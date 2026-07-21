@@ -1,0 +1,20 @@
+# Build
+/build/
+/cmake-build-*/
+compile_commands.json
+
+# Lint / IDE / local agent
+/lint-reports/
+.cache/
+.idea/
+.vscode/
+.claude/
+*.swp
+*~
+.DS_Store
+
+# Local DB / runtime
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
