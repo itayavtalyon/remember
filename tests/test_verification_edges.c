@@ -1,6 +1,6 @@
-#include "test.h"
 #include "harness.h"
 #include "register.h"
+#include "test.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -18,7 +18,8 @@
 TEST(add_tag_casefold_merges_to_one_tag_name)
 {
     char *db = make_temp_db_path();
-    CmdResult r, g;
+    CmdResult r;
+    CmdResult g;
     const char *a1[] = {"add", "--tag", "Foo", "same body casefold"};
     const char *a2[] = {"add", "--tag", "foo", "same body casefold"};
     const char *gargs[] = {"get", "--json", "1"};
@@ -83,7 +84,8 @@ TEST(add_key_control_char_rejected)
 TEST(update_rejects_source_flag)
 {
     char *db = make_temp_db_path();
-    CmdResult r, u;
+    CmdResult r;
+    CmdResult u;
     const char *a[] = {"add", "body"};
     const char *uargs[] = {"update", "1", "--source", "agent", "--text", "x"};
     ASSERT_TRUE(db != NULL);
@@ -98,7 +100,8 @@ TEST(update_rejects_source_flag)
 TEST(get_rejects_source_flag)
 {
     char *db = make_temp_db_path();
-    CmdResult r, g;
+    CmdResult r;
+    CmdResult g;
     const char *a[] = {"add", "body"};
     const char *gargs[] = {"get", "--source", "human", "1"};
     ASSERT_TRUE(db != NULL);
@@ -113,7 +116,8 @@ TEST(get_rejects_source_flag)
 TEST(delete_rejects_source_flag)
 {
     char *db = make_temp_db_path();
-    CmdResult r, d;
+    CmdResult r;
+    CmdResult d;
     const char *a[] = {"add", "body"};
     const char *dargs[] = {"delete", "--source", "tool", "1"};
     ASSERT_TRUE(db != NULL);
@@ -128,7 +132,9 @@ TEST(delete_rejects_source_flag)
 TEST(keyless_merge_keeps_created_at)
 {
     char *db = make_temp_db_path();
-    CmdResult r, g1, g2;
+    CmdResult r;
+    CmdResult g1;
+    CmdResult g2;
     const char *a1[] = {"add", "--json", "--source", "human", "stable created"};
     const char *a2[] = {"add", "--json", "--tag", "t", "stable created"};
     const char *gargs[] = {"get", "--json", "1"};
@@ -173,9 +179,10 @@ TEST(keyless_merge_keeps_created_at)
 TEST(update_preserves_id_key_source_created_at)
 {
     char *db = make_temp_db_path();
-    CmdResult r, u, g;
-    const char *a[] = {"add", "--json", "--key", "slot", "--source", "human",
-                       "v1"};
+    CmdResult r;
+    CmdResult u;
+    CmdResult g;
+    const char *a[] = {"add", "--json", "--key", "slot", "--source", "human", "v1"};
     const char *uargs[] = {"update", "--json", "--key", "slot", "--text", "v2"};
     const char *gargs[] = {"get", "--json", "--key", "slot"};
     char created[32];
@@ -216,7 +223,8 @@ TEST(update_preserves_id_key_source_created_at)
 TEST(orphan_tag_removed_when_last_use_deleted)
 {
     char *db = make_temp_db_path();
-    CmdResult r, d;
+    CmdResult r;
+    CmdResult d;
     char *count;
     const char *a[] = {"add", "--tag", "orphanonly", "solo"};
     const char *dargs[] = {"delete", "1"};
@@ -237,7 +245,8 @@ TEST(orphan_tag_removed_when_last_use_deleted)
 TEST(shared_tag_survives_when_other_entry_uses_it)
 {
     char *db = make_temp_db_path();
-    CmdResult r, d;
+    CmdResult r;
+    CmdResult d;
     char *count;
     const char *a1[] = {"add", "--tag", "shared", "one"};
     const char *a2[] = {"add", "--tag", "shared", "two"};
@@ -262,7 +271,9 @@ TEST(shared_tag_survives_when_other_entry_uses_it)
 TEST(fts_search_reflects_body_update)
 {
     char *db = make_temp_db_path();
-    CmdResult r, u, s;
+    CmdResult r;
+    CmdResult u;
+    CmdResult s;
     const char *a[] = {"add", "oldtokenxyz unique body"};
     const char *uargs[] = {"update", "1", "--text", "newtokenabc unique body"};
     const char *sold[] = {"search", "--json", "oldtokenxyz"};
@@ -287,7 +298,9 @@ TEST(fts_search_reflects_body_update)
 TEST(fts_search_empty_after_delete)
 {
     char *db = make_temp_db_path();
-    CmdResult r, d, s;
+    CmdResult r;
+    CmdResult d;
+    CmdResult s;
     const char *a[] = {"add", "deleteftsunique99"};
     const char *dargs[] = {"delete", "1"};
     const char *sargs[] = {"search", "--json", "deleteftsunique99"};
@@ -307,7 +320,8 @@ TEST(fts_search_empty_after_delete)
 TEST(fts_search_reflects_keyed_upsert)
 {
     char *db = make_temp_db_path();
-    CmdResult r, s;
+    CmdResult r;
+    CmdResult s;
     const char *a1[] = {"add", "--key", "k", "firstval_unique"};
     const char *a2[] = {"add", "--key", "k", "secondval_unique"};
     const char *s1[] = {"search", "--json", "firstval_unique"};
@@ -334,7 +348,8 @@ TEST(fts_search_reflects_keyed_upsert)
 TEST(search_finds_compound_tag_component)
 {
     char *db = make_temp_db_path();
-    CmdResult r, s;
+    CmdResult r;
+    CmdResult s;
     const char *a[] = {"add", "--tag", "pref:editor", "uses helix editor maybe"};
     const char *sargs[] = {"search", "--json", "editor"};
     ASSERT_TRUE(db != NULL);
@@ -350,7 +365,8 @@ TEST(search_finds_compound_tag_component)
 TEST(search_diacritics_folded)
 {
     char *db = make_temp_db_path();
-    CmdResult r, s;
+    CmdResult r;
+    CmdResult s;
     const char *a[] = {"add", "I love café culture"};
     const char *sargs[] = {"search", "--json", "cafe"};
     ASSERT_TRUE(db != NULL);
@@ -368,7 +384,8 @@ TEST(search_diacritics_folded)
 TEST(search_unbalanced_quote_rejected)
 {
     char *db = make_temp_db_path();
-    CmdResult r, s;
+    CmdResult r;
+    CmdResult s;
     const char *a[] = {"add", "quote test body"};
     const char *sargs[] = {"search", "\"unbalanced"};
     ASSERT_TRUE(db != NULL);
@@ -386,7 +403,8 @@ TEST(search_unbalanced_quote_rejected)
 TEST(list_no_matches_json_total_zero)
 {
     char *db = make_temp_db_path();
-    CmdResult r, l;
+    CmdResult r;
+    CmdResult l;
     const char *a[] = {"add", "--tag", "x", "only"};
     const char *largs[] = {"list", "--json", "--tag", "nomatch"};
     ASSERT_TRUE(db != NULL);
@@ -419,7 +437,8 @@ TEST(update_invalid_utf8_text_rejected)
 {
     char *db = make_temp_db_path();
     char bad[] = {(char)0xff, '\0'};
-    CmdResult r, u;
+    CmdResult r;
+    CmdResult u;
     const char *a[] = {"add", "ok"};
     const char *uargs[] = {"update", "1", "--text", "-"};
     ASSERT_TRUE(db != NULL);
@@ -436,7 +455,8 @@ TEST(update_invalid_utf8_text_rejected)
 TEST(human_list_preview_first_line_only)
 {
     char *db = make_temp_db_path();
-    CmdResult r, l;
+    CmdResult r;
+    CmdResult l;
     const char *a[] = {"add", "firstline_unique\nsecondline_secret_should_hide"};
     const char *largs[] = {"list"};
     ASSERT_TRUE(db != NULL);
@@ -454,7 +474,8 @@ TEST(human_list_preview_truncates_long_line)
 {
     char *db = make_temp_db_path();
     char body[200];
-    CmdResult r, l;
+    CmdResult r;
+    CmdResult l;
     const char *a[2];
     const char *largs[] = {"list"};
     size_t i;
@@ -491,6 +512,9 @@ TEST(db_parent_dir_mode_0700)
     size_t n;
     base = mkdtemp(tmpl);
     ASSERT_TRUE(base != NULL);
+    if (base == NULL) {
+        return;
+    }
     n = strlen(base) + strlen("/nested/test.db") + 1U;
     db = malloc(n);
     ASSERT_TRUE(db != NULL);
@@ -513,7 +537,8 @@ TEST(db_parent_dir_mode_0700)
 TEST(schema_user_version_too_new_refused)
 {
     char *db = make_temp_db_path();
-    CmdResult r, l;
+    CmdResult r;
+    CmdResult l;
     char *ver;
     const char *a[] = {"add", "bootstrap"};
     const char *largs[] = {"list"};
@@ -521,13 +546,8 @@ TEST(schema_user_version_too_new_refused)
     r = run_remember(db, a, 2, NULL);
     ASSERT_EQ_INT(r.exit_code, 0);
     cmd_result_free(&r);
-    /* Bump schema beyond tool support */
-    {
-        char cmd[512];
-        int n = snprintf(cmd, sizeof(cmd), "sqlite3 '%s' 'PRAGMA user_version=99;'", db);
-        ASSERT_TRUE(n > 0 && (size_t)n < sizeof(cmd));
-        ASSERT_EQ_INT(system(cmd), 0);
-    }
+    /* Bump schema beyond tool support (reuse the query helper; set returns no rows). */
+    free(sqlite3_query_line(db, "PRAGMA user_version=99;"));
     ver = sqlite3_query_line(db, "PRAGMA user_version;");
     ASSERT_TRUE(ver != NULL);
     ASSERT_STREQ(ver, "99");
@@ -544,7 +564,8 @@ TEST(schema_user_version_too_new_refused)
 TEST(json_get_missing_empty_stdout)
 {
     char *db = make_temp_db_path();
-    CmdResult r, g;
+    CmdResult r;
+    CmdResult g;
     const char *a[] = {"add", "x"};
     const char *gargs[] = {"get", "--json", "99"};
     ASSERT_TRUE(db != NULL);

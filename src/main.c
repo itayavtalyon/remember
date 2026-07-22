@@ -93,21 +93,17 @@ static int dispatch_nyi(const char *name)
     return REMEMBER_NYI;
 }
 
-int main(int argc, char **argv)
+static int run(const CliArgs *args)
 {
-    CliArgs args;
-
-    cli_parse(argc, argv, &args);
-
-    if (args.error != CLI_ERR_OK) {
-        print_parse_error(&args);
+    if (args->error != CLI_ERR_OK) {
+        print_parse_error(args);
         return REMEMBER_ERR;
     }
 
-    switch (args.command) {
+    switch (args->command) {
     case CLI_CMD_HELP:
-        if (args.help_topic != CLI_CMD_NONE) {
-            print_command_help(args.help_topic);
+        if (args->help_topic != CLI_CMD_NONE) {
+            print_command_help(args->help_topic);
         } else {
             print_general_help();
         }
@@ -138,4 +134,15 @@ int main(int argc, char **argv)
         (void)fprintf(stderr, "remember: internal error\n");
         return REMEMBER_ERR;
     }
+}
+
+int main(int argc, char **argv)
+{
+    CliArgs args;
+    int rc;
+
+    cli_parse(argc, argv, &args);
+    rc = run(&args);
+    cli_args_free(&args);
+    return rc;
 }

@@ -1,6 +1,6 @@
-#include "test.h"
 #include "harness.h"
 #include "register.h"
+#include "test.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -9,12 +9,9 @@
 static void seed_search_corpus(const char *db)
 {
     CmdResult r;
-    const char *a1[] = {"add", "--tag", "pref", "--tag", "editor",
-                        "Preferred editor is helix"};
-    const char *a2[] = {"add", "--tag", "decision", "--source", "agent",
-                        "Use FTS5 not embeddings"};
-    const char *a3[] = {"add", "--tag", "pref", "--source", "human",
-                        "Font size 14 in terminal"};
+    const char *a1[] = {"add", "--tag", "pref", "--tag", "editor", "Preferred editor is helix"};
+    const char *a2[] = {"add", "--tag", "decision", "--source", "agent", "Use FTS5 not embeddings"};
+    const char *a3[] = {"add", "--tag", "pref", "--source", "human", "Font size 14 in terminal"};
     r = run_remember(db, a1, 6, NULL);
     cmd_result_free(&r);
     r = run_remember(db, a2, 6, NULL);
@@ -125,8 +122,8 @@ TEST(search_no_matches_exits_zero)
 TEST(search_json_paging_fields)
 {
     char *db = make_temp_db_path();
-    const char *args[] = {"search", "--json", "--limit", "1", "--offset", "0",
-                          "pref OR helix OR FTS5 OR Font"};
+    const char *args[] = {
+        "search", "--json", "--limit", "1", "--offset", "0", "pref OR helix OR FTS5 OR Font"};
     CmdResult r;
     ASSERT_TRUE(db != NULL);
     seed_search_corpus(db);

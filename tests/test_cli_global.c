@@ -1,6 +1,6 @@
-#include "test.h"
 #include "harness.h"
 #include "register.h"
+#include "test.h"
 
 #include <stdio.h>
 #include <stdlib.h>

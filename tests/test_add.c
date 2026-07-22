@@ -1,6 +1,6 @@
-#include "test.h"
 #include "harness.h"
 #include "register.h"
+#include "test.h"
 
 #include <stdlib.h>
 #include <string.h>
@@ -23,8 +23,8 @@ TEST(add_basic_prints_id_one)
 TEST(add_with_tags_and_source_human)
 {
     char *db = make_temp_db_path();
-    const char *args[] = {"add", "--tag", "pref", "--tag", "editor", "--source",
-                          "human", "use helix"};
+    const char *args[] = {"add",    "--tag",    "pref",  "--tag",
+                          "editor", "--source", "human", "use helix"};
     CmdResult r;
     const char *gargs[] = {"get", "--json", "1"};
     CmdResult g;
@@ -65,7 +65,8 @@ TEST(add_default_source_is_unknown)
 TEST(add_source_agent_tool_accepted)
 {
     char *db = make_temp_db_path();
-    CmdResult r1, r2;
+    CmdResult r1;
+    CmdResult r2;
     const char *a1[] = {"add", "--source", "agent", "from agent"};
     const char *a2[] = {"add", "--source", "tool", "from tool"};
     ASSERT_TRUE(db != NULL);
@@ -135,11 +136,14 @@ TEST(add_body_trimmed_before_store)
 TEST(add_dedupe_same_body_merges_tags)
 {
     char *db = make_temp_db_path();
-    CmdResult r1, r2, g;
+    CmdResult r1;
+    CmdResult r2;
+    CmdResult g;
     const char *a1[] = {"add", "--tag", "a", "same text"};
     const char *a2[] = {"add", "--tag", "b", "same text"};
     const char *gargs[] = {"get", "--json", "1"};
-    long id1, id2;
+    long id1;
+    long id2;
     ASSERT_TRUE(db != NULL);
     r1 = run_remember(db, a1, 4, NULL);
     r2 = run_remember(db, a2, 4, NULL);
@@ -161,7 +165,8 @@ TEST(add_dedupe_same_body_merges_tags)
 TEST(add_dedupe_trim_equivalent_bodies)
 {
     char *db = make_temp_db_path();
-    CmdResult r1, r2;
+    CmdResult r1;
+    CmdResult r2;
     const char *a1[] = {"add", "  hello  "};
     const char *a2[] = {"add", "hello"};
     ASSERT_TRUE(db != NULL);
@@ -178,7 +183,9 @@ TEST(add_dedupe_trim_equivalent_bodies)
 TEST(add_dedupe_keeps_original_source)
 {
     char *db = make_temp_db_path();
-    CmdResult r1, r2, g;
+    CmdResult r1;
+    CmdResult r2;
+    CmdResult g;
     const char *a1[] = {"add", "--source", "human", "stable body"};
     const char *a2[] = {"add", "--source", "agent", "--tag", "x", "stable body"};
     const char *gargs[] = {"get", "--json", "1"};
@@ -217,7 +224,8 @@ TEST(add_json_created_shape)
 TEST(add_json_merged_shape)
 {
     char *db = make_temp_db_path();
-    CmdResult r1, r2;
+    CmdResult r1;
+    CmdResult r2;
     const char *a1[] = {"add", "--json", "dup"};
     const char *a2[] = {"add", "--json", "--tag", "m", "dup"};
     ASSERT_TRUE(db != NULL);
@@ -255,6 +263,10 @@ TEST(add_body_over_64kib_rejected)
     ASSERT_TRUE(db != NULL);
     big = malloc(65537U + 1U);
     ASSERT_TRUE(big != NULL);
+    if (big == NULL) {
+        free(db);
+        return;
+    }
     for (i = 0; i < 65537U; i++) {
         big[i] = 'a';
     }

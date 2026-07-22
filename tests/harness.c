@@ -1,8 +1,10 @@
 #include "harness.h"
 
+#include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <limits.h>
+#include <poll.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -26,40 +28,197 @@ void cmd_result_free(CmdResult *r)
     r->exit_code = 0;
 }
 
-static char *read_fd_all(int fd)
+typedef struct {
+    char *data;
+    size_t len;
+    size_t cap;
+} Buf;
+
+static bool buf_append(Buf *b, const char *src, size_t n)
 {
-    size_t cap = 4096;
-    size_t len = 0;
-    char *buf = malloc(cap);
-    if (buf == NULL) {
-        return NULL;
-    }
-    for (;;) {
-        if (len + 1024 >= cap) {
-            size_t ncap = cap * 2U;
-            char *nbuf = realloc(buf, ncap);
-            if (nbuf == NULL) {
-                free(buf);
-                return NULL;
-            }
-            buf = nbuf;
-            cap = ncap;
+    if (b->len + n + 1U > b->cap) {
+        size_t ncap = (b->cap != 0U) ? b->cap : 4096U;
+        char *nd;
+        while (ncap < b->len + n + 1U) {
+            ncap *= 2U;
         }
-        ssize_t n = read(fd, buf + len, 1024);
-        if (n < 0) {
+        nd = realloc(b->data, ncap);
+        if (nd == NULL) {
+            return false;
+        }
+        b->data = nd;
+        b->cap = ncap;
+    }
+    memcpy(b->data + b->len, src, n);
+    b->len += n;
+    return true;
+}
+
+/*
+ * Drain both fds to EOF concurrently via poll(). Reading them sequentially would
+ * deadlock if the child fills one pipe (e.g. a large stderr) while we block on
+ * the other. Each output is heap-allocated and NUL-terminated (never NULL).
+ */
+static void drain_two(int fd0, int fd1, char **out0, char **out1)
+{
+    Buf bufs[2] = {{NULL, 0, 0}, {NULL, 0, 0}};
+    int fds[2];
+    int open_count = 2;
+
+    fds[0] = fd0;
+    fds[1] = fd1;
+
+    while (open_count > 0) {
+        struct pollfd pfds[2];
+        int slot[2];
+        int nfds = 0;
+        int i;
+
+        for (i = 0; i < 2; i++) {
+            if (fds[i] >= 0) {
+                pfds[nfds].fd = fds[i];
+                pfds[nfds].events = POLLIN;
+                pfds[nfds].revents = 0;
+                slot[nfds] = i;
+                nfds++;
+            }
+        }
+        if (poll(pfds, (nfds_t)nfds, -1) < 0) {
             if (errno == EINTR) {
                 continue;
             }
-            free(buf);
-            return NULL;
-        }
-        if (n == 0) {
             break;
         }
-        len += (size_t)n;
+        for (i = 0; i < nfds; i++) {
+            int idx = slot[i];
+            char tmp[4096];
+            ssize_t n;
+
+            if ((pfds[i].revents & (POLLIN | POLLHUP | POLLERR)) == 0) {
+                continue;
+            }
+            n = read(fds[idx], tmp, sizeof(tmp));
+            if (n > 0) {
+                (void)buf_append(&bufs[idx], tmp, (size_t)n);
+            } else if (n == 0 || errno != EINTR) {
+                fds[idx] = -1;
+                open_count--;
+            }
+        }
     }
-    buf[len] = '\0';
-    return buf;
+
+    for (int i = 0; i < 2; i++) {
+        if (bufs[i].data == NULL) {
+            bufs[i].data = calloc(1U, 1U);
+        } else {
+            bufs[i].data[bufs[i].len] = '\0';
+        }
+    }
+    *out0 = bufs[0].data;
+    *out1 = bufs[1].data;
+}
+
+static CmdResult harness_error(const char *msg)
+{
+    CmdResult r;
+
+    r.exit_code = 127;
+    r.out = strdup("");
+    r.err = strdup(msg);
+    return r;
+}
+
+static void close_pipe(int p[2])
+{
+    if (p[0] >= 0) {
+        close(p[0]);
+    }
+    if (p[1] >= 0) {
+        close(p[1]);
+    }
+}
+
+/* argv: bin, --db, path, args..., NULL. Elements alias their inputs. */
+static char **build_child_argv(const char *db_path, const char *const *args, size_t nargs)
+{
+    size_t argc = 3U + nargs;
+    char **argv = (char **)calloc(argc + 1U, sizeof(*argv));
+    size_t i;
+
+    if (argv == NULL) {
+        return NULL;
+    }
+    argv[0] = (char *)g_remember_bin;
+    argv[1] = (char *)"--db";
+    argv[2] = (char *)db_path;
+    for (i = 0; i < nargs; i++) {
+        argv[3U + i] = (char *)args[i];
+    }
+    argv[argc] = NULL;
+    return argv;
+}
+
+/* Child side: redirect stdio to the pipes and exec. Never returns. */
+static void child_run(int out_pipe[2], int err_pipe[2], int in_pipe[2], const char *stdin_data,
+                      char *const argv[])
+{
+    if (dup2(out_pipe[1], STDOUT_FILENO) < 0 || dup2(err_pipe[1], STDERR_FILENO) < 0) {
+        _exit(127);
+    }
+    close(out_pipe[0]);
+    close(out_pipe[1]);
+    close(err_pipe[0]);
+    close(err_pipe[1]);
+
+    if (stdin_data != NULL) {
+        if (dup2(in_pipe[0], STDIN_FILENO) < 0) {
+            _exit(127);
+        }
+        close(in_pipe[0]);
+        close(in_pipe[1]);
+    } else {
+        int devnull = open("/dev/null", O_RDONLY);
+        if (devnull >= 0) {
+            (void)dup2(devnull, STDIN_FILENO);
+            close(devnull);
+        }
+    }
+    execv(g_remember_bin, argv);
+    _exit(127);
+}
+
+static void write_all(int fd, const char *data)
+{
+    size_t left = strlen(data);
+    const char *p = data;
+
+    while (left > 0) {
+        ssize_t w = write(fd, p, left);
+        if (w < 0) {
+            if (errno == EINTR) {
+                continue;
+            }
+            break;
+        }
+        p += (size_t)w;
+        left -= (size_t)w;
+    }
+}
+
+static int wait_status(pid_t pid)
+{
+    int status = 0;
+
+    if (waitpid(pid, &status, 0) < 0) {
+        return 127;
+    }
+    if (WIFEXITED(status)) {
+        return WEXITSTATUS(status);
+    }
+    if (WIFSIGNALED(status)) {
+        return 128 + WTERMSIG(status);
+    }
+    return 127;
 }
 
 CmdResult run_remember(const char *db_path, const char *const *args, size_t nargs,
@@ -69,169 +228,135 @@ CmdResult run_remember(const char *db_path, const char *const *args, size_t narg
     int out_pipe[2] = {-1, -1};
     int err_pipe[2] = {-1, -1};
     int in_pipe[2] = {-1, -1};
+    char **argv;
     pid_t pid;
-    size_t i;
-    size_t argc;
-    char **argv = NULL;
 
     if (g_remember_bin == NULL || db_path == NULL) {
-        result.exit_code = 127;
-        result.err = strdup("harness: missing binary or db path");
-        result.out = strdup("");
-        return result;
+        return harness_error("harness: missing binary or db path");
     }
-
     if (pipe(out_pipe) != 0 || pipe(err_pipe) != 0) {
-        result.exit_code = 127;
-        result.err = strdup("harness: pipe failed");
-        result.out = strdup("");
-        return result;
+        return harness_error("harness: pipe failed");
+    }
+    if (stdin_data != NULL && pipe(in_pipe) != 0) {
+        close_pipe(out_pipe);
+        close_pipe(err_pipe);
+        return harness_error("harness: stdin pipe failed");
     }
 
-    if (stdin_data != NULL) {
-        if (pipe(in_pipe) != 0) {
-            result.exit_code = 127;
-            result.err = strdup("harness: stdin pipe failed");
-            result.out = strdup("");
-            close(out_pipe[0]);
-            close(out_pipe[1]);
-            close(err_pipe[0]);
-            close(err_pipe[1]);
-            return result;
-        }
-    }
-
-    /* argv: bin, --db, path, args..., NULL */
-    argc = 3U + nargs;
-    argv = calloc(argc + 1U, sizeof(*argv));
+    argv = build_child_argv(db_path, args, nargs);
     if (argv == NULL) {
-        result.exit_code = 127;
-        result.err = strdup("harness: oom");
-        result.out = strdup("");
-        goto fail_pipes;
+        result = harness_error("harness: oom");
+        goto cleanup;
     }
-    argv[0] = (char *)g_remember_bin;
-    argv[1] = (char *)"--db";
-    argv[2] = (char *)db_path;
-    for (i = 0; i < nargs; i++) {
-        argv[3U + i] = (char *)args[i];
-    }
-    argv[argc] = NULL;
 
     pid = fork();
     if (pid < 0) {
-        result.exit_code = 127;
-        result.err = strdup("harness: fork failed");
-        result.out = strdup("");
-        free(argv);
-        goto fail_pipes;
+        result = harness_error("harness: fork failed");
+        free((void *)argv);
+        goto cleanup;
     }
-
     if (pid == 0) {
-        /* child */
-        if (dup2(out_pipe[1], STDOUT_FILENO) < 0) {
-            _exit(127);
-        }
-        if (dup2(err_pipe[1], STDERR_FILENO) < 0) {
-            _exit(127);
-        }
-        close(out_pipe[0]);
-        close(out_pipe[1]);
-        close(err_pipe[0]);
-        close(err_pipe[1]);
-
-        if (stdin_data != NULL) {
-            if (dup2(in_pipe[0], STDIN_FILENO) < 0) {
-                _exit(127);
-            }
-            close(in_pipe[0]);
-            close(in_pipe[1]);
-        } else {
-            int devnull = open("/dev/null", O_RDONLY);
-            if (devnull >= 0) {
-                (void)dup2(devnull, STDIN_FILENO);
-                close(devnull);
-            }
-        }
-
-        execv(g_remember_bin, argv);
-        _exit(127);
+        child_run(out_pipe, err_pipe, in_pipe, stdin_data, argv);
     }
 
     /* parent */
-    free(argv);
+    free((void *)argv);
     close(out_pipe[1]);
+    out_pipe[1] = -1;
     close(err_pipe[1]);
+    err_pipe[1] = -1;
     if (stdin_data != NULL) {
         close(in_pipe[0]);
-        {
-            size_t left = strlen(stdin_data);
-            const char *p = stdin_data;
-            while (left > 0) {
-                ssize_t w = write(in_pipe[1], p, left);
-                if (w < 0) {
-                    if (errno == EINTR) {
-                        continue;
-                    }
-                    break;
-                }
-                p += (size_t)w;
-                left -= (size_t)w;
-            }
-        }
+        in_pipe[0] = -1;
+        write_all(in_pipe[1], stdin_data);
         close(in_pipe[1]);
         in_pipe[1] = -1;
     }
 
-    result.out = read_fd_all(out_pipe[0]);
-    result.err = read_fd_all(err_pipe[0]);
+    drain_two(out_pipe[0], err_pipe[0], &result.out, &result.err);
     close(out_pipe[0]);
     close(err_pipe[0]);
-    out_pipe[0] = err_pipe[0] = -1;
-
     if (result.out == NULL) {
         result.out = strdup("");
     }
     if (result.err == NULL) {
         result.err = strdup("");
     }
-
-    {
-        int status = 0;
-        if (waitpid(pid, &status, 0) < 0) {
-            result.exit_code = 127;
-            return result;
-        }
-        if (WIFEXITED(status)) {
-            result.exit_code = WEXITSTATUS(status);
-        } else if (WIFSIGNALED(status)) {
-            result.exit_code = 128 + WTERMSIG(status);
-        } else {
-            result.exit_code = 127;
-        }
-    }
+    result.exit_code = wait_status(pid);
     return result;
 
-fail_pipes:
-    if (out_pipe[0] >= 0) {
-        close(out_pipe[0]);
-    }
-    if (out_pipe[1] >= 0) {
-        close(out_pipe[1]);
-    }
-    if (err_pipe[0] >= 0) {
-        close(err_pipe[0]);
-    }
-    if (err_pipe[1] >= 0) {
-        close(err_pipe[1]);
-    }
-    if (in_pipe[0] >= 0) {
-        close(in_pipe[0]);
-    }
-    if (in_pipe[1] >= 0) {
-        close(in_pipe[1]);
-    }
+cleanup:
+    close_pipe(out_pipe);
+    close_pipe(err_pipe);
+    close_pipe(in_pipe);
     return result;
+}
+
+/* ---- temp-dir registry: clean up every mkdtemp at process exit ----------- */
+
+static char **g_temp_dirs;
+static size_t g_temp_count;
+static size_t g_temp_cap;
+static bool g_atexit_registered;
+
+static void remove_temp_dir(const char *dir)
+{
+    DIR *d = opendir(dir);
+
+    if (d != NULL) {
+        struct dirent *ent;
+        while ((ent = readdir(d)) != NULL) {
+            char path[PATH_MAX];
+            int n;
+            if (strcmp(ent->d_name, ".") == 0 || strcmp(ent->d_name, "..") == 0) {
+                continue;
+            }
+            n = snprintf(path, sizeof(path), "%s/%s", dir, ent->d_name);
+            if (n > 0 && (size_t)n < sizeof(path)) {
+                (void)unlink(path);
+            }
+        }
+        (void)closedir(d);
+    }
+    (void)rmdir(dir);
+}
+
+static void cleanup_temp_dirs(void)
+{
+    size_t i;
+    for (i = 0; i < g_temp_count; i++) {
+        remove_temp_dir(g_temp_dirs[i]);
+        free(g_temp_dirs[i]);
+    }
+    free((void *)g_temp_dirs);
+    g_temp_dirs = NULL;
+    g_temp_count = 0;
+    g_temp_cap = 0;
+}
+
+static void register_temp_dir(const char *dir)
+{
+    char *copy;
+
+    if (!g_atexit_registered) {
+        (void)atexit(cleanup_temp_dirs);
+        g_atexit_registered = true;
+    }
+    if (g_temp_count == g_temp_cap) {
+        size_t ncap = (g_temp_cap != 0U) ? g_temp_cap * 2U : 16U;
+        char **grown = (char **)realloc((void *)g_temp_dirs, ncap * sizeof(*grown));
+        if (grown == NULL) {
+            return;
+        }
+        g_temp_dirs = grown;
+        g_temp_cap = ncap;
+    }
+    copy = strdup(dir);
+    if (copy == NULL) {
+        return;
+    }
+    g_temp_dirs[g_temp_count] = copy;
+    g_temp_count++;
 }
 
 char *make_temp_db_path(void)
@@ -245,6 +370,7 @@ char *make_temp_db_path(void)
     if (dir == NULL) {
         return NULL;
     }
+    register_temp_dir(dir);
     n = strlen(dir) + strlen("/test.db") + 1U;
     path = malloc(n);
     if (path == NULL) {
@@ -325,6 +451,9 @@ char *sqlite3_query_line(const char *db_path, const char *sql)
     if (n < 0 || (size_t)n >= sizeof(cmd)) {
         return NULL;
     }
+    /* Test-only DB inspection; command is built from test-controlled paths/SQL,
+       never external input. */
+    /* NOLINTNEXTLINE(cert-env33-c,bugprone-command-processor) */
     fp = popen(cmd, "r");
     if (fp == NULL) {
         return NULL;

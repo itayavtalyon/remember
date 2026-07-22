@@ -31,7 +31,7 @@ if [[ -n "$CLANG_FORMAT" ]]; then
       fmt_fail=1
     fi
   done <<EOF
-$(find "$SRC_DIR" \( -name '*.c' -o -name '*.h' \) 2>/dev/null | sort)
+$(find "$SRC_DIR" tests \( -name '*.c' -o -name '*.h' \) 2>/dev/null | sort)
 EOF
   if [[ "$fmt_fail" -ne 0 ]]; then
     echo "format: FAIL (see $REPORT_DIR/format.txt)"
@@ -43,9 +43,9 @@ else
   echo "format: SKIP (clang-format missing — brew install llvm; PATH=\$(brew --prefix llvm)/bin:\$PATH)"
 fi
 
-echo "== no sqlite outside store_sqlite =="
+echo "== no sqlite outside db.c =="
 if grep -RIn --include='*.c' --include='*.h' 'sqlite3\.h' "$SRC_DIR" 2>/dev/null \
-  | grep -v 'store_sqlite\.c' | grep -v 'third_party' >/tmp/remember-sqlite-leak.txt 2>/dev/null; then
+  | grep -v 'db\.c' | grep -v 'third_party' >/tmp/remember-sqlite-leak.txt 2>/dev/null; then
   if [[ -s /tmp/remember-sqlite-leak.txt ]]; then
     echo "sqlite leak: FAIL"
     cat /tmp/remember-sqlite-leak.txt
@@ -86,8 +86,8 @@ if [[ -n "$CLANG_TIDY" ]] && [[ -f "$BUILD_DIR/compile_commands.json" ]]; then
   fi
   : >"$REPORT_DIR/clang-tidy.txt"
   tidy_fail=0
-  # Portable find loop (no process substitution for bash 3)
-  for f in "$SRC_DIR"/*.c; do
+  # Project sources and the test suite are held to the same checks.
+  for f in "$SRC_DIR"/*.c tests/*.c; do
     [[ -f "$f" ]] || continue
     if ! "$CLANG_TIDY" -p "$BUILD_DIR" "${EXTRA_ARGS[@]}" "$f" >>"$REPORT_DIR/clang-tidy.txt" 2>&1; then
       tidy_fail=1

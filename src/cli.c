@@ -1,6 +1,7 @@
 #include "cli.h"
 
 #include <stddef.h>
+#include <stdlib.h>
 #include <string.h>
 
 /* ---- argument cursor ----------------------------------------------------- */
@@ -46,7 +47,7 @@ static const char *cursor_next(ArgCursor *c)
     return arg;
 }
 
-/* ---- command table + open-addressing hash map ---------------------------- */
+/* ---- command table ------------------------------------------------------- */
 
 typedef struct {
     const char *name;
@@ -66,60 +67,20 @@ static const CommandEntry k_commands[] = {
 };
 
 enum { COMMAND_COUNT = (int)(sizeof(k_commands) / sizeof(k_commands[0])) };
-enum { CMD_MAP_SIZE = 32 };
 
-static int g_cmd_map[CMD_MAP_SIZE];
-static bool g_cmd_map_ready;
-
-static unsigned cmd_hash(const char *s)
-{
-    unsigned h = 5381U;
-    while (*s != '\0') {
-        h = ((h << 5) + h) + (unsigned char)(*s);
-        s++;
-    }
-    return h;
-}
-
-static void cmd_map_init(void)
-{
-    int i;
-
-    if (g_cmd_map_ready) {
-        return;
-    }
-    for (i = 0; i < CMD_MAP_SIZE; i++) {
-        g_cmd_map[i] = -1;
-    }
-    for (i = 0; i < COMMAND_COUNT; i++) {
-        unsigned h = cmd_hash(k_commands[i].name) % (unsigned)CMD_MAP_SIZE;
-        while (g_cmd_map[h] != -1) {
-            h = (h + 1U) % (unsigned)CMD_MAP_SIZE;
-        }
-        g_cmd_map[h] = i;
-    }
-    g_cmd_map_ready = true;
-}
-
+/* Linear scan: eight fixed entries. A hash map would be more code and mutable
+   state, and slower at this size. */
 static const CommandEntry *cmd_lookup(const char *name)
 {
-    unsigned h;
-    unsigned probes;
+    int i;
 
     if (name == NULL) {
         return NULL;
     }
-    cmd_map_init();
-    h = cmd_hash(name) % (unsigned)CMD_MAP_SIZE;
-    for (probes = 0; probes < (unsigned)CMD_MAP_SIZE; probes++) {
-        int idx = g_cmd_map[h];
-        if (idx < 0) {
-            return NULL;
+    for (i = 0; i < COMMAND_COUNT; i++) {
+        if (strcmp(k_commands[i].name, name) == 0) {
+            return &k_commands[i];
         }
-        if (strcmp(k_commands[idx].name, name) == 0) {
-            return &k_commands[idx];
-        }
-        h = (h + 1U) % (unsigned)CMD_MAP_SIZE;
     }
     return NULL;
 }
@@ -246,15 +207,19 @@ static bool take_global(ArgCursor *cur, CliArgs *out)
         out->globals.db_path = cursor_next(cur);
         return true;
     }
-    if (strncmp(arg, "--db=", 5) == 0) {
-        (void)cursor_next(cur);
-        if (arg[5] == '\0') {
-            out->error = CLI_ERR_MISSING_OPTION_VALUE;
-            out->error_option = "--db";
+    {
+        static const char db_eq[] = "--db=";
+        const size_t db_eq_len = sizeof(db_eq) - 1U;
+        if (strncmp(arg, db_eq, db_eq_len) == 0) {
+            (void)cursor_next(cur);
+            if (arg[db_eq_len] == '\0') {
+                out->error = CLI_ERR_MISSING_OPTION_VALUE;
+                out->error_option = "--db";
+                return true;
+            }
+            out->globals.db_path = arg + db_eq_len;
             return true;
         }
-        out->globals.db_path = arg + 5;
-        return true;
     }
     return false;
 }
@@ -303,16 +268,16 @@ static void apply_bare_help_command(CliArgs *out)
     out->error = CLI_ERR_OK;
 }
 
-static bool take_subcommand(ArgCursor *cur, CliArgs *out, int at, int *command_index)
+/* Append a subcommand-owned token to rest_argv (capacity is argc, never exceeded). */
+static void rest_push(CliArgs *out, const char *tok)
 {
-    const char *arg = cursor_peek(cur);
+    out->rest_argv[out->rest_argc] = tok;
+    out->rest_argc++;
+}
 
-    if (looks_like_option(arg)) {
-        out->error = CLI_ERR_UNKNOWN_OPTION;
-        out->error_arg = arg;
-        return false;
-    }
-    (void)cursor_next(cur);
+/* Record arg as the subcommand. arg is already known not to be a global/flag. */
+static bool accept_subcommand(CliArgs *out, const char *arg, int at, int *command_index)
+{
     out->command = command_from_name(arg);
     if (out->command == CLI_CMD_UNKNOWN) {
         out->error = CLI_ERR_UNKNOWN_COMMAND;
@@ -323,8 +288,74 @@ static bool take_subcommand(ArgCursor *cur, CliArgs *out, int at, int *command_i
     return true;
 }
 
-static void scan_argv(ArgCursor *cur, CliArgs *out, bool *want_help, bool *want_version,
-                      int *command_index)
+static bool take_subcommand(ArgCursor *cur, CliArgs *out, int at, int *command_index)
+{
+    const char *arg = cursor_peek(cur);
+
+    if (looks_like_option(arg)) {
+        out->error = CLI_ERR_UNKNOWN_OPTION;
+        out->error_arg = arg;
+        return false;
+    }
+    (void)cursor_next(cur);
+    return accept_subcommand(out, arg, at, command_index);
+}
+
+typedef struct {
+    bool want_help;
+    bool want_version;
+    bool end_of_options;
+    int command_index;
+} ScanState;
+
+/* Handle one token after "--": literal subcommand (if none yet) or rest arg. */
+static bool scan_literal(ArgCursor *cur, CliArgs *out, const char *arg, int at, ScanState *st)
+{
+    (void)cursor_next(cur);
+    if (st->command_index < 0) {
+        return accept_subcommand(out, arg, at, &st->command_index);
+    }
+    rest_push(out, arg);
+    return true;
+}
+
+/* Handle one token during normal option processing. false = stop (error set). */
+static bool scan_option(ArgCursor *cur, CliArgs *out, const char *arg, int at, ScanState *st)
+{
+    if (strcmp(arg, "--") == 0) {
+        (void)cursor_next(cur);
+        st->end_of_options = true;
+        return true;
+    }
+    if (is_help_flag(arg)) {
+        (void)cursor_next(cur);
+        st->want_help = true;
+        return true;
+    }
+    if (is_version_flag(arg)) {
+        (void)cursor_next(cur);
+        st->want_version = true;
+        return true;
+    }
+    if (take_global(cur, out)) {
+        return out->error == CLI_ERR_OK;
+    }
+    if (st->command_index < 0) {
+        return take_subcommand(cur, out, at, &st->command_index);
+    }
+    (void)cursor_next(cur);
+    rest_push(out, arg);
+    return true;
+}
+
+/*
+ * Single pass over argv. Globals (--db/--json) and meta flags (--help/--version)
+ * are recognized wherever they appear and stripped out; the first bare token is
+ * the subcommand; every other token becomes a subcommand arg in rest_argv. A
+ * "--" ends option processing: subsequent tokens are literal, even if they look
+ * like flags or globals.
+ */
+static void scan_argv(ArgCursor *cur, CliArgs *out, ScanState *st)
 {
     while (!cursor_done(cur)) {
         const char *arg = cursor_peek(cur);
@@ -334,38 +365,22 @@ static void scan_argv(ArgCursor *cur, CliArgs *out, bool *want_help, bool *want_
             (void)cursor_next(cur);
             continue;
         }
-        if (is_help_flag(arg)) {
-            (void)cursor_next(cur);
-            *want_help = true;
-            continue;
-        }
-        if (is_version_flag(arg)) {
-            (void)cursor_next(cur);
-            *want_version = true;
-            continue;
-        }
-        if (take_global(cur, out)) {
-            if (out->error != CLI_ERR_OK) {
+        if (st->end_of_options) {
+            if (!scan_literal(cur, out, arg, at, st)) {
                 return;
             }
             continue;
         }
-        if (*command_index < 0) {
-            if (!take_subcommand(cur, out, at, command_index)) {
-                return;
-            }
-            continue;
+        if (!scan_option(cur, out, arg, at, st)) {
+            return;
         }
-        (void)cursor_next(cur);
     }
 }
 
 void cli_parse(int argc, char *const *argv, CliArgs *out)
 {
     ArgCursor cur;
-    bool want_help = false;
-    bool want_version = false;
-    int command_index = -1;
+    ScanState st = {false, false, false, -1};
 
     if (out == NULL) {
         return;
@@ -377,30 +392,29 @@ void cli_parse(int argc, char *const *argv, CliArgs *out)
         return;
     }
 
+    /* Upper bound on subcommand args is argc; one allocation, no growth. */
+    out->rest_argv = (const char **)malloc(sizeof(*out->rest_argv) * (size_t)argc);
+    if (out->rest_argv == NULL) {
+        out->error = CLI_ERR_INTERNAL;
+        return;
+    }
+
     cursor_init(&cur, argc, argv);
-    scan_argv(&cur, out, &want_help, &want_version, &command_index);
+    scan_argv(&cur, out, &st);
     if (out->error != CLI_ERR_OK) {
         return;
     }
 
-    if (command_index >= 0) {
-        int rest_start = command_index + 1;
-        if (rest_start < argc) {
-            out->rest_argc = argc - rest_start;
-            out->rest_argv = &argv[rest_start];
-        }
-    }
-
-    if (want_help) {
-        apply_help_request(out, command_index);
+    if (st.want_help) {
+        apply_help_request(out, st.command_index);
         return;
     }
-    if (want_version) {
+    if (st.want_version) {
         out->command = CLI_CMD_VERSION;
         out->error = CLI_ERR_OK;
         return;
     }
-    if (command_index < 0) {
+    if (st.command_index < 0) {
         out->command = CLI_CMD_NONE;
         out->error = CLI_ERR_MISSING_COMMAND;
         return;
@@ -410,4 +424,14 @@ void cli_parse(int argc, char *const *argv, CliArgs *out)
         return;
     }
     out->error = CLI_ERR_OK;
+}
+
+void cli_args_free(CliArgs *out)
+{
+    if (out == NULL) {
+        return;
+    }
+    free((void *)out->rest_argv);
+    out->rest_argv = NULL;
+    out->rest_argc = 0;
 }

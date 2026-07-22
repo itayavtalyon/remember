@@ -1,6 +1,6 @@
-#include "test.h"
 #include "harness.h"
 #include "register.h"
+#include "test.h"
 
 #include <fcntl.h>
 #include <stdio.h>
@@ -14,8 +14,7 @@
  * REMEMBER_DB is tested by invoking the binary without --db via a local helper.
  */
 
-static CmdResult run_remember_raw(const char *const *argv, size_t argc,
-                                  const char *stdin_data)
+static CmdResult run_remember_raw(const char *const *argv, size_t argc, const char *stdin_data)
 {
     /* Like run_remember but does not inject --db (for env tests). */
     CmdResult result = {0, NULL, NULL};
@@ -37,7 +36,7 @@ static CmdResult run_remember_raw(const char *const *argv, size_t argc,
         result.err = strdup("pipe");
         return result;
     }
-    av = calloc(argc + 2U, sizeof(*av));
+    av = (char **)calloc(argc + 2U, sizeof(*av));
     if (av == NULL) {
         result.exit_code = 127;
         result.out = strdup("");
@@ -68,7 +67,7 @@ static CmdResult run_remember_raw(const char *const *argv, size_t argc,
         execv(g_remember_bin, av);
         _exit(127);
     }
-    free(av);
+    free((void *)av);
     close(out_pipe[1]);
     close(err_pipe[1]);
     /* simplified: ignore stdin_data for raw helper */
@@ -76,7 +75,8 @@ static CmdResult run_remember_raw(const char *const *argv, size_t argc,
     {
         char buf[4096];
         ssize_t n;
-        size_t olen = 0, elen = 0;
+        size_t olen = 0;
+        size_t elen = 0;
         char *ob = malloc(1);
         char *eb = malloc(1);
         if (ob) {
@@ -122,7 +122,8 @@ TEST(db_flag_isolates_stores)
 {
     char *db1 = make_temp_db_path();
     char *db2 = make_temp_db_path();
-    CmdResult r, g;
+    CmdResult r;
+    CmdResult g;
     const char *a[] = {"add", "only in db1"};
     const char *gargs[] = {"get", "--json", "1"};
     ASSERT_TRUE(db1 != NULL && db2 != NULL);
@@ -143,12 +144,15 @@ TEST(db_flag_isolates_stores)
 TEST(remember_db_env_used_when_no_flag)
 {
     char *db = make_temp_db_path();
-    CmdResult r, g;
+    CmdResult r;
+    CmdResult g;
     const char *a[] = {"add", "via env db"};
     const char *gargs[] = {"get", "--json", "1"};
     char *old;
     ASSERT_TRUE(db != NULL);
     old = getenv("REMEMBER_DB");
+    /* Copy now: a later setenv may invalidate the getenv-returned string (CERT ENV31-C). */
+    old = (old != NULL) ? strdup(old) : NULL;
     ASSERT_EQ_INT(setenv("REMEMBER_DB", db, 1), 0);
     r = run_remember_raw(a, 2, NULL);
     ASSERT_EQ_INT(r.exit_code, 0);
@@ -159,6 +163,7 @@ TEST(remember_db_env_used_when_no_flag)
     cmd_result_free(&g);
     if (old != NULL) {
         (void)setenv("REMEMBER_DB", old, 1);
+        free(old);
     } else {
         (void)unsetenv("REMEMBER_DB");
     }
@@ -169,7 +174,8 @@ TEST(db_flag_wins_over_env)
 {
     char *db_flag = make_temp_db_path();
     char *db_env = make_temp_db_path();
-    CmdResult r, g;
+    CmdResult r;
+    CmdResult g;
     const char *a[] = {"add", "flag wins"};
     const char *gargs[] = {"get", "--json", "1"};
     ASSERT_TRUE(db_flag != NULL && db_env != NULL);
@@ -191,7 +197,8 @@ TEST(db_flag_wins_over_env)
 TEST(json_entry_has_required_fields)
 {
     char *db = make_temp_db_path();
-    CmdResult r, g;
+    CmdResult r;
+    CmdResult g;
     const char *a[] = {"add", "--tag", "t", "--source", "tool", "fields check"};
     const char *gargs[] = {"get", "--json", "1"};
     ASSERT_TRUE(db != NULL);
@@ -216,7 +223,8 @@ TEST(json_entry_has_required_fields)
 TEST(second_add_gets_id_two)
 {
     char *db = make_temp_db_path();
-    CmdResult r1, r2;
+    CmdResult r1;
+    CmdResult r2;
     const char *a1[] = {"add", "first"};
     const char *a2[] = {"add", "second"};
     ASSERT_TRUE(db != NULL);

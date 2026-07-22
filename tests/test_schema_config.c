@@ -1,6 +1,6 @@
-#include "test.h"
 #include "harness.h"
 #include "register.h"
+#include "test.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -29,6 +29,10 @@ TEST(sync_path_warning_on_clouddocs_marker)
     n = strlen("/tmp/com~apple~CloudDocs-remember-XXXXXX") + 1U;
     syncish = malloc(n);
     ASSERT_TRUE(syncish != NULL);
+    if (syncish == NULL) {
+        free(db);
+        return;
+    }
     (void)snprintf(syncish, n, "%s", "/tmp/com~apple~CloudDocs-remember-XXXXXX");
     if (mkdtemp(syncish) == NULL) {
         free(syncish);
@@ -46,10 +50,8 @@ TEST(sync_path_warning_on_clouddocs_marker)
         ASSERT_EQ_INT(r.exit_code, 0);
         /* Heuristic warning required (design: one-line stderr). */
         ASSERT_TRUE(r.err != NULL && r.err[0] != '\0');
-        ASSERT_TRUE(strstr(r.err, "sync") != NULL ||
-                    strstr(r.err, "iCloud") != NULL ||
-                    strstr(r.err, "CloudDocs") != NULL ||
-                    strstr(r.err, "Dropbox") != NULL);
+        ASSERT_TRUE(strstr(r.err, "sync") != NULL || strstr(r.err, "iCloud") != NULL ||
+                    strstr(r.err, "CloudDocs") != NULL || strstr(r.err, "Dropbox") != NULL);
         cmd_result_free(&r);
         free(path);
     }
@@ -60,7 +62,8 @@ TEST(sync_path_warning_on_clouddocs_marker)
 TEST(json_entry_includes_key_field_null_when_keyless)
 {
     char *db = make_temp_db_path();
-    CmdResult r, g;
+    CmdResult r;
+    CmdResult g;
     const char *a[] = {"add", "keyless entry"};
     const char *gargs[] = {"get", "--json", "1"};
     ASSERT_TRUE(db != NULL);

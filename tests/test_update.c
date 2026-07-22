@@ -1,13 +1,12 @@
-#include "test.h"
 #include "harness.h"
 #include "register.h"
+#include "test.h"
 
 #include <stdlib.h>
 
 static void seed_tagged(const char *db)
 {
-    const char *args[] = {"add", "--tag", "a", "--tag", "b", "--source", "human",
-                          "original body"};
+    const char *args[] = {"add", "--tag", "a", "--tag", "b", "--source", "human", "original body"};
     CmdResult r = run_remember(db, args, 8, NULL);
     cmd_result_free(&r);
 }
@@ -15,7 +14,8 @@ static void seed_tagged(const char *db)
 TEST(update_text_only_keeps_tags)
 {
     char *db = make_temp_db_path();
-    CmdResult u, g;
+    CmdResult u;
+    CmdResult g;
     const char *uargs[] = {"update", "1", "--text", "new body only"};
     const char *gargs[] = {"get", "--json", "1"};
     ASSERT_TRUE(db != NULL);
@@ -36,7 +36,8 @@ TEST(update_text_only_keeps_tags)
 TEST(update_tags_only_keeps_body)
 {
     char *db = make_temp_db_path();
-    CmdResult u, g;
+    CmdResult u;
+    CmdResult g;
     const char *uargs[] = {"update", "1", "--tag", "z"};
     const char *gargs[] = {"get", "--json", "1"};
     ASSERT_TRUE(db != NULL);
@@ -56,7 +57,8 @@ TEST(update_tags_only_keeps_body)
 TEST(update_clear_tags_flag)
 {
     char *db = make_temp_db_path();
-    CmdResult u, g;
+    CmdResult u;
+    CmdResult g;
     const char *uargs[] = {"update", "1", "--clear-tags"};
     const char *gargs[] = {"get", "--json", "1"};
     ASSERT_TRUE(db != NULL);
@@ -105,9 +107,9 @@ TEST(update_same_text_still_succeeds_and_returns_entry)
 TEST(update_text_and_tags_together)
 {
     char *db = make_temp_db_path();
-    CmdResult u, g;
-    const char *uargs[] = {"update", "1", "--text", "both changed", "--tag",
-                           "only"};
+    CmdResult u;
+    CmdResult g;
+    const char *uargs[] = {"update", "1", "--text", "both changed", "--tag", "only"};
     const char *gargs[] = {"get", "--json", "1"};
     ASSERT_TRUE(db != NULL);
     seed_tagged(db);
@@ -152,7 +154,8 @@ TEST(update_missing_id_exits_two)
 TEST(update_body_hash_collision_rejected)
 {
     char *db = make_temp_db_path();
-    CmdResult r, u;
+    CmdResult r;
+    CmdResult u;
     const char *a1[] = {"add", "body one"};
     const char *a2[] = {"add", "body two"};
     const char *uargs[] = {"update", "1", "--text", "body two"};
@@ -184,7 +187,8 @@ TEST(update_empty_text_rejected)
 TEST(update_source_immutable)
 {
     char *db = make_temp_db_path();
-    CmdResult u, g;
+    CmdResult u;
+    CmdResult g;
     const char *uargs[] = {"update", "1", "--text", "still human source"};
     const char *gargs[] = {"get", "--json", "1"};
     ASSERT_TRUE(db != NULL);
@@ -220,7 +224,8 @@ TEST(update_json_shape)
 TEST(update_text_stdin_dash)
 {
     char *db = make_temp_db_path();
-    CmdResult u, g;
+    CmdResult u;
+    CmdResult g;
     const char *uargs[] = {"update", "1", "--text", "-"};
     const char *gargs[] = {"get", "--json", "1"};
     ASSERT_TRUE(db != NULL);
@@ -239,7 +244,8 @@ TEST(update_positional_body_not_accepted)
 {
     /* Regression: positional body on update must not work (tag wipe footgun). */
     char *db = make_temp_db_path();
-    CmdResult u, g;
+    CmdResult u;
+    CmdResult g;
     const char *uargs[] = {"update", "1", "positional not allowed"};
     const char *gargs[] = {"get", "--json", "1"};
     ASSERT_TRUE(db != NULL);
@@ -258,7 +264,8 @@ TEST(update_positional_body_not_accepted)
 TEST(update_replace_tags_multiple)
 {
     char *db = make_temp_db_path();
-    CmdResult u, g;
+    CmdResult u;
+    CmdResult g;
     const char *uargs[] = {"update", "1", "--tag", "one", "--tag", "two"};
     const char *gargs[] = {"get", "--json", "1"};
     ASSERT_TRUE(db != NULL);

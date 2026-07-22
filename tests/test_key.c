@@ -1,6 +1,6 @@
-#include "test.h"
 #include "harness.h"
 #include "register.h"
+#include "test.h"
 
 #include <stdlib.h>
 
@@ -12,7 +12,8 @@
 TEST(add_key_creates_slot)
 {
     char *db = make_temp_db_path();
-    CmdResult r, g;
+    CmdResult r;
+    CmdResult g;
     const char *a[] = {"add", "--json", "--key", "pref:editor", "helix"};
     const char *gargs[] = {"get", "--json", "--key", "pref:editor"};
     ASSERT_TRUE(db != NULL);
@@ -32,7 +33,9 @@ TEST(add_key_creates_slot)
 TEST(add_key_upsert_same_id_replaces_body)
 {
     char *db = make_temp_db_path();
-    CmdResult r1, r2, g;
+    CmdResult r1;
+    CmdResult r2;
+    CmdResult g;
     const char *a1[] = {"add", "--json", "--key", "pref:editor", "helix"};
     const char *a2[] = {"add", "--json", "--key", "pref:editor", "zed"};
     const char *gargs[] = {"get", "--json", "--key", "pref:editor"};
@@ -57,7 +60,9 @@ TEST(add_key_upsert_same_id_replaces_body)
 TEST(add_key_upsert_unions_tags)
 {
     char *db = make_temp_db_path();
-    CmdResult r1, r2, g;
+    CmdResult r1;
+    CmdResult r2;
+    CmdResult g;
     const char *a1[] = {"add", "--key", "k", "--tag", "a", "v1"};
     const char *a2[] = {"add", "--key", "k", "--tag", "b", "v2"};
     const char *gargs[] = {"get", "--json", "--key", "k"};
@@ -80,7 +85,9 @@ TEST(add_key_upsert_unions_tags)
 TEST(add_key_keeps_original_source)
 {
     char *db = make_temp_db_path();
-    CmdResult r1, r2, g;
+    CmdResult r1;
+    CmdResult r2;
+    CmdResult g;
     const char *a1[] = {"add", "--key", "k", "--source", "human", "one"};
     const char *a2[] = {"add", "--key", "k", "--source", "agent", "two"};
     const char *gargs[] = {"get", "--json", "--key", "k"};
@@ -102,7 +109,9 @@ TEST(add_key_keeps_original_source)
 TEST(keyed_entries_may_share_body_text)
 {
     char *db = make_temp_db_path();
-    CmdResult r1, r2, l;
+    CmdResult r1;
+    CmdResult r2;
+    CmdResult l;
     const char *a1[] = {"add", "--json", "--key", "k1", "same"};
     const char *a2[] = {"add", "--json", "--key", "k2", "same"};
     const char *largs[] = {"list", "--json"};
@@ -125,7 +134,9 @@ TEST(keyed_entries_may_share_body_text)
 TEST(keyless_still_dedupes_among_keyless_only)
 {
     char *db = make_temp_db_path();
-    CmdResult rk, r1, r2;
+    CmdResult rk;
+    CmdResult r1;
+    CmdResult r2;
     const char *ak[] = {"add", "--key", "slot", "shared text"};
     const char *a1[] = {"add", "shared text"};
     const char *a2[] = {"add", "shared text"};
@@ -194,7 +205,9 @@ TEST(get_neither_id_nor_key_rejected)
 TEST(delete_by_key)
 {
     char *db = make_temp_db_path();
-    CmdResult r, d, g;
+    CmdResult r;
+    CmdResult d;
+    CmdResult g;
     const char *a[] = {"add", "--key", "k", "to remove"};
     const char *dargs[] = {"delete", "--json", "--key", "k"};
     const char *gargs[] = {"get", "--key", "k"};
@@ -215,7 +228,9 @@ TEST(delete_by_key)
 TEST(update_by_key_text)
 {
     char *db = make_temp_db_path();
-    CmdResult r, u, g;
+    CmdResult r;
+    CmdResult u;
+    CmdResult g;
     const char *a[] = {"add", "--key", "k", "--tag", "t", "old"};
     const char *uargs[] = {"update", "--key", "k", "--text", "new"};
     const char *gargs[] = {"get", "--json", "--key", "k"};
@@ -237,7 +252,8 @@ TEST(update_keyed_no_body_hash_conflict)
 {
     /* Keyed entry may take a body already used by another keyless/keyed row. */
     char *db = make_temp_db_path();
-    CmdResult r, u;
+    CmdResult r;
+    CmdResult u;
     const char *a1[] = {"add", "shared body"};
     const char *a2[] = {"add", "--key", "k", "other"};
     const char *uargs[] = {"update", "--key", "k", "--text", "shared body"};
@@ -255,7 +271,8 @@ TEST(update_keyed_no_body_hash_conflict)
 TEST(list_filter_by_key)
 {
     char *db = make_temp_db_path();
-    CmdResult r, l;
+    CmdResult r;
+    CmdResult l;
     const char *a1[] = {"add", "--key", "keep", "aaa"};
     const char *a2[] = {"add", "--key", "other", "bbb"};
     const char *largs[] = {"list", "--json", "--key", "keep"};
@@ -276,7 +293,8 @@ TEST(list_filter_by_key)
 TEST(search_filter_by_key)
 {
     char *db = make_temp_db_path();
-    CmdResult r, s;
+    CmdResult r;
+    CmdResult s;
     const char *a1[] = {"add", "--key", "keep", "unique word alpha"};
     const char *a2[] = {"add", "--key", "other", "unique word beta"};
     const char *sargs[] = {"search", "--json", "--key", "keep", "unique"};
@@ -296,7 +314,8 @@ TEST(search_filter_by_key)
 TEST(add_key_ascii_casefold)
 {
     char *db = make_temp_db_path();
-    CmdResult r, g;
+    CmdResult r;
+    CmdResult g;
     const char *a[] = {"add", "--key", "Pref:Editor", "v"};
     const char *gargs[] = {"get", "--json", "--key", "pref:editor"};
     ASSERT_TRUE(db != NULL);

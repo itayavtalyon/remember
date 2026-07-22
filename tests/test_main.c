@@ -1,49 +1,66 @@
-#include "test.h"
 #include "harness.h"
 #include "register.h"
+#include "test.h"
 
 #include <stdio.h>
-#include <stdlib.h>
+#include <string.h>
 
-int g_tests_run;
-int g_tests_failed;
-int g_asserts_run;
-int g_asserts_failed;
-const char *g_current_test;
+typedef struct {
+    const char *name;
+    void (*run)(void);
+} TestGroup;
 
+static const TestGroup k_groups[] = {
+    {"cli_global", register_cli_global_tests},
+    {"add", register_add_tests},
+    {"get_list_delete", register_get_list_delete_tests},
+    {"search", register_search_tests},
+    {"update", register_update_tests},
+    {"json_db_config", register_json_db_config_tests},
+    {"key", register_key_tests},
+    {"schema_config", register_schema_config_tests},
+    {"verification_edges", register_verification_edges_tests},
+};
+
+/*
+ * usage: remember_tests <remember-binary> [--only GROUP[,GROUP...]]
+ * --only runs a subset (the implemented gate); without it, the whole suite runs
+ * (expected-fail during incremental TDD). Exit 0 only if every run test passed.
+ */
 int main(int argc, char **argv)
 {
+    const char *only = NULL;
+    size_t i;
+    int arg;
+
     if (argc < 2) {
-        fprintf(stderr, "usage: %s <path-to-remember-binary>\n", argv[0]);
+        (void)fprintf(stderr, "usage: %s <path-to-remember-binary> [--only GROUP,...]\n", argv[0]);
         return 2;
     }
     g_remember_bin = argv[1];
 
-    g_tests_run = 0;
-    g_tests_failed = 0;
-    g_asserts_run = 0;
-    g_asserts_failed = 0;
-
-    register_cli_global_tests();
-    register_add_tests();
-    register_get_list_delete_tests();
-    register_search_tests();
-    register_update_tests();
-    register_json_db_config_tests();
-    register_key_tests();
-    register_schema_config_tests();
-    register_verification_edges_tests();
-
-    printf("\n== summary ==\n");
-    printf("tests run:     %d\n", g_tests_run);
-    printf("tests failed:  %d\n", g_tests_failed);
-    printf("asserts run:   %d\n", g_asserts_run);
-    printf("asserts fail:  %d\n", g_asserts_failed);
-
-    if (g_asserts_failed == 0) {
-        printf("ALL PASSED (unexpected at skeleton stage)\n");
-        return 0;
+    for (arg = 2; arg < argc; arg++) {
+        if (strcmp(argv[arg], "--only") == 0 && arg + 1 < argc) {
+            only = argv[arg + 1];
+            arg++;
+        }
     }
-    printf("FAILURES (expected until implementation is complete)\n");
-    return 1;
+
+    for (i = 0; i < sizeof(k_groups) / sizeof(k_groups[0]); i++) {
+        if (only == NULL || strstr(only, k_groups[i].name) != NULL) {
+            k_groups[i].run();
+        }
+    }
+
+    (void)printf("\n== summary ==\n");
+    (void)printf("tests run:     %d\n", g_tests_run);
+    (void)printf("tests failed:  %d\n", g_tests_failed);
+    (void)printf("asserts run:   %d\n", g_asserts_run);
+    (void)printf("asserts fail:  %d\n", g_asserts_failed);
+
+    if (g_tests_run == 0) {
+        (void)fprintf(stderr, "no tests matched --only filter\n");
+        return 2;
+    }
+    return (g_asserts_failed == 0) ? 0 : 1;
 }

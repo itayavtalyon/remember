@@ -1,6 +1,6 @@
-#include "test.h"
 #include "harness.h"
 #include "register.h"
+#include "test.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -12,8 +12,7 @@ static void seed_three(const char *db)
     CmdResult r;
     const char *a1[] = {"add", "--tag", "a", "--source", "human", "alpha first"};
     const char *a2[] = {"add", "--tag", "b", "--source", "agent", "beta second"};
-    const char *a3[] = {"add", "--tag", "a", "--tag", "b", "--source", "tool",
-                        "gamma third"};
+    const char *a3[] = {"add", "--tag", "a", "--tag", "b", "--source", "tool", "gamma third"};
     r = run_remember(db, a1, 6, NULL);
     cmd_result_free(&r);
     /* ensure updated_at ordering: tiny sleep not portable enough; rely on
@@ -28,7 +27,8 @@ static void seed_three(const char *db)
 TEST(get_existing_json_envelope)
 {
     char *db = make_temp_db_path();
-    CmdResult r, g;
+    CmdResult r;
+    CmdResult g;
     const char *a[] = {"add", "--tag", "t", "get me"};
     const char *gargs[] = {"get", "--json", "1"};
     ASSERT_TRUE(db != NULL);
@@ -66,7 +66,8 @@ TEST(get_missing_exits_two)
 TEST(get_human_shows_body)
 {
     char *db = make_temp_db_path();
-    CmdResult r, g;
+    CmdResult r;
+    CmdResult g;
     const char *a[] = {"add", "human get body"};
     const char *gargs[] = {"get", "1"};
     ASSERT_TRUE(db != NULL);
@@ -223,7 +224,9 @@ TEST(list_limit_over_hard_cap_rejected)
 TEST(delete_existing)
 {
     char *db = make_temp_db_path();
-    CmdResult r, d, g;
+    CmdResult r;
+    CmdResult d;
+    CmdResult g;
     const char *a[] = {"add", "to delete"};
     const char *dargs[] = {"delete", "1"};
     const char *gargs[] = {"get", "1"};
@@ -259,7 +262,8 @@ TEST(delete_missing_exits_two)
 TEST(delete_json_shape)
 {
     char *db = make_temp_db_path();
-    CmdResult r, d;
+    CmdResult r;
+    CmdResult d;
     const char *a[] = {"add", "bye"};
     const char *dargs[] = {"delete", "--json", "1"};
     ASSERT_TRUE(db != NULL);

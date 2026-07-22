@@ -32,7 +32,7 @@ typedef struct {
 } CliGlobals;
 
 /*
- * Result of parsing argv. Pointers alias argv (no ownership).
+ * Result of parsing argv.
  * On error != CLI_ERR_OK, only error / error_arg / error_option are meaningful
  * for messaging; command may still be set for context (e.g. help target).
  */
@@ -45,13 +45,24 @@ typedef struct {
     CliCommand help_topic; /* when command==HELP: NONE = general, else topic */
     CliGlobals globals;
 
-    /* Tokens after the subcommand name, excluding consumed globals. */
+    /*
+     * The subcommand's own arguments: every token after the subcommand name
+     * with globals (--db/--json) and meta flags (--help/--version) already
+     * removed, in original order. Tokens after a "--" separator are included
+     * verbatim (end-of-options). Subcommand parsers see only what is theirs.
+     *
+     * The array is heap-owned — release with cli_args_free(). Its elements
+     * alias argv and must not be freed individually.
+     */
     int rest_argc;
-    char *const *rest_argv;
+    const char **rest_argv;
 } CliArgs;
 
-/* Fills *out. Never returns a status code — inspect out->error. */
+/* Fills *out (allocates out->rest_argv). Never returns a status — inspect out->error. */
 void cli_parse(int argc, char *const *argv, CliArgs *out);
+
+/* Releases resources owned by *out. Safe on a zeroed/failed CliArgs. */
+void cli_args_free(CliArgs *out);
 
 /* User-facing base message for err (no trailing newline). Never NULL. */
 const char *cli_error_message(CliError err);

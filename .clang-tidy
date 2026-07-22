@@ -1,3 +1,9 @@
+# Applies identically to src/ and tests/. Two checks are disabled by context,
+# not to lower the bar:
+#   misc-include-cleaner  - IWYU-style; false positives on macOS POSIX symbols
+#                           (strdup/open/popen/PATH_MAX are included yet flagged).
+#   concurrency-mt-unsafe - the project is single-threaded (local CLI plus a
+#                           fork/exec test harness); no shared-state reentrancy.
 Checks: >
   -*,
   bugprone-*,
@@ -12,9 +18,10 @@ Checks: >
   -readability-identifier-length,
   -bugprone-easily-swappable-parameters,
   -misc-no-recursion,
-  -clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling,
-  -cert-err33-c
+  -misc-include-cleaner,
+  -concurrency-mt-unsafe,
+  -clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling
 
 WarningsAsErrors: '*'
-HeaderFilterRegex: 'src/.*'
+HeaderFilterRegex: '(src|tests)/.*'
 FormatStyle: file
