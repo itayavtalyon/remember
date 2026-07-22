@@ -28,11 +28,15 @@ else()
     add_compile_options(-g -O1)
 endif()
 
-# --- remember CLI (skeleton) -------------------------------------------------
+# --- remember CLI ------------------------------------------------------------
 add_executable(remember
     src/main.c
+    src/cli.c
 )
 target_include_directories(remember PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+target_compile_definitions(remember PRIVATE
+    REMEMBER_VERSION="${PROJECT_VERSION}"
+)
 
 # Sanitizers on the CLI under test only — not on remember_tests (fork/exec harness
 # deadlocks under ASan when both parent and child are instrumented).
@@ -72,14 +76,16 @@ set_tests_properties(remember_tests PROPERTIES
 
 find_program(CLANG_FORMAT clang-format)
 if(CLANG_FORMAT)
+    # Use find so paths with spaces work (shell globs break under VERBATIM).
     add_custom_target(format
-        COMMAND ${CLANG_FORMAT} -i
-            --style=file
-            ${CMAKE_SOURCE_DIR}/src/*.c
-            ${CMAKE_SOURCE_DIR}/src/*.h
-            ${CMAKE_SOURCE_DIR}/tests/*.c
-            ${CMAKE_SOURCE_DIR}/tests/*.h
-        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+        COMMAND ${CMAKE_COMMAND} -E chdir ${CMAKE_SOURCE_DIR}
+            ${CLANG_FORMAT} -i --style=file
+            src/main.c src/cli.c src/cli.h src/exit_codes.h
+            tests/test.h tests/harness.h tests/harness.c tests/register.h
+            tests/test_main.c tests/test_cli_global.c tests/test_add.c
+            tests/test_get_list_delete.c tests/test_search.c tests/test_update.c
+            tests/test_json_db_config.c tests/test_key.c
+            tests/test_schema_config.c tests/test_verification_edges.c
         COMMENT "Running clang-format"
         VERBATIM
     )

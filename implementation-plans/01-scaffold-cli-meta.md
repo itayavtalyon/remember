@@ -41,6 +41,25 @@ Ship a real argv front-door: version, help, unknown/missing subcommand, global f
 
 ## Done checklist
 
-- [ ] Meta tests green
-- [ ] Formatted + compiles with `-Werror`
-- [ ] No sqlite includes
+- [x] Meta tests green (expanded parser suite)
+- [x] Formatted + compiles with `-Werror`
+- [x] No sqlite includes
+- [x] Post-review refactor: void parse, CliError, ArgCursor, command hash map, subcommand help, ASCII help, printing in main, private NYI
+
+## Review notes (2026-07-22)
+
+Strict review of step-01 code drove a refactor (not just nits):
+
+- **Parse errors:** `cli_parse` is `void`; `CliError` + `cli_error_message()` + `error_arg`/`error_option` are the source of truth.
+- **ArgCursor** owns walking argv (no `int *ip` mutation).
+- **Globals** work before/after the subcommand; command flags only after.
+- **Command table + open-addressing hash map** for name lookup; summaries for help.
+- **Subcommand help:** `add --help`, `help add`.
+- **Printing** only in `main.c`; **REMEMBER_NYI** private to main.
+- **bool** for booleans; **const** argv; ASCII strings; `default` in switches.
+- **NONE vs UNKNOWN:** none = missing token; unknown = bad token + `error_arg`. No abort on bad input.
+- Lasting rules: `docs/engineering-notes.md`, checklist `docs/STEP_REVIEW_CHECKLIST.md`, skill `remember-step-review`.
+
+### Still note for later steps
+
+- `rest_argv` may still contain global tokens if the user mixed them after the command; command parsers should ignore re-seen `--db`/`--json` or re-scan with shared helpers.

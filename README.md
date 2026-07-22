@@ -12,6 +12,8 @@ Skeleton + **failing** suite (TDD red): **96 tests, 0 pass**. Implementation fol
 
 Only **`store_sqlite.c`** may include SQLite. All other code uses **`store.h`** (port). CLI → commands → store → SQLite adapter.
 
+Engineering rules and post-step review: [`docs/engineering-notes.md`](docs/engineering-notes.md), [`docs/STEP_REVIEW_CHECKLIST.md`](docs/STEP_REVIEW_CHECKLIST.md).
+
 ## Build & test
 
 ```bash
