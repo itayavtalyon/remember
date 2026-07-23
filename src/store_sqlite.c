@@ -10,6 +10,14 @@
 #include <sys/stat.h>
 #include <sys/types.h>
 
+/*
+ * PATH_MAX is POSIX, not ISO C. With -std=c11 -pedantic, glibc may omit it from
+ * <limits.h> unless feature-test macros are set. Fall back to a sane stack cap.
+ */
+#ifndef PATH_MAX
+#define PATH_MAX 4096
+#endif
+
 struct Store {
     sqlite3 *db;
 };

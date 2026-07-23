@@ -22,7 +22,9 @@ jobs:
     name: linux (ASan+UBSan+LSan, lint, scan-build)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      # Checkout is a GitHub-maintained JS action (runs on Node in the runner).
+      # Our project is pure C — we do not use Node ourselves.
+      - uses: actions/checkout@v5
 
       - name: Install toolchain
         run: |
@@ -64,7 +66,7 @@ jobs:
     name: macos (ASan+UBSan, lint, leaks)
     runs-on: macos-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Install toolchain
         run: |
