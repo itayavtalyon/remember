@@ -16,7 +16,23 @@ How we keep C code safe: compile hard, analyze statically, run sanitizers, detec
 | include-what-you-use | if installed / `REMEMBER_IWYU=1` | if package present | optional |
 | scan-build | `REMEMBER_SCAN_BUILD=1` or `cmake --build --target analyze` | **required** | **required** |
 | macOS `leaks(1)` on **`remember_plain`** | `cmake --build build --target leaks-macos` | n/a | **required** |
+| **CodeQL** (Code Scanning) | n/a | `.github/workflows/codeql.yml` | n/a |
 | Valgrind | **not used** | **not used** | **not used** |
+
+### Code Scanning vs our `ci` workflow
+
+| | **ci.yml** | **codeql.yml** |
+|--|------------|----------------|
+| Purpose | Build, tests, sanitizers, lint, scan-build | GitHub **Code Scanning** alerts |
+| Ruleset “status checks” | Job names like `linux (…)` | Separate |
+| Ruleset “Wait for Code Scanning results” | No | **Yes** — needs this workflow (or turn that rule off) |
+
+If merge is blocked with *“Waiting for Code Scanning results”*:
+
+1. Prefer: keep `codeql.yml` (this repo) and wait for the **codeql** workflow to finish once on the PR/default branch, **or**
+2. **Settings → Rules →** your `main` ruleset → disable **Require code scanning results** (fine if you rely on `ci` + scan-build only).
+
+Also ensure **Settings → Code security → Code scanning** is not disabled for the repo.
 
 ## Targets
 

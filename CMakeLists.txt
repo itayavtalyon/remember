@@ -117,6 +117,11 @@ if(NOT CMAKE_BUILD_TYPE STREQUAL "Release")
     target_compile_definitions(sqlite3 PUBLIC SQLITE_ENABLE_API_ARMOR)
 endif()
 target_compile_options(sqlite3 PRIVATE -w)
+# FTS5 BM25 calls log(3); on Linux that lives in libm (not linked by default).
+# PUBLIC so every executable that links sqlite3 also gets -lm.
+if(UNIX)
+    target_link_libraries(sqlite3 PUBLIC m)
+endif()
 
 # Shared app sources (compiled per-target so the fork/exec harness parent can
 # stay uninstrumented while the CLI and store unit binary take sanitizers).

@@ -1,0 +1,56 @@
+# GitHub Code Scanning (CodeQL). Required if the branch ruleset waits for
+# "Code Scanning results". This is separate from our ci.yml quality jobs.
+name: codeql
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+  schedule:
+    # Weekly; keeps the default-branch scanning fresh for the ruleset.
+    - cron: "17 4 * * 1"
+  workflow_dispatch:
+
+concurrency:
+  group: codeql-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  analyze:
+    name: CodeQL analyze (C)
+    runs-on: ubuntu-latest
+    # Needed to upload results to the Security / Code Scanning UI.
+    permissions:
+      security-events: write
+      contents: read
+      actions: read
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v3
+        with:
+          languages: c-cpp
+          # Build-mode: we compile ourselves in the next steps (autobuild is flaky for CMake).
+          build-mode: manual
+
+      - name: Install toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential cmake ninja-build clang
+
+      - name: Build (no sanitizers — CodeQL wants a normal compile)
+        run: |
+          cmake -S . -B build -G Ninja \
+            -DCMAKE_BUILD_TYPE=Debug \
+            -DCMAKE_C_COMPILER=clang \
+            -DREMEMBER_ENABLE_SANITIZERS=OFF \
+            -DREMEMBER_ENABLE_LSAN=OFF
+          cmake --build build
+
+      - name: Perform CodeQL analysis
+        uses: github/codeql-action/analyze@v3
+        with:
+          category: "/language:c-cpp"
