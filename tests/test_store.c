@@ -11,6 +11,10 @@
 #include <sys/wait.h>
 #include <unistd.h>
 
+#ifndef PATH_MAX
+#define PATH_MAX 4096
+#endif
+
 /*
  * Unit suite for the store port (step 02). Black-box against store.h;
  * schema details inspected via the sqlite3 CLI helper when available.
