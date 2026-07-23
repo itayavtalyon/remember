@@ -4,7 +4,6 @@
 #include "test.h"
 
 #include <fcntl.h>
-#include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -165,6 +164,9 @@ TEST(store_open_db_file_mode_0600)
     struct stat st;
 
     ASSERT_TRUE(db != NULL);
+    if (db == NULL) {
+        return;
+    }
     s = store_open(db, err, sizeof(err));
     ASSERT_TRUE(s != NULL);
     store_close(s);
@@ -413,7 +415,7 @@ cleanup:
 
 TEST(store_open_path_too_long_fails)
 {
-    size_t n = (size_t)PATH_MAX + 16U;
+    size_t n = (size_t)REMEMBER_PATH_MAX + 16U;
     char *path = malloc(n + 1U);
     char err[256];
     Store *s;

@@ -1,7 +1,6 @@
 #include "cli.h"
 #include "exit_codes.h"
 
-#include <stddef.h>
 #include <stdio.h>
 
 #ifndef REMEMBER_VERSION

@@ -5,7 +5,10 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+/* mkdtemp: Darwin declares it in unistd.h; glibc often via stdlib + POSIX. */
+#ifdef __APPLE__
 #include <unistd.h>
+#endif
 
 /*
  * Schema version + sync-path warning (design Round 7).
@@ -25,6 +28,9 @@ TEST(sync_path_warning_on_clouddocs_marker)
     const char *a[] = {"add", "cloud path note"};
     size_t n;
     ASSERT_TRUE(db != NULL);
+    if (db == NULL) {
+        return;
+    }
     /* Build a path that embeds the marker but lives under /tmp for safety. */
     n = strlen("/tmp/com~apple~CloudDocs-remember-XXXXXX") + 1U;
     syncish = malloc(n);
@@ -45,13 +51,20 @@ TEST(sync_path_warning_on_clouddocs_marker)
         size_t pn = strlen(syncish) + strlen("/t.db") + 1U;
         path = malloc(pn);
         ASSERT_TRUE(path != NULL);
+        if (path == NULL) {
+            free(syncish);
+            free(db);
+            return;
+        }
         (void)snprintf(path, pn, "%s/t.db", syncish);
         r = run_remember(path, a, 2, NULL);
         ASSERT_EQ_INT(r.exit_code, 0);
         /* Heuristic warning required (design: one-line stderr). */
         ASSERT_TRUE(r.err != NULL && r.err[0] != '\0');
-        ASSERT_TRUE(strstr(r.err, "sync") != NULL || strstr(r.err, "iCloud") != NULL ||
-                    strstr(r.err, "CloudDocs") != NULL || strstr(r.err, "Dropbox") != NULL);
+        if (r.err != NULL) {
+            ASSERT_TRUE(strstr(r.err, "sync") != NULL || strstr(r.err, "iCloud") != NULL ||
+                        strstr(r.err, "CloudDocs") != NULL || strstr(r.err, "Dropbox") != NULL);
+        }
         cmd_result_free(&r);
         free(path);
     }

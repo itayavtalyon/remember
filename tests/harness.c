@@ -312,7 +312,7 @@ static void remove_temp_dir(const char *dir)
     if (d != NULL) {
         struct dirent *ent;
         while ((ent = readdir(d)) != NULL) {
-            char path[PATH_MAX];
+            char path[4096];
             struct stat st;
             int n;
             if (strcmp(ent->d_name, ".") == 0 || strcmp(ent->d_name, "..") == 0) {
