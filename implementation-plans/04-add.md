@@ -34,6 +34,12 @@ FTS insert/resync inside the same transaction.
 - Commands orchestrate normalize → store_add → output.
 - **No SQL in `commands.c`.**
 
+## Carried from step 02 review (wire `store_open` here)
+
+- **`--db` path policy owns `:memory:` and `file:` handling.** `store_open` passes its path straight to `sqlite3_open_v2`, so `remember --db :memory: add ...` opens a throwaway store that discards everything on close — a silent data-loss footgun. Resolve when `main` first calls `store_open`: either reject non-file `--db` values, or document them as an explicit ephemeral mode. Add a black-box test for whichever you pick.
+- **Sync-path warning** (`path_looks_synced()` in `util`, called from `main` before/after open) is still deferred; land it when the CLI gains the real DB path.
+- Once `main` calls `store_open`, the black-box suite exercises the adapter under ASan (via `remember`), complementing the fast `store_asan_gate` unit target.
+
 ## Tests that must pass
 
 ### Keyless add (`test_add.c`)

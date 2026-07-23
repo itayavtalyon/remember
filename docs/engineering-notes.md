@@ -6,6 +6,16 @@ Update after each step review.
 ## Architecture
 
 - **Store port:** only `store_sqlite.c` may include SQLite. Everyone else uses `store.h`.
+- **Amalgamation:** `third_party/sqlite/` (pinned version in its README); CMake target `sqlite3` built with `-w` (no project `-Werror` on that TU).
+- **SQLite compile flags** (single-threaded personal CLI):
+  - Required: `SQLITE_ENABLE_FTS5`, `SQLITE_OMIT_LOAD_EXTENSION`, `SQLITE_DQS=0`
+  - Recommended: `SQLITE_THREADSAFE=0`, `SQLITE_DEFAULT_MEMSTATUS=0`, `SQLITE_LIKE_DOESNT_MATCH_BLOBS`, `SQLITE_OMIT_DEPRECATED`, `SQLITE_OMIT_DECLTYPE`, `SQLITE_OMIT_PROGRESS_CALLBACK`, `SQLITE_OMIT_SHARED_CACHE`, `SQLITE_DEFAULT_FOREIGN_KEYS=1`
+  - Polish: `SQLITE_DEFAULT_FILE_PERMISSIONS=0600` (private DB files), `SQLITE_SECURE_DELETE` (zero deleted content)
+  - Debug only: `SQLITE_ENABLE_API_ARMOR` (misuse checks; not a security boundary)
+  - Do **not** re-enable threads without flipping `SQLITE_THREADSAFE` back to `1` (or `2`).
+- **`store_open`:** creates parent dirs `0700`, applies `foreign_keys=ON` + `busy_timeout=5000`, gates on `user_version` (0→create→1, 1→ok, >1→error `"database is newer than this remember"`). Default journal (no WAL).
+- **Schema bootstrap must be atomic:** run initial DDL + `user_version=1` inside one transaction (or tear down on failure). A partial create at `user_version=0` bricks later opens (`table already exists`).
+- **Parent mkdir:** on `EEXIST`, verify the path component is a directory (`S_ISDIR`), not a file.
 - **CLI layers:** `cli_parse` (pure argv → `CliArgs`) / `main` (I/O + exit codes) / later `commands_*` / `output` as needed.
 - **Stable exit codes:** `0` ok, `1` usage/error, `2` not found. Scaffold NYI is private (`REMEMBER_NYI` in `main.c` only), not public ABI.
 
@@ -17,8 +27,16 @@ Update after each step review.
 - **Globals** (`--db`, `--json`) allowed before or after the subcommand.
 - **Before** subcommand, unknown `-flag` → usage error.
 - **After** subcommand, unknown-looking flags stay in `rest_*` for command parsers.
-- **Command registry:** single table `k_commands[]` + open-addressing hash map for name lookup. Add a command once in that table (+ dispatch in `main` until function pointers land).
+- **Command registry:** single table `k_commands[]` with **linear** name lookup (n is tiny). Add a command once in that table (+ dispatch in `main` until function pointers land).
 - **Help:** general (`--help` / `help`), topic (`help add`, `add --help`).
+
+### Sanitizers / leaks (summary)
+
+- Instrument **`remember`** and **`remember_store_tests`** with ASan+UBSan (Debug).
+- Do **not** ASan **`remember_tests`** (fork parent + ASan child deadlocks).
+- Linux CI: `REMEMBER_ENABLE_LSAN=ON` + `detect_leaks=1`.
+- macOS leak smoke: **`remember_plain`** + `leaks(1)` (ASan heaps are invisible to `leaks`).
+- Details: `docs/QUALITY.md`.
 
 ### Subcommand identity: NONE vs UNKNOWN
 
@@ -39,6 +57,44 @@ Internal `name == NULL` in lookup is not a user path: treat as lookup miss → U
 - `(void)fprintf` / `(void)fputs` OK for stdout/stderr.
 - Exhaustive `switch` on enums with **`default:`** defensive path (no silent fallthrough).
 - Format + lint clean on every step (`scripts/lint-all.sh`).
+- Full quality matrix (sanitizers, LSan, scan-build, IWYU, CI): **`docs/QUALITY.md`**.
+
+### Resource cleanup: `goto cleanup` (required pattern)
+
+Multi-resource functions use a **single exit with `goto cleanup` / `goto cleanup_fail`**, not copy-pasted free/close on every branch.
+
+```c
+int do_thing(...)
+{
+    T *a = NULL;
+    U *b = NULL;
+    int rc = -1;
+
+    a = acquire_a();
+    if (a == NULL) {
+        goto cleanup;
+    }
+    b = acquire_b();
+    if (b == NULL) {
+        goto cleanup;
+    }
+    if (work(a, b) != 0) {
+        goto cleanup;
+    }
+    rc = 0;
+
+cleanup:
+    free_b(b);   /* NULL-safe */
+    free_a(a);
+    return rc;
+}
+```
+
+Rules:
+- One cleanup label (or success path + `cleanup_fail` when the success path retains ownership — see `store_open`).
+- Free/close in reverse acquisition order; helpers must accept NULL.
+- On failure, set the error **before** `goto`; cleanup must not overwrite a useful error (use quiet rollback helpers when needed).
+- Prefer this over nested `if` pyramids and over duplicated teardown blocks.
 
 ## Testing
 

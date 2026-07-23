@@ -235,7 +235,7 @@ TEST(orphan_tag_removed_when_last_use_deleted)
     d = run_remember(db, dargs, 2, NULL);
     ASSERT_EQ_INT(d.exit_code, 0);
     cmd_result_free(&d);
-    count = sqlite3_query_line(db, "SELECT count(*) FROM tags WHERE name='orphanonly';");
+    count = harness_sqlite_query_line(db, "SELECT count(*) FROM tags WHERE name='orphanonly';");
     ASSERT_TRUE(count != NULL);
     ASSERT_STREQ(count, "0");
     free(count);
@@ -259,7 +259,7 @@ TEST(shared_tag_survives_when_other_entry_uses_it)
     d = run_remember(db, dargs, 2, NULL);
     ASSERT_EQ_INT(d.exit_code, 0);
     cmd_result_free(&d);
-    count = sqlite3_query_line(db, "SELECT count(*) FROM tags WHERE name='shared';");
+    count = harness_sqlite_query_line(db, "SELECT count(*) FROM tags WHERE name='shared';");
     ASSERT_TRUE(count != NULL);
     ASSERT_STREQ(count, "1");
     free(count);
@@ -547,8 +547,8 @@ TEST(schema_user_version_too_new_refused)
     ASSERT_EQ_INT(r.exit_code, 0);
     cmd_result_free(&r);
     /* Bump schema beyond tool support (reuse the query helper; set returns no rows). */
-    free(sqlite3_query_line(db, "PRAGMA user_version=99;"));
-    ver = sqlite3_query_line(db, "PRAGMA user_version;");
+    free(harness_sqlite_query_line(db, "PRAGMA user_version=99;"));
+    ver = harness_sqlite_query_line(db, "PRAGMA user_version;");
     ASSERT_TRUE(ver != NULL);
     ASSERT_STREQ(ver, "99");
     free(ver);

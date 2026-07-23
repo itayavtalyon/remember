@@ -21,7 +21,7 @@ Dev tools for inspect tests: `sqlite3` on PATH (`brew install sqlite` if needed)
 | 8 | Empty body / size | add empty/whitespace/64kib |
 | 9 | Paging JSON | list/search paging tests |
 | 10 | `--db` isolation | `db_flag_isolates_stores` |
-| 11 | Concurrent | *optional — not automated* |
+| 11 | Concurrent | `store_open_concurrent_create_all_succeed` (create race); write-path stress still manual |
 | 12 | Skill | plan 10 |
 | 13 | Lint | plan 08 |
 | 14 | user_version>1 | `schema_user_version_too_new_refused` |
@@ -54,6 +54,7 @@ Dev tools for inspect tests: `sqlite3` on PATH (`brew install sqlite` if needed)
 | `test_update.c` | update |
 | `test_key.c` | `--key` |
 | `test_json_db_config.c` | db path / JSON fields |
+| `test_store.c` | store_open/close, schema, user_version gate, create race + rollback, parent 0700/0600, error edges (step 02 unit; runs black-box **and** under ASan via `remember_store_tests`) |
 | `test_schema_config.c` | sync path, key null |
 | `test_verification_edges.c` | V21–34 edges, GC, FTS sync, UTF-8, 0700, user_version |
 

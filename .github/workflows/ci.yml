@@ -1,0 +1,110 @@
+# Quality gates: hard compile, sanitizers, leak detection (Linux LSan), lint, scan-build.
+# Valgrind is intentionally not used (poor Apple Silicon story; sanitizers replace it).
+name: ci
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # Fail fast on sanitizer issues. LSan is meaningful on Linux.
+  UBSAN_OPTIONS: halt_on_error=1:print_stacktrace=1
+  ASAN_OPTIONS: detect_leaks=1:halt_on_error=1:abort_on_error=1:allocator_may_return_null=1
+
+jobs:
+  linux:
+    name: linux (ASan+UBSan+LSan, lint, scan-build)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential cmake ninja-build clang clang-tidy clang-tools \
+            clang-format cppcheck sqlite3 \
+            iwyu python3
+
+      - name: Configure (sanitizers + LSan request)
+        run: |
+          cmake -S . -B build -G Ninja \
+            -DCMAKE_BUILD_TYPE=Debug \
+            -DCMAKE_C_COMPILER=clang \
+            -DREMEMBER_ENABLE_SANITIZERS=ON \
+            -DREMEMBER_ENABLE_LSAN=ON
+
+      - name: Build
+        run: cmake --build build
+
+      - name: CTest (scaffold + store ASan/LSan)
+        run: ctest --test-dir build --output-on-failure
+
+      - name: Black-box gate (cli_global,store)
+        run: ./build/remember_tests ./build/remember --only cli_global,store
+
+      - name: Store unit under ASan/LSan
+        run: ./build/remember_store_tests
+
+      - name: Lint (format, tidy, cppcheck, IWYU if present, scan-build)
+        env:
+          CI: "true"
+          BUILD_DIR: build
+          REMEMBER_SCAN_BUILD: "1"
+          REMEMBER_IWYU: "1"
+        run: ./scripts/lint-all.sh
+
+  macos:
+    name: macos (ASan+UBSan, lint, leaks)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install toolchain
+        run: |
+          brew install cmake ninja cppcheck sqlite
+          # LLVM provides clang-tidy, clang-format, scan-build
+          brew install llvm
+          echo "$(brew --prefix llvm)/bin" >> "$GITHUB_PATH"
+
+      - name: Configure
+        run: |
+          cmake -S . -B build -G Ninja \
+            -DCMAKE_BUILD_TYPE=Debug \
+            -DCMAKE_C_COMPILER=clang \
+            -DREMEMBER_ENABLE_SANITIZERS=ON \
+            -DREMEMBER_ENABLE_LSAN=OFF
+
+      - name: Build
+        run: cmake --build build
+
+      - name: CTest
+        env:
+          # LSan is not reliable on macOS; keep ASan corruption checks only.
+          ASAN_OPTIONS: detect_leaks=0:halt_on_error=1:abort_on_error=1:allocator_may_return_null=1
+        run: ctest --test-dir build --output-on-failure
+
+      - name: Black-box + store unit
+        env:
+          ASAN_OPTIONS: detect_leaks=0:halt_on_error=1:abort_on_error=1:allocator_may_return_null=1
+        run: |
+          ./build/remember_tests ./build/remember --only cli_global,store
+          ./build/remember_store_tests
+
+      - name: Lint
+        env:
+          CI: "true"
+          BUILD_DIR: build
+          # scan-build full rebuild is heavy; still run when tool exists.
+          REMEMBER_SCAN_BUILD: "1"
+          REMEMBER_IWYU: "0"
+        run: ./scripts/lint-all.sh
+
+      - name: macOS leaks(1) CLI smoke (non-ASan binary)
+        run: cmake --build build --target leaks-macos

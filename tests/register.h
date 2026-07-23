@@ -2,6 +2,7 @@
 #define REMEMBER_REGISTER_H
 
 void register_cli_global_tests(void);
+void register_store_tests(void);
 void register_add_tests(void);
 void register_get_list_delete_tests(void);
 void register_search_tests(void);

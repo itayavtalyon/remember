@@ -1,7 +1,12 @@
-# Build
+# Build trees
 /build/
+/build-*/
+/build-scan/
+/build-analyze/
 /cmake-build-*/
 compile_commands.json
+*.o
+*.a
 
 # Lint / IDE / local agent
 /lint-reports/

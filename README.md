@@ -6,7 +6,9 @@ Plans: [`implementation-plans/INDEX.md`](implementation-plans/INDEX.md).
 
 ## Status
 
-Skeleton + **failing** suite (TDD red): **96 tests, 0 pass**. Implementation follows the step plans.
+Step **01** (meta CLI) and **02** (store port + SQLite schema) done. Remaining command steps still red under TDD.
+
+Pinned SQLite amalgamation: **3.53.3** in `third_party/sqlite/` (see that README).
 
 ## Architecture (pragmatic)
 
@@ -17,10 +19,16 @@ Engineering rules and post-step review: [`docs/engineering-notes.md`](docs/engin
 ## Build & test
 
 ```bash
-cmake -S . -B build -DCMAKE_C_COMPILER=clang
+cmake -S . -B build -DCMAKE_C_COMPILER=clang \
+  -DREMEMBER_ENABLE_SANITIZERS=ON
 cmake --build build
-./build/remember_tests ./build/remember
+ctest --test-dir build --output-on-failure
+./build/remember_tests ./build/remember --only cli_global,store
+./build/remember_store_tests   # store port under ASan
 ```
+
+Quality matrix (sanitizers, LSan on Linux CI, scan-build, IWYU, macOS `leaks`):  
+[`docs/QUALITY.md`](docs/QUALITY.md). CI: [`.github/workflows/ci.yml`](.github/workflows/ci.yml).
 
 ## Format & lint
 
@@ -29,6 +37,9 @@ export PATH="$(brew --prefix llvm)/bin:$PATH"   # clang-tidy, clang-format, scan
 brew install cppcheck llvm                      # once
 cmake --build build --target format
 cmake --build build --target lint
+# Optional heavy gates:
+REMEMBER_SCAN_BUILD=1 ./scripts/lint-all.sh
+cmake --build build --target leaks-macos        # macOS only; uses remember_plain
 ```
 
 Coverage: [`tests/COVERAGE.md`](tests/COVERAGE.md).

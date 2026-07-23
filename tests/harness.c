@@ -5,14 +5,13 @@
 #include <fcntl.h>
 #include <limits.h>
 #include <poll.h>
+#include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
 #include <sys/wait.h>
 #include <unistd.h>
-
-#include <stdbool.h>
 
 const char *g_remember_bin = NULL;
 
@@ -138,7 +137,8 @@ static void close_pipe(int p[2])
     }
 }
 
-/* argv: bin, --db, path, args..., NULL. Elements alias their inputs. */
+/* argv: bin, --db, path, args..., NULL. Elements alias their inputs.
+ * execv wants char *const[]; the process does not write through these pointers. */
 static char **build_child_argv(const char *db_path, const char *const *args, size_t nargs)
 {
     size_t argc = 3U + nargs;
@@ -148,12 +148,14 @@ static char **build_child_argv(const char *db_path, const char *const *args, siz
     if (argv == NULL) {
         return NULL;
     }
+    /* NOLINTBEGIN(clang-diagnostic-cast-qual) */
     argv[0] = (char *)g_remember_bin;
     argv[1] = (char *)"--db";
     argv[2] = (char *)db_path;
     for (i = 0; i < nargs; i++) {
         argv[3U + i] = (char *)args[i];
     }
+    /* NOLINTEND(clang-diagnostic-cast-qual) */
     argv[argc] = NULL;
     return argv;
 }
@@ -234,13 +236,15 @@ CmdResult run_remember(const char *db_path, const char *const *args, size_t narg
     if (g_remember_bin == NULL || db_path == NULL) {
         return harness_error("harness: missing binary or db path");
     }
+    /* Every failure below goes through cleanup: a half-open pipe pair would
+       otherwise leak two fds per call. */
     if (pipe(out_pipe) != 0 || pipe(err_pipe) != 0) {
-        return harness_error("harness: pipe failed");
+        result = harness_error("harness: pipe failed");
+        goto cleanup;
     }
     if (stdin_data != NULL && pipe(in_pipe) != 0) {
-        close_pipe(out_pipe);
-        close_pipe(err_pipe);
-        return harness_error("harness: stdin pipe failed");
+        result = harness_error("harness: stdin pipe failed");
+        goto cleanup;
     }
 
     argv = build_child_argv(db_path, args, nargs);
@@ -299,6 +303,8 @@ static size_t g_temp_count;
 static size_t g_temp_cap;
 static bool g_atexit_registered;
 
+/* Depth-first: tests nest databases under the temp dir (see parent-dir tests),
+   so a single-level unlink sweep would leave the whole tree behind in /tmp. */
 static void remove_temp_dir(const char *dir)
 {
     DIR *d = opendir(dir);
@@ -307,12 +313,18 @@ static void remove_temp_dir(const char *dir)
         struct dirent *ent;
         while ((ent = readdir(d)) != NULL) {
             char path[PATH_MAX];
+            struct stat st;
             int n;
             if (strcmp(ent->d_name, ".") == 0 || strcmp(ent->d_name, "..") == 0) {
                 continue;
             }
             n = snprintf(path, sizeof(path), "%s/%s", dir, ent->d_name);
-            if (n > 0 && (size_t)n < sizeof(path)) {
+            if (n <= 0 || (size_t)n >= sizeof(path)) {
+                continue;
+            }
+            if (lstat(path, &st) == 0 && S_ISDIR(st.st_mode)) {
+                remove_temp_dir(path);
+            } else {
                 (void)unlink(path);
             }
         }
@@ -435,20 +447,66 @@ bool str_is_blank(const char *s)
     return true;
 }
 
-char *sqlite3_query_line(const char *db_path, const char *sql)
+/*
+ * Append s to dst as a single-quoted shell word, escaping embedded quotes as
+ * '\''. Double-quoting would be shorter but leaves $, ` and \ live, which SQL
+ * predicates ('%$%', LIKE patterns) hit sooner or later.
+ * Returns false if dst would overflow.
+ */
+static bool shell_quote_append(char *dst, size_t cap, size_t *len, const char *s)
+{
+    size_t i = *len;
+
+    if (i + 1U >= cap) {
+        return false;
+    }
+    dst[i++] = '\'';
+    for (; *s != '\0'; s++) {
+        if (*s == '\'') {
+            if (i + 4U >= cap) {
+                return false;
+            }
+            memcpy(dst + i, "'\\''", 4U);
+            i += 4U;
+            continue;
+        }
+        if (i + 1U >= cap) {
+            return false;
+        }
+        dst[i++] = *s;
+    }
+    if (i + 1U >= cap) {
+        return false;
+    }
+    dst[i++] = '\'';
+    dst[i] = '\0';
+    *len = i;
+    return true;
+}
+
+char *harness_sqlite_query_line(const char *db_path, const char *sql)
 {
     char cmd[1024];
     FILE *fp;
     char line[512];
     char *out;
-    int n;
+    size_t len;
 
     if (db_path == NULL || sql == NULL) {
         return NULL;
     }
     /* Requires sqlite3 CLI on PATH (dev dependency for inspect-only tests). */
-    n = snprintf(cmd, sizeof(cmd), "sqlite3 '%s' '%s'", db_path, sql);
-    if (n < 0 || (size_t)n >= sizeof(cmd)) {
+    len = (size_t)snprintf(cmd, sizeof(cmd), "sqlite3 ");
+    if (!shell_quote_append(cmd, sizeof(cmd), &len, db_path)) {
+        return NULL;
+    }
+    if (len + 1U >= sizeof(cmd)) {
+        return NULL;
+    }
+    cmd[len] = ' ';
+    len++;
+    cmd[len] = '\0';
+    if (!shell_quote_append(cmd, sizeof(cmd), &len, sql)) {
         return NULL;
     }
     /* Test-only DB inspection; command is built from test-controlled paths/SQL,

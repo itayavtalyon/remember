@@ -1,9 +1,13 @@
-# Applies identically to src/ and tests/. Two checks are disabled by context,
-# not to lower the bar:
-#   misc-include-cleaner  - IWYU-style; false positives on macOS POSIX symbols
-#                           (strdup/open/popen/PATH_MAX are included yet flagged).
-#   concurrency-mt-unsafe - the project is single-threaded (local CLI plus a
-#                           fork/exec test harness); no shared-state reentrancy.
+# Applies identically to src/ and tests/.
+#
+# Disabled by context (not to lower the bar):
+#   concurrency-mt-unsafe — single-threaded CLI + fork/exec harness
+#   clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling —
+#       flags snprintf/etc. that we intentionally use with known sizes
+#
+# IWYU-style include hygiene:
+#   misc-include-cleaner is ON for project headers. System/POSIX false positives
+#   are reduced via IgnoreHeaders; remaining noise uses NOLINTNEXTLINE sparingly.
 Checks: >
   -*,
   bugprone-*,
@@ -18,10 +22,15 @@ Checks: >
   -readability-identifier-length,
   -bugprone-easily-swappable-parameters,
   -misc-no-recursion,
-  -misc-include-cleaner,
   -concurrency-mt-unsafe,
   -clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling
 
 WarningsAsErrors: '*'
 HeaderFilterRegex: '(src|tests)/.*'
 FormatStyle: file
+
+CheckOptions:
+  - key: misc-include-cleaner.IgnoreHeaders
+    value: '(sqlite3\.h|sys/.*|bits/.*|linux/.*|asm/.*|mach/.*|Availability.*|_.*)'
+  - key: misc-include-cleaner.DeduplicateFindings
+    value: 'true'

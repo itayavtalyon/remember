@@ -40,7 +40,7 @@ bool str_is_blank(const char *s);
  * Run `sqlite3 <db> <sql>` and return first line of stdout (heap; caller frees).
  * Returns NULL if sqlite3 missing or command failed.
  */
-char *sqlite3_query_line(const char *db_path, const char *sql);
+char *harness_sqlite_query_line(const char *db_path, const char *sql);
 
 /* Directory containing path (heap; caller frees). */
 char *dir_of_path(const char *file_path);
