@@ -37,6 +37,22 @@ cmake --build build --target analyze          # same idea via CMake
 cmake --build build --target leaks-macos      # macOS only
 ```
 
+## Portability (Linux glibc + strict C11)
+
+We build with `-std=c11` and `CMAKE_C_EXTENSIONS=OFF` (no `gnu11`). On glibc that
+**hides** POSIX prototypes (`strdup`, `mkdtemp`, `popen`, …) and often `PATH_MAX`
+unless feature-test macros are set **before** system headers.
+
+CMake therefore defines for all project TUs:
+
+- `_POSIX_C_SOURCE=200809L`
+- `_XOPEN_SOURCE=700`
+
+Plus a `#ifndef PATH_MAX` → `4096` fallback in `store_sqlite.c` / harness.
+
+macOS is more permissive; these defines are still safe there. CI on Ubuntu is what
+catches “works on my Mac” gaps.
+
 ## Layer A (compiler)
 
 Project TUs (not amalgamation) use warnings-as-errors plus:

@@ -13,6 +13,11 @@
 #include <sys/wait.h>
 #include <unistd.h>
 
+/* Same fallback as store_sqlite.c: PATH_MAX is POSIX, not ISO C. */
+#ifndef PATH_MAX
+#define PATH_MAX 4096
+#endif
+
 const char *g_remember_bin = NULL;
 
 void cmd_result_free(CmdResult *r)

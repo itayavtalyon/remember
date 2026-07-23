@@ -65,11 +65,18 @@ jobs:
   macos:
     name: macos (ASan+UBSan, lint, leaks)
     runs-on: macos-latest
+    env:
+      # GitHub's macOS image may ship third-party taps (e.g. aws/tap) that Brew
+      # now refuses without explicit trust. We only use core/llvm formulae.
+      HOMEBREW_NO_AUTO_UPDATE: 1
+      HOMEBREW_NO_INSTALLED_DEPENDENTS_CHECK: 1
     steps:
       - uses: actions/checkout@v5
 
       - name: Install toolchain
         run: |
+          # Drop untrusted preinstalled taps so brew install is not noisy/blocked.
+          brew untap aws/tap 2>/dev/null || true
           brew install cmake ninja cppcheck sqlite
           # LLVM provides clang-tidy, clang-format, scan-build
           brew install llvm

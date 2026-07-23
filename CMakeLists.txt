@@ -3,6 +3,9 @@ project(remember VERSION 0.1.0 LANGUAGES C)
 
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)
+# Keep language dialect ISO C11 (no gnu11), but still request POSIX APIs via
+# feature-test macros on *project* targets only (not the amalgamation).
+# CMAKE_C_EXTENSIONS OFF alone hides strdup/mkdtemp etc. on glibc with -std=c11.
 set(CMAKE_C_EXTENSIONS OFF)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
@@ -78,6 +81,18 @@ function(remember_apply_sanitizers target)
     endif()
 endfunction()
 
+# glibc + pure -std=c11 hides POSIX prototypes unless we request them.
+# Apply only on Linux project targets (not amalgamation, not macOS — Darwin
+# already exposes these APIs, and _XOPEN_SOURCE can hide mkdtemp / break SDKs).
+function(remember_apply_posix_feature_macros target)
+    if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+        target_compile_definitions(${target} PRIVATE
+            _POSIX_C_SOURCE=200809L
+            _XOPEN_SOURCE=700
+        )
+    endif()
+endfunction()
+
 # --- SQLite amalgamation (sole SQLite TU; relaxed warnings) ------------------
 add_library(sqlite3 STATIC third_party/sqlite/sqlite3.c)
 target_include_directories(sqlite3 PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/third_party/sqlite)
@@ -120,6 +135,7 @@ target_link_libraries(remember PRIVATE sqlite3)
 target_compile_definitions(remember PRIVATE
     REMEMBER_VERSION="${PROJECT_VERSION}"
 )
+remember_apply_posix_feature_macros(remember)
 remember_apply_sanitizers(remember)
 
 # Non-sanitized CLI for macOS leaks(1) (leaks cannot inspect ASan heaps).
@@ -132,6 +148,7 @@ target_link_libraries(remember_plain PRIVATE sqlite3)
 target_compile_definitions(remember_plain PRIVATE
     REMEMBER_VERSION="${PROJECT_VERSION}"
 )
+remember_apply_posix_feature_macros(remember_plain)
 
 # --- full black-box harness (NOT instrumented — forks ASan child) ------------
 set(REMEMBER_TEST_SOURCES
@@ -161,6 +178,7 @@ target_link_libraries(remember_tests PRIVATE sqlite3)
 target_compile_definitions(remember_tests PRIVATE
     REMEMBER_VERSION="${PROJECT_VERSION}"
 )
+remember_apply_posix_feature_macros(remember_tests)
 add_dependencies(remember_tests remember)
 
 # --- store unit tests under ASan (no fork/exec) — leak/corruption gate -------
@@ -176,6 +194,7 @@ target_include_directories(remember_store_tests PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/src
 )
 target_link_libraries(remember_store_tests PRIVATE sqlite3)
+remember_apply_posix_feature_macros(remember_store_tests)
 remember_apply_sanitizers(remember_store_tests)
 
 enable_testing()
