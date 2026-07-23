@@ -4,17 +4,12 @@
 #include "test.h"
 
 #include <fcntl.h>
-#include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
 #include <sys/wait.h>
 #include <unistd.h>
-
-#ifndef PATH_MAX
-#define PATH_MAX 4096
-#endif
 
 /*
  * Unit suite for the store port (step 02). Black-box against store.h;
@@ -420,7 +415,7 @@ cleanup:
 
 TEST(store_open_path_too_long_fails)
 {
-    size_t n = (size_t)PATH_MAX + 16U;
+    size_t n = (size_t)REMEMBER_PATH_MAX + 16U;
     char *path = malloc(n + 1U);
     char err[256];
     Store *s;

@@ -6,7 +6,7 @@
 #include <stdlib.h>
 #include <string.h>
 /* mkdtemp: Darwin declares it in unistd.h; glibc often via stdlib + POSIX. */
-#if defined(__APPLE__)
+#ifdef __APPLE__
 #include <unistd.h>
 #endif
 

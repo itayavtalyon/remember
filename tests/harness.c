@@ -13,11 +13,6 @@
 #include <sys/wait.h>
 #include <unistd.h>
 
-/* Same fallback as store_sqlite.c: PATH_MAX is POSIX, not ISO C. */
-#ifndef PATH_MAX
-#define PATH_MAX 4096
-#endif
-
 const char *g_remember_bin = NULL;
 
 void cmd_result_free(CmdResult *r)
@@ -317,7 +312,7 @@ static void remove_temp_dir(const char *dir)
     if (d != NULL) {
         struct dirent *ent;
         while ((ent = readdir(d)) != NULL) {
-            char path[PATH_MAX];
+            char path[4096];
             struct stat st;
             int n;
             if (strcmp(ent->d_name, ".") == 0 || strcmp(ent->d_name, "..") == 0) {

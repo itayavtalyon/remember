@@ -8,6 +8,11 @@
  * The only implementation is store_sqlite.c.
  */
 
+/* Stack path bound for open/mkdir helpers (not PATH_MAX — that is POSIX-only). */
+#ifndef REMEMBER_PATH_MAX
+#define REMEMBER_PATH_MAX 4096
+#endif
+
 typedef struct Store Store;
 
 /* Open or create a store at path. Creates parent directories (mode 0700).

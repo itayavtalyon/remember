@@ -8,14 +8,6 @@
 #include <string.h>
 #include <sys/stat.h>
 
-/*
- * PATH_MAX is POSIX, not ISO C. Prefer <limits.h> when it defines it; otherwise
- * a fixed stack bound (also keeps IWYU happy on pure C11 TUs).
- */
-#ifndef PATH_MAX
-#define PATH_MAX 4096
-#endif
-
 struct Store {
     sqlite3 *db;
 };
@@ -75,7 +67,7 @@ static void set_errf(char *err, size_t errlen, const char *prefix, const char *d
 /* Create every parent of path with mode 0700 (mkdir -p style). */
 static int ensure_parent_dirs(const char *path, char *err, size_t errlen)
 {
-    char buf[PATH_MAX];
+    char buf[REMEMBER_PATH_MAX];
     size_t len = strlen(path);
     size_t i;
 
