@@ -3,16 +3,14 @@
 #include "sqlite3.h"
 
 #include <errno.h>
-#include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
-#include <sys/types.h>
 
 /*
- * PATH_MAX is POSIX, not ISO C. With -std=c11 -pedantic, glibc may omit it from
- * <limits.h> unless feature-test macros are set. Fall back to a sane stack cap.
+ * PATH_MAX is POSIX, not ISO C. Prefer <limits.h> when it defines it; otherwise
+ * a fixed stack bound (also keeps IWYU happy on pure C11 TUs).
  */
 #ifndef PATH_MAX
 #define PATH_MAX 4096

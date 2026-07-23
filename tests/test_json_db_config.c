@@ -150,6 +150,9 @@ TEST(remember_db_env_used_when_no_flag)
     const char *gargs[] = {"get", "--json", "1"};
     char *old;
     ASSERT_TRUE(db != NULL);
+    if (db == NULL) {
+        return;
+    }
     old = getenv("REMEMBER_DB");
     /* Copy now: a later setenv may invalidate the getenv-returned string (CERT ENV31-C). */
     old = (old != NULL) ? strdup(old) : NULL;
@@ -179,6 +182,11 @@ TEST(db_flag_wins_over_env)
     const char *a[] = {"add", "flag wins"};
     const char *gargs[] = {"get", "--json", "1"};
     ASSERT_TRUE(db_flag != NULL && db_env != NULL);
+    if (db_flag == NULL || db_env == NULL) {
+        free(db_flag);
+        free(db_env);
+        return;
+    }
     ASSERT_EQ_INT(setenv("REMEMBER_DB", db_env, 1), 0);
     r = run_remember(db_flag, a, 2, NULL);
     ASSERT_EQ_INT(r.exit_code, 0);

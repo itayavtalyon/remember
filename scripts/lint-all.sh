@@ -17,9 +17,12 @@ SRC_DIR="src"
 REPORT_DIR="lint-reports"
 mkdir -p "$REPORT_DIR"
 
-# Prefer Homebrew LLVM tools when present (clang-tidy, clang-format, scan-build).
-if [[ -d "$(brew --prefix llvm 2>/dev/null)/bin" ]]; then
-  export PATH="$(brew --prefix llvm)/bin:$PATH"
+# Prefer Homebrew LLVM tools when present (macOS). Skip quietly on Linux CI.
+if command -v brew >/dev/null 2>&1; then
+  brew_llvm_bin="$(brew --prefix llvm 2>/dev/null)/bin"
+  if [[ -d "$brew_llvm_bin" ]]; then
+    export PATH="$brew_llvm_bin:$PATH"
+  fi
 fi
 
 CLANG_TIDY=$(command -v clang-tidy || true)

@@ -169,6 +169,9 @@ TEST(store_open_db_file_mode_0600)
     struct stat st;
 
     ASSERT_TRUE(db != NULL);
+    if (db == NULL) {
+        return;
+    }
     s = store_open(db, err, sizeof(err));
     ASSERT_TRUE(s != NULL);
     store_close(s);

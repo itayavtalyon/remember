@@ -518,10 +518,17 @@ TEST(db_parent_dir_mode_0700)
     n = strlen(base) + strlen("/nested/test.db") + 1U;
     db = malloc(n);
     ASSERT_TRUE(db != NULL);
+    if (db == NULL) {
+        return;
+    }
     (void)snprintf(db, n, "%s/nested/test.db", base);
     n = strlen(base) + strlen("/nested") + 1U;
     created_dir = malloc(n);
     ASSERT_TRUE(created_dir != NULL);
+    if (created_dir == NULL) {
+        free(db);
+        return;
+    }
     (void)snprintf(created_dir, n, "%s/nested", base);
     r = run_remember(db, a, 2, NULL);
     ASSERT_EQ_INT(r.exit_code, 0);
