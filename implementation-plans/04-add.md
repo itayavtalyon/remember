@@ -40,6 +40,16 @@ FTS insert/resync inside the same transaction.
 - **Sync-path warning** (`path_looks_synced()` in `util`, called from `main` before/after open) is still deferred; land it when the CLI gains the real DB path.
 - Once `main` calls `store_open`, the black-box suite exercises the adapter under ASan (via `remember`), complementing the fast `store_asan_gate` unit target.
 
+## Sub-step: output must not break on body content (from step 03 review)
+
+A body is trimmed + UTF-8-validated but **not** stripped of control characters (design: only tags/keys forbid them — see [[output-escaping]]). The `add` JSON envelope echoes the full entry, so the first time a stored body reaches output is here.
+
+- **JSON:** escape per RFC 8259 — `"` `\` and every U+0000–U+001F control char as `\uXXXX` (`\n` `\t` etc. for the short forms). The envelope must stay parseable when the body contains quotes, backslashes, newlines, or ESC.
+- **Human:** a body with an embedded ESC etc. must not emit raw terminal escape sequences on a TTY. Decide the rule (the CLI is line-oriented; `add` only prints the id, so human exposure starts at `get`/`list` — carry the same escaping helper there).
+- **NUL:** already handled upstream — `body_trim_copy` ends the body at the first NUL ([[nul-is-end-of-string]]), so output never sees an embedded NUL.
+
+**Required test** (`test_add.c`, add once JSON output exists): `add_json_body_with_control_and_quotes_stays_valid` — add a body containing `"`, `\`, newline, and `0x1b`; assert stdout is valid JSON (parse it / check the escapes) and round-trips back to the original bytes.
+
 ## Tests that must pass
 
 ### Keyless add (`test_add.c`)

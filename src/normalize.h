@@ -18,23 +18,32 @@ typedef enum {
     NORM_ERR_TOO_LONG,     /* body > 64 KiB or token > 64 bytes */
     NORM_ERR_INVALID_UTF8, /* ill-formed UTF-8 sequence */
     NORM_ERR_INVALID_CHAR, /* ASCII whitespace or control inside token */
-    NORM_ERR_OOM           /* allocation failure (body_trim_copy only) */
+    NORM_ERR_OOM,          /* allocation failure (body_trim_copy only) */
+    NORM_ERR_INTERNAL      /* caller contract violation: missing/too-small out buffer */
 } NormStatus;
 
 /*
- * Trim leading/trailing ASCII whitespace from src[0..src_len).
- * Reject empty, length > REMEMBER_BODY_MAX, or invalid UTF-8.
- * On NORM_OK, *out is a heap NUL-terminated copy of the trimmed body (free
- * with free()). If out_len is non-NULL, *out_len is the byte length (no NUL).
- * src may be NULL only when src_len is 0.
+ * Trim leading/trailing ASCII whitespace and copy.
+ *
+ * The body is a C string: the first NUL within src[0..src_len) ends it, and any
+ * bytes after are ignored (so *out_len always equals strlen(*out)). Pass
+ * src_len as the readable extent; strlen(src) is the common choice.
+ *
+ * Reject empty (NORM_ERR_EMPTY), length > REMEMBER_BODY_MAX (NORM_ERR_TOO_LONG),
+ * or invalid UTF-8 (NORM_ERR_INVALID_UTF8). On NORM_OK, *out is a heap
+ * NUL-terminated copy of the trimmed body (free with free()); if out_len is
+ * non-NULL, *out_len is the byte length (no NUL). src may be NULL only when
+ * src_len is 0. out == NULL is a contract violation → NORM_ERR_INTERNAL.
  */
 NormStatus body_trim_copy(const char *src, size_t src_len, char **out, size_t *out_len);
 
 /*
  * Shared tag/key algorithm (design: identical rules).
  * Trim; reject empty / invalid UTF-8 / internal ASCII whitespace or control /
- * length > REMEMBER_TOKEN_MAX; ASCII A–Z → a–z. Writes NUL-terminated result
- * into out. out_cap should be at least REMEMBER_TOKEN_MAX + 1.
+ * length > REMEMBER_TOKEN_MAX (NORM_ERR_TOO_LONG); ASCII A–Z → a–z. Writes
+ * NUL-terminated result into out. out_cap must be at least REMEMBER_TOKEN_MAX + 1;
+ * a missing or too-small buffer is a contract violation → NORM_ERR_INTERNAL
+ * (distinct from an over-long token).
  */
 NormStatus normalize_token(const char *src, char *out, size_t out_cap);
 

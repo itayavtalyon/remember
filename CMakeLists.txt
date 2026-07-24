@@ -66,7 +66,10 @@ endif()
 # with -fsanitize=address on several toolchains.
 set(REMEMBER_SANITIZER_FLAGS "")
 if(REMEMBER_ENABLE_SANITIZERS)
-    list(APPEND REMEMBER_SANITIZER_FLAGS -fsanitize=address,undefined)
+    # -fno-sanitize-recover: UB aborts the process on any run, not just when the
+    # test env sets halt_on_error. Without it UBSan prints and continues, so a
+    # direct `./remember_store_tests` would exit 0 despite real UB.
+    list(APPEND REMEMBER_SANITIZER_FLAGS -fsanitize=address,undefined -fno-sanitize-recover=all)
 endif()
 
 if(REMEMBER_ENABLE_LSAN)
@@ -194,7 +197,11 @@ target_compile_definitions(remember_tests PRIVATE
 remember_apply_posix_feature_macros(remember_tests)
 add_dependencies(remember_tests remember)
 
-# --- in-process unit tests under ASan (no fork/exec) — leak/corruption gate
+# --- in-process unit tests under ASan/UBSan (no fork/exec) — leak/corruption
+# AND undefined-behavior gate. The digest is compiled *into* this target (not the
+# -w static lib) so UBSan instruments it; test_normalize.c's NIST vectors then
+# guard against UB regressions in the vendored TU. sqlite3 stays the trusted -w
+# lib (upstream has intentional, suppressed UB — blanket UBSan there is noise).
 add_executable(remember_store_tests
     tests/test_store_main.c
     tests/test.c
@@ -203,12 +210,19 @@ add_executable(remember_store_tests
     tests/test_normalize.c
     src/store_sqlite.c
     src/normalize.c
+    third_party/sha256/sha256.c
 )
 target_include_directories(remember_store_tests PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/tests
     ${CMAKE_CURRENT_SOURCE_DIR}/src
+    ${CMAKE_CURRENT_SOURCE_DIR}/third_party/sha256
 )
-target_link_libraries(remember_store_tests PRIVATE sqlite3 sha256)
+# Warnings off for the vendored digest only; sanitizer flags still apply to it.
+set_property(SOURCE third_party/sha256/sha256.c
+    TARGET_DIRECTORY remember_store_tests
+    APPEND PROPERTY COMPILE_OPTIONS -w
+)
+target_link_libraries(remember_store_tests PRIVATE sqlite3)
 remember_apply_posix_feature_macros(remember_store_tests)
 remember_apply_sanitizers(remember_store_tests)
 

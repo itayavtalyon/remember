@@ -146,7 +146,7 @@ NormStatus body_trim_copy(const char *src, size_t src_len, char **out, size_t *o
     char *buf;
 
     if (out == NULL) {
-        return NORM_ERR_OOM;
+        return NORM_ERR_INTERNAL;
     }
     *out = NULL;
     if (out_len != NULL) {
@@ -156,6 +156,10 @@ NormStatus body_trim_copy(const char *src, size_t src_len, char **out, size_t *o
     if (src == NULL) {
         return NORM_ERR_EMPTY;
     }
+
+    /* NUL ends the string: ignore anything past the first NUL so the stored
+       body, its length, and its hash all agree (no bytes after the terminator). */
+    src_len = strnlen(src, src_len);
 
     ascii_ws_trim_span(src, src_len, &start, &end);
     if (start >= end) {
@@ -191,8 +195,9 @@ NormStatus normalize_token(const char *src, char *out, size_t out_cap)
     size_t n;
     size_t i;
 
+    /* No usable output buffer is a caller bug, not an over-long token. */
     if (out == NULL || out_cap == 0U) {
-        return NORM_ERR_TOO_LONG;
+        return NORM_ERR_INTERNAL;
     }
     out[0] = '\0';
 
@@ -205,8 +210,12 @@ NormStatus normalize_token(const char *src, char *out, size_t out_cap)
         return NORM_ERR_EMPTY;
     }
     n = end - start;
-    if (n > (size_t)REMEMBER_TOKEN_MAX || n + 1U > out_cap) {
+    if (n > (size_t)REMEMBER_TOKEN_MAX) {
         return NORM_ERR_TOO_LONG;
+    }
+    /* Token fits the spec but not the caller's buffer: contract violation. */
+    if (n + 1U > out_cap) {
+        return NORM_ERR_INTERNAL;
     }
     if (!utf8_is_valid(src + start, n)) {
         return NORM_ERR_INVALID_UTF8;
@@ -279,6 +288,8 @@ const char *norm_status_string(NormStatus st)
         return "invalid character";
     case NORM_ERR_OOM:
         return "out of memory";
+    case NORM_ERR_INTERNAL:
+        return "internal error";
     default:
         return "unknown normalize error";
     }

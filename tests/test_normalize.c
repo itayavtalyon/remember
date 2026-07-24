@@ -117,6 +117,110 @@ TEST(body_trim_valid_utf8_multibyte)
     free(out);
 }
 
+/* Assert body_trim_copy rejects bytes[0..len) as ill-formed UTF-8. */
+static void assert_body_utf8_rejected(const char *bytes, size_t len)
+{
+    char *out = NULL;
+    ASSERT_EQ_INT(body_trim_copy(bytes, len, &out, NULL), NORM_ERR_INVALID_UTF8);
+    ASSERT_TRUE(out == NULL);
+    free(out);
+}
+
+/*
+ * The security-relevant UTF-8 rejections (RFC 3629). These exercise the
+ * validator branches — overlong, surrogate, out-of-range, truncation, and a
+ * lone continuation byte — that plain "0xff" does not reach.
+ */
+TEST(body_trim_utf8_edge_rejections)
+{
+    assert_body_utf8_rejected("\xc0\x80", 2);         /* overlong 2-byte NUL */
+    assert_body_utf8_rejected("\xc1\xbf", 2);         /* overlong 2-byte (max) */
+    assert_body_utf8_rejected("\xe0\x80\x80", 3);     /* overlong 3-byte */
+    assert_body_utf8_rejected("\xed\xa0\x80", 3);     /* surrogate U+D800 */
+    assert_body_utf8_rejected("\xf4\x90\x80\x80", 4); /* U+110000 > U+10FFFF */
+    assert_body_utf8_rejected("\xf5\x80\x80\x80", 4); /* lead > F4 */
+    assert_body_utf8_rejected("\xc3", 1);             /* truncated 2-byte */
+    assert_body_utf8_rejected("\xe2\x82", 2);         /* truncated 3-byte */
+    assert_body_utf8_rejected("\x80", 1);             /* bare continuation */
+    assert_body_utf8_rejected("a\xc3\x28", 3);        /* bad continuation byte */
+}
+
+/*
+ * Policy: a body is a C string, so the first NUL ends it. Bytes after are
+ * ignored, and *out_len stays equal to strlen(*out) — otherwise the stored
+ * text, its length, and its hash would disagree (see [[nul-is-end-of-string]]).
+ */
+TEST(body_trim_nul_terminates)
+{
+    char *out = NULL;
+    size_t n = 0;
+    const char in[] = {' ', 'a', 'b', '\0', 'c', 'd'}; /* trailing "cd" ignored */
+
+    ASSERT_EQ_INT(body_trim_copy(in, sizeof(in), &out, &n), NORM_OK);
+    ASSERT_STREQ(out, "ab");
+    ASSERT_EQ_INT((int)n, 2);
+    ASSERT_EQ_INT((int)n, (int)strlen(out));
+    free(out);
+
+    /* A leading NUL makes the whole body empty. */
+    {
+        const char lead[] = {'\0', 'x'};
+        ASSERT_EQ_INT(body_trim_copy(lead, sizeof(lead), &out, &n), NORM_ERR_EMPTY);
+        ASSERT_TRUE(out == NULL);
+    }
+}
+
+/* NUL-terminated body hashes the same as the bare prefix (dedup depends on it). */
+TEST(body_hash_ignores_bytes_after_nul)
+{
+    char *out = NULL;
+    size_t n = 0;
+    char hex[REMEMBER_SHA256_HEX_LEN + 1];
+    char hex_direct[REMEMBER_SHA256_HEX_LEN + 1];
+    const char in[] = {'a', 'b', 'c', '\0', 'X', 'Y'};
+
+    ASSERT_EQ_INT(body_trim_copy(in, sizeof(in), &out, &n), NORM_OK);
+    body_hash_hex(out, n, hex);
+    body_hash_hex("abc", 3, hex_direct);
+    ASSERT_STREQ(hex, hex_direct);
+    free(out);
+}
+
+/* Control chars (other than NUL) stay in the body — only tokens forbid them.
+   Downstream output must escape these; see [[output-escaping]]. */
+TEST(body_trim_keeps_control_chars)
+{
+    char *out = NULL;
+    size_t n = 0;
+    const char in[] = {'x', 0x01, 0x1b, 'y'}; /* SOH, ESC preserved */
+
+    ASSERT_EQ_INT(body_trim_copy(in, sizeof(in), &out, &n), NORM_OK);
+    ASSERT_EQ_INT((int)n, 4);
+    free(out);
+}
+
+/* A missing or too-small output buffer is NORM_ERR_INTERNAL, not TOO_LONG/OOM. */
+TEST(normalize_reports_bad_output_buffer)
+{
+    char small[3]; /* room for "ab" + NUL, but not a 4-char token */
+
+    ASSERT_EQ_INT(normalize_token("abcd", small, sizeof(small)), NORM_ERR_INTERNAL);
+    ASSERT_EQ_INT(normalize_token("ab", NULL, 0), NORM_ERR_INTERNAL);
+    ASSERT_EQ_INT(body_trim_copy("ab", 2, NULL, NULL), NORM_ERR_INTERNAL);
+
+    /* A genuinely over-long token is still TOO_LONG, not conflated. */
+    {
+        char big[REMEMBER_TOKEN_MAX + 2];
+        char out[REMEMBER_TOKEN_MAX + 2];
+        size_t i;
+        for (i = 0; i < (size_t)REMEMBER_TOKEN_MAX + 1U; i++) {
+            big[i] = 'a';
+        }
+        big[REMEMBER_TOKEN_MAX + 1U] = '\0';
+        ASSERT_EQ_INT(normalize_token(big, out, sizeof(out)), NORM_ERR_TOO_LONG);
+    }
+}
+
 TEST(body_hash_empty_and_abc)
 {
     char hex[REMEMBER_SHA256_HEX_LEN + 1];
@@ -232,6 +336,7 @@ TEST(norm_status_string_stable)
     ASSERT_STREQ(norm_status_string(NORM_ERR_INVALID_UTF8), "invalid UTF-8");
     ASSERT_STREQ(norm_status_string(NORM_ERR_INVALID_CHAR), "invalid character");
     ASSERT_STREQ(norm_status_string(NORM_ERR_OOM), "out of memory");
+    ASSERT_STREQ(norm_status_string(NORM_ERR_INTERNAL), "internal error");
     /* Exhaustive switch has a defensive default; only named values are public. */
     ASSERT_TRUE(norm_status_string(NORM_OK) != NULL);
 }
@@ -245,6 +350,11 @@ void register_normalize_tests(void)
     RUN_TEST(body_trim_too_long);
     RUN_TEST(body_trim_invalid_utf8);
     RUN_TEST(body_trim_valid_utf8_multibyte);
+    RUN_TEST(body_trim_utf8_edge_rejections);
+    RUN_TEST(body_trim_nul_terminates);
+    RUN_TEST(body_hash_ignores_bytes_after_nul);
+    RUN_TEST(body_trim_keeps_control_chars);
+    RUN_TEST(normalize_reports_bad_output_buffer);
     RUN_TEST(body_hash_empty_and_abc);
     RUN_TEST(body_hash_matches_trimmed);
     RUN_TEST(token_casefold_and_trim);

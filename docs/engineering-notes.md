@@ -57,8 +57,19 @@ Internal `name == NULL` in lookup is not a user path: treat as lookup miss → U
 - Help and user strings: **ASCII** only.
 - `(void)fprintf` / `(void)fputs` OK for stdout/stderr.
 - Exhaustive `switch` on enums with **`default:`** defensive path (no silent fallthrough).
+- **Shifting a `char`/`unsigned char`:** it promotes to signed `int`, so `byte << 24` is signed overflow (UB) for bytes ≥ 0x80. Cast to an unsigned type first: `(uint32_t)byte << 24`. (Bit us in vendored `sha256.c`.)
+- **Loop counters over a `size_t` length must be `size_t`**, not a fixed-width type — a 32-bit counter truncates lengths ≥ 4 GiB. Fix for correctness on every arch even when today's inputs are bounded.
+- **Error codes must be accurate:** a caller-contract violation (missing/too-small output buffer) is not the same as bad user input. Give it its own status (`NORM_ERR_INTERNAL`), never overload `TOO_LONG`/`OOM`.
 - Format + lint clean on every step (`scripts/lint-all.sh`).
 - Full quality matrix (sanitizers, LSan, scan-build, IWYU, CI): **`docs/QUALITY.md`**.
+
+### Vendored code gets a sanitizer gate, not blind trust
+
+`-w` on a third-party TU silences *warnings* but a TU built only as a `-w` static lib is also **never instrumented** — UBSan/ASan can't see its bugs (this is how the `sha256.c` signed-shift UB hid). Rule:
+
+- For any vendored TU **we call and can audit** (e.g. `sha256.c`), compile it **into** the sanitized unit binary (`remember_store_tests`) as a direct source with a per-source `-w`, and cover it with tests (NIST vectors) so UBSan runs over it. Do **not** also link its `-w` static lib into that target (double definition).
+- `-fno-sanitize-recover=all` on instrumented targets so UB **aborts** on any run, not only under ctest's `halt_on_error` env.
+- Large, upstream-trusted TUs with intentional/suppressed UB (`sqlite3.c`) stay the plain `-w` lib — blanket UBSan there is noise, not signal.
 
 ### Resource cleanup: `goto cleanup` (required pattern)
 
@@ -96,6 +107,12 @@ Rules:
 - Free/close in reverse acquisition order; helpers must accept NULL.
 - On failure, set the error **before** `goto`; cleanup must not overwrite a useful error (use quiet rollback helpers when needed).
 - Prefer this over nested `if` pyramids and over duplicated teardown blocks.
+
+## Data model invariants
+
+- **NUL is end-of-string.** Bodies and tokens are C strings: `body_trim_copy` stops at the first NUL within its `src_len`, so `*out_len == strlen(*out)` always. This keeps stored text, its byte length, and its hash in agreement — a body bound to SQLite with an explicit length would otherwise disagree with a hash taken over the full buffer, silently breaking dedup. Never reintroduce a path that carries bytes past a NUL.
+- **Body vs token content differ by design.** Body: trim ASCII ws, valid UTF-8, ≤64 KiB — control characters are **allowed**. Token (tag/key): additionally rejects ASCII ws/control and casefolds ASCII. Do not "tidy" bodies by stripping controls at normalize time; that belongs at output.
+- **Output owns escaping.** Because bodies keep control chars, every surface that emits a body must escape it: JSON per RFC 8259 (`"`, `\`, U+0000–U+001F as `\uXXXX`/short forms); human/TTY output must not pass raw escape sequences through. One shared escaping helper across `add` JSON envelope, `get`, and `list`. See step 04 plan.
 
 ## Testing
 
