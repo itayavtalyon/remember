@@ -17,6 +17,7 @@ Update after each step review.
 - **Schema bootstrap must be atomic:** run initial DDL + `user_version=1` inside one transaction (or tear down on failure). A partial create at `user_version=0` bricks later opens (`table already exists`).
 - **Parent mkdir:** on `EEXIST`, verify the path component is a directory (`S_ISDIR`), not a file.
 - **CLI layers:** `cli_parse` (pure argv → `CliArgs`) / `main` (I/O + exit codes) / later `commands_*` / `output` as needed.
+- **Normalize + hash (pure):** `normalize.c` / `normalize.h` — no I/O, no store/cli. Body trim + UTF-8 + size; shared `normalize_token` for tag and key; `body_hash_hex` (lowercase SHA-256). SHA-256 amalgamation in `third_party/sha256/` (Brad Conte public domain); only `normalize.c` includes `sha256.h`.
 - **Stable exit codes:** `0` ok, `1` usage/error, `2` not found. Scaffold NYI is private (`REMEMBER_NYI` in `main.c` only), not public ABI.
 
 ## CLI parse contract

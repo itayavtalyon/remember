@@ -77,6 +77,20 @@ else
   echo "sqlite boundary: PASS (no leaks)"
 fi
 
+echo "== no sha256 outside normalize.c =="
+if grep -RIn --include='*.c' --include='*.h' -E 'sha256\.h|SHA256_|sha256_' "$SRC_DIR" 2>/dev/null \
+  | grep -v 'normalize\.c' | grep -v 'normalize\.h' >/tmp/remember-sha256-leak.txt 2>/dev/null; then
+  if [[ -s /tmp/remember-sha256-leak.txt ]]; then
+    echo "sha256 leak: FAIL"
+    cat /tmp/remember-sha256-leak.txt
+    fail=1
+  else
+    echo "sha256 boundary: PASS"
+  fi
+else
+  echo "sha256 boundary: PASS (no leaks)"
+fi
+
 echo "== cppcheck =="
 if [[ -n "$CPPCHECK" ]] && [[ -d "$SRC_DIR" ]]; then
   if ! "$CPPCHECK" --enable=warning,style,performance,portability \

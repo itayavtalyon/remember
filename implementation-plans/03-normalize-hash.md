@@ -39,6 +39,14 @@ Pure functions for body trim, tag/key normalization, UTF-8 checks, SHA-256 hex. 
 
 ## Done checklist
 
-- [ ] API stable for commands
-- [ ] SHA-256 in-tree
-- [ ] Format + lint-ready
+- [x] API stable for commands
+- [x] SHA-256 in-tree
+- [x] Format + lint-ready
+
+## Review notes (2026-07-24)
+
+- **API:** `body_trim_copy` (length-based, heap result), `normalize_token` + `normalize_tag`/`normalize_key` aliases, `body_hash_hex`, `NormStatus` + `norm_status_string`.
+- **Rules:** ASCII ws trim (`space`/`tab`/`LF`/`CR`/`VT`/`FF`); body max 64 KiB; token max 64; UTF-8 RFC 3629 (no overlong/surrogate/>U+10FFFF); token rejects ASCII ws/control; ASCII A–Z casefold only.
+- **SHA-256:** Brad Conte public-domain in `third_party/sha256/`; CMake target `sha256` with `-w`; one-shot hex in `normalize.c`.
+- **Tests:** pure unit suite `normalize` (15 cases) in black-box harness and under ASan via `remember_store_tests`. ctest gate: `--only cli_global,store,normalize`.
+- **Pragmatic:** no store/cli includes; tag/key share one path; third_party digest is swappable without touching callers of `body_hash_hex`.

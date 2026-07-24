@@ -50,6 +50,7 @@ set_property(SOURCE
     src/main.c
     src/cli.c
     src/store_sqlite.c
+    src/normalize.c
     APPEND PROPERTY COMPILE_OPTIONS -Wcast-qual
 )
 
@@ -123,11 +124,17 @@ if(UNIX)
     target_link_libraries(sqlite3 PUBLIC m)
 endif()
 
+# --- SHA-256 (public-domain; sole digest TU; relaxed warnings) --------------
+add_library(sha256 STATIC third_party/sha256/sha256.c)
+target_include_directories(sha256 PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/third_party/sha256)
+target_compile_options(sha256 PRIVATE -w)
+
 # Shared app sources (compiled per-target so the fork/exec harness parent can
 # stay uninstrumented while the CLI and store unit binary take sanitizers).
 set(REMEMBER_LIB_SOURCES
     src/cli.c
     src/store_sqlite.c
+    src/normalize.c
 )
 
 # --- remember CLI (instrumented) ---------------------------------------------
@@ -136,7 +143,7 @@ add_executable(remember
     ${REMEMBER_LIB_SOURCES}
 )
 target_include_directories(remember PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
-target_link_libraries(remember PRIVATE sqlite3)
+target_link_libraries(remember PRIVATE sqlite3 sha256)
 target_compile_definitions(remember PRIVATE
     REMEMBER_VERSION="${PROJECT_VERSION}"
 )
@@ -149,7 +156,7 @@ add_executable(remember_plain
     ${REMEMBER_LIB_SOURCES}
 )
 target_include_directories(remember_plain PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
-target_link_libraries(remember_plain PRIVATE sqlite3)
+target_link_libraries(remember_plain PRIVATE sqlite3 sha256)
 target_compile_definitions(remember_plain PRIVATE
     REMEMBER_VERSION="${PROJECT_VERSION}"
 )
@@ -162,6 +169,7 @@ set(REMEMBER_TEST_SOURCES
     tests/harness.c
     tests/test_cli_global.c
     tests/test_store.c
+    tests/test_normalize.c
     tests/test_add.c
     tests/test_get_list_delete.c
     tests/test_search.c
@@ -179,33 +187,35 @@ target_include_directories(remember_tests PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/tests
     ${CMAKE_CURRENT_SOURCE_DIR}/src
 )
-target_link_libraries(remember_tests PRIVATE sqlite3)
+target_link_libraries(remember_tests PRIVATE sqlite3 sha256)
 target_compile_definitions(remember_tests PRIVATE
     REMEMBER_VERSION="${PROJECT_VERSION}"
 )
 remember_apply_posix_feature_macros(remember_tests)
 add_dependencies(remember_tests remember)
 
-# --- store unit tests under ASan (no fork/exec) — leak/corruption gate -------
+# --- in-process unit tests under ASan (no fork/exec) — leak/corruption gate
 add_executable(remember_store_tests
     tests/test_store_main.c
     tests/test.c
     tests/harness.c
     tests/test_store.c
+    tests/test_normalize.c
     src/store_sqlite.c
+    src/normalize.c
 )
 target_include_directories(remember_store_tests PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/tests
     ${CMAKE_CURRENT_SOURCE_DIR}/src
 )
-target_link_libraries(remember_store_tests PRIVATE sqlite3)
+target_link_libraries(remember_store_tests PRIVATE sqlite3 sha256)
 remember_apply_posix_feature_macros(remember_store_tests)
 remember_apply_sanitizers(remember_store_tests)
 
 enable_testing()
 # Green gate: implemented suites via black-box harness + ASan store units.
 add_test(NAME scaffold_gate
-    COMMAND remember_tests $<TARGET_FILE:remember> --only cli_global,store
+    COMMAND remember_tests $<TARGET_FILE:remember> --only cli_global,store,normalize
 )
 set_tests_properties(scaffold_gate PROPERTIES
     WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
