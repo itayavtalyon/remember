@@ -97,6 +97,8 @@ if [[ -n "$CPPCHECK" ]] && [[ -d "$SRC_DIR" ]]; then
       --error-exitcode=1 --inline-suppr \
       --suppress=missingIncludeSystem \
       -I "$SRC_DIR" \
+      -I third_party/sqlite \
+      -I third_party/sha256 \
       $(find "$SRC_DIR" -name '*.c' 2>/dev/null) \
       2>"$REPORT_DIR/cppcheck.txt"; then
     echo "cppcheck: FAIL"
@@ -153,11 +155,17 @@ if [[ "$run_iwyu" -eq 1 ]]; then
   if [[ -n "$IWYU" || -n "$IWYU_TOOL" ]]; then
     : >"$REPORT_DIR/iwyu.txt"
     iwyu_fail=0
+    # Vendor headers used by src/ (PUBLIC includes of linked libs). Keep in sync
+    # with CMake targets: sqlite3 → third_party/sqlite, sha256 → third_party/sha256.
+    # Required for the direct-iwyu fallback; also passed after -- for iwyu_tool so
+    # a stale/partial compile_commands still finds sha256.h (normalize.c).
+    IWYU_VENDOR_INCLUDES=(-I"$ROOT/third_party/sqlite" -I"$ROOT/third_party/sha256")
     # Prefer iwyu_tool.py over compile_commands when available.
     if [[ -n "$IWYU_TOOL" && -f "$BUILD_DIR/compile_commands.json" ]]; then
       if ! python3 "$IWYU_TOOL" -p "$BUILD_DIR" \
           $(find "$SRC_DIR" -name '*.c' | sort) \
           -- -Xiwyu --error=1 -Xiwyu --no_fwd_decls \
+          "${IWYU_VENDOR_INCLUDES[@]}" \
           >>"$REPORT_DIR/iwyu.txt" 2>&1; then
         iwyu_fail=1
       fi
@@ -165,7 +173,7 @@ if [[ "$run_iwyu" -eq 1 ]]; then
       for f in "$SRC_DIR"/*.c; do
         [[ -f "$f" ]] || continue
         if ! include-what-you-use -Xiwyu --error=1 -Xiwyu --no_fwd_decls \
-            -I"$SRC_DIR" -Ithird_party/sqlite -std=c11 "$f" \
+            -I"$SRC_DIR" "${IWYU_VENDOR_INCLUDES[@]}" -std=c11 "$f" \
             >>"$REPORT_DIR/iwyu.txt" 2>&1; then
           iwyu_fail=1
         fi
