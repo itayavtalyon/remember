@@ -2,26 +2,37 @@
 
 #include "sha256.h"
 
+#include <stdbool.h>
 #include <stdlib.h>
 #include <string.h>
 
 /* ---- ASCII class helpers ------------------------------------------------- */
 
-static int is_ascii_ws(unsigned char c)
+static bool is_ascii_ws(unsigned char c)
 {
     /* Design: space, tab, LF, CR, VT, FF. */
-    return c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '\v' || c == '\f';
+    /* Explicit true/false: C relational ops yield int (clang-tidy). */
+    if (c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '\v' || c == '\f') {
+        return true;
+    }
+    return false;
 }
 
-static int is_ascii_control(unsigned char c)
+static bool is_ascii_control(unsigned char c)
 {
-    return c < 0x20U || c == 0x7FU;
+    if (c < 0x20U || c == 0x7FU) {
+        return true;
+    }
+    return false;
 }
 
 /* Token forbids ASCII whitespace and control (after outer trim). */
-static int is_token_forbidden(unsigned char c)
+static bool is_token_forbidden(unsigned char c)
 {
-    return is_ascii_ws(c) || is_ascii_control(c);
+    if (is_ascii_ws(c) || is_ascii_control(c)) {
+        return true;
+    }
+    return false;
 }
 
 /* Span [start, end) after stripping leading/trailing ASCII whitespace. */
@@ -42,74 +53,77 @@ static void ascii_ws_trim_span(const char *s, size_t len, size_t *start_out, siz
 
 /* ---- UTF-8 (RFC 3629) ---------------------------------------------------- */
 
-/* Decode one non-ASCII lead byte into need/cp_prefix; 0 = invalid lead. */
-static int utf8_lead(unsigned char c, size_t *need, unsigned int *cp)
+/* Decode one non-ASCII lead byte into need/cp_prefix; false = invalid lead. */
+static bool utf8_lead(unsigned char c, size_t *need, unsigned int *cp)
 {
     if ((c & 0xE0U) == 0xC0U) {
         if (c < 0xC2U) {
-            return 0; /* overlong 2-byte */
+            return false; /* overlong 2-byte */
         }
         *need = 2;
         *cp = c & 0x1FU;
-        return 1;
+        return true;
     }
     if ((c & 0xF0U) == 0xE0U) {
         *need = 3;
         *cp = c & 0x0FU;
-        return 1;
+        return true;
     }
     if ((c & 0xF8U) == 0xF0U) {
         if (c > 0xF4U) {
-            return 0; /* would exceed U+10FFFF */
+            return false; /* would exceed U+10FFFF */
         }
         *need = 4;
         *cp = c & 0x07U;
-        return 1;
+        return true;
     }
-    return 0;
+    return false;
 }
 
-/* Append continuation bytes; returns 0 if truncated or bad continuation. */
-static int utf8_cont(const char *s, size_t len, size_t i, size_t need, unsigned int *cp)
+/* Append continuation bytes; false if truncated or bad continuation. */
+static bool utf8_cont(const char *s, size_t len, size_t i, size_t need, unsigned int *cp)
 {
     size_t j;
 
     if (i + need > len) {
-        return 0;
+        return false;
     }
     for (j = 1; j < need; j++) {
         unsigned char cc = (unsigned char)s[i + j];
         if ((cc & 0xC0U) != 0x80U) {
-            return 0;
+            return false;
         }
         *cp = (*cp << 6) | (cc & 0x3FU);
     }
-    return 1;
+    return true;
 }
 
 /* Reject overlong encodings, surrogates, and out-of-range scalar values. */
-static int utf8_cp_ok(size_t need, unsigned int cp)
+static bool utf8_cp_ok(size_t need, unsigned int cp)
 {
     if (need == 3U) {
         if (cp < 0x800U) {
-            return 0;
+            return false;
         }
         if (cp >= 0xD800U && cp <= 0xDFFFU) {
-            return 0;
+            return false;
         }
-        return 1;
+        return true;
     }
     if (need == 4U) {
-        return cp >= 0x10000U && cp <= 0x10FFFFU;
+        if (cp >= 0x10000U && cp <= 0x10FFFFU) {
+            return true;
+        }
+        return false;
     }
-    return 1; /* 2-byte lead already rejected overlongs */
+    return true; /* 2-byte lead already rejected overlongs */
 }
 
 /*
  * Validate that s[0..len) is well-formed UTF-8.
  * Rejects overlong encodings, surrogates, and code points above U+10FFFF.
  */
-static int utf8_is_valid(const char *s, size_t len)
+static bool utf8_is_valid(const char *s, size_t len)
 {
     size_t i = 0;
 
@@ -123,17 +137,17 @@ static int utf8_is_valid(const char *s, size_t len)
             continue;
         }
         if (!utf8_lead(c, &need, &cp)) {
-            return 0;
+            return false;
         }
         if (!utf8_cont(s, len, i, need, &cp)) {
-            return 0;
+            return false;
         }
         if (!utf8_cp_ok(need, cp)) {
-            return 0;
+            return false;
         }
         i += need;
     }
-    return 1;
+    return true;
 }
 
 /* ---- body ---------------------------------------------------------------- */

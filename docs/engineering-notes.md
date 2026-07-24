@@ -70,6 +70,8 @@ Internal `name == NULL` in lookup is not a user path: treat as lookup miss → U
 - For any vendored TU **we call and can audit** (e.g. `sha256.c`), compile it **into** the sanitized unit binary (`remember_store_tests`) as a direct source with a per-source `-w`, and cover it with tests (NIST vectors) so UBSan runs over it. Do **not** also link its `-w` static lib into that target (double definition).
 - `-fno-sanitize-recover=all` on instrumented targets so UB **aborts** on any run, not only under ctest's `halt_on_error` env.
 - Large, upstream-trusted TUs with intentional/suppressed UB (`sqlite3.c`) stay the plain `-w` lib — blanket UBSan there is noise, not signal.
+- **Digest test vectors must hit every padding/block path** under that instrumented TU — not only empty/`"abc"`. At minimum: a message with `len >= 56` (forces the long final-pad branch) and one with `len >= 64` (forces multi-block `sha256_update`). Covered by `body_hash_long_pad_and_multiblock` in `tests/test_normalize.c`. Short vectors alone leave the UBSan gate half-blind.
+- **CLI links the `-w` `sha256` static lib; the unit binary compiles the digest under sanitizers.** That split is intentional: detection lives in `remember_store_tests` + NIST/long vectors, not in rebuilding the digest into every ASan CLI. Do not "fix" this by linking the static lib into the unit target (duplicate symbols) or by dropping the instrumented compile.
 
 ### Resource cleanup: `goto cleanup` (required pattern)
 

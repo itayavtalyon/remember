@@ -32,8 +32,8 @@ typedef enum {
  * Reject empty (NORM_ERR_EMPTY), length > REMEMBER_BODY_MAX (NORM_ERR_TOO_LONG),
  * or invalid UTF-8 (NORM_ERR_INVALID_UTF8). On NORM_OK, *out is a heap
  * NUL-terminated copy of the trimmed body (free with free()); if out_len is
- * non-NULL, *out_len is the byte length (no NUL). src may be NULL only when
- * src_len is 0. out == NULL is a contract violation → NORM_ERR_INTERNAL.
+ * non-NULL, *out_len is the byte length (no NUL). src == NULL → NORM_ERR_EMPTY
+ * (src_len is ignored). out == NULL is a contract violation → NORM_ERR_INTERNAL.
  */
 NormStatus body_trim_copy(const char *src, size_t src_len, char **out, size_t *out_len);
 

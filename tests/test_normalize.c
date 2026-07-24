@@ -195,7 +195,16 @@ TEST(body_trim_keeps_control_chars)
     const char in[] = {'x', 0x01, 0x1b, 'y'}; /* SOH, ESC preserved */
 
     ASSERT_EQ_INT(body_trim_copy(in, sizeof(in), &out, &n), NORM_OK);
+    ASSERT_TRUE(out != NULL);
+    if (out == NULL) {
+        return;
+    }
     ASSERT_EQ_INT((int)n, 4);
+    /* Policy: raw control bytes must survive — length alone is not enough. */
+    ASSERT_EQ_INT((int)(unsigned char)out[0], (int)'x');
+    ASSERT_EQ_INT((int)(unsigned char)out[1], 0x01);
+    ASSERT_EQ_INT((int)(unsigned char)out[2], 0x1b);
+    ASSERT_EQ_INT((int)(unsigned char)out[3], (int)'y');
     free(out);
 }
 
@@ -230,6 +239,28 @@ TEST(body_hash_empty_and_abc)
 
     body_hash_hex("abc", 3, hex);
     ASSERT_STREQ(hex, "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad");
+}
+
+/*
+ * Exercise the long-pad and multi-block paths in the instrumented digest TU
+ * (see engineering-notes: empty/"abc" alone leave sha256_final's datalen>=56
+ * branch and multi-block sha256_update unrun under UBSan).
+ */
+TEST(body_hash_long_pad_and_multiblock)
+{
+    char hex[REMEMBER_SHA256_HEX_LEN + 1];
+    /* NIST FIPS 180-2 / FIPS 180-4 example: 56-byte message. */
+    static const char s56[] = "abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq";
+    /* Exactly one full 64-byte block before final (multi-block transform). */
+    static const char s64[] = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+
+    ASSERT_EQ_INT((int)strlen(s56), 56);
+    body_hash_hex(s56, 56, hex);
+    ASSERT_STREQ(hex, "248d6a61d20638b8e5c026930c3e6039a33ce45964ff2167f6ecedd419db06c1");
+
+    ASSERT_EQ_INT((int)strlen(s64), 64);
+    body_hash_hex(s64, 64, hex);
+    ASSERT_STREQ(hex, "a8ae6e6ee929abea3afcfc5258c8ccd6f85273e0d4626d26c7279f3250f77c8e");
 }
 
 TEST(body_hash_matches_trimmed)
@@ -356,6 +387,7 @@ void register_normalize_tests(void)
     RUN_TEST(body_trim_keeps_control_chars);
     RUN_TEST(normalize_reports_bad_output_buffer);
     RUN_TEST(body_hash_empty_and_abc);
+    RUN_TEST(body_hash_long_pad_and_multiblock);
     RUN_TEST(body_hash_matches_trimmed);
     RUN_TEST(token_casefold_and_trim);
     RUN_TEST(token_tag_key_identical);

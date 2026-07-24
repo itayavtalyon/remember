@@ -34,6 +34,13 @@ FTS insert/resync inside the same transaction.
 - Commands orchestrate normalize → store_add → output.
 - **No SQL in `commands.c`.**
 
+## Carried from step 03 review (must do in this step)
+
+1. **Map `NormStatus` → user-facing stderr** — do **not** print `norm_status_string()` labels as the sole UX (`"empty"`, `"too long"`). Commands (or a thin `norm_error_message` for CLI) own full phrases, e.g. `empty body after trim`, `body exceeds 64 KiB`, `invalid UTF-8 in body`, `invalid tag`, `invalid key`. Exit 1. Keep `norm_status_string` for tests/debug if useful.
+2. **Body pipeline uses normalize once** — read argv/stdin → `body_trim_copy` → `body_hash_hex` → store; tags/keys via `normalize_tag` / `normalize_key` (never reimplement trim/casefold/UTF-8).
+3. **Output escaping** — see sub-step below (already required).
+4. **Digest sanitizer gate stays the unit suite** — production `remember` may keep linking the `-w` `sha256` static lib; do not reintroduce a second untested digest path. Multi-block/long-pad vectors live in `test_normalize.c` (`body_hash_long_pad_and_multiblock`).
+
 ## Carried from step 02 review (wire `store_open` here)
 
 - **`--db` path policy owns `:memory:` and `file:` handling.** `store_open` passes its path straight to `sqlite3_open_v2`, so `remember --db :memory: add ...` opens a throwaway store that discards everything on close — a silent data-loss footgun. Resolve when `main` first calls `store_open`: either reject non-file `--db` values, or document them as an explicit ephemeral mode. Add a black-box test for whichever you pick.

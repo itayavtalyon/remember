@@ -61,3 +61,28 @@ Fixes to findings from the formal review:
 4. **NUL = end-of-string** ([[nul-is-end-of-string]]): `body_trim_copy` now caps at the first NUL so `*out_len == strlen(*out)`; text/length/hash stay consistent. Tests: `body_trim_nul_terminates`, `body_hash_ignores_bytes_after_nul`.
 5. **Accurate errors:** new `NORM_ERR_INTERNAL` for missing/too-small output buffers (was `TOO_LONG` in `normalize_token`, `OOM` in `body_trim_copy`); a genuinely over-long token stays `TOO_LONG`. Test: `normalize_reports_bad_output_buffer`.
 6. **Control chars in body kept** (design: only tokens forbid them) — recorded as an **output**-escaping obligation, pushed to the step 04 plan with a required JSON test ([[output-escaping]]). Test here documents the behavior: `body_trim_keeps_control_chars`.
+
+## Formal re-review (2026-07-24) — tip `164b5d4`
+
+**Verdict: Approve with nits** (no blockers for step 04). Round-2 correctness fixes hold; residual items are coverage/doc strength.
+
+### Important — resolved (same day follow-up)
+
+1. **SHA-256 UBSan paths:** `body_hash_long_pad_and_multiblock` — NIST 56-byte vector (long final-pad) + 64-byte message (multi-block update).
+2. **`body_trim_keeps_control_chars`:** asserts SOH/`0x1b` byte values, not only length.
+
+### Nits — disposition
+
+| Nit | Disposition |
+|-----|-------------|
+| `normalize.h` NULL/`src_len` comment | **Fixed** — documents NULL → EMPTY for any `src_len`. |
+| `int` vs `bool` for class helpers | **Fixed** — `bool` + `<stdbool.h>`. |
+| Production links uninstrumented `sha256.a` | **Keep** — unit binary owns the digest UBSan gate; multi-block vectors complete it. Documented in step 04 carry-over. |
+| Short `norm_status_string` labels | **Defer to step 04** — map `NormStatus` → full stderr phrases at the command layer (see `04-add.md`). |
+
+### Confirmed OK
+
+- Design rules match (trim set, body max, token max, ASCII casefold only, token ws/control reject, body allows controls, NUL = EOS).
+- UTF-8 RFC 3629 structure + edge tests; pure module (no store/cli/sqlite).
+- Tag/key single path; `NORM_ERR_INTERNAL` vs `TOO_LONG`/`OOM` split.
+- SHA-256 signed-shift local fix + size_t update loop; lint boundaries; ctest + LINT OK.
