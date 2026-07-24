@@ -63,6 +63,26 @@ Internal `name == NULL` in lookup is not a user path: treat as lookup miss → U
 - Format + lint clean on every step (`scripts/lint-all.sh`).
 - Full quality matrix (sanitizers, LSan, scan-build, IWYU, CI): **`docs/QUALITY.md`**.
 
+### Vendoring third-party C (checklist for every new drop)
+
+CMake alone is not enough. A clean link on the developer machine still fails **Linux CI lint** if tools that do not fully honor `compile_commands.json` cannot see the vendor headers. Lesson from step 03: `normalize.c` built fine via `target_link_libraries(... sha256)` (PUBLIC `-I third_party/sha256`), but IWYU’s **direct** path only had `-I src -I third_party/sqlite` → `fatal error: 'sha256.h' file not found`.
+
+When adding (or changing) anything under `third_party/<name>/`:
+
+| Step | What to do |
+|------|------------|
+| 1. Tree + pin | `third_party/<name>/` with `README.md`: version, upstream URL, license, **local modifications** (if any). Prefer amalgamation / few files. |
+| 2. CMake target | `add_library(<name> STATIC …)` with `target_compile_options(... PRIVATE -w)`. `target_include_directories(... PUBLIC …/third_party/<name>)` so consumers get the include path by linking. |
+| 3. Single consumer | Only **one** project file includes the vendor header (e.g. only `store_sqlite.c` → `sqlite3.h`; only `normalize.c` → `sha256.h`). Everyone else uses a project port (`store.h`, `body_hash_hex`, …). |
+| 4. Lint boundary | Extend `scripts/lint-all.sh` grep so the vendor API cannot leak into other `src/` files (pattern already used for sqlite / sha256). |
+| 5. Lint include paths | Add `-I third_party/<name>` (or `$ROOT/third_party/<name>`) to **every** tool that parses `src/*.c` without relying solely on CMake: **IWYU** (`IWYU_VENDOR_INCLUDES` for both `iwyu_tool` *and* the per-file fallback), **cppcheck**. Keep that list in sync with CMake PUBLIC includes. |
+| 6. Sanitizer gate | See below — auditable TUs must run under UBSan with real tests; huge amalgamations stay `-w` lib only. |
+| 7. Local fixes | Prefer not forking style; if you must fix UB/portability, mark `Local fix:` in the vendor `.c` and document in its README. Do not reformat the whole amalgamation. |
+
+**Do not** “fix” missing includes by copying headers into `src/` or using deep relative paths like `#include "../third_party/…"`. The include path is a **tooling contract**, not just a compiler flag from one target.
+
+**Smoke after adding a vendor:** on a machine with IWYU (or in CI), `REMEMBER_IWYU=1 CI=true ./scripts/lint-all.sh` must pass — not only `cmake --build`.
+
 ### Vendored code gets a sanitizer gate, not blind trust
 
 `-w` on a third-party TU silences *warnings* but a TU built only as a `-w` static lib is also **never instrumented** — UBSan/ASan can't see its bugs (this is how the `sha256.c` signed-shift UB hid). Rule:
