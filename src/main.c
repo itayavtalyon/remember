@@ -1,7 +1,11 @@
 #include "cli.h"
+#include "commands.h"
 #include "exit_codes.h"
+#include "store.h"
+#include "util.h"
 
 #include <stdio.h>
+#include <string.h>
 
 #ifndef REMEMBER_VERSION
 #define REMEMBER_VERSION "0.1.0"
@@ -55,6 +59,14 @@ static void print_command_help(CliCommand topic)
     (void)printf("Usage:\n");
     (void)printf("  remember [global options] %s [command options] [args]\n", name);
     (void)printf("\n");
+    if (topic == CLI_CMD_ADD) {
+        (void)printf("Options:\n");
+        (void)printf("  --key KEY       Upsert into a named slot\n");
+        (void)printf("  --tag TAG       Attach a tag (repeatable; union on merge)\n");
+        (void)printf("  --source SRC    human|agent|tool|unknown (default unknown)\n");
+        (void)printf("  BODY|-          Memory text, or - to read stdin\n");
+        (void)printf("\n");
+    }
     (void)printf("Global options: --db PATH, --json, --help, --version\n");
     (void)printf("See also: remember --help\n");
 }
@@ -92,8 +104,33 @@ static int dispatch_nyi(const char *name)
     return REMEMBER_NYI;
 }
 
+/* Resolve --db / env / default and open. On failure prints and sets *out_rc. */
+static Store *open_store(const CliArgs *args, int *out_rc)
+{
+    char path[REMEMBER_PATH_MAX];
+    char err[256];
+    Store *s;
+
+    err[0] = '\0';
+    if (util_resolve_db_path(args->globals.db_path, path, sizeof(path), err, sizeof(err)) != 0) {
+        (void)fprintf(stderr, "remember: %s\n", err[0] != '\0' ? err : "invalid database path");
+        *out_rc = REMEMBER_ERR;
+        return NULL;
+    }
+    s = store_open(path, err, sizeof(err));
+    if (s == NULL) {
+        (void)fprintf(stderr, "remember: %s\n", err[0] != '\0' ? err : "cannot open database");
+        *out_rc = REMEMBER_ERR;
+        return NULL;
+    }
+    return s;
+}
+
 static int run(const CliArgs *args)
 {
+    Store *s;
+    int rc;
+
     if (args->error != CLI_ERR_OK) {
         print_parse_error(args);
         return REMEMBER_ERR;
@@ -111,20 +148,37 @@ static int run(const CliArgs *args)
         print_version();
         return REMEMBER_OK;
     case CLI_CMD_NONE:
-        /* Should be CLI_ERR_MISSING_COMMAND; defensive. */
         (void)fprintf(stderr, "remember: %s\n", cli_error_message(CLI_ERR_MISSING_COMMAND));
         return REMEMBER_ERR;
     case CLI_CMD_UNKNOWN:
         (void)fprintf(stderr, "remember: %s\n", cli_error_message(CLI_ERR_UNKNOWN_COMMAND));
         return REMEMBER_ERR;
     case CLI_CMD_ADD:
-        return dispatch_nyi("add");
+        s = open_store(args, &rc);
+        if (s == NULL) {
+            return rc;
+        }
+        rc = cmd_add(s, args->globals.json, args->rest_argc, args->rest_argv);
+        store_close(s);
+        return rc;
+    case CLI_CMD_GET:
+        s = open_store(args, &rc);
+        if (s == NULL) {
+            return rc;
+        }
+        rc = cmd_get(s, args->globals.json, args->rest_argc, args->rest_argv);
+        store_close(s);
+        return rc;
+    case CLI_CMD_LIST:
+        s = open_store(args, &rc);
+        if (s == NULL) {
+            return rc;
+        }
+        rc = cmd_list(s, args->globals.json, args->rest_argc, args->rest_argv);
+        store_close(s);
+        return rc;
     case CLI_CMD_SEARCH:
         return dispatch_nyi("search");
-    case CLI_CMD_LIST:
-        return dispatch_nyi("list");
-    case CLI_CMD_GET:
-        return dispatch_nyi("get");
     case CLI_CMD_UPDATE:
         return dispatch_nyi("update");
     case CLI_CMD_DELETE:

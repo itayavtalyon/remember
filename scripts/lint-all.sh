@@ -78,8 +78,10 @@ else
 fi
 
 echo "== no sha256 outside normalize.c =="
+# Allow REMEMBER_SHA256_HEX_LEN (public normalize API); forbid vendor symbols/includes.
 if grep -RIn --include='*.c' --include='*.h' -E 'sha256\.h|SHA256_|sha256_' "$SRC_DIR" 2>/dev/null \
-  | grep -v 'normalize\.c' | grep -v 'normalize\.h' >/tmp/remember-sha256-leak.txt 2>/dev/null; then
+  | grep -v 'normalize\.c' | grep -v 'normalize\.h' | grep -v 'REMEMBER_SHA256' \
+  >/tmp/remember-sha256-leak.txt 2>/dev/null; then
   if [[ -s /tmp/remember-sha256-leak.txt ]]; then
     echo "sha256 leak: FAIL"
     cat /tmp/remember-sha256-leak.txt

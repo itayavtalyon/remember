@@ -247,6 +247,40 @@ TEST(second_add_gets_id_two)
     free(db);
 }
 
+/* Path policy: :memory: and file: URIs are silent data-loss footguns — reject. */
+TEST(db_rejects_memory_uri)
+{
+    char *db = make_temp_db_path();
+    CmdResult r;
+    const char *args[] = {"add", "should not store"};
+    ASSERT_TRUE(db != NULL);
+    /* Override harness --db by putting :memory: after inject... run_remember always
+       injects --db first. Pass path as the harness db so the resolved CLI path is
+       :memory:. */
+    r = run_remember(":memory:", args, 2, NULL);
+    ASSERT_EQ_INT(r.exit_code, 1);
+    ASSERT_STR_CONTAINS(r.err, "regular file");
+    ASSERT_TRUE(str_is_blank(r.out));
+    cmd_result_free(&r);
+    free(db);
+}
+
+TEST(db_rejects_file_uri)
+{
+    char *db = make_temp_db_path();
+    char uri[512];
+    CmdResult r;
+    const char *args[] = {"add", "should not store"};
+    ASSERT_TRUE(db != NULL);
+    (void)snprintf(uri, sizeof(uri), "file:%s", db);
+    r = run_remember(uri, args, 2, NULL);
+    ASSERT_EQ_INT(r.exit_code, 1);
+    ASSERT_STR_CONTAINS(r.err, "regular file");
+    ASSERT_TRUE(str_is_blank(r.out));
+    cmd_result_free(&r);
+    free(db);
+}
+
 void register_json_db_config_tests(void)
 {
     RUN_TEST(db_flag_isolates_stores);
@@ -254,4 +288,6 @@ void register_json_db_config_tests(void)
     RUN_TEST(db_flag_wins_over_env);
     RUN_TEST(json_entry_has_required_fields);
     RUN_TEST(second_add_gets_id_two);
+    RUN_TEST(db_rejects_memory_uri);
+    RUN_TEST(db_rejects_file_uri);
 }

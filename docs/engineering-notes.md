@@ -18,7 +18,11 @@ Update after each step review.
 - **Parent mkdir:** on `EEXIST`, verify the path component is a directory (`S_ISDIR`), not a file.
 - **CLI layers:** `cli_parse` (pure argv → `CliArgs`) / `main` (I/O + exit codes) / later `commands_*` / `output` as needed.
 - **Normalize + hash (pure):** `normalize.c` / `normalize.h` — no I/O, no store/cli. Body trim + UTF-8 + size; shared `normalize_token` for tag and key; `body_hash_hex` (lowercase SHA-256). SHA-256 amalgamation in `third_party/sha256/` (Brad Conte public domain); only `normalize.c` includes `sha256.h`.
-- **Stable exit codes:** `0` ok, `1` usage/error, `2` not found. Scaffold NYI is private (`REMEMBER_NYI` in `main.c` only), not public ABI.
+- **Commands layer:** `commands.c` orchestrates normalize → `store_*` → `output_*`. No SQL. Norm errors map via full phrases (`empty body after trim`, …), not bare `norm_status_string` labels.
+- **Output:** `output.c` owns JSON escaping (RFC 8259) and envelopes; human `add` prints id only; human `get` uses `output_body_human` (terminal C0/DEL → `?`, keep `\n`/`\t`); human list previews also neutralize controls. Never raw-`fputs` a stored body to a TTY.
+- **Path resolve:** `util_resolve_db_path` — `--db` > `REMEMBER_DB` > `~/.remember/remember.db`. Rejects `:memory:` and `file:` URIs (silent data-loss footguns through `sqlite3_open_v2`).
+- **`store_add`:** keyless body-hash merge (union tags, keep source/created_at/body) or keyed upsert (replace body, union tags, keep source/created_at/key). FTS resync in the same transaction. Thin `store_get` / `store_get_by_key` / `store_list` for verification (full filters in step 05).
+- **Stable exit codes:** `0` ok, `1` usage/error, `2` not found. Scaffold NYI remains private for still-unimplemented commands (`search`/`update`/`delete`).
 
 ## CLI parse contract
 
@@ -142,6 +146,10 @@ Rules:
 - Parser edges: missing `--db` value, unknown option, globals after command, subcommand help, topic help.
 - Collect-all asserts: guard against NULL deref after failed asserts (early return if dependent data missing).
 - Inspect-only cases may use `sqlite3` CLI.
+- **`--only` group matching is exact comma-tokens**, not substring (`key` must not select `key_add`). See `group_selected` in `tests/test_main.c`.
+- **Step gates should include every plan-required green test** for that step. Leaving green cases only in mixed red suites (`verification_edges`, full `key`) means ctest can pass while plan criteria silently regress.
+- **Path policy tests belong next to the policy.** Rejecting `:memory:` / `file:` in `util_resolve_db_path` needs a black-box case, not only manual smoke.
+- **stdin vs argv body limits must share one enforcer.** Raw stdin caps are memory guards only (`REMEMBER_STDIN_MAX`); `body_trim_copy` owns the post-trim 64 KiB rule for both paths.
 
 ## Process
 

@@ -119,6 +119,56 @@ A body is trimmed + UTF-8-validated but **not** stripped of control characters (
 
 ## Done checklist
 
-- [ ] All listed add + key-add tests green
-- [ ] FTS row written on add (search may still fail until 06)
-- [ ] Format
+- [x] All listed add + key-add tests green
+- [x] FTS row written on add (search may still fail until 06)
+- [x] Format
+
+## Review notes (2026-07-24)
+
+- **Layers:** `commands.c` (add/get/list) → `store_*` port → `store_sqlite.c` only; `output.c` for JSON/human; `util.c` for path + stdin.
+- **Store:** `store_add` (created/merged/updated), `store_get` / `store_get_by_key`, minimal `store_list`; FTS rewrite in same txn as entry/tag mutation.
+- **UX:** Norm errors are full phrases; JSON envelope with escaped bodies; human add prints id.
+- **Path policy:** reject `:memory:` / `file:` at resolve time.
+- **Thin get/list:** enough for step-04 verification tests; filters stay step 05.
+- **Tests:** `step04_gate` = `cli_global,store,normalize,add,json_db_config,key_add` (98). Update/delete/search remain red.
+- **Lint:** `REMEMBER_SHA256_HEX_LEN` allowed outside normalize (public API constant); vendor symbols still gated.
+
+## Review round 2 (2026-07-25) — applied
+
+1. **stdin/argv body validation now identical.** `util_read_stdin` capped raw bytes at the *post-trim* limit, so a body that trims to exactly 64 KiB was rejected on stdin (surrounding whitespace pushed it over) while argv accepted it. stdin now reads with a generous hard cap (`REMEMBER_STDIN_MAX`, memory guard only) and `body_trim_copy` is the sole enforcer of "64 KiB after trim". Tests: `add_stdin_body_at_limit_accepted`, `add_stdin_body_over_limit_rejected`.
+2. **`get` human output goes through `output.c`.** Was a raw `fputs(body)` that could emit stored ESC/control bytes to the terminal (injection vector for `agent`/`tool`-sourced bodies). New `output_body_human` neutralizes terminal-control bytes to `?` while keeping `\n`/`\t`; exact bytes remain on the `--json` path. Tests: `get_human_body_neutralizes_control_chars`, `get_human_body_preserves_newlines`.
+3. **Keyed-add is now gated.** `add_key_*` + get-by-key cases split into a `key_add` suite (green) joined to `step04_gate`; the WIP update/delete/search cases stay in `key` (red). Fixed the test-group matcher to exact comma-token matching so `key` cannot select `key_add` (a substring match would have silently pulled the red suite into the gate).
+4. **Nits:** `parse_id_token` now rejects `strtoll` overflow as "invalid id" (was a lookup miss / exit 2); comment on the post-COMMIT `load_entry_by_id` failure (durable write, reporting-only error).
+
+## Review notes (2026-07-25) — formal step review (PR readiness)
+
+**Verdict: Approve with nits** — ready for PR after committing; no blocking defects.
+
+### Blocking
+(none)
+
+### Important (prefer before merge, or land as follow-up PR commits)
+1. **Missing black-box test for ephemeral `--db` reject.** Plan carried from step 02: pick reject-or-document and *add a test*. Implementation rejects `:memory:` / `file:` in `util_resolve_db_path` (manual smoke OK) but no harness case asserts exit 1 + message.
+2. **`step04_gate` omits plan-required verification edges.** `add_tag_casefold_*`, control/utf8 tag/key, `keyless_merge_keeps_created_at`, `db_parent_dir_mode_0700`, `json_add_error_empty_stdout` all pass under `--only verification_edges` but are not in ctest. A regression can green the gate while red those. Prefer a `verification_add` slice or fold the green cases into `add`/`json_db_config`.
+3. **JSON control-char test is escape-shape only.** Plan asked for parse + round-trip of original bytes; `add_json_body_with_control_and_quotes_stays_valid` checks substrings/`\\u001b` but does not `get --json` and compare body bytes.
+
+### Nits
+- Generic `"store error"` hides SQLite detail (OOM is special-cased; other `STORE_ERR_*` are opaque).
+- `cmd_list` teardown is duplicated (success vs JSON-fail); a single cleanup path would match engineering-notes style.
+- Human list still `fputs` keys/tags raw — safe today because tokens forbid controls; keep that invariant when filters land.
+- Uncommitted tree on `step/04-add` — commit before opening the PR.
+
+### Confirmed OK
+- Port boundary: only `store_sqlite.c` includes SQLite; lint gate clean.
+- Commands → normalize → store → output; no SQL in commands; FTS resync in same txn as mutators.
+- Norm UX phrases (not bare `norm_status_string`); body pipeline once; digest still unit-suite sanitized.
+- Output owns JSON RFC 8259 + human control neutralization (`output_body_human` / preview).
+- Gates: build `-Werror`, `step04_gate` (98), `store_asan_gate`, `scripts/lint-all.sh` LINT OK.
+
+## Review follow-ups applied (2026-07-25)
+
+1. **`db_rejects_memory_uri` / `db_rejects_file_uri`** in `json_db_config` (path policy black-box).
+2. **`verification_add` suite** + ctest gate includes it (plan V21/V22/V33/V34 + thin get/list edges).
+3. **JSON control-char test** round-trips via `get --json` escapes + `SELECT body` original bytes.
+4. **Nits:** `store_status_message`; `cmd_list` single cleanup; `open_store` rename; token raw-fputs comment.
+5. **Plans:** carry-overs noted on `05-get-list-delete.md` and `09-polish.md`.
