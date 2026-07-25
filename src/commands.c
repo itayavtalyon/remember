@@ -230,6 +230,24 @@ static int load_body(const char *body_raw, char **out_body, size_t *out_len, con
     return 0;
 }
 
+/* ISO C11: avoid strdup (POSIX; hidden under -std=c11 without feature macros). */
+static char *dup_cstr(const char *s)
+{
+    size_t n;
+    char *p;
+
+    if (s == NULL) {
+        return NULL;
+    }
+    n = strlen(s);
+    p = malloc(n + 1U);
+    if (p == NULL) {
+        return NULL;
+    }
+    memcpy(p, s, n + 1U);
+    return p;
+}
+
 static int normalize_tags(const char *const *tag_raw, size_t ntag_raw, char ***out_tags,
                           size_t *out_ntags, const char **err)
 {
@@ -260,7 +278,7 @@ static int normalize_tags(const char *const *tag_raw, size_t ntag_raw, char ***o
             *err = norm_token_message(ns, "tag");
             return -1;
         }
-        tags[t] = strdup(buf);
+        tags[t] = dup_cstr(buf);
         if (tags[t] == NULL) {
             size_t j;
             for (j = 0; j < t; j++) {

@@ -5,7 +5,6 @@
 #include "util.h"
 
 #include <stdio.h>
-#include <string.h>
 
 #ifndef REMEMBER_VERSION
 #define REMEMBER_VERSION "0.1.0"

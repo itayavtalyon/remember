@@ -3,7 +3,6 @@
 #include "store.h"
 
 #include <stdio.h>
-#include <string.h>
 
 static const char *empty_str(void)
 {

@@ -331,10 +331,13 @@ static char *dup_str(const char *s)
     return p;
 }
 
-/* ISO-8601 UTC second precision, e.g. 2026-07-24T12:00:00Z (20 chars + NUL). */
+/* ISO-8601 UTC second precision, e.g. 2026-07-24T12:00:00Z (20 chars + NUL).
+ * Uses gmtime (not gmtime_r): single-threaded CLI; gmtime_r is POSIX-only and
+ * vanishes under pure -std=c11 without feature-test macros (Linux IWYU). */
 static int utc_now(char *buf, size_t buflen)
 {
     time_t t;
+    const struct tm *tmp;
     struct tm tm;
 
     if (buf == NULL || buflen < 21U) {
@@ -344,9 +347,11 @@ static int utc_now(char *buf, size_t buflen)
     if (t == (time_t)-1) {
         return -1;
     }
-    if (gmtime_r(&t, &tm) == NULL) {
+    tmp = gmtime(&t);
+    if (tmp == NULL) {
         return -1;
     }
+    tm = *tmp;
     if (strftime(buf, buflen, "%Y-%m-%dT%H:%M:%SZ", &tm) == 0U) {
         return -1;
     }

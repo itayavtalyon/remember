@@ -66,6 +66,7 @@ Internal `name == NULL` in lookup is not a user path: treat as lookup miss → U
 - **Error codes must be accurate:** a caller-contract violation (missing/too-small output buffer) is not the same as bad user input. Give it its own status (`NORM_ERR_INTERNAL`), never overload `TOO_LONG`/`OOM`.
 - Format + lint clean on every step (`scripts/lint-all.sh`).
 - Full quality matrix (sanitizers, LSan, scan-build, IWYU, CI): **`docs/QUALITY.md`**.
+- **Prefer ISO C11 over POSIX when equivalent** for code IWYU/scan parses without relying solely on feature macros: e.g. `malloc`+`memcpy` instead of `strdup`, bounded scan instead of `strnlen`, `gmtime`+copy instead of `gmtime_r` (CLI is single-threaded). Keep CMake `_POSIX_C_SOURCE` for APIs that must be POSIX (`mkdir`, …) and pass the same defines into the **IWYU** clang command line on Linux (`scripts/lint-all.sh`).
 
 ### Vendoring third-party C (checklist for every new drop)
 

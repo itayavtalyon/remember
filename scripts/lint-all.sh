@@ -162,12 +162,19 @@ if [[ "$run_iwyu" -eq 1 ]]; then
     # Required for the direct-iwyu fallback; also passed after -- for iwyu_tool so
     # a stale/partial compile_commands still finds sha256.h (normalize.c).
     IWYU_VENDOR_INCLUDES=(-I"$ROOT/third_party/sqlite" -I"$ROOT/third_party/sha256")
+    # Match CMake Linux project targets: glibc + pure -std=c11 hides POSIX
+    # prototypes unless feature-test macros are visible to the IWYU clang parse.
+    IWYU_POSIX_FLAGS=()
+    if [[ "$(uname -s 2>/dev/null || true)" == "Linux" ]]; then
+      IWYU_POSIX_FLAGS=(-D_POSIX_C_SOURCE=200809L -D_XOPEN_SOURCE=700)
+    fi
     # Prefer iwyu_tool.py over compile_commands when available.
     if [[ -n "$IWYU_TOOL" && -f "$BUILD_DIR/compile_commands.json" ]]; then
       if ! python3 "$IWYU_TOOL" -p "$BUILD_DIR" \
           $(find "$SRC_DIR" -name '*.c' | sort) \
           -- -Xiwyu --error=1 -Xiwyu --no_fwd_decls \
           "${IWYU_VENDOR_INCLUDES[@]}" \
+          "${IWYU_POSIX_FLAGS[@]}" \
           >>"$REPORT_DIR/iwyu.txt" 2>&1; then
         iwyu_fail=1
       fi
@@ -175,7 +182,8 @@ if [[ "$run_iwyu" -eq 1 ]]; then
       for f in "$SRC_DIR"/*.c; do
         [[ -f "$f" ]] || continue
         if ! include-what-you-use -Xiwyu --error=1 -Xiwyu --no_fwd_decls \
-            -I"$SRC_DIR" "${IWYU_VENDOR_INCLUDES[@]}" -std=c11 "$f" \
+            -I"$SRC_DIR" "${IWYU_VENDOR_INCLUDES[@]}" "${IWYU_POSIX_FLAGS[@]}" \
+            -std=c11 "$f" \
             >>"$REPORT_DIR/iwyu.txt" 2>&1; then
           iwyu_fail=1
         fi
