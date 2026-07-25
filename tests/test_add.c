@@ -29,7 +29,7 @@ TEST(add_with_tags_and_source_human)
     const char *gargs[] = {"get", "--json", "1"};
     CmdResult g;
     ASSERT_TRUE(db != NULL);
-    r = run_remember(db, args, 7, NULL);
+    r = run_remember(db, args, 8, NULL);
     ASSERT_EQ_INT(r.exit_code, 0);
     ASSERT_EQ_INT(parse_id_stdout(r.out), 1);
     cmd_result_free(&r);
@@ -374,6 +374,191 @@ TEST(add_missing_body_rejected)
     free(db);
 }
 
+TEST(add_json_body_with_control_and_quotes_stays_valid)
+{
+    char *db = make_temp_db_path();
+    /* Includes ", \, newline, ESC — must escape in JSON and store intact. */
+    char body[] = {'q', '"', 'u',  'o', 't',        'e', ' ', '\\',
+                   ' ', 'n', '\n', 'e', (char)0x1b, 'x', '\0'};
+    const char *args[] = {"add", "--json", body};
+    const char *gargs[] = {"get", "--json", "1"};
+    CmdResult r;
+    CmdResult g;
+    char *hex_stored;
+    char hex_expect[64];
+    size_t i;
+    size_t body_len = sizeof(body) - 1U;
+    ASSERT_TRUE(db != NULL);
+    ASSERT_TRUE((body_len * 2U) + 1U <= sizeof(hex_expect));
+
+    r = run_remember(db, args, 3, NULL);
+    ASSERT_EQ_INT(r.exit_code, 0);
+    /* Envelope stays parseable: quotes/backslash/newline/ESC are escaped. */
+    ASSERT_STR_CONTAINS(r.out, "\"version\":1");
+    ASSERT_STR_CONTAINS(r.out, "\"action\":\"created\"");
+    ASSERT_STR_CONTAINS(r.out, "\\\"");
+    ASSERT_STR_CONTAINS(r.out, "\\\\");
+    ASSERT_STR_CONTAINS(r.out, "\\n");
+    ASSERT_STR_CONTAINS(r.out, "\\u001b");
+    /* Raw ESC must not appear unescaped in the JSON text. */
+    ASSERT_TRUE(strchr(r.out, (char)0x1b) == NULL);
+    cmd_result_free(&r);
+
+    /* Round-trip via get --json: same escapes, no raw control on stdout. */
+    g = run_remember(db, gargs, 3, NULL);
+    ASSERT_EQ_INT(g.exit_code, 0);
+    ASSERT_STR_CONTAINS(g.out, "\\\"");
+    ASSERT_STR_CONTAINS(g.out, "\\\\");
+    ASSERT_STR_CONTAINS(g.out, "\\n");
+    ASSERT_STR_CONTAINS(g.out, "\\u001b");
+    ASSERT_TRUE(strchr(g.out, (char)0x1b) == NULL);
+    cmd_result_free(&g);
+
+    /* On-disk body equals original bytes (hex: first-line helper can't carry \n). */
+    for (i = 0; i < body_len; i++) {
+        static const char k_hex[] = "0123456789ABCDEF";
+        unsigned char b = (unsigned char)body[i];
+        hex_expect[i * 2U] = k_hex[b >> 4];
+        hex_expect[(i * 2U) + 1U] = k_hex[b & 0x0FU];
+    }
+    hex_expect[body_len * 2U] = '\0';
+    hex_stored = harness_sqlite_query_line(db, "SELECT hex(body) FROM entries WHERE id=1;");
+    ASSERT_TRUE(hex_stored != NULL);
+    if (hex_stored != NULL) {
+        ASSERT_STREQ(hex_stored, hex_expect);
+        free(hex_stored);
+    }
+    free(db);
+}
+
+/*
+ * stdin and argv must validate a body identically: a body that trims to exactly
+ * 64 KiB is accepted regardless of surrounding whitespace (regression for the
+ * stdin path capping raw bytes before trim).
+ */
+TEST(add_stdin_body_at_limit_accepted)
+{
+    char *db = make_temp_db_path();
+    const char *args[] = {"add", "-"};
+    char *in;
+    CmdResult r;
+    size_t i;
+
+    ASSERT_TRUE(db != NULL);
+    in = malloc(65536U + 2U); /* 64 KiB body + one trailing newline + NUL */
+    ASSERT_TRUE(in != NULL);
+    if (in == NULL) {
+        free(db);
+        return;
+    }
+    for (i = 0; i < 65536U; i++) {
+        in[i] = 'a';
+    }
+    in[65536U] = '\n';
+    in[65537U] = '\0';
+
+    r = run_remember(db, args, 2, in);
+    ASSERT_EQ_INT(r.exit_code, 0);
+    ASSERT_EQ_INT(parse_id_stdout(r.out), 1);
+    cmd_result_free(&r);
+    free(in);
+    free(db);
+}
+
+/* Over-limit after trim is rejected on stdin with the same message as argv. */
+TEST(add_stdin_body_over_limit_rejected)
+{
+    char *db = make_temp_db_path();
+    const char *args[] = {"add", "-"};
+    char *in;
+    CmdResult r;
+    size_t i;
+
+    ASSERT_TRUE(db != NULL);
+    in = malloc(65537U + 1U);
+    ASSERT_TRUE(in != NULL);
+    if (in == NULL) {
+        free(db);
+        return;
+    }
+    for (i = 0; i < 65537U; i++) {
+        in[i] = 'a';
+    }
+    in[65537U] = '\0';
+
+    r = run_remember(db, args, 2, in);
+    ASSERT_EQ_INT(r.exit_code, 1);
+    ASSERT_STR_CONTAINS(r.err, "64 KiB");
+    cmd_result_free(&r);
+    free(in);
+    free(db);
+}
+
+/*
+ * get output safety + id parsing. These live here (an always-gated suite) rather
+ * than the still-red get/list/delete suite, so this step's get behavior is
+ * guarded now.
+ *
+ * Human `get` must not emit raw terminal escapes: a stored ESC renders as '?'.
+ */
+TEST(get_human_body_neutralizes_control_chars)
+{
+    char *db = make_temp_db_path();
+    char body[] = {'x', (char)0x1b, 'y', '\0'};
+    const char *aargs[] = {"add", body};
+    const char *gargs[] = {"get", "1"};
+    CmdResult a;
+    CmdResult g;
+
+    ASSERT_TRUE(db != NULL);
+    a = run_remember(db, aargs, 2, NULL);
+    ASSERT_EQ_INT(a.exit_code, 0);
+    cmd_result_free(&a);
+
+    g = run_remember(db, gargs, 2, NULL);
+    ASSERT_EQ_INT(g.exit_code, 0);
+    ASSERT_TRUE(strchr(g.out, (char)0x1b) == NULL); /* no raw ESC */
+    ASSERT_STR_CONTAINS(g.out, "x?y");
+    cmd_result_free(&g);
+    free(db);
+}
+
+/* But newlines are legitimate body content and must survive human `get`. */
+TEST(get_human_body_preserves_newlines)
+{
+    char *db = make_temp_db_path();
+    const char *aargs[] = {"add", "line1\nline2"};
+    const char *gargs[] = {"get", "1"};
+    CmdResult a;
+    CmdResult g;
+
+    ASSERT_TRUE(db != NULL);
+    a = run_remember(db, aargs, 2, NULL);
+    ASSERT_EQ_INT(a.exit_code, 0);
+    cmd_result_free(&a);
+
+    g = run_remember(db, gargs, 2, NULL);
+    ASSERT_EQ_INT(g.exit_code, 0);
+    ASSERT_STR_CONTAINS(g.out, "line1\nline2");
+    cmd_result_free(&g);
+    free(db);
+}
+
+/* An id that overflows long long is an invalid id (exit 1), not a lookup miss. */
+TEST(get_overflow_id_rejected)
+{
+    char *db = make_temp_db_path();
+    const char *gargs[] = {"get", "99999999999999999999999"};
+    CmdResult g;
+
+    ASSERT_TRUE(db != NULL);
+    g = run_remember(db, gargs, 2, NULL);
+    ASSERT_EQ_INT(g.exit_code, 1);
+    ASSERT_STR_CONTAINS(g.err, "invalid id");
+    cmd_result_free(&g);
+    free(db);
+}
+
 void register_add_tests(void)
 {
     RUN_TEST(add_basic_prints_id_one);
@@ -397,4 +582,10 @@ void register_add_tests(void)
     RUN_TEST(add_tag_too_long_rejected);
     RUN_TEST(add_tag_project_colon_style_allowed);
     RUN_TEST(add_missing_body_rejected);
+    RUN_TEST(add_json_body_with_control_and_quotes_stays_valid);
+    RUN_TEST(add_stdin_body_at_limit_accepted);
+    RUN_TEST(add_stdin_body_over_limit_rejected);
+    RUN_TEST(get_human_body_neutralizes_control_chars);
+    RUN_TEST(get_human_body_preserves_newlines);
+    RUN_TEST(get_overflow_id_rejected);
 }

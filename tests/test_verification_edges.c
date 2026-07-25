@@ -601,16 +601,33 @@ TEST(json_add_error_empty_stdout)
     free(db);
 }
 
-void register_verification_edges_tests(void)
+/*
+ * Step-04 plan criteria that are green today. Gated separately so ctest owns
+ * them; remaining verification_edges stay mixed with later-step red cases.
+ */
+void register_verification_add_tests(void)
 {
     RUN_TEST(add_tag_casefold_merges_to_one_tag_name);
     RUN_TEST(add_tag_control_char_rejected);
     RUN_TEST(add_tag_invalid_utf8_rejected);
     RUN_TEST(add_key_control_char_rejected);
-    RUN_TEST(update_rejects_source_flag);
-    RUN_TEST(get_rejects_source_flag);
-    RUN_TEST(delete_rejects_source_flag);
     RUN_TEST(keyless_merge_keeps_created_at);
+    RUN_TEST(add_invalid_utf8_body_rejected);
+    RUN_TEST(db_parent_dir_mode_0700);
+    RUN_TEST(json_add_error_empty_stdout);
+    /* Thin get/list already implemented for verification — keep gated. */
+    RUN_TEST(get_rejects_source_flag);
+    RUN_TEST(schema_user_version_too_new_refused);
+    RUN_TEST(json_get_missing_empty_stdout);
+    RUN_TEST(human_list_preview_first_line_only);
+    RUN_TEST(human_list_preview_truncates_long_line);
+}
+
+void register_verification_edges_tests(void)
+{
+    /* Still red until update/delete/search land (steps 05–07). */
+    RUN_TEST(update_rejects_source_flag);
+    RUN_TEST(delete_rejects_source_flag);
     RUN_TEST(update_preserves_id_key_source_created_at);
     RUN_TEST(orphan_tag_removed_when_last_use_deleted);
     RUN_TEST(shared_tag_survives_when_other_entry_uses_it);
@@ -621,12 +638,5 @@ void register_verification_edges_tests(void)
     RUN_TEST(search_diacritics_folded);
     RUN_TEST(search_unbalanced_quote_rejected);
     RUN_TEST(list_no_matches_json_total_zero);
-    RUN_TEST(add_invalid_utf8_body_rejected);
     RUN_TEST(update_invalid_utf8_text_rejected);
-    RUN_TEST(human_list_preview_first_line_only);
-    RUN_TEST(human_list_preview_truncates_long_line);
-    RUN_TEST(db_parent_dir_mode_0700);
-    RUN_TEST(schema_user_version_too_new_refused);
-    RUN_TEST(json_get_missing_empty_stdout);
-    RUN_TEST(json_add_error_empty_stdout);
 }

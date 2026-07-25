@@ -392,7 +392,12 @@ TEST(update_both_id_and_key_rejected)
     free(db);
 }
 
-void register_key_tests(void)
+/*
+ * Green in step 04 (keyed add + thin get-by-key). Split into its own suite so it
+ * joins the always-green gate; the WIP update/delete/search-by-key cases below
+ * stay in `key` (still red until steps 05/06) so they cannot mask a regression.
+ */
+void register_key_add_tests(void)
 {
     RUN_TEST(add_key_creates_slot);
     RUN_TEST(add_key_upsert_same_id_replaces_body);
@@ -400,16 +405,21 @@ void register_key_tests(void)
     RUN_TEST(add_key_keeps_original_source);
     RUN_TEST(keyed_entries_may_share_body_text);
     RUN_TEST(keyless_still_dedupes_among_keyless_only);
+    RUN_TEST(add_key_ascii_casefold);
+    RUN_TEST(add_empty_key_rejected);
     RUN_TEST(get_by_key_missing_exits_two);
     RUN_TEST(get_both_id_and_key_rejected);
     RUN_TEST(get_neither_id_nor_key_rejected);
+}
+
+/* WIP: update/delete/search by key — red until steps 05/06. */
+void register_key_tests(void)
+{
     RUN_TEST(delete_by_key);
     RUN_TEST(update_by_key_text);
     RUN_TEST(update_keyed_no_body_hash_conflict);
     RUN_TEST(list_filter_by_key);
     RUN_TEST(search_filter_by_key);
-    RUN_TEST(add_key_ascii_casefold);
-    RUN_TEST(add_empty_key_rejected);
     RUN_TEST(delete_by_key_missing_exits_two);
     RUN_TEST(update_by_key_missing_exits_two);
     RUN_TEST(update_both_id_and_key_rejected);

@@ -172,8 +172,17 @@ NormStatus body_trim_copy(const char *src, size_t src_len, char **out, size_t *o
     }
 
     /* NUL ends the string: ignore anything past the first NUL so the stored
-       body, its length, and its hash all agree (no bytes after the terminator). */
-    src_len = strnlen(src, src_len);
+       body, its length, and its hash all agree (no bytes after the terminator).
+       Pure C11 (no strnlen — POSIX, and IWYU/glibc hide it under -std=c11). */
+    {
+        size_t i;
+        for (i = 0; i < src_len; i++) {
+            if (src[i] == '\0') {
+                src_len = i;
+                break;
+            }
+        }
+    }
 
     ascii_ws_trim_span(src, src_len, &start, &end);
     if (start >= end) {

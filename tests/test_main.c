@@ -19,10 +19,33 @@ static const TestGroup k_groups[] = {
     {"search", register_search_tests},
     {"update", register_update_tests},
     {"json_db_config", register_json_db_config_tests},
+    {"key_add", register_key_add_tests},
     {"key", register_key_tests},
     {"schema_config", register_schema_config_tests},
+    {"verification_add", register_verification_add_tests},
     {"verification_edges", register_verification_edges_tests},
 };
+
+/* Exact comma-token match: "key" must not select "key_add" (or vice versa),
+   which a plain substring test would wrongly do and quietly corrupt the gate. */
+static int group_selected(const char *only, const char *name)
+{
+    size_t namelen = strlen(name);
+    const char *p = only;
+
+    while (*p != '\0') {
+        const char *comma = strchr(p, ',');
+        size_t toklen = (comma != NULL) ? (size_t)(comma - p) : strlen(p);
+        if (toklen == namelen && strncmp(p, name, namelen) == 0) {
+            return 1;
+        }
+        if (comma == NULL) {
+            break;
+        }
+        p = comma + 1;
+    }
+    return 0;
+}
 
 /*
  * usage: remember_tests <remember-binary> [--only GROUP[,GROUP...]]
@@ -49,7 +72,7 @@ int main(int argc, char **argv)
     }
 
     for (i = 0; i < sizeof(k_groups) / sizeof(k_groups[0]); i++) {
-        if (only == NULL || strstr(only, k_groups[i].name) != NULL) {
+        if (only == NULL || group_selected(only, k_groups[i].name)) {
             k_groups[i].run();
         }
     }

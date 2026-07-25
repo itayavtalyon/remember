@@ -80,3 +80,10 @@ int store_delete_by_key(Store *, const char *key, Entry *out_deleted);
 
 - [ ] All must-pass tests green
 - [ ] Locator validation only in CLI/commands, not duplicated SQL inconsistently
+
+## Carried from step 04 review
+
+- **List filters** (`--tag` AND, `--source`, `--key`, `--limit`/`--offset`) — thin list in step 04 rejects unknown options; implement full `ListQuery` here.
+- **Full get/list/delete** suite in `get_list_delete` + remaining `key` cases (`delete_by_key`, `list_filter_by_key`, …).
+- **Output escaping on every body surface** — keep using `output.c` for JSON + human (never raw `fputs` of a stored body). Keys/tags stay control-free via normalize; if that invariant ever changes, escape them too.
+- **Fold remaining green verification edges into the step gate** as they land (do not leave them only in mixed-red `verification_edges`).

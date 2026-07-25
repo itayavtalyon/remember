@@ -115,13 +115,14 @@ TEST(unknown_global_option_before_command_exits_usage)
 
 TEST(json_global_before_command_accepted)
 {
-    /* Not implemented yet, but must parse: exit 3, not usage 1. */
+    /* Global --json before command must parse and run (not usage 1). */
     char *db = make_temp_db_path();
     const char *args[] = {"--json", "add", "hello"};
     CmdResult r;
     ASSERT_TRUE(db != NULL);
     r = run_remember(db, args, 3, NULL);
-    ASSERT_EQ_INT(r.exit_code, 3);
+    ASSERT_EQ_INT(r.exit_code, 0);
+    ASSERT_STR_CONTAINS(r.out, "\"action\":\"created\"");
     cmd_result_free(&r);
     free(db);
 }
@@ -133,7 +134,8 @@ TEST(json_global_after_command_accepted)
     CmdResult r;
     ASSERT_TRUE(db != NULL);
     r = run_remember(db, args, 3, NULL);
-    ASSERT_EQ_INT(r.exit_code, 3);
+    ASSERT_EQ_INT(r.exit_code, 0);
+    ASSERT_STR_CONTAINS(r.out, "\"action\":\"created\"");
     cmd_result_free(&r);
     free(db);
 }
@@ -151,7 +153,8 @@ TEST(db_equals_form_accepted)
     args[2] = "hello";
     /* run_remember also injects --db; extra --db= is fine */
     r = run_remember(db, args, 3, NULL);
-    ASSERT_EQ_INT(r.exit_code, 3);
+    ASSERT_EQ_INT(r.exit_code, 0);
+    ASSERT_EQ_INT(parse_id_stdout(r.out), 1);
     cmd_result_free(&r);
     free(db);
 }
@@ -213,13 +216,14 @@ TEST(command_specific_option_before_command_is_unknown_global)
 
 TEST(command_specific_option_after_command_not_usage_error)
 {
-    /* --tag after add is for later steps; parse must not fail */
+    /* --tag after add is a command option; must not be treated as unknown global */
     char *db = make_temp_db_path();
     const char *args[] = {"add", "--tag", "x", "body"};
     CmdResult r;
     ASSERT_TRUE(db != NULL);
     r = run_remember(db, args, 4, NULL);
-    ASSERT_EQ_INT(r.exit_code, 3);
+    ASSERT_EQ_INT(r.exit_code, 0);
+    ASSERT_EQ_INT(parse_id_stdout(r.out), 1);
     cmd_result_free(&r);
     free(db);
 }

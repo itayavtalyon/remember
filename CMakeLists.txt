@@ -51,6 +51,9 @@ set_property(SOURCE
     src/cli.c
     src/store_sqlite.c
     src/normalize.c
+    src/commands.c
+    src/output.c
+    src/util.c
     APPEND PROPERTY COMPILE_OPTIONS -Wcast-qual
 )
 
@@ -138,6 +141,9 @@ set(REMEMBER_LIB_SOURCES
     src/cli.c
     src/store_sqlite.c
     src/normalize.c
+    src/commands.c
+    src/output.c
+    src/util.c
 )
 
 # --- remember CLI (instrumented) ---------------------------------------------
@@ -227,11 +233,13 @@ remember_apply_posix_feature_macros(remember_store_tests)
 remember_apply_sanitizers(remember_store_tests)
 
 enable_testing()
-# Green gate: implemented suites via black-box harness + ASan store units.
-add_test(NAME scaffold_gate
-    COMMAND remember_tests $<TARGET_FILE:remember> --only cli_global,store,normalize
+# Green gate: suites that are fully implemented after step 04.
+# key_add / verification_add hold green slices split out of mixed-red suites.
+add_test(NAME step04_gate
+    COMMAND remember_tests $<TARGET_FILE:remember>
+        --only cli_global,store,normalize,add,json_db_config,key_add,verification_add
 )
-set_tests_properties(scaffold_gate PROPERTIES
+set_tests_properties(step04_gate PROPERTIES
     WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
 )
 add_test(NAME store_asan_gate

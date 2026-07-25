@@ -32,3 +32,9 @@ Production-feeling edges: default DB dir mode 0700, help completeness, sync warn
 
 - [ ] Full suite green (all tests in `tests/`)
 - [ ] Lint clean
+
+## Carried from earlier reviews
+
+- **Sync-path warning** (`path_looks_synced()` in util, called from main after path resolve) — deferred since step 02/04; markers: `com~apple~CloudDocs`, `Dropbox`, `Google Drive`. Test: `sync_path_warning_on_clouddocs_marker`.
+- **Help completeness** — document `--key`, `--clear-tags`, `--offset`, exit codes 0/1/2 once those commands exist.
+- **Human preview** — 80 codepoints, no mid-UTF-8 split (partially exercised by `human_list_preview_*` once list is complete).
