@@ -21,8 +21,11 @@ Update after each step review.
 - **Commands layer:** `commands.c` orchestrates normalize → `store_*` → `output_*`. No SQL. Norm errors map via full phrases (`empty body after trim`, …), not bare `norm_status_string` labels.
 - **Output:** `output.c` owns JSON escaping (RFC 8259) and envelopes; human `add` prints id only; human `get` uses `output_body_human` (terminal C0/DEL → `?`, keep `\n`/`\t`); human list previews also neutralize controls. Never raw-`fputs` a stored body to a TTY.
 - **Path resolve:** `util_resolve_db_path` — `--db` > `REMEMBER_DB` > `~/.remember/remember.db`. Rejects `:memory:` and `file:` URIs (silent data-loss footguns through `sqlite3_open_v2`).
-- **`store_add`:** keyless body-hash merge (union tags, keep source/created_at/body) or keyed upsert (replace body, union tags, keep source/created_at/key). FTS resync in the same transaction. Thin `store_get` / `store_get_by_key` / `store_list` for verification (full filters in step 05).
-- **Stable exit codes:** `0` ok, `1` usage/error, `2` not found. Scaffold NYI remains private for still-unimplemented commands (`search`/`update`/`delete`).
+- **`store_add`:** keyless body-hash merge (union tags, keep source/created_at/body) or keyed upsert (replace body, union tags, keep source/created_at/key). FTS resync in the same transaction.
+- **`store_list`:** takes `ListQuery` (tags AND via EXISTS, optional `source`/`key`, `limit`/`offset`). Sort `updated_at DESC, id DESC`. CLI owns default limit 20 / max 1000 / offset ≥ 0 and a **tag-filter cap** (`LIST_TAG_FILTER_MAX` 50) under the store bind budget (`LIST_BIND_CAP`); store uses values as given. COUNT + paged SELECT run in **one read transaction** so empty pages still report unpaged `total`.
+- **`store_delete_by_id` / `store_delete_by_key`:** one write txn: load snapshot → FTS delete → `DELETE entries` (CASCADE `entry_tags`) → orphan-tag GC → COMMIT. Snapshot returned for JSON `action:deleted` matches the locked row.
+- **Locator (get/delete):** shared parse in `commands.c` — exactly one of positional id / `--key`; reject `--source`.
+- **Stable exit codes:** `0` ok, `1` usage/error, `2` not found. Scaffold NYI remains private for still-unimplemented commands (`search`/`update`).
 
 ## CLI parse contract
 
@@ -147,8 +150,9 @@ Rules:
 - Parser edges: missing `--db` value, unknown option, globals after command, subcommand help, topic help.
 - Collect-all asserts: guard against NULL deref after failed asserts (early return if dependent data missing).
 - Inspect-only cases may use `sqlite3` CLI.
-- **`--only` group matching is exact comma-tokens**, not substring (`key` must not select `key_add`). See `group_selected` in `tests/test_main.c`.
+- **`--only` group matching is exact comma-tokens**, not substring (`key` must not select `key_gld`). See `group_selected` in `tests/test_main.c`.
 - **Step gates should include every plan-required green test** for that step. Leaving green cases only in mixed red suites (`verification_edges`, full `key`) means ctest can pass while plan criteria silently regress.
+- **Gate suite names:** green get/list/delete slices are `key_gld` and `verification_gld` (not `*_add`). When step 06/07 lands, extend or rename deliberately — do not drop criteria by editing an outdated name.
 - **Path policy tests belong next to the policy.** Rejecting `:memory:` / `file:` in `util_resolve_db_path` needs a black-box case, not only manual smoke.
 - **stdin vs argv body limits must share one enforcer.** Raw stdin caps are memory guards only (`REMEMBER_STDIN_MAX`); `body_trim_copy` owns the post-trim 64 KiB rule for both paths.
 

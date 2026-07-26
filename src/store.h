@@ -74,12 +74,36 @@ StoreStatus store_get(Store *s, long long id, Entry *out_entry);
 StoreStatus store_get_by_key(Store *s, const char *key, Entry *out_entry);
 
 /*
- * List entries newest-first (updated_at DESC, id DESC).
- * limit 0 means default (100). offset skips that many.
+ * List filters (AND across tags). All string fields are normalized by the
+ * command layer; NULL / ntags==0 means "no filter on that axis".
+ * limit and offset are required as given (CLI enforces default/max/min).
+ */
+typedef struct {
+    const char *const *tags; /* may be NULL when ntags == 0 */
+    size_t ntags;
+    const char *source; /* NULL = any */
+    const char *key;    /* NULL = any; exact match */
+    size_t limit;
+    size_t offset;
+} ListQuery;
+
+/*
+ * List entries newest-first (updated_at DESC, id DESC) with optional filters.
  * On STORE_OK: *out_entries is a heap array of *out_count Entries (free each
  * with store_entry_free, then free the array); *out_total is the unpaged count.
  */
-StoreStatus store_list(Store *s, size_t limit, size_t offset, Entry **out_entries,
-                       size_t *out_count, size_t *out_total);
+StoreStatus store_list(Store *s, const ListQuery *q, Entry **out_entries, size_t *out_count,
+                       size_t *out_total);
+
+/*
+ * Hard-delete one entry. Under one write transaction: load snapshot, remove FTS
+ * row, DELETE entry (CASCADE entry_tags), GC orphan tags. *out_deleted is a
+ * heap snapshot of the removed row (caller frees with store_entry_free).
+ * STORE_ERR_NOT_FOUND if missing.
+ */
+StoreStatus store_delete_by_id(Store *s, long long id, Entry *out_deleted);
+
+/* Same as store_delete_by_id, located by normalized key. */
+StoreStatus store_delete_by_key(Store *s, const char *key, Entry *out_deleted);
 
 #endif /* REMEMBER_STORE_H */

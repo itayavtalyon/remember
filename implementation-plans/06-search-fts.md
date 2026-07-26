@@ -53,3 +53,12 @@ int store_search(Store *, const SearchQuery *q, Entry **out, size_t *count, size
 
 - [ ] All must-pass search tests green
 - [ ] FTS rowid == entry id verified (by search finding after update in 07)
+
+## Carried from step 05 review
+
+1. **Reuse list filter + paging patterns** — `ListQuery`-style filters (`--tag` AND, `--key`, `--source`), CLI default limit 20 / max 1000 / offset ≥ 0, COUNT + page in one read txn for unpaged `total` (including empty pages). Prefer a shared filter parse or store filter builder rather than a second SQL dialect for search.
+2. **FTS ownership stays in the store adapter** — search only reads `entries_fts`; mutators already resync. No SQL outside `store_sqlite.c`.
+3. **Gate green FTS edges as they land** — fold `fts_search_empty_after_delete`, `fts_search_reflects_keyed_upsert`, and search-only verification cases into `step06_gate` (extend `verification_gld` or add `verification_search`). Do not leave greens only in mixed-red `verification_edges`.
+4. **Suite names** — current green slices are `key_gld` / `verification_gld`; update CMake `--only` deliberately when adding search.
+5. **`commands.c` size** — when adding `cmd_search` (and later `cmd_update`), prefer splitting command modules if the file stays hard to navigate (~900+ lines).
+6. **Output** — human search previews through `output.c` (≤80 codepoints); JSON full bodies; check write failures like get/list.

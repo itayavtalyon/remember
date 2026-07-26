@@ -602,10 +602,11 @@ TEST(json_add_error_empty_stdout)
 }
 
 /*
- * Step-04 plan criteria that are green today. Gated separately so ctest owns
- * them; remaining verification_edges stay mixed with later-step red cases.
+ * Green verification criteria through step 05 (add + get/list/delete edges).
+ * Suite name `verification_gld` = get/list/delete slice. Remaining
+ * verification_edges stay mixed with later-step red cases (update/search).
  */
-void register_verification_add_tests(void)
+void register_verification_gld_tests(void)
 {
     RUN_TEST(add_tag_casefold_merges_to_one_tag_name);
     RUN_TEST(add_tag_control_char_rejected);
@@ -615,28 +616,27 @@ void register_verification_add_tests(void)
     RUN_TEST(add_invalid_utf8_body_rejected);
     RUN_TEST(db_parent_dir_mode_0700);
     RUN_TEST(json_add_error_empty_stdout);
-    /* Thin get/list already implemented for verification — keep gated. */
     RUN_TEST(get_rejects_source_flag);
+    RUN_TEST(delete_rejects_source_flag);
     RUN_TEST(schema_user_version_too_new_refused);
     RUN_TEST(json_get_missing_empty_stdout);
     RUN_TEST(human_list_preview_first_line_only);
     RUN_TEST(human_list_preview_truncates_long_line);
+    RUN_TEST(orphan_tag_removed_when_last_use_deleted);
+    RUN_TEST(shared_tag_survives_when_other_entry_uses_it);
+    RUN_TEST(list_no_matches_json_total_zero);
 }
 
 void register_verification_edges_tests(void)
 {
-    /* Still red until update/delete/search land (steps 05–07). */
+    /* Still red until update/search land (steps 06–07). */
     RUN_TEST(update_rejects_source_flag);
-    RUN_TEST(delete_rejects_source_flag);
     RUN_TEST(update_preserves_id_key_source_created_at);
-    RUN_TEST(orphan_tag_removed_when_last_use_deleted);
-    RUN_TEST(shared_tag_survives_when_other_entry_uses_it);
     RUN_TEST(fts_search_reflects_body_update);
     RUN_TEST(fts_search_empty_after_delete);
     RUN_TEST(fts_search_reflects_keyed_upsert);
     RUN_TEST(search_finds_compound_tag_component);
     RUN_TEST(search_diacritics_folded);
     RUN_TEST(search_unbalanced_quote_rejected);
-    RUN_TEST(list_no_matches_json_total_zero);
     RUN_TEST(update_invalid_utf8_text_rejected);
 }

@@ -220,6 +220,82 @@ TEST(list_limit_over_hard_cap_rejected)
     free(db);
 }
 
+/*
+ * A tag containing a SQL metacharacter (single quote) must be a bind parameter,
+ * never spliced into SQL: it stores, the list filter matches it exactly, and the
+ * schema is untouched. Regression guard for the parameterized WHERE builder.
+ */
+TEST(list_filter_tag_with_quote_is_parameterized)
+{
+    char *db = make_temp_db_path();
+    const char *a[] = {"add", "--tag", "a'b", "quoted tag"};
+    const char *l[] = {"list", "--json", "--tag", "a'b"};
+    const char *l2[] = {"list", "--json", "--tag", "zzz"};
+    CmdResult r;
+
+    ASSERT_TRUE(db != NULL);
+    r = run_remember(db, a, 4, NULL);
+    ASSERT_EQ_INT(r.exit_code, 0);
+    cmd_result_free(&r);
+
+    r = run_remember(db, l, 4, NULL);
+    ASSERT_EQ_INT(r.exit_code, 0);
+    ASSERT_STR_CONTAINS(r.out, "\"total\":1");
+    ASSERT_STR_CONTAINS(r.out, "\"quoted tag\"");
+    cmd_result_free(&r);
+
+    /* A non-matching filter returns nothing — proof the quote was not injected. */
+    r = run_remember(db, l2, 4, NULL);
+    ASSERT_EQ_INT(r.exit_code, 0);
+    ASSERT_STR_CONTAINS(r.out, "\"total\":0");
+    cmd_result_free(&r);
+    free(db);
+}
+
+/*
+ * Offset past the end returns an empty page but the *unpaged* total. This is the
+ * case a single COUNT(*) OVER() query would get wrong (empty page → no total),
+ * so it pins the two-statement-in-one-transaction design.
+ */
+TEST(list_offset_past_end_keeps_total)
+{
+    char *db = make_temp_db_path();
+    const char *l[] = {"list", "--json", "--limit", "2", "--offset", "10"};
+    CmdResult r;
+
+    ASSERT_TRUE(db != NULL);
+    seed_three(db);
+    r = run_remember(db, l, 6, NULL);
+    ASSERT_EQ_INT(r.exit_code, 0);
+    ASSERT_STR_CONTAINS(r.out, "\"count\":0");
+    ASSERT_STR_CONTAINS(r.out, "\"total\":3");
+    ASSERT_STR_CONTAINS(r.out, "\"entries\":[]");
+    cmd_result_free(&r);
+    free(db);
+}
+
+/* Over-cap tag filters are a clear user error, not an opaque "internal error". */
+TEST(list_too_many_tag_filters_rejected)
+{
+    char *db = make_temp_db_path();
+    const char *args[103];
+    CmdResult r;
+    size_t i;
+
+    ASSERT_TRUE(db != NULL);
+    args[0] = "list";
+    for (i = 0; i < 51U; i++) {
+        args[1U + (i * 2U)] = "--tag";
+        args[2U + (i * 2U)] = "t";
+    }
+    r = run_remember(db, args, 103, NULL);
+    ASSERT_EQ_INT(r.exit_code, 1);
+    ASSERT_STR_CONTAINS(r.err, "too many --tag");
+    ASSERT_STR_NOT_CONTAINS(r.err, "internal");
+    cmd_result_free(&r);
+    free(db);
+}
+
 TEST(delete_existing)
 {
     char *db = make_temp_db_path();
@@ -325,6 +401,24 @@ TEST(list_offset_negative_rejected)
     free(db);
 }
 
+TEST(json_entry_includes_key_field_null_when_keyless)
+{
+    char *db = make_temp_db_path();
+    CmdResult r;
+    CmdResult g;
+    const char *a[] = {"add", "keyless entry"};
+    const char *gargs[] = {"get", "--json", "1"};
+    ASSERT_TRUE(db != NULL);
+    r = run_remember(db, a, 2, NULL);
+    ASSERT_EQ_INT(r.exit_code, 0);
+    cmd_result_free(&r);
+    g = run_remember(db, gargs, 3, NULL);
+    ASSERT_EQ_INT(g.exit_code, 0);
+    ASSERT_STR_CONTAINS(g.out, "\"key\":null");
+    cmd_result_free(&g);
+    free(db);
+}
+
 void register_get_list_delete_tests(void)
 {
     RUN_TEST(get_existing_json_envelope);
@@ -338,10 +432,14 @@ void register_get_list_delete_tests(void)
     RUN_TEST(list_limit_default_is_twenty);
     RUN_TEST(list_limit_zero_rejected);
     RUN_TEST(list_limit_over_hard_cap_rejected);
+    RUN_TEST(list_too_many_tag_filters_rejected);
+    RUN_TEST(list_filter_tag_with_quote_is_parameterized);
+    RUN_TEST(list_offset_past_end_keeps_total);
     RUN_TEST(delete_existing);
     RUN_TEST(delete_missing_exits_two);
     RUN_TEST(delete_json_shape);
     RUN_TEST(list_json_paging_fields);
     RUN_TEST(list_offset_pages);
     RUN_TEST(list_offset_negative_rejected);
+    RUN_TEST(json_entry_includes_key_field_null_when_keyless);
 }
