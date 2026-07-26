@@ -679,6 +679,45 @@ TEST(store_list_prepare_fail)
     free(db);
 }
 
+TEST(store_search_prepare_and_step_fail)
+{
+    char *db = make_temp_db_path();
+    char err[256];
+    Store *s;
+    Entry e;
+    Entry *rows = NULL;
+    size_t count = 0U;
+    size_t total = 0U;
+    StoreAddAction act;
+    SearchQuery q;
+    ASSERT_TRUE(db != NULL);
+    s = store_open(db, err, sizeof(err));
+    ASSERT_TRUE(s != NULL);
+    memset(&e, 0, sizeof(e));
+    ASSERT_EQ_INT(
+        (int)store_add(s, "searchable body helix", k_hash_a, NULL, NULL, 0U, "unknown", &act, &e),
+        (int)STORE_OK);
+    store_entry_free(&e);
+    memset(&q, 0, sizeof(q));
+    q.query = "helix";
+    q.filters.limit = 20U;
+
+    /* Fail COUNT prepare. */
+    store_test_fail_prepare_after(0);
+    ASSERT_EQ_INT((int)store_search(s, &q, &rows, &count, &total), (int)STORE_ERR_SQLITE);
+
+    /* COUNT prepare ok; fail SELECT prepare. */
+    store_test_fail_prepare_after(1);
+    ASSERT_EQ_INT((int)store_search(s, &q, &rows, &count, &total), (int)STORE_ERR_SQLITE);
+
+    /* COUNT step ok; fail first SELECT step. */
+    store_test_fail_step_after(1);
+    ASSERT_EQ_INT((int)store_search(s, &q, &rows, &count, &total), (int)STORE_ERR_SQLITE);
+
+    store_close(s);
+    free(db);
+}
+
 TEST(store_delete_prepare_fail)
 {
     char *db = make_temp_db_path();
@@ -721,6 +760,56 @@ TEST(store_add_tag_alloc_fail)
     free(db);
 }
 
+/* Free a store_list/store_search page (or no-op if *rows is NULL). */
+static void sweep_free_page(Entry **rows, size_t count)
+{
+    size_t j;
+
+    if (*rows == NULL) {
+        return;
+    }
+    for (j = 0; j < count; j++) {
+        store_entry_free(&(*rows)[j]);
+    }
+    free(*rows);
+    *rows = NULL;
+}
+
+static void sweep_list_faults(Store *s, const ListQuery *q, int i)
+{
+    Entry *rows = NULL;
+    size_t count = 0U;
+    size_t total = 0U;
+
+    store_test_fail_prepare_after(i % 8);
+    (void)store_list(s, q, &rows, &count, &total);
+    sweep_free_page(&rows, count);
+    store_test_fail_step_after(i % 5);
+    (void)store_list(s, q, &rows, &count, &total);
+    sweep_free_page(&rows, count);
+}
+
+static void sweep_search_faults(Store *s, const char *const *tags, int i)
+{
+    Entry *rows = NULL;
+    size_t count = 0U;
+    size_t total = 0U;
+    SearchQuery sq;
+
+    memset(&sq, 0, sizeof(sq));
+    sq.query = "sweep";
+    sq.filters.limit = 10U;
+    sq.filters.offset = 0U;
+    sq.filters.tags = tags;
+    sq.filters.ntags = 1U;
+    store_test_fail_prepare_after(i % 4);
+    (void)store_search(s, &sq, &rows, &count, &total);
+    sweep_free_page(&rows, count);
+    store_test_fail_step_after(i % 3);
+    (void)store_search(s, &sq, &rows, &count, &total);
+    sweep_free_page(&rows, count);
+}
+
 /*
  * Sweep fault injection across mutators so OOM / prepare-error lines in
  * store_sqlite.c are actually executed (needed for 100% line coverage).
@@ -735,9 +824,6 @@ TEST(store_fault_injection_sweep)
     for (i = 0; i < 60; i++) {
         Store *s;
         Entry e;
-        Entry *rows = NULL;
-        size_t count = 0U;
-        size_t total = 0U;
         StoreAddAction act;
         ListQuery q;
         char body[32];
@@ -778,26 +864,8 @@ TEST(store_fault_injection_sweep)
         q.ntags = (size_t)(1U + (size_t)(i % 3));
         q.source = (i % 4 == 0) ? "agent" : NULL;
         q.key = (i % 7 == 0) ? "k" : NULL;
-        store_test_fail_prepare_after(i % 8);
-        (void)store_list(s, &q, &rows, &count, &total);
-        if (rows != NULL) {
-            size_t j;
-            for (j = 0; j < count; j++) {
-                store_entry_free(&rows[j]);
-            }
-            free(rows);
-            rows = NULL;
-        }
-        store_test_fail_step_after(i % 5);
-        (void)store_list(s, &q, &rows, &count, &total);
-        if (rows != NULL) {
-            size_t j;
-            for (j = 0; j < count; j++) {
-                store_entry_free(&rows[j]);
-            }
-            free(rows);
-            rows = NULL;
-        }
+        sweep_list_faults(s, &q, i);
+        sweep_search_faults(s, tags, i);
 
         store_test_fail_prepare_after(i % 6);
         (void)store_get(s, 1, &e);
@@ -861,6 +929,7 @@ void register_store_tests(void)
     RUN_TEST(store_add_prepare_fail);
     RUN_TEST(store_get_prepare_fail);
     RUN_TEST(store_list_prepare_fail);
+    RUN_TEST(store_search_prepare_and_step_fail);
     RUN_TEST(store_delete_prepare_fail);
     RUN_TEST(store_add_tag_alloc_fail);
     RUN_TEST(store_fault_injection_sweep);

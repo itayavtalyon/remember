@@ -51,14 +51,23 @@ int store_search(Store *, const SearchQuery *q, Entry **out, size_t *count, size
 
 ## Done checklist
 
-- [ ] All must-pass search tests green
+- [x] All must-pass search tests green (except `fts_search_reflects_body_update` → step 07)
 - [ ] FTS rowid == entry id verified (by search finding after update in 07)
 
 ## Carried from step 05 review
 
-1. **Reuse list filter + paging patterns** — `ListQuery`-style filters (`--tag` AND, `--key`, `--source`), CLI default limit 20 / max 1000 / offset ≥ 0, COUNT + page in one read txn for unpaged `total` (including empty pages). Prefer a shared filter parse or store filter builder rather than a second SQL dialect for search.
-2. **FTS ownership stays in the store adapter** — search only reads `entries_fts`; mutators already resync. No SQL outside `store_sqlite.c`.
-3. **Gate green FTS edges as they land** — fold `fts_search_empty_after_delete`, `fts_search_reflects_keyed_upsert`, and search-only verification cases into `step06_gate` (extend `verification_gld` or add `verification_search`). Do not leave greens only in mixed-red `verification_edges`.
-4. **Suite names** — current green slices are `key_gld` / `verification_gld`; update CMake `--only` deliberately when adding search.
-5. **`commands.c` size** — when adding `cmd_search` (and later `cmd_update`), prefer splitting command modules if the file stays hard to navigate (~900+ lines).
-6. **Output** — human search previews through `output.c` (≤80 codepoints); JSON full bodies; check write failures like get/list.
+1. **Reuse list filter + paging patterns** — ✅ `list_append_filters` + `ListParse` / `list_prepare_query` shared; `SearchQuery.filters` is a `ListQuery`.
+2. **FTS ownership stays in the store adapter** — ✅ only `store_sqlite.c` touches FTS.
+3. **Gate green FTS edges as they land** — ✅ suite `verification_search` + `search` + `key_gld` (`search_filter_by_key`) in `tests/gate-suites`.
+4. **Suite names** — ✅ `verification_search` added deliberately (not overloading `verification_gld`).
+5. **`commands.c` size** — ✅ split by concern: `commands_common` + `cmd_add` + `cmd_locator` + `cmd_query` (see engineering notes).
+6. **Output** — ✅ `emit_entry_page` → `output_list_envelope` / `output_entry_human_line`.
+
+## Review notes (2026-07-26)
+
+- FTS5 `MATCH`/`bm25()` need the **table name** `entries_fts`, not a JOIN alias.
+- Invalid MATCH → `STORE_ERR_QUERY` via errmsg heuristics (`fts5` / `syntax error` / …).
+- Left red for step 07: `fts_search_reflects_body_update`.
+- Commands split: public `commands.h` unchanged; internal `commands_common.h` for shared helpers only.
+- **Post-split lint:** `misc-include-cleaner` requires direct `#include "store.h"` / `"normalize.h"` in each `cmd_*.c` and `commands_common.c` (transitive via public headers is not enough). Fault-injection sweep complexity fixed by extracting `sweep_list_faults` / `sweep_search_faults`.
+- Step review verdict: **Approve** after lint fixes (gates: build/tests/lint/coverage green). Open nits only (errmsg heuristic fragility; optional txn-wrapper DRY).

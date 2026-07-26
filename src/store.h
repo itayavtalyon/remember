@@ -20,7 +20,8 @@ typedef enum {
     STORE_ERR_NOT_FOUND,
     STORE_ERR_SQLITE,
     STORE_ERR_OOM,
-    STORE_ERR_INTERNAL
+    STORE_ERR_INTERNAL,
+    STORE_ERR_QUERY /* invalid FTS5 MATCH syntax (search) */
 } StoreStatus;
 
 /* Short ASCII label for st (no trailing newline). Never NULL. */
@@ -94,6 +95,20 @@ typedef struct {
  */
 StoreStatus store_list(Store *s, const ListQuery *q, Entry **out_entries, size_t *out_count,
                        size_t *out_total);
+
+/*
+ * Ranked FTS5 search. query is raw FTS5 MATCH syntax (required, non-empty at CLI).
+ * filters reuse ListQuery: tag AND, optional source/key, limit/offset.
+ * Rank: bm25(entries_fts) ASC, then updated_at DESC, id DESC.
+ * On STORE_OK: same ownership as store_list. STORE_ERR_QUERY on bad MATCH syntax.
+ */
+typedef struct {
+    const char *query; /* FTS5 MATCH string */
+    ListQuery filters;
+} SearchQuery;
+
+StoreStatus store_search(Store *s, const SearchQuery *q, Entry **out_entries, size_t *out_count,
+                         size_t *out_total);
 
 /*
  * Hard-delete one entry. Under one write transaction: load snapshot, remove FTS

@@ -12,8 +12,9 @@ Test matrix: [`tests/COVERAGE.md`](../tests/COVERAGE.md).
 | **DRY** | Tag/key normalization once (`normalize.c`). Entry JSON/human rendering once (`output.c`). Body pipeline once. FTS resync one function in the store adapter. |
 
 ```text
-main → cli_parse → commands_* → store_* → [store_sqlite only: SQLite]
+main → cli_parse → commands.h (cmd_add | cmd_locator | cmd_query) → store_* → [store_sqlite only]
                       ↘ output_* (stdout)
+         commands_common (internal helpers only; not public)
 ```
 
 ## Steps (do in order)
@@ -25,7 +26,7 @@ main → cli_parse → commands_* → store_* → [store_sqlite only: SQLite]
 | 03 | [Normalize + hash](03-normalize-hash.md) | Unit tests for trim/tags/keys/hash; used by add ✅ |
 | 04 | [add](04-add.md) | All `add_*` + key add/upsert tests green ✅ |
 | 05 | [get / list / delete](05-get-list-delete.md) | get/list/delete + paging + key locator tests green ✅ |
-| 06 | [search FTS](06-search-fts.md) | All search_* + search key filter green |
+| 06 | [search FTS](06-search-fts.md) | All search_* + search key filter green ✅ |
 | 07 | [update](07-update.md) | All update_* + keyed update green |
 | 08 | [Lint + format toolchain](08-lint-format.md) | `lint` + `format` targets work; src clean |
 | 09 | [Polish](09-polish.md) | Help text, defaults dir 0700, warnings, remaining config tests |

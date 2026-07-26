@@ -23,6 +23,7 @@ static const TestGroup k_groups[] = {
     {"key", register_key_tests},
     {"schema_config", register_schema_config_tests},
     {"verification_gld", register_verification_gld_tests},
+    {"verification_search", register_verification_search_tests},
     {"verification_edges", register_verification_edges_tests},
     {"coverage_edges", register_coverage_edges_tests},
 };

@@ -422,6 +422,8 @@ const char *store_status_message(StoreStatus st)
         return "out of memory";
     case STORE_ERR_INTERNAL:
         return "internal error";
+    case STORE_ERR_QUERY:
+        return "invalid search query";
     default:
         return "store error";
     }
@@ -1253,8 +1255,32 @@ static int list_append_tag_exists(char *sql, size_t sql_cap, size_t *pos, int *n
 }
 
 /*
+ * Append shared list/search filter ANDs (source, key, tag EXISTS) at *pos / *nbinds.
+ * Tags are AND'd via EXISTS subqueries (one per tag). Returns -1 if truncated.
+ */
+static int list_append_filters(const ListQuery *q, char *sql, size_t sql_cap, size_t *pos,
+                               int *nbinds, const char **bind_text, size_t bind_cap)
+{
+    size_t t;
+
+    if (q == NULL || sql == NULL || pos == NULL || nbinds == NULL || bind_text == NULL) {
+        return -1;
+    }
+    if (list_append_eq(sql, sql_cap, pos, nbinds, bind_text, bind_cap, "source", q->source) != 0 ||
+        list_append_eq(sql, sql_cap, pos, nbinds, bind_text, bind_cap, "key", q->key) != 0) {
+        return -1;
+    }
+    for (t = 0; t < q->ntags; t++) {
+        const char *tag = (q->tags != NULL) ? q->tags[t] : NULL;
+        if (list_append_tag_exists(sql, sql_cap, pos, nbinds, bind_text, bind_cap, tag) != 0) {
+            return -1;
+        }
+    }
+    return 0;
+}
+
+/*
  * Build list WHERE clause fragments and bind params.
- * Tags are AND'd via EXISTS subqueries (one per tag).
  * sql_out must be large enough (caller-sized); returns -1 if truncated.
  */
 static int list_build_where(const ListQuery *q, char *sql, size_t sql_cap, int *out_nbinds,
@@ -1262,7 +1288,6 @@ static int list_build_where(const ListQuery *q, char *sql, size_t sql_cap, int *
 {
     size_t pos = 0U;
     int nbinds = 0;
-    size_t t;
     int n;
 
     if (q == NULL || sql == NULL || sql_cap == 0U || out_nbinds == NULL || bind_text == NULL) {
@@ -1274,19 +1299,62 @@ static int list_build_where(const ListQuery *q, char *sql, size_t sql_cap, int *
     }
     pos = (size_t)n;
 
-    if (list_append_eq(sql, sql_cap, &pos, &nbinds, bind_text, bind_cap, "source", q->source) !=
-            0 ||
-        list_append_eq(sql, sql_cap, &pos, &nbinds, bind_text, bind_cap, "key", q->key) != 0) {
+    if (list_append_filters(q, sql, sql_cap, &pos, &nbinds, bind_text, bind_cap) != 0) {
         return -1;
-    }
-    for (t = 0; t < q->ntags; t++) {
-        const char *tag = (q->tags != NULL) ? q->tags[t] : NULL;
-        if (list_append_tag_exists(sql, sql_cap, &pos, &nbinds, bind_text, bind_cap, tag) != 0) {
-            return -1;
-        }
     }
     *out_nbinds = nbinds;
     return 0;
+}
+
+/*
+ * Search WHERE: FTS MATCH on entries_fts (table name required — FTS5 rejects
+ * aliases for MATCH/bm25), then the same entry filters as list.
+ * Bind slot 1 is the MATCH query; filters continue from 2.
+ */
+static int search_build_where(const SearchQuery *q, char *sql, size_t sql_cap, int *out_nbinds,
+                              const char **bind_text, size_t bind_cap)
+{
+    size_t pos = 0U;
+    int nbinds = 0;
+    int n;
+
+    if (q == NULL || q->query == NULL || sql == NULL || sql_cap == 0U || out_nbinds == NULL ||
+        bind_text == NULL || bind_cap < 1U) {
+        return -1;
+    }
+    n = snprintf(sql, sql_cap, " WHERE entries_fts MATCH ?1");
+    if (n < 0 || (size_t)n >= sql_cap) {
+        return -1;
+    }
+    pos = (size_t)n;
+    bind_text[0] = q->query;
+    nbinds = 1;
+
+    if (list_append_filters(&q->filters, sql, sql_cap, &pos, &nbinds, bind_text, bind_cap) != 0) {
+        return -1;
+    }
+    *out_nbinds = nbinds;
+    return 0;
+}
+
+/* Map a failed prepare/step to STORE_ERR_QUERY when SQLite reports FTS syntax. */
+static StoreStatus store_status_from_sqlite(sqlite3 *db)
+{
+    const char *msg = sqlite3_errmsg(db);
+
+    if (msg != NULL &&
+        (strstr(msg, "fts5") != NULL || strstr(msg, "syntax error") != NULL ||
+         strstr(msg, "unrecognized token") != NULL || strstr(msg, "unterminated") != NULL)) {
+        return STORE_ERR_QUERY;
+    }
+    return STORE_ERR_SQLITE;
+}
+
+/* Error map for plain (non-FTS) queries: every failure is a database error. */
+static StoreStatus store_status_plain(sqlite3 *db)
+{
+    (void)db;
+    return STORE_ERR_SQLITE;
 }
 
 static StoreStatus list_bind_texts(sqlite3_stmt *stmt, const char **bind_text, int nbinds)
@@ -1305,20 +1373,22 @@ static StoreStatus list_bind_texts(sqlite3_stmt *stmt, const char **bind_text, i
 #define LIST_BIND_CAP 64
 
 /*
- * Count + page. Split into two statements (COUNT then paged SELECT) rather than
- * one query: a single COUNT(*) OVER() would ride on the result rows, so it
- * reports no total whenever the page is empty (offset past the end), breaking the
- * "total is the unpaged count" contract. store_list runs this inside one read
- * transaction so both statements see a single snapshot.
+ * Bind filters + limit/offset, run the COUNT statement then the paged SELECT the
+ * caller built, and collect rows. Split into two statements (COUNT then paged
+ * SELECT) rather than one query: a single COUNT(*) OVER() would ride on the
+ * result rows, so it reports no total whenever the page is empty (offset past the
+ * end), breaking the "total is the unpaged count" contract. Callers run this
+ * inside one read transaction so both statements see a single snapshot.
+ *
+ * map_err classifies a failed prepare/step: list passes store_status_plain (any
+ * failure is a database error); search passes store_status_from_sqlite (FTS-syntax
+ * errors become STORE_ERR_QUERY). limit/offset bind at ?nbinds+1 / ?nbinds+2.
  */
-static StoreStatus list_query_exec(sqlite3 *db, const ListQuery *q, Entry **out_entries,
-                                   size_t *out_count, size_t *out_total)
+static StoreStatus run_count_and_page(sqlite3 *db, const char *count_sql, const char *select_sql,
+                                      const char **bind_text, int nbinds, size_t limit,
+                                      size_t offset, StoreStatus (*map_err)(sqlite3 *),
+                                      Entry **out_entries, size_t *out_count, size_t *out_total)
 {
-    char where_sql[LIST_SQL_CAP];
-    char count_sql[LIST_SQL_CAP + 64];
-    char select_sql[LIST_SQL_CAP + 160];
-    const char *bind_text[LIST_BIND_CAP];
-    int nbinds = 0;
     sqlite3_stmt *count_stmt = NULL;
     sqlite3_stmt *sel = NULL;
     Entry *rows = NULL;
@@ -1327,38 +1397,14 @@ static StoreStatus list_query_exec(sqlite3 *db, const ListQuery *q, Entry **out_
     size_t total = 0U;
     int rc;
     StoreStatus st;
-    int lim_idx;
-    int off_idx;
 
     *out_entries = NULL;
     *out_count = 0U;
     *out_total = 0U;
 
-    if (list_build_where(q, where_sql, sizeof(where_sql), &nbinds, bind_text, LIST_BIND_CAP) != 0) {
-        return STORE_ERR_INTERNAL;
-    }
-
-    {
-        int sn =
-            snprintf(count_sql, sizeof(count_sql), "SELECT COUNT(*) FROM entries e%s;", where_sql);
-        if (sn < 0 || (size_t)sn >= sizeof(count_sql)) {
-            return STORE_ERR_INTERNAL;
-        }
-        sn = snprintf(select_sql, sizeof(select_sql),
-                      "SELECT e.id, e.key, e.body, e.source, e.created_at, e.updated_at "
-                      "FROM entries e%s ORDER BY e.updated_at DESC, e.id DESC "
-                      "LIMIT ?%d OFFSET ?%d;",
-                      where_sql, nbinds + 1, nbinds + 2);
-        if (sn < 0 || (size_t)sn >= sizeof(select_sql)) {
-            return STORE_ERR_INTERNAL;
-        }
-    }
-    lim_idx = nbinds + 1;
-    off_idx = nbinds + 2;
-
     rc = sqlite3_prepare_v2(db, count_sql, -1, &count_stmt, NULL);
     if (rc != SQLITE_OK) {
-        return STORE_ERR_SQLITE;
+        return map_err(db);
     }
     st = list_bind_texts(count_stmt, bind_text, nbinds);
     if (st != STORE_OK) {
@@ -1368,23 +1414,22 @@ static StoreStatus list_query_exec(sqlite3 *db, const ListQuery *q, Entry **out_
     rc = sqlite3_step(count_stmt);
     if (rc != SQLITE_ROW) {
         (void)sqlite3_finalize(count_stmt);
-        return STORE_ERR_SQLITE;
+        return map_err(db);
     }
     total = (size_t)sqlite3_column_int64(count_stmt, 0);
     (void)sqlite3_finalize(count_stmt);
-    count_stmt = NULL;
 
     rc = sqlite3_prepare_v2(db, select_sql, -1, &sel, NULL);
     if (rc != SQLITE_OK) {
-        return STORE_ERR_SQLITE;
+        return map_err(db);
     }
     st = list_bind_texts(sel, bind_text, nbinds);
     if (st != STORE_OK) {
         (void)sqlite3_finalize(sel);
         return st;
     }
-    if (sqlite3_bind_int64(sel, lim_idx, (sqlite3_int64)q->limit) != SQLITE_OK ||
-        sqlite3_bind_int64(sel, off_idx, (sqlite3_int64)q->offset) != SQLITE_OK) {
+    if (sqlite3_bind_int64(sel, nbinds + 1, (sqlite3_int64)limit) != SQLITE_OK ||
+        sqlite3_bind_int64(sel, nbinds + 2, (sqlite3_int64)offset) != SQLITE_OK) {
         (void)sqlite3_finalize(sel);
         return STORE_ERR_SQLITE;
     }
@@ -1400,7 +1445,7 @@ static StoreStatus list_query_exec(sqlite3 *db, const ListQuery *q, Entry **out_
     if (rc != SQLITE_DONE) {
         free_entry_rows(rows, n);
         (void)sqlite3_finalize(sel);
-        return STORE_ERR_SQLITE;
+        return map_err(db);
     }
     (void)sqlite3_finalize(sel);
 
@@ -1408,6 +1453,39 @@ static StoreStatus list_query_exec(sqlite3 *db, const ListQuery *q, Entry **out_
     *out_count = n;
     *out_total = total;
     return STORE_OK;
+}
+
+/*
+ * List: newest-first page with filters. count_sql/select_sql pad LIST_SQL_CAP for
+ * the fixed SELECT column list + ORDER BY + LIMIT/OFFSET that frame where_sql.
+ */
+static StoreStatus list_query_exec(sqlite3 *db, const ListQuery *q, Entry **out_entries,
+                                   size_t *out_count, size_t *out_total)
+{
+    char where_sql[LIST_SQL_CAP];
+    char count_sql[LIST_SQL_CAP + 64];
+    char select_sql[LIST_SQL_CAP + 160];
+    const char *bind_text[LIST_BIND_CAP];
+    int nbinds = 0;
+    int sn;
+
+    if (list_build_where(q, where_sql, sizeof(where_sql), &nbinds, bind_text, LIST_BIND_CAP) != 0) {
+        return STORE_ERR_INTERNAL;
+    }
+    sn = snprintf(count_sql, sizeof(count_sql), "SELECT COUNT(*) FROM entries e%s;", where_sql);
+    if (sn < 0 || (size_t)sn >= sizeof(count_sql)) {
+        return STORE_ERR_INTERNAL;
+    }
+    sn = snprintf(select_sql, sizeof(select_sql),
+                  "SELECT e.id, e.key, e.body, e.source, e.created_at, e.updated_at "
+                  "FROM entries e%s ORDER BY e.updated_at DESC, e.id DESC "
+                  "LIMIT ?%d OFFSET ?%d;",
+                  where_sql, nbinds + 1, nbinds + 2);
+    if (sn < 0 || (size_t)sn >= sizeof(select_sql)) {
+        return STORE_ERR_INTERNAL;
+    }
+    return run_count_and_page(db, count_sql, select_sql, bind_text, nbinds, q->limit, q->offset,
+                              store_status_plain, out_entries, out_count, out_total);
 }
 
 StoreStatus store_list(Store *s, const ListQuery *q, Entry **out_entries, size_t *out_count,
@@ -1436,6 +1514,82 @@ StoreStatus store_list(Store *s, const ListQuery *q, Entry **out_entries, size_t
     }
     if (exec_sql(s->db, "COMMIT;", err_unused, 0U) != 0) {
         /* Unwind the page we built so the caller sees a clean failure. */
+        rollback_quiet(s->db);
+        free_entry_rows(*out_entries, *out_count);
+        *out_entries = NULL;
+        *out_count = 0U;
+        *out_total = 0U;
+        return STORE_ERR_SQLITE;
+    }
+    return STORE_OK;
+}
+
+/*
+ * COUNT + paged FTS SELECT. Same two-statement total contract as list_query_exec.
+ * FROM joins entries_fts so MATCH/bm25 apply; filters reuse list_append_filters.
+ * bm25 lower (more negative) = better match, then updated_at DESC; FTS5 requires
+ * the real table name in bm25(), not an alias. count_sql/select_sql pad
+ * LIST_SQL_CAP for the JOIN + bm25 ORDER BY text that frame where_sql.
+ */
+static StoreStatus search_query_exec(sqlite3 *db, const SearchQuery *q, Entry **out_entries,
+                                     size_t *out_count, size_t *out_total)
+{
+    char where_sql[LIST_SQL_CAP];
+    char count_sql[LIST_SQL_CAP + 128];
+    char select_sql[LIST_SQL_CAP + 256];
+    const char *bind_text[LIST_BIND_CAP];
+    int nbinds = 0;
+    int sn;
+
+    if (search_build_where(q, where_sql, sizeof(where_sql), &nbinds, bind_text, LIST_BIND_CAP) !=
+        0) {
+        return STORE_ERR_INTERNAL;
+    }
+    sn = snprintf(count_sql, sizeof(count_sql),
+                  "SELECT COUNT(*) FROM entries e "
+                  "JOIN entries_fts ON entries_fts.rowid = e.id%s;",
+                  where_sql);
+    if (sn < 0 || (size_t)sn >= sizeof(count_sql)) {
+        return STORE_ERR_INTERNAL;
+    }
+    sn = snprintf(select_sql, sizeof(select_sql),
+                  "SELECT e.id, e.key, e.body, e.source, e.created_at, e.updated_at "
+                  "FROM entries e "
+                  "JOIN entries_fts ON entries_fts.rowid = e.id%s "
+                  "ORDER BY bm25(entries_fts), e.updated_at DESC, e.id DESC "
+                  "LIMIT ?%d OFFSET ?%d;",
+                  where_sql, nbinds + 1, nbinds + 2);
+    if (sn < 0 || (size_t)sn >= sizeof(select_sql)) {
+        return STORE_ERR_INTERNAL;
+    }
+    return run_count_and_page(db, count_sql, select_sql, bind_text, nbinds, q->filters.limit,
+                              q->filters.offset, store_status_from_sqlite, out_entries, out_count,
+                              out_total);
+}
+
+StoreStatus store_search(Store *s, const SearchQuery *q, Entry **out_entries, size_t *out_count,
+                         size_t *out_total)
+{
+    char err_unused[1];
+    StoreStatus st;
+
+    if (s == NULL || s->db == NULL || q == NULL || q->query == NULL || out_entries == NULL ||
+        out_count == NULL || out_total == NULL) {
+        return STORE_ERR_INTERNAL;
+    }
+    *out_entries = NULL;
+    *out_count = 0U;
+    *out_total = 0U;
+
+    if (exec_sql(s->db, "BEGIN;", err_unused, 0U) != 0) {
+        return STORE_ERR_SQLITE;
+    }
+    st = search_query_exec(s->db, q, out_entries, out_count, out_total);
+    if (st != STORE_OK) {
+        rollback_quiet(s->db);
+        return st;
+    }
+    if (exec_sql(s->db, "COMMIT;", err_unused, 0U) != 0) {
         rollback_quiet(s->db);
         free_entry_rows(*out_entries, *out_count);
         *out_entries = NULL;

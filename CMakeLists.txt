@@ -64,7 +64,10 @@ set_property(SOURCE
     src/cli.c
     src/store_sqlite.c
     src/normalize.c
-    src/commands.c
+    src/commands_common.c
+    src/cmd_add.c
+    src/cmd_locator.c
+    src/cmd_query.c
     src/output.c
     src/util.c
     APPEND PROPERTY COMPILE_OPTIONS -Wcast-qual
@@ -167,7 +170,10 @@ set(REMEMBER_LIB_SOURCES
     src/cli.c
     src/store_sqlite.c
     src/normalize.c
-    src/commands.c
+    src/commands_common.c
+    src/cmd_add.c
+    src/cmd_locator.c
+    src/cmd_query.c
     src/output.c
     src/util.c
 )
