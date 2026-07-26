@@ -72,27 +72,8 @@ TEST(sync_path_warning_on_clouddocs_marker)
     free(db);
 }
 
-TEST(json_entry_includes_key_field_null_when_keyless)
-{
-    char *db = make_temp_db_path();
-    CmdResult r;
-    CmdResult g;
-    const char *a[] = {"add", "keyless entry"};
-    const char *gargs[] = {"get", "--json", "1"};
-    ASSERT_TRUE(db != NULL);
-    r = run_remember(db, a, 2, NULL);
-    ASSERT_EQ_INT(r.exit_code, 0);
-    cmd_result_free(&r);
-    g = run_remember(db, gargs, 3, NULL);
-    ASSERT_EQ_INT(g.exit_code, 0);
-    /* key: null for keyless */
-    ASSERT_STR_CONTAINS(g.out, "\"key\":null");
-    cmd_result_free(&g);
-    free(db);
-}
-
 void register_schema_config_tests(void)
 {
+    /* json_entry key:null lives in get_list_delete (step 05 gate). */
     RUN_TEST(sync_path_warning_on_clouddocs_marker);
-    RUN_TEST(json_entry_includes_key_field_null_when_keyless);
 }

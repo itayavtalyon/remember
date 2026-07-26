@@ -233,13 +233,13 @@ remember_apply_posix_feature_macros(remember_store_tests)
 remember_apply_sanitizers(remember_store_tests)
 
 enable_testing()
-# Green gate: suites that are fully implemented after step 04.
-# key_add / verification_add hold green slices split out of mixed-red suites.
-add_test(NAME step04_gate
+# Green gate: suites fully implemented after step 05 (get/list/delete).
+# key_gld / verification_gld = green get/list/delete slices (not only "add").
+add_test(NAME step05_gate
     COMMAND remember_tests $<TARGET_FILE:remember>
-        --only cli_global,store,normalize,add,json_db_config,key_add,verification_add
+        --only cli_global,store,normalize,add,get_list_delete,json_db_config,key_gld,verification_gld
 )
-set_tests_properties(step04_gate PROPERTIES
+set_tests_properties(step05_gate PROPERTIES
     WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
 )
 add_test(NAME store_asan_gate

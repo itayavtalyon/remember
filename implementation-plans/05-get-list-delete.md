@@ -13,11 +13,11 @@ Read paths + hard delete; id **or** `--key` locator; list filters + paging.
 ## Store API
 
 ```c
-int store_get_by_id(Store *, int64_t id, Entry *out);
-int store_get_by_key(Store *, const char *key, Entry *out);
-int store_list(Store *, const ListQuery *q, Entry **out, size_t *count, size_t *total);
-int store_delete_by_id(Store *, int64_t id, Entry *out_deleted);
-int store_delete_by_key(Store *, const char *key, Entry *out_deleted);
+StoreStatus store_get(Store *, long long id, Entry *out);
+StoreStatus store_get_by_key(Store *, const char *key, Entry *out);
+StoreStatus store_list(Store *, const ListQuery *q, Entry **out, size_t *count, size_t *total);
+StoreStatus store_delete_by_id(Store *, long long id, Entry *out_deleted);
+StoreStatus store_delete_by_key(Store *, const char *key, Entry *out_deleted);
 ```
 
 ## Tests that must pass
@@ -78,8 +78,8 @@ int store_delete_by_key(Store *, const char *key, Entry *out_deleted);
 
 ## Done checklist
 
-- [ ] All must-pass tests green
-- [ ] Locator validation only in CLI/commands, not duplicated SQL inconsistently
+- [x] All must-pass tests green
+- [x] Locator validation only in CLI/commands, not duplicated SQL inconsistently
 
 ## Carried from step 04 review
 
@@ -87,3 +87,38 @@ int store_delete_by_key(Store *, const char *key, Entry *out_deleted);
 - **Full get/list/delete** suite in `get_list_delete` + remaining `key` cases (`delete_by_key`, `list_filter_by_key`, …).
 - **Output escaping on every body surface** — keep using `output.c` for JSON + human (never raw `fputs` of a stored body). Keys/tags stay control-free via normalize; if that invariant ever changes, escape them too.
 - **Fold remaining green verification edges into the step gate** as they land (do not leave them only in mixed-red `verification_edges`).
+
+## Review notes (2026-07-26) — implementation
+
+- **Store:** `ListQuery` + filtered `store_list`; `store_delete_by_id` / `store_delete_by_key` (load → FTS delete → CASCADE entry delete → orphan tag GC, one txn).
+- **Commands:** shared locator parse for get/delete; full `cmd_list` filters; human delete silent; JSON delete via `output_action_envelope(..., "deleted", ...)`.
+- **Limits:** CLI default 20 / hard cap 1000 / offset ≥ 0; store does not invent defaults. CLI also caps `--tag` count (`LIST_TAG_FILTER_MAX` 50) under store `LIST_BIND_CAP`.
+- **List paging:** COUNT + paged SELECT in one **read** transaction so empty pages still report unpaged `total` (see `list_offset_past_end_keeps_total`).
+- **Tests:** `step05_gate` = `cli_global,store,normalize,add,get_list_delete,json_db_config,key_gld,verification_gld`. Green key delete/list + V22/V24/V28 edges folded into gated suites. Unit store tests for list filters + delete GC under ASan. Extra: parameterized tag with `'`, over-cap tags, offset past end.
+- **Still red (later steps):** update, search, sync-path warning, FTS search verification.
+
+## Review notes (2026-07-26) — formal step review (PR readiness)
+
+**Verdict: Approve with nits** — ready for next step / PR after commit; no blocking defects.
+
+### Blocking
+(none)
+
+### Important — fixed (same day follow-up)
+1. **Delete load under write lock** — `delete_entry_tx`: BEGIN IMMEDIATE → load → FTS delete → DELETE → orphan GC → COMMIT.
+2. **Gate suite rename** — `key_gld` / `verification_gld` (was `key_add` / `verification_add`); CMake `step05_gate` updated.
+
+### Nits — fixed (same day follow-up)
+- Shared `push_cstr_ptr` for add/list tag argv lists.
+- `main`: `run_with_store` helper for open/run/close.
+- Human get/list check `output_*` write failures.
+- Plan API sketch uses `store_get` (not `store_get_by_id`).
+- `commands.c` split deferred to step 06 plan (search/update).
+
+### Confirmed OK
+- Port boundary: only `store_sqlite.c` includes SQLite; lint gate clean.
+- Locator policy only in commands (exactly one of id/`--key`); filters/normalize at CLI; store takes `ListQuery`.
+- Tag/source/key filters parameterized (quote regression test); CLI tag-cap → user error not `STORE_ERR_INTERNAL`.
+- Output: JSON envelopes + human body/preview neutralization; never raw body `fputs`.
+- Orphan-tag GC + FTS delete in the delete transaction; shared tags retained.
+- Gates: build `-Werror`, `step05_gate`, `store_asan_gate`, `scripts/lint-all.sh` LINT OK.

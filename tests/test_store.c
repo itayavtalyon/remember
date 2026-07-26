@@ -468,6 +468,134 @@ TEST(store_close_null_is_safe)
     ASSERT_TRUE(1);
 }
 
+/* Dummy 64-char hex (store does not re-hash). */
+static const char k_hash_a[] = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+static const char k_hash_b[] = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+static const char k_hash_c[] = "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc";
+
+TEST(store_list_filters_and_paging)
+{
+    char *db = make_temp_db_path();
+    char err[256];
+    Store *s;
+    Entry e;
+    StoreAddAction act;
+    const char *tags_ab[] = {"a", "b"};
+    const char *tags_a[] = {"a"};
+    ListQuery q;
+    Entry *rows = NULL;
+    size_t count = 0U;
+    size_t total = 0U;
+    size_t i;
+
+    ASSERT_TRUE(db != NULL);
+    s = store_open(db, err, sizeof(err));
+    ASSERT_TRUE(s != NULL);
+
+    memset(&e, 0, sizeof(e));
+    ASSERT_EQ_INT((int)store_add(s, "alpha", k_hash_a, NULL, tags_a, 1U, "human", &act, &e),
+                  (int)STORE_OK);
+    store_entry_free(&e);
+    ASSERT_EQ_INT((int)store_add(s, "beta", k_hash_b, NULL, tags_a, 1U, "agent", &act, &e),
+                  (int)STORE_OK);
+    store_entry_free(&e);
+    ASSERT_EQ_INT((int)store_add(s, "gamma", k_hash_c, "slot", tags_ab, 2U, "tool", &act, &e),
+                  (int)STORE_OK);
+    store_entry_free(&e);
+
+    memset(&q, 0, sizeof(q));
+    q.tags = tags_ab;
+    q.ntags = 2U;
+    q.limit = 20U;
+    q.offset = 0U;
+    ASSERT_EQ_INT((int)store_list(s, &q, &rows, &count, &total), (int)STORE_OK);
+    ASSERT_EQ_INT((int)count, 1);
+    ASSERT_EQ_INT((int)total, 1);
+    ASSERT_TRUE(rows != NULL && rows[0].body != NULL);
+    ASSERT_STREQ(rows[0].body, "gamma");
+    for (i = 0; i < count; i++) {
+        store_entry_free(&rows[i]);
+    }
+    free(rows);
+    rows = NULL;
+
+    memset(&q, 0, sizeof(q));
+    q.source = "agent";
+    q.limit = 20U;
+    ASSERT_EQ_INT((int)store_list(s, &q, &rows, &count, &total), (int)STORE_OK);
+    ASSERT_EQ_INT((int)count, 1);
+    ASSERT_STREQ(rows[0].body, "beta");
+    for (i = 0; i < count; i++) {
+        store_entry_free(&rows[i]);
+    }
+    free(rows);
+    rows = NULL;
+
+    memset(&q, 0, sizeof(q));
+    q.key = "slot";
+    q.limit = 20U;
+    ASSERT_EQ_INT((int)store_list(s, &q, &rows, &count, &total), (int)STORE_OK);
+    ASSERT_EQ_INT((int)total, 1);
+    ASSERT_STREQ(rows[0].body, "gamma");
+    for (i = 0; i < count; i++) {
+        store_entry_free(&rows[i]);
+    }
+    free(rows);
+
+    store_close(s);
+    free(db);
+}
+
+TEST(store_delete_by_id_gcs_orphan_tags)
+{
+    char *db = make_temp_db_path();
+    char err[256];
+    Store *s;
+    Entry e;
+    StoreAddAction act;
+    const char *tags[] = {"solo"};
+    char *count;
+
+    ASSERT_TRUE(db != NULL);
+    s = store_open(db, err, sizeof(err));
+    ASSERT_TRUE(s != NULL);
+
+    memset(&e, 0, sizeof(e));
+    ASSERT_EQ_INT((int)store_add(s, "only", k_hash_a, NULL, tags, 1U, "unknown", &act, &e),
+                  (int)STORE_OK);
+    ASSERT_EQ_INT((int)e.id, 1);
+    store_entry_free(&e);
+
+    ASSERT_EQ_INT((int)store_delete_by_id(s, 1, &e), (int)STORE_OK);
+    ASSERT_STREQ(e.body, "only");
+    store_entry_free(&e);
+
+    ASSERT_EQ_INT((int)store_get(s, 1, &e), (int)STORE_ERR_NOT_FOUND);
+    store_close(s);
+
+    count = harness_sqlite_query_line(db, "SELECT count(*) FROM tags WHERE name='solo';");
+    ASSERT_TRUE(count != NULL);
+    ASSERT_STREQ(count, "0");
+    free(count);
+    free(db);
+}
+
+TEST(store_delete_by_key_missing)
+{
+    char *db = make_temp_db_path();
+    char err[256];
+    Store *s;
+    Entry e;
+
+    ASSERT_TRUE(db != NULL);
+    s = store_open(db, err, sizeof(err));
+    ASSERT_TRUE(s != NULL);
+    memset(&e, 0, sizeof(e));
+    ASSERT_EQ_INT((int)store_delete_by_key(s, "nope", &e), (int)STORE_ERR_NOT_FOUND);
+    store_close(s);
+    free(db);
+}
+
 void register_store_tests(void)
 {
     RUN_TEST(store_open_creates_user_version_1);
@@ -488,4 +616,7 @@ void register_store_tests(void)
     RUN_TEST(store_open_path_too_long_fails);
     RUN_TEST(store_open_rejects_non_database_file);
     RUN_TEST(store_close_null_is_safe);
+    RUN_TEST(store_list_filters_and_paging);
+    RUN_TEST(store_delete_by_id_gcs_orphan_tags);
+    RUN_TEST(store_delete_by_key_missing);
 }

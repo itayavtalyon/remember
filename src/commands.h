@@ -11,5 +11,6 @@
 int cmd_add(Store *s, bool json, int rest_argc, const char **rest_argv);
 int cmd_get(Store *s, bool json, int rest_argc, const char **rest_argv);
 int cmd_list(Store *s, bool json, int rest_argc, const char **rest_argv);
+int cmd_delete(Store *s, bool json, int rest_argc, const char **rest_argv);
 
 #endif /* REMEMBER_COMMANDS_H */

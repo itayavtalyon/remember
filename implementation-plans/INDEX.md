@@ -24,7 +24,7 @@ main → cli_parse → commands_* → store_* → [store_sqlite only: SQLite]
 | 02 | [Store port + SQLite schema](02-store-sqlite-schema.md) | Open/create/version/pragmas work; unit smoke; **no sqlite outside adapter** ✅ |
 | 03 | [Normalize + hash](03-normalize-hash.md) | Unit tests for trim/tags/keys/hash; used by add ✅ |
 | 04 | [add](04-add.md) | All `add_*` + key add/upsert tests green ✅ |
-| 05 | [get / list / delete](05-get-list-delete.md) | get/list/delete + paging + key locator tests green |
+| 05 | [get / list / delete](05-get-list-delete.md) | get/list/delete + paging + key locator tests green ✅ |
 | 06 | [search FTS](06-search-fts.md) | All search_* + search key filter green |
 | 07 | [update](07-update.md) | All update_* + keyed update green |
 | 08 | [Lint + format toolchain](08-lint-format.md) | `lint` + `format` targets work; src clean |

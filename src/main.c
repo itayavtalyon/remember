@@ -4,6 +4,7 @@
 #include "store.h"
 #include "util.h"
 
+#include <stdbool.h>
 #include <stdio.h>
 
 #ifndef REMEMBER_VERSION
@@ -65,6 +66,21 @@ static void print_command_help(CliCommand topic)
         (void)printf("  --source SRC    human|agent|tool|unknown (default unknown)\n");
         (void)printf("  BODY|-          Memory text, or - to read stdin\n");
         (void)printf("\n");
+    } else if (topic == CLI_CMD_GET || topic == CLI_CMD_DELETE) {
+        (void)printf("Options:\n");
+        (void)printf("  ID              Entry id (positional)\n");
+        (void)printf("  --key KEY       Locate by key instead of id\n");
+        (void)printf("\n");
+        (void)printf("Exactly one of ID or --key is required.\n");
+        (void)printf("\n");
+    } else if (topic == CLI_CMD_LIST) {
+        (void)printf("Options:\n");
+        (void)printf("  --tag TAG       Require tag (repeatable; AND)\n");
+        (void)printf("  --source SRC    Filter by source\n");
+        (void)printf("  --key KEY       Exact key match\n");
+        (void)printf("  --limit N       Page size (default 20, max 1000)\n");
+        (void)printf("  --offset M      Skip M matches (default 0)\n");
+        (void)printf("\n");
     }
     (void)printf("Global options: --db PATH, --json, --help, --version\n");
     (void)printf("See also: remember --help\n");
@@ -125,11 +141,25 @@ static Store *open_store(const CliArgs *args, int *out_rc)
     return s;
 }
 
-static int run(const CliArgs *args)
+typedef int (*CmdFn)(Store *s, bool json, int rest_argc, const char **rest_argv);
+
+/* Open store, run a command, close. Propagates open or command exit codes. */
+static int run_with_store(const CliArgs *args, CmdFn fn)
 {
     Store *s;
     int rc;
 
+    s = open_store(args, &rc);
+    if (s == NULL) {
+        return rc;
+    }
+    rc = fn(s, args->globals.json, args->rest_argc, args->rest_argv);
+    store_close(s);
+    return rc;
+}
+
+static int run(const CliArgs *args)
+{
     if (args->error != CLI_ERR_OK) {
         print_parse_error(args);
         return REMEMBER_ERR;
@@ -153,35 +183,17 @@ static int run(const CliArgs *args)
         (void)fprintf(stderr, "remember: %s\n", cli_error_message(CLI_ERR_UNKNOWN_COMMAND));
         return REMEMBER_ERR;
     case CLI_CMD_ADD:
-        s = open_store(args, &rc);
-        if (s == NULL) {
-            return rc;
-        }
-        rc = cmd_add(s, args->globals.json, args->rest_argc, args->rest_argv);
-        store_close(s);
-        return rc;
+        return run_with_store(args, cmd_add);
     case CLI_CMD_GET:
-        s = open_store(args, &rc);
-        if (s == NULL) {
-            return rc;
-        }
-        rc = cmd_get(s, args->globals.json, args->rest_argc, args->rest_argv);
-        store_close(s);
-        return rc;
+        return run_with_store(args, cmd_get);
     case CLI_CMD_LIST:
-        s = open_store(args, &rc);
-        if (s == NULL) {
-            return rc;
-        }
-        rc = cmd_list(s, args->globals.json, args->rest_argc, args->rest_argv);
-        store_close(s);
-        return rc;
+        return run_with_store(args, cmd_list);
+    case CLI_CMD_DELETE:
+        return run_with_store(args, cmd_delete);
     case CLI_CMD_SEARCH:
         return dispatch_nyi("search");
     case CLI_CMD_UPDATE:
         return dispatch_nyi("update");
-    case CLI_CMD_DELETE:
-        return dispatch_nyi("delete");
     default:
         (void)fprintf(stderr, "remember: internal error\n");
         return REMEMBER_ERR;

@@ -1041,25 +1041,6 @@ static void free_entry_rows(Entry *rows, size_t n)
     free(rows);
 }
 
-static StoreStatus list_count_total(sqlite3 *db, size_t *out_total)
-{
-    sqlite3_stmt *count_stmt = NULL;
-    int rc;
-
-    rc = sqlite3_prepare_v2(db, "SELECT COUNT(*) FROM entries;", -1, &count_stmt, NULL);
-    if (rc != SQLITE_OK) {
-        return STORE_ERR_SQLITE;
-    }
-    rc = sqlite3_step(count_stmt);
-    if (rc != SQLITE_ROW) {
-        (void)sqlite3_finalize(count_stmt);
-        return STORE_ERR_SQLITE;
-    }
-    *out_total = (size_t)sqlite3_column_int64(count_stmt, 0);
-    (void)sqlite3_finalize(count_stmt);
-    return STORE_OK;
-}
-
 static StoreStatus list_append_row(sqlite3 *db, sqlite3_stmt *sel, Entry **rows, size_t *n,
                                    size_t *cap)
 {
@@ -1085,45 +1066,191 @@ static StoreStatus list_append_row(sqlite3 *db, sqlite3_stmt *sel, Entry **rows,
     return STORE_OK;
 }
 
-StoreStatus store_list(Store *s, size_t limit, size_t offset, Entry **out_entries,
-                       size_t *out_count, size_t *out_total)
+/* Append " AND col = ?N" and push bind; -1 on OOM/truncation/bind cap. */
+static int list_append_eq(char *sql, size_t sql_cap, size_t *pos, int *nbinds,
+                          const char **bind_text, size_t bind_cap, const char *col,
+                          const char *value)
 {
+    int n;
+
+    if (value == NULL) {
+        return 0;
+    }
+    if ((size_t)*nbinds >= bind_cap) {
+        return -1;
+    }
+    n = snprintf(sql + *pos, sql_cap - *pos, " AND e.%s = ?%d", col, *nbinds + 1);
+    if (n < 0 || (size_t)n >= sql_cap - *pos) {
+        return -1;
+    }
+    *pos += (size_t)n;
+    bind_text[(*nbinds)++] = value;
+    return 0;
+}
+
+static int list_append_tag_exists(char *sql, size_t sql_cap, size_t *pos, int *nbinds,
+                                  const char **bind_text, size_t bind_cap, const char *tag)
+{
+    int n;
+
+    if (tag == NULL) {
+        return 0;
+    }
+    if ((size_t)*nbinds >= bind_cap) {
+        return -1;
+    }
+    n = snprintf(sql + *pos, sql_cap - *pos,
+                 " AND EXISTS (SELECT 1 FROM entry_tags et"
+                 " JOIN tags tg ON tg.id = et.tag_id"
+                 " WHERE et.entry_id = e.id AND tg.name = ?%d)",
+                 *nbinds + 1);
+    if (n < 0 || (size_t)n >= sql_cap - *pos) {
+        return -1;
+    }
+    *pos += (size_t)n;
+    bind_text[(*nbinds)++] = tag;
+    return 0;
+}
+
+/*
+ * Build list WHERE clause fragments and bind params.
+ * Tags are AND'd via EXISTS subqueries (one per tag).
+ * sql_out must be large enough (caller-sized); returns -1 if truncated.
+ */
+static int list_build_where(const ListQuery *q, char *sql, size_t sql_cap, int *out_nbinds,
+                            const char **bind_text, size_t bind_cap)
+{
+    size_t pos = 0U;
+    int nbinds = 0;
+    size_t t;
+    int n;
+
+    if (q == NULL || sql == NULL || sql_cap == 0U || out_nbinds == NULL || bind_text == NULL) {
+        return -1;
+    }
+    n = snprintf(sql, sql_cap, " WHERE 1=1");
+    if (n < 0 || (size_t)n >= sql_cap) {
+        return -1;
+    }
+    pos = (size_t)n;
+
+    if (list_append_eq(sql, sql_cap, &pos, &nbinds, bind_text, bind_cap, "source", q->source) !=
+            0 ||
+        list_append_eq(sql, sql_cap, &pos, &nbinds, bind_text, bind_cap, "key", q->key) != 0) {
+        return -1;
+    }
+    for (t = 0; t < q->ntags; t++) {
+        const char *tag = (q->tags != NULL) ? q->tags[t] : NULL;
+        if (list_append_tag_exists(sql, sql_cap, &pos, &nbinds, bind_text, bind_cap, tag) != 0) {
+            return -1;
+        }
+    }
+    *out_nbinds = nbinds;
+    return 0;
+}
+
+static StoreStatus list_bind_texts(sqlite3_stmt *stmt, const char **bind_text, int nbinds)
+{
+    int i;
+    for (i = 0; i < nbinds; i++) {
+        if (sqlite3_bind_text(stmt, i + 1, bind_text[i], -1, SQLITE_STATIC) != SQLITE_OK) {
+            return STORE_ERR_SQLITE;
+        }
+    }
+    return STORE_OK;
+}
+
+/* Enough for source + key + many tag EXISTS clauses. */
+#define LIST_SQL_CAP 8192
+#define LIST_BIND_CAP 64
+
+/*
+ * Count + page. Split into two statements (COUNT then paged SELECT) rather than
+ * one query: a single COUNT(*) OVER() would ride on the result rows, so it
+ * reports no total whenever the page is empty (offset past the end), breaking the
+ * "total is the unpaged count" contract. store_list runs this inside one read
+ * transaction so both statements see a single snapshot.
+ */
+static StoreStatus list_query_exec(sqlite3 *db, const ListQuery *q, Entry **out_entries,
+                                   size_t *out_count, size_t *out_total)
+{
+    char where_sql[LIST_SQL_CAP];
+    char count_sql[LIST_SQL_CAP + 64];
+    char select_sql[LIST_SQL_CAP + 160];
+    const char *bind_text[LIST_BIND_CAP];
+    int nbinds = 0;
+    sqlite3_stmt *count_stmt = NULL;
     sqlite3_stmt *sel = NULL;
     Entry *rows = NULL;
     size_t n = 0U;
     size_t cap = 0U;
     size_t total = 0U;
-    size_t use_limit;
     int rc;
     StoreStatus st;
+    int lim_idx;
+    int off_idx;
 
-    if (s == NULL || s->db == NULL || out_entries == NULL || out_count == NULL ||
-        out_total == NULL) {
-        return STORE_ERR_INTERNAL;
-    }
     *out_entries = NULL;
     *out_count = 0U;
     *out_total = 0U;
 
-    use_limit = (limit == 0U) ? 100U : limit;
-    st = list_count_total(s->db, &total);
-    if (st != STORE_OK) {
-        return st;
+    if (list_build_where(q, where_sql, sizeof(where_sql), &nbinds, bind_text, LIST_BIND_CAP) != 0) {
+        return STORE_ERR_INTERNAL;
     }
 
-    rc = sqlite3_prepare_v2(s->db,
-                            "SELECT id, key, body, source, created_at, updated_at "
-                            "FROM entries ORDER BY updated_at DESC, id DESC "
-                            "LIMIT ?1 OFFSET ?2;",
-                            -1, &sel, NULL);
+    {
+        int sn =
+            snprintf(count_sql, sizeof(count_sql), "SELECT COUNT(*) FROM entries e%s;", where_sql);
+        if (sn < 0 || (size_t)sn >= sizeof(count_sql)) {
+            return STORE_ERR_INTERNAL;
+        }
+        sn = snprintf(select_sql, sizeof(select_sql),
+                      "SELECT e.id, e.key, e.body, e.source, e.created_at, e.updated_at "
+                      "FROM entries e%s ORDER BY e.updated_at DESC, e.id DESC "
+                      "LIMIT ?%d OFFSET ?%d;",
+                      where_sql, nbinds + 1, nbinds + 2);
+        if (sn < 0 || (size_t)sn >= sizeof(select_sql)) {
+            return STORE_ERR_INTERNAL;
+        }
+    }
+    lim_idx = nbinds + 1;
+    off_idx = nbinds + 2;
+
+    rc = sqlite3_prepare_v2(db, count_sql, -1, &count_stmt, NULL);
     if (rc != SQLITE_OK) {
         return STORE_ERR_SQLITE;
     }
-    (void)sqlite3_bind_int64(sel, 1, (sqlite3_int64)use_limit);
-    (void)sqlite3_bind_int64(sel, 2, (sqlite3_int64)offset);
+    st = list_bind_texts(count_stmt, bind_text, nbinds);
+    if (st != STORE_OK) {
+        (void)sqlite3_finalize(count_stmt);
+        return st;
+    }
+    rc = sqlite3_step(count_stmt);
+    if (rc != SQLITE_ROW) {
+        (void)sqlite3_finalize(count_stmt);
+        return STORE_ERR_SQLITE;
+    }
+    total = (size_t)sqlite3_column_int64(count_stmt, 0);
+    (void)sqlite3_finalize(count_stmt);
+    count_stmt = NULL;
+
+    rc = sqlite3_prepare_v2(db, select_sql, -1, &sel, NULL);
+    if (rc != SQLITE_OK) {
+        return STORE_ERR_SQLITE;
+    }
+    st = list_bind_texts(sel, bind_text, nbinds);
+    if (st != STORE_OK) {
+        (void)sqlite3_finalize(sel);
+        return st;
+    }
+    if (sqlite3_bind_int64(sel, lim_idx, (sqlite3_int64)q->limit) != SQLITE_OK ||
+        sqlite3_bind_int64(sel, off_idx, (sqlite3_int64)q->offset) != SQLITE_OK) {
+        (void)sqlite3_finalize(sel);
+        return STORE_ERR_SQLITE;
+    }
 
     while ((rc = sqlite3_step(sel)) == SQLITE_ROW) {
-        st = list_append_row(s->db, sel, &rows, &n, &cap);
+        st = list_append_row(db, sel, &rows, &n, &cap);
         if (st != STORE_OK) {
             free_entry_rows(rows, n);
             (void)sqlite3_finalize(sel);
@@ -1141,4 +1268,165 @@ StoreStatus store_list(Store *s, size_t limit, size_t offset, Entry **out_entrie
     *out_count = n;
     *out_total = total;
     return STORE_OK;
+}
+
+StoreStatus store_list(Store *s, const ListQuery *q, Entry **out_entries, size_t *out_count,
+                       size_t *out_total)
+{
+    char err_unused[1];
+    StoreStatus st;
+
+    if (s == NULL || s->db == NULL || q == NULL || out_entries == NULL || out_count == NULL ||
+        out_total == NULL) {
+        return STORE_ERR_INTERNAL;
+    }
+    *out_entries = NULL;
+    *out_count = 0U;
+    *out_total = 0U;
+
+    /* One read transaction: COUNT and the paged SELECT see the same snapshot, so
+     *out_total and the page cannot disagree if a writer commits mid-list. */
+    if (exec_sql(s->db, "BEGIN;", err_unused, 0U) != 0) {
+        return STORE_ERR_SQLITE;
+    }
+    st = list_query_exec(s->db, q, out_entries, out_count, out_total);
+    if (st != STORE_OK) {
+        rollback_quiet(s->db);
+        return st;
+    }
+    if (exec_sql(s->db, "COMMIT;", err_unused, 0U) != 0) {
+        /* Unwind the page we built so the caller sees a clean failure. */
+        rollback_quiet(s->db);
+        free_entry_rows(*out_entries, *out_count);
+        *out_entries = NULL;
+        *out_count = 0U;
+        *out_total = 0U;
+        return STORE_ERR_SQLITE;
+    }
+    return STORE_OK;
+}
+
+/* Remove FTS row for entry_id (no-op if already gone). */
+static StoreStatus fts_delete(sqlite3 *db, long long entry_id)
+{
+    sqlite3_stmt *del = NULL;
+    int rc;
+
+    rc = sqlite3_prepare_v2(db, "DELETE FROM entries_fts WHERE rowid = ?1;", -1, &del, NULL);
+    if (rc != SQLITE_OK) {
+        return STORE_ERR_SQLITE;
+    }
+    (void)sqlite3_bind_int64(del, 1, entry_id);
+    if (sqlite3_step(del) != SQLITE_DONE) {
+        (void)sqlite3_finalize(del);
+        return STORE_ERR_SQLITE;
+    }
+    (void)sqlite3_finalize(del);
+    return STORE_OK;
+}
+
+/* Drop tags with no remaining entry_tags rows (after CASCADE). */
+static StoreStatus gc_orphan_tags(sqlite3 *db)
+{
+    char err_unused[1];
+
+    if (exec_sql(db,
+                 "DELETE FROM tags WHERE NOT EXISTS "
+                 "(SELECT 1 FROM entry_tags et WHERE et.tag_id = tags.id);",
+                 err_unused, 0U) != 0) {
+        return STORE_ERR_SQLITE;
+    }
+    return STORE_OK;
+}
+
+/*
+ * Hard-delete one entry under a single write lock: load snapshot, FTS delete,
+ * DELETE entry (CASCADE entry_tags), orphan-tag GC, COMMIT. Load is inside the
+ * transaction so the JSON echo matches the row that is removed.
+ *
+ * *out_deleted is zeroed on entry. On STORE_OK it holds a heap snapshot (caller
+ * frees). On failure it is left zeroed / freed.
+ */
+static StoreStatus delete_entry_tx(Store *s, long long id_or_zero, const char *key_or_null,
+                                   Entry *out_deleted)
+{
+    char err_unused[1];
+    StoreStatus st;
+    sqlite3_stmt *del = NULL;
+    long long id = id_or_zero;
+    int rc;
+
+    memset(out_deleted, 0, sizeof(*out_deleted));
+
+    if (exec_sql(s->db, "BEGIN IMMEDIATE;", err_unused, 0U) != 0) {
+        return STORE_ERR_SQLITE;
+    }
+
+    if (key_or_null != NULL) {
+        st = load_entry_by_key(s->db, key_or_null, out_deleted);
+    } else {
+        st = load_entry_by_id(s->db, id, out_deleted);
+    }
+    if (st != STORE_OK) {
+        goto fail;
+    }
+    id = out_deleted->id;
+
+    st = fts_delete(s->db, id);
+    if (st != STORE_OK) {
+        goto fail_free;
+    }
+
+    rc = sqlite3_prepare_v2(s->db, "DELETE FROM entries WHERE id = ?1;", -1, &del, NULL);
+    if (rc != SQLITE_OK) {
+        st = STORE_ERR_SQLITE;
+        goto fail_free;
+    }
+    (void)sqlite3_bind_int64(del, 1, id);
+    if (sqlite3_step(del) != SQLITE_DONE) {
+        (void)sqlite3_finalize(del);
+        st = STORE_ERR_SQLITE;
+        goto fail_free;
+    }
+    (void)sqlite3_finalize(del);
+    del = NULL;
+
+    /* Should not happen under the write lock after a successful load. */
+    if (sqlite3_changes(s->db) == 0) {
+        st = STORE_ERR_NOT_FOUND;
+        goto fail_free;
+    }
+
+    st = gc_orphan_tags(s->db);
+    if (st != STORE_OK) {
+        goto fail_free;
+    }
+
+    if (exec_sql(s->db, "COMMIT;", err_unused, 0U) != 0) {
+        st = STORE_ERR_SQLITE;
+        goto fail_free;
+    }
+    return STORE_OK;
+
+fail_free:
+    store_entry_free(out_deleted);
+fail:
+    rollback_quiet(s->db);
+    return st;
+}
+
+StoreStatus store_delete_by_id(Store *s, long long id, Entry *out_deleted)
+{
+    if (s == NULL || s->db == NULL || out_deleted == NULL) {
+        return STORE_ERR_INTERNAL;
+    }
+    return delete_entry_tx(s, id, NULL, out_deleted);
+}
+
+StoreStatus store_delete_by_key(Store *s, const char *key, Entry *out_deleted)
+{
+    if (s == NULL || s->db == NULL || key == NULL || out_deleted == NULL) {
+        return STORE_ERR_INTERNAL;
+    }
+    return delete_entry_tx(s, 0, key, out_deleted);
 }

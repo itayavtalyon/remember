@@ -7,6 +7,8 @@
 #include "util.h"
 
 #include <errno.h>
+#include <limits.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -81,6 +83,25 @@ static const char *action_name(StoreAddAction a)
     }
 }
 
+/* ---- arg helpers --------------------------------------------------------- */
+
+/* Growable argv-alias list (tags on add/list). Does not own the strings. */
+static int push_cstr_ptr(const char ***arr, size_t *n, size_t *cap, const char *t)
+{
+    if (*n == *cap) {
+        size_t ncap = (*cap == 0U) ? 4U : (*cap * 2U);
+        const char **grown = (const char **)realloc((void *)*arr, ncap * sizeof(*grown));
+        if (grown == NULL) {
+            return -1;
+        }
+        *arr = grown;
+        *cap = ncap;
+    }
+    (*arr)[*n] = t;
+    (*n)++;
+    return 0;
+}
+
 /* ---- add arg parse ------------------------------------------------------- */
 
 typedef struct {
@@ -96,22 +117,6 @@ static void add_parse_free(AddParse *p)
     free((void *)p->tag_raw);
     p->tag_raw = NULL;
     p->ntag_raw = 0U;
-}
-
-static int add_parse_push_tag(AddParse *p, size_t *cap, const char *t)
-{
-    if (p->ntag_raw == *cap) {
-        size_t ncap = (*cap == 0U) ? 4U : (*cap * 2U);
-        const char **grown = (const char **)realloc((void *)p->tag_raw, ncap * sizeof(*grown));
-        if (grown == NULL) {
-            return -1;
-        }
-        p->tag_raw = grown;
-        *cap = ncap;
-    }
-    p->tag_raw[p->ntag_raw] = t;
-    p->ntag_raw++;
-    return 0;
 }
 
 /* Take the next token as an option value; advances *i. */
@@ -144,7 +149,7 @@ static int handle_add_flag(const char *arg, int *i, int rest_argc, const char **
         if (take_value(i, rest_argc, rest_argv, &t, err, "missing value for --tag") != 0) {
             return -1;
         }
-        if (add_parse_push_tag(out, tag_cap, t) != 0) {
+        if (push_cstr_ptr(&out->tag_raw, &out->ntag_raw, tag_cap, t) != 0) {
             *err = "out of memory";
             return -1;
         }
@@ -397,7 +402,13 @@ cleanup:
     return rc;
 }
 
-/* ---- get ----------------------------------------------------------------- */
+/* ---- locator (get / delete): exactly one of id | --key ------------------- */
+
+#define LIST_LIMIT_DEFAULT 20U
+#define LIST_LIMIT_MAX 1000U
+/* Bounded well under the store's per-query parameter budget (LIST_BIND_CAP) so
+   an over-cap filter set is a clear user error here, not an opaque store one. */
+#define LIST_TAG_FILTER_MAX 50U
 
 static int parse_id_token(const char *id_raw, long long *out_id)
 {
@@ -413,12 +424,37 @@ static int parse_id_token(const char *id_raw, long long *out_id)
     return 0;
 }
 
+/* Parse a non-negative size_t from decimal text. Rejects empty, non-digits, ERANGE. */
+static int parse_size_token(const char *raw, size_t *out)
+{
+    char *end = NULL;
+    unsigned long long v;
+
+    if (raw == NULL || raw[0] == '\0' || raw[0] == '-') {
+        return -1;
+    }
+    errno = 0;
+    v = strtoull(raw, &end, 10);
+    if (end == raw || (end != NULL && *end != '\0') || errno == ERANGE) {
+        return -1;
+    }
+#if SIZE_MAX < ULLONG_MAX
+    /* 32-bit size_t: reject rather than silently truncate the value. */
+    if (v > (unsigned long long)SIZE_MAX) {
+        return -1;
+    }
+#endif
+    *out = (size_t)v;
+    return 0;
+}
+
 typedef struct {
     const char *key_raw;
     const char *id_raw;
-} GetParse;
+} LocatorParse;
 
-static int parse_get_args(int rest_argc, const char **rest_argv, GetParse *out)
+/* Shared by get/delete: --key, positional id, reject --source and unknowns. */
+static int parse_locator_args(int rest_argc, const char **rest_argv, LocatorParse *out)
 {
     int i;
     int end_opts = 0;
@@ -458,36 +494,43 @@ static int parse_get_args(int rest_argc, const char **rest_argv, GetParse *out)
     return 0;
 }
 
-static int load_get_entry(Store *s, const GetParse *p, Entry *entry)
+static int locator_validate(const LocatorParse *p)
 {
-    StoreStatus st;
-
     if (p->key_raw != NULL && p->id_raw != NULL) {
         err_msg("provide either id or --key, not both");
-        return REMEMBER_ERR;
+        return -1;
     }
     if (p->key_raw == NULL && p->id_raw == NULL) {
         err_msg("missing id or --key");
-        return REMEMBER_ERR;
+        return -1;
     }
+    return 0;
+}
 
+/* Normalize key or parse id; on success either *out_key is set or *out_id. */
+static int locator_resolve(const LocatorParse *p, char *key_norm, size_t key_norm_sz,
+                           const char **out_key, long long *out_id)
+{
+    *out_key = NULL;
+    *out_id = 0;
     if (p->key_raw != NULL) {
-        char key_norm[REMEMBER_TOKEN_MAX + 1];
-        NormStatus ns = normalize_key(p->key_raw, key_norm, sizeof(key_norm));
+        NormStatus ns = normalize_key(p->key_raw, key_norm, key_norm_sz);
         if (ns != NORM_OK) {
             err_msg(norm_token_message(ns, "key"));
-            return REMEMBER_ERR;
+            return -1;
         }
-        st = store_get_by_key(s, key_norm, entry);
-    } else {
-        long long id = 0;
-        if (parse_id_token(p->id_raw, &id) != 0) {
-            err_msg("invalid id");
-            return REMEMBER_ERR;
-        }
-        st = store_get(s, id, entry);
+        *out_key = key_norm;
+        return 0;
     }
+    if (parse_id_token(p->id_raw, out_id) != 0) {
+        err_msg("invalid id");
+        return -1;
+    }
+    return 0;
+}
 
+static int store_status_to_exit(StoreStatus st)
+{
     if (st == STORE_ERR_NOT_FOUND) {
         err_msg(store_status_message(st));
         return REMEMBER_NOT_FOUND;
@@ -499,17 +542,35 @@ static int load_get_entry(Store *s, const GetParse *p, Entry *entry)
     return REMEMBER_OK;
 }
 
+/* ---- get ----------------------------------------------------------------- */
+
 int cmd_get(Store *s, bool json, int rest_argc, const char **rest_argv)
 {
-    GetParse parsed;
+    LocatorParse parsed;
     Entry entry;
+    char key_norm[REMEMBER_TOKEN_MAX + 1];
+    const char *key = NULL;
+    long long id = 0;
+    StoreStatus st;
     int rc;
 
     memset(&entry, 0, sizeof(entry));
-    if (parse_get_args(rest_argc, rest_argv, &parsed) != 0) {
+    if (parse_locator_args(rest_argc, rest_argv, &parsed) != 0) {
         return REMEMBER_ERR;
     }
-    rc = load_get_entry(s, &parsed, &entry);
+    if (locator_validate(&parsed) != 0) {
+        return REMEMBER_ERR;
+    }
+    if (locator_resolve(&parsed, key_norm, sizeof(key_norm), &key, &id) != 0) {
+        return REMEMBER_ERR;
+    }
+
+    if (key != NULL) {
+        st = store_get_by_key(s, key, &entry);
+    } else {
+        st = store_get(s, id, &entry);
+    }
+    rc = store_status_to_exit(st);
     if (rc != REMEMBER_OK) {
         return rc;
     }
@@ -521,66 +582,297 @@ int cmd_get(Store *s, bool json, int rest_argc, const char **rest_argv)
             return REMEMBER_ERR;
         }
     } else {
-        /* Same flow as list: body goes through output.c, never raw fputs, so a
-           control/ESC byte in a stored body cannot drive the terminal. */
-        (void)output_body_human(stdout, entry.body);
+        /* Body via output.c — never raw fputs (terminal control neutralization). */
+        if (output_body_human(stdout, entry.body) != 0) {
+            store_entry_free(&entry);
+            err_msg("failed to write output");
+            return REMEMBER_ERR;
+        }
     }
     store_entry_free(&entry);
     return REMEMBER_OK;
 }
 
-/* ---- list (minimal; filters in step 05) ---------------------------------- */
+/* ---- list ---------------------------------------------------------------- */
+
+typedef struct {
+    const char *source;
+    const char *key_raw;
+    const char **tag_raw;
+    size_t ntag_raw;
+    size_t limit;
+    size_t offset;
+} ListParse;
+
+static void list_parse_free(ListParse *p)
+{
+    free((void *)p->tag_raw);
+    p->tag_raw = NULL;
+    p->ntag_raw = 0U;
+}
+
+static int list_take_limit(int *i, int rest_argc, const char **rest_argv, size_t *out_limit,
+                           const char **err)
+{
+    const char *val = NULL;
+    size_t lim = 0U;
+
+    if (take_value(i, rest_argc, rest_argv, &val, err, "missing value for --limit") != 0) {
+        return -1;
+    }
+    if (parse_size_token(val, &lim) != 0 || lim == 0U || lim > LIST_LIMIT_MAX) {
+        *err = "invalid --limit (must be 1..1000)";
+        return -1;
+    }
+    *out_limit = lim;
+    return 0;
+}
+
+static int list_take_offset(int *i, int rest_argc, const char **rest_argv, size_t *out_offset,
+                            const char **err)
+{
+    const char *val = NULL;
+    size_t off = 0U;
+
+    if (take_value(i, rest_argc, rest_argv, &val, err, "missing value for --offset") != 0) {
+        return -1;
+    }
+    if (parse_size_token(val, &off) != 0) {
+        *err = "invalid --offset (must be >= 0)";
+        return -1;
+    }
+    *out_offset = off;
+    return 0;
+}
+
+/*
+ * Handle one list option. Returns: 0 handled, 1 end-opts, 2 positional/unknown
+ * for caller, -1 error (*err set; empty string if message already printed).
+ */
+static int list_handle_opt(const char *arg, int *i, int rest_argc, const char **rest_argv,
+                           ListParse *out, size_t *tag_cap, const char **err)
+{
+    const char *val = NULL;
+
+    if (strcmp(arg, "--") == 0) {
+        return 1;
+    }
+    if (strcmp(arg, "--tag") == 0) {
+        if (take_value(i, rest_argc, rest_argv, &val, err, "missing value for --tag") != 0) {
+            return -1;
+        }
+        if (push_cstr_ptr(&out->tag_raw, &out->ntag_raw, tag_cap, val) != 0) {
+            *err = "out of memory";
+            return -1;
+        }
+        return 0;
+    }
+    if (strcmp(arg, "--source") == 0) {
+        return take_value(i, rest_argc, rest_argv, &out->source, err, "missing value for --source");
+    }
+    if (strcmp(arg, "--key") == 0) {
+        return take_value(i, rest_argc, rest_argv, &out->key_raw, err, "missing value for --key");
+    }
+    if (strcmp(arg, "--limit") == 0) {
+        return list_take_limit(i, rest_argc, rest_argv, &out->limit, err);
+    }
+    if (strcmp(arg, "--offset") == 0) {
+        return list_take_offset(i, rest_argc, rest_argv, &out->offset, err);
+    }
+    if (arg[0] == '-' && arg[1] != '\0') {
+        (void)fprintf(stderr, "remember: unknown option '%s'\n", arg);
+        *err = "";
+        return -1;
+    }
+    return 2;
+}
+
+static int parse_list_args(int rest_argc, const char **rest_argv, ListParse *out, const char **err)
+{
+    int i;
+    int end_opts = 0;
+    size_t tag_cap = 0U;
+
+    out->source = NULL;
+    out->key_raw = NULL;
+    out->tag_raw = NULL;
+    out->ntag_raw = 0U;
+    out->limit = LIST_LIMIT_DEFAULT;
+    out->offset = 0U;
+    *err = NULL;
+
+    for (i = 0; i < rest_argc; i++) {
+        const char *arg = rest_argv[i];
+        int kind;
+
+        if (end_opts) {
+            *err = "unexpected argument";
+            return -1;
+        }
+        kind = list_handle_opt(arg, &i, rest_argc, rest_argv, out, &tag_cap, err);
+        if (kind == 1) {
+            end_opts = 1;
+            continue;
+        }
+        if (kind == 0) {
+            continue;
+        }
+        if (kind < 0) {
+            return -1;
+        }
+        *err = "unexpected argument";
+        return -1;
+    }
+    return 0;
+}
+
+/*
+ * Validate parsed filters and normalize them into *q. Allocates *out_tags (heap;
+ * caller frees with free_tag_list) that q->tags points into; key_norm is caller
+ * storage that q->key points into. Prints its own error and returns -1 on
+ * failure, 0 on success.
+ */
+static int list_prepare_query(const ListParse *parsed, char *key_norm, size_t key_norm_sz,
+                              char ***out_tags, size_t *out_ntags, ListQuery *q)
+{
+    const char *err = NULL;
+
+    *out_tags = NULL;
+    *out_ntags = 0U;
+
+    if (parsed->source != NULL && !source_is_valid(parsed->source)) {
+        err_msg("invalid source (use human, agent, tool, or unknown)");
+        return -1;
+    }
+    if (parsed->ntag_raw > LIST_TAG_FILTER_MAX) {
+        err_msg("too many --tag filters (max 50)");
+        return -1;
+    }
+    if (normalize_tags((const char *const *)parsed->tag_raw, parsed->ntag_raw, out_tags, out_ntags,
+                       &err) != 0) {
+        err_msg(err);
+        return -1;
+    }
+    if (parsed->key_raw != NULL) {
+        NormStatus ns = normalize_key(parsed->key_raw, key_norm, key_norm_sz);
+        if (ns != NORM_OK) {
+            err_msg(norm_token_message(ns, "key"));
+            return -1;
+        }
+        q->key = key_norm;
+    }
+    q->tags = (const char *const *)*out_tags;
+    q->ntags = *out_ntags;
+    q->source = parsed->source;
+    q->limit = parsed->limit;
+    q->offset = parsed->offset;
+    return 0;
+}
 
 int cmd_list(Store *s, bool json, int rest_argc, const char **rest_argv)
 {
+    ListParse parsed;
+    const char *err = NULL;
+    char **tags_norm = NULL;
+    size_t ntags = 0U;
+    char key_norm[REMEMBER_TOKEN_MAX + 1];
+    ListQuery q;
     Entry *entries = NULL;
     size_t count = 0U;
     size_t total = 0U;
     size_t i;
     StoreStatus st;
-    int j;
-    int end_opts = 0;
-    const size_t limit = 100U;
-    const size_t offset = 0U;
     int rc = REMEMBER_ERR;
 
-    for (j = 0; j < rest_argc; j++) {
-        const char *arg = rest_argv[j];
+    memset(&q, 0, sizeof(q));
+    memset(key_norm, 0, sizeof(key_norm));
 
-        if (!end_opts && strcmp(arg, "--") == 0) {
-            end_opts = 1;
-            continue;
+    if (parse_list_args(rest_argc, rest_argv, &parsed, &err) != 0) {
+        if (err != NULL && err[0] != '\0') {
+            err_msg(err);
         }
-        if (!end_opts && arg[0] == '-' && arg[1] != '\0') {
-            (void)fprintf(stderr, "remember: unknown option '%s'\n", arg);
-            return REMEMBER_ERR;
-        }
-        err_msg("unexpected argument");
+        list_parse_free(&parsed);
         return REMEMBER_ERR;
     }
 
-    st = store_list(s, limit, offset, &entries, &count, &total);
+    if (list_prepare_query(&parsed, key_norm, sizeof(key_norm), &tags_norm, &ntags, &q) != 0) {
+        goto cleanup;
+    }
+
+    st = store_list(s, &q, &entries, &count, &total);
     if (st != STORE_OK) {
         err_msg(store_status_message(st));
-        return REMEMBER_ERR;
+        goto cleanup;
     }
 
     if (json) {
-        if (output_list_envelope(stdout, offset, limit, count, total, entries) != 0) {
+        if (output_list_envelope(stdout, q.offset, q.limit, count, total, entries) != 0) {
             err_msg("failed to write output");
             goto cleanup;
         }
     } else {
         for (i = 0; i < count; i++) {
-            (void)output_entry_human_line(stdout, &entries[i]);
+            if (output_entry_human_line(stdout, &entries[i]) != 0) {
+                err_msg("failed to write output");
+                goto cleanup;
+            }
         }
     }
     rc = REMEMBER_OK;
 
 cleanup:
-    for (i = 0; i < count; i++) {
-        store_entry_free(&entries[i]);
+    list_parse_free(&parsed);
+    free_tag_list(tags_norm, ntags);
+    if (entries != NULL) {
+        for (i = 0; i < count; i++) {
+            store_entry_free(&entries[i]);
+        }
+        free(entries);
     }
-    free(entries);
     return rc;
+}
+
+/* ---- delete -------------------------------------------------------------- */
+
+int cmd_delete(Store *s, bool json, int rest_argc, const char **rest_argv)
+{
+    LocatorParse parsed;
+    Entry entry;
+    char key_norm[REMEMBER_TOKEN_MAX + 1];
+    const char *key = NULL;
+    long long id = 0;
+    StoreStatus st;
+    int rc;
+
+    memset(&entry, 0, sizeof(entry));
+    if (parse_locator_args(rest_argc, rest_argv, &parsed) != 0) {
+        return REMEMBER_ERR;
+    }
+    if (locator_validate(&parsed) != 0) {
+        return REMEMBER_ERR;
+    }
+    if (locator_resolve(&parsed, key_norm, sizeof(key_norm), &key, &id) != 0) {
+        return REMEMBER_ERR;
+    }
+
+    if (key != NULL) {
+        st = store_delete_by_key(s, key, &entry);
+    } else {
+        st = store_delete_by_id(s, id, &entry);
+    }
+    rc = store_status_to_exit(st);
+    if (rc != REMEMBER_OK) {
+        return rc;
+    }
+
+    if (json) {
+        if (output_action_envelope(stdout, "deleted", &entry) != 0) {
+            store_entry_free(&entry);
+            err_msg("failed to write output");
+            return REMEMBER_ERR;
+        }
+    }
+    /* Human delete: silent success (design: no id ack required for delete). */
+    store_entry_free(&entry);
+    return REMEMBER_OK;
 }
