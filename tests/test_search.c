@@ -105,6 +105,21 @@ TEST(search_whitespace_only_query_rejected)
     free(db);
 }
 
+/* Hits both leading and trailing ASCII-ws trim (coverage for end-- path). */
+TEST(search_query_trims_outer_whitespace)
+{
+    char *db = make_temp_db_path();
+    const char *args[] = {"search", "--json", "  helix  \t"};
+    CmdResult r;
+    ASSERT_TRUE(db != NULL);
+    seed_search_corpus(db);
+    r = run_remember(db, args, 3, NULL);
+    ASSERT_EQ_INT(r.exit_code, 0);
+    ASSERT_STR_CONTAINS(r.out, "Preferred editor is helix");
+    cmd_result_free(&r);
+    free(db);
+}
+
 TEST(search_missing_query_rejected)
 {
     char *db = make_temp_db_path();
@@ -257,6 +272,7 @@ void register_search_tests(void)
     RUN_TEST(search_source_filter);
     RUN_TEST(search_empty_query_rejected);
     RUN_TEST(search_whitespace_only_query_rejected);
+    RUN_TEST(search_query_trims_outer_whitespace);
     RUN_TEST(search_missing_query_rejected);
     RUN_TEST(search_no_matches_exits_zero);
     RUN_TEST(search_json_paging_fields);
