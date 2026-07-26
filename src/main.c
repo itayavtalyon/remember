@@ -176,12 +176,6 @@ static int run(const CliArgs *args)
     case CLI_CMD_VERSION:
         print_version();
         return REMEMBER_OK;
-    case CLI_CMD_NONE:
-        (void)fprintf(stderr, "remember: %s\n", cli_error_message(CLI_ERR_MISSING_COMMAND));
-        return REMEMBER_ERR;
-    case CLI_CMD_UNKNOWN:
-        (void)fprintf(stderr, "remember: %s\n", cli_error_message(CLI_ERR_UNKNOWN_COMMAND));
-        return REMEMBER_ERR;
     case CLI_CMD_ADD:
         return run_with_store(args, cmd_add);
     case CLI_CMD_GET:
@@ -194,6 +188,14 @@ static int run(const CliArgs *args)
         return dispatch_nyi("search");
     case CLI_CMD_UPDATE:
         return dispatch_nyi("update");
+    case CLI_CMD_NONE:
+        /* Usually set with CLI_ERR_MISSING_COMMAND (handled above); keep distinct. */
+        (void)fprintf(stderr, "remember: %s\n", cli_error_message(CLI_ERR_MISSING_COMMAND));
+        return REMEMBER_ERR;
+    case CLI_CMD_UNKNOWN:
+        /* Usually set with CLI_ERR_UNKNOWN_COMMAND (handled above); keep distinct. */
+        (void)fprintf(stderr, "remember: %s\n", cli_error_message(CLI_ERR_UNKNOWN_COMMAND));
+        return REMEMBER_ERR;
     default:
         (void)fprintf(stderr, "remember: internal error\n");
         return REMEMBER_ERR;

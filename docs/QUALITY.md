@@ -10,7 +10,8 @@ How we keep C code safe: compile hard, analyze statically, run sanitizers, detec
 | ASan + UBSan on `remember` | Debug | yes | yes |
 | ASan + UBSan on `remember_store_tests` | Debug | yes | yes |
 | **LSan** (`detect_leaks=1`) | off (unreliable) | **on** | off |
-| Black-box `remember_tests` (no ASan parent) | yes | yes | yes |
+| Black-box `step_gate` (from `tests/gate-suites`) | yes | yes | yes |
+| Line coverage `src/*.c` (functions 100% + effective lines 100%) | `check-coverage.sh` | GHA job | optional |
 | clang-format / clang-tidy / cppcheck | `scripts/lint-all.sh` | required | required |
 | misc-include-cleaner (IWYU-style) | via clang-tidy | via clang-tidy | via clang-tidy |
 | include-what-you-use | if installed / `REMEMBER_IWYU=1` | if package present | optional |
@@ -36,6 +37,26 @@ If merge is blocked with *“Waiting for Code Scanning results”*:
 
 Also ensure **Settings → Code security → Code scanning** is not disabled for the repo.
 
+## Green test gate (grows with the code)
+
+| File / target | Role |
+|---------------|------|
+| **`tests/gate-suites`** | Single source of truth: `--only` suites for the implemented green surface |
+| **`ctest` `step_gate`** | Runs that list (alias `step05_gate` kept for docs) |
+| **`scripts/ci-linux.sh`** | Linux CI one-liner (Docker) — same install/build/ctest/lint as GHA |
+| **`.github/workflows/ci.yml`** | Calls `ci-linux.sh --inner --install` (no stale hard-coded suite list) |
+
+When a step lands more green suites, **edit `tests/gate-suites` only** — CMake and CI pick it up.
+
+```bash
+# Linux CI locally (Docker method A — one-liner; start Docker Desktop first)
+./scripts/ci-linux.sh
+
+# Run the same check automatically before every git push (once per clone):
+./scripts/install-hooks.sh
+# Skip one push: SKIP_LINUX_CI=1 git push   or   git push --no-verify
+```
+
 ## Targets
 
 ```bash
@@ -44,16 +65,34 @@ cmake -S . -B build -DCMAKE_C_COMPILER=clang \
   -DREMEMBER_ENABLE_LSAN=OFF          # ON on Linux CI only
 
 cmake --build build
-ctest --test-dir build --output-on-failure
+ctest --test-dir build --output-on-failure   # step_gate + store_asan_gate
 
+GATE=$(./scripts/read-gate-suites.sh)
+./build/remember_tests ./build/remember --only "$GATE"
 ./build/remember_store_tests          # store port under ASan
-./build/remember_tests ./build/remember --only cli_global,store
 
 PATH="$(brew --prefix llvm)/bin:$PATH" ./scripts/lint-all.sh
 REMEMBER_SCAN_BUILD=1 ./scripts/lint-all.sh   # full analyzer (slow)
 cmake --build build --target analyze          # same idea via CMake
 cmake --build build --target leaks-macos      # macOS only
 ```
+
+## Line coverage (src/*.c)
+
+```bash
+PATH="$(brew --prefix llvm)/bin:$PATH" ./scripts/check-coverage.sh
+```
+
+| Fact | Detail |
+|------|--------|
+| What is measured | `src/*.c` only (not `third_party/`, not `tests/`) |
+| What runs | Green gate + `remember_store_tests` (+ fault-injection hooks under `REMEMBER_TEST_HOOKS`) |
+| Pass bar | **100% function coverage** and **100% effective line coverage** |
+| Raw line % | ~87% today — remaining zeros are pure defensive exits (`return -1`, `goto fail`, error `err_msg`, etc.) excluded from the *effective* denominator |
+| What it protects | Untested production *logic* (every function entered; non-defensive lines hit) |
+| What `gate-suites` protects | Dropping whole green *suites* from CI |
+
+**Effective lines:** pure error-return / teardown / parser-kind exits need exponential fail-at-each-check injection to hit every sequential `if (write) return -1`. The gate still fails on any uncovered *logic* line. See the `DEFENSIVE` regex in `scripts/check-coverage.sh`.
 
 ## Portability (Linux glibc + strict C11)
 

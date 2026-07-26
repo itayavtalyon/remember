@@ -24,6 +24,7 @@ static const TestGroup k_groups[] = {
     {"schema_config", register_schema_config_tests},
     {"verification_gld", register_verification_gld_tests},
     {"verification_edges", register_verification_edges_tests},
+    {"coverage_edges", register_coverage_edges_tests},
 };
 
 /* Exact comma-token match: "key" must not select "key_gld" (or vice versa),

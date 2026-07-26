@@ -153,6 +153,10 @@ Rules:
 - **`--only` group matching is exact comma-tokens**, not substring (`key` must not select `key_gld`). See `group_selected` in `tests/test_main.c`.
 - **Step gates should include every plan-required green test** for that step. Leaving green cases only in mixed red suites (`verification_edges`, full `key`) means ctest can pass while plan criteria silently regress.
 - **Gate suite names:** green get/list/delete slices are `key_gld` and `verification_gld` (not `*_add`). When step 06/07 lands, extend or rename deliberately — do not drop criteria by editing an outdated name.
+- **Single green-suite list:** `tests/gate-suites` is the only place to list `--only` suites for ctest `step_gate` and `scripts/ci-linux.sh` / GHA. Update that file when a step lands greens so CI grows with the code (do not hard-code stale filters in `ci.yml`).
+- **Linux CI one-liner:** `./scripts/ci-linux.sh` (Docker ubuntu:24.04). Agents/humans should run it before claiming Linux-ready.
+- **pre-push hook:** `./scripts/install-hooks.sh` sets `core.hooksPath=.githooks` so `git push` runs `ci-linux.sh`. Skip with `SKIP_LINUX_CI=1` or `--no-verify`.
+- **Line coverage gate:** `scripts/check-coverage.sh` — clang coverage on `src/*.c`; require **100% functions** + **100% effective lines** (defensive pure-error exits excluded; see script). Complements `tests/gate-suites` (untested *logic* vs dropped *suites*). `REMEMBER_TEST_HOOKS` enables store malloc/prepare/step/exec fault injection for OOM/SQLite error paths.
 - **Path policy tests belong next to the policy.** Rejecting `:memory:` / `file:` in `util_resolve_db_path` needs a black-box case, not only manual smoke.
 - **stdin vs argv body limits must share one enforcer.** Raw stdin caps are memory guards only (`REMEMBER_STDIN_MAX`); `body_trim_copy` owns the post-trim 64 KiB rule for both paths.
 

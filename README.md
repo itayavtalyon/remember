@@ -22,12 +22,24 @@ Engineering rules and post-step review: [`docs/engineering-notes.md`](docs/engin
 cmake -S . -B build -DCMAKE_C_COMPILER=clang \
   -DREMEMBER_ENABLE_SANITIZERS=ON
 cmake --build build
-ctest --test-dir build --output-on-failure
-./build/remember_tests ./build/remember --only cli_global,store
+ctest --test-dir build --output-on-failure   # step_gate + store_asan_gate
+
+GATE=$(./scripts/read-gate-suites.sh)        # grows via tests/gate-suites
+./build/remember_tests ./build/remember --only "$GATE"
 ./build/remember_store_tests   # store port under ASan
+
+# Full Linux CI locally (Docker one-liner — same as GHA linux job)
+./scripts/ci-linux.sh
+
+# Auto-run that check on git push (once per clone)
+./scripts/install-hooks.sh
+# Skip: SKIP_LINUX_CI=1 git push  |  git push --no-verify
+
+# Production line coverage (src/*.c; target 100%)
+PATH="$(brew --prefix llvm)/bin:$PATH" ./scripts/check-coverage.sh
 ```
 
-Quality matrix (sanitizers, LSan on Linux CI, scan-build, IWYU, macOS `leaks`):  
+Quality matrix (sanitizers, LSan on Linux CI, scan-build, IWYU, macOS `leaks`, coverage):  
 [`docs/QUALITY.md`](docs/QUALITY.md). CI: [`.github/workflows/ci.yml`](.github/workflows/ci.yml).
 
 ## Format & lint

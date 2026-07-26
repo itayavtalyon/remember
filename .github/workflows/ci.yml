@@ -1,5 +1,8 @@
 # Quality gates: hard compile, sanitizers, leak detection (Linux LSan), lint, scan-build.
 # Valgrind is intentionally not used (poor Apple Silicon story; sanitizers replace it).
+#
+# Green test list grows via tests/gate-suites (single source of truth). Do not
+# hard-code a stale --only filter here — use scripts/ci-linux.sh / step_gate.
 name: ci
 
 on:
@@ -26,41 +29,38 @@ jobs:
       # Our project is pure C — we do not use Node ourselves.
       - uses: actions/checkout@v5
 
+      - name: Linux CI (same as ./scripts/ci-linux.sh)
+        run: |
+          chmod +x scripts/ci-linux.sh scripts/read-gate-suites.sh scripts/check-coverage.sh
+          ./scripts/ci-linux.sh --inner --install
+
+  # Line coverage of src/*.c: 100% functions + 100% effective lines
+  # (see scripts/check-coverage.sh). Add this job name to branch protection
+  # required checks when ready.
+  linux-coverage:
+    name: linux (line coverage on src/)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
       - name: Install toolchain
         run: |
           sudo apt-get update
           sudo apt-get install -y \
-            build-essential cmake ninja-build clang clang-tidy clang-tools \
-            clang-format cppcheck sqlite3 \
-            iwyu python3
+            build-essential cmake ninja-build clang llvm sqlite3
 
-      - name: Configure (sanitizers + LSan request)
+      - name: Production line coverage (src/*.c target 100%)
         run: |
-          cmake -S . -B build -G Ninja \
-            -DCMAKE_BUILD_TYPE=Debug \
-            -DCMAKE_C_COMPILER=clang \
-            -DREMEMBER_ENABLE_SANITIZERS=ON \
-            -DREMEMBER_ENABLE_LSAN=ON
+          chmod +x scripts/check-coverage.sh scripts/read-gate-suites.sh
+          ./scripts/check-coverage.sh
 
-      - name: Build
-        run: cmake --build build
-
-      - name: CTest (scaffold + store ASan/LSan)
-        run: ctest --test-dir build --output-on-failure
-
-      - name: Black-box gate (cli_global,store)
-        run: ./build/remember_tests ./build/remember --only cli_global,store
-
-      - name: Store unit under ASan/LSan
-        run: ./build/remember_store_tests
-
-      - name: Lint (format, tidy, cppcheck, IWYU if present, scan-build)
-        env:
-          CI: "true"
-          BUILD_DIR: build
-          REMEMBER_SCAN_BUILD: "1"
-          REMEMBER_IWYU: "1"
-        run: ./scripts/lint-all.sh
+      - name: Upload coverage report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report
+          path: build-cov/coverage-report.txt
+          if-no-files-found: ignore
 
   macos:
     name: macos (ASan+UBSan, lint, leaks)
@@ -70,6 +70,7 @@ jobs:
       # now refuses without explicit trust. We only use core/llvm formulae.
       HOMEBREW_NO_AUTO_UPDATE: 1
       HOMEBREW_NO_INSTALLED_DEPENDENTS_CHECK: 1
+      ASAN_OPTIONS: detect_leaks=0:halt_on_error=1:abort_on_error=1:allocator_may_return_null=1
     steps:
       - uses: actions/checkout@v5
 
@@ -93,24 +94,19 @@ jobs:
       - name: Build
         run: cmake --build build
 
-      - name: CTest
-        env:
-          # LSan is not reliable on macOS; keep ASan corruption checks only.
-          ASAN_OPTIONS: detect_leaks=0:halt_on_error=1:abort_on_error=1:allocator_may_return_null=1
+      - name: CTest (step_gate + store_asan_gate)
         run: ctest --test-dir build --output-on-failure
 
-      - name: Black-box + store unit
-        env:
-          ASAN_OPTIONS: detect_leaks=0:halt_on_error=1:abort_on_error=1:allocator_may_return_null=1
+      - name: Black-box gate (tests/gate-suites)
         run: |
-          ./build/remember_tests ./build/remember --only cli_global,store
+          GATE=$(./scripts/read-gate-suites.sh)
+          ./build/remember_tests ./build/remember --only "$GATE"
           ./build/remember_store_tests
 
       - name: Lint
         env:
           CI: "true"
           BUILD_DIR: build
-          # scan-build full rebuild is heavy; still run when tool exists.
           REMEMBER_SCAN_BUILD: "1"
           REMEMBER_IWYU: "0"
         run: ./scripts/lint-all.sh
