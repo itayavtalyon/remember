@@ -68,12 +68,27 @@ fi
 GATE_SUITES="$("$ROOT/scripts/read-gate-suites.sh")"
 echo "== gate suites: ${GATE_SUITES} =="
 
-BUILD_DIR="${BUILD_DIR:-build}"
+# Never reuse a host macOS CMakeCache when running under Docker (mounted tree).
+if [[ -f /.dockerenv || "${REMEMBER_CI_LINUX_INNER:-}" == "1" ]]; then
+  BUILD_DIR="${BUILD_DIR:-build-linux-ci}"
+  # Drop a stale cache if it still points at the host path.
+  if [[ -f "$BUILD_DIR/CMakeCache.txt" ]] &&
+    grep -q 'CMAKE_HOME_DIRECTORY:INTERNAL=/Users/' "$BUILD_DIR/CMakeCache.txt" 2>/dev/null; then
+    rm -rf "$BUILD_DIR"
+  fi
+else
+  BUILD_DIR="${BUILD_DIR:-build}"
+fi
+
 CMAKE_GEN=(-G "Unix Makefiles")
 if command -v ninja >/dev/null 2>&1; then
   CMAKE_GEN=(-G Ninja)
 fi
 echo "== configure (${BUILD_DIR}) =="
+# Fresh configure each run inside Docker so generator/paths stay consistent.
+if [[ -f /.dockerenv || "${REMEMBER_CI_LINUX_INNER:-}" == "1" ]]; then
+  rm -rf "${BUILD_DIR:?}"
+fi
 cmake -S . -B "$BUILD_DIR" "${CMAKE_GEN[@]}" \
   -DCMAKE_BUILD_TYPE=Debug \
   -DCMAKE_C_COMPILER=clang \
