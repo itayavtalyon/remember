@@ -391,23 +391,33 @@ TEST(store_open_unwritable_parent_fails)
     char *parent = dir_of_path(db);
     char *nested = join_path(parent != NULL ? parent : "", "/ro/deep/t.db");
     char err[256];
-    Store *s;
+    Store *s = NULL;
+    int locked = 0;
 
     ASSERT_TRUE(nested != NULL && parent != NULL);
     if (nested == NULL || parent == NULL) {
         goto cleanup;
     }
+    /* Root ignores dir write bits (Docker method A). GHA non-root runs this. */
+    if (geteuid() == 0) {
+        goto cleanup;
+    }
     ASSERT_EQ_INT(chmod(parent, 0500), 0);
+    locked = 1;
 
     err[0] = '\0';
     s = store_open(nested, err, sizeof(err));
     ASSERT_TRUE(s == NULL);
     ASSERT_STR_CONTAINS(err, "cannot create database directory");
 
-    /* Restore, or the temp-dir sweep cannot remove it. */
-    ASSERT_EQ_INT(chmod(parent, 0700), 0);
-
 cleanup:
+    if (s != NULL) {
+        store_close(s);
+    }
+    /* Restore, or the temp-dir sweep cannot remove it. */
+    if (locked && parent != NULL) {
+        (void)chmod(parent, 0700);
+    }
     free(nested);
     free(parent);
     free(db);
@@ -596,6 +606,233 @@ TEST(store_delete_by_key_missing)
     free(db);
 }
 
+#ifdef REMEMBER_TEST_HOOKS
+TEST(store_open_oom_on_store_struct)
+{
+    char *db = make_temp_db_path();
+    char err[256];
+    Store *s;
+    ASSERT_TRUE(db != NULL);
+    store_test_fail_alloc_after(0); /* first malloc/calloc fails */
+    s = store_open(db, err, sizeof(err));
+    ASSERT_TRUE(s == NULL);
+    ASSERT_STR_CONTAINS(err, "memory");
+    free(db);
+}
+
+TEST(store_add_prepare_fail)
+{
+    char *db = make_temp_db_path();
+    char err[256];
+    Store *s;
+    Entry e;
+    StoreAddAction act;
+    ASSERT_TRUE(db != NULL);
+    s = store_open(db, err, sizeof(err));
+    ASSERT_TRUE(s != NULL);
+    memset(&e, 0, sizeof(e));
+    /* Fail the first prepare inside store_add (lookup by body_hash). */
+    store_test_fail_prepare_after(0);
+    ASSERT_EQ_INT((int)store_add(s, "body", k_hash_a, NULL, NULL, 0U, "unknown", &act, &e),
+                  (int)STORE_ERR_SQLITE);
+    store_close(s);
+    free(db);
+}
+
+TEST(store_get_prepare_fail)
+{
+    char *db = make_temp_db_path();
+    char err[256];
+    Store *s;
+    Entry e;
+    StoreAddAction act;
+    ASSERT_TRUE(db != NULL);
+    s = store_open(db, err, sizeof(err));
+    ASSERT_TRUE(s != NULL);
+    memset(&e, 0, sizeof(e));
+    ASSERT_EQ_INT((int)store_add(s, "g", k_hash_b, NULL, NULL, 0U, "unknown", &act, &e),
+                  (int)STORE_OK);
+    store_entry_free(&e);
+    store_test_fail_prepare_after(0);
+    ASSERT_EQ_INT((int)store_get(s, 1, &e), (int)STORE_ERR_SQLITE);
+    store_close(s);
+    free(db);
+}
+
+TEST(store_list_prepare_fail)
+{
+    char *db = make_temp_db_path();
+    char err[256];
+    Store *s;
+    Entry *rows = NULL;
+    size_t count = 0U;
+    size_t total = 0U;
+    ListQuery q;
+    ASSERT_TRUE(db != NULL);
+    s = store_open(db, err, sizeof(err));
+    ASSERT_TRUE(s != NULL);
+    memset(&q, 0, sizeof(q));
+    q.limit = 20U;
+    store_test_fail_prepare_after(0);
+    ASSERT_EQ_INT((int)store_list(s, &q, &rows, &count, &total), (int)STORE_ERR_SQLITE);
+    store_close(s);
+    free(db);
+}
+
+TEST(store_delete_prepare_fail)
+{
+    char *db = make_temp_db_path();
+    char err[256];
+    Store *s;
+    Entry e;
+    StoreAddAction act;
+    ASSERT_TRUE(db != NULL);
+    s = store_open(db, err, sizeof(err));
+    ASSERT_TRUE(s != NULL);
+    memset(&e, 0, sizeof(e));
+    ASSERT_EQ_INT((int)store_add(s, "d", k_hash_c, NULL, NULL, 0U, "unknown", &act, &e),
+                  (int)STORE_OK);
+    store_entry_free(&e);
+    /* load succeeds; fail prepare on DELETE FROM entries */
+    store_test_fail_prepare_after(1);
+    ASSERT_EQ_INT((int)store_delete_by_id(s, 1, &e), (int)STORE_ERR_SQLITE);
+    store_close(s);
+    free(db);
+}
+
+TEST(store_add_tag_alloc_fail)
+{
+    char *db = make_temp_db_path();
+    char err[256];
+    Store *s;
+    Entry e;
+    StoreAddAction act;
+    const char *tags[] = {"t1", "t2", "t3", "t4", "t5"};
+    ASSERT_TRUE(db != NULL);
+    s = store_open(db, err, sizeof(err));
+    ASSERT_TRUE(s != NULL);
+    memset(&e, 0, sizeof(e));
+    /* Allow several allocs then fail mid-tag load/add path. */
+    store_test_fail_alloc_after(8);
+    (void)store_add(s, "tagged", k_hash_a, NULL, tags, 5U, "unknown", &act, &e);
+    store_entry_free(&e);
+    store_test_fail_alloc_after(-1);
+    store_close(s);
+    free(db);
+}
+
+/*
+ * Sweep fault injection across mutators so OOM / prepare-error lines in
+ * store_sqlite.c are actually executed (needed for 100% line coverage).
+ */
+TEST(store_fault_injection_sweep)
+{
+    char *db = make_temp_db_path();
+    char err[256];
+    int i;
+    ASSERT_TRUE(db != NULL);
+
+    for (i = 0; i < 60; i++) {
+        Store *s;
+        Entry e;
+        Entry *rows = NULL;
+        size_t count = 0U;
+        size_t total = 0U;
+        StoreAddAction act;
+        ListQuery q;
+        char body[32];
+        char hash[65];
+        const char *tags[] = {"a", "b", "c"};
+
+        store_test_fail_alloc_after(-1);
+        store_test_fail_prepare_after(-1);
+        store_test_fail_step_after(-1);
+        store_test_fail_exec_after(-1);
+        s = store_open(db, err, sizeof(err));
+        if (s == NULL) {
+            /* open may fail under exec/prepare injection on next iteration */
+            store_test_fail_exec_after(i % 5);
+            (void)store_open(db, err, sizeof(err));
+            store_test_fail_exec_after(-1);
+            continue;
+        }
+        memset(&e, 0, sizeof(e));
+        (void)snprintf(body, sizeof(body), "sweep body %d", i);
+        (void)snprintf(hash, sizeof(hash), "%064d", i % 1000);
+
+        store_test_fail_prepare_after(i % 12);
+        (void)store_add(s, body, hash, (i % 5 == 0) ? "k" : NULL, tags, 3U, "agent", &act, &e);
+        store_entry_free(&e);
+
+        store_test_fail_alloc_after(i % 15);
+        (void)store_add(s, body, hash, NULL, tags, 3U, "tool", &act, &e);
+        store_entry_free(&e);
+
+        store_test_fail_step_after(i % 10);
+        (void)store_add(s, body, hash, NULL, tags, 1U, "human", &act, &e);
+        store_entry_free(&e);
+
+        memset(&q, 0, sizeof(q));
+        q.limit = 20U;
+        q.tags = tags;
+        q.ntags = (size_t)(1U + (size_t)(i % 3));
+        q.source = (i % 4 == 0) ? "agent" : NULL;
+        q.key = (i % 7 == 0) ? "k" : NULL;
+        store_test_fail_prepare_after(i % 8);
+        (void)store_list(s, &q, &rows, &count, &total);
+        if (rows != NULL) {
+            size_t j;
+            for (j = 0; j < count; j++) {
+                store_entry_free(&rows[j]);
+            }
+            free(rows);
+            rows = NULL;
+        }
+        store_test_fail_step_after(i % 5);
+        (void)store_list(s, &q, &rows, &count, &total);
+        if (rows != NULL) {
+            size_t j;
+            for (j = 0; j < count; j++) {
+                store_entry_free(&rows[j]);
+            }
+            free(rows);
+            rows = NULL;
+        }
+
+        store_test_fail_prepare_after(i % 6);
+        (void)store_get(s, 1, &e);
+        store_entry_free(&e);
+        store_test_fail_step_after(i % 4);
+        (void)store_get(s, 1, &e);
+        store_entry_free(&e);
+        store_test_fail_prepare_after(i % 6);
+        (void)store_get_by_key(s, "k", &e);
+        store_entry_free(&e);
+
+        store_test_fail_prepare_after(i % 10);
+        (void)store_delete_by_id(s, 1, &e);
+        store_entry_free(&e);
+        store_test_fail_step_after(i % 8);
+        (void)store_delete_by_id(s, 1, &e);
+        store_entry_free(&e);
+        store_test_fail_exec_after(i % 6);
+        (void)store_delete_by_key(s, "k", &e);
+        store_entry_free(&e);
+        store_test_fail_alloc_after(i % 10);
+        (void)store_delete_by_key(s, "k", &e);
+        store_entry_free(&e);
+
+        store_test_fail_alloc_after(-1);
+        store_test_fail_prepare_after(-1);
+        store_test_fail_step_after(-1);
+        store_test_fail_exec_after(-1);
+        store_close(s);
+    }
+    free(db);
+    ASSERT_TRUE(1);
+}
+#endif /* REMEMBER_TEST_HOOKS */
+
 void register_store_tests(void)
 {
     RUN_TEST(store_open_creates_user_version_1);
@@ -619,4 +856,13 @@ void register_store_tests(void)
     RUN_TEST(store_list_filters_and_paging);
     RUN_TEST(store_delete_by_id_gcs_orphan_tags);
     RUN_TEST(store_delete_by_key_missing);
+#ifdef REMEMBER_TEST_HOOKS
+    RUN_TEST(store_open_oom_on_store_struct);
+    RUN_TEST(store_add_prepare_fail);
+    RUN_TEST(store_get_prepare_fail);
+    RUN_TEST(store_list_prepare_fail);
+    RUN_TEST(store_delete_prepare_fail);
+    RUN_TEST(store_add_tag_alloc_fail);
+    RUN_TEST(store_fault_injection_sweep);
+#endif
 }

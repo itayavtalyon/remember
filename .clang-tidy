@@ -26,7 +26,10 @@ Checks: >
   -clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling
 
 WarningsAsErrors: '*'
-HeaderFilterRegex: '(src|tests)/.*'
+# Match only project TUs under src/ and tests/ (flat layout). Do not use a bare
+# 'src/' prefix: when Docker mounts the repo at /src, that also matches
+# /src/third_party/... and clang-tidy then fails on the sqlite amalgamation.
+HeaderFilterRegex: '(src|tests)/[^/]+\.(c|h)$'
 FormatStyle: file
 
 CheckOptions:

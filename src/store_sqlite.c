@@ -13,6 +13,146 @@ struct Store {
     sqlite3 *db;
 };
 
+/* ---- optional fault injection (coverage / unit tests) -------------------- */
+#ifdef REMEMBER_TEST_HOOKS
+static int g_fail_alloc_after = -1;
+static int g_fail_prepare_after = -1;
+static int g_fail_step_after = -1;
+static int g_fail_exec_after = -1;
+
+void store_test_fail_alloc_after(int n)
+{
+    g_fail_alloc_after = n;
+}
+
+void store_test_fail_prepare_after(int n)
+{
+    g_fail_prepare_after = n;
+}
+
+void store_test_fail_step_after(int n)
+{
+    g_fail_step_after = n;
+}
+
+void store_test_fail_exec_after(int n)
+{
+    g_fail_exec_after = n;
+}
+
+/* Capture libc allocators before macros redirect malloc/calloc/realloc. */
+static void *real_malloc(size_t n)
+{
+    return malloc(n);
+}
+static void *real_calloc(size_t nm, size_t sz)
+{
+    return calloc(nm, sz);
+}
+static void *real_realloc(void *p, size_t n)
+{
+    return realloc(p, n);
+}
+
+static void *hook_malloc(size_t n)
+{
+    if (g_fail_alloc_after >= 0) {
+        if (g_fail_alloc_after == 0) {
+            g_fail_alloc_after = -1;
+            return NULL;
+        }
+        g_fail_alloc_after--;
+    }
+    return real_malloc(n);
+}
+
+static void *hook_calloc(size_t nm, size_t sz)
+{
+    if (g_fail_alloc_after >= 0) {
+        if (g_fail_alloc_after == 0) {
+            g_fail_alloc_after = -1;
+            return NULL;
+        }
+        g_fail_alloc_after--;
+    }
+    return real_calloc(nm, sz);
+}
+
+static void *hook_realloc(void *p, size_t n)
+{
+    if (g_fail_alloc_after >= 0) {
+        if (g_fail_alloc_after == 0) {
+            g_fail_alloc_after = -1;
+            return NULL;
+        }
+        g_fail_alloc_after--;
+    }
+    return real_realloc(p, n);
+}
+
+#define malloc(n) hook_malloc(n)
+#define calloc(a, b) hook_calloc((a), (b))
+#define realloc(p, n) hook_realloc((p), (n))
+
+static int real_prepare(sqlite3 *db, const char *sql, int nByte, sqlite3_stmt **ppStmt,
+                        const char **pzTail)
+{
+    return sqlite3_prepare_v2(db, sql, nByte, ppStmt, pzTail);
+}
+
+static int store_prepare(sqlite3 *db, const char *sql, int nByte, sqlite3_stmt **ppStmt,
+                         const char **pzTail)
+{
+    if (g_fail_prepare_after >= 0) {
+        if (g_fail_prepare_after == 0) {
+            g_fail_prepare_after = -1;
+            return SQLITE_NOMEM;
+        }
+        g_fail_prepare_after--;
+    }
+    return real_prepare(db, sql, nByte, ppStmt, pzTail);
+}
+#define sqlite3_prepare_v2(db, sql, n, pp, pt) store_prepare((db), (sql), (n), (pp), (pt))
+
+static int real_step(sqlite3_stmt *stmt)
+{
+    return sqlite3_step(stmt);
+}
+
+static int store_step(sqlite3_stmt *stmt)
+{
+    if (g_fail_step_after >= 0) {
+        if (g_fail_step_after == 0) {
+            g_fail_step_after = -1;
+            return SQLITE_ERROR;
+        }
+        g_fail_step_after--;
+    }
+    return real_step(stmt);
+}
+#define sqlite3_step(stmt) store_step(stmt)
+
+static int real_exec(sqlite3 *db, const char *sql, int (*cb)(void *, int, char **, char **),
+                     void *arg, char **errmsg)
+{
+    return sqlite3_exec(db, sql, cb, arg, errmsg);
+}
+
+static int store_exec(sqlite3 *db, const char *sql, int (*cb)(void *, int, char **, char **),
+                      void *arg, char **errmsg)
+{
+    if (g_fail_exec_after >= 0) {
+        if (g_fail_exec_after == 0) {
+            g_fail_exec_after = -1;
+            return SQLITE_ERROR;
+        }
+        g_fail_exec_after--;
+    }
+    return real_exec(db, sql, cb, arg, errmsg);
+}
+#define sqlite3_exec(db, sql, cb, arg, errmsg) store_exec((db), (sql), (cb), (arg), (errmsg))
+#endif /* REMEMBER_TEST_HOOKS */
+
 /* DDL only; version bump is applied after a successful body (same transaction). */
 static const char k_schema_sql[] =
     "CREATE TABLE entries (\n"

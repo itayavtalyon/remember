@@ -1,0 +1,47 @@
+#!/usr/bin/env bash
+# pre-push: run Linux CI in Docker (same as GitHub Actions linux job).
+#
+# Enable once per clone:
+#   ./scripts/install-hooks.sh
+#   # or: git config core.hooksPath .githooks
+#
+# Skip for one push (use sparingly):
+#   SKIP_LINUX_CI=1 git push
+#   git push --no-verify
+set -euo pipefail
+
+# Only block actual pushes of commits (not when stdin is empty with no refs).
+# Still run when any ref is being updated.
+if [[ "${SKIP_LINUX_CI:-}" == "1" || "${SKIP_LINUX_CI:-}" == "true" ]]; then
+  echo "pre-push: SKIP_LINUX_CI set — skipping ./scripts/ci-linux.sh" >&2
+  exit 0
+fi
+
+ROOT="$(git rev-parse --show-toplevel 2>/dev/null || true)"
+if [[ -z "$ROOT" ]]; then
+  echo "pre-push: not inside a git work tree" >&2
+  exit 1
+fi
+cd "$ROOT"
+
+if [[ ! -x ./scripts/ci-linux.sh ]]; then
+  echo "pre-push: missing executable ./scripts/ci-linux.sh" >&2
+  exit 1
+fi
+
+if ! command -v docker >/dev/null 2>&1; then
+  echo "pre-push: docker not found on PATH." >&2
+  echo "  Install Docker, or skip with: SKIP_LINUX_CI=1 git push" >&2
+  exit 1
+fi
+
+if ! docker info >/dev/null 2>&1; then
+  echo "pre-push: Docker daemon is not running." >&2
+  echo "  Start Docker Desktop, or skip with: SKIP_LINUX_CI=1 git push" >&2
+  exit 1
+fi
+
+echo "pre-push: running Linux CI (./scripts/ci-linux.sh)…"
+echo "  (skip: SKIP_LINUX_CI=1 git push  |  git push --no-verify)"
+./scripts/ci-linux.sh
+echo "pre-push: Linux CI OK"

@@ -106,4 +106,16 @@ StoreStatus store_delete_by_id(Store *s, long long id, Entry *out_deleted);
 /* Same as store_delete_by_id, located by normalized key. */
 StoreStatus store_delete_by_key(Store *s, const char *key, Entry *out_deleted);
 
+/*
+ * Test-only fault injection (compiled when REMEMBER_TEST_HOOKS is defined).
+ * fail_after: number of successful allocs/prepares before the next fails;
+ * use 0 to fail the immediate next call. Pass -1 to disable.
+ */
+#ifdef REMEMBER_TEST_HOOKS
+void store_test_fail_alloc_after(int n);
+void store_test_fail_prepare_after(int n);
+void store_test_fail_step_after(int n);
+void store_test_fail_exec_after(int n);
+#endif
+
 #endif /* REMEMBER_STORE_H */

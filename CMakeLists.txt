@@ -14,9 +14,22 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 option(REMEMBER_ENABLE_SANITIZERS "Enable ASan/UBSan (and LSan on Linux)" ON)
 # When ON, also request leak detection (no-op / noisy on macOS; real on Linux).
 option(REMEMBER_ENABLE_LSAN "Request leak detection with ASan (Linux CI)" OFF)
+# Clang source-based coverage for scripts/check-coverage.sh (mutually exclusive
+# with sanitizers in practice — that script configures a separate build-cov tree).
+option(REMEMBER_ENABLE_COVERAGE "Clang -fprofile-instr-generate/-fcoverage-mapping" OFF)
+# Fault-injection hooks in store_sqlite (malloc/prepare). On for coverage builds
+# and Debug unit tests so OOM/SQLite-error lines are reachable.
+option(REMEMBER_TEST_HOOKS "Enable store_test_fail_* hooks in store_sqlite.c" OFF)
+if(REMEMBER_ENABLE_COVERAGE)
+    set(REMEMBER_TEST_HOOKS ON)
+endif()
 
 if(CMAKE_BUILD_TYPE STREQUAL "Release")
     set(REMEMBER_ENABLE_SANITIZERS OFF)
+endif()
+if(REMEMBER_ENABLE_COVERAGE AND REMEMBER_ENABLE_SANITIZERS)
+    message(WARNING "REMEMBER_ENABLE_COVERAGE with sanitizers: prefer a separate "
+                    "build dir with -DREMEMBER_ENABLE_SANITIZERS=OFF (see scripts/check-coverage.sh)")
 endif()
 
 # --- Layer A: hard compile flags (project code only; amalgamation uses -w) --
@@ -85,6 +98,19 @@ function(remember_apply_sanitizers target)
     if(REMEMBER_SANITIZER_FLAGS)
         target_compile_options(${target} PRIVATE ${REMEMBER_SANITIZER_FLAGS})
         target_link_options(${target} PRIVATE ${REMEMBER_SANITIZER_FLAGS})
+    endif()
+endfunction()
+
+function(remember_apply_coverage target)
+    if(REMEMBER_ENABLE_COVERAGE)
+        target_compile_options(${target} PRIVATE -fprofile-instr-generate -fcoverage-mapping)
+        target_link_options(${target} PRIVATE -fprofile-instr-generate -fcoverage-mapping)
+    endif()
+endfunction()
+
+function(remember_apply_test_hooks target)
+    if(REMEMBER_TEST_HOOKS)
+        target_compile_definitions(${target} PRIVATE REMEMBER_TEST_HOOKS)
     endif()
 endfunction()
 
@@ -158,6 +184,8 @@ target_compile_definitions(remember PRIVATE
 )
 remember_apply_posix_feature_macros(remember)
 remember_apply_sanitizers(remember)
+remember_apply_coverage(remember)
+remember_apply_test_hooks(remember)
 
 # Non-sanitized CLI for macOS leaks(1) (leaks cannot inspect ASan heaps).
 add_executable(remember_plain
@@ -170,6 +198,7 @@ target_compile_definitions(remember_plain PRIVATE
     REMEMBER_VERSION="${PROJECT_VERSION}"
 )
 remember_apply_posix_feature_macros(remember_plain)
+remember_apply_test_hooks(remember_plain)
 
 # --- full black-box harness (NOT instrumented — forks ASan child) ------------
 set(REMEMBER_TEST_SOURCES
@@ -187,6 +216,7 @@ set(REMEMBER_TEST_SOURCES
     tests/test_key.c
     tests/test_schema_config.c
     tests/test_verification_edges.c
+    tests/test_coverage_edges.c
 )
 add_executable(remember_tests
     ${REMEMBER_TEST_SOURCES}
@@ -201,6 +231,8 @@ target_compile_definitions(remember_tests PRIVATE
     REMEMBER_VERSION="${PROJECT_VERSION}"
 )
 remember_apply_posix_feature_macros(remember_tests)
+remember_apply_coverage(remember_tests)
+remember_apply_test_hooks(remember_tests)
 add_dependencies(remember_tests remember)
 
 # --- in-process unit tests under ASan/UBSan (no fork/exec) — leak/corruption
@@ -231,13 +263,44 @@ set_property(SOURCE third_party/sha256/sha256.c
 target_link_libraries(remember_store_tests PRIVATE sqlite3)
 remember_apply_posix_feature_macros(remember_store_tests)
 remember_apply_sanitizers(remember_store_tests)
+remember_apply_coverage(remember_store_tests)
+# Always enable hooks on the store unit binary so OOM paths are testable under ASan too.
+target_compile_definitions(remember_store_tests PRIVATE REMEMBER_TEST_HOOKS)
 
 enable_testing()
-# Green gate: suites fully implemented after step 05 (get/list/delete).
-# key_gld / verification_gld = green get/list/delete slices (not only "add").
+# Green gate: suite list is tests/gate-suites (single source of truth; CI grows
+# when that file is updated). Stable ctest name: step_gate.
+file(STRINGS "${CMAKE_SOURCE_DIR}/tests/gate-suites" REMEMBER_GATE_SUITE_LINES)
+set(REMEMBER_GATE_SUITES "")
+foreach(_line IN LISTS REMEMBER_GATE_SUITE_LINES)
+    # Strip # comments (CMake MATCHES with '#' is easy to get wrong).
+    string(REGEX REPLACE "#.*$" "" _line "${_line}")
+    string(STRIP "${_line}" _line)
+    if(_line STREQUAL "")
+        continue()
+    endif()
+    if(REMEMBER_GATE_SUITES STREQUAL "")
+        set(REMEMBER_GATE_SUITES "${_line}")
+    else()
+        set(REMEMBER_GATE_SUITES "${REMEMBER_GATE_SUITES},${_line}")
+    endif()
+endforeach()
+if(REMEMBER_GATE_SUITES STREQUAL "")
+    message(FATAL_ERROR "tests/gate-suites has no suite list")
+endif()
+message(STATUS "step_gate suites: ${REMEMBER_GATE_SUITES}")
+
+add_test(NAME step_gate
+    COMMAND remember_tests $<TARGET_FILE:remember>
+        --only "${REMEMBER_GATE_SUITES}"
+)
+set_tests_properties(step_gate PROPERTIES
+    WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
+)
+# Back-compat alias for docs/scripts that still say step05_gate.
 add_test(NAME step05_gate
     COMMAND remember_tests $<TARGET_FILE:remember>
-        --only cli_global,store,normalize,add,get_list_delete,json_db_config,key_gld,verification_gld
+        --only "${REMEMBER_GATE_SUITES}"
 )
 set_tests_properties(step05_gate PROPERTIES
     WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
