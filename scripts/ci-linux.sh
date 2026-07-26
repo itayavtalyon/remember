@@ -57,12 +57,22 @@ export ASAN_OPTIONS="${ASAN_OPTIONS:-detect_leaks=1:halt_on_error=1:abort_on_err
 
 if [[ "$DO_INSTALL" -eq 1 ]]; then
   echo "== install toolchain =="
-  apt-get update
-  apt-get install -y \
-    build-essential cmake ninja-build clang clang-tidy clang-tools \
-    clang-format cppcheck sqlite3 \
-    iwyu python3 \
-    llvm
+  # Root in Docker method A; passwordless sudo on GHA runners.
+  if [[ "$(id -u)" -eq 0 ]]; then
+    apt-get update
+    apt-get install -y \
+      build-essential cmake ninja-build clang clang-tidy clang-tools \
+      clang-format cppcheck sqlite3 \
+      iwyu python3 \
+      llvm
+  else
+    sudo DEBIAN_FRONTEND=noninteractive apt-get update
+    sudo DEBIAN_FRONTEND=noninteractive apt-get install -y \
+      build-essential cmake ninja-build clang clang-tidy clang-tools \
+      clang-format cppcheck sqlite3 \
+      iwyu python3 \
+      llvm
+  fi
 fi
 
 GATE_SUITES="$("$ROOT/scripts/read-gate-suites.sh")"

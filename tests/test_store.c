@@ -391,23 +391,33 @@ TEST(store_open_unwritable_parent_fails)
     char *parent = dir_of_path(db);
     char *nested = join_path(parent != NULL ? parent : "", "/ro/deep/t.db");
     char err[256];
-    Store *s;
+    Store *s = NULL;
+    int locked = 0;
 
     ASSERT_TRUE(nested != NULL && parent != NULL);
     if (nested == NULL || parent == NULL) {
         goto cleanup;
     }
+    /* Root ignores dir write bits (Docker method A). GHA non-root runs this. */
+    if (geteuid() == 0) {
+        goto cleanup;
+    }
     ASSERT_EQ_INT(chmod(parent, 0500), 0);
+    locked = 1;
 
     err[0] = '\0';
     s = store_open(nested, err, sizeof(err));
     ASSERT_TRUE(s == NULL);
     ASSERT_STR_CONTAINS(err, "cannot create database directory");
 
-    /* Restore, or the temp-dir sweep cannot remove it. */
-    ASSERT_EQ_INT(chmod(parent, 0700), 0);
-
 cleanup:
+    if (s != NULL) {
+        store_close(s);
+    }
+    /* Restore, or the temp-dir sweep cannot remove it. */
+    if (locked && parent != NULL) {
+        (void)chmod(parent, 0700);
+    }
     free(nested);
     free(parent);
     free(db);
