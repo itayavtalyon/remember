@@ -156,28 +156,27 @@ TEST(util_read_stdin_null_out)
 
 static FILE *open_write_fail(void)
 {
+    FILE *f = NULL;
+    int p[2];
+
 #ifdef __linux__
-    FILE *f = fopen("/dev/full", "w");
+    f = fopen("/dev/full", "w");
     if (f != NULL) {
         return f;
     }
 #endif
     /* Portable: write end of pipe with read end closed → EPIPE after ignore. */
-    {
-        int p[2];
-        FILE *f;
-        if (pipe(p) != 0) {
-            return NULL;
-        }
-        close(p[0]);
-        signal(SIGPIPE, SIG_IGN);
-        f = fdopen(p[1], "w");
-        if (f == NULL) {
-            close(p[1]);
-            return NULL;
-        }
-        return f;
+    if (pipe(p) != 0) {
+        return NULL;
     }
+    close(p[0]);
+    signal(SIGPIPE, SIG_IGN);
+    f = fdopen(p[1], "w");
+    if (f == NULL) {
+        close(p[1]);
+        return NULL;
+    }
+    return f;
 }
 
 TEST(output_json_string_null_out_fails)
