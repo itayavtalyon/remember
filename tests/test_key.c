@@ -412,15 +412,15 @@ void register_key_gld_tests(void)
     RUN_TEST(get_neither_id_nor_key_rejected);
     RUN_TEST(delete_by_key);
     RUN_TEST(list_filter_by_key);
+    RUN_TEST(search_filter_by_key);
     RUN_TEST(delete_by_key_missing_exits_two);
 }
 
-/* WIP: update/search by key — red until steps 06/07. */
+/* WIP: update by key — red until step 07. */
 void register_key_tests(void)
 {
     RUN_TEST(update_by_key_text);
     RUN_TEST(update_keyed_no_body_hash_conflict);
-    RUN_TEST(search_filter_by_key);
     RUN_TEST(update_by_key_missing_exits_two);
     RUN_TEST(update_both_id_and_key_rejected);
 }

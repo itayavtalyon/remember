@@ -81,6 +81,17 @@ static void print_command_help(CliCommand topic)
         (void)printf("  --limit N       Page size (default 20, max 1000)\n");
         (void)printf("  --offset M      Skip M matches (default 0)\n");
         (void)printf("\n");
+    } else if (topic == CLI_CMD_SEARCH) {
+        (void)printf("Options:\n");
+        (void)printf("  QUERY           FTS5 full-text query (required)\n");
+        (void)printf("  --tag TAG       Require tag (repeatable; AND)\n");
+        (void)printf("  --source SRC    Filter by source\n");
+        (void)printf("  --key KEY       Exact key match\n");
+        (void)printf("  --limit N       Page size (default 20, max 1000)\n");
+        (void)printf("  --offset M      Skip M matches (default 0)\n");
+        (void)printf("\n");
+        (void)printf("Ranked by FTS relevance (bm25), then updated_at.\n");
+        (void)printf("\n");
     }
     (void)printf("Global options: --db PATH, --json, --help, --version\n");
     (void)printf("See also: remember --help\n");
@@ -185,7 +196,7 @@ static int run(const CliArgs *args)
     case CLI_CMD_DELETE:
         return run_with_store(args, cmd_delete);
     case CLI_CMD_SEARCH:
-        return dispatch_nyi("search");
+        return run_with_store(args, cmd_search);
     case CLI_CMD_UPDATE:
         return dispatch_nyi("update");
     case CLI_CMD_NONE:

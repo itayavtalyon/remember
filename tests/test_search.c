@@ -87,6 +87,20 @@ TEST(search_empty_query_rejected)
     ASSERT_TRUE(db != NULL);
     r = run_remember(db, args, 2, NULL);
     ASSERT_EQ_INT(r.exit_code, 1);
+    ASSERT_STR_CONTAINS(r.err, "empty search query");
+    cmd_result_free(&r);
+    free(db);
+}
+
+TEST(search_whitespace_only_query_rejected)
+{
+    char *db = make_temp_db_path();
+    const char *args[] = {"search", "   \t  "};
+    CmdResult r;
+    ASSERT_TRUE(db != NULL);
+    r = run_remember(db, args, 2, NULL);
+    ASSERT_EQ_INT(r.exit_code, 1);
+    ASSERT_STR_CONTAINS(r.err, "empty search query");
     cmd_result_free(&r);
     free(db);
 }
@@ -242,6 +256,7 @@ void register_search_tests(void)
     RUN_TEST(search_tag_filter_ands_with_query);
     RUN_TEST(search_source_filter);
     RUN_TEST(search_empty_query_rejected);
+    RUN_TEST(search_whitespace_only_query_rejected);
     RUN_TEST(search_missing_query_rejected);
     RUN_TEST(search_no_matches_exits_zero);
     RUN_TEST(search_json_paging_fields);

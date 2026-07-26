@@ -13,6 +13,7 @@ void register_key_gld_tests(void);
 void register_key_tests(void);
 void register_schema_config_tests(void);
 void register_verification_gld_tests(void);
+void register_verification_search_tests(void);
 void register_verification_edges_tests(void);
 void register_coverage_edges_tests(void);
 

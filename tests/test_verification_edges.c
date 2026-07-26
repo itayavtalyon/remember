@@ -627,16 +627,24 @@ void register_verification_gld_tests(void)
     RUN_TEST(list_no_matches_json_total_zero);
 }
 
-void register_verification_edges_tests(void)
+/*
+ * Green FTS / search verification through step 06.
+ * fts_search_reflects_body_update stays red until update (step 07).
+ */
+void register_verification_search_tests(void)
 {
-    /* Still red until update/search land (steps 06–07). */
-    RUN_TEST(update_rejects_source_flag);
-    RUN_TEST(update_preserves_id_key_source_created_at);
-    RUN_TEST(fts_search_reflects_body_update);
     RUN_TEST(fts_search_empty_after_delete);
     RUN_TEST(fts_search_reflects_keyed_upsert);
     RUN_TEST(search_finds_compound_tag_component);
     RUN_TEST(search_diacritics_folded);
     RUN_TEST(search_unbalanced_quote_rejected);
+}
+
+void register_verification_edges_tests(void)
+{
+    /* Still red until update lands (step 07). */
+    RUN_TEST(update_rejects_source_flag);
+    RUN_TEST(update_preserves_id_key_source_created_at);
+    RUN_TEST(fts_search_reflects_body_update);
     RUN_TEST(update_invalid_utf8_text_rejected);
 }

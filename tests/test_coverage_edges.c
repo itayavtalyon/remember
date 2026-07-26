@@ -367,15 +367,15 @@ TEST(norm_status_string_unknown)
 
 /* ---- black-box: main help + NYI ------------------------------------------ */
 
-TEST(search_nyi_exits_three)
+TEST(search_empty_query_stderr)
 {
     char *db = make_temp_db_path();
-    const char *args[] = {"search", "foo"};
+    const char *args[] = {"search", ""};
     CmdResult r;
     ASSERT_TRUE(db != NULL);
     r = run_remember(db, args, 2, NULL);
-    ASSERT_EQ_INT(r.exit_code, 3);
-    ASSERT_STR_CONTAINS(r.err, "not implemented");
+    ASSERT_EQ_INT(r.exit_code, 1);
+    ASSERT_STR_CONTAINS(r.err, "empty search query");
     cmd_result_free(&r);
     free(db);
 }
@@ -746,6 +746,39 @@ TEST(list_end_opts_then_junk)
     free(db);
 }
 
+TEST(search_end_opts_then_query)
+{
+    /*
+     * Outer "--" ends CLI option scan; a second "--" is a literal rest token
+     * so cmd_search's own end-opts path (list_handle_opt kind==1) is exercised.
+     */
+    char *db = make_temp_db_path();
+    CmdResult r;
+    const char *a[] = {"add", "body with helix token"};
+    const char *s[] = {"search", "--json", "--", "--", "helix"};
+    ASSERT_TRUE(db != NULL);
+    r = run_remember(db, a, 2, NULL);
+    cmd_result_free(&r);
+    r = run_remember(db, s, 5, NULL);
+    ASSERT_EQ_INT(r.exit_code, 0);
+    ASSERT_STR_CONTAINS(r.out, "helix");
+    cmd_result_free(&r);
+    free(db);
+}
+
+TEST(search_end_opts_extra_positional_rejected)
+{
+    /* After command-local end-opts, a second positional is an error. */
+    char *db = make_temp_db_path();
+    const char *args[] = {"search", "--", "--", "helix", "extra"};
+    CmdResult r;
+    ASSERT_TRUE(db != NULL);
+    r = run_remember(db, args, 5, NULL);
+    ASSERT_EQ_INT(r.exit_code, 1);
+    cmd_result_free(&r);
+    free(db);
+}
+
 TEST(help_topic_unknown_name_falls_back)
 {
     /* help for a command whose name lookup fails → general help. */
@@ -861,7 +894,7 @@ void register_coverage_edges_tests(void)
     RUN_TEST(cli_parse_double_dash_literal);
     RUN_TEST(cli_parse_end_opts_then_subcommand_token);
     RUN_TEST(norm_status_string_unknown);
-    RUN_TEST(search_nyi_exits_three);
+    RUN_TEST(search_empty_query_stderr);
     RUN_TEST(update_nyi_exits_three);
     RUN_TEST(help_get_list_delete_topics);
     RUN_TEST(add_json_body_with_all_json_escapes);
@@ -884,6 +917,8 @@ void register_coverage_edges_tests(void)
     RUN_TEST(list_invalid_tag_message);
     RUN_TEST(add_second_tag_invalid_frees_first);
     RUN_TEST(list_end_opts_then_junk);
+    RUN_TEST(search_end_opts_then_query);
+    RUN_TEST(search_end_opts_extra_positional_rejected);
     RUN_TEST(help_topic_unknown_name_falls_back);
     RUN_TEST(add_double_dash_end_opts);
     RUN_TEST(output_invalid_utf8_lead_byte);

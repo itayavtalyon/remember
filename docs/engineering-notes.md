@@ -18,14 +18,38 @@ Update after each step review.
 - **Parent mkdir:** on `EEXIST`, verify the path component is a directory (`S_ISDIR`), not a file.
 - **CLI layers:** `cli_parse` (pure argv → `CliArgs`) / `main` (I/O + exit codes) / later `commands_*` / `output` as needed.
 - **Normalize + hash (pure):** `normalize.c` / `normalize.h` — no I/O, no store/cli. Body trim + UTF-8 + size; shared `normalize_token` for tag and key; `body_hash_hex` (lowercase SHA-256). SHA-256 amalgamation in `third_party/sha256/` (Brad Conte public domain); only `normalize.c` includes `sha256.h`.
-- **Commands layer:** `commands.c` orchestrates normalize → `store_*` → `output_*`. No SQL. Norm errors map via full phrases (`empty body after trim`, …), not bare `norm_status_string` labels.
+- **Commands layer:** public `commands.h` only. Implementation is split by **concern axis**, not one file per subcommand:
+  - `commands_common.c` / `commands_common.h` — internal shared helpers (err messages, tag normalize, argv helpers). **Not** a public API; only `cmd_*.c` include it.
+  - `cmd_add.c` — write path (body load, key/tags, `store_add`).
+  - `cmd_locator.c` — get + delete (shared id/`--key` locator).
+  - `cmd_query.c` — list + search (shared filter/paging parse; different store call).
+  - Orchestration is still normalize → `store_*` → `output_*`. No SQL. Norm errors map via full phrases (`empty body after trim`, …), not bare `norm_status_string` labels.
 - **Output:** `output.c` owns JSON escaping (RFC 8259) and envelopes; human `add` prints id only; human `get` uses `output_body_human` (terminal C0/DEL → `?`, keep `\n`/`\t`); human list previews also neutralize controls. Never raw-`fputs` a stored body to a TTY.
 - **Path resolve:** `util_resolve_db_path` — `--db` > `REMEMBER_DB` > `~/.remember/remember.db`. Rejects `:memory:` and `file:` URIs (silent data-loss footguns through `sqlite3_open_v2`).
 - **`store_add`:** keyless body-hash merge (union tags, keep source/created_at/body) or keyed upsert (replace body, union tags, keep source/created_at/key). FTS resync in the same transaction.
 - **`store_list`:** takes `ListQuery` (tags AND via EXISTS, optional `source`/`key`, `limit`/`offset`). Sort `updated_at DESC, id DESC`. CLI owns default limit 20 / max 1000 / offset ≥ 0 and a **tag-filter cap** (`LIST_TAG_FILTER_MAX` 50) under the store bind budget (`LIST_BIND_CAP`); store uses values as given. COUNT + paged SELECT run in **one read transaction** so empty pages still report unpaged `total`.
 - **`store_delete_by_id` / `store_delete_by_key`:** one write txn: load snapshot → FTS delete → `DELETE entries` (CASCADE `entry_tags`) → orphan-tag GC → COMMIT. Snapshot returned for JSON `action:deleted` matches the locked row.
-- **Locator (get/delete):** shared parse in `commands.c` — exactly one of positional id / `--key`; reject `--source`.
-- **Stable exit codes:** `0` ok, `1` usage/error, `2` not found. Scaffold NYI remains private for still-unimplemented commands (`search`/`update`).
+- **Locator (get/delete):** shared parse in `cmd_locator.c` — exactly one of positional id / `--key`; reject `--source`.
+- **Stable exit codes:** `0` ok, `1` usage/error, `2` not found. Scaffold NYI remains private for still-unimplemented commands (`update`).
+- **`store_search`:** `SearchQuery` = FTS MATCH string + embedded `ListQuery` filters (tag AND / source / key / limit / offset). Shared SQL filter builder with list (`list_append_filters`). Rank `bm25(entries_fts)` then `updated_at DESC, id DESC`. **FTS5 requires the real table name** in `MATCH`/`bm25()` — aliases fail (`no such column`). Invalid FTS syntax → `STORE_ERR_QUERY` ("invalid search query"). COUNT + page in one read txn (same empty-page total contract as list).
+- **CLI search:** same filter/paging parse path as list (`cmd_query.c`) + one required QUERY positional. Outer ASCII whitespace is trimmed (same set as normalize: space/tab/LF/CR/VT/FF); empty-after-trim → usage error `"empty search query"` (not FTS). Trimmed string is the FTS MATCH input (not tag/key-normalized). Human preview via `output_entry_human_line` (≤80 codepoints); JSON full bodies via `output_list_envelope`.
+- **Gate suites (step 06):** `search`, `verification_search` (FTS green edges), `search_filter_by_key` folded into `key_gld`. `fts_search_reflects_body_update` stays red until step 07.
+
+### Lessons: when/how to split a growing commands module
+
+Learned while growing past ~1000 lines at step 06 (search):
+
+1. **Split on shared knowledge, not on every subcommand name.** One file per CLI verb looks tidy but duplicates parse helpers. Axes that actually shared code:
+   - **common** — messages, tag normalize, argv list growth, store→exit mapping
+   - **locator** — get/delete (same “exactly one of id|key” contract; update will join here)
+   - **query** — list/search (same filters + paging; different store call + optional FTS query)
+   - **add** — unique body/stdin pipeline (and later `update` body edits may share pieces via common, not via query)
+2. **Keep one public header.** `commands.h` stays the only face for `main`. Internal `commands_common.h` is for command TUs only — do not export it from the public surface or pull it into `main`/tests.
+3. **Wire every new TU in CMake twice:** `REMEMBER_LIB_SOURCES` *and* the `-Wcast-qual` source list (easy to forget; a missed TU silently drops a warning gate).
+4. **Defer the split until a second consumer of a parse path exists.** list alone did not justify a module; list+search did. Similarly, wait to extract body-edit helpers until `update` lands if they would otherwise be single-use.
+5. **Line-count is a signal, not a rule.** Prefer navigating by concern (filter vs locator vs write) over forcing ~N lines per file.
+6. **`misc-include-cleaner` requires *direct* includes in each `.c`.** Pulling `store.h` / `normalize.h` only via `commands.h` or `commands_common.h` is enough for the compiler but **fails clang-tidy**. Every command TU that uses those symbols must `#include "store.h"` / `"normalize.h"` itself (same rule for any new `cmd_*.c`).
+7. **Fault-injection sweeps grow complexity fast.** When adding a store op to `store_fault_injection_sweep`, extract per-op helpers (`sweep_*_faults`) so cognitive-complexity stays under the tidy threshold — do not paste another free-page loop into the main `for`.
 
 ## CLI parse contract
 
