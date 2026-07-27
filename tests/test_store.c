@@ -4,6 +4,7 @@
 #include "test.h"
 
 #include <fcntl.h>
+#include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -556,6 +557,75 @@ TEST(store_list_filters_and_paging)
     free(db);
 }
 
+TEST(store_update_body_and_tags)
+{
+    char *db = make_temp_db_path();
+    char err[256];
+    Store *s;
+    Entry e;
+    StoreAddAction act;
+    const char *tags_ab[] = {"a", "b"};
+    const char *tags_z[] = {"z"};
+    long long conflict = 0;
+
+    ASSERT_TRUE(db != NULL);
+    s = store_open(db, err, sizeof(err));
+    ASSERT_TRUE(s != NULL);
+
+    memset(&e, 0, sizeof(e));
+    ASSERT_EQ_INT((int)store_add(s, "old", k_hash_a, NULL, tags_ab, 2U, "human", &act, &e),
+                  (int)STORE_OK);
+    store_entry_free(&e);
+
+    /* Body-only: tags unchanged. */
+    ASSERT_EQ_INT(
+        (int)store_update(s, 1, NULL, true, "new", k_hash_b, false, NULL, 0U, &e, &conflict),
+        (int)STORE_OK);
+    ASSERT_STREQ(e.body, "new");
+    ASSERT_EQ_INT((int)e.ntags, 2);
+    ASSERT_STREQ(e.source, "human");
+    store_entry_free(&e);
+
+    /* Tags-only replace + clear path via empty set. */
+    ASSERT_EQ_INT((int)store_update(s, 1, NULL, false, NULL, NULL, true, tags_z, 1U, &e, &conflict),
+                  (int)STORE_OK);
+    ASSERT_STREQ(e.body, "new");
+    ASSERT_EQ_INT((int)e.ntags, 1);
+    ASSERT_STREQ(e.tags[0], "z");
+    store_entry_free(&e);
+
+    ASSERT_EQ_INT((int)store_update(s, 1, NULL, false, NULL, NULL, true, NULL, 0U, &e, &conflict),
+                  (int)STORE_OK);
+    ASSERT_EQ_INT((int)e.ntags, 0);
+    store_entry_free(&e);
+
+    /* Keyed locator; no body-hash conflict against keyless peer. */
+    ASSERT_EQ_INT((int)store_add(s, "peer", k_hash_c, NULL, NULL, 0U, "agent", &act, &e),
+                  (int)STORE_OK);
+    store_entry_free(&e);
+    ASSERT_EQ_INT((int)store_add(s, "slotv1", k_hash_a, "slot", NULL, 0U, "tool", &act, &e),
+                  (int)STORE_OK);
+    store_entry_free(&e);
+    ASSERT_EQ_INT(
+        (int)store_update(s, 0, "slot", true, "peer", k_hash_c, false, NULL, 0U, &e, &conflict),
+        (int)STORE_OK);
+    ASSERT_STREQ(e.body, "peer");
+    ASSERT_STREQ(e.key, "slot");
+    store_entry_free(&e);
+
+    /* Keyless conflict: cannot take another keyless hash. */
+    ASSERT_EQ_INT((int)store_add(s, "solo", k_hash_a, NULL, NULL, 0U, "unknown", &act, &e),
+                  (int)STORE_OK);
+    store_entry_free(&e);
+    ASSERT_EQ_INT(
+        (int)store_update(s, 1, NULL, true, "peer", k_hash_c, false, NULL, 0U, &e, &conflict),
+        (int)STORE_ERR_CONFLICT);
+    ASSERT_TRUE(conflict != 0);
+
+    store_close(s);
+    free(db);
+}
+
 TEST(store_delete_by_id_gcs_orphan_tags)
 {
     char *db = make_temp_db_path();
@@ -890,6 +960,20 @@ TEST(store_fault_injection_sweep)
         (void)store_delete_by_key(s, "k", &e);
         store_entry_free(&e);
 
+        {
+            long long conflict = 0;
+            const char *utags[] = {"u"};
+            store_test_fail_prepare_after(i % 9);
+            (void)store_update(s, 1, NULL, true, body, hash, true, utags, 1U, &e, &conflict);
+            store_entry_free(&e);
+            store_test_fail_step_after(i % 7);
+            (void)store_update(s, 0, "k", false, NULL, NULL, true, NULL, 0U, &e, &conflict);
+            store_entry_free(&e);
+            store_test_fail_alloc_after(i % 12);
+            (void)store_update(s, 1, NULL, true, body, hash, false, NULL, 0U, &e, &conflict);
+            store_entry_free(&e);
+        }
+
         store_test_fail_alloc_after(-1);
         store_test_fail_prepare_after(-1);
         store_test_fail_step_after(-1);
@@ -922,6 +1006,7 @@ void register_store_tests(void)
     RUN_TEST(store_open_rejects_non_database_file);
     RUN_TEST(store_close_null_is_safe);
     RUN_TEST(store_list_filters_and_paging);
+    RUN_TEST(store_update_body_and_tags);
     RUN_TEST(store_delete_by_id_gcs_orphan_tags);
     RUN_TEST(store_delete_by_key_missing);
 #ifdef REMEMBER_TEST_HOOKS

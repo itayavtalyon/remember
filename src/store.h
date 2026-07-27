@@ -1,6 +1,7 @@
 #ifndef REMEMBER_STORE_H
 #define REMEMBER_STORE_H
 
+#include <stdbool.h>
 #include <stddef.h>
 
 /*
@@ -21,7 +22,8 @@ typedef enum {
     STORE_ERR_SQLITE,
     STORE_ERR_OOM,
     STORE_ERR_INTERNAL,
-    STORE_ERR_QUERY /* invalid FTS5 MATCH syntax (search) */
+    STORE_ERR_QUERY,   /* invalid FTS5 MATCH syntax (search) */
+    STORE_ERR_CONFLICT /* keyless body-hash collision on update */
 } StoreStatus;
 
 /* Short ASCII label for st (no trailing newline). Never NULL. */
@@ -120,6 +122,26 @@ StoreStatus store_delete_by_id(Store *s, long long id, Entry *out_deleted);
 
 /* Same as store_delete_by_id, located by normalized key. */
 StoreStatus store_delete_by_key(Store *s, const char *key, Entry *out_deleted);
+
+/*
+ * Update one entry by id (id > 0, key_or_null NULL) or normalized key
+ * (key_or_null set; id ignored). set_body / set_tags are independent opt-ins;
+ * at least one must be true at the command layer. On success always refreshes
+ * updated_at (even when body/tags are unchanged) and re-syncs FTS in the same
+ * write transaction. Never changes source or key.
+ *
+ * Keyless body-hash conflict: if set_body and the entry has no key and another
+ * keyless row already owns body_hash → STORE_ERR_CONFLICT and, when
+ * out_conflict_id is non-NULL, the other entry's id. Keyed entries skip the
+ * hash uniqueness check.
+ *
+ * When set_tags is true, ntags==0 clears tags; otherwise tags replace the set.
+ * body / body_hash required when set_body; tags may be NULL when ntags==0.
+ */
+StoreStatus store_update(Store *s, long long id, const char *key_or_null, bool set_body,
+                         const char *body, const char *body_hash, bool set_tags,
+                         const char *const *tags, size_t ntags, Entry *out_entry,
+                         long long *out_conflict_id);
 
 /*
  * Test-only fault injection (compiled when REMEMBER_TEST_HOOKS is defined).

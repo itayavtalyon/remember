@@ -3,6 +3,7 @@
 #include "exit_codes.h"
 #include "normalize.h"
 #include "store.h"
+#include "util.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -191,4 +192,42 @@ int store_status_to_exit(StoreStatus st)
         return REMEMBER_ERR;
     }
     return REMEMBER_OK;
+}
+
+int load_body(const char *body_raw, char **out_body, size_t *out_len, const char **err)
+{
+    char *stdin_body = NULL;
+    size_t stdin_len = 0U;
+    NormStatus ns;
+
+    *out_body = NULL;
+    *out_len = 0U;
+    *err = NULL;
+
+    if (body_raw == NULL) {
+        *err = "missing body";
+        return -1;
+    }
+    if (strcmp(body_raw, "-") == 0) {
+        /* Read with a generous hard cap; body_trim_copy enforces the real
+           post-trim 64 KiB limit, so stdin and argv reject identically. */
+        int rr = util_read_stdin(&stdin_body, &stdin_len, REMEMBER_STDIN_MAX);
+        if (rr == -2) {
+            *err = "stdin input too large";
+            return -1;
+        }
+        if (rr != 0 || stdin_body == NULL) {
+            *err = "failed to read body from stdin";
+            return -1;
+        }
+        ns = body_trim_copy(stdin_body, stdin_len, out_body, out_len);
+        free(stdin_body);
+    } else {
+        ns = body_trim_copy(body_raw, strlen(body_raw), out_body, out_len);
+    }
+    if (ns != NORM_OK) {
+        *err = norm_body_message(ns);
+        return -1;
+    }
+    return 0;
 }

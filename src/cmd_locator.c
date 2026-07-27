@@ -200,3 +200,240 @@ int cmd_delete(Store *s, bool json, int rest_argc, const char **rest_argv)
     store_entry_free(&entry);
     return REMEMBER_OK;
 }
+
+/* ---- update: locator + opt-in --text / --tag / --clear-tags ------------- */
+
+typedef struct {
+    LocatorParse loc;
+    const char *text_raw;
+    bool set_text;
+    bool clear_tags;
+    const char **tag_raw;
+    size_t ntag_raw;
+} UpdateParse;
+
+static void update_parse_free(UpdateParse *p)
+{
+    free((void *)p->tag_raw);
+    p->tag_raw = NULL;
+    p->ntag_raw = 0U;
+}
+
+/* Returns: 1 end-opts, 0 handled flag, 2 positional, -1 error. */
+static int handle_update_flag(const char *arg, int *i, int rest_argc, const char **rest_argv,
+                              UpdateParse *out, size_t *tag_cap, const char **err)
+{
+    if (strcmp(arg, "--") == 0) {
+        return 1;
+    }
+    if (strcmp(arg, "--key") == 0) {
+        return take_value(i, rest_argc, rest_argv, &out->loc.key_raw, err,
+                          "missing value for --key");
+    }
+    if (strcmp(arg, "--text") == 0) {
+        if (take_value(i, rest_argc, rest_argv, &out->text_raw, err, "missing value for --text") !=
+            0) {
+            return -1;
+        }
+        out->set_text = true;
+        return 0;
+    }
+    if (strcmp(arg, "--tag") == 0) {
+        const char *t = NULL;
+        if (take_value(i, rest_argc, rest_argv, &t, err, "missing value for --tag") != 0) {
+            return -1;
+        }
+        if (push_cstr_ptr(&out->tag_raw, &out->ntag_raw, tag_cap, t) != 0) {
+            *err = "out of memory";
+            return -1;
+        }
+        return 0;
+    }
+    if (strcmp(arg, "--clear-tags") == 0) {
+        out->clear_tags = true;
+        return 0;
+    }
+    if (strcmp(arg, "--source") == 0) {
+        *err = "--source is only valid on add";
+        return -1;
+    }
+    if (arg[0] == '-' && arg[1] != '\0') {
+        (void)fprintf(stderr, "remember: unknown option '%s'\n", arg);
+        *err = "";
+        return -1;
+    }
+    return 2;
+}
+
+static int parse_update_args(int rest_argc, const char **rest_argv, UpdateParse *out,
+                             const char **err)
+{
+    int i;
+    int end_opts = 0;
+    size_t tag_cap = 0U;
+
+    out->loc.key_raw = NULL;
+    out->loc.id_raw = NULL;
+    out->text_raw = NULL;
+    out->set_text = false;
+    out->clear_tags = false;
+    out->tag_raw = NULL;
+    out->ntag_raw = 0U;
+    *err = NULL;
+
+    for (i = 0; i < rest_argc; i++) {
+        const char *arg = rest_argv[i];
+
+        if (!end_opts) {
+            int kind = handle_update_flag(arg, &i, rest_argc, rest_argv, out, &tag_cap, err);
+            if (kind == 1) {
+                end_opts = 1;
+                continue;
+            }
+            if (kind == 0) {
+                continue;
+            }
+            if (kind < 0) {
+                return -1;
+            }
+        }
+        if (out->loc.id_raw != NULL) {
+            *err = "too many arguments";
+            return -1;
+        }
+        out->loc.id_raw = arg;
+    }
+    return 0;
+}
+
+static int update_validate_changes(const UpdateParse *p, const char **err)
+{
+    if (p->clear_tags && p->ntag_raw > 0U) {
+        *err = "cannot combine --tag and --clear-tags";
+        return -1;
+    }
+    if (!p->set_text && !p->clear_tags && p->ntag_raw == 0U) {
+        *err = "update requires --text, --tag, or --clear-tags";
+        return -1;
+    }
+    return 0;
+}
+
+static int emit_update_result(bool json, const Entry *entry)
+{
+    if (json) {
+        if (output_action_envelope(stdout, "updated", entry) != 0) {
+            err_msg("failed to write output");
+            return -1;
+        }
+        return 0;
+    }
+    if (output_id_human(stdout, entry->id) != 0) {
+        err_msg("failed to write output");
+        return -1;
+    }
+    return 0;
+}
+
+/* Normalize optional body/tags from parse; returns -1 after err_msg on failure. */
+static int update_prepare_payload(const UpdateParse *parsed, char **body, size_t *body_len,
+                                  char *hash, char ***tags_norm, size_t *ntags, bool *set_tags)
+{
+    const char *err = NULL;
+
+    *set_tags = false;
+    if (parsed->clear_tags) {
+        *set_tags = true;
+    }
+    if (parsed->ntag_raw > 0U) {
+        *set_tags = true;
+    }
+
+    if (parsed->set_text) {
+        if (load_body(parsed->text_raw, body, body_len, &err) != 0) {
+            err_msg(err);
+            return -1;
+        }
+        body_hash_hex(*body, *body_len, hash);
+    }
+    if (parsed->ntag_raw > 0U) {
+        if (normalize_tags((const char *const *)parsed->tag_raw, parsed->ntag_raw, tags_norm, ntags,
+                           &err) != 0) {
+            err_msg(err);
+            return -1;
+        }
+    }
+    return 0;
+}
+
+int cmd_update(Store *s, bool json, int rest_argc, const char **rest_argv)
+{
+    UpdateParse parsed;
+    const char *err = NULL;
+    char key_norm[REMEMBER_TOKEN_MAX + 1];
+    const char *key_or_null = NULL;
+    long long id = 0;
+    char **tags_norm = NULL;
+    size_t ntags = 0U;
+    char *body = NULL;
+    size_t body_len = 0U;
+    char hash[REMEMBER_SHA256_HEX_LEN + 1];
+    bool set_tags = false;
+    const char *body_hash = NULL;
+    Entry entry;
+    StoreStatus st;
+    long long conflict_id = 0;
+    int rc = REMEMBER_ERR;
+
+    memset(&entry, 0, sizeof(entry));
+    memset(key_norm, 0, sizeof(key_norm));
+    memset(hash, 0, sizeof(hash));
+
+    if (parse_update_args(rest_argc, rest_argv, &parsed, &err) != 0) {
+        if (err != NULL && err[0] != '\0') {
+            err_msg(err);
+        }
+        update_parse_free(&parsed);
+        return REMEMBER_ERR;
+    }
+    if (locator_validate(&parsed.loc) != 0 || update_validate_changes(&parsed, &err) != 0) {
+        if (err != NULL) {
+            err_msg(err);
+        }
+        update_parse_free(&parsed);
+        return REMEMBER_ERR;
+    }
+    if (locator_resolve(&parsed.loc, key_norm, sizeof(key_norm), &key_or_null, &id) != 0) {
+        update_parse_free(&parsed);
+        return REMEMBER_ERR;
+    }
+    if (update_prepare_payload(&parsed, &body, &body_len, hash, &tags_norm, &ntags, &set_tags) !=
+        0) {
+        goto cleanup;
+    }
+    if (parsed.set_text) {
+        body_hash = hash;
+    }
+
+    st = store_update(s, id, key_or_null, parsed.set_text, body, body_hash, set_tags,
+                      (const char *const *)tags_norm, ntags, &entry, &conflict_id);
+    if (st == STORE_ERR_CONFLICT) {
+        (void)fprintf(stderr, "remember: body hash conflicts with entry %lld\n", conflict_id);
+        goto cleanup;
+    }
+    if (st != STORE_OK) {
+        rc = store_status_to_exit(st);
+        goto cleanup;
+    }
+    if (emit_update_result(json, &entry) != 0) {
+        goto cleanup;
+    }
+    rc = REMEMBER_OK;
+
+cleanup:
+    update_parse_free(&parsed);
+    free(body);
+    free_tag_list(tags_norm, ntags);
+    store_entry_free(&entry);
+    return rc;
+}

@@ -6,7 +6,6 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
-#include <unistd.h>
 
 /*
  * Design log Verification Criteria 21–34 and related FTS/GC edges.
@@ -149,19 +148,24 @@ TEST(keyless_merge_keeps_created_at)
     p = (g1.out != NULL) ? strstr(g1.out, "\"created_at\":\"") : NULL;
     ASSERT_TRUE(p != NULL);
     if (p != NULL) {
+        const char *end;
         p += strlen("\"created_at\":\"");
-        created1 = malloc(21);
+        end = strchr(p, '"');
+        created1 = malloc(32);
         ASSERT_TRUE(created1 != NULL);
         if (created1 != NULL) {
-            (void)snprintf(created1, 21, "%.20s", p);
+            created1[0] = '\0';
+            if (end != NULL) {
+                (void)snprintf(created1, 32, "%.*s", (int)(end - p), p);
+            }
         }
     }
     cmd_result_free(&g1);
-    if (created1 == NULL) {
+    if (created1 == NULL || created1[0] == '\0') {
+        free(created1);
         free(db);
         return;
     }
-    (void)sleep(1); /* ensure updated_at can move */
     r = run_remember(db, a2, 5, NULL);
     ASSERT_EQ_INT(r.exit_code, 0);
     cmd_result_free(&r);
@@ -194,15 +198,18 @@ TEST(update_preserves_id_key_source_created_at)
     p = (r.out != NULL) ? strstr(r.out, "\"created_at\":\"") : NULL;
     ASSERT_TRUE(p != NULL);
     if (p != NULL) {
+        const char *end;
         p += strlen("\"created_at\":\"");
-        (void)snprintf(created, sizeof(created), "%.20s", p);
+        end = strchr(p, '"');
+        if (end != NULL) {
+            (void)snprintf(created, sizeof(created), "%.*s", (int)(end - p), p);
+        }
     }
     cmd_result_free(&r);
     if (created[0] == '\0') {
         free(db);
         return;
     }
-    (void)sleep(1);
     u = run_remember(db, uargs, 6, NULL);
     ASSERT_EQ_INT(u.exit_code, 0);
     ASSERT_STR_CONTAINS(u.out, "\"id\":1");
@@ -602,9 +609,8 @@ TEST(json_add_error_empty_stdout)
 }
 
 /*
- * Green verification criteria through step 05 (add + get/list/delete edges).
- * Suite name `verification_gld` = get/list/delete slice. Remaining
- * verification_edges stay mixed with later-step red cases (update/search).
+ * Green verification criteria through step 07 (add/get/list/delete/update edges).
+ * Suite name `verification_gld` kept for historical continuity.
  */
 void register_verification_gld_tests(void)
 {
@@ -618,6 +624,9 @@ void register_verification_gld_tests(void)
     RUN_TEST(json_add_error_empty_stdout);
     RUN_TEST(get_rejects_source_flag);
     RUN_TEST(delete_rejects_source_flag);
+    RUN_TEST(update_rejects_source_flag);
+    RUN_TEST(update_preserves_id_key_source_created_at);
+    RUN_TEST(update_invalid_utf8_text_rejected);
     RUN_TEST(schema_user_version_too_new_refused);
     RUN_TEST(json_get_missing_empty_stdout);
     RUN_TEST(human_list_preview_first_line_only);
@@ -628,13 +637,13 @@ void register_verification_gld_tests(void)
 }
 
 /*
- * Green FTS / search verification through step 06.
- * fts_search_reflects_body_update stays red until update (step 07).
+ * Green FTS / search verification through step 07 (includes body-update resync).
  */
 void register_verification_search_tests(void)
 {
     RUN_TEST(fts_search_empty_after_delete);
     RUN_TEST(fts_search_reflects_keyed_upsert);
+    RUN_TEST(fts_search_reflects_body_update);
     RUN_TEST(search_finds_compound_tag_component);
     RUN_TEST(search_diacritics_folded);
     RUN_TEST(search_unbalanced_quote_rejected);
@@ -642,9 +651,7 @@ void register_verification_search_tests(void)
 
 void register_verification_edges_tests(void)
 {
-    /* Still red until update lands (step 07). */
-    RUN_TEST(update_rejects_source_flag);
-    RUN_TEST(update_preserves_id_key_source_created_at);
-    RUN_TEST(fts_search_reflects_body_update);
-    RUN_TEST(update_invalid_utf8_text_rejected);
+    /* Full edges suite once later-step reds have been promoted. */
+    register_verification_gld_tests();
+    register_verification_search_tests();
 }
