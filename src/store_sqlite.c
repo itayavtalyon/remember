@@ -505,12 +505,9 @@ static int utc_now(char *buf, size_t buflen)
     if (n == 0U) {
         return -1;
     }
-    ms = (int)(ts.tv_nsec / 1000000); /* nanoseconds → [0,999] ms, narrowing cast */
-    if (ms < 0) {
-        ms = 0;
-    } else if (ms > 999) {
-        ms = 999;
-    }
+    /* C11: timespec_get(TIME_UTC) yields tv_nsec in [0, 999999999], so
+       nsec/1e6 is always in [0, 999] — no clamp branches (coverage-dead). */
+    ms = (int)(ts.tv_nsec / 1000000);
     if (snprintf(buf + n, buflen - n, ".%03dZ", ms) != 5) {
         return -1;
     }

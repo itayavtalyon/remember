@@ -6,6 +6,12 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+/* mkdtemp: Darwin declares it in unistd.h; glibc via stdlib.h + _POSIX_C_SOURCE
+ * (remember_apply_posix_feature_macros on Linux). Unconditional unistd breaks
+ * Linux clang-tidy include-cleaner; Apple-only matches test_schema_config.c. */
+#ifdef __APPLE__
+#include <unistd.h>
+#endif
 
 /*
  * Design log Verification Criteria 21–34 and related FTS/GC edges.
