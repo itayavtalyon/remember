@@ -393,9 +393,8 @@ TEST(update_both_id_and_key_rejected)
 }
 
 /*
- * Green key surface through step 05 (add/get/list/delete by key).
- * Suite name `key_gld` = get/list/delete (+ keyed add). WIP update/search stay
- * in `key` until steps 06/07.
+ * Green key surface through step 07 (add/get/list/delete/update/search by key).
+ * Suite name `key_gld` kept for historical continuity (get/list/delete origin).
  */
 void register_key_gld_tests(void)
 {
@@ -414,13 +413,14 @@ void register_key_gld_tests(void)
     RUN_TEST(list_filter_by_key);
     RUN_TEST(search_filter_by_key);
     RUN_TEST(delete_by_key_missing_exits_two);
-}
-
-/* WIP: update by key — red until step 07. */
-void register_key_tests(void)
-{
     RUN_TEST(update_by_key_text);
     RUN_TEST(update_keyed_no_body_hash_conflict);
     RUN_TEST(update_by_key_missing_exits_two);
     RUN_TEST(update_both_id_and_key_rejected);
+}
+
+/* Full key suite (same as key_gld once step 07 landed). */
+void register_key_tests(void)
+{
+    register_key_gld_tests();
 }

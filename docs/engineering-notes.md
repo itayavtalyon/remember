@@ -19,9 +19,9 @@ Update after each step review.
 - **CLI layers:** `cli_parse` (pure argv → `CliArgs`) / `main` (I/O + exit codes) / later `commands_*` / `output` as needed.
 - **Normalize + hash (pure):** `normalize.c` / `normalize.h` — no I/O, no store/cli. Body trim + UTF-8 + size; shared `normalize_token` for tag and key; `body_hash_hex` (lowercase SHA-256). SHA-256 amalgamation in `third_party/sha256/` (Brad Conte public domain); only `normalize.c` includes `sha256.h`.
 - **Commands layer:** public `commands.h` only. Implementation is split by **concern axis**, not one file per subcommand:
-  - `commands_common.c` / `commands_common.h` — internal shared helpers (err messages, tag normalize, argv helpers). **Not** a public API; only `cmd_*.c` include it.
-  - `cmd_add.c` — write path (body load, key/tags, `store_add`).
-  - `cmd_locator.c` — get + delete (shared id/`--key` locator).
+  - `commands_common.c` / `commands_common.h` — internal shared helpers (err messages, tag normalize, argv helpers, `load_body`). **Not** a public API; only `cmd_*.c` include it.
+  - `cmd_add.c` — write path (key/tags, `store_add`; body via shared `load_body`).
+  - `cmd_locator.c` — get + delete + update (shared id/`--key` locator; update adds `--text`/`--tag`/`--clear-tags`).
   - `cmd_query.c` — list + search (shared filter/paging parse; different store call).
   - Orchestration is still normalize → `store_*` → `output_*`. No SQL. Norm errors map via full phrases (`empty body after trim`, …), not bare `norm_status_string` labels.
 - **Output:** `output.c` owns JSON escaping (RFC 8259) and envelopes; human `add` prints id only; human `get` uses `output_body_human` (terminal C0/DEL → `?`, keep `\n`/`\t`); human list previews also neutralize controls. Never raw-`fputs` a stored body to a TTY.
@@ -29,11 +29,15 @@ Update after each step review.
 - **`store_add`:** keyless body-hash merge (union tags, keep source/created_at/body) or keyed upsert (replace body, union tags, keep source/created_at/key). FTS resync in the same transaction.
 - **`store_list`:** takes `ListQuery` (tags AND via EXISTS, optional `source`/`key`, `limit`/`offset`). Sort `updated_at DESC, id DESC`. CLI owns default limit 20 / max 1000 / offset ≥ 0 and a **tag-filter cap** (`LIST_TAG_FILTER_MAX` 50) under the store bind budget (`LIST_BIND_CAP`); store uses values as given. COUNT + paged SELECT run in **one read transaction** so empty pages still report unpaged `total`.
 - **`store_delete_by_id` / `store_delete_by_key`:** one write txn: load snapshot → FTS delete → `DELETE entries` (CASCADE `entry_tags`) → orphan-tag GC → COMMIT. Snapshot returned for JSON `action:deleted` matches the locked row.
-- **Locator (get/delete):** shared parse in `cmd_locator.c` — exactly one of positional id / `--key`; reject `--source`.
-- **Stable exit codes:** `0` ok, `1` usage/error, `2` not found. Scaffold NYI remains private for still-unimplemented commands (`update`).
+- **Locator (get/delete/update):** shared validate/resolve in `cmd_locator.c` — exactly one of positional id / `--key`; reject `--source`. Update adds its own flag parse (`--text`/`--tag`/`--clear-tags`) on top of the same locator contract.
+- **Stable exit codes:** `0` ok, `1` usage/error, `2` not found. All planned subcommands are implemented (no public NYI exit).
 - **`store_search`:** `SearchQuery` = FTS MATCH string + embedded `ListQuery` filters (tag AND / source / key / limit / offset). Shared SQL filter builder with list (`list_append_filters`). Rank `bm25(entries_fts)` then `updated_at DESC, id DESC`. **FTS5 requires the real table name** in `MATCH`/`bm25()` — aliases fail (`no such column`). Invalid FTS syntax → `STORE_ERR_QUERY` ("invalid search query"). COUNT + page in one read txn (same empty-page total contract as list).
 - **CLI search:** same filter/paging parse path as list (`cmd_query.c`) + one required QUERY positional. Outer ASCII whitespace is trimmed (same set as normalize: space/tab/LF/CR/VT/FF); empty-after-trim → usage error `"empty search query"` (not FTS). Trimmed string is the FTS MATCH input (not tag/key-normalized). Human preview via `output_entry_human_line` (≤80 codepoints); JSON full bodies via `output_list_envelope`.
-- **Gate suites (step 06):** `search`, `verification_search` (FTS green edges), `search_filter_by_key` folded into `key_gld`. `fts_search_reflects_body_update` stays red until step 07.
+- **`store_update`:** locate by id or key; independent `set_body` / `set_tags` flags; always bump `updated_at` on success; FTS resync in the same write txn. Keyless body-hash collision → `STORE_ERR_CONFLICT` + conflicting id (CLI prints it on stderr). Tag replace deletes `entry_tags` then re-links + orphan GC. Never changes `source` or `key`.
+- **CLI update:** lives in `cmd_locator.c` (same id/`--key` contract as get/delete) + opt-in `--text` / `--tag` / `--clear-tags`. Body load via shared `load_body` in `commands_common` (add + update). No positional body; `--source` rejected.
+- **Gate suites (step 07):** `update`, `key_gld` (keyed update cases), `verification_gld` (update edges), `verification_search` includes `fts_search_reflects_body_update`.
+- **Timestamps (public contract, step 07 / design Round 9):** `utc_now` writes ISO-8601 UTC with a **fixed 3-digit millisecond** fraction: `YYYY-MM-DDTHH:MM:SS.mmmZ` (via C11 `timespec_get` + `gmtime`). Always pad `.mmm` so string sort equals chronological order for `updated_at DESC, id DESC`. Prefer this over `sleep(1)` when tests assert bumps or list order. Do **not** parse as a fixed 20-char second stamp — use quote-delimited field extract or a real ISO parser. Documented in `design-logs/001-foundations.md` Round 9. C11 `timespec_get(TIME_UTC)` already bounds `tv_nsec` to `[0, 999999999]` — do not add clamp branches that coverage cannot hit.
+- **Test POSIX includes on Darwin:** `mkdtemp` is in `unistd.h` on macOS; on Linux it is in `stdlib.h` when `_POSIX_C_SOURCE` is set. Prefer `#ifdef __APPLE__` + `unistd.h` for TUs that only need `mkdtemp` (see `test_schema_config.c` / `test_verification_edges.c`) — unconditional `unistd.h` fails Linux clang-tidy `misc-include-cleaner`.
 
 ### Lessons: when/how to split a growing commands module
 

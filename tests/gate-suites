@@ -1,4 +1,4 @@
 # Comma-separated suite list for the green gate (remember_tests --only).
 # Single source of truth for CMake step_gate, scripts/ci-linux.sh, and GitHub Actions.
 # Update this line when a step lands more green suites so CI grows with the code.
-cli_global,store,normalize,add,get_list_delete,search,json_db_config,key_gld,verification_gld,verification_search,coverage_edges
+cli_global,store,normalize,add,get_list_delete,search,update,json_db_config,key_gld,verification_gld,verification_search,coverage_edges

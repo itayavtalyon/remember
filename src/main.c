@@ -11,9 +11,6 @@
 #define REMEMBER_VERSION "0.1.0"
 #endif
 
-/* Scaffold only — not part of the stable exit-code contract (0/1/2). */
-#define REMEMBER_NYI 3
-
 static void print_version(void)
 {
     (void)printf("remember %s\n", REMEMBER_VERSION);
@@ -73,6 +70,18 @@ static void print_command_help(CliCommand topic)
         (void)printf("\n");
         (void)printf("Exactly one of ID or --key is required.\n");
         (void)printf("\n");
+    } else if (topic == CLI_CMD_UPDATE) {
+        (void)printf("Options:\n");
+        (void)printf("  ID              Entry id (positional)\n");
+        (void)printf("  --key KEY       Locate by key instead of id\n");
+        (void)printf("  --text BODY|-   New body text, or - for stdin\n");
+        (void)printf("  --tag TAG       Replace tag set (repeatable)\n");
+        (void)printf("  --clear-tags    Clear all tags\n");
+        (void)printf("\n");
+        (void)printf("Exactly one of ID or --key is required.\n");
+        (void)printf("At least one of --text, --tag, or --clear-tags is required.\n");
+        (void)printf("Cannot combine --tag with --clear-tags.\n");
+        (void)printf("\n");
     } else if (topic == CLI_CMD_LIST) {
         (void)printf("Options:\n");
         (void)printf("  --tag TAG       Require tag (repeatable; AND)\n");
@@ -122,12 +131,6 @@ static void print_parse_error(const CliArgs *args)
         break;
     }
     (void)fprintf(stderr, "remember: %s\n", base);
-}
-
-static int dispatch_nyi(const char *name)
-{
-    (void)fprintf(stderr, "remember: command '%s' is not implemented yet\n", name);
-    return REMEMBER_NYI;
 }
 
 /* Resolve --db / env / default and open. On failure prints and sets *out_rc. */
@@ -198,7 +201,7 @@ static int run(const CliArgs *args)
     case CLI_CMD_SEARCH:
         return run_with_store(args, cmd_search);
     case CLI_CMD_UPDATE:
-        return dispatch_nyi("update");
+        return run_with_store(args, cmd_update);
     case CLI_CMD_NONE:
         /* Usually set with CLI_ERR_MISSING_COMMAND (handled above); keep distinct. */
         (void)fprintf(stderr, "remember: %s\n", cli_error_message(CLI_ERR_MISSING_COMMAND));

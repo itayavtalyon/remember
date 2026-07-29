@@ -380,15 +380,49 @@ TEST(search_empty_query_stderr)
     free(db);
 }
 
-TEST(update_nyi_exits_three)
+TEST(help_update_topic)
 {
     char *db = make_temp_db_path();
-    const char *args[] = {"update", "1", "--text", "x"};
+    const char *args[] = {"help", "update"};
     CmdResult r;
     ASSERT_TRUE(db != NULL);
-    r = run_remember(db, args, 4, NULL);
-    ASSERT_EQ_INT(r.exit_code, 3);
+    r = run_remember(db, args, 2, NULL);
+    ASSERT_EQ_INT(r.exit_code, 0);
+    ASSERT_STR_CONTAINS(r.out, "--text");
+    ASSERT_STR_CONTAINS(r.out, "--clear-tags");
     cmd_result_free(&r);
+    free(db);
+}
+
+TEST(update_missing_text_value_rejected)
+{
+    char *db = make_temp_db_path();
+    const char *a[] = {"add", "body"};
+    const char *uargs[] = {"update", "1", "--text"};
+    CmdResult r;
+    CmdResult u;
+    ASSERT_TRUE(db != NULL);
+    r = run_remember(db, a, 2, NULL);
+    cmd_result_free(&r);
+    u = run_remember(db, uargs, 3, NULL);
+    ASSERT_EQ_INT(u.exit_code, 1);
+    cmd_result_free(&u);
+    free(db);
+}
+
+TEST(update_invalid_id_token_rejected)
+{
+    char *db = make_temp_db_path();
+    const char *a[] = {"add", "body"};
+    const char *uargs[] = {"update", "not-a-number", "--text", "x"};
+    CmdResult r;
+    CmdResult u;
+    ASSERT_TRUE(db != NULL);
+    r = run_remember(db, a, 2, NULL);
+    cmd_result_free(&r);
+    u = run_remember(db, uargs, 4, NULL);
+    ASSERT_EQ_INT(u.exit_code, 1);
+    cmd_result_free(&u);
     free(db);
 }
 
@@ -895,7 +929,9 @@ void register_coverage_edges_tests(void)
     RUN_TEST(cli_parse_end_opts_then_subcommand_token);
     RUN_TEST(norm_status_string_unknown);
     RUN_TEST(search_empty_query_stderr);
-    RUN_TEST(update_nyi_exits_three);
+    RUN_TEST(help_update_topic);
+    RUN_TEST(update_missing_text_value_rejected);
+    RUN_TEST(update_invalid_id_token_rejected);
     RUN_TEST(help_get_list_delete_topics);
     RUN_TEST(add_json_body_with_all_json_escapes);
     RUN_TEST(list_invalid_source_rejected);

@@ -3,6 +3,7 @@
 #include "sqlite3.h"
 
 #include <errno.h>
+#include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -424,6 +425,8 @@ const char *store_status_message(StoreStatus st)
         return "internal error";
     case STORE_ERR_QUERY:
         return "invalid search query";
+    case STORE_ERR_CONFLICT:
+        return "body hash conflict";
     default:
         return "store error";
     }
@@ -473,28 +476,39 @@ static char *dup_str(const char *s)
     return p;
 }
 
-/* ISO-8601 UTC second precision, e.g. 2026-07-24T12:00:00Z (20 chars + NUL).
- * Uses gmtime (not gmtime_r): single-threaded CLI; gmtime_r is POSIX-only and
- * vanishes under pure -std=c11 without feature-test macros (Linux IWYU). */
+/* ISO-8601 UTC millisecond precision, e.g. 2026-07-24T12:00:00.123Z (24 chars +
+ * NUL). The 3-digit fraction is fixed-width so lexicographic order equals
+ * chronological order (list/search sort on these strings), and sub-second
+ * resolution keeps updated_at monotonic across writes within one second.
+ * timespec_get with TIME_UTC is ISO C11 (no POSIX feature macros); gmtime (not
+ * gmtime_r) is fine for a single-threaded CLI. */
 static int utc_now(char *buf, size_t buflen)
 {
-    time_t t;
+    struct timespec ts;
     const struct tm *tmp;
     struct tm tm;
+    size_t n;
+    int ms;
 
-    if (buf == NULL || buflen < 21U) {
+    if (buf == NULL || buflen < 25U) {
         return -1;
     }
-    t = time(NULL);
-    if (t == (time_t)-1) {
+    if (timespec_get(&ts, TIME_UTC) != TIME_UTC) {
         return -1;
     }
-    tmp = gmtime(&t);
+    tmp = gmtime(&ts.tv_sec);
     if (tmp == NULL) {
         return -1;
     }
     tm = *tmp;
-    if (strftime(buf, buflen, "%Y-%m-%dT%H:%M:%SZ", &tm) == 0U) {
+    n = strftime(buf, buflen, "%Y-%m-%dT%H:%M:%S", &tm);
+    if (n == 0U) {
+        return -1;
+    }
+    /* C11: timespec_get(TIME_UTC) yields tv_nsec in [0, 999999999], so
+       nsec/1e6 is always in [0, 999] — no clamp branches (coverage-dead). */
+    ms = (int)(ts.tv_nsec / 1000000);
+    if (snprintf(buf + n, buflen - n, ".%03dZ", ms) != 5) {
         return -1;
     }
     return 0;
@@ -1723,4 +1737,170 @@ StoreStatus store_delete_by_key(Store *s, const char *key, Entry *out_deleted)
         return STORE_ERR_INTERNAL;
     }
     return delete_entry_tx(s, 0, key, out_deleted);
+}
+
+/* Drop all entry_tags for entry_id, then link the new set (ntags may be 0). */
+static StoreStatus replace_tags(sqlite3 *db, long long entry_id, const char *const *tags,
+                                size_t ntags)
+{
+    sqlite3_stmt *del = NULL;
+    StoreStatus st;
+    int rc;
+
+    rc = sqlite3_prepare_v2(db, "DELETE FROM entry_tags WHERE entry_id = ?1;", -1, &del, NULL);
+    if (rc != SQLITE_OK) {
+        return STORE_ERR_SQLITE;
+    }
+    (void)sqlite3_bind_int64(del, 1, entry_id);
+    if (sqlite3_step(del) != SQLITE_DONE) {
+        (void)sqlite3_finalize(del);
+        return STORE_ERR_SQLITE;
+    }
+    (void)sqlite3_finalize(del);
+
+    st = union_tags(db, entry_id, tags, ntags);
+    if (st != STORE_OK) {
+        return st;
+    }
+    return gc_orphan_tags(db);
+}
+
+static StoreStatus update_check_args(const Store *s, long long id, const char *key_or_null,
+                                     bool set_body, const char *body, const char *body_hash,
+                                     bool set_tags, const char *const *tags, size_t ntags,
+                                     const Entry *out_entry)
+{
+    if (s == NULL || s->db == NULL || out_entry == NULL) {
+        return STORE_ERR_INTERNAL;
+    }
+    if (!set_body && !set_tags) {
+        return STORE_ERR_INTERNAL;
+    }
+    if (set_body && (body == NULL || body_hash == NULL)) {
+        return STORE_ERR_INTERNAL;
+    }
+    if (set_tags && ntags > 0U && tags == NULL) {
+        return STORE_ERR_INTERNAL;
+    }
+    if (key_or_null == NULL && id < 1) {
+        return STORE_ERR_INTERNAL;
+    }
+    return STORE_OK;
+}
+
+/* Keyless body-hash uniqueness: conflict if another keyless row owns body_hash. */
+static StoreStatus update_check_body_conflict(sqlite3 *db, long long entry_id, bool is_keyless,
+                                              const char *body_hash, long long *out_conflict_id)
+{
+    long long other_id = 0;
+    StoreStatus st;
+
+    if (!is_keyless) {
+        return STORE_OK;
+    }
+    st = find_keyless_by_hash(db, body_hash, &other_id);
+    if (st == STORE_ERR_NOT_FOUND) {
+        return STORE_OK;
+    }
+    if (st != STORE_OK) {
+        return st;
+    }
+    if (other_id == entry_id) {
+        return STORE_OK;
+    }
+    if (out_conflict_id != NULL) {
+        *out_conflict_id = other_id;
+    }
+    return STORE_ERR_CONFLICT;
+}
+
+/* Apply body and/or tag changes and always refresh updated_at. */
+static StoreStatus update_apply_changes(sqlite3 *db, long long entry_id, bool is_keyless,
+                                        bool set_body, const char *body, const char *body_hash,
+                                        bool set_tags, const char *const *tags, size_t ntags,
+                                        const char *now, long long *out_conflict_id)
+{
+    StoreStatus st;
+
+    if (set_body) {
+        st = update_check_body_conflict(db, entry_id, is_keyless, body_hash, out_conflict_id);
+        if (st != STORE_OK) {
+            return st;
+        }
+        st = replace_body(db, entry_id, body, body_hash, now);
+    } else {
+        st = touch_updated_at(db, entry_id, now);
+    }
+    if (st != STORE_OK) {
+        return st;
+    }
+    if (set_tags) {
+        st = replace_tags(db, entry_id, tags, ntags);
+        if (st != STORE_OK) {
+            return st;
+        }
+    }
+    return fts_resync(db, entry_id);
+}
+
+StoreStatus store_update(Store *s, long long id, const char *key_or_null, bool set_body,
+                         const char *body, const char *body_hash, bool set_tags,
+                         const char *const *tags, size_t ntags, Entry *out_entry,
+                         long long *out_conflict_id)
+{
+    char now[32];
+    char err_unused[1];
+    StoreStatus st;
+    Entry current;
+    long long entry_id;
+    bool is_keyless;
+
+    if (out_conflict_id != NULL) {
+        *out_conflict_id = 0;
+    }
+    st = update_check_args(s, id, key_or_null, set_body, body, body_hash, set_tags, tags, ntags,
+                           out_entry);
+    if (st != STORE_OK) {
+        return st;
+    }
+    if (utc_now(now, sizeof(now)) != 0) {
+        return STORE_ERR_INTERNAL;
+    }
+
+    memset(&current, 0, sizeof(current));
+    memset(out_entry, 0, sizeof(*out_entry));
+
+    if (exec_sql(s->db, "BEGIN IMMEDIATE;", err_unused, 0U) != 0) {
+        return STORE_ERR_SQLITE;
+    }
+
+    if (key_or_null != NULL) {
+        st = load_entry_by_key(s->db, key_or_null, &current);
+    } else {
+        st = load_entry_by_id(s->db, id, &current);
+    }
+    if (st != STORE_OK) {
+        rollback_quiet(s->db);
+        return st;
+    }
+    entry_id = current.id;
+    is_keyless = (current.key == NULL);
+
+    st = update_apply_changes(s->db, entry_id, is_keyless, set_body, body, body_hash, set_tags,
+                              tags, ntags, now, out_conflict_id);
+    if (st != STORE_OK) {
+        store_entry_free(&current);
+        rollback_quiet(s->db);
+        return st;
+    }
+
+    if (exec_sql(s->db, "COMMIT;", err_unused, 0U) != 0) {
+        store_entry_free(&current);
+        rollback_quiet(s->db);
+        return STORE_ERR_SQLITE;
+    }
+    store_entry_free(&current);
+
+    /* Durable past COMMIT; snapshot failure does not lose the write. */
+    return load_entry_by_id(s->db, entry_id, out_entry);
 }

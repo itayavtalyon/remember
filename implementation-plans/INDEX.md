@@ -27,7 +27,7 @@ main → cli_parse → commands.h (cmd_add | cmd_locator | cmd_query) → store_
 | 04 | [add](04-add.md) | All `add_*` + key add/upsert tests green ✅ |
 | 05 | [get / list / delete](05-get-list-delete.md) | get/list/delete + paging + key locator tests green ✅ |
 | 06 | [search FTS](06-search-fts.md) | All search_* + search key filter green ✅ |
-| 07 | [update](07-update.md) | All update_* + keyed update green |
+| 07 | [update](07-update.md) | All update_* + keyed update green ✅ |
 | 08 | [Lint + format toolchain](08-lint-format.md) | `lint` + `format` targets work; src clean |
 | 09 | [Polish](09-polish.md) | Help text, defaults dir 0700, warnings, remaining config tests |
 | 10 | [Skill + dogfood](10-skill.md) | `skills/remember/SKILL.md` matches CLI |

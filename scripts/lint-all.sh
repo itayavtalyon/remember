@@ -215,9 +215,19 @@ if [[ "${REMEMBER_SCAN_BUILD:-0}" == "1" || "$in_ci" -eq 1 ]]; then
 fi
 if [[ "$run_scan" -eq 1 ]]; then
   if [[ -n "$SCAN_BUILD" ]]; then
-    # Analyze project TUs only (skip amalgamation noise) via a dedicated build tree.
-    ANALYZE_DIR="${BUILD_DIR}-scan"
-    rm -rf "$ANALYZE_DIR"
+    # Dedicated build tree for analysis. Prefer /tmp inside Docker/CI so a
+    # host-mounted tree (e.g. iCloud) cannot leave undeletable "CMakeFiles 2"
+    # siblings that make `rm -rf ${BUILD_DIR}-scan` fail under set -e.
+    if [[ -f /.dockerenv || "${REMEMBER_CI_LINUX_INNER:-}" == "1" || "${CI:-}" == "true" ]]; then
+      ANALYZE_DIR="${TMPDIR:-/tmp}/remember-scan-build-$$"
+    else
+      ANALYZE_DIR="${BUILD_DIR}-scan"
+    fi
+    rm -rf "$ANALYZE_DIR" 2>/dev/null || true
+    if [[ -e "$ANALYZE_DIR" ]]; then
+      # Last-ditch: unique name if a previous tree refuses to die.
+      ANALYZE_DIR="${ANALYZE_DIR}-$$"
+    fi
     if ! "$SCAN_BUILD" --status-bugs -o "$REPORT_DIR/scan-build" \
         cmake -S . -B "$ANALYZE_DIR" \
         -DCMAKE_C_COMPILER=clang \
@@ -235,6 +245,8 @@ if [[ "$run_scan" -eq 1 ]]; then
     else
       echo "scan-build: PASS"
     fi
+    # Best-effort cleanup of /tmp trees (ignore sticky host-mount leftovers).
+    rm -rf "$ANALYZE_DIR" 2>/dev/null || true
   else
     echo "scan-build: SKIP (scan-build not installed)"
     if [[ "$in_ci" -eq 1 ]]; then

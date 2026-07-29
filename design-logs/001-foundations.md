@@ -7,6 +7,7 @@
 **Amended:** 2026-07-21 (Round 6 — update footgun + strict C tooling; pre-implementation)
 **Amended:** 2026-07-21 (Round 7 — clear-tags, paging, JSON uniformity, FTS/rowid, schema version, iCloud; pre-implementation)
 **Amended:** 2026-07-21 (Round 8 — `--key` key-value slots; pre-implementation)
+**Amended:** 2026-07-27 (Round 9 — timestamps: millisecond precision; step 07 implementation)
 
 ## Background
 
@@ -101,7 +102,7 @@ Without a design log, implementation will drift on the hard parts:
   A: Repeatable `--tag` (AND), `--source`, `--limit`.
 
 - **Q: Timestamps?**  
-  A: ISO-8601 UTC TEXT (`2026-07-20T15:04:05Z`).
+  A: ISO-8601 UTC TEXT with **fixed 3-digit millisecond** fraction (`2026-07-20T15:04:05.123Z`). Written by `utc_now` via C11 `timespec_get`. Fixed-width `.mmm` keeps lexicographic order equal to chronological order for `updated_at DESC` / `id DESC` sorts. (Round 9 revises the second-only example from earlier rounds.)
 
 - **Q: Dedupe merge vs `source`?**  
   A: Keep original source; only merge tags + `updated_at`. `source` is first-writer metadata with no other behavior.
@@ -277,6 +278,22 @@ Pulls "upsert by subject key" from the v2 wishlist into v1. A `--key` names a du
 - **Q: May distinct keys hold the same value?**  
   A: **Yes, required.** Keys are unique; values are not. Different slots must be able to hold the same body — `true`, `0`, a shared string. The partial-unique-on-`body_hash`-where-`key IS NULL` index already allows this (keyed rows skip body-hash dedupe).
 
+### Round 9 — Amendment: millisecond timestamps (step 07 implementation)
+
+Recorded while landing `update`. Second-only stamps forced tests to `sleep(1)` to observe `updated_at` bumps and list order; fractional seconds remove that footgun without changing sort contracts.
+
+- **Q: Timestamp precision?**  
+  A: **Millisecond**, fixed-width fraction. Format: `YYYY-MM-DDTHH:MM:SS.mmmZ` (24 characters + NUL). Source: C11 `timespec_get(..., TIME_UTC)`. Applies to every write that sets `created_at` / `updated_at` (`add`, keyed upsert, merge, `update`).
+
+- **Q: Why fixed three digits, not variable fraction?**  
+  A: Lexicographic `ORDER BY updated_at DESC` must match chronological order. Variable-length fractions (or omitting `.000`) would sort incorrectly. Always pad to `.mmm`.
+
+- **Q: Is this a schema migration?**  
+  A: **No.** Columns remain `TEXT`. Existing second-only rows (if any) still sort correctly against ms rows of the same second only if they lack a fraction — green-field v1 DBs always write ms. No `user_version` bump.
+
+- **Q: Parsing for agents / tests?**  
+  A: Treat as opaque ISO-8601 ending in `Z`. Do **not** assume a 20-character second stamp; extract fields by JSON quotes / a real parser.
+
 ## Design
 
 ### Goals (v1)
@@ -353,8 +370,8 @@ entries
   body          TEXT NOT NULL          -- trimmed body as stored (the value)
   body_hash     TEXT NOT NULL          -- hex sha256 of trimmed body bytes
   source        TEXT NOT NULL          -- human|agent|tool|unknown (first writer)
-  created_at    TEXT NOT NULL          -- ISO-8601 UTC
-  updated_at    TEXT NOT NULL
+  created_at    TEXT NOT NULL          -- ISO-8601 UTC ms: YYYY-MM-DDTHH:MM:SS.mmmZ
+  updated_at    TEXT NOT NULL          -- same format; refreshed on every successful write
 
 -- identity axes (partial unique indexes):
 --   keyed entries unique by key;  keyless entries unique by body_hash
@@ -455,8 +472,8 @@ Every command prints `{"version":1, ..., "entries":[...]}`. `search`/`list` add 
       "body": "full text…",
       "tags": ["project", "decision"],
       "source": "human",
-      "created_at": "2026-07-20T12:00:00Z",
-      "updated_at": "2026-07-20T15:00:00Z"
+      "created_at": "2026-07-20T12:00:00.000Z",
+      "updated_at": "2026-07-20T15:00:00.456Z"
     }
   ]
 }
