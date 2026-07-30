@@ -320,16 +320,38 @@ set_tests_properties(store_asan_gate PROPERTIES
         "ASAN_OPTIONS=detect_leaks=${REMEMBER_ASAN_DETECT_LEAKS}:halt_on_error=1:abort_on_error=1:allocator_may_return_null=1;UBSAN_OPTIONS=halt_on_error=1:print_stacktrace=1"
 )
 
-# clang-format over the same file set the lint script checks (src + tests).
-find_program(CLANG_FORMAT clang-format)
-if(CLANG_FORMAT)
-    file(GLOB_RECURSE REMEMBER_FORMAT_FILES CONFIGURE_DEPENDS
-        ${CMAKE_SOURCE_DIR}/src/*.c ${CMAKE_SOURCE_DIR}/src/*.h
-        ${CMAKE_SOURCE_DIR}/tests/*.c ${CMAKE_SOURCE_DIR}/tests/*.h
+# Homebrew LLVM is often off default PATH; needed for clang-format / scan-build.
+if(APPLE)
+    execute_process(
+        COMMAND brew --prefix llvm
+        OUTPUT_VARIABLE REMEMBER_BREW_LLVM
+        OUTPUT_STRIP_TRAILING_WHITESPACE
+        ERROR_QUIET
     )
+    if(REMEMBER_BREW_LLVM AND EXISTS "${REMEMBER_BREW_LLVM}/bin")
+        list(PREPEND CMAKE_PROGRAM_PATH "${REMEMBER_BREW_LLVM}/bin")
+    endif()
+endif()
+
+# Always define format so the target is stable; fail loudly if the tool is missing.
+file(GLOB_RECURSE REMEMBER_FORMAT_FILES CONFIGURE_DEPENDS
+    ${CMAKE_SOURCE_DIR}/src/*.c ${CMAKE_SOURCE_DIR}/src/*.h
+    ${CMAKE_SOURCE_DIR}/tests/*.c ${CMAKE_SOURCE_DIR}/tests/*.h
+)
+find_program(CLANG_FORMAT NAMES clang-format clang-format-20 clang-format-19
+    clang-format-18 clang-format-17)
+if(CLANG_FORMAT)
     add_custom_target(format
         COMMAND ${CLANG_FORMAT} -i --style=file ${REMEMBER_FORMAT_FILES}
-        COMMENT "Running clang-format"
+        COMMENT "Running clang-format (${CLANG_FORMAT})"
+        VERBATIM
+    )
+else()
+    add_custom_target(format
+        COMMAND ${CMAKE_COMMAND} -E echo
+            "error: clang-format not found (brew install llvm; reconfigure with PATH=\$(brew --prefix llvm)/bin:\$PATH)"
+        COMMAND ${CMAKE_COMMAND} -E false
+        COMMENT "clang-format missing"
         VERBATIM
     )
 endif()
@@ -342,7 +364,9 @@ add_custom_target(lint
     USES_TERMINAL
 )
 
-# Full clang static analyzer build (separate build dir; slow; used by CI).
+# Binary packaging only; multi-agent skill install is scripts/install.sh.
+install(TARGETS remember RUNTIME DESTINATION bin)
+
 find_program(SCAN_BUILD scan-build)
 if(SCAN_BUILD)
     add_custom_target(analyze
@@ -360,8 +384,7 @@ if(SCAN_BUILD)
     )
 endif()
 
-# macOS: leaks(1) on a short CLI invocation list (heuristic leak gate).
-# Uses remember_plain — leaks(1) cannot inspect AddressSanitizer heaps.
+# leaks(1) cannot see ASan heaps -- use remember_plain.
 if(APPLE)
     add_custom_target(leaks-macos
         COMMAND ${CMAKE_SOURCE_DIR}/scripts/run-leaks-macos.sh $<TARGET_FILE:remember_plain>
