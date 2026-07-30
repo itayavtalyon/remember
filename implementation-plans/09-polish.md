@@ -30,8 +30,34 @@ Production-feeling edges: default DB dir mode 0700, help completeness, sync warn
 
 ## Done checklist
 
-- [ ] Full suite green (all tests in `tests/`)
-- [ ] Lint clean
+- [x] Full suite green (all tests in `tests/`)
+- [x] Lint clean
+
+## Review notes (2026-07-29)
+
+### Implementation
+
+- Most polish already landed with earlier command steps (0700 parent, `user_version` refuse, human columns, 80-cp preview, help flags).
+- **Wired sync-path warning:** `util_path_looks_synced()` (markers: `com~apple~CloudDocs`, `Dropbox`, `Google Drive`) called from `main` after path resolve, before `store_open`. One-line stderr; proceed. Store stays path-pure.
+- General help documents exit codes 0/1/2.
+- Gate: `schema_config` added to `tests/gate-suites` (includes `sync_path_warning_on_clouddocs_marker`).
+
+### Pragmatic write-gate
+
+- **DRY:** single marker list in util; warning text only in main. Cleared.
+- **Orthogonal:** sync heuristic in util; I/O warning in main; store open unchanged. Cleared.
+- **Easy-to-replace:** drop warning by removing one call in `open_store`. Cleared.
+
+## Review notes (2026-07-29) — final v1 review (steps 08–10)
+
+### Verdict for step 09
+
+**Request changes** (one blocking string issue). Architecture of the sync warning is correct; gate + full suite green.
+
+### Findings (addressed 2026-07-30)
+
+- **blocking (fixed):** Sync-path warning is ASCII (`-` not em dash).
+- **important (fixed):** Unit tests for all three markers + black-box CLI tests for CloudDocs, Dropbox, and Google Drive (`schema_config`).
 
 ## Carried from earlier reviews
 

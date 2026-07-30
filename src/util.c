@@ -33,6 +33,27 @@ static int path_is_ephemeral(const char *path)
     return 0;
 }
 
+int util_path_looks_synced(const char *path)
+{
+    static const char *const markers[] = {
+        "com~apple~CloudDocs",
+        "Dropbox",
+        "Google Drive",
+        NULL,
+    };
+    size_t i;
+
+    if (path == NULL || path[0] == '\0') {
+        return 0;
+    }
+    for (i = 0; markers[i] != NULL; i++) {
+        if (strstr(path, markers[i]) != NULL) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
 int util_resolve_db_path(const char *cli_db, char *buf, size_t buflen, char *err, size_t errlen)
 {
     const char *chosen;

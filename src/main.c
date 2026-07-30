@@ -37,7 +37,12 @@ static void print_general_help(void)
                                "  --db PATH   Database file (overrides REMEMBER_DB)\n"
                                "  --json      Machine-readable JSON on stdout\n"
                                "  --help, -h  Show help\n"
-                               "  --version   Show version\n";
+                               "  --version   Show version\n"
+                               "\n"
+                               "Exit codes:\n"
+                               "  0  success (including empty search/list)\n"
+                               "  1  usage or error\n"
+                               "  2  not found (get/delete/update)\n";
 
     (void)fputs(help, stdout);
 }
@@ -133,7 +138,7 @@ static void print_parse_error(const CliArgs *args)
     (void)fprintf(stderr, "remember: %s\n", base);
 }
 
-/* Resolve --db / env / default and open. On failure prints and sets *out_rc. */
+/* Resolve path, optional sync-path warning, then open. Store stays path-pure. */
 static Store *open_store(const CliArgs *args, int *out_rc)
 {
     char path[REMEMBER_PATH_MAX];
@@ -146,6 +151,12 @@ static Store *open_store(const CliArgs *args, int *out_rc)
         *out_rc = REMEMBER_ERR;
         return NULL;
     }
+    /* Warn only: synced volumes can corrupt any journal mode; still open. */
+    if (util_path_looks_synced(path)) {
+        (void)fprintf(stderr,
+                      "remember: warning: database path looks like a synced folder "
+                      "(iCloud/Dropbox/Google Drive); corruption risk - prefer a local disk\n");
+    }
     s = store_open(path, err, sizeof(err));
     if (s == NULL) {
         (void)fprintf(stderr, "remember: %s\n", err[0] != '\0' ? err : "cannot open database");
@@ -157,7 +168,6 @@ static Store *open_store(const CliArgs *args, int *out_rc)
 
 typedef int (*CmdFn)(Store *s, bool json, int rest_argc, const char **rest_argv);
 
-/* Open store, run a command, close. Propagates open or command exit codes. */
 static int run_with_store(const CliArgs *args, CmdFn fn)
 {
     Store *s;
@@ -203,11 +213,11 @@ static int run(const CliArgs *args)
     case CLI_CMD_UPDATE:
         return run_with_store(args, cmd_update);
     case CLI_CMD_NONE:
-        /* Usually set with CLI_ERR_MISSING_COMMAND (handled above); keep distinct. */
+        /* Defensive: parse should set CLI_ERR_MISSING_COMMAND first. */
         (void)fprintf(stderr, "remember: %s\n", cli_error_message(CLI_ERR_MISSING_COMMAND));
         return REMEMBER_ERR;
     case CLI_CMD_UNKNOWN:
-        /* Usually set with CLI_ERR_UNKNOWN_COMMAND (handled above); keep distinct. */
+        /* Defensive: parse should set CLI_ERR_UNKNOWN_COMMAND first. */
         (void)fprintf(stderr, "remember: %s\n", cli_error_message(CLI_ERR_UNKNOWN_COMMAND));
         return REMEMBER_ERR;
     default:
