@@ -676,6 +676,67 @@ TEST(store_delete_by_key_missing)
     free(db);
 }
 
+TEST(store_tags_empty_db)
+{
+    char *db = make_temp_db_path();
+    char err[256];
+    Store *s;
+    TagCount *tags = NULL;
+    size_t n = 99U;
+
+    ASSERT_TRUE(db != NULL);
+    s = store_open(db, err, sizeof(err));
+    ASSERT_TRUE(s != NULL);
+    ASSERT_EQ_INT((int)store_tags(s, &tags, &n), (int)STORE_OK);
+    ASSERT_EQ_INT((int)n, 0);
+    ASSERT_TRUE(tags == NULL);
+    store_tags_free(tags, n);
+    store_close(s);
+    free(db);
+}
+
+TEST(store_tags_counts_and_sorted)
+{
+    char *db = make_temp_db_path();
+    char err[256];
+    Store *s;
+    Entry e;
+    StoreAddAction act;
+    const char *tags_az[] = {"zebra", "apple"};
+    const char *tags_a[] = {"apple"};
+    TagCount *tags = NULL;
+    size_t n = 0U;
+
+    ASSERT_TRUE(db != NULL);
+    s = store_open(db, err, sizeof(err));
+    ASSERT_TRUE(s != NULL);
+    memset(&e, 0, sizeof(e));
+    ASSERT_EQ_INT((int)store_add(s, "first", k_hash_a, NULL, tags_az, 2U, "human", &act, &e),
+                  (int)STORE_OK);
+    store_entry_free(&e);
+    ASSERT_EQ_INT((int)store_add(s, "second", k_hash_b, NULL, tags_a, 1U, "human", &act, &e),
+                  (int)STORE_OK);
+    store_entry_free(&e);
+
+    ASSERT_EQ_INT((int)store_tags(s, &tags, &n), (int)STORE_OK);
+    ASSERT_EQ_INT((int)n, 2);
+    ASSERT_TRUE(tags != NULL && n == 2U);
+    if (tags == NULL || n != 2U) {
+        store_tags_free(tags, n);
+        store_close(s);
+        free(db);
+        return;
+    }
+    /* Sorted by name COLLATE BINARY: apple (in 2 entries) before zebra (in 1). */
+    ASSERT_STREQ(tags[0].name, "apple");
+    ASSERT_EQ_INT((int)tags[0].count, 2);
+    ASSERT_STREQ(tags[1].name, "zebra");
+    ASSERT_EQ_INT((int)tags[1].count, 1);
+    store_tags_free(tags, n);
+    store_close(s);
+    free(db);
+}
+
 #ifdef REMEMBER_TEST_HOOKS
 TEST(store_open_oom_on_store_struct)
 {
@@ -983,6 +1044,97 @@ TEST(store_fault_injection_sweep)
     free(db);
     ASSERT_TRUE(1);
 }
+TEST(store_tags_prepare_fail)
+{
+    char *db = make_temp_db_path();
+    char err[256];
+    Store *s;
+    TagCount *tags = NULL;
+    size_t n = 0U;
+
+    ASSERT_TRUE(db != NULL);
+    s = store_open(db, err, sizeof(err));
+    ASSERT_TRUE(s != NULL);
+    store_test_fail_prepare_after(0);
+    ASSERT_EQ_INT((int)store_tags(s, &tags, &n), (int)STORE_ERR_SQLITE);
+    ASSERT_TRUE(tags == NULL);
+    store_tags_free(tags, n);
+    store_close(s);
+    free(db);
+}
+
+TEST(store_tags_alloc_fail)
+{
+    char *db = make_temp_db_path();
+    char err[256];
+    Store *s;
+    Entry e;
+    StoreAddAction act;
+    const char *tags_in[] = {"apple"};
+    TagCount *tags = NULL;
+    size_t n = 0U;
+
+    ASSERT_TRUE(db != NULL);
+    s = store_open(db, err, sizeof(err));
+    ASSERT_TRUE(s != NULL);
+    memset(&e, 0, sizeof(e));
+    ASSERT_EQ_INT((int)store_add(s, "x", k_hash_a, NULL, tags_in, 1U, "human", &act, &e),
+                  (int)STORE_OK);
+    store_entry_free(&e);
+    store_test_fail_alloc_after(0); /* first dup_str in store_tags fails */
+    ASSERT_EQ_INT((int)store_tags(s, &tags, &n), (int)STORE_ERR_OOM);
+    ASSERT_TRUE(tags == NULL);
+    store_tags_free(tags, n);
+    store_close(s);
+    free(db);
+}
+
+TEST(store_tags_realloc_fail)
+{
+    char *db = make_temp_db_path();
+    char err[256];
+    Store *s;
+    Entry e;
+    StoreAddAction act;
+    const char *tags_in[] = {"apple"};
+    TagCount *tags = NULL;
+    size_t n = 0U;
+
+    ASSERT_TRUE(db != NULL);
+    s = store_open(db, err, sizeof(err));
+    ASSERT_TRUE(s != NULL);
+    memset(&e, 0, sizeof(e));
+    ASSERT_EQ_INT((int)store_add(s, "x", k_hash_a, NULL, tags_in, 1U, "human", &act, &e),
+                  (int)STORE_OK);
+    store_entry_free(&e);
+    /* dup_str succeeds, the growth realloc (first append, cap 0->8) then fails. */
+    store_test_fail_alloc_after(1);
+    ASSERT_EQ_INT((int)store_tags(s, &tags, &n), (int)STORE_ERR_OOM);
+    ASSERT_TRUE(tags == NULL);
+    store_tags_free(tags, n);
+    store_close(s);
+    free(db);
+}
+
+TEST(store_tags_step_fail)
+{
+    char *db = make_temp_db_path();
+    char err[256];
+    Store *s;
+    TagCount *tags = NULL;
+    size_t n = 0U;
+
+    ASSERT_TRUE(db != NULL);
+    s = store_open(db, err, sizeof(err));
+    ASSERT_TRUE(s != NULL);
+    store_test_fail_step_after(0); /* first step errors -> rc != SQLITE_DONE path */
+    ASSERT_EQ_INT((int)store_tags(s, &tags, &n), (int)STORE_ERR_SQLITE);
+    ASSERT_TRUE(tags == NULL);
+    store_tags_free(tags, n);
+    store_close(s);
+    free(db);
+}
+
 #endif /* REMEMBER_TEST_HOOKS */
 
 void register_store_tests(void)
@@ -1009,8 +1161,14 @@ void register_store_tests(void)
     RUN_TEST(store_update_body_and_tags);
     RUN_TEST(store_delete_by_id_gcs_orphan_tags);
     RUN_TEST(store_delete_by_key_missing);
+    RUN_TEST(store_tags_empty_db);
+    RUN_TEST(store_tags_counts_and_sorted);
 #ifdef REMEMBER_TEST_HOOKS
     RUN_TEST(store_open_oom_on_store_struct);
+    RUN_TEST(store_tags_prepare_fail);
+    RUN_TEST(store_tags_alloc_fail);
+    RUN_TEST(store_tags_realloc_fail);
+    RUN_TEST(store_tags_step_fail);
     RUN_TEST(store_add_prepare_fail);
     RUN_TEST(store_get_prepare_fail);
     RUN_TEST(store_list_prepare_fail);

@@ -31,6 +31,7 @@ main → cli_parse → commands.h (cmd_add | cmd_locator | cmd_query) → store_
 | 08 | [Lint + format toolchain](08-lint-format.md) | `lint` + `format` targets work; src clean ✅ |
 | 09 | [Polish](09-polish.md) | Help text, defaults dir 0700, warnings, remaining config tests ✅ |
 | 10 | [Skill + install + dogfood](10-skill.md) | `SKILL.md` + `scripts/install.sh` (binary + agent skills) ✅ |
+| 11 | [Core façade lib + `tags`](11-core-facade-lib.md) | `remember_run` byte-equals CLI `--json`; `tags` cmd; `libremember` links w/o `main` |
 
 **Definition of done for the whole tool:** full suite green (all verification criteria 1–34 automated where practical), `cmake --build build --target lint` clean on `src/`, no `#include` of sqlite outside the store adapter.
 

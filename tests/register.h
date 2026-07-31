@@ -16,5 +16,7 @@ void register_verification_gld_tests(void);
 void register_verification_search_tests(void);
 void register_verification_edges_tests(void);
 void register_coverage_edges_tests(void);
+void register_facade_tests(void);
+void register_tags_tests(void);
 
 #endif /* REMEMBER_REGISTER_H */

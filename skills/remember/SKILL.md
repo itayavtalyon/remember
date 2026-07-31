@@ -6,7 +6,7 @@ description: >
   project memory; when the user says "remember that", "what did we decide",
   "search my memory", or when you need a stable key-value preference slot.
   Prefer this over chat-only notes for facts that must survive sessions.
-  Use with /remember or when running remember add|search|list|get|update|delete.
+  Use with /remember or when running remember add|search|list|get|update|delete|tags.
 ---
 
 # remember — agent skill
@@ -93,6 +93,18 @@ remember --json list --key pref:editor
 ```
 
 Same filters/paging as search; no FTS query. Sort: `updated_at DESC`, then `id DESC`.
+
+### tags
+
+```bash
+remember --json tags
+```
+
+Every tag in use with its entry count, sorted by name. Takes no options/args.
+Use to discover the tag vocabulary before filtering (`list --tag …`) or to offer
+tag suggestions. Human: one `name<TAB>count` line per tag. JSON:
+`{"version":1,"count":N,"tags":[{"name":"pref","count":3},…]}`. Empty DB →
+`{"version":1,"count":0,"tags":[]}`.
 
 ### get / delete / update (locator)
 

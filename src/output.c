@@ -286,6 +286,59 @@ static void write_preview(FILE *out, const char *body)
     }
 }
 
+int output_tags_envelope(FILE *out, const TagCount *tags, size_t count)
+{
+    size_t i;
+
+    if (out == NULL) {
+        return -1;
+    }
+    if (count > 0U && tags == NULL) {
+        return -1;
+    }
+    if (fprintf(out, "{\"version\":1,\"count\":%zu,\"tags\":[", count) < 0) {
+        return -1;
+    }
+    for (i = 0; i < count; i++) {
+        if (i > 0U && fputc(',', out) == EOF) {
+            return -1;
+        }
+        if (fputs("{\"name\":", out) < 0) {
+            return -1;
+        }
+        if (output_json_string(out, tags[i].name) != 0) {
+            return -1;
+        }
+        if (fprintf(out, ",\"count\":%lld}", tags[i].count) < 0) {
+            return -1;
+        }
+    }
+    if (fputs("]}\n", out) < 0) {
+        return -1;
+    }
+    return 0;
+}
+
+int output_tags_human(FILE *out, const TagCount *tags, size_t count)
+{
+    size_t i;
+
+    if (out == NULL) {
+        return -1;
+    }
+    if (count > 0U && tags == NULL) {
+        return -1;
+    }
+    for (i = 0; i < count; i++) {
+        /* Names are normalize_token output: no ASCII controls, raw print is safe. */
+        if (fprintf(out, "%s\t%lld\n", tags[i].name != NULL ? tags[i].name : empty_str(),
+                    tags[i].count) < 0) {
+            return -1;
+        }
+    }
+    return 0;
+}
+
 int output_entry_human_line(FILE *out, const Entry *e)
 {
     size_t i;

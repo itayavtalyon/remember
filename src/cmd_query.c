@@ -1,6 +1,7 @@
 #include "commands.h"
 #include "commands_common.h"
 
+#include "appio.h"
 #include "exit_codes.h"
 #include "normalize.h"
 #include "output.h"
@@ -131,7 +132,7 @@ static int list_handle_opt(const char *arg, int *i, int rest_argc, const char **
         return list_take_offset(i, rest_argc, rest_argv, &out->offset, err);
     }
     if (arg[0] == '-' && arg[1] != '\0') {
-        (void)fprintf(stderr, "remember: unknown option '%s'\n", arg);
+        (void)fprintf(app_err(), "remember: unknown option '%s'\n", arg);
         *err = "";
         return -1;
     }
@@ -356,10 +357,10 @@ static int emit_entry_page(bool json, size_t offset, size_t limit, size_t count,
     size_t i;
 
     if (json) {
-        return output_list_envelope(stdout, offset, limit, count, total, entries);
+        return output_list_envelope(app_out(), offset, limit, count, total, entries);
     }
     for (i = 0; i < count; i++) {
-        if (output_entry_human_line(stdout, &entries[i]) != 0) {
+        if (output_entry_human_line(app_out(), &entries[i]) != 0) {
             return -1;
         }
     }

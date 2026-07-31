@@ -13,6 +13,7 @@ typedef enum {
     CLI_CMD_GET,
     CLI_CMD_UPDATE,
     CLI_CMD_DELETE,
+    CLI_CMD_TAGS,
     CLI_CMD_UNKNOWN
 } CliCommand;
 

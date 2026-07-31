@@ -1,6 +1,7 @@
 #include "commands.h"
 #include "commands_common.h"
 
+#include "appio.h"
 #include "exit_codes.h"
 #include "normalize.h"
 #include "output.h"
@@ -50,7 +51,7 @@ static int handle_add_flag(const char *arg, int *i, int rest_argc, const char **
         return 0;
     }
     if (arg[0] == '-' && arg[1] != '\0') {
-        (void)fprintf(stderr, "remember: unknown option '%s'\n", arg);
+        (void)fprintf(app_err(), "remember: unknown option '%s'\n", arg);
         *err = "";
         return -1;
     }
@@ -98,13 +99,13 @@ static int parse_add_args(int rest_argc, const char **rest_argv, AddParse *out, 
 static int emit_add_result(bool json, StoreAddAction action, const Entry *entry)
 {
     if (json) {
-        if (output_action_envelope(stdout, action_name(action), entry) != 0) {
+        if (output_action_envelope(app_out(), action_name(action), entry) != 0) {
             err_msg("failed to write output");
             return -1;
         }
         return 0;
     }
-    if (output_id_human(stdout, entry->id) != 0) {
+    if (output_id_human(app_out(), entry->id) != 0) {
         err_msg("failed to write output");
         return -1;
     }

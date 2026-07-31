@@ -143,6 +143,23 @@ StoreStatus store_update(Store *s, long long id, const char *key_or_null, bool s
                          const char *const *tags, size_t ntags, Entry *out_entry,
                          long long *out_conflict_id);
 
+/* One tag with the number of entries carrying it. name is heap-owned. */
+typedef struct {
+    char *name;
+    long long count;
+} TagCount;
+
+/*
+ * All distinct tags with their entry counts, sorted by name (COLLATE BINARY).
+ * Tags with zero entries never appear (orphans are GC'd on delete). On STORE_OK,
+ * *out_tags is a heap array of *out_count TagCount (release with store_tags_free);
+ * an empty database yields *out_tags == NULL and *out_count == 0.
+ */
+StoreStatus store_tags(Store *s, TagCount **out_tags, size_t *out_count);
+
+/* Release a store_tags result. Safe with NULL. */
+void store_tags_free(TagCount *tags, size_t count);
+
 /*
  * Test-only fault injection (compiled when REMEMBER_TEST_HOOKS is defined).
  * fail_after: number of successful allocs/prepares before the next fails;

@@ -1,5 +1,6 @@
 #include "commands_common.h"
 
+#include "appio.h"
 #include "exit_codes.h"
 #include "normalize.h"
 #include "store.h"
@@ -54,7 +55,7 @@ const char *norm_token_message(NormStatus st, const char *kind)
 
 void err_msg(const char *msg)
 {
-    (void)fprintf(stderr, "remember: %s\n", msg);
+    (void)fprintf(app_err(), "remember: %s\n", msg);
 }
 
 int source_is_valid(const char *s)
