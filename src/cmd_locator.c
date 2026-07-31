@@ -1,6 +1,7 @@
 #include "commands.h"
 #include "commands_common.h"
 
+#include "appio.h"
 #include "exit_codes.h"
 #include "normalize.h"
 #include "output.h"
@@ -62,7 +63,7 @@ static int parse_locator_args(int rest_argc, const char **rest_argv, LocatorPars
             return -1;
         }
         if (!end_opts && arg[0] == '-' && arg[1] != '\0') {
-            (void)fprintf(stderr, "remember: unknown option '%s'\n", arg);
+            (void)fprintf(app_err(), "remember: unknown option '%s'\n", arg);
             return -1;
         }
         if (out->id_raw != NULL) {
@@ -141,14 +142,14 @@ int cmd_get(Store *s, bool json, int rest_argc, const char **rest_argv)
     }
 
     if (json) {
-        if (output_get_envelope(stdout, &entry) != 0) {
+        if (output_get_envelope(app_out(), &entry) != 0) {
             store_entry_free(&entry);
             err_msg("failed to write output");
             return REMEMBER_ERR;
         }
     } else {
         /* Body via output.c — never raw fputs (terminal control neutralization). */
-        if (output_body_human(stdout, entry.body) != 0) {
+        if (output_body_human(app_out(), entry.body) != 0) {
             store_entry_free(&entry);
             err_msg("failed to write output");
             return REMEMBER_ERR;
@@ -190,7 +191,7 @@ int cmd_delete(Store *s, bool json, int rest_argc, const char **rest_argv)
     }
 
     if (json) {
-        if (output_action_envelope(stdout, "deleted", &entry) != 0) {
+        if (output_action_envelope(app_out(), "deleted", &entry) != 0) {
             store_entry_free(&entry);
             err_msg("failed to write output");
             return REMEMBER_ERR;
@@ -258,7 +259,7 @@ static int handle_update_flag(const char *arg, int *i, int rest_argc, const char
         return -1;
     }
     if (arg[0] == '-' && arg[1] != '\0') {
-        (void)fprintf(stderr, "remember: unknown option '%s'\n", arg);
+        (void)fprintf(app_err(), "remember: unknown option '%s'\n", arg);
         *err = "";
         return -1;
     }
@@ -322,13 +323,13 @@ static int update_validate_changes(const UpdateParse *p, const char **err)
 static int emit_update_result(bool json, const Entry *entry)
 {
     if (json) {
-        if (output_action_envelope(stdout, "updated", entry) != 0) {
+        if (output_action_envelope(app_out(), "updated", entry) != 0) {
             err_msg("failed to write output");
             return -1;
         }
         return 0;
     }
-    if (output_id_human(stdout, entry->id) != 0) {
+    if (output_id_human(app_out(), entry->id) != 0) {
         err_msg("failed to write output");
         return -1;
     }
@@ -418,7 +419,7 @@ int cmd_update(Store *s, bool json, int rest_argc, const char **rest_argv)
     st = store_update(s, id, key_or_null, parsed.set_text, body, body_hash, set_tags,
                       (const char *const *)tags_norm, ntags, &entry, &conflict_id);
     if (st == STORE_ERR_CONFLICT) {
-        (void)fprintf(stderr, "remember: body hash conflicts with entry %lld\n", conflict_id);
+        (void)fprintf(app_err(), "remember: body hash conflicts with entry %lld\n", conflict_id);
         goto cleanup;
     }
     if (st != STORE_OK) {

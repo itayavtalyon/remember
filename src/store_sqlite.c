@@ -1188,6 +1188,83 @@ StoreStatus store_get_by_key(Store *s, const char *key, Entry *out_entry)
     return load_entry_by_key(s->db, key, out_entry);
 }
 
+void store_tags_free(TagCount *tags, size_t count)
+{
+    size_t i;
+
+    if (tags == NULL) {
+        return;
+    }
+    for (i = 0; i < count; i++) {
+        free(tags[i].name);
+    }
+    free(tags);
+}
+
+StoreStatus store_tags(Store *s, TagCount **out_tags, size_t *out_count)
+{
+    sqlite3_stmt *stmt = NULL;
+    TagCount *rows = NULL;
+    size_t n = 0U;
+    size_t cap = 0U;
+    int rc;
+
+    if (s == NULL || s->db == NULL || out_tags == NULL || out_count == NULL) {
+        return STORE_ERR_INTERNAL;
+    }
+    *out_tags = NULL;
+    *out_count = 0U;
+
+    /* INNER JOIN: a tag with no links (never expected — orphans are GC'd) is
+       simply absent, which is the desired "only tags in use" result. */
+    rc = sqlite3_prepare_v2(s->db,
+                            "SELECT t.name, COUNT(et.entry_id) FROM tags t "
+                            "JOIN entry_tags et ON et.tag_id = t.id "
+                            "GROUP BY t.id ORDER BY t.name COLLATE BINARY;",
+                            -1, &stmt, NULL);
+    if (rc != SQLITE_OK) {
+        return STORE_ERR_SQLITE;
+    }
+
+    while ((rc = sqlite3_step(stmt)) == SQLITE_ROW) {
+        const char *name = (const char *)sqlite3_column_text(stmt, 0);
+        char *copy;
+
+        if (name == NULL) {
+            continue;
+        }
+        copy = dup_str(name);
+        if (copy == NULL) {
+            store_tags_free(rows, n);
+            (void)sqlite3_finalize(stmt);
+            return STORE_ERR_OOM;
+        }
+        if (n == cap) {
+            size_t ncap = (cap == 0U) ? 8U : cap * 2U;
+            TagCount *grown = (TagCount *)realloc((void *)rows, ncap * sizeof(*grown));
+            if (grown == NULL) {
+                free(copy);
+                store_tags_free(rows, n);
+                (void)sqlite3_finalize(stmt);
+                return STORE_ERR_OOM;
+            }
+            rows = grown;
+            cap = ncap;
+        }
+        rows[n].name = copy;
+        rows[n].count = sqlite3_column_int64(stmt, 1);
+        n++;
+    }
+    (void)sqlite3_finalize(stmt);
+    if (rc != SQLITE_DONE) {
+        store_tags_free(rows, n);
+        return STORE_ERR_SQLITE;
+    }
+    *out_tags = rows;
+    *out_count = n;
+    return STORE_OK;
+}
+
 static void free_entry_rows(Entry *rows, size_t n)
 {
     size_t i;

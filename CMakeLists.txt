@@ -61,6 +61,8 @@ add_compile_options(
 # tables (POSIX API is char *const[]); keeping -Wcast-qual there is pure noise.
 set_property(SOURCE
     src/main.c
+    src/remember_app.c
+    src/appio.c
     src/cli.c
     src/store_sqlite.c
     src/normalize.c
@@ -68,6 +70,7 @@ set_property(SOURCE
     src/cmd_add.c
     src/cmd_locator.c
     src/cmd_query.c
+    src/cmd_tags.c
     src/output.c
     src/util.c
     APPEND PROPERTY COMPILE_OPTIONS -Wcast-qual
@@ -167,6 +170,8 @@ target_compile_options(sha256 PRIVATE -w)
 # Shared app sources (compiled per-target so the fork/exec harness parent can
 # stay uninstrumented while the CLI and store unit binary take sanitizers).
 set(REMEMBER_LIB_SOURCES
+    src/remember_app.c
+    src/appio.c
     src/cli.c
     src/store_sqlite.c
     src/normalize.c
@@ -174,6 +179,7 @@ set(REMEMBER_LIB_SOURCES
     src/cmd_add.c
     src/cmd_locator.c
     src/cmd_query.c
+    src/cmd_tags.c
     src/output.c
     src/util.c
 )
@@ -206,6 +212,17 @@ target_compile_definitions(remember_plain PRIVATE
 remember_apply_posix_feature_macros(remember_plain)
 remember_apply_test_hooks(remember_plain)
 
+# --- libremember: the core without main() (linked by the native GUI) ---------
+# Same sources as the CLI minus src/main.c, exposing remember_run (remember_app.h)
+# so an in-process caller reuses the exact pipeline and byte-identical JSON.
+add_library(remember_core STATIC ${REMEMBER_LIB_SOURCES})
+target_include_directories(remember_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
+target_link_libraries(remember_core PUBLIC sqlite3 sha256)
+target_compile_definitions(remember_core PRIVATE
+    REMEMBER_VERSION="${PROJECT_VERSION}"
+)
+remember_apply_posix_feature_macros(remember_core)
+
 # --- full black-box harness (NOT instrumented — forks ASan child) ------------
 set(REMEMBER_TEST_SOURCES
     tests/test_main.c
@@ -223,6 +240,8 @@ set(REMEMBER_TEST_SOURCES
     tests/test_schema_config.c
     tests/test_verification_edges.c
     tests/test_coverage_edges.c
+    tests/test_facade.c
+    tests/test_tags.c
 )
 add_executable(remember_tests
     ${REMEMBER_TEST_SOURCES}

@@ -37,4 +37,10 @@ int output_body_human(FILE *out, const char *body);
 /* Human list line: id | key | tags | preview | updated_at */
 int output_entry_human_line(FILE *out, const Entry *e);
 
+/* Tags JSON envelope: version/count/tags:[{name,count}]. */
+int output_tags_envelope(FILE *out, const TagCount *tags, size_t count);
+
+/* Human tags: one "name<TAB>count" line per tag (names are control-free tokens). */
+int output_tags_human(FILE *out, const TagCount *tags, size_t count);
+
 #endif /* REMEMBER_OUTPUT_H */

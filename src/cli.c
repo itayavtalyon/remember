@@ -64,6 +64,7 @@ static const CommandEntry k_commands[] = {
     {"get", CLI_CMD_GET, "Fetch one entry by id or --key"},
     {"update", CLI_CMD_UPDATE, "Change body and/or tags by id or --key"},
     {"delete", CLI_CMD_DELETE, "Remove an entry by id or --key"},
+    {"tags", CLI_CMD_TAGS, "List all tags with entry counts"},
 };
 
 enum { COMMAND_COUNT = (int)(sizeof(k_commands) / sizeof(k_commands[0])) };
