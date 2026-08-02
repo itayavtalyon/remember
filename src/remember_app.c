@@ -72,6 +72,7 @@ static void print_command_help(CliCommand topic)
         (void)fprintf(out, "  --tag TAG       Attach a tag (repeatable; union on merge)\n");
         (void)fprintf(out, "  --source SRC    human|agent|tool|unknown (default unknown)\n");
         (void)fprintf(out, "  BODY|-          Memory text, or - to read stdin\n");
+        (void)fprintf(out, "  -- -            Literal body \"-\" (end of options; not stdin)\n");
         (void)fprintf(out, "\n");
     } else if (topic == CLI_CMD_GET || topic == CLI_CMD_DELETE) {
         (void)fprintf(out, "Options:\n");
@@ -85,6 +86,7 @@ static void print_command_help(CliCommand topic)
         (void)fprintf(out, "  ID              Entry id (positional)\n");
         (void)fprintf(out, "  --key KEY       Locate by key instead of id\n");
         (void)fprintf(out, "  --text BODY|-   New body text, or - for stdin\n");
+        (void)fprintf(out, "  --text=-        Literal body \"-\" (not stdin)\n");
         (void)fprintf(out, "  --tag TAG       Replace tag set (repeatable)\n");
         (void)fprintf(out, "  --clear-tags    Clear all tags\n");
         (void)fprintf(out, "\n");

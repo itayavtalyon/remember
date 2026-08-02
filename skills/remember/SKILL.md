@@ -66,10 +66,13 @@ remember --json add --source agent --key pref:editor "helix"
 remember --json add --source agent --key decision:db --tag project:foo "use SQLite FTS5"
 # stdin body:
 printf '%s' "long body" | remember --json add --source agent -
+# literal body that is exactly a hyphen (not stdin):
+remember --json add --source agent -- -
 ```
 
 - Optional `--key KEY` → keyed **upsert** (same key replaces body; tags **union**; same id)
 - Keyless → body-hash merge (duplicate body merges tags)
+- Body token `-` alone means **stdin**; after `--`, `-` is a one-character body
 - `--source`: `human` | `agent` | `tool` | `unknown` (default `unknown`). **Agents pass `--source agent` on add only.**
 - Human stdout: id only. JSON: `{"version":1,"action":"created"|"merged"|"updated","count":1,"entries":[…]}`
 
@@ -127,7 +130,8 @@ remember --json update 3 --text "x" --tag a       # body + tags
 - At least one of `--text`, `--tag`, or `--clear-tags`
 - `--tag` + `--clear-tags` together → usage error
 - Omit tag flags → tags unchanged (never assume omit clears)
-- Body only via `--text` (or `--text -` for stdin); empty after trim rejected
+- Body only via `--text` (or `--text -` for stdin; use `--text=-` for a literal
+  hyphen body); empty after trim rejected
 - Success always bumps `updated_at`
 - Never changes `source` or `key`
 - Keyless body-hash collision with another keyless entry → exit 1 + conflicting id on stderr

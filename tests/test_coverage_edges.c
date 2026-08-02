@@ -783,17 +783,18 @@ TEST(list_end_opts_then_junk)
 TEST(search_end_opts_then_query)
 {
     /*
-     * Outer "--" ends CLI option scan; a second "--" is a literal rest token
-     * so cmd_search's own end-opts path (list_handle_opt kind==1) is exercised.
+     * After a subcommand, top-level cli_parse forwards "--" into rest_argv so
+     * cmd_search's end-opts path (list_handle_opt kind==1) runs; the following
+     * token is the FTS query (not an option).
      */
     char *db = make_temp_db_path();
     CmdResult r;
     const char *a[] = {"add", "body with helix token"};
-    const char *s[] = {"search", "--json", "--", "--", "helix"};
+    const char *s[] = {"search", "--json", "--", "helix"};
     ASSERT_TRUE(db != NULL);
     r = run_remember(db, a, 2, NULL);
     cmd_result_free(&r);
-    r = run_remember(db, s, 5, NULL);
+    r = run_remember(db, s, 4, NULL);
     ASSERT_EQ_INT(r.exit_code, 0);
     ASSERT_STR_CONTAINS(r.out, "helix");
     cmd_result_free(&r);
@@ -804,10 +805,10 @@ TEST(search_end_opts_extra_positional_rejected)
 {
     /* After command-local end-opts, a second positional is an error. */
     char *db = make_temp_db_path();
-    const char *args[] = {"search", "--", "--", "helix", "extra"};
+    const char *args[] = {"search", "--", "helix", "extra"};
     CmdResult r;
     ASSERT_TRUE(db != NULL);
-    r = run_remember(db, args, 5, NULL);
+    r = run_remember(db, args, 4, NULL);
     ASSERT_EQ_INT(r.exit_code, 1);
     cmd_result_free(&r);
     free(db);

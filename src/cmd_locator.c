@@ -208,6 +208,8 @@ typedef struct {
     LocatorParse loc;
     const char *text_raw;
     bool set_text;
+    /* True for `--text=VALUE` (VALUE may be "-"); false for `--text -` (stdin). */
+    bool text_literal;
     bool clear_tags;
     const char **tag_raw;
     size_t ntag_raw;
@@ -231,12 +233,20 @@ static int handle_update_flag(const char *arg, int *i, int rest_argc, const char
         return take_value(i, rest_argc, rest_argv, &out->loc.key_raw, err,
                           "missing value for --key");
     }
+    /* `--text=-` (or any `--text=VALUE`) is always a literal body, including "-". */
+    if (strncmp(arg, "--text=", 7) == 0) {
+        out->text_raw = arg + 7;
+        out->set_text = true;
+        out->text_literal = true;
+        return 0;
+    }
     if (strcmp(arg, "--text") == 0) {
         if (take_value(i, rest_argc, rest_argv, &out->text_raw, err, "missing value for --text") !=
             0) {
             return -1;
         }
         out->set_text = true;
+        out->text_literal = false; /* bare "-" still means stdin */
         return 0;
     }
     if (strcmp(arg, "--tag") == 0) {
@@ -277,6 +287,7 @@ static int parse_update_args(int rest_argc, const char **rest_argv, UpdateParse 
     out->loc.id_raw = NULL;
     out->text_raw = NULL;
     out->set_text = false;
+    out->text_literal = false;
     out->clear_tags = false;
     out->tag_raw = NULL;
     out->ntag_raw = 0U;
@@ -351,9 +362,15 @@ static int update_prepare_payload(const UpdateParse *parsed, char **body, size_t
     }
 
     if (parsed->set_text) {
-        if (load_body(parsed->text_raw, body, body_len, &err) != 0) {
-            err_msg(err);
-            return -1;
+        {
+            int dash_is_stdin = 1;
+            if (parsed->text_literal) {
+                dash_is_stdin = 0;
+            }
+            if (load_body(parsed->text_raw, dash_is_stdin, body, body_len, &err) != 0) {
+                err_msg(err);
+                return -1;
+            }
         }
         body_hash_hex(*body, *body_len, hash);
     }
