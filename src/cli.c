@@ -326,6 +326,12 @@ static bool scan_option(ArgCursor *cur, CliArgs *out, const char *arg, int at, S
     if (strcmp(arg, "--") == 0) {
         (void)cursor_next(cur);
         st->end_of_options = true;
+        /* After a subcommand is chosen, forward `--` into rest_argv so commands
+         * can treat a following "-" as a literal body (not stdin). Before a
+         * subcommand, `--` only ends global option scanning. */
+        if (st->command_index >= 0) {
+            rest_push(out, "--");
+        }
         return true;
     }
     if (is_help_flag(arg)) {

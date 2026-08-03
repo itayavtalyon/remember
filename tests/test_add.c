@@ -253,6 +253,25 @@ TEST(add_stdin_body_dash)
     free(db);
 }
 
+/* After `--`, "-" is a one-character body (not stdin). */
+TEST(add_literal_dash_body_after_endopts)
+{
+    char *db = make_temp_db_path();
+    const char *args[] = {"add", "--", "-"};
+    const char *gargs[] = {"get", "--json", "1"};
+    CmdResult r;
+    CmdResult g;
+    ASSERT_TRUE(db != NULL);
+    r = run_remember(db, args, 3, NULL);
+    ASSERT_EQ_INT(r.exit_code, 0);
+    cmd_result_free(&r);
+    g = run_remember(db, gargs, 3, NULL);
+    ASSERT_EQ_INT(g.exit_code, 0);
+    ASSERT_STR_CONTAINS(g.out, "\"body\":\"-\"");
+    cmd_result_free(&g);
+    free(db);
+}
+
 TEST(add_body_over_64kib_rejected)
 {
     char *db = make_temp_db_path();
@@ -575,6 +594,7 @@ void register_add_tests(void)
     RUN_TEST(add_json_created_shape);
     RUN_TEST(add_json_merged_shape);
     RUN_TEST(add_stdin_body_dash);
+    RUN_TEST(add_literal_dash_body_after_endopts);
     RUN_TEST(add_body_over_64kib_rejected);
     RUN_TEST(add_tag_ascii_casefold);
     RUN_TEST(add_empty_tag_rejected);

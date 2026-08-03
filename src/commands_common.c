@@ -195,7 +195,8 @@ int store_status_to_exit(StoreStatus st)
     return REMEMBER_OK;
 }
 
-int load_body(const char *body_raw, char **out_body, size_t *out_len, const char **err)
+int load_body(const char *body_raw, int dash_is_stdin, char **out_body, size_t *out_len,
+              const char **err)
 {
     char *stdin_body = NULL;
     size_t stdin_len = 0U;
@@ -209,7 +210,7 @@ int load_body(const char *body_raw, char **out_body, size_t *out_len, const char
         *err = "missing body";
         return -1;
     }
-    if (strcmp(body_raw, "-") == 0) {
+    if (dash_is_stdin != 0 && strcmp(body_raw, "-") == 0) {
         /* Read with a generous hard cap; body_trim_copy enforces the real
            post-trim 64 KiB limit, so stdin and argv reject identically. */
         int rr = util_read_stdin(&stdin_body, &stdin_len, REMEMBER_STDIN_MAX);

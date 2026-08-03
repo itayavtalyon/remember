@@ -34,9 +34,14 @@ void free_tag_list(char **tags, size_t ntags);
 int store_status_to_exit(StoreStatus st);
 
 /*
- * Load body from argv token or stdin ("-"). Applies body_trim_copy (64 KiB /
- * UTF-8 / empty). On success *out_body is heap-owned. Returns 0 or -1 with *err.
+ * Load body from argv token or stdin. Applies body_trim_copy (64 KiB / UTF-8 /
+ * empty). On success *out_body is heap-owned. Returns 0 or -1 with *err.
+ *
+ * dash_is_stdin non-zero: body_raw "-" reads stdin (CLI convention).
+ * dash_is_stdin zero: "-" is a literal one-character body (after `--` on add,
+ * or `--text=-` on update).
  */
-int load_body(const char *body_raw, char **out_body, size_t *out_len, const char **err);
+int load_body(const char *body_raw, int dash_is_stdin, char **out_body, size_t *out_len,
+              const char **err);
 
 #endif /* REMEMBER_COMMANDS_COMMON_H */

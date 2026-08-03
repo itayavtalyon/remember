@@ -18,6 +18,8 @@ typedef struct {
     const char *body_raw;
     const char **tag_raw;
     size_t ntag_raw;
+    /* True when the body token followed `--` — then "-" is a literal body. */
+    bool body_literal;
 } AddParse;
 
 static void add_parse_free(AddParse *p)
@@ -69,6 +71,7 @@ static int parse_add_args(int rest_argc, const char **rest_argv, AddParse *out, 
     out->body_raw = NULL;
     out->tag_raw = NULL;
     out->ntag_raw = 0U;
+    out->body_literal = false;
     *err = NULL;
 
     for (i = 0; i < rest_argc; i++) {
@@ -92,6 +95,8 @@ static int parse_add_args(int rest_argc, const char **rest_argv, AddParse *out, 
             return -1;
         }
         out->body_raw = arg;
+        /* After `--`, even "-" is a one-character memory, not stdin. */
+        out->body_literal = (end_opts != 0);
     }
     return 0;
 }
@@ -147,9 +152,15 @@ int cmd_add(Store *s, bool json, int rest_argc, const char **rest_argv)
         err_msg("missing body");
         goto cleanup;
     }
-    if (load_body(parsed.body_raw, &body, &body_len, &err) != 0) {
-        err_msg(err);
-        goto cleanup;
+    {
+        int dash_is_stdin = 1;
+        if (parsed.body_literal) {
+            dash_is_stdin = 0;
+        }
+        if (load_body(parsed.body_raw, dash_is_stdin, &body, &body_len, &err) != 0) {
+            err_msg(err);
+            goto cleanup;
+        }
     }
     if (parsed.key_raw != NULL) {
         NormStatus ns = normalize_key(parsed.key_raw, key_norm, sizeof(key_norm));

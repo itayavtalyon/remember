@@ -266,6 +266,26 @@ TEST(update_text_stdin_dash)
     free(db);
 }
 
+/* `--text=-` stores a literal hyphen body (not stdin). */
+TEST(update_text_literal_dash_equals_form)
+{
+    char *db = make_temp_db_path();
+    CmdResult u;
+    CmdResult g;
+    const char *uargs[] = {"update", "1", "--text=-"};
+    const char *gargs[] = {"get", "--json", "1"};
+    ASSERT_TRUE(db != NULL);
+    seed_tagged(db);
+    u = run_remember(db, uargs, 3, NULL);
+    ASSERT_EQ_INT(u.exit_code, 0);
+    cmd_result_free(&u);
+    g = run_remember(db, gargs, 3, NULL);
+    ASSERT_EQ_INT(g.exit_code, 0);
+    ASSERT_STR_CONTAINS(g.out, "\"body\":\"-\"");
+    cmd_result_free(&g);
+    free(db);
+}
+
 TEST(update_positional_body_not_accepted)
 {
     /* Regression: positional body on update must not work (tag wipe footgun). */
@@ -459,6 +479,7 @@ void register_update_tests(void)
     RUN_TEST(update_source_immutable);
     RUN_TEST(update_json_shape);
     RUN_TEST(update_text_stdin_dash);
+    RUN_TEST(update_text_literal_dash_equals_form);
     RUN_TEST(update_positional_body_not_accepted);
     RUN_TEST(update_replace_tags_multiple);
     RUN_TEST(update_replace_tags_keeps_shared_tag_on_other_entry);

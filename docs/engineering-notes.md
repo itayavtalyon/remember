@@ -197,6 +197,7 @@ Rules:
 - **Line coverage gate:** `scripts/check-coverage.sh` — clang coverage on `src/*.c`; require **100% functions** + **100% effective lines** (defensive pure-error exits excluded; see script). Complements `tests/gate-suites` (untested *logic* vs dropped *suites*). `REMEMBER_TEST_HOOKS` enables store malloc/prepare/step/exec fault injection for OOM/SQLite error paths.
 - **Path policy tests belong next to the policy.** Rejecting `:memory:` / `file:` in `util_resolve_db_path` needs a black-box case, not only manual smoke.
 - **stdin vs argv body limits must share one enforcer.** Raw stdin caps are memory guards only (`REMEMBER_STDIN_MAX`); `body_trim_copy` owns the post-trim 64 KiB rule for both paths.
+- **Literal body `"-"` vs stdin:** `load_body(body, dash_is_stdin, …)` — when `dash_is_stdin` is true, `"-"` reads stdin (CLI convention); when false, `"-"` is a one-character body. Callers: `add` sets literal after `--` (and top-level `cli_parse` **forwards** `--` into rest_argv once a subcommand is chosen, so `add -- -` reaches the command); `update` uses `--text=-` for a literal hyphen and `--text -` for stdin.
 
 ## Process
 
