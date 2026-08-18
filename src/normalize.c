@@ -26,9 +26,15 @@ static bool is_ascii_control(unsigned char c)
     return false;
 }
 
-/* Token forbids ASCII whitespace and control (after outer trim). */
+/* Token forbids ASCII control and non-space whitespace (after outer trim).
+   Internal spaces are allowed; edges are already trimmed by the caller.
+   ponytail: internal space runs are kept as-typed (not collapsed), same as
+   the body — collapse in normalize_token if "a  b" vs "a b" duplicates bite. */
 static bool is_token_forbidden(unsigned char c)
 {
+    if (c == ' ') {
+        return false;
+    }
     if (is_ascii_ws(c) || is_ascii_control(c)) {
         return true;
     }

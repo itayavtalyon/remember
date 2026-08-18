@@ -597,7 +597,7 @@ TEST(list_invalid_limit_and_offset_tokens)
 TEST(get_invalid_key_token)
 {
     char *db = make_temp_db_path();
-    const char *args[] = {"get", "--key", "bad key"};
+    const char *args[] = {"get", "--key", "bad\tkey"};
     CmdResult r;
     ASSERT_TRUE(db != NULL);
     r = run_remember(db, args, 3, NULL);
@@ -746,7 +746,7 @@ TEST(add_invalid_utf8_key_message)
 TEST(list_invalid_tag_message)
 {
     char *db = make_temp_db_path();
-    const char *args[] = {"list", "--tag", "bad tag"};
+    const char *args[] = {"list", "--tag", "bad\ttag"};
     CmdResult r;
     ASSERT_TRUE(db != NULL);
     r = run_remember(db, args, 3, NULL);
@@ -759,7 +759,7 @@ TEST(add_second_tag_invalid_frees_first)
 {
     /* First tag OK, second invalid → free loop over partial tags_norm. */
     char *db = make_temp_db_path();
-    const char *args[] = {"add", "--tag", "good", "--tag", "bad tag", "body"};
+    const char *args[] = {"add", "--tag", "good", "--tag", "bad\ttag", "body"};
     CmdResult r;
     ASSERT_TRUE(db != NULL);
     r = run_remember(db, args, 6, NULL);
@@ -871,9 +871,10 @@ TEST(cli_after_command_double_dash_rest)
 
 TEST(norm_token_message_invalid_char_is_key)
 {
-    /* invalid tag/key char uses is_key branch of message helper */
+    /* invalid tag/key char uses is_key branch of message helper (spaces are
+       allowed now; a tab is still rejected) */
     char *db = make_temp_db_path();
-    const char *args[] = {"list", "--key", "has space"};
+    const char *args[] = {"list", "--key", "has\ttab"};
     CmdResult r;
     ASSERT_TRUE(db != NULL);
     r = run_remember(db, args, 3, NULL);

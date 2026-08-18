@@ -165,7 +165,7 @@ Keyed slots make duplicate rivals impossible. Keyless facts still resolve by rec
 
 ## Tag / key normalization
 
-- ASCII casefold; trim; no whitespace/controls inside tokens
+- ASCII casefold; trim edges; internal spaces OK; no tabs/newlines/controls inside tokens
 - Use stable names: `pref:editor`, `decision:db-engine`, `project:remember`
 
 ## Human output (when not using --json)

@@ -329,13 +329,18 @@ TEST(add_empty_tag_rejected)
     free(db);
 }
 
-TEST(add_tag_with_space_rejected)
+TEST(add_tag_with_space_accepted)
 {
+    /* Internal spaces are allowed in tags/keys; a tab is still rejected. */
     char *db = make_temp_db_path();
     const char *args[] = {"add", "--tag", "two words", "body"};
+    const char *bad[] = {"add", "--tag", "two\twords", "body"};
     CmdResult r;
     ASSERT_TRUE(db != NULL);
     r = run_remember(db, args, 4, NULL);
+    ASSERT_EQ_INT(r.exit_code, 0);
+    cmd_result_free(&r);
+    r = run_remember(db, bad, 4, NULL);
     ASSERT_EQ_INT(r.exit_code, 1);
     cmd_result_free(&r);
     free(db);
@@ -598,7 +603,7 @@ void register_add_tests(void)
     RUN_TEST(add_body_over_64kib_rejected);
     RUN_TEST(add_tag_ascii_casefold);
     RUN_TEST(add_empty_tag_rejected);
-    RUN_TEST(add_tag_with_space_rejected);
+    RUN_TEST(add_tag_with_space_accepted);
     RUN_TEST(add_tag_too_long_rejected);
     RUN_TEST(add_tag_project_colon_style_allowed);
     RUN_TEST(add_missing_body_rejected);
