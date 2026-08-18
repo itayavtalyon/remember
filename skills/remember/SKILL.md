@@ -73,7 +73,7 @@ remember --json add --source agent -- -
 - Optional `--key KEY` → keyed **upsert** (same key replaces body; tags **union**; same id)
 - Keyless → body-hash merge (duplicate body merges tags)
 - Body token `-` alone means **stdin**; after `--`, `-` is a one-character body
-- `--source`: `human` | `agent` | `tool` | `unknown` (default `unknown`). **Agents pass `--source agent` on add only.**
+- `--source`: `human` | `agent` | `tool` | `share` | `unknown` (default `unknown`). **Agents pass `--source agent` on add only.** `share` is used by the Mac app Share/Service/Intent surfaces — agents should not set it.
 - Human stdout: id only. JSON: `{"version":1,"action":"created"|"merged"|"updated","count":1,"entries":[…]}`
 
 ### search
