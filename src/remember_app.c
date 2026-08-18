@@ -70,7 +70,7 @@ static void print_command_help(CliCommand topic)
         (void)fprintf(out, "Options:\n");
         (void)fprintf(out, "  --key KEY       Upsert into a named slot\n");
         (void)fprintf(out, "  --tag TAG       Attach a tag (repeatable; union on merge)\n");
-        (void)fprintf(out, "  --source SRC    human|agent|tool|unknown (default unknown)\n");
+        (void)fprintf(out, "  --source SRC    human|agent|tool|share|unknown (default unknown)\n");
         (void)fprintf(out, "  BODY|-          Memory text, or - to read stdin\n");
         (void)fprintf(out, "  -- -            Literal body \"-\" (end of options; not stdin)\n");
         (void)fprintf(out, "\n");

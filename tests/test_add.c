@@ -79,6 +79,31 @@ TEST(add_source_agent_tool_accepted)
     free(db);
 }
 
+TEST(add_source_share_accepted)
+{
+    char *db = make_temp_db_path();
+    CmdResult add_r;
+    CmdResult get_r;
+    CmdResult list_r;
+    const char *a_add[] = {"add", "--json", "--source", "share", "from share sheet"};
+    const char *a_get[] = {"get", "--json", "1"};
+    const char *a_list[] = {"list", "--json", "--source", "share"};
+    ASSERT_TRUE(db != NULL);
+    add_r = run_remember(db, a_add, 5, NULL);
+    ASSERT_EQ_INT(add_r.exit_code, 0);
+    ASSERT_STR_CONTAINS(add_r.out, "\"source\":\"share\"");
+    cmd_result_free(&add_r);
+    get_r = run_remember(db, a_get, 3, NULL);
+    ASSERT_EQ_INT(get_r.exit_code, 0);
+    ASSERT_STR_CONTAINS(get_r.out, "\"source\":\"share\"");
+    cmd_result_free(&get_r);
+    list_r = run_remember(db, a_list, 4, NULL);
+    ASSERT_EQ_INT(list_r.exit_code, 0);
+    ASSERT_STR_CONTAINS(list_r.out, "\"source\":\"share\"");
+    cmd_result_free(&list_r);
+    free(db);
+}
+
 TEST(add_invalid_source_rejected)
 {
     char *db = make_temp_db_path();
@@ -589,6 +614,7 @@ void register_add_tests(void)
     RUN_TEST(add_with_tags_and_source_human);
     RUN_TEST(add_default_source_is_unknown);
     RUN_TEST(add_source_agent_tool_accepted);
+    RUN_TEST(add_source_share_accepted);
     RUN_TEST(add_invalid_source_rejected);
     RUN_TEST(add_empty_body_rejected);
     RUN_TEST(add_whitespace_only_body_rejected);

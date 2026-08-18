@@ -145,7 +145,7 @@ int cmd_add(Store *s, bool json, int rest_argc, const char **rest_argv)
     }
 
     if (!source_is_valid(parsed.source)) {
-        err_msg("invalid source (use human, agent, tool, or unknown)");
+        err_msg("invalid source (use human, agent, tool, share, or unknown)");
         goto cleanup;
     }
     if (parsed.body_raw == NULL) {

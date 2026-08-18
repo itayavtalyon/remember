@@ -322,7 +322,7 @@ static int list_prepare_query(const ListParse *parsed, char *key_norm, size_t ke
     q->key = NULL; /* default; set below only when --key was given */
 
     if (parsed->source != NULL && !source_is_valid(parsed->source)) {
-        err_msg("invalid source (use human, agent, tool, or unknown)");
+        err_msg("invalid source (use human, agent, tool, share, or unknown)");
         return -1;
     }
     if (parsed->ntag_raw > LIST_TAG_FILTER_MAX) {
