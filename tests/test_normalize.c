@@ -304,7 +304,7 @@ TEST(token_tag_key_identical)
     ASSERT_STREQ(tag, tok);
 }
 
-TEST(token_rejects_empty_ws_control_space)
+TEST(token_rejects_empty_and_nonspace_ws_control)
 {
     char out[REMEMBER_TOKEN_MAX + 1];
 
@@ -312,8 +312,9 @@ TEST(token_rejects_empty_ws_control_space)
     ASSERT_EQ_INT(normalize_token("   ", out, sizeof(out)), NORM_ERR_EMPTY);
     ASSERT_EQ_INT(normalize_token(NULL, out, sizeof(out)), NORM_ERR_EMPTY);
 
-    ASSERT_EQ_INT(normalize_token("a b", out, sizeof(out)), NORM_ERR_INVALID_CHAR);
+    /* Internal space is allowed now; other whitespace is still rejected. */
     ASSERT_EQ_INT(normalize_token("a\tb", out, sizeof(out)), NORM_ERR_INVALID_CHAR);
+    ASSERT_EQ_INT(normalize_token("a\nb", out, sizeof(out)), NORM_ERR_INVALID_CHAR);
 
     {
         char ctrl[] = {'a', 0x01, 'b', '\0'};
@@ -323,6 +324,22 @@ TEST(token_rejects_empty_ws_control_space)
         char del[] = {'k', 0x7f, '\0'};
         ASSERT_EQ_INT(normalize_key(del, out, sizeof(out)), NORM_ERR_INVALID_CHAR);
     }
+}
+
+TEST(token_allows_internal_spaces)
+{
+    char out[REMEMBER_TOKEN_MAX + 1];
+
+    /* Internal spaces survive; edges are still trimmed; casefold still applies. */
+    ASSERT_EQ_INT(normalize_token("  My Key  ", out, sizeof(out)), NORM_OK);
+    ASSERT_STREQ(out, "my key");
+
+    ASSERT_EQ_INT(normalize_tag("Red Hot", out, sizeof(out)), NORM_OK);
+    ASSERT_STREQ(out, "red hot");
+
+    /* Runs are kept as-typed (not collapsed), like the body. */
+    ASSERT_EQ_INT(normalize_key("a  b", out, sizeof(out)), NORM_OK);
+    ASSERT_STREQ(out, "a  b");
 }
 
 TEST(token_length_and_utf8)
@@ -391,7 +408,8 @@ void register_normalize_tests(void)
     RUN_TEST(body_hash_matches_trimmed);
     RUN_TEST(token_casefold_and_trim);
     RUN_TEST(token_tag_key_identical);
-    RUN_TEST(token_rejects_empty_ws_control_space);
+    RUN_TEST(token_rejects_empty_and_nonspace_ws_control);
+    RUN_TEST(token_allows_internal_spaces);
     RUN_TEST(token_length_and_utf8);
     RUN_TEST(token_utf8_non_ascii_not_casefolded);
     RUN_TEST(norm_status_string_stable);

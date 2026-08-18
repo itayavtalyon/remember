@@ -17,7 +17,7 @@ typedef enum {
     NORM_ERR_EMPTY,        /* empty after trim */
     NORM_ERR_TOO_LONG,     /* body > 64 KiB or token > 64 bytes */
     NORM_ERR_INVALID_UTF8, /* ill-formed UTF-8 sequence */
-    NORM_ERR_INVALID_CHAR, /* ASCII whitespace or control inside token */
+    NORM_ERR_INVALID_CHAR, /* ASCII control or non-space whitespace inside token */
     NORM_ERR_OOM,          /* allocation failure (body_trim_copy only) */
     NORM_ERR_INTERNAL      /* caller contract violation: missing/too-small out buffer */
 } NormStatus;
@@ -39,7 +39,8 @@ NormStatus body_trim_copy(const char *src, size_t src_len, char **out, size_t *o
 
 /*
  * Shared tag/key algorithm (design: identical rules).
- * Trim; reject empty / invalid UTF-8 / internal ASCII whitespace or control /
+ * Trim edges; internal ASCII spaces are allowed; reject empty / invalid UTF-8 /
+ * internal ASCII control or non-space whitespace (tab, LF, CR, VT, FF) /
  * length > REMEMBER_TOKEN_MAX (NORM_ERR_TOO_LONG); ASCII A–Z → a–z. Writes
  * NUL-terminated result into out. out_cap must be at least REMEMBER_TOKEN_MAX + 1;
  * a missing or too-small buffer is a contract violation → NORM_ERR_INTERNAL
