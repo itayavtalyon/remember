@@ -60,9 +60,9 @@ void err_msg(const char *msg)
 
 int source_is_valid(const char *s)
 {
-    return s != NULL && (strcmp(s, "human") == 0 || strcmp(s, "agent") == 0 ||
-                         strcmp(s, "tool") == 0 || strcmp(s, "share") == 0 ||
-                         strcmp(s, "unknown") == 0);
+    return s != NULL &&
+           (strcmp(s, "human") == 0 || strcmp(s, "agent") == 0 || strcmp(s, "tool") == 0 ||
+            strcmp(s, "share") == 0 || strcmp(s, "unknown") == 0);
 }
 
 const char *action_name(StoreAddAction a)
