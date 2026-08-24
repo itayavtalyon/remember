@@ -18,5 +18,6 @@ void register_verification_edges_tests(void);
 void register_coverage_edges_tests(void);
 void register_facade_tests(void);
 void register_tags_tests(void);
+void register_ttl_tests(void);
 
 #endif /* REMEMBER_REGISTER_H */

@@ -6,7 +6,7 @@ description: >
   project memory; when the user says "remember that", "what did we decide",
   "search my memory", or when you need a stable key-value preference slot.
   Prefer this over chat-only notes for facts that must survive sessions.
-  Use with /remember or when running remember add|search|list|get|update|delete|tags.
+  Use with /remember or when running remember add|search|list|get|update|delete|tags|purge-trash.
 ---
 
 # remember — agent skill
@@ -52,9 +52,10 @@ remember [--db PATH] [--json] <command> …
 |------|---------|
 | `0` | Success (including empty search/list) |
 | `1` | Usage or error |
-| `2` | Not found (`get` / `delete` / `update`) |
+| `2` | Not found (`get` / `delete` / `update`) in either bin |
+| `3` | Wrong bin: `expired` (looked in active, it is trash) or `not_in_trash` (looked with `--trash`, it is active). Flip `--trash`. |
 
-Never invent ids or keys. On exit `2`, the entry is missing — do not fabricate one.
+Never invent ids or keys. On exit `2`, the entry is missing — do not fabricate one. On exit `3`, the row exists in the other bin.
 
 ## Commands (agent style: always `--json` when parsing)
 
@@ -70,8 +71,9 @@ printf '%s' "long body" | remember --json add --source agent -
 remember --json add --source agent -- -
 ```
 
+- Optional `--ttl 7d` (relative from **write** time; token `Nm`/`Nh`/`Nd`/`Nw`, no leading zeros) or `--expires YYYY-MM-DD` (local end-of-day → UTC) / `YYYY-MM-DDTHH:MM:SS[.frac]Z`. At most one. Past `--expires` is allowed (born in trash).
 - Optional `--key KEY` → keyed **upsert** (same key replaces body; tags **union**; same id)
-- Keyless → body-hash merge (duplicate body merges tags)
+- Keyless → body-hash merge (duplicate body merges tags). A keyless/keyed add that hits an **expired** row **revives** it (same id; clears expiry unless this add sets a new one).
 - Body token `-` alone means **stdin**; after `--`, `-` is a one-character body
 - `--source`: `human` | `agent` | `tool` | `share` | `unknown` (default `unknown`). **Agents pass `--source agent` on add only.** `share` is used by the Mac app Share/Service/Intent surfaces — agents should not set it.
 - Human stdout: id only. JSON: `{"version":1,"action":"created"|"merged"|"updated","count":1,"entries":[…]}`
@@ -84,7 +86,7 @@ remember --json search --tag project:foo --limit 20 --offset 0 "FTS query"
 ```
 
 - One required QUERY (FTS5 MATCH). Outer whitespace trimmed; empty after trim → exit 1.
-- Filters: `--tag` (AND, repeatable), `--key`, `--source`, `--limit` (default 20, max 1000), `--offset` (≥ 0)
+- Filters: `--tag` (AND, repeatable), `--key`, `--source`, `--limit` (default 20, max 1000), `--offset` (≥ 0), `--trash` (trash only; default is **active only**)
 - JSON envelope: `version`, `offset`, `limit`, `count`, `total`, `entries` (full bodies)
 - If `total` > rows received, page with `--offset` or raise `--limit` before concluding nothing else exists
 
@@ -95,7 +97,7 @@ remember --json list --tag pref --limit 20
 remember --json list --key pref:editor
 ```
 
-Same filters/paging as search; no FTS query. Sort: `updated_at DESC`, then `id DESC`.
+Same filters/paging as search; no FTS query. Sort: `updated_at DESC`, then `id DESC`. Default omits trash; `--trash` lists expired only.
 
 ### tags
 
@@ -103,7 +105,7 @@ Same filters/paging as search; no FTS query. Sort: `updated_at DESC`, then `id D
 remember --json tags
 ```
 
-Every tag in use with its entry count, sorted by name. Takes no options/args.
+Every tag in use with its entry count, sorted by name. Optional `--trash` counts among trash only; default is active only.
 Use to discover the tag vocabulary before filtering (`list --tag …`) or to offer
 tag suggestions. Human: one `name<TAB>count` line per tag. JSON:
 `{"version":1,"count":N,"tags":[{"name":"pref","count":3},…]}`. Empty DB →
@@ -115,19 +117,26 @@ Exactly **one** of positional `ID` or `--key KEY`. Never both. Do not invent eit
 
 ```bash
 remember --json get 3
+remember --json get --trash 3
 remember --json get --key pref:editor
 remember --json delete 3
+remember --json delete --trash 3
 remember --json delete --key pref:editor
 remember --json update 3 --text "new body"
 remember --json update --key pref:editor --text "nvim"
 remember --json update 3 --tag a --tag b          # replace tags
 remember --json update 3 --clear-tags             # clear tags
 remember --json update 3 --text "x" --tag a       # body + tags
+remember --json update --trash 3 --clear-expires  # restore from trash
+remember --json update --trash 3 --ttl 7d         # restore with new TTL
+remember --json purge-trash                       # permanently delete all trash
 ```
+
+Default locators are **active only**. `--trash` is trash only. There is no include-both flag.
 
 **Update rules:**
 
-- At least one of `--text`, `--tag`, or `--clear-tags`
+- At least one of `--text`, `--tag`, `--clear-tags`, `--ttl`, `--expires`, or `--clear-expires`
 - `--tag` + `--clear-tags` together → usage error
 - Omit tag flags → tags unchanged (never assume omit clears)
 - Body only via `--text` (or `--text -` for stdin; use `--text=-` for a literal
@@ -135,7 +144,10 @@ remember --json update 3 --text "x" --tag a       # body + tags
 - Success always bumps `updated_at`
 - Never changes `source` or `key`
 - Keyless body-hash collision with another keyless entry → exit 1 + conflicting id on stderr
+- `--clear-expires` + `--ttl`/`--expires` → usage error. Restore is `update --trash <locator> --clear-expires`.
+- `--ttl` on update is 7d from the **update**, not from creation.
 - JSON: `"action":"updated"` or `"action":"deleted"` with full entry snapshot where applicable
+- `purge-trash` JSON: `{"version":1,"action":"deleted","count":N,"entries":[…all snapshots…]}` (no cap). Empty trash: count 0, exit 0. Human stdout: the integer N.
 
 ## Entry JSON shape (fields)
 
@@ -147,11 +159,12 @@ remember --json update 3 --text "x" --tag a       # body + tags
   "tags": ["tools"],
   "source": "agent",
   "created_at": "2026-07-26T12:00:00.000Z",
-  "updated_at": "2026-07-26T12:00:00.000Z"
+  "updated_at": "2026-07-26T12:00:00.000Z",
+  "expires_at": null
 }
 ```
 
-`key` is JSON `null` when keyless. Timestamps are UTC with fixed 3-digit milliseconds.
+`key` is JSON `null` when keyless. `expires_at` is always present after `updated_at` (`null` or canonical UTC `.mmmZ`). Timestamps are UTC with fixed 3-digit milliseconds. Human `list`/`search` stay `id | key | tags | preview | updated_at`; human `get` stays body-only. Read expiry from `--json`.
 
 ## Evolving facts — use `--key`
 

@@ -20,6 +20,8 @@ typedef struct {
     size_t ntag_raw;
     /* True when the body token followed `--` — then "-" is a literal body. */
     bool body_literal;
+    const char *ttl_raw;
+    const char *expires_raw;
 } AddParse;
 
 static void add_parse_free(AddParse *p)
@@ -52,6 +54,13 @@ static int handle_add_flag(const char *arg, int *i, int rest_argc, const char **
         }
         return 0;
     }
+    if (strcmp(arg, "--ttl") == 0) {
+        return take_value(i, rest_argc, rest_argv, &out->ttl_raw, err, "missing value for --ttl");
+    }
+    if (strcmp(arg, "--expires") == 0) {
+        return take_value(i, rest_argc, rest_argv, &out->expires_raw, err,
+                          "missing value for --expires");
+    }
     if (arg[0] == '-' && arg[1] != '\0') {
         (void)fprintf(app_err(), "remember: unknown option '%s'\n", arg);
         *err = "";
@@ -72,6 +81,8 @@ static int parse_add_args(int rest_argc, const char **rest_argv, AddParse *out, 
     out->tag_raw = NULL;
     out->ntag_raw = 0U;
     out->body_literal = false;
+    out->ttl_raw = NULL;
+    out->expires_raw = NULL;
     *err = NULL;
 
     for (i = 0; i < rest_argc; i++) {
@@ -127,6 +138,9 @@ int cmd_add(Store *s, bool json, int rest_argc, const char **rest_argv)
     char *body = NULL;
     size_t body_len = 0U;
     char hash[REMEMBER_SHA256_HEX_LEN + 1];
+    char now[32];
+    char expires_iso[32];
+    const char *expires_at = NULL;
     const char *key_or_null = NULL;
     Entry entry;
     StoreAddAction action = STORE_ADD_CREATED;
@@ -177,8 +191,17 @@ int cmd_add(Store *s, bool json, int rest_argc, const char **rest_argv)
     }
 
     body_hash_hex(body, body_len, hash);
+    if (utc_now(now, sizeof(now)) != 0) {
+        err_msg("internal error");
+        goto cleanup;
+    }
+    if (resolve_expiry_flags(parsed.ttl_raw, parsed.expires_raw, now, expires_iso,
+                             sizeof(expires_iso), &expires_at, &err) != 0) {
+        err_msg(err);
+        goto cleanup;
+    }
     st = store_add(s, body, hash, key_or_null, (const char *const *)tags_norm, ntags, parsed.source,
-                   &action, &entry);
+                   expires_at, now, &action, &entry);
     if (st != STORE_OK) {
         err_msg(store_status_message(st));
         goto cleanup;

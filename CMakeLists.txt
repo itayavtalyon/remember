@@ -71,6 +71,7 @@ set_property(SOURCE
     src/cmd_locator.c
     src/cmd_query.c
     src/cmd_tags.c
+    src/cmd_purge.c
     src/output.c
     src/util.c
     APPEND PROPERTY COMPILE_OPTIONS -Wcast-qual
@@ -180,6 +181,7 @@ set(REMEMBER_LIB_SOURCES
     src/cmd_locator.c
     src/cmd_query.c
     src/cmd_tags.c
+    src/cmd_purge.c
     src/output.c
     src/util.c
 )
@@ -242,6 +244,7 @@ set(REMEMBER_TEST_SOURCES
     tests/test_coverage_edges.c
     tests/test_facade.c
     tests/test_tags.c
+    tests/test_ttl.c
 )
 add_executable(remember_tests
     ${REMEMBER_TEST_SOURCES}

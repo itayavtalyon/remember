@@ -18,6 +18,7 @@
 typedef struct {
     const char *key_raw;
     const char *id_raw;
+    bool trash;
 } LocatorParse;
 
 static int parse_id_token(const char *id_raw, long long *out_id)
@@ -42,6 +43,7 @@ static int parse_locator_args(int rest_argc, const char **rest_argv, LocatorPars
 
     out->key_raw = NULL;
     out->id_raw = NULL;
+    out->trash = false;
 
     for (i = 0; i < rest_argc; i++) {
         const char *arg = rest_argv[i];
@@ -56,6 +58,10 @@ static int parse_locator_args(int rest_argc, const char **rest_argv, LocatorPars
                 return -1;
             }
             out->key_raw = rest_argv[++i];
+            continue;
+        }
+        if (!end_opts && strcmp(arg, "--trash") == 0) {
+            out->trash = true;
             continue;
         }
         if (!end_opts && strcmp(arg, "--source") == 0) {
@@ -115,6 +121,7 @@ int cmd_get(Store *s, bool json, int rest_argc, const char **rest_argv)
     LocatorParse parsed;
     Entry entry;
     char key_norm[REMEMBER_TOKEN_MAX + 1];
+    char now[32];
     const char *key = NULL;
     long long id = 0;
     StoreStatus st;
@@ -130,11 +137,15 @@ int cmd_get(Store *s, bool json, int rest_argc, const char **rest_argv)
     if (locator_resolve(&parsed, key_norm, sizeof(key_norm), &key, &id) != 0) {
         return REMEMBER_ERR;
     }
+    if (utc_now(now, sizeof(now)) != 0) {
+        err_msg("internal error");
+        return REMEMBER_ERR;
+    }
 
     if (key != NULL) {
-        st = store_get_by_key(s, key, &entry);
+        st = store_get_by_key(s, key, parsed.trash, now, &entry);
     } else {
-        st = store_get(s, id, &entry);
+        st = store_get(s, id, parsed.trash, now, &entry);
     }
     rc = store_status_to_exit(st);
     if (rc != REMEMBER_OK) {
@@ -164,6 +175,7 @@ int cmd_delete(Store *s, bool json, int rest_argc, const char **rest_argv)
     LocatorParse parsed;
     Entry entry;
     char key_norm[REMEMBER_TOKEN_MAX + 1];
+    char now[32];
     const char *key = NULL;
     long long id = 0;
     StoreStatus st;
@@ -179,11 +191,15 @@ int cmd_delete(Store *s, bool json, int rest_argc, const char **rest_argv)
     if (locator_resolve(&parsed, key_norm, sizeof(key_norm), &key, &id) != 0) {
         return REMEMBER_ERR;
     }
+    if (utc_now(now, sizeof(now)) != 0) {
+        err_msg("internal error");
+        return REMEMBER_ERR;
+    }
 
     if (key != NULL) {
-        st = store_delete_by_key(s, key, &entry);
+        st = store_delete_by_key(s, key, parsed.trash, now, &entry);
     } else {
-        st = store_delete_by_id(s, id, &entry);
+        st = store_delete_by_id(s, id, parsed.trash, now, &entry);
     }
     rc = store_status_to_exit(st);
     if (rc != REMEMBER_OK) {
@@ -213,6 +229,9 @@ typedef struct {
     bool clear_tags;
     const char **tag_raw;
     size_t ntag_raw;
+    const char *ttl_raw;
+    const char *expires_raw;
+    bool clear_expires;
 } UpdateParse;
 
 static void update_parse_free(UpdateParse *p)
@@ -264,6 +283,21 @@ static int handle_update_flag(const char *arg, int *i, int rest_argc, const char
         out->clear_tags = true;
         return 0;
     }
+    if (strcmp(arg, "--trash") == 0) {
+        out->loc.trash = true;
+        return 0;
+    }
+    if (strcmp(arg, "--ttl") == 0) {
+        return take_value(i, rest_argc, rest_argv, &out->ttl_raw, err, "missing value for --ttl");
+    }
+    if (strcmp(arg, "--expires") == 0) {
+        return take_value(i, rest_argc, rest_argv, &out->expires_raw, err,
+                          "missing value for --expires");
+    }
+    if (strcmp(arg, "--clear-expires") == 0) {
+        out->clear_expires = true;
+        return 0;
+    }
     if (strcmp(arg, "--source") == 0) {
         *err = "--source is only valid on add";
         return -1;
@@ -291,6 +325,10 @@ static int parse_update_args(int rest_argc, const char **rest_argv, UpdateParse 
     out->clear_tags = false;
     out->tag_raw = NULL;
     out->ntag_raw = 0U;
+    out->ttl_raw = NULL;
+    out->expires_raw = NULL;
+    out->clear_expires = false;
+    out->loc.trash = false;
     *err = NULL;
 
     for (i = 0; i < rest_argc; i++) {
@@ -324,8 +362,17 @@ static int update_validate_changes(const UpdateParse *p, const char **err)
         *err = "cannot combine --tag and --clear-tags";
         return -1;
     }
-    if (!p->set_text && !p->clear_tags && p->ntag_raw == 0U) {
-        *err = "update requires --text, --tag, or --clear-tags";
+    if (p->clear_expires && (p->ttl_raw != NULL || p->expires_raw != NULL)) {
+        *err = "cannot combine --clear-expires with --ttl or --expires";
+        return -1;
+    }
+    if (p->ttl_raw != NULL && p->expires_raw != NULL) {
+        *err = "cannot combine --ttl and --expires";
+        return -1;
+    }
+    if (!p->set_text && !p->clear_tags && p->ntag_raw == 0U && !p->clear_expires &&
+        p->ttl_raw == NULL && p->expires_raw == NULL) {
+        *err = "update requires --text, --tag, --clear-tags, --ttl, --expires, or --clear-expires";
         return -1;
     }
     return 0;
@@ -396,6 +443,10 @@ int cmd_update(Store *s, bool json, int rest_argc, const char **rest_argv)
     char *body = NULL;
     size_t body_len = 0U;
     char hash[REMEMBER_SHA256_HEX_LEN + 1];
+    char now[32];
+    char expires_iso[32];
+    const char *expires_at = NULL;
+    bool set_expires = false;
     bool set_tags = false;
     const char *body_hash = NULL;
     Entry entry;
@@ -433,8 +484,23 @@ int cmd_update(Store *s, bool json, int rest_argc, const char **rest_argv)
         body_hash = hash;
     }
 
+    if (utc_now(now, sizeof(now)) != 0) {
+        err_msg("internal error");
+        goto cleanup;
+    }
+    if (parsed.clear_expires) {
+        set_expires = true;
+        expires_at = NULL;
+    } else if (resolve_expiry_flags(parsed.ttl_raw, parsed.expires_raw, now, expires_iso,
+                                    sizeof(expires_iso), &expires_at, &err) != 0) {
+        err_msg(err);
+        goto cleanup;
+    } else if (expires_at != NULL) {
+        set_expires = true;
+    }
     st = store_update(s, id, key_or_null, parsed.set_text, body, body_hash, set_tags,
-                      (const char *const *)tags_norm, ntags, &entry, &conflict_id);
+                      (const char *const *)tags_norm, ntags, set_expires, expires_at,
+                      parsed.loc.trash, now, &entry, &conflict_id);
     if (st == STORE_ERR_CONFLICT) {
         (void)fprintf(app_err(), "remember: body hash conflicts with entry %lld\n", conflict_id);
         goto cleanup;

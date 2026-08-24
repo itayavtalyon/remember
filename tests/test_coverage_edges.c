@@ -899,7 +899,8 @@ TEST(store_add_null_tag_slots_empty_join)
     ASSERT_TRUE(s != NULL);
     memset(&e, 0, sizeof(e));
     /* ntags>0 but NULL tag pointers → join_tags_space empty-buffer path */
-    ASSERT_EQ_INT((int)store_add(s, "nt", hash, NULL, tags, 2U, "unknown", &act, &e),
+    ASSERT_EQ_INT((int)store_add(s, "nt", hash, NULL, tags, 2U, "unknown", NULL,
+                                 "2026-06-15T12:00:00.000Z", &act, &e),
                   (int)STORE_OK);
     store_entry_free(&e);
     store_close(s);

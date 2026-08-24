@@ -163,7 +163,8 @@ static const char k_schema_sql[] =
     "  body_hash TEXT NOT NULL,\n"
     "  source TEXT NOT NULL,\n"
     "  created_at TEXT NOT NULL,\n"
-    "  updated_at TEXT NOT NULL\n"
+    "  updated_at TEXT NOT NULL,\n"
+    "  expires_at TEXT\n"
     ");\n"
     "CREATE UNIQUE INDEX ux_entries_key ON entries(key) WHERE key IS NOT NULL;\n"
     "CREATE UNIQUE INDEX ux_entries_bodyhash ON entries(body_hash) WHERE key IS NULL;\n"
@@ -290,13 +291,13 @@ static int apply_pragmas(sqlite3 *db, char *err, size_t errlen)
     return 0;
 }
 
-/* Gate an already-created database: 1 is current, anything else is refused. */
+/* Gate an already-created database: 2 is current, anything else is refused. */
 static int check_version(int version, char *err, size_t errlen)
 {
-    if (version == 1) {
+    if (version == 2) {
         return 0;
     }
-    if (version > 1) {
+    if (version > 2) {
         set_err(err, errlen, "database is newer than this remember");
     } else {
         set_err(err, errlen, "unsupported database version");
@@ -305,15 +306,11 @@ static int check_version(int version, char *err, size_t errlen)
 }
 
 /*
- * Bring an open database to schema version 1.
+ * Bring an open database to schema version 2.
  *
- * Create runs as one transaction (BEGIN → DDL → user_version=1 → COMMIT) so a
- * failure part-way cannot leave objects behind at user_version 0, which would
- * make every later open fail with "table entries already exists".
- *
- * The version is read a second time under the write lock: the first read happens
- * before we hold it, so a concurrent remember may have created the schema while
- * we waited, and our CREATEs would then collide.
+ * Create (v0) and migrate (v1) run as one transaction under a write lock so a
+ * failure part-way cannot leave objects behind at user_version 0, and a
+ * concurrent remember that already created or migrated is visible on re-read.
  */
 static int ensure_schema(sqlite3 *db, char *err, size_t errlen)
 {
@@ -322,7 +319,10 @@ static int ensure_schema(sqlite3 *db, char *err, size_t errlen)
     if (read_user_version(db, &version, err, errlen) != 0) {
         return -1;
     }
-    if (version != 0) {
+    if (version == 2) {
+        return 0;
+    }
+    if (version != 0 && version != 1) {
         return check_version(version, err, errlen);
     }
 
@@ -332,14 +332,23 @@ static int ensure_schema(sqlite3 *db, char *err, size_t errlen)
     if (read_user_version(db, &version, err, errlen) != 0) {
         goto cleanup_fail;
     }
-    if (version != 0) {
+    if (version == 2) {
+        rollback_quiet(db);
+        return 0;
+    }
+    if (version == 0) {
+        if (exec_sql(db, k_schema_sql, err, errlen) != 0) {
+            goto cleanup_fail;
+        }
+    } else if (version == 1) {
+        if (exec_sql(db, "ALTER TABLE entries ADD COLUMN expires_at TEXT;", err, errlen) != 0) {
+            goto cleanup_fail;
+        }
+    } else {
         rollback_quiet(db);
         return check_version(version, err, errlen);
     }
-    if (exec_sql(db, k_schema_sql, err, errlen) != 0) {
-        goto cleanup_fail;
-    }
-    if (exec_sql(db, "PRAGMA user_version = 1;", err, errlen) != 0) {
+    if (exec_sql(db, "PRAGMA user_version = 2;", err, errlen) != 0) {
         goto cleanup_fail;
     }
     if (exec_sql(db, "COMMIT;", err, errlen) != 0) {
@@ -427,6 +436,10 @@ const char *store_status_message(StoreStatus st)
         return "invalid search query";
     case STORE_ERR_CONFLICT:
         return "body hash conflict";
+    case STORE_ERR_EXPIRED:
+        return "expired";
+    case STORE_ERR_NOT_IN_TRASH:
+        return "not_in_trash";
     default:
         return "store error";
     }
@@ -449,6 +462,7 @@ void store_entry_free(Entry *e)
     free(e->source);
     free(e->created_at);
     free(e->updated_at);
+    free(e->expires_at);
     e->key = NULL;
     e->body = NULL;
     e->tags = NULL;
@@ -456,6 +470,7 @@ void store_entry_free(Entry *e)
     e->source = NULL;
     e->created_at = NULL;
     e->updated_at = NULL;
+    e->expires_at = NULL;
     e->id = 0;
 }
 
@@ -482,7 +497,7 @@ static char *dup_str(const char *s)
  * resolution keeps updated_at monotonic across writes within one second.
  * timespec_get with TIME_UTC is ISO C11 (no POSIX feature macros); gmtime (not
  * gmtime_r) is fine for a single-threaded CLI. */
-static int utc_now(char *buf, size_t buflen)
+int utc_now(char *buf, size_t buflen)
 {
     struct timespec ts;
     const struct tm *tmp;
@@ -594,7 +609,7 @@ static StoreStatus load_tags(sqlite3 *db, long long entry_id, char ***out_tags, 
 }
 
 /* Fill *out from a SELECT that returns columns:
- * id, key, body, source, created_at, updated_at (key may be NULL). */
+ * id, key, body, source, created_at, updated_at, expires_at (key/expires_at may be NULL). */
 static StoreStatus fill_entry_from_row(sqlite3 *db, sqlite3_stmt *stmt, Entry *out)
 {
     StoreStatus st;
@@ -603,6 +618,7 @@ static StoreStatus fill_entry_from_row(sqlite3 *db, sqlite3_stmt *stmt, Entry *o
     const unsigned char *source_u;
     const unsigned char *created_u;
     const unsigned char *updated_u;
+    const unsigned char *expires_u;
 
     memset(out, 0, sizeof(*out));
     out->id = sqlite3_column_int64(stmt, 0);
@@ -611,6 +627,7 @@ static StoreStatus fill_entry_from_row(sqlite3 *db, sqlite3_stmt *stmt, Entry *o
     source_u = sqlite3_column_text(stmt, 3);
     created_u = sqlite3_column_text(stmt, 4);
     updated_u = sqlite3_column_text(stmt, 5);
+    expires_u = sqlite3_column_text(stmt, 6);
 
     if (body_u == NULL || source_u == NULL || created_u == NULL || updated_u == NULL) {
         return STORE_ERR_SQLITE;
@@ -626,6 +643,13 @@ static StoreStatus fill_entry_from_row(sqlite3 *db, sqlite3_stmt *stmt, Entry *o
     out->source = dup_str((const char *)source_u);
     out->created_at = dup_str((const char *)created_u);
     out->updated_at = dup_str((const char *)updated_u);
+    if (expires_u != NULL) {
+        out->expires_at = dup_str((const char *)expires_u);
+        if (out->expires_at == NULL) {
+            store_entry_free(out);
+            return STORE_ERR_OOM;
+        }
+    }
     if (out->body == NULL || out->source == NULL || out->created_at == NULL ||
         out->updated_at == NULL) {
         store_entry_free(out);
@@ -639,6 +663,76 @@ static StoreStatus fill_entry_from_row(sqlite3 *db, sqlite3_stmt *stmt, Entry *o
     return STORE_OK;
 }
 
+static StoreStatus load_entry_by_id(sqlite3 *db, long long id, Entry *out);
+static StoreStatus load_entry_by_key(sqlite3 *db, const char *key, Entry *out);
+
+/* Trash iff expires_at is set and lexicographically <= now (ISO .mmmZ). */
+static int entry_is_trash(const char *expires_at, const char *now)
+{
+    return expires_at != NULL && now != NULL && strcmp(expires_at, now) <= 0;
+}
+
+static StoreStatus bin_status(const Entry *e, bool trash, const char *now)
+{
+    int in_trash;
+
+    if (e == NULL || now == NULL) {
+        return STORE_ERR_INTERNAL;
+    }
+    in_trash = entry_is_trash(e->expires_at, now);
+    if (trash) {
+        return in_trash ? STORE_OK : STORE_ERR_NOT_IN_TRASH;
+    }
+    return in_trash ? STORE_ERR_EXPIRED : STORE_OK;
+}
+
+static StoreStatus load_then_check_bin(sqlite3 *db, long long id, const char *key_or_null,
+                                       bool trash, const char *now, Entry *out)
+{
+    StoreStatus st;
+
+    if (now == NULL || out == NULL) {
+        return STORE_ERR_INTERNAL;
+    }
+    if (key_or_null != NULL) {
+        st = load_entry_by_key(db, key_or_null, out);
+    } else {
+        st = load_entry_by_id(db, id, out);
+    }
+    if (st != STORE_OK) {
+        return st;
+    }
+    st = bin_status(out, trash, now);
+    if (st != STORE_OK) {
+        store_entry_free(out);
+    }
+    return st;
+}
+
+static StoreStatus write_expires_at(sqlite3 *db, long long id, const char *expires_at)
+{
+    sqlite3_stmt *stmt = NULL;
+    int rc;
+
+    rc = sqlite3_prepare_v2(db, "UPDATE entries SET expires_at = ?1 WHERE id = ?2;", -1, &stmt,
+                            NULL);
+    if (rc != SQLITE_OK) {
+        return STORE_ERR_SQLITE;
+    }
+    if (expires_at == NULL) {
+        (void)sqlite3_bind_null(stmt, 1);
+    } else {
+        (void)sqlite3_bind_text(stmt, 1, expires_at, -1, SQLITE_STATIC);
+    }
+    (void)sqlite3_bind_int64(stmt, 2, id);
+    if (sqlite3_step(stmt) != SQLITE_DONE) {
+        (void)sqlite3_finalize(stmt);
+        return STORE_ERR_SQLITE;
+    }
+    (void)sqlite3_finalize(stmt);
+    return STORE_OK;
+}
+
 static StoreStatus load_entry_by_id(sqlite3 *db, long long id, Entry *out)
 {
     sqlite3_stmt *stmt = NULL;
@@ -646,7 +740,7 @@ static StoreStatus load_entry_by_id(sqlite3 *db, long long id, Entry *out)
     StoreStatus st;
 
     rc = sqlite3_prepare_v2(db,
-                            "SELECT id, key, body, source, created_at, updated_at "
+                            "SELECT id, key, body, source, created_at, updated_at, expires_at "
                             "FROM entries WHERE id = ?1;",
                             -1, &stmt, NULL);
     if (rc != SQLITE_OK) {
@@ -677,7 +771,7 @@ static StoreStatus load_entry_by_key(sqlite3 *db, const char *key, Entry *out)
         return STORE_ERR_INTERNAL;
     }
     rc = sqlite3_prepare_v2(db,
-                            "SELECT id, key, body, source, created_at, updated_at "
+                            "SELECT id, key, body, source, created_at, updated_at, expires_at "
                             "FROM entries WHERE key = ?1;",
                             -1, &stmt, NULL);
     if (rc != SQLITE_OK) {
@@ -965,14 +1059,14 @@ static StoreStatus find_id_by_key(sqlite3 *db, const char *key, long long *out_i
 
 static StoreStatus insert_entry(sqlite3 *db, const char *body, const char *body_hash,
                                 const char *key_or_null, const char *source, const char *now,
-                                long long *out_id)
+                                const char *expires_at, long long *out_id)
 {
     sqlite3_stmt *stmt = NULL;
     int rc;
 
     rc = sqlite3_prepare_v2(db,
                             "INSERT INTO entries(key, body, body_hash, source, created_at, "
-                            "updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6);",
+                            "updated_at, expires_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7);",
                             -1, &stmt, NULL);
     if (rc != SQLITE_OK) {
         return STORE_ERR_SQLITE;
@@ -987,6 +1081,11 @@ static StoreStatus insert_entry(sqlite3 *db, const char *body, const char *body_
     (void)sqlite3_bind_text(stmt, 4, source, -1, SQLITE_STATIC);
     (void)sqlite3_bind_text(stmt, 5, now, -1, SQLITE_STATIC);
     (void)sqlite3_bind_text(stmt, 6, now, -1, SQLITE_STATIC);
+    if (expires_at == NULL) {
+        (void)sqlite3_bind_null(stmt, 7);
+    } else {
+        (void)sqlite3_bind_text(stmt, 7, expires_at, -1, SQLITE_STATIC);
+    }
     if (sqlite3_step(stmt) != SQLITE_DONE) {
         (void)sqlite3_finalize(stmt);
         return STORE_ERR_SQLITE;
@@ -1040,10 +1139,29 @@ static StoreStatus replace_body(sqlite3 *db, long long id, const char *body, con
     return STORE_OK;
 }
 
+/* If the existing row is trash, clear expiry unless the add supplies a new one. */
+static StoreStatus maybe_revive(sqlite3 *db, long long id, const char *now, const char *expires_at)
+{
+    Entry current;
+    StoreStatus st;
+
+    memset(&current, 0, sizeof(current));
+    st = load_entry_by_id(db, id, &current);
+    if (st != STORE_OK) {
+        return st;
+    }
+    if (entry_is_trash(current.expires_at, now)) {
+        st = write_expires_at(db, id, expires_at);
+    }
+    store_entry_free(&current);
+    return st;
+}
+
 /* Keyed upsert: replace body + union tags, or insert. Sets out_id and out_action. */
 static StoreStatus add_keyed(sqlite3 *db, const char *body, const char *body_hash, const char *key,
                              const char *const *tags, size_t ntags, const char *source,
-                             const char *now, long long *out_id, StoreAddAction *out_action)
+                             const char *now, const char *expires_at, long long *out_id,
+                             StoreAddAction *out_action)
 {
     StoreStatus st;
     long long id = 0;
@@ -1051,6 +1169,10 @@ static StoreStatus add_keyed(sqlite3 *db, const char *body, const char *body_has
     st = find_id_by_key(db, key, &id);
     if (st == STORE_OK) {
         st = replace_body(db, id, body, body_hash, now);
+        if (st != STORE_OK) {
+            return st;
+        }
+        st = maybe_revive(db, id, now, expires_at);
         if (st != STORE_OK) {
             return st;
         }
@@ -1065,7 +1187,7 @@ static StoreStatus add_keyed(sqlite3 *db, const char *body, const char *body_has
     if (st != STORE_ERR_NOT_FOUND) {
         return st;
     }
-    st = insert_entry(db, body, body_hash, key, source, now, &id);
+    st = insert_entry(db, body, body_hash, key, source, now, expires_at, &id);
     if (st != STORE_OK) {
         return st;
     }
@@ -1081,7 +1203,8 @@ static StoreStatus add_keyed(sqlite3 *db, const char *body, const char *body_has
 /* Keyless insert or body-hash merge. */
 static StoreStatus add_keyless(sqlite3 *db, const char *body, const char *body_hash,
                                const char *const *tags, size_t ntags, const char *source,
-                               const char *now, long long *out_id, StoreAddAction *out_action)
+                               const char *now, const char *expires_at, long long *out_id,
+                               StoreAddAction *out_action)
 {
     StoreStatus st;
     long long id = 0;
@@ -1089,6 +1212,10 @@ static StoreStatus add_keyless(sqlite3 *db, const char *body, const char *body_h
     st = find_keyless_by_hash(db, body_hash, &id);
     if (st == STORE_OK) {
         st = touch_updated_at(db, id, now);
+        if (st != STORE_OK) {
+            return st;
+        }
+        st = maybe_revive(db, id, now, expires_at);
         if (st != STORE_OK) {
             return st;
         }
@@ -1103,7 +1230,7 @@ static StoreStatus add_keyless(sqlite3 *db, const char *body, const char *body_h
     if (st != STORE_ERR_NOT_FOUND) {
         return st;
     }
-    st = insert_entry(db, body, body_hash, NULL, source, now, &id);
+    st = insert_entry(db, body, body_hash, NULL, source, now, expires_at, &id);
     if (st != STORE_OK) {
         return st;
     }
@@ -1118,22 +1245,19 @@ static StoreStatus add_keyless(sqlite3 *db, const char *body, const char *body_h
 
 StoreStatus store_add(Store *s, const char *body, const char *body_hash, const char *key_or_null,
                       const char *const *tags, size_t ntags, const char *source,
-                      StoreAddAction *out_action, Entry *out_entry)
+                      const char *expires_at, const char *now, StoreAddAction *out_action,
+                      Entry *out_entry)
 {
-    char now[32];
     long long id = 0;
     StoreAddAction action = STORE_ADD_CREATED;
     StoreStatus st;
     char err_unused[1];
 
     if (s == NULL || s->db == NULL || body == NULL || body_hash == NULL || source == NULL ||
-        out_action == NULL || out_entry == NULL) {
+        now == NULL || out_action == NULL || out_entry == NULL) {
         return STORE_ERR_INTERNAL;
     }
     if (ntags > 0U && tags == NULL) {
-        return STORE_ERR_INTERNAL;
-    }
-    if (utc_now(now, sizeof(now)) != 0) {
         return STORE_ERR_INTERNAL;
     }
     if (exec_sql(s->db, "BEGIN IMMEDIATE;", err_unused, 0U) != 0) {
@@ -1141,9 +1265,11 @@ StoreStatus store_add(Store *s, const char *body, const char *body_hash, const c
     }
 
     if (key_or_null != NULL) {
-        st = add_keyed(s->db, body, body_hash, key_or_null, tags, ntags, source, now, &id, &action);
+        st = add_keyed(s->db, body, body_hash, key_or_null, tags, ntags, source, now, expires_at,
+                       &id, &action);
     } else {
-        st = add_keyless(s->db, body, body_hash, tags, ntags, source, now, &id, &action);
+        st =
+            add_keyless(s->db, body, body_hash, tags, ntags, source, now, expires_at, &id, &action);
     }
     if (st != STORE_OK) {
         goto fail;
@@ -1172,20 +1298,21 @@ fail:
     return st;
 }
 
-StoreStatus store_get(Store *s, long long id, Entry *out_entry)
+StoreStatus store_get(Store *s, long long id, bool trash, const char *now, Entry *out_entry)
 {
     if (s == NULL || s->db == NULL || out_entry == NULL) {
         return STORE_ERR_INTERNAL;
     }
-    return load_entry_by_id(s->db, id, out_entry);
+    return load_then_check_bin(s->db, id, NULL, trash, now, out_entry);
 }
 
-StoreStatus store_get_by_key(Store *s, const char *key, Entry *out_entry)
+StoreStatus store_get_by_key(Store *s, const char *key, bool trash, const char *now,
+                             Entry *out_entry)
 {
     if (s == NULL || s->db == NULL || key == NULL || out_entry == NULL) {
         return STORE_ERR_INTERNAL;
     }
-    return load_entry_by_key(s->db, key, out_entry);
+    return load_then_check_bin(s->db, 0, key, trash, now, out_entry);
 }
 
 void store_tags_free(TagCount *tags, size_t count)
@@ -1201,30 +1328,43 @@ void store_tags_free(TagCount *tags, size_t count)
     free(tags);
 }
 
-StoreStatus store_tags(Store *s, TagCount **out_tags, size_t *out_count)
+StoreStatus store_tags(Store *s, bool trash, const char *now, TagCount **out_tags,
+                       size_t *out_count)
 {
     sqlite3_stmt *stmt = NULL;
     TagCount *rows = NULL;
     size_t n = 0U;
     size_t cap = 0U;
     int rc;
+    const char *sql;
 
-    if (s == NULL || s->db == NULL || out_tags == NULL || out_count == NULL) {
+    if (s == NULL || s->db == NULL || now == NULL || out_tags == NULL || out_count == NULL) {
         return STORE_ERR_INTERNAL;
     }
     *out_tags = NULL;
     *out_count = 0U;
 
     /* INNER JOIN: a tag with no links (never expected — orphans are GC'd) is
-       simply absent, which is the desired "only tags in use" result. */
-    rc = sqlite3_prepare_v2(s->db,
-                            "SELECT t.name, COUNT(et.entry_id) FROM tags t "
-                            "JOIN entry_tags et ON et.tag_id = t.id "
-                            "GROUP BY t.id ORDER BY t.name COLLATE BINARY;",
-                            -1, &stmt, NULL);
+       simply absent, which is the desired "only tags in use" result. Bin filter
+       is on entries so counts match list/search. */
+    if (trash) {
+        sql = "SELECT t.name, COUNT(et.entry_id) FROM tags t "
+              "JOIN entry_tags et ON et.tag_id = t.id "
+              "JOIN entries e ON e.id = et.entry_id "
+              "WHERE e.expires_at IS NOT NULL AND e.expires_at <= ?1 "
+              "GROUP BY t.id ORDER BY t.name COLLATE BINARY;";
+    } else {
+        sql = "SELECT t.name, COUNT(et.entry_id) FROM tags t "
+              "JOIN entry_tags et ON et.tag_id = t.id "
+              "JOIN entries e ON e.id = et.entry_id "
+              "WHERE e.expires_at IS NULL OR e.expires_at > ?1 "
+              "GROUP BY t.id ORDER BY t.name COLLATE BINARY;";
+    }
+    rc = sqlite3_prepare_v2(s->db, sql, -1, &stmt, NULL);
     if (rc != SQLITE_OK) {
         return STORE_ERR_SQLITE;
     }
+    (void)sqlite3_bind_text(stmt, 1, now, -1, SQLITE_STATIC);
 
     while ((rc = sqlite3_step(stmt)) == SQLITE_ROW) {
         const char *name = (const char *)sqlite3_column_text(stmt, 0);
@@ -1349,6 +1489,32 @@ static int list_append_tag_exists(char *sql, size_t sql_cap, size_t *pos, int *n
  * Append shared list/search filter ANDs (source, key, tag EXISTS) at *pos / *nbinds.
  * Tags are AND'd via EXISTS subqueries (one per tag). Returns -1 if truncated.
  */
+static int list_append_bin(char *sql, size_t sql_cap, size_t *pos, int *nbinds,
+                           const char **bind_text, size_t bind_cap, bool trash, const char *now)
+{
+    int n;
+
+    if (now == NULL) {
+        return -1;
+    }
+    if ((size_t)*nbinds >= bind_cap) {
+        return -1;
+    }
+    if (trash) {
+        n = snprintf(sql + *pos, sql_cap - *pos,
+                     " AND e.expires_at IS NOT NULL AND e.expires_at <= ?%d", *nbinds + 1);
+    } else {
+        n = snprintf(sql + *pos, sql_cap - *pos,
+                     " AND (e.expires_at IS NULL OR e.expires_at > ?%d)", *nbinds + 1);
+    }
+    if (n < 0 || (size_t)n >= sql_cap - *pos) {
+        return -1;
+    }
+    *pos += (size_t)n;
+    bind_text[(*nbinds)++] = now;
+    return 0;
+}
+
 static int list_append_filters(const ListQuery *q, char *sql, size_t sql_cap, size_t *pos,
                                int *nbinds, const char **bind_text, size_t bind_cap)
 {
@@ -1374,14 +1540,15 @@ static int list_append_filters(const ListQuery *q, char *sql, size_t sql_cap, si
  * Build list WHERE clause fragments and bind params.
  * sql_out must be large enough (caller-sized); returns -1 if truncated.
  */
-static int list_build_where(const ListQuery *q, char *sql, size_t sql_cap, int *out_nbinds,
-                            const char **bind_text, size_t bind_cap)
+static int list_build_where(const ListQuery *q, const char *now, char *sql, size_t sql_cap,
+                            int *out_nbinds, const char **bind_text, size_t bind_cap)
 {
     size_t pos = 0U;
     int nbinds = 0;
     int n;
 
-    if (q == NULL || sql == NULL || sql_cap == 0U || out_nbinds == NULL || bind_text == NULL) {
+    if (q == NULL || now == NULL || sql == NULL || sql_cap == 0U || out_nbinds == NULL ||
+        bind_text == NULL) {
         return -1;
     }
     n = snprintf(sql, sql_cap, " WHERE 1=1");
@@ -1393,6 +1560,9 @@ static int list_build_where(const ListQuery *q, char *sql, size_t sql_cap, int *
     if (list_append_filters(q, sql, sql_cap, &pos, &nbinds, bind_text, bind_cap) != 0) {
         return -1;
     }
+    if (list_append_bin(sql, sql_cap, &pos, &nbinds, bind_text, bind_cap, q->trash, now) != 0) {
+        return -1;
+    }
     *out_nbinds = nbinds;
     return 0;
 }
@@ -1402,15 +1572,15 @@ static int list_build_where(const ListQuery *q, char *sql, size_t sql_cap, int *
  * aliases for MATCH/bm25), then the same entry filters as list.
  * Bind slot 1 is the MATCH query; filters continue from 2.
  */
-static int search_build_where(const SearchQuery *q, char *sql, size_t sql_cap, int *out_nbinds,
-                              const char **bind_text, size_t bind_cap)
+static int search_build_where(const SearchQuery *q, const char *now, char *sql, size_t sql_cap,
+                              int *out_nbinds, const char **bind_text, size_t bind_cap)
 {
     size_t pos = 0U;
     int nbinds = 0;
     int n;
 
-    if (q == NULL || q->query == NULL || sql == NULL || sql_cap == 0U || out_nbinds == NULL ||
-        bind_text == NULL || bind_cap < 1U) {
+    if (q == NULL || q->query == NULL || now == NULL || sql == NULL || sql_cap == 0U ||
+        out_nbinds == NULL || bind_text == NULL || bind_cap < 1U) {
         return -1;
     }
     n = snprintf(sql, sql_cap, " WHERE entries_fts MATCH ?1");
@@ -1422,6 +1592,10 @@ static int search_build_where(const SearchQuery *q, char *sql, size_t sql_cap, i
     nbinds = 1;
 
     if (list_append_filters(&q->filters, sql, sql_cap, &pos, &nbinds, bind_text, bind_cap) != 0) {
+        return -1;
+    }
+    if (list_append_bin(sql, sql_cap, &pos, &nbinds, bind_text, bind_cap, q->filters.trash, now) !=
+        0) {
         return -1;
     }
     *out_nbinds = nbinds;
@@ -1550,8 +1724,8 @@ static StoreStatus run_count_and_page(sqlite3 *db, const char *count_sql, const 
  * List: newest-first page with filters. count_sql/select_sql pad LIST_SQL_CAP for
  * the fixed SELECT column list + ORDER BY + LIMIT/OFFSET that frame where_sql.
  */
-static StoreStatus list_query_exec(sqlite3 *db, const ListQuery *q, Entry **out_entries,
-                                   size_t *out_count, size_t *out_total)
+static StoreStatus list_query_exec(sqlite3 *db, const ListQuery *q, const char *now,
+                                   Entry **out_entries, size_t *out_count, size_t *out_total)
 {
     char where_sql[LIST_SQL_CAP];
     char count_sql[LIST_SQL_CAP + 64];
@@ -1560,7 +1734,8 @@ static StoreStatus list_query_exec(sqlite3 *db, const ListQuery *q, Entry **out_
     int nbinds = 0;
     int sn;
 
-    if (list_build_where(q, where_sql, sizeof(where_sql), &nbinds, bind_text, LIST_BIND_CAP) != 0) {
+    if (list_build_where(q, now, where_sql, sizeof(where_sql), &nbinds, bind_text, LIST_BIND_CAP) !=
+        0) {
         return STORE_ERR_INTERNAL;
     }
     sn = snprintf(count_sql, sizeof(count_sql), "SELECT COUNT(*) FROM entries e%s;", where_sql);
@@ -1568,7 +1743,7 @@ static StoreStatus list_query_exec(sqlite3 *db, const ListQuery *q, Entry **out_
         return STORE_ERR_INTERNAL;
     }
     sn = snprintf(select_sql, sizeof(select_sql),
-                  "SELECT e.id, e.key, e.body, e.source, e.created_at, e.updated_at "
+                  "SELECT e.id, e.key, e.body, e.source, e.created_at, e.updated_at, e.expires_at "
                   "FROM entries e%s ORDER BY e.updated_at DESC, e.id DESC "
                   "LIMIT ?%d OFFSET ?%d;",
                   where_sql, nbinds + 1, nbinds + 2);
@@ -1579,14 +1754,14 @@ static StoreStatus list_query_exec(sqlite3 *db, const ListQuery *q, Entry **out_
                               store_status_plain, out_entries, out_count, out_total);
 }
 
-StoreStatus store_list(Store *s, const ListQuery *q, Entry **out_entries, size_t *out_count,
-                       size_t *out_total)
+StoreStatus store_list(Store *s, const ListQuery *q, const char *now, Entry **out_entries,
+                       size_t *out_count, size_t *out_total)
 {
     char err_unused[1];
     StoreStatus st;
 
-    if (s == NULL || s->db == NULL || q == NULL || out_entries == NULL || out_count == NULL ||
-        out_total == NULL) {
+    if (s == NULL || s->db == NULL || q == NULL || now == NULL || out_entries == NULL ||
+        out_count == NULL || out_total == NULL) {
         return STORE_ERR_INTERNAL;
     }
     *out_entries = NULL;
@@ -1598,7 +1773,7 @@ StoreStatus store_list(Store *s, const ListQuery *q, Entry **out_entries, size_t
     if (exec_sql(s->db, "BEGIN;", err_unused, 0U) != 0) {
         return STORE_ERR_SQLITE;
     }
-    st = list_query_exec(s->db, q, out_entries, out_count, out_total);
+    st = list_query_exec(s->db, q, now, out_entries, out_count, out_total);
     if (st != STORE_OK) {
         rollback_quiet(s->db);
         return st;
@@ -1622,8 +1797,8 @@ StoreStatus store_list(Store *s, const ListQuery *q, Entry **out_entries, size_t
  * the real table name in bm25(), not an alias. count_sql/select_sql pad
  * LIST_SQL_CAP for the JOIN + bm25 ORDER BY text that frame where_sql.
  */
-static StoreStatus search_query_exec(sqlite3 *db, const SearchQuery *q, Entry **out_entries,
-                                     size_t *out_count, size_t *out_total)
+static StoreStatus search_query_exec(sqlite3 *db, const SearchQuery *q, const char *now,
+                                     Entry **out_entries, size_t *out_count, size_t *out_total)
 {
     char where_sql[LIST_SQL_CAP];
     char count_sql[LIST_SQL_CAP + 128];
@@ -1632,8 +1807,8 @@ static StoreStatus search_query_exec(sqlite3 *db, const SearchQuery *q, Entry **
     int nbinds = 0;
     int sn;
 
-    if (search_build_where(q, where_sql, sizeof(where_sql), &nbinds, bind_text, LIST_BIND_CAP) !=
-        0) {
+    if (search_build_where(q, now, where_sql, sizeof(where_sql), &nbinds, bind_text,
+                           LIST_BIND_CAP) != 0) {
         return STORE_ERR_INTERNAL;
     }
     sn = snprintf(count_sql, sizeof(count_sql),
@@ -1644,7 +1819,7 @@ static StoreStatus search_query_exec(sqlite3 *db, const SearchQuery *q, Entry **
         return STORE_ERR_INTERNAL;
     }
     sn = snprintf(select_sql, sizeof(select_sql),
-                  "SELECT e.id, e.key, e.body, e.source, e.created_at, e.updated_at "
+                  "SELECT e.id, e.key, e.body, e.source, e.created_at, e.updated_at, e.expires_at "
                   "FROM entries e "
                   "JOIN entries_fts ON entries_fts.rowid = e.id%s "
                   "ORDER BY bm25(entries_fts), e.updated_at DESC, e.id DESC "
@@ -1658,14 +1833,14 @@ static StoreStatus search_query_exec(sqlite3 *db, const SearchQuery *q, Entry **
                               out_total);
 }
 
-StoreStatus store_search(Store *s, const SearchQuery *q, Entry **out_entries, size_t *out_count,
-                         size_t *out_total)
+StoreStatus store_search(Store *s, const SearchQuery *q, const char *now, Entry **out_entries,
+                         size_t *out_count, size_t *out_total)
 {
     char err_unused[1];
     StoreStatus st;
 
-    if (s == NULL || s->db == NULL || q == NULL || q->query == NULL || out_entries == NULL ||
-        out_count == NULL || out_total == NULL) {
+    if (s == NULL || s->db == NULL || q == NULL || q->query == NULL || now == NULL ||
+        out_entries == NULL || out_count == NULL || out_total == NULL) {
         return STORE_ERR_INTERNAL;
     }
     *out_entries = NULL;
@@ -1675,7 +1850,7 @@ StoreStatus store_search(Store *s, const SearchQuery *q, Entry **out_entries, si
     if (exec_sql(s->db, "BEGIN;", err_unused, 0U) != 0) {
         return STORE_ERR_SQLITE;
     }
-    st = search_query_exec(s->db, q, out_entries, out_count, out_total);
+    st = search_query_exec(s->db, q, now, out_entries, out_count, out_total);
     if (st != STORE_OK) {
         rollback_quiet(s->db);
         return st;
@@ -1733,7 +1908,7 @@ static StoreStatus gc_orphan_tags(sqlite3 *db)
  * frees). On failure it is left zeroed / freed.
  */
 static StoreStatus delete_entry_tx(Store *s, long long id_or_zero, const char *key_or_null,
-                                   Entry *out_deleted)
+                                   bool trash, const char *now, Entry *out_deleted)
 {
     char err_unused[1];
     StoreStatus st;
@@ -1747,11 +1922,7 @@ static StoreStatus delete_entry_tx(Store *s, long long id_or_zero, const char *k
         return STORE_ERR_SQLITE;
     }
 
-    if (key_or_null != NULL) {
-        st = load_entry_by_key(s->db, key_or_null, out_deleted);
-    } else {
-        st = load_entry_by_id(s->db, id, out_deleted);
-    }
+    st = load_then_check_bin(s->db, id, key_or_null, trash, now, out_deleted);
     if (st != STORE_OK) {
         goto fail;
     }
@@ -1800,20 +1971,22 @@ fail:
     return st;
 }
 
-StoreStatus store_delete_by_id(Store *s, long long id, Entry *out_deleted)
+StoreStatus store_delete_by_id(Store *s, long long id, bool trash, const char *now,
+                               Entry *out_deleted)
 {
-    if (s == NULL || s->db == NULL || out_deleted == NULL) {
+    if (s == NULL || s->db == NULL || now == NULL || out_deleted == NULL) {
         return STORE_ERR_INTERNAL;
     }
-    return delete_entry_tx(s, id, NULL, out_deleted);
+    return delete_entry_tx(s, id, NULL, trash, now, out_deleted);
 }
 
-StoreStatus store_delete_by_key(Store *s, const char *key, Entry *out_deleted)
+StoreStatus store_delete_by_key(Store *s, const char *key, bool trash, const char *now,
+                                Entry *out_deleted)
 {
-    if (s == NULL || s->db == NULL || key == NULL || out_deleted == NULL) {
+    if (s == NULL || s->db == NULL || key == NULL || now == NULL || out_deleted == NULL) {
         return STORE_ERR_INTERNAL;
     }
-    return delete_entry_tx(s, 0, key, out_deleted);
+    return delete_entry_tx(s, 0, key, trash, now, out_deleted);
 }
 
 /* Drop all entry_tags for entry_id, then link the new set (ntags may be 0). */
@@ -1845,12 +2018,12 @@ static StoreStatus replace_tags(sqlite3 *db, long long entry_id, const char *con
 static StoreStatus update_check_args(const Store *s, long long id, const char *key_or_null,
                                      bool set_body, const char *body, const char *body_hash,
                                      bool set_tags, const char *const *tags, size_t ntags,
-                                     const Entry *out_entry)
+                                     bool set_expires, const char *now, const Entry *out_entry)
 {
-    if (s == NULL || s->db == NULL || out_entry == NULL) {
+    if (s == NULL || s->db == NULL || now == NULL || out_entry == NULL) {
         return STORE_ERR_INTERNAL;
     }
-    if (!set_body && !set_tags) {
+    if (!set_body && !set_tags && !set_expires) {
         return STORE_ERR_INTERNAL;
     }
     if (set_body && (body == NULL || body_hash == NULL)) {
@@ -1895,7 +2068,8 @@ static StoreStatus update_check_body_conflict(sqlite3 *db, long long entry_id, b
 static StoreStatus update_apply_changes(sqlite3 *db, long long entry_id, bool is_keyless,
                                         bool set_body, const char *body, const char *body_hash,
                                         bool set_tags, const char *const *tags, size_t ntags,
-                                        const char *now, long long *out_conflict_id)
+                                        bool set_expires, const char *expires_at, const char *now,
+                                        long long *out_conflict_id)
 {
     StoreStatus st;
 
@@ -1917,15 +2091,21 @@ static StoreStatus update_apply_changes(sqlite3 *db, long long entry_id, bool is
             return st;
         }
     }
+    if (set_expires) {
+        st = write_expires_at(db, entry_id, expires_at);
+        if (st != STORE_OK) {
+            return st;
+        }
+    }
     return fts_resync(db, entry_id);
 }
 
 StoreStatus store_update(Store *s, long long id, const char *key_or_null, bool set_body,
                          const char *body, const char *body_hash, bool set_tags,
-                         const char *const *tags, size_t ntags, Entry *out_entry,
+                         const char *const *tags, size_t ntags, bool set_expires,
+                         const char *expires_at, bool trash, const char *now, Entry *out_entry,
                          long long *out_conflict_id)
 {
-    char now[32];
     char err_unused[1];
     StoreStatus st;
     Entry current;
@@ -1936,12 +2116,9 @@ StoreStatus store_update(Store *s, long long id, const char *key_or_null, bool s
         *out_conflict_id = 0;
     }
     st = update_check_args(s, id, key_or_null, set_body, body, body_hash, set_tags, tags, ntags,
-                           out_entry);
+                           set_expires, now, out_entry);
     if (st != STORE_OK) {
         return st;
-    }
-    if (utc_now(now, sizeof(now)) != 0) {
-        return STORE_ERR_INTERNAL;
     }
 
     memset(&current, 0, sizeof(current));
@@ -1951,11 +2128,7 @@ StoreStatus store_update(Store *s, long long id, const char *key_or_null, bool s
         return STORE_ERR_SQLITE;
     }
 
-    if (key_or_null != NULL) {
-        st = load_entry_by_key(s->db, key_or_null, &current);
-    } else {
-        st = load_entry_by_id(s->db, id, &current);
-    }
+    st = load_then_check_bin(s->db, id, key_or_null, trash, now, &current);
     if (st != STORE_OK) {
         rollback_quiet(s->db);
         return st;
@@ -1964,7 +2137,7 @@ StoreStatus store_update(Store *s, long long id, const char *key_or_null, bool s
     is_keyless = (current.key == NULL);
 
     st = update_apply_changes(s->db, entry_id, is_keyless, set_body, body, body_hash, set_tags,
-                              tags, ntags, now, out_conflict_id);
+                              tags, ntags, set_expires, expires_at, now, out_conflict_id);
     if (st != STORE_OK) {
         store_entry_free(&current);
         rollback_quiet(s->db);
@@ -1980,4 +2153,97 @@ StoreStatus store_update(Store *s, long long id, const char *key_or_null, bool s
 
     /* Durable past COMMIT; snapshot failure does not lose the write. */
     return load_entry_by_id(s->db, entry_id, out_entry);
+}
+
+StoreStatus store_purge_trash(Store *s, const char *now, Entry **out_entries, size_t *out_count)
+{
+    sqlite3_stmt *sel = NULL;
+    sqlite3_stmt *del = NULL;
+    char err_unused[1];
+    StoreStatus st;
+    Entry *rows = NULL;
+    size_t n = 0U;
+    size_t cap = 0U;
+    size_t i;
+    int rc;
+
+    if (s == NULL || s->db == NULL || now == NULL || out_entries == NULL || out_count == NULL) {
+        return STORE_ERR_INTERNAL;
+    }
+    *out_entries = NULL;
+    *out_count = 0U;
+
+    if (exec_sql(s->db, "BEGIN IMMEDIATE;", err_unused, 0U) != 0) {
+        return STORE_ERR_SQLITE;
+    }
+
+    rc = sqlite3_prepare_v2(s->db,
+                            "SELECT id, key, body, source, created_at, updated_at, expires_at "
+                            "FROM entries WHERE expires_at IS NOT NULL AND expires_at <= ?1 "
+                            "ORDER BY updated_at DESC, id DESC;",
+                            -1, &sel, NULL);
+    if (rc != SQLITE_OK) {
+        rollback_quiet(s->db);
+        return STORE_ERR_SQLITE;
+    }
+    (void)sqlite3_bind_text(sel, 1, now, -1, SQLITE_STATIC);
+    while ((rc = sqlite3_step(sel)) == SQLITE_ROW) {
+        st = list_append_row(s->db, sel, &rows, &n, &cap);
+        if (st != STORE_OK) {
+            (void)sqlite3_finalize(sel);
+            free_entry_rows(rows, n);
+            rollback_quiet(s->db);
+            return st;
+        }
+    }
+    (void)sqlite3_finalize(sel);
+    sel = NULL;
+    if (rc != SQLITE_DONE) {
+        free_entry_rows(rows, n);
+        rollback_quiet(s->db);
+        return STORE_ERR_SQLITE;
+    }
+
+    for (i = 0; i < n; i++) {
+        st = fts_delete(s->db, rows[i].id);
+        if (st != STORE_OK) {
+            free_entry_rows(rows, n);
+            rollback_quiet(s->db);
+            return st;
+        }
+    }
+
+    rc = sqlite3_prepare_v2(
+        s->db, "DELETE FROM entries WHERE expires_at IS NOT NULL AND expires_at <= ?1;", -1, &del,
+        NULL);
+    if (rc != SQLITE_OK) {
+        free_entry_rows(rows, n);
+        rollback_quiet(s->db);
+        return STORE_ERR_SQLITE;
+    }
+    (void)sqlite3_bind_text(del, 1, now, -1, SQLITE_STATIC);
+    if (sqlite3_step(del) != SQLITE_DONE) {
+        (void)sqlite3_finalize(del);
+        free_entry_rows(rows, n);
+        rollback_quiet(s->db);
+        return STORE_ERR_SQLITE;
+    }
+    (void)sqlite3_finalize(del);
+
+    st = gc_orphan_tags(s->db);
+    if (st != STORE_OK) {
+        free_entry_rows(rows, n);
+        rollback_quiet(s->db);
+        return st;
+    }
+
+    if (exec_sql(s->db, "COMMIT;", err_unused, 0U) != 0) {
+        free_entry_rows(rows, n);
+        rollback_quiet(s->db);
+        return STORE_ERR_SQLITE;
+    }
+
+    *out_entries = rows;
+    *out_count = n;
+    return STORE_OK;
 }

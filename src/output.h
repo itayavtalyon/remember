@@ -16,6 +16,9 @@ int output_entry_json(FILE *out, const Entry *e);
 /* Uniform mutation envelope: version/action/count/entries:[one]. */
 int output_action_envelope(FILE *out, const char *action, const Entry *e);
 
+/* purge-trash JSON: action deleted, count N, all snapshots (no cap). */
+int output_deleted_list(FILE *out, const Entry *entries, size_t count);
+
 /* Get envelope: version/count/entries:[one] (no action). */
 int output_get_envelope(FILE *out, const Entry *e);
 

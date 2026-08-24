@@ -54,6 +54,7 @@ typedef struct {
     size_t ntag_raw;
     size_t limit;
     size_t offset;
+    bool trash;
 } ListParse;
 
 static void list_parse_free(ListParse *p)
@@ -131,6 +132,10 @@ static int list_handle_opt(const char *arg, int *i, int rest_argc, const char **
     if (strcmp(arg, "--offset") == 0) {
         return list_take_offset(i, rest_argc, rest_argv, &out->offset, err);
     }
+    if (strcmp(arg, "--trash") == 0) {
+        out->trash = true;
+        return 0;
+    }
     if (arg[0] == '-' && arg[1] != '\0') {
         (void)fprintf(app_err(), "remember: unknown option '%s'\n", arg);
         *err = "";
@@ -147,6 +152,7 @@ static void list_parse_init(ListParse *out)
     out->ntag_raw = 0U;
     out->limit = LIST_LIMIT_DEFAULT;
     out->offset = 0U;
+    out->trash = false;
 }
 
 static int parse_list_args(int rest_argc, const char **rest_argv, ListParse *out, const char **err)
@@ -347,6 +353,7 @@ static int list_prepare_query(const ListParse *parsed, char *key_norm, size_t ke
     q->source = parsed->source;
     q->limit = parsed->limit;
     q->offset = parsed->offset;
+    q->trash = parsed->trash;
     return 0;
 }
 
@@ -393,6 +400,7 @@ int cmd_list(Store *s, bool json, int rest_argc, const char **rest_argv)
     size_t total = 0U;
     StoreStatus st;
     int rc = REMEMBER_ERR;
+    char now[32];
 
     memset(&q, 0, sizeof(q));
     memset(key_norm, 0, sizeof(key_norm));
@@ -409,7 +417,11 @@ int cmd_list(Store *s, bool json, int rest_argc, const char **rest_argv)
         goto cleanup;
     }
 
-    st = store_list(s, &q, &entries, &count, &total);
+    if (utc_now(now, sizeof(now)) != 0) {
+        err_msg("internal error");
+        goto cleanup;
+    }
+    st = store_list(s, &q, now, &entries, &count, &total);
     if (st != STORE_OK) {
         err_msg(store_status_message(st));
         goto cleanup;
@@ -441,6 +453,7 @@ int cmd_search(Store *s, bool json, int rest_argc, const char **rest_argv)
     size_t total = 0U;
     StoreStatus st;
     int rc = REMEMBER_ERR;
+    char now[32];
 
     memset(&q, 0, sizeof(q));
     memset(key_norm, 0, sizeof(key_norm));
@@ -459,7 +472,11 @@ int cmd_search(Store *s, bool json, int rest_argc, const char **rest_argv)
     }
     q.query = parsed.query;
 
-    st = store_search(s, &q, &entries, &count, &total);
+    if (utc_now(now, sizeof(now)) != 0) {
+        err_msg("internal error");
+        goto cleanup;
+    }
+    st = store_search(s, &q, now, &entries, &count, &total);
     if (st != STORE_OK) {
         err_msg(store_status_message(st));
         goto cleanup;

@@ -65,12 +65,12 @@ static const CommandEntry k_commands[] = {
     {"update", CLI_CMD_UPDATE, "Change body and/or tags by id or --key"},
     {"delete", CLI_CMD_DELETE, "Remove an entry by id or --key"},
     {"tags", CLI_CMD_TAGS, "List all tags with entry counts"},
+    {"purge-trash", CLI_CMD_PURGE_TRASH, "Permanently delete every expired memory"},
 };
 
 enum { COMMAND_COUNT = (int)(sizeof(k_commands) / sizeof(k_commands[0])) };
 
-/* Linear scan: eight fixed entries. A hash map would be more code and mutable
-   state, and slower at this size. */
+/* Linear scan: n is tiny. A hash map would be more code and mutable state. */
 static const CommandEntry *cmd_lookup(const char *name)
 {
     int i;
