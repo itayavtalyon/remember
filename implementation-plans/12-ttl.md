@@ -26,7 +26,7 @@ tests + coverage.
 | `--ttl 1h` stored as ISO `> now`; in default list | relative |
 | `--expires` past → only `--trash` list | absolute + trash |
 | Default list/search/tags omit expired | hide |
-| `get` expired → exit 1, stderr `expired` | error token |
+| `get` expired → **exit 3**, stderr `expired` | distinct from 1 and 2 |
 | `get --trash` expired → 0 + row | trash read |
 | `get --trash` active → exit 2 | trash-only get |
 | `update --clear-expires` restores | restore |
@@ -47,7 +47,7 @@ tests + coverage.
 
 - [ ] Design log 003 unchanged except Implementation Results
 - [ ] Must-pass table green; `user_version` 2
-- [ ] Public exits still 0/1/2; expired → 1 + `expired`
+- [ ] Public exits 0/1/2/**3**; expired → **3** + stderr `expired`
 - [ ] Skill/help match flags
 - [ ] remember-mac pin bump is a **follow-up** (plan 11)
 
