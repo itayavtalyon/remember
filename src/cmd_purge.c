@@ -9,7 +9,6 @@
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
-#include <string.h>
 
 int cmd_purge_trash(Store *s, bool json, int rest_argc, const char **rest_argv)
 {
