@@ -14,6 +14,7 @@ typedef enum {
     CLI_CMD_UPDATE,
     CLI_CMD_DELETE,
     CLI_CMD_TAGS,
+    CLI_CMD_PURGE_TRASH,
     CLI_CMD_UNKNOWN
 } CliCommand;
 

@@ -419,10 +419,34 @@ TEST(json_entry_includes_key_field_null_when_keyless)
     free(db);
 }
 
+TEST(get_expired_exits_three)
+{
+    char *db = make_temp_db_path();
+    CmdResult r;
+    CmdResult g;
+    const char *a[] = {"add", "gone"};
+    const char *gargs[] = {"get", "1"};
+
+    ASSERT_TRUE(db != NULL);
+    r = run_remember(db, a, 2, NULL);
+    ASSERT_EQ_INT(r.exit_code, 0);
+    cmd_result_free(&r);
+    free(harness_sqlite_query_line(
+        db, "UPDATE entries SET expires_at='2020-01-01T00:00:00.000Z' WHERE id=1;"));
+
+    g = run_remember(db, gargs, 2, NULL);
+    ASSERT_EQ_INT(g.exit_code, 3);
+    ASSERT_STREQ(g.err, "remember: expired\n");
+    ASSERT_TRUE(g.out == NULL || g.out[0] == '\0');
+    cmd_result_free(&g);
+    free(db);
+}
+
 void register_get_list_delete_tests(void)
 {
     RUN_TEST(get_existing_json_envelope);
     RUN_TEST(get_missing_exits_two);
+    RUN_TEST(get_expired_exits_three);
     RUN_TEST(get_human_shows_body);
     RUN_TEST(list_empty_exits_zero);
     RUN_TEST(list_default_order_updated_at_desc);

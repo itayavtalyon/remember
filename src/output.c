@@ -110,6 +110,13 @@ int output_entry_json(FILE *out, const Entry *e)
     if (write_json_field_str(out, "updated_at", e->updated_at) != 0) {
         return -1;
     }
+    if (e->expires_at == NULL) {
+        if (fputs(",\"expires_at\":null", out) < 0) {
+            return -1;
+        }
+    } else if (write_json_field_str(out, "expires_at", e->expires_at) != 0) {
+        return -1;
+    }
     if (fputc('}', out) == EOF) {
         return -1;
     }
@@ -132,6 +139,34 @@ int output_action_envelope(FILE *out, const char *action, const Entry *e)
     }
     if (output_entry_json(out, e) != 0) {
         return -1;
+    }
+    if (fputs("]}\n", out) < 0) {
+        return -1;
+    }
+    return 0;
+}
+
+int output_deleted_list(FILE *out, const Entry *entries, size_t count)
+{
+    size_t i;
+
+    if (out == NULL) {
+        return -1;
+    }
+    if (count > 0U && entries == NULL) {
+        return -1;
+    }
+    if (fprintf(out, "{\"version\":1,\"action\":\"deleted\",\"count\":%zu,\"entries\":[", count) <
+        0) {
+        return -1;
+    }
+    for (i = 0; i < count; i++) {
+        if (i > 0U && fputc(',', out) == EOF) {
+            return -1;
+        }
+        if (output_entry_json(out, &entries[i]) != 0) {
+            return -1;
+        }
     }
     if (fputs("]}\n", out) < 0) {
         return -1;

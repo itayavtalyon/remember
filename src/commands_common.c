@@ -6,9 +6,11 @@
 #include "store.h"
 #include "util.h"
 
+#include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 
 const char *norm_body_message(NormStatus st)
 {
@@ -189,6 +191,10 @@ int store_status_to_exit(StoreStatus st)
         err_msg(store_status_message(st));
         return REMEMBER_NOT_FOUND;
     }
+    if (st == STORE_ERR_EXPIRED || st == STORE_ERR_NOT_IN_TRASH) {
+        err_msg(store_status_message(st));
+        return REMEMBER_WRONG_BIN;
+    }
     if (st != STORE_OK) {
         err_msg(store_status_message(st));
         return REMEMBER_ERR;
@@ -231,6 +237,362 @@ int load_body(const char *body_raw, int dash_is_stdin, char **out_body, size_t *
     if (ns != NORM_OK) {
         *err = norm_body_message(ns);
         return -1;
+    }
+    return 0;
+}
+
+static int digit(char c)
+{
+    return c >= '0' && c <= '9';
+}
+
+/* Civil to Unix days (Howard Hinnant). */
+static long long days_from_civil(int y, int m, int d)
+{
+    int era;
+    unsigned yoe;
+    unsigned doy;
+    unsigned doe;
+    int yy = y;
+
+    yy -= (m <= 2) ? 1 : 0;
+    era = (yy >= 0 ? yy : (yy - 399)) / 400;
+    yoe = (unsigned)(yy - (era * 400));
+    doy = ((((153U * (unsigned)(m + ((m > 2) ? -3 : 9))) + 2U) / 5U) + ((unsigned)d - 1U));
+    doe = (((yoe * 365U) + (yoe / 4U)) - (yoe / 100U)) + doy;
+    return (((long long)era * 146097LL) + (long long)doe) - 719468LL;
+}
+
+static int unix_from_civil(int y, int mo, int d, int h, int mi, int se, long long *out)
+{
+    long long days;
+    long long sec;
+
+    days = days_from_civil(y, mo, d);
+    if (days > LLONG_MAX / 86400LL || days < LLONG_MIN / 86400LL) {
+        return -1;
+    }
+    sec = days * 86400LL;
+    if (h < 0 || h > 23 || mi < 0 || mi > 59 || se < 0 || se > 59) {
+        return -1;
+    }
+    sec += ((long long)h * 3600LL) + ((long long)mi * 60LL) + (long long)se;
+    *out = sec;
+    return 0;
+}
+
+static int format_iso_mmmz(int y, int mo, int d, int h, int mi, int se, int ms, char *out,
+                           size_t outlen)
+{
+    int n;
+
+    if (out == NULL || outlen < 25U) {
+        return -1;
+    }
+    if (y < 1 || y > 9999) {
+        return -1;
+    }
+    n = snprintf(out, outlen, "%04d-%02d-%02dT%02d:%02d:%02d.%03dZ", y, mo, d, h, mi, se, ms);
+    if (n != 24) {
+        return -1;
+    }
+    return 0;
+}
+
+static int parse_n_digits(const char *s, size_t n, int *out)
+{
+    size_t i;
+    int v = 0;
+
+    for (i = 0; i < n; i++) {
+        if (s[i] < '0' || s[i] > '9') {
+            return -1;
+        }
+        v = (v * 10) + (int)(s[i] - '0');
+    }
+    *out = v;
+    return 0;
+}
+
+static int parse_iso_mmmz(const char *s, int *y, int *mo, int *d, int *h, int *mi, int *se, int *ms)
+{
+    if (s == NULL || strlen(s) != 24U) {
+        return -1;
+    }
+    if (s[4] != '-' || s[7] != '-' || s[10] != 'T' || s[13] != ':' || s[16] != ':' ||
+        s[19] != '.' || s[23] != 'Z') {
+        return -1;
+    }
+    if (parse_n_digits(s, 4U, y) != 0 || parse_n_digits(s + 5, 2U, mo) != 0 ||
+        parse_n_digits(s + 8, 2U, d) != 0 || parse_n_digits(s + 11, 2U, h) != 0 ||
+        parse_n_digits(s + 14, 2U, mi) != 0 || parse_n_digits(s + 17, 2U, se) != 0 ||
+        parse_n_digits(s + 20, 3U, ms) != 0) {
+        return -1;
+    }
+    return 0;
+}
+
+static int unix_to_iso_ms(long long unix_sec, int ms, char *out, size_t outlen)
+{
+    time_t tt;
+    const struct tm *tmp;
+    struct tm tm;
+
+    if (ms < 0 || ms > 999) {
+        return -1;
+    }
+    tt = (time_t)unix_sec;
+    if ((long long)tt != unix_sec) {
+        return -1;
+    }
+    tmp = gmtime(&tt);
+    if (tmp == NULL) {
+        return -1;
+    }
+    tm = *tmp;
+    return format_iso_mmmz(tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday, tm.tm_hour, tm.tm_min,
+                           tm.tm_sec, ms, out, outlen);
+}
+
+static int match_mask(const char *s, const char *mask)
+{
+    size_t i;
+
+    for (i = 0; mask[i] != '\0'; i++) {
+        if (mask[i] == 'd') {
+            if (!digit(s[i])) {
+                return 0;
+            }
+        } else if (s[i] != mask[i]) {
+            return 0;
+        }
+    }
+    return s[i] == '\0';
+}
+
+static int match_mask_n(const char *s, const char *mask, size_t n)
+{
+    size_t i;
+
+    for (i = 0; i < n; i++) {
+        if (mask[i] == '\0') {
+            return 0;
+        }
+        if (mask[i] == 'd') {
+            if (!digit(s[i])) {
+                return 0;
+            }
+        } else if (s[i] != mask[i]) {
+            return 0;
+        }
+    }
+    return 1;
+}
+
+int parse_ttl_to_expires(const char *token, const char *now, char *out, size_t outlen,
+                         const char **err)
+{
+    const char *p;
+    unsigned long long n = 0ULL;
+    unsigned long long mul;
+    long long add_sec;
+    long long unix_sec;
+    int y = 0;
+    int mo = 0;
+    int d = 0;
+    int h = 0;
+    int mi = 0;
+    int se = 0;
+    int ms = 0;
+
+    *err = "invalid --ttl";
+    if (token == NULL || now == NULL || out == NULL) {
+        return -1;
+    }
+    p = token;
+    if (*p < '1' || *p > '9') {
+        return -1;
+    }
+    while (*p >= '0' && *p <= '9') {
+        if (n > (ULLONG_MAX - (unsigned long long)(*p - '0')) / 10ULL) {
+            *err = "invalid --ttl";
+            return -1;
+        }
+        n = (n * 10ULL) + (unsigned long long)(*p - '0');
+        p++;
+    }
+    if (*p == '\0' || p[1] != '\0') {
+        return -1;
+    }
+    switch (*p) {
+    case 'm':
+        mul = 60ULL;
+        break;
+    case 'h':
+        mul = 3600ULL;
+        break;
+    case 'd':
+        mul = 86400ULL;
+        break;
+    case 'w':
+        mul = 604800ULL;
+        break;
+    default:
+        return -1;
+    }
+    if (n > ULLONG_MAX / mul) {
+        return -1;
+    }
+    n *= mul;
+    if (n > (unsigned long long)LLONG_MAX) {
+        return -1;
+    }
+    add_sec = (long long)n;
+    if (parse_iso_mmmz(now, &y, &mo, &d, &h, &mi, &se, &ms) != 0) {
+        *err = "internal error";
+        return -1;
+    }
+    if (unix_from_civil(y, mo, d, h, mi, se, &unix_sec) != 0) {
+        return -1;
+    }
+    if (add_sec > 0 && unix_sec > LLONG_MAX - add_sec) {
+        return -1;
+    }
+    unix_sec += add_sec;
+    if (unix_to_iso_ms(unix_sec, ms, out, outlen) != 0) {
+        return -1;
+    }
+    return 0;
+}
+
+static int expires_date_only(const char *token, char *out, size_t outlen)
+{
+    int y = 0;
+    int mo = 0;
+    int d = 0;
+    struct tm t;
+    time_t sec;
+    const struct tm *tmp;
+    struct tm utc;
+
+    if (strlen(token) != 10U || !match_mask(token, "dddd-dd-dd")) {
+        return -1;
+    }
+    if (parse_n_digits(token, 4U, &y) != 0 || parse_n_digits(token + 5, 2U, &mo) != 0 ||
+        parse_n_digits(token + 8, 2U, &d) != 0) {
+        return -1;
+    }
+    memset(&t, 0, sizeof(t));
+    t.tm_year = y - 1900;
+    t.tm_mon = mo - 1;
+    t.tm_mday = d;
+    t.tm_hour = 23;
+    t.tm_min = 59;
+    t.tm_sec = 59;
+    t.tm_isdst = -1;
+    sec = mktime(&t);
+    if (sec == (time_t)-1) {
+        return -1;
+    }
+    tmp = gmtime(&sec);
+    if (tmp == NULL) {
+        return -1;
+    }
+    utc = *tmp;
+    return format_iso_mmmz(utc.tm_year + 1900, utc.tm_mon + 1, utc.tm_mday, utc.tm_hour, utc.tm_min,
+                           utc.tm_sec, 999, out, outlen);
+}
+
+static int expires_utc_z(const char *token, char *out, size_t outlen)
+{
+    size_t n = strlen(token);
+    char canon[25];
+    int y = 0;
+    int mo = 0;
+    int d = 0;
+    int h = 0;
+    int mi = 0;
+    int se = 0;
+    int ms = 0;
+
+    if (n < 20U || token[n - 1U] != 'Z') {
+        return -1;
+    }
+    if (!match_mask_n(token, "dddd-dd-ddTdd:dd:dd", 19U)) {
+        return -1;
+    }
+    if (n == 20U && token[19] == 'Z') {
+        memcpy(canon, token, 19U);
+        memcpy(canon + 19U, ".000Z", 6U);
+    } else if (n >= 22U && token[19] == '.') {
+        size_t i;
+        size_t frac_n = n - 21U; /* digits between . and Z; n>=22 => frac_n>=1 */
+        for (i = 20U; i < n - 1U; i++) {
+            if (!digit(token[i])) {
+                return -1;
+            }
+        }
+        memcpy(canon, token, 20U); /* through the dot */
+        if (frac_n >= 3U) {
+            memcpy(canon + 20U, token + 20U, 3U);
+        } else {
+            memcpy(canon + 20U, token + 20U, frac_n);
+            memset(canon + 20U + frac_n, '0', 3U - frac_n);
+        }
+        canon[23] = 'Z';
+        canon[24] = '\0';
+    } else {
+        return -1;
+    }
+    if (parse_iso_mmmz(canon, &y, &mo, &d, &h, &mi, &se, &ms) != 0) {
+        return -1;
+    }
+    if (outlen < 25U) {
+        return -1;
+    }
+    memcpy(out, canon, 25U);
+    return 0;
+}
+
+int parse_expires_to_iso(const char *token, char *out, size_t outlen, const char **err)
+{
+    *err = "invalid --expires";
+    if (token == NULL || out == NULL) {
+        return -1;
+    }
+    if (strlen(token) == 10U) {
+        if (expires_date_only(token, out, outlen) != 0) {
+            return -1;
+        }
+        return 0;
+    }
+    if (expires_utc_z(token, out, outlen) != 0) {
+        return -1;
+    }
+    return 0;
+}
+
+int resolve_expiry_flags(const char *ttl_raw, const char *expires_raw, const char *now, char *out,
+                         size_t outlen, const char **out_expires, const char **err)
+{
+    *out_expires = NULL;
+    if (ttl_raw != NULL && expires_raw != NULL) {
+        *err = "cannot combine --ttl and --expires";
+        return -1;
+    }
+    if (ttl_raw != NULL) {
+        if (parse_ttl_to_expires(ttl_raw, now, out, outlen, err) != 0) {
+            return -1;
+        }
+        *out_expires = out;
+        return 0;
+    }
+    if (expires_raw != NULL) {
+        if (parse_expires_to_iso(expires_raw, out, outlen, err) != 0) {
+            return -1;
+        }
+        *out_expires = out;
+        return 0;
     }
     return 0;
 }

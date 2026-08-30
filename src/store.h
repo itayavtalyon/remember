@@ -22,8 +22,10 @@ typedef enum {
     STORE_ERR_SQLITE,
     STORE_ERR_OOM,
     STORE_ERR_INTERNAL,
-    STORE_ERR_QUERY,   /* invalid FTS5 MATCH syntax (search) */
-    STORE_ERR_CONFLICT /* keyless body-hash collision on update */
+    STORE_ERR_QUERY,       /* invalid FTS5 MATCH syntax (search) */
+    STORE_ERR_CONFLICT,    /* keyless body-hash collision on update */
+    STORE_ERR_EXPIRED,     /* locator hit trash without trash=true */
+    STORE_ERR_NOT_IN_TRASH /* locator hit active with trash=true */
 } StoreStatus;
 
 /* Short ASCII label for st (no trailing newline). Never NULL. */
@@ -41,12 +43,13 @@ typedef struct {
     char *source;
     char *created_at;
     char *updated_at;
+    char *expires_at; /* NULL if none (durable) */
 } Entry;
 
 /* Open or create a store at path. Creates parent directories (mode 0700).
  * On success returns a non-NULL Store*. On failure returns NULL and, if
  * err/errlen are usable, writes a short message into err (NUL-terminated).
- * Schema: user_version 0 → create at 1; 1 → ok; >1 → refuse.
+ * Schema: user_version 0 → create at 2; 1 → migrate to 2; 2 → ok; >2 → refuse.
  */
 Store *store_open(const char *path, char *err, size_t errlen);
 
@@ -56,25 +59,35 @@ void store_close(Store *s);
 /* Release heap fields of *e and zero it. Safe with NULL e or zeroed Entry. */
 void store_entry_free(Entry *e);
 
+/* Canonical ISO-8601 UTC .mmmZ (25-byte buffer). 0 on success, -1 on failure. */
+int utc_now(char *buf, size_t buflen);
+
 /*
  * Insert or merge/upsert one memory.
  *
  * body / body_hash / source are required (already normalized by the command).
  * key_or_null is NULL for keyless, or a normalized key.
  * tags are normalized names (ntags may be 0; tags may be NULL then).
+ * expires_at is NULL (durable) or a canonical .mmmZ string.
+ * now is the command's utc_now snapshot (required; used for revive + timestamps).
+ *
+ * An add that hits an expired row revives: keep id; union tags; incoming
+ * expiry or NULL; replace body on keyed upsert; bump updated_at.
  *
  * On STORE_OK, *out_action and *out_entry are filled (entry heap-owned).
  * On failure, *out_entry is left untouched / zeroed by the caller first.
  */
 StoreStatus store_add(Store *s, const char *body, const char *body_hash, const char *key_or_null,
                       const char *const *tags, size_t ntags, const char *source,
-                      StoreAddAction *out_action, Entry *out_entry);
+                      const char *expires_at, const char *now, StoreAddAction *out_action,
+                      Entry *out_entry);
 
-/* Load one entry by id. STORE_ERR_NOT_FOUND if missing. */
-StoreStatus store_get(Store *s, long long id, Entry *out_entry);
+/* Load one entry by id. Missing in both bins → NOT_FOUND; wrong bin → EXPIRED / NOT_IN_TRASH. */
+StoreStatus store_get(Store *s, long long id, bool trash, const char *now, Entry *out_entry);
 
-/* Load one entry by normalized key. STORE_ERR_NOT_FOUND if missing. */
-StoreStatus store_get_by_key(Store *s, const char *key, Entry *out_entry);
+/* Load one entry by normalized key. Same bin contract as store_get. */
+StoreStatus store_get_by_key(Store *s, const char *key, bool trash, const char *now,
+                             Entry *out_entry);
 
 /*
  * List filters (AND across tags). All string fields are normalized by the
@@ -88,15 +101,17 @@ typedef struct {
     const char *key;    /* NULL = any; exact match */
     size_t limit;
     size_t offset;
+    bool trash; /* false = active only; true = trash only */
 } ListQuery;
 
 /*
  * List entries newest-first (updated_at DESC, id DESC) with optional filters.
+ * now is required (canonical .mmmZ). Bin filter: active (default) or trash.
  * On STORE_OK: *out_entries is a heap array of *out_count Entries (free each
  * with store_entry_free, then free the array); *out_total is the unpaged count.
  */
-StoreStatus store_list(Store *s, const ListQuery *q, Entry **out_entries, size_t *out_count,
-                       size_t *out_total);
+StoreStatus store_list(Store *s, const ListQuery *q, const char *now, Entry **out_entries,
+                       size_t *out_count, size_t *out_total);
 
 /*
  * Ranked FTS5 search. query is raw FTS5 MATCH syntax (required, non-empty at CLI).
@@ -109,8 +124,8 @@ typedef struct {
     ListQuery filters;
 } SearchQuery;
 
-StoreStatus store_search(Store *s, const SearchQuery *q, Entry **out_entries, size_t *out_count,
-                         size_t *out_total);
+StoreStatus store_search(Store *s, const SearchQuery *q, const char *now, Entry **out_entries,
+                         size_t *out_count, size_t *out_total);
 
 /*
  * Hard-delete one entry. Under one write transaction: load snapshot, remove FTS
@@ -118,17 +133,21 @@ StoreStatus store_search(Store *s, const SearchQuery *q, Entry **out_entries, si
  * heap snapshot of the removed row (caller frees with store_entry_free).
  * STORE_ERR_NOT_FOUND if missing.
  */
-StoreStatus store_delete_by_id(Store *s, long long id, Entry *out_deleted);
+StoreStatus store_delete_by_id(Store *s, long long id, bool trash, const char *now,
+                               Entry *out_deleted);
 
 /* Same as store_delete_by_id, located by normalized key. */
-StoreStatus store_delete_by_key(Store *s, const char *key, Entry *out_deleted);
+StoreStatus store_delete_by_key(Store *s, const char *key, bool trash, const char *now,
+                                Entry *out_deleted);
 
 /*
  * Update one entry by id (id > 0, key_or_null NULL) or normalized key
- * (key_or_null set; id ignored). set_body / set_tags are independent opt-ins;
- * at least one must be true at the command layer. On success always refreshes
- * updated_at (even when body/tags are unchanged) and re-syncs FTS in the same
- * write transaction. Never changes source or key.
+ * (key_or_null set; id ignored). set_body / set_tags / set_expires are
+ * independent opt-ins; at least one must be true at the command layer.
+ * set_expires + expires_at NULL clears expiry; set_expires + ISO writes it.
+ * trash + now apply the locator bin (same as get/delete).
+ * On success always refreshes updated_at and re-syncs FTS in the same write
+ * transaction. Never changes source or key.
  *
  * Keyless body-hash conflict: if set_body and the entry has no key and another
  * keyless row already owns body_hash → STORE_ERR_CONFLICT and, when
@@ -140,7 +159,8 @@ StoreStatus store_delete_by_key(Store *s, const char *key, Entry *out_deleted);
  */
 StoreStatus store_update(Store *s, long long id, const char *key_or_null, bool set_body,
                          const char *body, const char *body_hash, bool set_tags,
-                         const char *const *tags, size_t ntags, Entry *out_entry,
+                         const char *const *tags, size_t ntags, bool set_expires,
+                         const char *expires_at, bool trash, const char *now, Entry *out_entry,
                          long long *out_conflict_id);
 
 /* One tag with the number of entries carrying it. name is heap-owned. */
@@ -155,10 +175,18 @@ typedef struct {
  * *out_tags is a heap array of *out_count TagCount (release with store_tags_free);
  * an empty database yields *out_tags == NULL and *out_count == 0.
  */
-StoreStatus store_tags(Store *s, TagCount **out_tags, size_t *out_count);
+StoreStatus store_tags(Store *s, bool trash, const char *now, TagCount **out_tags,
+                       size_t *out_count);
 
 /* Release a store_tags result. Safe with NULL. */
 void store_tags_free(TagCount *tags, size_t count);
+
+/*
+ * Permanently delete every expired row (one write txn, FTS + tag GC).
+ * On STORE_OK: *out_entries is all snapshots (*out_count; 0/NULL if empty).
+ * Caller frees each entry then the array.
+ */
+StoreStatus store_purge_trash(Store *s, const char *now, Entry **out_entries, size_t *out_count);
 
 /*
  * Test-only fault injection (compiled when REMEMBER_TEST_HOOKS is defined).

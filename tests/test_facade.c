@@ -270,6 +270,52 @@ TEST(facade_delete_matches_cli)
     free(db2);
 }
 
+TEST(facade_purge_trash_matches_cli)
+{
+    char *db1 = make_temp_db_path();
+    char *db2 = make_temp_db_path();
+    const char *seed[] = {"add", "--expires", "2020-01-01T00:00:00Z", "gone"};
+    const char *cmd[] = {"--json", "purge-trash"};
+    CmdResult s1;
+    CmdResult s2;
+    CmdResult sub;
+    char *fout = NULL;
+    char *ferr = NULL;
+    int frc;
+
+    ASSERT_TRUE(db1 != NULL && db2 != NULL);
+    s1 = run_remember(db1, seed, 4, NULL);
+    cmd_result_free(&s1);
+    s2 = run_remember(db2, seed, 4, NULL);
+    cmd_result_free(&s2);
+    sub = run_remember(db1, cmd, 2, NULL);
+    frc = facade_run(db2, cmd, 2, &fout, &ferr);
+    ASSERT_EQ_INT(frc, sub.exit_code);
+    mask_timestamps(sub.out);
+    mask_timestamps(fout);
+    ASSERT_STREQ(fout, sub.out);
+    ASSERT_STREQ(ferr, sub.err);
+    free(fout);
+    free(ferr);
+    cmd_result_free(&sub);
+    free(db1);
+    free(db2);
+}
+
+TEST(facade_list_trash_matches_cli)
+{
+    char *db = make_temp_db_path();
+    const char *seed[] = {"add", "--expires", "2020-01-01T00:00:00Z", "gone"};
+    const char *cmd[] = {"--json", "list", "--trash"};
+    CmdResult r;
+
+    ASSERT_TRUE(db != NULL);
+    r = run_remember(db, seed, 4, NULL);
+    cmd_result_free(&r);
+    assert_read_parity(db, cmd, 3);
+    free(db);
+}
+
 void register_facade_tests(void)
 {
     RUN_TEST(facade_list_matches_cli);
@@ -283,4 +329,6 @@ void register_facade_tests(void)
     RUN_TEST(facade_add_matches_cli);
     RUN_TEST(facade_update_matches_cli);
     RUN_TEST(facade_delete_matches_cli);
+    RUN_TEST(facade_purge_trash_matches_cli);
+    RUN_TEST(facade_list_trash_matches_cli);
 }

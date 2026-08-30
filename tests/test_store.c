@@ -45,7 +45,7 @@ static void assert_query_is(const char *db, const char *sql, const char *want)
     free(row);
 }
 
-TEST(store_open_creates_user_version_1)
+TEST(store_open_creates_user_version_2)
 {
     char *db = make_temp_db_path();
     char err[256];
@@ -58,7 +58,50 @@ TEST(store_open_creates_user_version_1)
     ASSERT_STREQ(err, "");
     store_close(s);
 
+    assert_query_is(db, "PRAGMA user_version;", "2");
+    assert_query_is(
+        db, "SELECT COUNT(*) FROM pragma_table_info('entries') WHERE name='expires_at';", "1");
+    /* ponytail: no expires_at index — full scan is fine at personal scale. */
+    assert_query_is(db,
+                    "SELECT COUNT(*) FROM sqlite_master WHERE type='index' AND "
+                    "(IFNULL(sql, '') LIKE '%expires_at%' OR name LIKE '%expires_at%');",
+                    "0");
+    free(db);
+}
+
+TEST(store_open_migrates_v1_to_v2)
+{
+    char *db = make_temp_db_path();
+    char err[256];
+    Store *s;
+
+    ASSERT_TRUE(db != NULL);
+    /* Compact v1 shape (no expires_at) + one row. sqlite3 CLI is the inspect tool. */
+    free(harness_sqlite_query_line(
+        db, "CREATE TABLE entries(id INTEGER PRIMARY KEY, key TEXT, body TEXT NOT NULL, "
+            "body_hash TEXT NOT NULL, source TEXT NOT NULL, created_at TEXT NOT NULL, "
+            "updated_at TEXT NOT NULL);"
+            "INSERT INTO entries(body, body_hash, source, created_at, updated_at) "
+            "VALUES('old row','h','human','2026-01-01T00:00:00.000Z',"
+            "'2026-01-01T00:00:00.000Z');"
+            "PRAGMA user_version=1;"));
     assert_query_is(db, "PRAGMA user_version;", "1");
+
+    err[0] = '\0';
+    s = store_open(db, err, sizeof(err));
+    ASSERT_TRUE(s != NULL);
+    ASSERT_STREQ(err, "");
+    store_close(s);
+
+    assert_query_is(db, "PRAGMA user_version;", "2");
+    assert_query_is(
+        db, "SELECT COUNT(*) FROM pragma_table_info('entries') WHERE name='expires_at';", "1");
+    assert_query_is(db, "SELECT body FROM entries WHERE id=1;", "old row");
+    assert_query_is(db, "SELECT IFNULL(expires_at, 'NULL') FROM entries WHERE id=1;", "NULL");
+    assert_query_is(db,
+                    "SELECT COUNT(*) FROM sqlite_master WHERE type='index' AND "
+                    "(IFNULL(sql, '') LIKE '%expires_at%' OR name LIKE '%expires_at%');",
+                    "0");
     free(db);
 }
 
@@ -288,7 +331,7 @@ TEST(store_open_concurrent_create_all_succeed)
         }
     }
     ASSERT_EQ_INT(failures, 0);
-    assert_query_is(db, "PRAGMA user_version;", "1");
+    assert_query_is(db, "PRAGMA user_version;", "2");
     free(db);
 }
 
@@ -483,6 +526,529 @@ TEST(store_close_null_is_safe)
 static const char k_hash_a[] = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 static const char k_hash_b[] = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
 static const char k_hash_c[] = "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc";
+static const char k_now[] = "2026-06-15T12:00:00.000Z";
+
+TEST(store_get_loads_expires_at)
+{
+    char *db = make_temp_db_path();
+    char err[256];
+    Store *s;
+    Entry e;
+    StoreAddAction act;
+
+    ASSERT_TRUE(db != NULL);
+    s = store_open(db, err, sizeof(err));
+    ASSERT_TRUE(s != NULL);
+    memset(&e, 0, sizeof(e));
+    ASSERT_EQ_INT(
+        (int)store_add(s, "ttl row", k_hash_a, NULL, NULL, 0U, "human", NULL, k_now, &act, &e),
+        (int)STORE_OK);
+    ASSERT_TRUE(e.expires_at == NULL);
+    store_entry_free(&e);
+
+    free(harness_sqlite_query_line(
+        db, "UPDATE entries SET expires_at='2026-12-31T23:59:59.000Z' WHERE id=1;"));
+
+    memset(&e, 0, sizeof(e));
+    ASSERT_EQ_INT((int)store_get(s, 1, false, k_now, &e), (int)STORE_OK);
+    ASSERT_STREQ(e.expires_at != NULL ? e.expires_at : "", "2026-12-31T23:59:59.000Z");
+    store_entry_free(&e);
+    store_close(s);
+    free(db);
+}
+
+TEST(store_get_expired_without_trash_is_expired)
+{
+    char *db = make_temp_db_path();
+    char err[256];
+    Store *s;
+    Entry e;
+    StoreAddAction act;
+
+    ASSERT_TRUE(db != NULL);
+    s = store_open(db, err, sizeof(err));
+    ASSERT_TRUE(s != NULL);
+    memset(&e, 0, sizeof(e));
+    ASSERT_EQ_INT(
+        (int)store_add(s, "gone", k_hash_a, NULL, NULL, 0U, "human", NULL, k_now, &act, &e),
+        (int)STORE_OK);
+    store_entry_free(&e);
+    free(harness_sqlite_query_line(db, "UPDATE entries SET expires_at='2020-01-01T00:00:00.000Z' "
+                                       "WHERE id=1;"));
+
+    memset(&e, 0, sizeof(e));
+    ASSERT_EQ_INT((int)store_get(s, 1, false, k_now, &e), (int)STORE_ERR_EXPIRED);
+    ASSERT_STREQ(store_status_message(STORE_ERR_EXPIRED), "expired");
+    store_entry_free(&e);
+    store_close(s);
+    free(db);
+}
+
+static void sql_set_expires(const char *db, const char *iso)
+{
+    char sql[160];
+
+    (void)snprintf(sql, sizeof(sql), "UPDATE entries SET expires_at='%s' WHERE id=1;", iso);
+    free(harness_sqlite_query_line(db, sql));
+}
+
+TEST(store_get_expired_with_trash_ok)
+{
+    char *db = make_temp_db_path();
+    char err[256];
+    Store *s;
+    Entry e;
+    StoreAddAction act;
+
+    ASSERT_TRUE(db != NULL);
+    s = store_open(db, err, sizeof(err));
+    ASSERT_TRUE(s != NULL);
+    memset(&e, 0, sizeof(e));
+    ASSERT_EQ_INT(
+        (int)store_add(s, "gone", k_hash_a, NULL, NULL, 0U, "human", NULL, k_now, &act, &e),
+        (int)STORE_OK);
+    store_entry_free(&e);
+    sql_set_expires(db, "2020-01-01T00:00:00.000Z");
+
+    memset(&e, 0, sizeof(e));
+    ASSERT_EQ_INT((int)store_get(s, 1, true, k_now, &e), (int)STORE_OK);
+    ASSERT_EQ_INT(e.id, 1);
+    store_entry_free(&e);
+    store_close(s);
+    free(db);
+}
+
+TEST(store_get_active_with_trash_is_not_in_trash)
+{
+    char *db = make_temp_db_path();
+    char err[256];
+    Store *s;
+    Entry e;
+    StoreAddAction act;
+
+    ASSERT_TRUE(db != NULL);
+    s = store_open(db, err, sizeof(err));
+    ASSERT_TRUE(s != NULL);
+    memset(&e, 0, sizeof(e));
+    ASSERT_EQ_INT(
+        (int)store_add(s, "live", k_hash_a, NULL, NULL, 0U, "human", NULL, k_now, &act, &e),
+        (int)STORE_OK);
+    store_entry_free(&e);
+
+    memset(&e, 0, sizeof(e));
+    ASSERT_EQ_INT((int)store_get(s, 1, true, k_now, &e), (int)STORE_ERR_NOT_IN_TRASH);
+    ASSERT_STREQ(store_status_message(STORE_ERR_NOT_IN_TRASH), "not_in_trash");
+    store_entry_free(&e);
+    store_close(s);
+    free(db);
+}
+
+TEST(store_get_missing_stays_not_found)
+{
+    char *db = make_temp_db_path();
+    char err[256];
+    Store *s;
+    Entry e;
+
+    ASSERT_TRUE(db != NULL);
+    s = store_open(db, err, sizeof(err));
+    ASSERT_TRUE(s != NULL);
+    memset(&e, 0, sizeof(e));
+    ASSERT_EQ_INT((int)store_get(s, 99, false, k_now, &e), (int)STORE_ERR_NOT_FOUND);
+    ASSERT_EQ_INT((int)store_get(s, 99, true, k_now, &e), (int)STORE_ERR_NOT_FOUND);
+    store_close(s);
+    free(db);
+}
+
+TEST(store_expires_at_equal_now_is_trash)
+{
+    char *db = make_temp_db_path();
+    char err[256];
+    Store *s;
+    Entry e;
+    StoreAddAction act;
+    ListQuery q;
+    Entry *rows = NULL;
+    size_t count = 0U;
+    size_t total = 0U;
+
+    ASSERT_TRUE(db != NULL);
+    s = store_open(db, err, sizeof(err));
+    ASSERT_TRUE(s != NULL);
+    memset(&e, 0, sizeof(e));
+    ASSERT_EQ_INT(
+        (int)store_add(s, "edge", k_hash_a, NULL, NULL, 0U, "human", NULL, k_now, &act, &e),
+        (int)STORE_OK);
+    store_entry_free(&e);
+    sql_set_expires(db, k_now);
+
+    memset(&e, 0, sizeof(e));
+    ASSERT_EQ_INT((int)store_get(s, 1, false, k_now, &e), (int)STORE_ERR_EXPIRED);
+    store_entry_free(&e);
+    memset(&e, 0, sizeof(e));
+    ASSERT_EQ_INT((int)store_get(s, 1, true, k_now, &e), (int)STORE_OK);
+    store_entry_free(&e);
+
+    memset(&q, 0, sizeof(q));
+    q.limit = 20U;
+    ASSERT_EQ_INT((int)store_list(s, &q, k_now, &rows, &count, &total), (int)STORE_OK);
+    ASSERT_EQ_INT((int)total, 0);
+    q.trash = true;
+    ASSERT_EQ_INT((int)store_list(s, &q, k_now, &rows, &count, &total), (int)STORE_OK);
+    ASSERT_EQ_INT((int)total, 1);
+    {
+        size_t i;
+        for (i = 0; i < count; i++) {
+            store_entry_free(&rows[i]);
+        }
+        free(rows);
+    }
+    store_close(s);
+    free(db);
+}
+
+TEST(store_list_and_search_bins)
+{
+    char *db = make_temp_db_path();
+    char err[256];
+    Store *s;
+    Entry e;
+    StoreAddAction act;
+    const char *tags[] = {"wip"};
+    ListQuery q;
+    SearchQuery sq;
+    Entry *rows = NULL;
+    size_t count = 0U;
+    size_t total = 0U;
+    TagCount *tc = NULL;
+    size_t ntags = 0U;
+
+    ASSERT_TRUE(db != NULL);
+    s = store_open(db, err, sizeof(err));
+    ASSERT_TRUE(s != NULL);
+    memset(&e, 0, sizeof(e));
+    ASSERT_EQ_INT(
+        (int)store_add(s, "live helix", k_hash_a, NULL, tags, 1U, "human", NULL, k_now, &act, &e),
+        (int)STORE_OK);
+    store_entry_free(&e);
+    memset(&e, 0, sizeof(e));
+    ASSERT_EQ_INT(
+        (int)store_add(s, "dead helix", k_hash_b, NULL, tags, 1U, "human", NULL, k_now, &act, &e),
+        (int)STORE_OK);
+    store_entry_free(&e);
+    free(harness_sqlite_query_line(db, "UPDATE entries SET expires_at='2020-01-01T00:00:00.000Z' "
+                                       "WHERE id=2;"));
+
+    memset(&q, 0, sizeof(q));
+    q.limit = 20U;
+    ASSERT_EQ_INT((int)store_list(s, &q, k_now, &rows, &count, &total), (int)STORE_OK);
+    ASSERT_EQ_INT((int)total, 1);
+    ASSERT_STREQ(rows[0].body, "live helix");
+    store_entry_free(&rows[0]);
+    free(rows);
+    rows = NULL;
+    q.trash = true;
+    ASSERT_EQ_INT((int)store_list(s, &q, k_now, &rows, &count, &total), (int)STORE_OK);
+    ASSERT_EQ_INT((int)total, 1);
+    ASSERT_STREQ(rows[0].body, "dead helix");
+    store_entry_free(&rows[0]);
+    free(rows);
+    rows = NULL;
+
+    memset(&sq, 0, sizeof(sq));
+    sq.query = "helix";
+    sq.filters.limit = 20U;
+    ASSERT_EQ_INT((int)store_search(s, &sq, k_now, &rows, &count, &total), (int)STORE_OK);
+    ASSERT_EQ_INT((int)total, 1);
+    ASSERT_STREQ(rows[0].body, "live helix");
+    store_entry_free(&rows[0]);
+    free(rows);
+    rows = NULL;
+    sq.filters.trash = true;
+    ASSERT_EQ_INT((int)store_search(s, &sq, k_now, &rows, &count, &total), (int)STORE_OK);
+    ASSERT_EQ_INT((int)total, 1);
+    ASSERT_STREQ(rows[0].body, "dead helix");
+    store_entry_free(&rows[0]);
+    free(rows);
+
+    ASSERT_EQ_INT((int)store_tags(s, false, k_now, &tc, &ntags), (int)STORE_OK);
+    ASSERT_EQ_INT((int)ntags, 1);
+    ASSERT_EQ_INT(tc[0].count, 1);
+    store_tags_free(tc, ntags);
+    tc = NULL;
+    ASSERT_EQ_INT((int)store_tags(s, true, k_now, &tc, &ntags), (int)STORE_OK);
+    ASSERT_EQ_INT((int)ntags, 1);
+    ASSERT_EQ_INT(tc[0].count, 1);
+    store_tags_free(tc, ntags);
+
+    store_close(s);
+    free(db);
+}
+
+TEST(store_update_and_delete_wrong_bin)
+{
+    char *db = make_temp_db_path();
+    char err[256];
+    Store *s;
+    Entry e;
+    StoreAddAction act;
+    long long conflict = 0;
+
+    ASSERT_TRUE(db != NULL);
+    s = store_open(db, err, sizeof(err));
+    ASSERT_TRUE(s != NULL);
+    memset(&e, 0, sizeof(e));
+    ASSERT_EQ_INT(
+        (int)store_add(s, "row", k_hash_a, NULL, NULL, 0U, "human", NULL, k_now, &act, &e),
+        (int)STORE_OK);
+    store_entry_free(&e);
+    sql_set_expires(db, "2020-01-01T00:00:00.000Z");
+
+    memset(&e, 0, sizeof(e));
+    ASSERT_EQ_INT((int)store_update(s, 1, NULL, true, "x", k_hash_b, false, NULL, 0U, false, NULL,
+                                    false, k_now, &e, &conflict),
+                  (int)STORE_ERR_EXPIRED);
+    store_entry_free(&e);
+    memset(&e, 0, sizeof(e));
+    ASSERT_EQ_INT((int)store_delete_by_id(s, 1, false, k_now, &e), (int)STORE_ERR_EXPIRED);
+    store_entry_free(&e);
+
+    memset(&e, 0, sizeof(e));
+    ASSERT_EQ_INT(
+        (int)store_add(s, "live", k_hash_c, NULL, NULL, 0U, "human", NULL, k_now, &act, &e),
+        (int)STORE_OK);
+    store_entry_free(&e);
+    memset(&e, 0, sizeof(e));
+    ASSERT_EQ_INT((int)store_update(s, 2, NULL, true, "y", k_hash_a, false, NULL, 0U, false, NULL,
+                                    true, k_now, &e, &conflict),
+                  (int)STORE_ERR_NOT_IN_TRASH);
+    store_entry_free(&e);
+    memset(&e, 0, sizeof(e));
+    ASSERT_EQ_INT((int)store_delete_by_id(s, 2, true, k_now, &e), (int)STORE_ERR_NOT_IN_TRASH);
+    store_entry_free(&e);
+    store_close(s);
+    free(db);
+}
+
+TEST(store_update_trash_clear_expires_restores)
+{
+    char *db = make_temp_db_path();
+    char err[256];
+    Store *s;
+    Entry e;
+    StoreAddAction act;
+    long long conflict = 0;
+
+    ASSERT_TRUE(db != NULL);
+    s = store_open(db, err, sizeof(err));
+    ASSERT_TRUE(s != NULL);
+    memset(&e, 0, sizeof(e));
+    ASSERT_EQ_INT(
+        (int)store_add(s, "row", k_hash_a, NULL, NULL, 0U, "human", NULL, k_now, &act, &e),
+        (int)STORE_OK);
+    store_entry_free(&e);
+    sql_set_expires(db, "2020-01-01T00:00:00.000Z");
+
+    memset(&e, 0, sizeof(e));
+    ASSERT_EQ_INT((int)store_update(s, 1, NULL, false, NULL, NULL, false, NULL, 0U, true, NULL,
+                                    true, k_now, &e, &conflict),
+                  (int)STORE_OK);
+    ASSERT_TRUE(e.expires_at == NULL);
+    store_entry_free(&e);
+    memset(&e, 0, sizeof(e));
+    ASSERT_EQ_INT((int)store_get(s, 1, false, k_now, &e), (int)STORE_OK);
+    store_entry_free(&e);
+    store_close(s);
+    free(db);
+}
+
+TEST(store_update_trash_future_expires_leaves_trash)
+{
+    char *db = make_temp_db_path();
+    char err[256];
+    Store *s;
+    Entry e;
+    StoreAddAction act;
+    long long conflict = 0;
+    const char *future = "2029-01-01T00:00:00.000Z";
+
+    ASSERT_TRUE(db != NULL);
+    s = store_open(db, err, sizeof(err));
+    ASSERT_TRUE(s != NULL);
+    memset(&e, 0, sizeof(e));
+    ASSERT_EQ_INT(
+        (int)store_add(s, "row", k_hash_a, NULL, NULL, 0U, "human", NULL, k_now, &act, &e),
+        (int)STORE_OK);
+    store_entry_free(&e);
+    sql_set_expires(db, "2020-01-01T00:00:00.000Z");
+
+    memset(&e, 0, sizeof(e));
+    ASSERT_EQ_INT((int)store_update(s, 1, NULL, false, NULL, NULL, false, NULL, 0U, true, future,
+                                    true, k_now, &e, &conflict),
+                  (int)STORE_OK);
+    ASSERT_STREQ(e.expires_at != NULL ? e.expires_at : "", future);
+    store_entry_free(&e);
+    memset(&e, 0, sizeof(e));
+    ASSERT_EQ_INT((int)store_get(s, 1, false, k_now, &e), (int)STORE_OK);
+    store_entry_free(&e);
+    store_close(s);
+    free(db);
+}
+
+TEST(store_add_keyless_revives_expired)
+{
+    char *db = make_temp_db_path();
+    char err[256];
+    Store *s;
+    Entry e;
+    StoreAddAction act;
+    const char *tags[] = {"wip"};
+
+    ASSERT_TRUE(db != NULL);
+    s = store_open(db, err, sizeof(err));
+    ASSERT_TRUE(s != NULL);
+    memset(&e, 0, sizeof(e));
+    ASSERT_EQ_INT(
+        (int)store_add(s, "same body", k_hash_a, NULL, NULL, 0U, "human", NULL, k_now, &act, &e),
+        (int)STORE_OK);
+    ASSERT_EQ_INT(e.id, 1);
+    store_entry_free(&e);
+    sql_set_expires(db, "2020-01-01T00:00:00.000Z");
+
+    memset(&e, 0, sizeof(e));
+    ASSERT_EQ_INT(
+        (int)store_add(s, "same body", k_hash_a, NULL, tags, 1U, "human", NULL, k_now, &act, &e),
+        (int)STORE_OK);
+    ASSERT_EQ_INT(e.id, 1);
+    ASSERT_EQ_INT((int)act, (int)STORE_ADD_MERGED);
+    ASSERT_TRUE(e.expires_at == NULL);
+    ASSERT_EQ_INT((int)e.ntags, 1);
+    store_entry_free(&e);
+    store_close(s);
+    free(db);
+}
+
+TEST(store_add_keyed_revives_expired)
+{
+    char *db = make_temp_db_path();
+    char err[256];
+    Store *s;
+    Entry e;
+    StoreAddAction act;
+
+    ASSERT_TRUE(db != NULL);
+    s = store_open(db, err, sizeof(err));
+    ASSERT_TRUE(s != NULL);
+    memset(&e, 0, sizeof(e));
+    ASSERT_EQ_INT(
+        (int)store_add(s, "v1", k_hash_a, "slot", NULL, 0U, "human", NULL, k_now, &act, &e),
+        (int)STORE_OK);
+    store_entry_free(&e);
+    sql_set_expires(db, "2020-01-01T00:00:00.000Z");
+
+    memset(&e, 0, sizeof(e));
+    ASSERT_EQ_INT(
+        (int)store_add(s, "v2", k_hash_b, "slot", NULL, 0U, "human", NULL, k_now, &act, &e),
+        (int)STORE_OK);
+    ASSERT_EQ_INT(e.id, 1);
+    ASSERT_EQ_INT((int)act, (int)STORE_ADD_UPDATED);
+    ASSERT_STREQ(e.body, "v2");
+    ASSERT_TRUE(e.expires_at == NULL);
+    store_entry_free(&e);
+    store_close(s);
+    free(db);
+}
+
+TEST(store_add_past_expires_born_in_trash)
+{
+    char *db = make_temp_db_path();
+    char err[256];
+    Store *s;
+    Entry e;
+    StoreAddAction act;
+    const char *past = "2020-01-01T00:00:00.000Z";
+
+    ASSERT_TRUE(db != NULL);
+    s = store_open(db, err, sizeof(err));
+    ASSERT_TRUE(s != NULL);
+    memset(&e, 0, sizeof(e));
+    ASSERT_EQ_INT(
+        (int)store_add(s, "already gone", k_hash_a, NULL, NULL, 0U, "human", past, k_now, &act, &e),
+        (int)STORE_OK);
+    ASSERT_STREQ(e.expires_at != NULL ? e.expires_at : "", past);
+    store_entry_free(&e);
+    memset(&e, 0, sizeof(e));
+    ASSERT_EQ_INT((int)store_get(s, 1, false, k_now, &e), (int)STORE_ERR_EXPIRED);
+    store_entry_free(&e);
+    memset(&e, 0, sizeof(e));
+    ASSERT_EQ_INT((int)store_get(s, 1, true, k_now, &e), (int)STORE_OK);
+    store_entry_free(&e);
+    store_close(s);
+    free(db);
+}
+
+TEST(store_purge_trash_deletes_only_expired)
+{
+    char *db = make_temp_db_path();
+    char err[256];
+    Store *s;
+    Entry e;
+    StoreAddAction act;
+    const char *tags[] = {"tmp"};
+    Entry *gone = NULL;
+    size_t n = 0U;
+    ListQuery q;
+    Entry *rows = NULL;
+    size_t count = 0U;
+    size_t total = 0U;
+    TagCount *tc = NULL;
+    size_t ntags = 0U;
+
+    ASSERT_TRUE(db != NULL);
+    s = store_open(db, err, sizeof(err));
+    ASSERT_TRUE(s != NULL);
+    memset(&e, 0, sizeof(e));
+    ASSERT_EQ_INT(
+        (int)store_add(s, "keep me", k_hash_a, NULL, NULL, 0U, "human", NULL, k_now, &act, &e),
+        (int)STORE_OK);
+    store_entry_free(&e);
+    memset(&e, 0, sizeof(e));
+    ASSERT_EQ_INT(
+        (int)store_add(s, "trash me", k_hash_b, NULL, tags, 1U, "human", NULL, k_now, &act, &e),
+        (int)STORE_OK);
+    store_entry_free(&e);
+    free(harness_sqlite_query_line(db, "UPDATE entries SET expires_at='2020-01-01T00:00:00.000Z' "
+                                       "WHERE id=2;"));
+
+    ASSERT_EQ_INT((int)store_purge_trash(s, k_now, &gone, &n), (int)STORE_OK);
+    ASSERT_EQ_INT((int)n, 1);
+    ASSERT_STREQ(gone[0].body, "trash me");
+    store_entry_free(&gone[0]);
+    free(gone);
+
+    memset(&q, 0, sizeof(q));
+    q.limit = 20U;
+    ASSERT_EQ_INT((int)store_list(s, &q, k_now, &rows, &count, &total), (int)STORE_OK);
+    ASSERT_EQ_INT((int)total, 1);
+    ASSERT_STREQ(rows[0].body, "keep me");
+    store_entry_free(&rows[0]);
+    free(rows);
+    q.trash = true;
+    rows = NULL;
+    ASSERT_EQ_INT((int)store_list(s, &q, k_now, &rows, &count, &total), (int)STORE_OK);
+    ASSERT_EQ_INT((int)total, 0);
+
+    ASSERT_EQ_INT((int)store_tags(s, false, k_now, &tc, &ntags), (int)STORE_OK);
+    ASSERT_EQ_INT((int)ntags, 0);
+    store_tags_free(tc, ntags);
+
+    ASSERT_EQ_INT((int)store_purge_trash(s, k_now, &gone, &n), (int)STORE_OK);
+    ASSERT_EQ_INT((int)n, 0);
+    ASSERT_TRUE(gone == NULL);
+
+    store_close(s);
+    free(db);
+}
 
 TEST(store_list_filters_and_paging)
 {
@@ -504,14 +1070,17 @@ TEST(store_list_filters_and_paging)
     ASSERT_TRUE(s != NULL);
 
     memset(&e, 0, sizeof(e));
-    ASSERT_EQ_INT((int)store_add(s, "alpha", k_hash_a, NULL, tags_a, 1U, "human", &act, &e),
-                  (int)STORE_OK);
+    ASSERT_EQ_INT(
+        (int)store_add(s, "alpha", k_hash_a, NULL, tags_a, 1U, "human", NULL, k_now, &act, &e),
+        (int)STORE_OK);
     store_entry_free(&e);
-    ASSERT_EQ_INT((int)store_add(s, "beta", k_hash_b, NULL, tags_a, 1U, "agent", &act, &e),
-                  (int)STORE_OK);
+    ASSERT_EQ_INT(
+        (int)store_add(s, "beta", k_hash_b, NULL, tags_a, 1U, "agent", NULL, k_now, &act, &e),
+        (int)STORE_OK);
     store_entry_free(&e);
-    ASSERT_EQ_INT((int)store_add(s, "gamma", k_hash_c, "slot", tags_ab, 2U, "tool", &act, &e),
-                  (int)STORE_OK);
+    ASSERT_EQ_INT(
+        (int)store_add(s, "gamma", k_hash_c, "slot", tags_ab, 2U, "tool", NULL, k_now, &act, &e),
+        (int)STORE_OK);
     store_entry_free(&e);
 
     memset(&q, 0, sizeof(q));
@@ -519,7 +1088,7 @@ TEST(store_list_filters_and_paging)
     q.ntags = 2U;
     q.limit = 20U;
     q.offset = 0U;
-    ASSERT_EQ_INT((int)store_list(s, &q, &rows, &count, &total), (int)STORE_OK);
+    ASSERT_EQ_INT((int)store_list(s, &q, k_now, &rows, &count, &total), (int)STORE_OK);
     ASSERT_EQ_INT((int)count, 1);
     ASSERT_EQ_INT((int)total, 1);
     ASSERT_TRUE(rows != NULL && rows[0].body != NULL);
@@ -533,7 +1102,7 @@ TEST(store_list_filters_and_paging)
     memset(&q, 0, sizeof(q));
     q.source = "agent";
     q.limit = 20U;
-    ASSERT_EQ_INT((int)store_list(s, &q, &rows, &count, &total), (int)STORE_OK);
+    ASSERT_EQ_INT((int)store_list(s, &q, k_now, &rows, &count, &total), (int)STORE_OK);
     ASSERT_EQ_INT((int)count, 1);
     ASSERT_STREQ(rows[0].body, "beta");
     for (i = 0; i < count; i++) {
@@ -545,7 +1114,7 @@ TEST(store_list_filters_and_paging)
     memset(&q, 0, sizeof(q));
     q.key = "slot";
     q.limit = 20U;
-    ASSERT_EQ_INT((int)store_list(s, &q, &rows, &count, &total), (int)STORE_OK);
+    ASSERT_EQ_INT((int)store_list(s, &q, k_now, &rows, &count, &total), (int)STORE_OK);
     ASSERT_EQ_INT((int)total, 1);
     ASSERT_STREQ(rows[0].body, "gamma");
     for (i = 0; i < count; i++) {
@@ -573,53 +1142,59 @@ TEST(store_update_body_and_tags)
     ASSERT_TRUE(s != NULL);
 
     memset(&e, 0, sizeof(e));
-    ASSERT_EQ_INT((int)store_add(s, "old", k_hash_a, NULL, tags_ab, 2U, "human", &act, &e),
-                  (int)STORE_OK);
+    ASSERT_EQ_INT(
+        (int)store_add(s, "old", k_hash_a, NULL, tags_ab, 2U, "human", NULL, k_now, &act, &e),
+        (int)STORE_OK);
     store_entry_free(&e);
 
     /* Body-only: tags unchanged. */
-    ASSERT_EQ_INT(
-        (int)store_update(s, 1, NULL, true, "new", k_hash_b, false, NULL, 0U, &e, &conflict),
-        (int)STORE_OK);
+    ASSERT_EQ_INT((int)store_update(s, 1, NULL, true, "new", k_hash_b, false, NULL, 0U, false, NULL,
+                                    false, k_now, &e, &conflict),
+                  (int)STORE_OK);
     ASSERT_STREQ(e.body, "new");
     ASSERT_EQ_INT((int)e.ntags, 2);
     ASSERT_STREQ(e.source, "human");
     store_entry_free(&e);
 
     /* Tags-only replace + clear path via empty set. */
-    ASSERT_EQ_INT((int)store_update(s, 1, NULL, false, NULL, NULL, true, tags_z, 1U, &e, &conflict),
+    ASSERT_EQ_INT((int)store_update(s, 1, NULL, false, NULL, NULL, true, tags_z, 1U, false, NULL,
+                                    false, k_now, &e, &conflict),
                   (int)STORE_OK);
     ASSERT_STREQ(e.body, "new");
     ASSERT_EQ_INT((int)e.ntags, 1);
     ASSERT_STREQ(e.tags[0], "z");
     store_entry_free(&e);
 
-    ASSERT_EQ_INT((int)store_update(s, 1, NULL, false, NULL, NULL, true, NULL, 0U, &e, &conflict),
+    ASSERT_EQ_INT((int)store_update(s, 1, NULL, false, NULL, NULL, true, NULL, 0U, false, NULL,
+                                    false, k_now, &e, &conflict),
                   (int)STORE_OK);
     ASSERT_EQ_INT((int)e.ntags, 0);
     store_entry_free(&e);
 
     /* Keyed locator; no body-hash conflict against keyless peer. */
-    ASSERT_EQ_INT((int)store_add(s, "peer", k_hash_c, NULL, NULL, 0U, "agent", &act, &e),
-                  (int)STORE_OK);
-    store_entry_free(&e);
-    ASSERT_EQ_INT((int)store_add(s, "slotv1", k_hash_a, "slot", NULL, 0U, "tool", &act, &e),
-                  (int)STORE_OK);
+    ASSERT_EQ_INT(
+        (int)store_add(s, "peer", k_hash_c, NULL, NULL, 0U, "agent", NULL, k_now, &act, &e),
+        (int)STORE_OK);
     store_entry_free(&e);
     ASSERT_EQ_INT(
-        (int)store_update(s, 0, "slot", true, "peer", k_hash_c, false, NULL, 0U, &e, &conflict),
+        (int)store_add(s, "slotv1", k_hash_a, "slot", NULL, 0U, "tool", NULL, k_now, &act, &e),
         (int)STORE_OK);
+    store_entry_free(&e);
+    ASSERT_EQ_INT((int)store_update(s, 0, "slot", true, "peer", k_hash_c, false, NULL, 0U, false,
+                                    NULL, false, k_now, &e, &conflict),
+                  (int)STORE_OK);
     ASSERT_STREQ(e.body, "peer");
     ASSERT_STREQ(e.key, "slot");
     store_entry_free(&e);
 
     /* Keyless conflict: cannot take another keyless hash. */
-    ASSERT_EQ_INT((int)store_add(s, "solo", k_hash_a, NULL, NULL, 0U, "unknown", &act, &e),
-                  (int)STORE_OK);
-    store_entry_free(&e);
     ASSERT_EQ_INT(
-        (int)store_update(s, 1, NULL, true, "peer", k_hash_c, false, NULL, 0U, &e, &conflict),
-        (int)STORE_ERR_CONFLICT);
+        (int)store_add(s, "solo", k_hash_a, NULL, NULL, 0U, "unknown", NULL, k_now, &act, &e),
+        (int)STORE_OK);
+    store_entry_free(&e);
+    ASSERT_EQ_INT((int)store_update(s, 1, NULL, true, "peer", k_hash_c, false, NULL, 0U, false,
+                                    NULL, false, k_now, &e, &conflict),
+                  (int)STORE_ERR_CONFLICT);
     ASSERT_TRUE(conflict != 0);
 
     store_close(s);
@@ -641,16 +1216,17 @@ TEST(store_delete_by_id_gcs_orphan_tags)
     ASSERT_TRUE(s != NULL);
 
     memset(&e, 0, sizeof(e));
-    ASSERT_EQ_INT((int)store_add(s, "only", k_hash_a, NULL, tags, 1U, "unknown", &act, &e),
-                  (int)STORE_OK);
+    ASSERT_EQ_INT(
+        (int)store_add(s, "only", k_hash_a, NULL, tags, 1U, "unknown", NULL, k_now, &act, &e),
+        (int)STORE_OK);
     ASSERT_EQ_INT((int)e.id, 1);
     store_entry_free(&e);
 
-    ASSERT_EQ_INT((int)store_delete_by_id(s, 1, &e), (int)STORE_OK);
+    ASSERT_EQ_INT((int)store_delete_by_id(s, 1, false, k_now, &e), (int)STORE_OK);
     ASSERT_STREQ(e.body, "only");
     store_entry_free(&e);
 
-    ASSERT_EQ_INT((int)store_get(s, 1, &e), (int)STORE_ERR_NOT_FOUND);
+    ASSERT_EQ_INT((int)store_get(s, 1, false, k_now, &e), (int)STORE_ERR_NOT_FOUND);
     store_close(s);
 
     count = harness_sqlite_query_line(db, "SELECT count(*) FROM tags WHERE name='solo';");
@@ -671,7 +1247,7 @@ TEST(store_delete_by_key_missing)
     s = store_open(db, err, sizeof(err));
     ASSERT_TRUE(s != NULL);
     memset(&e, 0, sizeof(e));
-    ASSERT_EQ_INT((int)store_delete_by_key(s, "nope", &e), (int)STORE_ERR_NOT_FOUND);
+    ASSERT_EQ_INT((int)store_delete_by_key(s, "nope", false, k_now, &e), (int)STORE_ERR_NOT_FOUND);
     store_close(s);
     free(db);
 }
@@ -687,7 +1263,7 @@ TEST(store_tags_empty_db)
     ASSERT_TRUE(db != NULL);
     s = store_open(db, err, sizeof(err));
     ASSERT_TRUE(s != NULL);
-    ASSERT_EQ_INT((int)store_tags(s, &tags, &n), (int)STORE_OK);
+    ASSERT_EQ_INT((int)store_tags(s, false, k_now, &tags, &n), (int)STORE_OK);
     ASSERT_EQ_INT((int)n, 0);
     ASSERT_TRUE(tags == NULL);
     store_tags_free(tags, n);
@@ -711,14 +1287,16 @@ TEST(store_tags_counts_and_sorted)
     s = store_open(db, err, sizeof(err));
     ASSERT_TRUE(s != NULL);
     memset(&e, 0, sizeof(e));
-    ASSERT_EQ_INT((int)store_add(s, "first", k_hash_a, NULL, tags_az, 2U, "human", &act, &e),
-                  (int)STORE_OK);
+    ASSERT_EQ_INT(
+        (int)store_add(s, "first", k_hash_a, NULL, tags_az, 2U, "human", NULL, k_now, &act, &e),
+        (int)STORE_OK);
     store_entry_free(&e);
-    ASSERT_EQ_INT((int)store_add(s, "second", k_hash_b, NULL, tags_a, 1U, "human", &act, &e),
-                  (int)STORE_OK);
+    ASSERT_EQ_INT(
+        (int)store_add(s, "second", k_hash_b, NULL, tags_a, 1U, "human", NULL, k_now, &act, &e),
+        (int)STORE_OK);
     store_entry_free(&e);
 
-    ASSERT_EQ_INT((int)store_tags(s, &tags, &n), (int)STORE_OK);
+    ASSERT_EQ_INT((int)store_tags(s, false, k_now, &tags, &n), (int)STORE_OK);
     ASSERT_EQ_INT((int)n, 2);
     ASSERT_TRUE(tags != NULL && n == 2U);
     if (tags == NULL || n != 2U) {
@@ -764,8 +1342,9 @@ TEST(store_add_prepare_fail)
     memset(&e, 0, sizeof(e));
     /* Fail the first prepare inside store_add (lookup by body_hash). */
     store_test_fail_prepare_after(0);
-    ASSERT_EQ_INT((int)store_add(s, "body", k_hash_a, NULL, NULL, 0U, "unknown", &act, &e),
-                  (int)STORE_ERR_SQLITE);
+    ASSERT_EQ_INT(
+        (int)store_add(s, "body", k_hash_a, NULL, NULL, 0U, "unknown", NULL, k_now, &act, &e),
+        (int)STORE_ERR_SQLITE);
     store_close(s);
     free(db);
 }
@@ -781,11 +1360,12 @@ TEST(store_get_prepare_fail)
     s = store_open(db, err, sizeof(err));
     ASSERT_TRUE(s != NULL);
     memset(&e, 0, sizeof(e));
-    ASSERT_EQ_INT((int)store_add(s, "g", k_hash_b, NULL, NULL, 0U, "unknown", &act, &e),
-                  (int)STORE_OK);
+    ASSERT_EQ_INT(
+        (int)store_add(s, "g", k_hash_b, NULL, NULL, 0U, "unknown", NULL, k_now, &act, &e),
+        (int)STORE_OK);
     store_entry_free(&e);
     store_test_fail_prepare_after(0);
-    ASSERT_EQ_INT((int)store_get(s, 1, &e), (int)STORE_ERR_SQLITE);
+    ASSERT_EQ_INT((int)store_get(s, 1, false, k_now, &e), (int)STORE_ERR_SQLITE);
     store_close(s);
     free(db);
 }
@@ -805,7 +1385,7 @@ TEST(store_list_prepare_fail)
     memset(&q, 0, sizeof(q));
     q.limit = 20U;
     store_test_fail_prepare_after(0);
-    ASSERT_EQ_INT((int)store_list(s, &q, &rows, &count, &total), (int)STORE_ERR_SQLITE);
+    ASSERT_EQ_INT((int)store_list(s, &q, k_now, &rows, &count, &total), (int)STORE_ERR_SQLITE);
     store_close(s);
     free(db);
 }
@@ -825,9 +1405,9 @@ TEST(store_search_prepare_and_step_fail)
     s = store_open(db, err, sizeof(err));
     ASSERT_TRUE(s != NULL);
     memset(&e, 0, sizeof(e));
-    ASSERT_EQ_INT(
-        (int)store_add(s, "searchable body helix", k_hash_a, NULL, NULL, 0U, "unknown", &act, &e),
-        (int)STORE_OK);
+    ASSERT_EQ_INT((int)store_add(s, "searchable body helix", k_hash_a, NULL, NULL, 0U, "unknown",
+                                 NULL, k_now, &act, &e),
+                  (int)STORE_OK);
     store_entry_free(&e);
     memset(&q, 0, sizeof(q));
     q.query = "helix";
@@ -835,15 +1415,15 @@ TEST(store_search_prepare_and_step_fail)
 
     /* Fail COUNT prepare. */
     store_test_fail_prepare_after(0);
-    ASSERT_EQ_INT((int)store_search(s, &q, &rows, &count, &total), (int)STORE_ERR_SQLITE);
+    ASSERT_EQ_INT((int)store_search(s, &q, k_now, &rows, &count, &total), (int)STORE_ERR_SQLITE);
 
     /* COUNT prepare ok; fail SELECT prepare. */
     store_test_fail_prepare_after(1);
-    ASSERT_EQ_INT((int)store_search(s, &q, &rows, &count, &total), (int)STORE_ERR_SQLITE);
+    ASSERT_EQ_INT((int)store_search(s, &q, k_now, &rows, &count, &total), (int)STORE_ERR_SQLITE);
 
     /* COUNT step ok; fail first SELECT step. */
     store_test_fail_step_after(1);
-    ASSERT_EQ_INT((int)store_search(s, &q, &rows, &count, &total), (int)STORE_ERR_SQLITE);
+    ASSERT_EQ_INT((int)store_search(s, &q, k_now, &rows, &count, &total), (int)STORE_ERR_SQLITE);
 
     store_close(s);
     free(db);
@@ -860,12 +1440,13 @@ TEST(store_delete_prepare_fail)
     s = store_open(db, err, sizeof(err));
     ASSERT_TRUE(s != NULL);
     memset(&e, 0, sizeof(e));
-    ASSERT_EQ_INT((int)store_add(s, "d", k_hash_c, NULL, NULL, 0U, "unknown", &act, &e),
-                  (int)STORE_OK);
+    ASSERT_EQ_INT(
+        (int)store_add(s, "d", k_hash_c, NULL, NULL, 0U, "unknown", NULL, k_now, &act, &e),
+        (int)STORE_OK);
     store_entry_free(&e);
     /* load succeeds; fail prepare on DELETE FROM entries */
     store_test_fail_prepare_after(1);
-    ASSERT_EQ_INT((int)store_delete_by_id(s, 1, &e), (int)STORE_ERR_SQLITE);
+    ASSERT_EQ_INT((int)store_delete_by_id(s, 1, false, k_now, &e), (int)STORE_ERR_SQLITE);
     store_close(s);
     free(db);
 }
@@ -884,7 +1465,7 @@ TEST(store_add_tag_alloc_fail)
     memset(&e, 0, sizeof(e));
     /* Allow several allocs then fail mid-tag load/add path. */
     store_test_fail_alloc_after(8);
-    (void)store_add(s, "tagged", k_hash_a, NULL, tags, 5U, "unknown", &act, &e);
+    (void)store_add(s, "tagged", k_hash_a, NULL, tags, 5U, "unknown", NULL, k_now, &act, &e);
     store_entry_free(&e);
     store_test_fail_alloc_after(-1);
     store_close(s);
@@ -913,10 +1494,10 @@ static void sweep_list_faults(Store *s, const ListQuery *q, int i)
     size_t total = 0U;
 
     store_test_fail_prepare_after(i % 8);
-    (void)store_list(s, q, &rows, &count, &total);
+    (void)store_list(s, q, k_now, &rows, &count, &total);
     sweep_free_page(&rows, count);
     store_test_fail_step_after(i % 5);
-    (void)store_list(s, q, &rows, &count, &total);
+    (void)store_list(s, q, k_now, &rows, &count, &total);
     sweep_free_page(&rows, count);
 }
 
@@ -934,10 +1515,10 @@ static void sweep_search_faults(Store *s, const char *const *tags, int i)
     sq.filters.tags = tags;
     sq.filters.ntags = 1U;
     store_test_fail_prepare_after(i % 4);
-    (void)store_search(s, &sq, &rows, &count, &total);
+    (void)store_search(s, &sq, k_now, &rows, &count, &total);
     sweep_free_page(&rows, count);
     store_test_fail_step_after(i % 3);
-    (void)store_search(s, &sq, &rows, &count, &total);
+    (void)store_search(s, &sq, k_now, &rows, &count, &total);
     sweep_free_page(&rows, count);
 }
 
@@ -978,15 +1559,16 @@ TEST(store_fault_injection_sweep)
         (void)snprintf(hash, sizeof(hash), "%064d", i % 1000);
 
         store_test_fail_prepare_after(i % 12);
-        (void)store_add(s, body, hash, (i % 5 == 0) ? "k" : NULL, tags, 3U, "agent", &act, &e);
+        (void)store_add(s, body, hash, (i % 5 == 0) ? "k" : NULL, tags, 3U, "agent", NULL, k_now,
+                        &act, &e);
         store_entry_free(&e);
 
         store_test_fail_alloc_after(i % 15);
-        (void)store_add(s, body, hash, NULL, tags, 3U, "tool", &act, &e);
+        (void)store_add(s, body, hash, NULL, tags, 3U, "tool", NULL, k_now, &act, &e);
         store_entry_free(&e);
 
         store_test_fail_step_after(i % 10);
-        (void)store_add(s, body, hash, NULL, tags, 1U, "human", &act, &e);
+        (void)store_add(s, body, hash, NULL, tags, 1U, "human", NULL, k_now, &act, &e);
         store_entry_free(&e);
 
         memset(&q, 0, sizeof(q));
@@ -999,39 +1581,42 @@ TEST(store_fault_injection_sweep)
         sweep_search_faults(s, tags, i);
 
         store_test_fail_prepare_after(i % 6);
-        (void)store_get(s, 1, &e);
+        (void)store_get(s, 1, false, k_now, &e);
         store_entry_free(&e);
         store_test_fail_step_after(i % 4);
-        (void)store_get(s, 1, &e);
+        (void)store_get(s, 1, false, k_now, &e);
         store_entry_free(&e);
         store_test_fail_prepare_after(i % 6);
-        (void)store_get_by_key(s, "k", &e);
+        (void)store_get_by_key(s, "k", false, k_now, &e);
         store_entry_free(&e);
 
         store_test_fail_prepare_after(i % 10);
-        (void)store_delete_by_id(s, 1, &e);
+        (void)store_delete_by_id(s, 1, false, k_now, &e);
         store_entry_free(&e);
         store_test_fail_step_after(i % 8);
-        (void)store_delete_by_id(s, 1, &e);
+        (void)store_delete_by_id(s, 1, false, k_now, &e);
         store_entry_free(&e);
         store_test_fail_exec_after(i % 6);
-        (void)store_delete_by_key(s, "k", &e);
+        (void)store_delete_by_key(s, "k", false, k_now, &e);
         store_entry_free(&e);
         store_test_fail_alloc_after(i % 10);
-        (void)store_delete_by_key(s, "k", &e);
+        (void)store_delete_by_key(s, "k", false, k_now, &e);
         store_entry_free(&e);
 
         {
             long long conflict = 0;
             const char *utags[] = {"u"};
             store_test_fail_prepare_after(i % 9);
-            (void)store_update(s, 1, NULL, true, body, hash, true, utags, 1U, &e, &conflict);
+            (void)store_update(s, 1, NULL, true, body, hash, true, utags, 1U, false, NULL, false,
+                               k_now, &e, &conflict);
             store_entry_free(&e);
             store_test_fail_step_after(i % 7);
-            (void)store_update(s, 0, "k", false, NULL, NULL, true, NULL, 0U, &e, &conflict);
+            (void)store_update(s, 0, "k", false, NULL, NULL, true, NULL, 0U, false, NULL, false,
+                               k_now, &e, &conflict);
             store_entry_free(&e);
             store_test_fail_alloc_after(i % 12);
-            (void)store_update(s, 1, NULL, true, body, hash, false, NULL, 0U, &e, &conflict);
+            (void)store_update(s, 1, NULL, true, body, hash, false, NULL, 0U, false, NULL, false,
+                               k_now, &e, &conflict);
             store_entry_free(&e);
         }
 
@@ -1056,7 +1641,7 @@ TEST(store_tags_prepare_fail)
     s = store_open(db, err, sizeof(err));
     ASSERT_TRUE(s != NULL);
     store_test_fail_prepare_after(0);
-    ASSERT_EQ_INT((int)store_tags(s, &tags, &n), (int)STORE_ERR_SQLITE);
+    ASSERT_EQ_INT((int)store_tags(s, false, k_now, &tags, &n), (int)STORE_ERR_SQLITE);
     ASSERT_TRUE(tags == NULL);
     store_tags_free(tags, n);
     store_close(s);
@@ -1078,11 +1663,12 @@ TEST(store_tags_alloc_fail)
     s = store_open(db, err, sizeof(err));
     ASSERT_TRUE(s != NULL);
     memset(&e, 0, sizeof(e));
-    ASSERT_EQ_INT((int)store_add(s, "x", k_hash_a, NULL, tags_in, 1U, "human", &act, &e),
-                  (int)STORE_OK);
+    ASSERT_EQ_INT(
+        (int)store_add(s, "x", k_hash_a, NULL, tags_in, 1U, "human", NULL, k_now, &act, &e),
+        (int)STORE_OK);
     store_entry_free(&e);
     store_test_fail_alloc_after(0); /* first dup_str in store_tags fails */
-    ASSERT_EQ_INT((int)store_tags(s, &tags, &n), (int)STORE_ERR_OOM);
+    ASSERT_EQ_INT((int)store_tags(s, false, k_now, &tags, &n), (int)STORE_ERR_OOM);
     ASSERT_TRUE(tags == NULL);
     store_tags_free(tags, n);
     store_close(s);
@@ -1104,12 +1690,13 @@ TEST(store_tags_realloc_fail)
     s = store_open(db, err, sizeof(err));
     ASSERT_TRUE(s != NULL);
     memset(&e, 0, sizeof(e));
-    ASSERT_EQ_INT((int)store_add(s, "x", k_hash_a, NULL, tags_in, 1U, "human", &act, &e),
-                  (int)STORE_OK);
+    ASSERT_EQ_INT(
+        (int)store_add(s, "x", k_hash_a, NULL, tags_in, 1U, "human", NULL, k_now, &act, &e),
+        (int)STORE_OK);
     store_entry_free(&e);
     /* dup_str succeeds, the growth realloc (first append, cap 0->8) then fails. */
     store_test_fail_alloc_after(1);
-    ASSERT_EQ_INT((int)store_tags(s, &tags, &n), (int)STORE_ERR_OOM);
+    ASSERT_EQ_INT((int)store_tags(s, false, k_now, &tags, &n), (int)STORE_ERR_OOM);
     ASSERT_TRUE(tags == NULL);
     store_tags_free(tags, n);
     store_close(s);
@@ -1128,7 +1715,7 @@ TEST(store_tags_step_fail)
     s = store_open(db, err, sizeof(err));
     ASSERT_TRUE(s != NULL);
     store_test_fail_step_after(0); /* first step errors -> rc != SQLITE_DONE path */
-    ASSERT_EQ_INT((int)store_tags(s, &tags, &n), (int)STORE_ERR_SQLITE);
+    ASSERT_EQ_INT((int)store_tags(s, false, k_now, &tags, &n), (int)STORE_ERR_SQLITE);
     ASSERT_TRUE(tags == NULL);
     store_tags_free(tags, n);
     store_close(s);
@@ -1139,7 +1726,8 @@ TEST(store_tags_step_fail)
 
 void register_store_tests(void)
 {
-    RUN_TEST(store_open_creates_user_version_1);
+    RUN_TEST(store_open_creates_user_version_2);
+    RUN_TEST(store_open_migrates_v1_to_v2);
     RUN_TEST(store_open_reopens_existing);
     RUN_TEST(store_open_refuses_user_version_too_new);
     RUN_TEST(store_open_refuses_negative_user_version);
@@ -1157,6 +1745,20 @@ void register_store_tests(void)
     RUN_TEST(store_open_path_too_long_fails);
     RUN_TEST(store_open_rejects_non_database_file);
     RUN_TEST(store_close_null_is_safe);
+    RUN_TEST(store_get_loads_expires_at);
+    RUN_TEST(store_get_expired_without_trash_is_expired);
+    RUN_TEST(store_get_expired_with_trash_ok);
+    RUN_TEST(store_get_active_with_trash_is_not_in_trash);
+    RUN_TEST(store_get_missing_stays_not_found);
+    RUN_TEST(store_expires_at_equal_now_is_trash);
+    RUN_TEST(store_list_and_search_bins);
+    RUN_TEST(store_update_and_delete_wrong_bin);
+    RUN_TEST(store_update_trash_clear_expires_restores);
+    RUN_TEST(store_update_trash_future_expires_leaves_trash);
+    RUN_TEST(store_add_keyless_revives_expired);
+    RUN_TEST(store_add_keyed_revives_expired);
+    RUN_TEST(store_add_past_expires_born_in_trash);
+    RUN_TEST(store_purge_trash_deletes_only_expired);
     RUN_TEST(store_list_filters_and_paging);
     RUN_TEST(store_update_body_and_tags);
     RUN_TEST(store_delete_by_id_gcs_orphan_tags);

@@ -33,9 +33,12 @@ static void print_general_help(void)
                                "  get       Fetch one entry by id or --key\n"
                                "  update    Change body and/or tags by id or --key\n"
                                "  delete    Remove an entry by id or --key\n"
-                               "  tags      List all tags with entry counts\n"
-                               "  help      Show this help (help <command> for a command)\n"
-                               "  version   Show version\n"
+                               "  tags        List all tags with entry counts\n"
+                               "  purge-trash Permanently delete every expired memory\n"
+                               "  help        Show this help (help <command> for a command)\n"
+                               "  version     Show version\n"
+                               "\n"
+                               "Expiry is optional. Default list/search/get hide trash.\n"
                                "\n"
                                "Global options (allowed before or after the command):\n"
                                "  --db PATH   Database file (overrides REMEMBER_DB)\n"
@@ -46,7 +49,8 @@ static void print_general_help(void)
                                "Exit codes:\n"
                                "  0  success (including empty search/list)\n"
                                "  1  usage or error\n"
-                               "  2  not found (get/delete/update)\n";
+                               "  2  not found (get/delete/update)\n"
+                               "  3  wrong bin (expired / not_in_trash)\n";
 
     (void)fputs(help, app_out());
 }
@@ -71,28 +75,40 @@ static void print_command_help(CliCommand topic)
         (void)fprintf(out, "  --key KEY       Upsert into a named slot\n");
         (void)fprintf(out, "  --tag TAG       Attach a tag (repeatable; union on merge)\n");
         (void)fprintf(out, "  --source SRC    human|agent|tool|share|unknown (default unknown)\n");
+        (void)fprintf(out, "  --ttl 7d        Relative expiry from write time (Nm/Nh/Nd/Nw)\n");
+        (void)fprintf(out, "  --expires TS    Absolute expiry (YYYY-MM-DD local EOD, or ...Z)\n");
         (void)fprintf(out, "  BODY|-          Memory text, or - to read stdin\n");
         (void)fprintf(out, "  -- -            Literal body \"-\" (end of options; not stdin)\n");
+        (void)fprintf(out, "\n");
+        (void)fprintf(out, "Cannot combine --ttl with --expires.\n");
         (void)fprintf(out, "\n");
     } else if (topic == CLI_CMD_GET || topic == CLI_CMD_DELETE) {
         (void)fprintf(out, "Options:\n");
         (void)fprintf(out, "  ID              Entry id (positional)\n");
         (void)fprintf(out, "  --key KEY       Locate by key instead of id\n");
+        (void)fprintf(out, "  --trash         Read/delete from trash only\n");
         (void)fprintf(out, "\n");
         (void)fprintf(out, "Exactly one of ID or --key is required.\n");
+        (void)fprintf(out, "Default locators are active-only; --trash is trash-only.\n");
         (void)fprintf(out, "\n");
     } else if (topic == CLI_CMD_UPDATE) {
         (void)fprintf(out, "Options:\n");
         (void)fprintf(out, "  ID              Entry id (positional)\n");
         (void)fprintf(out, "  --key KEY       Locate by key instead of id\n");
+        (void)fprintf(out, "  --trash         Locate in trash (required to restore)\n");
         (void)fprintf(out, "  --text BODY|-   New body text, or - for stdin\n");
         (void)fprintf(out, "  --text=-        Literal body \"-\" (not stdin)\n");
         (void)fprintf(out, "  --tag TAG       Replace tag set (repeatable)\n");
         (void)fprintf(out, "  --clear-tags    Clear all tags\n");
+        (void)fprintf(out, "  --ttl 7d        Set relative expiry from this update\n");
+        (void)fprintf(out, "  --expires TS    Set absolute expiry\n");
+        (void)fprintf(out, "  --clear-expires Remove expiry (restore when used with --trash)\n");
         (void)fprintf(out, "\n");
         (void)fprintf(out, "Exactly one of ID or --key is required.\n");
-        (void)fprintf(out, "At least one of --text, --tag, or --clear-tags is required.\n");
+        (void)fprintf(out, "At least one of --text, --tag, --clear-tags, --ttl, --expires,\n");
+        (void)fprintf(out, "or --clear-expires is required.\n");
         (void)fprintf(out, "Cannot combine --tag with --clear-tags.\n");
+        (void)fprintf(out, "Cannot combine --clear-expires with --ttl or --expires.\n");
         (void)fprintf(out, "\n");
     } else if (topic == CLI_CMD_LIST) {
         (void)fprintf(out, "Options:\n");
@@ -101,6 +117,7 @@ static void print_command_help(CliCommand topic)
         (void)fprintf(out, "  --key KEY       Exact key match\n");
         (void)fprintf(out, "  --limit N       Page size (default 20, max 1000)\n");
         (void)fprintf(out, "  --offset M      Skip M matches (default 0)\n");
+        (void)fprintf(out, "  --trash         List trash only (default: active only)\n");
         (void)fprintf(out, "\n");
     } else if (topic == CLI_CMD_SEARCH) {
         (void)fprintf(out, "Options:\n");
@@ -110,12 +127,21 @@ static void print_command_help(CliCommand topic)
         (void)fprintf(out, "  --key KEY       Exact key match\n");
         (void)fprintf(out, "  --limit N       Page size (default 20, max 1000)\n");
         (void)fprintf(out, "  --offset M      Skip M matches (default 0)\n");
+        (void)fprintf(out, "  --trash         Search trash only (default: active only)\n");
         (void)fprintf(out, "\n");
         (void)fprintf(out, "Ranked by FTS relevance (bm25), then updated_at.\n");
         (void)fprintf(out, "\n");
     } else if (topic == CLI_CMD_TAGS) {
-        (void)fprintf(out, "Takes no options. Lists every tag with its entry count,\n");
-        (void)fprintf(out, "sorted by name. Human: one \"name<TAB>count\" line per tag.\n");
+        (void)fprintf(out, "Options:\n");
+        (void)fprintf(out, "  --trash         Count tags among trash only (default: active)\n");
+        (void)fprintf(out, "\n");
+        (void)fprintf(out, "Lists every in-use tag with its entry count, sorted by name.\n");
+        (void)fprintf(out, "Human: one \"name<TAB>count\" line per tag.\n");
+        (void)fprintf(out, "\n");
+    } else if (topic == CLI_CMD_PURGE_TRASH) {
+        (void)fprintf(out, "Permanently delete every expired row (no prompt).\n");
+        (void)fprintf(out, "Human stdout: the count of deleted entries.\n");
+        (void)fprintf(out, "Takes no options.\n");
         (void)fprintf(out, "\n");
     }
     (void)fprintf(out, "Global options: --db PATH, --json, --help, --version\n");
@@ -226,6 +252,8 @@ static int run(const CliArgs *args)
         return run_with_store(args, cmd_update);
     case CLI_CMD_TAGS:
         return run_with_store(args, cmd_tags);
+    case CLI_CMD_PURGE_TRASH:
+        return run_with_store(args, cmd_purge_trash);
     case CLI_CMD_NONE:
         /* Defensive: parse should set CLI_ERR_MISSING_COMMAND first. */
         (void)fprintf(app_err(), "remember: %s\n", cli_error_message(CLI_ERR_MISSING_COMMAND));

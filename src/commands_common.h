@@ -44,4 +44,18 @@ int store_status_to_exit(StoreStatus st);
 int load_body(const char *body_raw, int dash_is_stdin, char **out_body, size_t *out_len,
               const char **err);
 
+/* --ttl token -> canonical .mmmZ using command `now`. 0 ok, -1 usage (*err). */
+int parse_ttl_to_expires(const char *token, const char *now, char *out, size_t outlen,
+                         const char **err);
+
+/* --expires token -> canonical .mmmZ. 0 ok, -1 usage (*err). */
+int parse_expires_to_iso(const char *token, char *out, size_t outlen, const char **err);
+
+/*
+ * Resolve --ttl / --expires mutex into *out_expires (NULL if neither).
+ * out must live as long as *out_expires is used. 0 ok, -1 usage (*err).
+ */
+int resolve_expiry_flags(const char *ttl_raw, const char *expires_raw, const char *now, char *out,
+                         size_t outlen, const char **out_expires, const char **err);
+
 #endif /* REMEMBER_COMMANDS_COMMON_H */
