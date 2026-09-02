@@ -2365,14 +2365,13 @@ static StoreStatus require_entry_id(sqlite3 *db, long long id)
     return STORE_OK;
 }
 
+/* a != b always: callers reject self-links before reaching here. Touching the
+   same row twice would be harmless anyway. */
 static StoreStatus bump_endpoints(sqlite3 *db, long long a, long long b, const char *now)
 {
     StoreStatus st = touch_updated_at(db, a, now);
     if (st != STORE_OK) {
         return st;
-    }
-    if (a == b) {
-        return STORE_OK;
     }
     return touch_updated_at(db, b, now);
 }

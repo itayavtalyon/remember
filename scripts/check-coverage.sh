@@ -168,6 +168,8 @@ DEFENSIVE = re.compile(
     |^\s*\(void\)fputs\s*\(
     |^\s*\(void\)fputc\s*\(
     |^\s*store_entry_free\s*\(
+    |^\s*store_neighbor_free\s*\(
+    |^\s*store_neighbors_free\s*\(
     |^\s*add_parse_free\s*\(
     |^\s*list_parse_free\s*\(
     |^\s*free\s*\(
@@ -179,6 +181,7 @@ DEFENSIVE = re.compile(
     |^\s*\(void\)sqlite3_finalize\s*\(
     |^\s*\*out_entries\s*=
     |^\s*\*out_count\s*=
+    |^\s*\*out_stubs\s*=
     |^\s*\*out_total\s*=
     |^\s*st\s*=\s*STORE_ERR_
     |^\s*free_entry_rows\s*\(

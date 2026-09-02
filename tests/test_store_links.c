@@ -586,6 +586,109 @@ TEST(store_list_neighbors_for_page)
     free(db);
 }
 
+TEST(store_list_neighbors_for_empty_page)
+{
+    char *db = NULL;
+    Store *s = open_temp(&db);
+    StoreNeighbor *rows = NULL;
+    size_t n = 7U;
+
+    ASSERT_TRUE(s != NULL);
+    ASSERT_EQ_INT((int)store_list_neighbors_for(s, NULL, 0U, k_now, &rows, &n), (int)STORE_OK);
+    ASSERT_TRUE(rows == NULL);
+    ASSERT_EQ_INT((int)n, 0);
+    store_close(s);
+    free(db);
+}
+
+#ifdef REMEMBER_TEST_HOOKS
+/* Sweep prepare/step/alloc faults across the graph mutators/readers so their
+   error and OOM cleanup paths execute (100% line coverage idiom). Asserts no
+   crash/leak under ASan; specific results are not the point. */
+TEST(store_links_fault_injection_sweep)
+{
+    char *db = NULL;
+    Store *s = open_temp(&db);
+    long long a;
+    long long b;
+    long long c;
+    int i;
+
+    ASSERT_TRUE(s != NULL);
+    a = add_row(s, "sa", "0000000000000000000000000000000000000000000000000000000000000001", "ka",
+                NULL);
+    b = add_row(s, "sb", "0000000000000000000000000000000000000000000000000000000000000002", NULL,
+                NULL);
+    c = add_row(s, "sc", "0000000000000000000000000000000000000000000000000000000000000003", NULL,
+                NULL);
+    ASSERT_TRUE(a > 0 && b > 0 && c > 0);
+
+    for (i = 0; i < 20; i++) {
+        StoreLinkAction act;
+        StoreNeighbor stub;
+        StoreNeighbor *rows = NULL;
+        StoreNeighbor *gone = NULL;
+        size_t n = 0U;
+        Entry e;
+        long long conflict = 0;
+        long long ids[2];
+
+        store_test_fail_alloc_after(-1);
+        store_test_fail_prepare_after(-1);
+        store_test_fail_step_after(-1);
+
+        memset(&stub, 0, sizeof(stub));
+        store_test_fail_prepare_after(i % 8);
+        if (store_link(s, a, b, STORE_EDGE_CITES, k_now, &act, &stub) == STORE_OK) {
+            store_neighbor_free(&stub);
+        }
+        store_test_fail_prepare_after(-1);
+        memset(&stub, 0, sizeof(stub));
+        store_test_fail_step_after(i % 6);
+        if (store_link(s, a, c, STORE_EDGE_RELATED, k_now, &act, &stub) == STORE_OK) {
+            store_neighbor_free(&stub);
+        }
+        store_test_fail_step_after(-1);
+
+        store_test_fail_prepare_after(i % 7);
+        (void)store_unlink(s, a, b, NULL, k_now, &gone, &n);
+        store_neighbors_free(gone, n);
+        store_test_fail_prepare_after(-1);
+
+        store_test_fail_step_after(i % 5);
+        (void)store_list_neighbors(s, a, NULL, STORE_NEIGHBOR_ALL, k_now, &rows, &n);
+        store_neighbors_free(rows, n);
+        rows = NULL;
+        n = 0U;
+        store_test_fail_step_after(-1);
+        store_test_fail_alloc_after(i % 6);
+        ids[0] = a;
+        ids[1] = c;
+        (void)store_list_neighbors_for(s, ids, 2U, k_now, &rows, &n);
+        store_neighbors_free(rows, n);
+        store_test_fail_alloc_after(-1);
+
+        memset(&e, 0, sizeof(e));
+        store_test_fail_step_after(i % 6);
+        (void)store_rekey(s, a, NULL, NULL, false, k_now, &e,
+                          &conflict); /* clear: load_body_hash */
+        store_entry_free(&e);
+        store_test_fail_step_after(-1);
+        memset(&e, 0, sizeof(e));
+        store_test_fail_prepare_after(i % 5);
+        (void)store_rekey(s, 0, "ka", "kz", false, k_now, &e, &conflict); /* set/rename */
+        store_entry_free(&e);
+        store_test_fail_prepare_after(-1);
+    }
+    store_test_fail_alloc_after(-1);
+    store_test_fail_prepare_after(-1);
+    store_test_fail_step_after(-1);
+    store_close(s);
+    free(db);
+    ASSERT_TRUE(1);
+}
+#endif /* REMEMBER_TEST_HOOKS */
+
 void register_store_link_tests(void)
 {
     RUN_TEST(store_open_creates_entry_links);
@@ -600,4 +703,8 @@ void register_store_link_tests(void)
     RUN_TEST(store_neighbors_cascade_and_survive_trash);
     RUN_TEST(store_rekey_rename_promote_demote);
     RUN_TEST(store_list_neighbors_for_page);
+    RUN_TEST(store_list_neighbors_for_empty_page);
+#ifdef REMEMBER_TEST_HOOKS
+    RUN_TEST(store_links_fault_injection_sweep);
+#endif
 }

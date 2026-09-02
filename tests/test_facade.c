@@ -103,6 +103,52 @@ static void seed_three(const char *db)
     cmd_result_free(&r);
 }
 
+/* Seed three, then link 1->2 (cites) and 1<->3 (related) so read parity
+   exercises the links[] stub path in-process. */
+static void seed_three_linked(const char *db)
+{
+    const char *l1[] = {"link", "--from", "1", "--to", "2", "--kind", "cites"};
+    const char *l2[] = {"link", "1", "3"};
+    CmdResult r;
+
+    seed_three(db);
+    r = run_remember(db, l1, 7, NULL);
+    cmd_result_free(&r);
+    r = run_remember(db, l2, 3, NULL);
+    cmd_result_free(&r);
+}
+
+typedef void (*SeedFn)(const char *db);
+
+/* Mutations: seed identical pre-state on two DBs, run cmd on each, compare
+   timestamp-masked stdout + exit. */
+static void assert_mutation_parity(SeedFn seed, const char *const *cmd, size_t ncmd)
+{
+    char *db1 = make_temp_db_path();
+    char *db2 = make_temp_db_path();
+    CmdResult sub;
+    char *fout = NULL;
+    char *ferr = NULL;
+    int frc;
+
+    ASSERT_TRUE(db1 != NULL && db2 != NULL);
+    if (seed != NULL) {
+        seed(db1);
+        seed(db2);
+    }
+    sub = run_remember(db1, cmd, ncmd, NULL);
+    frc = facade_run(db2, cmd, ncmd, &fout, &ferr);
+    ASSERT_EQ_INT(frc, sub.exit_code);
+    mask_timestamps(sub.out);
+    mask_timestamps(fout);
+    ASSERT_STREQ(fout, sub.out);
+    free(fout);
+    free(ferr);
+    cmd_result_free(&sub);
+    free(db1);
+    free(db2);
+}
+
 TEST(facade_list_matches_cli)
 {
     char *db = make_temp_db_path();
@@ -316,6 +362,46 @@ TEST(facade_list_trash_matches_cli)
     free(db);
 }
 
+/* Read parity for related and for get/list with a non-empty links[] stub. */
+TEST(facade_related_matches_cli)
+{
+    char *db = make_temp_db_path();
+    const char *cmd[] = {"--json", "related", "1"};
+    ASSERT_TRUE(db != NULL);
+    seed_three_linked(db);
+    assert_read_parity(db, cmd, 3);
+    free(db);
+}
+
+TEST(facade_get_with_links_matches_cli)
+{
+    char *db = make_temp_db_path();
+    const char *cmd[] = {"--json", "get", "1"};
+    ASSERT_TRUE(db != NULL);
+    seed_three_linked(db);
+    assert_read_parity(db, cmd, 3);
+    free(db);
+}
+
+/* Mutations: link, unlink, rekey byte-match the CLI. */
+TEST(facade_link_matches_cli)
+{
+    const char *cmd[] = {"--json", "link", "1", "2", "--kind", "cites"};
+    assert_mutation_parity(seed_three, cmd, 6);
+}
+
+TEST(facade_unlink_matches_cli)
+{
+    const char *cmd[] = {"--json", "unlink", "1", "2"};
+    assert_mutation_parity(seed_three_linked, cmd, 4);
+}
+
+TEST(facade_rekey_matches_cli)
+{
+    const char *cmd[] = {"--json", "rekey", "--key", "k", "--to-key", "k2"};
+    assert_mutation_parity(seed_three, cmd, 6);
+}
+
 void register_facade_tests(void)
 {
     RUN_TEST(facade_list_matches_cli);
@@ -331,4 +417,9 @@ void register_facade_tests(void)
     RUN_TEST(facade_delete_matches_cli);
     RUN_TEST(facade_purge_trash_matches_cli);
     RUN_TEST(facade_list_trash_matches_cli);
+    RUN_TEST(facade_related_matches_cli);
+    RUN_TEST(facade_get_with_links_matches_cli);
+    RUN_TEST(facade_link_matches_cli);
+    RUN_TEST(facade_unlink_matches_cli);
+    RUN_TEST(facade_rekey_matches_cli);
 }

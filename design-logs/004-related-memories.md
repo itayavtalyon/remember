@@ -514,5 +514,19 @@ remember rekey --key decision:p7-note --clear-key
 - Extra kinds only after two real uses.
 - Optional `--limit` on `remember related`.
 - Mac add-panel link sugar.
-</content>
-</invoke>
+
+## Implementation Results (2026-09-02)
+
+Shipped as designed (Rounds 1–4). Notes:
+
+- Schema, single-row canonical `related`, from/to direction, 5-name output
+  `type`, idempotent `unlink`, both-endpoint `updated_at` bump, and either-bin
+  graph locators (`store_get_any` / `store_get_any_by_key`) are all in as
+  specified. Stored `kind` stays the 3 canonical values.
+- `rekey` landed with **promote and demote** in v1 (Round 4): `--to-key`
+  sets/renames/promotes, `--clear-key` demotes (honoring keyless body-hash
+  uniqueness). Foundations' delete+re-add rename guidance is superseded.
+- `supersedes` reachability uses `WITH RECURSIVE … UNION` (set semantics) so a
+  dense supersedes DAG cannot blow up the cycle check.
+- Plan + gates: `implementation-plans/13-related-memories.md`. CLI complete on
+  `feat/p7-related-memories`; remember-mac pin + shell (Mac plan 13) follows.

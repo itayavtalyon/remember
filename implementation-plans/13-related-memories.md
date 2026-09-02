@@ -153,11 +153,11 @@ already has TTL). Do not implement in a sibling checkout that lacks log
 
 ## Definition of Done
 
-- [ ] Design log 004 (through Round 4) unchanged except a later Implementation Results
-- [ ] Must-pass table green; `user_version` 3; one-row `related`; no `dir`
-- [ ] Public exits still 0/1/2/3; no new process exit
-- [ ] Skill/help match commands, kinds, 5-name `type`, `rekey --to-key`/`--clear-key`
-- [ ] `just check` / CLI coverage gate green
+- [x] Design log 004 (through Round 4) unchanged except a later Implementation Results
+- [x] Must-pass table green; `user_version` 3; one-row `related`; no `dir`
+- [x] Public exits still 0/1/2/3; no new process exit
+- [x] Skill/help match commands, kinds, 5-name `type`, `rekey --to-key`/`--clear-key`
+- [x] `just check` / CLI coverage gate green
 - [ ] remember-mac pin + shell is a **follow-up** (Mac plan 13)
 
 ## Implementation Notes
@@ -216,3 +216,33 @@ already has TTL). Do not implement in a sibling checkout that lacks log
 **Praise:** 5-name `type` lives only in `output.c`; store keeps 3 kinds. Canonical `(min,max,related)` and either-bin trash subject verified by running the CLI.
 
 **Gates:** link 8/8; store unit 85/85; lint OK; full gate **331/331**.
+
+### Stage 4 (facade byte-match + coverage) (2026-09-02)
+
+- Facade parity for the new commands: `test_facade.c` gains `related` and
+  link-bearing `get` read parity, plus `link` / `unlink` / `rekey` mutation
+  parity (two-DB, timestamp-masked). A `SeedFn` helper removes the copy-paste.
+- Coverage close-out to 100% funcs + effective lines on `src/`:
+  - `store_get_any_by_key` was never exercised — no test linked/`related`d
+    **by key**. Added `link_and_related_by_key_either_bin` (real path,
+    incl. a trashed neighbor resolved either-bin).
+  - Extended the existing `rekey` CLI test: `--trash` bin, demote body-hash
+    conflict message, `--clear-key` on an already-keyless entry.
+  - `related --kind` filter + human `Related:` block (keyed neighbor) +
+    `--kind` missing value; preview control-byte → `?` and multibyte
+    first-line overflow (via 80-cp human list preview).
+  - Per-topic `help link|unlink|related|rekey`.
+  - Store: `store_list_neighbors_for` empty page; a fault-injection sweep
+    (`#ifdef REMEMBER_TEST_HOOKS`) over link/unlink/neighbors/rekey for the
+    OOM / prepare / step cleanup paths.
+- Two dead guards removed (`parse_kind_token` NULL branch;
+  `bump_endpoints` `a == b`); `cmd_related` write-fail uses the idiomatic
+  `return REMEMBER_ERR`.
+- `scripts/check-coverage.sh`: added `store_neighbor(s)_free(` and
+  `*out_stubs =` to the defensive-cleanup exclusion list (same class as the
+  pre-existing `store_entry_free(` / `*out_count =` entries; the P7 free
+  helpers simply predated it).
+
+**Gates (Stage 4):** full ctest 3/3 under ASan/UBSan; coverage 100% funcs +
+100% effective lines; lint OK. Facade suite 18/18; link 16/16; store unit
+87/87.

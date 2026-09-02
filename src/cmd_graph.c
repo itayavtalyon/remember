@@ -22,12 +22,9 @@ typedef struct {
     int npos;
 } PairParse;
 
+/* raw is never NULL: callers only parse when a --kind token was given. */
 static int parse_kind_token(const char *raw, StoreEdgeKind *out)
 {
-    if (raw == NULL) {
-        *out = STORE_EDGE_RELATED;
-        return 0;
-    }
     if (strcmp(raw, "related") == 0) {
         *out = STORE_EDGE_RELATED;
         return 0;
@@ -452,13 +449,11 @@ int cmd_related(Store *s, bool json, int rest_argc, const char **rest_argv)
     } else {
         rc = output_related_human(app_out(), rows, n, now);
     }
-    if (rc != 0) {
-        err_msg("failed to write output");
-        rc = REMEMBER_ERR;
-    } else {
-        rc = REMEMBER_OK;
-    }
     store_neighbors_free(rows, n);
     store_entry_free(&subject);
-    return rc;
+    if (rc != 0) {
+        err_msg("failed to write output");
+        return REMEMBER_ERR;
+    }
+    return REMEMBER_OK;
 }

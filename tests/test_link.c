@@ -310,6 +310,35 @@ TEST(rekey_rename_promote_demote_and_errors)
     r = run_remember(db, wrong, 5, NULL);
     ASSERT_EQ_INT(r.exit_code, 3);
     cmd_result_free(&r);
+
+    /* --trash reaches a trashed row (t:k is in the trash bin from `exp`). */
+    {
+        const char *rt[] = {"rekey", "--trash", "--key", "t:k", "--to-key", "t2:k"};
+        r = run_remember(db, rt, 6, NULL);
+        ASSERT_EQ_INT(r.exit_code, 0);
+        cmd_result_free(&r);
+    }
+    /* --clear-key on an already-keyless entry (id 1 was demoted above):
+       same-value success, no body-hash check. */
+    {
+        const char *clr[] = {"rekey", "1", "--clear-key"};
+        r = run_remember(db, clr, 3, NULL);
+        ASSERT_EQ_INT(r.exit_code, 0);
+        cmd_result_free(&r);
+    }
+    /* Demote whose body-hash collides with a keyless rival names that id. id 1
+       is keyless "slot"; a keyed entry with the same body cannot be demoted. */
+    {
+        const char *dup[] = {"add", "--key", "c:k", "slot"};
+        const char *demc[] = {"rekey", "--key", "c:k", "--clear-key"};
+        r = run_remember(db, dup, 4, NULL);
+        ASSERT_EQ_INT(r.exit_code, 0);
+        cmd_result_free(&r);
+        r = run_remember(db, demc, 4, NULL);
+        ASSERT_EQ_INT(r.exit_code, 1);
+        ASSERT_STR_CONTAINS(r.err, "body hash conflicts with entry 1");
+        cmd_result_free(&r);
+    }
     free(db);
 }
 
@@ -633,6 +662,150 @@ TEST(help_lists_graph_commands)
     ASSERT_STR_CONTAINS(r.out, "related");
     ASSERT_STR_CONTAINS(r.out, "rekey");
     cmd_result_free(&r);
+
+    /* Per-topic help for each graph command (distinct option blocks). */
+    {
+        const char *hl[] = {"help", "link"};
+        const char *hu[] = {"help", "unlink"};
+        const char *hr[] = {"help", "related"};
+        const char *hk[] = {"help", "rekey"};
+
+        r = run_remember(db, hl, 2, NULL);
+        ASSERT_EQ_INT(r.exit_code, 0);
+        ASSERT_STR_CONTAINS(r.out, "either bin");
+        cmd_result_free(&r);
+        r = run_remember(db, hu, 2, NULL);
+        ASSERT_EQ_INT(r.exit_code, 0);
+        ASSERT_STR_CONTAINS(r.out, "every kind");
+        cmd_result_free(&r);
+        r = run_remember(db, hr, 2, NULL);
+        ASSERT_EQ_INT(r.exit_code, 0);
+        ASSERT_STR_CONTAINS(r.out, "--outgoing");
+        cmd_result_free(&r);
+        r = run_remember(db, hk, 2, NULL);
+        ASSERT_EQ_INT(r.exit_code, 0);
+        ASSERT_STR_CONTAINS(r.out, "--clear-key");
+        cmd_result_free(&r);
+    }
+    free(db);
+}
+
+/* related --kind filter, human Related: block (keyed neighbor), and a --kind
+   with no value. */
+TEST(related_kind_filter_and_human_block)
+{
+    char *db = make_temp_db_path();
+    const char *kc[] = {"add", "--key", "c:k", "gamma"};
+    const char *lc[] = {"link", "--from", "1", "--to", "3", "--kind", "cites"};
+    const char *lr[] = {"link", "1", "2"};
+    const char *jkind[] = {"--json", "related", "1", "--kind", "cites"};
+    const char *human[] = {"related", "1"};
+    const char *nokind[] = {"related", "1", "--kind"};
+    CmdResult r;
+
+    ASSERT_TRUE(db != NULL);
+    ASSERT_EQ_INT(add_body(db, "alpha"), 1);
+    ASSERT_EQ_INT(add_body(db, "beta"), 2);
+    r = run_remember(db, kc, 4, NULL); /* id 3, keyed c:k */
+    ASSERT_EQ_INT(r.exit_code, 0);
+    cmd_result_free(&r);
+    r = run_remember(db, lc, 7, NULL); /* 1 cites 3 */
+    cmd_result_free(&r);
+    r = run_remember(db, lr, 3, NULL); /* 1 related 2 */
+    cmd_result_free(&r);
+
+    r = run_remember(db, jkind, 5, NULL);
+    ASSERT_EQ_INT(r.exit_code, 0);
+    ASSERT_TRUE(json_count_is(r.out, 1));
+    ASSERT_STR_CONTAINS(r.out, "\"type\":\"cites\"");
+    cmd_result_free(&r);
+
+    r = run_remember(db, human, 2, NULL);
+    ASSERT_EQ_INT(r.exit_code, 0);
+    ASSERT_STR_CONTAINS(r.out, "cites c:k"); /* type + neighbor key */
+    ASSERT_STR_CONTAINS(r.out, "related");
+    cmd_result_free(&r);
+
+    r = run_remember(db, nokind, 3, NULL);
+    ASSERT_EQ_INT(r.exit_code, 1);
+    cmd_result_free(&r);
+    free(db);
+}
+
+/* Preview control byte -> '?' and multibyte first line overflowing the buffer. */
+TEST(preview_control_and_multibyte_truncation)
+{
+    char *db = make_temp_db_path();
+    const char *ctl[] = {"add", "a\tb tail"};
+    const char *ls[] = {"list"};
+    char big[220];
+    const char *bigcmd[2];
+    CmdResult r;
+    size_t i;
+
+    ASSERT_TRUE(db != NULL);
+    r = run_remember(db, ctl, 2, NULL);
+    ASSERT_EQ_INT(r.exit_code, 0);
+    cmd_result_free(&r);
+
+    for (i = 0; i < 70U; i++) {
+        memcpy(big + (i * 3U), "\xE2\x98\x85", 3); /* U+2605 star, 3 bytes */
+    }
+    big[210] = '\0';
+    bigcmd[0] = "add";
+    bigcmd[1] = big;
+    r = run_remember(db, bigcmd, 2, NULL);
+    ASSERT_EQ_INT(r.exit_code, 0);
+    cmd_result_free(&r);
+
+    r = run_remember(db, ls, 1, NULL);
+    ASSERT_EQ_INT(r.exit_code, 0);
+    ASSERT_STR_CONTAINS(r.out, "a?b tail"); /* tab rendered as '?' */
+    ASSERT_STR_CONTAINS(r.out, "...");      /* multibyte line truncated */
+    cmd_result_free(&r);
+    free(db);
+}
+
+/* Link and related resolve either end by key in either bin (store_get_any_by_key):
+   linking to a trashed entry by key succeeds and marks the stub trash. */
+TEST(link_and_related_by_key_either_bin)
+{
+    char *db = make_temp_db_path();
+    const char *ka[] = {"add", "--key", "k:a", "alpha"};
+    const char *kb[] = {"add", "--key", "k:b", "beta"};
+    const char *kt[] = {"add", "--expires", "2020-01-01T00:00:00Z", "--key", "k:t", "trashed"};
+    const char *cite[] = {"--json",   "link", "--from-key", "k:a",
+                          "--to-key", "k:b",  "--kind",     "cites"};
+    const char *rel[] = {"--json", "link", "--from-key", "k:a", "--to-key", "k:t"};
+    const char *q[] = {"--json", "related", "--key", "k:a"};
+    CmdResult r;
+
+    ASSERT_TRUE(db != NULL);
+    r = run_remember(db, ka, 4, NULL);
+    cmd_result_free(&r);
+    r = run_remember(db, kb, 4, NULL);
+    cmd_result_free(&r);
+    r = run_remember(db, kt, 6, NULL);
+    cmd_result_free(&r);
+
+    r = run_remember(db, cite, 8, NULL);
+    ASSERT_EQ_INT(r.exit_code, 0);
+    ASSERT_STR_CONTAINS(r.out, "\"action\":\"created\"");
+    ASSERT_STR_CONTAINS(r.out, "\"type\":\"cites\"");
+    cmd_result_free(&r);
+
+    /* k:t is in the trash bin, yet the graph locator resolves it (either bin). */
+    r = run_remember(db, rel, 6, NULL);
+    ASSERT_EQ_INT(r.exit_code, 0);
+    ASSERT_STR_CONTAINS(r.out, "\"trash\":true");
+    cmd_result_free(&r);
+
+    r = run_remember(db, q, 4, NULL);
+    ASSERT_EQ_INT(r.exit_code, 0);
+    ASSERT_TRUE(json_count_is(r.out, 2));
+    ASSERT_STR_CONTAINS(r.out, "\"key\":\"k:b\"");
+    ASSERT_STR_CONTAINS(r.out, "\"key\":\"k:t\"");
+    cmd_result_free(&r);
     free(db);
 }
 
@@ -651,4 +824,7 @@ void register_link_tests(void)
     RUN_TEST(human_get_related_block_omitted_when_none);
     RUN_TEST(get_marks_trash_neighbor_restore_keeps_edge);
     RUN_TEST(help_lists_graph_commands);
+    RUN_TEST(link_and_related_by_key_either_bin);
+    RUN_TEST(related_kind_filter_and_human_block);
+    RUN_TEST(preview_control_and_multibyte_truncation);
 }
