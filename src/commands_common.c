@@ -6,11 +6,29 @@
 #include "store.h"
 #include "util.h"
 
+#include <errno.h>
 #include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+
+int parse_entry_id(const char *raw, long long *out_id)
+{
+    char *end = NULL;
+    long long id;
+
+    if (raw == NULL || out_id == NULL) {
+        return -1;
+    }
+    errno = 0;
+    id = strtoll(raw, &end, 10);
+    if (end == raw || (end != NULL && *end != '\0') || errno == ERANGE || id < 1) {
+        return -1;
+    }
+    *out_id = id;
+    return 0;
+}
 
 const char *norm_body_message(NormStatus st)
 {

@@ -66,6 +66,10 @@ static const CommandEntry k_commands[] = {
     {"delete", CLI_CMD_DELETE, "Remove an entry by id or --key"},
     {"tags", CLI_CMD_TAGS, "List all tags with entry counts"},
     {"purge-trash", CLI_CMD_PURGE_TRASH, "Permanently delete every expired memory"},
+    {"link", CLI_CMD_LINK, "Create or merge an entry link"},
+    {"unlink", CLI_CMD_UNLINK, "Remove entry links"},
+    {"related", CLI_CMD_RELATED, "List neighbors of an entry"},
+    {"rekey", CLI_CMD_REKEY, "Rename, set, or clear an entry key in place"},
 };
 
 enum { COMMAND_COUNT = (int)(sizeof(k_commands) / sizeof(k_commands[0])) };

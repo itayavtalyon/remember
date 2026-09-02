@@ -357,17 +357,48 @@ static int list_prepare_query(const ListParse *parsed, char *key_norm, size_t ke
     return 0;
 }
 
+static int load_page_neighbors(Store *s, const Entry *entries, size_t count, const char *now,
+                               StoreNeighbor **out, size_t *out_n)
+{
+    long long *ids = NULL;
+    size_t i;
+    StoreStatus st;
+
+    *out = NULL;
+    *out_n = 0U;
+    if (count == 0U) {
+        return 0;
+    }
+    ids = (long long *)malloc(count * sizeof(*ids));
+    if (ids == NULL) {
+        err_msg("out of memory");
+        return -1;
+    }
+    for (i = 0; i < count; i++) {
+        ids[i] = entries[i].id;
+    }
+    st = store_list_neighbors_for(s, ids, count, now, out, out_n);
+    free(ids);
+    if (st != STORE_OK) {
+        err_msg(store_status_message(st));
+        return -1;
+    }
+    return 0;
+}
+
 /* Emit list/search page: JSON envelope or human preview lines. */
 static int emit_entry_page(bool json, size_t offset, size_t limit, size_t count, size_t total,
-                           const Entry *entries)
+                           const Entry *entries, const StoreNeighbor *links, size_t nlinks,
+                           const char *now)
 {
     size_t i;
 
     if (json) {
-        return output_list_envelope(app_out(), offset, limit, count, total, entries);
+        return output_list_envelope(app_out(), offset, limit, count, total, entries, links, nlinks,
+                                    now);
     }
     for (i = 0; i < count; i++) {
-        if (output_entry_human_line(app_out(), &entries[i]) != 0) {
+        if (output_entry_human_line(app_out(), &entries[i], links, nlinks, now) != 0) {
             return -1;
         }
     }
@@ -398,6 +429,8 @@ int cmd_list(Store *s, bool json, int rest_argc, const char **rest_argv)
     Entry *entries = NULL;
     size_t count = 0U;
     size_t total = 0U;
+    StoreNeighbor *links = NULL;
+    size_t nlinks = 0U;
     StoreStatus st;
     int rc = REMEMBER_ERR;
     char now[32];
@@ -426,8 +459,11 @@ int cmd_list(Store *s, bool json, int rest_argc, const char **rest_argv)
         err_msg(store_status_message(st));
         goto cleanup;
     }
+    if (load_page_neighbors(s, entries, count, now, &links, &nlinks) != 0) {
+        goto cleanup;
+    }
 
-    if (emit_entry_page(json, q.offset, q.limit, count, total, entries) != 0) {
+    if (emit_entry_page(json, q.offset, q.limit, count, total, entries, links, nlinks, now) != 0) {
         err_msg("failed to write output");
         goto cleanup;
     }
@@ -436,6 +472,7 @@ int cmd_list(Store *s, bool json, int rest_argc, const char **rest_argv)
 cleanup:
     list_parse_free(&parsed);
     free_tag_list(tags_norm, ntags);
+    store_neighbors_free(links, nlinks);
     free_entry_page(entries, count);
     return rc;
 }
@@ -451,6 +488,8 @@ int cmd_search(Store *s, bool json, int rest_argc, const char **rest_argv)
     Entry *entries = NULL;
     size_t count = 0U;
     size_t total = 0U;
+    StoreNeighbor *links = NULL;
+    size_t nlinks = 0U;
     StoreStatus st;
     int rc = REMEMBER_ERR;
     char now[32];
@@ -481,8 +520,12 @@ int cmd_search(Store *s, bool json, int rest_argc, const char **rest_argv)
         err_msg(store_status_message(st));
         goto cleanup;
     }
+    if (load_page_neighbors(s, entries, count, now, &links, &nlinks) != 0) {
+        goto cleanup;
+    }
 
-    if (emit_entry_page(json, q.filters.offset, q.filters.limit, count, total, entries) != 0) {
+    if (emit_entry_page(json, q.filters.offset, q.filters.limit, count, total, entries, links,
+                        nlinks, now) != 0) {
         err_msg("failed to write output");
         goto cleanup;
     }
@@ -491,6 +534,7 @@ int cmd_search(Store *s, bool json, int rest_argc, const char **rest_argv)
 cleanup:
     search_parse_free(&parsed);
     free_tag_list(tags_norm, ntags);
+    store_neighbors_free(links, nlinks);
     free_entry_page(entries, count);
     return rc;
 }

@@ -13,6 +13,9 @@
 
 void err_msg(const char *msg);
 
+/* Parse a positive entry id token. 0 ok, -1 invalid (does not print). */
+int parse_entry_id(const char *raw, long long *out_id);
+
 const char *norm_body_message(NormStatus st);
 const char *norm_token_message(NormStatus st, const char *kind);
 

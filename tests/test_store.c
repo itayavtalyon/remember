@@ -45,7 +45,7 @@ static void assert_query_is(const char *db, const char *sql, const char *want)
     free(row);
 }
 
-TEST(store_open_creates_user_version_2)
+TEST(store_open_creates_user_version_3)
 {
     char *db = make_temp_db_path();
     char err[256];
@@ -58,7 +58,7 @@ TEST(store_open_creates_user_version_2)
     ASSERT_STREQ(err, "");
     store_close(s);
 
-    assert_query_is(db, "PRAGMA user_version;", "2");
+    assert_query_is(db, "PRAGMA user_version;", "3");
     assert_query_is(
         db, "SELECT COUNT(*) FROM pragma_table_info('entries') WHERE name='expires_at';", "1");
     /* ponytail: no expires_at index — full scan is fine at personal scale. */
@@ -93,7 +93,7 @@ TEST(store_open_migrates_v1_to_v2)
     ASSERT_STREQ(err, "");
     store_close(s);
 
-    assert_query_is(db, "PRAGMA user_version;", "2");
+    assert_query_is(db, "PRAGMA user_version;", "3");
     assert_query_is(
         db, "SELECT COUNT(*) FROM pragma_table_info('entries') WHERE name='expires_at';", "1");
     assert_query_is(db, "SELECT body FROM entries WHERE id=1;", "old row");
@@ -265,6 +265,8 @@ TEST(store_open_has_expected_schema)
                     "SELECT CASE WHEN sql LIKE '%ON DELETE CASCADE%' THEN 'ok' ELSE 'bad' END "
                     "FROM sqlite_master WHERE name='entry_tags';",
                     "ok");
+    assert_query_is(db, "SELECT name FROM sqlite_master WHERE type='table' AND name='entry_links';",
+                    "entry_links");
     free(db);
 }
 
@@ -331,7 +333,7 @@ TEST(store_open_concurrent_create_all_succeed)
         }
     }
     ASSERT_EQ_INT(failures, 0);
-    assert_query_is(db, "PRAGMA user_version;", "2");
+    assert_query_is(db, "PRAGMA user_version;", "3");
     free(db);
 }
 
@@ -1726,7 +1728,7 @@ TEST(store_tags_step_fail)
 
 void register_store_tests(void)
 {
-    RUN_TEST(store_open_creates_user_version_2);
+    RUN_TEST(store_open_creates_user_version_3);
     RUN_TEST(store_open_migrates_v1_to_v2);
     RUN_TEST(store_open_reopens_existing);
     RUN_TEST(store_open_refuses_user_version_too_new);
@@ -1765,6 +1767,7 @@ void register_store_tests(void)
     RUN_TEST(store_delete_by_key_missing);
     RUN_TEST(store_tags_empty_db);
     RUN_TEST(store_tags_counts_and_sorted);
+    register_store_link_tests();
 #ifdef REMEMBER_TEST_HOOKS
     RUN_TEST(store_open_oom_on_store_struct);
     RUN_TEST(store_tags_prepare_fail);
