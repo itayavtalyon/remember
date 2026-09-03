@@ -248,7 +248,7 @@ TEST(invalid_ttl_tokens)
     free(db);
 }
 
-TEST(human_list_still_five_columns)
+TEST(human_list_has_related_column)
 {
     char *db = make_temp_db_path();
     const char *a[] = {"add", "--tag", "t", "hello list"};
@@ -269,7 +269,7 @@ TEST(human_list_still_five_columns)
             pipes++;
         }
     }
-    ASSERT_EQ_INT(pipes, 4);
+    ASSERT_EQ_INT(pipes, 5);
     cmd_result_free(&r);
     free(db);
 }
@@ -438,7 +438,7 @@ void register_ttl_tests(void)
     RUN_TEST(purge_trash_json_and_empty);
     RUN_TEST(ttl_and_expires_mutex);
     RUN_TEST(invalid_ttl_tokens);
-    RUN_TEST(human_list_still_five_columns);
+    RUN_TEST(human_list_has_related_column);
     RUN_TEST(add_expires_date_only_local_eod);
     RUN_TEST(add_expires_frac_pad_and_trunc);
     RUN_TEST(purge_trash_rejects_args);

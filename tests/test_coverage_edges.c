@@ -255,11 +255,11 @@ TEST(output_write_fail_returns_error)
     }
     (void)output_entry_json(f, &e);
     (void)output_action_envelope(f, "created", &e);
-    (void)output_get_envelope(f, &e);
-    (void)output_list_envelope(f, 0, 20, 1, 1, &e);
+    (void)output_get_envelope(f, &e, NULL, 0, "t");
+    (void)output_list_envelope(f, 0, 20, 1, 1, &e, NULL, 0, "t");
     (void)output_id_human(f, 1);
     (void)output_body_human(f, "body");
-    (void)output_entry_human_line(f, &e);
+    (void)output_entry_human_line(f, &e, NULL, 0, "t");
     fclose(f);
 }
 
@@ -269,9 +269,9 @@ TEST(output_null_entry_fails)
     ASSERT_TRUE(f != NULL);
     ASSERT_EQ_INT(output_entry_json(f, NULL), -1);
     ASSERT_EQ_INT(output_action_envelope(f, "x", NULL), -1);
-    ASSERT_EQ_INT(output_get_envelope(f, NULL), -1);
-    ASSERT_EQ_INT(output_entry_human_line(f, NULL), -1);
-    ASSERT_EQ_INT(output_list_envelope(f, 0, 1, 1, 1, NULL), -1);
+    ASSERT_EQ_INT(output_get_envelope(f, NULL, NULL, 0, "t"), -1);
+    ASSERT_EQ_INT(output_entry_human_line(f, NULL, NULL, 0, "t"), -1);
+    ASSERT_EQ_INT(output_list_envelope(f, 0, 1, 1, 1, NULL, NULL, 0, "t"), -1);
     fclose(f);
 }
 
@@ -279,7 +279,7 @@ TEST(output_list_empty_ok)
 {
     FILE *f = tmpfile();
     ASSERT_TRUE(f != NULL);
-    ASSERT_EQ_INT(output_list_envelope(f, 0, 20, 0, 0, NULL), 0);
+    ASSERT_EQ_INT(output_list_envelope(f, 0, 20, 0, 0, NULL, NULL, 0, "t"), 0);
     fclose(f);
 }
 
@@ -296,14 +296,14 @@ TEST(output_preview_multibyte_and_truncate)
     e.source = (char *)"unknown";
     e.created_at = (char *)"c";
     e.updated_at = (char *)"u";
-    ASSERT_EQ_INT(output_entry_human_line(f, &e), 0);
+    ASSERT_EQ_INT(output_entry_human_line(f, &e, NULL, 0, "t"), 0);
     for (i = 0; i < 200U; i++) {
         body[i] = (char)0xC3;   /* start of 2-byte sequence */
         body[++i] = (char)0xA9; /* continuation é */
     }
     body[200] = '\0';
     e.body = body;
-    ASSERT_EQ_INT(output_entry_human_line(f, &e), 0);
+    ASSERT_EQ_INT(output_entry_human_line(f, &e, NULL, 0, "t"), 0);
     fclose(f);
 }
 
@@ -678,9 +678,9 @@ TEST(output_utf8_3_and_4_byte_preview)
     e.tags[0] = (char *)"a";
     e.tags[1] = (char *)"b";
     e.ntags = 2U;
-    ASSERT_EQ_INT(output_entry_human_line(f, &e), 0);
+    ASSERT_EQ_INT(output_entry_human_line(f, &e, NULL, 0, "t"), 0);
     e.body = bad;
-    ASSERT_EQ_INT(output_entry_human_line(f, &e), 0);
+    ASSERT_EQ_INT(output_entry_human_line(f, &e, NULL, 0, "t"), 0);
     free(e.tags);
     fclose(f);
 }
@@ -851,7 +851,7 @@ TEST(output_invalid_utf8_lead_byte)
     e.source = (char *)"unknown";
     e.created_at = (char *)"c";
     e.updated_at = (char *)"u";
-    ASSERT_EQ_INT(output_entry_human_line(f, &e), 0);
+    ASSERT_EQ_INT(output_entry_human_line(f, &e, NULL, 0, "t"), 0);
     fclose(f);
 }
 

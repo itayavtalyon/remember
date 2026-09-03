@@ -35,6 +35,10 @@ static void print_general_help(void)
                                "  delete    Remove an entry by id or --key\n"
                                "  tags        List all tags with entry counts\n"
                                "  purge-trash Permanently delete every expired memory\n"
+                               "  link        Create or merge an entry link\n"
+                               "  unlink      Remove entry links\n"
+                               "  related     List neighbors of an entry\n"
+                               "  rekey       Rename, set, or clear an entry key in place\n"
                                "  help        Show this help (help <command> for a command)\n"
                                "  version     Show version\n"
                                "\n"
@@ -90,6 +94,10 @@ static void print_command_help(CliCommand topic)
         (void)fprintf(out, "\n");
         (void)fprintf(out, "Exactly one of ID or --key is required.\n");
         (void)fprintf(out, "Default locators are active-only; --trash is trash-only.\n");
+        if (topic == CLI_CMD_GET) {
+            (void)fprintf(out, "JSON entries include links stubs after expires_at.\n");
+            (void)fprintf(out, "Human get prints the body, then a Related: block if any.\n");
+        }
         (void)fprintf(out, "\n");
     } else if (topic == CLI_CMD_UPDATE) {
         (void)fprintf(out, "Options:\n");
@@ -119,6 +127,9 @@ static void print_command_help(CliCommand topic)
         (void)fprintf(out, "  --offset M      Skip M matches (default 0)\n");
         (void)fprintf(out, "  --trash         List trash only (default: active only)\n");
         (void)fprintf(out, "\n");
+        (void)fprintf(out, "Human: id | key | tags | preview | updated_at | related\n");
+        (void)fprintf(out, "related cell: neighbor ids (cap 5, then , +N). JSON links stubs.\n");
+        (void)fprintf(out, "\n");
     } else if (topic == CLI_CMD_SEARCH) {
         (void)fprintf(out, "Options:\n");
         (void)fprintf(out, "  QUERY           FTS5 full-text query (required)\n");
@@ -130,6 +141,7 @@ static void print_command_help(CliCommand topic)
         (void)fprintf(out, "  --trash         Search trash only (default: active only)\n");
         (void)fprintf(out, "\n");
         (void)fprintf(out, "Ranked by FTS relevance (bm25), then updated_at.\n");
+        (void)fprintf(out, "Human columns match list (sixth is related ids). JSON links stubs.\n");
         (void)fprintf(out, "\n");
     } else if (topic == CLI_CMD_TAGS) {
         (void)fprintf(out, "Options:\n");
@@ -142,6 +154,44 @@ static void print_command_help(CliCommand topic)
         (void)fprintf(out, "Permanently delete every expired row (no prompt).\n");
         (void)fprintf(out, "Human stdout: the count of deleted entries.\n");
         (void)fprintf(out, "Takes no options.\n");
+        (void)fprintf(out, "\n");
+    } else if (topic == CLI_CMD_LINK || topic == CLI_CMD_UNLINK) {
+        (void)fprintf(out, "Options:\n");
+        (void)fprintf(out, "  --from ID       Source entry id\n");
+        (void)fprintf(out, "  --from-key KEY  Source entry key\n");
+        (void)fprintf(out, "  --to ID         Target entry id\n");
+        (void)fprintf(out, "  --to-key KEY    Target entry key\n");
+        (void)fprintf(out, "  --kind KIND     related (default on link) | supersedes | cites\n");
+        (void)fprintf(out, "  ID ID           Sugar for --from / --to numeric ids\n");
+        (void)fprintf(out, "\n");
+        (void)fprintf(out,
+                      "Each end is exactly one of id or --key. Locators resolve in either bin.\n");
+        if (topic == CLI_CMD_UNLINK) {
+            (void)fprintf(out, "Omit --kind to remove every kind between the pair.\n");
+        }
+        (void)fprintf(out, "\n");
+    } else if (topic == CLI_CMD_RELATED) {
+        (void)fprintf(out, "Options:\n");
+        (void)fprintf(out, "  ID              Entry id (positional)\n");
+        (void)fprintf(out, "  --key KEY       Locate by key instead of id\n");
+        (void)fprintf(out, "  --kind KIND     Filter stored kind (related|supersedes|cites)\n");
+        (void)fprintf(out, "  --outgoing      Directed from this entry; related still included\n");
+        (void)fprintf(out, "  --incoming      Directed to this entry; related still included\n");
+        (void)fprintf(out, "\n");
+        (void)fprintf(out, "Exactly one of ID or --key. Either bin (no --trash).\n");
+        (void)fprintf(out, "Cannot combine --outgoing and --incoming.\n");
+        (void)fprintf(out, "\n");
+    } else if (topic == CLI_CMD_REKEY) {
+        (void)fprintf(out, "Options:\n");
+        (void)fprintf(out, "  ID              Entry id (positional)\n");
+        (void)fprintf(out, "  --key KEY       Locate by key instead of id\n");
+        (void)fprintf(out, "  --trash         Locate in trash (same bin contract as update)\n");
+        (void)fprintf(out, "  --to-key NEW    Set or rename the key (non-empty)\n");
+        (void)fprintf(out, "  --clear-key     Remove the key (keyed becomes keyless)\n");
+        (void)fprintf(out, "\n");
+        (void)fprintf(out,
+                      "Exactly one of ID or --key, and exactly one of --to-key or --clear-key.\n");
+        (void)fprintf(out, "Empty --to-key is illegal (not a clear).\n");
         (void)fprintf(out, "\n");
     }
     (void)fprintf(out, "Global options: --db PATH, --json, --help, --version\n");
@@ -254,6 +304,14 @@ static int run(const CliArgs *args)
         return run_with_store(args, cmd_tags);
     case CLI_CMD_PURGE_TRASH:
         return run_with_store(args, cmd_purge_trash);
+    case CLI_CMD_LINK:
+        return run_with_store(args, cmd_link);
+    case CLI_CMD_UNLINK:
+        return run_with_store(args, cmd_unlink);
+    case CLI_CMD_RELATED:
+        return run_with_store(args, cmd_related);
+    case CLI_CMD_REKEY:
+        return run_with_store(args, cmd_rekey);
     case CLI_CMD_NONE:
         /* Defensive: parse should set CLI_ERR_MISSING_COMMAND first. */
         (void)fprintf(app_err(), "remember: %s\n", cli_error_message(CLI_ERR_MISSING_COMMAND));

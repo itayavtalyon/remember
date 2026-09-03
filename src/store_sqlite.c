@@ -183,6 +183,20 @@ static const char k_schema_sql[] =
     "  tokenize = 'unicode61 remove_diacritics 2'\n"
     ");\n";
 
+/* Applied on v0 create (after k_schema_sql) and on v1/v2 migrate. */
+static const char k_links_sql[] =
+    "CREATE TABLE entry_links (\n"
+    "  from_id    INTEGER NOT NULL REFERENCES entries(id) ON DELETE CASCADE,\n"
+    "  to_id      INTEGER NOT NULL REFERENCES entries(id) ON DELETE CASCADE,\n"
+    "  kind       TEXT NOT NULL CHECK (kind IN ('related', 'supersedes', 'cites')),\n"
+    "  created_at TEXT NOT NULL,\n"
+    "  updated_at TEXT NOT NULL,\n"
+    "  CHECK (from_id != to_id)\n"
+    ");\n"
+    "CREATE UNIQUE INDEX entry_links_edge\n"
+    "  ON entry_links(from_id, to_id, kind);\n"
+    "CREATE INDEX entry_links_to ON entry_links(to_id);\n";
+
 static void set_err(char *err, size_t errlen, const char *msg)
 {
     size_t n;
@@ -291,13 +305,13 @@ static int apply_pragmas(sqlite3 *db, char *err, size_t errlen)
     return 0;
 }
 
-/* Gate an already-created database: 2 is current, anything else is refused. */
+/* Gate an already-created database: 3 is current, anything else is refused. */
 static int check_version(int version, char *err, size_t errlen)
 {
-    if (version == 2) {
+    if (version == 3) {
         return 0;
     }
-    if (version > 2) {
+    if (version > 3) {
         set_err(err, errlen, "database is newer than this remember");
     } else {
         set_err(err, errlen, "unsupported database version");
@@ -305,11 +319,31 @@ static int check_version(int version, char *err, size_t errlen)
     return -1;
 }
 
+static int migrate_body_to_v3(sqlite3 *db, int version, char *err, size_t errlen)
+{
+    if (version == 0) {
+        if (exec_sql(db, k_schema_sql, err, errlen) != 0) {
+            return -1;
+        }
+        return exec_sql(db, k_links_sql, err, errlen);
+    }
+    if (version == 1) {
+        if (exec_sql(db, "ALTER TABLE entries ADD COLUMN expires_at TEXT;", err, errlen) != 0) {
+            return -1;
+        }
+        return exec_sql(db, k_links_sql, err, errlen);
+    }
+    if (version == 2) {
+        return exec_sql(db, k_links_sql, err, errlen);
+    }
+    return 1;
+}
+
 /*
- * Bring an open database to schema version 2.
+ * Bring an open database to schema version 3.
  *
- * Create (v0) and migrate (v1) run as one transaction under a write lock so a
- * failure part-way cannot leave objects behind at user_version 0, and a
+ * Create (v0) and migrate (v1/v2) run as one transaction under a write lock so
+ * a failure part-way cannot leave objects behind at user_version 0, and a
  * concurrent remember that already created or migrated is visible on re-read.
  */
 static int ensure_schema(sqlite3 *db, char *err, size_t errlen)
@@ -319,10 +353,10 @@ static int ensure_schema(sqlite3 *db, char *err, size_t errlen)
     if (read_user_version(db, &version, err, errlen) != 0) {
         return -1;
     }
-    if (version == 2) {
+    if (version == 3) {
         return 0;
     }
-    if (version != 0 && version != 1) {
+    if (version != 0 && version != 1 && version != 2) {
         return check_version(version, err, errlen);
     }
 
@@ -332,23 +366,21 @@ static int ensure_schema(sqlite3 *db, char *err, size_t errlen)
     if (read_user_version(db, &version, err, errlen) != 0) {
         goto cleanup_fail;
     }
-    if (version == 2) {
+    if (version == 3) {
         rollback_quiet(db);
         return 0;
     }
-    if (version == 0) {
-        if (exec_sql(db, k_schema_sql, err, errlen) != 0) {
+    {
+        int migrated = migrate_body_to_v3(db, version, err, errlen);
+        if (migrated == 1) {
+            rollback_quiet(db);
+            return check_version(version, err, errlen);
+        }
+        if (migrated != 0) {
             goto cleanup_fail;
         }
-    } else if (version == 1) {
-        if (exec_sql(db, "ALTER TABLE entries ADD COLUMN expires_at TEXT;", err, errlen) != 0) {
-            goto cleanup_fail;
-        }
-    } else {
-        rollback_quiet(db);
-        return check_version(version, err, errlen);
     }
-    if (exec_sql(db, "PRAGMA user_version = 2;", err, errlen) != 0) {
+    if (exec_sql(db, "PRAGMA user_version = 3;", err, errlen) != 0) {
         goto cleanup_fail;
     }
     if (exec_sql(db, "COMMIT;", err, errlen) != 0) {
@@ -440,6 +472,10 @@ const char *store_status_message(StoreStatus st)
         return "expired";
     case STORE_ERR_NOT_IN_TRASH:
         return "not_in_trash";
+    case STORE_ERR_SELF_LINK:
+        return "self-link";
+    case STORE_ERR_CYCLE:
+        return "supersedes cycle";
     default:
         return "store error";
     }
@@ -2246,4 +2282,849 @@ StoreStatus store_purge_trash(Store *s, const char *now, Entry **out_entries, si
     *out_entries = rows;
     *out_count = n;
     return STORE_OK;
+}
+
+/* ---- entry_links / rekey ------------------------------------------------- */
+
+static const char *edge_kind_token(StoreEdgeKind k)
+{
+    switch (k) {
+    case STORE_EDGE_RELATED:
+        return "related";
+    case STORE_EDGE_SUPERSEDES:
+        return "supersedes";
+    case STORE_EDGE_CITES:
+        return "cites";
+    default:
+        return NULL;
+    }
+}
+
+static int parse_edge_kind(const char *s, StoreEdgeKind *out)
+{
+    if (s == NULL || out == NULL) {
+        return -1;
+    }
+    if (strcmp(s, "related") == 0) {
+        *out = STORE_EDGE_RELATED;
+        return 0;
+    }
+    if (strcmp(s, "supersedes") == 0) {
+        *out = STORE_EDGE_SUPERSEDES;
+        return 0;
+    }
+    if (strcmp(s, "cites") == 0) {
+        *out = STORE_EDGE_CITES;
+        return 0;
+    }
+    return -1;
+}
+
+void store_neighbor_free(StoreNeighbor *n)
+{
+    if (n == NULL) {
+        return;
+    }
+    free(n->edge_updated_at);
+    free(n->neighbor_key);
+    free(n->neighbor_body);
+    free(n->neighbor_expires_at);
+    memset(n, 0, sizeof(*n));
+}
+
+void store_neighbors_free(StoreNeighbor *rows, size_t count)
+{
+    size_t i;
+    if (rows == NULL) {
+        return;
+    }
+    for (i = 0; i < count; i++) {
+        store_neighbor_free(&rows[i]);
+    }
+    free(rows);
+}
+
+static StoreStatus require_entry_id(sqlite3 *db, long long id)
+{
+    sqlite3_stmt *stmt = NULL;
+    int rc;
+
+    rc = sqlite3_prepare_v2(db, "SELECT 1 FROM entries WHERE id = ?1;", -1, &stmt, NULL);
+    if (rc != SQLITE_OK) {
+        return STORE_ERR_SQLITE;
+    }
+    (void)sqlite3_bind_int64(stmt, 1, id);
+    rc = sqlite3_step(stmt);
+    (void)sqlite3_finalize(stmt);
+    if (rc == SQLITE_DONE) {
+        return STORE_ERR_NOT_FOUND;
+    }
+    if (rc != SQLITE_ROW) {
+        return STORE_ERR_SQLITE;
+    }
+    return STORE_OK;
+}
+
+/* a != b always: callers reject self-links before reaching here. Touching the
+   same row twice would be harmless anyway. */
+static StoreStatus bump_endpoints(sqlite3 *db, long long a, long long b, const char *now)
+{
+    StoreStatus st = touch_updated_at(db, a, now);
+    if (st != STORE_OK) {
+        return st;
+    }
+    return touch_updated_at(db, b, now);
+}
+
+static StoreStatus fill_stub(sqlite3 *db, long long subject_id, long long row_from,
+                             long long row_to, StoreEdgeKind kind, const char *edge_updated,
+                             StoreNeighbor *out)
+{
+    Entry e;
+    long long nid = (row_from == subject_id) ? row_to : row_from;
+    StoreStatus st;
+
+    memset(out, 0, sizeof(*out));
+    memset(&e, 0, sizeof(e));
+    st = load_entry_by_id(db, nid, &e);
+    if (st != STORE_OK) {
+        return st;
+    }
+    out->subject_id = subject_id;
+    out->from_id = row_from;
+    out->to_id = row_to;
+    out->kind = kind;
+    out->edge_updated_at = dup_str(edge_updated);
+    out->neighbor_id = e.id;
+    out->neighbor_key = e.key;
+    e.key = NULL;
+    out->neighbor_body = e.body;
+    e.body = NULL;
+    out->neighbor_expires_at = e.expires_at;
+    e.expires_at = NULL;
+    store_entry_free(&e);
+    if (out->edge_updated_at == NULL || out->neighbor_body == NULL) {
+        store_neighbor_free(out);
+        return STORE_ERR_OOM;
+    }
+    return STORE_OK;
+}
+
+static StoreStatus supersedes_reaches(sqlite3 *db, long long start, long long target, bool *out)
+{
+    sqlite3_stmt *stmt = NULL;
+    int rc;
+
+    *out = false;
+    rc = sqlite3_prepare_v2(db,
+                            "WITH RECURSIVE chain(id) AS ("
+                            "  SELECT to_id FROM entry_links"
+                            "   WHERE from_id = ?1 AND kind = 'supersedes'"
+                            "  UNION"
+                            "  SELECT e.to_id FROM entry_links e"
+                            "   JOIN chain c ON e.from_id = c.id"
+                            "   WHERE e.kind = 'supersedes'"
+                            ") SELECT 1 FROM chain WHERE id = ?2 LIMIT 1;",
+                            -1, &stmt, NULL);
+    if (rc != SQLITE_OK) {
+        return STORE_ERR_SQLITE;
+    }
+    (void)sqlite3_bind_int64(stmt, 1, start);
+    (void)sqlite3_bind_int64(stmt, 2, target);
+    rc = sqlite3_step(stmt);
+    (void)sqlite3_finalize(stmt);
+    if (rc == SQLITE_ROW) {
+        *out = true;
+        return STORE_OK;
+    }
+    if (rc == SQLITE_DONE) {
+        return STORE_OK;
+    }
+    return STORE_ERR_SQLITE;
+}
+
+static StoreStatus find_edge(sqlite3 *db, long long from_id, long long to_id, StoreEdgeKind kind,
+                             bool *present)
+{
+    sqlite3_stmt *stmt = NULL;
+    int rc;
+    const char *tok = edge_kind_token(kind);
+
+    *present = false;
+    if (tok == NULL) {
+        return STORE_ERR_INTERNAL;
+    }
+    rc = sqlite3_prepare_v2(
+        db, "SELECT 1 FROM entry_links WHERE from_id = ?1 AND to_id = ?2 AND kind = ?3;", -1, &stmt,
+        NULL);
+    if (rc != SQLITE_OK) {
+        return STORE_ERR_SQLITE;
+    }
+    (void)sqlite3_bind_int64(stmt, 1, from_id);
+    (void)sqlite3_bind_int64(stmt, 2, to_id);
+    (void)sqlite3_bind_text(stmt, 3, tok, -1, SQLITE_STATIC);
+    rc = sqlite3_step(stmt);
+    (void)sqlite3_finalize(stmt);
+    if (rc == SQLITE_ROW) {
+        *present = true;
+        return STORE_OK;
+    }
+    if (rc == SQLITE_DONE) {
+        return STORE_OK;
+    }
+    return STORE_ERR_SQLITE;
+}
+
+static StoreStatus insert_edge(sqlite3 *db, long long from_id, long long to_id, StoreEdgeKind kind,
+                               const char *now)
+{
+    sqlite3_stmt *stmt = NULL;
+    int rc;
+    const char *tok = edge_kind_token(kind);
+
+    if (tok == NULL) {
+        return STORE_ERR_INTERNAL;
+    }
+    rc = sqlite3_prepare_v2(db,
+                            "INSERT INTO entry_links(from_id, to_id, kind, created_at, updated_at)"
+                            " VALUES (?1, ?2, ?3, ?4, ?4);",
+                            -1, &stmt, NULL);
+    if (rc != SQLITE_OK) {
+        return STORE_ERR_SQLITE;
+    }
+    (void)sqlite3_bind_int64(stmt, 1, from_id);
+    (void)sqlite3_bind_int64(stmt, 2, to_id);
+    (void)sqlite3_bind_text(stmt, 3, tok, -1, SQLITE_STATIC);
+    (void)sqlite3_bind_text(stmt, 4, now, -1, SQLITE_STATIC);
+    rc = sqlite3_step(stmt);
+    (void)sqlite3_finalize(stmt);
+    return (rc == SQLITE_DONE) ? STORE_OK : STORE_ERR_SQLITE;
+}
+
+static StoreStatus touch_edge(sqlite3 *db, long long from_id, long long to_id, StoreEdgeKind kind,
+                              const char *now)
+{
+    sqlite3_stmt *stmt = NULL;
+    int rc;
+    const char *tok = edge_kind_token(kind);
+
+    if (tok == NULL) {
+        return STORE_ERR_INTERNAL;
+    }
+    rc = sqlite3_prepare_v2(db,
+                            "UPDATE entry_links SET updated_at = ?1"
+                            " WHERE from_id = ?2 AND to_id = ?3 AND kind = ?4;",
+                            -1, &stmt, NULL);
+    if (rc != SQLITE_OK) {
+        return STORE_ERR_SQLITE;
+    }
+    (void)sqlite3_bind_text(stmt, 1, now, -1, SQLITE_STATIC);
+    (void)sqlite3_bind_int64(stmt, 2, from_id);
+    (void)sqlite3_bind_int64(stmt, 3, to_id);
+    (void)sqlite3_bind_text(stmt, 4, tok, -1, SQLITE_STATIC);
+    rc = sqlite3_step(stmt);
+    (void)sqlite3_finalize(stmt);
+    return (rc == SQLITE_DONE) ? STORE_OK : STORE_ERR_SQLITE;
+}
+
+StoreStatus store_get_any(Store *s, long long id, Entry *out_entry)
+{
+    if (s == NULL || s->db == NULL || out_entry == NULL) {
+        return STORE_ERR_INTERNAL;
+    }
+    memset(out_entry, 0, sizeof(*out_entry));
+    return load_entry_by_id(s->db, id, out_entry);
+}
+
+StoreStatus store_get_any_by_key(Store *s, const char *key, Entry *out_entry)
+{
+    if (s == NULL || s->db == NULL || key == NULL || out_entry == NULL) {
+        return STORE_ERR_INTERNAL;
+    }
+    memset(out_entry, 0, sizeof(*out_entry));
+    return load_entry_by_key(s->db, key, out_entry);
+}
+
+StoreStatus store_link(Store *s, long long from_id, long long to_id, StoreEdgeKind kind,
+                       const char *now, StoreLinkAction *out_action, StoreNeighbor *out_stub)
+{
+    char err_unused[1];
+    long long stored_from = from_id;
+    long long stored_to = to_id;
+    bool present = false;
+    bool cycle = false;
+    StoreStatus st;
+
+    if (s == NULL || s->db == NULL || now == NULL || out_action == NULL || out_stub == NULL) {
+        return STORE_ERR_INTERNAL;
+    }
+    memset(out_stub, 0, sizeof(*out_stub));
+    if (from_id == to_id) {
+        return STORE_ERR_SELF_LINK;
+    }
+    if (edge_kind_token(kind) == NULL) {
+        return STORE_ERR_INTERNAL;
+    }
+    if (kind == STORE_EDGE_RELATED) {
+        stored_from = (from_id < to_id) ? from_id : to_id;
+        stored_to = (from_id < to_id) ? to_id : from_id;
+    }
+
+    if (exec_sql(s->db, "BEGIN IMMEDIATE;", err_unused, 0U) != 0) {
+        return STORE_ERR_SQLITE;
+    }
+    st = require_entry_id(s->db, from_id);
+    if (st == STORE_OK) {
+        st = require_entry_id(s->db, to_id);
+    }
+    if (st != STORE_OK) {
+        rollback_quiet(s->db);
+        return st;
+    }
+    st = find_edge(s->db, stored_from, stored_to, kind, &present);
+    if (st != STORE_OK) {
+        rollback_quiet(s->db);
+        return st;
+    }
+    if (kind == STORE_EDGE_SUPERSEDES && !present) {
+        st = supersedes_reaches(s->db, to_id, from_id, &cycle);
+        if (st != STORE_OK) {
+            rollback_quiet(s->db);
+            return st;
+        }
+        if (cycle) {
+            rollback_quiet(s->db);
+            return STORE_ERR_CYCLE;
+        }
+    }
+    if (present) {
+        st = touch_edge(s->db, stored_from, stored_to, kind, now);
+        *out_action = STORE_LINK_MERGED;
+    } else {
+        st = insert_edge(s->db, stored_from, stored_to, kind, now);
+        *out_action = STORE_LINK_CREATED;
+    }
+    if (st == STORE_OK) {
+        st = bump_endpoints(s->db, from_id, to_id, now);
+    }
+    if (st != STORE_OK) {
+        rollback_quiet(s->db);
+        return st;
+    }
+    /* Read the stub inside the transaction (as store_unlink does) so a
+       neighbor purged between COMMIT and the read cannot turn a committed
+       link into a spurious not-found. */
+    st = fill_stub(s->db, from_id, stored_from, stored_to, kind, now, out_stub);
+    if (st != STORE_OK) {
+        rollback_quiet(s->db);
+        return st;
+    }
+    if (exec_sql(s->db, "COMMIT;", err_unused, 0U) != 0) {
+        store_neighbor_free(out_stub);
+        rollback_quiet(s->db);
+        return STORE_ERR_SQLITE;
+    }
+    return STORE_OK;
+}
+
+static StoreStatus collect_unlink_matches(sqlite3 *db, sqlite3_stmt *sel, long long subject,
+                                          StoreNeighbor **out, size_t *out_n)
+{
+    StoreNeighbor *rows = NULL;
+    size_t n = 0U;
+    size_t cap = 0U;
+    int rc;
+
+    *out = NULL;
+    *out_n = 0U;
+    while ((rc = sqlite3_step(sel)) == SQLITE_ROW) {
+        StoreNeighbor stub;
+        StoreEdgeKind kind;
+        long long from_id = sqlite3_column_int64(sel, 0);
+        long long to_id = sqlite3_column_int64(sel, 1);
+        const char *ktok = (const char *)sqlite3_column_text(sel, 2);
+        const char *upd = (const char *)sqlite3_column_text(sel, 3);
+        StoreNeighbor *grown;
+
+        if (parse_edge_kind(ktok, &kind) != 0) {
+            store_neighbors_free(rows, n);
+            return STORE_ERR_SQLITE;
+        }
+        memset(&stub, 0, sizeof(stub));
+        if (fill_stub(db, subject, from_id, to_id, kind, upd, &stub) != STORE_OK) {
+            store_neighbors_free(rows, n);
+            return STORE_ERR_OOM;
+        }
+        if (n == cap) {
+            size_t ncap = (cap == 0U) ? 4U : (cap * 2U);
+            grown = (StoreNeighbor *)realloc(rows, ncap * sizeof(*grown));
+            if (grown == NULL) {
+                store_neighbor_free(&stub);
+                store_neighbors_free(rows, n);
+                return STORE_ERR_OOM;
+            }
+            rows = grown;
+            cap = ncap;
+        }
+        rows[n] = stub;
+        n++;
+    }
+    if (rc != SQLITE_DONE) {
+        store_neighbors_free(rows, n);
+        return STORE_ERR_SQLITE;
+    }
+    *out = rows;
+    *out_n = n;
+    return STORE_OK;
+}
+
+static int bind_edge_ends(sqlite3_stmt *stmt, long long from_id, long long to_id, const char *tok)
+{
+    (void)sqlite3_bind_int64(stmt, 1, from_id);
+    (void)sqlite3_bind_int64(stmt, 2, to_id);
+    if (tok != NULL) {
+        (void)sqlite3_bind_text(stmt, 3, tok, -1, SQLITE_STATIC);
+    }
+    return 0;
+}
+
+StoreStatus store_unlink(Store *s, long long from_id, long long to_id, const StoreEdgeKind *kind,
+                         const char *now, StoreNeighbor **out_stubs, size_t *out_count)
+{
+    char err_unused[1];
+    sqlite3_stmt *sel = NULL;
+    sqlite3_stmt *del = NULL;
+    StoreStatus st;
+    int rc;
+    const char *tok = NULL;
+    long long stored_from = from_id;
+    long long stored_to = to_id;
+
+    if (s == NULL || s->db == NULL || now == NULL || out_stubs == NULL || out_count == NULL) {
+        return STORE_ERR_INTERNAL;
+    }
+    *out_stubs = NULL;
+    *out_count = 0U;
+    if (from_id == to_id) {
+        return STORE_ERR_SELF_LINK;
+    }
+    if (kind != NULL) {
+        tok = edge_kind_token(*kind);
+        if (tok == NULL) {
+            return STORE_ERR_INTERNAL;
+        }
+        if (*kind == STORE_EDGE_RELATED) {
+            stored_from = (from_id < to_id) ? from_id : to_id;
+            stored_to = (from_id < to_id) ? to_id : from_id;
+        }
+    }
+
+    if (exec_sql(s->db, "BEGIN IMMEDIATE;", err_unused, 0U) != 0) {
+        return STORE_ERR_SQLITE;
+    }
+
+    rc = sqlite3_prepare_v2(
+        s->db,
+        kind == NULL ? "SELECT from_id, to_id, kind, updated_at FROM entry_links"
+                       " WHERE (from_id = ?1 AND to_id = ?2) OR (from_id = ?2 AND to_id = ?1);"
+                     : "SELECT from_id, to_id, kind, updated_at FROM entry_links"
+                       " WHERE from_id = ?1 AND to_id = ?2 AND kind = ?3;",
+        -1, &sel, NULL);
+    if (rc != SQLITE_OK) {
+        rollback_quiet(s->db);
+        return STORE_ERR_SQLITE;
+    }
+    (void)bind_edge_ends(sel, stored_from, stored_to, tok);
+    st = collect_unlink_matches(s->db, sel, from_id, out_stubs, out_count);
+    (void)sqlite3_finalize(sel);
+    if (st != STORE_OK) {
+        rollback_quiet(s->db);
+        return st;
+    }
+
+    rc = sqlite3_prepare_v2(
+        s->db,
+        kind == NULL ? "DELETE FROM entry_links WHERE (from_id = ?1 AND to_id = ?2)"
+                       " OR (from_id = ?2 AND to_id = ?1);"
+                     : "DELETE FROM entry_links WHERE from_id = ?1 AND to_id = ?2 AND kind = ?3;",
+        -1, &del, NULL);
+    if (rc != SQLITE_OK) {
+        store_neighbors_free(*out_stubs, *out_count);
+        *out_stubs = NULL;
+        *out_count = 0U;
+        rollback_quiet(s->db);
+        return STORE_ERR_SQLITE;
+    }
+    (void)bind_edge_ends(del, stored_from, stored_to, tok);
+    if (sqlite3_step(del) != SQLITE_DONE) {
+        (void)sqlite3_finalize(del);
+        store_neighbors_free(*out_stubs, *out_count);
+        *out_stubs = NULL;
+        *out_count = 0U;
+        rollback_quiet(s->db);
+        return STORE_ERR_SQLITE;
+    }
+    (void)sqlite3_finalize(del);
+
+    if (*out_count > 0U) {
+        st = bump_endpoints(s->db, from_id, to_id, now);
+        if (st != STORE_OK) {
+            store_neighbors_free(*out_stubs, *out_count);
+            *out_stubs = NULL;
+            *out_count = 0U;
+            rollback_quiet(s->db);
+            return st;
+        }
+    }
+
+    if (exec_sql(s->db, "COMMIT;", err_unused, 0U) != 0) {
+        store_neighbors_free(*out_stubs, *out_count);
+        *out_stubs = NULL;
+        *out_count = 0U;
+        rollback_quiet(s->db);
+        return STORE_ERR_SQLITE;
+    }
+    return STORE_OK;
+}
+
+static StoreStatus neighbors_from_stmt(sqlite3_stmt *stmt, StoreNeighbor **out, size_t *out_n)
+{
+    StoreNeighbor *rows = NULL;
+    size_t n = 0U;
+    size_t cap = 0U;
+    int rc;
+
+    *out = NULL;
+    *out_n = 0U;
+    while ((rc = sqlite3_step(stmt)) == SQLITE_ROW) {
+        StoreNeighbor row;
+        StoreEdgeKind kind;
+        const char *ktok = (const char *)sqlite3_column_text(stmt, 3);
+        StoreNeighbor *grown;
+
+        memset(&row, 0, sizeof(row));
+        if (parse_edge_kind(ktok, &kind) != 0) {
+            store_neighbors_free(rows, n);
+            return STORE_ERR_SQLITE;
+        }
+        row.subject_id = sqlite3_column_int64(stmt, 0);
+        row.from_id = sqlite3_column_int64(stmt, 1);
+        row.to_id = sqlite3_column_int64(stmt, 2);
+        row.kind = kind;
+        row.edge_updated_at = dup_str((const char *)sqlite3_column_text(stmt, 4));
+        row.neighbor_id = sqlite3_column_int64(stmt, 5);
+        if (sqlite3_column_type(stmt, 6) != SQLITE_NULL) {
+            row.neighbor_key = dup_str((const char *)sqlite3_column_text(stmt, 6));
+        }
+        row.neighbor_body = dup_str((const char *)sqlite3_column_text(stmt, 7));
+        if (sqlite3_column_type(stmt, 8) != SQLITE_NULL) {
+            row.neighbor_expires_at = dup_str((const char *)sqlite3_column_text(stmt, 8));
+        }
+        if (row.edge_updated_at == NULL || row.neighbor_body == NULL) {
+            store_neighbor_free(&row);
+            store_neighbors_free(rows, n);
+            return STORE_ERR_OOM;
+        }
+        if (n == cap) {
+            size_t ncap = (cap == 0U) ? 8U : (cap * 2U);
+            grown = (StoreNeighbor *)realloc(rows, ncap * sizeof(*grown));
+            if (grown == NULL) {
+                store_neighbor_free(&row);
+                store_neighbors_free(rows, n);
+                return STORE_ERR_OOM;
+            }
+            rows = grown;
+            cap = ncap;
+        }
+        rows[n] = row;
+        n++;
+    }
+    if (rc != SQLITE_DONE) {
+        store_neighbors_free(rows, n);
+        return STORE_ERR_SQLITE;
+    }
+    *out = rows;
+    *out_n = n;
+    return STORE_OK;
+}
+
+static int build_neighbors_sql(char *sql, size_t cap, long long subject_id, StoreNeighborDir dir,
+                               const char *tok)
+{
+    size_t pos = 0U;
+    int n;
+
+    n = snprintf(
+        sql, cap,
+        "SELECT %lld, l.from_id, l.to_id, l.kind, l.updated_at,"
+        " n.id, n.key, n.body, n.expires_at"
+        " FROM entry_links l"
+        " JOIN entries n ON n.id = CASE WHEN l.from_id = ?1 THEN l.to_id ELSE l.from_id END"
+        " WHERE (l.from_id = ?1 OR l.to_id = ?1)",
+        subject_id);
+    if (n < 0 || (size_t)n >= cap) {
+        return -1;
+    }
+    pos = (size_t)n;
+    if (dir == STORE_NEIGHBOR_OUTGOING || dir == STORE_NEIGHBOR_INCOMING) {
+        n = snprintf(sql + pos, cap - pos,
+                     dir == STORE_NEIGHBOR_OUTGOING ? " AND (l.kind = 'related' OR l.from_id = ?1)"
+                                                    : " AND (l.kind = 'related' OR l.to_id = ?1)");
+        if (n < 0 || (size_t)n >= cap - pos) {
+            return -1;
+        }
+        pos += (size_t)n;
+    }
+    if (tok != NULL) {
+        n = snprintf(sql + pos, cap - pos, " AND l.kind = ?2");
+        if (n < 0 || (size_t)n >= cap - pos) {
+            return -1;
+        }
+        pos += (size_t)n;
+    }
+    n = snprintf(sql + pos, cap - pos, " ORDER BY l.updated_at DESC, n.id DESC;");
+    if (n < 0 || (size_t)n >= cap - pos) {
+        return -1;
+    }
+    return 0;
+}
+
+StoreStatus store_list_neighbors(Store *s, long long subject_id, const StoreEdgeKind *kind,
+                                 StoreNeighborDir dir, const char *now, StoreNeighbor **out,
+                                 size_t *out_count)
+{
+    sqlite3_stmt *stmt = NULL;
+    char sql[768];
+    int rc;
+    const char *tok = NULL;
+    StoreStatus st;
+
+    if (s == NULL || s->db == NULL || now == NULL || out == NULL || out_count == NULL) {
+        return STORE_ERR_INTERNAL;
+    }
+    *out = NULL;
+    *out_count = 0U;
+    if (kind != NULL) {
+        tok = edge_kind_token(*kind);
+        if (tok == NULL) {
+            return STORE_ERR_INTERNAL;
+        }
+    }
+    if (build_neighbors_sql(sql, sizeof(sql), subject_id, dir, tok) != 0) {
+        return STORE_ERR_INTERNAL;
+    }
+
+    rc = sqlite3_prepare_v2(s->db, sql, -1, &stmt, NULL);
+    if (rc != SQLITE_OK) {
+        return STORE_ERR_SQLITE;
+    }
+    (void)sqlite3_bind_int64(stmt, 1, subject_id);
+    if (tok != NULL) {
+        (void)sqlite3_bind_text(stmt, 2, tok, -1, SQLITE_STATIC);
+    }
+    st = neighbors_from_stmt(stmt, out, out_count);
+    (void)sqlite3_finalize(stmt);
+    return st;
+}
+
+StoreStatus store_list_neighbors_for(Store *s, const long long *ids, size_t nids, const char *now,
+                                     StoreNeighbor **out, size_t *out_count)
+{
+    sqlite3_stmt *stmt = NULL;
+    char sql[8192];
+    size_t pos = 0U;
+    size_t i;
+    int n;
+    int rc;
+    StoreStatus st;
+
+    if (s == NULL || s->db == NULL || now == NULL || out == NULL || out_count == NULL ||
+        (nids > 0U && ids == NULL)) {
+        return STORE_ERR_INTERNAL;
+    }
+    *out = NULL;
+    *out_count = 0U;
+    if (nids == 0U) {
+        return STORE_OK;
+    }
+
+    n = snprintf(
+        sql, sizeof(sql),
+        "SELECT s.id, l.from_id, l.to_id, l.kind, l.updated_at,"
+        " n.id, n.key, n.body, n.expires_at"
+        " FROM entries s"
+        " JOIN entry_links l ON l.from_id = s.id OR l.to_id = s.id"
+        " JOIN entries n ON n.id = CASE WHEN l.from_id = s.id THEN l.to_id ELSE l.from_id END"
+        " WHERE s.id IN (");
+    if (n < 0 || (size_t)n >= sizeof(sql)) {
+        return STORE_ERR_INTERNAL;
+    }
+    pos = (size_t)n;
+    for (i = 0; i < nids; i++) {
+        n = snprintf(sql + pos, sizeof(sql) - pos, "%s?%d", (i == 0U) ? "" : ",", (int)i + 1);
+        if (n < 0 || (size_t)n >= sizeof(sql) - pos) {
+            return STORE_ERR_INTERNAL;
+        }
+        pos += (size_t)n;
+    }
+    n = snprintf(sql + pos, sizeof(sql) - pos, ") ORDER BY l.updated_at DESC, n.id DESC;");
+    if (n < 0 || (size_t)n >= sizeof(sql) - pos) {
+        return STORE_ERR_INTERNAL;
+    }
+
+    rc = sqlite3_prepare_v2(s->db, sql, -1, &stmt, NULL);
+    if (rc != SQLITE_OK) {
+        return STORE_ERR_SQLITE;
+    }
+    for (i = 0; i < nids; i++) {
+        (void)sqlite3_bind_int64(stmt, (int)i + 1, ids[i]);
+    }
+    st = neighbors_from_stmt(stmt, out, out_count);
+    (void)sqlite3_finalize(stmt);
+    return st;
+}
+
+static StoreStatus load_body_hash(sqlite3 *db, long long id, char **out_hash)
+{
+    sqlite3_stmt *stmt = NULL;
+    int rc;
+
+    *out_hash = NULL;
+    rc = sqlite3_prepare_v2(db, "SELECT body_hash FROM entries WHERE id = ?1;", -1, &stmt, NULL);
+    if (rc != SQLITE_OK) {
+        return STORE_ERR_SQLITE;
+    }
+    (void)sqlite3_bind_int64(stmt, 1, id);
+    rc = sqlite3_step(stmt);
+    if (rc != SQLITE_ROW) {
+        (void)sqlite3_finalize(stmt);
+        return (rc == SQLITE_DONE) ? STORE_ERR_NOT_FOUND : STORE_ERR_SQLITE;
+    }
+    *out_hash = dup_str((const char *)sqlite3_column_text(stmt, 0));
+    (void)sqlite3_finalize(stmt);
+    return (*out_hash == NULL) ? STORE_ERR_OOM : STORE_OK;
+}
+
+static StoreStatus write_key(sqlite3 *db, long long id, const char *key_or_null)
+{
+    sqlite3_stmt *stmt = NULL;
+    int rc;
+
+    rc = sqlite3_prepare_v2(db, "UPDATE entries SET key = ?1 WHERE id = ?2;", -1, &stmt, NULL);
+    if (rc != SQLITE_OK) {
+        return STORE_ERR_SQLITE;
+    }
+    if (key_or_null == NULL) {
+        (void)sqlite3_bind_null(stmt, 1);
+    } else {
+        (void)sqlite3_bind_text(stmt, 1, key_or_null, -1, SQLITE_STATIC);
+    }
+    (void)sqlite3_bind_int64(stmt, 2, id);
+    rc = sqlite3_step(stmt);
+    (void)sqlite3_finalize(stmt);
+    return (rc == SQLITE_DONE) ? STORE_OK : STORE_ERR_SQLITE;
+}
+
+static StoreStatus rekey_set(sqlite3 *db, long long entry_id, const char *current_key,
+                             const char *new_key, long long *out_conflict_id)
+{
+    long long other = 0;
+    StoreStatus st;
+
+    if (current_key != NULL && strcmp(current_key, new_key) == 0) {
+        return STORE_OK;
+    }
+    st = find_id_by_key(db, new_key, &other);
+    if (st == STORE_OK && other != entry_id) {
+        if (out_conflict_id != NULL) {
+            *out_conflict_id = other;
+        }
+        return STORE_ERR_CONFLICT;
+    }
+    if (st != STORE_OK && st != STORE_ERR_NOT_FOUND) {
+        return st;
+    }
+    return write_key(db, entry_id, new_key);
+}
+
+static StoreStatus rekey_clear(sqlite3 *db, long long entry_id, const char *current_key,
+                               long long *out_conflict_id)
+{
+    char *hash = NULL;
+    long long other = 0;
+    StoreStatus st;
+
+    if (current_key == NULL) {
+        return STORE_OK;
+    }
+    st = load_body_hash(db, entry_id, &hash);
+    if (st != STORE_OK) {
+        return st;
+    }
+    st = find_keyless_by_hash(db, hash, &other);
+    free(hash);
+    if (st == STORE_OK && other != entry_id) {
+        if (out_conflict_id != NULL) {
+            *out_conflict_id = other;
+        }
+        return STORE_ERR_CONFLICT;
+    }
+    if (st != STORE_OK && st != STORE_ERR_NOT_FOUND) {
+        return st;
+    }
+    return write_key(db, entry_id, NULL);
+}
+
+StoreStatus store_rekey(Store *s, long long id, const char *key_or_null,
+                        const char *new_key_or_null, bool trash, const char *now, Entry *out_entry,
+                        long long *out_conflict_id)
+{
+    char err_unused[1];
+    Entry current;
+    StoreStatus st;
+    long long entry_id;
+
+    if (out_conflict_id != NULL) {
+        *out_conflict_id = 0;
+    }
+    if (s == NULL || s->db == NULL || now == NULL || out_entry == NULL) {
+        return STORE_ERR_INTERNAL;
+    }
+    if (key_or_null == NULL && id < 1) {
+        return STORE_ERR_INTERNAL;
+    }
+    if (new_key_or_null != NULL && new_key_or_null[0] == '\0') {
+        return STORE_ERR_INTERNAL;
+    }
+    memset(&current, 0, sizeof(current));
+    memset(out_entry, 0, sizeof(*out_entry));
+
+    if (exec_sql(s->db, "BEGIN IMMEDIATE;", err_unused, 0U) != 0) {
+        return STORE_ERR_SQLITE;
+    }
+    st = load_then_check_bin(s->db, id, key_or_null, trash, now, &current);
+    if (st != STORE_OK) {
+        rollback_quiet(s->db);
+        return st;
+    }
+    entry_id = current.id;
+
+    if (new_key_or_null != NULL) {
+        st = rekey_set(s->db, entry_id, current.key, new_key_or_null, out_conflict_id);
+    } else {
+        st = rekey_clear(s->db, entry_id, current.key, out_conflict_id);
+    }
+    if (st == STORE_OK) {
+        st = touch_updated_at(s->db, entry_id, now);
+    }
+    store_entry_free(&current);
+    if (st != STORE_OK) {
+        rollback_quiet(s->db);
+        return st;
+    }
+    if (exec_sql(s->db, "COMMIT;", err_unused, 0U) != 0) {
+        rollback_quiet(s->db);
+        return STORE_ERR_SQLITE;
+    }
+    return load_entry_by_id(s->db, entry_id, out_entry);
 }

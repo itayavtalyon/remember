@@ -7,7 +7,6 @@
 #include "output.h"
 #include "store.h"
 
-#include <errno.h>
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -20,20 +19,6 @@ typedef struct {
     const char *id_raw;
     bool trash;
 } LocatorParse;
-
-static int parse_id_token(const char *id_raw, long long *out_id)
-{
-    char *end = NULL;
-    long long id;
-
-    errno = 0;
-    id = strtoll(id_raw, &end, 10);
-    if (end == id_raw || (end != NULL && *end != '\0') || errno == ERANGE || id < 1) {
-        return -1;
-    }
-    *out_id = id;
-    return 0;
-}
 
 /* Shared by get/delete: --key, positional id, reject --source and unknowns. */
 static int parse_locator_args(int rest_argc, const char **rest_argv, LocatorParse *out)
@@ -109,7 +94,7 @@ static int locator_resolve(const LocatorParse *p, char *key_norm, size_t key_nor
         *out_key = key_norm;
         return 0;
     }
-    if (parse_id_token(p->id_raw, out_id) != 0) {
+    if (parse_entry_id(p->id_raw, out_id) != 0) {
         err_msg("invalid id");
         return -1;
     }
@@ -152,21 +137,32 @@ int cmd_get(Store *s, bool json, int rest_argc, const char **rest_argv)
         return rc;
     }
 
-    if (json) {
-        if (output_get_envelope(app_out(), &entry) != 0) {
+    {
+        StoreNeighbor *links = NULL;
+        size_t nlinks = 0U;
+        int wr;
+
+        st = store_list_neighbors(s, entry.id, NULL, STORE_NEIGHBOR_ALL, now, &links, &nlinks);
+        if (st != STORE_OK) {
             store_entry_free(&entry);
-            err_msg("failed to write output");
+            err_msg(store_status_message(st));
             return REMEMBER_ERR;
         }
-    } else {
-        /* Body via output.c — never raw fputs (terminal control neutralization). */
-        if (output_body_human(app_out(), entry.body) != 0) {
-            store_entry_free(&entry);
+        if (json) {
+            wr = output_get_envelope(app_out(), &entry, links, nlinks, now);
+        } else {
+            wr = output_body_human(app_out(), entry.body);
+            if (wr == 0) {
+                wr = output_related_human(app_out(), links, nlinks, now);
+            }
+        }
+        store_neighbors_free(links, nlinks);
+        store_entry_free(&entry);
+        if (wr != 0) {
             err_msg("failed to write output");
             return REMEMBER_ERR;
         }
     }
-    store_entry_free(&entry);
     return REMEMBER_OK;
 }
 
@@ -520,4 +516,159 @@ cleanup:
     free_tag_list(tags_norm, ntags);
     store_entry_free(&entry);
     return rc;
+}
+
+typedef struct {
+    LocatorParse loc;
+    const char *to_key_raw;
+    bool clear_key;
+} RekeyParse;
+
+static int handle_rekey_flag(const char *arg, int *i, int rest_argc, const char **rest_argv,
+                             RekeyParse *out)
+{
+    const char *err = NULL;
+
+    if (strcmp(arg, "--") == 0) {
+        return 2;
+    }
+    if (strcmp(arg, "--key") == 0) {
+        if (take_value(i, rest_argc, rest_argv, &out->loc.key_raw, &err,
+                       "missing value for --key") != 0) {
+            err_msg(err);
+            return -1;
+        }
+        return 1;
+    }
+    if (strcmp(arg, "--to-key") == 0) {
+        if (take_value(i, rest_argc, rest_argv, &out->to_key_raw, &err,
+                       "missing value for --to-key") != 0) {
+            err_msg(err);
+            return -1;
+        }
+        return 1;
+    }
+    if (strcmp(arg, "--clear-key") == 0) {
+        out->clear_key = true;
+        return 1;
+    }
+    if (strcmp(arg, "--trash") == 0) {
+        out->loc.trash = true;
+        return 1;
+    }
+    if (strcmp(arg, "--source") == 0) {
+        err_msg("--source is only valid on add");
+        return -1;
+    }
+    if (arg[0] == '-' && arg[1] != '\0') {
+        (void)fprintf(app_err(), "remember: unknown option '%s'\n", arg);
+        return -1;
+    }
+    return 0;
+}
+
+static int parse_rekey_args(int rest_argc, const char **rest_argv, RekeyParse *out)
+{
+    int i;
+    int end_opts = 0;
+
+    memset(out, 0, sizeof(*out));
+    for (i = 0; i < rest_argc; i++) {
+        const char *arg = rest_argv[i];
+
+        if (!end_opts) {
+            int kind = handle_rekey_flag(arg, &i, rest_argc, rest_argv, out);
+            if (kind == 2) {
+                end_opts = 1;
+                continue;
+            }
+            if (kind == 1) {
+                continue;
+            }
+            if (kind < 0) {
+                return -1;
+            }
+        }
+        if (out->loc.id_raw != NULL) {
+            err_msg("too many arguments");
+            return -1;
+        }
+        out->loc.id_raw = arg;
+    }
+    return 0;
+}
+
+int cmd_rekey(Store *s, bool json, int rest_argc, const char **rest_argv)
+{
+    RekeyParse parsed;
+    char key_norm[REMEMBER_TOKEN_MAX + 1];
+    char new_norm[REMEMBER_TOKEN_MAX + 1];
+    const char *key = NULL;
+    const char *new_key = NULL;
+    long long id = 0;
+    char now[32];
+    Entry entry;
+    StoreStatus st;
+    long long conflict_id = 0;
+    int rc;
+
+    memset(&entry, 0, sizeof(entry));
+    if (parse_rekey_args(rest_argc, rest_argv, &parsed) != 0) {
+        return REMEMBER_ERR;
+    }
+    if (locator_validate(&parsed.loc) != 0) {
+        return REMEMBER_ERR;
+    }
+    if (parsed.clear_key && parsed.to_key_raw != NULL) {
+        err_msg("cannot combine --to-key and --clear-key");
+        return REMEMBER_ERR;
+    }
+    if (!parsed.clear_key && parsed.to_key_raw == NULL) {
+        err_msg("rekey requires --to-key or --clear-key");
+        return REMEMBER_ERR;
+    }
+    if (locator_resolve(&parsed.loc, key_norm, sizeof(key_norm), &key, &id) != 0) {
+        return REMEMBER_ERR;
+    }
+    if (!parsed.clear_key) {
+        NormStatus ns = normalize_key(parsed.to_key_raw, new_norm, sizeof(new_norm));
+        if (ns != NORM_OK) {
+            err_msg(norm_token_message(ns, "key"));
+            return REMEMBER_ERR;
+        }
+        new_key = new_norm;
+    }
+    if (utc_now(now, sizeof(now)) != 0) {
+        err_msg("internal error");
+        return REMEMBER_ERR;
+    }
+    st = store_rekey(s, id, key, new_key, parsed.loc.trash, now, &entry, &conflict_id);
+    if (st == STORE_ERR_CONFLICT) {
+        if (new_key != NULL) {
+            (void)fprintf(app_err(), "remember: key conflicts with entry %lld\n", conflict_id);
+        } else {
+            (void)fprintf(app_err(), "remember: body hash conflicts with entry %lld\n",
+                          conflict_id);
+        }
+        store_entry_free(&entry);
+        return REMEMBER_ERR;
+    }
+    rc = store_status_to_exit(st);
+    if (rc != REMEMBER_OK) {
+        store_entry_free(&entry);
+        return rc;
+    }
+    if (json) {
+        if (output_action_envelope(app_out(), "updated", &entry) != 0) {
+            store_entry_free(&entry);
+            err_msg("failed to write output");
+            return REMEMBER_ERR;
+        }
+    } else if (output_id_human(app_out(), entry.id) != 0) {
+        store_entry_free(&entry);
+        err_msg("failed to write output");
+        return REMEMBER_ERR;
+    }
+    store_entry_free(&entry);
+    return REMEMBER_OK;
 }

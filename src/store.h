@@ -22,10 +22,12 @@ typedef enum {
     STORE_ERR_SQLITE,
     STORE_ERR_OOM,
     STORE_ERR_INTERNAL,
-    STORE_ERR_QUERY,       /* invalid FTS5 MATCH syntax (search) */
-    STORE_ERR_CONFLICT,    /* keyless body-hash collision on update */
-    STORE_ERR_EXPIRED,     /* locator hit trash without trash=true */
-    STORE_ERR_NOT_IN_TRASH /* locator hit active with trash=true */
+    STORE_ERR_QUERY,        /* invalid FTS5 MATCH syntax (search) */
+    STORE_ERR_CONFLICT,     /* keyless body-hash collision on update */
+    STORE_ERR_EXPIRED,      /* locator hit trash without trash=true */
+    STORE_ERR_NOT_IN_TRASH, /* locator hit active with trash=true */
+    STORE_ERR_SELF_LINK,    /* from_id == to_id */
+    STORE_ERR_CYCLE         /* supersedes would cycle */
 } StoreStatus;
 
 /* Short ASCII label for st (no trailing newline). Never NULL. */
@@ -49,7 +51,8 @@ typedef struct {
 /* Open or create a store at path. Creates parent directories (mode 0700).
  * On success returns a non-NULL Store*. On failure returns NULL and, if
  * err/errlen are usable, writes a short message into err (NUL-terminated).
- * Schema: user_version 0 → create at 2; 1 → migrate to 2; 2 → ok; >2 → refuse.
+ * Schema: user_version 0 → create at 3; 1 → migrate to 3; 2 → migrate to 3;
+ * 3 → ok; >3 → refuse.
  */
 Store *store_open(const char *path, char *err, size_t errlen);
 
@@ -187,6 +190,76 @@ void store_tags_free(TagCount *tags, size_t count);
  * Caller frees each entry then the array.
  */
 StoreStatus store_purge_trash(Store *s, const char *now, Entry **out_entries, size_t *out_count);
+
+/* Stored kind only. cited_by / superseded_by are output-only (CLI). */
+typedef enum { STORE_EDGE_RELATED = 0, STORE_EDGE_SUPERSEDES, STORE_EDGE_CITES } StoreEdgeKind;
+
+typedef enum { STORE_LINK_CREATED = 0, STORE_LINK_MERGED, STORE_LINK_DELETED } StoreLinkAction;
+
+typedef enum {
+    STORE_NEIGHBOR_ALL = 0,
+    STORE_NEIGHBOR_OUTGOING,
+    STORE_NEIGHBOR_INCOMING
+} StoreNeighborDir;
+
+/* One edge as seen from subject_id. Neighbor fields are the other end. */
+typedef struct {
+    long long subject_id;
+    long long from_id;
+    long long to_id;
+    StoreEdgeKind kind;
+    char *edge_updated_at;
+    long long neighbor_id;
+    char *neighbor_key; /* NULL if keyless */
+    char *neighbor_body;
+    char *neighbor_expires_at; /* NULL if durable */
+} StoreNeighbor;
+
+void store_neighbor_free(StoreNeighbor *n);
+void store_neighbors_free(StoreNeighbor *rows, size_t count);
+
+/* Load by id/key with no bin check (graph locators). Missing → NOT_FOUND. */
+StoreStatus store_get_any(Store *s, long long id, Entry *out_entry);
+StoreStatus store_get_any_by_key(Store *s, const char *key, Entry *out_entry);
+
+/*
+ * Upsert one edge. related is stored as (min,max,related). Directed is
+ * (from,to,kind). Self-link → SELF_LINK; missing id → NOT_FOUND; supersedes
+ * cycle → CYCLE. Real write bumps updated_at on both endpoints.
+ * *out_stub is subject-relative to from_id (caller frees).
+ */
+StoreStatus store_link(Store *s, long long from_id, long long to_id, StoreEdgeKind kind,
+                       const char *now, StoreLinkAction *out_action, StoreNeighbor *out_stub);
+
+/*
+ * Delete edges. kind NULL = all kinds between the unordered pair. related
+ * canonicalizes. Directed deletes the given (from,to,kind) only. Missing is
+ * OK (count 0, no bump). Real delete bumps both endpoints.
+ */
+StoreStatus store_unlink(Store *s, long long from_id, long long to_id, const StoreEdgeKind *kind,
+                         const char *now, StoreNeighbor **out_stubs, size_t *out_count);
+
+/*
+ * Neighbors of one subject. kind NULL = all stored kinds. related edges appear
+ * under OUTGOING and INCOMING. Order: edge updated_at DESC, neighbor id DESC.
+ */
+StoreStatus store_list_neighbors(Store *s, long long subject_id, const StoreEdgeKind *kind,
+                                 StoreNeighborDir dir, const char *now, StoreNeighbor **out,
+                                 size_t *out_count);
+
+/* All neighbors of a page of ids (one query). subject_id set per row. */
+StoreStatus store_list_neighbors_for(Store *s, const long long *ids, size_t nids, const char *now,
+                                     StoreNeighbor **out, size_t *out_count);
+
+/*
+ * Change key in place. Locator like update (id or key_or_null, trash+now).
+ * new_key_or_null NULL = clear (demote); non-NULL = set/rename (must be
+ * non-empty). Id and edges preserved. NEWKEY taken or demote body-hash
+ * collision → CONFLICT + *out_conflict_id. Always bumps updated_at.
+ */
+StoreStatus store_rekey(Store *s, long long id, const char *key_or_null,
+                        const char *new_key_or_null, bool trash, const char *now, Entry *out_entry,
+                        long long *out_conflict_id);
 
 /*
  * Test-only fault injection (compiled when REMEMBER_TEST_HOOKS is defined).
