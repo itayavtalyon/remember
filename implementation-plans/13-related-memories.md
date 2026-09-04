@@ -207,7 +207,8 @@ already has TTL). Do not implement in a sibling checkout that lacks log
 - Lint FAIL (cognitive complexity / unused bind / suspicious fill_stub args). Extracted parsers and SQL builders; `scripts/lint-all.sh` LINT OK.
 
 **Important (not blocking stage 3):**
-- `supersedes_reaches` uses recursive `UNION ALL` (SQLite default depth 1000). Fine at personal scale if we never insert cycles; corrupt SQL could theoretically spin.
+- `supersedes_reaches` uses recursive set `UNION` (not `UNION ALL`) so a dense
+  DAG cannot explode the cycle CTE. SQLite recursion depth is still 1000.
 - Facade byte-match for new commands is stage 4.
 - list/search/get `links[]` still absent (stage 3).
 
@@ -246,3 +247,17 @@ already has TTL). Do not implement in a sibling checkout that lacks log
 **Gates (Stage 4):** full ctest 3/3 under ASan/UBSan; coverage 100% funcs +
 100% effective lines; lint OK. Facade suite 18/18; link 16/16; store unit
 87/87.
+
+### Epic review (2026-09-04)
+
+**Verdict:** Approve CLI. Locked Round 4 contracts held under live probes
+(one-row related, empty `--to-key`, add JSON has no `links`, list/get field
+order, cap `+N`, either-bin trash stub, cycle, self-link, unlink no-op).
+Gate 345/345 + store unit 87/87.
+
+**Follow-up (2026-09-04):** `supersedes_reaches` is set `UNION` (already in
+source; docs had gone stale). Neighbor OOM fails closed; unlink `fill_stub`
+keeps SQLITE/OOM/NOT_FOUND.
+
+**Nits:** CLI DoD still lists Mac pin as unchecked follow-up (Mac #18 merged).
+No separate Stage 3 review notes (jumped to Stage 4).

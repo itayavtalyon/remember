@@ -2420,7 +2420,7 @@ static StoreStatus supersedes_reaches(sqlite3 *db, long long start, long long ta
                             "WITH RECURSIVE chain(id) AS ("
                             "  SELECT to_id FROM entry_links"
                             "   WHERE from_id = ?1 AND kind = 'supersedes'"
-                            "  UNION"
+                            "  UNION" /* set UNION, not UNION ALL: a dense DAG must not explode */
                             "  SELECT e.to_id FROM entry_links e"
                             "   JOIN chain c ON e.from_id = c.id"
                             "   WHERE e.kind = 'supersedes'"
@@ -2651,9 +2651,12 @@ static StoreStatus collect_unlink_matches(sqlite3 *db, sqlite3_stmt *sel, long l
             return STORE_ERR_SQLITE;
         }
         memset(&stub, 0, sizeof(stub));
-        if (fill_stub(db, subject, from_id, to_id, kind, upd, &stub) != STORE_OK) {
-            store_neighbors_free(rows, n);
-            return STORE_ERR_OOM;
+        {
+            StoreStatus st = fill_stub(db, subject, from_id, to_id, kind, upd, &stub);
+            if (st != STORE_OK) {
+                store_neighbors_free(rows, n);
+                return st;
+            }
         }
         if (n == cap) {
             size_t ncap = (cap == 0U) ? 4U : (cap * 2U);
@@ -2815,10 +2818,20 @@ static StoreStatus neighbors_from_stmt(sqlite3_stmt *stmt, StoreNeighbor **out, 
         row.neighbor_id = sqlite3_column_int64(stmt, 5);
         if (sqlite3_column_type(stmt, 6) != SQLITE_NULL) {
             row.neighbor_key = dup_str((const char *)sqlite3_column_text(stmt, 6));
+            if (row.neighbor_key == NULL) {
+                store_neighbor_free(&row);
+                store_neighbors_free(rows, n);
+                return STORE_ERR_OOM;
+            }
         }
         row.neighbor_body = dup_str((const char *)sqlite3_column_text(stmt, 7));
         if (sqlite3_column_type(stmt, 8) != SQLITE_NULL) {
             row.neighbor_expires_at = dup_str((const char *)sqlite3_column_text(stmt, 8));
+            if (row.neighbor_expires_at == NULL) {
+                store_neighbor_free(&row);
+                store_neighbors_free(rows, n);
+                return STORE_ERR_OOM;
+            }
         }
         if (row.edge_updated_at == NULL || row.neighbor_body == NULL) {
             store_neighbor_free(&row);
