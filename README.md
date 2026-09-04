@@ -1,18 +1,57 @@
 # remember
 
-Local CLI personal second brain (SQLite + FTS5).  
-Design: [`design-logs/001-foundations.md`](design-logs/001-foundations.md).  
+**Local-first personal second brain, on the command line.** Capture notes,
+facts, and decisions as durable *memories* — each with an optional named key,
+tags, an optional expiry, and typed links to related memories — then find them
+again with full-text search. One SQLite file: no server, no account, no network.
+Every command also speaks JSON, so agents and scripts share the surface you use.
+
+- **Store** — `remember add "…"` with optional `--key`, `--tags`, `--expires`.
+- **Find** — `remember search "…"` (SQLite FTS5 over the body) or `remember list`.
+- **Organize** — tags as facets; **keys** as stable named slots (upsert by key).
+- **Connect** — link memories as `related`, `cites`, or `supersedes`.
+- **Expire** — optional TTL with a trash bin (restore or purge); nothing vanishes silently.
+- **Automate** — `--json` on every command; ships an agent skill for Claude / Cursor / others.
+
+Design: [`design-logs/001-foundations.md`](design-logs/001-foundations.md) ·
 Plans: [`implementation-plans/INDEX.md`](implementation-plans/INDEX.md).
 
-## Status
+## Install
 
-Full command surface — add / get / list / search / update / delete, tags,
-TTL & trash, and related-memory links — plus quality gates, the agent skill,
-and the install script.
+### Homebrew (recommended)
 
-Pinned SQLite amalgamation: **3.53.3** in `third_party/sqlite/` (see that README).
+```bash
+brew install itayavtalyon/remember/remember
+```
 
-## Requirements
+Builds the release binary from source (needs `cmake`; no other dependencies).
+Upgrade or uninstall the usual way (`brew upgrade remember` /
+`brew uninstall remember`). The formula installs the binary only — for the agent
+skill too, use the [from-source install](#build-from-source) below.
+
+## What's New
+
+### v0.1.0 — first tagged release
+
+The initial public release bundles the full command surface built so far:
+
+- **Related memories** — connect entries with `related`, `cites`, or
+  `supersedes`; list a memory's neighbours and `rekey` in place.
+- **TTL & trash** — optional `--expires`; expired memories move to a trash bin
+  you can restore from or purge. No silent data loss.
+- **Full-text search** — SQLite **FTS5** over memory bodies (`remember search`).
+- **Keys & tags** — named-slot **keys** (upsert by key) and multi-tag faceting;
+  internal spaces allowed in both.
+- **JSON everywhere** — every command emits a stable JSON envelope, so agents
+  and scripts drive the same surface as the CLI.
+- **Agent skill** — installs into Claude / Cursor / Grok skill trees.
+
+## Build from source
+
+Prefer Homebrew (above) for a plain install. Build from source for the agent
+skill, for development, or on a platform without the tap.
+
+### Requirements
 
 - **CMake** ≥ 3.20
 - A **C11** compiler — clang is the primary target; gcc also works
@@ -20,18 +59,9 @@ Pinned SQLite amalgamation: **3.53.3** in `third_party/sqlite/` (see that README
 - **No external libraries** — SQLite is vendored in `third_party/sqlite/`, so there is nothing else to install to build the binary
 - Platforms: **macOS** and **Linux**
 
-## Install with Homebrew
+Pinned SQLite amalgamation: **3.53.3** in `third_party/sqlite/` (see that README).
 
-```bash
-brew install itayavtalyon/remember/remember
-```
-
-Builds the release binary from source (needs `cmake`; no other dependencies).
-Upgrades and uninstalls the usual way (`brew upgrade remember` /
-`brew uninstall remember`). The Homebrew formula installs the binary only — for
-the agent skill, use `scripts/install.sh --skill-only` from a clone.
-
-## Install (binary + agent skill)
+### Binary + agent skill (install script)
 
 Builds a **Release** binary (no sanitizers) into a dedicated `build-release/` tree
 (never reuses developer `build/`, which is often ASan), installs it, and copies

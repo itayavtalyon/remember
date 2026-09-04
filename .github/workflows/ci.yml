@@ -79,9 +79,14 @@ jobs:
           # Drop untrusted preinstalled taps so brew install is not noisy/blocked.
           brew untap aws/tap 2>/dev/null || true
           brew install cmake ninja cppcheck sqlite
-          # LLVM provides clang-tidy, clang-format, scan-build
-          brew install llvm
-          echo "$(brew --prefix llvm)/bin" >> "$GITHUB_PATH"
+          # LLVM provides clang-tidy, clang-format, scan-build. Pin the major
+          # version: the unpinned `llvm` floats, and each release auto-enables new
+          # checks under our `bugprone-*`/`readability-*` wildcards, turning a
+          # toolchain bump into red CI on untouched code. Linux pins clang in its
+          # image for the same reason; bumping this pin is a deliberate change
+          # (fix any new findings, then raise the number).
+          brew install llvm@22
+          echo "$(brew --prefix llvm@22)/bin" >> "$GITHUB_PATH"
 
       - name: Configure
         run: |
