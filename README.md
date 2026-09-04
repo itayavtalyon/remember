@@ -148,6 +148,11 @@ cmake --build build --target leaks-macos        # macOS only; uses remember_plai
 
 Coverage: [`tests/COVERAGE.md`](tests/COVERAGE.md).
 
+## Releasing
+
+Cutting a new version and publishing it to Homebrew (tag → GitHub release →
+formula bump): [`docs/RELEASING.md`](docs/RELEASING.md).
+
 ## License
 
 [MIT](LICENSE) © Itay Avtalyon. Vendored dependencies in `third_party/` keep
