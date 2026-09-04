@@ -602,6 +602,79 @@ TEST(store_list_neighbors_for_empty_page)
 }
 
 #ifdef REMEMBER_TEST_HOOKS
+TEST(store_list_neighbors_oom_keeps_key_and_trash)
+{
+    char *db = NULL;
+    Store *s = open_temp(&db);
+    long long a;
+    long long b;
+    StoreLinkAction act;
+    StoreNeighbor stub;
+    int i;
+
+    ASSERT_TRUE(s != NULL);
+    a = add_row(s, "alpha", k_hash_a, NULL, NULL);
+    b = add_row(s, "beta", k_hash_b, "slot:k", k_past);
+    memset(&stub, 0, sizeof(stub));
+    ASSERT_EQ_INT((int)store_link(s, a, b, STORE_EDGE_RELATED, k_now, &act, &stub), (int)STORE_OK);
+    store_neighbor_free(&stub);
+
+    for (i = 0; i < 24; i++) {
+        StoreNeighbor *rows = NULL;
+        size_t n = 0U;
+        StoreStatus st;
+
+        store_test_fail_alloc_after(i);
+        st = store_list_neighbors(s, a, NULL, STORE_NEIGHBOR_ALL, k_now, &rows, &n);
+        store_test_fail_alloc_after(-1);
+        if (st != STORE_OK) {
+            ASSERT_EQ_INT((int)st, (int)STORE_ERR_OOM);
+            store_neighbors_free(rows, n);
+            continue;
+        }
+        ASSERT_EQ_INT((int)n, 1);
+        if (rows == NULL) {
+            ASSERT_TRUE(0);
+            break;
+        }
+        ASSERT_STREQ(rows[0].neighbor_key != NULL ? rows[0].neighbor_key : "", "slot:k");
+        ASSERT_STREQ(rows[0].neighbor_expires_at != NULL ? rows[0].neighbor_expires_at : "",
+                     k_past);
+        store_neighbors_free(rows, n);
+    }
+    store_close(s);
+    free(db);
+}
+
+TEST(store_unlink_stub_load_failure_is_sqlite_not_oom)
+{
+    char *db = NULL;
+    Store *s = open_temp(&db);
+    long long a;
+    long long b;
+    StoreLinkAction act;
+    StoreNeighbor stub;
+    StoreNeighbor *gone = NULL;
+    size_t n = 0U;
+    StoreStatus st;
+
+    ASSERT_TRUE(s != NULL);
+    a = add_row(s, "alpha", k_hash_a, NULL, NULL);
+    b = add_row(s, "beta", k_hash_b, NULL, NULL);
+    memset(&stub, 0, sizeof(stub));
+    ASSERT_EQ_INT((int)store_link(s, a, b, STORE_EDGE_RELATED, k_now, &act, &stub), (int)STORE_OK);
+    store_neighbor_free(&stub);
+
+    /* Unlink: prepare SELECT edges (0), then fill_stub → load_entry prepare (1). */
+    store_test_fail_prepare_after(1);
+    st = store_unlink(s, a, b, NULL, k_now, &gone, &n);
+    store_test_fail_prepare_after(-1);
+    store_neighbors_free(gone, n);
+    ASSERT_EQ_INT((int)st, (int)STORE_ERR_SQLITE);
+    store_close(s);
+    free(db);
+}
+
 /* Sweep prepare/step/alloc faults across the graph mutators/readers so their
    error and OOM cleanup paths execute (100% line coverage idiom). Asserts no
    crash/leak under ASan; specific results are not the point. */
@@ -705,6 +778,8 @@ void register_store_link_tests(void)
     RUN_TEST(store_list_neighbors_for_page);
     RUN_TEST(store_list_neighbors_for_empty_page);
 #ifdef REMEMBER_TEST_HOOKS
+    RUN_TEST(store_list_neighbors_oom_keeps_key_and_trash);
+    RUN_TEST(store_unlink_stub_load_failure_is_sqlite_not_oom);
     RUN_TEST(store_links_fault_injection_sweep);
 #endif
 }
