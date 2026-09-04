@@ -6,7 +6,9 @@ Plans: [`implementation-plans/INDEX.md`](implementation-plans/INDEX.md).
 
 ## Status
 
-Steps **01–10** complete: full command surface, quality gates, polish, agent skill, and install script.
+Full command surface — add / get / list / search / update / delete, tags,
+TTL & trash, and related-memory links — plus quality gates, the agent skill,
+and the install script.
 
 Pinned SQLite amalgamation: **3.53.3** in `third_party/sqlite/` (see that README).
 
@@ -17,6 +19,17 @@ Pinned SQLite amalgamation: **3.53.3** in `third_party/sqlite/` (see that README
 - **git** (to clone)
 - **No external libraries** — SQLite is vendored in `third_party/sqlite/`, so there is nothing else to install to build the binary
 - Platforms: **macOS** and **Linux**
+
+## Install with Homebrew
+
+```bash
+brew install itayavtalyon/remember/remember
+```
+
+Builds the release binary from source (needs `cmake`; no other dependencies).
+Upgrades and uninstalls the usual way (`brew upgrade remember` /
+`brew uninstall remember`). The Homebrew formula installs the binary only — for
+the agent skill, use `scripts/install.sh --skill-only` from a clone.
 
 ## Install (binary + agent skill)
 
@@ -104,3 +117,8 @@ cmake --build build --target leaks-macos        # macOS only; uses remember_plai
 ```
 
 Coverage: [`tests/COVERAGE.md`](tests/COVERAGE.md).
+
+## License
+
+[MIT](LICENSE) © Itay Avtalyon. Vendored dependencies in `third_party/` keep
+their own licenses (SQLite is public domain; see each subdirectory's notice).
