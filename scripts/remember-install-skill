@@ -1,0 +1,135 @@
+#!/usr/bin/env bash
+# Install the remember agent skill into existing product skill trees.
+#
+# Default: symlink, so Homebrew upgrades keep agents on the keg skill.
+# --copy: snapshot copy (used by scripts/install.sh from a git clone).
+#
+# Homebrew cannot write ~/.claude itself (sandbox). This command is the
+# user-facing extra step; destinations match scripts/install.sh.
+set -euo pipefail
+
+MODE=symlink
+
+usage() {
+  cat <<'EOF'
+Usage: remember-install-skill [--copy|--symlink]
+
+Install skills/remember/SKILL.md into agent skill trees that already exist:
+
+  ~/.grok/skills/remember/SKILL.md
+  ~/.claude/skills/remember/SKILL.md
+  ~/.cursor/skills/remember/SKILL.md
+
+Only product dirs that already exist are touched. Default is a symlink so
+brew upgrade keeps the skill current. --copy writes a snapshot instead.
+
+Environment:
+  REMEMBER_SKILL_SRC    Skill file to install (default: prefix share/ or repo)
+  REMEMBER_SKILL_DIRS   Colon-separated skill parent dirs (replaces defaults)
+EOF
+}
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --copy)
+      MODE=copy
+      shift
+      ;;
+    --symlink)
+      MODE=symlink
+      shift
+      ;;
+    -h | --help)
+      usage
+      exit 0
+      ;;
+    *)
+      echo "error: unknown option: $1" >&2
+      usage >&2
+      exit 1
+      ;;
+  esac
+done
+
+# Prefer the path as invoked (Homebrew bin is a symlink into Cellar). Do not
+# realpath the script: that would pin agent trees at a versioned Cellar path
+# that dies on brew upgrade. /opt/homebrew/share/remember stays linked.
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+find_skill_src() {
+  if [[ -n "${REMEMBER_SKILL_SRC:-}" ]]; then
+    printf '%s\n' "$REMEMBER_SKILL_SRC"
+    return
+  fi
+  if [[ -f "$script_dir/../share/remember/SKILL.md" ]]; then
+    printf '%s\n' "$(cd "$script_dir/../share/remember" && pwd)/SKILL.md"
+    return
+  fi
+  if [[ -f "$script_dir/../skills/remember/SKILL.md" ]]; then
+    printf '%s\n' "$(cd "$script_dir/../skills/remember" && pwd)/SKILL.md"
+    return
+  fi
+  echo "error: cannot find SKILL.md (set REMEMBER_SKILL_SRC)" >&2
+  exit 1
+}
+
+default_skill_dirs() {
+  local dirs=()
+  if [[ -d "${HOME}/.grok" ]]; then
+    dirs+=("${HOME}/.grok/skills")
+  fi
+  if [[ -d "${HOME}/.claude" ]]; then
+    dirs+=("${HOME}/.claude/skills")
+  fi
+  if [[ -d "${HOME}/.cursor" ]]; then
+    dirs+=("${HOME}/.cursor/skills")
+  fi
+  if [[ ${#dirs[@]} -gt 0 ]]; then
+    printf '%s\n' "${dirs[@]}"
+  fi
+}
+
+SKILL_SRC="$(find_skill_src)"
+if [[ ! -f "$SKILL_SRC" ]]; then
+  echo "error: missing skill source: $SKILL_SRC" >&2
+  exit 1
+fi
+
+dirs=()
+if [[ -n "${REMEMBER_SKILL_DIRS:-}" ]]; then
+  IFS=':' read -r -a dirs <<< "$REMEMBER_SKILL_DIRS"
+else
+  while IFS= read -r d; do
+    [[ -n "$d" ]] && dirs+=("$d")
+  done < <(default_skill_dirs)
+fi
+
+if [[ ${#dirs[@]} -eq 0 ]]; then
+  echo "error: no agent skill roots found (~/.grok, ~/.claude, ~/.cursor);" >&2
+  echo "       install an agent first, or set REMEMBER_SKILL_DIRS=/path/to/skills" >&2
+  exit 1
+fi
+
+ok=0
+for d in "${dirs[@]}"; do
+  [[ -z "$d" ]] && continue
+  dest="$d/remember"
+  if ! mkdir -p "$dest" 2>/dev/null; then
+    echo "warn: cannot create $dest" >&2
+    continue
+  fi
+  if [[ "$MODE" == "symlink" ]]; then
+    ln -sfn "$SKILL_SRC" "$dest/SKILL.md"
+  else
+    install -m 644 "$SKILL_SRC" "$dest/SKILL.md"
+  fi
+  echo "skill: $dest/SKILL.md"
+  ok=1
+done
+
+if [[ "$ok" -eq 0 ]]; then
+  echo "error: no skill destination succeeded" >&2
+  exit 1
+fi
+
+exit 0

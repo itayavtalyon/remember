@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(remember VERSION 0.1.0 LANGUAGES C)
+project(remember VERSION 0.1.1 LANGUAGES C)
 
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)
@@ -341,6 +341,12 @@ set_tests_properties(step05_gate PROPERTIES
 add_test(NAME store_asan_gate
     COMMAND remember_store_tests
 )
+add_test(NAME install_skill
+    COMMAND bash "${CMAKE_SOURCE_DIR}/tests/test_install_skill.sh"
+)
+set_tests_properties(install_skill PROPERTIES
+    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+)
 set_tests_properties(store_asan_gate PROPERTIES
     WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
     ENVIRONMENT
@@ -391,8 +397,11 @@ add_custom_target(lint
     USES_TERMINAL
 )
 
-# Binary packaging only; multi-agent skill install is scripts/install.sh.
+# Binary + skill file + helper. Writing ~/.claude is still a user step
+# (remember-install-skill / scripts/install.sh) — Homebrew cannot do it.
 install(TARGETS remember RUNTIME DESTINATION bin)
+install(PROGRAMS scripts/remember-install-skill DESTINATION bin)
+install(FILES skills/remember/SKILL.md DESTINATION share/remember)
 
 find_program(SCAN_BUILD scan-build)
 if(SCAN_BUILD)
