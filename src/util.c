@@ -6,7 +6,7 @@
 
 static void set_err(char *err, size_t errlen, const char *msg)
 {
-    size_t n;
+    size_t n = 0;
 
     if (err == NULL || errlen == 0U) {
         return;
@@ -41,7 +41,7 @@ int util_path_looks_synced(const char *path)
         "Google Drive",
         NULL,
     };
-    size_t i;
+    size_t i = 0;
 
     if (path == NULL || path[0] == '\0') {
         return 0;
@@ -56,9 +56,9 @@ int util_path_looks_synced(const char *path)
 
 int util_resolve_db_path(const char *cli_db, char *buf, size_t buflen, char *err, size_t errlen)
 {
-    const char *chosen;
-    const char *home;
-    int n;
+    const char *chosen = NULL;
+    const char *home = NULL;
+    int n = 0;
 
     if (buf == NULL || buflen == 0U) {
         set_err(err, errlen, "internal error: path buffer missing");
@@ -130,7 +130,7 @@ int util_read_stdin(char **out, size_t *out_len, size_t max_len)
         }
         if (len + 1U >= cap) {
             size_t ncap = (cap == 0U) ? 4096U : cap * 2U;
-            char *nb;
+            char *nb = NULL;
             if (ncap < len + 2U) {
                 ncap = len + 2U;
             }

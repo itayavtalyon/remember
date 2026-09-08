@@ -98,7 +98,7 @@ static int handle_pair_flag(const char *arg, int *i, int rest_argc, const char *
 
 static int parse_pair_args(int rest_argc, const char **rest_argv, PairParse *out)
 {
-    int i;
+    int i = 0;
     int end_opts = 0;
 
     memset(out, 0, sizeof(*out));
@@ -166,7 +166,7 @@ static int pair_apply_sugar(PairParse *p)
 static int resolve_end(Store *s, const char *id_raw, const char *key_raw, long long *out_id)
 {
     Entry e;
-    StoreStatus st;
+    StoreStatus st = STORE_OK;
 
     memset(&e, 0, sizeof(e));
     if (key_raw != NULL) {
@@ -217,9 +217,9 @@ static int run_pair(Store *s, bool json, int rest_argc, const char **rest_argv, 
     char now[32];
     long long from_id = 0;
     long long to_id = 0;
-    int rc;
-    StoreStatus st;
-    StoreLinkAction act;
+    int rc = 0;
+    StoreStatus st = STORE_OK;
+    StoreLinkAction act = STORE_LINK_CREATED;
     StoreNeighbor stub;
     StoreNeighbor *gone = NULL;
     size_t n = 0U;
@@ -336,7 +336,7 @@ static int handle_related_flag(const char *arg, int *i, int rest_argc, const cha
 
 static int parse_related_args(int rest_argc, const char **rest_argv, RelatedParse *out)
 {
-    int i;
+    int i = 0;
     int end_opts = 0;
 
     memset(out, 0, sizeof(*out));
@@ -367,7 +367,7 @@ static int parse_related_args(int rest_argc, const char **rest_argv, RelatedPars
 
 static int related_load_subject(Store *s, const RelatedParse *p, Entry *subject)
 {
-    StoreStatus st;
+    StoreStatus st = STORE_OK;
 
     memset(subject, 0, sizeof(*subject));
     if (p->key_raw != NULL) {
@@ -392,15 +392,15 @@ static int related_load_subject(Store *s, const RelatedParse *p, Entry *subject)
 int cmd_related(Store *s, bool json, int rest_argc, const char **rest_argv)
 {
     RelatedParse p;
-    StoreEdgeKind kind;
+    StoreEdgeKind kind = STORE_EDGE_RELATED;
     const StoreEdgeKind *kind_ptr = NULL;
     StoreNeighborDir dir = STORE_NEIGHBOR_ALL;
     char now[32];
     Entry subject;
     StoreNeighbor *rows = NULL;
     size_t n = 0U;
-    StoreStatus st;
-    int rc;
+    StoreStatus st = STORE_OK;
+    int rc = 0;
 
     memset(&subject, 0, sizeof(subject));
     if (parse_related_args(rest_argc, rest_argv, &p) != 0) {

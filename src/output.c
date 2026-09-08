@@ -38,7 +38,7 @@ static int write_json_escape(FILE *out, unsigned char c)
 
 int output_json_string(FILE *out, const char *s)
 {
-    const unsigned char *p;
+    const unsigned char *p = NULL;
 
     if (out == NULL) {
         return -1;
@@ -70,7 +70,7 @@ static int write_json_field_str(FILE *out, const char *name, const char *value)
 
 static int write_entry_core(FILE *out, const Entry *e)
 {
-    size_t i;
+    size_t i = 0;
 
     if (fprintf(out, "{\"id\":%lld,\"key\":", e->id) < 0) {
         return -1;
@@ -160,7 +160,7 @@ int output_action_envelope(FILE *out, const char *action, const Entry *e)
 
 int output_deleted_list(FILE *out, const Entry *entries, size_t count)
 {
-    size_t i;
+    size_t i = 0;
 
     if (out == NULL) {
         return -1;
@@ -211,7 +211,7 @@ int output_list_envelope(FILE *out, size_t offset, size_t limit, size_t count, s
                          const Entry *entries, const StoreNeighbor *links, size_t nlinks,
                          const char *now)
 {
-    size_t i;
+    size_t i = 0;
 
     if (out == NULL || now == NULL) {
         return -1;
@@ -269,7 +269,7 @@ int output_body_human(FILE *out, const char *body)
         return -1;
     }
     if (body != NULL) {
-        const unsigned char *p;
+        const unsigned char *p = NULL;
         for (p = (const unsigned char *)body; *p != '\0'; p++) {
             int ch = is_terminal_ctrl(*p) ? '?' : (int)*p;
             if (fputc(ch, out) == EOF) {
@@ -306,7 +306,7 @@ static size_t utf8_clen(unsigned char c)
 static size_t utf8_clen_bounded(const char *body, size_t i)
 {
     size_t clen = utf8_clen((unsigned char)body[i]);
-    size_t k;
+    size_t k = 0;
 
     for (k = 1U; k < clen; k++) {
         if (body[i + k] == '\0') {
@@ -331,7 +331,7 @@ static void write_preview(FILE *out, const char *body)
 
 int output_tags_envelope(FILE *out, const TagCount *tags, size_t count)
 {
-    size_t i;
+    size_t i = 0;
 
     if (out == NULL) {
         return -1;
@@ -364,7 +364,7 @@ int output_tags_envelope(FILE *out, const TagCount *tags, size_t count)
 
 int output_tags_human(FILE *out, const TagCount *tags, size_t count)
 {
-    size_t i;
+    size_t i = 0;
 
     if (out == NULL) {
         return -1;
@@ -390,7 +390,7 @@ static int write_related_ids_cell(FILE *out, long long subject_id, const StoreNe
 int output_entry_human_line(FILE *out, const Entry *e, const StoreNeighbor *links, size_t nlinks,
                             const char *now)
 {
-    size_t i;
+    size_t i = 0;
 
     if (out == NULL || e == NULL) {
         return -1;
@@ -481,7 +481,7 @@ static void fill_preview(char *dst, size_t dst_cap, const char *body, size_t max
         if (c < 0x20U || c == 0x7FU) {
             dst[o++] = '?';
         } else {
-            size_t k;
+            size_t k = 0;
             for (k = 0; k < clen && body[i + k] != '\0'; k++) {
                 dst[o++] = body[i + k];
             }
@@ -503,7 +503,7 @@ static void fill_preview(char *dst, size_t dst_cap, const char *body, size_t max
 static int write_stub_json(FILE *out, const StoreNeighbor *n, const char *now)
 {
     char preview[PREVIEW_BUF];
-    int trash;
+    int trash = 0;
 
     if (n == NULL) {
         return -1;
@@ -541,7 +541,7 @@ static int write_stub_json(FILE *out, const StoreNeighbor *n, const char *now)
 static int write_links_json_field(FILE *out, long long subject_id, const StoreNeighbor *links,
                                   size_t nlinks, const char *now)
 {
-    size_t i;
+    size_t i = 0;
     int first = 1;
 
     if (fputs(",\"links\":[", out) < 0) {
@@ -583,7 +583,7 @@ static int write_entry_with_links(FILE *out, const Entry *e, const StoreNeighbor
 static int write_related_ids_cell(FILE *out, long long subject_id, const StoreNeighbor *links,
                                   size_t nlinks, const char *now)
 {
-    size_t i;
+    size_t i = 0;
     size_t shown = 0U;
     size_t total = 0U;
 
@@ -624,7 +624,7 @@ static int write_related_ids_cell(FILE *out, long long subject_id, const StoreNe
 int output_links_write_envelope(FILE *out, const char *action, const StoreNeighbor *links,
                                 size_t count, const char *now)
 {
-    size_t i;
+    size_t i = 0;
 
     if (out == NULL || action == NULL || now == NULL) {
         return -1;
@@ -658,7 +658,7 @@ int output_links_write_envelope(FILE *out, const char *action, const StoreNeighb
 int output_related_envelope(FILE *out, long long id, const char *key, const StoreNeighbor *links,
                             size_t count, const char *now)
 {
-    size_t i;
+    size_t i = 0;
 
     if (out == NULL || now == NULL) {
         return -1;
@@ -695,7 +695,7 @@ int output_related_envelope(FILE *out, long long id, const char *key, const Stor
 
 int output_related_human(FILE *out, const StoreNeighbor *links, size_t count, const char *now)
 {
-    size_t i;
+    size_t i = 0;
     char preview[PREVIEW_BUF];
 
     if (out == NULL || now == NULL) {

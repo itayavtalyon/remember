@@ -27,7 +27,7 @@
 static int parse_size_token(const char *raw, size_t *out)
 {
     char *end = NULL;
-    unsigned long long v;
+    unsigned long long v = 0;
 
     if (raw == NULL || raw[0] == '\0' || raw[0] == '-') {
         return -1;
@@ -157,7 +157,7 @@ static void list_parse_init(ListParse *out)
 
 static int parse_list_args(int rest_argc, const char **rest_argv, ListParse *out, const char **err)
 {
-    int i;
+    int i = 0;
     int end_opts = 0;
     size_t tag_cap = 0U;
 
@@ -166,7 +166,7 @@ static int parse_list_args(int rest_argc, const char **rest_argv, ListParse *out
 
     for (i = 0; i < rest_argc; i++) {
         const char *arg = rest_argv[i];
-        int kind;
+        int kind = 0;
 
         if (end_opts) {
             *err = "unexpected argument";
@@ -219,11 +219,11 @@ static int is_ascii_ws(unsigned char c)
  */
 static char *trim_query_copy(const char *raw, const char **err)
 {
-    size_t len;
+    size_t len = 0;
     size_t start = 0U;
-    size_t end;
-    size_t n;
-    char *out;
+    size_t end = 0;
+    size_t n = 0;
+    char *out = NULL;
 
     if (raw == NULL) {
         *err = "empty search query";
@@ -266,7 +266,7 @@ static int search_set_query(SearchParse *out, const char *arg, const char **err)
 static int parse_search_args(int rest_argc, const char **rest_argv, SearchParse *out,
                              const char **err)
 {
-    int i;
+    int i = 0;
     int end_opts = 0;
     size_t tag_cap = 0U;
 
@@ -277,7 +277,7 @@ static int parse_search_args(int rest_argc, const char **rest_argv, SearchParse 
 
     for (i = 0; i < rest_argc; i++) {
         const char *arg = rest_argv[i];
-        int kind;
+        int kind = 0;
 
         if (end_opts) {
             if (search_set_query(out, arg, err) != 0) {
@@ -361,8 +361,8 @@ static int load_page_neighbors(Store *s, const Entry *entries, size_t count, con
                                StoreNeighbor **out, size_t *out_n)
 {
     long long *ids = NULL;
-    size_t i;
-    StoreStatus st;
+    size_t i = 0;
+    StoreStatus st = STORE_OK;
 
     *out = NULL;
     *out_n = 0U;
@@ -391,7 +391,7 @@ static int emit_entry_page(bool json, size_t offset, size_t limit, size_t count,
                            const Entry *entries, const StoreNeighbor *links, size_t nlinks,
                            const char *now)
 {
-    size_t i;
+    size_t i = 0;
 
     if (json) {
         return output_list_envelope(app_out(), offset, limit, count, total, entries, links, nlinks,
@@ -407,7 +407,7 @@ static int emit_entry_page(bool json, size_t offset, size_t limit, size_t count,
 
 static void free_entry_page(Entry *entries, size_t count)
 {
-    size_t i;
+    size_t i = 0;
 
     if (entries == NULL) {
         return;
@@ -431,7 +431,7 @@ int cmd_list(Store *s, bool json, int rest_argc, const char **rest_argv)
     size_t total = 0U;
     StoreNeighbor *links = NULL;
     size_t nlinks = 0U;
-    StoreStatus st;
+    StoreStatus st = STORE_OK;
     int rc = REMEMBER_ERR;
     char now[32];
 
@@ -490,7 +490,7 @@ int cmd_search(Store *s, bool json, int rest_argc, const char **rest_argv)
     size_t total = 0U;
     StoreNeighbor *links = NULL;
     size_t nlinks = 0U;
-    StoreStatus st;
+    StoreStatus st = STORE_OK;
     int rc = REMEMBER_ERR;
     char now[32];
 

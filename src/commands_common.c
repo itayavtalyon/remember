@@ -16,7 +16,7 @@
 int parse_entry_id(const char *raw, long long *out_id)
 {
     char *end = NULL;
-    long long id;
+    long long id = 0;
 
     if (raw == NULL || out_id == NULL) {
         return -1;
@@ -130,8 +130,8 @@ int take_value(int *i, int rest_argc, const char **rest_argv, const char **out, 
 /* ISO C11: avoid strdup (POSIX; hidden under -std=c11 without feature macros). */
 static char *dup_cstr(const char *s)
 {
-    size_t n;
-    char *p;
+    size_t n = 0;
+    char *p = NULL;
 
     if (s == NULL) {
         return NULL;
@@ -148,8 +148,8 @@ static char *dup_cstr(const char *s)
 int normalize_tags(const char *const *tag_raw, size_t ntag_raw, char ***out_tags, size_t *out_ntags,
                    const char **err)
 {
-    size_t t;
-    char **tags;
+    size_t t = 0;
+    char **tags = NULL;
 
     *out_tags = NULL;
     *out_ntags = 0U;
@@ -167,7 +167,7 @@ int normalize_tags(const char *const *tag_raw, size_t ntag_raw, char ***out_tags
         char buf[REMEMBER_TOKEN_MAX + 1];
         NormStatus ns = normalize_tag(tag_raw[t], buf, sizeof(buf));
         if (ns != NORM_OK) {
-            size_t j;
+            size_t j = 0;
             for (j = 0; j < t; j++) {
                 free(tags[j]);
             }
@@ -177,7 +177,7 @@ int normalize_tags(const char *const *tag_raw, size_t ntag_raw, char ***out_tags
         }
         tags[t] = dup_cstr(buf);
         if (tags[t] == NULL) {
-            size_t j;
+            size_t j = 0;
             for (j = 0; j < t; j++) {
                 free(tags[j]);
             }
@@ -193,7 +193,7 @@ int normalize_tags(const char *const *tag_raw, size_t ntag_raw, char ***out_tags
 
 void free_tag_list(char **tags, size_t ntags)
 {
-    size_t t;
+    size_t t = 0;
     if (tags == NULL) {
         return;
     }
@@ -225,7 +225,7 @@ int load_body(const char *body_raw, int dash_is_stdin, char **out_body, size_t *
 {
     char *stdin_body = NULL;
     size_t stdin_len = 0U;
-    NormStatus ns;
+    NormStatus ns = NORM_OK;
 
     *out_body = NULL;
     *out_len = 0U;
@@ -267,10 +267,10 @@ static int digit(char c)
 /* Civil to Unix days (Howard Hinnant). */
 static long long days_from_civil(int y, int m, int d)
 {
-    int era;
-    unsigned yoe;
-    unsigned doy;
-    unsigned doe;
+    int era = 0;
+    unsigned yoe = 0;
+    unsigned doy = 0;
+    unsigned doe = 0;
     int yy = y;
 
     yy -= (m <= 2) ? 1 : 0;
@@ -283,8 +283,8 @@ static long long days_from_civil(int y, int m, int d)
 
 static int unix_from_civil(int y, int mo, int d, int h, int mi, int se, long long *out)
 {
-    long long days;
-    long long sec;
+    long long days = 0;
+    long long sec = 0;
 
     days = days_from_civil(y, mo, d);
     if (days > LLONG_MAX / 86400LL || days < LLONG_MIN / 86400LL) {
@@ -302,7 +302,7 @@ static int unix_from_civil(int y, int mo, int d, int h, int mi, int se, long lon
 static int format_iso_mmmz(int y, int mo, int d, int h, int mi, int se, int ms, char *out,
                            size_t outlen)
 {
-    int n;
+    int n = 0;
 
     if (out == NULL || outlen < 25U) {
         return -1;
@@ -319,7 +319,7 @@ static int format_iso_mmmz(int y, int mo, int d, int h, int mi, int se, int ms, 
 
 static int parse_n_digits(const char *s, size_t n, int *out)
 {
-    size_t i;
+    size_t i = 0;
     int v = 0;
 
     for (i = 0; i < n; i++) {
@@ -352,8 +352,8 @@ static int parse_iso_mmmz(const char *s, int *y, int *mo, int *d, int *h, int *m
 
 static int unix_to_iso_ms(long long unix_sec, int ms, char *out, size_t outlen)
 {
-    time_t tt;
-    const struct tm *tmp;
+    time_t tt = 0;
+    const struct tm *tmp = NULL;
     struct tm tm;
 
     if (ms < 0 || ms > 999) {
@@ -374,7 +374,7 @@ static int unix_to_iso_ms(long long unix_sec, int ms, char *out, size_t outlen)
 
 static int match_mask(const char *s, const char *mask)
 {
-    size_t i;
+    size_t i = 0;
 
     for (i = 0; mask[i] != '\0'; i++) {
         if (mask[i] == 'd') {
@@ -390,7 +390,7 @@ static int match_mask(const char *s, const char *mask)
 
 static int match_mask_n(const char *s, const char *mask, size_t n)
 {
-    size_t i;
+    size_t i = 0;
 
     for (i = 0; i < n; i++) {
         if (mask[i] == '\0') {
@@ -410,11 +410,11 @@ static int match_mask_n(const char *s, const char *mask, size_t n)
 int parse_ttl_to_expires(const char *token, const char *now, char *out, size_t outlen,
                          const char **err)
 {
-    const char *p;
+    const char *p = NULL;
     unsigned long long n = 0ULL;
-    unsigned long long mul;
-    long long add_sec;
-    long long unix_sec;
+    unsigned long long mul = 0;
+    long long add_sec = 0;
+    long long unix_sec = 0;
     int y = 0;
     int mo = 0;
     int d = 0;
@@ -489,8 +489,8 @@ static int expires_date_only(const char *token, char *out, size_t outlen)
     int mo = 0;
     int d = 0;
     struct tm t;
-    time_t sec;
-    const struct tm *tmp;
+    time_t sec = 0;
+    const struct tm *tmp = NULL;
     struct tm utc;
 
     if (strlen(token) != 10U || !match_mask(token, "dddd-dd-dd")) {
@@ -543,7 +543,7 @@ static int expires_utc_z(const char *token, char *out, size_t outlen)
         memcpy(canon, token, 19U);
         memcpy(canon + 19U, ".000Z", 6U);
     } else if (n >= 22U && token[19] == '.') {
-        size_t i;
+        size_t i = 0;
         size_t frac_n = n - 21U; /* digits between . and Z; n>=22 => frac_n>=1 */
         for (i = 20U; i < n - 1U; i++) {
             if (!digit(token[i])) {

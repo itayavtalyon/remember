@@ -15,8 +15,8 @@ int cmd_purge_trash(Store *s, bool json, int rest_argc, const char **rest_argv)
     char now[32];
     Entry *entries = NULL;
     size_t count = 0U;
-    StoreStatus st;
-    size_t i;
+    StoreStatus st = STORE_OK;
+    size_t i = 0;
     int rc = REMEMBER_ERR;
 
     if (rest_argc > 0) {

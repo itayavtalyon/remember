@@ -71,7 +71,7 @@ static int handle_add_flag(const char *arg, int *i, int rest_argc, const char **
 
 static int parse_add_args(int rest_argc, const char **rest_argv, AddParse *out, const char **err)
 {
-    int i;
+    int i = 0;
     int end_opts = 0;
     size_t tag_cap = 0U;
 
@@ -144,7 +144,7 @@ int cmd_add(Store *s, bool json, int rest_argc, const char **rest_argv)
     const char *key_or_null = NULL;
     Entry entry;
     StoreAddAction action = STORE_ADD_CREATED;
-    StoreStatus st;
+    StoreStatus st = STORE_OK;
     int rc = REMEMBER_ERR;
 
     memset(&entry, 0, sizeof(entry));

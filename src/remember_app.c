@@ -231,7 +231,7 @@ static Store *open_store(const CliArgs *args, int *out_rc)
 {
     char path[REMEMBER_PATH_MAX];
     char err[256];
-    Store *s;
+    Store *s = NULL;
 
     err[0] = '\0';
     if (util_resolve_db_path(args->globals.db_path, path, sizeof(path), err, sizeof(err)) != 0) {
@@ -258,8 +258,8 @@ typedef int (*CmdFn)(Store *s, bool json, int rest_argc, const char **rest_argv)
 
 static int run_with_store(const CliArgs *args, CmdFn fn)
 {
-    Store *s;
-    int rc;
+    Store *s = NULL;
+    int rc = 0;
 
     s = open_store(args, &rc);
     if (s == NULL) {
@@ -329,7 +329,7 @@ static int run(const CliArgs *args)
 int remember_run(int argc, char *const *argv, FILE *out, FILE *err)
 {
     CliArgs args;
-    int rc;
+    int rc = 0;
 
     app_set_streams(out, err);
     cli_parse(argc, argv, &args);

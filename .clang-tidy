@@ -1,29 +1,27 @@
-# Applies identically to src/ and tests/.
+# Maximum clang-tidy: enable every check, then subtract only the families that
+# are structurally meaningless for a host C11 CLI (no meaningful code fix exists
+# for them). Everything else is ON and driven green by real fixes; genuine false
+# positives are silenced with a per-line NOLINT carrying a reason (see the
+# NOLINT/NOLINTNEXTLINE sites in src/). Applies identically to src/ and tests/.
 #
-# Disabled by context (not to lower the bar):
-#   concurrency-mt-unsafe — single-threaded CLI + fork/exec harness
-#   clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling —
-#       flags snprintf/etc. that we intentionally use with known sizes
-#
-# IWYU-style include hygiene:
-#   misc-include-cleaner is ON for project headers. System/POSIX false positives
-#   are reduced via IgnoreHeaders; remaining noise uses NOLINTNEXTLINE sparingly.
+# Families subtracted (why a fix is impossible, not merely inconvenient):
+#   altera-*                              Intel FPGA OpenCL/HLS checks. struct-pack-align
+#                                         wants every struct packed+pow2-aligned for a
+#                                         hardware memory interface; unroll-loops wants
+#                                         #pragma unroll for FPGA pipelining;
+#                                         id-dependent-backward-branch is about OpenCL
+#                                         work-item IDs. None exist in a CPU CLI.
+#   llvmlibc-restrict-system-libc-headers Forbids <stdio.h> etc.; exists so llvm-libc
+#                                         avoids the system libc while implementing libc.
+#                                         We are an application that must use it.
+#   modernize-avoid-c-style-cast          Wants C++ static_cast<>/reinterpret_cast<>.
+#   google-readability-casting            Same; C++ named casts do not exist in C11.
 Checks: >
-  -*,
-  bugprone-*,
-  cert-*,
-  clang-analyzer-*,
-  concurrency-*,
-  misc-*,
-  performance-*,
-  portability-*,
-  readability-*,
-  -readability-magic-numbers,
-  -readability-identifier-length,
-  -bugprone-easily-swappable-parameters,
-  -misc-no-recursion,
-  -concurrency-mt-unsafe,
-  -clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling
+  *,
+  -altera-*,
+  -llvmlibc-restrict-system-libc-headers,
+  -modernize-avoid-c-style-cast,
+  -google-readability-casting
 
 WarningsAsErrors: '*'
 # Match only project TUs under src/ and tests/ (flat layout). Do not use a bare

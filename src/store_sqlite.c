@@ -199,7 +199,7 @@ static const char k_links_sql[] =
 
 static void set_err(char *err, size_t errlen, const char *msg)
 {
-    size_t n;
+    size_t n = 0;
 
     if (err == NULL || errlen == 0U) {
         return;
@@ -226,7 +226,7 @@ static int ensure_parent_dirs(const char *path, char *err, size_t errlen)
 {
     char buf[REMEMBER_PATH_MAX];
     size_t len = strlen(path);
-    size_t i;
+    size_t i = 0;
 
     if (len >= sizeof(buf)) {
         set_err(err, errlen, "database path is too long");
@@ -275,7 +275,7 @@ static void rollback_quiet(sqlite3 *db)
 static int read_user_version(sqlite3 *db, int *out, char *err, size_t errlen)
 {
     sqlite3_stmt *stmt = NULL;
-    int rc;
+    int rc = 0;
 
     rc = sqlite3_prepare_v2(db, "PRAGMA user_version;", -1, &stmt, NULL);
     if (rc != SQLITE_OK) {
@@ -489,7 +489,7 @@ void store_entry_free(Entry *e)
     free(e->key);
     free(e->body);
     if (e->tags != NULL) {
-        size_t i;
+        size_t i = 0;
         for (i = 0; i < e->ntags; i++) {
             free(e->tags[i]);
         }
@@ -512,8 +512,8 @@ void store_entry_free(Entry *e)
 
 static char *dup_str(const char *s)
 {
-    size_t n;
-    char *p;
+    size_t n = 0;
+    char *p = NULL;
 
     if (s == NULL) {
         return NULL;
@@ -536,10 +536,10 @@ static char *dup_str(const char *s)
 int utc_now(char *buf, size_t buflen)
 {
     struct timespec ts;
-    const struct tm *tmp;
+    const struct tm *tmp = NULL;
     struct tm tm;
-    size_t n;
-    int ms;
+    size_t n = 0;
+    int ms = 0;
 
     if (buf == NULL || buflen < 25U) {
         return -1;
@@ -575,7 +575,7 @@ static StoreStatus load_tags(sqlite3 *db, long long entry_id, char ***out_tags, 
     char **tags = NULL;
     size_t n = 0U;
     size_t cap = 0U;
-    int rc;
+    int rc = 0;
 
     *out_tags = NULL;
     *out_ntags = 0U;
@@ -593,15 +593,15 @@ static StoreStatus load_tags(sqlite3 *db, long long entry_id, char ***out_tags, 
 
     while ((rc = sqlite3_step(stmt)) == SQLITE_ROW) {
         const char *name = (const char *)sqlite3_column_text(stmt, 0);
-        char *copy;
-        char **grown;
+        char *copy = NULL;
+        char **grown = NULL;
 
         if (name == NULL) {
             continue;
         }
         copy = dup_str(name);
         if (copy == NULL) {
-            size_t i;
+            size_t i = 0;
             for (i = 0; i < n; i++) {
                 free(tags[i]);
             }
@@ -615,7 +615,7 @@ static StoreStatus load_tags(sqlite3 *db, long long entry_id, char ***out_tags, 
             if (grown == NULL) {
                 free(copy);
                 {
-                    size_t i;
+                    size_t i = 0;
                     for (i = 0; i < n; i++) {
                         free(tags[i]);
                     }
@@ -632,7 +632,7 @@ static StoreStatus load_tags(sqlite3 *db, long long entry_id, char ***out_tags, 
     }
     (void)sqlite3_finalize(stmt);
     if (rc != SQLITE_DONE) {
-        size_t i;
+        size_t i = 0;
         for (i = 0; i < n; i++) {
             free(tags[i]);
         }
@@ -648,13 +648,13 @@ static StoreStatus load_tags(sqlite3 *db, long long entry_id, char ***out_tags, 
  * id, key, body, source, created_at, updated_at, expires_at (key/expires_at may be NULL). */
 static StoreStatus fill_entry_from_row(sqlite3 *db, sqlite3_stmt *stmt, Entry *out)
 {
-    StoreStatus st;
-    const unsigned char *key_u;
-    const unsigned char *body_u;
-    const unsigned char *source_u;
-    const unsigned char *created_u;
-    const unsigned char *updated_u;
-    const unsigned char *expires_u;
+    StoreStatus st = STORE_OK;
+    const unsigned char *key_u = NULL;
+    const unsigned char *body_u = NULL;
+    const unsigned char *source_u = NULL;
+    const unsigned char *created_u = NULL;
+    const unsigned char *updated_u = NULL;
+    const unsigned char *expires_u = NULL;
 
     memset(out, 0, sizeof(*out));
     out->id = sqlite3_column_int64(stmt, 0);
@@ -710,7 +710,7 @@ static int entry_is_trash(const char *expires_at, const char *now)
 
 static StoreStatus bin_status(const Entry *e, bool trash, const char *now)
 {
-    int in_trash;
+    int in_trash = 0;
 
     if (e == NULL || now == NULL) {
         return STORE_ERR_INTERNAL;
@@ -725,7 +725,7 @@ static StoreStatus bin_status(const Entry *e, bool trash, const char *now)
 static StoreStatus load_then_check_bin(sqlite3 *db, long long id, const char *key_or_null,
                                        bool trash, const char *now, Entry *out)
 {
-    StoreStatus st;
+    StoreStatus st = STORE_OK;
 
     if (now == NULL || out == NULL) {
         return STORE_ERR_INTERNAL;
@@ -748,7 +748,7 @@ static StoreStatus load_then_check_bin(sqlite3 *db, long long id, const char *ke
 static StoreStatus write_expires_at(sqlite3 *db, long long id, const char *expires_at)
 {
     sqlite3_stmt *stmt = NULL;
-    int rc;
+    int rc = 0;
 
     rc = sqlite3_prepare_v2(db, "UPDATE entries SET expires_at = ?1 WHERE id = ?2;", -1, &stmt,
                             NULL);
@@ -772,8 +772,8 @@ static StoreStatus write_expires_at(sqlite3 *db, long long id, const char *expir
 static StoreStatus load_entry_by_id(sqlite3 *db, long long id, Entry *out)
 {
     sqlite3_stmt *stmt = NULL;
-    int rc;
-    StoreStatus st;
+    int rc = 0;
+    StoreStatus st = STORE_OK;
 
     rc = sqlite3_prepare_v2(db,
                             "SELECT id, key, body, source, created_at, updated_at, expires_at "
@@ -800,8 +800,8 @@ static StoreStatus load_entry_by_id(sqlite3 *db, long long id, Entry *out)
 static StoreStatus load_entry_by_key(sqlite3 *db, const char *key, Entry *out)
 {
     sqlite3_stmt *stmt = NULL;
-    int rc;
-    StoreStatus st;
+    int rc = 0;
+    StoreStatus st = STORE_OK;
 
     if (key == NULL) {
         return STORE_ERR_INTERNAL;
@@ -831,9 +831,9 @@ static StoreStatus load_entry_by_key(sqlite3 *db, const char *key, Entry *out)
 /* Space-joined tag names for FTS (heap; caller frees). Empty tags → "". */
 static char *join_tags_space(const char *const *tags, size_t ntags)
 {
-    size_t i;
+    size_t i = 0;
     size_t total = 0U;
-    char *buf;
+    char *buf = NULL;
     size_t pos = 0U;
 
     if (ntags == 0U || tags == NULL) {
@@ -861,7 +861,7 @@ static char *join_tags_space(const char *const *tags, size_t ntags)
         return NULL;
     }
     for (i = 0; i < ntags; i++) {
-        size_t len;
+        size_t len = 0;
         if (tags[i] == NULL) {
             continue;
         }
@@ -885,9 +885,9 @@ static StoreStatus fts_resync(sqlite3 *db, long long entry_id)
     char **tags = NULL;
     size_t ntags = 0U;
     char *tags_text = NULL;
-    const unsigned char *body_u;
+    const unsigned char *body_u = NULL;
     StoreStatus st = STORE_ERR_SQLITE;
-    int rc;
+    int rc = 0;
 
     rc = sqlite3_prepare_v2(db, "SELECT body FROM entries WHERE id = ?1;", -1, &sel, NULL);
     if (rc != SQLITE_OK) {
@@ -912,7 +912,7 @@ static StoreStatus fts_resync(sqlite3 *db, long long entry_id)
     }
     tags_text = join_tags_space((const char *const *)tags, ntags);
     if (tags_text == NULL) {
-        size_t i;
+        size_t i = 0;
         for (i = 0; i < ntags; i++) {
             free(tags[i]);
         }
@@ -954,7 +954,7 @@ cleanup:
     }
     (void)sqlite3_finalize(sel);
     {
-        size_t i;
+        size_t i = 0;
         for (i = 0; i < ntags; i++) {
             free(tags[i]);
         }
@@ -969,7 +969,7 @@ static StoreStatus ensure_tag(sqlite3 *db, const char *name, long long *out_tag_
 {
     sqlite3_stmt *ins = NULL;
     sqlite3_stmt *sel = NULL;
-    int rc;
+    int rc = 0;
 
     rc = sqlite3_prepare_v2(db, "INSERT OR IGNORE INTO tags(name) VALUES (?1);", -1, &ins, NULL);
     if (rc != SQLITE_OK) {
@@ -1000,7 +1000,7 @@ static StoreStatus ensure_tag(sqlite3 *db, const char *name, long long *out_tag_
 static StoreStatus link_tag(sqlite3 *db, long long entry_id, long long tag_id)
 {
     sqlite3_stmt *stmt = NULL;
-    int rc;
+    int rc = 0;
 
     rc = sqlite3_prepare_v2(
         db, "INSERT OR IGNORE INTO entry_tags(entry_id, tag_id) VALUES (?1, ?2);", -1, &stmt, NULL);
@@ -1020,14 +1020,14 @@ static StoreStatus link_tag(sqlite3 *db, long long entry_id, long long tag_id)
 static StoreStatus union_tags(sqlite3 *db, long long entry_id, const char *const *tags,
                               size_t ntags)
 {
-    size_t i;
+    size_t i = 0;
 
     if (tags == NULL || ntags == 0U) {
         return STORE_OK;
     }
     for (i = 0; i < ntags; i++) {
         long long tag_id = 0;
-        StoreStatus st;
+        StoreStatus st = STORE_OK;
 
         if (tags[i] == NULL) {
             continue;
@@ -1047,7 +1047,7 @@ static StoreStatus union_tags(sqlite3 *db, long long entry_id, const char *const
 static StoreStatus find_keyless_by_hash(sqlite3 *db, const char *body_hash, long long *out_id)
 {
     sqlite3_stmt *stmt = NULL;
-    int rc;
+    int rc = 0;
 
     rc = sqlite3_prepare_v2(db, "SELECT id FROM entries WHERE body_hash = ?1 AND key IS NULL;", -1,
                             &stmt, NULL);
@@ -1072,7 +1072,7 @@ static StoreStatus find_keyless_by_hash(sqlite3 *db, const char *body_hash, long
 static StoreStatus find_id_by_key(sqlite3 *db, const char *key, long long *out_id)
 {
     sqlite3_stmt *stmt = NULL;
-    int rc;
+    int rc = 0;
 
     rc = sqlite3_prepare_v2(db, "SELECT id FROM entries WHERE key = ?1;", -1, &stmt, NULL);
     if (rc != SQLITE_OK) {
@@ -1098,7 +1098,7 @@ static StoreStatus insert_entry(sqlite3 *db, const char *body, const char *body_
                                 const char *expires_at, long long *out_id)
 {
     sqlite3_stmt *stmt = NULL;
-    int rc;
+    int rc = 0;
 
     rc = sqlite3_prepare_v2(db,
                             "INSERT INTO entries(key, body, body_hash, source, created_at, "
@@ -1134,7 +1134,7 @@ static StoreStatus insert_entry(sqlite3 *db, const char *body, const char *body_
 static StoreStatus touch_updated_at(sqlite3 *db, long long id, const char *now)
 {
     sqlite3_stmt *stmt = NULL;
-    int rc;
+    int rc = 0;
 
     rc = sqlite3_prepare_v2(db, "UPDATE entries SET updated_at = ?1 WHERE id = ?2;", -1, &stmt,
                             NULL);
@@ -1155,7 +1155,7 @@ static StoreStatus replace_body(sqlite3 *db, long long id, const char *body, con
                                 const char *now)
 {
     sqlite3_stmt *stmt = NULL;
-    int rc;
+    int rc = 0;
 
     rc = sqlite3_prepare_v2(
         db, "UPDATE entries SET body = ?1, body_hash = ?2, updated_at = ?3 WHERE id = ?4;", -1,
@@ -1179,7 +1179,7 @@ static StoreStatus replace_body(sqlite3 *db, long long id, const char *body, con
 static StoreStatus maybe_revive(sqlite3 *db, long long id, const char *now, const char *expires_at)
 {
     Entry current;
-    StoreStatus st;
+    StoreStatus st = STORE_OK;
 
     memset(&current, 0, sizeof(current));
     st = load_entry_by_id(db, id, &current);
@@ -1199,7 +1199,7 @@ static StoreStatus add_keyed(sqlite3 *db, const char *body, const char *body_has
                              const char *now, const char *expires_at, long long *out_id,
                              StoreAddAction *out_action)
 {
-    StoreStatus st;
+    StoreStatus st = STORE_OK;
     long long id = 0;
 
     st = find_id_by_key(db, key, &id);
@@ -1242,7 +1242,7 @@ static StoreStatus add_keyless(sqlite3 *db, const char *body, const char *body_h
                                const char *now, const char *expires_at, long long *out_id,
                                StoreAddAction *out_action)
 {
-    StoreStatus st;
+    StoreStatus st = STORE_OK;
     long long id = 0;
 
     st = find_keyless_by_hash(db, body_hash, &id);
@@ -1286,7 +1286,7 @@ StoreStatus store_add(Store *s, const char *body, const char *body_hash, const c
 {
     long long id = 0;
     StoreAddAction action = STORE_ADD_CREATED;
-    StoreStatus st;
+    StoreStatus st = STORE_OK;
     char err_unused[1];
 
     if (s == NULL || s->db == NULL || body == NULL || body_hash == NULL || source == NULL ||
@@ -1353,7 +1353,7 @@ StoreStatus store_get_by_key(Store *s, const char *key, bool trash, const char *
 
 void store_tags_free(TagCount *tags, size_t count)
 {
-    size_t i;
+    size_t i = 0;
 
     if (tags == NULL) {
         return;
@@ -1371,8 +1371,8 @@ StoreStatus store_tags(Store *s, bool trash, const char *now, TagCount **out_tag
     TagCount *rows = NULL;
     size_t n = 0U;
     size_t cap = 0U;
-    int rc;
-    const char *sql;
+    int rc = 0;
+    const char *sql = NULL;
 
     if (s == NULL || s->db == NULL || now == NULL || out_tags == NULL || out_count == NULL) {
         return STORE_ERR_INTERNAL;
@@ -1404,7 +1404,7 @@ StoreStatus store_tags(Store *s, bool trash, const char *now, TagCount **out_tag
 
     while ((rc = sqlite3_step(stmt)) == SQLITE_ROW) {
         const char *name = (const char *)sqlite3_column_text(stmt, 0);
-        char *copy;
+        char *copy = NULL;
 
         if (name == NULL) {
             continue;
@@ -1443,7 +1443,7 @@ StoreStatus store_tags(Store *s, bool trash, const char *now, TagCount **out_tag
 
 static void free_entry_rows(Entry *rows, size_t n)
 {
-    size_t i;
+    size_t i = 0;
     for (i = 0; i < n; i++) {
         store_entry_free(&rows[i]);
     }
@@ -1455,7 +1455,7 @@ static StoreStatus list_append_row(sqlite3 *db, sqlite3_stmt *sel, Entry **rows,
 {
     Entry e;
     StoreStatus st = fill_entry_from_row(db, sel, &e);
-    Entry *grown;
+    Entry *grown = NULL;
 
     if (st != STORE_OK) {
         return st;
@@ -1480,7 +1480,7 @@ static int list_append_eq(char *sql, size_t sql_cap, size_t *pos, int *nbinds,
                           const char **bind_text, size_t bind_cap, const char *col,
                           const char *value)
 {
-    int n;
+    int n = 0;
 
     if (value == NULL) {
         return 0;
@@ -1500,7 +1500,7 @@ static int list_append_eq(char *sql, size_t sql_cap, size_t *pos, int *nbinds,
 static int list_append_tag_exists(char *sql, size_t sql_cap, size_t *pos, int *nbinds,
                                   const char **bind_text, size_t bind_cap, const char *tag)
 {
-    int n;
+    int n = 0;
 
     if (tag == NULL) {
         return 0;
@@ -1528,7 +1528,7 @@ static int list_append_tag_exists(char *sql, size_t sql_cap, size_t *pos, int *n
 static int list_append_bin(char *sql, size_t sql_cap, size_t *pos, int *nbinds,
                            const char **bind_text, size_t bind_cap, bool trash, const char *now)
 {
-    int n;
+    int n = 0;
 
     if (now == NULL) {
         return -1;
@@ -1554,7 +1554,7 @@ static int list_append_bin(char *sql, size_t sql_cap, size_t *pos, int *nbinds,
 static int list_append_filters(const ListQuery *q, char *sql, size_t sql_cap, size_t *pos,
                                int *nbinds, const char **bind_text, size_t bind_cap)
 {
-    size_t t;
+    size_t t = 0;
 
     if (q == NULL || sql == NULL || pos == NULL || nbinds == NULL || bind_text == NULL) {
         return -1;
@@ -1581,7 +1581,7 @@ static int list_build_where(const ListQuery *q, const char *now, char *sql, size
 {
     size_t pos = 0U;
     int nbinds = 0;
-    int n;
+    int n = 0;
 
     if (q == NULL || now == NULL || sql == NULL || sql_cap == 0U || out_nbinds == NULL ||
         bind_text == NULL) {
@@ -1613,7 +1613,7 @@ static int search_build_where(const SearchQuery *q, const char *now, char *sql, 
 {
     size_t pos = 0U;
     int nbinds = 0;
-    int n;
+    int n = 0;
 
     if (q == NULL || q->query == NULL || now == NULL || sql == NULL || sql_cap == 0U ||
         out_nbinds == NULL || bind_text == NULL || bind_cap < 1U) {
@@ -1660,7 +1660,7 @@ static StoreStatus store_status_plain(sqlite3 *db)
 
 static StoreStatus list_bind_texts(sqlite3_stmt *stmt, const char **bind_text, int nbinds)
 {
-    int i;
+    int i = 0;
     for (i = 0; i < nbinds; i++) {
         if (sqlite3_bind_text(stmt, i + 1, bind_text[i], -1, SQLITE_STATIC) != SQLITE_OK) {
             return STORE_ERR_SQLITE;
@@ -1696,8 +1696,8 @@ static StoreStatus run_count_and_page(sqlite3 *db, const char *count_sql, const 
     size_t n = 0U;
     size_t cap = 0U;
     size_t total = 0U;
-    int rc;
-    StoreStatus st;
+    int rc = 0;
+    StoreStatus st = STORE_OK;
 
     *out_entries = NULL;
     *out_count = 0U;
@@ -1768,7 +1768,7 @@ static StoreStatus list_query_exec(sqlite3 *db, const ListQuery *q, const char *
     char select_sql[LIST_SQL_CAP + 160];
     const char *bind_text[LIST_BIND_CAP];
     int nbinds = 0;
-    int sn;
+    int sn = 0;
 
     if (list_build_where(q, now, where_sql, sizeof(where_sql), &nbinds, bind_text, LIST_BIND_CAP) !=
         0) {
@@ -1794,7 +1794,7 @@ StoreStatus store_list(Store *s, const ListQuery *q, const char *now, Entry **ou
                        size_t *out_count, size_t *out_total)
 {
     char err_unused[1];
-    StoreStatus st;
+    StoreStatus st = STORE_OK;
 
     if (s == NULL || s->db == NULL || q == NULL || now == NULL || out_entries == NULL ||
         out_count == NULL || out_total == NULL) {
@@ -1841,7 +1841,7 @@ static StoreStatus search_query_exec(sqlite3 *db, const SearchQuery *q, const ch
     char select_sql[LIST_SQL_CAP + 256];
     const char *bind_text[LIST_BIND_CAP];
     int nbinds = 0;
-    int sn;
+    int sn = 0;
 
     if (search_build_where(q, now, where_sql, sizeof(where_sql), &nbinds, bind_text,
                            LIST_BIND_CAP) != 0) {
@@ -1873,7 +1873,7 @@ StoreStatus store_search(Store *s, const SearchQuery *q, const char *now, Entry 
                          size_t *out_count, size_t *out_total)
 {
     char err_unused[1];
-    StoreStatus st;
+    StoreStatus st = STORE_OK;
 
     if (s == NULL || s->db == NULL || q == NULL || q->query == NULL || now == NULL ||
         out_entries == NULL || out_count == NULL || out_total == NULL) {
@@ -1906,7 +1906,7 @@ StoreStatus store_search(Store *s, const SearchQuery *q, const char *now, Entry 
 static StoreStatus fts_delete(sqlite3 *db, long long entry_id)
 {
     sqlite3_stmt *del = NULL;
-    int rc;
+    int rc = 0;
 
     rc = sqlite3_prepare_v2(db, "DELETE FROM entries_fts WHERE rowid = ?1;", -1, &del, NULL);
     if (rc != SQLITE_OK) {
@@ -1947,10 +1947,10 @@ static StoreStatus delete_entry_tx(Store *s, long long id_or_zero, const char *k
                                    bool trash, const char *now, Entry *out_deleted)
 {
     char err_unused[1];
-    StoreStatus st;
+    StoreStatus st = STORE_OK;
     sqlite3_stmt *del = NULL;
     long long id = id_or_zero;
-    int rc;
+    int rc = 0;
 
     memset(out_deleted, 0, sizeof(*out_deleted));
 
@@ -2030,8 +2030,8 @@ static StoreStatus replace_tags(sqlite3 *db, long long entry_id, const char *con
                                 size_t ntags)
 {
     sqlite3_stmt *del = NULL;
-    StoreStatus st;
-    int rc;
+    StoreStatus st = STORE_OK;
+    int rc = 0;
 
     rc = sqlite3_prepare_v2(db, "DELETE FROM entry_tags WHERE entry_id = ?1;", -1, &del, NULL);
     if (rc != SQLITE_OK) {
@@ -2079,7 +2079,7 @@ static StoreStatus update_check_body_conflict(sqlite3 *db, long long entry_id, b
                                               const char *body_hash, long long *out_conflict_id)
 {
     long long other_id = 0;
-    StoreStatus st;
+    StoreStatus st = STORE_OK;
 
     if (!is_keyless) {
         return STORE_OK;
@@ -2107,7 +2107,7 @@ static StoreStatus update_apply_changes(sqlite3 *db, long long entry_id, bool is
                                         bool set_expires, const char *expires_at, const char *now,
                                         long long *out_conflict_id)
 {
-    StoreStatus st;
+    StoreStatus st = STORE_OK;
 
     if (set_body) {
         st = update_check_body_conflict(db, entry_id, is_keyless, body_hash, out_conflict_id);
@@ -2143,10 +2143,10 @@ StoreStatus store_update(Store *s, long long id, const char *key_or_null, bool s
                          long long *out_conflict_id)
 {
     char err_unused[1];
-    StoreStatus st;
+    StoreStatus st = STORE_OK;
     Entry current;
-    long long entry_id;
-    bool is_keyless;
+    long long entry_id = 0;
+    bool is_keyless = false;
 
     if (out_conflict_id != NULL) {
         *out_conflict_id = 0;
@@ -2196,12 +2196,12 @@ StoreStatus store_purge_trash(Store *s, const char *now, Entry **out_entries, si
     sqlite3_stmt *sel = NULL;
     sqlite3_stmt *del = NULL;
     char err_unused[1];
-    StoreStatus st;
+    StoreStatus st = STORE_OK;
     Entry *rows = NULL;
     size_t n = 0U;
     size_t cap = 0U;
-    size_t i;
-    int rc;
+    size_t i = 0;
+    int rc = 0;
 
     if (s == NULL || s->db == NULL || now == NULL || out_entries == NULL || out_count == NULL) {
         return STORE_ERR_INTERNAL;
@@ -2334,7 +2334,7 @@ void store_neighbor_free(StoreNeighbor *n)
 
 void store_neighbors_free(StoreNeighbor *rows, size_t count)
 {
-    size_t i;
+    size_t i = 0;
     if (rows == NULL) {
         return;
     }
@@ -2347,7 +2347,7 @@ void store_neighbors_free(StoreNeighbor *rows, size_t count)
 static StoreStatus require_entry_id(sqlite3 *db, long long id)
 {
     sqlite3_stmt *stmt = NULL;
-    int rc;
+    int rc = 0;
 
     rc = sqlite3_prepare_v2(db, "SELECT 1 FROM entries WHERE id = ?1;", -1, &stmt, NULL);
     if (rc != SQLITE_OK) {
@@ -2382,7 +2382,7 @@ static StoreStatus fill_stub(sqlite3 *db, long long subject_id, long long row_fr
 {
     Entry e;
     long long nid = (row_from == subject_id) ? row_to : row_from;
-    StoreStatus st;
+    StoreStatus st = STORE_OK;
 
     memset(out, 0, sizeof(*out));
     memset(&e, 0, sizeof(e));
@@ -2413,7 +2413,7 @@ static StoreStatus fill_stub(sqlite3 *db, long long subject_id, long long row_fr
 static StoreStatus supersedes_reaches(sqlite3 *db, long long start, long long target, bool *out)
 {
     sqlite3_stmt *stmt = NULL;
-    int rc;
+    int rc = 0;
 
     *out = false;
     rc = sqlite3_prepare_v2(db,
@@ -2447,7 +2447,7 @@ static StoreStatus find_edge(sqlite3 *db, long long from_id, long long to_id, St
                              bool *present)
 {
     sqlite3_stmt *stmt = NULL;
-    int rc;
+    int rc = 0;
     const char *tok = edge_kind_token(kind);
 
     *present = false;
@@ -2479,7 +2479,7 @@ static StoreStatus insert_edge(sqlite3 *db, long long from_id, long long to_id, 
                                const char *now)
 {
     sqlite3_stmt *stmt = NULL;
-    int rc;
+    int rc = 0;
     const char *tok = edge_kind_token(kind);
 
     if (tok == NULL) {
@@ -2505,7 +2505,7 @@ static StoreStatus touch_edge(sqlite3 *db, long long from_id, long long to_id, S
                               const char *now)
 {
     sqlite3_stmt *stmt = NULL;
-    int rc;
+    int rc = 0;
     const char *tok = edge_kind_token(kind);
 
     if (tok == NULL) {
@@ -2553,7 +2553,7 @@ StoreStatus store_link(Store *s, long long from_id, long long to_id, StoreEdgeKi
     long long stored_to = to_id;
     bool present = false;
     bool cycle = false;
-    StoreStatus st;
+    StoreStatus st = STORE_OK;
 
     if (s == NULL || s->db == NULL || now == NULL || out_action == NULL || out_stub == NULL) {
         return STORE_ERR_INTERNAL;
@@ -2633,18 +2633,18 @@ static StoreStatus collect_unlink_matches(sqlite3 *db, sqlite3_stmt *sel, long l
     StoreNeighbor *rows = NULL;
     size_t n = 0U;
     size_t cap = 0U;
-    int rc;
+    int rc = 0;
 
     *out = NULL;
     *out_n = 0U;
     while ((rc = sqlite3_step(sel)) == SQLITE_ROW) {
         StoreNeighbor stub;
-        StoreEdgeKind kind;
+        StoreEdgeKind kind = STORE_EDGE_RELATED;
         long long from_id = sqlite3_column_int64(sel, 0);
         long long to_id = sqlite3_column_int64(sel, 1);
         const char *ktok = (const char *)sqlite3_column_text(sel, 2);
         const char *upd = (const char *)sqlite3_column_text(sel, 3);
-        StoreNeighbor *grown;
+        StoreNeighbor *grown = NULL;
 
         if (parse_edge_kind(ktok, &kind) != 0) {
             store_neighbors_free(rows, n);
@@ -2697,8 +2697,8 @@ StoreStatus store_unlink(Store *s, long long from_id, long long to_id, const Sto
     char err_unused[1];
     sqlite3_stmt *sel = NULL;
     sqlite3_stmt *del = NULL;
-    StoreStatus st;
-    int rc;
+    StoreStatus st = STORE_OK;
+    int rc = 0;
     const char *tok = NULL;
     long long stored_from = from_id;
     long long stored_to = to_id;
@@ -2795,15 +2795,15 @@ static StoreStatus neighbors_from_stmt(sqlite3_stmt *stmt, StoreNeighbor **out, 
     StoreNeighbor *rows = NULL;
     size_t n = 0U;
     size_t cap = 0U;
-    int rc;
+    int rc = 0;
 
     *out = NULL;
     *out_n = 0U;
     while ((rc = sqlite3_step(stmt)) == SQLITE_ROW) {
         StoreNeighbor row;
-        StoreEdgeKind kind;
+        StoreEdgeKind kind = STORE_EDGE_RELATED;
         const char *ktok = (const char *)sqlite3_column_text(stmt, 3);
-        StoreNeighbor *grown;
+        StoreNeighbor *grown = NULL;
 
         memset(&row, 0, sizeof(row));
         if (parse_edge_kind(ktok, &kind) != 0) {
@@ -2865,7 +2865,7 @@ static int build_neighbors_sql(char *sql, size_t cap, long long subject_id, Stor
                                const char *tok)
 {
     size_t pos = 0U;
-    int n;
+    int n = 0;
 
     n = snprintf(
         sql, cap,
@@ -2908,9 +2908,9 @@ StoreStatus store_list_neighbors(Store *s, long long subject_id, const StoreEdge
 {
     sqlite3_stmt *stmt = NULL;
     char sql[768];
-    int rc;
+    int rc = 0;
     const char *tok = NULL;
-    StoreStatus st;
+    StoreStatus st = STORE_OK;
 
     if (s == NULL || s->db == NULL || now == NULL || out == NULL || out_count == NULL) {
         return STORE_ERR_INTERNAL;
@@ -2946,10 +2946,10 @@ StoreStatus store_list_neighbors_for(Store *s, const long long *ids, size_t nids
     sqlite3_stmt *stmt = NULL;
     char sql[8192];
     size_t pos = 0U;
-    size_t i;
-    int n;
-    int rc;
-    StoreStatus st;
+    size_t i = 0;
+    int n = 0;
+    int rc = 0;
+    StoreStatus st = STORE_OK;
 
     if (s == NULL || s->db == NULL || now == NULL || out == NULL || out_count == NULL ||
         (nids > 0U && ids == NULL)) {
@@ -3000,7 +3000,7 @@ StoreStatus store_list_neighbors_for(Store *s, const long long *ids, size_t nids
 static StoreStatus load_body_hash(sqlite3 *db, long long id, char **out_hash)
 {
     sqlite3_stmt *stmt = NULL;
-    int rc;
+    int rc = 0;
 
     *out_hash = NULL;
     rc = sqlite3_prepare_v2(db, "SELECT body_hash FROM entries WHERE id = ?1;", -1, &stmt, NULL);
@@ -3021,7 +3021,7 @@ static StoreStatus load_body_hash(sqlite3 *db, long long id, char **out_hash)
 static StoreStatus write_key(sqlite3 *db, long long id, const char *key_or_null)
 {
     sqlite3_stmt *stmt = NULL;
-    int rc;
+    int rc = 0;
 
     rc = sqlite3_prepare_v2(db, "UPDATE entries SET key = ?1 WHERE id = ?2;", -1, &stmt, NULL);
     if (rc != SQLITE_OK) {
@@ -3042,7 +3042,7 @@ static StoreStatus rekey_set(sqlite3 *db, long long entry_id, const char *curren
                              const char *new_key, long long *out_conflict_id)
 {
     long long other = 0;
-    StoreStatus st;
+    StoreStatus st = STORE_OK;
 
     if (current_key != NULL && strcmp(current_key, new_key) == 0) {
         return STORE_OK;
@@ -3065,7 +3065,7 @@ static StoreStatus rekey_clear(sqlite3 *db, long long entry_id, const char *curr
 {
     char *hash = NULL;
     long long other = 0;
-    StoreStatus st;
+    StoreStatus st = STORE_OK;
 
     if (current_key == NULL) {
         return STORE_OK;
@@ -3094,8 +3094,8 @@ StoreStatus store_rekey(Store *s, long long id, const char *key_or_null,
 {
     char err_unused[1];
     Entry current;
-    StoreStatus st;
-    long long entry_id;
+    StoreStatus st = STORE_OK;
+    long long entry_id = 0;
 
     if (out_conflict_id != NULL) {
         *out_conflict_id = 0;

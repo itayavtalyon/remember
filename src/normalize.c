@@ -89,7 +89,7 @@ static bool utf8_lead(unsigned char c, size_t *need, unsigned int *cp)
 /* Append continuation bytes; false if truncated or bad continuation. */
 static bool utf8_cont(const char *s, size_t len, size_t i, size_t need, unsigned int *cp)
 {
-    size_t j;
+    size_t j = 0;
 
     if (i + need > len) {
         return false;
@@ -160,10 +160,10 @@ static bool utf8_is_valid(const char *s, size_t len)
 
 NormStatus body_trim_copy(const char *src, size_t src_len, char **out, size_t *out_len)
 {
-    size_t start;
-    size_t end;
-    size_t n;
-    char *buf;
+    size_t start = 0;
+    size_t end = 0;
+    size_t n = 0;
+    char *buf = NULL;
 
     if (out == NULL) {
         return NORM_ERR_INTERNAL;
@@ -181,7 +181,7 @@ NormStatus body_trim_copy(const char *src, size_t src_len, char **out, size_t *o
        body, its length, and its hash all agree (no bytes after the terminator).
        Pure C11 (no strnlen — POSIX, and IWYU/glibc hide it under -std=c11). */
     {
-        size_t i;
+        size_t i = 0;
         for (i = 0; i < src_len; i++) {
             if (src[i] == '\0') {
                 src_len = i;
@@ -219,10 +219,10 @@ NormStatus body_trim_copy(const char *src, size_t src_len, char **out, size_t *o
 
 NormStatus normalize_token(const char *src, char *out, size_t out_cap)
 {
-    size_t start;
-    size_t end;
-    size_t n;
-    size_t i;
+    size_t start = 0;
+    size_t end = 0;
+    size_t n = 0;
+    size_t i = 0;
 
     /* No usable output buffer is a caller bug, not an over-long token. */
     if (out == NULL || out_cap == 0U) {
@@ -281,7 +281,7 @@ void body_hash_hex(const void *data, size_t len, char out_hex[REMEMBER_SHA256_HE
 {
     SHA256_CTX ctx;
     BYTE digest[SHA256_BLOCK_SIZE];
-    size_t i;
+    size_t i = 0;
     static const char k_hex[] = "0123456789abcdef";
 
     /* Empty-string digest is well-defined (NIST vector); callers reject empty

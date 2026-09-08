@@ -37,7 +37,7 @@ static const char *cursor_peek(const ArgCursor *c)
 
 static const char *cursor_next(ArgCursor *c)
 {
-    const char *arg;
+    const char *arg = NULL;
 
     if (cursor_done(c)) {
         return NULL;
@@ -77,7 +77,7 @@ enum { COMMAND_COUNT = (int)(sizeof(k_commands) / sizeof(k_commands[0])) };
 /* Linear scan: n is tiny. A hash map would be more code and mutable state. */
 static const CommandEntry *cmd_lookup(const char *name)
 {
-    int i;
+    int i = 0;
 
     if (name == NULL) {
         return NULL;
@@ -98,7 +98,7 @@ static CliCommand command_from_name(const char *name)
 
 const char *cli_command_name(CliCommand cmd)
 {
-    int i;
+    int i = 0;
     for (i = 0; i < COMMAND_COUNT; i++) {
         if (k_commands[i].command == cmd) {
             return k_commands[i].name;
@@ -109,7 +109,7 @@ const char *cli_command_name(CliCommand cmd)
 
 const char *cli_command_summary(CliCommand cmd)
 {
-    int i;
+    int i = 0;
     for (i = 0; i < COMMAND_COUNT; i++) {
         if (k_commands[i].command == cmd) {
             return k_commands[i].summary;
@@ -231,7 +231,7 @@ static bool take_global(ArgCursor *cur, CliArgs *out)
 
 static bool resolve_help_topic_token(CliArgs *out, const char *token)
 {
-    CliCommand topic;
+    CliCommand topic = CLI_CMD_NONE;
 
     if (token == NULL || looks_like_option(token)) {
         return true;

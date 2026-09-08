@@ -23,7 +23,7 @@ typedef struct {
 /* Shared by get/delete: --key, positional id, reject --source and unknowns. */
 static int parse_locator_args(int rest_argc, const char **rest_argv, LocatorParse *out)
 {
-    int i;
+    int i = 0;
     int end_opts = 0;
 
     out->key_raw = NULL;
@@ -109,8 +109,8 @@ int cmd_get(Store *s, bool json, int rest_argc, const char **rest_argv)
     char now[32];
     const char *key = NULL;
     long long id = 0;
-    StoreStatus st;
-    int rc;
+    StoreStatus st = STORE_OK;
+    int rc = 0;
 
     memset(&entry, 0, sizeof(entry));
     if (parse_locator_args(rest_argc, rest_argv, &parsed) != 0) {
@@ -140,7 +140,7 @@ int cmd_get(Store *s, bool json, int rest_argc, const char **rest_argv)
     {
         StoreNeighbor *links = NULL;
         size_t nlinks = 0U;
-        int wr;
+        int wr = 0;
 
         st = store_list_neighbors(s, entry.id, NULL, STORE_NEIGHBOR_ALL, now, &links, &nlinks);
         if (st != STORE_OK) {
@@ -174,8 +174,8 @@ int cmd_delete(Store *s, bool json, int rest_argc, const char **rest_argv)
     char now[32];
     const char *key = NULL;
     long long id = 0;
-    StoreStatus st;
-    int rc;
+    StoreStatus st = STORE_OK;
+    int rc = 0;
 
     memset(&entry, 0, sizeof(entry));
     if (parse_locator_args(rest_argc, rest_argv, &parsed) != 0) {
@@ -309,7 +309,7 @@ static int handle_update_flag(const char *arg, int *i, int rest_argc, const char
 static int parse_update_args(int rest_argc, const char **rest_argv, UpdateParse *out,
                              const char **err)
 {
-    int i;
+    int i = 0;
     int end_opts = 0;
     size_t tag_cap = 0U;
 
@@ -446,7 +446,7 @@ int cmd_update(Store *s, bool json, int rest_argc, const char **rest_argv)
     bool set_tags = false;
     const char *body_hash = NULL;
     Entry entry;
-    StoreStatus st;
+    StoreStatus st = STORE_OK;
     long long conflict_id = 0;
     int rc = REMEMBER_ERR;
 
@@ -569,7 +569,7 @@ static int handle_rekey_flag(const char *arg, int *i, int rest_argc, const char 
 
 static int parse_rekey_args(int rest_argc, const char **rest_argv, RekeyParse *out)
 {
-    int i;
+    int i = 0;
     int end_opts = 0;
 
     memset(out, 0, sizeof(*out));
@@ -608,9 +608,9 @@ int cmd_rekey(Store *s, bool json, int rest_argc, const char **rest_argv)
     long long id = 0;
     char now[32];
     Entry entry;
-    StoreStatus st;
+    StoreStatus st = STORE_OK;
     long long conflict_id = 0;
-    int rc;
+    int rc = 0;
 
     memset(&entry, 0, sizeof(entry));
     if (parse_rekey_args(rest_argc, rest_argv, &parsed) != 0) {
