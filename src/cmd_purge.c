@@ -12,7 +12,7 @@
 
 int cmd_purge_trash(Store *s, bool json, int rest_argc, const char **rest_argv)
 {
-    char now[32];
+    char now[ISO_TS_BUFSIZE];
     Entry *entries = NULL;
     size_t count = 0U;
     StoreStatus st = STORE_OK;

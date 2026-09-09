@@ -214,7 +214,7 @@ static int run_pair(Store *s, bool json, int rest_argc, const char **rest_argv, 
     PairParse p;
     StoreEdgeKind kind = STORE_EDGE_RELATED;
     const StoreEdgeKind *kind_ptr = NULL;
-    char now[32];
+    char now[ISO_TS_BUFSIZE];
     long long from_id = 0;
     long long to_id = 0;
     int rc = 0;
@@ -395,7 +395,7 @@ int cmd_related(Store *s, bool json, int rest_argc, const char **rest_argv)
     StoreEdgeKind kind = STORE_EDGE_RELATED;
     const StoreEdgeKind *kind_ptr = NULL;
     StoreNeighborDir dir = STORE_NEIGHBOR_ALL;
-    char now[32];
+    char now[ISO_TS_BUFSIZE];
     Entry subject;
     StoreNeighbor *rows = NULL;
     size_t n = 0U;

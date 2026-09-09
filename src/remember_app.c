@@ -229,8 +229,9 @@ static void print_parse_error(const CliArgs *args)
 /* Resolve path, optional sync-path warning, then open. Store stays path-pure. */
 static Store *open_store(const CliArgs *args, int *out_rc)
 {
+    enum { ERR_BUFSIZE = 256 }; /* store_open error-message buffer */
     char path[REMEMBER_PATH_MAX];
-    char err[256];
+    char err[ERR_BUFSIZE];
     Store *s = NULL;
 
     err[0] = '\0';

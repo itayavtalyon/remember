@@ -6,6 +6,37 @@
 #include <stdlib.h>
 #include <string.h>
 
+/* ---- ASCII / UTF-8 byte constants (RFC 3629) -----------------------------
+ * Kept unsigned so the mask/shift arithmetic below stays unsigned (avoids
+ * sign-conversion on the unsigned-int code point and signed-bitwise shifts). */
+static const unsigned ASCII_MAX = 0x7FU;             /* last single-byte code point */
+static const unsigned ASCII_DEL = 0x7FU;             /* DEL control */
+static const unsigned ASCII_FIRST_PRINTABLE = 0x20U; /* first non-control byte */
+
+static const unsigned UTF8_CONT_MASK = 0xC0U;
+static const unsigned UTF8_CONT_TAG = 0x80U;
+static const unsigned UTF8_CONT_PAYLOAD = 0x3FU;
+static const unsigned UTF8_CONT_SHIFT = 6U;
+static const unsigned UTF8_LEAD2_MASK = 0xE0U;
+static const unsigned UTF8_LEAD2_TAG = 0xC0U;
+static const unsigned UTF8_LEAD2_MIN = 0xC2U;
+static const unsigned UTF8_LEAD2_PAYLOAD = 0x1FU;
+static const unsigned UTF8_LEAD3_MASK = 0xF0U;
+static const unsigned UTF8_LEAD3_TAG = 0xE0U;
+static const unsigned UTF8_LEAD3_PAYLOAD = 0x0FU;
+static const unsigned UTF8_LEAD4_MASK = 0xF8U;
+static const unsigned UTF8_LEAD4_TAG = 0xF0U;
+static const unsigned UTF8_LEAD4_MAX = 0xF4U;
+static const unsigned UTF8_LEAD4_PAYLOAD = 0x07U;
+
+static const unsigned CP_2BYTE_MIN = 0x800U;
+static const unsigned CP_SURROGATE_MIN = 0xD800U;
+static const unsigned CP_SURROGATE_MAX = 0xDFFFU;
+static const unsigned CP_4BYTE_MIN = 0x10000U;
+static const unsigned CP_MAX = 0x10FFFFU;
+
+static const unsigned HEX_NIBBLE_MASK = 0x0FU;
+
 /* ---- ASCII class helpers ------------------------------------------------- */
 
 static bool is_ascii_ws(unsigned char c)
@@ -20,7 +51,7 @@ static bool is_ascii_ws(unsigned char c)
 
 static bool is_ascii_control(unsigned char c)
 {
-    if (c < 0x20U || c == 0x7FU) {
+    if (c < ASCII_FIRST_PRINTABLE || c == ASCII_DEL) {
         return true;
     }
     return false;
@@ -62,25 +93,25 @@ static void ascii_ws_trim_span(const char *s, size_t len, size_t *start_out, siz
 /* Decode one non-ASCII lead byte into need/cp_prefix; false = invalid lead. */
 static bool utf8_lead(unsigned char c, size_t *need, unsigned int *cp)
 {
-    if ((c & 0xE0U) == 0xC0U) {
-        if (c < 0xC2U) {
+    if ((c & UTF8_LEAD2_MASK) == UTF8_LEAD2_TAG) {
+        if (c < UTF8_LEAD2_MIN) {
             return false; /* overlong 2-byte */
         }
         *need = 2;
-        *cp = c & 0x1FU;
+        *cp = c & UTF8_LEAD2_PAYLOAD;
         return true;
     }
-    if ((c & 0xF0U) == 0xE0U) {
+    if ((c & UTF8_LEAD3_MASK) == UTF8_LEAD3_TAG) {
         *need = 3;
-        *cp = c & 0x0FU;
+        *cp = c & UTF8_LEAD3_PAYLOAD;
         return true;
     }
-    if ((c & 0xF8U) == 0xF0U) {
-        if (c > 0xF4U) {
+    if ((c & UTF8_LEAD4_MASK) == UTF8_LEAD4_TAG) {
+        if (c > UTF8_LEAD4_MAX) {
             return false; /* would exceed U+10FFFF */
         }
         *need = 4;
-        *cp = c & 0x07U;
+        *cp = c & UTF8_LEAD4_PAYLOAD;
         return true;
     }
     return false;
@@ -96,10 +127,10 @@ static bool utf8_cont(const char *s, size_t len, size_t i, size_t need, unsigned
     }
     for (j = 1; j < need; j++) {
         unsigned char cc = (unsigned char)s[i + j];
-        if ((cc & 0xC0U) != 0x80U) {
+        if ((cc & UTF8_CONT_MASK) != UTF8_CONT_TAG) {
             return false;
         }
-        *cp = (*cp << 6U) | (cc & 0x3FU);
+        *cp = (*cp << UTF8_CONT_SHIFT) | (cc & UTF8_CONT_PAYLOAD);
     }
     return true;
 }
@@ -108,16 +139,16 @@ static bool utf8_cont(const char *s, size_t len, size_t i, size_t need, unsigned
 static bool utf8_cp_ok(size_t need, unsigned int cp)
 {
     if (need == 3U) {
-        if (cp < 0x800U) {
+        if (cp < CP_2BYTE_MIN) {
             return false;
         }
-        if (cp >= 0xD800U && cp <= 0xDFFFU) {
+        if (cp >= CP_SURROGATE_MIN && cp <= CP_SURROGATE_MAX) {
             return false;
         }
         return true;
     }
     if (need == 4U) {
-        if (cp >= 0x10000U && cp <= 0x10FFFFU) {
+        if (cp >= CP_4BYTE_MIN && cp <= CP_MAX) {
             return true;
         }
         return false;
@@ -138,7 +169,7 @@ static bool utf8_is_valid(const char *s, size_t len)
         size_t need = 0;
         unsigned int cp = 0;
 
-        if (c <= 0x7FU) {
+        if (c <= ASCII_MAX) {
             i++;
             continue;
         }
@@ -296,8 +327,8 @@ void body_hash_hex(const void *data, size_t len, char out_hex[REMEMBER_SHA256_HE
         unsigned char b = digest[i];
         size_t hi = i * 2U;
         size_t lo = hi + 1U;
-        out_hex[hi] = k_hex[((unsigned int)b >> 4U) & 0x0FU];
-        out_hex[lo] = k_hex[b & 0x0FU];
+        out_hex[hi] = k_hex[((unsigned int)b >> 4U) & HEX_NIBBLE_MASK];
+        out_hex[lo] = k_hex[b & HEX_NIBBLE_MASK];
     }
     out_hex[REMEMBER_SHA256_HEX_LEN] = '\0';
 }

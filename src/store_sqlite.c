@@ -14,6 +14,14 @@ struct Store {
     sqlite3 *db;
 };
 
+/* Directory mode for the DB parent (rwx for owner only). */
+enum { DB_DIR_MODE = 0700 };
+/* ISO-8601 UTC timestamp helper: minimum buffer and the ".mmmZ" fraction suffix. */
+enum { ISO_TS_MIN_BUFLEN = 25, ISO_FRAC_SUFFIX_LEN = 5 };
+enum { NANOS_PER_MS = 1000000 };
+/* Initial element capacity for the geometric-growth dynamic arrays below. */
+enum { GROW_MIN_CAP = 8 };
+
 /* ---- optional fault injection (coverage / unit tests) --------------------
  * Deliberately mutable process-global counters: the store_test_fail_* setters are
  * the seam that drives OOM/SQLite-error paths from tests. Compiled only under
@@ -247,7 +255,7 @@ static int ensure_parent_dirs(const char *path, char *err, size_t errlen)
             continue;
         }
         buf[i] = '\0';
-        if (mkdir(buf, 0700) != 0) {
+        if (mkdir(buf, DB_DIR_MODE) != 0) {
             struct stat st;
             if (errno != EEXIST) {
                 /* Single-threaded CLI; strerror_r's signature is not portable (XSI vs GNU). */
@@ -551,7 +559,7 @@ int utc_now(char *buf, size_t buflen)
     size_t n = 0;
     int ms = 0;
 
-    if (buf == NULL || buflen < 25U) {
+    if (buf == NULL || buflen < (size_t)ISO_TS_MIN_BUFLEN) {
         return -1;
     }
     if (timespec_get(&ts, TIME_UTC) != TIME_UTC) {
@@ -567,8 +575,8 @@ int utc_now(char *buf, size_t buflen)
     }
     /* C11: timespec_get(TIME_UTC) yields tv_nsec in [0, 999999999], so
        nsec/1e6 is always in [0, 999] — no clamp branches (coverage-dead). */
-    ms = (int)(ts.tv_nsec / 1000000);
-    if (snprintf(buf + n, buflen - n, ".%03dZ", ms) != 5) {
+    ms = (int)(ts.tv_nsec / NANOS_PER_MS);
+    if (snprintf(buf + n, buflen - n, ".%03dZ", ms) != ISO_FRAC_SUFFIX_LEN) {
         return -1;
     }
     return 0;
@@ -657,6 +665,16 @@ static StoreStatus load_tags(sqlite3 *db, long long entry_id, char ***out_tags, 
  * id, key, body, source, created_at, updated_at, expires_at (key/expires_at may be NULL). */
 static StoreStatus fill_entry_from_row(sqlite3 *db, sqlite3_stmt *stmt, Entry *out)
 {
+    /* Column order of the entry SELECT this row comes from. */
+    enum {
+        COL_ID = 0,
+        COL_KEY = 1,
+        COL_BODY = 2,
+        COL_SOURCE = 3,
+        COL_CREATED_AT = 4,
+        COL_UPDATED_AT = 5,
+        COL_EXPIRES_AT = 6
+    };
     StoreStatus st = STORE_OK;
     const unsigned char *key_u = NULL;
     const unsigned char *body_u = NULL;
@@ -666,13 +684,13 @@ static StoreStatus fill_entry_from_row(sqlite3 *db, sqlite3_stmt *stmt, Entry *o
     const unsigned char *expires_u = NULL;
 
     memset(out, 0, sizeof(*out));
-    out->id = sqlite3_column_int64(stmt, 0);
-    key_u = sqlite3_column_text(stmt, 1);
-    body_u = sqlite3_column_text(stmt, 2);
-    source_u = sqlite3_column_text(stmt, 3);
-    created_u = sqlite3_column_text(stmt, 4);
-    updated_u = sqlite3_column_text(stmt, 5);
-    expires_u = sqlite3_column_text(stmt, 6);
+    out->id = sqlite3_column_int64(stmt, COL_ID);
+    key_u = sqlite3_column_text(stmt, COL_KEY);
+    body_u = sqlite3_column_text(stmt, COL_BODY);
+    source_u = sqlite3_column_text(stmt, COL_SOURCE);
+    created_u = sqlite3_column_text(stmt, COL_CREATED_AT);
+    updated_u = sqlite3_column_text(stmt, COL_UPDATED_AT);
+    expires_u = sqlite3_column_text(stmt, COL_EXPIRES_AT);
 
     if (body_u == NULL || source_u == NULL || created_u == NULL || updated_u == NULL) {
         return STORE_ERR_SQLITE;
@@ -1116,20 +1134,30 @@ static StoreStatus insert_entry(sqlite3 *db, const char *body, const char *body_
     if (rc != SQLITE_OK) {
         return STORE_ERR_SQLITE;
     }
+    /* ?N bind positions of the INSERT above. */
+    enum {
+        BIND_KEY = 1,
+        BIND_BODY = 2,
+        BIND_BODY_HASH = 3,
+        BIND_SOURCE = 4,
+        BIND_CREATED_AT = 5,
+        BIND_UPDATED_AT = 6,
+        BIND_EXPIRES_AT = 7
+    };
     if (key_or_null == NULL) {
-        (void)sqlite3_bind_null(stmt, 1);
+        (void)sqlite3_bind_null(stmt, BIND_KEY);
     } else {
-        (void)sqlite3_bind_text(stmt, 1, key_or_null, -1, SQLITE_STATIC);
+        (void)sqlite3_bind_text(stmt, BIND_KEY, key_or_null, -1, SQLITE_STATIC);
     }
-    (void)sqlite3_bind_text(stmt, 2, body, -1, SQLITE_STATIC);
-    (void)sqlite3_bind_text(stmt, 3, body_hash, -1, SQLITE_STATIC);
-    (void)sqlite3_bind_text(stmt, 4, source, -1, SQLITE_STATIC);
-    (void)sqlite3_bind_text(stmt, 5, now, -1, SQLITE_STATIC);
-    (void)sqlite3_bind_text(stmt, 6, now, -1, SQLITE_STATIC);
+    (void)sqlite3_bind_text(stmt, BIND_BODY, body, -1, SQLITE_STATIC);
+    (void)sqlite3_bind_text(stmt, BIND_BODY_HASH, body_hash, -1, SQLITE_STATIC);
+    (void)sqlite3_bind_text(stmt, BIND_SOURCE, source, -1, SQLITE_STATIC);
+    (void)sqlite3_bind_text(stmt, BIND_CREATED_AT, now, -1, SQLITE_STATIC);
+    (void)sqlite3_bind_text(stmt, BIND_UPDATED_AT, now, -1, SQLITE_STATIC);
     if (expires_at == NULL) {
-        (void)sqlite3_bind_null(stmt, 7);
+        (void)sqlite3_bind_null(stmt, BIND_EXPIRES_AT);
     } else {
-        (void)sqlite3_bind_text(stmt, 7, expires_at, -1, SQLITE_STATIC);
+        (void)sqlite3_bind_text(stmt, BIND_EXPIRES_AT, expires_at, -1, SQLITE_STATIC);
     }
     if (sqlite3_step(stmt) != SQLITE_DONE) {
         (void)sqlite3_finalize(stmt);
@@ -1425,7 +1453,7 @@ StoreStatus store_tags(Store *s, bool trash, const char *now, TagCount **out_tag
             return STORE_ERR_OOM;
         }
         if (n == cap) {
-            size_t ncap = (cap == 0U) ? 8U : cap * 2U;
+            size_t ncap = (cap == 0U) ? (size_t)GROW_MIN_CAP : cap * 2U;
             TagCount *grown = (TagCount *)realloc((void *)rows, ncap * sizeof(*grown));
             if (grown == NULL) {
                 free(copy);
@@ -1470,7 +1498,7 @@ static StoreStatus list_append_row(sqlite3 *db, sqlite3_stmt *sel, Entry **rows,
         return st;
     }
     if (*n == *cap) {
-        size_t ncap = (*cap == 0U) ? 8U : (*cap * 2U);
+        size_t ncap = (*cap == 0U) ? (size_t)GROW_MIN_CAP : (*cap * 2U);
         grown = (Entry *)realloc((void *)*rows, ncap * sizeof(*grown));
         if (grown == NULL) {
             store_entry_free(&e);
@@ -1772,9 +1800,12 @@ static StoreStatus run_count_and_page(sqlite3 *db, const char *count_sql, const 
 static StoreStatus list_query_exec(sqlite3 *db, const ListQuery *q, const char *now,
                                    Entry **out_entries, size_t *out_count, size_t *out_total)
 {
+    /* Headroom beyond where_sql for the COUNT / SELECT framing (columns,
+       ORDER BY, LIMIT/OFFSET) wrapped around it. */
+    enum { COUNT_FRAME_MARGIN = 64, SELECT_FRAME_MARGIN = 160 };
     char where_sql[LIST_SQL_CAP];
-    char count_sql[LIST_SQL_CAP + 64];
-    char select_sql[LIST_SQL_CAP + 160];
+    char count_sql[LIST_SQL_CAP + COUNT_FRAME_MARGIN];
+    char select_sql[LIST_SQL_CAP + SELECT_FRAME_MARGIN];
     const char *bind_text[LIST_BIND_CAP];
     int nbinds = 0;
     int sn = 0;
@@ -1845,9 +1876,12 @@ StoreStatus store_list(Store *s, const ListQuery *q, const char *now, Entry **ou
 static StoreStatus search_query_exec(sqlite3 *db, const SearchQuery *q, const char *now,
                                      Entry **out_entries, size_t *out_count, size_t *out_total)
 {
+    /* Headroom beyond where_sql for the COUNT / SELECT framing wrapped around it;
+       wider than the plain list path to hold the FTS join + snippet columns. */
+    enum { COUNT_FRAME_MARGIN = 128, SELECT_FRAME_MARGIN = 256 };
     char where_sql[LIST_SQL_CAP];
-    char count_sql[LIST_SQL_CAP + 128];
-    char select_sql[LIST_SQL_CAP + 256];
+    char count_sql[LIST_SQL_CAP + COUNT_FRAME_MARGIN];
+    char select_sql[LIST_SQL_CAP + SELECT_FRAME_MARGIN];
     const char *bind_text[LIST_BIND_CAP];
     int nbinds = 0;
     int sn = 0;
@@ -2801,6 +2835,18 @@ StoreStatus store_unlink(Store *s, long long from_id, long long to_id, const Sto
 
 static StoreStatus neighbors_from_stmt(sqlite3_stmt *stmt, StoreNeighbor **out, size_t *out_n)
 {
+    /* Column order of the neighbor SELECT feeding this loop. */
+    enum {
+        NCOL_SUBJECT_ID = 0,
+        NCOL_FROM_ID = 1,
+        NCOL_TO_ID = 2,
+        NCOL_KIND = 3,
+        NCOL_EDGE_UPDATED_AT = 4,
+        NCOL_NEIGHBOR_ID = 5,
+        NCOL_NEIGHBOR_KEY = 6,
+        NCOL_NEIGHBOR_BODY = 7,
+        NCOL_NEIGHBOR_EXPIRES_AT = 8
+    };
     StoreNeighbor *rows = NULL;
     size_t n = 0U;
     size_t cap = 0U;
@@ -2811,7 +2857,7 @@ static StoreStatus neighbors_from_stmt(sqlite3_stmt *stmt, StoreNeighbor **out, 
     while ((rc = sqlite3_step(stmt)) == SQLITE_ROW) {
         StoreNeighbor row;
         StoreEdgeKind kind = STORE_EDGE_RELATED;
-        const char *ktok = (const char *)sqlite3_column_text(stmt, 3);
+        const char *ktok = (const char *)sqlite3_column_text(stmt, NCOL_KIND);
         StoreNeighbor *grown = NULL;
 
         memset(&row, 0, sizeof(row));
@@ -2819,23 +2865,24 @@ static StoreStatus neighbors_from_stmt(sqlite3_stmt *stmt, StoreNeighbor **out, 
             store_neighbors_free(rows, n);
             return STORE_ERR_SQLITE;
         }
-        row.subject_id = sqlite3_column_int64(stmt, 0);
-        row.from_id = sqlite3_column_int64(stmt, 1);
-        row.to_id = sqlite3_column_int64(stmt, 2);
+        row.subject_id = sqlite3_column_int64(stmt, NCOL_SUBJECT_ID);
+        row.from_id = sqlite3_column_int64(stmt, NCOL_FROM_ID);
+        row.to_id = sqlite3_column_int64(stmt, NCOL_TO_ID);
         row.kind = kind;
-        row.edge_updated_at = dup_str((const char *)sqlite3_column_text(stmt, 4));
-        row.neighbor_id = sqlite3_column_int64(stmt, 5);
-        if (sqlite3_column_type(stmt, 6) != SQLITE_NULL) {
-            row.neighbor_key = dup_str((const char *)sqlite3_column_text(stmt, 6));
+        row.edge_updated_at = dup_str((const char *)sqlite3_column_text(stmt, NCOL_EDGE_UPDATED_AT));
+        row.neighbor_id = sqlite3_column_int64(stmt, NCOL_NEIGHBOR_ID);
+        if (sqlite3_column_type(stmt, NCOL_NEIGHBOR_KEY) != SQLITE_NULL) {
+            row.neighbor_key = dup_str((const char *)sqlite3_column_text(stmt, NCOL_NEIGHBOR_KEY));
             if (row.neighbor_key == NULL) {
                 store_neighbor_free(&row);
                 store_neighbors_free(rows, n);
                 return STORE_ERR_OOM;
             }
         }
-        row.neighbor_body = dup_str((const char *)sqlite3_column_text(stmt, 7));
-        if (sqlite3_column_type(stmt, 8) != SQLITE_NULL) {
-            row.neighbor_expires_at = dup_str((const char *)sqlite3_column_text(stmt, 8));
+        row.neighbor_body = dup_str((const char *)sqlite3_column_text(stmt, NCOL_NEIGHBOR_BODY));
+        if (sqlite3_column_type(stmt, NCOL_NEIGHBOR_EXPIRES_AT) != SQLITE_NULL) {
+            row.neighbor_expires_at =
+                dup_str((const char *)sqlite3_column_text(stmt, NCOL_NEIGHBOR_EXPIRES_AT));
             if (row.neighbor_expires_at == NULL) {
                 store_neighbor_free(&row);
                 store_neighbors_free(rows, n);
@@ -2848,7 +2895,7 @@ static StoreStatus neighbors_from_stmt(sqlite3_stmt *stmt, StoreNeighbor **out, 
             return STORE_ERR_OOM;
         }
         if (n == cap) {
-            size_t ncap = (cap == 0U) ? 8U : (cap * 2U);
+            size_t ncap = (cap == 0U) ? (size_t)GROW_MIN_CAP : (cap * 2U);
             grown = (StoreNeighbor *)realloc(rows, ncap * sizeof(*grown));
             if (grown == NULL) {
                 store_neighbor_free(&row);
@@ -2915,8 +2962,9 @@ StoreStatus store_list_neighbors(Store *s, long long subject_id, const StoreEdge
                                  StoreNeighborDir dir, const char *now, StoreNeighbor **out,
                                  size_t *out_count)
 {
+    enum { NEIGHBORS_SQL_CAP = 768 };
     sqlite3_stmt *stmt = NULL;
-    char sql[768];
+    char sql[NEIGHBORS_SQL_CAP];
     int rc = 0;
     const char *tok = NULL;
     StoreStatus st = STORE_OK;
@@ -2952,8 +3000,9 @@ StoreStatus store_list_neighbors(Store *s, long long subject_id, const StoreEdge
 StoreStatus store_list_neighbors_for(Store *s, const long long *ids, size_t nids, const char *now,
                                      StoreNeighbor **out, size_t *out_count)
 {
+    enum { NEIGHBORS_FOR_SQL_CAP = 8192 };
     sqlite3_stmt *stmt = NULL;
-    char sql[8192];
+    char sql[NEIGHBORS_FOR_SQL_CAP];
     size_t pos = 0U;
     size_t i = 0;
     int n = 0;

@@ -13,6 +13,63 @@
 #include <string.h>
 #include <time.h>
 
+/* Radix for all decimal integer parsing. */
+enum { DECIMAL_BASE = 10 };
+
+/* Seconds in each TTL unit (m/h/d/w). Enumerators are int; they promote without
+   loss where the TTL/overflow math below is unsigned long long or long long. */
+enum {
+    SECS_PER_MIN = 60,
+    SECS_PER_HOUR = 3600,
+    SECS_PER_DAY = 86400,
+    SECS_PER_WEEK = 604800,
+};
+
+/* Time-of-day bounds and struct tm base offsets. */
+enum {
+    HOUR_MAX = 23,
+    MINUTE_MAX = 59,
+    SECOND_MAX = 59,
+    MS_MAX = 999,
+    YEAR_MAX = 9999,
+    TM_YEAR_BASE = 1900,
+};
+
+/* Howard Hinnant civil<->days algorithm constants (see days_from_civil). */
+enum {
+    DAYS_PER_ERA = 146097,     /* days in a 400-year Gregorian era */
+    DAYS_CIVIL_EPOCH = 719468, /* days from 0000-03-01 to 1970-01-01 */
+    YEARS_PER_ERA = 400,
+    YEARS_PER_CENTURY = 100,
+    DAYS_PER_COMMON_YEAR = 365,
+    DOY_NUMERATOR_MUL = 153,  /* month->day-of-year: (153*mp + 2)/5 */
+    DOY_DENOMINATOR = 5,
+    MONTH_JANFEB_OFFSET = 9,  /* month-index shift for Jan/Feb */
+};
+
+/* Canonical UTC stamp layout: "YYYY-MM-DDTHH:MM:SS.mmmZ" (24 chars + NUL).
+   *_OFF_* are field byte offsets; *_SEP_* are the separator byte offsets. */
+enum {
+    ISO_LEN = 24,
+    ISO_BUFSIZE = 25,       /* includes NUL; minimum outlen for a canonical stamp */
+    ISO_DATE_LEN = 10,      /* "YYYY-MM-DD" prefix */
+    ISO_SECONDS_LEN = 19,   /* "YYYY-MM-DDTHH:MM:SS" */
+    ISO_MINZ_LEN = 20,      /* seconds precision + 'Z' */
+    ISO_FRACZ_MIN_LEN = 22, /* seconds + '.' + >=1 frac digit + 'Z' */
+    ISO_OFF_MONTH = 5,
+    ISO_SEP_MONTH_DAY = 7,
+    ISO_OFF_DAY = 8,
+    ISO_SEP_DATE_TIME = 10,
+    ISO_OFF_HOUR = 11,
+    ISO_SEP_HOUR_MIN = 13,
+    ISO_OFF_MIN = 14,
+    ISO_SEP_MIN_SEC = 16,
+    ISO_OFF_SEC = 17,
+    ISO_OFF_DOT = 19,
+    ISO_OFF_FRAC = 20,
+    ISO_OFF_Z = 23,
+};
+
 int parse_entry_id(const char *raw, long long *out_id)
 {
     char *end = NULL;
@@ -22,7 +79,7 @@ int parse_entry_id(const char *raw, long long *out_id)
         return -1;
     }
     errno = 0;
-    id = strtoll(raw, &end, 10);
+    id = strtoll(raw, &end, DECIMAL_BASE);
     if (end == raw || (end != NULL && *end != '\0') || errno == ERANGE || id < 1) {
         return -1;
     }
@@ -274,11 +331,13 @@ static long long days_from_civil(int y, int m, int d)
     int yy = y;
 
     yy -= (m <= 2) ? 1 : 0;
-    era = (yy >= 0 ? yy : (yy - 399)) / 400;
-    yoe = (unsigned)(yy - (era * 400));
-    doy = ((((153U * (unsigned)(m + ((m > 2) ? -3 : 9))) + 2U) / 5U) + ((unsigned)d - 1U));
-    doe = (((yoe * 365U) + (yoe / 4U)) - (yoe / 100U)) + doy;
-    return (((long long)era * 146097LL) + (long long)doe) - 719468LL;
+    era = (yy >= 0 ? yy : (yy - (YEARS_PER_ERA - 1))) / YEARS_PER_ERA;
+    yoe = (unsigned)(yy - (era * YEARS_PER_ERA));
+    doy = ((((DOY_NUMERATOR_MUL * (unsigned)(m + ((m > 2) ? -3 : MONTH_JANFEB_OFFSET))) + 2U) /
+            DOY_DENOMINATOR) +
+           ((unsigned)d - 1U));
+    doe = (((yoe * DAYS_PER_COMMON_YEAR) + (yoe / 4U)) - (yoe / YEARS_PER_CENTURY)) + doy;
+    return (((long long)era * DAYS_PER_ERA) + (long long)doe) - DAYS_CIVIL_EPOCH;
 }
 
 static int unix_from_civil(int y, int mo, int d, int h, int mi, int se, long long *out)
@@ -287,14 +346,14 @@ static int unix_from_civil(int y, int mo, int d, int h, int mi, int se, long lon
     long long sec = 0;
 
     days = days_from_civil(y, mo, d);
-    if (days > LLONG_MAX / 86400LL || days < LLONG_MIN / 86400LL) {
+    if (days > LLONG_MAX / SECS_PER_DAY || days < LLONG_MIN / SECS_PER_DAY) {
         return -1;
     }
-    sec = days * 86400LL;
-    if (h < 0 || h > 23 || mi < 0 || mi > 59 || se < 0 || se > 59) {
+    sec = days * SECS_PER_DAY;
+    if (h < 0 || h > HOUR_MAX || mi < 0 || mi > MINUTE_MAX || se < 0 || se > SECOND_MAX) {
         return -1;
     }
-    sec += ((long long)h * 3600LL) + ((long long)mi * 60LL) + (long long)se;
+    sec += ((long long)h * SECS_PER_HOUR) + ((long long)mi * SECS_PER_MIN) + (long long)se;
     *out = sec;
     return 0;
 }
@@ -304,14 +363,14 @@ static int format_iso_mmmz(int y, int mo, int d, int h, int mi, int se, int ms, 
 {
     int n = 0;
 
-    if (out == NULL || outlen < 25U) {
+    if (out == NULL || outlen < ISO_BUFSIZE) {
         return -1;
     }
-    if (y < 1 || y > 9999) {
+    if (y < 1 || y > YEAR_MAX) {
         return -1;
     }
     n = snprintf(out, outlen, "%04d-%02d-%02dT%02d:%02d:%02d.%03dZ", y, mo, d, h, mi, se, ms);
-    if (n != 24) {
+    if (n != ISO_LEN) {
         return -1;
     }
     return 0;
@@ -326,7 +385,7 @@ static int parse_n_digits(const char *s, size_t n, int *out)
         if (s[i] < '0' || s[i] > '9') {
             return -1;
         }
-        v = (v * 10) + (int)(s[i] - '0');
+        v = (v * DECIMAL_BASE) + (int)(s[i] - '0');
     }
     *out = v;
     return 0;
@@ -334,17 +393,18 @@ static int parse_n_digits(const char *s, size_t n, int *out)
 
 static int parse_iso_mmmz(const char *s, int *y, int *mo, int *d, int *h, int *mi, int *se, int *ms)
 {
-    if (s == NULL || strlen(s) != 24U) {
+    if (s == NULL || strlen(s) != (size_t)ISO_LEN) {
         return -1;
     }
-    if (s[4] != '-' || s[7] != '-' || s[10] != 'T' || s[13] != ':' || s[16] != ':' ||
-        s[19] != '.' || s[23] != 'Z') {
+    if (s[4] != '-' || s[ISO_SEP_MONTH_DAY] != '-' || s[ISO_SEP_DATE_TIME] != 'T' ||
+        s[ISO_SEP_HOUR_MIN] != ':' || s[ISO_SEP_MIN_SEC] != ':' || s[ISO_OFF_DOT] != '.' ||
+        s[ISO_OFF_Z] != 'Z') {
         return -1;
     }
-    if (parse_n_digits(s, 4U, y) != 0 || parse_n_digits(s + 5, 2U, mo) != 0 ||
-        parse_n_digits(s + 8, 2U, d) != 0 || parse_n_digits(s + 11, 2U, h) != 0 ||
-        parse_n_digits(s + 14, 2U, mi) != 0 || parse_n_digits(s + 17, 2U, se) != 0 ||
-        parse_n_digits(s + 20, 3U, ms) != 0) {
+    if (parse_n_digits(s, 4U, y) != 0 || parse_n_digits(s + ISO_OFF_MONTH, 2U, mo) != 0 ||
+        parse_n_digits(s + ISO_OFF_DAY, 2U, d) != 0 || parse_n_digits(s + ISO_OFF_HOUR, 2U, h) != 0 ||
+        parse_n_digits(s + ISO_OFF_MIN, 2U, mi) != 0 || parse_n_digits(s + ISO_OFF_SEC, 2U, se) != 0 ||
+        parse_n_digits(s + ISO_OFF_FRAC, 3U, ms) != 0) {
         return -1;
     }
     return 0;
@@ -355,7 +415,7 @@ static int unix_to_iso_ms(long long unix_sec, int ms, char *out, size_t outlen)
     time_t tt = 0;
     struct tm tm;
 
-    if (ms < 0 || ms > 999) {
+    if (ms < 0 || ms > MS_MAX) {
         return -1;
     }
     tt = (time_t)unix_sec;
@@ -366,7 +426,8 @@ static int unix_to_iso_ms(long long unix_sec, int ms, char *out, size_t outlen)
     if (gmtime_r(&tt, &tm) == NULL) {
         return -1;
     }
-    return format_iso_mmmz(tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday, tm.tm_hour, tm.tm_min,
+    return format_iso_mmmz(tm.tm_year + TM_YEAR_BASE, tm.tm_mon + 1, tm.tm_mday, tm.tm_hour,
+                           tm.tm_min,
                            tm.tm_sec, ms, out, outlen);
 }
 
@@ -430,11 +491,11 @@ int parse_ttl_to_expires(const char *token, const char *now, char *out, size_t o
         return -1;
     }
     while (*p >= '0' && *p <= '9') {
-        if (n > (ULLONG_MAX - (unsigned long long)(*p - '0')) / 10ULL) {
+        if (n > (ULLONG_MAX - (unsigned long long)(*p - '0')) / DECIMAL_BASE) {
             *err = "invalid --ttl";
             return -1;
         }
-        n = (n * 10ULL) + (unsigned long long)(*p - '0');
+        n = (n * DECIMAL_BASE) + (unsigned long long)(*p - '0');
         p++;
     }
     if (*p == '\0' || p[1] != '\0') {
@@ -442,16 +503,16 @@ int parse_ttl_to_expires(const char *token, const char *now, char *out, size_t o
     }
     switch (*p) {
     case 'm':
-        mul = 60ULL;
+        mul = SECS_PER_MIN;
         break;
     case 'h':
-        mul = 3600ULL;
+        mul = SECS_PER_HOUR;
         break;
     case 'd':
-        mul = 86400ULL;
+        mul = SECS_PER_DAY;
         break;
     case 'w':
-        mul = 604800ULL;
+        mul = SECS_PER_WEEK;
         break;
     default:
         return -1;
@@ -490,20 +551,20 @@ static int expires_date_only(const char *token, char *out, size_t outlen)
     time_t sec = 0;
     struct tm utc;
 
-    if (strlen(token) != 10U || !match_mask(token, "dddd-dd-dd")) {
+    if (strlen(token) != (size_t)ISO_DATE_LEN || !match_mask(token, "dddd-dd-dd")) {
         return -1;
     }
-    if (parse_n_digits(token, 4U, &y) != 0 || parse_n_digits(token + 5, 2U, &mo) != 0 ||
-        parse_n_digits(token + 8, 2U, &d) != 0) {
+    if (parse_n_digits(token, 4U, &y) != 0 || parse_n_digits(token + ISO_OFF_MONTH, 2U, &mo) != 0 ||
+        parse_n_digits(token + ISO_OFF_DAY, 2U, &d) != 0) {
         return -1;
     }
     memset(&t, 0, sizeof(t));
-    t.tm_year = y - 1900;
+    t.tm_year = y - TM_YEAR_BASE;
     t.tm_mon = mo - 1;
     t.tm_mday = d;
-    t.tm_hour = 23;
-    t.tm_min = 59;
-    t.tm_sec = 59;
+    t.tm_hour = HOUR_MAX;
+    t.tm_min = MINUTE_MAX;
+    t.tm_sec = SECOND_MAX;
     t.tm_isdst = -1;
     sec = mktime(&t);
     if (sec == (time_t)-1) {
@@ -513,14 +574,14 @@ static int expires_date_only(const char *token, char *out, size_t outlen)
     if (gmtime_r(&sec, &utc) == NULL) {
         return -1;
     }
-    return format_iso_mmmz(utc.tm_year + 1900, utc.tm_mon + 1, utc.tm_mday, utc.tm_hour, utc.tm_min,
-                           utc.tm_sec, 999, out, outlen);
+    return format_iso_mmmz(utc.tm_year + TM_YEAR_BASE, utc.tm_mon + 1, utc.tm_mday, utc.tm_hour,
+                           utc.tm_min, utc.tm_sec, MS_MAX, out, outlen);
 }
 
 static int expires_utc_z(const char *token, char *out, size_t outlen)
 {
     size_t n = strlen(token);
-    char canon[25];
+    char canon[ISO_BUFSIZE];
     int y = 0;
     int mo = 0;
     int d = 0;
@@ -529,42 +590,42 @@ static int expires_utc_z(const char *token, char *out, size_t outlen)
     int se = 0;
     int ms = 0;
 
-    if (n < 20U || token[n - 1U] != 'Z') {
+    if (n < (size_t)ISO_MINZ_LEN || token[n - 1U] != 'Z') {
         return -1;
     }
-    if (!match_mask_n(token, "dddd-dd-ddTdd:dd:dd", 19U)) {
+    if (!match_mask_n(token, "dddd-dd-ddTdd:dd:dd", (size_t)ISO_SECONDS_LEN)) {
         return -1;
     }
-    if (n == 20U && token[19] == 'Z') {
-        memcpy(canon, token, 19U);
-        memcpy(canon + 19U, ".000Z", 6U);
-    } else if (n >= 22U && token[19] == '.') {
+    if (n == (size_t)ISO_MINZ_LEN && token[ISO_OFF_DOT] == 'Z') {
+        memcpy(canon, token, (size_t)ISO_SECONDS_LEN);
+        memcpy(canon + ISO_OFF_DOT, ".000Z", sizeof(".000Z"));
+    } else if (n >= (size_t)ISO_FRACZ_MIN_LEN && token[ISO_OFF_DOT] == '.') {
         size_t i = 0;
-        size_t frac_n = n - 21U; /* digits between . and Z; n>=22 => frac_n>=1 */
-        for (i = 20U; i < n - 1U; i++) {
+        size_t frac_n = n - (size_t)(ISO_OFF_FRAC + 1); /* frac digits; n>=22 => frac_n>=1 */
+        for (i = (size_t)ISO_OFF_FRAC; i < n - 1U; i++) {
             if (!digit(token[i])) {
                 return -1;
             }
         }
-        memcpy(canon, token, 20U); /* through the dot */
+        memcpy(canon, token, (size_t)ISO_OFF_FRAC); /* through the dot */
         if (frac_n >= 3U) {
-            memcpy(canon + 20U, token + 20U, 3U);
+            memcpy(canon + ISO_OFF_FRAC, token + ISO_OFF_FRAC, 3U);
         } else {
-            memcpy(canon + 20U, token + 20U, frac_n);
-            memset(canon + 20U + frac_n, '0', 3U - frac_n);
+            memcpy(canon + ISO_OFF_FRAC, token + ISO_OFF_FRAC, frac_n);
+            memset(canon + (size_t)ISO_OFF_FRAC + frac_n, '0', 3U - frac_n);
         }
-        canon[23] = 'Z';
-        canon[24] = '\0';
+        canon[ISO_OFF_Z] = 'Z';
+        canon[ISO_LEN] = '\0';
     } else {
         return -1;
     }
     if (parse_iso_mmmz(canon, &y, &mo, &d, &h, &mi, &se, &ms) != 0) {
         return -1;
     }
-    if (outlen < 25U) {
+    if (outlen < (size_t)ISO_BUFSIZE) {
         return -1;
     }
-    memcpy(out, canon, 25U);
+    memcpy(out, canon, (size_t)ISO_BUFSIZE);
     return 0;
 }
 
@@ -574,7 +635,7 @@ int parse_expires_to_iso(const char *token, char *out, size_t outlen, const char
     if (token == NULL || out == NULL) {
         return -1;
     }
-    if (strlen(token) == 10U) {
+    if (strlen(token) == (size_t)ISO_DATE_LEN) {
         if (expires_date_only(token, out, outlen) != 0) {
             return -1;
         }

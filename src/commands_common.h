@@ -11,6 +11,10 @@
 
 #include <stddef.h>
 
+/* Stack buffer size for a canonical ISO-8601 UTC timestamp
+   ("YYYY-MM-DDTHH:MM:SS.mmmZ", 24 bytes + NUL). Must be >= 25. */
+enum { ISO_TS_BUFSIZE = 32 };
+
 void err_msg(const char *msg);
 
 /* Parse a positive entry id token. 0 ok, -1 invalid (does not print). */

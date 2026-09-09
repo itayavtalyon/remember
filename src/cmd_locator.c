@@ -106,7 +106,7 @@ int cmd_get(Store *s, bool json, int rest_argc, const char **rest_argv)
     LocatorParse parsed;
     Entry entry;
     char key_norm[REMEMBER_TOKEN_MAX + 1];
-    char now[32];
+    char now[ISO_TS_BUFSIZE];
     const char *key = NULL;
     long long id = 0;
     StoreStatus st = STORE_OK;
@@ -171,7 +171,7 @@ int cmd_delete(Store *s, bool json, int rest_argc, const char **rest_argv)
     LocatorParse parsed;
     Entry entry;
     char key_norm[REMEMBER_TOKEN_MAX + 1];
-    char now[32];
+    char now[ISO_TS_BUFSIZE];
     const char *key = NULL;
     long long id = 0;
     StoreStatus st = STORE_OK;
@@ -249,8 +249,8 @@ static int handle_update_flag(const char *arg, int *i, int rest_argc, const char
                           "missing value for --key");
     }
     /* `--text=-` (or any `--text=VALUE`) is always a literal body, including "-". */
-    if (strncmp(arg, "--text=", 7) == 0) {
-        out->text_raw = arg + 7;
+    if (strncmp(arg, "--text=", sizeof("--text=") - 1U) == 0) {
+        out->text_raw = arg + (sizeof("--text=") - 1U);
         out->set_text = true;
         out->text_literal = true;
         return 0;
@@ -439,8 +439,8 @@ int cmd_update(Store *s, bool json, int rest_argc, const char **rest_argv)
     char *body = NULL;
     size_t body_len = 0U;
     char hash[REMEMBER_SHA256_HEX_LEN + 1];
-    char now[32];
-    char expires_iso[32];
+    char now[ISO_TS_BUFSIZE];
+    char expires_iso[ISO_TS_BUFSIZE];
     const char *expires_at = NULL;
     bool set_expires = false;
     bool set_tags = false;
@@ -606,7 +606,7 @@ int cmd_rekey(Store *s, bool json, int rest_argc, const char **rest_argv)
     const char *key = NULL;
     const char *new_key = NULL;
     long long id = 0;
-    char now[32];
+    char now[ISO_TS_BUFSIZE];
     Entry entry;
     StoreStatus st = STORE_OK;
     long long conflict_id = 0;

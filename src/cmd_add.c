@@ -138,8 +138,8 @@ int cmd_add(Store *s, bool json, int rest_argc, const char **rest_argv)
     char *body = NULL;
     size_t body_len = 0U;
     char hash[REMEMBER_SHA256_HEX_LEN + 1];
-    char now[32];
-    char expires_iso[32];
+    char now[ISO_TS_BUFSIZE];
+    char expires_iso[ISO_TS_BUFSIZE];
     const char *expires_at = NULL;
     const char *key_or_null = NULL;
     Entry entry;

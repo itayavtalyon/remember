@@ -17,7 +17,7 @@ int cmd_tags(Store *s, bool json, int rest_argc, const char **rest_argv)
     size_t count = 0U;
     StoreStatus st = STORE_OK;
     int rc = REMEMBER_ERR;
-    char now[32];
+    char now[ISO_TS_BUFSIZE];
     bool trash = false;
     int i = 0;
 

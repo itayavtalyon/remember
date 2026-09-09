@@ -5,6 +5,18 @@
 #include <stdio.h>
 #include <string.h>
 
+/* ASCII / UTF-8 byte constants (see also normalize.c). Unsigned to keep the
+   mask arithmetic unsigned. */
+static const unsigned ASCII_FIRST_PRINTABLE = 0x20U; /* first non-control byte */
+static const unsigned ASCII_DEL = 0x7FU;             /* DEL control */
+static const unsigned UTF8_HIGH_BIT = 0x80U;         /* set => multibyte lead/continuation */
+static const unsigned UTF8_LEAD2_MASK = 0xE0U;
+static const unsigned UTF8_LEAD2_TAG = 0xC0U;
+static const unsigned UTF8_LEAD3_MASK = 0xF0U;
+static const unsigned UTF8_LEAD3_TAG = 0xE0U;
+static const unsigned UTF8_LEAD4_MASK = 0xF8U;
+static const unsigned UTF8_LEAD4_TAG = 0xF0U;
+
 static const char *empty_str(void)
 {
     static const char e[] = "";
@@ -29,7 +41,7 @@ static int write_json_escape(FILE *out, unsigned char c)
     case '\t':
         return fputs("\\t", out);
     default:
-        if (c < 0x20U) {
+        if (c < ASCII_FIRST_PRINTABLE) {
             return fprintf(out, "\\u%04x", (unsigned)c);
         }
         return fputc((int)c, out);
@@ -260,7 +272,7 @@ static int is_terminal_ctrl(unsigned char c)
     if (c == (unsigned char)'\n' || c == (unsigned char)'\t') {
         return 0;
     }
-    return c < 0x20U || c == 0x7FU;
+    return c < ASCII_FIRST_PRINTABLE || c == ASCII_DEL;
 }
 
 int output_body_human(FILE *out, const char *body)
@@ -285,16 +297,16 @@ int output_body_human(FILE *out, const char *body)
 
 static size_t utf8_clen(unsigned char c)
 {
-    if ((c & 0x80U) == 0U) {
+    if ((c & UTF8_HIGH_BIT) == 0U) {
         return 1U;
     }
-    if ((c & 0xE0U) == 0xC0U) {
+    if ((c & UTF8_LEAD2_MASK) == UTF8_LEAD2_TAG) {
         return 2U;
     }
-    if ((c & 0xF0U) == 0xE0U) {
+    if ((c & UTF8_LEAD3_MASK) == UTF8_LEAD3_TAG) {
         return 3U;
     }
-    if ((c & 0xF8U) == 0xF0U) {
+    if ((c & UTF8_LEAD4_MASK) == UTF8_LEAD4_TAG) {
         return 4U;
     }
     return 1U;
@@ -478,7 +490,7 @@ static void fill_preview(char *dst, size_t dst_cap, const char *body, size_t max
             truncated = 1;
             break;
         }
-        if (c < 0x20U || c == 0x7FU) {
+        if (c < ASCII_FIRST_PRINTABLE || c == ASCII_DEL) {
             dst[o++] = '?';
         } else {
             size_t k = 0;

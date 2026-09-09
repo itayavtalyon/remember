@@ -17,6 +17,7 @@
 
 /* list / search: shared filter + paging parse, different store call + query. */
 
+enum { DECIMAL_BASE = 10 };
 enum { LIST_LIMIT_DEFAULT = 20 };
 enum { LIST_LIMIT_MAX = 1000 };
 /* Bounded well under the store's per-query parameter budget (LIST_BIND_CAP) so
@@ -33,7 +34,7 @@ static int parse_size_token(const char *raw, size_t *out)
         return -1;
     }
     errno = 0;
-    v = strtoull(raw, &end, 10);
+    v = strtoull(raw, &end, DECIMAL_BASE);
     if (end == raw || (end != NULL && *end != '\0') || errno == ERANGE) {
         return -1;
     }
@@ -433,7 +434,7 @@ int cmd_list(Store *s, bool json, int rest_argc, const char **rest_argv)
     size_t nlinks = 0U;
     StoreStatus st = STORE_OK;
     int rc = REMEMBER_ERR;
-    char now[32];
+    char now[ISO_TS_BUFSIZE];
 
     memset(&q, 0, sizeof(q));
     memset(key_norm, 0, sizeof(key_norm));
@@ -492,7 +493,7 @@ int cmd_search(Store *s, bool json, int rest_argc, const char **rest_argv)
     size_t nlinks = 0U;
     StoreStatus st = STORE_OK;
     int rc = REMEMBER_ERR;
-    char now[32];
+    char now[ISO_TS_BUFSIZE];
 
     memset(&q, 0, sizeof(q));
     memset(key_norm, 0, sizeof(key_norm));
