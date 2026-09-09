@@ -41,6 +41,16 @@ typedef struct {
     StoreNeighborDir dir;
 } NeighborQuery;
 
+/* Result of a counted, paged query: status plus (on success) the owned rows,
+   the page count, and the pre-page total. count/total returned together so they
+   cannot be transposed by the caller. */
+typedef struct {
+    StoreStatus st;
+    Entry *entries;
+    size_t count;
+    size_t total;
+} PageResult;
+
 /* ---- optional fault injection (coverage / unit tests) --------------------
  * Deliberately mutable process-global counters: the store_test_fail_* setters are
  * the seam that drives OOM/SQLite-error paths from tests. Compiled only under
@@ -1740,10 +1750,9 @@ enum { LIST_BIND_CAP = 64 };
  * failure is a database error); search passes store_status_from_sqlite (FTS-syntax
  * errors become STORE_ERR_QUERY). limit/offset bind at ?nbinds+1 / ?nbinds+2.
  */
-static StoreStatus run_count_and_page(sqlite3 *db, const char *count_sql, const char *select_sql,
-                                      const char **bind_text, int nbinds, size_t limit,
-                                      size_t offset, StoreStatus (*map_err)(sqlite3 *),
-                                      Entry **out_entries, size_t *out_count, size_t *out_total)
+static PageResult run_count_and_page(sqlite3 *db, const char *count_sql, const char *select_sql,
+                                     const char **bind_text, int nbinds, size_t limit, size_t offset,
+                                     StoreStatus (*map_err)(sqlite3 *))
 {
     sqlite3_stmt *count_stmt = NULL;
     sqlite3_stmt *sel = NULL;
@@ -1754,40 +1763,36 @@ static StoreStatus run_count_and_page(sqlite3 *db, const char *count_sql, const 
     int rc = 0;
     StoreStatus st = STORE_OK;
 
-    *out_entries = NULL;
-    *out_count = 0U;
-    *out_total = 0U;
-
     rc = sqlite3_prepare_v2(db, count_sql, -1, &count_stmt, NULL);
     if (rc != SQLITE_OK) {
-        return map_err(db);
+        return (PageResult){.st = map_err(db)};
     }
     st = list_bind_texts(count_stmt, bind_text, nbinds);
     if (st != STORE_OK) {
         (void)sqlite3_finalize(count_stmt);
-        return st;
+        return (PageResult){.st = st};
     }
     rc = sqlite3_step(count_stmt);
     if (rc != SQLITE_ROW) {
         (void)sqlite3_finalize(count_stmt);
-        return map_err(db);
+        return (PageResult){.st = map_err(db)};
     }
     total = (size_t)sqlite3_column_int64(count_stmt, 0);
     (void)sqlite3_finalize(count_stmt);
 
     rc = sqlite3_prepare_v2(db, select_sql, -1, &sel, NULL);
     if (rc != SQLITE_OK) {
-        return map_err(db);
+        return (PageResult){.st = map_err(db)};
     }
     st = list_bind_texts(sel, bind_text, nbinds);
     if (st != STORE_OK) {
         (void)sqlite3_finalize(sel);
-        return st;
+        return (PageResult){.st = st};
     }
     if (sqlite3_bind_int64(sel, nbinds + 1, (sqlite3_int64)limit) != SQLITE_OK ||
         sqlite3_bind_int64(sel, nbinds + 2, (sqlite3_int64)offset) != SQLITE_OK) {
         (void)sqlite3_finalize(sel);
-        return STORE_ERR_SQLITE;
+        return (PageResult){.st = STORE_ERR_SQLITE};
     }
 
     while ((rc = sqlite3_step(sel)) == SQLITE_ROW) {
@@ -1795,20 +1800,17 @@ static StoreStatus run_count_and_page(sqlite3 *db, const char *count_sql, const 
         if (st != STORE_OK) {
             free_entry_rows(rows, n);
             (void)sqlite3_finalize(sel);
-            return st;
+            return (PageResult){.st = st};
         }
     }
     if (rc != SQLITE_DONE) {
         free_entry_rows(rows, n);
         (void)sqlite3_finalize(sel);
-        return map_err(db);
+        return (PageResult){.st = map_err(db)};
     }
     (void)sqlite3_finalize(sel);
 
-    *out_entries = rows;
-    *out_count = n;
-    *out_total = total;
-    return STORE_OK;
+    return (PageResult){.st = STORE_OK, .entries = rows, .count = n, .total = total};
 }
 
 /*
@@ -1844,8 +1846,14 @@ static StoreStatus list_query_exec(sqlite3 *db, const ListQuery *q, const char *
     if (sn < 0 || (size_t)sn >= sizeof(select_sql)) {
         return STORE_ERR_INTERNAL;
     }
-    return run_count_and_page(db, count_sql, select_sql, bind_text, nbinds, q->limit, q->offset,
-                              store_status_plain, out_entries, out_count, out_total);
+    {
+        PageResult page = run_count_and_page(db, count_sql, select_sql, bind_text, nbinds, q->limit,
+                                             q->offset, store_status_plain);
+        *out_entries = page.entries;
+        *out_count = page.count;
+        *out_total = page.total;
+        return page.st;
+    }
 }
 
 StoreStatus store_list(Store *s, const ListQuery *q, const char *now, Entry **out_entries,
@@ -1925,9 +1933,15 @@ static StoreStatus search_query_exec(sqlite3 *db, const SearchQuery *q, const ch
     if (sn < 0 || (size_t)sn >= sizeof(select_sql)) {
         return STORE_ERR_INTERNAL;
     }
-    return run_count_and_page(db, count_sql, select_sql, bind_text, nbinds, q->filters.limit,
-                              q->filters.offset, store_status_from_sqlite, out_entries, out_count,
-                              out_total);
+    {
+        PageResult page = run_count_and_page(db, count_sql, select_sql, bind_text, nbinds,
+                                             q->filters.limit, q->filters.offset,
+                                             store_status_from_sqlite);
+        *out_entries = page.entries;
+        *out_count = page.count;
+        *out_total = page.total;
+        return page.st;
+    }
 }
 
 StoreStatus store_search(Store *s, const SearchQuery *q, const char *now, Entry **out_entries,

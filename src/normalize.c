@@ -72,8 +72,14 @@ static bool is_token_forbidden(unsigned char c)
     return false;
 }
 
-/* Span [start, end) after stripping leading/trailing ASCII whitespace. */
-static void ascii_ws_trim_span(const char *s, size_t len, size_t *start_out, size_t *end_out)
+/* A half-open [start, end) byte range. */
+typedef struct {
+    size_t start;
+    size_t end;
+} Span;
+
+/* [start, end) after stripping leading/trailing ASCII whitespace. */
+static Span ascii_ws_trim_span(const char *s, size_t len)
 {
     size_t start = 0;
     size_t end = len;
@@ -84,8 +90,7 @@ static void ascii_ws_trim_span(const char *s, size_t len, size_t *start_out, siz
     while (end > start && is_ascii_ws((unsigned char)s[end - 1U])) {
         end--;
     }
-    *start_out = start;
-    *end_out = end;
+    return (Span){.start = start, .end = end};
 }
 
 /* ---- UTF-8 (RFC 3629) ---------------------------------------------------- */
@@ -228,7 +233,11 @@ NormStatus body_trim_copy(const char *src, size_t src_len, char **out, size_t *o
         }
     }
 
-    ascii_ws_trim_span(src, src_len, &start, &end);
+    {
+        Span span = ascii_ws_trim_span(src, src_len);
+        start = span.start;
+        end = span.end;
+    }
     if (start >= end) {
         return NORM_ERR_EMPTY;
     }
@@ -272,7 +281,11 @@ NormStatus normalize_token(const char *src, char *out, size_t out_cap)
         return NORM_ERR_EMPTY;
     }
 
-    ascii_ws_trim_span(src, strlen(src), &start, &end);
+    {
+        Span span = ascii_ws_trim_span(src, strlen(src));
+        start = span.start;
+        end = span.end;
+    }
     if (start >= end) {
         return NORM_ERR_EMPTY;
     }
