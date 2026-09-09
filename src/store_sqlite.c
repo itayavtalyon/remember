@@ -41,16 +41,6 @@ typedef struct {
     StoreNeighborDir dir;
 } NeighborQuery;
 
-/* Result of a counted, paged query: status plus (on success) the owned rows,
-   the page count, and the pre-page total. count/total returned together so they
-   cannot be transposed by the caller. */
-typedef struct {
-    StoreStatus st;
-    Entry *entries;
-    size_t count;
-    size_t total;
-} PageResult;
-
 /* ---- optional fault injection (coverage / unit tests) --------------------
  * Deliberately mutable process-global counters: the store_test_fail_* setters are
  * the seam that drives OOM/SQLite-error paths from tests. Compiled only under
@@ -1817,8 +1807,7 @@ static PageResult run_count_and_page(sqlite3 *db, const char *count_sql, const c
  * List: newest-first page with filters. count_sql/select_sql pad LIST_SQL_CAP for
  * the fixed SELECT column list + ORDER BY + LIMIT/OFFSET that frame where_sql.
  */
-static StoreStatus list_query_exec(sqlite3 *db, const ListQuery *q, const char *now,
-                                   Entry **out_entries, size_t *out_count, size_t *out_total)
+static PageResult list_query_exec(sqlite3 *db, const ListQuery *q, const char *now)
 {
     /* Headroom beyond where_sql for the COUNT / SELECT framing (columns,
        ORDER BY, LIMIT/OFFSET) wrapped around it. */
@@ -1832,11 +1821,11 @@ static StoreStatus list_query_exec(sqlite3 *db, const ListQuery *q, const char *
 
     if (list_build_where(q, now, where_sql, sizeof(where_sql), &nbinds, bind_text, LIST_BIND_CAP) !=
         0) {
-        return STORE_ERR_INTERNAL;
+        return (PageResult){.st = STORE_ERR_INTERNAL};
     }
     sn = snprintf(count_sql, sizeof(count_sql), "SELECT COUNT(*) FROM entries e%s;", where_sql);
     if (sn < 0 || (size_t)sn >= sizeof(count_sql)) {
-        return STORE_ERR_INTERNAL;
+        return (PageResult){.st = STORE_ERR_INTERNAL};
     }
     sn = snprintf(select_sql, sizeof(select_sql),
                   "SELECT e.id, e.key, e.body, e.source, e.created_at, e.updated_at, e.expires_at "
@@ -1844,52 +1833,38 @@ static StoreStatus list_query_exec(sqlite3 *db, const ListQuery *q, const char *
                   "LIMIT ?%d OFFSET ?%d;",
                   where_sql, nbinds + 1, nbinds + 2);
     if (sn < 0 || (size_t)sn >= sizeof(select_sql)) {
-        return STORE_ERR_INTERNAL;
+        return (PageResult){.st = STORE_ERR_INTERNAL};
     }
-    {
-        PageResult page = run_count_and_page(db, count_sql, select_sql, bind_text, nbinds, q->limit,
-                                             q->offset, store_status_plain);
-        *out_entries = page.entries;
-        *out_count = page.count;
-        *out_total = page.total;
-        return page.st;
-    }
+    return run_count_and_page(db, count_sql, select_sql, bind_text, nbinds, q->limit, q->offset,
+                              store_status_plain);
 }
 
-StoreStatus store_list(Store *s, const ListQuery *q, const char *now, Entry **out_entries,
-                       size_t *out_count, size_t *out_total)
+PageResult store_list(Store *s, const ListQuery *q, const char *now)
 {
     char err_unused[1];
-    StoreStatus st = STORE_OK;
+    PageResult page = {.st = STORE_OK};
 
-    if (s == NULL || s->db == NULL || q == NULL || now == NULL || out_entries == NULL ||
-        out_count == NULL || out_total == NULL) {
-        return STORE_ERR_INTERNAL;
+    if (s == NULL || s->db == NULL || q == NULL || now == NULL) {
+        return (PageResult){.st = STORE_ERR_INTERNAL};
     }
-    *out_entries = NULL;
-    *out_count = 0U;
-    *out_total = 0U;
 
     /* One read transaction: COUNT and the paged SELECT see the same snapshot, so
-     *out_total and the page cannot disagree if a writer commits mid-list. */
+       total and the page cannot disagree if a writer commits mid-list. */
     if (exec_sql(s->db, "BEGIN;", err_unused, 0U) != 0) {
-        return STORE_ERR_SQLITE;
+        return (PageResult){.st = STORE_ERR_SQLITE};
     }
-    st = list_query_exec(s->db, q, now, out_entries, out_count, out_total);
-    if (st != STORE_OK) {
+    page = list_query_exec(s->db, q, now);
+    if (page.st != STORE_OK) {
         rollback_quiet(s->db);
-        return st;
+        return page;
     }
     if (exec_sql(s->db, "COMMIT;", err_unused, 0U) != 0) {
         /* Unwind the page we built so the caller sees a clean failure. */
         rollback_quiet(s->db);
-        free_entry_rows(*out_entries, *out_count);
-        *out_entries = NULL;
-        *out_count = 0U;
-        *out_total = 0U;
-        return STORE_ERR_SQLITE;
+        free_entry_rows(page.entries, page.count);
+        return (PageResult){.st = STORE_ERR_SQLITE};
     }
-    return STORE_OK;
+    return page;
 }
 
 /*
@@ -1899,8 +1874,7 @@ StoreStatus store_list(Store *s, const ListQuery *q, const char *now, Entry **ou
  * the real table name in bm25(), not an alias. count_sql/select_sql pad
  * LIST_SQL_CAP for the JOIN + bm25 ORDER BY text that frame where_sql.
  */
-static StoreStatus search_query_exec(sqlite3 *db, const SearchQuery *q, const char *now,
-                                     Entry **out_entries, size_t *out_count, size_t *out_total)
+static PageResult search_query_exec(sqlite3 *db, const SearchQuery *q, const char *now)
 {
     /* Headroom beyond where_sql for the COUNT / SELECT framing wrapped around it;
        wider than the plain list path to hold the FTS join + snippet columns. */
@@ -1914,14 +1888,14 @@ static StoreStatus search_query_exec(sqlite3 *db, const SearchQuery *q, const ch
 
     if (search_build_where(q, now, where_sql, sizeof(where_sql), &nbinds, bind_text,
                            LIST_BIND_CAP) != 0) {
-        return STORE_ERR_INTERNAL;
+        return (PageResult){.st = STORE_ERR_INTERNAL};
     }
     sn = snprintf(count_sql, sizeof(count_sql),
                   "SELECT COUNT(*) FROM entries e "
                   "JOIN entries_fts ON entries_fts.rowid = e.id%s;",
                   where_sql);
     if (sn < 0 || (size_t)sn >= sizeof(count_sql)) {
-        return STORE_ERR_INTERNAL;
+        return (PageResult){.st = STORE_ERR_INTERNAL};
     }
     sn = snprintf(select_sql, sizeof(select_sql),
                   "SELECT e.id, e.key, e.body, e.source, e.created_at, e.updated_at, e.expires_at "
@@ -1931,50 +1905,35 @@ static StoreStatus search_query_exec(sqlite3 *db, const SearchQuery *q, const ch
                   "LIMIT ?%d OFFSET ?%d;",
                   where_sql, nbinds + 1, nbinds + 2);
     if (sn < 0 || (size_t)sn >= sizeof(select_sql)) {
-        return STORE_ERR_INTERNAL;
+        return (PageResult){.st = STORE_ERR_INTERNAL};
     }
-    {
-        PageResult page = run_count_and_page(db, count_sql, select_sql, bind_text, nbinds,
-                                             q->filters.limit, q->filters.offset,
-                                             store_status_from_sqlite);
-        *out_entries = page.entries;
-        *out_count = page.count;
-        *out_total = page.total;
-        return page.st;
-    }
+    return run_count_and_page(db, count_sql, select_sql, bind_text, nbinds, q->filters.limit,
+                              q->filters.offset, store_status_from_sqlite);
 }
 
-StoreStatus store_search(Store *s, const SearchQuery *q, const char *now, Entry **out_entries,
-                         size_t *out_count, size_t *out_total)
+PageResult store_search(Store *s, const SearchQuery *q, const char *now)
 {
     char err_unused[1];
-    StoreStatus st = STORE_OK;
+    PageResult page = {.st = STORE_OK};
 
-    if (s == NULL || s->db == NULL || q == NULL || q->query == NULL || now == NULL ||
-        out_entries == NULL || out_count == NULL || out_total == NULL) {
-        return STORE_ERR_INTERNAL;
+    if (s == NULL || s->db == NULL || q == NULL || q->query == NULL || now == NULL) {
+        return (PageResult){.st = STORE_ERR_INTERNAL};
     }
-    *out_entries = NULL;
-    *out_count = 0U;
-    *out_total = 0U;
 
     if (exec_sql(s->db, "BEGIN;", err_unused, 0U) != 0) {
-        return STORE_ERR_SQLITE;
+        return (PageResult){.st = STORE_ERR_SQLITE};
     }
-    st = search_query_exec(s->db, q, now, out_entries, out_count, out_total);
-    if (st != STORE_OK) {
+    page = search_query_exec(s->db, q, now);
+    if (page.st != STORE_OK) {
         rollback_quiet(s->db);
-        return st;
+        return page;
     }
     if (exec_sql(s->db, "COMMIT;", err_unused, 0U) != 0) {
         rollback_quiet(s->db);
-        free_entry_rows(*out_entries, *out_count);
-        *out_entries = NULL;
-        *out_count = 0U;
-        *out_total = 0U;
-        return STORE_ERR_SQLITE;
+        free_entry_rows(page.entries, page.count);
+        return (PageResult){.st = STORE_ERR_SQLITE};
     }
-    return STORE_OK;
+    return page;
 }
 
 /* Remove FTS row for entry_id (no-op if already gone). */

@@ -455,7 +455,13 @@ int cmd_list(Store *s, bool json, int rest_argc, const char **rest_argv)
         err_msg("internal error");
         goto cleanup;
     }
-    st = store_list(s, &q, now, &entries, &count, &total);
+    {
+        PageResult page = store_list(s, &q, now);
+        st = page.st;
+        entries = page.entries;
+        count = page.count;
+        total = page.total;
+    }
     if (st != STORE_OK) {
         err_msg(store_status_message(st));
         goto cleanup;
@@ -516,7 +522,13 @@ int cmd_search(Store *s, bool json, int rest_argc, const char **rest_argv)
         err_msg("internal error");
         goto cleanup;
     }
-    st = store_search(s, &q, now, &entries, &count, &total);
+    {
+        PageResult page = store_search(s, &q, now);
+        st = page.st;
+        entries = page.entries;
+        count = page.count;
+        total = page.total;
+    }
     if (st != STORE_OK) {
         err_msg(store_status_message(st));
         goto cleanup;

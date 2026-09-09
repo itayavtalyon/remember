@@ -108,27 +108,37 @@ typedef struct {
 } ListQuery;
 
 /*
+ * Result of a counted, paged query (store_list / store_search). On st == STORE_OK,
+ * entries is a heap array of count Entries (free each with store_entry_free, then
+ * free the array) and total is the unpaged count; on error entries is NULL and
+ * count/total are 0. count and total travel together so they cannot be transposed.
+ */
+typedef struct {
+    StoreStatus st;
+    Entry *entries;
+    size_t count;
+    size_t total;
+} PageResult;
+
+/*
  * List entries newest-first (updated_at DESC, id DESC) with optional filters.
  * now is required (canonical .mmmZ). Bin filter: active (default) or trash.
- * On STORE_OK: *out_entries is a heap array of *out_count Entries (free each
- * with store_entry_free, then free the array); *out_total is the unpaged count.
+ * See PageResult for ownership.
  */
-StoreStatus store_list(Store *s, const ListQuery *q, const char *now, Entry **out_entries,
-                       size_t *out_count, size_t *out_total);
+PageResult store_list(Store *s, const ListQuery *q, const char *now);
 
 /*
  * Ranked FTS5 search. query is raw FTS5 MATCH syntax (required, non-empty at CLI).
  * filters reuse ListQuery: tag AND, optional source/key, limit/offset.
  * Rank: bm25(entries_fts) ASC, then updated_at DESC, id DESC.
- * On STORE_OK: same ownership as store_list. STORE_ERR_QUERY on bad MATCH syntax.
+ * Same ownership as store_list (see PageResult). STORE_ERR_QUERY on bad MATCH syntax.
  */
 typedef struct {
     const char *query; /* FTS5 MATCH string */
     ListQuery filters;
 } SearchQuery;
 
-StoreStatus store_search(Store *s, const SearchQuery *q, const char *now, Entry **out_entries,
-                         size_t *out_count, size_t *out_total);
+PageResult store_search(Store *s, const SearchQuery *q, const char *now);
 
 /*
  * Hard-delete one entry. Under one write transaction: load snapshot, remove FTS

@@ -693,10 +693,22 @@ TEST(store_expires_at_equal_now_is_trash)
 
     memset(&q, 0, sizeof(q));
     q.limit = 20U;
-    ASSERT_EQ_INT((int)store_list(s, &q, k_now, &rows, &count, &total), (int)STORE_OK);
+    {
+        PageResult page = store_list(s, &q, k_now);
+        ASSERT_EQ_INT((int)page.st, (int)STORE_OK);
+        rows = page.entries;
+        count = page.count;
+        total = page.total;
+    }
     ASSERT_EQ_INT((int)total, 0);
     q.trash = true;
-    ASSERT_EQ_INT((int)store_list(s, &q, k_now, &rows, &count, &total), (int)STORE_OK);
+    {
+        PageResult page = store_list(s, &q, k_now);
+        ASSERT_EQ_INT((int)page.st, (int)STORE_OK);
+        rows = page.entries;
+        count = page.count;
+        total = page.total;
+    }
     ASSERT_EQ_INT((int)total, 1);
     {
         size_t i;
@@ -720,7 +732,6 @@ TEST(store_list_and_search_bins)
     ListQuery q;
     SearchQuery sq;
     Entry *rows = NULL;
-    size_t count = 0U;
     size_t total = 0U;
     TagCount *tc = NULL;
     size_t ntags = 0U;
@@ -743,14 +754,24 @@ TEST(store_list_and_search_bins)
 
     memset(&q, 0, sizeof(q));
     q.limit = 20U;
-    ASSERT_EQ_INT((int)store_list(s, &q, k_now, &rows, &count, &total), (int)STORE_OK);
+    {
+        PageResult page = store_list(s, &q, k_now);
+        ASSERT_EQ_INT((int)page.st, (int)STORE_OK);
+        rows = page.entries;
+        total = page.total;
+    }
     ASSERT_EQ_INT((int)total, 1);
     ASSERT_STREQ(rows[0].body, "live helix");
     store_entry_free(&rows[0]);
     free(rows);
     rows = NULL;
     q.trash = true;
-    ASSERT_EQ_INT((int)store_list(s, &q, k_now, &rows, &count, &total), (int)STORE_OK);
+    {
+        PageResult page = store_list(s, &q, k_now);
+        ASSERT_EQ_INT((int)page.st, (int)STORE_OK);
+        rows = page.entries;
+        total = page.total;
+    }
     ASSERT_EQ_INT((int)total, 1);
     ASSERT_STREQ(rows[0].body, "dead helix");
     store_entry_free(&rows[0]);
@@ -760,14 +781,24 @@ TEST(store_list_and_search_bins)
     memset(&sq, 0, sizeof(sq));
     sq.query = "helix";
     sq.filters.limit = 20U;
-    ASSERT_EQ_INT((int)store_search(s, &sq, k_now, &rows, &count, &total), (int)STORE_OK);
+    {
+        PageResult page = store_search(s, &sq, k_now);
+        ASSERT_EQ_INT((int)page.st, (int)STORE_OK);
+        rows = page.entries;
+        total = page.total;
+    }
     ASSERT_EQ_INT((int)total, 1);
     ASSERT_STREQ(rows[0].body, "live helix");
     store_entry_free(&rows[0]);
     free(rows);
     rows = NULL;
     sq.filters.trash = true;
-    ASSERT_EQ_INT((int)store_search(s, &sq, k_now, &rows, &count, &total), (int)STORE_OK);
+    {
+        PageResult page = store_search(s, &sq, k_now);
+        ASSERT_EQ_INT((int)page.st, (int)STORE_OK);
+        rows = page.entries;
+        total = page.total;
+    }
     ASSERT_EQ_INT((int)total, 1);
     ASSERT_STREQ(rows[0].body, "dead helix");
     store_entry_free(&rows[0]);
@@ -1001,7 +1032,6 @@ TEST(store_purge_trash_deletes_only_expired)
     size_t n = 0U;
     ListQuery q;
     Entry *rows = NULL;
-    size_t count = 0U;
     size_t total = 0U;
     TagCount *tc = NULL;
     size_t ntags = 0U;
@@ -1030,14 +1060,24 @@ TEST(store_purge_trash_deletes_only_expired)
 
     memset(&q, 0, sizeof(q));
     q.limit = 20U;
-    ASSERT_EQ_INT((int)store_list(s, &q, k_now, &rows, &count, &total), (int)STORE_OK);
+    {
+        PageResult page = store_list(s, &q, k_now);
+        ASSERT_EQ_INT((int)page.st, (int)STORE_OK);
+        rows = page.entries;
+        total = page.total;
+    }
     ASSERT_EQ_INT((int)total, 1);
     ASSERT_STREQ(rows[0].body, "keep me");
     store_entry_free(&rows[0]);
     free(rows);
     q.trash = true;
     rows = NULL;
-    ASSERT_EQ_INT((int)store_list(s, &q, k_now, &rows, &count, &total), (int)STORE_OK);
+    {
+        PageResult page = store_list(s, &q, k_now);
+        ASSERT_EQ_INT((int)page.st, (int)STORE_OK);
+        rows = page.entries;
+        total = page.total;
+    }
     ASSERT_EQ_INT((int)total, 0);
 
     ASSERT_EQ_INT((int)store_tags(s, false, k_now, &tc, &ntags), (int)STORE_OK);
@@ -1090,7 +1130,13 @@ TEST(store_list_filters_and_paging)
     q.ntags = 2U;
     q.limit = 20U;
     q.offset = 0U;
-    ASSERT_EQ_INT((int)store_list(s, &q, k_now, &rows, &count, &total), (int)STORE_OK);
+    {
+        PageResult page = store_list(s, &q, k_now);
+        ASSERT_EQ_INT((int)page.st, (int)STORE_OK);
+        rows = page.entries;
+        count = page.count;
+        total = page.total;
+    }
     ASSERT_EQ_INT((int)count, 1);
     ASSERT_EQ_INT((int)total, 1);
     ASSERT_TRUE(rows != NULL && rows[0].body != NULL);
@@ -1104,7 +1150,13 @@ TEST(store_list_filters_and_paging)
     memset(&q, 0, sizeof(q));
     q.source = "agent";
     q.limit = 20U;
-    ASSERT_EQ_INT((int)store_list(s, &q, k_now, &rows, &count, &total), (int)STORE_OK);
+    {
+        PageResult page = store_list(s, &q, k_now);
+        ASSERT_EQ_INT((int)page.st, (int)STORE_OK);
+        rows = page.entries;
+        count = page.count;
+        total = page.total;
+    }
     ASSERT_EQ_INT((int)count, 1);
     ASSERT_STREQ(rows[0].body, "beta");
     for (i = 0; i < count; i++) {
@@ -1116,7 +1168,13 @@ TEST(store_list_filters_and_paging)
     memset(&q, 0, sizeof(q));
     q.key = "slot";
     q.limit = 20U;
-    ASSERT_EQ_INT((int)store_list(s, &q, k_now, &rows, &count, &total), (int)STORE_OK);
+    {
+        PageResult page = store_list(s, &q, k_now);
+        ASSERT_EQ_INT((int)page.st, (int)STORE_OK);
+        rows = page.entries;
+        count = page.count;
+        total = page.total;
+    }
     ASSERT_EQ_INT((int)total, 1);
     ASSERT_STREQ(rows[0].body, "gamma");
     for (i = 0; i < count; i++) {
@@ -1377,9 +1435,6 @@ TEST(store_list_prepare_fail)
     char *db = make_temp_db_path();
     char err[256];
     Store *s;
-    Entry *rows = NULL;
-    size_t count = 0U;
-    size_t total = 0U;
     ListQuery q;
     ASSERT_TRUE(db != NULL);
     s = store_open(db, err, sizeof(err));
@@ -1387,7 +1442,7 @@ TEST(store_list_prepare_fail)
     memset(&q, 0, sizeof(q));
     q.limit = 20U;
     store_test_fail_prepare_after(0);
-    ASSERT_EQ_INT((int)store_list(s, &q, k_now, &rows, &count, &total), (int)STORE_ERR_SQLITE);
+    ASSERT_EQ_INT((int)store_list(s, &q, k_now).st, (int)STORE_ERR_SQLITE);
     store_close(s);
     free(db);
 }
@@ -1398,9 +1453,6 @@ TEST(store_search_prepare_and_step_fail)
     char err[256];
     Store *s;
     Entry e;
-    Entry *rows = NULL;
-    size_t count = 0U;
-    size_t total = 0U;
     StoreAddAction act;
     SearchQuery q;
     ASSERT_TRUE(db != NULL);
@@ -1417,15 +1469,15 @@ TEST(store_search_prepare_and_step_fail)
 
     /* Fail COUNT prepare. */
     store_test_fail_prepare_after(0);
-    ASSERT_EQ_INT((int)store_search(s, &q, k_now, &rows, &count, &total), (int)STORE_ERR_SQLITE);
+    ASSERT_EQ_INT((int)store_search(s, &q, k_now).st, (int)STORE_ERR_SQLITE);
 
     /* COUNT prepare ok; fail SELECT prepare. */
     store_test_fail_prepare_after(1);
-    ASSERT_EQ_INT((int)store_search(s, &q, k_now, &rows, &count, &total), (int)STORE_ERR_SQLITE);
+    ASSERT_EQ_INT((int)store_search(s, &q, k_now).st, (int)STORE_ERR_SQLITE);
 
     /* COUNT step ok; fail first SELECT step. */
     store_test_fail_step_after(1);
-    ASSERT_EQ_INT((int)store_search(s, &q, k_now, &rows, &count, &total), (int)STORE_ERR_SQLITE);
+    ASSERT_EQ_INT((int)store_search(s, &q, k_now).st, (int)STORE_ERR_SQLITE);
 
     store_close(s);
     free(db);
@@ -1493,13 +1545,20 @@ static void sweep_list_faults(Store *s, const ListQuery *q, int i)
 {
     Entry *rows = NULL;
     size_t count = 0U;
-    size_t total = 0U;
 
     store_test_fail_prepare_after(i % 8);
-    (void)store_list(s, q, k_now, &rows, &count, &total);
+    {
+        PageResult page = store_list(s, q, k_now);
+        rows = page.entries;
+        count = page.count;
+    }
     sweep_free_page(&rows, count);
     store_test_fail_step_after(i % 5);
-    (void)store_list(s, q, k_now, &rows, &count, &total);
+    {
+        PageResult page = store_list(s, q, k_now);
+        rows = page.entries;
+        count = page.count;
+    }
     sweep_free_page(&rows, count);
 }
 
@@ -1507,7 +1566,6 @@ static void sweep_search_faults(Store *s, const char *const *tags, int i)
 {
     Entry *rows = NULL;
     size_t count = 0U;
-    size_t total = 0U;
     SearchQuery sq;
 
     memset(&sq, 0, sizeof(sq));
@@ -1517,10 +1575,18 @@ static void sweep_search_faults(Store *s, const char *const *tags, int i)
     sq.filters.tags = tags;
     sq.filters.ntags = 1U;
     store_test_fail_prepare_after(i % 4);
-    (void)store_search(s, &sq, k_now, &rows, &count, &total);
+    {
+        PageResult page = store_search(s, &sq, k_now);
+        rows = page.entries;
+        count = page.count;
+    }
     sweep_free_page(&rows, count);
     store_test_fail_step_after(i % 3);
-    (void)store_search(s, &sq, k_now, &rows, &count, &total);
+    {
+        PageResult page = store_search(s, &sq, k_now);
+        rows = page.entries;
+        count = page.count;
+    }
     sweep_free_page(&rows, count);
 }
 
