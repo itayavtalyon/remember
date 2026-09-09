@@ -8,9 +8,9 @@
 /* Copy the value of a `"key":"..."` JSON string field into out (empty if absent). */
 static void extract_json_str(const char *json, const char *key, char *out, size_t outsz)
 {
-    const char *p;
-    const char *end;
-    size_t len;
+    const char *p = NULL;
+    const char *end = NULL;
+    size_t len = 0;
 
     out[0] = '\0';
     p = (json != NULL) ? strstr(json, key) : NULL;
@@ -417,8 +417,8 @@ TEST(update_moves_entry_to_top_of_list)
     const char *a2[] = {"add", "second"};
     const char *uargs[] = {"update", "1", "--text", "first edited"};
     const char *largs[] = {"list", "--json"};
-    const char *p1;
-    const char *p2;
+    const char *p1 = NULL;
+    const char *p2 = NULL;
     ASSERT_TRUE(db != NULL);
     r = run_remember(db, a1, 2, NULL);
     cmd_result_free(&r);

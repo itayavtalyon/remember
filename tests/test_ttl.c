@@ -8,8 +8,8 @@
 
 static int json_has_expires_after_updated(const char *json)
 {
-    const char *u;
-    const char *e;
+    const char *u = NULL;
+    const char *e = NULL;
 
     if (json == NULL) {
         return 0;
@@ -39,8 +39,8 @@ TEST(add_ttl_1h_is_future_canonical)
     char *db = make_temp_db_path();
     const char *a[] = {"--json", "add", "--ttl", "1h", "temp"};
     CmdResult r;
-    const char *exp;
-    const char *upd;
+    const char *exp = NULL;
+    const char *upd = NULL;
 
     ASSERT_TRUE(db != NULL);
     r = run_remember(db, a, 5, NULL);
@@ -235,7 +235,7 @@ TEST(invalid_ttl_tokens)
     char *db = make_temp_db_path();
     const char *bad[][2] = {{"0", "0"},       {"7", "7"},   {"07d", "07d"}, {"7x", "7x"},
                             {"1.5d", "1.5d"}, {"1M", "1M"}, {"+7d", "+7d"}};
-    size_t i;
+    size_t i = 0;
     CmdResult r;
 
     ASSERT_TRUE(db != NULL);
@@ -255,7 +255,7 @@ TEST(human_list_has_related_column)
     const char *l[] = {"list"};
     CmdResult r;
     int pipes = 0;
-    const char *p;
+    const char *p = NULL;
 
     ASSERT_TRUE(db != NULL);
     r = run_remember(db, a, 4, NULL);
@@ -390,7 +390,7 @@ TEST(invalid_expires_tokens)
     char *db = make_temp_db_path();
     const char *bad[] = {"2020-01-01Z", "2020-01-01 00:00:00Z", "2020-01-01T00:00Z",
                          "2020-01-01T00:00:00+00:00", "2020-01-01T00:00:00."};
-    size_t i;
+    size_t i = 0;
     CmdResult r;
 
     ASSERT_TRUE(db != NULL);

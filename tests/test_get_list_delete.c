@@ -150,7 +150,7 @@ TEST(list_limit)
     CmdResult r;
     const char *largs[] = {"list", "--json", "--limit", "2"};
     int count = 0;
-    const char *p;
+    const char *p = NULL;
     ASSERT_TRUE(db != NULL);
     seed_three(db);
     r = run_remember(db, largs, 4, NULL);
@@ -169,9 +169,9 @@ TEST(list_limit_default_is_twenty)
 {
     char *db = make_temp_db_path();
     CmdResult r;
-    int i;
+    int i = 0;
     int count = 0;
-    const char *p;
+    const char *p = NULL;
     const char *largs[] = {"list", "--json"};
     ASSERT_TRUE(db != NULL);
     for (i = 0; i < 25; i++) {
@@ -280,7 +280,7 @@ TEST(list_too_many_tag_filters_rejected)
     char *db = make_temp_db_path();
     const char *args[103];
     CmdResult r;
-    size_t i;
+    size_t i = 0;
 
     ASSERT_TRUE(db != NULL);
     args[0] = "list";

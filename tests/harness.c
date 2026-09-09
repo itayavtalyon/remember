@@ -37,7 +37,7 @@ static bool buf_append(Buf *b, const char *src, size_t n)
 {
     if (b->len + n + 1U > b->cap) {
         size_t ncap = (b->cap != 0U) ? b->cap : 4096U;
-        char *nd;
+        char *nd = NULL;
         while (ncap < b->len + n + 1U) {
             ncap *= 2U;
         }
@@ -71,7 +71,7 @@ static void drain_two(int fd0, int fd1, char **out0, char **out1)
         struct pollfd pfds[2];
         int slot[2];
         int nfds = 0;
-        int i;
+        int i = 0;
 
         for (i = 0; i < 2; i++) {
             if (fds[i] >= 0) {
@@ -91,7 +91,7 @@ static void drain_two(int fd0, int fd1, char **out0, char **out1)
         for (i = 0; i < nfds; i++) {
             int idx = slot[i];
             char tmp[4096];
-            ssize_t n;
+            ssize_t n = 0;
 
             if ((pfds[i].revents & (POLLIN | POLLHUP | POLLERR)) == 0) {
                 continue;
@@ -143,7 +143,7 @@ static char **build_child_argv(const char *db_path, const char *const *args, siz
 {
     size_t argc = 3U + nargs;
     char **argv = (char **)calloc(argc + 1U, sizeof(*argv));
-    size_t i;
+    size_t i = 0;
 
     if (argv == NULL) {
         return NULL;
@@ -230,8 +230,8 @@ CmdResult run_remember(const char *db_path, const char *const *args, size_t narg
     int out_pipe[2] = {-1, -1};
     int err_pipe[2] = {-1, -1};
     int in_pipe[2] = {-1, -1};
-    char **argv;
-    pid_t pid;
+    char **argv = NULL;
+    pid_t pid = 0;
 
     if (g_remember_bin == NULL || db_path == NULL) {
         return harness_error("harness: missing binary or db path");
@@ -310,11 +310,11 @@ static void remove_temp_dir(const char *dir)
     DIR *d = opendir(dir);
 
     if (d != NULL) {
-        struct dirent *ent;
+        struct dirent *ent = NULL;
         while ((ent = readdir(d)) != NULL) {
             char path[4096];
             struct stat st;
-            int n;
+            int n = 0;
             if (strcmp(ent->d_name, ".") == 0 || strcmp(ent->d_name, "..") == 0) {
                 continue;
             }
@@ -335,7 +335,7 @@ static void remove_temp_dir(const char *dir)
 
 static void cleanup_temp_dirs(void)
 {
-    size_t i;
+    size_t i = 0;
     for (i = 0; i < g_temp_count; i++) {
         remove_temp_dir(g_temp_dirs[i]);
         free(g_temp_dirs[i]);
@@ -348,7 +348,7 @@ static void cleanup_temp_dirs(void)
 
 static void register_temp_dir(const char *dir)
 {
-    char *copy;
+    char *copy = NULL;
 
     if (!g_atexit_registered) {
         (void)atexit(cleanup_temp_dirs);
@@ -374,9 +374,9 @@ static void register_temp_dir(const char *dir)
 char *make_temp_db_path(void)
 {
     char tmpl[] = "/tmp/remember-test-XXXXXX";
-    char *dir;
-    char *path;
-    size_t n;
+    char *dir = NULL;
+    char *path = NULL;
+    size_t n = 0;
 
     dir = mkdtemp(tmpl);
     if (dir == NULL) {
@@ -394,7 +394,7 @@ char *make_temp_db_path(void)
 
 void trim_trailing_newlines(char *s)
 {
-    size_t n;
+    size_t n = 0;
     if (s == NULL) {
         return;
     }
@@ -407,9 +407,9 @@ void trim_trailing_newlines(char *s)
 
 long parse_id_stdout(const char *out)
 {
-    char *copy;
+    char *copy = NULL;
     char *end = NULL;
-    long id;
+    long id = 0;
 
     if (out == NULL) {
         return -1;
@@ -487,10 +487,10 @@ static bool shell_quote_append(char *dst, size_t cap, size_t *len, const char *s
 char *harness_sqlite_query_line(const char *db_path, const char *sql)
 {
     char cmd[1024];
-    FILE *fp;
+    FILE *fp = NULL;
     char line[512];
-    char *out;
-    size_t len;
+    char *out = NULL;
+    size_t len = 0;
 
     if (db_path == NULL || sql == NULL) {
         return NULL;
@@ -528,8 +528,8 @@ char *harness_sqlite_query_line(const char *db_path, const char *sql)
 
 char *dir_of_path(const char *file_path)
 {
-    char *copy;
-    char *slash;
+    char *copy = NULL;
+    char *slash = NULL;
 
     if (file_path == NULL) {
         return NULL;

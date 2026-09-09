@@ -199,10 +199,10 @@ TEST(search_human_preview_not_only_id)
 TEST(search_limit)
 {
     char *db = make_temp_db_path();
-    int i;
+    int i = 0;
     CmdResult r;
     int count = 0;
-    const char *p;
+    const char *p = NULL;
     const char *args[] = {"search", "--json", "--limit", "3", "unique"};
     ASSERT_TRUE(db != NULL);
     for (i = 0; i < 10; i++) {

@@ -10,7 +10,7 @@ static long add_body(const char *db, const char *body)
 {
     const char *a[] = {"add", body};
     CmdResult r;
-    long id;
+    long id = 0;
 
     r = run_remember(db, a, 2, NULL);
     id = (r.exit_code == 0) ? parse_id_stdout(r.out) : -1;
@@ -32,8 +32,8 @@ static int json_count_is(const char *json, int want)
 TEST(link_sugar_related_one_canonical_row)
 {
     char *db = make_temp_db_path();
-    long a;
-    long b;
+    long a = 0;
+    long b = 0;
     const char *link[] = {"--json", "link", "1", "2"};
     const char *again[] = {"--json", "link", "2", "1", "--kind", "related"};
     CmdResult r;
@@ -223,9 +223,9 @@ TEST(link_bumps_both_and_human_id)
     char *db = make_temp_db_path();
     CmdResult r;
     const char *link[] = {"link", "1", "2"};
-    char *e1;
-    char *e2;
-    char *edge;
+    char *e1 = NULL;
+    char *e2 = NULL;
+    char *edge = NULL;
 
     ASSERT_TRUE(db != NULL);
     ASSERT_EQ_INT(add_body(db, "a"), 1);
@@ -367,8 +367,8 @@ TEST(link_invalid_id_is_exit_1)
 
 static int json_links_after_expires(const char *json)
 {
-    const char *e;
-    const char *l;
+    const char *e = NULL;
+    const char *l = NULL;
 
     if (json == NULL) {
         return 0;
@@ -380,7 +380,7 @@ static int json_links_after_expires(const char *json)
 
 static const char *json_links_array(const char *json)
 {
-    const char *p;
+    const char *p = NULL;
 
     if (json == NULL) {
         return NULL;
@@ -449,7 +449,7 @@ TEST(get_list_json_stubs_five_name_preview)
 {
     char *db = make_temp_db_path();
     CmdResult r;
-    const char *links_arr;
+    const char *links_arr = NULL;
     char long_body[64];
     const char *add_long[] = {"add", "--key", "slot:k", long_body};
     const char *cites[] = {"link", "--from", "1", "--to", "2", "--kind", "cites"};
@@ -459,7 +459,7 @@ TEST(get_list_json_stubs_five_name_preview)
     const char *by[] = {"link", "--from", "5", "--to", "1", "--kind", "supersedes"};
     const char *get[] = {"--json", "get", "1"};
     const char *lst[] = {"--json", "list", "--key", "hub:k"};
-    size_t i;
+    size_t i = 0;
 
     ASSERT_TRUE(db != NULL);
     for (i = 0; i < 50U; i++) {
@@ -530,7 +530,7 @@ TEST(human_list_related_ids_trash_cap)
     const char *keyed[] = {"add", "--key", "slot:k", "n2"};
     const char *trash[] = {"add", "--expires", "2020-01-01T00:00:00Z", "gone"};
     const char *lst[] = {"list", "--key", "hub:k"};
-    int i;
+    int i = 0;
 
     ASSERT_TRUE(db != NULL);
     r = run_remember(db, hub, 4, NULL);
@@ -741,7 +741,7 @@ TEST(preview_control_and_multibyte_truncation)
     char big[220];
     const char *bigcmd[2];
     CmdResult r;
-    size_t i;
+    size_t i = 0;
 
     ASSERT_TRUE(db != NULL);
     r = run_remember(db, ctl, 2, NULL);

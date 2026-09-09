@@ -23,14 +23,14 @@ static int facade_run(const char *db, const char *const *cmd, size_t ncmd, char 
 {
     const char *argv[32];
     size_t n = 0U;
-    size_t i;
+    size_t i = 0;
     char *obuf = NULL;
     char *ebuf = NULL;
     size_t olen = 0U;
     size_t elen = 0U;
-    FILE *of;
-    FILE *ef;
-    int rc;
+    FILE *of = NULL;
+    FILE *ef = NULL;
+    int rc = 0;
 
     argv[n++] = "remember";
     argv[n++] = "--db";
@@ -129,7 +129,7 @@ static void assert_mutation_parity(SeedFn seed, const char *const *cmd, size_t n
     CmdResult sub;
     char *fout = NULL;
     char *ferr = NULL;
-    int frc;
+    int frc = 0;
 
     ASSERT_TRUE(db1 != NULL && db2 != NULL);
     if (seed != NULL) {
@@ -236,7 +236,7 @@ TEST(facade_add_matches_cli)
     CmdResult sub;
     char *fout = NULL;
     char *ferr = NULL;
-    int frc;
+    int frc = 0;
 
     ASSERT_TRUE(db1 != NULL && db2 != NULL);
     sub = run_remember(db1, cmd, 5, NULL);
@@ -263,7 +263,7 @@ TEST(facade_update_matches_cli)
     CmdResult sub;
     char *fout = NULL;
     char *ferr = NULL;
-    int frc;
+    int frc = 0;
 
     ASSERT_TRUE(db1 != NULL && db2 != NULL);
     s1 = run_remember(db1, seed, 2, NULL);
@@ -295,7 +295,7 @@ TEST(facade_delete_matches_cli)
     CmdResult sub;
     char *fout = NULL;
     char *ferr = NULL;
-    int frc;
+    int frc = 0;
 
     ASSERT_TRUE(db1 != NULL && db2 != NULL);
     s1 = run_remember(db1, seed, 2, NULL);
@@ -327,7 +327,7 @@ TEST(facade_purge_trash_matches_cli)
     CmdResult sub;
     char *fout = NULL;
     char *ferr = NULL;
-    int frc;
+    int frc = 0;
 
     ASSERT_TRUE(db1 != NULL && db2 != NULL);
     s1 = run_remember(db1, seed, 4, NULL);

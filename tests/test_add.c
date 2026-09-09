@@ -10,7 +10,7 @@ TEST(add_basic_prints_id_one)
     char *db = make_temp_db_path();
     const char *args[] = {"add", "hello memory"};
     CmdResult r;
-    long id;
+    long id = 0;
     ASSERT_TRUE(db != NULL);
     r = run_remember(db, args, 2, NULL);
     ASSERT_EQ_INT(r.exit_code, 0);
@@ -167,8 +167,8 @@ TEST(add_dedupe_same_body_merges_tags)
     const char *a1[] = {"add", "--tag", "a", "same text"};
     const char *a2[] = {"add", "--tag", "b", "same text"};
     const char *gargs[] = {"get", "--json", "1"};
-    long id1;
-    long id2;
+    long id1 = 0;
+    long id2 = 0;
     ASSERT_TRUE(db != NULL);
     r1 = run_remember(db, a1, 4, NULL);
     r2 = run_remember(db, a2, 4, NULL);
@@ -300,10 +300,10 @@ TEST(add_literal_dash_body_after_endopts)
 TEST(add_body_over_64kib_rejected)
 {
     char *db = make_temp_db_path();
-    char *big;
+    char *big = NULL;
     const char *args[2];
     CmdResult r;
-    size_t i;
+    size_t i = 0;
     ASSERT_TRUE(db != NULL);
     big = malloc(65537U + 1U);
     ASSERT_TRUE(big != NULL);
@@ -377,7 +377,7 @@ TEST(add_tag_too_long_rejected)
     char tag[66];
     const char *args[4];
     CmdResult r;
-    size_t i;
+    size_t i = 0;
     ASSERT_TRUE(db != NULL);
     for (i = 0; i < 65U; i++) {
         tag[i] = 't';
@@ -433,9 +433,9 @@ TEST(add_json_body_with_control_and_quotes_stays_valid)
     const char *gargs[] = {"get", "--json", "1"};
     CmdResult r;
     CmdResult g;
-    char *hex_stored;
+    char *hex_stored = NULL;
     char hex_expect[64];
-    size_t i;
+    size_t i = 0;
     size_t body_len = sizeof(body) - 1U;
     ASSERT_TRUE(db != NULL);
     ASSERT_TRUE((body_len * 2U) + 1U <= sizeof(hex_expect));
@@ -489,9 +489,9 @@ TEST(add_stdin_body_at_limit_accepted)
 {
     char *db = make_temp_db_path();
     const char *args[] = {"add", "-"};
-    char *in;
+    char *in = NULL;
     CmdResult r;
-    size_t i;
+    size_t i = 0;
 
     ASSERT_TRUE(db != NULL);
     in = malloc(65536U + 2U); /* 64 KiB body + one trailing newline + NUL */
@@ -519,9 +519,9 @@ TEST(add_stdin_body_over_limit_rejected)
 {
     char *db = make_temp_db_path();
     const char *args[] = {"add", "-"};
-    char *in;
+    char *in = NULL;
     CmdResult r;
-    size_t i;
+    size_t i = 0;
 
     ASSERT_TRUE(db != NULL);
     in = malloc(65537U + 1U);

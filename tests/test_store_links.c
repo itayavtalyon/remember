@@ -25,7 +25,7 @@ TEST(store_open_creates_entry_links)
 {
     char *db = make_temp_db_path();
     char err[256];
-    Store *s;
+    Store *s = NULL;
 
     ASSERT_TRUE(db != NULL);
     err[0] = '\0';
@@ -56,7 +56,7 @@ TEST(store_open_migrates_v2_to_v3)
 {
     char *db = make_temp_db_path();
     char err[256];
-    Store *s;
+    Store *s = NULL;
 
     ASSERT_TRUE(db != NULL);
     free(harness_sqlite_query_line(
@@ -95,7 +95,7 @@ static long long add_row(Store *s, const char *body, const char *hash, const cha
 {
     StoreAddAction act;
     Entry e;
-    long long id;
+    long long id = 0;
 
     memset(&e, 0, sizeof(e));
     if (store_add(s, body, hash, key, NULL, 0U, "human", expires, k_now, &act, &e) != STORE_OK) {
@@ -109,7 +109,7 @@ static long long add_row(Store *s, const char *body, const char *hash, const cha
 static Store *open_temp(char **out_db)
 {
     char err[256];
-    Store *s;
+    Store *s = NULL;
 
     *out_db = make_temp_db_path();
     if (*out_db == NULL) {
@@ -128,8 +128,8 @@ TEST(store_link_related_is_one_canonical_row)
 {
     char *db = NULL;
     Store *s = open_temp(&db);
-    long long a;
-    long long b;
+    long long a = 0;
+    long long b = 0;
     StoreLinkAction act;
     StoreNeighbor stub;
     StoreEdgeKind related = STORE_EDGE_RELATED;
@@ -168,8 +168,8 @@ TEST(store_link_directed_and_kinds_independent)
 {
     char *db = NULL;
     Store *s = open_temp(&db);
-    long long a;
-    long long b;
+    long long a = 0;
+    long long b = 0;
     StoreLinkAction act;
     StoreNeighbor stub;
 
@@ -193,7 +193,7 @@ TEST(store_link_self_and_missing)
 {
     char *db = NULL;
     Store *s = open_temp(&db);
-    long long a;
+    long long a = 0;
     StoreLinkAction act;
     StoreNeighbor stub;
 
@@ -212,9 +212,9 @@ TEST(store_link_supersedes_cycle)
 {
     char *db = NULL;
     Store *s = open_temp(&db);
-    long long a;
-    long long b;
-    long long c;
+    long long a = 0;
+    long long b = 0;
+    long long c = 0;
     StoreLinkAction act;
     StoreNeighbor stub;
 
@@ -251,8 +251,8 @@ TEST(store_unlink_idempotent_and_pair)
 {
     char *db = NULL;
     Store *s = open_temp(&db);
-    long long a;
-    long long b;
+    long long a = 0;
+    long long b = 0;
     StoreLinkAction act;
     StoreNeighbor stub;
     StoreNeighbor *gone = NULL;
@@ -307,8 +307,8 @@ TEST(store_link_bumps_both_endpoints)
 {
     char *db = NULL;
     Store *s = open_temp(&db);
-    long long a;
-    long long b;
+    long long a = 0;
+    long long b = 0;
     StoreLinkAction act;
     StoreNeighbor stub;
     Entry ea;
@@ -337,16 +337,16 @@ TEST(store_neighbors_dir_and_trash)
 {
     char *db = NULL;
     Store *s = open_temp(&db);
-    long long a;
-    long long b;
-    long long c;
-    long long d;
+    long long a = 0;
+    long long b = 0;
+    long long c = 0;
+    long long d = 0;
     StoreLinkAction act;
     StoreNeighbor stub;
     StoreNeighbor *rows = NULL;
     size_t n = 0U;
     StoreEdgeKind cites = STORE_EDGE_CITES;
-    size_t i;
+    size_t i = 0;
     int saw_related = 0;
     int saw_c = 0;
     int saw_d = 0;
@@ -425,8 +425,8 @@ TEST(store_neighbors_cascade_and_survive_trash)
 {
     char *db = NULL;
     Store *s = open_temp(&db);
-    long long a;
-    long long b;
+    long long a = 0;
+    long long b = 0;
     StoreLinkAction act;
     StoreNeighbor stub;
     StoreNeighbor *rows = NULL;
@@ -479,8 +479,8 @@ TEST(store_rekey_rename_promote_demote)
 {
     char *db = NULL;
     Store *s = open_temp(&db);
-    long long a;
-    long long b;
+    long long a = 0;
+    long long b = 0;
     StoreLinkAction act;
     StoreNeighbor stub;
     Entry e;
@@ -557,9 +557,9 @@ TEST(store_list_neighbors_for_page)
 {
     char *db = NULL;
     Store *s = open_temp(&db);
-    long long a;
-    long long b;
-    long long c;
+    long long a = 0;
+    long long b = 0;
+    long long c = 0;
     StoreLinkAction act;
     StoreNeighbor stub;
     StoreNeighbor *rows = NULL;
@@ -606,11 +606,11 @@ TEST(store_list_neighbors_oom_keeps_key_and_trash)
 {
     char *db = NULL;
     Store *s = open_temp(&db);
-    long long a;
-    long long b;
+    long long a = 0;
+    long long b = 0;
     StoreLinkAction act;
     StoreNeighbor stub;
-    int i;
+    int i = 0;
 
     ASSERT_TRUE(s != NULL);
     a = add_row(s, "alpha", k_hash_a, NULL, NULL);
@@ -650,8 +650,8 @@ TEST(store_unlink_stub_load_failure_is_sqlite_not_oom)
 {
     char *db = NULL;
     Store *s = open_temp(&db);
-    long long a;
-    long long b;
+    long long a = 0;
+    long long b = 0;
     StoreLinkAction act;
     StoreNeighbor stub;
     StoreNeighbor *gone = NULL;
@@ -682,10 +682,10 @@ TEST(store_links_fault_injection_sweep)
 {
     char *db = NULL;
     Store *s = open_temp(&db);
-    long long a;
-    long long b;
-    long long c;
-    int i;
+    long long a = 0;
+    long long b = 0;
+    long long c = 0;
+    int i = 0;
 
     ASSERT_TRUE(s != NULL);
     a = add_row(s, "sa", "0000000000000000000000000000000000000000000000000000000000000001", "ka",

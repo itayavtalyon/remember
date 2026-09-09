@@ -61,8 +61,8 @@ static int group_selected(const char *only, const char *name)
 int main(int argc, char **argv)
 {
     const char *only = NULL;
-    size_t i;
-    int arg;
+    size_t i = 0;
+    int arg = 0;
 
     if (argc < 2) {
         (void)fprintf(stderr, "usage: %s <path-to-remember-binary> [--only GROUP,...]\n", argv[0]);

@@ -144,7 +144,7 @@ TEST(keyless_merge_keeps_created_at)
     const char *a2[] = {"add", "--json", "--tag", "t", "stable created"};
     const char *gargs[] = {"get", "--json", "1"};
     char *created1 = NULL;
-    const char *p;
+    const char *p = NULL;
     ASSERT_TRUE(db != NULL);
     r = run_remember(db, a1, 5, NULL);
     ASSERT_EQ_INT(r.exit_code, 0);
@@ -154,7 +154,7 @@ TEST(keyless_merge_keeps_created_at)
     p = (g1.out != NULL) ? strstr(g1.out, "\"created_at\":\"") : NULL;
     ASSERT_TRUE(p != NULL);
     if (p != NULL) {
-        const char *end;
+        const char *end = NULL;
         p += strlen("\"created_at\":\"");
         end = strchr(p, '"');
         created1 = malloc(32);
@@ -196,7 +196,7 @@ TEST(update_preserves_id_key_source_created_at)
     const char *uargs[] = {"update", "--json", "--key", "slot", "--text", "v2"};
     const char *gargs[] = {"get", "--json", "--key", "slot"};
     char created[32];
-    const char *p;
+    const char *p = NULL;
     ASSERT_TRUE(db != NULL);
     created[0] = '\0';
     r = run_remember(db, a, 7, NULL);
@@ -204,7 +204,7 @@ TEST(update_preserves_id_key_source_created_at)
     p = (r.out != NULL) ? strstr(r.out, "\"created_at\":\"") : NULL;
     ASSERT_TRUE(p != NULL);
     if (p != NULL) {
-        const char *end;
+        const char *end = NULL;
         p += strlen("\"created_at\":\"");
         end = strchr(p, '"');
         if (end != NULL) {
@@ -238,7 +238,7 @@ TEST(orphan_tag_removed_when_last_use_deleted)
     char *db = make_temp_db_path();
     CmdResult r;
     CmdResult d;
-    char *count;
+    char *count = NULL;
     const char *a[] = {"add", "--tag", "orphanonly", "solo"};
     const char *dargs[] = {"delete", "1"};
     ASSERT_TRUE(db != NULL);
@@ -260,7 +260,7 @@ TEST(shared_tag_survives_when_other_entry_uses_it)
     char *db = make_temp_db_path();
     CmdResult r;
     CmdResult d;
-    char *count;
+    char *count = NULL;
     const char *a1[] = {"add", "--tag", "shared", "one"};
     const char *a2[] = {"add", "--tag", "shared", "two"};
     const char *dargs[] = {"delete", "1"};
@@ -491,7 +491,7 @@ TEST(human_list_preview_truncates_long_line)
     CmdResult l;
     const char *a[2];
     const char *largs[] = {"list"};
-    size_t i;
+    size_t i = 0;
     ASSERT_TRUE(db != NULL);
     for (i = 0; i < 120U; i++) {
         body[i] = 'x';
@@ -516,13 +516,13 @@ TEST(db_parent_dir_mode_0700)
 {
     /* remember must create the missing parent dir as 0700 (not pre-created by harness). */
     char tmpl[] = "/tmp/remember-mkdir-XXXXXX";
-    char *base;
+    char *base = NULL;
     char *db = NULL;
     char *created_dir = NULL;
     CmdResult r;
     const char *a[] = {"add", "perms"};
     struct stat st;
-    size_t n;
+    size_t n = 0;
     base = mkdtemp(tmpl);
     ASSERT_TRUE(base != NULL);
     if (base == NULL) {
@@ -559,7 +559,7 @@ TEST(schema_user_version_too_new_refused)
     char *db = make_temp_db_path();
     CmdResult r;
     CmdResult l;
-    char *ver;
+    char *ver = NULL;
     const char *a[] = {"add", "bootstrap"};
     const char *largs[] = {"list"};
     ASSERT_TRUE(db != NULL);

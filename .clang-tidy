@@ -52,11 +52,13 @@ CheckOptions:
     value: 'true'
   # readability-identifier-length stays ON to catch genuinely cryptic short names on
   # new code, but the established one/two-letter idioms this codebase already uses are
-  # allowlisted: loop indices (i j k n m); handles (s=Store* db=sqlite3* e=Entry* p q);
-  # status/return (st rc ns); id; single-char scratch (a b c d h o t v y); and date/time
-  # components (yy mo d h mi se ms at ts tm). A short name NOT in this set is still flagged.
-  # Matches the same idiom decision made in the Swift .swiftlint.yml.
+  # allowlisted: single-letter scratch/loop/handle names (i j k n s e p q db...); a
+  # letter+digit pair for numbered fixtures (a1 e2 g1 p3 r2 s1 — two entries, two graph
+  # nodes, etc. in tests); and established two-letter idioms across src + tests:
+  # status/return (st rc ns), id, date/time (yy mo ms at mi se tm ts), keys/hashes in
+  # tests (ka kb kc kt hk hl hp hr hu), spans/sizes (sz cp), etc. A short name NOT in
+  # this set is still flagged. Same idiom decision as the Swift .swiftlint.yml.
   - key: readability-identifier-length.IgnoredVariableNames
-    value: '^(s|i|j|k|n|m|a|b|c|d|e|h|o|p|q|t|v|y|st|db|rc|id|ns|mo|ms|at|mi|se|cp|tm|nm|sz|cb|sn|wr|rr|yy|tt|cc|hi|lo|ch|fn|ts|nb)$'
+    value: '^(a|b|c|d|e|f|g|h|i|j|k|l|m|n|o|p|q|r|s|t|u|v|w|y|[a-z][0-9]|ab|ak|ar|at|av|bc|by|ca|cb|cc|ch|cp|cs|db|dn|ea|eb|ef|fd|fn|fp|hi|hk|hl|hp|hr|hu|id|in|ka|kb|kc|kt|lc|lo|lr|ls|mi|mo|ms|nb|nd|nm|ns|ob|of|pa|pn|pz|rc|rk|rr|rt|se|sn|sq|st|sz|tc|tm|to|ts|tt|wr|yy)$'
   - key: readability-identifier-length.IgnoredParameterNames
-    value: '^(s|i|j|k|n|m|a|b|c|d|e|h|o|p|q|t|v|y|st|db|rc|id|ns|mo|ms|at|mi|se|cp|tm|nm|sz|cb|sn|wr|rr|yy|tt|cc|hi|lo|ch|fn|ts|nb)$'
+    value: '^(a|b|c|d|e|f|g|h|i|j|k|l|m|n|o|p|q|r|s|t|u|v|w|y|[a-z][0-9]|ab|ak|ar|at|av|bc|by|ca|cb|cc|ch|cp|cs|db|dn|ea|eb|ef|fd|fn|fp|hi|hk|hl|hp|hr|hu|id|in|ka|kb|kc|kt|lc|lo|lr|ls|mi|mo|ms|nb|nd|nm|ns|ob|of|pa|pn|pz|rc|rk|rr|rt|se|sn|sq|st|sz|tc|tm|to|ts|tt|wr|yy)$'

@@ -65,9 +65,9 @@ TEST(body_trim_empty_and_ws_only)
 
 TEST(body_trim_too_long)
 {
-    char *buf;
+    char *buf = NULL;
     char *out = NULL;
-    size_t i;
+    size_t i = 0;
     NormStatus st;
 
     buf = malloc((size_t)REMEMBER_BODY_MAX + 2U);
@@ -221,7 +221,7 @@ TEST(normalize_reports_bad_output_buffer)
     {
         char big[REMEMBER_TOKEN_MAX + 2];
         char out[REMEMBER_TOKEN_MAX + 2];
-        size_t i;
+        size_t i = 0;
         for (i = 0; i < (size_t)REMEMBER_TOKEN_MAX + 1U; i++) {
             big[i] = 'a';
         }
@@ -347,7 +347,7 @@ TEST(token_length_and_utf8)
     char out[REMEMBER_TOKEN_MAX + 1];
     char ok64[REMEMBER_TOKEN_MAX + 1];
     char too[REMEMBER_TOKEN_MAX + 2];
-    size_t i;
+    size_t i = 0;
     char bad[] = {(char)0xff, (char)0xfe, 'x', '\0'};
 
     for (i = 0; i < (size_t)REMEMBER_TOKEN_MAX; i++) {

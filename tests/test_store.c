@@ -20,8 +20,8 @@
 /* "<base><leaf>" on the heap; NULL on allocation failure. */
 static char *join_path(const char *base, const char *leaf)
 {
-    size_t n;
-    char *out;
+    size_t n = 0;
+    char *out = NULL;
 
     if (base == NULL || leaf == NULL) {
         return NULL;
@@ -49,7 +49,7 @@ TEST(store_open_creates_user_version_3)
 {
     char *db = make_temp_db_path();
     char err[256];
-    Store *s;
+    Store *s = NULL;
 
     ASSERT_TRUE(db != NULL);
     err[0] = '\0';
@@ -73,7 +73,7 @@ TEST(store_open_migrates_v1_to_v2)
 {
     char *db = make_temp_db_path();
     char err[256];
-    Store *s;
+    Store *s = NULL;
 
     ASSERT_TRUE(db != NULL);
     /* Compact v1 shape (no expires_at) + one row. sqlite3 CLI is the inspect tool. */
@@ -109,8 +109,8 @@ TEST(store_open_reopens_existing)
 {
     char *db = make_temp_db_path();
     char err[256];
-    Store *s1;
-    Store *s2;
+    Store *s1 = NULL;
+    Store *s2 = NULL;
 
     ASSERT_TRUE(db != NULL);
     s1 = store_open(db, err, sizeof(err));
@@ -128,7 +128,7 @@ TEST(store_open_refuses_user_version_too_new)
 {
     char *db = make_temp_db_path();
     char err[256];
-    Store *s;
+    Store *s = NULL;
 
     ASSERT_TRUE(db != NULL);
     s = store_open(db, err, sizeof(err));
@@ -149,7 +149,7 @@ TEST(store_open_refuses_negative_user_version)
 {
     char *db = make_temp_db_path();
     char err[256];
-    Store *s;
+    Store *s = NULL;
 
     ASSERT_TRUE(db != NULL);
     s = store_open(db, err, sizeof(err));
@@ -172,7 +172,7 @@ TEST(store_open_creates_parent_dir_0700)
     char *nested = join_path(parent != NULL ? parent : "", "/nested/t.db");
     char *created = NULL;
     char err[256];
-    Store *s;
+    Store *s = NULL;
     struct stat st;
 
     ASSERT_TRUE(nested != NULL);
@@ -204,7 +204,7 @@ TEST(store_open_db_file_mode_0600)
 {
     char *db = make_temp_db_path();
     char err[256];
-    Store *s;
+    Store *s = NULL;
     struct stat st;
 
     ASSERT_TRUE(db != NULL);
@@ -224,7 +224,7 @@ TEST(store_open_has_expected_schema)
 {
     char *db = make_temp_db_path();
     char err[256];
-    Store *s;
+    Store *s = NULL;
 
     ASSERT_TRUE(db != NULL);
     s = store_open(db, err, sizeof(err));
@@ -280,7 +280,7 @@ TEST(store_open_rolls_back_partial_create)
 {
     char *db = make_temp_db_path();
     char err[256];
-    Store *s;
+    Store *s = NULL;
 
     ASSERT_TRUE(db != NULL);
     free(harness_sqlite_query_line(db, "CREATE TABLE tags(x); PRAGMA user_version=0;"));
@@ -306,7 +306,7 @@ TEST(store_open_concurrent_create_all_succeed)
     char *db = make_temp_db_path();
     pid_t pids[RACERS];
     int failures = 0;
-    int i;
+    int i = 0;
 
     ASSERT_TRUE(db != NULL);
     if (db == NULL) {
@@ -340,7 +340,7 @@ TEST(store_open_concurrent_create_all_succeed)
 TEST(store_open_null_path_fails)
 {
     char err[256];
-    Store *s;
+    Store *s = NULL;
 
     err[0] = '\0';
     s = store_open(NULL, err, sizeof(err));
@@ -351,7 +351,7 @@ TEST(store_open_null_path_fails)
 TEST(store_open_empty_path_fails)
 {
     char err[256];
-    Store *s;
+    Store *s = NULL;
 
     err[0] = '\0';
     s = store_open("", err, sizeof(err));
@@ -367,7 +367,7 @@ TEST(store_open_tolerates_missing_err_buffer)
     char *blocker = join_path(parent != NULL ? parent : "", "/notadir");
     char *nested = join_path(blocker != NULL ? blocker : "", "/t.db");
     char err[256];
-    int fd;
+    int fd = 0;
 
     ASSERT_TRUE(nested != NULL);
     if (nested == NULL) {
@@ -392,7 +392,7 @@ cleanup:
 TEST(store_open_truncates_error_to_buffer)
 {
     char err[8];
-    Store *s;
+    Store *s = NULL;
 
     memset(err, 'x', sizeof(err));
     s = store_open("", err, sizeof(err));
@@ -407,8 +407,8 @@ TEST(store_open_parent_component_file_fails)
     char *blocker = join_path(parent != NULL ? parent : "", "/notadir");
     char *nested = join_path(blocker != NULL ? blocker : "", "/t.db");
     char err[256];
-    Store *s;
-    int fd;
+    Store *s = NULL;
+    int fd = 0;
 
     ASSERT_TRUE(nested != NULL);
     if (nested == NULL) {
@@ -474,7 +474,7 @@ TEST(store_open_path_too_long_fails)
     size_t n = (size_t)REMEMBER_PATH_MAX + 16U;
     char *path = malloc(n + 1U);
     char err[256];
-    Store *s;
+    Store *s = NULL;
 
     ASSERT_TRUE(path != NULL);
     if (path == NULL) {
@@ -495,8 +495,8 @@ TEST(store_open_rejects_non_database_file)
 {
     char *db = make_temp_db_path();
     char err[256];
-    Store *s;
-    FILE *f;
+    Store *s = NULL;
+    FILE *f = NULL;
 
     ASSERT_TRUE(db != NULL);
     if (db == NULL) {
@@ -534,7 +534,7 @@ TEST(store_get_loads_expires_at)
 {
     char *db = make_temp_db_path();
     char err[256];
-    Store *s;
+    Store *s = NULL;
     Entry e;
     StoreAddAction act;
 
@@ -563,7 +563,7 @@ TEST(store_get_expired_without_trash_is_expired)
 {
     char *db = make_temp_db_path();
     char err[256];
-    Store *s;
+    Store *s = NULL;
     Entry e;
     StoreAddAction act;
 
@@ -598,7 +598,7 @@ TEST(store_get_expired_with_trash_ok)
 {
     char *db = make_temp_db_path();
     char err[256];
-    Store *s;
+    Store *s = NULL;
     Entry e;
     StoreAddAction act;
 
@@ -624,7 +624,7 @@ TEST(store_get_active_with_trash_is_not_in_trash)
 {
     char *db = make_temp_db_path();
     char err[256];
-    Store *s;
+    Store *s = NULL;
     Entry e;
     StoreAddAction act;
 
@@ -649,7 +649,7 @@ TEST(store_get_missing_stays_not_found)
 {
     char *db = make_temp_db_path();
     char err[256];
-    Store *s;
+    Store *s = NULL;
     Entry e;
 
     ASSERT_TRUE(db != NULL);
@@ -666,7 +666,7 @@ TEST(store_expires_at_equal_now_is_trash)
 {
     char *db = make_temp_db_path();
     char err[256];
-    Store *s;
+    Store *s = NULL;
     Entry e;
     StoreAddAction act;
     ListQuery q;
@@ -711,7 +711,7 @@ TEST(store_expires_at_equal_now_is_trash)
     }
     ASSERT_EQ_INT((int)total, 1);
     {
-        size_t i;
+        size_t i = 0;
         for (i = 0; i < count; i++) {
             store_entry_free(&rows[i]);
         }
@@ -725,7 +725,7 @@ TEST(store_list_and_search_bins)
 {
     char *db = make_temp_db_path();
     char err[256];
-    Store *s;
+    Store *s = NULL;
     Entry e;
     StoreAddAction act;
     const char *tags[] = {"wip"};
@@ -822,7 +822,7 @@ TEST(store_update_and_delete_wrong_bin)
 {
     char *db = make_temp_db_path();
     char err[256];
-    Store *s;
+    Store *s = NULL;
     Entry e;
     StoreAddAction act;
     long long conflict = 0;
@@ -867,7 +867,7 @@ TEST(store_update_trash_clear_expires_restores)
 {
     char *db = make_temp_db_path();
     char err[256];
-    Store *s;
+    Store *s = NULL;
     Entry e;
     StoreAddAction act;
     long long conflict = 0;
@@ -899,7 +899,7 @@ TEST(store_update_trash_future_expires_leaves_trash)
 {
     char *db = make_temp_db_path();
     char err[256];
-    Store *s;
+    Store *s = NULL;
     Entry e;
     StoreAddAction act;
     long long conflict = 0;
@@ -932,7 +932,7 @@ TEST(store_add_keyless_revives_expired)
 {
     char *db = make_temp_db_path();
     char err[256];
-    Store *s;
+    Store *s = NULL;
     Entry e;
     StoreAddAction act;
     const char *tags[] = {"wip"};
@@ -965,7 +965,7 @@ TEST(store_add_keyed_revives_expired)
 {
     char *db = make_temp_db_path();
     char err[256];
-    Store *s;
+    Store *s = NULL;
     Entry e;
     StoreAddAction act;
 
@@ -996,7 +996,7 @@ TEST(store_add_past_expires_born_in_trash)
 {
     char *db = make_temp_db_path();
     char err[256];
-    Store *s;
+    Store *s = NULL;
     Entry e;
     StoreAddAction act;
     const char *past = "2020-01-01T00:00:00.000Z";
@@ -1024,7 +1024,7 @@ TEST(store_purge_trash_deletes_only_expired)
 {
     char *db = make_temp_db_path();
     char err[256];
-    Store *s;
+    Store *s = NULL;
     Entry e;
     StoreAddAction act;
     const char *tags[] = {"tmp"};
@@ -1096,7 +1096,7 @@ TEST(store_list_filters_and_paging)
 {
     char *db = make_temp_db_path();
     char err[256];
-    Store *s;
+    Store *s = NULL;
     Entry e;
     StoreAddAction act;
     const char *tags_ab[] = {"a", "b"};
@@ -1105,7 +1105,7 @@ TEST(store_list_filters_and_paging)
     Entry *rows = NULL;
     size_t count = 0U;
     size_t total = 0U;
-    size_t i;
+    size_t i = 0;
 
     ASSERT_TRUE(db != NULL);
     s = store_open(db, err, sizeof(err));
@@ -1190,7 +1190,7 @@ TEST(store_update_body_and_tags)
 {
     char *db = make_temp_db_path();
     char err[256];
-    Store *s;
+    Store *s = NULL;
     Entry e;
     StoreAddAction act;
     const char *tags_ab[] = {"a", "b"};
@@ -1265,11 +1265,11 @@ TEST(store_delete_by_id_gcs_orphan_tags)
 {
     char *db = make_temp_db_path();
     char err[256];
-    Store *s;
+    Store *s = NULL;
     Entry e;
     StoreAddAction act;
     const char *tags[] = {"solo"};
-    char *count;
+    char *count = NULL;
 
     ASSERT_TRUE(db != NULL);
     s = store_open(db, err, sizeof(err));
@@ -1300,7 +1300,7 @@ TEST(store_delete_by_key_missing)
 {
     char *db = make_temp_db_path();
     char err[256];
-    Store *s;
+    Store *s = NULL;
     Entry e;
 
     ASSERT_TRUE(db != NULL);
@@ -1316,7 +1316,7 @@ TEST(store_tags_empty_db)
 {
     char *db = make_temp_db_path();
     char err[256];
-    Store *s;
+    Store *s = NULL;
     TagCount *tags = NULL;
     size_t n = 99U;
 
@@ -1335,7 +1335,7 @@ TEST(store_tags_counts_and_sorted)
 {
     char *db = make_temp_db_path();
     char err[256];
-    Store *s;
+    Store *s = NULL;
     Entry e;
     StoreAddAction act;
     const char *tags_az[] = {"zebra", "apple"};
@@ -1380,7 +1380,7 @@ TEST(store_open_oom_on_store_struct)
 {
     char *db = make_temp_db_path();
     char err[256];
-    Store *s;
+    Store *s = NULL;
     ASSERT_TRUE(db != NULL);
     store_test_fail_alloc_after(0); /* first malloc/calloc fails */
     s = store_open(db, err, sizeof(err));
@@ -1393,7 +1393,7 @@ TEST(store_add_prepare_fail)
 {
     char *db = make_temp_db_path();
     char err[256];
-    Store *s;
+    Store *s = NULL;
     Entry e;
     StoreAddAction act;
     ASSERT_TRUE(db != NULL);
@@ -1413,7 +1413,7 @@ TEST(store_get_prepare_fail)
 {
     char *db = make_temp_db_path();
     char err[256];
-    Store *s;
+    Store *s = NULL;
     Entry e;
     StoreAddAction act;
     ASSERT_TRUE(db != NULL);
@@ -1434,7 +1434,7 @@ TEST(store_list_prepare_fail)
 {
     char *db = make_temp_db_path();
     char err[256];
-    Store *s;
+    Store *s = NULL;
     ListQuery q;
     ASSERT_TRUE(db != NULL);
     s = store_open(db, err, sizeof(err));
@@ -1451,7 +1451,7 @@ TEST(store_search_prepare_and_step_fail)
 {
     char *db = make_temp_db_path();
     char err[256];
-    Store *s;
+    Store *s = NULL;
     Entry e;
     StoreAddAction act;
     SearchQuery q;
@@ -1487,7 +1487,7 @@ TEST(store_delete_prepare_fail)
 {
     char *db = make_temp_db_path();
     char err[256];
-    Store *s;
+    Store *s = NULL;
     Entry e;
     StoreAddAction act;
     ASSERT_TRUE(db != NULL);
@@ -1509,7 +1509,7 @@ TEST(store_add_tag_alloc_fail)
 {
     char *db = make_temp_db_path();
     char err[256];
-    Store *s;
+    Store *s = NULL;
     Entry e;
     StoreAddAction act;
     const char *tags[] = {"t1", "t2", "t3", "t4", "t5"};
@@ -1529,7 +1529,7 @@ TEST(store_add_tag_alloc_fail)
 /* Free a store_list/store_search page (or no-op if *rows is NULL). */
 static void sweep_free_page(Entry **rows, size_t count)
 {
-    size_t j;
+    size_t j = 0;
 
     if (*rows == NULL) {
         return;
@@ -1598,11 +1598,11 @@ TEST(store_fault_injection_sweep)
 {
     char *db = make_temp_db_path();
     char err[256];
-    int i;
+    int i = 0;
     ASSERT_TRUE(db != NULL);
 
     for (i = 0; i < 60; i++) {
-        Store *s;
+        Store *s = NULL;
         Entry e;
         StoreAddAction act;
         ListQuery q;
@@ -1701,7 +1701,7 @@ TEST(store_tags_prepare_fail)
 {
     char *db = make_temp_db_path();
     char err[256];
-    Store *s;
+    Store *s = NULL;
     TagCount *tags = NULL;
     size_t n = 0U;
 
@@ -1720,7 +1720,7 @@ TEST(store_tags_alloc_fail)
 {
     char *db = make_temp_db_path();
     char err[256];
-    Store *s;
+    Store *s = NULL;
     Entry e;
     StoreAddAction act;
     const char *tags_in[] = {"apple"};
@@ -1747,7 +1747,7 @@ TEST(store_tags_realloc_fail)
 {
     char *db = make_temp_db_path();
     char err[256];
-    Store *s;
+    Store *s = NULL;
     Entry e;
     StoreAddAction act;
     const char *tags_in[] = {"apple"};
@@ -1775,7 +1775,7 @@ TEST(store_tags_step_fail)
 {
     char *db = make_temp_db_path();
     char err[256];
-    Store *s;
+    Store *s = NULL;
     TagCount *tags = NULL;
     size_t n = 0U;
 

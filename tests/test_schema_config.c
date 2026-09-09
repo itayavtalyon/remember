@@ -35,8 +35,8 @@ static void assert_sync_warning_for_marker(const char *template_dir)
     char *path = NULL;
     CmdResult r;
     const char *a[] = {"add", "sync path note"};
-    size_t n;
-    size_t pn;
+    size_t n = 0;
+    size_t pn = 0;
 
     n = strlen(template_dir) + 1U;
     syncish = malloc(n);

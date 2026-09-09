@@ -20,9 +20,9 @@ static CmdResult run_remember_raw(const char *const *argv, size_t argc, const ch
     CmdResult result = {0, NULL, NULL};
     int out_pipe[2];
     int err_pipe[2];
-    pid_t pid;
-    char **av;
-    size_t i;
+    pid_t pid = 0;
+    char **av = NULL;
+    size_t i = 0;
 
     if (g_remember_bin == NULL) {
         result.exit_code = 127;
@@ -74,7 +74,7 @@ static CmdResult run_remember_raw(const char *const *argv, size_t argc, const ch
     (void)stdin_data;
     {
         char buf[4096];
-        ssize_t n;
+        ssize_t n = 0;
         size_t olen = 0;
         size_t elen = 0;
         char *ob = malloc(1);
@@ -148,7 +148,7 @@ TEST(remember_db_env_used_when_no_flag)
     CmdResult g;
     const char *a[] = {"add", "via env db"};
     const char *gargs[] = {"get", "--json", "1"};
-    char *old;
+    char *old = NULL;
     ASSERT_TRUE(db != NULL);
     if (db == NULL) {
         return;
