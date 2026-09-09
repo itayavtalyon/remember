@@ -17,11 +17,11 @@
 
 /* list / search: shared filter + paging parse, different store call + query. */
 
-#define LIST_LIMIT_DEFAULT 20U
-#define LIST_LIMIT_MAX 1000U
+enum { LIST_LIMIT_DEFAULT = 20 };
+enum { LIST_LIMIT_MAX = 1000 };
 /* Bounded well under the store's per-query parameter budget (LIST_BIND_CAP) so
    an over-cap filter set is a clear user error here, not an opaque store one. */
-#define LIST_TAG_FILTER_MAX 50U
+enum { LIST_TAG_FILTER_MAX = 50 };
 
 /* Parse a non-negative size_t from decimal text. Rejects empty, non-digits, ERANGE. */
 static int parse_size_token(const char *raw, size_t *out)

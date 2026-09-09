@@ -3,8 +3,11 @@
 #include <stdio.h>
 
 /* stdout/stderr are not constant expressions, so resolve the default lazily in
-   the accessors rather than initializing the globals to them. */
+   the accessors rather than initializing the globals to them. Deliberately mutable:
+   app_set_streams() is the test seam that redirects output for capture. */
+// NOLINTNEXTLINE(cppcoreguidelines-avoid-non-const-global-variables)
 static FILE *g_out = NULL;
+// NOLINTNEXTLINE(cppcoreguidelines-avoid-non-const-global-variables)
 static FILE *g_err = NULL;
 
 FILE *app_out(void)

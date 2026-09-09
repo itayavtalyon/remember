@@ -14,11 +14,18 @@ struct Store {
     sqlite3 *db;
 };
 
-/* ---- optional fault injection (coverage / unit tests) -------------------- */
+/* ---- optional fault injection (coverage / unit tests) --------------------
+ * Deliberately mutable process-global counters: the store_test_fail_* setters are
+ * the seam that drives OOM/SQLite-error paths from tests. Compiled only under
+ * REMEMBER_TEST_HOOKS. */
 #ifdef REMEMBER_TEST_HOOKS
+// NOLINTNEXTLINE(cppcoreguidelines-avoid-non-const-global-variables)
 static int g_fail_alloc_after = -1;
+// NOLINTNEXTLINE(cppcoreguidelines-avoid-non-const-global-variables)
 static int g_fail_prepare_after = -1;
+// NOLINTNEXTLINE(cppcoreguidelines-avoid-non-const-global-variables)
 static int g_fail_step_after = -1;
+// NOLINTNEXTLINE(cppcoreguidelines-avoid-non-const-global-variables)
 static int g_fail_exec_after = -1;
 
 void store_test_fail_alloc_after(int n)
@@ -243,6 +250,8 @@ static int ensure_parent_dirs(const char *path, char *err, size_t errlen)
         if (mkdir(buf, 0700) != 0) {
             struct stat st;
             if (errno != EEXIST) {
+                /* Single-threaded CLI; strerror_r's signature is not portable (XSI vs GNU). */
+                // NOLINTNEXTLINE(concurrency-mt-unsafe)
                 set_errf(err, errlen, "cannot create database directory", strerror(errno));
                 return -1;
             }
@@ -413,6 +422,8 @@ Store *store_open(const char *path, char *err, size_t errlen)
         return NULL;
     }
 
+    /* SQLITE_OPEN_* are sqlite's own signed-int flag macros; the API takes int. */
+    // NOLINTNEXTLINE(hicpp-signed-bitwise)
     if (sqlite3_open_v2(path, &db, SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE, NULL) != SQLITE_OK) {
         /* sqlite3_errmsg is NULL-safe: reports OOM when the handle is NULL. */
         set_errf(err, errlen, "cannot open database", sqlite3_errmsg(db));
@@ -536,7 +547,6 @@ static char *dup_str(const char *s)
 int utc_now(char *buf, size_t buflen)
 {
     struct timespec ts;
-    const struct tm *tmp = NULL;
     struct tm tm;
     size_t n = 0;
     int ms = 0;
@@ -547,11 +557,10 @@ int utc_now(char *buf, size_t buflen)
     if (timespec_get(&ts, TIME_UTC) != TIME_UTC) {
         return -1;
     }
-    tmp = gmtime(&ts.tv_sec);
-    if (tmp == NULL) {
+    /* gmtime_r: reentrant; gmtime uses a shared static buffer (concurrency-mt-unsafe). */
+    if (gmtime_r(&ts.tv_sec, &tm) == NULL) {
         return -1;
     }
-    tm = *tmp;
     n = strftime(buf, buflen, "%Y-%m-%dT%H:%M:%S", &tm);
     if (n == 0U) {
         return -1;
@@ -1670,8 +1679,8 @@ static StoreStatus list_bind_texts(sqlite3_stmt *stmt, const char **bind_text, i
 }
 
 /* Enough for source + key + many tag EXISTS clauses. */
-#define LIST_SQL_CAP 8192
-#define LIST_BIND_CAP 64
+enum { LIST_SQL_CAP = 8192 };
+enum { LIST_BIND_CAP = 64 };
 
 /*
  * Bind filters + limit/offset, run the COUNT statement then the paged SELECT the

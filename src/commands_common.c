@@ -353,7 +353,6 @@ static int parse_iso_mmmz(const char *s, int *y, int *mo, int *d, int *h, int *m
 static int unix_to_iso_ms(long long unix_sec, int ms, char *out, size_t outlen)
 {
     time_t tt = 0;
-    const struct tm *tmp = NULL;
     struct tm tm;
 
     if (ms < 0 || ms > 999) {
@@ -363,11 +362,10 @@ static int unix_to_iso_ms(long long unix_sec, int ms, char *out, size_t outlen)
     if ((long long)tt != unix_sec) {
         return -1;
     }
-    tmp = gmtime(&tt);
-    if (tmp == NULL) {
+    /* gmtime_r: reentrant; gmtime uses a shared static buffer (concurrency-mt-unsafe). */
+    if (gmtime_r(&tt, &tm) == NULL) {
         return -1;
     }
-    tm = *tmp;
     return format_iso_mmmz(tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday, tm.tm_hour, tm.tm_min,
                            tm.tm_sec, ms, out, outlen);
 }
@@ -490,7 +488,6 @@ static int expires_date_only(const char *token, char *out, size_t outlen)
     int d = 0;
     struct tm t;
     time_t sec = 0;
-    const struct tm *tmp = NULL;
     struct tm utc;
 
     if (strlen(token) != 10U || !match_mask(token, "dddd-dd-dd")) {
@@ -512,11 +509,10 @@ static int expires_date_only(const char *token, char *out, size_t outlen)
     if (sec == (time_t)-1) {
         return -1;
     }
-    tmp = gmtime(&sec);
-    if (tmp == NULL) {
+    /* gmtime_r: reentrant; gmtime uses a shared static buffer (concurrency-mt-unsafe). */
+    if (gmtime_r(&sec, &utc) == NULL) {
         return -1;
     }
-    utc = *tmp;
     return format_iso_mmmz(utc.tm_year + 1900, utc.tm_mon + 1, utc.tm_mday, utc.tm_hour, utc.tm_min,
                            utc.tm_sec, 999, out, outlen);
 }

@@ -68,6 +68,8 @@ int util_resolve_db_path(const char *cli_db, char *buf, size_t buflen, char *err
     if (cli_db != NULL && cli_db[0] != '\0') {
         chosen = cli_db;
     } else {
+        /* Single-threaded CLI; getenv has no portable thread-safe variant in C11/POSIX. */
+        // NOLINTNEXTLINE(concurrency-mt-unsafe)
         chosen = getenv("REMEMBER_DB");
         if (chosen != NULL && chosen[0] == '\0') {
             chosen = NULL;
@@ -88,6 +90,8 @@ int util_resolve_db_path(const char *cli_db, char *buf, size_t buflen, char *err
         return 0;
     }
 
+    /* Single-threaded CLI; getenv has no portable thread-safe variant in C11/POSIX. */
+    // NOLINTNEXTLINE(concurrency-mt-unsafe)
     home = getenv("HOME");
     if (home == NULL || home[0] == '\0') {
         set_err(err, errlen, "HOME is not set; pass --db PATH");

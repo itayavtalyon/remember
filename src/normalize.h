@@ -4,13 +4,13 @@
 #include <stddef.h>
 
 /* Design: body max after trim is 64 KiB. */
-#define REMEMBER_BODY_MAX 65536
+enum { REMEMBER_BODY_MAX = 65536 };
 
 /* Design: tag/key max UTF-8 bytes after trim. */
-#define REMEMBER_TOKEN_MAX 64
+enum { REMEMBER_TOKEN_MAX = 64 };
 
 /* Lowercase hex SHA-256 (no NUL). Buffer needs +1 for terminator. */
-#define REMEMBER_SHA256_HEX_LEN 64
+enum { REMEMBER_SHA256_HEX_LEN = 64 };
 
 typedef enum {
     NORM_OK = 0,

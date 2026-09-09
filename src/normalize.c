@@ -99,7 +99,7 @@ static bool utf8_cont(const char *s, size_t len, size_t i, size_t need, unsigned
         if ((cc & 0xC0U) != 0x80U) {
             return false;
         }
-        *cp = (*cp << 6) | (cc & 0x3FU);
+        *cp = (*cp << 6U) | (cc & 0x3FU);
     }
     return true;
 }
@@ -296,7 +296,7 @@ void body_hash_hex(const void *data, size_t len, char out_hex[REMEMBER_SHA256_HE
         unsigned char b = digest[i];
         size_t hi = i * 2U;
         size_t lo = hi + 1U;
-        out_hex[hi] = k_hex[(b >> 4) & 0x0FU];
+        out_hex[hi] = k_hex[((unsigned int)b >> 4U) & 0x0FU];
         out_hex[lo] = k_hex[b & 0x0FU];
     }
     out_hex[REMEMBER_SHA256_HEX_LEN] = '\0';

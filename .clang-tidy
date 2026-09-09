@@ -16,12 +16,27 @@
 #                                         We are an application that must use it.
 #   modernize-avoid-c-style-cast          Wants C++ static_cast<>/reinterpret_cast<>.
 #   google-readability-casting            Same; C++ named casts do not exist in C11.
+#   clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling
+#                                         Demands the C11 Annex K _s functions
+#                                         (fprintf_s/memset_s/snprintf_s/memcpy_s).
+#                                         Annex K is optional and unimplemented on
+#                                         macOS, glibc, and musl (__STDC_LIB_EXT1__ is
+#                                         undefined), so the suggested calls do not exist.
+#                                         Buffers here are bounded by construction.
+#   llvm-header-guard                     Derives the guard from the absolute file path
+#                                         (e.g. TMP_..._SRC_STORE_H), which is
+#                                         path-dependent and breaks across worktrees/CI
+#                                         mounts. The existing REMEMBER_<FILE>_H guards
+#                                         are correct and portable; no option strips the
+#                                         path prefix.
 Checks: >
   *,
   -altera-*,
   -llvmlibc-restrict-system-libc-headers,
   -modernize-avoid-c-style-cast,
-  -google-readability-casting
+  -google-readability-casting,
+  -clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling,
+  -llvm-header-guard
 
 WarningsAsErrors: '*'
 # Match only project TUs under src/ and tests/ (flat layout). Do not use a bare
@@ -35,3 +50,13 @@ CheckOptions:
     value: '(sqlite3\.h|sys/.*|bits/.*|linux/.*|asm/.*|mach/.*|Availability.*|_.*)'
   - key: misc-include-cleaner.DeduplicateFindings
     value: 'true'
+  # readability-identifier-length stays ON to catch genuinely cryptic short names on
+  # new code, but the established one/two-letter idioms this codebase already uses are
+  # allowlisted: loop indices (i j k n m); handles (s=Store* db=sqlite3* e=Entry* p q);
+  # status/return (st rc ns); id; single-char scratch (a b c d h o t v y); and date/time
+  # components (yy mo d h mi se ms at ts tm). A short name NOT in this set is still flagged.
+  # Matches the same idiom decision made in the Swift .swiftlint.yml.
+  - key: readability-identifier-length.IgnoredVariableNames
+    value: '^(s|i|j|k|n|m|a|b|c|d|e|h|o|p|q|t|v|y|st|db|rc|id|ns|mo|ms|at|mi|se|cp|tm|nm|sz|cb|sn|wr|rr|yy|tt|cc|hi|lo|ch|fn|ts|nb)$'
+  - key: readability-identifier-length.IgnoredParameterNames
+    value: '^(s|i|j|k|n|m|a|b|c|d|e|h|o|p|q|t|v|y|st|db|rc|id|ns|mo|ms|at|mi|se|cp|tm|nm|sz|cb|sn|wr|rr|yy|tt|cc|hi|lo|ch|fn|ts|nb)$'
