@@ -5,6 +5,8 @@
 #include <stdlib.h>
 #include <string.h>
 
+enum { TS_BUFSIZE = 32 }; /* ISO-8601 timestamp buffer */
+
 /* Copy the value of a `"key":"..."` JSON string field into out (empty if absent). */
 static void extract_json_str(const char *json, const char *key, char *out, size_t outsz)
 {
@@ -445,8 +447,8 @@ TEST(update_bumps_updated_at)
     char *db = make_temp_db_path();
     CmdResult r;
     CmdResult u;
-    char before[32];
-    char after[32];
+    char before[TS_BUFSIZE];
+    char after[TS_BUFSIZE];
     const char *a[] = {"add", "--json", "orig body"};
     const char *uargs[] = {"update", "--json", "1", "--text", "changed body"};
     ASSERT_TRUE(db != NULL);

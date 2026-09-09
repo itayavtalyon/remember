@@ -9,6 +9,8 @@
 #include <sys/wait.h>
 #include <unistd.h>
 
+enum { READ_BUFSIZE = 4096, URI_BUFSIZE = 512 }; /* scratch read / URI buffers */
+
 /*
  * DB path resolution and JSON field presence.
  * REMEMBER_DB is tested by invoking the binary without --db via a local helper.
@@ -75,7 +77,7 @@ static CmdResult run_remember_raw(const char *const *argv, size_t argc, const ch
     /* simplified: ignore stdin_data for raw helper */
     (void)stdin_data;
     {
-        char buf[4096];
+        char buf[READ_BUFSIZE];
         ssize_t n = 0;
         size_t olen = 0;
         size_t elen = 0;
@@ -282,7 +284,7 @@ TEST(db_rejects_memory_uri)
 TEST(db_rejects_file_uri)
 {
     char *db = make_temp_db_path();
-    char uri[512];
+    char uri[URI_BUFSIZE];
     CmdResult r;
     const char *args[] = {"add", "should not store"};
     ASSERT_TRUE(db != NULL);

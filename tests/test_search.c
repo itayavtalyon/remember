@@ -6,6 +6,8 @@
 #include <stdlib.h>
 #include <string.h>
 
+enum { SEED_ROWS = 10, BODY_BUFSIZE = 64 }; /* seeded rows; scratch body buffer */
+
 static void seed_search_corpus(const char *db)
 {
     CmdResult r;
@@ -205,8 +207,8 @@ TEST(search_limit)
     const char *p = NULL;
     const char *args[] = {"search", "--json", "--limit", "3", "unique"};
     ASSERT_TRUE(db != NULL);
-    for (i = 0; i < 10; i++) {
-        char body[64];
+    for (i = 0; i < SEED_ROWS; i++) {
+        char body[BODY_BUFSIZE];
         const char *a[2];
         CmdResult ar;
         (void)snprintf(body, sizeof(body), "unique hit number %d", i);
@@ -220,7 +222,7 @@ TEST(search_limit)
     p = r.out;
     while ((p = strstr(p, "\"id\":")) != NULL) {
         count++;
-        p += 5;
+        p += sizeof("\"id\":") - 1;
     }
     ASSERT_EQ_INT(count, 3);
     cmd_result_free(&r);

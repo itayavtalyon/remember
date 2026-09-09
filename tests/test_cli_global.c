@@ -5,6 +5,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 
+enum { ARG_BUFSIZE = 512 }; /* scratch buffer for a long CLI arg */
+
 /* ---- global CLI / meta --------------------------------------------------- */
 
 TEST(no_subcommand_exits_usage)
@@ -143,7 +145,7 @@ TEST(json_global_after_command_accepted)
 TEST(db_equals_form_accepted)
 {
     char *db = make_temp_db_path();
-    char arg[512];
+    char arg[ARG_BUFSIZE];
     const char *args[3];
     CmdResult r;
     ASSERT_TRUE(db != NULL);

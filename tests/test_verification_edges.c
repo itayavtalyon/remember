@@ -11,6 +11,9 @@
  * Linux clang-tidy include-cleaner; Apple-only matches test_schema_config.c. */
 #ifdef __APPLE__
 #include <unistd.h>
+
+/* Timestamp/body buffer sizes for the verification edge tests. */
+enum { TS_BUFSIZE = 32, LONG_BODY_LEN = 120, LONG_BODY_BUFSIZE = 200 };
 #endif
 
 /*
@@ -61,7 +64,7 @@ TEST(add_tag_control_char_rejected)
 TEST(add_tag_invalid_utf8_rejected)
 {
     char *db = make_temp_db_path();
-    char tag[] = {(char)0xff, (char)0xfe, 'x', '\0'};
+    char tag[] = {(char)UTF8_INVALID_FF, (char)UTF8_INVALID_FE, 'x', '\0'};
     const char *args[] = {"add", "--tag", tag, "body"};
     CmdResult r;
     ASSERT_TRUE(db != NULL);
@@ -74,7 +77,7 @@ TEST(add_tag_invalid_utf8_rejected)
 TEST(add_key_control_char_rejected)
 {
     char *db = make_temp_db_path();
-    char key[] = {'k', 0x7f, '\0'};
+    char key[] = {'k', ASCII_DEL, '\0'};
     const char *args[] = {"add", "--key", key, "body"};
     CmdResult r;
     ASSERT_TRUE(db != NULL);
@@ -157,7 +160,7 @@ TEST(keyless_merge_keeps_created_at)
         const char *end = NULL;
         p += strlen("\"created_at\":\"");
         end = strchr(p, '"');
-        created1 = malloc(32);
+        created1 = malloc(TS_BUFSIZE);
         ASSERT_TRUE(created1 != NULL);
         if (created1 != NULL) {
             created1[0] = '\0';
@@ -195,7 +198,7 @@ TEST(update_preserves_id_key_source_created_at)
     const char *a[] = {"add", "--json", "--key", "slot", "--source", "human", "v1"};
     const char *uargs[] = {"update", "--json", "--key", "slot", "--text", "v2"};
     const char *gargs[] = {"get", "--json", "--key", "slot"};
-    char created[32];
+    char created[TS_BUFSIZE];
     const char *p = NULL;
     ASSERT_TRUE(db != NULL);
     created[0] = '\0';
@@ -436,7 +439,7 @@ TEST(list_no_matches_json_total_zero)
 TEST(add_invalid_utf8_body_rejected)
 {
     char *db = make_temp_db_path();
-    char bad[] = {(char)0x80, (char)0xff, 'a', '\0'};
+    char bad[] = {(char)UTF8_STRAY_CONT, (char)UTF8_INVALID_FF, 'a', '\0'};
     const char *args[] = {"add", "-"};
     CmdResult r;
     ASSERT_TRUE(db != NULL);
@@ -449,7 +452,7 @@ TEST(add_invalid_utf8_body_rejected)
 TEST(update_invalid_utf8_text_rejected)
 {
     char *db = make_temp_db_path();
-    char bad[] = {(char)0xff, '\0'};
+    char bad[] = {(char)UTF8_INVALID_FF, '\0'};
     CmdResult r;
     CmdResult u;
     const char *a[] = {"add", "ok"};
@@ -486,17 +489,17 @@ TEST(human_list_preview_first_line_only)
 TEST(human_list_preview_truncates_long_line)
 {
     char *db = make_temp_db_path();
-    char body[200];
+    char body[LONG_BODY_BUFSIZE];
     CmdResult r;
     CmdResult l;
     const char *a[2];
     const char *largs[] = {"list"};
     size_t i = 0;
     ASSERT_TRUE(db != NULL);
-    for (i = 0; i < 120U; i++) {
+    for (i = 0; i < LONG_BODY_LEN; i++) {
         body[i] = 'x';
     }
-    body[120] = '\0';
+    body[LONG_BODY_LEN] = '\0';
     a[0] = "add";
     a[1] = body;
     r = run_remember(db, a, sizeof(a) / sizeof(a[0]), NULL);

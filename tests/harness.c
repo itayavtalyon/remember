@@ -13,6 +13,18 @@
 #include <sys/wait.h>
 #include <unistd.h>
 
+/* Buffer sizes and growth caps for the subprocess capture harness. */
+enum {
+    CAPTURE_INITIAL_CAP = 4096, /* first pipe-read buffer; doubles thereafter */
+    READ_CHUNK = 4096,          /* per-read scratch buffer */
+    PATH_BUFSIZE = 4096,        /* filesystem path buffer */
+    CMD_BUFSIZE = 1024,         /* sqlite3 CLI command buffer */
+    LINE_BUFSIZE = 512,         /* single output line buffer */
+    REGISTRY_INITIAL_CAP = 16,  /* temp-dir registry initial slots */
+    EXIT_SIGNAL_BASE = 128,     /* shell convention: 128 + signal number */
+    DECIMAL_BASE = 10           /* strtol radix */
+};
+
 /* Write-once path to the CLI binary under test, set from argv at startup. Mutable
    process-global by necessity (no const init available at that point). */
 // NOLINTNEXTLINE(cppcoreguidelines-avoid-non-const-global-variables)
@@ -39,7 +51,7 @@ typedef struct {
 static bool buf_append(Buf *b, const char *src, size_t n)
 {
     if (b->len + n + 1U > b->cap) {
-        size_t ncap = (b->cap != 0U) ? b->cap : 4096U;
+        size_t ncap = (b->cap != 0U) ? b->cap : CAPTURE_INITIAL_CAP;
         char *nd = NULL;
         while (ncap < b->len + n + 1U) {
             ncap *= 2U;
@@ -93,7 +105,7 @@ static void drain_two(int fd0, int fd1, char **out0, char **out1)
         }
         for (i = 0; i < nfds; i++) {
             int idx = slot[i];
-            char tmp[4096];
+            char tmp[READ_CHUNK];
             ssize_t n = 0;
 
             /* POLLIN/POLLHUP/POLLERR are POSIX-defined signed int macros. */
@@ -230,7 +242,7 @@ static int wait_status(pid_t pid)
         return WEXITSTATUS(status);
     }
     if (WIFSIGNALED(status)) {
-        return 128 + WTERMSIG(status);
+        return EXIT_SIGNAL_BASE + WTERMSIG(status);
     }
     return EXIT_SPAWN_FAIL;
 }
@@ -336,7 +348,7 @@ static void remove_temp_dir(const char *dir)
         /* readdir: single-threaded test harness; no portable reentrant variant. */
         // NOLINTNEXTLINE(concurrency-mt-unsafe)
         while ((ent = readdir(d)) != NULL) {
-            char path[4096];
+            char path[PATH_BUFSIZE];
             struct stat st;
             int n = 0;
             if (strcmp(ent->d_name, ".") == 0 || strcmp(ent->d_name, "..") == 0) {
@@ -379,7 +391,7 @@ static void register_temp_dir(const char *dir)
         g_atexit_registered = true;
     }
     if (g_temp_count == g_temp_cap) {
-        size_t ncap = (g_temp_cap != 0U) ? g_temp_cap * 2U : 16U;
+        size_t ncap = (g_temp_cap != 0U) ? g_temp_cap * 2U : REGISTRY_INITIAL_CAP;
         char **grown = (char **)realloc((void *)g_temp_dirs, ncap * sizeof(*grown));
         if (grown == NULL) {
             return;
@@ -448,7 +460,7 @@ long parse_id_stdout(const char *out)
         return -1;
     }
     errno = 0;
-    id = strtol(copy, &end, 10);
+    id = strtol(copy, &end, DECIMAL_BASE);
     if (errno != 0 || end == copy || (end != NULL && *end != '\0')) {
         free(copy);
         return -1;
@@ -510,9 +522,9 @@ static bool shell_quote_append(char *dst, size_t cap, size_t *len, const char *s
 
 char *harness_sqlite_query_line(const char *db_path, const char *sql)
 {
-    char cmd[1024];
+    char cmd[CMD_BUFSIZE];
     FILE *fp = NULL;
-    char line[512];
+    char line[LINE_BUFSIZE];
     char *out = NULL;
     size_t len = 0;
 

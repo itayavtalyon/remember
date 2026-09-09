@@ -7,6 +7,11 @@
 #include <stdlib.h>
 #include <string.h>
 
+enum {
+    NONZERO_SENTINEL = 7, /* pre-set out-count; store must reset it to 0 */
+    ALLOC_SWEEP_MAX = 24  /* alloc-failure injection points to sweep */
+};
+
 /*
  * Store unit tests for P7 entry_links (schema v3 + graph/rekey ports).
  * Black-box against store.h; schema via sqlite3 CLI inspect.
@@ -580,7 +585,7 @@ TEST(store_list_neighbors_for_empty_page)
     char *db = NULL;
     Store *s = open_temp(&db);
     StoreNeighbor *rows = NULL;
-    size_t n = 7U;
+    size_t n = NONZERO_SENTINEL;
 
     ASSERT_TRUE(s != NULL);
     ASSERT_EQ_INT((int)store_list_neighbors_for(s, NULL, 0U, k_now, &rows, &n), (int)STORE_OK);
@@ -608,7 +613,7 @@ TEST(store_list_neighbors_oom_keeps_key_and_trash)
     ASSERT_EQ_INT((int)store_link(s, (StoreEdge){.from_id = a, .to_id = b}, STORE_EDGE_RELATED, k_now, &act, &stub), (int)STORE_OK);
     store_neighbor_free(&stub);
 
-    for (i = 0; i < 24; i++) {
+    for (i = 0; i < ALLOC_SWEEP_MAX; i++) {
         StoreNeighbor *rows = NULL;
         size_t n = 0U;
         StoreStatus st = STORE_OK;
@@ -667,6 +672,9 @@ TEST(store_unlink_stub_load_failure_is_sqlite_not_oom)
 /* Sweep prepare/step/alloc faults across the graph mutators/readers so their
    error and OOM cleanup paths execute (100% line coverage idiom). Asserts no
    crash/leak under ASan; specific results are not the point. */
+/* Fault-injection fuzz sweep: store_test_fail_*(i % N) strides / small counts are
+   intentionally arbitrary tuning to reach distinct failure points. */
+// NOLINTBEGIN(cppcoreguidelines-avoid-magic-numbers,readability-magic-numbers)
 TEST(store_links_fault_injection_sweep)
 {
     char *db = NULL;
@@ -749,6 +757,7 @@ TEST(store_links_fault_injection_sweep)
     free(db);
     ASSERT_TRUE(1);
 }
+// NOLINTEND(cppcoreguidelines-avoid-magic-numbers,readability-magic-numbers)
 #endif /* REMEMBER_TEST_HOOKS */
 
 void register_store_link_tests(void)

@@ -12,6 +12,15 @@
 #include <sys/wait.h>
 #include <unistd.h>
 
+/* Test-fixture sizes/limits (see harness.h for ERR_BUFSIZE/DIR_PERMS). */
+enum {
+    LIST_LIMIT = 20,       /* default page limit across list/search tests */
+    SQL_BUFSIZE = 160,     /* scratch SQL buffer */
+    TINY_ERR_BUFSIZE = 8,  /* deliberately small buffer for truncation test */
+    PATH_OVER_MARGIN = 16, /* bytes past REMEMBER_PATH_MAX for the too-long-path test */
+    MANY_TAGS = 99         /* tag count for the tag-stress test */
+};
+
 /*
  * Unit suite for the store port (step 02). Black-box against store.h;
  * schema details inspected via the sqlite3 CLI helper when available.
@@ -296,7 +305,7 @@ TEST(store_open_concurrent_create_all_succeed)
     for (i = 0; i < RACERS; i++) {
         pids[i] = fork();
         if (pids[i] == 0) {
-            char cerr[256];
+            char cerr[ERR_BUFSIZE];
             Store *cs = store_open(db, cerr, sizeof(cerr));
             store_close(cs);
             _exit(cs != NULL ? 0 : 1);
@@ -368,7 +377,7 @@ cleanup:
 /* Messages longer than the buffer are truncated, never overrun. */
 TEST(store_open_truncates_error_to_buffer)
 {
-    char err[8];
+    char err[TINY_ERR_BUFSIZE];
     Store *s = NULL;
 
     memset(err, 'x', sizeof(err));
@@ -439,7 +448,7 @@ cleanup:
     }
     /* Restore, or the temp-dir sweep cannot remove it. */
     if (locked && parent != NULL) {
-        (void)chmod(parent, 0700);
+        (void)chmod(parent, DIR_PERMS);
     }
     free(nested);
     free(parent);
@@ -448,7 +457,7 @@ cleanup:
 
 TEST(store_open_path_too_long_fails)
 {
-    size_t n = (size_t)REMEMBER_PATH_MAX + 16U;
+    size_t n = (size_t)REMEMBER_PATH_MAX + PATH_OVER_MARGIN;
     char *path = malloc(n + 1U);
     char err[ERR_BUFSIZE];
     Store *s = NULL;
@@ -573,7 +582,7 @@ typedef struct {
 
 static void sql_set_expires(ExpiresUpdate upd)
 {
-    char sql[160];
+    char sql[SQL_BUFSIZE];
 
     (void)snprintf(sql, sizeof(sql), "UPDATE entries SET expires_at='%s' WHERE id=1;", upd.iso);
     free(harness_sqlite_query_line(upd.db, sql));
@@ -677,7 +686,7 @@ TEST(store_expires_at_equal_now_is_trash)
     store_entry_free(&e);
 
     memset(&q, 0, sizeof(q));
-    q.limit = 20U;
+    q.limit = LIST_LIMIT;
     {
         PageResult page = store_list(s, &q, k_now);
         ASSERT_EQ_INT((int)page.st, (int)STORE_OK);
@@ -736,7 +745,7 @@ TEST(store_list_and_search_bins)
                                        "WHERE id=2;"));
 
     memset(&q, 0, sizeof(q));
-    q.limit = 20U;
+    q.limit = LIST_LIMIT;
     {
         PageResult page = store_list(s, &q, k_now);
         ASSERT_EQ_INT((int)page.st, (int)STORE_OK);
@@ -763,7 +772,7 @@ TEST(store_list_and_search_bins)
 
     memset(&sq, 0, sizeof(sq));
     sq.query = "helix";
-    sq.filters.limit = 20U;
+    sq.filters.limit = LIST_LIMIT;
     {
         PageResult page = store_search(s, &sq, k_now);
         ASSERT_EQ_INT((int)page.st, (int)STORE_OK);
@@ -1042,7 +1051,7 @@ TEST(store_purge_trash_deletes_only_expired)
     free(gone);
 
     memset(&q, 0, sizeof(q));
-    q.limit = 20U;
+    q.limit = LIST_LIMIT;
     {
         PageResult page = store_list(s, &q, k_now);
         ASSERT_EQ_INT((int)page.st, (int)STORE_OK);
@@ -1110,7 +1119,7 @@ TEST(store_list_filters_and_paging)
     memset(&q, 0, sizeof(q));
     q.tags = tags_ab;
     q.ntags = 2U;
-    q.limit = 20U;
+    q.limit = LIST_LIMIT;
     q.offset = 0U;
     {
         PageResult page = store_list(s, &q, k_now);
@@ -1131,7 +1140,7 @@ TEST(store_list_filters_and_paging)
 
     memset(&q, 0, sizeof(q));
     q.source = "agent";
-    q.limit = 20U;
+    q.limit = LIST_LIMIT;
     {
         PageResult page = store_list(s, &q, k_now);
         ASSERT_EQ_INT((int)page.st, (int)STORE_OK);
@@ -1148,7 +1157,7 @@ TEST(store_list_filters_and_paging)
 
     memset(&q, 0, sizeof(q));
     q.key = "slot";
-    q.limit = 20U;
+    q.limit = LIST_LIMIT;
     {
         PageResult page = store_list(s, &q, k_now);
         ASSERT_EQ_INT((int)page.st, (int)STORE_OK);
@@ -1299,7 +1308,7 @@ TEST(store_tags_empty_db)
     char err[ERR_BUFSIZE];
     Store *s = NULL;
     TagCount *tags = NULL;
-    size_t n = 99U;
+    size_t n = MANY_TAGS;
 
     ASSERT_TRUE(db != NULL);
     s = store_open(db, err, sizeof(err));
@@ -1421,7 +1430,7 @@ TEST(store_list_prepare_fail)
     s = store_open(db, err, sizeof(err));
     ASSERT_TRUE(s != NULL);
     memset(&q, 0, sizeof(q));
-    q.limit = 20U;
+    q.limit = LIST_LIMIT;
     store_test_fail_prepare_after(0);
     ASSERT_EQ_INT((int)store_list(s, &q, k_now).st, (int)STORE_ERR_SQLITE);
     store_close(s);
@@ -1446,7 +1455,7 @@ TEST(store_search_prepare_and_step_fail)
     store_entry_free(&e);
     memset(&q, 0, sizeof(q));
     q.query = "helix";
-    q.filters.limit = 20U;
+    q.filters.limit = LIST_LIMIT;
 
     /* Fail COUNT prepare. */
     store_test_fail_prepare_after(0);
@@ -1486,6 +1495,10 @@ TEST(store_delete_prepare_fail)
     free(db);
 }
 
+/* Fault-injection fuzz sweep: the store_test_fail_*(i % N) strides and the small
+   buffer/iteration sizes below are intentionally arbitrary tuning knobs chosen to
+   reach distinct failure points; naming each would obscure, not clarify. */
+// NOLINTBEGIN(cppcoreguidelines-avoid-magic-numbers,readability-magic-numbers)
 TEST(store_add_tag_alloc_fail)
 {
     char *db = make_temp_db_path();
@@ -1621,7 +1634,7 @@ TEST(store_fault_injection_sweep)
         store_entry_free(&e);
 
         memset(&q, 0, sizeof(q));
-        q.limit = 20U;
+        q.limit = LIST_LIMIT;
         q.tags = tags;
         q.ntags = (size_t)(1U + (size_t)(i % 3));
         q.source = (i % 4 == 0) ? "agent" : NULL;
@@ -1678,6 +1691,8 @@ TEST(store_fault_injection_sweep)
     free(db);
     ASSERT_TRUE(1);
 }
+// NOLINTEND(cppcoreguidelines-avoid-magic-numbers,readability-magic-numbers)
+
 TEST(store_tags_prepare_fail)
 {
     char *db = make_temp_db_path();

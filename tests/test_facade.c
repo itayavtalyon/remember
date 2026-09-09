@@ -7,6 +7,8 @@
 #include <stdlib.h>
 #include <string.h>
 
+enum { FACADE_ARGV_MAX = 32 }; /* max argv slots built for remember_run */
+
 /*
  * Facade parity: remember_run (in-process, what the GUI links) must produce the
  * same bytes as the CLI subprocess for the same argv against the same DB. Both
@@ -28,7 +30,7 @@ static int facade_run(const char *db, const char *const *cmd, size_t ncmd, Facad
 {
     char **out = cap.out;
     char **err = cap.err;
-    const char *argv[32];
+    const char *argv[FACADE_ARGV_MAX];
     size_t n = 0U;
     size_t i = 0;
     char *obuf = NULL;
@@ -247,7 +249,7 @@ TEST(facade_add_matches_cli)
 
     ASSERT_TRUE(db1 != NULL && db2 != NULL);
     sub = run_remember(db1, cmd, sizeof(cmd) / sizeof(cmd[0]), NULL);
-    frc = facade_run(db2, cmd, 5, (FacadeCapture){.out = &fout, .err = &ferr});
+    frc = facade_run(db2, cmd, sizeof(cmd) / sizeof(cmd[0]), (FacadeCapture){.out = &fout, .err = &ferr});
     ASSERT_EQ_INT(frc, sub.exit_code);
     mask_timestamps(sub.out);
     mask_timestamps(fout);
@@ -279,7 +281,7 @@ TEST(facade_update_matches_cli)
     cmd_result_free(&s2);
 
     sub = run_remember(db1, cmd, sizeof(cmd) / sizeof(cmd[0]), NULL);
-    frc = facade_run(db2, cmd, 7, (FacadeCapture){.out = &fout, .err = &ferr});
+    frc = facade_run(db2, cmd, sizeof(cmd) / sizeof(cmd[0]), (FacadeCapture){.out = &fout, .err = &ferr});
     ASSERT_EQ_INT(frc, sub.exit_code);
     mask_timestamps(sub.out);
     mask_timestamps(fout);

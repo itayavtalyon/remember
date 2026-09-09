@@ -6,6 +6,12 @@
 #include <stdlib.h>
 #include <string.h>
 
+enum {
+    SEED_ROWS = 25,       /* rows seeded for the list/paging tests */
+    BODY_BUFSIZE = 64,    /* scratch body buffer */
+    TAG_PAIRS_OVER = 51   /* one past the 50-tag-filter limit */
+};
+
 static void seed_three(const char *db)
 {
     CmdResult r;
@@ -158,7 +164,7 @@ TEST(list_limit)
     p = r.out;
     while ((p = strstr(p, "\"id\":")) != NULL) {
         count++;
-        p += 5;
+        p += sizeof("\"id\":") - 1;
     }
     ASSERT_EQ_INT(count, 2);
     cmd_result_free(&r);
@@ -174,8 +180,8 @@ TEST(list_limit_default_is_twenty)
     const char *p = NULL;
     const char *largs[] = {"list", "--json"};
     ASSERT_TRUE(db != NULL);
-    for (i = 0; i < 25; i++) {
-        char body[64];
+    for (i = 0; i < SEED_ROWS; i++) {
+        char body[BODY_BUFSIZE];
         const char *a[2];
         CmdResult ar;
         (void)snprintf(body, sizeof(body), "item number %d unique", i);
@@ -189,7 +195,7 @@ TEST(list_limit_default_is_twenty)
     p = r.out;
     while ((p = strstr(p, "\"id\":")) != NULL) {
         count++;
-        p += 5;
+        p += sizeof("\"id\":") - 1;
     }
     ASSERT_EQ_INT(count, 20);
     cmd_result_free(&r);
@@ -278,13 +284,13 @@ TEST(list_offset_past_end_keeps_total)
 TEST(list_too_many_tag_filters_rejected)
 {
     char *db = make_temp_db_path();
-    const char *args[103];
+    const char *args[1 + (TAG_PAIRS_OVER * 2)];
     CmdResult r;
     size_t i = 0;
 
     ASSERT_TRUE(db != NULL);
     args[0] = "list";
-    for (i = 0; i < 51U; i++) {
+    for (i = 0; i < TAG_PAIRS_OVER; i++) {
         args[1U + (i * 2U)] = "--tag";
         args[2U + (i * 2U)] = "t";
     }

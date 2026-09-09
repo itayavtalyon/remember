@@ -6,6 +6,17 @@
 #include <stdlib.h>
 #include <string.h>
 
+enum {
+    NEEDLE_BUFSIZE = 32,    /* substring search buffer */
+    LONG_BODY_BUFSIZE = 64, /* over-length body scratch */
+    LONG_BODY_LEN = 50,     /* generated body length */
+    MAX_LINK_ID = 7,        /* highest entry id linked in the chain */
+    ID_STR_BUFSIZE = 8,     /* decimal id string buffer */
+    STAR_COUNT = 70,        /* U+2605 stars written into big[] */
+    STAR_BYTES = 210,       /* STAR_COUNT * 3 (star is 3 UTF-8 bytes) */
+    BIG_BUFSIZE = 220       /* buffer holding the star run + NUL */
+};
+
 typedef struct {
     const char *db;
     const char *body;
@@ -25,7 +36,7 @@ static long add_body(BodyInput in)
 
 static int json_count_is(const char *json, int want)
 {
-    char needle[32];
+    char needle[NEEDLE_BUFSIZE];
 
     if (json == NULL) {
         return 0;
@@ -455,7 +466,7 @@ TEST(get_list_json_stubs_five_name_preview)
     char *db = make_temp_db_path();
     CmdResult r;
     const char *links_arr = NULL;
-    char long_body[64];
+    char long_body[LONG_BODY_BUFSIZE];
     const char *add_long[] = {"add", "--key", "slot:k", long_body};
     const char *cites[] = {"link", "--from", "1", "--to", "2", "--kind", "cites"};
     const char *back[] = {"link", "--from", "2", "--to", "1", "--kind", "cites"};
@@ -467,10 +478,10 @@ TEST(get_list_json_stubs_five_name_preview)
     size_t i = 0;
 
     ASSERT_TRUE(db != NULL);
-    for (i = 0; i < 50U; i++) {
+    for (i = 0; i < LONG_BODY_LEN; i++) {
         long_body[i] = 'a';
     }
-    long_body[50] = '\0';
+    long_body[LONG_BODY_LEN] = '\0';
 
     {
         const char *hub[] = {"add", "--key", "hub:k", "hub body unique"};
@@ -552,9 +563,9 @@ TEST(human_list_related_ids_trash_cap)
     ASSERT_EQ_INT(r.exit_code, 0);
     cmd_result_free(&r);
 
-    for (i = 2; i <= 7; i++) {
-        char from[8];
-        char to[8];
+    for (i = 2; i <= MAX_LINK_ID; i++) {
+        char from[ID_STR_BUFSIZE];
+        char to[ID_STR_BUFSIZE];
         const char *link[3];
         (void)snprintf(from, sizeof(from), "1");
         (void)snprintf(to, sizeof(to), "%d", i);
@@ -743,7 +754,7 @@ TEST(preview_control_and_multibyte_truncation)
     char *db = make_temp_db_path();
     const char *ctl[] = {"add", "a\tb tail"};
     const char *ls[] = {"list"};
-    char big[220];
+    char big[BIG_BUFSIZE];
     const char *bigcmd[2];
     CmdResult r;
     size_t i = 0;
@@ -753,10 +764,10 @@ TEST(preview_control_and_multibyte_truncation)
     ASSERT_EQ_INT(r.exit_code, 0);
     cmd_result_free(&r);
 
-    for (i = 0; i < 70U; i++) {
+    for (i = 0; i < STAR_COUNT; i++) {
         memcpy(big + (i * 3U), "\xE2\x98\x85", 3); /* U+2605 star, 3 bytes */
     }
-    big[210] = '\0';
+    big[STAR_BYTES] = '\0';
     bigcmd[0] = "add";
     bigcmd[1] = big;
     r = run_remember(db, bigcmd, sizeof(bigcmd) / sizeof(bigcmd[0]), NULL);

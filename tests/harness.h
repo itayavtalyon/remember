@@ -10,7 +10,11 @@ enum {
     EXIT_SPAWN_FAIL = 127, /* child exit / result code when exec or spawn fails */
     PERM_BITS_MASK = 0777, /* st_mode permission bits (cast to unsigned at bitwise use) */
     DIR_PERMS = 0700,      /* store directory mode */
-    DB_FILE_PERMS = 0600   /* db-file / blocker-file mode */
+    DB_FILE_PERMS = 0600,  /* db-file / blocker-file mode */
+    ASCII_DEL = 0x7f,        /* DEL control byte (invalid in tokens) */
+    UTF8_STRAY_CONT = 0x80,  /* lone continuation byte (never a valid lead) */
+    UTF8_INVALID_FE = 0xfe,  /* never a valid UTF-8 byte */
+    UTF8_INVALID_FF = 0xff   /* never a valid UTF-8 byte */
 };
 
 /* A SQL query paired with its expected one-line result (assert_query_is). */
