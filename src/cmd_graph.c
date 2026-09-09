@@ -44,49 +44,53 @@ static int parse_kind_token(const char *raw, StoreEdgeKind *out)
 static int handle_pair_flag(const char *arg, int *i, int rest_argc, const char **rest_argv,
                             PairParse *out)
 {
-    const char *err = NULL;
 
     if (strcmp(arg, "--") == 0) {
         return 2;
     }
     if (strcmp(arg, "--from") == 0) {
-        if (take_value(i, rest_argc, rest_argv, &out->from_id_raw, &err,
-                       "missing value for --from") != 0) {
-            err_msg(err);
+        TakeValue taken = take_value(i, rest_argc, rest_argv, "missing value for --from");
+        if (taken.rc != 0) {
+            err_msg(taken.err);
             return -1;
         }
+        out->from_id_raw = taken.value;
         return 1;
     }
     if (strcmp(arg, "--from-key") == 0) {
-        if (take_value(i, rest_argc, rest_argv, &out->from_key_raw, &err,
-                       "missing value for --from-key") != 0) {
-            err_msg(err);
+        TakeValue taken = take_value(i, rest_argc, rest_argv, "missing value for --from-key");
+        if (taken.rc != 0) {
+            err_msg(taken.err);
             return -1;
         }
+        out->from_key_raw = taken.value;
         return 1;
     }
     if (strcmp(arg, "--to") == 0) {
-        if (take_value(i, rest_argc, rest_argv, &out->to_id_raw, &err, "missing value for --to") !=
-            0) {
-            err_msg(err);
+        TakeValue taken = take_value(i, rest_argc, rest_argv, "missing value for --to");
+        if (taken.rc != 0) {
+            err_msg(taken.err);
             return -1;
         }
+        out->to_id_raw = taken.value;
         return 1;
     }
     if (strcmp(arg, "--to-key") == 0) {
-        if (take_value(i, rest_argc, rest_argv, &out->to_key_raw, &err,
-                       "missing value for --to-key") != 0) {
-            err_msg(err);
+        TakeValue taken = take_value(i, rest_argc, rest_argv, "missing value for --to-key");
+        if (taken.rc != 0) {
+            err_msg(taken.err);
             return -1;
         }
+        out->to_key_raw = taken.value;
         return 1;
     }
     if (strcmp(arg, "--kind") == 0) {
-        if (take_value(i, rest_argc, rest_argv, &out->kind_raw, &err, "missing value for --kind") !=
-            0) {
-            err_msg(err);
+        TakeValue taken = take_value(i, rest_argc, rest_argv, "missing value for --kind");
+        if (taken.rc != 0) {
+            err_msg(taken.err);
             return -1;
         }
+        out->kind_raw = taken.value;
         return 1;
     }
     if (arg[0] == '-' && arg[1] != '\0') {
@@ -304,25 +308,26 @@ typedef struct {
 static int handle_related_flag(const char *arg, int *i, int rest_argc, const char **rest_argv,
                                RelatedParse *out)
 {
-    const char *err = NULL;
 
     if (strcmp(arg, "--") == 0) {
         return 2;
     }
     if (strcmp(arg, "--key") == 0) {
-        if (take_value(i, rest_argc, rest_argv, &out->key_raw, &err, "missing value for --key") !=
-            0) {
-            err_msg(err);
+        TakeValue taken = take_value(i, rest_argc, rest_argv, "missing value for --key");
+        if (taken.rc != 0) {
+            err_msg(taken.err);
             return -1;
         }
+        out->key_raw = taken.value;
         return 1;
     }
     if (strcmp(arg, "--kind") == 0) {
-        if (take_value(i, rest_argc, rest_argv, &out->kind_raw, &err, "missing value for --kind") !=
-            0) {
-            err_msg(err);
+        TakeValue taken = take_value(i, rest_argc, rest_argv, "missing value for --kind");
+        if (taken.rc != 0) {
+            err_msg(taken.err);
             return -1;
         }
+        out->kind_raw = taken.value;
         return 1;
     }
     if (strcmp(arg, "--outgoing") == 0) {

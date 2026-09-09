@@ -7,6 +7,7 @@
 /* Shared test constants (enum so a header include never warns "unused"). */
 enum {
     ERR_BUFSIZE = 256,     /* store_open error-message buffer */
+    EXIT_SPAWN_FAIL = 127, /* child exit / result code when exec or spawn fails */
     PERM_BITS_MASK = 0777, /* st_mode permission bits (cast to unsigned at bitwise use) */
     DIR_PERMS = 0700,      /* store directory mode */
     DB_FILE_PERMS = 0600   /* db-file / blocker-file mode */

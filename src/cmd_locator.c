@@ -245,8 +245,13 @@ static int handle_update_flag(const char *arg, int *i, int rest_argc, const char
         return 1;
     }
     if (strcmp(arg, "--key") == 0) {
-        return take_value(i, rest_argc, rest_argv, &out->loc.key_raw, err,
-                          "missing value for --key");
+        TakeValue taken = take_value(i, rest_argc, rest_argv, "missing value for --key");
+        if (taken.rc != 0) {
+            *err = taken.err;
+            return taken.rc;
+        }
+        out->loc.key_raw = taken.value;
+        return 0;
     }
     /* `--text=-` (or any `--text=VALUE`) is always a literal body, including "-". */
     if (strncmp(arg, "--text=", sizeof("--text=") - 1U) == 0) {
@@ -256,20 +261,23 @@ static int handle_update_flag(const char *arg, int *i, int rest_argc, const char
         return 0;
     }
     if (strcmp(arg, "--text") == 0) {
-        if (take_value(i, rest_argc, rest_argv, &out->text_raw, err, "missing value for --text") !=
-            0) {
+        TakeValue taken = take_value(i, rest_argc, rest_argv, "missing value for --text");
+        if (taken.rc != 0) {
+            *err = taken.err;
             return -1;
         }
+        out->text_raw = taken.value;
         out->set_text = true;
         out->text_literal = false; /* bare "-" still means stdin */
         return 0;
     }
     if (strcmp(arg, "--tag") == 0) {
-        const char *t = NULL;
-        if (take_value(i, rest_argc, rest_argv, &t, err, "missing value for --tag") != 0) {
+        TakeValue taken = take_value(i, rest_argc, rest_argv, "missing value for --tag");
+        if (taken.rc != 0) {
+            *err = taken.err;
             return -1;
         }
-        if (push_cstr_ptr(&out->tag_raw, &out->ntag_raw, tag_cap, t) != 0) {
+        if (push_cstr_ptr(&out->tag_raw, &out->ntag_raw, tag_cap, taken.value) != 0) {
             *err = "out of memory";
             return -1;
         }
@@ -284,11 +292,22 @@ static int handle_update_flag(const char *arg, int *i, int rest_argc, const char
         return 0;
     }
     if (strcmp(arg, "--ttl") == 0) {
-        return take_value(i, rest_argc, rest_argv, &out->ttl_raw, err, "missing value for --ttl");
+        TakeValue taken = take_value(i, rest_argc, rest_argv, "missing value for --ttl");
+        if (taken.rc != 0) {
+            *err = taken.err;
+            return taken.rc;
+        }
+        out->ttl_raw = taken.value;
+        return 0;
     }
     if (strcmp(arg, "--expires") == 0) {
-        return take_value(i, rest_argc, rest_argv, &out->expires_raw, err,
-                          "missing value for --expires");
+        TakeValue taken = take_value(i, rest_argc, rest_argv, "missing value for --expires");
+        if (taken.rc != 0) {
+            *err = taken.err;
+            return taken.rc;
+        }
+        out->expires_raw = taken.value;
+        return 0;
     }
     if (strcmp(arg, "--clear-expires") == 0) {
         out->clear_expires = true;
@@ -427,6 +446,31 @@ static int update_prepare_payload(const UpdateParse *parsed, char **body, size_t
     return 0;
 }
 
+/* Resolve --clear-expires / --ttl / --expires into (set_expires, expires_at).
+   0 ok; -1 usage error (message already printed). expires_at points into buf. */
+static int update_resolve_expiry(const UpdateParse *parsed, const char *now, char *buf,
+                                 size_t buflen, bool *out_set, const char **out_expires)
+{
+    ExpiryResult exp = {.rc = 0};
+
+    *out_set = false;
+    *out_expires = NULL;
+    if (parsed->clear_expires) {
+        *out_set = true;
+        return 0;
+    }
+    exp = resolve_expiry_flags(
+        (ExpiryFlags){.ttl_raw = parsed->ttl_raw, .expires_raw = parsed->expires_raw}, now, buf,
+        buflen);
+    if (exp.rc != 0) {
+        err_msg(exp.err);
+        return -1;
+    }
+    *out_expires = exp.expires;
+    *out_set = (exp.expires != NULL);
+    return 0;
+}
+
 int cmd_update(Store *s, bool json, int rest_argc, const char **rest_argv)
 {
     UpdateParse parsed;
@@ -484,15 +528,9 @@ int cmd_update(Store *s, bool json, int rest_argc, const char **rest_argv)
         err_msg("internal error");
         goto cleanup;
     }
-    if (parsed.clear_expires) {
-        set_expires = true;
-        expires_at = NULL;
-    } else if (resolve_expiry_flags(parsed.ttl_raw, parsed.expires_raw, now, expires_iso,
-                                    sizeof(expires_iso), &expires_at, &err) != 0) {
-        err_msg(err);
+    if (update_resolve_expiry(&parsed, now, expires_iso, sizeof(expires_iso), &set_expires,
+                              &expires_at) != 0) {
         goto cleanup;
-    } else if (expires_at != NULL) {
-        set_expires = true;
     }
     st = store_update(s, id, key_or_null, parsed.set_text, body, body_hash, set_tags,
                       (const char *const *)tags_norm, ntags, set_expires, expires_at,
@@ -527,25 +565,26 @@ typedef struct {
 static int handle_rekey_flag(const char *arg, int *i, int rest_argc, const char **rest_argv,
                              RekeyParse *out)
 {
-    const char *err = NULL;
 
     if (strcmp(arg, "--") == 0) {
         return 2;
     }
     if (strcmp(arg, "--key") == 0) {
-        if (take_value(i, rest_argc, rest_argv, &out->loc.key_raw, &err,
-                       "missing value for --key") != 0) {
-            err_msg(err);
+        TakeValue taken = take_value(i, rest_argc, rest_argv, "missing value for --key");
+        if (taken.rc != 0) {
+            err_msg(taken.err);
             return -1;
         }
+        out->loc.key_raw = taken.value;
         return 1;
     }
     if (strcmp(arg, "--to-key") == 0) {
-        if (take_value(i, rest_argc, rest_argv, &out->to_key_raw, &err,
-                       "missing value for --to-key") != 0) {
-            err_msg(err);
+        TakeValue taken = take_value(i, rest_argc, rest_argv, "missing value for --to-key");
+        if (taken.rc != 0) {
+            err_msg(taken.err);
             return -1;
         }
+        out->to_key_raw = taken.value;
         return 1;
     }
     if (strcmp(arg, "--clear-key") == 0) {

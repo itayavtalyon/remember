@@ -38,28 +38,52 @@ static int handle_add_flag(const char *arg, int *i, int rest_argc, const char **
         return 1; /* end opts */
     }
     if (strcmp(arg, "--source") == 0) {
-        return take_value(i, rest_argc, rest_argv, &out->source, err, "missing value for --source");
+        TakeValue taken = take_value(i, rest_argc, rest_argv, "missing value for --source");
+        if (taken.rc != 0) {
+            *err = taken.err;
+            return taken.rc;
+        }
+        out->source = taken.value;
+        return 0;
     }
     if (strcmp(arg, "--key") == 0) {
-        return take_value(i, rest_argc, rest_argv, &out->key_raw, err, "missing value for --key");
+        TakeValue taken = take_value(i, rest_argc, rest_argv, "missing value for --key");
+        if (taken.rc != 0) {
+            *err = taken.err;
+            return taken.rc;
+        }
+        out->key_raw = taken.value;
+        return 0;
     }
     if (strcmp(arg, "--tag") == 0) {
-        const char *t = NULL;
-        if (take_value(i, rest_argc, rest_argv, &t, err, "missing value for --tag") != 0) {
+        TakeValue taken = take_value(i, rest_argc, rest_argv, "missing value for --tag");
+        if (taken.rc != 0) {
+            *err = taken.err;
             return -1;
         }
-        if (push_cstr_ptr(&out->tag_raw, &out->ntag_raw, tag_cap, t) != 0) {
+        if (push_cstr_ptr(&out->tag_raw, &out->ntag_raw, tag_cap, taken.value) != 0) {
             *err = "out of memory";
             return -1;
         }
         return 0;
     }
     if (strcmp(arg, "--ttl") == 0) {
-        return take_value(i, rest_argc, rest_argv, &out->ttl_raw, err, "missing value for --ttl");
+        TakeValue taken = take_value(i, rest_argc, rest_argv, "missing value for --ttl");
+        if (taken.rc != 0) {
+            *err = taken.err;
+            return taken.rc;
+        }
+        out->ttl_raw = taken.value;
+        return 0;
     }
     if (strcmp(arg, "--expires") == 0) {
-        return take_value(i, rest_argc, rest_argv, &out->expires_raw, err,
-                          "missing value for --expires");
+        TakeValue taken = take_value(i, rest_argc, rest_argv, "missing value for --expires");
+        if (taken.rc != 0) {
+            *err = taken.err;
+            return taken.rc;
+        }
+        out->expires_raw = taken.value;
+        return 0;
     }
     if (arg[0] == '-' && arg[1] != '\0') {
         (void)fprintf(app_err(), "remember: unknown option '%s'\n", arg);
@@ -195,10 +219,15 @@ int cmd_add(Store *s, bool json, int rest_argc, const char **rest_argv)
         err_msg("internal error");
         goto cleanup;
     }
-    if (resolve_expiry_flags(parsed.ttl_raw, parsed.expires_raw, now, expires_iso,
-                             sizeof(expires_iso), &expires_at, &err) != 0) {
-        err_msg(err);
-        goto cleanup;
+    {
+        ExpiryResult exp = resolve_expiry_flags(
+            (ExpiryFlags){.ttl_raw = parsed.ttl_raw, .expires_raw = parsed.expires_raw}, now,
+            expires_iso, sizeof(expires_iso));
+        if (exp.rc != 0) {
+            err_msg(exp.err);
+            goto cleanup;
+        }
+        expires_at = exp.expires;
     }
     st = store_add(s, body, hash, key_or_null, (const char *const *)tags_norm, ntags, parsed.source,
                    expires_at, now, &action, &entry);

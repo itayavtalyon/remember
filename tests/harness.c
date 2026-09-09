@@ -126,7 +126,7 @@ static CmdResult harness_error(const char *msg)
 {
     CmdResult r;
 
-    r.exit_code = 127;
+    r.exit_code = EXIT_SPAWN_FAIL;
     r.out = strdup("");
     r.err = strdup(msg);
     return r;
@@ -177,7 +177,7 @@ typedef struct {
 static void child_run(ChildPipes pipes, const char *stdin_data, char *const argv[])
 {
     if (dup2(pipes.out[1], STDOUT_FILENO) < 0 || dup2(pipes.err[1], STDERR_FILENO) < 0) {
-        _exit(127);
+        _exit(EXIT_SPAWN_FAIL);
     }
     close(pipes.out[0]);
     close(pipes.out[1]);
@@ -186,7 +186,7 @@ static void child_run(ChildPipes pipes, const char *stdin_data, char *const argv
 
     if (stdin_data != NULL) {
         if (dup2(pipes.in[0], STDIN_FILENO) < 0) {
-            _exit(127);
+            _exit(EXIT_SPAWN_FAIL);
         }
         close(pipes.in[0]);
         close(pipes.in[1]);
@@ -198,7 +198,7 @@ static void child_run(ChildPipes pipes, const char *stdin_data, char *const argv
         }
     }
     execv(g_remember_bin, argv);
-    _exit(127);
+    _exit(EXIT_SPAWN_FAIL);
 }
 
 static void write_all(int fd, const char *data)
@@ -224,7 +224,7 @@ static int wait_status(pid_t pid)
     int status = 0;
 
     if (waitpid(pid, &status, 0) < 0) {
-        return 127;
+        return EXIT_SPAWN_FAIL;
     }
     if (WIFEXITED(status)) {
         return WEXITSTATUS(status);
@@ -232,7 +232,7 @@ static int wait_status(pid_t pid)
     if (WIFSIGNALED(status)) {
         return 128 + WTERMSIG(status);
     }
-    return 127;
+    return EXIT_SPAWN_FAIL;
 }
 
 CmdResult run_remember(const char *db_path, const char *const *args, size_t nargs,

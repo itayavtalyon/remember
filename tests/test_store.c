@@ -681,8 +681,6 @@ TEST(store_expires_at_equal_now_is_trash)
     {
         PageResult page = store_list(s, &q, k_now);
         ASSERT_EQ_INT((int)page.st, (int)STORE_OK);
-        rows = page.entries;
-        count = page.count;
         total = page.total;
     }
     ASSERT_EQ_INT((int)total, 0);
@@ -1060,7 +1058,6 @@ TEST(store_purge_trash_deletes_only_expired)
     {
         PageResult page = store_list(s, &q, k_now);
         ASSERT_EQ_INT((int)page.st, (int)STORE_OK);
-        rows = page.entries;
         total = page.total;
     }
     ASSERT_EQ_INT((int)total, 0);
@@ -1140,7 +1137,6 @@ TEST(store_list_filters_and_paging)
         ASSERT_EQ_INT((int)page.st, (int)STORE_OK);
         rows = page.entries;
         count = page.count;
-        total = page.total;
     }
     ASSERT_EQ_INT((int)count, 1);
     ASSERT_STREQ(rows[0].body, "beta");

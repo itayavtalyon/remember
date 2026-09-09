@@ -29,9 +29,15 @@ const char *action_name(StoreAddAction a);
 /* Growable argv-alias list (tags). Does not own the strings. */
 int push_cstr_ptr(const char ***arr, size_t *n, size_t *cap, const char *t);
 
-/* Take the next token as an option value; advances *i. */
-int take_value(int *i, int rest_argc, const char **rest_argv, const char **out, const char **err,
-               const char *missing_msg);
+/* Result of take_value: rc 0 with value set, or rc -1 with err (the missing_msg). */
+typedef struct {
+    int rc;
+    const char *value;
+    const char *err;
+} TakeValue;
+
+/* Take the next token as an option value; advances *i on success. */
+TakeValue take_value(int *i, int rest_argc, const char **rest_argv, const char *missing_msg);
 
 int normalize_tags(const char *const *tag_raw, size_t ntag_raw, char ***out_tags, size_t *out_ntags,
                    const char **err);
@@ -58,11 +64,24 @@ int parse_ttl_to_expires(const char *token, const char *now, char *out, size_t o
 /* --expires token -> canonical .mmmZ. 0 ok, -1 usage (*err). */
 int parse_expires_to_iso(const char *token, char *out, size_t outlen, const char **err);
 
+/* The mutually-exclusive --ttl / --expires flag values (either may be NULL). */
+typedef struct {
+    const char *ttl_raw;
+    const char *expires_raw;
+} ExpiryFlags;
+
+/* Result of resolve_expiry_flags: rc 0 with expires (NULL if neither flag given,
+   else points into the caller's out buffer), or rc -1 with err. */
+typedef struct {
+    int rc;
+    const char *expires;
+    const char *err;
+} ExpiryResult;
+
 /*
- * Resolve --ttl / --expires mutex into *out_expires (NULL if neither).
- * out must live as long as *out_expires is used. 0 ok, -1 usage (*err).
+ * Resolve the --ttl / --expires mutex. On rc 0, expires is NULL (neither) or points
+ * into out (canonical .mmmZ); out must outlive use of expires. rc -1 sets err.
  */
-int resolve_expiry_flags(const char *ttl_raw, const char *expires_raw, const char *now, char *out,
-                         size_t outlen, const char **out_expires, const char **err);
+ExpiryResult resolve_expiry_flags(ExpiryFlags flags, const char *now, char *out, size_t outlen);
 
 #endif /* REMEMBER_COMMANDS_COMMON_H */

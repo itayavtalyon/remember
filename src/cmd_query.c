@@ -71,8 +71,13 @@ static int list_take_limit(int *i, int rest_argc, const char **rest_argv, size_t
     const char *val = NULL;
     size_t lim = 0U;
 
-    if (take_value(i, rest_argc, rest_argv, &val, err, "missing value for --limit") != 0) {
-        return -1;
+    {
+        TakeValue taken = take_value(i, rest_argc, rest_argv, "missing value for --limit");
+        if (taken.rc != 0) {
+            *err = taken.err;
+            return -1;
+        }
+        val = taken.value;
     }
     if (parse_size_token(val, &lim) != 0 || lim == 0U || lim > LIST_LIMIT_MAX) {
         *err = "invalid --limit (must be 1..1000)";
@@ -88,8 +93,13 @@ static int list_take_offset(int *i, int rest_argc, const char **rest_argv, size_
     const char *val = NULL;
     size_t off = 0U;
 
-    if (take_value(i, rest_argc, rest_argv, &val, err, "missing value for --offset") != 0) {
-        return -1;
+    {
+        TakeValue taken = take_value(i, rest_argc, rest_argv, "missing value for --offset");
+        if (taken.rc != 0) {
+            *err = taken.err;
+            return -1;
+        }
+        val = taken.value;
     }
     if (parse_size_token(val, &off) != 0) {
         *err = "invalid --offset (must be >= 0)";
@@ -112,8 +122,13 @@ static int list_handle_opt(const char *arg, int *i, int rest_argc, const char **
         return 1;
     }
     if (strcmp(arg, "--tag") == 0) {
-        if (take_value(i, rest_argc, rest_argv, &val, err, "missing value for --tag") != 0) {
-            return -1;
+        {
+            TakeValue taken = take_value(i, rest_argc, rest_argv, "missing value for --tag");
+            if (taken.rc != 0) {
+                *err = taken.err;
+                return -1;
+            }
+            val = taken.value;
         }
         if (push_cstr_ptr(&out->tag_raw, &out->ntag_raw, tag_cap, val) != 0) {
             *err = "out of memory";
@@ -122,10 +137,22 @@ static int list_handle_opt(const char *arg, int *i, int rest_argc, const char **
         return 0;
     }
     if (strcmp(arg, "--source") == 0) {
-        return take_value(i, rest_argc, rest_argv, &out->source, err, "missing value for --source");
+        TakeValue taken = take_value(i, rest_argc, rest_argv, "missing value for --source");
+        if (taken.rc != 0) {
+            *err = taken.err;
+            return taken.rc;
+        }
+        out->source = taken.value;
+        return 0;
     }
     if (strcmp(arg, "--key") == 0) {
-        return take_value(i, rest_argc, rest_argv, &out->key_raw, err, "missing value for --key");
+        TakeValue taken = take_value(i, rest_argc, rest_argv, "missing value for --key");
+        if (taken.rc != 0) {
+            *err = taken.err;
+            return taken.rc;
+        }
+        out->key_raw = taken.value;
+        return 0;
     }
     if (strcmp(arg, "--limit") == 0) {
         return list_take_limit(i, rest_argc, rest_argv, &out->limit, err);

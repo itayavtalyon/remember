@@ -172,16 +172,13 @@ int push_cstr_ptr(const char ***arr, size_t *n, size_t *cap, const char *t)
     return 0;
 }
 
-int take_value(int *i, int rest_argc, const char **rest_argv, const char **out, const char **err,
-               const char *missing_msg)
+TakeValue take_value(int *i, int rest_argc, const char **rest_argv, const char *missing_msg)
 {
     if (*i + 1 >= rest_argc) {
-        *err = missing_msg;
-        return -1;
+        return (TakeValue){.rc = -1, .value = NULL, .err = missing_msg};
     }
     *i += 1;
-    *out = rest_argv[*i];
-    return 0;
+    return (TakeValue){.rc = 0, .value = rest_argv[*i], .err = NULL};
 }
 
 /* ISO C11: avoid strdup (POSIX; hidden under -std=c11 without feature macros). */
@@ -670,27 +667,24 @@ int parse_expires_to_iso(const char *token, char *out, size_t outlen, const char
     return 0;
 }
 
-int resolve_expiry_flags(const char *ttl_raw, const char *expires_raw, const char *now, char *out,
-                         size_t outlen, const char **out_expires, const char **err)
+ExpiryResult resolve_expiry_flags(ExpiryFlags flags, const char *now, char *out, size_t outlen)
 {
-    *out_expires = NULL;
-    if (ttl_raw != NULL && expires_raw != NULL) {
-        *err = "cannot combine --ttl and --expires";
-        return -1;
+    const char *err = NULL;
+
+    if (flags.ttl_raw != NULL && flags.expires_raw != NULL) {
+        return (ExpiryResult){.rc = -1, .expires = NULL, .err = "cannot combine --ttl and --expires"};
     }
-    if (ttl_raw != NULL) {
-        if (parse_ttl_to_expires(ttl_raw, now, out, outlen, err) != 0) {
-            return -1;
+    if (flags.ttl_raw != NULL) {
+        if (parse_ttl_to_expires(flags.ttl_raw, now, out, outlen, &err) != 0) {
+            return (ExpiryResult){.rc = -1, .expires = NULL, .err = err};
         }
-        *out_expires = out;
-        return 0;
+        return (ExpiryResult){.rc = 0, .expires = out, .err = NULL};
     }
-    if (expires_raw != NULL) {
-        if (parse_expires_to_iso(expires_raw, out, outlen, err) != 0) {
-            return -1;
+    if (flags.expires_raw != NULL) {
+        if (parse_expires_to_iso(flags.expires_raw, out, outlen, &err) != 0) {
+            return (ExpiryResult){.rc = -1, .expires = NULL, .err = err};
         }
-        *out_expires = out;
-        return 0;
+        return (ExpiryResult){.rc = 0, .expires = out, .err = NULL};
     }
-    return 0;
+    return (ExpiryResult){.rc = 0, .expires = NULL, .err = NULL};
 }

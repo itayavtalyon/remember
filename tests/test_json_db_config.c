@@ -25,7 +25,7 @@ static CmdResult run_remember_raw(const char *const *argv, size_t argc, const ch
     size_t i = 0;
 
     if (g_remember_bin == NULL) {
-        result.exit_code = 127;
+        result.exit_code = EXIT_SPAWN_FAIL;
         result.out = strdup("");
         result.err = strdup("no bin");
         return result;
@@ -33,14 +33,14 @@ static CmdResult run_remember_raw(const char *const *argv, size_t argc, const ch
     /* pipe2(O_CLOEXEC) unavailable on macOS; ends closed before exec */
     // NOLINTNEXTLINE(android-cloexec-pipe)
     if (pipe(out_pipe) != 0 || pipe(err_pipe) != 0) {
-        result.exit_code = 127;
+        result.exit_code = EXIT_SPAWN_FAIL;
         result.out = strdup("");
         result.err = strdup("pipe");
         return result;
     }
     av = (char **)calloc(argc + 2U, sizeof(*av));
     if (av == NULL) {
-        result.exit_code = 127;
+        result.exit_code = EXIT_SPAWN_FAIL;
         result.out = strdup("");
         result.err = strdup("oom");
         return result;
@@ -67,7 +67,7 @@ static CmdResult run_remember_raw(const char *const *argv, size_t argc, const ch
             }
         }
         execv(g_remember_bin, av);
-        _exit(127);
+        _exit(EXIT_SPAWN_FAIL);
     }
     free((void *)av);
     close(out_pipe[1]);
@@ -115,7 +115,7 @@ static CmdResult run_remember_raw(const char *const *argv, size_t argc, const ch
     {
         int st = 0;
         (void)waitpid(pid, &st, 0);
-        result.exit_code = WIFEXITED(st) ? WEXITSTATUS(st) : 127;
+        result.exit_code = WIFEXITED(st) ? WEXITSTATUS(st) : EXIT_SPAWN_FAIL;
     }
     return result;
 }
