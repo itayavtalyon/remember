@@ -17,11 +17,13 @@ typedef struct {
     const char *key_raw;
     const char *body_raw;
     const char **tag_raw;
+    const char *ttl_raw;
+    const char *expires_raw;
     size_t ntag_raw;
     /* True when the body token followed `--` — then "-" is a literal body. */
     bool body_literal;
-    const char *ttl_raw;
-    const char *expires_raw;
+    /* NOLINTNEXTLINE(readability-magic-numbers,cppcoreguidelines-avoid-magic-numbers) */
+    char pad_[7]; /* explicit tail padding (kept -Wpadded-clean) */
 } AddParse;
 
 static void add_parse_free(AddParse *p)

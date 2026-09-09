@@ -19,7 +19,7 @@ enum { READ_BUFSIZE = 4096, URI_BUFSIZE = 512 }; /* scratch read / URI buffers *
 static CmdResult run_remember_raw(const char *const *argv, size_t argc, const char *stdin_data)
 {
     /* Like run_remember but does not inject --db (for env tests). */
-    CmdResult result = {0, NULL, NULL};
+    CmdResult result = {.out = NULL, .err = NULL, .exit_code = 0};
     int out_pipe[2];
     int err_pipe[2];
     pid_t pid = 0;

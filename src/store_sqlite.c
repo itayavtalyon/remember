@@ -39,6 +39,7 @@ typedef struct {
 typedef struct {
     long long subject_id;
     StoreNeighborDir dir;
+    char pad_[4]; /* explicit tail padding (kept -Wpadded-clean) */
 } NeighborQuery;
 
 /* ---- optional fault injection (coverage / unit tests) --------------------

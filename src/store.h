@@ -99,12 +99,14 @@ StoreStatus store_get_by_key(Store *s, const char *key, bool trash, const char *
  */
 typedef struct {
     const char *const *tags; /* may be NULL when ntags == 0 */
+    const char *source;      /* NULL = any */
+    const char *key;         /* NULL = any; exact match */
     size_t ntags;
-    const char *source; /* NULL = any */
-    const char *key;    /* NULL = any; exact match */
     size_t limit;
     size_t offset;
     bool trash; /* false = active only; true = trash only */
+    /* NOLINTNEXTLINE(readability-magic-numbers,cppcoreguidelines-avoid-magic-numbers) */
+    char pad_[7]; /* explicit tail padding to keep the struct -Wpadded-clean */
 } ListQuery;
 
 /*
@@ -114,10 +116,11 @@ typedef struct {
  * count/total are 0. count and total travel together so they cannot be transposed.
  */
 typedef struct {
-    StoreStatus st;
     Entry *entries;
     size_t count;
     size_t total;
+    StoreStatus st;
+    char pad_[4]; /* explicit tail padding (kept -Wpadded-clean) */
 } PageResult;
 
 /*
@@ -231,12 +234,13 @@ typedef struct {
     long long subject_id;
     long long from_id;
     long long to_id;
-    StoreEdgeKind kind;
     char *edge_updated_at;
     long long neighbor_id;
     char *neighbor_key; /* NULL if keyless */
     char *neighbor_body;
     char *neighbor_expires_at; /* NULL if durable */
+    StoreEdgeKind kind;
+    char pad_[4]; /* explicit tail padding (kept -Wpadded-clean) */
 } StoreNeighbor;
 
 void store_neighbor_free(StoreNeighbor *n);

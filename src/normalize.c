@@ -145,6 +145,7 @@ static bool utf8_cont(const char *s, size_t len, size_t i, size_t need, unsigned
 typedef struct {
     size_t need;
     unsigned int cp;
+    char pad_[4]; /* explicit tail padding (kept -Wpadded-clean) */
 } Utf8Scalar;
 
 /* Reject overlong encodings, surrogates, and out-of-range scalar values. */

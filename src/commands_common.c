@@ -428,6 +428,7 @@ static int parse_iso_mmmz(const char *s, int *y, int *mo, int *d, int *h, int *m
 typedef struct {
     long long unix_sec;
     int ms;
+    char pad_[4]; /* explicit tail padding (kept -Wpadded-clean) */
 } Instant;
 
 static int unix_to_iso_ms(Instant at, char *out, size_t outlen)

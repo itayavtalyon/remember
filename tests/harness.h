@@ -29,9 +29,10 @@ typedef struct {
 extern const char *g_remember_bin;
 
 typedef struct {
-    int exit_code;
     char *out; /* stdout, heap, may be empty string */
     char *err; /* stderr, heap, may be empty string */
+    int exit_code;
+    char pad_[4]; /* explicit tail padding (kept -Wpadded-clean) */
 } CmdResult;
 
 void cmd_result_free(CmdResult *r);

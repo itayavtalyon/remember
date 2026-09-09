@@ -56,6 +56,8 @@ typedef struct {
     size_t limit;
     size_t offset;
     bool trash;
+    /* NOLINTNEXTLINE(readability-magic-numbers,cppcoreguidelines-avoid-magic-numbers) */
+    char pad_[7]; /* explicit tail padding (kept -Wpadded-clean) */
 } ListParse;
 
 static void list_parse_free(ListParse *p)

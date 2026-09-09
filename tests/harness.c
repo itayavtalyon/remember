@@ -250,7 +250,7 @@ static int wait_status(pid_t pid)
 CmdResult run_remember(const char *db_path, const char *const *args, size_t nargs,
                        const char *stdin_data)
 {
-    CmdResult result = {0, NULL, NULL};
+    CmdResult result = {.out = NULL, .err = NULL, .exit_code = 0};
     int out_pipe[2] = {-1, -1};
     int err_pipe[2] = {-1, -1};
     int in_pipe[2] = {-1, -1};

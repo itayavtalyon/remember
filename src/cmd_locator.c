@@ -18,6 +18,8 @@ typedef struct {
     const char *key_raw;
     const char *id_raw;
     bool trash;
+    /* NOLINTNEXTLINE(readability-magic-numbers,cppcoreguidelines-avoid-magic-numbers) */
+    char pad_[7]; /* explicit tail padding (kept -Wpadded-clean) */
 } LocatorParse;
 
 /* Shared by get/delete: --key, positional id, reject --source and unknowns. */
@@ -219,15 +221,16 @@ int cmd_delete(Store *s, bool json, int rest_argc, const char **rest_argv)
 typedef struct {
     LocatorParse loc;
     const char *text_raw;
+    const char **tag_raw;
+    const char *ttl_raw;
+    const char *expires_raw;
+    size_t ntag_raw;
     bool set_text;
     /* True for `--text=VALUE` (VALUE may be "-"); false for `--text -` (stdin). */
     bool text_literal;
     bool clear_tags;
-    const char **tag_raw;
-    size_t ntag_raw;
-    const char *ttl_raw;
-    const char *expires_raw;
     bool clear_expires;
+    char pad_[4]; /* explicit tail padding (kept -Wpadded-clean) */
 } UpdateParse;
 
 static void update_parse_free(UpdateParse *p)
@@ -560,6 +563,8 @@ typedef struct {
     LocatorParse loc;
     const char *to_key_raw;
     bool clear_key;
+    /* NOLINTNEXTLINE(readability-magic-numbers,cppcoreguidelines-avoid-magic-numbers) */
+    char pad_[7]; /* explicit tail padding (kept -Wpadded-clean) */
 } RekeyParse;
 
 static int handle_rekey_flag(const char *arg, int *i, int rest_argc, const char **rest_argv,

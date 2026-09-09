@@ -31,9 +31,10 @@ int push_cstr_ptr(const char ***arr, size_t *n, size_t *cap, const char *t);
 
 /* Result of take_value: rc 0 with value set, or rc -1 with err (the missing_msg). */
 typedef struct {
-    int rc;
     const char *value;
     const char *err;
+    int rc;
+    char pad_[4]; /* explicit tail padding (kept -Wpadded-clean) */
 } TakeValue;
 
 /* Take the next token as an option value; advances *i on success. */
@@ -73,9 +74,10 @@ typedef struct {
 /* Result of resolve_expiry_flags: rc 0 with expires (NULL if neither flag given,
    else points into the caller's out buffer), or rc -1 with err. */
 typedef struct {
-    int rc;
     const char *expires;
     const char *err;
+    int rc;
+    char pad_[4]; /* explicit tail padding (kept -Wpadded-clean) */
 } ExpiryResult;
 
 /*

@@ -19,6 +19,7 @@ typedef struct {
     const char *kind_raw;
     const char *pos[2];
     int npos;
+    char pad_[4]; /* explicit tail padding (kept -Wpadded-clean) */
 } PairParse;
 
 /* raw is never NULL: callers only parse when a --kind token was given. */
@@ -303,6 +304,8 @@ typedef struct {
     const char *kind_raw;
     bool outgoing;
     bool incoming;
+    /* NOLINTNEXTLINE(readability-magic-numbers,cppcoreguidelines-avoid-magic-numbers) */
+    char pad_[6]; /* explicit tail padding (kept -Wpadded-clean) */
 } RelatedParse;
 
 static int handle_related_flag(const char *arg, int *i, int rest_argc, const char **rest_argv,
