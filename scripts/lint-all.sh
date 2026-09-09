@@ -14,6 +14,7 @@ cd "$ROOT"
 
 BUILD_DIR="${BUILD_DIR:-build}"
 SRC_DIR="src"
+TESTS_DIR="tests"
 REPORT_DIR="lint-reports"
 mkdir -p "$REPORT_DIR"
 
@@ -95,35 +96,61 @@ fi
 
 echo "== cppcheck =="
 if [[ -n "$CPPCHECK" ]] && [[ -d "$SRC_DIR" ]]; then
-  # --enable=all, whole-program (all src TUs together so unusedFunction/staticFunction
-  # resolve across files). Suppressed families are confirmed structural FPs for this
-  # codebase shape, not real defects:
-  #   unusedFunction        src-only scan cannot see callers in tests/, the linked GUI,
-  #                         or the function-pointer command dispatch — every hit is a FP.
+  # --enable=all, whole-program per scan (all TUs in a scan together so
+  # unusedFunction/staticFunction resolve across files). Suppressed families are
+  # confirmed structural FPs for this codebase shape, not real defects:
+  #   unusedFunction        a single-target scan cannot see callers in the other
+  #                         target, the linked GUI, or the function-pointer command
+  #                         dispatch — every hit is a FP.
   #   unusedStructMember    only the deliberate `char pad_[]` tail-padding fields (see
   #                         the -Wpadded=explicit-fields policy) are ever flagged.
   #   normalCheckLevelMaxBranches / checkersReport / toomanyconfigs / missingIncludeSystem
   #                         informational notes, not defects.
   # Genuine should-be-static publics (used only via tests) carry per-line
   # `cppcheck-suppress staticFunction`; everything else is a real fix.
+  cppcheck_families=(
+    --suppress=missingIncludeSystem
+    --suppress=unusedFunction
+    --suppress=unusedStructMember
+    --suppress=normalCheckLevelMaxBranches
+    --suppress=checkersReport
+    --suppress=toomanyconfigs
+  )
+  # src scan: strict — every family suppression above matches here.
   if ! "$CPPCHECK" --enable=all \
       --error-exitcode=1 --inline-suppr \
-      --suppress=missingIncludeSystem \
-      --suppress=unusedFunction \
-      --suppress=unusedStructMember \
-      --suppress=normalCheckLevelMaxBranches \
-      --suppress=checkersReport \
-      --suppress=toomanyconfigs \
+      "${cppcheck_families[@]}" \
       -I "$SRC_DIR" \
       -I third_party/sqlite \
       -I third_party/sha256 \
       $(find "$SRC_DIR" -name '*.c' 2>/dev/null) \
       2>"$REPORT_DIR/cppcheck.txt"; then
-    echo "cppcheck: FAIL"
+    echo "cppcheck (src): FAIL"
     cat "$REPORT_DIR/cppcheck.txt" || true
     fail=1
   else
-    echo "cppcheck: PASS"
+    echo "cppcheck (src): PASS"
+  fi
+  # tests scan, held to the same bar. --suppress=unmatchedSuppression: the shared
+  # family list is broader than what the test TUs happen to trigger, and that is
+  # not itself a defect.
+  if [[ -d "$TESTS_DIR" ]]; then
+    if ! "$CPPCHECK" --enable=all \
+        --error-exitcode=1 --inline-suppr \
+        "${cppcheck_families[@]}" \
+        --suppress=unmatchedSuppression \
+        -I "$SRC_DIR" \
+        -I "$TESTS_DIR" \
+        -I third_party/sqlite \
+        -I third_party/sha256 \
+        $(find "$TESTS_DIR" -name '*.c' 2>/dev/null) \
+        2>"$REPORT_DIR/cppcheck-tests.txt"; then
+      echo "cppcheck (tests): FAIL"
+      cat "$REPORT_DIR/cppcheck-tests.txt" || true
+      fail=1
+    else
+      echo "cppcheck (tests): PASS"
+    fi
   fi
 else
   echo "cppcheck: SKIP"

@@ -266,7 +266,7 @@ TEST(store_open_rolls_back_partial_create)
 {
     char *db = make_temp_db_path();
     char err[ERR_BUFSIZE];
-    Store *s = NULL;
+    const Store *s = NULL;
 
     ASSERT_TRUE(db != NULL);
     free(harness_sqlite_query_line(db, "CREATE TABLE tags(x); PRAGMA user_version=0;"));
@@ -326,7 +326,7 @@ TEST(store_open_concurrent_create_all_succeed)
 TEST(store_open_null_path_fails)
 {
     char err[ERR_BUFSIZE];
-    Store *s = NULL;
+    const Store *s = NULL;
 
     err[0] = '\0';
     s = store_open(NULL, err, sizeof(err));
@@ -337,7 +337,7 @@ TEST(store_open_null_path_fails)
 TEST(store_open_empty_path_fails)
 {
     char err[ERR_BUFSIZE];
-    Store *s = NULL;
+    const Store *s = NULL;
 
     err[0] = '\0';
     s = store_open("", err, sizeof(err));
@@ -378,7 +378,7 @@ cleanup:
 TEST(store_open_truncates_error_to_buffer)
 {
     char err[TINY_ERR_BUFSIZE];
-    Store *s = NULL;
+    const Store *s = NULL;
 
     memset(err, 'x', sizeof(err));
     s = store_open("", err, sizeof(err));
@@ -393,7 +393,7 @@ TEST(store_open_parent_component_file_fails)
     char *blocker = join_path(parent != NULL ? parent : "", "/notadir");
     char *nested = join_path(blocker != NULL ? blocker : "", "/t.db");
     char err[ERR_BUFSIZE];
-    Store *s = NULL;
+    const Store *s = NULL;
     int fd = 0;
 
     ASSERT_TRUE(nested != NULL);
@@ -460,7 +460,7 @@ TEST(store_open_path_too_long_fails)
     size_t n = (size_t)REMEMBER_PATH_MAX + PATH_OVER_MARGIN;
     char *path = (char *)malloc(n + 1U);
     char err[ERR_BUFSIZE];
-    Store *s = NULL;
+    const Store *s = NULL;
 
     ASSERT_TRUE(path != NULL);
     if (path == NULL) {
@@ -481,7 +481,7 @@ TEST(store_open_rejects_non_database_file)
 {
     char *db = make_temp_db_path();
     char err[ERR_BUFSIZE];
-    Store *s = NULL;
+    const Store *s = NULL;
     FILE *f = NULL;
 
     ASSERT_TRUE(db != NULL);
@@ -1305,7 +1305,7 @@ TEST(store_open_oom_on_store_struct)
 {
     char *db = make_temp_db_path();
     char err[ERR_BUFSIZE];
-    Store *s = NULL;
+    const Store *s = NULL;
     ASSERT_TRUE(db != NULL);
     store_test_fail_alloc_after(0); /* first malloc/calloc fails */
     s = store_open(db, err, sizeof(err));

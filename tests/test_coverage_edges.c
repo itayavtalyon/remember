@@ -272,6 +272,7 @@ TEST(output_null_entry_fails)
     ASSERT_EQ_INT(output_get_envelope(f, NULL, NULL, 0, "t"), -1);
     ASSERT_EQ_INT(output_entry_human_line(f, NULL, NULL, 0, "t"), -1);
     ASSERT_EQ_INT(output_list_envelope(f, 0, 1, 1, 1, NULL, NULL, 0, "t"), -1);
+    // cppcheck-suppress nullPointerOutOfResources ; test-only: tmpfile()/malloc exhaustion is asserted above, not defended
     fclose(f);
 }
 
@@ -280,6 +281,7 @@ TEST(output_list_empty_ok)
     FILE *f = tmpfile();
     ASSERT_TRUE(f != NULL);
     ASSERT_EQ_INT(output_list_envelope(f, 0, 20, 0, 0, NULL, NULL, 0, "t"), 0);
+    // cppcheck-suppress nullPointerOutOfResources ; test-only: tmpfile()/malloc exhaustion is asserted above, not defended
     fclose(f);
 }
 
@@ -304,6 +306,7 @@ TEST(output_preview_multibyte_and_truncate)
     body[200] = '\0';
     e.body = body;
     ASSERT_EQ_INT(output_entry_human_line(f, &e, NULL, 0, "t"), 0);
+    // cppcheck-suppress nullPointerOutOfResources ; test-only: tmpfile()/malloc exhaustion is asserted above, not defended
     fclose(f);
 }
 
@@ -682,6 +685,7 @@ TEST(output_utf8_3_and_4_byte_preview)
     e.body = bad;
     ASSERT_EQ_INT(output_entry_human_line(f, &e, NULL, 0, "t"), 0);
     free(e.tags);
+    // cppcheck-suppress nullPointerOutOfResources ; test-only: tmpfile()/malloc exhaustion is asserted above, not defended
     fclose(f);
 }
 
@@ -690,6 +694,7 @@ TEST(output_body_null_human)
     FILE *f = tmpfile();
     ASSERT_TRUE(f != NULL);
     ASSERT_EQ_INT(output_body_human(f, NULL), 0);
+    // cppcheck-suppress nullPointerOutOfResources ; test-only: tmpfile()/malloc exhaustion is asserted above, not defended
     fclose(f);
 }
 
@@ -707,6 +712,7 @@ TEST(util_read_stdin_empty)
     ASSERT_EQ_INT((int)len, 0);
     free(out);
     stdin = old;
+    // cppcheck-suppress nullPointerOutOfResources ; test-only: tmpfile()/malloc exhaustion is asserted above, not defended
     fclose(empty);
 }
 
@@ -719,6 +725,7 @@ TEST(util_read_stdin_over_cap)
     int i;
     ASSERT_TRUE(in != NULL);
     for (i = 0; i < 20; i++) {
+        // cppcheck-suppress nullPointerOutOfResources ; test-only: tmpfile()/malloc exhaustion is asserted above, not defended
         ASSERT_TRUE(fputc('x', in) != EOF);
     }
     rewind(in);
@@ -852,6 +859,7 @@ TEST(output_invalid_utf8_lead_byte)
     e.created_at = (char *)"c";
     e.updated_at = (char *)"u";
     ASSERT_EQ_INT(output_entry_human_line(f, &e, NULL, 0, "t"), 0);
+    // cppcheck-suppress nullPointerOutOfResources ; test-only: tmpfile()/malloc exhaustion is asserted above, not defended
     fclose(f);
 }
 

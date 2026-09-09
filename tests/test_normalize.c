@@ -106,7 +106,7 @@ TEST(body_trim_too_long)
 TEST(body_trim_invalid_utf8)
 {
     char *out = NULL;
-    char bad[] = {'a', (char)UTF8_INVALID_FF, 'b'};
+    const char bad[] = {'a', (char)UTF8_INVALID_FF, 'b'};
     NormStatus st = body_trim_copy(bad, 3, &out, NULL);
 
     ASSERT_EQ_INT(st, NORM_ERR_INVALID_UTF8);
@@ -327,11 +327,11 @@ TEST(token_rejects_empty_and_nonspace_ws_control)
     ASSERT_EQ_INT(normalize_token("a\nb", out, sizeof(out)), NORM_ERR_INVALID_CHAR);
 
     {
-        char ctrl[] = {'a', 0x01, 'b', '\0'};
+        const char ctrl[] = {'a', 0x01, 'b', '\0'};
         ASSERT_EQ_INT(normalize_token(ctrl, out, sizeof(out)), NORM_ERR_INVALID_CHAR);
     }
     {
-        char del[] = {'k', ASCII_DEL, '\0'};
+        const char del[] = {'k', ASCII_DEL, '\0'};
         ASSERT_EQ_INT(normalize_key(del, out, sizeof(out)), NORM_ERR_INVALID_CHAR);
     }
 }
@@ -358,7 +358,7 @@ TEST(token_length_and_utf8)
     char ok64[REMEMBER_TOKEN_MAX + 1];
     char too[REMEMBER_TOKEN_MAX + 2];
     size_t i = 0;
-    char bad[] = {(char)UTF8_INVALID_FF, (char)UTF8_INVALID_FE, 'x', '\0'};
+    const char bad[] = {(char)UTF8_INVALID_FF, (char)UTF8_INVALID_FE, 'x', '\0'};
 
     for (i = 0; i < (size_t)REMEMBER_TOKEN_MAX; i++) {
         ok64[i] = 'a';

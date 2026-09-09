@@ -177,10 +177,10 @@ TEST(get_both_id_and_key_rejected)
 {
     char *db = make_temp_db_path();
     CmdResult g;
-    const char *a[] = {"add", "--key", "k", "body"};
     const char *gargs[] = {"get", "1", "--key", "k"};
     ASSERT_TRUE(db != NULL);
     {
+        const char *a[] = {"add", "--key", "k", "body"};
         CmdResult r = run_remember(db, a, sizeof(a) / sizeof(a[0]), NULL);
         cmd_result_free(&r);
     }
@@ -379,10 +379,10 @@ TEST(update_both_id_and_key_rejected)
 {
     char *db = make_temp_db_path();
     CmdResult u;
-    const char *a[] = {"add", "--key", "k", "body"};
     const char *uargs[] = {"update", "1", "--key", "k", "--text", "n"};
     ASSERT_TRUE(db != NULL);
     {
+        const char *a[] = {"add", "--key", "k", "body"};
         CmdResult r = run_remember(db, a, sizeof(a) / sizeof(a[0]), NULL);
         cmd_result_free(&r);
     }

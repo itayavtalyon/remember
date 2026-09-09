@@ -439,7 +439,7 @@ TEST(list_no_matches_json_total_zero)
 TEST(add_invalid_utf8_body_rejected)
 {
     char *db = make_temp_db_path();
-    char bad[] = {(char)UTF8_STRAY_CONT, (char)UTF8_INVALID_FF, 'a', '\0'};
+    const char bad[] = {(char)UTF8_STRAY_CONT, (char)UTF8_INVALID_FF, 'a', '\0'};
     const char *args[] = {"add", "-"};
     CmdResult r;
     ASSERT_TRUE(db != NULL);
@@ -452,7 +452,7 @@ TEST(add_invalid_utf8_body_rejected)
 TEST(update_invalid_utf8_text_rejected)
 {
     char *db = make_temp_db_path();
-    char bad[] = {(char)UTF8_INVALID_FF, '\0'};
+    const char bad[] = {(char)UTF8_INVALID_FF, '\0'};
     CmdResult r;
     CmdResult u;
     const char *a[] = {"add", "ok"};
@@ -519,7 +519,7 @@ TEST(db_parent_dir_mode_0700)
 {
     /* remember must create the missing parent dir as 0700 (not pre-created by harness). */
     char tmpl[] = "/tmp/remember-mkdir-XXXXXX";
-    char *base = NULL;
+    const char *base = NULL;
     char *db = NULL;
     char *created_dir = NULL;
     CmdResult r;

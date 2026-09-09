@@ -302,7 +302,6 @@ CmdResult run_remember(const char *db_path, const char *const *args, size_t narg
         in_pipe[0] = -1;
         write_all(in_pipe[1], stdin_data);
         close(in_pipe[1]);
-        in_pipe[1] = -1;
     }
 
     drain_two(out_pipe[0], err_pipe[0], &result.out, &result.err);
@@ -344,7 +343,7 @@ static void remove_temp_dir(const char *dir)
     DIR *d = opendir(dir);
 
     if (d != NULL) {
-        struct dirent *ent = NULL;
+        const struct dirent *ent = NULL;
         /* readdir: single-threaded test harness; no portable reentrant variant. */
         // NOLINTNEXTLINE(concurrency-mt-unsafe)
         while ((ent = readdir(d)) != NULL) {
@@ -410,7 +409,7 @@ static void register_temp_dir(const char *dir)
 char *make_temp_db_path(void)
 {
     char tmpl[] = "/tmp/remember-test-XXXXXX";
-    char *dir = NULL;
+    const char *dir = NULL;
     char *path = NULL;
     size_t n = 0;
 
