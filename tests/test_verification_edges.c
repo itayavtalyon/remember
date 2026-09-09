@@ -160,7 +160,7 @@ TEST(keyless_merge_keeps_created_at)
         const char *end = NULL;
         p += strlen("\"created_at\":\"");
         end = strchr(p, '"');
-        created1 = malloc(TS_BUFSIZE);
+        created1 = (char *)malloc(TS_BUFSIZE);
         ASSERT_TRUE(created1 != NULL);
         if (created1 != NULL) {
             created1[0] = '\0';
@@ -532,14 +532,14 @@ TEST(db_parent_dir_mode_0700)
         return;
     }
     n = strlen(base) + strlen("/nested/test.db") + 1U;
-    db = malloc(n);
+    db = (char *)malloc(n);
     ASSERT_TRUE(db != NULL);
     if (db == NULL) {
         return;
     }
     (void)snprintf(db, n, "%s/nested/test.db", base);
     n = strlen(base) + strlen("/nested") + 1U;
-    created_dir = malloc(n);
+    created_dir = (char *)malloc(n);
     ASSERT_TRUE(created_dir != NULL);
     if (created_dir == NULL) {
         free(db);

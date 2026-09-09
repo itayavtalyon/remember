@@ -56,7 +56,7 @@ static bool buf_append(Buf *b, const char *src, size_t n)
         while (ncap < b->len + n + 1U) {
             ncap *= 2U;
         }
-        nd = realloc(b->data, ncap);
+        nd = (char *)realloc(b->data, ncap);
         if (nd == NULL) {
             return false;
         }
@@ -125,7 +125,7 @@ static void drain_two(int fd0, int fd1, char **out0, char **out1)
 
     for (int i = 0; i < 2; i++) {
         if (bufs[i].data == NULL) {
-            bufs[i].data = calloc(1U, 1U);
+            bufs[i].data = (char *)calloc(1U, 1U);
         } else {
             bufs[i].data[bufs[i].len] = '\0';
         }
@@ -186,7 +186,7 @@ typedef struct {
 } ChildPipes;
 
 /* Child side: redirect stdio to the pipes and exec. Never returns. */
-static void child_run(ChildPipes pipes, const char *stdin_data, char *const argv[])
+static _Noreturn void child_run(ChildPipes pipes, const char *stdin_data, char *const argv[])
 {
     if (dup2(pipes.out[1], STDOUT_FILENO) < 0 || dup2(pipes.err[1], STDERR_FILENO) < 0) {
         _exit(EXIT_SPAWN_FAIL);
@@ -420,7 +420,7 @@ char *make_temp_db_path(void)
     }
     register_temp_dir(dir);
     n = strlen(dir) + strlen("/test.db") + 1U;
-    path = malloc(n);
+    path = (char *)malloc(n);
     if (path == NULL) {
         return NULL;
     }

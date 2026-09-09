@@ -191,7 +191,7 @@ static char *dup_cstr(const char *s)
         return NULL;
     }
     n = strlen(s);
-    p = malloc(n + 1U);
+    p = (char *)malloc(n + 1U);
     if (p == NULL) {
         return NULL;
     }

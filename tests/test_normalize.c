@@ -80,7 +80,7 @@ TEST(body_trim_too_long)
     size_t i = 0;
     NormStatus st = NORM_OK;
 
-    buf = malloc((size_t)REMEMBER_BODY_MAX + 2U);
+    buf = (char *)malloc((size_t)REMEMBER_BODY_MAX + 2U);
     if (buf == NULL) {
         ASSERT_TRUE(0); /* OOM — fail the test */
         return;

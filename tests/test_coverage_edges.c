@@ -74,7 +74,7 @@ static char *dup_home_or_null(void)
         return NULL;
     }
     n = strlen(h);
-    saved = malloc(n + 1U);
+    saved = (char *)malloc(n + 1U);
     if (saved == NULL) {
         return NULL;
     }
@@ -214,7 +214,7 @@ TEST(output_json_escapes_controls)
     n = ftell(f);
     ASSERT_TRUE(n > 0);
     ASSERT_EQ_INT(fseek(f, 0, SEEK_SET), 0);
-    got = malloc((size_t)n + 1U);
+    got = (char *)malloc((size_t)n + 1U);
     ASSERT_TRUE(got != NULL);
     if (got == NULL) {
         (void)fclose(f);
@@ -899,9 +899,8 @@ TEST(store_add_null_tag_slots_empty_join)
     ASSERT_TRUE(s != NULL);
     memset(&e, 0, sizeof(e));
     /* ntags>0 but NULL tag pointers → join_tags_space empty-buffer path */
-    ASSERT_EQ_INT((int)store_add(s, "nt", hash, NULL, tags, 2U, "unknown", NULL,
-                                 "2026-06-15T12:00:00.000Z", &act, &e),
-                  (int)STORE_OK);
+    ASSERT_EQ_STATUS(store_add(s, "nt", hash, NULL, tags, 2U, "unknown", NULL,
+                                 "2026-06-15T12:00:00.000Z", &act, &e), STORE_OK);
     store_entry_free(&e);
     store_close(s);
     free(db);

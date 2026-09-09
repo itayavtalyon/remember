@@ -32,6 +32,13 @@ void tst_assert_contains(const char *haystack, const char *needle, bool want, co
 #define ASSERT_FALSE(cond) tst_assert_true(!(cond), "!(" #cond ")", __FILE__, __LINE__)
 #define ASSERT_EQ_INT(actual, expected)                                                            \
     tst_assert_eq_int((long long)(actual), (long long)(expected), __FILE__, __LINE__)
+/* For enum-returning calls: assign the result first (implicit conversion, not a cast)
+   so the call is never the operand of a cast (avoids -Wbad-function-cast). */
+#define ASSERT_EQ_STATUS(call, expected)                                                            \
+    do {                                                                                            \
+        long long status__ = (call);                                                                \
+        ASSERT_EQ_INT(status__, (int)(expected));                                                   \
+    } while (0)
 #define ASSERT_STREQ(a, b) tst_assert_streq((a), (b), __FILE__, __LINE__)
 #define ASSERT_STR_CONTAINS(haystack, needle)                                                      \
     tst_assert_contains((haystack), (needle), true, __FILE__, __LINE__)

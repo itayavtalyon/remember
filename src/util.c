@@ -139,7 +139,7 @@ int util_read_stdin(char **out, size_t *out_len, size_t max_len)
             if (ncap < len + 2U) {
                 ncap = len + 2U;
             }
-            nb = realloc(buf, ncap);
+            nb = (char *)realloc(buf, ncap);
             if (nb == NULL) {
                 free(buf);
                 return -1;
@@ -152,7 +152,7 @@ int util_read_stdin(char **out, size_t *out_len, size_t max_len)
     }
 
     if (buf == NULL) {
-        buf = malloc(1U);
+        buf = (char *)malloc(1U);
         if (buf == NULL) {
             return -1;
         }

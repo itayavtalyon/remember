@@ -249,7 +249,7 @@ NormStatus body_trim_copy(const char *src, size_t src_len, char **out, size_t *o
         return NORM_ERR_INVALID_UTF8;
     }
 
-    buf = malloc(n + 1U);
+    buf = (char *)malloc(n + 1U);
     if (buf == NULL) {
         return NORM_ERR_OOM;
     }

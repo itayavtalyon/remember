@@ -443,7 +443,7 @@ Store *store_open(const char *path, char *err, size_t errlen)
         return NULL;
     }
 
-    s = calloc(1, sizeof(*s));
+    s = (Store *)calloc(1, sizeof(*s));
     if (s == NULL) {
         set_err(err, errlen, "out of memory");
         return NULL;
@@ -557,7 +557,7 @@ static char *dup_str(const char *s)
         return NULL;
     }
     n = strlen(s);
-    p = malloc(n + 1U);
+    p = (char *)malloc(n + 1U);
     if (p == NULL) {
         return NULL;
     }
@@ -883,7 +883,7 @@ static char *join_tags_space(const char *const *tags, size_t ntags)
     size_t pos = 0U;
 
     if (ntags == 0U || tags == NULL) {
-        buf = malloc(1U);
+        buf = (char *)malloc(1U);
         if (buf != NULL) {
             buf[0] = '\0';
         }
@@ -896,13 +896,13 @@ static char *join_tags_space(const char *const *tags, size_t ntags)
         total += strlen(tags[i]) + 1U; /* + space or NUL */
     }
     if (total == 0U) {
-        buf = malloc(1U);
+        buf = (char *)malloc(1U);
         if (buf != NULL) {
             buf[0] = '\0';
         }
         return buf;
     }
-    buf = malloc(total);
+    buf = (char *)malloc(total);
     if (buf == NULL) {
         return NULL;
     }
@@ -1143,6 +1143,16 @@ static StoreStatus insert_entry(sqlite3 *db, const char *body, const char *body_
                                 const char *key_or_null, const char *source, const char *now,
                                 const char *expires_at, long long *out_id)
 {
+    /* ?N bind positions of the INSERT below. */
+    enum {
+        BIND_KEY = 1,
+        BIND_BODY = 2,
+        BIND_BODY_HASH = 3,
+        BIND_SOURCE = 4,
+        BIND_CREATED_AT = 5,
+        BIND_UPDATED_AT = 6,
+        BIND_EXPIRES_AT = 7
+    };
     sqlite3_stmt *stmt = NULL;
     int rc = 0;
 
@@ -1153,16 +1163,6 @@ static StoreStatus insert_entry(sqlite3 *db, const char *body, const char *body_
     if (rc != SQLITE_OK) {
         return STORE_ERR_SQLITE;
     }
-    /* ?N bind positions of the INSERT above. */
-    enum {
-        BIND_KEY = 1,
-        BIND_BODY = 2,
-        BIND_BODY_HASH = 3,
-        BIND_SOURCE = 4,
-        BIND_CREATED_AT = 5,
-        BIND_UPDATED_AT = 6,
-        BIND_EXPIRES_AT = 7
-    };
     if (key_or_null == NULL) {
         (void)sqlite3_bind_null(stmt, BIND_KEY);
     } else {
@@ -1813,8 +1813,8 @@ static PageResult list_query_exec(sqlite3 *db, const ListQuery *q, const char *n
        ORDER BY, LIMIT/OFFSET) wrapped around it. */
     enum { COUNT_FRAME_MARGIN = 64, SELECT_FRAME_MARGIN = 160 };
     char where_sql[LIST_SQL_CAP];
-    char count_sql[LIST_SQL_CAP + COUNT_FRAME_MARGIN];
-    char select_sql[LIST_SQL_CAP + SELECT_FRAME_MARGIN];
+    char count_sql[(size_t)LIST_SQL_CAP + (size_t)COUNT_FRAME_MARGIN];
+    char select_sql[(size_t)LIST_SQL_CAP + (size_t)SELECT_FRAME_MARGIN];
     const char *bind_text[LIST_BIND_CAP];
     int nbinds = 0;
     int sn = 0;
@@ -1880,8 +1880,8 @@ static PageResult search_query_exec(sqlite3 *db, const SearchQuery *q, const cha
        wider than the plain list path to hold the FTS join + snippet columns. */
     enum { COUNT_FRAME_MARGIN = 128, SELECT_FRAME_MARGIN = 256 };
     char where_sql[LIST_SQL_CAP];
-    char count_sql[LIST_SQL_CAP + COUNT_FRAME_MARGIN];
-    char select_sql[LIST_SQL_CAP + SELECT_FRAME_MARGIN];
+    char count_sql[(size_t)LIST_SQL_CAP + (size_t)COUNT_FRAME_MARGIN];
+    char select_sql[(size_t)LIST_SQL_CAP + (size_t)SELECT_FRAME_MARGIN];
     const char *bind_text[LIST_BIND_CAP];
     int nbinds = 0;
     int sn = 0;

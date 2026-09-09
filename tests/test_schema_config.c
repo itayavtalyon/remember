@@ -39,7 +39,7 @@ static void assert_sync_warning_for_marker(const char *template_dir)
     size_t pn = 0;
 
     n = strlen(template_dir) + 1U;
-    syncish = malloc(n);
+    syncish = (char *)malloc(n);
     ASSERT_TRUE(syncish != NULL);
     if (syncish == NULL) {
         return;
@@ -52,7 +52,7 @@ static void assert_sync_warning_for_marker(const char *template_dir)
     }
 
     pn = strlen(syncish) + strlen("/t.db") + 1U;
-    path = malloc(pn);
+    path = (char *)malloc(pn);
     ASSERT_TRUE(path != NULL);
     if (path == NULL) {
         (void)remove(syncish);

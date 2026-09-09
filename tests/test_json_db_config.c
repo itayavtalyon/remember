@@ -81,8 +81,8 @@ static CmdResult run_remember_raw(const char *const *argv, size_t argc, const ch
         ssize_t n = 0;
         size_t olen = 0;
         size_t elen = 0;
-        char *ob = malloc(1);
-        char *eb = malloc(1);
+        char *ob = (char *)malloc(1);
+        char *eb = (char *)malloc(1);
         if (ob) {
             ob[0] = '\0';
         }
@@ -90,7 +90,7 @@ static CmdResult run_remember_raw(const char *const *argv, size_t argc, const ch
             eb[0] = '\0';
         }
         while ((n = read(out_pipe[0], buf, sizeof(buf))) > 0) {
-            char *nb = realloc(ob, olen + (size_t)n + 1U);
+            char *nb = (char *)realloc(ob, olen + (size_t)n + 1U);
             if (!nb) {
                 break;
             }
@@ -100,7 +100,7 @@ static CmdResult run_remember_raw(const char *const *argv, size_t argc, const ch
             ob[olen] = '\0';
         }
         while ((n = read(err_pipe[0], buf, sizeof(buf))) > 0) {
-            char *nb = realloc(eb, elen + (size_t)n + 1U);
+            char *nb = (char *)realloc(eb, elen + (size_t)n + 1U);
             if (!nb) {
                 break;
             }

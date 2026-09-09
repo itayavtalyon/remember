@@ -317,7 +317,7 @@ TEST(add_body_over_64kib_rejected)
     CmdResult r;
     size_t i = 0;
     ASSERT_TRUE(db != NULL);
-    big = malloc(BODY_OVER_MAX_BYTES + 1U);
+    big = (char *)malloc(BODY_OVER_MAX_BYTES + 1U);
     ASSERT_TRUE(big != NULL);
     if (big == NULL) {
         free(db);
@@ -506,7 +506,7 @@ TEST(add_stdin_body_at_limit_accepted)
     size_t i = 0;
 
     ASSERT_TRUE(db != NULL);
-    in = malloc(BODY_MAX_BYTES + 2U); /* 64 KiB body + one trailing newline + NUL */
+    in = (char *)malloc(BODY_MAX_BYTES + 2U); /* 64 KiB body + one trailing newline + NUL */
     ASSERT_TRUE(in != NULL);
     if (in == NULL) {
         free(db);
@@ -536,7 +536,7 @@ TEST(add_stdin_body_over_limit_rejected)
     size_t i = 0;
 
     ASSERT_TRUE(db != NULL);
-    in = malloc(BODY_OVER_MAX_BYTES + 1U);
+    in = (char *)malloc(BODY_OVER_MAX_BYTES + 1U);
     ASSERT_TRUE(in != NULL);
     if (in == NULL) {
         free(db);
