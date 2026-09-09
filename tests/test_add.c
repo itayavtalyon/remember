@@ -5,6 +5,18 @@
 #include <stdlib.h>
 #include <string.h>
 
+/* Boundary-test sizes for the CLI body/token limits (black-box: these mirror the
+   values normalize.h enforces, kept local since these tests drive the built binary). */
+enum {
+    TOKEN_OVERLONG_LEN = 65,     /* one past the 64-byte tag/key limit */
+    TOKEN_OVERLONG_BUFSIZE = 66, /* + NUL */
+    HEX_DIGEST_LEN = 64,         /* SHA-256 hex digits */
+    ASCII_ESC = 0x1b,            /* escape control byte */
+};
+static const unsigned HEX_NIBBLE_MASK = 0x0FU;
+static const size_t BODY_MAX_BYTES = 65536U;      /* body byte limit (64 KiB) */
+static const size_t BODY_OVER_MAX_BYTES = 65537U; /* one past the limit */
+
 TEST(add_basic_prints_id_one)
 {
     char *db = make_temp_db_path();
@@ -305,16 +317,16 @@ TEST(add_body_over_64kib_rejected)
     CmdResult r;
     size_t i = 0;
     ASSERT_TRUE(db != NULL);
-    big = malloc(65537U + 1U);
+    big = malloc(BODY_OVER_MAX_BYTES + 1U);
     ASSERT_TRUE(big != NULL);
     if (big == NULL) {
         free(db);
         return;
     }
-    for (i = 0; i < 65537U; i++) {
+    for (i = 0; i < BODY_OVER_MAX_BYTES; i++) {
         big[i] = 'a';
     }
-    big[65537U] = '\0';
+    big[BODY_OVER_MAX_BYTES] = '\0';
     args[0] = "add";
     args[1] = big;
     r = run_remember(db, args, sizeof(args) / sizeof(args[0]), NULL);
@@ -374,15 +386,15 @@ TEST(add_tag_with_space_accepted)
 TEST(add_tag_too_long_rejected)
 {
     char *db = make_temp_db_path();
-    char tag[66];
+    char tag[TOKEN_OVERLONG_BUFSIZE];
     const char *args[4];
     CmdResult r;
     size_t i = 0;
     ASSERT_TRUE(db != NULL);
-    for (i = 0; i < 65U; i++) {
+    for (i = 0; i < TOKEN_OVERLONG_LEN; i++) {
         tag[i] = 't';
     }
-    tag[65] = '\0';
+    tag[TOKEN_OVERLONG_LEN] = '\0';
     args[0] = "add";
     args[1] = "--tag";
     args[2] = tag;
@@ -428,13 +440,13 @@ TEST(add_json_body_with_control_and_quotes_stays_valid)
     char *db = make_temp_db_path();
     /* Includes ", \, newline, ESC — must escape in JSON and store intact. */
     char body[] = {'q', '"', 'u',  'o', 't',        'e', ' ', '\\',
-                   ' ', 'n', '\n', 'e', (char)0x1b, 'x', '\0'};
+                   ' ', 'n', '\n', 'e', (char)ASCII_ESC, 'x', '\0'};
     const char *args[] = {"add", "--json", body};
     const char *gargs[] = {"get", "--json", "1"};
     CmdResult r;
     CmdResult g;
     char *hex_stored = NULL;
-    char hex_expect[64];
+    char hex_expect[HEX_DIGEST_LEN];
     size_t i = 0;
     size_t body_len = sizeof(body) - 1U;
     ASSERT_TRUE(db != NULL);
@@ -450,7 +462,7 @@ TEST(add_json_body_with_control_and_quotes_stays_valid)
     ASSERT_STR_CONTAINS(r.out, "\\n");
     ASSERT_STR_CONTAINS(r.out, "\\u001b");
     /* Raw ESC must not appear unescaped in the JSON text. */
-    ASSERT_TRUE(strchr(r.out, (char)0x1b) == NULL);
+    ASSERT_TRUE(strchr(r.out, (char)ASCII_ESC) == NULL);
     cmd_result_free(&r);
 
     /* Round-trip via get --json: same escapes, no raw control on stdout. */
@@ -460,7 +472,7 @@ TEST(add_json_body_with_control_and_quotes_stays_valid)
     ASSERT_STR_CONTAINS(g.out, "\\\\");
     ASSERT_STR_CONTAINS(g.out, "\\n");
     ASSERT_STR_CONTAINS(g.out, "\\u001b");
-    ASSERT_TRUE(strchr(g.out, (char)0x1b) == NULL);
+    ASSERT_TRUE(strchr(g.out, (char)ASCII_ESC) == NULL);
     cmd_result_free(&g);
 
     /* On-disk body equals original bytes (hex: first-line helper can't carry \n). */
@@ -468,7 +480,7 @@ TEST(add_json_body_with_control_and_quotes_stays_valid)
         static const char k_hex[] = "0123456789ABCDEF";
         unsigned char b = (unsigned char)body[i];
         hex_expect[i * 2U] = k_hex[(unsigned int)b >> 4U];
-        hex_expect[(i * 2U) + 1U] = k_hex[b & 0x0FU];
+        hex_expect[(i * 2U) + 1U] = k_hex[b & HEX_NIBBLE_MASK];
     }
     hex_expect[body_len * 2U] = '\0';
     hex_stored = harness_sqlite_query_line(db, "SELECT hex(body) FROM entries WHERE id=1;");
@@ -494,17 +506,17 @@ TEST(add_stdin_body_at_limit_accepted)
     size_t i = 0;
 
     ASSERT_TRUE(db != NULL);
-    in = malloc(65536U + 2U); /* 64 KiB body + one trailing newline + NUL */
+    in = malloc(BODY_MAX_BYTES + 2U); /* 64 KiB body + one trailing newline + NUL */
     ASSERT_TRUE(in != NULL);
     if (in == NULL) {
         free(db);
         return;
     }
-    for (i = 0; i < 65536U; i++) {
+    for (i = 0; i < BODY_MAX_BYTES; i++) {
         in[i] = 'a';
     }
-    in[65536U] = '\n';
-    in[65537U] = '\0';
+    in[BODY_MAX_BYTES] = '\n';
+    in[BODY_OVER_MAX_BYTES] = '\0';
 
     r = run_remember(db, args, sizeof(args) / sizeof(args[0]), in);
     ASSERT_EQ_INT(r.exit_code, 0);
@@ -524,16 +536,16 @@ TEST(add_stdin_body_over_limit_rejected)
     size_t i = 0;
 
     ASSERT_TRUE(db != NULL);
-    in = malloc(65537U + 1U);
+    in = malloc(BODY_OVER_MAX_BYTES + 1U);
     ASSERT_TRUE(in != NULL);
     if (in == NULL) {
         free(db);
         return;
     }
-    for (i = 0; i < 65537U; i++) {
+    for (i = 0; i < BODY_OVER_MAX_BYTES; i++) {
         in[i] = 'a';
     }
-    in[65537U] = '\0';
+    in[BODY_OVER_MAX_BYTES] = '\0';
 
     r = run_remember(db, args, sizeof(args) / sizeof(args[0]), in);
     ASSERT_EQ_INT(r.exit_code, 1);
@@ -553,7 +565,7 @@ TEST(add_stdin_body_over_limit_rejected)
 TEST(get_human_body_neutralizes_control_chars)
 {
     char *db = make_temp_db_path();
-    char body[] = {'x', (char)0x1b, 'y', '\0'};
+    char body[] = {'x', (char)ASCII_ESC, 'y', '\0'};
     const char *aargs[] = {"add", body};
     const char *gargs[] = {"get", "1"};
     CmdResult a;
@@ -566,7 +578,7 @@ TEST(get_human_body_neutralizes_control_chars)
 
     g = run_remember(db, gargs, sizeof(gargs) / sizeof(gargs[0]), NULL);
     ASSERT_EQ_INT(g.exit_code, 0);
-    ASSERT_TRUE(strchr(g.out, (char)0x1b) == NULL); /* no raw ESC */
+    ASSERT_TRUE(strchr(g.out, (char)ASCII_ESC) == NULL); /* no raw ESC */
     ASSERT_STR_CONTAINS(g.out, "x?y");
     cmd_result_free(&g);
     free(db);
