@@ -9,11 +9,14 @@
  * place, keeping the same lint bar as src/ (no per-assert if/printf in callers).
  */
 
+/* Mutable runner counters/state; global by design (TEST/ASSERT macros update them). */
+// NOLINTBEGIN(cppcoreguidelines-avoid-non-const-global-variables)
 extern int g_tests_run;
 extern int g_tests_failed;
 extern int g_asserts_run;
 extern int g_asserts_failed;
 extern const char *g_current_test;
+// NOLINTEND(cppcoreguidelines-avoid-non-const-global-variables)
 
 void tst_run(const char *name, void (*fn)(void));
 void tst_assert_true(bool cond, const char *expr, const char *file, int line);

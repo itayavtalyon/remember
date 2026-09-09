@@ -13,7 +13,7 @@ TEST(body_trim_basic)
 {
     char *out = NULL;
     size_t n = 0;
-    NormStatus st;
+    NormStatus st = NORM_OK;
 
     st = body_trim_copy("  hello  ", 9, &out, &n);
     ASSERT_EQ_INT(st, NORM_OK);
@@ -68,7 +68,7 @@ TEST(body_trim_too_long)
     char *buf = NULL;
     char *out = NULL;
     size_t i = 0;
-    NormStatus st;
+    NormStatus st = NORM_OK;
 
     buf = malloc((size_t)REMEMBER_BODY_MAX + 2U);
     if (buf == NULL) {

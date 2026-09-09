@@ -19,8 +19,15 @@
  */
 
 /* Run remember_run with argv {"remember","--db",db,<cmd...>} into heap buffers. */
-static int facade_run(const char *db, const char *const *cmd, size_t ncmd, char **out, char **err)
+typedef struct {
+    char **out;
+    char **err;
+} FacadeCapture;
+
+static int facade_run(const char *db, const char *const *cmd, size_t ncmd, FacadeCapture cap)
 {
+    char **out = cap.out;
+    char **err = cap.err;
     const char *argv[32];
     size_t n = 0U;
     size_t i = 0;
@@ -78,7 +85,7 @@ static void assert_read_parity(const char *db, const char *const *cmd, size_t nc
     CmdResult sub = run_remember(db, cmd, ncmd, NULL);
     char *fout = NULL;
     char *ferr = NULL;
-    int frc = facade_run(db, cmd, ncmd, &fout, &ferr);
+    int frc = facade_run(db, cmd, ncmd, (FacadeCapture){.out = &fout, .err = &ferr});
 
     ASSERT_EQ_INT(frc, sub.exit_code);
     ASSERT_STREQ(fout, sub.out);
@@ -95,11 +102,11 @@ static void seed_three(const char *db)
     const char *a3[] = {"add", "--key", "k", "--tag", "a", "gamma third"};
     CmdResult r;
 
-    r = run_remember(db, a1, 6, NULL);
+    r = run_remember(db, a1, sizeof(a1) / sizeof(a1[0]), NULL);
     cmd_result_free(&r);
-    r = run_remember(db, a2, 6, NULL);
+    r = run_remember(db, a2, sizeof(a2) / sizeof(a2[0]), NULL);
     cmd_result_free(&r);
-    r = run_remember(db, a3, 6, NULL);
+    r = run_remember(db, a3, sizeof(a3) / sizeof(a3[0]), NULL);
     cmd_result_free(&r);
 }
 
@@ -112,9 +119,9 @@ static void seed_three_linked(const char *db)
     CmdResult r;
 
     seed_three(db);
-    r = run_remember(db, l1, 7, NULL);
+    r = run_remember(db, l1, sizeof(l1) / sizeof(l1[0]), NULL);
     cmd_result_free(&r);
-    r = run_remember(db, l2, 3, NULL);
+    r = run_remember(db, l2, sizeof(l2) / sizeof(l2[0]), NULL);
     cmd_result_free(&r);
 }
 
@@ -137,7 +144,7 @@ static void assert_mutation_parity(SeedFn seed, const char *const *cmd, size_t n
         seed(db2);
     }
     sub = run_remember(db1, cmd, ncmd, NULL);
-    frc = facade_run(db2, cmd, ncmd, &fout, &ferr);
+    frc = facade_run(db2, cmd, ncmd, (FacadeCapture){.out = &fout, .err = &ferr});
     ASSERT_EQ_INT(frc, sub.exit_code);
     mask_timestamps(sub.out);
     mask_timestamps(fout);
@@ -155,7 +162,7 @@ TEST(facade_list_matches_cli)
     const char *cmd[] = {"--json", "list"};
     ASSERT_TRUE(db != NULL);
     seed_three(db);
-    assert_read_parity(db, cmd, 2);
+    assert_read_parity(db, cmd, sizeof(cmd) / sizeof(cmd[0]));
     free(db);
 }
 
@@ -165,7 +172,7 @@ TEST(facade_search_matches_cli)
     const char *cmd[] = {"--json", "search", "beta"};
     ASSERT_TRUE(db != NULL);
     seed_three(db);
-    assert_read_parity(db, cmd, 3);
+    assert_read_parity(db, cmd, sizeof(cmd) / sizeof(cmd[0]));
     free(db);
 }
 
@@ -175,7 +182,7 @@ TEST(facade_search_bad_query_matches_cli)
     const char *cmd[] = {"--json", "search", "\"unterminated"};
     ASSERT_TRUE(db != NULL);
     seed_three(db);
-    assert_read_parity(db, cmd, 3);
+    assert_read_parity(db, cmd, sizeof(cmd) / sizeof(cmd[0]));
     free(db);
 }
 
@@ -185,7 +192,7 @@ TEST(facade_get_matches_cli)
     const char *cmd[] = {"--json", "get", "1"};
     ASSERT_TRUE(db != NULL);
     seed_three(db);
-    assert_read_parity(db, cmd, 3);
+    assert_read_parity(db, cmd, sizeof(cmd) / sizeof(cmd[0]));
     free(db);
 }
 
@@ -195,7 +202,7 @@ TEST(facade_get_missing_matches_cli)
     const char *cmd[] = {"--json", "get", "999"};
     ASSERT_TRUE(db != NULL);
     seed_three(db);
-    assert_read_parity(db, cmd, 3); /* exit 2 + "not found" on stderr */
+    assert_read_parity(db, cmd, sizeof(cmd) / sizeof(cmd[0])); /* exit 2 + "not found" on stderr */
     free(db);
 }
 
@@ -205,7 +212,7 @@ TEST(facade_tags_matches_cli)
     const char *cmd[] = {"--json", "tags"};
     ASSERT_TRUE(db != NULL);
     seed_three(db);
-    assert_read_parity(db, cmd, 2);
+    assert_read_parity(db, cmd, sizeof(cmd) / sizeof(cmd[0]));
     free(db);
 }
 
@@ -214,7 +221,7 @@ TEST(facade_unknown_option_matches_cli)
     char *db = make_temp_db_path();
     const char *cmd[] = {"list", "--bogus"};
     ASSERT_TRUE(db != NULL);
-    assert_read_parity(db, cmd, 2); /* exit 1 + unknown option on stderr */
+    assert_read_parity(db, cmd, sizeof(cmd) / sizeof(cmd[0])); /* exit 1 + unknown option on stderr */
     free(db);
 }
 
@@ -223,7 +230,7 @@ TEST(facade_help_matches_cli)
     char *db = make_temp_db_path();
     const char *cmd[] = {"help", "tags"};
     ASSERT_TRUE(db != NULL);
-    assert_read_parity(db, cmd, 2);
+    assert_read_parity(db, cmd, sizeof(cmd) / sizeof(cmd[0]));
     free(db);
 }
 
@@ -239,8 +246,8 @@ TEST(facade_add_matches_cli)
     int frc = 0;
 
     ASSERT_TRUE(db1 != NULL && db2 != NULL);
-    sub = run_remember(db1, cmd, 5, NULL);
-    frc = facade_run(db2, cmd, 5, &fout, &ferr);
+    sub = run_remember(db1, cmd, sizeof(cmd) / sizeof(cmd[0]), NULL);
+    frc = facade_run(db2, cmd, 5, (FacadeCapture){.out = &fout, .err = &ferr});
     ASSERT_EQ_INT(frc, sub.exit_code);
     mask_timestamps(sub.out);
     mask_timestamps(fout);
@@ -266,13 +273,13 @@ TEST(facade_update_matches_cli)
     int frc = 0;
 
     ASSERT_TRUE(db1 != NULL && db2 != NULL);
-    s1 = run_remember(db1, seed, 2, NULL);
+    s1 = run_remember(db1, seed, sizeof(seed) / sizeof(seed[0]), NULL);
     cmd_result_free(&s1);
-    s2 = run_remember(db2, seed, 2, NULL);
+    s2 = run_remember(db2, seed, sizeof(seed) / sizeof(seed[0]), NULL);
     cmd_result_free(&s2);
 
-    sub = run_remember(db1, cmd, 7, NULL);
-    frc = facade_run(db2, cmd, 7, &fout, &ferr);
+    sub = run_remember(db1, cmd, sizeof(cmd) / sizeof(cmd[0]), NULL);
+    frc = facade_run(db2, cmd, 7, (FacadeCapture){.out = &fout, .err = &ferr});
     ASSERT_EQ_INT(frc, sub.exit_code);
     mask_timestamps(sub.out);
     mask_timestamps(fout);
@@ -298,13 +305,13 @@ TEST(facade_delete_matches_cli)
     int frc = 0;
 
     ASSERT_TRUE(db1 != NULL && db2 != NULL);
-    s1 = run_remember(db1, seed, 2, NULL);
+    s1 = run_remember(db1, seed, sizeof(seed) / sizeof(seed[0]), NULL);
     cmd_result_free(&s1);
-    s2 = run_remember(db2, seed, 2, NULL);
+    s2 = run_remember(db2, seed, sizeof(seed) / sizeof(seed[0]), NULL);
     cmd_result_free(&s2);
 
-    sub = run_remember(db1, cmd, 3, NULL);
-    frc = facade_run(db2, cmd, 3, &fout, &ferr);
+    sub = run_remember(db1, cmd, sizeof(cmd) / sizeof(cmd[0]), NULL);
+    frc = facade_run(db2, cmd, 3, (FacadeCapture){.out = &fout, .err = &ferr});
     ASSERT_EQ_INT(frc, sub.exit_code);
     mask_timestamps(sub.out);
     mask_timestamps(fout);
@@ -330,12 +337,12 @@ TEST(facade_purge_trash_matches_cli)
     int frc = 0;
 
     ASSERT_TRUE(db1 != NULL && db2 != NULL);
-    s1 = run_remember(db1, seed, 4, NULL);
+    s1 = run_remember(db1, seed, sizeof(seed) / sizeof(seed[0]), NULL);
     cmd_result_free(&s1);
-    s2 = run_remember(db2, seed, 4, NULL);
+    s2 = run_remember(db2, seed, sizeof(seed) / sizeof(seed[0]), NULL);
     cmd_result_free(&s2);
-    sub = run_remember(db1, cmd, 2, NULL);
-    frc = facade_run(db2, cmd, 2, &fout, &ferr);
+    sub = run_remember(db1, cmd, sizeof(cmd) / sizeof(cmd[0]), NULL);
+    frc = facade_run(db2, cmd, 2, (FacadeCapture){.out = &fout, .err = &ferr});
     ASSERT_EQ_INT(frc, sub.exit_code);
     mask_timestamps(sub.out);
     mask_timestamps(fout);
@@ -356,9 +363,9 @@ TEST(facade_list_trash_matches_cli)
     CmdResult r;
 
     ASSERT_TRUE(db != NULL);
-    r = run_remember(db, seed, 4, NULL);
+    r = run_remember(db, seed, sizeof(seed) / sizeof(seed[0]), NULL);
     cmd_result_free(&r);
-    assert_read_parity(db, cmd, 3);
+    assert_read_parity(db, cmd, sizeof(cmd) / sizeof(cmd[0]));
     free(db);
 }
 
@@ -369,7 +376,7 @@ TEST(facade_related_matches_cli)
     const char *cmd[] = {"--json", "related", "1"};
     ASSERT_TRUE(db != NULL);
     seed_three_linked(db);
-    assert_read_parity(db, cmd, 3);
+    assert_read_parity(db, cmd, sizeof(cmd) / sizeof(cmd[0]));
     free(db);
 }
 
@@ -379,7 +386,7 @@ TEST(facade_get_with_links_matches_cli)
     const char *cmd[] = {"--json", "get", "1"};
     ASSERT_TRUE(db != NULL);
     seed_three_linked(db);
-    assert_read_parity(db, cmd, 3);
+    assert_read_parity(db, cmd, sizeof(cmd) / sizeof(cmd[0]));
     free(db);
 }
 
@@ -387,19 +394,19 @@ TEST(facade_get_with_links_matches_cli)
 TEST(facade_link_matches_cli)
 {
     const char *cmd[] = {"--json", "link", "1", "2", "--kind", "cites"};
-    assert_mutation_parity(seed_three, cmd, 6);
+    assert_mutation_parity(seed_three, cmd, sizeof(cmd) / sizeof(cmd[0]));
 }
 
 TEST(facade_unlink_matches_cli)
 {
     const char *cmd[] = {"--json", "unlink", "1", "2"};
-    assert_mutation_parity(seed_three_linked, cmd, 4);
+    assert_mutation_parity(seed_three_linked, cmd, sizeof(cmd) / sizeof(cmd[0]));
 }
 
 TEST(facade_rekey_matches_cli)
 {
     const char *cmd[] = {"--json", "rekey", "--key", "k", "--to-key", "k2"};
-    assert_mutation_parity(seed_three, cmd, 6);
+    assert_mutation_parity(seed_three, cmd, sizeof(cmd) / sizeof(cmd[0]));
 }
 
 void register_facade_tests(void)

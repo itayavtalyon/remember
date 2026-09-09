@@ -12,9 +12,9 @@ static void seed_tagged(const char *db)
     const char *a2[] = {"add", "--tag", "apple", "second body"};
     CmdResult r;
 
-    r = run_remember(db, a1, 6, NULL);
+    r = run_remember(db, a1, sizeof(a1) / sizeof(a1[0]), NULL);
     cmd_result_free(&r);
-    r = run_remember(db, a2, 4, NULL);
+    r = run_remember(db, a2, sizeof(a2) / sizeof(a2[0]), NULL);
     cmd_result_free(&r);
 }
 
@@ -25,7 +25,7 @@ TEST(tags_empty_db_json)
     CmdResult r;
 
     ASSERT_TRUE(db != NULL);
-    r = run_remember(db, args, 2, NULL);
+    r = run_remember(db, args, sizeof(args) / sizeof(args[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 0);
     ASSERT_STREQ(r.out, "{\"version\":1,\"count\":0,\"tags\":[]}\n");
     cmd_result_free(&r);
@@ -40,7 +40,7 @@ TEST(tags_counts_and_sorted_json)
 
     ASSERT_TRUE(db != NULL);
     seed_tagged(db);
-    r = run_remember(db, args, 2, NULL);
+    r = run_remember(db, args, sizeof(args) / sizeof(args[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 0);
     ASSERT_STR_CONTAINS(r.out, "\"count\":2");
     ASSERT_STR_CONTAINS(r.out, "{\"name\":\"apple\",\"count\":2}");
@@ -64,7 +64,7 @@ TEST(tags_human_shape)
 
     ASSERT_TRUE(db != NULL);
     seed_tagged(db);
-    r = run_remember(db, args, 1, NULL);
+    r = run_remember(db, args, sizeof(args) / sizeof(args[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 0);
     ASSERT_STR_CONTAINS(r.out, "apple\t2");
     ASSERT_STR_CONTAINS(r.out, "zebra\t1");
@@ -82,13 +82,13 @@ TEST(tags_reflects_delete_gc)
     CmdResult r;
 
     ASSERT_TRUE(db != NULL);
-    r = run_remember(db, add, 4, NULL);
+    r = run_remember(db, add, sizeof(add) / sizeof(add[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 0);
     cmd_result_free(&r);
-    r = run_remember(db, del, 2, NULL);
+    r = run_remember(db, del, sizeof(del) / sizeof(del[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 0);
     cmd_result_free(&r);
-    r = run_remember(db, args, 2, NULL);
+    r = run_remember(db, args, sizeof(args) / sizeof(args[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 0);
     ASSERT_STR_CONTAINS(r.out, "\"count\":0");
     ASSERT_STR_NOT_CONTAINS(r.out, "solo");
@@ -103,7 +103,7 @@ TEST(tags_rejects_arguments)
     CmdResult r;
 
     ASSERT_TRUE(db != NULL);
-    r = run_remember(db, args, 2, NULL);
+    r = run_remember(db, args, sizeof(args) / sizeof(args[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 1);
     ASSERT_STR_CONTAINS(r.err, "takes no arguments");
     cmd_result_free(&r);

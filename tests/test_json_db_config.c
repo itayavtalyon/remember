@@ -30,6 +30,8 @@ static CmdResult run_remember_raw(const char *const *argv, size_t argc, const ch
         result.err = strdup("no bin");
         return result;
     }
+    /* pipe2(O_CLOEXEC) unavailable on macOS; ends closed before exec */
+    // NOLINTNEXTLINE(android-cloexec-pipe)
     if (pipe(out_pipe) != 0 || pipe(err_pipe) != 0) {
         result.exit_code = 127;
         result.out = strdup("");
@@ -58,7 +60,7 @@ static CmdResult run_remember_raw(const char *const *argv, size_t argc, const ch
         close(err_pipe[0]);
         close(err_pipe[1]);
         if (stdin_data == NULL) {
-            int dn = open("/dev/null", O_RDONLY);
+            int dn = open("/dev/null", O_RDONLY | O_CLOEXEC);
             if (dn >= 0) {
                 (void)dup2(dn, STDIN_FILENO);
                 close(dn);
@@ -127,13 +129,13 @@ TEST(db_flag_isolates_stores)
     const char *a[] = {"add", "only in db1"};
     const char *gargs[] = {"get", "--json", "1"};
     ASSERT_TRUE(db1 != NULL && db2 != NULL);
-    r = run_remember(db1, a, 2, NULL);
+    r = run_remember(db1, a, sizeof(a) / sizeof(a[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 0);
     cmd_result_free(&r);
-    g = run_remember(db2, gargs, 3, NULL);
+    g = run_remember(db2, gargs, sizeof(gargs) / sizeof(gargs[0]), NULL);
     ASSERT_EQ_INT(g.exit_code, 2);
     cmd_result_free(&g);
-    g = run_remember(db1, gargs, 3, NULL);
+    g = run_remember(db1, gargs, sizeof(gargs) / sizeof(gargs[0]), NULL);
     ASSERT_EQ_INT(g.exit_code, 0);
     ASSERT_STR_CONTAINS(g.out, "only in db1");
     cmd_result_free(&g);
@@ -153,9 +155,13 @@ TEST(remember_db_env_used_when_no_flag)
     if (db == NULL) {
         return;
     }
+    /* single-threaded test; env funcs have no portable reentrant variant */
+    // NOLINTNEXTLINE(concurrency-mt-unsafe)
     old = getenv("REMEMBER_DB");
     /* Copy now: a later setenv may invalidate the getenv-returned string (CERT ENV31-C). */
     old = (old != NULL) ? strdup(old) : NULL;
+    /* single-threaded test; env funcs have no portable reentrant variant */
+    // NOLINTNEXTLINE(concurrency-mt-unsafe)
     ASSERT_EQ_INT(setenv("REMEMBER_DB", db, 1), 0);
     r = run_remember_raw(a, 2, NULL);
     ASSERT_EQ_INT(r.exit_code, 0);
@@ -165,9 +171,13 @@ TEST(remember_db_env_used_when_no_flag)
     ASSERT_STR_CONTAINS(g.out, "via env db");
     cmd_result_free(&g);
     if (old != NULL) {
+        /* single-threaded test; env funcs have no portable reentrant variant */
+        // NOLINTNEXTLINE(concurrency-mt-unsafe)
         (void)setenv("REMEMBER_DB", old, 1);
         free(old);
     } else {
+        /* single-threaded test; env funcs have no portable reentrant variant */
+        // NOLINTNEXTLINE(concurrency-mt-unsafe)
         (void)unsetenv("REMEMBER_DB");
     }
     free(db);
@@ -187,16 +197,20 @@ TEST(db_flag_wins_over_env)
         free(db_env);
         return;
     }
+    /* single-threaded test; env funcs have no portable reentrant variant */
+    // NOLINTNEXTLINE(concurrency-mt-unsafe)
     ASSERT_EQ_INT(setenv("REMEMBER_DB", db_env, 1), 0);
-    r = run_remember(db_flag, a, 2, NULL);
+    r = run_remember(db_flag, a, sizeof(a) / sizeof(a[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 0);
     cmd_result_free(&r);
-    g = run_remember(db_env, gargs, 3, NULL);
+    g = run_remember(db_env, gargs, sizeof(gargs) / sizeof(gargs[0]), NULL);
     ASSERT_EQ_INT(g.exit_code, 2);
     cmd_result_free(&g);
-    g = run_remember(db_flag, gargs, 3, NULL);
+    g = run_remember(db_flag, gargs, sizeof(gargs) / sizeof(gargs[0]), NULL);
     ASSERT_EQ_INT(g.exit_code, 0);
     cmd_result_free(&g);
+    /* single-threaded test; env funcs have no portable reentrant variant */
+    // NOLINTNEXTLINE(concurrency-mt-unsafe)
     (void)unsetenv("REMEMBER_DB");
     free(db_flag);
     free(db_env);
@@ -210,10 +224,10 @@ TEST(json_entry_has_required_fields)
     const char *a[] = {"add", "--tag", "t", "--source", "tool", "fields check"};
     const char *gargs[] = {"get", "--json", "1"};
     ASSERT_TRUE(db != NULL);
-    r = run_remember(db, a, 6, NULL);
+    r = run_remember(db, a, sizeof(a) / sizeof(a[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 0);
     cmd_result_free(&r);
-    g = run_remember(db, gargs, 3, NULL);
+    g = run_remember(db, gargs, sizeof(gargs) / sizeof(gargs[0]), NULL);
     ASSERT_EQ_INT(g.exit_code, 0);
     ASSERT_STR_CONTAINS(g.out, "\"version\":1");
     ASSERT_STR_CONTAINS(g.out, "\"id\":");
@@ -236,8 +250,8 @@ TEST(second_add_gets_id_two)
     const char *a1[] = {"add", "first"};
     const char *a2[] = {"add", "second"};
     ASSERT_TRUE(db != NULL);
-    r1 = run_remember(db, a1, 2, NULL);
-    r2 = run_remember(db, a2, 2, NULL);
+    r1 = run_remember(db, a1, sizeof(a1) / sizeof(a1[0]), NULL);
+    r2 = run_remember(db, a2, sizeof(a2) / sizeof(a2[0]), NULL);
     ASSERT_EQ_INT(r1.exit_code, 0);
     ASSERT_EQ_INT(r2.exit_code, 0);
     ASSERT_EQ_INT(parse_id_stdout(r1.out), 1);
@@ -257,7 +271,7 @@ TEST(db_rejects_memory_uri)
     /* Override harness --db by putting :memory: after inject... run_remember always
        injects --db first. Pass path as the harness db so the resolved CLI path is
        :memory:. */
-    r = run_remember(":memory:", args, 2, NULL);
+    r = run_remember(":memory:", args, sizeof(args) / sizeof(args[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 1);
     ASSERT_STR_CONTAINS(r.err, "regular file");
     ASSERT_TRUE(str_is_blank(r.out));
@@ -273,7 +287,7 @@ TEST(db_rejects_file_uri)
     const char *args[] = {"add", "should not store"};
     ASSERT_TRUE(db != NULL);
     (void)snprintf(uri, sizeof(uri), "file:%s", db);
-    r = run_remember(uri, args, 2, NULL);
+    r = run_remember(uri, args, sizeof(args) / sizeof(args[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 1);
     ASSERT_STR_CONTAINS(r.err, "regular file");
     ASSERT_TRUE(str_is_blank(r.out));

@@ -61,7 +61,7 @@ static void assert_sync_warning_for_marker(const char *template_dir)
     }
     (void)snprintf(path, pn, "%s/t.db", syncish);
 
-    r = run_remember(path, a, 2, NULL);
+    r = run_remember(path, a, sizeof(a) / sizeof(a[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 0);
     ASSERT_TRUE(r.err != NULL && r.err[0] != '\0');
     if (r.err != NULL) {

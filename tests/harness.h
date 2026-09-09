@@ -4,7 +4,23 @@
 #include <stdbool.h>
 #include <stddef.h>
 
-/* Path to the remember binary under test (set from argv in test_main). */
+/* Shared test constants (enum so a header include never warns "unused"). */
+enum {
+    ERR_BUFSIZE = 256,     /* store_open error-message buffer */
+    PERM_BITS_MASK = 0777, /* st_mode permission bits (cast to unsigned at bitwise use) */
+    DIR_PERMS = 0700,      /* store directory mode */
+    DB_FILE_PERMS = 0600   /* db-file / blocker-file mode */
+};
+
+/* A SQL query paired with its expected one-line result (assert_query_is). */
+typedef struct {
+    const char *sql;
+    const char *want;
+} QueryExpect;
+
+/* Path to the remember binary under test (set from argv in test_main). Write-once
+   process-global; no const-init available at startup. */
+// NOLINTNEXTLINE(cppcoreguidelines-avoid-non-const-global-variables)
 extern const char *g_remember_bin;
 
 typedef struct {

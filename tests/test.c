@@ -3,11 +3,15 @@
 #include <stdio.h>
 #include <string.h>
 
+/* Mutable process-global counters/state of the minimal test runner. Global by
+   design: every TEST and ASSERT macro updates them. */
+// NOLINTBEGIN(cppcoreguidelines-avoid-non-const-global-variables)
 int g_tests_run;
 int g_tests_failed;
 int g_asserts_run;
 int g_asserts_failed;
 const char *g_current_test;
+// NOLINTEND(cppcoreguidelines-avoid-non-const-global-variables)
 
 static const char *current_test(void)
 {

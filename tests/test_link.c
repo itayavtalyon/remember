@@ -6,13 +6,18 @@
 #include <stdlib.h>
 #include <string.h>
 
-static long add_body(const char *db, const char *body)
+typedef struct {
+    const char *db;
+    const char *body;
+} BodyInput;
+
+static long add_body(BodyInput in)
 {
-    const char *a[] = {"add", body};
+    const char *a[] = {"add", in.body};
     CmdResult r;
     long id = 0;
 
-    r = run_remember(db, a, 2, NULL);
+    r = run_remember(in.db, a, sizeof(a) / sizeof(a[0]), NULL);
     id = (r.exit_code == 0) ? parse_id_stdout(r.out) : -1;
     cmd_result_free(&r);
     return id;
@@ -39,19 +44,19 @@ TEST(link_sugar_related_one_canonical_row)
     CmdResult r;
 
     ASSERT_TRUE(db != NULL);
-    a = add_body(db, "alpha");
-    b = add_body(db, "beta");
+    a = add_body((BodyInput){.db = db, .body = "alpha"});
+    b = add_body((BodyInput){.db = db, .body = "beta"});
     ASSERT_EQ_INT(a, 1);
     ASSERT_EQ_INT(b, 2);
 
-    r = run_remember(db, link, 4, NULL);
+    r = run_remember(db, link, sizeof(link) / sizeof(link[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 0);
     ASSERT_STR_CONTAINS(r.out, "\"action\":\"created\"");
     ASSERT_TRUE(json_count_is(r.out, 1));
     ASSERT_STR_CONTAINS(r.out, "\"type\":\"related\"");
     cmd_result_free(&r);
 
-    r = run_remember(db, again, 6, NULL);
+    r = run_remember(db, again, sizeof(again) / sizeof(again[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 0);
     ASSERT_STR_CONTAINS(r.out, "\"action\":\"merged\"");
     ASSERT_TRUE(json_count_is(r.out, 1));
@@ -81,30 +86,30 @@ TEST(link_self_missing_kind_cycle)
     const char *ca[] = {"link", "--from", "3", "--to", "1", "--kind", "supersedes"};
 
     ASSERT_TRUE(db != NULL);
-    ASSERT_EQ_INT(add_body(db, "a"), 1);
-    ASSERT_EQ_INT(add_body(db, "b"), 2);
-    ASSERT_EQ_INT(add_body(db, "c"), 3);
+    ASSERT_EQ_INT(add_body((BodyInput){.db = db, .body = "a"}), 1);
+    ASSERT_EQ_INT(add_body((BodyInput){.db = db, .body = "b"}), 2);
+    ASSERT_EQ_INT(add_body((BodyInput){.db = db, .body = "c"}), 3);
 
-    r = run_remember(db, self, 3, NULL);
+    r = run_remember(db, self, sizeof(self) / sizeof(self[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 1);
     ASSERT_STR_CONTAINS(r.err, "self-link");
     cmd_result_free(&r);
 
-    r = run_remember(db, badkind, 5, NULL);
+    r = run_remember(db, badkind, sizeof(badkind) / sizeof(badkind[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 1);
     cmd_result_free(&r);
 
-    r = run_remember(db, miss, 5, NULL);
+    r = run_remember(db, miss, sizeof(miss) / sizeof(miss[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 2);
     cmd_result_free(&r);
 
-    r = run_remember(db, ab, 7, NULL);
+    r = run_remember(db, ab, sizeof(ab) / sizeof(ab[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 0);
     cmd_result_free(&r);
-    r = run_remember(db, bc, 7, NULL);
+    r = run_remember(db, bc, sizeof(bc) / sizeof(bc[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 0);
     cmd_result_free(&r);
-    r = run_remember(db, ca, 7, NULL);
+    r = run_remember(db, ca, sizeof(ca) / sizeof(ca[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 1);
     ASSERT_STR_CONTAINS(r.err, "supersedes cycle");
     cmd_result_free(&r);
@@ -122,24 +127,24 @@ TEST(unlink_idempotent_and_kinds)
     const char *drop_all[] = {"--json", "unlink", "1", "2"};
 
     ASSERT_TRUE(db != NULL);
-    ASSERT_EQ_INT(add_body(db, "a"), 1);
-    ASSERT_EQ_INT(add_body(db, "b"), 2);
+    ASSERT_EQ_INT(add_body((BodyInput){.db = db, .body = "a"}), 1);
+    ASSERT_EQ_INT(add_body((BodyInput){.db = db, .body = "b"}), 2);
 
-    r = run_remember(db, noop, 8, NULL);
+    r = run_remember(db, noop, sizeof(noop) / sizeof(noop[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 0);
     ASSERT_STR_CONTAINS(r.out, "\"action\":\"deleted\"");
     ASSERT_TRUE(json_count_is(r.out, 0));
     ASSERT_STR_CONTAINS(r.out, "\"links\":[]");
     cmd_result_free(&r);
 
-    r = run_remember(db, rel, 3, NULL);
+    r = run_remember(db, rel, sizeof(rel) / sizeof(rel[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 0);
     cmd_result_free(&r);
-    r = run_remember(db, cites, 7, NULL);
+    r = run_remember(db, cites, sizeof(cites) / sizeof(cites[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 0);
     cmd_result_free(&r);
 
-    r = run_remember(db, drop_rel, 8, NULL);
+    r = run_remember(db, drop_rel, sizeof(drop_rel) / sizeof(drop_rel[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 0);
     ASSERT_TRUE(json_count_is(r.out, 1));
     cmd_result_free(&r);
@@ -152,7 +157,7 @@ TEST(unlink_idempotent_and_kinds)
         free(n);
     }
 
-    r = run_remember(db, drop_all, 4, NULL);
+    r = run_remember(db, drop_all, sizeof(drop_all) / sizeof(drop_all[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 0);
     ASSERT_TRUE(json_count_is(r.out, 1));
     cmd_result_free(&r);
@@ -178,23 +183,23 @@ TEST(related_json_types_dir_and_trash)
     const char *both[] = {"related", "1", "--outgoing", "--incoming"};
 
     ASSERT_TRUE(db != NULL);
-    ASSERT_EQ_INT(add_body(db, "keep"), 1);
-    r = run_remember(db, exp, 4, NULL);
+    ASSERT_EQ_INT(add_body((BodyInput){.db = db, .body = "keep"}), 1);
+    r = run_remember(db, exp, sizeof(exp) / sizeof(exp[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 0);
     cmd_result_free(&r);
-    ASSERT_EQ_INT(add_body(db, "citee"), 3);
+    ASSERT_EQ_INT(add_body((BodyInput){.db = db, .body = "citee"}), 3);
 
-    r = run_remember(db, rel, 3, NULL);
+    r = run_remember(db, rel, sizeof(rel) / sizeof(rel[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 0);
     cmd_result_free(&r);
-    r = run_remember(db, cites, 7, NULL);
+    r = run_remember(db, cites, sizeof(cites) / sizeof(cites[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 0);
     cmd_result_free(&r);
-    r = run_remember(db, back, 7, NULL);
+    r = run_remember(db, back, sizeof(back) / sizeof(back[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 0);
     cmd_result_free(&r);
 
-    r = run_remember(db, q, 3, NULL);
+    r = run_remember(db, q, sizeof(q) / sizeof(q[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 0);
     ASSERT_TRUE(json_count_is(r.out, 3));
     ASSERT_STR_CONTAINS(r.out, "\"type\":\"related\"");
@@ -203,16 +208,16 @@ TEST(related_json_types_dir_and_trash)
     ASSERT_STR_CONTAINS(r.out, "\"trash\":true");
     cmd_result_free(&r);
 
-    r = run_remember(db, outg, 4, NULL);
+    r = run_remember(db, outg, sizeof(outg) / sizeof(outg[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 0);
     ASSERT_TRUE(json_count_is(r.out, 2)); /* related + outgoing cites */
     cmd_result_free(&r);
-    r = run_remember(db, inc, 4, NULL);
+    r = run_remember(db, inc, sizeof(inc) / sizeof(inc[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 0);
     ASSERT_TRUE(json_count_is(r.out, 2)); /* related + incoming cites */
     cmd_result_free(&r);
 
-    r = run_remember(db, both, 4, NULL);
+    r = run_remember(db, both, sizeof(both) / sizeof(both[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 1);
     cmd_result_free(&r);
     free(db);
@@ -228,9 +233,9 @@ TEST(link_bumps_both_and_human_id)
     char *edge = NULL;
 
     ASSERT_TRUE(db != NULL);
-    ASSERT_EQ_INT(add_body(db, "a"), 1);
-    ASSERT_EQ_INT(add_body(db, "b"), 2);
-    r = run_remember(db, link, 3, NULL);
+    ASSERT_EQ_INT(add_body((BodyInput){.db = db, .body = "a"}), 1);
+    ASSERT_EQ_INT(add_body((BodyInput){.db = db, .body = "b"}), 2);
+    r = run_remember(db, link, sizeof(link) / sizeof(link[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 0);
     ASSERT_EQ_INT(parse_id_stdout(r.out), 1);
     cmd_result_free(&r);
@@ -263,58 +268,58 @@ TEST(rekey_rename_promote_demote_and_errors)
     const char *wrong[] = {"rekey", "--key", "t:k", "--to-key", "t2"};
 
     ASSERT_TRUE(db != NULL);
-    r = run_remember(db, keyed, 4, NULL);
+    r = run_remember(db, keyed, sizeof(keyed) / sizeof(keyed[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 0);
     cmd_result_free(&r);
-    ASSERT_EQ_INT(add_body(db, "other"), 2);
+    ASSERT_EQ_INT(add_body((BodyInput){.db = db, .body = "other"}), 2);
 
-    r = run_remember(db, ren, 6, NULL);
+    r = run_remember(db, ren, sizeof(ren) / sizeof(ren[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 0);
     ASSERT_STR_CONTAINS(r.out, "\"action\":\"updated\"");
     ASSERT_STR_CONTAINS(r.out, "\"key\":\"new:k\"");
     cmd_result_free(&r);
 
-    r = run_remember(db, prom, 4, NULL);
+    r = run_remember(db, prom, sizeof(prom) / sizeof(prom[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 0);
     cmd_result_free(&r);
 
-    r = run_remember(db, dem, 5, NULL);
+    r = run_remember(db, dem, sizeof(dem) / sizeof(dem[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 0);
     ASSERT_STR_CONTAINS(r.out, "\"key\":null");
     cmd_result_free(&r);
 
-    r = run_remember(db, empty, 4, NULL);
+    r = run_remember(db, empty, sizeof(empty) / sizeof(empty[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 1);
     ASSERT_STR_CONTAINS(r.err, "empty key");
     cmd_result_free(&r);
 
-    r = run_remember(db, both, 5, NULL);
+    r = run_remember(db, both, sizeof(both) / sizeof(both[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 1);
     cmd_result_free(&r);
-    r = run_remember(db, neither, 2, NULL);
+    r = run_remember(db, neither, sizeof(neither) / sizeof(neither[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 1);
     cmd_result_free(&r);
 
-    r = run_remember(db, taken, 4, NULL);
+    r = run_remember(db, taken, sizeof(taken) / sizeof(taken[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 1);
     ASSERT_STR_CONTAINS(r.err, "2");
     cmd_result_free(&r);
 
-    r = run_remember(db, miss, 4, NULL);
+    r = run_remember(db, miss, sizeof(miss) / sizeof(miss[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 2);
     cmd_result_free(&r);
 
-    r = run_remember(db, exp, 6, NULL);
+    r = run_remember(db, exp, sizeof(exp) / sizeof(exp[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 0);
     cmd_result_free(&r);
-    r = run_remember(db, wrong, 5, NULL);
+    r = run_remember(db, wrong, sizeof(wrong) / sizeof(wrong[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 3);
     cmd_result_free(&r);
 
     /* --trash reaches a trashed row (t:k is in the trash bin from `exp`). */
     {
         const char *rt[] = {"rekey", "--trash", "--key", "t:k", "--to-key", "t2:k"};
-        r = run_remember(db, rt, 6, NULL);
+        r = run_remember(db, rt, sizeof(rt) / sizeof(rt[0]), NULL);
         ASSERT_EQ_INT(r.exit_code, 0);
         cmd_result_free(&r);
     }
@@ -322,7 +327,7 @@ TEST(rekey_rename_promote_demote_and_errors)
        same-value success, no body-hash check. */
     {
         const char *clr[] = {"rekey", "1", "--clear-key"};
-        r = run_remember(db, clr, 3, NULL);
+        r = run_remember(db, clr, sizeof(clr) / sizeof(clr[0]), NULL);
         ASSERT_EQ_INT(r.exit_code, 0);
         cmd_result_free(&r);
     }
@@ -331,10 +336,10 @@ TEST(rekey_rename_promote_demote_and_errors)
     {
         const char *dup[] = {"add", "--key", "c:k", "slot"};
         const char *demc[] = {"rekey", "--key", "c:k", "--clear-key"};
-        r = run_remember(db, dup, 4, NULL);
+        r = run_remember(db, dup, sizeof(dup) / sizeof(dup[0]), NULL);
         ASSERT_EQ_INT(r.exit_code, 0);
         cmd_result_free(&r);
-        r = run_remember(db, demc, 4, NULL);
+        r = run_remember(db, demc, sizeof(demc) / sizeof(demc[0]), NULL);
         ASSERT_EQ_INT(r.exit_code, 1);
         ASSERT_STR_CONTAINS(r.err, "body hash conflicts with entry 1");
         cmd_result_free(&r);
@@ -350,15 +355,15 @@ TEST(link_invalid_id_is_exit_1)
     const char *emptyk[] = {"link", "--from-key", "", "--to", "1"};
 
     ASSERT_TRUE(db != NULL);
-    ASSERT_EQ_INT(add_body(db, "a"), 1);
-    ASSERT_EQ_INT(add_body(db, "b"), 2);
+    ASSERT_EQ_INT(add_body((BodyInput){.db = db, .body = "a"}), 1);
+    ASSERT_EQ_INT(add_body((BodyInput){.db = db, .body = "b"}), 2);
 
-    r = run_remember(db, bad, 3, NULL);
+    r = run_remember(db, bad, sizeof(bad) / sizeof(bad[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 1);
     ASSERT_STR_CONTAINS(r.err, "invalid id");
     cmd_result_free(&r);
 
-    r = run_remember(db, emptyk, 5, NULL);
+    r = run_remember(db, emptyk, sizeof(emptyk) / sizeof(emptyk[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 1);
     ASSERT_STR_CONTAINS(r.err, "empty key");
     cmd_result_free(&r);
@@ -405,40 +410,40 @@ TEST(list_search_get_json_links_empty_after_expires)
     const char *prg[] = {"--json", "purge-trash"};
 
     ASSERT_TRUE(db != NULL);
-    r = run_remember(db, add, 3, NULL);
+    r = run_remember(db, add, sizeof(add) / sizeof(add[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 0);
     ASSERT_STR_NOT_CONTAINS(r.out, "\"links\"");
     cmd_result_free(&r);
 
-    r = run_remember(db, lst, 2, NULL);
+    r = run_remember(db, lst, sizeof(lst) / sizeof(lst[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 0);
     ASSERT_TRUE(json_links_after_expires(r.out));
     ASSERT_STR_CONTAINS(r.out, "\"links\":[]");
     cmd_result_free(&r);
 
-    r = run_remember(db, srch, 3, NULL);
+    r = run_remember(db, srch, sizeof(srch) / sizeof(srch[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 0);
     ASSERT_TRUE(json_links_after_expires(r.out));
     ASSERT_STR_CONTAINS(r.out, "\"links\":[]");
     cmd_result_free(&r);
 
-    r = run_remember(db, get, 3, NULL);
+    r = run_remember(db, get, sizeof(get) / sizeof(get[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 0);
     ASSERT_TRUE(json_links_after_expires(r.out));
     ASSERT_STR_CONTAINS(r.out, "\"links\":[]");
     cmd_result_free(&r);
 
-    r = run_remember(db, upd, 5, NULL);
+    r = run_remember(db, upd, sizeof(upd) / sizeof(upd[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 0);
     ASSERT_STR_NOT_CONTAINS(r.out, "\"links\"");
     cmd_result_free(&r);
 
-    r = run_remember(db, del, 3, NULL);
+    r = run_remember(db, del, sizeof(del) / sizeof(del[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 0);
     ASSERT_STR_NOT_CONTAINS(r.out, "\"links\"");
     cmd_result_free(&r);
 
-    r = run_remember(db, prg, 2, NULL);
+    r = run_remember(db, prg, sizeof(prg) / sizeof(prg[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 0);
     ASSERT_STR_NOT_CONTAINS(r.out, "\"links\"");
     cmd_result_free(&r);
@@ -469,34 +474,34 @@ TEST(get_list_json_stubs_five_name_preview)
 
     {
         const char *hub[] = {"add", "--key", "hub:k", "hub body unique"};
-        r = run_remember(db, hub, 4, NULL);
+        r = run_remember(db, hub, sizeof(hub) / sizeof(hub[0]), NULL);
         ASSERT_EQ_INT(r.exit_code, 0);
         cmd_result_free(&r);
     }
-    r = run_remember(db, add_long, 4, NULL);
+    r = run_remember(db, add_long, sizeof(add_long) / sizeof(add_long[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 0);
     cmd_result_free(&r);
-    ASSERT_EQ_INT(add_body(db, "related-n"), 3);
-    ASSERT_EQ_INT(add_body(db, "old"), 4);
-    ASSERT_EQ_INT(add_body(db, "newer"), 5);
+    ASSERT_EQ_INT(add_body((BodyInput){.db = db, .body = "related-n"}), 3);
+    ASSERT_EQ_INT(add_body((BodyInput){.db = db, .body = "old"}), 4);
+    ASSERT_EQ_INT(add_body((BodyInput){.db = db, .body = "newer"}), 5);
 
-    r = run_remember(db, cites, 7, NULL);
+    r = run_remember(db, cites, sizeof(cites) / sizeof(cites[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 0);
     cmd_result_free(&r);
-    r = run_remember(db, back, 7, NULL);
+    r = run_remember(db, back, sizeof(back) / sizeof(back[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 0);
     cmd_result_free(&r);
-    r = run_remember(db, rel, 3, NULL);
+    r = run_remember(db, rel, sizeof(rel) / sizeof(rel[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 0);
     cmd_result_free(&r);
-    r = run_remember(db, sup, 7, NULL);
+    r = run_remember(db, sup, sizeof(sup) / sizeof(sup[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 0);
     cmd_result_free(&r);
-    r = run_remember(db, by, 7, NULL);
+    r = run_remember(db, by, sizeof(by) / sizeof(by[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 0);
     cmd_result_free(&r);
 
-    r = run_remember(db, get, 3, NULL);
+    r = run_remember(db, get, sizeof(get) / sizeof(get[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 0);
     ASSERT_TRUE(json_links_after_expires(r.out));
     ASSERT_STR_CONTAINS(r.out, "\"type\":\"cites\"");
@@ -511,7 +516,7 @@ TEST(get_list_json_stubs_five_name_preview)
     ASSERT_TRUE(strstr(links_arr, "\"body\"") == NULL);
     cmd_result_free(&r);
 
-    r = run_remember(db, lst, 4, NULL);
+    r = run_remember(db, lst, sizeof(lst) / sizeof(lst[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 0);
     ASSERT_TRUE(json_links_after_expires(r.out));
     ASSERT_STR_CONTAINS(r.out, "\"type\":\"cites\"");
@@ -533,17 +538,17 @@ TEST(human_list_related_ids_trash_cap)
     int i = 0;
 
     ASSERT_TRUE(db != NULL);
-    r = run_remember(db, hub, 4, NULL);
+    r = run_remember(db, hub, sizeof(hub) / sizeof(hub[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 0);
     cmd_result_free(&r);
-    r = run_remember(db, keyed, 4, NULL);
+    r = run_remember(db, keyed, sizeof(keyed) / sizeof(keyed[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 0);
     cmd_result_free(&r);
-    ASSERT_EQ_INT(add_body(db, "n3"), 3);
-    ASSERT_EQ_INT(add_body(db, "n4"), 4);
-    ASSERT_EQ_INT(add_body(db, "n5"), 5);
-    ASSERT_EQ_INT(add_body(db, "n6"), 6);
-    r = run_remember(db, trash, 4, NULL);
+    ASSERT_EQ_INT(add_body((BodyInput){.db = db, .body = "n3"}), 3);
+    ASSERT_EQ_INT(add_body((BodyInput){.db = db, .body = "n4"}), 4);
+    ASSERT_EQ_INT(add_body((BodyInput){.db = db, .body = "n5"}), 5);
+    ASSERT_EQ_INT(add_body((BodyInput){.db = db, .body = "n6"}), 6);
+    r = run_remember(db, trash, sizeof(trash) / sizeof(trash[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 0);
     cmd_result_free(&r);
 
@@ -556,12 +561,12 @@ TEST(human_list_related_ids_trash_cap)
         link[0] = "link";
         link[1] = from;
         link[2] = to;
-        r = run_remember(db, link, 3, NULL);
+        r = run_remember(db, link, sizeof(link) / sizeof(link[0]), NULL);
         ASSERT_EQ_INT(r.exit_code, 0);
         cmd_result_free(&r);
     }
 
-    r = run_remember(db, lst, 3, NULL);
+    r = run_remember(db, lst, sizeof(lst) / sizeof(lst[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 0);
     ASSERT_STR_CONTAINS(r.out, "7[trash], 6, 5, 4, 3, +1");
     ASSERT_STR_NOT_CONTAINS(r.out, "slot:k");
@@ -578,20 +583,20 @@ TEST(human_get_related_block_omitted_when_none)
     const char *link[] = {"link", "--from", "1", "--to", "2", "--kind", "cites"};
 
     ASSERT_TRUE(db != NULL);
-    ASSERT_EQ_INT(add_body(db, "alpha body"), 1);
-    ASSERT_EQ_INT(add_body(db, "beta body"), 2);
+    ASSERT_EQ_INT(add_body((BodyInput){.db = db, .body = "alpha body"}), 1);
+    ASSERT_EQ_INT(add_body((BodyInput){.db = db, .body = "beta body"}), 2);
 
-    r = run_remember(db, get1, 2, NULL);
+    r = run_remember(db, get1, sizeof(get1) / sizeof(get1[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 0);
     ASSERT_STR_CONTAINS(r.out, "alpha body");
     ASSERT_STR_NOT_CONTAINS(r.out, "Related:");
     cmd_result_free(&r);
 
-    r = run_remember(db, link, 7, NULL);
+    r = run_remember(db, link, sizeof(link) / sizeof(link[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 0);
     cmd_result_free(&r);
 
-    r = run_remember(db, get1, 2, NULL);
+    r = run_remember(db, get1, sizeof(get1) / sizeof(get1[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 0);
     ASSERT_STR_CONTAINS(r.out, "alpha body");
     ASSERT_STR_CONTAINS(r.out, "Related:");
@@ -599,7 +604,7 @@ TEST(human_get_related_block_omitted_when_none)
     ASSERT_STR_CONTAINS(r.out, "beta body");
     cmd_result_free(&r);
 
-    r = run_remember(db, get2, 2, NULL);
+    r = run_remember(db, get2, sizeof(get2) / sizeof(get2[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 0);
     ASSERT_STR_CONTAINS(r.out, "cited_by 1");
     cmd_result_free(&r);
@@ -617,30 +622,30 @@ TEST(get_marks_trash_neighbor_restore_keeps_edge)
     const char *rest[] = {"update", "--trash", "2", "--clear-expires"};
 
     ASSERT_TRUE(db != NULL);
-    ASSERT_EQ_INT(add_body(db, "keep"), 1);
-    r = run_remember(db, exp, 4, NULL);
+    ASSERT_EQ_INT(add_body((BodyInput){.db = db, .body = "keep"}), 1);
+    r = run_remember(db, exp, sizeof(exp) / sizeof(exp[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 0);
     cmd_result_free(&r);
-    r = run_remember(db, link, 3, NULL);
+    r = run_remember(db, link, sizeof(link) / sizeof(link[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 0);
     cmd_result_free(&r);
 
-    r = run_remember(db, get, 3, NULL);
+    r = run_remember(db, get, sizeof(get) / sizeof(get[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 0);
     ASSERT_STR_CONTAINS(r.out, "\"trash\":true");
     ASSERT_STR_CONTAINS(r.out, "\"id\":2");
     cmd_result_free(&r);
 
-    r = run_remember(db, hget, 2, NULL);
+    r = run_remember(db, hget, sizeof(hget) / sizeof(hget[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 0);
     ASSERT_STR_CONTAINS(r.out, "[trash]");
     cmd_result_free(&r);
 
-    r = run_remember(db, rest, 4, NULL);
+    r = run_remember(db, rest, sizeof(rest) / sizeof(rest[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 0);
     cmd_result_free(&r);
 
-    r = run_remember(db, get, 3, NULL);
+    r = run_remember(db, get, sizeof(get) / sizeof(get[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 0);
     ASSERT_STR_CONTAINS(r.out, "\"id\":2");
     ASSERT_STR_CONTAINS(r.out, "\"trash\":false");
@@ -655,7 +660,7 @@ TEST(help_lists_graph_commands)
     CmdResult r;
 
     ASSERT_TRUE(db != NULL);
-    r = run_remember(db, h, 1, NULL);
+    r = run_remember(db, h, sizeof(h) / sizeof(h[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 0);
     ASSERT_STR_CONTAINS(r.out, "link");
     ASSERT_STR_CONTAINS(r.out, "unlink");
@@ -670,19 +675,19 @@ TEST(help_lists_graph_commands)
         const char *hr[] = {"help", "related"};
         const char *hk[] = {"help", "rekey"};
 
-        r = run_remember(db, hl, 2, NULL);
+        r = run_remember(db, hl, sizeof(hl) / sizeof(hl[0]), NULL);
         ASSERT_EQ_INT(r.exit_code, 0);
         ASSERT_STR_CONTAINS(r.out, "either bin");
         cmd_result_free(&r);
-        r = run_remember(db, hu, 2, NULL);
+        r = run_remember(db, hu, sizeof(hu) / sizeof(hu[0]), NULL);
         ASSERT_EQ_INT(r.exit_code, 0);
         ASSERT_STR_CONTAINS(r.out, "every kind");
         cmd_result_free(&r);
-        r = run_remember(db, hr, 2, NULL);
+        r = run_remember(db, hr, sizeof(hr) / sizeof(hr[0]), NULL);
         ASSERT_EQ_INT(r.exit_code, 0);
         ASSERT_STR_CONTAINS(r.out, "--outgoing");
         cmd_result_free(&r);
-        r = run_remember(db, hk, 2, NULL);
+        r = run_remember(db, hk, sizeof(hk) / sizeof(hk[0]), NULL);
         ASSERT_EQ_INT(r.exit_code, 0);
         ASSERT_STR_CONTAINS(r.out, "--clear-key");
         cmd_result_free(&r);
@@ -704,29 +709,29 @@ TEST(related_kind_filter_and_human_block)
     CmdResult r;
 
     ASSERT_TRUE(db != NULL);
-    ASSERT_EQ_INT(add_body(db, "alpha"), 1);
-    ASSERT_EQ_INT(add_body(db, "beta"), 2);
-    r = run_remember(db, kc, 4, NULL); /* id 3, keyed c:k */
+    ASSERT_EQ_INT(add_body((BodyInput){.db = db, .body = "alpha"}), 1);
+    ASSERT_EQ_INT(add_body((BodyInput){.db = db, .body = "beta"}), 2);
+    r = run_remember(db, kc, sizeof(kc) / sizeof(kc[0]), NULL); /* id 3, keyed c:k */
     ASSERT_EQ_INT(r.exit_code, 0);
     cmd_result_free(&r);
-    r = run_remember(db, lc, 7, NULL); /* 1 cites 3 */
+    r = run_remember(db, lc, sizeof(lc) / sizeof(lc[0]), NULL); /* 1 cites 3 */
     cmd_result_free(&r);
-    r = run_remember(db, lr, 3, NULL); /* 1 related 2 */
+    r = run_remember(db, lr, sizeof(lr) / sizeof(lr[0]), NULL); /* 1 related 2 */
     cmd_result_free(&r);
 
-    r = run_remember(db, jkind, 5, NULL);
+    r = run_remember(db, jkind, sizeof(jkind) / sizeof(jkind[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 0);
     ASSERT_TRUE(json_count_is(r.out, 1));
     ASSERT_STR_CONTAINS(r.out, "\"type\":\"cites\"");
     cmd_result_free(&r);
 
-    r = run_remember(db, human, 2, NULL);
+    r = run_remember(db, human, sizeof(human) / sizeof(human[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 0);
     ASSERT_STR_CONTAINS(r.out, "cites c:k"); /* type + neighbor key */
     ASSERT_STR_CONTAINS(r.out, "related");
     cmd_result_free(&r);
 
-    r = run_remember(db, nokind, 3, NULL);
+    r = run_remember(db, nokind, sizeof(nokind) / sizeof(nokind[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 1);
     cmd_result_free(&r);
     free(db);
@@ -744,7 +749,7 @@ TEST(preview_control_and_multibyte_truncation)
     size_t i = 0;
 
     ASSERT_TRUE(db != NULL);
-    r = run_remember(db, ctl, 2, NULL);
+    r = run_remember(db, ctl, sizeof(ctl) / sizeof(ctl[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 0);
     cmd_result_free(&r);
 
@@ -754,11 +759,11 @@ TEST(preview_control_and_multibyte_truncation)
     big[210] = '\0';
     bigcmd[0] = "add";
     bigcmd[1] = big;
-    r = run_remember(db, bigcmd, 2, NULL);
+    r = run_remember(db, bigcmd, sizeof(bigcmd) / sizeof(bigcmd[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 0);
     cmd_result_free(&r);
 
-    r = run_remember(db, ls, 1, NULL);
+    r = run_remember(db, ls, sizeof(ls) / sizeof(ls[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 0);
     ASSERT_STR_CONTAINS(r.out, "a?b tail"); /* tab rendered as '?' */
     ASSERT_STR_CONTAINS(r.out, "...");      /* multibyte line truncated */
@@ -781,26 +786,26 @@ TEST(link_and_related_by_key_either_bin)
     CmdResult r;
 
     ASSERT_TRUE(db != NULL);
-    r = run_remember(db, ka, 4, NULL);
+    r = run_remember(db, ka, sizeof(ka) / sizeof(ka[0]), NULL);
     cmd_result_free(&r);
-    r = run_remember(db, kb, 4, NULL);
+    r = run_remember(db, kb, sizeof(kb) / sizeof(kb[0]), NULL);
     cmd_result_free(&r);
-    r = run_remember(db, kt, 6, NULL);
+    r = run_remember(db, kt, sizeof(kt) / sizeof(kt[0]), NULL);
     cmd_result_free(&r);
 
-    r = run_remember(db, cite, 8, NULL);
+    r = run_remember(db, cite, sizeof(cite) / sizeof(cite[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 0);
     ASSERT_STR_CONTAINS(r.out, "\"action\":\"created\"");
     ASSERT_STR_CONTAINS(r.out, "\"type\":\"cites\"");
     cmd_result_free(&r);
 
     /* k:t is in the trash bin, yet the graph locator resolves it (either bin). */
-    r = run_remember(db, rel, 6, NULL);
+    r = run_remember(db, rel, sizeof(rel) / sizeof(rel[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 0);
     ASSERT_STR_CONTAINS(r.out, "\"trash\":true");
     cmd_result_free(&r);
 
-    r = run_remember(db, q, 4, NULL);
+    r = run_remember(db, q, sizeof(q) / sizeof(q[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 0);
     ASSERT_TRUE(json_count_is(r.out, 2));
     ASSERT_STR_CONTAINS(r.out, "\"key\":\"k:b\"");

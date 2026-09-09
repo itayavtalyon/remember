@@ -12,19 +12,19 @@
  * Black-box against store.h; schema via sqlite3 CLI inspect.
  */
 
-static void assert_query_is(const char *db, const char *sql, const char *want)
+static void assert_query_is(const char *db, QueryExpect check)
 {
-    char *row = harness_sqlite_query_line(db, sql);
+    char *row = harness_sqlite_query_line(db, check.sql);
 
     ASSERT_TRUE(row != NULL);
-    ASSERT_STREQ(row != NULL ? row : "", want);
+    ASSERT_STREQ(row != NULL ? row : "", check.want);
     free(row);
 }
 
 TEST(store_open_creates_entry_links)
 {
     char *db = make_temp_db_path();
-    char err[256];
+    char err[ERR_BUFSIZE];
     Store *s = NULL;
 
     ASSERT_TRUE(db != NULL);
@@ -34,28 +34,20 @@ TEST(store_open_creates_entry_links)
     ASSERT_STREQ(err, "");
     store_close(s);
 
-    assert_query_is(db, "PRAGMA user_version;", "3");
-    assert_query_is(db, "SELECT name FROM sqlite_master WHERE type='table' AND name='entry_links';",
-                    "entry_links");
-    assert_query_is(
-        db, "SELECT name FROM sqlite_master WHERE type='index' AND name='entry_links_edge';",
-        "entry_links_edge");
-    assert_query_is(db,
-                    "SELECT name FROM sqlite_master WHERE type='index' AND name='entry_links_to';",
-                    "entry_links_to");
-    assert_query_is(db, "SELECT COUNT(*) FROM pragma_table_info('entry_links') WHERE name='dir';",
-                    "0");
-    assert_query_is(db,
-                    "SELECT CASE WHEN sql LIKE '%from_id != to_id%' OR sql LIKE '%from_id<>to_id%' "
-                    "THEN 'ok' ELSE 'bad' END FROM sqlite_master WHERE name='entry_links';",
-                    "ok");
+    assert_query_is(db, (QueryExpect){.sql = "PRAGMA user_version;", .want = "3"});
+    assert_query_is(db, (QueryExpect){.sql = "SELECT name FROM sqlite_master WHERE type='table' AND name='entry_links';", .want = "entry_links"});
+    assert_query_is(db, (QueryExpect){.sql = "SELECT name FROM sqlite_master WHERE type='index' AND name='entry_links_edge';", .want = "entry_links_edge"});
+    assert_query_is(db, (QueryExpect){.sql = "SELECT name FROM sqlite_master WHERE type='index' AND name='entry_links_to';", .want = "entry_links_to"});
+    assert_query_is(db, (QueryExpect){.sql = "SELECT COUNT(*) FROM pragma_table_info('entry_links') WHERE name='dir';", .want = "0"});
+    assert_query_is(db, (QueryExpect){.sql = "SELECT CASE WHEN sql LIKE '%from_id != to_id%' OR sql LIKE '%from_id<>to_id%' "
+                    "THEN 'ok' ELSE 'bad' END FROM sqlite_master WHERE name='entry_links';", .want = "ok"});
     free(db);
 }
 
 TEST(store_open_migrates_v2_to_v3)
 {
     char *db = make_temp_db_path();
-    char err[256];
+    char err[ERR_BUFSIZE];
     Store *s = NULL;
 
     ASSERT_TRUE(db != NULL);
@@ -66,7 +58,7 @@ TEST(store_open_migrates_v2_to_v3)
             "INSERT INTO entries(body, body_hash, source, created_at, updated_at) "
             "VALUES('v2 row','h','human','2026-01-01T00:00:00.000Z','2026-01-01T00:00:00.000Z');"
             "PRAGMA user_version=2;"));
-    assert_query_is(db, "PRAGMA user_version;", "2");
+    assert_query_is(db, (QueryExpect){.sql = "PRAGMA user_version;", .want = "2"});
 
     err[0] = '\0';
     s = store_open(db, err, sizeof(err));
@@ -74,12 +66,10 @@ TEST(store_open_migrates_v2_to_v3)
     ASSERT_STREQ(err, "");
     store_close(s);
 
-    assert_query_is(db, "PRAGMA user_version;", "3");
-    assert_query_is(db, "SELECT body FROM entries WHERE id=1;", "v2 row");
-    assert_query_is(db, "SELECT COUNT(*) FROM entry_links;", "0");
-    assert_query_is(
-        db, "SELECT name FROM sqlite_master WHERE type='index' AND name='entry_links_edge';",
-        "entry_links_edge");
+    assert_query_is(db, (QueryExpect){.sql = "PRAGMA user_version;", .want = "3"});
+    assert_query_is(db, (QueryExpect){.sql = "SELECT body FROM entries WHERE id=1;", .want = "v2 row"});
+    assert_query_is(db, (QueryExpect){.sql = "SELECT COUNT(*) FROM entry_links;", .want = "0"});
+    assert_query_is(db, (QueryExpect){.sql = "SELECT name FROM sqlite_master WHERE type='index' AND name='entry_links_edge';", .want = "entry_links_edge"});
     free(db);
 }
 
@@ -93,7 +83,7 @@ static const char k_past[] = "2020-01-01T00:00:00.000Z";
 static long long add_row(Store *s, const char *body, const char *hash, const char *key,
                          const char *expires)
 {
-    StoreAddAction act;
+    StoreAddAction act = STORE_ADD_CREATED;
     Entry e;
     long long id = 0;
 
@@ -108,7 +98,7 @@ static long long add_row(Store *s, const char *body, const char *hash, const cha
 
 static Store *open_temp(char **out_db)
 {
-    char err[256];
+    char err[ERR_BUFSIZE];
     Store *s = NULL;
 
     *out_db = make_temp_db_path();
@@ -130,7 +120,7 @@ TEST(store_link_related_is_one_canonical_row)
     Store *s = open_temp(&db);
     long long a = 0;
     long long b = 0;
-    StoreLinkAction act;
+    StoreLinkAction act = STORE_LINK_CREATED;
     StoreNeighbor stub;
     StoreEdgeKind related = STORE_EDGE_RELATED;
 
@@ -144,22 +134,22 @@ TEST(store_link_related_is_one_canonical_row)
     ASSERT_EQ_INT(stub.neighbor_id, b);
     store_neighbor_free(&stub);
 
-    assert_query_is(db, "SELECT COUNT(*) FROM entry_links;", "1");
-    assert_query_is(db, "SELECT kind FROM entry_links;", "related");
+    assert_query_is(db, (QueryExpect){.sql = "SELECT COUNT(*) FROM entry_links;", .want = "1"});
+    assert_query_is(db, (QueryExpect){.sql = "SELECT kind FROM entry_links;", .want = "related"});
     /* Canonical (min, max) regardless of call order. */
     if (a < b) {
-        assert_query_is(db, "SELECT from_id FROM entry_links;", "1");
-        assert_query_is(db, "SELECT to_id FROM entry_links;", "2");
+        assert_query_is(db, (QueryExpect){.sql = "SELECT from_id FROM entry_links;", .want = "1"});
+        assert_query_is(db, (QueryExpect){.sql = "SELECT to_id FROM entry_links;", .want = "2"});
     } else {
-        assert_query_is(db, "SELECT from_id FROM entry_links;", "2");
-        assert_query_is(db, "SELECT to_id FROM entry_links;", "1");
+        assert_query_is(db, (QueryExpect){.sql = "SELECT from_id FROM entry_links;", .want = "2"});
+        assert_query_is(db, (QueryExpect){.sql = "SELECT to_id FROM entry_links;", .want = "1"});
     }
 
     memset(&stub, 0, sizeof(stub));
     ASSERT_EQ_INT((int)store_link(s, (StoreEdge){.from_id = b, .to_id = a}, related, k_later, &act, &stub), (int)STORE_OK);
     ASSERT_EQ_INT((int)act, (int)STORE_LINK_MERGED);
     store_neighbor_free(&stub);
-    assert_query_is(db, "SELECT COUNT(*) FROM entry_links;", "1");
+    assert_query_is(db, (QueryExpect){.sql = "SELECT COUNT(*) FROM entry_links;", .want = "1"});
     store_close(s);
     free(db);
 }
@@ -170,7 +160,7 @@ TEST(store_link_directed_and_kinds_independent)
     Store *s = open_temp(&db);
     long long a = 0;
     long long b = 0;
-    StoreLinkAction act;
+    StoreLinkAction act = STORE_LINK_CREATED;
     StoreNeighbor stub;
 
     ASSERT_TRUE(s != NULL);
@@ -182,9 +172,8 @@ TEST(store_link_directed_and_kinds_independent)
     memset(&stub, 0, sizeof(stub));
     ASSERT_EQ_INT((int)store_link(s, (StoreEdge){.from_id = a, .to_id = b}, STORE_EDGE_RELATED, k_now, &act, &stub), (int)STORE_OK);
     store_neighbor_free(&stub);
-    assert_query_is(db, "SELECT COUNT(*) FROM entry_links;", "2");
-    assert_query_is(
-        db, "SELECT COUNT(*) FROM entry_links WHERE kind='cites' AND from_id=1 AND to_id=2;", "1");
+    assert_query_is(db, (QueryExpect){.sql = "SELECT COUNT(*) FROM entry_links;", .want = "2"});
+    assert_query_is(db, (QueryExpect){.sql = "SELECT COUNT(*) FROM entry_links WHERE kind='cites' AND from_id=1 AND to_id=2;", .want = "1"});
     store_close(s);
     free(db);
 }
@@ -194,7 +183,7 @@ TEST(store_link_self_and_missing)
     char *db = NULL;
     Store *s = open_temp(&db);
     long long a = 0;
-    StoreLinkAction act;
+    StoreLinkAction act = STORE_LINK_CREATED;
     StoreNeighbor stub;
 
     ASSERT_TRUE(s != NULL);
@@ -215,7 +204,7 @@ TEST(store_link_supersedes_cycle)
     long long a = 0;
     long long b = 0;
     long long c = 0;
-    StoreLinkAction act;
+    StoreLinkAction act = STORE_LINK_CREATED;
     StoreNeighbor stub;
 
     ASSERT_TRUE(s != NULL);
@@ -253,7 +242,7 @@ TEST(store_unlink_idempotent_and_pair)
     Store *s = open_temp(&db);
     long long a = 0;
     long long b = 0;
-    StoreLinkAction act;
+    StoreLinkAction act = STORE_LINK_CREATED;
     StoreNeighbor stub;
     StoreNeighbor *gone = NULL;
     size_t n = 0U;
@@ -277,13 +266,13 @@ TEST(store_unlink_idempotent_and_pair)
     ASSERT_EQ_INT((int)store_unlink(s, b, a, &related, k_later, &gone, &n), (int)STORE_OK);
     ASSERT_EQ_INT((int)n, 1);
     store_neighbors_free(gone, n);
-    assert_query_is(db, "SELECT COUNT(*) FROM entry_links;", "1");
-    assert_query_is(db, "SELECT kind FROM entry_links;", "cites");
+    assert_query_is(db, (QueryExpect){.sql = "SELECT COUNT(*) FROM entry_links;", .want = "1"});
+    assert_query_is(db, (QueryExpect){.sql = "SELECT kind FROM entry_links;", .want = "cites"});
 
     ASSERT_EQ_INT((int)store_unlink(s, a, b, NULL, k_later, &gone, &n), (int)STORE_OK);
     ASSERT_EQ_INT((int)n, 1);
     store_neighbors_free(gone, n);
-    assert_query_is(db, "SELECT COUNT(*) FROM entry_links;", "0");
+    assert_query_is(db, (QueryExpect){.sql = "SELECT COUNT(*) FROM entry_links;", .want = "0"});
 
     /* no-op unlink does not bump */
     {
@@ -309,7 +298,7 @@ TEST(store_link_bumps_both_endpoints)
     Store *s = open_temp(&db);
     long long a = 0;
     long long b = 0;
-    StoreLinkAction act;
+    StoreLinkAction act = STORE_LINK_CREATED;
     StoreNeighbor stub;
     Entry ea;
     Entry eb;
@@ -341,7 +330,7 @@ TEST(store_neighbors_dir_and_trash)
     long long b = 0;
     long long c = 0;
     long long d = 0;
-    StoreLinkAction act;
+    StoreLinkAction act = STORE_LINK_CREATED;
     StoreNeighbor stub;
     StoreNeighbor *rows = NULL;
     size_t n = 0U;
@@ -427,7 +416,7 @@ TEST(store_neighbors_cascade_and_survive_trash)
     Store *s = open_temp(&db);
     long long a = 0;
     long long b = 0;
-    StoreLinkAction act;
+    StoreLinkAction act = STORE_LINK_CREATED;
     StoreNeighbor stub;
     StoreNeighbor *rows = NULL;
     size_t n = 0U;
@@ -481,7 +470,7 @@ TEST(store_rekey_rename_promote_demote)
     Store *s = open_temp(&db);
     long long a = 0;
     long long b = 0;
-    StoreLinkAction act;
+    StoreLinkAction act = STORE_LINK_CREATED;
     StoreNeighbor stub;
     Entry e;
     long long conflict = 0;
@@ -560,7 +549,7 @@ TEST(store_list_neighbors_for_page)
     long long a = 0;
     long long b = 0;
     long long c = 0;
-    StoreLinkAction act;
+    StoreLinkAction act = STORE_LINK_CREATED;
     StoreNeighbor stub;
     StoreNeighbor *rows = NULL;
     size_t n = 0U;
@@ -608,7 +597,7 @@ TEST(store_list_neighbors_oom_keeps_key_and_trash)
     Store *s = open_temp(&db);
     long long a = 0;
     long long b = 0;
-    StoreLinkAction act;
+    StoreLinkAction act = STORE_LINK_CREATED;
     StoreNeighbor stub;
     int i = 0;
 
@@ -622,7 +611,7 @@ TEST(store_list_neighbors_oom_keeps_key_and_trash)
     for (i = 0; i < 24; i++) {
         StoreNeighbor *rows = NULL;
         size_t n = 0U;
-        StoreStatus st;
+        StoreStatus st = STORE_OK;
 
         store_test_fail_alloc_after(i);
         st = store_list_neighbors(s, a, NULL, STORE_NEIGHBOR_ALL, k_now, &rows, &n);
@@ -652,11 +641,11 @@ TEST(store_unlink_stub_load_failure_is_sqlite_not_oom)
     Store *s = open_temp(&db);
     long long a = 0;
     long long b = 0;
-    StoreLinkAction act;
+    StoreLinkAction act = STORE_LINK_CREATED;
     StoreNeighbor stub;
     StoreNeighbor *gone = NULL;
     size_t n = 0U;
-    StoreStatus st;
+    StoreStatus st = STORE_OK;
 
     ASSERT_TRUE(s != NULL);
     a = add_row(s, "alpha", k_hash_a, NULL, NULL);
@@ -697,7 +686,7 @@ TEST(store_links_fault_injection_sweep)
     ASSERT_TRUE(a > 0 && b > 0 && c > 0);
 
     for (i = 0; i < 20; i++) {
-        StoreLinkAction act;
+        StoreLinkAction act = STORE_LINK_CREATED;
         StoreNeighbor stub;
         StoreNeighbor *rows = NULL;
         StoreNeighbor *gone = NULL;

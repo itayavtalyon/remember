@@ -25,7 +25,7 @@ TEST(unknown_subcommand_exits_usage)
     const char *args[] = {"frobnicate"};
     CmdResult r;
     ASSERT_TRUE(db != NULL);
-    r = run_remember(db, args, 1, NULL);
+    r = run_remember(db, args, sizeof(args) / sizeof(args[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 1);
     ASSERT_STR_CONTAINS(r.err, "frobnicate");
     cmd_result_free(&r);
@@ -38,7 +38,7 @@ TEST(help_exits_zero_and_prints_usage)
     const char *args[] = {"--help"};
     CmdResult r;
     ASSERT_TRUE(db != NULL);
-    r = run_remember(db, args, 1, NULL);
+    r = run_remember(db, args, sizeof(args) / sizeof(args[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 0);
     ASSERT_STR_CONTAINS(r.out, "add");
     ASSERT_STR_CONTAINS(r.out, "search");
@@ -53,7 +53,7 @@ TEST(version_exits_zero)
     const char *args[] = {"--version"};
     CmdResult r;
     ASSERT_TRUE(db != NULL);
-    r = run_remember(db, args, 1, NULL);
+    r = run_remember(db, args, sizeof(args) / sizeof(args[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 0);
     ASSERT_TRUE(r.out != NULL && r.out[0] != '\0');
     cmd_result_free(&r);
@@ -66,7 +66,7 @@ TEST(help_subcommand_exits_zero)
     const char *args[] = {"help"};
     CmdResult r;
     ASSERT_TRUE(db != NULL);
-    r = run_remember(db, args, 1, NULL);
+    r = run_remember(db, args, sizeof(args) / sizeof(args[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 0);
     ASSERT_STR_CONTAINS(r.out, "add");
     cmd_result_free(&r);
@@ -79,7 +79,7 @@ TEST(version_subcommand_exits_zero)
     const char *args[] = {"version"};
     CmdResult r;
     ASSERT_TRUE(db != NULL);
-    r = run_remember(db, args, 1, NULL);
+    r = run_remember(db, args, sizeof(args) / sizeof(args[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 0);
     ASSERT_STR_CONTAINS(r.out, "remember");
     cmd_result_free(&r);
@@ -93,7 +93,7 @@ TEST(db_without_value_exits_usage)
     const char *args[] = {"--db"};
     CmdResult r;
     ASSERT_TRUE(db != NULL);
-    r = run_remember(db, args, 1, NULL);
+    r = run_remember(db, args, sizeof(args) / sizeof(args[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 1);
     ASSERT_STR_CONTAINS(r.err, "--db");
     cmd_result_free(&r);
@@ -106,7 +106,7 @@ TEST(unknown_global_option_before_command_exits_usage)
     const char *args[] = {"--not-a-real-flag", "add", "x"};
     CmdResult r;
     ASSERT_TRUE(db != NULL);
-    r = run_remember(db, args, 3, NULL);
+    r = run_remember(db, args, sizeof(args) / sizeof(args[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 1);
     ASSERT_STR_CONTAINS(r.err, "--not-a-real-flag");
     cmd_result_free(&r);
@@ -120,7 +120,7 @@ TEST(json_global_before_command_accepted)
     const char *args[] = {"--json", "add", "hello"};
     CmdResult r;
     ASSERT_TRUE(db != NULL);
-    r = run_remember(db, args, 3, NULL);
+    r = run_remember(db, args, sizeof(args) / sizeof(args[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 0);
     ASSERT_STR_CONTAINS(r.out, "\"action\":\"created\"");
     cmd_result_free(&r);
@@ -133,7 +133,7 @@ TEST(json_global_after_command_accepted)
     const char *args[] = {"add", "--json", "hello"};
     CmdResult r;
     ASSERT_TRUE(db != NULL);
-    r = run_remember(db, args, 3, NULL);
+    r = run_remember(db, args, sizeof(args) / sizeof(args[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 0);
     ASSERT_STR_CONTAINS(r.out, "\"action\":\"created\"");
     cmd_result_free(&r);
@@ -152,7 +152,7 @@ TEST(db_equals_form_accepted)
     args[1] = "add";
     args[2] = "hello";
     /* run_remember also injects --db; extra --db= is fine */
-    r = run_remember(db, args, 3, NULL);
+    r = run_remember(db, args, sizeof(args) / sizeof(args[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 0);
     ASSERT_EQ_INT(parse_id_stdout(r.out), 1);
     cmd_result_free(&r);
@@ -165,7 +165,7 @@ TEST(subcommand_help_add)
     const char *args[] = {"add", "--help"};
     CmdResult r;
     ASSERT_TRUE(db != NULL);
-    r = run_remember(db, args, 2, NULL);
+    r = run_remember(db, args, sizeof(args) / sizeof(args[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 0);
     ASSERT_STR_CONTAINS(r.out, "add");
     ASSERT_STR_CONTAINS(r.out, "Store a memory");
@@ -179,7 +179,7 @@ TEST(help_topic_subcommand)
     const char *args[] = {"help", "search"};
     CmdResult r;
     ASSERT_TRUE(db != NULL);
-    r = run_remember(db, args, 2, NULL);
+    r = run_remember(db, args, sizeof(args) / sizeof(args[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 0);
     ASSERT_STR_CONTAINS(r.out, "search");
     ASSERT_STR_CONTAINS(r.out, "Full-text");
@@ -193,7 +193,7 @@ TEST(help_unknown_topic_exits_usage)
     const char *args[] = {"help", "frobnicate"};
     CmdResult r;
     ASSERT_TRUE(db != NULL);
-    r = run_remember(db, args, 2, NULL);
+    r = run_remember(db, args, sizeof(args) / sizeof(args[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 1);
     ASSERT_STR_CONTAINS(r.err, "frobnicate");
     cmd_result_free(&r);
@@ -207,7 +207,7 @@ TEST(command_specific_option_before_command_is_unknown_global)
     const char *args[] = {"--tag", "x", "add", "body"};
     CmdResult r;
     ASSERT_TRUE(db != NULL);
-    r = run_remember(db, args, 4, NULL);
+    r = run_remember(db, args, sizeof(args) / sizeof(args[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 1);
     ASSERT_STR_CONTAINS(r.err, "--tag");
     cmd_result_free(&r);
@@ -221,7 +221,7 @@ TEST(command_specific_option_after_command_not_usage_error)
     const char *args[] = {"add", "--tag", "x", "body"};
     CmdResult r;
     ASSERT_TRUE(db != NULL);
-    r = run_remember(db, args, 4, NULL);
+    r = run_remember(db, args, sizeof(args) / sizeof(args[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 0);
     ASSERT_EQ_INT(parse_id_stdout(r.out), 1);
     cmd_result_free(&r);

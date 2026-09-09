@@ -13,6 +13,9 @@
 #include <sys/wait.h>
 #include <unistd.h>
 
+/* Write-once path to the CLI binary under test, set from argv at startup. Mutable
+   process-global by necessity (no const init available at that point). */
+// NOLINTNEXTLINE(cppcoreguidelines-avoid-non-const-global-variables)
 const char *g_remember_bin = NULL;
 
 void cmd_result_free(CmdResult *r)
@@ -93,6 +96,8 @@ static void drain_two(int fd0, int fd1, char **out0, char **out1)
             char tmp[4096];
             ssize_t n = 0;
 
+            /* POLLIN/POLLHUP/POLLERR are POSIX-defined signed int macros. */
+            // NOLINTNEXTLINE(hicpp-signed-bitwise)
             if ((pfds[i].revents & (POLLIN | POLLHUP | POLLERR)) == 0) {
                 continue;
             }
@@ -160,26 +165,33 @@ static char **build_child_argv(const char *db_path, const char *const *args, siz
     return argv;
 }
 
+/* The three stdio pipe pairs (each a 2-int [read,write]), grouped so the child
+   setup cannot transpose them. Pointers to the caller's pipe arrays. */
+typedef struct {
+    int *out;
+    int *err;
+    int *in;
+} ChildPipes;
+
 /* Child side: redirect stdio to the pipes and exec. Never returns. */
-static void child_run(int out_pipe[2], int err_pipe[2], int in_pipe[2], const char *stdin_data,
-                      char *const argv[])
+static void child_run(ChildPipes pipes, const char *stdin_data, char *const argv[])
 {
-    if (dup2(out_pipe[1], STDOUT_FILENO) < 0 || dup2(err_pipe[1], STDERR_FILENO) < 0) {
+    if (dup2(pipes.out[1], STDOUT_FILENO) < 0 || dup2(pipes.err[1], STDERR_FILENO) < 0) {
         _exit(127);
     }
-    close(out_pipe[0]);
-    close(out_pipe[1]);
-    close(err_pipe[0]);
-    close(err_pipe[1]);
+    close(pipes.out[0]);
+    close(pipes.out[1]);
+    close(pipes.err[0]);
+    close(pipes.err[1]);
 
     if (stdin_data != NULL) {
-        if (dup2(in_pipe[0], STDIN_FILENO) < 0) {
+        if (dup2(pipes.in[0], STDIN_FILENO) < 0) {
             _exit(127);
         }
-        close(in_pipe[0]);
-        close(in_pipe[1]);
+        close(pipes.in[0]);
+        close(pipes.in[1]);
     } else {
-        int devnull = open("/dev/null", O_RDONLY);
+        int devnull = open("/dev/null", O_RDONLY | O_CLOEXEC);
         if (devnull >= 0) {
             (void)dup2(devnull, STDIN_FILENO);
             close(devnull);
@@ -238,10 +250,14 @@ CmdResult run_remember(const char *db_path, const char *const *args, size_t narg
     }
     /* Every failure below goes through cleanup: a half-open pipe pair would
        otherwise leak two fds per call. */
+    /* pipe2(O_CLOEXEC) is unavailable on macOS; these ends are explicitly closed in
+       both parent and child before execv, so nothing leaks across the exec. */
+    // NOLINTNEXTLINE(android-cloexec-pipe)
     if (pipe(out_pipe) != 0 || pipe(err_pipe) != 0) {
         result = harness_error("harness: pipe failed");
         goto cleanup;
     }
+    // NOLINTNEXTLINE(android-cloexec-pipe)
     if (stdin_data != NULL && pipe(in_pipe) != 0) {
         result = harness_error("harness: stdin pipe failed");
         goto cleanup;
@@ -260,7 +276,7 @@ CmdResult run_remember(const char *db_path, const char *const *args, size_t narg
         goto cleanup;
     }
     if (pid == 0) {
-        child_run(out_pipe, err_pipe, in_pipe, stdin_data, argv);
+        child_run((ChildPipes){.out = out_pipe, .err = err_pipe, .in = in_pipe}, stdin_data, argv);
     }
 
     /* parent */
@@ -298,19 +314,27 @@ cleanup:
 
 /* ---- temp-dir registry: clean up every mkdtemp at process exit ----------- */
 
+/* Process-global registry of mkdtemp dirs to remove at exit; mutable by nature
+   (grows as tests create temp dirs, swept by an atexit handler). */
+// NOLINTBEGIN(cppcoreguidelines-avoid-non-const-global-variables)
 static char **g_temp_dirs;
 static size_t g_temp_count;
 static size_t g_temp_cap;
 static bool g_atexit_registered;
+// NOLINTEND(cppcoreguidelines-avoid-non-const-global-variables)
 
-/* Depth-first: tests nest databases under the temp dir (see parent-dir tests),
-   so a single-level unlink sweep would leave the whole tree behind in /tmp. */
+/* Depth-first: tests nest databases under the temp dir (see parent-dir tests), so a
+   single-level unlink sweep would leave the whole tree behind in /tmp. Intentional
+   recursion; depth is bounded by the test layout. */
+// NOLINTNEXTLINE(misc-no-recursion)
 static void remove_temp_dir(const char *dir)
 {
     DIR *d = opendir(dir);
 
     if (d != NULL) {
         struct dirent *ent = NULL;
+        /* readdir: single-threaded test harness; no portable reentrant variant. */
+        // NOLINTNEXTLINE(concurrency-mt-unsafe)
         while ((ent = readdir(d)) != NULL) {
             char path[4096];
             struct stat st;
