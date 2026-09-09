@@ -201,6 +201,13 @@ typedef struct {
     long long to_id;
 } StoreEdge;
 
+/* Rekey selector + target: current key to match (NULL => locate by id / keyless)
+   and the new key (NULL => clear to keyless). Named so the two cannot transpose. */
+typedef struct {
+    const char *key_or_null;
+    const char *new_key_or_null;
+} RekeyKeys;
+
 typedef enum { STORE_LINK_CREATED = 0, STORE_LINK_MERGED, STORE_LINK_DELETED } StoreLinkAction;
 
 typedef enum {
@@ -264,9 +271,8 @@ StoreStatus store_list_neighbors_for(Store *s, const long long *ids, size_t nids
  * non-empty). Id and edges preserved. NEWKEY taken or demote body-hash
  * collision → CONFLICT + *out_conflict_id. Always bumps updated_at.
  */
-StoreStatus store_rekey(Store *s, long long id, const char *key_or_null,
-                        const char *new_key_or_null, bool trash, const char *now, Entry *out_entry,
-                        long long *out_conflict_id);
+StoreStatus store_rekey(Store *s, long long id, RekeyKeys keys, bool trash, const char *now,
+                        Entry *out_entry, long long *out_conflict_id);
 
 /*
  * Test-only fault injection (compiled when REMEMBER_TEST_HOOKS is defined).

@@ -321,14 +321,27 @@ static int digit(char c)
     return c >= '0' && c <= '9';
 }
 
-/* Civil to Unix days (Howard Hinnant). */
-static long long days_from_civil(int y, int m, int d)
+/* A broken-down civil UTC time. Passed by value so the six int components
+   cannot be transposed at a call site. */
+typedef struct {
+    int year;
+    int month;
+    int day;
+    int hour;
+    int min;
+    int sec;
+} CivilTime;
+
+/* Civil to Unix days (Howard Hinnant). Uses only the date fields of t. */
+static long long days_from_civil(CivilTime t)
 {
     int era = 0;
     unsigned yoe = 0;
     unsigned doy = 0;
     unsigned doe = 0;
-    int yy = y;
+    const int m = t.month;
+    const int d = t.day;
+    int yy = t.year;
 
     yy -= (m <= 2) ? 1 : 0;
     era = (yy >= 0 ? yy : (yy - (YEARS_PER_ERA - 1))) / YEARS_PER_ERA;
@@ -340,12 +353,15 @@ static long long days_from_civil(int y, int m, int d)
     return (((long long)era * DAYS_PER_ERA) + (long long)doe) - DAYS_CIVIL_EPOCH;
 }
 
-static int unix_from_civil(int y, int mo, int d, int h, int mi, int se, long long *out)
+static int unix_from_civil(CivilTime t, long long *out)
 {
     long long days = 0;
     long long sec = 0;
+    const int h = t.hour;
+    const int mi = t.min;
+    const int se = t.sec;
 
-    days = days_from_civil(y, mo, d);
+    days = days_from_civil(t);
     if (days > LLONG_MAX / SECS_PER_DAY || days < LLONG_MIN / SECS_PER_DAY) {
         return -1;
     }
@@ -410,16 +426,23 @@ static int parse_iso_mmmz(const char *s, int *y, int *mo, int *d, int *h, int *m
     return 0;
 }
 
-static int unix_to_iso_ms(long long unix_sec, int ms, char *out, size_t outlen)
+/* A point in time as whole seconds since the Unix epoch plus a millisecond
+   remainder. Named so the two convertible components cannot be transposed. */
+typedef struct {
+    long long unix_sec;
+    int ms;
+} Instant;
+
+static int unix_to_iso_ms(Instant at, char *out, size_t outlen)
 {
     time_t tt = 0;
     struct tm tm;
 
-    if (ms < 0 || ms > MS_MAX) {
+    if (at.ms < 0 || at.ms > MS_MAX) {
         return -1;
     }
-    tt = (time_t)unix_sec;
-    if ((long long)tt != unix_sec) {
+    tt = (time_t)at.unix_sec;
+    if ((long long)tt != at.unix_sec) {
         return -1;
     }
     /* gmtime_r: reentrant; gmtime uses a shared static buffer (concurrency-mt-unsafe). */
@@ -427,8 +450,7 @@ static int unix_to_iso_ms(long long unix_sec, int ms, char *out, size_t outlen)
         return -1;
     }
     return format_iso_mmmz(tm.tm_year + TM_YEAR_BASE, tm.tm_mon + 1, tm.tm_mday, tm.tm_hour,
-                           tm.tm_min,
-                           tm.tm_sec, ms, out, outlen);
+                           tm.tm_min, tm.tm_sec, at.ms, out, outlen);
 }
 
 static int match_mask(const char *s, const char *mask)
@@ -529,14 +551,15 @@ int parse_ttl_to_expires(const char *token, const char *now, char *out, size_t o
         *err = "internal error";
         return -1;
     }
-    if (unix_from_civil(y, mo, d, h, mi, se, &unix_sec) != 0) {
+    if (unix_from_civil((CivilTime){.year = y, .month = mo, .day = d, .hour = h, .min = mi, .sec = se},
+                        &unix_sec) != 0) {
         return -1;
     }
     if (add_sec > 0 && unix_sec > LLONG_MAX - add_sec) {
         return -1;
     }
     unix_sec += add_sec;
-    if (unix_to_iso_ms(unix_sec, ms, out, outlen) != 0) {
+    if (unix_to_iso_ms((Instant){.unix_sec = unix_sec, .ms = ms}, out, outlen) != 0) {
         return -1;
     }
     return 0;

@@ -135,20 +135,27 @@ static bool utf8_cont(const char *s, size_t len, size_t i, size_t need, unsigned
     return true;
 }
 
+/* A decoded scalar: the sequence length that produced it and its code point.
+   Grouped so the two convertible values cannot be transposed at the call site. */
+typedef struct {
+    size_t need;
+    unsigned int cp;
+} Utf8Scalar;
+
 /* Reject overlong encodings, surrogates, and out-of-range scalar values. */
-static bool utf8_cp_ok(size_t need, unsigned int cp)
+static bool utf8_cp_ok(Utf8Scalar dec)
 {
-    if (need == 3U) {
-        if (cp < CP_2BYTE_MIN) {
+    if (dec.need == 3U) {
+        if (dec.cp < CP_2BYTE_MIN) {
             return false;
         }
-        if (cp >= CP_SURROGATE_MIN && cp <= CP_SURROGATE_MAX) {
+        if (dec.cp >= CP_SURROGATE_MIN && dec.cp <= CP_SURROGATE_MAX) {
             return false;
         }
         return true;
     }
-    if (need == 4U) {
-        if (cp >= CP_4BYTE_MIN && cp <= CP_MAX) {
+    if (dec.need == 4U) {
+        if (dec.cp >= CP_4BYTE_MIN && dec.cp <= CP_MAX) {
             return true;
         }
         return false;
@@ -179,7 +186,7 @@ static bool utf8_is_valid(const char *s, size_t len)
         if (!utf8_cont(s, len, i, need, &cp)) {
             return false;
         }
-        if (!utf8_cp_ok(need, cp)) {
+        if (!utf8_cp_ok((Utf8Scalar){.need = need, .cp = cp})) {
             return false;
         }
         i += need;

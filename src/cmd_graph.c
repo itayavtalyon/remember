@@ -163,22 +163,28 @@ static int pair_apply_sugar(PairParse *p)
     return 0;
 }
 
-static int resolve_end(Store *s, const char *id_raw, const char *key_raw, long long *out_id)
+/* One endpoint locator: by raw id token or by raw key token (exactly one set). */
+typedef struct {
+    const char *id_raw;
+    const char *key_raw;
+} EndRef;
+
+static int resolve_end(Store *s, EndRef ref, long long *out_id)
 {
     Entry e;
     StoreStatus st = STORE_OK;
 
     memset(&e, 0, sizeof(e));
-    if (key_raw != NULL) {
+    if (ref.key_raw != NULL) {
         char key_norm[REMEMBER_TOKEN_MAX + 1];
-        NormStatus ns = normalize_key(key_raw, key_norm, sizeof(key_norm));
+        NormStatus ns = normalize_key(ref.key_raw, key_norm, sizeof(key_norm));
         if (ns != NORM_OK) {
             err_msg(norm_token_message(ns, "key"));
             return REMEMBER_ERR;
         }
         st = store_get_any_by_key(s, key_norm, &e);
     } else {
-        if (parse_entry_id(id_raw, out_id) != 0) {
+        if (parse_entry_id(ref.id_raw, out_id) != 0) {
             err_msg("invalid id");
             return REMEMBER_ERR;
         }
@@ -241,11 +247,11 @@ static int run_pair(Store *s, bool json, int rest_argc, const char **rest_argv, 
         err_msg("internal error");
         return REMEMBER_ERR;
     }
-    rc = resolve_end(s, p.from_id_raw, p.from_key_raw, &from_id);
+    rc = resolve_end(s, (EndRef){.id_raw = p.from_id_raw, .key_raw = p.from_key_raw}, &from_id);
     if (rc != REMEMBER_OK) {
         return rc;
     }
-    rc = resolve_end(s, p.to_id_raw, p.to_key_raw, &to_id);
+    rc = resolve_end(s, (EndRef){.id_raw = p.to_id_raw, .key_raw = p.to_key_raw}, &to_id);
     if (rc != REMEMBER_OK) {
         return rc;
     }

@@ -332,11 +332,11 @@ int remember_run(int argc, char *const *argv, FILE *out, FILE *err)
     CliArgs args;
     int rc = 0;
 
-    app_set_streams(out, err);
+    app_set_streams((AppStreams){.out = out, .err = err});
     cli_parse(argc, argv, &args);
     rc = run(&args);
     cli_args_free(&args);
-    app_set_streams(NULL, NULL);
+    app_set_streams((AppStreams){.out = NULL, .err = NULL});
     return rc;
 }
 

@@ -496,7 +496,7 @@ TEST(store_rekey_rename_promote_demote)
     store_neighbor_free(&stub);
 
     memset(&e, 0, sizeof(e));
-    ASSERT_EQ_INT((int)store_rekey(s, 0, "old:key", "new:key", false, k_later, &e, &conflict),
+    ASSERT_EQ_INT((int)store_rekey(s, 0, (RekeyKeys){.key_or_null = "old:key", .new_key_or_null = "new:key"}, false, k_later, &e, &conflict),
                   (int)STORE_OK);
     ASSERT_EQ_INT(e.id, a);
     ASSERT_STREQ(e.key, "new:key");
@@ -510,27 +510,27 @@ TEST(store_rekey_rename_promote_demote)
 
     /* promote keyless b */
     memset(&e, 0, sizeof(e));
-    ASSERT_EQ_INT((int)store_rekey(s, b, NULL, "b:key", false, k_later, &e, &conflict),
+    ASSERT_EQ_INT((int)store_rekey(s, b, (RekeyKeys){.key_or_null = NULL, .new_key_or_null = "b:key"}, false, k_later, &e, &conflict),
                   (int)STORE_OK);
     ASSERT_STREQ(e.key, "b:key");
     store_entry_free(&e);
 
     /* demote a */
     memset(&e, 0, sizeof(e));
-    ASSERT_EQ_INT((int)store_rekey(s, a, NULL, NULL, false, k_later, &e, &conflict), (int)STORE_OK);
+    ASSERT_EQ_INT((int)store_rekey(s, a, (RekeyKeys){.key_or_null = NULL, .new_key_or_null = NULL}, false, k_later, &e, &conflict), (int)STORE_OK);
     ASSERT_TRUE(e.key == NULL);
     store_entry_free(&e);
 
     /* same-value bump */
     memset(&e, 0, sizeof(e));
-    ASSERT_EQ_INT((int)store_rekey(s, b, NULL, "b:key", false, k_now, &e, &conflict),
+    ASSERT_EQ_INT((int)store_rekey(s, b, (RekeyKeys){.key_or_null = NULL, .new_key_or_null = "b:key"}, false, k_now, &e, &conflict),
                   (int)STORE_OK);
     ASSERT_STREQ(e.updated_at, k_now);
     store_entry_free(&e);
 
     /* NEWKEY taken */
     memset(&e, 0, sizeof(e));
-    ASSERT_EQ_INT((int)store_rekey(s, a, NULL, "b:key", false, k_later, &e, &conflict),
+    ASSERT_EQ_INT((int)store_rekey(s, a, (RekeyKeys){.key_or_null = NULL, .new_key_or_null = "b:key"}, false, k_later, &e, &conflict),
                   (int)STORE_ERR_CONFLICT);
     ASSERT_EQ_INT(conflict, b);
 
@@ -544,7 +544,7 @@ TEST(store_rekey_rename_promote_demote)
         long long c = add_row(s, "slot-copy", k_hash_a, "c:key", NULL);
         memset(&e, 0, sizeof(e));
         conflict = 0;
-        ASSERT_EQ_INT((int)store_rekey(s, c, NULL, NULL, false, k_later, &e, &conflict),
+        ASSERT_EQ_INT((int)store_rekey(s, c, (RekeyKeys){.key_or_null = NULL, .new_key_or_null = NULL}, false, k_later, &e, &conflict),
                       (int)STORE_ERR_CONFLICT);
         ASSERT_EQ_INT(conflict, a);
     }
@@ -743,13 +743,13 @@ TEST(store_links_fault_injection_sweep)
 
         memset(&e, 0, sizeof(e));
         store_test_fail_step_after(i % 6);
-        (void)store_rekey(s, a, NULL, NULL, false, k_now, &e,
+        (void)store_rekey(s, a, (RekeyKeys){.key_or_null = NULL, .new_key_or_null = NULL}, false, k_now, &e,
                           &conflict); /* clear: load_body_hash */
         store_entry_free(&e);
         store_test_fail_step_after(-1);
         memset(&e, 0, sizeof(e));
         store_test_fail_prepare_after(i % 5);
-        (void)store_rekey(s, 0, "ka", "kz", false, k_now, &e, &conflict); /* set/rename */
+        (void)store_rekey(s, 0, (RekeyKeys){.key_or_null = "ka", .new_key_or_null = "kz"}, false, k_now, &e, &conflict); /* set/rename */
         store_entry_free(&e);
         store_test_fail_prepare_after(-1);
     }

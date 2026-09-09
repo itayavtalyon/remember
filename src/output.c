@@ -72,12 +72,18 @@ int output_json_string(FILE *out, const char *s)
     return 0;
 }
 
-static int write_json_field_str(FILE *out, const char *name, const char *value)
+/* One JSON object field: its name and string value (NULL renders as ""). */
+typedef struct {
+    const char *name;
+    const char *value;
+} JsonField;
+
+static int write_json_field_str(FILE *out, JsonField field)
 {
-    if (fprintf(out, ",\"%s\":", name) < 0) {
+    if (fprintf(out, ",\"%s\":", field.name) < 0) {
         return -1;
     }
-    return output_json_string(out, value != NULL ? value : empty_str());
+    return output_json_string(out, field.value != NULL ? field.value : empty_str());
 }
 
 static int write_entry_core(FILE *out, const Entry *e)
@@ -94,7 +100,7 @@ static int write_entry_core(FILE *out, const Entry *e)
     } else if (output_json_string(out, e->key) != 0) {
         return -1;
     }
-    if (write_json_field_str(out, "body", e->body) != 0) {
+    if (write_json_field_str(out, (JsonField){.name = "body", .value = e->body}) != 0) {
         return -1;
     }
     if (fputs(",\"tags\":[", out) < 0) {
@@ -111,20 +117,20 @@ static int write_entry_core(FILE *out, const Entry *e)
     if (fputs("]", out) < 0) {
         return -1;
     }
-    if (write_json_field_str(out, "source", e->source != NULL ? e->source : "unknown") != 0) {
+    if (write_json_field_str(out, (JsonField){.name = "source", .value = e->source != NULL ? e->source : "unknown"}) != 0) {
         return -1;
     }
-    if (write_json_field_str(out, "created_at", e->created_at) != 0) {
+    if (write_json_field_str(out, (JsonField){.name = "created_at", .value = e->created_at}) != 0) {
         return -1;
     }
-    if (write_json_field_str(out, "updated_at", e->updated_at) != 0) {
+    if (write_json_field_str(out, (JsonField){.name = "updated_at", .value = e->updated_at}) != 0) {
         return -1;
     }
     if (e->expires_at == NULL) {
         if (fputs(",\"expires_at\":null", out) < 0) {
             return -1;
         }
-    } else if (write_json_field_str(out, "expires_at", e->expires_at) != 0) {
+    } else if (write_json_field_str(out, (JsonField){.name = "expires_at", .value = e->expires_at}) != 0) {
         return -1;
     }
     return 0;

@@ -20,8 +20,8 @@ FILE *app_err(void)
     return g_err != NULL ? g_err : stderr;
 }
 
-void app_set_streams(FILE *out, FILE *err)
+void app_set_streams(AppStreams streams)
 {
-    g_out = out;
-    g_err = err;
+    g_out = streams.out;
+    g_err = streams.err;
 }

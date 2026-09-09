@@ -22,6 +22,25 @@ enum { NANOS_PER_MS = 1000000 };
 /* Initial element capacity for the geometric-growth dynamic arrays below. */
 enum { GROW_MIN_CAP = 8 };
 
+/* A (wall-clock now, target expires_at) timestamp pair, named so the two
+   const char * arguments cannot be transposed at a call site. */
+typedef struct {
+    const char *now;
+    const char *expires_at;
+} EntryTimes;
+
+/* A SQL "col = ?" equality clause: the column name and its bound text value. */
+typedef struct {
+    const char *col;
+    const char *value;
+} SqlEq;
+
+/* A neighbor-query spec: the subject row id and which direction(s) to include. */
+typedef struct {
+    long long subject_id;
+    StoreNeighborDir dir;
+} NeighborQuery;
+
 /* ---- optional fault injection (coverage / unit tests) --------------------
  * Deliberately mutable process-global counters: the store_test_fail_* setters are
  * the seam that drives OOM/SQLite-error paths from tests. Compiled only under
@@ -1213,7 +1232,7 @@ static StoreStatus replace_body(sqlite3 *db, long long id, const char *body, con
 }
 
 /* If the existing row is trash, clear expiry unless the add supplies a new one. */
-static StoreStatus maybe_revive(sqlite3 *db, long long id, const char *now, const char *expires_at)
+static StoreStatus maybe_revive(sqlite3 *db, long long id, EntryTimes times)
 {
     Entry current;
     StoreStatus st = STORE_OK;
@@ -1223,8 +1242,8 @@ static StoreStatus maybe_revive(sqlite3 *db, long long id, const char *now, cons
     if (st != STORE_OK) {
         return st;
     }
-    if (entry_is_trash(current.expires_at, now)) {
-        st = write_expires_at(db, id, expires_at);
+    if (entry_is_trash(current.expires_at, times.now)) {
+        st = write_expires_at(db, id, times.expires_at);
     }
     store_entry_free(&current);
     return st;
@@ -1245,7 +1264,7 @@ static StoreStatus add_keyed(sqlite3 *db, const char *body, const char *body_has
         if (st != STORE_OK) {
             return st;
         }
-        st = maybe_revive(db, id, now, expires_at);
+        st = maybe_revive(db, id, (EntryTimes){.now = now, .expires_at = expires_at});
         if (st != STORE_OK) {
             return st;
         }
@@ -1288,7 +1307,7 @@ static StoreStatus add_keyless(sqlite3 *db, const char *body, const char *body_h
         if (st != STORE_OK) {
             return st;
         }
-        st = maybe_revive(db, id, now, expires_at);
+        st = maybe_revive(db, id, (EntryTimes){.now = now, .expires_at = expires_at});
         if (st != STORE_OK) {
             return st;
         }
@@ -1514,23 +1533,22 @@ static StoreStatus list_append_row(sqlite3 *db, sqlite3_stmt *sel, Entry **rows,
 
 /* Append " AND col = ?N" and push bind; -1 on OOM/truncation/bind cap. */
 static int list_append_eq(char *sql, size_t sql_cap, size_t *pos, int *nbinds,
-                          const char **bind_text, size_t bind_cap, const char *col,
-                          const char *value)
+                          const char **bind_text, size_t bind_cap, SqlEq clause)
 {
     int n = 0;
 
-    if (value == NULL) {
+    if (clause.value == NULL) {
         return 0;
     }
     if ((size_t)*nbinds >= bind_cap) {
         return -1;
     }
-    n = snprintf(sql + *pos, sql_cap - *pos, " AND e.%s = ?%d", col, *nbinds + 1);
+    n = snprintf(sql + *pos, sql_cap - *pos, " AND e.%s = ?%d", clause.col, *nbinds + 1);
     if (n < 0 || (size_t)n >= sql_cap - *pos) {
         return -1;
     }
     *pos += (size_t)n;
-    bind_text[(*nbinds)++] = value;
+    bind_text[(*nbinds)++] = clause.value;
     return 0;
 }
 
@@ -1596,8 +1614,8 @@ static int list_append_filters(const ListQuery *q, char *sql, size_t sql_cap, si
     if (q == NULL || sql == NULL || pos == NULL || nbinds == NULL || bind_text == NULL) {
         return -1;
     }
-    if (list_append_eq(sql, sql_cap, pos, nbinds, bind_text, bind_cap, "source", q->source) != 0 ||
-        list_append_eq(sql, sql_cap, pos, nbinds, bind_text, bind_cap, "key", q->key) != 0) {
+    if (list_append_eq(sql, sql_cap, pos, nbinds, bind_text, bind_cap, (SqlEq){.col = "source", .value = q->source}) != 0 ||
+        list_append_eq(sql, sql_cap, pos, nbinds, bind_text, bind_cap, (SqlEq){.col = "key", .value = q->key}) != 0) {
         return -1;
     }
     for (t = 0; t < q->ntags; t++) {
@@ -2147,7 +2165,7 @@ static StoreStatus update_check_body_conflict(sqlite3 *db, long long entry_id, b
 static StoreStatus update_apply_changes(sqlite3 *db, long long entry_id, bool is_keyless,
                                         bool set_body, const char *body, const char *body_hash,
                                         bool set_tags, const char *const *tags, size_t ntags,
-                                        bool set_expires, const char *expires_at, const char *now,
+                                        bool set_expires, EntryTimes times,
                                         long long *out_conflict_id)
 {
     StoreStatus st = STORE_OK;
@@ -2157,9 +2175,9 @@ static StoreStatus update_apply_changes(sqlite3 *db, long long entry_id, bool is
         if (st != STORE_OK) {
             return st;
         }
-        st = replace_body(db, entry_id, body, body_hash, now);
+        st = replace_body(db, entry_id, body, body_hash, times.now);
     } else {
-        st = touch_updated_at(db, entry_id, now);
+        st = touch_updated_at(db, entry_id, times.now);
     }
     if (st != STORE_OK) {
         return st;
@@ -2171,7 +2189,7 @@ static StoreStatus update_apply_changes(sqlite3 *db, long long entry_id, bool is
         }
     }
     if (set_expires) {
-        st = write_expires_at(db, entry_id, expires_at);
+        st = write_expires_at(db, entry_id, times.expires_at);
         if (st != STORE_OK) {
             return st;
         }
@@ -2215,8 +2233,9 @@ StoreStatus store_update(Store *s, long long id, const char *key_or_null, bool s
     entry_id = current.id;
     is_keyless = (current.key == NULL);
 
-    st = update_apply_changes(s->db, entry_id, is_keyless, set_body, body, body_hash, set_tags,
-                              tags, ntags, set_expires, expires_at, now, out_conflict_id);
+    st = update_apply_changes(s->db, entry_id, is_keyless, set_body, body, body_hash, set_tags, tags,
+                              ntags, set_expires, (EntryTimes){.now = now, .expires_at = expires_at},
+                              out_conflict_id);
     if (st != STORE_OK) {
         store_entry_free(&current);
         rollback_quiet(s->db);
@@ -2918,8 +2937,7 @@ static StoreStatus neighbors_from_stmt(sqlite3_stmt *stmt, StoreNeighbor **out, 
     return STORE_OK;
 }
 
-static int build_neighbors_sql(char *sql, size_t cap, long long subject_id, StoreNeighborDir dir,
-                               const char *tok)
+static int build_neighbors_sql(char *sql, size_t cap, NeighborQuery query, const char *tok)
 {
     size_t pos = 0U;
     int n = 0;
@@ -2931,15 +2949,16 @@ static int build_neighbors_sql(char *sql, size_t cap, long long subject_id, Stor
         " FROM entry_links l"
         " JOIN entries n ON n.id = CASE WHEN l.from_id = ?1 THEN l.to_id ELSE l.from_id END"
         " WHERE (l.from_id = ?1 OR l.to_id = ?1)",
-        subject_id);
+        query.subject_id);
     if (n < 0 || (size_t)n >= cap) {
         return -1;
     }
     pos = (size_t)n;
-    if (dir == STORE_NEIGHBOR_OUTGOING || dir == STORE_NEIGHBOR_INCOMING) {
+    if (query.dir == STORE_NEIGHBOR_OUTGOING || query.dir == STORE_NEIGHBOR_INCOMING) {
         n = snprintf(sql + pos, cap - pos,
-                     dir == STORE_NEIGHBOR_OUTGOING ? " AND (l.kind = 'related' OR l.from_id = ?1)"
-                                                    : " AND (l.kind = 'related' OR l.to_id = ?1)");
+                     query.dir == STORE_NEIGHBOR_OUTGOING
+                         ? " AND (l.kind = 'related' OR l.from_id = ?1)"
+                         : " AND (l.kind = 'related' OR l.to_id = ?1)");
         if (n < 0 || (size_t)n >= cap - pos) {
             return -1;
         }
@@ -2981,7 +3000,8 @@ StoreStatus store_list_neighbors(Store *s, long long subject_id, const StoreEdge
             return STORE_ERR_INTERNAL;
         }
     }
-    if (build_neighbors_sql(sql, sizeof(sql), subject_id, dir, tok) != 0) {
+    if (build_neighbors_sql(sql, sizeof(sql), (NeighborQuery){.subject_id = subject_id, .dir = dir},
+                            tok) != 0) {
         return STORE_ERR_INTERNAL;
     }
 
@@ -3147,10 +3167,11 @@ static StoreStatus rekey_clear(sqlite3 *db, long long entry_id, const char *curr
     return write_key(db, entry_id, NULL);
 }
 
-StoreStatus store_rekey(Store *s, long long id, const char *key_or_null,
-                        const char *new_key_or_null, bool trash, const char *now, Entry *out_entry,
-                        long long *out_conflict_id)
+StoreStatus store_rekey(Store *s, long long id, RekeyKeys keys, bool trash, const char *now,
+                        Entry *out_entry, long long *out_conflict_id)
 {
+    const char *key_or_null = keys.key_or_null;
+    const char *new_key_or_null = keys.new_key_or_null;
     char err_unused[1];
     Entry current;
     StoreStatus st = STORE_OK;
