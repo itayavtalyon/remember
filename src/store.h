@@ -194,6 +194,13 @@ StoreStatus store_purge_trash(Store *s, const char *now, Entry **out_entries, si
 /* Stored kind only. cited_by / superseded_by are output-only (CLI). */
 typedef enum { STORE_EDGE_RELATED = 0, STORE_EDGE_SUPERSEDES, STORE_EDGE_CITES } StoreEdgeKind;
 
+/* A directed (from_id -> to_id) endpoint pair. Passed by value so call sites
+   name each end (designated initializer) and cannot silently transpose them. */
+typedef struct {
+    long long from_id;
+    long long to_id;
+} StoreEdge;
+
 typedef enum { STORE_LINK_CREATED = 0, STORE_LINK_MERGED, STORE_LINK_DELETED } StoreLinkAction;
 
 typedef enum {
@@ -228,8 +235,8 @@ StoreStatus store_get_any_by_key(Store *s, const char *key, Entry *out_entry);
  * cycle → CYCLE. Real write bumps updated_at on both endpoints.
  * *out_stub is subject-relative to from_id (caller frees).
  */
-StoreStatus store_link(Store *s, long long from_id, long long to_id, StoreEdgeKind kind,
-                       const char *now, StoreLinkAction *out_action, StoreNeighbor *out_stub);
+StoreStatus store_link(Store *s, StoreEdge edge, StoreEdgeKind kind, const char *now,
+                       StoreLinkAction *out_action, StoreNeighbor *out_stub);
 
 /*
  * Delete edges. kind NULL = all kinds between the unordered pair. related

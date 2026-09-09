@@ -263,7 +263,7 @@ static int run_pair(Store *s, bool json, int rest_argc, const char **rest_argv, 
         store_neighbors_free(gone, n);
         return REMEMBER_OK;
     }
-    st = store_link(s, from_id, to_id, kind, now, &act, &stub);
+    st = store_link(s, (StoreEdge){.from_id = from_id, .to_id = to_id}, kind, now, &act, &stub);
     rc = store_status_to_exit(st);
     if (rc != REMEMBER_OK) {
         return rc;

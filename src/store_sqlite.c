@@ -2419,12 +2419,11 @@ static StoreStatus bump_endpoints(sqlite3 *db, long long a, long long b, const c
     return touch_updated_at(db, b, now);
 }
 
-static StoreStatus fill_stub(sqlite3 *db, long long subject_id, long long row_from,
-                             long long row_to, StoreEdgeKind kind, const char *edge_updated,
-                             StoreNeighbor *out)
+static StoreStatus fill_stub(sqlite3 *db, long long subject_id, StoreEdge row, StoreEdgeKind kind,
+                             const char *edge_updated, StoreNeighbor *out)
 {
     Entry e;
-    long long nid = (row_from == subject_id) ? row_to : row_from;
+    long long nid = (row.from_id == subject_id) ? row.to_id : row.from_id;
     StoreStatus st = STORE_OK;
 
     memset(out, 0, sizeof(*out));
@@ -2434,8 +2433,8 @@ static StoreStatus fill_stub(sqlite3 *db, long long subject_id, long long row_fr
         return st;
     }
     out->subject_id = subject_id;
-    out->from_id = row_from;
-    out->to_id = row_to;
+    out->from_id = row.from_id;
+    out->to_id = row.to_id;
     out->kind = kind;
     out->edge_updated_at = dup_str(edge_updated);
     out->neighbor_id = e.id;
@@ -2486,8 +2485,7 @@ static StoreStatus supersedes_reaches(sqlite3 *db, long long start, long long ta
     return STORE_ERR_SQLITE;
 }
 
-static StoreStatus find_edge(sqlite3 *db, long long from_id, long long to_id, StoreEdgeKind kind,
-                             bool *present)
+static StoreStatus find_edge(sqlite3 *db, StoreEdge edge, StoreEdgeKind kind, bool *present)
 {
     sqlite3_stmt *stmt = NULL;
     int rc = 0;
@@ -2503,8 +2501,8 @@ static StoreStatus find_edge(sqlite3 *db, long long from_id, long long to_id, St
     if (rc != SQLITE_OK) {
         return STORE_ERR_SQLITE;
     }
-    (void)sqlite3_bind_int64(stmt, 1, from_id);
-    (void)sqlite3_bind_int64(stmt, 2, to_id);
+    (void)sqlite3_bind_int64(stmt, 1, edge.from_id);
+    (void)sqlite3_bind_int64(stmt, 2, edge.to_id);
     (void)sqlite3_bind_text(stmt, 3, tok, -1, SQLITE_STATIC);
     rc = sqlite3_step(stmt);
     (void)sqlite3_finalize(stmt);
@@ -2518,8 +2516,7 @@ static StoreStatus find_edge(sqlite3 *db, long long from_id, long long to_id, St
     return STORE_ERR_SQLITE;
 }
 
-static StoreStatus insert_edge(sqlite3 *db, long long from_id, long long to_id, StoreEdgeKind kind,
-                               const char *now)
+static StoreStatus insert_edge(sqlite3 *db, StoreEdge edge, StoreEdgeKind kind, const char *now)
 {
     sqlite3_stmt *stmt = NULL;
     int rc = 0;
@@ -2535,8 +2532,8 @@ static StoreStatus insert_edge(sqlite3 *db, long long from_id, long long to_id, 
     if (rc != SQLITE_OK) {
         return STORE_ERR_SQLITE;
     }
-    (void)sqlite3_bind_int64(stmt, 1, from_id);
-    (void)sqlite3_bind_int64(stmt, 2, to_id);
+    (void)sqlite3_bind_int64(stmt, 1, edge.from_id);
+    (void)sqlite3_bind_int64(stmt, 2, edge.to_id);
     (void)sqlite3_bind_text(stmt, 3, tok, -1, SQLITE_STATIC);
     (void)sqlite3_bind_text(stmt, 4, now, -1, SQLITE_STATIC);
     rc = sqlite3_step(stmt);
@@ -2544,8 +2541,7 @@ static StoreStatus insert_edge(sqlite3 *db, long long from_id, long long to_id, 
     return (rc == SQLITE_DONE) ? STORE_OK : STORE_ERR_SQLITE;
 }
 
-static StoreStatus touch_edge(sqlite3 *db, long long from_id, long long to_id, StoreEdgeKind kind,
-                              const char *now)
+static StoreStatus touch_edge(sqlite3 *db, StoreEdge edge, StoreEdgeKind kind, const char *now)
 {
     sqlite3_stmt *stmt = NULL;
     int rc = 0;
@@ -2562,8 +2558,8 @@ static StoreStatus touch_edge(sqlite3 *db, long long from_id, long long to_id, S
         return STORE_ERR_SQLITE;
     }
     (void)sqlite3_bind_text(stmt, 1, now, -1, SQLITE_STATIC);
-    (void)sqlite3_bind_int64(stmt, 2, from_id);
-    (void)sqlite3_bind_int64(stmt, 3, to_id);
+    (void)sqlite3_bind_int64(stmt, 2, edge.from_id);
+    (void)sqlite3_bind_int64(stmt, 3, edge.to_id);
     (void)sqlite3_bind_text(stmt, 4, tok, -1, SQLITE_STATIC);
     rc = sqlite3_step(stmt);
     (void)sqlite3_finalize(stmt);
@@ -2588,10 +2584,12 @@ StoreStatus store_get_any_by_key(Store *s, const char *key, Entry *out_entry)
     return load_entry_by_key(s->db, key, out_entry);
 }
 
-StoreStatus store_link(Store *s, long long from_id, long long to_id, StoreEdgeKind kind,
-                       const char *now, StoreLinkAction *out_action, StoreNeighbor *out_stub)
+StoreStatus store_link(Store *s, StoreEdge edge, StoreEdgeKind kind, const char *now,
+                       StoreLinkAction *out_action, StoreNeighbor *out_stub)
 {
     char err_unused[1];
+    long long from_id = edge.from_id;
+    long long to_id = edge.to_id;
     long long stored_from = from_id;
     long long stored_to = to_id;
     bool present = false;
@@ -2624,7 +2622,7 @@ StoreStatus store_link(Store *s, long long from_id, long long to_id, StoreEdgeKi
         rollback_quiet(s->db);
         return st;
     }
-    st = find_edge(s->db, stored_from, stored_to, kind, &present);
+    st = find_edge(s->db, (StoreEdge){.from_id = stored_from, .to_id = stored_to}, kind, &present);
     if (st != STORE_OK) {
         rollback_quiet(s->db);
         return st;
@@ -2641,10 +2639,10 @@ StoreStatus store_link(Store *s, long long from_id, long long to_id, StoreEdgeKi
         }
     }
     if (present) {
-        st = touch_edge(s->db, stored_from, stored_to, kind, now);
+        st = touch_edge(s->db, (StoreEdge){.from_id = stored_from, .to_id = stored_to}, kind, now);
         *out_action = STORE_LINK_MERGED;
     } else {
-        st = insert_edge(s->db, stored_from, stored_to, kind, now);
+        st = insert_edge(s->db, (StoreEdge){.from_id = stored_from, .to_id = stored_to}, kind, now);
         *out_action = STORE_LINK_CREATED;
     }
     if (st == STORE_OK) {
@@ -2657,7 +2655,8 @@ StoreStatus store_link(Store *s, long long from_id, long long to_id, StoreEdgeKi
     /* Read the stub inside the transaction (as store_unlink does) so a
        neighbor purged between COMMIT and the read cannot turn a committed
        link into a spurious not-found. */
-    st = fill_stub(s->db, from_id, stored_from, stored_to, kind, now, out_stub);
+    st = fill_stub(s->db, from_id, (StoreEdge){.from_id = stored_from, .to_id = stored_to}, kind, now,
+                   out_stub);
     if (st != STORE_OK) {
         rollback_quiet(s->db);
         return st;
@@ -2695,7 +2694,9 @@ static StoreStatus collect_unlink_matches(sqlite3 *db, sqlite3_stmt *sel, long l
         }
         memset(&stub, 0, sizeof(stub));
         {
-            StoreStatus st = fill_stub(db, subject, from_id, to_id, kind, upd, &stub);
+            StoreStatus st =
+                fill_stub(db, subject, (StoreEdge){.from_id = from_id, .to_id = to_id}, kind, upd,
+                          &stub);
             if (st != STORE_OK) {
                 store_neighbors_free(rows, n);
                 return st;
