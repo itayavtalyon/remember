@@ -48,6 +48,7 @@ static int write_json_escape(FILE *out, unsigned char c)
     }
 }
 
+/* cppcheck-suppress staticFunction ; public API (output.h); used by tests */
 int output_json_string(FILE *out, const char *s)
 {
     const unsigned char *p = NULL;
@@ -136,6 +137,7 @@ static int write_entry_core(FILE *out, const Entry *e)
     return 0;
 }
 
+/* cppcheck-suppress staticFunction ; public API (output.h); used by tests */
 int output_entry_json(FILE *out, const Entry *e)
 {
     if (out == NULL || e == NULL) {

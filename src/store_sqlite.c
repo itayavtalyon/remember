@@ -1854,6 +1854,7 @@ PageResult store_list(Store *s, const ListQuery *q, const char *now)
     if (exec_sql(s->db, "BEGIN;", err_unused, 0U) != 0) {
         return (PageResult){.st = STORE_ERR_SQLITE};
     }
+    /* cppcheck-suppress redundantInitialization */
     page = list_query_exec(s->db, q, now);
     if (page.st != STORE_OK) {
         rollback_quiet(s->db);
@@ -1924,6 +1925,7 @@ PageResult store_search(Store *s, const SearchQuery *q, const char *now)
     if (exec_sql(s->db, "BEGIN;", err_unused, 0U) != 0) {
         return (PageResult){.st = STORE_ERR_SQLITE};
     }
+    /* cppcheck-suppress redundantInitialization */
     page = search_query_exec(s->db, q, now);
     if (page.st != STORE_OK) {
         rollback_quiet(s->db);

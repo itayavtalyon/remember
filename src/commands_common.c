@@ -87,7 +87,7 @@ int parse_entry_id(const char *raw, long long *out_id)
     return 0;
 }
 
-const char *norm_body_message(NormStatus st)
+static const char *norm_body_message(NormStatus st)
 {
     switch (st) {
     case NORM_OK:
@@ -486,7 +486,7 @@ static int match_mask_n(const char *s, const char *mask, size_t n)
     return 1;
 }
 
-int parse_ttl_to_expires(const char *token, const char *now, char *out, size_t outlen,
+static int parse_ttl_to_expires(const char *token, const char *now, char *out, size_t outlen,
                          const char **err)
 {
     const char *p = NULL;
@@ -650,7 +650,7 @@ static int expires_utc_z(const char *token, char *out, size_t outlen)
     return 0;
 }
 
-int parse_expires_to_iso(const char *token, char *out, size_t outlen, const char **err)
+static int parse_expires_to_iso(const char *token, char *out, size_t outlen, const char **err)
 {
     *err = "invalid --expires";
     if (token == NULL || out == NULL) {

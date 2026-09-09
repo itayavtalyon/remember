@@ -265,6 +265,7 @@ NormStatus body_trim_copy(const char *src, size_t src_len, char **out, size_t *o
 
 /* ---- tag / key ----------------------------------------------------------- */
 
+/* cppcheck-suppress staticFunction ; public API (normalize.h); used by output.c and tests */
 NormStatus normalize_token(const char *src, char *out, size_t out_cap)
 {
     size_t start = 0;

@@ -95,9 +95,25 @@ fi
 
 echo "== cppcheck =="
 if [[ -n "$CPPCHECK" ]] && [[ -d "$SRC_DIR" ]]; then
-  if ! "$CPPCHECK" --enable=warning,style,performance,portability \
+  # --enable=all, whole-program (all src TUs together so unusedFunction/staticFunction
+  # resolve across files). Suppressed families are confirmed structural FPs for this
+  # codebase shape, not real defects:
+  #   unusedFunction        src-only scan cannot see callers in tests/, the linked GUI,
+  #                         or the function-pointer command dispatch — every hit is a FP.
+  #   unusedStructMember    only the deliberate `char pad_[]` tail-padding fields (see
+  #                         the -Wpadded=explicit-fields policy) are ever flagged.
+  #   normalCheckLevelMaxBranches / checkersReport / toomanyconfigs / missingIncludeSystem
+  #                         informational notes, not defects.
+  # Genuine should-be-static publics (used only via tests) carry per-line
+  # `cppcheck-suppress staticFunction`; everything else is a real fix.
+  if ! "$CPPCHECK" --enable=all \
       --error-exitcode=1 --inline-suppr \
       --suppress=missingIncludeSystem \
+      --suppress=unusedFunction \
+      --suppress=unusedStructMember \
+      --suppress=normalCheckLevelMaxBranches \
+      --suppress=checkersReport \
+      --suppress=toomanyconfigs \
       -I "$SRC_DIR" \
       -I third_party/sqlite \
       -I third_party/sha256 \

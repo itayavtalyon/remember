@@ -454,6 +454,9 @@ static int update_prepare_payload(const UpdateParse *parsed, char **body, size_t
 static int update_resolve_expiry(const UpdateParse *parsed, const char *now, char *buf,
                                  size_t buflen, bool *out_set, const char **out_expires)
 {
+    /* Init satisfies clang-tidy init-variables; keeping the declaration before the
+       early clear-expires return keeps clang's -Wdeclaration-after-statement happy,
+       so cppcheck's redundantInitialization is the one that must yield here. */
     ExpiryResult exp = {.rc = 0};
 
     *out_set = false;
@@ -462,6 +465,7 @@ static int update_resolve_expiry(const UpdateParse *parsed, const char *now, cha
         *out_set = true;
         return 0;
     }
+    /* cppcheck-suppress redundantInitialization */
     exp = resolve_expiry_flags(
         (ExpiryFlags){.ttl_raw = parsed->ttl_raw, .expires_raw = parsed->expires_raw}, now, buf,
         buflen);
