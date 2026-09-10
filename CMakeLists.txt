@@ -78,9 +78,6 @@ if(CMAKE_C_COMPILER_ID MATCHES "Clang")
         -Wno-pre-c11-compat
         # Cross-compilation hygiene check; fires on -isysroot for a native build:
         -Wno-poison-system-directories
-        # Heuristic that flags the store_test_fail_* malloc/calloc/realloc seams
-        # (fault injection) as allocator wrappers; they are deliberate test hooks:
-        -Wno-allocator-wrappers
     )
 endif()
 
