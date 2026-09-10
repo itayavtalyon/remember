@@ -11,10 +11,10 @@
  * Linux clang-tidy include-cleaner; Apple-only matches test_schema_config.c. */
 #ifdef __APPLE__
 #include <unistd.h>
+#endif
 
 /* Timestamp/body buffer sizes for the verification edge tests. */
 enum { TS_BUFSIZE = 32, LONG_BODY_LEN = 120, LONG_BODY_BUFSIZE = 200 };
-#endif
 
 /*
  * Design log Verification Criteria 21–34 and related FTS/GC edges.
