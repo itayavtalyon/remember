@@ -690,7 +690,8 @@ int cmd_rekey(Store *s, bool json, int rest_argc, const char **rest_argv)
         err_msg("internal error");
         return REMEMBER_ERR;
     }
-    st = store_rekey(s, id, (RekeyKeys){.key_or_null = key, .new_key_or_null = new_key}, parsed.loc.trash, now, &entry, &conflict_id);
+    st = store_rekey(s, id, (RekeyKeys){.key_or_null = key, .new_key_or_null = new_key},
+                     parsed.loc.trash, now, &entry, &conflict_id);
     if (st == STORE_ERR_CONFLICT) {
         if (new_key != NULL) {
             (void)fprintf(app_err(), "remember: key conflicts with entry %lld\n", conflict_id);

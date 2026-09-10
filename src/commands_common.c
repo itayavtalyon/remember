@@ -42,13 +42,13 @@ enum {
     YEARS_PER_ERA = 400,
     YEARS_PER_CENTURY = 100,
     DAYS_PER_COMMON_YEAR = 365,
-    DOY_NUMERATOR_MUL = 153,  /* month->day-of-year: (153*mp + 2)/5 */
+    DOY_NUMERATOR_MUL = 153, /* month->day-of-year: (153*mp + 2)/5 */
     DOY_DENOMINATOR = 5,
-    MONTH_JANFEB_OFFSET = 9,  /* month-index shift for Jan/Feb */
+    MONTH_JANFEB_OFFSET = 9, /* month-index shift for Jan/Feb */
 };
 
 /* Canonical UTC stamp layout: "YYYY-MM-DDTHH:MM:SS.mmmZ" (24 chars + NUL).
-   *_OFF_* are field byte offsets; *_SEP_* are the separator byte offsets. */
+ *_OFF_* are field byte offsets; *_SEP_* are the separator byte offsets. */
 enum {
     ISO_LEN = 24,
     ISO_BUFSIZE = 25,       /* includes NUL; minimum outlen for a canonical stamp */
@@ -415,8 +415,10 @@ static int parse_iso_mmmz(const char *s, int *y, int *mo, int *d, int *h, int *m
         return -1;
     }
     if (parse_n_digits(s, 4U, y) != 0 || parse_n_digits(s + ISO_OFF_MONTH, 2U, mo) != 0 ||
-        parse_n_digits(s + ISO_OFF_DAY, 2U, d) != 0 || parse_n_digits(s + ISO_OFF_HOUR, 2U, h) != 0 ||
-        parse_n_digits(s + ISO_OFF_MIN, 2U, mi) != 0 || parse_n_digits(s + ISO_OFF_SEC, 2U, se) != 0 ||
+        parse_n_digits(s + ISO_OFF_DAY, 2U, d) != 0 ||
+        parse_n_digits(s + ISO_OFF_HOUR, 2U, h) != 0 ||
+        parse_n_digits(s + ISO_OFF_MIN, 2U, mi) != 0 ||
+        parse_n_digits(s + ISO_OFF_SEC, 2U, se) != 0 ||
         parse_n_digits(s + ISO_OFF_FRAC, 3U, ms) != 0) {
         return -1;
     }
@@ -487,7 +489,7 @@ static int match_mask_n(const char *s, const char *mask, size_t n)
 }
 
 static int parse_ttl_to_expires(const char *token, const char *now, char *out, size_t outlen,
-                         const char **err)
+                                const char **err)
 {
     const char *p = NULL;
     unsigned long long n = 0ULL;
@@ -549,8 +551,9 @@ static int parse_ttl_to_expires(const char *token, const char *now, char *out, s
         *err = "internal error";
         return -1;
     }
-    if (unix_from_civil((CivilTime){.year = y, .month = mo, .day = d, .hour = h, .min = mi, .sec = se},
-                        &unix_sec) != 0) {
+    if (unix_from_civil(
+            (CivilTime){.year = y, .month = mo, .day = d, .hour = h, .min = mi, .sec = se},
+            &unix_sec) != 0) {
         return -1;
     }
     if (add_sec > 0 && unix_sec > LLONG_MAX - add_sec) {
@@ -673,7 +676,8 @@ ExpiryResult resolve_expiry_flags(ExpiryFlags flags, const char *now, char *out,
     const char *err = NULL;
 
     if (flags.ttl_raw != NULL && flags.expires_raw != NULL) {
-        return (ExpiryResult){.rc = -1, .expires = NULL, .err = "cannot combine --ttl and --expires"};
+        return (ExpiryResult){
+            .rc = -1, .expires = NULL, .err = "cannot combine --ttl and --expires"};
     }
     if (flags.ttl_raw != NULL) {
         if (parse_ttl_to_expires(flags.ttl_raw, now, out, outlen, &err) != 0) {

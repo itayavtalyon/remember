@@ -118,7 +118,9 @@ static int write_entry_core(FILE *out, const Entry *e)
     if (fputs("]", out) < 0) {
         return -1;
     }
-    if (write_json_field_str(out, (JsonField){.name = "source", .value = e->source != NULL ? e->source : "unknown"}) != 0) {
+    if (write_json_field_str(
+            out, (JsonField){.name = "source",
+                             .value = e->source != NULL ? e->source : "unknown"}) != 0) {
         return -1;
     }
     if (write_json_field_str(out, (JsonField){.name = "created_at", .value = e->created_at}) != 0) {
@@ -131,7 +133,8 @@ static int write_entry_core(FILE *out, const Entry *e)
         if (fputs(",\"expires_at\":null", out) < 0) {
             return -1;
         }
-    } else if (write_json_field_str(out, (JsonField){.name = "expires_at", .value = e->expires_at}) != 0) {
+    } else if (write_json_field_str(
+                   out, (JsonField){.name = "expires_at", .value = e->expires_at}) != 0) {
         return -1;
     }
     return 0;

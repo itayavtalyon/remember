@@ -1615,8 +1615,10 @@ static int list_append_filters(const ListQuery *q, char *sql, size_t sql_cap, si
     if (q == NULL || sql == NULL || pos == NULL || nbinds == NULL || bind_text == NULL) {
         return -1;
     }
-    if (list_append_eq(sql, sql_cap, pos, nbinds, bind_text, bind_cap, (SqlEq){.col = "source", .value = q->source}) != 0 ||
-        list_append_eq(sql, sql_cap, pos, nbinds, bind_text, bind_cap, (SqlEq){.col = "key", .value = q->key}) != 0) {
+    if (list_append_eq(sql, sql_cap, pos, nbinds, bind_text, bind_cap,
+                       (SqlEq){.col = "source", .value = q->source}) != 0 ||
+        list_append_eq(sql, sql_cap, pos, nbinds, bind_text, bind_cap,
+                       (SqlEq){.col = "key", .value = q->key}) != 0) {
         return -1;
     }
     for (t = 0; t < q->ntags; t++) {
@@ -1742,8 +1744,8 @@ enum { LIST_BIND_CAP = 64 };
  * errors become STORE_ERR_QUERY). limit/offset bind at ?nbinds+1 / ?nbinds+2.
  */
 static PageResult run_count_and_page(sqlite3 *db, const char *count_sql, const char *select_sql,
-                                     const char **bind_text, int nbinds, size_t limit, size_t offset,
-                                     StoreStatus (*map_err)(sqlite3 *))
+                                     const char **bind_text, int nbinds, size_t limit,
+                                     size_t offset, StoreStatus (*map_err)(sqlite3 *))
 {
     sqlite3_stmt *count_stmt = NULL;
     sqlite3_stmt *sel = NULL;
@@ -2209,9 +2211,9 @@ StoreStatus store_update(Store *s, long long id, const char *key_or_null, bool s
     entry_id = current.id;
     is_keyless = (current.key == NULL);
 
-    st = update_apply_changes(s->db, entry_id, is_keyless, set_body, body, body_hash, set_tags, tags,
-                              ntags, set_expires, (EntryTimes){.now = now, .expires_at = expires_at},
-                              out_conflict_id);
+    st = update_apply_changes(s->db, entry_id, is_keyless, set_body, body, body_hash, set_tags,
+                              tags, ntags, set_expires,
+                              (EntryTimes){.now = now, .expires_at = expires_at}, out_conflict_id);
     if (st != STORE_OK) {
         store_entry_free(&current);
         rollback_quiet(s->db);
@@ -2650,8 +2652,8 @@ StoreStatus store_link(Store *s, StoreEdge edge, StoreEdgeKind kind, const char 
     /* Read the stub inside the transaction (as store_unlink does) so a
        neighbor purged between COMMIT and the read cannot turn a committed
        link into a spurious not-found. */
-    st = fill_stub(s->db, from_id, (StoreEdge){.from_id = stored_from, .to_id = stored_to}, kind, now,
-                   out_stub);
+    st = fill_stub(s->db, from_id, (StoreEdge){.from_id = stored_from, .to_id = stored_to}, kind,
+                   now, out_stub);
     if (st != STORE_OK) {
         rollback_quiet(s->db);
         return st;
@@ -2689,9 +2691,8 @@ static StoreStatus collect_unlink_matches(sqlite3 *db, sqlite3_stmt *sel, long l
         }
         memset(&stub, 0, sizeof(stub));
         {
-            StoreStatus st =
-                fill_stub(db, subject, (StoreEdge){.from_id = from_id, .to_id = to_id}, kind, upd,
-                          &stub);
+            StoreStatus st = fill_stub(db, subject, (StoreEdge){.from_id = from_id, .to_id = to_id},
+                                       kind, upd, &stub);
             if (st != STORE_OK) {
                 store_neighbors_free(rows, n);
                 return st;
@@ -2865,7 +2866,8 @@ static StoreStatus neighbors_from_stmt(sqlite3_stmt *stmt, StoreNeighbor **out, 
         row.from_id = sqlite3_column_int64(stmt, NCOL_FROM_ID);
         row.to_id = sqlite3_column_int64(stmt, NCOL_TO_ID);
         row.kind = kind;
-        row.edge_updated_at = dup_str((const char *)sqlite3_column_text(stmt, NCOL_EDGE_UPDATED_AT));
+        row.edge_updated_at =
+            dup_str((const char *)sqlite3_column_text(stmt, NCOL_EDGE_UPDATED_AT));
         row.neighbor_id = sqlite3_column_int64(stmt, NCOL_NEIGHBOR_ID);
         if (sqlite3_column_type(stmt, NCOL_NEIGHBOR_KEY) != SQLITE_NULL) {
             row.neighbor_key = dup_str((const char *)sqlite3_column_text(stmt, NCOL_NEIGHBOR_KEY));

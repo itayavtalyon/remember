@@ -439,8 +439,8 @@ TEST(add_json_body_with_control_and_quotes_stays_valid)
 {
     char *db = make_temp_db_path();
     /* Includes ", \, newline, ESC — must escape in JSON and store intact. */
-    char body[] = {'q', '"', 'u',  'o', 't',        'e', ' ', '\\',
-                   ' ', 'n', '\n', 'e', (char)ASCII_ESC, 'x', '\0'};
+    char body[] = {'q', '"', 'u', 'o', 't', 'e', ' ', '\\', ' ', 'n', '\n', 'e', (char)ASCII_ESC,
+                   'x', '\0'};
     const char *args[] = {"add", "--json", body};
     const char *gargs[] = {"get", "--json", "1"};
     CmdResult r;

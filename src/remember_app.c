@@ -327,7 +327,8 @@ static int run(const CliArgs *args)
     }
 }
 
-/* cppcheck-suppress staticFunction ; public entry point (remember_app.h); used by main + GUI + tests */
+/* cppcheck-suppress staticFunction ; public entry point (remember_app.h); used by main + GUI +
+ * tests */
 int remember_run(int argc, char *const *argv, FILE *out, FILE *err)
 {
     CliArgs args;

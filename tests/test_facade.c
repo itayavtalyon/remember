@@ -223,7 +223,8 @@ TEST(facade_unknown_option_matches_cli)
     char *db = make_temp_db_path();
     const char *cmd[] = {"list", "--bogus"};
     ASSERT_TRUE(db != NULL);
-    assert_read_parity(db, cmd, sizeof(cmd) / sizeof(cmd[0])); /* exit 1 + unknown option on stderr */
+    assert_read_parity(db, cmd,
+                       sizeof(cmd) / sizeof(cmd[0])); /* exit 1 + unknown option on stderr */
     free(db);
 }
 
@@ -249,7 +250,8 @@ TEST(facade_add_matches_cli)
 
     ASSERT_TRUE(db1 != NULL && db2 != NULL);
     sub = run_remember(db1, cmd, sizeof(cmd) / sizeof(cmd[0]), NULL);
-    frc = facade_run(db2, cmd, sizeof(cmd) / sizeof(cmd[0]), (FacadeCapture){.out = &fout, .err = &ferr});
+    frc = facade_run(db2, cmd, sizeof(cmd) / sizeof(cmd[0]),
+                     (FacadeCapture){.out = &fout, .err = &ferr});
     ASSERT_EQ_INT(frc, sub.exit_code);
     mask_timestamps(sub.out);
     mask_timestamps(fout);
@@ -281,7 +283,8 @@ TEST(facade_update_matches_cli)
     cmd_result_free(&s2);
 
     sub = run_remember(db1, cmd, sizeof(cmd) / sizeof(cmd[0]), NULL);
-    frc = facade_run(db2, cmd, sizeof(cmd) / sizeof(cmd[0]), (FacadeCapture){.out = &fout, .err = &ferr});
+    frc = facade_run(db2, cmd, sizeof(cmd) / sizeof(cmd[0]),
+                     (FacadeCapture){.out = &fout, .err = &ferr});
     ASSERT_EQ_INT(frc, sub.exit_code);
     mask_timestamps(sub.out);
     mask_timestamps(fout);

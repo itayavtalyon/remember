@@ -7,9 +7,9 @@
 #include <string.h>
 
 enum {
-    SEED_ROWS = 25,       /* rows seeded for the list/paging tests */
-    BODY_BUFSIZE = 64,    /* scratch body buffer */
-    TAG_PAIRS_OVER = 51   /* one past the 50-tag-filter limit */
+    SEED_ROWS = 25,     /* rows seeded for the list/paging tests */
+    BODY_BUFSIZE = 64,  /* scratch body buffer */
+    TAG_PAIRS_OVER = 51 /* one past the 50-tag-filter limit */
 };
 
 static void seed_three(const char *db)

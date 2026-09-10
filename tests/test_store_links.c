@@ -40,12 +40,30 @@ TEST(store_open_creates_entry_links)
     store_close(s);
 
     assert_query_is(db, (QueryExpect){.sql = "PRAGMA user_version;", .want = "3"});
-    assert_query_is(db, (QueryExpect){.sql = "SELECT name FROM sqlite_master WHERE type='table' AND name='entry_links';", .want = "entry_links"});
-    assert_query_is(db, (QueryExpect){.sql = "SELECT name FROM sqlite_master WHERE type='index' AND name='entry_links_edge';", .want = "entry_links_edge"});
-    assert_query_is(db, (QueryExpect){.sql = "SELECT name FROM sqlite_master WHERE type='index' AND name='entry_links_to';", .want = "entry_links_to"});
-    assert_query_is(db, (QueryExpect){.sql = "SELECT COUNT(*) FROM pragma_table_info('entry_links') WHERE name='dir';", .want = "0"});
-    assert_query_is(db, (QueryExpect){.sql = "SELECT CASE WHEN sql LIKE '%from_id != to_id%' OR sql LIKE '%from_id<>to_id%' "
-                    "THEN 'ok' ELSE 'bad' END FROM sqlite_master WHERE name='entry_links';", .want = "ok"});
+    assert_query_is(
+        db, (QueryExpect){
+                .sql = "SELECT name FROM sqlite_master WHERE type='table' AND name='entry_links';",
+                .want = "entry_links"});
+    assert_query_is(
+        db,
+        (QueryExpect){
+            .sql = "SELECT name FROM sqlite_master WHERE type='index' AND name='entry_links_edge';",
+            .want = "entry_links_edge"});
+    assert_query_is(
+        db,
+        (QueryExpect){
+            .sql = "SELECT name FROM sqlite_master WHERE type='index' AND name='entry_links_to';",
+            .want = "entry_links_to"});
+    assert_query_is(
+        db, (QueryExpect){
+                .sql = "SELECT COUNT(*) FROM pragma_table_info('entry_links') WHERE name='dir';",
+                .want = "0"});
+    assert_query_is(
+        db,
+        (QueryExpect){
+            .sql = "SELECT CASE WHEN sql LIKE '%from_id != to_id%' OR sql LIKE '%from_id<>to_id%' "
+                   "THEN 'ok' ELSE 'bad' END FROM sqlite_master WHERE name='entry_links';",
+            .want = "ok"});
     free(db);
 }
 
@@ -72,9 +90,14 @@ TEST(store_open_migrates_v2_to_v3)
     store_close(s);
 
     assert_query_is(db, (QueryExpect){.sql = "PRAGMA user_version;", .want = "3"});
-    assert_query_is(db, (QueryExpect){.sql = "SELECT body FROM entries WHERE id=1;", .want = "v2 row"});
+    assert_query_is(db,
+                    (QueryExpect){.sql = "SELECT body FROM entries WHERE id=1;", .want = "v2 row"});
     assert_query_is(db, (QueryExpect){.sql = "SELECT COUNT(*) FROM entry_links;", .want = "0"});
-    assert_query_is(db, (QueryExpect){.sql = "SELECT name FROM sqlite_master WHERE type='index' AND name='entry_links_edge';", .want = "entry_links_edge"});
+    assert_query_is(
+        db,
+        (QueryExpect){
+            .sql = "SELECT name FROM sqlite_master WHERE type='index' AND name='entry_links_edge';",
+            .want = "entry_links_edge"});
     free(db);
 }
 
@@ -134,7 +157,9 @@ TEST(store_link_related_is_one_canonical_row)
     b = add_row(s, "beta", k_hash_b, NULL, NULL);
     ASSERT_TRUE(a > 0 && b > 0 && a != b);
     memset(&stub, 0, sizeof(stub));
-    ASSERT_EQ_STATUS(store_link(s, (StoreEdge){.from_id = a, .to_id = b}, related, k_now, &act, &stub), STORE_OK);
+    ASSERT_EQ_STATUS(
+        store_link(s, (StoreEdge){.from_id = a, .to_id = b}, related, k_now, &act, &stub),
+        STORE_OK);
     ASSERT_EQ_INT((int)act, (int)STORE_LINK_CREATED);
     ASSERT_EQ_INT(stub.neighbor_id, b);
     store_neighbor_free(&stub);
@@ -151,7 +176,9 @@ TEST(store_link_related_is_one_canonical_row)
     }
 
     memset(&stub, 0, sizeof(stub));
-    ASSERT_EQ_STATUS(store_link(s, (StoreEdge){.from_id = b, .to_id = a}, related, k_later, &act, &stub), STORE_OK);
+    ASSERT_EQ_STATUS(
+        store_link(s, (StoreEdge){.from_id = b, .to_id = a}, related, k_later, &act, &stub),
+        STORE_OK);
     ASSERT_EQ_INT((int)act, (int)STORE_LINK_MERGED);
     store_neighbor_free(&stub);
     assert_query_is(db, (QueryExpect){.sql = "SELECT COUNT(*) FROM entry_links;", .want = "1"});
@@ -172,13 +199,21 @@ TEST(store_link_directed_and_kinds_independent)
     a = add_row(s, "alpha", k_hash_a, NULL, NULL);
     b = add_row(s, "beta", k_hash_b, NULL, NULL);
     memset(&stub, 0, sizeof(stub));
-    ASSERT_EQ_STATUS(store_link(s, (StoreEdge){.from_id = a, .to_id = b}, STORE_EDGE_CITES, k_now, &act, &stub), STORE_OK);
+    ASSERT_EQ_STATUS(
+        store_link(s, (StoreEdge){.from_id = a, .to_id = b}, STORE_EDGE_CITES, k_now, &act, &stub),
+        STORE_OK);
     store_neighbor_free(&stub);
     memset(&stub, 0, sizeof(stub));
-    ASSERT_EQ_STATUS(store_link(s, (StoreEdge){.from_id = a, .to_id = b}, STORE_EDGE_RELATED, k_now, &act, &stub), STORE_OK);
+    ASSERT_EQ_STATUS(store_link(s, (StoreEdge){.from_id = a, .to_id = b}, STORE_EDGE_RELATED, k_now,
+                                &act, &stub),
+                     STORE_OK);
     store_neighbor_free(&stub);
     assert_query_is(db, (QueryExpect){.sql = "SELECT COUNT(*) FROM entry_links;", .want = "2"});
-    assert_query_is(db, (QueryExpect){.sql = "SELECT COUNT(*) FROM entry_links WHERE kind='cites' AND from_id=1 AND to_id=2;", .want = "1"});
+    assert_query_is(
+        db,
+        (QueryExpect){
+            .sql = "SELECT COUNT(*) FROM entry_links WHERE kind='cites' AND from_id=1 AND to_id=2;",
+            .want = "1"});
     store_close(s);
     free(db);
 }
@@ -194,8 +229,12 @@ TEST(store_link_self_and_missing)
     ASSERT_TRUE(s != NULL);
     a = add_row(s, "alpha", k_hash_a, NULL, NULL);
     memset(&stub, 0, sizeof(stub));
-    ASSERT_EQ_STATUS(store_link(s, (StoreEdge){.from_id = a, .to_id = a}, STORE_EDGE_RELATED, k_now, &act, &stub), STORE_ERR_SELF_LINK);
-    ASSERT_EQ_STATUS(store_link(s, (StoreEdge){.from_id = a, .to_id = 99}, STORE_EDGE_RELATED, k_now, &act, &stub), STORE_ERR_NOT_FOUND);
+    ASSERT_EQ_STATUS(store_link(s, (StoreEdge){.from_id = a, .to_id = a}, STORE_EDGE_RELATED, k_now,
+                                &act, &stub),
+                     STORE_ERR_SELF_LINK);
+    ASSERT_EQ_STATUS(store_link(s, (StoreEdge){.from_id = a, .to_id = 99}, STORE_EDGE_RELATED,
+                                k_now, &act, &stub),
+                     STORE_ERR_NOT_FOUND);
     store_close(s);
     free(db);
 }
@@ -215,21 +254,33 @@ TEST(store_link_supersedes_cycle)
     b = add_row(s, "b", k_hash_b, NULL, NULL);
     c = add_row(s, "c", k_hash_c, NULL, NULL);
     memset(&stub, 0, sizeof(stub));
-    ASSERT_EQ_STATUS(store_link(s, (StoreEdge){.from_id = a, .to_id = b}, STORE_EDGE_SUPERSEDES, k_now, &act, &stub), STORE_OK);
+    ASSERT_EQ_STATUS(store_link(s, (StoreEdge){.from_id = a, .to_id = b}, STORE_EDGE_SUPERSEDES,
+                                k_now, &act, &stub),
+                     STORE_OK);
     store_neighbor_free(&stub);
     memset(&stub, 0, sizeof(stub));
-    ASSERT_EQ_STATUS(store_link(s, (StoreEdge){.from_id = b, .to_id = c}, STORE_EDGE_SUPERSEDES, k_now, &act, &stub), STORE_OK);
+    ASSERT_EQ_STATUS(store_link(s, (StoreEdge){.from_id = b, .to_id = c}, STORE_EDGE_SUPERSEDES,
+                                k_now, &act, &stub),
+                     STORE_OK);
     store_neighbor_free(&stub);
     memset(&stub, 0, sizeof(stub));
-    ASSERT_EQ_STATUS(store_link(s, (StoreEdge){.from_id = c, .to_id = a}, STORE_EDGE_SUPERSEDES, k_now, &act, &stub), STORE_ERR_CYCLE);
+    ASSERT_EQ_STATUS(store_link(s, (StoreEdge){.from_id = c, .to_id = a}, STORE_EDGE_SUPERSEDES,
+                                k_now, &act, &stub),
+                     STORE_ERR_CYCLE);
     memset(&stub, 0, sizeof(stub));
-    ASSERT_EQ_STATUS(store_link(s, (StoreEdge){.from_id = b, .to_id = a}, STORE_EDGE_SUPERSEDES, k_now, &act, &stub), STORE_ERR_CYCLE);
+    ASSERT_EQ_STATUS(store_link(s, (StoreEdge){.from_id = b, .to_id = a}, STORE_EDGE_SUPERSEDES,
+                                k_now, &act, &stub),
+                     STORE_ERR_CYCLE);
     /* cites both ways is allowed */
     memset(&stub, 0, sizeof(stub));
-    ASSERT_EQ_STATUS(store_link(s, (StoreEdge){.from_id = a, .to_id = b}, STORE_EDGE_CITES, k_now, &act, &stub), STORE_OK);
+    ASSERT_EQ_STATUS(
+        store_link(s, (StoreEdge){.from_id = a, .to_id = b}, STORE_EDGE_CITES, k_now, &act, &stub),
+        STORE_OK);
     store_neighbor_free(&stub);
     memset(&stub, 0, sizeof(stub));
-    ASSERT_EQ_STATUS(store_link(s, (StoreEdge){.from_id = b, .to_id = a}, STORE_EDGE_CITES, k_now, &act, &stub), STORE_OK);
+    ASSERT_EQ_STATUS(
+        store_link(s, (StoreEdge){.from_id = b, .to_id = a}, STORE_EDGE_CITES, k_now, &act, &stub),
+        STORE_OK);
     store_neighbor_free(&stub);
     store_close(s);
     free(db);
@@ -256,10 +307,13 @@ TEST(store_unlink_idempotent_and_pair)
     ASSERT_TRUE(gone == NULL);
 
     memset(&stub, 0, sizeof(stub));
-    ASSERT_EQ_STATUS(store_link(s, (StoreEdge){.from_id = a, .to_id = b}, related, k_now, &act, &stub), STORE_OK);
+    ASSERT_EQ_STATUS(
+        store_link(s, (StoreEdge){.from_id = a, .to_id = b}, related, k_now, &act, &stub),
+        STORE_OK);
     store_neighbor_free(&stub);
     memset(&stub, 0, sizeof(stub));
-    ASSERT_EQ_STATUS(store_link(s, (StoreEdge){.from_id = a, .to_id = b}, cites, k_now, &act, &stub), STORE_OK);
+    ASSERT_EQ_STATUS(
+        store_link(s, (StoreEdge){.from_id = a, .to_id = b}, cites, k_now, &act, &stub), STORE_OK);
     store_neighbor_free(&stub);
 
     ASSERT_EQ_STATUS(store_unlink(s, b, a, &related, k_later, &gone, &n), STORE_OK);
@@ -306,7 +360,9 @@ TEST(store_link_bumps_both_endpoints)
     a = add_row(s, "alpha", k_hash_a, NULL, NULL);
     b = add_row(s, "beta", k_hash_b, NULL, NULL);
     memset(&stub, 0, sizeof(stub));
-    ASSERT_EQ_STATUS(store_link(s, (StoreEdge){.from_id = a, .to_id = b}, STORE_EDGE_RELATED, k_later, &act, &stub), STORE_OK);
+    ASSERT_EQ_STATUS(store_link(s, (StoreEdge){.from_id = a, .to_id = b}, STORE_EDGE_RELATED,
+                                k_later, &act, &stub),
+                     STORE_OK);
     store_neighbor_free(&stub);
     memset(&ea, 0, sizeof(ea));
     memset(&eb, 0, sizeof(eb));
@@ -346,13 +402,19 @@ TEST(store_neighbors_dir_and_trash)
     /* hashes: alpha unique, beta unique, gamma unique; delta is keyed so hash may match alpha */
 
     memset(&stub, 0, sizeof(stub));
-    ASSERT_EQ_STATUS(store_link(s, (StoreEdge){.from_id = a, .to_id = b}, STORE_EDGE_RELATED, k_now, &act, &stub), STORE_OK);
+    ASSERT_EQ_STATUS(store_link(s, (StoreEdge){.from_id = a, .to_id = b}, STORE_EDGE_RELATED, k_now,
+                                &act, &stub),
+                     STORE_OK);
     store_neighbor_free(&stub);
     memset(&stub, 0, sizeof(stub));
-    ASSERT_EQ_STATUS(store_link(s, (StoreEdge){.from_id = a, .to_id = c}, STORE_EDGE_CITES, k_now, &act, &stub), STORE_OK);
+    ASSERT_EQ_STATUS(
+        store_link(s, (StoreEdge){.from_id = a, .to_id = c}, STORE_EDGE_CITES, k_now, &act, &stub),
+        STORE_OK);
     store_neighbor_free(&stub);
     memset(&stub, 0, sizeof(stub));
-    ASSERT_EQ_STATUS(store_link(s, (StoreEdge){.from_id = d, .to_id = a}, STORE_EDGE_CITES, k_now, &act, &stub), STORE_OK);
+    ASSERT_EQ_STATUS(
+        store_link(s, (StoreEdge){.from_id = d, .to_id = a}, STORE_EDGE_CITES, k_now, &act, &stub),
+        STORE_OK);
     store_neighbor_free(&stub);
 
     /* either-bin: expired b is visible */
@@ -366,7 +428,8 @@ TEST(store_neighbors_dir_and_trash)
         ASSERT_EQ_STATUS(store_get(s, b, false, k_now, &e), STORE_ERR_EXPIRED);
     }
 
-    ASSERT_EQ_STATUS(store_list_neighbors(s, a, NULL, STORE_NEIGHBOR_ALL, k_now, &rows, &n), STORE_OK);
+    ASSERT_EQ_STATUS(store_list_neighbors(s, a, NULL, STORE_NEIGHBOR_ALL, k_now, &rows, &n),
+                     STORE_OK);
     ASSERT_EQ_INT((int)n, 3);
     for (i = 0; i < n; i++) {
         if (rows[i].kind == STORE_EDGE_RELATED) {
@@ -388,15 +451,18 @@ TEST(store_neighbors_dir_and_trash)
     ASSERT_EQ_INT(saw_d, 1);
     store_neighbors_free(rows, n);
 
-    ASSERT_EQ_STATUS(store_list_neighbors(s, a, NULL, STORE_NEIGHBOR_OUTGOING, k_now, &rows, &n), STORE_OK);
+    ASSERT_EQ_STATUS(store_list_neighbors(s, a, NULL, STORE_NEIGHBOR_OUTGOING, k_now, &rows, &n),
+                     STORE_OK);
     ASSERT_EQ_INT((int)n, 2); /* related + outgoing cites */
     store_neighbors_free(rows, n);
 
-    ASSERT_EQ_STATUS(store_list_neighbors(s, a, NULL, STORE_NEIGHBOR_INCOMING, k_now, &rows, &n), STORE_OK);
+    ASSERT_EQ_STATUS(store_list_neighbors(s, a, NULL, STORE_NEIGHBOR_INCOMING, k_now, &rows, &n),
+                     STORE_OK);
     ASSERT_EQ_INT((int)n, 2); /* related + incoming cites */
     store_neighbors_free(rows, n);
 
-    ASSERT_EQ_STATUS(store_list_neighbors(s, a, &cites, STORE_NEIGHBOR_ALL, k_now, &rows, &n), STORE_OK);
+    ASSERT_EQ_STATUS(store_list_neighbors(s, a, &cites, STORE_NEIGHBOR_ALL, k_now, &rows, &n),
+                     STORE_OK);
     ASSERT_EQ_INT((int)n, 2);
     store_neighbors_free(rows, n);
 
@@ -422,31 +488,38 @@ TEST(store_neighbors_cascade_and_survive_trash)
     a = add_row(s, "alpha", k_hash_a, NULL, NULL);
     b = add_row(s, "beta", k_hash_b, NULL, k_past);
     memset(&stub, 0, sizeof(stub));
-    ASSERT_EQ_STATUS(store_link(s, (StoreEdge){.from_id = a, .to_id = b}, STORE_EDGE_RELATED, k_now, &act, &stub), STORE_OK);
+    ASSERT_EQ_STATUS(store_link(s, (StoreEdge){.from_id = a, .to_id = b}, STORE_EDGE_RELATED, k_now,
+                                &act, &stub),
+                     STORE_OK);
     store_neighbor_free(&stub);
-    ASSERT_EQ_STATUS(store_list_neighbors(s, a, NULL, STORE_NEIGHBOR_ALL, k_now, &rows, &n), STORE_OK);
+    ASSERT_EQ_STATUS(store_list_neighbors(s, a, NULL, STORE_NEIGHBOR_ALL, k_now, &rows, &n),
+                     STORE_OK);
     ASSERT_EQ_INT((int)n, 1);
     store_neighbors_free(rows, n);
 
     /* restore keeps the edge */
     memset(&deleted, 0, sizeof(deleted));
-    ASSERT_EQ_STATUS(store_update(s, b, NULL, false, NULL, NULL, false, NULL, 0U, true, NULL,
-                                    true, k_now, &deleted, NULL), STORE_OK);
+    ASSERT_EQ_STATUS(store_update(s, b, NULL, false, NULL, NULL, false, NULL, 0U, true, NULL, true,
+                                  k_now, &deleted, NULL),
+                     STORE_OK);
     store_entry_free(&deleted);
-    ASSERT_EQ_STATUS(store_list_neighbors(s, a, NULL, STORE_NEIGHBOR_ALL, k_now, &rows, &n), STORE_OK);
+    ASSERT_EQ_STATUS(store_list_neighbors(s, a, NULL, STORE_NEIGHBOR_ALL, k_now, &rows, &n),
+                     STORE_OK);
     ASSERT_EQ_INT((int)n, 1);
     store_neighbors_free(rows, n);
 
     /* re-expire and purge drops the edge */
     memset(&deleted, 0, sizeof(deleted));
     ASSERT_EQ_STATUS(store_update(s, b, NULL, false, NULL, NULL, false, NULL, 0U, true, k_past,
-                                    false, k_now, &deleted, NULL), STORE_OK);
+                                  false, k_now, &deleted, NULL),
+                     STORE_OK);
     store_entry_free(&deleted);
     ASSERT_EQ_STATUS(store_purge_trash(s, k_now, &purged, &pn), STORE_OK);
     ASSERT_EQ_INT((int)pn, 1);
     store_entry_free(&purged[0]);
     free(purged);
-    ASSERT_EQ_STATUS(store_list_neighbors(s, a, NULL, STORE_NEIGHBOR_ALL, k_now, &rows, &n), STORE_OK);
+    ASSERT_EQ_STATUS(store_list_neighbors(s, a, NULL, STORE_NEIGHBOR_ALL, k_now, &rows, &n),
+                     STORE_OK);
     ASSERT_EQ_INT((int)n, 0);
     store_neighbors_free(rows, n);
     store_close(s);
@@ -470,41 +543,55 @@ TEST(store_rekey_rename_promote_demote)
     a = add_row(s, "slot", k_hash_a, "old:key", NULL);
     b = add_row(s, "other", k_hash_b, NULL, NULL);
     memset(&stub, 0, sizeof(stub));
-    ASSERT_EQ_STATUS(store_link(s, (StoreEdge){.from_id = a, .to_id = b}, STORE_EDGE_RELATED, k_now, &act, &stub), STORE_OK);
+    ASSERT_EQ_STATUS(store_link(s, (StoreEdge){.from_id = a, .to_id = b}, STORE_EDGE_RELATED, k_now,
+                                &act, &stub),
+                     STORE_OK);
     store_neighbor_free(&stub);
 
     memset(&e, 0, sizeof(e));
-    ASSERT_EQ_STATUS(store_rekey(s, 0, (RekeyKeys){.key_or_null = "old:key", .new_key_or_null = "new:key"}, false, k_later, &e, &conflict), STORE_OK);
+    ASSERT_EQ_STATUS(
+        store_rekey(s, 0, (RekeyKeys){.key_or_null = "old:key", .new_key_or_null = "new:key"},
+                    false, k_later, &e, &conflict),
+        STORE_OK);
     ASSERT_EQ_INT(e.id, a);
     ASSERT_STREQ(e.key, "new:key");
     ASSERT_STREQ(e.created_at, k_now);
     ASSERT_STREQ(e.updated_at, k_later);
     store_entry_free(&e);
-    ASSERT_EQ_STATUS(store_list_neighbors(s, a, NULL, STORE_NEIGHBOR_ALL, k_later, &rows, &n), STORE_OK);
+    ASSERT_EQ_STATUS(store_list_neighbors(s, a, NULL, STORE_NEIGHBOR_ALL, k_later, &rows, &n),
+                     STORE_OK);
     ASSERT_EQ_INT((int)n, 1);
     store_neighbors_free(rows, n);
 
     /* promote keyless b */
     memset(&e, 0, sizeof(e));
-    ASSERT_EQ_STATUS(store_rekey(s, b, (RekeyKeys){.key_or_null = NULL, .new_key_or_null = "b:key"}, false, k_later, &e, &conflict), STORE_OK);
+    ASSERT_EQ_STATUS(store_rekey(s, b, (RekeyKeys){.key_or_null = NULL, .new_key_or_null = "b:key"},
+                                 false, k_later, &e, &conflict),
+                     STORE_OK);
     ASSERT_STREQ(e.key, "b:key");
     store_entry_free(&e);
 
     /* demote a */
     memset(&e, 0, sizeof(e));
-    ASSERT_EQ_STATUS(store_rekey(s, a, (RekeyKeys){.key_or_null = NULL, .new_key_or_null = NULL}, false, k_later, &e, &conflict), STORE_OK);
+    ASSERT_EQ_STATUS(store_rekey(s, a, (RekeyKeys){.key_or_null = NULL, .new_key_or_null = NULL},
+                                 false, k_later, &e, &conflict),
+                     STORE_OK);
     ASSERT_TRUE(e.key == NULL);
     store_entry_free(&e);
 
     /* same-value bump */
     memset(&e, 0, sizeof(e));
-    ASSERT_EQ_STATUS(store_rekey(s, b, (RekeyKeys){.key_or_null = NULL, .new_key_or_null = "b:key"}, false, k_now, &e, &conflict), STORE_OK);
+    ASSERT_EQ_STATUS(store_rekey(s, b, (RekeyKeys){.key_or_null = NULL, .new_key_or_null = "b:key"},
+                                 false, k_now, &e, &conflict),
+                     STORE_OK);
     ASSERT_STREQ(e.updated_at, k_now);
     store_entry_free(&e);
 
     /* NEWKEY taken */
     memset(&e, 0, sizeof(e));
-    ASSERT_EQ_STATUS(store_rekey(s, a, (RekeyKeys){.key_or_null = NULL, .new_key_or_null = "b:key"}, false, k_later, &e, &conflict), STORE_ERR_CONFLICT);
+    ASSERT_EQ_STATUS(store_rekey(s, a, (RekeyKeys){.key_or_null = NULL, .new_key_or_null = "b:key"},
+                                 false, k_later, &e, &conflict),
+                     STORE_ERR_CONFLICT);
     ASSERT_EQ_INT(conflict, b);
 
     /* demote body-hash collision: add another keyless with same hash as a after demote.
@@ -517,7 +604,10 @@ TEST(store_rekey_rename_promote_demote)
         long long c = add_row(s, "slot-copy", k_hash_a, "c:key", NULL);
         memset(&e, 0, sizeof(e));
         conflict = 0;
-        ASSERT_EQ_STATUS(store_rekey(s, c, (RekeyKeys){.key_or_null = NULL, .new_key_or_null = NULL}, false, k_later, &e, &conflict), STORE_ERR_CONFLICT);
+        ASSERT_EQ_STATUS(store_rekey(s, c,
+                                     (RekeyKeys){.key_or_null = NULL, .new_key_or_null = NULL},
+                                     false, k_later, &e, &conflict),
+                         STORE_ERR_CONFLICT);
         ASSERT_EQ_INT(conflict, a);
     }
 
@@ -543,10 +633,14 @@ TEST(store_list_neighbors_for_page)
     b = add_row(s, "b", k_hash_b, NULL, NULL);
     c = add_row(s, "c", k_hash_c, NULL, NULL);
     memset(&stub, 0, sizeof(stub));
-    ASSERT_EQ_STATUS(store_link(s, (StoreEdge){.from_id = a, .to_id = b}, STORE_EDGE_RELATED, k_now, &act, &stub), STORE_OK);
+    ASSERT_EQ_STATUS(store_link(s, (StoreEdge){.from_id = a, .to_id = b}, STORE_EDGE_RELATED, k_now,
+                                &act, &stub),
+                     STORE_OK);
     store_neighbor_free(&stub);
     memset(&stub, 0, sizeof(stub));
-    ASSERT_EQ_STATUS(store_link(s, (StoreEdge){.from_id = b, .to_id = c}, STORE_EDGE_CITES, k_now, &act, &stub), STORE_OK);
+    ASSERT_EQ_STATUS(
+        store_link(s, (StoreEdge){.from_id = b, .to_id = c}, STORE_EDGE_CITES, k_now, &act, &stub),
+        STORE_OK);
     store_neighbor_free(&stub);
     ids[0] = a;
     ids[1] = b;
@@ -588,7 +682,9 @@ TEST(store_list_neighbors_oom_keeps_key_and_trash)
     a = add_row(s, "alpha", k_hash_a, NULL, NULL);
     b = add_row(s, "beta", k_hash_b, "slot:k", k_past);
     memset(&stub, 0, sizeof(stub));
-    ASSERT_EQ_STATUS(store_link(s, (StoreEdge){.from_id = a, .to_id = b}, STORE_EDGE_RELATED, k_now, &act, &stub), STORE_OK);
+    ASSERT_EQ_STATUS(store_link(s, (StoreEdge){.from_id = a, .to_id = b}, STORE_EDGE_RELATED, k_now,
+                                &act, &stub),
+                     STORE_OK);
     store_neighbor_free(&stub);
 
     for (i = 0; i < ALLOC_SWEEP_MAX; i++) {
@@ -634,7 +730,9 @@ TEST(store_unlink_stub_load_failure_is_sqlite_not_oom)
     a = add_row(s, "alpha", k_hash_a, NULL, NULL);
     b = add_row(s, "beta", k_hash_b, NULL, NULL);
     memset(&stub, 0, sizeof(stub));
-    ASSERT_EQ_STATUS(store_link(s, (StoreEdge){.from_id = a, .to_id = b}, STORE_EDGE_RELATED, k_now, &act, &stub), STORE_OK);
+    ASSERT_EQ_STATUS(store_link(s, (StoreEdge){.from_id = a, .to_id = b}, STORE_EDGE_RELATED, k_now,
+                                &act, &stub),
+                     STORE_OK);
     store_neighbor_free(&stub);
 
     /* Unlink: prepare SELECT edges (0), then fill_stub → load_entry prepare (1). */
@@ -687,13 +785,15 @@ TEST(store_links_fault_injection_sweep)
 
         memset(&stub, 0, sizeof(stub));
         store_test_fail_prepare_after(i % 8);
-        if (store_link(s, (StoreEdge){.from_id = a, .to_id = b}, STORE_EDGE_CITES, k_now, &act, &stub) == STORE_OK) {
+        if (store_link(s, (StoreEdge){.from_id = a, .to_id = b}, STORE_EDGE_CITES, k_now, &act,
+                       &stub) == STORE_OK) {
             store_neighbor_free(&stub);
         }
         store_test_fail_prepare_after(-1);
         memset(&stub, 0, sizeof(stub));
         store_test_fail_step_after(i % 6);
-        if (store_link(s, (StoreEdge){.from_id = a, .to_id = c}, STORE_EDGE_RELATED, k_now, &act, &stub) == STORE_OK) {
+        if (store_link(s, (StoreEdge){.from_id = a, .to_id = c}, STORE_EDGE_RELATED, k_now, &act,
+                       &stub) == STORE_OK) {
             store_neighbor_free(&stub);
         }
         store_test_fail_step_after(-1);
@@ -718,13 +818,14 @@ TEST(store_links_fault_injection_sweep)
 
         memset(&e, 0, sizeof(e));
         store_test_fail_step_after(i % 6);
-        (void)store_rekey(s, a, (RekeyKeys){.key_or_null = NULL, .new_key_or_null = NULL}, false, k_now, &e,
-                          &conflict); /* clear: load_body_hash */
+        (void)store_rekey(s, a, (RekeyKeys){.key_or_null = NULL, .new_key_or_null = NULL}, false,
+                          k_now, &e, &conflict); /* clear: load_body_hash */
         store_entry_free(&e);
         store_test_fail_step_after(-1);
         memset(&e, 0, sizeof(e));
         store_test_fail_prepare_after(i % 5);
-        (void)store_rekey(s, 0, (RekeyKeys){.key_or_null = "ka", .new_key_or_null = "kz"}, false, k_now, &e, &conflict); /* set/rename */
+        (void)store_rekey(s, 0, (RekeyKeys){.key_or_null = "ka", .new_key_or_null = "kz"}, false,
+                          k_now, &e, &conflict); /* set/rename */
         store_entry_free(&e);
         store_test_fail_prepare_after(-1);
     }
