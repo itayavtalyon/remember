@@ -65,6 +65,13 @@ add_compile_options(
 if(CMAKE_C_COMPILER_ID MATCHES "Clang")
     add_compile_options(
         -Weverything
+        # The -Wno- list below is version-sensitive: some warnings it names only
+        # exist in newer clang (e.g. -Wnrvo, -Wpre-c11-compat land ~clang 21),
+        # and -Weverything itself keeps growing. Recent clang silently tolerates an
+        # unknown -Wno-<name>, but clang <=18 promotes it to a hard error under
+        # -Werror. Tolerate unknown warning options so one suppression list works
+        # across every clang version (macOS clang 22, Linux CI clang 18, ...):
+        -Wno-unknown-warning-option
         # C++/std::span-oriented; C has no bounds-checked pointer form (and the
         # Annex K _s functions are unavailable on macOS/glibc/musl):
         -Wno-unsafe-buffer-usage
