@@ -33,6 +33,18 @@ CLANG_FORMAT=$(command -v clang-format || true)
 IWYU=$(command -v include-what-you-use || true)
 IWYU_TOOL=$(command -v iwyu_tool.py || true)
 
+# A real GCC (not the Apple clang shim named `gcc`) for the -fanalyzer gate — a
+# second, independent static analyzer alongside clang/clang-tidy/cppcheck.
+GCC_ANALYZER=""
+for cand in gcc-16 gcc-15 gcc-14 gcc-13 gcc; do
+  path=$(command -v "$cand" || true)
+  if [[ -n "$path" ]] && "$path" --version 2>/dev/null | grep -qiv clang \
+     && "$path" --version 2>/dev/null | grep -qi 'gcc\|free software'; then
+    GCC_ANALYZER="$path"
+    break
+  fi
+done
+
 fail=0
 in_ci=0
 if [[ "${CI:-}" == "true" || "${GITHUB_ACTIONS:-}" == "true" ]]; then
@@ -154,6 +166,39 @@ if [[ -n "$CPPCHECK" ]] && [[ -d "$SRC_DIR" ]]; then
   fi
 else
   echo "cppcheck: SKIP"
+  if [[ "$in_ci" -eq 1 ]]; then
+    fail=1
+  fi
+fi
+
+echo "== gcc -fanalyzer =="
+# Second, independent static analyzer (GCC's) over the src TUs, in addition to
+# clang / clang-tidy / cppcheck. -Werror makes any -Wall/-Wextra/-Wanalyzer
+# finding fatal. third_party is -isystem so vendored headers stay quiet.
+if [[ -n "$GCC_ANALYZER" ]] && [[ -d "$SRC_DIR" ]]; then
+  : >"$REPORT_DIR/gcc-analyzer.txt"
+  an_fail=0
+  while IFS= read -r f; do
+    [[ -z "$f" ]] && continue
+    if ! "$GCC_ANALYZER" -std=c11 -Wall -Wextra -Werror -fanalyzer -fsyntax-only \
+        -I "$SRC_DIR" \
+        -isystem third_party/sqlite \
+        -isystem third_party/sha256 \
+        "$f" >>"$REPORT_DIR/gcc-analyzer.txt" 2>&1; then
+      an_fail=1
+    fi
+  done <<EOF
+$(find "$SRC_DIR" -name '*.c' 2>/dev/null | sort)
+EOF
+  if [[ "$an_fail" -ne 0 ]]; then
+    echo "gcc -fanalyzer: FAIL (see $REPORT_DIR/gcc-analyzer.txt)"
+    cat "$REPORT_DIR/gcc-analyzer.txt" || true
+    fail=1
+  else
+    echo "gcc -fanalyzer: PASS"
+  fi
+else
+  echo "gcc -fanalyzer: SKIP"
   if [[ "$in_ci" -eq 1 ]]; then
     fail=1
   fi
