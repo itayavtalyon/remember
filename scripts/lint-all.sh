@@ -146,14 +146,13 @@ if [[ -n "$CPPCHECK" ]] && [[ -d "$SRC_DIR" ]]; then
   else
     echo "cppcheck (src): PASS"
   fi
-  # tests scan, held to the same bar. --suppress=unmatchedSuppression: the shared
-  # family list is broader than what the test TUs happen to trigger, and that is
-  # not itself a defect.
+  # tests scan, held to the same bar. cppcheck_families already carries
+  # --suppress=unmatchedSuppression (the shared family list is broader than what any
+  # one scan triggers); do NOT repeat it — cppcheck 2.21 errors on a duplicate suppression.
   if [[ -d "$TESTS_DIR" ]]; then
     if ! "$CPPCHECK" --enable=all \
         --error-exitcode=1 --inline-suppr \
         "${cppcheck_families[@]}" \
-        --suppress=unmatchedSuppression \
         -I "$SRC_DIR" \
         -I "$TESTS_DIR" \
         -I third_party/sqlite \
