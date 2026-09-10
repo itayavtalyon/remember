@@ -128,7 +128,10 @@ if [[ -n "$CPPCHECK" ]] && [[ -d "$SRC_DIR" ]]; then
     --suppress=checkersReport
     --suppress=toomanyconfigs
   )
-  # src scan: strict — every family suppression above matches here.
+  # --suppress=unmatchedSuppression: some suppressed checks (e.g. normalCheckLevelMaxBranches)
+  # only exist in newer cppcheck; on the older cppcheck in CI they are unmatched, which is
+  # not itself a defect. Keep one family list working across cppcheck versions.
+  cppcheck_families+=(--suppress=unmatchedSuppression)
   if ! "$CPPCHECK" --enable=all \
       --error-exitcode=1 --inline-suppr \
       "${cppcheck_families[@]}" \
@@ -180,7 +183,10 @@ if [[ -n "$GCC_ANALYZER" ]] && [[ -d "$SRC_DIR" ]]; then
   an_fail=0
   while IFS= read -r f; do
     [[ -z "$f" ]] && continue
-    if ! "$GCC_ANALYZER" -std=c11 -Wall -Wextra -Werror -fanalyzer -fsyntax-only \
+    # POSIX feature macros must match the CMake build (remember_apply_posix_feature_macros):
+    # glibc hides gmtime_r et al. under pure -std=c11 without them.
+    if ! "$GCC_ANALYZER" -std=c11 -D_POSIX_C_SOURCE=200809L -D_XOPEN_SOURCE=700 \
+        -Wall -Wextra -Werror -fanalyzer -fsyntax-only \
         -I "$SRC_DIR" \
         -isystem third_party/sqlite \
         -isystem third_party/sha256 \

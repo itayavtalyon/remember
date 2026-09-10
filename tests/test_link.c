@@ -481,6 +481,7 @@ TEST(get_list_json_stubs_five_name_preview)
     for (i = 0; i < LONG_BODY_LEN; i++) {
         long_body[i] = 'a';
     }
+    /* cppcheck-suppress unreadVariable ; NUL read via add_long[] below (old cppcheck FP) */
     long_body[LONG_BODY_LEN] = '\0';
 
     {

@@ -165,7 +165,7 @@ TEST(keyless_merge_keeps_created_at)
         if (created1 != NULL) {
             created1[0] = '\0';
             if (end != NULL) {
-                (void)snprintf(created1, 32, "%.*s", (int)(end - p), p);
+                (void)snprintf(created1, TS_BUFSIZE, "%.*s", (int)(end - p), p);
             }
         }
     }
