@@ -3,11 +3,15 @@
 #include <stdio.h>
 #include <string.h>
 
+/* Mutable process-global counters/state of the minimal test runner. Global by
+   design: every TEST and ASSERT macro updates them. */
+// NOLINTBEGIN(cppcoreguidelines-avoid-non-const-global-variables)
 int g_tests_run;
 int g_tests_failed;
 int g_asserts_run;
 int g_asserts_failed;
 const char *g_current_test;
+// NOLINTEND(cppcoreguidelines-avoid-non-const-global-variables)
 
 static const char *current_test(void)
 {
@@ -27,8 +31,12 @@ void tst_run(const char *name, void (*fn)(void))
     g_tests_run++;
     (void)printf("RUN  %s\n", name);
     fn();
+    // cppcheck-suppress knownConditionTrueFalse ; fn() (opaque) mutates the global assert counter;
+    // cppcheck cannot see it
     if (g_asserts_failed > fails_before) {
         g_tests_failed++;
+        // cppcheck-suppress knownArgument ; same: g_asserts_failed changes across the fn() call
+        // above
         (void)printf("FAIL %s (%d assert(s))\n", name, g_asserts_failed - fails_before);
     } else {
         (void)printf("PASS %s\n", name);

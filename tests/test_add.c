@@ -5,14 +5,26 @@
 #include <stdlib.h>
 #include <string.h>
 
+/* Boundary-test sizes for the CLI body/token limits (black-box: these mirror the
+   values normalize.h enforces, kept local since these tests drive the built binary). */
+enum {
+    TOKEN_OVERLONG_LEN = 65,     /* one past the 64-byte tag/key limit */
+    TOKEN_OVERLONG_BUFSIZE = 66, /* + NUL */
+    HEX_DIGEST_LEN = 64,         /* SHA-256 hex digits */
+    ASCII_ESC = 0x1b,            /* escape control byte */
+};
+static const unsigned HEX_NIBBLE_MASK = 0x0FU;
+static const size_t BODY_MAX_BYTES = 65536U;      /* body byte limit (64 KiB) */
+static const size_t BODY_OVER_MAX_BYTES = 65537U; /* one past the limit */
+
 TEST(add_basic_prints_id_one)
 {
     char *db = make_temp_db_path();
     const char *args[] = {"add", "hello memory"};
     CmdResult r;
-    long id;
+    long id = 0;
     ASSERT_TRUE(db != NULL);
-    r = run_remember(db, args, 2, NULL);
+    r = run_remember(db, args, sizeof(args) / sizeof(args[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 0);
     id = parse_id_stdout(r.out);
     ASSERT_EQ_INT(id, 1);
@@ -29,12 +41,12 @@ TEST(add_with_tags_and_source_human)
     const char *gargs[] = {"get", "--json", "1"};
     CmdResult g;
     ASSERT_TRUE(db != NULL);
-    r = run_remember(db, args, 8, NULL);
+    r = run_remember(db, args, sizeof(args) / sizeof(args[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 0);
     ASSERT_EQ_INT(parse_id_stdout(r.out), 1);
     cmd_result_free(&r);
 
-    g = run_remember(db, gargs, 3, NULL);
+    g = run_remember(db, gargs, sizeof(gargs) / sizeof(gargs[0]), NULL);
     ASSERT_EQ_INT(g.exit_code, 0);
     ASSERT_STR_CONTAINS(g.out, "\"source\":\"human\"");
     ASSERT_STR_CONTAINS(g.out, "pref");
@@ -52,10 +64,10 @@ TEST(add_default_source_is_unknown)
     const char *gargs[] = {"get", "--json", "1"};
     CmdResult g;
     ASSERT_TRUE(db != NULL);
-    r = run_remember(db, args, 2, NULL);
+    r = run_remember(db, args, sizeof(args) / sizeof(args[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 0);
     cmd_result_free(&r);
-    g = run_remember(db, gargs, 3, NULL);
+    g = run_remember(db, gargs, sizeof(gargs) / sizeof(gargs[0]), NULL);
     ASSERT_EQ_INT(g.exit_code, 0);
     ASSERT_STR_CONTAINS(g.out, "\"source\":\"unknown\"");
     cmd_result_free(&g);
@@ -70,8 +82,8 @@ TEST(add_source_agent_tool_accepted)
     const char *a1[] = {"add", "--source", "agent", "from agent"};
     const char *a2[] = {"add", "--source", "tool", "from tool"};
     ASSERT_TRUE(db != NULL);
-    r1 = run_remember(db, a1, 4, NULL);
-    r2 = run_remember(db, a2, 4, NULL);
+    r1 = run_remember(db, a1, sizeof(a1) / sizeof(a1[0]), NULL);
+    r2 = run_remember(db, a2, sizeof(a2) / sizeof(a2[0]), NULL);
     ASSERT_EQ_INT(r1.exit_code, 0);
     ASSERT_EQ_INT(r2.exit_code, 0);
     cmd_result_free(&r1);
@@ -89,15 +101,15 @@ TEST(add_source_share_accepted)
     const char *a_get[] = {"get", "--json", "1"};
     const char *a_list[] = {"list", "--json", "--source", "share"};
     ASSERT_TRUE(db != NULL);
-    add_r = run_remember(db, a_add, 5, NULL);
+    add_r = run_remember(db, a_add, sizeof(a_add) / sizeof(a_add[0]), NULL);
     ASSERT_EQ_INT(add_r.exit_code, 0);
     ASSERT_STR_CONTAINS(add_r.out, "\"source\":\"share\"");
     cmd_result_free(&add_r);
-    get_r = run_remember(db, a_get, 3, NULL);
+    get_r = run_remember(db, a_get, sizeof(a_get) / sizeof(a_get[0]), NULL);
     ASSERT_EQ_INT(get_r.exit_code, 0);
     ASSERT_STR_CONTAINS(get_r.out, "\"source\":\"share\"");
     cmd_result_free(&get_r);
-    list_r = run_remember(db, a_list, 4, NULL);
+    list_r = run_remember(db, a_list, sizeof(a_list) / sizeof(a_list[0]), NULL);
     ASSERT_EQ_INT(list_r.exit_code, 0);
     ASSERT_STR_CONTAINS(list_r.out, "\"source\":\"share\"");
     cmd_result_free(&list_r);
@@ -110,7 +122,7 @@ TEST(add_invalid_source_rejected)
     const char *args[] = {"add", "--source", "robot", "nope"};
     CmdResult r;
     ASSERT_TRUE(db != NULL);
-    r = run_remember(db, args, 4, NULL);
+    r = run_remember(db, args, sizeof(args) / sizeof(args[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 1);
     cmd_result_free(&r);
     free(db);
@@ -122,7 +134,7 @@ TEST(add_empty_body_rejected)
     const char *args[] = {"add", ""};
     CmdResult r;
     ASSERT_TRUE(db != NULL);
-    r = run_remember(db, args, 2, NULL);
+    r = run_remember(db, args, sizeof(args) / sizeof(args[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 1);
     cmd_result_free(&r);
     free(db);
@@ -134,7 +146,7 @@ TEST(add_whitespace_only_body_rejected)
     const char *args[] = {"add", "   \t\n  "};
     CmdResult r;
     ASSERT_TRUE(db != NULL);
-    r = run_remember(db, args, 2, NULL);
+    r = run_remember(db, args, sizeof(args) / sizeof(args[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 1);
     cmd_result_free(&r);
     free(db);
@@ -148,10 +160,10 @@ TEST(add_body_trimmed_before_store)
     const char *gargs[] = {"get", "--json", "1"};
     CmdResult g;
     ASSERT_TRUE(db != NULL);
-    r = run_remember(db, args, 2, NULL);
+    r = run_remember(db, args, sizeof(args) / sizeof(args[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 0);
     cmd_result_free(&r);
-    g = run_remember(db, gargs, 3, NULL);
+    g = run_remember(db, gargs, sizeof(gargs) / sizeof(gargs[0]), NULL);
     ASSERT_EQ_INT(g.exit_code, 0);
     ASSERT_STR_CONTAINS(g.out, "\"body\":\"padded body\"");
     cmd_result_free(&g);
@@ -167,11 +179,11 @@ TEST(add_dedupe_same_body_merges_tags)
     const char *a1[] = {"add", "--tag", "a", "same text"};
     const char *a2[] = {"add", "--tag", "b", "same text"};
     const char *gargs[] = {"get", "--json", "1"};
-    long id1;
-    long id2;
+    long id1 = 0;
+    long id2 = 0;
     ASSERT_TRUE(db != NULL);
-    r1 = run_remember(db, a1, 4, NULL);
-    r2 = run_remember(db, a2, 4, NULL);
+    r1 = run_remember(db, a1, sizeof(a1) / sizeof(a1[0]), NULL);
+    r2 = run_remember(db, a2, sizeof(a2) / sizeof(a2[0]), NULL);
     ASSERT_EQ_INT(r1.exit_code, 0);
     ASSERT_EQ_INT(r2.exit_code, 0);
     id1 = parse_id_stdout(r1.out);
@@ -179,7 +191,7 @@ TEST(add_dedupe_same_body_merges_tags)
     ASSERT_EQ_INT(id1, id2);
     cmd_result_free(&r1);
     cmd_result_free(&r2);
-    g = run_remember(db, gargs, 3, NULL);
+    g = run_remember(db, gargs, sizeof(gargs) / sizeof(gargs[0]), NULL);
     ASSERT_EQ_INT(g.exit_code, 0);
     ASSERT_STR_CONTAINS(g.out, "a");
     ASSERT_STR_CONTAINS(g.out, "b");
@@ -195,8 +207,8 @@ TEST(add_dedupe_trim_equivalent_bodies)
     const char *a1[] = {"add", "  hello  "};
     const char *a2[] = {"add", "hello"};
     ASSERT_TRUE(db != NULL);
-    r1 = run_remember(db, a1, 2, NULL);
-    r2 = run_remember(db, a2, 2, NULL);
+    r1 = run_remember(db, a1, sizeof(a1) / sizeof(a1[0]), NULL);
+    r2 = run_remember(db, a2, sizeof(a2) / sizeof(a2[0]), NULL);
     ASSERT_EQ_INT(r1.exit_code, 0);
     ASSERT_EQ_INT(r2.exit_code, 0);
     ASSERT_EQ_INT(parse_id_stdout(r1.out), parse_id_stdout(r2.out));
@@ -215,13 +227,13 @@ TEST(add_dedupe_keeps_original_source)
     const char *a2[] = {"add", "--source", "agent", "--tag", "x", "stable body"};
     const char *gargs[] = {"get", "--json", "1"};
     ASSERT_TRUE(db != NULL);
-    r1 = run_remember(db, a1, 4, NULL);
-    r2 = run_remember(db, a2, 6, NULL);
+    r1 = run_remember(db, a1, sizeof(a1) / sizeof(a1[0]), NULL);
+    r2 = run_remember(db, a2, sizeof(a2) / sizeof(a2[0]), NULL);
     ASSERT_EQ_INT(r1.exit_code, 0);
     ASSERT_EQ_INT(r2.exit_code, 0);
     cmd_result_free(&r1);
     cmd_result_free(&r2);
-    g = run_remember(db, gargs, 3, NULL);
+    g = run_remember(db, gargs, sizeof(gargs) / sizeof(gargs[0]), NULL);
     ASSERT_EQ_INT(g.exit_code, 0);
     ASSERT_STR_CONTAINS(g.out, "\"source\":\"human\"");
     cmd_result_free(&g);
@@ -234,7 +246,7 @@ TEST(add_json_created_shape)
     const char *args[] = {"add", "--json", "--tag", "t", "json body"};
     CmdResult r;
     ASSERT_TRUE(db != NULL);
-    r = run_remember(db, args, 5, NULL);
+    r = run_remember(db, args, sizeof(args) / sizeof(args[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 0);
     ASSERT_STR_CONTAINS(r.out, "\"version\":1");
     ASSERT_STR_CONTAINS(r.out, "\"action\":\"created\"");
@@ -254,8 +266,8 @@ TEST(add_json_merged_shape)
     const char *a1[] = {"add", "--json", "dup"};
     const char *a2[] = {"add", "--json", "--tag", "m", "dup"};
     ASSERT_TRUE(db != NULL);
-    r1 = run_remember(db, a1, 3, NULL);
-    r2 = run_remember(db, a2, 5, NULL);
+    r1 = run_remember(db, a1, sizeof(a1) / sizeof(a1[0]), NULL);
+    r2 = run_remember(db, a2, sizeof(a2) / sizeof(a2[0]), NULL);
     ASSERT_EQ_INT(r1.exit_code, 0);
     ASSERT_EQ_INT(r2.exit_code, 0);
     ASSERT_STR_CONTAINS(r2.out, "\"action\":\"merged\"");
@@ -271,7 +283,7 @@ TEST(add_stdin_body_dash)
     const char *args[] = {"add", "-"};
     CmdResult r;
     ASSERT_TRUE(db != NULL);
-    r = run_remember(db, args, 2, "from stdin body");
+    r = run_remember(db, args, sizeof(args) / sizeof(args[0]), "from stdin body");
     ASSERT_EQ_INT(r.exit_code, 0);
     ASSERT_EQ_INT(parse_id_stdout(r.out), 1);
     cmd_result_free(&r);
@@ -287,10 +299,10 @@ TEST(add_literal_dash_body_after_endopts)
     CmdResult r;
     CmdResult g;
     ASSERT_TRUE(db != NULL);
-    r = run_remember(db, args, 3, NULL);
+    r = run_remember(db, args, sizeof(args) / sizeof(args[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 0);
     cmd_result_free(&r);
-    g = run_remember(db, gargs, 3, NULL);
+    g = run_remember(db, gargs, sizeof(gargs) / sizeof(gargs[0]), NULL);
     ASSERT_EQ_INT(g.exit_code, 0);
     ASSERT_STR_CONTAINS(g.out, "\"body\":\"-\"");
     cmd_result_free(&g);
@@ -300,24 +312,24 @@ TEST(add_literal_dash_body_after_endopts)
 TEST(add_body_over_64kib_rejected)
 {
     char *db = make_temp_db_path();
-    char *big;
+    char *big = NULL;
     const char *args[2];
     CmdResult r;
-    size_t i;
+    size_t i = 0;
     ASSERT_TRUE(db != NULL);
-    big = malloc(65537U + 1U);
+    big = (char *)malloc(BODY_OVER_MAX_BYTES + 1U);
     ASSERT_TRUE(big != NULL);
     if (big == NULL) {
         free(db);
         return;
     }
-    for (i = 0; i < 65537U; i++) {
+    for (i = 0; i < BODY_OVER_MAX_BYTES; i++) {
         big[i] = 'a';
     }
-    big[65537U] = '\0';
+    big[BODY_OVER_MAX_BYTES] = '\0';
     args[0] = "add";
     args[1] = big;
-    r = run_remember(db, args, 2, NULL);
+    r = run_remember(db, args, sizeof(args) / sizeof(args[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 1);
     cmd_result_free(&r);
     free(big);
@@ -332,10 +344,10 @@ TEST(add_tag_ascii_casefold)
     const char *gargs[] = {"get", "--json", "1"};
     CmdResult g;
     ASSERT_TRUE(db != NULL);
-    r = run_remember(db, args, 4, NULL);
+    r = run_remember(db, args, sizeof(args) / sizeof(args[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 0);
     cmd_result_free(&r);
-    g = run_remember(db, gargs, 3, NULL);
+    g = run_remember(db, gargs, sizeof(gargs) / sizeof(gargs[0]), NULL);
     ASSERT_EQ_INT(g.exit_code, 0);
     ASSERT_STR_CONTAINS(g.out, "foo");
     cmd_result_free(&g);
@@ -348,7 +360,7 @@ TEST(add_empty_tag_rejected)
     const char *args[] = {"add", "--tag", "", "body"};
     CmdResult r;
     ASSERT_TRUE(db != NULL);
-    r = run_remember(db, args, 4, NULL);
+    r = run_remember(db, args, sizeof(args) / sizeof(args[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 1);
     cmd_result_free(&r);
     free(db);
@@ -362,10 +374,10 @@ TEST(add_tag_with_space_accepted)
     const char *bad[] = {"add", "--tag", "two\twords", "body"};
     CmdResult r;
     ASSERT_TRUE(db != NULL);
-    r = run_remember(db, args, 4, NULL);
+    r = run_remember(db, args, sizeof(args) / sizeof(args[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 0);
     cmd_result_free(&r);
-    r = run_remember(db, bad, 4, NULL);
+    r = run_remember(db, bad, sizeof(bad) / sizeof(bad[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 1);
     cmd_result_free(&r);
     free(db);
@@ -374,20 +386,20 @@ TEST(add_tag_with_space_accepted)
 TEST(add_tag_too_long_rejected)
 {
     char *db = make_temp_db_path();
-    char tag[66];
+    char tag[TOKEN_OVERLONG_BUFSIZE];
     const char *args[4];
     CmdResult r;
-    size_t i;
+    size_t i = 0;
     ASSERT_TRUE(db != NULL);
-    for (i = 0; i < 65U; i++) {
+    for (i = 0; i < TOKEN_OVERLONG_LEN; i++) {
         tag[i] = 't';
     }
-    tag[65] = '\0';
+    tag[TOKEN_OVERLONG_LEN] = '\0';
     args[0] = "add";
     args[1] = "--tag";
     args[2] = tag;
     args[3] = "body";
-    r = run_remember(db, args, 4, NULL);
+    r = run_remember(db, args, sizeof(args) / sizeof(args[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 1);
     cmd_result_free(&r);
     free(db);
@@ -401,10 +413,10 @@ TEST(add_tag_project_colon_style_allowed)
     const char *gargs[] = {"get", "--json", "1"};
     CmdResult g;
     ASSERT_TRUE(db != NULL);
-    r = run_remember(db, args, 4, NULL);
+    r = run_remember(db, args, sizeof(args) / sizeof(args[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 0);
     cmd_result_free(&r);
-    g = run_remember(db, gargs, 3, NULL);
+    g = run_remember(db, gargs, sizeof(gargs) / sizeof(gargs[0]), NULL);
     ASSERT_EQ_INT(g.exit_code, 0);
     ASSERT_STR_CONTAINS(g.out, "project:remember");
     cmd_result_free(&g);
@@ -417,7 +429,7 @@ TEST(add_missing_body_rejected)
     const char *args[] = {"add", "--tag", "only"};
     CmdResult r;
     ASSERT_TRUE(db != NULL);
-    r = run_remember(db, args, 3, NULL);
+    r = run_remember(db, args, sizeof(args) / sizeof(args[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 1);
     cmd_result_free(&r);
     free(db);
@@ -427,20 +439,20 @@ TEST(add_json_body_with_control_and_quotes_stays_valid)
 {
     char *db = make_temp_db_path();
     /* Includes ", \, newline, ESC — must escape in JSON and store intact. */
-    char body[] = {'q', '"', 'u',  'o', 't',        'e', ' ', '\\',
-                   ' ', 'n', '\n', 'e', (char)0x1b, 'x', '\0'};
+    char body[] = {'q', '"', 'u', 'o', 't', 'e', ' ', '\\', ' ', 'n', '\n', 'e', (char)ASCII_ESC,
+                   'x', '\0'};
     const char *args[] = {"add", "--json", body};
     const char *gargs[] = {"get", "--json", "1"};
     CmdResult r;
     CmdResult g;
-    char *hex_stored;
-    char hex_expect[64];
-    size_t i;
+    char *hex_stored = NULL;
+    char hex_expect[HEX_DIGEST_LEN];
+    size_t i = 0;
     size_t body_len = sizeof(body) - 1U;
     ASSERT_TRUE(db != NULL);
     ASSERT_TRUE((body_len * 2U) + 1U <= sizeof(hex_expect));
 
-    r = run_remember(db, args, 3, NULL);
+    r = run_remember(db, args, sizeof(args) / sizeof(args[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 0);
     /* Envelope stays parseable: quotes/backslash/newline/ESC are escaped. */
     ASSERT_STR_CONTAINS(r.out, "\"version\":1");
@@ -450,25 +462,25 @@ TEST(add_json_body_with_control_and_quotes_stays_valid)
     ASSERT_STR_CONTAINS(r.out, "\\n");
     ASSERT_STR_CONTAINS(r.out, "\\u001b");
     /* Raw ESC must not appear unescaped in the JSON text. */
-    ASSERT_TRUE(strchr(r.out, (char)0x1b) == NULL);
+    ASSERT_TRUE(strchr(r.out, (char)ASCII_ESC) == NULL);
     cmd_result_free(&r);
 
     /* Round-trip via get --json: same escapes, no raw control on stdout. */
-    g = run_remember(db, gargs, 3, NULL);
+    g = run_remember(db, gargs, sizeof(gargs) / sizeof(gargs[0]), NULL);
     ASSERT_EQ_INT(g.exit_code, 0);
     ASSERT_STR_CONTAINS(g.out, "\\\"");
     ASSERT_STR_CONTAINS(g.out, "\\\\");
     ASSERT_STR_CONTAINS(g.out, "\\n");
     ASSERT_STR_CONTAINS(g.out, "\\u001b");
-    ASSERT_TRUE(strchr(g.out, (char)0x1b) == NULL);
+    ASSERT_TRUE(strchr(g.out, (char)ASCII_ESC) == NULL);
     cmd_result_free(&g);
 
     /* On-disk body equals original bytes (hex: first-line helper can't carry \n). */
     for (i = 0; i < body_len; i++) {
         static const char k_hex[] = "0123456789ABCDEF";
         unsigned char b = (unsigned char)body[i];
-        hex_expect[i * 2U] = k_hex[b >> 4];
-        hex_expect[(i * 2U) + 1U] = k_hex[b & 0x0FU];
+        hex_expect[i * 2U] = k_hex[(unsigned int)b >> 4U];
+        hex_expect[(i * 2U) + 1U] = k_hex[b & HEX_NIBBLE_MASK];
     }
     hex_expect[body_len * 2U] = '\0';
     hex_stored = harness_sqlite_query_line(db, "SELECT hex(body) FROM entries WHERE id=1;");
@@ -489,24 +501,24 @@ TEST(add_stdin_body_at_limit_accepted)
 {
     char *db = make_temp_db_path();
     const char *args[] = {"add", "-"};
-    char *in;
+    char *in = NULL;
     CmdResult r;
-    size_t i;
+    size_t i = 0;
 
     ASSERT_TRUE(db != NULL);
-    in = malloc(65536U + 2U); /* 64 KiB body + one trailing newline + NUL */
+    in = (char *)malloc(BODY_MAX_BYTES + 2U); /* 64 KiB body + one trailing newline + NUL */
     ASSERT_TRUE(in != NULL);
     if (in == NULL) {
         free(db);
         return;
     }
-    for (i = 0; i < 65536U; i++) {
+    for (i = 0; i < BODY_MAX_BYTES; i++) {
         in[i] = 'a';
     }
-    in[65536U] = '\n';
-    in[65537U] = '\0';
+    in[BODY_MAX_BYTES] = '\n';
+    in[BODY_OVER_MAX_BYTES] = '\0';
 
-    r = run_remember(db, args, 2, in);
+    r = run_remember(db, args, sizeof(args) / sizeof(args[0]), in);
     ASSERT_EQ_INT(r.exit_code, 0);
     ASSERT_EQ_INT(parse_id_stdout(r.out), 1);
     cmd_result_free(&r);
@@ -519,23 +531,23 @@ TEST(add_stdin_body_over_limit_rejected)
 {
     char *db = make_temp_db_path();
     const char *args[] = {"add", "-"};
-    char *in;
+    char *in = NULL;
     CmdResult r;
-    size_t i;
+    size_t i = 0;
 
     ASSERT_TRUE(db != NULL);
-    in = malloc(65537U + 1U);
+    in = (char *)malloc(BODY_OVER_MAX_BYTES + 1U);
     ASSERT_TRUE(in != NULL);
     if (in == NULL) {
         free(db);
         return;
     }
-    for (i = 0; i < 65537U; i++) {
+    for (i = 0; i < BODY_OVER_MAX_BYTES; i++) {
         in[i] = 'a';
     }
-    in[65537U] = '\0';
+    in[BODY_OVER_MAX_BYTES] = '\0';
 
-    r = run_remember(db, args, 2, in);
+    r = run_remember(db, args, sizeof(args) / sizeof(args[0]), in);
     ASSERT_EQ_INT(r.exit_code, 1);
     ASSERT_STR_CONTAINS(r.err, "64 KiB");
     cmd_result_free(&r);
@@ -553,20 +565,20 @@ TEST(add_stdin_body_over_limit_rejected)
 TEST(get_human_body_neutralizes_control_chars)
 {
     char *db = make_temp_db_path();
-    char body[] = {'x', (char)0x1b, 'y', '\0'};
+    char body[] = {'x', (char)ASCII_ESC, 'y', '\0'};
     const char *aargs[] = {"add", body};
     const char *gargs[] = {"get", "1"};
     CmdResult a;
     CmdResult g;
 
     ASSERT_TRUE(db != NULL);
-    a = run_remember(db, aargs, 2, NULL);
+    a = run_remember(db, aargs, sizeof(aargs) / sizeof(aargs[0]), NULL);
     ASSERT_EQ_INT(a.exit_code, 0);
     cmd_result_free(&a);
 
-    g = run_remember(db, gargs, 2, NULL);
+    g = run_remember(db, gargs, sizeof(gargs) / sizeof(gargs[0]), NULL);
     ASSERT_EQ_INT(g.exit_code, 0);
-    ASSERT_TRUE(strchr(g.out, (char)0x1b) == NULL); /* no raw ESC */
+    ASSERT_TRUE(strchr(g.out, (char)ASCII_ESC) == NULL); /* no raw ESC */
     ASSERT_STR_CONTAINS(g.out, "x?y");
     cmd_result_free(&g);
     free(db);
@@ -582,11 +594,11 @@ TEST(get_human_body_preserves_newlines)
     CmdResult g;
 
     ASSERT_TRUE(db != NULL);
-    a = run_remember(db, aargs, 2, NULL);
+    a = run_remember(db, aargs, sizeof(aargs) / sizeof(aargs[0]), NULL);
     ASSERT_EQ_INT(a.exit_code, 0);
     cmd_result_free(&a);
 
-    g = run_remember(db, gargs, 2, NULL);
+    g = run_remember(db, gargs, sizeof(gargs) / sizeof(gargs[0]), NULL);
     ASSERT_EQ_INT(g.exit_code, 0);
     ASSERT_STR_CONTAINS(g.out, "line1\nline2");
     cmd_result_free(&g);
@@ -601,7 +613,7 @@ TEST(get_overflow_id_rejected)
     CmdResult g;
 
     ASSERT_TRUE(db != NULL);
-    g = run_remember(db, gargs, 2, NULL);
+    g = run_remember(db, gargs, sizeof(gargs) / sizeof(gargs[0]), NULL);
     ASSERT_EQ_INT(g.exit_code, 1);
     ASSERT_STR_CONTAINS(g.err, "invalid id");
     cmd_result_free(&g);

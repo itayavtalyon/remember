@@ -15,11 +15,11 @@ int cmd_tags(Store *s, bool json, int rest_argc, const char **rest_argv)
 {
     TagCount *tags = NULL;
     size_t count = 0U;
-    StoreStatus st;
+    StoreStatus st = STORE_OK;
     int rc = REMEMBER_ERR;
-    char now[32];
+    char now[ISO_TS_BUFSIZE];
     bool trash = false;
-    int i;
+    int i = 0;
 
     for (i = 0; i < rest_argc; i++) {
         const char *arg = rest_argv[i];

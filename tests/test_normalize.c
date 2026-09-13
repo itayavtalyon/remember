@@ -5,6 +5,16 @@
 #include <stdlib.h>
 #include <string.h>
 
+/* Fixed-length hash inputs / counts and invalid-byte fixtures for normalize tests. */
+enum {
+    HASH_IN_56 = 56,
+    HASH_IN_64 = 64,
+    TAG_COUNT_99 = 99,
+    ASCII_DEL = 0x7f,       /* DEL control byte */
+    UTF8_INVALID_FE = 0xfe, /* never a valid UTF-8 byte */
+    UTF8_INVALID_FF = 0xff  /* never a valid UTF-8 byte */
+};
+
 /*
  * Pure unit tests for normalize + SHA-256 (step 03). No CLI, no store.
  */
@@ -13,9 +23,9 @@ TEST(body_trim_basic)
 {
     char *out = NULL;
     size_t n = 0;
-    NormStatus st;
+    NormStatus st = NORM_OK;
 
-    st = body_trim_copy("  hello  ", 9, &out, &n);
+    st = body_trim_copy("  hello  ", sizeof("  hello  ") - 1, &out, &n);
     ASSERT_EQ_INT(st, NORM_OK);
     ASSERT_TRUE(out != NULL);
     ASSERT_STREQ(out, "hello");
@@ -40,7 +50,7 @@ TEST(body_trim_preserves_internal_ws)
 {
     char *out = NULL;
     size_t n = 0;
-    NormStatus st = body_trim_copy("  a  b  ", 8, &out, &n);
+    NormStatus st = body_trim_copy("  a  b  ", sizeof("  a  b  ") - 1, &out, &n);
 
     ASSERT_EQ_INT(st, NORM_OK);
     ASSERT_STREQ(out, "a  b");
@@ -51,7 +61,7 @@ TEST(body_trim_preserves_internal_ws)
 TEST(body_trim_empty_and_ws_only)
 {
     char *out = NULL;
-    size_t n = 99;
+    size_t n = TAG_COUNT_99;
 
     ASSERT_EQ_INT(body_trim_copy("", 0, &out, &n), NORM_ERR_EMPTY);
     ASSERT_TRUE(out == NULL);
@@ -65,12 +75,12 @@ TEST(body_trim_empty_and_ws_only)
 
 TEST(body_trim_too_long)
 {
-    char *buf;
+    char *buf = NULL;
     char *out = NULL;
-    size_t i;
-    NormStatus st;
+    size_t i = 0;
+    NormStatus st = NORM_OK;
 
-    buf = malloc((size_t)REMEMBER_BODY_MAX + 2U);
+    buf = (char *)malloc((size_t)REMEMBER_BODY_MAX + 2U);
     if (buf == NULL) {
         ASSERT_TRUE(0); /* OOM — fail the test */
         return;
@@ -96,7 +106,7 @@ TEST(body_trim_too_long)
 TEST(body_trim_invalid_utf8)
 {
     char *out = NULL;
-    char bad[] = {'a', (char)0xff, 'b'};
+    const char bad[] = {'a', (char)UTF8_INVALID_FF, 'b'};
     NormStatus st = body_trim_copy(bad, 3, &out, NULL);
 
     ASSERT_EQ_INT(st, NORM_ERR_INVALID_UTF8);
@@ -221,7 +231,7 @@ TEST(normalize_reports_bad_output_buffer)
     {
         char big[REMEMBER_TOKEN_MAX + 2];
         char out[REMEMBER_TOKEN_MAX + 2];
-        size_t i;
+        size_t i = 0;
         for (i = 0; i < (size_t)REMEMBER_TOKEN_MAX + 1U; i++) {
             big[i] = 'a';
         }
@@ -255,11 +265,11 @@ TEST(body_hash_long_pad_and_multiblock)
     static const char s64[] = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
 
     ASSERT_EQ_INT((int)strlen(s56), 56);
-    body_hash_hex(s56, 56, hex);
+    body_hash_hex(s56, HASH_IN_56, hex);
     ASSERT_STREQ(hex, "248d6a61d20638b8e5c026930c3e6039a33ce45964ff2167f6ecedd419db06c1");
 
     ASSERT_EQ_INT((int)strlen(s64), 64);
-    body_hash_hex(s64, 64, hex);
+    body_hash_hex(s64, HASH_IN_64, hex);
     ASSERT_STREQ(hex, "a8ae6e6ee929abea3afcfc5258c8ccd6f85273e0d4626d26c7279f3250f77c8e");
 }
 
@@ -317,11 +327,11 @@ TEST(token_rejects_empty_and_nonspace_ws_control)
     ASSERT_EQ_INT(normalize_token("a\nb", out, sizeof(out)), NORM_ERR_INVALID_CHAR);
 
     {
-        char ctrl[] = {'a', 0x01, 'b', '\0'};
+        const char ctrl[] = {'a', 0x01, 'b', '\0'};
         ASSERT_EQ_INT(normalize_token(ctrl, out, sizeof(out)), NORM_ERR_INVALID_CHAR);
     }
     {
-        char del[] = {'k', 0x7f, '\0'};
+        const char del[] = {'k', ASCII_DEL, '\0'};
         ASSERT_EQ_INT(normalize_key(del, out, sizeof(out)), NORM_ERR_INVALID_CHAR);
     }
 }
@@ -347,8 +357,8 @@ TEST(token_length_and_utf8)
     char out[REMEMBER_TOKEN_MAX + 1];
     char ok64[REMEMBER_TOKEN_MAX + 1];
     char too[REMEMBER_TOKEN_MAX + 2];
-    size_t i;
-    char bad[] = {(char)0xff, (char)0xfe, 'x', '\0'};
+    size_t i = 0;
+    const char bad[] = {(char)UTF8_INVALID_FF, (char)UTF8_INVALID_FE, 'x', '\0'};
 
     for (i = 0; i < (size_t)REMEMBER_TOKEN_MAX; i++) {
         ok64[i] = 'a';

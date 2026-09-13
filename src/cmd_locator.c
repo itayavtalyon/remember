@@ -18,12 +18,14 @@ typedef struct {
     const char *key_raw;
     const char *id_raw;
     bool trash;
+    /* NOLINTNEXTLINE(readability-magic-numbers,cppcoreguidelines-avoid-magic-numbers) */
+    char pad_[7]; /* explicit tail padding (kept -Wpadded-clean) */
 } LocatorParse;
 
 /* Shared by get/delete: --key, positional id, reject --source and unknowns. */
 static int parse_locator_args(int rest_argc, const char **rest_argv, LocatorParse *out)
 {
-    int i;
+    int i = 0;
     int end_opts = 0;
 
     out->key_raw = NULL;
@@ -106,11 +108,11 @@ int cmd_get(Store *s, bool json, int rest_argc, const char **rest_argv)
     LocatorParse parsed;
     Entry entry;
     char key_norm[REMEMBER_TOKEN_MAX + 1];
-    char now[32];
+    char now[ISO_TS_BUFSIZE];
     const char *key = NULL;
     long long id = 0;
-    StoreStatus st;
-    int rc;
+    StoreStatus st = STORE_OK;
+    int rc = 0;
 
     memset(&entry, 0, sizeof(entry));
     if (parse_locator_args(rest_argc, rest_argv, &parsed) != 0) {
@@ -140,7 +142,7 @@ int cmd_get(Store *s, bool json, int rest_argc, const char **rest_argv)
     {
         StoreNeighbor *links = NULL;
         size_t nlinks = 0U;
-        int wr;
+        int wr = 0;
 
         st = store_list_neighbors(s, entry.id, NULL, STORE_NEIGHBOR_ALL, now, &links, &nlinks);
         if (st != STORE_OK) {
@@ -171,11 +173,11 @@ int cmd_delete(Store *s, bool json, int rest_argc, const char **rest_argv)
     LocatorParse parsed;
     Entry entry;
     char key_norm[REMEMBER_TOKEN_MAX + 1];
-    char now[32];
+    char now[ISO_TS_BUFSIZE];
     const char *key = NULL;
     long long id = 0;
-    StoreStatus st;
-    int rc;
+    StoreStatus st = STORE_OK;
+    int rc = 0;
 
     memset(&entry, 0, sizeof(entry));
     if (parse_locator_args(rest_argc, rest_argv, &parsed) != 0) {
@@ -219,15 +221,16 @@ int cmd_delete(Store *s, bool json, int rest_argc, const char **rest_argv)
 typedef struct {
     LocatorParse loc;
     const char *text_raw;
+    const char **tag_raw;
+    const char *ttl_raw;
+    const char *expires_raw;
+    size_t ntag_raw;
     bool set_text;
     /* True for `--text=VALUE` (VALUE may be "-"); false for `--text -` (stdin). */
     bool text_literal;
     bool clear_tags;
-    const char **tag_raw;
-    size_t ntag_raw;
-    const char *ttl_raw;
-    const char *expires_raw;
     bool clear_expires;
+    char pad_[4]; /* explicit tail padding (kept -Wpadded-clean) */
 } UpdateParse;
 
 static void update_parse_free(UpdateParse *p)
@@ -245,31 +248,39 @@ static int handle_update_flag(const char *arg, int *i, int rest_argc, const char
         return 1;
     }
     if (strcmp(arg, "--key") == 0) {
-        return take_value(i, rest_argc, rest_argv, &out->loc.key_raw, err,
-                          "missing value for --key");
+        TakeValue taken = take_value(i, rest_argc, rest_argv, "missing value for --key");
+        if (taken.rc != 0) {
+            *err = taken.err;
+            return taken.rc;
+        }
+        out->loc.key_raw = taken.value;
+        return 0;
     }
     /* `--text=-` (or any `--text=VALUE`) is always a literal body, including "-". */
-    if (strncmp(arg, "--text=", 7) == 0) {
-        out->text_raw = arg + 7;
+    if (strncmp(arg, "--text=", sizeof("--text=") - 1U) == 0) {
+        out->text_raw = arg + (sizeof("--text=") - 1U);
         out->set_text = true;
         out->text_literal = true;
         return 0;
     }
     if (strcmp(arg, "--text") == 0) {
-        if (take_value(i, rest_argc, rest_argv, &out->text_raw, err, "missing value for --text") !=
-            0) {
+        TakeValue taken = take_value(i, rest_argc, rest_argv, "missing value for --text");
+        if (taken.rc != 0) {
+            *err = taken.err;
             return -1;
         }
+        out->text_raw = taken.value;
         out->set_text = true;
         out->text_literal = false; /* bare "-" still means stdin */
         return 0;
     }
     if (strcmp(arg, "--tag") == 0) {
-        const char *t = NULL;
-        if (take_value(i, rest_argc, rest_argv, &t, err, "missing value for --tag") != 0) {
+        TakeValue taken = take_value(i, rest_argc, rest_argv, "missing value for --tag");
+        if (taken.rc != 0) {
+            *err = taken.err;
             return -1;
         }
-        if (push_cstr_ptr(&out->tag_raw, &out->ntag_raw, tag_cap, t) != 0) {
+        if (push_cstr_ptr(&out->tag_raw, &out->ntag_raw, tag_cap, taken.value) != 0) {
             *err = "out of memory";
             return -1;
         }
@@ -284,11 +295,22 @@ static int handle_update_flag(const char *arg, int *i, int rest_argc, const char
         return 0;
     }
     if (strcmp(arg, "--ttl") == 0) {
-        return take_value(i, rest_argc, rest_argv, &out->ttl_raw, err, "missing value for --ttl");
+        TakeValue taken = take_value(i, rest_argc, rest_argv, "missing value for --ttl");
+        if (taken.rc != 0) {
+            *err = taken.err;
+            return taken.rc;
+        }
+        out->ttl_raw = taken.value;
+        return 0;
     }
     if (strcmp(arg, "--expires") == 0) {
-        return take_value(i, rest_argc, rest_argv, &out->expires_raw, err,
-                          "missing value for --expires");
+        TakeValue taken = take_value(i, rest_argc, rest_argv, "missing value for --expires");
+        if (taken.rc != 0) {
+            *err = taken.err;
+            return taken.rc;
+        }
+        out->expires_raw = taken.value;
+        return 0;
     }
     if (strcmp(arg, "--clear-expires") == 0) {
         out->clear_expires = true;
@@ -309,7 +331,7 @@ static int handle_update_flag(const char *arg, int *i, int rest_argc, const char
 static int parse_update_args(int rest_argc, const char **rest_argv, UpdateParse *out,
                              const char **err)
 {
-    int i;
+    int i = 0;
     int end_opts = 0;
     size_t tag_cap = 0U;
 
@@ -427,6 +449,35 @@ static int update_prepare_payload(const UpdateParse *parsed, char **body, size_t
     return 0;
 }
 
+/* Resolve --clear-expires / --ttl / --expires into (set_expires, expires_at).
+   0 ok; -1 usage error (message already printed). expires_at points into buf. */
+static int update_resolve_expiry(const UpdateParse *parsed, const char *now, char *buf,
+                                 size_t buflen, bool *out_set, const char **out_expires)
+{
+    /* Init satisfies clang-tidy init-variables; keeping the declaration before the
+       early clear-expires return keeps clang's -Wdeclaration-after-statement happy,
+       so cppcheck's redundantInitialization is the one that must yield here. */
+    ExpiryResult exp = {.rc = 0};
+
+    *out_set = false;
+    *out_expires = NULL;
+    if (parsed->clear_expires) {
+        *out_set = true;
+        return 0;
+    }
+    /* cppcheck-suppress redundantInitialization */
+    exp = resolve_expiry_flags(
+        (ExpiryFlags){.ttl_raw = parsed->ttl_raw, .expires_raw = parsed->expires_raw}, now, buf,
+        buflen);
+    if (exp.rc != 0) {
+        err_msg(exp.err);
+        return -1;
+    }
+    *out_expires = exp.expires;
+    *out_set = (exp.expires != NULL);
+    return 0;
+}
+
 int cmd_update(Store *s, bool json, int rest_argc, const char **rest_argv)
 {
     UpdateParse parsed;
@@ -439,14 +490,14 @@ int cmd_update(Store *s, bool json, int rest_argc, const char **rest_argv)
     char *body = NULL;
     size_t body_len = 0U;
     char hash[REMEMBER_SHA256_HEX_LEN + 1];
-    char now[32];
-    char expires_iso[32];
+    char now[ISO_TS_BUFSIZE];
+    char expires_iso[ISO_TS_BUFSIZE];
     const char *expires_at = NULL;
     bool set_expires = false;
     bool set_tags = false;
     const char *body_hash = NULL;
     Entry entry;
-    StoreStatus st;
+    StoreStatus st = STORE_OK;
     long long conflict_id = 0;
     int rc = REMEMBER_ERR;
 
@@ -484,15 +535,9 @@ int cmd_update(Store *s, bool json, int rest_argc, const char **rest_argv)
         err_msg("internal error");
         goto cleanup;
     }
-    if (parsed.clear_expires) {
-        set_expires = true;
-        expires_at = NULL;
-    } else if (resolve_expiry_flags(parsed.ttl_raw, parsed.expires_raw, now, expires_iso,
-                                    sizeof(expires_iso), &expires_at, &err) != 0) {
-        err_msg(err);
+    if (update_resolve_expiry(&parsed, now, expires_iso, sizeof(expires_iso), &set_expires,
+                              &expires_at) != 0) {
         goto cleanup;
-    } else if (expires_at != NULL) {
-        set_expires = true;
     }
     st = store_update(s, id, key_or_null, parsed.set_text, body, body_hash, set_tags,
                       (const char *const *)tags_norm, ntags, set_expires, expires_at,
@@ -522,30 +567,33 @@ typedef struct {
     LocatorParse loc;
     const char *to_key_raw;
     bool clear_key;
+    /* NOLINTNEXTLINE(readability-magic-numbers,cppcoreguidelines-avoid-magic-numbers) */
+    char pad_[7]; /* explicit tail padding (kept -Wpadded-clean) */
 } RekeyParse;
 
 static int handle_rekey_flag(const char *arg, int *i, int rest_argc, const char **rest_argv,
                              RekeyParse *out)
 {
-    const char *err = NULL;
 
     if (strcmp(arg, "--") == 0) {
         return 2;
     }
     if (strcmp(arg, "--key") == 0) {
-        if (take_value(i, rest_argc, rest_argv, &out->loc.key_raw, &err,
-                       "missing value for --key") != 0) {
-            err_msg(err);
+        TakeValue taken = take_value(i, rest_argc, rest_argv, "missing value for --key");
+        if (taken.rc != 0) {
+            err_msg(taken.err);
             return -1;
         }
+        out->loc.key_raw = taken.value;
         return 1;
     }
     if (strcmp(arg, "--to-key") == 0) {
-        if (take_value(i, rest_argc, rest_argv, &out->to_key_raw, &err,
-                       "missing value for --to-key") != 0) {
-            err_msg(err);
+        TakeValue taken = take_value(i, rest_argc, rest_argv, "missing value for --to-key");
+        if (taken.rc != 0) {
+            err_msg(taken.err);
             return -1;
         }
+        out->to_key_raw = taken.value;
         return 1;
     }
     if (strcmp(arg, "--clear-key") == 0) {
@@ -569,7 +617,7 @@ static int handle_rekey_flag(const char *arg, int *i, int rest_argc, const char 
 
 static int parse_rekey_args(int rest_argc, const char **rest_argv, RekeyParse *out)
 {
-    int i;
+    int i = 0;
     int end_opts = 0;
 
     memset(out, 0, sizeof(*out));
@@ -606,11 +654,11 @@ int cmd_rekey(Store *s, bool json, int rest_argc, const char **rest_argv)
     const char *key = NULL;
     const char *new_key = NULL;
     long long id = 0;
-    char now[32];
+    char now[ISO_TS_BUFSIZE];
     Entry entry;
-    StoreStatus st;
+    StoreStatus st = STORE_OK;
     long long conflict_id = 0;
-    int rc;
+    int rc = 0;
 
     memset(&entry, 0, sizeof(entry));
     if (parse_rekey_args(rest_argc, rest_argv, &parsed) != 0) {
@@ -642,7 +690,8 @@ int cmd_rekey(Store *s, bool json, int rest_argc, const char **rest_argv)
         err_msg("internal error");
         return REMEMBER_ERR;
     }
-    st = store_rekey(s, id, key, new_key, parsed.loc.trash, now, &entry, &conflict_id);
+    st = store_rekey(s, id, (RekeyKeys){.key_or_null = key, .new_key_or_null = new_key},
+                     parsed.loc.trash, now, &entry, &conflict_id);
     if (st == STORE_ERR_CONFLICT) {
         if (new_key != NULL) {
             (void)fprintf(app_err(), "remember: key conflicts with entry %lld\n", conflict_id);

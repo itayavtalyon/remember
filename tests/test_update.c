@@ -5,12 +5,14 @@
 #include <stdlib.h>
 #include <string.h>
 
+enum { TS_BUFSIZE = 32 }; /* ISO-8601 timestamp buffer */
+
 /* Copy the value of a `"key":"..."` JSON string field into out (empty if absent). */
 static void extract_json_str(const char *json, const char *key, char *out, size_t outsz)
 {
-    const char *p;
-    const char *end;
-    size_t len;
+    const char *p = NULL;
+    const char *end = NULL;
+    size_t len = 0;
 
     out[0] = '\0';
     p = (json != NULL) ? strstr(json, key) : NULL;
@@ -33,7 +35,7 @@ static void extract_json_str(const char *json, const char *key, char *out, size_
 static void seed_tagged(const char *db)
 {
     const char *args[] = {"add", "--tag", "a", "--tag", "b", "--source", "human", "original body"};
-    CmdResult r = run_remember(db, args, 8, NULL);
+    CmdResult r = run_remember(db, args, sizeof(args) / sizeof(args[0]), NULL);
     cmd_result_free(&r);
 }
 
@@ -46,11 +48,11 @@ TEST(update_text_only_keeps_tags)
     const char *gargs[] = {"get", "--json", "1"};
     ASSERT_TRUE(db != NULL);
     seed_tagged(db);
-    u = run_remember(db, uargs, 4, NULL);
+    u = run_remember(db, uargs, sizeof(uargs) / sizeof(uargs[0]), NULL);
     ASSERT_EQ_INT(u.exit_code, 0);
     ASSERT_EQ_INT(parse_id_stdout(u.out), 1);
     cmd_result_free(&u);
-    g = run_remember(db, gargs, 3, NULL);
+    g = run_remember(db, gargs, sizeof(gargs) / sizeof(gargs[0]), NULL);
     ASSERT_EQ_INT(g.exit_code, 0);
     ASSERT_STR_CONTAINS(g.out, "new body only");
     ASSERT_STR_CONTAINS(g.out, "a");
@@ -68,10 +70,10 @@ TEST(update_tags_only_keeps_body)
     const char *gargs[] = {"get", "--json", "1"};
     ASSERT_TRUE(db != NULL);
     seed_tagged(db);
-    u = run_remember(db, uargs, 4, NULL);
+    u = run_remember(db, uargs, sizeof(uargs) / sizeof(uargs[0]), NULL);
     ASSERT_EQ_INT(u.exit_code, 0);
     cmd_result_free(&u);
-    g = run_remember(db, gargs, 3, NULL);
+    g = run_remember(db, gargs, sizeof(gargs) / sizeof(gargs[0]), NULL);
     ASSERT_EQ_INT(g.exit_code, 0);
     ASSERT_STR_CONTAINS(g.out, "original body");
     ASSERT_STR_CONTAINS(g.out, "z");
@@ -89,10 +91,10 @@ TEST(update_clear_tags_flag)
     const char *gargs[] = {"get", "--json", "1"};
     ASSERT_TRUE(db != NULL);
     seed_tagged(db);
-    u = run_remember(db, uargs, 3, NULL);
+    u = run_remember(db, uargs, sizeof(uargs) / sizeof(uargs[0]), NULL);
     ASSERT_EQ_INT(u.exit_code, 0);
     cmd_result_free(&u);
-    g = run_remember(db, gargs, 3, NULL);
+    g = run_remember(db, gargs, sizeof(gargs) / sizeof(gargs[0]), NULL);
     ASSERT_EQ_INT(g.exit_code, 0);
     ASSERT_STR_CONTAINS(g.out, "original body");
     ASSERT_STR_CONTAINS(g.out, "\"tags\":[]");
@@ -107,7 +109,7 @@ TEST(update_tag_and_clear_tags_rejected)
     const char *uargs[] = {"update", "1", "--tag", "x", "--clear-tags"};
     ASSERT_TRUE(db != NULL);
     seed_tagged(db);
-    u = run_remember(db, uargs, 5, NULL);
+    u = run_remember(db, uargs, sizeof(uargs) / sizeof(uargs[0]), NULL);
     ASSERT_EQ_INT(u.exit_code, 1);
     cmd_result_free(&u);
     free(db);
@@ -121,7 +123,7 @@ TEST(update_same_text_still_succeeds_and_returns_entry)
     const char *uargs[] = {"update", "--json", "1", "--text", "original body"};
     ASSERT_TRUE(db != NULL);
     seed_tagged(db);
-    u = run_remember(db, uargs, 5, NULL);
+    u = run_remember(db, uargs, sizeof(uargs) / sizeof(uargs[0]), NULL);
     ASSERT_EQ_INT(u.exit_code, 0);
     ASSERT_STR_CONTAINS(u.out, "\"action\":\"updated\"");
     ASSERT_STR_CONTAINS(u.out, "\"entries\"");
@@ -139,10 +141,10 @@ TEST(update_text_and_tags_together)
     const char *gargs[] = {"get", "--json", "1"};
     ASSERT_TRUE(db != NULL);
     seed_tagged(db);
-    u = run_remember(db, uargs, 6, NULL);
+    u = run_remember(db, uargs, sizeof(uargs) / sizeof(uargs[0]), NULL);
     ASSERT_EQ_INT(u.exit_code, 0);
     cmd_result_free(&u);
-    g = run_remember(db, gargs, 3, NULL);
+    g = run_remember(db, gargs, sizeof(gargs) / sizeof(gargs[0]), NULL);
     ASSERT_EQ_INT(g.exit_code, 0);
     ASSERT_STR_CONTAINS(g.out, "both changed");
     ASSERT_STR_CONTAINS(g.out, "only");
@@ -158,7 +160,7 @@ TEST(update_no_change_rejected)
     const char *uargs[] = {"update", "1"};
     ASSERT_TRUE(db != NULL);
     seed_tagged(db);
-    u = run_remember(db, uargs, 2, NULL);
+    u = run_remember(db, uargs, sizeof(uargs) / sizeof(uargs[0]), NULL);
     ASSERT_EQ_INT(u.exit_code, 1);
     cmd_result_free(&u);
     free(db);
@@ -171,7 +173,7 @@ TEST(update_missing_id_exits_two)
     const char *uargs[] = {"update", "99", "--text", "nope"};
     ASSERT_TRUE(db != NULL);
     seed_tagged(db);
-    u = run_remember(db, uargs, 4, NULL);
+    u = run_remember(db, uargs, sizeof(uargs) / sizeof(uargs[0]), NULL);
     ASSERT_EQ_INT(u.exit_code, 2);
     cmd_result_free(&u);
     free(db);
@@ -186,11 +188,11 @@ TEST(update_body_hash_collision_rejected)
     const char *a2[] = {"add", "body two"};
     const char *uargs[] = {"update", "1", "--text", "body two"};
     ASSERT_TRUE(db != NULL);
-    r = run_remember(db, a1, 2, NULL);
+    r = run_remember(db, a1, sizeof(a1) / sizeof(a1[0]), NULL);
     cmd_result_free(&r);
-    r = run_remember(db, a2, 2, NULL);
+    r = run_remember(db, a2, sizeof(a2) / sizeof(a2[0]), NULL);
     cmd_result_free(&r);
-    u = run_remember(db, uargs, 4, NULL);
+    u = run_remember(db, uargs, sizeof(uargs) / sizeof(uargs[0]), NULL);
     ASSERT_EQ_INT(u.exit_code, 1);
     ASSERT_STR_CONTAINS(u.err, "2");
     cmd_result_free(&u);
@@ -204,7 +206,7 @@ TEST(update_empty_text_rejected)
     const char *uargs[] = {"update", "1", "--text", "   "};
     ASSERT_TRUE(db != NULL);
     seed_tagged(db);
-    u = run_remember(db, uargs, 4, NULL);
+    u = run_remember(db, uargs, sizeof(uargs) / sizeof(uargs[0]), NULL);
     ASSERT_EQ_INT(u.exit_code, 1);
     cmd_result_free(&u);
     free(db);
@@ -219,10 +221,10 @@ TEST(update_source_immutable)
     const char *gargs[] = {"get", "--json", "1"};
     ASSERT_TRUE(db != NULL);
     seed_tagged(db);
-    u = run_remember(db, uargs, 4, NULL);
+    u = run_remember(db, uargs, sizeof(uargs) / sizeof(uargs[0]), NULL);
     ASSERT_EQ_INT(u.exit_code, 0);
     cmd_result_free(&u);
-    g = run_remember(db, gargs, 3, NULL);
+    g = run_remember(db, gargs, sizeof(gargs) / sizeof(gargs[0]), NULL);
     ASSERT_EQ_INT(g.exit_code, 0);
     ASSERT_STR_CONTAINS(g.out, "\"source\":\"human\"");
     cmd_result_free(&g);
@@ -236,7 +238,7 @@ TEST(update_json_shape)
     const char *uargs[] = {"update", "--json", "1", "--text", "json update"};
     ASSERT_TRUE(db != NULL);
     seed_tagged(db);
-    u = run_remember(db, uargs, 5, NULL);
+    u = run_remember(db, uargs, sizeof(uargs) / sizeof(uargs[0]), NULL);
     ASSERT_EQ_INT(u.exit_code, 0);
     ASSERT_STR_CONTAINS(u.out, "\"version\":1");
     ASSERT_STR_CONTAINS(u.out, "\"action\":\"updated\"");
@@ -256,10 +258,10 @@ TEST(update_text_stdin_dash)
     const char *gargs[] = {"get", "--json", "1"};
     ASSERT_TRUE(db != NULL);
     seed_tagged(db);
-    u = run_remember(db, uargs, 4, "stdin update body");
+    u = run_remember(db, uargs, sizeof(uargs) / sizeof(uargs[0]), "stdin update body");
     ASSERT_EQ_INT(u.exit_code, 0);
     cmd_result_free(&u);
-    g = run_remember(db, gargs, 3, NULL);
+    g = run_remember(db, gargs, sizeof(gargs) / sizeof(gargs[0]), NULL);
     ASSERT_EQ_INT(g.exit_code, 0);
     ASSERT_STR_CONTAINS(g.out, "stdin update body");
     cmd_result_free(&g);
@@ -276,10 +278,10 @@ TEST(update_text_literal_dash_equals_form)
     const char *gargs[] = {"get", "--json", "1"};
     ASSERT_TRUE(db != NULL);
     seed_tagged(db);
-    u = run_remember(db, uargs, 3, NULL);
+    u = run_remember(db, uargs, sizeof(uargs) / sizeof(uargs[0]), NULL);
     ASSERT_EQ_INT(u.exit_code, 0);
     cmd_result_free(&u);
-    g = run_remember(db, gargs, 3, NULL);
+    g = run_remember(db, gargs, sizeof(gargs) / sizeof(gargs[0]), NULL);
     ASSERT_EQ_INT(g.exit_code, 0);
     ASSERT_STR_CONTAINS(g.out, "\"body\":\"-\"");
     cmd_result_free(&g);
@@ -296,10 +298,10 @@ TEST(update_positional_body_not_accepted)
     const char *gargs[] = {"get", "--json", "1"};
     ASSERT_TRUE(db != NULL);
     seed_tagged(db);
-    u = run_remember(db, uargs, 3, NULL);
+    u = run_remember(db, uargs, sizeof(uargs) / sizeof(uargs[0]), NULL);
     ASSERT_EQ_INT(u.exit_code, 1);
     cmd_result_free(&u);
-    g = run_remember(db, gargs, 3, NULL);
+    g = run_remember(db, gargs, sizeof(gargs) / sizeof(gargs[0]), NULL);
     ASSERT_EQ_INT(g.exit_code, 0);
     ASSERT_STR_CONTAINS(g.out, "original body");
     ASSERT_STR_CONTAINS(g.out, "a");
@@ -316,10 +318,10 @@ TEST(update_replace_tags_multiple)
     const char *gargs[] = {"get", "--json", "1"};
     ASSERT_TRUE(db != NULL);
     seed_tagged(db);
-    u = run_remember(db, uargs, 6, NULL);
+    u = run_remember(db, uargs, sizeof(uargs) / sizeof(uargs[0]), NULL);
     ASSERT_EQ_INT(u.exit_code, 0);
     cmd_result_free(&u);
-    g = run_remember(db, gargs, 3, NULL);
+    g = run_remember(db, gargs, sizeof(gargs) / sizeof(gargs[0]), NULL);
     ASSERT_EQ_INT(g.exit_code, 0);
     ASSERT_STR_CONTAINS(g.out, "one");
     ASSERT_STR_CONTAINS(g.out, "two");
@@ -340,14 +342,14 @@ TEST(update_replace_tags_keeps_shared_tag_on_other_entry)
     const char *uargs[] = {"update", "1", "--tag", "only"};
     const char *gargs[] = {"get", "--json", "2"};
     ASSERT_TRUE(db != NULL);
-    r = run_remember(db, a1, 6, NULL);
+    r = run_remember(db, a1, sizeof(a1) / sizeof(a1[0]), NULL);
     cmd_result_free(&r);
-    r = run_remember(db, a2, 6, NULL);
+    r = run_remember(db, a2, sizeof(a2) / sizeof(a2[0]), NULL);
     cmd_result_free(&r);
-    u = run_remember(db, uargs, 4, NULL);
+    u = run_remember(db, uargs, sizeof(uargs) / sizeof(uargs[0]), NULL);
     ASSERT_EQ_INT(u.exit_code, 0);
     cmd_result_free(&u);
-    g = run_remember(db, gargs, 3, NULL);
+    g = run_remember(db, gargs, sizeof(gargs) / sizeof(gargs[0]), NULL);
     ASSERT_EQ_INT(g.exit_code, 0);
     ASSERT_STR_CONTAINS(g.out, "shared");
     ASSERT_STR_CONTAINS(g.out, "y");
@@ -365,12 +367,12 @@ TEST(update_by_key_clear_tags)
     const char *uargs[] = {"update", "--key", "k", "--clear-tags"};
     const char *gargs[] = {"get", "--json", "--key", "k"};
     ASSERT_TRUE(db != NULL);
-    r = run_remember(db, a, 6, NULL);
+    r = run_remember(db, a, sizeof(a) / sizeof(a[0]), NULL);
     cmd_result_free(&r);
-    u = run_remember(db, uargs, 4, NULL);
+    u = run_remember(db, uargs, sizeof(uargs) / sizeof(uargs[0]), NULL);
     ASSERT_EQ_INT(u.exit_code, 0);
     cmd_result_free(&u);
-    g = run_remember(db, gargs, 4, NULL);
+    g = run_remember(db, gargs, sizeof(gargs) / sizeof(gargs[0]), NULL);
     ASSERT_EQ_INT(g.exit_code, 0);
     ASSERT_STR_CONTAINS(g.out, "\"tags\":[]");
     cmd_result_free(&g);
@@ -389,16 +391,16 @@ TEST(fts_reflects_tag_update)
     const char *sold[] = {"search", "--json", "oldtagxyz"};
     const char *snew[] = {"search", "--json", "newtagabc"};
     ASSERT_TRUE(db != NULL);
-    r = run_remember(db, a, 4, NULL);
+    r = run_remember(db, a, sizeof(a) / sizeof(a[0]), NULL);
     cmd_result_free(&r);
-    u = run_remember(db, uargs, 4, NULL);
+    u = run_remember(db, uargs, sizeof(uargs) / sizeof(uargs[0]), NULL);
     ASSERT_EQ_INT(u.exit_code, 0);
     cmd_result_free(&u);
-    s = run_remember(db, sold, 3, NULL);
+    s = run_remember(db, sold, sizeof(sold) / sizeof(sold[0]), NULL);
     ASSERT_EQ_INT(s.exit_code, 0);
     ASSERT_STR_CONTAINS(s.out, "\"total\":0");
     cmd_result_free(&s);
-    s = run_remember(db, snew, 3, NULL);
+    s = run_remember(db, snew, sizeof(snew) / sizeof(snew[0]), NULL);
     ASSERT_EQ_INT(s.exit_code, 0);
     ASSERT_STR_CONTAINS(s.out, "plain body");
     cmd_result_free(&s);
@@ -417,17 +419,17 @@ TEST(update_moves_entry_to_top_of_list)
     const char *a2[] = {"add", "second"};
     const char *uargs[] = {"update", "1", "--text", "first edited"};
     const char *largs[] = {"list", "--json"};
-    const char *p1;
-    const char *p2;
+    const char *p1 = NULL;
+    const char *p2 = NULL;
     ASSERT_TRUE(db != NULL);
-    r = run_remember(db, a1, 2, NULL);
+    r = run_remember(db, a1, sizeof(a1) / sizeof(a1[0]), NULL);
     cmd_result_free(&r);
-    r = run_remember(db, a2, 2, NULL);
+    r = run_remember(db, a2, sizeof(a2) / sizeof(a2[0]), NULL);
     cmd_result_free(&r);
-    u = run_remember(db, uargs, 4, NULL);
+    u = run_remember(db, uargs, sizeof(uargs) / sizeof(uargs[0]), NULL);
     ASSERT_EQ_INT(u.exit_code, 0);
     cmd_result_free(&u);
-    l = run_remember(db, largs, 2, NULL);
+    l = run_remember(db, largs, sizeof(largs) / sizeof(largs[0]), NULL);
     ASSERT_EQ_INT(l.exit_code, 0);
     p1 = (l.out != NULL) ? strstr(l.out, "\"id\":1") : NULL;
     p2 = (l.out != NULL) ? strstr(l.out, "\"id\":2") : NULL;
@@ -445,17 +447,17 @@ TEST(update_bumps_updated_at)
     char *db = make_temp_db_path();
     CmdResult r;
     CmdResult u;
-    char before[32];
-    char after[32];
+    char before[TS_BUFSIZE];
+    char after[TS_BUFSIZE];
     const char *a[] = {"add", "--json", "orig body"};
     const char *uargs[] = {"update", "--json", "1", "--text", "changed body"};
     ASSERT_TRUE(db != NULL);
-    r = run_remember(db, a, 3, NULL);
+    r = run_remember(db, a, sizeof(a) / sizeof(a[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 0);
     extract_json_str(r.out, "\"updated_at\":\"", before, sizeof(before));
     cmd_result_free(&r);
     ASSERT_TRUE(before[0] != '\0');
-    u = run_remember(db, uargs, 5, NULL);
+    u = run_remember(db, uargs, sizeof(uargs) / sizeof(uargs[0]), NULL);
     ASSERT_EQ_INT(u.exit_code, 0);
     extract_json_str(u.out, "\"updated_at\":\"", after, sizeof(after));
     ASSERT_TRUE(after[0] != '\0');

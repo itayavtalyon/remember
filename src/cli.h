@@ -35,6 +35,8 @@ typedef enum {
 typedef struct {
     const char *db_path; /* NULL if omitted; aliases argv */
     bool json;
+    /* NOLINTNEXTLINE(readability-magic-numbers,cppcoreguidelines-avoid-magic-numbers) */
+    char pad_[7]; /* explicit tail padding to keep the struct -Wpadded-clean */
 } CliGlobals;
 
 /*
@@ -43,14 +45,8 @@ typedef struct {
  * for messaging; command may still be set for context (e.g. help target).
  */
 typedef struct {
-    CliError error;
     const char *error_arg;    /* unknown command/option token, if any */
     const char *error_option; /* option name missing a value, e.g. "--db" */
-
-    CliCommand command;
-    CliCommand help_topic; /* when command==HELP: NONE = general, else topic */
-    CliGlobals globals;
-
     /*
      * The subcommand's own arguments: every token after the subcommand name
      * with globals (--db/--json) and meta flags (--help/--version) already
@@ -60,8 +56,14 @@ typedef struct {
      * The array is heap-owned — release with cli_args_free(). Its elements
      * alias argv and must not be freed individually.
      */
-    int rest_argc;
     const char **rest_argv;
+    CliGlobals globals;
+
+    /* 4-byte fields grouped last so the struct carries no padding. */
+    CliError error;
+    CliCommand command;
+    CliCommand help_topic; /* when command==HELP: NONE = general, else topic */
+    int rest_argc;
 } CliArgs;
 
 /* Fills *out (allocates out->rest_argv). Never returns a status — inspect out->error. */

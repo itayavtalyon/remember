@@ -22,7 +22,14 @@ FILE *app_out(void);
 /* Current error stream (never NULL — falls back to stderr). */
 FILE *app_err(void);
 
-/* Swap the streams. NULL restores the stdout/stderr default. */
-void app_set_streams(FILE *out, FILE *err);
+/* Output/error stream pair. Passed by value so callers name each end and cannot
+   transpose the two FILE* arguments. */
+typedef struct {
+    FILE *out;
+    FILE *err;
+} AppStreams;
+
+/* Swap the streams. NULL fields restore the stdout/stderr default. */
+void app_set_streams(AppStreams streams);
 
 #endif /* REMEMBER_APPIO_H */

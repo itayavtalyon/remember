@@ -57,6 +57,37 @@ add_compile_options(
     -fno-omit-frame-pointer
 )
 
+# --- Layer A+: clang -Weverything (exhaustive second warning pass) ----------
+# Enable every clang warning, then subtract only the families that are
+# structurally inapplicable to a portable C11 CLI (no meaningful code fix); every
+# other -Weverything finding was fixed in the sources. gcc is covered separately
+# by the -fanalyzer lint gate. Guarded to Clang: gcc rejects -Weverything.
+if(CMAKE_C_COMPILER_ID MATCHES "Clang")
+    add_compile_options(
+        -Weverything
+        # The -Wno- list below is version-sensitive: some warnings it names only
+        # exist in newer clang (e.g. -Wnrvo, -Wpre-c11-compat land ~clang 21),
+        # and -Weverything itself keeps growing. Recent clang silently tolerates an
+        # unknown -Wno-<name>, but clang <=18 promotes it to a hard error under
+        # -Werror. Tolerate unknown warning options so one suppression list works
+        # across every clang version (macOS clang 22, Linux CI clang 18, ...):
+        -Wno-unknown-warning-option
+        # C++/std::span-oriented; C has no bounds-checked pointer form (and the
+        # Annex K _s functions are unavailable on macOS/glibc/musl):
+        -Wno-unsafe-buffer-usage
+        # We keep a defensive `default:` on exhaustive switches (fail-fast) and it
+        # preserves the same-line-return trick under the 100% line-coverage gate:
+        -Wno-covered-switch-default
+        # An optimization hint ("named return value not elided"), not a defect,
+        # and not reliably satisfiable in C for structs built across error paths:
+        -Wno-nrvo
+        # We target C11; _Noreturn and other C11 features are intentional:
+        -Wno-pre-c11-compat
+        # Cross-compilation hygiene check; fires on -isysroot for a native build:
+        -Wno-poison-system-directories
+    )
+endif()
+
 # -Wcast-qual on production TUs only. Tests build execv argv from const string
 # tables (POSIX API is char *const[]); keeping -Wcast-qual there is pure noise.
 set_property(SOURCE
@@ -136,7 +167,7 @@ endfunction()
 
 # --- SQLite amalgamation (sole SQLite TU; relaxed warnings) ------------------
 add_library(sqlite3 STATIC third_party/sqlite/sqlite3.c)
-target_include_directories(sqlite3 PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/third_party/sqlite)
+target_include_directories(sqlite3 SYSTEM PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/third_party/sqlite)
 # Compile options: SQLite recommended set tailored to a single-threaded CLI.
 # See https://www.sqlite.org/compile.html — and docs/engineering-notes.md.
 target_compile_definitions(sqlite3 PUBLIC
@@ -166,7 +197,7 @@ endif()
 
 # --- SHA-256 (public-domain; sole digest TU; relaxed warnings) --------------
 add_library(sha256 STATIC third_party/sha256/sha256.c)
-target_include_directories(sha256 PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/third_party/sha256)
+target_include_directories(sha256 SYSTEM PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/third_party/sha256)
 target_compile_options(sha256 PRIVATE -w)
 
 # Shared app sources (compiled per-target so the fork/exec harness parent can
@@ -265,6 +296,10 @@ target_compile_definitions(remember_tests PRIVATE
 remember_apply_posix_feature_macros(remember_tests)
 remember_apply_coverage(remember_tests)
 remember_apply_test_hooks(remember_tests)
+# Tests build execv/remember_run argv from const string tables (POSIX API is
+# char *const[]); -Weverything's -Wcast-qual there is pure noise (see the src-only
+# -Wcast-qual property above). Keep it off for the test targets only.
+target_compile_options(remember_tests PRIVATE -Wno-cast-qual)
 add_dependencies(remember_tests remember)
 
 # --- in-process unit tests under ASan/UBSan (no fork/exec) — leak/corruption
@@ -294,6 +329,11 @@ set_property(SOURCE third_party/sha256/sha256.c
     APPEND PROPERTY COMPILE_OPTIONS -w
 )
 target_link_libraries(remember_store_tests PRIVATE sqlite3)
+# Vendored sha256 header included directly here: treat as system so -Weverything
+# does not flag upstream header style. And exempt the argv const-casts as above.
+target_include_directories(remember_store_tests SYSTEM PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/third_party/sha256)
+target_compile_options(remember_store_tests PRIVATE -Wno-cast-qual)
 remember_apply_posix_feature_macros(remember_store_tests)
 remember_apply_sanitizers(remember_store_tests)
 remember_apply_coverage(remember_store_tests)

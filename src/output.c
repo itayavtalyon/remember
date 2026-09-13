@@ -5,6 +5,18 @@
 #include <stdio.h>
 #include <string.h>
 
+/* ASCII / UTF-8 byte constants (see also normalize.c). Unsigned to keep the
+   mask arithmetic unsigned. */
+static const unsigned ASCII_FIRST_PRINTABLE = 0x20U; /* first non-control byte */
+static const unsigned ASCII_DEL = 0x7FU;             /* DEL control */
+static const unsigned UTF8_HIGH_BIT = 0x80U;         /* set => multibyte lead/continuation */
+static const unsigned UTF8_LEAD2_MASK = 0xE0U;
+static const unsigned UTF8_LEAD2_TAG = 0xC0U;
+static const unsigned UTF8_LEAD3_MASK = 0xF0U;
+static const unsigned UTF8_LEAD3_TAG = 0xE0U;
+static const unsigned UTF8_LEAD4_MASK = 0xF8U;
+static const unsigned UTF8_LEAD4_TAG = 0xF0U;
+
 static const char *empty_str(void)
 {
     static const char e[] = "";
@@ -29,16 +41,17 @@ static int write_json_escape(FILE *out, unsigned char c)
     case '\t':
         return fputs("\\t", out);
     default:
-        if (c < 0x20U) {
+        if (c < ASCII_FIRST_PRINTABLE) {
             return fprintf(out, "\\u%04x", (unsigned)c);
         }
         return fputc((int)c, out);
     }
 }
 
+/* cppcheck-suppress staticFunction ; public API (output.h); used by tests */
 int output_json_string(FILE *out, const char *s)
 {
-    const unsigned char *p;
+    const unsigned char *p = NULL;
 
     if (out == NULL) {
         return -1;
@@ -60,17 +73,23 @@ int output_json_string(FILE *out, const char *s)
     return 0;
 }
 
-static int write_json_field_str(FILE *out, const char *name, const char *value)
+/* One JSON object field: its name and string value (NULL renders as ""). */
+typedef struct {
+    const char *name;
+    const char *value;
+} JsonField;
+
+static int write_json_field_str(FILE *out, JsonField field)
 {
-    if (fprintf(out, ",\"%s\":", name) < 0) {
+    if (fprintf(out, ",\"%s\":", field.name) < 0) {
         return -1;
     }
-    return output_json_string(out, value != NULL ? value : empty_str());
+    return output_json_string(out, field.value != NULL ? field.value : empty_str());
 }
 
 static int write_entry_core(FILE *out, const Entry *e)
 {
-    size_t i;
+    size_t i = 0;
 
     if (fprintf(out, "{\"id\":%lld,\"key\":", e->id) < 0) {
         return -1;
@@ -82,7 +101,7 @@ static int write_entry_core(FILE *out, const Entry *e)
     } else if (output_json_string(out, e->key) != 0) {
         return -1;
     }
-    if (write_json_field_str(out, "body", e->body) != 0) {
+    if (write_json_field_str(out, (JsonField){.name = "body", .value = e->body}) != 0) {
         return -1;
     }
     if (fputs(",\"tags\":[", out) < 0) {
@@ -99,25 +118,29 @@ static int write_entry_core(FILE *out, const Entry *e)
     if (fputs("]", out) < 0) {
         return -1;
     }
-    if (write_json_field_str(out, "source", e->source != NULL ? e->source : "unknown") != 0) {
+    if (write_json_field_str(
+            out, (JsonField){.name = "source",
+                             .value = e->source != NULL ? e->source : "unknown"}) != 0) {
         return -1;
     }
-    if (write_json_field_str(out, "created_at", e->created_at) != 0) {
+    if (write_json_field_str(out, (JsonField){.name = "created_at", .value = e->created_at}) != 0) {
         return -1;
     }
-    if (write_json_field_str(out, "updated_at", e->updated_at) != 0) {
+    if (write_json_field_str(out, (JsonField){.name = "updated_at", .value = e->updated_at}) != 0) {
         return -1;
     }
     if (e->expires_at == NULL) {
         if (fputs(",\"expires_at\":null", out) < 0) {
             return -1;
         }
-    } else if (write_json_field_str(out, "expires_at", e->expires_at) != 0) {
+    } else if (write_json_field_str(
+                   out, (JsonField){.name = "expires_at", .value = e->expires_at}) != 0) {
         return -1;
     }
     return 0;
 }
 
+/* cppcheck-suppress staticFunction ; public API (output.h); used by tests */
 int output_entry_json(FILE *out, const Entry *e)
 {
     if (out == NULL || e == NULL) {
@@ -160,7 +183,7 @@ int output_action_envelope(FILE *out, const char *action, const Entry *e)
 
 int output_deleted_list(FILE *out, const Entry *entries, size_t count)
 {
-    size_t i;
+    size_t i = 0;
 
     if (out == NULL) {
         return -1;
@@ -211,7 +234,7 @@ int output_list_envelope(FILE *out, size_t offset, size_t limit, size_t count, s
                          const Entry *entries, const StoreNeighbor *links, size_t nlinks,
                          const char *now)
 {
-    size_t i;
+    size_t i = 0;
 
     if (out == NULL || now == NULL) {
         return -1;
@@ -260,7 +283,7 @@ static int is_terminal_ctrl(unsigned char c)
     if (c == (unsigned char)'\n' || c == (unsigned char)'\t') {
         return 0;
     }
-    return c < 0x20U || c == 0x7FU;
+    return c < ASCII_FIRST_PRINTABLE || c == ASCII_DEL;
 }
 
 int output_body_human(FILE *out, const char *body)
@@ -269,7 +292,7 @@ int output_body_human(FILE *out, const char *body)
         return -1;
     }
     if (body != NULL) {
-        const unsigned char *p;
+        const unsigned char *p = NULL;
         for (p = (const unsigned char *)body; *p != '\0'; p++) {
             int ch = is_terminal_ctrl(*p) ? '?' : (int)*p;
             if (fputc(ch, out) == EOF) {
@@ -285,16 +308,16 @@ int output_body_human(FILE *out, const char *body)
 
 static size_t utf8_clen(unsigned char c)
 {
-    if ((c & 0x80U) == 0U) {
+    if ((c & UTF8_HIGH_BIT) == 0U) {
         return 1U;
     }
-    if ((c & 0xE0U) == 0xC0U) {
+    if ((c & UTF8_LEAD2_MASK) == UTF8_LEAD2_TAG) {
         return 2U;
     }
-    if ((c & 0xF0U) == 0xE0U) {
+    if ((c & UTF8_LEAD3_MASK) == UTF8_LEAD3_TAG) {
         return 3U;
     }
-    if ((c & 0xF8U) == 0xF0U) {
+    if ((c & UTF8_LEAD4_MASK) == UTF8_LEAD4_TAG) {
         return 4U;
     }
     return 1U;
@@ -306,7 +329,7 @@ static size_t utf8_clen(unsigned char c)
 static size_t utf8_clen_bounded(const char *body, size_t i)
 {
     size_t clen = utf8_clen((unsigned char)body[i]);
-    size_t k;
+    size_t k = 0;
 
     for (k = 1U; k < clen; k++) {
         if (body[i + k] == '\0') {
@@ -331,7 +354,7 @@ static void write_preview(FILE *out, const char *body)
 
 int output_tags_envelope(FILE *out, const TagCount *tags, size_t count)
 {
-    size_t i;
+    size_t i = 0;
 
     if (out == NULL) {
         return -1;
@@ -364,7 +387,7 @@ int output_tags_envelope(FILE *out, const TagCount *tags, size_t count)
 
 int output_tags_human(FILE *out, const TagCount *tags, size_t count)
 {
-    size_t i;
+    size_t i = 0;
 
     if (out == NULL) {
         return -1;
@@ -390,7 +413,7 @@ static int write_related_ids_cell(FILE *out, long long subject_id, const StoreNe
 int output_entry_human_line(FILE *out, const Entry *e, const StoreNeighbor *links, size_t nlinks,
                             const char *now)
 {
-    size_t i;
+    size_t i = 0;
 
     if (out == NULL || e == NULL) {
         return -1;
@@ -478,10 +501,10 @@ static void fill_preview(char *dst, size_t dst_cap, const char *body, size_t max
             truncated = 1;
             break;
         }
-        if (c < 0x20U || c == 0x7FU) {
+        if (c < ASCII_FIRST_PRINTABLE || c == ASCII_DEL) {
             dst[o++] = '?';
         } else {
-            size_t k;
+            size_t k = 0;
             for (k = 0; k < clen && body[i + k] != '\0'; k++) {
                 dst[o++] = body[i + k];
             }
@@ -503,7 +526,7 @@ static void fill_preview(char *dst, size_t dst_cap, const char *body, size_t max
 static int write_stub_json(FILE *out, const StoreNeighbor *n, const char *now)
 {
     char preview[PREVIEW_BUF];
-    int trash;
+    int trash = 0;
 
     if (n == NULL) {
         return -1;
@@ -541,7 +564,7 @@ static int write_stub_json(FILE *out, const StoreNeighbor *n, const char *now)
 static int write_links_json_field(FILE *out, long long subject_id, const StoreNeighbor *links,
                                   size_t nlinks, const char *now)
 {
-    size_t i;
+    size_t i = 0;
     int first = 1;
 
     if (fputs(",\"links\":[", out) < 0) {
@@ -583,7 +606,7 @@ static int write_entry_with_links(FILE *out, const Entry *e, const StoreNeighbor
 static int write_related_ids_cell(FILE *out, long long subject_id, const StoreNeighbor *links,
                                   size_t nlinks, const char *now)
 {
-    size_t i;
+    size_t i = 0;
     size_t shown = 0U;
     size_t total = 0U;
 
@@ -624,7 +647,7 @@ static int write_related_ids_cell(FILE *out, long long subject_id, const StoreNe
 int output_links_write_envelope(FILE *out, const char *action, const StoreNeighbor *links,
                                 size_t count, const char *now)
 {
-    size_t i;
+    size_t i = 0;
 
     if (out == NULL || action == NULL || now == NULL) {
         return -1;
@@ -658,7 +681,7 @@ int output_links_write_envelope(FILE *out, const char *action, const StoreNeighb
 int output_related_envelope(FILE *out, long long id, const char *key, const StoreNeighbor *links,
                             size_t count, const char *now)
 {
-    size_t i;
+    size_t i = 0;
 
     if (out == NULL || now == NULL) {
         return -1;
@@ -695,7 +718,7 @@ int output_related_envelope(FILE *out, long long id, const char *key, const Stor
 
 int output_related_human(FILE *out, const StoreNeighbor *links, size_t count, const char *now)
 {
-    size_t i;
+    size_t i = 0;
     char preview[PREVIEW_BUF];
 
     if (out == NULL || now == NULL) {

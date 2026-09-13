@@ -74,7 +74,7 @@ static char *dup_home_or_null(void)
         return NULL;
     }
     n = strlen(h);
-    saved = malloc(n + 1U);
+    saved = (char *)malloc(n + 1U);
     if (saved == NULL) {
         return NULL;
     }
@@ -214,7 +214,7 @@ TEST(output_json_escapes_controls)
     n = ftell(f);
     ASSERT_TRUE(n > 0);
     ASSERT_EQ_INT(fseek(f, 0, SEEK_SET), 0);
-    got = malloc((size_t)n + 1U);
+    got = (char *)malloc((size_t)n + 1U);
     ASSERT_TRUE(got != NULL);
     if (got == NULL) {
         (void)fclose(f);
@@ -272,6 +272,8 @@ TEST(output_null_entry_fails)
     ASSERT_EQ_INT(output_get_envelope(f, NULL, NULL, 0, "t"), -1);
     ASSERT_EQ_INT(output_entry_human_line(f, NULL, NULL, 0, "t"), -1);
     ASSERT_EQ_INT(output_list_envelope(f, 0, 1, 1, 1, NULL, NULL, 0, "t"), -1);
+    // cppcheck-suppress nullPointerOutOfResources ; test-only: tmpfile()/malloc exhaustion is
+    // asserted above, not defended
     fclose(f);
 }
 
@@ -280,6 +282,8 @@ TEST(output_list_empty_ok)
     FILE *f = tmpfile();
     ASSERT_TRUE(f != NULL);
     ASSERT_EQ_INT(output_list_envelope(f, 0, 20, 0, 0, NULL, NULL, 0, "t"), 0);
+    // cppcheck-suppress nullPointerOutOfResources ; test-only: tmpfile()/malloc exhaustion is
+    // asserted above, not defended
     fclose(f);
 }
 
@@ -304,6 +308,8 @@ TEST(output_preview_multibyte_and_truncate)
     body[200] = '\0';
     e.body = body;
     ASSERT_EQ_INT(output_entry_human_line(f, &e, NULL, 0, "t"), 0);
+    // cppcheck-suppress nullPointerOutOfResources ; test-only: tmpfile()/malloc exhaustion is
+    // asserted above, not defended
     fclose(f);
 }
 
@@ -373,7 +379,7 @@ TEST(search_empty_query_stderr)
     const char *args[] = {"search", ""};
     CmdResult r;
     ASSERT_TRUE(db != NULL);
-    r = run_remember(db, args, 2, NULL);
+    r = run_remember(db, args, sizeof(args) / sizeof(args[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 1);
     ASSERT_STR_CONTAINS(r.err, "empty search query");
     cmd_result_free(&r);
@@ -386,7 +392,7 @@ TEST(help_update_topic)
     const char *args[] = {"help", "update"};
     CmdResult r;
     ASSERT_TRUE(db != NULL);
-    r = run_remember(db, args, 2, NULL);
+    r = run_remember(db, args, sizeof(args) / sizeof(args[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 0);
     ASSERT_STR_CONTAINS(r.out, "--text");
     ASSERT_STR_CONTAINS(r.out, "--clear-tags");
@@ -402,9 +408,9 @@ TEST(update_missing_text_value_rejected)
     CmdResult r;
     CmdResult u;
     ASSERT_TRUE(db != NULL);
-    r = run_remember(db, a, 2, NULL);
+    r = run_remember(db, a, sizeof(a) / sizeof(a[0]), NULL);
     cmd_result_free(&r);
-    u = run_remember(db, uargs, 3, NULL);
+    u = run_remember(db, uargs, sizeof(uargs) / sizeof(uargs[0]), NULL);
     ASSERT_EQ_INT(u.exit_code, 1);
     cmd_result_free(&u);
     free(db);
@@ -418,9 +424,9 @@ TEST(update_invalid_id_token_rejected)
     CmdResult r;
     CmdResult u;
     ASSERT_TRUE(db != NULL);
-    r = run_remember(db, a, 2, NULL);
+    r = run_remember(db, a, sizeof(a) / sizeof(a[0]), NULL);
     cmd_result_free(&r);
-    u = run_remember(db, uargs, 4, NULL);
+    u = run_remember(db, uargs, sizeof(uargs) / sizeof(uargs[0]), NULL);
     ASSERT_EQ_INT(u.exit_code, 1);
     cmd_result_free(&u);
     free(db);
@@ -435,19 +441,19 @@ TEST(help_get_list_delete_topics)
     const char *hd[] = {"help", "delete"};
     const char *hget[] = {"get", "--help"};
     ASSERT_TRUE(db != NULL);
-    r = run_remember(db, hg, 2, NULL);
+    r = run_remember(db, hg, sizeof(hg) / sizeof(hg[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 0);
     ASSERT_STR_CONTAINS(r.out, "--key");
     cmd_result_free(&r);
-    r = run_remember(db, hl, 2, NULL);
+    r = run_remember(db, hl, sizeof(hl) / sizeof(hl[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 0);
     ASSERT_STR_CONTAINS(r.out, "--limit");
     cmd_result_free(&r);
-    r = run_remember(db, hd, 2, NULL);
+    r = run_remember(db, hd, sizeof(hd) / sizeof(hd[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 0);
     ASSERT_STR_CONTAINS(r.out, "--key");
     cmd_result_free(&r);
-    r = run_remember(db, hget, 2, NULL);
+    r = run_remember(db, hget, sizeof(hget) / sizeof(hget[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 0);
     cmd_result_free(&r);
     free(db);
@@ -459,7 +465,7 @@ TEST(add_json_body_with_all_json_escapes)
     const char *args[] = {"add", "--json", "line\b\f\r\t\"\\ok"};
     CmdResult r;
     ASSERT_TRUE(db != NULL);
-    r = run_remember(db, args, 3, NULL);
+    r = run_remember(db, args, sizeof(args) / sizeof(args[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 0);
     ASSERT_STR_CONTAINS(r.out, "\\b");
     ASSERT_STR_CONTAINS(r.out, "\\f");
@@ -475,7 +481,7 @@ TEST(list_invalid_source_rejected)
     const char *args[] = {"list", "--source", "nope"};
     CmdResult r;
     ASSERT_TRUE(db != NULL);
-    r = run_remember(db, args, 3, NULL);
+    r = run_remember(db, args, sizeof(args) / sizeof(args[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 1);
     ASSERT_STR_CONTAINS(r.err, "invalid source");
     cmd_result_free(&r);
@@ -492,19 +498,19 @@ TEST(list_missing_option_values)
     const char *a4[] = {"list", "--key"};
     const char *a5[] = {"list", "--source"};
     ASSERT_TRUE(db != NULL);
-    r = run_remember(db, a1, 2, NULL);
+    r = run_remember(db, a1, sizeof(a1) / sizeof(a1[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 1);
     cmd_result_free(&r);
-    r = run_remember(db, a2, 2, NULL);
+    r = run_remember(db, a2, sizeof(a2) / sizeof(a2[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 1);
     cmd_result_free(&r);
-    r = run_remember(db, a3, 2, NULL);
+    r = run_remember(db, a3, sizeof(a3) / sizeof(a3[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 1);
     cmd_result_free(&r);
-    r = run_remember(db, a4, 2, NULL);
+    r = run_remember(db, a4, sizeof(a4) / sizeof(a4[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 1);
     cmd_result_free(&r);
-    r = run_remember(db, a5, 2, NULL);
+    r = run_remember(db, a5, sizeof(a5) / sizeof(a5[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 1);
     cmd_result_free(&r);
     free(db);
@@ -518,13 +524,13 @@ TEST(list_unknown_option_and_positional)
     const char *a2[] = {"list", "positional"};
     const char *a3[] = {"list", "--", "x"};
     ASSERT_TRUE(db != NULL);
-    r = run_remember(db, a1, 2, NULL);
+    r = run_remember(db, a1, sizeof(a1) / sizeof(a1[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 1);
     cmd_result_free(&r);
-    r = run_remember(db, a2, 2, NULL);
+    r = run_remember(db, a2, sizeof(a2) / sizeof(a2[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 1);
     cmd_result_free(&r);
-    r = run_remember(db, a3, 3, NULL);
+    r = run_remember(db, a3, sizeof(a3) / sizeof(a3[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 1);
     cmd_result_free(&r);
     free(db);
@@ -538,13 +544,13 @@ TEST(get_key_missing_value_and_unknown_opt)
     const char *a2[] = {"get", "--nope"};
     const char *a3[] = {"get", "1", "2"};
     ASSERT_TRUE(db != NULL);
-    r = run_remember(db, a1, 2, NULL);
+    r = run_remember(db, a1, sizeof(a1) / sizeof(a1[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 1);
     cmd_result_free(&r);
-    r = run_remember(db, a2, 2, NULL);
+    r = run_remember(db, a2, sizeof(a2) / sizeof(a2[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 1);
     cmd_result_free(&r);
-    r = run_remember(db, a3, 3, NULL);
+    r = run_remember(db, a3, sizeof(a3) / sizeof(a3[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 1);
     cmd_result_free(&r);
     free(db);
@@ -559,16 +565,16 @@ TEST(add_too_many_args_and_unknown_opt)
     const char *a3[] = {"add", "--tag"};
     const char *a4[] = {"add", "--", "body ok"};
     ASSERT_TRUE(db != NULL);
-    r = run_remember(db, a1, 3, NULL);
+    r = run_remember(db, a1, sizeof(a1) / sizeof(a1[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 1);
     cmd_result_free(&r);
-    r = run_remember(db, a2, 3, NULL);
+    r = run_remember(db, a2, sizeof(a2) / sizeof(a2[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 1);
     cmd_result_free(&r);
-    r = run_remember(db, a3, 2, NULL);
+    r = run_remember(db, a3, sizeof(a3) / sizeof(a3[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 1);
     cmd_result_free(&r);
-    r = run_remember(db, a4, 3, NULL);
+    r = run_remember(db, a4, sizeof(a4) / sizeof(a4[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 0);
     cmd_result_free(&r);
     free(db);
@@ -582,13 +588,13 @@ TEST(list_invalid_limit_and_offset_tokens)
     const char *a2[] = {"list", "--offset", "x"};
     const char *a3[] = {"list", "--limit", "1001"};
     ASSERT_TRUE(db != NULL);
-    r = run_remember(db, a1, 3, NULL);
+    r = run_remember(db, a1, sizeof(a1) / sizeof(a1[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 1);
     cmd_result_free(&r);
-    r = run_remember(db, a2, 3, NULL);
+    r = run_remember(db, a2, sizeof(a2) / sizeof(a2[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 1);
     cmd_result_free(&r);
-    r = run_remember(db, a3, 3, NULL);
+    r = run_remember(db, a3, sizeof(a3) / sizeof(a3[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 1);
     cmd_result_free(&r);
     free(db);
@@ -600,7 +606,7 @@ TEST(get_invalid_key_token)
     const char *args[] = {"get", "--key", "bad\tkey"};
     CmdResult r;
     ASSERT_TRUE(db != NULL);
-    r = run_remember(db, args, 3, NULL);
+    r = run_remember(db, args, sizeof(args) / sizeof(args[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 1);
     cmd_result_free(&r);
     free(db);
@@ -612,7 +618,7 @@ TEST(delete_missing_locator)
     const char *args[] = {"delete"};
     CmdResult r;
     ASSERT_TRUE(db != NULL);
-    r = run_remember(db, args, 1, NULL);
+    r = run_remember(db, args, sizeof(args) / sizeof(args[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 1);
     cmd_result_free(&r);
     free(db);
@@ -682,6 +688,8 @@ TEST(output_utf8_3_and_4_byte_preview)
     e.body = bad;
     ASSERT_EQ_INT(output_entry_human_line(f, &e, NULL, 0, "t"), 0);
     free(e.tags);
+    // cppcheck-suppress nullPointerOutOfResources ; test-only: tmpfile()/malloc exhaustion is
+    // asserted above, not defended
     fclose(f);
 }
 
@@ -690,6 +698,8 @@ TEST(output_body_null_human)
     FILE *f = tmpfile();
     ASSERT_TRUE(f != NULL);
     ASSERT_EQ_INT(output_body_human(f, NULL), 0);
+    // cppcheck-suppress nullPointerOutOfResources ; test-only: tmpfile()/malloc exhaustion is
+    // asserted above, not defended
     fclose(f);
 }
 
@@ -707,6 +717,8 @@ TEST(util_read_stdin_empty)
     ASSERT_EQ_INT((int)len, 0);
     free(out);
     stdin = old;
+    // cppcheck-suppress nullPointerOutOfResources ; test-only: tmpfile()/malloc exhaustion is
+    // asserted above, not defended
     fclose(empty);
 }
 
@@ -719,6 +731,8 @@ TEST(util_read_stdin_over_cap)
     int i;
     ASSERT_TRUE(in != NULL);
     for (i = 0; i < 20; i++) {
+        // cppcheck-suppress nullPointerOutOfResources ; test-only: tmpfile()/malloc exhaustion is
+        // asserted above, not defended
         ASSERT_TRUE(fputc('x', in) != EOF);
     }
     rewind(in);
@@ -736,7 +750,7 @@ TEST(add_invalid_utf8_key_message)
     const char *args[] = {"add", "--key", key, "body"};
     CmdResult r;
     ASSERT_TRUE(db != NULL);
-    r = run_remember(db, args, 4, NULL);
+    r = run_remember(db, args, sizeof(args) / sizeof(args[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 1);
     ASSERT_STR_CONTAINS(r.err, "key");
     cmd_result_free(&r);
@@ -749,7 +763,7 @@ TEST(list_invalid_tag_message)
     const char *args[] = {"list", "--tag", "bad\ttag"};
     CmdResult r;
     ASSERT_TRUE(db != NULL);
-    r = run_remember(db, args, 3, NULL);
+    r = run_remember(db, args, sizeof(args) / sizeof(args[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 1);
     cmd_result_free(&r);
     free(db);
@@ -762,7 +776,7 @@ TEST(add_second_tag_invalid_frees_first)
     const char *args[] = {"add", "--tag", "good", "--tag", "bad\ttag", "body"};
     CmdResult r;
     ASSERT_TRUE(db != NULL);
-    r = run_remember(db, args, 6, NULL);
+    r = run_remember(db, args, sizeof(args) / sizeof(args[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 1);
     cmd_result_free(&r);
     free(db);
@@ -774,7 +788,7 @@ TEST(list_end_opts_then_junk)
     const char *args[] = {"list", "--", "junk"};
     CmdResult r;
     ASSERT_TRUE(db != NULL);
-    r = run_remember(db, args, 3, NULL);
+    r = run_remember(db, args, sizeof(args) / sizeof(args[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 1);
     cmd_result_free(&r);
     free(db);
@@ -792,9 +806,9 @@ TEST(search_end_opts_then_query)
     const char *a[] = {"add", "body with helix token"};
     const char *s[] = {"search", "--json", "--", "helix"};
     ASSERT_TRUE(db != NULL);
-    r = run_remember(db, a, 2, NULL);
+    r = run_remember(db, a, sizeof(a) / sizeof(a[0]), NULL);
     cmd_result_free(&r);
-    r = run_remember(db, s, 4, NULL);
+    r = run_remember(db, s, sizeof(s) / sizeof(s[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 0);
     ASSERT_STR_CONTAINS(r.out, "helix");
     cmd_result_free(&r);
@@ -808,7 +822,7 @@ TEST(search_end_opts_extra_positional_rejected)
     const char *args[] = {"search", "--", "helix", "extra"};
     CmdResult r;
     ASSERT_TRUE(db != NULL);
-    r = run_remember(db, args, 4, NULL);
+    r = run_remember(db, args, sizeof(args) / sizeof(args[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 1);
     cmd_result_free(&r);
     free(db);
@@ -821,7 +835,7 @@ TEST(help_topic_unknown_name_falls_back)
     const char *args[] = {"help", "version"};
     CmdResult r;
     ASSERT_TRUE(db != NULL);
-    r = run_remember(db, args, 2, NULL);
+    r = run_remember(db, args, sizeof(args) / sizeof(args[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 0);
     cmd_result_free(&r);
     free(db);
@@ -833,7 +847,7 @@ TEST(add_double_dash_end_opts)
     const char *args[] = {"add", "--tag", "t", "--", "body after end opts"};
     CmdResult r;
     ASSERT_TRUE(db != NULL);
-    r = run_remember(db, args, 5, NULL);
+    r = run_remember(db, args, sizeof(args) / sizeof(args[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 0);
     cmd_result_free(&r);
     free(db);
@@ -852,6 +866,8 @@ TEST(output_invalid_utf8_lead_byte)
     e.created_at = (char *)"c";
     e.updated_at = (char *)"u";
     ASSERT_EQ_INT(output_entry_human_line(f, &e, NULL, 0, "t"), 0);
+    // cppcheck-suppress nullPointerOutOfResources ; test-only: tmpfile()/malloc exhaustion is
+    // asserted above, not defended
     fclose(f);
 }
 
@@ -877,7 +893,7 @@ TEST(norm_token_message_invalid_char_is_key)
     const char *args[] = {"list", "--key", "has\ttab"};
     CmdResult r;
     ASSERT_TRUE(db != NULL);
-    r = run_remember(db, args, 3, NULL);
+    r = run_remember(db, args, sizeof(args) / sizeof(args[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 1);
     ASSERT_STR_CONTAINS(r.err, "key");
     cmd_result_free(&r);
@@ -888,7 +904,7 @@ TEST(norm_token_message_invalid_char_is_key)
 TEST(store_add_null_tag_slots_empty_join)
 {
     char *db = make_temp_db_path();
-    char err[256];
+    char err[ERR_BUFSIZE];
     Store *s;
     Entry e;
     StoreAddAction act;
@@ -899,9 +915,9 @@ TEST(store_add_null_tag_slots_empty_join)
     ASSERT_TRUE(s != NULL);
     memset(&e, 0, sizeof(e));
     /* ntags>0 but NULL tag pointers → join_tags_space empty-buffer path */
-    ASSERT_EQ_INT((int)store_add(s, "nt", hash, NULL, tags, 2U, "unknown", NULL,
-                                 "2026-06-15T12:00:00.000Z", &act, &e),
-                  (int)STORE_OK);
+    ASSERT_EQ_STATUS(store_add(s, "nt", hash, NULL, tags, 2U, "unknown", NULL,
+                               "2026-06-15T12:00:00.000Z", &act, &e),
+                     STORE_OK);
     store_entry_free(&e);
     store_close(s);
     free(db);

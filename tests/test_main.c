@@ -34,8 +34,15 @@ static const TestGroup k_groups[] = {
 
 /* Exact comma-token match: "key" must not select "key_gld" (or vice versa),
    which a plain substring test would wrongly do and quietly corrupt the gate. */
-static int group_selected(const char *only, const char *name)
+typedef struct {
+    const char *only;
+    const char *name;
+} GroupSel;
+
+static int group_selected(GroupSel sel)
 {
+    const char *only = sel.only;
+    const char *name = sel.name;
     size_t namelen = strlen(name);
     const char *p = only;
 
@@ -61,8 +68,8 @@ static int group_selected(const char *only, const char *name)
 int main(int argc, char **argv)
 {
     const char *only = NULL;
-    size_t i;
-    int arg;
+    size_t i = 0;
+    int arg = 0;
 
     if (argc < 2) {
         (void)fprintf(stderr, "usage: %s <path-to-remember-binary> [--only GROUP,...]\n", argv[0]);
@@ -78,7 +85,7 @@ int main(int argc, char **argv)
     }
 
     for (i = 0; i < sizeof(k_groups) / sizeof(k_groups[0]); i++) {
-        if (only == NULL || group_selected(only, k_groups[i].name)) {
+        if (only == NULL || group_selected((GroupSel){.only = only, .name = k_groups[i].name})) {
             k_groups[i].run();
         }
     }
