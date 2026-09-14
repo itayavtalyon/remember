@@ -35,11 +35,11 @@ static void assert_sync_warning_for_marker(const char *template_dir)
     char *path = NULL;
     CmdResult r;
     const char *a[] = {"add", "sync path note"};
-    size_t n;
-    size_t pn;
+    size_t n = 0;
+    size_t pn = 0;
 
     n = strlen(template_dir) + 1U;
-    syncish = malloc(n);
+    syncish = (char *)malloc(n);
     ASSERT_TRUE(syncish != NULL);
     if (syncish == NULL) {
         return;
@@ -52,7 +52,7 @@ static void assert_sync_warning_for_marker(const char *template_dir)
     }
 
     pn = strlen(syncish) + strlen("/t.db") + 1U;
-    path = malloc(pn);
+    path = (char *)malloc(pn);
     ASSERT_TRUE(path != NULL);
     if (path == NULL) {
         (void)remove(syncish);
@@ -61,7 +61,7 @@ static void assert_sync_warning_for_marker(const char *template_dir)
     }
     (void)snprintf(path, pn, "%s/t.db", syncish);
 
-    r = run_remember(path, a, 2, NULL);
+    r = run_remember(path, a, sizeof(a) / sizeof(a[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 0);
     ASSERT_TRUE(r.err != NULL && r.err[0] != '\0');
     if (r.err != NULL) {

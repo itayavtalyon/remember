@@ -19,6 +19,7 @@ typedef struct {
     const char *kind_raw;
     const char *pos[2];
     int npos;
+    char pad_[4]; /* explicit tail padding (kept -Wpadded-clean) */
 } PairParse;
 
 /* raw is never NULL: callers only parse when a --kind token was given. */
@@ -44,49 +45,53 @@ static int parse_kind_token(const char *raw, StoreEdgeKind *out)
 static int handle_pair_flag(const char *arg, int *i, int rest_argc, const char **rest_argv,
                             PairParse *out)
 {
-    const char *err = NULL;
 
     if (strcmp(arg, "--") == 0) {
         return 2;
     }
     if (strcmp(arg, "--from") == 0) {
-        if (take_value(i, rest_argc, rest_argv, &out->from_id_raw, &err,
-                       "missing value for --from") != 0) {
-            err_msg(err);
+        TakeValue taken = take_value(i, rest_argc, rest_argv, "missing value for --from");
+        if (taken.rc != 0) {
+            err_msg(taken.err);
             return -1;
         }
+        out->from_id_raw = taken.value;
         return 1;
     }
     if (strcmp(arg, "--from-key") == 0) {
-        if (take_value(i, rest_argc, rest_argv, &out->from_key_raw, &err,
-                       "missing value for --from-key") != 0) {
-            err_msg(err);
+        TakeValue taken = take_value(i, rest_argc, rest_argv, "missing value for --from-key");
+        if (taken.rc != 0) {
+            err_msg(taken.err);
             return -1;
         }
+        out->from_key_raw = taken.value;
         return 1;
     }
     if (strcmp(arg, "--to") == 0) {
-        if (take_value(i, rest_argc, rest_argv, &out->to_id_raw, &err, "missing value for --to") !=
-            0) {
-            err_msg(err);
+        TakeValue taken = take_value(i, rest_argc, rest_argv, "missing value for --to");
+        if (taken.rc != 0) {
+            err_msg(taken.err);
             return -1;
         }
+        out->to_id_raw = taken.value;
         return 1;
     }
     if (strcmp(arg, "--to-key") == 0) {
-        if (take_value(i, rest_argc, rest_argv, &out->to_key_raw, &err,
-                       "missing value for --to-key") != 0) {
-            err_msg(err);
+        TakeValue taken = take_value(i, rest_argc, rest_argv, "missing value for --to-key");
+        if (taken.rc != 0) {
+            err_msg(taken.err);
             return -1;
         }
+        out->to_key_raw = taken.value;
         return 1;
     }
     if (strcmp(arg, "--kind") == 0) {
-        if (take_value(i, rest_argc, rest_argv, &out->kind_raw, &err, "missing value for --kind") !=
-            0) {
-            err_msg(err);
+        TakeValue taken = take_value(i, rest_argc, rest_argv, "missing value for --kind");
+        if (taken.rc != 0) {
+            err_msg(taken.err);
             return -1;
         }
+        out->kind_raw = taken.value;
         return 1;
     }
     if (arg[0] == '-' && arg[1] != '\0') {
@@ -98,7 +103,7 @@ static int handle_pair_flag(const char *arg, int *i, int rest_argc, const char *
 
 static int parse_pair_args(int rest_argc, const char **rest_argv, PairParse *out)
 {
-    int i;
+    int i = 0;
     int end_opts = 0;
 
     memset(out, 0, sizeof(*out));
@@ -163,22 +168,28 @@ static int pair_apply_sugar(PairParse *p)
     return 0;
 }
 
-static int resolve_end(Store *s, const char *id_raw, const char *key_raw, long long *out_id)
+/* One endpoint locator: by raw id token or by raw key token (exactly one set). */
+typedef struct {
+    const char *id_raw;
+    const char *key_raw;
+} EndRef;
+
+static int resolve_end(Store *s, EndRef ref, long long *out_id)
 {
     Entry e;
-    StoreStatus st;
+    StoreStatus st = STORE_OK;
 
     memset(&e, 0, sizeof(e));
-    if (key_raw != NULL) {
+    if (ref.key_raw != NULL) {
         char key_norm[REMEMBER_TOKEN_MAX + 1];
-        NormStatus ns = normalize_key(key_raw, key_norm, sizeof(key_norm));
+        NormStatus ns = normalize_key(ref.key_raw, key_norm, sizeof(key_norm));
         if (ns != NORM_OK) {
             err_msg(norm_token_message(ns, "key"));
             return REMEMBER_ERR;
         }
         st = store_get_any_by_key(s, key_norm, &e);
     } else {
-        if (parse_entry_id(id_raw, out_id) != 0) {
+        if (parse_entry_id(ref.id_raw, out_id) != 0) {
             err_msg("invalid id");
             return REMEMBER_ERR;
         }
@@ -214,12 +225,12 @@ static int run_pair(Store *s, bool json, int rest_argc, const char **rest_argv, 
     PairParse p;
     StoreEdgeKind kind = STORE_EDGE_RELATED;
     const StoreEdgeKind *kind_ptr = NULL;
-    char now[32];
+    char now[ISO_TS_BUFSIZE];
     long long from_id = 0;
     long long to_id = 0;
-    int rc;
-    StoreStatus st;
-    StoreLinkAction act;
+    int rc = 0;
+    StoreStatus st = STORE_OK;
+    StoreLinkAction act = STORE_LINK_CREATED;
     StoreNeighbor stub;
     StoreNeighbor *gone = NULL;
     size_t n = 0U;
@@ -241,11 +252,11 @@ static int run_pair(Store *s, bool json, int rest_argc, const char **rest_argv, 
         err_msg("internal error");
         return REMEMBER_ERR;
     }
-    rc = resolve_end(s, p.from_id_raw, p.from_key_raw, &from_id);
+    rc = resolve_end(s, (EndRef){.id_raw = p.from_id_raw, .key_raw = p.from_key_raw}, &from_id);
     if (rc != REMEMBER_OK) {
         return rc;
     }
-    rc = resolve_end(s, p.to_id_raw, p.to_key_raw, &to_id);
+    rc = resolve_end(s, (EndRef){.id_raw = p.to_id_raw, .key_raw = p.to_key_raw}, &to_id);
     if (rc != REMEMBER_OK) {
         return rc;
     }
@@ -263,7 +274,7 @@ static int run_pair(Store *s, bool json, int rest_argc, const char **rest_argv, 
         store_neighbors_free(gone, n);
         return REMEMBER_OK;
     }
-    st = store_link(s, from_id, to_id, kind, now, &act, &stub);
+    st = store_link(s, (StoreEdge){.from_id = from_id, .to_id = to_id}, kind, now, &act, &stub);
     rc = store_status_to_exit(st);
     if (rc != REMEMBER_OK) {
         return rc;
@@ -293,30 +304,33 @@ typedef struct {
     const char *kind_raw;
     bool outgoing;
     bool incoming;
+    /* NOLINTNEXTLINE(readability-magic-numbers,cppcoreguidelines-avoid-magic-numbers) */
+    char pad_[6]; /* explicit tail padding (kept -Wpadded-clean) */
 } RelatedParse;
 
 static int handle_related_flag(const char *arg, int *i, int rest_argc, const char **rest_argv,
                                RelatedParse *out)
 {
-    const char *err = NULL;
 
     if (strcmp(arg, "--") == 0) {
         return 2;
     }
     if (strcmp(arg, "--key") == 0) {
-        if (take_value(i, rest_argc, rest_argv, &out->key_raw, &err, "missing value for --key") !=
-            0) {
-            err_msg(err);
+        TakeValue taken = take_value(i, rest_argc, rest_argv, "missing value for --key");
+        if (taken.rc != 0) {
+            err_msg(taken.err);
             return -1;
         }
+        out->key_raw = taken.value;
         return 1;
     }
     if (strcmp(arg, "--kind") == 0) {
-        if (take_value(i, rest_argc, rest_argv, &out->kind_raw, &err, "missing value for --kind") !=
-            0) {
-            err_msg(err);
+        TakeValue taken = take_value(i, rest_argc, rest_argv, "missing value for --kind");
+        if (taken.rc != 0) {
+            err_msg(taken.err);
             return -1;
         }
+        out->kind_raw = taken.value;
         return 1;
     }
     if (strcmp(arg, "--outgoing") == 0) {
@@ -336,7 +350,7 @@ static int handle_related_flag(const char *arg, int *i, int rest_argc, const cha
 
 static int parse_related_args(int rest_argc, const char **rest_argv, RelatedParse *out)
 {
-    int i;
+    int i = 0;
     int end_opts = 0;
 
     memset(out, 0, sizeof(*out));
@@ -367,7 +381,7 @@ static int parse_related_args(int rest_argc, const char **rest_argv, RelatedPars
 
 static int related_load_subject(Store *s, const RelatedParse *p, Entry *subject)
 {
-    StoreStatus st;
+    StoreStatus st = STORE_OK;
 
     memset(subject, 0, sizeof(*subject));
     if (p->key_raw != NULL) {
@@ -392,15 +406,15 @@ static int related_load_subject(Store *s, const RelatedParse *p, Entry *subject)
 int cmd_related(Store *s, bool json, int rest_argc, const char **rest_argv)
 {
     RelatedParse p;
-    StoreEdgeKind kind;
+    StoreEdgeKind kind = STORE_EDGE_RELATED;
     const StoreEdgeKind *kind_ptr = NULL;
     StoreNeighborDir dir = STORE_NEIGHBOR_ALL;
-    char now[32];
+    char now[ISO_TS_BUFSIZE];
     Entry subject;
     StoreNeighbor *rows = NULL;
     size_t n = 0U;
-    StoreStatus st;
-    int rc;
+    StoreStatus st = STORE_OK;
+    int rc = 0;
 
     memset(&subject, 0, sizeof(subject));
     if (parse_related_args(rest_argc, rest_argv, &p) != 0) {

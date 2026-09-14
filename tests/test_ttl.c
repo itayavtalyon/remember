@@ -8,8 +8,8 @@
 
 static int json_has_expires_after_updated(const char *json)
 {
-    const char *u;
-    const char *e;
+    const char *u = NULL;
+    const char *e = NULL;
 
     if (json == NULL) {
         return 0;
@@ -26,7 +26,7 @@ TEST(add_json_expires_at_null)
     CmdResult r;
 
     ASSERT_TRUE(db != NULL);
-    r = run_remember(db, a, 3, NULL);
+    r = run_remember(db, a, sizeof(a) / sizeof(a[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 0);
     ASSERT_TRUE(json_has_expires_after_updated(r.out));
     ASSERT_STR_CONTAINS(r.out, "\"expires_at\":null");
@@ -39,11 +39,11 @@ TEST(add_ttl_1h_is_future_canonical)
     char *db = make_temp_db_path();
     const char *a[] = {"--json", "add", "--ttl", "1h", "temp"};
     CmdResult r;
-    const char *exp;
-    const char *upd;
+    const char *exp = NULL;
+    const char *upd = NULL;
 
     ASSERT_TRUE(db != NULL);
-    r = run_remember(db, a, 5, NULL);
+    r = run_remember(db, a, sizeof(a) / sizeof(a[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 0);
     ASSERT_TRUE(json_has_expires_after_updated(r.out));
     exp = strstr(r.out, "\"expires_at\":\"");
@@ -72,17 +72,17 @@ TEST(add_expires_past_z_is_trash_only)
     CmdResult r;
 
     ASSERT_TRUE(db != NULL);
-    r = run_remember(db, a, 5, NULL);
+    r = run_remember(db, a, sizeof(a) / sizeof(a[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 0);
     ASSERT_STR_CONTAINS(r.out, "2020-01-01T00:00:00.000Z");
     cmd_result_free(&r);
 
-    r = run_remember(db, list, 2, NULL);
+    r = run_remember(db, list, sizeof(list) / sizeof(list[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 0);
     ASSERT_STR_CONTAINS(r.out, "\"total\":0");
     cmd_result_free(&r);
 
-    r = run_remember(db, trash, 3, NULL);
+    r = run_remember(db, trash, sizeof(trash) / sizeof(trash[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 0);
     ASSERT_STR_CONTAINS(r.out, "old");
     cmd_result_free(&r);
@@ -96,7 +96,7 @@ TEST(add_expires_bare_second_pads_ms)
     CmdResult r;
 
     ASSERT_TRUE(db != NULL);
-    r = run_remember(db, a, 5, NULL);
+    r = run_remember(db, a, sizeof(a) / sizeof(a[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 0);
     ASSERT_STR_CONTAINS(r.out, "2020-01-01T00:00:59.000Z");
     cmd_result_free(&r);
@@ -111,10 +111,10 @@ TEST(get_trash_of_active_exits_three)
     CmdResult r;
 
     ASSERT_TRUE(db != NULL);
-    r = run_remember(db, a, 2, NULL);
+    r = run_remember(db, a, sizeof(a) / sizeof(a[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 0);
     cmd_result_free(&r);
-    r = run_remember(db, g, 3, NULL);
+    r = run_remember(db, g, sizeof(g) / sizeof(g[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 3);
     ASSERT_STREQ(r.err, "remember: not_in_trash\n");
     ASSERT_TRUE(r.out == NULL || r.out[0] == '\0');
@@ -131,13 +131,13 @@ TEST(update_trash_clear_expires_restores_cli)
     CmdResult r;
 
     ASSERT_TRUE(db != NULL);
-    r = run_remember(db, a, 5, NULL);
+    r = run_remember(db, a, sizeof(a) / sizeof(a[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 0);
     cmd_result_free(&r);
-    r = run_remember(db, u, 4, NULL);
+    r = run_remember(db, u, sizeof(u) / sizeof(u[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 0);
     cmd_result_free(&r);
-    r = run_remember(db, g, 2, NULL);
+    r = run_remember(db, g, sizeof(g) / sizeof(g[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 0);
     cmd_result_free(&r);
     free(db);
@@ -152,14 +152,14 @@ TEST(update_trash_ttl_leaves_trash)
     CmdResult r;
 
     ASSERT_TRUE(db != NULL);
-    r = run_remember(db, a, 4, NULL);
+    r = run_remember(db, a, sizeof(a) / sizeof(a[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 0);
     cmd_result_free(&r);
-    r = run_remember(db, u, 6, NULL);
+    r = run_remember(db, u, sizeof(u) / sizeof(u[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 0);
     ASSERT_STR_CONTAINS(r.out, "\"expires_at\":\"");
     cmd_result_free(&r);
-    r = run_remember(db, g, 2, NULL);
+    r = run_remember(db, g, sizeof(g) / sizeof(g[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 0);
     cmd_result_free(&r);
     free(db);
@@ -173,10 +173,10 @@ TEST(keyless_add_revives_expired_cli)
     CmdResult r;
 
     ASSERT_TRUE(db != NULL);
-    r = run_remember(db, a1, 6, NULL);
+    r = run_remember(db, a1, sizeof(a1) / sizeof(a1[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 0);
     cmd_result_free(&r);
-    r = run_remember(db, a2, 5, NULL);
+    r = run_remember(db, a2, sizeof(a2) / sizeof(a2[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 0);
     ASSERT_STR_CONTAINS(r.out, "\"action\":\"merged\"");
     ASSERT_STR_CONTAINS(r.out, "\"expires_at\":null");
@@ -195,21 +195,21 @@ TEST(purge_trash_json_and_empty)
     CmdResult r;
 
     ASSERT_TRUE(db != NULL);
-    r = run_remember(db, a, 4, NULL);
+    r = run_remember(db, a, sizeof(a) / sizeof(a[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 0);
     cmd_result_free(&r);
-    r = run_remember(db, keep, 2, NULL);
+    r = run_remember(db, keep, sizeof(keep) / sizeof(keep[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 0);
     cmd_result_free(&r);
 
-    r = run_remember(db, p, 2, NULL);
+    r = run_remember(db, p, sizeof(p) / sizeof(p[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 0);
     ASSERT_STR_CONTAINS(r.out, "\"action\":\"deleted\"");
     ASSERT_STR_CONTAINS(r.out, "\"count\":1");
     ASSERT_STR_CONTAINS(r.out, "gone");
     cmd_result_free(&r);
 
-    r = run_remember(db, p2, 1, NULL);
+    r = run_remember(db, p2, sizeof(p2) / sizeof(p2[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 0);
     trim_trailing_newlines(r.out);
     ASSERT_STREQ(r.out, "0");
@@ -224,7 +224,7 @@ TEST(ttl_and_expires_mutex)
     CmdResult r;
 
     ASSERT_TRUE(db != NULL);
-    r = run_remember(db, a, 6, NULL);
+    r = run_remember(db, a, sizeof(a) / sizeof(a[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 1);
     cmd_result_free(&r);
     free(db);
@@ -235,13 +235,13 @@ TEST(invalid_ttl_tokens)
     char *db = make_temp_db_path();
     const char *bad[][2] = {{"0", "0"},       {"7", "7"},   {"07d", "07d"}, {"7x", "7x"},
                             {"1.5d", "1.5d"}, {"1M", "1M"}, {"+7d", "+7d"}};
-    size_t i;
+    size_t i = 0;
     CmdResult r;
 
     ASSERT_TRUE(db != NULL);
     for (i = 0; i < sizeof(bad) / sizeof(bad[0]); i++) {
         const char *a[] = {"add", "--ttl", bad[i][0], "x"};
-        r = run_remember(db, a, 4, NULL);
+        r = run_remember(db, a, sizeof(a) / sizeof(a[0]), NULL);
         ASSERT_EQ_INT(r.exit_code, 1);
         cmd_result_free(&r);
     }
@@ -255,13 +255,13 @@ TEST(human_list_has_related_column)
     const char *l[] = {"list"};
     CmdResult r;
     int pipes = 0;
-    const char *p;
+    const char *p = NULL;
 
     ASSERT_TRUE(db != NULL);
-    r = run_remember(db, a, 4, NULL);
+    r = run_remember(db, a, sizeof(a) / sizeof(a[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 0);
     cmd_result_free(&r);
-    r = run_remember(db, l, 1, NULL);
+    r = run_remember(db, l, sizeof(l) / sizeof(l[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 0);
     ASSERT_STR_NOT_CONTAINS(r.out, "expires");
     for (p = r.out != NULL ? r.out : ""; *p != '\0'; p++) {
@@ -281,7 +281,7 @@ TEST(add_expires_date_only_local_eod)
     CmdResult r;
 
     ASSERT_TRUE(db != NULL);
-    r = run_remember(db, a, 5, NULL);
+    r = run_remember(db, a, sizeof(a) / sizeof(a[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 0);
     ASSERT_STR_CONTAINS(r.out, "\"expires_at\":\"");
     ASSERT_STR_CONTAINS(r.out, ".999Z");
@@ -297,11 +297,11 @@ TEST(add_expires_frac_pad_and_trunc)
     CmdResult r;
 
     ASSERT_TRUE(db != NULL);
-    r = run_remember(db, pad, 5, NULL);
+    r = run_remember(db, pad, sizeof(pad) / sizeof(pad[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 0);
     ASSERT_STR_CONTAINS(r.out, "2020-01-01T00:00:00.100Z");
     cmd_result_free(&r);
-    r = run_remember(db, trunc, 5, NULL);
+    r = run_remember(db, trunc, sizeof(trunc) / sizeof(trunc[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 0);
     ASSERT_STR_CONTAINS(r.out, "2020-01-01T00:00:00.123Z");
     cmd_result_free(&r);
@@ -316,10 +316,10 @@ TEST(purge_trash_rejects_args)
     CmdResult r;
 
     ASSERT_TRUE(db != NULL);
-    r = run_remember(db, flag, 2, NULL);
+    r = run_remember(db, flag, sizeof(flag) / sizeof(flag[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 1);
     cmd_result_free(&r);
-    r = run_remember(db, pos, 2, NULL);
+    r = run_remember(db, pos, sizeof(pos) / sizeof(pos[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 1);
     cmd_result_free(&r);
     free(db);
@@ -334,14 +334,14 @@ TEST(tags_and_search_trash_bin)
     CmdResult r;
 
     ASSERT_TRUE(db != NULL);
-    r = run_remember(db, a, 6, NULL);
+    r = run_remember(db, a, sizeof(a) / sizeof(a[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 0);
     cmd_result_free(&r);
-    r = run_remember(db, tags, 3, NULL);
+    r = run_remember(db, tags, sizeof(tags) / sizeof(tags[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 0);
     ASSERT_STR_CONTAINS(r.out, "tmp");
     cmd_result_free(&r);
-    r = run_remember(db, search, 4, NULL);
+    r = run_remember(db, search, sizeof(search) / sizeof(search[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 0);
     ASSERT_STR_CONTAINS(r.out, "gone");
     cmd_result_free(&r);
@@ -356,11 +356,11 @@ TEST(add_ttl_minutes_and_weeks)
     CmdResult r;
 
     ASSERT_TRUE(db != NULL);
-    r = run_remember(db, m, 5, NULL);
+    r = run_remember(db, m, sizeof(m) / sizeof(m[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 0);
     ASSERT_STR_CONTAINS(r.out, "\"expires_at\":\"");
     cmd_result_free(&r);
-    r = run_remember(db, w, 5, NULL);
+    r = run_remember(db, w, sizeof(w) / sizeof(w[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 0);
     ASSERT_STR_CONTAINS(r.out, "\"expires_at\":\"");
     cmd_result_free(&r);
@@ -375,10 +375,10 @@ TEST(update_expires_on_active)
     CmdResult r;
 
     ASSERT_TRUE(db != NULL);
-    r = run_remember(db, a, 2, NULL);
+    r = run_remember(db, a, sizeof(a) / sizeof(a[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 0);
     cmd_result_free(&r);
-    r = run_remember(db, u, 5, NULL);
+    r = run_remember(db, u, sizeof(u) / sizeof(u[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 0);
     ASSERT_STR_CONTAINS(r.out, "2029-01-01T00:00:00.000Z");
     cmd_result_free(&r);
@@ -390,13 +390,13 @@ TEST(invalid_expires_tokens)
     char *db = make_temp_db_path();
     const char *bad[] = {"2020-01-01Z", "2020-01-01 00:00:00Z", "2020-01-01T00:00Z",
                          "2020-01-01T00:00:00+00:00", "2020-01-01T00:00:00."};
-    size_t i;
+    size_t i = 0;
     CmdResult r;
 
     ASSERT_TRUE(db != NULL);
     for (i = 0; i < sizeof(bad) / sizeof(bad[0]); i++) {
         const char *a[] = {"add", "--expires", bad[i], "x"};
-        r = run_remember(db, a, 4, NULL);
+        r = run_remember(db, a, sizeof(a) / sizeof(a[0]), NULL);
         ASSERT_EQ_INT(r.exit_code, 1);
         cmd_result_free(&r);
     }
@@ -410,14 +410,14 @@ TEST(help_mentions_ttl_and_exit_three)
     CmdResult r;
 
     ASSERT_TRUE(db != NULL);
-    r = run_remember(db, h, 1, NULL);
+    r = run_remember(db, h, sizeof(h) / sizeof(h[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 0);
     ASSERT_STR_CONTAINS(r.out, "purge-trash");
     ASSERT_STR_CONTAINS(r.out, "  3");
     cmd_result_free(&r);
     {
         const char *hp[] = {"help", "purge-trash"};
-        r = run_remember(db, hp, 2, NULL);
+        r = run_remember(db, hp, sizeof(hp) / sizeof(hp[0]), NULL);
         ASSERT_EQ_INT(r.exit_code, 0);
         ASSERT_STR_CONTAINS(r.out, "Permanently delete");
         cmd_result_free(&r);

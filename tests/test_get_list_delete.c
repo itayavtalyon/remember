@@ -6,20 +6,26 @@
 #include <stdlib.h>
 #include <string.h>
 
+enum {
+    SEED_ROWS = 25,     /* rows seeded for the list/paging tests */
+    BODY_BUFSIZE = 64,  /* scratch body buffer */
+    TAG_PAIRS_OVER = 51 /* one past the 50-tag-filter limit */
+};
+
 static void seed_three(const char *db)
 {
     CmdResult r;
     const char *a1[] = {"add", "--tag", "a", "--source", "human", "alpha first"};
     const char *a2[] = {"add", "--tag", "b", "--source", "agent", "beta second"};
     const char *a3[] = {"add", "--tag", "a", "--tag", "b", "--source", "tool", "gamma third"};
-    r = run_remember(db, a1, 6, NULL);
+    r = run_remember(db, a1, sizeof(a1) / sizeof(a1[0]), NULL);
     cmd_result_free(&r);
     /* ensure updated_at ordering: tiny sleep not portable enough; rely on
      * sequential updates via update --text later when implemented. Order of
      * add is still updated_at increasing. */
-    r = run_remember(db, a2, 6, NULL);
+    r = run_remember(db, a2, sizeof(a2) / sizeof(a2[0]), NULL);
     cmd_result_free(&r);
-    r = run_remember(db, a3, 8, NULL);
+    r = run_remember(db, a3, sizeof(a3) / sizeof(a3[0]), NULL);
     cmd_result_free(&r);
 }
 
@@ -31,10 +37,10 @@ TEST(get_existing_json_envelope)
     const char *a[] = {"add", "--tag", "t", "get me"};
     const char *gargs[] = {"get", "--json", "1"};
     ASSERT_TRUE(db != NULL);
-    r = run_remember(db, a, 4, NULL);
+    r = run_remember(db, a, sizeof(a) / sizeof(a[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 0);
     cmd_result_free(&r);
-    g = run_remember(db, gargs, 3, NULL);
+    g = run_remember(db, gargs, sizeof(gargs) / sizeof(gargs[0]), NULL);
     ASSERT_EQ_INT(g.exit_code, 0);
     ASSERT_STR_CONTAINS(g.out, "\"version\":1");
     ASSERT_STR_CONTAINS(g.out, "\"entries\"");
@@ -53,10 +59,10 @@ TEST(get_missing_exits_two)
     /* empty db still valid path */
     {
         const char *a[] = {"add", "placeholder"};
-        CmdResult r = run_remember(db, a, 2, NULL);
+        CmdResult r = run_remember(db, a, sizeof(a) / sizeof(a[0]), NULL);
         cmd_result_free(&r);
     }
-    g = run_remember(db, gargs, 2, NULL);
+    g = run_remember(db, gargs, sizeof(gargs) / sizeof(gargs[0]), NULL);
     ASSERT_EQ_INT(g.exit_code, 2);
     cmd_result_free(&g);
     free(db);
@@ -70,9 +76,9 @@ TEST(get_human_shows_body)
     const char *a[] = {"add", "human get body"};
     const char *gargs[] = {"get", "1"};
     ASSERT_TRUE(db != NULL);
-    r = run_remember(db, a, 2, NULL);
+    r = run_remember(db, a, sizeof(a) / sizeof(a[0]), NULL);
     cmd_result_free(&r);
-    g = run_remember(db, gargs, 2, NULL);
+    g = run_remember(db, gargs, sizeof(gargs) / sizeof(gargs[0]), NULL);
     ASSERT_EQ_INT(g.exit_code, 0);
     ASSERT_STR_CONTAINS(g.out, "human get body");
     cmd_result_free(&g);
@@ -87,7 +93,7 @@ TEST(list_empty_exits_zero)
     ASSERT_TRUE(db != NULL);
     /* create empty db by listing before any add — or add+delete.
      * list on missing file should create schema and return empty. */
-    r = run_remember(db, args, 1, NULL);
+    r = run_remember(db, args, sizeof(args) / sizeof(args[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 0);
     cmd_result_free(&r);
     free(db);
@@ -100,7 +106,7 @@ TEST(list_default_order_updated_at_desc)
     const char *largs[] = {"list", "--json"};
     ASSERT_TRUE(db != NULL);
     seed_three(db);
-    r = run_remember(db, largs, 2, NULL);
+    r = run_remember(db, largs, sizeof(largs) / sizeof(largs[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 0);
     /* newest first: id 3 before id 1 in JSON text order of entries array */
     {
@@ -120,7 +126,7 @@ TEST(list_filter_tag_and)
     const char *largs[] = {"list", "--json", "--tag", "a", "--tag", "b"};
     ASSERT_TRUE(db != NULL);
     seed_three(db);
-    r = run_remember(db, largs, 6, NULL);
+    r = run_remember(db, largs, sizeof(largs) / sizeof(largs[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 0);
     ASSERT_STR_CONTAINS(r.out, "gamma third");
     ASSERT_STR_NOT_CONTAINS(r.out, "alpha first");
@@ -136,7 +142,7 @@ TEST(list_filter_source)
     const char *largs[] = {"list", "--json", "--source", "agent"};
     ASSERT_TRUE(db != NULL);
     seed_three(db);
-    r = run_remember(db, largs, 4, NULL);
+    r = run_remember(db, largs, sizeof(largs) / sizeof(largs[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 0);
     ASSERT_STR_CONTAINS(r.out, "beta second");
     ASSERT_STR_NOT_CONTAINS(r.out, "alpha first");
@@ -150,15 +156,15 @@ TEST(list_limit)
     CmdResult r;
     const char *largs[] = {"list", "--json", "--limit", "2"};
     int count = 0;
-    const char *p;
+    const char *p = NULL;
     ASSERT_TRUE(db != NULL);
     seed_three(db);
-    r = run_remember(db, largs, 4, NULL);
+    r = run_remember(db, largs, sizeof(largs) / sizeof(largs[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 0);
     p = r.out;
     while ((p = strstr(p, "\"id\":")) != NULL) {
         count++;
-        p += 5;
+        p += sizeof("\"id\":") - 1;
     }
     ASSERT_EQ_INT(count, 2);
     cmd_result_free(&r);
@@ -169,27 +175,27 @@ TEST(list_limit_default_is_twenty)
 {
     char *db = make_temp_db_path();
     CmdResult r;
-    int i;
+    int i = 0;
     int count = 0;
-    const char *p;
+    const char *p = NULL;
     const char *largs[] = {"list", "--json"};
     ASSERT_TRUE(db != NULL);
-    for (i = 0; i < 25; i++) {
-        char body[64];
+    for (i = 0; i < SEED_ROWS; i++) {
+        char body[BODY_BUFSIZE];
         const char *a[2];
         CmdResult ar;
         (void)snprintf(body, sizeof(body), "item number %d unique", i);
         a[0] = "add";
         a[1] = body;
-        ar = run_remember(db, a, 2, NULL);
+        ar = run_remember(db, a, sizeof(a) / sizeof(a[0]), NULL);
         cmd_result_free(&ar);
     }
-    r = run_remember(db, largs, 2, NULL);
+    r = run_remember(db, largs, sizeof(largs) / sizeof(largs[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 0);
     p = r.out;
     while ((p = strstr(p, "\"id\":")) != NULL) {
         count++;
-        p += 5;
+        p += sizeof("\"id\":") - 1;
     }
     ASSERT_EQ_INT(count, 20);
     cmd_result_free(&r);
@@ -202,7 +208,7 @@ TEST(list_limit_zero_rejected)
     const char *args[] = {"list", "--limit", "0"};
     CmdResult r;
     ASSERT_TRUE(db != NULL);
-    r = run_remember(db, args, 3, NULL);
+    r = run_remember(db, args, sizeof(args) / sizeof(args[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 1);
     cmd_result_free(&r);
     free(db);
@@ -214,7 +220,7 @@ TEST(list_limit_over_hard_cap_rejected)
     const char *args[] = {"list", "--limit", "1001"};
     CmdResult r;
     ASSERT_TRUE(db != NULL);
-    r = run_remember(db, args, 3, NULL);
+    r = run_remember(db, args, sizeof(args) / sizeof(args[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 1);
     cmd_result_free(&r);
     free(db);
@@ -234,18 +240,18 @@ TEST(list_filter_tag_with_quote_is_parameterized)
     CmdResult r;
 
     ASSERT_TRUE(db != NULL);
-    r = run_remember(db, a, 4, NULL);
+    r = run_remember(db, a, sizeof(a) / sizeof(a[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 0);
     cmd_result_free(&r);
 
-    r = run_remember(db, l, 4, NULL);
+    r = run_remember(db, l, sizeof(l) / sizeof(l[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 0);
     ASSERT_STR_CONTAINS(r.out, "\"total\":1");
     ASSERT_STR_CONTAINS(r.out, "\"quoted tag\"");
     cmd_result_free(&r);
 
     /* A non-matching filter returns nothing — proof the quote was not injected. */
-    r = run_remember(db, l2, 4, NULL);
+    r = run_remember(db, l2, sizeof(l2) / sizeof(l2[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 0);
     ASSERT_STR_CONTAINS(r.out, "\"total\":0");
     cmd_result_free(&r);
@@ -265,7 +271,7 @@ TEST(list_offset_past_end_keeps_total)
 
     ASSERT_TRUE(db != NULL);
     seed_three(db);
-    r = run_remember(db, l, 6, NULL);
+    r = run_remember(db, l, sizeof(l) / sizeof(l[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 0);
     ASSERT_STR_CONTAINS(r.out, "\"count\":0");
     ASSERT_STR_CONTAINS(r.out, "\"total\":3");
@@ -278,17 +284,17 @@ TEST(list_offset_past_end_keeps_total)
 TEST(list_too_many_tag_filters_rejected)
 {
     char *db = make_temp_db_path();
-    const char *args[103];
+    const char *args[1 + (TAG_PAIRS_OVER * 2)];
     CmdResult r;
-    size_t i;
+    size_t i = 0;
 
     ASSERT_TRUE(db != NULL);
     args[0] = "list";
-    for (i = 0; i < 51U; i++) {
+    for (i = 0; i < TAG_PAIRS_OVER; i++) {
         args[1U + (i * 2U)] = "--tag";
         args[2U + (i * 2U)] = "t";
     }
-    r = run_remember(db, args, 103, NULL);
+    r = run_remember(db, args, sizeof(args) / sizeof(args[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 1);
     ASSERT_STR_CONTAINS(r.err, "too many --tag");
     ASSERT_STR_NOT_CONTAINS(r.err, "internal");
@@ -306,12 +312,12 @@ TEST(delete_existing)
     const char *dargs[] = {"delete", "1"};
     const char *gargs[] = {"get", "1"};
     ASSERT_TRUE(db != NULL);
-    r = run_remember(db, a, 2, NULL);
+    r = run_remember(db, a, sizeof(a) / sizeof(a[0]), NULL);
     cmd_result_free(&r);
-    d = run_remember(db, dargs, 2, NULL);
+    d = run_remember(db, dargs, sizeof(dargs) / sizeof(dargs[0]), NULL);
     ASSERT_EQ_INT(d.exit_code, 0);
     cmd_result_free(&d);
-    g = run_remember(db, gargs, 2, NULL);
+    g = run_remember(db, gargs, sizeof(gargs) / sizeof(gargs[0]), NULL);
     ASSERT_EQ_INT(g.exit_code, 2);
     cmd_result_free(&g);
     free(db);
@@ -325,10 +331,10 @@ TEST(delete_missing_exits_two)
     ASSERT_TRUE(db != NULL);
     {
         const char *a[] = {"add", "x"};
-        CmdResult r = run_remember(db, a, 2, NULL);
+        CmdResult r = run_remember(db, a, sizeof(a) / sizeof(a[0]), NULL);
         cmd_result_free(&r);
     }
-    d = run_remember(db, dargs, 2, NULL);
+    d = run_remember(db, dargs, sizeof(dargs) / sizeof(dargs[0]), NULL);
     ASSERT_EQ_INT(d.exit_code, 2);
     cmd_result_free(&d);
     free(db);
@@ -342,9 +348,9 @@ TEST(delete_json_shape)
     const char *a[] = {"add", "bye"};
     const char *dargs[] = {"delete", "--json", "1"};
     ASSERT_TRUE(db != NULL);
-    r = run_remember(db, a, 2, NULL);
+    r = run_remember(db, a, sizeof(a) / sizeof(a[0]), NULL);
     cmd_result_free(&r);
-    d = run_remember(db, dargs, 3, NULL);
+    d = run_remember(db, dargs, sizeof(dargs) / sizeof(dargs[0]), NULL);
     ASSERT_EQ_INT(d.exit_code, 0);
     ASSERT_STR_CONTAINS(d.out, "\"version\":1");
     ASSERT_STR_CONTAINS(d.out, "\"action\":\"deleted\"");
@@ -362,7 +368,7 @@ TEST(list_json_paging_fields)
     const char *largs[] = {"list", "--json", "--limit", "2", "--offset", "0"};
     ASSERT_TRUE(db != NULL);
     seed_three(db);
-    r = run_remember(db, largs, 6, NULL);
+    r = run_remember(db, largs, sizeof(largs) / sizeof(largs[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 0);
     ASSERT_STR_CONTAINS(r.out, "\"offset\":0");
     ASSERT_STR_CONTAINS(r.out, "\"limit\":2");
@@ -379,7 +385,7 @@ TEST(list_offset_pages)
     const char *largs[] = {"list", "--json", "--limit", "1", "--offset", "1"};
     ASSERT_TRUE(db != NULL);
     seed_three(db);
-    r = run_remember(db, largs, 6, NULL);
+    r = run_remember(db, largs, sizeof(largs) / sizeof(largs[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 0);
     ASSERT_STR_CONTAINS(r.out, "\"count\":1");
     ASSERT_STR_CONTAINS(r.out, "\"total\":3");
@@ -395,7 +401,7 @@ TEST(list_offset_negative_rejected)
     const char *args[] = {"list", "--offset", "-1"};
     CmdResult r;
     ASSERT_TRUE(db != NULL);
-    r = run_remember(db, args, 3, NULL);
+    r = run_remember(db, args, sizeof(args) / sizeof(args[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 1);
     cmd_result_free(&r);
     free(db);
@@ -409,10 +415,10 @@ TEST(json_entry_includes_key_field_null_when_keyless)
     const char *a[] = {"add", "keyless entry"};
     const char *gargs[] = {"get", "--json", "1"};
     ASSERT_TRUE(db != NULL);
-    r = run_remember(db, a, 2, NULL);
+    r = run_remember(db, a, sizeof(a) / sizeof(a[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 0);
     cmd_result_free(&r);
-    g = run_remember(db, gargs, 3, NULL);
+    g = run_remember(db, gargs, sizeof(gargs) / sizeof(gargs[0]), NULL);
     ASSERT_EQ_INT(g.exit_code, 0);
     ASSERT_STR_CONTAINS(g.out, "\"key\":null");
     cmd_result_free(&g);
@@ -428,13 +434,13 @@ TEST(get_expired_exits_three)
     const char *gargs[] = {"get", "1"};
 
     ASSERT_TRUE(db != NULL);
-    r = run_remember(db, a, 2, NULL);
+    r = run_remember(db, a, sizeof(a) / sizeof(a[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 0);
     cmd_result_free(&r);
     free(harness_sqlite_query_line(
         db, "UPDATE entries SET expires_at='2020-01-01T00:00:00.000Z' WHERE id=1;"));
 
-    g = run_remember(db, gargs, 2, NULL);
+    g = run_remember(db, gargs, sizeof(gargs) / sizeof(gargs[0]), NULL);
     ASSERT_EQ_INT(g.exit_code, 3);
     ASSERT_STREQ(g.err, "remember: expired\n");
     ASSERT_TRUE(g.out == NULL || g.out[0] == '\0');

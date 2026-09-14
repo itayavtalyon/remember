@@ -37,7 +37,7 @@ static const char *cursor_peek(const ArgCursor *c)
 
 static const char *cursor_next(ArgCursor *c)
 {
-    const char *arg;
+    const char *arg = NULL;
 
     if (cursor_done(c)) {
         return NULL;
@@ -51,25 +51,34 @@ static const char *cursor_next(ArgCursor *c)
 
 typedef struct {
     const char *name;
-    CliCommand command;
     const char *summary;
+    CliCommand command;
+    char pad_[4]; /* explicit tail padding (kept -Wpadded-clean) */
 } CommandEntry;
 
 static const CommandEntry k_commands[] = {
-    {"help", CLI_CMD_HELP, "Show help"},
-    {"version", CLI_CMD_VERSION, "Show version"},
-    {"add", CLI_CMD_ADD, "Store a memory (optional --key, --tag, --source)"},
-    {"search", CLI_CMD_SEARCH, "Full-text search"},
-    {"list", CLI_CMD_LIST, "List memories with filters"},
-    {"get", CLI_CMD_GET, "Fetch one entry by id or --key"},
-    {"update", CLI_CMD_UPDATE, "Change body and/or tags by id or --key"},
-    {"delete", CLI_CMD_DELETE, "Remove an entry by id or --key"},
-    {"tags", CLI_CMD_TAGS, "List all tags with entry counts"},
-    {"purge-trash", CLI_CMD_PURGE_TRASH, "Permanently delete every expired memory"},
-    {"link", CLI_CMD_LINK, "Create or merge an entry link"},
-    {"unlink", CLI_CMD_UNLINK, "Remove entry links"},
-    {"related", CLI_CMD_RELATED, "List neighbors of an entry"},
-    {"rekey", CLI_CMD_REKEY, "Rename, set, or clear an entry key in place"},
+    {.name = "help", .command = CLI_CMD_HELP, .summary = "Show help"},
+    {.name = "version", .command = CLI_CMD_VERSION, .summary = "Show version"},
+    {.name = "add",
+     .command = CLI_CMD_ADD,
+     .summary = "Store a memory (optional --key, --tag, --source)"},
+    {.name = "search", .command = CLI_CMD_SEARCH, .summary = "Full-text search"},
+    {.name = "list", .command = CLI_CMD_LIST, .summary = "List memories with filters"},
+    {.name = "get", .command = CLI_CMD_GET, .summary = "Fetch one entry by id or --key"},
+    {.name = "update",
+     .command = CLI_CMD_UPDATE,
+     .summary = "Change body and/or tags by id or --key"},
+    {.name = "delete", .command = CLI_CMD_DELETE, .summary = "Remove an entry by id or --key"},
+    {.name = "tags", .command = CLI_CMD_TAGS, .summary = "List all tags with entry counts"},
+    {.name = "purge-trash",
+     .command = CLI_CMD_PURGE_TRASH,
+     .summary = "Permanently delete every expired memory"},
+    {.name = "link", .command = CLI_CMD_LINK, .summary = "Create or merge an entry link"},
+    {.name = "unlink", .command = CLI_CMD_UNLINK, .summary = "Remove entry links"},
+    {.name = "related", .command = CLI_CMD_RELATED, .summary = "List neighbors of an entry"},
+    {.name = "rekey",
+     .command = CLI_CMD_REKEY,
+     .summary = "Rename, set, or clear an entry key in place"},
 };
 
 enum { COMMAND_COUNT = (int)(sizeof(k_commands) / sizeof(k_commands[0])) };
@@ -77,7 +86,7 @@ enum { COMMAND_COUNT = (int)(sizeof(k_commands) / sizeof(k_commands[0])) };
 /* Linear scan: n is tiny. A hash map would be more code and mutable state. */
 static const CommandEntry *cmd_lookup(const char *name)
 {
-    int i;
+    int i = 0;
 
     if (name == NULL) {
         return NULL;
@@ -98,7 +107,7 @@ static CliCommand command_from_name(const char *name)
 
 const char *cli_command_name(CliCommand cmd)
 {
-    int i;
+    int i = 0;
     for (i = 0; i < COMMAND_COUNT; i++) {
         if (k_commands[i].command == cmd) {
             return k_commands[i].name;
@@ -109,7 +118,7 @@ const char *cli_command_name(CliCommand cmd)
 
 const char *cli_command_summary(CliCommand cmd)
 {
-    int i;
+    int i = 0;
     for (i = 0; i < COMMAND_COUNT; i++) {
         if (k_commands[i].command == cmd) {
             return k_commands[i].summary;
@@ -231,7 +240,7 @@ static bool take_global(ArgCursor *cur, CliArgs *out)
 
 static bool resolve_help_topic_token(CliArgs *out, const char *token)
 {
-    CliCommand topic;
+    CliCommand topic = CLI_CMD_NONE;
 
     if (token == NULL || looks_like_option(token)) {
         return true;
@@ -307,10 +316,11 @@ static bool take_subcommand(ArgCursor *cur, CliArgs *out, int at, int *command_i
 }
 
 typedef struct {
+    int command_index;
     bool want_help;
     bool want_version;
     bool end_of_options;
-    int command_index;
+    char pad_[1]; /* explicit tail padding (kept -Wpadded-clean) */
 } ScanState;
 
 /* Handle one token after "--": literal subcommand (if none yet) or rest arg. */
@@ -391,7 +401,7 @@ static void scan_argv(ArgCursor *cur, CliArgs *out, ScanState *st)
 void cli_parse(int argc, char *const *argv, CliArgs *out)
 {
     ArgCursor cur;
-    ScanState st = {false, false, false, -1};
+    ScanState st = {.command_index = -1};
 
     if (out == NULL) {
         return;

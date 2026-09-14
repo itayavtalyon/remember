@@ -229,9 +229,10 @@ static void print_parse_error(const CliArgs *args)
 /* Resolve path, optional sync-path warning, then open. Store stays path-pure. */
 static Store *open_store(const CliArgs *args, int *out_rc)
 {
+    enum { ERR_BUFSIZE = 256 }; /* store_open error-message buffer */
     char path[REMEMBER_PATH_MAX];
-    char err[256];
-    Store *s;
+    char err[ERR_BUFSIZE];
+    Store *s = NULL;
 
     err[0] = '\0';
     if (util_resolve_db_path(args->globals.db_path, path, sizeof(path), err, sizeof(err)) != 0) {
@@ -258,8 +259,8 @@ typedef int (*CmdFn)(Store *s, bool json, int rest_argc, const char **rest_argv)
 
 static int run_with_store(const CliArgs *args, CmdFn fn)
 {
-    Store *s;
-    int rc;
+    Store *s = NULL;
+    int rc = 0;
 
     s = open_store(args, &rc);
     if (s == NULL) {
@@ -326,16 +327,18 @@ static int run(const CliArgs *args)
     }
 }
 
+/* cppcheck-suppress staticFunction ; public entry point (remember_app.h); used by main + GUI +
+ * tests */
 int remember_run(int argc, char *const *argv, FILE *out, FILE *err)
 {
     CliArgs args;
-    int rc;
+    int rc = 0;
 
-    app_set_streams(out, err);
+    app_set_streams((AppStreams){.out = out, .err = err});
     cli_parse(argc, argv, &args);
     rc = run(&args);
     cli_args_free(&args);
-    app_set_streams(NULL, NULL);
+    app_set_streams((AppStreams){.out = NULL, .err = NULL});
     return rc;
 }
 

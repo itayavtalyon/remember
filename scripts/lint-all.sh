@@ -14,6 +14,7 @@ cd "$ROOT"
 
 BUILD_DIR="${BUILD_DIR:-build}"
 SRC_DIR="src"
+TESTS_DIR="tests"
 REPORT_DIR="lint-reports"
 mkdir -p "$REPORT_DIR"
 
@@ -31,6 +32,18 @@ SCAN_BUILD=$(command -v scan-build || true)
 CLANG_FORMAT=$(command -v clang-format || true)
 IWYU=$(command -v include-what-you-use || true)
 IWYU_TOOL=$(command -v iwyu_tool.py || true)
+
+# A real GCC (not the Apple clang shim named `gcc`) for the -fanalyzer gate — a
+# second, independent static analyzer alongside clang/clang-tidy/cppcheck.
+GCC_ANALYZER=""
+for cand in gcc-16 gcc-15 gcc-14 gcc-13 gcc; do
+  path=$(command -v "$cand" || true)
+  if [[ -n "$path" ]] && "$path" --version 2>/dev/null | grep -qiv clang \
+     && "$path" --version 2>/dev/null | grep -qi 'gcc\|free software'; then
+    GCC_ANALYZER="$path"
+    break
+  fi
+done
 
 fail=0
 in_ci=0
@@ -95,22 +108,102 @@ fi
 
 echo "== cppcheck =="
 if [[ -n "$CPPCHECK" ]] && [[ -d "$SRC_DIR" ]]; then
-  if ! "$CPPCHECK" --enable=warning,style,performance,portability \
+  # --enable=all, whole-program per scan (all TUs in a scan together so
+  # unusedFunction/staticFunction resolve across files). Suppressed families are
+  # confirmed structural FPs for this codebase shape, not real defects:
+  #   unusedFunction        a single-target scan cannot see callers in the other
+  #                         target, the linked GUI, or the function-pointer command
+  #                         dispatch — every hit is a FP.
+  #   unusedStructMember    only the deliberate `char pad_[]` tail-padding fields (see
+  #                         the -Wpadded=explicit-fields policy) are ever flagged.
+  #   normalCheckLevelMaxBranches / checkersReport / toomanyconfigs / missingIncludeSystem
+  #                         informational notes, not defects.
+  # Genuine should-be-static publics (used only via tests) carry per-line
+  # `cppcheck-suppress staticFunction`; everything else is a real fix.
+  cppcheck_families=(
+    --suppress=missingIncludeSystem
+    --suppress=unusedFunction
+    --suppress=unusedStructMember
+    --suppress=normalCheckLevelMaxBranches
+    --suppress=checkersReport
+    --suppress=toomanyconfigs
+  )
+  # --suppress=unmatchedSuppression: some suppressed checks (e.g. normalCheckLevelMaxBranches)
+  # only exist in newer cppcheck; on the older cppcheck in CI they are unmatched, which is
+  # not itself a defect. Keep one family list working across cppcheck versions.
+  cppcheck_families+=(--suppress=unmatchedSuppression)
+  if ! "$CPPCHECK" --enable=all \
       --error-exitcode=1 --inline-suppr \
-      --suppress=missingIncludeSystem \
+      "${cppcheck_families[@]}" \
       -I "$SRC_DIR" \
       -I third_party/sqlite \
       -I third_party/sha256 \
       $(find "$SRC_DIR" -name '*.c' 2>/dev/null) \
       2>"$REPORT_DIR/cppcheck.txt"; then
-    echo "cppcheck: FAIL"
+    echo "cppcheck (src): FAIL"
     cat "$REPORT_DIR/cppcheck.txt" || true
     fail=1
   else
-    echo "cppcheck: PASS"
+    echo "cppcheck (src): PASS"
+  fi
+  # tests scan, held to the same bar. cppcheck_families already carries
+  # --suppress=unmatchedSuppression (the shared family list is broader than what any
+  # one scan triggers); do NOT repeat it — cppcheck 2.21 errors on a duplicate suppression.
+  if [[ -d "$TESTS_DIR" ]]; then
+    if ! "$CPPCHECK" --enable=all \
+        --error-exitcode=1 --inline-suppr \
+        "${cppcheck_families[@]}" \
+        -I "$SRC_DIR" \
+        -I "$TESTS_DIR" \
+        -I third_party/sqlite \
+        -I third_party/sha256 \
+        $(find "$TESTS_DIR" -name '*.c' 2>/dev/null) \
+        2>"$REPORT_DIR/cppcheck-tests.txt"; then
+      echo "cppcheck (tests): FAIL"
+      cat "$REPORT_DIR/cppcheck-tests.txt" || true
+      fail=1
+    else
+      echo "cppcheck (tests): PASS"
+    fi
   fi
 else
   echo "cppcheck: SKIP"
+  if [[ "$in_ci" -eq 1 ]]; then
+    fail=1
+  fi
+fi
+
+echo "== gcc -fanalyzer =="
+# Second, independent static analyzer (GCC's) over the src TUs, in addition to
+# clang / clang-tidy / cppcheck. -Werror makes any -Wall/-Wextra/-Wanalyzer
+# finding fatal. third_party is -isystem so vendored headers stay quiet.
+if [[ -n "$GCC_ANALYZER" ]] && [[ -d "$SRC_DIR" ]]; then
+  : >"$REPORT_DIR/gcc-analyzer.txt"
+  an_fail=0
+  while IFS= read -r f; do
+    [[ -z "$f" ]] && continue
+    # POSIX feature macros must match the CMake build (remember_apply_posix_feature_macros):
+    # glibc hides gmtime_r et al. under pure -std=c11 without them.
+    if ! "$GCC_ANALYZER" -std=c11 -D_POSIX_C_SOURCE=200809L -D_XOPEN_SOURCE=700 \
+        -Wall -Wextra -Werror -fanalyzer -fsyntax-only \
+        -I "$SRC_DIR" \
+        -isystem third_party/sqlite \
+        -isystem third_party/sha256 \
+        "$f" >>"$REPORT_DIR/gcc-analyzer.txt" 2>&1; then
+      an_fail=1
+    fi
+  done <<EOF
+$(find "$SRC_DIR" -name '*.c' 2>/dev/null | sort)
+EOF
+  if [[ "$an_fail" -ne 0 ]]; then
+    echo "gcc -fanalyzer: FAIL (see $REPORT_DIR/gcc-analyzer.txt)"
+    cat "$REPORT_DIR/gcc-analyzer.txt" || true
+    fail=1
+  else
+    echo "gcc -fanalyzer: PASS"
+  fi
+else
+  echo "gcc -fanalyzer: SKIP"
   if [[ "$in_ci" -eq 1 ]]; then
     fail=1
   fi

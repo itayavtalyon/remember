@@ -17,13 +17,13 @@ TEST(add_key_creates_slot)
     const char *a[] = {"add", "--json", "--key", "pref:editor", "helix"};
     const char *gargs[] = {"get", "--json", "--key", "pref:editor"};
     ASSERT_TRUE(db != NULL);
-    r = run_remember(db, a, 5, NULL);
+    r = run_remember(db, a, sizeof(a) / sizeof(a[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 0);
     ASSERT_STR_CONTAINS(r.out, "\"action\":\"created\"");
     ASSERT_STR_CONTAINS(r.out, "\"key\":\"pref:editor\"");
     ASSERT_STR_CONTAINS(r.out, "helix");
     cmd_result_free(&r);
-    g = run_remember(db, gargs, 4, NULL);
+    g = run_remember(db, gargs, sizeof(gargs) / sizeof(gargs[0]), NULL);
     ASSERT_EQ_INT(g.exit_code, 0);
     ASSERT_STR_CONTAINS(g.out, "helix");
     cmd_result_free(&g);
@@ -40,8 +40,8 @@ TEST(add_key_upsert_same_id_replaces_body)
     const char *a2[] = {"add", "--json", "--key", "pref:editor", "zed"};
     const char *gargs[] = {"get", "--json", "--key", "pref:editor"};
     ASSERT_TRUE(db != NULL);
-    r1 = run_remember(db, a1, 5, NULL);
-    r2 = run_remember(db, a2, 5, NULL);
+    r1 = run_remember(db, a1, sizeof(a1) / sizeof(a1[0]), NULL);
+    r2 = run_remember(db, a2, sizeof(a2) / sizeof(a2[0]), NULL);
     ASSERT_EQ_INT(r1.exit_code, 0);
     ASSERT_EQ_INT(r2.exit_code, 0);
     ASSERT_STR_CONTAINS(r2.out, "\"action\":\"updated\"");
@@ -49,7 +49,7 @@ TEST(add_key_upsert_same_id_replaces_body)
     ASSERT_STR_CONTAINS(r2.out, "\"id\":1");
     cmd_result_free(&r1);
     cmd_result_free(&r2);
-    g = run_remember(db, gargs, 4, NULL);
+    g = run_remember(db, gargs, sizeof(gargs) / sizeof(gargs[0]), NULL);
     ASSERT_EQ_INT(g.exit_code, 0);
     ASSERT_STR_CONTAINS(g.out, "zed");
     ASSERT_STR_NOT_CONTAINS(g.out, "helix");
@@ -67,13 +67,13 @@ TEST(add_key_upsert_unions_tags)
     const char *a2[] = {"add", "--key", "k", "--tag", "b", "v2"};
     const char *gargs[] = {"get", "--json", "--key", "k"};
     ASSERT_TRUE(db != NULL);
-    r1 = run_remember(db, a1, 6, NULL);
-    r2 = run_remember(db, a2, 6, NULL);
+    r1 = run_remember(db, a1, sizeof(a1) / sizeof(a1[0]), NULL);
+    r2 = run_remember(db, a2, sizeof(a2) / sizeof(a2[0]), NULL);
     ASSERT_EQ_INT(r1.exit_code, 0);
     ASSERT_EQ_INT(r2.exit_code, 0);
     cmd_result_free(&r1);
     cmd_result_free(&r2);
-    g = run_remember(db, gargs, 4, NULL);
+    g = run_remember(db, gargs, sizeof(gargs) / sizeof(gargs[0]), NULL);
     ASSERT_EQ_INT(g.exit_code, 0);
     ASSERT_STR_CONTAINS(g.out, "v2");
     ASSERT_STR_CONTAINS(g.out, "a");
@@ -92,13 +92,13 @@ TEST(add_key_keeps_original_source)
     const char *a2[] = {"add", "--key", "k", "--source", "agent", "two"};
     const char *gargs[] = {"get", "--json", "--key", "k"};
     ASSERT_TRUE(db != NULL);
-    r1 = run_remember(db, a1, 6, NULL);
-    r2 = run_remember(db, a2, 6, NULL);
+    r1 = run_remember(db, a1, sizeof(a1) / sizeof(a1[0]), NULL);
+    r2 = run_remember(db, a2, sizeof(a2) / sizeof(a2[0]), NULL);
     ASSERT_EQ_INT(r1.exit_code, 0);
     ASSERT_EQ_INT(r2.exit_code, 0);
     cmd_result_free(&r1);
     cmd_result_free(&r2);
-    g = run_remember(db, gargs, 4, NULL);
+    g = run_remember(db, gargs, sizeof(gargs) / sizeof(gargs[0]), NULL);
     ASSERT_EQ_INT(g.exit_code, 0);
     ASSERT_STR_CONTAINS(g.out, "\"source\":\"human\"");
     ASSERT_STR_CONTAINS(g.out, "two");
@@ -116,15 +116,15 @@ TEST(keyed_entries_may_share_body_text)
     const char *a2[] = {"add", "--json", "--key", "k2", "same"};
     const char *largs[] = {"list", "--json"};
     ASSERT_TRUE(db != NULL);
-    r1 = run_remember(db, a1, 5, NULL);
-    r2 = run_remember(db, a2, 5, NULL);
+    r1 = run_remember(db, a1, sizeof(a1) / sizeof(a1[0]), NULL);
+    r2 = run_remember(db, a2, sizeof(a2) / sizeof(a2[0]), NULL);
     ASSERT_EQ_INT(r1.exit_code, 0);
     ASSERT_EQ_INT(r2.exit_code, 0);
     ASSERT_STR_CONTAINS(r1.out, "\"id\":1");
     ASSERT_STR_CONTAINS(r2.out, "\"id\":2");
     cmd_result_free(&r1);
     cmd_result_free(&r2);
-    l = run_remember(db, largs, 2, NULL);
+    l = run_remember(db, largs, sizeof(largs) / sizeof(largs[0]), NULL);
     ASSERT_EQ_INT(l.exit_code, 0);
     ASSERT_STR_CONTAINS(l.out, "\"total\":2");
     cmd_result_free(&l);
@@ -141,9 +141,9 @@ TEST(keyless_still_dedupes_among_keyless_only)
     const char *a1[] = {"add", "shared text"};
     const char *a2[] = {"add", "shared text"};
     ASSERT_TRUE(db != NULL);
-    rk = run_remember(db, ak, 4, NULL);
-    r1 = run_remember(db, a1, 2, NULL);
-    r2 = run_remember(db, a2, 2, NULL);
+    rk = run_remember(db, ak, sizeof(ak) / sizeof(ak[0]), NULL);
+    r1 = run_remember(db, a1, sizeof(a1) / sizeof(a1[0]), NULL);
+    r2 = run_remember(db, a2, sizeof(a2) / sizeof(a2[0]), NULL);
     ASSERT_EQ_INT(rk.exit_code, 0);
     ASSERT_EQ_INT(r1.exit_code, 0);
     ASSERT_EQ_INT(r2.exit_code, 0);
@@ -164,10 +164,10 @@ TEST(get_by_key_missing_exits_two)
     ASSERT_TRUE(db != NULL);
     {
         const char *a[] = {"add", "x"};
-        CmdResult r = run_remember(db, a, 2, NULL);
+        CmdResult r = run_remember(db, a, sizeof(a) / sizeof(a[0]), NULL);
         cmd_result_free(&r);
     }
-    g = run_remember(db, gargs, 3, NULL);
+    g = run_remember(db, gargs, sizeof(gargs) / sizeof(gargs[0]), NULL);
     ASSERT_EQ_INT(g.exit_code, 2);
     cmd_result_free(&g);
     free(db);
@@ -177,14 +177,14 @@ TEST(get_both_id_and_key_rejected)
 {
     char *db = make_temp_db_path();
     CmdResult g;
-    const char *a[] = {"add", "--key", "k", "body"};
     const char *gargs[] = {"get", "1", "--key", "k"};
     ASSERT_TRUE(db != NULL);
     {
-        CmdResult r = run_remember(db, a, 4, NULL);
+        const char *a[] = {"add", "--key", "k", "body"};
+        CmdResult r = run_remember(db, a, sizeof(a) / sizeof(a[0]), NULL);
         cmd_result_free(&r);
     }
-    g = run_remember(db, gargs, 4, NULL);
+    g = run_remember(db, gargs, sizeof(gargs) / sizeof(gargs[0]), NULL);
     ASSERT_EQ_INT(g.exit_code, 1);
     cmd_result_free(&g);
     free(db);
@@ -196,7 +196,7 @@ TEST(get_neither_id_nor_key_rejected)
     CmdResult g;
     const char *gargs[] = {"get"};
     ASSERT_TRUE(db != NULL);
-    g = run_remember(db, gargs, 1, NULL);
+    g = run_remember(db, gargs, sizeof(gargs) / sizeof(gargs[0]), NULL);
     ASSERT_EQ_INT(g.exit_code, 1);
     cmd_result_free(&g);
     free(db);
@@ -212,14 +212,14 @@ TEST(delete_by_key)
     const char *dargs[] = {"delete", "--json", "--key", "k"};
     const char *gargs[] = {"get", "--key", "k"};
     ASSERT_TRUE(db != NULL);
-    r = run_remember(db, a, 4, NULL);
+    r = run_remember(db, a, sizeof(a) / sizeof(a[0]), NULL);
     cmd_result_free(&r);
-    d = run_remember(db, dargs, 4, NULL);
+    d = run_remember(db, dargs, sizeof(dargs) / sizeof(dargs[0]), NULL);
     ASSERT_EQ_INT(d.exit_code, 0);
     ASSERT_STR_CONTAINS(d.out, "\"action\":\"deleted\"");
     ASSERT_STR_CONTAINS(d.out, "to remove");
     cmd_result_free(&d);
-    g = run_remember(db, gargs, 3, NULL);
+    g = run_remember(db, gargs, sizeof(gargs) / sizeof(gargs[0]), NULL);
     ASSERT_EQ_INT(g.exit_code, 2);
     cmd_result_free(&g);
     free(db);
@@ -235,12 +235,12 @@ TEST(update_by_key_text)
     const char *uargs[] = {"update", "--key", "k", "--text", "new"};
     const char *gargs[] = {"get", "--json", "--key", "k"};
     ASSERT_TRUE(db != NULL);
-    r = run_remember(db, a, 6, NULL);
+    r = run_remember(db, a, sizeof(a) / sizeof(a[0]), NULL);
     cmd_result_free(&r);
-    u = run_remember(db, uargs, 5, NULL);
+    u = run_remember(db, uargs, sizeof(uargs) / sizeof(uargs[0]), NULL);
     ASSERT_EQ_INT(u.exit_code, 0);
     cmd_result_free(&u);
-    g = run_remember(db, gargs, 4, NULL);
+    g = run_remember(db, gargs, sizeof(gargs) / sizeof(gargs[0]), NULL);
     ASSERT_EQ_INT(g.exit_code, 0);
     ASSERT_STR_CONTAINS(g.out, "new");
     ASSERT_STR_CONTAINS(g.out, "t"); /* tags unchanged */
@@ -258,11 +258,11 @@ TEST(update_keyed_no_body_hash_conflict)
     const char *a2[] = {"add", "--key", "k", "other"};
     const char *uargs[] = {"update", "--key", "k", "--text", "shared body"};
     ASSERT_TRUE(db != NULL);
-    r = run_remember(db, a1, 2, NULL);
+    r = run_remember(db, a1, sizeof(a1) / sizeof(a1[0]), NULL);
     cmd_result_free(&r);
-    r = run_remember(db, a2, 4, NULL);
+    r = run_remember(db, a2, sizeof(a2) / sizeof(a2[0]), NULL);
     cmd_result_free(&r);
-    u = run_remember(db, uargs, 5, NULL);
+    u = run_remember(db, uargs, sizeof(uargs) / sizeof(uargs[0]), NULL);
     ASSERT_EQ_INT(u.exit_code, 0);
     cmd_result_free(&u);
     free(db);
@@ -277,11 +277,11 @@ TEST(list_filter_by_key)
     const char *a2[] = {"add", "--key", "other", "bbb"};
     const char *largs[] = {"list", "--json", "--key", "keep"};
     ASSERT_TRUE(db != NULL);
-    r = run_remember(db, a1, 4, NULL);
+    r = run_remember(db, a1, sizeof(a1) / sizeof(a1[0]), NULL);
     cmd_result_free(&r);
-    r = run_remember(db, a2, 4, NULL);
+    r = run_remember(db, a2, sizeof(a2) / sizeof(a2[0]), NULL);
     cmd_result_free(&r);
-    l = run_remember(db, largs, 4, NULL);
+    l = run_remember(db, largs, sizeof(largs) / sizeof(largs[0]), NULL);
     ASSERT_EQ_INT(l.exit_code, 0);
     ASSERT_STR_CONTAINS(l.out, "aaa");
     ASSERT_STR_NOT_CONTAINS(l.out, "bbb");
@@ -299,11 +299,11 @@ TEST(search_filter_by_key)
     const char *a2[] = {"add", "--key", "other", "unique word beta"};
     const char *sargs[] = {"search", "--json", "--key", "keep", "unique"};
     ASSERT_TRUE(db != NULL);
-    r = run_remember(db, a1, 4, NULL);
+    r = run_remember(db, a1, sizeof(a1) / sizeof(a1[0]), NULL);
     cmd_result_free(&r);
-    r = run_remember(db, a2, 4, NULL);
+    r = run_remember(db, a2, sizeof(a2) / sizeof(a2[0]), NULL);
     cmd_result_free(&r);
-    s = run_remember(db, sargs, 5, NULL);
+    s = run_remember(db, sargs, sizeof(sargs) / sizeof(sargs[0]), NULL);
     ASSERT_EQ_INT(s.exit_code, 0);
     ASSERT_STR_CONTAINS(s.out, "alpha");
     ASSERT_STR_NOT_CONTAINS(s.out, "beta");
@@ -319,10 +319,10 @@ TEST(add_key_ascii_casefold)
     const char *a[] = {"add", "--key", "Pref:Editor", "v"};
     const char *gargs[] = {"get", "--json", "--key", "pref:editor"};
     ASSERT_TRUE(db != NULL);
-    r = run_remember(db, a, 4, NULL);
+    r = run_remember(db, a, sizeof(a) / sizeof(a[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 0);
     cmd_result_free(&r);
-    g = run_remember(db, gargs, 4, NULL);
+    g = run_remember(db, gargs, sizeof(gargs) / sizeof(gargs[0]), NULL);
     ASSERT_EQ_INT(g.exit_code, 0);
     ASSERT_STR_CONTAINS(g.out, "\"key\":\"pref:editor\"");
     cmd_result_free(&g);
@@ -335,7 +335,7 @@ TEST(add_empty_key_rejected)
     CmdResult r;
     const char *a[] = {"add", "--key", "", "body"};
     ASSERT_TRUE(db != NULL);
-    r = run_remember(db, a, 4, NULL);
+    r = run_remember(db, a, sizeof(a) / sizeof(a[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 1);
     cmd_result_free(&r);
     free(db);
@@ -349,10 +349,10 @@ TEST(delete_by_key_missing_exits_two)
     ASSERT_TRUE(db != NULL);
     {
         const char *a[] = {"add", "x"};
-        CmdResult r = run_remember(db, a, 2, NULL);
+        CmdResult r = run_remember(db, a, sizeof(a) / sizeof(a[0]), NULL);
         cmd_result_free(&r);
     }
-    d = run_remember(db, dargs, 3, NULL);
+    d = run_remember(db, dargs, sizeof(dargs) / sizeof(dargs[0]), NULL);
     ASSERT_EQ_INT(d.exit_code, 2);
     cmd_result_free(&d);
     free(db);
@@ -366,10 +366,10 @@ TEST(update_by_key_missing_exits_two)
     ASSERT_TRUE(db != NULL);
     {
         const char *a[] = {"add", "x"};
-        CmdResult r = run_remember(db, a, 2, NULL);
+        CmdResult r = run_remember(db, a, sizeof(a) / sizeof(a[0]), NULL);
         cmd_result_free(&r);
     }
-    u = run_remember(db, uargs, 5, NULL);
+    u = run_remember(db, uargs, sizeof(uargs) / sizeof(uargs[0]), NULL);
     ASSERT_EQ_INT(u.exit_code, 2);
     cmd_result_free(&u);
     free(db);
@@ -379,14 +379,14 @@ TEST(update_both_id_and_key_rejected)
 {
     char *db = make_temp_db_path();
     CmdResult u;
-    const char *a[] = {"add", "--key", "k", "body"};
     const char *uargs[] = {"update", "1", "--key", "k", "--text", "n"};
     ASSERT_TRUE(db != NULL);
     {
-        CmdResult r = run_remember(db, a, 4, NULL);
+        const char *a[] = {"add", "--key", "k", "body"};
+        CmdResult r = run_remember(db, a, sizeof(a) / sizeof(a[0]), NULL);
         cmd_result_free(&r);
     }
-    u = run_remember(db, uargs, 6, NULL);
+    u = run_remember(db, uargs, sizeof(uargs) / sizeof(uargs[0]), NULL);
     ASSERT_EQ_INT(u.exit_code, 1);
     cmd_result_free(&u);
     free(db);

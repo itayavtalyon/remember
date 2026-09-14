@@ -13,6 +13,21 @@
 #include <sys/wait.h>
 #include <unistd.h>
 
+/* Buffer sizes and growth caps for the subprocess capture harness. */
+enum {
+    CAPTURE_INITIAL_CAP = 4096, /* first pipe-read buffer; doubles thereafter */
+    READ_CHUNK = 4096,          /* per-read scratch buffer */
+    PATH_BUFSIZE = 4096,        /* filesystem path buffer */
+    CMD_BUFSIZE = 1024,         /* sqlite3 CLI command buffer */
+    LINE_BUFSIZE = 512,         /* single output line buffer */
+    REGISTRY_INITIAL_CAP = 16,  /* temp-dir registry initial slots */
+    EXIT_SIGNAL_BASE = 128,     /* shell convention: 128 + signal number */
+    DECIMAL_BASE = 10           /* strtol radix */
+};
+
+/* Write-once path to the CLI binary under test, set from argv at startup. Mutable
+   process-global by necessity (no const init available at that point). */
+// NOLINTNEXTLINE(cppcoreguidelines-avoid-non-const-global-variables)
 const char *g_remember_bin = NULL;
 
 void cmd_result_free(CmdResult *r)
@@ -36,12 +51,12 @@ typedef struct {
 static bool buf_append(Buf *b, const char *src, size_t n)
 {
     if (b->len + n + 1U > b->cap) {
-        size_t ncap = (b->cap != 0U) ? b->cap : 4096U;
-        char *nd;
+        size_t ncap = (b->cap != 0U) ? b->cap : CAPTURE_INITIAL_CAP;
+        char *nd = NULL;
         while (ncap < b->len + n + 1U) {
             ncap *= 2U;
         }
-        nd = realloc(b->data, ncap);
+        nd = (char *)realloc(b->data, ncap);
         if (nd == NULL) {
             return false;
         }
@@ -71,7 +86,7 @@ static void drain_two(int fd0, int fd1, char **out0, char **out1)
         struct pollfd pfds[2];
         int slot[2];
         int nfds = 0;
-        int i;
+        int i = 0;
 
         for (i = 0; i < 2; i++) {
             if (fds[i] >= 0) {
@@ -90,9 +105,11 @@ static void drain_two(int fd0, int fd1, char **out0, char **out1)
         }
         for (i = 0; i < nfds; i++) {
             int idx = slot[i];
-            char tmp[4096];
-            ssize_t n;
+            char tmp[READ_CHUNK];
+            ssize_t n = 0;
 
+            /* POLLIN/POLLHUP/POLLERR are POSIX-defined signed int macros. */
+            // NOLINTNEXTLINE(hicpp-signed-bitwise)
             if ((pfds[i].revents & (POLLIN | POLLHUP | POLLERR)) == 0) {
                 continue;
             }
@@ -108,7 +125,7 @@ static void drain_two(int fd0, int fd1, char **out0, char **out1)
 
     for (int i = 0; i < 2; i++) {
         if (bufs[i].data == NULL) {
-            bufs[i].data = calloc(1U, 1U);
+            bufs[i].data = (char *)calloc(1U, 1U);
         } else {
             bufs[i].data[bufs[i].len] = '\0';
         }
@@ -121,7 +138,7 @@ static CmdResult harness_error(const char *msg)
 {
     CmdResult r;
 
-    r.exit_code = 127;
+    r.exit_code = EXIT_SPAWN_FAIL;
     r.out = strdup("");
     r.err = strdup(msg);
     return r;
@@ -143,7 +160,7 @@ static char **build_child_argv(const char *db_path, const char *const *args, siz
 {
     size_t argc = 3U + nargs;
     char **argv = (char **)calloc(argc + 1U, sizeof(*argv));
-    size_t i;
+    size_t i = 0;
 
     if (argv == NULL) {
         return NULL;
@@ -160,33 +177,40 @@ static char **build_child_argv(const char *db_path, const char *const *args, siz
     return argv;
 }
 
+/* The three stdio pipe pairs (each a 2-int [read,write]), grouped so the child
+   setup cannot transpose them. Pointers to the caller's pipe arrays. */
+typedef struct {
+    int *out;
+    int *err;
+    int *in;
+} ChildPipes;
+
 /* Child side: redirect stdio to the pipes and exec. Never returns. */
-static void child_run(int out_pipe[2], int err_pipe[2], int in_pipe[2], const char *stdin_data,
-                      char *const argv[])
+static _Noreturn void child_run(ChildPipes pipes, const char *stdin_data, char *const argv[])
 {
-    if (dup2(out_pipe[1], STDOUT_FILENO) < 0 || dup2(err_pipe[1], STDERR_FILENO) < 0) {
-        _exit(127);
+    if (dup2(pipes.out[1], STDOUT_FILENO) < 0 || dup2(pipes.err[1], STDERR_FILENO) < 0) {
+        _exit(EXIT_SPAWN_FAIL);
     }
-    close(out_pipe[0]);
-    close(out_pipe[1]);
-    close(err_pipe[0]);
-    close(err_pipe[1]);
+    close(pipes.out[0]);
+    close(pipes.out[1]);
+    close(pipes.err[0]);
+    close(pipes.err[1]);
 
     if (stdin_data != NULL) {
-        if (dup2(in_pipe[0], STDIN_FILENO) < 0) {
-            _exit(127);
+        if (dup2(pipes.in[0], STDIN_FILENO) < 0) {
+            _exit(EXIT_SPAWN_FAIL);
         }
-        close(in_pipe[0]);
-        close(in_pipe[1]);
+        close(pipes.in[0]);
+        close(pipes.in[1]);
     } else {
-        int devnull = open("/dev/null", O_RDONLY);
+        int devnull = open("/dev/null", O_RDONLY | O_CLOEXEC);
         if (devnull >= 0) {
             (void)dup2(devnull, STDIN_FILENO);
             close(devnull);
         }
     }
     execv(g_remember_bin, argv);
-    _exit(127);
+    _exit(EXIT_SPAWN_FAIL);
 }
 
 static void write_all(int fd, const char *data)
@@ -212,36 +236,40 @@ static int wait_status(pid_t pid)
     int status = 0;
 
     if (waitpid(pid, &status, 0) < 0) {
-        return 127;
+        return EXIT_SPAWN_FAIL;
     }
     if (WIFEXITED(status)) {
         return WEXITSTATUS(status);
     }
     if (WIFSIGNALED(status)) {
-        return 128 + WTERMSIG(status);
+        return EXIT_SIGNAL_BASE + WTERMSIG(status);
     }
-    return 127;
+    return EXIT_SPAWN_FAIL;
 }
 
 CmdResult run_remember(const char *db_path, const char *const *args, size_t nargs,
                        const char *stdin_data)
 {
-    CmdResult result = {0, NULL, NULL};
+    CmdResult result = {.out = NULL, .err = NULL, .exit_code = 0};
     int out_pipe[2] = {-1, -1};
     int err_pipe[2] = {-1, -1};
     int in_pipe[2] = {-1, -1};
-    char **argv;
-    pid_t pid;
+    char **argv = NULL;
+    pid_t pid = 0;
 
     if (g_remember_bin == NULL || db_path == NULL) {
         return harness_error("harness: missing binary or db path");
     }
     /* Every failure below goes through cleanup: a half-open pipe pair would
        otherwise leak two fds per call. */
+    /* pipe2(O_CLOEXEC) is unavailable on macOS; these ends are explicitly closed in
+       both parent and child before execv, so nothing leaks across the exec. */
+    // NOLINTNEXTLINE(android-cloexec-pipe)
     if (pipe(out_pipe) != 0 || pipe(err_pipe) != 0) {
         result = harness_error("harness: pipe failed");
         goto cleanup;
     }
+    // NOLINTNEXTLINE(android-cloexec-pipe)
     if (stdin_data != NULL && pipe(in_pipe) != 0) {
         result = harness_error("harness: stdin pipe failed");
         goto cleanup;
@@ -260,7 +288,7 @@ CmdResult run_remember(const char *db_path, const char *const *args, size_t narg
         goto cleanup;
     }
     if (pid == 0) {
-        child_run(out_pipe, err_pipe, in_pipe, stdin_data, argv);
+        child_run((ChildPipes){.out = out_pipe, .err = err_pipe, .in = in_pipe}, stdin_data, argv);
     }
 
     /* parent */
@@ -274,7 +302,6 @@ CmdResult run_remember(const char *db_path, const char *const *args, size_t narg
         in_pipe[0] = -1;
         write_all(in_pipe[1], stdin_data);
         close(in_pipe[1]);
-        in_pipe[1] = -1;
     }
 
     drain_two(out_pipe[0], err_pipe[0], &result.out, &result.err);
@@ -298,23 +325,31 @@ cleanup:
 
 /* ---- temp-dir registry: clean up every mkdtemp at process exit ----------- */
 
+/* Process-global registry of mkdtemp dirs to remove at exit; mutable by nature
+   (grows as tests create temp dirs, swept by an atexit handler). */
+// NOLINTBEGIN(cppcoreguidelines-avoid-non-const-global-variables)
 static char **g_temp_dirs;
 static size_t g_temp_count;
 static size_t g_temp_cap;
 static bool g_atexit_registered;
+// NOLINTEND(cppcoreguidelines-avoid-non-const-global-variables)
 
-/* Depth-first: tests nest databases under the temp dir (see parent-dir tests),
-   so a single-level unlink sweep would leave the whole tree behind in /tmp. */
+/* Depth-first: tests nest databases under the temp dir (see parent-dir tests), so a
+   single-level unlink sweep would leave the whole tree behind in /tmp. Intentional
+   recursion; depth is bounded by the test layout. */
+// NOLINTNEXTLINE(misc-no-recursion)
 static void remove_temp_dir(const char *dir)
 {
     DIR *d = opendir(dir);
 
     if (d != NULL) {
-        struct dirent *ent;
+        const struct dirent *ent = NULL;
+        /* readdir: single-threaded test harness; no portable reentrant variant. */
+        // NOLINTNEXTLINE(concurrency-mt-unsafe)
         while ((ent = readdir(d)) != NULL) {
-            char path[4096];
+            char path[PATH_BUFSIZE];
             struct stat st;
-            int n;
+            int n = 0;
             if (strcmp(ent->d_name, ".") == 0 || strcmp(ent->d_name, "..") == 0) {
                 continue;
             }
@@ -335,7 +370,7 @@ static void remove_temp_dir(const char *dir)
 
 static void cleanup_temp_dirs(void)
 {
-    size_t i;
+    size_t i = 0;
     for (i = 0; i < g_temp_count; i++) {
         remove_temp_dir(g_temp_dirs[i]);
         free(g_temp_dirs[i]);
@@ -348,14 +383,14 @@ static void cleanup_temp_dirs(void)
 
 static void register_temp_dir(const char *dir)
 {
-    char *copy;
+    char *copy = NULL;
 
     if (!g_atexit_registered) {
         (void)atexit(cleanup_temp_dirs);
         g_atexit_registered = true;
     }
     if (g_temp_count == g_temp_cap) {
-        size_t ncap = (g_temp_cap != 0U) ? g_temp_cap * 2U : 16U;
+        size_t ncap = (g_temp_cap != 0U) ? g_temp_cap * 2U : REGISTRY_INITIAL_CAP;
         char **grown = (char **)realloc((void *)g_temp_dirs, ncap * sizeof(*grown));
         if (grown == NULL) {
             return;
@@ -374,9 +409,9 @@ static void register_temp_dir(const char *dir)
 char *make_temp_db_path(void)
 {
     char tmpl[] = "/tmp/remember-test-XXXXXX";
-    char *dir;
-    char *path;
-    size_t n;
+    const char *dir = NULL;
+    char *path = NULL;
+    size_t n = 0;
 
     dir = mkdtemp(tmpl);
     if (dir == NULL) {
@@ -384,7 +419,7 @@ char *make_temp_db_path(void)
     }
     register_temp_dir(dir);
     n = strlen(dir) + strlen("/test.db") + 1U;
-    path = malloc(n);
+    path = (char *)malloc(n);
     if (path == NULL) {
         return NULL;
     }
@@ -394,7 +429,7 @@ char *make_temp_db_path(void)
 
 void trim_trailing_newlines(char *s)
 {
-    size_t n;
+    size_t n = 0;
     if (s == NULL) {
         return;
     }
@@ -407,9 +442,9 @@ void trim_trailing_newlines(char *s)
 
 long parse_id_stdout(const char *out)
 {
-    char *copy;
+    char *copy = NULL;
     char *end = NULL;
-    long id;
+    long id = 0;
 
     if (out == NULL) {
         return -1;
@@ -424,7 +459,7 @@ long parse_id_stdout(const char *out)
         return -1;
     }
     errno = 0;
-    id = strtol(copy, &end, 10);
+    id = strtol(copy, &end, DECIMAL_BASE);
     if (errno != 0 || end == copy || (end != NULL && *end != '\0')) {
         free(copy);
         return -1;
@@ -486,11 +521,11 @@ static bool shell_quote_append(char *dst, size_t cap, size_t *len, const char *s
 
 char *harness_sqlite_query_line(const char *db_path, const char *sql)
 {
-    char cmd[1024];
-    FILE *fp;
-    char line[512];
-    char *out;
-    size_t len;
+    char cmd[CMD_BUFSIZE];
+    FILE *fp = NULL;
+    char line[LINE_BUFSIZE];
+    char *out = NULL;
+    size_t len = 0;
 
     if (db_path == NULL || sql == NULL) {
         return NULL;
@@ -528,8 +563,8 @@ char *harness_sqlite_query_line(const char *db_path, const char *sql)
 
 char *dir_of_path(const char *file_path)
 {
-    char *copy;
-    char *slash;
+    char *copy = NULL;
+    char *slash = NULL;
 
     if (file_path == NULL) {
         return NULL;

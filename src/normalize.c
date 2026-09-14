@@ -6,6 +6,37 @@
 #include <stdlib.h>
 #include <string.h>
 
+/* ---- ASCII / UTF-8 byte constants (RFC 3629) -----------------------------
+ * Kept unsigned so the mask/shift arithmetic below stays unsigned (avoids
+ * sign-conversion on the unsigned-int code point and signed-bitwise shifts). */
+static const unsigned ASCII_MAX = 0x7FU;             /* last single-byte code point */
+static const unsigned ASCII_DEL = 0x7FU;             /* DEL control */
+static const unsigned ASCII_FIRST_PRINTABLE = 0x20U; /* first non-control byte */
+
+static const unsigned UTF8_CONT_MASK = 0xC0U;
+static const unsigned UTF8_CONT_TAG = 0x80U;
+static const unsigned UTF8_CONT_PAYLOAD = 0x3FU;
+static const unsigned UTF8_CONT_SHIFT = 6U;
+static const unsigned UTF8_LEAD2_MASK = 0xE0U;
+static const unsigned UTF8_LEAD2_TAG = 0xC0U;
+static const unsigned UTF8_LEAD2_MIN = 0xC2U;
+static const unsigned UTF8_LEAD2_PAYLOAD = 0x1FU;
+static const unsigned UTF8_LEAD3_MASK = 0xF0U;
+static const unsigned UTF8_LEAD3_TAG = 0xE0U;
+static const unsigned UTF8_LEAD3_PAYLOAD = 0x0FU;
+static const unsigned UTF8_LEAD4_MASK = 0xF8U;
+static const unsigned UTF8_LEAD4_TAG = 0xF0U;
+static const unsigned UTF8_LEAD4_MAX = 0xF4U;
+static const unsigned UTF8_LEAD4_PAYLOAD = 0x07U;
+
+static const unsigned CP_2BYTE_MIN = 0x800U;
+static const unsigned CP_SURROGATE_MIN = 0xD800U;
+static const unsigned CP_SURROGATE_MAX = 0xDFFFU;
+static const unsigned CP_4BYTE_MIN = 0x10000U;
+static const unsigned CP_MAX = 0x10FFFFU;
+
+static const unsigned HEX_NIBBLE_MASK = 0x0FU;
+
 /* ---- ASCII class helpers ------------------------------------------------- */
 
 static bool is_ascii_ws(unsigned char c)
@@ -20,7 +51,7 @@ static bool is_ascii_ws(unsigned char c)
 
 static bool is_ascii_control(unsigned char c)
 {
-    if (c < 0x20U || c == 0x7FU) {
+    if (c < ASCII_FIRST_PRINTABLE || c == ASCII_DEL) {
         return true;
     }
     return false;
@@ -41,8 +72,14 @@ static bool is_token_forbidden(unsigned char c)
     return false;
 }
 
-/* Span [start, end) after stripping leading/trailing ASCII whitespace. */
-static void ascii_ws_trim_span(const char *s, size_t len, size_t *start_out, size_t *end_out)
+/* A half-open [start, end) byte range. */
+typedef struct {
+    size_t start;
+    size_t end;
+} Span;
+
+/* [start, end) after stripping leading/trailing ASCII whitespace. */
+static Span ascii_ws_trim_span(const char *s, size_t len)
 {
     size_t start = 0;
     size_t end = len;
@@ -53,8 +90,7 @@ static void ascii_ws_trim_span(const char *s, size_t len, size_t *start_out, siz
     while (end > start && is_ascii_ws((unsigned char)s[end - 1U])) {
         end--;
     }
-    *start_out = start;
-    *end_out = end;
+    return (Span){.start = start, .end = end};
 }
 
 /* ---- UTF-8 (RFC 3629) ---------------------------------------------------- */
@@ -62,25 +98,25 @@ static void ascii_ws_trim_span(const char *s, size_t len, size_t *start_out, siz
 /* Decode one non-ASCII lead byte into need/cp_prefix; false = invalid lead. */
 static bool utf8_lead(unsigned char c, size_t *need, unsigned int *cp)
 {
-    if ((c & 0xE0U) == 0xC0U) {
-        if (c < 0xC2U) {
+    if ((c & UTF8_LEAD2_MASK) == UTF8_LEAD2_TAG) {
+        if (c < UTF8_LEAD2_MIN) {
             return false; /* overlong 2-byte */
         }
         *need = 2;
-        *cp = c & 0x1FU;
+        *cp = c & UTF8_LEAD2_PAYLOAD;
         return true;
     }
-    if ((c & 0xF0U) == 0xE0U) {
+    if ((c & UTF8_LEAD3_MASK) == UTF8_LEAD3_TAG) {
         *need = 3;
-        *cp = c & 0x0FU;
+        *cp = c & UTF8_LEAD3_PAYLOAD;
         return true;
     }
-    if ((c & 0xF8U) == 0xF0U) {
-        if (c > 0xF4U) {
+    if ((c & UTF8_LEAD4_MASK) == UTF8_LEAD4_TAG) {
+        if (c > UTF8_LEAD4_MAX) {
             return false; /* would exceed U+10FFFF */
         }
         *need = 4;
-        *cp = c & 0x07U;
+        *cp = c & UTF8_LEAD4_PAYLOAD;
         return true;
     }
     return false;
@@ -89,35 +125,43 @@ static bool utf8_lead(unsigned char c, size_t *need, unsigned int *cp)
 /* Append continuation bytes; false if truncated or bad continuation. */
 static bool utf8_cont(const char *s, size_t len, size_t i, size_t need, unsigned int *cp)
 {
-    size_t j;
+    size_t j = 0;
 
     if (i + need > len) {
         return false;
     }
     for (j = 1; j < need; j++) {
         unsigned char cc = (unsigned char)s[i + j];
-        if ((cc & 0xC0U) != 0x80U) {
+        if ((cc & UTF8_CONT_MASK) != UTF8_CONT_TAG) {
             return false;
         }
-        *cp = (*cp << 6) | (cc & 0x3FU);
+        *cp = (*cp << UTF8_CONT_SHIFT) | (cc & UTF8_CONT_PAYLOAD);
     }
     return true;
 }
 
+/* A decoded scalar: the sequence length that produced it and its code point.
+   Grouped so the two convertible values cannot be transposed at the call site. */
+typedef struct {
+    size_t need;
+    unsigned int cp;
+    char pad_[4]; /* explicit tail padding (kept -Wpadded-clean) */
+} Utf8Scalar;
+
 /* Reject overlong encodings, surrogates, and out-of-range scalar values. */
-static bool utf8_cp_ok(size_t need, unsigned int cp)
+static bool utf8_cp_ok(Utf8Scalar dec)
 {
-    if (need == 3U) {
-        if (cp < 0x800U) {
+    if (dec.need == 3U) {
+        if (dec.cp < CP_2BYTE_MIN) {
             return false;
         }
-        if (cp >= 0xD800U && cp <= 0xDFFFU) {
+        if (dec.cp >= CP_SURROGATE_MIN && dec.cp <= CP_SURROGATE_MAX) {
             return false;
         }
         return true;
     }
-    if (need == 4U) {
-        if (cp >= 0x10000U && cp <= 0x10FFFFU) {
+    if (dec.need == 4U) {
+        if (dec.cp >= CP_4BYTE_MIN && dec.cp <= CP_MAX) {
             return true;
         }
         return false;
@@ -138,7 +182,7 @@ static bool utf8_is_valid(const char *s, size_t len)
         size_t need = 0;
         unsigned int cp = 0;
 
-        if (c <= 0x7FU) {
+        if (c <= ASCII_MAX) {
             i++;
             continue;
         }
@@ -148,7 +192,7 @@ static bool utf8_is_valid(const char *s, size_t len)
         if (!utf8_cont(s, len, i, need, &cp)) {
             return false;
         }
-        if (!utf8_cp_ok(need, cp)) {
+        if (!utf8_cp_ok((Utf8Scalar){.need = need, .cp = cp})) {
             return false;
         }
         i += need;
@@ -160,10 +204,10 @@ static bool utf8_is_valid(const char *s, size_t len)
 
 NormStatus body_trim_copy(const char *src, size_t src_len, char **out, size_t *out_len)
 {
-    size_t start;
-    size_t end;
-    size_t n;
-    char *buf;
+    size_t start = 0;
+    size_t end = 0;
+    size_t n = 0;
+    char *buf = NULL;
 
     if (out == NULL) {
         return NORM_ERR_INTERNAL;
@@ -181,7 +225,7 @@ NormStatus body_trim_copy(const char *src, size_t src_len, char **out, size_t *o
        body, its length, and its hash all agree (no bytes after the terminator).
        Pure C11 (no strnlen — POSIX, and IWYU/glibc hide it under -std=c11). */
     {
-        size_t i;
+        size_t i = 0;
         for (i = 0; i < src_len; i++) {
             if (src[i] == '\0') {
                 src_len = i;
@@ -190,7 +234,11 @@ NormStatus body_trim_copy(const char *src, size_t src_len, char **out, size_t *o
         }
     }
 
-    ascii_ws_trim_span(src, src_len, &start, &end);
+    {
+        Span span = ascii_ws_trim_span(src, src_len);
+        start = span.start;
+        end = span.end;
+    }
     if (start >= end) {
         return NORM_ERR_EMPTY;
     }
@@ -202,7 +250,7 @@ NormStatus body_trim_copy(const char *src, size_t src_len, char **out, size_t *o
         return NORM_ERR_INVALID_UTF8;
     }
 
-    buf = malloc(n + 1U);
+    buf = (char *)malloc(n + 1U);
     if (buf == NULL) {
         return NORM_ERR_OOM;
     }
@@ -217,12 +265,13 @@ NormStatus body_trim_copy(const char *src, size_t src_len, char **out, size_t *o
 
 /* ---- tag / key ----------------------------------------------------------- */
 
+/* cppcheck-suppress staticFunction ; public API (normalize.h); used by output.c and tests */
 NormStatus normalize_token(const char *src, char *out, size_t out_cap)
 {
-    size_t start;
-    size_t end;
-    size_t n;
-    size_t i;
+    size_t start = 0;
+    size_t end = 0;
+    size_t n = 0;
+    size_t i = 0;
 
     /* No usable output buffer is a caller bug, not an over-long token. */
     if (out == NULL || out_cap == 0U) {
@@ -234,7 +283,11 @@ NormStatus normalize_token(const char *src, char *out, size_t out_cap)
         return NORM_ERR_EMPTY;
     }
 
-    ascii_ws_trim_span(src, strlen(src), &start, &end);
+    {
+        Span span = ascii_ws_trim_span(src, strlen(src));
+        start = span.start;
+        end = span.end;
+    }
     if (start >= end) {
         return NORM_ERR_EMPTY;
     }
@@ -281,7 +334,7 @@ void body_hash_hex(const void *data, size_t len, char out_hex[REMEMBER_SHA256_HE
 {
     SHA256_CTX ctx;
     BYTE digest[SHA256_BLOCK_SIZE];
-    size_t i;
+    size_t i = 0;
     static const char k_hex[] = "0123456789abcdef";
 
     /* Empty-string digest is well-defined (NIST vector); callers reject empty
@@ -296,8 +349,8 @@ void body_hash_hex(const void *data, size_t len, char out_hex[REMEMBER_SHA256_HE
         unsigned char b = digest[i];
         size_t hi = i * 2U;
         size_t lo = hi + 1U;
-        out_hex[hi] = k_hex[(b >> 4) & 0x0FU];
-        out_hex[lo] = k_hex[b & 0x0FU];
+        out_hex[hi] = k_hex[((unsigned int)b >> 4U) & HEX_NIBBLE_MASK];
+        out_hex[lo] = k_hex[b & HEX_NIBBLE_MASK];
     }
     out_hex[REMEMBER_SHA256_HEX_LEN] = '\0';
 }

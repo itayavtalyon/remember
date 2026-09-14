@@ -6,7 +6,7 @@
 
 static void set_err(char *err, size_t errlen, const char *msg)
 {
-    size_t n;
+    size_t n = 0;
 
     if (err == NULL || errlen == 0U) {
         return;
@@ -27,7 +27,7 @@ static int path_is_ephemeral(const char *path)
     if (strcmp(path, ":memory:") == 0) {
         return 1;
     }
-    if (strncmp(path, "file:", 5) == 0) {
+    if (strncmp(path, "file:", sizeof("file:") - 1U) == 0) {
         return 1;
     }
     return 0;
@@ -41,7 +41,7 @@ int util_path_looks_synced(const char *path)
         "Google Drive",
         NULL,
     };
-    size_t i;
+    size_t i = 0;
 
     if (path == NULL || path[0] == '\0') {
         return 0;
@@ -56,9 +56,9 @@ int util_path_looks_synced(const char *path)
 
 int util_resolve_db_path(const char *cli_db, char *buf, size_t buflen, char *err, size_t errlen)
 {
-    const char *chosen;
-    const char *home;
-    int n;
+    const char *chosen = NULL;
+    const char *home = NULL;
+    int n = 0;
 
     if (buf == NULL || buflen == 0U) {
         set_err(err, errlen, "internal error: path buffer missing");
@@ -68,6 +68,8 @@ int util_resolve_db_path(const char *cli_db, char *buf, size_t buflen, char *err
     if (cli_db != NULL && cli_db[0] != '\0') {
         chosen = cli_db;
     } else {
+        /* Single-threaded CLI; getenv has no portable thread-safe variant in C11/POSIX. */
+        // NOLINTNEXTLINE(concurrency-mt-unsafe)
         chosen = getenv("REMEMBER_DB");
         if (chosen != NULL && chosen[0] == '\0') {
             chosen = NULL;
@@ -88,6 +90,8 @@ int util_resolve_db_path(const char *cli_db, char *buf, size_t buflen, char *err
         return 0;
     }
 
+    /* Single-threaded CLI; getenv has no portable thread-safe variant in C11/POSIX. */
+    // NOLINTNEXTLINE(concurrency-mt-unsafe)
     home = getenv("HOME");
     if (home == NULL || home[0] == '\0') {
         set_err(err, errlen, "HOME is not set; pass --db PATH");
@@ -103,6 +107,7 @@ int util_resolve_db_path(const char *cli_db, char *buf, size_t buflen, char *err
 
 int util_read_stdin(char **out, size_t *out_len, size_t max_len)
 {
+    enum { STDIN_INITIAL_CAP = 4096 }; /* first read buffer; doubles thereafter */
     char *buf = NULL;
     size_t len = 0U;
     size_t cap = 0U;
@@ -129,12 +134,12 @@ int util_read_stdin(char **out, size_t *out_len, size_t max_len)
             return -2;
         }
         if (len + 1U >= cap) {
-            size_t ncap = (cap == 0U) ? 4096U : cap * 2U;
-            char *nb;
+            size_t ncap = (cap == 0U) ? (size_t)STDIN_INITIAL_CAP : cap * 2U;
+            char *nb = NULL;
             if (ncap < len + 2U) {
                 ncap = len + 2U;
             }
-            nb = realloc(buf, ncap);
+            nb = (char *)realloc(buf, ncap);
             if (nb == NULL) {
                 free(buf);
                 return -1;
@@ -147,7 +152,7 @@ int util_read_stdin(char **out, size_t *out_len, size_t max_len)
     }
 
     if (buf == NULL) {
-        buf = malloc(1U);
+        buf = (char *)malloc(1U);
         if (buf == NULL) {
             return -1;
         }

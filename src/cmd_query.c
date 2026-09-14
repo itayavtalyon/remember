@@ -17,23 +17,24 @@
 
 /* list / search: shared filter + paging parse, different store call + query. */
 
-#define LIST_LIMIT_DEFAULT 20U
-#define LIST_LIMIT_MAX 1000U
+enum { DECIMAL_BASE = 10 };
+enum { LIST_LIMIT_DEFAULT = 20 };
+enum { LIST_LIMIT_MAX = 1000 };
 /* Bounded well under the store's per-query parameter budget (LIST_BIND_CAP) so
    an over-cap filter set is a clear user error here, not an opaque store one. */
-#define LIST_TAG_FILTER_MAX 50U
+enum { LIST_TAG_FILTER_MAX = 50 };
 
 /* Parse a non-negative size_t from decimal text. Rejects empty, non-digits, ERANGE. */
 static int parse_size_token(const char *raw, size_t *out)
 {
     char *end = NULL;
-    unsigned long long v;
+    unsigned long long v = 0;
 
     if (raw == NULL || raw[0] == '\0' || raw[0] == '-') {
         return -1;
     }
     errno = 0;
-    v = strtoull(raw, &end, 10);
+    v = strtoull(raw, &end, DECIMAL_BASE);
     if (end == raw || (end != NULL && *end != '\0') || errno == ERANGE) {
         return -1;
     }
@@ -55,6 +56,8 @@ typedef struct {
     size_t limit;
     size_t offset;
     bool trash;
+    /* NOLINTNEXTLINE(readability-magic-numbers,cppcoreguidelines-avoid-magic-numbers) */
+    char pad_[7]; /* explicit tail padding (kept -Wpadded-clean) */
 } ListParse;
 
 static void list_parse_free(ListParse *p)
@@ -70,8 +73,13 @@ static int list_take_limit(int *i, int rest_argc, const char **rest_argv, size_t
     const char *val = NULL;
     size_t lim = 0U;
 
-    if (take_value(i, rest_argc, rest_argv, &val, err, "missing value for --limit") != 0) {
-        return -1;
+    {
+        TakeValue taken = take_value(i, rest_argc, rest_argv, "missing value for --limit");
+        if (taken.rc != 0) {
+            *err = taken.err;
+            return -1;
+        }
+        val = taken.value;
     }
     if (parse_size_token(val, &lim) != 0 || lim == 0U || lim > LIST_LIMIT_MAX) {
         *err = "invalid --limit (must be 1..1000)";
@@ -87,8 +95,13 @@ static int list_take_offset(int *i, int rest_argc, const char **rest_argv, size_
     const char *val = NULL;
     size_t off = 0U;
 
-    if (take_value(i, rest_argc, rest_argv, &val, err, "missing value for --offset") != 0) {
-        return -1;
+    {
+        TakeValue taken = take_value(i, rest_argc, rest_argv, "missing value for --offset");
+        if (taken.rc != 0) {
+            *err = taken.err;
+            return -1;
+        }
+        val = taken.value;
     }
     if (parse_size_token(val, &off) != 0) {
         *err = "invalid --offset (must be >= 0)";
@@ -111,8 +124,13 @@ static int list_handle_opt(const char *arg, int *i, int rest_argc, const char **
         return 1;
     }
     if (strcmp(arg, "--tag") == 0) {
-        if (take_value(i, rest_argc, rest_argv, &val, err, "missing value for --tag") != 0) {
-            return -1;
+        {
+            TakeValue taken = take_value(i, rest_argc, rest_argv, "missing value for --tag");
+            if (taken.rc != 0) {
+                *err = taken.err;
+                return -1;
+            }
+            val = taken.value;
         }
         if (push_cstr_ptr(&out->tag_raw, &out->ntag_raw, tag_cap, val) != 0) {
             *err = "out of memory";
@@ -121,10 +139,22 @@ static int list_handle_opt(const char *arg, int *i, int rest_argc, const char **
         return 0;
     }
     if (strcmp(arg, "--source") == 0) {
-        return take_value(i, rest_argc, rest_argv, &out->source, err, "missing value for --source");
+        TakeValue taken = take_value(i, rest_argc, rest_argv, "missing value for --source");
+        if (taken.rc != 0) {
+            *err = taken.err;
+            return taken.rc;
+        }
+        out->source = taken.value;
+        return 0;
     }
     if (strcmp(arg, "--key") == 0) {
-        return take_value(i, rest_argc, rest_argv, &out->key_raw, err, "missing value for --key");
+        TakeValue taken = take_value(i, rest_argc, rest_argv, "missing value for --key");
+        if (taken.rc != 0) {
+            *err = taken.err;
+            return taken.rc;
+        }
+        out->key_raw = taken.value;
+        return 0;
     }
     if (strcmp(arg, "--limit") == 0) {
         return list_take_limit(i, rest_argc, rest_argv, &out->limit, err);
@@ -157,7 +187,7 @@ static void list_parse_init(ListParse *out)
 
 static int parse_list_args(int rest_argc, const char **rest_argv, ListParse *out, const char **err)
 {
-    int i;
+    int i = 0;
     int end_opts = 0;
     size_t tag_cap = 0U;
 
@@ -166,7 +196,7 @@ static int parse_list_args(int rest_argc, const char **rest_argv, ListParse *out
 
     for (i = 0; i < rest_argc; i++) {
         const char *arg = rest_argv[i];
-        int kind;
+        int kind = 0;
 
         if (end_opts) {
             *err = "unexpected argument";
@@ -219,11 +249,11 @@ static int is_ascii_ws(unsigned char c)
  */
 static char *trim_query_copy(const char *raw, const char **err)
 {
-    size_t len;
+    size_t len = 0;
     size_t start = 0U;
-    size_t end;
-    size_t n;
-    char *out;
+    size_t end = 0;
+    size_t n = 0;
+    char *out = NULL;
 
     if (raw == NULL) {
         *err = "empty search query";
@@ -266,7 +296,7 @@ static int search_set_query(SearchParse *out, const char *arg, const char **err)
 static int parse_search_args(int rest_argc, const char **rest_argv, SearchParse *out,
                              const char **err)
 {
-    int i;
+    int i = 0;
     int end_opts = 0;
     size_t tag_cap = 0U;
 
@@ -277,7 +307,7 @@ static int parse_search_args(int rest_argc, const char **rest_argv, SearchParse 
 
     for (i = 0; i < rest_argc; i++) {
         const char *arg = rest_argv[i];
-        int kind;
+        int kind = 0;
 
         if (end_opts) {
             if (search_set_query(out, arg, err) != 0) {
@@ -361,8 +391,8 @@ static int load_page_neighbors(Store *s, const Entry *entries, size_t count, con
                                StoreNeighbor **out, size_t *out_n)
 {
     long long *ids = NULL;
-    size_t i;
-    StoreStatus st;
+    size_t i = 0;
+    StoreStatus st = STORE_OK;
 
     *out = NULL;
     *out_n = 0U;
@@ -391,7 +421,7 @@ static int emit_entry_page(bool json, size_t offset, size_t limit, size_t count,
                            const Entry *entries, const StoreNeighbor *links, size_t nlinks,
                            const char *now)
 {
-    size_t i;
+    size_t i = 0;
 
     if (json) {
         return output_list_envelope(app_out(), offset, limit, count, total, entries, links, nlinks,
@@ -407,7 +437,7 @@ static int emit_entry_page(bool json, size_t offset, size_t limit, size_t count,
 
 static void free_entry_page(Entry *entries, size_t count)
 {
-    size_t i;
+    size_t i = 0;
 
     if (entries == NULL) {
         return;
@@ -431,9 +461,9 @@ int cmd_list(Store *s, bool json, int rest_argc, const char **rest_argv)
     size_t total = 0U;
     StoreNeighbor *links = NULL;
     size_t nlinks = 0U;
-    StoreStatus st;
+    StoreStatus st = STORE_OK;
     int rc = REMEMBER_ERR;
-    char now[32];
+    char now[ISO_TS_BUFSIZE];
 
     memset(&q, 0, sizeof(q));
     memset(key_norm, 0, sizeof(key_norm));
@@ -454,7 +484,13 @@ int cmd_list(Store *s, bool json, int rest_argc, const char **rest_argv)
         err_msg("internal error");
         goto cleanup;
     }
-    st = store_list(s, &q, now, &entries, &count, &total);
+    {
+        PageResult page = store_list(s, &q, now);
+        st = page.st;
+        entries = page.entries;
+        count = page.count;
+        total = page.total;
+    }
     if (st != STORE_OK) {
         err_msg(store_status_message(st));
         goto cleanup;
@@ -490,9 +526,9 @@ int cmd_search(Store *s, bool json, int rest_argc, const char **rest_argv)
     size_t total = 0U;
     StoreNeighbor *links = NULL;
     size_t nlinks = 0U;
-    StoreStatus st;
+    StoreStatus st = STORE_OK;
     int rc = REMEMBER_ERR;
-    char now[32];
+    char now[ISO_TS_BUFSIZE];
 
     memset(&q, 0, sizeof(q));
     memset(key_norm, 0, sizeof(key_norm));
@@ -515,7 +551,13 @@ int cmd_search(Store *s, bool json, int rest_argc, const char **rest_argv)
         err_msg("internal error");
         goto cleanup;
     }
-    st = store_search(s, &q, now, &entries, &count, &total);
+    {
+        PageResult page = store_search(s, &q, now);
+        st = page.st;
+        entries = page.entries;
+        count = page.count;
+        total = page.total;
+    }
     if (st != STORE_OK) {
         err_msg(store_status_message(st));
         goto cleanup;

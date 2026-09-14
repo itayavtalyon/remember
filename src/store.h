@@ -99,36 +99,49 @@ StoreStatus store_get_by_key(Store *s, const char *key, bool trash, const char *
  */
 typedef struct {
     const char *const *tags; /* may be NULL when ntags == 0 */
+    const char *source;      /* NULL = any */
+    const char *key;         /* NULL = any; exact match */
     size_t ntags;
-    const char *source; /* NULL = any */
-    const char *key;    /* NULL = any; exact match */
     size_t limit;
     size_t offset;
     bool trash; /* false = active only; true = trash only */
+    /* NOLINTNEXTLINE(readability-magic-numbers,cppcoreguidelines-avoid-magic-numbers) */
+    char pad_[7]; /* explicit tail padding to keep the struct -Wpadded-clean */
 } ListQuery;
+
+/*
+ * Result of a counted, paged query (store_list / store_search). On st == STORE_OK,
+ * entries is a heap array of count Entries (free each with store_entry_free, then
+ * free the array) and total is the unpaged count; on error entries is NULL and
+ * count/total are 0. count and total travel together so they cannot be transposed.
+ */
+typedef struct {
+    Entry *entries;
+    size_t count;
+    size_t total;
+    StoreStatus st;
+    char pad_[4]; /* explicit tail padding (kept -Wpadded-clean) */
+} PageResult;
 
 /*
  * List entries newest-first (updated_at DESC, id DESC) with optional filters.
  * now is required (canonical .mmmZ). Bin filter: active (default) or trash.
- * On STORE_OK: *out_entries is a heap array of *out_count Entries (free each
- * with store_entry_free, then free the array); *out_total is the unpaged count.
+ * See PageResult for ownership.
  */
-StoreStatus store_list(Store *s, const ListQuery *q, const char *now, Entry **out_entries,
-                       size_t *out_count, size_t *out_total);
+PageResult store_list(Store *s, const ListQuery *q, const char *now);
 
 /*
  * Ranked FTS5 search. query is raw FTS5 MATCH syntax (required, non-empty at CLI).
  * filters reuse ListQuery: tag AND, optional source/key, limit/offset.
  * Rank: bm25(entries_fts) ASC, then updated_at DESC, id DESC.
- * On STORE_OK: same ownership as store_list. STORE_ERR_QUERY on bad MATCH syntax.
+ * Same ownership as store_list (see PageResult). STORE_ERR_QUERY on bad MATCH syntax.
  */
 typedef struct {
     const char *query; /* FTS5 MATCH string */
     ListQuery filters;
 } SearchQuery;
 
-StoreStatus store_search(Store *s, const SearchQuery *q, const char *now, Entry **out_entries,
-                         size_t *out_count, size_t *out_total);
+PageResult store_search(Store *s, const SearchQuery *q, const char *now);
 
 /*
  * Hard-delete one entry. Under one write transaction: load snapshot, remove FTS
@@ -194,6 +207,20 @@ StoreStatus store_purge_trash(Store *s, const char *now, Entry **out_entries, si
 /* Stored kind only. cited_by / superseded_by are output-only (CLI). */
 typedef enum { STORE_EDGE_RELATED = 0, STORE_EDGE_SUPERSEDES, STORE_EDGE_CITES } StoreEdgeKind;
 
+/* A directed (from_id -> to_id) endpoint pair. Passed by value so call sites
+   name each end (designated initializer) and cannot silently transpose them. */
+typedef struct {
+    long long from_id;
+    long long to_id;
+} StoreEdge;
+
+/* Rekey selector + target: current key to match (NULL => locate by id / keyless)
+   and the new key (NULL => clear to keyless). Named so the two cannot transpose. */
+typedef struct {
+    const char *key_or_null;
+    const char *new_key_or_null;
+} RekeyKeys;
+
 typedef enum { STORE_LINK_CREATED = 0, STORE_LINK_MERGED, STORE_LINK_DELETED } StoreLinkAction;
 
 typedef enum {
@@ -207,12 +234,13 @@ typedef struct {
     long long subject_id;
     long long from_id;
     long long to_id;
-    StoreEdgeKind kind;
     char *edge_updated_at;
     long long neighbor_id;
     char *neighbor_key; /* NULL if keyless */
     char *neighbor_body;
     char *neighbor_expires_at; /* NULL if durable */
+    StoreEdgeKind kind;
+    char pad_[4]; /* explicit tail padding (kept -Wpadded-clean) */
 } StoreNeighbor;
 
 void store_neighbor_free(StoreNeighbor *n);
@@ -228,8 +256,8 @@ StoreStatus store_get_any_by_key(Store *s, const char *key, Entry *out_entry);
  * cycle → CYCLE. Real write bumps updated_at on both endpoints.
  * *out_stub is subject-relative to from_id (caller frees).
  */
-StoreStatus store_link(Store *s, long long from_id, long long to_id, StoreEdgeKind kind,
-                       const char *now, StoreLinkAction *out_action, StoreNeighbor *out_stub);
+StoreStatus store_link(Store *s, StoreEdge edge, StoreEdgeKind kind, const char *now,
+                       StoreLinkAction *out_action, StoreNeighbor *out_stub);
 
 /*
  * Delete edges. kind NULL = all kinds between the unordered pair. related
@@ -257,9 +285,8 @@ StoreStatus store_list_neighbors_for(Store *s, const long long *ids, size_t nids
  * non-empty). Id and edges preserved. NEWKEY taken or demote body-hash
  * collision → CONFLICT + *out_conflict_id. Always bumps updated_at.
  */
-StoreStatus store_rekey(Store *s, long long id, const char *key_or_null,
-                        const char *new_key_or_null, bool trash, const char *now, Entry *out_entry,
-                        long long *out_conflict_id);
+StoreStatus store_rekey(Store *s, long long id, RekeyKeys keys, bool trash, const char *now,
+                        Entry *out_entry, long long *out_conflict_id);
 
 /*
  * Test-only fault injection (compiled when REMEMBER_TEST_HOOKS is defined).

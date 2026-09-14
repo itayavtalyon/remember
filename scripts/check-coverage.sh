@@ -147,6 +147,8 @@ DEFENSIVE = re.compile(
     |^\s*return\s+-1\s*;\s*$
     |^\s*return\s+NULL\s*;\s*$
     |^\s*return\s+STORE_ERR_
+    |^\s*return\s+\(PageResult\)\{         # PageResult early-error return (return-by-value refactor)
+    |^\s*return\s+\w+\.rc\s*;              # TakeValue/ExpiryResult error-path rc return
     |^\s*return\s+REMEMBER_ERR\b
     |^\s*return\s+REMEMBER_NOT_FOUND\b
     |^\s*return\s+REMEMBER_OK\b
@@ -173,7 +175,7 @@ DEFENSIVE = re.compile(
     |^\s*add_parse_free\s*\(
     |^\s*list_parse_free\s*\(
     |^\s*free\s*\(
-    |^\s*size_t\s+\w+\s*;
+    |^\s*size_t\s+\w+\s*(=\s*0U?\s*)?;      # decl (init-variables may add = 0)
     |^\s*end_opts\s*=
     |^\s*g_fail_\w+\s*--
     |^\s*set_errf?\s*\(
@@ -185,7 +187,7 @@ DEFENSIVE = re.compile(
     |^\s*\*out_total\s*=
     |^\s*st\s*=\s*STORE_ERR_
     |^\s*free_entry_rows\s*\(
-    |^\s*buf\s*=\s*malloc\s*\(
+    |^\s*buf\s*=\s*(\(char\s*\*\)\s*)?malloc\s*\(   # cast added by clang-tidy readability
     |^\s*ncap\s*=
     |^\s*len\s*=\s*0U\s*;
     |^\s*clen\s*=\s*1U\s*;
@@ -227,6 +229,13 @@ defensive = 0
 for path, ln in zeros:
     src_lines = Path(path).read_text().splitlines()
     code = src_lines[ln - 1] if 0 < ln <= len(src_lines) else ""
+    # A physical line ending in ',' is a wrapped statement fragment (e.g. a call's
+    # argument list split by clang-format). llvm-cov attributes the region to one
+    # sibling line, leaving the others zero-hit even though the statement ran; the
+    # substance is on those sibling lines, which are checked in their own right.
+    if code.rstrip().endswith(","):
+        defensive += 1
+        continue
     if DEFENSIVE.match(code):
         defensive += 1
         continue

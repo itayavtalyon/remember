@@ -11,12 +11,15 @@
 
 #include <stddef.h>
 
+/* Stack buffer size for a canonical ISO-8601 UTC timestamp
+   ("YYYY-MM-DDTHH:MM:SS.mmmZ", 24 bytes + NUL). Must be >= 25. */
+enum { ISO_TS_BUFSIZE = 32 };
+
 void err_msg(const char *msg);
 
 /* Parse a positive entry id token. 0 ok, -1 invalid (does not print). */
 int parse_entry_id(const char *raw, long long *out_id);
 
-const char *norm_body_message(NormStatus st);
 const char *norm_token_message(NormStatus st, const char *kind);
 
 int source_is_valid(const char *s);
@@ -25,9 +28,16 @@ const char *action_name(StoreAddAction a);
 /* Growable argv-alias list (tags). Does not own the strings. */
 int push_cstr_ptr(const char ***arr, size_t *n, size_t *cap, const char *t);
 
-/* Take the next token as an option value; advances *i. */
-int take_value(int *i, int rest_argc, const char **rest_argv, const char **out, const char **err,
-               const char *missing_msg);
+/* Result of take_value: rc 0 with value set, or rc -1 with err (the missing_msg). */
+typedef struct {
+    const char *value;
+    const char *err;
+    int rc;
+    char pad_[4]; /* explicit tail padding (kept -Wpadded-clean) */
+} TakeValue;
+
+/* Take the next token as an option value; advances *i on success. */
+TakeValue take_value(int *i, int rest_argc, const char **rest_argv, const char *missing_msg);
 
 int normalize_tags(const char *const *tag_raw, size_t ntag_raw, char ***out_tags, size_t *out_ntags,
                    const char **err);
@@ -47,18 +57,25 @@ int store_status_to_exit(StoreStatus st);
 int load_body(const char *body_raw, int dash_is_stdin, char **out_body, size_t *out_len,
               const char **err);
 
-/* --ttl token -> canonical .mmmZ using command `now`. 0 ok, -1 usage (*err). */
-int parse_ttl_to_expires(const char *token, const char *now, char *out, size_t outlen,
-                         const char **err);
+/* The mutually-exclusive --ttl / --expires flag values (either may be NULL). */
+typedef struct {
+    const char *ttl_raw;
+    const char *expires_raw;
+} ExpiryFlags;
 
-/* --expires token -> canonical .mmmZ. 0 ok, -1 usage (*err). */
-int parse_expires_to_iso(const char *token, char *out, size_t outlen, const char **err);
+/* Result of resolve_expiry_flags: rc 0 with expires (NULL if neither flag given,
+   else points into the caller's out buffer), or rc -1 with err. */
+typedef struct {
+    const char *expires;
+    const char *err;
+    int rc;
+    char pad_[4]; /* explicit tail padding (kept -Wpadded-clean) */
+} ExpiryResult;
 
 /*
- * Resolve --ttl / --expires mutex into *out_expires (NULL if neither).
- * out must live as long as *out_expires is used. 0 ok, -1 usage (*err).
+ * Resolve the --ttl / --expires mutex. On rc 0, expires is NULL (neither) or points
+ * into out (canonical .mmmZ); out must outlive use of expires. rc -1 sets err.
  */
-int resolve_expiry_flags(const char *ttl_raw, const char *expires_raw, const char *now, char *out,
-                         size_t outlen, const char **out_expires, const char **err);
+ExpiryResult resolve_expiry_flags(ExpiryFlags flags, const char *now, char *out, size_t outlen);
 
 #endif /* REMEMBER_COMMANDS_COMMON_H */
