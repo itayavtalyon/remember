@@ -22,12 +22,12 @@ Plans: [`implementation-plans/INDEX.md`](implementation-plans/INDEX.md).
 
 ```bash
 brew install itayavtalyon/remember/remember
-remember-install-skill
+remember-install-skill   # required: agent skill (Homebrew cannot write ~/.claude)
 ```
 
-Builds the release binary from source (needs `cmake`; no other dependencies).
-Homebrew cannot write into `~/.claude` / `~/.grok` / `~/.cursor`, so the formula
-ships the skill in the keg and `remember-install-skill` symlinks it into agent
+You also need to run `remember-install-skill` after `brew install`. The formula
+ships the binary and the skill file; Homebrew cannot write into `~/.claude` /
+`~/.grok` / `~/.cursor`, so that second command symlinks the skill into agent
 trees that already exist. Re-run after installing a new agent. Upgrade or
 uninstall the usual way (`brew upgrade remember` / `brew uninstall remember`).
 
