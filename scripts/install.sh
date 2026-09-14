@@ -200,63 +200,15 @@ install_binary() {
   "$bin_dst" --version || true
 }
 
-default_skill_dirs() {
-  local dirs=()
-  # Only touch skill roots for products that already exist on this machine.
-  if [[ -d "$HOME/.grok" ]]; then
-    dirs+=("$HOME/.grok/skills")
-  fi
-  if [[ -d "$HOME/.claude" ]]; then
-    dirs+=("$HOME/.claude/skills")
-  fi
-  if [[ -d "$HOME/.cursor" ]]; then
-    dirs+=("$HOME/.cursor/skills")
-  fi
-  # bash 3.2 (macOS): empty "${dirs[@]}" aborts under set -u.
-  if [[ ${#dirs[@]} -gt 0 ]]; then
-    printf '%s\n' "${dirs[@]}"
-  fi
-}
-
 install_skills() {
-  local dirs=()
-  local d dest ok=0
-
-  if [[ -n "${REMEMBER_SKILL_DIRS:-}" ]]; then
-    IFS=':' read -r -a dirs <<< "$REMEMBER_SKILL_DIRS"
-  else
-    while IFS= read -r d; do
-      [[ -n "$d" ]] && dirs+=("$d")
-    done < <(default_skill_dirs)
-  fi
-
-  if [[ ${#dirs[@]} -eq 0 ]]; then
-    echo "error: no agent skill roots found (~/.grok, ~/.claude, ~/.cursor);" >&2
-    echo "       set REMEMBER_SKILL_DIRS=/path/to/skills or create one first" >&2
-    exit 1
-  fi
-
+  local args=()
   echo "== install skill =="
-  for d in "${dirs[@]}"; do
-    [[ -z "$d" ]] && continue
-    dest="$d/remember"
-    if ! mkdir -p "$dest" 2>/dev/null; then
-      echo "warn: cannot create $dest" >&2
-      continue
-    fi
-    if [[ "$SYMLINK_SKILL" -eq 1 ]]; then
-      ln -sfn "$SKILL_SRC" "$dest/SKILL.md"
-    else
-      install -m 644 "$SKILL_SRC" "$dest/SKILL.md"
-    fi
-    echo "skill: $dest/SKILL.md"
-    ok=1
-  done
-
-  if [[ "$ok" -eq 0 ]]; then
-    echo "error: no skill destination succeeded" >&2
-    exit 1
+  if [[ "$SYMLINK_SKILL" -eq 1 ]]; then
+    args+=(--symlink)
+  else
+    args+=(--copy)
   fi
+  REMEMBER_SKILL_SRC="$SKILL_SRC" "$ROOT/scripts/remember-install-skill" "${args[@]}"
 }
 
 if [[ "$DO_BIN" -eq 1 ]]; then

@@ -22,14 +22,22 @@ Plans: [`implementation-plans/INDEX.md`](implementation-plans/INDEX.md).
 
 ```bash
 brew install itayavtalyon/remember/remember
+remember-install-skill
 ```
 
 Builds the release binary from source (needs `cmake`; no other dependencies).
-Upgrade or uninstall the usual way (`brew upgrade remember` /
-`brew uninstall remember`). The formula installs the binary only — for the agent
-skill too, use the [from-source install](#build-from-source) below.
+Homebrew cannot write into `~/.claude` / `~/.grok` / `~/.cursor`, so the formula
+ships the skill in the keg and `remember-install-skill` symlinks it into agent
+trees that already exist. Re-run after installing a new agent. Upgrade or
+uninstall the usual way (`brew upgrade remember` / `brew uninstall remember`).
 
 ## What's New
+
+### v0.1.1 — Homebrew agent skill
+
+`remember-install-skill` plus `share/remember/SKILL.md` in the prefix, so
+`brew install` can ship the skill without writing into `~/.claude`. Symlink into
+existing Grok / Claude / Cursor skill trees; `brew upgrade` stays current.
 
 ### v0.1.0 — first tagged release
 
@@ -48,8 +56,8 @@ The initial public release bundles the full command surface built so far:
 
 ## Build from source
 
-Prefer Homebrew (above) for a plain install. Build from source for the agent
-skill, for development, or on a platform without the tap.
+Prefer Homebrew (above) for a plain install. Build from source for development
+or on a platform without the tap.
 
 ### Requirements
 
@@ -80,7 +88,8 @@ the agent skill into product skill roots that already exist:
 | Binary | `$PREFIX/bin/remember` (default `~/.local/bin`) |
 | Release build tree | `build-release/` (override with `REMEMBER_RELEASE_DIR`) |
 | Skill (source) | [`skills/remember/SKILL.md`](skills/remember/SKILL.md) |
-| Skill (installed) | `remember/SKILL.md` under whichever of `~/.grok/skills`, `~/.claude/skills`, `~/.cursor/skills` already exist |
+| Skill (prefix) | `$PREFIX/share/remember/SKILL.md` (cmake / Homebrew) |
+| Skill (installed) | `remember/SKILL.md` under whichever of `~/.grok/skills`, `~/.claude/skills`, `~/.cursor/skills` already exist (`remember-install-skill`) |
 
 Override skill destinations: `REMEMBER_SKILL_DIRS=/path/a:/path/b ./scripts/install.sh --skill-only`.
 
@@ -98,8 +107,9 @@ cmake --install build-release --prefix ~/.local   # -> ~/.local/bin/remember
 remember --version                                 # if ~/.local/bin is on PATH
 ```
 
-`cmake --install` handles only the binary; run `./scripts/install.sh --skill-only`
-if you also want the agent skill.
+`cmake --install` installs the binary, `remember-install-skill`, and
+`share/remember/SKILL.md`. Then run `remember-install-skill` (or
+`./scripts/install.sh --skill-only`) to symlink/copy into agent trees.
 
 ## Architecture (pragmatic)
 

@@ -11,7 +11,7 @@
 #include <stdio.h>
 
 #ifndef REMEMBER_VERSION
-#define REMEMBER_VERSION "0.1.0"
+#define REMEMBER_VERSION "0.1.1"
 #endif
 
 static void print_version(void)

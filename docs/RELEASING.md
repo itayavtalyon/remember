@@ -6,7 +6,9 @@ End-to-end steps for cutting a new version and publishing it to Homebrew.
 [`itayavtalyon/homebrew-remember`](https://github.com/itayavtalyon/homebrew-remember),
 installed as `brew install itayavtalyon/remember/remember`. The formula builds
 the release binary **from source** (needs only `cmake`; SQLite is vendored, so
-there are no other dependencies).
+there are no other dependencies). Homebrew cannot write into `~/.claude`; the
+keg ships `share/remember/SKILL.md` and `remember-install-skill` (printed as a
+caveat). Users run that once per agent product.
 
 A release is two things:
 
@@ -128,8 +130,9 @@ exercises the upgrade path.
 The tap repo `itayavtalyon/homebrew-remember` was created once with:
 
 - `Formula/remember.rb` — the source-build formula (`depends_on "cmake" => :build`,
-  a `cmake` configure/build/install, and a `test` block that runs `--version`
-  plus an add/list round-trip on a temp DB).
+  a `cmake` configure/build/install, caveats for `remember-install-skill`, and a
+  `test` block that runs `--version`, an add/list round-trip, and the skill
+  installer against a fake `HOME`).
 - `README.md` and an MIT `LICENSE`.
 
 `brew install itayavtalyon/remember/remember` taps the repo automatically; there
@@ -159,4 +162,5 @@ gh release create vX.Y.Z --title "remember vX.Y.Z" --generate-notes
 brew bump-formula-pr --version X.Y.Z itayavtalyon/remember/remember
 # review+merge the tap PR, then:
 brew update && brew upgrade remember && remember --version
+remember-install-skill   # once per machine / new agent product
 ```
