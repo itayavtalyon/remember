@@ -57,6 +57,18 @@ When a step lands more green suites, **edit `tests/gate-suites` only** — CMake
 # Skip one push: SKIP_LINUX_CI=1 git push   or   git push --no-verify
 ```
 
+> **Toolchain skew — a green local `lint-all.sh` is not proof CI is green.**
+> CI runs *older* tools than a typical macOS dev box (Ubuntu 24.04: clang /
+> clang-tidy / clang-format 18, cppcheck 2.13; macOS Homebrew: clang 22,
+> cppcheck 2.21). The newer tools are more lenient and silently tolerate things
+> the older ones reject — a `-Wno-<name>` for a warning that only exists in a
+> newer clang, a magic number clang-tidy 18 flags but 22 does not, a cppcheck
+> check that exists in only one version. So **before pushing any change to the C
+> sources or the lint config, run `./scripts/ci-linux.sh`** (or install the
+> pre-push hook above); it reproduces CI's exact toolchain in Docker and is the
+> real gate. Match CI's flags in hand-rolled gates too (e.g. pass the project's
+> POSIX feature macros to any standalone compiler invocation).
+
 ## Targets
 
 ```bash
