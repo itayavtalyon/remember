@@ -46,14 +46,23 @@ void free_tag_list(char **tags, size_t ntags);
 /* Map store status to process exit; prints store_status_message on error. */
 int store_status_to_exit(StoreStatus st);
 
-/* Map a CLI --trash / --expired flag to the expired bin (default live). */
-static inline StoreBin cmd_bin_expired(bool expired_flag)
-{
-    if (expired_flag) {
-        return STORE_BIN_EXPIRED;
-    }
-    return STORE_BIN_LIVE;
-}
+/* Parsed --expired / --deleted / --trash (alias of --expired). */
+typedef struct {
+    bool expired;
+    bool deleted;
+    bool trash_alias;
+    /* NOLINTNEXTLINE(readability-magic-numbers,cppcoreguidelines-avoid-magic-numbers) */
+    char pad_[5]; /* explicit tail padding (kept -Wpadded-clean) */
+} CmdBinOpts;
+
+/* 1 if arg is a bin flag and was recorded; 0 if not a bin flag. */
+int cmd_bin_take_flag(const char *arg, CmdBinOpts *opts);
+
+/* Deprecation stderr for --trash; mutex --expired/--deleted. 0 ok. */
+int cmd_bin_resolve(const CmdBinOpts *opts, StoreBin *out);
+
+/* Compact *n in place, freeing neighbors whose bin is deleted. */
+void cmd_neighbors_drop_deleted(StoreNeighbor *rows, size_t *n, const char *now);
 
 /*
  * Load body from argv token or stdin. Applies body_trim_copy (64 KiB / UTF-8 /

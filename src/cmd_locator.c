@@ -17,9 +17,7 @@
 typedef struct {
     const char *key_raw;
     const char *id_raw;
-    bool trash;
-    /* NOLINTNEXTLINE(readability-magic-numbers,cppcoreguidelines-avoid-magic-numbers) */
-    char pad_[7]; /* explicit tail padding (kept -Wpadded-clean) */
+    CmdBinOpts bins;
 } LocatorParse;
 
 /* Shared by get/delete: --key, positional id, reject --source and unknowns. */
@@ -30,7 +28,7 @@ static int parse_locator_args(int rest_argc, const char **rest_argv, LocatorPars
 
     out->key_raw = NULL;
     out->id_raw = NULL;
-    out->trash = false;
+    memset(&out->bins, 0, sizeof(out->bins));
 
     for (i = 0; i < rest_argc; i++) {
         const char *arg = rest_argv[i];
@@ -47,8 +45,7 @@ static int parse_locator_args(int rest_argc, const char **rest_argv, LocatorPars
             out->key_raw = rest_argv[++i];
             continue;
         }
-        if (!end_opts && strcmp(arg, "--trash") == 0) {
-            out->trash = true;
+        if (!end_opts && cmd_bin_take_flag(arg, &out->bins) != 0) {
             continue;
         }
         if (!end_opts && strcmp(arg, "--source") == 0) {
@@ -112,6 +109,7 @@ int cmd_get(Store *s, bool json, int rest_argc, const char **rest_argv)
     const char *key = NULL;
     long long id = 0;
     StoreStatus st = STORE_OK;
+    StoreBin bin = STORE_BIN_LIVE;
     int rc = 0;
 
     memset(&entry, 0, sizeof(entry));
@@ -119,6 +117,9 @@ int cmd_get(Store *s, bool json, int rest_argc, const char **rest_argv)
         return REMEMBER_ERR;
     }
     if (locator_validate(&parsed) != 0) {
+        return REMEMBER_ERR;
+    }
+    if (cmd_bin_resolve(&parsed.bins, &bin) != 0) {
         return REMEMBER_ERR;
     }
     if (locator_resolve(&parsed, key_norm, sizeof(key_norm), &key, &id) != 0) {
@@ -130,9 +131,9 @@ int cmd_get(Store *s, bool json, int rest_argc, const char **rest_argv)
     }
 
     if (key != NULL) {
-        st = store_get_by_key(s, key, cmd_bin_expired(parsed.trash), now, &entry);
+        st = store_get_by_key(s, key, bin, now, &entry);
     } else {
-        st = store_get(s, id, cmd_bin_expired(parsed.trash), now, &entry);
+        st = store_get(s, id, bin, now, &entry);
     }
     rc = store_status_to_exit(st);
     if (rc != REMEMBER_OK) {
@@ -149,6 +150,9 @@ int cmd_get(Store *s, bool json, int rest_argc, const char **rest_argv)
             store_entry_free(&entry);
             err_msg(store_status_message(st));
             return REMEMBER_ERR;
+        }
+        if (bin != STORE_BIN_DELETED) {
+            cmd_neighbors_drop_deleted(links, &nlinks, now);
         }
         if (json) {
             wr = output_get_envelope(app_out(), &entry, links, nlinks, now);
@@ -177,6 +181,7 @@ int cmd_delete(Store *s, bool json, int rest_argc, const char **rest_argv)
     const char *key = NULL;
     long long id = 0;
     StoreStatus st = STORE_OK;
+    StoreBin bin = STORE_BIN_LIVE;
     int rc = 0;
 
     memset(&entry, 0, sizeof(entry));
@@ -184,6 +189,9 @@ int cmd_delete(Store *s, bool json, int rest_argc, const char **rest_argv)
         return REMEMBER_ERR;
     }
     if (locator_validate(&parsed) != 0) {
+        return REMEMBER_ERR;
+    }
+    if (cmd_bin_resolve(&parsed.bins, &bin) != 0) {
         return REMEMBER_ERR;
     }
     if (locator_resolve(&parsed, key_norm, sizeof(key_norm), &key, &id) != 0) {
@@ -195,9 +203,9 @@ int cmd_delete(Store *s, bool json, int rest_argc, const char **rest_argv)
     }
 
     if (key != NULL) {
-        st = store_delete_by_key(s, key, cmd_bin_expired(parsed.trash), now, &entry);
+        st = store_delete_by_key(s, key, bin, now, &entry);
     } else {
-        st = store_delete_by_id(s, id, cmd_bin_expired(parsed.trash), now, &entry);
+        st = store_delete_by_id(s, id, bin, now, &entry);
     }
     rc = store_status_to_exit(st);
     if (rc != REMEMBER_OK) {
@@ -205,7 +213,7 @@ int cmd_delete(Store *s, bool json, int rest_argc, const char **rest_argv)
     }
 
     if (json) {
-        if (output_action_envelope(app_out(), "deleted", &entry) != 0) {
+        if (output_action_envelope(app_out(), "deleted", &entry, now) != 0) {
             store_entry_free(&entry);
             err_msg("failed to write output");
             return REMEMBER_ERR;
@@ -290,8 +298,7 @@ static int handle_update_flag(const char *arg, int *i, int rest_argc, const char
         out->clear_tags = true;
         return 0;
     }
-    if (strcmp(arg, "--trash") == 0) {
-        out->loc.trash = true;
+    if (cmd_bin_take_flag(arg, &out->loc.bins) != 0) {
         return 0;
     }
     if (strcmp(arg, "--ttl") == 0) {
@@ -346,7 +353,7 @@ static int parse_update_args(int rest_argc, const char **rest_argv, UpdateParse 
     out->ttl_raw = NULL;
     out->expires_raw = NULL;
     out->clear_expires = false;
-    out->loc.trash = false;
+    memset(&out->loc.bins, 0, sizeof(out->loc.bins));
     *err = NULL;
 
     for (i = 0; i < rest_argc; i++) {
@@ -396,10 +403,10 @@ static int update_validate_changes(const UpdateParse *p, const char **err)
     return 0;
 }
 
-static int emit_update_result(bool json, const Entry *entry)
+static int emit_update_result(bool json, const Entry *entry, const char *now)
 {
     if (json) {
-        if (output_action_envelope(app_out(), "updated", entry) != 0) {
+        if (output_action_envelope(app_out(), "updated", entry, now) != 0) {
             err_msg("failed to write output");
             return -1;
         }
@@ -498,6 +505,7 @@ int cmd_update(Store *s, bool json, int rest_argc, const char **rest_argv)
     const char *body_hash = NULL;
     Entry entry;
     StoreStatus st = STORE_OK;
+    StoreBin bin = STORE_BIN_LIVE;
     long long conflict_id = 0;
     int rc = REMEMBER_ERR;
 
@@ -516,6 +524,10 @@ int cmd_update(Store *s, bool json, int rest_argc, const char **rest_argv)
         if (err != NULL) {
             err_msg(err);
         }
+        update_parse_free(&parsed);
+        return REMEMBER_ERR;
+    }
+    if (cmd_bin_resolve(&parsed.loc.bins, &bin) != 0) {
         update_parse_free(&parsed);
         return REMEMBER_ERR;
     }
@@ -540,8 +552,8 @@ int cmd_update(Store *s, bool json, int rest_argc, const char **rest_argv)
         goto cleanup;
     }
     st = store_update(s, id, key_or_null, parsed.set_text, body, body_hash, set_tags,
-                      (const char *const *)tags_norm, ntags, set_expires, expires_at,
-                      cmd_bin_expired(parsed.loc.trash), now, &entry, &conflict_id);
+                      (const char *const *)tags_norm, ntags, set_expires, expires_at, bin, now,
+                      &entry, &conflict_id);
     if (st == STORE_ERR_CONFLICT) {
         (void)fprintf(app_err(), "remember: body hash conflicts with entry %lld\n", conflict_id);
         goto cleanup;
@@ -550,7 +562,7 @@ int cmd_update(Store *s, bool json, int rest_argc, const char **rest_argv)
         rc = store_status_to_exit(st);
         goto cleanup;
     }
-    if (emit_update_result(json, &entry) != 0) {
+    if (emit_update_result(json, &entry, now) != 0) {
         goto cleanup;
     }
     rc = REMEMBER_OK;
@@ -600,8 +612,7 @@ static int handle_rekey_flag(const char *arg, int *i, int rest_argc, const char 
         out->clear_key = true;
         return 1;
     }
-    if (strcmp(arg, "--trash") == 0) {
-        out->loc.trash = true;
+    if (cmd_bin_take_flag(arg, &out->loc.bins) != 0) {
         return 1;
     }
     if (strcmp(arg, "--source") == 0) {
@@ -657,6 +668,7 @@ int cmd_rekey(Store *s, bool json, int rest_argc, const char **rest_argv)
     char now[ISO_TS_BUFSIZE];
     Entry entry;
     StoreStatus st = STORE_OK;
+    StoreBin bin = STORE_BIN_LIVE;
     long long conflict_id = 0;
     int rc = 0;
 
@@ -665,6 +677,9 @@ int cmd_rekey(Store *s, bool json, int rest_argc, const char **rest_argv)
         return REMEMBER_ERR;
     }
     if (locator_validate(&parsed.loc) != 0) {
+        return REMEMBER_ERR;
+    }
+    if (cmd_bin_resolve(&parsed.loc.bins, &bin) != 0) {
         return REMEMBER_ERR;
     }
     if (parsed.clear_key && parsed.to_key_raw != NULL) {
@@ -690,8 +705,8 @@ int cmd_rekey(Store *s, bool json, int rest_argc, const char **rest_argv)
         err_msg("internal error");
         return REMEMBER_ERR;
     }
-    st = store_rekey(s, id, (RekeyKeys){.key_or_null = key, .new_key_or_null = new_key},
-                     cmd_bin_expired(parsed.loc.trash), now, &entry, &conflict_id);
+    st = store_rekey(s, id, (RekeyKeys){.key_or_null = key, .new_key_or_null = new_key}, bin, now,
+                     &entry, &conflict_id);
     if (st == STORE_ERR_CONFLICT) {
         if (new_key != NULL) {
             (void)fprintf(app_err(), "remember: key conflicts with entry %lld\n", conflict_id);
@@ -708,7 +723,7 @@ int cmd_rekey(Store *s, bool json, int rest_argc, const char **rest_argv)
         return rc;
     }
     if (json) {
-        if (output_action_envelope(app_out(), "updated", &entry) != 0) {
+        if (output_action_envelope(app_out(), "updated", &entry, now) != 0) {
             store_entry_free(&entry);
             err_msg("failed to write output");
             return REMEMBER_ERR;

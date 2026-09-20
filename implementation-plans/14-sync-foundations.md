@@ -168,6 +168,21 @@ wins (atomic SAVEPOINT replace); empty `devices` insert from sidecar.
 maps to expired pending stage 2 aliases. VV bumps on update deferred to
 stage 4.
 
+### Stage 2 (2026-09-20)
+
+JSON field order + always `bin` enum `live|expired|deleted`; no `"trash"`
+on entries or stubs. Stubs `{id,sync_id,key,type,bin,preview}`. Shared
+`CmdBinOpts` (`cmd_bin_take_flag` / `cmd_bin_resolve`): `--expired` /
+`--deleted` mutex (`cannot combine --expired and --deleted`); `--trash`
+≡ `--expired` + one stderr line
+`remember: --trash is deprecated; use --expired`. Round 7 exit-3 matrix
+on get (tokens `expired|deleted|not_expired|not_deleted`). Human neighbor
+marks `[expired]` / `[deleted]`. Default list/search/get/related omit
+deleted neighbors; expired neighbors remain; `--deleted` includes them.
+`store_bin_of` is the single bin predicate (adapter). Facade mutation
+parity masks `sync_id` + `version_vector` as well as timestamps. Help /
+skill / soft-delete / `--sync-id` stay later stages.
+
 ## Review Notes
 
 ### 2026-09-20 — strict review (pre-implementation)
@@ -211,3 +226,34 @@ project-status churn is unrelated to plan 14 (skill sync-docs are stage 6) —
 commit separately. `-Wallocator-wrappers` fires only on Apple clang 21 under
 `REMEMBER_TEST_HOOKS` (pre-existing `real_*` wrappers); not `-Werror`-promoted,
 gate stays green; add `-Wno-allocator-wrappers` if silence is wanted.
+
+### 2026-09-20 — Claude second-opinion deep review (stage 2)
+
+Independent pass on output/bins/exit-tokens/aliases. Verified by running:
+ctest 4/4 (ASan/UBSan), coverage functions 100% + effective lines 100%,
+`-Weverything -Werror` clean, lint OK (format/cppcheck src+tests/gcc
+-fanalyzer/clang-tidy). Confirmed against 005 Round 7: JSON entry field order
+(id,sync_id,key,body,tags,source,created_at,updated_at,expires_at,deleted_at,
+bin,version_vector[,links]) with `version_vector` a raw object; `bin` always
+enum; stub `{id,sync_id,key,type,bin,preview}`, no `trash`; `--expired`/
+`--deleted` mutex + `--trash` one-line deprecation (`cmd_bin_resolve`);
+human `[expired]`/`[deleted]`; neighbor stubs carry sync_id+bin and default
+paths drop only deleted neighbors (expired stay) via `cmd_neighbors_drop_deleted`,
+`--deleted` includes them. `store_bin_of` is the single shared predicate
+(entry_bin + output + drop-deleted all delegate). Neighbor loader refactored to
+`neighbor_row_from_stmt`/`dup_col_req|opt`/`neighbor_append` (DRY), fail-closed
+on OOM; both neighbor SELECTs add `sync_id,deleted_at`. `delete` correctly
+stays hard (soft-delete is stage 3); `--deleted`/`--expired` bins simply select
+empty bins until then. Golden test `test_sync_output.c` (8 tests) asserts field
+order, bin values, deprecation/mutex, human marks. No product/arch forks — no
+grill.
+
+**Auto-fixed:** coverage script had *replaced* the `add_parse_free` defensive
+exemption with `update_parse_free`, dropping a valid one (add_parse_free still
+exists in cmd_add.c); restored both (harmless — script ignores unused
+exemptions).
+
+**Notes (not blocking):** general-help exit-3 line still reads
+`expired / not_expired` though `--deleted` now makes `deleted`/`not_deleted`
+reachable — reasonable to fold into stage 6 (help/skill). `SKILL.md`
+project-status churn still uncommitted (carry-over from stage 1).

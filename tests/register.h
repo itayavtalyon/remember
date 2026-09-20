@@ -22,5 +22,6 @@ void register_facade_tests(void);
 void register_tags_tests(void);
 void register_ttl_tests(void);
 void register_link_tests(void);
+void register_sync_output_tests(void);
 
 #endif /* REMEMBER_REGISTER_H */

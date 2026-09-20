@@ -253,8 +253,8 @@ TEST(output_write_fail_returns_error)
         }
         ASSERT_TRUE(i < 10000);
     }
-    (void)output_entry_json(f, &e);
-    (void)output_action_envelope(f, "created", &e);
+    (void)output_entry_json(f, &e, "t");
+    (void)output_action_envelope(f, "created", &e, "t");
     (void)output_get_envelope(f, &e, NULL, 0, "t");
     (void)output_list_envelope(f, 0, 20, 1, 1, &e, NULL, 0, "t");
     (void)output_id_human(f, 1);
@@ -267,8 +267,8 @@ TEST(output_null_entry_fails)
 {
     FILE *f = tmpfile();
     ASSERT_TRUE(f != NULL);
-    ASSERT_EQ_INT(output_entry_json(f, NULL), -1);
-    ASSERT_EQ_INT(output_action_envelope(f, "x", NULL), -1);
+    ASSERT_EQ_INT(output_entry_json(f, NULL, "t"), -1);
+    ASSERT_EQ_INT(output_action_envelope(f, "x", NULL, "t"), -1);
     ASSERT_EQ_INT(output_get_envelope(f, NULL, NULL, 0, "t"), -1);
     ASSERT_EQ_INT(output_entry_human_line(f, NULL, NULL, 0, "t"), -1);
     ASSERT_EQ_INT(output_list_envelope(f, 0, 1, 1, 1, NULL, NULL, 0, "t"), -1);

@@ -55,9 +55,7 @@ typedef struct {
     size_t ntag_raw;
     size_t limit;
     size_t offset;
-    bool trash;
-    /* NOLINTNEXTLINE(readability-magic-numbers,cppcoreguidelines-avoid-magic-numbers) */
-    char pad_[7]; /* explicit tail padding (kept -Wpadded-clean) */
+    CmdBinOpts bins;
 } ListParse;
 
 static void list_parse_free(ListParse *p)
@@ -162,8 +160,7 @@ static int list_handle_opt(const char *arg, int *i, int rest_argc, const char **
     if (strcmp(arg, "--offset") == 0) {
         return list_take_offset(i, rest_argc, rest_argv, &out->offset, err);
     }
-    if (strcmp(arg, "--trash") == 0) {
-        out->trash = true;
+    if (cmd_bin_take_flag(arg, &out->bins) != 0) {
         return 0;
     }
     if (arg[0] == '-' && arg[1] != '\0') {
@@ -182,7 +179,7 @@ static void list_parse_init(ListParse *out)
     out->ntag_raw = 0U;
     out->limit = LIST_LIMIT_DEFAULT;
     out->offset = 0U;
-    out->trash = false;
+    memset(&out->bins, 0, sizeof(out->bins));
 }
 
 static int parse_list_args(int rest_argc, const char **rest_argv, ListParse *out, const char **err)
@@ -383,7 +380,10 @@ static int list_prepare_query(const ListParse *parsed, char *key_norm, size_t ke
     q->source = parsed->source;
     q->limit = parsed->limit;
     q->offset = parsed->offset;
-    q->bin = cmd_bin_expired(parsed->trash);
+    q->bin = STORE_BIN_LIVE;
+    if (cmd_bin_resolve(&parsed->bins, &q->bin) != 0) {
+        return -1;
+    }
     return 0;
 }
 
@@ -498,6 +498,9 @@ int cmd_list(Store *s, bool json, int rest_argc, const char **rest_argv)
     if (load_page_neighbors(s, entries, count, now, &links, &nlinks) != 0) {
         goto cleanup;
     }
+    if (q.bin != STORE_BIN_DELETED) {
+        cmd_neighbors_drop_deleted(links, &nlinks, now);
+    }
 
     if (emit_entry_page(json, q.offset, q.limit, count, total, entries, links, nlinks, now) != 0) {
         err_msg("failed to write output");
@@ -564,6 +567,9 @@ int cmd_search(Store *s, bool json, int rest_argc, const char **rest_argv)
     }
     if (load_page_neighbors(s, entries, count, now, &links, &nlinks) != 0) {
         goto cleanup;
+    }
+    if (q.filters.bin != STORE_BIN_DELETED) {
+        cmd_neighbors_drop_deleted(links, &nlinks, now);
     }
 
     if (emit_entry_page(json, q.filters.offset, q.filters.limit, count, total, entries, links,

@@ -35,6 +35,11 @@ typedef enum {
 /* Locator / list / search / tags bin. LIVE is the zero value (zero-init queries). */
 typedef enum { STORE_BIN_LIVE = 0, STORE_BIN_EXPIRED, STORE_BIN_DELETED } StoreBin;
 
+/* live: no deleted_at and (no expiry or expires_at > now);
+ * expired: no deleted_at and expires_at <= now;
+ * deleted: deleted_at set. now may be NULL (then expiry cannot match). */
+StoreBin store_bin_of(const char *deleted_at, const char *expires_at, const char *now);
+
 /* Short ASCII label for st (no trailing newline). Never NULL. */
 const char *store_status_message(StoreStatus st);
 
@@ -251,6 +256,8 @@ typedef struct {
     char *neighbor_key; /* NULL if keyless */
     char *neighbor_body;
     char *neighbor_expires_at; /* NULL if durable */
+    char *neighbor_sync_id;    /* UUID v7; required on a successful load */
+    char *neighbor_deleted_at; /* NULL if not soft-deleted */
     StoreEdgeKind kind;
     char pad_[4]; /* explicit tail padding (kept -Wpadded-clean) */
 } StoreNeighbor;

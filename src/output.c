@@ -87,35 +87,80 @@ static int write_json_field_str(FILE *out, JsonField field)
     return output_json_string(out, field.value != NULL ? field.value : empty_str());
 }
 
-static int write_entry_core(FILE *out, const Entry *e)
+static int write_json_nullable(FILE *out, const char *name, const char *value)
+{
+    if (value == NULL) {
+        return fprintf(out, ",\"%s\":null", name) < 0 ? -1 : 0;
+    }
+    return write_json_field_str(out, (JsonField){.name = name, .value = value});
+}
+
+static const char *bin_token(StoreBin bin)
+{
+    switch (bin) {
+    case STORE_BIN_LIVE:
+        return "live";
+    case STORE_BIN_EXPIRED:
+        return "expired";
+    case STORE_BIN_DELETED:
+        return "deleted";
+    default:
+        return NULL;
+    }
+}
+
+static int write_json_tags(FILE *out, char *const *tags, size_t ntags)
 {
     size_t i = 0;
 
-    if (fprintf(out, "{\"id\":%lld,\"key\":", e->id) < 0) {
+    if (fputs(",\"tags\":[", out) < 0) {
         return -1;
     }
-    if (e->key == NULL) {
-        if (fputs("null", out) < 0) {
+    for (i = 0; i < ntags; i++) {
+        if (i > 0U && fputc(',', out) == EOF) {
             return -1;
         }
-    } else if (output_json_string(out, e->key) != 0) {
+        if (output_json_string(out, tags[i]) != 0) {
+            return -1;
+        }
+    }
+    return fputs("]", out) < 0 ? -1 : 0;
+}
+
+static int write_json_raw_object(FILE *out, JsonField field)
+{
+    if (fprintf(out, ",\"%s\":", field.name) < 0) {
+        return -1;
+    }
+    return fputs(field.value, out) < 0 ? -1 : 0;
+}
+
+static int write_entry_core(FILE *out, const Entry *e, const char *now)
+{
+    const char *bin = NULL;
+
+    if (now == NULL || e->sync_id == NULL || e->version_vector == NULL ||
+        e->version_vector[0] != '{') {
+        return -1;
+    }
+    bin = bin_token(store_bin_of(e->deleted_at, e->expires_at, now));
+    if (bin == NULL) {
+        return -1;
+    }
+
+    if (fprintf(out, "{\"id\":%lld,\"sync_id\":", e->id) < 0) {
+        return -1;
+    }
+    if (output_json_string(out, e->sync_id) != 0) {
+        return -1;
+    }
+    if (write_json_nullable(out, "key", e->key) != 0) {
         return -1;
     }
     if (write_json_field_str(out, (JsonField){.name = "body", .value = e->body}) != 0) {
         return -1;
     }
-    if (fputs(",\"tags\":[", out) < 0) {
-        return -1;
-    }
-    for (i = 0; i < e->ntags; i++) {
-        if (i > 0U && fputc(',', out) == EOF) {
-            return -1;
-        }
-        if (output_json_string(out, e->tags[i]) != 0) {
-            return -1;
-        }
-    }
-    if (fputs("]", out) < 0) {
+    if (write_json_tags(out, e->tags, e->ntags) != 0) {
         return -1;
     }
     if (write_json_field_str(
@@ -129,24 +174,26 @@ static int write_entry_core(FILE *out, const Entry *e)
     if (write_json_field_str(out, (JsonField){.name = "updated_at", .value = e->updated_at}) != 0) {
         return -1;
     }
-    if (e->expires_at == NULL) {
-        if (fputs(",\"expires_at\":null", out) < 0) {
-            return -1;
-        }
-    } else if (write_json_field_str(
-                   out, (JsonField){.name = "expires_at", .value = e->expires_at}) != 0) {
+    if (write_json_nullable(out, "expires_at", e->expires_at) != 0) {
         return -1;
     }
-    return 0;
+    if (write_json_nullable(out, "deleted_at", e->deleted_at) != 0) {
+        return -1;
+    }
+    if (write_json_field_str(out, (JsonField){.name = "bin", .value = bin}) != 0) {
+        return -1;
+    }
+    return write_json_raw_object(out,
+                                 (JsonField){.name = "version_vector", .value = e->version_vector});
 }
 
 /* cppcheck-suppress staticFunction ; public API (output.h); used by tests */
-int output_entry_json(FILE *out, const Entry *e)
+int output_entry_json(FILE *out, const Entry *e, const char *now)
 {
     if (out == NULL || e == NULL) {
         return -1;
     }
-    if (write_entry_core(out, e) != 0) {
+    if (write_entry_core(out, e, now) != 0) {
         return -1;
     }
     if (fputc('}', out) == EOF) {
@@ -158,7 +205,7 @@ int output_entry_json(FILE *out, const Entry *e)
 static int write_entry_with_links(FILE *out, const Entry *e, const StoreNeighbor *links,
                                   size_t nlinks, const char *now);
 
-int output_action_envelope(FILE *out, const char *action, const Entry *e)
+int output_action_envelope(FILE *out, const char *action, const Entry *e, const char *now)
 {
     if (out == NULL || action == NULL || e == NULL) {
         return -1;
@@ -172,7 +219,7 @@ int output_action_envelope(FILE *out, const char *action, const Entry *e)
     if (fputs(",\"count\":1,\"entries\":[", out) < 0) {
         return -1;
     }
-    if (output_entry_json(out, e) != 0) {
+    if (output_entry_json(out, e, now) != 0) {
         return -1;
     }
     if (fputs("]}\n", out) < 0) {
@@ -181,7 +228,7 @@ int output_action_envelope(FILE *out, const char *action, const Entry *e)
     return 0;
 }
 
-int output_deleted_list(FILE *out, const Entry *entries, size_t count)
+int output_deleted_list(FILE *out, const Entry *entries, size_t count, const char *now)
 {
     size_t i = 0;
 
@@ -199,7 +246,7 @@ int output_deleted_list(FILE *out, const Entry *entries, size_t count)
         if (i > 0U && fputc(',', out) == EOF) {
             return -1;
         }
-        if (output_entry_json(out, &entries[i]) != 0) {
+        if (output_entry_json(out, &entries[i], now) != 0) {
             return -1;
         }
     }
@@ -468,12 +515,20 @@ static const char *link_type_token(const StoreNeighbor *n)
     return "related";
 }
 
-static int neighbor_trash(const StoreNeighbor *n, const char *now)
+static StoreBin neighbor_bin(const StoreNeighbor *n, const char *now)
 {
-    if (n == NULL || n->neighbor_expires_at == NULL || now == NULL) {
-        return 0;
+    return store_bin_of(n->neighbor_deleted_at, n->neighbor_expires_at, now);
+}
+
+static const char *human_bin_mark(StoreBin bin)
+{
+    if (bin == STORE_BIN_EXPIRED) {
+        return "[expired]";
     }
-    return strcmp(n->neighbor_expires_at, now) <= 0;
+    if (bin == STORE_BIN_DELETED) {
+        return "[deleted]";
+    }
+    return NULL;
 }
 
 static void fill_preview(char *dst, size_t dst_cap, const char *body, size_t max_cp)
@@ -526,21 +581,23 @@ static void fill_preview(char *dst, size_t dst_cap, const char *body, size_t max
 static int write_stub_json(FILE *out, const StoreNeighbor *n, const char *now)
 {
     char preview[PREVIEW_BUF];
-    int trash = 0;
+    const char *bin = NULL;
 
-    if (n == NULL) {
+    if (n == NULL || n->neighbor_sync_id == NULL) {
         return -1;
     }
-    trash = neighbor_trash(n, now);
+    bin = bin_token(neighbor_bin(n, now));
+    if (bin == NULL) {
+        return -1;
+    }
     fill_preview(preview, sizeof(preview), n->neighbor_body, STUB_PREVIEW_CP);
-    if (fprintf(out, "{\"id\":%lld,\"key\":", n->neighbor_id) < 0) {
+    if (fprintf(out, "{\"id\":%lld,\"sync_id\":", n->neighbor_id) < 0) {
         return -1;
     }
-    if (n->neighbor_key == NULL) {
-        if (fputs("null", out) < 0) {
-            return -1;
-        }
-    } else if (output_json_string(out, n->neighbor_key) != 0) {
+    if (output_json_string(out, n->neighbor_sync_id) != 0) {
+        return -1;
+    }
+    if (write_json_nullable(out, "key", n->neighbor_key) != 0) {
         return -1;
     }
     if (fputs(",\"type\":", out) < 0) {
@@ -549,10 +606,10 @@ static int write_stub_json(FILE *out, const StoreNeighbor *n, const char *now)
     if (output_json_string(out, link_type_token(n)) != 0) {
         return -1;
     }
-    if (fprintf(out, ",\"trash\":%s,\"preview\":", trash ? "true" : "false") < 0) {
+    if (write_json_field_str(out, (JsonField){.name = "bin", .value = bin}) != 0) {
         return -1;
     }
-    if (output_json_string(out, preview) != 0) {
+    if (write_json_field_str(out, (JsonField){.name = "preview", .value = preview}) != 0) {
         return -1;
     }
     if (fputc('}', out) == EOF) {
@@ -591,7 +648,7 @@ static int write_links_json_field(FILE *out, long long subject_id, const StoreNe
 static int write_entry_with_links(FILE *out, const Entry *e, const StoreNeighbor *links,
                                   size_t nlinks, const char *now)
 {
-    if (write_entry_core(out, e) != 0) {
+    if (write_entry_core(out, e, now) != 0) {
         return -1;
     }
     if (write_links_json_field(out, e->id, links, nlinks, now) != 0) {
@@ -631,8 +688,11 @@ static int write_related_ids_cell(FILE *out, long long subject_id, const StoreNe
         if (fprintf(out, "%lld", links[i].neighbor_id) < 0) {
             return -1;
         }
-        if (neighbor_trash(&links[i], now) && fputs("[trash]", out) < 0) {
-            return -1;
+        {
+            const char *mark = human_bin_mark(neighbor_bin(&links[i], now));
+            if (mark != NULL && fputs(mark, out) < 0) {
+                return -1;
+            }
         }
         shown++;
     }
@@ -746,8 +806,11 @@ int output_related_human(FILE *out, const StoreNeighbor *links, size_t count, co
         } else if (fprintf(out, "%lld", n->neighbor_id) < 0) {
             return -1;
         }
-        if (neighbor_trash(n, now) && fputs(" [trash]", out) < 0) {
-            return -1;
+        {
+            const char *mark = human_bin_mark(neighbor_bin(n, now));
+            if (mark != NULL && fprintf(out, " %s", mark) < 0) {
+                return -1;
+            }
         }
         if (preview[0] != '\0' && fprintf(out, " %s", preview) < 0) {
             return -1;

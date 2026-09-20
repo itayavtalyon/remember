@@ -304,6 +304,7 @@ typedef struct {
     const char *kind_raw;
     bool outgoing;
     bool incoming;
+    CmdBinOpts bins;
     /* NOLINTNEXTLINE(readability-magic-numbers,cppcoreguidelines-avoid-magic-numbers) */
     char pad_[6]; /* explicit tail padding (kept -Wpadded-clean) */
 } RelatedParse;
@@ -339,6 +340,9 @@ static int handle_related_flag(const char *arg, int *i, int rest_argc, const cha
     }
     if (strcmp(arg, "--incoming") == 0) {
         out->incoming = true;
+        return 1;
+    }
+    if (cmd_bin_take_flag(arg, &out->bins) != 0) {
         return 1;
     }
     if (arg[0] == '-' && arg[1] != '\0') {
@@ -414,10 +418,14 @@ int cmd_related(Store *s, bool json, int rest_argc, const char **rest_argv)
     StoreNeighbor *rows = NULL;
     size_t n = 0U;
     StoreStatus st = STORE_OK;
+    StoreBin bin = STORE_BIN_LIVE;
     int rc = 0;
 
     memset(&subject, 0, sizeof(subject));
     if (parse_related_args(rest_argc, rest_argv, &p) != 0) {
+        return REMEMBER_ERR;
+    }
+    if (cmd_bin_resolve(&p.bins, &bin) != 0) {
         return REMEMBER_ERR;
     }
     if (p.outgoing && p.incoming) {
@@ -456,6 +464,9 @@ int cmd_related(Store *s, bool json, int rest_argc, const char **rest_argv)
     if (rc != REMEMBER_OK) {
         store_entry_free(&subject);
         return rc;
+    }
+    if (bin != STORE_BIN_DELETED) {
+        cmd_neighbors_drop_deleted(rows, &n, now);
     }
     if (json) {
         rc = output_related_envelope(app_out(), subject.id, subject.key, rows, n, now);

@@ -281,6 +281,7 @@ set(REMEMBER_TEST_SOURCES
     tests/test_tags.c
     tests/test_ttl.c
     tests/test_link.c
+    tests/test_sync_output.c
 )
 add_executable(remember_tests
     ${REMEMBER_TEST_SOURCES}

@@ -38,7 +38,7 @@ int cmd_purge_trash(Store *s, bool json, int rest_argc, const char **rest_argv)
         goto cleanup;
     }
     if (json) {
-        if (output_deleted_list(app_out(), entries, count) != 0) {
+        if (output_deleted_list(app_out(), entries, count, now) != 0) {
             err_msg("failed to write output");
             goto cleanup;
         }

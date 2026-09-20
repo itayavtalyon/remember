@@ -1355,15 +1355,22 @@ static StoreStatus load_entry_by_id(sqlite3 *db, long long id, Entry *out);
 static StoreStatus load_entry_by_key(sqlite3 *db, const char *key, Entry *out);
 static StoreStatus load_entry_by_sync_id(sqlite3 *db, const char *sync_id, Entry *out);
 
-static StoreBin entry_bin(const Entry *e, const char *now)
+/* Three timestamp strings; order is the bin contract (deleted, then expiry). */
+// NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
+StoreBin store_bin_of(const char *deleted_at, const char *expires_at, const char *now)
 {
-    if (e->deleted_at != NULL) {
+    if (deleted_at != NULL) {
         return STORE_BIN_DELETED;
     }
-    if (e->expires_at != NULL && now != NULL && strcmp(e->expires_at, now) <= 0) {
+    if (expires_at != NULL && now != NULL && strcmp(expires_at, now) <= 0) {
         return STORE_BIN_EXPIRED;
     }
     return STORE_BIN_LIVE;
+}
+
+static StoreBin entry_bin(const Entry *e, const char *now)
+{
+    return store_bin_of(e->deleted_at, e->expires_at, now);
 }
 
 /* Round 7 exit-3 matrix. Prefer the row's actual bin when two flags are wrong. */
@@ -3077,6 +3084,8 @@ void store_neighbor_free(StoreNeighbor *n)
     free(n->neighbor_key);
     free(n->neighbor_body);
     free(n->neighbor_expires_at);
+    free(n->neighbor_sync_id);
+    free(n->neighbor_deleted_at);
     memset(n, 0, sizeof(*n));
 }
 
@@ -3149,8 +3158,13 @@ static StoreStatus fill_stub(sqlite3 *db, long long subject_id, StoreEdge row, S
     e.body = NULL;
     out->neighbor_expires_at = e.expires_at;
     e.expires_at = NULL;
+    out->neighbor_sync_id = e.sync_id;
+    e.sync_id = NULL;
+    out->neighbor_deleted_at = e.deleted_at;
+    e.deleted_at = NULL;
     store_entry_free(&e);
-    if (out->edge_updated_at == NULL || out->neighbor_body == NULL) {
+    if (out->edge_updated_at == NULL || out->neighbor_body == NULL ||
+        out->neighbor_sync_id == NULL) {
         store_neighbor_free(out);
         return STORE_ERR_OOM;
     }
@@ -3558,20 +3572,87 @@ StoreStatus store_unlink(Store *s, long long from_id, long long to_id, const Sto
     return STORE_OK;
 }
 
+static StoreStatus dup_col_opt(sqlite3_stmt *stmt, int col, char **out)
+{
+    *out = NULL;
+    if (sqlite3_column_type(stmt, col) == SQLITE_NULL) {
+        return STORE_OK;
+    }
+    *out = dup_str((const char *)sqlite3_column_text(stmt, col));
+    return (*out == NULL) ? STORE_ERR_OOM : STORE_OK;
+}
+
+static StoreStatus dup_col_req(sqlite3_stmt *stmt, int col, char **out)
+{
+    *out = dup_str((const char *)sqlite3_column_text(stmt, col));
+    return (*out == NULL) ? STORE_ERR_OOM : STORE_OK;
+}
+
+/* Column order of the neighbor SELECT feeding neighbors_from_stmt. */
+enum {
+    NCOL_SUBJECT_ID = 0,
+    NCOL_FROM_ID = 1,
+    NCOL_TO_ID = 2,
+    NCOL_KIND = 3,
+    NCOL_EDGE_UPDATED_AT = 4,
+    NCOL_NEIGHBOR_ID = 5,
+    NCOL_NEIGHBOR_KEY = 6,
+    NCOL_NEIGHBOR_BODY = 7,
+    NCOL_NEIGHBOR_EXPIRES_AT = 8,
+    NCOL_NEIGHBOR_SYNC_ID = 9,
+    NCOL_NEIGHBOR_DELETED_AT = 10
+};
+
+static StoreStatus neighbor_row_from_stmt(sqlite3_stmt *stmt, StoreNeighbor *row)
+{
+    StoreEdgeKind kind = STORE_EDGE_RELATED;
+    const char *ktok = (const char *)sqlite3_column_text(stmt, NCOL_KIND);
+
+    memset(row, 0, sizeof(*row));
+    if (parse_edge_kind(ktok, &kind) != 0) {
+        return STORE_ERR_SQLITE;
+    }
+    row->subject_id = sqlite3_column_int64(stmt, NCOL_SUBJECT_ID);
+    row->from_id = sqlite3_column_int64(stmt, NCOL_FROM_ID);
+    row->to_id = sqlite3_column_int64(stmt, NCOL_TO_ID);
+    row->kind = kind;
+    row->neighbor_id = sqlite3_column_int64(stmt, NCOL_NEIGHBOR_ID);
+    if (dup_col_req(stmt, NCOL_EDGE_UPDATED_AT, &row->edge_updated_at) != STORE_OK ||
+        dup_col_opt(stmt, NCOL_NEIGHBOR_KEY, &row->neighbor_key) != STORE_OK ||
+        dup_col_req(stmt, NCOL_NEIGHBOR_BODY, &row->neighbor_body) != STORE_OK ||
+        dup_col_opt(stmt, NCOL_NEIGHBOR_EXPIRES_AT, &row->neighbor_expires_at) != STORE_OK ||
+        dup_col_req(stmt, NCOL_NEIGHBOR_SYNC_ID, &row->neighbor_sync_id) != STORE_OK ||
+        dup_col_opt(stmt, NCOL_NEIGHBOR_DELETED_AT, &row->neighbor_deleted_at) != STORE_OK) {
+        store_neighbor_free(row);
+        return STORE_ERR_OOM;
+    }
+    return STORE_OK;
+}
+
+static StoreStatus neighbor_append(StoreNeighbor **rows, size_t *n, size_t *cap, StoreNeighbor *row)
+{
+    if (*n == *cap) {
+        size_t ncap = (*cap == 0U) ? (size_t)GROW_MIN_CAP : (*cap * 2U);
+        StoreNeighbor *grown = (StoreNeighbor *)realloc(*rows, ncap * sizeof(*grown));
+        if (grown == NULL) {
+            store_neighbor_free(row);
+            store_neighbors_free(*rows, *n);
+            *rows = NULL;
+            *n = 0U;
+            *cap = 0U;
+            return STORE_ERR_OOM;
+        }
+        *rows = grown;
+        *cap = ncap;
+    }
+    (*rows)[*n] = *row;
+    memset(row, 0, sizeof(*row));
+    (*n)++;
+    return STORE_OK;
+}
+
 static StoreStatus neighbors_from_stmt(sqlite3_stmt *stmt, StoreNeighbor **out, size_t *out_n)
 {
-    /* Column order of the neighbor SELECT feeding this loop. */
-    enum {
-        NCOL_SUBJECT_ID = 0,
-        NCOL_FROM_ID = 1,
-        NCOL_TO_ID = 2,
-        NCOL_KIND = 3,
-        NCOL_EDGE_UPDATED_AT = 4,
-        NCOL_NEIGHBOR_ID = 5,
-        NCOL_NEIGHBOR_KEY = 6,
-        NCOL_NEIGHBOR_BODY = 7,
-        NCOL_NEIGHBOR_EXPIRES_AT = 8
-    };
     StoreNeighbor *rows = NULL;
     size_t n = 0U;
     size_t cap = 0U;
@@ -3581,58 +3662,15 @@ static StoreStatus neighbors_from_stmt(sqlite3_stmt *stmt, StoreNeighbor **out, 
     *out_n = 0U;
     while ((rc = sqlite3_step(stmt)) == SQLITE_ROW) {
         StoreNeighbor row;
-        StoreEdgeKind kind = STORE_EDGE_RELATED;
-        const char *ktok = (const char *)sqlite3_column_text(stmt, NCOL_KIND);
-        StoreNeighbor *grown = NULL;
-
-        memset(&row, 0, sizeof(row));
-        if (parse_edge_kind(ktok, &kind) != 0) {
+        StoreStatus st = neighbor_row_from_stmt(stmt, &row);
+        if (st != STORE_OK) {
             store_neighbors_free(rows, n);
-            return STORE_ERR_SQLITE;
+            return st;
         }
-        row.subject_id = sqlite3_column_int64(stmt, NCOL_SUBJECT_ID);
-        row.from_id = sqlite3_column_int64(stmt, NCOL_FROM_ID);
-        row.to_id = sqlite3_column_int64(stmt, NCOL_TO_ID);
-        row.kind = kind;
-        row.edge_updated_at =
-            dup_str((const char *)sqlite3_column_text(stmt, NCOL_EDGE_UPDATED_AT));
-        row.neighbor_id = sqlite3_column_int64(stmt, NCOL_NEIGHBOR_ID);
-        if (sqlite3_column_type(stmt, NCOL_NEIGHBOR_KEY) != SQLITE_NULL) {
-            row.neighbor_key = dup_str((const char *)sqlite3_column_text(stmt, NCOL_NEIGHBOR_KEY));
-            if (row.neighbor_key == NULL) {
-                store_neighbor_free(&row);
-                store_neighbors_free(rows, n);
-                return STORE_ERR_OOM;
-            }
+        st = neighbor_append(&rows, &n, &cap, &row);
+        if (st != STORE_OK) {
+            return st;
         }
-        row.neighbor_body = dup_str((const char *)sqlite3_column_text(stmt, NCOL_NEIGHBOR_BODY));
-        if (sqlite3_column_type(stmt, NCOL_NEIGHBOR_EXPIRES_AT) != SQLITE_NULL) {
-            row.neighbor_expires_at =
-                dup_str((const char *)sqlite3_column_text(stmt, NCOL_NEIGHBOR_EXPIRES_AT));
-            if (row.neighbor_expires_at == NULL) {
-                store_neighbor_free(&row);
-                store_neighbors_free(rows, n);
-                return STORE_ERR_OOM;
-            }
-        }
-        if (row.edge_updated_at == NULL || row.neighbor_body == NULL) {
-            store_neighbor_free(&row);
-            store_neighbors_free(rows, n);
-            return STORE_ERR_OOM;
-        }
-        if (n == cap) {
-            size_t ncap = (cap == 0U) ? (size_t)GROW_MIN_CAP : (cap * 2U);
-            grown = (StoreNeighbor *)realloc(rows, ncap * sizeof(*grown));
-            if (grown == NULL) {
-                store_neighbor_free(&row);
-                store_neighbors_free(rows, n);
-                return STORE_ERR_OOM;
-            }
-            rows = grown;
-            cap = ncap;
-        }
-        rows[n] = row;
-        n++;
     }
     if (rc != SQLITE_DONE) {
         store_neighbors_free(rows, n);
@@ -3651,7 +3689,7 @@ static int build_neighbors_sql(char *sql, size_t cap, NeighborQuery query, const
     n = snprintf(
         sql, cap,
         "SELECT %lld, l.from_id, l.to_id, l.kind, l.updated_at,"
-        " n.id, n.key, n.body, n.expires_at"
+        " n.id, n.key, n.body, n.expires_at, n.sync_id, n.deleted_at"
         " FROM entry_links l"
         " JOIN entries n ON n.id = CASE WHEN l.from_id = ?1 THEN l.to_id ELSE l.from_id END"
         " WHERE (l.from_id = ?1 OR l.to_id = ?1)",
@@ -3749,7 +3787,7 @@ StoreStatus store_list_neighbors_for(Store *s, const long long *ids, size_t nids
     n = snprintf(
         sql, sizeof(sql),
         "SELECT s.id, l.from_id, l.to_id, l.kind, l.updated_at,"
-        " n.id, n.key, n.body, n.expires_at"
+        " n.id, n.key, n.body, n.expires_at, n.sync_id, n.deleted_at"
         " FROM entries s"
         " JOIN entry_links l ON l.from_id = s.id OR l.to_id = s.id"
         " JOIN entries n ON n.id = CASE WHEN l.from_id = s.id THEN l.to_id ELSE l.from_id END"

@@ -15,9 +15,10 @@ enum { FACADE_ARGV_MAX = 32 }; /* max argv slots built for remember_run */
  * paths share output.c and the run() pipeline, so this guards the stream
  * injection (appio) and any future drift.
  *
- * Timestamps are the one field that legitimately differs between two separate
- * writes, so mutation cases mask created_at/updated_at values before comparing;
- * read cases compare exact bytes (stored timestamps are identical across reads).
+ * Timestamps, sync_id, and version_vector are the fields that legitimately
+ * differ between two separate writes, so mutation cases mask those values
+ * before comparing; read cases compare exact bytes (stored ids are identical
+ * across reads of the same DB).
  */
 
 /* Run remember_run with argv {"remember","--db",db,<cmd...>} into heap buffers. */
@@ -72,6 +73,23 @@ static void mask_field(char *s, const char *field)
     }
 }
 
+static void mask_version_vector(char *s)
+{
+    char *p = s;
+
+    while ((p = strstr(p, "\"version_vector\":")) != NULL) {
+        p += strlen("\"version_vector\":");
+        if (*p != '{') {
+            continue;
+        }
+        p++;
+        while (*p != '\0' && *p != '}') {
+            *p = 'X';
+            p++;
+        }
+    }
+}
+
 static void mask_timestamps(char *s)
 {
     if (s == NULL) {
@@ -79,6 +97,8 @@ static void mask_timestamps(char *s)
     }
     mask_field(s, "\"created_at\":\"");
     mask_field(s, "\"updated_at\":\"");
+    mask_field(s, "\"sync_id\":\"");
+    mask_version_vector(s);
 }
 
 /* Assert remember_run stdout/stderr/exit byte-match the CLI for a read command. */
@@ -130,7 +150,7 @@ static void seed_three_linked(const char *db)
 typedef void (*SeedFn)(const char *db);
 
 /* Mutations: seed identical pre-state on two DBs, run cmd on each, compare
-   timestamp-masked stdout + exit. */
+   timestamp/sync_id-masked stdout + exit. */
 static void assert_mutation_parity(SeedFn seed, const char *const *cmd, size_t ncmd)
 {
     char *db1 = make_temp_db_path();

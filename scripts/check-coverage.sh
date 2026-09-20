@@ -173,6 +173,7 @@ DEFENSIVE = re.compile(
     |^\s*store_neighbor_free\s*\(
     |^\s*store_neighbors_free\s*\(
     |^\s*add_parse_free\s*\(
+    |^\s*update_parse_free\s*\(
     |^\s*list_parse_free\s*\(
     |^\s*free\s*\(
     |^\s*size_t\s+\w+\s*(=\s*0U?\s*)?;      # decl (init-variables may add = 0)
