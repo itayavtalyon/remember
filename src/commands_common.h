@@ -46,6 +46,15 @@ void free_tag_list(char **tags, size_t ntags);
 /* Map store status to process exit; prints store_status_message on error. */
 int store_status_to_exit(StoreStatus st);
 
+/* Map a CLI --trash / --expired flag to the expired bin (default live). */
+static inline StoreBin cmd_bin_expired(bool expired_flag)
+{
+    if (expired_flag) {
+        return STORE_BIN_EXPIRED;
+    }
+    return STORE_BIN_LIVE;
+}
+
 /*
  * Load body from argv token or stdin. Applies body_trim_copy (64 KiB / UTF-8 /
  * empty). On success *out_body is heap-owned. Returns 0 or -1 with *err.

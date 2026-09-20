@@ -266,6 +266,7 @@ set(REMEMBER_TEST_SOURCES
     tests/test_cli_global.c
     tests/test_store.c
     tests/test_store_links.c
+    tests/test_store_sync.c
     tests/test_normalize.c
     tests/test_add.c
     tests/test_get_list_delete.c
@@ -313,6 +314,7 @@ add_executable(remember_store_tests
     tests/harness.c
     tests/test_store.c
     tests/test_store_links.c
+    tests/test_store_sync.c
     tests/test_normalize.c
     src/store_sqlite.c
     src/normalize.c

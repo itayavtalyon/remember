@@ -34,8 +34,9 @@ main → cli_parse → commands.h (cmd_add | cmd_locator | cmd_query) → store_
 | 11 | [Core façade lib + `tags`](11-core-facade-lib.md) | `remember_run` byte-equals CLI `--json`; `tags` cmd; `libremember` links w/o `main` ✅ |
 | 12 | [TTL / trash](12-ttl.md) | `expires_at`; `--ttl`/`--expires`/`--trash`; `purge-trash`; exit 3; v1→v2 migrate |
 | 13 | [Related memories](13-related-memories.md) | `entry_links` v3; `link`/`unlink`/`related`/`rekey`; one-row `related`; stubs; skill |
+| 14 | [Sync foundations](14-sync-foundations.md) | `sync_id` v7; soft-delete bins; per-file sidecar + local-only devices + VV; import merge + conflicts; `--sync-id` locators (design 005 Round 7) |
 
-**Definition of done for the whole tool:** full suite green (all verification criteria 1–34 automated where practical), `cmake --build build --target lint` clean on `src/`, no `#include` of sqlite outside the store adapter.
+**Definition of done for the whole tool:** full suite green (all verification criteria 1–34 automated where practical), `cmake --build build --target lint` clean on `src/`, no `#include` of sqlite outside the store adapter. Plan 14 adds criteria from design 005.
 
 ## Design append note (criteria 21–34)
 

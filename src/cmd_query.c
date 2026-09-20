@@ -383,7 +383,7 @@ static int list_prepare_query(const ListParse *parsed, char *key_norm, size_t ke
     q->source = parsed->source;
     q->limit = parsed->limit;
     q->offset = parsed->offset;
-    q->trash = parsed->trash;
+    q->bin = cmd_bin_expired(parsed->trash);
     return 0;
 }
 

@@ -263,7 +263,8 @@ int store_status_to_exit(StoreStatus st)
         err_msg(store_status_message(st));
         return REMEMBER_NOT_FOUND;
     }
-    if (st == STORE_ERR_EXPIRED || st == STORE_ERR_NOT_IN_TRASH) {
+    if (st == STORE_ERR_EXPIRED || st == STORE_ERR_NOT_EXPIRED || st == STORE_ERR_DELETED ||
+        st == STORE_ERR_NOT_DELETED) {
         err_msg(store_status_message(st));
         return REMEMBER_WRONG_BIN;
     }

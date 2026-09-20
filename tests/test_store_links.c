@@ -39,7 +39,7 @@ TEST(store_open_creates_entry_links)
     ASSERT_STREQ(err, "");
     store_close(s);
 
-    assert_query_is(db, (QueryExpect){.sql = "PRAGMA user_version;", .want = "3"});
+    assert_query_is(db, (QueryExpect){.sql = "PRAGMA user_version;", .want = "4"});
     assert_query_is(
         db, (QueryExpect){
                 .sql = "SELECT name FROM sqlite_master WHERE type='table' AND name='entry_links';",
@@ -89,7 +89,7 @@ TEST(store_open_migrates_v2_to_v3)
     ASSERT_STREQ(err, "");
     store_close(s);
 
-    assert_query_is(db, (QueryExpect){.sql = "PRAGMA user_version;", .want = "3"});
+    assert_query_is(db, (QueryExpect){.sql = "PRAGMA user_version;", .want = "4"});
     assert_query_is(db,
                     (QueryExpect){.sql = "SELECT body FROM entries WHERE id=1;", .want = "v2 row"});
     assert_query_is(db, (QueryExpect){.sql = "SELECT COUNT(*) FROM entry_links;", .want = "0"});
@@ -425,7 +425,7 @@ TEST(store_neighbors_dir_and_trash)
         ASSERT_TRUE(e.expires_at != NULL);
         store_entry_free(&e);
         memset(&e, 0, sizeof(e));
-        ASSERT_EQ_STATUS(store_get(s, b, false, k_now, &e), STORE_ERR_EXPIRED);
+        ASSERT_EQ_STATUS(store_get(s, b, STORE_BIN_LIVE, k_now, &e), STORE_ERR_EXPIRED);
     }
 
     ASSERT_EQ_STATUS(store_list_neighbors(s, a, NULL, STORE_NEIGHBOR_ALL, k_now, &rows, &n),
@@ -499,8 +499,8 @@ TEST(store_neighbors_cascade_and_survive_trash)
 
     /* restore keeps the edge */
     memset(&deleted, 0, sizeof(deleted));
-    ASSERT_EQ_STATUS(store_update(s, b, NULL, false, NULL, NULL, false, NULL, 0U, true, NULL, true,
-                                  k_now, &deleted, NULL),
+    ASSERT_EQ_STATUS(store_update(s, b, NULL, false, NULL, NULL, false, NULL, 0U, true, NULL,
+                                  STORE_BIN_EXPIRED, k_now, &deleted, NULL),
                      STORE_OK);
     store_entry_free(&deleted);
     ASSERT_EQ_STATUS(store_list_neighbors(s, a, NULL, STORE_NEIGHBOR_ALL, k_now, &rows, &n),
@@ -511,7 +511,7 @@ TEST(store_neighbors_cascade_and_survive_trash)
     /* re-expire and purge drops the edge */
     memset(&deleted, 0, sizeof(deleted));
     ASSERT_EQ_STATUS(store_update(s, b, NULL, false, NULL, NULL, false, NULL, 0U, true, k_past,
-                                  false, k_now, &deleted, NULL),
+                                  STORE_BIN_LIVE, k_now, &deleted, NULL),
                      STORE_OK);
     store_entry_free(&deleted);
     ASSERT_EQ_STATUS(store_purge_trash(s, k_now, &purged, &pn), STORE_OK);
@@ -551,7 +551,7 @@ TEST(store_rekey_rename_promote_demote)
     memset(&e, 0, sizeof(e));
     ASSERT_EQ_STATUS(
         store_rekey(s, 0, (RekeyKeys){.key_or_null = "old:key", .new_key_or_null = "new:key"},
-                    false, k_later, &e, &conflict),
+                    STORE_BIN_LIVE, k_later, &e, &conflict),
         STORE_OK);
     ASSERT_EQ_INT(e.id, a);
     ASSERT_STREQ(e.key, "new:key");
@@ -566,7 +566,7 @@ TEST(store_rekey_rename_promote_demote)
     /* promote keyless b */
     memset(&e, 0, sizeof(e));
     ASSERT_EQ_STATUS(store_rekey(s, b, (RekeyKeys){.key_or_null = NULL, .new_key_or_null = "b:key"},
-                                 false, k_later, &e, &conflict),
+                                 STORE_BIN_LIVE, k_later, &e, &conflict),
                      STORE_OK);
     ASSERT_STREQ(e.key, "b:key");
     store_entry_free(&e);
@@ -574,7 +574,7 @@ TEST(store_rekey_rename_promote_demote)
     /* demote a */
     memset(&e, 0, sizeof(e));
     ASSERT_EQ_STATUS(store_rekey(s, a, (RekeyKeys){.key_or_null = NULL, .new_key_or_null = NULL},
-                                 false, k_later, &e, &conflict),
+                                 STORE_BIN_LIVE, k_later, &e, &conflict),
                      STORE_OK);
     ASSERT_TRUE(e.key == NULL);
     store_entry_free(&e);
@@ -582,7 +582,7 @@ TEST(store_rekey_rename_promote_demote)
     /* same-value bump */
     memset(&e, 0, sizeof(e));
     ASSERT_EQ_STATUS(store_rekey(s, b, (RekeyKeys){.key_or_null = NULL, .new_key_or_null = "b:key"},
-                                 false, k_now, &e, &conflict),
+                                 STORE_BIN_LIVE, k_now, &e, &conflict),
                      STORE_OK);
     ASSERT_STREQ(e.updated_at, k_now);
     store_entry_free(&e);
@@ -590,7 +590,7 @@ TEST(store_rekey_rename_promote_demote)
     /* NEWKEY taken */
     memset(&e, 0, sizeof(e));
     ASSERT_EQ_STATUS(store_rekey(s, a, (RekeyKeys){.key_or_null = NULL, .new_key_or_null = "b:key"},
-                                 false, k_later, &e, &conflict),
+                                 STORE_BIN_LIVE, k_later, &e, &conflict),
                      STORE_ERR_CONFLICT);
     ASSERT_EQ_INT(conflict, b);
 
@@ -606,7 +606,7 @@ TEST(store_rekey_rename_promote_demote)
         conflict = 0;
         ASSERT_EQ_STATUS(store_rekey(s, c,
                                      (RekeyKeys){.key_or_null = NULL, .new_key_or_null = NULL},
-                                     false, k_later, &e, &conflict),
+                                     STORE_BIN_LIVE, k_later, &e, &conflict),
                          STORE_ERR_CONFLICT);
         ASSERT_EQ_INT(conflict, a);
     }
@@ -818,14 +818,14 @@ TEST(store_links_fault_injection_sweep)
 
         memset(&e, 0, sizeof(e));
         store_test_fail_step_after(i % 6);
-        (void)store_rekey(s, a, (RekeyKeys){.key_or_null = NULL, .new_key_or_null = NULL}, false,
-                          k_now, &e, &conflict); /* clear: load_body_hash */
+        (void)store_rekey(s, a, (RekeyKeys){.key_or_null = NULL, .new_key_or_null = NULL},
+                          STORE_BIN_LIVE, k_now, &e, &conflict); /* clear: load_body_hash */
         store_entry_free(&e);
         store_test_fail_step_after(-1);
         memset(&e, 0, sizeof(e));
         store_test_fail_prepare_after(i % 5);
-        (void)store_rekey(s, 0, (RekeyKeys){.key_or_null = "ka", .new_key_or_null = "kz"}, false,
-                          k_now, &e, &conflict); /* set/rename */
+        (void)store_rekey(s, 0, (RekeyKeys){.key_or_null = "ka", .new_key_or_null = "kz"},
+                          STORE_BIN_LIVE, k_now, &e, &conflict); /* set/rename */
         store_entry_free(&e);
         store_test_fail_prepare_after(-1);
     }

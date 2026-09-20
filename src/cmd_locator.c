@@ -130,9 +130,9 @@ int cmd_get(Store *s, bool json, int rest_argc, const char **rest_argv)
     }
 
     if (key != NULL) {
-        st = store_get_by_key(s, key, parsed.trash, now, &entry);
+        st = store_get_by_key(s, key, cmd_bin_expired(parsed.trash), now, &entry);
     } else {
-        st = store_get(s, id, parsed.trash, now, &entry);
+        st = store_get(s, id, cmd_bin_expired(parsed.trash), now, &entry);
     }
     rc = store_status_to_exit(st);
     if (rc != REMEMBER_OK) {
@@ -195,9 +195,9 @@ int cmd_delete(Store *s, bool json, int rest_argc, const char **rest_argv)
     }
 
     if (key != NULL) {
-        st = store_delete_by_key(s, key, parsed.trash, now, &entry);
+        st = store_delete_by_key(s, key, cmd_bin_expired(parsed.trash), now, &entry);
     } else {
-        st = store_delete_by_id(s, id, parsed.trash, now, &entry);
+        st = store_delete_by_id(s, id, cmd_bin_expired(parsed.trash), now, &entry);
     }
     rc = store_status_to_exit(st);
     if (rc != REMEMBER_OK) {
@@ -541,7 +541,7 @@ int cmd_update(Store *s, bool json, int rest_argc, const char **rest_argv)
     }
     st = store_update(s, id, key_or_null, parsed.set_text, body, body_hash, set_tags,
                       (const char *const *)tags_norm, ntags, set_expires, expires_at,
-                      parsed.loc.trash, now, &entry, &conflict_id);
+                      cmd_bin_expired(parsed.loc.trash), now, &entry, &conflict_id);
     if (st == STORE_ERR_CONFLICT) {
         (void)fprintf(app_err(), "remember: body hash conflicts with entry %lld\n", conflict_id);
         goto cleanup;
@@ -691,7 +691,7 @@ int cmd_rekey(Store *s, bool json, int rest_argc, const char **rest_argv)
         return REMEMBER_ERR;
     }
     st = store_rekey(s, id, (RekeyKeys){.key_or_null = key, .new_key_or_null = new_key},
-                     parsed.loc.trash, now, &entry, &conflict_id);
+                     cmd_bin_expired(parsed.loc.trash), now, &entry, &conflict_id);
     if (st == STORE_ERR_CONFLICT) {
         if (new_key != NULL) {
             (void)fprintf(app_err(), "remember: key conflicts with entry %lld\n", conflict_id);

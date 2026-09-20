@@ -54,7 +54,7 @@ static void print_general_help(void)
                                "  0  success (including empty search/list)\n"
                                "  1  usage or error\n"
                                "  2  not found (get/delete/update)\n"
-                               "  3  wrong bin (expired / not_in_trash)\n";
+                               "  3  wrong bin (expired / not_expired)\n";
 
     (void)fputs(help, app_out());
 }

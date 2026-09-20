@@ -2,16 +2,22 @@
 
 #include "sqlite3.h"
 
+#include <ctype.h>
 #include <errno.h>
+#include <fcntl.h>
 #include <stdbool.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
 #include <time.h>
+#include <unistd.h>
 
 struct Store {
     sqlite3 *db;
+    char *path;
+    char *device_id;
 };
 
 /* Directory mode for the DB parent (rwx for owner only). */
@@ -189,21 +195,30 @@ static int store_exec(sqlite3 *db, const char *sql, int (*cb)(void *, int, char 
 #define sqlite3_exec(db, sql, cb, arg, errmsg) store_exec((db), (sql), (cb), (arg), (errmsg))
 #endif /* REMEMBER_TEST_HOOKS */
 
+/* Single source of truth for the entries columns + indexes: fresh create uses
+   them here; the v1/2/3 migrate rebuild (rebuild_entries_notnull) reuses them so
+   a migrated DB is byte-identical to a fresh one (NOT NULL sync_id/version_vector,
+   one index per column). ALTER ADD COLUMN cannot add NOT NULL, hence the rebuild. */
+#define K_ENTRIES_COLUMNS                                                                          \
+    "  id INTEGER PRIMARY KEY,\n"                                                                  \
+    "  key TEXT,\n"                                                                                \
+    "  body TEXT NOT NULL,\n"                                                                      \
+    "  body_hash TEXT NOT NULL,\n"                                                                 \
+    "  source TEXT NOT NULL,\n"                                                                    \
+    "  created_at TEXT NOT NULL,\n"                                                                \
+    "  updated_at TEXT NOT NULL,\n"                                                                \
+    "  expires_at TEXT,\n"                                                                         \
+    "  sync_id TEXT NOT NULL,\n"                                                                   \
+    "  deleted_at TEXT,\n"                                                                         \
+    "  version_vector TEXT NOT NULL\n"
+#define K_ENTRIES_INDEXES                                                                          \
+    "CREATE UNIQUE INDEX ux_entries_key ON entries(key) WHERE key IS NOT NULL;\n"                  \
+    "CREATE UNIQUE INDEX ux_entries_bodyhash ON entries(body_hash) WHERE key IS NULL;\n"           \
+    "CREATE UNIQUE INDEX ux_entries_sync_id ON entries(sync_id);\n"
+
 /* DDL only; version bump is applied after a successful body (same transaction). */
 static const char k_schema_sql[] =
-    "CREATE TABLE entries (\n"
-    "  id INTEGER PRIMARY KEY,\n"
-    "  key TEXT,\n"
-    "  body TEXT NOT NULL,\n"
-    "  body_hash TEXT NOT NULL,\n"
-    "  source TEXT NOT NULL,\n"
-    "  created_at TEXT NOT NULL,\n"
-    "  updated_at TEXT NOT NULL,\n"
-    "  expires_at TEXT\n"
-    ");\n"
-    "CREATE UNIQUE INDEX ux_entries_key ON entries(key) WHERE key IS NOT NULL;\n"
-    "CREATE UNIQUE INDEX ux_entries_bodyhash ON entries(body_hash) WHERE key IS NULL;\n"
-    "CREATE TABLE tags (\n"
+    "CREATE TABLE entries (\n" K_ENTRIES_COLUMNS ");\n" K_ENTRIES_INDEXES "CREATE TABLE tags (\n"
     "  id INTEGER PRIMARY KEY,\n"
     "  name TEXT NOT NULL UNIQUE\n"
     ");\n"
@@ -231,6 +246,52 @@ static const char k_links_sql[] =
     "CREATE UNIQUE INDEX entry_links_edge\n"
     "  ON entry_links(from_id, to_id, kind);\n"
     "CREATE INDEX entry_links_to ON entry_links(to_id);\n";
+
+static const char k_sync_sql[] = "CREATE TABLE devices (\n"
+                                 "  device_id  TEXT PRIMARY KEY,\n"
+                                 "  first_seen TEXT NOT NULL,\n"
+                                 "  last_seen  TEXT NOT NULL\n"
+                                 ");\n"
+                                 "CREATE TABLE conflicts (\n"
+                                 "  id            INTEGER PRIMARY KEY,\n"
+                                 "  sync_id       TEXT NOT NULL,\n"
+                                 "  reason        TEXT NOT NULL,\n"
+                                 "  local_json    TEXT NOT NULL,\n"
+                                 "  incoming_json TEXT NOT NULL,\n"
+                                 "  created_at    TEXT NOT NULL\n"
+                                 ");\n";
+
+enum { SCHEMA_VERSION = 4, UUID_STR_LEN = 36, UUID_BYTES = 16 };
+/* RFC 4122 layout for canonical 8-4-4-4-12 and v7 mint. */
+enum {
+    UUID_DASH_0 = 8,
+    UUID_DASH_1 = 13,
+    UUID_DASH_2 = 18,
+    UUID_DASH_3 = 23,
+    UUID_VER_CHAR = 14,
+    UUID_VAR_CHAR = 19,
+    UUID_VER_BYTE = 6,
+    UUID_VAR_BYTE = 8,
+    UUID_HEX_DASH_0 = 4,
+    UUID_HEX_DASH_1 = 6,
+    UUID_HEX_DASH_2 = 8,
+    UUID_HEX_DASH_3 = 10,
+    UUID_NIBBLE_SHIFT = 4U,
+    UUID_NIBBLE_MASK = 0x0fU,
+    UUID_V7_HI = 0x70U,
+    UUID_VAR_MASK = 0x3fU,
+    UUID_VAR_RFC = 0x80U,
+    MS_PER_SEC = 1000ULL,
+    UUID_MS_SHIFT_0 = 40U,
+    UUID_MS_SHIFT_1 = 32U,
+    UUID_MS_SHIFT_2 = 24U,
+    UUID_MS_SHIFT_3 = 16U,
+    UUID_MS_SHIFT_4 = 8U,
+    SIDECAR_LINE_BUF = 64,
+    SIDECAR_FILE_MODE = 0600,
+    SIDECAR_PATH_PAD = 16,
+    VV_JSON_BUFLEN = 80
+};
 
 static void set_err(char *err, size_t errlen, const char *msg)
 {
@@ -309,6 +370,13 @@ static void rollback_quiet(sqlite3 *db)
     (void)sqlite3_exec(db, "ROLLBACK;", NULL, NULL, NULL);
 }
 
+/* Undo a named savepoint without aborting an outer write transaction. */
+static void savepoint_undo(sqlite3 *db)
+{
+    (void)sqlite3_exec(db, "ROLLBACK TO remember_device;", NULL, NULL, NULL);
+    (void)sqlite3_exec(db, "RELEASE remember_device;", NULL, NULL, NULL);
+}
+
 static int read_user_version(sqlite3 *db, int *out, char *err, size_t errlen)
 {
     sqlite3_stmt *stmt = NULL;
@@ -342,13 +410,393 @@ static int apply_pragmas(sqlite3 *db, char *err, size_t errlen)
     return 0;
 }
 
-/* Gate an already-created database: 3 is current, anything else is refused. */
-static int check_version(int version, char *err, size_t errlen)
+/* Canonical lowercase 8-4-4-4-12. Device sidecar and entry sync_id share this. */
+static int uuid_is_canonical(const char *s)
 {
-    if (version == 3) {
+    size_t i = 0;
+
+    if (s == NULL || strlen(s) != (size_t)UUID_STR_LEN) {
         return 0;
     }
-    if (version > 3) {
+    if (s[UUID_DASH_0] != '-' || s[UUID_DASH_1] != '-' || s[UUID_DASH_2] != '-' ||
+        s[UUID_DASH_3] != '-') {
+        return 0;
+    }
+    if (s[UUID_VER_CHAR] != '7') {
+        return 0;
+    }
+    if (s[UUID_VAR_CHAR] != '8' && s[UUID_VAR_CHAR] != '9' && s[UUID_VAR_CHAR] != 'a' &&
+        s[UUID_VAR_CHAR] != 'b') {
+        return 0;
+    }
+    for (i = 0; i < (size_t)UUID_STR_LEN; i++) {
+        unsigned char c = (unsigned char)s[i];
+        if (s[i] == '-') {
+            continue;
+        }
+        if (!isxdigit(c) || (isalpha(c) && !islower(c))) {
+            return 0;
+        }
+    }
+    return 1;
+}
+
+/* RFC 4122 v7 packing: shifts and nibble masks are the layout, not business
+   constants clang-tidy can usefully name. */
+// NOLINTBEGIN(hicpp-signed-bitwise,cppcoreguidelines-avoid-magic-numbers,readability-magic-numbers)
+static int mint_uuid_v7(char out[UUID_STR_LEN + 1])
+{
+    struct timespec ts;
+    unsigned char b[UUID_BYTES];
+    static const char hex[] = "0123456789abcdef";
+    uint64_t ms = 0;
+    int i = 0;
+    int o = 0;
+
+    if (out == NULL) {
+        return -1;
+    }
+    if (timespec_get(&ts, TIME_UTC) != TIME_UTC) {
+        return -1;
+    }
+    if (ts.tv_sec < 0) {
+        return -1;
+    }
+    ms = ((uint64_t)ts.tv_sec * MS_PER_SEC) + (uint64_t)(ts.tv_nsec / NANOS_PER_MS);
+    sqlite3_randomness((int)sizeof(b), b);
+    b[0] = (unsigned char)(ms >> UUID_MS_SHIFT_0);
+    b[1] = (unsigned char)(ms >> UUID_MS_SHIFT_1);
+    b[2] = (unsigned char)(ms >> UUID_MS_SHIFT_2);
+    b[3] = (unsigned char)(ms >> UUID_MS_SHIFT_3);
+    b[4] = (unsigned char)(ms >> UUID_MS_SHIFT_4);
+    b[5] = (unsigned char)ms;
+    b[UUID_VER_BYTE] = (unsigned char)((b[UUID_VER_BYTE] & UUID_NIBBLE_MASK) | UUID_V7_HI);
+    b[UUID_VAR_BYTE] = (unsigned char)((b[UUID_VAR_BYTE] & UUID_VAR_MASK) | UUID_VAR_RFC);
+    for (i = 0; i < UUID_BYTES; i++) {
+        if (i == UUID_HEX_DASH_0 || i == UUID_HEX_DASH_1 || i == UUID_HEX_DASH_2 ||
+            i == UUID_HEX_DASH_3) {
+            out[o++] = '-';
+        }
+        out[o++] = hex[b[i] >> UUID_NIBBLE_SHIFT];
+        out[o++] = hex[b[i] & UUID_NIBBLE_MASK];
+    }
+    out[UUID_STR_LEN] = '\0';
+    return 0;
+}
+// NOLINTEND(hicpp-signed-bitwise,cppcoreguidelines-avoid-magic-numbers,readability-magic-numbers)
+
+static int sidecar_path(const char *db_path, char *out, size_t outlen)
+{
+    int n = 0;
+
+    if (db_path == NULL || out == NULL) {
+        return -1;
+    }
+    n = snprintf(out, outlen, "%s.device_id", db_path);
+    if (n < 0 || (size_t)n >= outlen) {
+        return -1;
+    }
+    return 0;
+}
+
+/* 0 = read ok, 1 = missing, -1 = invalid/error. */
+static int read_sidecar(const char *path, char uuid[UUID_STR_LEN + 1])
+{
+    FILE *f = NULL;
+    char buf[SIDECAR_LINE_BUF];
+    size_t n = 0;
+
+    /* macOS fopen has no 'e' (O_CLOEXEC) mode; CLI is short-lived. */
+    // NOLINTNEXTLINE(android-cloexec-fopen)
+    f = fopen(path, "r");
+    if (f == NULL) {
+        return (errno == ENOENT) ? 1 : -1;
+    }
+    if (fgets(buf, (int)sizeof(buf), f) == NULL) {
+        (void)fclose(f);
+        return -1;
+    }
+    (void)fclose(f);
+    n = strlen(buf);
+    while (n > 0U && (buf[n - 1U] == '\n' || buf[n - 1U] == '\r')) {
+        buf[--n] = '\0';
+    }
+    if (!uuid_is_canonical(buf)) {
+        return -1;
+    }
+    memcpy(uuid, buf, (size_t)UUID_STR_LEN + 1U);
+    return 0;
+}
+
+/* path then uuid: sidecar file vs contents; call sites pass them in that order. */
+// NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
+static int write_sidecar(const char *path, const char *uuid, char *err, size_t errlen)
+{
+    int fd = -1;
+    char line[UUID_STR_LEN + 2];
+    ssize_t w = 0;
+    size_t n = 0;
+
+    n = (size_t)snprintf(line, sizeof(line), "%s\n", uuid);
+    if (n != (size_t)UUID_STR_LEN + 1U) {
+        set_err(err, errlen, "cannot write device_id sidecar");
+        return -1;
+    }
+    /* SQLITE_OPEN_* style: O_* are signed-int flag macros. */
+    // NOLINTNEXTLINE(hicpp-signed-bitwise,android-cloexec-open)
+    fd = open(path, O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, SIDECAR_FILE_MODE);
+    if (fd < 0) {
+        set_err(err, errlen, "cannot write device_id sidecar");
+        return -1;
+    }
+    if (fchmod(fd, SIDECAR_FILE_MODE) != 0) {
+        (void)close(fd);
+        set_err(err, errlen, "cannot write device_id sidecar");
+        return -1;
+    }
+    w = write(fd, line, n);
+    if (w < 0 || (size_t)w != n) {
+        (void)close(fd);
+        set_err(err, errlen, "cannot write device_id sidecar");
+        return -1;
+    }
+    if (close(fd) != 0) {
+        set_err(err, errlen, "cannot write device_id sidecar");
+        return -1;
+    }
+    return 0;
+}
+
+static int devices_count(sqlite3 *db, int *out)
+{
+    sqlite3_stmt *stmt = NULL;
+    int rc = 0;
+
+    rc = sqlite3_prepare_v2(db, "SELECT COUNT(*) FROM devices;", -1, &stmt, NULL);
+    if (rc != SQLITE_OK) {
+        return -1;
+    }
+    rc = sqlite3_step(stmt);
+    if (rc != SQLITE_ROW) {
+        (void)sqlite3_finalize(stmt);
+        return -1;
+    }
+    *out = sqlite3_column_int(stmt, 0);
+    (void)sqlite3_finalize(stmt);
+    return 0;
+}
+
+static int devices_get_one(sqlite3 *db, char uuid[UUID_STR_LEN + 1])
+{
+    sqlite3_stmt *stmt = NULL;
+    const unsigned char *t = NULL;
+    int rc = 0;
+
+    rc = sqlite3_prepare_v2(db, "SELECT device_id FROM devices LIMIT 1;", -1, &stmt, NULL);
+    if (rc != SQLITE_OK) {
+        return -1;
+    }
+    rc = sqlite3_step(stmt);
+    if (rc != SQLITE_ROW) {
+        (void)sqlite3_finalize(stmt);
+        return -1;
+    }
+    t = sqlite3_column_text(stmt, 0);
+    if (t == NULL || !uuid_is_canonical((const char *)t)) {
+        (void)sqlite3_finalize(stmt);
+        return -1;
+    }
+    memcpy(uuid, t, (size_t)UUID_STR_LEN + 1U);
+    (void)sqlite3_finalize(stmt);
+    return 0;
+}
+
+static int devices_replace(sqlite3 *db, const char *uuid, const char *now, char *err, size_t errlen)
+{
+    sqlite3_stmt *stmt = NULL;
+    int rc = 0;
+
+    /* SAVEPOINT is nested-safe inside migrate's BEGIN and starts a txn if none. */
+    if (exec_sql(db, "SAVEPOINT remember_device;", err, errlen) != 0) {
+        return -1;
+    }
+    if (exec_sql(db, "DELETE FROM devices;", err, errlen) != 0) {
+        savepoint_undo(db);
+        return -1;
+    }
+    rc = sqlite3_prepare_v2(
+        db, "INSERT INTO devices(device_id, first_seen, last_seen) VALUES (?1, ?2, ?3);", -1, &stmt,
+        NULL);
+    if (rc != SQLITE_OK) {
+        savepoint_undo(db);
+        set_errf(err, errlen, "sqlite", sqlite3_errmsg(db));
+        return -1;
+    }
+    (void)sqlite3_bind_text(stmt, 1, uuid, -1, SQLITE_STATIC);
+    (void)sqlite3_bind_text(stmt, 2, now, -1, SQLITE_STATIC);
+    (void)sqlite3_bind_text(stmt, 3, now, -1, SQLITE_STATIC);
+    rc = sqlite3_step(stmt);
+    (void)sqlite3_finalize(stmt);
+    if (rc != SQLITE_DONE) {
+        savepoint_undo(db);
+        set_errf(err, errlen, "sqlite", sqlite3_errmsg(db));
+        return -1;
+    }
+    if (exec_sql(db, "RELEASE remember_device;", err, errlen) != 0) {
+        savepoint_undo(db);
+        return -1;
+    }
+    return 0;
+}
+
+static char *dup_str(const char *s);
+
+static int bind_device_id(Store *s, const char *uuid, char *err, size_t errlen)
+{
+    s->device_id = dup_str(uuid);
+    if (s->device_id == NULL) {
+        set_err(err, errlen, "out of memory");
+        return -1;
+    }
+    return 0;
+}
+
+// NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
+static int recover_device_identity(Store *s, const char *side, int file_rc, char *file_uuid,
+                                   int have_devices, int have_db_row, const char *db_uuid,
+                                   char *err, size_t errlen)
+{
+    char now[ISO_TS_MIN_BUFLEN];
+
+    if (utc_now(now, sizeof(now)) != 0) {
+        set_err(err, errlen, "cannot read clock");
+        return -1;
+    }
+    if (file_rc == 0) {
+        if (have_devices != 0 && (have_db_row == 0 || strcmp(file_uuid, db_uuid) != 0)) {
+            if (devices_replace(s->db, file_uuid, now, err, errlen) != 0) {
+                return -1;
+            }
+        }
+        return bind_device_id(s, file_uuid, err, errlen);
+    }
+    if (have_db_row != 0) {
+        if (write_sidecar(side, db_uuid, err, errlen) != 0) {
+            return -1;
+        }
+        return bind_device_id(s, db_uuid, err, errlen);
+    }
+    if (mint_uuid_v7(file_uuid) != 0) {
+        set_err(err, errlen, "cannot mint device_id");
+        return -1;
+    }
+    if (write_sidecar(side, file_uuid, err, errlen) != 0) {
+        return -1;
+    }
+    if (have_devices != 0 && devices_replace(s->db, file_uuid, now, err, errlen) != 0) {
+        return -1;
+    }
+    return bind_device_id(s, file_uuid, err, errlen);
+}
+
+/* Sidecar + at most one local devices row. No last_seen bump when already in sync. */
+static int ensure_device_identity(Store *s, int have_devices, char *err, size_t errlen)
+{
+    char side[REMEMBER_PATH_MAX + SIDECAR_PATH_PAD];
+    char file_uuid[UUID_STR_LEN + 1];
+    char db_uuid[UUID_STR_LEN + 1] = {0};
+    int file_rc = 0;
+    int n_dev = 0;
+    int have_db_row = 0;
+
+    if (sidecar_path(s->path, side, sizeof(side)) != 0) {
+        set_err(err, errlen, "database path is too long");
+        return -1;
+    }
+    file_rc = read_sidecar(side, file_uuid);
+    if (file_rc < 0) {
+        set_err(err, errlen, "invalid device_id sidecar");
+        return -1;
+    }
+    if (have_devices != 0) {
+        if (devices_count(s->db, &n_dev) != 0) {
+            set_err(err, errlen, "cannot read devices");
+            return -1;
+        }
+        if (n_dev > 0) {
+            if (devices_get_one(s->db, db_uuid) != 0) {
+                set_err(err, errlen, "cannot read devices");
+                return -1;
+            }
+            have_db_row = 1;
+        }
+    }
+    if (file_rc == 0 && have_db_row != 0 && strcmp(file_uuid, db_uuid) == 0) {
+        return bind_device_id(s, file_uuid, err, errlen);
+    }
+    return recover_device_identity(s, side, file_rc, file_uuid, have_devices, have_db_row, db_uuid,
+                                   err, errlen);
+}
+
+static int backfill_sync_ids(sqlite3 *db, const char *device_id, char *err, size_t errlen)
+{
+    sqlite3_stmt *sel = NULL;
+    sqlite3_stmt *upd = NULL;
+    int rc = 0;
+    char uuid[UUID_STR_LEN + 1];
+    char vv_json[VV_JSON_BUFLEN];
+
+    rc = sqlite3_prepare_v2(db,
+                            "SELECT id FROM entries WHERE sync_id IS NULL OR version_vector IS "
+                            "NULL;",
+                            -1, &sel, NULL);
+    if (rc != SQLITE_OK) {
+        set_errf(err, errlen, "sqlite", sqlite3_errmsg(db));
+        return -1;
+    }
+    rc = sqlite3_prepare_v2(
+        db, "UPDATE entries SET sync_id = ?1, version_vector = ?2 WHERE id = ?3;", -1, &upd, NULL);
+    if (rc != SQLITE_OK) {
+        (void)sqlite3_finalize(sel);
+        set_errf(err, errlen, "sqlite", sqlite3_errmsg(db));
+        return -1;
+    }
+    (void)snprintf(vv_json, sizeof(vv_json), "{\"%s\":1}", device_id);
+    while ((rc = sqlite3_step(sel)) == SQLITE_ROW) {
+        long long id = sqlite3_column_int64(sel, 0);
+        if (mint_uuid_v7(uuid) != 0) {
+            (void)sqlite3_finalize(sel);
+            (void)sqlite3_finalize(upd);
+            set_err(err, errlen, "cannot mint sync_id");
+            return -1;
+        }
+        (void)sqlite3_reset(upd);
+        (void)sqlite3_bind_text(upd, 1, uuid, -1, SQLITE_TRANSIENT);
+        (void)sqlite3_bind_text(upd, 2, vv_json, -1, SQLITE_TRANSIENT);
+        (void)sqlite3_bind_int64(upd, 3, id);
+        if (sqlite3_step(upd) != SQLITE_DONE) {
+            (void)sqlite3_finalize(sel);
+            (void)sqlite3_finalize(upd);
+            set_errf(err, errlen, "sqlite", sqlite3_errmsg(db));
+            return -1;
+        }
+    }
+    (void)sqlite3_finalize(sel);
+    (void)sqlite3_finalize(upd);
+    if (rc != SQLITE_DONE) {
+        set_errf(err, errlen, "sqlite", sqlite3_errmsg(db));
+        return -1;
+    }
+    return 0;
+}
+
+/* Gate an already-created database: 4 is current, anything else is refused. */
+static int check_version(int version, char *err, size_t errlen)
+{
+    if (version == SCHEMA_VERSION) {
+        return 0;
+    }
+    if (version > SCHEMA_VERSION) {
         set_err(err, errlen, "database is newer than this remember");
     } else {
         set_err(err, errlen, "unsupported database version");
@@ -356,46 +804,108 @@ static int check_version(int version, char *err, size_t errlen)
     return -1;
 }
 
-static int migrate_body_to_v3(sqlite3 *db, int version, char *err, size_t errlen)
+static int migrate_v3_to_v4_columns(sqlite3 *db, char *err, size_t errlen)
+{
+    if (exec_sql(db, "ALTER TABLE entries ADD COLUMN sync_id TEXT;", err, errlen) != 0) {
+        return -1;
+    }
+    if (exec_sql(db, "ALTER TABLE entries ADD COLUMN deleted_at TEXT;", err, errlen) != 0) {
+        return -1;
+    }
+    if (exec_sql(db, "ALTER TABLE entries ADD COLUMN version_vector TEXT;", err, errlen) != 0) {
+        return -1;
+    }
+    if (exec_sql(db, k_sync_sql, err, errlen) != 0) {
+        return -1;
+    }
+    return 0;
+}
+
+static int migrate_body_to_v4(sqlite3 *db, int version, char *err, size_t errlen)
 {
     if (version == 0) {
         if (exec_sql(db, k_schema_sql, err, errlen) != 0) {
             return -1;
         }
-        return exec_sql(db, k_links_sql, err, errlen);
+        if (exec_sql(db, k_links_sql, err, errlen) != 0) {
+            return -1;
+        }
+        return exec_sql(db, k_sync_sql, err, errlen);
     }
     if (version == 1) {
         if (exec_sql(db, "ALTER TABLE entries ADD COLUMN expires_at TEXT;", err, errlen) != 0) {
             return -1;
         }
-        return exec_sql(db, k_links_sql, err, errlen);
+        if (exec_sql(db, k_links_sql, err, errlen) != 0) {
+            return -1;
+        }
+        return migrate_v3_to_v4_columns(db, err, errlen);
     }
     if (version == 2) {
-        return exec_sql(db, k_links_sql, err, errlen);
+        if (exec_sql(db, k_links_sql, err, errlen) != 0) {
+            return -1;
+        }
+        return migrate_v3_to_v4_columns(db, err, errlen);
+    }
+    if (version == 3) {
+        return migrate_v3_to_v4_columns(db, err, errlen);
     }
     return 1;
 }
 
-/*
- * Bring an open database to schema version 3.
- *
- * Create (v0) and migrate (v1/v2) run as one transaction under a write lock so
- * a failure part-way cannot leave objects behind at user_version 0, and a
- * concurrent remember that already created or migrated is visible on re-read.
- */
-static int ensure_schema(sqlite3 *db, char *err, size_t errlen)
+/* Fail fast if the schema left any dangling foreign-key reference (run after a
+   rebuild, while foreign_keys is OFF). One returned row = at least one violation. */
+static int foreign_keys_ok(sqlite3 *db, char *err, size_t errlen)
 {
-    int version = 0;
+    sqlite3_stmt *stmt = NULL;
+    int rc = 0;
 
-    if (read_user_version(db, &version, err, errlen) != 0) {
+    rc = sqlite3_prepare_v2(db, "PRAGMA foreign_key_check;", -1, &stmt, NULL);
+    if (rc != SQLITE_OK) {
+        set_errf(err, errlen, "sqlite", sqlite3_errmsg(db));
         return -1;
     }
-    if (version == 3) {
-        return 0;
+    rc = sqlite3_step(stmt);
+    (void)sqlite3_finalize(stmt);
+    if (rc == SQLITE_ROW) {
+        set_err(err, errlen, "migration left a dangling reference");
+        return -1;
     }
-    if (version != 0 && version != 1 && version != 2) {
-        return check_version(version, err, errlen);
+    if (rc != SQLITE_DONE) {
+        set_errf(err, errlen, "sqlite", sqlite3_errmsg(db));
+        return -1;
     }
+    return 0;
+}
+
+/* Rebuild entries so v1/2/3-migrated rows get NOT NULL sync_id/version_vector and
+   a single named index per column (parity with a fresh create). Runs with
+   foreign_keys OFF so DROP does not cascade entry_links/entry_tags; the caller's
+   foreign_keys_ok() verifies afterward. sync_id/version_vector are already
+   backfilled, so the NOT NULL copy succeeds. */
+static int rebuild_entries_notnull(sqlite3 *db, char *err, size_t errlen)
+{
+    static const char sql[] =
+        "CREATE TABLE entries_v4 (\n" K_ENTRIES_COLUMNS ");\n"
+        "INSERT INTO entries_v4 SELECT id, key, body, body_hash, source, created_at, updated_at, "
+        "expires_at, sync_id, deleted_at, version_vector FROM entries;\n"
+        "DROP TABLE entries;\n"
+        "ALTER TABLE entries_v4 RENAME TO entries;\n" K_ENTRIES_INDEXES;
+    return exec_sql(db, sql, err, errlen);
+}
+
+/*
+ * Create or migrate to schema 4 in one write transaction. Assumes foreign_keys
+ * is OFF (ensure_schema toggles it) so the v1/2/3 rebuild's DROP does not cascade
+ * entry_links/entry_tags. Returns 0 = created/migrated + committed (identity
+ * bound), 1 = a concurrent remember already migrated (caller binds identity),
+ * -1 = failure.
+ */
+static int migrate_to_v4(Store *s, char *err, size_t errlen)
+{
+    sqlite3 *db = s->db;
+    int version = 0;
+    int migrated = 0;
 
     if (exec_sql(db, "BEGIN IMMEDIATE;", err, errlen) != 0) {
         return -1;
@@ -403,21 +913,32 @@ static int ensure_schema(sqlite3 *db, char *err, size_t errlen)
     if (read_user_version(db, &version, err, errlen) != 0) {
         goto cleanup_fail;
     }
-    if (version == 3) {
+    if (version == SCHEMA_VERSION) {
         rollback_quiet(db);
-        return 0;
+        return 1;
     }
-    {
-        int migrated = migrate_body_to_v3(db, version, err, errlen);
-        if (migrated == 1) {
-            rollback_quiet(db);
-            return check_version(version, err, errlen);
-        }
-        if (migrated != 0) {
-            goto cleanup_fail;
-        }
+    migrated = migrate_body_to_v4(db, version, err, errlen);
+    if (migrated == 1) {
+        rollback_quiet(db);
+        return check_version(version, err, errlen);
     }
-    if (exec_sql(db, "PRAGMA user_version = 3;", err, errlen) != 0) {
+    if (migrated != 0) {
+        goto cleanup_fail;
+    }
+    if (ensure_device_identity(s, 1, err, errlen) != 0) {
+        goto cleanup_fail;
+    }
+    if (backfill_sync_ids(db, s->device_id, err, errlen) != 0) {
+        goto cleanup_fail;
+    }
+    /* v0 (fresh) is already NOT NULL from k_schema_sql; only migrated rows rebuild. */
+    if (version != 0 && rebuild_entries_notnull(db, err, errlen) != 0) {
+        goto cleanup_fail;
+    }
+    if (foreign_keys_ok(db, err, errlen) != 0) {
+        goto cleanup_fail;
+    }
+    if (exec_sql(db, "PRAGMA user_version = 4;", err, errlen) != 0) {
         goto cleanup_fail;
     }
     if (exec_sql(db, "COMMIT;", err, errlen) != 0) {
@@ -430,10 +951,50 @@ cleanup_fail:
     return -1;
 }
 
+/*
+ * Bring an open database to schema version 4 and bind local device identity.
+ *
+ * The v1/2/3 migration rebuilds entries, so foreign_keys is toggled OFF around
+ * it (the PRAGMA is a no-op inside a transaction) and restored ON afterward.
+ * The already-current and concurrent-adopt paths share bind_identity so the
+ * bind is covered by every normal reopen.
+ */
+static int ensure_schema(Store *s, char *err, size_t errlen)
+{
+    int version = 0;
+    int rc = 0;
+    sqlite3 *db = s->db;
+
+    if (read_user_version(db, &version, err, errlen) != 0) {
+        return -1;
+    }
+    if (version == SCHEMA_VERSION) {
+        goto bind_identity; /* already current; foreign_keys stays ON */
+    }
+    if (version != 0 && version != 1 && version != 2 && version != 3) {
+        return check_version(version, err, errlen);
+    }
+    if (exec_sql(db, "PRAGMA foreign_keys = OFF;", err, errlen) != 0) {
+        return -1;
+    }
+    rc = migrate_to_v4(s, err, errlen);
+    (void)exec_sql(db, "PRAGMA foreign_keys = ON;", NULL, 0);
+    if (rc < 0) {
+        return -1;
+    }
+    if (rc == 0) {
+        return 0; /* migrated + committed; identity already bound */
+    }
+
+bind_identity:
+    return ensure_device_identity(s, 1, err, errlen);
+}
+
 Store *store_open(const char *path, char *err, size_t errlen)
 {
     Store *s = NULL;
     sqlite3 *db = NULL;
+    size_t plen = 0;
 
     if (path == NULL || path[0] == '\0') {
         set_err(err, errlen, "empty database path");
@@ -449,6 +1010,14 @@ Store *store_open(const char *path, char *err, size_t errlen)
         set_err(err, errlen, "out of memory");
         return NULL;
     }
+    plen = strlen(path);
+    s->path = (char *)malloc(plen + 1U);
+    if (s->path == NULL) {
+        set_err(err, errlen, "out of memory");
+        free(s);
+        return NULL;
+    }
+    memcpy(s->path, path, plen + 1U);
 
     /* SQLITE_OPEN_* are sqlite's own signed-int flag macros; the API takes int. */
     // NOLINTNEXTLINE(hicpp-signed-bitwise)
@@ -457,14 +1026,14 @@ Store *store_open(const char *path, char *err, size_t errlen)
         set_errf(err, errlen, "cannot open database", sqlite3_errmsg(db));
         goto cleanup_fail;
     }
+    s->db = db;
     if (apply_pragmas(db, err, errlen) != 0) {
         goto cleanup_fail;
     }
-    if (ensure_schema(db, err, errlen) != 0) {
+    if (ensure_schema(s, err, errlen) != 0) {
         goto cleanup_fail;
     }
 
-    s->db = db;
     if (err != NULL && errlen > 0U) {
         err[0] = '\0';
     }
@@ -472,6 +1041,8 @@ Store *store_open(const char *path, char *err, size_t errlen)
 
 cleanup_fail:
     (void)sqlite3_close_v2(db);
+    free(s->path);
+    free(s->device_id);
     free(s);
     return NULL;
 }
@@ -485,6 +1056,10 @@ void store_close(Store *s)
        leaking the connection (sqlite3_close would return SQLITE_BUSY). */
     (void)sqlite3_close_v2(s->db);
     s->db = NULL;
+    free(s->path);
+    free(s->device_id);
+    s->path = NULL;
+    s->device_id = NULL;
     free(s);
 }
 
@@ -509,8 +1084,12 @@ const char *store_status_message(StoreStatus st)
         return "body hash conflict";
     case STORE_ERR_EXPIRED:
         return "expired";
-    case STORE_ERR_NOT_IN_TRASH:
-        return "not_in_trash";
+    case STORE_ERR_NOT_EXPIRED:
+        return "not_expired";
+    case STORE_ERR_DELETED:
+        return "deleted";
+    case STORE_ERR_NOT_DELETED:
+        return "not_deleted";
     case STORE_ERR_SELF_LINK:
         return "self-link";
     case STORE_ERR_CYCLE:
@@ -538,6 +1117,9 @@ void store_entry_free(Entry *e)
     free(e->created_at);
     free(e->updated_at);
     free(e->expires_at);
+    free(e->sync_id);
+    free(e->deleted_at);
+    free(e->version_vector);
     e->key = NULL;
     e->body = NULL;
     e->tags = NULL;
@@ -546,6 +1128,9 @@ void store_entry_free(Entry *e)
     e->created_at = NULL;
     e->updated_at = NULL;
     e->expires_at = NULL;
+    e->sync_id = NULL;
+    e->deleted_at = NULL;
+    e->version_vector = NULL;
     e->id = 0;
 }
 
@@ -682,7 +1267,8 @@ static StoreStatus load_tags(sqlite3 *db, long long entry_id, char ***out_tags, 
 }
 
 /* Fill *out from a SELECT that returns columns:
- * id, key, body, source, created_at, updated_at, expires_at (key/expires_at may be NULL). */
+ * id, key, body, source, created_at, updated_at, expires_at, sync_id,
+ * deleted_at, version_vector (key/expires_at/deleted_at may be NULL). */
 static StoreStatus fill_entry_from_row(sqlite3 *db, sqlite3_stmt *stmt, Entry *out)
 {
     /* Column order of the entry SELECT this row comes from. */
@@ -693,7 +1279,10 @@ static StoreStatus fill_entry_from_row(sqlite3 *db, sqlite3_stmt *stmt, Entry *o
         COL_SOURCE = 3,
         COL_CREATED_AT = 4,
         COL_UPDATED_AT = 5,
-        COL_EXPIRES_AT = 6
+        COL_EXPIRES_AT = 6,
+        COL_SYNC_ID = 7,
+        COL_DELETED_AT = 8,
+        COL_VERSION_VECTOR = 9
     };
     StoreStatus st = STORE_OK;
     const unsigned char *key_u = NULL;
@@ -702,6 +1291,9 @@ static StoreStatus fill_entry_from_row(sqlite3 *db, sqlite3_stmt *stmt, Entry *o
     const unsigned char *created_u = NULL;
     const unsigned char *updated_u = NULL;
     const unsigned char *expires_u = NULL;
+    const unsigned char *sync_u = NULL;
+    const unsigned char *deleted_u = NULL;
+    const unsigned char *vv_u = NULL;
 
     memset(out, 0, sizeof(*out));
     out->id = sqlite3_column_int64(stmt, COL_ID);
@@ -711,8 +1303,12 @@ static StoreStatus fill_entry_from_row(sqlite3 *db, sqlite3_stmt *stmt, Entry *o
     created_u = sqlite3_column_text(stmt, COL_CREATED_AT);
     updated_u = sqlite3_column_text(stmt, COL_UPDATED_AT);
     expires_u = sqlite3_column_text(stmt, COL_EXPIRES_AT);
+    sync_u = sqlite3_column_text(stmt, COL_SYNC_ID);
+    deleted_u = sqlite3_column_text(stmt, COL_DELETED_AT);
+    vv_u = sqlite3_column_text(stmt, COL_VERSION_VECTOR);
 
-    if (body_u == NULL || source_u == NULL || created_u == NULL || updated_u == NULL) {
+    if (body_u == NULL || source_u == NULL || created_u == NULL || updated_u == NULL ||
+        sync_u == NULL || vv_u == NULL) {
         return STORE_ERR_SQLITE;
     }
     if (key_u != NULL) {
@@ -726,6 +1322,8 @@ static StoreStatus fill_entry_from_row(sqlite3 *db, sqlite3_stmt *stmt, Entry *o
     out->source = dup_str((const char *)source_u);
     out->created_at = dup_str((const char *)created_u);
     out->updated_at = dup_str((const char *)updated_u);
+    out->sync_id = dup_str((const char *)sync_u);
+    out->version_vector = dup_str((const char *)vv_u);
     if (expires_u != NULL) {
         out->expires_at = dup_str((const char *)expires_u);
         if (out->expires_at == NULL) {
@@ -733,8 +1331,15 @@ static StoreStatus fill_entry_from_row(sqlite3 *db, sqlite3_stmt *stmt, Entry *o
             return STORE_ERR_OOM;
         }
     }
+    if (deleted_u != NULL) {
+        out->deleted_at = dup_str((const char *)deleted_u);
+        if (out->deleted_at == NULL) {
+            store_entry_free(out);
+            return STORE_ERR_OOM;
+        }
+    }
     if (out->body == NULL || out->source == NULL || out->created_at == NULL ||
-        out->updated_at == NULL) {
+        out->updated_at == NULL || out->sync_id == NULL || out->version_vector == NULL) {
         store_entry_free(out);
         return STORE_ERR_OOM;
     }
@@ -748,36 +1353,53 @@ static StoreStatus fill_entry_from_row(sqlite3 *db, sqlite3_stmt *stmt, Entry *o
 
 static StoreStatus load_entry_by_id(sqlite3 *db, long long id, Entry *out);
 static StoreStatus load_entry_by_key(sqlite3 *db, const char *key, Entry *out);
+static StoreStatus load_entry_by_sync_id(sqlite3 *db, const char *sync_id, Entry *out);
 
-/* Trash iff expires_at is set and lexicographically <= now (ISO .mmmZ). */
-static int entry_is_trash(const char *expires_at, const char *now)
+static StoreBin entry_bin(const Entry *e, const char *now)
 {
-    return expires_at != NULL && now != NULL && strcmp(expires_at, now) <= 0;
+    if (e->deleted_at != NULL) {
+        return STORE_BIN_DELETED;
+    }
+    if (e->expires_at != NULL && now != NULL && strcmp(e->expires_at, now) <= 0) {
+        return STORE_BIN_EXPIRED;
+    }
+    return STORE_BIN_LIVE;
 }
 
-static StoreStatus bin_status(const Entry *e, bool trash, const char *now)
+/* Round 7 exit-3 matrix. Prefer the row's actual bin when two flags are wrong. */
+static StoreStatus bin_status(const Entry *e, StoreBin want, const char *now)
 {
-    int in_trash = 0;
+    StoreBin have = STORE_BIN_LIVE;
 
     if (e == NULL || now == NULL) {
         return STORE_ERR_INTERNAL;
     }
-    in_trash = entry_is_trash(e->expires_at, now);
-    if (trash) {
-        return in_trash ? STORE_OK : STORE_ERR_NOT_IN_TRASH;
+    have = entry_bin(e, now);
+    if (have == want) {
+        return STORE_OK;
     }
-    return in_trash ? STORE_ERR_EXPIRED : STORE_OK;
+    if (want == STORE_BIN_LIVE) {
+        return (have == STORE_BIN_EXPIRED) ? STORE_ERR_EXPIRED : STORE_ERR_DELETED;
+    }
+    if (want == STORE_BIN_EXPIRED) {
+        return (have == STORE_BIN_LIVE) ? STORE_ERR_NOT_EXPIRED : STORE_ERR_DELETED;
+    }
+    return (have == STORE_BIN_LIVE) ? STORE_ERR_NOT_DELETED : STORE_ERR_EXPIRED;
 }
 
+// NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
 static StoreStatus load_then_check_bin(sqlite3 *db, long long id, const char *key_or_null,
-                                       bool trash, const char *now, Entry *out)
+                                       const char *sync_id_or_null, StoreBin bin, const char *now,
+                                       Entry *out)
 {
     StoreStatus st = STORE_OK;
 
     if (now == NULL || out == NULL) {
         return STORE_ERR_INTERNAL;
     }
-    if (key_or_null != NULL) {
+    if (sync_id_or_null != NULL) {
+        st = load_entry_by_sync_id(db, sync_id_or_null, out);
+    } else if (key_or_null != NULL) {
         st = load_entry_by_key(db, key_or_null, out);
     } else {
         st = load_entry_by_id(db, id, out);
@@ -785,7 +1407,7 @@ static StoreStatus load_then_check_bin(sqlite3 *db, long long id, const char *ke
     if (st != STORE_OK) {
         return st;
     }
-    st = bin_status(out, trash, now);
+    st = bin_status(out, bin, now);
     if (st != STORE_OK) {
         store_entry_free(out);
     }
@@ -823,7 +1445,8 @@ static StoreStatus load_entry_by_id(sqlite3 *db, long long id, Entry *out)
     StoreStatus st = STORE_OK;
 
     rc = sqlite3_prepare_v2(db,
-                            "SELECT id, key, body, source, created_at, updated_at, expires_at "
+                            "SELECT id, key, body, source, created_at, updated_at, expires_at, "
+                            "sync_id, deleted_at, version_vector "
                             "FROM entries WHERE id = ?1;",
                             -1, &stmt, NULL);
     if (rc != SQLITE_OK) {
@@ -854,13 +1477,46 @@ static StoreStatus load_entry_by_key(sqlite3 *db, const char *key, Entry *out)
         return STORE_ERR_INTERNAL;
     }
     rc = sqlite3_prepare_v2(db,
-                            "SELECT id, key, body, source, created_at, updated_at, expires_at "
+                            "SELECT id, key, body, source, created_at, updated_at, expires_at, "
+                            "sync_id, deleted_at, version_vector "
                             "FROM entries WHERE key = ?1;",
                             -1, &stmt, NULL);
     if (rc != SQLITE_OK) {
         return STORE_ERR_SQLITE;
     }
     (void)sqlite3_bind_text(stmt, 1, key, -1, SQLITE_STATIC);
+    rc = sqlite3_step(stmt);
+    if (rc == SQLITE_DONE) {
+        (void)sqlite3_finalize(stmt);
+        return STORE_ERR_NOT_FOUND;
+    }
+    if (rc != SQLITE_ROW) {
+        (void)sqlite3_finalize(stmt);
+        return STORE_ERR_SQLITE;
+    }
+    st = fill_entry_from_row(db, stmt, out);
+    (void)sqlite3_finalize(stmt);
+    return st;
+}
+
+static StoreStatus load_entry_by_sync_id(sqlite3 *db, const char *sync_id, Entry *out)
+{
+    sqlite3_stmt *stmt = NULL;
+    int rc = 0;
+    StoreStatus st = STORE_OK;
+
+    if (sync_id == NULL) {
+        return STORE_ERR_INTERNAL;
+    }
+    rc = sqlite3_prepare_v2(db,
+                            "SELECT id, key, body, source, created_at, updated_at, expires_at, "
+                            "sync_id, deleted_at, version_vector "
+                            "FROM entries WHERE sync_id = ?1;",
+                            -1, &stmt, NULL);
+    if (rc != SQLITE_OK) {
+        return STORE_ERR_SQLITE;
+    }
+    (void)sqlite3_bind_text(stmt, 1, sync_id, -1, SQLITE_STATIC);
     rc = sqlite3_step(stmt);
     if (rc == SQLITE_DONE) {
         (void)sqlite3_finalize(stmt);
@@ -1140,9 +1796,11 @@ static StoreStatus find_id_by_key(sqlite3 *db, const char *key, long long *out_i
     return STORE_OK;
 }
 
+// NOLINTBEGIN(bugprone-easily-swappable-parameters)
 static StoreStatus insert_entry(sqlite3 *db, const char *body, const char *body_hash,
                                 const char *key_or_null, const char *source, const char *now,
-                                const char *expires_at, long long *out_id)
+                                const char *expires_at, const char *device_id, long long *out_id)
+// NOLINTEND(bugprone-easily-swappable-parameters)
 {
     /* ?N bind positions of the INSERT below. */
     enum {
@@ -1152,14 +1810,27 @@ static StoreStatus insert_entry(sqlite3 *db, const char *body, const char *body_
         BIND_SOURCE = 4,
         BIND_CREATED_AT = 5,
         BIND_UPDATED_AT = 6,
-        BIND_EXPIRES_AT = 7
+        BIND_EXPIRES_AT = 7,
+        BIND_SYNC_ID = 8,
+        BIND_VV = 9
     };
     sqlite3_stmt *stmt = NULL;
     int rc = 0;
+    char uuid[UUID_STR_LEN + 1];
+    char vv_json[VV_JSON_BUFLEN];
+
+    if (device_id == NULL) {
+        return STORE_ERR_INTERNAL;
+    }
+    if (mint_uuid_v7(uuid) != 0) {
+        return STORE_ERR_INTERNAL;
+    }
+    (void)snprintf(vv_json, sizeof(vv_json), "{\"%s\":1}", device_id);
 
     rc = sqlite3_prepare_v2(db,
                             "INSERT INTO entries(key, body, body_hash, source, created_at, "
-                            "updated_at, expires_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7);",
+                            "updated_at, expires_at, sync_id, version_vector) "
+                            "VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9);",
                             -1, &stmt, NULL);
     if (rc != SQLITE_OK) {
         return STORE_ERR_SQLITE;
@@ -1179,6 +1850,8 @@ static StoreStatus insert_entry(sqlite3 *db, const char *body, const char *body_
     } else {
         (void)sqlite3_bind_text(stmt, BIND_EXPIRES_AT, expires_at, -1, SQLITE_STATIC);
     }
+    (void)sqlite3_bind_text(stmt, BIND_SYNC_ID, uuid, -1, SQLITE_TRANSIENT);
+    (void)sqlite3_bind_text(stmt, BIND_VV, vv_json, -1, SQLITE_TRANSIENT);
     if (sqlite3_step(stmt) != SQLITE_DONE) {
         (void)sqlite3_finalize(stmt);
         return STORE_ERR_SQLITE;
@@ -1243,7 +1916,7 @@ static StoreStatus maybe_revive(sqlite3 *db, long long id, EntryTimes times)
     if (st != STORE_OK) {
         return st;
     }
-    if (entry_is_trash(current.expires_at, times.now)) {
+    if (entry_bin(&current, times.now) == STORE_BIN_EXPIRED) {
         st = write_expires_at(db, id, times.expires_at);
     }
     store_entry_free(&current);
@@ -1253,8 +1926,8 @@ static StoreStatus maybe_revive(sqlite3 *db, long long id, EntryTimes times)
 /* Keyed upsert: replace body + union tags, or insert. Sets out_id and out_action. */
 static StoreStatus add_keyed(sqlite3 *db, const char *body, const char *body_hash, const char *key,
                              const char *const *tags, size_t ntags, const char *source,
-                             const char *now, const char *expires_at, long long *out_id,
-                             StoreAddAction *out_action)
+                             const char *now, const char *expires_at, const char *device_id,
+                             long long *out_id, StoreAddAction *out_action)
 {
     StoreStatus st = STORE_OK;
     long long id = 0;
@@ -1280,7 +1953,7 @@ static StoreStatus add_keyed(sqlite3 *db, const char *body, const char *body_has
     if (st != STORE_ERR_NOT_FOUND) {
         return st;
     }
-    st = insert_entry(db, body, body_hash, key, source, now, expires_at, &id);
+    st = insert_entry(db, body, body_hash, key, source, now, expires_at, device_id, &id);
     if (st != STORE_OK) {
         return st;
     }
@@ -1296,8 +1969,8 @@ static StoreStatus add_keyed(sqlite3 *db, const char *body, const char *body_has
 /* Keyless insert or body-hash merge. */
 static StoreStatus add_keyless(sqlite3 *db, const char *body, const char *body_hash,
                                const char *const *tags, size_t ntags, const char *source,
-                               const char *now, const char *expires_at, long long *out_id,
-                               StoreAddAction *out_action)
+                               const char *now, const char *expires_at, const char *device_id,
+                               long long *out_id, StoreAddAction *out_action)
 {
     StoreStatus st = STORE_OK;
     long long id = 0;
@@ -1323,7 +1996,7 @@ static StoreStatus add_keyless(sqlite3 *db, const char *body, const char *body_h
     if (st != STORE_ERR_NOT_FOUND) {
         return st;
     }
-    st = insert_entry(db, body, body_hash, NULL, source, now, expires_at, &id);
+    st = insert_entry(db, body, body_hash, NULL, source, now, expires_at, device_id, &id);
     if (st != STORE_OK) {
         return st;
     }
@@ -1346,8 +2019,8 @@ StoreStatus store_add(Store *s, const char *body, const char *body_hash, const c
     StoreStatus st = STORE_OK;
     char err_unused[1];
 
-    if (s == NULL || s->db == NULL || body == NULL || body_hash == NULL || source == NULL ||
-        now == NULL || out_action == NULL || out_entry == NULL) {
+    if (s == NULL || s->db == NULL || s->device_id == NULL || body == NULL || body_hash == NULL ||
+        source == NULL || now == NULL || out_action == NULL || out_entry == NULL) {
         return STORE_ERR_INTERNAL;
     }
     if (ntags > 0U && tags == NULL) {
@@ -1359,10 +2032,10 @@ StoreStatus store_add(Store *s, const char *body, const char *body_hash, const c
 
     if (key_or_null != NULL) {
         st = add_keyed(s->db, body, body_hash, key_or_null, tags, ntags, source, now, expires_at,
-                       &id, &action);
+                       s->device_id, &id, &action);
     } else {
-        st =
-            add_keyless(s->db, body, body_hash, tags, ntags, source, now, expires_at, &id, &action);
+        st = add_keyless(s->db, body, body_hash, tags, ntags, source, now, expires_at, s->device_id,
+                         &id, &action);
     }
     if (st != STORE_OK) {
         goto fail;
@@ -1391,21 +2064,30 @@ fail:
     return st;
 }
 
-StoreStatus store_get(Store *s, long long id, bool trash, const char *now, Entry *out_entry)
+StoreStatus store_get(Store *s, long long id, StoreBin bin, const char *now, Entry *out_entry)
 {
     if (s == NULL || s->db == NULL || out_entry == NULL) {
         return STORE_ERR_INTERNAL;
     }
-    return load_then_check_bin(s->db, id, NULL, trash, now, out_entry);
+    return load_then_check_bin(s->db, id, NULL, NULL, bin, now, out_entry);
 }
 
-StoreStatus store_get_by_key(Store *s, const char *key, bool trash, const char *now,
+StoreStatus store_get_by_key(Store *s, const char *key, StoreBin bin, const char *now,
                              Entry *out_entry)
 {
     if (s == NULL || s->db == NULL || key == NULL || out_entry == NULL) {
         return STORE_ERR_INTERNAL;
     }
-    return load_then_check_bin(s->db, 0, key, trash, now, out_entry);
+    return load_then_check_bin(s->db, 0, key, NULL, bin, now, out_entry);
+}
+
+StoreStatus store_get_by_sync_id(Store *s, const char *sync_id, StoreBin bin, const char *now,
+                                 Entry *out_entry)
+{
+    if (s == NULL || s->db == NULL || sync_id == NULL || out_entry == NULL) {
+        return STORE_ERR_INTERNAL;
+    }
+    return load_then_check_bin(s->db, 0, NULL, sync_id, bin, now, out_entry);
 }
 
 void store_tags_free(TagCount *tags, size_t count)
@@ -1421,7 +2103,7 @@ void store_tags_free(TagCount *tags, size_t count)
     free(tags);
 }
 
-StoreStatus store_tags(Store *s, bool trash, const char *now, TagCount **out_tags,
+StoreStatus store_tags(Store *s, StoreBin bin, const char *now, TagCount **out_tags,
                        size_t *out_count)
 {
     sqlite3_stmt *stmt = NULL;
@@ -1440,24 +2122,32 @@ StoreStatus store_tags(Store *s, bool trash, const char *now, TagCount **out_tag
     /* INNER JOIN: a tag with no links (never expected — orphans are GC'd) is
        simply absent, which is the desired "only tags in use" result. Bin filter
        is on entries so counts match list/search. */
-    if (trash) {
+    if (bin == STORE_BIN_EXPIRED) {
         sql = "SELECT t.name, COUNT(et.entry_id) FROM tags t "
               "JOIN entry_tags et ON et.tag_id = t.id "
               "JOIN entries e ON e.id = et.entry_id "
-              "WHERE e.expires_at IS NOT NULL AND e.expires_at <= ?1 "
+              "WHERE e.deleted_at IS NULL AND e.expires_at IS NOT NULL AND e.expires_at <= ?1 "
+              "GROUP BY t.id ORDER BY t.name COLLATE BINARY;";
+    } else if (bin == STORE_BIN_DELETED) {
+        sql = "SELECT t.name, COUNT(et.entry_id) FROM tags t "
+              "JOIN entry_tags et ON et.tag_id = t.id "
+              "JOIN entries e ON e.id = et.entry_id "
+              "WHERE e.deleted_at IS NOT NULL "
               "GROUP BY t.id ORDER BY t.name COLLATE BINARY;";
     } else {
         sql = "SELECT t.name, COUNT(et.entry_id) FROM tags t "
               "JOIN entry_tags et ON et.tag_id = t.id "
               "JOIN entries e ON e.id = et.entry_id "
-              "WHERE e.expires_at IS NULL OR e.expires_at > ?1 "
+              "WHERE e.deleted_at IS NULL AND (e.expires_at IS NULL OR e.expires_at > ?1) "
               "GROUP BY t.id ORDER BY t.name COLLATE BINARY;";
     }
     rc = sqlite3_prepare_v2(s->db, sql, -1, &stmt, NULL);
     if (rc != SQLITE_OK) {
         return STORE_ERR_SQLITE;
     }
-    (void)sqlite3_bind_text(stmt, 1, now, -1, SQLITE_STATIC);
+    if (bin != STORE_BIN_DELETED) {
+        (void)sqlite3_bind_text(stmt, 1, now, -1, SQLITE_STATIC);
+    }
 
     while ((rc = sqlite3_step(stmt)) == SQLITE_ROW) {
         const char *name = (const char *)sqlite3_column_text(stmt, 0);
@@ -1581,23 +2271,36 @@ static int list_append_tag_exists(char *sql, size_t sql_cap, size_t *pos, int *n
  * Append shared list/search filter ANDs (source, key, tag EXISTS) at *pos / *nbinds.
  * Tags are AND'd via EXISTS subqueries (one per tag). Returns -1 if truncated.
  */
+// NOLINTBEGIN(bugprone-easily-swappable-parameters)
 static int list_append_bin(char *sql, size_t sql_cap, size_t *pos, int *nbinds,
-                           const char **bind_text, size_t bind_cap, bool trash, const char *now)
+                           const char **bind_text, size_t bind_cap, StoreBin bin, const char *now)
+// NOLINTEND(bugprone-easily-swappable-parameters)
 {
     int n = 0;
 
+    if (bin == STORE_BIN_DELETED) {
+        n = snprintf(sql + *pos, sql_cap - *pos, " AND e.deleted_at IS NOT NULL");
+        if (n < 0 || (size_t)n >= sql_cap - *pos) {
+            return -1;
+        }
+        *pos += (size_t)n;
+        return 0;
+    }
     if (now == NULL) {
         return -1;
     }
     if ((size_t)*nbinds >= bind_cap) {
         return -1;
     }
-    if (trash) {
-        n = snprintf(sql + *pos, sql_cap - *pos,
-                     " AND e.expires_at IS NOT NULL AND e.expires_at <= ?%d", *nbinds + 1);
+    if (bin == STORE_BIN_EXPIRED) {
+        n = snprintf(
+            sql + *pos, sql_cap - *pos,
+            " AND e.deleted_at IS NULL AND e.expires_at IS NOT NULL AND e.expires_at <= ?%d",
+            *nbinds + 1);
     } else {
         n = snprintf(sql + *pos, sql_cap - *pos,
-                     " AND (e.expires_at IS NULL OR e.expires_at > ?%d)", *nbinds + 1);
+                     " AND e.deleted_at IS NULL AND (e.expires_at IS NULL OR e.expires_at > ?%d)",
+                     *nbinds + 1);
     }
     if (n < 0 || (size_t)n >= sql_cap - *pos) {
         return -1;
@@ -1654,7 +2357,7 @@ static int list_build_where(const ListQuery *q, const char *now, char *sql, size
     if (list_append_filters(q, sql, sql_cap, &pos, &nbinds, bind_text, bind_cap) != 0) {
         return -1;
     }
-    if (list_append_bin(sql, sql_cap, &pos, &nbinds, bind_text, bind_cap, q->trash, now) != 0) {
+    if (list_append_bin(sql, sql_cap, &pos, &nbinds, bind_text, bind_cap, q->bin, now) != 0) {
         return -1;
     }
     *out_nbinds = nbinds;
@@ -1688,7 +2391,7 @@ static int search_build_where(const SearchQuery *q, const char *now, char *sql, 
     if (list_append_filters(&q->filters, sql, sql_cap, &pos, &nbinds, bind_text, bind_cap) != 0) {
         return -1;
     }
-    if (list_append_bin(sql, sql_cap, &pos, &nbinds, bind_text, bind_cap, q->filters.trash, now) !=
+    if (list_append_bin(sql, sql_cap, &pos, &nbinds, bind_text, bind_cap, q->filters.bin, now) !=
         0) {
         return -1;
     }
@@ -1831,7 +2534,8 @@ static PageResult list_query_exec(sqlite3 *db, const ListQuery *q, const char *n
         return (PageResult){.st = STORE_ERR_INTERNAL};
     }
     sn = snprintf(select_sql, sizeof(select_sql),
-                  "SELECT e.id, e.key, e.body, e.source, e.created_at, e.updated_at, e.expires_at "
+                  "SELECT e.id, e.key, e.body, e.source, e.created_at, e.updated_at, e.expires_at, "
+                  "e.sync_id, e.deleted_at, e.version_vector "
                   "FROM entries e%s ORDER BY e.updated_at DESC, e.id DESC "
                   "LIMIT ?%d OFFSET ?%d;",
                   where_sql, nbinds + 1, nbinds + 2);
@@ -1902,7 +2606,8 @@ static PageResult search_query_exec(sqlite3 *db, const SearchQuery *q, const cha
         return (PageResult){.st = STORE_ERR_INTERNAL};
     }
     sn = snprintf(select_sql, sizeof(select_sql),
-                  "SELECT e.id, e.key, e.body, e.source, e.created_at, e.updated_at, e.expires_at "
+                  "SELECT e.id, e.key, e.body, e.source, e.created_at, e.updated_at, e.expires_at, "
+                  "e.sync_id, e.deleted_at, e.version_vector "
                   "FROM entries e "
                   "JOIN entries_fts ON entries_fts.rowid = e.id%s "
                   "ORDER BY bm25(entries_fts), e.updated_at DESC, e.id DESC "
@@ -1983,7 +2688,7 @@ static StoreStatus gc_orphan_tags(sqlite3 *db)
  * frees). On failure it is left zeroed / freed.
  */
 static StoreStatus delete_entry_tx(Store *s, long long id_or_zero, const char *key_or_null,
-                                   bool trash, const char *now, Entry *out_deleted)
+                                   StoreBin bin, const char *now, Entry *out_deleted)
 {
     char err_unused[1];
     StoreStatus st = STORE_OK;
@@ -1997,7 +2702,7 @@ static StoreStatus delete_entry_tx(Store *s, long long id_or_zero, const char *k
         return STORE_ERR_SQLITE;
     }
 
-    st = load_then_check_bin(s->db, id, key_or_null, trash, now, out_deleted);
+    st = load_then_check_bin(s->db, id, key_or_null, NULL, bin, now, out_deleted);
     if (st != STORE_OK) {
         goto fail;
     }
@@ -2046,22 +2751,22 @@ fail:
     return st;
 }
 
-StoreStatus store_delete_by_id(Store *s, long long id, bool trash, const char *now,
+StoreStatus store_delete_by_id(Store *s, long long id, StoreBin bin, const char *now,
                                Entry *out_deleted)
 {
     if (s == NULL || s->db == NULL || now == NULL || out_deleted == NULL) {
         return STORE_ERR_INTERNAL;
     }
-    return delete_entry_tx(s, id, NULL, trash, now, out_deleted);
+    return delete_entry_tx(s, id, NULL, bin, now, out_deleted);
 }
 
-StoreStatus store_delete_by_key(Store *s, const char *key, bool trash, const char *now,
+StoreStatus store_delete_by_key(Store *s, const char *key, StoreBin bin, const char *now,
                                 Entry *out_deleted)
 {
     if (s == NULL || s->db == NULL || key == NULL || now == NULL || out_deleted == NULL) {
         return STORE_ERR_INTERNAL;
     }
-    return delete_entry_tx(s, 0, key, trash, now, out_deleted);
+    return delete_entry_tx(s, 0, key, bin, now, out_deleted);
 }
 
 /* Drop all entry_tags for entry_id, then link the new set (ntags may be 0). */
@@ -2178,7 +2883,7 @@ static StoreStatus update_apply_changes(sqlite3 *db, long long entry_id, bool is
 StoreStatus store_update(Store *s, long long id, const char *key_or_null, bool set_body,
                          const char *body, const char *body_hash, bool set_tags,
                          const char *const *tags, size_t ntags, bool set_expires,
-                         const char *expires_at, bool trash, const char *now, Entry *out_entry,
+                         const char *expires_at, StoreBin bin, const char *now, Entry *out_entry,
                          long long *out_conflict_id)
 {
     char err_unused[1];
@@ -2203,7 +2908,7 @@ StoreStatus store_update(Store *s, long long id, const char *key_or_null, bool s
         return STORE_ERR_SQLITE;
     }
 
-    st = load_then_check_bin(s->db, id, key_or_null, trash, now, &current);
+    st = load_then_check_bin(s->db, id, key_or_null, NULL, bin, now, &current);
     if (st != STORE_OK) {
         rollback_quiet(s->db);
         return st;
@@ -2254,9 +2959,10 @@ StoreStatus store_purge_trash(Store *s, const char *now, Entry **out_entries, si
     }
 
     rc = sqlite3_prepare_v2(s->db,
-                            "SELECT id, key, body, source, created_at, updated_at, expires_at "
-                            "FROM entries WHERE expires_at IS NOT NULL AND expires_at <= ?1 "
-                            "ORDER BY updated_at DESC, id DESC;",
+                            "SELECT id, key, body, source, created_at, updated_at, expires_at, "
+                            "sync_id, deleted_at, version_vector "
+                            "FROM entries WHERE deleted_at IS NULL AND expires_at IS NOT NULL "
+                            "AND expires_at <= ?1 ORDER BY updated_at DESC, id DESC;",
                             -1, &sel, NULL);
     if (rc != SQLITE_OK) {
         rollback_quiet(s->db);
@@ -2290,8 +2996,10 @@ StoreStatus store_purge_trash(Store *s, const char *now, Entry **out_entries, si
     }
 
     rc = sqlite3_prepare_v2(
-        s->db, "DELETE FROM entries WHERE expires_at IS NOT NULL AND expires_at <= ?1;", -1, &del,
-        NULL);
+        s->db,
+        "DELETE FROM entries WHERE deleted_at IS NULL AND expires_at IS NOT NULL AND "
+        "expires_at <= ?1;",
+        -1, &del, NULL);
     if (rc != SQLITE_OK) {
         free_entry_rows(rows, n);
         rollback_quiet(s->db);
@@ -2565,20 +3273,40 @@ static StoreStatus touch_edge(sqlite3 *db, StoreEdge edge, StoreEdgeKind kind, c
 
 StoreStatus store_get_any(Store *s, long long id, Entry *out_entry)
 {
+    StoreStatus st = STORE_OK;
+
     if (s == NULL || s->db == NULL || out_entry == NULL) {
         return STORE_ERR_INTERNAL;
     }
     memset(out_entry, 0, sizeof(*out_entry));
-    return load_entry_by_id(s->db, id, out_entry);
+    st = load_entry_by_id(s->db, id, out_entry);
+    if (st != STORE_OK) {
+        return st;
+    }
+    if (out_entry->deleted_at != NULL) {
+        store_entry_free(out_entry);
+        return STORE_ERR_NOT_FOUND;
+    }
+    return STORE_OK;
 }
 
 StoreStatus store_get_any_by_key(Store *s, const char *key, Entry *out_entry)
 {
+    StoreStatus st = STORE_OK;
+
     if (s == NULL || s->db == NULL || key == NULL || out_entry == NULL) {
         return STORE_ERR_INTERNAL;
     }
     memset(out_entry, 0, sizeof(*out_entry));
-    return load_entry_by_key(s->db, key, out_entry);
+    st = load_entry_by_key(s->db, key, out_entry);
+    if (st != STORE_OK) {
+        return st;
+    }
+    if (out_entry->deleted_at != NULL) {
+        store_entry_free(out_entry);
+        return STORE_ERR_NOT_FOUND;
+    }
+    return STORE_OK;
 }
 
 StoreStatus store_link(Store *s, StoreEdge edge, StoreEdgeKind kind, const char *now,
@@ -3145,7 +3873,7 @@ static StoreStatus rekey_clear(sqlite3 *db, long long entry_id, const char *curr
     return write_key(db, entry_id, NULL);
 }
 
-StoreStatus store_rekey(Store *s, long long id, RekeyKeys keys, bool trash, const char *now,
+StoreStatus store_rekey(Store *s, long long id, RekeyKeys keys, StoreBin bin, const char *now,
                         Entry *out_entry, long long *out_conflict_id)
 {
     const char *key_or_null = keys.key_or_null;
@@ -3173,7 +3901,7 @@ StoreStatus store_rekey(Store *s, long long id, RekeyKeys keys, bool trash, cons
     if (exec_sql(s->db, "BEGIN IMMEDIATE;", err_unused, 0U) != 0) {
         return STORE_ERR_SQLITE;
     }
-    st = load_then_check_bin(s->db, id, key_or_null, trash, now, &current);
+    st = load_then_check_bin(s->db, id, key_or_null, NULL, bin, now, &current);
     if (st != STORE_OK) {
         rollback_quiet(s->db);
         return st;

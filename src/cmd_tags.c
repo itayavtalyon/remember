@@ -39,7 +39,7 @@ int cmd_tags(Store *s, bool json, int rest_argc, const char **rest_argv)
         return REMEMBER_ERR;
     }
 
-    st = store_tags(s, trash, now, &tags, &count);
+    st = store_tags(s, cmd_bin_expired(trash), now, &tags, &count);
     if (st != STORE_OK) {
         err_msg(store_status_message(st));
         return REMEMBER_ERR;

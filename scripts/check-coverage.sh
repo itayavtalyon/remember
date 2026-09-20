@@ -180,7 +180,12 @@ DEFENSIVE = re.compile(
     |^\s*g_fail_\w+\s*--
     |^\s*set_errf?\s*\(
     |^\s*rollback_quiet\s*\(
+    |^\s*savepoint_undo\s*\(
+    |^\s*\(void\)exec_sql\s*\(
+    |^\s*\(void\)sqlite3_exec\s*\(
     |^\s*\(void\)sqlite3_finalize\s*\(
+    |^\s*\(void\)fclose\s*\(
+    |^\s*\(void\)close\s*\(
     |^\s*\*out_entries\s*=
     |^\s*\*out_count\s*=
     |^\s*\*out_stubs\s*=
