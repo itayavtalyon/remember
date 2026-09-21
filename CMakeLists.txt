@@ -283,6 +283,7 @@ set(REMEMBER_TEST_SOURCES
     tests/test_link.c
     tests/test_sync_output.c
     tests/test_sync_delete.c
+    tests/test_sync_locators.c
 )
 add_executable(remember_tests
     ${REMEMBER_TEST_SOURCES}

@@ -206,6 +206,24 @@ and hard-delete-by-key tests). Note for the second pass: CLI hatch after
 reopen only stays COUNT>1 when the extra `device_id` sorts after the
 local v7 (recovery `SELECT device_id LIMIT 1` follows TEXT PK order).
 
+### Stage 4 (2026-09-21)
+
+CLI `--sync-id` (canonical lowercase UUID v7) as the third locator form
+alongside id / `--key` (mutex; same for graph `--from-sync-id` /
+`--to-sync-id` / related `--sync-id`). Sugar `link ID ID` stays numeric
+ids only. Graph default resolvers stay live+expired via `store_get_any*`;
+`--deleted` expands to `store_get_row*` so deleted ends resolve (no silent
+link without the flag); `--expired` rejected on graph. Default related /
+stubs still omit deleted neighbors. `store_link` / `store_unlink` /
+`store_rekey` bump VV on affected ends (via `bump_endpoints` +
+`apply_vv_bump`); no-op unlink still skips the bump (004). `sync_id`
+immutable across rekey. Suite `sync_locators` in `tests/gate-suites`.
+Help/skill stay stage 6.
+
+Gates (this stage): step_gate + store_asan green; coverage functions
+100% + effective lines 100%; `lint-all` LINT OK. In-session deep-review:
+no new grill locks. Auto-fixed related subject double-load.
+
 ## Review Notes
 
 ### 2026-09-20 — strict review (pre-implementation)
@@ -316,3 +334,24 @@ registration lands in a later log, revisit so a reopen cannot collapse a
 legitimate multi-device registry. `VV_OUT_MAX=256` is ample for single-device;
 re-check when stage-5 import can grow a VV with foreign device keys (bump fails
 safe with `STORE_ERR_INTERNAL` if exceeded). `SKILL.md` churn still uncommitted.
+
+### 2026-09-21 — Claude second-opinion deep review (stage 4)
+
+Independent pass on `--sync-id` locators + graph `--deleted` + VV bumps on
+link/unlink/rekey. Verified by running: ctest 4/4 (ASan/UBSan), coverage
+functions 100% + effective lines 100%, `-Weverything -Werror` clean, lint OK.
+Confirmed against 005 Round 7: locator mutex (exactly one of id | `--key` |
+`--sync-id`, canonical-UUID validated → "invalid sync-id"); graph twins
+`--from-sync-id`/`--to-sync-id` with per-end mutex; graph default resolvers
+live+expired and **exclude deleted** (`store_get_any_by_*`), `--deleted`
+includes deleted ends (`store_get_row*`), `--expired` on graph rejected;
+`bump_endpoints` bumps updated_at + VV on **both** ends of a real link/unlink,
+no-op unlink (`out_count==0`) does not bump; `store_rekey` bumps VV. Store
+`store_get_any_by_sync_id` correctly returns NOT_FOUND for a deleted row.
+
+**Auto-fixed (coverage gap):** `related --deleted --key` (subject-by-key in the
+deleted bin, `cmd_graph.c` `related_load_subject`) was untested — the coder's
+"100%" was a pre-final run. Added a `related --deleted --key gonek` assertion to
+`cli_graph_deleted_via_key_and_sync_id`; coverage back to 100% effective.
+
+No product/arch forks — no grill. `SKILL.md` churn still uncommitted.

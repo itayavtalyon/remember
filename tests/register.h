@@ -24,5 +24,6 @@ void register_ttl_tests(void);
 void register_link_tests(void);
 void register_sync_output_tests(void);
 void register_sync_delete_tests(void);
+void register_sync_locators_tests(void);
 
 #endif /* REMEMBER_REGISTER_H */

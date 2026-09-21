@@ -3418,14 +3418,37 @@ static StoreStatus require_entry_id(sqlite3 *db, long long id)
 }
 
 /* a != b always: callers reject self-links before reaching here. Touching the
-   same row twice would be harmless anyway. */
-static StoreStatus bump_endpoints(sqlite3 *db, long long a, long long b, const char *now)
+   same row twice would be harmless anyway. Bumps updated_at and version_vector. */
+static StoreStatus bump_endpoints(Store *s, long long a, long long b, const char *now)
 {
-    StoreStatus st = touch_updated_at(db, a, now);
+    Entry ea;
+    Entry eb;
+    StoreStatus st = STORE_OK;
+
+    memset(&ea, 0, sizeof(ea));
+    memset(&eb, 0, sizeof(eb));
+    st = load_entry_by_id(s->db, a, &ea);
     if (st != STORE_OK) {
         return st;
     }
-    return touch_updated_at(db, b, now);
+    st = load_entry_by_id(s->db, b, &eb);
+    if (st != STORE_OK) {
+        store_entry_free(&ea);
+        return st;
+    }
+    st = touch_updated_at(s->db, a, now);
+    if (st == STORE_OK) {
+        st = apply_vv_bump(s->db, a, s->device_id, ea.version_vector);
+    }
+    if (st == STORE_OK) {
+        st = touch_updated_at(s->db, b, now);
+    }
+    if (st == STORE_OK) {
+        st = apply_vv_bump(s->db, b, s->device_id, eb.version_vector);
+    }
+    store_entry_free(&ea);
+    store_entry_free(&eb);
+    return st;
 }
 
 static StoreStatus fill_stub(sqlite3 *db, long long subject_id, StoreEdge row, StoreEdgeKind kind,
@@ -3618,6 +3641,57 @@ StoreStatus store_get_any_by_key(Store *s, const char *key, Entry *out_entry)
     return STORE_OK;
 }
 
+StoreStatus store_get_any_by_sync_id(Store *s, const char *sync_id, Entry *out_entry)
+{
+    StoreStatus st = STORE_OK;
+
+    if (s == NULL || s->db == NULL || sync_id == NULL || out_entry == NULL) {
+        return STORE_ERR_INTERNAL;
+    }
+    memset(out_entry, 0, sizeof(*out_entry));
+    st = load_entry_by_sync_id(s->db, sync_id, out_entry);
+    if (st != STORE_OK) {
+        return st;
+    }
+    if (out_entry->deleted_at != NULL) {
+        store_entry_free(out_entry);
+        return STORE_ERR_NOT_FOUND;
+    }
+    return STORE_OK;
+}
+
+StoreStatus store_get_row(Store *s, long long id, Entry *out_entry)
+{
+    if (s == NULL || s->db == NULL || out_entry == NULL) {
+        return STORE_ERR_INTERNAL;
+    }
+    memset(out_entry, 0, sizeof(*out_entry));
+    return load_entry_by_id(s->db, id, out_entry);
+}
+
+StoreStatus store_get_row_by_key(Store *s, const char *key, Entry *out_entry)
+{
+    if (s == NULL || s->db == NULL || key == NULL || out_entry == NULL) {
+        return STORE_ERR_INTERNAL;
+    }
+    memset(out_entry, 0, sizeof(*out_entry));
+    return load_entry_by_key(s->db, key, out_entry);
+}
+
+StoreStatus store_get_row_by_sync_id(Store *s, const char *sync_id, Entry *out_entry)
+{
+    if (s == NULL || s->db == NULL || sync_id == NULL || out_entry == NULL) {
+        return STORE_ERR_INTERNAL;
+    }
+    memset(out_entry, 0, sizeof(*out_entry));
+    return load_entry_by_sync_id(s->db, sync_id, out_entry);
+}
+
+int store_sync_id_is_canonical(const char *s)
+{
+    return uuid_is_canonical(s);
+}
+
 StoreStatus store_link(Store *s, StoreEdge edge, StoreEdgeKind kind, const char *now,
                        StoreLinkAction *out_action, StoreNeighbor *out_stub)
 {
@@ -3680,7 +3754,7 @@ StoreStatus store_link(Store *s, StoreEdge edge, StoreEdgeKind kind, const char 
         *out_action = STORE_LINK_CREATED;
     }
     if (st == STORE_OK) {
-        st = bump_endpoints(s->db, from_id, to_id, now);
+        st = bump_endpoints(s, from_id, to_id, now);
     }
     if (st != STORE_OK) {
         rollback_quiet(s->db);
@@ -3847,7 +3921,7 @@ StoreStatus store_unlink(Store *s, long long from_id, long long to_id, const Sto
     (void)sqlite3_finalize(del);
 
     if (*out_count > 0U) {
-        st = bump_endpoints(s->db, from_id, to_id, now);
+        st = bump_endpoints(s, from_id, to_id, now);
         if (st != STORE_OK) {
             store_neighbors_free(*out_stubs, *out_count);
             *out_stubs = NULL;
@@ -4248,6 +4322,9 @@ StoreStatus store_rekey(Store *s, long long id, RekeyKeys keys, StoreBin bin, co
     }
     if (st == STORE_OK) {
         st = touch_updated_at(s->db, entry_id, now);
+    }
+    if (st == STORE_OK) {
+        st = apply_vv_bump(s->db, entry_id, s->device_id, current.version_vector);
     }
     store_entry_free(&current);
     if (st != STORE_OK) {

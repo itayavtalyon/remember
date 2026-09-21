@@ -280,6 +280,15 @@ void store_neighbors_free(StoreNeighbor *rows, size_t count);
  * Missing (or deleted) → NOT_FOUND. */
 StoreStatus store_get_any(Store *s, long long id, Entry *out_entry);
 StoreStatus store_get_any_by_key(Store *s, const char *key, Entry *out_entry);
+StoreStatus store_get_any_by_sync_id(Store *s, const char *sync_id, Entry *out_entry);
+
+/* Load by id/key/sync_id in any bin (including deleted). For graph --deleted. */
+StoreStatus store_get_row(Store *s, long long id, Entry *out_entry);
+StoreStatus store_get_row_by_key(Store *s, const char *key, Entry *out_entry);
+StoreStatus store_get_row_by_sync_id(Store *s, const char *sync_id, Entry *out_entry);
+
+/* True if s is canonical lowercase UUID v7 (8-4-4-4-12). */
+int store_sync_id_is_canonical(const char *s);
 
 /*
  * Upsert one edge. related is stored as (min,max,related). Directed is
