@@ -34,6 +34,7 @@ static void print_general_help(void)
                                "  update    Change body and/or tags by id or --key\n"
                                "  delete    Remove an entry by id or --key\n"
                                "  tags        List all tags with entry counts\n"
+                               "  purge       Permanently delete one bin (--expired or --deleted)\n"
                                "  purge-trash Permanently delete every expired memory\n"
                                "  link        Create or merge an entry link\n"
                                "  unlink      Remove entry links\n"
@@ -149,6 +150,14 @@ static void print_command_help(CliCommand topic)
         (void)fprintf(out, "\n");
         (void)fprintf(out, "Lists every in-use tag with its entry count, sorted by name.\n");
         (void)fprintf(out, "Human: one \"name<TAB>count\" line per tag.\n");
+        (void)fprintf(out, "\n");
+    } else if (topic == CLI_CMD_PURGE) {
+        (void)fprintf(out, "Permanently delete every row in one bin (no prompt).\n");
+        (void)fprintf(out, "Options:\n");
+        (void)fprintf(out, "  --expired       Wipe expired rows\n");
+        (void)fprintf(out, "  --deleted       Wipe deleted rows\n");
+        (void)fprintf(out, "Exactly one of --expired or --deleted is required.\n");
+        (void)fprintf(out, "Human stdout: the count of deleted entries.\n");
         (void)fprintf(out, "\n");
     } else if (topic == CLI_CMD_PURGE_TRASH) {
         (void)fprintf(out, "Permanently delete every expired row (no prompt).\n");
@@ -305,6 +314,8 @@ static int run(const CliArgs *args)
         return run_with_store(args, cmd_tags);
     case CLI_CMD_PURGE_TRASH:
         return run_with_store(args, cmd_purge_trash);
+    case CLI_CMD_PURGE:
+        return run_with_store(args, cmd_purge);
     case CLI_CMD_LINK:
         return run_with_store(args, cmd_link);
     case CLI_CMD_UNLINK:

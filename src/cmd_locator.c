@@ -203,9 +203,15 @@ int cmd_delete(Store *s, bool json, int rest_argc, const char **rest_argv)
     }
 
     if (key != NULL) {
-        st = store_delete_by_key(s, key, bin, now, &entry);
+        if (bin == STORE_BIN_LIVE) {
+            st = store_soft_delete_by_key(s, key, now, &entry);
+        } else {
+            st = store_hard_delete_by_key(s, key, bin, now, &entry);
+        }
+    } else if (bin == STORE_BIN_LIVE) {
+        st = store_soft_delete_by_id(s, id, now, &entry);
     } else {
-        st = store_delete_by_id(s, id, bin, now, &entry);
+        st = store_hard_delete_by_id(s, id, bin, now, &entry);
     }
     rc = store_status_to_exit(st);
     if (rc != REMEMBER_OK) {
@@ -238,7 +244,8 @@ typedef struct {
     bool text_literal;
     bool clear_tags;
     bool clear_expires;
-    char pad_[4]; /* explicit tail padding (kept -Wpadded-clean) */
+    bool undelete;
+    char pad_[3]; /* explicit tail padding (kept -Wpadded-clean) */
 } UpdateParse;
 
 static void update_parse_free(UpdateParse *p)
@@ -247,6 +254,9 @@ static void update_parse_free(UpdateParse *p)
     p->tag_raw = NULL;
     p->ntag_raw = 0U;
 }
+
+static int handle_update_ttl_flag(const char *arg, int *i, int rest_argc, const char **rest_argv,
+                                  UpdateParse *out, const char **err);
 
 /* Returns: 1 end-opts, 0 handled flag, 2 positional, -1 error. */
 static int handle_update_flag(const char *arg, int *i, int rest_argc, const char **rest_argv,
@@ -301,6 +311,12 @@ static int handle_update_flag(const char *arg, int *i, int rest_argc, const char
     if (cmd_bin_take_flag(arg, &out->loc.bins) != 0) {
         return 0;
     }
+    return handle_update_ttl_flag(arg, i, rest_argc, rest_argv, out, err);
+}
+
+static int handle_update_ttl_flag(const char *arg, int *i, int rest_argc, const char **rest_argv,
+                                  UpdateParse *out, const char **err)
+{
     if (strcmp(arg, "--ttl") == 0) {
         TakeValue taken = take_value(i, rest_argc, rest_argv, "missing value for --ttl");
         if (taken.rc != 0) {
@@ -321,6 +337,10 @@ static int handle_update_flag(const char *arg, int *i, int rest_argc, const char
     }
     if (strcmp(arg, "--clear-expires") == 0) {
         out->clear_expires = true;
+        return 0;
+    }
+    if (strcmp(arg, "--undelete") == 0) {
+        out->undelete = true;
         return 0;
     }
     if (strcmp(arg, "--source") == 0) {
@@ -353,6 +373,7 @@ static int parse_update_args(int rest_argc, const char **rest_argv, UpdateParse 
     out->ttl_raw = NULL;
     out->expires_raw = NULL;
     out->clear_expires = false;
+    out->undelete = false;
     memset(&out->loc.bins, 0, sizeof(out->loc.bins));
     *err = NULL;
 
@@ -395,9 +416,14 @@ static int update_validate_changes(const UpdateParse *p, const char **err)
         *err = "cannot combine --ttl and --expires";
         return -1;
     }
+    if (p->undelete && (p->ttl_raw != NULL || p->expires_raw != NULL || p->clear_expires)) {
+        *err = "cannot combine --undelete with --ttl, --expires, or --clear-expires";
+        return -1;
+    }
     if (!p->set_text && !p->clear_tags && p->ntag_raw == 0U && !p->clear_expires &&
-        p->ttl_raw == NULL && p->expires_raw == NULL) {
-        *err = "update requires --text, --tag, --clear-tags, --ttl, --expires, or --clear-expires";
+        p->ttl_raw == NULL && p->expires_raw == NULL && !p->undelete) {
+        *err = "update requires --text, --tag, --clear-tags, --ttl, --expires, --clear-expires, or "
+               "--undelete";
         return -1;
     }
     return 0;
@@ -552,8 +578,8 @@ int cmd_update(Store *s, bool json, int rest_argc, const char **rest_argv)
         goto cleanup;
     }
     st = store_update(s, id, key_or_null, parsed.set_text, body, body_hash, set_tags,
-                      (const char *const *)tags_norm, ntags, set_expires, expires_at, bin, now,
-                      &entry, &conflict_id);
+                      (const char *const *)tags_norm, ntags, set_expires, expires_at,
+                      parsed.undelete, bin, now, &entry, &conflict_id);
     if (st == STORE_ERR_CONFLICT) {
         (void)fprintf(app_err(), "remember: body hash conflicts with entry %lld\n", conflict_id);
         goto cleanup;

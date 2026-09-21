@@ -27,6 +27,15 @@ static void assert_query_is(const char *db, QueryExpect check)
     free(row);
 }
 
+/* TEXT PK scan + LIMIT 1 in sidecar recovery: extra must sort after a v7
+ * local id so a later reopen does not REPLACE the table back to COUNT==1. */
+static void insert_extra_device(const char *db)
+{
+    free(harness_sqlite_query_line(db, "INSERT INTO devices(device_id, first_seen, last_seen) "
+                                       "VALUES('ffffffff-ffff-7fff-bfff-ffffffffffff',"
+                                       "'2020-01-01T00:00:00.000Z','2020-01-01T00:00:00.000Z');"));
+}
+
 static char *sidecar_path(const char *db)
 {
     size_t n = 0;
@@ -325,13 +334,22 @@ TEST(store_sync_id_stable_across_update)
     ASSERT_EQ_STATUS(store_add(s, "one", k_hash_a, "k", NULL, 0U, "human", NULL, k_now, &act, &e),
                      STORE_OK);
     (void)snprintf(sync, sizeof(sync), "%s", e.sync_id);
-    store_entry_free(&e);
+    {
+        char vv_before[80];
+        (void)snprintf(vv_before, sizeof(vv_before), "%s", e.version_vector);
+        store_entry_free(&e);
 
-    memset(&e, 0, sizeof(e));
-    ASSERT_EQ_STATUS(store_update(s, 1, NULL, true, "two", k_hash_b, false, NULL, 0U, false, NULL,
-                                  STORE_BIN_LIVE, k_now, &e, &conflict),
-                     STORE_OK);
-    ASSERT_STREQ(e.sync_id, sync);
+        memset(&e, 0, sizeof(e));
+        ASSERT_EQ_STATUS(store_update(s, 1, NULL, true, "two", k_hash_b, false, NULL, 0U, false,
+                                      NULL, false, STORE_BIN_LIVE, k_now, &e, &conflict),
+                         STORE_OK);
+        ASSERT_STREQ(e.sync_id, sync);
+        /* A plain body edit advances the version vector (criteria #12). */
+        ASSERT_TRUE(e.version_vector != NULL);
+        if (e.version_vector != NULL) {
+            ASSERT_TRUE(strcmp(e.version_vector, vv_before) != 0);
+        }
+    }
     store_entry_free(&e);
     store_close(s);
     free(db);
@@ -685,6 +703,362 @@ TEST(store_list_tags_deleted_bin)
     free(db);
 }
 
+TEST(store_soft_delete_live_keeps_body_fts_edges)
+{
+    char *db = make_temp_db_path();
+    char err[ERR_BUFSIZE];
+    Store *s = NULL;
+    Entry e;
+    Entry peer;
+    StoreAddAction act = STORE_ADD_CREATED;
+    StoreLinkAction lact = STORE_LINK_CREATED;
+    StoreNeighbor stub;
+    StoreNeighbor *rows = NULL;
+    size_t n = 0;
+    char sync[80];
+    char vv_before[80];
+    const char *tags[] = {"keep"};
+
+    ASSERT_TRUE(db != NULL);
+    s = store_open(db, err, sizeof(err));
+    ASSERT_TRUE(s != NULL);
+    memset(&e, 0, sizeof(e));
+    memset(&peer, 0, sizeof(peer));
+    memset(&stub, 0, sizeof(stub));
+    ASSERT_EQ_STATUS(
+        store_add(s, "keep-me", k_hash_a, "ksoft", tags, 1U, "human", NULL, k_now, &act, &e),
+        STORE_OK);
+    (void)snprintf(sync, sizeof(sync), "%s", e.sync_id);
+    (void)snprintf(vv_before, sizeof(vv_before), "%s", e.version_vector);
+    store_entry_free(&e);
+    ASSERT_EQ_STATUS(
+        store_add(s, "peer", k_hash_b, NULL, NULL, 0U, "human", NULL, k_now, &act, &peer),
+        STORE_OK);
+    ASSERT_EQ_STATUS(store_link(s, (StoreEdge){.from_id = 1, .to_id = peer.id}, STORE_EDGE_RELATED,
+                                k_now, &lact, &stub),
+                     STORE_OK);
+    store_neighbor_free(&stub);
+    store_entry_free(&peer);
+
+    memset(&e, 0, sizeof(e));
+    ASSERT_EQ_STATUS(store_soft_delete_by_id(s, 1, k_now, &e), STORE_OK);
+    ASSERT_STREQ(e.body, "keep-me");
+    ASSERT_STREQ(e.key, "ksoft");
+    ASSERT_STREQ(e.sync_id, sync);
+    ASSERT_TRUE(e.deleted_at != NULL);
+    ASSERT_STREQ(e.deleted_at, k_now);
+    ASSERT_TRUE(e.expires_at == NULL);
+    ASSERT_EQ_INT((int)e.ntags, 1);
+    ASSERT_TRUE(e.version_vector != NULL);
+    if (e.version_vector != NULL) {
+        ASSERT_TRUE(strcmp(e.version_vector, vv_before) != 0);
+    }
+    store_entry_free(&e);
+
+    ASSERT_EQ_STATUS(store_get(s, 1, STORE_BIN_LIVE, k_now, &e), STORE_ERR_DELETED);
+    store_entry_free(&e);
+    ASSERT_EQ_STATUS(store_get(s, 1, STORE_BIN_DELETED, k_now, &e), STORE_OK);
+    ASSERT_STREQ(e.sync_id, sync);
+    store_entry_free(&e);
+    ASSERT_EQ_STATUS(store_get_any(s, 1, &e), STORE_ERR_NOT_FOUND);
+    store_entry_free(&e);
+
+    assert_query_is(db,
+                    (QueryExpect){.sql = "SELECT count(*) FROM entries WHERE id=1;", .want = "1"});
+    assert_query_is(
+        db, (QueryExpect){.sql = "SELECT count(*) FROM entries_fts WHERE rowid=1;", .want = "1"});
+    ASSERT_EQ_STATUS(store_list_neighbors(s, 1, NULL, STORE_NEIGHBOR_ALL, k_now, &rows, &n),
+                     STORE_OK);
+    ASSERT_EQ_INT((int)n, 1);
+    store_neighbors_free(rows, n);
+    store_close(s);
+    free(db);
+}
+
+TEST(store_soft_delete_expired_clears_expires)
+{
+    char *db = make_temp_db_path();
+    char err[ERR_BUFSIZE];
+    Store *s = NULL;
+    Entry e;
+    StoreAddAction act = STORE_ADD_CREATED;
+
+    ASSERT_TRUE(db != NULL);
+    s = store_open(db, err, sizeof(err));
+    ASSERT_TRUE(s != NULL);
+    memset(&e, 0, sizeof(e));
+    ASSERT_EQ_STATUS(store_add(s, "exp", k_hash_a, "kexp", NULL, 0U, "human",
+                               "2020-01-01T00:00:00.000Z", k_now, &act, &e),
+                     STORE_OK);
+    store_entry_free(&e);
+    ASSERT_EQ_STATUS(store_soft_delete_by_key(s, "kexp", k_now, &e), STORE_OK);
+    ASSERT_TRUE(e.deleted_at != NULL);
+    ASSERT_TRUE(e.expires_at == NULL);
+    store_entry_free(&e);
+    ASSERT_EQ_STATUS(store_get(s, 1, STORE_BIN_EXPIRED, k_now, &e), STORE_ERR_DELETED);
+    store_entry_free(&e);
+    ASSERT_EQ_STATUS(store_soft_delete_by_id(s, 1, k_now, &e), STORE_ERR_DELETED);
+    store_entry_free(&e);
+    store_close(s);
+    free(db);
+}
+
+TEST(store_hard_delete_expired_cascades_fts)
+{
+    char *db = make_temp_db_path();
+    char err[ERR_BUFSIZE];
+    Store *s = NULL;
+    Entry e;
+    StoreAddAction act = STORE_ADD_CREATED;
+    StoreLinkAction lact = STORE_LINK_CREATED;
+    StoreNeighbor stub;
+
+    ASSERT_TRUE(db != NULL);
+    s = store_open(db, err, sizeof(err));
+    ASSERT_TRUE(s != NULL);
+    memset(&e, 0, sizeof(e));
+    memset(&stub, 0, sizeof(stub));
+    ASSERT_EQ_STATUS(store_add(s, "exp", k_hash_a, NULL, NULL, 0U, "human",
+                               "2020-01-01T00:00:00.000Z", k_now, &act, &e),
+                     STORE_OK);
+    store_entry_free(&e);
+    ASSERT_EQ_STATUS(store_add(s, "peer", k_hash_b, NULL, NULL, 0U, "human", NULL, k_now, &act, &e),
+                     STORE_OK);
+    ASSERT_EQ_STATUS(store_link(s, (StoreEdge){.from_id = 1, .to_id = e.id}, STORE_EDGE_RELATED,
+                                k_now, &lact, &stub),
+                     STORE_OK);
+    store_neighbor_free(&stub);
+    store_entry_free(&e);
+
+    ASSERT_EQ_STATUS(store_hard_delete_by_id(s, 1, STORE_BIN_EXPIRED, k_now, &e), STORE_OK);
+    ASSERT_STREQ(e.body, "exp");
+    store_entry_free(&e);
+    ASSERT_EQ_STATUS(store_get(s, 1, STORE_BIN_EXPIRED, k_now, &e), STORE_ERR_NOT_FOUND);
+    store_entry_free(&e);
+    assert_query_is(db,
+                    (QueryExpect){.sql = "SELECT count(*) FROM entries WHERE id=1;", .want = "0"});
+    assert_query_is(
+        db, (QueryExpect){.sql = "SELECT count(*) FROM entries_fts WHERE rowid=1;", .want = "0"});
+    assert_query_is(db, (QueryExpect){.sql = "SELECT count(*) FROM entry_links;", .want = "0"});
+    store_close(s);
+    free(db);
+}
+
+TEST(store_hard_delete_hatch_two_devices)
+{
+    char *db = make_temp_db_path();
+    char err[ERR_BUFSIZE];
+    Store *s = NULL;
+    Entry e;
+    StoreAddAction act = STORE_ADD_CREATED;
+
+    ASSERT_TRUE(db != NULL);
+    s = store_open(db, err, sizeof(err));
+    ASSERT_TRUE(s != NULL);
+    memset(&e, 0, sizeof(e));
+    ASSERT_EQ_STATUS(store_add(s, "x", k_hash_a, NULL, NULL, 0U, "human",
+                               "2020-01-01T00:00:00.000Z", k_now, &act, &e),
+                     STORE_OK);
+    store_entry_free(&e);
+    insert_extra_device(db);
+    ASSERT_EQ_STATUS(store_hard_delete_by_id(s, 1, STORE_BIN_EXPIRED, k_now, &e),
+                     STORE_ERR_NOT_SINGLE_DEVICE);
+    store_entry_free(&e);
+    ASSERT_EQ_STATUS(store_get(s, 1, STORE_BIN_EXPIRED, k_now, &e), STORE_OK);
+    store_entry_free(&e);
+    store_close(s);
+    free(db);
+}
+
+TEST(store_purge_deleted_and_hatch)
+{
+    char *db = make_temp_db_path();
+    char err[ERR_BUFSIZE];
+    Store *s = NULL;
+    Entry e;
+    Entry *gone = NULL;
+    size_t n = 0;
+    StoreAddAction act = STORE_ADD_CREATED;
+
+    ASSERT_TRUE(db != NULL);
+    s = store_open(db, err, sizeof(err));
+    ASSERT_TRUE(s != NULL);
+    memset(&e, 0, sizeof(e));
+    ASSERT_EQ_STATUS(store_add(s, "del", k_hash_a, "kd", NULL, 0U, "human", NULL, k_now, &act, &e),
+                     STORE_OK);
+    store_entry_free(&e);
+    ASSERT_EQ_STATUS(store_soft_delete_by_id(s, 1, k_now, &e), STORE_OK);
+    store_entry_free(&e);
+    ASSERT_EQ_STATUS(store_add(s, "live", k_hash_b, NULL, NULL, 0U, "human", NULL, k_now, &act, &e),
+                     STORE_OK);
+    store_entry_free(&e);
+
+    ASSERT_EQ_STATUS(store_purge(s, STORE_BIN_LIVE, k_now, &gone, &n), STORE_ERR_INTERNAL);
+    ASSERT_EQ_STATUS(store_purge(s, STORE_BIN_DELETED, k_now, &gone, &n), STORE_OK);
+    ASSERT_EQ_INT((int)n, 1);
+    ASSERT_STREQ(gone[0].body, "del");
+    store_entry_free(&gone[0]);
+    free(gone);
+    ASSERT_EQ_STATUS(store_get(s, 1, STORE_BIN_DELETED, k_now, &e), STORE_ERR_NOT_FOUND);
+    store_entry_free(&e);
+    ASSERT_EQ_STATUS(store_get(s, 2, STORE_BIN_LIVE, k_now, &e), STORE_OK);
+    store_entry_free(&e);
+    insert_extra_device(db);
+    ASSERT_EQ_STATUS(store_add(s, "exp", k_hash_a, NULL, NULL, 0U, "human",
+                               "2020-01-01T00:00:00.000Z", k_now, &act, &e),
+                     STORE_OK);
+    store_entry_free(&e);
+    ASSERT_EQ_STATUS(store_purge(s, STORE_BIN_EXPIRED, k_now, &gone, &n),
+                     STORE_ERR_NOT_SINGLE_DEVICE);
+    store_close(s);
+    free(db);
+}
+
+TEST(store_add_revives_deleted_same_sync_id)
+{
+    char *db = make_temp_db_path();
+    char err[ERR_BUFSIZE];
+    Store *s = NULL;
+    Entry e;
+    StoreAddAction act = STORE_ADD_CREATED;
+    char sync_k[80];
+    char sync_h[80];
+    const char *tags[] = {"t"};
+
+    ASSERT_TRUE(db != NULL);
+    s = store_open(db, err, sizeof(err));
+    ASSERT_TRUE(s != NULL);
+    memset(&e, 0, sizeof(e));
+    ASSERT_EQ_STATUS(
+        store_add(s, "keyed", k_hash_a, "slot", tags, 1U, "human", NULL, k_now, &act, &e),
+        STORE_OK);
+    (void)snprintf(sync_k, sizeof(sync_k), "%s", e.sync_id);
+    store_entry_free(&e);
+    ASSERT_EQ_STATUS(store_soft_delete_by_key(s, "slot", k_now, &e), STORE_OK);
+    store_entry_free(&e);
+    ASSERT_EQ_STATUS(
+        store_add(s, "keyed-new", k_hash_b, "slot", NULL, 0U, "agent", NULL, k_now, &act, &e),
+        STORE_OK);
+    ASSERT_EQ_INT((int)act, (int)STORE_ADD_UPDATED);
+    ASSERT_STREQ(e.sync_id, sync_k);
+    ASSERT_TRUE(e.deleted_at == NULL);
+    ASSERT_STREQ(e.body, "keyed-new");
+    store_entry_free(&e);
+    ASSERT_EQ_STATUS(store_get(s, 1, STORE_BIN_LIVE, k_now, &e), STORE_OK);
+    store_entry_free(&e);
+
+    ASSERT_EQ_STATUS(
+        store_add(s, "hashbody", k_hash_a, NULL, NULL, 0U, "human", NULL, k_now, &act, &e),
+        STORE_OK);
+    (void)snprintf(sync_h, sizeof(sync_h), "%s", e.sync_id);
+    store_entry_free(&e);
+    ASSERT_EQ_STATUS(store_soft_delete_by_id(s, 2, k_now, &e), STORE_OK);
+    store_entry_free(&e);
+    ASSERT_EQ_STATUS(
+        store_add(s, "hashbody", k_hash_a, NULL, tags, 1U, "tool", NULL, k_now, &act, &e),
+        STORE_OK);
+    ASSERT_EQ_INT((int)act, (int)STORE_ADD_MERGED);
+    ASSERT_STREQ(e.sync_id, sync_h);
+    ASSERT_TRUE(e.deleted_at == NULL);
+    store_entry_free(&e);
+    store_close(s);
+    free(db);
+}
+
+TEST(store_vv_increment_inserts_missing_device_key)
+{
+    char *db = make_temp_db_path();
+    char err[ERR_BUFSIZE];
+    Store *s = NULL;
+    Entry e;
+    StoreAddAction act = STORE_ADD_CREATED;
+
+    ASSERT_TRUE(db != NULL);
+    s = store_open(db, err, sizeof(err));
+    ASSERT_TRUE(s != NULL);
+    memset(&e, 0, sizeof(e));
+    ASSERT_EQ_STATUS(
+        store_add(s, "empty-vv", k_hash_a, NULL, NULL, 0U, "human", NULL, k_now, &act, &e),
+        STORE_OK);
+    store_entry_free(&e);
+    free(harness_sqlite_query_line(db, "UPDATE entries SET version_vector='{}' WHERE id=1;"));
+    ASSERT_EQ_STATUS(store_soft_delete_by_id(s, 1, k_now, &e), STORE_OK);
+    ASSERT_TRUE(e.version_vector != NULL);
+    if (e.version_vector != NULL) {
+        ASSERT_STR_CONTAINS(e.version_vector, "\":1}");
+        ASSERT_TRUE(e.version_vector[0] == '{');
+    }
+    store_entry_free(&e);
+
+    ASSERT_EQ_STATUS(
+        store_add(s, "other-vv", k_hash_b, NULL, NULL, 0U, "human", NULL, k_now, &act, &e),
+        STORE_OK);
+    store_entry_free(&e);
+    free(harness_sqlite_query_line(db,
+                                   "UPDATE entries SET version_vector="
+                                   "'{\"00000000-0000-7000-8000-000000000001\":3}' WHERE id=2;"));
+    ASSERT_EQ_STATUS(store_soft_delete_by_id(s, 2, k_now, &e), STORE_OK);
+    ASSERT_TRUE(e.version_vector != NULL);
+    if (e.version_vector != NULL) {
+        ASSERT_STR_CONTAINS(e.version_vector, "00000000-0000-7000-8000-000000000001\":3");
+        ASSERT_STR_CONTAINS(e.version_vector, "\":1}");
+    }
+    store_entry_free(&e);
+
+    ASSERT_EQ_STATUS(
+        store_add(s, "bad-vv", k_hash_a, "badvv", NULL, 0U, "human", NULL, k_now, &act, &e),
+        STORE_OK);
+    store_entry_free(&e);
+    free(harness_sqlite_query_line(db, "UPDATE entries SET version_vector='{' WHERE id=3;"));
+    ASSERT_EQ_STATUS(store_soft_delete_by_id(s, 3, k_now, &e), STORE_ERR_INTERNAL);
+    store_entry_free(&e);
+    store_close(s);
+    free(db);
+}
+
+TEST(store_update_undelete_deleted)
+{
+    char *db = make_temp_db_path();
+    char err[ERR_BUFSIZE];
+    Store *s = NULL;
+    Entry e;
+    StoreAddAction act = STORE_ADD_CREATED;
+    long long conflict = 0;
+    char sync[80];
+    char vv_before[80];
+
+    ASSERT_TRUE(db != NULL);
+    s = store_open(db, err, sizeof(err));
+    ASSERT_TRUE(s != NULL);
+    memset(&e, 0, sizeof(e));
+    ASSERT_EQ_STATUS(store_add(s, "gone", k_hash_a, "u", NULL, 0U, "human", NULL, k_now, &act, &e),
+                     STORE_OK);
+    (void)snprintf(sync, sizeof(sync), "%s", e.sync_id);
+    store_entry_free(&e);
+    ASSERT_EQ_STATUS(store_soft_delete_by_id(s, 1, k_now, &e), STORE_OK);
+    (void)snprintf(vv_before, sizeof(vv_before), "%s", e.version_vector);
+    store_entry_free(&e);
+
+    ASSERT_EQ_STATUS(store_update(s, 1, NULL, false, NULL, NULL, false, NULL, 0U, false, NULL, true,
+                                  STORE_BIN_LIVE, k_now, &e, &conflict),
+                     STORE_ERR_DELETED);
+    store_entry_free(&e);
+    ASSERT_EQ_STATUS(store_update(s, 1, NULL, false, NULL, NULL, false, NULL, 0U, false, NULL, true,
+                                  STORE_BIN_DELETED, k_now, &e, &conflict),
+                     STORE_OK);
+    ASSERT_TRUE(e.deleted_at == NULL);
+    ASSERT_STREQ(e.sync_id, sync);
+    ASSERT_TRUE(e.version_vector != NULL);
+    if (e.version_vector != NULL) {
+        ASSERT_TRUE(strcmp(e.version_vector, vv_before) != 0);
+    }
+    store_entry_free(&e);
+    ASSERT_EQ_STATUS(store_get(s, 1, STORE_BIN_LIVE, k_now, &e), STORE_OK);
+    store_entry_free(&e);
+    store_close(s);
+    free(db);
+}
+
 #ifdef REMEMBER_TEST_HOOKS
 TEST(store_devices_replace_exec_fail_undoes_savepoint)
 {
@@ -724,6 +1098,14 @@ void register_store_sync_tests(void)
     RUN_TEST(store_purge_trash_skips_deleted);
     RUN_TEST(store_empty_sidecar_refuses_open);
     RUN_TEST(store_list_tags_deleted_bin);
+    RUN_TEST(store_soft_delete_live_keeps_body_fts_edges);
+    RUN_TEST(store_soft_delete_expired_clears_expires);
+    RUN_TEST(store_hard_delete_expired_cascades_fts);
+    RUN_TEST(store_hard_delete_hatch_two_devices);
+    RUN_TEST(store_purge_deleted_and_hatch);
+    RUN_TEST(store_add_revives_deleted_same_sync_id);
+    RUN_TEST(store_vv_increment_inserts_missing_device_key);
+    RUN_TEST(store_update_undelete_deleted);
 #ifdef REMEMBER_TEST_HOOKS
     RUN_TEST(store_devices_replace_exec_fail_undoes_savepoint);
 #endif

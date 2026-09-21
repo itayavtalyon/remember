@@ -220,7 +220,8 @@ TEST(delete_by_key)
     ASSERT_STR_CONTAINS(d.out, "to remove");
     cmd_result_free(&d);
     g = run_remember(db, gargs, sizeof(gargs) / sizeof(gargs[0]), NULL);
-    ASSERT_EQ_INT(g.exit_code, 2);
+    ASSERT_EQ_INT(g.exit_code, 3);
+    ASSERT_STREQ(g.err, "remember: deleted\n");
     cmd_result_free(&g);
     free(db);
 }

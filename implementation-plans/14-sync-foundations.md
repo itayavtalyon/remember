@@ -181,7 +181,30 @@ marks `[expired]` / `[deleted]`. Default list/search/get/related omit
 deleted neighbors; expired neighbors remain; `--deleted` includes them.
 `store_bin_of` is the single bin predicate (adapter). Facade mutation
 parity masks `sync_id` + `version_vector` as well as timestamps. Help /
-skill / soft-delete / `--sync-id` stay later stages.
+skill / `--sync-id` stay later stages.
+
+### Stage 3 (2026-09-20)
+
+Unflagged `delete` is soft (live or expired): `deleted_at=now`,
+`expires_at` cleared, body/tags/key/`sync_id`/edges/FTS kept, VV bumped,
+`bin=deleted`. `delete --expired|--deleted` is one-row hard CASCADE
+(FTS removed) iff `devices` COUNT==1; `--trash` ≡ `--expired` +
+deprecation. Soft vs hard are two store functions (`LIVE` hard →
+INTERNAL). `update --deleted --undelete` restores (mutex with
+`--ttl`/`--expires`/`--clear-expires`). `add` revives the same key /
+keyless body-hash (same `sync_id`). `purge --expired|--deleted` wipes
+that whole bin (exactly one flag, same hatch); `purge-trash` ≡
+`purge --expired` + deprecation. Hatch ASCII:
+`hard delete requires exactly one registered device`. Graph/rekey VV
+and `--sync-id` locators stay stage 4. Help/skill stay stage 6.
+
+Gates (this stage): ctest 4/4 ASan/UBSan, store 113, coverage 100%
+functions + effective lines, `lint-all` LINT OK. In-session deep-review:
+no new grill locks. Auto-fixed lint/coverage (`clear_deleted_at` instead
+of a dead bind-text branch; `handle_update_ttl_flag` split; VV miss-key
+and hard-delete-by-key tests). Note for the second pass: CLI hatch after
+reopen only stays COUNT>1 when the extra `device_id` sorts after the
+local v7 (recovery `SELECT device_id LIMIT 1` follows TEXT PK order).
 
 ## Review Notes
 
@@ -257,3 +280,39 @@ exemptions).
 `expired / not_expired` though `--deleted` now makes `deleted`/`not_deleted`
 reachable — reasonable to fold into stage 6 (help/skill). `SKILL.md`
 project-status churn still uncommitted (carry-over from stage 1).
+
+### 2026-09-20 — Claude second-opinion deep review (stage 3)
+
+Independent pass on soft-delete / one-row hard delete / undelete / revive /
+purge. Verified by running: ctest 4/4 (ASan/UBSan), coverage functions 100% +
+effective lines 100%, `-Weverything -Werror` clean, lint OK. Confirmed against
+005 Round 7: soft vs hard are two store functions (hard `LIVE` → INTERNAL);
+COUNT==1 hatch (`NOT_SINGLE_DEVICE`) checked before any destructive op → exit 1
+with clear ASCII; unflagged `delete` soft-deletes live-or-expired (clears
+`expires_at`, keeps body/tags/key/sync_id/edges/FTS); `--expired`/`--deleted`
+one-row hard CASCADE; `--trash` ≡ `--expired`; `update --undelete` (mutex with
+ttl/expires, needs `--deleted` via bin locator); `add` revives deleted+expired
+same key/hash preserving sync_id; `purge --expired|--deleted` bin-specific with
+the same hatch, `purge-trash` ≡ `purge --expired`. `vv_increment` hand-rolled
+JSON bump is sound (fixed-length UUID needle, overflow-guarded, snprintf
+truncation fails safe) with edge tests; `del` finalize path has no
+double-finalize.
+
+**Grill → fixed now (Itay chose "fix in stage 3"):** plain `update`
+(set_body/set_tags/set_expires) and keyed-upsert did NOT bump the version
+vector — only soft-delete/undelete did — which would leave a body edit
+invisible to stage-5 import dominance (criteria #12). Fix: single
+`apply_vv_bump` at the end of `update_apply_changes` covering every update kind
+(guarded against the undelete double-bump). Verified: add→VV1, `update --text`
+→VV2, `update --tag`→VV3. Test extends `store_sync_id_stable_across_update` to
+assert the bump. Supersedes stage-1's "update VV deferred to stage 4" note;
+stage 4 keeps only graph (link/unlink/rekey) VV.
+
+**Forward note (not this plan):** `devices_get_one` uses `SELECT … LIMIT 1`
+with no ORDER BY and "sidecar wins" recovery replaces the single row. Correct
+now (Round 7: `devices` is local-only, one row; COUNT>1 is a defensive/future
+path only reachable by the test's manual insert). When multi-device
+registration lands in a later log, revisit so a reopen cannot collapse a
+legitimate multi-device registry. `VV_OUT_MAX=256` is ample for single-device;
+re-check when stage-5 import can grow a VV with foreign device keys (bump fails
+safe with `STORE_ERR_INTERNAL` if exceeded). `SKILL.md` churn still uncommitted.

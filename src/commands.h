@@ -16,6 +16,7 @@ int cmd_delete(Store *s, bool json, int rest_argc, const char **rest_argv);
 int cmd_update(Store *s, bool json, int rest_argc, const char **rest_argv);
 int cmd_tags(Store *s, bool json, int rest_argc, const char **rest_argv);
 int cmd_purge_trash(Store *s, bool json, int rest_argc, const char **rest_argv);
+int cmd_purge(Store *s, bool json, int rest_argc, const char **rest_argv);
 int cmd_link(Store *s, bool json, int rest_argc, const char **rest_argv);
 int cmd_unlink(Store *s, bool json, int rest_argc, const char **rest_argv);
 int cmd_related(Store *s, bool json, int rest_argc, const char **rest_argv);

@@ -97,6 +97,7 @@ static void mask_timestamps(char *s)
     }
     mask_field(s, "\"created_at\":\"");
     mask_field(s, "\"updated_at\":\"");
+    mask_field(s, "\"deleted_at\":\"");
     mask_field(s, "\"sync_id\":\"");
     mask_version_vector(s);
 }

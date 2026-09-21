@@ -15,6 +15,7 @@ typedef enum {
     CLI_CMD_DELETE,
     CLI_CMD_TAGS,
     CLI_CMD_PURGE_TRASH,
+    CLI_CMD_PURGE,
     CLI_CMD_LINK,
     CLI_CMD_UNLINK,
     CLI_CMD_RELATED,

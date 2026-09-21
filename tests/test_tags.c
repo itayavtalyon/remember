@@ -72,13 +72,14 @@ TEST(tags_human_shape)
     free(db);
 }
 
-/* Deleting the only entry with a tag drops it (orphan-tag GC is reflected). */
+/* Default tags is the live bin: soft-delete hides the tag; --deleted still lists it. */
 TEST(tags_reflects_delete_gc)
 {
     char *db = make_temp_db_path();
     const char *add[] = {"add", "--tag", "solo", "only body"};
     const char *del[] = {"delete", "1"};
     const char *args[] = {"tags", "--json"};
+    const char *delbin[] = {"tags", "--deleted", "--json"};
     CmdResult r;
 
     ASSERT_TRUE(db != NULL);
@@ -92,6 +93,10 @@ TEST(tags_reflects_delete_gc)
     ASSERT_EQ_INT(r.exit_code, 0);
     ASSERT_STR_CONTAINS(r.out, "\"count\":0");
     ASSERT_STR_NOT_CONTAINS(r.out, "solo");
+    cmd_result_free(&r);
+    r = run_remember(db, delbin, sizeof(delbin) / sizeof(delbin[0]), NULL);
+    ASSERT_EQ_INT(r.exit_code, 0);
+    ASSERT_STR_CONTAINS(r.out, "solo");
     cmd_result_free(&r);
     free(db);
 }

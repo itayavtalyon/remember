@@ -22,14 +22,15 @@ typedef enum {
     STORE_ERR_SQLITE,
     STORE_ERR_OOM,
     STORE_ERR_INTERNAL,
-    STORE_ERR_QUERY,       /* invalid FTS5 MATCH syntax (search) */
-    STORE_ERR_CONFLICT,    /* keyless body-hash collision on update */
-    STORE_ERR_EXPIRED,     /* locator hit expired without STORE_BIN_EXPIRED */
-    STORE_ERR_NOT_EXPIRED, /* locator used STORE_BIN_EXPIRED but row is live */
-    STORE_ERR_DELETED,     /* locator hit deleted without STORE_BIN_DELETED */
-    STORE_ERR_NOT_DELETED, /* locator used STORE_BIN_DELETED but row is live */
-    STORE_ERR_SELF_LINK,   /* from_id == to_id */
-    STORE_ERR_CYCLE        /* supersedes would cycle */
+    STORE_ERR_QUERY,             /* invalid FTS5 MATCH syntax (search) */
+    STORE_ERR_CONFLICT,          /* keyless body-hash collision on update */
+    STORE_ERR_EXPIRED,           /* locator hit expired without STORE_BIN_EXPIRED */
+    STORE_ERR_NOT_EXPIRED,       /* locator used STORE_BIN_EXPIRED but row is live */
+    STORE_ERR_DELETED,           /* locator hit deleted without STORE_BIN_DELETED */
+    STORE_ERR_NOT_DELETED,       /* locator used STORE_BIN_DELETED but row is live */
+    STORE_ERR_NOT_SINGLE_DEVICE, /* hard wipe when devices COUNT != 1 */
+    STORE_ERR_SELF_LINK,         /* from_id == to_id */
+    STORE_ERR_CYCLE              /* supersedes would cycle */
 } StoreStatus;
 
 /* Locator / list / search / tags bin. LIVE is the zero value (zero-init queries). */
@@ -161,23 +162,29 @@ typedef struct {
 PageResult store_search(Store *s, const SearchQuery *q, const char *now);
 
 /*
- * Hard-delete one entry. Under one write transaction: load snapshot, remove FTS
- * row, DELETE entry (CASCADE entry_tags), GC orphan tags. *out_deleted is a
- * heap snapshot of the removed row (caller frees with store_entry_free).
- * STORE_ERR_NOT_FOUND if missing.
+ * Soft-delete one entry (locator: live or expired). Sets deleted_at=now, clears
+ * expires_at, keeps body/tags/key/sync_id/edges/FTS, bumps VV + updated_at.
+ * Already deleted → STORE_ERR_DELETED. *out is the post-mutation snapshot.
  */
-StoreStatus store_delete_by_id(Store *s, long long id, StoreBin bin, const char *now,
-                               Entry *out_deleted);
+StoreStatus store_soft_delete_by_id(Store *s, long long id, const char *now, Entry *out);
+StoreStatus store_soft_delete_by_key(Store *s, const char *key, const char *now, Entry *out);
 
-/* Same as store_delete_by_id, located by normalized key. */
-StoreStatus store_delete_by_key(Store *s, const char *key, StoreBin bin, const char *now,
-                                Entry *out_deleted);
+/*
+ * Hard CASCADE one row. bin must be EXPIRED or DELETED (LIVE → INTERNAL; hard
+ * cannot default). Hatch: devices COUNT==1 else NOT_SINGLE_DEVICE. Removes FTS.
+ * *out is a snapshot of the removed row.
+ */
+StoreStatus store_hard_delete_by_id(Store *s, long long id, StoreBin bin, const char *now,
+                                    Entry *out);
+StoreStatus store_hard_delete_by_key(Store *s, const char *key, StoreBin bin, const char *now,
+                                     Entry *out);
 
 /*
  * Update one entry by id (id > 0, key_or_null NULL) or normalized key
- * (key_or_null set; id ignored). set_body / set_tags / set_expires are
- * independent opt-ins; at least one must be true at the command layer.
+ * (key_or_null set; id ignored). set_body / set_tags / set_expires / undelete
+ * are independent opt-ins; at least one must be true at the command layer.
  * set_expires + expires_at NULL clears expiry; set_expires + ISO writes it.
+ * undelete clears deleted_at (locator is normally STORE_BIN_DELETED).
  * bin + now apply the locator bin (same as get/delete).
  * On success always refreshes updated_at and re-syncs FTS in the same write
  * transaction. Never changes source or key.
@@ -193,8 +200,8 @@ StoreStatus store_delete_by_key(Store *s, const char *key, StoreBin bin, const c
 StoreStatus store_update(Store *s, long long id, const char *key_or_null, bool set_body,
                          const char *body, const char *body_hash, bool set_tags,
                          const char *const *tags, size_t ntags, bool set_expires,
-                         const char *expires_at, StoreBin bin, const char *now, Entry *out_entry,
-                         long long *out_conflict_id);
+                         const char *expires_at, bool undelete, StoreBin bin, const char *now,
+                         Entry *out_entry, long long *out_conflict_id);
 
 /* One tag with the number of entries carrying it. name is heap-owned. */
 typedef struct {
@@ -215,10 +222,14 @@ StoreStatus store_tags(Store *s, StoreBin bin, const char *now, TagCount **out_t
 void store_tags_free(TagCount *tags, size_t count);
 
 /*
- * Permanently delete every expired row (one write txn, FTS + tag GC).
- * On STORE_OK: *out_entries is all snapshots (*out_count; 0/NULL if empty).
- * Caller frees each entry then the array.
+ * Hard-wipe every row in bin (EXPIRED or DELETED; LIVE → INTERNAL). Same hatch
+ * as one-row hard delete. On STORE_OK: *out_entries is all snapshots
+ * (*out_count; 0/NULL if empty). Caller frees each entry then the array.
  */
+StoreStatus store_purge(Store *s, StoreBin bin, const char *now, Entry **out_entries,
+                        size_t *out_count);
+
+/* store_purge(EXPIRED). Kept so existing expired-bin call sites stay short. */
 StoreStatus store_purge_trash(Store *s, const char *now, Entry **out_entries, size_t *out_count);
 
 /* Stored kind only. cited_by / superseded_by are output-only (CLI). */

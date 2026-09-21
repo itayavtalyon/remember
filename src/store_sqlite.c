@@ -5,6 +5,7 @@
 #include <ctype.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <limits.h>
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -290,7 +291,11 @@ enum {
     SIDECAR_LINE_BUF = 64,
     SIDECAR_FILE_MODE = 0600,
     SIDECAR_PATH_PAD = 16,
-    VV_JSON_BUFLEN = 80
+    VV_JSON_BUFLEN = 80,
+    VV_OUT_MAX = 256,
+    VV_JSON_MIN_OUT = 8, /* shortest compact object we emit: {"d":1} */
+    VV_INT_BASE = 10,
+    VV_NEEDLE_LEN = UUID_STR_LEN + 4 /* "\"<uuid>\":" */
 };
 
 static void set_err(char *err, size_t errlen, const char *msg)
@@ -1090,6 +1095,8 @@ const char *store_status_message(StoreStatus st)
         return "deleted";
     case STORE_ERR_NOT_DELETED:
         return "not_deleted";
+    case STORE_ERR_NOT_SINGLE_DEVICE:
+        return "hard delete requires exactly one registered device";
     case STORE_ERR_SELF_LINK:
         return "self-link";
     case STORE_ERR_CYCLE:
@@ -1442,6 +1449,122 @@ static StoreStatus write_expires_at(sqlite3 *db, long long id, const char *expir
         return STORE_ERR_SQLITE;
     }
     (void)sqlite3_finalize(stmt);
+    return STORE_OK;
+}
+
+static StoreStatus clear_deleted_at(sqlite3 *db, long long id)
+{
+    sqlite3_stmt *stmt = NULL;
+    int rc = 0;
+
+    rc = sqlite3_prepare_v2(db, "UPDATE entries SET deleted_at = NULL WHERE id = ?1;", -1, &stmt,
+                            NULL);
+    if (rc != SQLITE_OK) {
+        return STORE_ERR_SQLITE;
+    }
+    (void)sqlite3_bind_int64(stmt, 1, id);
+    if (sqlite3_step(stmt) != SQLITE_DONE) {
+        (void)sqlite3_finalize(stmt);
+        return STORE_ERR_SQLITE;
+    }
+    (void)sqlite3_finalize(stmt);
+    return STORE_OK;
+}
+
+/* Increment version_vector[device_id] (missing key = 0). Compact JSON, no spaces. */
+static int vv_increment(const char *in, const char *device_id, char *out, size_t outlen)
+{
+    char needle[VV_NEEDLE_LEN];
+    const char *hit = NULL;
+    int needle_n = 0;
+    int written = 0;
+
+    if (in == NULL || device_id == NULL || out == NULL || outlen < (size_t)VV_JSON_MIN_OUT ||
+        in[0] != '{') {
+        return -1;
+    }
+    needle_n = snprintf(needle, sizeof(needle), "\"%s\":", device_id);
+    if (needle_n < 0 || (size_t)needle_n >= sizeof(needle)) {
+        return -1;
+    }
+    hit = strstr(in, needle);
+    if (hit != NULL) {
+        const char *digits = hit + (size_t)needle_n;
+        char *end = NULL;
+        unsigned long long next_clock = 0;
+        size_t pre = 0;
+
+        errno = 0;
+        next_clock = strtoull(digits, &end, VV_INT_BASE);
+        if (end == digits || errno != 0 || next_clock == ULLONG_MAX ||
+            next_clock >= ULLONG_MAX - 1ULL) {
+            return -1;
+        }
+        next_clock++;
+        pre = (size_t)(digits - in);
+        written = snprintf(out, outlen, "%.*s%llu%s", (int)pre, in, next_clock, end);
+        if (written < 0 || (size_t)written >= outlen) {
+            return -1;
+        }
+        return 0;
+    }
+    {
+        const char *brace = strrchr(in, '}');
+        size_t len = strlen(in);
+
+        if (brace == NULL || brace[1] != '\0') {
+            return -1;
+        }
+        if (len <= 2U) {
+            written = snprintf(out, outlen, "{\"%s\":1}", device_id);
+        } else {
+            written = snprintf(out, outlen, "%.*s,\"%s\":1}", (int)(brace - in), in, device_id);
+        }
+        if (written < 0 || (size_t)written >= outlen) {
+            return -1;
+        }
+        return 0;
+    }
+}
+
+static StoreStatus apply_vv_bump(sqlite3 *db, long long id, const char *device_id,
+                                 const char *vv_in)
+{
+    sqlite3_stmt *stmt = NULL;
+    char vv_out[VV_OUT_MAX];
+    int rc = 0;
+
+    if (device_id == NULL || vv_in == NULL) {
+        return STORE_ERR_INTERNAL;
+    }
+    if (vv_increment(vv_in, device_id, vv_out, sizeof(vv_out)) != 0) {
+        return STORE_ERR_INTERNAL;
+    }
+    rc = sqlite3_prepare_v2(db, "UPDATE entries SET version_vector = ?1 WHERE id = ?2;", -1, &stmt,
+                            NULL);
+    if (rc != SQLITE_OK) {
+        return STORE_ERR_SQLITE;
+    }
+    (void)sqlite3_bind_text(stmt, 1, vv_out, -1, SQLITE_TRANSIENT);
+    (void)sqlite3_bind_int64(stmt, 2, id);
+    if (sqlite3_step(stmt) != SQLITE_DONE) {
+        (void)sqlite3_finalize(stmt);
+        return STORE_ERR_SQLITE;
+    }
+    (void)sqlite3_finalize(stmt);
+    return STORE_OK;
+}
+
+static StoreStatus require_single_device(sqlite3 *db)
+{
+    int n = 0;
+
+    if (devices_count(db, &n) != 0) {
+        return STORE_ERR_SQLITE;
+    }
+    if (n != 1) {
+        return STORE_ERR_NOT_SINGLE_DEVICE;
+    }
     return STORE_OK;
 }
 
@@ -1912,20 +2035,36 @@ static StoreStatus replace_body(sqlite3 *db, long long id, const char *body, con
     return STORE_OK;
 }
 
-/* If the existing row is trash, clear expiry unless the add supplies a new one. */
-static StoreStatus maybe_revive(sqlite3 *db, long long id, EntryTimes times)
+/* If the existing row is expired or deleted, restore to live (incoming expiry or none). */
+static StoreStatus maybe_revive(sqlite3 *db, long long id, EntryTimes times, const char *device_id)
 {
     Entry current;
     StoreStatus st = STORE_OK;
+    StoreBin have = STORE_BIN_LIVE;
 
     memset(&current, 0, sizeof(current));
     st = load_entry_by_id(db, id, &current);
     if (st != STORE_OK) {
         return st;
     }
-    if (entry_bin(&current, times.now) == STORE_BIN_EXPIRED) {
-        st = write_expires_at(db, id, times.expires_at);
+    have = entry_bin(&current, times.now);
+    if (have == STORE_BIN_LIVE) {
+        store_entry_free(&current);
+        return STORE_OK;
     }
+    st = write_expires_at(db, id, times.expires_at);
+    if (st != STORE_OK) {
+        goto done;
+    }
+    if (have == STORE_BIN_DELETED) {
+        st = clear_deleted_at(db, id);
+        if (st != STORE_OK) {
+            goto done;
+        }
+    }
+    st = apply_vv_bump(db, id, device_id, current.version_vector);
+
+done:
     store_entry_free(&current);
     return st;
 }
@@ -1945,7 +2084,7 @@ static StoreStatus add_keyed(sqlite3 *db, const char *body, const char *body_has
         if (st != STORE_OK) {
             return st;
         }
-        st = maybe_revive(db, id, (EntryTimes){.now = now, .expires_at = expires_at});
+        st = maybe_revive(db, id, (EntryTimes){.now = now, .expires_at = expires_at}, device_id);
         if (st != STORE_OK) {
             return st;
         }
@@ -1988,7 +2127,7 @@ static StoreStatus add_keyless(sqlite3 *db, const char *body, const char *body_h
         if (st != STORE_OK) {
             return st;
         }
-        st = maybe_revive(db, id, (EntryTimes){.now = now, .expires_at = expires_at});
+        st = maybe_revive(db, id, (EntryTimes){.now = now, .expires_at = expires_at}, device_id);
         if (st != STORE_OK) {
             return st;
         }
@@ -2686,16 +2825,111 @@ static StoreStatus gc_orphan_tags(sqlite3 *db)
     return STORE_OK;
 }
 
-/*
- * Hard-delete one entry under a single write lock: load snapshot, FTS delete,
- * DELETE entry (CASCADE entry_tags), orphan-tag GC, COMMIT. Load is inside the
- * transaction so the JSON echo matches the row that is removed.
- *
- * *out_deleted is zeroed on entry. On STORE_OK it holds a heap snapshot (caller
- * frees). On failure it is left zeroed / freed.
- */
-static StoreStatus delete_entry_tx(Store *s, long long id_or_zero, const char *key_or_null,
-                                   StoreBin bin, const char *now, Entry *out_deleted)
+static StoreStatus bin_status_soft_delete(const Entry *e, const char *now)
+{
+    if (e == NULL || now == NULL) {
+        return STORE_ERR_INTERNAL;
+    }
+    if (entry_bin(e, now) == STORE_BIN_DELETED) {
+        return STORE_ERR_DELETED;
+    }
+    return STORE_OK;
+}
+
+// NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
+static StoreStatus load_for_soft_delete(sqlite3 *db, long long id, const char *key_or_null,
+                                        const char *now, Entry *out)
+{
+    StoreStatus st = STORE_OK;
+
+    if (key_or_null != NULL) {
+        st = load_entry_by_key(db, key_or_null, out);
+    } else {
+        st = load_entry_by_id(db, id, out);
+    }
+    if (st != STORE_OK) {
+        return st;
+    }
+    st = bin_status_soft_delete(out, now);
+    if (st != STORE_OK) {
+        store_entry_free(out);
+    }
+    return st;
+}
+
+// NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
+static StoreStatus apply_soft_delete(sqlite3 *db, long long id, const char *now,
+                                     const char *device_id, const char *vv_in)
+{
+    sqlite3_stmt *stmt = NULL;
+    char vv_out[VV_OUT_MAX];
+    int rc = 0;
+
+    if (vv_increment(vv_in, device_id, vv_out, sizeof(vv_out)) != 0) {
+        return STORE_ERR_INTERNAL;
+    }
+    rc = sqlite3_prepare_v2(db,
+                            "UPDATE entries SET deleted_at = ?1, expires_at = NULL, "
+                            "updated_at = ?1, version_vector = ?2 WHERE id = ?3;",
+                            -1, &stmt, NULL);
+    if (rc != SQLITE_OK) {
+        return STORE_ERR_SQLITE;
+    }
+    (void)sqlite3_bind_text(stmt, 1, now, -1, SQLITE_STATIC);
+    (void)sqlite3_bind_text(stmt, 2, vv_out, -1, SQLITE_TRANSIENT);
+    (void)sqlite3_bind_int64(stmt, 3, id);
+    if (sqlite3_step(stmt) != SQLITE_DONE) {
+        (void)sqlite3_finalize(stmt);
+        return STORE_ERR_SQLITE;
+    }
+    (void)sqlite3_finalize(stmt);
+    return STORE_OK;
+}
+
+static StoreStatus soft_delete_tx(Store *s, long long id_or_zero, const char *key_or_null,
+                                  const char *now, Entry *out)
+{
+    char err_unused[1];
+    StoreStatus st = STORE_OK;
+    long long id = id_or_zero;
+    Entry cur;
+
+    if (s == NULL || s->db == NULL || s->device_id == NULL || now == NULL || out == NULL) {
+        return STORE_ERR_INTERNAL;
+    }
+    memset(out, 0, sizeof(*out));
+    memset(&cur, 0, sizeof(cur));
+    if (exec_sql(s->db, "BEGIN IMMEDIATE;", err_unused, 0U) != 0) {
+        return STORE_ERR_SQLITE;
+    }
+    st = load_for_soft_delete(s->db, id, key_or_null, now, &cur);
+    if (st != STORE_OK) {
+        goto fail;
+    }
+    id = cur.id;
+    st = apply_soft_delete(s->db, id, now, s->device_id, cur.version_vector);
+    store_entry_free(&cur);
+    if (st != STORE_OK) {
+        goto fail;
+    }
+    st = load_entry_by_id(s->db, id, out);
+    if (st != STORE_OK) {
+        goto fail;
+    }
+    if (exec_sql(s->db, "COMMIT;", err_unused, 0U) != 0) {
+        st = STORE_ERR_SQLITE;
+        store_entry_free(out);
+        goto fail;
+    }
+    return STORE_OK;
+
+fail:
+    rollback_quiet(s->db);
+    return st;
+}
+
+static StoreStatus hard_delete_tx(Store *s, long long id_or_zero, const char *key_or_null,
+                                  StoreBin bin, const char *now, Entry *out_deleted)
 {
     char err_unused[1];
     StoreStatus st = STORE_OK;
@@ -2704,7 +2938,9 @@ static StoreStatus delete_entry_tx(Store *s, long long id_or_zero, const char *k
     int rc = 0;
 
     memset(out_deleted, 0, sizeof(*out_deleted));
-
+    if (bin == STORE_BIN_LIVE) {
+        return STORE_ERR_INTERNAL;
+    }
     if (exec_sql(s->db, "BEGIN IMMEDIATE;", err_unused, 0U) != 0) {
         return STORE_ERR_SQLITE;
     }
@@ -2712,6 +2948,10 @@ static StoreStatus delete_entry_tx(Store *s, long long id_or_zero, const char *k
     st = load_then_check_bin(s->db, id, key_or_null, NULL, bin, now, out_deleted);
     if (st != STORE_OK) {
         goto fail;
+    }
+    st = require_single_device(s->db);
+    if (st != STORE_OK) {
+        goto fail_free;
     }
     id = out_deleted->id;
 
@@ -2732,9 +2972,7 @@ static StoreStatus delete_entry_tx(Store *s, long long id_or_zero, const char *k
         goto fail_free;
     }
     (void)sqlite3_finalize(del);
-    del = NULL;
 
-    /* Should not happen under the write lock after a successful load. */
     if (sqlite3_changes(s->db) == 0) {
         st = STORE_ERR_NOT_FOUND;
         goto fail_free;
@@ -2758,22 +2996,38 @@ fail:
     return st;
 }
 
-StoreStatus store_delete_by_id(Store *s, long long id, StoreBin bin, const char *now,
-                               Entry *out_deleted)
+StoreStatus store_soft_delete_by_id(Store *s, long long id, const char *now, Entry *out)
 {
-    if (s == NULL || s->db == NULL || now == NULL || out_deleted == NULL) {
+    if (s == NULL || s->db == NULL || now == NULL || out == NULL) {
         return STORE_ERR_INTERNAL;
     }
-    return delete_entry_tx(s, id, NULL, bin, now, out_deleted);
+    return soft_delete_tx(s, id, NULL, now, out);
 }
 
-StoreStatus store_delete_by_key(Store *s, const char *key, StoreBin bin, const char *now,
-                                Entry *out_deleted)
+StoreStatus store_soft_delete_by_key(Store *s, const char *key, const char *now, Entry *out)
 {
-    if (s == NULL || s->db == NULL || key == NULL || now == NULL || out_deleted == NULL) {
+    if (s == NULL || s->db == NULL || key == NULL || now == NULL || out == NULL) {
         return STORE_ERR_INTERNAL;
     }
-    return delete_entry_tx(s, 0, key, bin, now, out_deleted);
+    return soft_delete_tx(s, 0, key, now, out);
+}
+
+StoreStatus store_hard_delete_by_id(Store *s, long long id, StoreBin bin, const char *now,
+                                    Entry *out)
+{
+    if (s == NULL || s->db == NULL || now == NULL || out == NULL) {
+        return STORE_ERR_INTERNAL;
+    }
+    return hard_delete_tx(s, id, NULL, bin, now, out);
+}
+
+StoreStatus store_hard_delete_by_key(Store *s, const char *key, StoreBin bin, const char *now,
+                                     Entry *out)
+{
+    if (s == NULL || s->db == NULL || key == NULL || now == NULL || out == NULL) {
+        return STORE_ERR_INTERNAL;
+    }
+    return hard_delete_tx(s, 0, key, bin, now, out);
 }
 
 /* Drop all entry_tags for entry_id, then link the new set (ntags may be 0). */
@@ -2805,12 +3059,13 @@ static StoreStatus replace_tags(sqlite3 *db, long long entry_id, const char *con
 static StoreStatus update_check_args(const Store *s, long long id, const char *key_or_null,
                                      bool set_body, const char *body, const char *body_hash,
                                      bool set_tags, const char *const *tags, size_t ntags,
-                                     bool set_expires, const char *now, const Entry *out_entry)
+                                     bool set_expires, bool undelete, const char *now,
+                                     const Entry *out_entry)
 {
     if (s == NULL || s->db == NULL || now == NULL || out_entry == NULL) {
         return STORE_ERR_INTERNAL;
     }
-    if (!set_body && !set_tags && !set_expires) {
+    if (!set_body && !set_tags && !set_expires && !undelete) {
         return STORE_ERR_INTERNAL;
     }
     if (set_body && (body == NULL || body_hash == NULL)) {
@@ -2855,7 +3110,8 @@ static StoreStatus update_check_body_conflict(sqlite3 *db, long long entry_id, b
 static StoreStatus update_apply_changes(sqlite3 *db, long long entry_id, bool is_keyless,
                                         bool set_body, const char *body, const char *body_hash,
                                         bool set_tags, const char *const *tags, size_t ntags,
-                                        bool set_expires, EntryTimes times,
+                                        bool set_expires, EntryTimes times, bool undelete,
+                                        const char *device_id, const char *vv_in,
                                         long long *out_conflict_id)
 {
     StoreStatus st = STORE_OK;
@@ -2884,14 +3140,26 @@ static StoreStatus update_apply_changes(sqlite3 *db, long long entry_id, bool is
             return st;
         }
     }
+    if (undelete) {
+        st = clear_deleted_at(db, entry_id);
+        if (st != STORE_OK) {
+            return st;
+        }
+    }
+    /* Every update mutates at least one field (update_check_args), so bump the
+       version vector exactly once here — covers body/tags/expiry and undelete. */
+    st = apply_vv_bump(db, entry_id, device_id, vv_in);
+    if (st != STORE_OK) {
+        return st;
+    }
     return fts_resync(db, entry_id);
 }
 
 StoreStatus store_update(Store *s, long long id, const char *key_or_null, bool set_body,
                          const char *body, const char *body_hash, bool set_tags,
                          const char *const *tags, size_t ntags, bool set_expires,
-                         const char *expires_at, StoreBin bin, const char *now, Entry *out_entry,
-                         long long *out_conflict_id)
+                         const char *expires_at, bool undelete, StoreBin bin, const char *now,
+                         Entry *out_entry, long long *out_conflict_id)
 {
     char err_unused[1];
     StoreStatus st = STORE_OK;
@@ -2903,7 +3171,7 @@ StoreStatus store_update(Store *s, long long id, const char *key_or_null, bool s
         *out_conflict_id = 0;
     }
     st = update_check_args(s, id, key_or_null, set_body, body, body_hash, set_tags, tags, ntags,
-                           set_expires, now, out_entry);
+                           set_expires, undelete, now, out_entry);
     if (st != STORE_OK) {
         return st;
     }
@@ -2923,9 +3191,10 @@ StoreStatus store_update(Store *s, long long id, const char *key_or_null, bool s
     entry_id = current.id;
     is_keyless = (current.key == NULL);
 
-    st = update_apply_changes(s->db, entry_id, is_keyless, set_body, body, body_hash, set_tags,
-                              tags, ntags, set_expires,
-                              (EntryTimes){.now = now, .expires_at = expires_at}, out_conflict_id);
+    st =
+        update_apply_changes(s->db, entry_id, is_keyless, set_body, body, body_hash, set_tags, tags,
+                             ntags, set_expires, (EntryTimes){.now = now, .expires_at = expires_at},
+                             undelete, s->device_id, current.version_vector, out_conflict_id);
     if (st != STORE_OK) {
         store_entry_free(&current);
         rollback_quiet(s->db);
@@ -2943,7 +3212,8 @@ StoreStatus store_update(Store *s, long long id, const char *key_or_null, bool s
     return load_entry_by_id(s->db, entry_id, out_entry);
 }
 
-StoreStatus store_purge_trash(Store *s, const char *now, Entry **out_entries, size_t *out_count)
+StoreStatus store_purge(Store *s, StoreBin bin, const char *now, Entry **out_entries,
+                        size_t *out_count)
 {
     sqlite3_stmt *sel = NULL;
     sqlite3_stmt *del = NULL;
@@ -2954,8 +3224,28 @@ StoreStatus store_purge_trash(Store *s, const char *now, Entry **out_entries, si
     size_t cap = 0U;
     size_t i = 0;
     int rc = 0;
+    const char *sel_sql = NULL;
+    const char *del_sql = NULL;
+    bool bind_now = false;
 
     if (s == NULL || s->db == NULL || now == NULL || out_entries == NULL || out_count == NULL) {
+        return STORE_ERR_INTERNAL;
+    }
+    if (bin == STORE_BIN_EXPIRED) {
+        sel_sql = "SELECT id, key, body, source, created_at, updated_at, expires_at, "
+                  "sync_id, deleted_at, version_vector "
+                  "FROM entries WHERE deleted_at IS NULL AND expires_at IS NOT NULL "
+                  "AND expires_at <= ?1 ORDER BY updated_at DESC, id DESC;";
+        del_sql = "DELETE FROM entries WHERE deleted_at IS NULL AND expires_at IS NOT NULL AND "
+                  "expires_at <= ?1;";
+        bind_now = true;
+    } else if (bin == STORE_BIN_DELETED) {
+        sel_sql = "SELECT id, key, body, source, created_at, updated_at, expires_at, "
+                  "sync_id, deleted_at, version_vector "
+                  "FROM entries WHERE deleted_at IS NOT NULL "
+                  "ORDER BY updated_at DESC, id DESC;";
+        del_sql = "DELETE FROM entries WHERE deleted_at IS NOT NULL;";
+    } else {
         return STORE_ERR_INTERNAL;
     }
     *out_entries = NULL;
@@ -2964,18 +3254,20 @@ StoreStatus store_purge_trash(Store *s, const char *now, Entry **out_entries, si
     if (exec_sql(s->db, "BEGIN IMMEDIATE;", err_unused, 0U) != 0) {
         return STORE_ERR_SQLITE;
     }
+    st = require_single_device(s->db);
+    if (st != STORE_OK) {
+        rollback_quiet(s->db);
+        return st;
+    }
 
-    rc = sqlite3_prepare_v2(s->db,
-                            "SELECT id, key, body, source, created_at, updated_at, expires_at, "
-                            "sync_id, deleted_at, version_vector "
-                            "FROM entries WHERE deleted_at IS NULL AND expires_at IS NOT NULL "
-                            "AND expires_at <= ?1 ORDER BY updated_at DESC, id DESC;",
-                            -1, &sel, NULL);
+    rc = sqlite3_prepare_v2(s->db, sel_sql, -1, &sel, NULL);
     if (rc != SQLITE_OK) {
         rollback_quiet(s->db);
         return STORE_ERR_SQLITE;
     }
-    (void)sqlite3_bind_text(sel, 1, now, -1, SQLITE_STATIC);
+    if (bind_now) {
+        (void)sqlite3_bind_text(sel, 1, now, -1, SQLITE_STATIC);
+    }
     while ((rc = sqlite3_step(sel)) == SQLITE_ROW) {
         st = list_append_row(s->db, sel, &rows, &n, &cap);
         if (st != STORE_OK) {
@@ -3002,17 +3294,15 @@ StoreStatus store_purge_trash(Store *s, const char *now, Entry **out_entries, si
         }
     }
 
-    rc = sqlite3_prepare_v2(
-        s->db,
-        "DELETE FROM entries WHERE deleted_at IS NULL AND expires_at IS NOT NULL AND "
-        "expires_at <= ?1;",
-        -1, &del, NULL);
+    rc = sqlite3_prepare_v2(s->db, del_sql, -1, &del, NULL);
     if (rc != SQLITE_OK) {
         free_entry_rows(rows, n);
         rollback_quiet(s->db);
         return STORE_ERR_SQLITE;
     }
-    (void)sqlite3_bind_text(del, 1, now, -1, SQLITE_STATIC);
+    if (bind_now) {
+        (void)sqlite3_bind_text(del, 1, now, -1, SQLITE_STATIC);
+    }
     if (sqlite3_step(del) != SQLITE_DONE) {
         (void)sqlite3_finalize(del);
         free_entry_rows(rows, n);
@@ -3037,6 +3327,11 @@ StoreStatus store_purge_trash(Store *s, const char *now, Entry **out_entries, si
     *out_entries = rows;
     *out_count = n;
     return STORE_OK;
+}
+
+StoreStatus store_purge_trash(Store *s, const char *now, Entry **out_entries, size_t *out_count)
+{
+    return store_purge(s, STORE_BIN_EXPIRED, now, out_entries, out_count);
 }
 
 /* ---- entry_links / rekey ------------------------------------------------- */
