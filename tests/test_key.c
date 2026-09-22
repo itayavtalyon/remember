@@ -284,8 +284,10 @@ TEST(list_filter_by_key)
     cmd_result_free(&r);
     l = run_remember(db, largs, sizeof(largs) / sizeof(largs[0]), NULL);
     ASSERT_EQ_INT(l.exit_code, 0);
-    ASSERT_STR_CONTAINS(l.out, "aaa");
-    ASSERT_STR_NOT_CONTAINS(l.out, "bbb");
+    /* Match JSON fields, not hex fragments — sync_id is UUID and can contain "bbb". */
+    ASSERT_STR_CONTAINS(l.out, "\"body\":\"aaa\"");
+    ASSERT_STR_NOT_CONTAINS(l.out, "\"body\":\"bbb\"");
+    ASSERT_STR_NOT_CONTAINS(l.out, "\"key\":\"other\"");
     ASSERT_STR_CONTAINS(l.out, "\"total\":1");
     cmd_result_free(&l);
     free(db);
