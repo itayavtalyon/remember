@@ -20,6 +20,9 @@ typedef enum {
     CLI_CMD_UNLINK,
     CLI_CMD_RELATED,
     CLI_CMD_REKEY,
+    CLI_CMD_IMPORT,
+    CLI_CMD_CONFLICTS,
+    CLI_CMD_CONFLICT,
     CLI_CMD_UNKNOWN
 } CliCommand;
 

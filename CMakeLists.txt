@@ -104,6 +104,7 @@ set_property(SOURCE
     src/cmd_tags.c
     src/cmd_purge.c
     src/cmd_graph.c
+    src/cmd_import.c
     src/output.c
     src/util.c
     APPEND PROPERTY COMPILE_OPTIONS -Wcast-qual
@@ -215,6 +216,7 @@ set(REMEMBER_LIB_SOURCES
     src/cmd_tags.c
     src/cmd_purge.c
     src/cmd_graph.c
+    src/cmd_import.c
     src/output.c
     src/util.c
 )
@@ -284,6 +286,7 @@ set(REMEMBER_TEST_SOURCES
     tests/test_sync_output.c
     tests/test_sync_delete.c
     tests/test_sync_locators.c
+    tests/test_sync_import.c
 )
 add_executable(remember_tests
     ${REMEMBER_TEST_SOURCES}

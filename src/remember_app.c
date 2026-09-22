@@ -40,6 +40,9 @@ static void print_general_help(void)
                                "  unlink      Remove entry links\n"
                                "  related     List neighbors of an entry\n"
                                "  rekey       Rename, set, or clear an entry key in place\n"
+                               "  import      Merge another remember database (--from-db)\n"
+                               "  conflicts   List unresolved merge conflicts\n"
+                               "  conflict    Resolve a merge conflict (accept)\n"
                                "  help        Show this help (help <command> for a command)\n"
                                "  version     Show version\n"
                                "\n"
@@ -202,6 +205,23 @@ static void print_command_help(CliCommand topic)
                       "Exactly one of ID or --key, and exactly one of --to-key or --clear-key.\n");
         (void)fprintf(out, "Empty --to-key is illegal (not a clear).\n");
         (void)fprintf(out, "\n");
+    } else if (topic == CLI_CMD_IMPORT) {
+        (void)fprintf(out, "Options:\n");
+        (void)fprintf(out, "  --from-db PATH  Source remember database (read-only)\n");
+        (void)fprintf(out, "\n");
+        (void)fprintf(out, "Merges by sync_id. Conflicts are recorded; exit 0 even if any.\n");
+        (void)fprintf(out, "Run 'conflicts' after import. Source must be schema v4+.\n");
+        (void)fprintf(out, "\n");
+    } else if (topic == CLI_CMD_CONFLICTS) {
+        (void)fprintf(out, "Lists unresolved import conflicts. Takes no options.\n");
+        (void)fprintf(out, "\n");
+    } else if (topic == CLI_CMD_CONFLICT) {
+        (void)fprintf(out, "Usage:\n");
+        (void)fprintf(out, "  remember conflict accept --id N --keep local|incoming|both\n");
+        (void)fprintf(out, "\n");
+        (void)fprintf(out,
+                      "both remints sync_id on concurrent_vv; clash keeps incoming sync_id.\n");
+        (void)fprintf(out, "\n");
     }
     (void)fprintf(out, "Global options: --db PATH, --json, --help, --version\n");
     (void)fprintf(out, "See also: remember --help\n");
@@ -324,6 +344,12 @@ static int run(const CliArgs *args)
         return run_with_store(args, cmd_related);
     case CLI_CMD_REKEY:
         return run_with_store(args, cmd_rekey);
+    case CLI_CMD_IMPORT:
+        return run_with_store(args, cmd_import);
+    case CLI_CMD_CONFLICTS:
+        return run_with_store(args, cmd_conflicts);
+    case CLI_CMD_CONFLICT:
+        return run_with_store(args, cmd_conflict);
     case CLI_CMD_NONE:
         /* Defensive: parse should set CLI_ERR_MISSING_COMMAND first. */
         (void)fprintf(app_err(), "remember: %s\n", cli_error_message(CLI_ERR_MISSING_COMMAND));

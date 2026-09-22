@@ -821,3 +821,106 @@ int output_related_human(FILE *out, const StoreNeighbor *links, size_t count, co
     }
     return 0;
 }
+
+int output_import_envelope(FILE *out, const StoreImportCounts *counts)
+{
+    if (out == NULL || counts == NULL) {
+        return -1;
+    }
+    if (fprintf(out,
+                "{\"version\":1,\"action\":\"imported\",\"inserted\":%zu,\"updated\":%zu,"
+                "\"unchanged\":%zu,\"conflicts\":%zu}\n",
+                counts->inserted, counts->updated, counts->unchanged, counts->conflicts) < 0) {
+        return -1;
+    }
+    return 0;
+}
+
+static int output_one_conflict_json(FILE *out, const StoreConflict *row)
+{
+    const char *reason = NULL;
+
+    if (row == NULL) {
+        return -1;
+    }
+    reason = store_conflict_reason_str(row->reason);
+    if (reason == NULL || row->sync_id == NULL || row->local_json == NULL ||
+        row->incoming_json == NULL || row->created_at == NULL) {
+        return -1;
+    }
+    if (fprintf(out, "{\"id\":%lld,\"sync_id\":", row->id) < 0) {
+        return -1;
+    }
+    if (output_json_string(out, row->sync_id) != 0) {
+        return -1;
+    }
+    if (fprintf(out, ",\"reason\":") < 0) {
+        return -1;
+    }
+    if (output_json_string(out, reason) != 0) {
+        return -1;
+    }
+    if (fprintf(out, ",\"local\":%s,\"incoming\":%s,\"created_at\":", row->local_json,
+                row->incoming_json) < 0) {
+        return -1;
+    }
+    if (output_json_string(out, row->created_at) != 0) {
+        return -1;
+    }
+    return (fputc('}', out) == EOF) ? -1 : 0;
+}
+
+int output_conflicts_envelope(FILE *out, const StoreConflict *rows, size_t count)
+{
+    size_t i = 0;
+
+    if (out == NULL) {
+        return -1;
+    }
+    if (count > 0U && rows == NULL) {
+        return -1;
+    }
+    if (fprintf(out, "{\"version\":1,\"count\":%zu,\"conflicts\":[", count) < 0) {
+        return -1;
+    }
+    for (i = 0; i < count; i++) {
+        if (i > 0U && fputc(',', out) == EOF) {
+            return -1;
+        }
+        if (output_one_conflict_json(out, &rows[i]) != 0) {
+            return -1;
+        }
+    }
+    if (fputs("]}\n", out) < 0) {
+        return -1;
+    }
+    return 0;
+}
+
+int output_accepted_envelope(FILE *out, const Entry *entries, size_t count, const char *now)
+{
+    size_t i = 0;
+
+    if (out == NULL || now == NULL) {
+        return -1;
+    }
+    if (count > 0U && entries == NULL) {
+        return -1;
+    }
+    if (fprintf(out, "{\"version\":1,\"action\":\"accepted\",\"count\":%zu,\"entries\":[", count) <
+        0) {
+        return -1;
+    }
+    for (i = 0; i < count; i++) {
+        if (i > 0U && fputc(',', out) == EOF) {
+            return -1;
+        }
+        if (output_entry_json(out, &entries[i], now) != 0) {
+            return -1;
+        }
+    }
+    if (fputs("]}\n", out) < 0) {
+        return -1;
+    }
+    return 0;
+}

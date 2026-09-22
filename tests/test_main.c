@@ -33,6 +33,7 @@ static const TestGroup k_groups[] = {
     {"sync_output", register_sync_output_tests},
     {"sync_delete", register_sync_delete_tests},
     {"sync_locators", register_sync_locators_tests},
+    {"sync_import", register_sync_import_tests},
 };
 
 /* Exact comma-token match: "key" must not select "key_gld" (or vice versa),

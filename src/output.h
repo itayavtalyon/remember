@@ -61,4 +61,13 @@ int output_related_envelope(FILE *out, long long id, const char *key, const Stor
 /* Human Related: block (omit entirely when count==0). */
 int output_related_human(FILE *out, const StoreNeighbor *links, size_t count, const char *now);
 
+/* import --json counts envelope (no entry dump). */
+int output_import_envelope(FILE *out, const StoreImportCounts *counts);
+
+/* conflicts --json list. */
+int output_conflicts_envelope(FILE *out, const StoreConflict *rows, size_t count);
+
+/* conflict accept --json: action accepted + entries. */
+int output_accepted_envelope(FILE *out, const Entry *entries, size_t count, const char *now);
+
 #endif /* REMEMBER_OUTPUT_H */

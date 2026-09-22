@@ -355,3 +355,81 @@ deleted bin, `cmd_graph.c` `related_load_subject`) was untested — the coder's
 `cli_graph_deleted_via_key_and_sync_id`; coverage back to 100% effective.
 
 No product/arch forks — no grill. `SKILL.md` churn still uncommitted.
+
+### Stage 5 (2026-09-21)
+
+`import --from-db` + `conflicts` + `conflict accept` (005 Round 7). New TU
+`cmd_import.c` (wired in `REMEMBER_LIB_SOURCES` + `-Wcast-qual`). Store port:
+`store_import` / `store_conflicts_list` / `store_conflict_accept` in the
+adapter only — foreign DB opened `SQLITE_OPEN_READONLY` (never `store_open`);
+refuse `user_version` < 4; never touch foreign sidecar; never INSERT foreign
+`devices` (COUNT stays 1). Merge by `sync_id` with VV compare (missing key = 0):
+incoming dominates → apply + pairwise-max then bump local; local dominates /
+identical content (body+tags+key+delete state) → pairwise-max only;
+concurrent different → `conflicts` reason `concurrent_vv`. Unique key/hash
+clash (any bin) → `key_clash`/`hash_clash` row, never SQLITE constraint error.
+Link remap after entries via sync_id (`INSERT OR IGNORE`; skip missing ends).
+`VV_OUT_MAX` raised 256 → 4096 for foreign VV keys in pairwise-max.
+
+Accept: `--keep local|incoming|both`; `both`+`concurrent_vv` remints incoming
+sync_id with `{local:1}` (keyless when local still holds the key);
+`both`+clash keeps incoming sync_id keyless if needed. Closed reason enum.
+JSON: `action:imported` counts envelope; conflicts list; `action:accepted`
+entries. Suite `sync_import` (28 tests: re-import upsert + hash demote
+refuse). Gate: step_gate green, lint OK, coverage 100% fn + effective
+lines. Skill/help still stage 6; `SKILL.md` left alone this stage.
+
+**In-session deep-review auto-fix:** `conflict accept --keep incoming` on
+`concurrent_vv` demotes another unique occupant before apply (was raw SQLITE
+`database error`). Reason tokens unified via `store_conflict_reason_str`.
+
+**Grill locked (2026-09-22):**
+1. `decision:sync-import-reimport-idempotent` — concurrent insert pairwise-maxes
+   local VV; open conflict by `(sync_id, reason)` is upserted (refresh
+   snapshots), never duplicated on re-import.
+2. `decision:sync-import-hash-demote` — on keyed clash keep local / demote
+   imported (incoming keyless until accept). Never mint `key=sync_id`. Both
+   keyless / hash slot contested → `STORE_ERR_UNIQUE_TAKEN` clear ASCII
+   (`cannot free unique key or body hash without inventing a key`).
+
+### 2026-09-22 — Claude second-opinion deep review (stage 5)
+
+Independent pass on `import --from-db` + `conflicts` + `conflict accept`.
+Loaded both new decision keys before reviewing. Verified by running: ctest 4/4
+(ASan/UBSan), coverage functions 100% + effective lines 100%, `-Weverything
+-Werror` clean, lint OK. **Clean pass — no auto-fix, no grill** (both grill
+locks were pre-applied and implemented exactly).
+
+Confirmed against 005 Round 7 + the two new decisions:
+- `store_import` opens the source `SQLITE_OPEN_READONLY` (never `store_open`),
+  refuses `user_version < 4` (`SOURCE_TOO_OLD` → "source database is older than
+  this remember", exit 1), never touches the foreign sidecar, never INSERTs
+  foreign `devices` (COUNT stays 1), rolls back + closes src on any failure.
+- `vv_compare` is a correct VV comparison (missing key = 0; dominates iff all ≥
+  and one >). Incoming-dominates → unique-check-before-apply (clash → conflict
+  row, not raw SQLITE), apply fields, `vv_union_bump`. Local-dominates or
+  concurrent+identical (body+tags+key+delete-state, excl. expires_at/source) →
+  pairwise-max VV only, unchanged.
+- **Reimport idempotent:** `record_concurrent_vv` pairwise-maxes local VV (so a
+  re-import makes local dominate) AND upserts the open `(sync_id, reason)`
+  conflict (`find_open_conflict` → update vs insert). Double-guarded. Test
+  `cli_import_concurrent_reimport_idempotent`.
+- **Hash-demote:** `insert_snapshot_row` demotes the incoming copy on a keyed
+  clash (keyless), and on a keyless hash clash with no free slot returns
+  `STORE_ERR_UNIQUE_TAKEN` — never `key=sync_id`. Tests
+  `..._both_refuse_fake_key`, `..._demote_hash_escape_refuses`.
+- Accept local/incoming/both: unions incoming VV into survivors; `both`+
+  `concurrent_vv` remints incoming `{local:1}`, `both`+clash keeps incoming
+  sync_id keyless if needed. Closed `reason` enum (bad reason on disk → error).
+- Link remap after entries via sync_id, `INSERT OR IGNORE`, skips edges whose
+  ends aren't both present locally. `VV_OUT_MAX` raised 256 → 4096 (resolves the
+  stage-4 forward note about foreign-key VV growth).
+- JSON envelopes (`imported` counts / `conflicts` list / `accepted`), exit 0
+  even with conflicts. `sync_import` suite (28 tests) covers every rule + both
+  decisions + fail-fast (bad VV, bad reason).
+
+**Note (stage 6):** `import`/`conflicts`/`conflict` are not yet in the facade
+byte-match test (`test_facade.c`) — they use `app_out()`/`app_err()` so they
+are facade-safe by construction, but the must-pass "facade byte-match for
+new/changed commands" needs their cases added in stage 6 (facade parity).
+`SKILL.md` project-status churn still uncommitted.

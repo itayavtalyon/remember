@@ -1,5 +1,6 @@
 #include "store.h"
 
+#include "normalize.h"
 #include "sqlite3.h"
 
 #include <ctype.h>
@@ -292,7 +293,7 @@ enum {
     SIDECAR_FILE_MODE = 0600,
     SIDECAR_PATH_PAD = 16,
     VV_JSON_BUFLEN = 80,
-    VV_OUT_MAX = 256,
+    VV_OUT_MAX = 4096,   /* import may merge many foreign device keys */
     VV_JSON_MIN_OUT = 8, /* shortest compact object we emit: {"d":1} */
     VV_INT_BASE = 10,
     VV_NEEDLE_LEN = UUID_STR_LEN + 4 /* "\"<uuid>\":" */
@@ -1101,6 +1102,10 @@ const char *store_status_message(StoreStatus st)
         return "self-link";
     case STORE_ERR_CYCLE:
         return "supersedes cycle";
+    case STORE_ERR_SOURCE_TOO_OLD:
+        return "source database is older than this remember";
+    case STORE_ERR_UNIQUE_TAKEN:
+        return "cannot free unique key or body hash without inventing a key";
     default:
         return "store error";
     }
@@ -4336,4 +4341,2167 @@ StoreStatus store_rekey(Store *s, long long id, RekeyKeys keys, StoreBin bin, co
         return STORE_ERR_SQLITE;
     }
     return load_entry_by_id(s->db, entry_id, out_entry);
+}
+
+/* ---- sync import / conflicts (plan 14 stage 5, 005 Round 7) ------------- */
+
+typedef struct {
+    char *device_id;
+    unsigned long long clock;
+} VvPair;
+
+static void free_tag_list(char **tags, size_t n)
+{
+    size_t i = 0;
+
+    if (tags == NULL) {
+        return;
+    }
+    for (i = 0; i < n; i++) {
+        free(tags[i]);
+    }
+    free((void *)tags);
+}
+
+static void vv_pairs_free(VvPair *pairs, size_t n)
+{
+    size_t i = 0;
+
+    if (pairs == NULL) {
+        return;
+    }
+    for (i = 0; i < n; i++) {
+        free(pairs[i].device_id);
+    }
+    free(pairs);
+}
+
+/* Parse compact VV object via JSON1 into heap pairs. Empty {} → n=0. */
+static StoreStatus vv_parse_pairs(sqlite3 *db, const char *vv_json, VvPair **out, size_t *out_n)
+{
+    sqlite3_stmt *stmt = NULL;
+    VvPair *pairs = NULL;
+    size_t n = 0U;
+    size_t cap = 0U;
+    int rc = 0;
+
+    *out = NULL;
+    *out_n = 0U;
+    if (vv_json == NULL || vv_json[0] != '{') {
+        return STORE_ERR_INTERNAL;
+    }
+    rc = sqlite3_prepare_v2(db, "SELECT key, CAST(value AS INTEGER) FROM json_each(?1);", -1, &stmt,
+                            NULL);
+    if (rc != SQLITE_OK) {
+        return STORE_ERR_SQLITE;
+    }
+    (void)sqlite3_bind_text(stmt, 1, vv_json, -1, SQLITE_STATIC);
+    while ((rc = sqlite3_step(stmt)) == SQLITE_ROW) {
+        const char *key = (const char *)sqlite3_column_text(stmt, 0);
+        char *copy = NULL;
+        VvPair *grown = NULL;
+
+        if (key == NULL || key[0] == '\0') {
+            continue;
+        }
+        copy = dup_str(key);
+        if (copy == NULL) {
+            vv_pairs_free(pairs, n);
+            (void)sqlite3_finalize(stmt);
+            return STORE_ERR_OOM;
+        }
+        if (n == cap) {
+            size_t ncap = (cap == 0U) ? (size_t)GROW_MIN_CAP : cap * 2U;
+            grown = (VvPair *)realloc(pairs, ncap * sizeof(*pairs));
+            if (grown == NULL) {
+                free(copy);
+                vv_pairs_free(pairs, n);
+                (void)sqlite3_finalize(stmt);
+                return STORE_ERR_OOM;
+            }
+            pairs = grown;
+            cap = ncap;
+        }
+        pairs[n].device_id = copy;
+        pairs[n].clock = (unsigned long long)sqlite3_column_int64(stmt, 1);
+        n++;
+    }
+    (void)sqlite3_finalize(stmt);
+    if (rc != SQLITE_DONE) {
+        vv_pairs_free(pairs, n);
+        return STORE_ERR_SQLITE;
+    }
+    *out = pairs;
+    *out_n = n;
+    return STORE_OK;
+}
+
+static unsigned long long vv_clock_of(const VvPair *pairs, size_t n, const char *device_id)
+{
+    size_t i = 0;
+
+    for (i = 0; i < n; i++) {
+        if (strcmp(pairs[i].device_id, device_id) == 0) {
+            return pairs[i].clock;
+        }
+    }
+    return 0ULL;
+}
+
+/*
+ * -1 local dominates, 1 incoming dominates, 0 concurrent or equal.
+ * Missing device key = 0. Dominates iff every counter >= and at least one >.
+ */
+static StoreStatus vv_compare(sqlite3 *db, const char *local_vv, const char *incoming_vv, int *out)
+{
+    VvPair *loc = NULL;
+    VvPair *inc = NULL;
+    size_t nloc = 0U;
+    size_t ninc = 0U;
+    size_t i = 0;
+    int any_loc_gt = 0;
+    int any_inc_gt = 0;
+    StoreStatus st = STORE_OK;
+
+    if (out == NULL) {
+        return STORE_ERR_INTERNAL;
+    }
+    *out = 0;
+    st = vv_parse_pairs(db, local_vv, &loc, &nloc);
+    if (st != STORE_OK) {
+        return st;
+    }
+    st = vv_parse_pairs(db, incoming_vv, &inc, &ninc);
+    if (st != STORE_OK) {
+        vv_pairs_free(loc, nloc);
+        return st;
+    }
+    for (i = 0; i < nloc; i++) {
+        unsigned long long a = loc[i].clock;
+        unsigned long long b = vv_clock_of(inc, ninc, loc[i].device_id);
+
+        if (a > b) {
+            any_loc_gt = 1;
+        } else if (a < b) {
+            any_inc_gt = 1;
+        }
+    }
+    for (i = 0; i < ninc; i++) {
+        unsigned long long b = inc[i].clock;
+        unsigned long long a = vv_clock_of(loc, nloc, inc[i].device_id);
+
+        if (b > a) {
+            any_inc_gt = 1;
+        } else if (b < a) {
+            any_loc_gt = 1;
+        }
+    }
+    vv_pairs_free(loc, nloc);
+    vv_pairs_free(inc, ninc);
+    if (any_inc_gt && !any_loc_gt) {
+        *out = 1;
+    } else if (any_loc_gt && !any_inc_gt) {
+        *out = -1;
+    } else {
+        *out = 0;
+    }
+    return STORE_OK;
+}
+
+static int vv_device_in_pairs(const VvPair *pairs, size_t count, const char *device_id)
+{
+    size_t i = 0;
+
+    for (i = 0; i < count; i++) {
+        if (strcmp(pairs[i].device_id, device_id) == 0) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+static int vv_append_field(char *out, size_t outlen, size_t *pos, int *first, const char *device_id,
+                           unsigned long long clock)
+{
+    int written = 0;
+
+    written =
+        snprintf(out + *pos, outlen - *pos, "%s\"%s\":%llu", *first ? "" : ",", device_id, clock);
+    if (written < 0 || (size_t)written >= outlen - *pos) {
+        return -1;
+    }
+    *pos += (size_t)written;
+    *first = 0;
+    return 0;
+}
+
+/* Pairwise max of two VVs into out[outlen]. Compact JSON, no spaces. */
+static StoreStatus vv_pairwise_max(sqlite3 *db, const char *a_vv, const char *b_vv, char *out,
+                                   size_t outlen)
+{
+    VvPair *pairs_a = NULL;
+    VvPair *pairs_b = NULL;
+    size_t count_a = 0U;
+    size_t count_b = 0U;
+    size_t i = 0;
+    size_t pos = 0U;
+    int first = 1;
+    StoreStatus st = STORE_OK;
+
+    if (out == NULL || outlen < (size_t)VV_JSON_MIN_OUT) {
+        return STORE_ERR_INTERNAL;
+    }
+    st = vv_parse_pairs(db, a_vv, &pairs_a, &count_a);
+    if (st != STORE_OK) {
+        return st;
+    }
+    st = vv_parse_pairs(db, b_vv, &pairs_b, &count_b);
+    if (st != STORE_OK) {
+        vv_pairs_free(pairs_a, count_a);
+        return st;
+    }
+    out[0] = '{';
+    pos = 1U;
+    for (i = 0; i < count_a; i++) {
+        unsigned long long clock_a = pairs_a[i].clock;
+        unsigned long long clock_b = vv_clock_of(pairs_b, count_b, pairs_a[i].device_id);
+        unsigned long long merged = (clock_a > clock_b) ? clock_a : clock_b;
+
+        if (vv_append_field(out, outlen, &pos, &first, pairs_a[i].device_id, merged) != 0) {
+            vv_pairs_free(pairs_a, count_a);
+            vv_pairs_free(pairs_b, count_b);
+            return STORE_ERR_INTERNAL;
+        }
+    }
+    for (i = 0; i < count_b; i++) {
+        /* Skip if already emitted from a's loop, including a-device with clock 0. */
+        if (vv_device_in_pairs(pairs_a, count_a, pairs_b[i].device_id)) {
+            continue;
+        }
+        if (vv_append_field(out, outlen, &pos, &first, pairs_b[i].device_id, pairs_b[i].clock) !=
+            0) {
+            vv_pairs_free(pairs_a, count_a);
+            vv_pairs_free(pairs_b, count_b);
+            return STORE_ERR_INTERNAL;
+        }
+    }
+    vv_pairs_free(pairs_a, count_a);
+    vv_pairs_free(pairs_b, count_b);
+    if (pos + 1U >= outlen) {
+        return STORE_ERR_INTERNAL;
+    }
+    out[pos] = '}';
+    out[pos + 1U] = '\0';
+    return STORE_OK;
+}
+
+static StoreStatus write_version_vector(sqlite3 *db, long long id, const char *vv_json)
+{
+    sqlite3_stmt *stmt = NULL;
+    int rc = 0;
+
+    rc = sqlite3_prepare_v2(db, "UPDATE entries SET version_vector = ?1 WHERE id = ?2;", -1, &stmt,
+                            NULL);
+    if (rc != SQLITE_OK) {
+        return STORE_ERR_SQLITE;
+    }
+    (void)sqlite3_bind_text(stmt, 1, vv_json, -1, SQLITE_TRANSIENT);
+    (void)sqlite3_bind_int64(stmt, 2, id);
+    if (sqlite3_step(stmt) != SQLITE_DONE) {
+        (void)sqlite3_finalize(stmt);
+        return STORE_ERR_SQLITE;
+    }
+    (void)sqlite3_finalize(stmt);
+    return STORE_OK;
+}
+
+/* Union a and b then bump local device; write VV (+ optional updated_at). */
+// NOLINTBEGIN(bugprone-easily-swappable-parameters)
+static StoreStatus vv_union_bump(sqlite3 *db, long long id, const char *a_vv, const char *b_vv,
+                                 const char *device_id, const char *now_or_null)
+// NOLINTEND(bugprone-easily-swappable-parameters)
+{
+    char maxed[VV_OUT_MAX];
+    char bumped[VV_OUT_MAX];
+    StoreStatus st = STORE_OK;
+
+    st = vv_pairwise_max(db, a_vv, b_vv, maxed, sizeof(maxed));
+    if (st != STORE_OK) {
+        return st;
+    }
+    if (vv_increment(maxed, device_id, bumped, sizeof(bumped)) != 0) {
+        return STORE_ERR_INTERNAL;
+    }
+    st = write_version_vector(db, id, bumped);
+    if (st != STORE_OK) {
+        return st;
+    }
+    if (now_or_null != NULL) {
+        return touch_updated_at(db, id, now_or_null);
+    }
+    return STORE_OK;
+}
+
+enum { ASCII_C0_MAX = 0x20 }; /* first printable ASCII */
+
+static int json_putc_escape(FILE *fp, unsigned char c)
+{
+    switch (c) {
+    case '"':
+        return fputs("\\\"", fp);
+    case '\\':
+        return fputs("\\\\", fp);
+    case '\b':
+        return fputs("\\b", fp);
+    case '\f':
+        return fputs("\\f", fp);
+    case '\n':
+        return fputs("\\n", fp);
+    case '\r':
+        return fputs("\\r", fp);
+    case '\t':
+        return fputs("\\t", fp);
+    default:
+        if (c < (unsigned char)ASCII_C0_MAX) {
+            return fprintf(fp, "\\u%04x", (unsigned)c);
+        }
+        return fputc((int)c, fp);
+    }
+}
+
+static int json_write_string(FILE *fp, const char *s)
+{
+    static const char k_empty[] = "";
+    const unsigned char *p = NULL;
+    const char *text = (s != NULL) ? s : k_empty;
+
+    if (fputc('"', fp) == EOF) {
+        return -1;
+    }
+    for (p = (const unsigned char *)text; *p != '\0'; p++) {
+        if (json_putc_escape(fp, *p) < 0) {
+            return -1;
+        }
+    }
+    return (fputc('"', fp) == EOF) ? -1 : 0;
+}
+
+// NOLINTBEGIN(bugprone-easily-swappable-parameters)
+static int json_write_nullable(FILE *fp, const char *name, const char *value)
+// NOLINTEND(bugprone-easily-swappable-parameters)
+{
+    if (fprintf(fp, ",\"%s\":", name) < 0) {
+        return -1;
+    }
+    if (value == NULL) {
+        return fputs("null", fp) < 0 ? -1 : 0;
+    }
+    return json_write_string(fp, value);
+}
+
+static const char *bin_token_store(StoreBin bin)
+{
+    switch (bin) {
+    case STORE_BIN_LIVE:
+        return "live";
+    case STORE_BIN_EXPIRED:
+        return "expired";
+    case STORE_BIN_DELETED:
+        return "deleted";
+    default:
+        return NULL;
+    }
+}
+
+/* Entry-like JSON without links (005 field order). Caller frees *out. */
+static StoreStatus entry_snapshot_json(const Entry *e, const char *now, char **out)
+{
+    FILE *fp = NULL;
+    char *buf = NULL;
+    size_t buflen = 0U;
+    const char *bin = NULL;
+    size_t i = 0;
+
+    *out = NULL;
+    if (e == NULL || now == NULL || e->sync_id == NULL || e->version_vector == NULL ||
+        e->version_vector[0] != '{') {
+        return STORE_ERR_INTERNAL;
+    }
+    bin = bin_token_store(store_bin_of(e->deleted_at, e->expires_at, now));
+    if (bin == NULL) {
+        return STORE_ERR_INTERNAL;
+    }
+    fp = open_memstream(&buf, &buflen);
+    if (fp == NULL) {
+        return STORE_ERR_OOM;
+    }
+    if (fprintf(fp, "{\"id\":%lld,\"sync_id\":", e->id) < 0 ||
+        json_write_string(fp, e->sync_id) != 0 || json_write_nullable(fp, "key", e->key) != 0 ||
+        fprintf(fp, ",\"body\":") < 0 || json_write_string(fp, e->body) != 0 ||
+        fputs(",\"tags\":[", fp) < 0) {
+        (void)fclose(fp);
+        free(buf);
+        return STORE_ERR_OOM;
+    }
+    for (i = 0; i < e->ntags; i++) {
+        if (i > 0U && fputc(',', fp) == EOF) {
+            (void)fclose(fp);
+            free(buf);
+            return STORE_ERR_OOM;
+        }
+        if (json_write_string(fp, e->tags[i]) != 0) {
+            (void)fclose(fp);
+            free(buf);
+            return STORE_ERR_OOM;
+        }
+    }
+    if (fputs("]", fp) < 0 || fprintf(fp, ",\"source\":") < 0 ||
+        json_write_string(fp, e->source != NULL ? e->source : "unknown") != 0 ||
+        fprintf(fp, ",\"created_at\":") < 0 || json_write_string(fp, e->created_at) != 0 ||
+        fprintf(fp, ",\"updated_at\":") < 0 || json_write_string(fp, e->updated_at) != 0 ||
+        json_write_nullable(fp, "expires_at", e->expires_at) != 0 ||
+        json_write_nullable(fp, "deleted_at", e->deleted_at) != 0 || fprintf(fp, ",\"bin\":") < 0 ||
+        json_write_string(fp, bin) != 0 ||
+        fprintf(fp, ",\"version_vector\":%s}", e->version_vector) < 0) {
+        (void)fclose(fp);
+        free(buf);
+        return STORE_ERR_OOM;
+    }
+    if (fclose(fp) != 0) {
+        free(buf);
+        return STORE_ERR_OOM;
+    }
+    *out = buf;
+    return STORE_OK;
+}
+
+const char *store_conflict_reason_str(StoreConflictReason reason)
+{
+    switch (reason) {
+    case STORE_CONFLICT_CONCURRENT_VV:
+        return "concurrent_vv";
+    case STORE_CONFLICT_KEY_CLASH:
+        return "key_clash";
+    case STORE_CONFLICT_HASH_CLASH:
+        return "hash_clash";
+    default:
+        return NULL;
+    }
+}
+
+static StoreStatus conflict_reason_parse(const char *s, StoreConflictReason *out)
+{
+    if (s == NULL || out == NULL) {
+        return STORE_ERR_INTERNAL;
+    }
+    if (strcmp(s, "concurrent_vv") == 0) {
+        *out = STORE_CONFLICT_CONCURRENT_VV;
+        return STORE_OK;
+    }
+    if (strcmp(s, "key_clash") == 0) {
+        *out = STORE_CONFLICT_KEY_CLASH;
+        return STORE_OK;
+    }
+    if (strcmp(s, "hash_clash") == 0) {
+        *out = STORE_CONFLICT_HASH_CLASH;
+        return STORE_OK;
+    }
+    return STORE_ERR_INTERNAL;
+}
+
+static StoreStatus insert_conflict(sqlite3 *db, const char *sync_id, StoreConflictReason reason,
+                                   const char *local_json, const char *incoming_json,
+                                   const char *now)
+{
+    enum { BIND_SYNC = 1, BIND_REASON = 2, BIND_LOCAL = 3, BIND_INCOMING = 4, BIND_CREATED = 5 };
+    sqlite3_stmt *stmt = NULL;
+    const char *r = store_conflict_reason_str(reason);
+    int rc = 0;
+
+    if (r == NULL || sync_id == NULL || local_json == NULL || incoming_json == NULL ||
+        now == NULL) {
+        return STORE_ERR_INTERNAL;
+    }
+    rc = sqlite3_prepare_v2(db,
+                            "INSERT INTO conflicts(sync_id, reason, local_json, incoming_json, "
+                            "created_at) VALUES (?1, ?2, ?3, ?4, ?5);",
+                            -1, &stmt, NULL);
+    if (rc != SQLITE_OK) {
+        return STORE_ERR_SQLITE;
+    }
+    (void)sqlite3_bind_text(stmt, BIND_SYNC, sync_id, -1, SQLITE_STATIC);
+    (void)sqlite3_bind_text(stmt, BIND_REASON, r, -1, SQLITE_STATIC);
+    (void)sqlite3_bind_text(stmt, BIND_LOCAL, local_json, -1, SQLITE_STATIC);
+    (void)sqlite3_bind_text(stmt, BIND_INCOMING, incoming_json, -1, SQLITE_STATIC);
+    (void)sqlite3_bind_text(stmt, BIND_CREATED, now, -1, SQLITE_STATIC);
+    if (sqlite3_step(stmt) != SQLITE_DONE) {
+        (void)sqlite3_finalize(stmt);
+        return STORE_ERR_SQLITE;
+    }
+    (void)sqlite3_finalize(stmt);
+    return STORE_OK;
+}
+
+/* Refresh snapshots on an existing open conflict (same sync_id + reason). */
+static StoreStatus update_conflict_snapshots(sqlite3 *db, long long id, const char *local_json,
+                                             const char *incoming_json)
+{
+    sqlite3_stmt *stmt = NULL;
+    int rc = 0;
+
+    rc = sqlite3_prepare_v2(
+        db, "UPDATE conflicts SET local_json = ?1, incoming_json = ?2 WHERE id = ?3;", -1, &stmt,
+        NULL);
+    if (rc != SQLITE_OK) {
+        return STORE_ERR_SQLITE;
+    }
+    (void)sqlite3_bind_text(stmt, 1, local_json, -1, SQLITE_STATIC);
+    (void)sqlite3_bind_text(stmt, 2, incoming_json, -1, SQLITE_STATIC);
+    (void)sqlite3_bind_int64(stmt, 3, id);
+    if (sqlite3_step(stmt) != SQLITE_DONE) {
+        (void)sqlite3_finalize(stmt);
+        return STORE_ERR_SQLITE;
+    }
+    (void)sqlite3_finalize(stmt);
+    return STORE_OK;
+}
+
+/* Find open conflict by sync_id + reason. NOT_FOUND if none. */
+static StoreStatus find_open_conflict(sqlite3 *db, const char *sync_id, StoreConflictReason reason,
+                                      long long *out_id)
+{
+    sqlite3_stmt *stmt = NULL;
+    const char *r = store_conflict_reason_str(reason);
+    int rc = 0;
+
+    if (r == NULL || sync_id == NULL || out_id == NULL) {
+        return STORE_ERR_INTERNAL;
+    }
+    *out_id = 0;
+    rc = sqlite3_prepare_v2(db,
+                            "SELECT id FROM conflicts WHERE sync_id = ?1 AND reason = ?2 "
+                            "ORDER BY id ASC LIMIT 1;",
+                            -1, &stmt, NULL);
+    if (rc != SQLITE_OK) {
+        return STORE_ERR_SQLITE;
+    }
+    (void)sqlite3_bind_text(stmt, 1, sync_id, -1, SQLITE_STATIC);
+    (void)sqlite3_bind_text(stmt, 2, r, -1, SQLITE_STATIC);
+    rc = sqlite3_step(stmt);
+    if (rc == SQLITE_DONE) {
+        (void)sqlite3_finalize(stmt);
+        return STORE_ERR_NOT_FOUND;
+    }
+    if (rc != SQLITE_ROW) {
+        (void)sqlite3_finalize(stmt);
+        return STORE_ERR_SQLITE;
+    }
+    *out_id = sqlite3_column_int64(stmt, 0);
+    (void)sqlite3_finalize(stmt);
+    return STORE_OK;
+}
+
+/*
+ * Record or refresh a concurrent_vv conflict after pairwise-maxing local VV
+ * (decision:sync-import-reimport-idempotent — re-import must not add another row).
+ * *out_new_conflict is 1 only when a new conflicts row was inserted.
+ */
+// NOLINTBEGIN(bugprone-easily-swappable-parameters)
+static StoreStatus record_concurrent_vv(sqlite3 *db, const Entry *local, const Entry *incoming_view,
+                                        const char *incoming_vv, const char *now,
+                                        int *out_new_conflict)
+// NOLINTEND(bugprone-easily-swappable-parameters)
+{
+    char maxed[VV_OUT_MAX];
+    char *local_json = NULL;
+    char *incoming_json = NULL;
+    long long existing = 0;
+    StoreStatus st = STORE_OK;
+    Entry refreshed;
+
+    if (out_new_conflict != NULL) {
+        *out_new_conflict = 0;
+    }
+    st = vv_pairwise_max(db, local->version_vector, incoming_vv, maxed, sizeof(maxed));
+    if (st != STORE_OK) {
+        return st;
+    }
+    st = write_version_vector(db, local->id, maxed);
+    if (st != STORE_OK) {
+        return st;
+    }
+
+    memset(&refreshed, 0, sizeof(refreshed));
+    st = load_entry_by_id(db, local->id, &refreshed);
+    if (st != STORE_OK) {
+        return st;
+    }
+    st = entry_snapshot_json(&refreshed, now, &local_json);
+    store_entry_free(&refreshed);
+    if (st != STORE_OK) {
+        return st;
+    }
+    st = entry_snapshot_json(incoming_view, now, &incoming_json);
+    if (st != STORE_OK) {
+        free(local_json);
+        return st;
+    }
+
+    st = find_open_conflict(db, local->sync_id, STORE_CONFLICT_CONCURRENT_VV, &existing);
+    if (st == STORE_OK) {
+        st = update_conflict_snapshots(db, existing, local_json, incoming_json);
+        free(local_json);
+        free(incoming_json);
+        return st;
+    }
+    if (st != STORE_ERR_NOT_FOUND) {
+        free(local_json);
+        free(incoming_json);
+        return st;
+    }
+    st = insert_conflict(db, local->sync_id, STORE_CONFLICT_CONCURRENT_VV, local_json,
+                         incoming_json, now);
+    free(local_json);
+    free(incoming_json);
+    if (st == STORE_OK && out_new_conflict != NULL) {
+        *out_new_conflict = 1;
+    }
+    return st;
+}
+
+static StoreStatus delete_conflict_row(sqlite3 *db, long long id)
+{
+    sqlite3_stmt *stmt = NULL;
+    int rc = 0;
+
+    rc = sqlite3_prepare_v2(db, "DELETE FROM conflicts WHERE id = ?1;", -1, &stmt, NULL);
+    if (rc != SQLITE_OK) {
+        return STORE_ERR_SQLITE;
+    }
+    (void)sqlite3_bind_int64(stmt, 1, id);
+    if (sqlite3_step(stmt) != SQLITE_DONE) {
+        (void)sqlite3_finalize(stmt);
+        return STORE_ERR_SQLITE;
+    }
+    (void)sqlite3_finalize(stmt);
+    return STORE_OK;
+}
+
+/* Insert preserving sync_id / VV / timestamps / deleted_at (no mint, no bump). */
+static StoreStatus insert_entry_imported(sqlite3 *db, const char *key_or_null, const char *body,
+                                         const char *body_hash, const char *source,
+                                         const char *created_at, const char *updated_at,
+                                         const char *expires_at, const char *sync_id,
+                                         const char *deleted_at, const char *vv_json,
+                                         long long *out_id)
+{
+    enum {
+        BIND_KEY = 1,
+        BIND_BODY = 2,
+        BIND_BODY_HASH = 3,
+        BIND_SOURCE = 4,
+        BIND_CREATED_AT = 5,
+        BIND_UPDATED_AT = 6,
+        BIND_EXPIRES_AT = 7,
+        BIND_SYNC_ID = 8,
+        BIND_DELETED_AT = 9,
+        BIND_VV = 10
+    };
+    sqlite3_stmt *stmt = NULL;
+    int rc = 0;
+
+    if (body == NULL || body_hash == NULL || source == NULL || created_at == NULL ||
+        updated_at == NULL || sync_id == NULL || vv_json == NULL || out_id == NULL) {
+        return STORE_ERR_INTERNAL;
+    }
+    rc = sqlite3_prepare_v2(db,
+                            "INSERT INTO entries(key, body, body_hash, source, created_at, "
+                            "updated_at, expires_at, sync_id, deleted_at, version_vector) "
+                            "VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10);",
+                            -1, &stmt, NULL);
+    if (rc != SQLITE_OK) {
+        return STORE_ERR_SQLITE;
+    }
+    if (key_or_null == NULL) {
+        (void)sqlite3_bind_null(stmt, BIND_KEY);
+    } else {
+        (void)sqlite3_bind_text(stmt, BIND_KEY, key_or_null, -1, SQLITE_STATIC);
+    }
+    (void)sqlite3_bind_text(stmt, BIND_BODY, body, -1, SQLITE_STATIC);
+    (void)sqlite3_bind_text(stmt, BIND_BODY_HASH, body_hash, -1, SQLITE_STATIC);
+    (void)sqlite3_bind_text(stmt, BIND_SOURCE, source, -1, SQLITE_STATIC);
+    (void)sqlite3_bind_text(stmt, BIND_CREATED_AT, created_at, -1, SQLITE_STATIC);
+    (void)sqlite3_bind_text(stmt, BIND_UPDATED_AT, updated_at, -1, SQLITE_STATIC);
+    if (expires_at == NULL) {
+        (void)sqlite3_bind_null(stmt, BIND_EXPIRES_AT);
+    } else {
+        (void)sqlite3_bind_text(stmt, BIND_EXPIRES_AT, expires_at, -1, SQLITE_STATIC);
+    }
+    (void)sqlite3_bind_text(stmt, BIND_SYNC_ID, sync_id, -1, SQLITE_STATIC);
+    if (deleted_at == NULL) {
+        (void)sqlite3_bind_null(stmt, BIND_DELETED_AT);
+    } else {
+        (void)sqlite3_bind_text(stmt, BIND_DELETED_AT, deleted_at, -1, SQLITE_STATIC);
+    }
+    (void)sqlite3_bind_text(stmt, BIND_VV, vv_json, -1, SQLITE_STATIC);
+    if (sqlite3_step(stmt) != SQLITE_DONE) {
+        (void)sqlite3_finalize(stmt);
+        return STORE_ERR_SQLITE;
+    }
+    *out_id = sqlite3_last_insert_rowid(db);
+    (void)sqlite3_finalize(stmt);
+    return STORE_OK;
+}
+
+static int keys_equal(const char *a, const char *b)
+{
+    if (a == NULL && b == NULL) {
+        return 1;
+    }
+    if (a == NULL || b == NULL) {
+        return 0;
+    }
+    return strcmp(a, b) == 0;
+}
+
+static int delete_state_equal(const char *a, const char *b)
+{
+    return (a == NULL) == (b == NULL);
+}
+
+static int tags_equal(char *const *a, size_t count_a, char *const *b, size_t count_b)
+{
+    size_t i = 0;
+
+    if (count_a != count_b) {
+        return 0;
+    }
+    for (i = 0; i < count_a; i++) {
+        if (a[i] == NULL || b[i] == NULL || strcmp(a[i], b[i]) != 0) {
+            return 0;
+        }
+    }
+    return 1;
+}
+
+/* Identical content = body+tags+key+delete state (not expires/source/links). */
+// NOLINTBEGIN(bugprone-easily-swappable-parameters)
+static int content_identical(const Entry *local, const char *body, const char *key,
+                             const char *deleted_at, char *const *tags, size_t ntags)
+// NOLINTEND(bugprone-easily-swappable-parameters)
+{
+    if (local == NULL || body == NULL || local->body == NULL) {
+        return 0;
+    }
+    if (strcmp(local->body, body) != 0) {
+        return 0;
+    }
+    if (!keys_equal(local->key, key)) {
+        return 0;
+    }
+    if (!delete_state_equal(local->deleted_at, deleted_at)) {
+        return 0;
+    }
+    return tags_equal(local->tags, local->ntags, tags, ntags);
+}
+
+/* True if key is taken by a row whose sync_id != except_sync_id (NULL = any). */
+// NOLINTBEGIN(bugprone-easily-swappable-parameters)
+static StoreStatus key_taken_by_other(sqlite3 *db, const char *key, const char *except_sync_id,
+                                      long long *out_id, int *taken)
+// NOLINTEND(bugprone-easily-swappable-parameters)
+{
+    long long id = 0;
+    StoreStatus st = STORE_OK;
+    Entry e;
+
+    *taken = 0;
+    if (out_id != NULL) {
+        *out_id = 0;
+    }
+    if (key == NULL) {
+        return STORE_OK;
+    }
+    st = find_id_by_key(db, key, &id);
+    if (st == STORE_ERR_NOT_FOUND) {
+        return STORE_OK;
+    }
+    if (st != STORE_OK) {
+        return st;
+    }
+    memset(&e, 0, sizeof(e));
+    st = load_entry_by_id(db, id, &e);
+    if (st != STORE_OK) {
+        return st;
+    }
+    if (except_sync_id != NULL && e.sync_id != NULL && strcmp(e.sync_id, except_sync_id) == 0) {
+        store_entry_free(&e);
+        return STORE_OK;
+    }
+    store_entry_free(&e);
+    *taken = 1;
+    if (out_id != NULL) {
+        *out_id = id;
+    }
+    return STORE_OK;
+}
+
+// NOLINTBEGIN(bugprone-easily-swappable-parameters)
+static StoreStatus hash_taken_by_other(sqlite3 *db, const char *body_hash,
+                                       const char *except_sync_id, long long *out_id, int *taken)
+// NOLINTEND(bugprone-easily-swappable-parameters)
+{
+    long long id = 0;
+    StoreStatus st = STORE_OK;
+    Entry e;
+
+    *taken = 0;
+    if (out_id != NULL) {
+        *out_id = 0;
+    }
+    if (body_hash == NULL) {
+        return STORE_OK;
+    }
+    st = find_keyless_by_hash(db, body_hash, &id);
+    if (st == STORE_ERR_NOT_FOUND) {
+        return STORE_OK;
+    }
+    if (st != STORE_OK) {
+        return st;
+    }
+    memset(&e, 0, sizeof(e));
+    st = load_entry_by_id(db, id, &e);
+    if (st != STORE_OK) {
+        return st;
+    }
+    if (except_sync_id != NULL && e.sync_id != NULL && strcmp(e.sync_id, except_sync_id) == 0) {
+        store_entry_free(&e);
+        return STORE_OK;
+    }
+    store_entry_free(&e);
+    *taken = 1;
+    if (out_id != NULL) {
+        *out_id = id;
+    }
+    return STORE_OK;
+}
+
+// NOLINTBEGIN(bugprone-easily-swappable-parameters)
+static StoreStatus apply_incoming_fields(sqlite3 *db, long long id, const char *key_or_null,
+                                         const char *body, const char *body_hash,
+                                         const char *source, const char *expires_at,
+                                         const char *deleted_at, const char *now, char *const *tags,
+                                         size_t ntags)
+// NOLINTEND(bugprone-easily-swappable-parameters)
+{
+    enum {
+        BIND_KEY = 1,
+        BIND_BODY = 2,
+        BIND_BODY_HASH = 3,
+        BIND_EXPIRES_AT = 4,
+        BIND_DELETED_AT = 5,
+        BIND_UPDATED_AT = 6,
+        BIND_ID = 7
+    };
+    sqlite3_stmt *stmt = NULL;
+    StoreStatus st = STORE_OK;
+    int rc = 0;
+
+    (void)source; /* Round 7 apply list omits source; leave local source. */
+    rc = sqlite3_prepare_v2(db,
+                            "UPDATE entries SET key = ?1, body = ?2, body_hash = ?3, "
+                            "expires_at = ?4, deleted_at = ?5, updated_at = ?6 WHERE id = ?7;",
+                            -1, &stmt, NULL);
+    if (rc != SQLITE_OK) {
+        return STORE_ERR_SQLITE;
+    }
+    if (key_or_null == NULL) {
+        (void)sqlite3_bind_null(stmt, BIND_KEY);
+    } else {
+        (void)sqlite3_bind_text(stmt, BIND_KEY, key_or_null, -1, SQLITE_STATIC);
+    }
+    (void)sqlite3_bind_text(stmt, BIND_BODY, body, -1, SQLITE_STATIC);
+    (void)sqlite3_bind_text(stmt, BIND_BODY_HASH, body_hash, -1, SQLITE_STATIC);
+    if (expires_at == NULL) {
+        (void)sqlite3_bind_null(stmt, BIND_EXPIRES_AT);
+    } else {
+        (void)sqlite3_bind_text(stmt, BIND_EXPIRES_AT, expires_at, -1, SQLITE_STATIC);
+    }
+    if (deleted_at == NULL) {
+        (void)sqlite3_bind_null(stmt, BIND_DELETED_AT);
+    } else {
+        (void)sqlite3_bind_text(stmt, BIND_DELETED_AT, deleted_at, -1, SQLITE_STATIC);
+    }
+    (void)sqlite3_bind_text(stmt, BIND_UPDATED_AT, now, -1, SQLITE_STATIC);
+    (void)sqlite3_bind_int64(stmt, BIND_ID, id);
+    if (sqlite3_step(stmt) != SQLITE_DONE) {
+        (void)sqlite3_finalize(stmt);
+        return STORE_ERR_SQLITE;
+    }
+    (void)sqlite3_finalize(stmt);
+    st = replace_tags(db, id, (const char *const *)tags, ntags);
+    if (st != STORE_OK) {
+        return st;
+    }
+    return fts_resync(db, id);
+}
+
+static StoreStatus record_clash(sqlite3 *db, long long local_id, const Entry *incoming_view,
+                                const char *now, StoreConflictReason reason, const char *sync_id)
+{
+    Entry local;
+    char *local_json = NULL;
+    char *incoming_json = NULL;
+    StoreStatus st = STORE_OK;
+
+    memset(&local, 0, sizeof(local));
+    st = load_entry_by_id(db, local_id, &local);
+    if (st != STORE_OK) {
+        return st;
+    }
+    st = entry_snapshot_json(&local, now, &local_json);
+    if (st != STORE_OK) {
+        store_entry_free(&local);
+        return st;
+    }
+    st = entry_snapshot_json(incoming_view, now, &incoming_json);
+    store_entry_free(&local);
+    if (st != STORE_OK) {
+        free(local_json);
+        return st;
+    }
+    st = insert_conflict(db, sync_id, reason, local_json, incoming_json, now);
+    free(local_json);
+    free(incoming_json);
+    return st;
+}
+
+typedef struct {
+    long long foreign_id;
+    char *key;
+    char *body;
+    char *body_hash;
+    char *source;
+    char *created_at;
+    char *updated_at;
+    char *expires_at;
+    char *sync_id;
+    char *deleted_at;
+    char *version_vector;
+    char **tags;
+    size_t ntags;
+} ImportRow;
+
+static void import_row_free(ImportRow *r)
+{
+    if (r == NULL) {
+        return;
+    }
+    free(r->key);
+    free(r->body);
+    free(r->body_hash);
+    free(r->source);
+    free(r->created_at);
+    free(r->updated_at);
+    free(r->expires_at);
+    free(r->sync_id);
+    free(r->deleted_at);
+    free(r->version_vector);
+    free_tag_list(r->tags, r->ntags);
+    memset(r, 0, sizeof(*r));
+}
+
+static StoreStatus import_row_from_stmt(sqlite3 *src, sqlite3_stmt *stmt, ImportRow *out)
+{
+    enum {
+        COL_ID = 0,
+        COL_KEY = 1,
+        COL_BODY = 2,
+        COL_BODY_HASH = 3,
+        COL_SOURCE = 4,
+        COL_CREATED_AT = 5,
+        COL_UPDATED_AT = 6,
+        COL_EXPIRES_AT = 7,
+        COL_SYNC_ID = 8,
+        COL_DELETED_AT = 9,
+        COL_VV = 10
+    };
+    StoreStatus st = STORE_OK;
+    const unsigned char *u = NULL;
+
+    memset(out, 0, sizeof(*out));
+    out->foreign_id = sqlite3_column_int64(stmt, COL_ID);
+    if (sqlite3_column_type(stmt, COL_KEY) != SQLITE_NULL) {
+        out->key = dup_str((const char *)sqlite3_column_text(stmt, COL_KEY));
+        if (out->key == NULL) {
+            return STORE_ERR_OOM;
+        }
+    }
+    u = sqlite3_column_text(stmt, COL_BODY);
+    out->body = dup_str(u != NULL ? (const char *)u : "");
+    u = sqlite3_column_text(stmt, COL_BODY_HASH);
+    out->body_hash = dup_str(u != NULL ? (const char *)u : "");
+    u = sqlite3_column_text(stmt, COL_SOURCE);
+    out->source = dup_str(u != NULL ? (const char *)u : "unknown");
+    u = sqlite3_column_text(stmt, COL_CREATED_AT);
+    out->created_at = dup_str(u != NULL ? (const char *)u : "");
+    u = sqlite3_column_text(stmt, COL_UPDATED_AT);
+    out->updated_at = dup_str(u != NULL ? (const char *)u : "");
+    if (sqlite3_column_type(stmt, COL_EXPIRES_AT) != SQLITE_NULL) {
+        out->expires_at = dup_str((const char *)sqlite3_column_text(stmt, COL_EXPIRES_AT));
+        if (out->expires_at == NULL) {
+            import_row_free(out);
+            return STORE_ERR_OOM;
+        }
+    }
+    u = sqlite3_column_text(stmt, COL_SYNC_ID);
+    out->sync_id = dup_str(u != NULL ? (const char *)u : "");
+    if (sqlite3_column_type(stmt, COL_DELETED_AT) != SQLITE_NULL) {
+        out->deleted_at = dup_str((const char *)sqlite3_column_text(stmt, COL_DELETED_AT));
+        if (out->deleted_at == NULL) {
+            import_row_free(out);
+            return STORE_ERR_OOM;
+        }
+    }
+    u = sqlite3_column_text(stmt, COL_VV);
+    out->version_vector = dup_str(u != NULL ? (const char *)u : "{}");
+    if (out->body == NULL || out->body_hash == NULL || out->source == NULL ||
+        out->created_at == NULL || out->updated_at == NULL || out->sync_id == NULL ||
+        out->version_vector == NULL) {
+        import_row_free(out);
+        return STORE_ERR_OOM;
+    }
+    st = load_tags(src, out->foreign_id, &out->tags, &out->ntags);
+    if (st != STORE_OK) {
+        import_row_free(out);
+        return st;
+    }
+    return STORE_OK;
+}
+
+static void import_row_as_entry(const ImportRow *r, Entry *e)
+{
+    memset(e, 0, sizeof(*e));
+    e->id = r->foreign_id; /* snapshot id from foreign; cosmetic in conflict JSON */
+    e->sync_id = r->sync_id;
+    e->key = r->key;
+    e->body = r->body;
+    e->tags = r->tags;
+    e->ntags = r->ntags;
+    e->source = r->source;
+    e->created_at = r->created_at;
+    e->updated_at = r->updated_at;
+    e->expires_at = r->expires_at;
+    e->deleted_at = r->deleted_at;
+    e->version_vector = r->version_vector;
+}
+
+static StoreStatus import_insert_new(sqlite3 *dst, const ImportRow *row, const char *now,
+                                     StoreImportCounts *counts)
+{
+    int taken = 0;
+    long long occ = 0;
+    long long new_id = 0;
+    StoreStatus st = STORE_OK;
+    Entry view;
+
+    if (row->key != NULL) {
+        st = key_taken_by_other(dst, row->key, NULL, &occ, &taken);
+        if (st != STORE_OK) {
+            return st;
+        }
+        if (taken) {
+            import_row_as_entry(row, &view);
+            st = record_clash(dst, occ, &view, now, STORE_CONFLICT_KEY_CLASH, row->sync_id);
+            if (st == STORE_OK) {
+                counts->conflicts++;
+            }
+            return st;
+        }
+    } else {
+        st = hash_taken_by_other(dst, row->body_hash, NULL, &occ, &taken);
+        if (st != STORE_OK) {
+            return st;
+        }
+        if (taken) {
+            import_row_as_entry(row, &view);
+            st = record_clash(dst, occ, &view, now, STORE_CONFLICT_HASH_CLASH, row->sync_id);
+            if (st == STORE_OK) {
+                counts->conflicts++;
+            }
+            return st;
+        }
+    }
+    st = insert_entry_imported(dst, row->key, row->body, row->body_hash, row->source,
+                               row->created_at, row->updated_at, row->expires_at, row->sync_id,
+                               row->deleted_at, row->version_vector, &new_id);
+    if (st != STORE_OK) {
+        return st;
+    }
+    st = union_tags(dst, new_id, (const char *const *)row->tags, row->ntags);
+    if (st != STORE_OK) {
+        return st;
+    }
+    st = fts_resync(dst, new_id);
+    if (st != STORE_OK) {
+        return st;
+    }
+    counts->inserted++;
+    return STORE_OK;
+}
+
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
+static StoreStatus import_merge_present(sqlite3 *dst, const char *device_id, const ImportRow *row,
+                                        const Entry *local, const char *now,
+                                        StoreImportCounts *counts)
+{
+    int cmp = 0;
+    StoreStatus st = STORE_OK;
+    int taken = 0;
+    long long occ = 0;
+    Entry view;
+
+    st = vv_compare(dst, local->version_vector, row->version_vector, &cmp);
+    if (st != STORE_OK) {
+        return st;
+    }
+    if (cmp > 0) {
+        /* Incoming dominates — check unique before apply. */
+        if (row->key != NULL) {
+            st = key_taken_by_other(dst, row->key, row->sync_id, &occ, &taken);
+        } else {
+            st = hash_taken_by_other(dst, row->body_hash, row->sync_id, &occ, &taken);
+        }
+        if (st != STORE_OK) {
+            return st;
+        }
+        if (taken) {
+            import_row_as_entry(row, &view);
+            st = record_clash(dst, occ, &view, now,
+                              row->key != NULL ? STORE_CONFLICT_KEY_CLASH
+                                               : STORE_CONFLICT_HASH_CLASH,
+                              row->sync_id);
+            if (st == STORE_OK) {
+                counts->conflicts++;
+            }
+            return st;
+        }
+        st = apply_incoming_fields(dst, local->id, row->key, row->body, row->body_hash, row->source,
+                                   row->expires_at, row->deleted_at, now, row->tags, row->ntags);
+        if (st != STORE_OK) {
+            return st;
+        }
+        st = vv_union_bump(dst, local->id, local->version_vector, row->version_vector, device_id,
+                           NULL);
+        if (st != STORE_OK) {
+            return st;
+        }
+        counts->updated++;
+        return STORE_OK;
+    }
+    if (cmp < 0 ||
+        content_identical(local, row->body, row->key, row->deleted_at, row->tags, row->ntags)) {
+        /* Local dominates, or concurrent/equal with identical content. */
+        char maxed[VV_OUT_MAX];
+
+        st = vv_pairwise_max(dst, local->version_vector, row->version_vector, maxed, sizeof(maxed));
+        if (st != STORE_OK) {
+            return st;
+        }
+        st = write_version_vector(dst, local->id, maxed);
+        if (st != STORE_OK) {
+            return st;
+        }
+        counts->unchanged++;
+        return STORE_OK;
+    }
+    /* Concurrent + different → conflict (pairwise-max + idempotent row). */
+    {
+        int is_new = 0;
+
+        import_row_as_entry(row, &view);
+        st = record_concurrent_vv(dst, local, &view, row->version_vector, now, &is_new);
+        if (st == STORE_OK && is_new) {
+            counts->conflicts++;
+        }
+        return st;
+    }
+}
+
+static StoreStatus import_one_entry(sqlite3 *dst, const char *device_id, const ImportRow *row,
+                                    const char *now, StoreImportCounts *counts)
+{
+    Entry local;
+    StoreStatus st = STORE_OK;
+
+    memset(&local, 0, sizeof(local));
+    st = load_entry_by_sync_id(dst, row->sync_id, &local);
+    if (st == STORE_ERR_NOT_FOUND) {
+        return import_insert_new(dst, row, now, counts);
+    }
+    if (st != STORE_OK) {
+        return st;
+    }
+    st = import_merge_present(dst, device_id, row, &local, now, counts);
+    store_entry_free(&local);
+    return st;
+}
+
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
+static StoreStatus import_remap_links(sqlite3 *dst, sqlite3 *src)
+{
+    sqlite3_stmt *sel = NULL;
+    sqlite3_stmt *ins = NULL;
+    sqlite3_stmt *sync_of = NULL;
+    int rc = 0;
+
+    rc = sqlite3_prepare_v2(src,
+                            "SELECT from_id, to_id, kind, created_at, updated_at FROM entry_links;",
+                            -1, &sel, NULL);
+    if (rc != SQLITE_OK) {
+        return STORE_ERR_SQLITE;
+    }
+    rc = sqlite3_prepare_v2(src, "SELECT sync_id FROM entries WHERE id = ?1;", -1, &sync_of, NULL);
+    if (rc != SQLITE_OK) {
+        (void)sqlite3_finalize(sel);
+        return STORE_ERR_SQLITE;
+    }
+    rc = sqlite3_prepare_v2(dst,
+                            "INSERT OR IGNORE INTO entry_links(from_id, to_id, kind, created_at, "
+                            "updated_at) VALUES (?1, ?2, ?3, ?4, ?5);",
+                            -1, &ins, NULL);
+    if (rc != SQLITE_OK) {
+        (void)sqlite3_finalize(sel);
+        (void)sqlite3_finalize(sync_of);
+        return STORE_ERR_SQLITE;
+    }
+
+    while ((rc = sqlite3_step(sel)) == SQLITE_ROW) {
+        enum { BIND_FROM = 1, BIND_TO = 2, BIND_KIND = 3, BIND_CREATED = 4, BIND_UPDATED = 5 };
+        long long f_id = sqlite3_column_int64(sel, 0);
+        long long t_id = sqlite3_column_int64(sel, 1);
+        const char *kind = (const char *)sqlite3_column_text(sel, 2);
+        const char *created = (const char *)sqlite3_column_text(sel, 3);
+        const char *updated = (const char *)sqlite3_column_text(sel, 4);
+        const char *f_sync = NULL;
+        const char *t_sync = NULL;
+        Entry from_entry;
+        Entry to_entry;
+        StoreStatus st = STORE_OK;
+
+        (void)sqlite3_reset(sync_of);
+        (void)sqlite3_clear_bindings(sync_of);
+        (void)sqlite3_bind_int64(sync_of, 1, f_id);
+        if (sqlite3_step(sync_of) != SQLITE_ROW) {
+            continue;
+        }
+        f_sync = (const char *)sqlite3_column_text(sync_of, 0);
+        if (f_sync == NULL) {
+            continue;
+        }
+        {
+            char *from_sync = dup_str(f_sync);
+            char *ts = NULL;
+
+            (void)sqlite3_reset(sync_of);
+            (void)sqlite3_clear_bindings(sync_of);
+            (void)sqlite3_bind_int64(sync_of, 1, t_id);
+            if (sqlite3_step(sync_of) != SQLITE_ROW) {
+                free(from_sync);
+                continue;
+            }
+            t_sync = (const char *)sqlite3_column_text(sync_of, 0);
+            if (t_sync == NULL) {
+                free(from_sync);
+                continue;
+            }
+            ts = dup_str(t_sync);
+            if (from_sync == NULL || ts == NULL) {
+                free(from_sync);
+                free(ts);
+                (void)sqlite3_finalize(sel);
+                (void)sqlite3_finalize(sync_of);
+                (void)sqlite3_finalize(ins);
+                return STORE_ERR_OOM;
+            }
+            memset(&from_entry, 0, sizeof(from_entry));
+            memset(&to_entry, 0, sizeof(to_entry));
+            st = load_entry_by_sync_id(dst, from_sync, &from_entry);
+            if (st == STORE_OK) {
+                st = load_entry_by_sync_id(dst, ts, &to_entry);
+            }
+            free(from_sync);
+            free(ts);
+            if (st == STORE_ERR_NOT_FOUND) {
+                store_entry_free(&from_entry);
+                store_entry_free(&to_entry);
+                continue;
+            }
+            if (st != STORE_OK) {
+                store_entry_free(&from_entry);
+                store_entry_free(&to_entry);
+                (void)sqlite3_finalize(sel);
+                (void)sqlite3_finalize(sync_of);
+                (void)sqlite3_finalize(ins);
+                return st;
+            }
+            (void)sqlite3_reset(ins);
+            (void)sqlite3_clear_bindings(ins);
+            (void)sqlite3_bind_int64(ins, BIND_FROM, from_entry.id);
+            (void)sqlite3_bind_int64(ins, BIND_TO, to_entry.id);
+            (void)sqlite3_bind_text(ins, BIND_KIND, kind != NULL ? kind : "related", -1,
+                                    SQLITE_TRANSIENT);
+            (void)sqlite3_bind_text(ins, BIND_CREATED, created != NULL ? created : "", -1,
+                                    SQLITE_TRANSIENT);
+            (void)sqlite3_bind_text(ins, BIND_UPDATED, updated != NULL ? updated : "", -1,
+                                    SQLITE_TRANSIENT);
+            if (sqlite3_step(ins) != SQLITE_DONE) {
+                store_entry_free(&from_entry);
+                store_entry_free(&to_entry);
+                (void)sqlite3_finalize(sel);
+                (void)sqlite3_finalize(sync_of);
+                (void)sqlite3_finalize(ins);
+                return STORE_ERR_SQLITE;
+            }
+            store_entry_free(&from_entry);
+            store_entry_free(&to_entry);
+        }
+    }
+    (void)sqlite3_finalize(sel);
+    (void)sqlite3_finalize(sync_of);
+    (void)sqlite3_finalize(ins);
+    return (rc == SQLITE_DONE) ? STORE_OK : STORE_ERR_SQLITE;
+}
+
+StoreStatus store_import(Store *dst, const char *src_path, const char *now,
+                         StoreImportCounts *out_counts)
+{
+    sqlite3 *src = NULL;
+    sqlite3_stmt *sel = NULL;
+    char err_unused[1];
+    int rc = 0;
+    int version = 0;
+    StoreStatus st = STORE_OK;
+
+    if (out_counts != NULL) {
+        memset(out_counts, 0, sizeof(*out_counts));
+    }
+    if (dst == NULL || dst->db == NULL || dst->device_id == NULL || src_path == NULL ||
+        now == NULL || out_counts == NULL) {
+        return STORE_ERR_INTERNAL;
+    }
+    rc = sqlite3_open_v2(src_path, &src, SQLITE_OPEN_READONLY, NULL);
+    if (rc != SQLITE_OK) {
+        if (src != NULL) {
+            (void)sqlite3_close(src);
+        }
+        return STORE_ERR_SQLITE;
+    }
+    if (read_user_version(src, &version, err_unused, 0U) != 0) {
+        (void)sqlite3_close(src);
+        return STORE_ERR_SQLITE;
+    }
+    if (version < SCHEMA_VERSION) {
+        (void)sqlite3_close(src);
+        return STORE_ERR_SOURCE_TOO_OLD;
+    }
+
+    if (exec_sql(dst->db, "BEGIN IMMEDIATE;", err_unused, 0U) != 0) {
+        (void)sqlite3_close(src);
+        return STORE_ERR_SQLITE;
+    }
+
+    rc = sqlite3_prepare_v2(src,
+                            "SELECT id, key, body, body_hash, source, created_at, updated_at, "
+                            "expires_at, sync_id, deleted_at, version_vector FROM entries;",
+                            -1, &sel, NULL);
+    if (rc != SQLITE_OK) {
+        st = STORE_ERR_SQLITE;
+        goto fail;
+    }
+    while ((rc = sqlite3_step(sel)) == SQLITE_ROW) {
+        ImportRow row;
+
+        st = import_row_from_stmt(src, sel, &row);
+        if (st != STORE_OK) {
+            goto fail;
+        }
+        st = import_one_entry(dst->db, dst->device_id, &row, now, out_counts);
+        import_row_free(&row);
+        if (st != STORE_OK) {
+            goto fail;
+        }
+    }
+    if (rc != SQLITE_DONE) {
+        st = STORE_ERR_SQLITE;
+        goto fail;
+    }
+    (void)sqlite3_finalize(sel);
+    sel = NULL;
+
+    st = import_remap_links(dst->db, src);
+    if (st != STORE_OK) {
+        goto fail;
+    }
+
+    if (exec_sql(dst->db, "COMMIT;", err_unused, 0U) != 0) {
+        st = STORE_ERR_SQLITE;
+        goto fail;
+    }
+    (void)sqlite3_close(src);
+    return STORE_OK;
+
+fail:
+    if (sel != NULL) {
+        (void)sqlite3_finalize(sel);
+    }
+    rollback_quiet(dst->db);
+    (void)sqlite3_close(src);
+    return st;
+}
+
+void store_conflicts_free(StoreConflict *rows, size_t count)
+{
+    size_t i = 0;
+
+    if (rows == NULL) {
+        return;
+    }
+    for (i = 0; i < count; i++) {
+        free(rows[i].sync_id);
+        free(rows[i].local_json);
+        free(rows[i].incoming_json);
+        free(rows[i].created_at);
+    }
+    free(rows);
+}
+
+StoreStatus store_conflicts_list(Store *s, StoreConflict **out_rows, size_t *out_count)
+{
+    sqlite3_stmt *stmt = NULL;
+    StoreConflict *rows = NULL;
+    size_t n = 0U;
+    size_t cap = 0U;
+    int rc = 0;
+
+    if (s == NULL || s->db == NULL || out_rows == NULL || out_count == NULL) {
+        return STORE_ERR_INTERNAL;
+    }
+    *out_rows = NULL;
+    *out_count = 0U;
+    rc = sqlite3_prepare_v2(s->db,
+                            "SELECT id, sync_id, reason, local_json, incoming_json, created_at "
+                            "FROM conflicts ORDER BY id ASC;",
+                            -1, &stmt, NULL);
+    if (rc != SQLITE_OK) {
+        return STORE_ERR_SQLITE;
+    }
+    while ((rc = sqlite3_step(stmt)) == SQLITE_ROW) {
+        enum {
+            COL_ID = 0,
+            COL_SYNC_ID = 1,
+            COL_REASON = 2,
+            COL_LOCAL = 3,
+            COL_INCOMING = 4,
+            COL_CREATED_AT = 5
+        };
+        StoreConflict *grown = NULL;
+        StoreConflict row;
+        StoreStatus st = STORE_OK;
+        const char *reason = (const char *)sqlite3_column_text(stmt, COL_REASON);
+
+        memset(&row, 0, sizeof(row));
+        row.id = sqlite3_column_int64(stmt, COL_ID);
+        row.sync_id = dup_str((const char *)sqlite3_column_text(stmt, COL_SYNC_ID));
+        row.local_json = dup_str((const char *)sqlite3_column_text(stmt, COL_LOCAL));
+        row.incoming_json = dup_str((const char *)sqlite3_column_text(stmt, COL_INCOMING));
+        row.created_at = dup_str((const char *)sqlite3_column_text(stmt, COL_CREATED_AT));
+        st = conflict_reason_parse(reason, &row.reason);
+        if (st != STORE_OK || row.sync_id == NULL || row.local_json == NULL ||
+            row.incoming_json == NULL || row.created_at == NULL) {
+            free(row.sync_id);
+            free(row.local_json);
+            free(row.incoming_json);
+            free(row.created_at);
+            store_conflicts_free(rows, n);
+            (void)sqlite3_finalize(stmt);
+            return (st != STORE_OK) ? st : STORE_ERR_OOM;
+        }
+        if (n == cap) {
+            size_t ncap = (cap == 0U) ? (size_t)GROW_MIN_CAP : cap * 2U;
+            grown = (StoreConflict *)realloc(rows, ncap * sizeof(*rows));
+            if (grown == NULL) {
+                free(row.sync_id);
+                free(row.local_json);
+                free(row.incoming_json);
+                free(row.created_at);
+                store_conflicts_free(rows, n);
+                (void)sqlite3_finalize(stmt);
+                return STORE_ERR_OOM;
+            }
+            rows = grown;
+            cap = ncap;
+        }
+        rows[n] = row;
+        n++;
+    }
+    (void)sqlite3_finalize(stmt);
+    if (rc != SQLITE_DONE) {
+        store_conflicts_free(rows, n);
+        return STORE_ERR_SQLITE;
+    }
+    *out_rows = rows;
+    *out_count = n;
+    return STORE_OK;
+}
+
+/* ---- conflict accept helpers ------------------------------------------- */
+
+enum { SNAPSHOT_FIELDS_PAD = 7 };
+
+typedef struct {
+    char *sync_id;
+    char *key;
+    char *body;
+    char *source;
+    char *created_at;
+    char *updated_at;
+    char *expires_at;
+    char *deleted_at;
+    char *version_vector;
+    char **tags;
+    size_t ntags;
+    char body_hash[REMEMBER_SHA256_HEX_LEN + 1];
+    char pad_[SNAPSHOT_FIELDS_PAD];
+} SnapshotFields;
+
+static void snapshot_fields_free(SnapshotFields *f)
+{
+    if (f == NULL) {
+        return;
+    }
+    free(f->sync_id);
+    free(f->key);
+    free(f->body);
+    free(f->source);
+    free(f->created_at);
+    free(f->updated_at);
+    free(f->expires_at);
+    free(f->deleted_at);
+    free(f->version_vector);
+    free_tag_list(f->tags, f->ntags);
+    memset(f, 0, sizeof(*f));
+}
+
+enum { JSON_EXTRACT_SQL_BUFLEN = 128 };
+
+// NOLINTBEGIN(bugprone-easily-swappable-parameters)
+static char *json_extract_text(sqlite3 *db, const char *json, const char *path, int *is_null)
+// NOLINTEND(bugprone-easily-swappable-parameters)
+{
+    sqlite3_stmt *stmt = NULL;
+    char *out = NULL;
+    char sql[JSON_EXTRACT_SQL_BUFLEN];
+    int rc = 0;
+
+    *is_null = 0;
+    if (snprintf(sql, sizeof(sql), "SELECT json_extract(?1, '%s');", path) < 0) {
+        return NULL;
+    }
+    rc = sqlite3_prepare_v2(db, sql, -1, &stmt, NULL);
+    if (rc != SQLITE_OK) {
+        return NULL;
+    }
+    (void)sqlite3_bind_text(stmt, 1, json, -1, SQLITE_STATIC);
+    rc = sqlite3_step(stmt);
+    if (rc != SQLITE_ROW) {
+        (void)sqlite3_finalize(stmt);
+        return NULL;
+    }
+    if (sqlite3_column_type(stmt, 0) == SQLITE_NULL) {
+        *is_null = 1;
+        (void)sqlite3_finalize(stmt);
+        return NULL;
+    }
+    out = dup_str((const char *)sqlite3_column_text(stmt, 0));
+    (void)sqlite3_finalize(stmt);
+    return out;
+}
+
+static StoreStatus snapshot_parse_tags(sqlite3 *db, const char *json, char ***out_tags,
+                                       size_t *out_n)
+{
+    sqlite3_stmt *stmt = NULL;
+    char **tags = NULL;
+    size_t n = 0U;
+    size_t cap = 0U;
+    int rc = 0;
+
+    *out_tags = NULL;
+    *out_n = 0U;
+    rc = sqlite3_prepare_v2(db,
+                            "SELECT value FROM json_each(?1, '$.tags') "
+                            "ORDER BY CAST(key AS INTEGER);",
+                            -1, &stmt, NULL);
+    if (rc != SQLITE_OK) {
+        return STORE_ERR_SQLITE;
+    }
+    (void)sqlite3_bind_text(stmt, 1, json, -1, SQLITE_STATIC);
+    while ((rc = sqlite3_step(stmt)) == SQLITE_ROW) {
+        char *copy = dup_str((const char *)sqlite3_column_text(stmt, 0));
+        char **grown = NULL;
+
+        if (copy == NULL) {
+            free_tag_list(tags, n);
+            (void)sqlite3_finalize(stmt);
+            return STORE_ERR_OOM;
+        }
+        if (n == cap) {
+            size_t ncap = (cap == 0U) ? (size_t)GROW_MIN_CAP : cap * 2U;
+            grown = (char **)realloc((void *)tags, ncap * sizeof(*tags));
+            if (grown == NULL) {
+                free(copy);
+                free_tag_list(tags, n);
+                (void)sqlite3_finalize(stmt);
+                return STORE_ERR_OOM;
+            }
+            tags = grown;
+            cap = ncap;
+        }
+        tags[n++] = copy;
+    }
+    (void)sqlite3_finalize(stmt);
+    if (rc != SQLITE_DONE) {
+        free_tag_list(tags, n);
+        return STORE_ERR_SQLITE;
+    }
+    *out_tags = tags;
+    *out_n = n;
+    return STORE_OK;
+}
+
+static StoreStatus snapshot_parse(sqlite3 *db, const char *json, SnapshotFields *out)
+{
+    int is_null = 0;
+    StoreStatus st = STORE_OK;
+
+    memset(out, 0, sizeof(*out));
+    out->sync_id = json_extract_text(db, json, "$.sync_id", &is_null);
+    if (out->sync_id == NULL) {
+        return STORE_ERR_INTERNAL;
+    }
+    out->key = json_extract_text(db, json, "$.key", &is_null);
+    if (is_null) {
+        free(out->key);
+        out->key = NULL;
+    } else if (out->key == NULL) {
+        snapshot_fields_free(out);
+        return STORE_ERR_OOM;
+    }
+    out->body = json_extract_text(db, json, "$.body", &is_null);
+    out->source = json_extract_text(db, json, "$.source", &is_null);
+    out->created_at = json_extract_text(db, json, "$.created_at", &is_null);
+    out->updated_at = json_extract_text(db, json, "$.updated_at", &is_null);
+    out->expires_at = json_extract_text(db, json, "$.expires_at", &is_null);
+    if (is_null) {
+        free(out->expires_at);
+        out->expires_at = NULL;
+    }
+    out->deleted_at = json_extract_text(db, json, "$.deleted_at", &is_null);
+    if (is_null) {
+        free(out->deleted_at);
+        out->deleted_at = NULL;
+    }
+    /* version_vector is an object — extract as JSON text */
+    {
+        sqlite3_stmt *stmt = NULL;
+        int rc =
+            sqlite3_prepare_v2(db, "SELECT json_extract(?1, '$.version_vector');", -1, &stmt, NULL);
+        if (rc != SQLITE_OK) {
+            snapshot_fields_free(out);
+            return STORE_ERR_SQLITE;
+        }
+        (void)sqlite3_bind_text(stmt, 1, json, -1, SQLITE_STATIC);
+        if (sqlite3_step(stmt) != SQLITE_ROW || sqlite3_column_type(stmt, 0) == SQLITE_NULL) {
+            (void)sqlite3_finalize(stmt);
+            snapshot_fields_free(out);
+            return STORE_ERR_INTERNAL;
+        }
+        out->version_vector = dup_str((const char *)sqlite3_column_text(stmt, 0));
+        (void)sqlite3_finalize(stmt);
+        if (out->version_vector == NULL) {
+            snapshot_fields_free(out);
+            return STORE_ERR_OOM;
+        }
+    }
+    if (out->body == NULL || out->source == NULL || out->created_at == NULL ||
+        out->updated_at == NULL) {
+        snapshot_fields_free(out);
+        return STORE_ERR_OOM;
+    }
+    body_hash_hex(out->body, strlen(out->body), out->body_hash);
+    /* Ownership of out fields transfers to caller on STORE_OK. */
+    // NOLINTNEXTLINE(clang-analyzer-unix.Malloc)
+    st = snapshot_parse_tags(db, json, &out->tags, &out->ntags);
+    if (st != STORE_OK) {
+        snapshot_fields_free(out);
+        return st;
+    }
+    return STORE_OK;
+}
+
+static StoreStatus accept_load_conflict(sqlite3 *db, long long id, char **sync_id,
+                                        char **local_json, char **incoming_json,
+                                        StoreConflictReason *reason)
+{
+    sqlite3_stmt *stmt = NULL;
+    StoreStatus st = STORE_OK;
+    int rc = 0;
+
+    *sync_id = NULL;
+    *local_json = NULL;
+    *incoming_json = NULL;
+    rc = sqlite3_prepare_v2(db,
+                            "SELECT sync_id, reason, local_json, incoming_json FROM conflicts "
+                            "WHERE id = ?1;",
+                            -1, &stmt, NULL);
+    if (rc != SQLITE_OK) {
+        return STORE_ERR_SQLITE;
+    }
+    (void)sqlite3_bind_int64(stmt, 1, id);
+    rc = sqlite3_step(stmt);
+    if (rc == SQLITE_DONE) {
+        (void)sqlite3_finalize(stmt);
+        return STORE_ERR_NOT_FOUND;
+    }
+    if (rc != SQLITE_ROW) {
+        (void)sqlite3_finalize(stmt);
+        return STORE_ERR_SQLITE;
+    }
+    *sync_id = dup_str((const char *)sqlite3_column_text(stmt, 0));
+    st = conflict_reason_parse((const char *)sqlite3_column_text(stmt, 1), reason);
+    *local_json = dup_str((const char *)sqlite3_column_text(stmt, 2));
+    *incoming_json = dup_str((const char *)sqlite3_column_text(stmt, 3));
+    (void)sqlite3_finalize(stmt);
+    if (st != STORE_OK) {
+        free(*sync_id);
+        free(*local_json);
+        free(*incoming_json);
+        *sync_id = NULL;
+        *local_json = NULL;
+        *incoming_json = NULL;
+        return st;
+    }
+    if (*sync_id == NULL || *local_json == NULL || *incoming_json == NULL) {
+        free(*sync_id);
+        free(*local_json);
+        free(*incoming_json);
+        *sync_id = NULL;
+        *local_json = NULL;
+        *incoming_json = NULL;
+        return STORE_ERR_OOM;
+    }
+    return STORE_OK;
+}
+
+/* Insert snapshot; if key taken and make_keyless_ok, strip key. Hash collision → UNIQUE_TAKEN. */
+// NOLINTBEGIN(bugprone-easily-swappable-parameters)
+static StoreStatus insert_snapshot_row(sqlite3 *db, const SnapshotFields *snap,
+                                       int preserve_sync_id, const char *device_id, const char *now,
+                                       int make_keyless_ok, long long *out_id)
+// NOLINTEND(bugprone-easily-swappable-parameters)
+{
+    const char *key = snap->key;
+    char minted[UUID_STR_LEN + 1];
+    char vv_new[VV_JSON_BUFLEN];
+    const char *sync_id = snap->sync_id;
+    const char *vv_json = snap->version_vector;
+    int taken = 0;
+    StoreStatus st = STORE_OK;
+
+    if (!preserve_sync_id) {
+        if (mint_uuid_v7(minted) != 0) {
+            return STORE_ERR_INTERNAL;
+        }
+        sync_id = minted;
+        (void)snprintf(vv_new, sizeof(vv_new), "{\"%s\":1}", device_id);
+        vv_json = vv_new;
+    }
+    if (key != NULL) {
+        st = key_taken_by_other(db, key, sync_id, NULL, &taken);
+        if (st != STORE_OK) {
+            return st;
+        }
+        if (taken) {
+            if (!make_keyless_ok) {
+                return STORE_ERR_INTERNAL;
+            }
+            key = NULL;
+        }
+    }
+    if (key == NULL) {
+        st = hash_taken_by_other(db, snap->body_hash, sync_id, NULL, &taken);
+        if (st != STORE_OK) {
+            return st;
+        }
+        if (taken) {
+            /* decision:sync-import-hash-demote — never invent key=sync_id. */
+            return STORE_ERR_UNIQUE_TAKEN;
+        }
+    }
+    st = insert_entry_imported(db, key, snap->body, snap->body_hash, snap->source, snap->created_at,
+                               now, snap->expires_at, sync_id, snap->deleted_at, vv_json, out_id);
+    if (st != STORE_OK) {
+        return st;
+    }
+    st = union_tags(db, *out_id, (const char *const *)snap->tags, snap->ntags);
+    if (st != STORE_OK) {
+        return st;
+    }
+    return fts_resync(db, *out_id);
+}
+
+static StoreStatus accept_out_one(sqlite3 *db, long long id, Entry **out_entries, size_t *out_count)
+{
+    Entry *arr = NULL;
+    StoreStatus st = STORE_OK;
+
+    arr = (Entry *)calloc(1U, sizeof(Entry));
+    if (arr == NULL) {
+        return STORE_ERR_OOM;
+    }
+    st = load_entry_by_id(db, id, &arr[0]);
+    if (st != STORE_OK) {
+        free(arr);
+        return st;
+    }
+    *out_entries = arr;
+    *out_count = 1U;
+    return STORE_OK;
+}
+
+static StoreStatus accept_out_two(sqlite3 *db, long long a, long long b, Entry **out_entries,
+                                  size_t *out_count)
+{
+    Entry *arr = NULL;
+    StoreStatus st = STORE_OK;
+
+    arr = (Entry *)calloc(2U, sizeof(Entry));
+    if (arr == NULL) {
+        return STORE_ERR_OOM;
+    }
+    st = load_entry_by_id(db, a, &arr[0]);
+    if (st != STORE_OK) {
+        free(arr);
+        return st;
+    }
+    st = load_entry_by_id(db, b, &arr[1]);
+    if (st != STORE_OK) {
+        store_entry_free(&arr[0]);
+        free(arr);
+        return st;
+    }
+    *out_entries = arr;
+    *out_count = 2U;
+    return STORE_OK;
+}
+
+// NOLINTBEGIN(bugprone-easily-swappable-parameters)
+static StoreStatus accept_keep_local(sqlite3 *db, const char *device_id, const char *now,
+                                     const SnapshotFields *local, const SnapshotFields *incoming,
+                                     Entry **out_entries, size_t *out_count)
+// NOLINTEND(bugprone-easily-swappable-parameters)
+{
+    Entry e;
+    StoreStatus st = STORE_OK;
+
+    memset(&e, 0, sizeof(e));
+    st = load_entry_by_sync_id(db, local->sync_id, &e);
+    if (st != STORE_OK) {
+        return st;
+    }
+    st = vv_union_bump(db, e.id, e.version_vector, incoming->version_vector, device_id, now);
+    if (st != STORE_OK) {
+        store_entry_free(&e);
+        return st;
+    }
+    {
+        long long id = e.id;
+        store_entry_free(&e);
+        return accept_out_one(db, id, out_entries, out_count);
+    }
+}
+
+/* Clear key so another row can claim it. If that would collide on body_hash,
+ * fail (decision:sync-import-hash-demote — never invent key=sync_id). */
+static StoreStatus demote_occupant_key(sqlite3 *db, long long occupant_id)
+{
+    char *hash = NULL;
+    Entry e;
+    int taken = 0;
+    StoreStatus st = STORE_OK;
+
+    memset(&e, 0, sizeof(e));
+    st = load_entry_by_id(db, occupant_id, &e);
+    if (st != STORE_OK) {
+        return st;
+    }
+    st = load_body_hash(db, occupant_id, &hash);
+    if (st != STORE_OK) {
+        store_entry_free(&e);
+        return st;
+    }
+    st = hash_taken_by_other(db, hash, e.sync_id, NULL, &taken);
+    if (st != STORE_OK) {
+        free(hash);
+        store_entry_free(&e);
+        return st;
+    }
+    if (taken) {
+        free(hash);
+        store_entry_free(&e);
+        return STORE_ERR_UNIQUE_TAKEN;
+    }
+    st = write_key(db, occupant_id, NULL);
+    free(hash);
+    store_entry_free(&e);
+    return st;
+}
+
+/* Free a key/hash slot held by a different sync_id (Round 7: never SQLITE unique). */
+static StoreStatus demote_other_if_unique_taken(sqlite3 *db, const SnapshotFields *incoming)
+{
+    int taken = 0;
+    long long occ = 0;
+    StoreStatus st = STORE_OK;
+
+    if (incoming == NULL || incoming->sync_id == NULL) {
+        return STORE_ERR_INTERNAL;
+    }
+    if (incoming->key != NULL) {
+        st = key_taken_by_other(db, incoming->key, incoming->sync_id, &occ, &taken);
+        if (st != STORE_OK) {
+            return st;
+        }
+        if (taken) {
+            return demote_occupant_key(db, occ);
+        }
+        return STORE_OK;
+    }
+    st = hash_taken_by_other(db, incoming->body_hash, incoming->sync_id, &occ, &taken);
+    if (st != STORE_OK) {
+        return st;
+    }
+    if (taken) {
+        /* Occupant is keyless with this hash — cannot invent a key for them. */
+        return STORE_ERR_UNIQUE_TAKEN;
+    }
+    return STORE_OK;
+}
+
+static StoreStatus accept_keep_incoming(sqlite3 *db, const char *device_id, const char *now,
+                                        StoreConflictReason reason, const SnapshotFields *local,
+                                        const SnapshotFields *incoming, Entry **out_entries,
+                                        size_t *out_count)
+{
+    StoreStatus st = STORE_OK;
+    Entry e;
+    long long id = 0;
+
+    memset(&e, 0, sizeof(e));
+    if (reason == STORE_CONFLICT_CONCURRENT_VV) {
+        st = load_entry_by_sync_id(db, incoming->sync_id, &e);
+        if (st != STORE_OK) {
+            return st;
+        }
+        id = e.id;
+        /* Incoming may rekey onto a slot another local row holds. */
+        st = demote_other_if_unique_taken(db, incoming);
+        if (st != STORE_OK) {
+            store_entry_free(&e);
+            return st;
+        }
+        st = apply_incoming_fields(db, id, incoming->key, incoming->body, incoming->body_hash,
+                                   incoming->source, incoming->expires_at, incoming->deleted_at,
+                                   now, incoming->tags, incoming->ntags);
+        if (st != STORE_OK) {
+            store_entry_free(&e);
+            return st;
+        }
+        st = vv_union_bump(db, id, e.version_vector, incoming->version_vector, device_id, NULL);
+        store_entry_free(&e);
+        if (st != STORE_OK) {
+            return st;
+        }
+        return accept_out_one(db, id, out_entries, out_count);
+    }
+
+    /* Clash: incoming takes the contested slot; demote local occupant. */
+    st = load_entry_by_sync_id(db, local->sync_id, &e);
+    if (st != STORE_OK) {
+        return st;
+    }
+    if (reason == STORE_CONFLICT_KEY_CLASH) {
+        st = demote_occupant_key(db, e.id);
+    } else if (reason == STORE_CONFLICT_HASH_CLASH) {
+        /* Local is keyless owning the hash — cannot invent a key; refuse. */
+        st = STORE_ERR_UNIQUE_TAKEN;
+    }
+    store_entry_free(&e);
+    if (st != STORE_OK) {
+        return st;
+    }
+
+    st = insert_snapshot_row(db, incoming, 1, device_id, now, 0, &id);
+    if (st != STORE_OK) {
+        return st;
+    }
+    st = apply_vv_bump(db, id, device_id, incoming->version_vector);
+    if (st != STORE_OK) {
+        return st;
+    }
+    memset(&e, 0, sizeof(e));
+    st = load_entry_by_sync_id(db, local->sync_id, &e);
+    if (st != STORE_OK) {
+        return st;
+    }
+    st = vv_union_bump(db, e.id, e.version_vector, incoming->version_vector, device_id, now);
+    store_entry_free(&e);
+    if (st != STORE_OK) {
+        return st;
+    }
+    return accept_out_one(db, id, out_entries, out_count);
+}
+
+// NOLINTBEGIN(bugprone-easily-swappable-parameters)
+static StoreStatus accept_keep_both(sqlite3 *db, const char *device_id, const char *now,
+                                    StoreConflictReason reason, const SnapshotFields *local,
+                                    const SnapshotFields *incoming, Entry **out_entries,
+                                    size_t *out_count)
+// NOLINTEND(bugprone-easily-swappable-parameters)
+{
+    Entry e;
+    long long local_id = 0;
+    long long new_id = 0;
+    StoreStatus st = STORE_OK;
+    int remint = (reason == STORE_CONFLICT_CONCURRENT_VV);
+
+    memset(&e, 0, sizeof(e));
+    st = load_entry_by_sync_id(db, local->sync_id, &e);
+    if (st != STORE_OK) {
+        return st;
+    }
+    local_id = e.id;
+    st = vv_union_bump(db, local_id, e.version_vector, incoming->version_vector, device_id, now);
+    store_entry_free(&e);
+    if (st != STORE_OK) {
+        return st;
+    }
+
+    st = insert_snapshot_row(db, incoming, remint ? 0 : 1, device_id, now, 1, &new_id);
+    if (st != STORE_OK) {
+        return st;
+    }
+    if (!remint) {
+        /* Preserve incoming VV then bump. */
+        memset(&e, 0, sizeof(e));
+        st = load_entry_by_id(db, new_id, &e);
+        if (st != STORE_OK) {
+            return st;
+        }
+        st = apply_vv_bump(db, new_id, device_id, e.version_vector);
+        store_entry_free(&e);
+        if (st != STORE_OK) {
+            return st;
+        }
+    }
+    return accept_out_two(db, local_id, new_id, out_entries, out_count);
+}
+
+// NOLINTBEGIN(bugprone-easily-swappable-parameters)
+StoreStatus store_conflict_accept(Store *s, long long conflict_id, StoreConflictKeep keep,
+                                  const char *now, Entry **out_entries, size_t *out_count)
+// NOLINTEND(bugprone-easily-swappable-parameters)
+{
+    char err_unused[1];
+    char *sync_id = NULL;
+    char *local_json = NULL;
+    char *incoming_json = NULL;
+    StoreConflictReason reason = STORE_CONFLICT_CONCURRENT_VV;
+    SnapshotFields local;
+    SnapshotFields incoming;
+    StoreStatus st = STORE_OK;
+
+    if (s == NULL || s->db == NULL || s->device_id == NULL || now == NULL || out_entries == NULL ||
+        out_count == NULL) {
+        return STORE_ERR_INTERNAL;
+    }
+    *out_entries = NULL;
+    *out_count = 0U;
+    memset(&local, 0, sizeof(local));
+    memset(&incoming, 0, sizeof(incoming));
+
+    if (exec_sql(s->db, "BEGIN IMMEDIATE;", err_unused, 0U) != 0) {
+        return STORE_ERR_SQLITE;
+    }
+    st = accept_load_conflict(s->db, conflict_id, &sync_id, &local_json, &incoming_json, &reason);
+    if (st != STORE_OK) {
+        goto fail;
+    }
+    (void)sync_id;
+    st = snapshot_parse(s->db, local_json, &local);
+    if (st != STORE_OK) {
+        goto fail;
+    }
+    st = snapshot_parse(s->db, incoming_json, &incoming);
+    if (st != STORE_OK) {
+        goto fail;
+    }
+
+    if (keep == STORE_KEEP_LOCAL) {
+        st = accept_keep_local(s->db, s->device_id, now, &local, &incoming, out_entries, out_count);
+    } else if (keep == STORE_KEEP_INCOMING) {
+        st = accept_keep_incoming(s->db, s->device_id, now, reason, &local, &incoming, out_entries,
+                                  out_count);
+    } else if (keep == STORE_KEEP_BOTH) {
+        st = accept_keep_both(s->db, s->device_id, now, reason, &local, &incoming, out_entries,
+                              out_count);
+    } else {
+        st = STORE_ERR_INTERNAL;
+    }
+    if (st != STORE_OK) {
+        goto fail;
+    }
+    st = delete_conflict_row(s->db, conflict_id);
+    if (st != STORE_OK) {
+        goto fail;
+    }
+    if (exec_sql(s->db, "COMMIT;", err_unused, 0U) != 0) {
+        st = STORE_ERR_SQLITE;
+        goto fail;
+    }
+    free(sync_id);
+    free(local_json);
+    free(incoming_json);
+    snapshot_fields_free(&local);
+    snapshot_fields_free(&incoming);
+    return STORE_OK;
+
+fail:
+    if (*out_entries != NULL) {
+        size_t i = 0;
+        for (i = 0; i < *out_count; i++) {
+            store_entry_free(&(*out_entries)[i]);
+        }
+        free(*out_entries);
+        *out_entries = NULL;
+        *out_count = 0U;
+    }
+    free(sync_id);
+    free(local_json);
+    free(incoming_json);
+    snapshot_fields_free(&local);
+    snapshot_fields_free(&incoming);
+    rollback_quiet(s->db);
+    return st;
 }

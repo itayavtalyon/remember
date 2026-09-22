@@ -30,7 +30,9 @@ typedef enum {
     STORE_ERR_NOT_DELETED,       /* locator used STORE_BIN_DELETED but row is live */
     STORE_ERR_NOT_SINGLE_DEVICE, /* hard wipe when devices COUNT != 1 */
     STORE_ERR_SELF_LINK,         /* from_id == to_id */
-    STORE_ERR_CYCLE              /* supersedes would cycle */
+    STORE_ERR_CYCLE,             /* supersedes would cycle */
+    STORE_ERR_SOURCE_TOO_OLD,    /* import --from-db: source user_version < 4 */
+    STORE_ERR_UNIQUE_TAKEN       /* accept cannot free key/hash without inventing a key */
 } StoreStatus;
 
 /* Locator / list / search / tags bin. LIVE is the zero value (zero-init queries). */
@@ -327,6 +329,59 @@ StoreStatus store_list_neighbors_for(Store *s, const long long *ids, size_t nids
  */
 StoreStatus store_rekey(Store *s, long long id, RekeyKeys keys, StoreBin bin, const char *now,
                         Entry *out_entry, long long *out_conflict_id);
+
+/* Counts from store_import (JSON envelope fields). */
+typedef struct {
+    size_t inserted;
+    size_t updated;
+    size_t unchanged;
+    size_t conflicts;
+} StoreImportCounts;
+
+/*
+ * Merge another remember DB by sync_id (Round 7 VV / unique rules). Opens
+ * src_path read-only inside the adapter (never store_open; never touches the
+ * foreign sidecar; never INSERTs foreign devices). user_version < 4 →
+ * STORE_ERR_SOURCE_TOO_OLD. Exit-path JSON: action imported + these counts;
+ * STORE_OK even when conflicts > 0.
+ */
+StoreStatus store_import(Store *dst, const char *src_path, const char *now,
+                         StoreImportCounts *out_counts);
+
+/* Closed conflict reason enum (Round 7). Unknown on disk → store error. */
+typedef enum {
+    STORE_CONFLICT_CONCURRENT_VV = 0,
+    STORE_CONFLICT_KEY_CLASH,
+    STORE_CONFLICT_HASH_CLASH
+} StoreConflictReason;
+
+/* Canonical reason tokens (concurrent_vv|key_clash|hash_clash). NULL if invalid. */
+const char *store_conflict_reason_str(StoreConflictReason reason);
+
+typedef struct {
+    long long id;
+    char *sync_id;
+    char *local_json;
+    char *incoming_json;
+    char *created_at;
+    StoreConflictReason reason;
+    char pad_[4];
+} StoreConflict;
+
+/* List open conflicts (id ASC). Caller frees with store_conflicts_free. */
+StoreStatus store_conflicts_list(Store *s, StoreConflict **out_rows, size_t *out_count);
+void store_conflicts_free(StoreConflict *rows, size_t count);
+
+typedef enum { STORE_KEEP_LOCAL = 0, STORE_KEEP_INCOMING, STORE_KEEP_BOTH } StoreConflictKeep;
+
+/*
+ * Resolve one conflict. --keep both: remint sync_id on concurrent_vv; on
+ * key/hash clash keep incoming sync_id (keyless if slot taken). Unions
+ * incoming VV into survivor(s). *out_entries / *out_count are post-accept
+ * snapshots (1 or 2); caller frees each then the array. Missing id → NOT_FOUND.
+ */
+StoreStatus store_conflict_accept(Store *s, long long conflict_id, StoreConflictKeep keep,
+                                  const char *now, Entry **out_entries, size_t *out_count);
 
 /*
  * Test-only fault injection (compiled when REMEMBER_TEST_HOOKS is defined).
