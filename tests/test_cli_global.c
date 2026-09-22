@@ -45,6 +45,10 @@ TEST(help_exits_zero_and_prints_usage)
     ASSERT_STR_CONTAINS(r.out, "add");
     ASSERT_STR_CONTAINS(r.out, "search");
     ASSERT_STR_CONTAINS(r.out, "update");
+    ASSERT_STR_CONTAINS(r.out, "import");
+    ASSERT_STR_CONTAINS(r.out, "conflicts");
+    /* Round 7 exit-3 matrix (stage 6). */
+    ASSERT_STR_CONTAINS(r.out, "expired / not_expired / deleted / not_deleted");
     cmd_result_free(&r);
     free(db);
 }

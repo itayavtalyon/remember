@@ -6,8 +6,15 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 
-enum { FACADE_ARGV_MAX = 32 }; /* max argv slots built for remember_run */
+enum {
+    FACADE_ARGV_MAX = 32, /* max argv slots built for remember_run */
+    FACADE_PATH_BUF = 192,
+    FACADE_CMD_BUF = 400,
+    FACADE_SQL_BUF = 320,
+    FACADE_SIDE_BUF = 208
+};
 
 /*
  * Facade parity: remember_run (in-process, what the GUI links) must produce the
@@ -435,6 +442,186 @@ TEST(facade_rekey_matches_cli)
     assert_mutation_parity(seed_three, cmd, sizeof(cmd) / sizeof(cmd[0]));
 }
 
+/* Stage 6: import / conflicts / conflict accept byte-match the CLI. */
+// NOLINTBEGIN(bugprone-command-processor,cert-env33-c,concurrency-mt-unsafe)
+TEST(facade_import_matches_cli)
+{
+    char *db1 = make_temp_db_path();
+    char *db2 = make_temp_db_path();
+    char *foreign = make_temp_db_path();
+    const char *seed_f[] = {"--json", "add", "--key", "slot", "from foreign"};
+    const char *cmd[] = {"--json", "import", "--from-db", NULL};
+    CmdResult seed_foreign;
+    CmdResult sub;
+    char *fout = NULL;
+    char *ferr = NULL;
+    int frc = 0;
+
+    ASSERT_TRUE(db1 != NULL && db2 != NULL && foreign != NULL);
+    seed_foreign = run_remember(foreign, seed_f, sizeof(seed_f) / sizeof(seed_f[0]), NULL);
+    ASSERT_EQ_INT(seed_foreign.exit_code, 0);
+    cmd_result_free(&seed_foreign);
+
+    cmd[3] = foreign;
+    sub = run_remember(db1, cmd, sizeof(cmd) / sizeof(cmd[0]), NULL);
+    frc = facade_run(db2, cmd, sizeof(cmd) / sizeof(cmd[0]),
+                     (FacadeCapture){.out = &fout, .err = &ferr});
+    ASSERT_EQ_INT(frc, sub.exit_code);
+    mask_timestamps(sub.out);
+    mask_timestamps(fout);
+    ASSERT_STREQ(fout, sub.out);
+    ASSERT_STREQ(ferr, sub.err);
+    free(fout);
+    free(ferr);
+    cmd_result_free(&sub);
+    free(db1);
+    free(db2);
+    free(foreign);
+}
+
+TEST(facade_conflicts_matches_cli)
+{
+    char tmpl[] = "/tmp/remember-facade-c-XXXXXX";
+    char *dir = NULL;
+    char local[FACADE_PATH_BUF];
+    char foreign[FACADE_PATH_BUF];
+    CmdResult r;
+    const char *add[] = {"--json", "add", "--key", "k", "local"};
+    const char *imp[] = {"--json", "import", "--from-db", NULL};
+    const char *cmd[] = {"--json", "conflicts"};
+    char *dev = NULL;
+
+    dir = mkdtemp(tmpl);
+    ASSERT_TRUE(dir != NULL);
+    if (dir == NULL) {
+        return;
+    }
+    (void)snprintf(local, sizeof(local), "%s/local.db", dir);
+    (void)snprintf(foreign, sizeof(foreign), "%s/foreign.db", dir);
+
+    r = run_remember(local, add, sizeof(add) / sizeof(add[0]), NULL);
+    ASSERT_EQ_INT(r.exit_code, 0);
+    cmd_result_free(&r);
+    {
+        char cp[FACADE_CMD_BUF];
+        (void)snprintf(cp, sizeof(cp), "cp '%s' '%s'", local, foreign);
+        ASSERT_EQ_INT(system(cp), 0);
+    }
+    free(harness_sqlite_query_line(
+        foreign, "UPDATE entries SET body='incoming', "
+                 "body_hash='abababababababababababababababababababababababababababababababab',"
+                 "version_vector='{\"bbbbbbbb-bbbb-7bbb-bbbb-bbbbbbbbbbbb\":1}' WHERE id=1;"));
+    dev = harness_sqlite_query_line(local, "SELECT device_id FROM devices LIMIT 1;");
+    ASSERT_TRUE(dev != NULL);
+    {
+        char sql[FACADE_SQL_BUF];
+        (void)snprintf(sql, sizeof(sql),
+                       "UPDATE entries SET version_vector='{\"%s\":1}' WHERE id=1;", dev);
+        free(harness_sqlite_query_line(local, sql));
+    }
+    free(dev);
+
+    imp[3] = foreign;
+    r = run_remember(local, imp, sizeof(imp) / sizeof(imp[0]), NULL);
+    ASSERT_EQ_INT(r.exit_code, 0);
+    ASSERT_STR_CONTAINS(r.out, "\"conflicts\":1");
+    cmd_result_free(&r);
+
+    assert_read_parity(local, cmd, sizeof(cmd) / sizeof(cmd[0]));
+
+    (void)remove(local);
+    (void)remove(foreign);
+    {
+        char side[FACADE_SIDE_BUF];
+        (void)snprintf(side, sizeof(side), "%s.device_id", local);
+        (void)remove(side);
+    }
+    (void)rmdir(dir);
+}
+
+TEST(facade_conflict_accept_matches_cli)
+{
+    char tmpl[] = "/tmp/remember-facade-a-XXXXXX";
+    char *dir = NULL;
+    char local1[FACADE_PATH_BUF];
+    char local2[FACADE_PATH_BUF];
+    char foreign[FACADE_PATH_BUF];
+    CmdResult r;
+    const char *add[] = {"--json", "add", "--key", "k", "local"};
+    const char *imp[] = {"--json", "import", "--from-db", NULL};
+    const char *accept[] = {"--json", "conflict", "accept", "--id", "1", "--keep", "local"};
+    char *fout = NULL;
+    char *ferr = NULL;
+    int frc = 0;
+    char *dev = NULL;
+
+    dir = mkdtemp(tmpl);
+    ASSERT_TRUE(dir != NULL);
+    if (dir == NULL) {
+        return;
+    }
+    (void)snprintf(local1, sizeof(local1), "%s/a.db", dir);
+    (void)snprintf(local2, sizeof(local2), "%s/b.db", dir);
+    (void)snprintf(foreign, sizeof(foreign), "%s/f.db", dir);
+
+    r = run_remember(local1, add, sizeof(add) / sizeof(add[0]), NULL);
+    ASSERT_EQ_INT(r.exit_code, 0);
+    cmd_result_free(&r);
+    {
+        char cp[FACADE_CMD_BUF];
+        (void)snprintf(cp, sizeof(cp), "cp '%s' '%s'", local1, foreign);
+        ASSERT_EQ_INT(system(cp), 0);
+    }
+    free(harness_sqlite_query_line(
+        foreign, "UPDATE entries SET body='incoming', "
+                 "body_hash='abababababababababababababababababababababababababababababababab',"
+                 "version_vector='{\"bbbbbbbb-bbbb-7bbb-bbbb-bbbbbbbbbbbb\":1}' WHERE id=1;"));
+    dev = harness_sqlite_query_line(local1, "SELECT device_id FROM devices LIMIT 1;");
+    ASSERT_TRUE(dev != NULL);
+    {
+        char sql[FACADE_SQL_BUF];
+        (void)snprintf(sql, sizeof(sql),
+                       "UPDATE entries SET version_vector='{\"%s\":1}' WHERE id=1;", dev);
+        free(harness_sqlite_query_line(local1, sql));
+    }
+    free(dev);
+
+    imp[3] = foreign;
+    r = run_remember(local1, imp, sizeof(imp) / sizeof(imp[0]), NULL);
+    ASSERT_EQ_INT(r.exit_code, 0);
+    cmd_result_free(&r);
+    {
+        char cp[FACADE_CMD_BUF];
+        (void)snprintf(cp, sizeof(cp), "cp '%s' '%s'", local1, local2);
+        ASSERT_EQ_INT(system(cp), 0);
+    }
+
+    r = run_remember(local1, accept, sizeof(accept) / sizeof(accept[0]), NULL);
+    frc = facade_run(local2, accept, sizeof(accept) / sizeof(accept[0]),
+                     (FacadeCapture){.out = &fout, .err = &ferr});
+    ASSERT_EQ_INT(frc, r.exit_code);
+    mask_timestamps(r.out);
+    mask_timestamps(fout);
+    ASSERT_STREQ(fout, r.out);
+    ASSERT_STREQ(ferr, r.err);
+    free(fout);
+    free(ferr);
+    cmd_result_free(&r);
+
+    (void)remove(local1);
+    (void)remove(local2);
+    (void)remove(foreign);
+    {
+        char side[FACADE_SIDE_BUF];
+        (void)snprintf(side, sizeof(side), "%s.device_id", local1);
+        (void)remove(side);
+        (void)snprintf(side, sizeof(side), "%s.device_id", local2);
+        (void)remove(side);
+    }
+    (void)rmdir(dir);
+}
+// NOLINTEND(bugprone-command-processor,cert-env33-c,concurrency-mt-unsafe)
+
 void register_facade_tests(void)
 {
     RUN_TEST(facade_list_matches_cli);
@@ -455,4 +642,7 @@ void register_facade_tests(void)
     RUN_TEST(facade_link_matches_cli);
     RUN_TEST(facade_unlink_matches_cli);
     RUN_TEST(facade_rekey_matches_cli);
+    RUN_TEST(facade_import_matches_cli);
+    RUN_TEST(facade_conflicts_matches_cli);
+    RUN_TEST(facade_conflict_accept_matches_cli);
 }

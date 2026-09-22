@@ -689,7 +689,8 @@ TEST(help_lists_graph_commands)
 
         r = run_remember(db, hl, sizeof(hl) / sizeof(hl[0]), NULL);
         ASSERT_EQ_INT(r.exit_code, 0);
-        ASSERT_STR_CONTAINS(r.out, "either bin");
+        ASSERT_STR_CONTAINS(r.out, "live+expired");
+        ASSERT_STR_CONTAINS(r.out, "--from-sync-id");
         cmd_result_free(&r);
         r = run_remember(db, hu, sizeof(hu) / sizeof(hu[0]), NULL);
         ASSERT_EQ_INT(r.exit_code, 0);

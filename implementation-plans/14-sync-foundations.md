@@ -146,11 +146,11 @@ open a second SQLite handle.
 
 ## Definition of Done
 
-- [ ] Design log 005 unchanged except later Implementation Results
-- [ ] Must-pass table green; `user_version` 4
-- [ ] No `"trash"` in JSON; `bin` always enum
-- [ ] Skill/help match locators, bins, aliases, conflicts, sync_id guidance
-- [ ] `just check` / coverage gate green
+- [x] Design log 005 unchanged except later Implementation Results
+- [x] Must-pass table green; `user_version` 4
+- [x] No `"trash"` in JSON; `bin` always enum
+- [x] Skill/help match locators, bins, aliases, conflicts, sync_id guidance
+- [x] `just check` / coverage gate green
 - [ ] remember-mac pin + 15f is a **follow-up** (kit must decode `bin`,
       drop `trash`, hard-require `sync_id`)
 
@@ -428,8 +428,44 @@ Confirmed against 005 Round 7 + the two new decisions:
   even with conflicts. `sync_import` suite (28 tests) covers every rule + both
   decisions + fail-fast (bad VV, bad reason).
 
-**Note (stage 6):** `import`/`conflicts`/`conflict` are not yet in the facade
-byte-match test (`test_facade.c`) — they use `app_out()`/`app_err()` so they
-are facade-safe by construction, but the must-pass "facade byte-match for
-new/changed commands" needs their cases added in stage 6 (facade parity).
-`SKILL.md` project-status churn still uncommitted.
+**Note (stage 6):** facade byte-match + skill/help landed in stage 6 below.
+`SKILL.md` still uncommitted until Itay asks.
+
+### Stage 6 (2026-09-22)
+
+FINAL: skill/help + facade parity + full suite. General help exit-3 line now
+lists `expired / not_expired / deleted / not_deleted`; command help documents
+`--sync-id`, bins (`--expired`/`--deleted`, `--trash` alias), soft vs hard
+delete, graph `--*-sync-id` / `--deleted`, import sidecar note. `SKILL.md`
+rewritten for Round 7 (locators, bins, soft/hard, import→conflicts, JSON
+`bin`/`sync_id`, no `"trash"` field). Facade suite grows
+`facade_import_matches_cli` / `facade_conflicts_matches_cli` /
+`facade_conflict_accept_matches_cli` (21 tests). Gate: step_gate green, lint
+OK, coverage 100% fn + effective lines. remember-mac kit pin remains follow-up.
+
+### 2026-09-22 — Claude second-opinion deep review (stage 6, FINAL)
+
+Independent pass on skill/help Round 7 + facade parity. Verified by running:
+ctest 4/4 (ASan/UBSan), coverage functions 100% + effective lines 100%,
+`-Weverything -Werror` clean, lint OK. **Clean pass — no auto-fix, no grill.**
+Every note carried across earlier stages is now resolved:
+- General-help exit-3 line lists all four tokens
+  (`expired / not_expired / deleted / not_deleted`); per-command help documents
+  `--sync-id`, graph `--from/--to-sync-id`, import/conflicts. Asserted in
+  `test_cli_global`.
+- **Facade parity gap (flagged at stage 5) closed:** `facade_import_matches_cli`
+  / `facade_conflicts_matches_cli` / `facade_conflict_accept_matches_cli` assert
+  `remember_run` stdout+stderr+exit byte-match the CLI subprocess
+  (timestamp/sync_id/VV masked). Must-pass "facade byte-match for new/changed
+  commands" now satisfied.
+- `SKILL.md` rewritten for Round 7 (locators id|--key|--sync-id; bins + `--trash`
+  deprecation; soft vs hard delete; revive; purge; import→run `conflicts`;
+  `--keep` remint/demote; graph `--deleted`; sidecar next to the DB) — accurate
+  to the implementation. `SKILL.md` is legitimately in scope this stage (skill
+  docs), so it should be committed **with** stage 6 (no longer held back).
+
+**Plan 14 Definition of Done — all met:** design log 005 unchanged (verified);
+must-pass table green; `user_version` 4; no `"trash"` in JSON, `bin` always
+enum; skill/help match locators/bins/aliases/conflicts/sync_id; coverage +
+lint gates green. remember-mac pin + 15f is the follow-up (kit must decode
+`bin`, drop `trash`, hard-require `sync_id`). **Stages 1–6 complete.**

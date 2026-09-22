@@ -10,8 +10,9 @@ Every command also speaks JSON, so agents and scripts share the surface you use.
 - **Find** — `remember search "…"` (SQLite FTS5 over the body) or `remember list`.
 - **Organize** — tags as facets; **keys** as stable named slots (upsert by key).
 - **Connect** — link memories as `related`, `cites`, or `supersedes`.
-- **Expire** — optional TTL with a trash bin (restore or purge); nothing vanishes silently.
+- **Expire / delete** — optional TTL (`--expired` bin) and soft-delete (`--deleted`); hard wipe via `purge` / flagged `delete`. Nothing vanishes silently.
 - **Automate** — `--json` on every command; ships an agent skill for Claude / Cursor / others.
+- **Merge** — `import --from-db` merges another brain by `sync_id`; run `conflicts` after.
 
 Design: [`design-logs/001-foundations.md`](design-logs/001-foundations.md) ·
 Plans: [`implementation-plans/INDEX.md`](implementation-plans/INDEX.md).
@@ -45,8 +46,9 @@ The initial public release bundles the full command surface built so far:
 
 - **Related memories** — connect entries with `related`, `cites`, or
   `supersedes`; list a memory's neighbours and `rekey` in place.
-- **TTL & trash** — optional `--expires`; expired memories move to a trash bin
-  you can restore from or purge. No silent data loss.
+- **TTL & bins** — optional `--expires`; expired and soft-deleted rows live in
+  separate bins (`--expired` / `--deleted`; `--trash` aliases `--expired`).
+  Restore or hard-purge; no silent data loss.
 - **Full-text search** — SQLite **FTS5** over memory bodies (`remember search`).
 - **Keys & tags** — named-slot **keys** (upsert by key) and multi-tag faceting;
   internal spaces allowed in both.
