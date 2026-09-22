@@ -4713,7 +4713,8 @@ static const char *bin_token_store(StoreBin bin)
     }
 }
 
-/* Entry-like JSON without links (005 field order). Caller frees *out. */
+/* Entry-like JSON without links (005 field order). Caller frees *out.
+ * ponytail: RFC 8259 escape is duplicated with output.c; extract if snapshots drift. */
 static StoreStatus entry_snapshot_json(const Entry *e, const char *now, char **out)
 {
     FILE *fp = NULL;
@@ -4901,6 +4902,31 @@ static StoreStatus find_open_conflict(sqlite3 *db, const char *sync_id, StoreCon
     return STORE_OK;
 }
 
+/* Insert or refresh an open conflict by (sync_id, reason). *out_new is 1 only on insert. */
+static StoreStatus upsert_conflict(sqlite3 *db, const char *sync_id, StoreConflictReason reason,
+                                   const char *local_json, const char *incoming_json,
+                                   const char *now, int *out_new)
+{
+    long long existing = 0;
+    StoreStatus st = STORE_OK;
+
+    if (out_new != NULL) {
+        *out_new = 0;
+    }
+    st = find_open_conflict(db, sync_id, reason, &existing);
+    if (st == STORE_OK) {
+        return update_conflict_snapshots(db, existing, local_json, incoming_json);
+    }
+    if (st != STORE_ERR_NOT_FOUND) {
+        return st;
+    }
+    st = insert_conflict(db, sync_id, reason, local_json, incoming_json, now);
+    if (st == STORE_OK && out_new != NULL) {
+        *out_new = 1;
+    }
+    return st;
+}
+
 /*
  * Record or refresh a concurrent_vv conflict after pairwise-maxing local VV
  * (decision:sync-import-reimport-idempotent — re-import must not add another row).
@@ -4915,7 +4941,6 @@ static StoreStatus record_concurrent_vv(sqlite3 *db, const Entry *local, const E
     char maxed[VV_OUT_MAX];
     char *local_json = NULL;
     char *incoming_json = NULL;
-    long long existing = 0;
     StoreStatus st = STORE_OK;
     Entry refreshed;
 
@@ -4947,25 +4972,10 @@ static StoreStatus record_concurrent_vv(sqlite3 *db, const Entry *local, const E
         return st;
     }
 
-    st = find_open_conflict(db, local->sync_id, STORE_CONFLICT_CONCURRENT_VV, &existing);
-    if (st == STORE_OK) {
-        st = update_conflict_snapshots(db, existing, local_json, incoming_json);
-        free(local_json);
-        free(incoming_json);
-        return st;
-    }
-    if (st != STORE_ERR_NOT_FOUND) {
-        free(local_json);
-        free(incoming_json);
-        return st;
-    }
-    st = insert_conflict(db, local->sync_id, STORE_CONFLICT_CONCURRENT_VV, local_json,
-                         incoming_json, now);
+    st = upsert_conflict(db, local->sync_id, STORE_CONFLICT_CONCURRENT_VV, local_json,
+                         incoming_json, now, out_new_conflict);
     free(local_json);
     free(incoming_json);
-    if (st == STORE_OK && out_new_conflict != NULL) {
-        *out_new_conflict = 1;
-    }
     return st;
 }
 
@@ -5247,13 +5257,17 @@ static StoreStatus apply_incoming_fields(sqlite3 *db, long long id, const char *
 }
 
 static StoreStatus record_clash(sqlite3 *db, long long local_id, const Entry *incoming_view,
-                                const char *now, StoreConflictReason reason, const char *sync_id)
+                                const char *now, StoreConflictReason reason, const char *sync_id,
+                                int *out_new_conflict)
 {
     Entry local;
     char *local_json = NULL;
     char *incoming_json = NULL;
     StoreStatus st = STORE_OK;
 
+    if (out_new_conflict != NULL) {
+        *out_new_conflict = 0;
+    }
     memset(&local, 0, sizeof(local));
     st = load_entry_by_id(db, local_id, &local);
     if (st != STORE_OK) {
@@ -5270,7 +5284,7 @@ static StoreStatus record_clash(sqlite3 *db, long long local_id, const Entry *in
         free(local_json);
         return st;
     }
-    st = insert_conflict(db, sync_id, reason, local_json, incoming_json, now);
+    st = upsert_conflict(db, sync_id, reason, local_json, incoming_json, now, out_new_conflict);
     free(local_json);
     free(incoming_json);
     return st;
@@ -5411,9 +5425,12 @@ static StoreStatus import_insert_new(sqlite3 *dst, const ImportRow *row, const c
             return st;
         }
         if (taken) {
+            int is_new = 0;
+
             import_row_as_entry(row, &view);
-            st = record_clash(dst, occ, &view, now, STORE_CONFLICT_KEY_CLASH, row->sync_id);
-            if (st == STORE_OK) {
+            st =
+                record_clash(dst, occ, &view, now, STORE_CONFLICT_KEY_CLASH, row->sync_id, &is_new);
+            if (st == STORE_OK && is_new) {
                 counts->conflicts++;
             }
             return st;
@@ -5424,9 +5441,12 @@ static StoreStatus import_insert_new(sqlite3 *dst, const ImportRow *row, const c
             return st;
         }
         if (taken) {
+            int is_new = 0;
+
             import_row_as_entry(row, &view);
-            st = record_clash(dst, occ, &view, now, STORE_CONFLICT_HASH_CLASH, row->sync_id);
-            if (st == STORE_OK) {
+            st = record_clash(dst, occ, &view, now, STORE_CONFLICT_HASH_CLASH, row->sync_id,
+                              &is_new);
+            if (st == STORE_OK && is_new) {
                 counts->conflicts++;
             }
             return st;
@@ -5476,12 +5496,14 @@ static StoreStatus import_merge_present(sqlite3 *dst, const char *device_id, con
             return st;
         }
         if (taken) {
+            int is_new = 0;
+
             import_row_as_entry(row, &view);
             st = record_clash(dst, occ, &view, now,
                               row->key != NULL ? STORE_CONFLICT_KEY_CLASH
                                                : STORE_CONFLICT_HASH_CLASH,
-                              row->sync_id);
-            if (st == STORE_OK) {
+                              row->sync_id, &is_new);
+            if (st == STORE_OK && is_new) {
                 counts->conflicts++;
             }
             return st;

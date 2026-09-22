@@ -469,3 +469,16 @@ must-pass table green; `user_version` 4; no `"trash"` in JSON, `bin` always
 enum; skill/help match locators/bins/aliases/conflicts/sync_id; coverage +
 lint gates green. remember-mac pin + 15f is the follow-up (kit must decode
 `bin`, drop `trash`, hard-require `sync_id`). **Stages 1–6 complete.**
+
+### 2026-09-22 — epic merge deep-review (in-session)
+
+Probed live (not only read): key_clash re-import duplicated `conflicts` rows
+(concurrent_vv already upserted; clash always `INSERT`). Auto-fixed:
+`upsert_conflict` shared by concurrent_vv and key/hash clash; envelope
+`conflicts` counts only new rows; test `cli_import_key_clash_reimport_idempotent`.
+Also: command-table summaries now mention `--sync-id` / soft-delete; skill
+human `delete` is silent (matches `cmd_delete`). 005 Implementation Results
+filled. Grill (version): Itay chose **0.2.0 in this PR** (pre-1.0 breaking = MINOR).
+CMake + `remember_app.c` fallback bumped; README What's New documents the
+JSON/`delete`/exit-3 breaks. Tag/Homebrew formula still wait for merge to
+main per `docs/RELEASING.md`.

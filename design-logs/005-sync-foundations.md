@@ -605,7 +605,15 @@ remember --json purge --deleted                   # whole-bin; single-device onl
 
 ## Implementation Results
 
-_(filled after implementation)_
+Shipped in plan 14 (branch `plan14-stage1-sync-foundations`, 2026-09-20–22). Schema
+`user_version` 4: `sync_id` / `deleted_at` / `version_vector`, local-only `devices`,
+`conflicts`, sidecar `<db-path>.device_id`. JSON field order + always `bin` enum;
+no `"trash"`. Unflagged `delete` is soft (live or expired); `--expired`/`--deleted`
+one-row hard CASCADE iff `devices` COUNT==1. Locators id | `--key` | `--sync-id`.
+`import --from-db` read-only, refuse v3, no foreign device register; clash and
+`concurrent_vv` upsert by `(sync_id, reason)` so re-import is idempotent.
+`conflict accept --keep both` remints on `concurrent_vv`. Skill/help/facade match.
+remember-mac kit pin + 15f remain follow-up.
 
 ## Review Notes
 

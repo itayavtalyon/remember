@@ -236,7 +236,7 @@ Keyed slots make duplicate rivals impossible. Keyless facts still resolve by rec
 
 ## Human output (when not using `--json`)
 
-- `add` / `update` / `delete` / `rekey`: id (or JSON envelope with `--json`)
+- `add` / `update` / `rekey`: id (or JSON envelope with `--json`); human `delete` is silent
 - `list` / `search`: `id | key | tags | preview | updated_at | related` (preview ≤ 80 codepoints; related ids cap 5)
 - `get` / `related`: `Related:` block after the body (`related` has no body)
 

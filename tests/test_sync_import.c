@@ -325,6 +325,66 @@ TEST(cli_import_key_clash_and_hash_clash_exit_0)
     free(foreign);
 }
 
+TEST(cli_import_key_clash_reimport_idempotent)
+{
+    char *local = make_temp_db_path();
+    char *foreign = make_temp_db_path();
+    CmdResult r;
+    char *nconf = NULL;
+    const char *add_local[] = {"--json", "add", "--key", "slot", "local body"};
+    const char *add_foreign[] = {"--json", "add", "--key", "slot", "foreign body"};
+    const char *imp[] = {"--json", "import", "--from-db", NULL};
+    const char *conflicts[] = {"--json", "conflicts"};
+
+    ASSERT_TRUE(local != NULL && foreign != NULL);
+    r = run_remember(local, add_local, sizeof(add_local) / sizeof(add_local[0]), NULL);
+    ASSERT_EQ_INT(r.exit_code, 0);
+    cmd_result_free(&r);
+    r = run_remember(foreign, add_foreign, sizeof(add_foreign) / sizeof(add_foreign[0]), NULL);
+    ASSERT_EQ_INT(r.exit_code, 0);
+    cmd_result_free(&r);
+
+    imp[3] = foreign;
+    r = run_remember(local, imp, sizeof(imp) / sizeof(imp[0]), NULL);
+    ASSERT_EQ_INT(r.exit_code, 0);
+    ASSERT_STR_CONTAINS(r.out, "\"conflicts\":1");
+    cmd_result_free(&r);
+
+    r = run_remember(local, conflicts, sizeof(conflicts) / sizeof(conflicts[0]), NULL);
+    ASSERT_EQ_INT(r.exit_code, 0);
+    ASSERT_STR_CONTAINS(r.out, "\"count\":1");
+    cmd_result_free(&r);
+
+    r = run_remember(local, imp, sizeof(imp) / sizeof(imp[0]), NULL);
+    ASSERT_EQ_INT(r.exit_code, 0);
+    ASSERT_STR_CONTAINS(r.out, "\"conflicts\":0");
+    cmd_result_free(&r);
+
+    nconf = harness_sqlite_query_line(local, "SELECT COUNT(*) FROM conflicts;");
+    ASSERT_STREQ(nconf != NULL ? nconf : "", "1");
+    free(nconf);
+
+    force_body(foreign, 1, "foreign body v2",
+               "bebebebebebebebebebebebebebebebebebebebebebebebebebebebebebebebe");
+    r = run_remember(local, imp, sizeof(imp) / sizeof(imp[0]), NULL);
+    ASSERT_EQ_INT(r.exit_code, 0);
+    ASSERT_STR_CONTAINS(r.out, "\"conflicts\":0");
+    cmd_result_free(&r);
+
+    nconf = harness_sqlite_query_line(local, "SELECT COUNT(*) FROM conflicts;");
+    ASSERT_STREQ(nconf != NULL ? nconf : "", "1");
+    free(nconf);
+
+    r = run_remember(local, conflicts, sizeof(conflicts) / sizeof(conflicts[0]), NULL);
+    ASSERT_EQ_INT(r.exit_code, 0);
+    ASSERT_STR_CONTAINS(r.out, "\"count\":1");
+    ASSERT_STR_CONTAINS(r.out, "foreign body v2");
+    cmd_result_free(&r);
+
+    free(local);
+    free(foreign);
+}
+
 TEST(cli_conflict_accept_keep_both_concurrent_remints)
 {
     char tmpl[] = "/tmp/remember-both-XXXXXX";
@@ -1805,6 +1865,7 @@ void register_sync_import_tests(void)
     RUN_TEST(cli_import_refuses_v3_source);
     RUN_TEST(cli_import_identical_automerge_concurrent_conflict);
     RUN_TEST(cli_import_key_clash_and_hash_clash_exit_0);
+    RUN_TEST(cli_import_key_clash_reimport_idempotent);
     RUN_TEST(cli_conflict_accept_keep_both_concurrent_remints);
     RUN_TEST(cli_conflict_accept_keep_both_key_clash_keeps_incoming_sync_id);
     RUN_TEST(cli_import_incoming_dominates_updates);

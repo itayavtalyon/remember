@@ -34,6 +34,58 @@ uninstall the usual way (`brew upgrade remember` / `brew uninstall remember`).
 
 ## What's New
 
+### v0.2.0 — local sync foundations
+
+Existing databases migrate in place on first open (`user_version` 1/2/3 → **4**).
+Every memory gets an immutable `sync_id` (UUID v7). Local numeric `id` is still
+the short handle on one machine; after a merge, cite `--sync-id` or `--key`.
+
+**New**
+
+- Locators: positional `id` | `--key` | `--sync-id` (graph:
+  `--from-sync-id` / `--to-sync-id`).
+- Three bins: **live** (default), **expired** (`--expired`), **deleted**
+  (`--deleted`). Unflagged `delete` is reversible; `update --deleted --undelete`
+  restores.
+- `import --from-db PATH` merges another remember DB by `sync_id`. Then run
+  `conflicts` and `conflict accept --id N --keep local|incoming|both`.
+- Device identity is a sidecar file `<db-path>.device_id` (not copied on
+  import). Hard wipe is allowed only when this DB has exactly one registered
+  device.
+
+```bash
+remember --json delete --key pref:editor          # soft-delete
+remember --json update --deleted --key pref:editor --undelete
+remember --json import --from-db /path/other.db
+remember --json conflicts
+remember --json conflict accept --id 1 --keep both
+remember --json purge --deleted                   # whole deleted bin; 1 device
+```
+
+**Breaking** (scripts, agents, RememberKit)
+
+| 0.1.x | 0.2.0 |
+|-------|--------|
+| JSON `"trash": true/false` on entries and stubs | `"bin": "live"\|"expired"\|"deleted"` (always present, never null). Stubs also carry `sync_id`. |
+| Exit 3 token `not_in_trash` | `not_expired`. Soft-delete adds `deleted` / `not_deleted`. |
+| Unflagged `delete` permanently CASCADE-wiped the row | Soft-delete (`deleted_at` set, body and edges kept). |
+| `delete --trash` / `purge-trash` were the only hard paths | Hard wipe is `delete --expired\|--deleted` or `purge --expired\|--deleted` (single-device hatch). |
+| JSON fields ended at `expires_at` then optional `links` | Order is `id, sync_id, key, body, tags, source, created_at, updated_at, expires_at, deleted_at, bin, version_vector` then `links` on list/search/get. |
+
+`--trash` and `purge-trash` still run as aliases of `--expired`, with one
+stderr deprecation line per invocation. They never select the deleted bin.
+
+**Upgrade notes**
+
+- Opening an old DB is enough; do not copy `<db>.device_id` along with a file
+  copy that is meant to be a different replica.
+- JSON parsers must stop reading `"trash"` and must accept `"bin"` +
+  `"sync_id"` (kits should hard-require `sync_id`).
+- Scripts that used `delete` as "forget forever" should switch to
+  `delete --deleted` after a soft-delete, or `purge --deleted`.
+- After `import --from-db`, always run `conflicts` (import exits 0 even when
+  conflicts were recorded).
+
 ### v0.1.1 — Homebrew agent skill
 
 `remember-install-skill` plus `share/remember/SKILL.md` in the prefix, so
@@ -46,9 +98,8 @@ The initial public release bundles the full command surface built so far:
 
 - **Related memories** — connect entries with `related`, `cites`, or
   `supersedes`; list a memory's neighbours and `rekey` in place.
-- **TTL & bins** — optional `--expires`; expired and soft-deleted rows live in
-  separate bins (`--expired` / `--deleted`; `--trash` aliases `--expired`).
-  Restore or hard-purge; no silent data loss.
+- **TTL** — optional `--expires`; expired rows live in a `--trash` /
+  `--expired` bin until `purge-trash`. (Soft-delete is **v0.2.0**.)
 - **Full-text search** — SQLite **FTS5** over memory bodies (`remember search`).
 - **Keys & tags** — named-slot **keys** (upsert by key) and multi-tag faceting;
   internal spaces allowed in both.
