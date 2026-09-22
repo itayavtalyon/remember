@@ -451,6 +451,10 @@ TEST(cli_conflict_accept_keep_both_concurrent_remints)
         const char *p1 = strstr(r.out, sync_orig);
         const char *p2 = NULL;
         ASSERT_TRUE(p1 != NULL);
+        if (p1 == NULL) {
+            cmd_result_free(&r);
+            return;
+        }
         p2 = strstr(p1 + strlen(sync_orig), sync_orig);
         ASSERT_TRUE(p2 == NULL);
     }

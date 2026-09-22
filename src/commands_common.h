@@ -9,6 +9,7 @@
 #include "normalize.h"
 #include "store.h"
 
+#include <stdbool.h>
 #include <stddef.h>
 
 /* Stack buffer size for a canonical ISO-8601 UTC timestamp

@@ -3,7 +3,6 @@
 #include "store.h"
 
 #include <stdio.h>
-#include <string.h>
 
 /* ASCII / UTF-8 byte constants (see also normalize.c). Unsigned to keep the
    mask arithmetic unsigned. */
