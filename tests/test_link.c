@@ -216,7 +216,7 @@ TEST(related_json_types_dir_and_trash)
     ASSERT_STR_CONTAINS(r.out, "\"type\":\"related\"");
     ASSERT_STR_CONTAINS(r.out, "\"type\":\"cites\"");
     ASSERT_STR_CONTAINS(r.out, "\"type\":\"cited_by\"");
-    ASSERT_STR_CONTAINS(r.out, "\"trash\":true");
+    ASSERT_STR_CONTAINS(r.out, "\"bin\":\"expired\"");
     cmd_result_free(&r);
 
     r = run_remember(db, outg, sizeof(outg) / sizeof(outg[0]), NULL);
@@ -580,7 +580,7 @@ TEST(human_list_related_ids_trash_cap)
 
     r = run_remember(db, lst, sizeof(lst) / sizeof(lst[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 0);
-    ASSERT_STR_CONTAINS(r.out, "7[trash], 6, 5, 4, 3, +1");
+    ASSERT_STR_CONTAINS(r.out, "7[expired], 6, 5, 4, 3, +1");
     ASSERT_STR_NOT_CONTAINS(r.out, "slot:k");
     cmd_result_free(&r);
     free(db);
@@ -644,13 +644,13 @@ TEST(get_marks_trash_neighbor_restore_keeps_edge)
 
     r = run_remember(db, get, sizeof(get) / sizeof(get[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 0);
-    ASSERT_STR_CONTAINS(r.out, "\"trash\":true");
+    ASSERT_STR_CONTAINS(r.out, "\"bin\":\"expired\"");
     ASSERT_STR_CONTAINS(r.out, "\"id\":2");
     cmd_result_free(&r);
 
     r = run_remember(db, hget, sizeof(hget) / sizeof(hget[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 0);
-    ASSERT_STR_CONTAINS(r.out, "[trash]");
+    ASSERT_STR_CONTAINS(r.out, "[expired]");
     cmd_result_free(&r);
 
     r = run_remember(db, rest, sizeof(rest) / sizeof(rest[0]), NULL);
@@ -660,7 +660,7 @@ TEST(get_marks_trash_neighbor_restore_keeps_edge)
     r = run_remember(db, get, sizeof(get) / sizeof(get[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 0);
     ASSERT_STR_CONTAINS(r.out, "\"id\":2");
-    ASSERT_STR_CONTAINS(r.out, "\"trash\":false");
+    ASSERT_STR_CONTAINS(r.out, "\"bin\":\"live\"");
     cmd_result_free(&r);
     free(db);
 }
@@ -689,7 +689,8 @@ TEST(help_lists_graph_commands)
 
         r = run_remember(db, hl, sizeof(hl) / sizeof(hl[0]), NULL);
         ASSERT_EQ_INT(r.exit_code, 0);
-        ASSERT_STR_CONTAINS(r.out, "either bin");
+        ASSERT_STR_CONTAINS(r.out, "live+expired");
+        ASSERT_STR_CONTAINS(r.out, "--from-sync-id");
         cmd_result_free(&r);
         r = run_remember(db, hu, sizeof(hu) / sizeof(hu[0]), NULL);
         ASSERT_EQ_INT(r.exit_code, 0);
@@ -814,7 +815,7 @@ TEST(link_and_related_by_key_either_bin)
     /* k:t is in the trash bin, yet the graph locator resolves it (either bin). */
     r = run_remember(db, rel, sizeof(rel) / sizeof(rel[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 0);
-    ASSERT_STR_CONTAINS(r.out, "\"trash\":true");
+    ASSERT_STR_CONTAINS(r.out, "\"bin\":\"expired\"");
     cmd_result_free(&r);
 
     r = run_remember(db, q, sizeof(q) / sizeof(q[0]), NULL);

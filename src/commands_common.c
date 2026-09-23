@@ -257,13 +257,81 @@ void free_tag_list(char **tags, size_t ntags)
     free((void *)tags);
 }
 
+int cmd_bin_take_flag(const char *arg, CmdBinOpts *opts)
+{
+    if (arg == NULL || opts == NULL) {
+        return 0;
+    }
+    if (strcmp(arg, "--trash") == 0) {
+        opts->expired = true;
+        opts->trash_alias = true;
+        return 1;
+    }
+    if (strcmp(arg, "--expired") == 0) {
+        opts->expired = true;
+        return 1;
+    }
+    if (strcmp(arg, "--deleted") == 0) {
+        opts->deleted = true;
+        return 1;
+    }
+    return 0;
+}
+
+int cmd_bin_resolve(const CmdBinOpts *opts, StoreBin *out)
+{
+    if (opts == NULL || out == NULL) {
+        err_msg("internal error");
+        return -1;
+    }
+    if (opts->trash_alias) {
+        (void)fprintf(app_err(), "remember: --trash is deprecated; use --expired\n");
+    }
+    if (opts->expired && opts->deleted) {
+        err_msg("cannot combine --expired and --deleted");
+        return -1;
+    }
+    if (opts->deleted) {
+        *out = STORE_BIN_DELETED;
+    } else if (opts->expired) {
+        *out = STORE_BIN_EXPIRED;
+    } else {
+        *out = STORE_BIN_LIVE;
+    }
+    return 0;
+}
+
+void cmd_neighbors_drop_deleted(StoreNeighbor *rows, size_t *n, const char *now)
+{
+    size_t i = 0;
+    size_t w = 0;
+
+    if (rows == NULL || n == NULL || now == NULL) {
+        return;
+    }
+    for (i = 0; i < *n; i++) {
+        if (store_bin_of(rows[i].neighbor_deleted_at, rows[i].neighbor_expires_at, now) ==
+            STORE_BIN_DELETED) {
+            store_neighbor_free(&rows[i]);
+            continue;
+        }
+        if (w != i) {
+            rows[w] = rows[i];
+            memset(&rows[i], 0, sizeof(rows[i]));
+        }
+        w++;
+    }
+    *n = w;
+}
+
 int store_status_to_exit(StoreStatus st)
 {
     if (st == STORE_ERR_NOT_FOUND) {
         err_msg(store_status_message(st));
         return REMEMBER_NOT_FOUND;
     }
-    if (st == STORE_ERR_EXPIRED || st == STORE_ERR_NOT_IN_TRASH) {
+    if (st == STORE_ERR_EXPIRED || st == STORE_ERR_NOT_EXPIRED || st == STORE_ERR_DELETED ||
+        st == STORE_ERR_NOT_DELETED) {
         err_msg(store_status_message(st));
         return REMEMBER_WRONG_BIN;
     }

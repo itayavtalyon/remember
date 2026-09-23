@@ -318,8 +318,16 @@ TEST(delete_existing)
     ASSERT_EQ_INT(d.exit_code, 0);
     cmd_result_free(&d);
     g = run_remember(db, gargs, sizeof(gargs) / sizeof(gargs[0]), NULL);
-    ASSERT_EQ_INT(g.exit_code, 2);
+    ASSERT_EQ_INT(g.exit_code, 3);
+    ASSERT_STREQ(g.err, "remember: deleted\n");
     cmd_result_free(&g);
+    {
+        const char *get_deleted[] = {"get", "--deleted", "1"};
+        g = run_remember(db, get_deleted, sizeof(get_deleted) / sizeof(get_deleted[0]), NULL);
+        ASSERT_EQ_INT(g.exit_code, 0);
+        ASSERT_STR_CONTAINS(g.out, "to delete");
+        cmd_result_free(&g);
+    }
     free(db);
 }
 

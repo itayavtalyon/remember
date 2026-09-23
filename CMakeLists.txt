@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(remember VERSION 0.1.1 LANGUAGES C)
+project(remember VERSION 0.2.0 LANGUAGES C)
 
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)
@@ -104,6 +104,7 @@ set_property(SOURCE
     src/cmd_tags.c
     src/cmd_purge.c
     src/cmd_graph.c
+    src/cmd_import.c
     src/output.c
     src/util.c
     APPEND PROPERTY COMPILE_OPTIONS -Wcast-qual
@@ -215,6 +216,7 @@ set(REMEMBER_LIB_SOURCES
     src/cmd_tags.c
     src/cmd_purge.c
     src/cmd_graph.c
+    src/cmd_import.c
     src/output.c
     src/util.c
 )
@@ -266,6 +268,7 @@ set(REMEMBER_TEST_SOURCES
     tests/test_cli_global.c
     tests/test_store.c
     tests/test_store_links.c
+    tests/test_store_sync.c
     tests/test_normalize.c
     tests/test_add.c
     tests/test_get_list_delete.c
@@ -280,6 +283,10 @@ set(REMEMBER_TEST_SOURCES
     tests/test_tags.c
     tests/test_ttl.c
     tests/test_link.c
+    tests/test_sync_output.c
+    tests/test_sync_delete.c
+    tests/test_sync_locators.c
+    tests/test_sync_import.c
 )
 add_executable(remember_tests
     ${REMEMBER_TEST_SOURCES}
@@ -313,6 +320,7 @@ add_executable(remember_store_tests
     tests/harness.c
     tests/test_store.c
     tests/test_store_links.c
+    tests/test_store_sync.c
     tests/test_normalize.c
     src/store_sqlite.c
     src/normalize.c

@@ -116,7 +116,8 @@ TEST(get_trash_of_active_exits_three)
     cmd_result_free(&r);
     r = run_remember(db, g, sizeof(g) / sizeof(g[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 3);
-    ASSERT_STREQ(r.err, "remember: not_in_trash\n");
+    ASSERT_STR_CONTAINS(r.err, "remember: --trash is deprecated; use --expired");
+    ASSERT_STR_CONTAINS(r.err, "remember: not_expired\n");
     ASSERT_TRUE(r.out == NULL || r.out[0] == '\0');
     cmd_result_free(&r);
     free(db);

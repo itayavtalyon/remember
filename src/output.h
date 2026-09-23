@@ -10,16 +10,17 @@
  */
 int output_json_string(FILE *out, const char *s);
 
-/* Print a single Entry as a JSON object (no trailing newline). */
-int output_entry_json(FILE *out, const Entry *e);
+/* Print a single Entry as a JSON object (no trailing newline). now is required
+ * to compute bin. */
+int output_entry_json(FILE *out, const Entry *e, const char *now);
 
 /* Uniform mutation envelope: version/action/count/entries:[one]. */
-int output_action_envelope(FILE *out, const char *action, const Entry *e);
+int output_action_envelope(FILE *out, const char *action, const Entry *e, const char *now);
 
 /* purge-trash JSON: action deleted, count N, all snapshots (no cap). */
-int output_deleted_list(FILE *out, const Entry *entries, size_t count);
+int output_deleted_list(FILE *out, const Entry *entries, size_t count, const char *now);
 
-/* Get envelope: version/count/entries:[one] (no action). links after expires_at. */
+/* Get envelope: version/count/entries:[one] (no action). links after version_vector. */
 int output_get_envelope(FILE *out, const Entry *e, const StoreNeighbor *links, size_t nlinks,
                         const char *now);
 
@@ -59,5 +60,14 @@ int output_related_envelope(FILE *out, long long id, const char *key, const Stor
 
 /* Human Related: block (omit entirely when count==0). */
 int output_related_human(FILE *out, const StoreNeighbor *links, size_t count, const char *now);
+
+/* import --json counts envelope (no entry dump). */
+int output_import_envelope(FILE *out, const StoreImportCounts *counts);
+
+/* conflicts --json list. */
+int output_conflicts_envelope(FILE *out, const StoreConflict *rows, size_t count);
+
+/* conflict accept --json: action accepted + entries. */
+int output_accepted_envelope(FILE *out, const Entry *entries, size_t count, const char *now);
 
 #endif /* REMEMBER_OUTPUT_H */

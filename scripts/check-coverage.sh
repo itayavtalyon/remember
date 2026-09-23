@@ -172,7 +172,13 @@ DEFENSIVE = re.compile(
     |^\s*store_entry_free\s*\(
     |^\s*store_neighbor_free\s*\(
     |^\s*store_neighbors_free\s*\(
+    |^\s*store_conflicts_free\s*\(
+    |^\s*vv_pairs_free\s*\(
+    |^\s*import_row_free\s*\(
+    |^\s*snapshot_fields_free\s*\(
+    |^\s*free_tag_list\s*\(
     |^\s*add_parse_free\s*\(
+    |^\s*update_parse_free\s*\(
     |^\s*list_parse_free\s*\(
     |^\s*free\s*\(
     |^\s*size_t\s+\w+\s*(=\s*0U?\s*)?;      # decl (init-variables may add = 0)
@@ -180,11 +186,27 @@ DEFENSIVE = re.compile(
     |^\s*g_fail_\w+\s*--
     |^\s*set_errf?\s*\(
     |^\s*rollback_quiet\s*\(
+    |^\s*savepoint_undo\s*\(
+    |^\s*\(void\)exec_sql\s*\(
+    |^\s*\(void\)sqlite3_exec\s*\(
     |^\s*\(void\)sqlite3_finalize\s*\(
+    |^\s*\(void\)sqlite3_close\s*\(
+    |^\s*\(void\)sqlite3_bind_text\s*\(
+    |^\s*\(void\)sqlite3_bind_null\s*\(
+    |^\s*\(void\)fclose\s*\(
+    |^\s*\(void\)close\s*\(
     |^\s*\*out_entries\s*=
     |^\s*\*out_count\s*=
     |^\s*\*out_stubs\s*=
     |^\s*\*out_total\s*=
+    |^\s*\*\w+\s*=\s*NULL\s*;             # out-param nulling on error tails
+    |^\s*s\s*=\s*""\s*;                   # json_write_string NULL→empty
+    |^\s*if\s*\(\s*src\s*!=\s*NULL\s*\)
+    |^\s*if\s*\(\s*sel\s*!=\s*NULL\s*\)
+    |^\s*if\s*\(\s*\*out_entries\s*!=\s*NULL\s*\)
+    |^\s*for\s*\(\s*i\s*=\s*0\s*;\s*i\s*<\s*\*out_count
+    |^\s*fail:\s*$
+    |^\s*return\s+STORE_OK\s*;\s*$        # null-arg / trivial OK early-outs (cf. STORE_ERR_)
     |^\s*st\s*=\s*STORE_ERR_
     |^\s*free_entry_rows\s*\(
     |^\s*buf\s*=\s*(\(char\s*\*\)\s*)?malloc\s*\(   # cast added by clang-tidy readability

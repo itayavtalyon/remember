@@ -138,10 +138,10 @@ static int parse_add_args(int rest_argc, const char **rest_argv, AddParse *out, 
     return 0;
 }
 
-static int emit_add_result(bool json, StoreAddAction action, const Entry *entry)
+static int emit_add_result(bool json, StoreAddAction action, const Entry *entry, const char *now)
 {
     if (json) {
-        if (output_action_envelope(app_out(), action_name(action), entry) != 0) {
+        if (output_action_envelope(app_out(), action_name(action), entry, now) != 0) {
             err_msg("failed to write output");
             return -1;
         }
@@ -237,7 +237,7 @@ int cmd_add(Store *s, bool json, int rest_argc, const char **rest_argv)
         err_msg(store_status_message(st));
         goto cleanup;
     }
-    if (emit_add_result(json, action, &entry) != 0) {
+    if (emit_add_result(json, action, &entry, now) != 0) {
         goto cleanup;
     }
     rc = REMEMBER_OK;

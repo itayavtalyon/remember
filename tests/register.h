@@ -4,6 +4,7 @@
 void register_cli_global_tests(void);
 void register_store_tests(void);
 void register_store_link_tests(void);
+void register_store_sync_tests(void);
 void register_normalize_tests(void);
 void register_add_tests(void);
 void register_get_list_delete_tests(void);
@@ -21,5 +22,9 @@ void register_facade_tests(void);
 void register_tags_tests(void);
 void register_ttl_tests(void);
 void register_link_tests(void);
+void register_sync_output_tests(void);
+void register_sync_delete_tests(void);
+void register_sync_locators_tests(void);
+void register_sync_import_tests(void);
 
 #endif /* REMEMBER_REGISTER_H */

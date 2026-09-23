@@ -14,10 +14,13 @@
 typedef struct {
     const char *from_id_raw;
     const char *from_key_raw;
+    const char *from_sync_id_raw;
     const char *to_id_raw;
     const char *to_key_raw;
+    const char *to_sync_id_raw;
     const char *kind_raw;
     const char *pos[2];
+    CmdBinOpts bins;
     int npos;
     char pad_[4]; /* explicit tail padding (kept -Wpadded-clean) */
 } PairParse;
@@ -67,6 +70,15 @@ static int handle_pair_flag(const char *arg, int *i, int rest_argc, const char *
         out->from_key_raw = taken.value;
         return 1;
     }
+    if (strcmp(arg, "--from-sync-id") == 0) {
+        TakeValue taken = take_value(i, rest_argc, rest_argv, "missing value for --from-sync-id");
+        if (taken.rc != 0) {
+            err_msg(taken.err);
+            return -1;
+        }
+        out->from_sync_id_raw = taken.value;
+        return 1;
+    }
     if (strcmp(arg, "--to") == 0) {
         TakeValue taken = take_value(i, rest_argc, rest_argv, "missing value for --to");
         if (taken.rc != 0) {
@@ -85,6 +97,15 @@ static int handle_pair_flag(const char *arg, int *i, int rest_argc, const char *
         out->to_key_raw = taken.value;
         return 1;
     }
+    if (strcmp(arg, "--to-sync-id") == 0) {
+        TakeValue taken = take_value(i, rest_argc, rest_argv, "missing value for --to-sync-id");
+        if (taken.rc != 0) {
+            err_msg(taken.err);
+            return -1;
+        }
+        out->to_sync_id_raw = taken.value;
+        return 1;
+    }
     if (strcmp(arg, "--kind") == 0) {
         TakeValue taken = take_value(i, rest_argc, rest_argv, "missing value for --kind");
         if (taken.rc != 0) {
@@ -92,6 +113,9 @@ static int handle_pair_flag(const char *arg, int *i, int rest_argc, const char *
             return -1;
         }
         out->kind_raw = taken.value;
+        return 1;
+    }
+    if (cmd_bin_take_flag(arg, &out->bins) != 0) {
         return 1;
     }
     if (arg[0] == '-' && arg[1] != '\0') {
@@ -132,14 +156,38 @@ static int parse_pair_args(int rest_argc, const char **rest_argv, PairParse *out
     return 0;
 }
 
+/* One endpoint locator: exactly one of id / key / sync_id. */
+typedef struct {
+    const char *id_raw;
+    const char *key_raw;
+    const char *sync_id_raw;
+} EndRef;
+
+static int end_form_count(EndRef ref)
+{
+    int n = 0;
+
+    if (ref.id_raw != NULL) {
+        n++;
+    }
+    if (ref.key_raw != NULL) {
+        n++;
+    }
+    if (ref.sync_id_raw != NULL) {
+        n++;
+    }
+    return n;
+}
+
 static int pair_apply_sugar(PairParse *p)
 {
-    int from_n = 0;
-    int to_n = 0;
+    EndRef from = {
+        .id_raw = p->from_id_raw, .key_raw = p->from_key_raw, .sync_id_raw = p->from_sync_id_raw};
+    EndRef to = {
+        .id_raw = p->to_id_raw, .key_raw = p->to_key_raw, .sync_id_raw = p->to_sync_id_raw};
 
     if (p->npos == 2) {
-        if (p->from_id_raw != NULL || p->from_key_raw != NULL || p->to_id_raw != NULL ||
-            p->to_key_raw != NULL) {
+        if (end_form_count(from) != 0 || end_form_count(to) != 0) {
             err_msg("provide --from/--to flags or two ids, not both");
             return -1;
         }
@@ -149,51 +197,55 @@ static int pair_apply_sugar(PairParse *p)
         err_msg("missing --from/--to (or two ids)");
         return -1;
     }
-    if (p->from_id_raw != NULL) {
-        from_n++;
-    }
-    if (p->from_key_raw != NULL) {
-        from_n++;
-    }
-    if (p->to_id_raw != NULL) {
-        to_n++;
-    }
-    if (p->to_key_raw != NULL) {
-        to_n++;
-    }
-    if (from_n != 1 || to_n != 1) {
-        err_msg("each end needs exactly one of id or --key");
+    from = (EndRef){
+        .id_raw = p->from_id_raw, .key_raw = p->from_key_raw, .sync_id_raw = p->from_sync_id_raw};
+    to = (EndRef){
+        .id_raw = p->to_id_raw, .key_raw = p->to_key_raw, .sync_id_raw = p->to_sync_id_raw};
+    if (end_form_count(from) != 1 || end_form_count(to) != 1) {
+        err_msg("each end needs exactly one of id, --key, or --sync-id");
         return -1;
     }
     return 0;
 }
 
-/* One endpoint locator: by raw id token or by raw key token (exactly one set). */
-typedef struct {
-    const char *id_raw;
-    const char *key_raw;
-} EndRef;
-
-static int resolve_end(Store *s, EndRef ref, long long *out_id)
+static int resolve_end(Store *s, EndRef ref, bool include_deleted, long long *out_id)
 {
     Entry e;
     StoreStatus st = STORE_OK;
 
     memset(&e, 0, sizeof(e));
-    if (ref.key_raw != NULL) {
+    if (ref.sync_id_raw != NULL) {
+        if (store_sync_id_is_canonical(ref.sync_id_raw) == 0) {
+            err_msg("invalid sync-id");
+            return REMEMBER_ERR;
+        }
+        if (include_deleted) {
+            st = store_get_row_by_sync_id(s, ref.sync_id_raw, &e);
+        } else {
+            st = store_get_any_by_sync_id(s, ref.sync_id_raw, &e);
+        }
+    } else if (ref.key_raw != NULL) {
         char key_norm[REMEMBER_TOKEN_MAX + 1];
         NormStatus ns = normalize_key(ref.key_raw, key_norm, sizeof(key_norm));
         if (ns != NORM_OK) {
             err_msg(norm_token_message(ns, "key"));
             return REMEMBER_ERR;
         }
-        st = store_get_any_by_key(s, key_norm, &e);
+        if (include_deleted) {
+            st = store_get_row_by_key(s, key_norm, &e);
+        } else {
+            st = store_get_any_by_key(s, key_norm, &e);
+        }
     } else {
         if (parse_entry_id(ref.id_raw, out_id) != 0) {
             err_msg("invalid id");
             return REMEMBER_ERR;
         }
-        st = store_get_any(s, *out_id, &e);
+        if (include_deleted) {
+            st = store_get_row(s, *out_id, &e);
+        } else {
+            st = store_get_any(s, *out_id, &e);
+        }
     }
     if (st != STORE_OK) {
         return store_status_to_exit(st);
@@ -234,11 +286,21 @@ static int run_pair(Store *s, bool json, int rest_argc, const char **rest_argv, 
     StoreNeighbor stub;
     StoreNeighbor *gone = NULL;
     size_t n = 0U;
+    StoreBin bin = STORE_BIN_LIVE;
+    bool include_deleted = false;
 
     memset(&stub, 0, sizeof(stub));
     if (parse_pair_args(rest_argc, rest_argv, &p) != 0 || pair_apply_sugar(&p) != 0) {
         return REMEMBER_ERR;
     }
+    if (cmd_bin_resolve(&p.bins, &bin) != 0) {
+        return REMEMBER_ERR;
+    }
+    if (p.bins.expired || p.bins.trash_alias) {
+        err_msg("graph commands use --deleted for deleted ends (not --expired)");
+        return REMEMBER_ERR;
+    }
+    include_deleted = (bin == STORE_BIN_DELETED);
     if (p.kind_raw != NULL) {
         if (parse_kind_token(p.kind_raw, &kind) != 0) {
             return REMEMBER_ERR;
@@ -252,11 +314,18 @@ static int run_pair(Store *s, bool json, int rest_argc, const char **rest_argv, 
         err_msg("internal error");
         return REMEMBER_ERR;
     }
-    rc = resolve_end(s, (EndRef){.id_raw = p.from_id_raw, .key_raw = p.from_key_raw}, &from_id);
+    rc = resolve_end(s,
+                     (EndRef){.id_raw = p.from_id_raw,
+                              .key_raw = p.from_key_raw,
+                              .sync_id_raw = p.from_sync_id_raw},
+                     include_deleted, &from_id);
     if (rc != REMEMBER_OK) {
         return rc;
     }
-    rc = resolve_end(s, (EndRef){.id_raw = p.to_id_raw, .key_raw = p.to_key_raw}, &to_id);
+    rc = resolve_end(
+        s,
+        (EndRef){.id_raw = p.to_id_raw, .key_raw = p.to_key_raw, .sync_id_raw = p.to_sync_id_raw},
+        include_deleted, &to_id);
     if (rc != REMEMBER_OK) {
         return rc;
     }
@@ -301,9 +370,11 @@ int cmd_unlink(Store *s, bool json, int rest_argc, const char **rest_argv)
 typedef struct {
     const char *id_raw;
     const char *key_raw;
+    const char *sync_id_raw;
     const char *kind_raw;
     bool outgoing;
     bool incoming;
+    CmdBinOpts bins;
     /* NOLINTNEXTLINE(readability-magic-numbers,cppcoreguidelines-avoid-magic-numbers) */
     char pad_[6]; /* explicit tail padding (kept -Wpadded-clean) */
 } RelatedParse;
@@ -324,6 +395,15 @@ static int handle_related_flag(const char *arg, int *i, int rest_argc, const cha
         out->key_raw = taken.value;
         return 1;
     }
+    if (strcmp(arg, "--sync-id") == 0) {
+        TakeValue taken = take_value(i, rest_argc, rest_argv, "missing value for --sync-id");
+        if (taken.rc != 0) {
+            err_msg(taken.err);
+            return -1;
+        }
+        out->sync_id_raw = taken.value;
+        return 1;
+    }
     if (strcmp(arg, "--kind") == 0) {
         TakeValue taken = take_value(i, rest_argc, rest_argv, "missing value for --kind");
         if (taken.rc != 0) {
@@ -339,6 +419,9 @@ static int handle_related_flag(const char *arg, int *i, int rest_argc, const cha
     }
     if (strcmp(arg, "--incoming") == 0) {
         out->incoming = true;
+        return 1;
+    }
+    if (cmd_bin_take_flag(arg, &out->bins) != 0) {
         return 1;
     }
     if (arg[0] == '-' && arg[1] != '\0') {
@@ -379,26 +462,46 @@ static int parse_related_args(int rest_argc, const char **rest_argv, RelatedPars
     return 0;
 }
 
-static int related_load_subject(Store *s, const RelatedParse *p, Entry *subject)
+static int related_load_subject(Store *s, const RelatedParse *p, bool include_deleted,
+                                Entry *subject)
 {
+    EndRef ref = {.id_raw = p->id_raw, .key_raw = p->key_raw, .sync_id_raw = p->sync_id_raw};
     StoreStatus st = STORE_OK;
 
     memset(subject, 0, sizeof(*subject));
-    if (p->key_raw != NULL) {
+    if (ref.sync_id_raw != NULL) {
+        if (store_sync_id_is_canonical(ref.sync_id_raw) == 0) {
+            err_msg("invalid sync-id");
+            return REMEMBER_ERR;
+        }
+        if (include_deleted) {
+            st = store_get_row_by_sync_id(s, ref.sync_id_raw, subject);
+        } else {
+            st = store_get_any_by_sync_id(s, ref.sync_id_raw, subject);
+        }
+    } else if (ref.key_raw != NULL) {
         char key_norm[REMEMBER_TOKEN_MAX + 1];
-        NormStatus ns = normalize_key(p->key_raw, key_norm, sizeof(key_norm));
+        NormStatus ns = normalize_key(ref.key_raw, key_norm, sizeof(key_norm));
         if (ns != NORM_OK) {
             err_msg(norm_token_message(ns, "key"));
             return REMEMBER_ERR;
         }
-        st = store_get_any_by_key(s, key_norm, subject);
+        if (include_deleted) {
+            st = store_get_row_by_key(s, key_norm, subject);
+        } else {
+            st = store_get_any_by_key(s, key_norm, subject);
+        }
     } else {
         long long id = 0;
-        if (parse_entry_id(p->id_raw, &id) != 0) {
+        if (parse_entry_id(ref.id_raw, &id) != 0) {
             err_msg("invalid id");
             return REMEMBER_ERR;
         }
-        st = store_get_any(s, id, subject);
+        if (include_deleted) {
+            st = store_get_row(s, id, subject);
+        } else {
+            st = store_get_any(s, id, subject);
+        }
     }
     return store_status_to_exit(st);
 }
@@ -414,22 +517,42 @@ int cmd_related(Store *s, bool json, int rest_argc, const char **rest_argv)
     StoreNeighbor *rows = NULL;
     size_t n = 0U;
     StoreStatus st = STORE_OK;
+    StoreBin bin = STORE_BIN_LIVE;
+    bool include_deleted = false;
+    int forms = 0;
     int rc = 0;
 
     memset(&subject, 0, sizeof(subject));
     if (parse_related_args(rest_argc, rest_argv, &p) != 0) {
         return REMEMBER_ERR;
     }
+    if (cmd_bin_resolve(&p.bins, &bin) != 0) {
+        return REMEMBER_ERR;
+    }
+    if (p.bins.expired || p.bins.trash_alias) {
+        err_msg("graph commands use --deleted for deleted ends (not --expired)");
+        return REMEMBER_ERR;
+    }
+    include_deleted = (bin == STORE_BIN_DELETED);
     if (p.outgoing && p.incoming) {
         err_msg("cannot combine --outgoing and --incoming");
         return REMEMBER_ERR;
     }
-    if (p.key_raw != NULL && p.id_raw != NULL) {
-        err_msg("provide either id or --key, not both");
+    if (p.key_raw != NULL) {
+        forms++;
+    }
+    if (p.id_raw != NULL) {
+        forms++;
+    }
+    if (p.sync_id_raw != NULL) {
+        forms++;
+    }
+    if (forms > 1) {
+        err_msg("provide exactly one of id, --key, or --sync-id");
         return REMEMBER_ERR;
     }
-    if (p.key_raw == NULL && p.id_raw == NULL) {
-        err_msg("missing id or --key");
+    if (forms == 0) {
+        err_msg("missing id, --key, or --sync-id");
         return REMEMBER_ERR;
     }
     if (p.kind_raw != NULL) {
@@ -447,7 +570,7 @@ int cmd_related(Store *s, bool json, int rest_argc, const char **rest_argv)
         err_msg("internal error");
         return REMEMBER_ERR;
     }
-    rc = related_load_subject(s, &p, &subject);
+    rc = related_load_subject(s, &p, include_deleted, &subject);
     if (rc != REMEMBER_OK) {
         return rc;
     }
@@ -456,6 +579,9 @@ int cmd_related(Store *s, bool json, int rest_argc, const char **rest_argv)
     if (rc != REMEMBER_OK) {
         store_entry_free(&subject);
         return rc;
+    }
+    if (bin != STORE_BIN_DELETED) {
+        cmd_neighbors_drop_deleted(rows, &n, now);
     }
     if (json) {
         rc = output_related_envelope(app_out(), subject.id, subject.key, rows, n, now);

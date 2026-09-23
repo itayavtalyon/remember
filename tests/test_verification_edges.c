@@ -236,6 +236,7 @@ TEST(update_preserves_id_key_source_created_at)
 
 /* ---- V24 orphan-tag GC --------------------------------------------------- */
 
+/* Unflagged delete is soft: tags stay. Hard wipe GCs the orphan. */
 TEST(orphan_tag_removed_when_last_use_deleted)
 {
     char *db = make_temp_db_path();
@@ -243,12 +244,20 @@ TEST(orphan_tag_removed_when_last_use_deleted)
     CmdResult d;
     char *count = NULL;
     const char *a[] = {"add", "--tag", "orphanonly", "solo"};
-    const char *dargs[] = {"delete", "1"};
+    const char *soft[] = {"delete", "1"};
+    const char *hard[] = {"delete", "--deleted", "1"};
     ASSERT_TRUE(db != NULL);
     r = run_remember(db, a, sizeof(a) / sizeof(a[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 0);
     cmd_result_free(&r);
-    d = run_remember(db, dargs, sizeof(dargs) / sizeof(dargs[0]), NULL);
+    d = run_remember(db, soft, sizeof(soft) / sizeof(soft[0]), NULL);
+    ASSERT_EQ_INT(d.exit_code, 0);
+    cmd_result_free(&d);
+    count = harness_sqlite_query_line(db, "SELECT count(*) FROM tags WHERE name='orphanonly';");
+    ASSERT_TRUE(count != NULL);
+    ASSERT_STREQ(count, "1");
+    free(count);
+    d = run_remember(db, hard, sizeof(hard) / sizeof(hard[0]), NULL);
     ASSERT_EQ_INT(d.exit_code, 0);
     cmd_result_free(&d);
     count = harness_sqlite_query_line(db, "SELECT count(*) FROM tags WHERE name='orphanonly';");
@@ -320,6 +329,7 @@ TEST(fts_search_empty_after_delete)
     const char *a[] = {"add", "deleteftsunique99"};
     const char *dargs[] = {"delete", "1"};
     const char *sargs[] = {"search", "--json", "deleteftsunique99"};
+    const char *sdel[] = {"search", "--deleted", "--json", "deleteftsunique99"};
     ASSERT_TRUE(db != NULL);
     r = run_remember(db, a, sizeof(a) / sizeof(a[0]), NULL);
     cmd_result_free(&r);
@@ -329,6 +339,10 @@ TEST(fts_search_empty_after_delete)
     s = run_remember(db, sargs, sizeof(sargs) / sizeof(sargs[0]), NULL);
     ASSERT_EQ_INT(s.exit_code, 0);
     ASSERT_STR_CONTAINS(s.out, "\"total\":0");
+    cmd_result_free(&s);
+    s = run_remember(db, sdel, sizeof(sdel) / sizeof(sdel[0]), NULL);
+    ASSERT_EQ_INT(s.exit_code, 0);
+    ASSERT_STR_CONTAINS(s.out, "deleteftsunique99");
     cmd_result_free(&s);
     free(db);
 }
