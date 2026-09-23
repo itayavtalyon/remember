@@ -28,22 +28,28 @@ static void assert_query_is(const char *db, QueryExpect check)
     free(row);
 }
 
+typedef struct {
+    const char *query;
+    size_t want;
+    StoreBin bin;
+    char pad_[4];
+} SearchExpect;
+
 /* FTS via the store port — do not inspect entries_fts with the system sqlite3
  * CLI (GHA macOS sqlite is older than the vendored amalgamation). */
-// NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
-static void assert_search_total(Store *s, const char *query, StoreBin bin, int want)
+static void assert_search_total(Store *s, SearchExpect check)
 {
     SearchQuery sq;
     PageResult page;
     size_t i = 0;
 
     memset(&sq, 0, sizeof(sq));
-    sq.query = query;
+    sq.query = check.query;
     sq.filters.limit = (size_t)LIST_PAGE;
-    sq.filters.bin = bin;
+    sq.filters.bin = check.bin;
     page = store_search(s, &sq, k_now);
     ASSERT_EQ_STATUS(page.st, STORE_OK);
-    ASSERT_EQ_INT((int)page.total, want);
+    ASSERT_EQ_INT((int)page.total, (int)check.want);
     for (i = 0; i < page.count; i++) {
         store_entry_free(&page.entries[i]);
     }
@@ -893,8 +899,8 @@ TEST(store_soft_delete_live_keeps_body_fts_edges)
 
     assert_query_is(db,
                     (QueryExpect){.sql = "SELECT count(*) FROM entries WHERE id=1;", .want = "1"});
-    assert_search_total(s, "keep", STORE_BIN_LIVE, 0);
-    assert_search_total(s, "keep", STORE_BIN_DELETED, 1);
+    assert_search_total(s, (SearchExpect){.query = "keep", .bin = STORE_BIN_LIVE, .want = 0});
+    assert_search_total(s, (SearchExpect){.query = "keep", .bin = STORE_BIN_DELETED, .want = 1});
     ASSERT_EQ_STATUS(store_list_neighbors(s, 1, NULL, STORE_NEIGHBOR_ALL, k_now, &rows, &n),
                      STORE_OK);
     ASSERT_EQ_INT((int)n, 1);
@@ -965,7 +971,7 @@ TEST(store_hard_delete_expired_cascades_fts)
     store_entry_free(&e);
     assert_query_is(db,
                     (QueryExpect){.sql = "SELECT count(*) FROM entries WHERE id=1;", .want = "0"});
-    assert_search_total(s, "exp", STORE_BIN_EXPIRED, 0);
+    assert_search_total(s, (SearchExpect){.query = "exp", .bin = STORE_BIN_EXPIRED, .want = 0});
     assert_query_is(db, (QueryExpect){.sql = "SELECT count(*) FROM entry_links;", .want = "0"});
     store_close(s);
     free(db);
