@@ -30,6 +30,7 @@ static void assert_query_is(const char *db, QueryExpect check)
 
 /* FTS via the store port — do not inspect entries_fts with the system sqlite3
  * CLI (GHA macOS sqlite is older than the vendored amalgamation). */
+// NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
 static void assert_search_total(Store *s, const char *query, StoreBin bin, int want)
 {
     SearchQuery sq;
