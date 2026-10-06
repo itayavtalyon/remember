@@ -1,3 +1,18 @@
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/assets/readme-header.png">
+    <source media="(prefers-color-scheme: light)" srcset="docs/assets/readme-header-light.png">
+    <img alt="remember: One memory for you and your agents" src="docs/assets/readme-header.png" width="100%">
+  </picture>
+</p>
+
+<p align="center">
+  <a href="https://github.com/itayavtalyon/remember/actions/workflows/ci.yml?query=branch%3Amain"><img alt="CI status" src="https://img.shields.io/github/actions/workflow/status/itayavtalyon/remember/ci.yml?branch=main&amp;style=flat-square&amp;label=ci&amp;labelColor=8B5CF6"></a>
+  <a href="https://github.com/itayavtalyon/remember/releases/latest"><img alt="Latest release" src="https://img.shields.io/github/v/release/itayavtalyon/remember?style=flat-square&amp;labelColor=8B5CF6&amp;color=F59E0B"></a>
+  <a href="LICENSE"><img alt="License: MIT" src="https://img.shields.io/github/license/itayavtalyon/remember?style=flat-square&amp;labelColor=8B5CF6&amp;color=F59E0B"></a>
+  <a href="#homebrew-recommended"><img alt="Install with Homebrew" src="https://img.shields.io/badge/homebrew-install-F59E0B?style=flat-square&amp;logo=homebrew&amp;logoColor=white&amp;labelColor=8B5CF6"></a>
+</p>
+
 # remember
 
 **Local-first personal second brain, on the command line.** Capture notes,
