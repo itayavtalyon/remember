@@ -13,6 +13,10 @@
   <a href="#homebrew-recommended"><img alt="Install with Homebrew" src="https://img.shields.io/badge/homebrew-install-F59E0B?style=flat-square&amp;logo=homebrew&amp;logoColor=white&amp;labelColor=8B5CF6"></a>
 </p>
 
+<p align="center">
+  <img alt="Remember demo" src="docs/assets/demo.gif">
+</p>
+
 # remember
 
 **Local-first personal second brain, on the command line.** Capture notes,
@@ -20,6 +24,14 @@ facts, and decisions as durable *memories* — each with an optional named key,
 tags, an optional expiry, and typed links to related memories — then find them
 again with full-text search. One SQLite file: no server, no account, no network.
 Every command also speaks JSON, so agents and scripts share the surface you use.
+
+```mermaid
+flowchart LR
+    You([You]) <--> R[(Remember<br/>one local SQLite file)]
+    A1([Claude Code]) <-->|--json| R
+    A2([Cursor]) <-->|--json| R
+    A3([Any agent<br/>with the skill]) <-->|--json| R
+```
 
 - **Store** — `remember add "…"` with optional `--key`, `--tags`, `--expires`.
 - **Find** — `remember search "…"` (SQLite FTS5 over the body) or `remember list`.
@@ -33,6 +45,8 @@ Design: [`design-logs/001-foundations.md`](design-logs/001-foundations.md) ·
 Plans: [`implementation-plans/INDEX.md`](implementation-plans/INDEX.md).
 
 ## Install
+
+**[Getting started](docs/getting-started.md)** — install, a first minute on the CLI, and handing the same file to agents.
 
 ### Homebrew (recommended)
 
