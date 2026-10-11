@@ -1,6 +1,6 @@
 # 006 - Engine changes for the Fortkeeps UI overhaul (0.3.0)
 
-**Status:** Design (closed 2026-10-11)
+**Status:** Design (closed 2026-10-11, amended the same day after deep review)
 **Author:** Itay (+ agent facilitation)
 **Created:** 2026-10-11
 
@@ -53,9 +53,10 @@ shape this log:
   EN-01/EN-02 named in What's New.
 - Device id: E14 `device` / `device new`; the 005 recovery rule stays (Round 5, replaces
   the Round 4 rule change).
-- Q6: a hand-edited import record that differs records a conflict.
+- Q6: a hand-edited import record with a `sync_id` and no `version_vector`, whose fields differ, records a `concurrent_vv` conflict (E7.2). An equal version vector stays unchanged (E7.1).
 - Q12: import never registers foreign devices; this log makes it a tested rule.
 - v5 migrates silently on open; Homebrew 0.3.0 ships before any app that links v5.
+- Deep review 2026-10-11 (Itay): a blank search writes no warning (E2.1); one import is one transaction (E7.9, E7.10); Markdown and CSV settings are the E12.9 object and import reads bucket prefixes only (E7.11); an existing export path is `usage` (E6.6); `--keep incoming` and `--keep both` on `hash_clash` stay failures.
 
 ## Design
 
@@ -76,18 +77,19 @@ shape this log:
   4. Create `settings(name TEXT PRIMARY KEY, value TEXT NOT NULL, updated_at TEXT NOT NULL)`.
   5. `ALTER TABLE conflicts ADD COLUMN origin TEXT`.
   6. Set `user_version = 5`.
-- E1.2. `fts_resync` writes the key (empty string when NULL), the body and the tag names.
-- E1.4. `import --from-db` accepts sources at v4 and v5.
+- E1.2. `fts_resync` writes the key (empty string when NULL), the body, and the tag names joined with one space, as in 0.2.0.
+- E1.4. `import --from-db` accepts sources at v4 and v5. The engine opens the source read-only and does not migrate it. A missing `origin` column, a missing `bucket_prefixes` table, or a missing `settings` table means those values are absent.
 - E1.5. remember 0.2.x refuses a v5 brain with `database is newer than this remember`.
 
 ### 2. Search (E2, E3)
 
-- E2.1. `remember search QUERY` is the only search. The filters `--tag`, `--source`, `--key`, `--limit`, `--offset`, `--expired`, `--deleted`, `--since`, `--until` apply. `--facet-limit N` (default 50, max 200) caps the `keys` and `tags` items.
+- E2.1. `remember search QUERY` is the only search. The filters `--tag`, `--source`, `--key`, `--limit`, `--offset`, `--expired`, `--deleted`, `--since`, `--until` apply. `--facet-limit N` (default 50, max 200) caps the `keys` and `tags` items. A value outside 1–200 exits 1 with code `usage` and message `invalid --facet-limit (must be 1..200)`.
 - E2.1. The memory query is a union:
   1. P = the prefix part built by E2.2.
   2. R = QUERY trimmed of ASCII whitespace.
   3. When R is not empty and parses alone (E2.1a), the engine runs one FTS query `(<P>) OR (<R>)`. When P is empty, it runs R alone.
-  4. Otherwise the engine runs P alone and writes the `raw_query_ignored` warning (E2.3). When P is also empty, the result is empty: exit 0, `count` 0, `total` 0, empty `keys` and `tags`.
+  4. When R is empty, the engine runs P alone and writes no warning. When P is also empty, the result is empty: exit 0, `count` 0, `total` 0, empty `keys` and `tags`.
+  5. When R is not empty and does not parse, the engine runs P alone and writes the `raw_query_ignored` warning (E2.3). When P is empty, the result is empty and the warning is still written.
 - E2.1a. The "parses alone" test prepares `SELECT 1 FROM entries_fts WHERE entries_fts MATCH ?1 LIMIT 1`, binds R and steps once on the same connection and transaction. `SQLITE_ROW` or `SQLITE_DONE` means it parses. `SQLITE_ERROR` with a message starting `fts5:`, `no such column` or `unknown special query` means it does not parse; the engine keeps the message. Any other result is a real error (E3.2).
 - E2.1b. Each row appears once. `count`, `total`, `--offset` and `--limit` apply to the de-duplicated set.
 - E2.2. The engine builds P:
@@ -101,7 +103,7 @@ shape this log:
 - E2.4. Memories are ordered by, with q = QUERY trimmed and ASCII-lowercased:
   1. `e.key = q` first.
   2. Then `substr(e.key, 1, length(q)) = q`.
-  3. Then `bm25(entries_fts, 10.0, 1.0, 4.0)` (key, body, tags).
+  3. Then `bm25(entries_fts, 10.0, 1.0, 4.0) ASC` (key, body, tags). A smaller score comes first, as in 0.2.0.
   4. Then `e.updated_at DESC, e.id DESC`.
 - E2.5. With t1…tn = the P tokens ASCII-lowercased, a key or tag splits into segments on `:`, `-`, `_`, `.`, `/` and whitespace. A key or tag text-matches when every token is a prefix of one of its segments, or when q is a prefix of the whole key or tag. The engine returns a key or tag only when it text-matches and belongs to at least one memory inside the active bin and filters. A key belongs to its memory. A tag belongs to every memory that carries it.
 - E2.6. The `--json` output adds `keys` and `tags` between `total` and `entries`. This is a stated exception to EN-01 and EN-02 (Itay, Round 7); What's New names it:
@@ -141,7 +143,8 @@ shape this log:
 | SCHEMA 17 | the engine retries the statement once, then `database` |
 | everything else (NOMEM, IOERR_NOMEM, MISUSE, RANGE, MISMATCH, FORMAT, INTERNAL, AUTH, INTERRUPT, TOOBIG, unmapped CONSTRAINT, ERROR) | `database` |
 
-- E4.7. `cannot_open` carries `detail.reason`: `permission` for EACCES, `missing` for ENOENT, `is_directory` for ISDIR, else `other`. A readable but unwritable file becomes `read_only` at the first write.
+- E4.7. `cannot_open` carries `detail.reason`: `permission` for EACCES, `missing` for ENOENT, `is_directory` for ISDIR, else `other`. A readable but unwritable file becomes `read_only` at the first write. The engine does not probe writability at open.
+- E4.15. A SCHEMA retry prepares the same SQL, binds the same values, and runs that statement once more. A second failure returns `database`.
 - E4.8. The plain line is `remember: database error: <cause> (<SQLITE_NAME>). <fix>` with the extended name:
 
 | Code | `message` | Cause | Fix |
@@ -157,9 +160,9 @@ shape this log:
 | `database` | database error | — | plain: `remember: database error (<SQLITE_NAME>). Try again. If it keeps happening, report the details from --json-errors.` |
 
 - E4.9. The JSON error has an optional `detail` object: `sqlite_code`, `sqlite_extended`, `sqlite_name` (always for SQLite errors); `sqlite_message`; `errno` (only when non-zero); `path` (only for `read_only`, `disk_full`, `cannot_open`, `not_a_database`, `corrupt`, `io_error`; always the absolute brain path given to `--db`); `reason` (`cannot_open` only); `fts_only` (`corrupt` only).
-- E4.9. The global flag `--busy-timeout MS` (0–60000, default 5000) sets `PRAGMA busy_timeout`. The engine has no own retry loop.
-- E4.10. The engine never repairs on its own. On `corrupt`, it runs `PRAGMA quick_check` on `entries`, `entry_links`, `devices`, `conflicts`, `settings` and `bucket_prefixes`. When that passes and the failing statement touched `entries_fts`, or the code is CORRUPT_VTAB, `fts_only` is true.
-- E4.10. `remember repair search-index` runs `quick_check` on the base tables (it refuses with `corrupt`, `fts_only` false, when they fail), then `INSERT INTO entries_fts(entries_fts) VALUES('rebuild')` in one transaction, then `VALUES('integrity-check')`. Output: `{"version":1,"action":"rebuilt","entries":N}`.
+- E4.13. The global flag `--busy-timeout MS` (0–60000, default 5000) sets `PRAGMA busy_timeout`. A value outside that range exits 1 with code `usage` and message `invalid --busy-timeout (must be 0..60000)`. The engine has no own retry loop.
+- E4.10. The engine never repairs on its own. On `corrupt`, it runs `PRAGMA quick_check` on `entries`, `entry_links`, `devices`, `conflicts`, `settings` and `bucket_prefixes`. The failing statement touched `entries_fts` when its SQL text contains `entries_fts`. When the check passes and the statement touched `entries_fts`, or the code is CORRUPT_VTAB, `fts_only` is true.
+- E4.14. `remember repair search-index` runs `quick_check` on the base tables (it refuses with `corrupt`, `fts_only` false, when they fail), then `INSERT INTO entries_fts(entries_fts) VALUES('rebuild')` in one transaction, then `VALUES('integrity-check')`. Output: `{"version":1,"action":"rebuilt","entries":N}`. N is the number of rows in `entries`, in every bin.
 - E4.11. The global flag `--no-create` makes a missing file fail with `cannot_open`, `reason` `missing`, and creates nothing.
 - E4.12. Exit codes do not change. On an error, stdout is empty.
 - X-E02. A test-only VFS shim wraps `unix` and fails on demand: `REMEMBER_TEST_FAIL_WRITE=N` (IOERR_WRITE after N writes), `REMEMBER_TEST_FAIL_READ=N` (IOERR_READ), `REMEMBER_TEST_ENOSPC=1` (FULL), `REMEMBER_TEST_NOMEM=1` (IOERR_NOMEM). Only test builds compile it. Release binaries and the apps never contain it.
@@ -167,7 +170,7 @@ shape this log:
 ### 4. List (E5)
 
 - E5.1. `list --sort updated|created` (default `updated`) orders by `<field> DESC, id DESC`.
-- E5.2. `list --since TS --until TS` filter on the sort field. `since` is inclusive. `until` is exclusive. TS is `YYYY-MM-DD` (local start of day) or a full ISO `…Z` timestamp.
+- E5.2. `list --since TS --until TS` filter on the sort field. `since` is inclusive. `until` is exclusive. TS is `YYYY-MM-DD` (local start of day) or a full ISO `…Z` timestamp. Any other TS exits 1 with code `usage` and message `invalid timestamp: <ts>`. Search `--since` and `--until` use the same TS rule and filter on `updated_at` (E5.3).
 
 ### 5. Export (E6)
 
@@ -177,12 +180,12 @@ shape this log:
 - E6.3. Links export as `{from, to, kind, created_at, updated_at}` with `sync_id` ends, for every `entry_links` row whose two ends are exported.
 - E6.4. `devices`, `conflicts` and the sidecar are not exported. Brain settings are exported.
 - E6.5. Output: `{"version":1,"action":"exported","format":"<f>","path":"…","count":N,"links":M}`.
-- E6.6. The engine writes to `PATH.tmp…` and renames. It fails when PATH exists, unless `--force`.
+- E6.6. The engine writes to a temporary file beside PATH and renames it onto PATH. When PATH exists and `--force` is absent, the engine writes nothing, exits 1 with code `usage`, and sets the message to `output already exists: <path>`. `--force` replaces PATH by that rename.
 - E6.a. JSON (UTF-8, no BOM): `{"format":"remember-export","version":1,"exported_at":"…Z","engine":"0.3.0","schema":5,"entries":[…],"links":[…],"settings":{…}}`. Entry members are in the E6.2 order with `bin` before `version_vector`. Entries sort by `created_at`, then `sync_id`. `settings` is last; an untouched brain writes `{}`.
-- E6.b. Markdown is a folder: `README.txt` (one paragraph: what this is, how to import it), `settings.json`, `memories/`, `expired/`, `deleted/`.
+- E6.b. Markdown is a folder: `README.txt` (one paragraph: what this is, how to import it), `settings.json`, `memories/`, `expired/`, `deleted/`. `settings.json` is the E12.9 settings object.
   - A file name is `<slug>--<last 12 hex of sync_id>.md`. The slug is the key, else the `# ` heading text, else the first 6 words; lowercase ASCII; every run outside `[a-z0-9]` becomes `-`; trimmed of `-`; max 48 characters; empty becomes `memory`.
   - A file is front matter, then the body byte for byte, then exactly one `\n`. The front matter lines are `remember_export: 1`, `sync_id`, `key`, `tags`, `source`, `created_at`, `updated_at`, `expires_at`, `deleted_at`, `version_vector`, `links`, each value written as JSON. `links` lists the edges whose `from` is this memory.
-- E6.c. CSV: RFC 4180, UTF-8 with BOM, CRLF, every field quoted, `"` doubled. Header: `sync_id,key,body,tags,source,created_at,updated_at,expires_at,deleted_at,bin,version_vector,links`. `tags`, `version_vector` and `links` cells hold JSON. NULL is an empty cell. Settings are one extra last row with `sync_id` `#settings` and the settings JSON in `body`.
+- E6.c. CSV: RFC 4180, UTF-8 with BOM, CRLF, every field quoted, `"` doubled. Header: `sync_id,key,body,tags,source,created_at,updated_at,expires_at,deleted_at,bin,version_vector,links`. `tags`, `version_vector` and `links` cells hold JSON. NULL is an empty cell. Settings are one extra last row with `sync_id` `#settings` and the E12.9 settings object in `body`. That row is not a memory.
 
 ### 6. Import (E7)
 
@@ -191,12 +194,15 @@ shape this log:
 - E7.2. A record with `sync_id` and no `version_vector` is unchanged when every field equals the local row; otherwise it records `concurrent_vv`. It never overwrites.
 - E7.3. A record without `sync_id` is added with a new `sync_id` under the normal add rules, except that a key clash records `key_clash` (no keyed upsert). Missing timestamps are now. A missing source is `unknown`.
 - E7.4. A `.md` file without front matter imports as one memory with the whole file, trimmed, as its body.
-- E7.5. Links apply after all entries. A link to a missing `sync_id` is skipped and reported.
+- E7.5. Links apply after all entries. A link to a missing `sync_id` increments `skipped`. The `errors` array gains one object whose message is `missing link target: <sync_id>`.
 - E7.6. Bad records do not stop the import. Output: `{"version":1,"action":"imported","inserted","updated","unchanged","conflicts","skipped","errors":[{"file","line","message"}],"prefixes_merged":bool}`.
 - E7.7. The engine reads no zip.
 - E7.8. Every import source merges bucket prefixes by E12.6.
+- E7.9. The engine applies one import in one transaction. A JSON value that does not parse exits 1 with code `import_parse`. A CSV file that does not parse exits 1 with code `import_parse`. A `--from-md` path that is not a directory exits 1 with code `import_parse`. The brain does not change. `--from-db` keeps the database codes in E4.
+- E7.10. A parsed file with bad records commits the good records and exits 0. The `errors` array lists each bad record.
+- E7.11. Markdown `settings.json` is the E12.9 settings object. The CSV `#settings` body is that same object. Import reads `bucket_prefixes` and ignores other keys. The `#settings` row is not a memory.
 - X-E03 (Q12). No import registers a device or reads or writes a sidecar. After any import, `devices` still holds exactly the local row. A test covers each import format.
-- E13.2. `import` writes `conflicts.origin` = the basename of the `--from-*` path (for `--from-md`, the folder name). `--origin LABEL` (max 64 bytes) overrides it.
+- E13.2. `import` writes `conflicts.origin` = the basename of the `--from-*` path (for `--from-md`, the folder name). `--origin LABEL` (max 64 bytes) overrides it. A longer label exits 1 with code `usage` and message `origin is too long (max 64 bytes)`.
 - E13.3. `conflicts --json` adds `"origin"` (string or null) after `"created_at"`.
 
 ### 7. Stale-write guard (E8)
@@ -223,7 +229,7 @@ shape this log:
 ### 11. Bucket prefixes (E12)
 
 - E12.2. A prefix is live when `removed_at IS NULL OR added_at >= removed_at`. A row that is not live is a tombstone. Tombstones are kept.
-- E12.3. With an empty table, `config get` reports `project:`, `status:` with `"default":true` and writes nothing. The first write first stores the defaults with `added_at = "1970-01-01T00:00:00.000Z"`.
+- E12.3. With an empty table, `config get` reports `project:`, `status:` with `"default":true` and writes nothing. The first write stores those defaults with `added_at = "1970-01-01T00:00:00.000Z"`, then applies E12.5, in that same transaction.
 - E12.4. A prefix is 1–32 code points of `\p{L}`, `\p{Nd}`, `-`, `_`, `.`, then one `:`. ASCII folds to lowercase. Errors exit 1 with code `usage`: `invalid bucket prefix: <p>`, `duplicate bucket prefix: <p>`, `too many bucket prefixes (max 8)`.
 - E12.5. `config set bucket-prefixes P1 … Pn` (n ≤ 8; `--clear` = an empty list), in one transaction with now = the current time:
   1. Each Pi that is not live gets `added_at = now` and `device_id = local`.
@@ -246,7 +252,7 @@ shape this log:
 - No `status` field or command.
 - `tags --json` stays as is.
 - `--source` stays single-valued.
-- Conflict verbs stay `local|incoming|both`.
+- Conflict verbs stay `local|incoming|both`. `--keep incoming` and `--keep both` on `hash_clash` stay failures with code `unique_taken`. Log 010 does not offer Use incoming for that kind.
 - Soft `delete` keeps clearing `expires_at`.
 
 ## Examples
@@ -279,7 +285,7 @@ remember --db r.db add b              # (r.db chmod 444) exit 1: remember: datab
 - E2: every acceptance line of the Examples passes; the inputs `C++`, `"`, `recs:books`, `key:recs`, `foo AND`, `a AND`, `NEAR(`, `*`, `-x`, `(`, `ספר`, emoji and 10,000 characters exit 0; a 60-tag match gives `tags.total` 60 and 50 items (200 with `--facet-limit 200`).
 - E3/E4: a damaged index exits 1 with empty stdout, code `corrupt`, `fts_only` true; `repair search-index` then succeeds; each E4.7 acceptance case (chmod 444 file, chmod 555 folder, chmod 000 file, missing path with `--no-create`, folder as path, text file, truncated file, held lock with `--busy-timeout 500`, tmpfs or ENOSPC shim, IOERR shims, NOMEM shim) gives its code, `detail` and plain line; `get --key nope` gives `not_found` exit 2.
 - E5: `list --sort created` orders by `created_at` after the oldest is updated; `list --since <today>` returns today's only.
-- E6/E7: the round trip of JSON, Markdown and CSV through an empty brain gives equal exports (except `exported_at`) for the fixture with keyed and keyless memories, tags with spaces and `:`, all 5 sources, expired and deleted rows, all 3 link kinds, CRLF, tabs, emoji, Hebrew, a `---` line, a body starting with `---`, quotes, commas, a 64 KiB body, null and non-null `expires_at`, and changed bucket prefixes with tombstones; a second import reports only `unchanged` and `prefixes_merged` false.
+- E6/E7: the round trip of JSON, Markdown and CSV through an empty brain gives equal exports (except `exported_at`) for the fixture with keyed and keyless memories, tags with spaces and `:`, all 5 sources, expired and deleted rows, all 3 link kinds, CRLF, tabs, emoji, Hebrew, a `---` line, a body starting with `---`, quotes, commas, a 64 KiB body, null and non-null `expires_at`, and changed bucket prefixes with tombstones; a second import reports only `unchanged` and `prefixes_merged` false. An existing export path without `--force` exits 1 with `usage` and writes nothing. A JSON file that does not parse exits 1 with `import_parse` and leaves the brain unchanged. A CSV `#settings` row does not become a memory. A whitespace-only search exits 0 with an empty result and no warning.
 - X-E03: after each import format, `devices` holds exactly the local row.
 - E8: an old `--if-updated-at` exits 1 with `stale`.
 - E10: `ספר` prefix-matches a body with niqqud.
