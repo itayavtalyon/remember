@@ -35,6 +35,22 @@ main → cli_parse → commands.h (cmd_add | cmd_locator | cmd_query) → store_
 | 12 | [TTL / trash](12-ttl.md) | `expires_at`; `--ttl`/`--expires`/`--trash`; `purge-trash`; exit 3; v1→v2 migrate |
 | 13 | [Related memories](13-related-memories.md) | `entry_links` v3; `link`/`unlink`/`related`/`rekey`; one-row `related`; stubs; skill |
 | 14 | [Sync foundations](14-sync-foundations.md) | `sync_id` v7; soft-delete bins; per-file sidecar + local-only devices + VV; import merge + conflicts; `--sync-id` locators (design 005 Round 7) |
+| 15 | [Schema v5 + device id](15-schema-v5-device-id.md) | `user_version` 5; FTS `key, body, tags` + Hebrew fold; `bucket_prefixes`/`settings`/`conflicts.origin`; `devices` dropped; sidecar-only id; `device` / `device new` (006 §1, §12) |
+| 16 | [Actionable errors](16-actionable-errors.md) | `--json-errors`; code catalog; SQLite cause split + fix text + `detail`; warnings; `--busy-timeout`; `--no-create`; `repair search-index`; test VFS shim (006 §3) |
+| 17 | [List dates + stale guard](17-list-dates-stale-guard.md) | `list --sort/--since/--until`; search date filters; `update --if-updated-at` → `stale` (006 §4, §7) |
+| 18 | [Union search](18-union-search.md) | Prefix ∪ raw FTS; never fails on input; `keys`/`tags` facets with tiers; utf8proc vendored (006 §2, §9) |
+| 19 | [Bucket prefixes](19-bucket-prefixes.md) | `config get/set bucket-prefixes`; add-wins set + tombstones; cap 8 + overflow (006 §11) |
+| 20 | [Export](20-export.md) | `export --format json|md|csv`; deterministic; atomic write + `--force` (006 §5) |
+| 21 | [Import formats](21-import-formats.md) | `import --from-json/--from-md/--from-csv`; bad records listed; `origin`; prefix merge; round trip (006 §6) |
+| 22 | [Brain path + skills + 0.3.0](22-brain-path-skills-release.md) | `~/.remember/default-db`; Codex skill; SKILL/help/What's New sweep; version 0.3.0 (006 §8, §13) |
+
+**Design 006 (0.3.0) plans 15–22:** do them in order; each plan names its
+prerequisites. Locked decisions from the 2026-10-12 plan grill are law, like
+the design log itself:
+[`006-locked-decisions.md`](006-locked-decisions.md). E11 (Android presets) is
+not planned here (mobile build, not CLI). Each plan carries its own workflow,
+coding standards, quality gate, Definition of Done and Second review handover,
+so it can be handed to an implementer alone.
 
 **Definition of done for the whole tool:** full suite green (all verification criteria 1–34 automated where practical), `cmake --build build --target lint` clean on `src/`, no `#include` of sqlite outside the store adapter. Plan 14 adds criteria from design 005.
 

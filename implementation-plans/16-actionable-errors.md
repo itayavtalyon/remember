@@ -24,9 +24,7 @@ swallowed). Do not invent. If 006 does not decide a case, stop and ask Itay
 
 ## Context (standalone summary)
 
-Baseline: `main` at `a27efca` plus plan 15 (schema v5) if merged; this plan
-does not depend on v5 tables except `settings` / `bucket_prefixes` in the
-E4.10 check (skip a table that does not exist yet and add it when it lands).
+Baseline: `main` at `a27efca` with plan 15 (schema v5) merged.
 
 Today:
 
@@ -95,9 +93,9 @@ Rules this plan implements (restated from 006):
 
 ## Prerequisites
 
-- `main` clean and up to date. Plan 15 merged is recommended (the E4.10 table
-  list includes `settings` and `bucket_prefixes`); if it is not, skip those
-  two tables in the check and note it.
+- `main` clean and up to date.
+- **Plan 15 merged** (the E4.10 check covers its `settings` and
+  `bucket_prefixes` tables). If it is not, stop.
 
 ## Scope
 
@@ -147,6 +145,23 @@ retry loop; WAL; changing exit codes.
 | E4.7 table | `database error` and every `cannot open database …` (now mapped per SQLite cause) |
 
 `empty search query` stays `usage` until plan 18 makes a blank search succeed.
+
+**Observed facts (Linux, vendored SQLite 3.53.3, run as uid `nobody`; use
+them as the test expectations, and record the macOS values in
+Implementation Notes — a different macOS value is a grill, not a choice)**
+
+| Case | Open | First statement | Expected code / `reason` |
+|------|------|-----------------|--------------------------|
+| file mode 444 | OK | READONLY (8) | `read_only` |
+| folder mode 555 (file 666) | OK | READONLY_DIRECTORY (1544) | `read_only` |
+| file mode 000 | CANTOPEN (14), errno 13 | — | `cannot_open`, `reason` `permission` |
+| folder given as path | CANTOPEN (14) (not 526), errno 21 EISDIR | — | `cannot_open`, `reason` `is_directory` |
+| text file as path | OK | NOTADB (26) | `not_a_database` |
+
+So `reason` is derived from `sqlite3_system_errno()` (EACCES → `permission`,
+ENOENT → `missing`, EISDIR → `is_directory`) and from the extended code
+CANTOPEN_ISDIR (526) → `is_directory`; anything else → `other`. Capture the
+errno right after the failing call.
 Anything 006 and this section do not decide: stop and ask Itay. Do not choose.
 
 ## Files

@@ -91,8 +91,8 @@ Anything 006 and this table do not decide: stop and ask Itay. Do not choose.
 `src/store_sqlite.c` (DDL, migrate, `fts_resync`, fold helper, sidecar,
 device ports, hatch removal, import source probing), `src/store.h`
 (`store_device_id`, `store_device_new`), `src/normalize.c/.h` (pure
-`fold_hebrew_marks` if it is reused by plan 18; otherwise keep it static in
-the adapter; decide per YAGNI), `src/cli.c/.h` (`device` in `k_commands[]`),
+`fold_hebrew_marks`: plan 18 reuses it for query tokens, so it lives in
+`normalize.c`, not in the adapter), `src/cli.c/.h` (`device` in `k_commands[]`),
 `src/remember_app.c` (dispatch + help), new `src/cmd_device.c` (wire it in
 `REMEMBER_LIB_SOURCES` **and** the `-Wcast-qual` list), `src/output.c/.h`
 (device envelopes), `tests/test_store_sync.c`, `tests/test_sync_delete.c`,
