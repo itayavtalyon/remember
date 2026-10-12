@@ -57,6 +57,15 @@ shape this log:
 - Q12: import never registers foreign devices; this log makes it a tested rule.
 - v5 migrates silently on open; Homebrew 0.3.0 ships before any app that links v5.
 - Deep review 2026-10-11 (Itay): a blank search writes no warning (E2.1); one import is one transaction (E7.9, E7.10); Markdown and CSV settings are the E12.9 object and import reads bucket prefixes only (E7.11); an existing export path is `usage` (E6.6); `--keep incoming` and `--keep both` on `hash_clash` stay failures.
+- Plan grill 2026-10-12 (Itay, while writing implementation plans 15–22). These amend the Design below; each plan restates them as Locked decisions:
+  - E2.1a: an `SQLITE_ERROR` whose message starts `unterminated string` also means "does not parse". SQLite 3.53.3 reports `unterminated string` for `"` and `"abc`.
+  - E4.6: two more warning codes, `deprecated_flag` (the `--trash` / `purge-trash` line) and `synced_folder` (the cloud-folder line). With `--json-errors` they are JSON warning lines. Plain text is unchanged.
+  - E4.7: SQLite NOMEM and IOERR_NOMEM map to `database` (the explicit row wins over the IOERR row). Engine allocation failures map to `out_of_memory`.
+  - E7.2: "every field equals" compares content only: key, body, tags as a set, `expires_at`, `deleted_at`.
+  - E14.6: open mints a missing sidecar as usual (E14.3), so `device new` reports the id that open minted as `previous`. `null` stays in the type only.
+  - E15.1: an empty `REMEMBER_DB` counts as unset, as in 0.2.0. The engine then reads `default-db`.
+  - E6.6 (Markdown `--force`): write `<PATH>.tmp-<rand>/`, rename the old PATH to `<PATH>.old-<rand>/`, rename tmp onto PATH, then delete the old folder.
+  - E11 (Android presets) is not part of the CLI plans.
 - Grill 2026-10-12 (Itay): key and tag suggestions use every word against a part, and the same part may serve two words. Whole-start stays. Key rank is whole-start, then in-order parts, then the rest, by code point (E2.5, E2.6). This round supersedes the Round 5 sentence that keeps the 005 sidecar recovery. The sidecar file is the only device id. Schema v5 drops `devices` (E1.3, E14). `--since` and `--until` accept seconds-only `Z` (E5.2). Markdown files and `README.txt` have a fixed shape (E6.b). Import classifies bad records and rolls the named whole-file failures back (E7.12, E7.13). The brain path reads `~/.remember/default-db` after `REMEMBER_DB` (E15).
 
 ## Design
