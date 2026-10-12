@@ -1,6 +1,6 @@
 # 006 - Engine changes for the Fortkeeps UI overhaul (0.3.0)
 
-**Status:** Design (closed 2026-10-11, amended the same day after deep review)
+**Status:** Design (closed 2026-10-11, amended 2026-10-12)
 **Author:** Itay (+ agent facilitation)
 **Created:** 2026-10-11
 
@@ -57,6 +57,7 @@ shape this log:
 - Q12: import never registers foreign devices; this log makes it a tested rule.
 - v5 migrates silently on open; Homebrew 0.3.0 ships before any app that links v5.
 - Deep review 2026-10-11 (Itay): a blank search writes no warning (E2.1); one import is one transaction (E7.9, E7.10); Markdown and CSV settings are the E12.9 object and import reads bucket prefixes only (E7.11); an existing export path is `usage` (E6.6); `--keep incoming` and `--keep both` on `hash_clash` stay failures.
+- Grill 2026-10-12 (Itay): key and tag suggestions use every word against a part, and the same part may serve two words. Whole-start stays. Key rank is whole-start, then in-order parts, then the rest, by code point (E2.5, E2.6). This round supersedes the Round 5 sentence that keeps the 005 sidecar recovery. The sidecar file is the only device id. Schema v5 drops `devices` (E1.3, E14). `--since` and `--until` accept seconds-only `Z` (E5.2). Markdown files and `README.txt` have a fixed shape (E6.b). Import classifies bad records and rolls the named whole-file failures back (E7.12, E7.13). The brain path reads `~/.remember/default-db` after `REMEMBER_DB` (E15).
 
 ## Design
 
@@ -76,7 +77,8 @@ shape this log:
   3. Create `bucket_prefixes(prefix TEXT PRIMARY KEY, added_at TEXT NOT NULL, removed_at TEXT, device_id TEXT NOT NULL)`.
   4. Create `settings(name TEXT PRIMARY KEY, value TEXT NOT NULL, updated_at TEXT NOT NULL)`.
   5. `ALTER TABLE conflicts ADD COLUMN origin TEXT`.
-  6. Set `user_version = 5`.
+  6. `DROP TABLE devices`. The engine does not copy any row into the sidecar.
+  7. Set `user_version = 5`.
 - E1.2. `fts_resync` writes the key (empty string when NULL), the body, and the tag names joined with one space, as in 0.2.0.
 - E1.4. `import --from-db` accepts sources at v4 and v5. The engine opens the source read-only and does not migrate it. A missing `origin` column, a missing `bucket_prefixes` table, or a missing `settings` table means those values are absent.
 - E1.5. remember 0.2.x refuses a v5 brain with `database is newer than this remember`.
@@ -105,16 +107,21 @@ shape this log:
   2. Then `substr(e.key, 1, length(q)) = q`.
   3. Then `bm25(entries_fts, 10.0, 1.0, 4.0) ASC` (key, body, tags). A smaller score comes first, as in 0.2.0.
   4. Then `e.updated_at DESC, e.id DESC`.
-- E2.5. With t1…tn = the P tokens ASCII-lowercased, a key or tag splits into segments on `:`, `-`, `_`, `.`, `/` and whitespace. A key or tag text-matches when every token is a prefix of one of its segments, or when q is a prefix of the whole key or tag. The engine returns a key or tag only when it text-matches and belongs to at least one memory inside the active bin and filters. A key belongs to its memory. A tag belongs to every memory that carries it.
+- E2.5. The engine ASCII-lowercases the P tokens. Call those tokens t1…tn, in that order. A key or a tag splits into segments on `:`, `-`, `_`, `.`, `/`, and whitespace. The engine keeps the segment order.
+- E2.5a. A token matches a segment when the segment starts with the token. The same segment may match more than one token.
+- E2.5b. A key or a tag text-matches when every token matches one of its segments. A key or a tag also text-matches when q is a prefix of the whole key or tag. q is QUERY trimmed and ASCII-lowercased, as in E2.4.
+- E2.5c. Word order does not decide whether a key or a tag matches. Word order decides the key rank in E2.6.
+- E2.5d. The engine returns a key or a tag only when it text-matches and belongs to at least one memory inside the active bin and filters. A key belongs to its memory. A tag belongs to every memory that carries it.
 - E2.6. The `--json` output adds `keys` and `tags` between `total` and `entries`. This is a stated exception to EN-01 and EN-02 (Itay, Round 7); What's New names it:
   `{"version":1,"offset":0,"limit":20,"count":2,"total":2,"keys":{"total":1,"items":[{"key":"recs:books","sync_id":"…","label":"Book recommendations","source":"agent","updated_at":"…Z"}]},"tags":{"total":1,"items":[{"tag":"type:books","count":1}]},"entries":[…]}`.
-  - `keys.items` order: exact key, then key prefix of q, then `updated_at DESC`.
+  - `keys.items` rank uses three tiers. Tier 1 holds a key when q is a prefix of the whole key. Tier 2 holds a key when the tokens match segments in order and the key is not in tier 1. Token t1 matches a segment at index i1. Each later token matches a segment at an index greater than or equal to the index used by the previous token. Tier 3 holds every other text-match.
+  - Inside one tier, the engine orders keys by the stored key. The order is ascending Unicode code point order.
   - `tags.items` order: exact tag, then `count DESC`, then tag.
   - A tag's `count` is the number of memories in the active bin and filters that carry it.
   - `total` is the number of scoped matches. `items` holds at most `--facet-limit`.
   - `label` is the one-line label: the `# ` title, else the key, else the first 60 graphemes of the plain text + "…".
   - `--offset` and `--limit` page `entries` only.
-- E2.7. Human output prints `keys: k1, k2, …` and `tags: t1 (n), …` lines before the entry lines, only when not empty, at most 10 each, then `… and N more`.
+- E2.7. Human output prints `keys: k1, k2, …` and `tags: t1 (n), …` lines before the entry lines, only when not empty, at most 10 each, then `… and N more`. The key line uses the E2.6 key order. The tag line uses the E2.6 tag order.
 - E2.8. Release note: "`remember search` now also matches word prefixes and returns matching keys and tags. FTS5 queries work as before; a query that FTS5 cannot parse no longer fails: it returns prefix matches and prints a note on stderr."
 - E5.3. `search` ignores `--sort`. `--since` and `--until` filter on `updated_at`.
 - E3.1. Input that FTS5 cannot parse is never an error (E2.3).
@@ -161,7 +168,7 @@ shape this log:
 
 - E4.9. The JSON error has an optional `detail` object: `sqlite_code`, `sqlite_extended`, `sqlite_name` (always for SQLite errors); `sqlite_message`; `errno` (only when non-zero); `path` (only for `read_only`, `disk_full`, `cannot_open`, `not_a_database`, `corrupt`, `io_error`; always the absolute brain path given to `--db`); `reason` (`cannot_open` only); `fts_only` (`corrupt` only).
 - E4.13. The global flag `--busy-timeout MS` (0–60000, default 5000) sets `PRAGMA busy_timeout`. A value outside that range exits 1 with code `usage` and message `invalid --busy-timeout (must be 0..60000)`. The engine has no own retry loop.
-- E4.10. The engine never repairs on its own. On `corrupt`, it runs `PRAGMA quick_check` on `entries`, `entry_links`, `devices`, `conflicts`, `settings` and `bucket_prefixes`. The failing statement touched `entries_fts` when its SQL text contains `entries_fts`. When the check passes and the statement touched `entries_fts`, or the code is CORRUPT_VTAB, `fts_only` is true.
+- E4.10. The engine never repairs on its own. On `corrupt`, it runs `PRAGMA quick_check` on `entries`, `entry_links`, `conflicts`, `settings` and `bucket_prefixes`. The failing statement touched `entries_fts` when its SQL text contains `entries_fts`. When the check passes and the statement touched `entries_fts`, or the code is CORRUPT_VTAB, `fts_only` is true.
 - E4.14. `remember repair search-index` runs `quick_check` on the base tables (it refuses with `corrupt`, `fts_only` false, when they fail), then `INSERT INTO entries_fts(entries_fts) VALUES('rebuild')` in one transaction, then `VALUES('integrity-check')`. Output: `{"version":1,"action":"rebuilt","entries":N}`. N is the number of rows in `entries`, in every bin.
 - E4.11. The global flag `--no-create` makes a missing file fail with `cannot_open`, `reason` `missing`, and creates nothing.
 - E4.12. Exit codes do not change. On an error, stdout is empty.
@@ -170,7 +177,11 @@ shape this log:
 ### 4. List (E5)
 
 - E5.1. `list --sort updated|created` (default `updated`) orders by `<field> DESC, id DESC`.
-- E5.2. `list --since TS --until TS` filter on the sort field. `since` is inclusive. `until` is exclusive. TS is `YYYY-MM-DD` (local start of day) or a full ISO `…Z` timestamp. Any other TS exits 1 with code `usage` and message `invalid timestamp: <ts>`. Search `--since` and `--until` use the same TS rule and filter on `updated_at` (E5.3).
+- E5.2. `list --since TS --until TS` filter on the sort field. `since` is inclusive. `until` is exclusive. Search `--since` and `--until` use the same TS rule and filter on `updated_at` (E5.3).
+- E5.2a. The canonical timestamp is `YYYY-MM-DDTHH:MM:SS.mmmZ`. The engine accepts that form.
+- E5.2b. The engine accepts `YYYY-MM-DD`. The engine reads it as the local start of that day. The engine converts it to the canonical form.
+- E5.2c. The engine accepts `YYYY-MM-DDTHH:MM:SSZ`. The engine reads it as the same instant with `.000`.
+- E5.2d. Any other TS exits 1 with code `usage` and message `invalid timestamp: <ts>`.
 
 ### 5. Export (E6)
 
@@ -178,13 +189,15 @@ shape this log:
 - E6.1. Export never needs an account, a network or a quota check.
 - E6.2. Each memory exports `sync_id, key, body, tags, source, created_at, updated_at, expires_at, deleted_at, version_vector` and its links. The local `id` is not exported. `bin` is written for readers and ignored on import.
 - E6.3. Links export as `{from, to, kind, created_at, updated_at}` with `sync_id` ends, for every `entry_links` row whose two ends are exported.
-- E6.4. `devices`, `conflicts` and the sidecar are not exported. Brain settings are exported.
+- E6.4. The sidecar is not exported. The `conflicts` table is not exported. Brain settings are exported.
 - E6.5. Output: `{"version":1,"action":"exported","format":"<f>","path":"…","count":N,"links":M}`.
 - E6.6. The engine writes to a temporary file beside PATH and renames it onto PATH. When PATH exists and `--force` is absent, the engine writes nothing, exits 1 with code `usage`, and sets the message to `output already exists: <path>`. `--force` replaces PATH by that rename.
 - E6.a. JSON (UTF-8, no BOM): `{"format":"remember-export","version":1,"exported_at":"…Z","engine":"0.3.0","schema":5,"entries":[…],"links":[…],"settings":{…}}`. Entry members are in the E6.2 order with `bin` before `version_vector`. Entries sort by `created_at`, then `sync_id`. `settings` is last; an untouched brain writes `{}`.
-- E6.b. Markdown is a folder: `README.txt` (one paragraph: what this is, how to import it), `settings.json`, `memories/`, `expired/`, `deleted/`. `settings.json` is the E12.9 settings object.
-  - A file name is `<slug>--<last 12 hex of sync_id>.md`. The slug is the key, else the `# ` heading text, else the first 6 words; lowercase ASCII; every run outside `[a-z0-9]` becomes `-`; trimmed of `-`; max 48 characters; empty becomes `memory`.
-  - A file is front matter, then the body byte for byte, then exactly one `\n`. The front matter lines are `remember_export: 1`, `sync_id`, `key`, `tags`, `source`, `created_at`, `updated_at`, `expires_at`, `deleted_at`, `version_vector`, `links`, each value written as JSON. `links` lists the edges whose `from` is this memory.
+- E6.b. Markdown is a folder: `README.txt`, `settings.json`, `memories/`, `expired/`, `deleted/`. `settings.json` is the E12.9 settings object.
+- E6.b1. `README.txt` is exactly this sentence: `This folder is a Fortkeeps export. Import it with: remember import --from-md <folder>`.
+- E6.b2. A file name is `<slug>--<last 12 hex of sync_id>.md`. The slug is the key, else the `# ` heading text, else the first 6 words. The engine lowercases ASCII in the slug. The engine replaces every run outside `[a-z0-9]` with `-`. The engine trims `-`. The slug max is 48 characters. An empty slug becomes `memory`.
+- E6.b3. A memory file starts with a line `---`. The next lines are one field per line, in this order: `remember_export`, `sync_id`, `key`, `tags`, `source`, `created_at`, `updated_at`, `expires_at`, `deleted_at`, `version_vector`, `links`. Each line is `<field>: <JSON>`. A line `---` closes the front matter. The body bytes follow. The file ends with one newline.
+- E6.b4. `remember_export` is the JSON number `1`. A null field is JSON `null`. `links` is a JSON array of `{to, kind, created_at, updated_at}`. A link object has no `from`. `links` lists the edges whose `from` is this memory.
 - E6.c. CSV: RFC 4180, UTF-8 with BOM, CRLF, every field quoted, `"` doubled. Header: `sync_id,key,body,tags,source,created_at,updated_at,expires_at,deleted_at,bin,version_vector,links`. `tags`, `version_vector` and `links` cells hold JSON. NULL is an empty cell. Settings are one extra last row with `sync_id` `#settings` and the E12.9 settings object in `body`. That row is not a memory.
 
 ### 6. Import (E7)
@@ -201,7 +214,12 @@ shape this log:
 - E7.9. The engine applies one import in one transaction. A JSON value that does not parse exits 1 with code `import_parse`. A CSV file that does not parse exits 1 with code `import_parse`. A `--from-md` path that is not a directory exits 1 with code `import_parse`. The brain does not change. `--from-db` keeps the database codes in E4.
 - E7.10. A parsed file with bad records commits the good records and exits 0. The `errors` array lists each bad record.
 - E7.11. Markdown `settings.json` is the E12.9 settings object. The CSV `#settings` body is that same object. Import reads `bucket_prefixes` and ignores other keys. The `#settings` row is not a memory.
-- X-E03 (Q12). No import registers a device or reads or writes a sidecar. After any import, `devices` still holds exactly the local row. A test covers each import format.
+- E7.12. A missing `settings.json` is an empty settings object. A present `settings.json` that does not parse exits 1 with code `import_parse`. The brain does not change.
+- E7.13. These whole-file failures also exit 1 with code `import_parse` and leave the brain unchanged. The JSON root `format` is not `remember-export`. The JSON root `version` is not `1`. The CSV header is not the E6.c header.
+- E7.14. `--from-md` selects files as follows. When `memories/`, `expired/`, or `deleted/` exists, the engine imports only `*.md` files directly inside those three folders. Otherwise the engine imports only `*.md` files directly in the directory. The engine does not recurse. The engine ignores `README.txt` and every other file.
+- E7.15. A record is bad in these cases. The body is missing. The body is empty after trim. The body is longer than 65536 bytes. `sync_id` is present and is not a canonical UUID (`8-4-4-4-12` hex, either case). A present timestamp is not `YYYY-MM-DDTHH:MM:SS.mmmZ`. `source` is present and is not `human`, `agent`, `tool`, `share`, or `unknown`. A present key or tag fails the key and tag checks of log 001. `version_vector` is present and is not a JSON object of device id to a JSON integer greater than 0. A device id in that object is not a canonical UUID. A link object lacks `to` or `kind`. A link `kind` is not `related`, `cites`, or `supersedes`. A `sync_id` repeats in the file. The second copy is the bad record. A CSV row's column count differs from the header. A JSON entry is not an object.
+- E7.16. The `errors` message for a bad record is the matching line: `body is missing`, `body is empty`, `body is too long`, `sync_id is not a UUID`, `invalid timestamp`, `invalid source`, `invalid key or tag`, `invalid version_vector`, `invalid link`, `duplicate sync_id`, `column count does not match the header`, `entry is not an object`.
+- X-E03 (Q12). No import reads or writes a sidecar. No import changes the destination device id. A test covers each import format.
 - E13.2. `import` writes `conflicts.origin` = the basename of the `--from-*` path (for `--from-md`, the folder name). `--origin LABEL` (max 64 bytes) overrides it. A longer label exits 1 with code `usage` and message `origin is too long (max 64 bytes)`.
 - E13.3. `conflicts --json` adds `"origin"` (string or null) after `"created_at"`.
 
@@ -242,11 +260,27 @@ shape this log:
 
 ### 12. Device id (E14)
 
-- E14.1. `remember device new` mints a UUIDv7, writes `<db>.device_id` and replaces the single local `devices` row (`first_seen` = `last_seen` = now). Version vectors do not change. Output: the new id; `--json` `{"version":1,"device_id":"…","previous":"…"}`.
-- E14.2. `remember device` prints the current id; `--json` `{"version":1,"device_id":"…"}`.
-- E14.3. The 005 "Lost sidecar" recovery stays: a missing sidecar with a `devices` row is rewritten from the row.
+- E14.1. The writer id is the one lowercase UUID line in `<db-path>.device_id`. The file mode is `0600`. The database holds no second copy.
+- E14.2. Open uses a valid sidecar as the writer id. Open does not read a device id from the database.
+- E14.3. A missing sidecar mints a new UUIDv7. Open writes that id to the sidecar. This includes a v4 brain whose sidecar file is gone after the v5 migration.
+- E14.4. An invalid sidecar file is an error. The message is `invalid device_id sidecar`. Open does not mint over an invalid file.
+- E14.5. `remember device` prints the current id. `--json` returns `{"version":1,"device_id":"…"}`.
+- E14.6. `remember device new` mints a new UUIDv7 and writes the sidecar. Version vectors do not change. The plain output is the new id. `--json` returns `{"version":1,"device_id":"…","previous":"…"}`. `previous` is the old sidecar id. `previous` is JSON `null` when the file was missing.
+- E14.7. Hard delete and purge run after open has a valid sidecar. `not_single_device` stays in the E4.3 catalog. No v5 command returns it.
+- E14.8. `bucket_prefixes.device_id` and `version_vector` still store device-id strings. They do not reference a `devices` table.
 
-### 13. Not changing
+### 13. Brain path (E15)
+
+- E15.1. The engine chooses the brain path in this order. It uses the first item that applies.
+  1. `--db PATH`.
+  2. The environment variable `REMEMBER_DB`, when the variable is present. An empty value still counts as present.
+  3. The absolute path in `~/.remember/default-db`.
+  4. `~/.remember/remember.db`.
+- E15.2. `~` is the home directory the engine already uses for the built-in brain path.
+- E15.3. `default-db` is a UTF-8 file with one line. The app writes a trailing newline. The engine trims ASCII whitespace. The engine accepts a missing trailing newline.
+- E15.4. The engine ignores `default-db` when the file is missing, the line is empty, or the path is not absolute. The engine then uses the built-in path. The engine does not create `default-db`.
+
+### 14. Not changing
 
 - The deprecated aliases `--trash` and `purge-trash` stay.
 - No `status` field or command.
@@ -277,26 +311,27 @@ remember --db r.db add b              # (r.db chmod 444) exit 1: remember: datab
 | Warning on exit 0 | Silent | Do not swallow (Round 5). |
 | Seven error codes | One `database` code | Users can fix what they can name (Round 6). |
 | Add-wins prefix set | Last write wins | No device loses a prefix silently (Q20). |
-| `device new` | Missing sidecar = new device | Explicit, testable; Mac and CLI keep recovery (Round 5). |
+| Sidecar file only | A second copy in `devices` | A backup must not carry the writer id (Itay, 2026-10-12). |
 
 ## Verification Criteria
 
 - E1: `search editor` finds `pref:editor`; F5 (v4) migrates keeping every entry, tag, link and `sync_id`; body and tag search results are equal before and after.
-- E2: every acceptance line of the Examples passes; the inputs `C++`, `"`, `recs:books`, `key:recs`, `foo AND`, `a AND`, `NEAR(`, `*`, `-x`, `(`, `ספר`, emoji and 10,000 characters exit 0; a 60-tag match gives `tags.total` 60 and 50 items (200 with `--facet-limit 200`).
+- E2: every acceptance line of the Examples passes; the inputs `C++`, `"`, `recs:books`, `key:recs`, `foo AND`, `a AND`, `NEAR(`, `*`, `-x`, `(`, `ספר`, emoji and 10,000 characters exit 0; a 60-tag match gives `tags.total` 60 and 50 items (200 with `--facet-limit 200`). Against key `recs:books`, `book` matches, `boo book` matches, `recs games` does not match, and `recs:bo` is tier 1. Against tag `project:fortkeeps-cloud`, `fort cloud` is tier 2 and `cloud fortkeeps` is tier 3. Tier 1 sorts before tier 2. Inside a tier, keys sort by code point.
 - E3/E4: a damaged index exits 1 with empty stdout, code `corrupt`, `fts_only` true; `repair search-index` then succeeds; each E4.7 acceptance case (chmod 444 file, chmod 555 folder, chmod 000 file, missing path with `--no-create`, folder as path, text file, truncated file, held lock with `--busy-timeout 500`, tmpfs or ENOSPC shim, IOERR shims, NOMEM shim) gives its code, `detail` and plain line; `get --key nope` gives `not_found` exit 2.
 - E5: `list --sort created` orders by `created_at` after the oldest is updated; `list --since <today>` returns today's only.
 - E6/E7: the round trip of JSON, Markdown and CSV through an empty brain gives equal exports (except `exported_at`) for the fixture with keyed and keyless memories, tags with spaces and `:`, all 5 sources, expired and deleted rows, all 3 link kinds, CRLF, tabs, emoji, Hebrew, a `---` line, a body starting with `---`, quotes, commas, a 64 KiB body, null and non-null `expires_at`, and changed bucket prefixes with tombstones; a second import reports only `unchanged` and `prefixes_merged` false. An existing export path without `--force` exits 1 with `usage` and writes nothing. A JSON file that does not parse exits 1 with `import_parse` and leaves the brain unchanged. A CSV `#settings` row does not become a memory. A whitespace-only search exits 0 with an empty result and no warning.
-- X-E03: after each import format, `devices` holds exactly the local row.
+- X-E03: after each import format, the destination sidecar is unchanged.
 - E8: an old `--if-updated-at` exits 1 with `stale`.
 - E10: `ספר` prefix-matches a body with niqqud.
 - E12: every E12 acceptance scenario (defaults, set, validation, round trip, add wins, re-add, removal after add, order, cap and overflow, idempotent import) passes.
 - E13: `conflicts --json` shows `origin`.
-- E14: `device` → A; `device new` → B with `previous` A; a new edit counts under B.
+- E14: `device` → A; `device new` → B with `previous` A; a new edit counts under B. A brain with no sidecar opens as a new id. A v4 `devices` row is not copied. `not_single_device` is never returned.
+- E15: a set `REMEMBER_DB` hides `default-db`. An absolute `default-db` line is used. A missing or relative line uses `~/.remember/remember.db`.
 - E11: the Android `.so` builds for three ABIs and the emulator smoke test passes.
 
 ## Known Limitations
 
-- Two copies of a brain that keep their sidecar share a device id (Mac migration, manual copies); `device new` is the fix.
+- Two copies that both keep the sidecar file share a device id. `device new` gives the copy its own id. Mac backup exclusion is remember-mac log 011.
 - Undo in the apps cannot restore `updated_at`.
 
 ## Future Work
