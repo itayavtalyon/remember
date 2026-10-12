@@ -113,37 +113,41 @@ only); tests for each acceptance case; help/skill/What's New.
 built here); `stale` (plan 17), `import_parse` (plan 21) call sites; any
 retry loop; WAL; changing exit codes.
 
-## Open questions (ask before the stage that needs them)
+## Locked decisions (grill 2026-10-12; index in [`006-locked-decisions.md`](006-locked-decisions.md))
 
-1. **Non-error stderr lines under `--json-errors`.** 0.2.0 writes plain
-   stderr lines on exit 0: `remember: --trash is deprecated; use --expired`
-   and the synced-folder warning (iCloud/Dropbox/Google Drive). E4.6 says the
-   only warning code in 0.3.0 is `raw_query_ignored`. With `--json-errors`,
-   should these lines stay plain, become JSON warnings with new codes, or be
-   dropped? Recommendation: keep them plain (E4.2) and record that apps must
-   tolerate them, or ask for two new warning codes. Needed in stage 2.
-2. **IOERR_NOMEM.** The `io_error` row says "every other IOERR_*", and the last
-   row names IOERR_NOMEM under `database`. Under "first match wins" these
-   disagree. Recommendation: special-case IOERR_NOMEM → `database` (the
-   explicit mention). When is `out_of_memory` used? Recommendation: engine
-   allocation failures (`STORE_ERR_OOM`, `NORM_ERR_OOM`). Needed in stage 3.
-3. **`detail.path` for a relative `--db`.** "Always the absolute brain path
-   given to `--db`." Recommendation: make the resolved path absolute (cwd join,
-   no symlink resolution); same for `REMEMBER_DB` and the default path.
-4. **Codes for existing messages.** Proposed mapping (confirm in one grill):
-   parse errors, validation (`missing body`, `invalid sync-id`, flag mutex, …)
-   → `usage`; locator miss → `not_found`; `STORE_ERR_CONFLICT` on a keyless
-   body → `body_conflict`, key collision → `key_conflict`; bin tokens →
-   their names; `STORE_ERR_SELF_LINK` → `self_link`; `CYCLE` → `cycle`;
-   `SOURCE_TOO_OLD` → `source_too_old`; `UNIQUE_TAKEN` → `unique_taken`;
-   `database is newer than this remember` → `newer_database`; open of a file
-   whose `user_version` is not a remember schema → `unsupported_database`;
-   `invalid device_id sidecar` (plan 15) → `internal`; `internal error` →
-   `internal`. List any message that does not fit and ask.
-5. **Human output of `repair search-index`.** 006 gives only JSON.
-   Recommendation: `rebuilt N` (one line), like other write commands.
-6. **`--no-create` and parent folders.** "Creates nothing": confirm it also
-   skips `ensure_parent_dirs` (recommended: yes, check before any mkdir).
+| # | Decision |
+|---|----------|
+| D5 | Two more warning codes. `deprecated_flag` is the `--trash` / `purge-trash` deprecation line. `synced_folder` is the iCloud/Dropbox/Google Drive line. Plain text is unchanged. With `--json-errors` each becomes `{"version":1,"warning":{"code":"<code>","message":"<text>"}}`. These two and `raw_query_ignored` (plan 18) are the only warning codes. (Amends E4.6.) |
+| D6 | SQLite NOMEM (7) and IOERR_NOMEM (3082) → `database`; this check runs **before** the IOERR row. Engine allocation failures (`STORE_ERR_OOM`, `NORM_ERR_OOM`, any malloc failure in cmd/output) → `out_of_memory`, plain `remember: out of memory` (unchanged text). |
+| D7 | `detail.path` is absolute: join a relative path with the cwd and normalize `.` and `..` lexically, with no symlink resolution. The same rule applies whether the path came from `--db`, `REMEMBER_DB`, `default-db` or the built-in path. |
+| D8 | `--no-create` checks the file before `ensure_parent_dirs`: no folder, no file, no sidecar. Human `repair search-index` prints `rebuilt N`. |
+| D9 | Code table for 0.2.0 messages (below). A message it does not cover → stop and ask. |
+| P3 | The shim's CMake option is `REMEMBER_TEST_VFS` (default OFF). |
+| P6 | `repair` gets a registry row, a help topic and a facade byte-match test. |
+
+**D9 code table**
+
+| Code | Messages (0.2.0 text unchanged) |
+|------|----------------------------------|
+| `usage` | every argv/flag parse error (`unknown option`, `option requires a value`, `missing value for --key`, `unexpected argument`, `too many arguments`, `missing command (try --help)`, `unknown command`, `… takes no arguments`, `… requires …`, `usage: conflict accept …`); every `cannot combine …`; `invalid id`, `invalid sync-id`, `invalid conflict id`, `invalid --limit (must be 1..1000)`, `invalid --offset (must be >= 0)`, `invalid --ttl`, `invalid --expires`, `invalid source (…)`, `unknown kind (…)`, `--keep must be …`, `--source is only valid on add`, `too many --tag filters (max 50)`, `graph commands use --deleted …`, `provide …`, `missing …`, `each end needs …`, `duplicate --…`; body/token normalize errors (`missing body`, `empty body after trim`, `body exceeds 64 KiB`, `invalid UTF-8 in body`, `invalid UTF-8`, `invalid character`, `too long`, `empty`, `stdin input too large`); `missing search query`; `HOME is not set; pass --db PATH`; `database path is too long`; `empty database path`; `database path must be a regular file (not :memory: or file: URI)` |
+| `not_found` | `not found` (StoreStatus NOT_FOUND) |
+| `expired` / `not_expired` / `deleted` / `not_deleted` | the four bin StoreStatus values |
+| `self_link` | `self-link` |
+| `cycle` | `supersedes cycle` |
+| `source_too_old` | `source database is older than this remember` |
+| `unique_taken` | `cannot free unique key or body hash without inventing a key` |
+| `body_conflict` | `body hash conflict` (keyless body-hash collision) |
+| `key_conflict` | a keyed collision on update / rekey (the message that names the other id) |
+| `newer_database` | `database is newer than this remember` |
+| `unsupported_database` | `unsupported database version` |
+| `cannot_open` (`reason` `other`) | `database path component is not a directory` |
+| `corrupt` | `migration left a dangling reference` |
+| `internal` | `internal error`, `internal error: path buffer missing`, `internal argument error`, `store error`, `unknown error`, `unknown normalize error`, `cannot read clock`, `cannot mint sync_id`, `cannot mint device_id`, `cannot write device_id sidecar`, `invalid device_id sidecar`, `failed to read body from stdin`, `failed to write output` |
+| `out_of_memory` | `out of memory` (D6) |
+| E4.7 table | `database error` and every `cannot open database …` (now mapped per SQLite cause) |
+
+`empty search query` stays `usage` until plan 18 makes a blank search succeed.
+Anything 006 and this section do not decide: stop and ask Itay. Do not choose.
 
 ## Files
 
@@ -185,7 +189,10 @@ the shim, like the asan check), tests: new `tests/test_errors.c` (suite
 | Truncated brain → `corrupt` | acceptance |
 | Held write lock + `--busy-timeout 500` → `busy` within ~0.5 s | E4.13 |
 | `--busy-timeout 60001` / `-1` / `abc` → `usage`, `invalid --busy-timeout (must be 0..60000)` | E4.13 |
-| `REMEMBER_TEST_ENOSPC=1` → `disk_full`; `REMEMBER_TEST_FAIL_WRITE=N` / `_READ=N` → `io_error` with `sqlite_name`; `REMEMBER_TEST_NOMEM=1` → the code chosen in question 2 | X-E02 |
+| `REMEMBER_TEST_ENOSPC=1` → `disk_full`; `REMEMBER_TEST_FAIL_WRITE=N` / `_READ=N` → `io_error` with `sqlite_name`; `REMEMBER_TEST_NOMEM=1` → `database` (`SQLITE_IOERR_NOMEM`, D6) | X-E02 |
+| `--json-errors` + `--trash` → one JSON warning `deprecated_flag`; `--db` under a `Dropbox` path → JSON warning `synced_folder`; plain text unchanged without the flag | D5 |
+| Engine OOM (`REMEMBER_TEST_HOOKS` alloc fault) → `out_of_memory` | D6 |
+| Relative `--db sub/x.db` → `detail.path` = cwd + `/sub/x.db`, normalized, symlinks kept | D7 |
 | Damaged FTS shadow table (corrupt `entries_fts_data`) → exit 1, empty stdout, `corrupt`, `fts_only` true; then `repair search-index` → `{"version":1,"action":"rebuilt","entries":N}`; search works again | E4.10, E4.14 |
 | Damaged base table → `repair search-index` refuses with `corrupt`, `fts_only` false | E4.14 |
 | `detail` member order and presence rules (no `errno` when 0; `path` only for the six codes; `reason` only `cannot_open`; `fts_only` only `corrupt`) | E4.9 |
@@ -205,11 +212,13 @@ review, Implementation Notes, commit.
    change yet.
 2. **Route every error.** `--json-errors` global (parse anywhere, like
    `--json`). Replace `err_msg` and the `fprintf(app_err(), …)` error lines
-   with coded calls (question 4). Golden test proves plain bytes unchanged.
-   Question 1 decides the deprecation/sync-warning lines.
+   with coded calls (D9 table). Golden test proves plain bytes unchanged.
+   Route the deprecation and synced-folder lines through `diag_warning`
+   with `deprecated_flag` / `synced_folder` (D5).
 3. **Structured store errors.** Capture code/extended/message/errno where
    SQLite fails (one helper; never after another SQLite call clobbers it).
-   Mapping + extended-name table in the adapter only. `store_open_opts`.
+   Mapping + extended-name table in the adapter only (D6 before the IOERR
+   row). `store_open_opts`. D7 absolute path helper in `util.c`.
    E4.8 text, E4.9 detail, absolute path. SCHEMA retry helper.
 4. **VFS shim + acceptance matrix.** `REMEMBER_TEST_VFS` CMake option,
    `test_vfs.c`, registration as default VFS in test builds only. Write the
@@ -282,7 +291,7 @@ cmake --build build --target leaks-macos          # macOS only
 - [ ] Plain stderr unchanged for non-database errors (golden test).
 - [ ] Exit codes unchanged; stdout empty on every error.
 - [ ] Shim absent from release, `remember_plain` and `remember_core`.
-- [ ] Open questions 1–6 answered and recorded.
+- [ ] Locked decisions D5–D9, P3, P6 implemented as written (D9 table is a test).
 - [ ] Help, SKILL.md, README What's New (`--json-errors`, the seven causes,
       `--busy-timeout`, `--no-create`, `repair search-index`).
 - [ ] Engineering notes + QUALITY.md updated.
@@ -301,8 +310,7 @@ and verifies by **running**, not reading.
 
 - Branch, PR link, commit range, this plan, 006 §3.
 - Gate output (ctest, lint, coverage, `ci-linux.sh` as non-root).
-- The code mapping table actually implemented (question 4) and every grill
-  answer.
+- Locked decisions D5–D9, P3, P6, and any new grill answers.
 - The observed `sqlite_name` for each acceptance case (some depend on the OS).
 
 **Probe these (expected result in brackets)**

@@ -76,18 +76,15 @@ tests; What's New lines; skill/help updates for `device`.
 (plan 19); writing `conflicts.origin` (plan 21); query-side Hebrew folding
 (plan 18); version bump to 0.3.0 (plan 22).
 
-## Open questions (ask before the stage that needs them)
+## Locked decisions (grill 2026-10-12; index in [`006-locked-decisions.md`](006-locked-decisions.md))
 
-1. **E14.6 `previous: null`.** Open mints a sidecar when the file is missing
-   (E14.3), so by the time `device new` runs the file exists. When can
-   `previous` be `null`? Options: (a) `device new` skips the open-time mint
-   and reports `null` when the file was missing at open; (b) the id minted by
-   open counts as `previous`. Recommendation: (a), because it matches the
-   wording "previous is JSON null when the file was missing". Stage 4 needs
-   the answer.
-2. **E14.4 code and exit.** The message is fixed. The E4.3 code arrives with
-   plan 16. Until then: exit 1, plain `remember: invalid device_id sidecar`.
-   Confirm that plan 16 maps it to `internal` (recommended) or to a new code.
+| # | Decision |
+|---|----------|
+| D4 | Open mints a missing sidecar as usual (E14.3). `device new` mints again and reports the open-minted id as `previous`. `previous` is never `null` in practice; keep `null` in the JSON type only. |
+| D9 | `invalid device_id sidecar`, `cannot write device_id sidecar` and `cannot mint device_id` map to code `internal` once plan 16 lands. Until then: exit 1, plain `remember: <message>`. |
+| P6 | `device` gets a registry row, a help topic and a facade byte-match test. |
+
+Anything 006 and this table do not decide: stop and ask Itay. Do not choose.
 
 ## Files
 
@@ -154,7 +151,7 @@ review, Implementation Notes, commit.
 4. **`device` / `device new`.** Store ports `store_device_id(Store *)` and
    `store_device_new(Store *, char *prev_out, size_t, bool *had_prev)`.
    `cmd_device.c`, registry row, help topic, JSON + plain output, facade
-   test. Needs open question 1.
+   test. `previous` per D4.
 5. **Import sources v4 + v5.** Probe the source schema read-only (missing
    `origin`, `bucket_prefixes`, `settings` are "absent"; nothing reads
    `devices`). Accept 4 and 5, refuse < 4 as today, refuse > 5 with
@@ -221,7 +218,7 @@ cmake --build build --target leaks-macos          # macOS only
       is gone; `not_single_device` is never returned.
 - [ ] Every key-changing path resyncs the FTS key column (test per path).
 - [ ] `device` / `device new` work in human and `--json`; facade byte-match.
-- [ ] Open questions 1–2 answered and recorded.
+- [ ] Locked decisions D4, D9, P6 implemented as written.
 - [ ] Help, SKILL.md, README What's New (v0.3.0 section, one line per user-
       visible change: key is searchable, Hebrew marks folded, `device`,
       sidecar-only identity, hard wipe without the device hatch).
@@ -241,7 +238,7 @@ and verifies by **running**, not reading.
 
 - Branch, PR link, commit range, this plan, 006 §1/§9/§12.
 - Gate output pasted in the PR (ctest, lint, coverage summary, `ci-linux.sh`).
-- Decisions taken (open questions 1–2 and any grill) with their answers.
+- Locked decisions D4, D9, P6 and any new grill answers.
 - The list of replaced 0.2.0 tests and why each was replaced.
 
 **Probe these (expected result in brackets)**
@@ -270,7 +267,7 @@ and verifies by **running**, not reading.
 - FTS key resync coverage of every write path (missed paths make stale keys).
 - Migration atomicity with `foreign_keys` toggling (plan 14 rebuild lesson).
 - Fold helper on invalid or truncated UTF-8 (must not read past the buffer).
-- `previous` semantics (open question 1).
+- `previous` semantics (D4): the id open just minted, never `null` in practice.
 
 **Do not re-open:** sidecar is the only device id; `devices` is dropped and
 not copied; FTS column order `key, body, tags`; tokenizer unchanged;
