@@ -60,7 +60,7 @@ Rules this plan implements (restated from 006):
 | E2.5d | A key or tag is returned only when it text-matches **and** belongs to at least one memory in the active bin and filters. A key belongs to its memory; a tag to every memory that carries it. (Scope = bin + filters, **not** the query match.) |
 | E2.6 | `--json` adds `keys` and `tags` **between `total` and `entries`** (stated exception to EN-01/EN-02; What's New names it): `{"version":1,"offset":0,"limit":20,"count":2,"total":2,"keys":{"total":1,"items":[{"key":"recs:books","sync_id":"…","label":"Book recommendations","source":"agent","updated_at":"…Z"}]},"tags":{"total":1,"items":[{"tag":"type:books","count":1}]},"entries":[…]}`. |
 | E2.6 keys | Tier 1: q is a prefix of the whole key. Tier 2 (not tier 1): tokens match segments in order — t1 at index i1, each later token at an index ≥ the previous one. Tier 3: every other text-match. Inside a tier: ascending Unicode code point order of the stored key. |
-| E2.6 tags | Exact tag first, then `count DESC`, then tag. `count` = memories in the active bin and filters that carry it. |
+| E2.6 tags | Exact tag first, then `count DESC`, then tag (**amended by D28: tiers between exact and count**). `count` = memories in the active bin and filters that carry it. |
 | E2.6 misc | `total` = number of scoped matches; `items` ≤ `--facet-limit`. `label` = the `# ` title, else the key, else the first 60 graphemes of the plain text + "…". `--offset`/`--limit` page `entries` only. |
 | E2.7 | Human output: `keys: k1, k2, …` and `tags: t1 (n), …` lines before the entry lines, only when not empty, at most 10 each, then `… and N more`. Same orders as E2.6. |
 | E2.8 | Release note text, verbatim: "`remember search` now also matches word prefixes and returns matching keys and tags. FTS5 queries work as before; a query that FTS5 cannot parse no longer fails: it returns prefix matches and prints a note on stderr." |
@@ -75,6 +75,8 @@ Rules this plan implements (restated from 006):
 | D2 | Vendor **utf8proc** (MIT) through the vendoring checklist (`docs/engineering-notes.md` § Vendoring). Single consumer: new `src/unicode.c` behind a project port `src/unicode.h` exposing NFC, a grapheme-break iterator, general category, and an "is Unicode whitespace" test (White_Space property). No other TU includes `utf8proc.h`. |
 | D12 | Title = the body's first line when it starts with `# `: the text after `# `, ASCII-trimmed; if that is empty there is no title. Plain text = the body with every run of whitespace or control characters collapsed to one space (then trimmed). No markdown stripping. |
 | D13 | Pure TU `src/search_terms.c/.h` (no I/O, no SQLite): QUERY → token list (E2.2 steps 1–3, 16/64 caps); key/tag segmenting and E2.5 match; E2.6 key tiers + code-point order; tag order; `label`. The adapter (`store_sqlite.c`) owns: FTS5 quoting of P (E2.2 steps 4–5), the E2.1a parse probe, the union query, the E2.4 ranking SQL, and fetching the candidate keys and tags in scope (bin + filters). The C side then filters and ranks those candidates with `search_terms.c`. |
+| D27 | A QUERY that is not valid UTF-8 → exit 1 `usage` `invalid UTF-8 in search query` (checked before any other work). |
+| D28 | Tag item order: exact tag, then tier 1/2/3 using the E2.6 key tier rules on the tag text, then `count DESC`, then tag (code-point order). Human `tags:` line uses the same order. |
 | P2 | The `…` suffix on `label` is written only when the 60-grapheme cut actually truncates. |
 
 Anything 006 and this table do not decide: stop and ask Itay. Do not choose.
@@ -140,9 +142,10 @@ pref:editor "Use Zed"`.
 | Query of only punctuation that does not parse (e.g. `"`) → empty result + warning | E2.1(5) |
 | 60 matching tags → `tags.total` 60, 50 items; `--facet-limit 200` → 60 items; `--facet-limit 0`/`201`/`x` → usage | E2.1, E2.6 |
 | Key `recs:books`: `book` matches; `boo book` matches; `recs games` does not; `recs:bo` is tier 1 | E2.5, E2 verification |
-| Tag `project:fortkeeps-cloud`: `fort cloud` tier 2; `cloud fortkeeps` tier 3 (tiers checked through the key list with an equivalent key) | E2.6 |
+| Tag `project:fortkeeps-cloud`: `fort cloud` tier 2; `cloud fortkeeps` tier 3; tier decides tag order before count | E2.6, D28 |
+| Invalid UTF-8 query bytes → `usage` `invalid UTF-8 in search query` | D27 |
 | Tier 1 before tier 2; inside a tier, code-point order (`B` before `a`, `z` before `é`) | E2.6 |
-| Tag order: exact tag first, then count DESC, then tag | E2.6 |
+| Tag order: exact tag, then tier, then count DESC, then tag | D28 |
 | A row matched by both P and R appears once; `count`/`total`/paging over the de-duplicated set | E2.1b |
 | Ranking: exact key, then key prefix, then bm25 (key weight 10 beats body), then recency | E2.4 |
 | `label`: `# ` title; else key; else first 60 graphemes of plain text + `…` only when cut (test with combining marks and a ZWJ emoji sequence) | E2.6, D12, P2 |
@@ -237,7 +240,7 @@ cmake --build build --target leaks-macos          # macOS only
 - [ ] Design log 006 unchanged except Implementation Results rows for E2.*,
       E3.*, E10.1 (and the utf8proc version used).
 - [ ] Every must-pass row green and in `tests/gate-suites`.
-- [ ] D1, D2, D12, D13, P2 implemented exactly.
+- [ ] D1, D2, D12, D13, D27, D28, P2 implemented exactly.
 - [ ] utf8proc vendored per the full checklist; IWYU run green.
 - [ ] No search input exits non-zero except real E4 errors and usage flags.
 - [ ] Help, SKILL.md, README What's New (E2.8 verbatim + the E2.6 order
@@ -266,8 +269,8 @@ and verifies by **running**, not reading.
 1. Run all six 006 Examples by hand [exact match to the must-pass rows].
 2. Fuzz: 1,000 random strings (ASCII punctuation, quotes, parentheses,
    `NEAR`, `AND`, `OR`, `NOT`, `^`, `*`, `:`, Hebrew, emoji, invalid UTF-8
-   bytes) through `search` [never exit 1 except invalid UTF-8 if 006/plan 16
-   classify it as usage; never a crash; ASan clean].
+   bytes) through `search` [exit 0 always, except invalid UTF-8 → `usage`
+   (D27); never a crash; ASan clean].
 3. `remember search "$(python3 -c 'print("a "*10000)')"` [exit 0; fast].
 4. Keys facet scope: memory with key `recs:books` moved to the deleted bin;
    `search boo` [key absent]; `search boo --deleted` [key present].
@@ -292,7 +295,7 @@ and verifies by **running**, not reading.
   tokens).
 
 **Do not re-open:** union search without a flag; warning on exit 0; facet
-JSON position (Itay's stated exception); tier rules; Hebrew fold only on P;
+JSON position (Itay's stated exception); tier rules (keys and tags, D28); Hebrew fold only on P;
 utf8proc as the Unicode source.
 
 **Review output:** append `### <date> — second-opinion deep review (stage N |

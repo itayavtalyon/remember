@@ -28,8 +28,7 @@ Baseline: `main` at `a27efca` with plans 15, 16, 18 and 19 merged.
   counter). `bin` is derived: `live`, `expired`, `deleted`.
 - Links are `entry_links(from_id, to_id, kind)` with stored kinds `related`
   (canonical `min,max`), `cites`, `supersedes`, plus `created_at`/`updated_at`
-  (check the v5 DDL; if `entry_links` has no timestamps, stop and ask — E6.3
-  exports them).
+  (`entry_links` has `created_at`/`updated_at NOT NULL`).
 - `output.c` owns JSON escaping (RFC 8259) and is the only JSON writer.
 - Plan 19 added `store_bucket_prefixes_get` (all rows incl. tombstones +
   `bucket_prefix_order` + `updated_at`) and the pure `bucket_prefixes.c`.
@@ -81,10 +80,11 @@ mapping: `live` → `memories/`, `expired` → `expired/`, `deleted` →
 characters is trimmed of `-` again after the cut. The JSON `engine` member is
 `REMEMBER_VERSION`; `schema` is the open brain's `user_version` (5).
 
-**Pending grill (stop before stage 3 until answered):**
-- G-E1: with `--bins` excluding a bin, does the Markdown export still create
-  that bin's empty folder?
-- G-E2: does `README.txt` end with a newline after the sentence?
+**Answered in the final grill:**
+- D29: the Markdown folder always has `README.txt`, `settings.json`,
+  `memories/`, `expired/`, `deleted/`, with empty folders for excluded or
+  empty bins.
+- D30: `README.txt` is the E6.b1 sentence followed by one `\n`.
 
 Anything else 006 and this table do not decide: stop and ask Itay. Do not
 choose.
@@ -138,7 +138,7 @@ non-null `expires_at`; changed bucket prefixes with tombstones.
 | `--force` replaces a file (JSON/CSV) and a non-empty folder (Markdown, D17); no `.tmp-`/`.old-` left on success | E6.6, D17 |
 | Failure mid-write (ENOSPC via a full tmpfs or a fault hook in `fileio.c`) → `disk_full`; PATH untouched; temp removed | D19, P5 |
 | Unwritable parent → `read_only`; missing parent → `cannot_open` `missing` | D19 |
-| Markdown: `README.txt` exact text (G-E2); `settings.json` = E12.9 object; files in `memories/`, `expired/`, `deleted/` by bin | E6.b, E6.b1 |
+| Markdown: `README.txt` = sentence + `\n` (D30); `settings.json` = E12.9 object; files in `memories/`, `expired/`, `deleted/` by bin; all three folders exist even with `--bins live` (D29) | E6.b, E6.b1, D29, D30 |
 | Slug: key `recs:books` → `recs-books--<12hex>.md`; `# Hello, World!` → `hello-world--…`; keyless no heading → first 6 words; Hebrew-only body → `memory--…`; 60-char key → 48 then trimmed | E6.b2, D12 |
 | Front matter: fields in order, `<field>: <JSON>`, nulls as `null`, `remember_export: 1`, `links` without `from`, sorted (D25/D18) | E6.b3, E6.b4 |
 | A body containing a `---` line and a body starting with `---` are written verbatim after the closing `---`; file ends with exactly one `\n` | E6.b3 |
@@ -160,7 +160,7 @@ review, Implementation Notes, commit.
    (E6.b2, D12), front matter, CSV quoting, E12.9 object. Unit tests with the
    fixture.
 3. **File I/O.** `fileio.c`: temp + rename, D17 swap, cleanup on failure,
-   errno → code (D19). Needs G-E1/G-E2 answers.
+   errno → code (D19). Folder layout per D29/D30.
 4. **CLI.** Flags, messages, envelope, human line, help, facade.
 5. **Docs + full gate.** What's New (export command; 005 non-goal superseded),
    SKILL.md, engineering notes (`fileio.c` is the only file-writing TU),
@@ -219,8 +219,8 @@ cmake --build build --target leaks-macos          # macOS only
 - [ ] Design log 006 unchanged except Implementation Results rows for E6–
       E6.c and E12.9.
 - [ ] Every must-pass row green and in `tests/gate-suites`.
-- [ ] D7, D12, D17, D18, D19, D25, P5, P6 and the locked messages
-      implemented exactly; G-E1/G-E2 answered and recorded.
+- [ ] D7, D12, D17, D18, D19, D25, D29, D30, P5, P6, P7, P9 implemented
+      exactly.
 - [ ] Round-trip fixture builder is shared and ready for plan 21.
 - [ ] Help, SKILL.md, README What's New, engineering notes updated.
 - [ ] Gate: ctest, lint, coverage 100/100, `ci-linux.sh` all green.

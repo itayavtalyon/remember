@@ -31,6 +31,14 @@ plan can be read alone. This file is the index.
 | D23 | E7.2 compare | Content only: key, body, tags (set), `expires_at`, `deleted_at`. | 21 |
 | D24 | Empty `REMEMBER_DB` | Counts as unset (0.2.0 behavior) → read `default-db`, then the built-in path. | 22 |
 | D25 | CSV `links` cell | Same shape as Markdown: `[{to, kind, created_at, updated_at}]` for edges whose stored `from` is this row, sorted by (to sync_id, kind). | 20, 21 |
+| D27 | Invalid UTF-8 in a search QUERY | Exit 1 `usage` `invalid UTF-8 in search query`. (Amends "never fails on its input" for non-text bytes.) | 18 |
+| D28 | Tag facet order | Exact tag, then tier 1/2/3 (the E2.6 key tier rules applied to the tag), then `count DESC`, then tag. (Amends E2.6 to match Verification E2.) | 18 |
+| D29 | Markdown folders | The export folder always has `README.txt`, `settings.json`, `memories/`, `expired/`, `deleted/`, with empty folders for excluded or empty bins. | 20 |
+| D30 | `README.txt` | The sentence followed by one `\n`. | 20 |
+| D31 | null in import records | JSON `null` or an empty CSV cell = absent, for key, expires_at, deleted_at, version_vector, created_at, updated_at, source, tags, links and sync_id. `sync_id: null` → E7.3; `version_vector: null` → E7.2. A null or empty body → `body is missing`. | 21 |
+| D32 | Markdown front matter detection | Front matter exists only when line 1 is exactly `---` and a later line is exactly `---`. Otherwise E7.4: the whole file, trimmed, is the body. | 21 |
+| D33 | Unknown / repeated fields | Unknown JSON members and unknown front-matter fields are ignored. A repeated known front-matter field, a front-matter line not shaped `<field>: <JSON>`, or a value that is not valid JSON → bad record, message `invalid front matter` (new E7.16 line). | 21 |
+| D34 | Imported links (every source) | Canonicalize `related` to (min, max); `INSERT OR IGNORE`; keep the record's timestamps; no endpoint `updated_at`/VV bump; an existing triple is unchanged. A `supersedes` link that would create a cycle is skipped with error `invalid link`; this cycle check is added to `--from-db` too. | 21 |
 | D26 | Scope | E11 (Android) is not planned here. E9 and E12.10 are in plan 22. | INDEX |
 
 ## Decisions the planner locked without a grill (low risk; Itay may veto)
@@ -42,4 +50,7 @@ plan can be read alone. This file is the index.
 | P3 | Test-only VFS shim CMake option is `REMEMBER_TEST_VFS` (default OFF). The Release tree, `remember_plain` and `remember_core` never set it. | 16 |
 | P4 | The E8 stale check and the update run in the same write transaction. | 17 |
 | P5 | Temp names beside PATH: `<PATH>.tmp-<16 hex random>`. They are removed on every failure path. | 20 |
+| P7 | A repeated flag on a new or changed command (`--sort`, `--since`, `--until`, `--if-updated-at`, `--format`, `--out`, `--bins`, `--origin`, `--from-*`) → `usage` `duplicate <flag>`, as `duplicate --id` is today. | 17, 20, 21 |
+| P8 | A JSON entry object with a duplicate member name is a bad record with message `duplicate field` (new E7.16 line). | 21 |
+| P9 | Export flag messages: missing `--format` → `export requires --format (json, md, or csv)`; bad value → `invalid --format (use json, md, or csv)`; missing `--out` → `export requires --out PATH`. Import: zero or several `--from-*` → `import requires exactly one of --from-json, --from-md, --from-csv, --from-db`. | 20, 21 |
 | P6 | Every new command (`device`, `repair`, `config`, `export`) gets a registry row, a help topic and a facade byte-match test. | all |
