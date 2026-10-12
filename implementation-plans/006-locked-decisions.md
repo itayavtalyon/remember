@@ -55,4 +55,5 @@ plan can be read alone. This file is the index.
 | P8 | A JSON entry object with a duplicate member name is a bad record with message `duplicate field` (new E7.16 line). | 21 |
 | P9 | Export flag messages: missing `--format` → `export requires --format (json, md, or csv)`; bad value → `invalid --format (use json, md, or csv)`; missing `--out` → `export requires --out PATH`. Import: zero or several `--from-*` → `import requires exactly one of --from-json, --from-md, --from-csv, --from-db`. | 20, 21 |
 | P10 | The CSV reader accepts an optional BOM and CRLF or LF record ends; exports always write BOM + CRLF. | 21 |
+| P11 | `jsonread.c` nesting depth cap 64; no document size cap (an import file is read whole into memory). Deeper nesting → the file does not parse → `import_parse`. | 21 |
 | P6 | Every new command (`device`, `repair`, `config`, `export`) gets a registry row, a help topic and a facade byte-match test. | all |

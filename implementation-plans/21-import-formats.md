@@ -74,7 +74,7 @@ Rules this plan implements (restated from 006):
 
 | # | Decision |
 |---|----------|
-| D3 | Own strict RFC 8259 JSON reader `src/jsonread.c/.h`: pure, no I/O, returns a tree (or a pull API) with the 1-based line of every value start; limits: depth 64, document ≤ the existing stdin cap order of magnitude (set one named constant and test it); rejects trailing garbage, NaN/Infinity, invalid UTF-8, lone surrogates. Unit-tested under ASan/UBSan in `remember_store_tests`. No vendored JSON library; never SQLite JSON1 for this. |
+| D3 | Own strict RFC 8259 JSON reader `src/jsonread.c/.h`: pure, no I/O, returns a tree (or a pull API) with the 1-based line of every value start; limits: nesting depth 64 (named constant, tested); no document size cap — the file is read whole into memory (P11); rejects trailing garbage, NaN/Infinity, invalid UTF-8, lone surrogates. Unit-tested under ASan/UBSan in `remember_store_tests`. No vendored JSON library; never SQLite JSON1 for this. |
 | D20 | `errors[]` `file`/`line`: JSON → file = basename, line = line of the entry's (or link's) `{`. CSV → basename, physical line where the record starts (header = line 1). Markdown → path relative to the import folder (`memories/x--abc.md`), line = the offending front-matter line, or 1 for whole-file problems. `missing link target` uses the link's line. |
 | D21 | `skipped` = bad records + skipped links. Every skipped item has exactly one `errors[]` entry: `skipped == len(errors)`. |
 | D22 | Record without `sync_id`: same body as an existing keyless memory → union tags into it (keep its `sync_id`, `source`, `created_at`); counted `updated` if tags changed, else `unchanged`. A keyed record whose key exists → `key_clash` (no upsert). Otherwise insert with a new UUIDv7 → `inserted`. |
