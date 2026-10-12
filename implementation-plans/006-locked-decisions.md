@@ -39,6 +39,7 @@ plan can be read alone. This file is the index.
 | D32 | Markdown front matter detection | Front matter exists only when line 1 is exactly `---` and a later line is exactly `---`. Otherwise E7.4: the whole file, trimmed, is the body. | 21 |
 | D33 | Unknown / repeated fields | Unknown JSON members and unknown front-matter fields are ignored. A repeated known front-matter field, a front-matter line not shaped `<field>: <JSON>`, or a value that is not valid JSON → bad record, message `invalid front matter` (new E7.16 line). | 21 |
 | D34 | Imported links (every source) | Canonicalize `related` to (min, max); `INSERT OR IGNORE`; keep the record's timestamps; no endpoint `updated_at`/VV bump; an existing triple is unchanged. A `supersedes` link that would create a cycle is skipped with error `invalid link`; this cycle check is added to `--from-db` too. | 21 |
+| D35 | `sync_id` case on import | A valid `sync_id` in either case is lowercased on read (before merge and duplicate detection). Link ends and VV device ids likewise. | 21 |
 | D26 | Scope | E11 (Android) is not planned here. E9 and E12.10 are in plan 22. | INDEX |
 
 ## Decisions the planner locked without a grill (low risk; Itay may veto)
@@ -53,4 +54,5 @@ plan can be read alone. This file is the index.
 | P7 | A repeated flag on a new or changed command (`--sort`, `--since`, `--until`, `--if-updated-at`, `--format`, `--out`, `--bins`, `--origin`, `--from-*`) → `usage` `duplicate <flag>`, as `duplicate --id` is today. | 17, 20, 21 |
 | P8 | A JSON entry object with a duplicate member name is a bad record with message `duplicate field` (new E7.16 line). | 21 |
 | P9 | Export flag messages: missing `--format` → `export requires --format (json, md, or csv)`; bad value → `invalid --format (use json, md, or csv)`; missing `--out` → `export requires --out PATH`. Import: zero or several `--from-*` → `import requires exactly one of --from-json, --from-md, --from-csv, --from-db`. | 20, 21 |
+| P10 | The CSV reader accepts an optional BOM and CRLF or LF record ends; exports always write BOM + CRLF. | 21 |
 | P6 | Every new command (`device`, `repair`, `config`, `export`) gets a registry row, a help topic and a facade byte-match test. | all |
