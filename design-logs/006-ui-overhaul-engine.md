@@ -69,6 +69,7 @@ shape this log:
   - E2.6: tag items order is exact tag, then the key tiers 1/2/3 applied to the tag, then `count DESC`, then tag.
   - E6.b: the Markdown folder always has all three bin folders. `README.txt` ends with one newline.
   - E7: JSON `null` or an empty CSV cell means absent. Front matter needs an opening and a closing `---` line. Unknown fields are ignored. A repeated field or a malformed front-matter line is a bad record `invalid front matter`. Imported links use `INSERT OR IGNORE` with no endpoint bump, and a `supersedes` cycle is skipped as `invalid link` (also for `--from-db`).
+  - E7.6 for `--from-db`: `errors[]` `file` is the source basename and `line` is the source `entry_links` rowid. A `sync_id` read in either case is lowercased. Invalid UTF-8 in `default-db` is ignored like a missing line.
   - E11 (Android presets) is not part of the CLI plans.
 - Grill 2026-10-12 (Itay): key and tag suggestions use every word against a part, and the same part may serve two words. Whole-start stays. Key rank is whole-start, then in-order parts, then the rest, by code point (E2.5, E2.6). This round supersedes the Round 5 sentence that keeps the 005 sidecar recovery. The sidecar file is the only device id. Schema v5 drops `devices` (E1.3, E14). `--since` and `--until` accept seconds-only `Z` (E5.2). Markdown files and `README.txt` have a fixed shape (E6.b). Import classifies bad records and rolls the named whole-file failures back (E7.12, E7.13). The brain path reads `~/.remember/default-db` after `REMEMBER_DB` (E15).
 

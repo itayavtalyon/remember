@@ -75,7 +75,8 @@ Rules this plan implements (restated from 006):
 | # | Decision |
 |---|----------|
 | D3 | Own strict RFC 8259 JSON reader `src/jsonread.c/.h`: pure, no I/O, returns a tree (or a pull API) with the 1-based line of every value start; limits: nesting depth 64 (named constant, tested); no document size cap — the file is read whole into memory (P11); rejects trailing garbage, NaN/Infinity, invalid UTF-8, lone surrogates. Unit-tested under ASan/UBSan in `remember_store_tests`. No vendored JSON library; never SQLite JSON1 for this. |
-| D20 | `errors[]` `file`/`line`: JSON → file = basename, line = line of the entry's (or link's) `{`. CSV → basename, physical line where the record starts (header = line 1). Markdown → path relative to the import folder (`memories/x--abc.md`), line = the offending front-matter line, or 1 for whole-file problems. `missing link target` uses the link's line. |
+| D20 | `errors[]` `file`/`line`: JSON → file = basename, line = line of the entry's (or link's) `{`. CSV → basename, physical line where the record starts (header = line 1). Markdown → path relative to the import folder (`memories/x--abc.md`), line = the offending front-matter line, or 1 for whole-file problems. `missing link target` uses the link's line. `--from-db` (D37) → file = basename of the source DB, line = the source `entry_links` rowid. |
+| D37 | `--from-db` `errors[]`: file = source DB basename, line = the source `entry_links` rowid of the skipped link (missing end or `supersedes` cycle). |
 | D21 | `skipped` = bad records + skipped links. Every skipped item has exactly one `errors[]` entry: `skipped == len(errors)`. |
 | D22 | Record without `sync_id`: same body as an existing keyless memory → union tags into it (keep its `sync_id`, `source`, `created_at`); counted `updated` if tags changed, else `unchanged`. A keyed record whose key exists → `key_clash` (no upsert). Otherwise insert with a new UUIDv7 → `inserted`. |
 | D23 | E7.2 compares key, body, tags (as a set), `expires_at`, `deleted_at`. Timestamps and source are ignored. |
@@ -161,6 +162,7 @@ merge function next to the plan-19 effective list), tests: new
 | `#settings` CSV row and `settings.json` merge prefixes; never a memory | E7.11 |
 | Prefix merge scenarios: add wins, re-add after remove, removal after add, order with later `updated_at` wins (ties local), device id tie-break, `prefixes_merged` true only on change; `--from-db` v5 source merges, v4 source has none | E12.6, E7.8, Verification E12 |
 | Links: related canonicalized; existing triple unchanged; no endpoint bump; supersedes cycle skipped with `invalid link` (JSON, MD, CSV **and** `--from-db`) | D34 |
+| `--from-db` skipped link → `errors[]` `{file: <db basename>, line: <source entry_links rowid>}` | D37 |
 | `conflicts.origin` = basename (file) / folder name (md) / db basename; `--origin x` overrides; 65-byte label → `usage` `origin is too long (max 64 bytes)` | E13.2 |
 | `conflicts --json` has `origin` after `created_at` (null for pre-0.3.0 rows) | E13.3 |
 | Sidecar bytes and mtime unchanged after each of the four sources; `device` unchanged | X-E03 |
@@ -247,7 +249,7 @@ cmake --build build --target leaks-macos          # macOS only
 - [ ] Design log 006 unchanged except Implementation Results rows for E1.4,
       E7.*, X-E03, E12.6, E13.2, E13.3.
 - [ ] Every must-pass row green and in `tests/gate-suites`.
-- [ ] D3, D20–D23, D25, D31–D35, P7–P10 implemented exactly.
+- [ ] D3, D20–D23, D25, D31–D35, D37, P7–P11 implemented exactly.
 - [ ] `--from-db` and the file formats share one merge path; `--from-db`
       envelope gains `skipped`, `errors`, `prefixes_merged`.
 - [ ] Round trip equal for JSON, Markdown, CSV.
@@ -298,7 +300,7 @@ and verifies by **running**, not reading.
 
 **Do not re-open:** one transaction; bad records do not stop the import;
 `import_parse` cases; no foreign device registration; origin rules; E12.6;
-D20–D23, D31–D35.
+D20–D23, D31–D35, D37.
 
 **Review output:** append `### <date> — second-opinion deep review (stage N |
 FINAL)` under Review Notes. Tag each finding **blocking / important / nit /

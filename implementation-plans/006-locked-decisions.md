@@ -47,6 +47,7 @@ plan can be read alone. This file is the index.
 
 | # | Decision | Plan |
 |---|----------|------|
+| D37 | `--from-db` `errors[]` | file = source DB basename; line = the source `entry_links` rowid of the skipped link. | 21 |
 | P1 | `config set bucket-prefixes --clear P1` → `usage` `cannot combine --clear with prefixes`. | 19 |
 | P2 | Label (E2.6): the `…` suffix is written only when the 60-grapheme cut actually truncates. | 18 |
 | P3 | Test-only VFS shim CMake option is `REMEMBER_TEST_VFS` (default OFF). The Release tree, `remember_plain` and `remember_core` never set it. | 16 |
