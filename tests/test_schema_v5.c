@@ -122,7 +122,12 @@ static void given_v4_brain(const char *db)
                  "'human', '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z', "
                  "'2026-02-01T00:00:00.000Z', '018f6b2e-7c3a-7c00-8000-000000000002', "
                  "'{\"018f6b2e-7c3a-7b2e-8f3a-7c3a7b2e8f3a\":1}');");
-    exec_sql(db, "INSERT INTO entries_fts(rowid, body, tags) VALUES (1, 'notes', ''), (2, "
+    exec_sql(db, "INSERT INTO tags(id, name) VALUES (1, 'tooling');"
+                 "INSERT INTO entry_tags(entry_id, tag_id) VALUES (1, 1);"
+                 "INSERT INTO conflicts(id, sync_id, reason, local_json, incoming_json, "
+                 "created_at) VALUES (7, '018f6b2e-7c3a-7c00-8000-000000000001', 'concurrent_vv', "
+                 "'{\"l\":1}', '{\"i\":1}', '2026-03-01T00:00:00.000Z');");
+    exec_sql(db, "INSERT INTO entries_fts(rowid, body, tags) VALUES (1, 'notes', 'tooling'), (2, "
                  "'archivedword', '');"
                  "INSERT INTO devices(device_id, first_seen, last_seen) VALUES "
                  "('018f6b2e-7c3a-7b2e-8f3a-7c3a7b2e8f3a', '2026-01-01T00:00:00.000Z', "
@@ -301,6 +306,16 @@ TEST(schema_v5_v4_migrates_to_the_fresh_schema)
                     (QueryExpect){.sql = "SELECT COUNT(*) FROM entries_fts WHERE entries_fts MATCH "
                                          "'archivedword';",
                                   .want = "1"});
+    assert_query_is(old,
+                    (QueryExpect){.sql = "SELECT id || '|' || sync_id || '|' || reason || '|' || "
+                                         "local_json || '|' || incoming_json || '|' || created_at "
+                                         "|| '|' || IFNULL(origin, 'NULL') FROM conflicts;",
+                                  .want = "7|018f6b2e-7c3a-7c00-8000-000000000001|concurrent_vv|"
+                                          "{\"l\":1}|{\"i\":1}|2026-03-01T00:00:00.000Z|NULL"});
+    assert_query_is(old,
+                    (QueryExpect){.sql = "SELECT rowid FROM entries_fts WHERE entries_fts MATCH "
+                                         "'tooling';",
+                                  .want = "1"});
 
     memset(&q, 0, sizeof(q));
     q.query = "editor";
@@ -387,11 +402,16 @@ TEST(fold_hebrew_marks_drops_the_listed_points)
     const char kept[] = "\xD7\x90\xD6\xBE\xD7\x80";
     const char multibyte[] = "\xC3\xA9\xF0\x9F\x98\x80";
     char with_nul[] = {'a', 'b', '\0', 'c'};
+    const char edges[] = "\xD6\x90\xD6\x91\xD6\xBD\xD6\xBE\xD6\xBF\xD7\x80\xD7\x81\xD7\x82\xD7\x83"
+                         "\xD7\x84\xD7\x85\xD7\x86\xD7\x87\xD7\x88";
 
     assert_fold("", 0U, "");
     assert_fold(marked, sizeof(marked) - 1U, kept);
     assert_fold(multibyte, sizeof(multibyte) - 1U, multibyte);
     assert_fold(with_nul, sizeof(with_nul), "ab");
+    /* Every range edge: U+0590 0591 05BD 05BE 05BF 05C0 05C1 05C2 05C3 05C4 05C5 05C6 05C7 05C8;
+       kept U+0590 05BE 05C0 05C3 05C6 05C8. */
+    assert_fold(edges, sizeof(edges) - 1U, "\xD6\x90\xD6\xBE\xD7\x80\xD7\x83\xD7\x86\xD7\x88");
 
     ns = fold_hebrew_marks(NULL, 0U, &out);
     ASSERT_EQ_STATUS(ns, NORM_ERR_INTERNAL);

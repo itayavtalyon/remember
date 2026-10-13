@@ -244,8 +244,9 @@ and verifies by **running**, not reading.
 **Probe these (expected result in brackets)**
 
 1. Copy a real v4 brain; open it with the new build; `sqlite3 x.db .schema`
-   [no `devices`; FTS `key, body, tags`; `user_version` 5]; diff `.schema`
-   with a fresh brain [identical].
+   [no `devices`; FTS `key, body, tags`; `user_version` 5]; diff the sorted
+   `.schema` with a fresh brain's [identical; statement order may differ,
+   Itay 2026-10-13].
 2. `remember --db x.db --json search editor` on a brain with `pref:editor`
    [found].
 3. Kill-mid-migration: run the fault-injection test and inspect the file
@@ -303,3 +304,36 @@ Itay chose migrate-keep-devices: fresh databases and v1–v4 all land on the sam
 **Nit:** a brand-new database creates the v5 FTS table and `apply_v5_delta` drops and recreates it with the same SQL. One path, no drift. Left as is.
 
 **Left for later stages:** drop `devices` (stage 3); `device` / `device new` (stage 4); refuse import user_version > 5 (stage 5); query-side Hebrew fold (plan 18); What's New (stage 6).
+
+### 2026-10-13 — second-opinion deep review (stage 1)
+
+**Verdict:** stage 1 approved. No open blocking item.
+
+**Run, not read.** Gate: ctest 4/4 (ASan/UBSan), LINT OK, coverage 100% functions and 100% effective lines, `leaks-macos`, `ci-linux.sh`. Probes used a real 0.2.0 binary built from `42df03e`:
+
+- A real v4 brain (keys, keyless, tags, a `cites` link, live/expired/deleted, one `concurrent_vv` conflict) opens to `user_version` 5. Every entries/tags/entry_tags/links/conflicts column is byte-identical before and after. `conflicts.origin` is NULL. The sidecar is unchanged. 30 body/tag/bin search queries return the same totals under 0.2.0 before and under the new build after.
+- The sorted `.schema` of a migrated brain equals a fresh brain's. FTS columns are `key, body, tags`.
+- `search editor` finds `pref:editor` on a migrated brain. `search exp --expired` finds `t:exp`.
+- Key paths, checking that search follows the new key and drops the old one: `rekey --to-key`, `rekey --clear-key`, keyed `add` upsert (old body word gone), `import --from-db` insert, `import` fast-forward of a rekeyed row, and `conflict accept --keep incoming` and `--keep both` all pass.
+- Hebrew: `search ספר` finds `סֵפֶר טוֹב` and `get` returns the niqqud bytes. Niqqud in a key or tag is folded in the FTS row and kept in `entries`/`tags`. `list --tag` with niqqud still matches exactly.
+- 0.2.0 refuses a v5 file and this build refuses `user_version` 6, both exit 1 with `database is newer than this remember`. `import --from-db` of a 0.2.0 v4 source and of a v5 source both succeed, and the source sha and mtime are unchanged. Purging deleted entries leaves no FTS rows behind.
+
+**Auto-fixed (gate re-run green):**
+
+- **important** — the v4 fixture had no conflict row and no tag, so no test proved `rebuild_conflicts_with_origin` copies rows or that migration carries tags into FTS. `given_v4_brain` now has a tag and a conflict row. `schema_v5_v4_migrates_to_the_fresh_schema` asserts the conflict row byte-for-byte with `origin` NULL, and that the tag is searchable.
+- **nit** — `fold_hebrew_marks` range edges were not pinned, so moving `0x05BD` to `0x05BC` still passed. The fold test now covers every edge (U+0590/0591, 05BD/05BE/05BF/05C0, 05C1–05C3, 05C4–05C6, 05C7/05C8). Mutation-checked: that edit now fails the test.
+- **nit** — `ensure_conflicts_origin` repeated the `sqlite_master` probe from `create_table_if_missing`. It now calls `create_table_if_missing` and checks only the `origin` column.
+
+**Grill (Itay 2026-10-13):**
+
+- E1.3 step 5: keep the conflicts rebuild (rename away → canonical `CREATE` → copy → drop) instead of `ALTER TABLE ... ADD COLUMN`, because ALTER leaves `sqlite_master` text that differs from a fresh brain. Record this as an E1.3 amendment in the 006 Implementation Results (stage 6).
+- Fresh and migrated schemas must be the same set of statements. Order may differ. Probe 1 is amended.
+- Stage 2: remove the `create_table_if_missing` guards for `tags` / `entry_tags` in `apply_v5_delta`. Real v1–v4 brains always had them. Give the compact v1/v2 test fixtures the tags tables instead.
+
+**Important (forward, stage 3):** `read_sidecar` reads only the first line through `fgets`. A sidecar with the valid id plus a second line `junk` opens today (verified). The stage 3 must-pass row "two lines → `invalid device_id sidecar`" needs `read_sidecar` to reject trailing content.
+
+**Nit (left):** a fresh create builds the v5 FTS table and `apply_v5_delta` drops and rebuilds it (already noted in-session). Repopulate prepares four statements per row; fine at personal scale.
+
+**Not done:** there is no local Bugbot binary on this machine (`bugbot` / `cursor-agent` not found). Its pass was replaced by a manual DRY/orthogonality read of the diff.
+
+**Praise:** one DDL source for fresh create and migrate; the `EXCEPT` both-ways schema compare; the fold helper never reads past `src_len` (`utf8_cont` bounds-checks before it touches continuation bytes); `fts_resync` now covers every key-changing path. Probe 4 found no stale key anywhere.

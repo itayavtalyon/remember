@@ -987,15 +987,10 @@ static int rebuild_conflicts_with_origin(sqlite3 *db, char *err, size_t errlen)
 
 static int ensure_conflicts_origin(sqlite3 *db, char *err, size_t errlen)
 {
-    int n = 0;
     int origin = 0;
 
-    if (select_int(db, "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name=?1;",
-                   "conflicts", &n, err, errlen) != 0) {
+    if (create_table_if_missing(db, "conflicts", K_CONFLICTS_SQL, err, errlen) != 0) {
         return -1;
-    }
-    if (n == 0) {
-        return exec_sql(db, K_CONFLICTS_SQL, err, errlen);
     }
     if (select_int(db, "SELECT COUNT(*) FROM pragma_table_info('conflicts') WHERE name='origin';",
                    NULL, &origin, err, errlen) != 0) {
