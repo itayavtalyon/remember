@@ -291,6 +291,14 @@ Itay chose migrate-keep-devices: fresh databases and v1–v4 all land on the sam
 - `store_rekey` now calls `fts_resync` before commit. Add, update, and import already did. Search follows the new key and drops the old one.
 - What's New, SKILL.md, and the design-log Implementation Results stay for stage 6 / the whole-plan DoD. Engineering notes record the v5 open rules because stage 2 depends on them.
 
+### 2026-10-13 — stage 2 (rollback after step 3; tags already exist)
+
+Devices stay until stage 3 (`decision:plan15-stage1-keep-devices`). This stage does not drop them.
+
+- `apply_v5_delta` no longer creates `tags` or `entry_tags`. Real v1–v4 brains already have them. The compact v1 and v2 fixtures now create those tables with the canonical DDL before `PRAGMA user_version`. Without that, open fails with `cannot rebuild search index` and the file stays at the old version.
+- `schema_v5_fault_after_step3_keeps_v4` fails the 8th `sqlite3_exec` on a v4 open (`store_test_fail_exec_after(7)`). That statement is `CREATE TABLE settings`, the first exec after `bucket_prefixes`. The file stays `user_version` 4, FTS column 0 stays `body`, and `bucket_prefixes` is absent. Reopen then migrates. A probe that committed after `bucket_prefixes` and continued made this test fail (FTS column 0 became `key`, and `bucket_prefixes` was left behind). The probe was removed.
+- The prepare-failure test from stage 1 still covers a fault during FTS repopulate.
+
 ## Review Notes
 
 ### 2026-10-13 — in-session deep review (stage 1)
@@ -337,3 +345,17 @@ Itay chose migrate-keep-devices: fresh databases and v1–v4 all land on the sam
 **Not done:** there is no local Bugbot binary on this machine (`bugbot` / `cursor-agent` not found). Its pass was replaced by a manual DRY/orthogonality read of the diff.
 
 **Praise:** one DDL source for fresh create and migrate; the `EXCEPT` both-ways schema compare; the fold helper never reads past `src_len` (`utf8_cont` bounds-checks before it touches continuation bytes); `fts_resync` now covers every key-changing path. Probe 4 found no stale key anywhere.
+
+### 2026-10-13 — in-session deep review (stage 2)
+
+**Verdict:** approve for the second-opinion pass. No open blocking item. No grill.
+
+**Ran:** ctest 4/4 (ASan/UBSan), LINT OK, coverage 100% functions and 100% effective lines, `leaks-macos` PASS, `ci-linux.sh` OK. The fault test was mutation-checked: committing after `bucket_prefixes` leaves the new FTS and the new table, and the test fails.
+
+**Nit (left):** `SCHEMA_V5_EXEC_AFTER_STEP3` is a count of `sqlite3_exec` calls. An extra exec before `CREATE TABLE settings` would still leave a v4 file, so the test could pass without failing the settings statement. The comment lists the seven successes. Same pattern as `store_devices_replace_exec_fail_undoes_savepoint`.
+
+**Nit (left):** the canonical `tags` / `entry_tags` DDL is copied into the v1 and v2 fixtures. The sqlite3 CLI cannot see the `K_TAGS_SQL` macro.
+
+**Not done:** no local Bugbot binary (`bugbot` and `cursor-agent` are not on PATH). That pass was a manual DRY and orthogonality read of the diff.
+
+**Praise:** one transaction still owns the delta. Removing the tag-table guards made the existing v1 and v2 tests fail until the fixtures matched real brains.

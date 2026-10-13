@@ -1029,15 +1029,10 @@ static int repopulate_fts(sqlite3 *db, char *err, size_t errlen)
     return 0;
 }
 
-/* v5 objects on a database that already has entries. Devices stay (stage 3 drops them). */
+/* v5 objects on a database that already has entries, tags, and entry_tags.
+   Devices stay (stage 3 drops them). */
 static int apply_v5_delta(sqlite3 *db, char *err, size_t errlen)
 {
-    if (create_table_if_missing(db, "tags", K_TAGS_SQL, err, errlen) != 0) {
-        return -1;
-    }
-    if (create_table_if_missing(db, "entry_tags", K_ENTRY_TAGS_SQL, err, errlen) != 0) {
-        return -1;
-    }
     if (exec_sql(db, "DROP TABLE IF EXISTS entries_fts;", err, errlen) != 0) {
         return -1;
     }

@@ -80,6 +80,16 @@ TEST(store_open_migrates_v2_to_v5)
             "updated_at TEXT NOT NULL, expires_at TEXT);"
             "INSERT INTO entries(body, body_hash, source, created_at, updated_at) "
             "VALUES('v2 row','h','human','2026-01-01T00:00:00.000Z','2026-01-01T00:00:00.000Z');"
+            /* Real v2 brains already had these. The v5 delta does not create them. */
+            "CREATE TABLE tags (\n"
+            "  id INTEGER PRIMARY KEY,\n"
+            "  name TEXT NOT NULL UNIQUE\n"
+            ");\n"
+            "CREATE TABLE entry_tags (\n"
+            "  entry_id INTEGER NOT NULL REFERENCES entries(id) ON DELETE CASCADE,\n"
+            "  tag_id INTEGER NOT NULL REFERENCES tags(id) ON DELETE CASCADE,\n"
+            "  PRIMARY KEY (entry_id, tag_id)\n"
+            ");\n"
             "PRAGMA user_version=2;"));
     assert_query_is(db, (QueryExpect){.sql = "PRAGMA user_version;", .want = "2"});
 

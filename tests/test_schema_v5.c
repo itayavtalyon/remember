@@ -9,6 +9,11 @@
 #include <string.h>
 
 enum { SCHEMA_V5_LIMIT = 20, SCHEMA_V5_COMPARE_SQL = 1024, SCHEMA_V5_PREPARE_TRIES = 40 };
+/* Successful sqlite3_exec calls before CREATE settings on a v4 open:
+   foreign_keys ON, busy_timeout, foreign_keys OFF, BEGIN IMMEDIATE,
+   DROP entries_fts, CREATE entries_fts, CREATE bucket_prefixes.
+   The next exec is the first one after E1.3 step 3. */
+enum { SCHEMA_V5_EXEC_AFTER_STEP3 = 7 };
 
 static const char k_hash_a[] = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 static const char k_now[] = "2026-06-15T12:00:00.000Z";
@@ -381,6 +386,58 @@ TEST(schema_v5_fts_rebuild_prepare_failure_keeps_v4)
     ASSERT_EQ_INT(saw, 1);
     free(db);
 }
+
+/* E1.3 is one transaction. A failure after bucket_prefixes is created must
+   leave the file at v4 with the old FTS. Reopen then migrates. */
+TEST(schema_v5_fault_after_step3_keeps_v4)
+{
+    char *db = make_temp_db_path();
+    char err[ERR_BUFSIZE];
+    Store *s = NULL;
+
+    ASSERT_TRUE(db != NULL);
+    given_v4_brain(db);
+    err[0] = '\0';
+    store_test_fail_exec_after(SCHEMA_V5_EXEC_AFTER_STEP3);
+    s = store_open(db, err, sizeof(err));
+    store_test_fail_exec_after(-1);
+    ASSERT_TRUE(s == NULL);
+    ASSERT_STR_CONTAINS(err, "sqlite:");
+    assert_query_is(db, (QueryExpect){.sql = "PRAGMA user_version;", .want = "4"});
+    assert_query_is(db, (QueryExpect){.sql = "SELECT name FROM pragma_table_info('entries_fts') "
+                                             "WHERE cid=0;",
+                                      .want = "body"});
+    assert_query_is(db, (QueryExpect){.sql = "SELECT COUNT(*) FROM entries_fts;", .want = "2"});
+    assert_query_is(db,
+                    (QueryExpect){.sql = "SELECT COUNT(*) FROM entries_fts WHERE entries_fts MATCH "
+                                         "'archivedword';",
+                                  .want = "1"});
+    assert_query_is(
+        db, (QueryExpect){.sql = "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND "
+                                 "name='bucket_prefixes';",
+                          .want = "0"});
+    assert_query_is(db,
+                    (QueryExpect){.sql = "SELECT COUNT(*) FROM sqlite_master WHERE type='table' "
+                                         "AND name='settings';",
+                                  .want = "0"});
+    assert_query_is(db, (QueryExpect){.sql = "SELECT COUNT(*) FROM pragma_table_info('conflicts') "
+                                             "WHERE name='origin';",
+                                      .want = "0"});
+    assert_query_is(db, (QueryExpect){.sql = "SELECT COUNT(*) FROM devices;", .want = "1"});
+
+    s = given_open(db);
+    assert_query_is(db, (QueryExpect){.sql = "PRAGMA user_version;", .want = "5"});
+    assert_query_is(db, (QueryExpect){.sql = "SELECT name FROM pragma_table_info('entries_fts') "
+                                             "WHERE cid=0;",
+                                      .want = "key"});
+    assert_query_is(db,
+                    (QueryExpect){.sql = "SELECT COUNT(*) FROM entries_fts WHERE entries_fts MATCH "
+                                         "'archivedword';",
+                                  .want = "1"});
+    assert_query_is(db, (QueryExpect){.sql = "SELECT COUNT(*) FROM devices;", .want = "1"});
+    store_close(s);
+    free(db);
+}
 #endif
 
 static void assert_fold(const char *src, size_t len, const char *want)
@@ -451,6 +508,7 @@ void register_schema_v5_tests(void)
     RUN_TEST(schema_v5_v4_missing_conflicts_creates_the_table);
 #ifdef REMEMBER_TEST_HOOKS
     RUN_TEST(schema_v5_fts_rebuild_prepare_failure_keeps_v4);
+    RUN_TEST(schema_v5_fault_after_step3_keeps_v4);
 #endif
     RUN_TEST(fold_hebrew_marks_drops_the_listed_points);
     RUN_TEST(fold_hebrew_marks_copies_a_truncated_sequence);
