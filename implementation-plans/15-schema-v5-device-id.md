@@ -359,3 +359,21 @@ Devices stay until stage 3 (`decision:plan15-stage1-keep-devices`). This stage d
 **Not done:** no local Bugbot binary (`bugbot` and `cursor-agent` are not on PATH). That pass was a manual DRY and orthogonality read of the diff.
 
 **Praise:** one transaction still owns the delta. Removing the tag-table guards made the existing v1 and v2 tests fail until the fixtures matched real brains.
+
+### 2026-10-13 — second-opinion deep review (stage 2)
+
+**Verdict:** stage 2 approved. No open blocking item. No grill: the tag-guard removal is Itay's stage 1 answer, applied as written.
+
+**Run, not read.** Gate: ctest 4/4 (ASan/UBSan), LINT OK, coverage 100% functions and 100% effective lines, `leaks-macos` PASS, `ci-linux.sh` OK.
+
+- Fault position: a temporary `fprintf` in the exec hook (since reverted) showed that `store_test_fail_exec_after(7)` faults `CREATE TABLE settings`, as the test comment says.
+- Probe 3 with real crashes: a 200k-row v4 brain (migrating takes about 3 s on the ASan build) was killed with `kill -9` at 0.3 s, 0.8 s, 1.5 s and 2.3 s. Each time the hot journal rolled the file back to `user_version` 4 with FTS column 0 `body` and `integrity_check` ok. Reopen migrated to v5 and the key search found all 200k rows.
+
+**Auto-fixed (gate re-run green):**
+
+- **important** — `schema_v5_fault_after_step3_keeps_v4` depends on an exec count. Mutation: adding `COMMIT; BEGIN IMMEDIATE;` before `CREATE TABLE settings` (a real mid-migration commit) still passed that test, because the extra exec moved the fault onto the injected `COMMIT`. This is the in-session nit, now proven. New `schema_v5_v4_open_exec_fault_sweep` fails every exec position of a v4 open in turn. Each failed open must leave v4, FTS column 0 `body`, and the old rows searchable. The sweep must also pass step 3 (`n > SCHEMA_V5_EXEC_AFTER_STEP3`) before a clean open migrates. The same mutation fails the sweep (`ASSERT_STREQ("key", "body")`). The named test stays as the readable E1.3 case.
+- **nit** — clang-format on the new test.
+
+**Nit (left, pre-existing):** `ensure_schema` ignores the result of `PRAGMA foreign_keys = ON` after migrating. If that PRAGMA failed, the connection would run with foreign keys OFF. It cannot fail outside a transaction in practice; failing loudly would be the fail-fast version.
+
+**Praise:** removing the guards was proven by the old v1/v2 tests failing first. The engineering notes state the new rule (no `tags`/`entry_tags` creation, rollback after `bucket_prefixes`).
