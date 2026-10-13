@@ -423,3 +423,29 @@ Schema and open tests that asserted `COUNT(*) FROM devices = 1` after a successf
 **Bugbot:** the in-session Bugbot pass reported no findings. Sidecar read/write, migration order, and the remaining `devices` assertions (rollback only) match the stage.
 
 **Praise:** invalid sidecars are compared as file bytes, so a "fix" that rewrites the file fails the test. The catalog string is still called, and hard delete returns `STORE_OK` in the same test.
+
+### 2026-10-13 — second-opinion deep review (stage 3)
+
+**Verdict:** stage 3 approved after one grill-decided fix. No open blocking item.
+
+**Run, not read.** Gate: ctest 4/4 (ASan/UBSan), LINT OK, coverage 100% functions and 100% effective lines, `leaks-macos` PASS, `ci-linux.sh` OK. Probe 5 on the built binary:
+
+- A fresh brain has a sidecar at mode 0600 with one 37-byte line, and there is no `devices` table.
+- A deleted sidecar is re-minted at 0600, with a new id.
+- A sidecar of garbage, an uppercase UUID, the id plus a second line, or empty → exit 1 `invalid device_id sidecar`, and the sha is unchanged. The id with one trailing `\n` or `\r\n` opens. The second-line case is the stage 1 forward item, now closed.
+- With the sidecar missing in a `0555` folder → `cannot write device_id sidecar`, and no `.tmp` or partial file is left behind.
+- A 0.2.0 v4 brain with its sidecar removed gets a new id, not the `devices` row value, and ends with no `devices` table.
+
+**Blocking → fixed (Itay grill 2026-10-13: mint under the DB lock):** on an existing v5 brain whose sidecar was missing, open minted outside any lock. All processes used the same `<path>.device_id.tmp`, and `rename` overwrites. With 16 parallel CLI `add` runs per round, one round in five had one run fail with `cannot write device_id sidecar` (its temp file had already been renamed away). Another run wrote its row under an id the sidecar did not keep: a phantom writer in `version_vector`. Fresh create and v4 migrate were safe because they mint inside `BEGIN IMMEDIATE`.
+
+- New `bind_current_identity`: a valid sidecar binds with no lock, so normal opens stay lock-free. Otherwise it takes `BEGIN IMMEDIATE` (the lock migrate takes), re-reads the sidecar through `ensure_device_identity`, mints only if the file is still missing, and commits.
+- New `cli_parallel_opens_mint_one_sidecar_id` (gate suite `sync_delete`): 8 rounds of 16 real CLI processes. Each round must give 16 rows, none under an id other than the sidecar's, and no failed run. It went red in 2 of 3 runs before the fix (`15|0`, `15|1`, failures 2–3) and green in 5 of 5 after. A 10-round shell probe also had 0 bad rounds.
+- The test spawns the CLI because forked children inherit SQLite's PRNG state: they mint the same UUID within the same millisecond, which hides the race. A 48×20 in-process fork version stayed green on the buggy code.
+
+**Auto-fixed:** **important** — `write_sidecar` renamed without `fsync`. After a power loss the rename could land before the data, leaving an empty sidecar. E14.4 then refuses the brain and never re-mints it. It now calls `fsync(fd)` before close and rename.
+
+**Nit (left for stage 6 help/docs):** `import` help still says "or register devices", and the `store_import` comment in `store.h` still says "never INSERTs foreign devices". Both are stale now that the table is gone.
+
+**Nit (left):** `store_test_fail_sidecar_rename(int n)` uses only `n > 0`, so it is a flag.
+
+**Praise:** about 180 lines of `devices` reconciliation are gone. `ensure_device_identity` now has three branches (valid, missing, invalid). `read_sidecar` checks the trailing `fgetc` against `EOF` and `ferror`. The replaced-tests list in Implementation Notes names every 0.2.0 test and gives the reason.

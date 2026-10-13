@@ -614,6 +614,11 @@ static int write_sidecar(const char *path, const char *uuid, char *err, size_t e
     if (wrote < 0 || (size_t)wrote != n) {
         goto cleanup;
     }
+    /* Durable before the rename publishes it: an empty sidecar after power loss
+       would be "invalid" and never re-minted (E14.4). */
+    if (fsync(fd) != 0) {
+        goto cleanup;
+    }
     {
         int closed = close(fd);
 
@@ -674,6 +679,28 @@ static int ensure_device_identity(Store *s, char *err, size_t errlen)
         }
     }
     return bind_device_id(s, file_uuid, err, errlen);
+}
+
+/* Already-current open. A valid sidecar binds without a lock. Otherwise take the
+   write lock migrate also takes, re-read, and mint only if still missing, so
+   parallel opens all bind the one id the file keeps (Itay 2026-10-13). */
+static int bind_current_identity(Store *s, char *err, size_t errlen)
+{
+    char side[REMEMBER_PATH_MAX + SIDECAR_PATH_PAD];
+    char uuid[UUID_STR_LEN + 1];
+
+    if (sidecar_path(s->path, side, sizeof(side)) == 0 && read_sidecar(side, uuid) == 0) {
+        return bind_device_id(s, uuid, err, errlen);
+    }
+    if (exec_sql(s->db, "BEGIN IMMEDIATE;", err, errlen) != 0) {
+        return -1;
+    }
+    if (ensure_device_identity(s, err, errlen) != 0 ||
+        exec_sql(s->db, "COMMIT;", err, errlen) != 0) {
+        rollback_quiet(s->db);
+        return -1;
+    }
+    return 0;
 }
 
 static int backfill_sync_ids(sqlite3 *db, const char *device_id, char *err, size_t errlen)
@@ -1070,7 +1097,7 @@ static int ensure_schema(Store *s, char *err, size_t errlen)
     }
 
 bind_identity:
-    return ensure_device_identity(s, err, errlen);
+    return bind_current_identity(s, err, errlen);
 }
 
 Store *store_open(const char *path, char *err, size_t errlen)
