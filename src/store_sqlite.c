@@ -20,6 +20,9 @@ struct Store {
     sqlite3 *db;
     char *path;
     char *device_id;
+    bool replace_invalid_sidecar; /* device new only: invalid counts as missing */
+    /* NOLINTNEXTLINE(readability-magic-numbers,cppcoreguidelines-avoid-magic-numbers) */
+    char pad_[7]; /* explicit tail padding (kept -Wpadded-clean) */
 };
 
 /* Directory mode for the DB parent (rwx for owner only). */
@@ -653,7 +656,8 @@ static int bind_device_id(Store *s, const char *uuid, char *err, size_t errlen)
     return 0;
 }
 
-/* Sidecar is the only device id. Valid: use it. Missing: mint and write. Invalid: fail. */
+/* Sidecar is the only device id. Valid: use it. Missing: mint and write. Invalid:
+   fail, unless this handle is a `device new` open (Itay 2026-10-13), which mints over it. */
 static int ensure_device_identity(Store *s, char *err, size_t errlen)
 {
     char side[REMEMBER_PATH_MAX + SIDECAR_PATH_PAD];
@@ -665,11 +669,11 @@ static int ensure_device_identity(Store *s, char *err, size_t errlen)
         return -1;
     }
     file_rc = read_sidecar(side, file_uuid);
-    if (file_rc < 0) {
+    if (file_rc < 0 && !s->replace_invalid_sidecar) {
         set_err(err, errlen, "invalid device_id sidecar");
         return -1;
     }
-    if (file_rc == 1) {
+    if (file_rc != 0) {
         if (mint_uuid_v7(file_uuid) != 0) {
             set_err(err, errlen, "cannot mint device_id");
             return -1;
@@ -743,12 +747,8 @@ StoreStatus store_device_new(Store *s, char *prev_out, size_t prev_len, bool *ha
     if (exec_sql(s->db, "BEGIN IMMEDIATE;", err, errlen) != 0) {
         return STORE_ERR_SQLITE;
     }
+    /* device new always mints: an invalid file is replaced like a missing one. */
     file_rc = read_sidecar(side, previous);
-    if (file_rc < 0) {
-        rollback_quiet(s->db);
-        set_err(err, errlen, "invalid device_id sidecar");
-        return STORE_ERR_INTERNAL;
-    }
     if (mint_uuid_v7(minted) != 0) {
         rollback_quiet(s->db);
         set_err(err, errlen, "cannot mint device_id");
@@ -1173,7 +1173,8 @@ bind_identity:
     return bind_current_identity(s, err, errlen);
 }
 
-Store *store_open(const char *path, char *err, size_t errlen)
+static Store *open_store_mode(const char *path, bool replace_invalid_sidecar, char *err,
+                              size_t errlen)
 {
     Store *s = NULL;
     sqlite3 *db = NULL;
@@ -1201,6 +1202,7 @@ Store *store_open(const char *path, char *err, size_t errlen)
         return NULL;
     }
     memcpy(s->path, path, plen + 1U);
+    s->replace_invalid_sidecar = replace_invalid_sidecar;
 
     /* SQLITE_OPEN_* are sqlite's own signed-int flag macros; the API takes int. */
     // NOLINTNEXTLINE(hicpp-signed-bitwise)
@@ -1228,6 +1230,16 @@ cleanup_fail:
     free(s->device_id);
     free(s);
     return NULL;
+}
+
+Store *store_open(const char *path, char *err, size_t errlen)
+{
+    return open_store_mode(path, false, err, errlen);
+}
+
+Store *store_open_replacing_sidecar(const char *path, char *err, size_t errlen)
+{
+    return open_store_mode(path, true, err, errlen);
 }
 
 void store_close(Store *s)

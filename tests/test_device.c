@@ -314,6 +314,71 @@ TEST(device_new_json_previous_is_null_when_missing)
     free(buf);
 }
 
+/* db then text: the database path, then the sidecar contents. */
+// NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
+static void write_sidecar_text(const char *db, const char *text)
+{
+    char path[REMEMBER_PATH_MAX];
+    FILE *file = NULL;
+
+    (void)snprintf(path, sizeof(path), "%s.device_id", db);
+    /* NOLINTNEXTLINE(android-cloexec-fopen) */
+    file = fopen(path, "w");
+    ASSERT_TRUE(file != NULL);
+    if (file != NULL) {
+        (void)fputs(text, file);
+        (void)fclose(file);
+    }
+}
+
+/* device new always mints (Itay 2026-10-13): it replaces a bad sidecar. Every
+   other command, `device` and `device new extra` included, still refuses it
+   and leaves the file alone (E14.4). */
+TEST(device_new_replaces_an_invalid_sidecar)
+{
+    char *db = make_temp_db_path();
+    const char *show[] = {"device"};
+    const char *tail[] = {"device", "new", "extra"};
+    const char *mint[] = {"--json", "device", "new"};
+    char id[DEVICE_ID_BUF];
+    char *side = NULL;
+    CmdResult result;
+
+    ASSERT_TRUE(db != NULL);
+    result = run_remember(db, show, sizeof(show) / sizeof(show[0]), NULL);
+    ASSERT_EQ_INT(result.exit_code, 0);
+    cmd_result_free(&result);
+
+    write_sidecar_text(db, "GARBAGE\n");
+    result = run_remember(db, show, sizeof(show) / sizeof(show[0]), NULL);
+    ASSERT_EQ_INT(result.exit_code, 1);
+    ASSERT_STREQ(result.err, "remember: invalid device_id sidecar\n");
+    cmd_result_free(&result);
+    result = run_remember(db, tail, sizeof(tail) / sizeof(tail[0]), NULL);
+    ASSERT_EQ_INT(result.exit_code, 1);
+    cmd_result_free(&result);
+    side = sidecar_text(db);
+    ASSERT_STREQ(side != NULL ? side : "", "GARBAGE");
+    free(side);
+
+    result = run_remember(db, mint, sizeof(mint) / sizeof(mint[0]), NULL);
+    ASSERT_EQ_INT(result.exit_code, 0);
+    ASSERT_STREQ(result.err, "");
+    ASSERT_EQ_INT(copy_json_field(result.out, "device_id", id, sizeof(id)), 0);
+    /* Open minted over the bad file first, so previous is that id (D4). */
+    ASSERT_STR_CONTAINS(result.out, "\"previous\":\"");
+    side = sidecar_text(db);
+    ASSERT_STREQ(side != NULL ? side : "", id);
+    free(side);
+    cmd_result_free(&result);
+
+    result = run_remember(db, show, sizeof(show) / sizeof(show[0]), NULL);
+    ASSERT_EQ_INT(result.exit_code, 0);
+    ASSERT_STR_CONTAINS(result.out, id);
+    cmd_result_free(&result);
+    free(db);
+}
+
 void register_device_tests(void)
 {
     RUN_TEST(device_prints_the_sidecar_id);
@@ -322,4 +387,5 @@ void register_device_tests(void)
     RUN_TEST(device_rejects_extra_words_and_options);
     RUN_TEST(help_device_describes_new);
     RUN_TEST(device_new_json_previous_is_null_when_missing);
+    RUN_TEST(device_new_replaces_an_invalid_sidecar);
 }

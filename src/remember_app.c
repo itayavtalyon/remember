@@ -257,6 +257,7 @@ static void print_command_help(CliCommand topic)
         (void)fprintf(out, "\n");
         (void)fprintf(out, "'device new' mints a new id and writes the sidecar.\n");
         (void)fprintf(out, "Plain output is that id. It does not change a version vector.\n");
+        (void)fprintf(out, "It also replaces an invalid sidecar (no other command does).\n");
         (void)fprintf(out, "JSON adds \"previous\" (null when the file was missing).\n");
         (void)fprintf(out, "\n");
     }
@@ -312,7 +313,11 @@ static Store *open_store(const CliArgs *args, int *out_rc)
                       "remember: warning: database path looks like a synced folder "
                       "(iCloud/Dropbox/Google Drive); corruption risk - prefer a local disk\n");
     }
-    s = store_open(path, err, sizeof(err));
+    if (args->command == CLI_CMD_DEVICE && cmd_device_mints(args->rest_argc, args->rest_argv)) {
+        s = store_open_replacing_sidecar(path, err, sizeof(err));
+    } else {
+        s = store_open(path, err, sizeof(err));
+    }
     if (s == NULL) {
         (void)fprintf(app_err(), "remember: %s\n", err[0] != '\0' ? err : "cannot open database");
         *out_rc = REMEMBER_ERR;

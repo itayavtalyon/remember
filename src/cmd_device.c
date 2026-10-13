@@ -94,6 +94,17 @@ static int emit_new_device(Store *s, bool json)
     return REMEMBER_OK;
 }
 
+bool cmd_device_mints(int rest_argc, const char **rest_argv)
+{
+    if (rest_argc != 1 || rest_argv == NULL) {
+        return false;
+    }
+    if (strcmp(rest_argv[0], "new") != 0) {
+        return false;
+    }
+    return true;
+}
+
 int cmd_device(Store *s, bool json, int rest_argc, const char **rest_argv)
 {
     bool make_new = false;

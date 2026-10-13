@@ -74,6 +74,11 @@ typedef struct {
  */
 Store *store_open(const char *path, char *err, size_t errlen);
 
+/* store_open for `device new` only: an invalid sidecar counts as missing and is
+ * minted over under the write lock (Itay 2026-10-13). Every other open keeps
+ * the E14.4 error. */
+Store *store_open_replacing_sidecar(const char *path, char *err, size_t errlen);
+
 /* Close and free. Safe with NULL. */
 void store_close(Store *s);
 
@@ -90,9 +95,9 @@ const char *store_device_id(const Store *s);
  * share <path>.device_id.tmp.
  * On STORE_OK, the sidecar and this handle both hold the new id. *had_prev is
  * true and prev_out (STORE_DEVICE_ID_LEN + 1) holds the id the file had. A
- * missing file sets *had_prev false and prev_out empty (JSON null). Open mints
- * a missing file first, so a CLI call reports that id (D4). An invalid file
- * is left unchanged. Allocation fails before the rename, so the file stays.
+ * missing or invalid file sets *had_prev false and prev_out empty (JSON null)
+ * and is replaced. Open mints a missing file first, so a CLI call reports that
+ * id (D4). Allocation fails before the rename, so the file stays.
  * err receives the open-path message. prev_out / had_prev are meaningful only
  * on STORE_OK.
  */

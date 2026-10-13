@@ -867,16 +867,19 @@ TEST(store_device_new_missing_file_has_no_previous)
     free(db);
 }
 
-TEST(store_device_new_invalid_sidecar_is_unchanged)
+/* device new always mints (Itay 2026-10-13): an invalid file is replaced and
+   reported like a missing one. Plain store_open still refuses it (E14.4); the
+   device-new opener mints over it. */
+TEST(store_device_new_replaces_an_invalid_sidecar)
 {
     char *db = make_temp_db_path();
     Store *s = NULL;
     char previous[STORE_DEVICE_ID_LEN + 1];
     char err[ERR_BUFSIZE];
     char old_id[STORE_DEVICE_ID_LEN + 1];
-    bool had_prev = false;
+    char want[STORE_DEVICE_ID_LEN + 2];
+    bool had_prev = true;
     char *side = NULL;
-    char *before = NULL;
     char *after = NULL;
 
     ASSERT_TRUE(db != NULL);
@@ -889,16 +892,30 @@ TEST(store_device_new_invalid_sidecar_is_unchanged)
                          store_device_id(s) != NULL ? store_device_id(s) : "") > 0);
     side = sidecar_path(db);
     write_text(side, "GARBAGE\n");
-    before = read_text(side);
     err[0] = '\0';
     ASSERT_EQ_STATUS(store_device_new(s, previous, sizeof(previous), &had_prev, err, sizeof(err)),
-                     STORE_ERR_INTERNAL);
-    ASSERT_STR_CONTAINS(err, "invalid device_id sidecar");
+                     STORE_OK);
+    ASSERT_TRUE(!had_prev);
+    ASSERT_STREQ(previous, "");
+    ASSERT_TRUE(strcmp(store_device_id(s), old_id) != 0);
+    (void)snprintf(want, sizeof(want), "%s\n", store_device_id(s));
     after = read_text(side);
-    ASSERT_STREQ(after != NULL ? after : "", before != NULL ? before : "");
-    ASSERT_STREQ(store_device_id(s), old_id);
+    ASSERT_STREQ(after != NULL ? after : "", want);
     store_close(s);
-    free(before);
+    free(after);
+
+    write_text(side, "GARBAGE\n");
+    err[0] = '\0';
+    s = store_open(db, err, sizeof(err));
+    ASSERT_TRUE(s == NULL);
+    ASSERT_STR_CONTAINS(err, "invalid device_id sidecar");
+    err[0] = '\0';
+    s = store_open_replacing_sidecar(db, err, sizeof(err));
+    ASSERT_TRUE(s != NULL);
+    (void)snprintf(want, sizeof(want), "%s\n", s != NULL ? store_device_id(s) : "");
+    after = read_text(side);
+    ASSERT_STREQ(after != NULL ? after : "", want);
+    store_close(s);
     free(after);
     free(side);
     free(db);
@@ -966,7 +983,7 @@ void register_schema_v5_tests(void)
     RUN_TEST(schema_v5_invalid_sidecar_is_left_unchanged);
     RUN_TEST(store_device_new_keeps_the_vector_until_the_next_edit);
     RUN_TEST(store_device_new_missing_file_has_no_previous);
-    RUN_TEST(store_device_new_invalid_sidecar_is_unchanged);
+    RUN_TEST(store_device_new_replaces_an_invalid_sidecar);
 #ifdef REMEMBER_TEST_HOOKS
     RUN_TEST(store_device_new_rename_failure_keeps_the_old_id);
 #endif

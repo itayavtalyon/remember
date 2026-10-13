@@ -475,3 +475,25 @@ Open mints a missing sidecar first (D4), so a CLI `device new` reports that id a
 **Nit (left for stage 6):** import help still says "register devices". README and SKILL.md still describe the device hatch.
 
 **Praise:** the version-vector test mints once, then updates. The vector keeps `"A":1` and gains `"B":1`. Human `device new` is the new id and nothing else.
+
+### 2026-10-13 — second-opinion deep review (stage 4)
+
+**Verdict:** stage 4 approved after one grill-decided change. No open blocking item.
+
+**Run, not read.** Gate: ctest 4/4 (ASan/UBSan), LINT OK, coverage 100% functions and 100% effective lines, `leaks-macos` PASS, `ci-linux.sh` OK. Probes on the built binary:
+
+- `device` prints A. `--json` prints `{"version":1,"device_id":"A"}`.
+- `--json device new` prints `{"version":1,"device_id":"B","previous":"A"}`. Every `version_vector` is byte-identical before and after.
+- The next `update` makes the vector `{"A":1,"B":1}`: B is added and A's counter is kept (probe 6).
+- Human `device new` prints only the new id. `help device` describes `new`, `previous`, and the version vector.
+
+**Grill (Itay 2026-10-13): `device new` always mints and replaces an invalid sidecar.** Before, an invalid sidecar failed every command, `device new` included, because open fails first. The only recovery was deleting the file by hand, and nothing told the user. This amends E14.4 and grill item 12 for `device new` only. Every other open, including `device` and `device new extra`, still exits 1 with `invalid device_id sidecar` and leaves the file unchanged.
+
+- `store_open_replacing_sidecar` sets `Store.replace_invalid_sidecar` (explicit tail pad, kept `-Wpadded`-clean). In that mode `ensure_device_identity` treats an invalid file like a missing one: it mints over it under the same lock as a missing-sidecar open. `store_device_new` no longer refuses an invalid file. It replaces it and reports no previous id.
+- `open_store` in `remember_app.c` uses that opener only when `cmd_device_mints()` (exported from `cmd_device.c`, so the `new` rule lives in one place) sees exactly `device new`. A bad argument list never touches the file.
+- `previous` follows D4: open mints over the bad file first, so the CLI reports that id. `null` stays type-only.
+- `help device` gains "It also replaces an invalid sidecar (no other command does)."
+- Tests: `store_device_new_invalid_sidecar_is_unchanged` was replaced by `store_device_new_replaces_an_invalid_sidecar`, which also checks that plain `store_open` still refuses and that the device-new opener mints over the bad file. New `device_new_replaces_an_invalid_sidecar` (CLI): `device` and `device new extra` exit 1 with the file still `GARBAGE`, `device new` exits 0 and the sidecar equals the reported id, and a later `device` prints it.
+- For stage 6: record this amendment in the 006 Implementation Results (E14.4, E14.6). SKILL.md should say "`device new` also repairs an invalid sidecar".
+
+**Praise:** `store_device_new` takes the stage 3 write lock, so it cannot race a missing-sidecar open on the shared `.tmp`. The new id is duplicated before the rename, so an allocation failure leaves the old file. The facade byte-match masks ids (P6). `STORE_DEVICE_ID_LEN` is the single source of the UUID length.
