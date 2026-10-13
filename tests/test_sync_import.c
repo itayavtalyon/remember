@@ -42,6 +42,42 @@ static int json_copy_quoted(const char *json, const char *key, char *out, size_t
     return 0;
 }
 
+static char *sidecar_path(const char *db);
+
+static char *read_sidecar_id(const char *db)
+{
+    char *side = NULL;
+    FILE *f = NULL;
+    char buf[80];
+    size_t n = 0;
+    char *out = NULL;
+
+    side = sidecar_path(db);
+    if (side == NULL) {
+        return NULL;
+    }
+    f = fopen(side, "r");
+    free(side);
+    if (f == NULL) {
+        return NULL;
+    }
+    if (fgets(buf, (int)sizeof(buf), f) == NULL) {
+        (void)fclose(f);
+        return NULL;
+    }
+    (void)fclose(f);
+    n = strlen(buf);
+    while (n > 0U && (buf[n - 1U] == '\n' || buf[n - 1U] == '\r')) {
+        buf[--n] = '\0';
+    }
+    out = (char *)malloc(n + 1U);
+    if (out == NULL) {
+        return NULL;
+    }
+    memcpy(out, buf, n + 1U);
+    return out;
+}
+
 static char *sidecar_path(const char *db)
 {
     size_t n = 0;
@@ -136,8 +172,9 @@ TEST(cli_import_inserts_preserves_sync_id_remaps_links_no_device_register)
     ASSERT_STR_CONTAINS(r.out, "\"type\":\"cites\"");
     cmd_result_free(&r);
 
-    devices = harness_sqlite_query_line(local, "SELECT COUNT(*) FROM devices;");
-    ASSERT_STREQ(devices != NULL ? devices : "", "1");
+    devices = harness_sqlite_query_line(
+        local, "SELECT name FROM sqlite_master WHERE type='table' AND name='devices';");
+    ASSERT_TRUE(devices == NULL);
     free(devices);
 
     free(local);
@@ -208,7 +245,7 @@ TEST(cli_import_identical_automerge_concurrent_conflict)
     }
 
     /* Identical content + concurrent VV → auto-merge (no conflict). */
-    dev = harness_sqlite_query_line(local, "SELECT device_id FROM devices LIMIT 1;");
+    dev = read_sidecar_id(local);
     ASSERT_TRUE(dev != NULL);
     {
         char vv_local[VV_BUF];
@@ -416,7 +453,7 @@ TEST(cli_conflict_accept_keep_both_concurrent_remints)
         (void)snprintf(cmd, sizeof(cmd), "cp '%s' '%s'", local, foreign);
         ASSERT_EQ_INT(system(cmd), 0);
     }
-    dev = harness_sqlite_query_line(local, "SELECT device_id FROM devices LIMIT 1;");
+    dev = read_sidecar_id(local);
     ASSERT_TRUE(dev != NULL);
     force_body(foreign, 1, "incoming-body",
                "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc");
@@ -551,7 +588,7 @@ TEST(cli_import_incoming_dominates_updates)
     }
     force_body(foreign, 1, "new",
                "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd");
-    dev = harness_sqlite_query_line(local, "SELECT device_id FROM devices LIMIT 1;");
+    dev = read_sidecar_id(local);
     ASSERT_TRUE(dev != NULL);
     {
         char vv_l[VV_BUF];
@@ -619,8 +656,9 @@ TEST(store_import_no_sidecar_copy_devices_stay_one)
     ASSERT_TRUE(counts.conflicts == 0U);
     store_close(dst);
 
-    devices = harness_sqlite_query_line(local, "SELECT COUNT(*) FROM devices;");
-    ASSERT_STREQ(devices != NULL ? devices : "", "1");
+    devices = harness_sqlite_query_line(
+        local, "SELECT name FROM sqlite_master WHERE type='table' AND name='devices';");
+    ASSERT_TRUE(devices == NULL);
     free(devices);
     ASSERT_EQ_INT(access(side_f, F_OK), -1); /* still absent */
     free(side_f);
@@ -660,7 +698,7 @@ TEST(cli_conflict_accept_keep_local_and_incoming)
     }
     force_body(foreign, 1, "incoming-body",
                "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee");
-    dev = harness_sqlite_query_line(local, "SELECT device_id FROM devices LIMIT 1;");
+    dev = read_sidecar_id(local);
     ASSERT_TRUE(dev != NULL);
     {
         char vv_l[VV_BUF];
@@ -824,7 +862,7 @@ TEST(cli_import_local_dominates_unchanged)
     }
     force_body(foreign, 1, "stale-foreign",
                "1111111111111111111111111111111111111111111111111111111111111111");
-    dev = harness_sqlite_query_line(local, "SELECT device_id FROM devices LIMIT 1;");
+    dev = read_sidecar_id(local);
     ASSERT_TRUE(dev != NULL);
     {
         char vv_l[VV_BUF];
@@ -940,7 +978,7 @@ TEST(cli_import_conflict_snapshot_json_escapes)
     }
     force_body(foreign, 1, "other",
                "2222222222222222222222222222222222222222222222222222222222222222");
-    dev = harness_sqlite_query_line(local, "SELECT device_id FROM devices LIMIT 1;");
+    dev = read_sidecar_id(local);
     ASSERT_TRUE(dev != NULL);
     {
         char vv_l[VV_BUF];
@@ -1164,7 +1202,7 @@ TEST(cli_import_incoming_dominates_keyless_hash_clash)
         free(harness_sqlite_query_line(foreign, sql));
         free(hash);
     }
-    dev = harness_sqlite_query_line(local, "SELECT device_id FROM devices LIMIT 1;");
+    dev = read_sidecar_id(local);
     ASSERT_TRUE(dev != NULL);
     {
         char vv_l[VV_BUF];
@@ -1238,7 +1276,7 @@ TEST(cli_conflict_accept_incoming_many_tags)
     force_body(foreign, 1, "body-in",
                "3333333333333333333333333333333333333333333333333333333333333333");
     /* Keep the 10 tags on foreign; only body differs for concurrent_vv. */
-    dev = harness_sqlite_query_line(local, "SELECT device_id FROM devices LIMIT 1;");
+    dev = read_sidecar_id(local);
     ASSERT_TRUE(dev != NULL);
     {
         char vv_l[VV_BUF];
@@ -1366,7 +1404,7 @@ TEST(cli_import_incoming_dominates_expires_deleted_keyless)
     get_del[2] = "--sync-id";
     get_del[3] = sync;
     get_del[4] = "--deleted";
-    dev = harness_sqlite_query_line(local, "SELECT device_id FROM devices LIMIT 1;");
+    dev = read_sidecar_id(local);
     ASSERT_TRUE(dev != NULL);
     {
         char vv_l[VV_BUF];
@@ -1524,7 +1562,7 @@ TEST(cli_conflict_accept_concurrent_keep_incoming_demotes_other_key)
                        k_hash_a, sync_shared);
         free(harness_sqlite_query_line(foreign, sql));
     }
-    dev = harness_sqlite_query_line(local, "SELECT device_id FROM devices LIMIT 1;");
+    dev = read_sidecar_id(local);
     ASSERT_TRUE(dev != NULL);
     {
         char vv_l[VV_BUF];
@@ -1614,7 +1652,7 @@ TEST(cli_conflict_accept_concurrent_keep_incoming_hash_taken_refuses)
                        hash, sync_shared);
         free(harness_sqlite_query_line(foreign, sql));
     }
-    dev = harness_sqlite_query_line(local, "SELECT device_id FROM devices LIMIT 1;");
+    dev = read_sidecar_id(local);
     ASSERT_TRUE(dev != NULL);
     {
         char *sid = NULL;
@@ -1744,7 +1782,7 @@ TEST(cli_import_concurrent_reimport_idempotent)
     }
     force_body(foreign, 1, "incoming-body",
                "abababababababababababababababababababababababababababababababab");
-    dev = harness_sqlite_query_line(local, "SELECT device_id FROM devices LIMIT 1;");
+    dev = read_sidecar_id(local);
     ASSERT_TRUE(dev != NULL);
     {
         char vv_l[VV_BUF];
@@ -1834,7 +1872,7 @@ TEST(cli_import_vv_zero_clock_in_a_membership)
         (void)snprintf(cmd, sizeof(cmd), "cp '%s' '%s'", local, foreign);
         ASSERT_EQ_INT(system(cmd), 0);
     }
-    dev = harness_sqlite_query_line(local, "SELECT device_id FROM devices LIMIT 1;");
+    dev = read_sidecar_id(local);
     ASSERT_TRUE(dev != NULL);
     {
         char vv_l[VV_BUF];

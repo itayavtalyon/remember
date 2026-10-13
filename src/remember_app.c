@@ -178,7 +178,6 @@ static void print_command_help(CliCommand topic)
         (void)fprintf(out, "  --expired       Wipe expired rows\n");
         (void)fprintf(out, "  --deleted       Wipe deleted rows\n");
         (void)fprintf(out, "Exactly one of --expired or --deleted is required.\n");
-        (void)fprintf(out, "Requires exactly one registered device.\n");
         (void)fprintf(out, "Human stdout: the count of deleted entries.\n");
         (void)fprintf(out, "\n");
     } else if (topic == CLI_CMD_PURGE_TRASH) {

@@ -315,10 +315,12 @@ TEST(store_open_has_expected_schema)
         db, (QueryExpect){
                 .sql = "SELECT name FROM sqlite_master WHERE type='table' AND name='entry_links';",
                 .want = "entry_links"});
-    assert_query_is(
-        db, (QueryExpect){
-                .sql = "SELECT name FROM sqlite_master WHERE type='table' AND name='devices';",
-                .want = "devices"});
+    {
+        char *devices = harness_sqlite_query_line(
+            db, "SELECT name FROM sqlite_master WHERE type='table' AND name='devices';");
+        ASSERT_TRUE(devices == NULL);
+        free(devices);
+    }
     assert_query_is(
         db, (QueryExpect){
                 .sql = "SELECT name FROM sqlite_master WHERE type='table' AND name='conflicts';",

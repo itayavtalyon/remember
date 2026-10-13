@@ -299,6 +299,32 @@ Devices stay until stage 3 (`decision:plan15-stage1-keep-devices`). This stage d
 - `schema_v5_fault_after_step3_keeps_v4` fails the 8th `sqlite3_exec` on a v4 open (`store_test_fail_exec_after(7)`). That statement is `CREATE TABLE settings`, the first exec after `bucket_prefixes`. The file stays `user_version` 4, FTS column 0 stays `body`, and `bucket_prefixes` is absent. Reopen then migrates. A probe that committed after `bucket_prefixes` and continued made this test fail (FTS column 0 became `key`, and `bucket_prefixes` was left behind). The probe was removed.
 - The prepare-failure test from stage 1 still covers a fault during FTS repopulate.
 
+### 2026-10-13 — stage 3 (sidecar-only identity)
+
+The sidecar is the only device id. Fresh create and a v1–v4 migrate both finish with no `devices` table. `DROP TABLE IF EXISTS devices` is the last statement in `apply_v5_delta` and copies no row. v1–v3 no longer create the table, so the drop is `IF EXISTS`. `decision:plan15-stage1-keep-devices` ends here.
+
+Open reads the sidecar and nothing in the database. A valid file is used. A missing file is a new UUIDv7, written as one lowercase line, mode 0600, through `<path>.device_id.tmp` then `rename`. An invalid file (garbage, uppercase UUID, a second line, empty) fails with `invalid device_id sidecar` and is not overwritten. `fgetc` after the first line must be EOF; a read error is not treated as the end of the file. Those messages stay plain `remember: …` exit 1 until plan 16 (D9).
+
+Identity is bound before `backfill_sync_ids` on v0–v3, and after the v5 delta on v4. An already-v5 brain binds on open. `require_single_device` is gone. `STORE_ERR_NOT_SINGLE_DEVICE` and `hard delete requires exactly one registered device` stay in the catalog. No command returns that status. Purge help no longer claims the hatch. README and SKILL.md still do; stage 6 owns them.
+
+`store_test_fail_sidecar_rename(n)` fails the next rename when `n > 0` and is compiled only into the test hooks. A failed rename unlinks the temp, so neither the sidecar nor the `.tmp` is left behind.
+
+Replaced tests:
+
+- `store_get_does_not_bump_last_seen` → `store_get_does_not_rewrite_sidecar`
+- `store_lost_sidecar_rewritten_from_devices` → `store_missing_sidecar_mints_a_new_id` (a missing sidecar is minted, not restored)
+- `store_sidecar_wins_over_devices_mismatch` → removed; the v4 case is `schema_v5_v4_sidecar_is_kept_and_devices_row_is_ignored`
+- `store_empty_devices_inserted_from_sidecar` → `store_reopen_keeps_sidecar`
+- `store_hard_delete_hatch_two_devices` → `store_hard_delete_needs_no_device_hatch` (catalog string still present; hard delete returns `STORE_OK`)
+- `store_purge_deleted_and_hatch` → `store_purge_deleted_and_expired`
+- `store_devices_replace_exec_fail_undoes_savepoint` → `store_sidecar_rename_failure_leaves_no_file`
+- `cli_delete_deleted_hard_and_hatch` → `cli_delete_deleted_hard_wipes_the_row`
+- `cli_purge_hatch_two_devices` → `cli_purge_expired_wipes_without_device_hatch`
+- `store_import_no_sidecar_copy_devices_stay_one` kept its name. It now asserts there is no `devices` table and that the foreign sidecar is still absent.
+- `facade_conflict_accept_matches_cli` copies the sidecar with the database. Open of a copied file no longer recovers the writer id from a `devices` row, so the two accepts would bump different ids.
+
+Schema and open tests that asserted `COUNT(*) FROM devices = 1` after a successful open now assert the table is absent. The rolled-back fault file is still v4 and still has one devices row.
+
 ## Review Notes
 
 ### 2026-10-13 — in-session deep review (stage 1)
@@ -377,3 +403,23 @@ Devices stay until stage 3 (`decision:plan15-stage1-keep-devices`). This stage d
 **Nit (left, pre-existing):** `ensure_schema` ignores the result of `PRAGMA foreign_keys = ON` after migrating. If that PRAGMA failed, the connection would run with foreign keys OFF. It cannot fail outside a transaction in practice; failing loudly would be the fail-fast version.
 
 **Praise:** removing the guards was proven by the old v1/v2 tests failing first. The engineering notes state the new rule (no `tags`/`entry_tags` creation, rollback after `bucket_prefixes`).
+
+### 2026-10-13 — in-session deep review (stage 3)
+
+**Verdict:** approve for the second-opinion pass. No open blocking item. No grill.
+
+**Ran:** ctest 4/4 (ASan/UBSan), LINT OK, coverage 100% functions and 100% effective lines, `leaks-macos` PASS, `ci-linux.sh` OK. Store unit 127/0. Removing the trailing-content check makes `schema_v5_invalid_sidecar_is_left_unchanged` fail (a two-line sidecar opens). The check was put back.
+
+**Auto-fixed:**
+
+- **important** — `write_sidecar` set `fd = -1` only on the close-failure path. Coverage rejected that line (not a defensive pattern). The assignment now always runs after `close`.
+- **important** — `read_sidecar` treated a read error as end of file. `ferror` after `fgetc` is now invalid, same as a second line.
+- **important** — `facade_conflict_accept_matches_cli` copied the database and not the sidecar. The copy minted a new id, so the two accepts no longer matched. The test copies the sidecar too.
+- **nit** — purge help still said the command requires one registered device. That sentence is gone. README and SKILL.md still say it; stage 6.
+- **nit** — clang-tidy: null `db` into `sidecar_path`, swappable `write_text` parameters, `ArrayBound` on `is_uuid_v7` after `strlen` (the analyzer drops the length of a malloc'd line).
+
+**Nit (left):** an unwritable directory while the sidecar is missing is not a unit test. The rename hook covers a failed `rename` and the temp unlink. The second-opinion probe list still asks for the directory case.
+
+**Bugbot:** the in-session Bugbot pass reported no findings. Sidecar read/write, migration order, and the remaining `devices` assertions (rollback only) match the stage.
+
+**Praise:** invalid sidecars are compared as file bytes, so a "fix" that rewrites the file fails the test. The catalog string is still called, and hard delete returns `STORE_OK` in the same test.

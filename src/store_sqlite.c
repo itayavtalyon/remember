@@ -84,6 +84,15 @@ void store_test_fail_exec_after(int n)
     g_fail_exec_after = n;
 }
 
+/* Next sidecar rename fails once, after the temp file is written. */
+// NOLINTNEXTLINE(cppcoreguidelines-avoid-non-const-global-variables)
+static int g_fail_sidecar_rename = 0;
+
+void store_test_fail_sidecar_rename(int n)
+{
+    g_fail_sidecar_rename = n;
+}
+
 /* Capture libc allocators before macros redirect malloc/calloc/realloc. */
 static void *real_malloc(size_t n)
 {
@@ -237,12 +246,6 @@ static int store_exec(sqlite3 *db, const char *sql, int (*cb)(void *, int, char 
     "  tag_id INTEGER NOT NULL REFERENCES tags(id) ON DELETE CASCADE,\n"                           \
     "  PRIMARY KEY (entry_id, tag_id)\n"                                                           \
     ");\n"
-#define K_DEVICES_SQL                                                                              \
-    "CREATE TABLE devices (\n"                                                                     \
-    "  device_id  TEXT PRIMARY KEY,\n"                                                             \
-    "  first_seen TEXT NOT NULL,\n"                                                                \
-    "  last_seen  TEXT NOT NULL\n"                                                                 \
-    ");\n"
 #define K_CONFLICTS_COLUMNS                                                                        \
     "  id            INTEGER PRIMARY KEY,\n"                                                       \
     "  sync_id       TEXT NOT NULL,\n"                                                             \
@@ -284,7 +287,7 @@ static const char k_links_sql[] =
     "  ON entry_links(from_id, to_id, kind);\n"
     "CREATE INDEX entry_links_to ON entry_links(to_id);\n";
 
-static const char k_sync_sql[] = K_DEVICES_SQL K_CONFLICTS_SQL K_BUCKET_PREFIXES_SQL K_SETTINGS_SQL;
+static const char k_sync_sql[] = K_CONFLICTS_SQL K_BUCKET_PREFIXES_SQL K_SETTINGS_SQL;
 
 enum { SCHEMA_VERSION = 5, UUID_STR_LEN = 36, UUID_BYTES = 16 };
 /* import --from-db still accepts a v4 source (E1.4). The >5 refusal is stage 5. */
@@ -317,6 +320,7 @@ enum {
     SIDECAR_LINE_BUF = 64,
     SIDECAR_FILE_MODE = 0600,
     SIDECAR_PATH_PAD = 16,
+    SIDECAR_TMP_EXTRA = 4, /* ".tmp" */
     VV_JSON_BUFLEN = 80,
     VV_OUT_MAX = 4096,   /* import may merge many foreign device keys */
     VV_JSON_MIN_OUT = 8, /* shortest compact object we emit: {"d":1} */
@@ -399,13 +403,6 @@ static int exec_sql(sqlite3 *db, const char *sql, char *err, size_t errlen)
 static void rollback_quiet(sqlite3 *db)
 {
     (void)sqlite3_exec(db, "ROLLBACK;", NULL, NULL, NULL);
-}
-
-/* Undo a named savepoint without aborting an outer write transaction. */
-static void savepoint_undo(sqlite3 *db)
-{
-    (void)sqlite3_exec(db, "ROLLBACK TO remember_device;", NULL, NULL, NULL);
-    (void)sqlite3_exec(db, "RELEASE remember_device;", NULL, NULL, NULL);
 }
 
 static int read_user_version(sqlite3 *db, int *out, char *err, size_t errlen)
@@ -530,12 +527,13 @@ static int sidecar_path(const char *db_path, char *out, size_t outlen)
     return 0;
 }
 
-/* 0 = read ok, 1 = missing, -1 = invalid/error. */
+/* 0 = one canonical line, 1 = missing, -1 = invalid or unreadable. */
 static int read_sidecar(const char *path, char uuid[UUID_STR_LEN + 1])
 {
     FILE *f = NULL;
     char buf[SIDECAR_LINE_BUF];
     size_t n = 0;
+    int extra = 0;
 
     /* macOS fopen has no 'e' (O_CLOEXEC) mode; CLI is short-lived. */
     // NOLINTNEXTLINE(android-cloexec-fopen)
@@ -547,137 +545,95 @@ static int read_sidecar(const char *path, char uuid[UUID_STR_LEN + 1])
         (void)fclose(f);
         return -1;
     }
-    (void)fclose(f);
     n = strlen(buf);
     while (n > 0U && (buf[n - 1U] == '\n' || buf[n - 1U] == '\r')) {
         buf[--n] = '\0';
     }
     if (!uuid_is_canonical(buf)) {
+        (void)fclose(f);
         return -1;
     }
+    /* A second line, even empty, is not the one-line sidecar.
+       EOF from a read error is not a proven end of file. */
+    extra = fgetc(f);
+    if (extra != EOF || ferror(f) != 0) {
+        (void)fclose(f);
+        return -1;
+    }
+    (void)fclose(f);
     memcpy(uuid, buf, (size_t)UUID_STR_LEN + 1U);
     return 0;
 }
 
-/* path then uuid: sidecar file vs contents; call sites pass them in that order. */
+/* Temp name then final path. The test hook fails the rename once. */
+// NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
+static int rename_sidecar_tmp(const char *tmp, const char *path)
+{
+#ifdef REMEMBER_TEST_HOOKS
+    if (g_fail_sidecar_rename > 0) {
+        g_fail_sidecar_rename = 0;
+        return -1;
+    }
+#endif
+    return rename(tmp, path);
+}
+
+/* path then uuid: sidecar file vs contents; call sites pass them in that order.
+   Writes a temp file and renames it over path so a crash cannot leave a partial sidecar. */
 // NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
 static int write_sidecar(const char *path, const char *uuid, char *err, size_t errlen)
 {
+    char tmp[REMEMBER_PATH_MAX + SIDECAR_PATH_PAD + SIDECAR_TMP_EXTRA];
     int fd = -1;
     char line[UUID_STR_LEN + 2];
-    ssize_t w = 0;
+    ssize_t wrote = 0;
     size_t n = 0;
+    int sn = 0;
 
     n = (size_t)snprintf(line, sizeof(line), "%s\n", uuid);
     if (n != (size_t)UUID_STR_LEN + 1U) {
         set_err(err, errlen, "cannot write device_id sidecar");
         return -1;
     }
-    /* SQLITE_OPEN_* style: O_* are signed-int flag macros. */
+    sn = snprintf(tmp, sizeof(tmp), "%s.tmp", path);
+    if (sn < 0 || (size_t)sn >= sizeof(tmp)) {
+        set_err(err, errlen, "cannot write device_id sidecar");
+        return -1;
+    }
+    /* O_* are signed-int flag macros. */
     // NOLINTNEXTLINE(hicpp-signed-bitwise,android-cloexec-open)
-    fd = open(path, O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, SIDECAR_FILE_MODE);
+    fd = open(tmp, O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, SIDECAR_FILE_MODE);
     if (fd < 0) {
         set_err(err, errlen, "cannot write device_id sidecar");
         return -1;
     }
     if (fchmod(fd, SIDECAR_FILE_MODE) != 0) {
+        goto cleanup;
+    }
+    wrote = write(fd, line, n);
+    if (wrote < 0 || (size_t)wrote != n) {
+        goto cleanup;
+    }
+    {
+        int closed = close(fd);
+
+        fd = -1;
+        if (closed != 0) {
+            goto cleanup;
+        }
+    }
+    if (rename_sidecar_tmp(tmp, path) != 0) {
+        goto cleanup;
+    }
+    return 0;
+
+cleanup:
+    if (fd >= 0) {
         (void)close(fd);
-        set_err(err, errlen, "cannot write device_id sidecar");
-        return -1;
     }
-    w = write(fd, line, n);
-    if (w < 0 || (size_t)w != n) {
-        (void)close(fd);
-        set_err(err, errlen, "cannot write device_id sidecar");
-        return -1;
-    }
-    if (close(fd) != 0) {
-        set_err(err, errlen, "cannot write device_id sidecar");
-        return -1;
-    }
-    return 0;
-}
-
-static int devices_count(sqlite3 *db, int *out)
-{
-    sqlite3_stmt *stmt = NULL;
-    int rc = 0;
-
-    rc = sqlite3_prepare_v2(db, "SELECT COUNT(*) FROM devices;", -1, &stmt, NULL);
-    if (rc != SQLITE_OK) {
-        return -1;
-    }
-    rc = sqlite3_step(stmt);
-    if (rc != SQLITE_ROW) {
-        (void)sqlite3_finalize(stmt);
-        return -1;
-    }
-    *out = sqlite3_column_int(stmt, 0);
-    (void)sqlite3_finalize(stmt);
-    return 0;
-}
-
-static int devices_get_one(sqlite3 *db, char uuid[UUID_STR_LEN + 1])
-{
-    sqlite3_stmt *stmt = NULL;
-    const unsigned char *t = NULL;
-    int rc = 0;
-
-    rc = sqlite3_prepare_v2(db, "SELECT device_id FROM devices LIMIT 1;", -1, &stmt, NULL);
-    if (rc != SQLITE_OK) {
-        return -1;
-    }
-    rc = sqlite3_step(stmt);
-    if (rc != SQLITE_ROW) {
-        (void)sqlite3_finalize(stmt);
-        return -1;
-    }
-    t = sqlite3_column_text(stmt, 0);
-    if (t == NULL || !uuid_is_canonical((const char *)t)) {
-        (void)sqlite3_finalize(stmt);
-        return -1;
-    }
-    memcpy(uuid, t, (size_t)UUID_STR_LEN + 1U);
-    (void)sqlite3_finalize(stmt);
-    return 0;
-}
-
-static int devices_replace(sqlite3 *db, const char *uuid, const char *now, char *err, size_t errlen)
-{
-    sqlite3_stmt *stmt = NULL;
-    int rc = 0;
-
-    /* SAVEPOINT is nested-safe inside migrate's BEGIN and starts a txn if none. */
-    if (exec_sql(db, "SAVEPOINT remember_device;", err, errlen) != 0) {
-        return -1;
-    }
-    if (exec_sql(db, "DELETE FROM devices;", err, errlen) != 0) {
-        savepoint_undo(db);
-        return -1;
-    }
-    rc = sqlite3_prepare_v2(
-        db, "INSERT INTO devices(device_id, first_seen, last_seen) VALUES (?1, ?2, ?3);", -1, &stmt,
-        NULL);
-    if (rc != SQLITE_OK) {
-        savepoint_undo(db);
-        set_errf(err, errlen, "sqlite", sqlite3_errmsg(db));
-        return -1;
-    }
-    (void)sqlite3_bind_text(stmt, 1, uuid, -1, SQLITE_STATIC);
-    (void)sqlite3_bind_text(stmt, 2, now, -1, SQLITE_STATIC);
-    (void)sqlite3_bind_text(stmt, 3, now, -1, SQLITE_STATIC);
-    rc = sqlite3_step(stmt);
-    (void)sqlite3_finalize(stmt);
-    if (rc != SQLITE_DONE) {
-        savepoint_undo(db);
-        set_errf(err, errlen, "sqlite", sqlite3_errmsg(db));
-        return -1;
-    }
-    if (exec_sql(db, "RELEASE remember_device;", err, errlen) != 0) {
-        savepoint_undo(db);
-        return -1;
-    }
-    return 0;
+    (void)unlink(tmp);
+    set_err(err, errlen, "cannot write device_id sidecar");
+    return -1;
 }
 
 static char *dup_str(const char *s);
@@ -692,53 +648,12 @@ static int bind_device_id(Store *s, const char *uuid, char *err, size_t errlen)
     return 0;
 }
 
-// NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
-static int recover_device_identity(Store *s, const char *side, int file_rc, char *file_uuid,
-                                   int have_devices, int have_db_row, const char *db_uuid,
-                                   char *err, size_t errlen)
-{
-    char now[ISO_TS_MIN_BUFLEN];
-
-    if (utc_now(now, sizeof(now)) != 0) {
-        set_err(err, errlen, "cannot read clock");
-        return -1;
-    }
-    if (file_rc == 0) {
-        if (have_devices != 0 && (have_db_row == 0 || strcmp(file_uuid, db_uuid) != 0)) {
-            if (devices_replace(s->db, file_uuid, now, err, errlen) != 0) {
-                return -1;
-            }
-        }
-        return bind_device_id(s, file_uuid, err, errlen);
-    }
-    if (have_db_row != 0) {
-        if (write_sidecar(side, db_uuid, err, errlen) != 0) {
-            return -1;
-        }
-        return bind_device_id(s, db_uuid, err, errlen);
-    }
-    if (mint_uuid_v7(file_uuid) != 0) {
-        set_err(err, errlen, "cannot mint device_id");
-        return -1;
-    }
-    if (write_sidecar(side, file_uuid, err, errlen) != 0) {
-        return -1;
-    }
-    if (have_devices != 0 && devices_replace(s->db, file_uuid, now, err, errlen) != 0) {
-        return -1;
-    }
-    return bind_device_id(s, file_uuid, err, errlen);
-}
-
-/* Sidecar + at most one local devices row. No last_seen bump when already in sync. */
-static int ensure_device_identity(Store *s, int have_devices, char *err, size_t errlen)
+/* Sidecar is the only device id. Valid: use it. Missing: mint and write. Invalid: fail. */
+static int ensure_device_identity(Store *s, char *err, size_t errlen)
 {
     char side[REMEMBER_PATH_MAX + SIDECAR_PATH_PAD];
     char file_uuid[UUID_STR_LEN + 1];
-    char db_uuid[UUID_STR_LEN + 1] = {0};
     int file_rc = 0;
-    int n_dev = 0;
-    int have_db_row = 0;
 
     if (sidecar_path(s->path, side, sizeof(side)) != 0) {
         set_err(err, errlen, "database path is too long");
@@ -749,24 +664,16 @@ static int ensure_device_identity(Store *s, int have_devices, char *err, size_t 
         set_err(err, errlen, "invalid device_id sidecar");
         return -1;
     }
-    if (have_devices != 0) {
-        if (devices_count(s->db, &n_dev) != 0) {
-            set_err(err, errlen, "cannot read devices");
+    if (file_rc == 1) {
+        if (mint_uuid_v7(file_uuid) != 0) {
+            set_err(err, errlen, "cannot mint device_id");
             return -1;
         }
-        if (n_dev > 0) {
-            if (devices_get_one(s->db, db_uuid) != 0) {
-                set_err(err, errlen, "cannot read devices");
-                return -1;
-            }
-            have_db_row = 1;
+        if (write_sidecar(side, file_uuid, err, errlen) != 0) {
+            return -1;
         }
     }
-    if (file_rc == 0 && have_db_row != 0 && strcmp(file_uuid, db_uuid) == 0) {
-        return bind_device_id(s, file_uuid, err, errlen);
-    }
-    return recover_device_identity(s, side, file_rc, file_uuid, have_devices, have_db_row, db_uuid,
-                                   err, errlen);
+    return bind_device_id(s, file_uuid, err, errlen);
 }
 
 static int backfill_sync_ids(sqlite3 *db, const char *device_id, char *err, size_t errlen)
@@ -1030,7 +937,7 @@ static int repopulate_fts(sqlite3 *db, char *err, size_t errlen)
 }
 
 /* v5 objects on a database that already has entries, tags, and entry_tags.
-   Devices stay (stage 3 drops them). */
+   Drop devices last: the row is not copied into the sidecar. */
 static int apply_v5_delta(sqlite3 *db, char *err, size_t errlen)
 {
     if (exec_sql(db, "DROP TABLE IF EXISTS entries_fts;", err, errlen) != 0) {
@@ -1048,7 +955,10 @@ static int apply_v5_delta(sqlite3 *db, char *err, size_t errlen)
     if (create_table_if_missing(db, "settings", K_SETTINGS_SQL, err, errlen) != 0) {
         return -1;
     }
-    return ensure_conflicts_origin(db, err, errlen);
+    if (ensure_conflicts_origin(db, err, errlen) != 0) {
+        return -1;
+    }
+    return exec_sql(db, "DROP TABLE IF EXISTS devices;", err, errlen);
 }
 
 /* v0 creates the v5 DDL directly. v1/v2/v3 still climb through the v4 column rebuild. */
@@ -1059,7 +969,7 @@ static int migrate_legacy(Store *s, int version, char *err, size_t errlen)
     if (migrate_body_to_v4(db, version, err, errlen) != 0) {
         return -1;
     }
-    if (ensure_device_identity(s, 1, err, errlen) != 0) {
+    if (ensure_device_identity(s, err, errlen) != 0) {
         return -1;
     }
     if (backfill_sync_ids(db, s->device_id, err, errlen) != 0) {
@@ -1077,7 +987,7 @@ static int migrate_legacy(Store *s, int version, char *err, size_t errlen)
  * is OFF (ensure_schema toggles it) so the v1/2/3 rebuild's DROP does not cascade
  * entry_links/entry_tags. Returns 0 = created/migrated + committed (identity
  * bound), 1 = a concurrent remember already migrated (caller binds identity),
- * -1 = failure. The devices table stays until plan 15 stage 3.
+ * -1 = failure. Device id comes from the sidecar, never from a devices row.
  */
 static int migrate_to_current(Store *s, char *err, size_t errlen)
 {
@@ -1108,7 +1018,7 @@ static int migrate_to_current(Store *s, char *err, size_t errlen)
     if (apply_v5_delta(db, err, errlen) != 0) {
         goto cleanup_fail;
     }
-    if (version == 4 && ensure_device_identity(s, 1, err, errlen) != 0) {
+    if (version == 4 && ensure_device_identity(s, err, errlen) != 0) {
         goto cleanup_fail;
     }
     if (exec_sql(db, "PRAGMA user_version = 5;", err, errlen) != 0) {
@@ -1160,7 +1070,7 @@ static int ensure_schema(Store *s, char *err, size_t errlen)
     }
 
 bind_identity:
-    return ensure_device_identity(s, 1, err, errlen);
+    return ensure_device_identity(s, err, errlen);
 }
 
 Store *store_open(const char *path, char *err, size_t errlen)
@@ -1724,19 +1634,6 @@ static StoreStatus apply_vv_bump(sqlite3 *db, long long id, const char *device_i
         return STORE_ERR_SQLITE;
     }
     (void)sqlite3_finalize(stmt);
-    return STORE_OK;
-}
-
-static StoreStatus require_single_device(sqlite3 *db)
-{
-    int n = 0;
-
-    if (devices_count(db, &n) != 0) {
-        return STORE_ERR_SQLITE;
-    }
-    if (n != 1) {
-        return STORE_ERR_NOT_SINGLE_DEVICE;
-    }
     return STORE_OK;
 }
 
@@ -3165,10 +3062,6 @@ static StoreStatus hard_delete_tx(Store *s, long long id_or_zero, const char *ke
     if (st != STORE_OK) {
         goto fail;
     }
-    st = require_single_device(s->db);
-    if (st != STORE_OK) {
-        goto fail_free;
-    }
     id = out_deleted->id;
 
     st = fts_delete(s->db, id);
@@ -3469,11 +3362,6 @@ StoreStatus store_purge(Store *s, StoreBin bin, const char *now, Entry **out_ent
 
     if (exec_sql(s->db, "BEGIN IMMEDIATE;", err_unused, 0U) != 0) {
         return STORE_ERR_SQLITE;
-    }
-    st = require_single_device(s->db);
-    if (st != STORE_OK) {
-        rollback_quiet(s->db);
-        return st;
     }
 
     rc = sqlite3_prepare_v2(s->db, sel_sql, -1, &sel, NULL);

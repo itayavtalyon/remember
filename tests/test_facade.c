@@ -13,8 +13,39 @@ enum {
     FACADE_PATH_BUF = 192,
     FACADE_CMD_BUF = 400,
     FACADE_SQL_BUF = 320,
-    FACADE_SIDE_BUF = 208
+    FACADE_SIDE_BUF = 208,
+    FACADE_LINE_BUF = 80
 };
+
+static char *facade_sidecar_id(const char *db)
+{
+    char side[FACADE_SIDE_BUF];
+    FILE *f = NULL;
+    char buf[FACADE_LINE_BUF];
+    size_t n = 0;
+    char *out = NULL;
+
+    (void)snprintf(side, sizeof(side), "%s.device_id", db);
+    /* NOLINTNEXTLINE(android-cloexec-fopen) */
+    f = fopen(side, "r");
+    if (f == NULL || fgets(buf, (int)sizeof(buf), f) == NULL) {
+        if (f != NULL) {
+            (void)fclose(f);
+        }
+        return NULL;
+    }
+    (void)fclose(f);
+    n = strlen(buf);
+    while (n > 0U && (buf[n - 1U] == '\n' || buf[n - 1U] == '\r')) {
+        buf[--n] = '\0';
+    }
+    out = (char *)malloc(n + 1U);
+    if (out == NULL) {
+        return NULL;
+    }
+    memcpy(out, buf, n + 1U);
+    return out;
+}
 
 /*
  * Facade parity: remember_run (in-process, what the GUI links) must produce the
@@ -511,7 +542,7 @@ TEST(facade_conflicts_matches_cli)
         foreign, "UPDATE entries SET body='incoming', "
                  "body_hash='abababababababababababababababababababababababababababababababab',"
                  "version_vector='{\"bbbbbbbb-bbbb-7bbb-bbbb-bbbbbbbbbbbb\":1}' WHERE id=1;"));
-    dev = harness_sqlite_query_line(local, "SELECT device_id FROM devices LIMIT 1;");
+    dev = facade_sidecar_id(local);
     ASSERT_TRUE(dev != NULL);
     {
         char sql[FACADE_SQL_BUF];
@@ -576,7 +607,7 @@ TEST(facade_conflict_accept_matches_cli)
         foreign, "UPDATE entries SET body='incoming', "
                  "body_hash='abababababababababababababababababababababababababababababababab',"
                  "version_vector='{\"bbbbbbbb-bbbb-7bbb-bbbb-bbbbbbbbbbbb\":1}' WHERE id=1;"));
-    dev = harness_sqlite_query_line(local1, "SELECT device_id FROM devices LIMIT 1;");
+    dev = facade_sidecar_id(local1);
     ASSERT_TRUE(dev != NULL);
     {
         char sql[FACADE_SQL_BUF];
@@ -592,7 +623,9 @@ TEST(facade_conflict_accept_matches_cli)
     cmd_result_free(&r);
     {
         char cp[FACADE_CMD_BUF];
-        (void)snprintf(cp, sizeof(cp), "cp '%s' '%s'", local1, local2);
+        /* Same writer id, or accept bumps a freshly minted id and the vectors differ. */
+        (void)snprintf(cp, sizeof(cp), "cp '%s' '%s' && cp '%s.device_id' '%s.device_id'", local1,
+                       local2, local1, local2);
         ASSERT_EQ_INT(system(cp), 0);
     }
 

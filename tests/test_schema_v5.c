@@ -9,6 +9,7 @@
 #include <string.h>
 
 enum { SCHEMA_V5_LIMIT = 20, SCHEMA_V5_COMPARE_SQL = 1024, SCHEMA_V5_PREPARE_TRIES = 40 };
+enum { SIDECAR_READ_BUF = 80, SIDECAR_FILE_BUF = 128 };
 /* Successful sqlite3_exec calls before CREATE settings on a v4 open:
    foreign_keys ON, busy_timeout, foreign_keys OFF, BEGIN IMMEDIATE,
    DROP entries_fts, CREATE entries_fts, CREATE bucket_prefixes.
@@ -33,6 +34,103 @@ static void assert_query_is(const char *db, QueryExpect check)
 static void exec_sql(const char *db, const char *sql)
 {
     free(harness_sqlite_query_line(db, sql));
+}
+
+/* The v4 fixture's devices row. Open must not copy this into the sidecar. */
+static const char k_v4_device[] = "018f6b2e-7c3a-7b2e-8f3a-7c3a7b2e8f3a";
+static const char k_sidecar_other[] = "01900000-0000-7000-8000-0000000000ab";
+
+static char *sidecar_path(const char *db)
+{
+    size_t n = 0;
+    char *out = NULL;
+
+    if (db == NULL) {
+        return NULL;
+    }
+    n = strlen(db) + strlen(".device_id") + 1U;
+    out = (char *)malloc(n);
+    if (out == NULL) {
+        return NULL;
+    }
+    (void)snprintf(out, n, "%s.device_id", db);
+    return out;
+}
+
+static char *read_sidecar_line(const char *path)
+{
+    FILE *f = NULL;
+    char buf[SIDECAR_READ_BUF];
+    size_t n = 0;
+    char *out = NULL;
+
+    /* NOLINTNEXTLINE(android-cloexec-fopen) */
+    f = fopen(path, "r");
+    if (f == NULL) {
+        return NULL;
+    }
+    if (fgets(buf, (int)sizeof(buf), f) == NULL) {
+        (void)fclose(f);
+        return NULL;
+    }
+    (void)fclose(f);
+    n = strlen(buf);
+    while (n > 0U && (buf[n - 1U] == '\n' || buf[n - 1U] == '\r')) {
+        buf[--n] = '\0';
+    }
+    out = (char *)malloc(n + 1U);
+    if (out == NULL) {
+        return NULL;
+    }
+    memcpy(out, buf, n + 1U);
+    return out;
+}
+
+/* path then contents. */
+// NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
+static void write_text(const char *path, const char *text)
+{
+    FILE *f = NULL;
+
+    /* NOLINTNEXTLINE(android-cloexec-fopen) */
+    f = fopen(path, "w");
+    ASSERT_TRUE(f != NULL);
+    if (f != NULL) {
+        (void)fputs(text, f);
+        (void)fclose(f);
+    }
+}
+
+static char *read_text(const char *path)
+{
+    FILE *f = NULL;
+    char buf[SIDECAR_FILE_BUF];
+    size_t n = 0;
+    char *out = NULL;
+
+    /* NOLINTNEXTLINE(android-cloexec-fopen) */
+    f = fopen(path, "rb");
+    if (f == NULL) {
+        return NULL;
+    }
+    n = fread(buf, 1, sizeof(buf) - 1U, f);
+    (void)fclose(f);
+    buf[n] = '\0';
+    out = (char *)malloc(n + 1U);
+    if (out == NULL) {
+        return NULL;
+    }
+    memcpy(out, buf, n + 1U);
+    return out;
+}
+
+static void assert_no_devices_table(const char *db)
+{
+    char *devices = harness_sqlite_query_line(
+        db, "SELECT name FROM sqlite_master WHERE type='table' AND name='devices';");
+
+    ASSERT_TRUE(devices == NULL);
+    free(devices);
 }
 
 static void free_page(PageResult page)
@@ -170,10 +268,12 @@ TEST(schema_v5_fresh_has_v5_objects)
     assert_query_is(db, (QueryExpect){.sql = "SELECT COUNT(*) FROM pragma_table_info('conflicts') "
                                              "WHERE name='origin';",
                                       .want = "1"});
-    assert_query_is(db,
-                    (QueryExpect){.sql = "SELECT name FROM sqlite_master WHERE type='table' AND "
-                                         "name='devices';",
-                                  .want = "devices"});
+    {
+        char *devices = harness_sqlite_query_line(
+            db, "SELECT name FROM sqlite_master WHERE type='table' AND name='devices';");
+        ASSERT_TRUE(devices == NULL);
+        free(devices);
+    }
     free(db);
 }
 
@@ -305,7 +405,12 @@ TEST(schema_v5_v4_migrates_to_the_fresh_schema)
     assert_query_is(old, (QueryExpect){.sql = "PRAGMA user_version;", .want = "4"});
     s = given_open(old);
     assert_query_is(old, (QueryExpect){.sql = "PRAGMA user_version;", .want = "5"});
-    assert_query_is(old, (QueryExpect){.sql = "SELECT COUNT(*) FROM devices;", .want = "1"});
+    {
+        char *devices = harness_sqlite_query_line(
+            old, "SELECT name FROM sqlite_master WHERE type='table' AND name='devices';");
+        ASSERT_TRUE(devices == NULL);
+        free(devices);
+    }
     assert_query_is(old, (QueryExpect){.sql = "SELECT COUNT(*) FROM entries_fts;", .want = "2"});
     assert_query_is(old,
                     (QueryExpect){.sql = "SELECT COUNT(*) FROM entries_fts WHERE entries_fts MATCH "
@@ -434,7 +539,12 @@ TEST(schema_v5_fault_after_step3_keeps_v4)
                     (QueryExpect){.sql = "SELECT COUNT(*) FROM entries_fts WHERE entries_fts MATCH "
                                          "'archivedword';",
                                   .want = "1"});
-    assert_query_is(db, (QueryExpect){.sql = "SELECT COUNT(*) FROM devices;", .want = "1"});
+    {
+        char *devices = harness_sqlite_query_line(
+            db, "SELECT name FROM sqlite_master WHERE type='table' AND name='devices';");
+        ASSERT_TRUE(devices == NULL);
+        free(devices);
+    }
     store_close(s);
     free(db);
 }
@@ -533,9 +643,111 @@ TEST(fold_hebrew_marks_copies_a_truncated_sequence)
     free(out);
 }
 
+/* v4 brain, sidecar gone: mint a new id. Do not copy the devices row. */
+TEST(schema_v5_v4_missing_sidecar_mints_a_new_id)
+{
+    char *db = make_temp_db_path();
+    char *side = NULL;
+    char *id = NULL;
+    Store *s = NULL;
+
+    ASSERT_TRUE(db != NULL);
+    given_v4_brain(db);
+    side = sidecar_path(db);
+    ASSERT_TRUE(side != NULL);
+    s = given_open(db);
+    store_close(s);
+
+    id = read_sidecar_line(side);
+    ASSERT_TRUE(id != NULL);
+    ASSERT_TRUE(strcmp(id != NULL ? id : "", k_v4_device) != 0);
+    assert_no_devices_table(db);
+    free(id);
+    free(side);
+    free(db);
+}
+
+TEST(schema_v5_v4_sidecar_is_kept_and_devices_row_is_ignored)
+{
+    char *db = make_temp_db_path();
+    char *side = NULL;
+    char *id = NULL;
+    char line[SIDECAR_READ_BUF];
+    Store *s = NULL;
+    Entry e;
+    StoreAddAction act = STORE_ADD_CREATED;
+
+    ASSERT_TRUE(db != NULL);
+    given_v4_brain(db);
+    side = sidecar_path(db);
+    ASSERT_TRUE(side != NULL);
+    (void)snprintf(line, sizeof(line), "%s\n", k_sidecar_other);
+    write_text(side, line);
+    s = given_open(db);
+    id = read_sidecar_line(side);
+    ASSERT_STREQ(id, k_sidecar_other);
+    assert_no_devices_table(db);
+
+    memset(&e, 0, sizeof(e));
+    ASSERT_EQ_STATUS(
+        store_add(s, "fresh", k_hash_a, "pref:fresh", NULL, 0U, "human", NULL, k_now, &act, &e),
+        STORE_OK);
+    ASSERT_TRUE(e.version_vector != NULL && strstr(e.version_vector, k_sidecar_other) != NULL);
+    ASSERT_TRUE(e.version_vector != NULL && strstr(e.version_vector, k_v4_device) == NULL);
+    store_entry_free(&e);
+    store_close(s);
+    free(id);
+    free(side);
+    free(db);
+}
+
+static void assert_invalid_sidecar_unchanged(const char *text)
+{
+    char *db = make_temp_db_path();
+    char *side = NULL;
+    char err[ERR_BUFSIZE];
+    char *before = NULL;
+    char *after = NULL;
+    Store *s = NULL;
+
+    ASSERT_TRUE(db != NULL);
+    s = given_open(db);
+    store_close(s);
+    side = sidecar_path(db);
+    ASSERT_TRUE(side != NULL);
+    write_text(side, text);
+    before = read_text(side);
+    err[0] = '\0';
+    s = store_open(db, err, sizeof(err));
+    ASSERT_TRUE(s == NULL);
+    ASSERT_STR_CONTAINS(err, "invalid device_id sidecar");
+    after = read_text(side);
+    ASSERT_STREQ(before != NULL ? before : "", after != NULL ? after : "");
+    free(before);
+    free(after);
+    free(side);
+    free(db);
+}
+
+TEST(schema_v5_invalid_sidecar_is_left_unchanged)
+{
+    char upper[SIDECAR_READ_BUF];
+    char two[SIDECAR_FILE_BUF];
+
+    (void)snprintf(upper, sizeof(upper), "018F6B2E-7C3A-7C00-8000-000000000099\n");
+    (void)snprintf(two, sizeof(two), "%s\njunk\n", k_sidecar_other);
+    assert_invalid_sidecar_unchanged("not-a-uuid\n");
+    assert_invalid_sidecar_unchanged(upper);
+    assert_invalid_sidecar_unchanged(two);
+    assert_invalid_sidecar_unchanged("");
+}
+
 void register_schema_v5_tests(void)
 {
     RUN_TEST(schema_v5_fresh_has_v5_objects);
+    RUN_TEST(schema_v5_v4_missing_sidecar_mints_a_new_id);
+    RUN_TEST(schema_v5_v4_sidecar_is_kept_and_devices_row_is_ignored);
+    RUN_TEST(schema_v5_invalid_sidecar_is_left_unchanged);
     RUN_TEST(schema_v5_search_finds_key_word);
     RUN_TEST(schema_v5_rekey_search_follows_the_new_key);
     RUN_TEST(schema_v5_search_folds_hebrew_marks_in_the_row);

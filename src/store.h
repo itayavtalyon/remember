@@ -28,7 +28,7 @@ typedef enum {
     STORE_ERR_NOT_EXPIRED,       /* locator used STORE_BIN_EXPIRED but row is live */
     STORE_ERR_DELETED,           /* locator hit deleted without STORE_BIN_DELETED */
     STORE_ERR_NOT_DELETED,       /* locator used STORE_BIN_DELETED but row is live */
-    STORE_ERR_NOT_SINGLE_DEVICE, /* hard wipe when devices COUNT != 1 */
+    STORE_ERR_NOT_SINGLE_DEVICE, /* catalog only; no v5 command returns it */
     STORE_ERR_SELF_LINK,         /* from_id == to_id */
     STORE_ERR_CYCLE,             /* supersedes would cycle */
     STORE_ERR_SOURCE_TOO_OLD,    /* import --from-db: source user_version < 4 */
@@ -67,8 +67,10 @@ typedef struct {
 /* Open or create a store at path. Creates parent directories (mode 0700).
  * On success returns a non-NULL Store*. On failure returns NULL and, if
  * err/errlen are usable, writes a short message into err (NUL-terminated).
- * Schema: user_version 0 → create at 4; 1/2/3 → migrate to 4; 4 → ok;
- * >4 → refuse. Sidecar: <path>.device_id (mode 0600).
+ * Schema: user_version 0 creates 5; 1/2/3 climb to 5; 4 migrates to 5; 5 is
+ * current; >5 refuses with "database is newer than this remember".
+ * Sidecar <path>.device_id (mode 0600) is the only device id. A missing file
+ * is minted. An invalid file is an error and is left unchanged.
  */
 Store *store_open(const char *path, char *err, size_t errlen);
 
@@ -173,7 +175,7 @@ StoreStatus store_soft_delete_by_key(Store *s, const char *key, const char *now,
 
 /*
  * Hard CASCADE one row. bin must be EXPIRED or DELETED (LIVE → INTERNAL; hard
- * cannot default). Hatch: devices COUNT==1 else NOT_SINGLE_DEVICE. Removes FTS.
+ * cannot default). Open already required a valid sidecar. Removes FTS.
  * *out is a snapshot of the removed row.
  */
 StoreStatus store_hard_delete_by_id(Store *s, long long id, StoreBin bin, const char *now,
@@ -224,8 +226,8 @@ StoreStatus store_tags(Store *s, StoreBin bin, const char *now, TagCount **out_t
 void store_tags_free(TagCount *tags, size_t count);
 
 /*
- * Hard-wipe every row in bin (EXPIRED or DELETED; LIVE → INTERNAL). Same hatch
- * as one-row hard delete. On STORE_OK: *out_entries is all snapshots
+ * Hard-wipe every row in bin (EXPIRED or DELETED; LIVE → INTERNAL). Open
+ * already required a valid sidecar. On STORE_OK: *out_entries is all snapshots
  * (*out_count; 0/NULL if empty). Caller frees each entry then the array.
  */
 StoreStatus store_purge(Store *s, StoreBin bin, const char *now, Entry **out_entries,
@@ -393,6 +395,8 @@ void store_test_fail_alloc_after(int n);
 void store_test_fail_prepare_after(int n);
 void store_test_fail_step_after(int n);
 void store_test_fail_exec_after(int n);
+/* Fail the next sidecar rename when n > 0. Pass 0 to clear. */
+void store_test_fail_sidecar_rename(int n);
 #endif
 
 #endif /* REMEMBER_STORE_H */

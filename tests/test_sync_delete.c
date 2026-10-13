@@ -8,16 +8,6 @@
 
 // NOLINTBEGIN(readability-identifier-length,cppcoreguidelines-avoid-magic-numbers,readability-magic-numbers)
 
-static void insert_extra_device(const char *db)
-{
-    /* TEXT PK: SELECT device_id LIMIT 1 (open recovery) uses index order.
-       Extra must sort after a v7 local id so sidecar still matches LIMIT 1
-       and recovery does not REPLACE the extra row away. */
-    free(harness_sqlite_query_line(db, "INSERT INTO devices(device_id, first_seen, last_seen) "
-                                       "VALUES('ffffffff-ffff-7fff-bfff-ffffffffffff',"
-                                       "'2020-01-01T00:00:00.000Z','2020-01-01T00:00:00.000Z');"));
-}
-
 TEST(cli_unflagged_delete_is_soft)
 {
     char *db = make_temp_db_path();
@@ -124,13 +114,14 @@ TEST(cli_delete_expired_hard_wipes_one_row)
     free(db);
 }
 
-TEST(cli_delete_deleted_hard_and_hatch)
+TEST(cli_delete_deleted_hard_wipes_the_row)
 {
     char *db = make_temp_db_path();
     CmdResult r;
     const char *a[] = {"add", "wipe"};
     const char *soft[] = {"delete", "1"};
     const char *hard[] = {"delete", "--deleted", "1"};
+    const char *gone[] = {"get", "--deleted", "1"};
 
     ASSERT_TRUE(db != NULL);
     r = run_remember(db, a, sizeof(a) / sizeof(a[0]), NULL);
@@ -139,10 +130,11 @@ TEST(cli_delete_deleted_hard_and_hatch)
     r = run_remember(db, soft, sizeof(soft) / sizeof(soft[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 0);
     cmd_result_free(&r);
-    insert_extra_device(db);
     r = run_remember(db, hard, sizeof(hard) / sizeof(hard[0]), NULL);
-    ASSERT_EQ_INT(r.exit_code, 1);
-    ASSERT_STR_CONTAINS(r.err, "hard delete requires exactly one registered device");
+    ASSERT_EQ_INT(r.exit_code, 0);
+    cmd_result_free(&r);
+    r = run_remember(db, gone, sizeof(gone) / sizeof(gone[0]), NULL);
+    ASSERT_EQ_INT(r.exit_code, 2);
     cmd_result_free(&r);
     free(db);
 }
@@ -297,21 +289,65 @@ TEST(cli_purge_deleted_and_purge_trash_alias)
     free(db);
 }
 
-TEST(cli_purge_hatch_two_devices)
+TEST(cli_invalid_sidecar_exits_1_and_keeps_the_file)
+{
+    char *db = make_temp_db_path();
+    char side[512];
+    char got[64];
+    CmdResult r;
+    FILE *f = NULL;
+    const char *a[] = {"add", "x"};
+    int sn = 0;
+
+    ASSERT_TRUE(db != NULL);
+    got[0] = '\0';
+    r = run_remember(db, a, sizeof(a) / sizeof(a[0]), NULL);
+    ASSERT_EQ_INT(r.exit_code, 0);
+    cmd_result_free(&r);
+
+    sn = snprintf(side, sizeof(side), "%s.device_id", db);
+    ASSERT_TRUE(sn > 0 && (size_t)sn < sizeof(side));
+    /* NOLINTNEXTLINE(android-cloexec-fopen) */
+    f = fopen(side, "w");
+    ASSERT_TRUE(f != NULL);
+    if (f != NULL) {
+        (void)fputs("not-a-uuid\n", f);
+        (void)fclose(f);
+    }
+    r = run_remember(db, a, sizeof(a) / sizeof(a[0]), NULL);
+    ASSERT_EQ_INT(r.exit_code, 1);
+    ASSERT_STREQ(r.err, "remember: invalid device_id sidecar\n");
+    cmd_result_free(&r);
+
+    /* NOLINTNEXTLINE(android-cloexec-fopen) */
+    f = fopen(side, "r");
+    ASSERT_TRUE(f != NULL);
+    ASSERT_TRUE(f != NULL && fgets(got, (int)sizeof(got), f) != NULL);
+    if (f != NULL) {
+        (void)fclose(f);
+    }
+    ASSERT_STREQ(got, "not-a-uuid\n");
+    free(db);
+}
+
+TEST(cli_purge_expired_wipes_without_device_hatch)
 {
     char *db = make_temp_db_path();
     CmdResult r;
     const char *a[] = {"add", "--expires", "2020-01-01T00:00:00Z", "old"};
     const char *p[] = {"purge", "--expired"};
+    const char *gone[] = {"get", "--expired", "1"};
 
     ASSERT_TRUE(db != NULL);
     r = run_remember(db, a, sizeof(a) / sizeof(a[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 0);
     cmd_result_free(&r);
-    insert_extra_device(db);
     r = run_remember(db, p, sizeof(p) / sizeof(p[0]), NULL);
-    ASSERT_EQ_INT(r.exit_code, 1);
-    ASSERT_STR_CONTAINS(r.err, "hard delete requires exactly one registered device");
+    ASSERT_EQ_INT(r.exit_code, 0);
+    ASSERT_TRUE(strstr(r.err, "exactly one registered device") == NULL);
+    cmd_result_free(&r);
+    r = run_remember(db, gone, sizeof(gone) / sizeof(gone[0]), NULL);
+    ASSERT_EQ_INT(r.exit_code, 2);
     cmd_result_free(&r);
     free(db);
 }
@@ -321,12 +357,13 @@ void register_sync_delete_tests(void)
     RUN_TEST(cli_unflagged_delete_is_soft);
     RUN_TEST(cli_unflagged_delete_expired_clears_expires);
     RUN_TEST(cli_delete_expired_hard_wipes_one_row);
-    RUN_TEST(cli_delete_deleted_hard_and_hatch);
+    RUN_TEST(cli_delete_deleted_hard_wipes_the_row);
     RUN_TEST(cli_update_undelete);
     RUN_TEST(cli_add_revives_deleted);
     RUN_TEST(cli_purge_requires_one_flag);
     RUN_TEST(cli_purge_deleted_and_purge_trash_alias);
-    RUN_TEST(cli_purge_hatch_two_devices);
+    RUN_TEST(cli_invalid_sidecar_exits_1_and_keeps_the_file);
+    RUN_TEST(cli_purge_expired_wipes_without_device_hatch);
 }
 
 // NOLINTEND(readability-identifier-length,cppcoreguidelines-avoid-magic-numbers,readability-magic-numbers)
