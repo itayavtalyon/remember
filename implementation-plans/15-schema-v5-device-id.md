@@ -280,8 +280,26 @@ or architecture forks to Itay as a grill. Re-run the full gate after any fix.
 
 ## Implementation Notes
 
-_(empty; fill per stage)_
+### 2026-10-13 — stage 1 (fresh v5 + migrate, devices kept)
+
+Itay chose migrate-keep-devices: fresh databases and v1–v4 all land on the same `user_version` 5 schema in this stage (FTS rebuild, `bucket_prefixes`, `settings`, `conflicts.origin`). The `devices` table stays until stage 3. Stage 2 is the leftover migrate edge (a scripted fail-after-step-3 atomicity test); a prepare failure during FTS repopulate is already covered and leaves the file at v4.
+
+- DDL macros (`K_FTS_SQL`, tags, devices, conflicts, bucket_prefixes, settings) are shared by fresh create and migrate. Conflicts are rebuilt by renaming the old table away, then `CREATE` with the canonical DDL, because renaming the new table quotes its name in `sqlite_master`.
+- `fold_hebrew_marks` lives in `normalize.c` for plan 18. Entries keep the original body. Invalid or truncated UTF-8 is copied one byte and never read past the buffer.
+- Import still accepts user_version >= 4 (`IMPORT_MIN_USER_VERSION`). Refusing a source newer than 5 is stage 5.
+- `store_rekey` now calls `fts_resync` before commit. Add, update, and import already did. Search follows the new key and drops the old one.
+- What's New, SKILL.md, and the design-log Implementation Results stay for stage 6 / the whole-plan DoD. Engineering notes record the v5 open rules because stage 2 depends on them.
 
 ## Review Notes
 
-_(empty; second review appends here)_
+### 2026-10-13 — in-session deep review (stage 1)
+
+**Verdict:** approve for the second-opinion pass. No open blocking item.
+
+**Auto-fixed:** `store_rekey` wrote `entries.key` and left the FTS key stale (search still hit the old key and missed the new one). Locked by `schema_v5_rekey_search_follows_the_new_key`.
+
+**Praise:** one DDL source; v4 fixture text is compared to a fresh database with `EXCEPT` both ways; Hebrew fold is proven by a search that failed before the helper existed.
+
+**Nit:** a brand-new database creates the v5 FTS table and `apply_v5_delta` drops and recreates it with the same SQL. One path, no drift. Left as is.
+
+**Left for later stages:** drop `devices` (stage 3); `device` / `device new` (stage 4); refuse import user_version > 5 (stage 5); query-side Hebrew fold (plan 18); What's New (stage 6).

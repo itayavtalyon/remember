@@ -57,6 +57,7 @@ Dev tools for inspect tests: `sqlite3` on PATH (`brew install sqlite` if needed)
 | `test_store.c` | store_open/close, schema, user_version gate, create race + rollback, parent 0700/0600, error edges (step 02 unit; runs black-box **and** under ASan via `remember_store_tests`) |
 | `test_normalize.c` | body trim/size, UTF-8 edges, NUL-terminates, control-byte preserve, tag/key normalize, SHA-256 empty/abc + 56-byte NIST long-pad + 64-byte multi-block (step 03 pure unit; harness + ASan/UBSan unit binary, digest instrumented) |
 | `test_schema_config.c` | sync path, key null |
+| `test_schema_v5.c` | fresh v5 schema, key search, Hebrew FTS fold, v4→v5 schema identity (plan 15 stage 1; gate suite `schema_v5`; also under ASan via `remember_store_tests`) |
 | `test_verification_edges.c` | V21–34 edges (green slice: `verification_gld`; WIP: `verification_edges`) |
 
 ## Intentionally not automated

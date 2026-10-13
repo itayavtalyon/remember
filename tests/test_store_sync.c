@@ -138,7 +138,7 @@ static int is_uuid_v7(const char *s)
     return 1;
 }
 
-TEST(store_open_creates_v4_sidecar_and_device)
+TEST(store_open_creates_v5_sidecar_and_device)
 {
     char *db = make_temp_db_path();
     char *side = NULL;
@@ -154,7 +154,7 @@ TEST(store_open_creates_v4_sidecar_and_device)
     ASSERT_STREQ(err, "");
     store_close(s);
 
-    assert_query_is(db, (QueryExpect){.sql = "PRAGMA user_version;", .want = "4"});
+    assert_query_is(db, (QueryExpect){.sql = "PRAGMA user_version;", .want = "5"});
     assert_query_is(db, (QueryExpect){.sql = "SELECT COUNT(*) FROM devices;", .want = "1"});
     assert_query_is(db, (QueryExpect){.sql = "SELECT COUNT(*) FROM conflicts;", .want = "0"});
     /* One named unique index on sync_id, no redundant inline-UNIQUE autoindex. */
@@ -236,7 +236,7 @@ TEST(store_open_two_dbs_in_one_dir_distinct_sidecars)
     (void)rmdir(dir);
 }
 
-TEST(store_open_migrates_v3_to_v4_preserves_rows)
+TEST(store_open_migrates_v3_to_v5_preserves_rows)
 {
     char *db = make_temp_db_path();
     char err[ERR_BUFSIZE];
@@ -276,7 +276,7 @@ TEST(store_open_migrates_v3_to_v4_preserves_rows)
     ASSERT_STREQ(err, "");
     store_close(s);
 
-    assert_query_is(db, (QueryExpect){.sql = "PRAGMA user_version;", .want = "4"});
+    assert_query_is(db, (QueryExpect){.sql = "PRAGMA user_version;", .want = "5"});
     assert_query_is(db,
                     (QueryExpect){.sql = "SELECT body FROM entries WHERE id=1;", .want = "alpha"});
     assert_query_is(db, (QueryExpect){.sql = "SELECT COUNT(*) FROM entry_links;", .want = "1"});
@@ -1216,9 +1216,9 @@ TEST(store_devices_replace_exec_fail_undoes_savepoint)
 
 void register_store_sync_tests(void)
 {
-    RUN_TEST(store_open_creates_v4_sidecar_and_device);
+    RUN_TEST(store_open_creates_v5_sidecar_and_device);
     RUN_TEST(store_open_two_dbs_in_one_dir_distinct_sidecars);
-    RUN_TEST(store_open_migrates_v3_to_v4_preserves_rows);
+    RUN_TEST(store_open_migrates_v3_to_v5_preserves_rows);
     RUN_TEST(store_add_mints_v7_sync_id_and_get_by_sync_id);
     RUN_TEST(store_sync_id_stable_across_update);
     RUN_TEST(store_get_does_not_bump_last_seen);

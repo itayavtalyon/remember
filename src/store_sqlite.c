@@ -218,22 +218,57 @@ static int store_exec(sqlite3 *db, const char *sql, int (*cb)(void *, int, char 
     "CREATE UNIQUE INDEX ux_entries_bodyhash ON entries(body_hash) WHERE key IS NULL;\n"           \
     "CREATE UNIQUE INDEX ux_entries_sync_id ON entries(sync_id);\n"
 
+/* FTS column order is key, body, tags (E1.3). Fresh create and v4→v5 share this. */
+#define K_FTS_SQL                                                                                  \
+    "CREATE VIRTUAL TABLE entries_fts USING fts5(\n"                                               \
+    "  key,\n"                                                                                     \
+    "  body,\n"                                                                                    \
+    "  tags,\n"                                                                                    \
+    "  tokenize = 'unicode61 remove_diacritics 2'\n"                                               \
+    ");\n"
+#define K_TAGS_SQL                                                                                 \
+    "CREATE TABLE tags (\n"                                                                        \
+    "  id INTEGER PRIMARY KEY,\n"                                                                  \
+    "  name TEXT NOT NULL UNIQUE\n"                                                                \
+    ");\n"
+#define K_ENTRY_TAGS_SQL                                                                           \
+    "CREATE TABLE entry_tags (\n"                                                                  \
+    "  entry_id INTEGER NOT NULL REFERENCES entries(id) ON DELETE CASCADE,\n"                      \
+    "  tag_id INTEGER NOT NULL REFERENCES tags(id) ON DELETE CASCADE,\n"                           \
+    "  PRIMARY KEY (entry_id, tag_id)\n"                                                           \
+    ");\n"
+#define K_DEVICES_SQL                                                                              \
+    "CREATE TABLE devices (\n"                                                                     \
+    "  device_id  TEXT PRIMARY KEY,\n"                                                             \
+    "  first_seen TEXT NOT NULL,\n"                                                                \
+    "  last_seen  TEXT NOT NULL\n"                                                                 \
+    ");\n"
+#define K_CONFLICTS_COLUMNS                                                                        \
+    "  id            INTEGER PRIMARY KEY,\n"                                                       \
+    "  sync_id       TEXT NOT NULL,\n"                                                             \
+    "  reason        TEXT NOT NULL,\n"                                                             \
+    "  local_json    TEXT NOT NULL,\n"                                                             \
+    "  incoming_json TEXT NOT NULL,\n"                                                             \
+    "  created_at    TEXT NOT NULL,\n"                                                             \
+    "  origin        TEXT\n"
+#define K_CONFLICTS_SQL "CREATE TABLE conflicts (\n" K_CONFLICTS_COLUMNS ");\n"
+#define K_BUCKET_PREFIXES_SQL                                                                      \
+    "CREATE TABLE bucket_prefixes (\n"                                                             \
+    "  prefix TEXT PRIMARY KEY,\n"                                                                 \
+    "  added_at TEXT NOT NULL,\n"                                                                  \
+    "  removed_at TEXT,\n"                                                                         \
+    "  device_id TEXT NOT NULL\n"                                                                  \
+    ");\n"
+#define K_SETTINGS_SQL                                                                             \
+    "CREATE TABLE settings (\n"                                                                    \
+    "  name TEXT PRIMARY KEY,\n"                                                                   \
+    "  value TEXT NOT NULL,\n"                                                                     \
+    "  updated_at TEXT NOT NULL\n"                                                                 \
+    ");\n"
+
 /* DDL only; version bump is applied after a successful body (same transaction). */
-static const char k_schema_sql[] =
-    "CREATE TABLE entries (\n" K_ENTRIES_COLUMNS ");\n" K_ENTRIES_INDEXES "CREATE TABLE tags (\n"
-    "  id INTEGER PRIMARY KEY,\n"
-    "  name TEXT NOT NULL UNIQUE\n"
-    ");\n"
-    "CREATE TABLE entry_tags (\n"
-    "  entry_id INTEGER NOT NULL REFERENCES entries(id) ON DELETE CASCADE,\n"
-    "  tag_id INTEGER NOT NULL REFERENCES tags(id) ON DELETE CASCADE,\n"
-    "  PRIMARY KEY (entry_id, tag_id)\n"
-    ");\n"
-    "CREATE VIRTUAL TABLE entries_fts USING fts5(\n"
-    "  body,\n"
-    "  tags,\n"
-    "  tokenize = 'unicode61 remove_diacritics 2'\n"
-    ");\n";
+static const char k_schema_sql[] = "CREATE TABLE entries (\n" K_ENTRIES_COLUMNS
+                                   ");\n" K_ENTRIES_INDEXES K_TAGS_SQL K_ENTRY_TAGS_SQL K_FTS_SQL;
 
 /* Applied on v0 create (after k_schema_sql) and on v1/v2 migrate. */
 static const char k_links_sql[] =
@@ -249,21 +284,11 @@ static const char k_links_sql[] =
     "  ON entry_links(from_id, to_id, kind);\n"
     "CREATE INDEX entry_links_to ON entry_links(to_id);\n";
 
-static const char k_sync_sql[] = "CREATE TABLE devices (\n"
-                                 "  device_id  TEXT PRIMARY KEY,\n"
-                                 "  first_seen TEXT NOT NULL,\n"
-                                 "  last_seen  TEXT NOT NULL\n"
-                                 ");\n"
-                                 "CREATE TABLE conflicts (\n"
-                                 "  id            INTEGER PRIMARY KEY,\n"
-                                 "  sync_id       TEXT NOT NULL,\n"
-                                 "  reason        TEXT NOT NULL,\n"
-                                 "  local_json    TEXT NOT NULL,\n"
-                                 "  incoming_json TEXT NOT NULL,\n"
-                                 "  created_at    TEXT NOT NULL\n"
-                                 ");\n";
+static const char k_sync_sql[] = K_DEVICES_SQL K_CONFLICTS_SQL K_BUCKET_PREFIXES_SQL K_SETTINGS_SQL;
 
-enum { SCHEMA_VERSION = 4, UUID_STR_LEN = 36, UUID_BYTES = 16 };
+enum { SCHEMA_VERSION = 5, UUID_STR_LEN = 36, UUID_BYTES = 16 };
+/* import --from-db still accepts a v4 source (E1.4). The >5 refusal is stage 5. */
+enum { IMPORT_MIN_USER_VERSION = 4 };
 /* RFC 4122 layout for canonical 8-4-4-4-12 and v7 mint. */
 enum {
     UUID_DASH_0 = 8,
@@ -796,7 +821,7 @@ static int backfill_sync_ids(sqlite3 *db, const char *device_id, char *err, size
     return 0;
 }
 
-/* Gate an already-created database: 4 is current, anything else is refused. */
+/* Gate an already-created database: 5 is current, anything else is refused. */
 static int check_version(int version, char *err, size_t errlen)
 {
     if (version == SCHEMA_VERSION) {
@@ -900,18 +925,174 @@ static int rebuild_entries_notnull(sqlite3 *db, char *err, size_t errlen)
     return exec_sql(db, sql, err, errlen);
 }
 
+static StoreStatus fts_resync(sqlite3 *db, long long entry_id);
+
+/* One integer column. bind NULL means the statement has no parameter. */
+// NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
+static int select_int(sqlite3 *db, const char *sql, const char *bind, int *out, char *err,
+                      size_t errlen)
+{
+    sqlite3_stmt *stmt = NULL;
+    int rc = 0;
+
+    rc = sqlite3_prepare_v2(db, sql, -1, &stmt, NULL);
+    if (rc != SQLITE_OK) {
+        set_errf(err, errlen, "sqlite", sqlite3_errmsg(db));
+        return -1;
+    }
+    if (bind != NULL) {
+        (void)sqlite3_bind_text(stmt, 1, bind, -1, SQLITE_STATIC);
+    }
+    rc = sqlite3_step(stmt);
+    if (rc != SQLITE_ROW) {
+        (void)sqlite3_finalize(stmt);
+        set_errf(err, errlen, "sqlite", sqlite3_errmsg(db));
+        return -1;
+    }
+    *out = sqlite3_column_int(stmt, 0);
+    (void)sqlite3_finalize(stmt);
+    return 0;
+}
+
+/* Create with the canonical DDL only when the table is absent, so an existing
+   object's sqlite_master text stays identical to a fresh database. */
+// NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
+static int create_table_if_missing(sqlite3 *db, const char *name, const char *sql, char *err,
+                                   size_t errlen)
+{
+    int n = 0;
+
+    if (select_int(db, "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name=?1;", name,
+                   &n, err, errlen) != 0) {
+        return -1;
+    }
+    if (n > 0) {
+        return 0;
+    }
+    return exec_sql(db, sql, err, errlen);
+}
+
+static int rebuild_conflicts_with_origin(sqlite3 *db, char *err, size_t errlen)
+{
+    /* Rename away, then CREATE with the fresh DDL. Renaming the new table quotes
+       its name in sqlite_master and would drift from a fresh database. */
+    static const char sql[] =
+        "ALTER TABLE conflicts RENAME TO conflicts_v4;\n" K_CONFLICTS_SQL
+        "INSERT INTO conflicts(id, sync_id, reason, local_json, incoming_json, created_at, "
+        "origin) SELECT id, sync_id, reason, local_json, incoming_json, created_at, NULL FROM "
+        "conflicts_v4;\n"
+        "DROP TABLE conflicts_v4;\n";
+    return exec_sql(db, sql, err, errlen);
+}
+
+static int ensure_conflicts_origin(sqlite3 *db, char *err, size_t errlen)
+{
+    int n = 0;
+    int origin = 0;
+
+    if (select_int(db, "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name=?1;",
+                   "conflicts", &n, err, errlen) != 0) {
+        return -1;
+    }
+    if (n == 0) {
+        return exec_sql(db, K_CONFLICTS_SQL, err, errlen);
+    }
+    if (select_int(db, "SELECT COUNT(*) FROM pragma_table_info('conflicts') WHERE name='origin';",
+                   NULL, &origin, err, errlen) != 0) {
+        return -1;
+    }
+    if (origin > 0) {
+        return 0;
+    }
+    return rebuild_conflicts_with_origin(db, err, errlen);
+}
+
+static int repopulate_fts(sqlite3 *db, char *err, size_t errlen)
+{
+    sqlite3_stmt *sel = NULL;
+    int rc = 0;
+
+    rc = sqlite3_prepare_v2(db, "SELECT id FROM entries;", -1, &sel, NULL);
+    if (rc != SQLITE_OK) {
+        set_errf(err, errlen, "sqlite", sqlite3_errmsg(db));
+        return -1;
+    }
+    while ((rc = sqlite3_step(sel)) == SQLITE_ROW) {
+        StoreStatus st = fts_resync(db, sqlite3_column_int64(sel, 0));
+        if (st != STORE_OK) {
+            (void)sqlite3_finalize(sel);
+            set_err(err, errlen,
+                    (st == STORE_ERR_OOM) ? "out of memory" : "cannot rebuild search index");
+            return -1;
+        }
+    }
+    (void)sqlite3_finalize(sel);
+    if (rc != SQLITE_DONE) {
+        set_errf(err, errlen, "sqlite", sqlite3_errmsg(db));
+        return -1;
+    }
+    return 0;
+}
+
+/* v5 objects on a database that already has entries. Devices stay (stage 3 drops them). */
+static int apply_v5_delta(sqlite3 *db, char *err, size_t errlen)
+{
+    if (create_table_if_missing(db, "tags", K_TAGS_SQL, err, errlen) != 0) {
+        return -1;
+    }
+    if (create_table_if_missing(db, "entry_tags", K_ENTRY_TAGS_SQL, err, errlen) != 0) {
+        return -1;
+    }
+    if (exec_sql(db, "DROP TABLE IF EXISTS entries_fts;", err, errlen) != 0) {
+        return -1;
+    }
+    if (exec_sql(db, K_FTS_SQL, err, errlen) != 0) {
+        return -1;
+    }
+    if (repopulate_fts(db, err, errlen) != 0) {
+        return -1;
+    }
+    if (create_table_if_missing(db, "bucket_prefixes", K_BUCKET_PREFIXES_SQL, err, errlen) != 0) {
+        return -1;
+    }
+    if (create_table_if_missing(db, "settings", K_SETTINGS_SQL, err, errlen) != 0) {
+        return -1;
+    }
+    return ensure_conflicts_origin(db, err, errlen);
+}
+
+/* v0 creates the v5 DDL directly. v1/v2/v3 still climb through the v4 column rebuild. */
+static int migrate_legacy(Store *s, int version, char *err, size_t errlen)
+{
+    sqlite3 *db = s->db;
+
+    if (migrate_body_to_v4(db, version, err, errlen) != 0) {
+        return -1;
+    }
+    if (ensure_device_identity(s, 1, err, errlen) != 0) {
+        return -1;
+    }
+    if (backfill_sync_ids(db, s->device_id, err, errlen) != 0) {
+        return -1;
+    }
+    /* v0 is already NOT NULL from k_schema_sql; only migrated rows rebuild. */
+    if (version != 0 && rebuild_entries_notnull(db, err, errlen) != 0) {
+        return -1;
+    }
+    return foreign_keys_ok(db, err, errlen);
+}
+
 /*
- * Create or migrate to schema 4 in one write transaction. Assumes foreign_keys
+ * Create or migrate to schema 5 in one write transaction. Assumes foreign_keys
  * is OFF (ensure_schema toggles it) so the v1/2/3 rebuild's DROP does not cascade
  * entry_links/entry_tags. Returns 0 = created/migrated + committed (identity
  * bound), 1 = a concurrent remember already migrated (caller binds identity),
- * -1 = failure.
+ * -1 = failure. The devices table stays until plan 15 stage 3.
  */
-static int migrate_to_v4(Store *s, char *err, size_t errlen)
+static int migrate_to_current(Store *s, char *err, size_t errlen)
 {
     sqlite3 *db = s->db;
     int version = 0;
-    int migrated = 0;
 
     if (exec_sql(db, "BEGIN IMMEDIATE;", err, errlen) != 0) {
         return -1;
@@ -923,28 +1104,24 @@ static int migrate_to_v4(Store *s, char *err, size_t errlen)
         rollback_quiet(db);
         return 1;
     }
-    migrated = migrate_body_to_v4(db, version, err, errlen);
-    if (migrated == 1) {
+    /* Another writer committed an illegal version before BEGIN IMMEDIATE.
+       Same refusal as the outer gate. */
+    if (version < 0 || version > SCHEMA_VERSION) {
         rollback_quiet(db);
         return check_version(version, err, errlen);
     }
-    if (migrated != 0) {
+    if (version <= 3) {
+        if (migrate_legacy(s, version, err, errlen) != 0) {
+            goto cleanup_fail;
+        }
+    }
+    if (apply_v5_delta(db, err, errlen) != 0) {
         goto cleanup_fail;
     }
-    if (ensure_device_identity(s, 1, err, errlen) != 0) {
+    if (version == 4 && ensure_device_identity(s, 1, err, errlen) != 0) {
         goto cleanup_fail;
     }
-    if (backfill_sync_ids(db, s->device_id, err, errlen) != 0) {
-        goto cleanup_fail;
-    }
-    /* v0 (fresh) is already NOT NULL from k_schema_sql; only migrated rows rebuild. */
-    if (version != 0 && rebuild_entries_notnull(db, err, errlen) != 0) {
-        goto cleanup_fail;
-    }
-    if (foreign_keys_ok(db, err, errlen) != 0) {
-        goto cleanup_fail;
-    }
-    if (exec_sql(db, "PRAGMA user_version = 4;", err, errlen) != 0) {
+    if (exec_sql(db, "PRAGMA user_version = 5;", err, errlen) != 0) {
         goto cleanup_fail;
     }
     if (exec_sql(db, "COMMIT;", err, errlen) != 0) {
@@ -958,7 +1135,7 @@ cleanup_fail:
 }
 
 /*
- * Bring an open database to schema version 4 and bind local device identity.
+ * Bring an open database to schema version 5 and bind local device identity.
  *
  * The v1/2/3 migration rebuilds entries, so foreign_keys is toggled OFF around
  * it (the PRAGMA is a no-op inside a transaction) and restored ON afterward.
@@ -977,13 +1154,13 @@ static int ensure_schema(Store *s, char *err, size_t errlen)
     if (version == SCHEMA_VERSION) {
         goto bind_identity; /* already current; foreign_keys stays ON */
     }
-    if (version != 0 && version != 1 && version != 2 && version != 3) {
+    if (version != 0 && version != 1 && version != 2 && version != 3 && version != 4) {
         return check_version(version, err, errlen);
     }
     if (exec_sql(db, "PRAGMA foreign_keys = OFF;", err, errlen) != 0) {
         return -1;
     }
-    rc = migrate_to_v4(s, err, errlen);
+    rc = migrate_to_current(s, err, errlen);
     (void)exec_sql(db, "PRAGMA foreign_keys = ON;", NULL, 0);
     if (rc < 0) {
         return -1;
@@ -1714,50 +1891,44 @@ static char *join_tags_space(const char *const *tags, size_t ntags)
     return buf;
 }
 
-/* Rewrite FTS row for entry_id from current entries + entry_tags. */
-static StoreStatus fts_resync(sqlite3 *db, long long entry_id)
+static StoreStatus fold_fts_field(const char *src, char **out)
 {
-    sqlite3_stmt *sel = NULL;
+    const char *text = (src != NULL) ? src : "";
+    NormStatus ns = fold_hebrew_marks(text, strlen(text), out);
+
+    /* NULL out/src are not passed here, so the only failure is OOM. */
+    if (ns == NORM_OK) {
+        return STORE_OK;
+    }
+    return STORE_ERR_OOM;
+}
+
+/* Fold key, body, and tags, then replace the FTS row. key may be NULL. */
+// NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
+static StoreStatus write_folded_fts(sqlite3 *db, long long entry_id, const char *key,
+                                    const char *body, const char *tags_text)
+{
     sqlite3_stmt *del = NULL;
     sqlite3_stmt *ins = NULL;
-    char **tags = NULL;
-    size_t ntags = 0U;
-    char *tags_text = NULL;
-    const unsigned char *body_u = NULL;
+    char *key_fold = NULL;
+    char *body_fold = NULL;
+    char *tags_fold = NULL;
     StoreStatus st = STORE_ERR_SQLITE;
     int rc = 0;
 
-    rc = sqlite3_prepare_v2(db, "SELECT body FROM entries WHERE id = ?1;", -1, &sel, NULL);
-    if (rc != SQLITE_OK) {
-        return STORE_ERR_SQLITE;
-    }
-    (void)sqlite3_bind_int64(sel, 1, entry_id);
-    rc = sqlite3_step(sel);
-    if (rc != SQLITE_ROW) {
-        (void)sqlite3_finalize(sel);
-        return (rc == SQLITE_DONE) ? STORE_ERR_NOT_FOUND : STORE_ERR_SQLITE;
-    }
-    body_u = sqlite3_column_text(sel, 0);
-    if (body_u == NULL) {
-        (void)sqlite3_finalize(sel);
-        return STORE_ERR_SQLITE;
-    }
-
-    st = load_tags(db, entry_id, &tags, &ntags);
+    st = fold_fts_field(key, &key_fold);
     if (st != STORE_OK) {
-        (void)sqlite3_finalize(sel);
-        return st;
+        goto cleanup;
     }
-    tags_text = join_tags_space((const char *const *)tags, ntags);
-    if (tags_text == NULL) {
-        size_t i = 0;
-        for (i = 0; i < ntags; i++) {
-            free(tags[i]);
-        }
-        free((void *)tags);
-        (void)sqlite3_finalize(sel);
-        return STORE_ERR_OOM;
+    st = fold_fts_field(body, &body_fold);
+    if (st != STORE_OK) {
+        goto cleanup;
     }
+    st = fold_fts_field(tags_text, &tags_fold);
+    if (st != STORE_OK) {
+        goto cleanup;
+    }
+    st = STORE_ERR_SQLITE;
 
     rc = sqlite3_prepare_v2(db, "DELETE FROM entries_fts WHERE rowid = ?1;", -1, &del, NULL);
     if (rc != SQLITE_OK) {
@@ -1768,16 +1939,19 @@ static StoreStatus fts_resync(sqlite3 *db, long long entry_id)
         goto cleanup;
     }
 
-    rc = sqlite3_prepare_v2(db, "INSERT INTO entries_fts(rowid, body, tags) VALUES (?1, ?2, ?3);",
-                            -1, &ins, NULL);
+    rc = sqlite3_prepare_v2(
+        db, "INSERT INTO entries_fts(rowid, key, body, tags) VALUES (?1, ?2, ?3, ?4);", -1, &ins,
+        NULL);
     if (rc != SQLITE_OK) {
         goto cleanup;
     }
     (void)sqlite3_bind_int64(ins, 1, entry_id);
     /* NOLINTNEXTLINE(performance-no-int-to-ptr) -- SQLITE_TRANSIENT is (destructor)-1 */
-    (void)sqlite3_bind_text(ins, 2, (const char *)body_u, -1, SQLITE_TRANSIENT);
+    (void)sqlite3_bind_text(ins, 2, key_fold, -1, SQLITE_TRANSIENT);
     /* NOLINTNEXTLINE(performance-no-int-to-ptr) -- SQLITE_TRANSIENT is (destructor)-1 */
-    (void)sqlite3_bind_text(ins, 3, tags_text, -1, SQLITE_TRANSIENT);
+    (void)sqlite3_bind_text(ins, 3, body_fold, -1, SQLITE_TRANSIENT);
+    /* NOLINTNEXTLINE(performance-no-int-to-ptr) -- SQLITE_TRANSIENT is (destructor)-1 */
+    (void)sqlite3_bind_text(ins, 4, tags_fold, -1, SQLITE_TRANSIENT);
     if (sqlite3_step(ins) != SQLITE_DONE) {
         goto cleanup;
     }
@@ -1790,6 +1964,53 @@ cleanup:
     if (del != NULL) {
         (void)sqlite3_finalize(del);
     }
+    free(key_fold);
+    free(body_fold);
+    free(tags_fold);
+    return st;
+}
+
+/* Rewrite FTS row for entry_id from current entries + entry_tags. */
+static StoreStatus fts_resync(sqlite3 *db, long long entry_id)
+{
+    sqlite3_stmt *sel = NULL;
+    char **tags = NULL;
+    size_t ntags = 0U;
+    char *tags_text = NULL;
+    const unsigned char *body_u = NULL;
+    StoreStatus st = STORE_ERR_SQLITE;
+    int rc = 0;
+
+    rc = sqlite3_prepare_v2(db, "SELECT key, body FROM entries WHERE id = ?1;", -1, &sel, NULL);
+    if (rc != SQLITE_OK) {
+        return STORE_ERR_SQLITE;
+    }
+    (void)sqlite3_bind_int64(sel, 1, entry_id);
+    rc = sqlite3_step(sel);
+    if (rc != SQLITE_ROW) {
+        (void)sqlite3_finalize(sel);
+        return (rc == SQLITE_DONE) ? STORE_ERR_NOT_FOUND : STORE_ERR_SQLITE;
+    }
+    body_u = sqlite3_column_text(sel, 1);
+    if (body_u == NULL) {
+        (void)sqlite3_finalize(sel);
+        return STORE_ERR_SQLITE;
+    }
+
+    st = load_tags(db, entry_id, &tags, &ntags);
+    if (st != STORE_OK) {
+        (void)sqlite3_finalize(sel);
+        return st;
+    }
+    tags_text = join_tags_space((const char *const *)tags, ntags);
+    if (tags_text == NULL) {
+        st = STORE_ERR_OOM;
+        goto cleanup;
+    }
+    st = write_folded_fts(db, entry_id, (const char *)sqlite3_column_text(sel, 0),
+                          (const char *)body_u, tags_text);
+
+cleanup:
     (void)sqlite3_finalize(sel);
     {
         size_t i = 0;
@@ -4331,6 +4552,9 @@ StoreStatus store_rekey(Store *s, long long id, RekeyKeys keys, StoreBin bin, co
     if (st == STORE_OK) {
         st = apply_vv_bump(s->db, entry_id, s->device_id, current.version_vector);
     }
+    if (st == STORE_OK) {
+        st = fts_resync(s->db, entry_id);
+    }
     store_entry_free(&current);
     if (st != STORE_OK) {
         rollback_quiet(s->db);
@@ -5723,7 +5947,7 @@ StoreStatus store_import(Store *dst, const char *src_path, const char *now,
         (void)sqlite3_close(src);
         return STORE_ERR_SQLITE;
     }
-    if (version < SCHEMA_VERSION) {
+    if (version < IMPORT_MIN_USER_VERSION) {
         (void)sqlite3_close(src);
         return STORE_ERR_SOURCE_TOO_OLD;
     }
