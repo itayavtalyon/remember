@@ -289,7 +289,7 @@ static const char k_links_sql[] =
 
 static const char k_sync_sql[] = K_CONFLICTS_SQL K_BUCKET_PREFIXES_SQL K_SETTINGS_SQL;
 
-enum { SCHEMA_VERSION = 5, UUID_STR_LEN = 36, UUID_BYTES = 16 };
+enum { SCHEMA_VERSION = 5, UUID_BYTES = 16, UUID_STR_LEN = STORE_DEVICE_ID_LEN };
 /* import --from-db still accepts a v4 source (E1.4). The >5 refusal is stage 5. */
 enum { IMPORT_MIN_USER_VERSION = 4 };
 /* RFC 4122 layout for canonical 8-4-4-4-12 and v7 mint. */
@@ -701,6 +701,79 @@ static int bind_current_identity(Store *s, char *err, size_t errlen)
         return -1;
     }
     return 0;
+}
+
+const char *store_device_id(const Store *s)
+{
+    if (s == NULL) {
+        return NULL;
+    }
+    return s->device_id;
+}
+
+static void fill_device_previous(char *prev_out, bool *had_prev, int file_rc, const char *previous)
+{
+    if (file_rc == 0) {
+        memcpy(prev_out, previous, (size_t)STORE_DEVICE_ID_LEN + 1U);
+        *had_prev = true;
+        return;
+    }
+    prev_out[0] = '\0';
+    *had_prev = false;
+}
+
+StoreStatus store_device_new(Store *s, char *prev_out, size_t prev_len, bool *had_prev, char *err,
+                             size_t errlen)
+{
+    char side[REMEMBER_PATH_MAX + SIDECAR_PATH_PAD];
+    char previous[UUID_STR_LEN + 1];
+    char minted[UUID_STR_LEN + 1];
+    char *next = NULL;
+    int file_rc = 0;
+
+    if (s == NULL || prev_out == NULL || had_prev == NULL ||
+        prev_len < (size_t)STORE_DEVICE_ID_LEN + 1U) {
+        set_err(err, errlen, "internal error");
+        return STORE_ERR_INTERNAL;
+    }
+    if (sidecar_path(s->path, side, sizeof(side)) != 0) {
+        set_err(err, errlen, "database path is too long");
+        return STORE_ERR_INTERNAL;
+    }
+    if (exec_sql(s->db, "BEGIN IMMEDIATE;", err, errlen) != 0) {
+        return STORE_ERR_SQLITE;
+    }
+    file_rc = read_sidecar(side, previous);
+    if (file_rc < 0) {
+        rollback_quiet(s->db);
+        set_err(err, errlen, "invalid device_id sidecar");
+        return STORE_ERR_INTERNAL;
+    }
+    if (mint_uuid_v7(minted) != 0) {
+        rollback_quiet(s->db);
+        set_err(err, errlen, "cannot mint device_id");
+        return STORE_ERR_INTERNAL;
+    }
+    /* Dup before the rename so an allocation failure leaves the old file. */
+    next = dup_str(minted);
+    if (next == NULL) {
+        rollback_quiet(s->db);
+        set_err(err, errlen, "out of memory");
+        return STORE_ERR_OOM;
+    }
+    if (write_sidecar(side, minted, err, errlen) != 0) {
+        free(next);
+        rollback_quiet(s->db);
+        return STORE_ERR_INTERNAL;
+    }
+    free(s->device_id);
+    s->device_id = next;
+    if (exec_sql(s->db, "COMMIT;", err, errlen) != 0) {
+        /* The transaction wrote nothing. The sidecar is already the new id. */
+        rollback_quiet(s->db);
+    }
+    fill_device_previous(prev_out, had_prev, file_rc, previous);
+    return STORE_OK;
 }
 
 static int backfill_sync_ids(sqlite3 *db, const char *device_id, char *err, size_t errlen)

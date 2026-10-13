@@ -77,6 +77,28 @@ Store *store_open(const char *path, char *err, size_t errlen);
 /* Close and free. Safe with NULL. */
 void store_close(Store *s);
 
+/* UUID text length of a device id, not counting the NUL. */
+enum { STORE_DEVICE_ID_LEN = 36 };
+
+/* Writer id bound at open. NULL if s is NULL. Valid until store_close or a
+ * successful store_device_new on the same handle. */
+const char *store_device_id(const Store *s);
+
+/*
+ * Mint a new sidecar id and bind it. Does not change any version_vector.
+ * Takes the same write lock as a missing-sidecar open, so parallel mints cannot
+ * share <path>.device_id.tmp.
+ * On STORE_OK, the sidecar and this handle both hold the new id. *had_prev is
+ * true and prev_out (STORE_DEVICE_ID_LEN + 1) holds the id the file had. A
+ * missing file sets *had_prev false and prev_out empty (JSON null). Open mints
+ * a missing file first, so a CLI call reports that id (D4). An invalid file
+ * is left unchanged. Allocation fails before the rename, so the file stays.
+ * err receives the open-path message. prev_out / had_prev are meaningful only
+ * on STORE_OK.
+ */
+StoreStatus store_device_new(Store *s, char *prev_out, size_t prev_len, bool *had_prev, char *err,
+                             size_t errlen);
+
 /* Release heap fields of *e and zero it. Safe with NULL e or zeroed Entry. */
 void store_entry_free(Entry *e);
 

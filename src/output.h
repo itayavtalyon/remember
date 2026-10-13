@@ -64,6 +64,13 @@ int output_related_human(FILE *out, const StoreNeighbor *links, size_t count, co
 /* import --json counts envelope (no entry dump). */
 int output_import_envelope(FILE *out, const StoreImportCounts *counts);
 
+/* device: plain id, or {"version":1,"device_id":"…"}. */
+int output_device_human(FILE *out, const char *device_id);
+int output_device_envelope(FILE *out, const char *device_id);
+
+/* device new JSON. previous NULL is JSON null (the file was missing). */
+int output_device_new_envelope(FILE *out, const char *device_id, const char *previous);
+
 /* conflicts --json list. */
 int output_conflicts_envelope(FILE *out, const StoreConflict *rows, size_t count);
 

@@ -325,6 +325,16 @@ Replaced tests:
 
 Schema and open tests that asserted `COUNT(*) FROM devices = 1` after a successful open now assert the table is absent. The rolled-back fault file is still v4 and still has one devices row.
 
+### 2026-10-13 — stage 4 (`device` / `device new`)
+
+`remember device` prints the sidecar id. `remember device new` mints a UUIDv7, writes the sidecar, and does not change any version vector. Plain output is the new id. `--json` is `{"version":1,"device_id":"…","previous":"…"}`.
+
+The plan's port omitted an error buffer. `store_device_new` takes the same `err` buffer as `store_open`, so `invalid device_id sidecar`, `cannot write device_id sidecar`, and `cannot mint device_id` stay plain `remember: …` exit 1 until plan 16 (D9). Statuses are `STORE_ERR_INTERNAL`, `STORE_ERR_OOM`, and `STORE_ERR_SQLITE`.
+
+The new id is duplicated before the rename. The handle pointer is swapped only after the rename succeeds, so an allocation failure leaves the old file. A failed rename frees that duplicate. The mint holds `BEGIN IMMEDIATE` across the read and the rename, the same lock and the same `<path>.device_id.tmp` as a missing-sidecar open. The transaction writes nothing. If that empty `COMMIT` fails after the sidecar is published, the mint still stands: memory already matches the file.
+
+Open mints a missing sidecar first (D4), so a CLI `device new` reports that id as `previous`. JSON `null` is only the type. A direct `output_device_new_envelope(..., NULL)` covers it. A store test unlinks the sidecar after open and checks `had_prev` is false. `UUID_STR_LEN` is `STORE_DEVICE_ID_LEN` (one length). Delete help no longer says hard wipe needs one device. Import help, README, and SKILL.md still mention devices or the hatch; stage 6 owns them.
+
 ## Review Notes
 
 ### 2026-10-13 — in-session deep review (stage 1)
@@ -449,3 +459,19 @@ Schema and open tests that asserted `COUNT(*) FROM devices = 1` after a successf
 **Nit (left):** `store_test_fail_sidecar_rename(int n)` uses only `n > 0`, so it is a flag.
 
 **Praise:** about 180 lines of `devices` reconciliation are gone. `ensure_device_identity` now has three branches (valid, missing, invalid). `read_sidecar` checks the trailing `fgetc` against `EOF` and `ferror`. The replaced-tests list in Implementation Notes names every 0.2.0 test and gives the reason.
+
+### 2026-10-13 — in-session deep review (stage 4)
+
+**Verdict:** approve for the second-opinion pass. No open blocking item. No grill.
+
+**Ran:** ctest 4/4 (ASan/UBSan), LINT OK, coverage 100% functions and 100% effective lines, `leaks-macos` PASS, `ci-linux.sh` OK. Device suite 6/6. Store unit 131/0. Facade byte-match for `device` and `device new` (ids masked).
+
+**Auto-fixed:** **important** — `store_device_new` published the sidecar and then adopted the id. An allocation failure after the rename left the file on the new id and the handle on the old one, so a later `device` in that process would not print the sidecar. The duplicate now happens first; the pointer moves only after the rename. Bugbot reported that pre-fix order. The fix is in this commit.
+
+**Nit (left):** the whole-plan must-pass row "facade byte-match for search after migrate" is not this stage's bullet. Store search-after-migrate and `facade_search` on a fresh v5 already exist.
+
+**Nit (left):** parallel `device new` has no test of its own. It uses the stage 3 lock (`BEGIN IMMEDIATE`, `busy_timeout` 5000, same temp name). The stage 3 test is `cli_parallel_opens_mint_one_sidecar_id`.
+
+**Nit (left for stage 6):** import help still says "register devices". README and SKILL.md still describe the device hatch.
+
+**Praise:** the version-vector test mints once, then updates. The vector keeps `"A":1` and gains `"B":1`. Human `device new` is the new id and nothing else.

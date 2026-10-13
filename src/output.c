@@ -821,6 +821,65 @@ int output_related_human(FILE *out, const StoreNeighbor *links, size_t count, co
     return 0;
 }
 
+static int write_device_id_field(FILE *out, const char *device_id)
+{
+    if (fputs("{\"version\":1,\"device_id\":", out) < 0) {
+        return -1;
+    }
+    return output_json_string(out, device_id);
+}
+
+int output_device_human(FILE *out, const char *device_id)
+{
+    if (out == NULL || device_id == NULL) {
+        return -1;
+    }
+    if (fprintf(out, "%s\n", device_id) < 0) {
+        return -1;
+    }
+    return 0;
+}
+
+int output_device_envelope(FILE *out, const char *device_id)
+{
+    if (out == NULL || device_id == NULL) {
+        return -1;
+    }
+    if (write_device_id_field(out, device_id) != 0) {
+        return -1;
+    }
+    if (fputs("}\n", out) < 0) {
+        return -1;
+    }
+    return 0;
+}
+
+/* device_id then previous: the new id, then the id it replaced (NULL is JSON null). */
+// NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
+int output_device_new_envelope(FILE *out, const char *device_id, const char *previous)
+{
+    if (out == NULL || device_id == NULL) {
+        return -1;
+    }
+    if (write_device_id_field(out, device_id) != 0) {
+        return -1;
+    }
+    if (fputs(",\"previous\":", out) < 0) {
+        return -1;
+    }
+    if (previous != NULL) {
+        if (output_json_string(out, previous) != 0) {
+            return -1;
+        }
+    } else if (fputs("null", out) < 0) {
+        return -1;
+    }
+    if (fputs("}\n", out) < 0) {
+        return -1;
+    }
+    return 0;
+}
+
 int output_import_envelope(FILE *out, const StoreImportCounts *counts)
 {
     if (out == NULL || counts == NULL) {

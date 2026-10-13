@@ -43,6 +43,7 @@ static void print_general_help(void)
                                "  import      Merge another remember database (--from-db)\n"
                                "  conflicts   List unresolved merge conflicts\n"
                                "  conflict    Resolve a merge conflict (accept)\n"
+                               "  device      Print the device id, or mint one with 'new'\n"
                                "  help        Show this help (help <command> for a command)\n"
                                "  version     Show version\n"
                                "\n"
@@ -108,7 +109,7 @@ static void print_command_help(CliCommand topic)
             (void)fprintf(out, "Human get prints the body, then a Related: block if any.\n");
         } else {
             (void)fprintf(out, "Unflagged delete soft-deletes (live or expired).\n");
-            (void)fprintf(out, "delete --expired|--deleted hard-wipes one row (needs 1 device).\n");
+            (void)fprintf(out, "delete --expired|--deleted hard-wipes one row.\n");
         }
         (void)fprintf(out, "\n");
     } else if (topic == CLI_CMD_UPDATE) {
@@ -249,6 +250,15 @@ static void print_command_help(CliCommand topic)
         (void)fprintf(out,
                       "both remints sync_id on concurrent_vv; clash keeps incoming sync_id.\n");
         (void)fprintf(out, "\n");
+    } else if (topic == CLI_CMD_DEVICE) {
+        (void)fprintf(out, "Prints the sidecar device id.\n");
+        (void)fprintf(out, "  remember device\n");
+        (void)fprintf(out, "  remember device new\n");
+        (void)fprintf(out, "\n");
+        (void)fprintf(out, "'device new' mints a new id and writes the sidecar.\n");
+        (void)fprintf(out, "Plain output is that id. It does not change a version vector.\n");
+        (void)fprintf(out, "JSON adds \"previous\" (null when the file was missing).\n");
+        (void)fprintf(out, "\n");
     }
     (void)fprintf(out, "Global options: --db PATH, --json, --help, --version\n");
     (void)fprintf(out, "See also: remember --help\n");
@@ -377,6 +387,8 @@ static int run(const CliArgs *args)
         return run_with_store(args, cmd_conflicts);
     case CLI_CMD_CONFLICT:
         return run_with_store(args, cmd_conflict);
+    case CLI_CMD_DEVICE:
+        return run_with_store(args, cmd_device);
     case CLI_CMD_NONE:
         /* Defensive: parse should set CLI_ERR_MISSING_COMMAND first. */
         (void)fprintf(app_err(), "remember: %s\n", cli_error_message(CLI_ERR_MISSING_COMMAND));

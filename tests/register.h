@@ -27,5 +27,6 @@ void register_sync_delete_tests(void);
 void register_sync_locators_tests(void);
 void register_sync_import_tests(void);
 void register_schema_v5_tests(void);
+void register_device_tests(void);
 
 #endif /* REMEMBER_REGISTER_H */

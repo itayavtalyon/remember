@@ -7,8 +7,14 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
 
-enum { SCHEMA_V5_LIMIT = 20, SCHEMA_V5_COMPARE_SQL = 1024, SCHEMA_V5_PREPARE_TRIES = 40 };
+enum {
+    SCHEMA_V5_LIMIT = 20,
+    SCHEMA_V5_COMPARE_SQL = 1024,
+    SCHEMA_V5_PREPARE_TRIES = 40,
+    DEVICE_COUNTER_BUF = 48
+};
 enum { SIDECAR_READ_BUF = 80, SIDECAR_FILE_BUF = 128 };
 /* Successful sqlite3_exec calls before CREATE settings on a v4 open:
    foreign_keys ON, busy_timeout, foreign_keys OFF, BEGIN IMMEDIATE,
@@ -742,12 +748,228 @@ TEST(schema_v5_invalid_sidecar_is_left_unchanged)
     assert_invalid_sidecar_unchanged("");
 }
 
+TEST(store_device_new_keeps_the_vector_until_the_next_edit)
+{
+    char *db = make_temp_db_path();
+    Store *s = NULL;
+    Entry entry;
+    StoreAddAction action = STORE_ADD_CREATED;
+    char previous[STORE_DEVICE_ID_LEN + 1];
+    char err[ERR_BUFSIZE];
+    char saved_vv[SIDECAR_FILE_BUF];
+    char old_id[STORE_DEVICE_ID_LEN + 1];
+    char old_counter[DEVICE_COUNTER_BUF];
+    char new_counter[DEVICE_COUNTER_BUF];
+    bool had_prev = false;
+    char *side = NULL;
+    struct stat st;
+
+    ASSERT_TRUE(db != NULL);
+    s = given_open(db);
+    if (s == NULL) {
+        free(db);
+        return;
+    }
+    memset(&entry, 0, sizeof(entry));
+    ASSERT_EQ_STATUS(store_add(s, "helix", k_hash_a, "pref:editor", NULL, 0U, "human", NULL, k_now,
+                               &action, &entry),
+                     STORE_OK);
+    ASSERT_TRUE(entry.version_vector != NULL);
+    ASSERT_TRUE(snprintf(saved_vv, sizeof(saved_vv), "%s",
+                         entry.version_vector != NULL ? entry.version_vector : "") > 0);
+    ASSERT_TRUE(store_device_id(s) != NULL);
+    ASSERT_TRUE(snprintf(old_id, sizeof(old_id), "%s",
+                         store_device_id(s) != NULL ? store_device_id(s) : "") > 0);
+    store_entry_free(&entry);
+
+    err[0] = '\0';
+    ASSERT_EQ_STATUS(store_device_new(s, previous, sizeof(previous), &had_prev, err, sizeof(err)),
+                     STORE_OK);
+    ASSERT_STREQ(err, "");
+    ASSERT_TRUE(had_prev);
+    ASSERT_STREQ(previous, old_id);
+    ASSERT_TRUE(strcmp(store_device_id(s), old_id) != 0);
+    side = sidecar_path(db);
+    {
+        char *line = read_sidecar_line(side);
+
+        ASSERT_STREQ(line != NULL ? line : "", store_device_id(s));
+        free(line);
+    }
+    ASSERT_EQ_INT(stat(side, &st), 0);
+    ASSERT_EQ_STATUS((st.st_mode & (unsigned)PERM_BITS_MASK), DB_FILE_PERMS);
+
+    memset(&entry, 0, sizeof(entry));
+    ASSERT_EQ_STATUS(store_get(s, 1, STORE_BIN_LIVE, k_now, &entry), STORE_OK);
+    ASSERT_STREQ(entry.version_vector, saved_vv);
+    store_entry_free(&entry);
+
+    memset(&entry, 0, sizeof(entry));
+    ASSERT_EQ_STATUS(store_update(s, 1, NULL, true, "nvim", k_hash_a, false, NULL, 0U, false, NULL,
+                                  false, STORE_BIN_LIVE, k_now, &entry, NULL),
+                     STORE_OK);
+    (void)snprintf(old_counter, sizeof(old_counter), "\"%s\":1", old_id);
+    (void)snprintf(new_counter, sizeof(new_counter), "\"%s\":1", store_device_id(s));
+    ASSERT_STR_CONTAINS(entry.version_vector, old_counter);
+    ASSERT_STR_CONTAINS(entry.version_vector, new_counter);
+    store_entry_free(&entry);
+    store_close(s);
+    free(side);
+    free(db);
+}
+
+TEST(store_device_new_missing_file_has_no_previous)
+{
+    char *db = make_temp_db_path();
+    Store *s = NULL;
+    Entry entry;
+    StoreAddAction action = STORE_ADD_CREATED;
+    char previous[STORE_DEVICE_ID_LEN + 1];
+    char err[ERR_BUFSIZE];
+    char saved_vv[SIDECAR_FILE_BUF];
+    bool had_prev = true;
+    char *side = NULL;
+
+    ASSERT_TRUE(db != NULL);
+    s = given_open(db);
+    if (s == NULL) {
+        free(db);
+        return;
+    }
+    memset(&entry, 0, sizeof(entry));
+    ASSERT_EQ_STATUS(
+        store_add(s, "helix", k_hash_a, NULL, NULL, 0U, "human", NULL, k_now, &action, &entry),
+        STORE_OK);
+    ASSERT_TRUE(snprintf(saved_vv, sizeof(saved_vv), "%s",
+                         entry.version_vector != NULL ? entry.version_vector : "") > 0);
+    store_entry_free(&entry);
+    side = sidecar_path(db);
+    ASSERT_EQ_INT(remove(side), 0);
+
+    err[0] = '\0';
+    previous[0] = 'x';
+    ASSERT_EQ_STATUS(store_device_new(s, previous, sizeof(previous), &had_prev, err, sizeof(err)),
+                     STORE_OK);
+    ASSERT_FALSE(had_prev);
+    ASSERT_STREQ(previous, "");
+    {
+        char *line = read_sidecar_line(side);
+
+        ASSERT_STREQ(line != NULL ? line : "", store_device_id(s));
+        free(line);
+    }
+    memset(&entry, 0, sizeof(entry));
+    ASSERT_EQ_STATUS(store_get(s, 1, STORE_BIN_LIVE, k_now, &entry), STORE_OK);
+    ASSERT_STREQ(entry.version_vector, saved_vv);
+    store_entry_free(&entry);
+    store_close(s);
+    free(side);
+    free(db);
+}
+
+TEST(store_device_new_invalid_sidecar_is_unchanged)
+{
+    char *db = make_temp_db_path();
+    Store *s = NULL;
+    char previous[STORE_DEVICE_ID_LEN + 1];
+    char err[ERR_BUFSIZE];
+    char old_id[STORE_DEVICE_ID_LEN + 1];
+    bool had_prev = false;
+    char *side = NULL;
+    char *before = NULL;
+    char *after = NULL;
+
+    ASSERT_TRUE(db != NULL);
+    s = given_open(db);
+    if (s == NULL) {
+        free(db);
+        return;
+    }
+    ASSERT_TRUE(snprintf(old_id, sizeof(old_id), "%s",
+                         store_device_id(s) != NULL ? store_device_id(s) : "") > 0);
+    side = sidecar_path(db);
+    write_text(side, "GARBAGE\n");
+    before = read_text(side);
+    err[0] = '\0';
+    ASSERT_EQ_STATUS(store_device_new(s, previous, sizeof(previous), &had_prev, err, sizeof(err)),
+                     STORE_ERR_INTERNAL);
+    ASSERT_STR_CONTAINS(err, "invalid device_id sidecar");
+    after = read_text(side);
+    ASSERT_STREQ(after != NULL ? after : "", before != NULL ? before : "");
+    ASSERT_STREQ(store_device_id(s), old_id);
+    store_close(s);
+    free(before);
+    free(after);
+    free(side);
+    free(db);
+}
+
+#ifdef REMEMBER_TEST_HOOKS
+TEST(store_device_new_rename_failure_keeps_the_old_id)
+{
+    char *db = make_temp_db_path();
+    Store *s = NULL;
+    char previous[STORE_DEVICE_ID_LEN + 1];
+    char err[ERR_BUFSIZE];
+    char old_id[STORE_DEVICE_ID_LEN + 1];
+    bool had_prev = false;
+    char *side = NULL;
+    char *tmp = NULL;
+
+    ASSERT_TRUE(db != NULL);
+    s = given_open(db);
+    if (s == NULL) {
+        free(db);
+        return;
+    }
+    ASSERT_TRUE(snprintf(old_id, sizeof(old_id), "%s",
+                         store_device_id(s) != NULL ? store_device_id(s) : "") > 0);
+    side = sidecar_path(db);
+    store_test_fail_sidecar_rename(1);
+    err[0] = '\0';
+    ASSERT_EQ_STATUS(store_device_new(s, previous, sizeof(previous), &had_prev, err, sizeof(err)),
+                     STORE_ERR_INTERNAL);
+    ASSERT_STR_CONTAINS(err, "cannot write device_id sidecar");
+    {
+        char *line = read_sidecar_line(side);
+
+        ASSERT_STREQ(line != NULL ? line : "", old_id);
+        free(line);
+    }
+    ASSERT_STREQ(store_device_id(s), old_id);
+    if (side != NULL) {
+        size_t tmp_len = strlen(side) + strlen(".tmp") + 1U;
+
+        tmp = (char *)malloc(tmp_len);
+        ASSERT_TRUE(tmp != NULL);
+        if (tmp != NULL) {
+            char *body = NULL;
+
+            (void)snprintf(tmp, tmp_len, "%s.tmp", side);
+            body = read_text(tmp);
+            ASSERT_TRUE(body == NULL);
+            free(body);
+            free(tmp);
+        }
+    }
+    store_close(s);
+    free(side);
+    free(db);
+}
+#endif
+
 void register_schema_v5_tests(void)
 {
     RUN_TEST(schema_v5_fresh_has_v5_objects);
     RUN_TEST(schema_v5_v4_missing_sidecar_mints_a_new_id);
     RUN_TEST(schema_v5_v4_sidecar_is_kept_and_devices_row_is_ignored);
     RUN_TEST(schema_v5_invalid_sidecar_is_left_unchanged);
+    RUN_TEST(store_device_new_keeps_the_vector_until_the_next_edit);
+    RUN_TEST(store_device_new_missing_file_has_no_previous);
+    RUN_TEST(store_device_new_invalid_sidecar_is_unchanged);
+#ifdef REMEMBER_TEST_HOOKS
+    RUN_TEST(store_device_new_rename_failure_keeps_the_old_id);
+#endif
     RUN_TEST(schema_v5_search_finds_key_word);
     RUN_TEST(schema_v5_rekey_search_follows_the_new_key);
     RUN_TEST(schema_v5_search_folds_hebrew_marks_in_the_row);

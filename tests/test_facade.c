@@ -99,8 +99,14 @@ static int facade_run(const char *db, const char *const *cmd, size_t ncmd, Facad
 /* Overwrite a "<field>":"VALUE" value with X's so timestamps do not break diff. */
 static void mask_field(char *s, const char *field)
 {
-    char *p = s;
-    size_t flen = strlen(field);
+    char *p = NULL;
+    size_t flen = 0;
+
+    if (s == NULL || field == NULL) {
+        return;
+    }
+    p = s;
+    flen = strlen(field);
 
     while ((p = strstr(p, field)) != NULL) {
         p += flen;
@@ -655,6 +661,74 @@ TEST(facade_conflict_accept_matches_cli)
 }
 // NOLINTEND(bugprone-command-processor,cert-env33-c,concurrency-mt-unsafe)
 
+static void mask_through_newline(char *text)
+{
+    char *cursor = text;
+
+    if (text == NULL) {
+        return;
+    }
+    while (*cursor != '\0' && *cursor != '\n') {
+        *cursor = 'X';
+        cursor++;
+    }
+}
+
+TEST(facade_device_matches_cli)
+{
+    char *db = make_temp_db_path();
+    const char *human[] = {"device"};
+    const char *json[] = {"--json", "device"};
+    const char *help[] = {"help", "device"};
+
+    ASSERT_TRUE(db != NULL);
+    assert_read_parity(db, human, sizeof(human) / sizeof(human[0]));
+    assert_read_parity(db, json, sizeof(json) / sizeof(json[0]));
+    assert_read_parity(db, help, sizeof(help) / sizeof(help[0]));
+    free(db);
+}
+
+TEST(facade_device_new_matches_cli)
+{
+    const char *json[] = {"--json", "device", "new"};
+    const char *human[] = {"device", "new"};
+    char *db1 = make_temp_db_path();
+    char *db2 = make_temp_db_path();
+    CmdResult sub;
+    char *fout = NULL;
+    char *ferr = NULL;
+    int frc = 0;
+
+    ASSERT_TRUE(db1 != NULL && db2 != NULL);
+    sub = run_remember(db1, json, sizeof(json) / sizeof(json[0]), NULL);
+    frc = facade_run(db2, json, sizeof(json) / sizeof(json[0]),
+                     (FacadeCapture){.out = &fout, .err = &ferr});
+    ASSERT_EQ_INT(frc, sub.exit_code);
+    mask_field(sub.out, "\"device_id\":\"");
+    mask_field(sub.out, "\"previous\":\"");
+    mask_field(fout, "\"device_id\":\"");
+    mask_field(fout, "\"previous\":\"");
+    ASSERT_STREQ(fout, sub.out);
+    ASSERT_STREQ(ferr, sub.err);
+    free(fout);
+    free(ferr);
+    cmd_result_free(&sub);
+
+    sub = run_remember(db1, human, sizeof(human) / sizeof(human[0]), NULL);
+    frc = facade_run(db2, human, sizeof(human) / sizeof(human[0]),
+                     (FacadeCapture){.out = &fout, .err = &ferr});
+    ASSERT_EQ_INT(frc, sub.exit_code);
+    mask_through_newline(sub.out);
+    mask_through_newline(fout);
+    ASSERT_STREQ(fout, sub.out);
+    ASSERT_STREQ(ferr, sub.err);
+    free(fout);
+    free(ferr);
+    cmd_result_free(&sub);
+    free(db1);
+    free(db2);
+}
+
 void register_facade_tests(void)
 {
     RUN_TEST(facade_list_matches_cli);
@@ -678,4 +752,6 @@ void register_facade_tests(void)
     RUN_TEST(facade_import_matches_cli);
     RUN_TEST(facade_conflicts_matches_cli);
     RUN_TEST(facade_conflict_accept_matches_cli);
+    RUN_TEST(facade_device_matches_cli);
+    RUN_TEST(facade_device_new_matches_cli);
 }
