@@ -515,3 +515,20 @@ A v4 fixture with no origin column, no `bucket_prefixes`, no `settings`, and one
 **Nit (left):** `probe_count` discards the count. Zero and one are both success, because this stage does not copy the rows. The v4 test (objects missing) and the v5 test (rows present, not copied) lock that.
 
 **Praise:** one string for `database is newer than this remember`. The version gate returns before any write on the destination. The source check compares file bytes, not only `user_version`.
+
+### 2026-10-14 — second-opinion deep review (stage 5)
+
+**Verdict:** stage 5 approved. No open blocking item. No code change.
+
+**Run, not read.** Gate: ctest 4/4 (ASan/UBSan), LINT OK, coverage 100% functions and 100% effective lines, `leaks-macos` PASS, `ci-linux.sh` OK. Probes on the built binary:
+
+- `import --from-db` of a `user_version` 6 source → exit 1 `database is newer than this remember`, and the destination stays empty. A v3 source → `source database is older than this remember`.
+- A real 0.2.0 v4 brain as the source → `inserted 4`. The source sha and mtime are unchanged, it stays at `user_version` 4, and no sidecar is created beside it.
+- A v5 source with a `settings` row and a `bucket_prefixes` row → imported. The source and its sidecar are byte-unchanged, and the destination `settings` and `bucket_prefixes` stay empty.
+- A non-database file or a missing path as the source → exit 1 `database error`, and no file is created. The vague text is plan 16's error work.
+
+**Grill (Itay 2026-10-14):** `probe_import_source` runs three read-only schema counts and discards each answer (`(void)n`), so today it changes no outcome. Itay chose to **keep it as scaffolding**. Plans 19 and 21 replace `(void)n` with a real use when they copy `bucket_prefixes` / `settings` / `conflicts.origin` rows.
+
+**Nit (left, plan 16):** the refusal of a v6 source says "database is newer than this remember" without naming the source, so a user may think their own brain is too new. The text is locked (E1.5 / stage 5 "same text"). Plan 16's `detail.path` can carry the source path.
+
+**Praise:** one `k_newer_database` string backs both open and import, so the two messages cannot drift. The gate is ordered so the probe never runs on a version this build does not understand. A failed probe returns before `BEGIN IMMEDIATE`.
