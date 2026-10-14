@@ -1106,6 +1106,78 @@ TEST(cli_conflict_accept_keep_incoming_key_clash_demotes)
 }
 
 /* Local VV strictly greater → unchanged (vv_compare *out = -1). */
+/* Search total for one word, from the JSON envelope. db, word, then the
+   expected "total" fragment. */
+// NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
+static void assert_search_total(const char *db, const char *word, const char *want_total)
+{
+    const char *args[] = {"--json", "search", word};
+    CmdResult r = run_remember(db, args, sizeof(args) / sizeof(args[0]), NULL);
+
+    ASSERT_EQ_INT(r.exit_code, 0);
+    ASSERT_STR_CONTAINS(r.out, want_total);
+    cmd_result_free(&r);
+}
+
+/* E1.2 on the import paths: an inserted row and an accepted incoming key both
+   land in the FTS key column; the replaced key word stops matching. */
+TEST(cli_import_insert_and_accept_incoming_resync_the_fts_key)
+{
+    char tmpl[] = "/tmp/remember-ftskey-XXXXXX";
+    const char *dir = NULL;
+    char local[PATH_BUF];
+    char foreign[PATH_BUF];
+    CmdResult r;
+    const char *add[] = {"add", "--key", "note:lemur", "shared body"};
+    const char *add_new[] = {"add", "--key", "imp:zebra", "foreign only"};
+    const char *rekey_local[] = {"rekey", "--key", "note:lemur", "--to-key", "note:aardvark"};
+    const char *rekey_foreign[] = {"rekey", "--key", "note:lemur", "--to-key", "note:bison"};
+    const char *imp[] = {"--json", "import", "--from-db", NULL};
+    const char *accept[] = {"conflict", "accept", "--id", "1", "--keep", "incoming"};
+
+    dir = mkdtemp(tmpl);
+    ASSERT_TRUE(dir != NULL);
+    if (dir == NULL) {
+        return;
+    }
+    (void)snprintf(local, sizeof(local), "%s/local.db", dir);
+    (void)snprintf(foreign, sizeof(foreign), "%s/foreign.db", dir);
+
+    r = run_remember(local, add, sizeof(add) / sizeof(add[0]), NULL);
+    ASSERT_EQ_INT(r.exit_code, 0);
+    cmd_result_free(&r);
+    {
+        char cmd[PATH_BUF * 2];
+        /* The copy has no sidecar, so its writes count under a new device id. */
+        (void)snprintf(cmd, sizeof(cmd), "cp '%s' '%s'", local, foreign);
+        ASSERT_EQ_INT(system(cmd), 0);
+    }
+    r = run_remember(foreign, add_new, sizeof(add_new) / sizeof(add_new[0]), NULL);
+    ASSERT_EQ_INT(r.exit_code, 0);
+    cmd_result_free(&r);
+    r = run_remember(local, rekey_local, sizeof(rekey_local) / sizeof(rekey_local[0]), NULL);
+    ASSERT_EQ_INT(r.exit_code, 0);
+    cmd_result_free(&r);
+    r = run_remember(foreign, rekey_foreign, sizeof(rekey_foreign) / sizeof(rekey_foreign[0]),
+                     NULL);
+    ASSERT_EQ_INT(r.exit_code, 0);
+    cmd_result_free(&r);
+
+    imp[3] = foreign;
+    r = run_remember(local, imp, sizeof(imp) / sizeof(imp[0]), NULL);
+    ASSERT_EQ_INT(r.exit_code, 0);
+    ASSERT_STR_CONTAINS(r.out, "\"inserted\":1");
+    ASSERT_STR_CONTAINS(r.out, "\"conflicts\":1");
+    cmd_result_free(&r);
+    assert_search_total(local, "zebra", "\"total\":1");
+
+    r = run_remember(local, accept, sizeof(accept) / sizeof(accept[0]), NULL);
+    ASSERT_EQ_INT(r.exit_code, 0);
+    cmd_result_free(&r);
+    assert_search_total(local, "bison", "\"total\":1");
+    assert_search_total(local, "aardvark", "\"total\":0");
+}
+
 TEST(cli_import_local_dominates_unchanged)
 {
     char tmpl[] = "/tmp/remember-locdom-XXXXXX";
@@ -2198,6 +2270,7 @@ void register_sync_import_tests(void)
     RUN_TEST(cli_import_incoming_dominates_updates);
     RUN_TEST(store_import_no_sidecar_copy_devices_stay_one);
     RUN_TEST(cli_conflict_accept_keep_local_and_incoming);
+    RUN_TEST(cli_import_insert_and_accept_incoming_resync_the_fts_key);
     RUN_TEST(cli_conflict_accept_keep_incoming_key_clash_demotes);
     RUN_TEST(cli_import_local_dominates_unchanged);
     RUN_TEST(cli_import_soft_deleted_and_expired_rows);

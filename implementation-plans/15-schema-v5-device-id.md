@@ -224,8 +224,8 @@ cmake --build build --target leaks-macos          # macOS only
       sidecar-only identity, hard wipe without the device hatch).
 - [x] `docs/engineering-notes.md` `store_open` bullet updated.
 - [x] Gate: ctest, lint, coverage 100/100, `ci-linux.sh` all green.
-- [ ] Second review done; no open **blocking** item.
-- [ ] `implementation-plans/INDEX.md` row marked ✅.
+- [x] Second review done; no open **blocking** item.
+- [x] `implementation-plans/INDEX.md` row marked ✅.
 
 ## Second review handover
 
@@ -566,3 +566,20 @@ README What's New has a v0.3.0 section with one line each for key search, Hebrew
 - Easy-to-replace: PASS
 - Orthogonal: PASS
 - Deferred markers added: none
+
+### 2026-10-14 — second-opinion deep review (stage 6, FINAL)
+
+**Verdict:** plan 15 is closed. No open blocking item. DoD is all checked, and the INDEX row is marked ✅.
+
+**Run, not read.** Full gate after the fixes below: ctest 4/4 (ASan/UBSan), LINT OK, coverage 100% functions and 100% effective lines, `leaks-macos` PASS, `ci-linux.sh` OK.
+
+**Docs check.** README What's New v0.3.0 has the five required lines. SKILL.md has a `device` section, FTS notes, v4-or-v5 import, and no hatch wording. The 006 Implementation Results record E1.2–E1.5, E10.1 (rows), and E14, with both grill amendments (the E1.3 conflicts rebuild and `device new` replacing an invalid sidecar). The Design section is unchanged. Import help no longer says "register devices" (the stage 3 nit). The README v0.2.0 table still names the hatch, which is accurate history.
+
+**Auto-fixed (gate re-run green):**
+
+- **important** — the DoD marked "every must-pass row green" and "test per path", but two must-pass rows had no test. They had only been checked by hand in the stage 1 probes.
+  - New `schema_v5_v4_body_and_tag_search_is_unchanged_by_migration`: four body/tag queries on the v4 fixture return the same ids in the same `rank` order before and after migration.
+  - New `cli_import_insert_and_accept_incoming_resync_the_fts_key`: an imported key (`imp:zebra`) is searchable, and after `conflict accept --keep incoming` the incoming key word matches and the replaced one does not. Mutation-checked: dropping `fts_resync` on the import insert fails it. Keyed `add` upsert never changes the key, so it needs no FTS-key test.
+- **nit** — `help device` said `"previous"` is "null when the file was missing". Per D4, open mints a missing (or now invalid) file first, so the CLI never prints null. The help now says "the id it replaced", which matches SKILL.md.
+
+**Carried forward:** the plan 16 nits (a source-naming `detail.path` on the v6 import refusal, and `database error` for a missing or non-database import source). The plan 19/21 use of `probe_import_source` stays (Itay: keep as scaffolding).

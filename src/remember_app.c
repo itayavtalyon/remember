@@ -259,7 +259,7 @@ static void print_command_help(CliCommand topic)
         (void)fprintf(out, "Run it after a restore or a copied brain.\n");
         (void)fprintf(out, "Plain output is that id. It does not change a version vector.\n");
         (void)fprintf(out, "It also replaces an invalid sidecar (no other command does).\n");
-        (void)fprintf(out, "JSON adds \"previous\" (null when the file was missing).\n");
+        (void)fprintf(out, "JSON adds \"previous\", the id it replaced.\n");
         (void)fprintf(out, "\n");
     }
     (void)fprintf(out, "Global options: --db PATH, --json, --help, --version\n");

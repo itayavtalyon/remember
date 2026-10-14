@@ -454,6 +454,43 @@ TEST(schema_v5_v4_migrates_to_the_fresh_schema)
     free(old);
 }
 
+/* Body/tag search gives the same ids in the same rank order before and after
+   v4 -> v5 (fixture query set; no word here is a key part). */
+TEST(schema_v5_v4_body_and_tag_search_is_unchanged_by_migration)
+{
+    static const char *const queries[] = {"notes", "tooling", "archivedword",
+                                          "notes OR archivedword OR tooling"};
+    enum { NQ = sizeof(queries) / sizeof(queries[0]) };
+    char *db = make_temp_db_path();
+    char *before[NQ] = {NULL};
+    char sql[SCHEMA_V5_COMPARE_SQL];
+    Store *s = NULL;
+    size_t i = 0;
+
+    ASSERT_TRUE(db != NULL);
+    given_v4_brain(db);
+    for (i = 0; i < NQ; i++) {
+        (void)snprintf(sql, sizeof(sql),
+                       "SELECT IFNULL(group_concat(rowid), '-') FROM (SELECT rowid FROM "
+                       "entries_fts WHERE entries_fts MATCH '%s' ORDER BY rank, rowid);",
+                       queries[i]);
+        before[i] = harness_sqlite_query_line(db, sql);
+    }
+    s = given_open(db);
+    store_close(s);
+    assert_query_is(db, (QueryExpect){.sql = "PRAGMA user_version;", .want = "5"});
+    for (i = 0; i < NQ; i++) {
+        (void)snprintf(sql, sizeof(sql),
+                       "SELECT IFNULL(group_concat(rowid), '-') FROM (SELECT rowid FROM "
+                       "entries_fts WHERE entries_fts MATCH '%s' ORDER BY rank, rowid);",
+                       queries[i]);
+        ASSERT_TRUE(before[i] != NULL && strcmp(before[i], "-") != 0);
+        assert_query_is(db, (QueryExpect){.sql = sql, .want = before[i] != NULL ? before[i] : ""});
+        free(before[i]);
+    }
+    free(db);
+}
+
 TEST(schema_v5_v4_missing_conflicts_creates_the_table)
 {
     char *db = make_temp_db_path();
@@ -1017,6 +1054,7 @@ void register_schema_v5_tests(void)
     RUN_TEST(schema_v5_rekey_search_follows_the_new_key);
     RUN_TEST(schema_v5_search_folds_hebrew_marks_in_the_row);
     RUN_TEST(schema_v5_v4_migrates_to_the_fresh_schema);
+    RUN_TEST(schema_v5_v4_body_and_tag_search_is_unchanged_by_migration);
     RUN_TEST(schema_v5_v4_missing_conflicts_creates_the_table);
 #ifdef REMEMBER_TEST_HOOKS
     RUN_TEST(schema_v5_fts_rebuild_prepare_failure_keeps_v4);
