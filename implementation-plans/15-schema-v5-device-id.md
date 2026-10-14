@@ -555,9 +555,9 @@ README What's New has a v0.3.0 section with one line each for key search, Hebrew
 
 **Auto-fixed:** **nit** — the What's New Hebrew line said "folded out of search", which can be read as query-side folding. It now says "folded out of the search index". Query-side folding stays plan 18.
 
-**Bugbot:** two runs died before any findings (connection interrupted). A manual DRY and orthogonality read of the diff replaced that pass. No new logic. The same sentences sit in help, SKILL.md, What's New, the `store_open` bullet, and the 006 Implementation Results because each of those readers was named for this stage.
+**Bugbot:** two runs died before any findings (connection interrupted). A later retry on the branch found one real gap: `demote_occupant_key` cleared `entries.key` and left the old key in `entries_fts`. `conflict accept --keep incoming` on a `key_clash` then still found the demoted row by that key. `fts_resync` now runs after that clear. `cli_conflict_accept_keep_incoming_key_clash_demotes` locks it (the search returned `total` 2, including body `L`, before the resync).
 
-**Left for the closer:** `implementation-plans/INDEX.md` stays unmarked until the second review closes the plan. The v0.2.0 What's New section still describes the single-device hatch as that release's behavior.
+The final review in `0ed577f` had already marked the INDEX row and deleted the review marker before this resync landed. The marker stays unset. The v0.2.0 What's New section still describes the single-device hatch as that release's behavior.
 
 **Praise:** import help no longer mentions a device registry, and the test fails if that phrase returns. 006 Design is unchanged. The two amendments are copied from the locked decision keys.
 

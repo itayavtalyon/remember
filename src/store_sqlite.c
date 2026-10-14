@@ -6550,6 +6550,9 @@ static StoreStatus demote_occupant_key(sqlite3 *db, long long occupant_id)
         return STORE_ERR_UNIQUE_TAKEN;
     }
     st = write_key(db, occupant_id, NULL);
+    if (st == STORE_OK) {
+        st = fts_resync(db, occupant_id);
+    }
     free(hash);
     store_entry_free(&e);
     return st;

@@ -1075,6 +1075,7 @@ TEST(cli_conflict_accept_keep_incoming_key_clash_demotes)
     const char *imp[] = {"--json", "import", "--from-db", NULL};
     const char *accept[] = {"--json", "conflict", "accept", "--id", "1", "--keep", "incoming"};
     const char *get_slot[] = {"--json", "get", "--key", "slot"};
+    const char *search_slot[] = {"--json", "search", "slot"};
 
     ASSERT_TRUE(local != NULL && foreign != NULL);
     r = run_remember(local, add_l, sizeof(add_l) / sizeof(add_l[0]), NULL);
@@ -1099,6 +1100,14 @@ TEST(cli_conflict_accept_keep_incoming_key_clash_demotes)
     ASSERT_EQ_INT(r.exit_code, 0);
     ASSERT_STR_CONTAINS(r.out, "\"body\":\"F\"");
     ASSERT_STR_CONTAINS(r.out, "\"key\":\"slot\"");
+    cmd_result_free(&r);
+
+    /* The demoted row is keyless. Search must not still hit it by the old key. */
+    r = run_remember(local, search_slot, sizeof(search_slot) / sizeof(search_slot[0]), NULL);
+    ASSERT_EQ_INT(r.exit_code, 0);
+    ASSERT_STR_CONTAINS(r.out, "\"total\":1");
+    ASSERT_STR_CONTAINS(r.out, "\"body\":\"F\"");
+    ASSERT_TRUE(strstr(r.out, "\"body\":\"L\"") == NULL);
     cmd_result_free(&r);
 
     free(local);
