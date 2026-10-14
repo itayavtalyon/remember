@@ -194,7 +194,7 @@ Rules:
 - Black-box CLI tests via harness (`--db` injected first).
 - Parser edges: missing `--db` value, unknown option, globals after command, subcommand help, topic help.
 - Collect-all asserts: guard against NULL deref after failed asserts (early return if dependent data missing).
-- Inspect-only cases may use `sqlite3` CLI.
+- Inspect-only cases may use `sqlite3` CLI. macOS CI puts Homebrew sqlite on `PATH` (`brew --prefix sqlite` is keg-only). `/usr/bin/sqlite3` cannot create or read `entries_fts` written by the vendored amalgamation, so a v4 fixture stays at `user_version` 0 and the next open dies with `table entries already exists`. `tests/test_store_sync.c` still checks FTS through `store_search`.
 - **`--only` group matching is exact comma-tokens**, not substring (`key` must not select `key_gld`). See `group_selected` in `tests/test_main.c`.
 - **Step gates should include every plan-required green test** for that step. Leaving green cases only in mixed red suites (`verification_edges`, full `key`) means ctest can pass while plan criteria silently regress.
 - **Gate suite names:** green get/list/delete slices are `key_gld` and `verification_gld` (not `*_add`). When step 06/07 lands, extend or rename deliberately — do not drop criteria by editing an outdated name.

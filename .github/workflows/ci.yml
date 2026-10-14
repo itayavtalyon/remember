@@ -79,6 +79,10 @@ jobs:
           # Drop untrusted preinstalled taps so brew install is not noisy/blocked.
           brew untap aws/tap 2>/dev/null || true
           brew install cmake ninja cppcheck sqlite
+          # sqlite is keg-only, so /usr/bin/sqlite3 would stay first. Schema tests
+          # shell out to sqlite3, including entries_fts. Apple's CLI cannot create
+          # or read FTS5 tables written by the vendored amalgamation (PR #22).
+          echo "$(brew --prefix sqlite)/bin" >> "$GITHUB_PATH"
           # LLVM provides clang-tidy, clang-format, scan-build. Pin the major
           # version: the unpinned `llvm` floats, and each release auto-enables new
           # checks under our `bugprone-*`/`readability-*` wildcards, turning a

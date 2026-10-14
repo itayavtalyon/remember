@@ -583,3 +583,5 @@ The final review in `0ed577f` had already marked the INDEX row and deleted the r
 - **nit** — `help device` said `"previous"` is "null when the file was missing". Per D4, open mints a missing (or now invalid) file first, so the CLI never prints null. The help now says "the id it replaced", which matches SKILL.md.
 
 **Carried forward:** the plan 16 nits (a source-naming `detail.path` on the v6 import refusal, and `database error` for a missing or non-database import source). The plan 19/21 use of `probe_import_source` stays (Itay: keep as scaffolding).
+
+**CI (2026-10-14, PR #28):** GitHub macOS failed `schema_v5_*` because ctest used `/usr/bin/sqlite3`. That CLI cannot create or read the vendored `entries_fts`, so `given_v4_brain` never reached `PRAGMA user_version=4` and open reported `table entries already exists`. The macOS job now prepends `$(brew --prefix sqlite)/bin`. Linux was already green.
