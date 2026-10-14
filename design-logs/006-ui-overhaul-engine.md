@@ -352,3 +352,15 @@ remember --db r.db add b              # (r.db chmod 444) exit 1: remember: datab
 
 - Remove `--trash` and `purge-trash` in a major version.
 - Sync registers multiple devices (Cloud log).
+
+## Implementation Results
+
+Shipped in plan 15 (branch `plan15-stage1-schema-v5`, 2026-10-13–14). The Design section above is unchanged.
+
+- E1.2. `fts_resync` writes the key (empty string when NULL), the body, and the tag names joined with one space. `store_rekey` resyncs that key before commit.
+- E1.3. v4 migrates to v5 on open in one `BEGIN IMMEDIATE`. **Amendment (Itay 2026-10-13, `decision:plan15-stage1-review-grill`):** step 5 rebuilds `conflicts` (rename the old table away, `CREATE` the canonical DDL, copy the rows, drop the old table) instead of `ALTER TABLE ... ADD COLUMN`, so `sqlite_master` text matches a fresh brain. Fresh and migrated schemas are the same set of statements. Order may differ.
+- E1.4. `import --from-db` accepts a v4 or v5 source, opened read-only and not migrated. A missing `origin` column, or a missing `bucket_prefixes` or `settings` table, means those values are absent.
+- E1.5. This build refuses `user_version` above 5 with `database is newer than this remember`. remember 0.2.x already refuses a v5 brain with that text.
+- E10.1 (rows). FTS rows drop U+0591–U+05BD, U+05BF, U+05C1–U+05C2, U+05C4–U+05C5 and U+05C7. `entries` keeps the original body. Query-side folding is plan 18.
+- E14.1–E14.3, E14.5, E14.7, E14.8. The sidecar `<db-path>.device_id` (mode 0600, one lowercase UUID) is the only device id. Open uses a valid sidecar and does not read a device id from the database. A missing sidecar is a new UUIDv7, including a v4 brain whose sidecar is gone; the `devices` row is not copied. `remember device` prints the id. Hard delete and purge run once open has a valid sidecar. `not_single_device` stays in the catalog and no v5 command returns it. `bucket_prefixes.device_id` and `version_vector` store device-id strings and do not reference a `devices` table.
+- E14.4 / E14.6. **Amendment (Itay 2026-10-13, `decision:plan15-device-new-replaces-invalid`):** `device new` always mints and replaces an invalid sidecar. Every other open, including `device` and `device new extra`, still exits 1 with `invalid device_id sidecar` and leaves the file unchanged. Version vectors do not change. Plain output is the new id. `--json` is `{"version":1,"device_id":"…","previous":"…"}`. `previous` is JSON `null` only in the type: open mints a missing or invalid file first, so the command reports that id.

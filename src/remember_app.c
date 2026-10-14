@@ -237,8 +237,8 @@ static void print_command_help(CliCommand topic)
         (void)fprintf(out, "  --from-db PATH  Source remember database (read-only)\n");
         (void)fprintf(out, "\n");
         (void)fprintf(out, "Merges by sync_id. Conflicts are recorded; exit 0 even if any.\n");
-        (void)fprintf(out, "Run 'conflicts' after import. Source must be schema v4+.\n");
-        (void)fprintf(out, "Does not copy the foreign device_id sidecar or register devices.\n");
+        (void)fprintf(out, "Run 'conflicts' after import. Source must be schema v4 or v5.\n");
+        (void)fprintf(out, "Does not copy the foreign device_id sidecar.\n");
         (void)fprintf(out, "\n");
     } else if (topic == CLI_CMD_CONFLICTS) {
         (void)fprintf(out, "Lists unresolved import conflicts. Takes no options.\n");
@@ -256,6 +256,7 @@ static void print_command_help(CliCommand topic)
         (void)fprintf(out, "  remember device new\n");
         (void)fprintf(out, "\n");
         (void)fprintf(out, "'device new' mints a new id and writes the sidecar.\n");
+        (void)fprintf(out, "Run it after a restore or a copied brain.\n");
         (void)fprintf(out, "Plain output is that id. It does not change a version vector.\n");
         (void)fprintf(out, "It also replaces an invalid sidecar (no other command does).\n");
         (void)fprintf(out, "JSON adds \"previous\" (null when the file was missing).\n");

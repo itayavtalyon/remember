@@ -210,20 +210,20 @@ cmake --build build --target leaks-macos          # macOS only
 
 ## Definition of Done
 
-- [ ] Design log 006 unchanged except new rows in its Implementation Results
+- [x] Design log 006 unchanged except new rows in its Implementation Results
       for E1.2–E1.5, E10.1 (rows), E14.
-- [ ] Every must-pass row green and included in `tests/gate-suites`.
-- [ ] Fresh and migrated schemas are identical; `user_version` 5.
-- [ ] No code path reads or writes a `devices` table; `require_single_device`
+- [x] Every must-pass row green and included in `tests/gate-suites`.
+- [x] Fresh and migrated schemas are identical; `user_version` 5.
+- [x] No code path reads or writes a `devices` table; `require_single_device`
       is gone; `not_single_device` is never returned.
-- [ ] Every key-changing path resyncs the FTS key column (test per path).
-- [ ] `device` / `device new` work in human and `--json`; facade byte-match.
-- [ ] Locked decisions D4, D9, P6 implemented as written.
-- [ ] Help, SKILL.md, README What's New (v0.3.0 section, one line per user-
+- [x] Every key-changing path resyncs the FTS key column (test per path).
+- [x] `device` / `device new` work in human and `--json`; facade byte-match.
+- [x] Locked decisions D4, D9, P6 implemented as written.
+- [x] Help, SKILL.md, README What's New (v0.3.0 section, one line per user-
       visible change: key is searchable, Hebrew marks folded, `device`,
       sidecar-only identity, hard wipe without the device hatch).
-- [ ] `docs/engineering-notes.md` `store_open` bullet updated.
-- [ ] Gate: ctest, lint, coverage 100/100, `ci-linux.sh` all green.
+- [x] `docs/engineering-notes.md` `store_open` bullet updated.
+- [x] Gate: ctest, lint, coverage 100/100, `ci-linux.sh` all green.
 - [ ] Second review done; no open **blocking** item.
 - [ ] `implementation-plans/INDEX.md` row marked ✅.
 
@@ -342,6 +342,20 @@ Open mints a missing sidecar first (D4), so a CLI `device new` reports that id a
 The source stays `SQLITE_OPEN_READONLY` and is not migrated. `probe_import_source` counts `conflicts.origin`, `bucket_prefixes`, and `settings` before the merge. A count of 0 is absent. Those rows are not copied (plans 19 and 21). `devices` is not queried. A failed probe returns before `BEGIN IMMEDIATE`, so the destination is unchanged.
 
 A v4 fixture with no origin column, no `bucket_prefixes`, no `settings`, and one `devices` row imports. The source bytes and `user_version` stay 4. The destination has the entry and no `devices` table. A v5 source that already has a settings row, a bucket prefix, and a conflict `origin` keeps those rows and its sidecar bytes. The destination does not gain them. `user_version` 6 is refused and the destination stays empty.
+
+### 2026-10-14 — stage 6 (docs + full gate)
+
+Help `device` already described `new`, `previous`, the version vector, and the invalid-sidecar repair. This stage adds when to run it: after a restore or a copied brain. Import help no longer says "register devices". The source line is "schema v4 or v5" (E1.4, E1.5). `cli_import_and_conflict_human_and_help` locks both sentences. `help_device_describes_new` locks the restore line and the repair line.
+
+SKILL.md: the device id is the sidecar; `device new` after a restore or a copied brain; `device new` also repairs an invalid sidecar. Hard delete and purge no longer mention the device hatch. Import no longer says it registers foreign devices. Search notes say the key is indexed and Hebrew marks are folded out of the index.
+
+README What's New has a v0.3.0 section with one line each for key search, Hebrew marks, `device`, sidecar-only identity, and hard wipe without the hatch. The v0.2.0 section stays as the history of that release. The version string stays 0.2.0 (plan 22).
+
+`docs/engineering-notes.md` `store_open` bullet now says v5, sidecar-only, and no device-count hatch, and that only `device new` replaces an invalid sidecar. The import bullet no longer says the adapter inserts foreign `devices`. `store.h` already said "never reads devices" (stage 5); this stage left that comment.
+
+`tests/gate-suites` already lists `schema_v5` and `device`. Nothing was added. `tests/COVERAGE.md` rows for `test_schema_v5.c`, `test_device.c`, and `test_sync_import.c` name those suites.
+
+006 Design is unchanged. Implementation Results records E1.2–E1.5, E10.1 (rows), and E14, including the two amendments already locked: the conflicts rebuild (`decision:plan15-stage1-review-grill`) and `device new` replacing an invalid sidecar (`decision:plan15-device-new-replaces-invalid`).
 
 ## Review Notes
 
@@ -532,3 +546,23 @@ A v4 fixture with no origin column, no `bucket_prefixes`, no `settings`, and one
 **Nit (left, plan 16):** the refusal of a v6 source says "database is newer than this remember" without naming the source, so a user may think their own brain is too new. The text is locked (E1.5 / stage 5 "same text"). Plan 16's `detail.path` can carry the source path.
 
 **Praise:** one `k_newer_database` string backs both open and import, so the two messages cannot drift. The gate is ordered so the probe never runs on a version this build does not understand. A failed probe returns before `BEGIN IMMEDIATE`.
+
+### 2026-10-14 — in-session deep review (stage 6)
+
+**Verdict:** approve for the second-opinion pass. No open blocking item. No grill.
+
+**Ran:** ctest 4/4 (ASan/UBSan), LINT OK, coverage 100% functions and 100% effective lines, `leaks-macos` PASS, `ci-linux.sh` OK. The import-help assertion failed first on `schema v4+` and `register devices`, then passed after the help change.
+
+**Auto-fixed:** **nit** — the What's New Hebrew line said "folded out of search", which can be read as query-side folding. It now says "folded out of the search index". Query-side folding stays plan 18.
+
+**Bugbot:** two runs died before any findings (connection interrupted). A manual DRY and orthogonality read of the diff replaced that pass. No new logic. The same sentences sit in help, SKILL.md, What's New, the `store_open` bullet, and the 006 Implementation Results because each of those readers was named for this stage.
+
+**Left for the closer:** `implementation-plans/INDEX.md` stays unmarked until the second review closes the plan. The v0.2.0 What's New section still describes the single-device hatch as that release's behavior.
+
+**Praise:** import help no longer mentions a device registry, and the test fails if that phrase returns. 006 Design is unchanged. The two amendments are copied from the locked decision keys.
+
+## Pragmatic write-gate
+- DRY: PASS
+- Easy-to-replace: PASS
+- Orthogonal: PASS
+- Deferred markers added: none

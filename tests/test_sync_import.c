@@ -1300,6 +1300,7 @@ TEST(cli_import_and_conflict_human_and_help)
     const char *add_f[] = {"add", "human-import-body"};
     const char *list[] = {"list"};
     const char *imp[] = {"import", "--from-db", NULL};
+    const char *help_import[] = {"help", "import"};
     const char *help_conflicts[] = {"help", "conflicts"};
     const char *help_conflict[] = {"help", "conflict"};
 
@@ -1316,6 +1317,13 @@ TEST(cli_import_and_conflict_human_and_help)
     ASSERT_EQ_INT(r.exit_code, 0);
     ASSERT_STR_CONTAINS(r.out, "inserted 1");
     ASSERT_STR_CONTAINS(r.out, "unchanged 0");
+    cmd_result_free(&r);
+
+    r = run_remember(local, help_import, sizeof(help_import) / sizeof(help_import[0]), NULL);
+    ASSERT_EQ_INT(r.exit_code, 0);
+    ASSERT_STR_CONTAINS(r.out, "schema v4 or v5");
+    ASSERT_STR_CONTAINS(r.out, "Does not copy the foreign device_id sidecar");
+    ASSERT_TRUE(strstr(r.out, "register devices") == NULL);
     cmd_result_free(&r);
 
     r = run_remember(local, help_conflicts, sizeof(help_conflicts) / sizeof(help_conflicts[0]),

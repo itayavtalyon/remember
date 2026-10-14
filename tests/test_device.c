@@ -291,6 +291,8 @@ TEST(help_device_describes_new)
     ASSERT_STR_CONTAINS(result.out, "device new");
     ASSERT_STR_CONTAINS(result.out, "previous");
     ASSERT_STR_CONTAINS(result.out, "version vector");
+    ASSERT_STR_CONTAINS(result.out, "restore or a copied brain");
+    ASSERT_STR_CONTAINS(result.out, "invalid sidecar");
     cmd_result_free(&result);
     free(db);
 }
