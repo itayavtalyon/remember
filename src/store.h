@@ -32,6 +32,7 @@ typedef enum {
     STORE_ERR_SELF_LINK,         /* from_id == to_id */
     STORE_ERR_CYCLE,             /* supersedes would cycle */
     STORE_ERR_SOURCE_TOO_OLD,    /* import --from-db: source user_version < 4 */
+    STORE_ERR_SOURCE_TOO_NEW,    /* import --from-db: source user_version > 5 */
     STORE_ERR_UNIQUE_TAKEN       /* accept cannot free key/hash without inventing a key */
 } StoreStatus;
 
@@ -370,8 +371,11 @@ typedef struct {
 /*
  * Merge another remember DB by sync_id (Round 7 VV / unique rules). Opens
  * src_path read-only inside the adapter (never store_open; never touches the
- * foreign sidecar; never INSERTs foreign devices). user_version < 4 →
- * STORE_ERR_SOURCE_TOO_OLD. Exit-path JSON: action imported + these counts;
+ * foreign sidecar; never reads devices). user_version < 4 →
+ * STORE_ERR_SOURCE_TOO_OLD. user_version > 5 → STORE_ERR_SOURCE_TOO_NEW
+ * ("database is newer than this remember"). A missing conflicts.origin column
+ * or a missing bucket_prefixes / settings table is absent, not an error; those
+ * rows are not copied. Exit-path JSON: action imported + these counts;
  * STORE_OK even when conflicts > 0.
  */
 StoreStatus store_import(Store *dst, const char *src_path, const char *now,

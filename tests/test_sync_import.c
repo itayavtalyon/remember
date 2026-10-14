@@ -211,6 +211,280 @@ TEST(cli_import_refuses_v3_source)
     free(foreign);
 }
 
+static void sqlite_exec(const char *db, const char *sql)
+{
+    free(harness_sqlite_query_line(db, sql));
+}
+
+static unsigned char *read_file(const char *path, size_t *out_n)
+{
+    FILE *f = NULL;
+    long len = 0;
+    unsigned char *buf = NULL;
+
+    if (path == NULL || out_n == NULL) {
+        return NULL;
+    }
+    f = fopen(path, "rb");
+    if (f == NULL) {
+        return NULL;
+    }
+    if (fseek(f, 0, SEEK_END) != 0) {
+        (void)fclose(f);
+        return NULL;
+    }
+    len = ftell(f);
+    if (len <= 0 || fseek(f, 0, SEEK_SET) != 0) {
+        (void)fclose(f);
+        return NULL;
+    }
+    buf = (unsigned char *)malloc((size_t)len);
+    if (buf == NULL || fread(buf, 1U, (size_t)len, f) != (size_t)len) {
+        free(buf);
+        (void)fclose(f);
+        return NULL;
+    }
+    (void)fclose(f);
+    *out_n = (size_t)len;
+    return buf;
+}
+
+static int file_matches(const char *path, const unsigned char *before, size_t n)
+{
+    size_t now_n = 0U;
+    unsigned char *now = NULL;
+    int same = 0;
+
+    now = read_file(path, &now_n);
+    if (now == NULL || before == NULL) {
+        free(now);
+        return 0;
+    }
+    same = (now_n == n && memcmp(now, before, n) == 0) ? 1 : 0;
+    free(now);
+    return same;
+}
+
+/* v4 shape: no origin column, no bucket_prefixes, no settings, one devices row. */
+static void given_v4_import_source(const char *db)
+{
+    sqlite_exec(db, "CREATE TABLE entries ("
+                    "id INTEGER PRIMARY KEY, key TEXT, body TEXT NOT NULL, "
+                    "body_hash TEXT NOT NULL, source TEXT NOT NULL, created_at TEXT NOT NULL, "
+                    "updated_at TEXT NOT NULL, expires_at TEXT, sync_id TEXT NOT NULL, "
+                    "deleted_at TEXT, version_vector TEXT NOT NULL);");
+    sqlite_exec(db, "CREATE TABLE tags (id INTEGER PRIMARY KEY, name TEXT NOT NULL UNIQUE);"
+                    "CREATE TABLE entry_tags ("
+                    "entry_id INTEGER NOT NULL, tag_id INTEGER NOT NULL, "
+                    "PRIMARY KEY (entry_id, tag_id));"
+                    "CREATE TABLE entry_links ("
+                    "from_id INTEGER NOT NULL, to_id INTEGER NOT NULL, kind TEXT NOT NULL, "
+                    "created_at TEXT NOT NULL, updated_at TEXT NOT NULL);");
+    sqlite_exec(db,
+                "CREATE TABLE devices ("
+                "device_id TEXT PRIMARY KEY, first_seen TEXT NOT NULL, last_seen TEXT NOT NULL);"
+                "CREATE TABLE conflicts ("
+                "id INTEGER PRIMARY KEY, sync_id TEXT NOT NULL, reason TEXT NOT NULL, "
+                "local_json TEXT NOT NULL, incoming_json TEXT NOT NULL, "
+                "created_at TEXT NOT NULL);");
+    sqlite_exec(db, "INSERT INTO entries(id, key, body, body_hash, source, created_at, updated_at, "
+                    "sync_id, version_vector) VALUES (1, 'pref:editor', 'notes', "
+                    "'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', "
+                    "'human', '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z', "
+                    "'018f6b2e-7c3a-7c00-8000-000000000001', "
+                    "'{\"018f6b2e-7c3a-7b2e-8f3a-7c3a7b2e8f3a\":1}');");
+    sqlite_exec(db, "INSERT INTO devices(device_id, first_seen, last_seen) VALUES "
+                    "('018f6b2e-7c3a-7b2e-8f3a-7c3a7b2e8f3a', '2026-01-01T00:00:00.000Z', "
+                    "'2026-01-01T00:00:00.000Z');"
+                    "PRAGMA user_version=4;");
+}
+
+TEST(cli_import_refuses_source_newer_than_v5)
+{
+    char *local = make_temp_db_path();
+    char *foreign = make_temp_db_path();
+    CmdResult r;
+    const char *add[] = {"--json", "add", "--key", "ka", "alpha"};
+    const char *list[] = {"--json", "list"};
+    const char *imp[] = {"--json", "import", "--from-db", NULL};
+    char *ver = NULL;
+
+    ASSERT_TRUE(local != NULL && foreign != NULL);
+    r = run_remember(local, list, sizeof(list) / sizeof(list[0]), NULL);
+    ASSERT_EQ_INT(r.exit_code, 0);
+    cmd_result_free(&r);
+    r = run_remember(foreign, add, sizeof(add) / sizeof(add[0]), NULL);
+    ASSERT_EQ_INT(r.exit_code, 0);
+    cmd_result_free(&r);
+    free(harness_sqlite_query_line(foreign, "PRAGMA user_version=6;"));
+    ver = harness_sqlite_query_line(foreign, "PRAGMA user_version;");
+    ASSERT_STREQ(ver, "6");
+    free(ver);
+
+    imp[3] = foreign;
+    r = run_remember(local, imp, sizeof(imp) / sizeof(imp[0]), NULL);
+    ASSERT_EQ_INT(r.exit_code, 1);
+    ASSERT_STR_CONTAINS(r.err, "database is newer than this remember");
+    cmd_result_free(&r);
+
+    ver = harness_sqlite_query_line(foreign, "PRAGMA user_version;");
+    ASSERT_STREQ(ver, "6");
+    free(ver);
+    r = run_remember(local, list, sizeof(list) / sizeof(list[0]), NULL);
+    ASSERT_EQ_INT(r.exit_code, 0);
+    ASSERT_STR_CONTAINS(r.out, "\"total\":0");
+    cmd_result_free(&r);
+    free(local);
+    free(foreign);
+}
+
+TEST(cli_import_v4_source_is_read_only_and_optional_objects_are_absent)
+{
+    char *local = make_temp_db_path();
+    char *foreign = make_temp_db_path();
+    char *side = NULL;
+    unsigned char *before = NULL;
+    size_t before_n = 0U;
+    CmdResult r;
+    const char *list[] = {"--json", "list"};
+    const char *imp[] = {"--json", "import", "--from-db", NULL};
+    const char *get[] = {"--json", "get", "--key", "pref:editor"};
+    char *line = NULL;
+
+    ASSERT_TRUE(local != NULL && foreign != NULL);
+    given_v4_import_source(foreign);
+    line = harness_sqlite_query_line(foreign, "PRAGMA user_version;");
+    ASSERT_STREQ(line, "4");
+    free(line);
+    line = harness_sqlite_query_line(
+        foreign, "SELECT COUNT(*) FROM pragma_table_info('conflicts') WHERE name='origin';");
+    ASSERT_STREQ(line, "0");
+    free(line);
+    line = harness_sqlite_query_line(
+        foreign, "SELECT name FROM sqlite_master WHERE type='table' AND name='bucket_prefixes';");
+    ASSERT_TRUE(line == NULL);
+    free(line);
+    line = harness_sqlite_query_line(
+        foreign, "SELECT name FROM sqlite_master WHERE type='table' AND name='settings';");
+    ASSERT_TRUE(line == NULL);
+    free(line);
+    before = read_file(foreign, &before_n);
+    ASSERT_TRUE(before != NULL);
+
+    r = run_remember(local, list, sizeof(list) / sizeof(list[0]), NULL);
+    ASSERT_EQ_INT(r.exit_code, 0);
+    cmd_result_free(&r);
+    imp[3] = foreign;
+    r = run_remember(local, imp, sizeof(imp) / sizeof(imp[0]), NULL);
+    ASSERT_EQ_INT(r.exit_code, 0);
+    ASSERT_STR_CONTAINS(r.out, "\"inserted\":1");
+    cmd_result_free(&r);
+
+    ASSERT_TRUE(file_matches(foreign, before, before_n));
+    line = harness_sqlite_query_line(foreign, "PRAGMA user_version;");
+    ASSERT_STREQ(line, "4");
+    free(line);
+    line = harness_sqlite_query_line(foreign, "SELECT device_id FROM devices;");
+    ASSERT_STREQ(line, "018f6b2e-7c3a-7b2e-8f3a-7c3a7b2e8f3a");
+    free(line);
+    side = sidecar_path(foreign);
+    ASSERT_TRUE(side != NULL);
+    ASSERT_TRUE(access(side, F_OK) != 0);
+    free(side);
+    line = harness_sqlite_query_line(
+        local, "SELECT name FROM sqlite_master WHERE type='table' AND name='devices';");
+    ASSERT_TRUE(line == NULL);
+    free(line);
+    line = harness_sqlite_query_line(local, "SELECT COUNT(*) FROM settings;");
+    ASSERT_STREQ(line, "0");
+    free(line);
+    line = harness_sqlite_query_line(local, "SELECT COUNT(*) FROM bucket_prefixes;");
+    ASSERT_STREQ(line, "0");
+    free(line);
+    r = run_remember(local, get, sizeof(get) / sizeof(get[0]), NULL);
+    ASSERT_EQ_INT(r.exit_code, 0);
+    ASSERT_STR_CONTAINS(r.out, "notes");
+    cmd_result_free(&r);
+    free(before);
+    free(local);
+    free(foreign);
+}
+
+TEST(cli_import_v5_source_is_read_only_and_optional_rows_stay_there)
+{
+    char *local = make_temp_db_path();
+    char *foreign = make_temp_db_path();
+    char *side = NULL;
+    unsigned char *before = NULL;
+    unsigned char *side_before = NULL;
+    size_t before_n = 0U;
+    size_t side_n = 0U;
+    CmdResult r;
+    const char *add[] = {"--json", "add", "--key", "ka", "alpha"};
+    const char *list[] = {"--json", "list"};
+    const char *imp[] = {"--json", "import", "--from-db", NULL};
+    char *line = NULL;
+
+    ASSERT_TRUE(local != NULL && foreign != NULL);
+    r = run_remember(foreign, add, sizeof(add) / sizeof(add[0]), NULL);
+    ASSERT_EQ_INT(r.exit_code, 0);
+    cmd_result_free(&r);
+    sqlite_exec(foreign, "INSERT INTO settings(name, value, updated_at) VALUES "
+                         "('ui.theme', 'dark', '2026-01-01T00:00:00.000Z');"
+                         "INSERT INTO bucket_prefixes(prefix, added_at, device_id) VALUES "
+                         "('work', '2026-01-01T00:00:00.000Z', "
+                         "'018f6b2e-7c3a-7b2e-8f3a-7c3a7b2e8f3a');"
+                         "INSERT INTO conflicts(sync_id, reason, local_json, incoming_json, "
+                         "created_at, origin) VALUES "
+                         "('018f6b2e-7c3a-7c00-8000-000000000009', 'concurrent_vv', "
+                         "'{\"l\":1}', '{\"i\":1}', '2026-01-01T00:00:00.000Z', 'other.db');");
+    line = harness_sqlite_query_line(
+        foreign, "SELECT COUNT(*) FROM pragma_table_info('conflicts') WHERE name='origin';");
+    ASSERT_STREQ(line, "1");
+    free(line);
+    line = harness_sqlite_query_line(
+        foreign, "SELECT name FROM sqlite_master WHERE type='table' AND name='devices';");
+    ASSERT_TRUE(line == NULL);
+    free(line);
+    before = read_file(foreign, &before_n);
+    side = sidecar_path(foreign);
+    ASSERT_TRUE(before != NULL && side != NULL);
+    side_before = read_file(side, &side_n);
+    ASSERT_TRUE(side_before != NULL);
+
+    r = run_remember(local, list, sizeof(list) / sizeof(list[0]), NULL);
+    ASSERT_EQ_INT(r.exit_code, 0);
+    cmd_result_free(&r);
+    imp[3] = foreign;
+    r = run_remember(local, imp, sizeof(imp) / sizeof(imp[0]), NULL);
+    ASSERT_EQ_INT(r.exit_code, 0);
+    ASSERT_STR_CONTAINS(r.out, "\"inserted\":1");
+    cmd_result_free(&r);
+
+    ASSERT_TRUE(file_matches(foreign, before, before_n));
+    ASSERT_TRUE(file_matches(side, side_before, side_n));
+    line = harness_sqlite_query_line(foreign, "PRAGMA user_version;");
+    ASSERT_STREQ(line, "5");
+    free(line);
+    line = harness_sqlite_query_line(foreign, "SELECT value FROM settings WHERE name='ui.theme';");
+    ASSERT_STREQ(line, "dark");
+    free(line);
+    line = harness_sqlite_query_line(local, "SELECT COUNT(*) FROM settings WHERE name='ui.theme';");
+    ASSERT_STREQ(line, "0");
+    free(line);
+    line = harness_sqlite_query_line(local, "SELECT COUNT(*) FROM bucket_prefixes;");
+    ASSERT_STREQ(line, "0");
+    free(line);
+    line = harness_sqlite_query_line(local, "SELECT COUNT(*) FROM conflicts;");
+    ASSERT_STREQ(line, "0");
+    free(line);
+    free(side_before);
+    free(side);
+    free(before);
+    free(local);
+    free(foreign);
+}
+
 TEST(cli_import_identical_automerge_concurrent_conflict)
 {
     char tmpl[] = "/tmp/remember-imp-XXXXXX";
@@ -1905,6 +2179,9 @@ void register_sync_import_tests(void)
 {
     RUN_TEST(cli_import_inserts_preserves_sync_id_remaps_links_no_device_register);
     RUN_TEST(cli_import_refuses_v3_source);
+    RUN_TEST(cli_import_refuses_source_newer_than_v5);
+    RUN_TEST(cli_import_v4_source_is_read_only_and_optional_objects_are_absent);
+    RUN_TEST(cli_import_v5_source_is_read_only_and_optional_rows_stay_there);
     RUN_TEST(cli_import_identical_automerge_concurrent_conflict);
     RUN_TEST(cli_import_key_clash_and_hash_clash_exit_0);
     RUN_TEST(cli_import_key_clash_reimport_idempotent);

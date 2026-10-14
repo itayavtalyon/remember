@@ -293,8 +293,9 @@ static const char k_links_sql[] =
 static const char k_sync_sql[] = K_CONFLICTS_SQL K_BUCKET_PREFIXES_SQL K_SETTINGS_SQL;
 
 enum { SCHEMA_VERSION = 5, UUID_BYTES = 16, UUID_STR_LEN = STORE_DEVICE_ID_LEN };
-/* import --from-db still accepts a v4 source (E1.4). The >5 refusal is stage 5. */
+/* import --from-db accepts 4 and 5. Above SCHEMA_VERSION uses the open message. */
 enum { IMPORT_MIN_USER_VERSION = 4 };
+static const char k_newer_database[] = "database is newer than this remember";
 /* RFC 4122 layout for canonical 8-4-4-4-12 and v7 mint. */
 enum {
     UUID_DASH_0 = 8,
@@ -835,7 +836,7 @@ static int check_version(int version, char *err, size_t errlen)
         return 0;
     }
     if (version > SCHEMA_VERSION) {
-        set_err(err, errlen, "database is newer than this remember");
+        set_err(err, errlen, k_newer_database);
     } else {
         set_err(err, errlen, "unsupported database version");
     }
@@ -1293,6 +1294,8 @@ const char *store_status_message(StoreStatus st)
         return "supersedes cycle";
     case STORE_ERR_SOURCE_TOO_OLD:
         return "source database is older than this remember";
+    case STORE_ERR_SOURCE_TOO_NEW:
+        return k_newer_database;
     case STORE_ERR_UNIQUE_TAKEN:
         return "cannot free unique key or body hash without inventing a key";
     default:
@@ -5909,6 +5912,53 @@ static StoreStatus import_remap_links(sqlite3 *dst, sqlite3 *src)
     return (rc == SQLITE_DONE) ? STORE_OK : STORE_ERR_SQLITE;
 }
 
+/* One existence count. 0 is absent. A sqlite error is -1. devices is never queried. */
+static int probe_count(sqlite3 *src, const char *sql)
+{
+    int n = 0;
+
+    if (select_int(src, sql, NULL, &n, NULL, 0U) != 0) {
+        return -1;
+    }
+    (void)n; /* 0 is absent and 1 is present. This stage does not copy the rows. */
+    return 0;
+}
+
+/* Read-only. Missing objects are absent, not an error. Row contents stay in the
+   source (bucket_prefixes and settings are plan 19; conflicts.origin is plan 21). */
+static int probe_import_source(sqlite3 *src)
+{
+    if (probe_count(src, "SELECT COUNT(*) FROM pragma_table_info('conflicts') WHERE "
+                         "name='origin';") != 0) {
+        return -1;
+    }
+    if (probe_count(src, "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND "
+                         "name='bucket_prefixes';") != 0) {
+        return -1;
+    }
+    if (probe_count(src, "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND "
+                         "name='settings';") != 0) {
+        return -1;
+    }
+    return 0;
+}
+
+/* Accept 4 and 5. Older keeps the source-too-old text. Newer uses the open text.
+   Probe only after the version is one this build understands. */
+static StoreStatus import_source_gate(sqlite3 *src, int version)
+{
+    if (version < IMPORT_MIN_USER_VERSION) {
+        return STORE_ERR_SOURCE_TOO_OLD;
+    }
+    if (version > SCHEMA_VERSION) {
+        return STORE_ERR_SOURCE_TOO_NEW;
+    }
+    if (probe_import_source(src) != 0) {
+        return STORE_ERR_SQLITE;
+    }
+    return STORE_OK;
+}
+
 StoreStatus store_import(Store *dst, const char *src_path, const char *now,
                          StoreImportCounts *out_counts)
 {
@@ -5937,9 +5987,10 @@ StoreStatus store_import(Store *dst, const char *src_path, const char *now,
         (void)sqlite3_close(src);
         return STORE_ERR_SQLITE;
     }
-    if (version < IMPORT_MIN_USER_VERSION) {
+    st = import_source_gate(src, version);
+    if (st != STORE_OK) {
         (void)sqlite3_close(src);
-        return STORE_ERR_SOURCE_TOO_OLD;
+        return st;
     }
 
     if (exec_sql(dst->db, "BEGIN IMMEDIATE;", err_unused, 0U) != 0) {

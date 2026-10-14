@@ -973,6 +973,32 @@ TEST(store_device_new_rename_failure_keeps_the_old_id)
     free(side);
     free(db);
 }
+
+TEST(store_import_probe_prepare_fail_imports_nothing)
+{
+    char *local = make_temp_db_path();
+    char *foreign = make_temp_db_path();
+    char err[ERR_BUFSIZE];
+    Store *dst = NULL;
+    Store *src = NULL;
+    StoreImportCounts counts;
+
+    ASSERT_TRUE(local != NULL && foreign != NULL);
+    dst = store_open(local, err, sizeof(err));
+    src = store_open(foreign, err, sizeof(err));
+    ASSERT_TRUE(dst != NULL && src != NULL);
+    store_close(src);
+    /* user_version prepare succeeds; the next prepare is the origin probe. */
+    store_test_fail_prepare_after(1);
+    memset(&counts, 0, sizeof(counts));
+    ASSERT_EQ_STATUS(store_import(dst, foreign, k_now, &counts), STORE_ERR_SQLITE);
+    store_test_fail_prepare_after(-1);
+    store_close(dst);
+    assert_query_is(foreign, (QueryExpect){.sql = "PRAGMA user_version;", .want = "5"});
+    assert_query_is(local, (QueryExpect){.sql = "SELECT COUNT(*) FROM entries;", .want = "0"});
+    free(local);
+    free(foreign);
+}
 #endif
 
 void register_schema_v5_tests(void)
@@ -996,6 +1022,7 @@ void register_schema_v5_tests(void)
     RUN_TEST(schema_v5_fts_rebuild_prepare_failure_keeps_v4);
     RUN_TEST(schema_v5_fault_after_step3_keeps_v4);
     RUN_TEST(schema_v5_v4_open_exec_fault_sweep);
+    RUN_TEST(store_import_probe_prepare_fail_imports_nothing);
 #endif
     RUN_TEST(fold_hebrew_marks_drops_the_listed_points);
     RUN_TEST(fold_hebrew_marks_copies_a_truncated_sequence);

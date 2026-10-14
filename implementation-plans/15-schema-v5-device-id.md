@@ -335,6 +335,14 @@ The new id is duplicated before the rename. The handle pointer is swapped only a
 
 Open mints a missing sidecar first (D4), so a CLI `device new` reports that id as `previous`. JSON `null` is only the type. A direct `output_device_new_envelope(..., NULL)` covers it. A store test unlinks the sidecar after open and checks `had_prev` is false. `UUID_STR_LEN` is `STORE_DEVICE_ID_LEN` (one length). Delete help no longer says hard wipe needs one device. Import help, README, and SKILL.md still mention devices or the hatch; stage 6 owns them.
 
+### 2026-10-14 — stage 5 (import sources v4 and v5)
+
+`store_import` accepts `user_version` 4 and 5. Below 4 is still `source database is older than this remember`. Above 5 is `STORE_ERR_SOURCE_TOO_NEW`, the same text as open (`database is newer than this remember`), from one string `k_newer_database`. The max is `SCHEMA_VERSION`.
+
+The source stays `SQLITE_OPEN_READONLY` and is not migrated. `probe_import_source` counts `conflicts.origin`, `bucket_prefixes`, and `settings` before the merge. A count of 0 is absent. Those rows are not copied (plans 19 and 21). `devices` is not queried. A failed probe returns before `BEGIN IMMEDIATE`, so the destination is unchanged.
+
+A v4 fixture with no origin column, no `bucket_prefixes`, no `settings`, and one `devices` row imports. The source bytes and `user_version` stay 4. The destination has the entry and no `devices` table. A v5 source that already has a settings row, a bucket prefix, and a conflict `origin` keeps those rows and its sidecar bytes. The destination does not gain them. `user_version` 6 is refused and the destination stays empty.
+
 ## Review Notes
 
 ### 2026-10-13 — in-session deep review (stage 1)
@@ -497,3 +505,13 @@ Open mints a missing sidecar first (D4), so a CLI `device new` reports that id a
 - For stage 6: record this amendment in the 006 Implementation Results (E14.4, E14.6). SKILL.md should say "`device new` also repairs an invalid sidecar".
 
 **Praise:** `store_device_new` takes the stage 3 write lock, so it cannot race a missing-sidecar open on the shared `.tmp`. The new id is duplicated before the rename, so an allocation failure leaves the old file. The facade byte-match masks ids (P6). `STORE_DEVICE_ID_LEN` is the single source of the UUID length.
+
+### 2026-10-14 — in-session deep review (stage 5)
+
+**Verdict:** approve for the second-opinion pass. No open blocking item. No grill.
+
+**Ran:** ctest 4/4 (ASan/UBSan; `install_skill` outside the sandbox), LINT OK, coverage 100% functions and 100% effective lines, `leaks-macos` PASS, `ci-linux.sh` OK. Import suite 32/0. Store unit 132/0. Bugbot reported no findings.
+
+**Nit (left):** `probe_count` discards the count. Zero and one are both success, because this stage does not copy the rows. The v4 test (objects missing) and the v5 test (rows present, not copied) lock that.
+
+**Praise:** one string for `database is newer than this remember`. The version gate returns before any write on the destination. The source check compares file bytes, not only `user_version`.
