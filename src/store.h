@@ -103,15 +103,20 @@ typedef struct {
     int sys_errno;          /* OS errno captured at the failure; 0 when none */
     StoreOpenReason reason; /* cannot_open only; NONE otherwise */
     bool fts_only;          /* corrupt is FTS-only (set by the stage 6 check) */
-    char pad_[3];           /* explicit tail padding (kept -Wpadded-clean) */
+    bool import_source;     /* the failing call ran on the import --from-db source */
+    char pad_[2];           /* explicit tail padding (kept -Wpadded-clean) */
 } StoreError;
 
 /* Open options (plan 16 stage 3). NULL opts means defaults (5000 ms, create).
  * Busy timeout and --no-create reach the CLI in stage 5. */
+enum { STORE_DEFAULT_BUSY_TIMEOUT_MS = 5000 };
+
 typedef struct {
-    int busy_timeout_ms; /* PRAGMA busy_timeout; used as given when opts != NULL */
-    bool no_create;      /* missing file fails instead of creating (E4.11) */
-    char pad_[3];        /* explicit tail padding (kept -Wpadded-clean) */
+    int busy_timeout_ms;          /* PRAGMA busy_timeout; used as given when opts != NULL */
+    bool no_create;               /* missing file fails instead of creating (E4.11) */
+    bool replace_invalid_sidecar; /* `device new` only: an invalid sidecar counts as
+                                     missing and is minted over (Itay 2026-10-13) */
+    char pad_[2];                 /* explicit tail padding (kept -Wpadded-clean) */
 } StoreOpenOpts;
 
 /* Open or create a store at path. Creates parent directories (mode 0700).
@@ -124,15 +129,10 @@ typedef struct {
  */
 Store *store_open(const char *path, char *err, size_t errlen);
 
-/* store_open for `device new` only: an invalid sidecar counts as missing and is
- * minted over under the write lock (Itay 2026-10-13). Every other open keeps
- * the E14.4 error. out_error follows store_open_opts (NULL means no detail). */
-Store *store_open_replacing_sidecar(const char *path, char *err, size_t errlen,
-                                    StoreError *out_error);
-
 /*
  * store_open with options and a structured SQLite failure. opts NULL means
- * defaults. out_error NULL means no detail. On failure with an SQLite cause,
+ * defaults (STORE_DEFAULT_BUSY_TIMEOUT_MS, create, keep an invalid sidecar an
+ * error). out_error NULL means no detail. On failure with an SQLite cause,
  * *out_error carries code/extended/name/message/errno (E4.7); otherwise it is
  * zeroed (the err text still names the failure). With no_create, a missing
  * file fails before any mkdir and creates nothing (D8).

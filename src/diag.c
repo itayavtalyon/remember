@@ -8,7 +8,6 @@
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdio.h>
-#include <stdlib.h>
 #include <string.h>
 
 /* See diag_set_json_errors. Deliberately mutable; one call at a time. */
@@ -272,48 +271,43 @@ static const char *const k_open_reasons[] = {
     [STORE_REASON_OTHER] = "other",
 };
 
-/* Heap-owned E4.8 message (E4.4: the JSON message is this same text). */
-static char *sqlite_plain_message(DiagCode code, const StoreError *detail)
-{
-    const SqliteAdvice *advice = (code == DIAG_DATABASE) ? NULL : &k_sqlite_advice[code];
-    int wrote = 0;
-    char *buf = NULL;
+/* The import --from-db source failed, not the brain (Itay 2026-10-15): the
+   causes a read-only source can hit name the source. Others keep the base row. */
+static const char k_source_fix[] = "Check the --from-db path.";
+static const SqliteAdvice k_source_advice[DIAG_CODE_COUNT] = {
+    [DIAG_BUSY] = {"the import source is locked by another process", k_source_fix},
+    [DIAG_CANNOT_OPEN] = {"cannot open the import source", k_source_fix},
+    [DIAG_NOT_A_DATABASE] = {"the import source is not a remember database", k_source_fix},
+    [DIAG_CORRUPT] = {"the import source is damaged", k_source_fix},
+};
 
+/* database has no cause; its fix is the E4.8 "Try again" sentence. */
+static const char k_database_fix[] =
+    "Try again. If it keeps happening, report the details from --json-errors.";
+
+/* E4.8 cause/fix for code, or NULL for database. corrupt + fts_only is the repair row. */
+static const SqliteAdvice *sqlite_advice(DiagCode code, const StoreError *detail)
+{
+    if (code == DIAG_DATABASE) {
+        return NULL;
+    }
+    if (detail->import_source && k_source_advice[code].cause != NULL) {
+        return &k_source_advice[code];
+    }
     if (code == DIAG_CORRUPT && detail->fts_only) {
-        advice = &k_sqlite_fts_advice;
+        return &k_sqlite_fts_advice;
     }
-    if (advice == NULL) {
-        wrote = snprintf(NULL, 0U,
-                         "database error (%s). Try again. If it keeps happening, report the "
-                         "details from --json-errors.",
-                         detail->sqlite_name);
-    } else {
-        wrote = snprintf(NULL, 0U, "database error: %s (%s). %s", advice->cause,
-                         detail->sqlite_name, advice->fix);
-    }
-    if (wrote < 0) {
-        return NULL;
-    }
-    buf = (char *)malloc((size_t)wrote + 1U);
-    if (buf == NULL) {
-        return NULL;
-    }
-    if (advice == NULL) {
-        (void)snprintf(buf, (size_t)wrote + 1U,
-                       "database error (%s). Try again. If it keeps happening, report the details "
-                       "from --json-errors.",
-                       detail->sqlite_name);
-    } else {
-        (void)snprintf(buf, (size_t)wrote + 1U, "database error: %s (%s). %s", advice->cause,
-                       detail->sqlite_name, advice->fix);
-    }
-    return buf;
+    return &k_sqlite_advice[code];
 }
 
-/* E4.9 detail members in E4.9 order: sqlite_code, sqlite_extended, sqlite_name
-   and sqlite_message always; then the code-gated members. abs_path is NULL
-   when omitted. */
-static int write_sqlite_required(FILE *err, const StoreError *detail)
+/* Every part is bounded (cause < 50, sqlite_name < STORE_SQLITE_NAME_LEN, fix
+   < 140), so one stack line holds the longest E4.8 text. */
+enum { SQLITE_LINE_BUF = 512 };
+
+/* E4.9 detail members in E4.9 order: sqlite_code, sqlite_extended, sqlite_name,
+   sqlite_message and fix always (fix: Itay 2026-10-15); then the code-gated
+   members. abs_path is NULL when omitted. */
+static int write_sqlite_required(FILE *err, const StoreError *detail, const char *fix)
 {
     if (fprintf(err, ",\"detail\":{\"sqlite_code\":%d,\"sqlite_extended\":%d", detail->sqlite_code,
                 detail->sqlite_extended) < 0) {
@@ -331,7 +325,10 @@ static int write_sqlite_required(FILE *err, const StoreError *detail)
     if (output_json_string(err, detail->sqlite_message) != 0) {
         return -1;
     }
-    return 0;
+    if (fputs(",\"fix\":", err) < 0) {
+        return -1;
+    }
+    return output_json_string(err, fix);
 }
 
 /* E4.7 reason names; an out-of-range reason can never come from the store and
@@ -403,10 +400,12 @@ static int write_sqlite_optional(FILE *err, DiagCode code, const StoreError *det
     return 0;
 }
 
-static int write_sqlite_detail(FILE *err, DiagCode code, const StoreError *detail,
+/* fix then abs_path: the E4.8 fix sentence, then the optional E4.9 path. */
+// NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
+static int write_sqlite_detail(FILE *err, DiagCode code, const StoreError *detail, const char *fix,
                                const char *abs_path)
 {
-    if (write_sqlite_required(err, detail) != 0) {
+    if (write_sqlite_required(err, detail, fix) != 0) {
         return -1;
     }
     return write_sqlite_optional(err, code, detail, abs_path);
@@ -416,7 +415,9 @@ static int write_sqlite_detail(FILE *err, DiagCode code, const StoreError *detai
 int diag_error_sqlite(DiagCode code, const StoreError *detail, const char *path)
 {
     const char *name = NULL;
-    char *message = NULL;
+    const SqliteAdvice *advice = NULL;
+    const char *fix = k_database_fix;
+    char line[SQLITE_LINE_BUF];
     char absolute[REMEMBER_PATH_MAX];
     const char *abs_path = NULL;
     FILE *err = NULL;
@@ -425,44 +426,48 @@ int diag_error_sqlite(DiagCode code, const StoreError *detail, const char *path)
         return -1;
     }
     name = diag_code_name(code);
-    if (name == NULL) {
-        return -1;
+    advice = sqlite_advice(code, detail);
+    if (advice != NULL) {
+        fix = advice->fix;
     }
-    /* D7: only an absolute path is emitted; a path that will not absolutize
-       is omitted rather than emitted relative. */
-    if (sqlite_code_has_path(code) && path != NULL) {
-        if (util_absolute_path(path, absolute, sizeof(absolute)) == 0) {
-            abs_path = absolute;
-        }
-    }
-    message = sqlite_plain_message(code, detail);
-    if (message == NULL) {
-        return -1;
-    }
-    err = app_err();
     if (!g_json_errors) {
-        int rc = write_notice((Notice){
+        /* E4.8 plain line: cause, extended name, fix. */
+        if (advice == NULL) {
+            (void)snprintf(line, sizeof(line), "database error (%s). %s", detail->sqlite_name, fix);
+        } else {
+            (void)snprintf(line, sizeof(line), "database error: %s (%s). %s", advice->cause,
+                           detail->sqlite_name, fix);
+        }
+        return write_notice((Notice){
             .json_kind = "error",
             .plain_prefix = "",
             .code = name,
-            .message = message,
+            .message = line,
             .json_errors = false,
         });
-        free(message);
-        return rc;
     }
-    if (write_json_notice_head(err, "error", name, message) != 0) {
-        free(message);
+    /* JSON (Itay 2026-10-15, amends E4.4 for SQLite codes): a short message,
+       the fix in detail.fix. */
+    if (advice == NULL) {
+        (void)snprintf(line, sizeof(line), "database error");
+    } else {
+        (void)snprintf(line, sizeof(line), "database error: %s", advice->cause);
+    }
+    /* D7: only an absolute path is emitted; a path that will not absolutize
+       is omitted rather than emitted relative. */
+    if (sqlite_code_has_path(code) && path != NULL &&
+        util_absolute_path(path, absolute, sizeof(absolute)) == 0) {
+        abs_path = absolute;
+    }
+    err = app_err();
+    if (write_json_notice_head(err, "error", name, line) != 0) {
         return -1;
     }
-    if (write_sqlite_detail(err, code, detail, abs_path) != 0) {
-        free(message);
+    if (write_sqlite_detail(err, code, detail, fix, abs_path) != 0) {
         return -1;
     }
     if (fputs("}}\n", err) < 0) {
-        free(message);
         return -1;
     }
-    free(message);
     return 0;
 }

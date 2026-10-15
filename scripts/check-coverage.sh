@@ -189,6 +189,7 @@ DEFENSIVE = re.compile(
     |^\s*g_fail_\w+\s*--
     |^\s*set_errf?\s*\(
     |^\s*capture_sqlite_error\s*\(        # snapshot before finalize/rollback (plan 16)
+    |^\s*capture_source_error\s*\(        # same snapshot on the import source handle
     |^\s*rollback_quiet\s*\(
     |^\s*savepoint_undo\s*\(
     |^\s*\(void\)exec_sql\s*\(

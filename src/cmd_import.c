@@ -53,6 +53,11 @@ int cmd_import(Store *s, bool json, int rest_argc, const char **rest_argv)
         return REMEMBER_ERR;
     }
     st = store_import(s, from_db, now, &counts);
+    if (st == STORE_ERR_SQLITE && store_last_error(s)->import_source) {
+        /* The source failed, not the brain: name the --from-db file. */
+        err_store_sqlite(store_last_error(s), from_db);
+        return REMEMBER_ERR;
+    }
     if (st != STORE_OK) {
         return store_status_to_exit(s, st);
     }

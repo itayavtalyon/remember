@@ -493,3 +493,39 @@ Change: `diag_warning(code, message, json_errors)` drops `exit_code`; plain pref
 **Nit (left; stage 3 and later):** `code_for_store_text` maps store error *text* to codes. That is the locked bridge (`decision:plan16-open-message-codes`) until stage 3 adds structured store errors. `code_for_cmd_text` does the same for command helpers, which return only a string. The golden table now pins every family it routes, so a reworded sentence fails a test. Plan 16 or a later plan could let those helpers return their code, which would delete the classifier.
 
 **Praise:** `err_store` puts the StoreStatus → code switch next to `store_status_message`, as the plan asks. `err_fmt` keeps long unknown-option text without truncating it (it has its own test). Parse errors map through one `code_for_cli_error` switch.
+
+### 2026-10-15 — second-opinion deep review (stage 3)
+
+**Verdict:** stage 3 approved after three grill-decided changes and one auto-fixed simplification. No open blocking item.
+
+**Run, not read.** Gate (after the changes): ctest 4/4 (ASan/UBSan), LINT OK, coverage 100% functions and 100% effective lines, `leaks-macos` PASS, `ci-linux.sh` OK. Acceptance on macOS (uid 501, real binary):
+
+| Case | Code | `sqlite_name` (macOS) | Detail |
+|------|------|------------------------|--------|
+| file 444 + `add` | `read_only` | `SQLITE_READONLY` (8) | absolute `path` |
+| folder 555 + `add` | `read_only` | `SQLITE_READONLY_DIRECTORY` (1544), same as Linux | absolute `path` |
+| file 000 | `cannot_open` | `SQLITE_CANTOPEN` (14), errno 13 | `reason` `permission` |
+| folder as path | `cannot_open` | `SQLITE_CANTOPEN` (14, not 526), errno 21 | `reason` `is_directory` |
+| text file | `not_a_database` | `SQLITE_NOTADB` (26) | absolute `path` |
+| truncated brain | `corrupt` | `SQLITE_CORRUPT` (11) | `fts_only` false |
+| `--db ./sub/../sub/r.db` (444) | `read_only` | `SQLITE_READONLY` | `path` = cwd + `/sub/r.db` (D7) |
+
+Capture runs right after the failing call, before finalize or ROLLBACK (the hot spot). `exec_sql` retries SCHEMA once.
+
+**Grill 1 (Itay 2026-10-15): JSON shape for SQLite errors (amends E4.4 for the eight SQLite codes).** 006 contradicted itself: E4.4 says `message` = plain line minus the prefix, but the E4.8 table has a short `message` column. Itay's answer: `message` = `database error: <cause>` (`database error` for code `database`). `detail` gains `fix` (the E4.8 fix sentence) right after `sqlite_message`. `code` stays the catalog token, and the SQLite name stays in `detail.sqlite_name`. The plain stderr line is unchanged. `diag_error_sqlite` now writes one bounded stack line in place of the measure → malloc → format → free sequence.
+
+**Grill 2 (Itay 2026-10-15): name the import source.** `import --from-db /missing.db` used to say "cannot open the brain file", with `detail.path` = the user's healthy brain. `StoreError.import_source` is set by `capture_source_error` (every source-handle capture) and by the source-only version read and gate. `cmd_import` reports with the `--from-db` path, so `detail.path` is the source. The cause names "the import source" for `busy`, `cannot_open`, `not_a_database` and `corrupt`, and the fix is `Check the --from-db path.` Other causes keep the base row. The golden import row is updated.
+
+**Grill 3 (Itay 2026-10-15, simplicity lens): one open with options.** `store_open_replacing_sidecar` is gone. `StoreOpenOpts.replace_invalid_sidecar` replaces it, `store_open_opts` is the single implementation, and `store_open` is `store_open_opts(path, NULL, …)`. `STORE_DEFAULT_BUSY_TIMEOUT_MS` moves to `store.h`, so the CLI's `opts` starts from the real default (a zeroed struct would mean a busy timeout of 0). Stage 5 sets `--busy-timeout` / `--no-create` on the same struct.
+
+**Auto-fixed (simplicity lens, behaviour-neutral):**
+
+- The E4.7 class table had 59 rows. 55 of them only restated what `classify_extended`'s primary-code switch already returns; I checked this mechanically against the pre-change file. 4 rows remain, each a real exception or a D6 marker: `NOMEM`, `IOERR_NOMEM`, `READONLY_DBMOVED`, `IOERR_SHORT_READ`.
+- The two parallel 74-entry arrays (codes and names, plus a `_Static_assert` tying their lengths) are now one `{name, code}` table, so a name cannot drift from its code.
+- `store_sqlite.c` is a net 123 lines shorter, including the import-source addition. The mapping tests (`store_test_classify_extended` table, names, reasons) pass unchanged.
+
+**Gate follow-ups (all fixed before commit):** the coverage script now treats `capture_source_error(` as a defensive snapshot line, the same class as `capture_sqlite_error(`. The source version-read branch is covered by the new `cli_import_text_source_names_the_source` (a text file as `--from-db` gives `not_a_database`, source wording, and `detail.path` = the source). After the stack-buffer change, Linux IWYU removed `<stdlib.h>` from `diag.c`. Two clang-tidy fixes: an order comment on `write_sqlite_detail`, and an `if` instead of an int→bool `&&` assignment in `open_store`.
+
+**Nit (left):** `diag.h` includes `store.h` so `diag_error_sqlite` can take a `StoreError`. The emitter now knows a store type. A diag-local detail struct would decouple them, at the cost of a copy at the one call site. Left as is.
+
+**Praise:** `store.h` stays SQLite-free. One capture helper feeds every failure site. The cannot_open reason table matches the plan's observed facts on macOS too.

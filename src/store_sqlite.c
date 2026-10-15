@@ -382,6 +382,9 @@ static void set_errf(char *err, size_t errlen, const char *prefix, const char *d
 /* Primary result code: the low byte of an extended code. */
 enum { SQLITE_PRIMARY_CODE_MASK = 0xFF };
 
+/* Only the codes whose class differs from their primary code's row; every
+   other code (all BUSY_*, LOCKED_*, READONLY_*, CANTOPEN_*, CORRUPT_*, IOERR_*)
+   lands on its primary in classify_extended. */
 static const struct {
     int extended;
     StoreErrorClass error_class;
@@ -389,72 +392,10 @@ static const struct {
     /* D6: allocation failures are database, never io_error. */
     {SQLITE_NOMEM, STORE_ERROR_DATABASE},
     {SQLITE_IOERR_NOMEM, STORE_ERROR_DATABASE},
-    /* busy row */
-    {SQLITE_BUSY, STORE_ERROR_BUSY},
-    {SQLITE_BUSY_RECOVERY, STORE_ERROR_BUSY},
-    {SQLITE_BUSY_SNAPSHOT, STORE_ERROR_BUSY},
-    {SQLITE_BUSY_TIMEOUT, STORE_ERROR_BUSY},
-    {SQLITE_LOCKED, STORE_ERROR_BUSY},
-    {SQLITE_LOCKED_SHAREDCACHE, STORE_ERROR_BUSY},
-    {SQLITE_LOCKED_VTAB, STORE_ERROR_BUSY},
-    {SQLITE_PROTOCOL, STORE_ERROR_BUSY},
-    /* moved read-only databases cannot be reopened: cannot_open, not read_only */
+    /* A moved read-only database cannot be reopened: cannot_open, not read_only. */
     {SQLITE_READONLY_DBMOVED, STORE_ERROR_CANNOT_OPEN},
-    /* read_only row */
-    {SQLITE_READONLY, STORE_ERROR_READ_ONLY},
-    {SQLITE_READONLY_RECOVERY, STORE_ERROR_READ_ONLY},
-    {SQLITE_READONLY_CANTLOCK, STORE_ERROR_READ_ONLY},
-    {SQLITE_READONLY_ROLLBACK, STORE_ERROR_READ_ONLY},
-    {SQLITE_READONLY_CANTINIT, STORE_ERROR_READ_ONLY},
-    {SQLITE_READONLY_DIRECTORY, STORE_ERROR_READ_ONLY},
-    /* disk_full row */
-    {SQLITE_FULL, STORE_ERROR_DISK_FULL},
-    /* cannot_open row (primary 14 plus every CANTOPEN_* the table names) */
-    {SQLITE_CANTOPEN, STORE_ERROR_CANNOT_OPEN},
-    {SQLITE_CANTOPEN_NOTEMPDIR, STORE_ERROR_CANNOT_OPEN},
-    {SQLITE_CANTOPEN_ISDIR, STORE_ERROR_CANNOT_OPEN},
-    {SQLITE_CANTOPEN_FULLPATH, STORE_ERROR_CANNOT_OPEN},
-    {SQLITE_CANTOPEN_CONVPATH, STORE_ERROR_CANNOT_OPEN},
-    {SQLITE_CANTOPEN_DIRTYWAL, STORE_ERROR_CANNOT_OPEN},
-    {SQLITE_CANTOPEN_SYMLINK, STORE_ERROR_CANNOT_OPEN},
-    {SQLITE_PERM, STORE_ERROR_CANNOT_OPEN},
-    /* not_a_database row */
-    {SQLITE_NOTADB, STORE_ERROR_NOT_A_DATABASE},
-    /* corrupt row (a short read means the file ends mid-page: damage) */
-    {SQLITE_CORRUPT, STORE_ERROR_CORRUPT},
-    {SQLITE_CORRUPT_VTAB, STORE_ERROR_CORRUPT},
-    {SQLITE_CORRUPT_SEQUENCE, STORE_ERROR_CORRUPT},
-    {SQLITE_CORRUPT_INDEX, STORE_ERROR_CORRUPT},
+    /* A short read means the file ends mid-page: damage, not io_error. */
     {SQLITE_IOERR_SHORT_READ, STORE_ERROR_CORRUPT},
-    /* io_error row: plain IOERR plus every other IOERR_* (see the primary
-       fallback in classify_extended for variants this table does not name). */
-    {SQLITE_IOERR, STORE_ERROR_IO_ERROR},
-    {SQLITE_IOERR_READ, STORE_ERROR_IO_ERROR},
-    {SQLITE_IOERR_WRITE, STORE_ERROR_IO_ERROR},
-    {SQLITE_IOERR_FSYNC, STORE_ERROR_IO_ERROR},
-    {SQLITE_IOERR_TRUNCATE, STORE_ERROR_IO_ERROR},
-    {SQLITE_IOERR_FSTAT, STORE_ERROR_IO_ERROR},
-    {SQLITE_IOERR_UNLOCK, STORE_ERROR_IO_ERROR},
-    {SQLITE_IOERR_RDLOCK, STORE_ERROR_IO_ERROR},
-    {SQLITE_IOERR_DELETE, STORE_ERROR_IO_ERROR},
-    {SQLITE_IOERR_BLOCKED, STORE_ERROR_IO_ERROR},
-    {SQLITE_IOERR_ACCESS, STORE_ERROR_IO_ERROR},
-    {SQLITE_IOERR_CHECKRESERVEDLOCK, STORE_ERROR_IO_ERROR},
-    {SQLITE_IOERR_LOCK, STORE_ERROR_IO_ERROR},
-    {SQLITE_IOERR_CLOSE, STORE_ERROR_IO_ERROR},
-    {SQLITE_IOERR_SHMOPEN, STORE_ERROR_IO_ERROR},
-    {SQLITE_IOERR_SHMSIZE, STORE_ERROR_IO_ERROR},
-    {SQLITE_IOERR_SHMLOCK, STORE_ERROR_IO_ERROR},
-    {SQLITE_IOERR_SHMMAP, STORE_ERROR_IO_ERROR},
-    {SQLITE_IOERR_SEEK, STORE_ERROR_IO_ERROR},
-    {SQLITE_IOERR_MMAP, STORE_ERROR_IO_ERROR},
-    {SQLITE_IOERR_GETTEMPPATH, STORE_ERROR_IO_ERROR},
-    {SQLITE_IOERR_CONVPATH, STORE_ERROR_IO_ERROR},
-    {SQLITE_IOERR_VNODE, STORE_ERROR_IO_ERROR},
-    {SQLITE_IOERR_AUTH, STORE_ERROR_IO_ERROR},
-    {SQLITE_IOERR_DATA, STORE_ERROR_IO_ERROR},
-    {SQLITE_IOERR_CORRUPTFS, STORE_ERROR_IO_ERROR},
-    {SQLITE_NOLFS, STORE_ERROR_IO_ERROR},
 };
 
 static StoreErrorClass classify_extended(int extended)
@@ -466,7 +407,7 @@ static StoreErrorClass classify_extended(int extended)
             return k_error_classes[i].error_class;
         }
     }
-    /* Primary-code fallback: anything the table misses. */
+    /* Primary code: every E4.7 row except the exceptions above. */
     // NOLINTNEXTLINE(hicpp-signed-bitwise)
     switch (extended & SQLITE_PRIMARY_CODE_MASK) {
     case SQLITE_BUSY:
@@ -495,183 +436,106 @@ static StoreErrorClass classify_extended(int extended)
     }
 }
 
-/* Extended names for every code the class table names, plus the primaries and
- * the common database fallbacks. Parallel arrays (padding-free): codes[i] is
- * named by names[i]. Missing entries resolve via the primary code, then to
- * SQLITE_ERROR. */
-static const int k_sqlite_codes[] = {
-    SQLITE_OK,
-    SQLITE_ERROR,
-    SQLITE_INTERNAL,
-    SQLITE_PERM,
-    SQLITE_ABORT,
-    SQLITE_BUSY,
-    SQLITE_LOCKED,
-    SQLITE_NOMEM,
-    SQLITE_READONLY,
-    SQLITE_INTERRUPT,
-    SQLITE_IOERR,
-    SQLITE_CORRUPT,
-    SQLITE_NOTFOUND,
-    SQLITE_FULL,
-    SQLITE_CANTOPEN,
-    SQLITE_PROTOCOL,
-    SQLITE_EMPTY,
-    SQLITE_SCHEMA,
-    SQLITE_TOOBIG,
-    SQLITE_CONSTRAINT,
-    SQLITE_MISMATCH,
-    SQLITE_MISUSE,
-    SQLITE_NOLFS,
-    SQLITE_AUTH,
-    SQLITE_FORMAT,
-    SQLITE_RANGE,
-    SQLITE_NOTADB,
-    SQLITE_BUSY_RECOVERY,
-    SQLITE_BUSY_SNAPSHOT,
-    SQLITE_BUSY_TIMEOUT,
-    SQLITE_LOCKED_SHAREDCACHE,
-    SQLITE_LOCKED_VTAB,
-    SQLITE_READONLY_RECOVERY,
-    SQLITE_READONLY_CANTLOCK,
-    SQLITE_READONLY_ROLLBACK,
-    SQLITE_READONLY_DBMOVED,
-    SQLITE_READONLY_CANTINIT,
-    SQLITE_READONLY_DIRECTORY,
-    SQLITE_CANTOPEN_NOTEMPDIR,
-    SQLITE_CANTOPEN_ISDIR,
-    SQLITE_CANTOPEN_FULLPATH,
-    SQLITE_CANTOPEN_CONVPATH,
-    SQLITE_CANTOPEN_DIRTYWAL,
-    SQLITE_CANTOPEN_SYMLINK,
-    SQLITE_CORRUPT_VTAB,
-    SQLITE_CORRUPT_SEQUENCE,
-    SQLITE_CORRUPT_INDEX,
-    SQLITE_IOERR_READ,
-    SQLITE_IOERR_SHORT_READ,
-    SQLITE_IOERR_WRITE,
-    SQLITE_IOERR_FSYNC,
-    SQLITE_IOERR_TRUNCATE,
-    SQLITE_IOERR_FSTAT,
-    SQLITE_IOERR_UNLOCK,
-    SQLITE_IOERR_RDLOCK,
-    SQLITE_IOERR_DELETE,
-    SQLITE_IOERR_BLOCKED,
-    SQLITE_IOERR_NOMEM,
-    SQLITE_IOERR_ACCESS,
-    SQLITE_IOERR_CHECKRESERVEDLOCK,
-    SQLITE_IOERR_LOCK,
-    SQLITE_IOERR_CLOSE,
-    SQLITE_IOERR_SHMOPEN,
-    SQLITE_IOERR_SHMSIZE,
-    SQLITE_IOERR_SHMLOCK,
-    SQLITE_IOERR_SHMMAP,
-    SQLITE_IOERR_SEEK,
-    SQLITE_IOERR_MMAP,
-    SQLITE_IOERR_GETTEMPPATH,
-    SQLITE_IOERR_CONVPATH,
-    SQLITE_IOERR_VNODE,
-    SQLITE_IOERR_AUTH,
-    SQLITE_IOERR_DATA,
-    SQLITE_IOERR_CORRUPTFS,
-};
-
-static const char *const k_sqlite_code_names[] = {
-    "SQLITE_OK",
-    "SQLITE_ERROR",
-    "SQLITE_INTERNAL",
-    "SQLITE_PERM",
-    "SQLITE_ABORT",
-    "SQLITE_BUSY",
-    "SQLITE_LOCKED",
-    "SQLITE_NOMEM",
-    "SQLITE_READONLY",
-    "SQLITE_INTERRUPT",
-    "SQLITE_IOERR",
-    "SQLITE_CORRUPT",
-    "SQLITE_NOTFOUND",
-    "SQLITE_FULL",
-    "SQLITE_CANTOPEN",
-    "SQLITE_PROTOCOL",
-    "SQLITE_EMPTY",
-    "SQLITE_SCHEMA",
-    "SQLITE_TOOBIG",
-    "SQLITE_CONSTRAINT",
-    "SQLITE_MISMATCH",
-    "SQLITE_MISUSE",
-    "SQLITE_NOLFS",
-    "SQLITE_AUTH",
-    "SQLITE_FORMAT",
-    "SQLITE_RANGE",
-    "SQLITE_NOTADB",
-    "SQLITE_BUSY_RECOVERY",
-    "SQLITE_BUSY_SNAPSHOT",
-    "SQLITE_BUSY_TIMEOUT",
-    "SQLITE_LOCKED_SHAREDCACHE",
-    "SQLITE_LOCKED_VTAB",
-    "SQLITE_READONLY_RECOVERY",
-    "SQLITE_READONLY_CANTLOCK",
-    "SQLITE_READONLY_ROLLBACK",
-    "SQLITE_READONLY_DBMOVED",
-    "SQLITE_READONLY_CANTINIT",
-    "SQLITE_READONLY_DIRECTORY",
-    "SQLITE_CANTOPEN_NOTEMPDIR",
-    "SQLITE_CANTOPEN_ISDIR",
-    "SQLITE_CANTOPEN_FULLPATH",
-    "SQLITE_CANTOPEN_CONVPATH",
-    "SQLITE_CANTOPEN_DIRTYWAL",
-    "SQLITE_CANTOPEN_SYMLINK",
-    "SQLITE_CORRUPT_VTAB",
-    "SQLITE_CORRUPT_SEQUENCE",
-    "SQLITE_CORRUPT_INDEX",
-    "SQLITE_IOERR_READ",
-    "SQLITE_IOERR_SHORT_READ",
-    "SQLITE_IOERR_WRITE",
-    "SQLITE_IOERR_FSYNC",
-    "SQLITE_IOERR_TRUNCATE",
-    "SQLITE_IOERR_FSTAT",
-    "SQLITE_IOERR_UNLOCK",
-    "SQLITE_IOERR_RDLOCK",
-    "SQLITE_IOERR_DELETE",
-    "SQLITE_IOERR_BLOCKED",
-    "SQLITE_IOERR_NOMEM",
-    "SQLITE_IOERR_ACCESS",
-    "SQLITE_IOERR_CHECKRESERVEDLOCK",
-    "SQLITE_IOERR_LOCK",
-    "SQLITE_IOERR_CLOSE",
-    "SQLITE_IOERR_SHMOPEN",
-    "SQLITE_IOERR_SHMSIZE",
-    "SQLITE_IOERR_SHMLOCK",
-    "SQLITE_IOERR_SHMMAP",
-    "SQLITE_IOERR_SEEK",
-    "SQLITE_IOERR_MMAP",
-    "SQLITE_IOERR_GETTEMPPATH",
-    "SQLITE_IOERR_CONVPATH",
-    "SQLITE_IOERR_VNODE",
-    "SQLITE_IOERR_AUTH",
-    "SQLITE_IOERR_DATA",
-    "SQLITE_IOERR_CORRUPTFS",
+/* Extended names E4.8 prints: every code the E4.7 table names, the primaries,
+   and the common database fallbacks. Anything else resolves via its primary
+   code, then to SQLITE_ERROR. The name sits beside its code, so they cannot
+   drift. */
+static const struct {
+    const char *name;
+    int code;
+    /* NOLINTNEXTLINE(readability-magic-numbers,cppcoreguidelines-avoid-magic-numbers) */
+    char pad_[4]; /* explicit tail padding (kept -Wpadded-clean) */
+} k_sqlite_names[] = {
+    {"SQLITE_OK", SQLITE_OK, {0}},
+    {"SQLITE_ERROR", SQLITE_ERROR, {0}},
+    {"SQLITE_INTERNAL", SQLITE_INTERNAL, {0}},
+    {"SQLITE_PERM", SQLITE_PERM, {0}},
+    {"SQLITE_ABORT", SQLITE_ABORT, {0}},
+    {"SQLITE_BUSY", SQLITE_BUSY, {0}},
+    {"SQLITE_LOCKED", SQLITE_LOCKED, {0}},
+    {"SQLITE_NOMEM", SQLITE_NOMEM, {0}},
+    {"SQLITE_READONLY", SQLITE_READONLY, {0}},
+    {"SQLITE_INTERRUPT", SQLITE_INTERRUPT, {0}},
+    {"SQLITE_IOERR", SQLITE_IOERR, {0}},
+    {"SQLITE_CORRUPT", SQLITE_CORRUPT, {0}},
+    {"SQLITE_NOTFOUND", SQLITE_NOTFOUND, {0}},
+    {"SQLITE_FULL", SQLITE_FULL, {0}},
+    {"SQLITE_CANTOPEN", SQLITE_CANTOPEN, {0}},
+    {"SQLITE_PROTOCOL", SQLITE_PROTOCOL, {0}},
+    {"SQLITE_EMPTY", SQLITE_EMPTY, {0}},
+    {"SQLITE_SCHEMA", SQLITE_SCHEMA, {0}},
+    {"SQLITE_TOOBIG", SQLITE_TOOBIG, {0}},
+    {"SQLITE_CONSTRAINT", SQLITE_CONSTRAINT, {0}},
+    {"SQLITE_MISMATCH", SQLITE_MISMATCH, {0}},
+    {"SQLITE_MISUSE", SQLITE_MISUSE, {0}},
+    {"SQLITE_NOLFS", SQLITE_NOLFS, {0}},
+    {"SQLITE_AUTH", SQLITE_AUTH, {0}},
+    {"SQLITE_FORMAT", SQLITE_FORMAT, {0}},
+    {"SQLITE_RANGE", SQLITE_RANGE, {0}},
+    {"SQLITE_NOTADB", SQLITE_NOTADB, {0}},
+    {"SQLITE_BUSY_RECOVERY", SQLITE_BUSY_RECOVERY, {0}},
+    {"SQLITE_BUSY_SNAPSHOT", SQLITE_BUSY_SNAPSHOT, {0}},
+    {"SQLITE_BUSY_TIMEOUT", SQLITE_BUSY_TIMEOUT, {0}},
+    {"SQLITE_LOCKED_SHAREDCACHE", SQLITE_LOCKED_SHAREDCACHE, {0}},
+    {"SQLITE_LOCKED_VTAB", SQLITE_LOCKED_VTAB, {0}},
+    {"SQLITE_READONLY_RECOVERY", SQLITE_READONLY_RECOVERY, {0}},
+    {"SQLITE_READONLY_CANTLOCK", SQLITE_READONLY_CANTLOCK, {0}},
+    {"SQLITE_READONLY_ROLLBACK", SQLITE_READONLY_ROLLBACK, {0}},
+    {"SQLITE_READONLY_DBMOVED", SQLITE_READONLY_DBMOVED, {0}},
+    {"SQLITE_READONLY_CANTINIT", SQLITE_READONLY_CANTINIT, {0}},
+    {"SQLITE_READONLY_DIRECTORY", SQLITE_READONLY_DIRECTORY, {0}},
+    {"SQLITE_CANTOPEN_NOTEMPDIR", SQLITE_CANTOPEN_NOTEMPDIR, {0}},
+    {"SQLITE_CANTOPEN_ISDIR", SQLITE_CANTOPEN_ISDIR, {0}},
+    {"SQLITE_CANTOPEN_FULLPATH", SQLITE_CANTOPEN_FULLPATH, {0}},
+    {"SQLITE_CANTOPEN_CONVPATH", SQLITE_CANTOPEN_CONVPATH, {0}},
+    {"SQLITE_CANTOPEN_DIRTYWAL", SQLITE_CANTOPEN_DIRTYWAL, {0}},
+    {"SQLITE_CANTOPEN_SYMLINK", SQLITE_CANTOPEN_SYMLINK, {0}},
+    {"SQLITE_CORRUPT_VTAB", SQLITE_CORRUPT_VTAB, {0}},
+    {"SQLITE_CORRUPT_SEQUENCE", SQLITE_CORRUPT_SEQUENCE, {0}},
+    {"SQLITE_CORRUPT_INDEX", SQLITE_CORRUPT_INDEX, {0}},
+    {"SQLITE_IOERR_READ", SQLITE_IOERR_READ, {0}},
+    {"SQLITE_IOERR_SHORT_READ", SQLITE_IOERR_SHORT_READ, {0}},
+    {"SQLITE_IOERR_WRITE", SQLITE_IOERR_WRITE, {0}},
+    {"SQLITE_IOERR_FSYNC", SQLITE_IOERR_FSYNC, {0}},
+    {"SQLITE_IOERR_TRUNCATE", SQLITE_IOERR_TRUNCATE, {0}},
+    {"SQLITE_IOERR_FSTAT", SQLITE_IOERR_FSTAT, {0}},
+    {"SQLITE_IOERR_UNLOCK", SQLITE_IOERR_UNLOCK, {0}},
+    {"SQLITE_IOERR_RDLOCK", SQLITE_IOERR_RDLOCK, {0}},
+    {"SQLITE_IOERR_DELETE", SQLITE_IOERR_DELETE, {0}},
+    {"SQLITE_IOERR_BLOCKED", SQLITE_IOERR_BLOCKED, {0}},
+    {"SQLITE_IOERR_NOMEM", SQLITE_IOERR_NOMEM, {0}},
+    {"SQLITE_IOERR_ACCESS", SQLITE_IOERR_ACCESS, {0}},
+    {"SQLITE_IOERR_CHECKRESERVEDLOCK", SQLITE_IOERR_CHECKRESERVEDLOCK, {0}},
+    {"SQLITE_IOERR_LOCK", SQLITE_IOERR_LOCK, {0}},
+    {"SQLITE_IOERR_CLOSE", SQLITE_IOERR_CLOSE, {0}},
+    {"SQLITE_IOERR_SHMOPEN", SQLITE_IOERR_SHMOPEN, {0}},
+    {"SQLITE_IOERR_SHMSIZE", SQLITE_IOERR_SHMSIZE, {0}},
+    {"SQLITE_IOERR_SHMLOCK", SQLITE_IOERR_SHMLOCK, {0}},
+    {"SQLITE_IOERR_SHMMAP", SQLITE_IOERR_SHMMAP, {0}},
+    {"SQLITE_IOERR_SEEK", SQLITE_IOERR_SEEK, {0}},
+    {"SQLITE_IOERR_MMAP", SQLITE_IOERR_MMAP, {0}},
+    {"SQLITE_IOERR_GETTEMPPATH", SQLITE_IOERR_GETTEMPPATH, {0}},
+    {"SQLITE_IOERR_CONVPATH", SQLITE_IOERR_CONVPATH, {0}},
+    {"SQLITE_IOERR_VNODE", SQLITE_IOERR_VNODE, {0}},
+    {"SQLITE_IOERR_AUTH", SQLITE_IOERR_AUTH, {0}},
+    {"SQLITE_IOERR_DATA", SQLITE_IOERR_DATA, {0}},
+    {"SQLITE_IOERR_CORRUPTFS", SQLITE_IOERR_CORRUPTFS, {0}},
 };
 
 static const char *extended_name(int extended)
 {
     size_t i = 0U;
-    size_t count = sizeof(k_sqlite_codes) / sizeof(k_sqlite_codes[0]);
+    size_t count = sizeof(k_sqlite_names) / sizeof(k_sqlite_names[0]);
 
-    /* The two tables travel together; a length drift is a build break, not a
-       silent mislabel. */
-    _Static_assert(sizeof(k_sqlite_codes) / sizeof(k_sqlite_codes[0]) ==
-                       sizeof(k_sqlite_code_names) / sizeof(k_sqlite_code_names[0]),
-                   "sqlite code and name tables disagree");
     for (i = 0U; i < count; i++) {
-        if (k_sqlite_codes[i] == extended) {
-            return k_sqlite_code_names[i];
+        if (k_sqlite_names[i].code == extended) {
+            return k_sqlite_names[i].name;
         }
     }
     for (i = 0U; i < count; i++) {
         // NOLINTNEXTLINE(hicpp-signed-bitwise)
-        if (k_sqlite_codes[i] == (extended & SQLITE_PRIMARY_CODE_MASK)) {
-            return k_sqlite_code_names[i];
+        if (k_sqlite_names[i].code == (extended & SQLITE_PRIMARY_CODE_MASK)) {
+            return k_sqlite_names[i].name;
         }
     }
     return "SQLITE_ERROR";
@@ -746,6 +610,16 @@ static void capture_sqlite_error(sqlite3 *db, StoreError *out)
     out->sys_errno = sqlite3_system_errno(db);
     if (out->error_class == STORE_ERROR_CANNOT_OPEN) {
         out->reason = derive_reason(out->sqlite_extended, out->sys_errno);
+    }
+}
+
+/* A failure on the import --from-db handle: same capture, flagged so the CLI
+   names the source file instead of the brain (Itay 2026-10-15). */
+static void capture_source_error(sqlite3 *src, StoreError *out)
+{
+    capture_sqlite_error(src, out);
+    if (out != NULL) {
+        out->import_source = true;
     }
 }
 
@@ -873,7 +747,6 @@ static int read_user_version(sqlite3 *db, int *out, char *err, size_t errlen, St
 
 /* Default busy wait when the caller passes no options (plan 16 stage 5 owns
  * the --busy-timeout flag; the store applies the value as given). */
-enum { DEFAULT_BUSY_TIMEOUT_MS = 5000 };
 
 /* "PRAGMA busy_timeout = <int>;" fits with room to spare. */
 enum { BUSY_TIMEOUT_SQL_CAP = 64 };
@@ -1649,15 +1522,15 @@ bind_identity:
     return bind_current_identity(s, err, errlen);
 }
 
-static Store *open_store_mode(const char *path, bool replace_invalid_sidecar,
-                              const StoreOpenOpts *opts, char *err, size_t errlen,
-                              StoreError *out_error)
+Store *store_open_opts(const char *path, const StoreOpenOpts *opts, char *err, size_t errlen,
+                       StoreError *out_error)
 {
     Store *s = NULL;
     sqlite3 *db = NULL;
     size_t plen = 0;
-    int timeout_ms = DEFAULT_BUSY_TIMEOUT_MS;
+    int timeout_ms = STORE_DEFAULT_BUSY_TIMEOUT_MS;
     bool no_create = false;
+    bool replace_invalid_sidecar = false;
     /* SQLITE_OPEN_* are sqlite's own signed-int flag macros; the API takes int. */
     // NOLINTNEXTLINE(hicpp-signed-bitwise)
     int flags = SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE;
@@ -1672,6 +1545,7 @@ static Store *open_store_mode(const char *path, bool replace_invalid_sidecar,
     if (opts != NULL) {
         timeout_ms = opts->busy_timeout_ms;
         no_create = opts->no_create;
+        replace_invalid_sidecar = opts->replace_invalid_sidecar;
     }
     if (no_create) {
         /* D8: no folder, no file, no sidecar. mkdir is skipped entirely and
@@ -1730,19 +1604,7 @@ cleanup_fail:
 
 Store *store_open(const char *path, char *err, size_t errlen)
 {
-    return open_store_mode(path, false, NULL, err, errlen, NULL);
-}
-
-Store *store_open_replacing_sidecar(const char *path, char *err, size_t errlen,
-                                    StoreError *out_error)
-{
-    return open_store_mode(path, true, NULL, err, errlen, out_error);
-}
-
-Store *store_open_opts(const char *path, const StoreOpenOpts *opts, char *err, size_t errlen,
-                       StoreError *out_error)
-{
-    return open_store_mode(path, false, opts, err, errlen, out_error);
+    return store_open_opts(path, NULL, err, errlen, NULL);
 }
 
 const StoreError *store_last_error(const Store *s)
@@ -6486,12 +6348,12 @@ static StoreStatus import_remap_links(sqlite3 *dst, sqlite3 *src, StoreError *se
                             "SELECT from_id, to_id, kind, created_at, updated_at FROM entry_links;",
                             -1, &sel, NULL);
     if (rc != SQLITE_OK) {
-        capture_sqlite_error(src, serr);
+        capture_source_error(src, serr);
         return STORE_ERR_SQLITE;
     }
     rc = sqlite3_prepare_v2(src, "SELECT sync_id FROM entries WHERE id = ?1;", -1, &sync_of, NULL);
     if (rc != SQLITE_OK) {
-        capture_sqlite_error(src, serr);
+        capture_source_error(src, serr);
         (void)sqlite3_finalize(sel);
         return STORE_ERR_SQLITE;
     }
@@ -6599,7 +6461,7 @@ static StoreStatus import_remap_links(sqlite3 *dst, sqlite3 *src, StoreError *se
         }
     }
     if (rc != SQLITE_DONE) {
-        capture_sqlite_error(src, serr);
+        capture_source_error(src, serr);
     }
     (void)sqlite3_finalize(sel);
     (void)sqlite3_finalize(sync_of);
@@ -6680,18 +6542,21 @@ StoreStatus store_import(Store *dst, const char *src_path, const char *now,
     memset(&dst->last, 0, sizeof(dst->last));
     rc = sqlite3_open_v2(src_path, &src, SQLITE_OPEN_READONLY, NULL);
     if (rc != SQLITE_OK) {
-        capture_sqlite_error(src, &dst->last);
+        capture_source_error(src, &dst->last);
         if (src != NULL) {
             (void)sqlite3_close(src);
         }
         return STORE_ERR_SQLITE;
     }
     if (read_user_version(src, &version, err_unused, 0U, &dst->last) != 0) {
+        dst->last.import_source = true;
         (void)sqlite3_close(src);
         return STORE_ERR_SQLITE;
     }
     st = import_source_gate(src, version, &dst->last);
     if (st != STORE_OK) {
+        /* The gate reads only the source. */
+        dst->last.import_source = true;
         (void)sqlite3_close(src);
         return st;
     }
@@ -6706,7 +6571,7 @@ StoreStatus store_import(Store *dst, const char *src_path, const char *now,
                             "expires_at, sync_id, deleted_at, version_vector FROM entries;",
                             -1, &sel, NULL);
     if (rc != SQLITE_OK) {
-        capture_sqlite_error(src, &dst->last);
+        capture_source_error(src, &dst->last);
         st = STORE_ERR_SQLITE;
         goto fail;
     }
@@ -6724,7 +6589,7 @@ StoreStatus store_import(Store *dst, const char *src_path, const char *now,
         }
     }
     if (rc != SQLITE_DONE) {
-        capture_sqlite_error(src, &dst->last);
+        capture_source_error(src, &dst->last);
         st = STORE_ERR_SQLITE;
         goto fail;
     }

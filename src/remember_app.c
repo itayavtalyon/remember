@@ -318,6 +318,8 @@ static Store *open_store(const CliArgs *args, int *out_rc)
     char path[REMEMBER_PATH_MAX];
     char err[ERR_BUFSIZE];
     StoreError detail;
+    /* --busy-timeout and --no-create reach these options in stage 5. */
+    StoreOpenOpts opts = {.busy_timeout_ms = STORE_DEFAULT_BUSY_TIMEOUT_MS};
     Store *s = NULL;
 
     err[0] = '\0';
@@ -335,12 +337,9 @@ static Store *open_store(const CliArgs *args, int *out_rc)
                            "(iCloud/Dropbox/Google Drive); corruption risk - prefer a local disk");
     }
     if (args->command == CLI_CMD_DEVICE && cmd_device_mints(args->rest_argc, args->rest_argv)) {
-        s = store_open_replacing_sidecar(path, err, sizeof(err), &detail);
-    } else {
-        /* NULL opts is defaults (5000 ms, create); --busy-timeout and
-           --no-create reach the CLI in stage 5 (store.h). */
-        s = store_open_opts(path, NULL, err, sizeof(err), &detail);
+        opts.replace_invalid_sidecar = true;
     }
+    s = store_open_opts(path, &opts, err, sizeof(err), &detail);
     if (s == NULL) {
         /* A captured SQLite failure takes the E4.8 line; mkdir, sidecar and
            version failures keep their stage 2 code and text (no SQLite cause

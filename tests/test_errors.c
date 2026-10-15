@@ -839,8 +839,8 @@ TEST(golden_error_lines_and_d9_codes)
          false,
          {0}},
         {{"import", "--from-db", "/nonexistent/remember-golden.db"},
-         "database error: cannot open the brain file (SQLITE_CANTOPEN). Check that the folder "
-         "exists and that you can read and write it.",
+         "database error: cannot open the import source (SQLITE_CANTOPEN). Check the --from-db "
+         "path.",
          "cannot_open",
          1,
          true,
@@ -873,18 +873,16 @@ TEST(golden_error_lines_and_d9_codes)
         }
         r = run_remember(db, json_args, n + 1U, NULL);
         if (row->with_detail) {
-            /* The one SQLite row: the JSON error carries the E4.9 detail. */
-            char detail[GOLDEN_LINE_BUF];
-
-            (void)snprintf(
-                detail, sizeof(detail),
-                ",\"detail\":{\"sqlite_code\":14,\"sqlite_extended\":14,"
-                "\"sqlite_name\":\"SQLITE_CANTOPEN\",\"sqlite_message\":\"unable to open "
-                "database file\",\"errno\":%d,\"path\":\"%s\",\"reason\":\"missing\"}",
-                ENOENT, db);
+            /* The one SQLite row (the import source is missing): short message, the
+               fix in detail, and detail.path names the source, not the brain. */
             (void)snprintf(want, sizeof(want),
-                           "{\"version\":1,\"error\":{\"code\":\"%s\",\"message\":\"%s\"%s}}\n",
-                           row->code, row->message, detail);
+                           "{\"version\":1,\"error\":{\"code\":\"%s\",\"message\":\"database "
+                           "error: cannot open the import source\",\"detail\":{\"sqlite_code\":14,"
+                           "\"sqlite_extended\":14,\"sqlite_name\":\"SQLITE_CANTOPEN\","
+                           "\"sqlite_message\":\"unable to open database file\",\"fix\":\"Check "
+                           "the --from-db path.\",\"errno\":%d,\"path\":\"%s\",\"reason\":"
+                           "\"missing\"}}}\n",
+                           row->code, ENOENT, row->args[2]);
         } else {
             (void)snprintf(want, sizeof(want),
                            "{\"version\":1,\"error\":{\"code\":\"%s\",\"message\":\"%s\"}}\n",
@@ -1597,9 +1595,10 @@ TEST(sqlite_busy_reports_cause_fix_and_detail)
         "Wait a moment and try again. Another app or a terminal may be using this brain.\n";
     static const char *const k_json =
         "{\"version\":1,\"error\":{\"code\":\"busy\",\"message\":\"database error: the brain is "
-        "locked by another process (SQLITE_BUSY). Wait a moment and try again. Another app or a "
-        "terminal may be using this brain.\",\"detail\":{\"sqlite_code\":5,\"sqlite_extended\":5,"
-        "\"sqlite_name\":\"SQLITE_BUSY\",\"sqlite_message\":\"database is locked\"}}}\n";
+        "locked by another "
+        "process\",\"detail\":{\"sqlite_code\":5,\"sqlite_extended\":5,\"sqlite_name\":\"SQLITE_"
+        "BUSY\",\"sqlite_message\":\"database is locked\",\"fix\":\"Wait a moment and try again. "
+        "Another app or a terminal may be using this brain.\"}}}\n";
     StoreError detail = given_sqlite_detail(STORE_ERROR_BUSY, SQLITE_BUSY, SQLITE_BUSY,
                                             "SQLITE_BUSY", "database is locked");
     char *buf = NULL;
@@ -1644,15 +1643,14 @@ TEST(sqlite_cannot_open_carries_errno_reason_and_absolute_path)
     if (getcwd(cwd, sizeof(cwd)) == NULL) {
         return;
     }
-    (void)snprintf(
-        want, sizeof(want),
-        "{\"version\":1,\"error\":{\"code\":\"cannot_open\",\"message\":\"database error: "
-        "cannot open the brain file (SQLITE_CANTOPEN). Check that the folder exists and "
-        "that you can read and write it.\",\"detail\":{\"sqlite_code\":14,"
-        "\"sqlite_extended\":14,\"sqlite_name\":\"SQLITE_CANTOPEN\",\"sqlite_message\":"
-        "\"unable to open database file\",\"errno\":%d,\"path\":\"%s/some/rel.db\","
-        "\"reason\":\"missing\"}}}\n",
-        ENOENT, cwd);
+    (void)snprintf(want, sizeof(want),
+                   "{\"version\":1,\"error\":{\"code\":\"cannot_open\",\"message\":\"database "
+                   "error: cannot open the brain "
+                   "file\",\"detail\":{\"sqlite_code\":14,\"sqlite_extended\":14,\"sqlite_name\":"
+                   "\"SQLITE_CANTOPEN\",\"sqlite_message\":\"unable to open database "
+                   "file\",\"fix\":\"Check that the folder exists and that you can read and write "
+                   "it.\",\"errno\":%d,\"path\":\"%s/some/rel.db\",\"reason\":\"missing\"}}}\n",
+                   ENOENT, cwd);
     err = open_memstream(&buf, &len);
     ASSERT_TRUE(err != NULL);
     if (err == NULL) {
@@ -1680,10 +1678,10 @@ TEST(sqlite_database_keeps_its_own_text_without_a_path)
         "remember: database error (SQLITE_SCHEMA). Try again. If it keeps happening, report the "
         "details from --json-errors.\n";
     static const char *const k_json =
-        "{\"version\":1,\"error\":{\"code\":\"database\",\"message\":\"database error "
-        "(SQLITE_SCHEMA). Try again. If it keeps happening, report the details from "
-        "--json-errors.\",\"detail\":{\"sqlite_code\":17,\"sqlite_extended\":17,\"sqlite_name\":"
-        "\"SQLITE_SCHEMA\",\"sqlite_message\":\"\"}}}\n";
+        "{\"version\":1,\"error\":{\"code\":\"database\",\"message\":\"database "
+        "error\",\"detail\":{\"sqlite_code\":17,\"sqlite_extended\":17,\"sqlite_name\":\"SQLITE_"
+        "SCHEMA\",\"sqlite_message\":\"\",\"fix\":\"Try again. If it keeps happening, report the "
+        "details from --json-errors.\"}}}\n";
     StoreError detail = given_sqlite_detail(STORE_ERROR_DATABASE, SQLITE_SCHEMA, SQLITE_SCHEMA,
                                             "SQLITE_SCHEMA", "");
     char *buf = NULL;
@@ -1769,10 +1767,11 @@ TEST(sqlite_corrupt_marks_fts_only_and_keeps_base_text)
     ASSERT_STREQ(
         buf + strlen(k_base_plain),
         "{\"version\":1,\"error\":{\"code\":\"corrupt\",\"message\":\"database error: the brain "
-        "file is damaged (SQLITE_CORRUPT). Copy the file somewhere safe before anything else, "
-        "then run `remember export`, or restore a backup.\",\"detail\":{\"sqlite_code\":11,"
-        "\"sqlite_extended\":11,\"sqlite_name\":\"SQLITE_CORRUPT\",\"sqlite_message\":\"database "
-        "disk image is malformed\",\"path\":\"/tmp/b.db\",\"fts_only\":false}}}\n");
+        "file is "
+        "damaged\",\"detail\":{\"sqlite_code\":11,\"sqlite_extended\":11,\"sqlite_name\":\"SQLITE_"
+        "CORRUPT\",\"sqlite_message\":\"database disk image is malformed\",\"fix\":\"Copy the file "
+        "somewhere safe before anything else, then run `remember export`, or restore a "
+        "backup.\",\"path\":\"/tmp/b.db\",\"fts_only\":false}}}\n");
     app_set_streams((AppStreams){.out = NULL, .err = NULL});
     ASSERT_EQ_INT(fclose(err), 0);
     free(buf);
@@ -1790,13 +1789,13 @@ TEST(sqlite_corrupt_marks_fts_only_and_keeps_base_text)
     app_set_streams((AppStreams){.out = NULL, .err = err});
     ASSERT_EQ_INT(diag_sqlite_as(true, DIAG_CORRUPT, &fts, "/tmp/b.db"), 0);
     ASSERT_EQ_INT(fflush(err), 0);
-    ASSERT_STREQ(
-        buf + strlen(k_fts_plain),
-        "{\"version\":1,\"error\":{\"code\":\"corrupt\",\"message\":\"database error: the search "
-        "index is damaged (SQLITE_CORRUPT_VTAB). Run `remember repair search-index`. Your "
-        "memories are not affected.\",\"detail\":{\"sqlite_code\":11,\"sqlite_extended\":267,"
-        "\"sqlite_name\":\"SQLITE_CORRUPT_VTAB\",\"sqlite_message\":\"database disk image is "
-        "malformed\",\"path\":\"/tmp/b.db\",\"fts_only\":true}}}\n");
+    ASSERT_STREQ(buf + strlen(k_fts_plain),
+                 "{\"version\":1,\"error\":{\"code\":\"corrupt\",\"message\":\"database error: the "
+                 "search index is "
+                 "damaged\",\"detail\":{\"sqlite_code\":11,\"sqlite_extended\":267,\"sqlite_name\":"
+                 "\"SQLITE_CORRUPT_VTAB\",\"sqlite_message\":\"database disk image is "
+                 "malformed\",\"fix\":\"Run `remember repair search-index`. Your memories are not "
+                 "affected.\",\"path\":\"/tmp/b.db\",\"fts_only\":true}}}\n");
     app_set_streams((AppStreams){.out = NULL, .err = NULL});
     ASSERT_EQ_INT(fclose(err), 0);
     free(buf);
@@ -1863,17 +1862,64 @@ TEST(cli_text_file_reports_not_a_database)
     r = run_remember(tmpl, json, sizeof(json) / sizeof(json[0]), NULL);
     (void)snprintf(
         want, sizeof(want),
-        "{\"version\":1,\"error\":{\"code\":\"not_a_database\",\"message\":\"database error: "
-        "the file is not a remember database (SQLITE_NOTADB). Point --db at a remember "
-        "brain, or move this file away.\",\"detail\":{\"sqlite_code\":26,"
-        "\"sqlite_extended\":26,\"sqlite_name\":\"SQLITE_NOTADB\",\"sqlite_message\":"
-        "\"file is not a database\",\"path\":\"%s\"}}}\n",
+        "{\"version\":1,\"error\":{\"code\":\"not_a_database\",\"message\":\"database error: the "
+        "file is not a remember "
+        "database\",\"detail\":{\"sqlite_code\":26,\"sqlite_extended\":26,\"sqlite_name\":\"SQLITE_"
+        "NOTADB\",\"sqlite_message\":\"file is not a database\",\"fix\":\"Point --db at a remember "
+        "brain, or move this file away.\",\"path\":\"%s\"}}}\n",
         tmpl);
     ASSERT_EQ_INT(r.exit_code, 1);
     ASSERT_STREQ(r.out, "");
     ASSERT_STREQ(r.err, want);
     cmd_result_free(&r);
     (void)unlink(tmpl);
+}
+
+/* Itay 2026-10-15: a bad import SOURCE names the source, not the brain.
+   A text file as --from-db opens and fails at the source's version read. */
+TEST(cli_import_text_source_names_the_source)
+{
+    static const char *const k_plain =
+        "remember: database error: the import source is not a remember database "
+        "(SQLITE_NOTADB). Check the --from-db path.\n";
+    char tmpl[] = "/tmp/remember-cli-src-notadb-XXXXXX";
+    int fd = mkstemp(tmpl);
+    char *db = make_temp_db_path();
+    const char *add[] = {"add", "x"};
+    const char *imp[] = {"import", "--from-db", tmpl};
+    const char *json[] = {"--json-errors", "import", "--from-db", tmpl};
+    char want[CLI_JSON_CAP];
+    CmdResult r;
+
+    ASSERT_TRUE(fd >= 0 && db != NULL);
+    if (fd < 0 || db == NULL) {
+        free(db);
+        return;
+    }
+    ASSERT_TRUE(write(fd, "this is not a database", sizeof("this is not a database") - 1U) > 0);
+    ASSERT_EQ_INT(close(fd), 0);
+    r = run_remember(db, add, sizeof(add) / sizeof(add[0]), NULL);
+    ASSERT_EQ_INT(r.exit_code, 0);
+    cmd_result_free(&r);
+    r = run_remember(db, imp, sizeof(imp) / sizeof(imp[0]), NULL);
+    ASSERT_EQ_INT(r.exit_code, 1);
+    ASSERT_STREQ(r.out, "");
+    ASSERT_STREQ(r.err, k_plain);
+    cmd_result_free(&r);
+    r = run_remember(db, json, sizeof(json) / sizeof(json[0]), NULL);
+    (void)snprintf(want, sizeof(want),
+                   "{\"version\":1,\"error\":{\"code\":\"not_a_database\",\"message\":\"database "
+                   "error: the import source is not a remember database\",\"detail\":{"
+                   "\"sqlite_code\":26,\"sqlite_extended\":26,\"sqlite_name\":\"SQLITE_NOTADB\","
+                   "\"sqlite_message\":\"file is not a database\",\"fix\":\"Check the --from-db "
+                   "path.\",\"path\":\"%s\"}}}\n",
+                   tmpl);
+    ASSERT_EQ_INT(r.exit_code, 1);
+    ASSERT_STREQ(r.out, "");
+    ASSERT_STREQ(r.err, want);
+    cmd_result_free(&r);
+    (void)unlink(tmpl);
+    free(db);
 }
 
 /* D7 through the CLI: a relative --db is emitted absolute, with no symlink work. */
@@ -1917,15 +1963,14 @@ TEST(cli_relative_db_emits_absolute_detail_path)
     ASSERT_EQ_INT(fflush(out), 0);
     ASSERT_EQ_INT(rc, 1);
     ASSERT_STREQ(out_buf, "");
-    wrote =
-        snprintf(want, sizeof(want),
-                 "{\"version\":1,\"error\":{\"code\":\"cannot_open\",\"message\":\"database "
-                 "error: cannot open the brain file (SQLITE_CANTOPEN). Check that the folder "
-                 "exists and that you can read and write it.\",\"detail\":{\"sqlite_code\":14,"
-                 "\"sqlite_extended\":14,\"sqlite_name\":\"SQLITE_CANTOPEN\",\"sqlite_message\":"
-                 "\"unable to open database file\",\"errno\":%d,\"path\":\"%s/%s\","
-                 "\"reason\":\"is_directory\"}}}\n",
-                 EISDIR, cwd, tmpl);
+    wrote = snprintf(want, sizeof(want),
+                     "{\"version\":1,\"error\":{\"code\":\"cannot_open\",\"message\":\"database "
+                     "error: cannot open the brain "
+                     "file\",\"detail\":{\"sqlite_code\":14,\"sqlite_extended\":14,\"sqlite_name\":"
+                     "\"SQLITE_CANTOPEN\",\"sqlite_message\":\"unable to open database "
+                     "file\",\"fix\":\"Check that the folder exists and that you can read and "
+                     "write it.\",\"errno\":%d,\"path\":\"%s/%s\",\"reason\":\"is_directory\"}}}\n",
+                     EISDIR, cwd, tmpl);
     ASSERT_TRUE(wrote > 0 && (size_t)wrote < sizeof(want));
     ASSERT_STREQ(err_buf, want);
     ASSERT_EQ_INT(fclose(err), 0);
@@ -1969,14 +2014,14 @@ TEST(cli_read_only_file_reports_read_only_on_write)
     ASSERT_STREQ(r.err, k_plain);
     cmd_result_free(&r);
     r = run_remember(db, json, sizeof(json) / sizeof(json[0]), NULL);
-    (void)snprintf(
-        want, sizeof(want),
-        "{\"version\":1,\"error\":{\"code\":\"read_only\",\"message\":\"database error: the "
-        "brain is read-only (SQLITE_READONLY). Give yourself write permission on the brain "
-        "file and its folder, or move the brain to a writable folder.\",\"detail\":{"
-        "\"sqlite_code\":8,\"sqlite_extended\":8,\"sqlite_name\":\"SQLITE_READONLY\","
-        "\"sqlite_message\":\"attempt to write a readonly database\",\"path\":\"%s\"}}}\n",
-        db);
+    (void)snprintf(want, sizeof(want),
+                   "{\"version\":1,\"error\":{\"code\":\"read_only\",\"message\":\"database error: "
+                   "the brain is "
+                   "read-only\",\"detail\":{\"sqlite_code\":8,\"sqlite_extended\":8,\"sqlite_"
+                   "name\":\"SQLITE_READONLY\",\"sqlite_message\":\"attempt to write a readonly "
+                   "database\",\"fix\":\"Give yourself write permission on the brain file and its "
+                   "folder, or move the brain to a writable folder.\",\"path\":\"%s\"}}}\n",
+                   db);
     ASSERT_EQ_INT(r.exit_code, 1);
     ASSERT_STREQ(r.out, "");
     ASSERT_STREQ(r.err, want);
@@ -2006,12 +2051,13 @@ TEST(sqlite_out_of_range_reason_falls_back_to_other)
     app_set_streams((AppStreams){.out = NULL, .err = err});
     ASSERT_EQ_INT(diag_sqlite_as(true, DIAG_CANNOT_OPEN, &detail, NULL), 0);
     ASSERT_EQ_INT(fflush(err), 0);
-    ASSERT_STREQ(buf,
-                 "{\"version\":1,\"error\":{\"code\":\"cannot_open\",\"message\":\"database error: "
-                 "cannot open the brain file (SQLITE_CANTOPEN). Check that the folder exists and "
-                 "that you can read and write it.\",\"detail\":{\"sqlite_code\":14,"
-                 "\"sqlite_extended\":14,\"sqlite_name\":\"SQLITE_CANTOPEN\",\"sqlite_message\":"
-                 "\"unable to open database file\",\"reason\":\"other\"}}}\n");
+    ASSERT_STREQ(
+        buf,
+        "{\"version\":1,\"error\":{\"code\":\"cannot_open\",\"message\":\"database error: cannot "
+        "open the brain "
+        "file\",\"detail\":{\"sqlite_code\":14,\"sqlite_extended\":14,\"sqlite_name\":\"SQLITE_"
+        "CANTOPEN\",\"sqlite_message\":\"unable to open database file\",\"fix\":\"Check that the "
+        "folder exists and that you can read and write it.\",\"reason\":\"other\"}}}\n");
     app_set_streams((AppStreams){.out = NULL, .err = NULL});
     ASSERT_EQ_INT(fclose(err), 0);
     free(buf);
@@ -2186,6 +2232,7 @@ void register_errors_tests(void)
     RUN_TEST(sqlite_corrupt_marks_fts_only_and_keeps_base_text);
     RUN_TEST(store_class_maps_to_its_diag_code);
     RUN_TEST(cli_text_file_reports_not_a_database);
+    RUN_TEST(cli_import_text_source_names_the_source);
     RUN_TEST(cli_relative_db_emits_absolute_detail_path);
     RUN_TEST(cli_read_only_file_reports_read_only_on_write);
     RUN_TEST(sqlite_out_of_range_reason_falls_back_to_other);
