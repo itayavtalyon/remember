@@ -108,6 +108,7 @@ set_property(SOURCE
     src/cmd_device.c
     src/output.c
     src/util.c
+    src/diag.c
     APPEND PROPERTY COMPILE_OPTIONS -Wcast-qual
 )
 
@@ -221,6 +222,7 @@ set(REMEMBER_LIB_SOURCES
     src/cmd_device.c
     src/output.c
     src/util.c
+    src/diag.c
 )
 
 # --- remember CLI (instrumented) ---------------------------------------------
@@ -291,6 +293,7 @@ set(REMEMBER_TEST_SOURCES
     tests/test_sync_import.c
     tests/test_schema_v5.c
     tests/test_device.c
+    tests/test_errors.c
 )
 add_executable(remember_tests
     ${REMEMBER_TEST_SOURCES}

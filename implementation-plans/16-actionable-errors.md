@@ -366,8 +366,30 @@ or architecture forks to Itay as a grill. Re-run the full gate after any fix.
 
 ## Implementation Notes
 
-_(empty; fill per stage)_
+### 2026-10-15 — stage 1 (catalog + emitter)
+
+No call sites changed. `err_msg` and the `fprintf(app_err(), …)` lines still write the 0.2.0 plain text. Stage 2 routes them.
+
+- Error tokens are one array, E4.3 order, indexed by `DiagCode`. Warning tokens are a second array (`raw_query_ignored`, `deprecated_flag`, `synced_folder`). A warning token is not an error code. `diag_code_name` / `diag_warning_name` and the reverse lookups share one scanner.
+- `diag_error` writes through `app_err()` only. Plain is `remember: <message>\n`. JSON is one line `{"version":1,"error":{"code":"<code>","message":"<message>"}}` and no plain line. `message` is escaped with `output_json_string`. Plain text is not escaped.
+- `diag_warning` uses the same writer. Plain is `remember: note: <text>\n`. JSON is `{"version":1,"warning":{"code":"<code>","message":"<text>"}}`. `message` is `<text>`, not `note: <text>`. A non-zero exit writes nothing and returns 0. A code outside either catalog writes nothing and returns -1, including a warning whose exit is already non-zero.
+- NULL message is an empty string, so a NULL cannot reach `printf("%s")`.
+- E4.8 cause/fix text and E4.9 `detail` stay in stage 3, when the store error exists. This stage's writer takes the message from the caller.
 
 ## Review Notes
 
-_(empty; second review appends here)_
+### 2026-10-15 — in-session deep review (stage 1)
+
+**Verdict:** approve for the second-opinion pass. No open blocking item. No grill.
+
+**Ran:** ctest 4/4 with ASan/UBSan, `lint-all.sh` LINT OK, coverage 100% functions and 100% effective lines, `leaks-macos` PASS, `ci-linux.sh` OK. A sanitizer probe checked percent signs, tab/CR/UTF-8, warning JSON quotes, a NULL warning message, exit `-1`, and a read-only error stream (plain, JSON, and warning all return -1). Bugbot on the uncommitted diff reported no bugs.
+
+**Praise:** one string table per catalog and one writer. JSON goes through `output_json_string`. Warning tokens are not error codes. Unknown codes write nothing.
+
+**Nit:** the memstream setup is repeated in each test. Left as is; it is the same shape as the other stream tests, and a helper would hide the arrange step.
+
+**Ponytail:** nothing to cut. The padding byte and the `Notice` struct exist so `-Wpadded` and the swappable-parameter check stay quiet.
+
+**Pragmatic write-gate:** DRY PASS, easy-to-replace PASS (`app_err` is the existing stream port), orthogonal PASS (no SQLite, no call-site edits). No deferred markers.
+
+**Left for later:** stage 2 routes `err_msg`. Stage 3 adds E4.8 text and E4.9 `detail`.
