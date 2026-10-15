@@ -59,13 +59,13 @@ bool diag_warning_from_name(const char *name, DiagWarning *out);
 
 /*
  * Write one error to the error stream.
- * Plain (json_errors false): "remember: <message>\n".
- * JSON (json_errors true): {"version":1,"error":{"code":"<code>","message":"<message>"}}
- * and no plain line. message is the plain text without the "remember: " prefix
- * (E4.4). NULL message is empty. Returns 0, or -1 when code is outside the
- * catalog or the write fails.
+ * Plain (--json-errors off): "remember: <message>\n".
+ * JSON (--json-errors on, see diag_set_json_errors):
+ * {"version":1,"error":{"code":"<code>","message":"<message>"}} and no plain line. message is the
+ * plain text without the "remember: " prefix (E4.4). NULL message is empty. Returns 0, or -1 when
+ * code is outside the catalog or the write fails.
  */
-int diag_error(DiagCode code, const char *message, bool json_errors);
+int diag_error(DiagCode code, const char *message);
 
 /*
  * Write one warning. Plain: "remember: warning: <message>\n" for every code
@@ -76,14 +76,13 @@ int diag_error(DiagCode code, const char *message, bool json_errors);
  * raw_query_ignored is called only by a search that succeeds (E4.6).
  * Returns -1 when code is outside the warning catalog or the write fails.
  */
-int diag_warning(DiagWarning code, const char *message, bool json_errors);
+int diag_warning(DiagWarning code, const char *message);
 
 /*
  * Process-wide --json-errors switch. remember_run sets it for one call and
- * clears it. ponytail: one flag, same reason as the appio streams — the CLI
- * is single-threaded, so commands read it instead of taking another parameter.
+ * clears it. diag_error and diag_warning read it, so no caller passes the
+ * mode. ponytail: one flag, same reason as the appio streams (single-threaded CLI).
  */
 void diag_set_json_errors(bool enabled);
-bool diag_json_errors(void);
 
 #endif /* REMEMBER_DIAG_H */

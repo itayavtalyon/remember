@@ -91,8 +91,7 @@ int cmd_purge(Store *s, bool json, int rest_argc, const char **rest_argv)
 
 int cmd_purge_trash(Store *s, bool json, int rest_argc, const char **rest_argv)
 {
-    (void)diag_warning(DIAG_WARN_DEPRECATED_FLAG, "purge-trash is deprecated; use purge --expired",
-                       diag_json_errors());
+    (void)diag_warning(DIAG_WARN_DEPRECATED_FLAG, "purge-trash is deprecated; use purge --expired");
     if (rest_argc > 0) {
         if (rest_argv != NULL && rest_argv[0] != NULL && rest_argv[0][0] == '-' &&
             rest_argv[0][1] != '\0') {

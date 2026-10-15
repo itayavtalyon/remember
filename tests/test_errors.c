@@ -49,6 +49,27 @@ static const char *const k_error_codes[] = {
     "io_error",
 };
 
+/* Unit tests pick the --json-errors mode per call; the flag is cleared after. */
+static int diag_error_as(bool json, DiagCode code, const char *message)
+{
+    int rc = 0;
+
+    diag_set_json_errors(json);
+    rc = diag_error(code, message);
+    diag_set_json_errors(false);
+    return rc;
+}
+
+static int diag_warning_as(bool json, DiagWarning code, const char *message)
+{
+    int rc = 0;
+
+    diag_set_json_errors(json);
+    rc = diag_warning(code, message);
+    diag_set_json_errors(false);
+    return rc;
+}
+
 TEST(error_catalog_round_trips_every_e4_3_code)
 {
     size_t i = 0;
@@ -125,7 +146,7 @@ TEST(plain_error_is_remember_prefix_and_the_message)
         return;
     }
     app_set_streams((AppStreams){.out = NULL, .err = err});
-    ASSERT_EQ_INT(diag_error(DIAG_USAGE, "missing command (try --help)", false), 0);
+    ASSERT_EQ_INT(diag_error_as(false, DIAG_USAGE, "missing command (try --help)"), 0);
     ASSERT_EQ_INT(fflush(err), 0);
     ASSERT_STREQ(buf, "remember: missing command (try --help)\n");
     app_set_streams((AppStreams){.out = NULL, .err = NULL});
@@ -144,7 +165,7 @@ TEST(json_error_is_one_line_and_not_the_plain_line)
         return;
     }
     app_set_streams((AppStreams){.out = NULL, .err = err});
-    ASSERT_EQ_INT(diag_error(DIAG_NOT_FOUND, "not found", true), 0);
+    ASSERT_EQ_INT(diag_error_as(true, DIAG_NOT_FOUND, "not found"), 0);
     ASSERT_EQ_INT(fflush(err), 0);
     ASSERT_STREQ(buf,
                  "{\"version\":1,\"error\":{\"code\":\"not_found\",\"message\":\"not found\"}}\n");
@@ -164,8 +185,8 @@ TEST(error_outside_the_catalog_writes_nothing)
         return;
     }
     app_set_streams((AppStreams){.out = NULL, .err = err});
-    ASSERT_EQ_INT(diag_error(DIAG_CODE_COUNT, "missing command (try --help)", false), -1);
-    ASSERT_EQ_INT(diag_error(DIAG_CODE_COUNT, "missing command (try --help)", true), -1);
+    ASSERT_EQ_INT(diag_error_as(false, DIAG_CODE_COUNT, "missing command (try --help)"), -1);
+    ASSERT_EQ_INT(diag_error_as(true, DIAG_CODE_COUNT, "missing command (try --help)"), -1);
     ASSERT_EQ_INT(fflush(err), 0);
     ASSERT_STREQ(buf, "");
     app_set_streams((AppStreams){.out = NULL, .err = NULL});
@@ -185,7 +206,7 @@ TEST(json_error_escapes_message_bytes)
         return;
     }
     app_set_streams((AppStreams){.out = NULL, .err = err});
-    ASSERT_EQ_INT(diag_error(DIAG_USAGE, message, true), 0);
+    ASSERT_EQ_INT(diag_error_as(true, DIAG_USAGE, message), 0);
     ASSERT_EQ_INT(fflush(err), 0);
     ASSERT_STREQ(
         buf,
@@ -225,9 +246,9 @@ TEST(every_error_code_json_message_matches_the_plain_line)
             return;
         }
         app_set_streams((AppStreams){.out = NULL, .err = plain});
-        ASSERT_EQ_INT(diag_error(code, sample, false), 0);
+        ASSERT_EQ_INT(diag_error_as(false, code, sample), 0);
         app_set_streams((AppStreams){.out = NULL, .err = json});
-        ASSERT_EQ_INT(diag_error(code, sample, true), 0);
+        ASSERT_EQ_INT(diag_error_as(true, code, sample), 0);
         ASSERT_EQ_INT(fflush(plain), 0);
         ASSERT_EQ_INT(fflush(json), 0);
         ASSERT_STREQ(plain_buf, "remember: sample text\n");
@@ -256,7 +277,7 @@ TEST(plain_warning_is_remember_warning)
         return;
     }
     app_set_streams((AppStreams){.out = NULL, .err = err});
-    ASSERT_EQ_INT(diag_warning(DIAG_WARN_RAW_QUERY_IGNORED, "x", false), 0);
+    ASSERT_EQ_INT(diag_warning_as(false, DIAG_WARN_RAW_QUERY_IGNORED, "x"), 0);
     ASSERT_EQ_INT(fflush(err), 0);
     ASSERT_STREQ(buf, "remember: warning: x\n");
     app_set_streams((AppStreams){.out = NULL, .err = NULL});
@@ -275,7 +296,7 @@ TEST(json_warning_is_one_line_without_the_prefix)
         return;
     }
     app_set_streams((AppStreams){.out = NULL, .err = err});
-    ASSERT_EQ_INT(diag_warning(DIAG_WARN_DEPRECATED_FLAG, "x", true), 0);
+    ASSERT_EQ_INT(diag_warning_as(true, DIAG_WARN_DEPRECATED_FLAG, "x"), 0);
     ASSERT_EQ_INT(fflush(err), 0);
     ASSERT_STREQ(buf,
                  "{\"version\":1,\"warning\":{\"code\":\"deprecated_flag\",\"message\":\"x\"}}\n");
@@ -298,11 +319,12 @@ TEST(every_warning_uses_the_warning_prefix)
     }
     app_set_streams((AppStreams){.out = NULL, .err = err});
     ASSERT_EQ_INT(
-        diag_warning(DIAG_WARN_DEPRECATED_FLAG, "--trash is deprecated; use --expired", false), 0);
-    ASSERT_EQ_INT(
-        diag_warning(DIAG_WARN_SYNCED_FOLDER, "database path looks like a synced folder", false),
+        diag_warning_as(false, DIAG_WARN_DEPRECATED_FLAG, "--trash is deprecated; use --expired"),
         0);
-    ASSERT_EQ_INT(diag_warning(DIAG_WARN_COUNT, "x", false), -1);
+    ASSERT_EQ_INT(
+        diag_warning_as(false, DIAG_WARN_SYNCED_FOLDER, "database path looks like a synced folder"),
+        0);
+    ASSERT_EQ_INT(diag_warning_as(false, DIAG_WARN_COUNT, "x"), -1);
     ASSERT_EQ_INT(fflush(err), 0);
     ASSERT_STREQ(buf, "remember: warning: --trash is deprecated; use --expired\n"
                       "remember: warning: database path looks like a synced folder\n");
@@ -322,9 +344,9 @@ TEST(null_message_is_empty_text)
         return;
     }
     app_set_streams((AppStreams){.out = NULL, .err = err});
-    ASSERT_EQ_INT(diag_error(DIAG_INTERNAL, NULL, false), 0);
-    ASSERT_EQ_INT(diag_error(DIAG_INTERNAL, NULL, true), 0);
-    ASSERT_EQ_INT(diag_warning(DIAG_WARN_SYNCED_FOLDER, NULL, false), 0);
+    ASSERT_EQ_INT(diag_error_as(false, DIAG_INTERNAL, NULL), 0);
+    ASSERT_EQ_INT(diag_error_as(true, DIAG_INTERNAL, NULL), 0);
+    ASSERT_EQ_INT(diag_warning_as(false, DIAG_WARN_SYNCED_FOLDER, NULL), 0);
     ASSERT_EQ_INT(fflush(err), 0);
     ASSERT_STREQ(buf, "remember: \n"
                       "{\"version\":1,\"error\":{\"code\":\"internal\",\"message\":\"\"}}\n"
@@ -345,7 +367,7 @@ TEST(plain_error_keeps_quote_and_backslash)
         return;
     }
     app_set_streams((AppStreams){.out = NULL, .err = err});
-    ASSERT_EQ_INT(diag_error(DIAG_USAGE, "say \"hi\"\\", false), 0);
+    ASSERT_EQ_INT(diag_error_as(false, DIAG_USAGE, "say \"hi\"\\"), 0);
     ASSERT_EQ_INT(fflush(err), 0);
     ASSERT_STREQ(buf, "remember: say \"hi\"\\\n");
     app_set_streams((AppStreams){.out = NULL, .err = NULL});
@@ -376,8 +398,8 @@ TEST(error_and_warning_leave_stdout_empty)
         return;
     }
     app_set_streams((AppStreams){.out = out, .err = err});
-    ASSERT_EQ_INT(diag_error(DIAG_USAGE, "missing command (try --help)", false), 0);
-    ASSERT_EQ_INT(diag_warning(DIAG_WARN_RAW_QUERY_IGNORED, "x", true), 0);
+    ASSERT_EQ_INT(diag_error_as(false, DIAG_USAGE, "missing command (try --help)"), 0);
+    ASSERT_EQ_INT(diag_warning_as(true, DIAG_WARN_RAW_QUERY_IGNORED, "x"), 0);
     ASSERT_EQ_INT(fflush(out), 0);
     ASSERT_EQ_INT(fflush(err), 0);
     ASSERT_STREQ(out_buf, "");
@@ -403,8 +425,8 @@ TEST(warning_outside_the_catalog_writes_nothing)
         return;
     }
     app_set_streams((AppStreams){.out = NULL, .err = err});
-    ASSERT_EQ_INT(diag_warning(DIAG_WARN_COUNT, "x", false), -1);
-    ASSERT_EQ_INT(diag_warning(DIAG_WARN_COUNT, "x", true), -1);
+    ASSERT_EQ_INT(diag_warning_as(false, DIAG_WARN_COUNT, "x"), -1);
+    ASSERT_EQ_INT(diag_warning_as(true, DIAG_WARN_COUNT, "x"), -1);
     ASSERT_EQ_INT(fflush(err), 0);
     ASSERT_STREQ(buf, "");
     app_set_streams((AppStreams){.out = NULL, .err = NULL});
@@ -683,6 +705,126 @@ TEST(err_fmt_keeps_a_long_unknown_option)
     free(err_buf);
 }
 
+enum { GOLDEN_MAX_ARGS = 6, GOLDEN_STEP_ARGS = 4, GOLDEN_LINE_BUF = 512 };
+
+/* One golden row: argv after --db, the 0.2.0 message, its exit, its D9 code. */
+typedef struct {
+    const char *args[GOLDEN_MAX_ARGS];
+    const char *message;
+    const char *code;
+    int exit_code;
+    /* NOLINTNEXTLINE(readability-magic-numbers,cppcoreguidelines-avoid-magic-numbers) */
+    char pad_[4]; /* explicit tail padding (kept -Wpadded-clean) */
+} GoldenError;
+
+/* Count leading non-NULL args (rows are NULL-padded). */
+static size_t args_count(const char *const *args, size_t cap)
+{
+    size_t n = 0;
+
+    while (n < cap && args[n] != NULL) {
+        n++;
+    }
+    return n;
+}
+
+static void given_golden_brain(const char *db)
+{
+    const char *const steps[][GOLDEN_STEP_ARGS] = {
+        {"add", "--key", "k1", "one"},   {"add", "--key", "k2", "two"},
+        {"delete", "--key", "k2", NULL}, {"add", "gamma", NULL, NULL},
+        {"add", "delta", NULL, NULL},
+    };
+    size_t i = 0;
+
+    for (i = 0; i < sizeof(steps) / sizeof(steps[0]); i++) {
+        CmdResult r =
+            run_remember(db, steps[i], args_count(steps[i], (size_t)GOLDEN_STEP_ARGS), NULL);
+
+        ASSERT_EQ_INT(r.exit_code, 0);
+        cmd_result_free(&r);
+    }
+}
+
+/* E4.2 golden + D9 table: plain stderr is the 0.2.0 line byte for byte, and
+   --json-errors gives the D9 code with the same message, one line, empty stdout. */
+TEST(golden_error_lines_and_d9_codes)
+{
+    static const GoldenError rows[] = {
+        {{"bogus"}, "unknown command 'bogus'", "usage", 1, {0}},
+        {{"--bogus", "list"}, "unknown option '--bogus'", "usage", 1, {0}},
+        {{"list", "--limit", "0"}, "invalid --limit (must be 1..1000)", "usage", 1, {0}},
+        {{"get", "abc"}, "invalid id", "usage", 1, {0}},
+        {{"add", "--source", "martian", "x"},
+         "invalid source (use human, agent, tool, share, or unknown)",
+         "usage",
+         1,
+         {0}},
+        {{"add", "--key", "", "x"}, "empty key", "usage", 1, {0}},
+        {{"conflict", "accept", "--id", "1", "--keep", "sideways"},
+         "--keep must be local, incoming, or both",
+         "usage",
+         1,
+         {0}},
+        {{"device", "extra"}, "device takes 'new' or no arguments", "usage", 1, {0}},
+        {{"get", "999"}, "not found", "not_found", 2, {0}},
+        {{"get", "--key", "k2"}, "deleted", "deleted", 3, {0}},
+        {{"get", "--deleted", "--key", "k1"}, "not_deleted", "not_deleted", 3, {0}},
+        {{"search", "\""}, "invalid search query", "invalid_query", 1, {0}},
+        {{"link", "1", "1"}, "self-link", "self_link", 1, {0}},
+        {{"rekey", "--key", "k1", "--to-key", "k2"},
+         "key conflicts with entry 2",
+         "key_conflict",
+         1,
+         {0}},
+        {{"update", "4", "--text", "gamma"},
+         "body hash conflicts with entry 3",
+         "body_conflict",
+         1,
+         {0}},
+        {{"import", "--from-db", "/nonexistent/remember-golden.db"},
+         "database error",
+         "database",
+         1,
+         {0}},
+    };
+    char *db = make_temp_db_path();
+    size_t i = 0;
+
+    ASSERT_TRUE(db != NULL);
+    if (db == NULL) {
+        return;
+    }
+    given_golden_brain(db);
+    for (i = 0; i < sizeof(rows) / sizeof(rows[0]); i++) {
+        const GoldenError *row = &rows[i];
+        const char *json_args[GOLDEN_MAX_ARGS + 1] = {"--json-errors"};
+        char want[GOLDEN_LINE_BUF];
+        size_t n = args_count(row->args, (size_t)GOLDEN_MAX_ARGS);
+        size_t j = 0;
+        CmdResult r = run_remember(db, row->args, n, NULL);
+
+        (void)snprintf(want, sizeof(want), "remember: %s\n", row->message);
+        ASSERT_STREQ(r.err, want);
+        ASSERT_EQ_INT(r.exit_code, row->exit_code);
+        ASSERT_STREQ(r.out, "");
+        cmd_result_free(&r);
+
+        for (j = 0; j < n; j++) {
+            json_args[j + 1U] = row->args[j];
+        }
+        r = run_remember(db, json_args, n + 1U, NULL);
+        (void)snprintf(want, sizeof(want),
+                       "{\"version\":1,\"error\":{\"code\":\"%s\",\"message\":\"%s\"}}\n",
+                       row->code, row->message);
+        ASSERT_STREQ(r.err, want);
+        ASSERT_EQ_INT(r.exit_code, row->exit_code);
+        ASSERT_STREQ(r.out, "");
+        cmd_result_free(&r);
+    }
+    free(db);
+}
+
 void register_errors_tests(void)
 {
     RUN_TEST(error_catalog_round_trips_every_e4_3_code);
@@ -712,4 +854,5 @@ void register_errors_tests(void)
     RUN_TEST(store_text_codes_follow_the_locked_split);
     RUN_TEST(err_fmt_keeps_a_long_unknown_option);
     RUN_TEST(internal_parse_stays_a_plain_internal_line);
+    RUN_TEST(golden_error_lines_and_d9_codes);
 }

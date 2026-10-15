@@ -134,7 +134,7 @@ const char *norm_token_message(NormStatus st, const char *kind)
 
 void err_msg(DiagCode code, const char *msg)
 {
-    (void)diag_error(code, msg, diag_json_errors());
+    (void)diag_error(code, msg);
 }
 
 void err_fmt(DiagCode code, const char *fmt, ...)
@@ -437,8 +437,7 @@ int cmd_bin_resolve(const CmdBinOpts *opts, StoreBin *out)
         return -1;
     }
     if (opts->trash_alias) {
-        (void)diag_warning(DIAG_WARN_DEPRECATED_FLAG, "--trash is deprecated; use --expired",
-                           diag_json_errors());
+        (void)diag_warning(DIAG_WARN_DEPRECATED_FLAG, "--trash is deprecated; use --expired");
     }
     if (opts->expired && opts->deleted) {
         err_msg(DIAG_USAGE, "cannot combine --expired and --deleted");

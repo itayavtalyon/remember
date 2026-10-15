@@ -159,7 +159,7 @@ static int write_notice(Notice notice)
     return 0;
 }
 
-int diag_error(DiagCode code, const char *message, bool json_errors)
+int diag_error(DiagCode code, const char *message)
 {
     const char *name = diag_code_name(code);
 
@@ -171,7 +171,7 @@ int diag_error(DiagCode code, const char *message, bool json_errors)
         .plain_prefix = "",
         .code = name,
         .message = message,
-        .json_errors = json_errors,
+        .json_errors = g_json_errors,
     });
 }
 
@@ -181,13 +181,7 @@ void diag_set_json_errors(bool enabled)
     g_json_errors = enabled;
 }
 
-/* cppcheck-suppress staticFunction ; public API (diag.h); err_msg and warnings */
-bool diag_json_errors(void)
-{
-    return g_json_errors;
-}
-
-int diag_warning(DiagWarning code, const char *message, bool json_errors)
+int diag_warning(DiagWarning code, const char *message)
 {
     const char *name = diag_warning_name(code);
 
@@ -199,6 +193,6 @@ int diag_warning(DiagWarning code, const char *message, bool json_errors)
         .plain_prefix = "warning: ",
         .code = name,
         .message = message,
-        .json_errors = json_errors,
+        .json_errors = g_json_errors,
     });
 }

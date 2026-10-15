@@ -442,3 +442,22 @@ Change: `diag_warning(code, message, json_errors)` drops `exit_code`; plain pref
 **For stage 2:** the E4.2 golden list must include the two new deprecation lines with `warning: `. For stage 7: record both amendments in the 006 Implementation Results (E4.6, D5).
 
 **Praise:** one string table per catalog. JSON reuses `output_json_string`. An unknown code writes nothing and returns -1. A NULL message cannot reach `printf("%s")`.
+
+### 2026-10-15 — second-opinion deep review (stage 2)
+
+**Verdict:** stage 2 approved after one grill-decided simplification and one test auto-fix. No open blocking item.
+
+**Run, not read.** Gate (after the fixes): ctest 4/4 (ASan/UBSan), LINT OK, coverage 100% functions and 100% effective lines, `leaks-macos` PASS, `ci-linux.sh` OK.
+
+- **Plain golden by experiment.** `build-release/remember` was built from stage 1, which changed no call sites, so it is an exact 0.2.0-text baseline. I diffed stderr and exit codes against stage 2 on 49 error cases: argv and flag errors, ids, limits, bins, add/update/rekey/link/search/import/conflict/device/tags/purge, `--db` path errors, `--trash` and `purge-trash`. Only the two deprecation lines differ, and only by the `warning: ` prefix Itay chose.
+- **JSON by experiment.** With `--json-errors`, the same 49 cases give exactly one valid JSON error line, with a warning line before it where one applies. stdout is empty on every error, `message` equals the plain line minus `remember: `, and every code matches D9: `usage`, `not_found`, `deleted`, `not_deleted`, `invalid_query`, `self_link`, `key_conflict`, `body_conflict`, `database`, `cannot_open`.
+
+**Auto-fixed:**
+
+- **important** — two stage 2 checks had no test. The plan's "golden test proves plain bytes unchanged" was missing, and so was the DoD row "D9 table is a test". The repo had only three plain samples, and `code_for_cmd_text` (text → code) had no test. New `golden_error_lines_and_d9_codes` is a table of 16 rows over every D9 family. Each row is run plain (exact `remember: <msg>\n`, exit, empty stdout) and with `--json-errors` (exact JSON line, same exit, empty stdout). Mutation-checked: mapping `STORE_ERR_SELF_LINK` to `cycle` fails it.
+
+**Simplify lens → grill (Itay 2026-10-15: drop it):** after stage 2 added the process-wide flag, every `src/` caller passed `diag_json_errors()` back into `diag_error` / `diag_warning`. Both functions now take `(code, message)` and read the flag themselves. The getter `diag_json_errors()` then had no caller, which the function-coverage gate caught (99.78%), so it is deleted too. Unit tests set the mode through two small helpers, `diag_error_as` and `diag_warning_as`.
+
+**Nit (left; stage 3 and later):** `code_for_store_text` maps store error *text* to codes. That is the locked bridge (`decision:plan16-open-message-codes`) until stage 3 adds structured store errors. `code_for_cmd_text` does the same for command helpers, which return only a string. The golden table now pins every family it routes, so a reworded sentence fails a test. Plan 16 or a later plan could let those helpers return their code, which would delete the classifier.
+
+**Praise:** `err_store` puts the StoreStatus → code switch next to `store_status_message`, as the plan asks. `err_fmt` keeps long unknown-option text without truncating it (it has its own test). Parse errors map through one `code_for_cli_error` switch.

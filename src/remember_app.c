@@ -331,8 +331,7 @@ static Store *open_store(const CliArgs *args, int *out_rc)
     if (util_path_looks_synced(path)) {
         (void)diag_warning(DIAG_WARN_SYNCED_FOLDER,
                            "database path looks like a synced folder "
-                           "(iCloud/Dropbox/Google Drive); corruption risk - prefer a local disk",
-                           diag_json_errors());
+                           "(iCloud/Dropbox/Google Drive); corruption risk - prefer a local disk");
     }
     if (args->command == CLI_CMD_DEVICE && cmd_device_mints(args->rest_argc, args->rest_argv)) {
         s = store_open_replacing_sidecar(path, err, sizeof(err));
