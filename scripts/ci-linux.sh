@@ -103,19 +103,69 @@ cmake -S . -B "$BUILD_DIR" "${CMAKE_GEN[@]}" \
   -DCMAKE_BUILD_TYPE=Debug \
   -DCMAKE_C_COMPILER=clang \
   -DREMEMBER_ENABLE_SANITIZERS=ON \
-  -DREMEMBER_ENABLE_LSAN=ON
+  -DREMEMBER_ENABLE_LSAN=ON \
+  -DREMEMBER_TEST_VFS=ON
 
 echo "== build =="
 cmake --build "$BUILD_DIR"
 
+# chmod acceptance cases skip when euid is 0. Docker method A is root; drop to
+# the source-tree owner so those cases actually run. GitHub Actions is already
+# non-root and stays that way.
+ci_run() {
+  if [[ "$(id -u)" -ne 0 ]]; then
+    "$@"
+    return
+  fi
+  local uid gid user
+  uid="$(stat -c '%u' "$ROOT")"
+  gid="$(stat -c '%g' "$ROOT")"
+  # Docker Desktop mounts the tree as root even when the host user is not.
+  # chmod tests no-op as root, so always drop to an unprivileged account.
+  # The release-shim configure writes under the build dir (the source root
+  # stays root-owned and is not chowned).
+  if [[ "$uid" -eq 0 ]]; then
+    user="rememberci"
+    id "$user" >/dev/null 2>&1 || useradd -M -s /bin/bash "$user"
+    # World-writable, not chowned: a virtiofs chown would rewrite the host
+    # build dir's owner. The unprivileged user only needs to write test output.
+    chmod -R a+rwX "$BUILD_DIR"
+    echo "ci-linux: running tests as ${user}, not root"
+    runuser -u "$user" -- env \
+      ASAN_OPTIONS="${ASAN_OPTIONS:-}" \
+      UBSAN_OPTIONS="${UBSAN_OPTIONS:-}" \
+      PATH="$PATH" \
+      HOME="${HOME:-/tmp}" \
+      REMEMBER_SHIM_RELEASE_DIR="${ROOT}/${BUILD_DIR}/shim-release" \
+      "$@"
+    return
+  fi
+  if ! getent passwd "$uid" >/dev/null; then
+    user="rememberci"
+    getent group "$gid" >/dev/null || groupadd -g "$gid" "$user"
+    useradd -u "$uid" -g "$gid" -M -s /bin/bash "$user"
+  else
+    user="$(getent passwd "$uid" | cut -d: -f1)"
+  fi
+  # ctest writes under the build dir, which this script created as root.
+  chown -R "$uid:$gid" "$BUILD_DIR"
+  echo "ci-linux: running tests as ${user} (uid ${uid}), not root"
+  runuser -u "$user" -- env \
+    ASAN_OPTIONS="${ASAN_OPTIONS:-}" \
+    UBSAN_OPTIONS="${UBSAN_OPTIONS:-}" \
+    PATH="$PATH" \
+    HOME="${HOME:-/tmp}" \
+    "$@"
+}
+
 echo "== ctest (step_gate + store_asan_gate) =="
-ctest --test-dir "$BUILD_DIR" --output-on-failure
+ci_run ctest --test-dir "$BUILD_DIR" --output-on-failure
 
 echo "== black-box gate (same suites as step_gate) =="
-"./${BUILD_DIR}/remember_tests" "./${BUILD_DIR}/remember" --only "$GATE_SUITES"
+ci_run "./${BUILD_DIR}/remember_tests" "./${BUILD_DIR}/remember" --only "$GATE_SUITES"
 
 echo "== store unit under ASan/LSan =="
-"./${BUILD_DIR}/remember_store_tests"
+ci_run "./${BUILD_DIR}/remember_store_tests"
 
 echo "== lint (format, tidy, cppcheck, IWYU, scan-build) =="
 export CI=true

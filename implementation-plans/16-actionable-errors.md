@@ -399,6 +399,38 @@ E4.8 cause/fix is `diag_error_sqlite`. `database` has its own sentence (no cause
 
 No new grill. `sqlite_message` always-emit follows 006's omit list (errno/path/reason/fts_only only).
 
+### 2026-10-15 — stage 4 (VFS shim + acceptance matrix)
+
+`REMEMBER_TEST_VFS` defaults OFF. A Release configure forces it OFF even if the cache asks. The shim compiles into the `remember` CLI only. `remember_plain` and `remember_core` do not link it. `main` calls `remember_test_vfs_install` under the define; that wraps `unix` and registers it as the default VFS. Unix methods other than `xOpen` stay the parent's (they ignore the VFS pointer). `xOpen` leaves the `unixFile` at the front of the buffer — those methods expect that layout — and stores a method-table copy after it. Only `xRead` and `xWrite` are replaced. Truncate, sector size, and the lock methods stay the unix functions, which is what SQLite calls.
+
+Env, read once at install:
+
+- `REMEMBER_TEST_ENOSPC=1` — every `xWrite` returns `SQLITE_FULL`.
+- `REMEMBER_TEST_FAIL_WRITE=N` — N writes succeed, then every later write returns `SQLITE_IOERR_WRITE`.
+- `REMEMBER_TEST_FAIL_READ=N` — same for reads, `SQLITE_IOERR_READ`.
+- `REMEMBER_TEST_NOMEM=1` — a write returns `SQLITE_IOERR_NOMEM`, and so does a read of a file that already has bytes. A zero-length read is the probe SQLite does before it writes a new brain's header; that probe is passed through so the write-side fault can run.
+
+Unset or non-numeric counts are off. `=1` is the only value that turns the two flags on. A fault stays on once the count is exhausted, so SQLite cannot retry past it. NOMEM is checked before ENOSPC, which is checked before the write count.
+
+Itay 2026-10-15, `decision:plan16-nomem-sqlite-name`: the shim returns `SQLITE_IOERR_NOMEM`, and SQLite's `apiHandleError` rewrites that to `SQLITE_NOMEM` before `sqlite3_exec` / `sqlite3_step` return. The CLI locks `sqlite_name` `SQLITE_NOMEM`, message `out of memory`, code `database`. Do not bypass the rewrite.
+
+The failing `xRead` / `xWrite` returns before that system call, so `detail.errno` is whatever the unix VFS stored last. NOMEM checks size with `xFileSize` first; a successful `fstat` does not set errno. Observed on macOS: `FAIL_WRITE=0` on a new path reports `errno` `ENOENT` (2); `FAIL_READ=0` on an existing brain reports `errno` `EEXIST` (17). ENOSPC and NOMEM reported no errno.
+
+chmod acceptance (macOS, uid not root), same names as the Linux table in this plan:
+
+| Case | `sqlite_name` |
+|------|----------------|
+| file 444 + `add` | `SQLITE_READONLY` |
+| folder 555, file 666 + `add` | `SQLITE_READONLY_DIRECTORY` |
+| file 000 | `SQLITE_CANTOPEN`, `reason` `permission`, errno `EACCES` |
+| truncated to 512 bytes | `SQLITE_CORRUPT`, `fts_only` false |
+
+Each chmod test prints `SKIP <name> (running as root; file mode bits are ignored)` when `geteuid` is 0, and returns before the mode bits are checked. `scripts/ci-linux.sh` runs the suite as the source-tree owner when the container is root. Docker Desktop mounts the tree as uid 0, so that path creates `rememberci` and runs as that user instead. The build dir is made world-writable rather than chowned, so the host owner of the build tree stays put. GitHub Actions is already non-root.
+
+`tests/test_no_shim.sh` (ctest `no_shim_symbols`) requires the symbol on the test CLI and rejects it on `remember_plain`, `remember_core`, and a Release tree configured with `-DREMEMBER_TEST_VFS=ON`. `scripts/install.sh` refuses a binary that defines the symbol. `test_vfs.c` is the one TU besides `store_sqlite.c` allowed to include sqlite.
+
+`--busy-timeout`, `--no-create`, and `repair search-index` stay stages 5 and 6. QUALITY.md's shim paragraph stays stage 7.
+
 ## Review Notes
 
 ### 2026-10-15 — in-session deep review (stage 3)
@@ -529,3 +561,17 @@ Capture runs right after the failing call, before finalize or ROLLBACK (the hot 
 **Nit (left):** `diag.h` includes `store.h` so `diag_error_sqlite` can take a `StoreError`. The emitter now knows a store type. A diag-local detail struct would decouple them, at the cost of a copy at the one call site. Left as is.
 
 **Praise:** `store.h` stays SQLite-free. One capture helper feeds every failure site. The cannot_open reason table matches the plan's observed facts on macOS too.
+
+### 2026-10-15 — in-session deep review (stage 4)
+
+**Verdict:** approve for the second-opinion pass. No open blocking item. No new grill. `decision:plan16-nomem-sqlite-name` stays the only stage 4 decision.
+
+**Ran:** ctest 5/5 with ASan/UBSan (including `no_shim_symbols`), `lint-all.sh` LINT OK, coverage 100% functions and 100% effective lines, `leaks-macos` PASS, `ci-linux.sh` OK (iwyu and scan-build included). The container is root and the mount is uid 0; the suite ran as `rememberci`. No chmod test printed `SKIP`.
+
+**Praise:** the unix file stays at the front of the buffer, and only `xRead` / `xWrite` are replaced. Truncate and sector size stay the unix functions, which is what SQLite calls, so the wrapper does not grow methods the suite never enters. Release, `remember_plain`, and `remember_core` stay free of the symbol.
+
+**Auto-fixed before commit:** clang-tidy and cppcheck on the shim (env helpers, NOLINT on the process counters, `const` on the file header). Coverage was 99.60% while every io method was a wrapper SQLite does not call (`xTruncate`, `xSectorSize` on a powersafe-overwrite filesystem). Those wrappers are gone. NOMEM on a brand-new brain used to die on the empty-file probe, so the write-side return never ran; that probe is passed through and the header write takes the fault. The user-visible line is still `SQLITE_NOMEM` / `database` / no errno.
+
+**Follow-up, not this stage:** Bugbot on the branch (it did not finish `store_sqlite.c`, `tests/test_errors.c`, or `tests/test_no_shim.sh`) reported one medium finding in `cmd_import.c`: `load_tags` on the import source captures a SQLite error without `import_source`, so a tag-read failure is blamed on the brain. That is the stage 3 source-naming contract, not the VFS. Left for the whole-plan review.
+
+**Nit (left):** the tail cast needs a clang `-Wcast-align` suppression. `unixFile`'s size is pointer-aligned, and an assert checks that before the cast.

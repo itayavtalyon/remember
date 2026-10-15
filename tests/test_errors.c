@@ -12,6 +12,7 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <sqlite3.h>
+#include <stdbool.h>
 #include <stddef.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -1980,6 +1981,16 @@ TEST(cli_relative_db_emits_absolute_detail_path)
     (void)rmdir(tmpl);
 }
 
+/* Root ignores file mode bits. Print the skip: a green root run did not check it. */
+static bool skip_chmod_when_root(void)
+{
+    if (geteuid() != 0) {
+        return false;
+    }
+    (void)printf("SKIP %s (running as root; file mode bits are ignored)\n", g_current_test);
+    return true;
+}
+
 /* E4.8 through err_store: the first write to a read-only brain is read_only,
    with the absolute brain path and no errno. Root ignores file bits: skip. */
 TEST(cli_read_only_file_reports_read_only_on_write)
@@ -2002,8 +2013,7 @@ TEST(cli_read_only_file_reports_read_only_on_write)
     r = run_remember(db, seed, sizeof(seed) / sizeof(seed[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 0);
     cmd_result_free(&r);
-    /* Root ignores file bits. */
-    if (geteuid() == 0) {
+    if (skip_chmod_when_root()) {
         free(db);
         return;
     }
@@ -2179,6 +2189,414 @@ TEST(cli_db_under_a_file_keeps_the_legacy_open_line)
     free(dir);
 }
 
+/* chmod 555 on the folder (file stays 666) is read_only, READONLY_DIRECTORY.
+   Root skips: file mode bits do not apply. */
+TEST(cli_readonly_directory_reports_read_only)
+{
+    static const char *const k_plain =
+        "remember: database error: the brain is read-only (SQLITE_READONLY_DIRECTORY). "
+        "Give yourself write permission on the brain file and its folder, or move the brain to a "
+        "writable folder.\n";
+    char *db = make_temp_db_path();
+    char dir[TEST_PATH_CAP];
+    const char *seed[] = {"add", "seed"};
+    const char *add[] = {"add", "world"};
+    const char *json[] = {"--json-errors", "add", "world"};
+    char want[CLI_JSON_CAP];
+    char *slash = NULL;
+    CmdResult r;
+    int wrote = 0;
+
+    ASSERT_TRUE(db != NULL);
+    if (db == NULL) {
+        return;
+    }
+    r = run_remember(db, seed, sizeof(seed) / sizeof(seed[0]), NULL);
+    ASSERT_EQ_INT(r.exit_code, 0);
+    cmd_result_free(&r);
+    if (skip_chmod_when_root()) {
+        free(db);
+        return;
+    }
+    slash = strrchr(db, '/');
+    ASSERT_TRUE(slash != NULL && slash != db);
+    if (slash == NULL || slash == db) {
+        free(db);
+        return;
+    }
+    wrote = snprintf(dir, sizeof(dir), "%.*s", (int)(slash - db), db);
+    ASSERT_TRUE(wrote > 0 && (size_t)wrote < sizeof(dir));
+    ASSERT_EQ_INT(chmod(db, 0666), 0);
+    ASSERT_EQ_INT(chmod(dir, 0555), 0);
+    r = run_remember(db, add, sizeof(add) / sizeof(add[0]), NULL);
+    ASSERT_EQ_INT(r.exit_code, 1);
+    ASSERT_STREQ(r.out, "");
+    ASSERT_STREQ(r.err, k_plain);
+    cmd_result_free(&r);
+    r = run_remember(db, json, sizeof(json) / sizeof(json[0]), NULL);
+    (void)snprintf(want, sizeof(want),
+                   "{\"version\":1,\"error\":{\"code\":\"read_only\",\"message\":\"database error: "
+                   "the brain is "
+                   "read-only\",\"detail\":{\"sqlite_code\":8,\"sqlite_extended\":1544,\"sqlite_"
+                   "name\":\"SQLITE_READONLY_DIRECTORY\",\"sqlite_message\":\"attempt to write a "
+                   "readonly database\",\"fix\":\"Give yourself write permission on the brain file "
+                   "and its folder, or move the brain to a writable "
+                   "folder.\",\"path\":\"%s\"}}}\n",
+                   db);
+    ASSERT_EQ_INT(r.exit_code, 1);
+    ASSERT_STREQ(r.out, "");
+    ASSERT_STREQ(r.err, want);
+    cmd_result_free(&r);
+    ASSERT_EQ_INT(chmod(dir, 0700), 0);
+    ASSERT_EQ_INT(chmod(db, 0600), 0);
+    free(db);
+}
+
+/* chmod 000 on the brain file is cannot_open, reason permission. Root skips. */
+TEST(cli_mode_000_reports_cannot_open_permission)
+{
+    static const char *const k_plain =
+        "remember: database error: cannot open the brain file (SQLITE_CANTOPEN). "
+        "Check that the folder exists and that you can read and write it.\n";
+    char *db = make_temp_db_path();
+    const char *seed[] = {"add", "seed"};
+    const char *get[] = {"get", "1"};
+    const char *json[] = {"--json-errors", "get", "1"};
+    char want[CLI_JSON_CAP];
+    CmdResult r;
+
+    ASSERT_TRUE(db != NULL);
+    if (db == NULL) {
+        return;
+    }
+    r = run_remember(db, seed, sizeof(seed) / sizeof(seed[0]), NULL);
+    ASSERT_EQ_INT(r.exit_code, 0);
+    cmd_result_free(&r);
+    if (skip_chmod_when_root()) {
+        free(db);
+        return;
+    }
+    ASSERT_EQ_INT(chmod(db, 0), 0);
+    r = run_remember(db, get, sizeof(get) / sizeof(get[0]), NULL);
+    ASSERT_EQ_INT(r.exit_code, 1);
+    ASSERT_STREQ(r.out, "");
+    ASSERT_STREQ(r.err, k_plain);
+    cmd_result_free(&r);
+    r = run_remember(db, json, sizeof(json) / sizeof(json[0]), NULL);
+    (void)snprintf(
+        want, sizeof(want),
+        "{\"version\":1,\"error\":{\"code\":\"cannot_open\",\"message\":\"database error: cannot "
+        "open the brain "
+        "file\",\"detail\":{\"sqlite_code\":14,\"sqlite_extended\":14,\"sqlite_name\":\"SQLITE_"
+        "CANTOPEN\",\"sqlite_message\":\"unable to open database file\",\"fix\":\"Check that the "
+        "folder exists and that you can read and write it.\",\"errno\":%d,\"path\":\"%s\","
+        "\"reason\":\"permission\"}}}\n",
+        EACCES, db);
+    ASSERT_EQ_INT(r.exit_code, 1);
+    ASSERT_STREQ(r.out, "");
+    ASSERT_STREQ(r.err, want);
+    cmd_result_free(&r);
+    ASSERT_EQ_INT(chmod(db, 0600), 0);
+    free(db);
+}
+
+/* A header with the body cut off is corrupt, fts_only false. */
+TEST(cli_truncated_brain_reports_corrupt)
+{
+    static const char *const k_plain =
+        "remember: database error: the brain file is damaged (SQLITE_CORRUPT). "
+        "Copy the file somewhere safe before anything else, then run `remember export`, or "
+        "restore a backup.\n";
+    char *db = make_temp_db_path();
+    const char *seed[] = {"add", "seed"};
+    const char *get[] = {"get", "1"};
+    const char *json[] = {"--json-errors", "get", "1"};
+    char want[CLI_JSON_CAP];
+    CmdResult r;
+    int fd = -1;
+
+    ASSERT_TRUE(db != NULL);
+    if (db == NULL) {
+        return;
+    }
+    r = run_remember(db, seed, sizeof(seed) / sizeof(seed[0]), NULL);
+    ASSERT_EQ_INT(r.exit_code, 0);
+    cmd_result_free(&r);
+    fd = open(db, O_RDWR | O_CLOEXEC);
+    ASSERT_TRUE(fd >= 0);
+    if (fd >= 0) {
+        ASSERT_EQ_INT(ftruncate(fd, 512), 0);
+        ASSERT_EQ_INT(close(fd), 0);
+    }
+    r = run_remember(db, get, sizeof(get) / sizeof(get[0]), NULL);
+    ASSERT_EQ_INT(r.exit_code, 1);
+    ASSERT_STREQ(r.out, "");
+    ASSERT_STREQ(r.err, k_plain);
+    cmd_result_free(&r);
+    r = run_remember(db, json, sizeof(json) / sizeof(json[0]), NULL);
+    (void)snprintf(
+        want, sizeof(want),
+        "{\"version\":1,\"error\":{\"code\":\"corrupt\",\"message\":\"database error: the brain "
+        "file is "
+        "damaged\",\"detail\":{\"sqlite_code\":11,\"sqlite_extended\":11,\"sqlite_name\":\"SQLITE_"
+        "CORRUPT\",\"sqlite_message\":\"database disk image is malformed\",\"fix\":\"Copy the file "
+        "somewhere safe before anything else, then run `remember export`, or restore a "
+        "backup.\",\"path\":\"%s\",\"fts_only\":false}}}\n",
+        db);
+    ASSERT_EQ_INT(r.exit_code, 1);
+    ASSERT_STREQ(r.out, "");
+    ASSERT_STREQ(r.err, want);
+    cmd_result_free(&r);
+    free(db);
+}
+
+/* Single-threaded tests; setenv and unsetenv have no portable reentrant variant. */
+// NOLINTBEGIN(concurrency-mt-unsafe)
+
+/* X-E02: REMEMBER_TEST_ENOSPC=1 makes the next write SQLITE_FULL. */
+TEST(cli_enospc_shim_reports_disk_full)
+{
+    static const char *const k_plain =
+        "remember: database error: disk is full (SQLITE_FULL). Free some space and try again.\n";
+    char *db = make_temp_db_path();
+    const char *add[] = {"add", "full"};
+    const char *json[] = {"--json-errors", "add", "full"};
+    char want[CLI_JSON_CAP];
+    CmdResult r;
+
+    ASSERT_TRUE(db != NULL);
+    if (db == NULL) {
+        return;
+    }
+    ASSERT_EQ_INT(setenv("REMEMBER_TEST_ENOSPC", "1", 1), 0);
+    r = run_remember(db, add, sizeof(add) / sizeof(add[0]), NULL);
+    ASSERT_EQ_INT(unsetenv("REMEMBER_TEST_ENOSPC"), 0);
+    ASSERT_EQ_INT(r.exit_code, 1);
+    ASSERT_STREQ(r.out, "");
+    ASSERT_STREQ(r.err, k_plain);
+    cmd_result_free(&r);
+
+    ASSERT_EQ_INT(setenv("REMEMBER_TEST_ENOSPC", "1", 1), 0);
+    r = run_remember(db, json, sizeof(json) / sizeof(json[0]), NULL);
+    ASSERT_EQ_INT(unsetenv("REMEMBER_TEST_ENOSPC"), 0);
+    (void)snprintf(want, sizeof(want),
+                   "{\"version\":1,\"error\":{\"code\":\"disk_full\",\"message\":\"database error: "
+                   "disk is full\",\"detail\":{\"sqlite_code\":13,\"sqlite_extended\":13,\"sqlite_"
+                   "name\":\"SQLITE_FULL\",\"sqlite_message\":\"database or disk is "
+                   "full\",\"fix\":\"Free some space and try again.\",\"path\":\"%s\"}}}\n",
+                   db);
+    ASSERT_EQ_INT(r.exit_code, 1);
+    ASSERT_STREQ(r.out, "");
+    ASSERT_STREQ(r.err, want);
+    cmd_result_free(&r);
+    free(db);
+}
+
+/* X-E02: REMEMBER_TEST_FAIL_WRITE=0 fails the first write with IOERR_WRITE. */
+TEST(cli_fail_write_shim_reports_io_error)
+{
+    static const char *const k_plain =
+        "remember: database error: the disk reported a read or write error "
+        "(SQLITE_IOERR_WRITE). Check the disk or drive, then try again.\n";
+    char *db = make_temp_db_path();
+    const char *add[] = {"add", "write"};
+    const char *json[] = {"--json-errors", "add", "write"};
+    char want[CLI_JSON_CAP];
+    CmdResult r;
+
+    ASSERT_TRUE(db != NULL);
+    if (db == NULL) {
+        return;
+    }
+    ASSERT_EQ_INT(setenv("REMEMBER_TEST_FAIL_WRITE", "0", 1), 0);
+    r = run_remember(db, add, sizeof(add) / sizeof(add[0]), NULL);
+    ASSERT_EQ_INT(unsetenv("REMEMBER_TEST_FAIL_WRITE"), 0);
+    ASSERT_EQ_INT(r.exit_code, 1);
+    ASSERT_STREQ(r.out, "");
+    ASSERT_STREQ(r.err, k_plain);
+    cmd_result_free(&r);
+
+    ASSERT_EQ_INT(setenv("REMEMBER_TEST_FAIL_WRITE", "0", 1), 0);
+    r = run_remember(db, json, sizeof(json) / sizeof(json[0]), NULL);
+    ASSERT_EQ_INT(unsetenv("REMEMBER_TEST_FAIL_WRITE"), 0);
+    (void)snprintf(
+        want, sizeof(want),
+        "{\"version\":1,\"error\":{\"code\":\"io_error\",\"message\":\"database error: the disk "
+        "reported a read or write "
+        "error\",\"detail\":{\"sqlite_code\":10,\"sqlite_extended\":778,\"sqlite_name\":\"SQLITE_"
+        "IOERR_WRITE\",\"sqlite_message\":\"disk I/O error\",\"fix\":\"Check the disk or drive, "
+        "then try again.\",\"errno\":%d,\"path\":\"%s\"}}}\n",
+        ENOENT, db);
+    ASSERT_EQ_INT(r.exit_code, 1);
+    ASSERT_STREQ(r.out, "");
+    ASSERT_STREQ(r.err, want);
+    cmd_result_free(&r);
+    free(db);
+}
+
+/* A large write budget still finishes the add. N=0 above is the failure side. */
+TEST(cli_fail_write_budget_lets_an_add_finish)
+{
+    char *db = make_temp_db_path();
+    const char *add[] = {"add", "budget"};
+    CmdResult r;
+
+    ASSERT_TRUE(db != NULL);
+    if (db == NULL) {
+        return;
+    }
+    ASSERT_EQ_INT(setenv("REMEMBER_TEST_FAIL_WRITE", "100000", 1), 0);
+    r = run_remember(db, add, sizeof(add) / sizeof(add[0]), NULL);
+    ASSERT_EQ_INT(unsetenv("REMEMBER_TEST_FAIL_WRITE"), 0);
+    ASSERT_EQ_INT(r.exit_code, 0);
+    ASSERT_STR_NOT_CONTAINS(r.err, "database error");
+    cmd_result_free(&r);
+    free(db);
+}
+
+/* X-E02: REMEMBER_TEST_FAIL_READ=0 fails the first read with IOERR_READ. */
+TEST(cli_fail_read_shim_reports_io_error)
+{
+    static const char *const k_plain =
+        "remember: database error: the disk reported a read or write error "
+        "(SQLITE_IOERR_READ). Check the disk or drive, then try again.\n";
+    char *db = make_temp_db_path();
+    const char *seed[] = {"add", "seed"};
+    const char *list[] = {"list"};
+    const char *json[] = {"--json-errors", "list"};
+    char want[CLI_JSON_CAP];
+    CmdResult r;
+
+    ASSERT_TRUE(db != NULL);
+    if (db == NULL) {
+        return;
+    }
+    r = run_remember(db, seed, sizeof(seed) / sizeof(seed[0]), NULL);
+    ASSERT_EQ_INT(r.exit_code, 0);
+    cmd_result_free(&r);
+
+    ASSERT_EQ_INT(setenv("REMEMBER_TEST_FAIL_READ", "0", 1), 0);
+    r = run_remember(db, list, sizeof(list) / sizeof(list[0]), NULL);
+    ASSERT_EQ_INT(unsetenv("REMEMBER_TEST_FAIL_READ"), 0);
+    ASSERT_EQ_INT(r.exit_code, 1);
+    ASSERT_STREQ(r.out, "");
+    ASSERT_STREQ(r.err, k_plain);
+    cmd_result_free(&r);
+
+    ASSERT_EQ_INT(setenv("REMEMBER_TEST_FAIL_READ", "0", 1), 0);
+    r = run_remember(db, json, sizeof(json) / sizeof(json[0]), NULL);
+    ASSERT_EQ_INT(unsetenv("REMEMBER_TEST_FAIL_READ"), 0);
+    (void)snprintf(
+        want, sizeof(want),
+        "{\"version\":1,\"error\":{\"code\":\"io_error\",\"message\":\"database error: the disk "
+        "reported a read or write "
+        "error\",\"detail\":{\"sqlite_code\":10,\"sqlite_extended\":266,\"sqlite_name\":\"SQLITE_"
+        "IOERR_READ\",\"sqlite_message\":\"disk I/O error\",\"fix\":\"Check the disk or drive, "
+        "then try again.\",\"errno\":%d,\"path\":\"%s\"}}}\n",
+        EEXIST, db);
+    ASSERT_EQ_INT(r.exit_code, 1);
+    ASSERT_STREQ(r.out, "");
+    ASSERT_STREQ(r.err, want);
+    cmd_result_free(&r);
+    free(db);
+}
+
+/* A large read budget still lists the seeded row. N=0 above is the failure side. */
+TEST(cli_fail_read_budget_lets_a_list_finish)
+{
+    char *db = make_temp_db_path();
+    const char *seed[] = {"add", "seed"};
+    const char *list[] = {"list"};
+    CmdResult r;
+
+    ASSERT_TRUE(db != NULL);
+    if (db == NULL) {
+        return;
+    }
+    r = run_remember(db, seed, sizeof(seed) / sizeof(seed[0]), NULL);
+    ASSERT_EQ_INT(r.exit_code, 0);
+    cmd_result_free(&r);
+    ASSERT_EQ_INT(setenv("REMEMBER_TEST_FAIL_READ", "100000", 1), 0);
+    r = run_remember(db, list, sizeof(list) / sizeof(list[0]), NULL);
+    ASSERT_EQ_INT(unsetenv("REMEMBER_TEST_FAIL_READ"), 0);
+    ASSERT_EQ_INT(r.exit_code, 0);
+    ASSERT_STR_CONTAINS(r.out, "seed");
+    cmd_result_free(&r);
+    free(db);
+}
+
+/* X-E02 / D6: the shim returns IOERR_NOMEM. SQLite's apiHandleError rewrites
+   that to SQLITE_NOMEM before the store sees it (Itay 2026-10-15: lock the
+   observed name). The class is still database. */
+TEST(cli_nomem_shim_reports_database)
+{
+    static const char *const k_plain =
+        "remember: database error (SQLITE_NOMEM). Try again. If it keeps happening, report "
+        "the details from --json-errors.\n";
+    char *db = make_temp_db_path();
+    const char *add[] = {"add", "nomem"};
+    const char *json[] = {"--json-errors", "add", "nomem"};
+    char want[CLI_JSON_CAP];
+    CmdResult r;
+
+    ASSERT_TRUE(db != NULL);
+    if (db == NULL) {
+        return;
+    }
+    ASSERT_EQ_INT(setenv("REMEMBER_TEST_NOMEM", "1", 1), 0);
+    r = run_remember(db, add, sizeof(add) / sizeof(add[0]), NULL);
+    ASSERT_EQ_INT(unsetenv("REMEMBER_TEST_NOMEM"), 0);
+    ASSERT_EQ_INT(r.exit_code, 1);
+    ASSERT_STREQ(r.out, "");
+    ASSERT_STREQ(r.err, k_plain);
+    cmd_result_free(&r);
+
+    ASSERT_EQ_INT(setenv("REMEMBER_TEST_NOMEM", "1", 1), 0);
+    r = run_remember(db, json, sizeof(json) / sizeof(json[0]), NULL);
+    ASSERT_EQ_INT(unsetenv("REMEMBER_TEST_NOMEM"), 0);
+    (void)snprintf(want, sizeof(want),
+                   "{\"version\":1,\"error\":{\"code\":\"database\",\"message\":\"database "
+                   "error\",\"detail\":{\"sqlite_code\":7,\"sqlite_extended\":7,\"sqlite_"
+                   "name\":\"SQLITE_NOMEM\",\"sqlite_message\":\"out of "
+                   "memory\",\"fix\":\"Try again. If it keeps happening, report the details from "
+                   "--json-errors.\"}}}\n");
+    ASSERT_EQ_INT(r.exit_code, 1);
+    ASSERT_STREQ(r.out, "");
+    ASSERT_STREQ(r.err, want);
+    cmd_result_free(&r);
+    free(db);
+}
+
+/* Same rewrite on a read: list of an existing brain is also SQLITE_NOMEM. */
+TEST(cli_nomem_shim_fails_a_list)
+{
+    static const char *const k_plain =
+        "remember: database error (SQLITE_NOMEM). Try again. If it keeps happening, report "
+        "the details from --json-errors.\n";
+    char *db = make_temp_db_path();
+    const char *seed[] = {"add", "seed"};
+    const char *list[] = {"list"};
+    CmdResult r;
+
+    ASSERT_TRUE(db != NULL);
+    if (db == NULL) {
+        return;
+    }
+    r = run_remember(db, seed, sizeof(seed) / sizeof(seed[0]), NULL);
+    ASSERT_EQ_INT(r.exit_code, 0);
+    cmd_result_free(&r);
+    ASSERT_EQ_INT(setenv("REMEMBER_TEST_NOMEM", "1", 1), 0);
+    r = run_remember(db, list, sizeof(list) / sizeof(list[0]), NULL);
+    ASSERT_EQ_INT(unsetenv("REMEMBER_TEST_NOMEM"), 0);
+    ASSERT_EQ_INT(r.exit_code, 1);
+    ASSERT_STREQ(r.out, "");
+    ASSERT_STREQ(r.err, k_plain);
+    cmd_result_free(&r);
+    free(db);
+}
+
+// NOLINTEND(concurrency-mt-unsafe)
+
 void register_errors_tests(void)
 {
     RUN_TEST(util_absolute_path_joins_cwd_and_normalizes_lexically);
@@ -2235,6 +2653,16 @@ void register_errors_tests(void)
     RUN_TEST(cli_import_text_source_names_the_source);
     RUN_TEST(cli_relative_db_emits_absolute_detail_path);
     RUN_TEST(cli_read_only_file_reports_read_only_on_write);
+    RUN_TEST(cli_readonly_directory_reports_read_only);
+    RUN_TEST(cli_mode_000_reports_cannot_open_permission);
+    RUN_TEST(cli_truncated_brain_reports_corrupt);
+    RUN_TEST(cli_enospc_shim_reports_disk_full);
+    RUN_TEST(cli_fail_write_shim_reports_io_error);
+    RUN_TEST(cli_fail_write_budget_lets_an_add_finish);
+    RUN_TEST(cli_fail_read_shim_reports_io_error);
+    RUN_TEST(cli_fail_read_budget_lets_a_list_finish);
+    RUN_TEST(cli_nomem_shim_reports_database);
+    RUN_TEST(cli_nomem_shim_fails_a_list);
     RUN_TEST(sqlite_out_of_range_reason_falls_back_to_other);
     RUN_TEST(err_store_sqlite_misuse_and_clean_store_fall_back);
     RUN_TEST(cli_db_under_a_file_keeps_the_legacy_open_line);

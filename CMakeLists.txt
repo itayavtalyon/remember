@@ -20,12 +20,16 @@ option(REMEMBER_ENABLE_COVERAGE "Clang -fprofile-instr-generate/-fcoverage-mappi
 # Fault-injection hooks in store_sqlite (malloc/prepare). On for coverage builds
 # and Debug unit tests so OOM/SQLite-error lines are reachable.
 option(REMEMBER_TEST_HOOKS "Enable store_test_fail_* hooks in store_sqlite.c" OFF)
+# X-E02 / P3. Default OFF. Release forces it off even if the cache asks.
+# remember_plain and remember_core never compile the shim.
+option(REMEMBER_TEST_VFS "Compile the test-only failing SQLite VFS into the remember CLI" OFF)
 if(REMEMBER_ENABLE_COVERAGE)
     set(REMEMBER_TEST_HOOKS ON)
 endif()
 
 if(CMAKE_BUILD_TYPE STREQUAL "Release")
     set(REMEMBER_ENABLE_SANITIZERS OFF)
+    set(REMEMBER_TEST_VFS OFF)
 endif()
 if(REMEMBER_ENABLE_COVERAGE AND REMEMBER_ENABLE_SANITIZERS)
     message(WARNING "REMEMBER_ENABLE_COVERAGE with sanitizers: prefer a separate "
@@ -109,6 +113,7 @@ set_property(SOURCE
     src/output.c
     src/util.c
     src/diag.c
+    src/test_vfs.c
     APPEND PROPERTY COMPILE_OPTIONS -Wcast-qual
 )
 
@@ -239,6 +244,10 @@ remember_apply_posix_feature_macros(remember)
 remember_apply_sanitizers(remember)
 remember_apply_coverage(remember)
 remember_apply_test_hooks(remember)
+if(REMEMBER_TEST_VFS)
+    target_sources(remember PRIVATE src/test_vfs.c)
+    target_compile_definitions(remember PRIVATE REMEMBER_TEST_VFS)
+endif()
 
 # Non-sanitized CLI for macOS leaks(1) (leaks cannot inspect ASan heaps).
 add_executable(remember_plain
@@ -401,6 +410,18 @@ add_test(NAME store_asan_gate
 add_test(NAME install_skill
     COMMAND bash "${CMAKE_SOURCE_DIR}/tests/test_install_skill.sh"
 )
+if(REMEMBER_TEST_VFS)
+    add_test(NAME no_shim_symbols
+        COMMAND bash "${CMAKE_SOURCE_DIR}/tests/test_no_shim.sh"
+            $<TARGET_FILE:remember>
+            $<TARGET_FILE:remember_plain>
+            $<TARGET_FILE:remember_core>
+            "${CMAKE_SOURCE_DIR}"
+    )
+    set_tests_properties(no_shim_symbols PROPERTIES
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+    )
+endif()
 set_tests_properties(install_skill PROPERTIES
     WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
 )
