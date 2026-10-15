@@ -105,6 +105,7 @@ set_property(SOURCE
     src/cmd_purge.c
     src/cmd_graph.c
     src/cmd_import.c
+    src/cmd_device.c
     src/output.c
     src/util.c
     APPEND PROPERTY COMPILE_OPTIONS -Wcast-qual
@@ -217,6 +218,7 @@ set(REMEMBER_LIB_SOURCES
     src/cmd_purge.c
     src/cmd_graph.c
     src/cmd_import.c
+    src/cmd_device.c
     src/output.c
     src/util.c
 )
@@ -287,6 +289,8 @@ set(REMEMBER_TEST_SOURCES
     tests/test_sync_delete.c
     tests/test_sync_locators.c
     tests/test_sync_import.c
+    tests/test_schema_v5.c
+    tests/test_device.c
 )
 add_executable(remember_tests
     ${REMEMBER_TEST_SOURCES}
@@ -322,6 +326,7 @@ add_executable(remember_store_tests
     tests/test_store_links.c
     tests/test_store_sync.c
     tests/test_normalize.c
+    tests/test_schema_v5.c
     src/store_sqlite.c
     src/normalize.c
     third_party/sha256/sha256.c

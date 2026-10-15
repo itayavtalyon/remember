@@ -200,6 +200,104 @@ static bool utf8_is_valid(const char *s, size_t len)
     return true;
 }
 
+/* Hebrew points and cantillation dropped from FTS rows (E10.1). Letters stay. */
+static const unsigned HEBREW_MARK_BLOCK_LO = 0x0591U;
+static const unsigned HEBREW_MARK_BLOCK_HI = 0x05BDU;
+static const unsigned HEBREW_MARK_RAFE = 0x05BFU;
+static const unsigned HEBREW_MARK_SHIN_LO = 0x05C1U;
+static const unsigned HEBREW_MARK_SHIN_HI = 0x05C2U;
+static const unsigned HEBREW_MARK_DOT_LO = 0x05C4U;
+static const unsigned HEBREW_MARK_DOT_HI = 0x05C5U;
+static const unsigned HEBREW_MARK_QAMATS = 0x05C7U;
+
+static bool is_hebrew_mark(unsigned int cp)
+{
+    if (cp >= HEBREW_MARK_BLOCK_LO && cp <= HEBREW_MARK_BLOCK_HI) {
+        return true;
+    }
+    if (cp == HEBREW_MARK_RAFE) {
+        return true;
+    }
+    if (cp >= HEBREW_MARK_SHIN_LO && cp <= HEBREW_MARK_SHIN_HI) {
+        return true;
+    }
+    if (cp >= HEBREW_MARK_DOT_LO && cp <= HEBREW_MARK_DOT_HI) {
+        return true;
+    }
+    if (cp == HEBREW_MARK_QAMATS) {
+        return true;
+    }
+    return false;
+}
+
+/* Decode one scalar at s[i], or false without reading past len. */
+static bool utf8_one(const char *s, size_t len, size_t i, Utf8Scalar *out)
+{
+    unsigned char c = (unsigned char)s[i];
+    size_t need = 0;
+    unsigned int cp = 0;
+
+    if (!utf8_lead(c, &need, &cp)) {
+        return false;
+    }
+    if (!utf8_cont(s, len, i, need, &cp)) {
+        return false;
+    }
+    *out = (Utf8Scalar){.need = need, .cp = cp};
+    return utf8_cp_ok(*out);
+}
+
+/* cppcheck-suppress staticFunction ; public API (normalize.h); FTS row text */
+NormStatus fold_hebrew_marks(const char *src, size_t src_len, char **out)
+{
+    char *buf = NULL;
+    size_t i = 0;
+    size_t w = 0;
+
+    if (out == NULL) {
+        return NORM_ERR_INTERNAL;
+    }
+    *out = NULL;
+    if (src == NULL) {
+        return NORM_ERR_INTERNAL;
+    }
+    for (i = 0; i < src_len; i++) {
+        if (src[i] == '\0') {
+            src_len = i;
+            break;
+        }
+    }
+
+    buf = (char *)malloc(src_len + 1U);
+    if (buf == NULL) {
+        return NORM_ERR_OOM;
+    }
+    i = 0;
+    while (i < src_len) {
+        unsigned char c = (unsigned char)src[i];
+        Utf8Scalar dec;
+
+        if (c <= ASCII_MAX) {
+            buf[w++] = (char)c;
+            i++;
+            continue;
+        }
+        if (!utf8_one(src, src_len, i, &dec)) {
+            buf[w++] = (char)c;
+            i++;
+            continue;
+        }
+        if (!is_hebrew_mark(dec.cp)) {
+            memcpy(buf + w, src + i, dec.need);
+            w += dec.need;
+        }
+        i += dec.need;
+    }
+    buf[w] = '\0';
+    *out = buf;
+    return NORM_OK;
+}
+
 /* ---- body ---------------------------------------------------------------- */
 
 NormStatus body_trim_copy(const char *src, size_t src_len, char **out, size_t *out_len)

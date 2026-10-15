@@ -43,6 +43,7 @@ static void print_general_help(void)
                                "  import      Merge another remember database (--from-db)\n"
                                "  conflicts   List unresolved merge conflicts\n"
                                "  conflict    Resolve a merge conflict (accept)\n"
+                               "  device      Print the device id, or mint one with 'new'\n"
                                "  help        Show this help (help <command> for a command)\n"
                                "  version     Show version\n"
                                "\n"
@@ -108,7 +109,7 @@ static void print_command_help(CliCommand topic)
             (void)fprintf(out, "Human get prints the body, then a Related: block if any.\n");
         } else {
             (void)fprintf(out, "Unflagged delete soft-deletes (live or expired).\n");
-            (void)fprintf(out, "delete --expired|--deleted hard-wipes one row (needs 1 device).\n");
+            (void)fprintf(out, "delete --expired|--deleted hard-wipes one row.\n");
         }
         (void)fprintf(out, "\n");
     } else if (topic == CLI_CMD_UPDATE) {
@@ -178,7 +179,6 @@ static void print_command_help(CliCommand topic)
         (void)fprintf(out, "  --expired       Wipe expired rows\n");
         (void)fprintf(out, "  --deleted       Wipe deleted rows\n");
         (void)fprintf(out, "Exactly one of --expired or --deleted is required.\n");
-        (void)fprintf(out, "Requires exactly one registered device.\n");
         (void)fprintf(out, "Human stdout: the count of deleted entries.\n");
         (void)fprintf(out, "\n");
     } else if (topic == CLI_CMD_PURGE_TRASH) {
@@ -237,8 +237,8 @@ static void print_command_help(CliCommand topic)
         (void)fprintf(out, "  --from-db PATH  Source remember database (read-only)\n");
         (void)fprintf(out, "\n");
         (void)fprintf(out, "Merges by sync_id. Conflicts are recorded; exit 0 even if any.\n");
-        (void)fprintf(out, "Run 'conflicts' after import. Source must be schema v4+.\n");
-        (void)fprintf(out, "Does not copy the foreign device_id sidecar or register devices.\n");
+        (void)fprintf(out, "Run 'conflicts' after import. Source must be schema v4 or v5.\n");
+        (void)fprintf(out, "Does not copy the foreign device_id sidecar.\n");
         (void)fprintf(out, "\n");
     } else if (topic == CLI_CMD_CONFLICTS) {
         (void)fprintf(out, "Lists unresolved import conflicts. Takes no options.\n");
@@ -249,6 +249,17 @@ static void print_command_help(CliCommand topic)
         (void)fprintf(out, "\n");
         (void)fprintf(out,
                       "both remints sync_id on concurrent_vv; clash keeps incoming sync_id.\n");
+        (void)fprintf(out, "\n");
+    } else if (topic == CLI_CMD_DEVICE) {
+        (void)fprintf(out, "Prints the sidecar device id.\n");
+        (void)fprintf(out, "  remember device\n");
+        (void)fprintf(out, "  remember device new\n");
+        (void)fprintf(out, "\n");
+        (void)fprintf(out, "'device new' mints a new id and writes the sidecar.\n");
+        (void)fprintf(out, "Run it after a restore or a copied brain.\n");
+        (void)fprintf(out, "Plain output is that id. It does not change a version vector.\n");
+        (void)fprintf(out, "It also replaces an invalid sidecar (no other command does).\n");
+        (void)fprintf(out, "JSON adds \"previous\", the id it replaced.\n");
         (void)fprintf(out, "\n");
     }
     (void)fprintf(out, "Global options: --db PATH, --json, --help, --version\n");
@@ -303,7 +314,11 @@ static Store *open_store(const CliArgs *args, int *out_rc)
                       "remember: warning: database path looks like a synced folder "
                       "(iCloud/Dropbox/Google Drive); corruption risk - prefer a local disk\n");
     }
-    s = store_open(path, err, sizeof(err));
+    if (args->command == CLI_CMD_DEVICE && cmd_device_mints(args->rest_argc, args->rest_argv)) {
+        s = store_open_replacing_sidecar(path, err, sizeof(err));
+    } else {
+        s = store_open(path, err, sizeof(err));
+    }
     if (s == NULL) {
         (void)fprintf(app_err(), "remember: %s\n", err[0] != '\0' ? err : "cannot open database");
         *out_rc = REMEMBER_ERR;
@@ -378,6 +393,8 @@ static int run(const CliArgs *args)
         return run_with_store(args, cmd_conflicts);
     case CLI_CMD_CONFLICT:
         return run_with_store(args, cmd_conflict);
+    case CLI_CMD_DEVICE:
+        return run_with_store(args, cmd_device);
     case CLI_CMD_NONE:
         /* Defensive: parse should set CLI_ERR_MISSING_COMMAND first. */
         (void)fprintf(app_err(), "remember: %s\n", cli_error_message(CLI_ERR_MISSING_COMMAND));

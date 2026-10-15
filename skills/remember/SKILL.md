@@ -10,7 +10,7 @@ description: >
   chat-only notes for facts that must survive sessions. On deep review, get
   --key workflow:deep-review and follow it. On project pickup or pause, follow
   workflow:project-status (status:<slug> cards + links). Use with /remember or
-  remember add|search|list|get|update|delete|tags|purge|import|conflicts|link|unlink|related|rekey.
+  remember add|search|list|get|update|delete|tags|purge|import|conflicts|device|link|unlink|related|rekey.
 ---
 
 # remember — agent skill
@@ -18,7 +18,7 @@ description: >
 Personal durable memory on the local machine. **Not** a chat log.
 
 Binary: `remember` (install via `./scripts/install.sh`). Default DB: `~/.remember/remember.db`.
-Device identity lives next to the DB as `<db-path>.device_id` (never copy on import).
+The device id is the sidecar `<db-path>.device_id` (never copy on import). Run `device new` after a restore or a copied brain. `device new` also repairs an invalid sidecar.
 
 ## When to write
 
@@ -145,8 +145,8 @@ remember --json purge-trash                       # deprecated ≡ purge --expir
 **Soft vs hard delete:**
 
 - Unflagged `delete` = **soft** (sets `deleted_at`, clears `expires_at`, keeps body/tags/key/sync_id/edges/FTS)
-- `delete --expired` / `delete --deleted` = **one-row hard** CASCADE (needs exactly one registered device)
-- `purge --expired|--deleted` = whole-bin hard wipe (same single-device hatch)
+- `delete --expired` / `delete --deleted` = **one-row hard** CASCADE
+- `purge --expired|--deleted` = whole-bin hard wipe
 - `--trash` ≡ `--expired` + deprecation stderr
 
 **Update rules:**
@@ -168,12 +168,25 @@ remember --json conflicts
 remember --json conflict accept --id 1 --keep local|incoming|both
 ```
 
-- Merges by **`sync_id`**. Source opened read-only; must be schema v4+ (older → exit 1).
-- Does **not** copy the foreign `.device_id` sidecar or register foreign devices.
+- Merges by **`sync_id`**. Source opened read-only; must be schema v4 or v5 (older or newer → exit 1).
+- Does **not** copy the foreign `.device_id` sidecar.
 - Exit **0** even when conflicts were recorded. **Always run `conflicts` after import.**
 - Reasons: `concurrent_vv` | `key_clash` | `hash_clash`
 - `--keep both` remints incoming `sync_id` on `concurrent_vv`; on clash keeps incoming sync_id (keyless if the slot is taken)
 - JSON import: `action:imported` + `inserted`/`updated`/`unchanged`/`conflicts` counts
+
+### device
+
+```bash
+remember device
+remember --json device new
+```
+
+- The device id is the sidecar `<db-path>.device_id` (one lowercase UUID, mode 0600). The database holds no second copy.
+- `device` prints that id. `--json` is `{"version":1,"device_id":"…"}`.
+- `device new` mints a new id after a restore or a copied brain. It writes the sidecar and does not change version vectors. Plain output is the new id. `--json` adds `"previous"`.
+- `device new` also repairs an invalid sidecar. No other command does.
+- A missing sidecar is minted on open, so `"previous"` is that id. JSON `null` is only the type.
 
 ### link / unlink / related
 
@@ -245,6 +258,8 @@ Agents should always use `--json` when parsing.
 ## FTS notes
 
 - Query language is SQLite FTS5 MATCH (document in help / SQLite docs)
+- The key is indexed: `search editor` finds `pref:editor`.
+- Hebrew marks are folded out of the index. The stored body keeps them.
 - Invalid MATCH syntax → exit 1 (`invalid search query`)
 - Empty result set → exit 0 with `count:0` (not an error)
 
@@ -326,7 +341,7 @@ remember --json link --from-key status:treasurehunter --to-key project:treasureh
 3. Search before add when the subject may already exist
 4. Honor paging (`total` vs `count`)
 5. Cite real ids/keys/sync_ids from tool output only
-6. Keep the DB on local disk; leave `<db>.device_id` beside it
+6. Keep the DB on local disk. The device id is the sidecar beside it. Run `device new` after a restore or a copied brain
 7. Link only for intentional pairs; tags for shared facets
 8. Read stub `bin` (`live`/`expired`/`deleted`); wrong-bin get → exit 3
 9. Rename keys with `rekey`, never delete + re-add

@@ -42,6 +42,42 @@ static int json_copy_quoted(const char *json, const char *key, char *out, size_t
     return 0;
 }
 
+static char *sidecar_path(const char *db);
+
+static char *read_sidecar_id(const char *db)
+{
+    char *side = NULL;
+    FILE *f = NULL;
+    char buf[80];
+    size_t n = 0;
+    char *out = NULL;
+
+    side = sidecar_path(db);
+    if (side == NULL) {
+        return NULL;
+    }
+    f = fopen(side, "r");
+    free(side);
+    if (f == NULL) {
+        return NULL;
+    }
+    if (fgets(buf, (int)sizeof(buf), f) == NULL) {
+        (void)fclose(f);
+        return NULL;
+    }
+    (void)fclose(f);
+    n = strlen(buf);
+    while (n > 0U && (buf[n - 1U] == '\n' || buf[n - 1U] == '\r')) {
+        buf[--n] = '\0';
+    }
+    out = (char *)malloc(n + 1U);
+    if (out == NULL) {
+        return NULL;
+    }
+    memcpy(out, buf, n + 1U);
+    return out;
+}
+
 static char *sidecar_path(const char *db)
 {
     size_t n = 0;
@@ -136,8 +172,9 @@ TEST(cli_import_inserts_preserves_sync_id_remaps_links_no_device_register)
     ASSERT_STR_CONTAINS(r.out, "\"type\":\"cites\"");
     cmd_result_free(&r);
 
-    devices = harness_sqlite_query_line(local, "SELECT COUNT(*) FROM devices;");
-    ASSERT_STREQ(devices != NULL ? devices : "", "1");
+    devices = harness_sqlite_query_line(
+        local, "SELECT name FROM sqlite_master WHERE type='table' AND name='devices';");
+    ASSERT_TRUE(devices == NULL);
     free(devices);
 
     free(local);
@@ -170,6 +207,280 @@ TEST(cli_import_refuses_v3_source)
     ASSERT_EQ_INT(r.exit_code, 1);
     ASSERT_STR_CONTAINS(r.err, "source database is older than this remember");
     cmd_result_free(&r);
+    free(local);
+    free(foreign);
+}
+
+static void sqlite_exec(const char *db, const char *sql)
+{
+    free(harness_sqlite_query_line(db, sql));
+}
+
+static unsigned char *read_file(const char *path, size_t *out_n)
+{
+    FILE *f = NULL;
+    long len = 0;
+    unsigned char *buf = NULL;
+
+    if (path == NULL || out_n == NULL) {
+        return NULL;
+    }
+    f = fopen(path, "rb");
+    if (f == NULL) {
+        return NULL;
+    }
+    if (fseek(f, 0, SEEK_END) != 0) {
+        (void)fclose(f);
+        return NULL;
+    }
+    len = ftell(f);
+    if (len <= 0 || fseek(f, 0, SEEK_SET) != 0) {
+        (void)fclose(f);
+        return NULL;
+    }
+    buf = (unsigned char *)malloc((size_t)len);
+    if (buf == NULL || fread(buf, 1U, (size_t)len, f) != (size_t)len) {
+        free(buf);
+        (void)fclose(f);
+        return NULL;
+    }
+    (void)fclose(f);
+    *out_n = (size_t)len;
+    return buf;
+}
+
+static int file_matches(const char *path, const unsigned char *before, size_t n)
+{
+    size_t now_n = 0U;
+    unsigned char *now = NULL;
+    int same = 0;
+
+    now = read_file(path, &now_n);
+    if (now == NULL || before == NULL) {
+        free(now);
+        return 0;
+    }
+    same = (now_n == n && memcmp(now, before, n) == 0) ? 1 : 0;
+    free(now);
+    return same;
+}
+
+/* v4 shape: no origin column, no bucket_prefixes, no settings, one devices row. */
+static void given_v4_import_source(const char *db)
+{
+    sqlite_exec(db, "CREATE TABLE entries ("
+                    "id INTEGER PRIMARY KEY, key TEXT, body TEXT NOT NULL, "
+                    "body_hash TEXT NOT NULL, source TEXT NOT NULL, created_at TEXT NOT NULL, "
+                    "updated_at TEXT NOT NULL, expires_at TEXT, sync_id TEXT NOT NULL, "
+                    "deleted_at TEXT, version_vector TEXT NOT NULL);");
+    sqlite_exec(db, "CREATE TABLE tags (id INTEGER PRIMARY KEY, name TEXT NOT NULL UNIQUE);"
+                    "CREATE TABLE entry_tags ("
+                    "entry_id INTEGER NOT NULL, tag_id INTEGER NOT NULL, "
+                    "PRIMARY KEY (entry_id, tag_id));"
+                    "CREATE TABLE entry_links ("
+                    "from_id INTEGER NOT NULL, to_id INTEGER NOT NULL, kind TEXT NOT NULL, "
+                    "created_at TEXT NOT NULL, updated_at TEXT NOT NULL);");
+    sqlite_exec(db,
+                "CREATE TABLE devices ("
+                "device_id TEXT PRIMARY KEY, first_seen TEXT NOT NULL, last_seen TEXT NOT NULL);"
+                "CREATE TABLE conflicts ("
+                "id INTEGER PRIMARY KEY, sync_id TEXT NOT NULL, reason TEXT NOT NULL, "
+                "local_json TEXT NOT NULL, incoming_json TEXT NOT NULL, "
+                "created_at TEXT NOT NULL);");
+    sqlite_exec(db, "INSERT INTO entries(id, key, body, body_hash, source, created_at, updated_at, "
+                    "sync_id, version_vector) VALUES (1, 'pref:editor', 'notes', "
+                    "'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', "
+                    "'human', '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z', "
+                    "'018f6b2e-7c3a-7c00-8000-000000000001', "
+                    "'{\"018f6b2e-7c3a-7b2e-8f3a-7c3a7b2e8f3a\":1}');");
+    sqlite_exec(db, "INSERT INTO devices(device_id, first_seen, last_seen) VALUES "
+                    "('018f6b2e-7c3a-7b2e-8f3a-7c3a7b2e8f3a', '2026-01-01T00:00:00.000Z', "
+                    "'2026-01-01T00:00:00.000Z');"
+                    "PRAGMA user_version=4;");
+}
+
+TEST(cli_import_refuses_source_newer_than_v5)
+{
+    char *local = make_temp_db_path();
+    char *foreign = make_temp_db_path();
+    CmdResult r;
+    const char *add[] = {"--json", "add", "--key", "ka", "alpha"};
+    const char *list[] = {"--json", "list"};
+    const char *imp[] = {"--json", "import", "--from-db", NULL};
+    char *ver = NULL;
+
+    ASSERT_TRUE(local != NULL && foreign != NULL);
+    r = run_remember(local, list, sizeof(list) / sizeof(list[0]), NULL);
+    ASSERT_EQ_INT(r.exit_code, 0);
+    cmd_result_free(&r);
+    r = run_remember(foreign, add, sizeof(add) / sizeof(add[0]), NULL);
+    ASSERT_EQ_INT(r.exit_code, 0);
+    cmd_result_free(&r);
+    free(harness_sqlite_query_line(foreign, "PRAGMA user_version=6;"));
+    ver = harness_sqlite_query_line(foreign, "PRAGMA user_version;");
+    ASSERT_STREQ(ver, "6");
+    free(ver);
+
+    imp[3] = foreign;
+    r = run_remember(local, imp, sizeof(imp) / sizeof(imp[0]), NULL);
+    ASSERT_EQ_INT(r.exit_code, 1);
+    ASSERT_STR_CONTAINS(r.err, "database is newer than this remember");
+    cmd_result_free(&r);
+
+    ver = harness_sqlite_query_line(foreign, "PRAGMA user_version;");
+    ASSERT_STREQ(ver, "6");
+    free(ver);
+    r = run_remember(local, list, sizeof(list) / sizeof(list[0]), NULL);
+    ASSERT_EQ_INT(r.exit_code, 0);
+    ASSERT_STR_CONTAINS(r.out, "\"total\":0");
+    cmd_result_free(&r);
+    free(local);
+    free(foreign);
+}
+
+TEST(cli_import_v4_source_is_read_only_and_optional_objects_are_absent)
+{
+    char *local = make_temp_db_path();
+    char *foreign = make_temp_db_path();
+    char *side = NULL;
+    unsigned char *before = NULL;
+    size_t before_n = 0U;
+    CmdResult r;
+    const char *list[] = {"--json", "list"};
+    const char *imp[] = {"--json", "import", "--from-db", NULL};
+    const char *get[] = {"--json", "get", "--key", "pref:editor"};
+    char *line = NULL;
+
+    ASSERT_TRUE(local != NULL && foreign != NULL);
+    given_v4_import_source(foreign);
+    line = harness_sqlite_query_line(foreign, "PRAGMA user_version;");
+    ASSERT_STREQ(line, "4");
+    free(line);
+    line = harness_sqlite_query_line(
+        foreign, "SELECT COUNT(*) FROM pragma_table_info('conflicts') WHERE name='origin';");
+    ASSERT_STREQ(line, "0");
+    free(line);
+    line = harness_sqlite_query_line(
+        foreign, "SELECT name FROM sqlite_master WHERE type='table' AND name='bucket_prefixes';");
+    ASSERT_TRUE(line == NULL);
+    free(line);
+    line = harness_sqlite_query_line(
+        foreign, "SELECT name FROM sqlite_master WHERE type='table' AND name='settings';");
+    ASSERT_TRUE(line == NULL);
+    free(line);
+    before = read_file(foreign, &before_n);
+    ASSERT_TRUE(before != NULL);
+
+    r = run_remember(local, list, sizeof(list) / sizeof(list[0]), NULL);
+    ASSERT_EQ_INT(r.exit_code, 0);
+    cmd_result_free(&r);
+    imp[3] = foreign;
+    r = run_remember(local, imp, sizeof(imp) / sizeof(imp[0]), NULL);
+    ASSERT_EQ_INT(r.exit_code, 0);
+    ASSERT_STR_CONTAINS(r.out, "\"inserted\":1");
+    cmd_result_free(&r);
+
+    ASSERT_TRUE(file_matches(foreign, before, before_n));
+    line = harness_sqlite_query_line(foreign, "PRAGMA user_version;");
+    ASSERT_STREQ(line, "4");
+    free(line);
+    line = harness_sqlite_query_line(foreign, "SELECT device_id FROM devices;");
+    ASSERT_STREQ(line, "018f6b2e-7c3a-7b2e-8f3a-7c3a7b2e8f3a");
+    free(line);
+    side = sidecar_path(foreign);
+    ASSERT_TRUE(side != NULL);
+    ASSERT_TRUE(access(side, F_OK) != 0);
+    free(side);
+    line = harness_sqlite_query_line(
+        local, "SELECT name FROM sqlite_master WHERE type='table' AND name='devices';");
+    ASSERT_TRUE(line == NULL);
+    free(line);
+    line = harness_sqlite_query_line(local, "SELECT COUNT(*) FROM settings;");
+    ASSERT_STREQ(line, "0");
+    free(line);
+    line = harness_sqlite_query_line(local, "SELECT COUNT(*) FROM bucket_prefixes;");
+    ASSERT_STREQ(line, "0");
+    free(line);
+    r = run_remember(local, get, sizeof(get) / sizeof(get[0]), NULL);
+    ASSERT_EQ_INT(r.exit_code, 0);
+    ASSERT_STR_CONTAINS(r.out, "notes");
+    cmd_result_free(&r);
+    free(before);
+    free(local);
+    free(foreign);
+}
+
+TEST(cli_import_v5_source_is_read_only_and_optional_rows_stay_there)
+{
+    char *local = make_temp_db_path();
+    char *foreign = make_temp_db_path();
+    char *side = NULL;
+    unsigned char *before = NULL;
+    unsigned char *side_before = NULL;
+    size_t before_n = 0U;
+    size_t side_n = 0U;
+    CmdResult r;
+    const char *add[] = {"--json", "add", "--key", "ka", "alpha"};
+    const char *list[] = {"--json", "list"};
+    const char *imp[] = {"--json", "import", "--from-db", NULL};
+    char *line = NULL;
+
+    ASSERT_TRUE(local != NULL && foreign != NULL);
+    r = run_remember(foreign, add, sizeof(add) / sizeof(add[0]), NULL);
+    ASSERT_EQ_INT(r.exit_code, 0);
+    cmd_result_free(&r);
+    sqlite_exec(foreign, "INSERT INTO settings(name, value, updated_at) VALUES "
+                         "('ui.theme', 'dark', '2026-01-01T00:00:00.000Z');"
+                         "INSERT INTO bucket_prefixes(prefix, added_at, device_id) VALUES "
+                         "('work', '2026-01-01T00:00:00.000Z', "
+                         "'018f6b2e-7c3a-7b2e-8f3a-7c3a7b2e8f3a');"
+                         "INSERT INTO conflicts(sync_id, reason, local_json, incoming_json, "
+                         "created_at, origin) VALUES "
+                         "('018f6b2e-7c3a-7c00-8000-000000000009', 'concurrent_vv', "
+                         "'{\"l\":1}', '{\"i\":1}', '2026-01-01T00:00:00.000Z', 'other.db');");
+    line = harness_sqlite_query_line(
+        foreign, "SELECT COUNT(*) FROM pragma_table_info('conflicts') WHERE name='origin';");
+    ASSERT_STREQ(line, "1");
+    free(line);
+    line = harness_sqlite_query_line(
+        foreign, "SELECT name FROM sqlite_master WHERE type='table' AND name='devices';");
+    ASSERT_TRUE(line == NULL);
+    free(line);
+    before = read_file(foreign, &before_n);
+    side = sidecar_path(foreign);
+    ASSERT_TRUE(before != NULL && side != NULL);
+    side_before = read_file(side, &side_n);
+    ASSERT_TRUE(side_before != NULL);
+
+    r = run_remember(local, list, sizeof(list) / sizeof(list[0]), NULL);
+    ASSERT_EQ_INT(r.exit_code, 0);
+    cmd_result_free(&r);
+    imp[3] = foreign;
+    r = run_remember(local, imp, sizeof(imp) / sizeof(imp[0]), NULL);
+    ASSERT_EQ_INT(r.exit_code, 0);
+    ASSERT_STR_CONTAINS(r.out, "\"inserted\":1");
+    cmd_result_free(&r);
+
+    ASSERT_TRUE(file_matches(foreign, before, before_n));
+    ASSERT_TRUE(file_matches(side, side_before, side_n));
+    line = harness_sqlite_query_line(foreign, "PRAGMA user_version;");
+    ASSERT_STREQ(line, "5");
+    free(line);
+    line = harness_sqlite_query_line(foreign, "SELECT value FROM settings WHERE name='ui.theme';");
+    ASSERT_STREQ(line, "dark");
+    free(line);
+    line = harness_sqlite_query_line(local, "SELECT COUNT(*) FROM settings WHERE name='ui.theme';");
+    ASSERT_STREQ(line, "0");
+    free(line);
+    line = harness_sqlite_query_line(local, "SELECT COUNT(*) FROM bucket_prefixes;");
+    ASSERT_STREQ(line, "0");
+    free(line);
+    line = harness_sqlite_query_line(local, "SELECT COUNT(*) FROM conflicts;");
+    ASSERT_STREQ(line, "0");
+    free(line);
+    free(side_before);
+    free(side);
+    free(before);
     free(local);
     free(foreign);
 }
@@ -208,7 +519,7 @@ TEST(cli_import_identical_automerge_concurrent_conflict)
     }
 
     /* Identical content + concurrent VV → auto-merge (no conflict). */
-    dev = harness_sqlite_query_line(local, "SELECT device_id FROM devices LIMIT 1;");
+    dev = read_sidecar_id(local);
     ASSERT_TRUE(dev != NULL);
     {
         char vv_local[VV_BUF];
@@ -416,7 +727,7 @@ TEST(cli_conflict_accept_keep_both_concurrent_remints)
         (void)snprintf(cmd, sizeof(cmd), "cp '%s' '%s'", local, foreign);
         ASSERT_EQ_INT(system(cmd), 0);
     }
-    dev = harness_sqlite_query_line(local, "SELECT device_id FROM devices LIMIT 1;");
+    dev = read_sidecar_id(local);
     ASSERT_TRUE(dev != NULL);
     force_body(foreign, 1, "incoming-body",
                "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc");
@@ -551,7 +862,7 @@ TEST(cli_import_incoming_dominates_updates)
     }
     force_body(foreign, 1, "new",
                "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd");
-    dev = harness_sqlite_query_line(local, "SELECT device_id FROM devices LIMIT 1;");
+    dev = read_sidecar_id(local);
     ASSERT_TRUE(dev != NULL);
     {
         char vv_l[VV_BUF];
@@ -619,8 +930,9 @@ TEST(store_import_no_sidecar_copy_devices_stay_one)
     ASSERT_TRUE(counts.conflicts == 0U);
     store_close(dst);
 
-    devices = harness_sqlite_query_line(local, "SELECT COUNT(*) FROM devices;");
-    ASSERT_STREQ(devices != NULL ? devices : "", "1");
+    devices = harness_sqlite_query_line(
+        local, "SELECT name FROM sqlite_master WHERE type='table' AND name='devices';");
+    ASSERT_TRUE(devices == NULL);
     free(devices);
     ASSERT_EQ_INT(access(side_f, F_OK), -1); /* still absent */
     free(side_f);
@@ -660,7 +972,7 @@ TEST(cli_conflict_accept_keep_local_and_incoming)
     }
     force_body(foreign, 1, "incoming-body",
                "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee");
-    dev = harness_sqlite_query_line(local, "SELECT device_id FROM devices LIMIT 1;");
+    dev = read_sidecar_id(local);
     ASSERT_TRUE(dev != NULL);
     {
         char vv_l[VV_BUF];
@@ -763,6 +1075,7 @@ TEST(cli_conflict_accept_keep_incoming_key_clash_demotes)
     const char *imp[] = {"--json", "import", "--from-db", NULL};
     const char *accept[] = {"--json", "conflict", "accept", "--id", "1", "--keep", "incoming"};
     const char *get_slot[] = {"--json", "get", "--key", "slot"};
+    const char *search_slot[] = {"--json", "search", "slot"};
 
     ASSERT_TRUE(local != NULL && foreign != NULL);
     r = run_remember(local, add_l, sizeof(add_l) / sizeof(add_l[0]), NULL);
@@ -789,11 +1102,91 @@ TEST(cli_conflict_accept_keep_incoming_key_clash_demotes)
     ASSERT_STR_CONTAINS(r.out, "\"key\":\"slot\"");
     cmd_result_free(&r);
 
+    /* The demoted row is keyless. Search must not still hit it by the old key. */
+    r = run_remember(local, search_slot, sizeof(search_slot) / sizeof(search_slot[0]), NULL);
+    ASSERT_EQ_INT(r.exit_code, 0);
+    ASSERT_STR_CONTAINS(r.out, "\"total\":1");
+    ASSERT_STR_CONTAINS(r.out, "\"body\":\"F\"");
+    ASSERT_TRUE(strstr(r.out, "\"body\":\"L\"") == NULL);
+    cmd_result_free(&r);
+
     free(local);
     free(foreign);
 }
 
 /* Local VV strictly greater → unchanged (vv_compare *out = -1). */
+/* Search total for one word, from the JSON envelope. db, word, then the
+   expected "total" fragment. */
+// NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
+static void assert_search_total(const char *db, const char *word, const char *want_total)
+{
+    const char *args[] = {"--json", "search", word};
+    CmdResult r = run_remember(db, args, sizeof(args) / sizeof(args[0]), NULL);
+
+    ASSERT_EQ_INT(r.exit_code, 0);
+    ASSERT_STR_CONTAINS(r.out, want_total);
+    cmd_result_free(&r);
+}
+
+/* E1.2 on the import paths: an inserted row and an accepted incoming key both
+   land in the FTS key column; the replaced key word stops matching. */
+TEST(cli_import_insert_and_accept_incoming_resync_the_fts_key)
+{
+    char tmpl[] = "/tmp/remember-ftskey-XXXXXX";
+    const char *dir = NULL;
+    char local[PATH_BUF];
+    char foreign[PATH_BUF];
+    CmdResult r;
+    const char *add[] = {"add", "--key", "note:lemur", "shared body"};
+    const char *add_new[] = {"add", "--key", "imp:zebra", "foreign only"};
+    const char *rekey_local[] = {"rekey", "--key", "note:lemur", "--to-key", "note:aardvark"};
+    const char *rekey_foreign[] = {"rekey", "--key", "note:lemur", "--to-key", "note:bison"};
+    const char *imp[] = {"--json", "import", "--from-db", NULL};
+    const char *accept[] = {"conflict", "accept", "--id", "1", "--keep", "incoming"};
+
+    dir = mkdtemp(tmpl);
+    ASSERT_TRUE(dir != NULL);
+    if (dir == NULL) {
+        return;
+    }
+    (void)snprintf(local, sizeof(local), "%s/local.db", dir);
+    (void)snprintf(foreign, sizeof(foreign), "%s/foreign.db", dir);
+
+    r = run_remember(local, add, sizeof(add) / sizeof(add[0]), NULL);
+    ASSERT_EQ_INT(r.exit_code, 0);
+    cmd_result_free(&r);
+    {
+        char cmd[PATH_BUF * 2];
+        /* The copy has no sidecar, so its writes count under a new device id. */
+        (void)snprintf(cmd, sizeof(cmd), "cp '%s' '%s'", local, foreign);
+        ASSERT_EQ_INT(system(cmd), 0);
+    }
+    r = run_remember(foreign, add_new, sizeof(add_new) / sizeof(add_new[0]), NULL);
+    ASSERT_EQ_INT(r.exit_code, 0);
+    cmd_result_free(&r);
+    r = run_remember(local, rekey_local, sizeof(rekey_local) / sizeof(rekey_local[0]), NULL);
+    ASSERT_EQ_INT(r.exit_code, 0);
+    cmd_result_free(&r);
+    r = run_remember(foreign, rekey_foreign, sizeof(rekey_foreign) / sizeof(rekey_foreign[0]),
+                     NULL);
+    ASSERT_EQ_INT(r.exit_code, 0);
+    cmd_result_free(&r);
+
+    imp[3] = foreign;
+    r = run_remember(local, imp, sizeof(imp) / sizeof(imp[0]), NULL);
+    ASSERT_EQ_INT(r.exit_code, 0);
+    ASSERT_STR_CONTAINS(r.out, "\"inserted\":1");
+    ASSERT_STR_CONTAINS(r.out, "\"conflicts\":1");
+    cmd_result_free(&r);
+    assert_search_total(local, "zebra", "\"total\":1");
+
+    r = run_remember(local, accept, sizeof(accept) / sizeof(accept[0]), NULL);
+    ASSERT_EQ_INT(r.exit_code, 0);
+    cmd_result_free(&r);
+    assert_search_total(local, "bison", "\"total\":1");
+    assert_search_total(local, "aardvark", "\"total\":0");
+}
+
 TEST(cli_import_local_dominates_unchanged)
 {
     char tmpl[] = "/tmp/remember-locdom-XXXXXX";
@@ -824,7 +1217,7 @@ TEST(cli_import_local_dominates_unchanged)
     }
     force_body(foreign, 1, "stale-foreign",
                "1111111111111111111111111111111111111111111111111111111111111111");
-    dev = harness_sqlite_query_line(local, "SELECT device_id FROM devices LIMIT 1;");
+    dev = read_sidecar_id(local);
     ASSERT_TRUE(dev != NULL);
     {
         char vv_l[VV_BUF];
@@ -940,7 +1333,7 @@ TEST(cli_import_conflict_snapshot_json_escapes)
     }
     force_body(foreign, 1, "other",
                "2222222222222222222222222222222222222222222222222222222222222222");
-    dev = harness_sqlite_query_line(local, "SELECT device_id FROM devices LIMIT 1;");
+    dev = read_sidecar_id(local);
     ASSERT_TRUE(dev != NULL);
     {
         char vv_l[VV_BUF];
@@ -988,6 +1381,7 @@ TEST(cli_import_and_conflict_human_and_help)
     const char *add_f[] = {"add", "human-import-body"};
     const char *list[] = {"list"};
     const char *imp[] = {"import", "--from-db", NULL};
+    const char *help_import[] = {"help", "import"};
     const char *help_conflicts[] = {"help", "conflicts"};
     const char *help_conflict[] = {"help", "conflict"};
 
@@ -1004,6 +1398,13 @@ TEST(cli_import_and_conflict_human_and_help)
     ASSERT_EQ_INT(r.exit_code, 0);
     ASSERT_STR_CONTAINS(r.out, "inserted 1");
     ASSERT_STR_CONTAINS(r.out, "unchanged 0");
+    cmd_result_free(&r);
+
+    r = run_remember(local, help_import, sizeof(help_import) / sizeof(help_import[0]), NULL);
+    ASSERT_EQ_INT(r.exit_code, 0);
+    ASSERT_STR_CONTAINS(r.out, "schema v4 or v5");
+    ASSERT_STR_CONTAINS(r.out, "Does not copy the foreign device_id sidecar");
+    ASSERT_TRUE(strstr(r.out, "register devices") == NULL);
     cmd_result_free(&r);
 
     r = run_remember(local, help_conflicts, sizeof(help_conflicts) / sizeof(help_conflicts[0]),
@@ -1164,7 +1565,7 @@ TEST(cli_import_incoming_dominates_keyless_hash_clash)
         free(harness_sqlite_query_line(foreign, sql));
         free(hash);
     }
-    dev = harness_sqlite_query_line(local, "SELECT device_id FROM devices LIMIT 1;");
+    dev = read_sidecar_id(local);
     ASSERT_TRUE(dev != NULL);
     {
         char vv_l[VV_BUF];
@@ -1238,7 +1639,7 @@ TEST(cli_conflict_accept_incoming_many_tags)
     force_body(foreign, 1, "body-in",
                "3333333333333333333333333333333333333333333333333333333333333333");
     /* Keep the 10 tags on foreign; only body differs for concurrent_vv. */
-    dev = harness_sqlite_query_line(local, "SELECT device_id FROM devices LIMIT 1;");
+    dev = read_sidecar_id(local);
     ASSERT_TRUE(dev != NULL);
     {
         char vv_l[VV_BUF];
@@ -1366,7 +1767,7 @@ TEST(cli_import_incoming_dominates_expires_deleted_keyless)
     get_del[2] = "--sync-id";
     get_del[3] = sync;
     get_del[4] = "--deleted";
-    dev = harness_sqlite_query_line(local, "SELECT device_id FROM devices LIMIT 1;");
+    dev = read_sidecar_id(local);
     ASSERT_TRUE(dev != NULL);
     {
         char vv_l[VV_BUF];
@@ -1524,7 +1925,7 @@ TEST(cli_conflict_accept_concurrent_keep_incoming_demotes_other_key)
                        k_hash_a, sync_shared);
         free(harness_sqlite_query_line(foreign, sql));
     }
-    dev = harness_sqlite_query_line(local, "SELECT device_id FROM devices LIMIT 1;");
+    dev = read_sidecar_id(local);
     ASSERT_TRUE(dev != NULL);
     {
         char vv_l[VV_BUF];
@@ -1614,7 +2015,7 @@ TEST(cli_conflict_accept_concurrent_keep_incoming_hash_taken_refuses)
                        hash, sync_shared);
         free(harness_sqlite_query_line(foreign, sql));
     }
-    dev = harness_sqlite_query_line(local, "SELECT device_id FROM devices LIMIT 1;");
+    dev = read_sidecar_id(local);
     ASSERT_TRUE(dev != NULL);
     {
         char *sid = NULL;
@@ -1744,7 +2145,7 @@ TEST(cli_import_concurrent_reimport_idempotent)
     }
     force_body(foreign, 1, "incoming-body",
                "abababababababababababababababababababababababababababababababab");
-    dev = harness_sqlite_query_line(local, "SELECT device_id FROM devices LIMIT 1;");
+    dev = read_sidecar_id(local);
     ASSERT_TRUE(dev != NULL);
     {
         char vv_l[VV_BUF];
@@ -1834,7 +2235,7 @@ TEST(cli_import_vv_zero_clock_in_a_membership)
         (void)snprintf(cmd, sizeof(cmd), "cp '%s' '%s'", local, foreign);
         ASSERT_EQ_INT(system(cmd), 0);
     }
-    dev = harness_sqlite_query_line(local, "SELECT device_id FROM devices LIMIT 1;");
+    dev = read_sidecar_id(local);
     ASSERT_TRUE(dev != NULL);
     {
         char vv_l[VV_BUF];
@@ -1867,6 +2268,9 @@ void register_sync_import_tests(void)
 {
     RUN_TEST(cli_import_inserts_preserves_sync_id_remaps_links_no_device_register);
     RUN_TEST(cli_import_refuses_v3_source);
+    RUN_TEST(cli_import_refuses_source_newer_than_v5);
+    RUN_TEST(cli_import_v4_source_is_read_only_and_optional_objects_are_absent);
+    RUN_TEST(cli_import_v5_source_is_read_only_and_optional_rows_stay_there);
     RUN_TEST(cli_import_identical_automerge_concurrent_conflict);
     RUN_TEST(cli_import_key_clash_and_hash_clash_exit_0);
     RUN_TEST(cli_import_key_clash_reimport_idempotent);
@@ -1875,6 +2279,7 @@ void register_sync_import_tests(void)
     RUN_TEST(cli_import_incoming_dominates_updates);
     RUN_TEST(store_import_no_sidecar_copy_devices_stay_one);
     RUN_TEST(cli_conflict_accept_keep_local_and_incoming);
+    RUN_TEST(cli_import_insert_and_accept_incoming_resync_the_fts_key);
     RUN_TEST(cli_conflict_accept_keep_incoming_key_clash_demotes);
     RUN_TEST(cli_import_local_dominates_unchanged);
     RUN_TEST(cli_import_soft_deleted_and_expired_rows);

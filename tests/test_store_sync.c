@@ -56,15 +56,6 @@ static void assert_search_total(Store *s, SearchExpect check)
     free(page.entries);
 }
 
-/* TEXT PK scan + LIMIT 1 in sidecar recovery: extra must sort after a v7
- * local id so a later reopen does not REPLACE the table back to COUNT==1. */
-static void insert_extra_device(const char *db)
-{
-    free(harness_sqlite_query_line(db, "INSERT INTO devices(device_id, first_seen, last_seen) "
-                                       "VALUES('ffffffff-ffff-7fff-bfff-ffffffffffff',"
-                                       "'2020-01-01T00:00:00.000Z','2020-01-01T00:00:00.000Z');"));
-}
-
 static char *sidecar_path(const char *db)
 {
     size_t n = 0;
@@ -118,6 +109,8 @@ static int is_uuid_v7(const char *s)
     if (s == NULL || strlen(s) != 36U) {
         return 0;
     }
+    /* Length is 36. The analyzer drops that for a malloc'd line. */
+    // NOLINTBEGIN(clang-analyzer-security.ArrayBound)
     if (s[8] != '-' || s[13] != '-' || s[18] != '-' || s[23] != '-') {
         return 0;
     }
@@ -135,10 +128,11 @@ static int is_uuid_v7(const char *s)
             return 0;
         }
     }
+    // NOLINTEND(clang-analyzer-security.ArrayBound)
     return 1;
 }
 
-TEST(store_open_creates_v4_sidecar_and_device)
+TEST(store_open_creates_v5_sidecar_and_device)
 {
     char *db = make_temp_db_path();
     char *side = NULL;
@@ -154,8 +148,13 @@ TEST(store_open_creates_v4_sidecar_and_device)
     ASSERT_STREQ(err, "");
     store_close(s);
 
-    assert_query_is(db, (QueryExpect){.sql = "PRAGMA user_version;", .want = "4"});
-    assert_query_is(db, (QueryExpect){.sql = "SELECT COUNT(*) FROM devices;", .want = "1"});
+    assert_query_is(db, (QueryExpect){.sql = "PRAGMA user_version;", .want = "5"});
+    {
+        char *devices = harness_sqlite_query_line(
+            db, "SELECT name FROM sqlite_master WHERE type='table' AND name='devices';");
+        ASSERT_TRUE(devices == NULL);
+        free(devices);
+    }
     assert_query_is(db, (QueryExpect){.sql = "SELECT COUNT(*) FROM conflicts;", .want = "0"});
     /* One named unique index on sync_id, no redundant inline-UNIQUE autoindex. */
     assert_query_is(
@@ -173,12 +172,6 @@ TEST(store_open_creates_v4_sidecar_and_device)
     ASSERT_EQ_STATUS((st.st_mode & (unsigned)PERM_BITS_MASK), DB_FILE_PERMS);
     uuid = read_first_line(side);
     ASSERT_TRUE(is_uuid_v7(uuid));
-    {
-        char sql[128];
-        (void)snprintf(sql, sizeof(sql), "SELECT COUNT(*) FROM devices WHERE device_id='%s';",
-                       uuid != NULL ? uuid : "");
-        assert_query_is(db, (QueryExpect){.sql = sql, .want = "1"});
-    }
     free(uuid);
     free(side);
     free(db);
@@ -236,7 +229,7 @@ TEST(store_open_two_dbs_in_one_dir_distinct_sidecars)
     (void)rmdir(dir);
 }
 
-TEST(store_open_migrates_v3_to_v4_preserves_rows)
+TEST(store_open_migrates_v3_to_v5_preserves_rows)
 {
     char *db = make_temp_db_path();
     char err[ERR_BUFSIZE];
@@ -276,14 +269,19 @@ TEST(store_open_migrates_v3_to_v4_preserves_rows)
     ASSERT_STREQ(err, "");
     store_close(s);
 
-    assert_query_is(db, (QueryExpect){.sql = "PRAGMA user_version;", .want = "4"});
+    assert_query_is(db, (QueryExpect){.sql = "PRAGMA user_version;", .want = "5"});
     assert_query_is(db,
                     (QueryExpect){.sql = "SELECT body FROM entries WHERE id=1;", .want = "alpha"});
     assert_query_is(db, (QueryExpect){.sql = "SELECT COUNT(*) FROM entry_links;", .want = "1"});
     assert_query_is(db, (QueryExpect){.sql = "SELECT COUNT(*) FROM entry_tags;", .want = "1"});
     assert_query_is(
         db, (QueryExpect){.sql = "SELECT COUNT(DISTINCT sync_id) FROM entries;", .want = "2"});
-    assert_query_is(db, (QueryExpect){.sql = "SELECT COUNT(*) FROM devices;", .want = "1"});
+    {
+        char *devices = harness_sqlite_query_line(
+            db, "SELECT name FROM sqlite_master WHERE type='table' AND name='devices';");
+        ASSERT_TRUE(devices == NULL);
+        free(devices);
+    }
     /* Rebuilt columns match a fresh create: NOT NULL, and one (named) sync_id index. */
     assert_query_is(
         db, (QueryExpect){
@@ -384,15 +382,16 @@ TEST(store_sync_id_stable_across_update)
     free(db);
 }
 
-TEST(store_get_does_not_bump_last_seen)
+TEST(store_get_does_not_rewrite_sidecar)
 {
     char *db = make_temp_db_path();
     char err[ERR_BUFSIZE];
     Store *s = NULL;
     Entry e;
     StoreAddAction act = STORE_ADD_CREATED;
-    char *t1 = NULL;
-    char *t2 = NULL;
+    char *side = NULL;
+    char *before = NULL;
+    char *after = NULL;
 
     ASSERT_TRUE(db != NULL);
     s = store_open(db, err, sizeof(err));
@@ -403,8 +402,9 @@ TEST(store_get_does_not_bump_last_seen)
     store_entry_free(&e);
     store_close(s);
 
-    t1 = harness_sqlite_query_line(db, "SELECT last_seen FROM devices;");
-    ASSERT_TRUE(t1 != NULL);
+    side = sidecar_path(db);
+    before = read_first_line(side);
+    ASSERT_TRUE(is_uuid_v7(before));
 
     s = store_open(db, err, sizeof(err));
     ASSERT_TRUE(s != NULL);
@@ -413,21 +413,23 @@ TEST(store_get_does_not_bump_last_seen)
     store_entry_free(&e);
     store_close(s);
 
-    t2 = harness_sqlite_query_line(db, "SELECT last_seen FROM devices;");
-    ASSERT_STREQ(t1, t2);
-    free(t1);
-    free(t2);
+    after = read_first_line(side);
+    ASSERT_STREQ(before, after);
+    free(before);
+    free(after);
+    free(side);
     free(db);
 }
 
-TEST(store_lost_sidecar_rewritten_from_devices)
+TEST(store_missing_sidecar_mints_a_new_id)
 {
     char *db = make_temp_db_path();
     char err[ERR_BUFSIZE];
     Store *s = NULL;
     char *side = NULL;
     char *orig = NULL;
-    char *restored = NULL;
+    char *minted = NULL;
+    struct stat st;
 
     ASSERT_TRUE(db != NULL);
     s = store_open(db, err, sizeof(err));
@@ -443,11 +445,13 @@ TEST(store_lost_sidecar_rewritten_from_devices)
     ASSERT_TRUE(s != NULL);
     store_close(s);
 
-    restored = read_first_line(side);
-    ASSERT_STREQ(orig, restored);
-    assert_query_is(db, (QueryExpect){.sql = "SELECT COUNT(*) FROM devices;", .want = "1"});
+    ASSERT_EQ_INT(stat(side, &st), 0);
+    ASSERT_EQ_STATUS((st.st_mode & (unsigned)PERM_BITS_MASK), DB_FILE_PERMS);
+    minted = read_first_line(side);
+    ASSERT_TRUE(is_uuid_v7(minted));
+    ASSERT_TRUE(orig != NULL && minted != NULL && strcmp(orig, minted) != 0);
     free(orig);
-    free(restored);
+    free(minted);
     free(side);
     free(db);
 }
@@ -622,7 +626,7 @@ TEST(store_invalid_sidecar_refuses_open)
     free(db);
 }
 
-TEST(store_sidecar_wins_over_devices_mismatch)
+TEST(store_reopen_keeps_sidecar)
 {
     char *db = make_temp_db_path();
     char err[ERR_BUFSIZE];
@@ -630,7 +634,6 @@ TEST(store_sidecar_wins_over_devices_mismatch)
     char *side = NULL;
     char *orig = NULL;
     char *after = NULL;
-    static const char k_other[] = "01900000-0000-7000-8000-000000000001";
 
     ASSERT_TRUE(db != NULL);
     s = store_open(db, err, sizeof(err));
@@ -640,61 +643,13 @@ TEST(store_sidecar_wins_over_devices_mismatch)
     side = sidecar_path(db);
     orig = read_first_line(side);
     ASSERT_TRUE(is_uuid_v7(orig));
-    {
-        char sql[160];
-        (void)snprintf(sql, sizeof(sql), "UPDATE devices SET device_id='%s';", k_other);
-        free(harness_sqlite_query_line(db, sql));
-    }
-
     s = store_open(db, err, sizeof(err));
     ASSERT_TRUE(s != NULL);
     store_close(s);
-
     after = read_first_line(side);
     ASSERT_STREQ(orig, after);
-    {
-        char sql[160];
-        (void)snprintf(sql, sizeof(sql), "SELECT COUNT(*) FROM devices WHERE device_id='%s';",
-                       orig != NULL ? orig : "");
-        assert_query_is(db, (QueryExpect){.sql = sql, .want = "1"});
-    }
-    assert_query_is(db, (QueryExpect){.sql = "SELECT COUNT(*) FROM devices;", .want = "1"});
     free(orig);
     free(after);
-    free(side);
-    free(db);
-}
-
-TEST(store_empty_devices_inserted_from_sidecar)
-{
-    char *db = make_temp_db_path();
-    char err[ERR_BUFSIZE];
-    Store *s = NULL;
-    char *side = NULL;
-    char *orig = NULL;
-
-    ASSERT_TRUE(db != NULL);
-    s = store_open(db, err, sizeof(err));
-    ASSERT_TRUE(s != NULL);
-    store_close(s);
-
-    side = sidecar_path(db);
-    orig = read_first_line(side);
-    free(harness_sqlite_query_line(db, "DELETE FROM devices;"));
-    assert_query_is(db, (QueryExpect){.sql = "SELECT COUNT(*) FROM devices;", .want = "0"});
-
-    s = store_open(db, err, sizeof(err));
-    ASSERT_TRUE(s != NULL);
-    store_close(s);
-
-    assert_query_is(db, (QueryExpect){.sql = "SELECT COUNT(*) FROM devices;", .want = "1"});
-    {
-        char sql[160];
-        (void)snprintf(sql, sizeof(sql), "SELECT COUNT(*) FROM devices WHERE device_id='%s';",
-                       orig != NULL ? orig : "");
-        assert_query_is(db, (QueryExpect){.sql = sql, .want = "1"});
-    }
-    free(orig);
     free(side);
     free(db);
 }
@@ -977,7 +932,7 @@ TEST(store_hard_delete_expired_cascades_fts)
     free(db);
 }
 
-TEST(store_hard_delete_hatch_two_devices)
+TEST(store_hard_delete_needs_no_device_hatch)
 {
     char *db = make_temp_db_path();
     char err[ERR_BUFSIZE];
@@ -993,17 +948,18 @@ TEST(store_hard_delete_hatch_two_devices)
                                "2020-01-01T00:00:00.000Z", k_now, &act, &e),
                      STORE_OK);
     store_entry_free(&e);
-    insert_extra_device(db);
-    ASSERT_EQ_STATUS(store_hard_delete_by_id(s, 1, STORE_BIN_EXPIRED, k_now, &e),
-                     STORE_ERR_NOT_SINGLE_DEVICE);
+    ASSERT_STREQ(store_status_message(STORE_ERR_NOT_SINGLE_DEVICE),
+                 "hard delete requires exactly one registered device");
+    ASSERT_EQ_STATUS(store_hard_delete_by_id(s, 1, STORE_BIN_EXPIRED, k_now, &e), STORE_OK);
+    ASSERT_STREQ(e.body, "x");
     store_entry_free(&e);
-    ASSERT_EQ_STATUS(store_get(s, 1, STORE_BIN_EXPIRED, k_now, &e), STORE_OK);
+    ASSERT_EQ_STATUS(store_get(s, 1, STORE_BIN_EXPIRED, k_now, &e), STORE_ERR_NOT_FOUND);
     store_entry_free(&e);
     store_close(s);
     free(db);
 }
 
-TEST(store_purge_deleted_and_hatch)
+TEST(store_purge_deleted_and_expired)
 {
     char *db = make_temp_db_path();
     char err[ERR_BUFSIZE];
@@ -1036,13 +992,15 @@ TEST(store_purge_deleted_and_hatch)
     store_entry_free(&e);
     ASSERT_EQ_STATUS(store_get(s, 2, STORE_BIN_LIVE, k_now, &e), STORE_OK);
     store_entry_free(&e);
-    insert_extra_device(db);
     ASSERT_EQ_STATUS(store_add(s, "exp", k_hash_a, NULL, NULL, 0U, "human",
                                "2020-01-01T00:00:00.000Z", k_now, &act, &e),
                      STORE_OK);
     store_entry_free(&e);
-    ASSERT_EQ_STATUS(store_purge(s, STORE_BIN_EXPIRED, k_now, &gone, &n),
-                     STORE_ERR_NOT_SINGLE_DEVICE);
+    ASSERT_EQ_STATUS(store_purge(s, STORE_BIN_EXPIRED, k_now, &gone, &n), STORE_OK);
+    ASSERT_EQ_INT((int)n, 1);
+    ASSERT_STREQ(gone[0].body, "exp");
+    store_entry_free(&gone[0]);
+    free(gone);
     store_close(s);
     free(db);
 }
@@ -1193,41 +1151,55 @@ TEST(store_update_undelete_deleted)
 }
 
 #ifdef REMEMBER_TEST_HOOKS
-TEST(store_devices_replace_exec_fail_undoes_savepoint)
+TEST(store_sidecar_rename_failure_leaves_no_file)
 {
     char *db = make_temp_db_path();
     char err[ERR_BUFSIZE];
     Store *s = NULL;
+    char *side = NULL;
+    char tmp[160];
 
     ASSERT_TRUE(db != NULL);
     s = store_open(db, err, sizeof(err));
     ASSERT_TRUE(s != NULL);
     store_close(s);
-    free(harness_sqlite_query_line(db, "DELETE FROM devices;"));
-    /* pragmas (2) + SAVEPOINT (1) succeed; DELETE inside devices_replace fails. */
-    store_test_fail_exec_after(3);
+    side = sidecar_path(db);
+    ASSERT_TRUE(side != NULL);
+    ASSERT_EQ_INT(remove(side), 0);
+    (void)snprintf(tmp, sizeof(tmp), "%s.tmp", side);
+
+    store_test_fail_sidecar_rename(1);
     err[0] = '\0';
     s = store_open(db, err, sizeof(err));
-    store_test_fail_exec_after(-1);
+    store_test_fail_sidecar_rename(0);
     ASSERT_TRUE(s == NULL);
+    ASSERT_STR_CONTAINS(err, "cannot write device_id sidecar");
+    ASSERT_TRUE(access(side, F_OK) != 0);
+    ASSERT_TRUE(access(tmp, F_OK) != 0);
+
+    s = store_open(db, err, sizeof(err));
+    ASSERT_TRUE(s != NULL);
+    store_close(s);
+    ASSERT_TRUE(access(side, F_OK) == 0);
+    ASSERT_TRUE(access(tmp, F_OK) != 0);
+    free(side);
     free(db);
 }
 #endif
 
 void register_store_sync_tests(void)
 {
-    RUN_TEST(store_open_creates_v4_sidecar_and_device);
+    RUN_TEST(store_open_creates_v5_sidecar_and_device);
     RUN_TEST(store_open_two_dbs_in_one_dir_distinct_sidecars);
-    RUN_TEST(store_open_migrates_v3_to_v4_preserves_rows);
+    RUN_TEST(store_open_migrates_v3_to_v5_preserves_rows);
     RUN_TEST(store_add_mints_v7_sync_id_and_get_by_sync_id);
     RUN_TEST(store_sync_id_stable_across_update);
-    RUN_TEST(store_get_does_not_bump_last_seen);
-    RUN_TEST(store_lost_sidecar_rewritten_from_devices);
+    RUN_TEST(store_get_does_not_rewrite_sidecar);
+    RUN_TEST(store_missing_sidecar_mints_a_new_id);
     RUN_TEST(store_get_any_excludes_deleted);
     RUN_TEST(store_link_unlink_rekey_bump_vv);
     RUN_TEST(store_invalid_sidecar_refuses_open);
-    RUN_TEST(store_sidecar_wins_over_devices_mismatch);
-    RUN_TEST(store_empty_devices_inserted_from_sidecar);
+    RUN_TEST(store_reopen_keeps_sidecar);
     RUN_TEST(store_bin_matrix_deleted_vs_expired);
     RUN_TEST(store_purge_trash_skips_deleted);
     RUN_TEST(store_empty_sidecar_refuses_open);
@@ -1235,13 +1207,13 @@ void register_store_sync_tests(void)
     RUN_TEST(store_soft_delete_live_keeps_body_fts_edges);
     RUN_TEST(store_soft_delete_expired_clears_expires);
     RUN_TEST(store_hard_delete_expired_cascades_fts);
-    RUN_TEST(store_hard_delete_hatch_two_devices);
-    RUN_TEST(store_purge_deleted_and_hatch);
+    RUN_TEST(store_hard_delete_needs_no_device_hatch);
+    RUN_TEST(store_purge_deleted_and_expired);
     RUN_TEST(store_add_revives_deleted_same_sync_id);
     RUN_TEST(store_vv_increment_inserts_missing_device_key);
     RUN_TEST(store_update_undelete_deleted);
 #ifdef REMEMBER_TEST_HOOKS
-    RUN_TEST(store_devices_replace_exec_fail_undoes_savepoint);
+    RUN_TEST(store_sidecar_rename_failure_leaves_no_file);
 #endif
 }
 

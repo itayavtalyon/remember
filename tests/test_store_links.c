@@ -39,7 +39,7 @@ TEST(store_open_creates_entry_links)
     ASSERT_STREQ(err, "");
     store_close(s);
 
-    assert_query_is(db, (QueryExpect){.sql = "PRAGMA user_version;", .want = "4"});
+    assert_query_is(db, (QueryExpect){.sql = "PRAGMA user_version;", .want = "5"});
     assert_query_is(
         db, (QueryExpect){
                 .sql = "SELECT name FROM sqlite_master WHERE type='table' AND name='entry_links';",
@@ -67,7 +67,7 @@ TEST(store_open_creates_entry_links)
     free(db);
 }
 
-TEST(store_open_migrates_v2_to_v3)
+TEST(store_open_migrates_v2_to_v5)
 {
     char *db = make_temp_db_path();
     char err[ERR_BUFSIZE];
@@ -80,6 +80,16 @@ TEST(store_open_migrates_v2_to_v3)
             "updated_at TEXT NOT NULL, expires_at TEXT);"
             "INSERT INTO entries(body, body_hash, source, created_at, updated_at) "
             "VALUES('v2 row','h','human','2026-01-01T00:00:00.000Z','2026-01-01T00:00:00.000Z');"
+            /* Real v2 brains already had these. The v5 delta does not create them. */
+            "CREATE TABLE tags (\n"
+            "  id INTEGER PRIMARY KEY,\n"
+            "  name TEXT NOT NULL UNIQUE\n"
+            ");\n"
+            "CREATE TABLE entry_tags (\n"
+            "  entry_id INTEGER NOT NULL REFERENCES entries(id) ON DELETE CASCADE,\n"
+            "  tag_id INTEGER NOT NULL REFERENCES tags(id) ON DELETE CASCADE,\n"
+            "  PRIMARY KEY (entry_id, tag_id)\n"
+            ");\n"
             "PRAGMA user_version=2;"));
     assert_query_is(db, (QueryExpect){.sql = "PRAGMA user_version;", .want = "2"});
 
@@ -89,7 +99,7 @@ TEST(store_open_migrates_v2_to_v3)
     ASSERT_STREQ(err, "");
     store_close(s);
 
-    assert_query_is(db, (QueryExpect){.sql = "PRAGMA user_version;", .want = "4"});
+    assert_query_is(db, (QueryExpect){.sql = "PRAGMA user_version;", .want = "5"});
     assert_query_is(db,
                     (QueryExpect){.sql = "SELECT body FROM entries WHERE id=1;", .want = "v2 row"});
     assert_query_is(db, (QueryExpect){.sql = "SELECT COUNT(*) FROM entry_links;", .want = "0"});
@@ -842,7 +852,7 @@ TEST(store_links_fault_injection_sweep)
 void register_store_link_tests(void)
 {
     RUN_TEST(store_open_creates_entry_links);
-    RUN_TEST(store_open_migrates_v2_to_v3);
+    RUN_TEST(store_open_migrates_v2_to_v5);
     RUN_TEST(store_link_related_is_one_canonical_row);
     RUN_TEST(store_link_directed_and_kinds_independent);
     RUN_TEST(store_link_self_and_missing);

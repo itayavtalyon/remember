@@ -63,6 +63,16 @@ uninstall the usual way (`brew upgrade remember` / `brew uninstall remember`).
 
 ## What's New
 
+### v0.3.0 — searchable keys and a sidecar device id
+
+Opening an existing database migrates it to `user_version` **5**.
+
+- A key is searchable: `search editor` finds `pref:editor`.
+- Hebrew marks are folded out of the search index. The stored body keeps them.
+- `remember device` prints the device id. `remember device new` mints a new one after a restore or a copied brain, and it repairs an invalid sidecar.
+- The device id is only the sidecar `<db-path>.device_id`. The database holds no copy.
+- Hard wipe (`delete --expired|--deleted`, `purge --expired|--deleted`) no longer needs one registered device.
+
 ### v0.2.0 — local sync foundations
 
 Existing databases migrate in place on first open (`user_version` 1/2/3 → **4**).

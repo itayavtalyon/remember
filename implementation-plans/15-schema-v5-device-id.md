@@ -210,22 +210,22 @@ cmake --build build --target leaks-macos          # macOS only
 
 ## Definition of Done
 
-- [ ] Design log 006 unchanged except new rows in its Implementation Results
+- [x] Design log 006 unchanged except new rows in its Implementation Results
       for E1.2–E1.5, E10.1 (rows), E14.
-- [ ] Every must-pass row green and included in `tests/gate-suites`.
-- [ ] Fresh and migrated schemas are identical; `user_version` 5.
-- [ ] No code path reads or writes a `devices` table; `require_single_device`
+- [x] Every must-pass row green and included in `tests/gate-suites`.
+- [x] Fresh and migrated schemas are identical; `user_version` 5.
+- [x] No code path reads or writes a `devices` table; `require_single_device`
       is gone; `not_single_device` is never returned.
-- [ ] Every key-changing path resyncs the FTS key column (test per path).
-- [ ] `device` / `device new` work in human and `--json`; facade byte-match.
-- [ ] Locked decisions D4, D9, P6 implemented as written.
-- [ ] Help, SKILL.md, README What's New (v0.3.0 section, one line per user-
+- [x] Every key-changing path resyncs the FTS key column (test per path).
+- [x] `device` / `device new` work in human and `--json`; facade byte-match.
+- [x] Locked decisions D4, D9, P6 implemented as written.
+- [x] Help, SKILL.md, README What's New (v0.3.0 section, one line per user-
       visible change: key is searchable, Hebrew marks folded, `device`,
       sidecar-only identity, hard wipe without the device hatch).
-- [ ] `docs/engineering-notes.md` `store_open` bullet updated.
-- [ ] Gate: ctest, lint, coverage 100/100, `ci-linux.sh` all green.
-- [ ] Second review done; no open **blocking** item.
-- [ ] `implementation-plans/INDEX.md` row marked ✅.
+- [x] `docs/engineering-notes.md` `store_open` bullet updated.
+- [x] Gate: ctest, lint, coverage 100/100, `ci-linux.sh` all green.
+- [x] Second review done; no open **blocking** item.
+- [x] `implementation-plans/INDEX.md` row marked ✅.
 
 ## Second review handover
 
@@ -244,8 +244,9 @@ and verifies by **running**, not reading.
 **Probe these (expected result in brackets)**
 
 1. Copy a real v4 brain; open it with the new build; `sqlite3 x.db .schema`
-   [no `devices`; FTS `key, body, tags`; `user_version` 5]; diff `.schema`
-   with a fresh brain [identical].
+   [no `devices`; FTS `key, body, tags`; `user_version` 5]; diff the sorted
+   `.schema` with a fresh brain's [identical; statement order may differ,
+   Itay 2026-10-13].
 2. `remember --db x.db --json search editor` on a brain with `pref:editor`
    [found].
 3. Kill-mid-migration: run the fault-injection test and inspect the file
@@ -280,8 +281,307 @@ or architecture forks to Itay as a grill. Re-run the full gate after any fix.
 
 ## Implementation Notes
 
-_(empty; fill per stage)_
+### 2026-10-13 — stage 1 (fresh v5 + migrate, devices kept)
+
+Itay chose migrate-keep-devices: fresh databases and v1–v4 all land on the same `user_version` 5 schema in this stage (FTS rebuild, `bucket_prefixes`, `settings`, `conflicts.origin`). The `devices` table stays until stage 3. Stage 2 is the leftover migrate edge (a scripted fail-after-step-3 atomicity test); a prepare failure during FTS repopulate is already covered and leaves the file at v4.
+
+- DDL macros (`K_FTS_SQL`, tags, devices, conflicts, bucket_prefixes, settings) are shared by fresh create and migrate. Conflicts are rebuilt by renaming the old table away, then `CREATE` with the canonical DDL, because renaming the new table quotes its name in `sqlite_master`.
+- `fold_hebrew_marks` lives in `normalize.c` for plan 18. Entries keep the original body. Invalid or truncated UTF-8 is copied one byte and never read past the buffer.
+- Import still accepts user_version >= 4 (`IMPORT_MIN_USER_VERSION`). Refusing a source newer than 5 is stage 5.
+- `store_rekey` now calls `fts_resync` before commit. Add, update, and import already did. Search follows the new key and drops the old one.
+- What's New, SKILL.md, and the design-log Implementation Results stay for stage 6 / the whole-plan DoD. Engineering notes record the v5 open rules because stage 2 depends on them.
+
+### 2026-10-13 — stage 2 (rollback after step 3; tags already exist)
+
+Devices stay until stage 3 (`decision:plan15-stage1-keep-devices`). This stage does not drop them.
+
+- `apply_v5_delta` no longer creates `tags` or `entry_tags`. Real v1–v4 brains already have them. The compact v1 and v2 fixtures now create those tables with the canonical DDL before `PRAGMA user_version`. Without that, open fails with `cannot rebuild search index` and the file stays at the old version.
+- `schema_v5_fault_after_step3_keeps_v4` fails the 8th `sqlite3_exec` on a v4 open (`store_test_fail_exec_after(7)`). That statement is `CREATE TABLE settings`, the first exec after `bucket_prefixes`. The file stays `user_version` 4, FTS column 0 stays `body`, and `bucket_prefixes` is absent. Reopen then migrates. A probe that committed after `bucket_prefixes` and continued made this test fail (FTS column 0 became `key`, and `bucket_prefixes` was left behind). The probe was removed.
+- The prepare-failure test from stage 1 still covers a fault during FTS repopulate.
+
+### 2026-10-13 — stage 3 (sidecar-only identity)
+
+The sidecar is the only device id. Fresh create and a v1–v4 migrate both finish with no `devices` table. `DROP TABLE IF EXISTS devices` is the last statement in `apply_v5_delta` and copies no row. v1–v3 no longer create the table, so the drop is `IF EXISTS`. `decision:plan15-stage1-keep-devices` ends here.
+
+Open reads the sidecar and nothing in the database. A valid file is used. A missing file is a new UUIDv7, written as one lowercase line, mode 0600, through `<path>.device_id.tmp` then `rename`. An invalid file (garbage, uppercase UUID, a second line, empty) fails with `invalid device_id sidecar` and is not overwritten. `fgetc` after the first line must be EOF; a read error is not treated as the end of the file. Those messages stay plain `remember: …` exit 1 until plan 16 (D9).
+
+Identity is bound before `backfill_sync_ids` on v0–v3, and after the v5 delta on v4. An already-v5 brain binds on open. `require_single_device` is gone. `STORE_ERR_NOT_SINGLE_DEVICE` and `hard delete requires exactly one registered device` stay in the catalog. No command returns that status. Purge help no longer claims the hatch. README and SKILL.md still do; stage 6 owns them.
+
+`store_test_fail_sidecar_rename(n)` fails the next rename when `n > 0` and is compiled only into the test hooks. A failed rename unlinks the temp, so neither the sidecar nor the `.tmp` is left behind.
+
+Replaced tests:
+
+- `store_get_does_not_bump_last_seen` → `store_get_does_not_rewrite_sidecar`
+- `store_lost_sidecar_rewritten_from_devices` → `store_missing_sidecar_mints_a_new_id` (a missing sidecar is minted, not restored)
+- `store_sidecar_wins_over_devices_mismatch` → removed; the v4 case is `schema_v5_v4_sidecar_is_kept_and_devices_row_is_ignored`
+- `store_empty_devices_inserted_from_sidecar` → `store_reopen_keeps_sidecar`
+- `store_hard_delete_hatch_two_devices` → `store_hard_delete_needs_no_device_hatch` (catalog string still present; hard delete returns `STORE_OK`)
+- `store_purge_deleted_and_hatch` → `store_purge_deleted_and_expired`
+- `store_devices_replace_exec_fail_undoes_savepoint` → `store_sidecar_rename_failure_leaves_no_file`
+- `cli_delete_deleted_hard_and_hatch` → `cli_delete_deleted_hard_wipes_the_row`
+- `cli_purge_hatch_two_devices` → `cli_purge_expired_wipes_without_device_hatch`
+- `store_import_no_sidecar_copy_devices_stay_one` kept its name. It now asserts there is no `devices` table and that the foreign sidecar is still absent.
+- `facade_conflict_accept_matches_cli` copies the sidecar with the database. Open of a copied file no longer recovers the writer id from a `devices` row, so the two accepts would bump different ids.
+
+Schema and open tests that asserted `COUNT(*) FROM devices = 1` after a successful open now assert the table is absent. The rolled-back fault file is still v4 and still has one devices row.
+
+### 2026-10-13 — stage 4 (`device` / `device new`)
+
+`remember device` prints the sidecar id. `remember device new` mints a UUIDv7, writes the sidecar, and does not change any version vector. Plain output is the new id. `--json` is `{"version":1,"device_id":"…","previous":"…"}`.
+
+The plan's port omitted an error buffer. `store_device_new` takes the same `err` buffer as `store_open`, so `invalid device_id sidecar`, `cannot write device_id sidecar`, and `cannot mint device_id` stay plain `remember: …` exit 1 until plan 16 (D9). Statuses are `STORE_ERR_INTERNAL`, `STORE_ERR_OOM`, and `STORE_ERR_SQLITE`.
+
+The new id is duplicated before the rename. The handle pointer is swapped only after the rename succeeds, so an allocation failure leaves the old file. A failed rename frees that duplicate. The mint holds `BEGIN IMMEDIATE` across the read and the rename, the same lock and the same `<path>.device_id.tmp` as a missing-sidecar open. The transaction writes nothing. If that empty `COMMIT` fails after the sidecar is published, the mint still stands: memory already matches the file.
+
+Open mints a missing sidecar first (D4), so a CLI `device new` reports that id as `previous`. JSON `null` is only the type. A direct `output_device_new_envelope(..., NULL)` covers it. A store test unlinks the sidecar after open and checks `had_prev` is false. `UUID_STR_LEN` is `STORE_DEVICE_ID_LEN` (one length). Delete help no longer says hard wipe needs one device. Import help, README, and SKILL.md still mention devices or the hatch; stage 6 owns them.
+
+### 2026-10-14 — stage 5 (import sources v4 and v5)
+
+`store_import` accepts `user_version` 4 and 5. Below 4 is still `source database is older than this remember`. Above 5 is `STORE_ERR_SOURCE_TOO_NEW`, the same text as open (`database is newer than this remember`), from one string `k_newer_database`. The max is `SCHEMA_VERSION`.
+
+The source stays `SQLITE_OPEN_READONLY` and is not migrated. `probe_import_source` counts `conflicts.origin`, `bucket_prefixes`, and `settings` before the merge. A count of 0 is absent. Those rows are not copied (plans 19 and 21). `devices` is not queried. A failed probe returns before `BEGIN IMMEDIATE`, so the destination is unchanged.
+
+A v4 fixture with no origin column, no `bucket_prefixes`, no `settings`, and one `devices` row imports. The source bytes and `user_version` stay 4. The destination has the entry and no `devices` table. A v5 source that already has a settings row, a bucket prefix, and a conflict `origin` keeps those rows and its sidecar bytes. The destination does not gain them. `user_version` 6 is refused and the destination stays empty.
+
+### 2026-10-14 — stage 6 (docs + full gate)
+
+Help `device` already described `new`, `previous`, the version vector, and the invalid-sidecar repair. This stage adds when to run it: after a restore or a copied brain. Import help no longer says "register devices". The source line is "schema v4 or v5" (E1.4, E1.5). `cli_import_and_conflict_human_and_help` locks both sentences. `help_device_describes_new` locks the restore line and the repair line.
+
+SKILL.md: the device id is the sidecar; `device new` after a restore or a copied brain; `device new` also repairs an invalid sidecar. Hard delete and purge no longer mention the device hatch. Import no longer says it registers foreign devices. Search notes say the key is indexed and Hebrew marks are folded out of the index.
+
+README What's New has a v0.3.0 section with one line each for key search, Hebrew marks, `device`, sidecar-only identity, and hard wipe without the hatch. The v0.2.0 section stays as the history of that release. The version string stays 0.2.0 (plan 22).
+
+`docs/engineering-notes.md` `store_open` bullet now says v5, sidecar-only, and no device-count hatch, and that only `device new` replaces an invalid sidecar. The import bullet no longer says the adapter inserts foreign `devices`. `store.h` already said "never reads devices" (stage 5); this stage left that comment.
+
+`tests/gate-suites` already lists `schema_v5` and `device`. Nothing was added. `tests/COVERAGE.md` rows for `test_schema_v5.c`, `test_device.c`, and `test_sync_import.c` name those suites.
+
+006 Design is unchanged. Implementation Results records E1.2–E1.5, E10.1 (rows), and E14, including the two amendments already locked: the conflicts rebuild (`decision:plan15-stage1-review-grill`) and `device new` replacing an invalid sidecar (`decision:plan15-device-new-replaces-invalid`).
 
 ## Review Notes
 
-_(empty; second review appends here)_
+### 2026-10-13 — in-session deep review (stage 1)
+
+**Verdict:** approve for the second-opinion pass. No open blocking item.
+
+**Auto-fixed:** `store_rekey` wrote `entries.key` and left the FTS key stale (search still hit the old key and missed the new one). Locked by `schema_v5_rekey_search_follows_the_new_key`.
+
+**Praise:** one DDL source; v4 fixture text is compared to a fresh database with `EXCEPT` both ways; Hebrew fold is proven by a search that failed before the helper existed.
+
+**Nit:** a brand-new database creates the v5 FTS table and `apply_v5_delta` drops and recreates it with the same SQL. One path, no drift. Left as is.
+
+**Left for later stages:** drop `devices` (stage 3); `device` / `device new` (stage 4); refuse import user_version > 5 (stage 5); query-side Hebrew fold (plan 18); What's New (stage 6).
+
+### 2026-10-13 — second-opinion deep review (stage 1)
+
+**Verdict:** stage 1 approved. No open blocking item.
+
+**Run, not read.** Gate: ctest 4/4 (ASan/UBSan), LINT OK, coverage 100% functions and 100% effective lines, `leaks-macos`, `ci-linux.sh`. Probes used a real 0.2.0 binary built from `42df03e`:
+
+- A real v4 brain (keys, keyless, tags, a `cites` link, live/expired/deleted, one `concurrent_vv` conflict) opens to `user_version` 5. Every entries/tags/entry_tags/links/conflicts column is byte-identical before and after. `conflicts.origin` is NULL. The sidecar is unchanged. 30 body/tag/bin search queries return the same totals under 0.2.0 before and under the new build after.
+- The sorted `.schema` of a migrated brain equals a fresh brain's. FTS columns are `key, body, tags`.
+- `search editor` finds `pref:editor` on a migrated brain. `search exp --expired` finds `t:exp`.
+- Key paths, checking that search follows the new key and drops the old one: `rekey --to-key`, `rekey --clear-key`, keyed `add` upsert (old body word gone), `import --from-db` insert, `import` fast-forward of a rekeyed row, and `conflict accept --keep incoming` and `--keep both` all pass.
+- Hebrew: `search ספר` finds `סֵפֶר טוֹב` and `get` returns the niqqud bytes. Niqqud in a key or tag is folded in the FTS row and kept in `entries`/`tags`. `list --tag` with niqqud still matches exactly.
+- 0.2.0 refuses a v5 file and this build refuses `user_version` 6, both exit 1 with `database is newer than this remember`. `import --from-db` of a 0.2.0 v4 source and of a v5 source both succeed, and the source sha and mtime are unchanged. Purging deleted entries leaves no FTS rows behind.
+
+**Auto-fixed (gate re-run green):**
+
+- **important** — the v4 fixture had no conflict row and no tag, so no test proved `rebuild_conflicts_with_origin` copies rows or that migration carries tags into FTS. `given_v4_brain` now has a tag and a conflict row. `schema_v5_v4_migrates_to_the_fresh_schema` asserts the conflict row byte-for-byte with `origin` NULL, and that the tag is searchable.
+- **nit** — `fold_hebrew_marks` range edges were not pinned, so moving `0x05BD` to `0x05BC` still passed. The fold test now covers every edge (U+0590/0591, 05BD/05BE/05BF/05C0, 05C1–05C3, 05C4–05C6, 05C7/05C8). Mutation-checked: that edit now fails the test.
+- **nit** — `ensure_conflicts_origin` repeated the `sqlite_master` probe from `create_table_if_missing`. It now calls `create_table_if_missing` and checks only the `origin` column.
+
+**Grill (Itay 2026-10-13):**
+
+- E1.3 step 5: keep the conflicts rebuild (rename away → canonical `CREATE` → copy → drop) instead of `ALTER TABLE ... ADD COLUMN`, because ALTER leaves `sqlite_master` text that differs from a fresh brain. Record this as an E1.3 amendment in the 006 Implementation Results (stage 6).
+- Fresh and migrated schemas must be the same set of statements. Order may differ. Probe 1 is amended.
+- Stage 2: remove the `create_table_if_missing` guards for `tags` / `entry_tags` in `apply_v5_delta`. Real v1–v4 brains always had them. Give the compact v1/v2 test fixtures the tags tables instead.
+
+**Important (forward, stage 3):** `read_sidecar` reads only the first line through `fgets`. A sidecar with the valid id plus a second line `junk` opens today (verified). The stage 3 must-pass row "two lines → `invalid device_id sidecar`" needs `read_sidecar` to reject trailing content.
+
+**Nit (left):** a fresh create builds the v5 FTS table and `apply_v5_delta` drops and rebuilds it (already noted in-session). Repopulate prepares four statements per row; fine at personal scale.
+
+**Not done:** there is no local Bugbot binary on this machine (`bugbot` / `cursor-agent` not found). Its pass was replaced by a manual DRY/orthogonality read of the diff.
+
+**Praise:** one DDL source for fresh create and migrate; the `EXCEPT` both-ways schema compare; the fold helper never reads past `src_len` (`utf8_cont` bounds-checks before it touches continuation bytes); `fts_resync` now covers every key-changing path. Probe 4 found no stale key anywhere.
+
+### 2026-10-13 — in-session deep review (stage 2)
+
+**Verdict:** approve for the second-opinion pass. No open blocking item. No grill.
+
+**Ran:** ctest 4/4 (ASan/UBSan), LINT OK, coverage 100% functions and 100% effective lines, `leaks-macos` PASS, `ci-linux.sh` OK. The fault test was mutation-checked: committing after `bucket_prefixes` leaves the new FTS and the new table, and the test fails.
+
+**Nit (left):** `SCHEMA_V5_EXEC_AFTER_STEP3` is a count of `sqlite3_exec` calls. An extra exec before `CREATE TABLE settings` would still leave a v4 file, so the test could pass without failing the settings statement. The comment lists the seven successes. Same pattern as `store_devices_replace_exec_fail_undoes_savepoint`.
+
+**Nit (left):** the canonical `tags` / `entry_tags` DDL is copied into the v1 and v2 fixtures. The sqlite3 CLI cannot see the `K_TAGS_SQL` macro.
+
+**Not done:** no local Bugbot binary (`bugbot` and `cursor-agent` are not on PATH). That pass was a manual DRY and orthogonality read of the diff.
+
+**Praise:** one transaction still owns the delta. Removing the tag-table guards made the existing v1 and v2 tests fail until the fixtures matched real brains.
+
+### 2026-10-13 — second-opinion deep review (stage 2)
+
+**Verdict:** stage 2 approved. No open blocking item. No grill: the tag-guard removal is Itay's stage 1 answer, applied as written.
+
+**Run, not read.** Gate: ctest 4/4 (ASan/UBSan), LINT OK, coverage 100% functions and 100% effective lines, `leaks-macos` PASS, `ci-linux.sh` OK.
+
+- Fault position: a temporary `fprintf` in the exec hook (since reverted) showed that `store_test_fail_exec_after(7)` faults `CREATE TABLE settings`, as the test comment says.
+- Probe 3 with real crashes: a 200k-row v4 brain (migrating takes about 3 s on the ASan build) was killed with `kill -9` at 0.3 s, 0.8 s, 1.5 s and 2.3 s. Each time the hot journal rolled the file back to `user_version` 4 with FTS column 0 `body` and `integrity_check` ok. Reopen migrated to v5 and the key search found all 200k rows.
+
+**Auto-fixed (gate re-run green):**
+
+- **important** — `schema_v5_fault_after_step3_keeps_v4` depends on an exec count. Mutation: adding `COMMIT; BEGIN IMMEDIATE;` before `CREATE TABLE settings` (a real mid-migration commit) still passed that test, because the extra exec moved the fault onto the injected `COMMIT`. This is the in-session nit, now proven. New `schema_v5_v4_open_exec_fault_sweep` fails every exec position of a v4 open in turn. Each failed open must leave v4, FTS column 0 `body`, and the old rows searchable. The sweep must also pass step 3 (`n > SCHEMA_V5_EXEC_AFTER_STEP3`) before a clean open migrates. The same mutation fails the sweep (`ASSERT_STREQ("key", "body")`). The named test stays as the readable E1.3 case.
+- **nit** — clang-format on the new test.
+
+**Nit (left, pre-existing):** `ensure_schema` ignores the result of `PRAGMA foreign_keys = ON` after migrating. If that PRAGMA failed, the connection would run with foreign keys OFF. It cannot fail outside a transaction in practice; failing loudly would be the fail-fast version.
+
+**Praise:** removing the guards was proven by the old v1/v2 tests failing first. The engineering notes state the new rule (no `tags`/`entry_tags` creation, rollback after `bucket_prefixes`).
+
+### 2026-10-13 — in-session deep review (stage 3)
+
+**Verdict:** approve for the second-opinion pass. No open blocking item. No grill.
+
+**Ran:** ctest 4/4 (ASan/UBSan), LINT OK, coverage 100% functions and 100% effective lines, `leaks-macos` PASS, `ci-linux.sh` OK. Store unit 127/0. Removing the trailing-content check makes `schema_v5_invalid_sidecar_is_left_unchanged` fail (a two-line sidecar opens). The check was put back.
+
+**Auto-fixed:**
+
+- **important** — `write_sidecar` set `fd = -1` only on the close-failure path. Coverage rejected that line (not a defensive pattern). The assignment now always runs after `close`.
+- **important** — `read_sidecar` treated a read error as end of file. `ferror` after `fgetc` is now invalid, same as a second line.
+- **important** — `facade_conflict_accept_matches_cli` copied the database and not the sidecar. The copy minted a new id, so the two accepts no longer matched. The test copies the sidecar too.
+- **nit** — purge help still said the command requires one registered device. That sentence is gone. README and SKILL.md still say it; stage 6.
+- **nit** — clang-tidy: null `db` into `sidecar_path`, swappable `write_text` parameters, `ArrayBound` on `is_uuid_v7` after `strlen` (the analyzer drops the length of a malloc'd line).
+
+**Nit (left):** an unwritable directory while the sidecar is missing is not a unit test. The rename hook covers a failed `rename` and the temp unlink. The second-opinion probe list still asks for the directory case.
+
+**Bugbot:** the in-session Bugbot pass reported no findings. Sidecar read/write, migration order, and the remaining `devices` assertions (rollback only) match the stage.
+
+**Praise:** invalid sidecars are compared as file bytes, so a "fix" that rewrites the file fails the test. The catalog string is still called, and hard delete returns `STORE_OK` in the same test.
+
+### 2026-10-13 — second-opinion deep review (stage 3)
+
+**Verdict:** stage 3 approved after one grill-decided fix. No open blocking item.
+
+**Run, not read.** Gate: ctest 4/4 (ASan/UBSan), LINT OK, coverage 100% functions and 100% effective lines, `leaks-macos` PASS, `ci-linux.sh` OK. Probe 5 on the built binary:
+
+- A fresh brain has a sidecar at mode 0600 with one 37-byte line, and there is no `devices` table.
+- A deleted sidecar is re-minted at 0600, with a new id.
+- A sidecar of garbage, an uppercase UUID, the id plus a second line, or empty → exit 1 `invalid device_id sidecar`, and the sha is unchanged. The id with one trailing `\n` or `\r\n` opens. The second-line case is the stage 1 forward item, now closed.
+- With the sidecar missing in a `0555` folder → `cannot write device_id sidecar`, and no `.tmp` or partial file is left behind.
+- A 0.2.0 v4 brain with its sidecar removed gets a new id, not the `devices` row value, and ends with no `devices` table.
+
+**Blocking → fixed (Itay grill 2026-10-13: mint under the DB lock):** on an existing v5 brain whose sidecar was missing, open minted outside any lock. All processes used the same `<path>.device_id.tmp`, and `rename` overwrites. With 16 parallel CLI `add` runs per round, one round in five had one run fail with `cannot write device_id sidecar` (its temp file had already been renamed away). Another run wrote its row under an id the sidecar did not keep: a phantom writer in `version_vector`. Fresh create and v4 migrate were safe because they mint inside `BEGIN IMMEDIATE`.
+
+- New `bind_current_identity`: a valid sidecar binds with no lock, so normal opens stay lock-free. Otherwise it takes `BEGIN IMMEDIATE` (the lock migrate takes), re-reads the sidecar through `ensure_device_identity`, mints only if the file is still missing, and commits.
+- New `cli_parallel_opens_mint_one_sidecar_id` (gate suite `sync_delete`): 8 rounds of 16 real CLI processes. Each round must give 16 rows, none under an id other than the sidecar's, and no failed run. It went red in 2 of 3 runs before the fix (`15|0`, `15|1`, failures 2–3) and green in 5 of 5 after. A 10-round shell probe also had 0 bad rounds.
+- The test spawns the CLI because forked children inherit SQLite's PRNG state: they mint the same UUID within the same millisecond, which hides the race. A 48×20 in-process fork version stayed green on the buggy code.
+
+**Auto-fixed:** **important** — `write_sidecar` renamed without `fsync`. After a power loss the rename could land before the data, leaving an empty sidecar. E14.4 then refuses the brain and never re-mints it. It now calls `fsync(fd)` before close and rename.
+
+**Nit (left for stage 6 help/docs):** `import` help still says "or register devices", and the `store_import` comment in `store.h` still says "never INSERTs foreign devices". Both are stale now that the table is gone.
+
+**Nit (left):** `store_test_fail_sidecar_rename(int n)` uses only `n > 0`, so it is a flag.
+
+**Praise:** about 180 lines of `devices` reconciliation are gone. `ensure_device_identity` now has three branches (valid, missing, invalid). `read_sidecar` checks the trailing `fgetc` against `EOF` and `ferror`. The replaced-tests list in Implementation Notes names every 0.2.0 test and gives the reason.
+
+### 2026-10-13 — in-session deep review (stage 4)
+
+**Verdict:** approve for the second-opinion pass. No open blocking item. No grill.
+
+**Ran:** ctest 4/4 (ASan/UBSan), LINT OK, coverage 100% functions and 100% effective lines, `leaks-macos` PASS, `ci-linux.sh` OK. Device suite 6/6. Store unit 131/0. Facade byte-match for `device` and `device new` (ids masked).
+
+**Auto-fixed:** **important** — `store_device_new` published the sidecar and then adopted the id. An allocation failure after the rename left the file on the new id and the handle on the old one, so a later `device` in that process would not print the sidecar. The duplicate now happens first; the pointer moves only after the rename. Bugbot reported that pre-fix order. The fix is in this commit.
+
+**Nit (left):** the whole-plan must-pass row "facade byte-match for search after migrate" is not this stage's bullet. Store search-after-migrate and `facade_search` on a fresh v5 already exist.
+
+**Nit (left):** parallel `device new` has no test of its own. It uses the stage 3 lock (`BEGIN IMMEDIATE`, `busy_timeout` 5000, same temp name). The stage 3 test is `cli_parallel_opens_mint_one_sidecar_id`.
+
+**Nit (left for stage 6):** import help still says "register devices". README and SKILL.md still describe the device hatch.
+
+**Praise:** the version-vector test mints once, then updates. The vector keeps `"A":1` and gains `"B":1`. Human `device new` is the new id and nothing else.
+
+### 2026-10-13 — second-opinion deep review (stage 4)
+
+**Verdict:** stage 4 approved after one grill-decided change. No open blocking item.
+
+**Run, not read.** Gate: ctest 4/4 (ASan/UBSan), LINT OK, coverage 100% functions and 100% effective lines, `leaks-macos` PASS, `ci-linux.sh` OK. Probes on the built binary:
+
+- `device` prints A. `--json` prints `{"version":1,"device_id":"A"}`.
+- `--json device new` prints `{"version":1,"device_id":"B","previous":"A"}`. Every `version_vector` is byte-identical before and after.
+- The next `update` makes the vector `{"A":1,"B":1}`: B is added and A's counter is kept (probe 6).
+- Human `device new` prints only the new id. `help device` describes `new`, `previous`, and the version vector.
+
+**Grill (Itay 2026-10-13): `device new` always mints and replaces an invalid sidecar.** Before, an invalid sidecar failed every command, `device new` included, because open fails first. The only recovery was deleting the file by hand, and nothing told the user. This amends E14.4 and grill item 12 for `device new` only. Every other open, including `device` and `device new extra`, still exits 1 with `invalid device_id sidecar` and leaves the file unchanged.
+
+- `store_open_replacing_sidecar` sets `Store.replace_invalid_sidecar` (explicit tail pad, kept `-Wpadded`-clean). In that mode `ensure_device_identity` treats an invalid file like a missing one: it mints over it under the same lock as a missing-sidecar open. `store_device_new` no longer refuses an invalid file. It replaces it and reports no previous id.
+- `open_store` in `remember_app.c` uses that opener only when `cmd_device_mints()` (exported from `cmd_device.c`, so the `new` rule lives in one place) sees exactly `device new`. A bad argument list never touches the file.
+- `previous` follows D4: open mints over the bad file first, so the CLI reports that id. `null` stays type-only.
+- `help device` gains "It also replaces an invalid sidecar (no other command does)."
+- Tests: `store_device_new_invalid_sidecar_is_unchanged` was replaced by `store_device_new_replaces_an_invalid_sidecar`, which also checks that plain `store_open` still refuses and that the device-new opener mints over the bad file. New `device_new_replaces_an_invalid_sidecar` (CLI): `device` and `device new extra` exit 1 with the file still `GARBAGE`, `device new` exits 0 and the sidecar equals the reported id, and a later `device` prints it.
+- For stage 6: record this amendment in the 006 Implementation Results (E14.4, E14.6). SKILL.md should say "`device new` also repairs an invalid sidecar".
+
+**Praise:** `store_device_new` takes the stage 3 write lock, so it cannot race a missing-sidecar open on the shared `.tmp`. The new id is duplicated before the rename, so an allocation failure leaves the old file. The facade byte-match masks ids (P6). `STORE_DEVICE_ID_LEN` is the single source of the UUID length.
+
+### 2026-10-14 — in-session deep review (stage 5)
+
+**Verdict:** approve for the second-opinion pass. No open blocking item. No grill.
+
+**Ran:** ctest 4/4 (ASan/UBSan; `install_skill` outside the sandbox), LINT OK, coverage 100% functions and 100% effective lines, `leaks-macos` PASS, `ci-linux.sh` OK. Import suite 32/0. Store unit 132/0. Bugbot reported no findings.
+
+**Nit (left):** `probe_count` discards the count. Zero and one are both success, because this stage does not copy the rows. The v4 test (objects missing) and the v5 test (rows present, not copied) lock that.
+
+**Praise:** one string for `database is newer than this remember`. The version gate returns before any write on the destination. The source check compares file bytes, not only `user_version`.
+
+### 2026-10-14 — second-opinion deep review (stage 5)
+
+**Verdict:** stage 5 approved. No open blocking item. No code change.
+
+**Run, not read.** Gate: ctest 4/4 (ASan/UBSan), LINT OK, coverage 100% functions and 100% effective lines, `leaks-macos` PASS, `ci-linux.sh` OK. Probes on the built binary:
+
+- `import --from-db` of a `user_version` 6 source → exit 1 `database is newer than this remember`, and the destination stays empty. A v3 source → `source database is older than this remember`.
+- A real 0.2.0 v4 brain as the source → `inserted 4`. The source sha and mtime are unchanged, it stays at `user_version` 4, and no sidecar is created beside it.
+- A v5 source with a `settings` row and a `bucket_prefixes` row → imported. The source and its sidecar are byte-unchanged, and the destination `settings` and `bucket_prefixes` stay empty.
+- A non-database file or a missing path as the source → exit 1 `database error`, and no file is created. The vague text is plan 16's error work.
+
+**Grill (Itay 2026-10-14):** `probe_import_source` runs three read-only schema counts and discards each answer (`(void)n`), so today it changes no outcome. Itay chose to **keep it as scaffolding**. Plans 19 and 21 replace `(void)n` with a real use when they copy `bucket_prefixes` / `settings` / `conflicts.origin` rows.
+
+**Nit (left, plan 16):** the refusal of a v6 source says "database is newer than this remember" without naming the source, so a user may think their own brain is too new. The text is locked (E1.5 / stage 5 "same text"). Plan 16's `detail.path` can carry the source path.
+
+**Praise:** one `k_newer_database` string backs both open and import, so the two messages cannot drift. The gate is ordered so the probe never runs on a version this build does not understand. A failed probe returns before `BEGIN IMMEDIATE`.
+
+### 2026-10-14 — in-session deep review (stage 6)
+
+**Verdict:** approve for the second-opinion pass. No open blocking item. No grill.
+
+**Ran:** ctest 4/4 (ASan/UBSan), LINT OK, coverage 100% functions and 100% effective lines, `leaks-macos` PASS, `ci-linux.sh` OK. The import-help assertion failed first on `schema v4+` and `register devices`, then passed after the help change.
+
+**Auto-fixed:** **nit** — the What's New Hebrew line said "folded out of search", which can be read as query-side folding. It now says "folded out of the search index". Query-side folding stays plan 18.
+
+**Bugbot:** two runs died before any findings (connection interrupted). A later retry on the branch found one real gap: `demote_occupant_key` cleared `entries.key` and left the old key in `entries_fts`. `conflict accept --keep incoming` on a `key_clash` then still found the demoted row by that key. `fts_resync` now runs after that clear. `cli_conflict_accept_keep_incoming_key_clash_demotes` locks it (the search returned `total` 2, including body `L`, before the resync).
+
+The final review in `0ed577f` had already marked the INDEX row and deleted the review marker before this resync landed. The marker stays unset. The v0.2.0 What's New section still describes the single-device hatch as that release's behavior.
+
+**Praise:** import help no longer mentions a device registry, and the test fails if that phrase returns. 006 Design is unchanged. The two amendments are copied from the locked decision keys.
+
+## Pragmatic write-gate
+- DRY: PASS
+- Easy-to-replace: PASS
+- Orthogonal: PASS
+- Deferred markers added: none
+
+### 2026-10-14 — second-opinion deep review (stage 6, FINAL)
+
+**Verdict:** plan 15 is closed. No open blocking item. DoD is all checked, and the INDEX row is marked ✅.
+
+**Run, not read.** Full gate after the fixes below: ctest 4/4 (ASan/UBSan), LINT OK, coverage 100% functions and 100% effective lines, `leaks-macos` PASS, `ci-linux.sh` OK.
+
+**Docs check.** README What's New v0.3.0 has the five required lines. SKILL.md has a `device` section, FTS notes, v4-or-v5 import, and no hatch wording. The 006 Implementation Results record E1.2–E1.5, E10.1 (rows), and E14, with both grill amendments (the E1.3 conflicts rebuild and `device new` replacing an invalid sidecar). The Design section is unchanged. Import help no longer says "register devices" (the stage 3 nit). The README v0.2.0 table still names the hatch, which is accurate history.
+
+**Auto-fixed (gate re-run green):**
+
+- **important** — the DoD marked "every must-pass row green" and "test per path", but two must-pass rows had no test. They had only been checked by hand in the stage 1 probes.
+  - New `schema_v5_v4_body_and_tag_search_is_unchanged_by_migration`: four body/tag queries on the v4 fixture return the same ids in the same `rank` order before and after migration.
+  - New `cli_import_insert_and_accept_incoming_resync_the_fts_key`: an imported key (`imp:zebra`) is searchable, and after `conflict accept --keep incoming` the incoming key word matches and the replaced one does not. Mutation-checked: dropping `fts_resync` on the import insert fails it. Keyed `add` upsert never changes the key, so it needs no FTS-key test.
+- **nit** — `help device` said `"previous"` is "null when the file was missing". Per D4, open mints a missing (or now invalid) file first, so the CLI never prints null. The help now says "the id it replaced", which matches SKILL.md.
+
+**Carried forward:** the plan 16 nits (a source-naming `detail.path` on the v6 import refusal, and `database error` for a missing or non-database import source). The plan 19/21 use of `probe_import_source` stays (Itay: keep as scaffolding).
+
+**CI (2026-10-14, PR #28):** GitHub macOS failed `schema_v5_*` because ctest used `/usr/bin/sqlite3`. That CLI cannot create or read the vendored `entries_fts`, so `given_v4_brain` never reached `PRAGMA user_version=4` and open reported `table entries already exists`. The macOS job now prepends `$(brew --prefix sqlite)/bin`. Linux was already green.

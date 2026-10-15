@@ -35,7 +35,7 @@ main → cli_parse → commands.h (cmd_add | cmd_locator | cmd_query) → store_
 | 12 | [TTL / trash](12-ttl.md) | `expires_at`; `--ttl`/`--expires`/`--trash`; `purge-trash`; exit 3; v1→v2 migrate |
 | 13 | [Related memories](13-related-memories.md) | `entry_links` v3; `link`/`unlink`/`related`/`rekey`; one-row `related`; stubs; skill |
 | 14 | [Sync foundations](14-sync-foundations.md) | `sync_id` v7; soft-delete bins; per-file sidecar + local-only devices + VV; import merge + conflicts; `--sync-id` locators (design 005 Round 7) |
-| 15 | [Schema v5 + device id](15-schema-v5-device-id.md) | `user_version` 5; FTS `key, body, tags` + Hebrew fold; `bucket_prefixes`/`settings`/`conflicts.origin`; `devices` dropped; sidecar-only id; `device` / `device new` (006 §1, §12) |
+| 15 | [Schema v5 + device id](15-schema-v5-device-id.md) | `user_version` 5; FTS `key, body, tags` + Hebrew fold; `bucket_prefixes`/`settings`/`conflicts.origin`; `devices` dropped; sidecar-only id; `device` / `device new` (006 §1, §12) ✅ |
 | 16 | [Actionable errors](16-actionable-errors.md) | `--json-errors`; code catalog; SQLite cause split + fix text + `detail`; warnings; `--busy-timeout`; `--no-create`; `repair search-index`; test VFS shim (006 §3) |
 | 17 | [List dates + stale guard](17-list-dates-stale-guard.md) | `list --sort/--since/--until`; search date filters; `update --if-updated-at` → `stale` (006 §4, §7) |
 | 18 | [Union search](18-union-search.md) | Prefix ∪ raw FTS; never fails on input; `keys`/`tags` facets with tiers; utf8proc vendored (006 §2, §9) |

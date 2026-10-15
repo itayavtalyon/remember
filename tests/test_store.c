@@ -54,7 +54,7 @@ static void assert_query_is(const char *db, QueryExpect check)
     free(row);
 }
 
-TEST(store_open_creates_user_version_4)
+TEST(store_open_creates_user_version_5)
 {
     char *db = make_temp_db_path();
     char err[ERR_BUFSIZE];
@@ -67,7 +67,7 @@ TEST(store_open_creates_user_version_4)
     ASSERT_STREQ(err, "");
     store_close(s);
 
-    assert_query_is(db, (QueryExpect){.sql = "PRAGMA user_version;", .want = "4"});
+    assert_query_is(db, (QueryExpect){.sql = "PRAGMA user_version;", .want = "5"});
     assert_query_is(
         db, (QueryExpect){
                 .sql = "SELECT COUNT(*) FROM pragma_table_info('entries') WHERE name='expires_at';",
@@ -81,7 +81,7 @@ TEST(store_open_creates_user_version_4)
     free(db);
 }
 
-TEST(store_open_migrates_v1_to_v4)
+TEST(store_open_migrates_v1_to_v5)
 {
     char *db = make_temp_db_path();
     char err[ERR_BUFSIZE];
@@ -96,6 +96,16 @@ TEST(store_open_migrates_v1_to_v4)
             "INSERT INTO entries(body, body_hash, source, created_at, updated_at) "
             "VALUES('old row','h','human','2026-01-01T00:00:00.000Z',"
             "'2026-01-01T00:00:00.000Z');"
+            /* Real v1 brains already had these. The v5 delta does not create them. */
+            "CREATE TABLE tags (\n"
+            "  id INTEGER PRIMARY KEY,\n"
+            "  name TEXT NOT NULL UNIQUE\n"
+            ");\n"
+            "CREATE TABLE entry_tags (\n"
+            "  entry_id INTEGER NOT NULL REFERENCES entries(id) ON DELETE CASCADE,\n"
+            "  tag_id INTEGER NOT NULL REFERENCES tags(id) ON DELETE CASCADE,\n"
+            "  PRIMARY KEY (entry_id, tag_id)\n"
+            ");\n"
             "PRAGMA user_version=1;"));
     assert_query_is(db, (QueryExpect){.sql = "PRAGMA user_version;", .want = "1"});
 
@@ -105,7 +115,7 @@ TEST(store_open_migrates_v1_to_v4)
     ASSERT_STREQ(err, "");
     store_close(s);
 
-    assert_query_is(db, (QueryExpect){.sql = "PRAGMA user_version;", .want = "4"});
+    assert_query_is(db, (QueryExpect){.sql = "PRAGMA user_version;", .want = "5"});
     assert_query_is(
         db, (QueryExpect){
                 .sql = "SELECT COUNT(*) FROM pragma_table_info('entries') WHERE name='expires_at';",
@@ -305,10 +315,12 @@ TEST(store_open_has_expected_schema)
         db, (QueryExpect){
                 .sql = "SELECT name FROM sqlite_master WHERE type='table' AND name='entry_links';",
                 .want = "entry_links"});
-    assert_query_is(
-        db, (QueryExpect){
-                .sql = "SELECT name FROM sqlite_master WHERE type='table' AND name='devices';",
-                .want = "devices"});
+    {
+        char *devices = harness_sqlite_query_line(
+            db, "SELECT name FROM sqlite_master WHERE type='table' AND name='devices';");
+        ASSERT_TRUE(devices == NULL);
+        free(devices);
+    }
     assert_query_is(
         db, (QueryExpect){
                 .sql = "SELECT name FROM sqlite_master WHERE type='table' AND name='conflicts';",
@@ -394,7 +406,7 @@ TEST(store_open_concurrent_create_all_succeed)
         }
     }
     ASSERT_EQ_INT(failures, 0);
-    assert_query_is(db, (QueryExpect){.sql = "PRAGMA user_version;", .want = "4"});
+    assert_query_is(db, (QueryExpect){.sql = "PRAGMA user_version;", .want = "5"});
     free(db);
 }
 
@@ -1861,8 +1873,8 @@ TEST(store_tags_step_fail)
 
 void register_store_tests(void)
 {
-    RUN_TEST(store_open_creates_user_version_4);
-    RUN_TEST(store_open_migrates_v1_to_v4);
+    RUN_TEST(store_open_creates_user_version_5);
+    RUN_TEST(store_open_migrates_v1_to_v5);
     RUN_TEST(store_open_reopens_existing);
     RUN_TEST(store_open_refuses_user_version_too_new);
     RUN_TEST(store_open_refuses_negative_user_version);

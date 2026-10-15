@@ -14,6 +14,7 @@ int main(void)
 {
     register_store_tests();
     register_normalize_tests();
+    register_schema_v5_tests();
 
     (void)printf("\n== unit (sanitized) summary ==\n");
     (void)printf("tests run:     %d\n", g_tests_run);

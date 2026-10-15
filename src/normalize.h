@@ -53,6 +53,16 @@ NormStatus normalize_tag(const char *src, char *out, size_t out_cap);
 NormStatus normalize_key(const char *src, char *out, size_t out_cap);
 
 /*
+ * Copy src with the Hebrew marks U+0591–U+05BD, U+05BF, U+05C1–U+05C2,
+ * U+05C4–U+05C5 and U+05C7 removed. The stored body keeps the original bytes;
+ * FTS rows use this copy. Invalid or truncated UTF-8 is copied one byte at a
+ * time and is never read past src_len. A NUL inside src_len ends the input.
+ * On NORM_OK, *out is a heap NUL-terminated string (free it). out == NULL or
+ * src == NULL is a contract violation → NORM_ERR_INTERNAL.
+ */
+NormStatus fold_hebrew_marks(const char *src, size_t src_len, char **out);
+
+/*
  * Lowercase hex SHA-256 of data[0..len) into out_hex
  * (must provide REMEMBER_SHA256_HEX_LEN + 1 bytes).
  */

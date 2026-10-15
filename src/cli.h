@@ -23,6 +23,7 @@ typedef enum {
     CLI_CMD_IMPORT,
     CLI_CMD_CONFLICTS,
     CLI_CMD_CONFLICT,
+    CLI_CMD_DEVICE,
     CLI_CMD_UNKNOWN
 } CliCommand;
 
