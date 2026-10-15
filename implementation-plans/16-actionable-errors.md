@@ -393,3 +393,25 @@ No call sites changed. `err_msg` and the `fprintf(app_err(), …)` lines still w
 **Pragmatic write-gate:** DRY PASS, easy-to-replace PASS (`app_err` is the existing stream port), orthogonal PASS (no SQLite, no call-site edits). No deferred markers.
 
 **Left for later:** stage 2 routes `err_msg`. Stage 3 adds E4.8 text and E4.9 `detail`.
+
+### 2026-10-15 — second-opinion deep review (stage 1)
+
+**Verdict:** stage 1 approved after a grill-driven change to the warning emitter. No open blocking item.
+
+**Run, not read.** Gate: ctest 4/4 (ASan/UBSan), LINT OK, coverage 100% functions and 100% effective lines, `leaks-macos` PASS, `ci-linux.sh` OK. The catalog matches E4.3 exactly: 28 codes in order, each once, with enum ↔ string round-trips. Warning tokens are a separate catalog. A message containing `%`, a quote, CR or tab is safe on both plain and JSON output.
+
+**Blocking → fixed (Itay grill 2026-10-15).** The stage 1 warning API could not carry out stage 2's D5 routing as locked:
+
+- `diag_warning(..., exit_code)` wrote nothing on a non-zero exit (E4.6). But the `--trash` / `purge-trash` deprecation line and the synced-folder line are written before the command runs, and 0.2.0 prints them on failing commands too. Verified: `get --trash 999` printed the deprecation line, then `not found`, then exit 2.
+- The plain format `remember: note: <text>` could not reproduce `remember: --trash is deprecated; use --expired` or `remember: warning: database path looks like ...`, so D5 "plain text unchanged" was impossible.
+
+Itay's answers:
+
+- **deprecated_flag and synced_folder keep printing when the command then fails.**
+- **Every warning's plain prefix is `warning:`**: `remember: warning: <text>`. This amends E4.6 (`note:` becomes `warning:`). It also amends D5: the deprecation lines gain `warning: ` (`remember: warning: --trash is deprecated; use --expired`), and the synced-folder line is unchanged. JSON `message` is `<text>` without the prefix.
+
+Change: `diag_warning(code, message, json_errors)` drops `exit_code`; plain prefix is `warning: `. The test `warning_with_nonzero_exit_writes_nothing` is replaced by `every_warning_uses_the_warning_prefix`. E4.6's "never with a non-zero exit" now holds by contract at the plan 18 call site, which writes `raw_query_ignored` only when the search succeeds (written in `diag.h`).
+
+**For stage 2:** the E4.2 golden list must include the two new deprecation lines with `warning: `. For stage 7: record both amendments in the 006 Implementation Results (E4.6, D5).
+
+**Praise:** one string table per catalog. JSON reuses `output_json_string`. An unknown code writes nothing and returns -1. A NULL message cannot reach `printf("%s")`.

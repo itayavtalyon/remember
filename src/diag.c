@@ -115,7 +115,7 @@ static const char *message_or_empty(const char *message)
     return message != NULL ? message : "";
 }
 
-/* One plain or JSON notice. plain_prefix is "" for errors and "note: " for warnings. */
+/* One plain or JSON notice. plain_prefix is "" for errors and "warning: " for warnings. */
 typedef struct {
     const char *json_kind;
     const char *plain_prefix;
@@ -171,19 +171,16 @@ int diag_error(DiagCode code, const char *message, bool json_errors)
     });
 }
 
-int diag_warning(DiagWarning code, const char *message, bool json_errors, int exit_code)
+int diag_warning(DiagWarning code, const char *message, bool json_errors)
 {
     const char *name = diag_warning_name(code);
 
     if (name == NULL) {
         return -1;
     }
-    if (exit_code != 0) {
-        return 0;
-    }
     return write_notice((Notice){
         .json_kind = "warning",
-        .plain_prefix = "note: ",
+        .plain_prefix = "warning: ",
         .code = name,
         .message = message,
         .json_errors = json_errors,

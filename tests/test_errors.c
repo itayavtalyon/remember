@@ -238,7 +238,7 @@ TEST(every_error_code_json_message_matches_the_plain_line)
     }
 }
 
-TEST(plain_warning_is_remember_note)
+TEST(plain_warning_is_remember_warning)
 {
     char *buf = NULL;
     size_t len = 0U;
@@ -249,15 +249,15 @@ TEST(plain_warning_is_remember_note)
         return;
     }
     app_set_streams((AppStreams){.out = NULL, .err = err});
-    ASSERT_EQ_INT(diag_warning(DIAG_WARN_RAW_QUERY_IGNORED, "x", false, 0), 0);
+    ASSERT_EQ_INT(diag_warning(DIAG_WARN_RAW_QUERY_IGNORED, "x", false), 0);
     ASSERT_EQ_INT(fflush(err), 0);
-    ASSERT_STREQ(buf, "remember: note: x\n");
+    ASSERT_STREQ(buf, "remember: warning: x\n");
     app_set_streams((AppStreams){.out = NULL, .err = NULL});
     ASSERT_EQ_INT(fclose(err), 0);
     free(buf);
 }
 
-TEST(json_warning_is_one_line_and_not_the_note)
+TEST(json_warning_is_one_line_without_the_prefix)
 {
     char *buf = NULL;
     size_t len = 0U;
@@ -268,7 +268,7 @@ TEST(json_warning_is_one_line_and_not_the_note)
         return;
     }
     app_set_streams((AppStreams){.out = NULL, .err = err});
-    ASSERT_EQ_INT(diag_warning(DIAG_WARN_DEPRECATED_FLAG, "x", true, 0), 0);
+    ASSERT_EQ_INT(diag_warning(DIAG_WARN_DEPRECATED_FLAG, "x", true), 0);
     ASSERT_EQ_INT(fflush(err), 0);
     ASSERT_STREQ(buf,
                  "{\"version\":1,\"warning\":{\"code\":\"deprecated_flag\",\"message\":\"x\"}}\n");
@@ -277,7 +277,9 @@ TEST(json_warning_is_one_line_and_not_the_note)
     free(buf);
 }
 
-TEST(warning_with_nonzero_exit_writes_nothing)
+/* deprecated_flag and synced_folder keep their 0.2.0 text after "warning: "
+   (Itay 2026-10-15). An unknown warning code writes nothing. */
+TEST(every_warning_uses_the_warning_prefix)
 {
     char *buf = NULL;
     size_t len = 0U;
@@ -288,11 +290,15 @@ TEST(warning_with_nonzero_exit_writes_nothing)
         return;
     }
     app_set_streams((AppStreams){.out = NULL, .err = err});
-    ASSERT_EQ_INT(diag_warning(DIAG_WARN_SYNCED_FOLDER, "x", false, 1), 0);
-    ASSERT_EQ_INT(diag_warning(DIAG_WARN_SYNCED_FOLDER, "x", true, 3), 0);
-    ASSERT_EQ_INT(diag_warning(DIAG_WARN_COUNT, "x", false, 1), -1);
+    ASSERT_EQ_INT(
+        diag_warning(DIAG_WARN_DEPRECATED_FLAG, "--trash is deprecated; use --expired", false), 0);
+    ASSERT_EQ_INT(
+        diag_warning(DIAG_WARN_SYNCED_FOLDER, "database path looks like a synced folder", false),
+        0);
+    ASSERT_EQ_INT(diag_warning(DIAG_WARN_COUNT, "x", false), -1);
     ASSERT_EQ_INT(fflush(err), 0);
-    ASSERT_STREQ(buf, "");
+    ASSERT_STREQ(buf, "remember: warning: --trash is deprecated; use --expired\n"
+                      "remember: warning: database path looks like a synced folder\n");
     app_set_streams((AppStreams){.out = NULL, .err = NULL});
     ASSERT_EQ_INT(fclose(err), 0);
     free(buf);
@@ -311,11 +317,11 @@ TEST(null_message_is_empty_text)
     app_set_streams((AppStreams){.out = NULL, .err = err});
     ASSERT_EQ_INT(diag_error(DIAG_INTERNAL, NULL, false), 0);
     ASSERT_EQ_INT(diag_error(DIAG_INTERNAL, NULL, true), 0);
-    ASSERT_EQ_INT(diag_warning(DIAG_WARN_SYNCED_FOLDER, NULL, false, 0), 0);
+    ASSERT_EQ_INT(diag_warning(DIAG_WARN_SYNCED_FOLDER, NULL, false), 0);
     ASSERT_EQ_INT(fflush(err), 0);
     ASSERT_STREQ(buf, "remember: \n"
                       "{\"version\":1,\"error\":{\"code\":\"internal\",\"message\":\"\"}}\n"
-                      "remember: note: \n");
+                      "remember: warning: \n");
     app_set_streams((AppStreams){.out = NULL, .err = NULL});
     ASSERT_EQ_INT(fclose(err), 0);
     free(buf);
@@ -364,7 +370,7 @@ TEST(error_and_warning_leave_stdout_empty)
     }
     app_set_streams((AppStreams){.out = out, .err = err});
     ASSERT_EQ_INT(diag_error(DIAG_USAGE, "missing command (try --help)", false), 0);
-    ASSERT_EQ_INT(diag_warning(DIAG_WARN_RAW_QUERY_IGNORED, "x", true, 0), 0);
+    ASSERT_EQ_INT(diag_warning(DIAG_WARN_RAW_QUERY_IGNORED, "x", true), 0);
     ASSERT_EQ_INT(fflush(out), 0);
     ASSERT_EQ_INT(fflush(err), 0);
     ASSERT_STREQ(out_buf, "");
@@ -390,8 +396,8 @@ TEST(warning_outside_the_catalog_writes_nothing)
         return;
     }
     app_set_streams((AppStreams){.out = NULL, .err = err});
-    ASSERT_EQ_INT(diag_warning(DIAG_WARN_COUNT, "x", false, 0), -1);
-    ASSERT_EQ_INT(diag_warning(DIAG_WARN_COUNT, "x", true, 0), -1);
+    ASSERT_EQ_INT(diag_warning(DIAG_WARN_COUNT, "x", false), -1);
+    ASSERT_EQ_INT(diag_warning(DIAG_WARN_COUNT, "x", true), -1);
     ASSERT_EQ_INT(fflush(err), 0);
     ASSERT_STREQ(buf, "");
     app_set_streams((AppStreams){.out = NULL, .err = NULL});
@@ -410,9 +416,9 @@ void register_errors_tests(void)
     RUN_TEST(error_outside_the_catalog_writes_nothing);
     RUN_TEST(json_error_escapes_message_bytes);
     RUN_TEST(every_error_code_json_message_matches_the_plain_line);
-    RUN_TEST(plain_warning_is_remember_note);
-    RUN_TEST(json_warning_is_one_line_and_not_the_note);
-    RUN_TEST(warning_with_nonzero_exit_writes_nothing);
+    RUN_TEST(plain_warning_is_remember_warning);
+    RUN_TEST(json_warning_is_one_line_without_the_prefix);
+    RUN_TEST(every_warning_uses_the_warning_prefix);
     RUN_TEST(null_message_is_empty_text);
     RUN_TEST(plain_error_keeps_quote_and_backslash);
     RUN_TEST(error_and_warning_leave_stdout_empty);

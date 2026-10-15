@@ -68,12 +68,14 @@ bool diag_warning_from_name(const char *name, DiagWarning *out);
 int diag_error(DiagCode code, const char *message, bool json_errors);
 
 /*
- * Write one warning only when exit_code is 0 (E4.6). Any other exit writes
- * nothing and returns 0. Plain: "remember: note: <message>\n". JSON:
- * {"version":1,"warning":{"code":"<code>","message":"<message>"}}.
- * message is the <text>, without "note: ". NULL message is empty.
+ * Write one warning. Plain: "remember: warning: <message>\n" for every code
+ * (Itay 2026-10-15; amends E4.6 "note:" and D5). JSON:
+ * {"version":1,"warning":{"code":"<code>","message":"<message>"}}; message is
+ * the <text> without "warning: ". NULL message is empty. deprecated_flag and
+ * synced_folder print even when the command then fails (Itay 2026-10-15);
+ * raw_query_ignored is called only by a search that succeeds (E4.6).
  * Returns -1 when code is outside the warning catalog or the write fails.
  */
-int diag_warning(DiagWarning code, const char *message, bool json_errors, int exit_code);
+int diag_warning(DiagWarning code, const char *message, bool json_errors);
 
 #endif /* REMEMBER_DIAG_H */
