@@ -20,4 +20,12 @@ int util_path_looks_synced(const char *path);
 /* Heap buffer, NUL-terminated. -2 if content exceeds max_len; -1 I/O or OOM. */
 int util_read_stdin(char **out, size_t *out_len, size_t max_len);
 
+/*
+ * Absolute form of path (D7): a relative path joins the cwd; "." and ".."
+ * normalize lexically with no symlink resolution. Applies equally to --db,
+ * REMEMBER_DB, and the built-in path. 0 on success, -1 on bad input, getcwd
+ * failure, or a short buffer.
+ */
+int util_absolute_path(const char *path, char *buf, size_t buflen);
+
 #endif /* REMEMBER_UTIL_H */

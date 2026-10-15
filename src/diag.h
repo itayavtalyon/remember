@@ -3,6 +3,8 @@
 
 #include <stdbool.h>
 
+#include "store.h"
+
 /*
  * Closed error-code catalog (design log 006, E4.3). One string per code.
  * Warning codes are a separate catalog (E4.6, amended by D5).
@@ -66,6 +68,22 @@ bool diag_warning_from_name(const char *name, DiagWarning *out);
  * code is outside the catalog or the write fails.
  */
 int diag_error(DiagCode code, const char *message);
+
+/*
+ * Write one SQLite failure (E4.8 text, E4.9 detail). code is one of the eight
+ * SQLite codes (busy, read_only, disk_full, cannot_open, not_a_database,
+ * corrupt, io_error, database); detail carries the captured failure (never
+ * NULL, class never NONE); path is the brain path or NULL (emitted absolute
+ * per D7, only for the six codes E4.9 names; a path that will not absolutize
+ * is omitted). Plain: "remember: database error: <cause> (<SQLITE_NAME>).
+ * <fix>" (database: "remember: database error (<SQLITE_NAME>). Try again. If
+ * it keeps happening, report the details from --json-errors."). JSON: the
+ * E4.4 message plus "detail" (sqlite_code, sqlite_extended, sqlite_name,
+ * sqlite_message always; errno only non-zero; path only for the six codes;
+ * reason cannot_open only; fts_only corrupt only). Returns 0, or -1 when the
+ * code is not a SQLite code, detail is unusable, or the write fails.
+ */
+int diag_error_sqlite(DiagCode code, const StoreError *detail, const char *path);
 
 /*
  * Write one warning. Plain: "remember: warning: <message>\n" for every code

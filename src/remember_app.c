@@ -317,6 +317,7 @@ static Store *open_store(const CliArgs *args, int *out_rc)
     enum { ERR_BUFSIZE = 256 }; /* store_open error-message buffer */
     char path[REMEMBER_PATH_MAX];
     char err[ERR_BUFSIZE];
+    StoreError detail;
     Store *s = NULL;
 
     err[0] = '\0';
@@ -334,14 +335,23 @@ static Store *open_store(const CliArgs *args, int *out_rc)
                            "(iCloud/Dropbox/Google Drive); corruption risk - prefer a local disk");
     }
     if (args->command == CLI_CMD_DEVICE && cmd_device_mints(args->rest_argc, args->rest_argv)) {
-        s = store_open_replacing_sidecar(path, err, sizeof(err));
+        s = store_open_replacing_sidecar(path, err, sizeof(err), &detail);
     } else {
-        s = store_open(path, err, sizeof(err));
+        /* NULL opts is defaults (5000 ms, create); --busy-timeout and
+           --no-create reach the CLI in stage 5 (store.h). */
+        s = store_open_opts(path, NULL, err, sizeof(err), &detail);
     }
     if (s == NULL) {
-        const char *msg = err[0] != '\0' ? err : "cannot open database";
+        /* A captured SQLite failure takes the E4.8 line; mkdir, sidecar and
+           version failures keep their stage 2 code and text (no SQLite cause
+           exists, so detail is the zero value). */
+        if (detail.error_class != STORE_ERROR_NONE) {
+            err_store_sqlite(&detail, path);
+        } else {
+            const char *msg = err[0] != '\0' ? err : "cannot open database";
 
-        err_msg(code_for_store_text(msg), msg);
+            err_msg(code_for_store_text(msg), msg);
+        }
         *out_rc = REMEMBER_ERR;
         return NULL;
     }

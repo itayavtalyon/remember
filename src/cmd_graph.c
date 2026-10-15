@@ -249,7 +249,7 @@ static int resolve_end(Store *s, EndRef ref, bool include_deleted, long long *ou
         }
     }
     if (st != STORE_OK) {
-        return store_status_to_exit(st);
+        return store_status_to_exit(s, st);
     }
     *out_id = e.id;
     store_entry_free(&e);
@@ -332,7 +332,7 @@ static int run_pair(Store *s, bool json, int rest_argc, const char **rest_argv, 
     }
     if (is_unlink) {
         st = store_unlink(s, from_id, to_id, kind_ptr, now, &gone, &n);
-        rc = store_status_to_exit(st);
+        rc = store_status_to_exit(s, st);
         if (rc != REMEMBER_OK) {
             store_neighbors_free(gone, n);
             return rc;
@@ -345,7 +345,7 @@ static int run_pair(Store *s, bool json, int rest_argc, const char **rest_argv, 
         return REMEMBER_OK;
     }
     st = store_link(s, (StoreEdge){.from_id = from_id, .to_id = to_id}, kind, now, &act, &stub);
-    rc = store_status_to_exit(st);
+    rc = store_status_to_exit(s, st);
     if (rc != REMEMBER_OK) {
         return rc;
     }
@@ -504,7 +504,7 @@ static int related_load_subject(Store *s, const RelatedParse *p, bool include_de
             st = store_get_any(s, id, subject);
         }
     }
-    return store_status_to_exit(st);
+    return store_status_to_exit(s, st);
 }
 
 int cmd_related(Store *s, bool json, int rest_argc, const char **rest_argv)
@@ -576,7 +576,7 @@ int cmd_related(Store *s, bool json, int rest_argc, const char **rest_argv)
         return rc;
     }
     st = store_list_neighbors(s, subject.id, kind_ptr, dir, now, &rows, &n);
-    rc = store_status_to_exit(st);
+    rc = store_status_to_exit(s, st);
     if (rc != REMEMBER_OK) {
         store_entry_free(&subject);
         return rc;

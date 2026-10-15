@@ -209,8 +209,51 @@ DiagCode code_for_store_status(StoreStatus st)
     }
 }
 
-void err_store(StoreStatus st)
+/* cppcheck-suppress staticFunction ; public API (commands_common.h); used by tests */
+DiagCode code_for_store_class(StoreErrorClass error_class)
 {
+    switch (error_class) {
+    case STORE_ERROR_BUSY:
+        return DIAG_BUSY;
+    case STORE_ERROR_READ_ONLY:
+        return DIAG_READ_ONLY;
+    case STORE_ERROR_DISK_FULL:
+        return DIAG_DISK_FULL;
+    case STORE_ERROR_CANNOT_OPEN:
+        return DIAG_CANNOT_OPEN;
+    case STORE_ERROR_NOT_A_DATABASE:
+        return DIAG_NOT_A_DATABASE;
+    case STORE_ERROR_CORRUPT:
+        return DIAG_CORRUPT;
+    case STORE_ERROR_IO_ERROR:
+        return DIAG_IO_ERROR;
+    case STORE_ERROR_DATABASE:
+        return DIAG_DATABASE;
+    case STORE_ERROR_NONE:
+    default:
+        return DIAG_INTERNAL;
+    }
+}
+
+void err_store_sqlite(const StoreError *detail, const char *path)
+{
+    if (detail == NULL || detail->error_class == STORE_ERROR_NONE) {
+        err_msg(DIAG_INTERNAL, "internal error");
+        return;
+    }
+    (void)diag_error_sqlite(code_for_store_class(detail->error_class), detail, path);
+}
+
+void err_store(const Store *s, StoreStatus st)
+{
+    if (st == STORE_ERR_SQLITE && s != NULL) {
+        const StoreError *detail = store_last_error(s);
+
+        if (detail != NULL && detail->error_class != STORE_ERROR_NONE) {
+            err_store_sqlite(detail, store_path(s));
+            return;
+        }
+    }
     err_msg(code_for_store_status(st), store_status_message(st));
 }
 
@@ -476,19 +519,19 @@ void cmd_neighbors_drop_deleted(StoreNeighbor *rows, size_t *n, const char *now)
     *n = w;
 }
 
-int store_status_to_exit(StoreStatus st)
+int store_status_to_exit(const Store *s, StoreStatus st)
 {
     if (st == STORE_ERR_NOT_FOUND) {
-        err_store(st);
+        err_store(s, st);
         return REMEMBER_NOT_FOUND;
     }
     if (st == STORE_ERR_EXPIRED || st == STORE_ERR_NOT_EXPIRED || st == STORE_ERR_DELETED ||
         st == STORE_ERR_NOT_DELETED) {
-        err_store(st);
+        err_store(s, st);
         return REMEMBER_WRONG_BIN;
     }
     if (st != STORE_OK) {
-        err_store(st);
+        err_store(s, st);
         return REMEMBER_ERR;
     }
     return REMEMBER_OK;

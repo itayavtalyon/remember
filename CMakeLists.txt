@@ -306,6 +306,7 @@ target_include_directories(remember_tests PRIVATE
 target_link_libraries(remember_tests PRIVATE sqlite3 sha256)
 target_compile_definitions(remember_tests PRIVATE
     REMEMBER_VERSION="${PROJECT_VERSION}"
+    REMEMBER_TEST_HOOKS
 )
 remember_apply_posix_feature_macros(remember_tests)
 remember_apply_coverage(remember_tests)

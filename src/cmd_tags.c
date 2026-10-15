@@ -45,7 +45,7 @@ int cmd_tags(Store *s, bool json, int rest_argc, const char **rest_argv)
 
     st = store_tags(s, bin, now, &tags, &count);
     if (st != STORE_OK) {
-        err_store(st);
+        err_store(s, st);
         return REMEMBER_ERR;
     }
 

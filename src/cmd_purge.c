@@ -43,7 +43,7 @@ static int run_purge_bin(Store *s, bool json, StoreBin bin)
     }
     st = store_purge(s, bin, now, &entries, &count);
     if (st != STORE_OK) {
-        err_store(st);
+        err_store(s, st);
         goto cleanup;
     }
     if (emit_purge_result(json, entries, count, now) != 0) {

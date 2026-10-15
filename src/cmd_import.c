@@ -54,7 +54,7 @@ int cmd_import(Store *s, bool json, int rest_argc, const char **rest_argv)
     }
     st = store_import(s, from_db, now, &counts);
     if (st != STORE_OK) {
-        return store_status_to_exit(st);
+        return store_status_to_exit(s, st);
     }
     if (json) {
         if (output_import_envelope(app_out(), &counts) != 0) {
@@ -84,7 +84,7 @@ int cmd_conflicts(Store *s, bool json, int rest_argc, const char **rest_argv)
     (void)rest_argv;
     st = store_conflicts_list(s, &rows, &count);
     if (st != STORE_OK) {
-        return store_status_to_exit(st);
+        return store_status_to_exit(s, st);
     }
     if (json) {
         if (output_conflicts_envelope(app_out(), rows, count) != 0) {
@@ -255,7 +255,7 @@ int cmd_conflict(Store *s, bool json, int rest_argc, const char **rest_argv)
     }
     st = store_conflict_accept(s, conflict_id, keep, now, &entries, &count);
     if (st != STORE_OK) {
-        return store_status_to_exit(st);
+        return store_status_to_exit(s, st);
     }
     rc = conflict_accept_emit(json, entries, count, now);
 

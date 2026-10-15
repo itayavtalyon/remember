@@ -198,7 +198,7 @@ int cmd_get(Store *s, bool json, int rest_argc, const char **rest_argv)
     } else {
         st = store_get(s, loc.id, bin, now, &entry);
     }
-    rc = store_status_to_exit(st);
+    rc = store_status_to_exit(s, st);
     if (rc != REMEMBER_OK) {
         return rc;
     }
@@ -211,7 +211,7 @@ int cmd_get(Store *s, bool json, int rest_argc, const char **rest_argv)
         st = store_list_neighbors(s, entry.id, NULL, STORE_NEIGHBOR_ALL, now, &links, &nlinks);
         if (st != STORE_OK) {
             store_entry_free(&entry);
-            err_store(st);
+            err_store(s, st);
             return REMEMBER_ERR;
         }
         if (bin != STORE_BIN_DELETED) {
@@ -308,7 +308,7 @@ int cmd_delete(Store *s, bool json, int rest_argc, const char **rest_argv)
     }
 
     st = delete_resolved(s, &loc, bin, now, &entry);
-    rc = store_status_to_exit(st);
+    rc = store_status_to_exit(s, st);
     if (rc != REMEMBER_OK) {
         return rc;
     }
@@ -633,7 +633,7 @@ static int locator_bind_write(Store *s, const LocatorResolved *loc, StoreBin bin
         memset(&found, 0, sizeof(found));
         st = store_get_by_sync_id(s, loc->sync_id, bin, now, &found);
         if (st != STORE_OK) {
-            return store_status_to_exit(st);
+            return store_status_to_exit(s, st);
         }
         *out_id = found.id;
         store_entry_free(&found);
@@ -725,7 +725,7 @@ int cmd_update(Store *s, bool json, int rest_argc, const char **rest_argv)
         goto cleanup;
     }
     if (st != STORE_OK) {
-        rc = store_status_to_exit(st);
+        rc = store_status_to_exit(s, st);
         goto cleanup;
     }
     if (emit_update_result(json, &entry, now) != 0) {
@@ -899,7 +899,7 @@ int cmd_rekey(Store *s, bool json, int rest_argc, const char **rest_argv)
         store_entry_free(&entry);
         return REMEMBER_ERR;
     }
-    rc = store_status_to_exit(st);
+    rc = store_status_to_exit(s, st);
     if (rc != REMEMBER_OK) {
         store_entry_free(&entry);
         return rc;

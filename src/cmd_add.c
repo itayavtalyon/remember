@@ -235,7 +235,7 @@ int cmd_add(Store *s, bool json, int rest_argc, const char **rest_argv)
     st = store_add(s, body, hash, key_or_null, (const char *const *)tags_norm, ntags, parsed.source,
                    expires_at, now, &action, &entry);
     if (st != STORE_OK) {
-        err_store(st);
+        err_store(s, st);
         goto cleanup;
     }
     if (emit_add_result(json, action, &entry, now) != 0) {

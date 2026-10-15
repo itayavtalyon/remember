@@ -385,7 +385,39 @@ Itay 2026-10-15:
 - `decision:plan16-open-message-codes` — `database` for `sqlite: …`, `cannot read user_version: …`, `cannot rebuild search index`, and `cannot open database` (bare or with a detail). `cannot_open` for `cannot create database directory: …`. `usage` for the empty-buffer fallback `invalid database path`.
 - `decision:plan16-invalid-search-query` — `STORE_ERR_QUERY` is `invalid_query`. The sentence stays `invalid search query`.
 
+### 2026-10-15 — stage 3 (structured store errors)
+
+One `capture_sqlite_error` helper snapshots extended code, primary, name, message, and errno immediately after the failing SQLite call. `finalize` / `ROLLBACK` run after that. Mapping and the extended-name table live only in `store_sqlite.c`. D6 puts `SQLITE_NOMEM` and `SQLITE_IOERR_NOMEM` before the IOERR row; unnamed `IOERR_*` still fall through to `io_error` via the primary-code switch. `store.h` stays sqlite-free: `StoreError` / `StoreOpenOpts` / `store_open_opts` / `store_last_error` / `store_path`.
+
+`exec_sql` retries `SQLITE_SCHEMA` once, then classifies `database`. `prepare_v2` already re-prepares; a second helper was not added. `--busy-timeout` and `--no-create` stay stage 5; NULL opts are 5000 ms and create. D8 `no_create` is already on `StoreOpenOpts` and skips mkdir.
+
+D7 `util_absolute_path` joins cwd, then lexical `.` / `..`. It does not walk symlinks. `getcwd` uses a `PATH_MAX` stack buffer (GNU `getcwd(NULL,0)` is not C11).
+
+E4.8 cause/fix is `diag_error_sqlite`. `database` has its own sentence (no cause). E4.9 always writes `sqlite_code`, `sqlite_extended`, `sqlite_name`, `sqlite_message` (empty string when SQLite gave none — 006 has no omit rule for the message). `errno` only when non-zero; `path` only on the six codes, always the absolute `--db` path; `reason` only `cannot_open`; `fts_only` only `corrupt`.
+
+`capture_sqlite_error(...)` is a coverage-defensive line, same class as `set_err`. `remember_tests` always defines `REMEMBER_TEST_HOOKS` so the mapping/SCHEMA probes compile in the sanitizer binary.
+
+No new grill. `sqlite_message` always-emit follows 006's omit list (errno/path/reason/fts_only only).
+
 ## Review Notes
+
+### 2026-10-15 — in-session deep review (stage 3)
+
+**Verdict:** approve for the second-opinion pass. No open blocking item. No new grill.
+
+**Ran:** ctest 4/4 with ASan/UBSan, `lint-all.sh` LINT OK, coverage 100% functions and 100% effective lines, `leaks-macos` PASS, `ci-linux.sh` OK (iwyu and scan-build included). Probes: text file → `not_a_database` with absolute `path` (plain and JSON, empty stdout, exit 1); chmod 444 write → `read_only` with path; `get --key nope --json-errors` → `not_found` exit 2, no detail; truncated zeros → `not_a_database`. Bugbot on uncommitted changes: one validator-dropped finding; follow-up on `store_sqlite.c` found capture-after-finalize in `foreign_keys_ok` (and the same step-loop shape in three list helpers). Auto-fixed: capture, then `errmsg`, then `finalize`.
+
+**Praise:** one capture helper, mapping only in the adapter, `store.h` still sqlite-free, D7 lexical path in `util.c`.
+
+**Auto-fixed:** capture-before-finalize on `foreign_keys_ok`, VV parse, conflict list, and snapshot tags. Linux tidy magic `0xA5` → `POISON_BYTE`. D7 root `"/"` success plus a one-byte buffer miss. Coverage treats `capture_sqlite_error` as defensive.
+
+**Nit:** `k_sqlite_codes` / `k_sqlite_code_names` stay parallel arrays with `_Static_assert`. A struct row would merge them; the class table cannot merge because it names a different set. Left as is.
+
+**Ponytail:** SCHEMA retry is `exec_sql` only. `prepare_v2` already re-prepares. No second helper.
+
+**Pragmatic write-gate:** DRY PASS (one capture, one class table, one advice table). Easy-to-replace PASS (`store.h` is the port; sqlite stays in the adapter). Orthogonal PASS (codes do not change exit codes; E4.8 does not rewrite non-SQLite open text). Simplify PASS after the capture-order fix. No deferred markers.
+
+**Left for later:** stage 4 VFS shim + acceptance matrix. Stage 5 `--busy-timeout` / `--no-create`. Stage 6 `fts_only` from `quick_check`. Stage 7 help / SKILL / QUALITY shim note.
 
 ### 2026-10-15 — in-session deep review (stage 2)
 

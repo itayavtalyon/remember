@@ -411,7 +411,7 @@ static int load_page_neighbors(Store *s, const Entry *entries, size_t count, con
     st = store_list_neighbors_for(s, ids, count, now, out, out_n);
     free(ids);
     if (st != STORE_OK) {
-        err_store(st);
+        err_store(s, st);
         return -1;
     }
     return 0;
@@ -493,7 +493,7 @@ int cmd_list(Store *s, bool json, int rest_argc, const char **rest_argv)
         total = page.total;
     }
     if (st != STORE_OK) {
-        err_store(st);
+        err_store(s, st);
         goto cleanup;
     }
     if (load_page_neighbors(s, entries, count, now, &links, &nlinks) != 0) {
@@ -563,7 +563,7 @@ int cmd_search(Store *s, bool json, int rest_argc, const char **rest_argv)
         total = page.total;
     }
     if (st != STORE_OK) {
-        err_store(st);
+        err_store(s, st);
         goto cleanup;
     }
     if (load_page_neighbors(s, entries, count, now, &links, &nlinks) != 0) {

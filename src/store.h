@@ -38,7 +38,6 @@ typedef enum {
 
 /* Locator / list / search / tags bin. LIVE is the zero value (zero-init queries). */
 typedef enum { STORE_BIN_LIVE = 0, STORE_BIN_EXPIRED, STORE_BIN_DELETED } StoreBin;
-
 /* live: no deleted_at and (no expiry or expires_at > now);
  * expired: no deleted_at and expires_at <= now;
  * deleted: deleted_at set. now may be NULL (then expiry cannot match). */
@@ -65,6 +64,56 @@ typedef struct {
     char *version_vector; /* JSON object; never NULL after a successful load */
 } Entry;
 
+/* Structured SQLite failure (plan 16 stage 3). The zero value means no SQLite
+ * failure was captured. store.h exposes plain C only: ints, fixed strings,
+ * and enums — never engine header types or macros. The mapping from extended
+ * code to class and the extended-name table live in the adapter. */
+typedef enum {
+    STORE_ERROR_NONE = 0,
+    STORE_ERROR_BUSY,
+    STORE_ERROR_READ_ONLY,
+    STORE_ERROR_DISK_FULL,
+    STORE_ERROR_CANNOT_OPEN,
+    STORE_ERROR_NOT_A_DATABASE,
+    STORE_ERROR_CORRUPT,
+    STORE_ERROR_IO_ERROR,
+    STORE_ERROR_DATABASE
+} StoreErrorClass;
+
+/* cannot_open detail (E4.7): EACCES, ENOENT, EISDIR/CANTOPEN_ISDIR, else other. */
+typedef enum {
+    STORE_REASON_NONE = 0,
+    STORE_REASON_PERMISSION,
+    STORE_REASON_MISSING,
+    STORE_REASON_IS_DIRECTORY,
+    STORE_REASON_OTHER
+} StoreOpenReason;
+
+enum {
+    STORE_SQLITE_NAME_LEN = 32,
+    STORE_SQLITE_MSG_LEN = 256,
+};
+
+typedef struct {
+    StoreErrorClass error_class;
+    int sqlite_code;     /* primary result code (low byte of the extended code) */
+    int sqlite_extended; /* full extended result code */
+    char sqlite_name[STORE_SQLITE_NAME_LEN];
+    char sqlite_message[STORE_SQLITE_MSG_LEN];
+    int sys_errno;          /* OS errno captured at the failure; 0 when none */
+    StoreOpenReason reason; /* cannot_open only; NONE otherwise */
+    bool fts_only;          /* corrupt is FTS-only (set by the stage 6 check) */
+    char pad_[3];           /* explicit tail padding (kept -Wpadded-clean) */
+} StoreError;
+
+/* Open options (plan 16 stage 3). NULL opts means defaults (5000 ms, create).
+ * Busy timeout and --no-create reach the CLI in stage 5. */
+typedef struct {
+    int busy_timeout_ms; /* PRAGMA busy_timeout; used as given when opts != NULL */
+    bool no_create;      /* missing file fails instead of creating (E4.11) */
+    char pad_[3];        /* explicit tail padding (kept -Wpadded-clean) */
+} StoreOpenOpts;
+
 /* Open or create a store at path. Creates parent directories (mode 0700).
  * On success returns a non-NULL Store*. On failure returns NULL and, if
  * err/errlen are usable, writes a short message into err (NUL-terminated).
@@ -77,8 +126,29 @@ Store *store_open(const char *path, char *err, size_t errlen);
 
 /* store_open for `device new` only: an invalid sidecar counts as missing and is
  * minted over under the write lock (Itay 2026-10-13). Every other open keeps
- * the E14.4 error. */
-Store *store_open_replacing_sidecar(const char *path, char *err, size_t errlen);
+ * the E14.4 error. out_error follows store_open_opts (NULL means no detail). */
+Store *store_open_replacing_sidecar(const char *path, char *err, size_t errlen,
+                                    StoreError *out_error);
+
+/*
+ * store_open with options and a structured SQLite failure. opts NULL means
+ * defaults. out_error NULL means no detail. On failure with an SQLite cause,
+ * *out_error carries code/extended/name/message/errno (E4.7); otherwise it is
+ * zeroed (the err text still names the failure). With no_create, a missing
+ * file fails before any mkdir and creates nothing (D8).
+ */
+Store *store_open_opts(const char *path, const StoreOpenOpts *opts, char *err, size_t errlen,
+                       StoreError *out_error);
+
+/*
+ * Last captured SQLite failure on s. Meaningful only when the most recent op
+ * returned STORE_ERR_SQLITE; otherwise the zero value. Valid until the next
+ * op on s or store_close. Never NULL when s is non-NULL.
+ */
+const StoreError *store_last_error(const Store *s);
+
+/* Path s was opened with (borrowed; valid until store_close). NULL if s NULL. */
+const char *store_path(const Store *s);
 
 /* Close and free. Safe with NULL. */
 void store_close(Store *s);
@@ -426,8 +496,21 @@ void store_test_fail_alloc_after(int n);
 void store_test_fail_prepare_after(int n);
 void store_test_fail_step_after(int n);
 void store_test_fail_exec_after(int n);
+/* Report SQLITE_SCHEMA from exec (concurrent-DDL simulation for the SCHEMA
+   retry); same countdown convention as the other hooks. Pass -1 to disable. */
+void store_test_fail_exec_schema_after(int n);
 /* Fail the next sidecar rename when n > 0. Pass 0 to clear. */
 void store_test_fail_sidecar_rename(int n);
+/*
+ * Read-only probes for the E4.7 mapping (stage 3 coverage: the class table,
+ * the extended-name table, the cannot_open reason, and the message clamp).
+ * Pure functions of their inputs; they touch no database.
+ */
+StoreErrorClass store_test_classify_extended(int extended);
+const char *store_test_sqlite_name(int extended);
+StoreOpenReason store_test_derive_reason(int extended, int sys_errno);
+void store_test_copy_message(StoreError *out, const char *msg);
+void store_test_capture_null(StoreError *out);
 #endif
 
 #endif /* REMEMBER_STORE_H */

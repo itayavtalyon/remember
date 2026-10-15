@@ -22,7 +22,10 @@ void err_msg(DiagCode code, const char *msg);
 __attribute__((format(printf, 2, 3)))
 #endif
 void err_fmt(DiagCode code, const char *fmt, ...);
-void err_store(StoreStatus st);
+
+/* SQLITE failures (E4.7 class → E4.8 text + E4.9 detail); anything else keeps
+   the code_for_store_status code with the legacy store_status_message text. */
+void err_store(const Store *s, StoreStatus st);
 void err_norm(NormStatus st, const char *kind);
 
 /* usage, except "out of memory" and the internal sentences D9 names. */
@@ -33,6 +36,13 @@ DiagCode code_for_store_text(const char *msg);
 
 DiagCode code_for_store_status(StoreStatus st);
 DiagCode code_for_norm(NormStatus st);
+
+/* Structured failure class → catalog code (NONE is a store bug: internal). */
+DiagCode code_for_store_class(StoreErrorClass error_class);
+
+/* Emit one captured SQLite failure (E4.8 text, E4.9 detail with path).
+   A NULL or NONE detail is a store bug: internal error. */
+void err_store_sqlite(const StoreError *detail, const char *path);
 
 /* Parse a positive entry id token. 0 ok, -1 invalid (does not print). */
 int parse_entry_id(const char *raw, long long *out_id);
@@ -60,8 +70,8 @@ int normalize_tags(const char *const *tag_raw, size_t ntag_raw, char ***out_tags
                    const char **err);
 void free_tag_list(char **tags, size_t ntags);
 
-/* Map store status to process exit; prints store_status_message on error. */
-int store_status_to_exit(StoreStatus st);
+/* Map store status to process exit; prints the E4.8 line for SQLITE failures. */
+int store_status_to_exit(const Store *s, StoreStatus st);
 
 /* Parsed --expired / --deleted / --trash (alias of --expired). */
 typedef struct {

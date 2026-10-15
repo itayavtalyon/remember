@@ -188,6 +188,7 @@ DEFENSIVE = re.compile(
     |^\s*end_opts\s*=
     |^\s*g_fail_\w+\s*--
     |^\s*set_errf?\s*\(
+    |^\s*capture_sqlite_error\s*\(        # snapshot before finalize/rollback (plan 16)
     |^\s*rollback_quiet\s*\(
     |^\s*savepoint_undo\s*\(
     |^\s*\(void\)exec_sql\s*\(
@@ -203,6 +204,8 @@ DEFENSIVE = re.compile(
     |^\s*\*out_stubs\s*=
     |^\s*\*out_total\s*=
     |^\s*\*\w+\s*=\s*NULL\s*;             # out-param nulling on error tails
+    |^\s*sel\s*=\s*NULL\s*;               # local stmt nulling on error tails
+    |^\s*if\s*\(\s*rc\s*!=\s*SQLITE_DONE\s*\)  # step-done miss after capture
     |^\s*s\s*=\s*""\s*;                   # json_write_string NULL→empty
     |^\s*if\s*\(\s*src\s*!=\s*NULL\s*\)
     |^\s*if\s*\(\s*sel\s*!=\s*NULL\s*\)
