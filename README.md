@@ -164,7 +164,9 @@ Pinned SQLite amalgamation: **3.53.3** in `third_party/sqlite/` (see that README
 ### Binary + agent skill (install script)
 
 Builds a **Release** binary (no sanitizers) into a dedicated `build-release/` tree
-(never reuses developer `build/`, which is often ASan), installs it, and copies
+(never reuses developer `build/`, which is often ASan; the build is incremental,
+so an up-to-date tree is a no-op), refuses a binary whose `--version` does not
+match `CMakeLists.txt`, installs it, and copies
 the agent skill into product skill roots that already exist:
 
 ```bash
@@ -173,6 +175,7 @@ the agent skill into product skill roots that already exist:
 ./scripts/install.sh --skill-only    # refresh agent skill only
 ./scripts/install.sh --bin-only      # binary only
 ./scripts/install.sh --force-build   # clean rebuild of build-release/
+./scripts/install.sh --no-build      # install the existing build-release/ binary as-is
 ```
 
 | What | Where |
