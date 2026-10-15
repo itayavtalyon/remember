@@ -8,6 +8,10 @@
 #include <stdio.h>
 #include <string.h>
 
+/* See diag_set_json_errors. Deliberately mutable; one call at a time. */
+// NOLINTNEXTLINE(cppcoreguidelines-avoid-non-const-global-variables)
+static bool g_json_errors = false;
+
 /* E4.3 order. One token per code; diag_code_name / diag_code_from_name share it. */
 static const char *const k_error_codes[DIAG_CODE_COUNT] = {
     [DIAG_USAGE] = "usage",
@@ -169,6 +173,18 @@ int diag_error(DiagCode code, const char *message, bool json_errors)
         .message = message,
         .json_errors = json_errors,
     });
+}
+
+/* cppcheck-suppress staticFunction ; public API (diag.h); remember_run */
+void diag_set_json_errors(bool enabled)
+{
+    g_json_errors = enabled;
+}
+
+/* cppcheck-suppress staticFunction ; public API (diag.h); err_msg and warnings */
+bool diag_json_errors(void)
+{
+    return g_json_errors;
 }
 
 int diag_warning(DiagWarning code, const char *message, bool json_errors)

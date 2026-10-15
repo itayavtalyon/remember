@@ -1,11 +1,18 @@
 #include "appio.h"
+#include "commands_common.h"
 #include "diag.h"
+#include "harness.h"
+#include "normalize.h"
 #include "register.h"
+#include "remember_app.h"
+#include "store.h"
 #include "test.h"
 
 #include <stddef.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
 
 /* Longest E4.3 token plus the JSON envelope around "sample text". */
 enum { EXPECTED_JSON_CAP = 160 };
@@ -405,6 +412,277 @@ TEST(warning_outside_the_catalog_writes_nothing)
     free(buf);
 }
 
+TEST(plain_missing_command_is_unchanged)
+{
+    char *db = make_temp_db_path();
+    CmdResult r;
+
+    ASSERT_TRUE(db != NULL);
+    r = run_remember(db, NULL, 0, NULL);
+    ASSERT_EQ_INT(r.exit_code, 1);
+    ASSERT_STREQ(r.out, "");
+    ASSERT_STREQ(r.err, "remember: missing command (try --help)\n");
+    cmd_result_free(&r);
+    free(db);
+}
+
+TEST(json_errors_usage_is_one_stderr_line)
+{
+    char *db = make_temp_db_path();
+    const char *args[] = {"--json-errors"};
+    CmdResult r;
+
+    ASSERT_TRUE(db != NULL);
+    r = run_remember(db, args, sizeof(args) / sizeof(args[0]), NULL);
+    ASSERT_EQ_INT(r.exit_code, 1);
+    ASSERT_STREQ(r.out, "");
+    ASSERT_STREQ(r.err, "{\"version\":1,\"error\":{\"code\":\"usage\",\"message\":\"missing "
+                        "command (try --help)\"}}\n");
+    cmd_result_free(&r);
+    free(db);
+}
+
+TEST(json_errors_not_found_is_one_line)
+{
+    char *db = make_temp_db_path();
+    const char *args[] = {"get", "--json-errors", "--key", "nope"};
+    CmdResult r;
+
+    ASSERT_TRUE(db != NULL);
+    r = run_remember(db, args, sizeof(args) / sizeof(args[0]), NULL);
+    ASSERT_EQ_INT(r.exit_code, 2);
+    ASSERT_STREQ(r.out, "");
+    ASSERT_STREQ(r.err,
+                 "{\"version\":1,\"error\":{\"code\":\"not_found\",\"message\":\"not found\"}}\n");
+    cmd_result_free(&r);
+    free(db);
+}
+
+TEST(plain_not_found_is_unchanged)
+{
+    char *db = make_temp_db_path();
+    const char *args[] = {"get", "--key", "nope"};
+    CmdResult r;
+
+    ASSERT_TRUE(db != NULL);
+    r = run_remember(db, args, sizeof(args) / sizeof(args[0]), NULL);
+    ASSERT_EQ_INT(r.exit_code, 2);
+    ASSERT_STREQ(r.out, "");
+    ASSERT_STREQ(r.err, "remember: not found\n");
+    cmd_result_free(&r);
+    free(db);
+}
+
+TEST(plain_trash_warning_uses_warning_prefix)
+{
+    char *db = make_temp_db_path();
+    const char *args[] = {"list", "--trash"};
+    CmdResult r;
+
+    ASSERT_TRUE(db != NULL);
+    r = run_remember(db, args, sizeof(args) / sizeof(args[0]), NULL);
+    ASSERT_EQ_INT(r.exit_code, 0);
+    ASSERT_STREQ(r.err, "remember: warning: --trash is deprecated; use --expired\n");
+    cmd_result_free(&r);
+    free(db);
+}
+
+TEST(json_errors_trash_is_deprecated_flag)
+{
+    char *db = make_temp_db_path();
+    const char *args[] = {"--json-errors", "list", "--trash"};
+    CmdResult r;
+
+    ASSERT_TRUE(db != NULL);
+    r = run_remember(db, args, sizeof(args) / sizeof(args[0]), NULL);
+    ASSERT_EQ_INT(r.exit_code, 0);
+    ASSERT_STREQ(r.err, "{\"version\":1,\"warning\":{\"code\":\"deprecated_flag\",\"message\":\"--"
+                        "trash is deprecated; use --expired\"}}\n");
+    cmd_result_free(&r);
+    free(db);
+}
+
+TEST(json_errors_invalid_search_query_keeps_its_text)
+{
+    char *db = make_temp_db_path();
+    const char *args[] = {"--json-errors", "search", "\""};
+    CmdResult r;
+
+    ASSERT_TRUE(db != NULL);
+    r = run_remember(db, args, sizeof(args) / sizeof(args[0]), NULL);
+    ASSERT_EQ_INT(r.exit_code, 1);
+    ASSERT_STREQ(r.out, "");
+    ASSERT_STREQ(r.err,
+                 "{\"version\":1,\"error\":{\"code\":\"invalid_query\",\"message\":\"invalid "
+                 "search query\"}}\n");
+    cmd_result_free(&r);
+    free(db);
+}
+
+TEST(json_errors_synced_folder_is_one_warning)
+{
+    enum { PATH_CAP = 4096 };
+    char tmpl[] = "/tmp/Dropbox-remember-XXXXXX";
+    char *dir = mkdtemp(tmpl);
+    char path[PATH_CAP];
+    char sidecar[PATH_CAP];
+    const char *args[] = {"--json-errors", "list"};
+    CmdResult r;
+    int wrote = 0;
+
+    ASSERT_TRUE(dir != NULL);
+    if (dir == NULL) {
+        return;
+    }
+    wrote = snprintf(path, sizeof(path), "%s/test.db", dir);
+    ASSERT_TRUE(wrote > 0 && (size_t)wrote < sizeof(path));
+    r = run_remember(path, args, sizeof(args) / sizeof(args[0]), NULL);
+    ASSERT_EQ_INT(r.exit_code, 0);
+    ASSERT_STREQ(r.err,
+                 "{\"version\":1,\"warning\":{\"code\":\"synced_folder\",\"message\":\"database "
+                 "path looks like a synced folder "
+                 "(iCloud/Dropbox/Google Drive); corruption risk - prefer a local disk\"}}\n");
+    cmd_result_free(&r);
+    wrote = snprintf(sidecar, sizeof(sidecar), "%s.device_id", path);
+    ASSERT_TRUE(wrote > 0 && (size_t)wrote < sizeof(sidecar));
+    (void)unlink(path);
+    (void)unlink(sidecar);
+    (void)rmdir(dir);
+}
+
+static void expect_diag(DiagCode got, DiagCode want)
+{
+    ASSERT_EQ_INT((int)got, (int)want);
+}
+
+TEST(store_text_codes_follow_the_locked_split)
+{
+    expect_diag(code_for_store_text("sqlite: disk I/O error"), DIAG_DATABASE);
+    expect_diag(code_for_store_text("cannot read user_version: bad"), DIAG_DATABASE);
+    expect_diag(code_for_store_text("cannot rebuild search index"), DIAG_DATABASE);
+    expect_diag(code_for_store_text("cannot open database"), DIAG_DATABASE);
+    expect_diag(code_for_store_text("cannot open database: unable to open"), DIAG_DATABASE);
+    expect_diag(code_for_store_text("cannot create database directory: denied"), DIAG_CANNOT_OPEN);
+    expect_diag(code_for_store_text("database path component is not a directory"),
+                DIAG_CANNOT_OPEN);
+    expect_diag(code_for_store_text("invalid database path"), DIAG_USAGE);
+    expect_diag(code_for_store_text("database path is too long"), DIAG_USAGE);
+    expect_diag(code_for_store_text("empty database path"), DIAG_USAGE);
+    expect_diag(code_for_store_text("HOME is not set; pass --db PATH"), DIAG_USAGE);
+    expect_diag(
+        code_for_store_text("database path must be a regular file (not :memory: or file: URI)"),
+        DIAG_USAGE);
+    expect_diag(code_for_store_text("out of memory"), DIAG_OUT_OF_MEMORY);
+    expect_diag(code_for_store_text("database is newer than this remember"), DIAG_NEWER_DATABASE);
+    expect_diag(code_for_store_text("unsupported database version"), DIAG_UNSUPPORTED_DATABASE);
+    expect_diag(code_for_store_text("migration left a dangling reference"), DIAG_CORRUPT);
+    expect_diag(code_for_store_text("internal error"), DIAG_INTERNAL);
+    expect_diag(code_for_store_text("internal error: path buffer missing"), DIAG_INTERNAL);
+    expect_diag(code_for_store_text("cannot write device_id sidecar"), DIAG_INTERNAL);
+    expect_diag(code_for_store_text("invalid device_id sidecar"), DIAG_INTERNAL);
+    expect_diag(code_for_store_text("cannot mint device_id"), DIAG_INTERNAL);
+    expect_diag(code_for_store_text("cannot mint sync_id"), DIAG_INTERNAL);
+    expect_diag(code_for_store_text(NULL), DIAG_INTERNAL);
+    expect_diag(code_for_store_text(""), DIAG_INTERNAL);
+    expect_diag(code_for_store_text("not a known store sentence"), DIAG_INTERNAL);
+    expect_diag(code_for_cmd_text("missing body"), DIAG_USAGE);
+    expect_diag(code_for_cmd_text("out of memory"), DIAG_OUT_OF_MEMORY);
+    expect_diag(code_for_cmd_text("failed to read body from stdin"), DIAG_INTERNAL);
+    expect_diag(code_for_norm(NORM_ERR_OOM), DIAG_OUT_OF_MEMORY);
+    expect_diag(code_for_norm(NORM_ERR_EMPTY), DIAG_USAGE);
+    expect_diag(code_for_store_status(STORE_OK), DIAG_INTERNAL);
+    expect_diag(code_for_store_status(STORE_ERR_NOT_FOUND), DIAG_NOT_FOUND);
+    expect_diag(code_for_store_status(STORE_ERR_SQLITE), DIAG_DATABASE);
+    expect_diag(code_for_store_status(STORE_ERR_OOM), DIAG_OUT_OF_MEMORY);
+    expect_diag(code_for_store_status(STORE_ERR_INTERNAL), DIAG_INTERNAL);
+    expect_diag(code_for_store_status(STORE_ERR_QUERY), DIAG_INVALID_QUERY);
+    expect_diag(code_for_store_status(STORE_ERR_CONFLICT), DIAG_BODY_CONFLICT);
+    expect_diag(code_for_store_status(STORE_ERR_EXPIRED), DIAG_EXPIRED);
+    expect_diag(code_for_store_status(STORE_ERR_NOT_EXPIRED), DIAG_NOT_EXPIRED);
+    expect_diag(code_for_store_status(STORE_ERR_DELETED), DIAG_DELETED);
+    expect_diag(code_for_store_status(STORE_ERR_NOT_DELETED), DIAG_NOT_DELETED);
+    expect_diag(code_for_store_status(STORE_ERR_NOT_SINGLE_DEVICE), DIAG_NOT_SINGLE_DEVICE);
+    expect_diag(code_for_store_status(STORE_ERR_SELF_LINK), DIAG_SELF_LINK);
+    expect_diag(code_for_store_status(STORE_ERR_CYCLE), DIAG_CYCLE);
+    expect_diag(code_for_store_status(STORE_ERR_SOURCE_TOO_OLD), DIAG_SOURCE_TOO_OLD);
+    expect_diag(code_for_store_status(STORE_ERR_SOURCE_TOO_NEW), DIAG_NEWER_DATABASE);
+    expect_diag(code_for_store_status(STORE_ERR_UNIQUE_TAKEN), DIAG_UNIQUE_TAKEN);
+    {
+        enum { UNKNOWN_STORE_STATUS = 1000 };
+        /* NOLINTNEXTLINE(clang-analyzer-optin.core.EnumCastOutOfRange) */
+        StoreStatus unknown = (StoreStatus)UNKNOWN_STORE_STATUS;
+
+        expect_diag(code_for_store_status(unknown), DIAG_INTERNAL);
+    }
+}
+
+TEST(internal_parse_stays_a_plain_internal_line)
+{
+    char *err_buf = NULL;
+    char *out_buf = NULL;
+    size_t err_len = 0U;
+    size_t out_len = 0U;
+    FILE *err = open_memstream(&err_buf, &err_len);
+    FILE *out = open_memstream(&out_buf, &out_len);
+    int rc = 0;
+
+    ASSERT_TRUE(err != NULL);
+    ASSERT_TRUE(out != NULL);
+    if (err == NULL || out == NULL) {
+        if (err != NULL) {
+            (void)fclose(err);
+        }
+        if (out != NULL) {
+            (void)fclose(out);
+        }
+        free(err_buf);
+        free(out_buf);
+        return;
+    }
+    rc = remember_run(0, NULL, out, err);
+    ASSERT_EQ_INT(fflush(err), 0);
+    ASSERT_EQ_INT(fflush(out), 0);
+    ASSERT_EQ_INT(rc, 1);
+    ASSERT_STREQ(out_buf, "");
+    ASSERT_STREQ(err_buf, "remember: internal argument error\n");
+    ASSERT_EQ_INT(fclose(err), 0);
+    ASSERT_EQ_INT(fclose(out), 0);
+    free(err_buf);
+    free(out_buf);
+}
+
+TEST(err_fmt_keeps_a_long_unknown_option)
+{
+    enum {
+        OPT_LEN = 600, /* longer than any fixed stderr scratch buffer */
+        EXPECT_SLACK = 64
+    };
+    char *err_buf = NULL;
+    size_t err_len = 0U;
+    FILE *err = NULL;
+    char long_opt[OPT_LEN];
+    char expect[OPT_LEN + EXPECT_SLACK];
+    int wrote = 0;
+
+    memset(long_opt, 'a', sizeof(long_opt) - 1U);
+    long_opt[sizeof(long_opt) - 1U] = '\0';
+    err = open_memstream(&err_buf, &err_len);
+    ASSERT_TRUE(err != NULL);
+    if (err == NULL) {
+        return;
+    }
+    app_set_streams((AppStreams){.out = NULL, .err = err});
+    diag_set_json_errors(false);
+    err_fmt(DIAG_USAGE, "unknown option '%s'", long_opt);
+    app_set_streams((AppStreams){.out = NULL, .err = NULL});
+    ASSERT_EQ_INT(fflush(err), 0);
+    ASSERT_EQ_INT(fclose(err), 0);
+    wrote = snprintf(expect, sizeof(expect), "remember: unknown option '%s'\n", long_opt);
+    ASSERT_TRUE(wrote > 0 && (size_t)wrote < sizeof(expect));
+    ASSERT_STREQ(err_buf, expect);
+    free(err_buf);
+}
+
 void register_errors_tests(void)
 {
     RUN_TEST(error_catalog_round_trips_every_e4_3_code);
@@ -423,4 +701,15 @@ void register_errors_tests(void)
     RUN_TEST(plain_error_keeps_quote_and_backslash);
     RUN_TEST(error_and_warning_leave_stdout_empty);
     RUN_TEST(warning_outside_the_catalog_writes_nothing);
+    RUN_TEST(plain_missing_command_is_unchanged);
+    RUN_TEST(json_errors_usage_is_one_stderr_line);
+    RUN_TEST(json_errors_not_found_is_one_line);
+    RUN_TEST(plain_not_found_is_unchanged);
+    RUN_TEST(plain_trash_warning_uses_warning_prefix);
+    RUN_TEST(json_errors_trash_is_deprecated_flag);
+    RUN_TEST(json_errors_invalid_search_query_keeps_its_text);
+    RUN_TEST(json_errors_synced_folder_is_one_warning);
+    RUN_TEST(store_text_codes_follow_the_locked_split);
+    RUN_TEST(err_fmt_keeps_a_long_unknown_option);
+    RUN_TEST(internal_parse_stays_a_plain_internal_line);
 }

@@ -40,8 +40,9 @@ typedef enum {
 typedef struct {
     const char *db_path; /* NULL if omitted; aliases argv */
     bool json;
+    bool json_errors;
     /* NOLINTNEXTLINE(readability-magic-numbers,cppcoreguidelines-avoid-magic-numbers) */
-    char pad_[7]; /* explicit tail padding to keep the struct -Wpadded-clean */
+    char pad_[6]; /* explicit tail padding to keep the struct -Wpadded-clean */
 } CliGlobals;
 
 /*
@@ -54,7 +55,7 @@ typedef struct {
     const char *error_option; /* option name missing a value, e.g. "--db" */
     /*
      * The subcommand's own arguments: every token after the subcommand name
-     * with globals (--db/--json) and meta flags (--help/--version) already
+     * with globals (--db/--json/--json-errors) and meta flags (--help/--version) already
      * removed, in original order. Tokens after a "--" separator are included
      * verbatim (end-of-options). Subcommand parsers see only what is theirs.
      *

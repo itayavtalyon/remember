@@ -1,5 +1,6 @@
 #include "commands.h"
 #include "commands_common.h"
+#include "diag.h"
 
 #include "appio.h"
 #include "exit_codes.h"
@@ -88,7 +89,7 @@ static int handle_add_flag(const char *arg, int *i, int rest_argc, const char **
         return 0;
     }
     if (arg[0] == '-' && arg[1] != '\0') {
-        (void)fprintf(app_err(), "remember: unknown option '%s'\n", arg);
+        err_fmt(DIAG_USAGE, "unknown option '%s'", arg);
         *err = "";
         return -1;
     }
@@ -142,13 +143,13 @@ static int emit_add_result(bool json, StoreAddAction action, const Entry *entry,
 {
     if (json) {
         if (output_action_envelope(app_out(), action_name(action), entry, now) != 0) {
-            err_msg("failed to write output");
+            err_msg(DIAG_INTERNAL, "failed to write output");
             return -1;
         }
         return 0;
     }
     if (output_id_human(app_out(), entry->id) != 0) {
-        err_msg("failed to write output");
+        err_msg(DIAG_INTERNAL, "failed to write output");
         return -1;
     }
     return 0;
@@ -178,18 +179,18 @@ int cmd_add(Store *s, bool json, int rest_argc, const char **rest_argv)
 
     if (parse_add_args(rest_argc, rest_argv, &parsed, &err) != 0) {
         if (err != NULL && err[0] != '\0') {
-            err_msg(err);
+            err_msg(code_for_cmd_text(err), err);
         }
         add_parse_free(&parsed);
         return REMEMBER_ERR;
     }
 
     if (!source_is_valid(parsed.source)) {
-        err_msg("invalid source (use human, agent, tool, share, or unknown)");
+        err_msg(DIAG_USAGE, "invalid source (use human, agent, tool, share, or unknown)");
         goto cleanup;
     }
     if (parsed.body_raw == NULL) {
-        err_msg("missing body");
+        err_msg(DIAG_USAGE, "missing body");
         goto cleanup;
     }
     {
@@ -198,27 +199,27 @@ int cmd_add(Store *s, bool json, int rest_argc, const char **rest_argv)
             dash_is_stdin = 0;
         }
         if (load_body(parsed.body_raw, dash_is_stdin, &body, &body_len, &err) != 0) {
-            err_msg(err);
+            err_msg(code_for_cmd_text(err), err);
             goto cleanup;
         }
     }
     if (parsed.key_raw != NULL) {
         NormStatus ns = normalize_key(parsed.key_raw, key_norm, sizeof(key_norm));
         if (ns != NORM_OK) {
-            err_msg(norm_token_message(ns, "key"));
+            err_norm(ns, "key");
             goto cleanup;
         }
         key_or_null = key_norm;
     }
     if (normalize_tags((const char *const *)parsed.tag_raw, parsed.ntag_raw, &tags_norm, &ntags,
                        &err) != 0) {
-        err_msg(err);
+        err_msg(code_for_cmd_text(err), err);
         goto cleanup;
     }
 
     body_hash_hex(body, body_len, hash);
     if (utc_now(now, sizeof(now)) != 0) {
-        err_msg("internal error");
+        err_msg(DIAG_INTERNAL, "internal error");
         goto cleanup;
     }
     {
@@ -226,7 +227,7 @@ int cmd_add(Store *s, bool json, int rest_argc, const char **rest_argv)
             (ExpiryFlags){.ttl_raw = parsed.ttl_raw, .expires_raw = parsed.expires_raw}, now,
             expires_iso, sizeof(expires_iso));
         if (exp.rc != 0) {
-            err_msg(exp.err);
+            err_msg(code_for_cmd_text(exp.err), exp.err);
             goto cleanup;
         }
         expires_at = exp.expires;
@@ -234,7 +235,7 @@ int cmd_add(Store *s, bool json, int rest_argc, const char **rest_argv)
     st = store_add(s, body, hash, key_or_null, (const char *const *)tags_norm, ntags, parsed.source,
                    expires_at, now, &action, &entry);
     if (st != STORE_OK) {
-        err_msg(store_status_message(st));
+        err_store(st);
         goto cleanup;
     }
     if (emit_add_result(json, action, &entry, now) != 0) {

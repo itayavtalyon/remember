@@ -1,5 +1,6 @@
 #include "commands.h"
 #include "commands_common.h"
+#include "diag.h"
 
 #include "appio.h"
 #include "exit_codes.h"
@@ -8,7 +9,6 @@
 
 #include <stdbool.h>
 #include <stddef.h>
-#include <stdio.h>
 #include <string.h>
 
 int cmd_tags(Store *s, bool json, int rest_argc, const char **rest_argv)
@@ -29,14 +29,14 @@ int cmd_tags(Store *s, bool json, int rest_argc, const char **rest_argv)
             continue;
         }
         if (arg[0] == '-' && arg[1] != '\0') {
-            (void)fprintf(app_err(), "remember: unknown option '%s'\n", arg);
+            err_fmt(DIAG_USAGE, "unknown option '%s'", arg);
             return REMEMBER_ERR;
         }
-        err_msg("tags takes no arguments");
+        err_msg(DIAG_USAGE, "tags takes no arguments");
         return REMEMBER_ERR;
     }
     if (utc_now(now, sizeof(now)) != 0) {
-        err_msg("internal error");
+        err_msg(DIAG_INTERNAL, "internal error");
         return REMEMBER_ERR;
     }
     if (cmd_bin_resolve(&bins, &bin) != 0) {
@@ -45,18 +45,18 @@ int cmd_tags(Store *s, bool json, int rest_argc, const char **rest_argv)
 
     st = store_tags(s, bin, now, &tags, &count);
     if (st != STORE_OK) {
-        err_msg(store_status_message(st));
+        err_store(st);
         return REMEMBER_ERR;
     }
 
     if (json) {
         if (output_tags_envelope(app_out(), tags, count) != 0) {
-            err_msg("failed to write output");
+            err_msg(DIAG_INTERNAL, "failed to write output");
             goto cleanup;
         }
     } else {
         if (output_tags_human(app_out(), tags, count) != 0) {
-            err_msg("failed to write output");
+            err_msg(DIAG_INTERNAL, "failed to write output");
             goto cleanup;
         }
     }

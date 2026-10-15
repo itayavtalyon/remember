@@ -78,4 +78,12 @@ int diag_error(DiagCode code, const char *message, bool json_errors);
  */
 int diag_warning(DiagWarning code, const char *message, bool json_errors);
 
+/*
+ * Process-wide --json-errors switch. remember_run sets it for one call and
+ * clears it. ponytail: one flag, same reason as the appio streams — the CLI
+ * is single-threaded, so commands read it instead of taking another parameter.
+ */
+void diag_set_json_errors(bool enabled);
+bool diag_json_errors(void);
+
 #endif /* REMEMBER_DIAG_H */

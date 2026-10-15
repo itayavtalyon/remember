@@ -6,6 +6,7 @@
  * callers outside the commands layer use commands.h.
  */
 
+#include "diag.h"
 #include "normalize.h"
 #include "store.h"
 
@@ -16,7 +17,22 @@
    ("YYYY-MM-DDTHH:MM:SS.mmmZ", 24 bytes + NUL). Must be >= 25. */
 enum { ISO_TS_BUFSIZE = 32 };
 
-void err_msg(const char *msg);
+void err_msg(DiagCode code, const char *msg);
+#ifdef __GNUC__
+__attribute__((format(printf, 2, 3)))
+#endif
+void err_fmt(DiagCode code, const char *fmt, ...);
+void err_store(StoreStatus st);
+void err_norm(NormStatus st, const char *kind);
+
+/* usage, except "out of memory" and the internal sentences D9 names. */
+DiagCode code_for_cmd_text(const char *msg);
+
+/* store_open / device err buffer. decision:plan16-open-message-codes. */
+DiagCode code_for_store_text(const char *msg);
+
+DiagCode code_for_store_status(StoreStatus st);
+DiagCode code_for_norm(NormStatus st);
 
 /* Parse a positive entry id token. 0 ok, -1 invalid (does not print). */
 int parse_entry_id(const char *raw, long long *out_id);

@@ -3,6 +3,8 @@
 #include "appio.h"
 #include "cli.h"
 #include "commands.h"
+#include "commands_common.h"
+#include "diag.h"
 #include "exit_codes.h"
 #include "store.h"
 #include "util.h"
@@ -266,22 +268,37 @@ static void print_command_help(CliCommand topic)
     (void)fprintf(out, "See also: remember --help\n");
 }
 
+static DiagCode code_for_cli_error(CliError err)
+{
+    switch (err) {
+    case CLI_ERR_MISSING_COMMAND:
+    case CLI_ERR_UNKNOWN_COMMAND:
+    case CLI_ERR_UNKNOWN_OPTION:
+    case CLI_ERR_MISSING_OPTION_VALUE:
+        return DIAG_USAGE;
+    case CLI_ERR_OK:
+    case CLI_ERR_INTERNAL:
+    default:
+        return DIAG_INTERNAL;
+    }
+}
+
 static void print_parse_error(const CliArgs *args)
 {
-    FILE *err = app_err();
     const char *base = cli_error_message(args->error);
+    DiagCode code = code_for_cli_error(args->error);
 
     switch (args->error) {
     case CLI_ERR_UNKNOWN_COMMAND:
     case CLI_ERR_UNKNOWN_OPTION:
         if (args->error_arg != NULL) {
-            (void)fprintf(err, "remember: %s '%s'\n", base, args->error_arg);
+            err_fmt(code, "%s '%s'", base, args->error_arg);
             return;
         }
         break;
     case CLI_ERR_MISSING_OPTION_VALUE:
         if (args->error_option != NULL) {
-            (void)fprintf(err, "remember: %s: %s\n", args->error_option, base);
+            err_fmt(code, "%s: %s", args->error_option, base);
             return;
         }
         break;
@@ -291,7 +308,7 @@ static void print_parse_error(const CliArgs *args)
     default:
         break;
     }
-    (void)fprintf(err, "remember: %s\n", base);
+    err_msg(code, base);
 }
 
 /* Resolve path, optional sync-path warning, then open. Store stays path-pure. */
@@ -304,15 +321,18 @@ static Store *open_store(const CliArgs *args, int *out_rc)
 
     err[0] = '\0';
     if (util_resolve_db_path(args->globals.db_path, path, sizeof(path), err, sizeof(err)) != 0) {
-        (void)fprintf(app_err(), "remember: %s\n", err[0] != '\0' ? err : "invalid database path");
+        const char *msg = err[0] != '\0' ? err : "invalid database path";
+
+        err_msg(code_for_store_text(msg), msg);
         *out_rc = REMEMBER_ERR;
         return NULL;
     }
     /* Warn only: synced volumes can corrupt any journal mode; still open. */
     if (util_path_looks_synced(path)) {
-        (void)fprintf(app_err(),
-                      "remember: warning: database path looks like a synced folder "
-                      "(iCloud/Dropbox/Google Drive); corruption risk - prefer a local disk\n");
+        (void)diag_warning(DIAG_WARN_SYNCED_FOLDER,
+                           "database path looks like a synced folder "
+                           "(iCloud/Dropbox/Google Drive); corruption risk - prefer a local disk",
+                           diag_json_errors());
     }
     if (args->command == CLI_CMD_DEVICE && cmd_device_mints(args->rest_argc, args->rest_argv)) {
         s = store_open_replacing_sidecar(path, err, sizeof(err));
@@ -320,7 +340,9 @@ static Store *open_store(const CliArgs *args, int *out_rc)
         s = store_open(path, err, sizeof(err));
     }
     if (s == NULL) {
-        (void)fprintf(app_err(), "remember: %s\n", err[0] != '\0' ? err : "cannot open database");
+        const char *msg = err[0] != '\0' ? err : "cannot open database";
+
+        err_msg(code_for_store_text(msg), msg);
         *out_rc = REMEMBER_ERR;
         return NULL;
     }
@@ -397,14 +419,14 @@ static int run(const CliArgs *args)
         return run_with_store(args, cmd_device);
     case CLI_CMD_NONE:
         /* Defensive: parse should set CLI_ERR_MISSING_COMMAND first. */
-        (void)fprintf(app_err(), "remember: %s\n", cli_error_message(CLI_ERR_MISSING_COMMAND));
+        err_msg(DIAG_USAGE, cli_error_message(CLI_ERR_MISSING_COMMAND));
         return REMEMBER_ERR;
     case CLI_CMD_UNKNOWN:
         /* Defensive: parse should set CLI_ERR_UNKNOWN_COMMAND first. */
-        (void)fprintf(app_err(), "remember: %s\n", cli_error_message(CLI_ERR_UNKNOWN_COMMAND));
+        err_msg(DIAG_USAGE, cli_error_message(CLI_ERR_UNKNOWN_COMMAND));
         return REMEMBER_ERR;
     default:
-        (void)fprintf(app_err(), "remember: internal error\n");
+        err_msg(DIAG_INTERNAL, "internal error");
         return REMEMBER_ERR;
     }
 }
@@ -418,7 +440,9 @@ int remember_run(int argc, char *const *argv, FILE *out, FILE *err)
 
     app_set_streams((AppStreams){.out = out, .err = err});
     cli_parse(argc, argv, &args);
+    diag_set_json_errors(args.globals.json_errors);
     rc = run(&args);
+    diag_set_json_errors(false);
     cli_args_free(&args);
     app_set_streams((AppStreams){.out = NULL, .err = NULL});
     return rc;

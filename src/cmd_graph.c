@@ -1,5 +1,6 @@
 #include "commands.h"
 #include "commands_common.h"
+#include "diag.h"
 
 #include "appio.h"
 #include "exit_codes.h"
@@ -40,7 +41,7 @@ static int parse_kind_token(const char *raw, StoreEdgeKind *out)
         *out = STORE_EDGE_CITES;
         return 0;
     }
-    err_msg("unknown kind (related, supersedes, cites)");
+    err_msg(DIAG_USAGE, "unknown kind (related, supersedes, cites)");
     return -1;
 }
 
@@ -55,7 +56,7 @@ static int handle_pair_flag(const char *arg, int *i, int rest_argc, const char *
     if (strcmp(arg, "--from") == 0) {
         TakeValue taken = take_value(i, rest_argc, rest_argv, "missing value for --from");
         if (taken.rc != 0) {
-            err_msg(taken.err);
+            err_msg(DIAG_USAGE, taken.err);
             return -1;
         }
         out->from_id_raw = taken.value;
@@ -64,7 +65,7 @@ static int handle_pair_flag(const char *arg, int *i, int rest_argc, const char *
     if (strcmp(arg, "--from-key") == 0) {
         TakeValue taken = take_value(i, rest_argc, rest_argv, "missing value for --from-key");
         if (taken.rc != 0) {
-            err_msg(taken.err);
+            err_msg(DIAG_USAGE, taken.err);
             return -1;
         }
         out->from_key_raw = taken.value;
@@ -73,7 +74,7 @@ static int handle_pair_flag(const char *arg, int *i, int rest_argc, const char *
     if (strcmp(arg, "--from-sync-id") == 0) {
         TakeValue taken = take_value(i, rest_argc, rest_argv, "missing value for --from-sync-id");
         if (taken.rc != 0) {
-            err_msg(taken.err);
+            err_msg(DIAG_USAGE, taken.err);
             return -1;
         }
         out->from_sync_id_raw = taken.value;
@@ -82,7 +83,7 @@ static int handle_pair_flag(const char *arg, int *i, int rest_argc, const char *
     if (strcmp(arg, "--to") == 0) {
         TakeValue taken = take_value(i, rest_argc, rest_argv, "missing value for --to");
         if (taken.rc != 0) {
-            err_msg(taken.err);
+            err_msg(DIAG_USAGE, taken.err);
             return -1;
         }
         out->to_id_raw = taken.value;
@@ -91,7 +92,7 @@ static int handle_pair_flag(const char *arg, int *i, int rest_argc, const char *
     if (strcmp(arg, "--to-key") == 0) {
         TakeValue taken = take_value(i, rest_argc, rest_argv, "missing value for --to-key");
         if (taken.rc != 0) {
-            err_msg(taken.err);
+            err_msg(DIAG_USAGE, taken.err);
             return -1;
         }
         out->to_key_raw = taken.value;
@@ -100,7 +101,7 @@ static int handle_pair_flag(const char *arg, int *i, int rest_argc, const char *
     if (strcmp(arg, "--to-sync-id") == 0) {
         TakeValue taken = take_value(i, rest_argc, rest_argv, "missing value for --to-sync-id");
         if (taken.rc != 0) {
-            err_msg(taken.err);
+            err_msg(DIAG_USAGE, taken.err);
             return -1;
         }
         out->to_sync_id_raw = taken.value;
@@ -109,7 +110,7 @@ static int handle_pair_flag(const char *arg, int *i, int rest_argc, const char *
     if (strcmp(arg, "--kind") == 0) {
         TakeValue taken = take_value(i, rest_argc, rest_argv, "missing value for --kind");
         if (taken.rc != 0) {
-            err_msg(taken.err);
+            err_msg(DIAG_USAGE, taken.err);
             return -1;
         }
         out->kind_raw = taken.value;
@@ -119,7 +120,7 @@ static int handle_pair_flag(const char *arg, int *i, int rest_argc, const char *
         return 1;
     }
     if (arg[0] == '-' && arg[1] != '\0') {
-        (void)fprintf(app_err(), "remember: unknown option '%s'\n", arg);
+        err_fmt(DIAG_USAGE, "unknown option '%s'", arg);
         return -1;
     }
     return 0;
@@ -148,7 +149,7 @@ static int parse_pair_args(int rest_argc, const char **rest_argv, PairParse *out
             }
         }
         if (out->npos >= 2) {
-            err_msg("too many arguments");
+            err_msg(DIAG_USAGE, "too many arguments");
             return -1;
         }
         out->pos[out->npos++] = arg;
@@ -188,13 +189,13 @@ static int pair_apply_sugar(PairParse *p)
 
     if (p->npos == 2) {
         if (end_form_count(from) != 0 || end_form_count(to) != 0) {
-            err_msg("provide --from/--to flags or two ids, not both");
+            err_msg(DIAG_USAGE, "provide --from/--to flags or two ids, not both");
             return -1;
         }
         p->from_id_raw = p->pos[0];
         p->to_id_raw = p->pos[1];
     } else if (p->npos != 0) {
-        err_msg("missing --from/--to (or two ids)");
+        err_msg(DIAG_USAGE, "missing --from/--to (or two ids)");
         return -1;
     }
     from = (EndRef){
@@ -202,7 +203,7 @@ static int pair_apply_sugar(PairParse *p)
     to = (EndRef){
         .id_raw = p->to_id_raw, .key_raw = p->to_key_raw, .sync_id_raw = p->to_sync_id_raw};
     if (end_form_count(from) != 1 || end_form_count(to) != 1) {
-        err_msg("each end needs exactly one of id, --key, or --sync-id");
+        err_msg(DIAG_USAGE, "each end needs exactly one of id, --key, or --sync-id");
         return -1;
     }
     return 0;
@@ -216,7 +217,7 @@ static int resolve_end(Store *s, EndRef ref, bool include_deleted, long long *ou
     memset(&e, 0, sizeof(e));
     if (ref.sync_id_raw != NULL) {
         if (store_sync_id_is_canonical(ref.sync_id_raw) == 0) {
-            err_msg("invalid sync-id");
+            err_msg(DIAG_USAGE, "invalid sync-id");
             return REMEMBER_ERR;
         }
         if (include_deleted) {
@@ -228,7 +229,7 @@ static int resolve_end(Store *s, EndRef ref, bool include_deleted, long long *ou
         char key_norm[REMEMBER_TOKEN_MAX + 1];
         NormStatus ns = normalize_key(ref.key_raw, key_norm, sizeof(key_norm));
         if (ns != NORM_OK) {
-            err_msg(norm_token_message(ns, "key"));
+            err_norm(ns, "key");
             return REMEMBER_ERR;
         }
         if (include_deleted) {
@@ -238,7 +239,7 @@ static int resolve_end(Store *s, EndRef ref, bool include_deleted, long long *ou
         }
     } else {
         if (parse_entry_id(ref.id_raw, out_id) != 0) {
-            err_msg("invalid id");
+            err_msg(DIAG_USAGE, "invalid id");
             return REMEMBER_ERR;
         }
         if (include_deleted) {
@@ -260,13 +261,13 @@ static int emit_links_result(bool json, const char *action, long long subject_id
 {
     if (json) {
         if (output_links_write_envelope(app_out(), action, links, count, now) != 0) {
-            err_msg("failed to write output");
+            err_msg(DIAG_INTERNAL, "failed to write output");
             return -1;
         }
         return 0;
     }
     if (output_id_human(app_out(), subject_id) != 0) {
-        err_msg("failed to write output");
+        err_msg(DIAG_INTERNAL, "failed to write output");
         return -1;
     }
     return 0;
@@ -297,7 +298,7 @@ static int run_pair(Store *s, bool json, int rest_argc, const char **rest_argv, 
         return REMEMBER_ERR;
     }
     if (p.bins.expired || p.bins.trash_alias) {
-        err_msg("graph commands use --deleted for deleted ends (not --expired)");
+        err_msg(DIAG_USAGE, "graph commands use --deleted for deleted ends (not --expired)");
         return REMEMBER_ERR;
     }
     include_deleted = (bin == STORE_BIN_DELETED);
@@ -311,7 +312,7 @@ static int run_pair(Store *s, bool json, int rest_argc, const char **rest_argv, 
         kind_ptr = &kind;
     }
     if (utc_now(now, sizeof(now)) != 0) {
-        err_msg("internal error");
+        err_msg(DIAG_INTERNAL, "internal error");
         return REMEMBER_ERR;
     }
     rc = resolve_end(s,
@@ -389,7 +390,7 @@ static int handle_related_flag(const char *arg, int *i, int rest_argc, const cha
     if (strcmp(arg, "--key") == 0) {
         TakeValue taken = take_value(i, rest_argc, rest_argv, "missing value for --key");
         if (taken.rc != 0) {
-            err_msg(taken.err);
+            err_msg(DIAG_USAGE, taken.err);
             return -1;
         }
         out->key_raw = taken.value;
@@ -398,7 +399,7 @@ static int handle_related_flag(const char *arg, int *i, int rest_argc, const cha
     if (strcmp(arg, "--sync-id") == 0) {
         TakeValue taken = take_value(i, rest_argc, rest_argv, "missing value for --sync-id");
         if (taken.rc != 0) {
-            err_msg(taken.err);
+            err_msg(DIAG_USAGE, taken.err);
             return -1;
         }
         out->sync_id_raw = taken.value;
@@ -407,7 +408,7 @@ static int handle_related_flag(const char *arg, int *i, int rest_argc, const cha
     if (strcmp(arg, "--kind") == 0) {
         TakeValue taken = take_value(i, rest_argc, rest_argv, "missing value for --kind");
         if (taken.rc != 0) {
-            err_msg(taken.err);
+            err_msg(DIAG_USAGE, taken.err);
             return -1;
         }
         out->kind_raw = taken.value;
@@ -425,7 +426,7 @@ static int handle_related_flag(const char *arg, int *i, int rest_argc, const cha
         return 1;
     }
     if (arg[0] == '-' && arg[1] != '\0') {
-        (void)fprintf(app_err(), "remember: unknown option '%s'\n", arg);
+        err_fmt(DIAG_USAGE, "unknown option '%s'", arg);
         return -1;
     }
     return 0;
@@ -454,7 +455,7 @@ static int parse_related_args(int rest_argc, const char **rest_argv, RelatedPars
             }
         }
         if (out->id_raw != NULL) {
-            err_msg("too many arguments");
+            err_msg(DIAG_USAGE, "too many arguments");
             return -1;
         }
         out->id_raw = arg;
@@ -471,7 +472,7 @@ static int related_load_subject(Store *s, const RelatedParse *p, bool include_de
     memset(subject, 0, sizeof(*subject));
     if (ref.sync_id_raw != NULL) {
         if (store_sync_id_is_canonical(ref.sync_id_raw) == 0) {
-            err_msg("invalid sync-id");
+            err_msg(DIAG_USAGE, "invalid sync-id");
             return REMEMBER_ERR;
         }
         if (include_deleted) {
@@ -483,7 +484,7 @@ static int related_load_subject(Store *s, const RelatedParse *p, bool include_de
         char key_norm[REMEMBER_TOKEN_MAX + 1];
         NormStatus ns = normalize_key(ref.key_raw, key_norm, sizeof(key_norm));
         if (ns != NORM_OK) {
-            err_msg(norm_token_message(ns, "key"));
+            err_norm(ns, "key");
             return REMEMBER_ERR;
         }
         if (include_deleted) {
@@ -494,7 +495,7 @@ static int related_load_subject(Store *s, const RelatedParse *p, bool include_de
     } else {
         long long id = 0;
         if (parse_entry_id(ref.id_raw, &id) != 0) {
-            err_msg("invalid id");
+            err_msg(DIAG_USAGE, "invalid id");
             return REMEMBER_ERR;
         }
         if (include_deleted) {
@@ -530,12 +531,12 @@ int cmd_related(Store *s, bool json, int rest_argc, const char **rest_argv)
         return REMEMBER_ERR;
     }
     if (p.bins.expired || p.bins.trash_alias) {
-        err_msg("graph commands use --deleted for deleted ends (not --expired)");
+        err_msg(DIAG_USAGE, "graph commands use --deleted for deleted ends (not --expired)");
         return REMEMBER_ERR;
     }
     include_deleted = (bin == STORE_BIN_DELETED);
     if (p.outgoing && p.incoming) {
-        err_msg("cannot combine --outgoing and --incoming");
+        err_msg(DIAG_USAGE, "cannot combine --outgoing and --incoming");
         return REMEMBER_ERR;
     }
     if (p.key_raw != NULL) {
@@ -548,11 +549,11 @@ int cmd_related(Store *s, bool json, int rest_argc, const char **rest_argv)
         forms++;
     }
     if (forms > 1) {
-        err_msg("provide exactly one of id, --key, or --sync-id");
+        err_msg(DIAG_USAGE, "provide exactly one of id, --key, or --sync-id");
         return REMEMBER_ERR;
     }
     if (forms == 0) {
-        err_msg("missing id, --key, or --sync-id");
+        err_msg(DIAG_USAGE, "missing id, --key, or --sync-id");
         return REMEMBER_ERR;
     }
     if (p.kind_raw != NULL) {
@@ -567,7 +568,7 @@ int cmd_related(Store *s, bool json, int rest_argc, const char **rest_argv)
         dir = STORE_NEIGHBOR_INCOMING;
     }
     if (utc_now(now, sizeof(now)) != 0) {
-        err_msg("internal error");
+        err_msg(DIAG_INTERNAL, "internal error");
         return REMEMBER_ERR;
     }
     rc = related_load_subject(s, &p, include_deleted, &subject);
@@ -591,7 +592,7 @@ int cmd_related(Store *s, bool json, int rest_argc, const char **rest_argv)
     store_neighbors_free(rows, n);
     store_entry_free(&subject);
     if (rc != 0) {
-        err_msg("failed to write output");
+        err_msg(DIAG_INTERNAL, "failed to write output");
         return REMEMBER_ERR;
     }
     return REMEMBER_OK;

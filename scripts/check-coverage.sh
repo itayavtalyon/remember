@@ -165,6 +165,9 @@ DEFENSIVE = re.compile(
     |^\s*break\s*;
     |^\s*continue\s*;
     |^\s*err_msg\s*\(
+    |^\s*err_fmt\s*\(
+    |^\s*err_store\s*\(
+    |^\s*err_norm\s*\(
     |^\s*\*err\s*=
     |^\s*\(void\)fprintf\s*\(
     |^\s*\(void\)fputs\s*\(
@@ -256,6 +259,14 @@ for path, ln in zeros:
     # sibling line, leaving the others zero-hit even though the statement ran; the
     # substance is on those sibling lines, which are checked in their own right.
     if code.rstrip().endswith(","):
+        defensive += 1
+        continue
+    # The closing line of a wrapped err_msg/err_fmt/err_store/err_norm call is the
+    # same error-report tail. The comma-ending line above is already skipped.
+    prev = src_lines[ln - 2] if ln >= 2 else ""
+    if prev.rstrip().endswith(",") and re.match(
+        r"^\s*err_(msg|fmt|store|norm)\s*\(", prev
+    ):
         defensive += 1
         continue
     if DEFENSIVE.match(code):

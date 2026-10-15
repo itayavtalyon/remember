@@ -175,6 +175,7 @@ static void cli_args_clear(CliArgs *out)
     out->help_topic = CLI_CMD_NONE;
     out->globals.db_path = NULL;
     out->globals.json = false;
+    out->globals.json_errors = false;
     out->rest_argc = 0;
     out->rest_argv = NULL;
 }
@@ -226,6 +227,11 @@ static bool take_global(ArgCursor *cur, CliArgs *out)
     if (strcmp(arg, "--json") == 0) {
         (void)cursor_next(cur);
         out->globals.json = true;
+        return true;
+    }
+    if (strcmp(arg, "--json-errors") == 0) {
+        (void)cursor_next(cur);
+        out->globals.json_errors = true;
         return true;
     }
     if (strcmp(arg, "--db") == 0) {
@@ -387,7 +393,7 @@ static bool scan_option(ArgCursor *cur, CliArgs *out, const char *arg, int at, S
 }
 
 /*
- * Single pass over argv. Globals (--db/--json) and meta flags (--help/--version)
+ * Single pass over argv. Globals (--db/--json/--json-errors) and meta flags (--help/--version)
  * are recognized wherever they appear and stripped out; the first bare token is
  * the subcommand; every other token becomes a subcommand arg in rest_argv. A
  * "--" ends option processing: subsequent tokens are literal, even if they look

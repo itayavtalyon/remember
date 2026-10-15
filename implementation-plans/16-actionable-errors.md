@@ -368,7 +368,7 @@ or architecture forks to Itay as a grill. Re-run the full gate after any fix.
 
 ### 2026-10-15 — stage 1 (catalog + emitter)
 
-No call sites changed. `err_msg` and the `fprintf(app_err(), …)` lines still write the 0.2.0 plain text. Stage 2 routes them.
+No call sites changed. `err_msg` and the `fprintf(app_err(), …)` lines still write the 0.2.0 plain text. Stage 2 routes them. The warning prefix below is the pre-grill API; the stage 1 second-opinion review replaced `note:` with `warning: ` and dropped the exit gate.
 
 - Error tokens are one array, E4.3 order, indexed by `DiagCode`. Warning tokens are a second array (`raw_query_ignored`, `deprecated_flag`, `synced_folder`). A warning token is not an error code. `diag_code_name` / `diag_warning_name` and the reverse lookups share one scanner.
 - `diag_error` writes through `app_err()` only. Plain is `remember: <message>\n`. JSON is one line `{"version":1,"error":{"code":"<code>","message":"<message>"}}` and no plain line. `message` is escaped with `output_json_string`. Plain text is not escaped.
@@ -376,7 +376,34 @@ No call sites changed. `err_msg` and the `fprintf(app_err(), …)` lines still w
 - NULL message is an empty string, so a NULL cannot reach `printf("%s")`.
 - E4.8 cause/fix text and E4.9 `detail` stay in stage 3, when the store error exists. This stage's writer takes the message from the caller.
 
+### 2026-10-15 — stage 2 (route every error)
+
+`--json-errors` is a global, stripped wherever `--json` is. `remember_run` sets `diag_set_json_errors` for that one call. `err_msg(code, text)` is the coded write. `err_store` maps `StoreStatus` beside the print. Plain bytes stay the 0.2.0 lines, except the two deprecation lines, which gained `warning: ` (stage 1 grill).
+
+Itay 2026-10-15:
+
+- `decision:plan16-open-message-codes` — `database` for `sqlite: …`, `cannot read user_version: …`, `cannot rebuild search index`, and `cannot open database` (bare or with a detail). `cannot_open` for `cannot create database directory: …`. `usage` for the empty-buffer fallback `invalid database path`.
+- `decision:plan16-invalid-search-query` — `STORE_ERR_QUERY` is `invalid_query`. The sentence stays `invalid search query`.
+
 ## Review Notes
+
+### 2026-10-15 — in-session deep review (stage 2)
+
+**Verdict:** approve for the second-opinion pass. No open blocking item. No new grill. The two code splits stay `decision:plan16-open-message-codes` and `decision:plan16-invalid-search-query`.
+
+**Ran:** ctest 4/4 with ASan/UBSan, `lint-all.sh` LINT OK, coverage 100% functions and 100% effective lines, `leaks-macos` PASS, `ci-linux.sh` OK (iwyu and scan-build included). Probes: `--json-errors` before and after the subcommand, both flags together on a miss and on an empty list, a plain and JSON unknown option, `--trash` then a miss (plain and JSON), help text unchanged, a missing `--db` value, `--json-errors=1` left as an unknown option, an empty search, a missing body after the synced-folder warning, and `purge-trash`. Bugbot on the uncommitted diff reported no bugs.
+
+**Praise:** one process flag, one writer, and the 0.2.0 sentences stay put except the two deprecation lines, which already gained `warning: ` in the stage 1 grill.
+
+**Auto-fixed:** command files include `diag.h` directly. `err_fmt` allocates the formatted line, so a long option stays that usage sentence. A wrapped `err_msg` tail counts as the same defensive line as a one-line call.
+
+**Nit:** `remember_app.c` and the mapper tests include the private `commands_common.h`. The router lives there; `main.c` still does not. Recorded in the engineering notes.
+
+**Ponytail:** the flag is process-global for the same reason as the stream pair. No second writer.
+
+**Pragmatic write-gate:** DRY PASS (one status map, one text map). Easy-to-replace PASS (`app_err` stays the stream port). Orthogonal PASS (codes do not change exit codes). Simplify PASS (the extra open-failure block is gone). No deferred markers.
+
+**Left for later:** stage 3 adds E4.8 text and E4.9 `detail`. Stage 7 adds `--json-errors` to help. `raw_query_ignored` still has no call site.
 
 ### 2026-10-15 — in-session deep review (stage 1)
 
