@@ -291,7 +291,8 @@ int util_parse_nonneg(const char *raw, unsigned long long *out)
     char *end = NULL;
     unsigned long long value = 0;
 
-    if (raw == NULL || raw[0] == '\0' || raw[0] == '-') {
+    /* A minus anywhere: strtoull skips leading space and wraps " -1" to ULLONG_MAX. */
+    if (raw == NULL || raw[0] == '\0' || strchr(raw, '-') != NULL) {
         return -1;
     }
     errno = 0;

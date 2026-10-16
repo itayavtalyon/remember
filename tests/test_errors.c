@@ -2899,6 +2899,50 @@ TEST(cli_busy_timeout_without_a_value_is_usage)
     free(db);
 }
 
+/* The one decimal parser behind --limit, --offset and --busy-timeout. A minus
+   anywhere is rejected: strtoull skips leading space and would wrap " -1" to
+   ULLONG_MAX (0.2.0 accepted --offset " -1" that way). "+5" and " 7" stay
+   accepted, as 0.2.0 did. */
+TEST(util_parse_nonneg_rejects_every_sign)
+{
+    static const char *const k_bad[] = {"",    "-1", " -1", "\t-5",
+                                        "abc", "5x", "-0",  "99999999999999999999999"};
+    unsigned long long value = 0;
+    size_t i = 0;
+
+    ASSERT_EQ_INT(util_parse_nonneg("0", &value), 0);
+    ASSERT_TRUE(value == 0ULL);
+    ASSERT_EQ_INT(util_parse_nonneg("60000", &value), 0);
+    ASSERT_TRUE(value == 60000ULL);
+    ASSERT_EQ_INT(util_parse_nonneg("+5", &value), 0);
+    ASSERT_TRUE(value == 5ULL);
+    ASSERT_EQ_INT(util_parse_nonneg(" 7", &value), 0);
+    ASSERT_TRUE(value == 7ULL);
+    for (i = 0; i < sizeof(k_bad) / sizeof(k_bad[0]); i++) {
+        ASSERT_EQ_INT(util_parse_nonneg(k_bad[i], &value), -1);
+    }
+    ASSERT_EQ_INT(util_parse_nonneg(NULL, &value), -1);
+}
+
+/* Through the CLI: a spaced negative offset is the usage line, not a huge offset. */
+TEST(cli_offset_spaced_negative_is_usage)
+{
+    char *db = make_temp_db_path();
+    const char *args[] = {"list", "--offset", " -1"};
+    CmdResult r;
+
+    ASSERT_TRUE(db != NULL);
+    if (db == NULL) {
+        return;
+    }
+    r = run_remember(db, args, sizeof(args) / sizeof(args[0]), NULL);
+    ASSERT_EQ_INT(r.exit_code, 1);
+    ASSERT_STREQ(r.out, "");
+    ASSERT_STREQ(r.err, "remember: invalid --offset (must be >= 0)\n");
+    cmd_result_free(&r);
+    free(db);
+}
+
 void register_errors_tests(void)
 {
     RUN_TEST(util_absolute_path_joins_cwd_and_normalizes_lexically);
@@ -2972,6 +3016,8 @@ void register_errors_tests(void)
     RUN_TEST(sqlite_out_of_range_reason_falls_back_to_other);
     RUN_TEST(err_store_sqlite_misuse_and_clean_store_fall_back);
     RUN_TEST(cli_db_under_a_file_keeps_the_legacy_open_line);
+    RUN_TEST(util_parse_nonneg_rejects_every_sign);
+    RUN_TEST(cli_offset_spaced_negative_is_usage);
     RUN_TEST(cli_busy_timeout_out_of_range_is_usage);
     RUN_TEST(cli_busy_timeout_500_reports_busy_within_half_a_second);
     RUN_TEST(cli_no_create_missing_path_creates_nothing);

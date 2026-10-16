@@ -622,3 +622,21 @@ No new grill. No new `decision:*`. Help text for the flags stays stage 7.
 **Left for later:** stage 6 is the corrupt check and `repair search-index`. Stage 7 is help for these flags, plus the facade byte-match for a `busy` case (the CLI and `remember_run` already share one pipeline).
 
 **Praise:** `-1` is not swallowed as a missing option. The missing-file test, not only the missing-parent test, is what proves `SQLITE_OPEN_CREATE` is off.
+
+### 2026-10-16 — second-opinion deep review (stage 5)
+
+**Verdict:** stage 5 approved after one auto-fix. No open blocking item. No grill.
+
+**Run, not read.** Gate (`-DREMEMBER_TEST_VFS=ON`): ctest (ASan/UBSan, incl. `no_shim_symbols`), LINT OK, coverage 100% functions and 100% effective lines, `leaks-macos` PASS, `ci-linux.sh` OK. Probes on the built CLI:
+
+- A held `BEGIN EXCLUSIVE` from a second process plus `--json-errors --busy-timeout 500 add` → `busy` (`SQLITE_BUSY`, no `path`, no `errno`) after about 0.65 s, not the 5 s default (probe 3).
+- `--busy-timeout 60001`, `abc`, or `" -1"` → `invalid --busy-timeout (must be 0..60000)`. A missing value → `--busy-timeout: option requires a value`. `+500` is accepted, as `--limit` accepts it in 0.2.0.
+- `--no-create --db <dir>/none/x.db list` → `cannot_open`, `reason` `missing`, errno 2, and no folder (probe 4). A missing file in an existing folder → the same, with no file and no sidecar. An existing brain with `--no-create` opens.
+
+**Auto-fixed:**
+
+- **important** — `--offset " -1"` was accepted as offset 18446744073709551615. It exited 0 with `"offset":18446744073709551615` in the JSON, and rows came back as if there were no offset. `util_parse_nonneg` checked for a minus only at `raw[0]`, and `strtoull` skips leading whitespace and wraps `-1` to `ULLONG_MAX`. The bug predates this stage: 0.2.0's `parse_size_token` had the same check. Stage 5 made it the single parser for `--limit`, `--offset` and `--busy-timeout`, so the fix lands there once: any `-` anywhere is rejected, because a non-negative decimal never contains one. `+5` and ` 7` stay accepted, for 0.2.0 compatibility. New `util_parse_nonneg_rejects_every_sign` (unit) and `cli_offset_spaced_negative_is_usage` (CLI) were red before the fix.
+
+**Simplify (lens 9, left):** `CliGlobals` carries `busy_timeout_ms` plus `busy_timeout_set`. A `-1` "omitted" sentinel would drop the bool, but `cli.c` would then need the store default or the sentinel would leak into `open_store`. The in-session review chose the explicit bool for that reason, and it reads clearly. Left as is.
+
+**Praise:** one decimal parser for three flags. `-1` is reported as a bad value, not as a missing option. The missing-file test (not only the missing-parent test) proves `SQLITE_OPEN_CREATE` is off.
