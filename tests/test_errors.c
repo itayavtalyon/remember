@@ -2350,6 +2350,9 @@ TEST(cli_truncated_brain_reports_corrupt)
     free(db);
 }
 
+/* The shim tests need the remember CLI built with REMEMBER_TEST_VFS (the gate
+   configures it ON). Without it they are skipped, and the run says so. */
+#ifdef REMEMBER_TEST_VFS
 /* Single-threaded tests; setenv and unsetenv have no portable reentrant variant. */
 // NOLINTBEGIN(concurrency-mt-unsafe)
 
@@ -2596,6 +2599,7 @@ TEST(cli_nomem_shim_fails_a_list)
 }
 
 // NOLINTEND(concurrency-mt-unsafe)
+#endif /* REMEMBER_TEST_VFS */
 
 void register_errors_tests(void)
 {
@@ -2656,6 +2660,7 @@ void register_errors_tests(void)
     RUN_TEST(cli_readonly_directory_reports_read_only);
     RUN_TEST(cli_mode_000_reports_cannot_open_permission);
     RUN_TEST(cli_truncated_brain_reports_corrupt);
+#ifdef REMEMBER_TEST_VFS
     RUN_TEST(cli_enospc_shim_reports_disk_full);
     RUN_TEST(cli_fail_write_shim_reports_io_error);
     RUN_TEST(cli_fail_write_budget_lets_an_add_finish);
@@ -2663,6 +2668,9 @@ void register_errors_tests(void)
     RUN_TEST(cli_fail_read_budget_lets_a_list_finish);
     RUN_TEST(cli_nomem_shim_reports_database);
     RUN_TEST(cli_nomem_shim_fails_a_list);
+#else
+    (void)printf("SKIP 7 VFS shim tests (remember built without REMEMBER_TEST_VFS)\n");
+#endif
     RUN_TEST(sqlite_out_of_range_reason_falls_back_to_other);
     RUN_TEST(err_store_sqlite_misuse_and_clean_store_fall_back);
     RUN_TEST(cli_db_under_a_file_keeps_the_legacy_open_line);

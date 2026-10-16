@@ -575,3 +575,25 @@ Capture runs right after the failing call, before finalize or ROLLBACK (the hot 
 **Follow-up, not this stage:** Bugbot on the branch (it did not finish `store_sqlite.c`, `tests/test_errors.c`, or `tests/test_no_shim.sh`) reported one medium finding in `cmd_import.c`: `load_tags` on the import source captures a SQLite error without `import_source`, so a tag-read failure is blamed on the brain. That is the stage 3 source-naming contract, not the VFS. Left for the whole-plan review.
 
 **Nit (left):** the tail cast needs a clang `-Wcast-align` suppression. `unixFile`'s size is pointer-aligned, and an assert checks that before the cast.
+
+### 2026-10-15 — second-opinion deep review (stage 4)
+
+**Verdict:** stage 4 approved. No open blocking item. No grill.
+
+**Run, not read.** Gate (`-DREMEMBER_TEST_VFS=ON`): ctest (ASan/UBSan, incl. `no_shim_symbols`), LINT OK, coverage 100% functions and 100% effective lines, `leaks-macos` PASS, `ci-linux.sh` OK. X-E02 by hand on the shim CLI:
+
+| Env | Code | `sqlite_name` | Notes |
+|-----|------|---------------|-------|
+| `REMEMBER_TEST_ENOSPC=1` + `add` | `disk_full` | `SQLITE_FULL` | exit 1, stdout empty |
+| `REMEMBER_TEST_FAIL_WRITE=0` | `io_error` | `SQLITE_IOERR_WRITE` | errno 2 (stale unix errno; documented) |
+| `REMEMBER_TEST_FAIL_READ=0` | `io_error` | `SQLITE_IOERR_READ` | |
+| `REMEMBER_TEST_NOMEM=1` | `database` | `SQLITE_NOMEM` | `decision:plan16-nomem-sqlite-name` |
+
+`nm`: `remember_test_vfs_install` is in the shim CLI only. `remember_plain`, the Release `remember`, a shim-off build, and `remember_core` all show 0. Release safety has four layers: CMake forces the option OFF in Release, `main` is `#ifdef`-guarded, `install.sh` refuses the symbol, and a ctest checks it.
+
+**Auto-fixed:**
+
+- **important** — a default build failed `ctest`. P3 keeps `REMEMBER_TEST_VFS` default OFF, but the seven shim tests ran unconditionally, so a plain `cmake -S . -B build && ctest` was red: the CLI had no shim, and every shim assertion failed. Found by experiment (my reconfigure lost the flag). CI and every gate script pass the flag, so they stayed green. Now CMake defines `REMEMBER_TEST_VFS` on `remember_tests` when the option is ON. The shim tests and their registrations are `#ifdef REMEMBER_TEST_VFS`, and otherwise the run prints `SKIP 7 VFS shim tests (remember built without REMEMBER_TEST_VFS)`, the same pattern as the root-chmod skip. Verified both ways: OFF gives 58 tests and 0 failures with the SKIP line; ON gives 65 tests and 0 failures.
+- **simplify (lens 9)** — `tail_of` in `test_vfs.c` silenced `-Wcast-align` with 12 lines of clang/GCC `#pragma` push/pop. It now casts through `void *`, with one `NOLINTNEXTLINE(bugprone-casting-through-void)` (C has no `reinterpret_cast`), and the alignment `assert` already above it states the guarantee.
+
+**Praise:** the shim opens through the real unix VFS, keeps the unix file at the front of the buffer, and replaces only `xRead` / `xWrite`. That is the least it can touch. The faults are sticky, so SQLite cannot retry past them. Each chmod skip prints its name, so a root run cannot pass silently.

@@ -320,6 +320,10 @@ target_compile_definitions(remember_tests PRIVATE
 remember_apply_posix_feature_macros(remember_tests)
 remember_apply_coverage(remember_tests)
 remember_apply_test_hooks(remember_tests)
+# The shim tests run only when the CLI under test carries the shim.
+if(REMEMBER_TEST_VFS)
+    target_compile_definitions(remember_tests PRIVATE REMEMBER_TEST_VFS)
+endif()
 # Tests build execv/remember_run argv from const string tables (POSIX API is
 # char *const[]); -Weverything's -Wcast-qual there is pure noise (see the src-only
 # -Wcast-qual property above). Keep it off for the test targets only.

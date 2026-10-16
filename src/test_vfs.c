@@ -96,19 +96,10 @@ static TestTail *tail_of(sqlite3_file *file)
      * the tail placed after it is aligned too. */
     assert(g_parent_file_size % (int)_Alignof(TestTail) == 0);
     bytes = (char *)file + g_parent_file_size;
-#ifdef __clang__
-#pragma clang diagnostic push
-#pragma clang diagnostic ignored "-Wcast-align"
-#elif defined(__GNUC__)
-#pragma GCC diagnostic push
-#pragma GCC diagnostic ignored "-Wcast-align"
-#endif
-    tail = (TestTail *)bytes;
-#ifdef __clang__
-#pragma clang diagnostic pop
-#elif defined(__GNUC__)
-#pragma GCC diagnostic pop
-#endif
+    /* Through void *: the alignment is asserted above, not assumed by the cast.
+       C has no reinterpret_cast, which is what the check asks for. */
+    // NOLINTNEXTLINE(bugprone-casting-through-void)
+    tail = (TestTail *)(void *)bytes;
     return tail;
 }
 
