@@ -36,6 +36,9 @@ enum { MODE_DIR_OPEN = 0700, MODE_FILE_PRIVATE = 0600 };
 /* Path join buffers in the open-classification tests. */
 enum { TEST_PATH_CAP = 512 };
 
+/* SQLite's smallest page. A root page smaller than this is not a real page. */
+enum { MIN_PAGE_SIZE = 512 };
+
 /* Fill byte so an untouched StoreError cannot look like STORE_ERROR_NONE. */
 enum { POISON_BYTE = 0xA5 };
 
@@ -2301,6 +2304,402 @@ TEST(cli_mode_000_reports_cannot_open_permission)
     free(db);
 }
 
+/* E4.10: damage one entries_fts_data block. Search's SQL names entries_fts and
+   the base tables are intact, so the failure is the search index (CORRUPT_VTAB). */
+static int damage_entries_fts_data(const char *db)
+{
+    sqlite3 *sql = NULL;
+    int rc = 0;
+
+    rc = sqlite3_open(db, &sql);
+    if (rc != SQLITE_OK) {
+        sqlite3_close(sql);
+        return -1;
+    }
+    rc = sqlite3_exec(sql,
+                      "UPDATE entries_fts_data SET block = zeroblob(32) "
+                      "WHERE id = (SELECT MIN(id) FROM entries_fts_data);",
+                      NULL, NULL, NULL);
+    sqlite3_close(sql);
+    if (rc != SQLITE_OK) {
+        return -1;
+    }
+    return 0;
+}
+
+TEST(cli_damaged_fts_search_reports_fts_only)
+{
+    static const char *const k_plain =
+        "remember: database error: the search index is damaged (SQLITE_CORRUPT_VTAB). "
+        "Run `remember repair search-index`. Your memories are not affected.\n";
+    char *db = make_temp_db_path();
+    const char *seed[] = {"add", "alpha seed memory"};
+    const char *search[] = {"search", "alpha"};
+    const char *json[] = {"--json-errors", "search", "alpha"};
+    char want[CLI_JSON_CAP];
+    CmdResult r;
+
+    ASSERT_TRUE(db != NULL);
+    if (db == NULL) {
+        return;
+    }
+    r = run_remember(db, seed, sizeof(seed) / sizeof(seed[0]), NULL);
+    ASSERT_EQ_INT(r.exit_code, 0);
+    cmd_result_free(&r);
+    ASSERT_EQ_INT(damage_entries_fts_data(db), 0);
+    r = run_remember(db, search, sizeof(search) / sizeof(search[0]), NULL);
+    ASSERT_EQ_INT(r.exit_code, 1);
+    ASSERT_STREQ(r.out, "");
+    ASSERT_STREQ(r.err, k_plain);
+    cmd_result_free(&r);
+    r = run_remember(db, json, sizeof(json) / sizeof(json[0]), NULL);
+    (void)snprintf(
+        want, sizeof(want),
+        "{\"version\":1,\"error\":{\"code\":\"corrupt\",\"message\":\"database error: the search "
+        "index is "
+        "damaged\",\"detail\":{\"sqlite_code\":11,\"sqlite_extended\":267,\"sqlite_name\":\"SQLITE_"
+        "CORRUPT_VTAB\",\"sqlite_message\":\"database disk image is "
+        "malformed\",\"fix\":\"Run `remember repair search-index`. Your memories are not "
+        "affected.\",\"path\":\"%s\",\"fts_only\":true}}}\n",
+        db);
+    ASSERT_EQ_INT(r.exit_code, 1);
+    ASSERT_STREQ(r.out, "");
+    ASSERT_STREQ(r.err, want);
+    cmd_result_free(&r);
+    free(db);
+}
+
+/* E4.14: repair rebuilds the index. N is the entries row count. Search works again. */
+TEST(cli_repair_search_index_rebuilds)
+{
+    char *db = make_temp_db_path();
+    const char *seed[] = {"add", "alpha seed memory"};
+    const char *repair[] = {"--json", "repair", "search-index"};
+    const char *search[] = {"search", "alpha"};
+    CmdResult r;
+
+    ASSERT_TRUE(db != NULL);
+    if (db == NULL) {
+        return;
+    }
+    r = run_remember(db, seed, sizeof(seed) / sizeof(seed[0]), NULL);
+    ASSERT_EQ_INT(r.exit_code, 0);
+    cmd_result_free(&r);
+    ASSERT_EQ_INT(damage_entries_fts_data(db), 0);
+    r = run_remember(db, repair, sizeof(repair) / sizeof(repair[0]), NULL);
+    ASSERT_EQ_INT(r.exit_code, 0);
+    ASSERT_STREQ(r.err, "");
+    ASSERT_STREQ(r.out, "{\"version\":1,\"action\":\"rebuilt\",\"entries\":1}\n");
+    cmd_result_free(&r);
+    r = run_remember(db, search, sizeof(search) / sizeof(search[0]), NULL);
+    ASSERT_EQ_INT(r.exit_code, 0);
+    ASSERT_STREQ(r.err, "");
+    ASSERT_STR_CONTAINS(r.out, "alpha seed memory");
+    cmd_result_free(&r);
+    free(db);
+}
+
+/* D8: without --json the same repair prints rebuilt N. */
+TEST(cli_repair_search_index_human_rebuilt)
+{
+    char *db = make_temp_db_path();
+    const char *seed[] = {"add", "alpha seed memory"};
+    const char *repair[] = {"repair", "search-index"};
+    CmdResult r;
+
+    ASSERT_TRUE(db != NULL);
+    if (db == NULL) {
+        return;
+    }
+    r = run_remember(db, seed, sizeof(seed) / sizeof(seed[0]), NULL);
+    ASSERT_EQ_INT(r.exit_code, 0);
+    cmd_result_free(&r);
+    r = run_remember(db, repair, sizeof(repair) / sizeof(repair[0]), NULL);
+    ASSERT_EQ_INT(r.exit_code, 0);
+    ASSERT_STREQ(r.err, "");
+    ASSERT_STREQ(r.out, "rebuilt 1\n");
+    cmd_result_free(&r);
+    free(db);
+}
+
+/* E4.14: N counts rows in every bin, including a soft-deleted one. */
+TEST(cli_repair_counts_deleted_entries)
+{
+    char *db = make_temp_db_path();
+    const char *first[] = {"add", "alpha seed memory"};
+    const char *second[] = {"add", "beta other memory"};
+    const char *drop[] = {"delete", "2"};
+    const char *repair[] = {"--json", "repair", "search-index"};
+    CmdResult r;
+
+    ASSERT_TRUE(db != NULL);
+    if (db == NULL) {
+        return;
+    }
+    r = run_remember(db, first, sizeof(first) / sizeof(first[0]), NULL);
+    ASSERT_EQ_INT(r.exit_code, 0);
+    cmd_result_free(&r);
+    r = run_remember(db, second, sizeof(second) / sizeof(second[0]), NULL);
+    ASSERT_EQ_INT(r.exit_code, 0);
+    cmd_result_free(&r);
+    r = run_remember(db, drop, sizeof(drop) / sizeof(drop[0]), NULL);
+    ASSERT_EQ_INT(r.exit_code, 0);
+    cmd_result_free(&r);
+    r = run_remember(db, repair, sizeof(repair) / sizeof(repair[0]), NULL);
+    ASSERT_EQ_INT(r.exit_code, 0);
+    ASSERT_STREQ(r.err, "");
+    ASSERT_STREQ(r.out, "{\"version\":1,\"action\":\"rebuilt\",\"entries\":2}\n");
+    cmd_result_free(&r);
+    free(db);
+}
+
+/* Zero the entries root page. The file still opens; quick_check does not pass. */
+static int smash_entries_root(const char *db)
+{
+    sqlite3 *sql = NULL;
+    sqlite3_stmt *stmt = NULL;
+    char *zeros = NULL;
+    int root = 0;
+    int page_size = 0;
+    int fd = -1;
+    int status = -1;
+
+    if (sqlite3_open(db, &sql) != SQLITE_OK) {
+        sqlite3_close(sql);
+        return -1;
+    }
+    if (sqlite3_prepare_v2(sql, "SELECT rootpage FROM sqlite_master WHERE name = 'entries';", -1,
+                           &stmt, NULL) != SQLITE_OK ||
+        sqlite3_step(stmt) != SQLITE_ROW) {
+        sqlite3_finalize(stmt);
+        sqlite3_close(sql);
+        return -1;
+    }
+    root = sqlite3_column_int(stmt, 0);
+    sqlite3_finalize(stmt);
+    stmt = NULL;
+    if (sqlite3_prepare_v2(sql, "PRAGMA page_size;", -1, &stmt, NULL) != SQLITE_OK ||
+        sqlite3_step(stmt) != SQLITE_ROW) {
+        sqlite3_finalize(stmt);
+        sqlite3_close(sql);
+        return -1;
+    }
+    page_size = sqlite3_column_int(stmt, 0);
+    sqlite3_finalize(stmt);
+    sqlite3_close(sql);
+    if (root < 2 || page_size < MIN_PAGE_SIZE) {
+        return -1;
+    }
+    zeros = (char *)calloc((size_t)page_size, 1U);
+    if (zeros == NULL) {
+        return -1;
+    }
+    fd = open(db, O_RDWR | O_CLOEXEC);
+    if (fd < 0 || lseek(fd, (off_t)(root - 1) * page_size, SEEK_SET) < 0 ||
+        write(fd, zeros, (size_t)page_size) != page_size) {
+        if (fd >= 0) {
+            (void)close(fd);
+        }
+        free(zeros);
+        return -1;
+    }
+    status = close(fd) == 0 ? 0 : -1;
+    free(zeros);
+    return status;
+}
+
+/* E4.14: a damaged base table is corrupt with fts_only false, and nothing is rebuilt. */
+TEST(cli_repair_refuses_damaged_base_table)
+{
+    static const char *const k_plain =
+        "remember: database error: the brain file is damaged (SQLITE_CORRUPT). "
+        "Copy the file somewhere safe before anything else, then run `remember export`, or "
+        "restore a backup.\n";
+    char *db = make_temp_db_path();
+    const char *seed[] = {"add", "alpha seed memory"};
+    const char *repair[] = {"repair", "search-index"};
+    const char *json[] = {"--json-errors", "repair", "search-index"};
+    char want[CLI_JSON_CAP];
+    CmdResult r;
+
+    ASSERT_TRUE(db != NULL);
+    if (db == NULL) {
+        return;
+    }
+    r = run_remember(db, seed, sizeof(seed) / sizeof(seed[0]), NULL);
+    ASSERT_EQ_INT(r.exit_code, 0);
+    cmd_result_free(&r);
+    ASSERT_EQ_INT(smash_entries_root(db), 0);
+    r = run_remember(db, repair, sizeof(repair) / sizeof(repair[0]), NULL);
+    ASSERT_EQ_INT(r.exit_code, 1);
+    ASSERT_STREQ(r.out, "");
+    ASSERT_STREQ(r.err, k_plain);
+    cmd_result_free(&r);
+    r = run_remember(db, json, sizeof(json) / sizeof(json[0]), NULL);
+    (void)snprintf(
+        want, sizeof(want),
+        "{\"version\":1,\"error\":{\"code\":\"corrupt\",\"message\":\"database error: the brain "
+        "file is "
+        "damaged\",\"detail\":{\"sqlite_code\":11,\"sqlite_extended\":11,\"sqlite_name\":\"SQLITE_"
+        "CORRUPT\",\"sqlite_message\":\"*** in database main ***\\nTree 2 page 2: btreeInitPage() "
+        "returns error code 11\",\"fix\":\"Copy the file "
+        "somewhere safe before anything else, then run `remember export`, or restore a "
+        "backup.\",\"path\":\"%s\",\"fts_only\":false}}}\n",
+        db);
+    ASSERT_EQ_INT(r.exit_code, 1);
+    ASSERT_STREQ(r.out, "");
+    ASSERT_STREQ(r.err, want);
+    cmd_result_free(&r);
+    free(db);
+}
+
+/* E4.14: a truncated brain cannot pass quick_check. Repair refuses; it does not rebuild. */
+TEST(cli_repair_refuses_truncated_brain)
+{
+    static const char *const k_plain =
+        "remember: database error: the brain file is damaged (SQLITE_CORRUPT). "
+        "Copy the file somewhere safe before anything else, then run `remember export`, or "
+        "restore a backup.\n";
+    char *db = make_temp_db_path();
+    const char *seed[] = {"add", "seed"};
+    const char *repair[] = {"repair", "search-index"};
+    const char *json[] = {"--json-errors", "repair", "search-index"};
+    char want[CLI_JSON_CAP];
+    CmdResult r;
+    int fd = -1;
+
+    ASSERT_TRUE(db != NULL);
+    if (db == NULL) {
+        return;
+    }
+    r = run_remember(db, seed, sizeof(seed) / sizeof(seed[0]), NULL);
+    ASSERT_EQ_INT(r.exit_code, 0);
+    cmd_result_free(&r);
+    fd = open(db, O_RDWR | O_CLOEXEC);
+    ASSERT_TRUE(fd >= 0);
+    if (fd >= 0) {
+        ASSERT_EQ_INT(ftruncate(fd, 512), 0);
+        ASSERT_EQ_INT(close(fd), 0);
+    }
+    r = run_remember(db, repair, sizeof(repair) / sizeof(repair[0]), NULL);
+    ASSERT_EQ_INT(r.exit_code, 1);
+    ASSERT_STREQ(r.out, "");
+    ASSERT_STREQ(r.err, k_plain);
+    cmd_result_free(&r);
+    r = run_remember(db, json, sizeof(json) / sizeof(json[0]), NULL);
+    (void)snprintf(
+        want, sizeof(want),
+        "{\"version\":1,\"error\":{\"code\":\"corrupt\",\"message\":\"database error: the brain "
+        "file is "
+        "damaged\",\"detail\":{\"sqlite_code\":11,\"sqlite_extended\":11,\"sqlite_name\":\"SQLITE_"
+        "CORRUPT\",\"sqlite_message\":\"database disk image is malformed\",\"fix\":\"Copy the file "
+        "somewhere safe before anything else, then run `remember export`, or restore a "
+        "backup.\",\"path\":\"%s\",\"fts_only\":false}}}\n",
+        db);
+    ASSERT_EQ_INT(r.exit_code, 1);
+    ASSERT_STREQ(r.out, "");
+    ASSERT_STREQ(r.err, want);
+    cmd_result_free(&r);
+    free(db);
+}
+
+/* E4.10: SQL that names entries_fts is not enough. A failed base check keeps fts_only false. */
+TEST(cli_search_on_damaged_base_is_not_fts_only)
+{
+    static const char *const k_plain =
+        "remember: database error: the brain file is damaged (SQLITE_CORRUPT). "
+        "Copy the file somewhere safe before anything else, then run `remember export`, or "
+        "restore a backup.\n";
+    char *db = make_temp_db_path();
+    const char *seed[] = {"add", "alpha seed memory"};
+    const char *search[] = {"search", "alpha"};
+    const char *json[] = {"--json-errors", "search", "alpha"};
+    char want[CLI_JSON_CAP];
+    CmdResult r;
+
+    ASSERT_TRUE(db != NULL);
+    if (db == NULL) {
+        return;
+    }
+    r = run_remember(db, seed, sizeof(seed) / sizeof(seed[0]), NULL);
+    ASSERT_EQ_INT(r.exit_code, 0);
+    cmd_result_free(&r);
+    ASSERT_EQ_INT(smash_entries_root(db), 0);
+    r = run_remember(db, search, sizeof(search) / sizeof(search[0]), NULL);
+    ASSERT_EQ_INT(r.exit_code, 1);
+    ASSERT_STREQ(r.out, "");
+    ASSERT_STREQ(r.err, k_plain);
+    cmd_result_free(&r);
+    r = run_remember(db, json, sizeof(json) / sizeof(json[0]), NULL);
+    (void)snprintf(
+        want, sizeof(want),
+        "{\"version\":1,\"error\":{\"code\":\"corrupt\",\"message\":\"database error: the brain "
+        "file is "
+        "damaged\",\"detail\":{\"sqlite_code\":11,\"sqlite_extended\":11,\"sqlite_name\":\"SQLITE_"
+        "CORRUPT\",\"sqlite_message\":\"database disk image is malformed\",\"fix\":\"Copy the file "
+        "somewhere safe before anything else, then run `remember export`, or restore a "
+        "backup.\",\"path\":\"%s\",\"fts_only\":false}}}\n",
+        db);
+    ASSERT_EQ_INT(r.exit_code, 1);
+    ASSERT_STREQ(r.out, "");
+    ASSERT_STREQ(r.err, want);
+    cmd_result_free(&r);
+    free(db);
+}
+
+/* Every misuse of repair is the one usage line. */
+TEST(cli_repair_usage_is_search_index)
+{
+    static const char *const k_err = "remember: usage: repair search-index\n";
+    char *db = make_temp_db_path();
+    const char *none[] = {"repair"};
+    const char *bad[] = {"repair", "foo"};
+    const char *extra[] = {"repair", "search-index", "extra"};
+    const char *opt[] = {"repair", "--nope"};
+    const char *const *cases[] = {none, bad, extra, opt};
+    const size_t counts[] = {1U, 2U, 3U, 2U};
+    size_t i = 0;
+    CmdResult r;
+
+    ASSERT_TRUE(db != NULL);
+    if (db == NULL) {
+        return;
+    }
+    for (i = 0; i < sizeof(cases) / sizeof(cases[0]); i++) {
+        r = run_remember(db, cases[i], counts[i], NULL);
+        ASSERT_EQ_INT(r.exit_code, 1);
+        ASSERT_STREQ(r.out, "");
+        ASSERT_STREQ(r.err, k_err);
+        cmd_result_free(&r);
+    }
+    free(db);
+}
+
+TEST(cli_repair_help_names_the_command)
+{
+    char *db = make_temp_db_path();
+    const char *help[] = {"help", "repair"};
+    const char *general[] = {"--help"};
+    CmdResult r;
+
+    ASSERT_TRUE(db != NULL);
+    if (db == NULL) {
+        return;
+    }
+    r = run_remember(db, help, sizeof(help) / sizeof(help[0]), NULL);
+    ASSERT_EQ_INT(r.exit_code, 0);
+    ASSERT_STR_CONTAINS(r.out, "remember repair search-index");
+    ASSERT_STR_CONTAINS(r.out, "rebuilt N");
+    ASSERT_STREQ(r.err, "");
+    cmd_result_free(&r);
+    r = run_remember(db, general, sizeof(general) / sizeof(general[0]), NULL);
+    ASSERT_EQ_INT(r.exit_code, 0);
+    ASSERT_STR_CONTAINS(r.out, "repair");
+    ASSERT_STR_CONTAINS(r.out, "Rebuild the search index");
+    cmd_result_free(&r);
+    free(db);
+}
+
 /* A header with the body cut off is corrupt, fts_only false. */
 TEST(cli_truncated_brain_reports_corrupt)
 {
@@ -2498,6 +2897,57 @@ TEST(cli_fail_read_shim_reports_io_error)
         "IOERR_READ\",\"sqlite_message\":\"disk I/O error\",\"fix\":\"Check the disk or drive, "
         "then try again.\",\"errno\":%d,\"path\":\"%s\"}}}\n",
         EEXIST, db);
+    ASSERT_EQ_INT(r.exit_code, 1);
+    ASSERT_STREQ(r.out, "");
+    ASSERT_STREQ(r.err, want);
+    cmd_result_free(&r);
+    free(db);
+}
+
+/* E4.14: a read fault during the base-table check is still corrupt, and the engine
+   name stays the I/O error. Open of a seeded brain completes two reads; the next
+   one is inside quick_check (observed on the vendored SQLite). */
+TEST(cli_repair_read_fault_during_check_is_corrupt)
+{
+    static const char *const k_plain =
+        "remember: database error: the brain file is damaged (SQLITE_IOERR_READ). "
+        "Copy the file somewhere safe before anything else, then run `remember export`, or "
+        "restore a backup.\n";
+    char *db = make_temp_db_path();
+    const char *seed[] = {"add", "seed"};
+    const char *repair[] = {"repair", "search-index"};
+    const char *json[] = {"--json-errors", "repair", "search-index"};
+    char want[CLI_JSON_CAP];
+    CmdResult r;
+
+    ASSERT_TRUE(db != NULL);
+    if (db == NULL) {
+        return;
+    }
+    r = run_remember(db, seed, sizeof(seed) / sizeof(seed[0]), NULL);
+    ASSERT_EQ_INT(r.exit_code, 0);
+    cmd_result_free(&r);
+
+    ASSERT_EQ_INT(setenv("REMEMBER_TEST_FAIL_READ", "2", 1), 0);
+    r = run_remember(db, repair, sizeof(repair) / sizeof(repair[0]), NULL);
+    ASSERT_EQ_INT(unsetenv("REMEMBER_TEST_FAIL_READ"), 0);
+    ASSERT_EQ_INT(r.exit_code, 1);
+    ASSERT_STREQ(r.out, "");
+    ASSERT_STREQ(r.err, k_plain);
+    cmd_result_free(&r);
+
+    ASSERT_EQ_INT(setenv("REMEMBER_TEST_FAIL_READ", "2", 1), 0);
+    r = run_remember(db, json, sizeof(json) / sizeof(json[0]), NULL);
+    ASSERT_EQ_INT(unsetenv("REMEMBER_TEST_FAIL_READ"), 0);
+    (void)snprintf(
+        want, sizeof(want),
+        "{\"version\":1,\"error\":{\"code\":\"corrupt\",\"message\":\"database error: the brain "
+        "file is "
+        "damaged\",\"detail\":{\"sqlite_code\":10,\"sqlite_extended\":266,\"sqlite_name\":\"SQLITE_"
+        "IOERR_READ\",\"sqlite_message\":\"disk I/O error\",\"fix\":\"Copy the file "
+        "somewhere safe before anything else, then run `remember export`, or restore a "
+        "backup.\",\"errno\":%d,\"path\":\"%s\",\"fts_only\":false}}}\n",
+        ENOENT, db);
     ASSERT_EQ_INT(r.exit_code, 1);
     ASSERT_STREQ(r.out, "");
     ASSERT_STREQ(r.err, want);
@@ -3001,17 +3451,27 @@ void register_errors_tests(void)
     RUN_TEST(cli_read_only_file_reports_read_only_on_write);
     RUN_TEST(cli_readonly_directory_reports_read_only);
     RUN_TEST(cli_mode_000_reports_cannot_open_permission);
+    RUN_TEST(cli_damaged_fts_search_reports_fts_only);
+    RUN_TEST(cli_repair_search_index_rebuilds);
+    RUN_TEST(cli_repair_search_index_human_rebuilt);
+    RUN_TEST(cli_repair_counts_deleted_entries);
+    RUN_TEST(cli_repair_refuses_damaged_base_table);
+    RUN_TEST(cli_repair_refuses_truncated_brain);
+    RUN_TEST(cli_search_on_damaged_base_is_not_fts_only);
+    RUN_TEST(cli_repair_usage_is_search_index);
+    RUN_TEST(cli_repair_help_names_the_command);
     RUN_TEST(cli_truncated_brain_reports_corrupt);
 #ifdef REMEMBER_TEST_VFS
     RUN_TEST(cli_enospc_shim_reports_disk_full);
     RUN_TEST(cli_fail_write_shim_reports_io_error);
     RUN_TEST(cli_fail_write_budget_lets_an_add_finish);
     RUN_TEST(cli_fail_read_shim_reports_io_error);
+    RUN_TEST(cli_repair_read_fault_during_check_is_corrupt);
     RUN_TEST(cli_fail_read_budget_lets_a_list_finish);
     RUN_TEST(cli_nomem_shim_reports_database);
     RUN_TEST(cli_nomem_shim_fails_a_list);
 #else
-    (void)printf("SKIP 7 VFS shim tests (remember built without REMEMBER_TEST_VFS)\n");
+    (void)printf("SKIP 8 VFS shim tests (remember built without REMEMBER_TEST_VFS)\n");
 #endif
     RUN_TEST(sqlite_out_of_range_reason_falls_back_to_other);
     RUN_TEST(err_store_sqlite_misuse_and_clean_store_fall_back);

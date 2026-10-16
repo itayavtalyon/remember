@@ -25,6 +25,7 @@ int cmd_import(Store *s, bool json, int rest_argc, const char **rest_argv);
 int cmd_conflicts(Store *s, bool json, int rest_argc, const char **rest_argv);
 int cmd_conflict(Store *s, bool json, int rest_argc, const char **rest_argv);
 int cmd_device(Store *s, bool json, int rest_argc, const char **rest_argv);
+int cmd_repair(Store *s, bool json, int rest_argc, const char **rest_argv);
 /* Exactly `device new`: its open replaces an invalid sidecar (Itay 2026-10-13). */
 bool cmd_device_mints(int rest_argc, const char **rest_argv);
 

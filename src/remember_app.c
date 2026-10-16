@@ -31,6 +31,7 @@ static void print_general_help(void)
                                "Commands:\n"
                                "  add       Store a memory (optional --key, --tag, --source)\n"
                                "  search    Full-text search\n"
+                               "  repair    Rebuild the search index\n"
                                "  list      List memories with filters\n"
                                "  get       Fetch one entry by id, --key, or --sync-id\n"
                                "  update    Change body and/or tags by id, --key, or --sync-id\n"
@@ -252,6 +253,15 @@ static void print_command_help(CliCommand topic)
         (void)fprintf(out,
                       "both remints sync_id on concurrent_vv; clash keeps incoming sync_id.\n");
         (void)fprintf(out, "\n");
+    } else if (topic == CLI_CMD_REPAIR) {
+        (void)fprintf(out, "Rebuilds the search index after the index itself is damaged.\n");
+        (void)fprintf(out, "  remember repair search-index\n");
+        (void)fprintf(out, "\n");
+        (void)fprintf(out, "Refuses when a base table fails its check.\n");
+        (void)fprintf(out, "Human stdout: rebuilt N\n");
+        (void)fprintf(out, "JSON: {\"version\":1,\"action\":\"rebuilt\",\"entries\":N}\n");
+        (void)fprintf(out, "N is the number of rows in entries, in every bin.\n");
+        (void)fprintf(out, "\n");
     } else if (topic == CLI_CMD_DEVICE) {
         (void)fprintf(out, "Prints the sidecar device id.\n");
         (void)fprintf(out, "  remember device\n");
@@ -431,6 +441,8 @@ static int run(const CliArgs *args)
         return run_with_store(args, cmd_conflict);
     case CLI_CMD_DEVICE:
         return run_with_store(args, cmd_device);
+    case CLI_CMD_REPAIR:
+        return run_with_store(args, cmd_repair);
     case CLI_CMD_NONE:
         /* Defensive: parse should set CLI_ERR_MISSING_COMMAND first. */
         err_msg(DIAG_USAGE, cli_error_message(CLI_ERR_MISSING_COMMAND));

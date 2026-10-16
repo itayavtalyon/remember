@@ -640,3 +640,30 @@ No new grill. No new `decision:*`. Help text for the flags stays stage 7.
 **Simplify (lens 9, left):** `CliGlobals` carries `busy_timeout_ms` plus `busy_timeout_set`. A `-1` "omitted" sentinel would drop the bool, but `cli.c` would then need the store default or the sentinel would leak into `open_store`. The in-session review chose the explicit bool for that reason, and it reads clearly. Left as is.
 
 **Praise:** one decimal parser for three flags. `-1` is reported as a bad value, not as a missing option. The missing-file test (not only the missing-parent test) proves `SQLITE_OPEN_CREATE` is off.
+
+### 2026-10-16 — stage 6 (corrupt check + repair)
+
+No new grill. No new `decision:*`. Help for `--json-errors`, `--busy-timeout`, and `--no-create` stays stage 7, and so do SKILL.md, What's New, the QUALITY shim paragraph, COVERAGE, gate-suites, and 006 Implementation Results.
+
+- `fts_only` is set in the adapter, after the snapshot and before any later SQLite call can clobber it. `quick_check` does not call `capture`. It is true for `SQLITE_CORRUPT_VTAB`. Otherwise it is true only when the five base checks pass and an active statement's SQL contains `entries_fts`. A search that names the index still stays `fts_only` false when a base table fails.
+- Base tables, in order: `entries`, `entry_links`, `conflicts`, `settings`, `bucket_prefixes`. Each is `PRAGMA quick_check(<table>)` on the same connection. One `ok` row passes. A problem row is `corrupt`, `SQLITE_CORRUPT`, `fts_only` false, and `sqlite_message` is that row. An engine error on the statement keeps the engine code, name, message, and errno, forces the class to `corrupt`, and sets `fts_only` false.
+- Observed on macOS, vendored SQLite, and confirmed by Linux CI: zeroing the entries root page (page 2 of a fresh brain) makes `quick_check` return the text row `*** in database main ***` / `Tree 2 page 2: btreeInitPage() returns error code 11`, not an engine code. A committed `UPDATE entries_fts_data SET block = zeroblob(32) WHERE id = (SELECT MIN(id) FROM entries_fts_data)` makes search return `SQLITE_CORRUPT_VTAB` (267), message `database disk image is malformed`, `fts_only` true. A truncated brain (512 bytes) makes repair refuse with the base `corrupt` line and `fts_only` false; it does not rebuild.
+- `REMEMBER_TEST_FAIL_READ=2` on a seeded brain fails a read inside the check (open uses the first two). Repair reports `corrupt` with `sqlite_name` `SQLITE_IOERR_READ`, `sqlite_message` `disk I/O error`, errno `ENOENT` (the shim returns before the syscall, same stale-errno rule as stage 4). Linux CI passed this test on the same count.
+- `repair search-index` checks first, then `BEGIN`, `INSERT INTO entries_fts(entries_fts) VALUES('rebuild')`, `COMMIT`, then `VALUES('integrity-check')`, then `COUNT(*)` from `entries` in every bin. Human stdout is `rebuilt N`. JSON is `{"version":1,"action":"rebuilt","entries":N}`. A failed rebuild rolls back. The integrity check is outside the transaction, as E4.14 says.
+- Every misuse (`repair`, `repair foo`, an extra token, `repair --nope`) is `usage: repair search-index`. Open runs before that reject, so the brain file is created, same as the other commands. Registry summary is `Rebuild the search index`. Command help states the check, the human line, the JSON object, and that N counts every bin. Facade byte-matches human repair, `--json` repair, and `help repair`.
+
+### 2026-10-16 — in-session deep review (stage 6)
+
+**Verdict:** approve for the second-opinion pass. No open blocking item. No grill. No new `decision:*`.
+
+**Ran:** ctest 5/5 with ASan/UBSan and `REMEMBER_TEST_VFS=ON` (100% passed). `lint-all.sh` LINT OK. Coverage 100% functions and 100% effective lines. `leaks-macos` PASS (the first run died in the sandbox with "Couldn't get task port"; the same target passed outside it). `ci-linux.sh` OK, including the non-root suite, IWYU, and scan-build. Bugbot on the uncommitted stage found no bugs.
+
+**Pragmatic write-gate:** DRY PASS (the five base tables are the E4.10 list, not a second copy of the schema). Easy-to-replace PASS (`cmd_repair` talks to `Store` and `output`; SQLite stays in the adapter). Orthogonal PASS (the check is part of corrupt reporting, which is what E4.10 says). No deferred markers.
+
+**Ponytail:** nothing to cut. The `touched = false` assignment is the form of the E4.10 rule that stays one covered return.
+
+**Auto-fixed:** coverage had left the engine-failure body of the base-table check unhit, so repair-on-truncated and `REMEMBER_TEST_FAIL_READ=2` now lock it. clang-tidy rejected `bool && bool` as an int conversion; the return assigns through a bool instead. cppcheck wanted `counts` const and `text` in the row block. IWYU wanted `<stdbool.h>` in `output.h` because `output_rebuilt` takes `bool`. The unreachable format-overflow branch is gone; the SQL is a fixed list.
+
+**Left for later:** stage 7 is help for `--json-errors`, `--busy-timeout`, and `--no-create`, plus SKILL.md, What's New, the QUALITY shim paragraph, COVERAGE, gate-suites, and 006 Implementation Results. The repair command topic is already in this stage.
+
+**Praise:** a damaged index says `fts_only` true and names `repair search-index`. A damaged base table stays the old corrupt line, and repair refuses it.

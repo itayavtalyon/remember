@@ -674,6 +674,21 @@ static void mask_through_newline(char *text)
     }
 }
 
+TEST(facade_repair_matches_cli)
+{
+    char *db = make_temp_db_path();
+    const char *human[] = {"repair", "search-index"};
+    const char *json[] = {"--json", "repair", "search-index"};
+    const char *help[] = {"help", "repair"};
+
+    ASSERT_TRUE(db != NULL);
+    seed_three(db);
+    assert_read_parity(db, human, sizeof(human) / sizeof(human[0]));
+    assert_read_parity(db, json, sizeof(json) / sizeof(json[0]));
+    assert_read_parity(db, help, sizeof(help) / sizeof(help[0]));
+    free(db);
+}
+
 TEST(facade_device_matches_cli)
 {
     char *db = make_temp_db_path();
@@ -752,6 +767,7 @@ void register_facade_tests(void)
     RUN_TEST(facade_import_matches_cli);
     RUN_TEST(facade_conflicts_matches_cli);
     RUN_TEST(facade_conflict_accept_matches_cli);
+    RUN_TEST(facade_repair_matches_cli);
     RUN_TEST(facade_device_matches_cli);
     RUN_TEST(facade_device_new_matches_cli);
 }

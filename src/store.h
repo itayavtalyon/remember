@@ -487,6 +487,14 @@ StoreStatus store_conflict_accept(Store *s, long long conflict_id, StoreConflict
                                   const char *now, Entry **out_entries, size_t *out_count);
 
 /*
+ * Rebuild the search index (E4.14). quick_check runs on the base tables first.
+ * A failure is STORE_ERR_SQLITE, class corrupt, fts_only false. Rebuild runs in
+ * one transaction, then integrity-check. *out_entries is COUNT(*) of entries,
+ * every bin. Never repairs on its own (E4.10).
+ */
+StoreStatus store_repair_search_index(Store *s, size_t *out_entries);
+
+/*
  * Test-only fault injection (compiled when REMEMBER_TEST_HOOKS is defined).
  * fail_after: number of successful allocs/prepares before the next fails;
  * use 0 to fail the immediate next call. Pass -1 to disable.

@@ -98,6 +98,7 @@ static const CommandEntry k_commands[] = {
     {.name = "device",
      .command = CLI_CMD_DEVICE,
      .summary = "Print the device id, or mint a new one"},
+    {.name = "repair", .command = CLI_CMD_REPAIR, .summary = "Rebuild the search index"},
 };
 
 enum { COMMAND_COUNT = (int)(sizeof(k_commands) / sizeof(k_commands[0])) };

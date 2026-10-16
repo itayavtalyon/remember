@@ -584,7 +584,137 @@ static void copy_sqlite_message(StoreError *out, const char *msg)
     out->sqlite_message[msg_n] = '\0';
 }
 
-static void capture_sqlite_error(sqlite3 *db, StoreError *out)
+static void snapshot_sqlite_error(sqlite3 *db, StoreError *out);
+
+/* E4.10: the failing statement touched the search index when its SQL names it. */
+static bool sql_names_entries_fts(const char *sql)
+{
+    if (sql == NULL) {
+        return false;
+    }
+    return strstr(sql, "entries_fts") != NULL;
+}
+
+static bool db_stmts_name_entries_fts(sqlite3 *db)
+{
+    sqlite3_stmt *stmt = NULL;
+
+    if (db == NULL) {
+        return false;
+    }
+    while ((stmt = sqlite3_next_stmt(db, stmt)) != NULL) {
+        if (sql_names_entries_fts(sqlite3_sql(stmt))) {
+            return true;
+        }
+    }
+    return false;
+}
+
+/* E4.10 base tables. The search index is not one of them. Names are fixed, so the
+   SQL is fixed too: nothing here is long enough to need a formatted buffer. */
+static const char *const k_base_checks[] = {
+    "PRAGMA quick_check(entries);",         "PRAGMA quick_check(entry_links);",
+    "PRAGMA quick_check(conflicts);",       "PRAGMA quick_check(settings);",
+    "PRAGMA quick_check(bucket_prefixes);",
+};
+
+/* A base-table check that did not return an engine code still reports corrupt. */
+static void assign_corrupt(StoreError *out, const char *message)
+{
+    if (out == NULL) {
+        return;
+    }
+    memset(out, 0, sizeof(*out));
+    out->error_class = STORE_ERROR_CORRUPT;
+    out->sqlite_code = SQLITE_CORRUPT;
+    out->sqlite_extended = SQLITE_CORRUPT;
+    (void)snprintf(out->sqlite_name, sizeof(out->sqlite_name), "SQLITE_CORRUPT");
+    copy_sqlite_message(out, message);
+}
+
+/* Keep the engine's code and message. A failed base-table check is corrupt, never fts_only. */
+static void record_engine_check_failure(sqlite3 *db, StoreError *fail)
+{
+    if (fail == NULL) {
+        return;
+    }
+    snapshot_sqlite_error(db, fail);
+    fail->error_class = STORE_ERROR_CORRUPT;
+    fail->fts_only = false;
+}
+
+/* One "ok" row means the table passed. Any other row, or a failed statement, does not.
+   fail NULL asks only for the bool; a non-NULL fail receives the corrupt error. */
+static int quick_check_table(sqlite3 *db, const char *sql, StoreError *fail)
+{
+    sqlite3_stmt *stmt = NULL;
+    char row_text[STORE_SQLITE_MSG_LEN];
+    int rc = 0;
+
+    row_text[0] = '\0';
+    rc = sqlite3_prepare_v2(db, sql, -1, &stmt, NULL);
+    if (rc == SQLITE_OK) {
+        rc = sqlite3_step(stmt);
+    }
+    if (rc == SQLITE_ROW) {
+        const char *text = (const char *)sqlite3_column_text(stmt, 0);
+
+        if (text != NULL && strcmp(text, "ok") == 0 && sqlite3_step(stmt) == SQLITE_DONE) {
+            (void)sqlite3_finalize(stmt);
+            return 0;
+        }
+        if (text != NULL) {
+            (void)snprintf(row_text, sizeof(row_text), "%s", text);
+        }
+    } else if (rc != SQLITE_DONE) {
+        record_engine_check_failure(db, fail);
+        (void)sqlite3_finalize(stmt);
+        return -1;
+    }
+    (void)sqlite3_finalize(stmt);
+    assign_corrupt(fail, row_text[0] != '\0' ? row_text : "database disk image is malformed");
+    return -1;
+}
+
+/* 0 when every base table is ok. fail receives the first corrupt error, or NULL to ignore it. */
+static int check_base_tables(sqlite3 *db, StoreError *fail)
+{
+    size_t i = 0;
+
+    for (i = 0; i < sizeof(k_base_checks) / sizeof(k_base_checks[0]); i++) {
+        if (quick_check_table(db, k_base_checks[i], fail) != 0) {
+            return -1;
+        }
+    }
+    return 0;
+}
+
+/* Check passes and the statement touched FTS, or the code is CORRUPT_VTAB. */
+static bool fts_only_for(int extended, bool touched, bool base_ok)
+{
+    if (extended == SQLITE_CORRUPT_VTAB) {
+        return true;
+    }
+    if (!base_ok) {
+        touched = false;
+    }
+    return touched;
+}
+
+static void note_corrupt_fts_only(sqlite3 *db, StoreError *out)
+{
+    bool touched = false;
+    bool base_ok = false;
+
+    if (out->error_class != STORE_ERROR_CORRUPT) {
+        return;
+    }
+    touched = db_stmts_name_entries_fts(db);
+    base_ok = check_base_tables(db, NULL) == 0;
+    out->fts_only = fts_only_for(out->sqlite_extended, touched, base_ok);
+}
+
+static void snapshot_sqlite_error(sqlite3 *db, StoreError *out)
 {
     const char *name = NULL;
 
@@ -610,6 +740,15 @@ static void capture_sqlite_error(sqlite3 *db, StoreError *out)
     out->sys_errno = sqlite3_system_errno(db);
     if (out->error_class == STORE_ERROR_CANNOT_OPEN) {
         out->reason = derive_reason(out->sqlite_extended, out->sys_errno);
+    }
+}
+
+static void capture_sqlite_error(sqlite3 *db, StoreError *out)
+{
+    snapshot_sqlite_error(db, out);
+    /* After the snapshot: quick_check is another SQLite call and would clobber it. */
+    if (out != NULL && db != NULL) {
+        note_corrupt_fts_only(db, out);
     }
 }
 
@@ -3468,6 +3607,60 @@ PageResult store_search(Store *s, const SearchQuery *q, const char *now)
         return (PageResult){.st = STORE_ERR_SQLITE};
     }
     return page;
+}
+
+static const char k_fts_rebuild_sql[] = "INSERT INTO entries_fts(entries_fts) VALUES('rebuild');";
+static const char k_fts_integrity_sql[] =
+    "INSERT INTO entries_fts(entries_fts) VALUES('integrity-check');";
+
+static StoreStatus count_all_entries(sqlite3 *db, size_t *out, StoreError *serr)
+{
+    sqlite3_stmt *stmt = NULL;
+    int rc = 0;
+
+    rc = sqlite3_prepare_v2(db, "SELECT COUNT(*) FROM entries;", -1, &stmt, NULL);
+    if (rc != SQLITE_OK) {
+        capture_sqlite_error(db, serr);
+        return STORE_ERR_SQLITE;
+    }
+    rc = sqlite3_step(stmt);
+    if (rc != SQLITE_ROW) {
+        capture_sqlite_error(db, serr);
+        (void)sqlite3_finalize(stmt);
+        return STORE_ERR_SQLITE;
+    }
+    *out = (size_t)sqlite3_column_int64(stmt, 0);
+    (void)sqlite3_finalize(stmt);
+    return STORE_OK;
+}
+
+/* E4.14: base tables first, rebuild in one transaction, then integrity-check. */
+StoreStatus store_repair_search_index(Store *s, size_t *out_entries)
+{
+    char err_unused[1];
+
+    if (s == NULL || s->db == NULL || out_entries == NULL) {
+        return STORE_ERR_INTERNAL;
+    }
+    memset(&s->last, 0, sizeof(s->last));
+    if (check_base_tables(s->db, &s->last) != 0) {
+        return STORE_ERR_SQLITE;
+    }
+    if (exec_sql(s->db, "BEGIN;", err_unused, 0U, &s->last) != 0) {
+        return STORE_ERR_SQLITE;
+    }
+    if (exec_sql(s->db, k_fts_rebuild_sql, err_unused, 0U, &s->last) != 0) {
+        rollback_quiet(s->db);
+        return STORE_ERR_SQLITE;
+    }
+    if (exec_sql(s->db, "COMMIT;", err_unused, 0U, &s->last) != 0) {
+        rollback_quiet(s->db);
+        return STORE_ERR_SQLITE;
+    }
+    if (exec_sql(s->db, k_fts_integrity_sql, err_unused, 0U, &s->last) != 0) {
+        return STORE_ERR_SQLITE;
+    }
+    return count_all_entries(s->db, out_entries, &s->last);
 }
 
 /* Remove FTS row for entry_id (no-op if already gone). */
