@@ -139,15 +139,16 @@ void err_msg(DiagCode code, const char *msg)
 
 void err_fmt(DiagCode code, const char *fmt, ...)
 {
-    /* va_list has no portable initializer. Measure, then write, each with its
-       own va_start. va_copy makes Linux clang-tidy treat the source list as
-       uninitialized at the first vsnprintf. */
+    /* va_list has no portable initializer. Measure, then write. Each pass
+       starts its own list: a va_list can be consumed only once. x86_64 clang
+       18 records va_start and vsnprintf on different regions. */
     /* NOLINTNEXTLINE(cppcoreguidelines-init-variables) */
     va_list vargs;
     int wrote = 0;
     char *buf = NULL;
 
     va_start(vargs, fmt);
+    /* NOLINTNEXTLINE(clang-analyzer-valist.Uninitialized) -- array va_list mismatch */
     wrote = vsnprintf(NULL, 0, fmt, vargs);
     va_end(vargs);
     if (wrote < 0) {
@@ -160,6 +161,7 @@ void err_fmt(DiagCode code, const char *fmt, ...)
         return;
     }
     va_start(vargs, fmt);
+    /* NOLINTNEXTLINE(clang-analyzer-valist.Uninitialized) -- array va_list mismatch */
     if (vsnprintf(buf, (size_t)wrote + 1U, fmt, vargs) != wrote) {
         err_msg(DIAG_INTERNAL, "internal error");
     } else {
