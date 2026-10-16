@@ -747,3 +747,13 @@ No new grill. No new `decision:*`. Help sentences use the existing help voice fo
 - The lint writes `/tmp/remember-*-leak.txt`, like its neighbors. A `mktemp` would be safer when two lint runs overlap.
 
 **Praise:** the facade tests lock bytes without touching production code, because `remember_run` and the CLI share one pipeline. The stage 6 two-tier repair still heals the page-damage cases.
+
+### 2026-10-16 — whole-plan deep review
+
+**Verdict:** approve. No open blocking item. No grill. No code change.
+
+**Ran, not read.** Probes on `build/remember` (ASan/UBSan, `REMEMBER_TEST_VFS=ON`): `--json-errors` usage is one line and exit 1; `get --key nope` is `not_found` exit 2; `--trash --deleted` writes `deprecated_flag` then `usage`; `--busy-timeout` 60001 / -1 / abc is `usage`; `--no-create` on a missing parent is `cannot_open` / `missing` and creates nothing; `repair search-index` on a missing path does the same; `repair` with no argument is `usage` and creates nothing; a directory is `is_directory` (errno 21); a text file is `not_a_database`; mode 444 then `add` is `read_only`; a held `BEGIN EXCLUSIVE` plus `--busy-timeout 500` is `busy` after 0.66 s with empty stdout; `REMEMBER_TEST_ENOSPC=1` is `disk_full`; a Dropbox path keeps `remember: warning: database path looks like a synced folder …`, and with `--json-errors` the warning line precedes `not_found`. `search editor` finds `pref:editor`. `search pref:editor` stays `database` (`no such column: pref`); that column-filter text is plan 18.
+
+**Simplify:** nothing to cut. The extended-name table, the seven-cause map, the two-tier repair, and the warning prefix are the locked contract. `store_status_plain` stays so a non-FTS failure is not passed through the FTS syntax heuristic.
+
+**Left:** the plan 22 help/README/SKILL nits from the FINAL review.
