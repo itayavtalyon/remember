@@ -519,6 +519,8 @@ const char *store_test_sqlite_name(int extended);
 StoreOpenReason store_test_derive_reason(int extended, int sys_errno);
 void store_test_copy_message(StoreError *out, const char *msg);
 void store_test_capture_null(StoreError *out);
+/* SQLITE_DBCONFIG_DEFENSIVE on s's connection: 1 on, 0 off, -1 for NULL. */
+int store_test_defensive(const Store *s);
 #endif
 
 #endif /* REMEMBER_STORE_H */

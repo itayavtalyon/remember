@@ -667,3 +667,30 @@ No new grill. No new `decision:*`. Help for `--json-errors`, `--busy-timeout`, a
 **Left for later:** stage 7 is help for `--json-errors`, `--busy-timeout`, and `--no-create`, plus SKILL.md, What's New, the QUALITY shim paragraph, COVERAGE, gate-suites, and 006 Implementation Results. The repair command topic is already in this stage.
 
 **Praise:** a damaged index says `fts_only` true and names `repair search-index`. A damaged base table stays the old corrupt line, and repair refuses it.
+
+### 2026-10-16 — second-opinion deep review (stage 6)
+
+**Verdict:** stage 6 approved after two grill-decided changes. No open blocking item.
+
+**Run, not read.** Gate (`-DREMEMBER_TEST_VFS=ON`): ctest (ASan/UBSan), LINT OK, coverage 100% functions and 100% effective lines, `leaks-macos` PASS, `ci-linux.sh` OK. Damage probes on a 40-memory brain (page-level = the table's root page zeroed with `dd`):
+
+| Damage | Before this review | After |
+|--------|--------------------|-------|
+| logical, `entries_fts_data` block (the coder's test) | search `fts_only` true; repair `rebuilt 40` | same (fast path) |
+| page, `entries_fts_data` | repair failed: "brain file is damaged" | repair heals (`rebuilt N`, search works, `integrity_check` ok) |
+| page, `entries_fts_content` | repair failed **and** said "Run `remember repair search-index`", a loop | repair heals |
+| page, `tags` | search `fts_only` true, "Your memories are not affected"; repair "rebuilt 40" while `list` stayed corrupt | search `corrupt`, `fts_only` false, "brain file is damaged"; repair refuses |
+| page, `entries` / truncated brain | repair refuses | unchanged |
+
+**Grill (Itay 2026-10-16):**
+
+1. **`tags` and `entry_tags` join the base check (amends E4.10).** Seven tables now: `entries`, `tags`, `entry_tags`, `entry_links`, `conflicts`, `settings`, `bucket_prefixes`. Tags are memories, not index.
+2. **Repair fixes whatever it can (amends E4.14).** My first proposal, DROP + repopulate, failed on page damage: DROP must free the damaged pages, exactly like FTS5 `'rebuild'`, and it even broke the index-page case. I reported that and re-asked, and Itay answered "do whatever it can to fix the damage, and do it now." Repair is now two-tier after the base check. (a) The `'rebuild'` fast path plus integrity-check handles logical damage. (b) If that fails, `replace_damaged_fts`: in one `BEGIN IMMEDIATE`, `writable_schema` unlinks `entries_fts` and its shadow tables from `sqlite_schema` without touching their pages, `writable_schema = RESET` reloads the schema, then the shared `K_FTS_SQL` and `repopulate_fts` rebuild the index from `entries` with the Hebrew fold, then COMMIT, `VACUUM` (drops the orphaned pages), and integrity-check. A failure rolls back and reloads the schema. (c) If both fail, `fts_only` is forced false, so the message is the base "brain file is damaged… export / restore" line and never sends the user back to repair. The surgery runs only after the seven base tables pass `quick_check`, so only index pages are abandoned. The sequence was prototyped in the `sqlite3` CLI on both page-damage cases before it was written in C.
+
+New tests: `cli_repair_heals_page_damaged_fts_data`, `cli_repair_heals_page_damaged_fts_content`, `cli_damaged_tags_is_brain_damage_not_fts_only`. `smash_entries_root` is generalized to `smash_root(db, name)`.
+
+3. **Defensive mode on (Itay 2026-10-16).** `SQLITE_DBCONFIG_DEFENSIVE` was off (SQLite's default). Every store connection now turns it on first, in `apply_pragmas` via `set_defensive`, so plain SQL on the connection cannot corrupt the file: no `writable_schema`, no `schema_version` writes, no `journal_mode=OFF`, no shadow-table writes. Repair's surgery is the one deliberate exception. It lifts defensive mode just around the schema unlink, including the rollback / `RESET` failure path, and turns it back on before `VACUUM`. The new `store_connection_is_defensive_before_and_after_repair` checks the live setting via `store_test_defensive` after open and after a surgery repair. Mutation-checked: without the lift, the page-damage heal fails because defensive mode refuses `writable_schema`, which proves the mode is really on.
+
+**Coverage follow-up:** coverage flagged the both-tiers-fail path. The new shim test `cli_repair_that_cannot_write_never_points_back_at_repair` (page-damaged index plus `REMEMBER_TEST_FAIL_WRITE=0`) checks exit 1, no "repair search-index" in the message, that the brain still opens afterwards (the surgery rolled back with the schema reloaded and defensive mode restored), and that a later repair without the fault heals it. The shim-off SKIP line no longer hard-codes a test count; it had already drifted to 8 when there are 9.
+
+**Praise:** `fts_only` is decided in the adapter right after the snapshot, before `quick_check` can clobber it. A failed engine call during the check keeps the engine's code and still reads as corrupt.

@@ -2454,7 +2454,10 @@ TEST(cli_repair_counts_deleted_entries)
 }
 
 /* Zero the entries root page. The file still opens; quick_check does not pass. */
-static int smash_entries_root(const char *db)
+/* Zero the root page of one table: page-level damage, not a bad value.
+   db then name: the brain file, then the table whose root page is zeroed. */
+// NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
+static int smash_root(const char *db, const char *name)
 {
     sqlite3 *sql = NULL;
     sqlite3_stmt *stmt = NULL;
@@ -2468,8 +2471,9 @@ static int smash_entries_root(const char *db)
         sqlite3_close(sql);
         return -1;
     }
-    if (sqlite3_prepare_v2(sql, "SELECT rootpage FROM sqlite_master WHERE name = 'entries';", -1,
-                           &stmt, NULL) != SQLITE_OK ||
+    if (sqlite3_prepare_v2(sql, "SELECT rootpage FROM sqlite_master WHERE name = ?1;", -1, &stmt,
+                           NULL) != SQLITE_OK ||
+        sqlite3_bind_text(stmt, 1, name, -1, SQLITE_STATIC) != SQLITE_OK ||
         sqlite3_step(stmt) != SQLITE_ROW) {
         sqlite3_finalize(stmt);
         sqlite3_close(sql);
@@ -2529,7 +2533,7 @@ TEST(cli_repair_refuses_damaged_base_table)
     r = run_remember(db, seed, sizeof(seed) / sizeof(seed[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 0);
     cmd_result_free(&r);
-    ASSERT_EQ_INT(smash_entries_root(db), 0);
+    ASSERT_EQ_INT(smash_root(db, "entries"), 0);
     r = run_remember(db, repair, sizeof(repair) / sizeof(repair[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 1);
     ASSERT_STREQ(r.out, "");
@@ -2554,6 +2558,124 @@ TEST(cli_repair_refuses_damaged_base_table)
 }
 
 /* E4.14: a truncated brain cannot pass quick_check. Repair refuses; it does not rebuild. */
+/* Itay 2026-10-16: repair heals page-level damage in an FTS shadow table too
+   ('rebuild' and DROP both fail there). Search works and the file checks clean. */
+static void expect_repair_heals(const char *shadow)
+{
+    char *db = make_temp_db_path();
+    const char *seed[] = {"add", "alpha seed memory"};
+    const char *seed2[] = {"add", "--tag", "beta", "second alpha"};
+    const char *repair[] = {"--json", "repair", "search-index"};
+    const char *search[] = {"--json", "search", "alpha"};
+    CmdResult r;
+    char *check = NULL;
+
+    ASSERT_TRUE(db != NULL);
+    if (db == NULL) {
+        return;
+    }
+    r = run_remember(db, seed, sizeof(seed) / sizeof(seed[0]), NULL);
+    ASSERT_EQ_INT(r.exit_code, 0);
+    cmd_result_free(&r);
+    r = run_remember(db, seed2, sizeof(seed2) / sizeof(seed2[0]), NULL);
+    ASSERT_EQ_INT(r.exit_code, 0);
+    cmd_result_free(&r);
+    ASSERT_EQ_INT(smash_root(db, shadow), 0);
+    r = run_remember(db, repair, sizeof(repair) / sizeof(repair[0]), NULL);
+    ASSERT_EQ_INT(r.exit_code, 0);
+    ASSERT_STREQ(r.err, "");
+    ASSERT_STREQ(r.out, "{\"version\":1,\"action\":\"rebuilt\",\"entries\":2}\n");
+    cmd_result_free(&r);
+    r = run_remember(db, search, sizeof(search) / sizeof(search[0]), NULL);
+    ASSERT_EQ_INT(r.exit_code, 0);
+    ASSERT_STR_CONTAINS(r.out, "\"total\":2");
+    cmd_result_free(&r);
+    check = harness_sqlite_query_line(db, "PRAGMA integrity_check;");
+    ASSERT_STREQ(check != NULL ? check : "", "ok");
+    free(check);
+    free(db);
+}
+
+TEST(cli_repair_heals_page_damaged_fts_data)
+{
+    expect_repair_heals("entries_fts_data");
+}
+
+TEST(cli_repair_heals_page_damaged_fts_content)
+{
+    expect_repair_heals("entries_fts_content");
+}
+
+/* Itay 2026-10-16: tags are memories, not index. Damage there is the base line,
+   fts_only false, and repair refuses instead of claiming success. */
+TEST(cli_damaged_tags_is_brain_damage_not_fts_only)
+{
+    char *db = make_temp_db_path();
+    const char *seed[] = {"add", "--tag", "beta", "alpha seed memory"};
+    const char *search[] = {"--json-errors", "search", "alpha"};
+    const char *repair[] = {"--json-errors", "repair", "search-index"};
+    CmdResult r;
+
+    ASSERT_TRUE(db != NULL);
+    if (db == NULL) {
+        return;
+    }
+    r = run_remember(db, seed, sizeof(seed) / sizeof(seed[0]), NULL);
+    ASSERT_EQ_INT(r.exit_code, 0);
+    cmd_result_free(&r);
+    ASSERT_EQ_INT(smash_root(db, "tags"), 0);
+    r = run_remember(db, search, sizeof(search) / sizeof(search[0]), NULL);
+    ASSERT_EQ_INT(r.exit_code, 1);
+    ASSERT_STR_CONTAINS(r.err, "\"code\":\"corrupt\"");
+    ASSERT_STR_CONTAINS(r.err, "\"fts_only\":false");
+    cmd_result_free(&r);
+    r = run_remember(db, repair, sizeof(repair) / sizeof(repair[0]), NULL);
+    ASSERT_EQ_INT(r.exit_code, 1);
+    ASSERT_STREQ(r.out, "");
+    ASSERT_STR_CONTAINS(r.err, "the brain file is damaged");
+    ASSERT_STR_CONTAINS(r.err, "\"fts_only\":false");
+    cmd_result_free(&r);
+    free(db);
+}
+
+#ifdef REMEMBER_TEST_HOOKS
+/* Itay 2026-10-16: every store connection is defensive, and repair's schema
+   surgery (page-damaged FTS) leaves it defensive again. */
+TEST(store_connection_is_defensive_before_and_after_repair)
+{
+    char *db = make_temp_db_path();
+    char err[ERR_BUFSIZE];
+    Store *s = NULL;
+    Entry e;
+    StoreAddAction act = STORE_ADD_CREATED;
+    size_t entries = 0U;
+
+    ASSERT_TRUE(db != NULL);
+    if (db == NULL) {
+        return;
+    }
+    s = store_open(db, err, sizeof(err));
+    ASSERT_TRUE(s != NULL);
+    ASSERT_EQ_INT(store_test_defensive(s), 1);
+    memset(&e, 0, sizeof(e));
+    ASSERT_EQ_STATUS(store_add(s, "alpha",
+                               "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                               NULL, NULL, 0U, "human", NULL, "2026-06-15T12:00:00.000Z", &act, &e),
+                     STORE_OK);
+    store_entry_free(&e);
+    store_close(s);
+    ASSERT_EQ_INT(smash_root(db, "entries_fts_data"), 0);
+    s = store_open(db, err, sizeof(err));
+    ASSERT_TRUE(s != NULL);
+    ASSERT_EQ_STATUS(store_repair_search_index(s, &entries), STORE_OK);
+    ASSERT_TRUE(entries == 1U);
+    ASSERT_EQ_INT(store_test_defensive(s), 1);
+    store_close(s);
+    ASSERT_EQ_INT(store_test_defensive(NULL), -1);
+    free(db);
+}
+#endif
+
 TEST(cli_repair_refuses_truncated_brain)
 {
     static const char *const k_plain =
@@ -2624,7 +2746,7 @@ TEST(cli_search_on_damaged_base_is_not_fts_only)
     r = run_remember(db, seed, sizeof(seed) / sizeof(seed[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 0);
     cmd_result_free(&r);
-    ASSERT_EQ_INT(smash_entries_root(db), 0);
+    ASSERT_EQ_INT(smash_root(db, "entries"), 0);
     r = run_remember(db, search, sizeof(search) / sizeof(search[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 1);
     ASSERT_STREQ(r.out, "");
@@ -2907,6 +3029,45 @@ TEST(cli_fail_read_shim_reports_io_error)
 /* E4.14: a read fault during the base-table check is still corrupt, and the engine
    name stays the I/O error. Open of a seeded brain completes two reads; the next
    one is inside quick_check (observed on the vendored SQLite). */
+/* Both repair tiers fail (every write fails): the message never sends the user
+   back to repair, the failed surgery leaves a brain that still opens, and a
+   later repair without the fault heals the page-damaged index. */
+TEST(cli_repair_that_cannot_write_never_points_back_at_repair)
+{
+    char *db = make_temp_db_path();
+    const char *seed[] = {"add", "alpha seed memory"};
+    const char *repair[] = {"repair", "search-index"};
+    const char *list[] = {"list"};
+    CmdResult r;
+
+    ASSERT_TRUE(db != NULL);
+    if (db == NULL) {
+        return;
+    }
+    r = run_remember(db, seed, sizeof(seed) / sizeof(seed[0]), NULL);
+    ASSERT_EQ_INT(r.exit_code, 0);
+    cmd_result_free(&r);
+    ASSERT_EQ_INT(smash_root(db, "entries_fts_data"), 0);
+
+    ASSERT_EQ_INT(setenv("REMEMBER_TEST_FAIL_WRITE", "0", 1), 0);
+    r = run_remember(db, repair, sizeof(repair) / sizeof(repair[0]), NULL);
+    ASSERT_EQ_INT(unsetenv("REMEMBER_TEST_FAIL_WRITE"), 0);
+    ASSERT_EQ_INT(r.exit_code, 1);
+    ASSERT_STREQ(r.out, "");
+    ASSERT_TRUE(strstr(r.err, "repair search-index") == NULL);
+    cmd_result_free(&r);
+
+    r = run_remember(db, list, sizeof(list) / sizeof(list[0]), NULL);
+    ASSERT_EQ_INT(r.exit_code, 0);
+    ASSERT_STR_CONTAINS(r.out, "alpha seed memory");
+    cmd_result_free(&r);
+    r = run_remember(db, repair, sizeof(repair) / sizeof(repair[0]), NULL);
+    ASSERT_EQ_INT(r.exit_code, 0);
+    ASSERT_STREQ(r.out, "rebuilt 1\n");
+    cmd_result_free(&r);
+    free(db);
+}
+
 TEST(cli_repair_read_fault_during_check_is_corrupt)
 {
     static const char *const k_plain =
@@ -3456,6 +3617,12 @@ void register_errors_tests(void)
     RUN_TEST(cli_repair_search_index_human_rebuilt);
     RUN_TEST(cli_repair_counts_deleted_entries);
     RUN_TEST(cli_repair_refuses_damaged_base_table);
+    RUN_TEST(cli_repair_heals_page_damaged_fts_data);
+    RUN_TEST(cli_repair_heals_page_damaged_fts_content);
+    RUN_TEST(cli_damaged_tags_is_brain_damage_not_fts_only);
+#ifdef REMEMBER_TEST_HOOKS
+    RUN_TEST(store_connection_is_defensive_before_and_after_repair);
+#endif
     RUN_TEST(cli_repair_refuses_truncated_brain);
     RUN_TEST(cli_search_on_damaged_base_is_not_fts_only);
     RUN_TEST(cli_repair_usage_is_search_index);
@@ -3467,11 +3634,12 @@ void register_errors_tests(void)
     RUN_TEST(cli_fail_write_budget_lets_an_add_finish);
     RUN_TEST(cli_fail_read_shim_reports_io_error);
     RUN_TEST(cli_repair_read_fault_during_check_is_corrupt);
+    RUN_TEST(cli_repair_that_cannot_write_never_points_back_at_repair);
     RUN_TEST(cli_fail_read_budget_lets_a_list_finish);
     RUN_TEST(cli_nomem_shim_reports_database);
     RUN_TEST(cli_nomem_shim_fails_a_list);
 #else
-    (void)printf("SKIP 8 VFS shim tests (remember built without REMEMBER_TEST_VFS)\n");
+    (void)printf("SKIP the VFS shim tests (remember built without REMEMBER_TEST_VFS)\n");
 #endif
     RUN_TEST(sqlite_out_of_range_reason_falls_back_to_other);
     RUN_TEST(err_store_sqlite_misuse_and_clean_store_fall_back);

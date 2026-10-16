@@ -612,8 +612,11 @@ static bool db_stmts_name_entries_fts(sqlite3 *db)
 
 /* E4.10 base tables. The search index is not one of them. Names are fixed, so the
    SQL is fixed too: nothing here is long enough to need a formatted buffer. */
+/* tags and entry_tags too (Itay 2026-10-16, amends E4.10): they are memories,
+   not index, so damage there must never read as fts_only. */
 static const char *const k_base_checks[] = {
-    "PRAGMA quick_check(entries);",         "PRAGMA quick_check(entry_links);",
+    "PRAGMA quick_check(entries);",         "PRAGMA quick_check(tags);",
+    "PRAGMA quick_check(entry_tags);",      "PRAGMA quick_check(entry_links);",
     "PRAGMA quick_check(conflicts);",       "PRAGMA quick_check(settings);",
     "PRAGMA quick_check(bucket_prefixes);",
 };
@@ -788,6 +791,17 @@ void store_test_copy_message(StoreError *out, const char *msg)
     copy_sqlite_message(out, msg);
 }
 
+int store_test_defensive(const Store *s)
+{
+    int enabled = -1;
+
+    if (s == NULL || s->db == NULL) {
+        return -1;
+    }
+    (void)sqlite3_db_config(s->db, SQLITE_DBCONFIG_DEFENSIVE, -1, &enabled);
+    return enabled;
+}
+
 void store_test_capture_null(StoreError *out)
 {
     capture_sqlite_error(NULL, out);
@@ -891,11 +905,29 @@ static int read_user_version(sqlite3 *db, int *out, char *err, size_t errlen, St
 enum { BUSY_TIMEOUT_SQL_CAP = 64 };
 
 // NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
+/* Defensive mode (Itay 2026-10-16): plain SQL on this connection cannot
+   corrupt the file (writable_schema, schema_version writes,
+   journal_mode=OFF, writes to virtual-table shadow tables). On for every
+   connection; only repair's schema surgery lifts it, briefly. */
+// NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
+static int set_defensive(sqlite3 *db, int enable, char *err, size_t errlen, StoreError *serr)
+{
+    if (sqlite3_db_config(db, SQLITE_DBCONFIG_DEFENSIVE, enable, (int *)NULL) != SQLITE_OK) {
+        capture_sqlite_error(db, serr);
+        set_errf(err, errlen, "sqlite", sqlite3_errmsg(db));
+        return -1;
+    }
+    return 0;
+}
+
 static int apply_pragmas(sqlite3 *db, int busy_timeout_ms, char *err, size_t errlen,
                          StoreError *serr)
 {
     char timeout_sql[BUSY_TIMEOUT_SQL_CAP];
 
+    if (set_defensive(db, 1, err, errlen, serr) != 0) {
+        return -1;
+    }
     if (exec_sql(db, "PRAGMA foreign_keys = ON;", err, errlen, serr) != 0) {
         return -1;
     }
@@ -3634,11 +3666,65 @@ static StoreStatus count_all_entries(sqlite3 *db, size_t *out, StoreError *serr)
     return STORE_OK;
 }
 
-/* E4.14: base tables first, rebuild in one transaction, then integrity-check. */
-StoreStatus store_repair_search_index(Store *s, size_t *out_entries)
+/* Fast path: FTS5 'rebuild' in one transaction, then integrity-check (E4.14).
+   Fixes logical damage; page-level damage makes it fail (it frees those pages). */
+static int rebuild_in_place(sqlite3 *db, StoreError *serr)
 {
     char err_unused[1];
 
+    if (exec_sql(db, "BEGIN;", err_unused, 0U, serr) != 0) {
+        return -1;
+    }
+    if (exec_sql(db, k_fts_rebuild_sql, err_unused, 0U, serr) != 0 ||
+        exec_sql(db, "COMMIT;", err_unused, 0U, serr) != 0) {
+        rollback_quiet(db);
+        return -1;
+    }
+    return exec_sql(db, k_fts_integrity_sql, err_unused, 0U, serr);
+}
+
+/* Page-level damage in an FTS shadow table defeats 'rebuild' and DROP alike:
+   both must free the damaged pages. The base tables already passed
+   quick_check, so unlink the index from the schema without touching its
+   pages, recreate it from entries (Hebrew fold) in the same transaction, then
+   VACUUM away the orphaned pages (Itay 2026-10-16: repair fixes whatever it
+   can). */
+static int replace_damaged_fts(sqlite3 *db, StoreError *serr)
+{
+    static const char unlink_sql[] = "PRAGMA writable_schema = ON;"
+                                     "DELETE FROM sqlite_schema WHERE tbl_name = 'entries_fts' OR "
+                                     "tbl_name LIKE 'entries\\_fts\\_%' ESCAPE '\\';"
+                                     "PRAGMA writable_schema = RESET;";
+    char err_unused[1];
+
+    /* writable_schema needs defensive mode off; it is back on before VACUUM. */
+    if (set_defensive(db, 0, err_unused, 0U, serr) != 0) {
+        return -1;
+    }
+    if (exec_sql(db, "BEGIN IMMEDIATE;", err_unused, 0U, serr) != 0 ||
+        exec_sql(db, unlink_sql, err_unused, 0U, serr) != 0 ||
+        exec_sql(db, K_FTS_SQL, err_unused, 0U, serr) != 0 ||
+        repopulate_fts(db, err_unused, 0U, serr) != 0 ||
+        exec_sql(db, "COMMIT;", err_unused, 0U, serr) != 0) {
+        rollback_quiet(db);
+        /* The schema was reloaded mid-transaction; reload the rolled-back one. */
+        (void)sqlite3_exec(db, "PRAGMA writable_schema = RESET;", NULL, NULL, NULL);
+        (void)set_defensive(db, 1, err_unused, 0U, NULL);
+        return -1;
+    }
+    if (set_defensive(db, 1, err_unused, 0U, serr) != 0) {
+        return -1;
+    }
+    if (exec_sql(db, "VACUUM;", err_unused, 0U, serr) != 0) {
+        return -1;
+    }
+    return exec_sql(db, k_fts_integrity_sql, err_unused, 0U, serr);
+}
+
+/* E4.14: base tables first (refuse on base damage), then the 'rebuild' fast
+   path, then the schema-surgery rebuild for page-level index damage. */
+StoreStatus store_repair_search_index(Store *s, size_t *out_entries)
+{
     if (s == NULL || s->db == NULL || out_entries == NULL) {
         return STORE_ERR_INTERNAL;
     }
@@ -3646,20 +3732,12 @@ StoreStatus store_repair_search_index(Store *s, size_t *out_entries)
     if (check_base_tables(s->db, &s->last) != 0) {
         return STORE_ERR_SQLITE;
     }
-    if (exec_sql(s->db, "BEGIN;", err_unused, 0U, &s->last) != 0) {
+    if (rebuild_in_place(s->db, &s->last) != 0 && replace_damaged_fts(s->db, &s->last) != 0) {
+        /* Repair could not fix it: never point the user back at repair. */
+        s->last.fts_only = false;
         return STORE_ERR_SQLITE;
     }
-    if (exec_sql(s->db, k_fts_rebuild_sql, err_unused, 0U, &s->last) != 0) {
-        rollback_quiet(s->db);
-        return STORE_ERR_SQLITE;
-    }
-    if (exec_sql(s->db, "COMMIT;", err_unused, 0U, &s->last) != 0) {
-        rollback_quiet(s->db);
-        return STORE_ERR_SQLITE;
-    }
-    if (exec_sql(s->db, k_fts_integrity_sql, err_unused, 0U, &s->last) != 0) {
-        return STORE_ERR_SQLITE;
-    }
+    memset(&s->last, 0, sizeof(s->last));
     return count_all_entries(s->db, out_entries, &s->last);
 }
 
