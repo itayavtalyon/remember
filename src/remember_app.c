@@ -3,6 +3,8 @@
 #include "appio.h"
 #include "cli.h"
 #include "commands.h"
+#include "commands_common.h"
+#include "diag.h"
 #include "exit_codes.h"
 #include "store.h"
 #include "util.h"
@@ -24,11 +26,13 @@ static void print_general_help(void)
     static const char help[] = "remember - local personal memory (SQLite + FTS5)\n"
                                "\n"
                                "Usage:\n"
-                               "  remember [--db PATH] [--json] <command> [options] [args]\n"
+                               "  remember [--db PATH] [--json] [--json-errors] "
+                               "[--busy-timeout MS] [--no-create] <command> [options] [args]\n"
                                "\n"
                                "Commands:\n"
                                "  add       Store a memory (optional --key, --tag, --source)\n"
                                "  search    Full-text search\n"
+                               "  repair    Rebuild the search index\n"
                                "  list      List memories with filters\n"
                                "  get       Fetch one entry by id, --key, or --sync-id\n"
                                "  update    Change body and/or tags by id, --key, or --sync-id\n"
@@ -52,10 +56,13 @@ static void print_general_help(void)
                                "Device id lives next to the DB as <path>.device_id.\n"
                                "\n"
                                "Global options (allowed before or after the command):\n"
-                               "  --db PATH   Database file (overrides REMEMBER_DB)\n"
-                               "  --json      Machine-readable JSON on stdout\n"
-                               "  --help, -h  Show help\n"
-                               "  --version   Show version\n"
+                               "  --db PATH          Database file (overrides REMEMBER_DB)\n"
+                               "  --json             Machine-readable JSON on stdout\n"
+                               "  --json-errors      JSON errors and warnings on stderr\n"
+                               "  --busy-timeout MS  Lock wait in ms (0..60000, default 5000)\n"
+                               "  --no-create        Do not create a missing brain file\n"
+                               "  --help, -h         Show help\n"
+                               "  --version          Show version\n"
                                "\n"
                                "Exit codes:\n"
                                "  0  success (including empty search/list)\n"
@@ -250,6 +257,16 @@ static void print_command_help(CliCommand topic)
         (void)fprintf(out,
                       "both remints sync_id on concurrent_vv; clash keeps incoming sync_id.\n");
         (void)fprintf(out, "\n");
+    } else if (topic == CLI_CMD_REPAIR) {
+        (void)fprintf(out, "Rebuilds the search index after the index itself is damaged.\n");
+        (void)fprintf(out, "  remember repair search-index\n");
+        (void)fprintf(out, "\n");
+        (void)fprintf(out, "Refuses when a base table fails its check.\n");
+        (void)fprintf(out, "A missing brain fails with cannot_open. Repair creates nothing.\n");
+        (void)fprintf(out, "Human stdout: rebuilt N\n");
+        (void)fprintf(out, "JSON: {\"version\":1,\"action\":\"rebuilt\",\"entries\":N}\n");
+        (void)fprintf(out, "N is the number of rows in entries, in every bin.\n");
+        (void)fprintf(out, "\n");
     } else if (topic == CLI_CMD_DEVICE) {
         (void)fprintf(out, "Prints the sidecar device id.\n");
         (void)fprintf(out, "  remember device\n");
@@ -262,36 +279,54 @@ static void print_command_help(CliCommand topic)
         (void)fprintf(out, "JSON adds \"previous\", the id it replaced.\n");
         (void)fprintf(out, "\n");
     }
-    (void)fprintf(out, "Global options: --db PATH, --json, --help, --version\n");
+    (void)fprintf(out, "Global options: --db PATH, --json, --json-errors, "
+                       "--busy-timeout MS, --no-create, --help, --version\n");
     (void)fprintf(out, "See also: remember --help\n");
+}
+
+static DiagCode code_for_cli_error(CliError err)
+{
+    switch (err) {
+    case CLI_ERR_MISSING_COMMAND:
+    case CLI_ERR_UNKNOWN_COMMAND:
+    case CLI_ERR_UNKNOWN_OPTION:
+    case CLI_ERR_MISSING_OPTION_VALUE:
+    case CLI_ERR_INVALID_BUSY_TIMEOUT:
+        return DIAG_USAGE;
+    case CLI_ERR_OK:
+    case CLI_ERR_INTERNAL:
+    default:
+        return DIAG_INTERNAL;
+    }
 }
 
 static void print_parse_error(const CliArgs *args)
 {
-    FILE *err = app_err();
     const char *base = cli_error_message(args->error);
+    DiagCode code = code_for_cli_error(args->error);
 
     switch (args->error) {
     case CLI_ERR_UNKNOWN_COMMAND:
     case CLI_ERR_UNKNOWN_OPTION:
         if (args->error_arg != NULL) {
-            (void)fprintf(err, "remember: %s '%s'\n", base, args->error_arg);
+            err_fmt(code, "%s '%s'", base, args->error_arg);
             return;
         }
         break;
     case CLI_ERR_MISSING_OPTION_VALUE:
         if (args->error_option != NULL) {
-            (void)fprintf(err, "remember: %s: %s\n", args->error_option, base);
+            err_fmt(code, "%s: %s", args->error_option, base);
             return;
         }
         break;
     case CLI_ERR_OK:
     case CLI_ERR_MISSING_COMMAND:
+    case CLI_ERR_INVALID_BUSY_TIMEOUT:
     case CLI_ERR_INTERNAL:
     default:
         break;
     }
-    (void)fprintf(err, "remember: %s\n", base);
+    err_msg(code, base);
 }
 
 /* Resolve path, optional sync-path warning, then open. Store stays path-pure. */
@@ -300,27 +335,48 @@ static Store *open_store(const CliArgs *args, int *out_rc)
     enum { ERR_BUFSIZE = 256 }; /* store_open error-message buffer */
     char path[REMEMBER_PATH_MAX];
     char err[ERR_BUFSIZE];
+    StoreError detail;
+    /* Omitted --busy-timeout keeps the store default. Zero is a real value. */
+    StoreOpenOpts opts = {.busy_timeout_ms = STORE_DEFAULT_BUSY_TIMEOUT_MS};
     Store *s = NULL;
 
     err[0] = '\0';
     if (util_resolve_db_path(args->globals.db_path, path, sizeof(path), err, sizeof(err)) != 0) {
-        (void)fprintf(app_err(), "remember: %s\n", err[0] != '\0' ? err : "invalid database path");
+        const char *msg = err[0] != '\0' ? err : "invalid database path";
+
+        err_msg(code_for_store_text(msg), msg);
         *out_rc = REMEMBER_ERR;
         return NULL;
     }
     /* Warn only: synced volumes can corrupt any journal mode; still open. */
     if (util_path_looks_synced(path)) {
-        (void)fprintf(app_err(),
-                      "remember: warning: database path looks like a synced folder "
-                      "(iCloud/Dropbox/Google Drive); corruption risk - prefer a local disk\n");
+        (void)diag_warning(DIAG_WARN_SYNCED_FOLDER,
+                           "database path looks like a synced folder "
+                           "(iCloud/Dropbox/Google Drive); corruption risk - prefer a local disk");
+    }
+    if (args->globals.busy_timeout_set) {
+        opts.busy_timeout_ms = args->globals.busy_timeout_ms;
+    }
+    opts.no_create = args->globals.no_create;
+    /* Repair never creates a brain (decision:plan16-repair-no-create). */
+    if (args->command == CLI_CMD_REPAIR) {
+        opts.no_create = true;
     }
     if (args->command == CLI_CMD_DEVICE && cmd_device_mints(args->rest_argc, args->rest_argv)) {
-        s = store_open_replacing_sidecar(path, err, sizeof(err));
-    } else {
-        s = store_open(path, err, sizeof(err));
+        opts.replace_invalid_sidecar = true;
     }
+    s = store_open_opts(path, &opts, err, sizeof(err), &detail);
     if (s == NULL) {
-        (void)fprintf(app_err(), "remember: %s\n", err[0] != '\0' ? err : "cannot open database");
+        /* A captured SQLite failure takes the E4.8 line; mkdir, sidecar and
+           version failures keep their stage 2 code and text (no SQLite cause
+           exists, so detail is the zero value). */
+        if (detail.error_class != STORE_ERROR_NONE) {
+            err_store_sqlite(&detail, path);
+        } else {
+            const char *msg = err[0] != '\0' ? err : "cannot open database";
+
+            err_msg(code_for_store_text(msg), msg);
+        }
         *out_rc = REMEMBER_ERR;
         return NULL;
     }
@@ -395,16 +451,21 @@ static int run(const CliArgs *args)
         return run_with_store(args, cmd_conflict);
     case CLI_CMD_DEVICE:
         return run_with_store(args, cmd_device);
+    case CLI_CMD_REPAIR:
+        if (cmd_repair_reject_args(args->rest_argc, args->rest_argv) != 0) {
+            return REMEMBER_ERR;
+        }
+        return run_with_store(args, cmd_repair);
     case CLI_CMD_NONE:
         /* Defensive: parse should set CLI_ERR_MISSING_COMMAND first. */
-        (void)fprintf(app_err(), "remember: %s\n", cli_error_message(CLI_ERR_MISSING_COMMAND));
+        err_msg(DIAG_USAGE, cli_error_message(CLI_ERR_MISSING_COMMAND));
         return REMEMBER_ERR;
     case CLI_CMD_UNKNOWN:
         /* Defensive: parse should set CLI_ERR_UNKNOWN_COMMAND first. */
-        (void)fprintf(app_err(), "remember: %s\n", cli_error_message(CLI_ERR_UNKNOWN_COMMAND));
+        err_msg(DIAG_USAGE, cli_error_message(CLI_ERR_UNKNOWN_COMMAND));
         return REMEMBER_ERR;
     default:
-        (void)fprintf(app_err(), "remember: internal error\n");
+        err_msg(DIAG_INTERNAL, "internal error");
         return REMEMBER_ERR;
     }
 }
@@ -418,7 +479,9 @@ int remember_run(int argc, char *const *argv, FILE *out, FILE *err)
 
     app_set_streams((AppStreams){.out = out, .err = err});
     cli_parse(argc, argv, &args);
+    diag_set_json_errors(args.globals.json_errors);
     rc = run(&args);
+    diag_set_json_errors(false);
     cli_args_free(&args);
     app_set_streams((AppStreams){.out = NULL, .err = NULL});
     return rc;

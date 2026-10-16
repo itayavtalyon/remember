@@ -20,12 +20,16 @@ option(REMEMBER_ENABLE_COVERAGE "Clang -fprofile-instr-generate/-fcoverage-mappi
 # Fault-injection hooks in store_sqlite (malloc/prepare). On for coverage builds
 # and Debug unit tests so OOM/SQLite-error lines are reachable.
 option(REMEMBER_TEST_HOOKS "Enable store_test_fail_* hooks in store_sqlite.c" OFF)
+# X-E02 / P3. Default OFF. Release forces it off even if the cache asks.
+# remember_plain and remember_core never compile the shim.
+option(REMEMBER_TEST_VFS "Compile the test-only failing SQLite VFS into the remember CLI" OFF)
 if(REMEMBER_ENABLE_COVERAGE)
     set(REMEMBER_TEST_HOOKS ON)
 endif()
 
 if(CMAKE_BUILD_TYPE STREQUAL "Release")
     set(REMEMBER_ENABLE_SANITIZERS OFF)
+    set(REMEMBER_TEST_VFS OFF)
 endif()
 if(REMEMBER_ENABLE_COVERAGE AND REMEMBER_ENABLE_SANITIZERS)
     message(WARNING "REMEMBER_ENABLE_COVERAGE with sanitizers: prefer a separate "
@@ -106,8 +110,11 @@ set_property(SOURCE
     src/cmd_graph.c
     src/cmd_import.c
     src/cmd_device.c
+    src/cmd_repair.c
     src/output.c
     src/util.c
+    src/diag.c
+    src/test_vfs.c
     APPEND PROPERTY COMPILE_OPTIONS -Wcast-qual
 )
 
@@ -219,8 +226,10 @@ set(REMEMBER_LIB_SOURCES
     src/cmd_graph.c
     src/cmd_import.c
     src/cmd_device.c
+    src/cmd_repair.c
     src/output.c
     src/util.c
+    src/diag.c
 )
 
 # --- remember CLI (instrumented) ---------------------------------------------
@@ -237,6 +246,10 @@ remember_apply_posix_feature_macros(remember)
 remember_apply_sanitizers(remember)
 remember_apply_coverage(remember)
 remember_apply_test_hooks(remember)
+if(REMEMBER_TEST_VFS)
+    target_sources(remember PRIVATE src/test_vfs.c)
+    target_compile_definitions(remember PRIVATE REMEMBER_TEST_VFS)
+endif()
 
 # Non-sanitized CLI for macOS leaks(1) (leaks cannot inspect ASan heaps).
 add_executable(remember_plain
@@ -291,6 +304,7 @@ set(REMEMBER_TEST_SOURCES
     tests/test_sync_import.c
     tests/test_schema_v5.c
     tests/test_device.c
+    tests/test_errors.c
 )
 add_executable(remember_tests
     ${REMEMBER_TEST_SOURCES}
@@ -303,10 +317,15 @@ target_include_directories(remember_tests PRIVATE
 target_link_libraries(remember_tests PRIVATE sqlite3 sha256)
 target_compile_definitions(remember_tests PRIVATE
     REMEMBER_VERSION="${PROJECT_VERSION}"
+    REMEMBER_TEST_HOOKS
 )
 remember_apply_posix_feature_macros(remember_tests)
 remember_apply_coverage(remember_tests)
 remember_apply_test_hooks(remember_tests)
+# The shim tests run only when the CLI under test carries the shim.
+if(REMEMBER_TEST_VFS)
+    target_compile_definitions(remember_tests PRIVATE REMEMBER_TEST_VFS)
+endif()
 # Tests build execv/remember_run argv from const string tables (POSIX API is
 # char *const[]); -Weverything's -Wcast-qual there is pure noise (see the src-only
 # -Wcast-qual property above). Keep it off for the test targets only.
@@ -397,6 +416,18 @@ add_test(NAME store_asan_gate
 add_test(NAME install_skill
     COMMAND bash "${CMAKE_SOURCE_DIR}/tests/test_install_skill.sh"
 )
+if(REMEMBER_TEST_VFS)
+    add_test(NAME no_shim_symbols
+        COMMAND bash "${CMAKE_SOURCE_DIR}/tests/test_no_shim.sh"
+            $<TARGET_FILE:remember>
+            $<TARGET_FILE:remember_plain>
+            $<TARGET_FILE:remember_core>
+            "${CMAKE_SOURCE_DIR}"
+    )
+    set_tests_properties(no_shim_symbols PROPERTIES
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+    )
+endif()
 set_tests_properties(install_skill PROPERTIES
     WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
 )

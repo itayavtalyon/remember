@@ -982,3 +982,21 @@ int output_accepted_envelope(FILE *out, const Entry *entries, size_t count, cons
     }
     return 0;
 }
+
+int output_rebuilt(FILE *out, bool json, size_t entries)
+{
+    int n = 0;
+
+    if (out == NULL) {
+        return -1;
+    }
+    if (json) {
+        n = fprintf(out, "{\"version\":1,\"action\":\"rebuilt\",\"entries\":%zu}\n", entries);
+    } else {
+        n = fprintf(out, "rebuilt %zu\n", entries);
+    }
+    if (n < 0) {
+        return -1;
+    }
+    return 0;
+}

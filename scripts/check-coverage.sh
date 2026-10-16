@@ -53,7 +53,8 @@ cmake -S . -B "$BUILD_DIR" "${CMAKE_GEN[@]}" \
   -DCMAKE_C_COMPILER=clang \
   -DREMEMBER_ENABLE_SANITIZERS=OFF \
   -DREMEMBER_ENABLE_LSAN=OFF \
-  -DREMEMBER_ENABLE_COVERAGE=ON
+  -DREMEMBER_ENABLE_COVERAGE=ON \
+  -DREMEMBER_TEST_VFS=ON
 
 echo "== coverage build =="
 cmake --build "$BUILD_DIR"
@@ -165,6 +166,9 @@ DEFENSIVE = re.compile(
     |^\s*break\s*;
     |^\s*continue\s*;
     |^\s*err_msg\s*\(
+    |^\s*err_fmt\s*\(
+    |^\s*err_store\s*\(
+    |^\s*err_norm\s*\(
     |^\s*\*err\s*=
     |^\s*\(void\)fprintf\s*\(
     |^\s*\(void\)fputs\s*\(
@@ -185,6 +189,8 @@ DEFENSIVE = re.compile(
     |^\s*end_opts\s*=
     |^\s*g_fail_\w+\s*--
     |^\s*set_errf?\s*\(
+    |^\s*capture_sqlite_error\s*\(        # snapshot before finalize/rollback (plan 16)
+    |^\s*capture_source_error\s*\(        # same snapshot on the import source handle
     |^\s*rollback_quiet\s*\(
     |^\s*savepoint_undo\s*\(
     |^\s*\(void\)exec_sql\s*\(
@@ -200,6 +206,8 @@ DEFENSIVE = re.compile(
     |^\s*\*out_stubs\s*=
     |^\s*\*out_total\s*=
     |^\s*\*\w+\s*=\s*NULL\s*;             # out-param nulling on error tails
+    |^\s*sel\s*=\s*NULL\s*;               # local stmt nulling on error tails
+    |^\s*if\s*\(\s*rc\s*!=\s*SQLITE_DONE\s*\)  # step-done miss after capture
     |^\s*s\s*=\s*""\s*;                   # json_write_string NULL→empty
     |^\s*if\s*\(\s*src\s*!=\s*NULL\s*\)
     |^\s*if\s*\(\s*sel\s*!=\s*NULL\s*\)
@@ -256,6 +264,14 @@ for path, ln in zeros:
     # sibling line, leaving the others zero-hit even though the statement ran; the
     # substance is on those sibling lines, which are checked in their own right.
     if code.rstrip().endswith(","):
+        defensive += 1
+        continue
+    # The closing line of a wrapped err_msg/err_fmt/err_store/err_norm call is the
+    # same error-report tail. The comma-ending line above is already skipped.
+    prev = src_lines[ln - 2] if ln >= 2 else ""
+    if prev.rstrip().endswith(",") and re.match(
+        r"^\s*err_(msg|fmt|store|norm)\s*\(", prev
+    ):
         defensive += 1
         continue
     if DEFENSIVE.match(code):

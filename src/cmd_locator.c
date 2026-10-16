@@ -1,5 +1,6 @@
 #include "commands.h"
 #include "commands_common.h"
+#include "diag.h"
 
 #include "appio.h"
 #include "exit_codes.h"
@@ -27,7 +28,7 @@ static int locator_take_option(const char *arg, int *i, int rest_argc, const cha
 {
     if (strcmp(arg, "--key") == 0) {
         if (*i + 1 >= rest_argc) {
-            err_msg("missing value for --key");
+            err_msg(DIAG_USAGE, "missing value for --key");
             return -1;
         }
         out->key_raw = rest_argv[++(*i)];
@@ -35,7 +36,7 @@ static int locator_take_option(const char *arg, int *i, int rest_argc, const cha
     }
     if (strcmp(arg, "--sync-id") == 0) {
         if (*i + 1 >= rest_argc) {
-            err_msg("missing value for --sync-id");
+            err_msg(DIAG_USAGE, "missing value for --sync-id");
             return -1;
         }
         out->sync_id_raw = rest_argv[++(*i)];
@@ -45,11 +46,11 @@ static int locator_take_option(const char *arg, int *i, int rest_argc, const cha
         return 1;
     }
     if (strcmp(arg, "--source") == 0) {
-        err_msg("--source is only valid on add");
+        err_msg(DIAG_USAGE, "--source is only valid on add");
         return -1;
     }
     if (arg[0] == '-' && arg[1] != '\0') {
-        (void)fprintf(app_err(), "remember: unknown option '%s'\n", arg);
+        err_fmt(DIAG_USAGE, "unknown option '%s'", arg);
         return -1;
     }
     return 0;
@@ -82,7 +83,7 @@ static int parse_locator_args(int rest_argc, const char **rest_argv, LocatorPars
             }
         }
         if (out->id_raw != NULL) {
-            err_msg("too many arguments");
+            err_msg(DIAG_USAGE, "too many arguments");
             return -1;
         }
         out->id_raw = arg;
@@ -104,11 +105,11 @@ static int locator_validate(const LocatorParse *p)
         n++;
     }
     if (n > 1) {
-        err_msg("provide exactly one of id, --key, or --sync-id");
+        err_msg(DIAG_USAGE, "provide exactly one of id, --key, or --sync-id");
         return -1;
     }
     if (n == 0) {
-        err_msg("missing id, --key, or --sync-id");
+        err_msg(DIAG_USAGE, "missing id, --key, or --sync-id");
         return -1;
     }
     return 0;
@@ -136,7 +137,7 @@ static int locator_resolve(const LocatorParse *p, char *key_norm, size_t key_nor
     if (p->key_raw != NULL) {
         NormStatus ns = normalize_key(p->key_raw, key_norm, key_norm_sz);
         if (ns != NORM_OK) {
-            err_msg(norm_token_message(ns, "key"));
+            err_norm(ns, "key");
             return -1;
         }
         out->kind = LOC_KEY;
@@ -145,7 +146,7 @@ static int locator_resolve(const LocatorParse *p, char *key_norm, size_t key_nor
     }
     if (p->sync_id_raw != NULL) {
         if (store_sync_id_is_canonical(p->sync_id_raw) == 0) {
-            err_msg("invalid sync-id");
+            err_msg(DIAG_USAGE, "invalid sync-id");
             return -1;
         }
         out->kind = LOC_SYNC_ID;
@@ -153,7 +154,7 @@ static int locator_resolve(const LocatorParse *p, char *key_norm, size_t key_nor
         return 0;
     }
     if (parse_entry_id(p->id_raw, &out->id) != 0) {
-        err_msg("invalid id");
+        err_msg(DIAG_USAGE, "invalid id");
         return -1;
     }
     out->kind = LOC_ID;
@@ -186,7 +187,7 @@ int cmd_get(Store *s, bool json, int rest_argc, const char **rest_argv)
         return REMEMBER_ERR;
     }
     if (utc_now(now, sizeof(now)) != 0) {
-        err_msg("internal error");
+        err_msg(DIAG_INTERNAL, "internal error");
         return REMEMBER_ERR;
     }
 
@@ -197,7 +198,7 @@ int cmd_get(Store *s, bool json, int rest_argc, const char **rest_argv)
     } else {
         st = store_get(s, loc.id, bin, now, &entry);
     }
-    rc = store_status_to_exit(st);
+    rc = store_status_to_exit(s, st);
     if (rc != REMEMBER_OK) {
         return rc;
     }
@@ -210,7 +211,7 @@ int cmd_get(Store *s, bool json, int rest_argc, const char **rest_argv)
         st = store_list_neighbors(s, entry.id, NULL, STORE_NEIGHBOR_ALL, now, &links, &nlinks);
         if (st != STORE_OK) {
             store_entry_free(&entry);
-            err_msg(store_status_message(st));
+            err_store(s, st);
             return REMEMBER_ERR;
         }
         if (bin != STORE_BIN_DELETED) {
@@ -227,7 +228,7 @@ int cmd_get(Store *s, bool json, int rest_argc, const char **rest_argv)
         store_neighbors_free(links, nlinks);
         store_entry_free(&entry);
         if (wr != 0) {
-            err_msg("failed to write output");
+            err_msg(DIAG_INTERNAL, "failed to write output");
             return REMEMBER_ERR;
         }
     }
@@ -302,12 +303,12 @@ int cmd_delete(Store *s, bool json, int rest_argc, const char **rest_argv)
         return REMEMBER_ERR;
     }
     if (utc_now(now, sizeof(now)) != 0) {
-        err_msg("internal error");
+        err_msg(DIAG_INTERNAL, "internal error");
         return REMEMBER_ERR;
     }
 
     st = delete_resolved(s, &loc, bin, now, &entry);
-    rc = store_status_to_exit(st);
+    rc = store_status_to_exit(s, st);
     if (rc != REMEMBER_OK) {
         return rc;
     }
@@ -315,7 +316,7 @@ int cmd_delete(Store *s, bool json, int rest_argc, const char **rest_argv)
     if (json) {
         if (output_action_envelope(app_out(), "deleted", &entry, now) != 0) {
             store_entry_free(&entry);
-            err_msg("failed to write output");
+            err_msg(DIAG_INTERNAL, "failed to write output");
             return REMEMBER_ERR;
         }
     }
@@ -451,7 +452,7 @@ static int handle_update_ttl_flag(const char *arg, int *i, int rest_argc, const 
         return -1;
     }
     if (arg[0] == '-' && arg[1] != '\0') {
-        (void)fprintf(app_err(), "remember: unknown option '%s'\n", arg);
+        err_fmt(DIAG_USAGE, "unknown option '%s'", arg);
         *err = "";
         return -1;
     }
@@ -537,13 +538,13 @@ static int emit_update_result(bool json, const Entry *entry, const char *now)
 {
     if (json) {
         if (output_action_envelope(app_out(), "updated", entry, now) != 0) {
-            err_msg("failed to write output");
+            err_msg(DIAG_INTERNAL, "failed to write output");
             return -1;
         }
         return 0;
     }
     if (output_id_human(app_out(), entry->id) != 0) {
-        err_msg("failed to write output");
+        err_msg(DIAG_INTERNAL, "failed to write output");
         return -1;
     }
     return 0;
@@ -570,7 +571,7 @@ static int update_prepare_payload(const UpdateParse *parsed, char **body, size_t
                 dash_is_stdin = 0;
             }
             if (load_body(parsed->text_raw, dash_is_stdin, body, body_len, &err) != 0) {
-                err_msg(err);
+                err_msg(code_for_cmd_text(err), err);
                 return -1;
             }
         }
@@ -579,7 +580,7 @@ static int update_prepare_payload(const UpdateParse *parsed, char **body, size_t
     if (parsed->ntag_raw > 0U) {
         if (normalize_tags((const char *const *)parsed->tag_raw, parsed->ntag_raw, tags_norm, ntags,
                            &err) != 0) {
-            err_msg(err);
+            err_msg(code_for_cmd_text(err), err);
             return -1;
         }
     }
@@ -607,7 +608,7 @@ static int update_resolve_expiry(const UpdateParse *parsed, const char *now, cha
         (ExpiryFlags){.ttl_raw = parsed->ttl_raw, .expires_raw = parsed->expires_raw}, now, buf,
         buflen);
     if (exp.rc != 0) {
-        err_msg(exp.err);
+        err_msg(code_for_cmd_text(exp.err), exp.err);
         return -1;
     }
     *out_expires = exp.expires;
@@ -632,7 +633,7 @@ static int locator_bind_write(Store *s, const LocatorResolved *loc, StoreBin bin
         memset(&found, 0, sizeof(found));
         st = store_get_by_sync_id(s, loc->sync_id, bin, now, &found);
         if (st != STORE_OK) {
-            return store_status_to_exit(st);
+            return store_status_to_exit(s, st);
         }
         *out_id = found.id;
         store_entry_free(&found);
@@ -675,14 +676,14 @@ int cmd_update(Store *s, bool json, int rest_argc, const char **rest_argv)
 
     if (parse_update_args(rest_argc, rest_argv, &parsed, &err) != 0) {
         if (err != NULL && err[0] != '\0') {
-            err_msg(err);
+            err_msg(code_for_cmd_text(err), err);
         }
         update_parse_free(&parsed);
         return REMEMBER_ERR;
     }
     if (locator_validate(&parsed.loc) != 0 || update_validate_changes(&parsed, &err) != 0) {
         if (err != NULL) {
-            err_msg(err);
+            err_msg(code_for_cmd_text(err), err);
         }
         update_parse_free(&parsed);
         return REMEMBER_ERR;
@@ -696,7 +697,7 @@ int cmd_update(Store *s, bool json, int rest_argc, const char **rest_argv)
         return REMEMBER_ERR;
     }
     if (utc_now(now, sizeof(now)) != 0) {
-        err_msg("internal error");
+        err_msg(DIAG_INTERNAL, "internal error");
         update_parse_free(&parsed);
         return REMEMBER_ERR;
     }
@@ -720,11 +721,11 @@ int cmd_update(Store *s, bool json, int rest_argc, const char **rest_argv)
                       (const char *const *)tags_norm, ntags, set_expires, expires_at,
                       parsed.undelete, bin, now, &entry, &conflict_id);
     if (st == STORE_ERR_CONFLICT) {
-        (void)fprintf(app_err(), "remember: body hash conflicts with entry %lld\n", conflict_id);
+        err_fmt(DIAG_BODY_CONFLICT, "body hash conflicts with entry %lld", conflict_id);
         goto cleanup;
     }
     if (st != STORE_OK) {
-        rc = store_status_to_exit(st);
+        rc = store_status_to_exit(s, st);
         goto cleanup;
     }
     if (emit_update_result(json, &entry, now) != 0) {
@@ -758,7 +759,7 @@ static int handle_rekey_flag(const char *arg, int *i, int rest_argc, const char 
     if (strcmp(arg, "--key") == 0) {
         TakeValue taken = take_value(i, rest_argc, rest_argv, "missing value for --key");
         if (taken.rc != 0) {
-            err_msg(taken.err);
+            err_msg(DIAG_USAGE, taken.err);
             return -1;
         }
         out->loc.key_raw = taken.value;
@@ -767,7 +768,7 @@ static int handle_rekey_flag(const char *arg, int *i, int rest_argc, const char 
     if (strcmp(arg, "--sync-id") == 0) {
         TakeValue taken = take_value(i, rest_argc, rest_argv, "missing value for --sync-id");
         if (taken.rc != 0) {
-            err_msg(taken.err);
+            err_msg(DIAG_USAGE, taken.err);
             return -1;
         }
         out->loc.sync_id_raw = taken.value;
@@ -776,7 +777,7 @@ static int handle_rekey_flag(const char *arg, int *i, int rest_argc, const char 
     if (strcmp(arg, "--to-key") == 0) {
         TakeValue taken = take_value(i, rest_argc, rest_argv, "missing value for --to-key");
         if (taken.rc != 0) {
-            err_msg(taken.err);
+            err_msg(DIAG_USAGE, taken.err);
             return -1;
         }
         out->to_key_raw = taken.value;
@@ -790,11 +791,11 @@ static int handle_rekey_flag(const char *arg, int *i, int rest_argc, const char 
         return 1;
     }
     if (strcmp(arg, "--source") == 0) {
-        err_msg("--source is only valid on add");
+        err_msg(DIAG_USAGE, "--source is only valid on add");
         return -1;
     }
     if (arg[0] == '-' && arg[1] != '\0') {
-        (void)fprintf(app_err(), "remember: unknown option '%s'\n", arg);
+        err_fmt(DIAG_USAGE, "unknown option '%s'", arg);
         return -1;
     }
     return 0;
@@ -823,7 +824,7 @@ static int parse_rekey_args(int rest_argc, const char **rest_argv, RekeyParse *o
             }
         }
         if (out->loc.id_raw != NULL) {
-            err_msg("too many arguments");
+            err_msg(DIAG_USAGE, "too many arguments");
             return -1;
         }
         out->loc.id_raw = arg;
@@ -859,11 +860,11 @@ int cmd_rekey(Store *s, bool json, int rest_argc, const char **rest_argv)
         return REMEMBER_ERR;
     }
     if (parsed.clear_key && parsed.to_key_raw != NULL) {
-        err_msg("cannot combine --to-key and --clear-key");
+        err_msg(DIAG_USAGE, "cannot combine --to-key and --clear-key");
         return REMEMBER_ERR;
     }
     if (!parsed.clear_key && parsed.to_key_raw == NULL) {
-        err_msg("rekey requires --to-key or --clear-key");
+        err_msg(DIAG_USAGE, "rekey requires --to-key or --clear-key");
         return REMEMBER_ERR;
     }
     if (locator_resolve(&parsed.loc, key_norm, sizeof(key_norm), &loc) != 0) {
@@ -872,13 +873,13 @@ int cmd_rekey(Store *s, bool json, int rest_argc, const char **rest_argv)
     if (!parsed.clear_key) {
         NormStatus ns = normalize_key(parsed.to_key_raw, new_norm, sizeof(new_norm));
         if (ns != NORM_OK) {
-            err_msg(norm_token_message(ns, "key"));
+            err_norm(ns, "key");
             return REMEMBER_ERR;
         }
         new_key = new_norm;
     }
     if (utc_now(now, sizeof(now)) != 0) {
-        err_msg("internal error");
+        err_msg(DIAG_INTERNAL, "internal error");
         return REMEMBER_ERR;
     }
     {
@@ -891,15 +892,14 @@ int cmd_rekey(Store *s, bool json, int rest_argc, const char **rest_argv)
                      &entry, &conflict_id);
     if (st == STORE_ERR_CONFLICT) {
         if (new_key != NULL) {
-            (void)fprintf(app_err(), "remember: key conflicts with entry %lld\n", conflict_id);
+            err_fmt(DIAG_KEY_CONFLICT, "key conflicts with entry %lld", conflict_id);
         } else {
-            (void)fprintf(app_err(), "remember: body hash conflicts with entry %lld\n",
-                          conflict_id);
+            err_fmt(DIAG_BODY_CONFLICT, "body hash conflicts with entry %lld", conflict_id);
         }
         store_entry_free(&entry);
         return REMEMBER_ERR;
     }
-    rc = store_status_to_exit(st);
+    rc = store_status_to_exit(s, st);
     if (rc != REMEMBER_OK) {
         store_entry_free(&entry);
         return rc;
@@ -907,12 +907,12 @@ int cmd_rekey(Store *s, bool json, int rest_argc, const char **rest_argv)
     if (json) {
         if (output_action_envelope(app_out(), "updated", &entry, now) != 0) {
             store_entry_free(&entry);
-            err_msg("failed to write output");
+            err_msg(DIAG_INTERNAL, "failed to write output");
             return REMEMBER_ERR;
         }
     } else if (output_id_human(app_out(), entry.id) != 0) {
         store_entry_free(&entry);
-        err_msg("failed to write output");
+        err_msg(DIAG_INTERNAL, "failed to write output");
         return REMEMBER_ERR;
     }
     store_entry_free(&entry);

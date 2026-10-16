@@ -297,22 +297,22 @@ cmake --build build --target leaks-macos          # macOS only
 
 ## Definition of Done
 
-- [ ] Design log 006 unchanged except Implementation Results rows for
+- [x] Design log 006 unchanged except Implementation Results rows for
       E4.1–E4.15, E3.2, X-E02 (with the observed SQLite names for the chmod
       folder case).
-- [ ] Every must-pass row green and in `tests/gate-suites`.
-- [ ] No stderr error line is written outside the diag emitter (grep check
+- [x] Every must-pass row green and in `tests/gate-suites`.
+- [x] No stderr error line is written outside the diag emitter (grep check
       in lint or a test).
-- [ ] Plain stderr unchanged for non-database errors (golden test).
-- [ ] Exit codes unchanged; stdout empty on every error.
-- [ ] Shim absent from release, `remember_plain` and `remember_core`.
-- [ ] Locked decisions D5–D9, P3, P6 implemented as written (D9 table is a test).
-- [ ] Help, SKILL.md, README What's New (`--json-errors`, the seven causes,
+- [x] Plain stderr unchanged for non-database errors (golden test).
+- [x] Exit codes unchanged; stdout empty on every error.
+- [x] Shim absent from release, `remember_plain` and `remember_core`.
+- [x] Locked decisions D5–D9, P3, P6 implemented as written (D9 table is a test).
+- [x] Help, SKILL.md, README What's New (`--json-errors`, the seven causes,
       `--busy-timeout`, `--no-create`, `repair search-index`).
-- [ ] Engineering notes + QUALITY.md updated.
-- [ ] Gate: ctest, lint, coverage 100/100, `ci-linux.sh` all green.
-- [ ] Second review done; no open **blocking** item.
-- [ ] `implementation-plans/INDEX.md` row marked ✅.
+- [x] Engineering notes + QUALITY.md updated.
+- [x] Gate: ctest, lint, coverage 100/100, `ci-linux.sh` all green.
+- [x] Second review done; no open **blocking** item.
+- [x] `implementation-plans/INDEX.md` row marked ✅.
 
 ## Second review handover
 
@@ -366,8 +366,394 @@ or architecture forks to Itay as a grill. Re-run the full gate after any fix.
 
 ## Implementation Notes
 
-_(empty; fill per stage)_
+### 2026-10-15 — stage 1 (catalog + emitter)
+
+No call sites changed. `err_msg` and the `fprintf(app_err(), …)` lines still write the 0.2.0 plain text. Stage 2 routes them. The warning prefix below is the pre-grill API; the stage 1 second-opinion review replaced `note:` with `warning: ` and dropped the exit gate.
+
+- Error tokens are one array, E4.3 order, indexed by `DiagCode`. Warning tokens are a second array (`raw_query_ignored`, `deprecated_flag`, `synced_folder`). A warning token is not an error code. `diag_code_name` / `diag_warning_name` and the reverse lookups share one scanner.
+- `diag_error` writes through `app_err()` only. Plain is `remember: <message>\n`. JSON is one line `{"version":1,"error":{"code":"<code>","message":"<message>"}}` and no plain line. `message` is escaped with `output_json_string`. Plain text is not escaped.
+- `diag_warning` uses the same writer. Plain is `remember: note: <text>\n`. JSON is `{"version":1,"warning":{"code":"<code>","message":"<text>"}}`. `message` is `<text>`, not `note: <text>`. A non-zero exit writes nothing and returns 0. A code outside either catalog writes nothing and returns -1, including a warning whose exit is already non-zero.
+- NULL message is an empty string, so a NULL cannot reach `printf("%s")`.
+- E4.8 cause/fix text and E4.9 `detail` stay in stage 3, when the store error exists. This stage's writer takes the message from the caller.
+
+### 2026-10-15 — stage 2 (route every error)
+
+`--json-errors` is a global, stripped wherever `--json` is. `remember_run` sets `diag_set_json_errors` for that one call. `err_msg(code, text)` is the coded write. `err_store` maps `StoreStatus` beside the print. Plain bytes stay the 0.2.0 lines, except the two deprecation lines, which gained `warning: ` (stage 1 grill).
+
+Itay 2026-10-15:
+
+- `decision:plan16-open-message-codes` — `database` for `sqlite: …`, `cannot read user_version: …`, `cannot rebuild search index`, and `cannot open database` (bare or with a detail). `cannot_open` for `cannot create database directory: …`. `usage` for the empty-buffer fallback `invalid database path`.
+- `decision:plan16-invalid-search-query` — `STORE_ERR_QUERY` is `invalid_query`. The sentence stays `invalid search query`.
+
+### 2026-10-15 — stage 3 (structured store errors)
+
+One `capture_sqlite_error` helper snapshots extended code, primary, name, message, and errno immediately after the failing SQLite call. `finalize` / `ROLLBACK` run after that. Mapping and the extended-name table live only in `store_sqlite.c`. D6 puts `SQLITE_NOMEM` and `SQLITE_IOERR_NOMEM` before the IOERR row; unnamed `IOERR_*` still fall through to `io_error` via the primary-code switch. `store.h` stays sqlite-free: `StoreError` / `StoreOpenOpts` / `store_open_opts` / `store_last_error` / `store_path`.
+
+`exec_sql` retries `SQLITE_SCHEMA` once, then classifies `database`. `prepare_v2` already re-prepares; a second helper was not added. `--busy-timeout` and `--no-create` stay stage 5; NULL opts are 5000 ms and create. D8 `no_create` is already on `StoreOpenOpts` and skips mkdir.
+
+D7 `util_absolute_path` joins cwd, then lexical `.` / `..`. It does not walk symlinks. `getcwd` uses a `PATH_MAX` stack buffer (GNU `getcwd(NULL,0)` is not C11).
+
+E4.8 cause/fix is `diag_error_sqlite`. `database` has its own sentence (no cause). E4.9 always writes `sqlite_code`, `sqlite_extended`, `sqlite_name`, `sqlite_message` (empty string when SQLite gave none — 006 has no omit rule for the message). `errno` only when non-zero; `path` only on the six codes, always the absolute `--db` path; `reason` only `cannot_open`; `fts_only` only `corrupt`.
+
+`capture_sqlite_error(...)` is a coverage-defensive line, same class as `set_err`. `remember_tests` always defines `REMEMBER_TEST_HOOKS` so the mapping/SCHEMA probes compile in the sanitizer binary.
+
+No new grill. `sqlite_message` always-emit follows 006's omit list (errno/path/reason/fts_only only).
+
+### 2026-10-15 — stage 4 (VFS shim + acceptance matrix)
+
+`REMEMBER_TEST_VFS` defaults OFF. A Release configure forces it OFF even if the cache asks. The shim compiles into the `remember` CLI only. `remember_plain` and `remember_core` do not link it. `main` calls `remember_test_vfs_install` under the define; that wraps `unix` and registers it as the default VFS. Unix methods other than `xOpen` stay the parent's (they ignore the VFS pointer). `xOpen` leaves the `unixFile` at the front of the buffer — those methods expect that layout — and stores a method-table copy after it. Only `xRead` and `xWrite` are replaced. Truncate, sector size, and the lock methods stay the unix functions, which is what SQLite calls.
+
+Env, read once at install:
+
+- `REMEMBER_TEST_ENOSPC=1` — every `xWrite` returns `SQLITE_FULL`.
+- `REMEMBER_TEST_FAIL_WRITE=N` — N writes succeed, then every later write returns `SQLITE_IOERR_WRITE`.
+- `REMEMBER_TEST_FAIL_READ=N` — same for reads, `SQLITE_IOERR_READ`.
+- `REMEMBER_TEST_NOMEM=1` — a write returns `SQLITE_IOERR_NOMEM`, and so does a read of a file that already has bytes. A zero-length read is the probe SQLite does before it writes a new brain's header; that probe is passed through so the write-side fault can run.
+
+Unset or non-numeric counts are off. `=1` is the only value that turns the two flags on. A fault stays on once the count is exhausted, so SQLite cannot retry past it. NOMEM is checked before ENOSPC, which is checked before the write count.
+
+Itay 2026-10-15, `decision:plan16-nomem-sqlite-name`: the shim returns `SQLITE_IOERR_NOMEM`, and SQLite's `apiHandleError` rewrites that to `SQLITE_NOMEM` before `sqlite3_exec` / `sqlite3_step` return. The CLI locks `sqlite_name` `SQLITE_NOMEM`, message `out of memory`, code `database`. Do not bypass the rewrite.
+
+The failing `xRead` / `xWrite` returns before that system call, so `detail.errno` is whatever the unix VFS stored last. NOMEM checks size with `xFileSize` first; a successful `fstat` does not set errno. Observed on macOS: `FAIL_WRITE=0` on a new path reports `errno` `ENOENT` (2); `FAIL_READ=0` on an existing brain reports `errno` `EEXIST` (17). ENOSPC and NOMEM reported no errno.
+
+chmod acceptance (macOS, uid not root), same names as the Linux table in this plan:
+
+| Case | `sqlite_name` |
+|------|----------------|
+| file 444 + `add` | `SQLITE_READONLY` |
+| folder 555, file 666 + `add` | `SQLITE_READONLY_DIRECTORY` |
+| file 000 | `SQLITE_CANTOPEN`, `reason` `permission`, errno `EACCES` |
+| truncated to 512 bytes | `SQLITE_CORRUPT`, `fts_only` false |
+
+Each chmod test prints `SKIP <name> (running as root; file mode bits are ignored)` when `geteuid` is 0, and returns before the mode bits are checked. `scripts/ci-linux.sh` runs the suite as the source-tree owner when the container is root. Docker Desktop mounts the tree as uid 0, so that path creates `rememberci` and runs as that user instead. The build dir is made world-writable rather than chowned, so the host owner of the build tree stays put. GitHub Actions is already non-root.
+
+`tests/test_no_shim.sh` (ctest `no_shim_symbols`) requires the symbol on the test CLI and rejects it on `remember_plain`, `remember_core`, and a Release tree configured with `-DREMEMBER_TEST_VFS=ON`. `scripts/install.sh` refuses a binary that defines the symbol. `test_vfs.c` is the one TU besides `store_sqlite.c` allowed to include sqlite.
+
+`--busy-timeout`, `--no-create`, and `repair search-index` stay stages 5 and 6. QUALITY.md's shim paragraph stays stage 7.
 
 ## Review Notes
 
-_(empty; second review appends here)_
+### 2026-10-15 — in-session deep review (stage 3)
+
+**Verdict:** approve for the second-opinion pass. No open blocking item. No new grill.
+
+**Ran:** ctest 4/4 with ASan/UBSan, `lint-all.sh` LINT OK, coverage 100% functions and 100% effective lines, `leaks-macos` PASS, `ci-linux.sh` OK (iwyu and scan-build included). Probes: text file → `not_a_database` with absolute `path` (plain and JSON, empty stdout, exit 1); chmod 444 write → `read_only` with path; `get --key nope --json-errors` → `not_found` exit 2, no detail; truncated zeros → `not_a_database`. Bugbot on uncommitted changes: one validator-dropped finding; follow-up on `store_sqlite.c` found capture-after-finalize in `foreign_keys_ok` (and the same step-loop shape in three list helpers). Auto-fixed: capture, then `errmsg`, then `finalize`.
+
+**Praise:** one capture helper, mapping only in the adapter, `store.h` still sqlite-free, D7 lexical path in `util.c`.
+
+**Auto-fixed:** capture-before-finalize on `foreign_keys_ok`, VV parse, conflict list, and snapshot tags. Linux tidy magic `0xA5` → `POISON_BYTE`. D7 root `"/"` success plus a one-byte buffer miss. Coverage treats `capture_sqlite_error` as defensive.
+
+**Nit:** `k_sqlite_codes` / `k_sqlite_code_names` stay parallel arrays with `_Static_assert`. A struct row would merge them; the class table cannot merge because it names a different set. Left as is.
+
+**Ponytail:** SCHEMA retry is `exec_sql` only. `prepare_v2` already re-prepares. No second helper.
+
+**Pragmatic write-gate:** DRY PASS (one capture, one class table, one advice table). Easy-to-replace PASS (`store.h` is the port; sqlite stays in the adapter). Orthogonal PASS (codes do not change exit codes; E4.8 does not rewrite non-SQLite open text). Simplify PASS after the capture-order fix. No deferred markers.
+
+**Left for later:** stage 4 VFS shim + acceptance matrix. Stage 5 `--busy-timeout` / `--no-create`. Stage 6 `fts_only` from `quick_check`. Stage 7 help / SKILL / QUALITY shim note.
+
+### 2026-10-15 — in-session deep review (stage 2)
+
+**Verdict:** approve for the second-opinion pass. No open blocking item. No new grill. The two code splits stay `decision:plan16-open-message-codes` and `decision:plan16-invalid-search-query`.
+
+**Ran:** ctest 4/4 with ASan/UBSan, `lint-all.sh` LINT OK, coverage 100% functions and 100% effective lines, `leaks-macos` PASS, `ci-linux.sh` OK (iwyu and scan-build included). Probes: `--json-errors` before and after the subcommand, both flags together on a miss and on an empty list, a plain and JSON unknown option, `--trash` then a miss (plain and JSON), help text unchanged, a missing `--db` value, `--json-errors=1` left as an unknown option, an empty search, a missing body after the synced-folder warning, and `purge-trash`. Bugbot on the uncommitted diff reported no bugs.
+
+**Praise:** one process flag, one writer, and the 0.2.0 sentences stay put except the two deprecation lines, which already gained `warning: ` in the stage 1 grill.
+
+**Auto-fixed:** command files include `diag.h` directly. `err_fmt` allocates the formatted line, so a long option stays that usage sentence. A wrapped `err_msg` tail counts as the same defensive line as a one-line call.
+
+**Nit:** `remember_app.c` and the mapper tests include the private `commands_common.h`. The router lives there; `main.c` still does not. Recorded in the engineering notes.
+
+**Ponytail:** the flag is process-global for the same reason as the stream pair. No second writer.
+
+**Pragmatic write-gate:** DRY PASS (one status map, one text map). Easy-to-replace PASS (`app_err` stays the stream port). Orthogonal PASS (codes do not change exit codes). Simplify PASS (the extra open-failure block is gone). No deferred markers.
+
+**Left for later:** stage 3 adds E4.8 text and E4.9 `detail`. Stage 7 adds `--json-errors` to help. `raw_query_ignored` still has no call site.
+
+### 2026-10-15 — in-session deep review (stage 1)
+
+**Verdict:** approve for the second-opinion pass. No open blocking item. No grill.
+
+**Ran:** ctest 4/4 with ASan/UBSan, `lint-all.sh` LINT OK, coverage 100% functions and 100% effective lines, `leaks-macos` PASS, `ci-linux.sh` OK. A sanitizer probe checked percent signs, tab/CR/UTF-8, warning JSON quotes, a NULL warning message, exit `-1`, and a read-only error stream (plain, JSON, and warning all return -1). Bugbot on the uncommitted diff reported no bugs.
+
+**Praise:** one string table per catalog and one writer. JSON goes through `output_json_string`. Warning tokens are not error codes. Unknown codes write nothing.
+
+**Nit:** the memstream setup is repeated in each test. Left as is; it is the same shape as the other stream tests, and a helper would hide the arrange step.
+
+**Ponytail:** nothing to cut. The padding byte and the `Notice` struct exist so `-Wpadded` and the swappable-parameter check stay quiet.
+
+**Pragmatic write-gate:** DRY PASS, easy-to-replace PASS (`app_err` is the existing stream port), orthogonal PASS (no SQLite, no call-site edits). No deferred markers.
+
+**Left for later:** stage 2 routes `err_msg`. Stage 3 adds E4.8 text and E4.9 `detail`.
+
+### 2026-10-15 — second-opinion deep review (stage 1)
+
+**Verdict:** stage 1 approved after a grill-driven change to the warning emitter. No open blocking item.
+
+**Run, not read.** Gate: ctest 4/4 (ASan/UBSan), LINT OK, coverage 100% functions and 100% effective lines, `leaks-macos` PASS, `ci-linux.sh` OK. The catalog matches E4.3 exactly: 28 codes in order, each once, with enum ↔ string round-trips. Warning tokens are a separate catalog. A message containing `%`, a quote, CR or tab is safe on both plain and JSON output.
+
+**Blocking → fixed (Itay grill 2026-10-15).** The stage 1 warning API could not carry out stage 2's D5 routing as locked:
+
+- `diag_warning(..., exit_code)` wrote nothing on a non-zero exit (E4.6). But the `--trash` / `purge-trash` deprecation line and the synced-folder line are written before the command runs, and 0.2.0 prints them on failing commands too. Verified: `get --trash 999` printed the deprecation line, then `not found`, then exit 2.
+- The plain format `remember: note: <text>` could not reproduce `remember: --trash is deprecated; use --expired` or `remember: warning: database path looks like ...`, so D5 "plain text unchanged" was impossible.
+
+Itay's answers:
+
+- **deprecated_flag and synced_folder keep printing when the command then fails.**
+- **Every warning's plain prefix is `warning:`**: `remember: warning: <text>`. This amends E4.6 (`note:` becomes `warning:`). It also amends D5: the deprecation lines gain `warning: ` (`remember: warning: --trash is deprecated; use --expired`), and the synced-folder line is unchanged. JSON `message` is `<text>` without the prefix.
+
+Change: `diag_warning(code, message, json_errors)` drops `exit_code`; plain prefix is `warning: `. The test `warning_with_nonzero_exit_writes_nothing` is replaced by `every_warning_uses_the_warning_prefix`. E4.6's "never with a non-zero exit" now holds by contract at the plan 18 call site, which writes `raw_query_ignored` only when the search succeeds (written in `diag.h`).
+
+**For stage 2:** the E4.2 golden list must include the two new deprecation lines with `warning: `. For stage 7: record both amendments in the 006 Implementation Results (E4.6, D5).
+
+**Praise:** one string table per catalog. JSON reuses `output_json_string`. An unknown code writes nothing and returns -1. A NULL message cannot reach `printf("%s")`.
+
+### 2026-10-15 — second-opinion deep review (stage 2)
+
+**Verdict:** stage 2 approved after one grill-decided simplification and one test auto-fix. No open blocking item.
+
+**Run, not read.** Gate (after the fixes): ctest 4/4 (ASan/UBSan), LINT OK, coverage 100% functions and 100% effective lines, `leaks-macos` PASS, `ci-linux.sh` OK.
+
+- **Plain golden by experiment.** `build-release/remember` was built from stage 1, which changed no call sites, so it is an exact 0.2.0-text baseline. I diffed stderr and exit codes against stage 2 on 49 error cases: argv and flag errors, ids, limits, bins, add/update/rekey/link/search/import/conflict/device/tags/purge, `--db` path errors, `--trash` and `purge-trash`. Only the two deprecation lines differ, and only by the `warning: ` prefix Itay chose.
+- **JSON by experiment.** With `--json-errors`, the same 49 cases give exactly one valid JSON error line, with a warning line before it where one applies. stdout is empty on every error, `message` equals the plain line minus `remember: `, and every code matches D9: `usage`, `not_found`, `deleted`, `not_deleted`, `invalid_query`, `self_link`, `key_conflict`, `body_conflict`, `database`, `cannot_open`.
+
+**Auto-fixed:**
+
+- **important** — two stage 2 checks had no test. The plan's "golden test proves plain bytes unchanged" was missing, and so was the DoD row "D9 table is a test". The repo had only three plain samples, and `code_for_cmd_text` (text → code) had no test. New `golden_error_lines_and_d9_codes` is a table of 16 rows over every D9 family. Each row is run plain (exact `remember: <msg>\n`, exit, empty stdout) and with `--json-errors` (exact JSON line, same exit, empty stdout). Mutation-checked: mapping `STORE_ERR_SELF_LINK` to `cycle` fails it.
+
+**Simplify lens → grill (Itay 2026-10-15: drop it):** after stage 2 added the process-wide flag, every `src/` caller passed `diag_json_errors()` back into `diag_error` / `diag_warning`. Both functions now take `(code, message)` and read the flag themselves. The getter `diag_json_errors()` then had no caller, which the function-coverage gate caught (99.78%), so it is deleted too. Unit tests set the mode through two small helpers, `diag_error_as` and `diag_warning_as`.
+
+**Nit (left; stage 3 and later):** `code_for_store_text` maps store error *text* to codes. That is the locked bridge (`decision:plan16-open-message-codes`) until stage 3 adds structured store errors. `code_for_cmd_text` does the same for command helpers, which return only a string. The golden table now pins every family it routes, so a reworded sentence fails a test. Plan 16 or a later plan could let those helpers return their code, which would delete the classifier.
+
+**Praise:** `err_store` puts the StoreStatus → code switch next to `store_status_message`, as the plan asks. `err_fmt` keeps long unknown-option text without truncating it (it has its own test). Parse errors map through one `code_for_cli_error` switch.
+
+### 2026-10-15 — second-opinion deep review (stage 3)
+
+**Verdict:** stage 3 approved after three grill-decided changes and one auto-fixed simplification. No open blocking item.
+
+**Run, not read.** Gate (after the changes): ctest 4/4 (ASan/UBSan), LINT OK, coverage 100% functions and 100% effective lines, `leaks-macos` PASS, `ci-linux.sh` OK. Acceptance on macOS (uid 501, real binary):
+
+| Case | Code | `sqlite_name` (macOS) | Detail |
+|------|------|------------------------|--------|
+| file 444 + `add` | `read_only` | `SQLITE_READONLY` (8) | absolute `path` |
+| folder 555 + `add` | `read_only` | `SQLITE_READONLY_DIRECTORY` (1544), same as Linux | absolute `path` |
+| file 000 | `cannot_open` | `SQLITE_CANTOPEN` (14), errno 13 | `reason` `permission` |
+| folder as path | `cannot_open` | `SQLITE_CANTOPEN` (14, not 526), errno 21 | `reason` `is_directory` |
+| text file | `not_a_database` | `SQLITE_NOTADB` (26) | absolute `path` |
+| truncated brain | `corrupt` | `SQLITE_CORRUPT` (11) | `fts_only` false |
+| `--db ./sub/../sub/r.db` (444) | `read_only` | `SQLITE_READONLY` | `path` = cwd + `/sub/r.db` (D7) |
+
+Capture runs right after the failing call, before finalize or ROLLBACK (the hot spot). `exec_sql` retries SCHEMA once.
+
+**Grill 1 (Itay 2026-10-15): JSON shape for SQLite errors (amends E4.4 for the eight SQLite codes).** 006 contradicted itself: E4.4 says `message` = plain line minus the prefix, but the E4.8 table has a short `message` column. Itay's answer: `message` = `database error: <cause>` (`database error` for code `database`). `detail` gains `fix` (the E4.8 fix sentence) right after `sqlite_message`. `code` stays the catalog token, and the SQLite name stays in `detail.sqlite_name`. The plain stderr line is unchanged. `diag_error_sqlite` now writes one bounded stack line in place of the measure → malloc → format → free sequence.
+
+**Grill 2 (Itay 2026-10-15): name the import source.** `import --from-db /missing.db` used to say "cannot open the brain file", with `detail.path` = the user's healthy brain. `StoreError.import_source` is set by `capture_source_error` (every source-handle capture) and by the source-only version read and gate. `cmd_import` reports with the `--from-db` path, so `detail.path` is the source. The cause names "the import source" for `busy`, `cannot_open`, `not_a_database` and `corrupt`, and the fix is `Check the --from-db path.` Other causes keep the base row. The golden import row is updated.
+
+**Grill 3 (Itay 2026-10-15, simplicity lens): one open with options.** `store_open_replacing_sidecar` is gone. `StoreOpenOpts.replace_invalid_sidecar` replaces it, `store_open_opts` is the single implementation, and `store_open` is `store_open_opts(path, NULL, …)`. `STORE_DEFAULT_BUSY_TIMEOUT_MS` moves to `store.h`, so the CLI's `opts` starts from the real default (a zeroed struct would mean a busy timeout of 0). Stage 5 sets `--busy-timeout` / `--no-create` on the same struct.
+
+**Auto-fixed (simplicity lens, behaviour-neutral):**
+
+- The E4.7 class table had 59 rows. 55 of them only restated what `classify_extended`'s primary-code switch already returns; I checked this mechanically against the pre-change file. 4 rows remain, each a real exception or a D6 marker: `NOMEM`, `IOERR_NOMEM`, `READONLY_DBMOVED`, `IOERR_SHORT_READ`.
+- The two parallel 74-entry arrays (codes and names, plus a `_Static_assert` tying their lengths) are now one `{name, code}` table, so a name cannot drift from its code.
+- `store_sqlite.c` is a net 123 lines shorter, including the import-source addition. The mapping tests (`store_test_classify_extended` table, names, reasons) pass unchanged.
+
+**Gate follow-ups (all fixed before commit):** the coverage script now treats `capture_source_error(` as a defensive snapshot line, the same class as `capture_sqlite_error(`. The source version-read branch is covered by the new `cli_import_text_source_names_the_source` (a text file as `--from-db` gives `not_a_database`, source wording, and `detail.path` = the source). After the stack-buffer change, Linux IWYU removed `<stdlib.h>` from `diag.c`. Two clang-tidy fixes: an order comment on `write_sqlite_detail`, and an `if` instead of an int→bool `&&` assignment in `open_store`.
+
+**Nit (left):** `diag.h` includes `store.h` so `diag_error_sqlite` can take a `StoreError`. The emitter now knows a store type. A diag-local detail struct would decouple them, at the cost of a copy at the one call site. Left as is.
+
+**Praise:** `store.h` stays SQLite-free. One capture helper feeds every failure site. The cannot_open reason table matches the plan's observed facts on macOS too.
+
+### 2026-10-15 — in-session deep review (stage 4)
+
+**Verdict:** approve for the second-opinion pass. No open blocking item. No new grill. `decision:plan16-nomem-sqlite-name` stays the only stage 4 decision.
+
+**Ran:** ctest 5/5 with ASan/UBSan (including `no_shim_symbols`), `lint-all.sh` LINT OK, coverage 100% functions and 100% effective lines, `leaks-macos` PASS, `ci-linux.sh` OK (iwyu and scan-build included). The container is root and the mount is uid 0; the suite ran as `rememberci`. No chmod test printed `SKIP`.
+
+**Praise:** the unix file stays at the front of the buffer, and only `xRead` / `xWrite` are replaced. Truncate and sector size stay the unix functions, which is what SQLite calls, so the wrapper does not grow methods the suite never enters. Release, `remember_plain`, and `remember_core` stay free of the symbol.
+
+**Auto-fixed before commit:** clang-tidy and cppcheck on the shim (env helpers, NOLINT on the process counters, `const` on the file header). Coverage was 99.60% while every io method was a wrapper SQLite does not call (`xTruncate`, `xSectorSize` on a powersafe-overwrite filesystem). Those wrappers are gone. NOMEM on a brand-new brain used to die on the empty-file probe, so the write-side return never ran; that probe is passed through and the header write takes the fault. The user-visible line is still `SQLITE_NOMEM` / `database` / no errno.
+
+**Follow-up, not this stage:** Bugbot on the branch (it did not finish `store_sqlite.c`, `tests/test_errors.c`, or `tests/test_no_shim.sh`) reported one medium finding in `cmd_import.c`: `load_tags` on the import source captures a SQLite error without `import_source`, so a tag-read failure is blamed on the brain. That is the stage 3 source-naming contract, not the VFS. Left for the whole-plan review.
+
+**Nit (left):** the tail cast needs a clang `-Wcast-align` suppression. `unixFile`'s size is pointer-aligned, and an assert checks that before the cast.
+
+### 2026-10-15 — second-opinion deep review (stage 4)
+
+**Verdict:** stage 4 approved. No open blocking item. No grill.
+
+**Run, not read.** Gate (`-DREMEMBER_TEST_VFS=ON`): ctest (ASan/UBSan, incl. `no_shim_symbols`), LINT OK, coverage 100% functions and 100% effective lines, `leaks-macos` PASS, `ci-linux.sh` OK. X-E02 by hand on the shim CLI:
+
+| Env | Code | `sqlite_name` | Notes |
+|-----|------|---------------|-------|
+| `REMEMBER_TEST_ENOSPC=1` + `add` | `disk_full` | `SQLITE_FULL` | exit 1, stdout empty |
+| `REMEMBER_TEST_FAIL_WRITE=0` | `io_error` | `SQLITE_IOERR_WRITE` | errno 2 (stale unix errno; documented) |
+| `REMEMBER_TEST_FAIL_READ=0` | `io_error` | `SQLITE_IOERR_READ` | |
+| `REMEMBER_TEST_NOMEM=1` | `database` | `SQLITE_NOMEM` | `decision:plan16-nomem-sqlite-name` |
+
+`nm`: `remember_test_vfs_install` is in the shim CLI only. `remember_plain`, the Release `remember`, a shim-off build, and `remember_core` all show 0. Release safety has four layers: CMake forces the option OFF in Release, `main` is `#ifdef`-guarded, `install.sh` refuses the symbol, and a ctest checks it.
+
+**Auto-fixed:**
+
+- **important** — a default build failed `ctest`. P3 keeps `REMEMBER_TEST_VFS` default OFF, but the seven shim tests ran unconditionally, so a plain `cmake -S . -B build && ctest` was red: the CLI had no shim, and every shim assertion failed. Found by experiment (my reconfigure lost the flag). CI and every gate script pass the flag, so they stayed green. Now CMake defines `REMEMBER_TEST_VFS` on `remember_tests` when the option is ON. The shim tests and their registrations are `#ifdef REMEMBER_TEST_VFS`, and otherwise the run prints `SKIP 7 VFS shim tests (remember built without REMEMBER_TEST_VFS)`, the same pattern as the root-chmod skip. Verified both ways: OFF gives 58 tests and 0 failures with the SKIP line; ON gives 65 tests and 0 failures.
+- **simplify (lens 9)** — `tail_of` in `test_vfs.c` silenced `-Wcast-align` with 12 lines of clang/GCC `#pragma` push/pop. It now casts through `void *`, with one `NOLINTNEXTLINE(bugprone-casting-through-void)` (C has no `reinterpret_cast`), and the alignment `assert` already above it states the guarantee.
+
+**Praise:** the shim opens through the real unix VFS, keeps the unix file at the front of the buffer, and replaces only `xRead` / `xWrite`. That is the least it can touch. The faults are sticky, so SQLite cannot retry past them. Each chmod skip prints its name, so a root run cannot pass silently.
+
+### 2026-10-16 — stage 5 (open flags)
+
+No new grill. No new `decision:*`. Help text for the flags stays stage 7.
+
+- `--busy-timeout MS` and `--no-create` are globals, stripped wherever `--json` is. There is no `--busy-timeout=MS` form (`--db=` stays the only equals form).
+- Range is 0..60000 inclusive. `60001`, `-1`, and `abc` are exit 1, code `usage`, sentence `invalid --busy-timeout (must be 0..60000)`. Stdout is empty and the brain is not created. With `--json-errors` that sentence is the one JSON line.
+- A missing token is `remember: --busy-timeout: option requires a value` (the `--db` shape). `-1` is a specified bad value, so a leading dash is still the value. Any present token outside the range uses the invalid sentence, including a following command name.
+- Omitted flag keeps 5000 ms. `0` is a real timeout (`busy_timeout_set`), not "use the default". A held `BEGIN EXCLUSIVE` plus `--busy-timeout 500` is `busy`, `SQLITE_BUSY` (5), `sqlite_message` `database is locked`, with no `path` and no `errno`. The wait is about half a second on macOS and in Linux CI, not the 5 s default. `--busy-timeout 0` returns the same `busy` line without that wait. `60000` is accepted and does not wait.
+- `--no-create` is applied before `store_open_opts`, which already skips `ensure_parent_dirs` and opens without `SQLITE_OPEN_CREATE`. A missing parent and a missing file in an existing directory both fail `cannot_open`, `reason` `missing`, `SQLITE_CANTOPEN` (14), errno `ENOENT`. No folder, no file, no `<path>.device_id`. An existing brain still opens.
+- Decimal rules live in `util_parse_nonneg`, shared with `--limit` and `--offset` (empty, leading `-`, trailing junk, `ERANGE`). Leading `+` and whitespace stay what `strtoull` already accepted for `--limit`.
+
+### 2026-10-16 — in-session deep review (stage 5)
+
+**Verdict:** approve for the second-opinion pass. No open blocking item. No grill.
+
+**Ran:** ctest step_gate, store_asan_gate, and no_shim_symbols (ASan/UBSan). `install_skill` failed inside the sandbox (`mkdir` on `.cursor` not permitted) and passed outside it. `lint-all.sh` LINT OK. Coverage 100% functions and 100% effective lines. `leaks-macos` PASS. `ci-linux.sh` OK, including non-root tests, IWYU, and scan-build. Bugbot on the uncommitted stage found no bugs.
+
+**Pragmatic write-gate:** DRY PASS (`util_parse_nonneg` is the one decimal parser). Easy-to-replace PASS (the parser is a plain function; SQLite stays in the adapter). Orthogonal PASS (cli parses, `open_store` applies, the store already implemented D8). No deferred markers.
+
+**Simplify:** `busy_timeout_set` is what makes `0` different from "flag omitted". A zeroed `StoreOpenOpts` would have meant a timeout of 0, which stage 3 already forbade.
+
+**Left for later:** stage 6 is the corrupt check and `repair search-index`. Stage 7 is help for these flags, plus the facade byte-match for a `busy` case (the CLI and `remember_run` already share one pipeline).
+
+**Praise:** `-1` is not swallowed as a missing option. The missing-file test, not only the missing-parent test, is what proves `SQLITE_OPEN_CREATE` is off.
+
+### 2026-10-16 — second-opinion deep review (stage 5)
+
+**Verdict:** stage 5 approved after one auto-fix. No open blocking item. No grill.
+
+**Run, not read.** Gate (`-DREMEMBER_TEST_VFS=ON`): ctest (ASan/UBSan, incl. `no_shim_symbols`), LINT OK, coverage 100% functions and 100% effective lines, `leaks-macos` PASS, `ci-linux.sh` OK. Probes on the built CLI:
+
+- A held `BEGIN EXCLUSIVE` from a second process plus `--json-errors --busy-timeout 500 add` → `busy` (`SQLITE_BUSY`, no `path`, no `errno`) after about 0.65 s, not the 5 s default (probe 3).
+- `--busy-timeout 60001`, `abc`, or `" -1"` → `invalid --busy-timeout (must be 0..60000)`. A missing value → `--busy-timeout: option requires a value`. `+500` is accepted, as `--limit` accepts it in 0.2.0.
+- `--no-create --db <dir>/none/x.db list` → `cannot_open`, `reason` `missing`, errno 2, and no folder (probe 4). A missing file in an existing folder → the same, with no file and no sidecar. An existing brain with `--no-create` opens.
+
+**Auto-fixed:**
+
+- **important** — `--offset " -1"` was accepted as offset 18446744073709551615. It exited 0 with `"offset":18446744073709551615` in the JSON, and rows came back as if there were no offset. `util_parse_nonneg` checked for a minus only at `raw[0]`, and `strtoull` skips leading whitespace and wraps `-1` to `ULLONG_MAX`. The bug predates this stage: 0.2.0's `parse_size_token` had the same check. Stage 5 made it the single parser for `--limit`, `--offset` and `--busy-timeout`, so the fix lands there once: any `-` anywhere is rejected, because a non-negative decimal never contains one. `+5` and ` 7` stay accepted, for 0.2.0 compatibility. New `util_parse_nonneg_rejects_every_sign` (unit) and `cli_offset_spaced_negative_is_usage` (CLI) were red before the fix.
+
+**Simplify (lens 9, left):** `CliGlobals` carries `busy_timeout_ms` plus `busy_timeout_set`. A `-1` "omitted" sentinel would drop the bool, but `cli.c` would then need the store default or the sentinel would leak into `open_store`. The in-session review chose the explicit bool for that reason, and it reads clearly. Left as is.
+
+**Praise:** one decimal parser for three flags. `-1` is reported as a bad value, not as a missing option. The missing-file test (not only the missing-parent test) proves `SQLITE_OPEN_CREATE` is off.
+
+### 2026-10-16 — stage 6 (corrupt check + repair)
+
+No new grill. No new `decision:*`. Help for `--json-errors`, `--busy-timeout`, and `--no-create` stays stage 7, and so do SKILL.md, What's New, the QUALITY shim paragraph, COVERAGE, gate-suites, and 006 Implementation Results.
+
+- `fts_only` is set in the adapter, after the snapshot and before any later SQLite call can clobber it. `quick_check` does not call `capture`. It is true for `SQLITE_CORRUPT_VTAB`. Otherwise it is true only when the five base checks pass and an active statement's SQL contains `entries_fts`. A search that names the index still stays `fts_only` false when a base table fails.
+- Base tables, in order: `entries`, `entry_links`, `conflicts`, `settings`, `bucket_prefixes`. Each is `PRAGMA quick_check(<table>)` on the same connection. One `ok` row passes. A problem row is `corrupt`, `SQLITE_CORRUPT`, `fts_only` false, and `sqlite_message` is that row. An engine error on the statement keeps the engine code, name, message, and errno, forces the class to `corrupt`, and sets `fts_only` false.
+- Observed on macOS, vendored SQLite, and confirmed by Linux CI: zeroing the entries root page (page 2 of a fresh brain) makes `quick_check` return the text row `*** in database main ***` / `Tree 2 page 2: btreeInitPage() returns error code 11`, not an engine code. A committed `UPDATE entries_fts_data SET block = zeroblob(32) WHERE id = (SELECT MIN(id) FROM entries_fts_data)` makes search return `SQLITE_CORRUPT_VTAB` (267), message `database disk image is malformed`, `fts_only` true. A truncated brain (512 bytes) makes repair refuse with the base `corrupt` line and `fts_only` false; it does not rebuild.
+- `REMEMBER_TEST_FAIL_READ=2` on a seeded brain fails a read inside the check (open uses the first two). Repair reports `corrupt` with `sqlite_name` `SQLITE_IOERR_READ`, `sqlite_message` `disk I/O error`, errno `ENOENT` (the shim returns before the syscall, same stale-errno rule as stage 4). Linux CI passed this test on the same count.
+- `repair search-index` checks first, then `BEGIN`, `INSERT INTO entries_fts(entries_fts) VALUES('rebuild')`, `COMMIT`, then `VALUES('integrity-check')`, then `COUNT(*)` from `entries` in every bin. Human stdout is `rebuilt N`. JSON is `{"version":1,"action":"rebuilt","entries":N}`. A failed rebuild rolls back. The integrity check is outside the transaction, as E4.14 says.
+- Every misuse (`repair`, `repair foo`, an extra token, `repair --nope`) is `usage: repair search-index`. Open runs before that reject, so the brain file is created, same as the other commands. Registry summary is `Rebuild the search index`. Command help states the check, the human line, the JSON object, and that N counts every bin. Facade byte-matches human repair, `--json` repair, and `help repair`.
+
+### 2026-10-16 — in-session deep review (stage 6)
+
+**Verdict:** approve for the second-opinion pass. No open blocking item. No grill. No new `decision:*`.
+
+**Ran:** ctest 5/5 with ASan/UBSan and `REMEMBER_TEST_VFS=ON` (100% passed). `lint-all.sh` LINT OK. Coverage 100% functions and 100% effective lines. `leaks-macos` PASS (the first run died in the sandbox with "Couldn't get task port"; the same target passed outside it). `ci-linux.sh` OK, including the non-root suite, IWYU, and scan-build. Bugbot on the uncommitted stage found no bugs.
+
+**Pragmatic write-gate:** DRY PASS (the five base tables are the E4.10 list, not a second copy of the schema). Easy-to-replace PASS (`cmd_repair` talks to `Store` and `output`; SQLite stays in the adapter). Orthogonal PASS (the check is part of corrupt reporting, which is what E4.10 says). No deferred markers.
+
+**Ponytail:** nothing to cut. The `touched = false` assignment is the form of the E4.10 rule that stays one covered return.
+
+**Auto-fixed:** coverage had left the engine-failure body of the base-table check unhit, so repair-on-truncated and `REMEMBER_TEST_FAIL_READ=2` now lock it. clang-tidy rejected `bool && bool` as an int conversion; the return assigns through a bool instead. cppcheck wanted `counts` const and `text` in the row block. IWYU wanted `<stdbool.h>` in `output.h` because `output_rebuilt` takes `bool`. The unreachable format-overflow branch is gone; the SQL is a fixed list.
+
+**Left for later:** stage 7 is help for `--json-errors`, `--busy-timeout`, and `--no-create`, plus SKILL.md, What's New, the QUALITY shim paragraph, COVERAGE, gate-suites, and 006 Implementation Results. The repair command topic is already in this stage.
+
+**Praise:** a damaged index says `fts_only` true and names `repair search-index`. A damaged base table stays the old corrupt line, and repair refuses it.
+
+### 2026-10-16 — second-opinion deep review (stage 6)
+
+**Verdict:** stage 6 approved after two grill-decided changes. No open blocking item.
+
+**Run, not read.** Gate (`-DREMEMBER_TEST_VFS=ON`): ctest (ASan/UBSan), LINT OK, coverage 100% functions and 100% effective lines, `leaks-macos` PASS, `ci-linux.sh` OK. Damage probes on a 40-memory brain (page-level = the table's root page zeroed with `dd`):
+
+| Damage | Before this review | After |
+|--------|--------------------|-------|
+| logical, `entries_fts_data` block (the coder's test) | search `fts_only` true; repair `rebuilt 40` | same (fast path) |
+| page, `entries_fts_data` | repair failed: "brain file is damaged" | repair heals (`rebuilt N`, search works, `integrity_check` ok) |
+| page, `entries_fts_content` | repair failed **and** said "Run `remember repair search-index`", a loop | repair heals |
+| page, `tags` | search `fts_only` true, "Your memories are not affected"; repair "rebuilt 40" while `list` stayed corrupt | search `corrupt`, `fts_only` false, "brain file is damaged"; repair refuses |
+| page, `entries` / truncated brain | repair refuses | unchanged |
+
+**Grill (Itay 2026-10-16):**
+
+1. **`tags` and `entry_tags` join the base check (amends E4.10).** Seven tables now: `entries`, `tags`, `entry_tags`, `entry_links`, `conflicts`, `settings`, `bucket_prefixes`. Tags are memories, not index.
+2. **Repair fixes whatever it can (amends E4.14).** My first proposal, DROP + repopulate, failed on page damage: DROP must free the damaged pages, exactly like FTS5 `'rebuild'`, and it even broke the index-page case. I reported that and re-asked, and Itay answered "do whatever it can to fix the damage, and do it now." Repair is now two-tier after the base check. (a) The `'rebuild'` fast path plus integrity-check handles logical damage. (b) If that fails, `replace_damaged_fts`: in one `BEGIN IMMEDIATE`, `writable_schema` unlinks `entries_fts` and its shadow tables from `sqlite_schema` without touching their pages, `writable_schema = RESET` reloads the schema, then the shared `K_FTS_SQL` and `repopulate_fts` rebuild the index from `entries` with the Hebrew fold, then COMMIT, `VACUUM` (drops the orphaned pages), and integrity-check. A failure rolls back and reloads the schema. (c) If both fail, `fts_only` is forced false, so the message is the base "brain file is damaged… export / restore" line and never sends the user back to repair. The surgery runs only after the seven base tables pass `quick_check`, so only index pages are abandoned. The sequence was prototyped in the `sqlite3` CLI on both page-damage cases before it was written in C.
+
+New tests: `cli_repair_heals_page_damaged_fts_data`, `cli_repair_heals_page_damaged_fts_content`, `cli_damaged_tags_is_brain_damage_not_fts_only`. `smash_entries_root` is generalized to `smash_root(db, name)`.
+
+3. **Defensive mode on (Itay 2026-10-16).** `SQLITE_DBCONFIG_DEFENSIVE` was off (SQLite's default). Every store connection now turns it on first, in `apply_pragmas` via `set_defensive`, so plain SQL on the connection cannot corrupt the file: no `writable_schema`, no `schema_version` writes, no `journal_mode=OFF`, no shadow-table writes. Repair's surgery is the one deliberate exception. It lifts defensive mode just around the schema unlink, including the rollback / `RESET` failure path, and turns it back on before `VACUUM`. The new `store_connection_is_defensive_before_and_after_repair` checks the live setting via `store_test_defensive` after open and after a surgery repair. Mutation-checked: without the lift, the page-damage heal fails because defensive mode refuses `writable_schema`, which proves the mode is really on.
+
+**Coverage follow-up:** coverage flagged the both-tiers-fail path. The new shim test `cli_repair_that_cannot_write_never_points_back_at_repair` (page-damaged index plus `REMEMBER_TEST_FAIL_WRITE=0`) checks exit 1, no "repair search-index" in the message, that the brain still opens afterwards (the surgery rolled back with the schema reloaded and defensive mode restored), and that a later repair without the fault heals it. The shim-off SKIP line no longer hard-codes a test count; it had already drifted to 8 when there are 9.
+
+**Praise:** `fts_only` is decided in the adapter right after the snapshot, before `quick_check` can clobber it. A failed engine call during the check keeps the engine's code and still reads as corrupt.
+
+### 2026-10-16 — stage 7 (docs + full gate)
+
+No new grill. No new `decision:*`. Help sentences use the existing help voice for behavior E4.1, E4.11, and E4.13 already locked. The repair command topic and the general-help command line stayed as stage 6 wrote them.
+
+- General help's usage line and global-options block name `--json-errors`, `--busy-timeout MS` (0..60000, default 5000), and `--no-create`. The shared command footer lists the same three. `cli_help_names_json_errors_busy_timeout_and_no_create` failed first because those strings were absent.
+- `skills/remember/SKILL.md` tells an agent to pass `--json-errors` and read `error.code`. `busy` means retry later. `corrupt` with `detail.fts_only` true means `remember repair search-index`.
+- README What's New, under the existing v0.3.0 heading, names `--json-errors`, the seven causes, `--busy-timeout`, `--no-create`, and `repair search-index`.
+- Engineering notes: an error or warning line is written only in `diag.c`. `scripts/lint-all.sh` rejects any other `app_err(` call. The repair bullet now matches the seven-table check and the two-tier heal (`decision:plan16-repair-heals-index-damage`). Every connection sets defensive mode (`decision:remember-sqlite-defensive-mode`).
+- `docs/QUALITY.md` describes the test-only VFS shim. `tests/COVERAGE.md` covers the plan 16 surface. `tests/gate-suites` already listed `errors` and `facade`, so that line did not change.
+- Design log 006 Implementation Results records E4.1–E4.15, E3.2, and X-E02, including the amendments. The Design section is unchanged.
+- `facade_json_errors_not_found_matches_cli` and `facade_busy_json_errors_matches_cli` passed on the first run. The CLI and `remember_run` already shared one pipeline, so those tests locked the bytes and did not change production code.
+
+### 2026-10-16 — in-session deep review (stage 7)
+
+**Verdict:** approve for the second-opinion pass. No open blocking item. No grill. No new `decision:*`.
+
+**Ran:** ctest 5/5 with ASan/UBSan and `REMEMBER_TEST_VFS=ON` (the first `install_skill` failed inside the sandbox on `mkdir` of `.cursor`; the same suite passed outside it). `lint-all.sh` LINT OK, including the new diag-boundary grep. Coverage 100% functions and 100% effective lines. `leaks-macos` PASS. `ci-linux.sh` OK, including the non-root suite, IWYU, and scan-build. Bugbot on the uncommitted stage found no bugs.
+
+**Pragmatic write-gate:** DRY PASS (the three flag sentences live in one help block; the test locks those bytes). Easy-to-replace PASS (no new production dependency; the facade test's sqlite include stays in the test binary). Orthogonal PASS (help is presentation; the flags were already parsed). No deferred markers.
+
+**Ponytail:** Lean already. The facade tests compare one run instead of calling `assert_read_parity` and running again.
+
+**Simplify:** nothing to cut. Realigning the global-options column is what keeps `--busy-timeout MS` on the same grid as `--db PATH`.
+
+**Praise:** one footer string covers every command topic. The repair topic was left as stage 6 wrote it.
+
+### 2026-10-16 — second-opinion deep review (FINAL)
+
+**Verdict:** plan 16 approved. No open blocking item. One grill, answered and implemented. Three auto-fixes.
+
+**Run, not read.** Final gate (`-DREMEMBER_TEST_VFS=ON`, ASan/UBSan, the gate script refuses to run unless the cache shows both ON): ctest 5/5 (`step05_gate` 114 s), `lint-all.sh` LINT OK including the widened diag-boundary grep, coverage 100% functions and 100% effective lines, `leaks-macos` PASS, `ci-linux.sh` OK including IWYU and scan-build, then `GATE-ALL-GREEN`. The first post-fix lint caught `opts.no_create = a || b` as an int-to-bool conversion (clang-tidy). It is now the `if` form that the `device new` line next to it uses. Probes on the built binary: `--json --json-errors get --key nope` (exit 2, one `not_found` line); `--json-errors --busy-timeout 500 add x` under a `sqlite3` `BEGIN EXCLUSIVE` (`busy` after 0.62 s, exit 1, no retry); `--no-create --db <missing>/x.db list` (`cannot_open` `missing`, folder not created); `REMEMBER_DB=<missing> --no-create device new` (same, nothing created); `--busy-timeout 5 --busy-timeout 99999` (usage); `REMEMBER_TEST_ENOSPC=1 add` (`disk_full`); `--json-errors help bogus` (one `usage` line); `nm build/remember` has `remember_test_vfs_install`, `nm build-release/remember` has no shim symbol.
+
+**Process note:** the first gate run here was invalid. CMake wiped the `build/` cache because the cached compiler path changed, and it silently dropped `-DREMEMBER_TEST_VFS=ON` from the same command line. The shim tests would have been SKIP. I stopped that run, and the gate script now greps `CMakeCache.txt` for both options before it builds.
+
+**Grill (Itay 2026-10-16):**
+
+1. **important → fixed. Repair never creates a brain (`decision:plan16-repair-no-create`, amends E4.14).** Probe: `remember --db typo/brain.db repair search-index` created `typo/`, an empty brain, and a sidecar, then printed `rebuilt 0` with exit 0. Now `run()` checks repair's argv before the open (`cmd_repair_reject_args`, exported next to `cmd_device_mints`), and `open_store` forces `no_create` for `CLI_CMD_REPAIR`. A missing brain is `cannot_open` / `missing`. A malformed repair is still `usage` and creates nothing. Every other command keeps create-on-missing. New tests `cli_repair_missing_brain_creates_nothing` and `cli_repair_usage_creates_no_brain` failed first. Mutation-checked: dropping the forced `no_create` fails the first; removing the pre-open argv check fails the second and `cli_repair_usage_is_search_index`. Repair help, README, engineering notes, and 006 Implementation Results say so.
+
+**Auto-fixes:**
+
+2. **important → fixed. The diag-boundary lint missed raw `stderr`.** Mutation: an injected `fprintf(stderr, …)`, `fputs(…, stderr)`, and `perror(…)` in `commands_common.c` all passed the stage 7 grep, which only matched `app_err(`. The pattern is now `app_err\(|[(, ]stderr[,)]|perror\(`, with `remember_main`'s `remember_run(argc, argv, stdout, stderr)` as the one exempt line. The real tree is clean and the mutant is caught. The engineering note names the wider rule.
+3. **important → fixed. SKILL.md said stderr is "one JSON object".** Probe: `--json-errors list --trash --deleted` writes a `deprecated_flag` warning line, then the `usage` error line. A synced path plus a miss gives `synced_folder` then `not_found`. An agent that parses stderr as one object breaks. SKILL.md now says each line is one object, warnings can come first even on failure, and to parse line by line.
+4. **nit → fixed (simplify, about 12 lines).** The two new facade tests repeated the parity triple from `assert_read_parity`. `read_parity` now asserts parity and returns the CLI result. `assert_read_parity` frees it, and the two tests assert exit, empty stdout, and code on that result. Mutation-checked: routing the JSON notice to raw `stderr` fails `facade_json_errors_not_found_matches_cli`; routing the SQLite JSON error to raw `stderr` fails `facade_busy_json_errors_matches_cli`.
+
+**Open nits (not fixed; plan 22 sweeps help, README, and SKILL):**
+
+- README's v0.3.0 heading still reads "searchable keys and a sidecar device id", and What's New does not mention the `remember: warning: ` prefix on the `--trash` and `purge-trash` lines (E4.2 amendment).
+- The general-help usage line is 113 columns.
+- The plan's Goal and must-pass rows still say `note:` and "never with non-zero exit". The amendments (`decision:plan16-warning-prefix-and-failure`) supersede them, and existing plan text stays as written.
+- The lint writes `/tmp/remember-*-leak.txt`, like its neighbors. A `mktemp` would be safer when two lint runs overlap.
+
+**Praise:** the facade tests lock bytes without touching production code, because `remember_run` and the CLI share one pipeline. The stage 6 two-tier repair still heals the page-damage cases.
+
+### 2026-10-16 — whole-plan deep review
+
+**Verdict:** approve. No open blocking item. No grill. No code change.
+
+**Ran, not read.** Probes on `build/remember` (ASan/UBSan, `REMEMBER_TEST_VFS=ON`): `--json-errors` usage is one line and exit 1; `get --key nope` is `not_found` exit 2; `--trash --deleted` writes `deprecated_flag` then `usage`; `--busy-timeout` 60001 / -1 / abc is `usage`; `--no-create` on a missing parent is `cannot_open` / `missing` and creates nothing; `repair search-index` on a missing path does the same; `repair` with no argument is `usage` and creates nothing; a directory is `is_directory` (errno 21); a text file is `not_a_database`; mode 444 then `add` is `read_only`; a held `BEGIN EXCLUSIVE` plus `--busy-timeout 500` is `busy` after 0.66 s with empty stdout; `REMEMBER_TEST_ENOSPC=1` is `disk_full`; a Dropbox path keeps `remember: warning: database path looks like a synced folder …`, and with `--json-errors` the warning line precedes `not_found`. `search editor` finds `pref:editor`. `search pref:editor` stays `database` (`no such column: pref`); that column-filter text is plan 18.
+
+**Simplify:** nothing to cut. The extended-name table, the seven-cause map, the two-tier repair, and the warning prefix are the locked contract. `store_status_plain` stays so a non-FTS failure is not passed through the FTS syntax heuristic.
+
+**Left:** the plan 22 help/README/SKILL nits from the FINAL review.

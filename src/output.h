@@ -3,6 +3,7 @@
 
 #include "store.h"
 
+#include <stdbool.h>
 #include <stdio.h>
 
 /* Write one JSON string (including surrounding quotes) to out. Escapes per
@@ -76,5 +77,8 @@ int output_conflicts_envelope(FILE *out, const StoreConflict *rows, size_t count
 
 /* conflict accept --json: action accepted + entries. */
 int output_accepted_envelope(FILE *out, const Entry *entries, size_t count, const char *now);
+
+/* repair search-index. JSON is the E4.14 object; human is D8 "rebuilt N". */
+int output_rebuilt(FILE *out, bool json, size_t entries);
 
 #endif /* REMEMBER_OUTPUT_H */

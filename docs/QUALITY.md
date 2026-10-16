@@ -139,6 +139,10 @@ Project TUs (not amalgamation) use warnings-as-errors plus:
 - **Linux CI**: `REMEMBER_ENABLE_LSAN=ON` → `ASAN_OPTIONS=detect_leaks=1` on store unit + env for the job.
 - **macOS**: use `leaks --atExit` smoke on meta CLI paths; LSan off.
 
+## Test-only VFS shim
+
+`REMEMBER_TEST_VFS` (default OFF) compiles `src/test_vfs.c` into the `remember` CLI only. A Release configure forces the option OFF. `remember_plain`, `remember_core`, and an installed binary never define `remember_test_vfs_install`. `scripts/install.sh` refuses a binary that defines it, and ctest `no_shim_symbols` checks the same split. The shim wraps the `unix` VFS and fails `xRead` / `xWrite` when `REMEMBER_TEST_ENOSPC`, `REMEMBER_TEST_FAIL_WRITE`, `REMEMBER_TEST_FAIL_READ`, or `REMEMBER_TEST_NOMEM` is set. It exists so the SQLite cause tests can run. It is not part of a release.
+
 ## Design rules that prevent leaks
 
 See `docs/engineering-notes.md`: **`goto cleanup`** single-exit teardown is mandatory for multi-resource functions.

@@ -1,6 +1,6 @@
 #include "commands_common.h"
 
-#include "appio.h"
+#include "diag.h"
 #include "exit_codes.h"
 #include "normalize.h"
 #include "store.h"
@@ -8,6 +8,7 @@
 
 #include <errno.h>
 #include <limits.h>
+#include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -107,6 +108,7 @@ static const char *norm_body_message(NormStatus st)
     }
 }
 
+/* cppcheck-suppress staticFunction ; public API (commands_common.h); used by tests */
 const char *norm_token_message(NormStatus st, const char *kind)
 {
     int is_key = (kind != NULL && strcmp(kind, "key") == 0);
@@ -130,9 +132,207 @@ const char *norm_token_message(NormStatus st, const char *kind)
     }
 }
 
-void err_msg(const char *msg)
+void err_msg(DiagCode code, const char *msg)
 {
-    (void)fprintf(app_err(), "remember: %s\n", msg);
+    (void)diag_error(code, msg);
+}
+
+void err_fmt(DiagCode code, const char *fmt, ...)
+{
+    /* va_list has no portable initializer. Measure, then write. Each pass
+       starts its own list: a va_list can be consumed only once. x86_64 clang
+       18 records va_start and vsnprintf on different regions. */
+    /* NOLINTNEXTLINE(cppcoreguidelines-init-variables) */
+    va_list vargs;
+    int wrote = 0;
+    char *buf = NULL;
+
+    va_start(vargs, fmt);
+    /* NOLINTNEXTLINE(clang-analyzer-valist.Uninitialized) -- array va_list mismatch */
+    wrote = vsnprintf(NULL, 0, fmt, vargs);
+    va_end(vargs);
+    if (wrote < 0) {
+        err_msg(DIAG_INTERNAL, "internal error");
+        return;
+    }
+    buf = (char *)malloc((size_t)wrote + 1U);
+    if (buf == NULL) {
+        err_msg(DIAG_OUT_OF_MEMORY, "out of memory");
+        return;
+    }
+    va_start(vargs, fmt);
+    /* NOLINTNEXTLINE(clang-analyzer-valist.Uninitialized) -- array va_list mismatch */
+    if (vsnprintf(buf, (size_t)wrote + 1U, fmt, vargs) != wrote) {
+        err_msg(DIAG_INTERNAL, "internal error");
+    } else {
+        err_msg(code, buf);
+    }
+    va_end(vargs);
+    free(buf);
+}
+
+/* cppcheck-suppress staticFunction ; public API (commands_common.h); used by tests */
+DiagCode code_for_store_status(StoreStatus st)
+{
+    switch (st) {
+    case STORE_OK:
+        return DIAG_INTERNAL;
+    case STORE_ERR_NOT_FOUND:
+        return DIAG_NOT_FOUND;
+    case STORE_ERR_SQLITE:
+        return DIAG_DATABASE;
+    case STORE_ERR_OOM:
+        return DIAG_OUT_OF_MEMORY;
+    case STORE_ERR_INTERNAL:
+        return DIAG_INTERNAL;
+    case STORE_ERR_QUERY:
+        return DIAG_INVALID_QUERY;
+    case STORE_ERR_CONFLICT:
+        return DIAG_BODY_CONFLICT;
+    case STORE_ERR_EXPIRED:
+        return DIAG_EXPIRED;
+    case STORE_ERR_NOT_EXPIRED:
+        return DIAG_NOT_EXPIRED;
+    case STORE_ERR_DELETED:
+        return DIAG_DELETED;
+    case STORE_ERR_NOT_DELETED:
+        return DIAG_NOT_DELETED;
+    case STORE_ERR_NOT_SINGLE_DEVICE:
+        return DIAG_NOT_SINGLE_DEVICE;
+    case STORE_ERR_SELF_LINK:
+        return DIAG_SELF_LINK;
+    case STORE_ERR_CYCLE:
+        return DIAG_CYCLE;
+    case STORE_ERR_SOURCE_TOO_OLD:
+        return DIAG_SOURCE_TOO_OLD;
+    case STORE_ERR_SOURCE_TOO_NEW:
+        return DIAG_NEWER_DATABASE;
+    case STORE_ERR_UNIQUE_TAKEN:
+        return DIAG_UNIQUE_TAKEN;
+    default:
+        return DIAG_INTERNAL;
+    }
+}
+
+/* cppcheck-suppress staticFunction ; public API (commands_common.h); used by tests */
+DiagCode code_for_store_class(StoreErrorClass error_class)
+{
+    switch (error_class) {
+    case STORE_ERROR_BUSY:
+        return DIAG_BUSY;
+    case STORE_ERROR_READ_ONLY:
+        return DIAG_READ_ONLY;
+    case STORE_ERROR_DISK_FULL:
+        return DIAG_DISK_FULL;
+    case STORE_ERROR_CANNOT_OPEN:
+        return DIAG_CANNOT_OPEN;
+    case STORE_ERROR_NOT_A_DATABASE:
+        return DIAG_NOT_A_DATABASE;
+    case STORE_ERROR_CORRUPT:
+        return DIAG_CORRUPT;
+    case STORE_ERROR_IO_ERROR:
+        return DIAG_IO_ERROR;
+    case STORE_ERROR_DATABASE:
+        return DIAG_DATABASE;
+    case STORE_ERROR_NONE:
+    default:
+        return DIAG_INTERNAL;
+    }
+}
+
+void err_store_sqlite(const StoreError *detail, const char *path)
+{
+    if (detail == NULL || detail->error_class == STORE_ERROR_NONE) {
+        err_msg(DIAG_INTERNAL, "internal error");
+        return;
+    }
+    (void)diag_error_sqlite(code_for_store_class(detail->error_class), detail, path);
+}
+
+void err_store(const Store *s, StoreStatus st)
+{
+    if (st == STORE_ERR_SQLITE && s != NULL) {
+        const StoreError *detail = store_last_error(s);
+
+        if (detail != NULL && detail->error_class != STORE_ERROR_NONE) {
+            err_store_sqlite(detail, store_path(s));
+            return;
+        }
+    }
+    err_msg(code_for_store_status(st), store_status_message(st));
+}
+
+/* cppcheck-suppress staticFunction ; public API (commands_common.h); used by tests */
+DiagCode code_for_norm(NormStatus st)
+{
+    if (st == NORM_ERR_OOM) {
+        return DIAG_OUT_OF_MEMORY;
+    }
+    return DIAG_USAGE;
+}
+
+void err_norm(NormStatus st, const char *kind)
+{
+    err_msg(code_for_norm(st), norm_token_message(st, kind));
+}
+
+DiagCode code_for_cmd_text(const char *msg)
+{
+    if (msg != NULL && strcmp(msg, "out of memory") == 0) {
+        return DIAG_OUT_OF_MEMORY;
+    }
+    if (msg != NULL && (strcmp(msg, "internal error") == 0 ||
+                        strcmp(msg, "failed to read body from stdin") == 0)) {
+        return DIAG_INTERNAL;
+    }
+    return DIAG_USAGE;
+}
+
+static bool store_text_has_prefix(const char *msg, const char *prefix)
+{
+    return strncmp(msg, prefix, strlen(prefix)) == 0;
+}
+
+DiagCode code_for_store_text(const char *msg)
+{
+    if (msg == NULL || msg[0] == '\0') {
+        return DIAG_INTERNAL;
+    }
+    if (strcmp(msg, "out of memory") == 0) {
+        return DIAG_OUT_OF_MEMORY;
+    }
+    if (strcmp(msg, "database is newer than this remember") == 0) {
+        return DIAG_NEWER_DATABASE;
+    }
+    if (strcmp(msg, "unsupported database version") == 0) {
+        return DIAG_UNSUPPORTED_DATABASE;
+    }
+    if (strcmp(msg, "migration left a dangling reference") == 0) {
+        return DIAG_CORRUPT;
+    }
+    if (strcmp(msg, "database path component is not a directory") == 0 ||
+        store_text_has_prefix(msg, "cannot create database directory")) {
+        return DIAG_CANNOT_OPEN;
+    }
+    if (strcmp(msg, "invalid database path") == 0 ||
+        strcmp(msg, "database path is too long") == 0 || strcmp(msg, "empty database path") == 0 ||
+        strcmp(msg, "HOME is not set; pass --db PATH") == 0 ||
+        strcmp(msg, "database path must be a regular file (not :memory: or file: URI)") == 0) {
+        return DIAG_USAGE;
+    }
+    if (strcmp(msg, "internal error") == 0 ||
+        strcmp(msg, "internal error: path buffer missing") == 0 ||
+        strcmp(msg, "cannot write device_id sidecar") == 0 ||
+        strcmp(msg, "invalid device_id sidecar") == 0 ||
+        strcmp(msg, "cannot mint device_id") == 0 || strcmp(msg, "cannot mint sync_id") == 0) {
+        return DIAG_INTERNAL;
+    }
+    if (strcmp(msg, "cannot rebuild search index") == 0 || store_text_has_prefix(msg, "sqlite:") ||
+        store_text_has_prefix(msg, "cannot read user_version") ||
+        store_text_has_prefix(msg, "cannot open database")) {
+        return DIAG_DATABASE;
+    }
+    return DIAG_INTERNAL;
 }
 
 int source_is_valid(const char *s)
@@ -281,14 +481,14 @@ int cmd_bin_take_flag(const char *arg, CmdBinOpts *opts)
 int cmd_bin_resolve(const CmdBinOpts *opts, StoreBin *out)
 {
     if (opts == NULL || out == NULL) {
-        err_msg("internal error");
+        err_msg(DIAG_INTERNAL, "internal error");
         return -1;
     }
     if (opts->trash_alias) {
-        (void)fprintf(app_err(), "remember: --trash is deprecated; use --expired\n");
+        (void)diag_warning(DIAG_WARN_DEPRECATED_FLAG, "--trash is deprecated; use --expired");
     }
     if (opts->expired && opts->deleted) {
-        err_msg("cannot combine --expired and --deleted");
+        err_msg(DIAG_USAGE, "cannot combine --expired and --deleted");
         return -1;
     }
     if (opts->deleted) {
@@ -324,19 +524,19 @@ void cmd_neighbors_drop_deleted(StoreNeighbor *rows, size_t *n, const char *now)
     *n = w;
 }
 
-int store_status_to_exit(StoreStatus st)
+int store_status_to_exit(const Store *s, StoreStatus st)
 {
     if (st == STORE_ERR_NOT_FOUND) {
-        err_msg(store_status_message(st));
+        err_store(s, st);
         return REMEMBER_NOT_FOUND;
     }
     if (st == STORE_ERR_EXPIRED || st == STORE_ERR_NOT_EXPIRED || st == STORE_ERR_DELETED ||
         st == STORE_ERR_NOT_DELETED) {
-        err_msg(store_status_message(st));
+        err_store(s, st);
         return REMEMBER_WRONG_BIN;
     }
     if (st != STORE_OK) {
-        err_msg(store_status_message(st));
+        err_store(s, st);
         return REMEMBER_ERR;
     }
     return REMEMBER_OK;

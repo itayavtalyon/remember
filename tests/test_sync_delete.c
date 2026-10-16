@@ -111,7 +111,7 @@ TEST(cli_delete_expired_hard_wipes_one_row)
     cmd_result_free(&r);
     r = run_remember(db, alias, sizeof(alias) / sizeof(alias[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 3);
-    ASSERT_STR_CONTAINS(r.err, "remember: --trash is deprecated; use --expired");
+    ASSERT_STR_CONTAINS(r.err, "remember: warning: --trash is deprecated; use --expired");
     ASSERT_STR_CONTAINS(r.err, "not_expired");
     cmd_result_free(&r);
     free(db);
@@ -282,7 +282,7 @@ TEST(cli_purge_deleted_and_purge_trash_alias)
     cmd_result_free(&r);
     r = run_remember(db, ptrash, sizeof(ptrash) / sizeof(ptrash[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 0);
-    ASSERT_STR_CONTAINS(r.err, "remember: purge-trash is deprecated; use purge --expired");
+    ASSERT_STR_CONTAINS(r.err, "remember: warning: purge-trash is deprecated; use purge --expired");
     trim_trailing_newlines(r.out);
     ASSERT_STREQ(r.out, "1");
     cmd_result_free(&r);

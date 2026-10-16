@@ -1,5 +1,6 @@
 #include "commands.h"
 #include "commands_common.h"
+#include "diag.h"
 
 #include "appio.h"
 #include "exit_codes.h"
@@ -15,13 +16,13 @@ static int emit_purge_result(bool json, const Entry *entries, size_t count, cons
 {
     if (json) {
         if (output_deleted_list(app_out(), entries, count, now) != 0) {
-            err_msg("failed to write output");
+            err_msg(DIAG_INTERNAL, "failed to write output");
             return -1;
         }
         return 0;
     }
     if (fprintf(app_out(), "%zu\n", count) < 0) {
-        err_msg("failed to write output");
+        err_msg(DIAG_INTERNAL, "failed to write output");
         return -1;
     }
     return 0;
@@ -37,12 +38,12 @@ static int run_purge_bin(Store *s, bool json, StoreBin bin)
     int rc = REMEMBER_ERR;
 
     if (utc_now(now, sizeof(now)) != 0) {
-        err_msg("internal error");
+        err_msg(DIAG_INTERNAL, "internal error");
         return REMEMBER_ERR;
     }
     st = store_purge(s, bin, now, &entries, &count);
     if (st != STORE_OK) {
-        err_msg(store_status_message(st));
+        err_store(s, st);
         goto cleanup;
     }
     if (emit_purge_result(json, entries, count, now) != 0) {
@@ -72,17 +73,17 @@ int cmd_purge(Store *s, bool json, int rest_argc, const char **rest_argv)
             continue;
         }
         if (arg != NULL && arg[0] == '-' && arg[1] != '\0') {
-            (void)fprintf(app_err(), "remember: unknown option '%s'\n", arg);
+            err_fmt(DIAG_USAGE, "unknown option '%s'", arg);
             return REMEMBER_ERR;
         }
-        err_msg("purge takes no positional arguments");
+        err_msg(DIAG_USAGE, "purge takes no positional arguments");
         return REMEMBER_ERR;
     }
     if (cmd_bin_resolve(&bins, &bin) != 0) {
         return REMEMBER_ERR;
     }
     if (bin == STORE_BIN_LIVE) {
-        err_msg("purge requires --expired or --deleted");
+        err_msg(DIAG_USAGE, "purge requires --expired or --deleted");
         return REMEMBER_ERR;
     }
     return run_purge_bin(s, json, bin);
@@ -90,13 +91,13 @@ int cmd_purge(Store *s, bool json, int rest_argc, const char **rest_argv)
 
 int cmd_purge_trash(Store *s, bool json, int rest_argc, const char **rest_argv)
 {
-    (void)fprintf(app_err(), "remember: purge-trash is deprecated; use purge --expired\n");
+    (void)diag_warning(DIAG_WARN_DEPRECATED_FLAG, "purge-trash is deprecated; use purge --expired");
     if (rest_argc > 0) {
         if (rest_argv != NULL && rest_argv[0] != NULL && rest_argv[0][0] == '-' &&
             rest_argv[0][1] != '\0') {
-            (void)fprintf(app_err(), "remember: unknown option '%s'\n", rest_argv[0]);
+            err_fmt(DIAG_USAGE, "unknown option '%s'", rest_argv[0]);
         } else {
-            err_msg("purge-trash takes no arguments");
+            err_msg(DIAG_USAGE, "purge-trash takes no arguments");
         }
         return REMEMBER_ERR;
     }
