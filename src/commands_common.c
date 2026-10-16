@@ -139,31 +139,34 @@ void err_msg(DiagCode code, const char *msg)
 
 void err_fmt(DiagCode code, const char *fmt, ...)
 {
+    /* va_list has no portable initializer. Measure, then write, each with its
+       own va_start. va_copy makes Linux clang-tidy treat the source list as
+       uninitialized at the first vsnprintf. */
     /* NOLINTNEXTLINE(cppcoreguidelines-init-variables) */
     va_list vargs;
-    /* NOLINTNEXTLINE(cppcoreguidelines-init-variables) */
-    va_list copy;
     int wrote = 0;
     char *buf = NULL;
 
     va_start(vargs, fmt);
-    va_copy(copy, vargs);
     wrote = vsnprintf(NULL, 0, fmt, vargs);
     va_end(vargs);
     if (wrote < 0) {
         err_msg(DIAG_INTERNAL, "internal error");
-    } else {
-        buf = (char *)malloc((size_t)wrote + 1U);
-        if (buf == NULL) {
-            err_msg(DIAG_OUT_OF_MEMORY, "out of memory");
-        } else if (vsnprintf(buf, (size_t)wrote + 1U, fmt, copy) != wrote) {
-            err_msg(DIAG_INTERNAL, "internal error");
-        } else {
-            err_msg(code, buf);
-        }
+        return;
     }
+    buf = (char *)malloc((size_t)wrote + 1U);
+    if (buf == NULL) {
+        err_msg(DIAG_OUT_OF_MEMORY, "out of memory");
+        return;
+    }
+    va_start(vargs, fmt);
+    if (vsnprintf(buf, (size_t)wrote + 1U, fmt, vargs) != wrote) {
+        err_msg(DIAG_INTERNAL, "internal error");
+    } else {
+        err_msg(code, buf);
+    }
+    va_end(vargs);
     free(buf);
-    va_end(copy);
 }
 
 /* cppcheck-suppress staticFunction ; public API (commands_common.h); used by tests */
