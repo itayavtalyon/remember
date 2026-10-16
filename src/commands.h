@@ -28,5 +28,8 @@ int cmd_device(Store *s, bool json, int rest_argc, const char **rest_argv);
 int cmd_repair(Store *s, bool json, int rest_argc, const char **rest_argv);
 /* Exactly `device new`: its open replaces an invalid sidecar (Itay 2026-10-13). */
 bool cmd_device_mints(int rest_argc, const char **rest_argv);
+/* 0 for exactly `search-index`; else prints usage and returns -1. Runs before
+   the open, which never creates a brain (decision:plan16-repair-no-create). */
+int cmd_repair_reject_args(int rest_argc, const char **rest_argv);
 
 #endif /* REMEMBER_COMMANDS_H */

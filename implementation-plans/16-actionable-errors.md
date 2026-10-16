@@ -297,22 +297,22 @@ cmake --build build --target leaks-macos          # macOS only
 
 ## Definition of Done
 
-- [ ] Design log 006 unchanged except Implementation Results rows for
+- [x] Design log 006 unchanged except Implementation Results rows for
       E4.1–E4.15, E3.2, X-E02 (with the observed SQLite names for the chmod
       folder case).
-- [ ] Every must-pass row green and in `tests/gate-suites`.
-- [ ] No stderr error line is written outside the diag emitter (grep check
+- [x] Every must-pass row green and in `tests/gate-suites`.
+- [x] No stderr error line is written outside the diag emitter (grep check
       in lint or a test).
-- [ ] Plain stderr unchanged for non-database errors (golden test).
-- [ ] Exit codes unchanged; stdout empty on every error.
-- [ ] Shim absent from release, `remember_plain` and `remember_core`.
-- [ ] Locked decisions D5–D9, P3, P6 implemented as written (D9 table is a test).
-- [ ] Help, SKILL.md, README What's New (`--json-errors`, the seven causes,
+- [x] Plain stderr unchanged for non-database errors (golden test).
+- [x] Exit codes unchanged; stdout empty on every error.
+- [x] Shim absent from release, `remember_plain` and `remember_core`.
+- [x] Locked decisions D5–D9, P3, P6 implemented as written (D9 table is a test).
+- [x] Help, SKILL.md, README What's New (`--json-errors`, the seven causes,
       `--busy-timeout`, `--no-create`, `repair search-index`).
-- [ ] Engineering notes + QUALITY.md updated.
-- [ ] Gate: ctest, lint, coverage 100/100, `ci-linux.sh` all green.
-- [ ] Second review done; no open **blocking** item.
-- [ ] `implementation-plans/INDEX.md` row marked ✅.
+- [x] Engineering notes + QUALITY.md updated.
+- [x] Gate: ctest, lint, coverage 100/100, `ci-linux.sh` all green.
+- [x] Second review done; no open **blocking** item.
+- [x] `implementation-plans/INDEX.md` row marked ✅.
 
 ## Second review handover
 
@@ -720,3 +720,30 @@ No new grill. No new `decision:*`. Help sentences use the existing help voice fo
 **Simplify:** nothing to cut. Realigning the global-options column is what keeps `--busy-timeout MS` on the same grid as `--db PATH`.
 
 **Praise:** one footer string covers every command topic. The repair topic was left as stage 6 wrote it.
+
+### 2026-10-16 — second-opinion deep review (FINAL)
+
+**Verdict:** plan 16 approved. No open blocking item. One grill, answered and implemented. Three auto-fixes.
+
+**Run, not read.** Final gate (`-DREMEMBER_TEST_VFS=ON`, ASan/UBSan, the gate script refuses to run unless the cache shows both ON): ctest 5/5 (`step05_gate` 114 s), `lint-all.sh` LINT OK including the widened diag-boundary grep, coverage 100% functions and 100% effective lines, `leaks-macos` PASS, `ci-linux.sh` OK including IWYU and scan-build, then `GATE-ALL-GREEN`. The first post-fix lint caught `opts.no_create = a || b` as an int-to-bool conversion (clang-tidy). It is now the `if` form that the `device new` line next to it uses. Probes on the built binary: `--json --json-errors get --key nope` (exit 2, one `not_found` line); `--json-errors --busy-timeout 500 add x` under a `sqlite3` `BEGIN EXCLUSIVE` (`busy` after 0.62 s, exit 1, no retry); `--no-create --db <missing>/x.db list` (`cannot_open` `missing`, folder not created); `REMEMBER_DB=<missing> --no-create device new` (same, nothing created); `--busy-timeout 5 --busy-timeout 99999` (usage); `REMEMBER_TEST_ENOSPC=1 add` (`disk_full`); `--json-errors help bogus` (one `usage` line); `nm build/remember` has `remember_test_vfs_install`, `nm build-release/remember` has no shim symbol.
+
+**Process note:** the first gate run here was invalid. CMake wiped the `build/` cache because the cached compiler path changed, and it silently dropped `-DREMEMBER_TEST_VFS=ON` from the same command line. The shim tests would have been SKIP. I stopped that run, and the gate script now greps `CMakeCache.txt` for both options before it builds.
+
+**Grill (Itay 2026-10-16):**
+
+1. **important → fixed. Repair never creates a brain (`decision:plan16-repair-no-create`, amends E4.14).** Probe: `remember --db typo/brain.db repair search-index` created `typo/`, an empty brain, and a sidecar, then printed `rebuilt 0` with exit 0. Now `run()` checks repair's argv before the open (`cmd_repair_reject_args`, exported next to `cmd_device_mints`), and `open_store` forces `no_create` for `CLI_CMD_REPAIR`. A missing brain is `cannot_open` / `missing`. A malformed repair is still `usage` and creates nothing. Every other command keeps create-on-missing. New tests `cli_repair_missing_brain_creates_nothing` and `cli_repair_usage_creates_no_brain` failed first. Mutation-checked: dropping the forced `no_create` fails the first; removing the pre-open argv check fails the second and `cli_repair_usage_is_search_index`. Repair help, README, engineering notes, and 006 Implementation Results say so.
+
+**Auto-fixes:**
+
+2. **important → fixed. The diag-boundary lint missed raw `stderr`.** Mutation: an injected `fprintf(stderr, …)`, `fputs(…, stderr)`, and `perror(…)` in `commands_common.c` all passed the stage 7 grep, which only matched `app_err(`. The pattern is now `app_err\(|[(, ]stderr[,)]|perror\(`, with `remember_main`'s `remember_run(argc, argv, stdout, stderr)` as the one exempt line. The real tree is clean and the mutant is caught. The engineering note names the wider rule.
+3. **important → fixed. SKILL.md said stderr is "one JSON object".** Probe: `--json-errors list --trash --deleted` writes a `deprecated_flag` warning line, then the `usage` error line. A synced path plus a miss gives `synced_folder` then `not_found`. An agent that parses stderr as one object breaks. SKILL.md now says each line is one object, warnings can come first even on failure, and to parse line by line.
+4. **nit → fixed (simplify, about 12 lines).** The two new facade tests repeated the parity triple from `assert_read_parity`. `read_parity` now asserts parity and returns the CLI result. `assert_read_parity` frees it, and the two tests assert exit, empty stdout, and code on that result. Mutation-checked: routing the JSON notice to raw `stderr` fails `facade_json_errors_not_found_matches_cli`; routing the SQLite JSON error to raw `stderr` fails `facade_busy_json_errors_matches_cli`.
+
+**Open nits (not fixed; plan 22 sweeps help, README, and SKILL):**
+
+- README's v0.3.0 heading still reads "searchable keys and a sidecar device id", and What's New does not mention the `remember: warning: ` prefix on the `--trash` and `purge-trash` lines (E4.2 amendment).
+- The general-help usage line is 113 columns.
+- The plan's Goal and must-pass rows still say `note:` and "never with non-zero exit". The amendments (`decision:plan16-warning-prefix-and-failure`) supersede them, and existing plan text stays as written.
+- The lint writes `/tmp/remember-*-leak.txt`, like its neighbors. A `mktemp` would be safer when two lint runs overlap.
+
+**Praise:** the facade tests lock bytes without touching production code, because `remember_run` and the CLI share one pipeline. The stage 6 two-tier repair still heals the page-damage cases.

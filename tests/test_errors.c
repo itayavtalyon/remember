@@ -2797,6 +2797,54 @@ TEST(cli_repair_usage_is_search_index)
     free(db);
 }
 
+/* decision:plan16-repair-no-create: repair on a missing brain is cannot_open
+   missing, as if --no-create were given, and creates no folder or file. */
+TEST(cli_repair_missing_brain_creates_nothing)
+{
+    char tmpl[] = "/tmp/remember-repair-XXXXXX";
+    char path[TEST_PATH_CAP];
+    const char *cmd[] = {"--json-errors", "repair", "search-index"};
+    const char *dir = NULL;
+    int wrote = 0;
+    CmdResult r;
+
+    dir = mkdtemp(tmpl);
+    ASSERT_TRUE(dir != NULL);
+    if (dir == NULL) {
+        return;
+    }
+    ASSERT_EQ_INT(rmdir(tmpl), 0);
+    wrote = snprintf(path, sizeof(path), "%s/x.db", tmpl);
+    ASSERT_TRUE(wrote > 0 && (size_t)wrote < sizeof(path));
+
+    r = run_remember(path, cmd, sizeof(cmd) / sizeof(cmd[0]), NULL);
+    ASSERT_EQ_INT(r.exit_code, 1);
+    ASSERT_STREQ(r.out, "");
+    ASSERT_STR_CONTAINS(r.err, "\"code\":\"cannot_open\"");
+    ASSERT_STR_CONTAINS(r.err, "\"reason\":\"missing\"");
+    ASSERT_TRUE(access(tmpl, F_OK) != 0);
+    cmd_result_free(&r);
+}
+
+/* A malformed repair is usage before any open, so it creates no brain either. */
+TEST(cli_repair_usage_creates_no_brain)
+{
+    char *db = make_temp_db_path();
+    const char *bad[] = {"repair", "foo"};
+    CmdResult r;
+
+    ASSERT_TRUE(db != NULL);
+    if (db == NULL) {
+        return;
+    }
+    r = run_remember(db, bad, sizeof(bad) / sizeof(bad[0]), NULL);
+    ASSERT_EQ_INT(r.exit_code, 1);
+    ASSERT_STREQ(r.err, "remember: usage: repair search-index\n");
+    ASSERT_TRUE(access(db, F_OK) != 0);
+    cmd_result_free(&r);
+    free(db);
+}
+
 TEST(cli_repair_help_names_the_command)
 {
     char *db = make_temp_db_path();
@@ -3655,6 +3703,8 @@ void register_errors_tests(void)
     RUN_TEST(cli_repair_refuses_truncated_brain);
     RUN_TEST(cli_search_on_damaged_base_is_not_fts_only);
     RUN_TEST(cli_repair_usage_is_search_index);
+    RUN_TEST(cli_repair_missing_brain_creates_nothing);
+    RUN_TEST(cli_repair_usage_creates_no_brain);
     RUN_TEST(cli_repair_help_names_the_command);
     RUN_TEST(cli_help_names_json_errors_busy_timeout_and_no_create);
     RUN_TEST(cli_truncated_brain_reports_corrupt);

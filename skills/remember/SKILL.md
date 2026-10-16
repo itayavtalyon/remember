@@ -71,7 +71,7 @@ Never invent ids, keys, or sync_ids. On exit `2`, the entry is missing — do no
 
 ## Errors
 
-Pass `--json-errors` when a command can fail. Stderr is then one JSON object and there is no plain line. Read `error.code`.
+Pass `--json-errors` when a command can fail. Each stderr line is then one JSON object, and there is no plain line. Warning lines (`warning.code`) can come before the error line, also when the command fails. Parse stderr line by line. Read `error.code`.
 
 `busy` means another process holds the brain. Retry later. The tool does not retry.
 

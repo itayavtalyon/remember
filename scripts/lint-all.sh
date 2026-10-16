@@ -94,8 +94,9 @@ fi
 
 echo "== no error writes outside diag.c =="
 # app_err() is the emitter's stream. Command code calls err_msg / diag_*.
-if grep -RIn --include='*.c' --include='*.h' -E 'app_err\(' "$SRC_DIR" 2>/dev/null \
-  | grep -v 'diag\.c' | grep -v 'appio\.' \
+# Raw stderr and perror bypass it too; remember_main is the one place that binds stderr.
+if grep -RIn --include='*.c' --include='*.h' -E 'app_err\(|[(, ]stderr[,)]|perror\(' "$SRC_DIR" 2>/dev/null \
+  | grep -v 'diag\.c' | grep -v 'appio\.' | grep -vF 'remember_run(argc, argv, stdout, stderr)' \
   >/tmp/remember-diag-leak.txt 2>/dev/null; then
   if [[ -s /tmp/remember-diag-leak.txt ]]; then
     echo "diag boundary: FAIL"

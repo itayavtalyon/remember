@@ -76,7 +76,7 @@ Opening an existing database migrates it to `user_version` **5**.
 - A database error names one of seven causes: `busy`, `read_only`, `disk_full`, `cannot_open`, `not_a_database`, `corrupt`, `io_error`. Anything else is `database`.
 - `--busy-timeout MS` sets the lock wait (0..60000, default 5000).
 - `--no-create` fails when the brain file is missing and creates nothing.
-- `remember repair search-index` rebuilds a damaged search index. `corrupt` with `fts_only` true means that command.
+- `remember repair search-index` rebuilds a damaged search index. `corrupt` with `fts_only` true means that command. It never creates a missing brain.
 
 ### v0.2.0 — local sync foundations
 

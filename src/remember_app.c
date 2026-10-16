@@ -262,6 +262,7 @@ static void print_command_help(CliCommand topic)
         (void)fprintf(out, "  remember repair search-index\n");
         (void)fprintf(out, "\n");
         (void)fprintf(out, "Refuses when a base table fails its check.\n");
+        (void)fprintf(out, "A missing brain fails with cannot_open. Repair creates nothing.\n");
         (void)fprintf(out, "Human stdout: rebuilt N\n");
         (void)fprintf(out, "JSON: {\"version\":1,\"action\":\"rebuilt\",\"entries\":N}\n");
         (void)fprintf(out, "N is the number of rows in entries, in every bin.\n");
@@ -357,6 +358,10 @@ static Store *open_store(const CliArgs *args, int *out_rc)
         opts.busy_timeout_ms = args->globals.busy_timeout_ms;
     }
     opts.no_create = args->globals.no_create;
+    /* Repair never creates a brain (decision:plan16-repair-no-create). */
+    if (args->command == CLI_CMD_REPAIR) {
+        opts.no_create = true;
+    }
     if (args->command == CLI_CMD_DEVICE && cmd_device_mints(args->rest_argc, args->rest_argv)) {
         opts.replace_invalid_sidecar = true;
     }
@@ -447,6 +452,9 @@ static int run(const CliArgs *args)
     case CLI_CMD_DEVICE:
         return run_with_store(args, cmd_device);
     case CLI_CMD_REPAIR:
+        if (cmd_repair_reject_args(args->rest_argc, args->rest_argv) != 0) {
+            return REMEMBER_ERR;
+        }
         return run_with_store(args, cmd_repair);
     case CLI_CMD_NONE:
         /* Defensive: parse should set CLI_ERR_MISSING_COMMAND first. */

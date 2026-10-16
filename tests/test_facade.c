@@ -147,8 +147,8 @@ static void mask_timestamps(char *s)
     mask_version_vector(s);
 }
 
-/* Assert remember_run stdout/stderr/exit byte-match the CLI for a read command. */
-static void assert_read_parity(const char *db, const char *const *cmd, size_t ncmd)
+/* Assert remember_run stdout/stderr/exit byte-match the CLI; return the CLI result. */
+static CmdResult read_parity(const char *db, const char *const *cmd, size_t ncmd)
 {
     CmdResult sub = run_remember(db, cmd, ncmd, NULL);
     char *fout = NULL;
@@ -160,6 +160,14 @@ static void assert_read_parity(const char *db, const char *const *cmd, size_t nc
     ASSERT_STREQ(ferr, sub.err);
     free(fout);
     free(ferr);
+    return sub;
+}
+
+/* Assert remember_run stdout/stderr/exit byte-match the CLI for a read command. */
+static void assert_read_parity(const char *db, const char *const *cmd, size_t ncmd)
+{
+    CmdResult sub = read_parity(db, cmd, ncmd);
+
     cmd_result_free(&sub);
 }
 
@@ -751,26 +759,16 @@ TEST(facade_json_errors_not_found_matches_cli)
     char *db = make_temp_db_path();
     const char *cmd[] = {"--json-errors", "get", "--key", "nope"};
     CmdResult sub;
-    char *fout = NULL;
-    char *ferr = NULL;
-    int frc = 0;
 
     ASSERT_TRUE(db != NULL);
     if (db == NULL) {
         return;
     }
     seed_three(db);
-    sub = run_remember(db, cmd, sizeof(cmd) / sizeof(cmd[0]), NULL);
-    frc = facade_run(db, cmd, sizeof(cmd) / sizeof(cmd[0]),
-                     (FacadeCapture){.out = &fout, .err = &ferr});
+    sub = read_parity(db, cmd, sizeof(cmd) / sizeof(cmd[0]));
     ASSERT_EQ_INT(sub.exit_code, 2);
     ASSERT_STREQ(sub.out, "");
     ASSERT_STR_CONTAINS(sub.err, "\"code\":\"not_found\"");
-    ASSERT_EQ_INT(frc, sub.exit_code);
-    ASSERT_STREQ(fout, sub.out);
-    ASSERT_STREQ(ferr, sub.err);
-    free(fout);
-    free(ferr);
     cmd_result_free(&sub);
     free(db);
 }
@@ -782,9 +780,6 @@ TEST(facade_busy_json_errors_matches_cli)
     const char *cmd[] = {"--json-errors", "--busy-timeout", "0", "add", "blocked"};
     sqlite3 *lock = NULL;
     CmdResult sub;
-    char *fout = NULL;
-    char *ferr = NULL;
-    int frc = 0;
 
     ASSERT_TRUE(db != NULL);
     if (db == NULL) {
@@ -793,19 +788,12 @@ TEST(facade_busy_json_errors_matches_cli)
     seed_three(db);
     ASSERT_EQ_INT(sqlite3_open_v2(db, &lock, SQLITE_OPEN_READWRITE, NULL), SQLITE_OK);
     ASSERT_EQ_INT(sqlite3_exec(lock, "BEGIN EXCLUSIVE;", NULL, NULL, NULL), SQLITE_OK);
-    sub = run_remember(db, cmd, sizeof(cmd) / sizeof(cmd[0]), NULL);
-    frc = facade_run(db, cmd, sizeof(cmd) / sizeof(cmd[0]),
-                     (FacadeCapture){.out = &fout, .err = &ferr});
+    sub = read_parity(db, cmd, sizeof(cmd) / sizeof(cmd[0]));
     ASSERT_EQ_INT(sqlite3_exec(lock, "ROLLBACK;", NULL, NULL, NULL), SQLITE_OK);
     (void)sqlite3_close(lock);
     ASSERT_EQ_INT(sub.exit_code, 1);
     ASSERT_STREQ(sub.out, "");
     ASSERT_STR_CONTAINS(sub.err, "\"code\":\"busy\"");
-    ASSERT_EQ_INT(frc, sub.exit_code);
-    ASSERT_STREQ(fout, sub.out);
-    ASSERT_STREQ(ferr, sub.err);
-    free(fout);
-    free(ferr);
     cmd_result_free(&sub);
     free(db);
 }
