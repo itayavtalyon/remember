@@ -275,6 +275,7 @@ static DiagCode code_for_cli_error(CliError err)
     case CLI_ERR_UNKNOWN_COMMAND:
     case CLI_ERR_UNKNOWN_OPTION:
     case CLI_ERR_MISSING_OPTION_VALUE:
+    case CLI_ERR_INVALID_BUSY_TIMEOUT:
         return DIAG_USAGE;
     case CLI_ERR_OK:
     case CLI_ERR_INTERNAL:
@@ -304,6 +305,7 @@ static void print_parse_error(const CliArgs *args)
         break;
     case CLI_ERR_OK:
     case CLI_ERR_MISSING_COMMAND:
+    case CLI_ERR_INVALID_BUSY_TIMEOUT:
     case CLI_ERR_INTERNAL:
     default:
         break;
@@ -318,7 +320,7 @@ static Store *open_store(const CliArgs *args, int *out_rc)
     char path[REMEMBER_PATH_MAX];
     char err[ERR_BUFSIZE];
     StoreError detail;
-    /* --busy-timeout and --no-create reach these options in stage 5. */
+    /* Omitted --busy-timeout keeps the store default. Zero is a real value. */
     StoreOpenOpts opts = {.busy_timeout_ms = STORE_DEFAULT_BUSY_TIMEOUT_MS};
     Store *s = NULL;
 
@@ -336,6 +338,10 @@ static Store *open_store(const CliArgs *args, int *out_rc)
                            "database path looks like a synced folder "
                            "(iCloud/Dropbox/Google Drive); corruption risk - prefer a local disk");
     }
+    if (args->globals.busy_timeout_set) {
+        opts.busy_timeout_ms = args->globals.busy_timeout_ms;
+    }
+    opts.no_create = args->globals.no_create;
     if (args->command == CLI_CMD_DEVICE && cmd_device_mints(args->rest_argc, args->rest_argv)) {
         opts.replace_invalid_sidecar = true;
     }

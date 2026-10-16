@@ -597,3 +597,28 @@ Capture runs right after the failing call, before finalize or ROLLBACK (the hot 
 - **simplify (lens 9)** — `tail_of` in `test_vfs.c` silenced `-Wcast-align` with 12 lines of clang/GCC `#pragma` push/pop. It now casts through `void *`, with one `NOLINTNEXTLINE(bugprone-casting-through-void)` (C has no `reinterpret_cast`), and the alignment `assert` already above it states the guarantee.
 
 **Praise:** the shim opens through the real unix VFS, keeps the unix file at the front of the buffer, and replaces only `xRead` / `xWrite`. That is the least it can touch. The faults are sticky, so SQLite cannot retry past them. Each chmod skip prints its name, so a root run cannot pass silently.
+
+### 2026-10-16 — stage 5 (open flags)
+
+No new grill. No new `decision:*`. Help text for the flags stays stage 7.
+
+- `--busy-timeout MS` and `--no-create` are globals, stripped wherever `--json` is. There is no `--busy-timeout=MS` form (`--db=` stays the only equals form).
+- Range is 0..60000 inclusive. `60001`, `-1`, and `abc` are exit 1, code `usage`, sentence `invalid --busy-timeout (must be 0..60000)`. Stdout is empty and the brain is not created. With `--json-errors` that sentence is the one JSON line.
+- A missing token is `remember: --busy-timeout: option requires a value` (the `--db` shape). `-1` is a specified bad value, so a leading dash is still the value. Any present token outside the range uses the invalid sentence, including a following command name.
+- Omitted flag keeps 5000 ms. `0` is a real timeout (`busy_timeout_set`), not "use the default". A held `BEGIN EXCLUSIVE` plus `--busy-timeout 500` is `busy`, `SQLITE_BUSY` (5), `sqlite_message` `database is locked`, with no `path` and no `errno`. The wait is about half a second on macOS and in Linux CI, not the 5 s default. `--busy-timeout 0` returns the same `busy` line without that wait. `60000` is accepted and does not wait.
+- `--no-create` is applied before `store_open_opts`, which already skips `ensure_parent_dirs` and opens without `SQLITE_OPEN_CREATE`. A missing parent and a missing file in an existing directory both fail `cannot_open`, `reason` `missing`, `SQLITE_CANTOPEN` (14), errno `ENOENT`. No folder, no file, no `<path>.device_id`. An existing brain still opens.
+- Decimal rules live in `util_parse_nonneg`, shared with `--limit` and `--offset` (empty, leading `-`, trailing junk, `ERANGE`). Leading `+` and whitespace stay what `strtoull` already accepted for `--limit`.
+
+### 2026-10-16 — in-session deep review (stage 5)
+
+**Verdict:** approve for the second-opinion pass. No open blocking item. No grill.
+
+**Ran:** ctest step_gate, store_asan_gate, and no_shim_symbols (ASan/UBSan). `install_skill` failed inside the sandbox (`mkdir` on `.cursor` not permitted) and passed outside it. `lint-all.sh` LINT OK. Coverage 100% functions and 100% effective lines. `leaks-macos` PASS. `ci-linux.sh` OK, including non-root tests, IWYU, and scan-build. Bugbot on the uncommitted stage found no bugs.
+
+**Pragmatic write-gate:** DRY PASS (`util_parse_nonneg` is the one decimal parser). Easy-to-replace PASS (the parser is a plain function; SQLite stays in the adapter). Orthogonal PASS (cli parses, `open_store` applies, the store already implemented D8). No deferred markers.
+
+**Simplify:** `busy_timeout_set` is what makes `0` different from "flag omitted". A zeroed `StoreOpenOpts` would have meant a timeout of 0, which stage 3 already forbade.
+
+**Left for later:** stage 6 is the corrupt check and `repair search-index`. Stage 7 is help for these flags, plus the facade byte-match for a `busy` case (the CLI and `remember_run` already share one pipeline).
+
+**Praise:** `-1` is not swallowed as a missing option. The missing-file test, not only the missing-parent test, is what proves `SQLITE_OPEN_CREATE` is off.

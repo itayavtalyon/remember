@@ -1,5 +1,6 @@
 #include "util.h"
 
+#include <errno.h>
 #include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -280,4 +281,24 @@ int util_absolute_path(const char *path, char *buf, size_t buflen)
     rc = normalize_into(joined, buf, buflen);
     free(joined);
     return rc;
+}
+
+/* Shared by --limit/--offset and --busy-timeout so the decimal rules stay one place. */
+enum { DECIMAL_BASE = 10 };
+
+int util_parse_nonneg(const char *raw, unsigned long long *out)
+{
+    char *end = NULL;
+    unsigned long long value = 0;
+
+    if (raw == NULL || raw[0] == '\0' || raw[0] == '-') {
+        return -1;
+    }
+    errno = 0;
+    value = strtoull(raw, &end, DECIMAL_BASE);
+    if (end == raw || (end != NULL && *end != '\0') || errno == ERANGE) {
+        return -1;
+    }
+    *out = value;
+    return 0;
 }

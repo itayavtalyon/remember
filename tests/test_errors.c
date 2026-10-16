@@ -18,6 +18,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <time.h>
 #include <unistd.h>
 
 /* Longest E4.3 token plus the JSON envelope around "sample text". */
@@ -2601,6 +2602,303 @@ TEST(cli_nomem_shim_fails_a_list)
 // NOLINTEND(concurrency-mt-unsafe)
 #endif /* REMEMBER_TEST_VFS */
 
+/* E4.13: 60001, -1 and abc are usage, with that exact sentence. Nothing is created. */
+TEST(cli_busy_timeout_out_of_range_is_usage)
+{
+    static const char *const k_plain = "remember: invalid --busy-timeout (must be 0..60000)\n";
+    static const char *const k_json =
+        "{\"version\":1,\"error\":{\"code\":\"usage\",\"message\":\"invalid --busy-timeout "
+        "(must be 0..60000)\"}}\n";
+    char *db = make_temp_db_path();
+    const char *hi[] = {"--busy-timeout", "60001", "list"};
+    const char *neg[] = {"--busy-timeout", "-1", "list"};
+    const char *word[] = {"--busy-timeout", "abc", "list"};
+    const char *json[] = {"--json-errors", "--busy-timeout", "60001", "list"};
+    CmdResult r;
+
+    ASSERT_TRUE(db != NULL);
+    if (db == NULL) {
+        return;
+    }
+    r = run_remember(db, hi, sizeof(hi) / sizeof(hi[0]), NULL);
+    ASSERT_EQ_INT(r.exit_code, 1);
+    ASSERT_STREQ(r.out, "");
+    ASSERT_STREQ(r.err, k_plain);
+    ASSERT_TRUE(access(db, F_OK) != 0);
+    cmd_result_free(&r);
+    r = run_remember(db, neg, sizeof(neg) / sizeof(neg[0]), NULL);
+    ASSERT_EQ_INT(r.exit_code, 1);
+    ASSERT_STREQ(r.out, "");
+    ASSERT_STREQ(r.err, k_plain);
+    cmd_result_free(&r);
+    r = run_remember(db, word, sizeof(word) / sizeof(word[0]), NULL);
+    ASSERT_EQ_INT(r.exit_code, 1);
+    ASSERT_STREQ(r.out, "");
+    ASSERT_STREQ(r.err, k_plain);
+    cmd_result_free(&r);
+    r = run_remember(db, json, sizeof(json) / sizeof(json[0]), NULL);
+    ASSERT_EQ_INT(r.exit_code, 1);
+    ASSERT_STREQ(r.out, "");
+    ASSERT_STREQ(r.err, k_json);
+    cmd_result_free(&r);
+    free(db);
+}
+
+/* E4.13: a held write lock plus --busy-timeout 500 is busy after about half a
+   second, not after the 5000 ms default. */
+enum { BUSY_FLAG_WAIT_MIN_MS = 250, BUSY_FLAG_WAIT_MAX_MS = 2000 };
+enum { MS_PER_SEC = 1000, NS_PER_MS = 1000000 };
+
+static long elapsed_ms(const struct timespec *start, const struct timespec *end)
+{
+    long sec = (long)(end->tv_sec - start->tv_sec);
+    long nsec = end->tv_nsec - start->tv_nsec;
+
+    return (sec * MS_PER_SEC) + (nsec / NS_PER_MS);
+}
+
+TEST(cli_busy_timeout_500_reports_busy_within_half_a_second)
+{
+    static const char *const k_plain =
+        "remember: database error: the brain is locked by another process (SQLITE_BUSY). "
+        "Wait a moment and try again. Another app or a terminal may be using this brain.\n";
+    char *db = make_temp_db_path();
+    const char *seed[] = {"add", "seed"};
+    const char *add[] = {"--busy-timeout", "500", "add", "blocked"};
+    sqlite3 *lock = NULL;
+    struct timespec start;
+    struct timespec end;
+    long waited = 0;
+    CmdResult r;
+
+    ASSERT_TRUE(db != NULL);
+    if (db == NULL) {
+        return;
+    }
+    r = run_remember(db, seed, sizeof(seed) / sizeof(seed[0]), NULL);
+    ASSERT_EQ_INT(r.exit_code, 0);
+    cmd_result_free(&r);
+
+    ASSERT_EQ_INT(sqlite3_open_v2(db, &lock, SQLITE_OPEN_READWRITE, NULL), SQLITE_OK);
+    ASSERT_EQ_INT(sqlite3_exec(lock, "BEGIN EXCLUSIVE;", NULL, NULL, NULL), SQLITE_OK);
+
+    ASSERT_EQ_INT(clock_gettime(CLOCK_MONOTONIC, &start), 0);
+    r = run_remember(db, add, sizeof(add) / sizeof(add[0]), NULL);
+    ASSERT_EQ_INT(clock_gettime(CLOCK_MONOTONIC, &end), 0);
+    waited = elapsed_ms(&start, &end);
+
+    ASSERT_EQ_INT(r.exit_code, 1);
+    ASSERT_STREQ(r.out, "");
+    ASSERT_STREQ(r.err, k_plain);
+    ASSERT_TRUE(waited >= BUSY_FLAG_WAIT_MIN_MS);
+    ASSERT_TRUE(waited < BUSY_FLAG_WAIT_MAX_MS);
+    cmd_result_free(&r);
+
+    {
+        static const char *const k_json =
+            "{\"version\":1,\"error\":{\"code\":\"busy\",\"message\":\"database error: the brain "
+            "is locked by another "
+            "process\",\"detail\":{\"sqlite_code\":5,\"sqlite_extended\":5,\"sqlite_name\":"
+            "\"SQLITE_BUSY\",\"sqlite_message\":\"database is "
+            "locked\",\"fix\":\"Wait a moment and try again. Another app or a terminal may be "
+            "using this brain.\"}}}\n";
+        const char *json[] = {"--json-errors", "--busy-timeout", "500", "add", "blocked"};
+
+        r = run_remember(db, json, sizeof(json) / sizeof(json[0]), NULL);
+        ASSERT_EQ_INT(r.exit_code, 1);
+        ASSERT_STREQ(r.out, "");
+        ASSERT_STREQ(r.err, k_json);
+        cmd_result_free(&r);
+    }
+    if (lock != NULL) {
+        (void)sqlite3_exec(lock, "ROLLBACK;", NULL, NULL, NULL);
+        (void)sqlite3_close(lock);
+    }
+    free(db);
+}
+
+/* E4.11 / D8: --no-create on a missing parent creates no folder, file, or sidecar. */
+TEST(cli_no_create_missing_path_creates_nothing)
+{
+    static const char *const k_plain =
+        "remember: database error: cannot open the brain file (SQLITE_CANTOPEN). "
+        "Check that the folder exists and that you can read and write it.\n";
+    char tmpl[] = "/tmp/remember-nocreate-XXXXXX";
+    char path[TEST_PATH_CAP];
+    char sidecar[TEST_PATH_CAP];
+    char want[CLI_JSON_CAP];
+    const char *list[] = {"--no-create", "list"};
+    const char *json[] = {"--json-errors", "--no-create", "list"};
+    const char *dir = NULL;
+    int wrote = 0;
+    CmdResult r;
+
+    dir = mkdtemp(tmpl);
+    ASSERT_TRUE(dir != NULL);
+    if (dir == NULL) {
+        return;
+    }
+    ASSERT_EQ_INT(rmdir(tmpl), 0);
+    wrote = snprintf(path, sizeof(path), "%s/x.db", tmpl);
+    ASSERT_TRUE(wrote > 0 && (size_t)wrote < sizeof(path));
+    wrote = snprintf(sidecar, sizeof(sidecar), "%s.device_id", path);
+    ASSERT_TRUE(wrote > 0 && (size_t)wrote < sizeof(sidecar));
+
+    r = run_remember(path, list, sizeof(list) / sizeof(list[0]), NULL);
+    ASSERT_EQ_INT(r.exit_code, 1);
+    ASSERT_STREQ(r.out, "");
+    ASSERT_STREQ(r.err, k_plain);
+    ASSERT_TRUE(access(tmpl, F_OK) != 0);
+    ASSERT_TRUE(access(path, F_OK) != 0);
+    ASSERT_TRUE(access(sidecar, F_OK) != 0);
+    cmd_result_free(&r);
+
+    r = run_remember(path, json, sizeof(json) / sizeof(json[0]), NULL);
+    wrote =
+        snprintf(want, sizeof(want),
+                 "{\"version\":1,\"error\":{\"code\":\"cannot_open\",\"message\":\"database "
+                 "error: cannot open the brain "
+                 "file\",\"detail\":{\"sqlite_code\":14,\"sqlite_extended\":14,\"sqlite_name\":"
+                 "\"SQLITE_CANTOPEN\",\"sqlite_message\":\"unable to open database "
+                 "file\",\"fix\":\"Check that the folder exists and that you can read and write "
+                 "it.\",\"errno\":%d,\"path\":\"%s\",\"reason\":\"missing\"}}}\n",
+                 ENOENT, path);
+    ASSERT_TRUE(wrote > 0 && (size_t)wrote < sizeof(want));
+    ASSERT_EQ_INT(r.exit_code, 1);
+    ASSERT_STREQ(r.out, "");
+    ASSERT_STREQ(r.err, want);
+    ASSERT_TRUE(access(tmpl, F_OK) != 0);
+    ASSERT_TRUE(access(path, F_OK) != 0);
+    ASSERT_TRUE(access(sidecar, F_OK) != 0);
+    cmd_result_free(&r);
+}
+
+/* D8: the parent already exists, so only omitting SQLITE_OPEN_CREATE keeps the file away. */
+TEST(cli_no_create_missing_file_creates_nothing)
+{
+    char *db = make_temp_db_path();
+    char sidecar[TEST_PATH_CAP];
+    const char *list[] = {"--no-create", "list"};
+    int wrote = 0;
+    CmdResult r;
+
+    ASSERT_TRUE(db != NULL);
+    if (db == NULL) {
+        return;
+    }
+    wrote = snprintf(sidecar, sizeof(sidecar), "%s.device_id", db);
+    ASSERT_TRUE(wrote > 0 && (size_t)wrote < sizeof(sidecar));
+    r = run_remember(db, list, sizeof(list) / sizeof(list[0]), NULL);
+    ASSERT_EQ_INT(r.exit_code, 1);
+    ASSERT_STREQ(r.out, "");
+    ASSERT_STR_CONTAINS(r.err, "cannot open the brain file");
+    ASSERT_STR_CONTAINS(r.err, "(SQLITE_CANTOPEN)");
+    ASSERT_TRUE(access(db, F_OK) != 0);
+    ASSERT_TRUE(access(sidecar, F_OK) != 0);
+    cmd_result_free(&r);
+    free(db);
+}
+
+/* --no-create still opens a brain that is already there. */
+TEST(cli_no_create_existing_brain_opens)
+{
+    char *db = make_temp_db_path();
+    const char *seed[] = {"add", "present"};
+    const char *list[] = {"--no-create", "list"};
+    CmdResult r;
+
+    ASSERT_TRUE(db != NULL);
+    if (db == NULL) {
+        return;
+    }
+    r = run_remember(db, seed, sizeof(seed) / sizeof(seed[0]), NULL);
+    ASSERT_EQ_INT(r.exit_code, 0);
+    cmd_result_free(&r);
+    r = run_remember(db, list, sizeof(list) / sizeof(list[0]), NULL);
+    ASSERT_EQ_INT(r.exit_code, 0);
+    ASSERT_STREQ(r.err, "");
+    ASSERT_STR_CONTAINS(r.out, "present");
+    cmd_result_free(&r);
+    free(db);
+}
+
+/* E4.13 inclusive lower bound: 0 is a real timeout, not "use the 5000 default". */
+enum { BUSY_ZERO_WAIT_MAX_MS = 250 };
+
+TEST(cli_busy_timeout_zero_is_busy_immediately)
+{
+    char *db = make_temp_db_path();
+    const char *seed[] = {"add", "seed"};
+    const char *add[] = {"--busy-timeout", "0", "add", "blocked"};
+    sqlite3 *lock = NULL;
+    struct timespec start;
+    struct timespec end;
+    long waited = 0;
+    CmdResult r;
+
+    ASSERT_TRUE(db != NULL);
+    if (db == NULL) {
+        return;
+    }
+    r = run_remember(db, seed, sizeof(seed) / sizeof(seed[0]), NULL);
+    ASSERT_EQ_INT(r.exit_code, 0);
+    cmd_result_free(&r);
+    ASSERT_EQ_INT(sqlite3_open_v2(db, &lock, SQLITE_OPEN_READWRITE, NULL), SQLITE_OK);
+    ASSERT_EQ_INT(sqlite3_exec(lock, "BEGIN EXCLUSIVE;", NULL, NULL, NULL), SQLITE_OK);
+    ASSERT_EQ_INT(clock_gettime(CLOCK_MONOTONIC, &start), 0);
+    r = run_remember(db, add, sizeof(add) / sizeof(add[0]), NULL);
+    ASSERT_EQ_INT(clock_gettime(CLOCK_MONOTONIC, &end), 0);
+    waited = elapsed_ms(&start, &end);
+    ASSERT_EQ_INT(r.exit_code, 1);
+    ASSERT_STREQ(r.out, "");
+    ASSERT_STR_CONTAINS(r.err, "(SQLITE_BUSY)");
+    ASSERT_TRUE(waited < BUSY_ZERO_WAIT_MAX_MS);
+    cmd_result_free(&r);
+    if (lock != NULL) {
+        (void)sqlite3_exec(lock, "ROLLBACK;", NULL, NULL, NULL);
+        (void)sqlite3_close(lock);
+    }
+    free(db);
+}
+
+/* E4.13 inclusive upper bound. Accepted means list runs; it does not wait 60 s. */
+TEST(cli_busy_timeout_60000_is_accepted)
+{
+    char *db = make_temp_db_path();
+    const char *list[] = {"--busy-timeout", "60000", "list"};
+    CmdResult r;
+
+    ASSERT_TRUE(db != NULL);
+    if (db == NULL) {
+        return;
+    }
+    r = run_remember(db, list, sizeof(list) / sizeof(list[0]), NULL);
+    ASSERT_EQ_INT(r.exit_code, 0);
+    ASSERT_STREQ(r.err, "");
+    cmd_result_free(&r);
+    free(db);
+}
+
+/* A missing token follows --db. A present token, even "-1", is the value (E4.13). */
+TEST(cli_busy_timeout_without_a_value_is_usage)
+{
+    char *db = make_temp_db_path();
+    const char *args[] = {"--busy-timeout"};
+    CmdResult r;
+
+    ASSERT_TRUE(db != NULL);
+    if (db == NULL) {
+        return;
+    }
+    r = run_remember(db, args, sizeof(args) / sizeof(args[0]), NULL);
+    ASSERT_EQ_INT(r.exit_code, 1);
+    ASSERT_STREQ(r.out, "");
+    ASSERT_STREQ(r.err, "remember: --busy-timeout: option requires a value\n");
+    ASSERT_TRUE(access(db, F_OK) != 0);
+    cmd_result_free(&r);
+    free(db);
+}
+
 void register_errors_tests(void)
 {
     RUN_TEST(util_absolute_path_joins_cwd_and_normalizes_lexically);
@@ -2674,4 +2972,12 @@ void register_errors_tests(void)
     RUN_TEST(sqlite_out_of_range_reason_falls_back_to_other);
     RUN_TEST(err_store_sqlite_misuse_and_clean_store_fall_back);
     RUN_TEST(cli_db_under_a_file_keeps_the_legacy_open_line);
+    RUN_TEST(cli_busy_timeout_out_of_range_is_usage);
+    RUN_TEST(cli_busy_timeout_500_reports_busy_within_half_a_second);
+    RUN_TEST(cli_no_create_missing_path_creates_nothing);
+    RUN_TEST(cli_no_create_missing_file_creates_nothing);
+    RUN_TEST(cli_no_create_existing_brain_opens);
+    RUN_TEST(cli_busy_timeout_zero_is_busy_immediately);
+    RUN_TEST(cli_busy_timeout_60000_is_accepted);
+    RUN_TEST(cli_busy_timeout_without_a_value_is_usage);
 }

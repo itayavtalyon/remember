@@ -108,7 +108,7 @@ typedef struct {
 } StoreError;
 
 /* Open options (plan 16 stage 3). NULL opts means defaults (5000 ms, create).
- * Busy timeout and --no-create reach the CLI in stage 5. */
+ * The CLI sets busy_timeout_ms from --busy-timeout and no_create from --no-create. */
 enum { STORE_DEFAULT_BUSY_TIMEOUT_MS = 5000 };
 
 typedef struct {

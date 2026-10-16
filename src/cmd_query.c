@@ -7,8 +7,8 @@
 #include "normalize.h"
 #include "output.h"
 #include "store.h"
+#include "util.h"
 
-#include <errno.h>
 #include <limits.h>
 #include <stdbool.h>
 #include <stdint.h>
@@ -18,7 +18,6 @@
 
 /* list / search: shared filter + paging parse, different store call + query. */
 
-enum { DECIMAL_BASE = 10 };
 enum { LIST_LIMIT_DEFAULT = 20 };
 enum { LIST_LIMIT_MAX = 1000 };
 /* Bounded well under the store's per-query parameter budget (LIST_BIND_CAP) so
@@ -28,24 +27,18 @@ enum { LIST_TAG_FILTER_MAX = 50 };
 /* Parse a non-negative size_t from decimal text. Rejects empty, non-digits, ERANGE. */
 static int parse_size_token(const char *raw, size_t *out)
 {
-    char *end = NULL;
-    unsigned long long v = 0;
+    unsigned long long value = 0;
 
-    if (raw == NULL || raw[0] == '\0' || raw[0] == '-') {
-        return -1;
-    }
-    errno = 0;
-    v = strtoull(raw, &end, DECIMAL_BASE);
-    if (end == raw || (end != NULL && *end != '\0') || errno == ERANGE) {
+    if (util_parse_nonneg(raw, &value) != 0) {
         return -1;
     }
 #if SIZE_MAX < ULLONG_MAX
     /* 32-bit size_t: reject rather than silently truncate the value. */
-    if (v > (unsigned long long)SIZE_MAX) {
+    if (value > (unsigned long long)SIZE_MAX) {
         return -1;
     }
 #endif
-    *out = (size_t)v;
+    *out = (size_t)value;
     return 0;
 }
 
