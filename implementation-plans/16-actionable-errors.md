@@ -694,3 +694,29 @@ New tests: `cli_repair_heals_page_damaged_fts_data`, `cli_repair_heals_page_dama
 **Coverage follow-up:** coverage flagged the both-tiers-fail path. The new shim test `cli_repair_that_cannot_write_never_points_back_at_repair` (page-damaged index plus `REMEMBER_TEST_FAIL_WRITE=0`) checks exit 1, no "repair search-index" in the message, that the brain still opens afterwards (the surgery rolled back with the schema reloaded and defensive mode restored), and that a later repair without the fault heals it. The shim-off SKIP line no longer hard-codes a test count; it had already drifted to 8 when there are 9.
 
 **Praise:** `fts_only` is decided in the adapter right after the snapshot, before `quick_check` can clobber it. A failed engine call during the check keeps the engine's code and still reads as corrupt.
+
+### 2026-10-16 — stage 7 (docs + full gate)
+
+No new grill. No new `decision:*`. Help sentences use the existing help voice for behavior E4.1, E4.11, and E4.13 already locked. The repair command topic and the general-help command line stayed as stage 6 wrote them.
+
+- General help's usage line and global-options block name `--json-errors`, `--busy-timeout MS` (0..60000, default 5000), and `--no-create`. The shared command footer lists the same three. `cli_help_names_json_errors_busy_timeout_and_no_create` failed first because those strings were absent.
+- `skills/remember/SKILL.md` tells an agent to pass `--json-errors` and read `error.code`. `busy` means retry later. `corrupt` with `detail.fts_only` true means `remember repair search-index`.
+- README What's New, under the existing v0.3.0 heading, names `--json-errors`, the seven causes, `--busy-timeout`, `--no-create`, and `repair search-index`.
+- Engineering notes: an error or warning line is written only in `diag.c`. `scripts/lint-all.sh` rejects any other `app_err(` call. The repair bullet now matches the seven-table check and the two-tier heal (`decision:plan16-repair-heals-index-damage`). Every connection sets defensive mode (`decision:remember-sqlite-defensive-mode`).
+- `docs/QUALITY.md` describes the test-only VFS shim. `tests/COVERAGE.md` covers the plan 16 surface. `tests/gate-suites` already listed `errors` and `facade`, so that line did not change.
+- Design log 006 Implementation Results records E4.1–E4.15, E3.2, and X-E02, including the amendments. The Design section is unchanged.
+- `facade_json_errors_not_found_matches_cli` and `facade_busy_json_errors_matches_cli` passed on the first run. The CLI and `remember_run` already shared one pipeline, so those tests locked the bytes and did not change production code.
+
+### 2026-10-16 — in-session deep review (stage 7)
+
+**Verdict:** approve for the second-opinion pass. No open blocking item. No grill. No new `decision:*`.
+
+**Ran:** ctest 5/5 with ASan/UBSan and `REMEMBER_TEST_VFS=ON` (the first `install_skill` failed inside the sandbox on `mkdir` of `.cursor`; the same suite passed outside it). `lint-all.sh` LINT OK, including the new diag-boundary grep. Coverage 100% functions and 100% effective lines. `leaks-macos` PASS. `ci-linux.sh` OK, including the non-root suite, IWYU, and scan-build. Bugbot on the uncommitted stage found no bugs.
+
+**Pragmatic write-gate:** DRY PASS (the three flag sentences live in one help block; the test locks those bytes). Easy-to-replace PASS (no new production dependency; the facade test's sqlite include stays in the test binary). Orthogonal PASS (help is presentation; the flags were already parsed). No deferred markers.
+
+**Ponytail:** Lean already. The facade tests compare one run instead of calling `assert_read_parity` and running again.
+
+**Simplify:** nothing to cut. Realigning the global-options column is what keeps `--busy-timeout MS` on the same grid as `--db PATH`.
+
+**Praise:** one footer string covers every command topic. The repair topic was left as stage 6 wrote it.

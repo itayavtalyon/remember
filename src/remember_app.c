@@ -26,7 +26,8 @@ static void print_general_help(void)
     static const char help[] = "remember - local personal memory (SQLite + FTS5)\n"
                                "\n"
                                "Usage:\n"
-                               "  remember [--db PATH] [--json] <command> [options] [args]\n"
+                               "  remember [--db PATH] [--json] [--json-errors] "
+                               "[--busy-timeout MS] [--no-create] <command> [options] [args]\n"
                                "\n"
                                "Commands:\n"
                                "  add       Store a memory (optional --key, --tag, --source)\n"
@@ -55,10 +56,13 @@ static void print_general_help(void)
                                "Device id lives next to the DB as <path>.device_id.\n"
                                "\n"
                                "Global options (allowed before or after the command):\n"
-                               "  --db PATH   Database file (overrides REMEMBER_DB)\n"
-                               "  --json      Machine-readable JSON on stdout\n"
-                               "  --help, -h  Show help\n"
-                               "  --version   Show version\n"
+                               "  --db PATH          Database file (overrides REMEMBER_DB)\n"
+                               "  --json             Machine-readable JSON on stdout\n"
+                               "  --json-errors      JSON errors and warnings on stderr\n"
+                               "  --busy-timeout MS  Lock wait in ms (0..60000, default 5000)\n"
+                               "  --no-create        Do not create a missing brain file\n"
+                               "  --help, -h         Show help\n"
+                               "  --version          Show version\n"
                                "\n"
                                "Exit codes:\n"
                                "  0  success (including empty search/list)\n"
@@ -274,7 +278,8 @@ static void print_command_help(CliCommand topic)
         (void)fprintf(out, "JSON adds \"previous\", the id it replaced.\n");
         (void)fprintf(out, "\n");
     }
-    (void)fprintf(out, "Global options: --db PATH, --json, --help, --version\n");
+    (void)fprintf(out, "Global options: --db PATH, --json, --json-errors, "
+                       "--busy-timeout MS, --no-create, --help, --version\n");
     (void)fprintf(out, "See also: remember --help\n");
 }
 

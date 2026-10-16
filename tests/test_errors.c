@@ -2822,6 +2822,35 @@ TEST(cli_repair_help_names_the_command)
     free(db);
 }
 
+/* Stage 7: general help and every command footer name the three globals. */
+TEST(cli_help_names_json_errors_busy_timeout_and_no_create)
+{
+    char *db = make_temp_db_path();
+    const char *general[] = {"--help"};
+    const char *topic[] = {"help", "add"};
+    CmdResult r;
+
+    ASSERT_TRUE(db != NULL);
+    if (db == NULL) {
+        return;
+    }
+    r = run_remember(db, general, sizeof(general) / sizeof(general[0]), NULL);
+    ASSERT_EQ_INT(r.exit_code, 0);
+    ASSERT_STREQ(r.err, "");
+    ASSERT_STR_CONTAINS(r.out, "[--json-errors] [--busy-timeout MS] [--no-create]");
+    ASSERT_STR_CONTAINS(r.out, "--json-errors      JSON errors and warnings on stderr");
+    ASSERT_STR_CONTAINS(r.out, "--busy-timeout MS  Lock wait in ms (0..60000, default 5000)");
+    ASSERT_STR_CONTAINS(r.out, "--no-create        Do not create a missing brain file");
+    cmd_result_free(&r);
+    r = run_remember(db, topic, sizeof(topic) / sizeof(topic[0]), NULL);
+    ASSERT_EQ_INT(r.exit_code, 0);
+    ASSERT_STREQ(r.err, "");
+    ASSERT_STR_CONTAINS(r.out, "Global options: --db PATH, --json, --json-errors, "
+                               "--busy-timeout MS, --no-create, --help, --version");
+    cmd_result_free(&r);
+    free(db);
+}
+
 /* A header with the body cut off is corrupt, fts_only false. */
 TEST(cli_truncated_brain_reports_corrupt)
 {
@@ -3627,6 +3656,7 @@ void register_errors_tests(void)
     RUN_TEST(cli_search_on_damaged_base_is_not_fts_only);
     RUN_TEST(cli_repair_usage_is_search_index);
     RUN_TEST(cli_repair_help_names_the_command);
+    RUN_TEST(cli_help_names_json_errors_busy_timeout_and_no_create);
     RUN_TEST(cli_truncated_brain_reports_corrupt);
 #ifdef REMEMBER_TEST_VFS
     RUN_TEST(cli_enospc_shim_reports_disk_full);

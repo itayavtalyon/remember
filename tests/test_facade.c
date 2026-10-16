@@ -3,6 +3,7 @@
 #include "remember_app.h"
 #include "test.h"
 
+#include <sqlite3.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -744,8 +745,75 @@ TEST(facade_device_new_matches_cli)
     free(db2);
 }
 
+/* EN-03: --json-errors not_found bytes match the CLI. */
+TEST(facade_json_errors_not_found_matches_cli)
+{
+    char *db = make_temp_db_path();
+    const char *cmd[] = {"--json-errors", "get", "--key", "nope"};
+    CmdResult sub;
+    char *fout = NULL;
+    char *ferr = NULL;
+    int frc = 0;
+
+    ASSERT_TRUE(db != NULL);
+    if (db == NULL) {
+        return;
+    }
+    seed_three(db);
+    sub = run_remember(db, cmd, sizeof(cmd) / sizeof(cmd[0]), NULL);
+    frc = facade_run(db, cmd, sizeof(cmd) / sizeof(cmd[0]),
+                     (FacadeCapture){.out = &fout, .err = &ferr});
+    ASSERT_EQ_INT(sub.exit_code, 2);
+    ASSERT_STREQ(sub.out, "");
+    ASSERT_STR_CONTAINS(sub.err, "\"code\":\"not_found\"");
+    ASSERT_EQ_INT(frc, sub.exit_code);
+    ASSERT_STREQ(fout, sub.out);
+    ASSERT_STREQ(ferr, sub.err);
+    free(fout);
+    free(ferr);
+    cmd_result_free(&sub);
+    free(db);
+}
+
+/* EN-03: a held lock plus --busy-timeout 0 is the same busy line in-process. */
+TEST(facade_busy_json_errors_matches_cli)
+{
+    char *db = make_temp_db_path();
+    const char *cmd[] = {"--json-errors", "--busy-timeout", "0", "add", "blocked"};
+    sqlite3 *lock = NULL;
+    CmdResult sub;
+    char *fout = NULL;
+    char *ferr = NULL;
+    int frc = 0;
+
+    ASSERT_TRUE(db != NULL);
+    if (db == NULL) {
+        return;
+    }
+    seed_three(db);
+    ASSERT_EQ_INT(sqlite3_open_v2(db, &lock, SQLITE_OPEN_READWRITE, NULL), SQLITE_OK);
+    ASSERT_EQ_INT(sqlite3_exec(lock, "BEGIN EXCLUSIVE;", NULL, NULL, NULL), SQLITE_OK);
+    sub = run_remember(db, cmd, sizeof(cmd) / sizeof(cmd[0]), NULL);
+    frc = facade_run(db, cmd, sizeof(cmd) / sizeof(cmd[0]),
+                     (FacadeCapture){.out = &fout, .err = &ferr});
+    ASSERT_EQ_INT(sqlite3_exec(lock, "ROLLBACK;", NULL, NULL, NULL), SQLITE_OK);
+    (void)sqlite3_close(lock);
+    ASSERT_EQ_INT(sub.exit_code, 1);
+    ASSERT_STREQ(sub.out, "");
+    ASSERT_STR_CONTAINS(sub.err, "\"code\":\"busy\"");
+    ASSERT_EQ_INT(frc, sub.exit_code);
+    ASSERT_STREQ(fout, sub.out);
+    ASSERT_STREQ(ferr, sub.err);
+    free(fout);
+    free(ferr);
+    cmd_result_free(&sub);
+    free(db);
+}
+
 void register_facade_tests(void)
 {
+    RUN_TEST(facade_json_errors_not_found_matches_cli);
+    RUN_TEST(facade_busy_json_errors_matches_cli);
     RUN_TEST(facade_list_matches_cli);
     RUN_TEST(facade_search_matches_cli);
     RUN_TEST(facade_search_bad_query_matches_cli);

@@ -72,6 +72,11 @@ Opening an existing database migrates it to `user_version` **5**.
 - `remember device` prints the device id. `remember device new` mints a new one after a restore or a copied brain, and it repairs an invalid sidecar.
 - The device id is only the sidecar `<db-path>.device_id`. The database holds no copy.
 - Hard wipe (`delete --expired|--deleted`, `purge --expired|--deleted`) no longer needs one registered device.
+- `--json-errors` writes one JSON object per error or warning on stderr. Read `code`.
+- A database error names one of seven causes: `busy`, `read_only`, `disk_full`, `cannot_open`, `not_a_database`, `corrupt`, `io_error`. Anything else is `database`.
+- `--busy-timeout MS` sets the lock wait (0..60000, default 5000).
+- `--no-create` fails when the brain file is missing and creates nothing.
+- `remember repair search-index` rebuilds a damaged search index. `corrupt` with `fts_only` true means that command.
 
 ### v0.2.0 — local sync foundations
 

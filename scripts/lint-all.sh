@@ -92,6 +92,22 @@ else
   echo "sqlite boundary: PASS (no leaks)"
 fi
 
+echo "== no error writes outside diag.c =="
+# app_err() is the emitter's stream. Command code calls err_msg / diag_*.
+if grep -RIn --include='*.c' --include='*.h' -E 'app_err\(' "$SRC_DIR" 2>/dev/null \
+  | grep -v 'diag\.c' | grep -v 'appio\.' \
+  >/tmp/remember-diag-leak.txt 2>/dev/null; then
+  if [[ -s /tmp/remember-diag-leak.txt ]]; then
+    echo "diag boundary: FAIL"
+    cat /tmp/remember-diag-leak.txt
+    fail=1
+  else
+    echo "diag boundary: PASS"
+  fi
+else
+  echo "diag boundary: PASS (no leaks)"
+fi
+
 echo "== no sha256 outside normalize.c =="
 # Allow REMEMBER_SHA256_HEX_LEN (public normalize API); forbid vendor symbols/includes.
 if grep -RIn --include='*.c' --include='*.h' -E 'sha256\.h|SHA256_|sha256_' "$SRC_DIR" 2>/dev/null \
