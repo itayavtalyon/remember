@@ -79,85 +79,6 @@ static void expected_local_midnight(const char *ymd, char out[ISO_TS_BUFSIZE])
                    utc.tm_sec);
 }
 
-TEST(filter_ts_canonical_is_copied)
-{
-    char out[ISO_TS_BUFSIZE];
-
-    out[0] = '\0';
-    ASSERT_EQ_INT(parse_filter_ts("2026-10-12T10:00:00.123Z", out), 0);
-    ASSERT_STREQ(out, "2026-10-12T10:00:00.123Z");
-}
-
-TEST(filter_ts_seconds_become_millis)
-{
-    char out[ISO_TS_BUFSIZE];
-
-    out[0] = '\0';
-    ASSERT_EQ_INT(parse_filter_ts("2026-10-12T10:00:00Z", out), 0);
-    ASSERT_STREQ(out, "2026-10-12T10:00:00.000Z");
-}
-
-TEST(filter_ts_date_is_jerusalem_local_midnight)
-{
-    const char *old = getenv("TZ");
-    int had = old != NULL;
-    char *saved = NULL;
-    char out[ISO_TS_BUFSIZE];
-    char want[ISO_TS_BUFSIZE];
-
-    if (had) {
-        saved = strdup(old);
-        ASSERT_TRUE(saved != NULL);
-        if (saved == NULL) {
-            return;
-        }
-    }
-    ASSERT_EQ_INT(setenv("TZ", "Asia/Jerusalem", 1), 0);
-    tzset();
-    expected_local_midnight("2026-06-15", want);
-    out[0] = '\0';
-    ASSERT_EQ_INT(parse_filter_ts("2026-06-15", out), 0);
-    ASSERT_STREQ(out, want);
-    ASSERT_STR_NOT_CONTAINS(out, "T00:00:00.000Z");
-    if (had) {
-        ASSERT_EQ_INT(setenv("TZ", saved, 1), 0);
-    } else {
-        ASSERT_EQ_INT(unsetenv("TZ"), 0);
-    }
-    free(saved);
-    tzset();
-}
-
-TEST(filter_ts_rejects_impossible_month)
-{
-    char out[ISO_TS_BUFSIZE];
-
-    out[0] = 'x';
-    out[1] = '\0';
-    ASSERT_EQ_INT(parse_filter_ts("2026-13-01T00:00:00.000Z", out), -1);
-    ASSERT_STREQ(out, "x");
-}
-
-TEST(filter_ts_rejects_february_30)
-{
-    char out[ISO_TS_BUFSIZE];
-
-    out[0] = 'x';
-    out[1] = '\0';
-    ASSERT_EQ_INT(parse_filter_ts("2026-02-30", out), -1);
-    ASSERT_STREQ(out, "x");
-}
-
-static void assert_ts_rejected(const char *raw)
-{
-    char out[ISO_TS_BUFSIZE];
-
-    out[0] = 'x';
-    out[1] = '\0';
-    ASSERT_EQ_INT(parse_filter_ts(raw, out), -1);
-    ASSERT_STREQ(out, "x");
-}
-
 static int use_tz(const char *zone, char **saved, int *had)
 {
     const char *old = getenv("TZ");
@@ -191,6 +112,70 @@ static void restore_tz(char *saved, int had)
     tzset();
 }
 
+TEST(filter_ts_canonical_is_copied)
+{
+    char out[ISO_TS_BUFSIZE];
+
+    out[0] = '\0';
+    ASSERT_EQ_INT(parse_filter_ts("2026-10-12T10:00:00.123Z", out), 0);
+    ASSERT_STREQ(out, "2026-10-12T10:00:00.123Z");
+}
+
+TEST(filter_ts_seconds_become_millis)
+{
+    char out[ISO_TS_BUFSIZE];
+
+    out[0] = '\0';
+    ASSERT_EQ_INT(parse_filter_ts("2026-10-12T10:00:00Z", out), 0);
+    ASSERT_STREQ(out, "2026-10-12T10:00:00.000Z");
+}
+
+TEST(filter_ts_date_is_jerusalem_local_midnight)
+{
+    char *saved = NULL;
+    int had = 0;
+    char out[ISO_TS_BUFSIZE];
+    char want[ISO_TS_BUFSIZE];
+
+    ASSERT_EQ_INT(use_tz("Asia/Jerusalem", &saved, &had), 0);
+    expected_local_midnight("2026-06-15", want);
+    out[0] = '\0';
+    ASSERT_EQ_INT(parse_filter_ts("2026-06-15", out), 0);
+    ASSERT_STREQ(out, want);
+    ASSERT_STR_NOT_CONTAINS(out, "T00:00:00.000Z");
+    restore_tz(saved, had);
+}
+
+TEST(filter_ts_rejects_impossible_month)
+{
+    char out[ISO_TS_BUFSIZE];
+
+    out[0] = 'x';
+    out[1] = '\0';
+    ASSERT_EQ_INT(parse_filter_ts("2026-13-01T00:00:00.000Z", out), -1);
+    ASSERT_STREQ(out, "x");
+}
+
+TEST(filter_ts_rejects_february_30)
+{
+    char out[ISO_TS_BUFSIZE];
+
+    out[0] = 'x';
+    out[1] = '\0';
+    ASSERT_EQ_INT(parse_filter_ts("2026-02-30", out), -1);
+    ASSERT_STREQ(out, "x");
+}
+
+static void assert_ts_rejected(const char *raw)
+{
+    char out[ISO_TS_BUFSIZE];
+
+    out[0] = 'x';
+    out[1] = '\0';
+    ASSERT_EQ_INT(parse_filter_ts(raw, out), -1);
+    ASSERT_STREQ(out, "x");
+}
+
 TEST(filter_ts_date_is_los_angeles_local_midnight)
 {
     char *saved = NULL;
@@ -220,6 +205,52 @@ TEST(filter_ts_jerusalem_dst_end_is_local_midnight)
     ASSERT_EQ_INT(parse_filter_ts("2026-10-25", out), 0);
     ASSERT_STREQ(out, want);
     ASSERT_STR_NOT_CONTAINS(out, "2026-10-25T00:00:00.000Z");
+    restore_tz(saved, had);
+}
+
+/* Havana skips 00:00-00:59 on 2026-03-08. The day starts at 01:00 local (UTC-4). */
+TEST(filter_ts_skipped_midnight_is_the_first_local_instant)
+{
+    char *saved = NULL;
+    int had = 0;
+    char out[ISO_TS_BUFSIZE];
+
+    ASSERT_EQ_INT(use_tz("America/Havana", &saved, &had), 0);
+    out[0] = '\0';
+    ASSERT_EQ_INT(parse_filter_ts("2026-03-08", out), 0);
+    ASSERT_STREQ(out, "2026-03-08T05:00:00.000Z");
+    restore_tz(saved, had);
+}
+
+/* Samoa skipped 2011-12-30 entirely. That day has no local start. */
+TEST(filter_ts_rejects_a_day_the_zone_skipped)
+{
+    char *saved = NULL;
+    int had = 0;
+
+    ASSERT_EQ_INT(use_tz("Pacific/Apia", &saved, &had), 0);
+    assert_ts_rejected("2011-12-30");
+    restore_tz(saved, had);
+}
+
+/* decision:plan17-date-floor-1900: macOS mktime cannot convert these, so every
+   platform rejects them. Before the floor, macOS returned 1969-12-31T23:59:59.000Z. */
+TEST(filter_ts_rejects_a_date_before_1900)
+{
+    assert_ts_rejected("1899-12-31");
+    assert_ts_rejected("0001-01-01");
+}
+
+TEST(filter_ts_date_1900_01_01_is_accepted)
+{
+    char *saved = NULL;
+    int had = 0;
+    char out[ISO_TS_BUFSIZE];
+
+    ASSERT_EQ_INT(use_tz("UTC", &saved, &had), 0);
+    out[0] = '\0';
+    ASSERT_EQ_INT(parse_filter_ts("1900-01-01", out), 0);
+    ASSERT_STREQ(out, "1900-01-01T00:00:00.000Z");
     restore_tz(saved, had);
 }
 
@@ -290,6 +321,10 @@ void register_list_dates_tests(void)
     RUN_TEST(filter_ts_date_is_jerusalem_local_midnight);
     RUN_TEST(filter_ts_date_is_los_angeles_local_midnight);
     RUN_TEST(filter_ts_jerusalem_dst_end_is_local_midnight);
+    RUN_TEST(filter_ts_skipped_midnight_is_the_first_local_instant);
+    RUN_TEST(filter_ts_rejects_a_day_the_zone_skipped);
+    RUN_TEST(filter_ts_rejects_a_date_before_1900);
+    RUN_TEST(filter_ts_date_1900_01_01_is_accepted);
     RUN_TEST(filter_ts_leap_day_utc_is_that_midnight);
     RUN_TEST(filter_ts_rejects_impossible_month);
     RUN_TEST(filter_ts_rejects_february_30);

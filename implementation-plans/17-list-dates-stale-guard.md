@@ -273,3 +273,25 @@ No new grill. `parse_filter_ts` does not reuse `parse_expires_to_iso`: that help
 **Left for later:** stage 2 is `ListQuery` sort plus `since`/`until`. Help, SKILL, What's New, and `COVERAGE.md` stay stage 5.
 
 **Praise:** the February 30 test failed first by showing the normalized March instant, which is the bug the plan warned about.
+
+### 2026-10-18 — second-opinion deep review (stage 1)
+
+**Verdict:** stage 1 approved after two fixes. No open blocking item. One grill, answered and implemented.
+
+**Run, not read.** Baseline `d26613d`: the local gate is green (ctest, LINT OK, coverage 100/100, `leaks-macos`), and `ci-linux.sh` is OK. Fixed tree: ctest 5/5 (ASan/UBSan, `REMEMBER_TEST_VFS=ON`), LINT OK, coverage 100% functions and 100% effective lines, `leaks-macos` PASS, `ci-linux.sh` OK including IWYU and scan-build, then `GATE-ALL-GREEN`. Stage 1 has no CLI call site, so I probed `parse_filter_ts`'s date-only branch two ways: with a standalone copy of its `mktime` logic on macOS and on Linux glibc, scanning every day of 2026 in ten zones, and with a throwaway ASan test that called the real function for the year extremes.
+
+**Findings:**
+
+1. **blocking → fixed. A real day whose midnight falls in a DST gap was `invalid timestamp`.** On both libcs, `mktime` moves a missing 00:00 forward to 01:00 on the same day. The stage's post-check also required `tm_hour == 0`, so it refused that. Rejected days in 2026: Havana 03-08, Santiago 09-06, Beirut 03-29, Cairo 04-24. E5.2b says the local start of the day, and E5.2d rejects only other forms. The post-check now compares only year, month, and day. A second probe showed that the instant `mktime` picks is then the day's first instant on every day in seven zones on both libcs. The date check is still needed: Samoa skipped 2011-12-30, and `mktime` lands it on 12-29. New tests `filter_ts_skipped_midnight_is_the_first_local_instant` (literal `2026-03-08T05:00:00.000Z`) and `filter_ts_rejects_a_day_the_zone_skipped`. Mutation-checked: putting the hour check back fails the first test, and dropping the date check fails the second.
+2. **important → fixed (grill). On macOS, a date-only year 0001–1899 returned success with `1969-12-31T23:59:59.000Z`.** macOS `mktime` returns `-1` for every year before 1900 and sets no `errno`, so the stage's "errno distinguishes failure" check passed it. glibc converts all those years. **Itay 2026-10-18 (`decision:plan17-date-floor-1900`, amends E5.2b):** a date-only year before 1900 is `invalid timestamp` on every platform. The canonical and whole-seconds forms keep 0001–9999. Failure detection is now the `tm_wday = -1` sentinel, which a successful `mktime` always overwrites, instead of `errno`. Tests `filter_ts_rejects_a_date_before_1900` (red first, showing the 1969 value) and `filter_ts_date_1900_01_01_is_accepted`. On macOS the floor and the sentinel each cover the other, so neither mutant alone fails there. Dropping the floor fails on Linux, where glibc would convert 1899. The sentinel stays as a defensive line. Stage 5 adds the 006 Implementation Results row.
+3. **nit → fixed (simplify, about 11 lines in `src/`).** The whole-seconds branch repeated the six-field parse and the civil check of the canonical branch. It now rewrites `…:SSZ` to `…:SS.000Z` and falls into the canonical branch. The three redundant zero assignments after `memset` are gone. Mutation-checked: a wrong `.001` rewrite fails `filter_ts_seconds_become_millis`.
+4. **nit → fixed.** `filter_ts_date_is_jerusalem_local_midnight` repeated `use_tz`/`restore_tz` inline. The helpers moved above it, and it now reads like the Los Angeles test.
+
+**Open nits (not fixed):**
+
+- The TZ tests' oracle `expected_local_midnight` runs the same `mktime` call as the code under test, so it cannot catch a shared wrong assumption. The plan asks for a computed expected value. The new Havana test pins one literal instant.
+- A date-only `9999-12-31` is accepted in Tokyo, Honolulu, and UTC. Probed under ASan: no crash, and each output is the right instant (Tokyo `9999-12-30T15:00:00.000Z`). Nothing to fix; it is recorded so stage 2 does not re-probe it.
+
+**Environment:** the local `ubuntu:24.04` image was x86_64 under emulation, and the baseline `ci-linux.sh` took 87 minutes. With Itay's OK I pulled the native `linux/arm64` image. The gate script now configures twice, because a compiler-path change wipes the CMake cache and drops `-DREMEMBER_TEST_VFS=ON`. It also checks the cache for both options before it builds.
+
+**Praise:** the parser does not print and leaves `out` unchanged on rejection, so stage 3 can phrase the usage error in one place. The February 30 test is the hot spot the plan warned about.
