@@ -289,9 +289,10 @@ No new grill. `parse_filter_ts` does not reuse `parse_expires_to_iso`: that help
 
 **Open nits (not fixed):**
 
-- The TZ tests' oracle `expected_local_midnight` runs the same `mktime` call as the code under test, so it cannot catch a shared wrong assumption. The plan asks for a computed expected value. The new Havana test pins one literal instant.
 - A date-only `9999-12-31` is accepted in Tokyo, Honolulu, and UTC. Probed under ASan: no crash, and each output is the right instant (Tokyo `9999-12-30T15:00:00.000Z`). Nothing to fix; it is recorded so stage 2 does not re-probe it.
 
 **Environment:** the local `ubuntu:24.04` image was x86_64 under emulation, and the baseline `ci-linux.sh` took 87 minutes. With Itay's OK I pulled the native `linux/arm64` image. The gate script now configures twice, because a compiler-path change wipes the CMake cache and drops `-DREMEMBER_TEST_VFS=ON`. It also checks the cache for both options before it builds.
 
 **Praise:** the parser does not print and leaves `out` unchanged on rejection, so stage 3 can phrase the usage error in one place. The February 30 test is the hot spot the plan warned about.
+
+**Addendum (Itay 2026-10-18, `decision:plan17-literal-tz-expectations`):** the three time-zone tests now assert literal UTC instants instead of calling the `expected_local_midnight` oracle. That oracle ran the same `mktime` call as `parse_filter_ts`, so the two could share a wrong assumption. The literals are Jerusalem `2026-06-15` → `2026-06-14T21:00:00.000Z`, Los Angeles `2026-06-15` → `2026-06-15T07:00:00.000Z`, and Jerusalem `2026-10-25` → `2026-10-24T21:00:00.000Z`. This deviates from the must-pass row "expected value computed in the test". The cost: a literal fails if a zone's 2026 rules change in tzdata. `take_digits`, the oracle, its constants, and two includes are gone (77 lines). Mutation-checked: `tm_isdst = 0` instead of `-1` fails all three tests. Gate: ctest 5/5 (ASan/UBSan, `REMEMBER_TEST_VFS=ON`), LINT OK, coverage 100/100, `leaks-macos` PASS, `ci-linux.sh` OK, then `GATE-ALL-GREEN`, run in a clean worktree of `02b6850` because the coder had stage 2 work uncommitted in the main checkout.

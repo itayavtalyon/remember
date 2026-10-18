@@ -2,8 +2,6 @@
 #include "register.h"
 #include "test.h"
 
-#include <errno.h>
-#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
@@ -15,69 +13,6 @@
  * Plan 17 stage 1. parse_filter_ts accepts the three filter forms and
  * writes the canonical UTC stamp. It does not print.
  */
-
-enum {
-    YMD_LEN = 10,
-    YEAR_LEN = 4,
-    MONTH_OFF = 5,
-    DAY_OFF = 8,
-    FIELD_LEN = 2,
-    TM_YEAR_BASE = 1900,
-    DECIMAL_BASE = 10
-};
-
-static int take_digits(const char *text, size_t count, int *out)
-{
-    char buf[YEAR_LEN + 1];
-    char *end = NULL;
-    long value = 0;
-
-    if (count > YEAR_LEN) {
-        return -1;
-    }
-    memcpy(buf, text, count);
-    buf[count] = '\0';
-    errno = 0;
-    value = strtol(buf, &end, DECIMAL_BASE);
-    if (errno != 0 || end == buf || *end != '\0') {
-        return -1;
-    }
-    *out = (int)value;
-    return 0;
-}
-
-/* Oracle for E5.2b: local midnight, then UTC. Not the function under test. */
-static void expected_local_midnight(const char *ymd, char out[ISO_TS_BUFSIZE])
-{
-    int year = 0;
-    int month = 0;
-    int day = 0;
-    struct tm local;
-    struct tm utc;
-    time_t sec = 0;
-
-    memset(out, 0, ISO_TS_BUFSIZE);
-    if (ymd == NULL || strlen(ymd) != YMD_LEN || take_digits(ymd, YEAR_LEN, &year) != 0 ||
-        take_digits(ymd + MONTH_OFF, FIELD_LEN, &month) != 0 ||
-        take_digits(ymd + DAY_OFF, FIELD_LEN, &day) != 0) {
-        return;
-    }
-    memset(&local, 0, sizeof(local));
-    local.tm_year = year - TM_YEAR_BASE;
-    local.tm_mon = month - 1;
-    local.tm_mday = day;
-    local.tm_hour = 0;
-    local.tm_min = 0;
-    local.tm_sec = 0;
-    local.tm_isdst = -1;
-    sec = mktime(&local);
-    if (gmtime_r(&sec, &utc) == NULL) {
-        return;
-    }
-    (void)snprintf(out, ISO_TS_BUFSIZE, "%04d-%02d-%02dT%02d:%02d:%02d.000Z",
-                   utc.tm_year + TM_YEAR_BASE, utc.tm_mon + 1, utc.tm_mday, utc.tm_hour, utc.tm_min,
-                   utc.tm_sec);
-}
 
 static int use_tz(const char *zone, char **saved, int *had)
 {
@@ -135,14 +70,11 @@ TEST(filter_ts_date_is_jerusalem_local_midnight)
     char *saved = NULL;
     int had = 0;
     char out[ISO_TS_BUFSIZE];
-    char want[ISO_TS_BUFSIZE];
 
     ASSERT_EQ_INT(use_tz("Asia/Jerusalem", &saved, &had), 0);
-    expected_local_midnight("2026-06-15", want);
     out[0] = '\0';
     ASSERT_EQ_INT(parse_filter_ts("2026-06-15", out), 0);
-    ASSERT_STREQ(out, want);
-    ASSERT_STR_NOT_CONTAINS(out, "T00:00:00.000Z");
+    ASSERT_STREQ(out, "2026-06-14T21:00:00.000Z"); /* IDT, UTC+3 */
     restore_tz(saved, had);
 }
 
@@ -181,14 +113,11 @@ TEST(filter_ts_date_is_los_angeles_local_midnight)
     char *saved = NULL;
     int had = 0;
     char out[ISO_TS_BUFSIZE];
-    char want[ISO_TS_BUFSIZE];
 
     ASSERT_EQ_INT(use_tz("America/Los_Angeles", &saved, &had), 0);
-    expected_local_midnight("2026-06-15", want);
     out[0] = '\0';
     ASSERT_EQ_INT(parse_filter_ts("2026-06-15", out), 0);
-    ASSERT_STREQ(out, want);
-    ASSERT_STR_NOT_CONTAINS(out, "T00:00:00.000Z");
+    ASSERT_STREQ(out, "2026-06-15T07:00:00.000Z"); /* PDT, UTC-7 */
     restore_tz(saved, had);
 }
 
@@ -197,14 +126,11 @@ TEST(filter_ts_jerusalem_dst_end_is_local_midnight)
     char *saved = NULL;
     int had = 0;
     char out[ISO_TS_BUFSIZE];
-    char want[ISO_TS_BUFSIZE];
 
     ASSERT_EQ_INT(use_tz("Asia/Jerusalem", &saved, &had), 0);
-    expected_local_midnight("2026-10-25", want);
     out[0] = '\0';
     ASSERT_EQ_INT(parse_filter_ts("2026-10-25", out), 0);
-    ASSERT_STREQ(out, want);
-    ASSERT_STR_NOT_CONTAINS(out, "2026-10-25T00:00:00.000Z");
+    ASSERT_STREQ(out, "2026-10-24T21:00:00.000Z"); /* DST ends 02:00; still UTC+3 */
     restore_tz(saved, had);
 }
 
