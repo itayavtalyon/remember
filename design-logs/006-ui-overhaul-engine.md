@@ -368,7 +368,7 @@ Shipped in plan 15 (branch `plan15-stage1-schema-v5`, 2026-10-13–14). The Desi
 Shipped in plan 16 (branch `plan16-actionable-errors`, 2026-10-15–16). The Design section above is unchanged.
 
 - E4.1. `--json-errors` writes exactly one stderr JSON line for an error, and no plain line. Stdout is empty. Exit codes are unchanged (E4.12).
-- E4.2. Without the flag, non-database errors stay the 0.2.0 bytes. **Amendment (`decision:plan16-warning-prefix-and-failure`):** the `--trash` and `purge-trash` lines gained `warning: `. The synced-folder line did not.
+- E4.2. Without the flag, non-database errors stay the 0.2.0 bytes. **Amendment (`decision:plan16-warning-prefix-and-failure`):** the `--trash` and `purge-trash` lines gained `warning: `. The synced-folder line did not. **Amendment (`decision:plain-stderr-control-bytes`, 2026-10-18):** every plain error and warning line shows C0 bytes (`\n` and `\t` included) and DEL as `?`. Input without control bytes keeps the 0.2.0 bytes. `--json-errors` is unchanged.
 - E4.3. One catalog in `diag.c`, in the E4.3 order. A test round-trips every code.
 - E4.4. `message` is the plain line without `remember: `. **Amendment (`decision:plan16-sqlite-json-shape`):** for the eight SQLite codes, JSON `message` is `database error: <cause>` (`database error` for `database`). The plain line stays the full E4.8 sentence. `detail.fix` carries the fix sentence.
 - E4.6. **Amendment (`decision:plan16-warning-prefix-and-failure`, D5):** plain warnings are `remember: warning: <text>`. Warning codes are `raw_query_ignored` (no call site until plan 18), `deprecated_flag`, and `synced_folder`. The two live warnings still print when the command then fails.

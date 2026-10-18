@@ -901,6 +901,71 @@ TEST(golden_error_lines_and_d9_codes)
     free(db);
 }
 
+/* decision:plain-stderr-control-bytes: the plain line replaces C0 and DEL in
+   echoed input with '?', so input cannot forge a line or drive the terminal.
+   --json-errors keeps its escaping. */
+TEST(plain_error_replaces_echoed_control_bytes)
+{
+    static const struct {
+        const char *args[2];
+        const char *plain;
+        const char *json;
+    } rows[] = {
+        {{"bogus\nremember: fake"},
+         "unknown command 'bogus?remember: fake'",
+         "unknown command 'bogus\\nremember: fake'"},
+        {{"--x\x1b[31m", "list"}, "unknown option '--x?[31m'", "unknown option '--x\\u001b[31m'"},
+        {{"zap\x7f"}, "unknown command 'zap?'", "unknown command 'zap\x7f'"},
+    };
+    char *db = make_temp_db_path();
+    size_t i = 0;
+
+    ASSERT_TRUE(db != NULL);
+    if (db == NULL) {
+        return;
+    }
+    for (i = 0; i < sizeof(rows) / sizeof(rows[0]); i++) {
+        const char *json_args[3] = {"--json-errors", rows[i].args[0], rows[i].args[1]};
+        size_t n = args_count(rows[i].args, 2U);
+        char want[GOLDEN_LINE_BUF];
+        CmdResult r = run_remember(db, rows[i].args, n, NULL);
+
+        (void)snprintf(want, sizeof(want), "remember: %s\n", rows[i].plain);
+        ASSERT_STREQ(r.err, want);
+        ASSERT_EQ_INT(r.exit_code, 1);
+        cmd_result_free(&r);
+
+        r = run_remember(db, json_args, n + 1U, NULL);
+        (void)snprintf(want, sizeof(want),
+                       "{\"version\":1,\"error\":{\"code\":\"usage\",\"message\":\"%s\"}}\n",
+                       rows[i].json);
+        ASSERT_STREQ(r.err, want);
+        ASSERT_EQ_INT(r.exit_code, 1);
+        cmd_result_free(&r);
+    }
+    free(db);
+}
+
+/* One-line mode drops tab too; space and UTF-8 pass through. */
+TEST(plain_warning_replaces_tab_and_c0_keeps_utf8)
+{
+    char *buf = NULL;
+    size_t len = 0U;
+    FILE *err = open_memstream(&buf, &len);
+
+    ASSERT_TRUE(err != NULL);
+    if (err == NULL) {
+        return;
+    }
+    app_set_streams((AppStreams){.out = NULL, .err = err});
+    ASSERT_EQ_INT(diag_warning_as(false, DIAG_WARN_DEPRECATED_FLAG, "\ta \x01\x1f\xc3\xa9~"), 0);
+    ASSERT_EQ_INT(fflush(err), 0);
+    ASSERT_STREQ(buf, "remember: warning: ?a ??\xc3\xa9~\n");
+    app_set_streams((AppStreams){.out = NULL, .err = NULL});
+    ASSERT_EQ_INT(fclose(err), 0);
+    free(buf);
+}
+
 /* D7: relative joins the cwd; "." and ".." normalize lexically; no symlink work. */
 TEST(util_absolute_path_joins_cwd_and_normalizes_lexically)
 {
@@ -3677,6 +3742,8 @@ void register_errors_tests(void)
     RUN_TEST(err_fmt_keeps_a_long_unknown_option);
     RUN_TEST(internal_parse_stays_a_plain_internal_line);
     RUN_TEST(golden_error_lines_and_d9_codes);
+    RUN_TEST(plain_error_replaces_echoed_control_bytes);
+    RUN_TEST(plain_warning_replaces_tab_and_c0_keeps_utf8);
     RUN_TEST(sqlite_busy_reports_cause_fix_and_detail);
     RUN_TEST(sqlite_cannot_open_carries_errno_reason_and_absolute_path);
     RUN_TEST(sqlite_database_keeps_its_own_text_without_a_path);

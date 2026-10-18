@@ -73,6 +73,7 @@ Opening an existing database migrates it to `user_version` **5**.
 - The device id is only the sidecar `<db-path>.device_id`. The database holds no copy.
 - Hard wipe (`delete --expired|--deleted`, `purge --expired|--deleted`) no longer needs one registered device.
 - `--json-errors` writes one JSON object per error or warning on stderr. Read `code`.
+- A plain error or warning line shows control characters from your input (newline, tab, escape, DEL) as `?`, so input cannot fake a second line or drive the terminal. `--json-errors` still escapes them.
 - A database error names one of seven causes: `busy`, `read_only`, `disk_full`, `cannot_open`, `not_a_database`, `corrupt`, `io_error`. Anything else is `database`.
 - `--busy-timeout MS` sets the lock wait (0..60000, default 5000).
 - `--no-create` fails when the brain file is missing and creates nothing.

@@ -166,7 +166,15 @@ static int write_notice(Notice notice)
         }
         return 0;
     }
-    if (fprintf(err, "remember: %s%s\n", notice.plain_prefix, message) < 0) {
+    /* decision:plain-stderr-control-bytes: echoed input cannot forge a line
+       or drive the terminal; C0 (with \n, \t) and DEL become '?'. */
+    if (fprintf(err, "remember: %s", notice.plain_prefix) < 0) {
+        return -1;
+    }
+    if (output_text_human(err, message, false) != 0) {
+        return -1;
+    }
+    if (fputc('\n', err) == EOF) {
         return -1;
     }
     return 0;
