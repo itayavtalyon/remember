@@ -947,7 +947,10 @@ TEST(store_device_new_replaces_an_invalid_sidecar)
     ASSERT_TRUE(s == NULL);
     ASSERT_STR_CONTAINS(err, "invalid device_id sidecar");
     err[0] = '\0';
-    s = store_open_replacing_sidecar(db, err, sizeof(err));
+    s = store_open_opts(db,
+                        &(StoreOpenOpts){.busy_timeout_ms = STORE_DEFAULT_BUSY_TIMEOUT_MS,
+                                         .replace_invalid_sidecar = true},
+                        err, sizeof(err), NULL);
     ASSERT_TRUE(s != NULL);
     (void)snprintf(want, sizeof(want), "%s\n", s != NULL ? store_device_id(s) : "");
     after = read_text(side);

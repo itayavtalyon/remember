@@ -217,7 +217,7 @@ TEST(trash_alias_expired_deprecation_skips_deleted)
 
     r = run_remember(db, lst_trash, sizeof(lst_trash) / sizeof(lst_trash[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 0);
-    ASSERT_STR_CONTAINS(r.err, "remember: --trash is deprecated; use --expired");
+    ASSERT_STR_CONTAINS(r.err, "remember: warning: --trash is deprecated; use --expired");
     ASSERT_STR_CONTAINS(r.out, "old");
     ASSERT_STR_NOT_CONTAINS(r.out, "fresh");
     cmd_result_free(&r);
@@ -253,7 +253,7 @@ TEST(expired_deleted_mutex)
     r = run_remember(db, alias, sizeof(alias) / sizeof(alias[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 1);
     ASSERT_STR_CONTAINS(r.err, "cannot combine --expired and --deleted");
-    ASSERT_STR_CONTAINS(r.err, "remember: --trash is deprecated; use --expired");
+    ASSERT_STR_CONTAINS(r.err, "remember: warning: --trash is deprecated; use --expired");
     cmd_result_free(&r);
 
     r = run_remember(db, upd_both, sizeof(upd_both) / sizeof(upd_both[0]), NULL);

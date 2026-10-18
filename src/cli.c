@@ -1,5 +1,7 @@
 #include "cli.h"
 
+#include "util.h"
+
 #include <stddef.h>
 #include <stdlib.h>
 #include <string.h>
@@ -96,6 +98,7 @@ static const CommandEntry k_commands[] = {
     {.name = "device",
      .command = CLI_CMD_DEVICE,
      .summary = "Print the device id, or mint a new one"},
+    {.name = "repair", .command = CLI_CMD_REPAIR, .summary = "Rebuild the search index"},
 };
 
 enum { COMMAND_COUNT = (int)(sizeof(k_commands) / sizeof(k_commands[0])) };
@@ -157,6 +160,8 @@ const char *cli_error_message(CliError err)
         return "unknown option";
     case CLI_ERR_MISSING_OPTION_VALUE:
         return "option requires a value";
+    case CLI_ERR_INVALID_BUSY_TIMEOUT:
+        return "invalid --busy-timeout (must be 0..60000)";
     case CLI_ERR_INTERNAL:
         return "internal argument error";
     default:
@@ -174,7 +179,11 @@ static void cli_args_clear(CliArgs *out)
     out->command = CLI_CMD_NONE;
     out->help_topic = CLI_CMD_NONE;
     out->globals.db_path = NULL;
+    out->globals.busy_timeout_ms = 0;
     out->globals.json = false;
+    out->globals.json_errors = false;
+    out->globals.no_create = false;
+    out->globals.busy_timeout_set = false;
     out->rest_argc = 0;
     out->rest_argv = NULL;
 }
@@ -215,6 +224,20 @@ static bool looks_like_option(const char *arg)
     return true;
 }
 
+/* E4.13: decimal milliseconds, inclusive. */
+enum { BUSY_TIMEOUT_MAX_MS = 60000 };
+
+static int parse_busy_timeout(const char *raw, int *out_ms)
+{
+    unsigned long long value = 0;
+
+    if (util_parse_nonneg(raw, &value) != 0 || value > (unsigned long long)BUSY_TIMEOUT_MAX_MS) {
+        return -1;
+    }
+    *out_ms = (int)value;
+    return 0;
+}
+
 /* Consume a global at cursor if present. true = consumed (or failed in out). */
 static bool take_global(ArgCursor *cur, CliArgs *out)
 {
@@ -226,6 +249,37 @@ static bool take_global(ArgCursor *cur, CliArgs *out)
     if (strcmp(arg, "--json") == 0) {
         (void)cursor_next(cur);
         out->globals.json = true;
+        return true;
+    }
+    if (strcmp(arg, "--json-errors") == 0) {
+        (void)cursor_next(cur);
+        out->globals.json_errors = true;
+        return true;
+    }
+    if (strcmp(arg, "--no-create") == 0) {
+        (void)cursor_next(cur);
+        out->globals.no_create = true;
+        return true;
+    }
+    if (strcmp(arg, "--busy-timeout") == 0) {
+        const char *val = NULL;
+        int ms = 0;
+
+        (void)cursor_next(cur);
+        /* -1 is a specified bad value (E4.13), so a leading dash is still the
+           value. Only a missing token is "option requires a value". */
+        if (cursor_done(cur)) {
+            out->error = CLI_ERR_MISSING_OPTION_VALUE;
+            out->error_option = "--busy-timeout";
+            return true;
+        }
+        val = cursor_next(cur);
+        if (parse_busy_timeout(val, &ms) != 0) {
+            out->error = CLI_ERR_INVALID_BUSY_TIMEOUT;
+            return true;
+        }
+        out->globals.busy_timeout_ms = ms;
+        out->globals.busy_timeout_set = true;
         return true;
     }
     if (strcmp(arg, "--db") == 0) {
@@ -387,11 +441,11 @@ static bool scan_option(ArgCursor *cur, CliArgs *out, const char *arg, int at, S
 }
 
 /*
- * Single pass over argv. Globals (--db/--json) and meta flags (--help/--version)
- * are recognized wherever they appear and stripped out; the first bare token is
- * the subcommand; every other token becomes a subcommand arg in rest_argv. A
- * "--" ends option processing: subsequent tokens are literal, even if they look
- * like flags or globals.
+ * Single pass over argv. Globals (--db/--json/--json-errors/--busy-timeout/--no-create)
+ * and meta flags (--help/--version) are recognized wherever they appear and
+ * stripped out; the first bare token is the subcommand; every other token
+ * becomes a subcommand arg in rest_argv. A "--" ends option processing:
+ * subsequent tokens are literal, even if they look like flags or globals.
  */
 static void scan_argv(ArgCursor *cur, CliArgs *out, ScanState *st)
 {

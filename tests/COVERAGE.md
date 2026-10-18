@@ -59,6 +59,8 @@ Dev tools for inspect tests: `sqlite3` on PATH (`brew install sqlite` if needed)
 | `test_schema_config.c` | sync path, key null |
 | `test_schema_v5.c` | fresh v5 schema, key search, Hebrew FTS fold, v4→v5 schema identity, every v4-open exec fault keeps v4, sidecar-only device id, `store_device_new` replaces an invalid sidecar (plan 15; gate suite `schema_v5`; also under ASan via `remember_store_tests`) |
 | `test_device.c` | `device` / `device new` human and JSON, version vector stays put until the next edit, `device new` replaces an invalid sidecar, help (plan 15; gate suite `device`) |
+| `test_errors.c` | Plan 16 error catalog, JSON errors, the seven SQLite causes, `--busy-timeout`, `--no-create`, `repair search-index`, and help for those globals (gate suite `errors`) |
+| `test_facade.c` | `remember_run` byte-matches the CLI, including `--json-errors` on a miss and a busy lock (gate suite `facade`) |
 | `test_sync_import.c` | import merge and conflicts; a v4 or v5 source stays read-only and is not migrated (plan 15 stage 5; gate suite `sync_import`) |
 | `test_verification_edges.c` | V21–34 edges (green slice: `verification_gld`; WIP: `verification_edges`) |
 

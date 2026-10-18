@@ -98,7 +98,8 @@ jobs:
             -DCMAKE_BUILD_TYPE=Debug \
             -DCMAKE_C_COMPILER=clang \
             -DREMEMBER_ENABLE_SANITIZERS=ON \
-            -DREMEMBER_ENABLE_LSAN=OFF
+            -DREMEMBER_ENABLE_LSAN=OFF \
+            -DREMEMBER_TEST_VFS=ON
 
       - name: Build
         run: cmake --build build

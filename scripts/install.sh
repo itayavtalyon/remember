@@ -127,6 +127,15 @@ binary_looks_sanitized() {
   return 1
 }
 
+# True when the binary defines the test-only VFS (X-E02). Release must not.
+binary_links_test_vfs() {
+  local bin="$1"
+  if [[ ! -f "$bin" ]] || ! command -v nm >/dev/null 2>&1; then
+    return 1
+  fi
+  nm "$bin" 2>/dev/null | grep -Eq '[[:space:]][Tt][[:space:]]+_*remember_test_vfs_install$'
+}
+
 release_tree() {
   # Absolute REMEMBER_RELEASE_DIR is used as-is; relative is under $ROOT.
   case "$RELEASE_DIR" in
@@ -152,6 +161,10 @@ install_binary() {
     if binary_looks_sanitized "$bin_src"; then
       echo "error: $bin_src looks sanitizer-linked; refuse to install" >&2
       echo "       rebuild with: $0 --force-build (or drop --no-build)" >&2
+      exit 1
+    fi
+    if binary_links_test_vfs "$bin_src"; then
+      echo "error: $bin_src links the test VFS; refuse to install" >&2
       exit 1
     fi
   else
@@ -180,6 +193,10 @@ install_binary() {
   fi
   if binary_looks_sanitized "$bin_src"; then
     echo "error: $bin_src is sanitizer-linked after build; refusing install" >&2
+    exit 1
+  fi
+  if binary_links_test_vfs "$bin_src"; then
+    echo "error: $bin_src links the test VFS after build; refusing install" >&2
     exit 1
   fi
 

@@ -45,13 +45,16 @@ The device id is the sidecar `<db-path>.device_id` (never copy on import). Run `
 ## Global flags
 
 ```text
-remember [--db PATH] [--json] <command> …
+remember [--db PATH] [--json] [--json-errors] [--busy-timeout MS] [--no-create] <command> …
 ```
 
 | Flag | Meaning |
 |------|---------|
 | `--db PATH` | Overrides `REMEMBER_DB` and default `~/.remember/remember.db` |
 | `--json` | Machine-readable JSON on stdout (use this from agents) |
+| `--json-errors` | One JSON object per error or warning on stderr. Read `error.code` |
+| `--busy-timeout MS` | Milliseconds to wait for a lock (0..60000, default 5000) |
+| `--no-create` | A missing brain file fails. Creates nothing |
 
 **DB location:** must be a **local disk**. Paths under iCloud (`com~apple~CloudDocs`), Dropbox, or Google Drive get a stderr warning and risk corruption. Prefer default `~/.remember`.
 
@@ -65,6 +68,14 @@ remember [--db PATH] [--json] <command> …
 | `3` | Wrong bin. Tokens: `expired` / `not_expired` / `deleted` / `not_deleted`. Flip `--expired` or `--deleted`. **Not** used by `link`/`unlink`/`related` (those resolve live+expired by default). |
 
 Never invent ids, keys, or sync_ids. On exit `2`, the entry is missing — do not fabricate one. On exit `3`, the row exists in another bin.
+
+## Errors
+
+Pass `--json-errors` when a command can fail. Each stderr line is then one JSON object, and there is no plain line. Warning lines (`warning.code`) can come before the error line, also when the command fails. Parse stderr line by line. Read `error.code`.
+
+`busy` means another process holds the brain. Retry later. The tool does not retry.
+
+`corrupt` with `detail.fts_only` true means the search index is damaged. Run `remember repair search-index`. Memories are not affected.
 
 ## Locators and bins
 
