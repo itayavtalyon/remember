@@ -305,6 +305,7 @@ set(REMEMBER_TEST_SOURCES
     tests/test_schema_v5.c
     tests/test_device.c
     tests/test_errors.c
+    tests/test_list_dates.c
 )
 add_executable(remember_tests
     ${REMEMBER_TEST_SOURCES}

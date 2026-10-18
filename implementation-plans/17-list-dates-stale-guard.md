@@ -247,8 +247,29 @@ or architecture forks to Itay as a grill. Re-run the full gate after any fix.
 
 ## Implementation Notes
 
-_(empty; fill per stage)_
+### 2026-10-18 — stage 1 (TS parser)
+
+No new grill. `parse_filter_ts` does not reuse `parse_expires_to_iso`: that helper is local end of day and accepts any fraction length. The filter parser takes the three forms exactly.
+
+- Canonical `YYYY-MM-DDTHH:MM:SS.mmmZ` is copied. `YYYY-MM-DDTHH:MM:SSZ` becomes the same instant with `.000`. `YYYY-MM-DD` is local midnight (`tm_isdst = -1`, `mktime`, then UTC).
+- A date that is not a real civil day is rejected before `mktime`. The red test for `2026-02-30` came back `2026-03-01T22:00:00.000Z` until that check landed. After `mktime`, the broken-down local fields must still be that midnight, so a libc normalization is refused. `(time_t)-1` is an error only when `errno` is set, because that value is also a real instant.
+- Leap years follow the Gregorian rule (400 / 100 / 4). Seconds stop at 59. The function does not print. On rejection it leaves `out` unchanged.
+- `list_dates` is on `tests/gate-suites` now, because the coverage gate only runs suites on that line and the new functions live in `src/`. `tests/COVERAGE.md` stays stage 5.
 
 ## Review Notes
 
-_(empty; second review appends here)_
+### 2026-10-18 — in-session deep review (stage 1)
+
+**Verdict:** approve for the second-opinion pass. No open blocking item. No grill. No new `decision:*` beyond `decision:plan17-whole-plan-flag`, which is the finish flag for the whole plan, not a parser rule.
+
+**Ran:** ctest 5/5 with ASan/UBSan and `REMEMBER_TEST_VFS=ON`. `lint-all.sh` LINT OK. Coverage 100% functions and 100% effective lines. `leaks-macos` PASS. `ci-linux.sh` OK, including IWYU and scan-build. [Bugbot](22ac6b1a-dcd7-4f01-a87d-97f96ca874c5) on the uncommitted stage found no blocking bug.
+
+**Pragmatic write-gate:** DRY PASS (one civil check for all three forms; the expires parser stays on its own rules). Easy-to-replace PASS (a pure function, no SQLite). Orthogonal PASS (the parser does not print and does not see SQL). No deferred markers.
+
+**Ponytail:** Lean already. The month-length table is the calendar.
+
+**Auto-fixed:** `mktime` returning `(time_t)-1` is a failure only when `errno` is set. The temporary `days` local is gone. `list_dates` was re-run under ASan, and clang-tidy on `commands_common.c` was clean after that fix. The full gate above is the tree before that two-line change; the success path of every date test still runs the new check.
+
+**Left for later:** stage 2 is `ListQuery` sort plus `since`/`until`. Help, SKILL, What's New, and `COVERAGE.md` stay stage 5.
+
+**Praise:** the February 30 test failed first by showing the normalized March instant, which is the bug the plan warned about.
