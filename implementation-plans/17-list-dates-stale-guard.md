@@ -347,3 +347,55 @@ Simplify, not applied:
 **Left for later:** stage 3 is the CLI list/search flags, D11 validation, and help text. Help, SKILL, What's New, engineering notes, and `COVERAGE.md` stay stage 5.
 
 **Praise:** the creation-order test failed first by returning updated-at order.
+
+### 2026-10-18 — second-opinion deep review (stage 2)
+
+**Verdict:** stage 2 approved. No open blocking item. One grill, answered. Two tests added, and the code and tests are shorter.
+
+**Run, not read.** Baseline `0e8c345` (gate root clean): ctest 5/5, LINT OK, coverage 100/100, `leaks-macos` PASS, `ci-linux.sh` OK, `GATE-ALL-GREEN`. Fixed tree: ctest 5/5 (ASan/UBSan, `REMEMBER_TEST_VFS=ON`), LINT OK, coverage 100/100, `leaks-macos` PASS, `ci-linux.sh` OK, `GATE-ALL-GREEN`, run in a clean worktree of `0e8c345` plus these changes. The CLI caps `--tag` at 50, so the worst list is 50 + source + key + `now` + since + until = 55 binds, inside `LIST_BIND_CAP` 64. `COUNT` and the page share the existing `BEGIN`/`COMMIT`.
+
+**Mutations on the coder's tests** (`remember_store_tests`, each from a copy):
+
+| Mutant | Result |
+|--------|--------|
+| since `>=` → `>` | caught: `store_list_since_inclusive_until_exclusive`, by a UBSan abort (exit 134, see nit 5) |
+| until `<` → `<=` | caught by three tests |
+| list tie-break `e.id DESC` → `ASC` | caught: `store_list_created_tie_breaks_by_id` |
+| list ignores `q->sort` | caught by four tests |
+| COUNT without the time bounds | caught |
+| **search ORDER BY uses `q->filters.sort`, filter unchanged** | **survived** → finding 1 |
+| **search tie-break `e.id DESC` → `ASC`** | **survived** (older than this stage) → finding 2 |
+
+**Findings:**
+
+1. **important → fixed. No test proved that search keeps its order when the query asks for `created` (E5.3).** The coder's mutation swapped the column for both the filter and the order, so the filter test caught it. An order-only bug passed. New `store_search_ignores_sort_for_order`: two identical bodies whose created and updated orders disagree, `filters.sort = CREATED`, ids 1 then 2. It fails the order-only mutant.
+2. **important → fixed. No test pinned search's `id` tie-break.** New `store_search_ties_break_by_id`: two identical bodies with the same timestamps come back as ids 2 then 1. It fails the `ASC` mutant. With the ORDER BY inlined (grill 3), each tie-break now has its own test.
+3. **Grill → fixed (Itay 2026-10-18, `decision:plan17-inline-order-by`, deviates from stage 2's "one place builds the ORDER BY").** `write_time_order`, `TIME_ORDER_CAP`, and two 64-byte `order` buffers are gone. List writes `ORDER BY e.%s DESC, e.id DESC` and search writes `ORDER BY bm25(entries_fts), e.%s DESC, e.id DESC` straight into their existing SELECT formats. The column still comes only from `list_sort_column`.
+4. **nit → fixed (simplify).** The one-caller wrapper `list_append_time` is inlined, so `list_append_filters` calls `list_append_cmp` twice, once with `true, q->since` and once with `false, q->until`. I first passed the operator string instead of `bool inclusive`. clang-tidy rejected that as three adjacent swappable `const char *` parameters, and the ternary form as an implicit bool conversion, so the coder's two-branch `list_append_cmp` stays as written. With finding 3, `src/store_sqlite.c` is net −27. The coder's argument for keeping search's `column == NULL` check holds (a broken switch would format NULL), so it stays.
+5. **nit → fixed (simplify, DRY).** 21 eleven-argument `store_add` calls, each with `Entry` / `StoreAddAction` / `memset` / `store_entry_free` around it, are now `given_entry(s, (GivenEntry){.body, .hash, .created, …})` (a `given*` helper, per `quality:test-the-contract`). Two tests inlined the loop that `free_page` already does, and one inlined the `UPDATE` that `set_updated_at` does. Net −71 test lines before the two new tests.
+6. **nit, open (harness).** After a failed `count` assert, a test still reads `page.entries[0]`. On an empty page that is a NULL read, so UBSan aborts the whole binary and hides every later result. The gate still goes red. The pattern is house-wide (12 sites in `test_store.c`). Follow-up: a `REQUIRE`-style assert in `tests/test.h` that returns from the test.
+
+**Praise:** `list_sort_column` is the one map, and zero-init keeps today's order. The unknown-sort test returns `STORE_ERR_INTERNAL` before any SQL. The coder probed non-canonical bounds and recorded that the store binds them as given.
+
+**Coder rating (stage 2): 8/10, up from 7.** It applied last round's instructions:
+
+- Seven mutations with the observed failures.
+- A thrown-away probe of non-canonical bounds.
+- Three simplify candidates, each with a line count.
+- The gate on the committed tree.
+- A pull of the review commit before committing.
+
+**Misses:**
+
+- Its mutations changed whole behaviors (search used the sort for both filter and order), so two narrower bugs survived. Mutate one clause at a time.
+- It turned down a simplification by citing plan wording instead of asking. The plan said "one place", and Itay chose the shorter code. A simplification blocked only by plan wording is a grill, not a no. Its other reasons held: search's NULL check stays, and lint forces the `bool` in `list_append_cmp`.
+- It wrote 21 copies of an 11-argument call instead of a `given*` helper.
+
+**Paste-ready for the coder:**
+
+```text
+1. Mutate one clause at a time (the ORDER BY alone, the WHERE alone, one operator, one tie-break). A mutant that changes two things is caught by the easier one.
+2. When a simplification is blocked only by plan wording, ask Itay; do not decline it yourself.
+3. When a test needs the same setup call more than twice, write a given* helper first.
+4. After a failed count assert, do not index the page.
+```

@@ -3310,20 +3310,8 @@ static const char *list_sort_column(StoreSort sort)
     }
 }
 
-/* prefix is empty for list, or "bm25(entries_fts), " for search. */
-enum { TIME_ORDER_CAP = 64 };
-
-static int write_time_order(char *dst, size_t cap, const char *prefix, const char *column)
-{
-    int n = snprintf(dst, cap, "ORDER BY %se.%s DESC, e.id DESC", prefix, column);
-
-    if (n < 0 || (size_t)n >= cap) {
-        return -1;
-    }
-    return 0;
-}
-
-/* One bound. inclusive is >= (since); the other side is < (until). NULL skips. */
+/* One bound. inclusive is >= (since); the other side is < (until). NULL skips.
+   column comes from list_sort_column. The timestamp is bound, never pasted. */
 static int list_append_cmp(char *sql, size_t sql_cap, size_t *pos, int *nbinds,
                            const char **bind_text, size_t bind_cap, const char *column,
                            bool inclusive, const char *value)
@@ -3349,20 +3337,6 @@ static int list_append_cmp(char *sql, size_t sql_cap, size_t *pos, int *nbinds,
     return 0;
 }
 
-/*
- * since is inclusive, until is exclusive. NULL skips that side.
- * column comes from list_sort_column. The timestamp is bound, never pasted.
- */
-static int list_append_time(char *sql, size_t sql_cap, size_t *pos, int *nbinds,
-                            const char **bind_text, size_t bind_cap, const char *column,
-                            const char *since, const char *until)
-{
-    if (list_append_cmp(sql, sql_cap, pos, nbinds, bind_text, bind_cap, column, true, since) != 0) {
-        return -1;
-    }
-    return list_append_cmp(sql, sql_cap, pos, nbinds, bind_text, bind_cap, column, false, until);
-}
-
 static int list_append_filters(const ListQuery *q, char *sql, size_t sql_cap, size_t *pos,
                                int *nbinds, const char **bind_text, size_t bind_cap,
                                const char *time_column)
@@ -3384,8 +3358,12 @@ static int list_append_filters(const ListQuery *q, char *sql, size_t sql_cap, si
             return -1;
         }
     }
-    return list_append_time(sql, sql_cap, pos, nbinds, bind_text, bind_cap, time_column, q->since,
-                            q->until);
+    if (list_append_cmp(sql, sql_cap, pos, nbinds, bind_text, bind_cap, time_column, true,
+                        q->since) != 0) {
+        return -1;
+    }
+    return list_append_cmp(sql, sql_cap, pos, nbinds, bind_text, bind_cap, time_column, false,
+                           q->until);
 }
 
 /*
@@ -3592,13 +3570,11 @@ static PageResult list_query_exec(sqlite3 *db, const ListQuery *q, const char *n
     char count_sql[(size_t)LIST_SQL_CAP + (size_t)COUNT_FRAME_MARGIN];
     char select_sql[(size_t)LIST_SQL_CAP + (size_t)SELECT_FRAME_MARGIN];
     const char *bind_text[LIST_BIND_CAP];
-    const char *column = NULL;
-    char order[TIME_ORDER_CAP];
+    const char *column = list_sort_column(q->sort);
     int nbinds = 0;
     int sn = 0;
 
-    column = list_sort_column(q->sort);
-    if (column == NULL || write_time_order(order, sizeof(order), "", column) != 0) {
+    if (column == NULL) {
         return (PageResult){.st = STORE_ERR_INTERNAL};
     }
     if (list_build_where(q, now, column, where_sql, sizeof(where_sql), &nbinds, bind_text,
@@ -3612,9 +3588,9 @@ static PageResult list_query_exec(sqlite3 *db, const ListQuery *q, const char *n
     sn = snprintf(select_sql, sizeof(select_sql),
                   "SELECT e.id, e.key, e.body, e.source, e.created_at, e.updated_at, e.expires_at, "
                   "e.sync_id, e.deleted_at, e.version_vector "
-                  "FROM entries e%s %s "
+                  "FROM entries e%s ORDER BY e.%s DESC, e.id DESC "
                   "LIMIT ?%d OFFSET ?%d;",
-                  where_sql, order, nbinds + 1, nbinds + 2);
+                  where_sql, column, nbinds + 1, nbinds + 2);
     if (sn < 0 || (size_t)sn >= sizeof(select_sql)) {
         return (PageResult){.st = STORE_ERR_INTERNAL};
     }
@@ -3669,15 +3645,12 @@ static PageResult search_query_exec(sqlite3 *db, const SearchQuery *q, const cha
     char count_sql[(size_t)LIST_SQL_CAP + (size_t)COUNT_FRAME_MARGIN];
     char select_sql[(size_t)LIST_SQL_CAP + (size_t)SELECT_FRAME_MARGIN];
     const char *bind_text[LIST_BIND_CAP];
-    const char *column = NULL;
-    char order[TIME_ORDER_CAP];
+    /* E5.3: search rank stays bm25, then updated_at. Sort on the query is ignored. */
+    const char *column = list_sort_column(STORE_SORT_UPDATED);
     int nbinds = 0;
     int sn = 0;
 
-    /* E5.3: search rank stays bm25, then updated_at. Sort on the query is ignored. */
-    column = list_sort_column(STORE_SORT_UPDATED);
-    if (column == NULL ||
-        write_time_order(order, sizeof(order), "bm25(entries_fts), ", column) != 0) {
+    if (column == NULL) {
         return (PageResult){.st = STORE_ERR_INTERNAL};
     }
     if (search_build_where(q, now, column, where_sql, sizeof(where_sql), &nbinds, bind_text,
@@ -3696,9 +3669,9 @@ static PageResult search_query_exec(sqlite3 *db, const SearchQuery *q, const cha
                   "e.sync_id, e.deleted_at, e.version_vector "
                   "FROM entries e "
                   "JOIN entries_fts ON entries_fts.rowid = e.id%s "
-                  "%s "
+                  "ORDER BY bm25(entries_fts), e.%s DESC, e.id DESC "
                   "LIMIT ?%d OFFSET ?%d;",
-                  where_sql, order, nbinds + 1, nbinds + 2);
+                  where_sql, column, nbinds + 1, nbinds + 2);
     if (sn < 0 || (size_t)sn >= sizeof(select_sql)) {
         return (PageResult){.st = STORE_ERR_INTERNAL};
     }

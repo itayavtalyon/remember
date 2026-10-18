@@ -628,6 +628,32 @@ static void set_updated_at(const char *db, long long id, const char *updated)
     free(harness_sqlite_query_line(db, sql));
 }
 
+/* Given: one memory whose created_at and updated_at are `created`. Source defaults to human. */
+typedef struct {
+    const char *body;
+    const char *hash;
+    const char *key;
+    const char *const *tags;
+    size_t ntags;
+    const char *source;
+    const char *created;
+} GivenEntry;
+
+static long long given_entry(Store *s, GivenEntry g)
+{
+    Entry e;
+    StoreAddAction act = STORE_ADD_CREATED;
+    long long id = 0;
+
+    memset(&e, 0, sizeof(e));
+    ASSERT_EQ_STATUS(store_add(s, g.body, g.hash, g.key, g.tags, g.ntags,
+                               g.source != NULL ? g.source : "human", NULL, g.created, &act, &e),
+                     STORE_OK);
+    id = e.id;
+    store_entry_free(&e);
+    return id;
+}
+
 TEST(store_get_loads_expires_at)
 {
     char *db = make_temp_db_path();
@@ -1194,30 +1220,19 @@ TEST(store_list_sort_created_keeps_creation_order)
     char *db = make_temp_db_path();
     char err[ERR_BUFSIZE];
     Store *s = NULL;
-    Entry e;
-    StoreAddAction act = STORE_ADD_CREATED;
     ListQuery q;
     PageResult page;
-    size_t i = 0;
 
     ASSERT_TRUE(db != NULL);
     s = store_open(db, err, sizeof(err));
     ASSERT_TRUE(s != NULL);
-    memset(&e, 0, sizeof(e));
-    ASSERT_EQ_STATUS(store_add(s, "oldest", k_hash_a, NULL, NULL, 0U, "human", NULL,
-                               "2026-01-01T00:00:00.000Z", &act, &e),
-                     STORE_OK);
-    store_entry_free(&e);
-    ASSERT_EQ_STATUS(store_add(s, "middle", k_hash_b, NULL, NULL, 0U, "human", NULL,
-                               "2026-02-01T00:00:00.000Z", &act, &e),
-                     STORE_OK);
-    store_entry_free(&e);
-    ASSERT_EQ_STATUS(store_add(s, "newest", k_hash_c, NULL, NULL, 0U, "human", NULL,
-                               "2026-03-01T00:00:00.000Z", &act, &e),
-                     STORE_OK);
-    store_entry_free(&e);
-    free(harness_sqlite_query_line(
-        db, "UPDATE entries SET updated_at='2026-04-01T00:00:00.000Z' WHERE id=1;"));
+    (void)given_entry(
+        s, (GivenEntry){.body = "oldest", .hash = k_hash_a, .created = "2026-01-01T00:00:00.000Z"});
+    (void)given_entry(
+        s, (GivenEntry){.body = "middle", .hash = k_hash_b, .created = "2026-02-01T00:00:00.000Z"});
+    (void)given_entry(
+        s, (GivenEntry){.body = "newest", .hash = k_hash_c, .created = "2026-03-01T00:00:00.000Z"});
+    set_updated_at(db, 1, "2026-04-01T00:00:00.000Z");
 
     memset(&q, 0, sizeof(q));
     q.limit = LIST_LIMIT;
@@ -1229,10 +1244,7 @@ TEST(store_list_sort_created_keeps_creation_order)
     ASSERT_STREQ(page.entries[0].body, "newest");
     ASSERT_STREQ(page.entries[1].body, "middle");
     ASSERT_STREQ(page.entries[2].body, "oldest");
-    for (i = 0; i < page.count; i++) {
-        store_entry_free(&page.entries[i]);
-    }
-    free(page.entries);
+    free_page(page);
     store_close(s);
     free(db);
 }
@@ -1243,28 +1255,20 @@ TEST(store_list_since_inclusive_until_exclusive)
     char *db = make_temp_db_path();
     char err[ERR_BUFSIZE];
     Store *s = NULL;
-    Entry e;
-    StoreAddAction act = STORE_ADD_CREATED;
     ListQuery q;
     PageResult page;
-    size_t i = 0;
 
     ASSERT_TRUE(db != NULL);
     s = store_open(db, err, sizeof(err));
     ASSERT_TRUE(s != NULL);
-    memset(&e, 0, sizeof(e));
-    ASSERT_EQ_STATUS(store_add(s, "before", k_hash_a, NULL, NULL, 0U, "human", NULL,
-                               "2026-06-01T00:00:00.000Z", &act, &e),
-                     STORE_OK);
-    store_entry_free(&e);
-    ASSERT_EQ_STATUS(store_add(s, "at_since", k_hash_b, NULL, NULL, 0U, "human", NULL,
-                               "2026-06-15T12:00:00.000Z", &act, &e),
-                     STORE_OK);
-    store_entry_free(&e);
-    ASSERT_EQ_STATUS(store_add(s, "at_until", k_hash_c, NULL, NULL, 0U, "human", NULL,
-                               "2026-06-20T00:00:00.000Z", &act, &e),
-                     STORE_OK);
-    store_entry_free(&e);
+    (void)given_entry(
+        s, (GivenEntry){.body = "before", .hash = k_hash_a, .created = "2026-06-01T00:00:00.000Z"});
+    (void)given_entry(
+        s,
+        (GivenEntry){.body = "at_since", .hash = k_hash_b, .created = "2026-06-15T12:00:00.000Z"});
+    (void)given_entry(
+        s,
+        (GivenEntry){.body = "at_until", .hash = k_hash_c, .created = "2026-06-20T00:00:00.000Z"});
 
     memset(&q, 0, sizeof(q));
     q.limit = LIST_LIMIT;
@@ -1275,10 +1279,7 @@ TEST(store_list_since_inclusive_until_exclusive)
     ASSERT_EQ_INT((int)page.count, 1);
     ASSERT_EQ_INT((int)page.total, 1);
     ASSERT_STREQ(page.entries[0].body, "at_since");
-    for (i = 0; i < page.count; i++) {
-        store_entry_free(&page.entries[i]);
-    }
-    free(page.entries);
+    free_page(page);
     store_close(s);
     free(db);
 }
@@ -1289,27 +1290,18 @@ TEST(store_list_updated_sort_puts_the_edit_first)
     char *db = make_temp_db_path();
     char err[ERR_BUFSIZE];
     Store *s = NULL;
-    Entry e;
-    StoreAddAction act = STORE_ADD_CREATED;
     ListQuery q;
     PageResult page;
 
     ASSERT_TRUE(db != NULL);
     s = store_open(db, err, sizeof(err));
     ASSERT_TRUE(s != NULL);
-    memset(&e, 0, sizeof(e));
-    ASSERT_EQ_STATUS(store_add(s, "oldest", k_hash_a, NULL, NULL, 0U, "human", NULL,
-                               "2026-01-01T00:00:00.000Z", &act, &e),
-                     STORE_OK);
-    store_entry_free(&e);
-    ASSERT_EQ_STATUS(store_add(s, "middle", k_hash_b, NULL, NULL, 0U, "human", NULL,
-                               "2026-02-01T00:00:00.000Z", &act, &e),
-                     STORE_OK);
-    store_entry_free(&e);
-    ASSERT_EQ_STATUS(store_add(s, "newest", k_hash_c, NULL, NULL, 0U, "human", NULL,
-                               "2026-03-01T00:00:00.000Z", &act, &e),
-                     STORE_OK);
-    store_entry_free(&e);
+    (void)given_entry(
+        s, (GivenEntry){.body = "oldest", .hash = k_hash_a, .created = "2026-01-01T00:00:00.000Z"});
+    (void)given_entry(
+        s, (GivenEntry){.body = "middle", .hash = k_hash_b, .created = "2026-02-01T00:00:00.000Z"});
+    (void)given_entry(
+        s, (GivenEntry){.body = "newest", .hash = k_hash_c, .created = "2026-03-01T00:00:00.000Z"});
     set_updated_at(db, 1, "2026-04-01T00:00:00.000Z");
 
     memset(&q, 0, sizeof(q));
@@ -1336,8 +1328,6 @@ TEST(store_list_created_tie_breaks_by_id)
     char *db = make_temp_db_path();
     char err[ERR_BUFSIZE];
     Store *s = NULL;
-    Entry e;
-    StoreAddAction act = STORE_ADD_CREATED;
     ListQuery q;
     PageResult page;
     long long low_id = 0;
@@ -1345,16 +1335,11 @@ TEST(store_list_created_tie_breaks_by_id)
     ASSERT_TRUE(db != NULL);
     s = store_open(db, err, sizeof(err));
     ASSERT_TRUE(s != NULL);
-    memset(&e, 0, sizeof(e));
-    ASSERT_EQ_STATUS(store_add(s, "low-id", k_hash_a, NULL, NULL, 0U, "human", NULL,
-                               "2026-01-01T00:00:00.000Z", &act, &e),
-                     STORE_OK);
-    low_id = e.id;
-    store_entry_free(&e);
-    ASSERT_EQ_STATUS(store_add(s, "high-id", k_hash_b, NULL, NULL, 0U, "human", NULL,
-                               "2026-01-01T00:00:00.000Z", &act, &e),
-                     STORE_OK);
-    store_entry_free(&e);
+    low_id = given_entry(
+        s, (GivenEntry){.body = "low-id", .hash = k_hash_a, .created = "2026-01-01T00:00:00.000Z"});
+    (void)given_entry(
+        s,
+        (GivenEntry){.body = "high-id", .hash = k_hash_b, .created = "2026-01-01T00:00:00.000Z"});
     set_updated_at(db, low_id, "2026-09-01T00:00:00.000Z");
 
     memset(&q, 0, sizeof(q));
@@ -1376,19 +1361,14 @@ TEST(store_list_since_follows_sort_column)
     char *db = make_temp_db_path();
     char err[ERR_BUFSIZE];
     Store *s = NULL;
-    Entry e;
-    StoreAddAction act = STORE_ADD_CREATED;
     ListQuery q;
     PageResult page;
 
     ASSERT_TRUE(db != NULL);
     s = store_open(db, err, sizeof(err));
     ASSERT_TRUE(s != NULL);
-    memset(&e, 0, sizeof(e));
-    ASSERT_EQ_STATUS(store_add(s, "moved", k_hash_a, NULL, NULL, 0U, "human", NULL,
-                               "2026-01-01T00:00:00.000Z", &act, &e),
-                     STORE_OK);
-    store_entry_free(&e);
+    (void)given_entry(
+        s, (GivenEntry){.body = "moved", .hash = k_hash_a, .created = "2026-01-01T00:00:00.000Z"});
     set_updated_at(db, 1, "2026-08-01T00:00:00.000Z");
 
     memset(&q, 0, sizeof(q));
@@ -1418,19 +1398,14 @@ TEST(store_list_crossed_bounds_are_empty)
     char *db = make_temp_db_path();
     char err[ERR_BUFSIZE];
     Store *s = NULL;
-    Entry e;
-    StoreAddAction act = STORE_ADD_CREATED;
     ListQuery q;
     PageResult page;
 
     ASSERT_TRUE(db != NULL);
     s = store_open(db, err, sizeof(err));
     ASSERT_TRUE(s != NULL);
-    memset(&e, 0, sizeof(e));
-    ASSERT_EQ_STATUS(store_add(s, "row", k_hash_a, NULL, NULL, 0U, "human", NULL,
-                               "2026-06-15T12:00:00.000Z", &act, &e),
-                     STORE_OK);
-    store_entry_free(&e);
+    (void)given_entry(
+        s, (GivenEntry){.body = "row", .hash = k_hash_a, .created = "2026-06-15T12:00:00.000Z"});
 
     memset(&q, 0, sizeof(q));
     q.limit = LIST_LIMIT;
@@ -1459,24 +1434,19 @@ TEST(store_search_since_filters_updated_at)
     char *db = make_temp_db_path();
     char err[ERR_BUFSIZE];
     Store *s = NULL;
-    Entry e;
-    StoreAddAction act = STORE_ADD_CREATED;
     SearchQuery sq;
     PageResult page;
 
     ASSERT_TRUE(db != NULL);
     s = store_open(db, err, sizeof(err));
     ASSERT_TRUE(s != NULL);
-    memset(&e, 0, sizeof(e));
-    ASSERT_EQ_STATUS(store_add(s, "edited alpha", k_hash_a, NULL, NULL, 0U, "human", NULL,
-                               "2026-01-01T00:00:00.000Z", &act, &e),
-                     STORE_OK);
-    store_entry_free(&e);
+    (void)given_entry(s, (GivenEntry){.body = "edited alpha",
+                                      .hash = k_hash_a,
+                                      .created = "2026-01-01T00:00:00.000Z"});
     set_updated_at(db, 1, "2026-08-01T00:00:00.000Z");
-    ASSERT_EQ_STATUS(store_add(s, "backdated alpha", k_hash_b, NULL, NULL, 0U, "human", NULL,
-                               "2026-09-01T00:00:00.000Z", &act, &e),
-                     STORE_OK);
-    store_entry_free(&e);
+    (void)given_entry(s, (GivenEntry){.body = "backdated alpha",
+                                      .hash = k_hash_b,
+                                      .created = "2026-09-01T00:00:00.000Z"});
     set_updated_at(db, 2, "2026-06-01T00:00:00.000Z");
 
     memset(&sq, 0, sizeof(sq));
@@ -1510,14 +1480,74 @@ TEST(store_search_since_filters_updated_at)
     free(db);
 }
 
+/* E5.3: search keeps bm25 then updated_at order even when the query asks for created. */
+TEST(store_search_ignores_sort_for_order)
+{
+    char *db = make_temp_db_path();
+    char err[ERR_BUFSIZE];
+    Store *s = NULL;
+    SearchQuery sq;
+    PageResult page;
+
+    ASSERT_TRUE(db != NULL);
+    s = store_open(db, err, sizeof(err));
+    ASSERT_TRUE(s != NULL);
+    (void)given_entry(
+        s, (GivenEntry){.body = "alpha", .hash = k_hash_a, .created = "2026-01-01T00:00:00.000Z"});
+    set_updated_at(db, 1, "2026-09-01T00:00:00.000Z");
+    (void)given_entry(
+        s, (GivenEntry){.body = "alpha", .hash = k_hash_b, .created = "2026-05-01T00:00:00.000Z"});
+
+    memset(&sq, 0, sizeof(sq));
+    sq.query = "alpha";
+    sq.filters.limit = LIST_LIMIT;
+    sq.filters.sort = STORE_SORT_CREATED;
+    page = store_search(s, &sq, k_now);
+    ASSERT_EQ_INT((int)page.st, (int)STORE_OK);
+    ASSERT_EQ_INT((int)page.count, 2);
+    ASSERT_EQ_INT((int)page.entries[0].id, 1);
+    ASSERT_EQ_INT((int)page.entries[1].id, 2);
+    free_page(page);
+    store_close(s);
+    free(db);
+}
+
+/* Search rank ties on bm25 and updated_at break toward the higher id. */
+TEST(store_search_ties_break_by_id)
+{
+    char *db = make_temp_db_path();
+    char err[ERR_BUFSIZE];
+    Store *s = NULL;
+    SearchQuery sq;
+    PageResult page;
+
+    ASSERT_TRUE(db != NULL);
+    s = store_open(db, err, sizeof(err));
+    ASSERT_TRUE(s != NULL);
+    (void)given_entry(
+        s, (GivenEntry){.body = "alpha", .hash = k_hash_a, .created = "2026-01-01T00:00:00.000Z"});
+    (void)given_entry(
+        s, (GivenEntry){.body = "alpha", .hash = k_hash_b, .created = "2026-01-01T00:00:00.000Z"});
+
+    memset(&sq, 0, sizeof(sq));
+    sq.query = "alpha";
+    sq.filters.limit = LIST_LIMIT;
+    page = store_search(s, &sq, k_now);
+    ASSERT_EQ_INT((int)page.st, (int)STORE_OK);
+    ASSERT_EQ_INT((int)page.count, 2);
+    ASSERT_EQ_INT((int)page.entries[0].id, 2);
+    ASSERT_EQ_INT((int)page.entries[1].id, 1);
+    free_page(page);
+    store_close(s);
+    free(db);
+}
+
 /* Time bounds AND with tag, source, key, bin, and paging. total is the filtered set. */
 TEST(store_list_bounds_compose_with_filters)
 {
     char *db = make_temp_db_path();
     char err[ERR_BUFSIZE];
     Store *s = NULL;
-    Entry e;
-    StoreAddAction act = STORE_ADD_CREATED;
     const char *tag_t[] = {"t"};
     const char *tag_z[] = {"z"};
     ListQuery q;
@@ -1526,31 +1556,38 @@ TEST(store_list_bounds_compose_with_filters)
     ASSERT_TRUE(db != NULL);
     s = store_open(db, err, sizeof(err));
     ASSERT_TRUE(s != NULL);
-    memset(&e, 0, sizeof(e));
-    ASSERT_EQ_STATUS(store_add(s, "in-a", k_hash_a, NULL, tag_t, 1U, "human", NULL,
-                               "2026-06-10T00:00:00.000Z", &act, &e),
-                     STORE_OK);
-    store_entry_free(&e);
-    ASSERT_EQ_STATUS(store_add(s, "in-b", k_hash_b, "slot", tag_t, 1U, "human", NULL,
-                               "2026-06-12T00:00:00.000Z", &act, &e),
-                     STORE_OK);
-    store_entry_free(&e);
-    ASSERT_EQ_STATUS(store_add(s, "other-tag", k_hash_c, NULL, tag_z, 1U, "human", NULL,
-                               "2026-06-12T00:00:00.000Z", &act, &e),
-                     STORE_OK);
-    store_entry_free(&e);
-    ASSERT_EQ_STATUS(store_add(s, "other-source", k_hash_d, NULL, tag_t, 1U, "agent", NULL,
-                               "2026-06-12T00:00:00.000Z", &act, &e),
-                     STORE_OK);
-    store_entry_free(&e);
-    ASSERT_EQ_STATUS(store_add(s, "too-early", k_hash_e, NULL, tag_t, 1U, "human", NULL,
-                               "2026-05-01T00:00:00.000Z", &act, &e),
-                     STORE_OK);
-    store_entry_free(&e);
-    ASSERT_EQ_STATUS(store_add(s, "expired-in", k_hash_f, NULL, tag_t, 1U, "human", NULL,
-                               "2026-06-11T00:00:00.000Z", &act, &e),
-                     STORE_OK);
-    store_entry_free(&e);
+    (void)given_entry(s, (GivenEntry){.body = "in-a",
+                                      .hash = k_hash_a,
+                                      .tags = tag_t,
+                                      .ntags = 1U,
+                                      .created = "2026-06-10T00:00:00.000Z"});
+    (void)given_entry(s, (GivenEntry){.body = "in-b",
+                                      .hash = k_hash_b,
+                                      .key = "slot",
+                                      .tags = tag_t,
+                                      .ntags = 1U,
+                                      .created = "2026-06-12T00:00:00.000Z"});
+    (void)given_entry(s, (GivenEntry){.body = "other-tag",
+                                      .hash = k_hash_c,
+                                      .tags = tag_z,
+                                      .ntags = 1U,
+                                      .created = "2026-06-12T00:00:00.000Z"});
+    (void)given_entry(s, (GivenEntry){.body = "other-source",
+                                      .hash = k_hash_d,
+                                      .tags = tag_t,
+                                      .ntags = 1U,
+                                      .source = "agent",
+                                      .created = "2026-06-12T00:00:00.000Z"});
+    (void)given_entry(s, (GivenEntry){.body = "too-early",
+                                      .hash = k_hash_e,
+                                      .tags = tag_t,
+                                      .ntags = 1U,
+                                      .created = "2026-05-01T00:00:00.000Z"});
+    (void)given_entry(s, (GivenEntry){.body = "expired-in",
+                                      .hash = k_hash_f,
+                                      .tags = tag_t,
+                                      .ntags = 1U,
+                                      .created = "2026-06-11T00:00:00.000Z"});
     free(harness_sqlite_query_line(
         db, "UPDATE entries SET expires_at='2020-01-01T00:00:00.000Z' WHERE id=6;"));
 
@@ -2387,6 +2424,8 @@ void register_store_tests(void)
     RUN_TEST(store_list_since_follows_sort_column);
     RUN_TEST(store_list_crossed_bounds_are_empty);
     RUN_TEST(store_search_since_filters_updated_at);
+    RUN_TEST(store_search_ignores_sort_for_order);
+    RUN_TEST(store_search_ties_break_by_id);
     RUN_TEST(store_list_bounds_compose_with_filters);
     RUN_TEST(store_list_unknown_sort_is_internal);
     RUN_TEST(store_list_filters_and_paging);
