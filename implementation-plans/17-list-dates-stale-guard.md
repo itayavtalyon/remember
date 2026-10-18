@@ -136,6 +136,15 @@ review, Implementation Notes, commit.
    back with `--if-updated-at`; on `stale`, re-read and retry), What's New,
    engineering notes, COVERAGE.md, gate-suites.
 
+**Amendment (Itay 2026-10-18, second review of stage 4): stage 4 is reworked as stage 4b before stage 5.** The `updated_at` guard has millisecond resolution. An in-process probe through `remember_run` saw 95 of 500 guarded updates overwrite a write made in the same millisecond. The guard moves to the version vector. These decisions are law for 4b, like D10–D11. Load them first: `decision:plan17-stale-guard-version-vector`, `decision:plan17-upsert-vv-rule`, `decision:plan17-store-update-options-struct`, `decision:plan17-stale-after-bin`, `decision:plan17-cli-tests-prove-wiring`.
+
+4b. **Stale guard on the version vector.** Three commits, each with a full gate:
+   1. **`StoreUpdate` options struct, no behavior change.** `store_update(Store *s, long long id, const StoreUpdate *u, const char *now, Entry *out_entry, long long *out_conflict_id)`. Convert all 24 call sites. The NOLINT for swappable parameters goes. Every existing test stays green unchanged in behavior.
+   2. **Add-path VV rule.** Both paths onto an existing row: keyed upsert (`STORE_ADD_UPDATED`) and keyless re-add (`STORE_ADD_MERGED`). A write that changes the row bumps `version_vector[local]` and `updated_at` together. A write that changes nothing moves neither, and `add` still prints the existing id. Store tests first, red: a changed keyed upsert bumps the VV; an identical keyed upsert moves neither; a keyless re-add with a new tag bumps both; an identical keyless re-add moves neither; a re-add that revives an expired row bumps both. Check what `maybe_revive` already bumps, so a revive does not bump twice. Then one CLI wiring test.
+   3. **Guard.** Replace `--if-updated-at` with `--if-version-vector VV`. The CLI passes the raw string. The adapter parses it with `vv_parse_pairs` and compares it with the row's `version_vector` as maps, a missing device counting as 0, after the bin check and inside the write transaction. `vv_compare` returns 0 for both equal and concurrent, so equality needs its own check. Malformed is the new `STORE_ERR_BAD_VV` → `usage` `invalid version vector: <vv>`. Not equal is `STORE_ERR_STALE` → `stale`. Duplicate and missing value use the house sentences. Store tests carry the semantics: equal, missing-device-as-0, key order and whitespace free, a counter changed, a device added, malformed (not an object, a negative or non-integer counter, an empty string), and a stale row unchanged. Add the in-process same-millisecond probe from this review as a store or facade test: W1, read the VV, W2, then a guarded update must be `stale` every time. CLI tests prove wiring only: the flag reaches the store, the duplicate and missing-value cases, one `--json-errors` stale line, and the facade byte-match.
+
+   Must-pass rows that name `--if-updated-at` now read `--if-version-vector`. The D10 row (`--if-updated-at 2026-10-12` → `invalid timestamp`) becomes a malformed VV → `invalid version vector: <vv>`. Stage 5 writes the 006 Implementation Results rows for E8.1 (amended), D10 (superseded), and the add-path VV rule. SKILL.md tells agents to read `version_vector`, pass it back with `--if-version-vector`, and re-read and retry on `stale`.
+
 ## How to work (workflow + coding standards)
 
 **Workflow**
@@ -582,3 +591,54 @@ Gate on this tree: ctest 5/5 (ASan/UBSan, `REMEMBER_TEST_VFS=ON`), LINT OK, cove
 **Left for later:** stage 5 is docs and the full gate: help, SKILL.md, What's New, engineering notes, `tests/COVERAGE.md`. Stage 5 is the last stage. After its second review is closed, write `.claude/WHOLE_PLAN_REVIEW` and stop.
 
 **Praise:** the first red store run wrote the body and bumped the version vector. The first red CLI run did not know the flag.
+
+### 2026-10-18 — second-opinion deep review (stage 4)
+
+**Verdict:** stage 4 is **not approved as is. It is reworked as stage 4b** (see the amendment under Stages). The code does what E8.1 and D10 say, but the token they chose cannot carry the guarantee. Six grill answers set the rework. No production code changed in this review.
+
+**Run, not read.** Baseline `06cc93b` (gate root clean): ctest 5/5, LINT OK, coverage 100/100, `leaks-macos` PASS, `ci-linux.sh` OK, `GATE-ALL-GREEN`. Handover probes on the binary all held:
+
+- **Two writers:** A reads the stamp, B edits, A's guarded update is `stale`, and B's edit survives.
+- **`--json-errors`:** one `stale` line.
+- **D10:** the date-only and whole-seconds forms are `invalid timestamp`.
+- **Flags:** a duplicate is caught, and the stamp alone is not a change.
+
+The coder's eleven mutants were not re-run, because 4b replaces the code they cover.
+
+**Findings:**
+
+1. **blocking → rework (grills 1–3, `decision:plan17-stale-guard-version-vector`).** A write stores `updated_at = now` at millisecond resolution, so two writes in the same millisecond carry the same stamp. My in-process probe through `remember_run` (the Mac app's path) ran W1, read its stamp, ran W2, then a guarded update. It accepted **95 of 500** stale updates and overwrote W2. A clock stepped backwards can repeat a stamp too.
+
+   Itay asked whether a revision counter would be better. The version vector already is one: per device, never repeating, already in entry JSON, and the token sync uses. My first answer said link writes do not bump it. That was wrong, and I said so and re-asked: run, link and unlink do bump it.
+
+   The answers:
+   - The flag is `--if-version-vector VV`, and `--if-updated-at` is removed.
+   - VV is compared as parsed maps, a missing device counting as 0. Malformed is `usage` `invalid version vector: <vv>`.
+   - The store parses it with the existing `vv_parse_pairs` (a recorded exception to "the store takes canonical strings").
+   - D10 is superseded in `006-locked-decisions.md`.
+2. **blocking → rework (grills 4–5, `decision:plan17-upsert-vv-rule`), older than plan 17.** `add --key K BODY` on an existing key replaced the body and left `version_vector` at 1. A keyless re-add of an existing body touched `updated_at` and never the VV either. Design log 005 says every write bumps the VV. The rule now: a write onto an existing row that changes it bumps the VV and `updated_at` together, and one that changes nothing moves neither.
+3. **important → rework (grill 6, `decision:plan17-store-update-options-struct`).** `store_update` takes 17 positional arguments behind a NOLINT for swappable parameters, at 24 call sites. It becomes `store_update(s, id, &(StoreUpdate){…}, now, &entry, &conflict)`, as the first 4b commit, with no behavior change.
+4. **nit, environment.** `build/` holds iCloud conflict copies (`libremember_core 2.a` … `21.a`, `libsqlite3 2.a` …). They are harmless to the build but waste disk. The repo is inside iCloud Drive, which is also why the CLI warns about synced folders.
+
+**Praise:**
+
+- The bin-first ordering (`decision:plan17-stale-after-bin`) was the coder's own grill.
+- The compare already sits inside the write transaction, after the bin check, with a rollback. 4b keeps that shape and changes only the token.
+- The Implementation Notes say which success tests a dropped stamp leaves green.
+
+**Coder rating (stage 4): 8/10.** Execution was the best so far:
+
+- Eleven one-clause mutants, in a table.
+- Hostile-input probes with a newline, an ESC, and 300 bytes (last round's advice), in plain and JSON.
+- One well-framed grill.
+- Honest notes.
+
+**Miss:** it never asked whether `updated_at` actually changes on every write. The brain's `lesson:review-run-edge-cases` is exactly that bug, with second-resolution timestamps. The plan locked the token, so part of this is the plan's fault. A guard is only as good as its token's uniqueness, and that is the probe to run first. The coder also declined the options struct as "a new shape for one argument" without asking. Itay chose it.
+
+**Paste-ready for the coder:**
+
+```text
+1. When a check relies on a value changing (a stamp, a counter, a hash), first prove it changes on every write: two writes in the same millisecond, in-process through remember_run, and every write path (add upsert, keyless re-add, update, link, rekey, delete, undelete).
+2. Before relying on a field, run the design log's rule for it against the code (for example, 005 says every write bumps the version vector). Report the gaps you find, even if they predate the plan.
+3. A declined simplification that changes an API is a grill, not a no.
+```

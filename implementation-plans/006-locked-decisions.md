@@ -15,7 +15,7 @@ plan can be read alone. This file is the index.
 | D7 | `detail.path` | Absolute: join a relative path with the cwd, normalize `.`/`..` lexically, no symlink resolution. The same rule applies to every path source. | 16, 20 |
 | D8 | `--no-create`; repair human | `--no-create` checks before any mkdir: no folder, no file, no sidecar. Human `repair search-index` prints `rebuilt N`. | 16 |
 | D9 | Codes for 0.2.0 messages | Table in plan 16 § Locked decisions (approved as proposed). A message the table does not cover → stop and ask. | 16 |
-| D10 | `--if-updated-at` | Canonical `YYYY-MM-DDTHH:MM:SS.mmmZ` only. Any other form → exit 1 `usage` `invalid timestamp: <ts>`. Byte compare. | 17 |
+| D10 | `--if-updated-at` | Canonical `YYYY-MM-DDTHH:MM:SS.mmmZ` only. Any other form → exit 1 `usage` `invalid timestamp: <ts>`. Byte compare. **Superseded 2026-10-18 (`decision:plan17-stale-guard-version-vector`):** the guard is `--if-version-vector VV`, compared as parsed maps (missing device = 0); `--if-updated-at` is removed. | 17 |
 | D11 | since/until; search `--sort` | `since >= until` → empty result, exit 0. `search --sort` is validated (`invalid --sort (use updated or created)`) and then ignored. | 17 |
 | D12 | Title / plain text / words | Title = the body's first line when it starts with `# `: the text after it, ASCII-trimmed; empty → no title. Plain text = the body with every run of whitespace or control characters collapsed to one space. Words = plain text split on spaces. No markdown stripping. | 18, 20 |
 | D13 | Search code layout | Pure `src/search_terms.c/.h` (tokens, segment match, tiers, label). The adapter owns FTS5 quoting of P, the parse probe, the union query, ranking SQL and candidate key/tag fetch. | 18 |
