@@ -291,6 +291,43 @@ Simplify, not applied:
 - Delete `write_time_order` and paste the ORDER BY twice (about 12 lines). The plan wants one place. The tie-break mutation is one string.
 - Drop the search `column == NULL` check (about 2 lines). A broken switch should return `STORE_ERR_INTERNAL`, as list does.
 
+### 2026-10-18 — stage 3 (CLI list/search flags)
+
+No new grill. No new `decision:*`. The CLI parses with the existing `parse_filter_ts` and passes canonical strings. It does not compare `since` with `until`. Definition of Done boxes stay unticked; this stage does not finish the plan.
+
+`list` takes `--sort`, `--since`, and `--until`. `search` takes the same three. A bad `--sort` is exit 1, code `usage`, `invalid --sort (use updated or created)`, on both commands. Search then ignores a valid `--sort` (the store still filters and ranks on `updated_at`). A repeated flag is `duplicate --sort`, `duplicate --since`, or `duplicate --until`. A missing value is `missing value for --sort`, `--since`, or `--until`. Anything `parse_filter_ts` rejects is `invalid timestamp: <raw token>`. `list_bind_bound` prints that and returns -1; `cmd_list` and `cmd_search` do not print it again. `--sort=created` stays `unknown option '--sort=created'`, because `take_value` reads the next argv. The brain opens in `run_with_store` before those flags are parsed, so a missing file is `cannot_open` even when the timestamp is also invalid.
+
+Help for `list` and `search` names the flags. Search help repeats the three TS forms. SKILL.md, What's New, engineering notes, and `tests/COVERAGE.md` stay stage 5. `--if-updated-at` stays stage 4.
+
+`./build/remember_tests ./build/remember --only list_dates` on this tree: 40 tests, 0 failed, 413 asserts. The first red runs were `unknown option '--sort'` and `unknown option '--since'`. The search-help assertion was red until the two TS lines were added; `search_crossed_bounds_are_empty` was already green.
+
+Mutations, each one clause, restored from the original text (not `git checkout`), proved by `./build/remember_tests ./build/remember --only list_dates` before the two review fixes:
+
+- Comparing `"created"` as `"CREATED"` fails `list_sort_created_keeps_creation_order`, `list_created_tie_breaks_by_id`, and `list_since_follows_sort_column`.
+- `*bound = raw` instead of the canonical buffer fails both date-since tests and `list_seconds_form_matches_canonical`.
+- Binding NULL for `since` fails the inclusive/exclusive test, the sort-column test, both date-since tests, the seconds form, the bad-timestamp test, and `search_since_filters_updated_at`.
+- Binding NULL for `until` fails the inclusive/exclusive test, `list_equal_bounds_are_empty`, the bad-timestamp test, `list_bounds_total_counts_the_filtered_set`, and `search_equal_bounds_are_empty`.
+- Accepting every `--sort` except `not-a-sort` fails `list_sort_rejects_a_bad_value` and `search_sort_bogus_is_usage`.
+- Treating an empty slot as a duplicate fails `list_bound_flags_reject_duplicates_and_missing_values`.
+- Rejecting `since >= until` as usage fails `list_equal_bounds_are_empty`, `list_crossed_bounds_are_empty`, and `search_equal_bounds_are_empty`.
+
+Probes, thrown away, `./build/remember`:
+
+- `--no-create` on a missing brain with `--since 2026-01-01`: exit 1, stdout empty, `cannot open the brain file (SQLITE_CANTOPEN)`.
+- `--no-create --db /no/such/remember-plan17.db list --until 2026-02-30`: the same `cannot_open`. The bad day is not reported.
+- `list --sort=created`: `unknown option '--sort=created'`. `list --sincee 2026-01-01`: `unknown option '--sincee'`.
+- `list --since --until`: `invalid timestamp: --until`. `list --since -1`: `invalid timestamp: -1`.
+- `TZ=Asia/Jerusalem list --since 2026-10-25` includes the row at `2026-10-24T21:00:00.000Z` and excludes `2026-10-24T20:59:59.999Z`.
+
+Simplify:
+
+- Applied: `list_take_sort` calls `list_take_raw` (about 12 lines).
+- Not applied: inline `list_bind_bound` (about 11 lines, twice). The helper is the parse-or-null contract.
+- Not applied: drop `q->sort = STORE_SORT_UPDATED` (1 line). `list_prepare_query` owns the field.
+- Not applied: one shared help block. The list and search sentences differ. The TS legend is copied so `help search` stands alone.
+
+Gate on this tree, after the search-help lines and `search_crossed_bounds_are_empty`: ctest 5/5 (ASan/UBSan, `REMEMBER_TEST_VFS=ON`), LINT OK, coverage 100% functions and 100% effective lines, `leaks-macos` PASS, `ci-linux.sh` OK (ctest 5/5, LINT OK). These notes were appended after that gate. No C file changed after it.
+
 ## Review Notes
 
 ### 2026-10-18 — in-session deep review (stage 1)
@@ -399,3 +436,19 @@ Simplify, not applied:
 3. When a test needs the same setup call more than twice, write a given* helper first.
 4. After a failed count assert, do not index the page.
 ```
+
+### 2026-10-18 — in-session deep review (stage 3)
+
+**Verdict:** approve for the second-opinion pass. No open blocking item. No grill. No new `decision:*`.
+
+**Ran:** the gate in the stage 3 Implementation Notes. [Bugbot](60839d72-93d6-4223-8528-587613f99ad1) found no blocking bugs. Two nits, both auto-fixed before that gate: `help search` now states the three TS forms (the assertion was red first), and `search_crossed_bounds_are_empty` locks D11 for search. Missing `--since` now also asserts empty stdout, as missing `--until` already did.
+
+**Pragmatic write-gate:** DRY PASS. One parser, one flag reader, one bind. The TS legend is on both help pages on purpose, and the help test locks both copies. Easy-to-replace PASS. SQL stays in `store_sqlite.c`; the CLI hands it canonical strings. Orthogonal PASS. List filters the sort field. Search validates `--sort`, then ignores it and filters `updated_at`. No deferred markers.
+
+**Simplify:** one applied shrink (`list_take_sort` through `list_take_raw`, about 12 lines). Three candidates declined in the Implementation Notes. Ponytail: nothing further to cut.
+
+**Lenses:** bad `--sort` and a bad timestamp return before the store. `since >= until` stays an empty page. The bound buffers are caller stack storage and live across `store_list` / `store_search`. `sort_raw` points at argv and is not freed. Human lines, the empty JSON page, and the time-zone instants are literals. Open still happens before flag parse.
+
+**Left for later:** stage 4 is the stale guard (`--if-updated-at`, D10, `STORE_ERR_STALE` → `stale`). Help, SKILL, What's New, engineering notes, and `COVERAGE.md` stay stage 5.
+
+**Praise:** the first red runs were `unknown option '--sort'` and `unknown option '--since'`.
