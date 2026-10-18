@@ -33,7 +33,8 @@ typedef enum {
     STORE_ERR_CYCLE,             /* supersedes would cycle */
     STORE_ERR_SOURCE_TOO_OLD,    /* import --from-db: source user_version < 4 */
     STORE_ERR_SOURCE_TOO_NEW,    /* import --from-db: source user_version > 5 */
-    STORE_ERR_UNIQUE_TAKEN       /* accept cannot free key/hash without inventing a key */
+    STORE_ERR_UNIQUE_TAKEN,      /* accept cannot free key/hash without inventing a key */
+    STORE_ERR_STALE /* if_updated_at is not the row's updated_at; nothing was written */
 } StoreStatus;
 
 /* Locator / list / search / tags bin. LIVE is the zero value (zero-init queries). */
@@ -308,12 +309,15 @@ StoreStatus store_hard_delete_by_key(Store *s, const char *key, StoreBin bin, co
  *
  * When set_tags is true, ntags==0 clears tags; otherwise tags replace the set.
  * body / body_hash required when set_body; tags may be NULL when ntags==0.
+ * if_updated_at NULL skips the guard. Any other string is compared byte for
+ * byte with the row's updated_at inside this write transaction. A mismatch
+ * is STORE_ERR_STALE and the transaction rolls back.
  */
 StoreStatus store_update(Store *s, long long id, const char *key_or_null, bool set_body,
                          const char *body, const char *body_hash, bool set_tags,
                          const char *const *tags, size_t ntags, bool set_expires,
                          const char *expires_at, bool undelete, StoreBin bin, const char *now,
-                         Entry *out_entry, long long *out_conflict_id);
+                         const char *if_updated_at, Entry *out_entry, long long *out_conflict_id);
 
 /* One tag with the number of entries carrying it. name is heap-owned. */
 typedef struct {

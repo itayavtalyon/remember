@@ -216,6 +216,8 @@ DiagCode code_for_store_status(StoreStatus st)
         return DIAG_NEWER_DATABASE;
     case STORE_ERR_UNIQUE_TAKEN:
         return DIAG_UNIQUE_TAKEN;
+    case STORE_ERR_STALE:
+        return DIAG_STALE;
     default:
         return DIAG_INTERNAL;
     }

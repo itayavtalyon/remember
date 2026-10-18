@@ -5,7 +5,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-enum { TS_BUFSIZE = 32 }; /* ISO-8601 timestamp buffer */
+enum { TS_BUFSIZE = 32, SYNC_ID_CAP = 40 }; /* ISO stamp, and a canonical UUID */
 
 /* Copy the value of a `"key":"..."` JSON string field into out (empty if absent). */
 static void extract_json_str(const char *json, const char *key, char *out, size_t outsz)
@@ -466,6 +466,268 @@ TEST(update_bumps_updated_at)
     free(db);
 }
 
+TEST(update_if_updated_at_rejects_non_canonical)
+{
+    char *db = make_temp_db_path();
+    const char *date_only[] = {"update", "1", "--if-updated-at", "2026-10-12", "--text", "new"};
+    const char *seconds[] = {"update", "1",  "--if-updated-at", "2026-10-12T10:00:00Z",
+                             "--text", "new"};
+    const char *not_a_stamp[] = {"update", "1", "--if-updated-at", "now", "--text", "new"};
+    CmdResult r;
+
+    ASSERT_TRUE(db != NULL);
+    if (db == NULL) {
+        return;
+    }
+    seed_tagged(db);
+    r = run_remember(db, date_only, sizeof(date_only) / sizeof(date_only[0]), NULL);
+    ASSERT_EQ_INT(r.exit_code, 1);
+    ASSERT_STREQ(r.err, "remember: invalid timestamp: 2026-10-12\n");
+    ASSERT_STREQ(r.out, "");
+    cmd_result_free(&r);
+    r = run_remember(db, seconds, sizeof(seconds) / sizeof(seconds[0]), NULL);
+    ASSERT_EQ_INT(r.exit_code, 1);
+    ASSERT_STREQ(r.err, "remember: invalid timestamp: 2026-10-12T10:00:00Z\n");
+    ASSERT_STREQ(r.out, "");
+    cmd_result_free(&r);
+    r = run_remember(db, not_a_stamp, sizeof(not_a_stamp) / sizeof(not_a_stamp[0]), NULL);
+    ASSERT_EQ_INT(r.exit_code, 1);
+    ASSERT_STREQ(r.err, "remember: invalid timestamp: now\n");
+    ASSERT_STREQ(r.out, "");
+    cmd_result_free(&r);
+    free(db);
+}
+
+static void given_updated_at(const char *db, char *stamp, size_t stamp_cap)
+{
+    const char *get[] = {"get", "--json", "1"};
+    CmdResult r = run_remember(db, get, sizeof(get) / sizeof(get[0]), NULL);
+
+    stamp[0] = '\0';
+    ASSERT_EQ_INT(r.exit_code, 0);
+    extract_json_str(r.out, "\"updated_at\":\"", stamp, stamp_cap);
+    ASSERT_TRUE(stamp[0] != '\0');
+    cmd_result_free(&r);
+}
+
+TEST(update_if_updated_at_match_writes)
+{
+    char *db = make_temp_db_path();
+    char stamp[TS_BUFSIZE];
+    CmdResult got;
+    const char *add[] = {"add", "original body"};
+
+    ASSERT_TRUE(db != NULL);
+    if (db == NULL) {
+        return;
+    }
+    got = run_remember(db, add, sizeof(add) / sizeof(add[0]), NULL);
+    cmd_result_free(&got);
+    given_updated_at(db, stamp, sizeof(stamp));
+    if (stamp[0] == '\0') {
+        free(db);
+        return;
+    }
+    {
+        const char *args[] = {"update", "1", "--if-updated-at", stamp, "--text", "new body"};
+        CmdResult updated = run_remember(db, args, sizeof(args) / sizeof(args[0]), NULL);
+
+        ASSERT_EQ_INT(updated.exit_code, 0);
+        ASSERT_STREQ(updated.err, "");
+        cmd_result_free(&updated);
+    }
+    free(db);
+}
+
+TEST(update_if_updated_at_mismatch_is_stale)
+{
+    char *db = make_temp_db_path();
+    const char *args[] = {
+        "--json-errors", "update",  "1", "--if-updated-at", "2020-01-01T00:00:00.000Z",
+        "--text",        "new body"};
+    CmdResult r;
+
+    ASSERT_TRUE(db != NULL);
+    if (db == NULL) {
+        return;
+    }
+    seed_tagged(db);
+    r = run_remember(db, args, sizeof(args) / sizeof(args[0]), NULL);
+    ASSERT_EQ_INT(r.exit_code, 1);
+    ASSERT_STREQ(r.out, "");
+    ASSERT_STREQ(r.err, "{\"version\":1,\"error\":{\"code\":\"stale\",\"message\":\"memory "
+                        "changed since it was read\"}}\n");
+    cmd_result_free(&r);
+    free(db);
+}
+
+TEST(update_if_updated_at_rejects_a_duplicate)
+{
+    char *db = make_temp_db_path();
+    const char *args[] = {"update",          "1",
+                          "--if-updated-at", "2020-01-01T00:00:00.000Z",
+                          "--if-updated-at", "2020-01-01T00:00:00.001Z",
+                          "--text",          "new"};
+    CmdResult r;
+
+    ASSERT_TRUE(db != NULL);
+    if (db == NULL) {
+        return;
+    }
+    seed_tagged(db);
+    r = run_remember(db, args, sizeof(args) / sizeof(args[0]), NULL);
+    ASSERT_EQ_INT(r.exit_code, 1);
+    ASSERT_STREQ(r.err, "remember: duplicate --if-updated-at\n");
+    ASSERT_STREQ(r.out, "");
+    cmd_result_free(&r);
+    free(db);
+}
+
+TEST(update_if_updated_at_rejects_a_missing_value)
+{
+    char *db = make_temp_db_path();
+    const char *args[] = {"update", "1", "--if-updated-at"};
+    CmdResult r;
+
+    ASSERT_TRUE(db != NULL);
+    if (db == NULL) {
+        return;
+    }
+    seed_tagged(db);
+    r = run_remember(db, args, sizeof(args) / sizeof(args[0]), NULL);
+    ASSERT_EQ_INT(r.exit_code, 1);
+    ASSERT_STREQ(r.err, "remember: missing value for --if-updated-at\n");
+    ASSERT_STREQ(r.out, "");
+    cmd_result_free(&r);
+    free(db);
+}
+
+TEST(update_if_updated_at_alone_is_not_a_change)
+{
+    char *db = make_temp_db_path();
+    const char *args[] = {"update", "1", "--if-updated-at", "2020-01-01T00:00:00.000Z"};
+    CmdResult r;
+
+    ASSERT_TRUE(db != NULL);
+    if (db == NULL) {
+        return;
+    }
+    seed_tagged(db);
+    r = run_remember(db, args, sizeof(args) / sizeof(args[0]), NULL);
+    ASSERT_EQ_INT(r.exit_code, 1);
+    ASSERT_STREQ(r.err, "remember: update requires --text, --tag, --clear-tags, --ttl, "
+                        "--expires, --clear-expires, or --undelete\n");
+    ASSERT_STREQ(r.out, "");
+    cmd_result_free(&r);
+    free(db);
+}
+
+TEST(update_if_updated_at_match_by_key_writes)
+{
+    char *db = make_temp_db_path();
+    char stamp[TS_BUFSIZE];
+    CmdResult got;
+    const char *add[] = {"add", "--key", "slot", "original body"};
+
+    ASSERT_TRUE(db != NULL);
+    if (db == NULL) {
+        return;
+    }
+    got = run_remember(db, add, sizeof(add) / sizeof(add[0]), NULL);
+    cmd_result_free(&got);
+    given_updated_at(db, stamp, sizeof(stamp));
+    if (stamp[0] == '\0') {
+        free(db);
+        return;
+    }
+    {
+        const char *args[] = {"update", "--key",  "slot",    "--if-updated-at",
+                              stamp,    "--text", "new body"};
+        CmdResult updated = run_remember(db, args, sizeof(args) / sizeof(args[0]), NULL);
+
+        ASSERT_EQ_INT(updated.exit_code, 0);
+        ASSERT_STREQ(updated.err, "");
+        cmd_result_free(&updated);
+    }
+    free(db);
+}
+
+TEST(update_if_updated_at_match_by_sync_id_writes)
+{
+    char *db = make_temp_db_path();
+    char stamp[TS_BUFSIZE];
+    char sync_id[SYNC_ID_CAP];
+    CmdResult got;
+    const char *add[] = {"add", "--json", "original body"};
+
+    ASSERT_TRUE(db != NULL);
+    if (db == NULL) {
+        return;
+    }
+    got = run_remember(db, add, sizeof(add) / sizeof(add[0]), NULL);
+    ASSERT_EQ_INT(got.exit_code, 0);
+    extract_json_str(got.out, "\"updated_at\":\"", stamp, sizeof(stamp));
+    extract_json_str(got.out, "\"sync_id\":\"", sync_id, sizeof(sync_id));
+    cmd_result_free(&got);
+    if (stamp[0] == '\0' || sync_id[0] == '\0') {
+        free(db);
+        return;
+    }
+    {
+        const char *args[] = {"update", "--sync-id", sync_id,   "--if-updated-at",
+                              stamp,    "--text",    "new body"};
+        CmdResult updated = run_remember(db, args, sizeof(args) / sizeof(args[0]), NULL);
+
+        ASSERT_EQ_INT(updated.exit_code, 0);
+        ASSERT_STREQ(updated.err, "");
+        cmd_result_free(&updated);
+    }
+    free(db);
+}
+
+TEST(update_if_updated_at_undelete_match_restores)
+{
+    char *db = make_temp_db_path();
+    char stamp[TS_BUFSIZE];
+    CmdResult got;
+    const char *add[] = {"add", "original body"};
+    const char *del[] = {"delete", "1"};
+    const char *deleted[] = {"get", "--deleted", "--json", "1"};
+    const char *live[] = {"get", "--json", "1"};
+
+    ASSERT_TRUE(db != NULL);
+    if (db == NULL) {
+        return;
+    }
+    got = run_remember(db, add, sizeof(add) / sizeof(add[0]), NULL);
+    cmd_result_free(&got);
+    got = run_remember(db, del, sizeof(del) / sizeof(del[0]), NULL);
+    ASSERT_EQ_INT(got.exit_code, 0);
+    cmd_result_free(&got);
+    got = run_remember(db, deleted, sizeof(deleted) / sizeof(deleted[0]), NULL);
+    ASSERT_EQ_INT(got.exit_code, 0);
+    extract_json_str(got.out, "\"updated_at\":\"", stamp, sizeof(stamp));
+    cmd_result_free(&got);
+    if (stamp[0] == '\0') {
+        free(db);
+        return;
+    }
+    {
+        const char *args[] = {"update", "1", "--deleted", "--undelete", "--if-updated-at", stamp};
+        CmdResult updated = run_remember(db, args, sizeof(args) / sizeof(args[0]), NULL);
+
+        ASSERT_EQ_INT(updated.exit_code, 0);
+        ASSERT_STREQ(updated.err, "");
+        cmd_result_free(&updated);
+    }
+    got = run_remember(db, live, sizeof(live) / sizeof(live[0]), NULL);
+    ASSERT_EQ_INT(got.exit_code, 0);
+    ASSERT_STR_CONTAINS(got.out, "original body");
+    ASSERT_STR_CONTAINS(got.out, "\"bin\":\"live\"");
+    cmd_result_free(&got);
+    free(db);
+}
+
 void register_update_tests(void)
 {
     RUN_TEST(update_text_only_keeps_tags);
@@ -489,4 +751,13 @@ void register_update_tests(void)
     RUN_TEST(fts_reflects_tag_update);
     RUN_TEST(update_moves_entry_to_top_of_list);
     RUN_TEST(update_bumps_updated_at);
+    RUN_TEST(update_if_updated_at_rejects_non_canonical);
+    RUN_TEST(update_if_updated_at_match_writes);
+    RUN_TEST(update_if_updated_at_mismatch_is_stale);
+    RUN_TEST(update_if_updated_at_rejects_a_duplicate);
+    RUN_TEST(update_if_updated_at_rejects_a_missing_value);
+    RUN_TEST(update_if_updated_at_alone_is_not_a_change);
+    RUN_TEST(update_if_updated_at_match_by_key_writes);
+    RUN_TEST(update_if_updated_at_match_by_sync_id_writes);
+    RUN_TEST(update_if_updated_at_undelete_match_restores);
 }

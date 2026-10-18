@@ -1849,6 +1849,8 @@ const char *store_status_message(StoreStatus st)
         return k_newer_database;
     case STORE_ERR_UNIQUE_TAKEN:
         return "cannot free unique key or body hash without inventing a key";
+    case STORE_ERR_STALE:
+        return "memory changed since it was read";
     default:
         return "store error";
     }
@@ -4176,11 +4178,13 @@ static StoreStatus update_apply_changes(sqlite3 *db, long long entry_id, bool is
     return fts_resync(db, entry_id, serr);
 }
 
+// NOLINTBEGIN(bugprone-easily-swappable-parameters)
 StoreStatus store_update(Store *s, long long id, const char *key_or_null, bool set_body,
                          const char *body, const char *body_hash, bool set_tags,
                          const char *const *tags, size_t ntags, bool set_expires,
                          const char *expires_at, bool undelete, StoreBin bin, const char *now,
-                         Entry *out_entry, long long *out_conflict_id)
+                         const char *if_updated_at, Entry *out_entry, long long *out_conflict_id)
+// NOLINTEND(bugprone-easily-swappable-parameters)
 {
     char err_unused[1];
     StoreStatus st = STORE_OK;
@@ -4212,6 +4216,12 @@ StoreStatus store_update(Store *s, long long id, const char *key_or_null, bool s
     }
     entry_id = current.id;
     is_keyless = (current.key == NULL);
+    /* P4: current.updated_at was read in this write transaction, before any change. */
+    if (if_updated_at != NULL && strcmp(current.updated_at, if_updated_at) != 0) {
+        store_entry_free(&current);
+        rollback_quiet(s->db);
+        return STORE_ERR_STALE;
+    }
 
     st = update_apply_changes(s->db, entry_id, is_keyless, set_body, body, body_hash, set_tags,
                               tags, ntags, set_expires,

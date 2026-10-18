@@ -328,6 +328,52 @@ Simplify:
 
 Gate on this tree, after the search-help lines and `search_crossed_bounds_are_empty`: ctest 5/5 (ASan/UBSan, `REMEMBER_TEST_VFS=ON`), LINT OK, coverage 100% functions and 100% effective lines, `leaks-macos` PASS, `ci-linux.sh` OK (ctest 5/5, LINT OK). These notes were appended after that gate. No C file changed after it.
 
+### 2026-10-18 — stage 4 (stale guard)
+
+One grill. **Itay 2026-10-18 (`decision:plan17-stale-after-bin`):** when the row is in the wrong bin and `--if-updated-at` does not match, the bin error wins (exit 3). The stamp is compared only after `load_then_check_bin` accepts the row. A matching stamp on the wrong bin still reports expired, deleted, not_expired, or not_deleted. Definition of Done boxes stay unticked; this stage does not finish the plan.
+
+`--if-updated-at` accepts only `YYYY-MM-DDTHH:MM:SS.mmmZ`. `update_take_if_updated` calls `parse_filter_ts` and then `strcmp`s the raw token with the canonical buffer. A date or `…T10:00:00Z` rewrites, so it fails that byte match: exit 1, code `usage`, `invalid timestamp: <raw token>`. There is no second calendar parser. `store_update` takes `const char *if_updated_at` immediately before `Entry *out_entry`. NULL skips the guard. Any other string is `strcmp`ed with the row's `updated_at` inside the `BEGIN IMMEDIATE` that also applies the write. A mismatch frees the loaded row, rolls back, and returns `STORE_ERR_STALE`. The message is `memory changed since it was read`. `code_for_store_status` maps that to `DIAG_STALE` (`stale`). `store_status_to_exit` already returns exit 1 for it. The flag alone is not a mutation. `--if-updated-at=value` stays `unknown option`, same as `--since=`.
+
+Help, SKILL.md, What's New, engineering notes, and `tests/COVERAGE.md` stay stage 5. The plain diag writer still echoes a raw newline or ESC. `--json-errors` escapes both. That writer is older than plan 17 and is not part of this stage.
+
+`store_update`'s `now` and `if_updated_at` are adjacent `const char *`. The definition is wrapped in `NOLINT(bugprone-easily-swappable-parameters)`, the same suppression the file already uses for that check. The match store test passes a local named `stamp` (a copy of `k_now`) so clang-tidy does not read the call as swapped. Linux cppcheck wanted that mismatch test's `stamp` in the block that uses it. `conflict` stays at function scope because the retry update uses it too.
+
+Store tests own the write and the refusal. CLI tests own the flag, the usage errors, and that the stamp reaches the store (`decision:plan17-cli-tests-prove-wiring`). The id, key, and sync-id success tests assert exit 0 only. Dropping the stamp leaves them green. `update_if_updated_at_mismatch_is_stale` is the one that goes exit 0 if the CLI passes NULL. The facade test byte-matches the CLI on one database and does not repeat the JSON sentence.
+
+First red runs, before the feature existed: the store mismatch returned status 0, body `new`, version vector 1 → 2. The CLI date form returned `unknown option '--if-updated-at'`.
+
+Mutations, each restored from a copy (not `git checkout`):
+
+| Mutant | Caught by |
+|---|---|
+| Compare `!=` flipped to `==` | both store tests |
+| Compare deleted | mismatch store test |
+| `if (if_updated_at != NULL)` with no `strcmp` | match store test |
+| `strncmp(..., 22)` | mismatch store test (1 ms) |
+| Rollback removed | mismatch store test's retry (status 2, `STORE_ERR_SQLITE`) |
+| Message changed to `stale` | mismatch store message assert |
+| CLI passes NULL | `update_if_updated_at_mismatch_is_stale` (exit 0). Key, sync-id, and undelete success tests stay green |
+| `strcmp` against the canonical buffer removed | date-only and seconds form become the stale sentence. `now` still fails parse |
+| Duplicate check removed | duplicate test gets the stale sentence |
+| `DIAG_STALE` changed to `DIAG_INTERNAL` | JSON stale test, and `store_text_codes_follow_the_locked_split` (actual 4, expected 17) |
+| Bin failure with a stamp returns `STORE_ERR_STALE` | `store_update_wrong_bin_wins_over_stale` (actual 17, expected 7) |
+
+Probes, thrown away, `./build/remember`, one added row:
+
+- `""`, a leading space, `-1`, and `2026-02-30T00:00:00.000Z`: exit 1, `invalid timestamp: <token>`, empty stdout.
+- 300 nines: one plain line, 330 bytes on stderr. `--json-errors`: one line, 371 bytes.
+- A newline in the token prints two plain `remember:` lines. An ESC is unchanged. `--json-errors` escapes `\n` and `\u001b`.
+- `--no-create` on a missing brain: `cannot open the brain file (SQLITE_CANTOPEN)`. The brain opens before the flag is parsed.
+- `--if-updated-at=2020-01-01T00:00:00.000Z` and `list --if-updated-at`: `unknown option`.
+
+Simplify, not applied:
+
+- Do not drop the key, sync-id, or undelete tests. The must-pass row names those locators. They catch the flag being parsed as the locator. They do not catch a dropped stamp.
+- Do not inline `update_take_if_updated`. It is the D10 check.
+- Do not add a second timestamp parser.
+
+Gate on this tree: ctest 5/5 (ASan/UBSan, `REMEMBER_TEST_VFS=ON`), LINT OK, coverage 100% functions and 100% effective lines, `ci-linux.sh` OK (ctest 5/5, LINT OK, including cppcheck), `leaks-macos` PASS, then `GATE-ALL-GREEN`. These notes were appended after that gate. No C file changed after it.
+
 ## Review Notes
 
 ### 2026-10-18 — in-session deep review (stage 1)
@@ -516,3 +562,23 @@ Gate on this tree, after the search-help lines and `search_crossed_bounds_are_em
 2. The simplify pass covers tests too. Count test lines per behavior and look for the same contract proven in two layers.
 3. Probe every value that an error message echoes with a newline, an ESC, and a 300-byte string, in plain and in --json-errors.
 ```
+
+### 2026-10-18 — in-session deep review (stage 4)
+
+**Verdict:** approve for the second-opinion pass. No open blocking item. One grill, answered. `decision:plan17-stale-after-bin`: the bin error wins over a mismatched stamp.
+
+**Ran:** the gate in the stage 4 Implementation Notes. [Bugbot](123f4ecb-720d-4b43-8a7a-bed25105ceb0) on the uncommitted stage found no bugs. These Review Notes were appended after that gate. No C file changed after it.
+
+**Pragmatic write-gate:** DRY PASS. One parser, then a byte compare. Easy-to-replace PASS. SQL stays in `store_sqlite.c`. Orthogonal PASS. The CLI rejects a non-canonical token. The store compares. The diag code is a separate map. No deferred markers.
+
+**Ponytail:** Lean already. The adjacent `const char *` parameters keep the signature the plan named, with the file's existing NOLINT. An options struct would be a new shape for one argument.
+
+**Auto-fixed:** `store_update_wrong_bin_wins_over_stale` locks the grill. Returning `STORE_ERR_STALE` on a bin failure fails it (actual 17, expected 7). clang-tidy wanted a NOLINT on `store_update` and a local named `stamp` on the match call. Linux cppcheck wanted that mismatch `stamp` inside the block that uses it.
+
+**Simplify:** three candidates, none applied. Reasons are in the Implementation Notes.
+
+**Lenses:** the compare runs after the bin check, inside the write transaction. A failed load frees the row inside `load_then_check_bin`, so the compare only sees a row that passed. `updated_at` is non-NULL on that path. The flag alone is not a change. Open still happens before flag parse. The plain writer still echoes a newline and an ESC. That stays the older cross-cutting issue.
+
+**Left for later:** stage 5 is docs and the full gate: help, SKILL.md, What's New, engineering notes, `tests/COVERAGE.md`. Stage 5 is the last stage. After its second review is closed, write `.claude/WHOLE_PLAN_REVIEW` and stop.
+
+**Praise:** the first red store run wrote the body and bumped the version vector. The first red CLI run did not know the flag.

@@ -368,7 +368,7 @@ TEST(store_sync_id_stable_across_update)
 
         memset(&e, 0, sizeof(e));
         ASSERT_EQ_STATUS(store_update(s, 1, NULL, true, "two", k_hash_b, false, NULL, 0U, false,
-                                      NULL, false, STORE_BIN_LIVE, k_now, &e, &conflict),
+                                      NULL, false, STORE_BIN_LIVE, k_now, NULL, &e, &conflict),
                          STORE_OK);
         ASSERT_STREQ(e.sync_id, sync);
         /* A plain body edit advances the version vector (criteria #12). */
@@ -1131,11 +1131,11 @@ TEST(store_update_undelete_deleted)
     store_entry_free(&e);
 
     ASSERT_EQ_STATUS(store_update(s, 1, NULL, false, NULL, NULL, false, NULL, 0U, false, NULL, true,
-                                  STORE_BIN_LIVE, k_now, &e, &conflict),
+                                  STORE_BIN_LIVE, k_now, NULL, &e, &conflict),
                      STORE_ERR_DELETED);
     store_entry_free(&e);
     ASSERT_EQ_STATUS(store_update(s, 1, NULL, false, NULL, NULL, false, NULL, 0U, false, NULL, true,
-                                  STORE_BIN_DELETED, k_now, &e, &conflict),
+                                  STORE_BIN_DELETED, k_now, NULL, &e, &conflict),
                      STORE_OK);
     ASSERT_TRUE(e.deleted_at == NULL);
     ASSERT_STREQ(e.sync_id, sync);
