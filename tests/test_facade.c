@@ -3,6 +3,7 @@
 #include "remember_app.h"
 #include "test.h"
 
+#include <sqlite3.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -146,8 +147,8 @@ static void mask_timestamps(char *s)
     mask_version_vector(s);
 }
 
-/* Assert remember_run stdout/stderr/exit byte-match the CLI for a read command. */
-static void assert_read_parity(const char *db, const char *const *cmd, size_t ncmd)
+/* Assert remember_run stdout/stderr/exit byte-match the CLI; return the CLI result. */
+static CmdResult read_parity(const char *db, const char *const *cmd, size_t ncmd)
 {
     CmdResult sub = run_remember(db, cmd, ncmd, NULL);
     char *fout = NULL;
@@ -159,6 +160,14 @@ static void assert_read_parity(const char *db, const char *const *cmd, size_t nc
     ASSERT_STREQ(ferr, sub.err);
     free(fout);
     free(ferr);
+    return sub;
+}
+
+/* Assert remember_run stdout/stderr/exit byte-match the CLI for a read command. */
+static void assert_read_parity(const char *db, const char *const *cmd, size_t ncmd)
+{
+    CmdResult sub = read_parity(db, cmd, ncmd);
+
     cmd_result_free(&sub);
 }
 
@@ -674,6 +683,21 @@ static void mask_through_newline(char *text)
     }
 }
 
+TEST(facade_repair_matches_cli)
+{
+    char *db = make_temp_db_path();
+    const char *human[] = {"repair", "search-index"};
+    const char *json[] = {"--json", "repair", "search-index"};
+    const char *help[] = {"help", "repair"};
+
+    ASSERT_TRUE(db != NULL);
+    seed_three(db);
+    assert_read_parity(db, human, sizeof(human) / sizeof(human[0]));
+    assert_read_parity(db, json, sizeof(json) / sizeof(json[0]));
+    assert_read_parity(db, help, sizeof(help) / sizeof(help[0]));
+    free(db);
+}
+
 TEST(facade_device_matches_cli)
 {
     char *db = make_temp_db_path();
@@ -729,8 +753,55 @@ TEST(facade_device_new_matches_cli)
     free(db2);
 }
 
+/* EN-03: --json-errors not_found bytes match the CLI. */
+TEST(facade_json_errors_not_found_matches_cli)
+{
+    char *db = make_temp_db_path();
+    const char *cmd[] = {"--json-errors", "get", "--key", "nope"};
+    CmdResult sub;
+
+    ASSERT_TRUE(db != NULL);
+    if (db == NULL) {
+        return;
+    }
+    seed_three(db);
+    sub = read_parity(db, cmd, sizeof(cmd) / sizeof(cmd[0]));
+    ASSERT_EQ_INT(sub.exit_code, 2);
+    ASSERT_STREQ(sub.out, "");
+    ASSERT_STR_CONTAINS(sub.err, "\"code\":\"not_found\"");
+    cmd_result_free(&sub);
+    free(db);
+}
+
+/* EN-03: a held lock plus --busy-timeout 0 is the same busy line in-process. */
+TEST(facade_busy_json_errors_matches_cli)
+{
+    char *db = make_temp_db_path();
+    const char *cmd[] = {"--json-errors", "--busy-timeout", "0", "add", "blocked"};
+    sqlite3 *lock = NULL;
+    CmdResult sub;
+
+    ASSERT_TRUE(db != NULL);
+    if (db == NULL) {
+        return;
+    }
+    seed_three(db);
+    ASSERT_EQ_INT(sqlite3_open_v2(db, &lock, SQLITE_OPEN_READWRITE, NULL), SQLITE_OK);
+    ASSERT_EQ_INT(sqlite3_exec(lock, "BEGIN EXCLUSIVE;", NULL, NULL, NULL), SQLITE_OK);
+    sub = read_parity(db, cmd, sizeof(cmd) / sizeof(cmd[0]));
+    ASSERT_EQ_INT(sqlite3_exec(lock, "ROLLBACK;", NULL, NULL, NULL), SQLITE_OK);
+    (void)sqlite3_close(lock);
+    ASSERT_EQ_INT(sub.exit_code, 1);
+    ASSERT_STREQ(sub.out, "");
+    ASSERT_STR_CONTAINS(sub.err, "\"code\":\"busy\"");
+    cmd_result_free(&sub);
+    free(db);
+}
+
 void register_facade_tests(void)
 {
+    RUN_TEST(facade_json_errors_not_found_matches_cli);
+    RUN_TEST(facade_busy_json_errors_matches_cli);
     RUN_TEST(facade_list_matches_cli);
     RUN_TEST(facade_search_matches_cli);
     RUN_TEST(facade_search_bad_query_matches_cli);
@@ -752,6 +823,7 @@ void register_facade_tests(void)
     RUN_TEST(facade_import_matches_cli);
     RUN_TEST(facade_conflicts_matches_cli);
     RUN_TEST(facade_conflict_accept_matches_cli);
+    RUN_TEST(facade_repair_matches_cli);
     RUN_TEST(facade_device_matches_cli);
     RUN_TEST(facade_device_new_matches_cli);
 }

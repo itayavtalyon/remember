@@ -1,5 +1,6 @@
 #include "commands.h"
 #include "commands_common.h"
+#include "diag.h"
 
 #include "appio.h"
 #include "exit_codes.h"
@@ -18,14 +19,14 @@ static int reject_device_args(int rest_argc, const char **rest_argv, bool *make_
 
     *make_new = false;
     if (rest_argc > 0 && rest_argv == NULL) {
-        err_msg("internal error");
+        err_msg(DIAG_INTERNAL, "internal error");
         return -1;
     }
     for (i = 0; i < rest_argc; i++) {
         const char *arg = rest_argv[i];
 
         if (arg[0] == '-' && arg[1] != '\0') {
-            (void)fprintf(app_err(), "remember: unknown option '%s'\n", arg);
+            err_fmt(DIAG_USAGE, "unknown option '%s'", arg);
             return -1;
         }
         if (i == 0 && strcmp(arg, "new") == 0) {
@@ -33,9 +34,9 @@ static int reject_device_args(int rest_argc, const char **rest_argv, bool *make_
             continue;
         }
         if (*make_new) {
-            err_msg("device new takes no arguments");
+            err_msg(DIAG_USAGE, "device new takes no arguments");
         } else {
-            err_msg("device takes 'new' or no arguments");
+            err_msg(DIAG_USAGE, "device takes 'new' or no arguments");
         }
         return -1;
     }
@@ -47,7 +48,7 @@ static int emit_current_device(bool json, const char *device_id)
     int rc = 0;
 
     if (device_id == NULL) {
-        err_msg("internal error");
+        err_msg(DIAG_INTERNAL, "internal error");
         return REMEMBER_ERR;
     }
     if (json) {
@@ -56,7 +57,7 @@ static int emit_current_device(bool json, const char *device_id)
         rc = output_device_human(app_out(), device_id);
     }
     if (rc != 0) {
-        err_msg("failed to write output");
+        err_msg(DIAG_INTERNAL, "failed to write output");
         return REMEMBER_ERR;
     }
     return REMEMBER_OK;
@@ -74,7 +75,8 @@ static int emit_new_device(Store *s, bool json)
     previous[0] = '\0';
     st = store_device_new(s, previous, sizeof(previous), &had_prev, err, sizeof(err));
     if (st != STORE_OK) {
-        err_msg(err[0] != '\0' ? err : store_status_message(st));
+        err_msg(err[0] != '\0' ? code_for_store_text(err) : code_for_store_status(st),
+                err[0] != '\0' ? err : store_status_message(st));
         return REMEMBER_ERR;
     }
     if (json) {
@@ -88,7 +90,7 @@ static int emit_new_device(Store *s, bool json)
         rc = output_device_human(app_out(), store_device_id(s));
     }
     if (rc != 0) {
-        err_msg("failed to write output");
+        err_msg(DIAG_INTERNAL, "failed to write output");
         return REMEMBER_ERR;
     }
     return REMEMBER_OK;

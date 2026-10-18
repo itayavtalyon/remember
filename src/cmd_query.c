@@ -1,13 +1,14 @@
 #include "commands.h"
 #include "commands_common.h"
+#include "diag.h"
 
 #include "appio.h"
 #include "exit_codes.h"
 #include "normalize.h"
 #include "output.h"
 #include "store.h"
+#include "util.h"
 
-#include <errno.h>
 #include <limits.h>
 #include <stdbool.h>
 #include <stdint.h>
@@ -17,7 +18,6 @@
 
 /* list / search: shared filter + paging parse, different store call + query. */
 
-enum { DECIMAL_BASE = 10 };
 enum { LIST_LIMIT_DEFAULT = 20 };
 enum { LIST_LIMIT_MAX = 1000 };
 /* Bounded well under the store's per-query parameter budget (LIST_BIND_CAP) so
@@ -27,24 +27,18 @@ enum { LIST_TAG_FILTER_MAX = 50 };
 /* Parse a non-negative size_t from decimal text. Rejects empty, non-digits, ERANGE. */
 static int parse_size_token(const char *raw, size_t *out)
 {
-    char *end = NULL;
-    unsigned long long v = 0;
+    unsigned long long value = 0;
 
-    if (raw == NULL || raw[0] == '\0' || raw[0] == '-') {
-        return -1;
-    }
-    errno = 0;
-    v = strtoull(raw, &end, DECIMAL_BASE);
-    if (end == raw || (end != NULL && *end != '\0') || errno == ERANGE) {
+    if (util_parse_nonneg(raw, &value) != 0) {
         return -1;
     }
 #if SIZE_MAX < ULLONG_MAX
     /* 32-bit size_t: reject rather than silently truncate the value. */
-    if (v > (unsigned long long)SIZE_MAX) {
+    if (value > (unsigned long long)SIZE_MAX) {
         return -1;
     }
 #endif
-    *out = (size_t)v;
+    *out = (size_t)value;
     return 0;
 }
 
@@ -164,7 +158,7 @@ static int list_handle_opt(const char *arg, int *i, int rest_argc, const char **
         return 0;
     }
     if (arg[0] == '-' && arg[1] != '\0') {
-        (void)fprintf(app_err(), "remember: unknown option '%s'\n", arg);
+        err_fmt(DIAG_USAGE, "unknown option '%s'", arg);
         *err = "";
         return -1;
     }
@@ -355,22 +349,22 @@ static int list_prepare_query(const ListParse *parsed, char *key_norm, size_t ke
     q->key = NULL; /* default; set below only when --key was given */
 
     if (parsed->source != NULL && !source_is_valid(parsed->source)) {
-        err_msg("invalid source (use human, agent, tool, share, or unknown)");
+        err_msg(DIAG_USAGE, "invalid source (use human, agent, tool, share, or unknown)");
         return -1;
     }
     if (parsed->ntag_raw > LIST_TAG_FILTER_MAX) {
-        err_msg("too many --tag filters (max 50)");
+        err_msg(DIAG_USAGE, "too many --tag filters (max 50)");
         return -1;
     }
     if (normalize_tags((const char *const *)parsed->tag_raw, parsed->ntag_raw, out_tags, out_ntags,
                        &err) != 0) {
-        err_msg(err);
+        err_msg(code_for_cmd_text(err), err);
         return -1;
     }
     if (parsed->key_raw != NULL) {
         NormStatus ns = normalize_key(parsed->key_raw, key_norm, key_norm_sz);
         if (ns != NORM_OK) {
-            err_msg(norm_token_message(ns, "key"));
+            err_norm(ns, "key");
             return -1;
         }
         q->key = key_norm;
@@ -401,7 +395,7 @@ static int load_page_neighbors(Store *s, const Entry *entries, size_t count, con
     }
     ids = (long long *)malloc(count * sizeof(*ids));
     if (ids == NULL) {
-        err_msg("out of memory");
+        err_msg(DIAG_OUT_OF_MEMORY, "out of memory");
         return -1;
     }
     for (i = 0; i < count; i++) {
@@ -410,7 +404,7 @@ static int load_page_neighbors(Store *s, const Entry *entries, size_t count, con
     st = store_list_neighbors_for(s, ids, count, now, out, out_n);
     free(ids);
     if (st != STORE_OK) {
-        err_msg(store_status_message(st));
+        err_store(s, st);
         return -1;
     }
     return 0;
@@ -470,7 +464,7 @@ int cmd_list(Store *s, bool json, int rest_argc, const char **rest_argv)
 
     if (parse_list_args(rest_argc, rest_argv, &parsed, &err) != 0) {
         if (err != NULL && err[0] != '\0') {
-            err_msg(err);
+            err_msg(code_for_cmd_text(err), err);
         }
         list_parse_free(&parsed);
         return REMEMBER_ERR;
@@ -481,7 +475,7 @@ int cmd_list(Store *s, bool json, int rest_argc, const char **rest_argv)
     }
 
     if (utc_now(now, sizeof(now)) != 0) {
-        err_msg("internal error");
+        err_msg(DIAG_INTERNAL, "internal error");
         goto cleanup;
     }
     {
@@ -492,7 +486,7 @@ int cmd_list(Store *s, bool json, int rest_argc, const char **rest_argv)
         total = page.total;
     }
     if (st != STORE_OK) {
-        err_msg(store_status_message(st));
+        err_store(s, st);
         goto cleanup;
     }
     if (load_page_neighbors(s, entries, count, now, &links, &nlinks) != 0) {
@@ -503,7 +497,7 @@ int cmd_list(Store *s, bool json, int rest_argc, const char **rest_argv)
     }
 
     if (emit_entry_page(json, q.offset, q.limit, count, total, entries, links, nlinks, now) != 0) {
-        err_msg("failed to write output");
+        err_msg(DIAG_INTERNAL, "failed to write output");
         goto cleanup;
     }
     rc = REMEMBER_OK;
@@ -538,7 +532,7 @@ int cmd_search(Store *s, bool json, int rest_argc, const char **rest_argv)
 
     if (parse_search_args(rest_argc, rest_argv, &parsed, &err) != 0) {
         if (err != NULL && err[0] != '\0') {
-            err_msg(err);
+            err_msg(code_for_cmd_text(err), err);
         }
         search_parse_free(&parsed);
         return REMEMBER_ERR;
@@ -551,7 +545,7 @@ int cmd_search(Store *s, bool json, int rest_argc, const char **rest_argv)
     q.query = parsed.query;
 
     if (utc_now(now, sizeof(now)) != 0) {
-        err_msg("internal error");
+        err_msg(DIAG_INTERNAL, "internal error");
         goto cleanup;
     }
     {
@@ -562,7 +556,7 @@ int cmd_search(Store *s, bool json, int rest_argc, const char **rest_argv)
         total = page.total;
     }
     if (st != STORE_OK) {
-        err_msg(store_status_message(st));
+        err_store(s, st);
         goto cleanup;
     }
     if (load_page_neighbors(s, entries, count, now, &links, &nlinks) != 0) {
@@ -574,7 +568,7 @@ int cmd_search(Store *s, bool json, int rest_argc, const char **rest_argv)
 
     if (emit_entry_page(json, q.filters.offset, q.filters.limit, count, total, entries, links,
                         nlinks, now) != 0) {
-        err_msg("failed to write output");
+        err_msg(DIAG_INTERNAL, "failed to write output");
         goto cleanup;
     }
     rc = REMEMBER_OK;

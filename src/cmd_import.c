@@ -1,5 +1,6 @@
 #include "commands.h"
 #include "commands_common.h"
+#include "diag.h"
 
 #include "appio.h"
 #include "exit_codes.h"
@@ -26,43 +27,48 @@ int cmd_import(Store *s, bool json, int rest_argc, const char **rest_argv)
         if (arg != NULL && strcmp(arg, "--from-db") == 0) {
             TakeValue taken = take_value(&i, rest_argc, rest_argv, "--from-db requires a path");
             if (taken.rc != 0) {
-                err_msg(taken.err);
+                err_msg(DIAG_USAGE, taken.err);
                 return REMEMBER_ERR;
             }
             if (from_db != NULL) {
-                err_msg("duplicate --from-db");
+                err_msg(DIAG_USAGE, "duplicate --from-db");
                 return REMEMBER_ERR;
             }
             from_db = taken.value;
             continue;
         }
         if (arg != NULL && arg[0] == '-' && arg[1] != '\0') {
-            (void)fprintf(app_err(), "remember: unknown option '%s'\n", arg);
+            err_fmt(DIAG_USAGE, "unknown option '%s'", arg);
             return REMEMBER_ERR;
         }
-        err_msg("import takes no positional arguments");
+        err_msg(DIAG_USAGE, "import takes no positional arguments");
         return REMEMBER_ERR;
     }
     if (from_db == NULL) {
-        err_msg("import requires --from-db PATH");
+        err_msg(DIAG_USAGE, "import requires --from-db PATH");
         return REMEMBER_ERR;
     }
     if (utc_now(now, sizeof(now)) != 0) {
-        err_msg("internal error");
+        err_msg(DIAG_INTERNAL, "internal error");
         return REMEMBER_ERR;
     }
     st = store_import(s, from_db, now, &counts);
+    if (st == STORE_ERR_SQLITE && store_last_error(s)->import_source) {
+        /* The source failed, not the brain: name the --from-db file. */
+        err_store_sqlite(store_last_error(s), from_db);
+        return REMEMBER_ERR;
+    }
     if (st != STORE_OK) {
-        return store_status_to_exit(st);
+        return store_status_to_exit(s, st);
     }
     if (json) {
         if (output_import_envelope(app_out(), &counts) != 0) {
-            err_msg("failed to write output");
+            err_msg(DIAG_INTERNAL, "failed to write output");
             return REMEMBER_ERR;
         }
     } else if (fprintf(app_out(), "inserted %zu updated %zu unchanged %zu conflicts %zu\n",
                        counts.inserted, counts.updated, counts.unchanged, counts.conflicts) < 0) {
-        err_msg("failed to write output");
+        err_msg(DIAG_INTERNAL, "failed to write output");
         return REMEMBER_ERR;
     }
     return REMEMBER_OK;
@@ -77,17 +83,17 @@ int cmd_conflicts(Store *s, bool json, int rest_argc, const char **rest_argv)
     int rc = REMEMBER_ERR;
 
     if (rest_argc > 0) {
-        err_msg("conflicts takes no arguments");
+        err_msg(DIAG_USAGE, "conflicts takes no arguments");
         return REMEMBER_ERR;
     }
     (void)rest_argv;
     st = store_conflicts_list(s, &rows, &count);
     if (st != STORE_OK) {
-        return store_status_to_exit(st);
+        return store_status_to_exit(s, st);
     }
     if (json) {
         if (output_conflicts_envelope(app_out(), rows, count) != 0) {
-            err_msg("failed to write output");
+            err_msg(DIAG_INTERNAL, "failed to write output");
             goto cleanup;
         }
     } else {
@@ -96,7 +102,7 @@ int cmd_conflicts(Store *s, bool json, int rest_argc, const char **rest_argv)
             if (fprintf(app_out(), "%lld\t%s\t%s\n", rows[i].id,
                         rows[i].sync_id != NULL ? rows[i].sync_id : "",
                         reason != NULL ? reason : "?") < 0) {
-                err_msg("failed to write output");
+                err_msg(DIAG_INTERNAL, "failed to write output");
                 goto cleanup;
             }
         }
@@ -134,15 +140,15 @@ static int conflict_accept_take_id(int *arg_i, int rest_argc, const char **rest_
     TakeValue taken = take_value(arg_i, rest_argc, rest_argv, "--id requires a value");
 
     if (taken.rc != 0) {
-        err_msg(taken.err);
+        err_msg(DIAG_USAGE, taken.err);
         return REMEMBER_ERR;
     }
     if (*have_id) {
-        err_msg("duplicate --id");
+        err_msg(DIAG_USAGE, "duplicate --id");
         return REMEMBER_ERR;
     }
     if (parse_entry_id(taken.value, conflict_id) != 0) {
-        err_msg("invalid conflict id");
+        err_msg(DIAG_USAGE, "invalid conflict id");
         return REMEMBER_ERR;
     }
     *have_id = true;
@@ -156,15 +162,15 @@ static int conflict_accept_take_keep(int *arg_i, int rest_argc, const char **res
         take_value(arg_i, rest_argc, rest_argv, "--keep requires local|incoming|both");
 
     if (taken.rc != 0) {
-        err_msg(taken.err);
+        err_msg(DIAG_USAGE, taken.err);
         return REMEMBER_ERR;
     }
     if (*have_keep) {
-        err_msg("duplicate --keep");
+        err_msg(DIAG_USAGE, "duplicate --keep");
         return REMEMBER_ERR;
     }
     if (parse_keep(taken.value, keep) != 0) {
-        err_msg("--keep must be local, incoming, or both");
+        err_msg(DIAG_USAGE, "--keep must be local, incoming, or both");
         return REMEMBER_ERR;
     }
     *have_keep = true;
@@ -197,14 +203,14 @@ static int conflict_accept_parse(int rest_argc, const char **rest_argv, long lon
             continue;
         }
         if (arg != NULL && arg[0] == '-' && arg[1] != '\0') {
-            (void)fprintf(app_err(), "remember: unknown option '%s'\n", arg);
+            err_fmt(DIAG_USAGE, "unknown option '%s'", arg);
             return REMEMBER_ERR;
         }
-        err_msg("conflict accept takes no positional arguments");
+        err_msg(DIAG_USAGE, "conflict accept takes no positional arguments");
         return REMEMBER_ERR;
     }
     if (!have_id || !have_keep) {
-        err_msg("conflict accept requires --id and --keep");
+        err_msg(DIAG_USAGE, "conflict accept requires --id and --keep");
         return REMEMBER_ERR;
     }
     return 0;
@@ -216,14 +222,14 @@ static int conflict_accept_emit(bool json, const Entry *entries, size_t count, c
 
     if (json) {
         if (output_accepted_envelope(app_out(), entries, count, now) != 0) {
-            err_msg("failed to write output");
+            err_msg(DIAG_INTERNAL, "failed to write output");
             return REMEMBER_ERR;
         }
         return REMEMBER_OK;
     }
     for (i = 0; i < count; i++) {
         if (output_id_human(app_out(), entries[i].id) != 0) {
-            err_msg("failed to write output");
+            err_msg(DIAG_INTERNAL, "failed to write output");
             return REMEMBER_ERR;
         }
     }
@@ -242,19 +248,19 @@ int cmd_conflict(Store *s, bool json, int rest_argc, const char **rest_argv)
     int rc = REMEMBER_ERR;
 
     if (rest_argc < 1 || rest_argv[0] == NULL || strcmp(rest_argv[0], "accept") != 0) {
-        err_msg("usage: conflict accept --id N --keep local|incoming|both");
+        err_msg(DIAG_USAGE, "usage: conflict accept --id N --keep local|incoming|both");
         return REMEMBER_ERR;
     }
     if (conflict_accept_parse(rest_argc, rest_argv, &conflict_id, &keep) != 0) {
         return REMEMBER_ERR;
     }
     if (utc_now(now, sizeof(now)) != 0) {
-        err_msg("internal error");
+        err_msg(DIAG_INTERNAL, "internal error");
         return REMEMBER_ERR;
     }
     st = store_conflict_accept(s, conflict_id, keep, now, &entries, &count);
     if (st != STORE_OK) {
-        return store_status_to_exit(st);
+        return store_status_to_exit(s, st);
     }
     rc = conflict_accept_emit(json, entries, count, now);
 

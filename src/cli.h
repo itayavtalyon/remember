@@ -24,6 +24,7 @@ typedef enum {
     CLI_CMD_CONFLICTS,
     CLI_CMD_CONFLICT,
     CLI_CMD_DEVICE,
+    CLI_CMD_REPAIR,
     CLI_CMD_UNKNOWN
 } CliCommand;
 
@@ -34,14 +35,17 @@ typedef enum {
     CLI_ERR_UNKNOWN_COMMAND,
     CLI_ERR_UNKNOWN_OPTION,
     CLI_ERR_MISSING_OPTION_VALUE,
+    CLI_ERR_INVALID_BUSY_TIMEOUT,
     CLI_ERR_INTERNAL
 } CliError;
 
 typedef struct {
     const char *db_path; /* NULL if omitted; aliases argv */
+    int busy_timeout_ms; /* set when busy_timeout_set; otherwise unused */
     bool json;
-    /* NOLINTNEXTLINE(readability-magic-numbers,cppcoreguidelines-avoid-magic-numbers) */
-    char pad_[7]; /* explicit tail padding to keep the struct -Wpadded-clean */
+    bool json_errors;
+    bool no_create;
+    bool busy_timeout_set;
 } CliGlobals;
 
 /*
@@ -54,8 +58,9 @@ typedef struct {
     const char *error_option; /* option name missing a value, e.g. "--db" */
     /*
      * The subcommand's own arguments: every token after the subcommand name
-     * with globals (--db/--json) and meta flags (--help/--version) already
-     * removed, in original order. Tokens after a "--" separator are included
+     * with globals (--db/--json/--json-errors/--busy-timeout/--no-create) and
+     * meta flags (--help/--version) already removed, in original order. Tokens
+     * after a "--" separator are included
      * verbatim (end-of-options). Subcommand parsers see only what is theirs.
      *
      * The array is heap-owned — release with cli_args_free(). Its elements
