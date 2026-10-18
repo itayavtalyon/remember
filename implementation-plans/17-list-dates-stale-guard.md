@@ -452,3 +452,67 @@ Gate on this tree, after the search-help lines and `search_crossed_bounds_are_em
 **Left for later:** stage 4 is the stale guard (`--if-updated-at`, D10, `STORE_ERR_STALE` → `stale`). Help, SKILL, What's New, engineering notes, and `COVERAGE.md` stay stage 5.
 
 **Praise:** the first red runs were `unknown option '--sort'` and `unknown option '--since'`.
+
+### 2026-10-18 — second-opinion deep review (stage 3)
+
+**Verdict:** stage 3 approved. No open blocking item. One grill, answered. No production code change.
+
+**Run, not read.** Baseline `343d04d` (gate root clean): ctest 5/5, LINT OK, coverage 100/100, `leaks-macos` PASS, `ci-linux.sh` OK, `GATE-ALL-GREEN`. Fixed tree: ctest 5/5 (ASan/UBSan, `REMEMBER_TEST_VFS=ON`), LINT OK, coverage 100/100, `leaks-macos` PASS, `ci-linux.sh` OK, `GATE-ALL-GREEN`, in a clean worktree of `343d04d` plus these changes.
+
+**Handover probes on the built binary:** three rows at `10-11T10:30Z`, `10-12T05:00Z`, and `10-12T11:30Z`, then `list --since 2026-10-12`. Kiritimati (+14) gives all three. Pago Pago (−11) gives only the 11:30 row. Jerusalem and UTC give the two 10-12 rows. So each zone's local midnight is a different UTC boundary, as the plan expects.
+
+- Jerusalem `2026-10-25`: correct.
+- `2026-02-29` and `2026-02-30`: both `invalid timestamp`.
+- Equal canonical bounds: exit 0, `"count":0,"total":0`.
+- `search foo --sort created` and `search foo`: byte-identical.
+- `--json-errors` on a newline in the timestamp: one escaped JSON line.
+
+**Mutations on `src/cmd_query.c`**, one clause each:
+
+| Mutant | Caught by |
+|--------|-----------|
+| W1: `--sort created` ignored | `list_sort_created_keeps_creation_order` |
+| W2: since and until swapped | 7 tests |
+| W3: search drops both bounds | 2 tests |
+| W4: bad `--sort` accepted | 2 tests |
+| W5: a duplicate is last-wins | 2 tests |
+| W6: raw string passed to the store | 3 tests |
+
+**Findings:**
+
+1. **Grill → fixed (Itay 2026-10-18, `decision:plan17-cli-tests-prove-wiring`).** Six CLI tests re-proved store semantics that stage 2's store tests already pin. They are removed, 195 lines:
+   - `list_created_tie_breaks_by_id`
+   - `list_since_follows_sort_column`
+   - `list_crossed_bounds_are_empty` (`list_equal_bounds_are_empty` stays for D11)
+   - `list_bounds_total_counts_the_filtered_set`
+   - `list_bounds_compose_with_bins`
+   - `search_equal_bounds_are_empty` (`search_crossed_bounds_are_empty` stays)
+
+   W1–W6 were re-run on the pruned suite, and each is still caught. The CLI suite now proves wiring, parse errors, D11 output, the time-zone conversion, one composition, help, and facade. The store suite proves order, tie-breaks, bound column, `total`, and bins.
+2. **nit, considered and not applied (simplify).** I tried mapping `--sort` to `StoreSort` once, when the flag is read, so `"created"` is compared in one place instead of two. A `StoreSort` field in `ListParse` needs an explicit pad under `-Wpadded`, and the change was +3 lines. The coder's second `strcmp` stays.
+3. **important, open, cross-cutting, older than plan 17. Plain error lines echo user input raw.** `list --since $'2026\nremember: fake line'` prints two `remember:` lines. An ESC sequence reaches the terminal unchanged. The same happens for `unknown option '…'` and `unknown command '…'`. `--json-errors` escapes correctly. When an agent passes text from untrusted content, the plain line can forge output. Suggested fix: the diag emitter's plain writer neutralizes C0/DEL as `?`, as `output_body_human` already does, in one place. That changes plain bytes only for inputs with control characters (E4.2). It needs a plan or a grill of its own.
+4. **nit, open, older than plan 17.** `take_value` takes a following option as the value. `list --since --limit 5` reads `--limit` as the timestamp and reports `unexpected argument` for `5`. `--key` and `--source` do the same. The coder probed `--since --until` (`invalid timestamp: --until`), which is the better case.
+
+**Praise:** each flag fails before the store with its own sentence, and the bound buffers are caller stack storage that lives across the store call. The coder recorded that the brain opens before flag parsing, so `cannot_open` wins over a bad timestamp.
+
+**Coder rating (stage 3): 8.5/10, up from 8.** It applied every instruction from the stage 2 list:
+
+- One-clause mutants (seven, each with the failing tests named).
+- A `--no-create` probe and a DST-day probe.
+- Literal instants.
+- Guards after count asserts.
+- Four simplify candidates, each with a reason.
+- The gate on the committed tree.
+
+**Misses:**
+
+- Its simplify pass looked only at production code, and it wrote "nothing further to cut" over 195 lines of tests that repeated another layer.
+- Its hostile-input probes stopped at dashes and empty strings. A newline or an ESC in an echoed value would have shown finding 3.
+
+**Paste-ready for the coder:**
+
+```text
+1. Before writing a CLI test, check whether a store test already proves that behavior. If it does, the CLI test proves only that the flag reaches the store.
+2. The simplify pass covers tests too. Count test lines per behavior and look for the same contract proven in two layers.
+3. Probe every value that an error message echoes with a newline, an ESC, and a 300-byte string, in plain and in --json-errors.
+```

@@ -369,35 +369,6 @@ TEST(list_sort_updated_puts_the_edit_first)
     free(db);
 }
 
-TEST(list_created_tie_breaks_by_id)
-{
-    char *db = make_temp_db_path();
-    const char *args[] = {"list", "--sort", "created"};
-    CmdResult r;
-    long low = 0;
-    long high = 0;
-
-    ASSERT_TRUE(db != NULL);
-    if (db == NULL) {
-        return;
-    }
-    low = given_stamped(db, "low-id", "2026-05-01T00:00:00.000Z", "2026-06-01T00:00:00.000Z");
-    high = given_stamped(db, "high-id", "2026-05-01T00:00:00.000Z", "2026-01-01T00:00:00.000Z");
-    ASSERT_EQ_INT(low, 1);
-    ASSERT_EQ_INT(high, 2);
-    if (high != 2) {
-        free(db);
-        return;
-    }
-    r = run_remember(db, args, sizeof(args) / sizeof(args[0]), NULL);
-    ASSERT_EQ_INT(r.exit_code, 0);
-    ASSERT_STREQ(r.err, "");
-    ASSERT_STREQ(r.out, "2 |  |  | high-id | 2026-01-01T00:00:00.000Z | \n"
-                        "1 |  |  | low-id | 2026-06-01T00:00:00.000Z | \n");
-    cmd_result_free(&r);
-    free(db);
-}
-
 /* The database path and the rejected token are different sentences. */
 // NOLINTBEGIN(bugprone-easily-swappable-parameters)
 static void assert_sort_rejected(const char *db, const char *token)
@@ -528,66 +499,6 @@ TEST(list_equal_bounds_are_empty)
     ASSERT_STREQ(r.err, "");
     ASSERT_STREQ(r.out, "{\"version\":1,\"offset\":0,\"limit\":20,\"count\":0,\"total\":0,"
                         "\"entries\":[]}\n");
-    cmd_result_free(&r);
-    free(db);
-}
-
-TEST(list_crossed_bounds_are_empty)
-{
-    char *db = make_temp_db_path();
-    const char *args[] = {"--json",  "list",
-                          "--since", "2026-06-16T00:00:00.000Z",
-                          "--until", "2026-06-15T00:00:00.000Z"};
-    CmdResult r;
-    long row = 0;
-
-    ASSERT_TRUE(db != NULL);
-    if (db == NULL) {
-        return;
-    }
-    row = given_stamped(db, "between", "2026-06-15T12:00:00.000Z", "2026-06-15T12:00:00.000Z");
-    ASSERT_EQ_INT(row, 1);
-    if (row != 1) {
-        free(db);
-        return;
-    }
-    r = run_remember(db, args, sizeof(args) / sizeof(args[0]), NULL);
-    ASSERT_EQ_INT(r.exit_code, 0);
-    ASSERT_STREQ(r.err, "");
-    ASSERT_STREQ(r.out, "{\"version\":1,\"offset\":0,\"limit\":20,\"count\":0,\"total\":0,"
-                        "\"entries\":[]}\n");
-    cmd_result_free(&r);
-    free(db);
-}
-
-TEST(list_since_follows_sort_column)
-{
-    char *db = make_temp_db_path();
-    const char *created[] = {"list", "--sort", "created", "--since", "2026-03-01T00:00:00.000Z"};
-    const char *updated[] = {"list", "--sort", "updated", "--since", "2026-03-01T00:00:00.000Z"};
-    CmdResult r;
-    long old_created = 0;
-
-    ASSERT_TRUE(db != NULL);
-    if (db == NULL) {
-        return;
-    }
-    old_created =
-        given_stamped(db, "old-created", "2026-01-01T00:00:00.000Z", "2026-06-01T00:00:00.000Z");
-    (void)given_stamped(db, "old-updated", "2026-06-01T00:00:00.000Z", "2026-01-01T00:00:00.000Z");
-    ASSERT_EQ_INT(old_created, 1);
-    if (old_created != 1) {
-        free(db);
-        return;
-    }
-    r = run_remember(db, created, sizeof(created) / sizeof(created[0]), NULL);
-    ASSERT_EQ_INT(r.exit_code, 0);
-    ASSERT_STREQ(r.out, "2 |  |  | old-updated | 2026-01-01T00:00:00.000Z | \n");
-    cmd_result_free(&r);
-    r = run_remember(db, updated, sizeof(updated) / sizeof(updated[0]), NULL);
-    ASSERT_EQ_INT(r.exit_code, 0);
-    ASSERT_STREQ(r.err, "");
-    ASSERT_STREQ(r.out, "1 |  |  | old-created | 2026-06-01T00:00:00.000Z | \n");
     cmd_result_free(&r);
     free(db);
 }
@@ -813,74 +724,6 @@ TEST(list_bounds_compose_with_tag_source_and_key)
     free(db);
 }
 
-TEST(list_bounds_total_counts_the_filtered_set)
-{
-    char *db = make_temp_db_path();
-    const char *args[] = {"--json",   "list",
-                          "--since",  "2026-01-01T00:00:00.000Z",
-                          "--until",  "2026-04-01T00:00:00.000Z",
-                          "--limit",  "1",
-                          "--offset", "1"};
-    CmdResult r;
-
-    ASSERT_TRUE(db != NULL);
-    if (db == NULL) {
-        return;
-    }
-    (void)given_stamped(db, "first-body", "2026-03-01T00:00:00.000Z", "2026-03-01T00:00:00.000Z");
-    (void)given_stamped(db, "middle-body", "2026-02-01T00:00:00.000Z", "2026-02-01T00:00:00.000Z");
-    (void)given_stamped(db, "third-body", "2026-01-01T00:00:00.000Z", "2026-01-01T00:00:00.000Z");
-    (void)given_stamped(db, "outside", "2026-05-01T00:00:00.000Z", "2026-05-01T00:00:00.000Z");
-    r = run_remember(db, args, sizeof(args) / sizeof(args[0]), NULL);
-    ASSERT_EQ_INT(r.exit_code, 0);
-    ASSERT_STREQ(r.err, "");
-    ASSERT_STR_CONTAINS(r.out, "\"offset\":1");
-    ASSERT_STR_CONTAINS(r.out, "\"limit\":1");
-    ASSERT_STR_CONTAINS(r.out, "\"count\":1");
-    ASSERT_STR_CONTAINS(r.out, "\"total\":3");
-    ASSERT_STR_CONTAINS(r.out, "middle-body");
-    ASSERT_STR_NOT_CONTAINS(r.out, "first-body");
-    ASSERT_STR_NOT_CONTAINS(r.out, "third-body");
-    ASSERT_STR_NOT_CONTAINS(r.out, "outside");
-    cmd_result_free(&r);
-    free(db);
-}
-
-TEST(list_bounds_compose_with_bins)
-{
-    char *db = make_temp_db_path();
-    const char *live[] = {"list", "--since", "2026-01-01T00:00:00.000Z"};
-    const char *expired[] = {"list", "--expired", "--since", "2026-01-01T00:00:00.000Z"};
-    const char *deleted[] = {"list", "--deleted", "--since", "2026-01-01T00:00:00.000Z"};
-    CmdResult r;
-
-    ASSERT_TRUE(db != NULL);
-    if (db == NULL) {
-        return;
-    }
-    (void)given_stamped(db, "live-row", "2026-06-01T00:00:00.000Z", "2026-06-01T00:00:00.000Z");
-    (void)given_stamped(db, "expired-row", "2026-06-01T00:00:00.000Z", "2026-06-01T00:00:00.000Z");
-    (void)given_stamped(db, "deleted-row", "2026-06-01T00:00:00.000Z", "2026-06-01T00:00:00.000Z");
-    free(harness_sqlite_query_line(
-        db, "UPDATE entries SET expires_at='2020-01-01T00:00:00.000Z' WHERE id=2;"));
-    free(harness_sqlite_query_line(
-        db, "UPDATE entries SET deleted_at='2020-01-01T00:00:00.000Z' WHERE id=3;"));
-    r = run_remember(db, live, sizeof(live) / sizeof(live[0]), NULL);
-    ASSERT_EQ_INT(r.exit_code, 0);
-    ASSERT_STREQ(r.out, "1 |  |  | live-row | 2026-06-01T00:00:00.000Z | \n");
-    cmd_result_free(&r);
-    r = run_remember(db, expired, sizeof(expired) / sizeof(expired[0]), NULL);
-    ASSERT_EQ_INT(r.exit_code, 0);
-    ASSERT_STREQ(r.out, "2 |  |  | expired-row | 2026-06-01T00:00:00.000Z | \n");
-    cmd_result_free(&r);
-    r = run_remember(db, deleted, sizeof(deleted) / sizeof(deleted[0]), NULL);
-    ASSERT_EQ_INT(r.exit_code, 0);
-    ASSERT_STREQ(r.err, "");
-    ASSERT_STREQ(r.out, "3 |  |  | deleted-row | 2026-06-01T00:00:00.000Z | \n");
-    cmd_result_free(&r);
-    free(db);
-}
-
 TEST(search_ignores_sort_for_order)
 {
     char *db = make_temp_db_path();
@@ -997,38 +840,6 @@ TEST(search_crossed_bounds_are_empty)
     free(db);
 }
 
-TEST(search_equal_bounds_are_empty)
-{
-    char *db = make_temp_db_path();
-    const char *args[] = {"--json",
-                          "search",
-                          "alpha",
-                          "--since",
-                          "2026-06-01T00:00:00.000Z",
-                          "--until",
-                          "2026-06-01T00:00:00.000Z"};
-    CmdResult r;
-    long id = 0;
-
-    ASSERT_TRUE(db != NULL);
-    if (db == NULL) {
-        return;
-    }
-    id = given_stamped(db, "alpha", "2026-06-01T00:00:00.000Z", "2026-06-01T00:00:00.000Z");
-    ASSERT_EQ_INT(id, 1);
-    if (id != 1) {
-        free(db);
-        return;
-    }
-    r = run_remember(db, args, sizeof(args) / sizeof(args[0]), NULL);
-    ASSERT_EQ_INT(r.exit_code, 0);
-    ASSERT_STREQ(r.err, "");
-    ASSERT_STREQ(r.out, "{\"version\":1,\"offset\":0,\"limit\":20,\"count\":0,\"total\":0,"
-                        "\"entries\":[]}\n");
-    cmd_result_free(&r);
-    free(db);
-}
-
 TEST(list_and_search_help_name_sort_and_bounds)
 {
     char *db = make_temp_db_path();
@@ -1080,27 +891,21 @@ void register_list_dates_tests(void)
     RUN_TEST(filter_ts_rejects_null_output);
     RUN_TEST(list_sort_created_keeps_creation_order);
     RUN_TEST(list_sort_updated_puts_the_edit_first);
-    RUN_TEST(list_created_tie_breaks_by_id);
     RUN_TEST(list_sort_rejects_a_bad_value);
     RUN_TEST(list_sort_rejects_a_duplicate);
     RUN_TEST(list_sort_requires_a_value);
     RUN_TEST(list_since_is_inclusive_and_until_is_exclusive);
     RUN_TEST(list_equal_bounds_are_empty);
-    RUN_TEST(list_crossed_bounds_are_empty);
-    RUN_TEST(list_since_follows_sort_column);
     RUN_TEST(list_date_since_is_jerusalem_local_midnight);
     RUN_TEST(list_date_since_is_los_angeles_local_midnight);
     RUN_TEST(list_seconds_form_matches_canonical);
     RUN_TEST(list_rejects_a_bad_timestamp);
     RUN_TEST(list_bound_flags_reject_duplicates_and_missing_values);
     RUN_TEST(list_bounds_compose_with_tag_source_and_key);
-    RUN_TEST(list_bounds_total_counts_the_filtered_set);
-    RUN_TEST(list_bounds_compose_with_bins);
     RUN_TEST(search_ignores_sort_for_order);
     RUN_TEST(search_since_filters_updated_at);
     RUN_TEST(search_sort_bogus_is_usage);
     RUN_TEST(search_crossed_bounds_are_empty);
-    RUN_TEST(search_equal_bounds_are_empty);
     RUN_TEST(list_and_search_help_name_sort_and_bounds);
 }
 // NOLINTEND(concurrency-mt-unsafe)
