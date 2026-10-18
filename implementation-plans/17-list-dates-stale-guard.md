@@ -256,6 +256,41 @@ No new grill. `parse_filter_ts` does not reuse `parse_expires_to_iso`: that help
 - Leap years follow the Gregorian rule (400 / 100 / 4). Seconds stop at 59. The function does not print. On rejection it leaves `out` unchanged.
 - `list_dates` is on `tests/gate-suites` now, because the coverage gate only runs suites on that line and the new functions live in `src/`. `tests/COVERAGE.md` stays stage 5.
 
+### 2026-10-18 — stage 2 (store list sort and since/until)
+
+No new grill. No new `decision:*`. The store binds the caller's strings. It does not parse them. Definition of Done boxes stay unticked; this stage does not finish the plan.
+
+`ListQuery` gained `StoreSort sort` (zero is updated), `since`, and `until`. `list_sort_column` is the only sort-to-column map. `list_append_time` appends `since` as `>=` and `until` as `<`, and the timestamp is a bind. `write_time_order` writes the ORDER BY for list and for search. List passes the sort column into both the WHERE and the ORDER BY. Search calls `list_sort_column(STORE_SORT_UPDATED)` and ignores `filters.sort`; rank stays `bm25(entries_fts), updated_at DESC, id DESC`. `COUNT` and the page stay inside the existing `BEGIN`/`COMMIT` in `store_list` and `store_search`. An unknown sort returns `STORE_ERR_INTERNAL` before any SQL.
+
+Tests live in `tests/test_store.c` (the ASan store binary). `./build/remember_store_tests` on this tree: 142 tests, 0 failed, 1399 asserts.
+
+Mutations, each restored from a copy of `src/store_sqlite.c` (not `git checkout`), proved by `./build/remember_store_tests`:
+
+- `STORE_SORT_UPDATED` returning `"created_at"` fails `store_list_updated_sort_puts_the_edit_first` (`newest`, `middle`, `oldest` instead of the edited row first) and the updated half of `store_list_since_follows_sort_column` (count 0, expected 1).
+- Dropping `, e.id DESC` from `write_time_order` fails `store_list_created_tie_breaks_by_id` (`low-id` then `high-id`).
+- Changing the until predicate from `<` to `<=` fails `store_list_since_inclusive_until_exclusive` (count 2, first body `at_until`), `store_list_crossed_bounds_are_empty` (count 1 on equal bounds), and `store_search_since_filters_updated_at` (count 1, expected 0, on equal search bounds).
+- Search using `q->filters.sort` instead of `STORE_SORT_UPDATED` fails `store_search_since_filters_updated_at` (`backdated alpha` instead of `edited alpha`).
+- `default: return "updated_at"` fails `store_list_unknown_sort_is_internal` (status 0, expected 4).
+- `list_append_time` binding NULL for both sides fails `store_list_since_inclusive_until_exclusive` (count 3, first body `at_until`), the created half of `store_list_since_follows_sort_column` (count 1, expected 0), `store_list_crossed_bounds_are_empty`, `store_search_since_filters_updated_at` (count 2, expected 1), and `store_list_bounds_compose_with_filters` (total 3, expected 2).
+
+The first red runs, before this code existed: `store_list_sort_created_keeps_creation_order` came back `oldest` first (updated-at order), and `store_list_since_inclusive_until_exclusive` came back count 3 with first body `at_until`.
+
+Probe, thrown away before this commit, one row at `2026-06-15T12:00:00.000Z`, ASan `./build/remember_store_tests`. The store does not reject non-canonical strings. Lexicographic compare, status 0 unless noted:
+
+- `since` `""`, `" "`, or a leading space matches the row (count 1). The same three as `until` match nothing (count 0).
+- A trailing space or `not-a-timestamp` as `since` matches nothing. As `until`, each matches the row.
+- A 4095-nines `since` matches nothing. The same string as `until` matches the row.
+- `(StoreSort)-1` is status 4, count 0, no rows.
+- Search `until` equal to that row's `updated_at`, with `filters.sort` created, is count 0. One millisecond later it returns `alpha`.
+
+No crash. Empty, spaced, and non-canonical bounds are a caller bug. Stage 3's parser rejects them before the store. This stage adds no path, so a missing file is not a new case. The year and DST scan stays on `parse_filter_ts` (stage 1); these strings are already canonical or they are not dates.
+
+Simplify, not applied:
+
+- Inline `list_append_time` into `list_append_filters` (about 8 lines). The pair is the since/until contract.
+- Delete `write_time_order` and paste the ORDER BY twice (about 12 lines). The plan wants one place. The tie-break mutation is one string.
+- Drop the search `column == NULL` check (about 2 lines). A broken switch should return `STORE_ERR_INTERNAL`, as list does.
+
 ## Review Notes
 
 ### 2026-10-18 — in-session deep review (stage 1)
@@ -296,3 +331,19 @@ No new grill. `parse_filter_ts` does not reuse `parse_expires_to_iso`: that help
 **Praise:** the parser does not print and leaves `out` unchanged on rejection, so stage 3 can phrase the usage error in one place. The February 30 test is the hot spot the plan warned about.
 
 **Addendum (Itay 2026-10-18, `decision:plan17-literal-tz-expectations`):** the three time-zone tests now assert literal UTC instants instead of calling the `expected_local_midnight` oracle. That oracle ran the same `mktime` call as `parse_filter_ts`, so the two could share a wrong assumption. The literals are Jerusalem `2026-06-15` → `2026-06-14T21:00:00.000Z`, Los Angeles `2026-06-15` → `2026-06-15T07:00:00.000Z`, and Jerusalem `2026-10-25` → `2026-10-24T21:00:00.000Z`. This deviates from the must-pass row "expected value computed in the test". The cost: a literal fails if a zone's 2026 rules change in tzdata. `take_digits`, the oracle, its constants, and two includes are gone (77 lines). Mutation-checked: `tm_isdst = 0` instead of `-1` fails all three tests. Gate: ctest 5/5 (ASan/UBSan, `REMEMBER_TEST_VFS=ON`), LINT OK, coverage 100/100, `leaks-macos` PASS, `ci-linux.sh` OK, then `GATE-ALL-GREEN`, run in a clean worktree of `02b6850` because the coder had stage 2 work uncommitted in the main checkout.
+
+### 2026-10-18 — in-session deep review (stage 2)
+
+**Verdict:** approve for the second-opinion pass. No open blocking item. No grill. No new `decision:*`.
+
+**Ran:** ctest 5/5 with ASan/UBSan and `REMEMBER_TEST_VFS=ON`. `lint-all.sh` LINT OK. Coverage 100% functions and 100% effective lines (`must-cover: 0`). `leaks-macos` PASS. `ci-linux.sh` OK, including LINT OK. The base of that run is `b9eef14` plus this stage. These Review Notes were appended after that gate. No C file changed after it. [Bugbot](e606274b-5b80-42e7-9f21-9f6ede28c74d) reported a 32-byte `memcpy` in `parse_filter_ts`. The tree copies `ISO_BUFSIZE` (25), which is the size of the stack `canon` buffer (`src/commands_common.c`). That finding does not match the code. The store check matched E5.1–E5.3 and D11.
+
+**Pragmatic write-gate:** DRY PASS (one column map, one bound append, one ORDER BY). Easy-to-replace PASS (SQL stays in `store_sqlite.c`). Orthogonal PASS (list uses the sort column for order and bounds; search ignores sort and filters `updated_at`). No deferred markers.
+
+**Simplify:** three candidates, none applied. Inlining `list_append_time` saves about 8 lines and hides the inclusive/exclusive pair. Deleting `write_time_order` saves about 12 lines and duplicates the tie-break. Dropping the search NULL check saves about 2 lines and would format a null column.
+
+**Auto-fixed:** `store_search_since_filters_updated_at` now also asserts that equal search bounds are empty and that one millisecond later includes the edited row. Changing `<` to `<=` fails that assertion (count 1, expected 0). The gate above includes that assertion.
+
+**Left for later:** stage 3 is the CLI list/search flags, D11 validation, and help text. Help, SKILL, What's New, engineering notes, and `COVERAGE.md` stay stage 5.
+
+**Praise:** the creation-order test failed first by returning updated-at order.

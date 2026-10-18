@@ -604,7 +604,29 @@ TEST(store_close_null_is_safe)
 static const char k_hash_a[] = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 static const char k_hash_b[] = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
 static const char k_hash_c[] = "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc";
+static const char k_hash_d[] = "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd";
+static const char k_hash_e[] = "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee";
+static const char k_hash_f[] = "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff";
 static const char k_now[] = "2026-06-15T12:00:00.000Z";
+
+static void free_page(PageResult page)
+{
+    size_t i = 0;
+
+    for (i = 0; i < page.count; i++) {
+        store_entry_free(&page.entries[i]);
+    }
+    free(page.entries);
+}
+
+static void set_updated_at(const char *db, long long id, const char *updated)
+{
+    char sql[SQL_BUFSIZE];
+
+    (void)snprintf(sql, sizeof(sql), "UPDATE entries SET updated_at='%s' WHERE id=%lld;", updated,
+                   id);
+    free(harness_sqlite_query_line(db, sql));
+}
 
 TEST(store_get_loads_expires_at)
 {
@@ -1162,6 +1184,458 @@ TEST(store_purge_trash_deletes_only_expired)
     ASSERT_EQ_INT((int)n, 0);
     ASSERT_TRUE(gone == NULL);
 
+    store_close(s);
+    free(db);
+}
+
+/* E5.1: editing the oldest row must not change creation order. */
+TEST(store_list_sort_created_keeps_creation_order)
+{
+    char *db = make_temp_db_path();
+    char err[ERR_BUFSIZE];
+    Store *s = NULL;
+    Entry e;
+    StoreAddAction act = STORE_ADD_CREATED;
+    ListQuery q;
+    PageResult page;
+    size_t i = 0;
+
+    ASSERT_TRUE(db != NULL);
+    s = store_open(db, err, sizeof(err));
+    ASSERT_TRUE(s != NULL);
+    memset(&e, 0, sizeof(e));
+    ASSERT_EQ_STATUS(store_add(s, "oldest", k_hash_a, NULL, NULL, 0U, "human", NULL,
+                               "2026-01-01T00:00:00.000Z", &act, &e),
+                     STORE_OK);
+    store_entry_free(&e);
+    ASSERT_EQ_STATUS(store_add(s, "middle", k_hash_b, NULL, NULL, 0U, "human", NULL,
+                               "2026-02-01T00:00:00.000Z", &act, &e),
+                     STORE_OK);
+    store_entry_free(&e);
+    ASSERT_EQ_STATUS(store_add(s, "newest", k_hash_c, NULL, NULL, 0U, "human", NULL,
+                               "2026-03-01T00:00:00.000Z", &act, &e),
+                     STORE_OK);
+    store_entry_free(&e);
+    free(harness_sqlite_query_line(
+        db, "UPDATE entries SET updated_at='2026-04-01T00:00:00.000Z' WHERE id=1;"));
+
+    memset(&q, 0, sizeof(q));
+    q.limit = LIST_LIMIT;
+    q.sort = STORE_SORT_CREATED;
+    page = store_list(s, &q, k_now);
+    ASSERT_EQ_INT((int)page.st, (int)STORE_OK);
+    ASSERT_EQ_INT((int)page.count, 3);
+    ASSERT_EQ_INT((int)page.total, 3);
+    ASSERT_STREQ(page.entries[0].body, "newest");
+    ASSERT_STREQ(page.entries[1].body, "middle");
+    ASSERT_STREQ(page.entries[2].body, "oldest");
+    for (i = 0; i < page.count; i++) {
+        store_entry_free(&page.entries[i]);
+    }
+    free(page.entries);
+    store_close(s);
+    free(db);
+}
+
+/* E5.2: since includes the boundary instant; until excludes it. */
+TEST(store_list_since_inclusive_until_exclusive)
+{
+    char *db = make_temp_db_path();
+    char err[ERR_BUFSIZE];
+    Store *s = NULL;
+    Entry e;
+    StoreAddAction act = STORE_ADD_CREATED;
+    ListQuery q;
+    PageResult page;
+    size_t i = 0;
+
+    ASSERT_TRUE(db != NULL);
+    s = store_open(db, err, sizeof(err));
+    ASSERT_TRUE(s != NULL);
+    memset(&e, 0, sizeof(e));
+    ASSERT_EQ_STATUS(store_add(s, "before", k_hash_a, NULL, NULL, 0U, "human", NULL,
+                               "2026-06-01T00:00:00.000Z", &act, &e),
+                     STORE_OK);
+    store_entry_free(&e);
+    ASSERT_EQ_STATUS(store_add(s, "at_since", k_hash_b, NULL, NULL, 0U, "human", NULL,
+                               "2026-06-15T12:00:00.000Z", &act, &e),
+                     STORE_OK);
+    store_entry_free(&e);
+    ASSERT_EQ_STATUS(store_add(s, "at_until", k_hash_c, NULL, NULL, 0U, "human", NULL,
+                               "2026-06-20T00:00:00.000Z", &act, &e),
+                     STORE_OK);
+    store_entry_free(&e);
+
+    memset(&q, 0, sizeof(q));
+    q.limit = LIST_LIMIT;
+    q.since = "2026-06-15T12:00:00.000Z";
+    q.until = "2026-06-20T00:00:00.000Z";
+    page = store_list(s, &q, k_now);
+    ASSERT_EQ_INT((int)page.st, (int)STORE_OK);
+    ASSERT_EQ_INT((int)page.count, 1);
+    ASSERT_EQ_INT((int)page.total, 1);
+    ASSERT_STREQ(page.entries[0].body, "at_since");
+    for (i = 0; i < page.count; i++) {
+        store_entry_free(&page.entries[i]);
+    }
+    free(page.entries);
+    store_close(s);
+    free(db);
+}
+
+/* E5.1: zero and updated both follow the edit, not creation time. */
+TEST(store_list_updated_sort_puts_the_edit_first)
+{
+    char *db = make_temp_db_path();
+    char err[ERR_BUFSIZE];
+    Store *s = NULL;
+    Entry e;
+    StoreAddAction act = STORE_ADD_CREATED;
+    ListQuery q;
+    PageResult page;
+
+    ASSERT_TRUE(db != NULL);
+    s = store_open(db, err, sizeof(err));
+    ASSERT_TRUE(s != NULL);
+    memset(&e, 0, sizeof(e));
+    ASSERT_EQ_STATUS(store_add(s, "oldest", k_hash_a, NULL, NULL, 0U, "human", NULL,
+                               "2026-01-01T00:00:00.000Z", &act, &e),
+                     STORE_OK);
+    store_entry_free(&e);
+    ASSERT_EQ_STATUS(store_add(s, "middle", k_hash_b, NULL, NULL, 0U, "human", NULL,
+                               "2026-02-01T00:00:00.000Z", &act, &e),
+                     STORE_OK);
+    store_entry_free(&e);
+    ASSERT_EQ_STATUS(store_add(s, "newest", k_hash_c, NULL, NULL, 0U, "human", NULL,
+                               "2026-03-01T00:00:00.000Z", &act, &e),
+                     STORE_OK);
+    store_entry_free(&e);
+    set_updated_at(db, 1, "2026-04-01T00:00:00.000Z");
+
+    memset(&q, 0, sizeof(q));
+    q.limit = LIST_LIMIT;
+    page = store_list(s, &q, k_now);
+    ASSERT_EQ_INT((int)page.st, (int)STORE_OK);
+    ASSERT_STREQ(page.entries[0].body, "oldest");
+    ASSERT_STREQ(page.entries[1].body, "newest");
+    ASSERT_STREQ(page.entries[2].body, "middle");
+    free_page(page);
+
+    q.sort = STORE_SORT_UPDATED;
+    page = store_list(s, &q, k_now);
+    ASSERT_EQ_INT((int)page.st, (int)STORE_OK);
+    ASSERT_STREQ(page.entries[0].body, "oldest");
+    free_page(page);
+    store_close(s);
+    free(db);
+}
+
+/* E5.1: equal created_at breaks toward the higher id, not the later edit. */
+TEST(store_list_created_tie_breaks_by_id)
+{
+    char *db = make_temp_db_path();
+    char err[ERR_BUFSIZE];
+    Store *s = NULL;
+    Entry e;
+    StoreAddAction act = STORE_ADD_CREATED;
+    ListQuery q;
+    PageResult page;
+    long long low_id = 0;
+
+    ASSERT_TRUE(db != NULL);
+    s = store_open(db, err, sizeof(err));
+    ASSERT_TRUE(s != NULL);
+    memset(&e, 0, sizeof(e));
+    ASSERT_EQ_STATUS(store_add(s, "low-id", k_hash_a, NULL, NULL, 0U, "human", NULL,
+                               "2026-01-01T00:00:00.000Z", &act, &e),
+                     STORE_OK);
+    low_id = e.id;
+    store_entry_free(&e);
+    ASSERT_EQ_STATUS(store_add(s, "high-id", k_hash_b, NULL, NULL, 0U, "human", NULL,
+                               "2026-01-01T00:00:00.000Z", &act, &e),
+                     STORE_OK);
+    store_entry_free(&e);
+    set_updated_at(db, low_id, "2026-09-01T00:00:00.000Z");
+
+    memset(&q, 0, sizeof(q));
+    q.limit = LIST_LIMIT;
+    q.sort = STORE_SORT_CREATED;
+    page = store_list(s, &q, k_now);
+    ASSERT_EQ_INT((int)page.st, (int)STORE_OK);
+    ASSERT_EQ_INT((int)page.count, 2);
+    ASSERT_STREQ(page.entries[0].body, "high-id");
+    ASSERT_STREQ(page.entries[1].body, "low-id");
+    free_page(page);
+    store_close(s);
+    free(db);
+}
+
+/* E5.2: since/until use created_at or updated_at with the sort. */
+TEST(store_list_since_follows_sort_column)
+{
+    char *db = make_temp_db_path();
+    char err[ERR_BUFSIZE];
+    Store *s = NULL;
+    Entry e;
+    StoreAddAction act = STORE_ADD_CREATED;
+    ListQuery q;
+    PageResult page;
+
+    ASSERT_TRUE(db != NULL);
+    s = store_open(db, err, sizeof(err));
+    ASSERT_TRUE(s != NULL);
+    memset(&e, 0, sizeof(e));
+    ASSERT_EQ_STATUS(store_add(s, "moved", k_hash_a, NULL, NULL, 0U, "human", NULL,
+                               "2026-01-01T00:00:00.000Z", &act, &e),
+                     STORE_OK);
+    store_entry_free(&e);
+    set_updated_at(db, 1, "2026-08-01T00:00:00.000Z");
+
+    memset(&q, 0, sizeof(q));
+    q.limit = LIST_LIMIT;
+    q.since = "2026-03-01T00:00:00.000Z";
+    q.sort = STORE_SORT_CREATED;
+    page = store_list(s, &q, k_now);
+    ASSERT_EQ_INT((int)page.st, (int)STORE_OK);
+    ASSERT_EQ_INT((int)page.count, 0);
+    ASSERT_EQ_INT((int)page.total, 0);
+    free_page(page);
+
+    q.sort = STORE_SORT_UPDATED;
+    page = store_list(s, &q, k_now);
+    ASSERT_EQ_INT((int)page.st, (int)STORE_OK);
+    ASSERT_EQ_INT((int)page.count, 1);
+    ASSERT_EQ_INT((int)page.total, 1);
+    ASSERT_STREQ(page.entries[0].body, "moved");
+    free_page(page);
+    store_close(s);
+    free(db);
+}
+
+/* D11: since >= until is an empty page, not an error. */
+TEST(store_list_crossed_bounds_are_empty)
+{
+    char *db = make_temp_db_path();
+    char err[ERR_BUFSIZE];
+    Store *s = NULL;
+    Entry e;
+    StoreAddAction act = STORE_ADD_CREATED;
+    ListQuery q;
+    PageResult page;
+
+    ASSERT_TRUE(db != NULL);
+    s = store_open(db, err, sizeof(err));
+    ASSERT_TRUE(s != NULL);
+    memset(&e, 0, sizeof(e));
+    ASSERT_EQ_STATUS(store_add(s, "row", k_hash_a, NULL, NULL, 0U, "human", NULL,
+                               "2026-06-15T12:00:00.000Z", &act, &e),
+                     STORE_OK);
+    store_entry_free(&e);
+
+    memset(&q, 0, sizeof(q));
+    q.limit = LIST_LIMIT;
+    q.since = "2026-06-15T12:00:00.000Z";
+    q.until = "2026-06-15T12:00:00.000Z";
+    page = store_list(s, &q, k_now);
+    ASSERT_EQ_INT((int)page.st, (int)STORE_OK);
+    ASSERT_EQ_INT((int)page.count, 0);
+    ASSERT_EQ_INT((int)page.total, 0);
+    free_page(page);
+
+    q.since = "2026-07-01T00:00:00.000Z";
+    q.until = "2026-06-01T00:00:00.000Z";
+    page = store_list(s, &q, k_now);
+    ASSERT_EQ_INT((int)page.st, (int)STORE_OK);
+    ASSERT_EQ_INT((int)page.count, 0);
+    ASSERT_EQ_INT((int)page.total, 0);
+    free_page(page);
+    store_close(s);
+    free(db);
+}
+
+/* E5.3: search since/until stay on updated_at when sort is created. */
+TEST(store_search_since_filters_updated_at)
+{
+    char *db = make_temp_db_path();
+    char err[ERR_BUFSIZE];
+    Store *s = NULL;
+    Entry e;
+    StoreAddAction act = STORE_ADD_CREATED;
+    SearchQuery sq;
+    PageResult page;
+
+    ASSERT_TRUE(db != NULL);
+    s = store_open(db, err, sizeof(err));
+    ASSERT_TRUE(s != NULL);
+    memset(&e, 0, sizeof(e));
+    ASSERT_EQ_STATUS(store_add(s, "edited alpha", k_hash_a, NULL, NULL, 0U, "human", NULL,
+                               "2026-01-01T00:00:00.000Z", &act, &e),
+                     STORE_OK);
+    store_entry_free(&e);
+    set_updated_at(db, 1, "2026-08-01T00:00:00.000Z");
+    ASSERT_EQ_STATUS(store_add(s, "backdated alpha", k_hash_b, NULL, NULL, 0U, "human", NULL,
+                               "2026-09-01T00:00:00.000Z", &act, &e),
+                     STORE_OK);
+    store_entry_free(&e);
+    set_updated_at(db, 2, "2026-06-01T00:00:00.000Z");
+
+    memset(&sq, 0, sizeof(sq));
+    sq.query = "alpha";
+    sq.filters.limit = LIST_LIMIT;
+    sq.filters.sort = STORE_SORT_CREATED;
+    sq.filters.since = "2026-07-15T00:00:00.000Z";
+    page = store_search(s, &sq, k_now);
+    ASSERT_EQ_INT((int)page.st, (int)STORE_OK);
+    ASSERT_EQ_INT((int)page.count, 1);
+    ASSERT_EQ_INT((int)page.total, 1);
+    ASSERT_STREQ(page.entries[0].body, "edited alpha");
+    free_page(page);
+
+    sq.filters.since = "2026-08-01T00:00:00.000Z";
+    sq.filters.until = "2026-08-01T00:00:00.000Z";
+    page = store_search(s, &sq, k_now);
+    ASSERT_EQ_INT((int)page.st, (int)STORE_OK);
+    ASSERT_EQ_INT((int)page.count, 0);
+    ASSERT_EQ_INT((int)page.total, 0);
+    free_page(page);
+
+    sq.filters.until = "2026-08-01T00:00:00.001Z";
+    page = store_search(s, &sq, k_now);
+    ASSERT_EQ_INT((int)page.st, (int)STORE_OK);
+    ASSERT_EQ_INT((int)page.count, 1);
+    ASSERT_EQ_INT((int)page.total, 1);
+    ASSERT_STREQ(page.entries[0].body, "edited alpha");
+    free_page(page);
+    store_close(s);
+    free(db);
+}
+
+/* Time bounds AND with tag, source, key, bin, and paging. total is the filtered set. */
+TEST(store_list_bounds_compose_with_filters)
+{
+    char *db = make_temp_db_path();
+    char err[ERR_BUFSIZE];
+    Store *s = NULL;
+    Entry e;
+    StoreAddAction act = STORE_ADD_CREATED;
+    const char *tag_t[] = {"t"};
+    const char *tag_z[] = {"z"};
+    ListQuery q;
+    PageResult page;
+
+    ASSERT_TRUE(db != NULL);
+    s = store_open(db, err, sizeof(err));
+    ASSERT_TRUE(s != NULL);
+    memset(&e, 0, sizeof(e));
+    ASSERT_EQ_STATUS(store_add(s, "in-a", k_hash_a, NULL, tag_t, 1U, "human", NULL,
+                               "2026-06-10T00:00:00.000Z", &act, &e),
+                     STORE_OK);
+    store_entry_free(&e);
+    ASSERT_EQ_STATUS(store_add(s, "in-b", k_hash_b, "slot", tag_t, 1U, "human", NULL,
+                               "2026-06-12T00:00:00.000Z", &act, &e),
+                     STORE_OK);
+    store_entry_free(&e);
+    ASSERT_EQ_STATUS(store_add(s, "other-tag", k_hash_c, NULL, tag_z, 1U, "human", NULL,
+                               "2026-06-12T00:00:00.000Z", &act, &e),
+                     STORE_OK);
+    store_entry_free(&e);
+    ASSERT_EQ_STATUS(store_add(s, "other-source", k_hash_d, NULL, tag_t, 1U, "agent", NULL,
+                               "2026-06-12T00:00:00.000Z", &act, &e),
+                     STORE_OK);
+    store_entry_free(&e);
+    ASSERT_EQ_STATUS(store_add(s, "too-early", k_hash_e, NULL, tag_t, 1U, "human", NULL,
+                               "2026-05-01T00:00:00.000Z", &act, &e),
+                     STORE_OK);
+    store_entry_free(&e);
+    ASSERT_EQ_STATUS(store_add(s, "expired-in", k_hash_f, NULL, tag_t, 1U, "human", NULL,
+                               "2026-06-11T00:00:00.000Z", &act, &e),
+                     STORE_OK);
+    store_entry_free(&e);
+    free(harness_sqlite_query_line(
+        db, "UPDATE entries SET expires_at='2020-01-01T00:00:00.000Z' WHERE id=6;"));
+
+    memset(&q, 0, sizeof(q));
+    q.tags = tag_t;
+    q.ntags = 1U;
+    q.source = "human";
+    q.limit = 1U;
+    q.offset = 0U;
+    q.since = "2026-06-01T00:00:00.000Z";
+    q.until = "2026-07-01T00:00:00.000Z";
+    page = store_list(s, &q, k_now);
+    ASSERT_EQ_INT((int)page.st, (int)STORE_OK);
+    ASSERT_EQ_INT((int)page.count, 1);
+    ASSERT_EQ_INT((int)page.total, 2);
+    ASSERT_STREQ(page.entries[0].body, "in-b");
+    free_page(page);
+
+    q.offset = 1U;
+    page = store_list(s, &q, k_now);
+    ASSERT_EQ_INT((int)page.st, (int)STORE_OK);
+    ASSERT_EQ_INT((int)page.count, 1);
+    ASSERT_EQ_INT((int)page.total, 2);
+    ASSERT_STREQ(page.entries[0].body, "in-a");
+    free_page(page);
+
+    q.offset = 2U;
+    page = store_list(s, &q, k_now);
+    ASSERT_EQ_INT((int)page.st, (int)STORE_OK);
+    ASSERT_EQ_INT((int)page.count, 0);
+    ASSERT_EQ_INT((int)page.total, 2);
+    free_page(page);
+
+    memset(&q, 0, sizeof(q));
+    q.key = "slot";
+    q.limit = LIST_LIMIT;
+    q.since = "2026-06-01T00:00:00.000Z";
+    q.until = "2026-07-01T00:00:00.000Z";
+    page = store_list(s, &q, k_now);
+    ASSERT_EQ_INT((int)page.st, (int)STORE_OK);
+    ASSERT_EQ_INT((int)page.count, 1);
+    ASSERT_EQ_INT((int)page.total, 1);
+    ASSERT_STREQ(page.entries[0].body, "in-b");
+    free_page(page);
+
+    memset(&q, 0, sizeof(q));
+    q.tags = tag_t;
+    q.ntags = 1U;
+    q.source = "human";
+    q.bin = STORE_BIN_EXPIRED;
+    q.limit = LIST_LIMIT;
+    q.since = "2026-06-01T00:00:00.000Z";
+    q.until = "2026-07-01T00:00:00.000Z";
+    page = store_list(s, &q, k_now);
+    ASSERT_EQ_INT((int)page.st, (int)STORE_OK);
+    ASSERT_EQ_INT((int)page.count, 1);
+    ASSERT_EQ_INT((int)page.total, 1);
+    ASSERT_STREQ(page.entries[0].body, "expired-in");
+    free_page(page);
+    store_close(s);
+    free(db);
+}
+
+TEST(store_list_unknown_sort_is_internal)
+{
+    char *db = make_temp_db_path();
+    char err[ERR_BUFSIZE];
+    Store *s = NULL;
+    ListQuery q;
+    PageResult page;
+    enum { UNKNOWN_STORE_SORT = 7 };
+
+    ASSERT_TRUE(db != NULL);
+    s = store_open(db, err, sizeof(err));
+    ASSERT_TRUE(s != NULL);
+    memset(&q, 0, sizeof(q));
+    q.limit = LIST_LIMIT;
+    /* NOLINTNEXTLINE(clang-analyzer-optin.core.EnumCastOutOfRange) */
+    q.sort = (StoreSort)UNKNOWN_STORE_SORT;
+    q.since = "2026-01-01T00:00:00.000Z";
+    page = store_list(s, &q, k_now);
+    ASSERT_EQ_INT((int)page.st, (int)STORE_ERR_INTERNAL);
+    ASSERT_TRUE(page.entries == NULL);
+    ASSERT_EQ_INT((int)page.count, 0);
+    ASSERT_EQ_INT((int)page.total, 0);
     store_close(s);
     free(db);
 }
@@ -1906,6 +2380,15 @@ void register_store_tests(void)
     RUN_TEST(store_add_keyed_revives_expired);
     RUN_TEST(store_add_past_expires_born_in_trash);
     RUN_TEST(store_purge_trash_deletes_only_expired);
+    RUN_TEST(store_list_sort_created_keeps_creation_order);
+    RUN_TEST(store_list_since_inclusive_until_exclusive);
+    RUN_TEST(store_list_updated_sort_puts_the_edit_first);
+    RUN_TEST(store_list_created_tie_breaks_by_id);
+    RUN_TEST(store_list_since_follows_sort_column);
+    RUN_TEST(store_list_crossed_bounds_are_empty);
+    RUN_TEST(store_search_since_filters_updated_at);
+    RUN_TEST(store_list_bounds_compose_with_filters);
+    RUN_TEST(store_list_unknown_sort_is_internal);
     RUN_TEST(store_list_filters_and_paging);
     RUN_TEST(store_update_body_and_tags);
     RUN_TEST(store_delete_by_id_gcs_orphan_tags);

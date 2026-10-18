@@ -38,6 +38,9 @@ typedef enum {
 
 /* Locator / list / search / tags bin. LIVE is the zero value (zero-init queries). */
 typedef enum { STORE_BIN_LIVE = 0, STORE_BIN_EXPIRED, STORE_BIN_DELETED } StoreBin;
+
+/* List time column. UPDATED is the zero value (zero-init queries keep today's order). */
+typedef enum { STORE_SORT_UPDATED = 0, STORE_SORT_CREATED } StoreSort;
 /* live: no deleted_at and (no expiry or expires_at > now);
  * expired: no deleted_at and expires_at <= now;
  * deleted: deleted_at set. now may be NULL (then expiry cannot match). */
@@ -217,6 +220,9 @@ StoreStatus store_get_by_sync_id(Store *s, const char *sync_id, StoreBin bin, co
  * List filters (AND across tags). All string fields are normalized by the
  * command layer; NULL / ntags==0 means "no filter on that axis".
  * limit and offset are required as given (CLI enforces default/max/min).
+ * sort is the list time column (order and since/until). Zero is updated.
+ * since is inclusive and until is exclusive; both are canonical .mmmZ or NULL.
+ * Search reuses the struct: it ignores sort and applies since/until to updated_at.
  */
 typedef struct {
     const char *const *tags; /* may be NULL when ntags == 0 */
@@ -225,8 +231,10 @@ typedef struct {
     size_t ntags;
     size_t limit;
     size_t offset;
-    StoreBin bin; /* LIVE (default) / EXPIRED / DELETED */
-    char pad_[4]; /* explicit tail padding to keep the struct -Wpadded-clean */
+    StoreBin bin;   /* LIVE (default) / EXPIRED / DELETED */
+    StoreSort sort; /* UPDATED (zero) / CREATED */
+    const char *since;
+    const char *until;
 } ListQuery;
 
 /*
@@ -244,16 +252,18 @@ typedef struct {
 } PageResult;
 
 /*
- * List entries newest-first (updated_at DESC, id DESC) with optional filters.
+ * List entries by the sort column DESC, then id DESC, with optional filters.
+ * Zero sort is updated_at. since/until bound that same column.
  * now is required (canonical .mmmZ). Bin filter: live / expired / deleted.
- * See PageResult for ownership.
+ * See PageResult for ownership. An unknown sort is STORE_ERR_INTERNAL.
  */
 PageResult store_list(Store *s, const ListQuery *q, const char *now);
 
 /*
  * Ranked FTS5 search. query is raw FTS5 MATCH syntax (required, non-empty at CLI).
- * filters reuse ListQuery: tag AND, optional source/key, limit/offset.
- * Rank: bm25(entries_fts) ASC, then updated_at DESC, id DESC.
+ * filters reuse ListQuery: tag AND, optional source/key, limit/offset, since/until.
+ * Rank stays bm25(entries_fts) ASC, then updated_at DESC, id DESC. filters.sort
+ * is ignored. since/until filter updated_at, not the sort column.
  * Same ownership as store_list (see PageResult). STORE_ERR_QUERY on bad MATCH syntax.
  */
 typedef struct {

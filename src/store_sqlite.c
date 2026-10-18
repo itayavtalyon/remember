@@ -3293,8 +3293,79 @@ static int list_append_bin(char *sql, size_t sql_cap, size_t *pos, int *nbinds,
     return 0;
 }
 
+/*
+ * The only map from a list sort to a column name. List order and list
+ * since/until both use it. Search asks for UPDATED and ignores ListQuery.sort.
+ * NULL is an unknown sort (programmer error).
+ */
+static const char *list_sort_column(StoreSort sort)
+{
+    switch (sort) {
+    case STORE_SORT_UPDATED:
+        return "updated_at";
+    case STORE_SORT_CREATED:
+        return "created_at";
+    default:
+        return NULL;
+    }
+}
+
+/* prefix is empty for list, or "bm25(entries_fts), " for search. */
+enum { TIME_ORDER_CAP = 64 };
+
+static int write_time_order(char *dst, size_t cap, const char *prefix, const char *column)
+{
+    int n = snprintf(dst, cap, "ORDER BY %se.%s DESC, e.id DESC", prefix, column);
+
+    if (n < 0 || (size_t)n >= cap) {
+        return -1;
+    }
+    return 0;
+}
+
+/* One bound. inclusive is >= (since); the other side is < (until). NULL skips. */
+static int list_append_cmp(char *sql, size_t sql_cap, size_t *pos, int *nbinds,
+                           const char **bind_text, size_t bind_cap, const char *column,
+                           bool inclusive, const char *value)
+{
+    int n = 0;
+
+    if (value == NULL) {
+        return 0;
+    }
+    if ((size_t)*nbinds >= bind_cap) {
+        return -1;
+    }
+    if (inclusive) {
+        n = snprintf(sql + *pos, sql_cap - *pos, " AND e.%s >= ?%d", column, *nbinds + 1);
+    } else {
+        n = snprintf(sql + *pos, sql_cap - *pos, " AND e.%s < ?%d", column, *nbinds + 1);
+    }
+    if (n < 0 || (size_t)n >= sql_cap - *pos) {
+        return -1;
+    }
+    *pos += (size_t)n;
+    bind_text[(*nbinds)++] = value;
+    return 0;
+}
+
+/*
+ * since is inclusive, until is exclusive. NULL skips that side.
+ * column comes from list_sort_column. The timestamp is bound, never pasted.
+ */
+static int list_append_time(char *sql, size_t sql_cap, size_t *pos, int *nbinds,
+                            const char **bind_text, size_t bind_cap, const char *column,
+                            const char *since, const char *until)
+{
+    if (list_append_cmp(sql, sql_cap, pos, nbinds, bind_text, bind_cap, column, true, since) != 0) {
+        return -1;
+    }
+    return list_append_cmp(sql, sql_cap, pos, nbinds, bind_text, bind_cap, column, false, until);
+}
+
 static int list_append_filters(const ListQuery *q, char *sql, size_t sql_cap, size_t *pos,
-                               int *nbinds, const char **bind_text, size_t bind_cap)
+                               int *nbinds, const char **bind_text, size_t bind_cap,
+                               const char *time_column)
 {
     size_t t = 0;
 
@@ -3313,22 +3384,24 @@ static int list_append_filters(const ListQuery *q, char *sql, size_t sql_cap, si
             return -1;
         }
     }
-    return 0;
+    return list_append_time(sql, sql_cap, pos, nbinds, bind_text, bind_cap, time_column, q->since,
+                            q->until);
 }
 
 /*
  * Build list WHERE clause fragments and bind params.
  * sql_out must be large enough (caller-sized); returns -1 if truncated.
  */
-static int list_build_where(const ListQuery *q, const char *now, char *sql, size_t sql_cap,
-                            int *out_nbinds, const char **bind_text, size_t bind_cap)
+static int list_build_where(const ListQuery *q, const char *now, const char *time_column, char *sql,
+                            size_t sql_cap, int *out_nbinds, const char **bind_text,
+                            size_t bind_cap)
 {
     size_t pos = 0U;
     int nbinds = 0;
     int n = 0;
 
-    if (q == NULL || now == NULL || sql == NULL || sql_cap == 0U || out_nbinds == NULL ||
-        bind_text == NULL) {
+    if (q == NULL || now == NULL || time_column == NULL || sql == NULL || sql_cap == 0U ||
+        out_nbinds == NULL || bind_text == NULL) {
         return -1;
     }
     n = snprintf(sql, sql_cap, " WHERE 1=1");
@@ -3337,7 +3410,8 @@ static int list_build_where(const ListQuery *q, const char *now, char *sql, size
     }
     pos = (size_t)n;
 
-    if (list_append_filters(q, sql, sql_cap, &pos, &nbinds, bind_text, bind_cap) != 0) {
+    if (list_append_filters(q, sql, sql_cap, &pos, &nbinds, bind_text, bind_cap, time_column) !=
+        0) {
         return -1;
     }
     if (list_append_bin(sql, sql_cap, &pos, &nbinds, bind_text, bind_cap, q->bin, now) != 0) {
@@ -3352,15 +3426,16 @@ static int list_build_where(const ListQuery *q, const char *now, char *sql, size
  * aliases for MATCH/bm25), then the same entry filters as list.
  * Bind slot 1 is the MATCH query; filters continue from 2.
  */
-static int search_build_where(const SearchQuery *q, const char *now, char *sql, size_t sql_cap,
-                              int *out_nbinds, const char **bind_text, size_t bind_cap)
+static int search_build_where(const SearchQuery *q, const char *now, const char *time_column,
+                              char *sql, size_t sql_cap, int *out_nbinds, const char **bind_text,
+                              size_t bind_cap)
 {
     size_t pos = 0U;
     int nbinds = 0;
     int n = 0;
 
-    if (q == NULL || q->query == NULL || now == NULL || sql == NULL || sql_cap == 0U ||
-        out_nbinds == NULL || bind_text == NULL || bind_cap < 1U) {
+    if (q == NULL || q->query == NULL || now == NULL || time_column == NULL || sql == NULL ||
+        sql_cap == 0U || out_nbinds == NULL || bind_text == NULL || bind_cap < 1U) {
         return -1;
     }
     n = snprintf(sql, sql_cap, " WHERE entries_fts MATCH ?1");
@@ -3371,7 +3446,9 @@ static int search_build_where(const SearchQuery *q, const char *now, char *sql, 
     bind_text[0] = q->query;
     nbinds = 1;
 
-    if (list_append_filters(&q->filters, sql, sql_cap, &pos, &nbinds, bind_text, bind_cap) != 0) {
+    /* time_column is updated_at. Search ignores ListQuery.sort (E5.3). */
+    if (list_append_filters(&q->filters, sql, sql_cap, &pos, &nbinds, bind_text, bind_cap,
+                            time_column) != 0) {
         return -1;
     }
     if (list_append_bin(sql, sql_cap, &pos, &nbinds, bind_text, bind_cap, q->filters.bin, now) !=
@@ -3501,8 +3578,9 @@ static PageResult run_count_and_page(sqlite3 *db, const char *count_sql, const c
 }
 
 /*
- * List: newest-first page with filters. count_sql/select_sql pad LIST_SQL_CAP for
- * the fixed SELECT column list + ORDER BY + LIMIT/OFFSET that frame where_sql.
+ * List: page ordered by the sort column DESC, then id DESC. count_sql/select_sql
+ * pad LIST_SQL_CAP for the fixed SELECT column list + ORDER BY + LIMIT/OFFSET
+ * that frame where_sql.
  */
 static PageResult list_query_exec(sqlite3 *db, const ListQuery *q, const char *now,
                                   StoreError *serr)
@@ -3514,11 +3592,17 @@ static PageResult list_query_exec(sqlite3 *db, const ListQuery *q, const char *n
     char count_sql[(size_t)LIST_SQL_CAP + (size_t)COUNT_FRAME_MARGIN];
     char select_sql[(size_t)LIST_SQL_CAP + (size_t)SELECT_FRAME_MARGIN];
     const char *bind_text[LIST_BIND_CAP];
+    const char *column = NULL;
+    char order[TIME_ORDER_CAP];
     int nbinds = 0;
     int sn = 0;
 
-    if (list_build_where(q, now, where_sql, sizeof(where_sql), &nbinds, bind_text, LIST_BIND_CAP) !=
-        0) {
+    column = list_sort_column(q->sort);
+    if (column == NULL || write_time_order(order, sizeof(order), "", column) != 0) {
+        return (PageResult){.st = STORE_ERR_INTERNAL};
+    }
+    if (list_build_where(q, now, column, where_sql, sizeof(where_sql), &nbinds, bind_text,
+                         LIST_BIND_CAP) != 0) {
         return (PageResult){.st = STORE_ERR_INTERNAL};
     }
     sn = snprintf(count_sql, sizeof(count_sql), "SELECT COUNT(*) FROM entries e%s;", where_sql);
@@ -3528,9 +3612,9 @@ static PageResult list_query_exec(sqlite3 *db, const ListQuery *q, const char *n
     sn = snprintf(select_sql, sizeof(select_sql),
                   "SELECT e.id, e.key, e.body, e.source, e.created_at, e.updated_at, e.expires_at, "
                   "e.sync_id, e.deleted_at, e.version_vector "
-                  "FROM entries e%s ORDER BY e.updated_at DESC, e.id DESC "
+                  "FROM entries e%s %s "
                   "LIMIT ?%d OFFSET ?%d;",
-                  where_sql, nbinds + 1, nbinds + 2);
+                  where_sql, order, nbinds + 1, nbinds + 2);
     if (sn < 0 || (size_t)sn >= sizeof(select_sql)) {
         return (PageResult){.st = STORE_ERR_INTERNAL};
     }
@@ -3585,10 +3669,18 @@ static PageResult search_query_exec(sqlite3 *db, const SearchQuery *q, const cha
     char count_sql[(size_t)LIST_SQL_CAP + (size_t)COUNT_FRAME_MARGIN];
     char select_sql[(size_t)LIST_SQL_CAP + (size_t)SELECT_FRAME_MARGIN];
     const char *bind_text[LIST_BIND_CAP];
+    const char *column = NULL;
+    char order[TIME_ORDER_CAP];
     int nbinds = 0;
     int sn = 0;
 
-    if (search_build_where(q, now, where_sql, sizeof(where_sql), &nbinds, bind_text,
+    /* E5.3: search rank stays bm25, then updated_at. Sort on the query is ignored. */
+    column = list_sort_column(STORE_SORT_UPDATED);
+    if (column == NULL ||
+        write_time_order(order, sizeof(order), "bm25(entries_fts), ", column) != 0) {
+        return (PageResult){.st = STORE_ERR_INTERNAL};
+    }
+    if (search_build_where(q, now, column, where_sql, sizeof(where_sql), &nbinds, bind_text,
                            LIST_BIND_CAP) != 0) {
         return (PageResult){.st = STORE_ERR_INTERNAL};
     }
@@ -3604,9 +3696,9 @@ static PageResult search_query_exec(sqlite3 *db, const SearchQuery *q, const cha
                   "e.sync_id, e.deleted_at, e.version_vector "
                   "FROM entries e "
                   "JOIN entries_fts ON entries_fts.rowid = e.id%s "
-                  "ORDER BY bm25(entries_fts), e.updated_at DESC, e.id DESC "
+                  "%s "
                   "LIMIT ?%d OFFSET ?%d;",
-                  where_sql, nbinds + 1, nbinds + 2);
+                  where_sql, order, nbinds + 1, nbinds + 2);
     if (sn < 0 || (size_t)sn >= sizeof(select_sql)) {
         return (PageResult){.st = STORE_ERR_INTERNAL};
     }
