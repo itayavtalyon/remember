@@ -848,7 +848,9 @@ Probes that stayed usage errors: a quote in `--since`, `--sort updated; DROP TAB
 
 **Pragmatic write-gate:** DRY PASS (one malformed check, used for the given token and the stored vector). Easy-to-replace PASS (`store.h` stays the port). Orthogonal PASS (the sort column is still only the enum).
 
-**Grades:** coder 8/10, stage-reviewer 8/10. The new pointers are below. They are not in `standard:coding` until Itay accepts them.
+**Grades:** coder 8/10, stage-reviewer 8/10. Itay accepted the pointers below as `standard:coding` round 7.
+
+**Follow-up.** The plain-line split and a repeated device key are [plan 17a](17a-plain-line-and-duplicate-vv.md). The other leftovers stay, for the reasons in that plan.
 
 ```text
 Coder: When a check asks SQLite whether a JSON number is an integer, also compare the value just past int64 max with the saturated cast. Type integer does not mean the number survived the cast.
