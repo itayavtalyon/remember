@@ -138,6 +138,63 @@ ishill="$HOME/.claude/skills/remember/SKILL.md"
 assert "install.sh copies a regular file" test -f "$ishill"
 assert "install.sh copy is not a symlink" test ! -L "$ishill"
 
+# 8-10. install.sh --bin-only never installs a stale Release binary.
+#       A stub cmake on PATH stands in for the real build: `--build TREE`
+#       writes TREE/remember printing "remember $STUB_VERSION".
+want_ver="$(sed -n 's/^project(remember VERSION \([0-9.]*\).*/\1/p' "$ROOT/CMakeLists.txt")"
+stubbin="$TMP/stubbin"
+mkdir -p "$stubbin"
+cat >"$stubbin/cmake" <<'EOF'
+#!/usr/bin/env bash
+echo "$*" >>"$STUB_LOG"
+[[ "$1" == "--build" && -n "$STUB_VERSION" ]] || exit 0
+printf '#!/bin/sh\necho "remember %s"\n' "$STUB_VERSION" >"$2/remember"
+chmod +x "$2/remember"
+EOF
+chmod +x "$stubbin/cmake"
+
+stale_tree() {
+  mkdir -p "$1"
+  printf '#!/bin/sh\necho "remember 0.0.1"\n' >"$1/remember"
+  chmod +x "$1/remember"
+}
+
+run_bin_install() {
+  set +e
+  out="$(
+    PATH="$stubbin:$PATH" STUB_LOG="$TMP/cmake.log" STUB_VERSION="$1" \
+      REMEMBER_RELEASE_DIR="$TMP/rel" "$ROOT/scripts/install.sh" \
+      --bin-only --prefix "$TMP/binprefix" "${@:2}" 2>&1
+  )"
+  rc=$?
+  set -e
+}
+
+# 8. Existing clean stale binary is rebuilt (incremental build always runs).
+rm -rf "$TMP/rel" "$TMP/binprefix" "$TMP/cmake.log"
+stale_tree "$TMP/rel"
+run_bin_install "$want_ver"
+assert_eq "stale binary: install exits 0" "$rc" "0"
+assert "stale binary: cmake --build ran" grep -q -- '--build' "$TMP/cmake.log"
+assert_eq "stale binary: installed version is current" \
+  "$("$TMP/binprefix/bin/remember" --version)" "remember $want_ver"
+
+# 9. Build leaves a mismatched binary -> fail loudly, install nothing.
+rm -rf "$TMP/rel" "$TMP/binprefix" "$TMP/cmake.log"
+stale_tree "$TMP/rel"
+run_bin_install ""
+assert_eq "version mismatch exits 1" "$rc" "1"
+assert "version mismatch names both versions" \
+  grep -q "0.0.1.*$want_ver" <<<"$out"
+assert "version mismatch installs nothing" test ! -e "$TMP/binprefix/bin/remember"
+
+# 10. --no-build skips cmake but still refuses a stale binary.
+rm -rf "$TMP/rel" "$TMP/binprefix" "$TMP/cmake.log"
+stale_tree "$TMP/rel"
+run_bin_install "$want_ver" --no-build
+assert_eq "--no-build stale exits 1" "$rc" "1"
+assert "--no-build does not run cmake" test ! -e "$TMP/cmake.log"
+
 if [[ "$FAILS" -ne 0 ]]; then
   echo "$FAILS failure(s)" >&2
   exit 1
