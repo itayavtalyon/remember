@@ -37,7 +37,7 @@ main → cli_parse → commands.h (cmd_add | cmd_locator | cmd_query) → store_
 | 14 | [Sync foundations](14-sync-foundations.md) | `sync_id` v7; soft-delete bins; per-file sidecar + local-only devices + VV; import merge + conflicts; `--sync-id` locators (design 005 Round 7) |
 | 15 | [Schema v5 + device id](15-schema-v5-device-id.md) | `user_version` 5; FTS `key, body, tags` + Hebrew fold; `bucket_prefixes`/`settings`/`conflicts.origin`; `devices` dropped; sidecar-only id; `device` / `device new` (006 §1, §12) ✅ |
 | 16 | [Actionable errors](16-actionable-errors.md) | `--json-errors`; code catalog; SQLite cause split + fix text + `detail`; warnings; `--busy-timeout`; `--no-create`; `repair search-index`; test VFS shim (006 §3) ✅ |
-| 17 | [List dates + stale guard](17-list-dates-stale-guard.md) | `list --sort/--since/--until`; search date filters; `update --if-updated-at` → `stale` (006 §4, §7) |
+| 17 | [List dates + stale guard](17-list-dates-stale-guard.md) | `list --sort/--since/--until`; search date filters; `update --if-version-vector` → `stale` (006 §4, §7) |
 | 18 | [Union search](18-union-search.md) | Prefix ∪ raw FTS; never fails on input; `keys`/`tags` facets with tiers; utf8proc vendored (006 §2, §9) |
 | 19 | [Bucket prefixes](19-bucket-prefixes.md) | `config get/set bucket-prefixes`; add-wins set + tombstones; cap 8 + overflow (006 §11) |
 | 20 | [Export](20-export.md) | `export --format json|md|csv`; deterministic; atomic write + `--force` (006 §5) |

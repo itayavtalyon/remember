@@ -135,12 +135,16 @@ static void print_command_help(CliCommand topic)
         (void)fprintf(out, "  --expires TS    Set absolute expiry\n");
         (void)fprintf(out, "  --clear-expires Remove expiry\n");
         (void)fprintf(out, "  --undelete      Clear deleted_at (use with --deleted)\n");
+        (void)fprintf(out, "  --if-version-vector VV\n");
+        (void)fprintf(out, "                  Write only when version_vector equals VV\n");
         (void)fprintf(out, "\n");
         (void)fprintf(out, "Exactly one of ID, --key, or --sync-id is required.\n");
         (void)fprintf(out, "At least one of --text, --tag, --clear-tags, --ttl, --expires,\n");
         (void)fprintf(out, "--clear-expires, or --undelete is required.\n");
         (void)fprintf(out, "Cannot combine --tag with --clear-tags.\n");
         (void)fprintf(out, "Cannot combine --clear-expires with --ttl or --expires.\n");
+        (void)fprintf(out, "A version-vector mismatch is code stale "
+                           "(memory changed since it was read) and writes nothing.\n");
         (void)fprintf(out, "\n");
     } else if (topic == CLI_CMD_LIST) {
         (void)fprintf(out, "Options:\n");

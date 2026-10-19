@@ -121,6 +121,7 @@ remember --json add --source agent -- -
 remember --json search "editor preference"
 remember --json search --tag project:foo --limit 20 --offset 0 "FTS query"
 remember --json list --tag pref --limit 20
+remember --json list --sort created --since 2026-10-19
 remember --json list --expired
 remember --json tags
 ```
@@ -129,7 +130,9 @@ remember --json tags
 - Filters: `--tag` (AND, repeatable), `--key`, `--source`, `--limit` (default 20, max 1000), `--offset` (≥ 0), `--expired` / `--deleted` (default **live only**)
 - JSON envelope: `version`, `offset`, `limit`, `count`, `total`, `entries` (full bodies + `links` stubs; empty array if none)
 - If `total` > rows received, page with `--offset` or raise `--limit` before concluding nothing else exists
-- list: same filters/paging; no FTS. Sort: `updated_at DESC`, then `id DESC`
+- list: same filters/paging; no FTS. `--sort updated` (default) orders by `updated_at DESC, id DESC`. `--sort created` orders by `created_at DESC, id DESC`.
+- `--since TS` is inclusive and `--until TS` is exclusive. On `list` they filter the sort field. On `search` they filter `updated_at`. `search --sort` is validated, then ignored.
+- TS is `YYYY-MM-DD` (local start of that day; a year before 1900 is `invalid timestamp`), `YYYY-MM-DDTHH:MM:SSZ`, or `YYYY-MM-DDTHH:MM:SS.mmmZ`. `since` equal to `until` is exit 0 with `count` 0 and `total` 0.
 - tags: every in-use tag with count; optional `--expired`/`--deleted`
 
 ### get / delete / update / rekey (locator)
@@ -143,7 +146,7 @@ remember --json delete 3                          # soft-delete (live or expired
 remember --json delete --expired 3                # hard wipe one expired row
 remember --json delete --deleted 3                # hard wipe one deleted row
 remember --json update 3 --text "new body"
-remember --json update --key pref:editor --text "nvim"
+remember --json update --key pref:editor --if-version-vector '{"<device>":1}' --text "nvim"
 remember --json update --deleted 3 --undelete     # restore from deleted
 remember --json update --expired 3 --clear-expires
 remember --json rekey --key decision:old --to-key decision:new
@@ -168,6 +171,7 @@ remember --json purge-trash                       # deprecated ≡ purge --expir
 - Body only via `--text` (or `--text -` for stdin; `--text=-` for literal hyphen)
 - `--undelete` needs `--deleted`; mutex with ttl/expires flags
 - Never changes `source` or `key` (use `rekey` for keys)
+- Read `version_vector` from the entry. Pass that object back with `--if-version-vector` (spacing does not matter). On code `stale` (`memory changed since it was read`), re-read and retry. A malformed vector is `usage` `invalid version vector: <vv>`. A wrong bin is still exit 3; the vector is checked only after the row is in the requested bin.
 - Keyless body-hash collision → exit 1 + conflicting id on stderr
 - JSON: `"action":"updated"` or `"action":"deleted"` with full entry snapshot. **add / update / delete / purge JSON have no `links` field**
 

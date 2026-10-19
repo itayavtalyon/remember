@@ -193,17 +193,29 @@ cmake --build build --target leaks-macos          # macOS only
 
 ## Definition of Done
 
-- [ ] Design log 006 unchanged except Implementation Results rows for E5.1–
-      E5.3 and E8.1.
-- [ ] Every must-pass row green and in `tests/gate-suites`.
-- [ ] D10, D11, P4 and the locked usage messages implemented exactly.
-- [ ] One TS parser serves list, search and update.
-- [ ] Help (`list`, `search`, `update`), SKILL.md, README What's New lines
-      (`--sort`, `--since`/`--until`, `--if-updated-at`).
-- [ ] Engineering notes `store_list` bullet updated (sort + time filters).
-- [ ] Gate: ctest, lint, coverage 100/100, `ci-linux.sh` all green.
+- [x] Design log 006 unchanged except Implementation Results rows for E5.1–
+      E5.3, E8.1 (amended), D10 (superseded), and the add-path version-vector
+      rule. Proved by the diff: the Design section is untouched.
+- [x] Every must-pass row green and in `tests/gate-suites` (`list_dates`,
+      `update`, `store`, `facade`). Proved by `step_gate` and `ci-linux.sh`.
+- [x] D10 (as amended: malformed vector → `invalid version vector`), D11, P4,
+      and the locked usage messages. Proved by
+      `update_if_version_vector_rejects_malformed`,
+      `store_list_crossed_bounds_are_empty`, and the store guard tests.
+- [x] One TS parser serves list and search (`parse_filter_ts` in
+      `test_list_dates.c`). Update does not use it. The guard is the version
+      vector (`decision:plan17-stale-guard-version-vector`).
+- [x] Help (`list`, `search`, `update`), SKILL.md, README What's New lines
+      (`--sort`, `--since`/`--until`, `--if-version-vector`). Help proved by
+      `list_and_search_help_name_sort_and_bounds` and
+      `update_help_names_the_version_vector_guard`.
+- [x] Engineering notes `store_list` bullet updated (sort + time filters),
+      plus the version-vector guard and the add-path rule.
+- [x] Gate: ctest, lint, coverage 100/100, `ci-linux.sh` all green. See
+      Implementation Notes.
 - [ ] Second review done; no open **blocking** item.
-- [ ] `implementation-plans/INDEX.md` row marked ✅.
+- [ ] `implementation-plans/INDEX.md` row marked ✅. The flag name in that row
+      is already `--if-version-vector`. The mark waits for the second review.
 
 ## Second review handover
 
@@ -730,3 +742,54 @@ TDD reds, before the clause existed: an equal vector compared with `updated_at` 
 3. Before declining a helper, grep the file for given* helpers that already exist, and reuse them.
 4. When a probe says "cannot", try one more form (in SQLite, CASE short-circuits) before writing it down.
 ```
+
+## Implementation Notes — stage 5
+
+Last stage. Docs and the full gate. No new grill. Definition of Done stays open on the second review and on the INDEX check mark.
+
+Help for `list` and `search` was already in stage 3 (`list_and_search_help_name_sort_and_bounds`). This stage adds `update` help for `--if-version-vector`. The first red run of `update_help_names_the_version_vector_guard` failed `ASSERT_STR_CONTAINS` because `help update` had no such lines. The other update tests stayed green.
+
+**Mutants, one clause each.** Restored after. The C tree matches the gate.
+
+| Clause | Test | Result |
+|---|---|---|
+| Description says `matches VV` | `update_help_names_the_version_vector_guard` | the equals line failed. The stale sentence stayed |
+| Stale sentence says `writes anyway` | same test | the stale sentence failed. One assert |
+
+**Probes, run** with `./build/remember` before the claims were written.
+
+- Missing `--db` path `/tmp/remember-does-not-exist-stage5.db help update`: exit 0, help text, file not created. `update --help` prints the same topic.
+- Keyed add of the same body and tags: `updated_at` and `version_vector` stay put. A changed body bumps the vector 1 → 2. Keyless re-add of the same body stays put. A new tag bumps 1 → 2.
+- Re-add of an expired row (expiry set with `sqlite3`, then `add` of the same body): bin `expired` vector 1 becomes `live` vector 2, `expires_at` null. One bump.
+- `list --sort created` vs `--sort updated` on two rows: created order is the newer id first; updated order is the edited row first.
+- `--since <updated_at>` includes that row. `--until` the same stamp excludes it. Equal bounds: `count` 0, `total` 0.
+- A `version_vector` object with a space after `:` is accepted by `--if-version-vector`. The old object after a later write is `stale`. Re-reading and passing the new object writes.
+- `list --since 1899-12-31`: exit 1, `invalid timestamp: 1899-12-31`. `list --since ''`: `invalid timestamp: ` (empty). `search probe --sort created` matches `search probe`. `search probe --sort bogus`: `invalid --sort (use updated or created)`.
+- `not-a-vector`: `usage` `invalid version vector: not-a-vector`.
+- Expired row, live locator, mismatched vector: exit 3, code `expired`. Same row with `--expired` and a mismatched vector: exit 1, code `stale`.
+
+**Gate on this commit's C tree.** ctest `step_gate`, `step05_gate`, `store_asan_gate`, and `no_shim_symbols` passed (ASan/UBSan, `REMEMBER_TEST_VFS=ON`). `install_skill` failed in the sandbox (`mkdir` Operation not permitted) and passed when re-run outside it. `lint-all.sh` LINT OK. Coverage 100% functions and 100% effective lines. `leaks-macos` failed in the sandbox (`Couldn't get task port`) and passed outside it. `ci-linux.sh` OK, including LINT OK, IWYU, and scan-build. No C file changed after that gate. [Bugbot](674275d6-8edb-448c-994e-834202ef9007) on the uncommitted stage found no blocking bug.
+
+**Simplify.** Three candidates.
+
+1. Two help sentences (`code stale` and `Nothing is written`) folded into one. Applied. One fprintf line.
+2. Fold the new test into `help_update_topic`. About 20 lines. Not applied. That test only checks that update help prints. This one checks the guard text, and it lives in the `update` suite with the flag.
+3. A `given*` helper for "open a db and run help". The new test is the only caller in this file. `help_update_topic` is in another file. A shared helper is more code than the two call sites. Not applied.
+
+The TS parser does not serve `update`. The amendment moved the guard to the version vector. The Definition of Done box now says that.
+
+`implementation-plans/006-locked-decisions.md` P7 still named `--if-updated-at`. It now names `--if-version-vector`, with the amendment on the same row. D10 in that file was already superseded.
+
+## Review Notes
+
+### 2026-10-19 — in-session deep review (stage 5)
+
+**Verdict:** Approve with nits. No open blocking item. No grill.
+
+**Lenses.** DRY: the stale sentence is quoted in help, the test, and SKILL.md. That is the locked message, not a second implementation. Easy-to-replace: no new module or dependency. Orthogonal: list/search help, the skill, What's New, engineering notes, COVERAGE.md, and 006 Implementation Results moved with the flag. Ponytail: the help test is the check; nothing else to cut. Comprehensive: the help test failed before the lines existed, and each clause mutant failed on its own assert.
+
+**Bugbot** (uncommitted stage): no blocking bug. It noted that help says "equals" and does not spell out spacing, malformed, or the bin check. Spacing and malformed are in SKILL.md, and both were run. The bin check was missing from SKILL.md; one sentence was added after the probe above (exit 3 before `stale`). P7 was the stale flag name; fixed. Help stays the short form. "equals" is the word in `decision:plan17-stale-guard-version-vector`.
+
+**Left open:** the stage 4b nit on a counter above int64 and a repeated device. Neither can equal a stored vector, so the result is `stale`. A future sync plan can make them malformed. The INDEX check mark and this stage's second review are not done.
+
+**Praise:** list and search help were not rewritten. The new test is one behavior in the suite that already owns the flag.

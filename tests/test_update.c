@@ -744,6 +744,32 @@ TEST(update_if_version_vector_undelete_match_restores)
     free(db);
 }
 
+TEST(update_help_names_the_version_vector_guard)
+{
+    char *db = make_temp_db_path();
+    const char *args[] = {"help", "update"};
+    CmdResult r;
+
+    ASSERT_TRUE(db != NULL);
+    if (db == NULL) {
+        return;
+    }
+    r = run_remember(db, args, sizeof(args) / sizeof(args[0]), NULL);
+    ASSERT_EQ_INT(r.exit_code, 0);
+    if (r.exit_code != 0) {
+        cmd_result_free(&r);
+        free(db);
+        return;
+    }
+    ASSERT_STR_CONTAINS(r.out, "  --if-version-vector VV\n"
+                               "                  Write only when version_vector equals VV\n");
+    ASSERT_STR_CONTAINS(r.out, "A version-vector mismatch is code stale "
+                               "(memory changed since it was read) and writes nothing.\n");
+    ASSERT_STREQ(r.err, "");
+    cmd_result_free(&r);
+    free(db);
+}
+
 void register_update_tests(void)
 {
     RUN_TEST(update_text_only_keeps_tags);
@@ -776,4 +802,5 @@ void register_update_tests(void)
     RUN_TEST(update_if_version_vector_match_by_key_writes);
     RUN_TEST(update_if_version_vector_match_by_sync_id_writes);
     RUN_TEST(update_if_version_vector_undelete_match_restores);
+    RUN_TEST(update_help_names_the_version_vector_guard);
 }
