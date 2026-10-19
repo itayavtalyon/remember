@@ -108,3 +108,79 @@ Branch from an up-to-date `main` after plan 17 has merged. One branch, one PR. L
 ## Second review handover
 
 Run the tests. Then, on `build/remember`: a plain `--since` with a newline and a CR, a JSON `--since` with a newline, a guarded update with `{"<device>":1,"<device>":1}`, and a guarded update with two different devices. Bugbot if it is installed.
+
+## Implementation Notes
+
+Branch `plan17a-plain-line-and-duplicate-vv` from `main` at `9cb97b9` (PR #32 merged).
+
+**Validity grill (Itay 2026-10-19, `decision:plan17a-notice-shared-classifier`).** Open PR #31 (`fix/plain-stderr-control-bytes`) fixed the same split line under `decision:plain-stderr-control-bytes`, but mapped tab to `?`. A1 wins on the rule: tab stays. The implementation follows #31's shape, not this plan's own loop in `diag.c`. `output.c`'s `is_terminal_ctrl` takes `keep_newline`, `output_text_human` is the one exported writer, and `write_notice` and `output_body_human` both call it. That keeps one C0/DEL classifier for bodies and notices. Close #31 as superseded when this PR opens.
+
+**Two plan claims were wrong. The probes:**
+- The plan's row-side test (stored `{"d":1,"d":2}` against a given `{"d":1}`) was green before the fix. The existing compare already finds the second clock. The bypass is the *agreeing* stored copy: stored `{"<device>":1,"<device>":1}` against a given `{"<device>":1}` returned `STORE_OK` and wrote `new`. `store_update_stored_repeated_device_key_is_stale` asserts both stored forms.
+- "A mutant that drops only the `GROUP BY` term must fail the agreeing-duplicate test" cannot hold. Without `GROUP BY` the term rejects every vector with two keys, so the agreeing duplicate is still rejected. The two-device tests kill that mutant (15 red, `store_update_two_device_version_vector_matches` among them).
+
+**Red runs before each fix.**
+- Stage 1: `plain_error_turns_a_newline_into_a_question_mark`, `…_carriage_return_…`, `…_an_escape_…`, and `…_del_…` failed (`remember: bad\ninjected`, `remember: bad\rinjected`, and so on). `plain_error_keeps_a_tab` passed before and after, because it guards against over-replacement.
+- Stage 2: `store_update_repeated_device_key_is_bad` got `STORE_OK` (0) for the agreeing copy and the body became `new`. `store_update_stored_repeated_device_key_is_stale` got `STORE_OK` and the body became `new`.
+
+**One-clause mutants.** Each was built and run. Every mutant goes red.
+
+| Mutant | Red |
+|--------|-----|
+| `write_notice` writes the message with `fputs` (raw echo) | 5: the four diag `turns_*` tests and `list_rejects_a_newline_timestamp_as_one_plain_line` |
+| drop `c == '\t' \|\|` | `plain_error_keeps_a_tab`, `output_body_human_keeps_newline_and_tab` |
+| ignore `keep_newline` (always keep `\n`) | the diag newline test and the CLI plain test |
+| `keep_newline && c == '\v'` (never keep `\n`) | `output_body_human_keeps_newline_and_tab` |
+| drop `\|\| c == ASCII_DEL` | `plain_error_turns_del_into_a_question_mark` |
+| drop `c < ASCII_FIRST_PRINTABLE` | the newline, CR, ESC, and CLI tests |
+| `write_notice` passes `keep_newline = true` | the diag newline test and the CLI plain test |
+| `output_body_human` passes `keep_newline = false` | `output_body_human_keeps_newline_and_tab` |
+| drop the duplicate-key `EXISTS` | both repeated-key store tests |
+| drop `GROUP BY` | 15 store guard tests |
+| `COUNT(*) > 2` | both repeated-key store tests |
+| `COUNT(*) > 0` | 11 store guard tests |
+| skip the stored-vector check | `store_update_int64_overflow_does_not_match_max`, `store_update_stored_repeated_device_key_is_stale` |
+
+The body-side mutants first survived. No test checked `output_body_human`'s mapping, and this plan routes it through the new helper, so `output_body_human_keeps_newline_and_tab` (`tests/test_coverage_edges.c`) now locks the documented body contract.
+
+**Probes on `build/remember`** (`--db` a fresh temp brain, `cat -vet`):
+- `list --since $'bad\ninjected'` → `remember: invalid timestamp: bad?injected$`, exit 1. The same for `\r`. `$'bad\x1b[2Jx'` → `bad?[2Jx`. `$'d\x7fel'` → `d?el`. A tab stays a tab. An empty token gives `remember: invalid timestamp: $`. `'say "hi"\'` is unchanged.
+- `--json-errors list --since $'bad\ninjected'` → one line with `bad\ninjected` escaped.
+- A 300-byte token plus `\n` → 1 line plain (331 bytes), 1 line JSON (373 bytes).
+- `$'bogus\nremember: forged'` as a command → one line, `'bogus?remember: forged'`.
+- `update --if-version-vector '{"<dev>":1,"<dev>":1}'` → `remember: invalid version vector: {…}`, exit 1. The same with `:1,…:2` under `--json-errors` → one `usage` line. `'{"other":0,"<dev>":1}'` → exit 0, and the body updates.
+- `sqlite3` 3.54 also rejects `{"a":1,"a":1}`: `json_each` decodes the key before `GROUP BY`. `{"a":1,"A":1}` passes (binary collation).
+
+**Simplify pass.**
+1. Applied: `output_body_human`'s header doc no longer restates the classifier and points at `output_text_human` (1 line).
+2. Applied: `given_row_version_vector` replaces the two hand-rolled `UPDATE … version_vector` blocks in the int64 tests and serves the two new tests (−4 lines net in the old tests).
+3. Declined: one table-driven test for the five diag cases would save about 40 lines, but `quality:test-the-contract` wants one behavior per test with no loops. Each byte class is its own clause, and its mutant names one test.
+4. Declined: `write_preview` keeps its own `c < 0x20 || c == DEL` branch. It also maps tab, because a list line is one pipe-delimited row, so it is a different rule. Sharing it would need a third mode for one caller.
+5. Declined: no helper for the store tests' `device` NULL guard. The guard is an early return, and a helper cannot carry one.
+
+**Not covered here.** Bytes `>= 0x80` pass through unchanged (both decisions say so), so a raw C1 `0x9b` reaches an 8-bit terminal. Modern UTF-8 terminals do not act on it. Plain warnings share `write_notice` with errors, so the diag error tests prove both.
+
+`vv_parse_pairs`: `git diff origin/main -- src/store_sqlite.c | grep -c vv_parse_pairs` → 0.
+
+**Gate on `9fb7274`** (the code tree that is pushed; only these notes change after it): ctest 5/5 (ASan/UBSan, `REMEMBER_TEST_VFS=ON`), `lint-all.sh` LINT OK, `check-coverage.sh` functions 100% and effective lines 100%, `leaks-macos` PASS, `ci-linux.sh` OK (iwyu and scan-build PASS). The first lint run failed on `bugprone-easily-swappable-parameters` for `given_row_version_vector(db, vector)`. That got a per-line NOLINT, as in `tests/test_device.c`. Bugbot is not installed here.
+
+## Review Notes
+
+### 2026-10-19 — in-session review (coder)
+
+**Verdict:** ready for the second opinion. No open blocking item. One grill, answered (`decision:plan17a-notice-shared-classifier`).
+
+- DRY: one C0/DEL classifier for bodies and notices. `write_preview` keeps its own branch, a different rule (it maps tab).
+- Easy-to-replace: the SQL stays in `store_sqlite.c`. `diag.c` reaches the classifier through `output.h`.
+- Orthogonal: JSON escaping, `vv_parse_pairs`, import, and `vv_compare` have no diff.
+- Fail fast: `plain_usage_line` returns NULL when the emitter fails, so a test cannot read a half-written line.
+- Leftovers, not this plan: bytes `>= 0x80` pass through unchanged, and `write_preview` maps controls on its own.
+
+Definition of Done, each box with its proof:
+- A1: `plain_error_turns_a_newline_into_a_question_mark`, `…_carriage_return_…`, `plain_error_keeps_a_tab`, `…_an_escape_…`, `…_del_…`, `list_rejects_a_newline_timestamp_as_one_plain_line`.
+- A2: `store_update_repeated_device_key_is_bad`, `store_update_stored_repeated_device_key_is_stale`, `store_update_two_device_version_vector_matches`.
+- No change for ordinary bytes: `plain_error_keeps_quote_and_backslash`, `json_error_escapes_message_bytes`, `list_rejects_a_newline_timestamp_as_one_json_line`, `output_body_human_keeps_newline_and_tab`.
+- `vv_parse_pairs` has no diff (grep above).
+- Engineering notes: the Diagnostics and `store_update` bullets.
+- Gate green: above.
+- Still open: the second review and the INDEX ✅ tick.
