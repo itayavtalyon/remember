@@ -2898,6 +2898,99 @@ done:
     return st;
 }
 
+/* What an add onto an existing row already wrote, so the stamp does not bump twice. */
+typedef struct {
+    bool updated_at_written; /* replace_body already set updated_at */
+    bool revived;            /* maybe_revive already bumped the version vector */
+    bool tags_added;
+} ExistingAddChange;
+
+/* Bump updated_at and version_vector[local] together, and only when the row
+   changed. A no-op add leaves both where they were. now and device_id are
+   different strings; the suppression is the same one insert_entry uses. */
+// NOLINTBEGIN(bugprone-easily-swappable-parameters)
+static StoreStatus stamp_existing_add(sqlite3 *db, long long id, const char *now,
+                                      const char *device_id, const char *vv_before,
+                                      ExistingAddChange change, StoreError *serr)
+// NOLINTEND(bugprone-easily-swappable-parameters)
+{
+    if (!change.updated_at_written && !change.revived && !change.tags_added) {
+        return STORE_OK;
+    }
+    if (!change.updated_at_written) {
+        StoreStatus st = touch_updated_at(db, id, now, serr);
+
+        if (st != STORE_OK) {
+            return st;
+        }
+    }
+    if (change.revived) {
+        return STORE_OK;
+    }
+    return apply_vv_bump(db, id, device_id, vv_before, serr);
+}
+
+typedef enum { REUSE_KEEP_BODY = 0, REUSE_REPLACE_CHANGED_BODY } ReuseBody;
+
+/* Keyed passes REUSE_REPLACE_CHANGED_BODY so a different body counts. Keyless
+   identity is the hash, so it passes REUSE_KEEP_BODY and does not write the body. */
+static StoreStatus reuse_existing_row(sqlite3 *db, long long id, const char *body,
+                                      const char *body_hash, const char *const *tags, size_t ntags,
+                                      const char *now, const char *expires_at,
+                                      const char *device_id, ReuseBody body_policy,
+                                      StoreError *serr)
+{
+    Entry current;
+    ExistingAddChange change = {false, false, false};
+    char vv_before[VV_OUT_MAX];
+    StoreStatus st = STORE_OK;
+    int vv_n = 0;
+    int changes_before = 0;
+
+    memset(&current, 0, sizeof(current));
+    memset(vv_before, 0, sizeof(vv_before));
+    st = load_entry_by_id(db, id, &current, serr);
+    if (st != STORE_OK) {
+        return st;
+    }
+    switch (body_policy) {
+    case REUSE_REPLACE_CHANGED_BODY:
+        change.updated_at_written =
+            ((current.body == NULL || strcmp(current.body, body) != 0) != 0);
+        break;
+    case REUSE_KEEP_BODY:
+        break;
+    default:
+        store_entry_free(&current);
+        return STORE_ERR_INTERNAL;
+    }
+    change.revived = (entry_bin(&current, now) != STORE_BIN_LIVE);
+    if (current.version_vector != NULL) {
+        vv_n = snprintf(vv_before, sizeof(vv_before), "%s", current.version_vector);
+    }
+    store_entry_free(&current);
+    if (vv_n < 0 || (size_t)vv_n >= sizeof(vv_before) || vv_before[0] == '\0') {
+        return STORE_ERR_INTERNAL;
+    }
+    if (change.updated_at_written) {
+        st = replace_body(db, id, body, body_hash, now, serr);
+        if (st != STORE_OK) {
+            return st;
+        }
+    }
+    st = maybe_revive(db, id, (EntryTimes){.now = now, .expires_at = expires_at}, device_id, serr);
+    if (st != STORE_OK) {
+        return st;
+    }
+    changes_before = sqlite3_total_changes(db);
+    st = union_tags(db, id, tags, ntags, serr);
+    if (st != STORE_OK) {
+        return st;
+    }
+    change.tags_added = (sqlite3_total_changes(db) != changes_before);
+    return stamp_existing_add(db, id, now, device_id, vv_before, change, serr);
+}
+
 /* Keyed upsert: replace body + union tags, or insert. Sets out_id and out_action. */
 static StoreStatus add_keyed(sqlite3 *db, const char *body, const char *body_hash, const char *key,
                              const char *const *tags, size_t ntags, const char *source,
@@ -2909,16 +3002,8 @@ static StoreStatus add_keyed(sqlite3 *db, const char *body, const char *body_has
 
     st = find_id_by_key(db, key, &id, serr);
     if (st == STORE_OK) {
-        st = replace_body(db, id, body, body_hash, now, serr);
-        if (st != STORE_OK) {
-            return st;
-        }
-        st = maybe_revive(db, id, (EntryTimes){.now = now, .expires_at = expires_at}, device_id,
-                          serr);
-        if (st != STORE_OK) {
-            return st;
-        }
-        st = union_tags(db, id, tags, ntags, serr);
+        st = reuse_existing_row(db, id, body, body_hash, tags, ntags, now, expires_at, device_id,
+                                REUSE_REPLACE_CHANGED_BODY, serr);
         if (st != STORE_OK) {
             return st;
         }
@@ -2953,16 +3038,8 @@ static StoreStatus add_keyless(sqlite3 *db, const char *body, const char *body_h
 
     st = find_keyless_by_hash(db, body_hash, &id, serr);
     if (st == STORE_OK) {
-        st = touch_updated_at(db, id, now, serr);
-        if (st != STORE_OK) {
-            return st;
-        }
-        st = maybe_revive(db, id, (EntryTimes){.now = now, .expires_at = expires_at}, device_id,
-                          serr);
-        if (st != STORE_OK) {
-            return st;
-        }
-        st = union_tags(db, id, tags, ntags, serr);
+        st = reuse_existing_row(db, id, body, body_hash, tags, ntags, now, expires_at, device_id,
+                                REUSE_KEEP_BODY, serr);
         if (st != STORE_OK) {
             return st;
         }

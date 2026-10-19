@@ -57,6 +57,28 @@ TEST(add_key_upsert_same_id_replaces_body)
     free(db);
 }
 
+TEST(add_key_changed_body_shows_the_bumped_vector)
+{
+    char *db = make_temp_db_path();
+    CmdResult r1;
+    CmdResult r2;
+    const char *a1[] = {"add", "--json", "--key", "k", "one"};
+    const char *a2[] = {"add", "--json", "--key", "k", "two"};
+
+    ASSERT_TRUE(db != NULL);
+    r1 = run_remember(db, a1, sizeof(a1) / sizeof(a1[0]), NULL);
+    r2 = run_remember(db, a2, sizeof(a2) / sizeof(a2[0]), NULL);
+    ASSERT_EQ_INT(r1.exit_code, 0);
+    ASSERT_EQ_INT(r2.exit_code, 0);
+    ASSERT_STR_CONTAINS(r1.out, "\":1}");
+    ASSERT_STR_CONTAINS(r2.out, "\"id\":1");
+    ASSERT_STR_CONTAINS(r2.out, "\"action\":\"updated\"");
+    ASSERT_STR_CONTAINS(r2.out, "\":2}");
+    cmd_result_free(&r1);
+    cmd_result_free(&r2);
+    free(db);
+}
+
 TEST(add_key_upsert_unions_tags)
 {
     char *db = make_temp_db_path();
@@ -403,6 +425,7 @@ void register_key_gld_tests(void)
 {
     RUN_TEST(add_key_creates_slot);
     RUN_TEST(add_key_upsert_same_id_replaces_body);
+    RUN_TEST(add_key_changed_body_shows_the_bumped_vector);
     RUN_TEST(add_key_upsert_unions_tags);
     RUN_TEST(add_key_keeps_original_source);
     RUN_TEST(keyed_entries_may_share_body_text);

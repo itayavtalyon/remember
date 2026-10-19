@@ -19,7 +19,8 @@ enum {
     TINY_ERR_BUFSIZE = 8,  /* deliberately small buffer for truncation test */
     PATH_OVER_MARGIN = 16, /* bytes past REMEMBER_PATH_MAX for the too-long-path test */
     MANY_TAGS = 99,        /* tag count for the tag-stress test */
-    STALE_VV_CAP = 128     /* version_vector copy for the stale-guard test */
+    STALE_VV_CAP = 128,    /* version_vector copy for the stale-guard test */
+    STAMP_TS_CAP = 32      /* updated_at copy; a canonical stamp is 24 plus NUL */
 };
 
 /*
@@ -609,6 +610,52 @@ static const char k_hash_d[] = "dddddddddddddddddddddddddddddddddddddddddddddddd
 static const char k_hash_e[] = "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee";
 static const char k_hash_f[] = "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff";
 static const char k_now[] = "2026-06-15T12:00:00.000Z";
+static const char k_later[] = "2026-06-15T13:00:00.000Z";
+static const char k_latest[] = "2026-06-15T14:00:00.000Z";
+
+/* Stamps a later add must move together, or leave alone. */
+typedef struct {
+    char version_vector[STALE_VV_CAP];
+    char updated_at[STAMP_TS_CAP];
+} RowStamp;
+
+/* Open a fresh brain and add one live row. Copies the row's VV and updated_at. */
+static Store *given_live_add(char **db_out, const char *body, const char *hash, const char *key,
+                             RowStamp *stamp)
+{
+    char err[ERR_BUFSIZE];
+    Store *s = NULL;
+    Entry e;
+    StoreAddAction act = STORE_ADD_CREATED;
+    int n = 0;
+
+    *db_out = make_temp_db_path();
+    if (*db_out == NULL || stamp == NULL) {
+        return NULL;
+    }
+    s = store_open(*db_out, err, sizeof(err));
+    if (s == NULL) {
+        return NULL;
+    }
+    memset(&e, 0, sizeof(e));
+    memset(stamp, 0, sizeof(*stamp));
+    if (store_add(s, body, hash, key, NULL, 0U, "human", NULL, k_now, &act, &e) != STORE_OK ||
+        e.version_vector == NULL || e.updated_at == NULL) {
+        store_entry_free(&e);
+        store_close(s);
+        return NULL;
+    }
+    n = snprintf(stamp->version_vector, sizeof(stamp->version_vector), "%s", e.version_vector);
+    if (n > 0 && (size_t)n < sizeof(stamp->version_vector)) {
+        n = snprintf(stamp->updated_at, sizeof(stamp->updated_at), "%s", e.updated_at);
+    }
+    store_entry_free(&e);
+    if (n < 0 || (size_t)n >= sizeof(stamp->updated_at) || stamp->version_vector[0] == '\0') {
+        store_close(s);
+        return NULL;
+    }
+    return s;
+}
 
 static void free_page(PageResult page)
 {
@@ -1131,6 +1178,415 @@ TEST(store_add_keyed_revives_expired)
     ASSERT_EQ_INT((int)act, (int)STORE_ADD_UPDATED);
     ASSERT_STREQ(e.body, "v2");
     ASSERT_TRUE(e.expires_at == NULL);
+    store_entry_free(&e);
+    store_close(s);
+    free(db);
+}
+
+TEST(store_add_keyed_change_bumps_version_vector)
+{
+    char *db = NULL;
+    Store *s = NULL;
+    Entry e;
+    StoreAddAction act = STORE_ADD_CREATED;
+    RowStamp before;
+    char expect[STALE_VV_CAP];
+    const char *device = NULL;
+    int n = 0;
+
+    memset(&before, 0, sizeof(before));
+    s = given_live_add(&db, "v1", k_hash_a, "slot", &before);
+    ASSERT_TRUE(s != NULL);
+    if (s == NULL) {
+        free(db);
+        return;
+    }
+    device = store_device_id(s);
+    ASSERT_TRUE(device != NULL);
+    if (device == NULL) {
+        store_close(s);
+        free(db);
+        return;
+    }
+    n = snprintf(expect, sizeof(expect), "{\"%s\":1}", device);
+    ASSERT_TRUE(n > 0 && (size_t)n < sizeof(expect));
+    ASSERT_STREQ(before.version_vector, expect);
+    ASSERT_STREQ(before.updated_at, k_now);
+    n = snprintf(expect, sizeof(expect), "{\"%s\":2}", device);
+    ASSERT_TRUE(n > 0 && (size_t)n < sizeof(expect));
+
+    memset(&e, 0, sizeof(e));
+    ASSERT_EQ_STATUS(
+        store_add(s, "v2", k_hash_b, "slot", NULL, 0U, "human", NULL, k_later, &act, &e), STORE_OK);
+    if (e.version_vector == NULL || e.updated_at == NULL) {
+        store_entry_free(&e);
+        store_close(s);
+        free(db);
+        return;
+    }
+    ASSERT_EQ_INT(e.id, 1);
+    ASSERT_EQ_INT((int)act, (int)STORE_ADD_UPDATED);
+    ASSERT_STREQ(e.version_vector, expect);
+    ASSERT_STREQ(e.updated_at, k_later);
+    store_entry_free(&e);
+    store_close(s);
+    free(db);
+}
+
+TEST(store_add_keyed_same_body_moves_neither_stamp)
+{
+    char *db = NULL;
+    Store *s = NULL;
+    Entry e;
+    StoreAddAction act = STORE_ADD_CREATED;
+    RowStamp before;
+
+    memset(&before, 0, sizeof(before));
+    s = given_live_add(&db, "v1", k_hash_a, "slot", &before);
+    ASSERT_TRUE(s != NULL);
+    if (s == NULL) {
+        free(db);
+        return;
+    }
+
+    memset(&e, 0, sizeof(e));
+    ASSERT_EQ_STATUS(
+        store_add(s, "v1", k_hash_a, "slot", NULL, 0U, "human", NULL, k_later, &act, &e), STORE_OK);
+    if (e.version_vector == NULL || e.updated_at == NULL) {
+        store_entry_free(&e);
+        store_close(s);
+        free(db);
+        return;
+    }
+    ASSERT_EQ_INT(e.id, 1);
+    ASSERT_EQ_INT((int)act, (int)STORE_ADD_UPDATED);
+    ASSERT_STREQ(e.version_vector, before.version_vector);
+    ASSERT_STREQ(e.updated_at, before.updated_at);
+    store_entry_free(&e);
+    store_close(s);
+    free(db);
+}
+
+TEST(store_add_keyed_new_tag_bumps_both_stamps)
+{
+    char *db = NULL;
+    Store *s = NULL;
+    Entry e;
+    StoreAddAction act = STORE_ADD_CREATED;
+    RowStamp before;
+    char expect[STALE_VV_CAP];
+    const char *device = NULL;
+    const char *tags[] = {"wip"};
+    int n = 0;
+
+    memset(&before, 0, sizeof(before));
+    s = given_live_add(&db, "v1", k_hash_a, "slot", &before);
+    ASSERT_TRUE(s != NULL);
+    if (s == NULL) {
+        free(db);
+        return;
+    }
+    device = store_device_id(s);
+    ASSERT_TRUE(device != NULL);
+    if (device == NULL) {
+        store_close(s);
+        free(db);
+        return;
+    }
+    n = snprintf(expect, sizeof(expect), "{\"%s\":2}", device);
+    ASSERT_TRUE(n > 0 && (size_t)n < sizeof(expect));
+
+    memset(&e, 0, sizeof(e));
+    ASSERT_EQ_STATUS(
+        store_add(s, "v1", k_hash_a, "slot", tags, 1U, "human", NULL, k_later, &act, &e), STORE_OK);
+    if (e.version_vector == NULL || e.updated_at == NULL) {
+        store_entry_free(&e);
+        store_close(s);
+        free(db);
+        return;
+    }
+    ASSERT_EQ_INT(e.id, 1);
+    ASSERT_EQ_INT((int)act, (int)STORE_ADD_UPDATED);
+    ASSERT_STREQ(e.version_vector, expect);
+    ASSERT_STREQ(e.updated_at, k_later);
+    store_entry_free(&e);
+    store_close(s);
+    free(db);
+}
+
+TEST(store_add_keyless_new_tag_bumps_both_stamps)
+{
+    char *db = NULL;
+    Store *s = NULL;
+    Entry e;
+    StoreAddAction act = STORE_ADD_CREATED;
+    RowStamp before;
+    char expect[STALE_VV_CAP];
+    const char *device = NULL;
+    const char *tags[] = {"wip"};
+    int n = 0;
+
+    memset(&before, 0, sizeof(before));
+    s = given_live_add(&db, "same", k_hash_a, NULL, &before);
+    ASSERT_TRUE(s != NULL);
+    if (s == NULL) {
+        free(db);
+        return;
+    }
+    device = store_device_id(s);
+    ASSERT_TRUE(device != NULL);
+    if (device == NULL) {
+        store_close(s);
+        free(db);
+        return;
+    }
+    n = snprintf(expect, sizeof(expect), "{\"%s\":2}", device);
+    ASSERT_TRUE(n > 0 && (size_t)n < sizeof(expect));
+
+    memset(&e, 0, sizeof(e));
+    ASSERT_EQ_STATUS(
+        store_add(s, "same", k_hash_a, NULL, tags, 1U, "human", NULL, k_later, &act, &e), STORE_OK);
+    if (e.version_vector == NULL || e.updated_at == NULL) {
+        store_entry_free(&e);
+        store_close(s);
+        free(db);
+        return;
+    }
+    ASSERT_EQ_INT(e.id, 1);
+    ASSERT_EQ_INT((int)act, (int)STORE_ADD_MERGED);
+    ASSERT_STREQ(e.version_vector, expect);
+    ASSERT_STREQ(e.updated_at, k_later);
+    store_entry_free(&e);
+    store_close(s);
+    free(db);
+}
+
+TEST(store_add_keyless_same_body_moves_neither_stamp)
+{
+    char *db = NULL;
+    Store *s = NULL;
+    Entry e;
+    StoreAddAction act = STORE_ADD_CREATED;
+    RowStamp before;
+
+    memset(&before, 0, sizeof(before));
+    s = given_live_add(&db, "same", k_hash_a, NULL, &before);
+    ASSERT_TRUE(s != NULL);
+    if (s == NULL) {
+        free(db);
+        return;
+    }
+
+    memset(&e, 0, sizeof(e));
+    ASSERT_EQ_STATUS(
+        store_add(s, "same", k_hash_a, NULL, NULL, 0U, "human", NULL, k_later, &act, &e), STORE_OK);
+    if (e.version_vector == NULL || e.updated_at == NULL) {
+        store_entry_free(&e);
+        store_close(s);
+        free(db);
+        return;
+    }
+    ASSERT_EQ_INT(e.id, 1);
+    ASSERT_EQ_INT((int)act, (int)STORE_ADD_MERGED);
+    ASSERT_STREQ(e.version_vector, before.version_vector);
+    ASSERT_STREQ(e.updated_at, before.updated_at);
+    store_entry_free(&e);
+    store_close(s);
+    free(db);
+}
+
+TEST(store_add_keyless_revive_bumps_both_stamps_once)
+{
+    char *db = NULL;
+    Store *s = NULL;
+    Entry e;
+    StoreAddAction act = STORE_ADD_CREATED;
+    RowStamp before;
+    char expect[STALE_VV_CAP];
+    const char *device = NULL;
+    int n = 0;
+
+    memset(&before, 0, sizeof(before));
+    s = given_live_add(&db, "same", k_hash_a, NULL, &before);
+    ASSERT_TRUE(s != NULL);
+    if (s == NULL) {
+        free(db);
+        return;
+    }
+    sql_set_expires((ExpiresUpdate){.db = db, .iso = "2020-01-01T00:00:00.000Z"});
+    device = store_device_id(s);
+    ASSERT_TRUE(device != NULL);
+    if (device == NULL) {
+        store_close(s);
+        free(db);
+        return;
+    }
+    n = snprintf(expect, sizeof(expect), "{\"%s\":2}", device);
+    ASSERT_TRUE(n > 0 && (size_t)n < sizeof(expect));
+
+    memset(&e, 0, sizeof(e));
+    ASSERT_EQ_STATUS(
+        store_add(s, "same", k_hash_a, NULL, NULL, 0U, "human", NULL, k_later, &act, &e), STORE_OK);
+    if (e.version_vector == NULL || e.updated_at == NULL) {
+        store_entry_free(&e);
+        store_close(s);
+        free(db);
+        return;
+    }
+    ASSERT_EQ_INT(e.id, 1);
+    ASSERT_EQ_INT((int)act, (int)STORE_ADD_MERGED);
+    ASSERT_TRUE(e.expires_at == NULL);
+    ASSERT_STREQ(e.version_vector, expect);
+    ASSERT_STREQ(e.updated_at, k_later);
+    store_entry_free(&e);
+    store_close(s);
+    free(db);
+}
+
+TEST(store_add_keyed_revive_bumps_both_stamps_once)
+{
+    char *db = NULL;
+    Store *s = NULL;
+    Entry e;
+    StoreAddAction act = STORE_ADD_CREATED;
+    char expect[STALE_VV_CAP];
+    const char *device = NULL;
+    int n = 0;
+    RowStamp before;
+
+    memset(&before, 0, sizeof(before));
+    s = given_live_add(&db, "v1", k_hash_a, "slot", &before);
+    ASSERT_TRUE(s != NULL);
+    if (s == NULL) {
+        free(db);
+        return;
+    }
+    sql_set_expires((ExpiresUpdate){.db = db, .iso = "2020-01-01T00:00:00.000Z"});
+    device = store_device_id(s);
+    ASSERT_TRUE(device != NULL);
+    if (device == NULL) {
+        store_close(s);
+        free(db);
+        return;
+    }
+    n = snprintf(expect, sizeof(expect), "{\"%s\":2}", device);
+    ASSERT_TRUE(n > 0 && (size_t)n < sizeof(expect));
+
+    memset(&e, 0, sizeof(e));
+    ASSERT_EQ_STATUS(
+        store_add(s, "v2", k_hash_b, "slot", NULL, 0U, "human", NULL, k_later, &act, &e), STORE_OK);
+    if (e.version_vector == NULL || e.updated_at == NULL) {
+        store_entry_free(&e);
+        store_close(s);
+        free(db);
+        return;
+    }
+    ASSERT_EQ_INT(e.id, 1);
+    ASSERT_EQ_INT((int)act, (int)STORE_ADD_UPDATED);
+    ASSERT_STREQ(e.body, "v2");
+    ASSERT_TRUE(e.expires_at == NULL);
+    ASSERT_STREQ(e.version_vector, expect);
+    ASSERT_STREQ(e.updated_at, k_later);
+    store_entry_free(&e);
+    store_close(s);
+    free(db);
+}
+
+TEST(store_add_keyless_deleted_revive_bumps_once)
+{
+    char *db = NULL;
+    Store *s = NULL;
+    Entry e;
+    StoreAddAction act = STORE_ADD_CREATED;
+    char expect[STALE_VV_CAP];
+    const char *device = NULL;
+    int n = 0;
+    RowStamp before;
+
+    memset(&before, 0, sizeof(before));
+    memset(&e, 0, sizeof(e));
+    s = given_live_add(&db, "same", k_hash_a, NULL, &before);
+    ASSERT_TRUE(s != NULL);
+    if (s == NULL) {
+        free(db);
+        return;
+    }
+    ASSERT_EQ_STATUS(store_soft_delete_by_id(s, 1, k_now, &e), STORE_OK);
+    store_entry_free(&e);
+    device = store_device_id(s);
+    ASSERT_TRUE(device != NULL);
+    if (device == NULL) {
+        store_close(s);
+        free(db);
+        return;
+    }
+    /* Create is 1. Soft-delete is one write, so the revive is the next counter. */
+    n = snprintf(expect, sizeof(expect), "{\"%s\":3}", device);
+    ASSERT_TRUE(n > 0 && (size_t)n < sizeof(expect));
+
+    memset(&e, 0, sizeof(e));
+    ASSERT_EQ_STATUS(
+        store_add(s, "same", k_hash_a, NULL, NULL, 0U, "human", NULL, k_later, &act, &e), STORE_OK);
+    if (e.version_vector == NULL || e.updated_at == NULL) {
+        store_entry_free(&e);
+        store_close(s);
+        free(db);
+        return;
+    }
+    ASSERT_EQ_INT(e.id, 1);
+    ASSERT_EQ_INT((int)act, (int)STORE_ADD_MERGED);
+    ASSERT_TRUE(e.deleted_at == NULL);
+    ASSERT_STREQ(e.version_vector, expect);
+    ASSERT_STREQ(e.updated_at, k_later);
+    store_entry_free(&e);
+    store_close(s);
+    free(db);
+}
+
+TEST(store_add_same_tag_again_moves_neither_stamp)
+{
+    char *db = NULL;
+    Store *s = NULL;
+    Entry e;
+    StoreAddAction act = STORE_ADD_CREATED;
+    RowStamp after_tag;
+    const char *tags[] = {"wip"};
+
+    memset(&after_tag, 0, sizeof(after_tag));
+    s = given_live_add(&db, "v1", k_hash_a, "slot", &after_tag);
+    ASSERT_TRUE(s != NULL);
+    if (s == NULL) {
+        free(db);
+        return;
+    }
+    memset(&e, 0, sizeof(e));
+    ASSERT_EQ_STATUS(
+        store_add(s, "v1", k_hash_a, "slot", tags, 1U, "human", NULL, k_later, &act, &e), STORE_OK);
+    if (e.version_vector == NULL || e.updated_at == NULL) {
+        store_entry_free(&e);
+        store_close(s);
+        free(db);
+        return;
+    }
+    ASSERT_TRUE(snprintf(after_tag.version_vector, sizeof(after_tag.version_vector), "%s",
+                         e.version_vector) > 0);
+    ASSERT_TRUE(snprintf(after_tag.updated_at, sizeof(after_tag.updated_at), "%s", e.updated_at) >
+                0);
+    store_entry_free(&e);
+
+    memset(&e, 0, sizeof(e));
+    ASSERT_EQ_STATUS(
+        store_add(s, "v1", k_hash_a, "slot", tags, 1U, "human", NULL, k_latest, &act, &e),
+        STORE_OK);
+    if (e.version_vector == NULL || e.updated_at == NULL) {
+        store_entry_free(&e);
+        store_close(s);
+        free(db);
+        return;
+    }
+    ASSERT_EQ_INT(e.id, 1);
+    ASSERT_STREQ(e.version_vector, after_tag.version_vector);
+    ASSERT_STREQ(e.updated_at, after_tag.updated_at);
     store_entry_free(&e);
     store_close(s);
     free(db);
@@ -2674,6 +3130,15 @@ void register_store_tests(void)
     RUN_TEST(store_update_trash_future_expires_leaves_trash);
     RUN_TEST(store_add_keyless_revives_expired);
     RUN_TEST(store_add_keyed_revives_expired);
+    RUN_TEST(store_add_keyed_change_bumps_version_vector);
+    RUN_TEST(store_add_keyed_same_body_moves_neither_stamp);
+    RUN_TEST(store_add_keyed_new_tag_bumps_both_stamps);
+    RUN_TEST(store_add_keyless_new_tag_bumps_both_stamps);
+    RUN_TEST(store_add_keyless_same_body_moves_neither_stamp);
+    RUN_TEST(store_add_keyless_revive_bumps_both_stamps_once);
+    RUN_TEST(store_add_keyed_revive_bumps_both_stamps_once);
+    RUN_TEST(store_add_keyless_deleted_revive_bumps_once);
+    RUN_TEST(store_add_same_tag_again_moves_neither_stamp);
     RUN_TEST(store_add_past_expires_born_in_trash);
     RUN_TEST(store_purge_trash_deletes_only_expired);
     RUN_TEST(store_list_sort_created_keeps_creation_order);
