@@ -229,3 +229,22 @@ I added two valid-SQL mutants:
 ```text
 1. When a mutant fails many unrelated tests at once, check whether it broke the code path (a prepare error, a crash) instead of the meaning. Prefer a valid-but-wrong rewrite (wrong GROUP BY column, wrong comparison) to prove what the tests pin.
 ```
+
+### 2026-10-19 — whole-plan deep review
+
+**Verdict:** approve. No code change. No grill. Do not start plan 18.
+
+**Ran, not read.** The C tree is `9fb7274`; the two commits after it are this plan and the INDEX. ctest 5/5 on that tree (ASan/UBSan, `REMEMBER_TEST_VFS=ON`). Store 127/0, list_dates 37/0. The FINAL review's lint, coverage, `leaks-macos`, and `ci-linux.sh` ran on these same C bytes. Bugbot is not installed. PR #31 is already closed.
+
+**Safety.** On `build/remember`, a fresh brain:
+
+- Plain `--since` with `\n`, `\r`, and `\r\n` is one stderr line (`bad?injected`, `bad??injected`). Tab stays a tab. ESC becomes `?`. DEL becomes `?`. Quotes and a backslash stay. `--json-errors` keeps the newline escaped, one line.
+- `--if-version-vector` with a raw newline is one line (`{"x":1}?forged`). Agreeing copies, disagreeing copies, three copies, `{"a":1,"\u0061":1}`, a device id repeated via `\u` escapes, and `{"a\/b":1,"a/b":1}` are `usage` `invalid version vector`. The body stays `body`.
+- `{"<device>":1,"other":0}` writes. Human `get` of a body keeps the newline and maps ESC to `?`.
+- U+2028 and UTF-8 U+009B stay inside that one `\n`-terminated line. A1 names bytes below `0x20` and DEL, so both pass through. U+009B does not swallow the bytes after it.
+
+**Simplicity.** Nothing to cut. `output_text_human` is the one classifier, and `write_preview` stays separate because a list cell also maps tab and stops at the first newline. A struct in place of the test helper's NOLINT would be more lines. The three writes in `write_notice` are the three failure points.
+
+**Pragmatic write-gate:** DRY PASS (one C0/DEL classifier). Easy-to-replace PASS (sqlite stays in the adapter; `diag.c` calls `output.h`). Orthogonal PASS (JSON, `vv_parse_pairs`, and import have no diff).
+
+**Grades:** coder 9/10, stage reviewer 9/10. No pointer beyond the stage reviewer's mutant note above. That note is not in `standard:coding` yet.
