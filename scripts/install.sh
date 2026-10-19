@@ -148,7 +148,8 @@ install_binary() {
   local tree
   local bin_src
   local bin_dst="$PREFIX/bin/remember"
-  local need_build=0
+  local want_ver
+  local got_ver
 
   tree="$(release_tree)"
   bin_src="$tree/remember"
@@ -168,17 +169,12 @@ install_binary() {
       exit 1
     fi
   else
-    need_build=1
     if [[ "$FORCE_BUILD" -eq 1 ]]; then
       echo "== clean Release tree ($tree) =="
       rm -rf "$tree"
-    elif [[ -x "$bin_src" ]] && ! binary_looks_sanitized "$bin_src"; then
-      # Reuse a prior clean Release binary unless forced.
-      need_build=0
     fi
-  fi
-
-  if [[ "$need_build" -eq 1 ]]; then
+    # Always build: an existing binary may be stale, and cmake is a no-op
+    # when the tree is up to date.
     echo "== build Release (no sanitizers) -> $tree =="
     cmake -S "$ROOT" -B "$tree" \
       -DCMAKE_BUILD_TYPE=Release \
@@ -197,6 +193,14 @@ install_binary() {
   fi
   if binary_links_test_vfs "$bin_src"; then
     echo "error: $bin_src links the test VFS after build; refusing install" >&2
+    exit 1
+  fi
+  # A stale binary here once shadowed Homebrew and could not open a newer brain.
+  want_ver="$(sed -n 's/^project(remember VERSION \([0-9.]*\).*/\1/p' "$ROOT/CMakeLists.txt")"
+  got_ver="$("$bin_src" --version 2>&1 || true)"
+  if [[ -z "$want_ver" || "$got_ver" != "remember $want_ver" ]]; then
+    echo "error: $bin_src reports '$got_ver' but CMakeLists.txt is $want_ver; refusing install" >&2
+    echo "       rebuild with: $0 --force-build" >&2
     exit 1
   fi
 
