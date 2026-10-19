@@ -5685,59 +5685,19 @@ static StoreStatus vv_compare(sqlite3 *db, const char *local_vv, const char *inc
 }
 
 /* A guard token is one JSON object of device id to non-negative integer.
-   json_each on malformed JSON is an error, so validity is checked first. */
+   json_type and json_each error on malformed JSON; CASE evaluates only the
+   branch it needs, so json_valid guards them in one statement. */
 static StoreStatus vv_reject_malformed(sqlite3 *db, const char *given, StoreError *serr)
 {
     sqlite3_stmt *stmt = NULL;
-    const char *kind = NULL;
     int rc = 0;
-    int valid = 0;
-    int is_object = 0;
-    int bad_member = 0;
-
-    /* json_type errors on malformed JSON, so validity is its own statement. */
-    rc = sqlite3_prepare_v2(db, "SELECT json_valid(?1);", -1, &stmt, NULL);
-    if (rc != SQLITE_OK) {
-        capture_sqlite_error(db, serr);
-        return STORE_ERR_SQLITE;
-    }
-    (void)sqlite3_bind_text(stmt, 1, given, -1, SQLITE_STATIC);
-    rc = sqlite3_step(stmt);
-    if (rc == SQLITE_ROW) {
-        valid = sqlite3_column_int(stmt, 0);
-    }
-    (void)sqlite3_finalize(stmt);
-    if (rc != SQLITE_ROW) {
-        capture_sqlite_error(db, serr);
-        return STORE_ERR_SQLITE;
-    }
-    if (valid == 0) {
-        return STORE_ERR_BAD_VV;
-    }
-
-    rc = sqlite3_prepare_v2(db, "SELECT json_type(?1);", -1, &stmt, NULL);
-    if (rc != SQLITE_OK) {
-        capture_sqlite_error(db, serr);
-        return STORE_ERR_SQLITE;
-    }
-    (void)sqlite3_bind_text(stmt, 1, given, -1, SQLITE_STATIC);
-    rc = sqlite3_step(stmt);
-    if (rc == SQLITE_ROW) {
-        kind = (const char *)sqlite3_column_text(stmt, 0);
-        is_object = (kind != NULL && strcmp(kind, "object") == 0);
-    }
-    (void)sqlite3_finalize(stmt);
-    if (rc != SQLITE_ROW) {
-        capture_sqlite_error(db, serr);
-        return STORE_ERR_SQLITE;
-    }
-    if (is_object == 0) {
-        return STORE_ERR_BAD_VV;
-    }
+    int bad = 1;
 
     rc = sqlite3_prepare_v2(db,
-                            "SELECT EXISTS (SELECT 1 FROM json_each(?1) "
-                            "WHERE type != 'integer' OR atom < 0 OR ifnull(key, '') = '');",
+                            "SELECT CASE WHEN json_valid(?1) = 0 THEN 1 "
+                            "WHEN json_type(?1) != 'object' THEN 1 "
+                            "ELSE EXISTS (SELECT 1 FROM json_each(?1) "
+                            "WHERE type != 'integer' OR atom < 0 OR ifnull(key, '') = '') END;",
                             -1, &stmt, NULL);
     if (rc != SQLITE_OK) {
         capture_sqlite_error(db, serr);
@@ -5746,17 +5706,14 @@ static StoreStatus vv_reject_malformed(sqlite3 *db, const char *given, StoreErro
     (void)sqlite3_bind_text(stmt, 1, given, -1, SQLITE_STATIC);
     rc = sqlite3_step(stmt);
     if (rc == SQLITE_ROW) {
-        bad_member = sqlite3_column_int(stmt, 0);
+        bad = sqlite3_column_int(stmt, 0);
     }
     (void)sqlite3_finalize(stmt);
     if (rc != SQLITE_ROW) {
         capture_sqlite_error(db, serr);
         return STORE_ERR_SQLITE;
     }
-    if (bad_member != 0) {
-        return STORE_ERR_BAD_VV;
-    }
-    return STORE_OK;
+    return bad != 0 ? STORE_ERR_BAD_VV : STORE_OK;
 }
 
 /* Equal when every device counter matches. A missing device counts as 0.

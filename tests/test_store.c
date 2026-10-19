@@ -657,6 +657,37 @@ static Store *given_live_add(char **db_out, const char *body, const char *hash, 
     return s;
 }
 
+/* When: update row 1's body to "new", guarded by vector. Returns the store status. */
+static StoreStatus when_guarded_body_update(Store *s, const char *vector, const char *now)
+{
+    Entry e;
+    long long conflict = 0;
+    StoreStatus st = STORE_OK;
+
+    memset(&e, 0, sizeof(e));
+    st = store_update(s, 1,
+                      &(StoreUpdate){
+                          .set_body = true,
+                          .body = "new",
+                          .body_hash = k_hash_b,
+                          .if_version_vector = vector,
+                      },
+                      now, &e, &conflict);
+    store_entry_free(&e);
+    return st;
+}
+
+/* Then: row 1's body reads body. */
+static void then_body_is(Store *s, const char *body)
+{
+    Entry e;
+
+    memset(&e, 0, sizeof(e));
+    ASSERT_EQ_STATUS(store_get(s, 1, STORE_BIN_LIVE, k_now, &e), STORE_OK);
+    ASSERT_STREQ(e.body, body);
+    store_entry_free(&e);
+}
+
 static void free_page(PageResult page)
 {
     size_t i = 0;
@@ -2349,60 +2380,17 @@ TEST(store_update_if_version_vector_mismatch_writes_nothing)
 
 TEST(store_update_equal_version_vector_writes)
 {
-    char *db = make_temp_db_path();
-    char err[ERR_BUFSIZE];
-    char vector[STALE_VV_CAP];
-    Store *s = NULL;
-    Entry e;
-    StoreAddAction act = STORE_ADD_CREATED;
-    const char *later = "2026-06-15T13:00:00.000Z";
-    long long conflict = 0;
-    StoreStatus st = STORE_OK;
-    int copied = 0;
+    char *db = NULL;
+    RowStamp before;
+    Store *s = given_live_add(&db, "old", k_hash_a, NULL, &before);
 
-    ASSERT_TRUE(db != NULL);
-    s = store_open(db, err, sizeof(err));
     ASSERT_TRUE(s != NULL);
     if (s == NULL) {
         free(db);
         return;
     }
-
-    memset(&e, 0, sizeof(e));
-    memset(vector, 0, sizeof(vector));
-    ASSERT_EQ_STATUS(store_add(s, "old", k_hash_a, NULL, NULL, 0U, "human", NULL, k_now, &act, &e),
-                     STORE_OK);
-    if (e.version_vector == NULL) {
-        store_entry_free(&e);
-        store_close(s);
-        free(db);
-        return;
-    }
-    copied = snprintf(vector, sizeof(vector), "%s", e.version_vector);
-    ASSERT_TRUE(copied > 0 && (size_t)copied < sizeof(vector));
-    ASSERT_TRUE(vector[0] == '{');
-    store_entry_free(&e);
-
-    memset(&e, 0, sizeof(e));
-    st = store_update(s, 1,
-                      &(StoreUpdate){
-                          .set_body = true,
-                          .body = "new",
-                          .body_hash = k_hash_b,
-                          .if_version_vector = vector,
-                      },
-                      later, &e, &conflict);
-    ASSERT_EQ_INT((int)st, (int)STORE_OK);
-    if (st != STORE_OK || e.body == NULL || e.updated_at == NULL) {
-        store_entry_free(&e);
-        store_close(s);
-        free(db);
-        return;
-    }
-    ASSERT_STREQ(e.body, "new");
-    ASSERT_STREQ(e.updated_at, later);
-    store_entry_free(&e);
-
+    ASSERT_EQ_STATUS(when_guarded_body_update(s, before.version_vector, k_later), STORE_OK);
+    then_body_is(s, "new");
     store_close(s);
     free(db);
 }
@@ -2410,110 +2398,36 @@ TEST(store_update_equal_version_vector_writes)
 /* Whitespace is not part of the vector. Byte equality would refuse this. */
 TEST(store_update_version_vector_ignores_whitespace)
 {
-    char *db = make_temp_db_path();
-    char err[ERR_BUFSIZE];
-    char spaced[STALE_VV_CAP];
-    Store *s = NULL;
-    Entry e;
-    StoreAddAction act = STORE_ADD_CREATED;
-    const char *device = NULL;
-    const char *later = "2026-06-15T13:00:00.000Z";
-    long long conflict = 0;
-    StoreStatus st = STORE_OK;
-    int n = 0;
+    char *db = NULL;
+    char vector[STALE_VV_CAP];
+    RowStamp before;
+    Store *s = given_live_add(&db, "old", k_hash_a, NULL, &before);
 
-    ASSERT_TRUE(db != NULL);
-    s = store_open(db, err, sizeof(err));
     ASSERT_TRUE(s != NULL);
     if (s == NULL) {
         free(db);
         return;
     }
-    device = store_device_id(s);
-    ASSERT_TRUE(device != NULL && device[0] != '\0');
-    if (device == NULL) {
-        store_close(s);
-        free(db);
-        return;
-    }
-
-    memset(&e, 0, sizeof(e));
-    ASSERT_EQ_STATUS(store_add(s, "old", k_hash_a, NULL, NULL, 0U, "human", NULL, k_now, &act, &e),
-                     STORE_OK);
-    store_entry_free(&e);
-
-    n = snprintf(spaced, sizeof(spaced), "{ \"%s\" : 1 }", device);
-    ASSERT_TRUE(n > 0 && (size_t)n < sizeof(spaced));
-
-    memset(&e, 0, sizeof(e));
-    st = store_update(s, 1,
-                      &(StoreUpdate){
-                          .set_body = true,
-                          .body = "new",
-                          .body_hash = k_hash_b,
-                          .if_version_vector = spaced,
-                      },
-                      later, &e, &conflict);
-    ASSERT_EQ_INT((int)st, (int)STORE_OK);
-    if (st != STORE_OK || e.body == NULL) {
-        store_entry_free(&e);
-        store_close(s);
-        free(db);
-        return;
-    }
-    ASSERT_STREQ(e.body, "new");
-    store_entry_free(&e);
-
+    ASSERT_TRUE(snprintf(vector, sizeof(vector), "{ \"%s\" : 1 }", store_device_id(s)) > 0);
+    ASSERT_EQ_STATUS(when_guarded_body_update(s, vector, k_later), STORE_OK);
+    then_body_is(s, "new");
     store_close(s);
     free(db);
 }
 
 TEST(store_update_empty_version_vector_is_bad)
 {
-    char *db = make_temp_db_path();
-    char err[ERR_BUFSIZE];
-    Store *s = NULL;
-    Entry e;
-    StoreAddAction act = STORE_ADD_CREATED;
-    long long conflict = 0;
-    StoreStatus st = STORE_OK;
+    char *db = NULL;
+    RowStamp before;
+    Store *s = given_live_add(&db, "old", k_hash_a, NULL, &before);
 
-    ASSERT_TRUE(db != NULL);
-    s = store_open(db, err, sizeof(err));
     ASSERT_TRUE(s != NULL);
     if (s == NULL) {
         free(db);
         return;
     }
-
-    memset(&e, 0, sizeof(e));
-    ASSERT_EQ_STATUS(store_add(s, "old", k_hash_a, NULL, NULL, 0U, "human", NULL, k_now, &act, &e),
-                     STORE_OK);
-    store_entry_free(&e);
-
-    memset(&e, 0, sizeof(e));
-    st = store_update(s, 1,
-                      &(StoreUpdate){
-                          .set_body = true,
-                          .body = "new",
-                          .body_hash = k_hash_b,
-                          .if_version_vector = "",
-                      },
-                      k_now, &e, &conflict);
-    ASSERT_EQ_INT((int)st, (int)STORE_ERR_BAD_VV);
-    store_entry_free(&e);
-
-    memset(&e, 0, sizeof(e));
-    ASSERT_EQ_STATUS(store_get(s, 1, STORE_BIN_LIVE, k_now, &e), STORE_OK);
-    if (e.body == NULL) {
-        store_entry_free(&e);
-        store_close(s);
-        free(db);
-        return;
-    }
-    ASSERT_STREQ(e.body, "old");
-    store_entry_free(&e);
-
+    ASSERT_EQ_STATUS(when_guarded_body_update(s, "", k_now), STORE_ERR_BAD_VV);
+    then_body_is(s, "old");
     store_close(s);
     free(db);
 }
@@ -2522,179 +2436,97 @@ TEST(store_update_empty_version_vector_is_bad)
    Key order does not matter. */
 TEST(store_update_version_vector_missing_device_is_zero)
 {
-    char *db = make_temp_db_path();
-    char err[ERR_BUFSIZE];
-    char reordered[STALE_VV_CAP];
-    Store *s = NULL;
-    Entry e;
-    StoreAddAction act = STORE_ADD_CREATED;
-    const char *device = NULL;
-    const char *later = "2026-06-15T13:00:00.000Z";
-    long long conflict = 0;
-    StoreStatus st = STORE_OK;
-    int n = 0;
+    char *db = NULL;
+    char vector[STALE_VV_CAP];
+    RowStamp before;
+    Store *s = given_live_add(&db, "old", k_hash_a, NULL, &before);
 
-    ASSERT_TRUE(db != NULL);
-    s = store_open(db, err, sizeof(err));
     ASSERT_TRUE(s != NULL);
     if (s == NULL) {
         free(db);
         return;
     }
-    device = store_device_id(s);
-    ASSERT_TRUE(device != NULL);
-    if (device == NULL) {
-        store_close(s);
+    ASSERT_TRUE(snprintf(vector, sizeof(vector), "{\"other\":0,\"%s\":1}", store_device_id(s)) > 0);
+    ASSERT_EQ_STATUS(when_guarded_body_update(s, vector, k_later), STORE_OK);
+    then_body_is(s, "new");
+    store_close(s);
+    free(db);
+}
+
+/* The caller saw a device the row never had: the given side differs. */
+TEST(store_update_extra_device_is_stale)
+{
+    char *db = NULL;
+    char vector[STALE_VV_CAP];
+    RowStamp before;
+    Store *s = given_live_add(&db, "old", k_hash_a, NULL, &before);
+
+    ASSERT_TRUE(s != NULL);
+    if (s == NULL) {
         free(db);
         return;
     }
+    ASSERT_TRUE(snprintf(vector, sizeof(vector), "{\"%s\":1,\"other\":1}", store_device_id(s)) > 0);
+    ASSERT_EQ_STATUS(when_guarded_body_update(s, vector, k_now), STORE_ERR_STALE);
+    then_body_is(s, "old");
+    store_close(s);
+    free(db);
+}
 
-    memset(&e, 0, sizeof(e));
-    ASSERT_EQ_STATUS(store_add(s, "old", k_hash_a, NULL, NULL, 0U, "human", NULL, k_now, &act, &e),
-                     STORE_OK);
-    store_entry_free(&e);
+/* The row has a counter the caller never saw: only the row side differs. */
+TEST(store_update_empty_object_is_stale)
+{
+    char *db = NULL;
+    RowStamp before;
+    Store *s = given_live_add(&db, "old", k_hash_a, NULL, &before);
 
-    n = snprintf(reordered, sizeof(reordered), "{\"other\":0,\"%s\":1}", device);
-    ASSERT_TRUE(n > 0 && (size_t)n < sizeof(reordered));
-
-    memset(&e, 0, sizeof(e));
-    st = store_update(s, 1,
-                      &(StoreUpdate){
-                          .set_body = true,
-                          .body = "new",
-                          .body_hash = k_hash_b,
-                          .if_version_vector = reordered,
-                      },
-                      later, &e, &conflict);
-    ASSERT_EQ_INT((int)st, (int)STORE_OK);
-    if (st != STORE_OK || e.body == NULL) {
-        store_entry_free(&e);
-        store_close(s);
+    ASSERT_TRUE(s != NULL);
+    if (s == NULL) {
         free(db);
         return;
     }
-    ASSERT_STREQ(e.body, "new");
-    store_entry_free(&e);
-
+    ASSERT_EQ_STATUS(when_guarded_body_update(s, "{}", k_now), STORE_ERR_STALE);
+    then_body_is(s, "old");
     store_close(s);
     free(db);
 }
 
 TEST(store_update_changed_counter_is_stale)
 {
-    char *db = make_temp_db_path();
-    char err[ERR_BUFSIZE];
-    char bumped[STALE_VV_CAP];
-    Store *s = NULL;
-    Entry e;
-    StoreAddAction act = STORE_ADD_CREATED;
-    const char *device = NULL;
-    long long conflict = 0;
-    StoreStatus st = STORE_OK;
-    int n = 0;
+    char *db = NULL;
+    char vector[STALE_VV_CAP];
+    RowStamp before;
+    Store *s = given_live_add(&db, "old", k_hash_a, NULL, &before);
 
-    ASSERT_TRUE(db != NULL);
-    s = store_open(db, err, sizeof(err));
     ASSERT_TRUE(s != NULL);
     if (s == NULL) {
         free(db);
         return;
     }
-    device = store_device_id(s);
-    ASSERT_TRUE(device != NULL);
-    if (device == NULL) {
-        store_close(s);
-        free(db);
-        return;
-    }
-
-    memset(&e, 0, sizeof(e));
-    ASSERT_EQ_STATUS(store_add(s, "old", k_hash_a, NULL, NULL, 0U, "human", NULL, k_now, &act, &e),
-                     STORE_OK);
-    store_entry_free(&e);
-
-    n = snprintf(bumped, sizeof(bumped), "{\"%s\":2}", device);
-    ASSERT_TRUE(n > 0 && (size_t)n < sizeof(bumped));
-
-    memset(&e, 0, sizeof(e));
-    st = store_update(s, 1,
-                      &(StoreUpdate){
-                          .set_body = true,
-                          .body = "new",
-                          .body_hash = k_hash_b,
-                          .if_version_vector = bumped,
-                      },
-                      k_now, &e, &conflict);
-    ASSERT_EQ_INT((int)st, (int)STORE_ERR_STALE);
-    store_entry_free(&e);
-
-    memset(&e, 0, sizeof(e));
-    ASSERT_EQ_STATUS(store_get(s, 1, STORE_BIN_LIVE, k_now, &e), STORE_OK);
-    if (e.body == NULL || e.version_vector == NULL) {
-        store_entry_free(&e);
-        store_close(s);
-        free(db);
-        return;
-    }
-    ASSERT_STREQ(e.body, "old");
-    ASSERT_TRUE(strstr(e.version_vector, ":1}") != NULL);
-    store_entry_free(&e);
-
+    ASSERT_TRUE(snprintf(vector, sizeof(vector), "{\"%s\":2}", store_device_id(s)) > 0);
+    ASSERT_EQ_STATUS(when_guarded_body_update(s, vector, k_now), STORE_ERR_STALE);
+    then_body_is(s, "old");
     store_close(s);
     free(db);
 }
 
 TEST(store_update_malformed_version_vector_writes_nothing)
 {
-    char *db = make_temp_db_path();
-    char err[ERR_BUFSIZE];
-    Store *s = NULL;
-    Entry e;
-    StoreAddAction act = STORE_ADD_CREATED;
-    const char *bad[] = {"[]", "{\"d\":-1}", "{\"d\":1.5}", "{\"d\":\"1\"}"};
+    char *db = NULL;
+    RowStamp before;
+    Store *s = given_live_add(&db, "old", k_hash_a, NULL, &before);
+    const char *bad[] = {"[]", "{\"d\":-1}", "{\"d\":1.5}", "{\"d\":\"1\"}", "{\"\":1}"};
     size_t i = 0;
-    long long conflict = 0;
 
-    ASSERT_TRUE(db != NULL);
-    s = store_open(db, err, sizeof(err));
     ASSERT_TRUE(s != NULL);
     if (s == NULL) {
         free(db);
         return;
     }
-
-    memset(&e, 0, sizeof(e));
-    ASSERT_EQ_STATUS(store_add(s, "old", k_hash_a, NULL, NULL, 0U, "human", NULL, k_now, &act, &e),
-                     STORE_OK);
-    store_entry_free(&e);
-
     for (i = 0; i < sizeof(bad) / sizeof(bad[0]); i++) {
-        StoreStatus st = STORE_OK;
-
-        memset(&e, 0, sizeof(e));
-        st = store_update(s, 1,
-                          &(StoreUpdate){
-                              .set_body = true,
-                              .body = "new",
-                              .body_hash = k_hash_b,
-                              .if_version_vector = bad[i],
-                          },
-                          k_now, &e, &conflict);
-        ASSERT_EQ_INT((int)st, (int)STORE_ERR_BAD_VV);
-        store_entry_free(&e);
+        ASSERT_EQ_STATUS(when_guarded_body_update(s, bad[i], k_now), STORE_ERR_BAD_VV);
     }
-
-    memset(&e, 0, sizeof(e));
-    ASSERT_EQ_STATUS(store_get(s, 1, STORE_BIN_LIVE, k_now, &e), STORE_OK);
-    if (e.body == NULL) {
-        store_entry_free(&e);
-        store_close(s);
-        free(db);
-        return;
-    }
-    ASSERT_STREQ(e.body, "old");
-    store_entry_free(&e);
-
+    then_body_is(s, "old");
     store_close(s);
     free(db);
 }
@@ -2702,81 +2534,32 @@ TEST(store_update_malformed_version_vector_writes_nothing)
 /* W2 shares W1's timestamp. The vector, not the clock, is what makes W1 stale. */
 TEST(store_update_same_timestamp_is_still_stale)
 {
-    char *db = make_temp_db_path();
-    char err[ERR_BUFSIZE];
-    char first_vv[STALE_VV_CAP];
-    Store *s = NULL;
+    char *db = NULL;
+    RowStamp first;
+    Store *s = given_live_add(&db, "first", k_hash_a, NULL, &first);
     Entry e;
-    StoreAddAction act = STORE_ADD_CREATED;
     long long conflict = 0;
-    StoreStatus st = STORE_OK;
-    int n = 0;
 
-    ASSERT_TRUE(db != NULL);
-    s = store_open(db, err, sizeof(err));
     ASSERT_TRUE(s != NULL);
     if (s == NULL) {
         free(db);
         return;
     }
-
-    memset(&e, 0, sizeof(e));
-    memset(first_vv, 0, sizeof(first_vv));
-    ASSERT_EQ_STATUS(
-        store_add(s, "first", k_hash_a, NULL, NULL, 0U, "human", NULL, k_now, &act, &e), STORE_OK);
-    if (e.version_vector == NULL) {
-        store_entry_free(&e);
-        store_close(s);
-        free(db);
-        return;
-    }
-    n = snprintf(first_vv, sizeof(first_vv), "%s", e.version_vector);
-    ASSERT_TRUE(n > 0 && (size_t)n < sizeof(first_vv));
-    store_entry_free(&e);
-
+    /* The second write reuses the add's millisecond, so only the VV can tell them apart. */
     memset(&e, 0, sizeof(e));
     ASSERT_EQ_STATUS(store_update(s, 1,
                                   &(StoreUpdate){
                                       .set_body = true,
                                       .body = "second",
-                                      .body_hash = k_hash_b,
+                                      .body_hash = k_hash_c,
                                   },
                                   k_now, &e, &conflict),
                      STORE_OK);
-    if (e.updated_at == NULL || e.version_vector == NULL) {
-        store_entry_free(&e);
-        store_close(s);
-        free(db);
-        return;
-    }
-    ASSERT_STREQ(e.updated_at, k_now);
-    ASSERT_TRUE(strcmp(e.version_vector, first_vv) != 0);
+    ASSERT_STREQ(e.updated_at, first.updated_at);
+    ASSERT_TRUE(e.version_vector != NULL && strcmp(e.version_vector, first.version_vector) != 0);
     store_entry_free(&e);
-
-    memset(&e, 0, sizeof(e));
-    st = store_update(s, 1,
-                      &(StoreUpdate){
-                          .set_body = true,
-                          .body = "third",
-                          .body_hash = k_hash_a,
-                          .if_version_vector = first_vv,
-                      },
-                      k_now, &e, &conflict);
-    ASSERT_EQ_INT((int)st, (int)STORE_ERR_STALE);
-    store_entry_free(&e);
-
-    memset(&e, 0, sizeof(e));
-    ASSERT_EQ_STATUS(store_get(s, 1, STORE_BIN_LIVE, k_now, &e), STORE_OK);
-    if (e.body == NULL || e.version_vector == NULL) {
-        store_entry_free(&e);
-        store_close(s);
-        free(db);
-        return;
-    }
-    ASSERT_STREQ(e.body, "second");
-    ASSERT_TRUE(strcmp(e.version_vector, first_vv) != 0);
-    store_entry_free(&e);
-
+    ASSERT_EQ_STATUS(when_guarded_body_update(s, first.version_vector, k_now), STORE_ERR_STALE);
+    then_body_is(s, "second");
     store_close(s);
     free(db);
 }
@@ -3543,6 +3326,8 @@ void register_store_tests(void)
     RUN_TEST(store_update_version_vector_ignores_whitespace);
     RUN_TEST(store_update_empty_version_vector_is_bad);
     RUN_TEST(store_update_version_vector_missing_device_is_zero);
+    RUN_TEST(store_update_extra_device_is_stale);
+    RUN_TEST(store_update_empty_object_is_stale);
     RUN_TEST(store_update_changed_counter_is_stale);
     RUN_TEST(store_update_malformed_version_vector_writes_nothing);
     RUN_TEST(store_update_same_timestamp_is_still_stale);

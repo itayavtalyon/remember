@@ -675,3 +675,58 @@ TDD reds, before the clause existed: an equal vector compared with `updated_at` 
 1. Fold the two clock loops into one helper. About 6 lines. Not applied. The two sides are the equality rule, and the free on a difference is what a reader checks.
 2. A `given*` helper for the store guard tests. About 80 lines. Not applied. Each test's setup is the contract, and the rest of `tests/test_store.c` is written the same way.
 3. One SQL statement for `json_valid`, `json_type`, and the member check. Cannot. `SELECT json_valid(''), json_type('')` errors with `malformed JSON` before the 0 from `json_valid` comes back. Probed with `sqlite3`. The three statements are the check.
+
+### 2026-10-19 — second-opinion deep review (stage 4b)
+
+**Verdict:** stage 4b approved. No open blocking item. No grill: every decision in the amendment is implemented as written. Two auto-fixed test gaps and two simplifications.
+
+**Run, not read.** Baseline `b9eac7d` (gate root clean): ctest 5/5, LINT OK, coverage 100/100, `leaks-macos` PASS, `ci-linux.sh` OK, `GATE-ALL-GREEN`. Fixed tree: ctest 5/5 (ASan/UBSan, `REMEMBER_TEST_VFS=ON`), LINT OK, coverage 100/100, `leaks-macos` PASS, `ci-linux.sh` OK, `GATE-ALL-GREEN`, in a clean worktree of `b9eac7d` plus these changes. The first run failed clang-tidy `readability-identifier-length` on my `vv` locals, which are now `vector`.
+
+- **The hole is closed.** The stage 4 in-process probe (W1, read the VV, W2, then a guarded update through `remember_run`) now uses `--if-version-vector`. It wrongly accepted **0 of 500**, against 95 of 500 with `updated_at`.
+- **Add-path rule on the binary:**
+  - A repeated keyed or keyless add with the same body and tags moves neither stamp.
+  - A changed body or a new tag bumps `updated_at` and the VV by exactly 1.
+  - A keyless re-add of an expired row revives it with one bump (2 → 3), not two.
+- **Shape check in the `sqlite3` CLI:** 19 hostile inputs (`''`, `x`, `null`, `5`, `[]`, `{"a":-1}`, `{"":1}`, `{"a":1.5}`, `{"a":"1"}`, `{"a":true}`, nested, …) all return BAD, and valid objects with any spacing return OK.
+
+**Mutations on the guard**, one clause each:
+
+| Mutant | Before this review | After |
+|--------|--------------------|-------|
+| shape check skipped | caught (2 tests) | caught |
+| negative counter allowed | caught | caught |
+| non-integer allowed | caught | caught |
+| empty device id allowed | **survived** | caught: `{"":1}` added to the malformed list |
+| given-side compare loop never runs | **survived** | caught: new `store_update_extra_device_is_stale` |
+| row-side compare loop never runs | **survived** | caught: new `store_update_empty_object_is_stale` |
+
+**Findings:**
+
+1. **important → fixed. Two test gaps let one side of the equality check go.** The rule is symmetric: every row counter must match the given one, and every given counter must match the row's. Every stale test differed in a way both loops catch, so either loop could be deleted with the suite green. The amendment listed "a device added" as a required store test, and it was missing. The two new tests each fail one mutant. The malformed list now includes `{"":1}`.
+2. **nit → fixed (simplify, `src/store_sqlite.c` net −43).** `vv_reject_malformed` used three prepare/step/finalize blocks, because `SELECT json_valid(''), json_type('')` errors before `json_valid`'s 0 comes back. The coder probed that form and wrote "Cannot". A `CASE` evaluates only the branch it needs, so `CASE WHEN json_valid(?1) = 0 THEN 1 WHEN json_type(?1) != 'object' THEN 1 ELSE EXISTS (…json_each…) END` is one statement. The malformed tests and all three shape mutants pass through it.
+3. **important → fixed (simplify, DRY).** Seven of the eight guard tests repeated about 25 lines of setup: open a store, check the device id, add "old" with an eleven-argument `store_add`, and guard early returns. The coder declined a helper because "the rest of `tests/test_store.c` is written the same way". It is not: `given_entry` (stage 2 review) and the coder's own `given_live_add` both exist. The tests now use `given_live_add`, plus two small helpers, `when_guarded_body_update` and `then_body_is`. `store_update_if_version_vector_mismatch_writes_nothing` keeps its full row-unchanged and rollback checks. `store_update_same_timestamp_is_still_stale` keeps its point: the second write's `updated_at` equals the first's, and its VV does not. One assertion was dropped: `equal_version_vector_writes` no longer checks that `updated_at` becomes `now` (update tests elsewhere prove that). `tests/test_store.c` is net −215 lines, including the two new tests.
+4. **nit, open.** The shape check accepts a counter above int64 (`{"a":99999999999999999999}`) and a repeated device (`{"a":1,"a":2}`). Neither can equal a real row, so the outcome is `stale`, never a lost write. A future sync plan could make both malformed.
+
+**Praise:**
+
+- `vv_compare`'s equal-or-concurrent trap was caught in the coder's own notes.
+- The compare stays after the bin check and inside the write transaction.
+- The options-struct commit really is behavior-neutral, so the VV commit reads on its own.
+
+**Coder rating (stage 4b): 7.5/10.** It implemented six locked decisions exactly, across three gated commits. It closed the hole, wrote a same-timestamp test, and probed newline and ESC input.
+
+**Misses:**
+
+- It ran three mutants this time against eleven last stage, and the two it skipped were the symmetric halves of the new compare.
+- A plan-listed test ("a device added") never got written.
+- It declined a helper with a claim about the file that a grep disproves.
+- It stopped at "Cannot" after one SQL form.
+
+**Paste-ready for the coder:**
+
+```text
+1. Mutate every clause of new logic: each branch, each side of a symmetric check, each WHERE term. Not a sample.
+2. Before REVIEW_REQUEST, tick every test the plan amendment names against the actual test names.
+3. Before declining a helper, grep the file for given* helpers that already exist, and reuse them.
+4. When a probe says "cannot", try one more form (in SQLite, CASE short-circuits) before writing it down.
+```
