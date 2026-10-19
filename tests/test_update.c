@@ -5,7 +5,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-enum { TS_BUFSIZE = 32, SYNC_ID_CAP = 40 }; /* ISO stamp, and a canonical UUID */
+enum { TS_BUFSIZE = 32, SYNC_ID_CAP = 40, VV_CAP = 128 }; /* stamp, UUID, version vector */
 
 /* Copy the value of a `"key":"..."` JSON string field into out (empty if absent). */
 static void extract_json_str(const char *json, const char *key, char *out, size_t outsz)
@@ -27,6 +27,36 @@ static void extract_json_str(const char *json, const char *key, char *out, size_
     len = (size_t)(end - p);
     if (len >= outsz) {
         len = outsz - 1U;
+    }
+    memcpy(out, p, len);
+    out[len] = '\0';
+}
+
+/* Copy the raw `"version_vector":{...}` object. One level, no nested braces. */
+static void extract_version_vector(const char *json, char *out, size_t outsz)
+{
+    const char *key = "\"version_vector\":";
+    const char *p = NULL;
+    const char *end = NULL;
+    size_t len = 0;
+
+    out[0] = '\0';
+    p = (json != NULL) ? strstr(json, key) : NULL;
+    if (p == NULL) {
+        return;
+    }
+    p += strlen(key);
+    if (p[0] != '{') {
+        return;
+    }
+    end = strchr(p, '}');
+    if (end == NULL) {
+        return;
+    }
+    end++;
+    len = (size_t)(end - p);
+    if (len >= outsz) {
+        return;
     }
     memcpy(out, p, len);
     out[len] = '\0';
@@ -466,13 +496,10 @@ TEST(update_bumps_updated_at)
     free(db);
 }
 
-TEST(update_if_updated_at_rejects_non_canonical)
+TEST(update_if_version_vector_rejects_malformed)
 {
     char *db = make_temp_db_path();
-    const char *date_only[] = {"update", "1", "--if-updated-at", "2026-10-12", "--text", "new"};
-    const char *seconds[] = {"update", "1",  "--if-updated-at", "2026-10-12T10:00:00Z",
-                             "--text", "new"};
-    const char *not_a_stamp[] = {"update", "1", "--if-updated-at", "now", "--text", "new"};
+    const char *args[] = {"update", "1", "--if-version-vector", "not-a-vector", "--text", "new"};
     CmdResult r;
 
     ASSERT_TRUE(db != NULL);
@@ -480,40 +507,30 @@ TEST(update_if_updated_at_rejects_non_canonical)
         return;
     }
     seed_tagged(db);
-    r = run_remember(db, date_only, sizeof(date_only) / sizeof(date_only[0]), NULL);
+    r = run_remember(db, args, sizeof(args) / sizeof(args[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 1);
-    ASSERT_STREQ(r.err, "remember: invalid timestamp: 2026-10-12\n");
-    ASSERT_STREQ(r.out, "");
-    cmd_result_free(&r);
-    r = run_remember(db, seconds, sizeof(seconds) / sizeof(seconds[0]), NULL);
-    ASSERT_EQ_INT(r.exit_code, 1);
-    ASSERT_STREQ(r.err, "remember: invalid timestamp: 2026-10-12T10:00:00Z\n");
-    ASSERT_STREQ(r.out, "");
-    cmd_result_free(&r);
-    r = run_remember(db, not_a_stamp, sizeof(not_a_stamp) / sizeof(not_a_stamp[0]), NULL);
-    ASSERT_EQ_INT(r.exit_code, 1);
-    ASSERT_STREQ(r.err, "remember: invalid timestamp: now\n");
+    ASSERT_STREQ(r.err, "remember: invalid version vector: not-a-vector\n");
     ASSERT_STREQ(r.out, "");
     cmd_result_free(&r);
     free(db);
 }
 
-static void given_updated_at(const char *db, char *stamp, size_t stamp_cap)
+static void given_version_vector(const char *db, char *vector, size_t vector_cap)
 {
     const char *get[] = {"get", "--json", "1"};
     CmdResult r = run_remember(db, get, sizeof(get) / sizeof(get[0]), NULL);
 
-    stamp[0] = '\0';
+    vector[0] = '\0';
     ASSERT_EQ_INT(r.exit_code, 0);
-    extract_json_str(r.out, "\"updated_at\":\"", stamp, stamp_cap);
-    ASSERT_TRUE(stamp[0] != '\0');
+    extract_version_vector(r.out, vector, vector_cap);
+    ASSERT_TRUE(vector[0] == '{');
     cmd_result_free(&r);
 }
 
-TEST(update_if_updated_at_match_writes)
+TEST(update_if_version_vector_match_writes)
 {
     char *db = make_temp_db_path();
-    char stamp[TS_BUFSIZE];
+    char vector[VV_CAP];
     CmdResult got;
     const char *add[] = {"add", "original body"};
 
@@ -523,13 +540,13 @@ TEST(update_if_updated_at_match_writes)
     }
     got = run_remember(db, add, sizeof(add) / sizeof(add[0]), NULL);
     cmd_result_free(&got);
-    given_updated_at(db, stamp, sizeof(stamp));
-    if (stamp[0] == '\0') {
+    given_version_vector(db, vector, sizeof(vector));
+    if (vector[0] == '\0') {
         free(db);
         return;
     }
     {
-        const char *args[] = {"update", "1", "--if-updated-at", stamp, "--text", "new body"};
+        const char *args[] = {"update", "1", "--if-version-vector", vector, "--text", "new body"};
         CmdResult updated = run_remember(db, args, sizeof(args) / sizeof(args[0]), NULL);
 
         ASSERT_EQ_INT(updated.exit_code, 0);
@@ -539,12 +556,11 @@ TEST(update_if_updated_at_match_writes)
     free(db);
 }
 
-TEST(update_if_updated_at_mismatch_is_stale)
+TEST(update_if_version_vector_mismatch_is_stale)
 {
     char *db = make_temp_db_path();
-    const char *args[] = {
-        "--json-errors", "update",  "1", "--if-updated-at", "2020-01-01T00:00:00.000Z",
-        "--text",        "new body"};
+    const char *args[] = {"--json-errors",        "update", "1",       "--if-version-vector",
+                          "{\"other-device\":1}", "--text", "new body"};
     CmdResult r;
 
     ASSERT_TRUE(db != NULL);
@@ -561,13 +577,12 @@ TEST(update_if_updated_at_mismatch_is_stale)
     free(db);
 }
 
-TEST(update_if_updated_at_rejects_a_duplicate)
+TEST(update_if_version_vector_rejects_a_duplicate)
 {
     char *db = make_temp_db_path();
-    const char *args[] = {"update",          "1",
-                          "--if-updated-at", "2020-01-01T00:00:00.000Z",
-                          "--if-updated-at", "2020-01-01T00:00:00.001Z",
-                          "--text",          "new"};
+    const char *args[] = {
+        "update", "1",  "--if-version-vector", "{\"a\":1}", "--if-version-vector", "{\"a\":2}",
+        "--text", "new"};
     CmdResult r;
 
     ASSERT_TRUE(db != NULL);
@@ -577,16 +592,16 @@ TEST(update_if_updated_at_rejects_a_duplicate)
     seed_tagged(db);
     r = run_remember(db, args, sizeof(args) / sizeof(args[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 1);
-    ASSERT_STREQ(r.err, "remember: duplicate --if-updated-at\n");
+    ASSERT_STREQ(r.err, "remember: duplicate --if-version-vector\n");
     ASSERT_STREQ(r.out, "");
     cmd_result_free(&r);
     free(db);
 }
 
-TEST(update_if_updated_at_rejects_a_missing_value)
+TEST(update_if_version_vector_rejects_a_missing_value)
 {
     char *db = make_temp_db_path();
-    const char *args[] = {"update", "1", "--if-updated-at"};
+    const char *args[] = {"update", "1", "--if-version-vector"};
     CmdResult r;
 
     ASSERT_TRUE(db != NULL);
@@ -596,16 +611,16 @@ TEST(update_if_updated_at_rejects_a_missing_value)
     seed_tagged(db);
     r = run_remember(db, args, sizeof(args) / sizeof(args[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 1);
-    ASSERT_STREQ(r.err, "remember: missing value for --if-updated-at\n");
+    ASSERT_STREQ(r.err, "remember: missing value for --if-version-vector\n");
     ASSERT_STREQ(r.out, "");
     cmd_result_free(&r);
     free(db);
 }
 
-TEST(update_if_updated_at_alone_is_not_a_change)
+TEST(update_if_version_vector_alone_is_not_a_change)
 {
     char *db = make_temp_db_path();
-    const char *args[] = {"update", "1", "--if-updated-at", "2020-01-01T00:00:00.000Z"};
+    const char *args[] = {"update", "1", "--if-version-vector", "{\"a\":1}"};
     CmdResult r;
 
     ASSERT_TRUE(db != NULL);
@@ -622,10 +637,10 @@ TEST(update_if_updated_at_alone_is_not_a_change)
     free(db);
 }
 
-TEST(update_if_updated_at_match_by_key_writes)
+TEST(update_if_version_vector_match_by_key_writes)
 {
     char *db = make_temp_db_path();
-    char stamp[TS_BUFSIZE];
+    char vector[VV_CAP];
     CmdResult got;
     const char *add[] = {"add", "--key", "slot", "original body"};
 
@@ -635,14 +650,14 @@ TEST(update_if_updated_at_match_by_key_writes)
     }
     got = run_remember(db, add, sizeof(add) / sizeof(add[0]), NULL);
     cmd_result_free(&got);
-    given_updated_at(db, stamp, sizeof(stamp));
-    if (stamp[0] == '\0') {
+    given_version_vector(db, vector, sizeof(vector));
+    if (vector[0] == '\0') {
         free(db);
         return;
     }
     {
-        const char *args[] = {"update", "--key",  "slot",    "--if-updated-at",
-                              stamp,    "--text", "new body"};
+        const char *args[] = {"update", "--key",  "slot",    "--if-version-vector",
+                              vector,   "--text", "new body"};
         CmdResult updated = run_remember(db, args, sizeof(args) / sizeof(args[0]), NULL);
 
         ASSERT_EQ_INT(updated.exit_code, 0);
@@ -652,10 +667,10 @@ TEST(update_if_updated_at_match_by_key_writes)
     free(db);
 }
 
-TEST(update_if_updated_at_match_by_sync_id_writes)
+TEST(update_if_version_vector_match_by_sync_id_writes)
 {
     char *db = make_temp_db_path();
-    char stamp[TS_BUFSIZE];
+    char vector[VV_CAP];
     char sync_id[SYNC_ID_CAP];
     CmdResult got;
     const char *add[] = {"add", "--json", "original body"};
@@ -666,16 +681,16 @@ TEST(update_if_updated_at_match_by_sync_id_writes)
     }
     got = run_remember(db, add, sizeof(add) / sizeof(add[0]), NULL);
     ASSERT_EQ_INT(got.exit_code, 0);
-    extract_json_str(got.out, "\"updated_at\":\"", stamp, sizeof(stamp));
+    extract_version_vector(got.out, vector, sizeof(vector));
     extract_json_str(got.out, "\"sync_id\":\"", sync_id, sizeof(sync_id));
     cmd_result_free(&got);
-    if (stamp[0] == '\0' || sync_id[0] == '\0') {
+    if (vector[0] == '\0' || sync_id[0] == '\0') {
         free(db);
         return;
     }
     {
-        const char *args[] = {"update", "--sync-id", sync_id,   "--if-updated-at",
-                              stamp,    "--text",    "new body"};
+        const char *args[] = {"update", "--sync-id", sync_id,   "--if-version-vector",
+                              vector,   "--text",    "new body"};
         CmdResult updated = run_remember(db, args, sizeof(args) / sizeof(args[0]), NULL);
 
         ASSERT_EQ_INT(updated.exit_code, 0);
@@ -685,10 +700,10 @@ TEST(update_if_updated_at_match_by_sync_id_writes)
     free(db);
 }
 
-TEST(update_if_updated_at_undelete_match_restores)
+TEST(update_if_version_vector_undelete_match_restores)
 {
     char *db = make_temp_db_path();
-    char stamp[TS_BUFSIZE];
+    char vector[VV_CAP];
     CmdResult got;
     const char *add[] = {"add", "original body"};
     const char *del[] = {"delete", "1"};
@@ -706,14 +721,15 @@ TEST(update_if_updated_at_undelete_match_restores)
     cmd_result_free(&got);
     got = run_remember(db, deleted, sizeof(deleted) / sizeof(deleted[0]), NULL);
     ASSERT_EQ_INT(got.exit_code, 0);
-    extract_json_str(got.out, "\"updated_at\":\"", stamp, sizeof(stamp));
+    extract_version_vector(got.out, vector, sizeof(vector));
     cmd_result_free(&got);
-    if (stamp[0] == '\0') {
+    if (vector[0] == '\0') {
         free(db);
         return;
     }
     {
-        const char *args[] = {"update", "1", "--deleted", "--undelete", "--if-updated-at", stamp};
+        const char *args[] = {"update", "1", "--deleted", "--undelete", "--if-version-vector",
+                              vector};
         CmdResult updated = run_remember(db, args, sizeof(args) / sizeof(args[0]), NULL);
 
         ASSERT_EQ_INT(updated.exit_code, 0);
@@ -751,13 +767,13 @@ void register_update_tests(void)
     RUN_TEST(fts_reflects_tag_update);
     RUN_TEST(update_moves_entry_to_top_of_list);
     RUN_TEST(update_bumps_updated_at);
-    RUN_TEST(update_if_updated_at_rejects_non_canonical);
-    RUN_TEST(update_if_updated_at_match_writes);
-    RUN_TEST(update_if_updated_at_mismatch_is_stale);
-    RUN_TEST(update_if_updated_at_rejects_a_duplicate);
-    RUN_TEST(update_if_updated_at_rejects_a_missing_value);
-    RUN_TEST(update_if_updated_at_alone_is_not_a_change);
-    RUN_TEST(update_if_updated_at_match_by_key_writes);
-    RUN_TEST(update_if_updated_at_match_by_sync_id_writes);
-    RUN_TEST(update_if_updated_at_undelete_match_restores);
+    RUN_TEST(update_if_version_vector_rejects_malformed);
+    RUN_TEST(update_if_version_vector_match_writes);
+    RUN_TEST(update_if_version_vector_mismatch_is_stale);
+    RUN_TEST(update_if_version_vector_rejects_a_duplicate);
+    RUN_TEST(update_if_version_vector_rejects_a_missing_value);
+    RUN_TEST(update_if_version_vector_alone_is_not_a_change);
+    RUN_TEST(update_if_version_vector_match_by_key_writes);
+    RUN_TEST(update_if_version_vector_match_by_sync_id_writes);
+    RUN_TEST(update_if_version_vector_undelete_match_restores);
 }

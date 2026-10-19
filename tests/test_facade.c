@@ -814,9 +814,8 @@ TEST(facade_busy_json_errors_matches_cli)
 TEST(facade_update_stale_matches_cli)
 {
     char *db = make_temp_db_path();
-    const char *cmd[] = {
-        "--json-errors", "update", "1", "--if-updated-at", "2020-01-01T00:00:00.000Z",
-        "--text",        "newer"};
+    const char *cmd[] = {"--json-errors",        "update", "1",    "--if-version-vector",
+                         "{\"other-device\":1}", "--text", "newer"};
     CmdResult sub;
 
     ASSERT_TRUE(db != NULL);

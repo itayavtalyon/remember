@@ -34,7 +34,8 @@ typedef enum {
     STORE_ERR_SOURCE_TOO_OLD,    /* import --from-db: source user_version < 4 */
     STORE_ERR_SOURCE_TOO_NEW,    /* import --from-db: source user_version > 5 */
     STORE_ERR_UNIQUE_TAKEN,      /* accept cannot free key/hash without inventing a key */
-    STORE_ERR_STALE /* if_updated_at is not the row's updated_at; nothing was written */
+    STORE_ERR_STALE, /* if_version_vector is not the row's version vector; nothing was written */
+    STORE_ERR_BAD_VV /* if_version_vector is not an object of non-negative integers */
 } StoreStatus;
 
 /* Locator / list / search / tags bin. LIVE is the zero value (zero-init queries). */
@@ -294,8 +295,8 @@ StoreStatus store_hard_delete_by_key(Store *s, const char *key, StoreBin bin, co
 
 /*
  * Change fields for store_update. Zero / NULL means that axis is left alone,
- * except set_tags with ntags 0, which clears tags. if_updated_at NULL skips
- * the stamp guard. Named fields so call sites cannot transpose the old
+ * except set_tags with ntags 0, which clears tags. if_version_vector NULL skips
+ * the version-vector guard. Named fields so call sites cannot transpose the old
  * positional list (decision:plan17-store-update-options-struct).
  */
 typedef struct {
@@ -304,7 +305,7 @@ typedef struct {
     const char *body_hash;
     const char *const *tags; /* may be NULL when ntags == 0 */
     const char *expires_at;  /* with set_expires: NULL clears, ISO writes */
-    const char *if_updated_at;
+    const char *if_version_vector;
     size_t ntags;
     StoreBin bin;
     bool set_body;
@@ -330,9 +331,10 @@ typedef struct {
  *
  * When set_tags is true, ntags==0 clears tags; otherwise tags replace the set.
  * body / body_hash required when set_body; tags may be NULL when ntags==0.
- * if_updated_at NULL skips the guard. Any other string is compared byte for
- * byte with the row's updated_at inside this write transaction. A mismatch
- * is STORE_ERR_STALE and the transaction rolls back.
+ * if_version_vector NULL skips the guard. Any other string is parsed as a
+ * version vector inside this write transaction, after the bin check. A missing
+ * device counts as 0. Not equal is STORE_ERR_STALE and the transaction rolls
+ * back. Malformed is STORE_ERR_BAD_VV.
  * u NULL is STORE_ERR_INTERNAL.
  */
 StoreStatus store_update(Store *s, long long id, const StoreUpdate *u, const char *now,

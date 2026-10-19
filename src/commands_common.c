@@ -218,6 +218,8 @@ DiagCode code_for_store_status(StoreStatus st)
         return DIAG_UNIQUE_TAKEN;
     case STORE_ERR_STALE:
         return DIAG_STALE;
+    case STORE_ERR_BAD_VV:
+        return DIAG_USAGE;
     default:
         return DIAG_INTERNAL;
     }

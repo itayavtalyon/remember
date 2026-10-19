@@ -333,7 +333,7 @@ typedef struct {
     const char **tag_raw;
     const char *ttl_raw;
     const char *expires_raw;
-    const char *if_updated_raw;
+    const char *if_version_vector_raw;
     size_t ntag_raw;
     bool set_text;
     /* True for `--text=VALUE` (VALUE may be "-"); false for `--text -` (stdin). */
@@ -419,37 +419,30 @@ static int handle_update_flag(const char *arg, int *i, int rest_argc, const char
     return handle_update_ttl_flag(arg, i, rest_argc, rest_argv, out, err);
 }
 
-/* D10: parse_filter_ts also accepts a date and whole seconds, and rewrites
-   them. A byte match with the raw token keeps the canonical form only. */
-static int update_take_if_updated(int *i, int rest_argc, const char **rest_argv, UpdateParse *out,
-                                  const char **err)
+/* The store parses the vector. The CLI keeps the raw token for the usage line. */
+static int update_take_if_version_vector(int *i, int rest_argc, const char **rest_argv,
+                                         UpdateParse *out, const char **err)
 {
-    char canon[ISO_TS_BUFSIZE];
     TakeValue taken;
 
-    if (out->if_updated_raw != NULL) {
-        *err = "duplicate --if-updated-at";
+    if (out->if_version_vector_raw != NULL) {
+        *err = "duplicate --if-version-vector";
         return -1;
     }
-    taken = take_value(i, rest_argc, rest_argv, "missing value for --if-updated-at");
+    taken = take_value(i, rest_argc, rest_argv, "missing value for --if-version-vector");
     if (taken.rc != 0) {
         *err = taken.err;
         return -1;
     }
-    if (parse_filter_ts(taken.value, canon) != 0 || strcmp(taken.value, canon) != 0) {
-        err_fmt(DIAG_USAGE, "invalid timestamp: %s", taken.value);
-        *err = "";
-        return -1;
-    }
-    out->if_updated_raw = taken.value;
+    out->if_version_vector_raw = taken.value;
     return 0;
 }
 
 static int handle_update_ttl_flag(const char *arg, int *i, int rest_argc, const char **rest_argv,
                                   UpdateParse *out, const char **err)
 {
-    if (strcmp(arg, "--if-updated-at") == 0) {
-        return update_take_if_updated(i, rest_argc, rest_argv, out, err);
+    if (strcmp(arg, "--if-version-vector") == 0) {
+        return update_take_if_version_vector(i, rest_argc, rest_argv, out, err);
     }
     if (strcmp(arg, "--ttl") == 0) {
         TakeValue taken = take_value(i, rest_argc, rest_argv, "missing value for --ttl");
@@ -507,7 +500,7 @@ static int parse_update_args(int rest_argc, const char **rest_argv, UpdateParse 
     out->ntag_raw = 0U;
     out->ttl_raw = NULL;
     out->expires_raw = NULL;
-    out->if_updated_raw = NULL;
+    out->if_version_vector_raw = NULL;
     out->clear_expires = false;
     out->undelete = false;
     memset(&out->loc.bins, 0, sizeof(out->loc.bins));
@@ -761,11 +754,15 @@ int cmd_update(Store *s, bool json, int rest_argc, const char **rest_argv)
                           .expires_at = expires_at,
                           .undelete = parsed.undelete,
                           .bin = bin,
-                          .if_updated_at = parsed.if_updated_raw,
+                          .if_version_vector = parsed.if_version_vector_raw,
                       },
                       now, &entry, &conflict_id);
     if (st == STORE_ERR_CONFLICT) {
         err_fmt(DIAG_BODY_CONFLICT, "body hash conflicts with entry %lld", conflict_id);
+        goto cleanup;
+    }
+    if (st == STORE_ERR_BAD_VV) {
+        err_fmt(DIAG_USAGE, "invalid version vector: %s", parsed.if_version_vector_raw);
         goto cleanup;
     }
     if (st != STORE_OK) {

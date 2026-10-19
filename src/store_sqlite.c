@@ -1851,6 +1851,8 @@ const char *store_status_message(StoreStatus st)
         return "cannot free unique key or body hash without inventing a key";
     case STORE_ERR_STALE:
         return "memory changed since it was read";
+    case STORE_ERR_BAD_VV:
+        return "invalid version vector";
     default:
         return "store error";
     }
@@ -4206,6 +4208,9 @@ static StoreStatus update_check_body_conflict(sqlite3 *db, long long entry_id, b
     return STORE_ERR_CONFLICT;
 }
 
+static StoreStatus version_vector_guard(sqlite3 *db, const char *row_vv, const char *given,
+                                        StoreError *serr);
+
 /* Apply body and/or tag changes and always refresh updated_at. */
 static StoreStatus update_apply_changes(sqlite3 *db, long long entry_id, bool is_keyless,
                                         bool set_body, const char *body, const char *body_hash,
@@ -4291,11 +4296,14 @@ StoreStatus store_update(Store *s, long long id, const StoreUpdate *u, const cha
     }
     entry_id = current.id;
     is_keyless = (current.key == NULL);
-    /* P4: current.updated_at was read in this write transaction, before any change. */
-    if (u->if_updated_at != NULL && strcmp(current.updated_at, u->if_updated_at) != 0) {
-        store_entry_free(&current);
-        rollback_quiet(s->db);
-        return STORE_ERR_STALE;
+    /* P4: current.version_vector was read in this write transaction, before any change. */
+    if (u->if_version_vector != NULL) {
+        st = version_vector_guard(s->db, current.version_vector, u->if_version_vector, &s->last);
+        if (st != STORE_OK) {
+            store_entry_free(&current);
+            rollback_quiet(s->db);
+            return st;
+        }
     }
 
     st = update_apply_changes(s->db, entry_id, is_keyless, u->set_body, u->body, u->body_hash,
@@ -5673,6 +5681,125 @@ static StoreStatus vv_compare(sqlite3 *db, const char *local_vv, const char *inc
     } else {
         *out = 0;
     }
+    return STORE_OK;
+}
+
+/* A guard token is one JSON object of device id to non-negative integer.
+   json_each on malformed JSON is an error, so validity is checked first. */
+static StoreStatus vv_reject_malformed(sqlite3 *db, const char *given, StoreError *serr)
+{
+    sqlite3_stmt *stmt = NULL;
+    const char *kind = NULL;
+    int rc = 0;
+    int valid = 0;
+    int is_object = 0;
+    int bad_member = 0;
+
+    /* json_type errors on malformed JSON, so validity is its own statement. */
+    rc = sqlite3_prepare_v2(db, "SELECT json_valid(?1);", -1, &stmt, NULL);
+    if (rc != SQLITE_OK) {
+        capture_sqlite_error(db, serr);
+        return STORE_ERR_SQLITE;
+    }
+    (void)sqlite3_bind_text(stmt, 1, given, -1, SQLITE_STATIC);
+    rc = sqlite3_step(stmt);
+    if (rc == SQLITE_ROW) {
+        valid = sqlite3_column_int(stmt, 0);
+    }
+    (void)sqlite3_finalize(stmt);
+    if (rc != SQLITE_ROW) {
+        capture_sqlite_error(db, serr);
+        return STORE_ERR_SQLITE;
+    }
+    if (valid == 0) {
+        return STORE_ERR_BAD_VV;
+    }
+
+    rc = sqlite3_prepare_v2(db, "SELECT json_type(?1);", -1, &stmt, NULL);
+    if (rc != SQLITE_OK) {
+        capture_sqlite_error(db, serr);
+        return STORE_ERR_SQLITE;
+    }
+    (void)sqlite3_bind_text(stmt, 1, given, -1, SQLITE_STATIC);
+    rc = sqlite3_step(stmt);
+    if (rc == SQLITE_ROW) {
+        kind = (const char *)sqlite3_column_text(stmt, 0);
+        is_object = (kind != NULL && strcmp(kind, "object") == 0);
+    }
+    (void)sqlite3_finalize(stmt);
+    if (rc != SQLITE_ROW) {
+        capture_sqlite_error(db, serr);
+        return STORE_ERR_SQLITE;
+    }
+    if (is_object == 0) {
+        return STORE_ERR_BAD_VV;
+    }
+
+    rc = sqlite3_prepare_v2(db,
+                            "SELECT EXISTS (SELECT 1 FROM json_each(?1) "
+                            "WHERE type != 'integer' OR atom < 0 OR ifnull(key, '') = '');",
+                            -1, &stmt, NULL);
+    if (rc != SQLITE_OK) {
+        capture_sqlite_error(db, serr);
+        return STORE_ERR_SQLITE;
+    }
+    (void)sqlite3_bind_text(stmt, 1, given, -1, SQLITE_STATIC);
+    rc = sqlite3_step(stmt);
+    if (rc == SQLITE_ROW) {
+        bad_member = sqlite3_column_int(stmt, 0);
+    }
+    (void)sqlite3_finalize(stmt);
+    if (rc != SQLITE_ROW) {
+        capture_sqlite_error(db, serr);
+        return STORE_ERR_SQLITE;
+    }
+    if (bad_member != 0) {
+        return STORE_ERR_BAD_VV;
+    }
+    return STORE_OK;
+}
+
+/* Equal when every device counter matches. A missing device counts as 0.
+   vv_compare returns 0 for both equal and concurrent, so it cannot guard. */
+static StoreStatus version_vector_guard(sqlite3 *db, const char *row_vv, const char *given,
+                                        StoreError *serr)
+{
+    VvPair *row = NULL;
+    VvPair *got = NULL;
+    size_t nrow = 0U;
+    size_t ngot = 0U;
+    size_t i = 0U;
+    StoreStatus st = STORE_OK;
+
+    st = vv_reject_malformed(db, given, serr);
+    if (st != STORE_OK) {
+        return st;
+    }
+    st = vv_parse_pairs(db, row_vv, &row, &nrow, serr);
+    if (st != STORE_OK) {
+        return st;
+    }
+    st = vv_parse_pairs(db, given, &got, &ngot, serr);
+    if (st != STORE_OK) {
+        vv_pairs_free(row, nrow);
+        return st;
+    }
+    for (i = 0; i < nrow; i++) {
+        if (row[i].clock != vv_clock_of(got, ngot, row[i].device_id)) {
+            vv_pairs_free(row, nrow);
+            vv_pairs_free(got, ngot);
+            return STORE_ERR_STALE;
+        }
+    }
+    for (i = 0; i < ngot; i++) {
+        if (got[i].clock != vv_clock_of(row, nrow, got[i].device_id)) {
+            vv_pairs_free(row, nrow);
+            vv_pairs_free(got, ngot);
+            return STORE_ERR_STALE;
+        }
+    }
+    vv_pairs_free(row, nrow);
+    vv_pairs_free(got, ngot);
     return STORE_OK;
 }
 

@@ -110,10 +110,10 @@ out[ISO_BUFSIZE])`, shared by list/search/update), `src/cmd_query.c` (flags),
 | `since >= until` → exit 0, empty, `total` 0 | D11 |
 | `search x --since A --until B` filters on `updated_at`; `search x --sort created` is accepted and ignored (same order as without it); `search x --sort bogus` → usage | E5.3, D11 |
 | `--since`/`--until` combine with `--tag`, `--source`, `--key`, bins, `--limit`/`--offset`; `total` counts the filtered set | filters |
-| `update --if-updated-at <current updated_at> --text new` succeeds | E8.1 |
-| `update --if-updated-at <old value>` → exit 1, `stale`, `memory changed since it was read`, row unchanged (body, tags, `updated_at`, VV) | E8 verification |
-| `--if-updated-at 2026-10-12` → `usage` `invalid timestamp: 2026-10-12` | D10 |
-| `--if-updated-at` works with id, `--key`, `--sync-id`, and with `--deleted --undelete` | E8.1 locators |
+| `update --if-version-vector <current version_vector> --text new` succeeds | E8.1 |
+| `update --if-version-vector <other vector>` → exit 1, `stale`, `memory changed since it was read`, row unchanged (body, tags, `updated_at`, VV) | E8 verification |
+| `--if-version-vector not-a-vector` → `usage` `invalid version vector: not-a-vector` | D10 |
+| `--if-version-vector` works with id, `--key`, `--sync-id`, and with `--deleted --undelete` | E8.1 locators |
 | `--json-errors` stale → one JSON line, stdout empty | E4.1 + E8 |
 | Facade byte-match for `list --sort created --since …` and a stale update | EN-03 |
 
@@ -642,3 +642,36 @@ The coder's eleven mutants were not re-run, because 4b replaces the code they co
 2. Before relying on a field, run the design log's rule for it against the code (for example, 005 says every write bumps the version vector). Report the gaps you find, even if they predate the plan.
 3. A declined simplification that changes an API is a grill, not a no.
 ```
+
+## Implementation Notes — stage 4b
+
+Three commits. Each one had a full gate before it was committed. Definition of Done boxes stay unticked. This stage does not finish the plan.
+
+1. `664d643` — `store_update` takes a `StoreUpdate`. No behavior change.
+2. `fafed75` — an add onto an existing row bumps `version_vector[local]` and `updated_at` together when the row changes, and moves neither when it does not.
+3. This commit — `--if-updated-at` is gone. `--if-version-vector` passes the raw string. The adapter checks the shape, parses with `vv_parse_pairs`, and compares maps inside the write transaction, after the bin check. A missing device counts as 0. `vv_compare` is not the check: it returns 0 for equal and for concurrent. Malformed is `STORE_ERR_BAD_VV` → `usage` `invalid version vector: <vv>`. Not equal is `STORE_ERR_STALE`.
+
+**Gate on this commit's tree, before these notes.** ctest 5/5 (ASan/UBSan, `REMEMBER_TEST_VFS=ON`). `lint-all.sh` LINT OK. Coverage 100% functions and 100% effective lines (`must-cover: 0`). `leaks-macos` PASS. `ci-linux.sh` OK, including LINT OK, IWYU, and scan-build. No C file changed after that gate. [Bugbot](ac3884da-72ed-49e7-bacc-fd7e88082ba1) on the uncommitted guard found no logic bug.
+
+**Mutants, one clause each.** Run after the gate and restored. The C tree matches the gate.
+
+| Clause | Test | Result |
+|---|---|---|
+| Reject the token before the bin check | `store_update_wrong_bin_wins_over_stale` | actual 18 (`BAD_VV`), expected 7 (`EXPIRED`) |
+| An explicit 0 counter is a difference | `store_update_version_vector_missing_device_is_zero` | actual 17, expected 0. No other store test failed |
+| The CLI passes NULL | `update_if_version_vector_mismatch_is_stale` and `update_if_version_vector_rejects_malformed` | exit 0. The match tests stayed green |
+
+TDD reds, before the clause existed: an equal vector compared with `updated_at` was status 17; whitespace against a byte compare of the vector was status 17; an empty string before the shape check was status 4 (`INTERNAL`).
+
+**Probes, run.** `./build/remember --db /tmp/remember-vv-probe.db`.
+
+- Newline in the token. Plain stderr is two lines (`remember: invalid version vector: not` / `a-vector`). `--json-errors` is one line and the message contains `\n`.
+- ESC (`\x1b`). Plain is one line. JSON is one line and the message contains `\u001b`.
+- 300 `x`. Plain is 335 bytes, JSON is 376 bytes, each one line, exit 1, code `usage`.
+- In-process: add, read the vector (`:1`), update, read it again (`:2`), then `update --if-version-vector` with the first vector. Exit 1, code `stale`, body stayed `second`. `store_update_same_timestamp_is_still_stale` is the same pair of writes with one forced timestamp.
+
+**Simplify.** Three candidates.
+
+1. Fold the two clock loops into one helper. About 6 lines. Not applied. The two sides are the equality rule, and the free on a difference is what a reader checks.
+2. A `given*` helper for the store guard tests. About 80 lines. Not applied. Each test's setup is the contract, and the rest of `tests/test_store.c` is written the same way.
+3. One SQL statement for `json_valid`, `json_type`, and the member check. Cannot. `SELECT json_valid(''), json_type('')` errors with `malformed JSON` before the 0 from `json_valid` comes back. Probed with `sqlite3`. The three statements are the check.
