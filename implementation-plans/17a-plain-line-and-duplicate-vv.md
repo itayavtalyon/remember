@@ -97,13 +97,13 @@ Branch from an up-to-date `main` after plan 17 has merged. One branch, one PR. L
 
 ## Definition of Done
 
-- [ ] A1 and A2 hold, each proved by the test named above.
-- [ ] Ordinary tokens, quotes, backslashes, tabs, and JSON error bytes are unchanged.
-- [ ] `vv_parse_pairs` has no diff.
-- [ ] Engineering notes mention the plain-line rule and the duplicate-key rule.
-- [ ] Gate green on the commit that is pushed.
-- [ ] Second review done, no open blocking item.
-- [ ] INDEX row 17a marked ✅.
+- [x] A1 and A2 hold, each proved by the test named above.
+- [x] Ordinary tokens, quotes, backslashes, tabs, and JSON error bytes are unchanged.
+- [x] `vv_parse_pairs` has no diff.
+- [x] Engineering notes mention the plain-line rule and the duplicate-key rule.
+- [x] Gate green on the commit that is pushed.
+- [x] Second review done, no open blocking item.
+- [x] INDEX row 17a marked ✅.
 
 ## Second review handover
 
@@ -184,3 +184,48 @@ Definition of Done, each box with its proof:
 - Engineering notes: the Diagnostics and `store_update` bullets.
 - Gate green: above.
 - Still open: the second review and the INDEX ✅ tick.
+
+### 2026-10-19 — second-opinion deep review (FINAL)
+
+**Verdict:** plan 17a approved. No open blocking item. No grill. No code change; one correction to the notes. DoD is all checked, and the INDEX row is marked ✅.
+
+**Run, not read.** Baseline `3688c8e` (gate root clean): ctest 5/5 (ASan/UBSan, `REMEMBER_TEST_VFS=ON`), LINT OK, coverage 100/100, `leaks-macos` PASS, `ci-linux.sh` OK, `GATE-ALL-GREEN`. This review changes only Markdown (this plan and the INDEX), so the pushed C tree is the one that gate ran. Handover probes on `build/remember`:
+
+- **Plain newline and CR:** `list --since $'bad\ninjected'` and `$'bad\rinjected'` each give one line, `remember: invalid timestamp: bad?injected`, read with `od -c`.
+- **Kept bytes:** a tab stays a tab, and `a"b\c` is unchanged.
+- **JSON:** `--json-errors` keeps `\n` escaped in one line.
+- **Bodies:** human `get` of a body with a newline and an ESC keeps the newline and maps the ESC to `?`.
+- **Repeated device key, given:** agreeing (`:1,:1`), disagreeing (`:1,:2`), and `\u`-escaped (`"0…"` decodes to the same key) duplicates are all `usage` `invalid version vector`.
+- **Repeated device key, stored:** a stored `{d:2,d:3}` against `{d:2}` is `stale`, and the body is unchanged.
+- **Two devices:** `{other:0,d:1}` still writes.
+
+**Mutations.** I re-ran three of the coder's 13, in a clean worktree, and each failed exactly the tests their table lists:
+
+- raw `fputs`: 5 tests.
+- a notice that keeps its newline: 2 tests.
+- dropped `GROUP BY`: many tests.
+
+I added two valid-SQL mutants:
+
+- `GROUP BY key, atom` (disagreeing copies slip) fails `store_update_repeated_device_key_is_bad`.
+- `GROUP BY type` (any two keys rejected) fails the two-device tests.
+
+**Findings:**
+
+1. **nit → corrected here (notes accuracy).** The Implementation Notes say that without `GROUP BY` "the term rejects every vector with two keys". It does not. The bundled SQLite 3.53.3 (and Homebrew 3.54) refuses `HAVING` without `GROUP BY` at prepare time ("HAVING clause on a non-aggregate query"). So that mutant fails every guarded update through `STORE_ERR_SQLITE`, single-key vectors included. It proves nothing about the meaning of the term. The two valid-SQL mutants above do, and both fail the right test. The suite is sound; only the explanation was wrong.
+2. **nit, open (outside A1).** A C1 control encoded as UTF-8 (U+009B, CSI, bytes `c2 9b`) passes through unchanged, in notices and in bodies alike. A1 scopes the rule to bytes below `0x20` and DEL, so this follows the decision. The coder's notes cover the raw `0x9b` byte. Whether a UTF-8 terminal acts on U+009B depends on the terminal. If that matters, it is one more range in the shared classifier, and it needs its own decision.
+
+**Praise:**
+
+- The coder corrected two plan claims by running them. The row-side test was green before the fix, and the real bypass is the *agreeing* stored copy. The plan's required `GROUP BY` mutant could not fail the test the plan named.
+- It grilled the conflict with PR #31 instead of picking a side.
+- One classifier now serves bodies and notices.
+- The store tests reuse `given_live_add`, `when_guarded_body_update`, and `then_body_is`. The new `given_row_version_vector` also tidies two older tests.
+
+**Coder rating (plan 17a): 9/10.** The best-tested change so far: 13 one-clause mutants, each red, plus a body-side test it found missing. The one slip was an explanation it did not run.
+
+**Paste-ready for the coder:**
+
+```text
+1. When a mutant fails many unrelated tests at once, check whether it broke the code path (a prepare error, a crash) instead of the meaning. Prefer a valid-but-wrong rewrite (wrong GROUP BY column, wrong comparison) to prove what the tests pin.
+```
