@@ -242,6 +242,19 @@ TEST(facade_list_matches_cli)
     free(db);
 }
 
+TEST(facade_list_sort_since_matches_cli)
+{
+    char *db = make_temp_db_path();
+    const char *cmd[] = {"--json", "list", "--sort", "created", "--since", "2020-01-01"};
+    ASSERT_TRUE(db != NULL);
+    if (db == NULL) {
+        return;
+    }
+    seed_three(db);
+    assert_read_parity(db, cmd, sizeof(cmd) / sizeof(cmd[0]));
+    free(db);
+}
+
 TEST(facade_search_matches_cli)
 {
     char *db = make_temp_db_path();
@@ -798,11 +811,31 @@ TEST(facade_busy_json_errors_matches_cli)
     free(db);
 }
 
+TEST(facade_update_stale_matches_cli)
+{
+    char *db = make_temp_db_path();
+    const char *cmd[] = {"--json-errors",        "update", "1",    "--if-version-vector",
+                         "{\"other-device\":1}", "--text", "newer"};
+    CmdResult sub;
+
+    ASSERT_TRUE(db != NULL);
+    if (db == NULL) {
+        return;
+    }
+    seed_three(db);
+    sub = read_parity(db, cmd, sizeof(cmd) / sizeof(cmd[0]));
+    ASSERT_EQ_INT(sub.exit_code, 1);
+    ASSERT_STREQ(sub.out, "");
+    cmd_result_free(&sub);
+    free(db);
+}
+
 void register_facade_tests(void)
 {
     RUN_TEST(facade_json_errors_not_found_matches_cli);
     RUN_TEST(facade_busy_json_errors_matches_cli);
     RUN_TEST(facade_list_matches_cli);
+    RUN_TEST(facade_list_sort_since_matches_cli);
     RUN_TEST(facade_search_matches_cli);
     RUN_TEST(facade_search_bad_query_matches_cli);
     RUN_TEST(facade_get_matches_cli);
@@ -812,6 +845,7 @@ void register_facade_tests(void)
     RUN_TEST(facade_help_matches_cli);
     RUN_TEST(facade_add_matches_cli);
     RUN_TEST(facade_update_matches_cli);
+    RUN_TEST(facade_update_stale_matches_cli);
     RUN_TEST(facade_delete_matches_cli);
     RUN_TEST(facade_purge_trash_matches_cli);
     RUN_TEST(facade_list_trash_matches_cli);

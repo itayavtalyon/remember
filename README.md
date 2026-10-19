@@ -77,6 +77,9 @@ Opening an existing database migrates it to `user_version` **5**.
 - `--busy-timeout MS` sets the lock wait (0..60000, default 5000).
 - `--no-create` fails when the brain file is missing and creates nothing.
 - `remember repair search-index` rebuilds a damaged search index. `corrupt` with `fts_only` true means that command. It never creates a missing brain.
+- `list --sort updated|created` (default `updated`) orders by that time, newest first, then id.
+- `list` and `search` take `--since` / `--until`. `since` is inclusive and `until` is exclusive. Search filters `updated_at` and ignores `--sort`.
+- `update --if-version-vector` writes only when that memory's `version_vector` still matches. A mismatch is code `stale` and writes nothing.
 
 ### v0.2.0 — local sync foundations
 

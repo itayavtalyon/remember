@@ -135,24 +135,34 @@ static void print_command_help(CliCommand topic)
         (void)fprintf(out, "  --expires TS    Set absolute expiry\n");
         (void)fprintf(out, "  --clear-expires Remove expiry\n");
         (void)fprintf(out, "  --undelete      Clear deleted_at (use with --deleted)\n");
+        (void)fprintf(out, "  --if-version-vector VV\n");
+        (void)fprintf(out, "                  Write only when version_vector equals VV\n");
         (void)fprintf(out, "\n");
         (void)fprintf(out, "Exactly one of ID, --key, or --sync-id is required.\n");
         (void)fprintf(out, "At least one of --text, --tag, --clear-tags, --ttl, --expires,\n");
         (void)fprintf(out, "--clear-expires, or --undelete is required.\n");
         (void)fprintf(out, "Cannot combine --tag with --clear-tags.\n");
         (void)fprintf(out, "Cannot combine --clear-expires with --ttl or --expires.\n");
+        (void)fprintf(out, "A version-vector mismatch is code stale "
+                           "(memory changed since it was read) and writes nothing.\n");
         (void)fprintf(out, "\n");
     } else if (topic == CLI_CMD_LIST) {
         (void)fprintf(out, "Options:\n");
         (void)fprintf(out, "  --tag TAG       Require tag (repeatable; AND)\n");
         (void)fprintf(out, "  --source SRC    Filter by source\n");
         (void)fprintf(out, "  --key KEY       Exact key match\n");
+        (void)fprintf(out, "  --sort SORT     updated or created (default updated)\n");
+        (void)fprintf(out, "  --since TS      Inclusive lower bound on the sort field\n");
+        (void)fprintf(out, "  --until TS      Exclusive upper bound on the sort field\n");
         (void)fprintf(out, "  --limit N       Page size (default 20, max 1000)\n");
         (void)fprintf(out, "  --offset M      Skip M matches (default 0)\n");
         (void)fprintf(out, "  --expired       List expired only (default: live only)\n");
         (void)fprintf(out, "  --deleted       List deleted only\n");
         (void)fprintf(out, "  --trash         Deprecated alias of --expired\n");
         (void)fprintf(out, "\n");
+        (void)fprintf(out, "--since is inclusive and --until is exclusive.\n");
+        (void)fprintf(out, "TS is YYYY-MM-DD (local start of that day), YYYY-MM-DDTHH:MM:SSZ,\n");
+        (void)fprintf(out, "or YYYY-MM-DDTHH:MM:SS.mmmZ.\n");
         (void)fprintf(out, "Human: id | key | tags | preview | updated_at | related\n");
         (void)fprintf(out, "related cell: neighbor ids (cap 5, then , +N). JSON links stubs.\n");
         (void)fprintf(out, "\n");
@@ -162,6 +172,9 @@ static void print_command_help(CliCommand topic)
         (void)fprintf(out, "  --tag TAG       Require tag (repeatable; AND)\n");
         (void)fprintf(out, "  --source SRC    Filter by source\n");
         (void)fprintf(out, "  --key KEY       Exact key match\n");
+        (void)fprintf(out, "  --sort SORT     updated or created; accepted, then ignored\n");
+        (void)fprintf(out, "  --since TS      Inclusive lower bound on updated_at\n");
+        (void)fprintf(out, "  --until TS      Exclusive upper bound on updated_at\n");
         (void)fprintf(out, "  --limit N       Page size (default 20, max 1000)\n");
         (void)fprintf(out, "  --offset M      Skip M matches (default 0)\n");
         (void)fprintf(out, "  --expired       Search expired only (default: live only)\n");
@@ -169,6 +182,9 @@ static void print_command_help(CliCommand topic)
         (void)fprintf(out, "  --trash         Deprecated alias of --expired\n");
         (void)fprintf(out, "\n");
         (void)fprintf(out, "Ranked by FTS relevance (bm25), then updated_at.\n");
+        (void)fprintf(out, "Search ignores --sort. --since and --until filter updated_at.\n");
+        (void)fprintf(out, "TS is YYYY-MM-DD (local start of that day), YYYY-MM-DDTHH:MM:SSZ,\n");
+        (void)fprintf(out, "or YYYY-MM-DDTHH:MM:SS.mmmZ.\n");
         (void)fprintf(out, "Human columns match list (sixth is related ids). JSON links stubs.\n");
         (void)fprintf(out, "\n");
     } else if (topic == CLI_CMD_TAGS) {

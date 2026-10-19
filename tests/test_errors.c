@@ -682,6 +682,8 @@ TEST(store_text_codes_follow_the_locked_split)
     expect_diag(code_for_store_status(STORE_ERR_SOURCE_TOO_OLD), DIAG_SOURCE_TOO_OLD);
     expect_diag(code_for_store_status(STORE_ERR_SOURCE_TOO_NEW), DIAG_NEWER_DATABASE);
     expect_diag(code_for_store_status(STORE_ERR_UNIQUE_TAKEN), DIAG_UNIQUE_TAKEN);
+    expect_diag(code_for_store_status(STORE_ERR_STALE), DIAG_STALE);
+    expect_diag(code_for_store_status(STORE_ERR_BAD_VV), DIAG_USAGE);
     {
         enum { UNKNOWN_STORE_STATUS = 1000 };
         /* NOLINTNEXTLINE(clang-analyzer-optin.core.EnumCastOutOfRange) */

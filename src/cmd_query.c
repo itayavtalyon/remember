@@ -45,6 +45,9 @@ static int parse_size_token(const char *raw, size_t *out)
 typedef struct {
     const char *source;
     const char *key_raw;
+    const char *sort_raw; /* NULL when --sort was omitted (default updated) */
+    const char *since_raw;
+    const char *until_raw;
     const char **tag_raw;
     size_t ntag_raw;
     size_t limit;
@@ -78,6 +81,41 @@ static int list_take_limit(int *i, int rest_argc, const char **rest_argv, size_t
         return -1;
     }
     *out_limit = lim;
+    return 0;
+}
+
+/* rest_argv and slot, and the two usage sentences, are adjacent on purpose. */
+// NOLINTBEGIN(bugprone-easily-swappable-parameters)
+static int list_take_raw(int *i, int rest_argc, const char **rest_argv, const char **slot,
+                         const char *duplicate, const char *missing, const char **err)
+// NOLINTEND(bugprone-easily-swappable-parameters)
+{
+    TakeValue taken;
+
+    if (*slot != NULL) {
+        *err = duplicate;
+        return -1;
+    }
+    taken = take_value(i, rest_argc, rest_argv, missing);
+    if (taken.rc != 0) {
+        *err = taken.err;
+        return -1;
+    }
+    *slot = taken.value;
+    return 0;
+}
+
+static int list_take_sort(int *i, int rest_argc, const char **rest_argv, ListParse *out,
+                          const char **err)
+{
+    if (list_take_raw(i, rest_argc, rest_argv, &out->sort_raw, "duplicate --sort",
+                      "missing value for --sort", err) != 0) {
+        return -1;
+    }
+    if (strcmp(out->sort_raw, "updated") != 0 && strcmp(out->sort_raw, "created") != 0) {
+        *err = "invalid --sort (use updated or created)";
+        return -1;
+    }
     return 0;
 }
 
@@ -154,6 +192,17 @@ static int list_handle_opt(const char *arg, int *i, int rest_argc, const char **
     if (strcmp(arg, "--offset") == 0) {
         return list_take_offset(i, rest_argc, rest_argv, &out->offset, err);
     }
+    if (strcmp(arg, "--sort") == 0) {
+        return list_take_sort(i, rest_argc, rest_argv, out, err);
+    }
+    if (strcmp(arg, "--since") == 0) {
+        return list_take_raw(i, rest_argc, rest_argv, &out->since_raw, "duplicate --since",
+                             "missing value for --since", err);
+    }
+    if (strcmp(arg, "--until") == 0) {
+        return list_take_raw(i, rest_argc, rest_argv, &out->until_raw, "duplicate --until",
+                             "missing value for --until", err);
+    }
     if (cmd_bin_take_flag(arg, &out->bins) != 0) {
         return 0;
     }
@@ -169,6 +218,9 @@ static void list_parse_init(ListParse *out)
 {
     out->source = NULL;
     out->key_raw = NULL;
+    out->sort_raw = NULL;
+    out->since_raw = NULL;
+    out->until_raw = NULL;
     out->tag_raw = NULL;
     out->ntag_raw = 0U;
     out->limit = LIST_LIMIT_DEFAULT;
@@ -333,14 +385,30 @@ static int parse_search_args(int rest_argc, const char **rest_argv, SearchParse 
     return 0;
 }
 
+static int list_bind_bound(const char *raw, char out[ISO_TS_BUFSIZE], const char **bound)
+{
+    if (raw == NULL) {
+        *bound = NULL;
+        return 0;
+    }
+    if (parse_filter_ts(raw, out) != 0) {
+        err_fmt(DIAG_USAGE, "invalid timestamp: %s", raw);
+        return -1;
+    }
+    *bound = out;
+    return 0;
+}
+
 /*
  * Validate parsed filters and normalize them into *q. Allocates *out_tags (heap;
  * caller frees with free_tag_list) that q->tags points into; key_norm is caller
- * storage that q->key points into. Prints its own error and returns -1 on
- * failure, 0 on success.
+ * storage that q->key points into. since_out/until_out hold canonical bounds
+ * when those flags were set. Prints its own error and returns -1 on failure,
+ * 0 on success.
  */
 static int list_prepare_query(const ListParse *parsed, char *key_norm, size_t key_norm_sz,
-                              char ***out_tags, size_t *out_ntags, ListQuery *q)
+                              char ***out_tags, size_t *out_ntags, ListQuery *q,
+                              char since_out[ISO_TS_BUFSIZE], char until_out[ISO_TS_BUFSIZE])
 {
     const char *err = NULL;
 
@@ -374,6 +442,14 @@ static int list_prepare_query(const ListParse *parsed, char *key_norm, size_t ke
     q->source = parsed->source;
     q->limit = parsed->limit;
     q->offset = parsed->offset;
+    q->sort = STORE_SORT_UPDATED;
+    if (parsed->sort_raw != NULL && strcmp(parsed->sort_raw, "created") == 0) {
+        q->sort = STORE_SORT_CREATED;
+    }
+    if (list_bind_bound(parsed->since_raw, since_out, &q->since) != 0 ||
+        list_bind_bound(parsed->until_raw, until_out, &q->until) != 0) {
+        return -1;
+    }
     q->bin = STORE_BIN_LIVE;
     if (cmd_bin_resolve(&parsed->bins, &q->bin) != 0) {
         return -1;
@@ -449,6 +525,8 @@ int cmd_list(Store *s, bool json, int rest_argc, const char **rest_argv)
     char **tags_norm = NULL;
     size_t ntags = 0U;
     char key_norm[REMEMBER_TOKEN_MAX + 1];
+    char since[ISO_TS_BUFSIZE];
+    char until[ISO_TS_BUFSIZE];
     ListQuery q;
     Entry *entries = NULL;
     size_t count = 0U;
@@ -470,7 +548,8 @@ int cmd_list(Store *s, bool json, int rest_argc, const char **rest_argv)
         return REMEMBER_ERR;
     }
 
-    if (list_prepare_query(&parsed, key_norm, sizeof(key_norm), &tags_norm, &ntags, &q) != 0) {
+    if (list_prepare_query(&parsed, key_norm, sizeof(key_norm), &tags_norm, &ntags, &q, since,
+                           until) != 0) {
         goto cleanup;
     }
 
@@ -517,6 +596,8 @@ int cmd_search(Store *s, bool json, int rest_argc, const char **rest_argv)
     char **tags_norm = NULL;
     size_t ntags = 0U;
     char key_norm[REMEMBER_TOKEN_MAX + 1];
+    char since[ISO_TS_BUFSIZE];
+    char until[ISO_TS_BUFSIZE];
     SearchQuery q;
     Entry *entries = NULL;
     size_t count = 0U;
@@ -539,7 +620,7 @@ int cmd_search(Store *s, bool json, int rest_argc, const char **rest_argv)
     }
 
     if (list_prepare_query(&parsed.filters, key_norm, sizeof(key_norm), &tags_norm, &ntags,
-                           &q.filters) != 0) {
+                           &q.filters, since, until) != 0) {
         goto cleanup;
     }
     q.query = parsed.query;

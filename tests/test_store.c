@@ -18,7 +18,9 @@ enum {
     SQL_BUFSIZE = 160,     /* scratch SQL buffer */
     TINY_ERR_BUFSIZE = 8,  /* deliberately small buffer for truncation test */
     PATH_OVER_MARGIN = 16, /* bytes past REMEMBER_PATH_MAX for the too-long-path test */
-    MANY_TAGS = 99         /* tag count for the tag-stress test */
+    MANY_TAGS = 99,        /* tag count for the tag-stress test */
+    STALE_VV_CAP = 128,    /* version_vector copy for the stale-guard test */
+    STAMP_TS_CAP = 32      /* updated_at copy; a canonical stamp is 24 plus NUL */
 };
 
 /*
@@ -604,7 +606,132 @@ TEST(store_close_null_is_safe)
 static const char k_hash_a[] = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 static const char k_hash_b[] = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
 static const char k_hash_c[] = "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc";
+static const char k_hash_d[] = "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd";
+static const char k_hash_e[] = "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee";
+static const char k_hash_f[] = "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff";
 static const char k_now[] = "2026-06-15T12:00:00.000Z";
+static const char k_later[] = "2026-06-15T13:00:00.000Z";
+static const char k_latest[] = "2026-06-15T14:00:00.000Z";
+
+/* Stamps a later add must move together, or leave alone. */
+typedef struct {
+    char version_vector[STALE_VV_CAP];
+    char updated_at[STAMP_TS_CAP];
+} RowStamp;
+
+/* Open a fresh brain and add one live row. Copies the row's VV and updated_at. */
+static Store *given_live_add(char **db_out, const char *body, const char *hash, const char *key,
+                             RowStamp *stamp)
+{
+    char err[ERR_BUFSIZE];
+    Store *s = NULL;
+    Entry e;
+    StoreAddAction act = STORE_ADD_CREATED;
+    int n = 0;
+
+    *db_out = make_temp_db_path();
+    if (*db_out == NULL || stamp == NULL) {
+        return NULL;
+    }
+    s = store_open(*db_out, err, sizeof(err));
+    if (s == NULL) {
+        return NULL;
+    }
+    memset(&e, 0, sizeof(e));
+    memset(stamp, 0, sizeof(*stamp));
+    if (store_add(s, body, hash, key, NULL, 0U, "human", NULL, k_now, &act, &e) != STORE_OK ||
+        e.version_vector == NULL || e.updated_at == NULL) {
+        store_entry_free(&e);
+        store_close(s);
+        return NULL;
+    }
+    n = snprintf(stamp->version_vector, sizeof(stamp->version_vector), "%s", e.version_vector);
+    if (n > 0 && (size_t)n < sizeof(stamp->version_vector)) {
+        n = snprintf(stamp->updated_at, sizeof(stamp->updated_at), "%s", e.updated_at);
+    }
+    store_entry_free(&e);
+    if (n < 0 || (size_t)n >= sizeof(stamp->updated_at) || stamp->version_vector[0] == '\0') {
+        store_close(s);
+        return NULL;
+    }
+    return s;
+}
+
+/* When: update row 1's body to "new", guarded by vector. Returns the store status. */
+static StoreStatus when_guarded_body_update(Store *s, const char *vector, const char *now)
+{
+    Entry e;
+    long long conflict = 0;
+    StoreStatus st = STORE_OK;
+
+    memset(&e, 0, sizeof(e));
+    st = store_update(s, 1,
+                      &(StoreUpdate){
+                          .set_body = true,
+                          .body = "new",
+                          .body_hash = k_hash_b,
+                          .if_version_vector = vector,
+                      },
+                      now, &e, &conflict);
+    store_entry_free(&e);
+    return st;
+}
+
+/* Then: row 1's body reads body. */
+static void then_body_is(Store *s, const char *body)
+{
+    Entry e;
+
+    memset(&e, 0, sizeof(e));
+    ASSERT_EQ_STATUS(store_get(s, 1, STORE_BIN_LIVE, k_now, &e), STORE_OK);
+    ASSERT_STREQ(e.body, body);
+    store_entry_free(&e);
+}
+
+static void free_page(PageResult page)
+{
+    size_t i = 0;
+
+    for (i = 0; i < page.count; i++) {
+        store_entry_free(&page.entries[i]);
+    }
+    free(page.entries);
+}
+
+static void set_updated_at(const char *db, long long id, const char *updated)
+{
+    char sql[SQL_BUFSIZE];
+
+    (void)snprintf(sql, sizeof(sql), "UPDATE entries SET updated_at='%s' WHERE id=%lld;", updated,
+                   id);
+    free(harness_sqlite_query_line(db, sql));
+}
+
+/* Given: one memory whose created_at and updated_at are `created`. Source defaults to human. */
+typedef struct {
+    const char *body;
+    const char *hash;
+    const char *key;
+    const char *const *tags;
+    size_t ntags;
+    const char *source;
+    const char *created;
+} GivenEntry;
+
+static long long given_entry(Store *s, GivenEntry g)
+{
+    Entry e;
+    StoreAddAction act = STORE_ADD_CREATED;
+    long long id = 0;
+
+    memset(&e, 0, sizeof(e));
+    ASSERT_EQ_STATUS(store_add(s, g.body, g.hash, g.key, g.tags, g.ntags,
+                               g.source != NULL ? g.source : "human", NULL, g.created, &act, &e),
+                     STORE_OK);
+    id = e.id;
+    store_entry_free(&e);
+    return id;
+}
 
 TEST(store_get_loads_expires_at)
 {
@@ -912,8 +1039,13 @@ TEST(store_update_and_delete_wrong_bin)
     sql_set_expires((ExpiresUpdate){.db = db, .iso = "2020-01-01T00:00:00.000Z"});
 
     memset(&e, 0, sizeof(e));
-    ASSERT_EQ_STATUS(store_update(s, 1, NULL, true, "x", k_hash_b, false, NULL, 0U, false, NULL,
-                                  false, STORE_BIN_LIVE, k_now, &e, &conflict),
+    ASSERT_EQ_STATUS(store_update(s, 1,
+                                  &(StoreUpdate){
+                                      .set_body = true,
+                                      .body = "x",
+                                      .body_hash = k_hash_b,
+                                  },
+                                  k_now, &e, &conflict),
                      STORE_ERR_EXPIRED);
     store_entry_free(&e);
     memset(&e, 0, sizeof(e));
@@ -930,8 +1062,14 @@ TEST(store_update_and_delete_wrong_bin)
                      STORE_OK);
     store_entry_free(&e);
     memset(&e, 0, sizeof(e));
-    ASSERT_EQ_STATUS(store_update(s, 2, NULL, true, "y", k_hash_a, false, NULL, 0U, false, NULL,
-                                  false, STORE_BIN_EXPIRED, k_now, &e, &conflict),
+    ASSERT_EQ_STATUS(store_update(s, 2,
+                                  &(StoreUpdate){
+                                      .set_body = true,
+                                      .body = "y",
+                                      .body_hash = k_hash_a,
+                                      .bin = STORE_BIN_EXPIRED,
+                                  },
+                                  k_now, &e, &conflict),
                      STORE_ERR_NOT_EXPIRED);
     store_entry_free(&e);
     memset(&e, 0, sizeof(e));
@@ -961,8 +1099,12 @@ TEST(store_update_trash_clear_expires_restores)
     sql_set_expires((ExpiresUpdate){.db = db, .iso = "2020-01-01T00:00:00.000Z"});
 
     memset(&e, 0, sizeof(e));
-    ASSERT_EQ_STATUS(store_update(s, 1, NULL, false, NULL, NULL, false, NULL, 0U, true, NULL, false,
-                                  STORE_BIN_EXPIRED, k_now, &e, &conflict),
+    ASSERT_EQ_STATUS(store_update(s, 1,
+                                  &(StoreUpdate){
+                                      .set_expires = true,
+                                      .bin = STORE_BIN_EXPIRED,
+                                  },
+                                  k_now, &e, &conflict),
                      STORE_OK);
     ASSERT_TRUE(e.expires_at == NULL);
     store_entry_free(&e);
@@ -993,8 +1135,13 @@ TEST(store_update_trash_future_expires_leaves_trash)
     sql_set_expires((ExpiresUpdate){.db = db, .iso = "2020-01-01T00:00:00.000Z"});
 
     memset(&e, 0, sizeof(e));
-    ASSERT_EQ_STATUS(store_update(s, 1, NULL, false, NULL, NULL, false, NULL, 0U, true, future,
-                                  false, STORE_BIN_EXPIRED, k_now, &e, &conflict),
+    ASSERT_EQ_STATUS(store_update(s, 1,
+                                  &(StoreUpdate){
+                                      .set_expires = true,
+                                      .expires_at = future,
+                                      .bin = STORE_BIN_EXPIRED,
+                                  },
+                                  k_now, &e, &conflict),
                      STORE_OK);
     ASSERT_STREQ(e.expires_at != NULL ? e.expires_at : "", future);
     store_entry_free(&e);
@@ -1062,6 +1209,415 @@ TEST(store_add_keyed_revives_expired)
     ASSERT_EQ_INT((int)act, (int)STORE_ADD_UPDATED);
     ASSERT_STREQ(e.body, "v2");
     ASSERT_TRUE(e.expires_at == NULL);
+    store_entry_free(&e);
+    store_close(s);
+    free(db);
+}
+
+TEST(store_add_keyed_change_bumps_version_vector)
+{
+    char *db = NULL;
+    Store *s = NULL;
+    Entry e;
+    StoreAddAction act = STORE_ADD_CREATED;
+    RowStamp before;
+    char expect[STALE_VV_CAP];
+    const char *device = NULL;
+    int n = 0;
+
+    memset(&before, 0, sizeof(before));
+    s = given_live_add(&db, "v1", k_hash_a, "slot", &before);
+    ASSERT_TRUE(s != NULL);
+    if (s == NULL) {
+        free(db);
+        return;
+    }
+    device = store_device_id(s);
+    ASSERT_TRUE(device != NULL);
+    if (device == NULL) {
+        store_close(s);
+        free(db);
+        return;
+    }
+    n = snprintf(expect, sizeof(expect), "{\"%s\":1}", device);
+    ASSERT_TRUE(n > 0 && (size_t)n < sizeof(expect));
+    ASSERT_STREQ(before.version_vector, expect);
+    ASSERT_STREQ(before.updated_at, k_now);
+    n = snprintf(expect, sizeof(expect), "{\"%s\":2}", device);
+    ASSERT_TRUE(n > 0 && (size_t)n < sizeof(expect));
+
+    memset(&e, 0, sizeof(e));
+    ASSERT_EQ_STATUS(
+        store_add(s, "v2", k_hash_b, "slot", NULL, 0U, "human", NULL, k_later, &act, &e), STORE_OK);
+    if (e.version_vector == NULL || e.updated_at == NULL) {
+        store_entry_free(&e);
+        store_close(s);
+        free(db);
+        return;
+    }
+    ASSERT_EQ_INT(e.id, 1);
+    ASSERT_EQ_INT((int)act, (int)STORE_ADD_UPDATED);
+    ASSERT_STREQ(e.version_vector, expect);
+    ASSERT_STREQ(e.updated_at, k_later);
+    store_entry_free(&e);
+    store_close(s);
+    free(db);
+}
+
+TEST(store_add_keyed_same_body_moves_neither_stamp)
+{
+    char *db = NULL;
+    Store *s = NULL;
+    Entry e;
+    StoreAddAction act = STORE_ADD_CREATED;
+    RowStamp before;
+
+    memset(&before, 0, sizeof(before));
+    s = given_live_add(&db, "v1", k_hash_a, "slot", &before);
+    ASSERT_TRUE(s != NULL);
+    if (s == NULL) {
+        free(db);
+        return;
+    }
+
+    memset(&e, 0, sizeof(e));
+    ASSERT_EQ_STATUS(
+        store_add(s, "v1", k_hash_a, "slot", NULL, 0U, "human", NULL, k_later, &act, &e), STORE_OK);
+    if (e.version_vector == NULL || e.updated_at == NULL) {
+        store_entry_free(&e);
+        store_close(s);
+        free(db);
+        return;
+    }
+    ASSERT_EQ_INT(e.id, 1);
+    ASSERT_EQ_INT((int)act, (int)STORE_ADD_UPDATED);
+    ASSERT_STREQ(e.version_vector, before.version_vector);
+    ASSERT_STREQ(e.updated_at, before.updated_at);
+    store_entry_free(&e);
+    store_close(s);
+    free(db);
+}
+
+TEST(store_add_keyed_new_tag_bumps_both_stamps)
+{
+    char *db = NULL;
+    Store *s = NULL;
+    Entry e;
+    StoreAddAction act = STORE_ADD_CREATED;
+    RowStamp before;
+    char expect[STALE_VV_CAP];
+    const char *device = NULL;
+    const char *tags[] = {"wip"};
+    int n = 0;
+
+    memset(&before, 0, sizeof(before));
+    s = given_live_add(&db, "v1", k_hash_a, "slot", &before);
+    ASSERT_TRUE(s != NULL);
+    if (s == NULL) {
+        free(db);
+        return;
+    }
+    device = store_device_id(s);
+    ASSERT_TRUE(device != NULL);
+    if (device == NULL) {
+        store_close(s);
+        free(db);
+        return;
+    }
+    n = snprintf(expect, sizeof(expect), "{\"%s\":2}", device);
+    ASSERT_TRUE(n > 0 && (size_t)n < sizeof(expect));
+
+    memset(&e, 0, sizeof(e));
+    ASSERT_EQ_STATUS(
+        store_add(s, "v1", k_hash_a, "slot", tags, 1U, "human", NULL, k_later, &act, &e), STORE_OK);
+    if (e.version_vector == NULL || e.updated_at == NULL) {
+        store_entry_free(&e);
+        store_close(s);
+        free(db);
+        return;
+    }
+    ASSERT_EQ_INT(e.id, 1);
+    ASSERT_EQ_INT((int)act, (int)STORE_ADD_UPDATED);
+    ASSERT_STREQ(e.version_vector, expect);
+    ASSERT_STREQ(e.updated_at, k_later);
+    store_entry_free(&e);
+    store_close(s);
+    free(db);
+}
+
+TEST(store_add_keyless_new_tag_bumps_both_stamps)
+{
+    char *db = NULL;
+    Store *s = NULL;
+    Entry e;
+    StoreAddAction act = STORE_ADD_CREATED;
+    RowStamp before;
+    char expect[STALE_VV_CAP];
+    const char *device = NULL;
+    const char *tags[] = {"wip"};
+    int n = 0;
+
+    memset(&before, 0, sizeof(before));
+    s = given_live_add(&db, "same", k_hash_a, NULL, &before);
+    ASSERT_TRUE(s != NULL);
+    if (s == NULL) {
+        free(db);
+        return;
+    }
+    device = store_device_id(s);
+    ASSERT_TRUE(device != NULL);
+    if (device == NULL) {
+        store_close(s);
+        free(db);
+        return;
+    }
+    n = snprintf(expect, sizeof(expect), "{\"%s\":2}", device);
+    ASSERT_TRUE(n > 0 && (size_t)n < sizeof(expect));
+
+    memset(&e, 0, sizeof(e));
+    ASSERT_EQ_STATUS(
+        store_add(s, "same", k_hash_a, NULL, tags, 1U, "human", NULL, k_later, &act, &e), STORE_OK);
+    if (e.version_vector == NULL || e.updated_at == NULL) {
+        store_entry_free(&e);
+        store_close(s);
+        free(db);
+        return;
+    }
+    ASSERT_EQ_INT(e.id, 1);
+    ASSERT_EQ_INT((int)act, (int)STORE_ADD_MERGED);
+    ASSERT_STREQ(e.version_vector, expect);
+    ASSERT_STREQ(e.updated_at, k_later);
+    store_entry_free(&e);
+    store_close(s);
+    free(db);
+}
+
+TEST(store_add_keyless_same_body_moves_neither_stamp)
+{
+    char *db = NULL;
+    Store *s = NULL;
+    Entry e;
+    StoreAddAction act = STORE_ADD_CREATED;
+    RowStamp before;
+
+    memset(&before, 0, sizeof(before));
+    s = given_live_add(&db, "same", k_hash_a, NULL, &before);
+    ASSERT_TRUE(s != NULL);
+    if (s == NULL) {
+        free(db);
+        return;
+    }
+
+    memset(&e, 0, sizeof(e));
+    ASSERT_EQ_STATUS(
+        store_add(s, "same", k_hash_a, NULL, NULL, 0U, "human", NULL, k_later, &act, &e), STORE_OK);
+    if (e.version_vector == NULL || e.updated_at == NULL) {
+        store_entry_free(&e);
+        store_close(s);
+        free(db);
+        return;
+    }
+    ASSERT_EQ_INT(e.id, 1);
+    ASSERT_EQ_INT((int)act, (int)STORE_ADD_MERGED);
+    ASSERT_STREQ(e.version_vector, before.version_vector);
+    ASSERT_STREQ(e.updated_at, before.updated_at);
+    store_entry_free(&e);
+    store_close(s);
+    free(db);
+}
+
+TEST(store_add_keyless_revive_bumps_both_stamps_once)
+{
+    char *db = NULL;
+    Store *s = NULL;
+    Entry e;
+    StoreAddAction act = STORE_ADD_CREATED;
+    RowStamp before;
+    char expect[STALE_VV_CAP];
+    const char *device = NULL;
+    int n = 0;
+
+    memset(&before, 0, sizeof(before));
+    s = given_live_add(&db, "same", k_hash_a, NULL, &before);
+    ASSERT_TRUE(s != NULL);
+    if (s == NULL) {
+        free(db);
+        return;
+    }
+    sql_set_expires((ExpiresUpdate){.db = db, .iso = "2020-01-01T00:00:00.000Z"});
+    device = store_device_id(s);
+    ASSERT_TRUE(device != NULL);
+    if (device == NULL) {
+        store_close(s);
+        free(db);
+        return;
+    }
+    n = snprintf(expect, sizeof(expect), "{\"%s\":2}", device);
+    ASSERT_TRUE(n > 0 && (size_t)n < sizeof(expect));
+
+    memset(&e, 0, sizeof(e));
+    ASSERT_EQ_STATUS(
+        store_add(s, "same", k_hash_a, NULL, NULL, 0U, "human", NULL, k_later, &act, &e), STORE_OK);
+    if (e.version_vector == NULL || e.updated_at == NULL) {
+        store_entry_free(&e);
+        store_close(s);
+        free(db);
+        return;
+    }
+    ASSERT_EQ_INT(e.id, 1);
+    ASSERT_EQ_INT((int)act, (int)STORE_ADD_MERGED);
+    ASSERT_TRUE(e.expires_at == NULL);
+    ASSERT_STREQ(e.version_vector, expect);
+    ASSERT_STREQ(e.updated_at, k_later);
+    store_entry_free(&e);
+    store_close(s);
+    free(db);
+}
+
+TEST(store_add_keyed_revive_bumps_both_stamps_once)
+{
+    char *db = NULL;
+    Store *s = NULL;
+    Entry e;
+    StoreAddAction act = STORE_ADD_CREATED;
+    char expect[STALE_VV_CAP];
+    const char *device = NULL;
+    int n = 0;
+    RowStamp before;
+
+    memset(&before, 0, sizeof(before));
+    s = given_live_add(&db, "v1", k_hash_a, "slot", &before);
+    ASSERT_TRUE(s != NULL);
+    if (s == NULL) {
+        free(db);
+        return;
+    }
+    sql_set_expires((ExpiresUpdate){.db = db, .iso = "2020-01-01T00:00:00.000Z"});
+    device = store_device_id(s);
+    ASSERT_TRUE(device != NULL);
+    if (device == NULL) {
+        store_close(s);
+        free(db);
+        return;
+    }
+    n = snprintf(expect, sizeof(expect), "{\"%s\":2}", device);
+    ASSERT_TRUE(n > 0 && (size_t)n < sizeof(expect));
+
+    memset(&e, 0, sizeof(e));
+    ASSERT_EQ_STATUS(
+        store_add(s, "v2", k_hash_b, "slot", NULL, 0U, "human", NULL, k_later, &act, &e), STORE_OK);
+    if (e.version_vector == NULL || e.updated_at == NULL) {
+        store_entry_free(&e);
+        store_close(s);
+        free(db);
+        return;
+    }
+    ASSERT_EQ_INT(e.id, 1);
+    ASSERT_EQ_INT((int)act, (int)STORE_ADD_UPDATED);
+    ASSERT_STREQ(e.body, "v2");
+    ASSERT_TRUE(e.expires_at == NULL);
+    ASSERT_STREQ(e.version_vector, expect);
+    ASSERT_STREQ(e.updated_at, k_later);
+    store_entry_free(&e);
+    store_close(s);
+    free(db);
+}
+
+TEST(store_add_keyless_deleted_revive_bumps_once)
+{
+    char *db = NULL;
+    Store *s = NULL;
+    Entry e;
+    StoreAddAction act = STORE_ADD_CREATED;
+    char expect[STALE_VV_CAP];
+    const char *device = NULL;
+    int n = 0;
+    RowStamp before;
+
+    memset(&before, 0, sizeof(before));
+    memset(&e, 0, sizeof(e));
+    s = given_live_add(&db, "same", k_hash_a, NULL, &before);
+    ASSERT_TRUE(s != NULL);
+    if (s == NULL) {
+        free(db);
+        return;
+    }
+    ASSERT_EQ_STATUS(store_soft_delete_by_id(s, 1, k_now, &e), STORE_OK);
+    store_entry_free(&e);
+    device = store_device_id(s);
+    ASSERT_TRUE(device != NULL);
+    if (device == NULL) {
+        store_close(s);
+        free(db);
+        return;
+    }
+    /* Create is 1. Soft-delete is one write, so the revive is the next counter. */
+    n = snprintf(expect, sizeof(expect), "{\"%s\":3}", device);
+    ASSERT_TRUE(n > 0 && (size_t)n < sizeof(expect));
+
+    memset(&e, 0, sizeof(e));
+    ASSERT_EQ_STATUS(
+        store_add(s, "same", k_hash_a, NULL, NULL, 0U, "human", NULL, k_later, &act, &e), STORE_OK);
+    if (e.version_vector == NULL || e.updated_at == NULL) {
+        store_entry_free(&e);
+        store_close(s);
+        free(db);
+        return;
+    }
+    ASSERT_EQ_INT(e.id, 1);
+    ASSERT_EQ_INT((int)act, (int)STORE_ADD_MERGED);
+    ASSERT_TRUE(e.deleted_at == NULL);
+    ASSERT_STREQ(e.version_vector, expect);
+    ASSERT_STREQ(e.updated_at, k_later);
+    store_entry_free(&e);
+    store_close(s);
+    free(db);
+}
+
+TEST(store_add_same_tag_again_moves_neither_stamp)
+{
+    char *db = NULL;
+    Store *s = NULL;
+    Entry e;
+    StoreAddAction act = STORE_ADD_CREATED;
+    RowStamp after_tag;
+    const char *tags[] = {"wip"};
+
+    memset(&after_tag, 0, sizeof(after_tag));
+    s = given_live_add(&db, "v1", k_hash_a, "slot", &after_tag);
+    ASSERT_TRUE(s != NULL);
+    if (s == NULL) {
+        free(db);
+        return;
+    }
+    memset(&e, 0, sizeof(e));
+    ASSERT_EQ_STATUS(
+        store_add(s, "v1", k_hash_a, "slot", tags, 1U, "human", NULL, k_later, &act, &e), STORE_OK);
+    if (e.version_vector == NULL || e.updated_at == NULL) {
+        store_entry_free(&e);
+        store_close(s);
+        free(db);
+        return;
+    }
+    ASSERT_TRUE(snprintf(after_tag.version_vector, sizeof(after_tag.version_vector), "%s",
+                         e.version_vector) > 0);
+    ASSERT_TRUE(snprintf(after_tag.updated_at, sizeof(after_tag.updated_at), "%s", e.updated_at) >
+                0);
+    store_entry_free(&e);
+
+    memset(&e, 0, sizeof(e));
+    ASSERT_EQ_STATUS(
+        store_add(s, "v1", k_hash_a, "slot", tags, 1U, "human", NULL, k_latest, &act, &e),
+        STORE_OK);
+    if (e.version_vector == NULL || e.updated_at == NULL) {
+        store_entry_free(&e);
+        store_close(s);
+        free(db);
+        return;
+    }
+    ASSERT_EQ_INT(e.id, 1);
+    ASSERT_STREQ(e.version_vector, after_tag.version_vector);
+    ASSERT_STREQ(e.updated_at, after_tag.updated_at);
     store_entry_free(&e);
     store_close(s);
     free(db);
@@ -1166,6 +1722,469 @@ TEST(store_purge_trash_deletes_only_expired)
     free(db);
 }
 
+/* E5.1: editing the oldest row must not change creation order. */
+TEST(store_list_sort_created_keeps_creation_order)
+{
+    char *db = make_temp_db_path();
+    char err[ERR_BUFSIZE];
+    Store *s = NULL;
+    ListQuery q;
+    PageResult page;
+
+    ASSERT_TRUE(db != NULL);
+    s = store_open(db, err, sizeof(err));
+    ASSERT_TRUE(s != NULL);
+    (void)given_entry(
+        s, (GivenEntry){.body = "oldest", .hash = k_hash_a, .created = "2026-01-01T00:00:00.000Z"});
+    (void)given_entry(
+        s, (GivenEntry){.body = "middle", .hash = k_hash_b, .created = "2026-02-01T00:00:00.000Z"});
+    (void)given_entry(
+        s, (GivenEntry){.body = "newest", .hash = k_hash_c, .created = "2026-03-01T00:00:00.000Z"});
+    set_updated_at(db, 1, "2026-04-01T00:00:00.000Z");
+
+    memset(&q, 0, sizeof(q));
+    q.limit = LIST_LIMIT;
+    q.sort = STORE_SORT_CREATED;
+    page = store_list(s, &q, k_now);
+    ASSERT_EQ_INT((int)page.st, (int)STORE_OK);
+    ASSERT_EQ_INT((int)page.count, 3);
+    ASSERT_EQ_INT((int)page.total, 3);
+    ASSERT_STREQ(page.entries[0].body, "newest");
+    ASSERT_STREQ(page.entries[1].body, "middle");
+    ASSERT_STREQ(page.entries[2].body, "oldest");
+    free_page(page);
+    store_close(s);
+    free(db);
+}
+
+/* E5.2: since includes the boundary instant; until excludes it. */
+TEST(store_list_since_inclusive_until_exclusive)
+{
+    char *db = make_temp_db_path();
+    char err[ERR_BUFSIZE];
+    Store *s = NULL;
+    ListQuery q;
+    PageResult page;
+
+    ASSERT_TRUE(db != NULL);
+    s = store_open(db, err, sizeof(err));
+    ASSERT_TRUE(s != NULL);
+    (void)given_entry(
+        s, (GivenEntry){.body = "before", .hash = k_hash_a, .created = "2026-06-01T00:00:00.000Z"});
+    (void)given_entry(
+        s,
+        (GivenEntry){.body = "at_since", .hash = k_hash_b, .created = "2026-06-15T12:00:00.000Z"});
+    (void)given_entry(
+        s,
+        (GivenEntry){.body = "at_until", .hash = k_hash_c, .created = "2026-06-20T00:00:00.000Z"});
+
+    memset(&q, 0, sizeof(q));
+    q.limit = LIST_LIMIT;
+    q.since = "2026-06-15T12:00:00.000Z";
+    q.until = "2026-06-20T00:00:00.000Z";
+    page = store_list(s, &q, k_now);
+    ASSERT_EQ_INT((int)page.st, (int)STORE_OK);
+    ASSERT_EQ_INT((int)page.count, 1);
+    ASSERT_EQ_INT((int)page.total, 1);
+    ASSERT_STREQ(page.entries[0].body, "at_since");
+    free_page(page);
+    store_close(s);
+    free(db);
+}
+
+/* E5.1: zero and updated both follow the edit, not creation time. */
+TEST(store_list_updated_sort_puts_the_edit_first)
+{
+    char *db = make_temp_db_path();
+    char err[ERR_BUFSIZE];
+    Store *s = NULL;
+    ListQuery q;
+    PageResult page;
+
+    ASSERT_TRUE(db != NULL);
+    s = store_open(db, err, sizeof(err));
+    ASSERT_TRUE(s != NULL);
+    (void)given_entry(
+        s, (GivenEntry){.body = "oldest", .hash = k_hash_a, .created = "2026-01-01T00:00:00.000Z"});
+    (void)given_entry(
+        s, (GivenEntry){.body = "middle", .hash = k_hash_b, .created = "2026-02-01T00:00:00.000Z"});
+    (void)given_entry(
+        s, (GivenEntry){.body = "newest", .hash = k_hash_c, .created = "2026-03-01T00:00:00.000Z"});
+    set_updated_at(db, 1, "2026-04-01T00:00:00.000Z");
+
+    memset(&q, 0, sizeof(q));
+    q.limit = LIST_LIMIT;
+    page = store_list(s, &q, k_now);
+    ASSERT_EQ_INT((int)page.st, (int)STORE_OK);
+    ASSERT_STREQ(page.entries[0].body, "oldest");
+    ASSERT_STREQ(page.entries[1].body, "newest");
+    ASSERT_STREQ(page.entries[2].body, "middle");
+    free_page(page);
+
+    q.sort = STORE_SORT_UPDATED;
+    page = store_list(s, &q, k_now);
+    ASSERT_EQ_INT((int)page.st, (int)STORE_OK);
+    ASSERT_STREQ(page.entries[0].body, "oldest");
+    free_page(page);
+    store_close(s);
+    free(db);
+}
+
+/* E5.1: equal created_at breaks toward the higher id, not the later edit. */
+TEST(store_list_created_tie_breaks_by_id)
+{
+    char *db = make_temp_db_path();
+    char err[ERR_BUFSIZE];
+    Store *s = NULL;
+    ListQuery q;
+    PageResult page;
+    long long low_id = 0;
+
+    ASSERT_TRUE(db != NULL);
+    s = store_open(db, err, sizeof(err));
+    ASSERT_TRUE(s != NULL);
+    low_id = given_entry(
+        s, (GivenEntry){.body = "low-id", .hash = k_hash_a, .created = "2026-01-01T00:00:00.000Z"});
+    (void)given_entry(
+        s,
+        (GivenEntry){.body = "high-id", .hash = k_hash_b, .created = "2026-01-01T00:00:00.000Z"});
+    set_updated_at(db, low_id, "2026-09-01T00:00:00.000Z");
+
+    memset(&q, 0, sizeof(q));
+    q.limit = LIST_LIMIT;
+    q.sort = STORE_SORT_CREATED;
+    page = store_list(s, &q, k_now);
+    ASSERT_EQ_INT((int)page.st, (int)STORE_OK);
+    ASSERT_EQ_INT((int)page.count, 2);
+    ASSERT_STREQ(page.entries[0].body, "high-id");
+    ASSERT_STREQ(page.entries[1].body, "low-id");
+    free_page(page);
+    store_close(s);
+    free(db);
+}
+
+/* E5.2: since/until use created_at or updated_at with the sort. */
+TEST(store_list_since_follows_sort_column)
+{
+    char *db = make_temp_db_path();
+    char err[ERR_BUFSIZE];
+    Store *s = NULL;
+    ListQuery q;
+    PageResult page;
+
+    ASSERT_TRUE(db != NULL);
+    s = store_open(db, err, sizeof(err));
+    ASSERT_TRUE(s != NULL);
+    (void)given_entry(
+        s, (GivenEntry){.body = "moved", .hash = k_hash_a, .created = "2026-01-01T00:00:00.000Z"});
+    set_updated_at(db, 1, "2026-08-01T00:00:00.000Z");
+
+    memset(&q, 0, sizeof(q));
+    q.limit = LIST_LIMIT;
+    q.since = "2026-03-01T00:00:00.000Z";
+    q.sort = STORE_SORT_CREATED;
+    page = store_list(s, &q, k_now);
+    ASSERT_EQ_INT((int)page.st, (int)STORE_OK);
+    ASSERT_EQ_INT((int)page.count, 0);
+    ASSERT_EQ_INT((int)page.total, 0);
+    free_page(page);
+
+    q.sort = STORE_SORT_UPDATED;
+    page = store_list(s, &q, k_now);
+    ASSERT_EQ_INT((int)page.st, (int)STORE_OK);
+    ASSERT_EQ_INT((int)page.count, 1);
+    ASSERT_EQ_INT((int)page.total, 1);
+    ASSERT_STREQ(page.entries[0].body, "moved");
+    free_page(page);
+    store_close(s);
+    free(db);
+}
+
+/* D11: since >= until is an empty page, not an error. */
+TEST(store_list_crossed_bounds_are_empty)
+{
+    char *db = make_temp_db_path();
+    char err[ERR_BUFSIZE];
+    Store *s = NULL;
+    ListQuery q;
+    PageResult page;
+
+    ASSERT_TRUE(db != NULL);
+    s = store_open(db, err, sizeof(err));
+    ASSERT_TRUE(s != NULL);
+    (void)given_entry(
+        s, (GivenEntry){.body = "row", .hash = k_hash_a, .created = "2026-06-15T12:00:00.000Z"});
+
+    memset(&q, 0, sizeof(q));
+    q.limit = LIST_LIMIT;
+    q.since = "2026-06-15T12:00:00.000Z";
+    q.until = "2026-06-15T12:00:00.000Z";
+    page = store_list(s, &q, k_now);
+    ASSERT_EQ_INT((int)page.st, (int)STORE_OK);
+    ASSERT_EQ_INT((int)page.count, 0);
+    ASSERT_EQ_INT((int)page.total, 0);
+    free_page(page);
+
+    q.since = "2026-07-01T00:00:00.000Z";
+    q.until = "2026-06-01T00:00:00.000Z";
+    page = store_list(s, &q, k_now);
+    ASSERT_EQ_INT((int)page.st, (int)STORE_OK);
+    ASSERT_EQ_INT((int)page.count, 0);
+    ASSERT_EQ_INT((int)page.total, 0);
+    free_page(page);
+    store_close(s);
+    free(db);
+}
+
+/* E5.3: search since/until stay on updated_at when sort is created. */
+TEST(store_search_since_filters_updated_at)
+{
+    char *db = make_temp_db_path();
+    char err[ERR_BUFSIZE];
+    Store *s = NULL;
+    SearchQuery sq;
+    PageResult page;
+
+    ASSERT_TRUE(db != NULL);
+    s = store_open(db, err, sizeof(err));
+    ASSERT_TRUE(s != NULL);
+    (void)given_entry(s, (GivenEntry){.body = "edited alpha",
+                                      .hash = k_hash_a,
+                                      .created = "2026-01-01T00:00:00.000Z"});
+    set_updated_at(db, 1, "2026-08-01T00:00:00.000Z");
+    (void)given_entry(s, (GivenEntry){.body = "backdated alpha",
+                                      .hash = k_hash_b,
+                                      .created = "2026-09-01T00:00:00.000Z"});
+    set_updated_at(db, 2, "2026-06-01T00:00:00.000Z");
+
+    memset(&sq, 0, sizeof(sq));
+    sq.query = "alpha";
+    sq.filters.limit = LIST_LIMIT;
+    sq.filters.sort = STORE_SORT_CREATED;
+    sq.filters.since = "2026-07-15T00:00:00.000Z";
+    page = store_search(s, &sq, k_now);
+    ASSERT_EQ_INT((int)page.st, (int)STORE_OK);
+    ASSERT_EQ_INT((int)page.count, 1);
+    ASSERT_EQ_INT((int)page.total, 1);
+    ASSERT_STREQ(page.entries[0].body, "edited alpha");
+    free_page(page);
+
+    sq.filters.since = "2026-08-01T00:00:00.000Z";
+    sq.filters.until = "2026-08-01T00:00:00.000Z";
+    page = store_search(s, &sq, k_now);
+    ASSERT_EQ_INT((int)page.st, (int)STORE_OK);
+    ASSERT_EQ_INT((int)page.count, 0);
+    ASSERT_EQ_INT((int)page.total, 0);
+    free_page(page);
+
+    sq.filters.until = "2026-08-01T00:00:00.001Z";
+    page = store_search(s, &sq, k_now);
+    ASSERT_EQ_INT((int)page.st, (int)STORE_OK);
+    ASSERT_EQ_INT((int)page.count, 1);
+    ASSERT_EQ_INT((int)page.total, 1);
+    ASSERT_STREQ(page.entries[0].body, "edited alpha");
+    free_page(page);
+    store_close(s);
+    free(db);
+}
+
+/* E5.3: search keeps bm25 then updated_at order even when the query asks for created. */
+TEST(store_search_ignores_sort_for_order)
+{
+    char *db = make_temp_db_path();
+    char err[ERR_BUFSIZE];
+    Store *s = NULL;
+    SearchQuery sq;
+    PageResult page;
+
+    ASSERT_TRUE(db != NULL);
+    s = store_open(db, err, sizeof(err));
+    ASSERT_TRUE(s != NULL);
+    (void)given_entry(
+        s, (GivenEntry){.body = "alpha", .hash = k_hash_a, .created = "2026-01-01T00:00:00.000Z"});
+    set_updated_at(db, 1, "2026-09-01T00:00:00.000Z");
+    (void)given_entry(
+        s, (GivenEntry){.body = "alpha", .hash = k_hash_b, .created = "2026-05-01T00:00:00.000Z"});
+
+    memset(&sq, 0, sizeof(sq));
+    sq.query = "alpha";
+    sq.filters.limit = LIST_LIMIT;
+    sq.filters.sort = STORE_SORT_CREATED;
+    page = store_search(s, &sq, k_now);
+    ASSERT_EQ_INT((int)page.st, (int)STORE_OK);
+    ASSERT_EQ_INT((int)page.count, 2);
+    ASSERT_EQ_INT((int)page.entries[0].id, 1);
+    ASSERT_EQ_INT((int)page.entries[1].id, 2);
+    free_page(page);
+    store_close(s);
+    free(db);
+}
+
+/* Search rank ties on bm25 and updated_at break toward the higher id. */
+TEST(store_search_ties_break_by_id)
+{
+    char *db = make_temp_db_path();
+    char err[ERR_BUFSIZE];
+    Store *s = NULL;
+    SearchQuery sq;
+    PageResult page;
+
+    ASSERT_TRUE(db != NULL);
+    s = store_open(db, err, sizeof(err));
+    ASSERT_TRUE(s != NULL);
+    (void)given_entry(
+        s, (GivenEntry){.body = "alpha", .hash = k_hash_a, .created = "2026-01-01T00:00:00.000Z"});
+    (void)given_entry(
+        s, (GivenEntry){.body = "alpha", .hash = k_hash_b, .created = "2026-01-01T00:00:00.000Z"});
+
+    memset(&sq, 0, sizeof(sq));
+    sq.query = "alpha";
+    sq.filters.limit = LIST_LIMIT;
+    page = store_search(s, &sq, k_now);
+    ASSERT_EQ_INT((int)page.st, (int)STORE_OK);
+    ASSERT_EQ_INT((int)page.count, 2);
+    ASSERT_EQ_INT((int)page.entries[0].id, 2);
+    ASSERT_EQ_INT((int)page.entries[1].id, 1);
+    free_page(page);
+    store_close(s);
+    free(db);
+}
+
+/* Time bounds AND with tag, source, key, bin, and paging. total is the filtered set. */
+TEST(store_list_bounds_compose_with_filters)
+{
+    char *db = make_temp_db_path();
+    char err[ERR_BUFSIZE];
+    Store *s = NULL;
+    const char *tag_t[] = {"t"};
+    const char *tag_z[] = {"z"};
+    ListQuery q;
+    PageResult page;
+
+    ASSERT_TRUE(db != NULL);
+    s = store_open(db, err, sizeof(err));
+    ASSERT_TRUE(s != NULL);
+    (void)given_entry(s, (GivenEntry){.body = "in-a",
+                                      .hash = k_hash_a,
+                                      .tags = tag_t,
+                                      .ntags = 1U,
+                                      .created = "2026-06-10T00:00:00.000Z"});
+    (void)given_entry(s, (GivenEntry){.body = "in-b",
+                                      .hash = k_hash_b,
+                                      .key = "slot",
+                                      .tags = tag_t,
+                                      .ntags = 1U,
+                                      .created = "2026-06-12T00:00:00.000Z"});
+    (void)given_entry(s, (GivenEntry){.body = "other-tag",
+                                      .hash = k_hash_c,
+                                      .tags = tag_z,
+                                      .ntags = 1U,
+                                      .created = "2026-06-12T00:00:00.000Z"});
+    (void)given_entry(s, (GivenEntry){.body = "other-source",
+                                      .hash = k_hash_d,
+                                      .tags = tag_t,
+                                      .ntags = 1U,
+                                      .source = "agent",
+                                      .created = "2026-06-12T00:00:00.000Z"});
+    (void)given_entry(s, (GivenEntry){.body = "too-early",
+                                      .hash = k_hash_e,
+                                      .tags = tag_t,
+                                      .ntags = 1U,
+                                      .created = "2026-05-01T00:00:00.000Z"});
+    (void)given_entry(s, (GivenEntry){.body = "expired-in",
+                                      .hash = k_hash_f,
+                                      .tags = tag_t,
+                                      .ntags = 1U,
+                                      .created = "2026-06-11T00:00:00.000Z"});
+    free(harness_sqlite_query_line(
+        db, "UPDATE entries SET expires_at='2020-01-01T00:00:00.000Z' WHERE id=6;"));
+
+    memset(&q, 0, sizeof(q));
+    q.tags = tag_t;
+    q.ntags = 1U;
+    q.source = "human";
+    q.limit = 1U;
+    q.offset = 0U;
+    q.since = "2026-06-01T00:00:00.000Z";
+    q.until = "2026-07-01T00:00:00.000Z";
+    page = store_list(s, &q, k_now);
+    ASSERT_EQ_INT((int)page.st, (int)STORE_OK);
+    ASSERT_EQ_INT((int)page.count, 1);
+    ASSERT_EQ_INT((int)page.total, 2);
+    ASSERT_STREQ(page.entries[0].body, "in-b");
+    free_page(page);
+
+    q.offset = 1U;
+    page = store_list(s, &q, k_now);
+    ASSERT_EQ_INT((int)page.st, (int)STORE_OK);
+    ASSERT_EQ_INT((int)page.count, 1);
+    ASSERT_EQ_INT((int)page.total, 2);
+    ASSERT_STREQ(page.entries[0].body, "in-a");
+    free_page(page);
+
+    q.offset = 2U;
+    page = store_list(s, &q, k_now);
+    ASSERT_EQ_INT((int)page.st, (int)STORE_OK);
+    ASSERT_EQ_INT((int)page.count, 0);
+    ASSERT_EQ_INT((int)page.total, 2);
+    free_page(page);
+
+    memset(&q, 0, sizeof(q));
+    q.key = "slot";
+    q.limit = LIST_LIMIT;
+    q.since = "2026-06-01T00:00:00.000Z";
+    q.until = "2026-07-01T00:00:00.000Z";
+    page = store_list(s, &q, k_now);
+    ASSERT_EQ_INT((int)page.st, (int)STORE_OK);
+    ASSERT_EQ_INT((int)page.count, 1);
+    ASSERT_EQ_INT((int)page.total, 1);
+    ASSERT_STREQ(page.entries[0].body, "in-b");
+    free_page(page);
+
+    memset(&q, 0, sizeof(q));
+    q.tags = tag_t;
+    q.ntags = 1U;
+    q.source = "human";
+    q.bin = STORE_BIN_EXPIRED;
+    q.limit = LIST_LIMIT;
+    q.since = "2026-06-01T00:00:00.000Z";
+    q.until = "2026-07-01T00:00:00.000Z";
+    page = store_list(s, &q, k_now);
+    ASSERT_EQ_INT((int)page.st, (int)STORE_OK);
+    ASSERT_EQ_INT((int)page.count, 1);
+    ASSERT_EQ_INT((int)page.total, 1);
+    ASSERT_STREQ(page.entries[0].body, "expired-in");
+    free_page(page);
+    store_close(s);
+    free(db);
+}
+
+TEST(store_list_unknown_sort_is_internal)
+{
+    char *db = make_temp_db_path();
+    char err[ERR_BUFSIZE];
+    Store *s = NULL;
+    ListQuery q;
+    PageResult page;
+    enum { UNKNOWN_STORE_SORT = 7 };
+
+    ASSERT_TRUE(db != NULL);
+    s = store_open(db, err, sizeof(err));
+    ASSERT_TRUE(s != NULL);
+    memset(&q, 0, sizeof(q));
+    q.limit = LIST_LIMIT;
+    /* NOLINTNEXTLINE(clang-analyzer-optin.core.EnumCastOutOfRange) */
+    q.sort = (StoreSort)UNKNOWN_STORE_SORT;
+    q.since = "2026-01-01T00:00:00.000Z";
+    page = store_list(s, &q, k_now);
+    ASSERT_EQ_INT((int)page.st, (int)STORE_ERR_INTERNAL);
+    ASSERT_TRUE(page.entries == NULL);
+    ASSERT_EQ_INT((int)page.count, 0);
+    ASSERT_EQ_INT((int)page.total, 0);
+    store_close(s);
+    free(db);
+}
+
 TEST(store_list_filters_and_paging)
 {
     char *db = make_temp_db_path();
@@ -1258,6 +2277,417 @@ TEST(store_list_filters_and_paging)
     free(db);
 }
 
+TEST(store_update_if_version_vector_mismatch_writes_nothing)
+{
+    char *db = make_temp_db_path();
+    char err[ERR_BUFSIZE];
+    char vv_before[STALE_VV_CAP];
+    Store *s = NULL;
+    Entry e;
+    StoreAddAction act = STORE_ADD_CREATED;
+    const char *tags[] = {"keep"};
+    long long conflict = 0;
+    int vv_n = 0;
+
+    ASSERT_TRUE(db != NULL);
+    s = store_open(db, err, sizeof(err));
+    ASSERT_TRUE(s != NULL);
+    if (s == NULL) {
+        free(db);
+        return;
+    }
+
+    memset(&e, 0, sizeof(e));
+    memset(vv_before, 0, sizeof(vv_before));
+    ASSERT_EQ_STATUS(store_add(s, "old", k_hash_a, NULL, tags, 1U, "human", NULL, k_now, &act, &e),
+                     STORE_OK);
+    if (e.body == NULL || e.updated_at == NULL || e.version_vector == NULL || e.tags == NULL ||
+        e.ntags != 1U || e.tags[0] == NULL) {
+        store_entry_free(&e);
+        store_close(s);
+        free(db);
+        return;
+    }
+    ASSERT_STREQ(e.body, "old");
+    ASSERT_STREQ(e.updated_at, k_now);
+    ASSERT_STREQ(e.tags[0], "keep");
+    vv_n = snprintf(vv_before, sizeof(vv_before), "%s", e.version_vector);
+    ASSERT_TRUE(vv_n > 0 && (size_t)vv_n < sizeof(vv_before));
+    store_entry_free(&e);
+
+    memset(&e, 0, sizeof(e));
+    {
+        const char *stamp = "{\"other-device\":1}";
+        StoreStatus st = store_update(s, 1,
+                                      &(StoreUpdate){
+                                          .set_body = true,
+                                          .body = "new",
+                                          .body_hash = k_hash_b,
+                                          .if_version_vector = stamp,
+                                      },
+                                      k_now, &e, &conflict);
+        ASSERT_EQ_INT((int)st, (int)STORE_ERR_STALE);
+        if (st != STORE_ERR_STALE) {
+            store_entry_free(&e);
+            store_close(s);
+            free(db);
+            return;
+        }
+    }
+    ASSERT_STREQ(store_status_message(STORE_ERR_STALE), "memory changed since it was read");
+    store_entry_free(&e);
+
+    memset(&e, 0, sizeof(e));
+    ASSERT_EQ_STATUS(store_get(s, 1, STORE_BIN_LIVE, k_now, &e), STORE_OK);
+    if (e.body == NULL || e.updated_at == NULL || e.version_vector == NULL || e.tags == NULL ||
+        e.ntags != 1U || e.tags[0] == NULL) {
+        store_entry_free(&e);
+        store_close(s);
+        free(db);
+        return;
+    }
+    ASSERT_STREQ(e.body, "old");
+    ASSERT_STREQ(e.updated_at, k_now);
+    ASSERT_STREQ(e.version_vector, vv_before);
+    ASSERT_STREQ(e.tags[0], "keep");
+    ASSERT_TRUE(e.deleted_at == NULL);
+    store_entry_free(&e);
+
+    /* The stale return rolls the write transaction back, so a later update works. */
+    memset(&e, 0, sizeof(e));
+    {
+        StoreStatus again = store_update(s, 1,
+                                         &(StoreUpdate){
+                                             .set_body = true,
+                                             .body = "new",
+                                             .body_hash = k_hash_b,
+                                         },
+                                         k_now, &e, &conflict);
+        ASSERT_EQ_INT((int)again, (int)STORE_OK);
+        if (again != STORE_OK || e.body == NULL) {
+            store_entry_free(&e);
+            store_close(s);
+            free(db);
+            return;
+        }
+    }
+    ASSERT_STREQ(e.body, "new");
+    store_entry_free(&e);
+
+    store_close(s);
+    free(db);
+}
+
+TEST(store_update_equal_version_vector_writes)
+{
+    char *db = NULL;
+    RowStamp before;
+    Store *s = given_live_add(&db, "old", k_hash_a, NULL, &before);
+
+    ASSERT_TRUE(s != NULL);
+    if (s == NULL) {
+        free(db);
+        return;
+    }
+    ASSERT_EQ_STATUS(when_guarded_body_update(s, before.version_vector, k_later), STORE_OK);
+    then_body_is(s, "new");
+    store_close(s);
+    free(db);
+}
+
+/* Whitespace is not part of the vector. Byte equality would refuse this. */
+TEST(store_update_version_vector_ignores_whitespace)
+{
+    char *db = NULL;
+    char vector[STALE_VV_CAP];
+    RowStamp before;
+    Store *s = given_live_add(&db, "old", k_hash_a, NULL, &before);
+
+    ASSERT_TRUE(s != NULL);
+    if (s == NULL) {
+        free(db);
+        return;
+    }
+    ASSERT_TRUE(snprintf(vector, sizeof(vector), "{ \"%s\" : 1 }", store_device_id(s)) > 0);
+    ASSERT_EQ_STATUS(when_guarded_body_update(s, vector, k_later), STORE_OK);
+    then_body_is(s, "new");
+    store_close(s);
+    free(db);
+}
+
+TEST(store_update_empty_version_vector_is_bad)
+{
+    char *db = NULL;
+    RowStamp before;
+    Store *s = given_live_add(&db, "old", k_hash_a, NULL, &before);
+
+    ASSERT_TRUE(s != NULL);
+    if (s == NULL) {
+        free(db);
+        return;
+    }
+    ASSERT_EQ_STATUS(when_guarded_body_update(s, "", k_now), STORE_ERR_BAD_VV);
+    then_body_is(s, "old");
+    store_close(s);
+    free(db);
+}
+
+/* An explicit 0 for a device the row does not mention is the same map.
+   Key order does not matter. */
+TEST(store_update_version_vector_missing_device_is_zero)
+{
+    char *db = NULL;
+    char vector[STALE_VV_CAP];
+    RowStamp before;
+    Store *s = given_live_add(&db, "old", k_hash_a, NULL, &before);
+
+    ASSERT_TRUE(s != NULL);
+    if (s == NULL) {
+        free(db);
+        return;
+    }
+    ASSERT_TRUE(snprintf(vector, sizeof(vector), "{\"other\":0,\"%s\":1}", store_device_id(s)) > 0);
+    ASSERT_EQ_STATUS(when_guarded_body_update(s, vector, k_later), STORE_OK);
+    then_body_is(s, "new");
+    store_close(s);
+    free(db);
+}
+
+/* The caller saw a device the row never had: the given side differs. */
+TEST(store_update_extra_device_is_stale)
+{
+    char *db = NULL;
+    char vector[STALE_VV_CAP];
+    RowStamp before;
+    Store *s = given_live_add(&db, "old", k_hash_a, NULL, &before);
+
+    ASSERT_TRUE(s != NULL);
+    if (s == NULL) {
+        free(db);
+        return;
+    }
+    ASSERT_TRUE(snprintf(vector, sizeof(vector), "{\"%s\":1,\"other\":1}", store_device_id(s)) > 0);
+    ASSERT_EQ_STATUS(when_guarded_body_update(s, vector, k_now), STORE_ERR_STALE);
+    then_body_is(s, "old");
+    store_close(s);
+    free(db);
+}
+
+/* The row has a counter the caller never saw: only the row side differs. */
+TEST(store_update_empty_object_is_stale)
+{
+    char *db = NULL;
+    RowStamp before;
+    Store *s = given_live_add(&db, "old", k_hash_a, NULL, &before);
+
+    ASSERT_TRUE(s != NULL);
+    if (s == NULL) {
+        free(db);
+        return;
+    }
+    ASSERT_EQ_STATUS(when_guarded_body_update(s, "{}", k_now), STORE_ERR_STALE);
+    then_body_is(s, "old");
+    store_close(s);
+    free(db);
+}
+
+TEST(store_update_changed_counter_is_stale)
+{
+    char *db = NULL;
+    char vector[STALE_VV_CAP];
+    RowStamp before;
+    Store *s = given_live_add(&db, "old", k_hash_a, NULL, &before);
+
+    ASSERT_TRUE(s != NULL);
+    if (s == NULL) {
+        free(db);
+        return;
+    }
+    ASSERT_TRUE(snprintf(vector, sizeof(vector), "{\"%s\":2}", store_device_id(s)) > 0);
+    ASSERT_EQ_STATUS(when_guarded_body_update(s, vector, k_now), STORE_ERR_STALE);
+    then_body_is(s, "old");
+    store_close(s);
+    free(db);
+}
+
+TEST(store_update_malformed_version_vector_writes_nothing)
+{
+    char *db = NULL;
+    RowStamp before;
+    Store *s = given_live_add(&db, "old", k_hash_a, NULL, &before);
+    /* 2^63 is not an int64. SQLite still reports type integer and saturates the cast. */
+    const char *bad[] = {"[]",          "{\"d\":-1}",
+                         "{\"d\":1.5}", "{\"d\":\"1\"}",
+                         "{\"\":1}",    "{\"d\":9223372036854775808}"};
+    size_t i = 0;
+
+    ASSERT_TRUE(s != NULL);
+    if (s == NULL) {
+        free(db);
+        return;
+    }
+    for (i = 0; i < sizeof(bad) / sizeof(bad[0]); i++) {
+        ASSERT_EQ_STATUS(when_guarded_body_update(s, bad[i], k_now), STORE_ERR_BAD_VV);
+    }
+    then_body_is(s, "old");
+    store_close(s);
+    free(db);
+}
+
+/* 2^63 must not pass as int64 max. CAST saturates both to the same clock. */
+TEST(store_update_int64_overflow_does_not_match_max)
+{
+    char *db = NULL;
+    char sql[SQL_BUFSIZE];
+    char attack[STALE_VV_CAP];
+    RowStamp before;
+    Store *s = given_live_add(&db, "old", k_hash_a, NULL, &before);
+    const char *device = NULL;
+
+    ASSERT_TRUE(s != NULL);
+    if (s == NULL) {
+        free(db);
+        return;
+    }
+    device = store_device_id(s);
+    ASSERT_TRUE(device != NULL);
+    if (device == NULL) {
+        store_close(s);
+        free(db);
+        return;
+    }
+    ASSERT_TRUE(snprintf(sql, sizeof(sql),
+                         "UPDATE entries SET version_vector='{\"%s\":9223372036854775808}' "
+                         "WHERE id=1;",
+                         device) > 0);
+    free(harness_sqlite_query_line(db, sql));
+    ASSERT_TRUE(snprintf(attack, sizeof(attack), "{\"%s\":9223372036854775807}", device) > 0);
+    ASSERT_EQ_STATUS(when_guarded_body_update(s, attack, k_now), STORE_ERR_STALE);
+    then_body_is(s, "old");
+    store_close(s);
+    free(db);
+}
+
+/* The largest int64 is a real counter. The overflow check must not reject it. */
+TEST(store_update_int64_max_matches_itself)
+{
+    char *db = NULL;
+    char sql[SQL_BUFSIZE];
+    char vector[STALE_VV_CAP];
+    RowStamp before;
+    Store *s = given_live_add(&db, "old", k_hash_a, NULL, &before);
+    const char *device = NULL;
+
+    ASSERT_TRUE(s != NULL);
+    if (s == NULL) {
+        free(db);
+        return;
+    }
+    device = store_device_id(s);
+    ASSERT_TRUE(device != NULL);
+    if (device == NULL) {
+        store_close(s);
+        free(db);
+        return;
+    }
+    ASSERT_TRUE(snprintf(vector, sizeof(vector), "{\"%s\":9223372036854775807}", device) > 0);
+    ASSERT_TRUE(snprintf(sql, sizeof(sql), "UPDATE entries SET version_vector='%s' WHERE id=1;",
+                         vector) > 0);
+    free(harness_sqlite_query_line(db, sql));
+    ASSERT_EQ_STATUS(when_guarded_body_update(s, vector, k_later), STORE_OK);
+    then_body_is(s, "new");
+    store_close(s);
+    free(db);
+}
+
+/* W2 shares W1's timestamp. The vector, not the clock, is what makes W1 stale. */
+TEST(store_update_same_timestamp_is_still_stale)
+{
+    char *db = NULL;
+    RowStamp first;
+    Store *s = given_live_add(&db, "first", k_hash_a, NULL, &first);
+    Entry e;
+    long long conflict = 0;
+
+    ASSERT_TRUE(s != NULL);
+    if (s == NULL) {
+        free(db);
+        return;
+    }
+    /* The second write reuses the add's millisecond, so only the VV can tell them apart. */
+    memset(&e, 0, sizeof(e));
+    ASSERT_EQ_STATUS(store_update(s, 1,
+                                  &(StoreUpdate){
+                                      .set_body = true,
+                                      .body = "second",
+                                      .body_hash = k_hash_c,
+                                  },
+                                  k_now, &e, &conflict),
+                     STORE_OK);
+    ASSERT_STREQ(e.updated_at, first.updated_at);
+    ASSERT_TRUE(e.version_vector != NULL && strcmp(e.version_vector, first.version_vector) != 0);
+    store_entry_free(&e);
+    ASSERT_EQ_STATUS(when_guarded_body_update(s, first.version_vector, k_now), STORE_ERR_STALE);
+    then_body_is(s, "second");
+    store_close(s);
+    free(db);
+}
+
+/* decision:plan17-stale-after-bin: a wrong bin wins over a mismatched stamp. */
+TEST(store_update_wrong_bin_wins_over_stale)
+{
+    char *db = make_temp_db_path();
+    char err[ERR_BUFSIZE];
+    Store *s = NULL;
+    Entry e;
+    StoreAddAction act = STORE_ADD_CREATED;
+    const char *stamp = "2020-01-01T00:00:00.000Z";
+    long long conflict = 0;
+    StoreStatus st = STORE_OK;
+
+    ASSERT_TRUE(db != NULL);
+    s = store_open(db, err, sizeof(err));
+    ASSERT_TRUE(s != NULL);
+    if (s == NULL) {
+        free(db);
+        return;
+    }
+
+    memset(&e, 0, sizeof(e));
+    ASSERT_EQ_STATUS(store_add(s, "old", k_hash_a, NULL, NULL, 0U, "human", NULL, k_now, &act, &e),
+                     STORE_OK);
+    store_entry_free(&e);
+    free(harness_sqlite_query_line(db, "UPDATE entries SET expires_at='2020-01-01T00:00:00.000Z' "
+                                       "WHERE id=1;"));
+
+    memset(&e, 0, sizeof(e));
+    st = store_update(s, 1,
+                      &(StoreUpdate){
+                          .set_body = true,
+                          .body = "new",
+                          .body_hash = k_hash_b,
+                          .if_version_vector = stamp,
+                      },
+                      k_now, &e, &conflict);
+    ASSERT_EQ_INT((int)st, (int)STORE_ERR_EXPIRED);
+    store_entry_free(&e);
+
+    memset(&e, 0, sizeof(e));
+    ASSERT_EQ_STATUS(store_get(s, 1, STORE_BIN_EXPIRED, k_now, &e), STORE_OK);
+    if (e.body == NULL || e.updated_at == NULL) {
+        store_entry_free(&e);
+        store_close(s);
+        free(db);
+        return;
+    }
+    ASSERT_STREQ(e.body, "old");
+    ASSERT_STREQ(e.updated_at, k_now);
+    store_entry_free(&e);
+
+    store_close(s);
+    free(db);
+}
+
 TEST(store_update_body_and_tags)
 {
     char *db = make_temp_db_path();
@@ -1279,8 +2709,13 @@ TEST(store_update_body_and_tags)
     store_entry_free(&e);
 
     /* Body-only: tags unchanged. */
-    ASSERT_EQ_STATUS(store_update(s, 1, NULL, true, "new", k_hash_b, false, NULL, 0U, false, NULL,
-                                  false, STORE_BIN_LIVE, k_now, &e, &conflict),
+    ASSERT_EQ_STATUS(store_update(s, 1,
+                                  &(StoreUpdate){
+                                      .set_body = true,
+                                      .body = "new",
+                                      .body_hash = k_hash_b,
+                                  },
+                                  k_now, &e, &conflict),
                      STORE_OK);
     ASSERT_STREQ(e.body, "new");
     ASSERT_EQ_INT((int)e.ntags, 2);
@@ -1288,16 +2723,20 @@ TEST(store_update_body_and_tags)
     store_entry_free(&e);
 
     /* Tags-only replace + clear path via empty set. */
-    ASSERT_EQ_STATUS(store_update(s, 1, NULL, false, NULL, NULL, true, tags_z, 1U, false, NULL,
-                                  false, STORE_BIN_LIVE, k_now, &e, &conflict),
+    ASSERT_EQ_STATUS(store_update(s, 1,
+                                  &(StoreUpdate){
+                                      .set_tags = true,
+                                      .tags = tags_z,
+                                      .ntags = 1U,
+                                  },
+                                  k_now, &e, &conflict),
                      STORE_OK);
     ASSERT_STREQ(e.body, "new");
     ASSERT_EQ_INT((int)e.ntags, 1);
     ASSERT_STREQ(e.tags[0], "z");
     store_entry_free(&e);
 
-    ASSERT_EQ_STATUS(store_update(s, 1, NULL, false, NULL, NULL, true, NULL, 0U, false, NULL, false,
-                                  STORE_BIN_LIVE, k_now, &e, &conflict),
+    ASSERT_EQ_STATUS(store_update(s, 1, &(StoreUpdate){.set_tags = true}, k_now, &e, &conflict),
                      STORE_OK);
     ASSERT_EQ_INT((int)e.ntags, 0);
     store_entry_free(&e);
@@ -1310,8 +2749,14 @@ TEST(store_update_body_and_tags)
         store_add(s, "slotv1", k_hash_a, "slot", NULL, 0U, "tool", NULL, k_now, &act, &e),
         STORE_OK);
     store_entry_free(&e);
-    ASSERT_EQ_STATUS(store_update(s, 0, "slot", true, "peer", k_hash_c, false, NULL, 0U, false,
-                                  NULL, false, STORE_BIN_LIVE, k_now, &e, &conflict),
+    ASSERT_EQ_STATUS(store_update(s, 0,
+                                  &(StoreUpdate){
+                                      .key_or_null = "slot",
+                                      .set_body = true,
+                                      .body = "peer",
+                                      .body_hash = k_hash_c,
+                                  },
+                                  k_now, &e, &conflict),
                      STORE_OK);
     ASSERT_STREQ(e.body, "peer");
     ASSERT_STREQ(e.key, "slot");
@@ -1321,8 +2766,13 @@ TEST(store_update_body_and_tags)
     ASSERT_EQ_STATUS(
         store_add(s, "solo", k_hash_a, NULL, NULL, 0U, "unknown", NULL, k_now, &act, &e), STORE_OK);
     store_entry_free(&e);
-    ASSERT_EQ_STATUS(store_update(s, 1, NULL, true, "peer", k_hash_c, false, NULL, 0U, false, NULL,
-                                  false, STORE_BIN_LIVE, k_now, &e, &conflict),
+    ASSERT_EQ_STATUS(store_update(s, 1,
+                                  &(StoreUpdate){
+                                      .set_body = true,
+                                      .body = "peer",
+                                      .body_hash = k_hash_c,
+                                  },
+                                  k_now, &e, &conflict),
                      STORE_ERR_CONFLICT);
     ASSERT_TRUE(conflict != 0);
 
@@ -1754,16 +3204,29 @@ TEST(store_fault_injection_sweep)
             long long conflict = 0;
             const char *utags[] = {"u"};
             store_test_fail_prepare_after(i % 9);
-            (void)store_update(s, 1, NULL, true, body, hash, true, utags, 1U, false, NULL, false,
-                               STORE_BIN_LIVE, k_now, &e, &conflict);
+            (void)store_update(s, 1,
+                               &(StoreUpdate){
+                                   .set_body = true,
+                                   .body = body,
+                                   .body_hash = hash,
+                                   .set_tags = true,
+                                   .tags = utags,
+                                   .ntags = 1U,
+                               },
+                               k_now, &e, &conflict);
             store_entry_free(&e);
             store_test_fail_step_after(i % 7);
-            (void)store_update(s, 0, "k", false, NULL, NULL, true, NULL, 0U, false, NULL, false,
-                               STORE_BIN_LIVE, k_now, &e, &conflict);
+            (void)store_update(s, 0, &(StoreUpdate){.key_or_null = "k", .set_tags = true}, k_now,
+                               &e, &conflict);
             store_entry_free(&e);
             store_test_fail_alloc_after(i % 12);
-            (void)store_update(s, 1, NULL, true, body, hash, false, NULL, 0U, false, NULL, false,
-                               STORE_BIN_LIVE, k_now, &e, &conflict);
+            (void)store_update(s, 1,
+                               &(StoreUpdate){
+                                   .set_body = true,
+                                   .body = body,
+                                   .body_hash = hash,
+                               },
+                               k_now, &e, &conflict);
             store_entry_free(&e);
         }
 
@@ -1904,9 +3367,42 @@ void register_store_tests(void)
     RUN_TEST(store_update_trash_future_expires_leaves_trash);
     RUN_TEST(store_add_keyless_revives_expired);
     RUN_TEST(store_add_keyed_revives_expired);
+    RUN_TEST(store_add_keyed_change_bumps_version_vector);
+    RUN_TEST(store_add_keyed_same_body_moves_neither_stamp);
+    RUN_TEST(store_add_keyed_new_tag_bumps_both_stamps);
+    RUN_TEST(store_add_keyless_new_tag_bumps_both_stamps);
+    RUN_TEST(store_add_keyless_same_body_moves_neither_stamp);
+    RUN_TEST(store_add_keyless_revive_bumps_both_stamps_once);
+    RUN_TEST(store_add_keyed_revive_bumps_both_stamps_once);
+    RUN_TEST(store_add_keyless_deleted_revive_bumps_once);
+    RUN_TEST(store_add_same_tag_again_moves_neither_stamp);
     RUN_TEST(store_add_past_expires_born_in_trash);
     RUN_TEST(store_purge_trash_deletes_only_expired);
+    RUN_TEST(store_list_sort_created_keeps_creation_order);
+    RUN_TEST(store_list_since_inclusive_until_exclusive);
+    RUN_TEST(store_list_updated_sort_puts_the_edit_first);
+    RUN_TEST(store_list_created_tie_breaks_by_id);
+    RUN_TEST(store_list_since_follows_sort_column);
+    RUN_TEST(store_list_crossed_bounds_are_empty);
+    RUN_TEST(store_search_since_filters_updated_at);
+    RUN_TEST(store_search_ignores_sort_for_order);
+    RUN_TEST(store_search_ties_break_by_id);
+    RUN_TEST(store_list_bounds_compose_with_filters);
+    RUN_TEST(store_list_unknown_sort_is_internal);
     RUN_TEST(store_list_filters_and_paging);
+    RUN_TEST(store_update_if_version_vector_mismatch_writes_nothing);
+    RUN_TEST(store_update_equal_version_vector_writes);
+    RUN_TEST(store_update_version_vector_ignores_whitespace);
+    RUN_TEST(store_update_empty_version_vector_is_bad);
+    RUN_TEST(store_update_version_vector_missing_device_is_zero);
+    RUN_TEST(store_update_extra_device_is_stale);
+    RUN_TEST(store_update_empty_object_is_stale);
+    RUN_TEST(store_update_changed_counter_is_stale);
+    RUN_TEST(store_update_malformed_version_vector_writes_nothing);
+    RUN_TEST(store_update_int64_overflow_does_not_match_max);
+    RUN_TEST(store_update_int64_max_matches_itself);
+    RUN_TEST(store_update_same_timestamp_is_still_stale);
+    RUN_TEST(store_update_wrong_bin_wins_over_stale);
     RUN_TEST(store_update_body_and_tags);
     RUN_TEST(store_delete_by_id_gcs_orphan_tags);
     RUN_TEST(store_delete_by_key_missing);
