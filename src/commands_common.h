@@ -123,4 +123,11 @@ typedef struct {
  */
 ExpiryResult resolve_expiry_flags(ExpiryFlags flags, const char *now, char *out, size_t outlen);
 
+/*
+ * Filter timestamp (E5.2a–E5.2c). On 0, out holds the canonical
+ * YYYY-MM-DDTHH:MM:SS.mmmZ form. On -1, out is unchanged. Does not print.
+ * out must hold ISO_TS_BUFSIZE bytes. Date-only is local midnight.
+ */
+int parse_filter_ts(const char *in, char out[ISO_TS_BUFSIZE]);
+
 #endif /* REMEMBER_COMMANDS_COMMON_H */

@@ -33,11 +33,16 @@ typedef enum {
     STORE_ERR_CYCLE,             /* supersedes would cycle */
     STORE_ERR_SOURCE_TOO_OLD,    /* import --from-db: source user_version < 4 */
     STORE_ERR_SOURCE_TOO_NEW,    /* import --from-db: source user_version > 5 */
-    STORE_ERR_UNIQUE_TAKEN       /* accept cannot free key/hash without inventing a key */
+    STORE_ERR_UNIQUE_TAKEN,      /* accept cannot free key/hash without inventing a key */
+    STORE_ERR_STALE, /* if_version_vector is not the row's version vector; nothing was written */
+    STORE_ERR_BAD_VV /* if_version_vector is not an object of non-negative integers */
 } StoreStatus;
 
 /* Locator / list / search / tags bin. LIVE is the zero value (zero-init queries). */
 typedef enum { STORE_BIN_LIVE = 0, STORE_BIN_EXPIRED, STORE_BIN_DELETED } StoreBin;
+
+/* List time column. UPDATED is the zero value (zero-init queries keep today's order). */
+typedef enum { STORE_SORT_UPDATED = 0, STORE_SORT_CREATED } StoreSort;
 /* live: no deleted_at and (no expiry or expires_at > now);
  * expired: no deleted_at and expires_at <= now;
  * deleted: deleted_at set. now may be NULL (then expiry cannot match). */
@@ -217,6 +222,9 @@ StoreStatus store_get_by_sync_id(Store *s, const char *sync_id, StoreBin bin, co
  * List filters (AND across tags). All string fields are normalized by the
  * command layer; NULL / ntags==0 means "no filter on that axis".
  * limit and offset are required as given (CLI enforces default/max/min).
+ * sort is the list time column (order and since/until). Zero is updated.
+ * since is inclusive and until is exclusive; both are canonical .mmmZ or NULL.
+ * Search reuses the struct: it ignores sort and applies since/until to updated_at.
  */
 typedef struct {
     const char *const *tags; /* may be NULL when ntags == 0 */
@@ -225,8 +233,10 @@ typedef struct {
     size_t ntags;
     size_t limit;
     size_t offset;
-    StoreBin bin; /* LIVE (default) / EXPIRED / DELETED */
-    char pad_[4]; /* explicit tail padding to keep the struct -Wpadded-clean */
+    StoreBin bin;   /* LIVE (default) / EXPIRED / DELETED */
+    StoreSort sort; /* UPDATED (zero) / CREATED */
+    const char *since;
+    const char *until;
 } ListQuery;
 
 /*
@@ -244,16 +254,18 @@ typedef struct {
 } PageResult;
 
 /*
- * List entries newest-first (updated_at DESC, id DESC) with optional filters.
+ * List entries by the sort column DESC, then id DESC, with optional filters.
+ * Zero sort is updated_at. since/until bound that same column.
  * now is required (canonical .mmmZ). Bin filter: live / expired / deleted.
- * See PageResult for ownership.
+ * See PageResult for ownership. An unknown sort is STORE_ERR_INTERNAL.
  */
 PageResult store_list(Store *s, const ListQuery *q, const char *now);
 
 /*
  * Ranked FTS5 search. query is raw FTS5 MATCH syntax (required, non-empty at CLI).
- * filters reuse ListQuery: tag AND, optional source/key, limit/offset.
- * Rank: bm25(entries_fts) ASC, then updated_at DESC, id DESC.
+ * filters reuse ListQuery: tag AND, optional source/key, limit/offset, since/until.
+ * Rank stays bm25(entries_fts) ASC, then updated_at DESC, id DESC. filters.sort
+ * is ignored. since/until filter updated_at, not the sort column.
  * Same ownership as store_list (see PageResult). STORE_ERR_QUERY on bad MATCH syntax.
  */
 typedef struct {
@@ -282,8 +294,29 @@ StoreStatus store_hard_delete_by_key(Store *s, const char *key, StoreBin bin, co
                                      Entry *out);
 
 /*
- * Update one entry by id (id > 0, key_or_null NULL) or normalized key
- * (key_or_null set; id ignored). set_body / set_tags / set_expires / undelete
+ * Change fields for store_update. Zero / NULL means that axis is left alone,
+ * except set_tags with ntags 0, which clears tags. if_version_vector NULL skips
+ * the version-vector guard. Named fields so call sites cannot transpose the old
+ * positional list (decision:plan17-store-update-options-struct).
+ */
+typedef struct {
+    const char *key_or_null; /* NULL => locate by id */
+    const char *body;
+    const char *body_hash;
+    const char *const *tags; /* may be NULL when ntags == 0 */
+    const char *expires_at;  /* with set_expires: NULL clears, ISO writes */
+    const char *if_version_vector;
+    size_t ntags;
+    StoreBin bin;
+    bool set_body;
+    bool set_tags;
+    bool set_expires;
+    bool undelete;
+} StoreUpdate;
+
+/*
+ * Update one entry by id (id > 0, u->key_or_null NULL) or normalized key
+ * (u->key_or_null set; id ignored). set_body / set_tags / set_expires / undelete
  * are independent opt-ins; at least one must be true at the command layer.
  * set_expires + expires_at NULL clears expiry; set_expires + ISO writes it.
  * undelete clears deleted_at (locator is normally STORE_BIN_DELETED).
@@ -298,11 +331,13 @@ StoreStatus store_hard_delete_by_key(Store *s, const char *key, StoreBin bin, co
  *
  * When set_tags is true, ntags==0 clears tags; otherwise tags replace the set.
  * body / body_hash required when set_body; tags may be NULL when ntags==0.
+ * if_version_vector NULL skips the guard. Any other string is parsed as a
+ * version vector inside this write transaction, after the bin check. A missing
+ * device counts as 0. Not equal is STORE_ERR_STALE and the transaction rolls
+ * back. Malformed is STORE_ERR_BAD_VV.
+ * u NULL is STORE_ERR_INTERNAL.
  */
-StoreStatus store_update(Store *s, long long id, const char *key_or_null, bool set_body,
-                         const char *body, const char *body_hash, bool set_tags,
-                         const char *const *tags, size_t ntags, bool set_expires,
-                         const char *expires_at, bool undelete, StoreBin bin, const char *now,
+StoreStatus store_update(Store *s, long long id, const StoreUpdate *u, const char *now,
                          Entry *out_entry, long long *out_conflict_id);
 
 /* One tag with the number of entries carrying it. name is heap-owned. */

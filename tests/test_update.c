@@ -5,7 +5,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-enum { TS_BUFSIZE = 32 }; /* ISO-8601 timestamp buffer */
+enum { TS_BUFSIZE = 32, SYNC_ID_CAP = 40, VV_CAP = 128 }; /* stamp, UUID, version vector */
 
 /* Copy the value of a `"key":"..."` JSON string field into out (empty if absent). */
 static void extract_json_str(const char *json, const char *key, char *out, size_t outsz)
@@ -27,6 +27,36 @@ static void extract_json_str(const char *json, const char *key, char *out, size_
     len = (size_t)(end - p);
     if (len >= outsz) {
         len = outsz - 1U;
+    }
+    memcpy(out, p, len);
+    out[len] = '\0';
+}
+
+/* Copy the raw `"version_vector":{...}` object. One level, no nested braces. */
+static void extract_version_vector(const char *json, char *out, size_t outsz)
+{
+    const char *key = "\"version_vector\":";
+    const char *p = NULL;
+    const char *end = NULL;
+    size_t len = 0;
+
+    out[0] = '\0';
+    p = (json != NULL) ? strstr(json, key) : NULL;
+    if (p == NULL) {
+        return;
+    }
+    p += strlen(key);
+    if (p[0] != '{') {
+        return;
+    }
+    end = strchr(p, '}');
+    if (end == NULL) {
+        return;
+    }
+    end++;
+    len = (size_t)(end - p);
+    if (len >= outsz) {
+        return;
     }
     memcpy(out, p, len);
     out[len] = '\0';
@@ -466,6 +496,280 @@ TEST(update_bumps_updated_at)
     free(db);
 }
 
+TEST(update_if_version_vector_rejects_malformed)
+{
+    char *db = make_temp_db_path();
+    const char *args[] = {"update", "1", "--if-version-vector", "not-a-vector", "--text", "new"};
+    CmdResult r;
+
+    ASSERT_TRUE(db != NULL);
+    if (db == NULL) {
+        return;
+    }
+    seed_tagged(db);
+    r = run_remember(db, args, sizeof(args) / sizeof(args[0]), NULL);
+    ASSERT_EQ_INT(r.exit_code, 1);
+    ASSERT_STREQ(r.err, "remember: invalid version vector: not-a-vector\n");
+    ASSERT_STREQ(r.out, "");
+    cmd_result_free(&r);
+    free(db);
+}
+
+static void given_version_vector(const char *db, char *vector, size_t vector_cap)
+{
+    const char *get[] = {"get", "--json", "1"};
+    CmdResult r = run_remember(db, get, sizeof(get) / sizeof(get[0]), NULL);
+
+    vector[0] = '\0';
+    ASSERT_EQ_INT(r.exit_code, 0);
+    extract_version_vector(r.out, vector, vector_cap);
+    ASSERT_TRUE(vector[0] == '{');
+    cmd_result_free(&r);
+}
+
+TEST(update_if_version_vector_match_writes)
+{
+    char *db = make_temp_db_path();
+    char vector[VV_CAP];
+    CmdResult got;
+    const char *add[] = {"add", "original body"};
+
+    ASSERT_TRUE(db != NULL);
+    if (db == NULL) {
+        return;
+    }
+    got = run_remember(db, add, sizeof(add) / sizeof(add[0]), NULL);
+    cmd_result_free(&got);
+    given_version_vector(db, vector, sizeof(vector));
+    if (vector[0] == '\0') {
+        free(db);
+        return;
+    }
+    {
+        const char *args[] = {"update", "1", "--if-version-vector", vector, "--text", "new body"};
+        CmdResult updated = run_remember(db, args, sizeof(args) / sizeof(args[0]), NULL);
+
+        ASSERT_EQ_INT(updated.exit_code, 0);
+        ASSERT_STREQ(updated.err, "");
+        cmd_result_free(&updated);
+    }
+    free(db);
+}
+
+TEST(update_if_version_vector_mismatch_is_stale)
+{
+    char *db = make_temp_db_path();
+    const char *args[] = {"--json-errors",        "update", "1",       "--if-version-vector",
+                          "{\"other-device\":1}", "--text", "new body"};
+    CmdResult r;
+
+    ASSERT_TRUE(db != NULL);
+    if (db == NULL) {
+        return;
+    }
+    seed_tagged(db);
+    r = run_remember(db, args, sizeof(args) / sizeof(args[0]), NULL);
+    ASSERT_EQ_INT(r.exit_code, 1);
+    ASSERT_STREQ(r.out, "");
+    ASSERT_STREQ(r.err, "{\"version\":1,\"error\":{\"code\":\"stale\",\"message\":\"memory "
+                        "changed since it was read\"}}\n");
+    cmd_result_free(&r);
+    free(db);
+}
+
+TEST(update_if_version_vector_rejects_a_duplicate)
+{
+    char *db = make_temp_db_path();
+    const char *args[] = {
+        "update", "1",  "--if-version-vector", "{\"a\":1}", "--if-version-vector", "{\"a\":2}",
+        "--text", "new"};
+    CmdResult r;
+
+    ASSERT_TRUE(db != NULL);
+    if (db == NULL) {
+        return;
+    }
+    seed_tagged(db);
+    r = run_remember(db, args, sizeof(args) / sizeof(args[0]), NULL);
+    ASSERT_EQ_INT(r.exit_code, 1);
+    ASSERT_STREQ(r.err, "remember: duplicate --if-version-vector\n");
+    ASSERT_STREQ(r.out, "");
+    cmd_result_free(&r);
+    free(db);
+}
+
+TEST(update_if_version_vector_rejects_a_missing_value)
+{
+    char *db = make_temp_db_path();
+    const char *args[] = {"update", "1", "--if-version-vector"};
+    CmdResult r;
+
+    ASSERT_TRUE(db != NULL);
+    if (db == NULL) {
+        return;
+    }
+    seed_tagged(db);
+    r = run_remember(db, args, sizeof(args) / sizeof(args[0]), NULL);
+    ASSERT_EQ_INT(r.exit_code, 1);
+    ASSERT_STREQ(r.err, "remember: missing value for --if-version-vector\n");
+    ASSERT_STREQ(r.out, "");
+    cmd_result_free(&r);
+    free(db);
+}
+
+TEST(update_if_version_vector_alone_is_not_a_change)
+{
+    char *db = make_temp_db_path();
+    const char *args[] = {"update", "1", "--if-version-vector", "{\"a\":1}"};
+    CmdResult r;
+
+    ASSERT_TRUE(db != NULL);
+    if (db == NULL) {
+        return;
+    }
+    seed_tagged(db);
+    r = run_remember(db, args, sizeof(args) / sizeof(args[0]), NULL);
+    ASSERT_EQ_INT(r.exit_code, 1);
+    ASSERT_STREQ(r.err, "remember: update requires --text, --tag, --clear-tags, --ttl, "
+                        "--expires, --clear-expires, or --undelete\n");
+    ASSERT_STREQ(r.out, "");
+    cmd_result_free(&r);
+    free(db);
+}
+
+TEST(update_if_version_vector_match_by_key_writes)
+{
+    char *db = make_temp_db_path();
+    char vector[VV_CAP];
+    CmdResult got;
+    const char *add[] = {"add", "--key", "slot", "original body"};
+
+    ASSERT_TRUE(db != NULL);
+    if (db == NULL) {
+        return;
+    }
+    got = run_remember(db, add, sizeof(add) / sizeof(add[0]), NULL);
+    cmd_result_free(&got);
+    given_version_vector(db, vector, sizeof(vector));
+    if (vector[0] == '\0') {
+        free(db);
+        return;
+    }
+    {
+        const char *args[] = {"update", "--key",  "slot",    "--if-version-vector",
+                              vector,   "--text", "new body"};
+        CmdResult updated = run_remember(db, args, sizeof(args) / sizeof(args[0]), NULL);
+
+        ASSERT_EQ_INT(updated.exit_code, 0);
+        ASSERT_STREQ(updated.err, "");
+        cmd_result_free(&updated);
+    }
+    free(db);
+}
+
+TEST(update_if_version_vector_match_by_sync_id_writes)
+{
+    char *db = make_temp_db_path();
+    char vector[VV_CAP];
+    char sync_id[SYNC_ID_CAP];
+    CmdResult got;
+    const char *add[] = {"add", "--json", "original body"};
+
+    ASSERT_TRUE(db != NULL);
+    if (db == NULL) {
+        return;
+    }
+    got = run_remember(db, add, sizeof(add) / sizeof(add[0]), NULL);
+    ASSERT_EQ_INT(got.exit_code, 0);
+    extract_version_vector(got.out, vector, sizeof(vector));
+    extract_json_str(got.out, "\"sync_id\":\"", sync_id, sizeof(sync_id));
+    cmd_result_free(&got);
+    if (vector[0] == '\0' || sync_id[0] == '\0') {
+        free(db);
+        return;
+    }
+    {
+        const char *args[] = {"update", "--sync-id", sync_id,   "--if-version-vector",
+                              vector,   "--text",    "new body"};
+        CmdResult updated = run_remember(db, args, sizeof(args) / sizeof(args[0]), NULL);
+
+        ASSERT_EQ_INT(updated.exit_code, 0);
+        ASSERT_STREQ(updated.err, "");
+        cmd_result_free(&updated);
+    }
+    free(db);
+}
+
+TEST(update_if_version_vector_undelete_match_restores)
+{
+    char *db = make_temp_db_path();
+    char vector[VV_CAP];
+    CmdResult got;
+    const char *add[] = {"add", "original body"};
+    const char *del[] = {"delete", "1"};
+    const char *deleted[] = {"get", "--deleted", "--json", "1"};
+    const char *live[] = {"get", "--json", "1"};
+
+    ASSERT_TRUE(db != NULL);
+    if (db == NULL) {
+        return;
+    }
+    got = run_remember(db, add, sizeof(add) / sizeof(add[0]), NULL);
+    cmd_result_free(&got);
+    got = run_remember(db, del, sizeof(del) / sizeof(del[0]), NULL);
+    ASSERT_EQ_INT(got.exit_code, 0);
+    cmd_result_free(&got);
+    got = run_remember(db, deleted, sizeof(deleted) / sizeof(deleted[0]), NULL);
+    ASSERT_EQ_INT(got.exit_code, 0);
+    extract_version_vector(got.out, vector, sizeof(vector));
+    cmd_result_free(&got);
+    if (vector[0] == '\0') {
+        free(db);
+        return;
+    }
+    {
+        const char *args[] = {"update", "1", "--deleted", "--undelete", "--if-version-vector",
+                              vector};
+        CmdResult updated = run_remember(db, args, sizeof(args) / sizeof(args[0]), NULL);
+
+        ASSERT_EQ_INT(updated.exit_code, 0);
+        ASSERT_STREQ(updated.err, "");
+        cmd_result_free(&updated);
+    }
+    got = run_remember(db, live, sizeof(live) / sizeof(live[0]), NULL);
+    ASSERT_EQ_INT(got.exit_code, 0);
+    ASSERT_STR_CONTAINS(got.out, "original body");
+    ASSERT_STR_CONTAINS(got.out, "\"bin\":\"live\"");
+    cmd_result_free(&got);
+    free(db);
+}
+
+TEST(update_help_names_the_version_vector_guard)
+{
+    char *db = make_temp_db_path();
+    const char *args[] = {"help", "update"};
+    CmdResult r;
+
+    ASSERT_TRUE(db != NULL);
+    if (db == NULL) {
+        return;
+    }
+    r = run_remember(db, args, sizeof(args) / sizeof(args[0]), NULL);
+    ASSERT_EQ_INT(r.exit_code, 0);
+    if (r.exit_code != 0) {
+        cmd_result_free(&r);
+        free(db);
+        return;
+    }
+    ASSERT_STR_CONTAINS(r.out, "  --if-version-vector VV\n"
+                               "                  Write only when version_vector equals VV\n");
+    ASSERT_STR_CONTAINS(r.out, "A version-vector mismatch is code stale "
+                               "(memory changed since it was read) and writes nothing.\n");
+    ASSERT_STREQ(r.err, "");
+    cmd_result_free(&r);
+    free(db);
+}
+
 void register_update_tests(void)
 {
     RUN_TEST(update_text_only_keeps_tags);
@@ -489,4 +793,14 @@ void register_update_tests(void)
     RUN_TEST(fts_reflects_tag_update);
     RUN_TEST(update_moves_entry_to_top_of_list);
     RUN_TEST(update_bumps_updated_at);
+    RUN_TEST(update_if_version_vector_rejects_malformed);
+    RUN_TEST(update_if_version_vector_match_writes);
+    RUN_TEST(update_if_version_vector_mismatch_is_stale);
+    RUN_TEST(update_if_version_vector_rejects_a_duplicate);
+    RUN_TEST(update_if_version_vector_rejects_a_missing_value);
+    RUN_TEST(update_if_version_vector_alone_is_not_a_change);
+    RUN_TEST(update_if_version_vector_match_by_key_writes);
+    RUN_TEST(update_if_version_vector_match_by_sync_id_writes);
+    RUN_TEST(update_if_version_vector_undelete_match_restores);
+    RUN_TEST(update_help_names_the_version_vector_guard);
 }

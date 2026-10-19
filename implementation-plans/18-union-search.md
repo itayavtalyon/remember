@@ -86,6 +86,7 @@ Anything 006 and this table do not decide: stop and ask Itay. Do not choose.
 - **Plan 15 merged** (`entries_fts` has `key`; rows folded).
 - **Plan 16 merged** (warning emitter, E4 codes for real errors).
 - **Plan 17 merged** (`--since`/`--until`/`--sort` on search).
+- **Plan 17a merged** (one plain notice is one line; a repeated device key is malformed).
 - If any is missing, stop.
 
 ## Scope

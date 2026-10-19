@@ -1849,6 +1849,10 @@ const char *store_status_message(StoreStatus st)
         return k_newer_database;
     case STORE_ERR_UNIQUE_TAKEN:
         return "cannot free unique key or body hash without inventing a key";
+    case STORE_ERR_STALE:
+        return "memory changed since it was read";
+    case STORE_ERR_BAD_VV:
+        return "invalid version vector";
     default:
         return "store error";
     }
@@ -2896,6 +2900,100 @@ done:
     return st;
 }
 
+/* What an add onto an existing row already wrote, so the stamp does not bump twice. */
+typedef struct {
+    bool updated_at_written; /* replace_body already set updated_at */
+    bool revived;            /* maybe_revive already bumped the version vector */
+    bool tags_added;
+} ExistingAddChange;
+
+/* Bump updated_at and version_vector[local] together, and only when the row
+   changed. A no-op add leaves both where they were. now and device_id are
+   different strings; the suppression is the same one insert_entry uses. */
+// NOLINTBEGIN(bugprone-easily-swappable-parameters)
+static StoreStatus stamp_existing_add(sqlite3 *db, long long id, const char *now,
+                                      const char *device_id, const char *vv_before,
+                                      ExistingAddChange change, StoreError *serr)
+// NOLINTEND(bugprone-easily-swappable-parameters)
+{
+    if (!change.updated_at_written && !change.revived && !change.tags_added) {
+        return STORE_OK;
+    }
+    if (!change.updated_at_written) {
+        StoreStatus st = touch_updated_at(db, id, now, serr);
+
+        if (st != STORE_OK) {
+            return st;
+        }
+    }
+    if (change.revived) {
+        return STORE_OK;
+    }
+    return apply_vv_bump(db, id, device_id, vv_before, serr);
+}
+
+typedef enum { REUSE_KEEP_BODY = 0, REUSE_REPLACE_CHANGED_BODY } ReuseBody;
+
+/* Keyed passes REUSE_REPLACE_CHANGED_BODY so a different body counts. Keyless
+   identity is the hash, so it passes REUSE_KEEP_BODY and does not write the body. */
+static StoreStatus reuse_existing_row(sqlite3 *db, long long id, const char *body,
+                                      const char *body_hash, const char *const *tags, size_t ntags,
+                                      const char *now, const char *expires_at,
+                                      const char *device_id, ReuseBody body_policy,
+                                      StoreError *serr)
+{
+    Entry current;
+    ExistingAddChange change = {false, false, false};
+    char vv_before[VV_OUT_MAX];
+    StoreStatus st = STORE_OK;
+    int vv_n = 0;
+    int changes_before = 0;
+
+    memset(&current, 0, sizeof(current));
+    memset(vv_before, 0, sizeof(vv_before));
+    st = load_entry_by_id(db, id, &current, serr);
+    if (st != STORE_OK) {
+        return st;
+    }
+    switch (body_policy) {
+    case REUSE_REPLACE_CHANGED_BODY:
+        if (current.body == NULL || strcmp(current.body, body) != 0) {
+            change.updated_at_written = true;
+        }
+        break;
+    case REUSE_KEEP_BODY:
+        break;
+    default:
+        store_entry_free(&current);
+        return STORE_ERR_INTERNAL;
+    }
+    change.revived = (entry_bin(&current, now) != STORE_BIN_LIVE);
+    if (current.version_vector != NULL) {
+        vv_n = snprintf(vv_before, sizeof(vv_before), "%s", current.version_vector);
+    }
+    store_entry_free(&current);
+    if (vv_n < 0 || (size_t)vv_n >= sizeof(vv_before) || vv_before[0] == '\0') {
+        return STORE_ERR_INTERNAL;
+    }
+    if (change.updated_at_written) {
+        st = replace_body(db, id, body, body_hash, now, serr);
+        if (st != STORE_OK) {
+            return st;
+        }
+    }
+    st = maybe_revive(db, id, (EntryTimes){.now = now, .expires_at = expires_at}, device_id, serr);
+    if (st != STORE_OK) {
+        return st;
+    }
+    changes_before = sqlite3_total_changes(db);
+    st = union_tags(db, id, tags, ntags, serr);
+    if (st != STORE_OK) {
+        return st;
+    }
+    change.tags_added = (sqlite3_total_changes(db) != changes_before);
+    return stamp_existing_add(db, id, now, device_id, vv_before, change, serr);
+}
+
 /* Keyed upsert: replace body + union tags, or insert. Sets out_id and out_action. */
 static StoreStatus add_keyed(sqlite3 *db, const char *body, const char *body_hash, const char *key,
                              const char *const *tags, size_t ntags, const char *source,
@@ -2907,16 +3005,8 @@ static StoreStatus add_keyed(sqlite3 *db, const char *body, const char *body_has
 
     st = find_id_by_key(db, key, &id, serr);
     if (st == STORE_OK) {
-        st = replace_body(db, id, body, body_hash, now, serr);
-        if (st != STORE_OK) {
-            return st;
-        }
-        st = maybe_revive(db, id, (EntryTimes){.now = now, .expires_at = expires_at}, device_id,
-                          serr);
-        if (st != STORE_OK) {
-            return st;
-        }
-        st = union_tags(db, id, tags, ntags, serr);
+        st = reuse_existing_row(db, id, body, body_hash, tags, ntags, now, expires_at, device_id,
+                                REUSE_REPLACE_CHANGED_BODY, serr);
         if (st != STORE_OK) {
             return st;
         }
@@ -2951,16 +3041,8 @@ static StoreStatus add_keyless(sqlite3 *db, const char *body, const char *body_h
 
     st = find_keyless_by_hash(db, body_hash, &id, serr);
     if (st == STORE_OK) {
-        st = touch_updated_at(db, id, now, serr);
-        if (st != STORE_OK) {
-            return st;
-        }
-        st = maybe_revive(db, id, (EntryTimes){.now = now, .expires_at = expires_at}, device_id,
-                          serr);
-        if (st != STORE_OK) {
-            return st;
-        }
-        st = union_tags(db, id, tags, ntags, serr);
+        st = reuse_existing_row(db, id, body, body_hash, tags, ntags, now, expires_at, device_id,
+                                REUSE_KEEP_BODY, serr);
         if (st != STORE_OK) {
             return st;
         }
@@ -3293,8 +3375,53 @@ static int list_append_bin(char *sql, size_t sql_cap, size_t *pos, int *nbinds,
     return 0;
 }
 
+/*
+ * The only map from a list sort to a column name. List order and list
+ * since/until both use it. Search asks for UPDATED and ignores ListQuery.sort.
+ * NULL is an unknown sort (programmer error).
+ */
+static const char *list_sort_column(StoreSort sort)
+{
+    switch (sort) {
+    case STORE_SORT_UPDATED:
+        return "updated_at";
+    case STORE_SORT_CREATED:
+        return "created_at";
+    default:
+        return NULL;
+    }
+}
+
+/* One bound. inclusive is >= (since); the other side is < (until). NULL skips.
+   column comes from list_sort_column. The timestamp is bound, never pasted. */
+static int list_append_cmp(char *sql, size_t sql_cap, size_t *pos, int *nbinds,
+                           const char **bind_text, size_t bind_cap, const char *column,
+                           bool inclusive, const char *value)
+{
+    int n = 0;
+
+    if (value == NULL) {
+        return 0;
+    }
+    if ((size_t)*nbinds >= bind_cap) {
+        return -1;
+    }
+    if (inclusive) {
+        n = snprintf(sql + *pos, sql_cap - *pos, " AND e.%s >= ?%d", column, *nbinds + 1);
+    } else {
+        n = snprintf(sql + *pos, sql_cap - *pos, " AND e.%s < ?%d", column, *nbinds + 1);
+    }
+    if (n < 0 || (size_t)n >= sql_cap - *pos) {
+        return -1;
+    }
+    *pos += (size_t)n;
+    bind_text[(*nbinds)++] = value;
+    return 0;
+}
+
 static int list_append_filters(const ListQuery *q, char *sql, size_t sql_cap, size_t *pos,
-                               int *nbinds, const char **bind_text, size_t bind_cap)
+                               int *nbinds, const char **bind_text, size_t bind_cap,
+                               const char *time_column)
 {
     size_t t = 0;
 
@@ -3313,22 +3440,28 @@ static int list_append_filters(const ListQuery *q, char *sql, size_t sql_cap, si
             return -1;
         }
     }
-    return 0;
+    if (list_append_cmp(sql, sql_cap, pos, nbinds, bind_text, bind_cap, time_column, true,
+                        q->since) != 0) {
+        return -1;
+    }
+    return list_append_cmp(sql, sql_cap, pos, nbinds, bind_text, bind_cap, time_column, false,
+                           q->until);
 }
 
 /*
  * Build list WHERE clause fragments and bind params.
  * sql_out must be large enough (caller-sized); returns -1 if truncated.
  */
-static int list_build_where(const ListQuery *q, const char *now, char *sql, size_t sql_cap,
-                            int *out_nbinds, const char **bind_text, size_t bind_cap)
+static int list_build_where(const ListQuery *q, const char *now, const char *time_column, char *sql,
+                            size_t sql_cap, int *out_nbinds, const char **bind_text,
+                            size_t bind_cap)
 {
     size_t pos = 0U;
     int nbinds = 0;
     int n = 0;
 
-    if (q == NULL || now == NULL || sql == NULL || sql_cap == 0U || out_nbinds == NULL ||
-        bind_text == NULL) {
+    if (q == NULL || now == NULL || time_column == NULL || sql == NULL || sql_cap == 0U ||
+        out_nbinds == NULL || bind_text == NULL) {
         return -1;
     }
     n = snprintf(sql, sql_cap, " WHERE 1=1");
@@ -3337,7 +3470,8 @@ static int list_build_where(const ListQuery *q, const char *now, char *sql, size
     }
     pos = (size_t)n;
 
-    if (list_append_filters(q, sql, sql_cap, &pos, &nbinds, bind_text, bind_cap) != 0) {
+    if (list_append_filters(q, sql, sql_cap, &pos, &nbinds, bind_text, bind_cap, time_column) !=
+        0) {
         return -1;
     }
     if (list_append_bin(sql, sql_cap, &pos, &nbinds, bind_text, bind_cap, q->bin, now) != 0) {
@@ -3352,15 +3486,16 @@ static int list_build_where(const ListQuery *q, const char *now, char *sql, size
  * aliases for MATCH/bm25), then the same entry filters as list.
  * Bind slot 1 is the MATCH query; filters continue from 2.
  */
-static int search_build_where(const SearchQuery *q, const char *now, char *sql, size_t sql_cap,
-                              int *out_nbinds, const char **bind_text, size_t bind_cap)
+static int search_build_where(const SearchQuery *q, const char *now, const char *time_column,
+                              char *sql, size_t sql_cap, int *out_nbinds, const char **bind_text,
+                              size_t bind_cap)
 {
     size_t pos = 0U;
     int nbinds = 0;
     int n = 0;
 
-    if (q == NULL || q->query == NULL || now == NULL || sql == NULL || sql_cap == 0U ||
-        out_nbinds == NULL || bind_text == NULL || bind_cap < 1U) {
+    if (q == NULL || q->query == NULL || now == NULL || time_column == NULL || sql == NULL ||
+        sql_cap == 0U || out_nbinds == NULL || bind_text == NULL || bind_cap < 1U) {
         return -1;
     }
     n = snprintf(sql, sql_cap, " WHERE entries_fts MATCH ?1");
@@ -3371,7 +3506,9 @@ static int search_build_where(const SearchQuery *q, const char *now, char *sql, 
     bind_text[0] = q->query;
     nbinds = 1;
 
-    if (list_append_filters(&q->filters, sql, sql_cap, &pos, &nbinds, bind_text, bind_cap) != 0) {
+    /* time_column is updated_at. Search ignores ListQuery.sort (E5.3). */
+    if (list_append_filters(&q->filters, sql, sql_cap, &pos, &nbinds, bind_text, bind_cap,
+                            time_column) != 0) {
         return -1;
     }
     if (list_append_bin(sql, sql_cap, &pos, &nbinds, bind_text, bind_cap, q->filters.bin, now) !=
@@ -3501,8 +3638,9 @@ static PageResult run_count_and_page(sqlite3 *db, const char *count_sql, const c
 }
 
 /*
- * List: newest-first page with filters. count_sql/select_sql pad LIST_SQL_CAP for
- * the fixed SELECT column list + ORDER BY + LIMIT/OFFSET that frame where_sql.
+ * List: page ordered by the sort column DESC, then id DESC. count_sql/select_sql
+ * pad LIST_SQL_CAP for the fixed SELECT column list + ORDER BY + LIMIT/OFFSET
+ * that frame where_sql.
  */
 static PageResult list_query_exec(sqlite3 *db, const ListQuery *q, const char *now,
                                   StoreError *serr)
@@ -3514,11 +3652,15 @@ static PageResult list_query_exec(sqlite3 *db, const ListQuery *q, const char *n
     char count_sql[(size_t)LIST_SQL_CAP + (size_t)COUNT_FRAME_MARGIN];
     char select_sql[(size_t)LIST_SQL_CAP + (size_t)SELECT_FRAME_MARGIN];
     const char *bind_text[LIST_BIND_CAP];
+    const char *column = list_sort_column(q->sort);
     int nbinds = 0;
     int sn = 0;
 
-    if (list_build_where(q, now, where_sql, sizeof(where_sql), &nbinds, bind_text, LIST_BIND_CAP) !=
-        0) {
+    if (column == NULL) {
+        return (PageResult){.st = STORE_ERR_INTERNAL};
+    }
+    if (list_build_where(q, now, column, where_sql, sizeof(where_sql), &nbinds, bind_text,
+                         LIST_BIND_CAP) != 0) {
         return (PageResult){.st = STORE_ERR_INTERNAL};
     }
     sn = snprintf(count_sql, sizeof(count_sql), "SELECT COUNT(*) FROM entries e%s;", where_sql);
@@ -3528,9 +3670,9 @@ static PageResult list_query_exec(sqlite3 *db, const ListQuery *q, const char *n
     sn = snprintf(select_sql, sizeof(select_sql),
                   "SELECT e.id, e.key, e.body, e.source, e.created_at, e.updated_at, e.expires_at, "
                   "e.sync_id, e.deleted_at, e.version_vector "
-                  "FROM entries e%s ORDER BY e.updated_at DESC, e.id DESC "
+                  "FROM entries e%s ORDER BY e.%s DESC, e.id DESC "
                   "LIMIT ?%d OFFSET ?%d;",
-                  where_sql, nbinds + 1, nbinds + 2);
+                  where_sql, column, nbinds + 1, nbinds + 2);
     if (sn < 0 || (size_t)sn >= sizeof(select_sql)) {
         return (PageResult){.st = STORE_ERR_INTERNAL};
     }
@@ -3585,10 +3727,12 @@ static PageResult search_query_exec(sqlite3 *db, const SearchQuery *q, const cha
     char count_sql[(size_t)LIST_SQL_CAP + (size_t)COUNT_FRAME_MARGIN];
     char select_sql[(size_t)LIST_SQL_CAP + (size_t)SELECT_FRAME_MARGIN];
     const char *bind_text[LIST_BIND_CAP];
+    /* E5.3: search rank stays bm25, then updated_at. Sort on the query is ignored. */
+    const char *column = list_sort_column(STORE_SORT_UPDATED);
     int nbinds = 0;
     int sn = 0;
 
-    if (search_build_where(q, now, where_sql, sizeof(where_sql), &nbinds, bind_text,
+    if (search_build_where(q, now, column, where_sql, sizeof(where_sql), &nbinds, bind_text,
                            LIST_BIND_CAP) != 0) {
         return (PageResult){.st = STORE_ERR_INTERNAL};
     }
@@ -3604,9 +3748,9 @@ static PageResult search_query_exec(sqlite3 *db, const SearchQuery *q, const cha
                   "e.sync_id, e.deleted_at, e.version_vector "
                   "FROM entries e "
                   "JOIN entries_fts ON entries_fts.rowid = e.id%s "
-                  "ORDER BY bm25(entries_fts), e.updated_at DESC, e.id DESC "
+                  "ORDER BY bm25(entries_fts), e.%s DESC, e.id DESC "
                   "LIMIT ?%d OFFSET ?%d;",
-                  where_sql, nbinds + 1, nbinds + 2);
+                  where_sql, column, nbinds + 1, nbinds + 2);
     if (sn < 0 || (size_t)sn >= sizeof(select_sql)) {
         return (PageResult){.st = STORE_ERR_INTERNAL};
     }
@@ -4062,6 +4206,9 @@ static StoreStatus update_check_body_conflict(sqlite3 *db, long long entry_id, b
     return STORE_ERR_CONFLICT;
 }
 
+static StoreStatus version_vector_guard(sqlite3 *db, const char *row_vv, const char *given,
+                                        StoreError *serr);
+
 /* Apply body and/or tag changes and always refresh updated_at. */
 static StoreStatus update_apply_changes(sqlite3 *db, long long entry_id, bool is_keyless,
                                         bool set_body, const char *body, const char *body_hash,
@@ -4111,10 +4258,7 @@ static StoreStatus update_apply_changes(sqlite3 *db, long long entry_id, bool is
     return fts_resync(db, entry_id, serr);
 }
 
-StoreStatus store_update(Store *s, long long id, const char *key_or_null, bool set_body,
-                         const char *body, const char *body_hash, bool set_tags,
-                         const char *const *tags, size_t ntags, bool set_expires,
-                         const char *expires_at, bool undelete, StoreBin bin, const char *now,
+StoreStatus store_update(Store *s, long long id, const StoreUpdate *u, const char *now,
                          Entry *out_entry, long long *out_conflict_id)
 {
     char err_unused[1];
@@ -4126,8 +4270,11 @@ StoreStatus store_update(Store *s, long long id, const char *key_or_null, bool s
     if (out_conflict_id != NULL) {
         *out_conflict_id = 0;
     }
-    st = update_check_args(s, id, key_or_null, set_body, body, body_hash, set_tags, tags, ntags,
-                           set_expires, undelete, now, out_entry);
+    if (u == NULL) {
+        return STORE_ERR_INTERNAL;
+    }
+    st = update_check_args(s, id, u->key_or_null, u->set_body, u->body, u->body_hash, u->set_tags,
+                           u->tags, u->ntags, u->set_expires, u->undelete, now, out_entry);
     if (st != STORE_OK) {
         return st;
     }
@@ -4140,17 +4287,26 @@ StoreStatus store_update(Store *s, long long id, const char *key_or_null, bool s
         return STORE_ERR_SQLITE;
     }
 
-    st = load_then_check_bin(s->db, id, key_or_null, NULL, bin, now, &current, &s->last);
+    st = load_then_check_bin(s->db, id, u->key_or_null, NULL, u->bin, now, &current, &s->last);
     if (st != STORE_OK) {
         rollback_quiet(s->db);
         return st;
     }
     entry_id = current.id;
     is_keyless = (current.key == NULL);
+    /* P4: current.version_vector was read in this write transaction, before any change. */
+    if (u->if_version_vector != NULL) {
+        st = version_vector_guard(s->db, current.version_vector, u->if_version_vector, &s->last);
+        if (st != STORE_OK) {
+            store_entry_free(&current);
+            rollback_quiet(s->db);
+            return st;
+        }
+    }
 
-    st = update_apply_changes(s->db, entry_id, is_keyless, set_body, body, body_hash, set_tags,
-                              tags, ntags, set_expires,
-                              (EntryTimes){.now = now, .expires_at = expires_at}, undelete,
+    st = update_apply_changes(s->db, entry_id, is_keyless, u->set_body, u->body, u->body_hash,
+                              u->set_tags, u->tags, u->ntags, u->set_expires,
+                              (EntryTimes){.now = now, .expires_at = u->expires_at}, u->undelete,
                               s->device_id, current.version_vector, out_conflict_id, &s->last);
     if (st != STORE_OK) {
         store_entry_free(&current);
@@ -5523,6 +5679,93 @@ static StoreStatus vv_compare(sqlite3 *db, const char *local_vv, const char *inc
     } else {
         *out = 0;
     }
+    return STORE_OK;
+}
+
+/* A guard token is one JSON object of device id to non-negative integer.
+   json_type and json_each error on malformed JSON; CASE evaluates only the
+   branch it needs, so json_valid guards them. An integer that does not fit in
+   int64 fails `value != CAST(value AS INTEGER)`: SQLite reports it as integer
+   and saturates the cast, so 2^63 would compare equal to 2^63-1. */
+static StoreStatus vv_reject_malformed(sqlite3 *db, const char *given, StoreError *serr)
+{
+    sqlite3_stmt *stmt = NULL;
+    int rc = 0;
+    int bad = 1;
+
+    rc = sqlite3_prepare_v2(db,
+                            "SELECT CASE WHEN json_valid(?1) = 0 THEN 1 "
+                            "WHEN json_type(?1) != 'object' THEN 1 "
+                            "ELSE EXISTS (SELECT 1 FROM json_each(?1) "
+                            "WHERE type != 'integer' OR atom < 0 OR ifnull(key, '') = '' "
+                            "OR value != CAST(value AS INTEGER)) END;",
+                            -1, &stmt, NULL);
+    if (rc != SQLITE_OK) {
+        capture_sqlite_error(db, serr);
+        return STORE_ERR_SQLITE;
+    }
+    (void)sqlite3_bind_text(stmt, 1, given, -1, SQLITE_STATIC);
+    rc = sqlite3_step(stmt);
+    if (rc == SQLITE_ROW) {
+        bad = sqlite3_column_int(stmt, 0);
+    }
+    (void)sqlite3_finalize(stmt);
+    if (rc != SQLITE_ROW) {
+        capture_sqlite_error(db, serr);
+        return STORE_ERR_SQLITE;
+    }
+    return bad != 0 ? STORE_ERR_BAD_VV : STORE_OK;
+}
+
+/* Equal when every device counter matches. A missing device counts as 0.
+   vv_compare returns 0 for both equal and concurrent, so it cannot guard. */
+static StoreStatus version_vector_guard(sqlite3 *db, const char *row_vv, const char *given,
+                                        StoreError *serr)
+{
+    VvPair *row = NULL;
+    VvPair *got = NULL;
+    size_t nrow = 0U;
+    size_t ngot = 0U;
+    size_t i = 0U;
+    StoreStatus st = STORE_OK;
+
+    st = vv_reject_malformed(db, given, serr);
+    if (st != STORE_OK) {
+        return st;
+    }
+    /* A stored counter that does not fit int64 must not saturate into a match. */
+    st = vv_reject_malformed(db, row_vv, serr);
+    if (st == STORE_ERR_BAD_VV) {
+        return STORE_ERR_STALE;
+    }
+    if (st != STORE_OK) {
+        return st;
+    }
+    st = vv_parse_pairs(db, row_vv, &row, &nrow, serr);
+    if (st != STORE_OK) {
+        return st;
+    }
+    st = vv_parse_pairs(db, given, &got, &ngot, serr);
+    if (st != STORE_OK) {
+        vv_pairs_free(row, nrow);
+        return st;
+    }
+    for (i = 0; i < nrow; i++) {
+        if (row[i].clock != vv_clock_of(got, ngot, row[i].device_id)) {
+            vv_pairs_free(row, nrow);
+            vv_pairs_free(got, ngot);
+            return STORE_ERR_STALE;
+        }
+    }
+    for (i = 0; i < ngot; i++) {
+        if (got[i].clock != vv_clock_of(row, nrow, got[i].device_id)) {
+            vv_pairs_free(row, nrow);
+            vv_pairs_free(got, ngot);
+            return STORE_ERR_STALE;
+        }
+    }
+    vv_pairs_free(row, nrow);
+    vv_pairs_free(got, ngot);
     return STORE_OK;
 }
 

@@ -34,6 +34,12 @@ enum {
     MS_MAX = 999,
     YEAR_MAX = 9999,
     TM_YEAR_BASE = 1900,
+    MONTH_MAX = 12,
+    MONTH_FEB = 2,
+    DAY_MAX_LONG = 31,
+    DAY_MAX_SHORT = 30,
+    DAY_MAX_LEAP = 29,
+    DAY_MAX_FEB = 28,
 };
 
 /* Howard Hinnant civil<->days algorithm constants (see days_from_civil). */
@@ -42,6 +48,7 @@ enum {
     DAYS_CIVIL_EPOCH = 719468, /* days from 0000-03-01 to 1970-01-01 */
     YEARS_PER_ERA = 400,
     YEARS_PER_CENTURY = 100,
+    YEARS_PER_LEAP = 4,
     DAYS_PER_COMMON_YEAR = 365,
     DOY_NUMERATOR_MUL = 153, /* month->day-of-year: (153*mp + 2)/5 */
     DOY_DENOMINATOR = 5,
@@ -209,6 +216,10 @@ DiagCode code_for_store_status(StoreStatus st)
         return DIAG_NEWER_DATABASE;
     case STORE_ERR_UNIQUE_TAKEN:
         return DIAG_UNIQUE_TAKEN;
+    case STORE_ERR_STALE:
+        return DIAG_STALE;
+    case STORE_ERR_BAD_VV:
+        return DIAG_USAGE;
     default:
         return DIAG_INTERNAL;
     }
@@ -937,6 +948,125 @@ static int parse_expires_to_iso(const char *token, char *out, size_t outlen, con
         return -1;
     }
     return 0;
+}
+
+static int is_leap_year(int year)
+{
+    if (year % YEARS_PER_ERA == 0) {
+        return 1;
+    }
+    if (year % YEARS_PER_CENTURY == 0) {
+        return 0;
+    }
+    return (year % YEARS_PER_LEAP == 0) ? 1 : 0;
+}
+
+static int days_in_month(CivilTime date)
+{
+    static const int k_days[MONTH_MAX + 1] = {0,
+                                              DAY_MAX_LONG,
+                                              DAY_MAX_FEB,
+                                              DAY_MAX_LONG,
+                                              DAY_MAX_SHORT,
+                                              DAY_MAX_LONG,
+                                              DAY_MAX_SHORT,
+                                              DAY_MAX_LONG,
+                                              DAY_MAX_LONG,
+                                              DAY_MAX_SHORT,
+                                              DAY_MAX_LONG,
+                                              DAY_MAX_SHORT,
+                                              DAY_MAX_LONG};
+    if (date.month < 1 || date.month > MONTH_MAX) {
+        return 0;
+    }
+    if (date.month == MONTH_FEB && is_leap_year(date.year) != 0) {
+        return DAY_MAX_LEAP;
+    }
+    return k_days[date.month];
+}
+
+/* 0 when the civil fields are a real clock time. Seconds stop at 59. */
+static int civil_fields_ok(CivilTime when)
+{
+    if (when.year < 1 || when.year > YEAR_MAX || when.month < 1 || when.month > MONTH_MAX) {
+        return -1;
+    }
+    if (when.day < 1 || when.day > days_in_month(when)) {
+        return -1;
+    }
+    if (when.hour < 0 || when.hour > HOUR_MAX || when.min < 0 || when.min > MINUTE_MAX ||
+        when.sec < 0 || when.sec > SECOND_MAX) {
+        return -1;
+    }
+    return 0;
+}
+
+/* cppcheck-suppress staticFunction ; public API (commands_common.h); used by tests */
+int parse_filter_ts(const char *in, char out[ISO_TS_BUFSIZE])
+{
+    char canon[ISO_BUFSIZE];
+    int year = 0;
+    int month = 0;
+    int day = 0;
+    int hour = 0;
+    int min = 0;
+    int sec = 0;
+    int ms = 0;
+
+    if (in == NULL || out == NULL) {
+        return -1;
+    }
+    /* E5.2c: whole seconds are the same instant with .000. */
+    if (match_mask(in, "dddd-dd-ddTdd:dd:ddZ")) {
+        (void)snprintf(canon, sizeof(canon), "%.19s.000Z", in);
+        in = canon;
+    }
+    if (match_mask(in, "dddd-dd-ddTdd:dd:dd.dddZ")) {
+        if (parse_iso_mmmz(in, &year, &month, &day, &hour, &min, &sec, &ms) != 0 ||
+            civil_fields_ok((CivilTime){
+                .year = year, .month = month, .day = day, .hour = hour, .min = min, .sec = sec}) !=
+                0) {
+            return -1;
+        }
+        memcpy(out, in, (size_t)ISO_BUFSIZE);
+        return 0;
+    }
+    if (match_mask(in, "dddd-dd-dd")) {
+        struct tm local;
+        struct tm utc;
+        time_t unix_sec = 0;
+
+        /* decision:plan17-date-floor-1900: macOS mktime fails below 1900. */
+        if (parse_n_digits(in, 4U, &year) != 0 || year < TM_YEAR_BASE ||
+            parse_n_digits(in + ISO_OFF_MONTH, 2U, &month) != 0 ||
+            parse_n_digits(in + ISO_OFF_DAY, 2U, &day) != 0 ||
+            civil_fields_ok((CivilTime){
+                .year = year, .month = month, .day = day, .hour = 0, .min = 0, .sec = 0}) != 0) {
+            return -1;
+        }
+        memset(&local, 0, sizeof(local));
+        local.tm_year = year - TM_YEAR_BASE;
+        local.tm_mon = month - 1;
+        local.tm_mday = day;
+        local.tm_isdst = -1;
+        local.tm_wday = -1;
+        unix_sec = mktime(&local);
+        /* (time_t)-1 is also a real instant, and macOS sets no errno on failure.
+           A successful mktime always writes tm_wday. */
+        if (local.tm_wday < 0 || gmtime_r(&unix_sec, &utc) == NULL) {
+            return -1;
+        }
+        /* A DST gap moves a missing midnight to the day's first instant (01:00 in
+           Havana on 2026-03-08); that is the local start. A day the zone skipped
+           lands on another date. Refuse that. */
+        if (local.tm_year != year - TM_YEAR_BASE || local.tm_mon != month - 1 ||
+            local.tm_mday != day) {
+            return -1;
+        }
+        return format_iso_mmmz(utc.tm_year + TM_YEAR_BASE, utc.tm_mon + 1, utc.tm_mday, utc.tm_hour,
+                               utc.tm_min, utc.tm_sec, 0, out, ISO_TS_BUFSIZE);
+    }
+    return -1;
 }
 
 ExpiryResult resolve_expiry_flags(ExpiryFlags flags, const char *now, char *out, size_t outlen)
