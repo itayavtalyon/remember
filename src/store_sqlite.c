@@ -4178,13 +4178,8 @@ static StoreStatus update_apply_changes(sqlite3 *db, long long entry_id, bool is
     return fts_resync(db, entry_id, serr);
 }
 
-// NOLINTBEGIN(bugprone-easily-swappable-parameters)
-StoreStatus store_update(Store *s, long long id, const char *key_or_null, bool set_body,
-                         const char *body, const char *body_hash, bool set_tags,
-                         const char *const *tags, size_t ntags, bool set_expires,
-                         const char *expires_at, bool undelete, StoreBin bin, const char *now,
-                         const char *if_updated_at, Entry *out_entry, long long *out_conflict_id)
-// NOLINTEND(bugprone-easily-swappable-parameters)
+StoreStatus store_update(Store *s, long long id, const StoreUpdate *u, const char *now,
+                         Entry *out_entry, long long *out_conflict_id)
 {
     char err_unused[1];
     StoreStatus st = STORE_OK;
@@ -4195,8 +4190,11 @@ StoreStatus store_update(Store *s, long long id, const char *key_or_null, bool s
     if (out_conflict_id != NULL) {
         *out_conflict_id = 0;
     }
-    st = update_check_args(s, id, key_or_null, set_body, body, body_hash, set_tags, tags, ntags,
-                           set_expires, undelete, now, out_entry);
+    if (u == NULL) {
+        return STORE_ERR_INTERNAL;
+    }
+    st = update_check_args(s, id, u->key_or_null, u->set_body, u->body, u->body_hash, u->set_tags,
+                           u->tags, u->ntags, u->set_expires, u->undelete, now, out_entry);
     if (st != STORE_OK) {
         return st;
     }
@@ -4209,7 +4207,7 @@ StoreStatus store_update(Store *s, long long id, const char *key_or_null, bool s
         return STORE_ERR_SQLITE;
     }
 
-    st = load_then_check_bin(s->db, id, key_or_null, NULL, bin, now, &current, &s->last);
+    st = load_then_check_bin(s->db, id, u->key_or_null, NULL, u->bin, now, &current, &s->last);
     if (st != STORE_OK) {
         rollback_quiet(s->db);
         return st;
@@ -4217,15 +4215,15 @@ StoreStatus store_update(Store *s, long long id, const char *key_or_null, bool s
     entry_id = current.id;
     is_keyless = (current.key == NULL);
     /* P4: current.updated_at was read in this write transaction, before any change. */
-    if (if_updated_at != NULL && strcmp(current.updated_at, if_updated_at) != 0) {
+    if (u->if_updated_at != NULL && strcmp(current.updated_at, u->if_updated_at) != 0) {
         store_entry_free(&current);
         rollback_quiet(s->db);
         return STORE_ERR_STALE;
     }
 
-    st = update_apply_changes(s->db, entry_id, is_keyless, set_body, body, body_hash, set_tags,
-                              tags, ntags, set_expires,
-                              (EntryTimes){.now = now, .expires_at = expires_at}, undelete,
+    st = update_apply_changes(s->db, entry_id, is_keyless, u->set_body, u->body, u->body_hash,
+                              u->set_tags, u->tags, u->ntags, u->set_expires,
+                              (EntryTimes){.now = now, .expires_at = u->expires_at}, u->undelete,
                               s->device_id, current.version_vector, out_conflict_id, &s->last);
     if (st != STORE_OK) {
         store_entry_free(&current);

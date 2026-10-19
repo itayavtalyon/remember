@@ -509,8 +509,12 @@ TEST(store_neighbors_cascade_and_survive_trash)
 
     /* restore keeps the edge */
     memset(&deleted, 0, sizeof(deleted));
-    ASSERT_EQ_STATUS(store_update(s, b, NULL, false, NULL, NULL, false, NULL, 0U, true, NULL, false,
-                                  STORE_BIN_EXPIRED, k_now, NULL, &deleted, NULL),
+    ASSERT_EQ_STATUS(store_update(s, b,
+                                  &(StoreUpdate){
+                                      .set_expires = true,
+                                      .bin = STORE_BIN_EXPIRED,
+                                  },
+                                  k_now, &deleted, NULL),
                      STORE_OK);
     store_entry_free(&deleted);
     ASSERT_EQ_STATUS(store_list_neighbors(s, a, NULL, STORE_NEIGHBOR_ALL, k_now, &rows, &n),
@@ -520,8 +524,12 @@ TEST(store_neighbors_cascade_and_survive_trash)
 
     /* re-expire and purge drops the edge */
     memset(&deleted, 0, sizeof(deleted));
-    ASSERT_EQ_STATUS(store_update(s, b, NULL, false, NULL, NULL, false, NULL, 0U, true, k_past,
-                                  false, STORE_BIN_LIVE, k_now, NULL, &deleted, NULL),
+    ASSERT_EQ_STATUS(store_update(s, b,
+                                  &(StoreUpdate){
+                                      .set_expires = true,
+                                      .expires_at = k_past,
+                                  },
+                                  k_now, &deleted, NULL),
                      STORE_OK);
     store_entry_free(&deleted);
     ASSERT_EQ_STATUS(store_purge_trash(s, k_now, &purged, &pn), STORE_OK);

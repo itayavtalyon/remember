@@ -293,8 +293,29 @@ StoreStatus store_hard_delete_by_key(Store *s, const char *key, StoreBin bin, co
                                      Entry *out);
 
 /*
- * Update one entry by id (id > 0, key_or_null NULL) or normalized key
- * (key_or_null set; id ignored). set_body / set_tags / set_expires / undelete
+ * Change fields for store_update. Zero / NULL means that axis is left alone,
+ * except set_tags with ntags 0, which clears tags. if_updated_at NULL skips
+ * the stamp guard. Named fields so call sites cannot transpose the old
+ * positional list (decision:plan17-store-update-options-struct).
+ */
+typedef struct {
+    const char *key_or_null; /* NULL => locate by id */
+    const char *body;
+    const char *body_hash;
+    const char *const *tags; /* may be NULL when ntags == 0 */
+    const char *expires_at;  /* with set_expires: NULL clears, ISO writes */
+    const char *if_updated_at;
+    size_t ntags;
+    StoreBin bin;
+    bool set_body;
+    bool set_tags;
+    bool set_expires;
+    bool undelete;
+} StoreUpdate;
+
+/*
+ * Update one entry by id (id > 0, u->key_or_null NULL) or normalized key
+ * (u->key_or_null set; id ignored). set_body / set_tags / set_expires / undelete
  * are independent opt-ins; at least one must be true at the command layer.
  * set_expires + expires_at NULL clears expiry; set_expires + ISO writes it.
  * undelete clears deleted_at (locator is normally STORE_BIN_DELETED).
@@ -312,12 +333,10 @@ StoreStatus store_hard_delete_by_key(Store *s, const char *key, StoreBin bin, co
  * if_updated_at NULL skips the guard. Any other string is compared byte for
  * byte with the row's updated_at inside this write transaction. A mismatch
  * is STORE_ERR_STALE and the transaction rolls back.
+ * u NULL is STORE_ERR_INTERNAL.
  */
-StoreStatus store_update(Store *s, long long id, const char *key_or_null, bool set_body,
-                         const char *body, const char *body_hash, bool set_tags,
-                         const char *const *tags, size_t ntags, bool set_expires,
-                         const char *expires_at, bool undelete, StoreBin bin, const char *now,
-                         const char *if_updated_at, Entry *out_entry, long long *out_conflict_id);
+StoreStatus store_update(Store *s, long long id, const StoreUpdate *u, const char *now,
+                         Entry *out_entry, long long *out_conflict_id);
 
 /* One tag with the number of entries carrying it. name is heap-owned. */
 typedef struct {

@@ -748,9 +748,22 @@ int cmd_update(Store *s, bool json, int rest_argc, const char **rest_argv)
                               &expires_at) != 0) {
         goto cleanup;
     }
-    st = store_update(s, id, key_or_null, parsed.set_text, body, body_hash, set_tags,
-                      (const char *const *)tags_norm, ntags, set_expires, expires_at,
-                      parsed.undelete, bin, now, parsed.if_updated_raw, &entry, &conflict_id);
+    st = store_update(s, id,
+                      &(StoreUpdate){
+                          .key_or_null = key_or_null,
+                          .set_body = parsed.set_text,
+                          .body = body,
+                          .body_hash = body_hash,
+                          .set_tags = set_tags,
+                          .tags = (const char *const *)tags_norm,
+                          .ntags = ntags,
+                          .set_expires = set_expires,
+                          .expires_at = expires_at,
+                          .undelete = parsed.undelete,
+                          .bin = bin,
+                          .if_updated_at = parsed.if_updated_raw,
+                      },
+                      now, &entry, &conflict_id);
     if (st == STORE_ERR_CONFLICT) {
         err_fmt(DIAG_BODY_CONFLICT, "body hash conflicts with entry %lld", conflict_id);
         goto cleanup;

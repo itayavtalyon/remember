@@ -842,8 +842,13 @@ TEST(store_device_new_keeps_the_vector_until_the_next_edit)
     store_entry_free(&entry);
 
     memset(&entry, 0, sizeof(entry));
-    ASSERT_EQ_STATUS(store_update(s, 1, NULL, true, "nvim", k_hash_a, false, NULL, 0U, false, NULL,
-                                  false, STORE_BIN_LIVE, k_now, NULL, &entry, NULL),
+    ASSERT_EQ_STATUS(store_update(s, 1,
+                                  &(StoreUpdate){
+                                      .set_body = true,
+                                      .body = "nvim",
+                                      .body_hash = k_hash_a,
+                                  },
+                                  k_now, &entry, NULL),
                      STORE_OK);
     (void)snprintf(old_counter, sizeof(old_counter), "\"%s\":1", old_id);
     (void)snprintf(new_counter, sizeof(new_counter), "\"%s\":1", store_device_id(s));
