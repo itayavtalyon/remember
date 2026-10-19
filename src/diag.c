@@ -166,7 +166,15 @@ static int write_notice(Notice notice)
         }
         return 0;
     }
-    if (fprintf(err, "remember: %s%s\n", notice.plain_prefix, message) < 0) {
+    /* decision:plan17a-plain-notice-one-line: an echoed token cannot split the
+       line or drive the terminal. JSON escapes the same bytes above. */
+    if (fprintf(err, "remember: %s", notice.plain_prefix) < 0) {
+        return -1;
+    }
+    if (output_text_human(err, message, false) != 0) {
+        return -1;
+    }
+    if (fputc('\n', err) == EOF) {
         return -1;
     }
     return 0;

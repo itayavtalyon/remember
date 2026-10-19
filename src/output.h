@@ -34,6 +34,14 @@ int output_list_envelope(FILE *out, size_t offset, size_t limit, size_t count, s
 int output_id_human(FILE *out, long long id);
 
 /*
+ * Write text with each byte that could drive the terminal (C0 except \t,
+ * plus DEL) replaced by '?'. keep_newline keeps \n for multi-line bodies; a
+ * one-line notice passes false. NULL text writes nothing. No trailing newline.
+ * Returns 0 on success, -1 on I/O error.
+ */
+int output_text_human(FILE *out, const char *text, bool keep_newline);
+
+/*
  * Write a full body for human `get`, then a newline. Control bytes that could
  * drive the terminal (C0 except \n and \t, plus DEL) are replaced with '?';
  * newlines and tabs are kept so multi-line memories render intact. For exact
