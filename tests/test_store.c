@@ -2510,7 +2510,9 @@ TEST(store_update_changed_counter_is_stale)
     free(db);
 }
 
-/* Overwrite row 1's stored vector, bypassing the store's own writers. */
+/* Overwrite row 1's stored vector, bypassing the store's own writers.
+   db path first, like harness_sqlite_query_line. */
+// NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
 static void given_row_version_vector(const char *db, const char *vector)
 {
     char sql[SQL_BUFSIZE];
