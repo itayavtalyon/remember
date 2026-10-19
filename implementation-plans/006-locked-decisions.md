@@ -54,7 +54,7 @@ plan can be read alone. This file is the index.
 | P4 | The E8 stale check and the update run in the same write transaction. | 17 |
 | P5 | Temp names beside PATH: `<PATH>.tmp-<16 hex random>`. They are removed on every failure path. | 20 |
 | P6 | Every new command (`device`, `repair`, `config`, `export`) gets a registry row, a help topic and a facade byte-match test. | all |
-| P7 | A repeated flag on a new or changed command (`--sort`, `--since`, `--until`, `--if-version-vector`, `--format`, `--out`, `--bins`, `--origin`, `--from-*`) → `usage` `duplicate <flag>`, as `duplicate --id` is today. **Amendment (2026-10-18, with D10):** `--if-updated-at` in this list is `--if-version-vector`. | 17, 20, 21 |
+| P7 | A repeated flag on a new or changed command (`--sort`, `--since`, `--until`, `--if-version-vector`, `--format`, `--out`, `--bins`, `--origin`, `--from-*`) → `usage` `duplicate <flag>`, as `duplicate --id` is today. (`--if-version-vector` replaced `--if-updated-at` with D10, 2026-10-18.) | 17, 20, 21 |
 | P8 | A JSON entry object with a duplicate member name is a bad record with message `duplicate field` (new E7.16 line). | 21 |
 | P9 | Export flag messages: missing `--format` → `export requires --format (json, md, or csv)`; bad value → `invalid --format (use json, md, or csv)`; missing `--out` → `export requires --out PATH`. Import: zero or several `--from-*` → `import requires exactly one of --from-json, --from-md, --from-csv, --from-db`. | 20, 21 |
 | P10 | The CSV reader accepts an optional BOM and CRLF or LF record ends; exports always write BOM + CRLF. | 21 |

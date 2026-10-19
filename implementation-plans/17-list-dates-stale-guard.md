@@ -213,8 +213,8 @@ cmake --build build --target leaks-macos          # macOS only
       plus the version-vector guard and the add-path rule.
 - [x] Gate: ctest, lint, coverage 100/100, `ci-linux.sh` all green. See
       Implementation Notes.
-- [ ] Second review done; no open **blocking** item.
-- [ ] `implementation-plans/INDEX.md` row marked ✅. The flag name in that row
+- [x] Second review done; no open **blocking** item.
+- [x] `implementation-plans/INDEX.md` row marked ✅. The flag name in that row
       is already `--if-version-vector`. The mark waits for the second review.
 
 ## Second review handover
@@ -793,3 +793,41 @@ The TS parser does not serve `update`. The amendment moved the guard to the vers
 **Left open:** the stage 4b nit on a counter above int64 and a repeated device. Neither can equal a stored vector, so the result is `stale`. A future sync plan can make them malformed. The INDEX check mark and this stage's second review are not done.
 
 **Praise:** list and search help were not rewritten. The new test is one behavior in the suite that already owns the flag.
+
+### 2026-10-19 — second-opinion deep review (stage 5, FINAL)
+
+**Verdict:** plan 17 approved. No open blocking item. No grill. Two doc nits auto-fixed. DoD is all checked, and the INDEX row is marked ✅. The whole-plan review (`decision:plan17-whole-plan-flag`) is next: the coder writes `.claude/WHOLE_PLAN_REVIEW` and stops.
+
+**Run, not read.** Baseline `d2a4562`: ctest 5/5 (ASan/UBSan, `REMEMBER_TEST_VFS=ON`), LINT OK, coverage 100/100, `leaks-macos` PASS, `ci-linux.sh` OK, `GATE-ALL-GREEN`. Fixed tree: the same run, because this review changed only Markdown (SKILL.md, the plan, the INDEX, and the locked-decisions index). The C tree is byte-identical to `d2a4562`. Every user-facing claim in this stage was run on the binary:
+
+- `help update` shows the flag and the stale sentence.
+- SKILL's `list --sort created --since <today>` returns today's row.
+- SKILL's workflow holds end to end. A `version_vector` read with `--json get` and passed back pretty-printed (`json.dumps(indent=1)`) writes. The same vector again is one `stale` JSON line, exit 1.
+- `--since 2026-10-20 --until 2026-10-01` is `count` 0, `total` 0.
+- A wrong bin with a mismatched vector is still exit 3 `not_expired`.
+
+**Findings:**
+
+1. **nit → fixed.** SKILL.md said "`since` equal to `until`" is empty. D11 is `since >= until`. It now says "at or after".
+2. **nit → fixed.** `006-locked-decisions.md` P7 had both the rewritten flag list and an amendment saying the same rename. It now keeps the list with a one-clause note.
+3. **nit, open (plan 22).** The new update help sentence is 95 columns. Lines over 80 already exist (the usage line is 108, the footer 99). Plan 22's help sweep owns the wrap.
+
+**Plan 17 in one paragraph.** List and search gained `--sort`, `--since`, and `--until` on one filter-timestamp parser. That parser accepts a date whose midnight a DST change skips, and rejects date-only years before 1900. The stale guard moved from `updated_at`, which repeats within a millisecond (95 of 500 lost updates in-process), to the version vector (0 of 500). Both add paths now bump the version vector as design log 005 says. Second reviews added seven decisions and fixed two blocking bugs, both found by running, not reading. They added 8 tests, and the review commits are still net −410 test lines and −79 source lines.
+
+**Coder rating (stage 5): 9/10.** The best stage:
+
+- Every DoD box names the test or probe that proves it.
+- The help mutants are one clause each.
+- Every doc claim was probed before it was written, including the expired-plus-stale order.
+- Three simplify candidates, each with a sound reason.
+
+The misses are two wording slips.
+
+**Plan 17 overall: 8/10.** The trend is up across five stages (7 → 8 → 8.5 → 8 → 7.5 → 9). The coder now applies each round's instructions the same day. The remaining pattern is design-level: it trusts the plan's token, wording, or file claims without a probe. Stages 1, 4, and 4b each had one finding of that kind.
+
+**Paste-ready for the coder (whole plan):**
+
+```text
+1. Treat every plan assumption as a claim to probe first: a timestamp's uniqueness, a libc's errno, a design log's "every write bumps X".
+2. Keep the per-stage checklist you used in stage 5 (DoD box -> named proof, one-clause mutants, docs probed before written) for every stage, not only the last.
+```

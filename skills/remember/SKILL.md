@@ -132,7 +132,7 @@ remember --json tags
 - If `total` > rows received, page with `--offset` or raise `--limit` before concluding nothing else exists
 - list: same filters/paging; no FTS. `--sort updated` (default) orders by `updated_at DESC, id DESC`. `--sort created` orders by `created_at DESC, id DESC`.
 - `--since TS` is inclusive and `--until TS` is exclusive. On `list` they filter the sort field. On `search` they filter `updated_at`. `search --sort` is validated, then ignored.
-- TS is `YYYY-MM-DD` (local start of that day; a year before 1900 is `invalid timestamp`), `YYYY-MM-DDTHH:MM:SSZ`, or `YYYY-MM-DDTHH:MM:SS.mmmZ`. `since` equal to `until` is exit 0 with `count` 0 and `total` 0.
+- TS is `YYYY-MM-DD` (local start of that day; a year before 1900 is `invalid timestamp`), `YYYY-MM-DDTHH:MM:SSZ`, or `YYYY-MM-DDTHH:MM:SS.mmmZ`. `since` at or after `until` is exit 0 with `count` 0 and `total` 0.
 - tags: every in-use tag with count; optional `--expired`/`--deleted`
 
 ### get / delete / update / rekey (locator)
