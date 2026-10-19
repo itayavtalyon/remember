@@ -831,3 +831,27 @@ The misses are two wording slips.
 1. Treat every plan assumption as a claim to probe first: a timestamp's uniqueness, a libc's errno, a design log's "every write bumps X".
 2. Keep the per-stage checklist you used in stage 5 (DoD box -> named proof, one-clause mutants, docs probed before written) for every stage, not only the last.
 ```
+
+### 2026-10-19 — whole-plan deep review
+
+**Verdict:** approve. One blocking hole fixed. No grill. Do not start plan 18.
+
+**Ran, not read.** After the fix: store suite 124/0, list_dates 36/0, ctest 5/5 (ASan/UBSan, `REMEMBER_TEST_VFS=ON`), `lint-all.sh` LINT OK, coverage 100% functions and 100% effective lines, `leaks-macos` PASS, `ci-linux.sh` OK (iwyu and scan-build included). Bugbot is not installed here (no `bugbot` binary, no Bugbot tool). These notes are the only edit after that gate.
+
+**Safety, fixed.** `json_each` reports `9223372036854775808` (`2^63`) as type integer, and `CAST(value AS INTEGER)` saturates to `9223372036854775807`. The guard then treated a caller's `2^63-1` as equal to a stored `2^63` and wrote the new body. Red: `store_update_int64_overflow_does_not_match_max` returned `STORE_OK` and the body became `new`. The check is now `value != CAST(value AS INTEGER)`. A given `2^63` is `STORE_ERR_BAD_VV`. A stored counter that does not fit is `STORE_ERR_STALE`. `9223372036854775807` still matches itself. `vv_parse_pairs` is unchanged, so import dominance is unchanged.
+
+Probes that stayed usage errors: a quote in `--since`, `--sort updated; DROP TABLE entries`, a 300-byte timestamp, and ESC in `--since` (JSON `\u001b`). Bounds are bound parameters. `ORDER BY` comes only from `list_sort_column`. `TZ=UTC` `parse_filter_ts("9999-12-31")` stays `9999-12-31T00:00:00.000Z`, and that test ran inside `ci-linux.sh`.
+
+**Nits left.** Plain mode echoes a rejected timestamp with `%s`, so a newline splits that line. JSON keeps it one line (`list_rejects_a_newline_timestamp_as_one_json_line`). The raw plain echo is what the existing tests lock. Disagreeing duplicate keys compare stale, because the clock lookup returns the first copy. Agreeing copies compare as that clock. The 95-column update help line stays with plan 22. `handle_update_ttl_flag` still parses `--if-version-vector`. Omitting the guard flag still overwrites.
+
+**Simplicity.** Dropped the dead `column == NULL` return in `search_query_exec` (3 lines). `list_sort_column(STORE_SORT_UPDATED)` does not return NULL, and `search_build_where` still rejects a NULL time column. The body-changed flag is an `if` that sets `true`, so the comparison is a condition. Left alone: a struct to retire `list_take_raw`'s NOLINT, a help-text helper, and `maybe_revive`'s expiry-on-live no-op.
+
+**Pragmatic write-gate:** DRY PASS (one malformed check, used for the given token and the stored vector). Easy-to-replace PASS (`store.h` stays the port). Orthogonal PASS (the sort column is still only the enum).
+
+**Grades:** coder 8/10, stage-reviewer 8/10. The new pointers are below. They are not in `standard:coding` until Itay accepts them.
+
+```text
+Coder: When a check asks SQLite whether a JSON number is an integer, also compare the value just past int64 max with the saturated cast. Type integer does not mean the number survived the cast.
+
+Reviewer: Do not record "cannot equal" for an overflow unless you have compared the out-of-range token with the saturated value. A stale result on a normal row does not prove the saturated values are unequal.
+```

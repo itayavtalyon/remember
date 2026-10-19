@@ -2957,8 +2957,9 @@ static StoreStatus reuse_existing_row(sqlite3 *db, long long id, const char *bod
     }
     switch (body_policy) {
     case REUSE_REPLACE_CHANGED_BODY:
-        change.updated_at_written =
-            ((current.body == NULL || strcmp(current.body, body) != 0) != 0);
+        if (current.body == NULL || strcmp(current.body, body) != 0) {
+            change.updated_at_written = true;
+        }
         break;
     case REUSE_KEEP_BODY:
         break;
@@ -3731,9 +3732,6 @@ static PageResult search_query_exec(sqlite3 *db, const SearchQuery *q, const cha
     int nbinds = 0;
     int sn = 0;
 
-    if (column == NULL) {
-        return (PageResult){.st = STORE_ERR_INTERNAL};
-    }
     if (search_build_where(q, now, column, where_sql, sizeof(where_sql), &nbinds, bind_text,
                            LIST_BIND_CAP) != 0) {
         return (PageResult){.st = STORE_ERR_INTERNAL};
@@ -5686,7 +5684,9 @@ static StoreStatus vv_compare(sqlite3 *db, const char *local_vv, const char *inc
 
 /* A guard token is one JSON object of device id to non-negative integer.
    json_type and json_each error on malformed JSON; CASE evaluates only the
-   branch it needs, so json_valid guards them in one statement. */
+   branch it needs, so json_valid guards them. An integer that does not fit in
+   int64 fails `value != CAST(value AS INTEGER)`: SQLite reports it as integer
+   and saturates the cast, so 2^63 would compare equal to 2^63-1. */
 static StoreStatus vv_reject_malformed(sqlite3 *db, const char *given, StoreError *serr)
 {
     sqlite3_stmt *stmt = NULL;
@@ -5697,7 +5697,8 @@ static StoreStatus vv_reject_malformed(sqlite3 *db, const char *given, StoreErro
                             "SELECT CASE WHEN json_valid(?1) = 0 THEN 1 "
                             "WHEN json_type(?1) != 'object' THEN 1 "
                             "ELSE EXISTS (SELECT 1 FROM json_each(?1) "
-                            "WHERE type != 'integer' OR atom < 0 OR ifnull(key, '') = '') END;",
+                            "WHERE type != 'integer' OR atom < 0 OR ifnull(key, '') = '' "
+                            "OR value != CAST(value AS INTEGER)) END;",
                             -1, &stmt, NULL);
     if (rc != SQLITE_OK) {
         capture_sqlite_error(db, serr);
@@ -5729,6 +5730,14 @@ static StoreStatus version_vector_guard(sqlite3 *db, const char *row_vv, const c
     StoreStatus st = STORE_OK;
 
     st = vv_reject_malformed(db, given, serr);
+    if (st != STORE_OK) {
+        return st;
+    }
+    /* A stored counter that does not fit int64 must not saturate into a match. */
+    st = vv_reject_malformed(db, row_vv, serr);
+    if (st == STORE_ERR_BAD_VV) {
+        return STORE_ERR_STALE;
+    }
     if (st != STORE_OK) {
         return st;
     }

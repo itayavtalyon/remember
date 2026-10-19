@@ -2515,7 +2515,10 @@ TEST(store_update_malformed_version_vector_writes_nothing)
     char *db = NULL;
     RowStamp before;
     Store *s = given_live_add(&db, "old", k_hash_a, NULL, &before);
-    const char *bad[] = {"[]", "{\"d\":-1}", "{\"d\":1.5}", "{\"d\":\"1\"}", "{\"\":1}"};
+    /* 2^63 is not an int64. SQLite still reports type integer and saturates the cast. */
+    const char *bad[] = {"[]",          "{\"d\":-1}",
+                         "{\"d\":1.5}", "{\"d\":\"1\"}",
+                         "{\"\":1}",    "{\"d\":9223372036854775808}"};
     size_t i = 0;
 
     ASSERT_TRUE(s != NULL);
@@ -2527,6 +2530,72 @@ TEST(store_update_malformed_version_vector_writes_nothing)
         ASSERT_EQ_STATUS(when_guarded_body_update(s, bad[i], k_now), STORE_ERR_BAD_VV);
     }
     then_body_is(s, "old");
+    store_close(s);
+    free(db);
+}
+
+/* 2^63 must not pass as int64 max. CAST saturates both to the same clock. */
+TEST(store_update_int64_overflow_does_not_match_max)
+{
+    char *db = NULL;
+    char sql[SQL_BUFSIZE];
+    char attack[STALE_VV_CAP];
+    RowStamp before;
+    Store *s = given_live_add(&db, "old", k_hash_a, NULL, &before);
+    const char *device = NULL;
+
+    ASSERT_TRUE(s != NULL);
+    if (s == NULL) {
+        free(db);
+        return;
+    }
+    device = store_device_id(s);
+    ASSERT_TRUE(device != NULL);
+    if (device == NULL) {
+        store_close(s);
+        free(db);
+        return;
+    }
+    ASSERT_TRUE(snprintf(sql, sizeof(sql),
+                         "UPDATE entries SET version_vector='{\"%s\":9223372036854775808}' "
+                         "WHERE id=1;",
+                         device) > 0);
+    free(harness_sqlite_query_line(db, sql));
+    ASSERT_TRUE(snprintf(attack, sizeof(attack), "{\"%s\":9223372036854775807}", device) > 0);
+    ASSERT_EQ_STATUS(when_guarded_body_update(s, attack, k_now), STORE_ERR_STALE);
+    then_body_is(s, "old");
+    store_close(s);
+    free(db);
+}
+
+/* The largest int64 is a real counter. The overflow check must not reject it. */
+TEST(store_update_int64_max_matches_itself)
+{
+    char *db = NULL;
+    char sql[SQL_BUFSIZE];
+    char vector[STALE_VV_CAP];
+    RowStamp before;
+    Store *s = given_live_add(&db, "old", k_hash_a, NULL, &before);
+    const char *device = NULL;
+
+    ASSERT_TRUE(s != NULL);
+    if (s == NULL) {
+        free(db);
+        return;
+    }
+    device = store_device_id(s);
+    ASSERT_TRUE(device != NULL);
+    if (device == NULL) {
+        store_close(s);
+        free(db);
+        return;
+    }
+    ASSERT_TRUE(snprintf(vector, sizeof(vector), "{\"%s\":9223372036854775807}", device) > 0);
+    ASSERT_TRUE(snprintf(sql, sizeof(sql), "UPDATE entries SET version_vector='%s' WHERE id=1;",
+                         vector) > 0);
+    free(harness_sqlite_query_line(db, sql));
+    ASSERT_EQ_STATUS(when_guarded_body_update(s, vector, k_later), STORE_OK);
+    then_body_is(s, "new");
     store_close(s);
     free(db);
 }
@@ -3330,6 +3399,8 @@ void register_store_tests(void)
     RUN_TEST(store_update_empty_object_is_stale);
     RUN_TEST(store_update_changed_counter_is_stale);
     RUN_TEST(store_update_malformed_version_vector_writes_nothing);
+    RUN_TEST(store_update_int64_overflow_does_not_match_max);
+    RUN_TEST(store_update_int64_max_matches_itself);
     RUN_TEST(store_update_same_timestamp_is_still_stale);
     RUN_TEST(store_update_wrong_bin_wins_over_stale);
     RUN_TEST(store_update_body_and_tags);

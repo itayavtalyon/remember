@@ -182,6 +182,20 @@ TEST(filter_ts_date_1900_01_01_is_accepted)
     restore_tz(saved, had);
 }
 
+/* A year mktime can represent stays in that year. It must not become 1969. */
+TEST(filter_ts_year_9999_stays_in_year_9999)
+{
+    char *saved = NULL;
+    int had = 0;
+    char out[ISO_TS_BUFSIZE];
+
+    ASSERT_EQ_INT(use_tz("UTC", &saved, &had), 0);
+    out[0] = '\0';
+    ASSERT_EQ_INT(parse_filter_ts("9999-12-31", out), 0);
+    ASSERT_STREQ(out, "9999-12-31T00:00:00.000Z");
+    restore_tz(saved, had);
+}
+
 TEST(filter_ts_leap_day_utc_is_that_midnight)
 {
     char *saved = NULL;
@@ -643,6 +657,26 @@ TEST(list_rejects_a_bad_timestamp)
     free(db);
 }
 
+/* A newline in the token stays inside one JSON error line. */
+TEST(list_rejects_a_newline_timestamp_as_one_json_line)
+{
+    char *db = make_temp_db_path();
+    const char *args[] = {"--json-errors", "list", "--since", "bad\ninjected"};
+    CmdResult r;
+
+    ASSERT_TRUE(db != NULL);
+    if (db == NULL) {
+        return;
+    }
+    r = run_remember(db, args, sizeof(args) / sizeof(args[0]), NULL);
+    ASSERT_EQ_INT(r.exit_code, 1);
+    ASSERT_STREQ(r.out, "");
+    ASSERT_STREQ(r.err, "{\"version\":1,\"error\":{\"code\":\"usage\",\"message\":\"invalid "
+                        "timestamp: bad\\ninjected\"}}\n");
+    cmd_result_free(&r);
+    free(db);
+}
+
 TEST(list_bound_flags_reject_duplicates_and_missing_values)
 {
     char *db = make_temp_db_path();
@@ -882,6 +916,7 @@ void register_list_dates_tests(void)
     RUN_TEST(filter_ts_rejects_a_day_the_zone_skipped);
     RUN_TEST(filter_ts_rejects_a_date_before_1900);
     RUN_TEST(filter_ts_date_1900_01_01_is_accepted);
+    RUN_TEST(filter_ts_year_9999_stays_in_year_9999);
     RUN_TEST(filter_ts_leap_day_utc_is_that_midnight);
     RUN_TEST(filter_ts_rejects_impossible_month);
     RUN_TEST(filter_ts_rejects_february_30);
@@ -900,6 +935,7 @@ void register_list_dates_tests(void)
     RUN_TEST(list_date_since_is_los_angeles_local_midnight);
     RUN_TEST(list_seconds_form_matches_canonical);
     RUN_TEST(list_rejects_a_bad_timestamp);
+    RUN_TEST(list_rejects_a_newline_timestamp_as_one_json_line);
     RUN_TEST(list_bound_flags_reject_duplicates_and_missing_values);
     RUN_TEST(list_bounds_compose_with_tag_source_and_key);
     RUN_TEST(search_ignores_sort_for_order);
