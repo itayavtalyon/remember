@@ -18,7 +18,7 @@ typedef enum {
     UNICODE_ERR_INTERNAL
 } UnicodeStatus;
 
-/* Unicode general categories. Values match the pinned utf8proc enum. */
+/* Unicode general categories. */
 typedef enum {
     UNICODE_CAT_CN = 0, /* Other, not assigned */
     UNICODE_CAT_LU,     /* Letter, uppercase */

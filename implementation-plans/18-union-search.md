@@ -352,7 +352,7 @@ Equivalent mutants, kept on purpose:
 Probes beyond the plan:
 
 - Empty input, a 65,536-byte ASCII string, an interior NUL, a length past PTRDIFF_MAX, NULL for each pointer, an iterator reused after success and after failure: each has a test.
-- NFC cost on `a` + N alternating ccc-230/220 marks (`-O2`, no sanitizers): 10,000 marks 0.044 s, 50,000 0.807 s, 100,000 3.236 s. Grapheme iteration on 100,000 marks: 0.001 s. NFC is quadratic on one long combining run (utf8proc's canonical reorder). **Open for stage 2 (grill):** E2.2 runs NFC on the whole QUERY before the 16 × 64 cap, so a large pasted query pays this cost. `ARG_MAX` bounds it, not the cap.
+- NFC cost on `a` + N alternating ccc-230/220 marks (`-O2`, no sanitizers): 10,000 marks 0.044 s, 50,000 0.807 s, 100,000 3.236 s. Grapheme iteration on 100,000 marks: 0.001 s. NFC is quadratic on one long combining run (utf8proc's canonical reorder). E2.2 runs NFC on the whole QUERY before the 16 × 64 cap, so a large pasted query pays this cost. `ARG_MAX` bounds it, not the cap. Grilled in the review below: accepted (`decision:plan18-nfc-cost-accept`).
 
 Simplify pass:
 
@@ -376,4 +376,16 @@ Gate on this tree (2026-10-20), each run after the last C edit:
 
 ## Review Notes
 
-_(empty; second review appends here)_
+### 2026-10-20 — in-session deep review (stage 1)
+
+Lenses: `pref:review-lenses` 1–9, comprehensive, ponytail, `docs/STEP_REVIEW_CHECKLIST.md`. Bugbot is not installed. Target: `d1e8668` plus the fix below.
+
+- **nit, fixed.** `unicode.h` said its category values "match the pinned utf8proc enum". That names the vendor in the port. The header now says only "Unicode general categories". The reason for the pins moved to the `PIN_CAT` block in `unicode.c`. `grep utf8proc src/unicode.h` finds nothing.
+- **nit, deferred.** `check_boundary` matches its allow ERE against the whole grep line, so a file outside the allow list that names the allowed file in the same line passes (for example a comment with `unicode.c` and `utf8proc_`). That is the old semantics of all four rules, kept as is. Anchoring the file names (`^src/unicode\.c:`) would also need a separate content allow for `REMEMBER_SHA256` and the `remember_run` line. Not this stage.
+- **important, grilled.** NFC is quadratic on one long combining-mark run (numbers under Implementation Notes). E2.2 normalizes the whole QUERY before the 16 × 64 cap. Itay chose: accept and document (`decision:plan18-nfc-cost-accept`). Stage 2 keeps E2.2 as written, adds a `ponytail:` comment that names the ceiling and the upgrade path, and adds an engineering-notes line.
+- **praise.** One consumer, a vendor-free port, 30 pinned category values, an exhaustive UCD 18 probe, and every non-equivalent mutant red.
+
+Gate after the fix, on this tree: ctest 5/5, `lint-all.sh` LINT OK, coverage 100/100, `ci-linux.sh` OK (iwyu PASS), `leaks-macos` PASS.
+
+Pragmatic write gate: DRY PASS (one `bounded_bytes` for both entry points; one `check_boundary` for four rules). Easy-to-replace PASS (only `unicode.c` knows utf8proc; a swap rewrites one file, and the pins fail the build if the numbering differs). Orthogonal PASS (the CLI, store, and output have no diff). Simplify: see the pass under Implementation Notes.
+

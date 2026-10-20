@@ -17,6 +17,7 @@ static const uint32_t WS_C0_FIRST = 0x0009U;
 static const uint32_t WS_C0_LAST = 0x000DU;
 static const uint32_t WS_NEL = 0x0085U;
 
+/* unicode_category returns the vendor value unchanged, so pin every value. */
 #define PIN_CAT(name)                                                                              \
     _Static_assert((int)UTF8PROC_CATEGORY_##name == (int)UNICODE_CAT_##name, #name)
 PIN_CAT(CN);
