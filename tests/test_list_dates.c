@@ -677,6 +677,25 @@ TEST(list_rejects_a_newline_timestamp_as_one_json_line)
     free(db);
 }
 
+/* The plain line maps the newline to '?' and stays one line. */
+TEST(list_rejects_a_newline_timestamp_as_one_plain_line)
+{
+    char *db = make_temp_db_path();
+    const char *args[] = {"list", "--since", "bad\ninjected"};
+    CmdResult r;
+
+    ASSERT_TRUE(db != NULL);
+    if (db == NULL) {
+        return;
+    }
+    r = run_remember(db, args, sizeof(args) / sizeof(args[0]), NULL);
+    ASSERT_EQ_INT(r.exit_code, 1);
+    ASSERT_STREQ(r.out, "");
+    ASSERT_STREQ(r.err, "remember: invalid timestamp: bad?injected\n");
+    cmd_result_free(&r);
+    free(db);
+}
+
 TEST(list_bound_flags_reject_duplicates_and_missing_values)
 {
     char *db = make_temp_db_path();
@@ -936,6 +955,7 @@ void register_list_dates_tests(void)
     RUN_TEST(list_seconds_form_matches_canonical);
     RUN_TEST(list_rejects_a_bad_timestamp);
     RUN_TEST(list_rejects_a_newline_timestamp_as_one_json_line);
+    RUN_TEST(list_rejects_a_newline_timestamp_as_one_plain_line);
     RUN_TEST(list_bound_flags_reject_duplicates_and_missing_values);
     RUN_TEST(list_bounds_compose_with_tag_source_and_key);
     RUN_TEST(search_ignores_sort_for_order);

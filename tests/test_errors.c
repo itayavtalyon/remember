@@ -95,6 +95,28 @@ static int diag_warning_as(bool json, DiagWarning code, const char *message)
     return rc;
 }
 
+/* Plain (no --json-errors) usage line for message; the caller frees it.
+   NULL when the stream cannot open or the emitter fails. */
+static char *plain_usage_line(const char *message)
+{
+    char *buf = NULL;
+    size_t len = 0U;
+    FILE *err = open_memstream(&buf, &len);
+    int rc = 0;
+
+    if (err == NULL) {
+        return NULL;
+    }
+    app_set_streams((AppStreams){.out = NULL, .err = err});
+    rc = diag_error_as(false, DIAG_USAGE, message);
+    app_set_streams((AppStreams){.out = NULL, .err = NULL});
+    if (fclose(err) != 0 || rc != 0) {
+        free(buf);
+        return NULL;
+    }
+    return buf;
+}
+
 /* E4.8/E4.9 unit tests call the SQLite emitter directly with a synthetic
    StoreError; no store handle is needed. The flag is cleared after. */
 static int diag_sqlite_as(bool json, DiagCode code, const StoreError *detail, const char *path)
@@ -426,6 +448,70 @@ TEST(plain_error_keeps_quote_and_backslash)
     app_set_streams((AppStreams){.out = NULL, .err = NULL});
     ASSERT_EQ_INT(fclose(err), 0);
     free(buf);
+}
+
+/* decision:plan17a-plain-notice-one-line: one notice is one stderr line. */
+TEST(plain_error_turns_a_newline_into_a_question_mark)
+{
+    char *line = plain_usage_line("bad\ninjected");
+
+    ASSERT_TRUE(line != NULL);
+    if (line == NULL) {
+        return;
+    }
+    ASSERT_STREQ(line, "remember: bad?injected\n");
+    free(line);
+}
+
+/* A CR would move the cursor back over the "remember: " prefix. */
+TEST(plain_error_turns_a_carriage_return_into_a_question_mark)
+{
+    char *line = plain_usage_line("bad\rinjected");
+
+    ASSERT_TRUE(line != NULL);
+    if (line == NULL) {
+        return;
+    }
+    ASSERT_STREQ(line, "remember: bad?injected\n");
+    free(line);
+}
+
+TEST(plain_error_keeps_a_tab)
+{
+    char *line = plain_usage_line("bad\tinjected");
+
+    ASSERT_TRUE(line != NULL);
+    if (line == NULL) {
+        return;
+    }
+    ASSERT_STREQ(line, "remember: bad\tinjected\n");
+    free(line);
+}
+
+TEST(plain_error_turns_an_escape_into_a_question_mark)
+{
+    char *line = plain_usage_line("bad\x1b"
+                                  "injected");
+
+    ASSERT_TRUE(line != NULL);
+    if (line == NULL) {
+        return;
+    }
+    ASSERT_STREQ(line, "remember: bad?injected\n");
+    free(line);
+}
+
+TEST(plain_error_turns_del_into_a_question_mark)
+{
+    char *line = plain_usage_line("bad\x7f"
+                                  "injected");
+
+    ASSERT_TRUE(line != NULL);
+    if (line == NULL) {
+        return;
+    }
+    ASSERT_STREQ(line, "remember: bad?injected\n");
+    free(line);
 }
 
 TEST(error_and_warning_leave_stdout_empty)
@@ -3665,6 +3751,11 @@ void register_errors_tests(void)
     RUN_TEST(every_warning_uses_the_warning_prefix);
     RUN_TEST(null_message_is_empty_text);
     RUN_TEST(plain_error_keeps_quote_and_backslash);
+    RUN_TEST(plain_error_turns_a_newline_into_a_question_mark);
+    RUN_TEST(plain_error_turns_a_carriage_return_into_a_question_mark);
+    RUN_TEST(plain_error_keeps_a_tab);
+    RUN_TEST(plain_error_turns_an_escape_into_a_question_mark);
+    RUN_TEST(plain_error_turns_del_into_a_question_mark);
     RUN_TEST(error_and_warning_leave_stdout_empty);
     RUN_TEST(warning_outside_the_catalog_writes_nothing);
     RUN_TEST(plain_missing_command_is_unchanged);

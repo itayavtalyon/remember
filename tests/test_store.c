@@ -2510,6 +2510,18 @@ TEST(store_update_changed_counter_is_stale)
     free(db);
 }
 
+/* Overwrite row 1's stored vector, bypassing the store's own writers.
+   db path first, like harness_sqlite_query_line. */
+// NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
+static void given_row_version_vector(const char *db, const char *vector)
+{
+    char sql[SQL_BUFSIZE];
+
+    ASSERT_TRUE(snprintf(sql, sizeof(sql), "UPDATE entries SET version_vector='%s' WHERE id=1;",
+                         vector) > 0);
+    free(harness_sqlite_query_line(db, sql));
+}
+
 TEST(store_update_malformed_version_vector_writes_nothing)
 {
     char *db = NULL;
@@ -2534,11 +2546,99 @@ TEST(store_update_malformed_version_vector_writes_nothing)
     free(db);
 }
 
+/* decision:plan17a-duplicate-vv-key: agreeing copies would match the row as
+   that one clock, so a repeated key is malformed even when the copies agree. */
+TEST(store_update_repeated_device_key_is_bad)
+{
+    char *db = NULL;
+    char agree[STALE_VV_CAP];
+    char differ[STALE_VV_CAP];
+    RowStamp before;
+    Store *s = given_live_add(&db, "old", k_hash_a, NULL, &before);
+    const char *device = NULL;
+
+    ASSERT_TRUE(s != NULL);
+    if (s == NULL) {
+        free(db);
+        return;
+    }
+    device = store_device_id(s);
+    ASSERT_TRUE(device != NULL);
+    if (device == NULL) {
+        store_close(s);
+        free(db);
+        return;
+    }
+    ASSERT_TRUE(snprintf(agree, sizeof(agree), "{\"%s\":1,\"%s\":1}", device, device) > 0);
+    ASSERT_TRUE(snprintf(differ, sizeof(differ), "{\"%s\":1,\"%s\":2}", device, device) > 0);
+    ASSERT_EQ_STATUS(when_guarded_body_update(s, agree, k_later), STORE_ERR_BAD_VV);
+    ASSERT_EQ_STATUS(when_guarded_body_update(s, differ, k_later), STORE_ERR_BAD_VV);
+    then_body_is(s, "old");
+    store_close(s);
+    free(db);
+}
+
+/* A stored vector with a repeated key cannot authorize a write. */
+TEST(store_update_stored_repeated_device_key_is_stale)
+{
+    char *db = NULL;
+    char agree[STALE_VV_CAP];
+    char differ[STALE_VV_CAP];
+    char given[STALE_VV_CAP];
+    RowStamp before;
+    Store *s = given_live_add(&db, "old", k_hash_a, NULL, &before);
+    const char *device = NULL;
+
+    ASSERT_TRUE(s != NULL);
+    if (s == NULL) {
+        free(db);
+        return;
+    }
+    device = store_device_id(s);
+    ASSERT_TRUE(device != NULL);
+    if (device == NULL) {
+        store_close(s);
+        free(db);
+        return;
+    }
+    ASSERT_TRUE(snprintf(agree, sizeof(agree), "{\"%s\":1,\"%s\":1}", device, device) > 0);
+    ASSERT_TRUE(snprintf(differ, sizeof(differ), "{\"%s\":1,\"%s\":2}", device, device) > 0);
+    ASSERT_TRUE(snprintf(given, sizeof(given), "{\"%s\":1}", device) > 0);
+    given_row_version_vector(db, agree);
+    ASSERT_EQ_STATUS(when_guarded_body_update(s, given, k_later), STORE_ERR_STALE);
+    given_row_version_vector(db, differ);
+    ASSERT_EQ_STATUS(when_guarded_body_update(s, given, k_later), STORE_ERR_STALE);
+    then_body_is(s, "old");
+    store_close(s);
+    free(db);
+}
+
+/* Two different devices are not a repeated key. */
+TEST(store_update_two_device_version_vector_matches)
+{
+    char *db = NULL;
+    char vector[STALE_VV_CAP];
+    RowStamp before;
+    Store *s = given_live_add(&db, "old", k_hash_a, NULL, &before);
+
+    ASSERT_TRUE(s != NULL);
+    if (s == NULL) {
+        free(db);
+        return;
+    }
+    ASSERT_TRUE(snprintf(vector, sizeof(vector), "{\"%s\":1,\"other\":2}", store_device_id(s)) > 0);
+    given_row_version_vector(db, vector);
+    ASSERT_EQ_STATUS(when_guarded_body_update(s, vector, k_later), STORE_OK);
+    then_body_is(s, "new");
+    store_close(s);
+    free(db);
+}
+
 /* 2^63 must not pass as int64 max. CAST saturates both to the same clock. */
 TEST(store_update_int64_overflow_does_not_match_max)
 {
     char *db = NULL;
-    char sql[SQL_BUFSIZE];
+    char stored[STALE_VV_CAP];
     char attack[STALE_VV_CAP];
     RowStamp before;
     Store *s = given_live_add(&db, "old", k_hash_a, NULL, &before);
@@ -2556,11 +2656,8 @@ TEST(store_update_int64_overflow_does_not_match_max)
         free(db);
         return;
     }
-    ASSERT_TRUE(snprintf(sql, sizeof(sql),
-                         "UPDATE entries SET version_vector='{\"%s\":9223372036854775808}' "
-                         "WHERE id=1;",
-                         device) > 0);
-    free(harness_sqlite_query_line(db, sql));
+    ASSERT_TRUE(snprintf(stored, sizeof(stored), "{\"%s\":9223372036854775808}", device) > 0);
+    given_row_version_vector(db, stored);
     ASSERT_TRUE(snprintf(attack, sizeof(attack), "{\"%s\":9223372036854775807}", device) > 0);
     ASSERT_EQ_STATUS(when_guarded_body_update(s, attack, k_now), STORE_ERR_STALE);
     then_body_is(s, "old");
@@ -2572,7 +2669,6 @@ TEST(store_update_int64_overflow_does_not_match_max)
 TEST(store_update_int64_max_matches_itself)
 {
     char *db = NULL;
-    char sql[SQL_BUFSIZE];
     char vector[STALE_VV_CAP];
     RowStamp before;
     Store *s = given_live_add(&db, "old", k_hash_a, NULL, &before);
@@ -2591,9 +2687,7 @@ TEST(store_update_int64_max_matches_itself)
         return;
     }
     ASSERT_TRUE(snprintf(vector, sizeof(vector), "{\"%s\":9223372036854775807}", device) > 0);
-    ASSERT_TRUE(snprintf(sql, sizeof(sql), "UPDATE entries SET version_vector='%s' WHERE id=1;",
-                         vector) > 0);
-    free(harness_sqlite_query_line(db, sql));
+    given_row_version_vector(db, vector);
     ASSERT_EQ_STATUS(when_guarded_body_update(s, vector, k_later), STORE_OK);
     then_body_is(s, "new");
     store_close(s);
@@ -3399,6 +3493,9 @@ void register_store_tests(void)
     RUN_TEST(store_update_empty_object_is_stale);
     RUN_TEST(store_update_changed_counter_is_stale);
     RUN_TEST(store_update_malformed_version_vector_writes_nothing);
+    RUN_TEST(store_update_repeated_device_key_is_bad);
+    RUN_TEST(store_update_stored_repeated_device_key_is_stale);
+    RUN_TEST(store_update_two_device_version_vector_matches);
     RUN_TEST(store_update_int64_overflow_does_not_match_max);
     RUN_TEST(store_update_int64_max_matches_itself);
     RUN_TEST(store_update_same_timestamp_is_still_stale);

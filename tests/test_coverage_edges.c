@@ -703,6 +703,25 @@ TEST(output_body_null_human)
     fclose(f);
 }
 
+/* A body may be several lines: \n and \t stay, other controls become '?'. */
+TEST(output_body_human_keeps_newline_and_tab)
+{
+    char *buf = NULL;
+    size_t len = 0U;
+    FILE *f = open_memstream(&buf, &len);
+
+    ASSERT_TRUE(f != NULL);
+    if (f == NULL) {
+        return;
+    }
+    ASSERT_EQ_INT(output_body_human(f, "a\nb\tc\x1b"
+                                       "d"),
+                  0);
+    ASSERT_EQ_INT(fclose(f), 0);
+    ASSERT_STREQ(buf, "a\nb\tc?d\n");
+    free(buf);
+}
+
 TEST(util_read_stdin_empty)
 {
     /* Empty stdin → empty buffer path (malloc 1). */
@@ -966,6 +985,7 @@ void register_coverage_edges_tests(void)
     RUN_TEST(cli_help_bad_topic_token);
     RUN_TEST(output_utf8_3_and_4_byte_preview);
     RUN_TEST(output_body_null_human);
+    RUN_TEST(output_body_human_keeps_newline_and_tab);
     RUN_TEST(util_read_stdin_empty);
     RUN_TEST(util_read_stdin_over_cap);
     RUN_TEST(add_invalid_utf8_key_message);

@@ -2,6 +2,7 @@
 
 #include "store.h"
 
+#include <stdbool.h>
 #include <stdio.h>
 
 /* ASCII / UTF-8 byte constants (see also normalize.c). Unsigned to keep the
@@ -322,14 +323,32 @@ int output_id_human(FILE *out, long long id)
     return 0;
 }
 
-/* Control byte that could drive the terminal (drop \n and \t, which are safe
-   whitespace we want to keep). Shared intent with write_preview's '?' mapping. */
-static int is_terminal_ctrl(unsigned char c)
+/* Control byte that could drive the terminal. Tab is safe whitespace. A
+   multi-line body keeps \n; a one-line notice does not
+   (decision:plan17a-notice-shared-classifier). Shared intent with
+   write_preview's '?' mapping. */
+static int is_terminal_ctrl(unsigned char c, bool keep_newline)
 {
-    if (c == (unsigned char)'\n' || c == (unsigned char)'\t') {
+    if (c == (unsigned char)'\t' || (keep_newline && c == (unsigned char)'\n')) {
         return 0;
     }
     return c < ASCII_FIRST_PRINTABLE || c == ASCII_DEL;
+}
+
+int output_text_human(FILE *out, const char *text, bool keep_newline)
+{
+    const unsigned char *p = NULL;
+
+    if (text == NULL) {
+        return 0;
+    }
+    for (p = (const unsigned char *)text; *p != '\0'; p++) {
+        int ch = is_terminal_ctrl(*p, keep_newline) ? '?' : (int)*p;
+        if (fputc(ch, out) == EOF) {
+            return -1;
+        }
+    }
+    return 0;
 }
 
 int output_body_human(FILE *out, const char *body)
@@ -337,14 +356,8 @@ int output_body_human(FILE *out, const char *body)
     if (out == NULL) {
         return -1;
     }
-    if (body != NULL) {
-        const unsigned char *p = NULL;
-        for (p = (const unsigned char *)body; *p != '\0'; p++) {
-            int ch = is_terminal_ctrl(*p) ? '?' : (int)*p;
-            if (fputc(ch, out) == EOF) {
-                return -1;
-            }
-        }
+    if (output_text_human(out, body, true) != 0) {
+        return -1;
     }
     if (fputc('\n', out) == EOF) {
         return -1;

@@ -5686,7 +5686,9 @@ static StoreStatus vv_compare(sqlite3 *db, const char *local_vv, const char *inc
    json_type and json_each error on malformed JSON; CASE evaluates only the
    branch it needs, so json_valid guards them. An integer that does not fit in
    int64 fails `value != CAST(value AS INTEGER)`: SQLite reports it as integer
-   and saturates the cast, so 2^63 would compare equal to 2^63-1. */
+   and saturates the cast, so 2^63 would compare equal to 2^63-1. A repeated
+   key is malformed too: vv_clock_of reads the first copy, so agreeing copies
+   pass as one clock and disagreeing ones do not match themselves. */
 static StoreStatus vv_reject_malformed(sqlite3 *db, const char *given, StoreError *serr)
 {
     sqlite3_stmt *stmt = NULL;
@@ -5698,7 +5700,9 @@ static StoreStatus vv_reject_malformed(sqlite3 *db, const char *given, StoreErro
                             "WHEN json_type(?1) != 'object' THEN 1 "
                             "ELSE EXISTS (SELECT 1 FROM json_each(?1) "
                             "WHERE type != 'integer' OR atom < 0 OR ifnull(key, '') = '' "
-                            "OR value != CAST(value AS INTEGER)) END;",
+                            "OR value != CAST(value AS INTEGER)) "
+                            "OR EXISTS (SELECT key FROM json_each(?1) "
+                            "GROUP BY key HAVING COUNT(*) > 1) END;",
                             -1, &stmt, NULL);
     if (rc != SQLITE_OK) {
         capture_sqlite_error(db, serr);
