@@ -80,21 +80,14 @@ echo "== merge ${#raws[@]} profiles =="
 "$LLVM_PROFDATA" merge -sparse "${raws[@]}" -o "$PROF_DIR/merged.profdata"
 
 BINS=("${BUILD_DIR}/remember" "${BUILD_DIR}/remember_store_tests" "${BUILD_DIR}/remember_tests")
-IGNORE_REGEX='(/third_party/|/tests/)'
+COV_ARGS=("${BINS[@]}" -instr-profile="$PROF_DIR/merged.profdata" -ignore-filename-regex='(/third_party/|/tests/)')
 
 echo "== llvm-cov report =="
 REPORT_TXT="${BUILD_DIR}/coverage-report.txt"
-"$LLVM_COV" report "${BINS[@]}" \
-  -instr-profile="$PROF_DIR/merged.profdata" \
-  -ignore-filename-regex="$IGNORE_REGEX" \
-  | tee "$REPORT_TXT"
+"$LLVM_COV" report "${COV_ARGS[@]}" | tee "$REPORT_TXT"
 
 LCOV_OUT="${BUILD_DIR}/coverage.lcov"
-"$LLVM_COV" export "${BINS[@]}" \
-  -instr-profile="$PROF_DIR/merged.profdata" \
-  -format=lcov \
-  -ignore-filename-regex="$IGNORE_REGEX" \
-  >"$LCOV_OUT"
+"$LLVM_COV" export "${COV_ARGS[@]}" -format=lcov >"$LCOV_OUT"
 
 # Function coverage: 3rd percentage is lines; functions executed is 2nd % field...
 # Columns: Regions% FunctionsExecuted% Lines% Branches%
@@ -292,6 +285,39 @@ if bad:
 
 print("effective line coverage (src, non-defensive): 100%")
 sys.exit(0)
+PY
+
+# Branch sides of the pure TUs (plan 18b). The line regex above cannot tell a
+# defensive `return -1;` from a rule branch; branch records can. A branch
+# inside a macro is counted too (llvm-cov report counts it), reported at its
+# #define with a "(macro)" tag (decision:plan18b-macro-branches-counted).
+BRANCH_JSON="${BUILD_DIR}/coverage-branches.json"
+"$LLVM_COV" export "${COV_ARGS[@]}" -format=text -skip-functions >"$BRANCH_JSON"
+
+echo "== branch sides (report only) =="
+python3 - "$ROOT" "$BRANCH_JSON" <<'PY'
+import json, sys
+from pathlib import Path
+
+root = sys.argv[1].rstrip("/") + "/"
+GATED = ("src/search_terms.c", "src/unicode.c", "src/normalize.c", "src/output.c")
+
+files = {f["filename"]: f for f in json.loads(Path(sys.argv[2]).read_text())["data"][0]["files"]}
+for rel in GATED:
+    f = files.get(root + rel)
+    if f is None:
+        sys.exit(f"error: {rel} has no coverage record")
+    # A branch record: [line, col, end_line, end_col, true_count, false_count,
+    # file_id, ...]; file_id 0 is the TU, any other id is a macro expansion.
+    missed = [
+        f"{rel}:{b[0]}:{b[1]} {side}" + (" (macro)" if b[6] else "")
+        for b in sorted(f["branches"])
+        for side, count in (("true", b[4]), ("false", b[5]))
+        if count == 0
+    ]
+    print(f"{rel}: {2 * len(f['branches'])} branch sides, {len(missed)} missed")
+    for m in missed:
+        print(f"  {m}")
 PY
 
 echo "== coverage: functions 100% + effective lines 100% OK =="

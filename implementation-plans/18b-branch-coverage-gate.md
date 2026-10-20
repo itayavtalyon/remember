@@ -112,8 +112,9 @@ TDD. One red test, then the smallest change. Gate green after each stage.
 1. **Branch report (report mode).** In `check-coverage.sh`, read the branch
    records for the four files from `llvm-cov export -format=text` (the
    `branches` arrays) and print each missed side as `file:line:col true|false`.
-   Count only records whose file is the TU itself, not an expansion from a
-   header or macro. The script still exits on the line gate alone. Record the
+   Count every record in the TU's `branches` array, including a branch inside
+   a macro, tagged `(macro)` (amended 2026-10-20 by
+   `decision:plan18b-macro-branches-counted`; see the stage 1 notes). The script still exits on the line gate alone. Record the
    list in the notes, and check that it matches the baseline counts. Probe that
    the Linux LLVM in `ci-linux.sh` and in GitHub Actions emits the same records.
 2. **Remove what cannot run.** Go through each missed side. A NULL guard in a
@@ -171,5 +172,69 @@ Release `remember`). Read every removed side against its reason. Read the
 failing-stream helper on both platforms.
 
 ## Implementation Notes
+
+### 2026-10-20 — stage 1 (branch report, report mode)
+
+One grill, answered with the recommended option: `decision:plan18b-macro-branches-counted`. Definition of Done boxes stay unticked; this stage does not finish the plan.
+
+What changed: `scripts/check-coverage.sh` only. After the line gate, it writes `build-cov/coverage-branches.json` (`llvm-cov export -format=text -skip-functions`) and prints, per gated TU, `<file>: <n> branch sides, <m> missed`, then each missed side as `file:line:col true|false`, sorted by position. The exit code still comes from the function and line gates alone. The three `llvm-cov` calls now share one `COV_ARGS` array (binaries, profile, ignore regex) instead of three copies.
+
+**Plan correction (grilled).** The stage text said to count only records whose file is the TU itself, not a macro expansion. A probe disagrees with the assumption behind it: llvm-cov puts a macro-expanded branch in the same `files[].branches` list (with `file_id` != 0 and the coordinates of the `#define`), not only in `expansions`, and `llvm-cov report` counts it in the TU's total. Probe (scratch `p.c`: `#define POS(x) ((x) > 0 ? 1 : 0)` used in one function, Homebrew LLVM 22.1.8): `files[0].branches` = `[[1,17,1,24,1,0,1,0,4], [3,51,3,59,0,1,0,0,4]]`; `llvm-cov report` TOTAL branches = 4. Itay chose to count them, so the gate equals Definition of Done box 2. A macro side prints with a ` (macro)` tag. On this tree the four TUs have 0 records with `file_id` != 0 (the only function-like macro, `PIN_CAT` in `unicode.c`, is a `_Static_assert`), so the counts do not change.
+
+Report on this tree, macOS (Homebrew LLVM 22.1.8), matching the baseline exactly:
+
+```
+src/search_terms.c: 198 branch sides, 26 missed
+src/unicode.c: 74 branch sides, 0 missed
+src/normalize.c: 172 branch sides, 6 missed
+src/output.c: 584 branch sides, 194 missed
+```
+
+The missed sides (`line:col` + `T`rue / `F`alse):
+
+- `src/search_terms.c` (26): 30:5T, 32:5T, 40:5F, 42:5T, 44:5T, 45:5T, 46:5T, 47:5T, 48:5T, 49:5T, 101:9T, 124:13T, 172:13T, 181:13T, 228:12F, 234:17T, 269:13T, 276:13F, 278:17T, 321:9T, 325:9F, 373:16T, 423:9T, 431:9T, 441:13T, 465:22F
+- `src/normalize.c` (6): 147:43F, 153:13F, 261:9T, 338:9T, 361:24T, 424:9F
+- `src/output.c` (194): 62:9T, 70:9T, 84:9T, 87:36F, 93:16T, 107:5T, 116:9T, 120:23T, 123:13T, 127:12T, 132:9T, 135:12T, 142:9T, 142:46T, 143:9T, 147:9T, 151:9T, 154:9T, 157:9T, 160:9T, 163:9T, 166:9T, 168:39F, 171:9T, 174:9T, 177:9T, 180:9T, 183:9T, 193:9T, 199:9T, 210:9T, 210:24T, 216:9T, 219:9T, 222:9T, 225:9T, 235:9T, 238:23T, 241:9T, 246:13T, 246:23F, 246:23T, 249:13T, 253:9T, 262:9T, 262:37T, 265:24T, 271:9T, 274:9T, 286:9T, 286:24T, 292:24T, 302:23T, 305:13T, 309:9T, 317:9T, 356:9T, 362:9T, 418:9T, 421:23T, 424:9T, 428:23T, 431:13T, 434:13T, 437:13T, 441:9T, 451:9T, 454:9F, 454:23T, 459:13T, 459:40F, 477:9T, 480:24T, 495:13F, 502:9F, 506:9T, 515:9T, 524:9F, 553:9T, 553:24T, 557:9T, 560:50F, 571:42T, 575:37F, 582:47F, 585:22F, 598:9T, 598:22T, 602:9T, 606:9T, 609:9T, 612:9T, 615:9T, 618:9T, 621:9T, 624:9T, 627:9T, 639:9T, 643:13T, 646:23T, 650:13T, 654:9T, 663:9T, 666:9T, 669:9T, 686:13F, 691:13T, 697:27T, 700:13T, 705:33T, 712:13T, 724:9T, 724:24T, 724:42T, 727:23T, 730:9T, 733:9T, 736:9T, 740:13T, 740:23F, 740:23T, 743:13T, 747:9T, 758:9T, 758:24T, 761:23T, 764:9T, 768:13T, 771:16T, 774:9T, 778:23T, 781:13T, 785:9T, 796:9T, 796:24T, 802:9T, 805:9T, 811:13T, 815:17T, 818:20T, 823:33T, 827:13F, 827:35T, 830:13T, 839:9T, 847:9T, 847:24T, 850:9T, 858:9T, 858:24T, 861:9T, 864:9T, 874:9T, 874:24T, 877:9T, 880:9T, 884:13T, 887:16T, 890:9T, 898:9T, 898:24T, 901:9T, 914:9T, 918:9T, 918:27T, 918:51T, 919:9T, 919:39T, 922:9T, 925:9T, 928:9T, 931:9T, 934:9T, 938:9T, 941:12T, 948:9T, 951:9F, 951:23T, 954:9T, 958:13T, 958:23F, 958:23T, 961:13T, 965:9T, 975:9T, 975:24T, 978:9F, 978:23T, 981:9T, 986:23T, 989:13T, 993:9T, 1003:9T, 1011:9T
+
+Independent check (round 1.4): the same list, built from `llvm-cov show -show-branches=count src/<f>.c` (`Branch (L:C): [True: n, False: m]` lines, one zero → one missed side, `sort -u`), is identical: 226 lines, `diff` empty.
+
+Mutations of the report (round 1.1, 2.1), each one clause on an extracted copy of the Python block, run on the real `coverage-branches.json` and diffed against the `llvm-cov show` list:
+
+- Side labels swapped (`("true", b[5]), ("false", b[4])`): RED (diff).
+- `count == 0` → `count <= 1`: RED.
+- Line taken from `end_line` (`b[2]`): RED. Column taken from `end_col` (`b[3]`): RED.
+- File lookup without the `root` prefix: exit 1, `error: src/search_terms.c has no coverage record`.
+- `(macro)` tag condition → `False`: the fake export below prints `src/search_terms.c:1:17 false` with no tag (RED against the expected tagged line).
+- Unmutated: GREEN (diff empty).
+
+Macro probe through the real report code: the scratch export above, with its file renamed to `/fake/src/search_terms.c` and empty records for the other three TUs, prints `src/search_terms.c: 4 branch sides, 2 missed`, `src/search_terms.c:1:17 false (macro)`, `src/search_terms.c:3:51 true`. 4 sides equals the probe's `llvm-cov report` TOTAL.
+
+Probes beyond the plan (round 1.2):
+
+- A missing export file: Python raises `FileNotFoundError` and exits 1; under `set -e` the script stops.
+- A gated TU absent from the export (wrong root): exit 1 with `error: <file> has no coverage record` (mutation above).
+- `lcov` export as the source instead of a second export: rejected. Its `BRDA:line,block,branch,count` records have no column (`BRDA:46,0,0,98` in `build-cov/coverage.lcov`), so two conditions on one line (`a && b`) could not be told apart in the plan's `file:line:col` format.
+
+Linux LLVM (ubuntu 24.04, the image `ci-linux.sh` uses; `clang` and `llvm` 18.1.3): `BUILD_DIR=build-cov-linux ./scripts/check-coverage.sh` in Docker, exit 0. The branch record positions (`[line, col, end_line, end_col]` per TU) are identical to macOS: a Python compare of both `coverage-branches.json` files printed `True True` (same files, same records). The missed counts differ in `output.c` only: 197 on Linux, 194 on macOS. Linux misses `output.c` 213:9, 268:9, 295:9, 320:9, 347:13, 359:9, 483:9 (true) that macOS takes; macOS misses 222:9, 271:9, 305:13, 663:9 (true) that Linux takes. All 11 are stream-write-failure sides. The cause is the existing failing stream in `tests/test_coverage_edges.c:162`: `/dev/full` under `#ifdef __linux__`, a pipe with its read end closed elsewhere, so each platform's first failing write lands in a different writer. I did not trace the exact flush points further; stage 4 replaces that helper with a deterministic failing stream on both platforms, and stage 6 must be green on both. So the must-pass row "the branch report lists exactly the baseline's missed sides" holds on macOS; on Linux it holds for `search_terms.c`, `normalize.c`, and `unicode.c`.
+
+GitHub Actions `linux-coverage` (`ubuntu-latest`) was not run: that needs a push, and stage 1 does not push. Its record format is the same `llvm-cov export` JSON; the job's proof is Definition of Done box 7 (stage 6).
+
+New dependency (round 9.2): none. The report uses `llvm-cov export -format=text` (already required for the lcov export) and the `python3` the line gate already uses. Consumers: `check-coverage.sh` callers (local, `linux-coverage` job) get one more artifact, `build-cov/coverage-branches.json`; nothing reads it yet.
+
+Simplify pass (round 1.5):
+
+- Applied: `COV_ARGS` holds the binaries, profile, and ignore regex once. The three `llvm-cov` calls (report, lcov export, JSON export) shrank from 15 lines to 3 plus one array line; `IGNORE_REGEX` is gone.
+- Declined: fold the branch report into the line gate's Python heredoc (saves 4 lines of heredoc framing). The line gate `sys.exit(1)`s on its first failure, so a merged block would hide the branch list exactly when both are red; two blocks keep the gates independent.
+- Declined: parse `llvm-cov show -show-branches=count` with `grep`/`awk` instead of Python (about 8 lines shorter). It prints counts abbreviated (`1.52k`) and is meant for humans; the cross-check above uses it once, the gate should not.
+- Declined: build the report from the lcov export (no second export, 1 line). No column; see the probe above.
+- Declined: inline `BINS` into `COV_ARGS` (1 line). `BINS` names the three binaries and keeps the array line readable.
+
+Gate on this tree (2026-10-20). The C sources are unchanged from `123ac31`; only the script changed after the C gate runs:
+
+- `ctest --test-dir build` (ASan/UBSan, `REMEMBER_TEST_VFS=ON`): 5/5.
+- `./scripts/lint-all.sh`: LINT OK. `shellcheck scripts/check-coverage.sh`: clean.
+- `./scripts/ci-linux.sh` (ubuntu 24.04): exit 0, iwyu PASS, scan-build PASS, LINT OK.
+- `cmake --build build --target leaks-macos`: PASS.
+- `./scripts/check-coverage.sh` (final script): exit 0; functions 100%, effective lines 100%; branch report as above.
 
 ## Review Notes
