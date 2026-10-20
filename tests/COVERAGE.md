@@ -64,6 +64,7 @@ Dev tools for inspect tests: `sqlite3` on PATH (`brew install sqlite` if needed)
 | `test_facade.c` | `remember_run` byte-matches the CLI, including `--json-errors` on a miss and a busy lock (gate suite `facade`) |
 | `test_sync_import.c` | import merge and conflicts; a v4 or v5 source stays read-only and is not migrated (plan 15 stage 5; gate suite `sync_import`) |
 | `test_verification_edges.c` | V21–34 edges (green slice: `verification_gld`; WIP: `verification_edges`) |
+| `test_output.c` | `output.c` argument guards, NULL fields, link filtering per subject, preview cuts (CR, DEL, the byte bound), comma separators (plan 18b; ASan unit binary `remember_store_tests`) |
 
 ## Intentionally not automated
 

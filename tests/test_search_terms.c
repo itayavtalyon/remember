@@ -88,6 +88,14 @@ static void assert_label(const char *body, const char *key, const char *want)
     free(out);
 }
 
+/* cmp puts first before second, whichever side it is passed on (round 9.4). */
+static void assert_first_from_either_side(int (*cmp)(const void *, const void *),
+                                          const SearchFacet *first, const SearchFacet *second)
+{
+    ASSERT_TRUE(cmp(first, second) < 0);
+    ASSERT_TRUE(cmp(second, first) > 0);
+}
+
 /* n copies of unit, joined by sep (may be ""), into buf. */
 static void given_repeated(char *buf, size_t cap, const char *unit, const char *sep, size_t n)
 {
@@ -430,6 +438,23 @@ TEST(search_tier_matches_a_vocalized_key_through_the_fold)
     assert_tier(SAMEKH_PE_RESH, key, SEARCH_TIER_2);
 }
 
+TEST(search_tier_order_lost_at_the_second_token_stays_tier_3)
+{
+    /* "fort" is not after "cloud"; "project" then has no in-order position to keep. */
+    assert_tier("cloud fort project", "project:fortkeeps-cloud", SEARCH_TIER_3);
+}
+
+/* E2.5a: a token matches one segment, so it cannot reach across a separator.
+   search_tokens_build never keeps a separator in a token, so build one by hand. */
+TEST(search_tier_a_token_does_not_match_across_a_separator)
+{
+    SearchTokens toks = {.count = 1, .tokens = {"a:b"}};
+    SearchFacet facet = {.text = NULL, .tier = SEARCH_TIER_1};
+
+    ASSERT_EQ_INT(search_facet_classify(&toks, "x", "a:bc", 0, &facet), SEARCH_OK);
+    ASSERT_EQ_INT(facet.tier, SEARCH_TIER_NONE);
+}
+
 TEST(search_tier_no_tokens_is_none_without_a_prefix)
 {
     assert_tier("::", "recs:books", SEARCH_TIER_NONE);
@@ -535,8 +560,47 @@ TEST(search_tag_order_puts_exact_first_from_either_side)
         .text = "t", .count = COUNT_FEW, .tier = SEARCH_TIER_1, .exact = true};
     const SearchFacet busier = {.text = "t1many", .count = COUNT_MANY, .tier = SEARCH_TIER_1};
 
-    ASSERT_TRUE(search_tag_order(&exact, &busier) < 0);
-    ASSERT_TRUE(search_tag_order(&busier, &exact) > 0);
+    assert_first_from_either_side(search_tag_order, &exact, &busier);
+}
+
+TEST(search_tag_order_puts_the_lower_tier_first_from_either_side)
+{
+    const SearchFacet tier1 = {.text = "z", .count = COUNT_FEW, .tier = SEARCH_TIER_1};
+    const SearchFacet tier2 = {.text = "a", .count = COUNT_MANY, .tier = SEARCH_TIER_2};
+
+    assert_first_from_either_side(search_tag_order, &tier1, &tier2);
+}
+
+TEST(search_tag_order_puts_the_busier_tag_first_from_either_side)
+{
+    const SearchFacet busier = {.text = "z", .count = COUNT_MANY, .tier = SEARCH_TIER_2};
+    const SearchFacet fewer = {.text = "a", .count = COUNT_FEW, .tier = SEARCH_TIER_2};
+
+    assert_first_from_either_side(search_tag_order, &busier, &fewer);
+}
+
+TEST(search_tag_order_breaks_a_count_tie_by_code_point_from_either_side)
+{
+    const SearchFacet upper = {.text = "B", .count = COUNT_FEW, .tier = SEARCH_TIER_2};
+    const SearchFacet lower = {.text = "a", .count = COUNT_FEW, .tier = SEARCH_TIER_2};
+
+    assert_first_from_either_side(search_tag_order, &upper, &lower);
+}
+
+TEST(search_key_order_puts_the_lower_tier_first_from_either_side)
+{
+    const SearchFacet tier1 = {.text = "z", .tier = SEARCH_TIER_1};
+    const SearchFacet tier3 = {.text = "a", .tier = SEARCH_TIER_3};
+
+    assert_first_from_either_side(search_key_order, &tier1, &tier3);
+}
+
+TEST(search_key_order_breaks_a_tier_tie_by_code_point_from_either_side)
+{
+    const SearchFacet ascii = {.text = "z", .tier = SEARCH_TIER_2};
+    const SearchFacet e_acute = {.text = "\xc3\xa9", .tier = SEARCH_TIER_2};
+
+    assert_first_from_either_side(search_key_order, &ascii, &e_acute);
 }
 
 TEST(search_tag_order_is_exact_tier_count_then_code_point)
@@ -584,6 +648,11 @@ TEST(search_label_hash_without_a_space_is_not_a_title)
 TEST(search_label_title_only_comes_from_the_first_line)
 {
     assert_label("intro\n# Later", NULL, "intro # Later");
+}
+
+TEST(search_label_title_may_be_the_whole_body)
+{
+    assert_label("# Only a title", "k:one", "Only a title");
 }
 
 TEST(search_label_without_title_is_the_key)
@@ -725,6 +794,8 @@ void register_search_terms_tests(void)
     RUN_TEST(search_tier_does_not_split_on_other_punctuation);
     RUN_TEST(search_tier_matches_an_nfd_key_through_nfc);
     RUN_TEST(search_tier_matches_a_vocalized_key_through_the_fold);
+    RUN_TEST(search_tier_order_lost_at_the_second_token_stays_tier_3);
+    RUN_TEST(search_tier_a_token_does_not_match_across_a_separator);
     RUN_TEST(search_tier_no_tokens_is_none_without_a_prefix);
     RUN_TEST(search_tier_no_tokens_still_takes_a_whole_prefix);
     RUN_TEST(search_tier_blank_query_matches_nothing);
@@ -735,12 +806,18 @@ void register_search_terms_tests(void)
     RUN_TEST(search_tier_null_arguments_are_internal);
     RUN_TEST(search_key_order_is_tier_then_code_point);
     RUN_TEST(search_tag_order_puts_exact_first_from_either_side);
+    RUN_TEST(search_tag_order_puts_the_lower_tier_first_from_either_side);
+    RUN_TEST(search_tag_order_puts_the_busier_tag_first_from_either_side);
+    RUN_TEST(search_tag_order_breaks_a_count_tie_by_code_point_from_either_side);
+    RUN_TEST(search_key_order_puts_the_lower_tier_first_from_either_side);
+    RUN_TEST(search_key_order_breaks_a_tier_tie_by_code_point_from_either_side);
     RUN_TEST(search_tag_order_is_exact_tier_count_then_code_point);
     RUN_TEST(search_label_is_the_title);
     RUN_TEST(search_label_title_is_ascii_trimmed);
     RUN_TEST(search_label_blank_title_falls_back_to_the_key);
     RUN_TEST(search_label_hash_without_a_space_is_not_a_title);
     RUN_TEST(search_label_title_only_comes_from_the_first_line);
+    RUN_TEST(search_label_title_may_be_the_whole_body);
     RUN_TEST(search_label_without_title_is_the_key);
     RUN_TEST(search_label_collapses_whitespace_and_controls);
     RUN_TEST(search_label_trims_the_plain_text);

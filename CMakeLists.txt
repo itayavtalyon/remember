@@ -361,8 +361,10 @@ add_executable(remember_store_tests
     src/normalize.c
     src/unicode.c
     src/search_terms.c
+    src/output.c
     tests/test_unicode.c
     tests/test_search_terms.c
+    tests/test_output.c
     third_party/sha256/sha256.c
     third_party/utf8proc/utf8proc.c
 )

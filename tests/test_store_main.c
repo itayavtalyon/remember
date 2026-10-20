@@ -17,6 +17,7 @@ int main(void)
     register_schema_v5_tests();
     register_unicode_tests();
     register_search_terms_tests();
+    register_output_tests();
 
     (void)printf("\n== unit (sanitized) summary ==\n");
     (void)printf("tests run:     %d\n", g_tests_run);

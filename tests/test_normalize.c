@@ -155,6 +155,31 @@ TEST(body_trim_utf8_edge_rejections)
     assert_body_utf8_rejected("a\xc3\x28", 3);        /* bad continuation byte */
 }
 
+/* Assert body_trim_copy accepts bytes as one valid scalar. */
+static void assert_body_utf8_accepted(const char *bytes)
+{
+    char *out = NULL;
+
+    ASSERT_EQ_INT(body_trim_copy(bytes, strlen(bytes), &out, NULL), NORM_OK);
+    ASSERT_STREQ(out, bytes);
+    free(out);
+}
+
+TEST(body_trim_accepts_the_first_scalar_after_the_surrogates)
+{
+    assert_body_utf8_accepted("\xee\x80\x80"); /* U+E000 */
+}
+
+TEST(body_trim_accepts_the_first_four_byte_scalar)
+{
+    assert_body_utf8_accepted("\xf0\x90\x80\x80"); /* U+10000 */
+}
+
+TEST(body_trim_rejects_a_four_byte_overlong)
+{
+    assert_body_utf8_rejected("\xf0\x8f\xbf\xbf", 4); /* U+FFFF in four bytes */
+}
+
 /*
  * Policy: a body is a C string, so the first NUL ends it. Bytes after are
  * ignored, and *out_len stays equal to strlen(*out) — otherwise the stored
@@ -238,6 +263,22 @@ TEST(normalize_reports_bad_output_buffer)
         big[REMEMBER_TOKEN_MAX + 1U] = '\0';
         ASSERT_EQ_INT(normalize_token(big, out, sizeof(out)), NORM_ERR_TOO_LONG);
     }
+}
+
+TEST(normalize_token_zero_capacity_is_internal)
+{
+    char out[1] = {'x'};
+
+    ASSERT_EQ_INT(normalize_token("ab", out, 0), NORM_ERR_INTERNAL);
+    ASSERT_EQ_INT(out[0], 'x');
+}
+
+TEST(body_hash_of_null_data_is_the_empty_digest)
+{
+    char hex[REMEMBER_SHA256_HEX_LEN + 1];
+
+    body_hash_hex(NULL, 3, hex);
+    ASSERT_STREQ(hex, "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855");
 }
 
 TEST(body_hash_empty_and_abc)
@@ -409,10 +450,15 @@ void register_normalize_tests(void)
     RUN_TEST(body_trim_invalid_utf8);
     RUN_TEST(body_trim_valid_utf8_multibyte);
     RUN_TEST(body_trim_utf8_edge_rejections);
+    RUN_TEST(body_trim_accepts_the_first_scalar_after_the_surrogates);
+    RUN_TEST(body_trim_accepts_the_first_four_byte_scalar);
+    RUN_TEST(body_trim_rejects_a_four_byte_overlong);
     RUN_TEST(body_trim_nul_terminates);
     RUN_TEST(body_hash_ignores_bytes_after_nul);
     RUN_TEST(body_trim_keeps_control_chars);
     RUN_TEST(normalize_reports_bad_output_buffer);
+    RUN_TEST(normalize_token_zero_capacity_is_internal);
+    RUN_TEST(body_hash_of_null_data_is_the_empty_digest);
     RUN_TEST(body_hash_empty_and_abc);
     RUN_TEST(body_hash_long_pad_and_multiblock);
     RUN_TEST(body_hash_matches_trimmed);

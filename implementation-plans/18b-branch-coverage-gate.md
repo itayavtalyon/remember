@@ -293,4 +293,47 @@ Simplify pass (round 1.5):
 - Declined: drop `segment_starts_with`'s length argument and always compare against `len - seg` (ST8 shows it is equivalent for built tokens). It would make E2.5a depend on a tokenizer invariant that `search_facet_classify` cannot see; the length argument keeps the rule local.
 - Declined: share `BIN_TOKENS` with `store_sqlite.c`'s `bin_token_store` (`store_sqlite.c:5999`). Out of this plan's scope (other `src/` files); noted for a later DRY pass.
 
+### 2026-10-20 — stage 3 (rule and logic sides)
+
+No grill. All new tests run in `remember_store_tests` (ASan/UBSan). `src/output.c` and the new `tests/test_output.c` (38 tests) are now in that target, so `output.c` has an in-process unit suite for the first time; before this it ran only under the black-box CLI suites. `tests/register.h`, `tests/test_store_main.c`, and `tests/COVERAGE.md` name the new suite.
+
+Tests by side (`line:col` on the stage 2 tree):
+
+| Side | Test |
+|---|---|
+| `search_terms.c` 361:16T (count rule, busier on the left) | `search_tag_order_puts_the_busier_tag_first_from_either_side` |
+| comparators in each argument order (round 9.4) | `search_tag_order_puts_the_lower_tier_first_from_either_side`, `…_breaks_a_count_tie_by_code_point_from_either_side`, `search_key_order_puts_the_lower_tier_first_from_either_side`, `…_breaks_a_tier_tie_by_code_point_from_either_side`; the existing exact test now uses the shared `assert_first_from_either_side` |
+| `search_terms.c` 453:22F (title with no newline) | `search_label_title_may_be_the_whole_body` |
+| `search_terms.c` 263:13F (order already lost) | `search_tier_order_lost_at_the_second_token_stays_tier_3` |
+| stage 2 survivor ST8 (inner segment length) | `search_tier_a_token_does_not_match_across_a_separator` (a hand-built `SearchTokens` with `a:b`) |
+| `normalize.c` 147:43F | `body_trim_accepts_the_first_scalar_after_the_surrogates` (U+E000) |
+| `normalize.c` 153:13F | `body_trim_rejects_a_four_byte_overlong` (F0 8F BF BF); boundary `body_trim_accepts_the_first_four_byte_scalar` (U+10000) |
+| `normalize.c` 361:24T | `normalize_token_zero_capacity_is_internal` (and the buffer stays unwritten) |
+| `normalize.c` 424:9F | `body_hash_of_null_data_is_the_empty_digest` (NULL with length 3) |
+| `output.c` public guards (40 clauses) | one `output_*_rejects_missing_arguments` test per writer, plus `output_human_writers_reject_a_missing_stream`, `output_device_human_rejects_a_missing_id` |
+| `output.c` data sides | `output_entry_json_rejects_an_incomplete_entry`, `…_renders_a_null_source_as_unknown`, `…_renders_null_text_fields_as_empty_strings`, `output_links_write_envelope_rejects_a_link_without_a_sync_id`, `output_conflicts_envelope_rejects_an_incomplete_conflict`, `output_tags_human_renders_a_null_name_as_empty`, `output_entry_human_line_skips_a_null_tag`, `…_leaves_a_null_updated_at_empty`, `…_leaves_a_null_body_preview_empty` |
+| `output.c` rule sides | `output_get_envelope_lists_only_the_subjects_links`, `output_entry_human_line_counts_only_the_subjects_links`, `output_links_write_envelope_names_both_supersedes_directions`, `output_preview_stops_at_a_carriage_return`, `output_preview_masks_del`, `output_preview_cuts_by_bytes_before_the_scalar_cap`, `output_tags_human_writes_nothing_for_no_tags`, `output_conflicts_envelope_lists_no_conflicts`, `output_accepted_envelope_lists_no_entries`, `output_deleted_list_separates_entries_with_a_comma`, `output_conflicts_envelope_separates_conflicts_with_a_comma`, `output_related_human_omits_an_empty_preview` |
+
+Every expected string in `test_output.c` was written by hand from the format strings in `output.c` before that test's first run, and each passed on its first run, so none was pasted from output. The byte-bound case was worked out on paper: iteration k checks `3k + 3 + 4 >= 192`, first true at k = 62, so 62 euro signs and `...`.
+
+Mutations (one clause each, same runner as stage 2; `remember_store_tests` unless noted). All RED with the named test unless listed under equivalent:
+
+- Comparators: count direction and its right-hand side (`? -1 : -1`), tier right-hand side: the order tests above. Title end without a newline → `0`: `search_label_title_may_be_the_whole_body`. ST8: `search_tier_a_token_does_not_match_across_a_separator`.
+- `normalize.c`: surrogate max widened by 0x1000, 4-byte min lowered by 0x1000, `>=` → `>` on U+10000, `out_cap == 0` dropped (first survived: the call still returned INTERNAL, because `n + 1 > 0` fails too; the test now also asserts the buffer is unwritten, and the mutant writes `out[0] = '\0'`), `data != NULL` dropped (UBSan null load in `sha256.c:108`).
+- `output.c`: SUPERSEDES direction, the byte bound (−100), NULL field → `"x"`, `version_vector[0] != '{'` → `'['`, `"unknown"` → `"unk"`, NULL tag name → `"?"`, the related-ids total counting every link (`3, 3, 3, 3, 3, +1`), the cell and the JSON `links` not skipping the other subject (rewritten as `== -1` / `== -subject_id` because `if (false)` is `-Wunreachable-code` and an unused `subject_id` is `-Wunused-parameter`), `\r` dropped from the preview stop, DEL → DEL+1, a NULL body previewed as `?`, a NULL tag printed, a NULL `updated_at` printed, `count > 0U &&` dropped from three envelopes, `neighbor_sync_id` check weakened, each of the five conflict-field clauses dropped, the two comma guards `i > 0U` → `i > 1U`, and the empty-preview check dropped.
+- Every clause of every public `output.c` argument guard, generated from the source (each `X == NULL` term dropped in turn, each `count > 0U && X == NULL` → `count > 1U`): 40 of 40 RED (crash in, or FAIL of, the matching `*_rejects_missing_arguments` test). The related-links test first used two links and equal neighbor ids; it now uses five subject links plus one other subject's link with neighbor id 9, so a mutant that miscounts shows `, +1` and a mutant that skips the filter shows `9`.
+- **Equivalent, kept**: `segment_tier`'s `if (in_order)` → `if (true)` (R5). Once order is lost, `cursor == found == len`, and `find_segment` from `len` returns `len` again, so `in_order` stays false either way. The guard only skips a search that cannot succeed; the side itself is taken by `search_tier_order_lost_at_the_second_token_stays_tier_3`.
+
+Lint: `clang-analyzer-optin.core.EnumCastOutOfRange` flagged the deliberate out-of-range `StoreConflictReason` in the incomplete-conflict test; a per-line `NOLINTNEXTLINE` names it as the guard under test. clang-tidy also asked for `fseek` over `rewind`, named constants (`EURO_KEPT`, `CONFLICT_FIELDS`), and parentheses in `(EURO_COUNT * 3) + 1`. The conflict test was unrolled (no loop in a test body), and the euro string moved into `given_euros`.
+
+Counts after stage 3 (macOS): `search_terms.c` 13 missed, `normalize.c` 2, `output.c` 107, `unicode.c` 0. A classifier over the remaining `output.c` sides (the condition at the side starts with `fputs`/`fprintf`/`fputc` or a writer call) leaves none outside the stream category. The `search_terms.c` and `normalize.c` remainders are exactly the stage 5 list in the stage 2 notes.
+
+Process note: a stage 2 `ci-linux.sh` run failed clang-tidy on `search_terms.c:327` (`? -1 : -1`) and a missing final newline. Those were mutants: the mutation runner rewrote `src/` while the Docker run linted the same mounted tree. `git diff --quiet src/` was clean afterwards. Linux CI now runs only when no mutation is running.
+
+Process note: `build/CMakeCache.txt` had `REMEMBER_TEST_VFS=OFF` after a reconfigure (ctest listed 4 tests, not 5). I did not find what wrote it; no script configures `build` itself. Reconfigured with `-DREMEMBER_TEST_VFS=ON`; ctest is 5/5 again.
+
+Pre-existing, not this plan: compiling `store_sqlite.c` for the two hook targets (`remember_tests`, `remember_store_tests`) prints three `-Wallocator-wrappers` warnings (`real_malloc`, `real_calloc`, `real_realloc`, the store's allocation hook). Both compiles carry `-Werror` (checked in `build/compile_commands.json`) and still succeed, so clang 22 does not promote this warning. Relevant to stage 5: a new allocation hook written the same way gets the same warning.
+
+Gate on stage 3: ctest 5/5 (VFS on), `lint-all.sh` LINT OK on macOS, `leaks-macos` PASS, `check-coverage.sh` exit 0. `ci-linux.sh` failed clang-tidy on `strcat`/`strcpy` in `test_output.c` (`clang-analyzer-security.insecureAPI.strcpy`, Linux only); fixed with `memcpy` in `given_euros` and one `snprintf`. `remember_store_tests` is green after the fix. **Not yet rerun on the committed tree: `lint-all.sh` and `ci-linux.sh`** (usage limit). Run both first when work resumes.
+
 ## Review Notes
