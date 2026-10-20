@@ -374,6 +374,91 @@ Gate on this tree (2026-10-20), each run after the last C edit:
 - `./scripts/check-coverage.sh`: functions 100%, effective lines 100%; `unicode.c` 100% raw lines and branches.
 - `cmake --build build --target leaks-macos`: PASS.
 
+### 2026-10-20 — stage 2 (`search_terms.c`, D13)
+
+Three grills, all answered with the recommended option and saved as keys:
+
+- `decision:plan18-empty-token-no-vacuous`: a token that the E10.1 fold empties is dropped, and it still used one of the 16 slots. With no tokens, a key or tag text-matches only by the whole-prefix rule. FTS5 3.53.3 was probed first: `""*` alone matches 0 rows, and `"boo"* ""*` matches the same row as `"boo"*`.
+- `decision:plan18-segment-normalize`: key and tag text is NFC'd and folded before segment matching. q stays literal.
+- `decision:plan18-segment-unicode-whitespace`: segments split on Unicode White_Space.
+
+API (`src/search_terms.h`): `search_tokens_build`, `search_q`, `search_facet_classify` (tier + `exact`), `search_key_order` / `search_tag_order` (qsort), `search_label`. `SearchTokens` is a fixed 16 × 257-byte block that the caller owns, and there is no nested allocation. A first draft bound q to the tag comparator through a global. `search_facet_classify` fills `exact` instead, so both comparators are pure.
+
+Reuse instead of new copies:
+
+- `fold_hebrew_marks` folds segments. `is_hebrew_mark` is now public (it was static) and folds token code points while the 64-code-point cap is counted. Its edges are already pinned by `fold_hebrew_marks_drops_the_listed_points`, so it gets no second test (round 3.1).
+- `ascii_ws_trim` (in `normalize.c`) is now the one ASCII trim. It replaced `normalize.c`'s `ascii_ws_trim_span` + `Span`, the trim loops in `cmd_query.c` (whose `intentional:` copy of `is_ascii_ws` is gone), and a draft `ascii_trim` in `search_terms.c`. `is_ascii_ws` stays static.
+- `unicode_decode` is new in the port (5 tests). Only `unicode.c` may call utf8proc, and search_terms needs code points.
+
+**Plan correction (stage 3 grill).** E2.2 step 4, "double every `\"`", can never fire. `"` is an ASCII character outside `[A-Za-z0-9]`, so step 1 always splits on it. `search_tokens_split_on_a_double_quote` proves it (`a"b` → `a`, `b`). The must-pass unit row "`\"` doubled" therefore has no input that reaches it. Stage 3 owns the quoting code, and Itay decides there between a dead doubling loop, an assert, or dropping the step.
+
+Must-pass rows → tests (`tests/test_search_terms.c`, 67 tests, in `remember_store_tests` under ASan/UBSan):
+
+| Plan row | Test |
+|---|---|
+| NFC composes `e`+U+0301 | `search_tokens_compose_to_nfc` |
+| split on U+3000 | `search_tokens_split_on_ideographic_space` |
+| 17th token dropped | `search_tokens_keep_the_first_16` |
+| 65th code point dropped | `search_tokens_keep_the_first_64_code_points`, `search_tokens_cap_counts_code_points_not_bytes` |
+| `"` doubled | none possible (above); `search_tokens_split_on_a_double_quote` |
+| Hebrew marks removed | `search_tokens_remove_hebrew_marks`, `search_tokens_cap_before_the_fold` |
+| `book` / `boo book` match, `recs games` does not, `recs:bo` tier 1 | `search_tier_word_prefix_of_a_key_segment_matches`, `search_tier_one_segment_serves_two_tokens`, `search_tier_a_token_without_a_segment_does_not_match`, `search_tier_whole_key_prefix_is_tier_1` |
+| `fort cloud` tier 2, `cloud fortkeeps` tier 3 | `search_tier_in_order_tokens_are_tier_2`, `search_tier_out_of_order_tokens_are_tier_3` |
+| tier 1 before tier 2; `B` before `a`, `z` before `é` | `search_key_order_is_tier_then_code_point` |
+| tag order exact, tier, count DESC, tag (D28) | `search_tag_order_is_exact_tier_count_then_code_point` |
+| label title / key / 60 graphemes + `…` only when cut, combining marks, ZWJ sequence | `search_label_*` (15 tests) |
+
+The CLI-level rows (Examples, facets in JSON, scope) belong to stages 3–5.
+
+TDD: the 63 first tests ran against stubs. 57 were red. The 6 that passed check a NULL-argument `INTERNAL` that a stub also returns, and their mutants below prove them. The `unicode_decode` tests were red against a stub (14 asserts) before the implementation.
+
+Mutations: one clause at a time on copies of `src/search_terms.c` and `src/unicode.c`, `cmake --build build --target remember_store_tests`, run, restore. Each was killed. Highlights, with the red tests:
+
+- Each `[A-Za-z0-9]` edge (`>=` → `>`, `<=` → `<` on 0, 9, a, z, A, Z): `search_tokens_keep_ascii_letters_and_digits_together`. The `z` mutant survived at first: no test had a lowercase `z`. The test now uses `AZaz09`. `ascii_lower` edges: `search_q_lowercases_only_a_to_z`. ASCII limit `<` → `<=`: `search_tokens_split_on_del_but_keep_u0080`.
+- Each segment separator dropped (`:`, `-`, `_`, `.`, `/`, White_Space): `search_tier_splits_on_every_listed_separator` (and `..._unicode_whitespace`). Token White_Space dropped: `search_tokens_split_on_ideographic_space`, `..._no_break_space_and_nel`, `..._only_separators_is_no_token`.
+- Cap `<` → `<=`, `cps++` dropped: the three cap tests. Fold dropped (`&& cp != 0U`): four fold tests. Emptied token kept: `search_tokens_drop_a_token_the_fold_empties`, `..._an_emptied_token_still_used_a_slot`.
+- Segment prefix `>=` → `>`, segment start not advanced, a missing token not fatal, in-order search from 0, `in_order` never cleared, cursor not advanced, tier 2/3 swapped: the tier tests, each named in the run log.
+- `q_len > 0` dropped: `search_tier_blank_query_matches_nothing`. Prefix → equality: `search_tier_whole_key_prefix_is_tier_1`. The no-token early exit dropped: `search_tier_no_tokens_is_none_without_a_prefix`. Segment NFC skipped: `search_tier_matches_an_nfd_key_through_nfc`. Segment fold skipped: `search_tier_matches_a_vocalized_key_through_the_fold`.
+- Every comparator clause (tier direction, text direction, exact first, tier before count, count DESC): the two order tests.
+- Plain text White_Space or Cc dropped, Cc → Cf, leading gap kept: the collapse, trim, and ZWJ label tests. Cut `<` → `<=`, 60 → 59, cut inside a cluster: the four 60-grapheme tests. Title `"# "` → `"#"`, newline ignored, blank title kept, key fallback skipped: the title tests. `*out = NULL` dropped: it survived until `search_label_invalid_utf8_plain_text_is_rejected` started from a non-NULL sentinel.
+- `from_unicode` INVALID and OOM mapped to INTERNAL: the invalid-UTF-8 and NFC-OOM tests.
+- `unicode_decode`: `len == 0`, PTRDIFF_MAX, `n < 0` → `n < -3`, `nbytes` off by one: the decode tests.
+- Crash kills, where an ASan abort in the named test is the meaning: each NULL guard; `slots` `<` → `<=` and slots counted only for kept tokens (a 17th token past the array, `search_tokens_keep_the_first_16`); q `out_cap <= end` → `<` (`search_q_short_buffer_is_internal`); token NFC skipped; the plain-text gap never reset (output grows past its buffer).
+- Three plain deletions were `-Werror` compile kills (`token_len >= 0U`, `q_len >= 0U` tautologies, unused `cursor`). Each was rerun as a valid-but-wrong rewrite and killed.
+
+Coverage: `check-coverage.sh` gained `^\s*return\s+SEARCH_ERR_`, the same exclusion as `NORM_ERR_` and `STORE_ERR_`. The 32 zero-hit lines in `search_terms.c` are all defensive: `case` labels, malloc OOM, the fold's OOM, and decode or grapheme failures on text that NFC already validated. `llvm-cov show … src/search_terms.c` lists them.
+
+Probes beyond the plan, ASan/UBSan, `probe2.c` (thrown away):
+
+- 1 MB of `a `: 16 tokens, 0.060 s. 1 MB of separators: 0 tokens, 0.061 s. 1 MB of one 4-byte emoji: one token of 256 bytes (the buffer edge), 0.019 s. `ab ` × 10,000: 16 tokens.
+- `search_facet_classify` with 16 tokens against a 64 KiB text: 0.005 s.
+- A label is 60 graphemes, not 60 bytes. `a` + 32,768 combining marks is one grapheme, so the label is 65,537 bytes. That follows D12 / P2 as written. The keys facet never reaches that path, because a keys-facet item always has a key.
+- A cut can end on a space: 64 KiB of `x ` gives `x x … x ` + `…`. D12 / P2 do not trim after the cut.
+- `# ` with no key gives `#` (the title is empty, and the plain text is `#`). `# ` + U+200B gives the 3-byte ZWSP as the title (ASCII trim only).
+
+Simplify pass:
+
+- Applied: `plain_label` dropped `k == 60 &&` from the ellipsis test. When fewer than 60 clusters exist, the loop consumed them all and `cut == text_len`. The suite stays green, and the mutant `cut < → <=` still dies (1 line).
+- Applied (in-session review, DRY Critical: three sites): one `ascii_ws_trim` for `normalize.c`, `cmd_query.c`, and `search_terms.c`. `cmd_query.c` lost its private `is_ascii_ws` and its two loops. Mutants on the shared function (leading or trailing loop disabled) fail `body_trim_*`, `token_*`, `search_q_trims_*`, and `search_label_title_is_ascii_trimmed`.
+- Applied: segment folding calls `fold_hebrew_marks` instead of a second fold loop (about −15 lines).
+- Declined: `from_norm` (17 lines) serves one unreachable path. `-Wswitch-enum` needs every case, and the `case` form keeps those zero-hit lines defensive; an `if` chain would leave a must-cover zero-hit line.
+- Declined: one comparator with a mode flag. `count` sits between tier and text for tags only; a flag would braid the two orders.
+- Tests: 741 lines for 67 behaviors. Four `assert_*` helpers and two `given_*` builders carry the repetition. The fold contract appears in two layers on purpose: `normalize` proves the set, and here the tests prove the E2.2 step order (cap before fold, emptied slot).
+
+Pre-existing, not this stage: `-Wallocator-wrappers` on `real_malloc` / `real_calloc` / `real_realloc` in `store_sqlite.c` (three warnings, `remember_tests` and `remember_store_tests` only, not `-Werror`). Proof: the same flags on `HEAD`'s `store_sqlite.c` give the same three.
+
+Handover items for this stage: Release (`-DCMAKE_BUILD_TYPE=Release`, clang) `remember` 1,886,360 → 1,886,920 B (+560 B), `libremember_core.a` 270,936 → 276,408 B (+5,472 B), against `33f91c3`. Non-CMake consumers of `libremember_core.a`: `search_terms.o` and `unicode.o` are in the archive, but no `remember_core` entry point calls them yet, so nothing new must be linked. From stage 3 on, `store_search` calls them, and such a consumer must add `libutf8proc.a` next to `libsqlite3.a` and `libsha256.a`.
+
+Gate on this tree (2026-10-20), after the last C edit:
+
+- `ctest --test-dir build` (ASan/UBSan, `REMEMBER_TEST_VFS=ON`, `ctest -N` = 5): 5/5. `remember_store_tests`: 280 tests, 0 failed.
+- `./scripts/lint-all.sh`: LINT OK (format, four boundaries, cppcheck src + tests, `gcc -fanalyzer`, clang-tidy).
+- `./scripts/ci-linux.sh`: OK, **iwyu PASS**, 5/5 suites.
+- `./scripts/check-coverage.sh`: functions 100%, effective lines 100%.
+- `cmake --build build --target leaks-macos`: PASS.
+
+One gate run failed `store_asan_gate` with eight trim tests red. That binary was the last mutant (`trim trailing dropped`): the mutation script restored the source but did not rebuild, and `ctest` does not build. A rebuild of the restored tree passed (the run above). The script now rebuilds after it restores.
+
 ## Review Notes
 
 ### 2026-10-20 — in-session deep review (stage 1)
@@ -431,3 +516,16 @@ Pragmatic write gate: DRY PASS (one `bounded_bytes` for both entry points; one `
 1. Before REVIEW_REQUEST, go through the plan's "Package to hand over" list item by item, as you did the vendoring checklist. This stage missed the binary size delta (Release remember +341 KB).
 2. When a stage adds a static lib, note in the Implementation Notes what a non-CMake consumer of libremember_core.a must now link.
 ```
+
+### 2026-10-20 — in-session deep review (stage 2)
+
+Lenses: `pref:review-lenses` 1–9, comprehensive, ponytail, `docs/STEP_REVIEW_CHECKLIST.md`. Bugbot is not installed.
+
+- **critical (DRY), fixed.** The ASCII trim loop lived in three places: `normalize.c` `ascii_ws_trim_span`, `cmd_query.c` `trim_query_copy`, and the new `search_terms.c` `ascii_trim`. Now there is one `ascii_ws_trim` in `normalize.h`. Mutants and red tests are under Implementation Notes.
+- **important (process), fixed.** The first stage 2 `ctest` ran 4 of 5 tests: the `build` cache had `REMEMBER_TEST_VFS=OFF` (what set it before this stage is not reproduced). The first reconfigure did not fix it, and that cause is reproduced: passing `-DCMAKE_C_COMPILER=clang` while Homebrew clang is first on `PATH` changes the cached absolute path, so CMake deletes the cache, and the `-D` options on that same line are lost. Fix: configure with the cached absolute compiler path. `ctest -N` now lists 5 tests, including `no_shim_symbols`. The gate below ran on that cache.
+- **nit, kept.** `segment_tier` calls `find_segment` twice per token while the order still holds. One call from the cursor would do when it succeeds. The saving is microseconds on 64-byte keys, and the two calls read as "is it there" and "is it in order".
+- **grill carried to stage 3.** E2.2 step 4 (`"` doubling) can never fire; see Implementation Notes.
+- **praise.** Pure comparators, a caller-owned token block with no nested allocation, every mutant red, and three grills asked before any code.
+
+Pragmatic write gate: DRY PASS after the fix (one trim, one fold, one decoder, one Hebrew set). Easy-to-replace PASS (search_terms knows only `unicode.h` and `normalize.h`; utf8proc stays behind the port). Orthogonal PASS (no store, CLI, or output change; the stage 3 adapter is the next consumer).
+

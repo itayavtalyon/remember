@@ -72,25 +72,14 @@ static bool is_token_forbidden(unsigned char c)
     return false;
 }
 
-/* A half-open [start, end) byte range. */
-typedef struct {
-    size_t start;
-    size_t end;
-} Span;
-
-/* [start, end) after stripping leading/trailing ASCII whitespace. */
-static Span ascii_ws_trim_span(const char *s, size_t len)
+void ascii_ws_trim(const char *s, size_t *start, size_t *end)
 {
-    size_t start = 0;
-    size_t end = len;
-
-    while (start < end && is_ascii_ws((unsigned char)s[start])) {
-        start++;
+    while (*start < *end && is_ascii_ws((unsigned char)s[*start])) {
+        (*start)++;
     }
-    while (end > start && is_ascii_ws((unsigned char)s[end - 1U])) {
-        end--;
+    while (*end > *start && is_ascii_ws((unsigned char)s[*end - 1U])) {
+        (*end)--;
     }
-    return (Span){.start = start, .end = end};
 }
 
 /* ---- UTF-8 (RFC 3629) ---------------------------------------------------- */
@@ -210,7 +199,7 @@ static const unsigned HEBREW_MARK_DOT_LO = 0x05C4U;
 static const unsigned HEBREW_MARK_DOT_HI = 0x05C5U;
 static const unsigned HEBREW_MARK_QAMATS = 0x05C7U;
 
-static bool is_hebrew_mark(unsigned int cp)
+bool is_hebrew_mark(unsigned int cp)
 {
     if (cp >= HEBREW_MARK_BLOCK_LO && cp <= HEBREW_MARK_BLOCK_HI) {
         return true;
@@ -332,11 +321,8 @@ NormStatus body_trim_copy(const char *src, size_t src_len, char **out, size_t *o
         }
     }
 
-    {
-        Span span = ascii_ws_trim_span(src, src_len);
-        start = span.start;
-        end = span.end;
-    }
+    end = src_len;
+    ascii_ws_trim(src, &start, &end);
     if (start >= end) {
         return NORM_ERR_EMPTY;
     }
@@ -381,11 +367,8 @@ NormStatus normalize_token(const char *src, char *out, size_t out_cap)
         return NORM_ERR_EMPTY;
     }
 
-    {
-        Span span = ascii_ws_trim_span(src, strlen(src));
-        start = span.start;
-        end = span.end;
-    }
+    end = strlen(src);
+    ascii_ws_trim(src, &start, &end);
     if (start >= end) {
         return NORM_ERR_EMPTY;
     }

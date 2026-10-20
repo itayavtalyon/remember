@@ -205,6 +205,23 @@ UnicodeStatus unicode_graphemes_next(UnicodeGraphemes *iter, size_t *start, size
     return UNICODE_OK;
 }
 
+UnicodeStatus unicode_decode(const char *src, size_t len, uint32_t *cp, size_t *nbytes)
+{
+    utf8proc_int32_t scalar = 0;
+    utf8proc_ssize_t n = 0;
+
+    if (src == NULL || cp == NULL || nbytes == NULL || len == 0 || len > (size_t)PTRDIFF_MAX) {
+        return UNICODE_ERR_INTERNAL;
+    }
+    n = utf8proc_iterate(as_u8(src), (utf8proc_ssize_t)len, &scalar);
+    if (n < 0) {
+        return UNICODE_ERR_INVALID_UTF8;
+    }
+    *cp = (uint32_t)scalar;
+    *nbytes = (size_t)n;
+    return UNICODE_OK;
+}
+
 /* cppcheck-suppress staticFunction ; public API (unicode.h); used by tests */
 UnicodeCategory unicode_category(uint32_t cp)
 {

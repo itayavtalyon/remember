@@ -1,6 +1,7 @@
 #ifndef REMEMBER_NORMALIZE_H
 #define REMEMBER_NORMALIZE_H
 
+#include <stdbool.h>
 #include <stddef.h>
 
 /* Design: body max after trim is 64 KiB. */
@@ -61,6 +62,15 @@ NormStatus normalize_key(const char *src, char *out, size_t out_cap);
  * src == NULL is a contract violation → NORM_ERR_INTERNAL.
  */
 NormStatus fold_hebrew_marks(const char *src, size_t src_len, char **out);
+
+/* True for the E10.1 marks that fold_hebrew_marks removes. */
+bool is_hebrew_mark(unsigned int cp);
+
+/*
+ * Shrink [*start, *end) of s past leading and trailing ASCII whitespace (space,
+ * tab, LF, CR, VT, FF): the one trim every design rule means by "ASCII-trimmed".
+ */
+void ascii_ws_trim(const char *s, size_t *start, size_t *end);
 
 /*
  * Lowercase hex SHA-256 of data[0..len) into out_hex

@@ -102,6 +102,7 @@ set_property(SOURCE
     src/store_sqlite.c
     src/normalize.c
     src/unicode.c
+    src/search_terms.c
     src/commands_common.c
     src/cmd_add.c
     src/cmd_locator.c
@@ -225,6 +226,7 @@ set(REMEMBER_LIB_SOURCES
     src/store_sqlite.c
     src/normalize.c
     src/unicode.c
+    src/search_terms.c
     src/commands_common.c
     src/cmd_add.c
     src/cmd_locator.c
@@ -358,7 +360,9 @@ add_executable(remember_store_tests
     src/store_sqlite.c
     src/normalize.c
     src/unicode.c
+    src/search_terms.c
     tests/test_unicode.c
+    tests/test_search_terms.c
     third_party/sha256/sha256.c
     third_party/utf8proc/utf8proc.c
 )

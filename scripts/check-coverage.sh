@@ -155,6 +155,7 @@ DEFENSIVE = re.compile(
     |^\s*return\s+REMEMBER_OK\b
     |^\s*return\s+NORM_ERR_
     |^\s*return\s+NORM_OK\b
+    |^\s*return\s+SEARCH_ERR_
     |^\s*return\s+st\s*;\s*$
     |^\s*return\s+rc\s*;\s*$
     |^\s*return\s+[012]\s*;              # parser kind (allows trailing comment)

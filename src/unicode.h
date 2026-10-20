@@ -78,6 +78,13 @@ UnicodeStatus unicode_graphemes_open(UnicodeGraphemes *iter, const char *src, si
 /* UNICODE_OK writes one cluster's byte span. UNICODE_DONE at the end. */
 UnicodeStatus unicode_graphemes_next(UnicodeGraphemes *iter, size_t *start, size_t *nbytes);
 
+/*
+ * Decode the scalar at src[0..len). UNICODE_OK writes *cp and *nbytes (1..4).
+ * Invalid or truncated UTF-8 is UNICODE_ERR_INVALID_UTF8 and writes nothing;
+ * no byte at or past len is read. NULL pointers or len 0 are INTERNAL.
+ */
+UnicodeStatus unicode_decode(const char *src, size_t len, uint32_t *cp, size_t *nbytes);
+
 /* General category. A code point above U+10FFFF is CN. */
 UnicodeCategory unicode_category(uint32_t cp);
 

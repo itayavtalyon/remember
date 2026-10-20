@@ -382,6 +382,79 @@ TEST(unicode_graphemes_length_past_ptrdiff_max_is_internal)
     ASSERT_EQ_INT(st, UNICODE_ERR_INTERNAL);
 }
 
+TEST(unicode_decode_reads_one_scalar_of_each_length)
+{
+    /* U+0061, U+00E9, U+3000, U+1F6D1: 1, 2, 3, and 4 UTF-8 bytes. */
+    static const char src[] = "a\xc3\xa9\xe3\x80\x80\xf0\x9f\x9b\x91";
+    size_t at = 0;
+    uint32_t cp = 0;
+    size_t n = 0;
+    UnicodeStatus st = unicode_decode(src, sizeof src - 1U, &cp, &n);
+
+    ASSERT_EQ_INT(st, UNICODE_OK);
+    ASSERT_EQ_INT((long long)cp, 0x61);
+    ASSERT_EQ_INT((int)n, 1);
+    at += n;
+    st = unicode_decode(src + at, sizeof src - 1U - at, &cp, &n);
+    ASSERT_EQ_INT(st, UNICODE_OK);
+    ASSERT_EQ_INT((long long)cp, 0xE9);
+    ASSERT_EQ_INT((int)n, 2);
+    at += n;
+    st = unicode_decode(src + at, sizeof src - 1U - at, &cp, &n);
+    ASSERT_EQ_INT(st, UNICODE_OK);
+    ASSERT_EQ_INT((long long)cp, 0x3000);
+    ASSERT_EQ_INT((int)n, 3);
+    at += n;
+    st = unicode_decode(src + at, sizeof src - 1U - at, &cp, &n);
+    ASSERT_EQ_INT(st, UNICODE_OK);
+    ASSERT_EQ_INT((long long)cp, 0x1F6D1);
+    ASSERT_EQ_INT((int)n, 4);
+}
+
+TEST(unicode_decode_does_not_read_past_len)
+{
+    /* A whole 2-byte sequence, but len cuts it after the lead byte. */
+    uint32_t cp = UNWRITTEN;
+    size_t n = UNWRITTEN;
+    UnicodeStatus st = unicode_decode("\xc3\xa9", 1, &cp, &n);
+
+    ASSERT_EQ_INT(st, UNICODE_ERR_INVALID_UTF8);
+    ASSERT_EQ_INT((long long)cp, UNWRITTEN);
+    ASSERT_EQ_INT((int)n, UNWRITTEN);
+}
+
+TEST(unicode_decode_rejects_an_invalid_byte)
+{
+    uint32_t cp = UNWRITTEN;
+    size_t n = UNWRITTEN;
+    UnicodeStatus st = unicode_decode("\xff", 1, &cp, &n);
+
+    ASSERT_EQ_INT(st, UNICODE_ERR_INVALID_UTF8);
+    ASSERT_EQ_INT((int)n, UNWRITTEN);
+}
+
+TEST(unicode_decode_bad_arguments_are_internal)
+{
+    uint32_t cp = 0;
+    size_t n = 0;
+
+    ASSERT_EQ_INT(unicode_decode(NULL, 1, &cp, &n), UNICODE_ERR_INTERNAL);
+    ASSERT_EQ_INT(unicode_decode("a", 0, &cp, &n), UNICODE_ERR_INTERNAL);
+    ASSERT_EQ_INT(unicode_decode("a", 1, NULL, &n), UNICODE_ERR_INTERNAL);
+    ASSERT_EQ_INT(unicode_decode("a", 1, &cp, NULL), UNICODE_ERR_INTERNAL);
+}
+
+TEST(unicode_decode_length_past_ptrdiff_max_is_internal)
+{
+    const char src[1] = {'a'};
+    size_t too_big = (size_t)PTRDIFF_MAX;
+    uint32_t cp = 0;
+    size_t n = 0;
+
+    too_big += 1U;
+    ASSERT_EQ_INT(unicode_decode(src, too_big, &cp, &n), UNICODE_ERR_INTERNAL);
+}
+
 TEST(unicode_category_matches_unicode_general_category)
 {
     ASSERT_EQ_INT(unicode_category(0x0041), UNICODE_CAT_LU);
@@ -485,6 +558,11 @@ void register_unicode_tests(void)
     RUN_TEST(unicode_graphemes_null_source_is_internal);
     RUN_TEST(unicode_graphemes_null_span_outs_are_internal);
     RUN_TEST(unicode_graphemes_length_past_ptrdiff_max_is_internal);
+    RUN_TEST(unicode_decode_reads_one_scalar_of_each_length);
+    RUN_TEST(unicode_decode_does_not_read_past_len);
+    RUN_TEST(unicode_decode_rejects_an_invalid_byte);
+    RUN_TEST(unicode_decode_bad_arguments_are_internal);
+    RUN_TEST(unicode_decode_length_past_ptrdiff_max_is_internal);
     RUN_TEST(unicode_category_matches_unicode_general_category);
     RUN_TEST(unicode_whitespace_is_unicode_18_white_space);
     RUN_TEST(unicode_whitespace_rejects_near_misses);

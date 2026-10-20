@@ -280,12 +280,6 @@ static void search_parse_free(SearchParse *p)
     p->query_raw = NULL;
 }
 
-/* intentional: same ASCII ws as normalize.c (space/tab/LF/CR/VT/FF). */
-static int is_ascii_ws(unsigned char c)
-{
-    return c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '\v' || c == '\f';
-}
-
 /*
  * Heap-copy of raw with leading/trailing ASCII whitespace removed.
  * NULL + *err on empty-after-trim or OOM.
@@ -304,12 +298,7 @@ static char *trim_query_copy(const char *raw, const char **err)
     }
     len = strlen(raw);
     end = len;
-    while (start < end && is_ascii_ws((unsigned char)raw[start])) {
-        start++;
-    }
-    while (end > start && is_ascii_ws((unsigned char)raw[end - 1U])) {
-        end--;
-    }
+    ascii_ws_trim(raw, &start, &end);
     if (start == end) {
         *err = "empty search query";
         return NULL;
