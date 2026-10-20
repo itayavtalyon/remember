@@ -306,7 +306,73 @@ or architecture forks to Itay as a grill. Re-run the full gate after any fix.
 
 ## Implementation Notes
 
-_(empty; fill per stage)_
+### 2026-10-20 — stage 1 (vendor utf8proc + `unicode.c` port, D2)
+
+No new grill. No new `decision:*`. Definition of Done boxes stay unticked; this stage does not finish the plan.
+
+Vendoring checklist (`docs/engineering-notes.md` § Vendoring), row by row:
+
+1. Tree + pin. `third_party/utf8proc/` holds `utf8proc.h`, `utf8proc.c`, `utf8proc_data.c`, `LICENSE.md`, and a `README.md` (2.12.0, Unicode 18.0.0, URL, MIT, local modifications none). Proof: `shasum -a 256 utf8proc-2.12.0.tar.gz` is `f564011d…25111`, and `tar -xOzf … utf8proc-2.12.0/<f> | cmp - third_party/utf8proc/<f>` is identical for all four files. `utf8proc_unicode_version()` returns `"18.0.0"`.
+2. CMake. `add_library(utf8proc STATIC third_party/utf8proc/utf8proc.c)` with `-w` and a `SYSTEM PUBLIC` include. `remember`, `remember_plain`, `remember_core`, and `remember_tests` link it. `utf8proc.c` includes `utf8proc_data.c`, so the data file is not compiled on its own.
+3. Single consumer. Only `src/unicode.c` includes `utf8proc.h`. `unicode.h` exposes `unicode_nfc`, `unicode_graphemes_open` / `_next`, `unicode_category`, and `unicode_is_whitespace`. Thirty `_Static_assert`s pin each `UnicodeCategory` value to the vendor enum.
+4. Lint boundary. `scripts/lint-all.sh` has a utf8proc rule. The four boundary rules (sqlite, diag, sha256, utf8proc) now share one `check_boundary` function, and the function keeps the leaks in a variable instead of `/tmp/remember-*-leak.txt` (the overlap risk noted in plan 16).
+5. Include paths. `-I third_party/utf8proc` is on cppcheck (src and tests), `gcc -fanalyzer` (`-isystem`), and `IWYU_VENDOR_INCLUDES`.
+6. Sanitizer gate. `remember_store_tests` compiles `utf8proc.c` under ASan/UBSan with a per-source `-w` and does not link the static lib. `tests/test_unicode.c` (39 tests) drives NFC, grapheme, category, and White_Space vectors from the 18.0.0 UCD files.
+7. Local fixes. None.
+
+`unicode_is_whitespace`: utf8proc has no White_Space bit. On Unicode 18 the property is Zs + Zl + Zp plus U+0009..U+000D and U+0085. The bidi class is a different set: utf8proc gives U+0009 `S`, U+00A0 `CS`, U+2029 `B`, and only 17 scalars have bidi `WS`.
+
+Conformance probe, thrown away before this commit (`probe.c` against `unicode.c` + `utf8proc.c`, clang `-fsanitize=address,undefined -fno-sanitize-recover=all`), using `PropList-18.0.0.txt`, `GraphemeBreakTest-18.0.0.txt`, and `NormalizationTest-18.0.0.txt`:
+
+- White_Space: all 0x110000 scalars; 25 in the property; 0 mismatches.
+- Graphemes: 775 test lines, 0 failures. The other 78 lines contain U+0000; the port ends input at the first NUL by contract, so those lines split differently.
+- NFC: 20,171 lines × 5 columns (c2 = NFC(c1..c3), c4 = NFC(c4..c5)); 0 failures.
+- Each GraphemeBreakTest line number and NormalizationTest row cited in a test comment was checked with `sed -n` / `grep` against the file.
+
+Mutations: one clause at a time on a copy of `src/unicode.c`, `cmake --build build --target remember_store_tests`, run, restore. 69 runs: 53 in the first pass, then 16 reruns. Clauses that a plain deletion turned into a `-Werror` compile failure (unused constant, unreachable code) were rerun as valid-but-wrong rewrites (for example `src == NULL` → `src == NULL && src_len == 0`). Red tests, abbreviated:
+
+- `nul != NULL` → `&& nul == src`, and `nul - src` + 1: `*_stops_at_an_interior_nul` (both).
+- `*out = NULL` dropped: `unicode_nfc_null_source_is_internal_and_resets_out`. `*out_len = 0` dropped: all eight `assert_nfc_fails` tests.
+- Inject `!= 0` → `> 1`, reset dropped, `==` → `!=`: `unicode_nfc_injected_*`.
+- `COMPOSE` → `DECOMPOSE`: the four compose tests. `+ COMPAT`: `unicode_nfc_does_not_compatibility_decompose_fi`.
+- `n < 0` → `n < -1`, and each error map (`INVALIDUTF8`, `NOMEM`) → `OVERFLOW`: the invalid-UTF-8 and inject tests.
+- `*out = dst` dropped, `*out_len = n - 1`: every OK-path NFC test.
+- Open reset dropped: `*_failed_reopen_drops_the_previous_string`, `*_reopen_restarts_at_the_first_byte`. Validation `n < 0` → `n < -3`, and `bytes` set before validation: `*_invalid_open_is_not_iterable`, `*_failed_reopen_*`. Each bounded-bytes status check → `&& src == NULL`: the PTRDIFF_MAX tests.
+- `next`: `iter->bytes == NULL` dropped: unopened / invalid-open / failed-reopen. `>=` → `>` on DONE: every cluster test. First `n <= 0` → `n < -3`: `*_next_rejects_invalidated_bytes`. `n2 <= 0` → `n2 < -3`: `*_next_rejects_a_later_invalid_byte`. `state` made `static` (not reset per cluster): combining mark, regional indicators, ZWJ. `i += n2` → `i += 1`, `*start = i`, `*nbytes = i`, offset not advanced: the cluster tests.
+- Whitespace: each of Zs, Zl, Zp dropped; `>=` → `>`; `<=` → `<`; first − 1; last + 1; NEL + 1; NEL dropped: `unicode_whitespace_*`.
+- Crash kills (ASan abort in the named test, a NULL dereference is the meaning of the guard): `src == NULL`, PTRDIFF_MAX, `out == NULL`, open `iter == NULL`, `next` `iter`/`start`/`nbytes` NULL, `out_len != NULL` → `true`.
+
+Equivalent mutants, kept on purpose:
+
+- `UTF8PROC_STABLE` dropped. utf8proc 2.12.0 never reads that flag (`grep UTF8PROC_STABLE utf8proc.c` hits only the five public wrappers). The flags match upstream `utf8proc_NFC`.
+- First `n <= 0` → `n < 0` (and the same for `n2`). `utf8proc_iterate` returns 0 only for an empty span, and `offset < length` rules that out. `<= 0` also stops an endless loop if that ever changes.
+- `prev = next_cp` dropped. In 2.12.0 `grapheme_break_extended` reads `c1` only while `state == 0`, the first call per cluster. The header requires consecutive code points, so the port follows the contract.
+- `unicode_category` `>` → `>=`, or `> CP_MAX + 1`. U+10FFFF is Cn and utf8proc maps out-of-range values to Cn. The guard stays because `(int32_t)cp` is implementation-defined above INT32_MAX (C11 6.3.1.3); the code says so.
+
+Probes beyond the plan:
+
+- Empty input, a 65,536-byte ASCII string, an interior NUL, a length past PTRDIFF_MAX, NULL for each pointer, an iterator reused after success and after failure: each has a test.
+- NFC cost on `a` + N alternating ccc-230/220 marks (`-O2`, no sanitizers): 10,000 marks 0.044 s, 50,000 0.807 s, 100,000 3.236 s. Grapheme iteration on 100,000 marks: 0.001 s. NFC is quadratic on one long combining run (utf8proc's canonical reorder). **Open for stage 2 (grill):** E2.2 runs NFC on the whole QUERY before the 16 × 64 cap, so a large pasted query pays this cost. `ARG_MAX` bounds it, not the cap.
+
+Simplify pass:
+
+- Applied: `assert_nfc`, `assert_nfc_fails`, `assert_clusters`, and `assert_next_is_internal` in `tests/test_unicode.c`. The file went from 722 to 491 lines while the suite grew from 32 to 39 tests (three invalid-UTF-8 cases and the NULL cases are now one behavior per test; `reopen_restarts_at_the_first_byte` is new, found by the open-reset mutant). The `still_ok` guards are gone because `ASSERT_STREQ` is NULL-safe.
+- Applied: `check_boundary` in `scripts/lint-all.sh`, 4 copy-pasted blocks → 1 function, about 29 lines saved against the copy-paste version. Each rule was mutated (`utf8proc_map`, `sqlite3_open`, `app_err(`, `perror(`, `sha256_init`, `fprintf(stderr` appended to `src/output.c`; `#include "utf8proc.h"` appended to `src/unicode.h`; the allow ERE replaced): each went `FAIL`, and the clean tree is `PASS` for all four.
+- Applied: the three iterator field resets → one compound-literal assignment (2 lines).
+- Declined: delete the `unicode_category` range guard (4 lines). Reason above.
+- Declined: delete `prev = next_cp` (1 line). It relies on a vendor internal that the header does not promise.
+
+Lint fixes from the first gate run: `it` → `iter` (readability-identifier-length), magic sentinels → `UNWRITTEN` / `INVALID_UTF8_BYTE`, a per-line `NOLINT(hicpp-signed-bitwise)` on the vendor flag OR (the vendor enum is `int`, as with `SQLITE_OPEN_*` in `store_sqlite.c`), and the `||` of a parenthesized `&&` → two `if`s (readability-implicit-bool-conversion).
+
+Pre-existing, not this stage: `shellcheck scripts/lint-all.sh` reports three SC2046 warnings on the unquoted `$(find …)` lists (also on `HEAD`). shellcheck is not a `lint-all.sh` gate.
+
+Gate on this tree (2026-10-20), each run after the last C edit:
+
+- `ctest --test-dir build` (ASan/UBSan, `REMEMBER_TEST_VFS=ON`): 5/5. `remember_store_tests`: 208 tests, 0 failed.
+- `./scripts/lint-all.sh`: LINT OK (format, four boundaries, cppcheck src + tests, `gcc -fanalyzer`, clang-tidy). `REMEMBER_IWYU=1 CI=true ./scripts/lint-all.sh` on macOS: LINT OK with scan-build PASS; IWYU is not installed on this Mac, so it SKIPs there.
+- `./scripts/ci-linux.sh` (ubuntu 24.04, iwyu 8.21): 5/5 suites; format, boundaries, cppcheck, `gcc -fanalyzer`, clang-tidy, **iwyu PASS**, scan-build PASS; exit 0. This is the IWYU run the stage requires.
+- `./scripts/check-coverage.sh`: functions 100%, effective lines 100%; `unicode.c` 100% raw lines and branches.
+- `cmake --build build --target leaks-macos`: PASS.
 
 ## Review Notes
 

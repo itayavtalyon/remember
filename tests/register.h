@@ -30,5 +30,6 @@ void register_schema_v5_tests(void);
 void register_device_tests(void);
 void register_errors_tests(void);
 void register_list_dates_tests(void);
+void register_unicode_tests(void);
 
 #endif /* REMEMBER_REGISTER_H */

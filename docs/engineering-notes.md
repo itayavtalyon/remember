@@ -19,6 +19,7 @@ Update after each step review.
 - **Parent mkdir:** on `EEXIST`, verify the path component is a directory (`S_ISDIR`), not a file.
 - **CLI layers:** `cli_parse` (pure argv → `CliArgs`) / `main` (I/O + exit codes) / later `commands_*` / `output` as needed.
 - **Normalize + hash (pure):** `normalize.c` / `normalize.h` — no I/O, no store/cli. Body trim + UTF-8 + size; shared `normalize_token` for tag and key; `body_hash_hex` (lowercase SHA-256). SHA-256 amalgamation in `third_party/sha256/` (Brad Conte public domain); only `normalize.c` includes `sha256.h`.
+- **Unicode port (plan 18, D2):** `unicode.c` / `unicode.h` — NFC, a stateful UAX #29 grapheme iterator, general category, and White_Space. No I/O and no store knowledge. utf8proc 2.12.0 (Unicode 18.0.0, MIT) lives in `third_party/utf8proc/`; only `unicode.c` includes the vendor header. utf8proc has no White_Space bit. On Unicode 18 that property is exactly Zs+Zl+Zp plus U+0009–U+000D and U+0085 (bidi class is a different set). The CLI links the `-w` static lib. `remember_store_tests` compiles `utf8proc.c` (which includes `utf8proc_data.c`) under sanitizers and does not also link the static lib.
 - **Commands layer:** public `commands.h` only. Implementation is split by **concern axis**, not one file per subcommand:
   - `commands_common.c` / `commands_common.h` — internal shared helpers (err messages, tag normalize, argv helpers, `load_body`, `--ttl`/`--expires` parse). **Not** a public API. Included by `cmd_*.c`, by `remember_app.c` (parse and open errors), and by the mapper tests. `main.c` does not include it.
   - `cmd_add.c` — write path (key/tags, `store_add`; body via shared `load_body`; optional expiry).
@@ -130,7 +131,7 @@ When adding (or changing) anything under `third_party/<name>/`:
 | 1. Tree + pin | `third_party/<name>/` with `README.md`: version, upstream URL, license, **local modifications** (if any). Prefer amalgamation / few files. |
 | 2. CMake target | `add_library(<name> STATIC …)` with `target_compile_options(... PRIVATE -w)`. `target_include_directories(... PUBLIC …/third_party/<name>)` so consumers get the include path by linking. |
 | 3. Single consumer | Only **one** project file includes the vendor header (e.g. only `store_sqlite.c` → `sqlite3.h`; only `normalize.c` → `sha256.h`). Everyone else uses a project port (`store.h`, `body_hash_hex`, …). |
-| 4. Lint boundary | Extend `scripts/lint-all.sh` grep so the vendor API cannot leak into other `src/` files (pattern already used for sqlite / sha256). |
+| 4. Lint boundary | Add a `check_boundary` call in `scripts/lint-all.sh` so the vendor API cannot leak into other `src/` files (as for sqlite / sha256 / utf8proc). |
 | 5. Lint include paths | Add `-I third_party/<name>` (or `$ROOT/third_party/<name>`) to **every** tool that parses `src/*.c` without relying solely on CMake: **IWYU** (`IWYU_VENDOR_INCLUDES` for both `iwyu_tool` *and* the per-file fallback), **cppcheck**. Keep that list in sync with CMake PUBLIC includes. |
 | 6. Sanitizer gate | See below — auditable TUs must run under UBSan with real tests; huge amalgamations stay `-w` lib only. |
 | 7. Local fixes | Prefer not forking style; if you must fix UB/portability, mark `Local fix:` in the vendor `.c` and document in its README. Do not reformat the whole amalgamation. |
