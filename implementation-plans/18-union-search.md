@@ -389,3 +389,45 @@ Gate after the fix, on this tree: ctest 5/5, `lint-all.sh` LINT OK, coverage 100
 
 Pragmatic write gate: DRY PASS (one `bounded_bytes` for both entry points; one `check_boundary` for four rules). Easy-to-replace PASS (only `unicode.c` knows utf8proc; a swap rewrites one file, and the pins fail the build if the numbering differs). Orthogonal PASS (the CLI, store, and output have no diff). Simplify: see the pass under Implementation Notes.
 
+
+### 2026-10-20 — second-opinion deep review (stage 1)
+
+**Verdict:** stage 1 approved. No open blocking item. No grill. No code change. One handover item filled in, and one integration note.
+
+**Run, not read.**
+
+- **Gate.** Baseline `3b4eb1f`: ctest 5/5 (ASan/UBSan, `REMEMBER_TEST_VFS=ON`), LINT OK, coverage 100/100, `leaks-macos` PASS, `ci-linux.sh` OK with **iwyu PASS** (the IWYU run the stage requires), `GATE-ALL-GREEN`. This review changes only this plan file, so that gate covers the pushed C tree.
+- **Vendor pin, checked against upstream without a download.** For `utf8proc.h`, `utf8proc.c`, `utf8proc_data.c`, and `LICENSE.md`, `git hash-object` on each file equals the blob `sha` that `gh api repos/JuliaStrings/utf8proc/contents/<f>?ref=v2.12.0` returns. All four match, so "local modifications: none" holds byte for byte.
+- **Mutants**, re-run under ASan in a clean worktree. Each failed the tests the coder lists:
+  - grapheme `state` made `static`: 3 cluster tests.
+  - `i += n2` → `i += 1`: 4 cluster tests.
+  - NEL test shifted by one: both whitespace tests.
+
+**Findings:**
+
+1. **nit → filled in here (handover item).** The handover asks for the binary size delta, and the notes did not have it. Release builds (`-DCMAKE_BUILD_TYPE=Release`, clang), in clean worktrees:
+
+   | Binary | `main` `bc06fcb` | stage 1 `3b4eb1f` | Delta |
+   |--------|------------------|-------------------|-------|
+   | `remember` | 1,536,824 B | 1,886,056 B | +349,232 B (+22.7%) |
+   | `libremember_core.a` | 267,760 B | 269,776 B | +2,016 B |
+
+   `__TEXT` grows by 344,064 B, almost all of it utf8proc's tables. The CLI pays this already in stage 1, because `unicode.c` is in `REMEMBER_LIB_SOURCES` and pulls `utf8proc.o` in. D2 locks utf8proc, so this is a record, not a finding against it.
+2. **nit, open (integration).** `utf8proc` is its own static lib, not part of `libremember_core.a`. CMake consumers get it through `remember_core`'s `PUBLIC` link. A consumer that links the `.a` files by hand, as the Mac app may, must add `libutf8proc.a` next to `libsqlite3.a` and `libsha256.a` once stage 2 calls the port. Before that, nothing pulls `unicode.o` out of the archive, so the gap does not show yet.
+3. **nit, agreed.** The coder's deferred `check_boundary` note (the allow pattern matches the whole grep line) is the old semantics of all four rules. It is fine to leave.
+
+**Praise:**
+
+- The conformance probe ran every scalar against White_Space, all 775 grapheme lines, and every NFC line.
+- 69 mutant runs, with the equivalent mutants each explained against the vendor source.
+- A port header that never names the vendor, and 30 pinned category values that fail the build if the vendor renumbers.
+- The NFC cost was measured and grilled before it shipped (`decision:plan18-nfc-cost-accept`).
+
+**Coder rating (plan 18 stage 1): 9.5/10.** This is the strongest stage yet. It verified everything a reviewer would check: the tarball hash, per-file identity, the UCD conformance files, one-clause mutants including the equivalent ones, a simplify pass that shrank the tests from 722 to 491 lines while adding 7, and a cost grill. The one gap was the size delta the handover names.
+
+**Paste-ready for the coder:**
+
+```text
+1. Before REVIEW_REQUEST, go through the plan's "Package to hand over" list item by item, as you did the vendoring checklist. This stage missed the binary size delta (Release remember +341 KB).
+2. When a stage adds a static lib, note in the Implementation Notes what a non-CMake consumer of libremember_core.a must now link.
+```
