@@ -529,3 +529,52 @@ Lenses: `pref:review-lenses` 1–9, comprehensive, ponytail, `docs/STEP_REVIEW_C
 
 Pragmatic write gate: DRY PASS after the fix (one trim, one fold, one decoder, one Hebrew set). Easy-to-replace PASS (search_terms knows only `unicode.h` and `normalize.h`; utf8proc stays behind the port). Orthogonal PASS (no store, CLI, or output change; the stage 3 adapter is the next consumer).
 
+
+### 2026-10-20 — second-opinion deep review (stage 2)
+
+**Verdict:** stage 2 approved. No open blocking item. One grill, answered (`decision:coverage-branch-gate-followup`, a follow-up plan, not a change here). One test added. No production code change.
+
+**Run, not read.**
+
+- **Gate.** Baseline `4454df0` (gate root clean): ctest 5/5, LINT OK, coverage 100/100, `leaks-macos` PASS, `ci-linux.sh` OK, `GATE-ALL-GREEN`. Fixed tree: ctest 5/5 (ASan/UBSan, `REMEMBER_TEST_VFS=ON`), LINT OK, coverage 100/100, `leaks-macos` PASS, `ci-linux.sh` OK with iwyu PASS, `GATE-ALL-GREEN`, in a clean worktree of `4454df0` plus the new test and these notes.
+- **Stored keys and tags are ASCII-lowercased.** `add --key Recs:Books --tag Type:Books` stores `recs:books` and `type:books`. Lowercased tokens against unlowered segment text therefore never mismatch on ASCII.
+- **The `ascii_ws_trim` refactor.** All three callers (`body_trim_copy`, `normalize_token`, `trim_query_copy`) set `start = 0` right before the call, so the new in/out form is behavior-neutral.
+- **Mutants**, one clause each, under ASan in a clean worktree:
+
+  | Mutant | Result |
+  |--------|--------|
+  | same segment cannot serve two tokens (`cursor = found + 1`) | caught: `search_tier_one_segment_serves_two_tokens` |
+  | ellipsis even when not cut (`<=`) | caught: 5 label tests |
+  | tokens not lowercased | caught: 2 token tests |
+  | slots counted by kept tokens, so an emptied token is free | caught: `search_tokens_an_emptied_token_still_used_a_slot` |
+  | no exact-first rule in the tag order | caught: `search_tag_order_is_exact_tier_count_then_code_point` |
+  | `slots++` dropped | ASan abort (token array overflow); the row above is the semantic kill |
+  | tier checked before exact | equivalent: an exact tag equals q, so it is always tier 1 |
+  | exact tag on the **left** returns 1 | **survived** → finding 1 |
+
+**Findings:**
+
+1. **important → fixed. A real comparator branch never ran, and coverage still read 100%.** In `search_tag_order`, `if (lhs->exact) return -1;` had 0 hits. `qsort` only ever passed the exact tag as the right-hand argument, so only `return 1` ran. `check-coverage.sh` excludes every zero-hit `return -1;` as defensive (line 148), so the effective line number stayed 100%. The new `search_tag_order_puts_exact_first_from_either_side` calls the comparator both ways, and the left-side mutant now fails it. I read all zero-hit lines in `search_terms.c`: the rest are OOM, unreachable status mappings, and decode errors on text that NFC has already validated.
+2. **Grill → follow-up plan (Itay 2026-10-20, `decision:coverage-branch-gate-followup`).** The regex exclusion (2,169 zero-hit lines today) cannot tell a defensive return from a rule branch. A plan after 18 adds an llvm-cov branch-coverage gate for the pure TUs (`search_terms.c`, `unicode.c`, `normalize.c`, `output.c`). The line regex stays.
+3. **nit, considered and not applied (simplify).** I tried `return (cp >= '0' && …);` in `is_ascii_alnum` and `return !is_ascii_alnum(cp);` in `splits_token` (−6 lines). clang-tidy `readability-implicit-bool-conversion` rejects both, because C relational operators yield `int`. The coder's `if`/`return true` shape is what lint forces.
+
+**Praise:**
+
+- Three grills before writing code, each recorded as a decision with its reason: the empty-token slot, segment normalization, and Unicode whitespace in segments.
+- Reuse instead of copies: `unicode_decode` joins the port, and `is_hebrew_mark` and one `ascii_ws_trim` come out of `normalize`.
+- The handover package is itemized in the marker, including the Release size delta (last round's advice).
+- It flagged E2.2 step 4 as unable to fire, for stage 3's grill.
+
+**Coder rating (plan 18 stage 2): 9/10.**
+
+- Every mutant it claimed was red, I could reproduce.
+- It applied both instructions from stage 1 the same day.
+
+**Miss:** it did not read the zero-hit lines that the coverage regex excluded. One of them was a rule branch.
+
+**Paste-ready for the coder:**
+
+```text
+1. After check-coverage, list the zero-hit lines in the TUs you touched (llvm-cov show ... | awk -F'|' '$2 ~ /^ *0$/') and read each one. The regex excludes every "return -1;" and *_ERR_ return, so a real branch (a comparator side, a rule) can hide there.
+2. A qsort comparator gets a direct test with each argument order; qsort decides which side it calls, not your test.
+```

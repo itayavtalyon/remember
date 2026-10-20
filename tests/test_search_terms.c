@@ -527,6 +527,18 @@ TEST(search_key_order_is_tier_then_code_point)
     ASSERT_STREQ(keys[5].text, "a");
 }
 
+/* D28: an exact tag sorts before a busier tag of the same tier, whichever side
+   qsort passes it on. The sort above only ever passes it on the right. */
+TEST(search_tag_order_puts_exact_first_from_either_side)
+{
+    const SearchFacet exact = {
+        .text = "t", .count = COUNT_FEW, .tier = SEARCH_TIER_1, .exact = true};
+    const SearchFacet busier = {.text = "t1many", .count = COUNT_MANY, .tier = SEARCH_TIER_1};
+
+    ASSERT_TRUE(search_tag_order(&exact, &busier) < 0);
+    ASSERT_TRUE(search_tag_order(&busier, &exact) > 0);
+}
+
 TEST(search_tag_order_is_exact_tier_count_then_code_point)
 {
     SearchFacet tags[] = {
@@ -722,6 +734,7 @@ void register_search_terms_tests(void)
     RUN_TEST(search_tier_nfc_oom_is_oom);
     RUN_TEST(search_tier_null_arguments_are_internal);
     RUN_TEST(search_key_order_is_tier_then_code_point);
+    RUN_TEST(search_tag_order_puts_exact_first_from_either_side);
     RUN_TEST(search_tag_order_is_exact_tier_count_then_code_point);
     RUN_TEST(search_label_is_the_title);
     RUN_TEST(search_label_title_is_ascii_trimmed);
