@@ -237,4 +237,60 @@ Gate on this tree (2026-10-20). The C sources are unchanged from `123ac31`; only
 - `cmake --build build --target leaks-macos`: PASS.
 - `./scripts/check-coverage.sh` (final script): exit 0; functions 100%, effective lines 100%; branch report as above.
 
+### 2026-10-20 — stage 2 (remove what cannot run)
+
+Itay, after stage 1: "fix also the ones Linux finds. Move on with the plan". So the stages run back to back, and the gate must end green on Linux too: the 11 Linux-only stream sides (stage 1 notes) are stage 4's job, driven by the deterministic failing stream on both platforms.
+
+No public contract changed: every removed side sits in a static helper or behind a static caller. The public NULL and argument guards (`output_*(NULL, …)`, `count > 0 && entries == NULL`, `normalize_token(…, 0)`, `body_hash_hex(NULL, …)`) stay; a unit test can reach each one, so stage 3 tests them instead.
+
+Removed or restructured, each with the reason it could not run (side as `line:col` on `59dc617`):
+
+| Side | Code | Why it could not run | Change |
+|---|---|---|---|
+| `search_terms.c` 30:5T, 32:5T | `from_unicode` cases `UNICODE_DONE`, `default` | No caller passes `UNICODE_DONE`: `plain_label` returns on it before mapping, and `unicode_nfc`, `unicode_decode`, `unicode_graphemes_open` never return it. `default` needs a value outside the enum. | `switch` → three `if`s; anything not OK / INVALID / OOM is INTERNAL. The INTERNAL fallthrough is taken (`search_tokens_nfc_internal_is_internal`). |
+| `search_terms.c` 44:5T … 49:5T | `from_norm` cases EMPTY, TOO_LONG, INVALID_UTF8, INVALID_CHAR, INTERNAL, `default` | `from_norm` had one caller, `fold_hebrew_marks(nfc, nfc_len, &folded)`. That function returns INTERNAL only for a NULL `src` or `out`; `nfc` is non-NULL after `unicode_nfc` returns OK (it is utf8proc's buffer) and `&folded` is never NULL. It returns no other status. | `from_norm` deleted. One line: `st = (fold == NORM_OK) ? SEARCH_OK : SEARCH_ERR_OOM;`. Its OOM side (`308:10F` now) and the old `40:5F` / `42:5T` are the same failure, reached by stage 5's allocation hook. |
+| `search_terms.c` 228:12F | `while (i <= len)` exits by its condition | At `i == len` the body always returned or `break`ed, so the condition never read false. | `while (i < len)`, then the last segment checked once after the loop. The shared test is `segment_starts_with` (new static helper). |
+| `output.c` 107:5T, 147:9T, 602:9T | `bin_token` `default: return NULL`, and both callers' `bin == NULL` | `bin_token` only ever received `store_bin_of(…)`, which returns one of the three `StoreBin` values (`store_sqlite.c:2125`). | `BIN_TOKENS[]`, a designated-initializer table indexed by the bin; no branch. |
+| `output.c` 515:9T | `link_type_token` `n == NULL` | Both callers pass `&links[i]` (`write_stub_json` after its own check, `output_related_human`). | Guard deleted. |
+| `output.c` 524:9F | `kind == STORE_EDGE_SUPERSEDES` false, then `return "related"` | `StoreEdgeKind` has three values (`store.h:373`); RELATED and CITES return earlier. | The SUPERSEDES ternary is the last return. |
+| `output.c` 598:9T | `write_stub_json` `n == NULL` | Its three callers pass `&links[i]`. | `n == NULL` dropped; `n->neighbor_sync_id == NULL` stays (data, reachable). |
+| `output.c` 553:9T, 553:24T | `fill_preview` `dst == NULL`, `dst_cap == 0` | All three callers pass a `char[PREVIEW_BUF]` stack buffer. | Guard deleted, and the `dst_cap` parameter with it: `fill_preview(char dst[PREVIEW_BUF], …)`. |
+| `output.c` 575:37F | `body[i + k] != '\0'` in the copy loop | `utf8_clen_bounded` already returns 1 when a NUL falls inside the sequence. | Clause deleted; a comment names the reason. |
+| `output.c` 582:47F | the post-loop `if (body[i] != '\0' && … != '\r') truncated = 1;` | The loop ends naturally only on `\0`, `\n`, or `\r`, so that `if` is false; after a `break`, `truncated` is already 1. The whole block never changed `truncated`. | Block deleted (3 lines). |
+| `output.c` 585:22F | `truncated && o + 3U < dst_cap` false | `o` starts at 0 and each copy passed `o + clen + 4 < PREVIEW_BUF`, so `o + 3 < PREVIEW_BUF` always holds. | `if (truncated)`. |
+| `output.c` 914:9T | `output_one_conflict_json` `row == NULL` | Its one caller passes `&rows[i]`. | Guard deleted. |
+| `output.c` 87:36F | `field.value != NULL ? field.value : empty_str()` | Not unreachable, but duplicated: `output_json_string` already renders NULL as `""` (`if (s == NULL) s = empty_str();`). | Ternary deleted; the value goes straight to `output_json_string`. Stage 3 tests a NULL field. |
+
+Counts on this tree (macOS): `search_terms.c` 176 sides, 16 missed (was 198 / 26); `output.c` 548 / 181 (was 584 / 194); `normalize.c` 172 / 6; `unicode.c` 74 / 0.
+
+What the remaining sides need (the plan for stages 3–5):
+
+- Rule sides (stage 3): `normalize.c` 147:43F (3-byte above the surrogates), 153:13F (4-byte overlong); `search_terms.c` 361:16T (busier tag on the left), 453:22F (`# ` title with no newline), 263:13F (in-order already lost, then a later token); public argument guards in `normalize.c` (361:24T `out_cap == 0`, 424:9F `data == NULL`) and in `output.c`; the `output.c` data sides (NULL `version_vector`, `source`, a tag, `updated_at`, `neighbor_sync_id`, a conflict field, an unknown conflict reason, `\r` and DEL in a preview, links for another subject).
+- Stream writes (stage 4): every `fputs` / `fprintf` / `fputc` result in `output.c`, and the callers that propagate them. This includes the 11 sides on which macOS and Linux disagree.
+- Allocation (stage 5): `normalize.c` 261:9T, 338:9T; `search_terms.c` 83:9T (`dup_bytes`), 411:9T (`plain_label`), 308:10F / 309:9T (the fold).
+- Callee status (stage 5): `search_terms.c` 106:13T, 154:13T, 222:13T (`unicode_decode` on NFC text), 163:13T, 256:13T, 265:17T, 313:9F (propagation of those), 419:9T, 429:13T (grapheme iterator on validated text).
+
+Mutations (one clause each; runner: copy the file, apply one replacement, `cmake --build build-mut` (ASan/UBSan, `REMEMBER_TEST_VFS=ON`), run `remember_store_tests` and/or `remember_tests --only <gate suites>`, restore):
+
+- `from_unicode`: OK → DONE, INVALID → INTERNAL, OOM → INTERNAL: RED (`search_tokens_split_on_ascii_punctuation_and_space`, `search_tokens_invalid_utf8_is_rejected`, `search_tokens_nfc_oom_is_oom`, and more).
+- `segment_starts_with` `>=` → `>`: RED (`search_tier_in_order_tokens_are_tier_2`, …). `memcmp == 0` → `!= 0`: RED (`search_tier_a_token_without_a_segment_does_not_match`, …). Both rerun after the clang-tidy fix below: RED.
+- Last-segment check dropped, and its start `seg` → `from`: RED (`search_tier_word_prefix_of_a_key_segment_matches`, …).
+- Fold ternary `== NORM_OK` → `!=`: RED (`search_tier_word_prefix_of_a_key_segment_matches`, …).
+- `BIN_TOKENS` each value swapped or misspelled: RED (`json_expired_and_deleted_bins`, `human_expired_and_deleted_neighbor_marks`, `json_entry_field_order_bin_always_enum`).
+- SUPERSEDES → `"related"`: RED (`get_list_json_stubs_five_name_preview`). `if (truncated)` → `if (!truncated)`: RED (`get_list_json_stubs_five_name_preview`, `list_sort_*`). Copy loop `k < clen` → `k < 1`: RED (`preview_control_and_multibyte_truncation`).
+- **Survived, killed in stage 3** (the code existed before; no test pins it):
+  - `find_segment` inner length `i - seg` → `len - seg` (ST8). Equivalent for tokens from `search_tokens_build`: a token never holds a segment separator (all five ASCII separators and White_Space split tokens), and both are valid UTF-8, so a token cannot match across a separator byte for byte. A hand-built `SearchTokens` with `a:b` reaches it; E2.5a says a token matches *a* segment.
+  - SUPERSEDES direction `==` → `!=` (O4): no test checks `supersedes` vs `superseded_by`.
+  - The preview buffer bound `PREVIEW_BUF` → `PREVIEW_BUF - 100` (O7): no test checks a preview cut by bytes rather than by code points.
+  - A NULL field rendered as `"x"` instead of `""` (O9): no test passes a NULL `body` / `created_at` / `updated_at`.
+
+Lint fix: `return a && b;` in `segment_starts_with` tripped `readability-implicit-bool-conversion`; it now uses the file's `if (…) { return true; } return false;` form.
+
+Simplify pass (round 1.5):
+
+- Applied: `from_norm` (16 lines) → one ternary line; `bin_token` (12 lines) + two NULL checks (6 lines) → a 5-line table; the `fill_preview` dead block and guards (−8 lines) and its `dst_cap` parameter; the duplicate NULL ternary in `write_json_field_str`.
+- Applied: `find_segment` lost the `at_end` flag and its two `if (at_end)` tests; the match test moved into `segment_starts_with`, used twice.
+- Declined: drop `segment_starts_with`'s length argument and always compare against `len - seg` (ST8 shows it is equivalent for built tokens). It would make E2.5a depend on a tokenizer invariant that `search_facet_classify` cannot see; the length argument keeps the rule local.
+- Declined: share `BIN_TOKENS` with `store_sqlite.c`'s `bin_token_store` (`store_sqlite.c:5999`). Out of this plan's scope (other `src/` files); noted for a later DRY pass.
+
 ## Review Notes

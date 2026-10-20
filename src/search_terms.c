@@ -18,37 +18,19 @@ _Static_assert((size_t)SEARCH_TOKEN_BYTES_MAX >=
 static const char TITLE_MARK[] = "# ";
 static const char ELLIPSIS[] = "\xe2\x80\xa6"; /* U+2026 */
 
+/* No caller passes UNICODE_DONE: plain_label stops on it before mapping. */
 static SearchStatus from_unicode(UnicodeStatus st)
 {
-    switch (st) {
-    case UNICODE_OK:
+    if (st == UNICODE_OK) {
         return SEARCH_OK;
-    case UNICODE_ERR_INVALID_UTF8:
+    }
+    if (st == UNICODE_ERR_INVALID_UTF8) {
         return SEARCH_ERR_INVALID_UTF8;
-    case UNICODE_ERR_OOM:
-        return SEARCH_ERR_OOM;
-    case UNICODE_DONE:
-    case UNICODE_ERR_INTERNAL:
-    default:
-        return SEARCH_ERR_INTERNAL;
     }
-}
-
-static SearchStatus from_norm(NormStatus st)
-{
-    switch (st) {
-    case NORM_OK:
-        return SEARCH_OK;
-    case NORM_ERR_OOM:
+    if (st == UNICODE_ERR_OOM) {
         return SEARCH_ERR_OOM;
-    case NORM_ERR_EMPTY:
-    case NORM_ERR_TOO_LONG:
-    case NORM_ERR_INVALID_UTF8:
-    case NORM_ERR_INVALID_CHAR:
-    case NORM_ERR_INTERNAL:
-    default:
-        return SEARCH_ERR_INTERNAL;
     }
+    return SEARCH_ERR_INTERNAL;
 }
 
 /* The scalar at s[i..len). */
@@ -211,6 +193,16 @@ SearchStatus search_q(const char *query, char *out, size_t out_cap)
     return SEARCH_OK;
 }
 
+static bool segment_starts_with(const char *seg, size_t seg_len, const char *token)
+{
+    size_t token_len = strlen(token);
+
+    if (seg_len >= token_len && memcmp(seg, token, token_len) == 0) {
+        return true;
+    }
+    return false;
+}
+
 /*
  * The start offset of the first segment of text[0..len), at or after offset
  * from, that begins with token; len when there is none.
@@ -218,34 +210,29 @@ SearchStatus search_q(const char *query, char *out, size_t out_cap)
 static SearchStatus find_segment(const char *text, size_t len, const char *token, size_t from,
                                  size_t *found)
 {
-    size_t token_len = strlen(token);
     size_t i = from;
     size_t seg = from;
     uint32_t cp = 0;
     size_t n = 0;
 
     *found = len;
-    while (i <= len) {
-        bool at_end = (i == len);
+    while (i < len) {
+        SearchStatus st = decode_at(text, len, i, &cp, &n);
 
-        if (!at_end) {
-            SearchStatus st = decode_at(text, len, i, &cp, &n);
-
-            if (st != SEARCH_OK) {
-                return st;
-            }
+        if (st != SEARCH_OK) {
+            return st;
         }
-        if (at_end || splits_segment(cp)) {
-            if (i - seg >= token_len && memcmp(text + seg, token, token_len) == 0) {
+        if (splits_segment(cp)) {
+            if (segment_starts_with(text + seg, i - seg, token)) {
                 *found = seg;
                 return SEARCH_OK;
-            }
-            if (at_end) {
-                break;
             }
             seg = i + n;
         }
         i += n;
+    }
+    if (segment_starts_with(text + seg, len - seg, token)) {
+        *found = seg;
     }
     return SEARCH_OK;
 }
@@ -317,7 +304,8 @@ SearchStatus search_facet_classify(const SearchTokens *tokens, const char *q, co
     if (st != SEARCH_OK) {
         return st;
     }
-    st = from_norm(fold_hebrew_marks(nfc, nfc_len, &folded));
+    /* nfc and &folded are non-NULL, so the fold fails only when malloc does. */
+    st = (fold_hebrew_marks(nfc, nfc_len, &folded) == NORM_OK) ? SEARCH_OK : SEARCH_ERR_OOM;
     if (st != SEARCH_OK) {
         goto cleanup;
     }

@@ -84,7 +84,7 @@ static int write_json_field_str(FILE *out, JsonField field)
     if (fprintf(out, ",\"%s\":", field.name) < 0) {
         return -1;
     }
-    return output_json_string(out, field.value != NULL ? field.value : empty_str());
+    return output_json_string(out, field.value);
 }
 
 static int write_json_nullable(FILE *out, const char *name, const char *value)
@@ -95,19 +95,12 @@ static int write_json_nullable(FILE *out, const char *name, const char *value)
     return write_json_field_str(out, (JsonField){.name = name, .value = value});
 }
 
-static const char *bin_token(StoreBin bin)
-{
-    switch (bin) {
-    case STORE_BIN_LIVE:
-        return "live";
-    case STORE_BIN_EXPIRED:
-        return "expired";
-    case STORE_BIN_DELETED:
-        return "deleted";
-    default:
-        return NULL;
-    }
-}
+/* Indexed by a store_bin_of result, which is always one of the three bins. */
+static const char *const BIN_TOKENS[] = {
+    [STORE_BIN_LIVE] = "live",
+    [STORE_BIN_EXPIRED] = "expired",
+    [STORE_BIN_DELETED] = "deleted",
+};
 
 static int write_json_tags(FILE *out, char *const *tags, size_t ntags)
 {
@@ -143,11 +136,7 @@ static int write_entry_core(FILE *out, const Entry *e, const char *now)
         e->version_vector[0] != '{') {
         return -1;
     }
-    bin = bin_token(store_bin_of(e->deleted_at, e->expires_at, now));
-    if (bin == NULL) {
-        return -1;
-    }
-
+    bin = BIN_TOKENS[store_bin_of(e->deleted_at, e->expires_at, now)];
     if (fprintf(out, "{\"id\":%lld,\"sync_id\":", e->id) < 0) {
         return -1;
     }
@@ -400,14 +389,14 @@ static size_t utf8_clen_bounded(const char *body, size_t i)
 
 enum { LIST_PREVIEW_CP = 80U, STUB_PREVIEW_CP = 40U, PREVIEW_BUF = 192U };
 
-static void fill_preview(char *dst, size_t dst_cap, const char *body, size_t max_cp);
+static void fill_preview(char dst[PREVIEW_BUF], const char *body, size_t max_cp);
 
 /* First line, max 80 codepoints, ellipsis if truncated. Control bytes → '?'. */
 static void write_preview(FILE *out, const char *body)
 {
     char buf[PREVIEW_BUF];
 
-    fill_preview(buf, sizeof(buf), body, LIST_PREVIEW_CP);
+    fill_preview(buf, body, LIST_PREVIEW_CP);
     (void)fputs(buf, out);
 }
 
@@ -512,19 +501,13 @@ int output_entry_human_line(FILE *out, const Entry *e, const StoreNeighbor *link
 
 static const char *link_type_token(const StoreNeighbor *n)
 {
-    if (n == NULL) {
-        return "related";
-    }
     if (n->kind == STORE_EDGE_RELATED) {
         return "related";
     }
     if (n->kind == STORE_EDGE_CITES) {
         return (n->subject_id == n->from_id) ? "cites" : "cited_by";
     }
-    if (n->kind == STORE_EDGE_SUPERSEDES) {
-        return (n->subject_id == n->from_id) ? "supersedes" : "superseded_by";
-    }
-    return "related";
+    return (n->subject_id == n->from_id) ? "supersedes" : "superseded_by";
 }
 
 static StoreBin neighbor_bin(const StoreNeighbor *n, const char *now)
@@ -543,16 +526,13 @@ static const char *human_bin_mark(StoreBin bin)
     return NULL;
 }
 
-static void fill_preview(char *dst, size_t dst_cap, const char *body, size_t max_cp)
+static void fill_preview(char dst[PREVIEW_BUF], const char *body, size_t max_cp)
 {
     size_t i = 0U;
     size_t o = 0U;
     size_t cps = 0U;
     int truncated = 0;
 
-    if (dst == NULL || dst_cap == 0U) {
-        return;
-    }
     dst[0] = '\0';
     if (body == NULL) {
         return;
@@ -564,7 +544,7 @@ static void fill_preview(char *dst, size_t dst_cap, const char *body, size_t max
             truncated = 1;
             break;
         }
-        if (o + clen + 4U >= dst_cap) {
+        if (o + clen + 4U >= PREVIEW_BUF) {
             truncated = 1;
             break;
         }
@@ -572,17 +552,16 @@ static void fill_preview(char *dst, size_t dst_cap, const char *body, size_t max
             dst[o++] = '?';
         } else {
             size_t k = 0;
-            for (k = 0; k < clen && body[i + k] != '\0'; k++) {
+            /* utf8_clen_bounded already stops clen before a NUL. */
+            for (k = 0; k < clen; k++) {
                 dst[o++] = body[i + k];
             }
         }
         i += clen;
         cps++;
     }
-    if (body[i] != '\0' && body[i] != '\n' && body[i] != '\r') {
-        truncated = 1;
-    }
-    if (truncated && o + 3U < dst_cap) {
+    /* o starts at 0 and each copy leaves o + 4 < PREVIEW_BUF, so the dots and the NUL fit. */
+    if (truncated) {
         dst[o++] = '.';
         dst[o++] = '.';
         dst[o++] = '.';
@@ -595,14 +574,11 @@ static int write_stub_json(FILE *out, const StoreNeighbor *n, const char *now)
     char preview[PREVIEW_BUF];
     const char *bin = NULL;
 
-    if (n == NULL || n->neighbor_sync_id == NULL) {
+    if (n->neighbor_sync_id == NULL) {
         return -1;
     }
-    bin = bin_token(neighbor_bin(n, now));
-    if (bin == NULL) {
-        return -1;
-    }
-    fill_preview(preview, sizeof(preview), n->neighbor_body, STUB_PREVIEW_CP);
+    bin = BIN_TOKENS[neighbor_bin(n, now)];
+    fill_preview(preview, n->neighbor_body, STUB_PREVIEW_CP);
     if (fprintf(out, "{\"id\":%lld,\"sync_id\":", n->neighbor_id) < 0) {
         return -1;
     }
@@ -807,7 +783,7 @@ int output_related_human(FILE *out, const StoreNeighbor *links, size_t count, co
     }
     for (i = 0; i < count; i++) {
         const StoreNeighbor *n = &links[i];
-        fill_preview(preview, sizeof(preview), n->neighbor_body, STUB_PREVIEW_CP);
+        fill_preview(preview, n->neighbor_body, STUB_PREVIEW_CP);
         if (fprintf(out, "%s ", link_type_token(n)) < 0) {
             return -1;
         }
@@ -911,9 +887,6 @@ static int output_one_conflict_json(FILE *out, const StoreConflict *row)
 {
     const char *reason = NULL;
 
-    if (row == NULL) {
-        return -1;
-    }
     reason = store_conflict_reason_str(row->reason);
     if (reason == NULL || row->sync_id == NULL || row->local_json == NULL ||
         row->incoming_json == NULL || row->created_at == NULL) {
