@@ -188,6 +188,8 @@ review, Implementation Notes, commit.
    verbatim + "JSON `keys` and `tags` now sit between `total` and
    `entries`"), engineering notes, QUALITY.md, COVERAGE.md, gate-suites.
 
+**Insert (Itay 2026-10-20, `decision:coverage-branch-gate-followup`):** after stage 2 and before stage 3, run [plan 18b](18b-branch-coverage-gate.md) on this branch. Stages 3–6 then meet the branch gate for `search_terms.c`, `unicode.c`, `normalize.c`, and `output.c`, and this plan's Definition of Done gains that gate (18b stage 6).
+
 ## How to work (workflow + coding standards)
 
 **Workflow**
