@@ -367,4 +367,47 @@ Linux clang-tidy (only Linux compiles the glibc branch) asked for a longer name 
 Gate on this tree (2026-10-21): macOS ctest 5/5 (VFS on), `leaks-macos` PASS, `lint-all.sh` LINT OK, `check-coverage.sh` exit 0. `ci-linux.sh` exit 0 (5/5, iwyu PASS, scan-build PASS) after the `funcs` rename. Linux coverage (`BUILD_DIR=build-cov-linux ./scripts/check-coverage.sh` in ubuntu 24.04, LLVM 18): `output.c` 566 sides, 0 missed; the other three TUs match macOS (13 / 2 / 0). The stage 1 platform difference is gone.
 
 
+### 2026-10-21 — stage 5 (fault injection)
+
+One grill before the first hook, answered with the recommended option: `decision:plan18b-shared-alloc-hook` (one allocation hook shared by the pure TUs, in a hooks-only TU).
+
+**Allocation hook.** `src/test_alloc.c/.h`: `test_alloc_fail_after(n)` and `test_alloc_malloc(n)` over one process-global counter. `normalize.c` and `search_terms.c` include `test_alloc.h` last under `#ifdef REMEMBER_TEST_HOOKS`; the header defines `malloc(n)` as `test_alloc_malloc(n)` after it has included `<stdlib.h>`, so a later `<stdlib.h>` cannot expand the macro in its own declaration. `test_alloc.c` `#undef`s `malloc` because it is the hook. CMake adds `src/test_alloc.c` to `remember_tests` and `remember_store_tests` (both always define `REMEMBER_TEST_HOOKS`), and through `remember_apply_test_hooks` to `remember` / `remember_plain` when the option is on (coverage builds). `remember_core` and Release builds never compile it.
+
+**Callee-status hook.** `unicode_test_fail_after(n)` in `unicode.c`: one counter across `unicode_decode`, `unicode_graphemes_open`, and `unicode_graphemes_next`. The (n+1)-th call returns `UNICODE_ERR_INTERNAL`. Each check sits in an `#ifdef REMEMBER_TEST_HOOKS` block after the function's own argument checks. The one-shot countdown is shared: `test_countdown_fires(int *counter)` in `test_alloc.c` serves both hooks (one copy of the logic; the store keeps its own, per the decision). `unicode_test_inject_nfc` was reused unchanged: it already reaches the NFC OOM and INTERNAL sides.
+
+Tests (TDD: the three `normalize.c` tests went red, `actual=0, expected=5` (OK, not OOM), before the `malloc` redirect existed; `unicode_test_fail_after_fails_only_the_nth_call` failed to link before the hook existed):
+
+| Side | Test |
+|---|---|
+| the countdown (fires on the Nth, one-shot, off after) | `test_alloc_fails_only_the_nth_allocation`, `unicode_test_fail_after_fails_only_the_nth_call` |
+| `normalize.c` 261:9T, 338:9T | `fold_hebrew_marks_reports_oom`, `body_trim_copy_reports_oom` |
+| `search_terms.c` 83:9T (`dup_bytes`) | `search_label_reports_oom_when_the_title_copy_fails` |
+| `search_terms.c` 411:9T (`plain_label`) | `search_label_reports_oom_when_the_plain_text_buffer_fails` |
+| `search_terms.c` 308:10F, 309:9T (the fold) | `search_tier_reports_oom_when_the_fold_fails` |
+| `search_terms.c` 154:13T, 106:13T, 163:13T | `search_tokens_report_a_failed_decode_at_a_token_start`, `…_inside_a_token` |
+| `search_terms.c` 222:13T, 256:13T, 265:17T, 313:9F | `search_tier_reports_a_failed_decode_in_the_segment_search`, `…_in_the_in_order_search` |
+| `search_terms.c` 419:9T, 429:13T | `search_label_reports_a_failed_grapheme_open`, `…_grapheme_step` |
+
+Each OOM test checks the out pointer stays NULL and the facet is left as it was. Leaks: `ctest` runs `store_asan_gate`; `ci-linux.sh` runs it with `detect_leaks=1`.
+
+Counts after stage 5, macOS: all four TUs 0 missed (`search_terms.c` 176, `unicode.c` 80, `normalize.c` 172, `output.c` 566). `unicode.c` grew from 74 to 80 sides: the three hook checks, both sides taken.
+
+Mutations (one clause each, RED with the named tests):
+
+- Countdown: fire at 1 instead of 0, count down only above 1, no reset after firing (also breaks unrelated store tests, because a stuck counter fails every later allocation), the alloc hook ignored: `test_alloc_fails_only_the_nth_allocation`, `unicode_test_fail_after_fails_only_the_nth_call`, and the OOM tests.
+- Each of the three `unicode.c` injection checks weakened (`&& len > 1000000U`): the grapheme open / step tests, the decode tests.
+- Each OOM status (`dup_bytes`, `plain_label`, the fold ternary, the two `normalize.c` mallocs) returned as INTERNAL: the matching OOM test.
+- Every `if (st != SEARCH_OK)` in `search_terms.c` (13 sites), first mutated to swallow INTERNAL: 7 RED. The other 6 never see INTERNAL in a test (they see OOM or invalid UTF-8), so they were mutated to swallow everything except INTERNAL: 5 RED (`search_tokens_invalid_utf8_is_rejected`, `search_tier_invalid_utf8_text_is_rejected`, `search_tier_reports_oom_when_the_fold_fails`, `search_label_invalid_utf8_plain_text_is_rejected` ×2).
+- **Equivalent, kept**: the `unicode_graphemes_open` status check in `plain_label` (L425) survives both mutants. If it is skipped, `unicode_graphemes_next` gets an iterator whose `bytes` is NULL and returns INTERNAL itself, which is the same status. The check stays at the call that failed (fail fast); `search_label_reports_a_failed_grapheme_open` takes its side.
+
+Release (round 9.2, handover "nm on a Release remember"): `cmake --build build-release --target remember` (Release, hooks off), `nm build-release/remember | grep -ciE 'test_alloc|test_countdown|unicode_test|failing_stream'` = 0. Positive control: `nm build-mut/remember_store_tests` lists `_test_alloc_fail_after`, `_test_countdown_fires`, `_unicode_test_fail_after`.
+
+New dependency (round 9.2): `src/test_alloc.c` is a source every hooks target must compile. Consumers: CMake (above); `scripts/lint-all.sh` lints it with the other `src/*.c` (no change needed, it globs); `test_no_shim.sh` checks only the VFS shim, so the Release `nm` check above is the proof for the new symbols. No consumer outside the build.
+
+Lint: clang-tidy rejected `(malloc)(n)` as redundant parentheses (now `#undef malloc`); cppcheck called a non-hook `injected_failure()` stub "always false" (the stub is gone; the call sites are `#ifdef`'d). Apple clang 21 warns `-Wallocator-wrappers` on `test_alloc_malloc`, which is not promoted under `-Werror`. `__attribute__((malloc))`, `alloc_size(1)`, and `ownership_returns(malloc)` each still warn (scratch copy of the file). A `#pragma clang diagnostic ignored` under `#ifdef __clang__` with the reason silences it; the extra `-Wunknown-warning-option` ignore is for clang 18 on Linux, which does not know the warning. The store's three identical warnings (`real_malloc`, …) predate this plan and are untouched.
+Linux IWYU asked to drop `<stddef.h>` from `test_alloc.h` and `test_alloc.c` (`size_t` comes from the kept `<stdlib.h>`); done.
+
+Gate on this tree (2026-10-21): macOS ctest 5/5 (VFS on), `leaks-macos` PASS, `lint-all.sh` LINT OK, `check-coverage.sh` exit 0 with all four TUs at 0 missed. `ci-linux.sh` exit 0 (5/5, iwyu PASS, scan-build PASS). Linux coverage (ubuntu 24.04, LLVM 18): all four TUs 0 missed, and the build printed no warnings.
+
+
 ## Review Notes

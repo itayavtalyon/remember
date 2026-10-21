@@ -2,8 +2,13 @@
 
 #include "utf8proc.h"
 
+#include <stdbool.h>
 #include <stdint.h>
 #include <string.h>
+
+#ifdef REMEMBER_TEST_HOOKS
+#include "test_alloc.h"
+#endif
 
 /*
  * Unicode 18 PropList White_Space equals Zs+Zl+Zp plus these six controls
@@ -55,6 +60,20 @@ PIN_CAT(CO);
 #ifdef REMEMBER_TEST_HOOKS
 /* NOLINTNEXTLINE(cppcoreguidelines-avoid-non-const-global-variables) */
 static int g_nfc_inject;
+/* NOLINTNEXTLINE(cppcoreguidelines-avoid-non-const-global-variables) */
+static int g_fail_after = -1;
+
+void unicode_test_fail_after(int n)
+{
+    g_fail_after = n;
+}
+
+/* The search_terms error paths for these calls run only on text they already
+   validated, so a test reaches them only through this seam (plan 18b B3). */
+static bool injected_failure(void)
+{
+    return test_countdown_fires(&g_fail_after);
+}
 #endif
 
 static const utf8proc_uint8_t *as_u8(const char *s)
@@ -148,6 +167,11 @@ UnicodeStatus unicode_graphemes_open(UnicodeGraphemes *iter, const char *src, si
         return UNICODE_ERR_INTERNAL;
     }
     *iter = (UnicodeGraphemes){NULL, 0, 0};
+#ifdef REMEMBER_TEST_HOOKS
+    if (injected_failure()) {
+        return UNICODE_ERR_INTERNAL;
+    }
+#endif
     st = bounded_bytes(src, src_len, &bytes, &len);
     if (st != UNICODE_OK) {
         return st;
@@ -176,6 +200,11 @@ UnicodeStatus unicode_graphemes_next(UnicodeGraphemes *iter, size_t *start, size
     if (iter == NULL || start == NULL || nbytes == NULL || iter->bytes == NULL) {
         return UNICODE_ERR_INTERNAL;
     }
+#ifdef REMEMBER_TEST_HOOKS
+    if (injected_failure()) {
+        return UNICODE_ERR_INTERNAL;
+    }
+#endif
     if (iter->offset >= iter->length) {
         return UNICODE_DONE;
     }
@@ -213,6 +242,11 @@ UnicodeStatus unicode_decode(const char *src, size_t len, uint32_t *cp, size_t *
     if (src == NULL || cp == NULL || nbytes == NULL || len == 0 || len > (size_t)PTRDIFF_MAX) {
         return UNICODE_ERR_INTERNAL;
     }
+#ifdef REMEMBER_TEST_HOOKS
+    if (injected_failure()) {
+        return UNICODE_ERR_INTERNAL;
+    }
+#endif
     n = utf8proc_iterate(as_u8(src), (utf8proc_ssize_t)len, &scalar);
     if (n < 0) {
         return UNICODE_ERR_INVALID_UTF8;

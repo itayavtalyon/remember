@@ -95,6 +95,10 @@ bool unicode_is_whitespace(uint32_t cp);
 /* Next unicode_nfc call returns OOM, or an unexpected library status. */
 enum { UNICODE_TEST_INJECT_NOMEM = 1, UNICODE_TEST_INJECT_UNEXPECTED = 2 };
 void unicode_test_inject_nfc(int which);
+/* The call after n more succeed, counting unicode_decode, unicode_graphemes_open
+   and unicode_graphemes_next together, returns UNICODE_ERR_INTERNAL (0 = the
+   next one); -1 turns it off. */
+void unicode_test_fail_after(int n);
 #endif
 
 #endif /* REMEMBER_UNICODE_H */

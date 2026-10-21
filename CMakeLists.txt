@@ -117,6 +117,7 @@ set_property(SOURCE
     src/util.c
     src/diag.c
     src/test_vfs.c
+    src/test_alloc.c
     APPEND PROPERTY COMPILE_OPTIONS -Wcast-qual
 )
 
@@ -161,6 +162,7 @@ endfunction()
 function(remember_apply_test_hooks target)
     if(REMEMBER_TEST_HOOKS)
         target_compile_definitions(${target} PRIVATE REMEMBER_TEST_HOOKS)
+        target_sources(${target} PRIVATE ${CMAKE_SOURCE_DIR}/src/test_alloc.c)
     endif()
 endfunction()
 
@@ -320,6 +322,7 @@ set(REMEMBER_TEST_SOURCES
 add_executable(remember_tests
     ${REMEMBER_TEST_SOURCES}
     ${REMEMBER_LIB_SOURCES}
+    src/test_alloc.c
 )
 target_include_directories(remember_tests PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/tests
@@ -362,6 +365,7 @@ add_executable(remember_store_tests
     src/unicode.c
     src/search_terms.c
     src/output.c
+    src/test_alloc.c
     tests/test_unicode.c
     tests/test_search_terms.c
     tests/test_output.c

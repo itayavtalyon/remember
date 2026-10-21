@@ -1,6 +1,7 @@
 #include "register.h"
 #include "search_terms.h"
 #include "test.h"
+#include "test_alloc.h"
 #include "unicode.h"
 
 #include <stdio.h>
@@ -750,6 +751,96 @@ TEST(search_label_null_arguments_are_internal)
     ASSERT_EQ_INT(search_label("b", "k", NULL), SEARCH_ERR_INTERNAL);
 }
 
+/* ---- failed allocations and callees (plan 18b B3) ----------------------- */
+
+TEST(search_label_reports_oom_when_the_title_copy_fails)
+{
+    char *out = NULL;
+
+    test_alloc_fail_after(0);
+    ASSERT_EQ_INT(search_label("# Title", NULL, &out), SEARCH_ERR_OOM);
+    ASSERT_TRUE(out == NULL);
+}
+
+TEST(search_label_reports_oom_when_the_plain_text_buffer_fails)
+{
+    char *out = NULL;
+
+    test_alloc_fail_after(0);
+    ASSERT_EQ_INT(search_label("plain", NULL, &out), SEARCH_ERR_OOM);
+    ASSERT_TRUE(out == NULL);
+}
+
+TEST(search_tier_reports_oom_when_the_fold_fails)
+{
+    SearchTokens toks;
+    SearchFacet facet = {.text = NULL, .tier = SEARCH_TIER_1};
+
+    ASSERT_EQ_INT(search_tokens_build("boo", &toks), SEARCH_OK);
+    test_alloc_fail_after(0);
+    ASSERT_EQ_INT(search_facet_classify(&toks, "zz", "x:books", 0, &facet), SEARCH_ERR_OOM);
+    ASSERT_EQ_INT(facet.tier, SEARCH_TIER_1);
+}
+
+TEST(search_tokens_report_a_failed_decode_at_a_token_start)
+{
+    SearchTokens toks;
+
+    unicode_test_fail_after(0);
+    ASSERT_EQ_INT(search_tokens_build("ab", &toks), SEARCH_ERR_INTERNAL);
+}
+
+TEST(search_tokens_report_a_failed_decode_inside_a_token)
+{
+    SearchTokens toks;
+
+    /* Decode 1 finds the token start; decode 2 is read_token's first. */
+    unicode_test_fail_after(1);
+    ASSERT_EQ_INT(search_tokens_build("ab", &toks), SEARCH_ERR_INTERNAL);
+}
+
+TEST(search_tier_reports_a_failed_decode_in_the_segment_search)
+{
+    SearchTokens toks;
+    SearchFacet facet = {.text = NULL, .tier = SEARCH_TIER_1};
+
+    ASSERT_EQ_INT(search_tokens_build("a", &toks), SEARCH_OK);
+    unicode_test_fail_after(0);
+    ASSERT_EQ_INT(search_facet_classify(&toks, "x", "a", 0, &facet), SEARCH_ERR_INTERNAL);
+    ASSERT_EQ_INT(facet.tier, SEARCH_TIER_1);
+}
+
+TEST(search_tier_reports_a_failed_decode_in_the_in_order_search)
+{
+    SearchTokens toks;
+    SearchFacet facet = {.text = NULL, .tier = SEARCH_TIER_1};
+
+    /* Text "a": the any-position search decodes once, then the in-order one. */
+    ASSERT_EQ_INT(search_tokens_build("a", &toks), SEARCH_OK);
+    unicode_test_fail_after(1);
+    ASSERT_EQ_INT(search_facet_classify(&toks, "x", "a", 0, &facet), SEARCH_ERR_INTERNAL);
+    ASSERT_EQ_INT(facet.tier, SEARCH_TIER_1);
+}
+
+TEST(search_label_reports_a_failed_grapheme_open)
+{
+    char *out = NULL;
+
+    /* Plain text "ab" decodes twice; the third unicode call opens the iterator. */
+    unicode_test_fail_after(2);
+    ASSERT_EQ_INT(search_label("ab", NULL, &out), SEARCH_ERR_INTERNAL);
+    ASSERT_TRUE(out == NULL);
+}
+
+TEST(search_label_reports_a_failed_grapheme_step)
+{
+    char *out = NULL;
+
+    unicode_test_fail_after(3);
+    ASSERT_EQ_INT(search_label("ab", NULL, &out), SEARCH_ERR_INTERNAL);
+    ASSERT_TRUE(out == NULL);
+}
+
 void register_search_terms_tests(void)
 {
     RUN_TEST(search_tokens_split_on_ascii_punctuation_and_space);
@@ -828,4 +919,13 @@ void register_search_terms_tests(void)
     RUN_TEST(search_label_counts_a_zwj_emoji_sequence_as_one_grapheme);
     RUN_TEST(search_label_invalid_utf8_plain_text_is_rejected);
     RUN_TEST(search_label_null_arguments_are_internal);
+    RUN_TEST(search_label_reports_oom_when_the_title_copy_fails);
+    RUN_TEST(search_label_reports_oom_when_the_plain_text_buffer_fails);
+    RUN_TEST(search_tier_reports_oom_when_the_fold_fails);
+    RUN_TEST(search_tokens_report_a_failed_decode_at_a_token_start);
+    RUN_TEST(search_tokens_report_a_failed_decode_inside_a_token);
+    RUN_TEST(search_tier_reports_a_failed_decode_in_the_segment_search);
+    RUN_TEST(search_tier_reports_a_failed_decode_in_the_in_order_search);
+    RUN_TEST(search_label_reports_a_failed_grapheme_open);
+    RUN_TEST(search_label_reports_a_failed_grapheme_step);
 }

@@ -1,6 +1,7 @@
 #include "normalize.h"
 #include "register.h"
 #include "test.h"
+#include "test_alloc.h"
 
 #include <stdlib.h>
 #include <string.h>
@@ -427,6 +428,41 @@ TEST(token_utf8_non_ascii_not_casefolded)
     ASSERT_STREQ(out, in);
 }
 
+/* ---- allocation failure (plan 18b B3, shared hook) ----------------------- */
+
+TEST(test_alloc_fails_only_the_nth_allocation)
+{
+    char *first = NULL;
+    char *second = NULL;
+    char *third = NULL;
+
+    test_alloc_fail_after(1);
+    ASSERT_EQ_INT(body_trim_copy("a", 1, &first, NULL), NORM_OK);
+    ASSERT_EQ_INT(body_trim_copy("b", 1, &second, NULL), NORM_ERR_OOM);
+    ASSERT_EQ_INT(body_trim_copy("c", 1, &third, NULL), NORM_OK);
+    ASSERT_TRUE(second == NULL);
+    free(first);
+    free(third);
+}
+
+TEST(body_trim_copy_reports_oom)
+{
+    char *out = NULL;
+
+    test_alloc_fail_after(0);
+    ASSERT_EQ_INT(body_trim_copy("body", 4, &out, NULL), NORM_ERR_OOM);
+    ASSERT_TRUE(out == NULL);
+}
+
+TEST(fold_hebrew_marks_reports_oom)
+{
+    char *out = NULL;
+
+    test_alloc_fail_after(0);
+    ASSERT_EQ_INT(fold_hebrew_marks("abc", 3, &out), NORM_ERR_OOM);
+    ASSERT_TRUE(out == NULL);
+}
+
 TEST(norm_status_string_stable)
 {
     ASSERT_STREQ(norm_status_string(NORM_OK), "ok");
@@ -468,5 +504,8 @@ void register_normalize_tests(void)
     RUN_TEST(token_allows_internal_spaces);
     RUN_TEST(token_length_and_utf8);
     RUN_TEST(token_utf8_non_ascii_not_casefolded);
+    RUN_TEST(test_alloc_fails_only_the_nth_allocation);
+    RUN_TEST(body_trim_copy_reports_oom);
+    RUN_TEST(fold_hebrew_marks_reports_oom);
     RUN_TEST(norm_status_string_stable);
 }

@@ -520,6 +520,17 @@ TEST(unicode_whitespace_rejects_near_misses)
     ASSERT_FALSE(unicode_is_whitespace(0x110000));
 }
 
+TEST(unicode_test_fail_after_fails_only_the_nth_call)
+{
+    uint32_t cp = 0;
+    size_t n = 0;
+
+    unicode_test_fail_after(1);
+    ASSERT_EQ_INT(unicode_decode("a", 1, &cp, &n), UNICODE_OK);
+    ASSERT_EQ_INT(unicode_decode("a", 1, &cp, &n), UNICODE_ERR_INTERNAL);
+    ASSERT_EQ_INT(unicode_decode("a", 1, &cp, &n), UNICODE_OK);
+}
+
 void register_unicode_tests(void)
 {
     RUN_TEST(unicode_nfc_composes_e_acute);
@@ -566,4 +577,5 @@ void register_unicode_tests(void)
     RUN_TEST(unicode_category_matches_unicode_general_category);
     RUN_TEST(unicode_whitespace_is_unicode_18_white_space);
     RUN_TEST(unicode_whitespace_rejects_near_misses);
+    RUN_TEST(unicode_test_fail_after_fails_only_the_nth_call);
 }

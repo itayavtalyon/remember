@@ -6,6 +6,12 @@
 #include <stdlib.h>
 #include <string.h>
 
+/* Last: under REMEMBER_TEST_HOOKS every malloc below goes through the shared
+   fault hook (decision:plan18b-shared-alloc-hook). */
+#ifdef REMEMBER_TEST_HOOKS
+#include "test_alloc.h" // IWYU pragma: keep
+#endif
+
 /* ---- ASCII / UTF-8 byte constants (RFC 3629) -----------------------------
  * Kept unsigned so the mask/shift arithmetic below stays unsigned (avoids
  * sign-conversion on the unsigned-int code point and signed-bitwise shifts). */
