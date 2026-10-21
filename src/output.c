@@ -392,12 +392,21 @@ enum { LIST_PREVIEW_CP = 80U, STUB_PREVIEW_CP = 40U, PREVIEW_BUF = 192U };
 static void fill_preview(char dst[PREVIEW_BUF], const char *body, size_t max_cp);
 
 /* First line, max 80 codepoints, ellipsis if truncated. Control bytes → '?'. */
-static void write_preview(FILE *out, const char *body)
+/* fputs that writes nothing for NULL. */
+static int write_text_or_nothing(FILE *out, const char *s)
+{
+    if (s == NULL) {
+        return 0;
+    }
+    return fputs(s, out) < 0 ? -1 : 0;
+}
+
+static int write_preview(FILE *out, const char *body)
 {
     char buf[PREVIEW_BUF];
 
     fill_preview(buf, body, LIST_PREVIEW_CP);
-    (void)fputs(buf, out);
+    return write_text_or_nothing(out, buf);
 }
 
 int output_tags_envelope(FILE *out, const TagCount *tags, size_t count)
@@ -473,30 +482,27 @@ int output_entry_human_line(FILE *out, const Entry *e, const StoreNeighbor *link
         return -1;
     }
     /* Keys/tags are normalize_token output: no ASCII controls. Raw fputs is safe. */
-    if (e->key != NULL) {
-        (void)fputs(e->key, out);
+    if (write_text_or_nothing(out, e->key) != 0 || fputs(" | ", out) < 0) {
+        return -1;
     }
-    (void)fputs(" | ", out);
     for (i = 0; i < e->ntags; i++) {
-        if (i > 0U) {
-            (void)fputc(',', out);
+        if (i > 0U && fputc(',', out) == EOF) {
+            return -1;
         }
-        if (e->tags[i] != NULL) {
-            (void)fputs(e->tags[i], out);
+        if (write_text_or_nothing(out, e->tags[i]) != 0) {
+            return -1;
         }
     }
-    (void)fputs(" | ", out);
-    write_preview(out, e->body);
-    (void)fputs(" | ", out);
-    if (e->updated_at != NULL) {
-        (void)fputs(e->updated_at, out);
+    if (fputs(" | ", out) < 0 || write_preview(out, e->body) != 0 || fputs(" | ", out) < 0) {
+        return -1;
     }
-    (void)fputs(" | ", out);
+    if (write_text_or_nothing(out, e->updated_at) != 0 || fputs(" | ", out) < 0) {
+        return -1;
+    }
     if (write_related_ids_cell(out, e->id, links, nlinks, now) != 0) {
         return -1;
     }
-    (void)fputc('\n', out);
-    return 0;
+    return fputc('\n', out) == EOF ? -1 : 0;
 }
 
 static const char *link_type_token(const StoreNeighbor *n)

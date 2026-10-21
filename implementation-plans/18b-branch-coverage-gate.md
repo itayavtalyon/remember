@@ -334,6 +334,37 @@ Process note: `build/CMakeCache.txt` had `REMEMBER_TEST_VFS=OFF` after a reconfi
 
 Pre-existing, not this plan: compiling `store_sqlite.c` for the two hook targets (`remember_tests`, `remember_store_tests`) prints three `-Wallocator-wrappers` warnings (`real_malloc`, `real_calloc`, `real_realloc`, the store's allocation hook). Both compiles carry `-Werror` (checked in `build/compile_commands.json`) and still succeed, so clang 22 does not promote this warning. Relevant to stage 5: a new allocation hook written the same way gets the same warning.
 
-Gate on stage 3: ctest 5/5 (VFS on), `lint-all.sh` LINT OK on macOS, `leaks-macos` PASS, `check-coverage.sh` exit 0. `ci-linux.sh` failed clang-tidy on `strcat`/`strcpy` in `test_output.c` (`clang-analyzer-security.insecureAPI.strcpy`, Linux only); fixed with `memcpy` in `given_euros` and one `snprintf`. `remember_store_tests` is green after the fix. **Not yet rerun on the committed tree: `lint-all.sh` and `ci-linux.sh`** (usage limit). Run both first when work resumes.
+Gate on stage 3: ctest 5/5 (VFS on), `lint-all.sh` LINT OK on macOS, `leaks-macos` PASS, `check-coverage.sh` exit 0. `ci-linux.sh` failed clang-tidy on `strcat`/`strcpy` in `test_output.c` (`clang-analyzer-security.insecureAPI.strcpy`, Linux only); fixed with `memcpy` in `given_euros` and one `snprintf`. `remember_store_tests` is green after the fix. Rerun on `c0f62fd` (2026-10-21, the uncommitted stage 4 shim moved out of the tree first): `lint-all.sh` LINT OK; `ci-linux.sh` exit 0 (5/5 suites, iwyu PASS, scan-build PASS).
+
+### 2026-10-21 — stage 4 (failing stream)
+
+No grill. Itay asked that the 11 Linux-only stream sides from stage 1 also be fixed; this stage covers them on both platforms with one deterministic stream.
+
+Probe (plan step: `fmemopen` + `setvbuf(_IONBF)` first). Scratch `probe.c`: for capacity 1..7, `fputs("ab")`, `fputc('c')`, `fprintf("%d", 42)`, then `fputs("z")`:
+
+- macOS: capacity N accepts exactly N bytes; partial writes land; after the first failure every later write fails (`cap 4: … after-error fputs=-1 buf=abc4`).
+- glibc 2.39 (ubuntu 24.04): one byte goes to the NUL (`cap 6: buf=abc42`), and the error is not sticky: `cap 1: fputs=-1 fputc=99`, `cap 4: … after-error fputs=1`.
+
+The platforms disagree, so per the plan the helper is `tests/failing_stream.c/.h`: `funopen` on macOS, `fopencookie` on glibc (`_GNU_SOURCE` with a reasoned `NOLINT`), `#error` elsewhere. Unbuffered. A write succeeds while the total stays within `limit`; the write that would pass it fails, and every later one fails too (sticky on both platforms by construction). `late_writes` counts write calls after the first failure. Probe of the helper itself (`shimprobe.c`, limits 0..6 over the same calls, and `late.c` for one failed call of each kind): the macOS and Linux outputs are byte-identical (`diff` empty), and neither libc retries inside a failed call (`late=0` for `fputs`, `fputc`, `fprintf`, and a mid-call failure).
+
+One finding from the first test run: macOS stdio keeps the byte of a failed `fputc` and writes it again at `fclose` (`late_writes` 1 when read after `fclose`, 0 before). The driver reads `late_writes` before `fclose`; the contract is about the writer's own call.
+
+Driver (`assert_reports_every_failed_write` in `tests/test_output.c`): run the writer unlimited (it must return 0 and write `len > 0` bytes), then once per limit `0 … len-1`: it must return -1 and make no write after the failed one. The second assertion matters: a sticky stream alone cannot tell "stopped at the failure" from "ignored it and failed on the next write".
+
+**Bug fixed (fail fast).** `output_entry_human_line` ignored 10 write results (`(void)fputs`/`fputc` for the key, separators, tags, preview, `updated_at`, and the final newline), and `write_preview` returned `void`. A failed write there returned 0 to `cmd_query.c`, which already turns -1 into an error. TDD: `output_entry_human_line_reports_every_failed_write` went red first (`at byte limit 4 of 54`: the key write), and it was red again with `git stash -- src/output.c`. Now every write is checked; `write_text_or_nothing` (fputs that writes nothing for NULL) replaces the four `if (x != NULL) (void)fputs(x)` blocks, and `write_preview` returns its write result.
+
+Tests: 25 `output_*_reports_every_failed_write`, one per public writer, plus a second variant where a writer has a NULL / non-NULL branch around a write (`related_envelope` with and without a key, `device_new_envelope` with and without `previous`, `rebuilt` JSON and human). Fixtures give every write at least one byte: two items wherever a comma is written, a keyed deleted link and a keyless live link (`given_two_links`), six links on the human line (the `, +1` overflow and a `[deleted]` mark), every JSON escape plus a C0 byte in `output_json_string`.
+
+Removed, superseded: `output_write_fail_returns_error` and `open_write_fail` in `tests/test_coverage_edges.c`. It wrote 10,000 strings into `/dev/full` (Linux) or a closed pipe (macOS) until one failed, then called seven writers with `(void)` and asserted nothing about them. It was the source of the 11 platform-dependent sides. `<signal.h>` and `<unistd.h>` went with it (no other use in the file).
+
+Mutations: every write check in `output.c`, generated from the source, one at a time: `) < 0` → `) < -1`, `) == EOF` → `) == EOF - 1`, `) != 0` → `) < -1`, `n < 0` → `n < -1`. Each makes that error ignored. 127 of 127 RED, each in the matching `*_reports_every_failed_write` test.
+
+Counts after stage 4: macOS `output.c` 566 sides, 0 missed (566 = 548 + the new checks in `output_entry_human_line`); `search_terms.c` 13, `normalize.c` 2 (stage 5), `unicode.c` 0.
+
+Lint fixes: `#if defined(__APPLE__)` → `#ifdef`, the ternary returns in the cookie writers → `if`, direct `<stdio.h>`/`<stdbool.h>`/`<stddef.h>` includes, `FAILING_STREAM_PAD` for the tail padding.
+Linux clang-tidy (only Linux compiles the glibc branch) asked for a longer name than `io`: now `funcs`.
+
+Gate on this tree (2026-10-21): macOS ctest 5/5 (VFS on), `leaks-macos` PASS, `lint-all.sh` LINT OK, `check-coverage.sh` exit 0. `ci-linux.sh` exit 0 (5/5, iwyu PASS, scan-build PASS) after the `funcs` rename. Linux coverage (`BUILD_DIR=build-cov-linux ./scripts/check-coverage.sh` in ubuntu 24.04, LLVM 18): `output.c` 566 sides, 0 missed; the other three TUs match macOS (13 / 2 / 0). The stage 1 platform difference is gone.
+
 
 ## Review Notes

@@ -11,11 +11,9 @@
 #include "util.h"
 
 #include <errno.h>
-#include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <unistd.h>
 
 /*
  * Extra edges for production line coverage: util/output/cli unit paths and
@@ -154,31 +152,6 @@ TEST(util_read_stdin_null_out)
 
 /* ---- output -------------------------------------------------------------- */
 
-static FILE *open_write_fail(void)
-{
-    FILE *f = NULL;
-    int p[2];
-
-#ifdef __linux__
-    f = fopen("/dev/full", "w");
-    if (f != NULL) {
-        return f;
-    }
-#endif
-    /* Portable: write end of pipe with read end closed → EPIPE after ignore. */
-    if (pipe(p) != 0) {
-        return NULL;
-    }
-    close(p[0]);
-    signal(SIGPIPE, SIG_IGN);
-    f = fdopen(p[1], "w");
-    if (f == NULL) {
-        close(p[1]);
-        return NULL;
-    }
-    return f;
-}
-
 TEST(output_json_string_null_out_fails)
 {
     ASSERT_EQ_INT(output_json_string(NULL, "x"), -1);
@@ -230,37 +203,6 @@ TEST(output_json_escapes_controls)
     ASSERT_STR_CONTAINS(got, "\\\\");
     free(got);
     (void)fclose(f);
-}
-
-TEST(output_write_fail_returns_error)
-{
-    FILE *f = open_write_fail();
-    Entry e;
-    ASSERT_TRUE(f != NULL);
-    memset(&e, 0, sizeof(e));
-    e.id = 1;
-    e.body = (char *)"x";
-    e.source = (char *)"unknown";
-    e.created_at = (char *)"t";
-    e.updated_at = (char *)"t";
-    /* Force a large write so a closed-pipe or /dev/full fails. */
-    {
-        int i;
-        for (i = 0; i < 10000; i++) {
-            if (output_json_string(f, "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx") != 0) {
-                break;
-            }
-        }
-        ASSERT_TRUE(i < 10000);
-    }
-    (void)output_entry_json(f, &e, "t");
-    (void)output_action_envelope(f, "created", &e, "t");
-    (void)output_get_envelope(f, &e, NULL, 0, "t");
-    (void)output_list_envelope(f, 0, 20, 1, 1, &e, NULL, 0, "t");
-    (void)output_id_human(f, 1);
-    (void)output_body_human(f, "body");
-    (void)output_entry_human_line(f, &e, NULL, 0, "t");
-    fclose(f);
 }
 
 TEST(output_null_entry_fails)
@@ -957,7 +899,6 @@ void register_coverage_edges_tests(void)
     RUN_TEST(output_json_string_null_out_fails);
     RUN_TEST(output_json_string_null_s_uses_empty);
     RUN_TEST(output_json_escapes_controls);
-    RUN_TEST(output_write_fail_returns_error);
     RUN_TEST(output_null_entry_fails);
     RUN_TEST(output_list_empty_ok);
     RUN_TEST(output_preview_multibyte_and_truncate);

@@ -365,6 +365,7 @@ add_executable(remember_store_tests
     tests/test_unicode.c
     tests/test_search_terms.c
     tests/test_output.c
+    tests/failing_stream.c
     third_party/sha256/sha256.c
     third_party/utf8proc/utf8proc.c
 )

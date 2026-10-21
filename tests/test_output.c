@@ -1,3 +1,4 @@
+#include "failing_stream.h"
 #include "output.h"
 #include "register.h"
 #include "store.h"
@@ -105,6 +106,48 @@ static StoreConflict given_conflict(void)
         .reason = STORE_CONFLICT_KEY_CLASH,
     };
     return c;
+}
+
+/*
+ * Drive writer once per byte limit (B4). Unlimited, it succeeds and writes len
+ * bytes. Every limit below len makes some write fail: the writer must return
+ * -1 and stop there, so no later write is attempted.
+ */
+static void assert_reports_every_failed_write(int (*writer)(FILE *))
+{
+    FailingStream s;
+    FILE *f = failing_stream_open(&s, FAILING_STREAM_CAP - 1U);
+    size_t len = 0;
+    size_t limit = 0;
+
+    ASSERT_TRUE(f != NULL);
+    if (f == NULL) {
+        return;
+    }
+    ASSERT_EQ_INT(writer(f), 0);
+    (void)fclose(f);
+    len = s.len;
+    ASSERT_TRUE(len > 0);
+    for (limit = 0; limit < len; limit++) {
+        int rc = 0;
+        size_t late = 0;
+
+        f = failing_stream_open(&s, limit);
+        ASSERT_TRUE(f != NULL);
+        if (f == NULL) {
+            return;
+        }
+        rc = writer(f);
+        /* Read before fclose: stdio may retry a failed byte when it closes. */
+        late = s.late_writes;
+        (void)fclose(f);
+        ASSERT_EQ_INT(rc, -1);
+        ASSERT_EQ_INT(late, 0);
+        if (rc != -1 || late != 0) {
+            (void)fprintf(stderr, "  at byte limit %zu of %zu\n", limit, len);
+            return;
+        }
+    }
 }
 
 /* ---- entry JSON ----------------------------------------------------------- */
@@ -558,6 +601,327 @@ TEST(output_related_human_omits_an_empty_preview)
     assert_written(f, "Related:\nrelated 3\n");
 }
 
+/* ---- failed writes (B4) --------------------------------------------------- */
+
+static Entry given_full_entry(void)
+{
+    static char *tags[] = {(char *)"a", (char *)"b"};
+    Entry e = given_entry();
+
+    e.tags = tags;
+    e.ntags = 2;
+    return e;
+}
+
+/* Two links of the subject: one keyed and deleted, one keyless and live. */
+static void given_two_links(StoreNeighbor links[2])
+{
+    links[0] = given_link(SUBJECT_ID, SUBJECT_ID, STORE_EDGE_CITES);
+    links[0].neighbor_key = (char *)"k:3";
+    links[0].neighbor_deleted_at = (char *)"d";
+    links[1] = given_link(SUBJECT_ID, NEIGHBOR_ID, STORE_EDGE_RELATED);
+}
+
+static int write_json_string(FILE *f)
+{
+    return output_json_string(f, "q\"b\\\b\f\n\r\t\x01z");
+}
+
+static int write_entry_json(FILE *f)
+{
+    Entry e = given_full_entry();
+
+    return output_entry_json(f, &e, NOW);
+}
+
+static int write_action_envelope(FILE *f)
+{
+    Entry e = given_full_entry();
+
+    return output_action_envelope(f, "created", &e, NOW);
+}
+
+static int write_deleted_list(FILE *f)
+{
+    Entry entries[] = {given_full_entry(), given_full_entry()};
+
+    return output_deleted_list(f, entries, 2, NOW);
+}
+
+static int write_get_envelope(FILE *f)
+{
+    Entry e = given_full_entry();
+    StoreNeighbor links[2];
+
+    given_two_links(links);
+    return output_get_envelope(f, &e, links, 2, NOW);
+}
+
+static int write_list_envelope(FILE *f)
+{
+    Entry entries[] = {given_full_entry(), given_full_entry()};
+    StoreNeighbor links[2];
+
+    given_two_links(links);
+    return output_list_envelope(f, 0, 2, 2, 2, entries, links, 2, NOW);
+}
+
+static int write_id_human(FILE *f)
+{
+    return output_id_human(f, SUBJECT_ID);
+}
+
+static int write_text_human(FILE *f)
+{
+    return output_text_human(f,
+                             "a\x01"
+                             "b",
+                             false);
+}
+
+static int write_body_human(FILE *f)
+{
+    return output_body_human(f, "body");
+}
+
+static int write_tags_envelope(FILE *f)
+{
+    TagCount tags[] = {{.name = (char *)"a", .count = 1}, {.name = (char *)"b", .count = 2}};
+
+    return output_tags_envelope(f, tags, 2);
+}
+
+static int write_tags_human(FILE *f)
+{
+    TagCount tags[] = {{.name = (char *)"a", .count = 1}, {.name = (char *)"b", .count = 2}};
+
+    return output_tags_human(f, tags, 2);
+}
+
+static int write_links_write_envelope(FILE *f)
+{
+    StoreNeighbor links[2];
+
+    given_two_links(links);
+    return output_links_write_envelope(f, "created", links, 2, NOW);
+}
+
+static int write_related_envelope_with_key(FILE *f)
+{
+    StoreNeighbor links[2];
+
+    given_two_links(links);
+    return output_related_envelope(f, SUBJECT_ID, "k:7", links, 2, NOW);
+}
+
+static int write_related_envelope_without_key(FILE *f)
+{
+    return output_related_envelope(f, SUBJECT_ID, NULL, NULL, 0, NOW);
+}
+
+static int write_related_human(FILE *f)
+{
+    StoreNeighbor links[2];
+
+    given_two_links(links);
+    return output_related_human(f, links, 2, NOW);
+}
+
+static int write_import_envelope(FILE *f)
+{
+    StoreImportCounts counts = {.inserted = 1, .updated = 2, .unchanged = 3, .conflicts = 4};
+
+    return output_import_envelope(f, &counts);
+}
+
+static int write_device_human(FILE *f)
+{
+    return output_device_human(f, "dev");
+}
+
+static int write_device_envelope(FILE *f)
+{
+    return output_device_envelope(f, "dev");
+}
+
+static int write_device_new_envelope_with_previous(FILE *f)
+{
+    return output_device_new_envelope(f, "dev", "old");
+}
+
+static int write_device_new_envelope_without_previous(FILE *f)
+{
+    return output_device_new_envelope(f, "dev", NULL);
+}
+
+static int write_conflicts_envelope(FILE *f)
+{
+    StoreConflict rows[] = {given_conflict(), given_conflict()};
+
+    return output_conflicts_envelope(f, rows, 2);
+}
+
+static int write_accepted_envelope(FILE *f)
+{
+    Entry entries[] = {given_full_entry(), given_full_entry()};
+
+    return output_accepted_envelope(f, entries, 2, NOW);
+}
+
+static int write_rebuilt_json(FILE *f)
+{
+    return output_rebuilt(f, true, 2);
+}
+
+static int write_rebuilt_human(FILE *f)
+{
+    return output_rebuilt(f, false, 2);
+}
+
+TEST(output_json_string_reports_every_failed_write)
+{
+    assert_reports_every_failed_write(write_json_string);
+}
+
+TEST(output_entry_json_reports_every_failed_write)
+{
+    assert_reports_every_failed_write(write_entry_json);
+}
+
+TEST(output_action_envelope_reports_every_failed_write)
+{
+    assert_reports_every_failed_write(write_action_envelope);
+}
+
+TEST(output_deleted_list_reports_every_failed_write)
+{
+    assert_reports_every_failed_write(write_deleted_list);
+}
+
+TEST(output_get_envelope_reports_every_failed_write)
+{
+    assert_reports_every_failed_write(write_get_envelope);
+}
+
+TEST(output_list_envelope_reports_every_failed_write)
+{
+    assert_reports_every_failed_write(write_list_envelope);
+}
+
+TEST(output_id_human_reports_every_failed_write)
+{
+    assert_reports_every_failed_write(write_id_human);
+}
+
+TEST(output_text_human_reports_every_failed_write)
+{
+    assert_reports_every_failed_write(write_text_human);
+}
+
+TEST(output_body_human_reports_every_failed_write)
+{
+    assert_reports_every_failed_write(write_body_human);
+}
+
+TEST(output_tags_envelope_reports_every_failed_write)
+{
+    assert_reports_every_failed_write(write_tags_envelope);
+}
+
+TEST(output_tags_human_reports_every_failed_write)
+{
+    assert_reports_every_failed_write(write_tags_human);
+}
+
+TEST(output_links_write_envelope_reports_every_failed_write)
+{
+    assert_reports_every_failed_write(write_links_write_envelope);
+}
+
+TEST(output_related_envelope_with_key_reports_every_failed_write)
+{
+    assert_reports_every_failed_write(write_related_envelope_with_key);
+}
+
+TEST(output_related_envelope_without_key_reports_every_failed_write)
+{
+    assert_reports_every_failed_write(write_related_envelope_without_key);
+}
+
+TEST(output_related_human_reports_every_failed_write)
+{
+    assert_reports_every_failed_write(write_related_human);
+}
+
+TEST(output_import_envelope_reports_every_failed_write)
+{
+    assert_reports_every_failed_write(write_import_envelope);
+}
+
+TEST(output_device_human_reports_every_failed_write)
+{
+    assert_reports_every_failed_write(write_device_human);
+}
+
+TEST(output_device_envelope_reports_every_failed_write)
+{
+    assert_reports_every_failed_write(write_device_envelope);
+}
+
+TEST(output_device_new_envelope_with_previous_reports_every_failed_write)
+{
+    assert_reports_every_failed_write(write_device_new_envelope_with_previous);
+}
+
+TEST(output_device_new_envelope_without_previous_reports_every_failed_write)
+{
+    assert_reports_every_failed_write(write_device_new_envelope_without_previous);
+}
+
+TEST(output_conflicts_envelope_reports_every_failed_write)
+{
+    assert_reports_every_failed_write(write_conflicts_envelope);
+}
+
+TEST(output_accepted_envelope_reports_every_failed_write)
+{
+    assert_reports_every_failed_write(write_accepted_envelope);
+}
+
+TEST(output_rebuilt_json_reports_every_failed_write)
+{
+    assert_reports_every_failed_write(write_rebuilt_json);
+}
+
+TEST(output_rebuilt_human_reports_every_failed_write)
+{
+    assert_reports_every_failed_write(write_rebuilt_human);
+}
+
+static int write_entry_human_line(FILE *f)
+{
+    char *tags[] = {(char *)"a", (char *)"b"};
+    Entry e = given_entry();
+    StoreNeighbor links[] = {
+        given_link(SUBJECT_ID, SUBJECT_ID, STORE_EDGE_RELATED),
+        given_link(SUBJECT_ID, SUBJECT_ID, STORE_EDGE_RELATED),
+        given_link(SUBJECT_ID, SUBJECT_ID, STORE_EDGE_RELATED),
+        given_link(SUBJECT_ID, SUBJECT_ID, STORE_EDGE_RELATED),
+        given_link(SUBJECT_ID, SUBJECT_ID, STORE_EDGE_RELATED),
+        given_link(SUBJECT_ID, SUBJECT_ID, STORE_EDGE_RELATED),
+    };
+
+    links[0].neighbor_deleted_at = (char *)"d";
+    e.tags = tags;
+    e.ntags = 2;
+    return output_entry_human_line(f, &e, links, sizeof links / sizeof links[0], NOW);
+}
+
+TEST(output_entry_human_line_reports_every_failed_write)
+{
+    assert_reports_every_failed_write(write_entry_human_line);
+}
+
 void register_output_tests(void)
 {
     RUN_TEST(output_entry_json_rejects_missing_arguments);
@@ -598,4 +962,29 @@ void register_output_tests(void)
     RUN_TEST(output_preview_cuts_by_bytes_before_the_scalar_cap);
     RUN_TEST(output_related_human_rejects_missing_arguments);
     RUN_TEST(output_related_human_omits_an_empty_preview);
+    RUN_TEST(output_json_string_reports_every_failed_write);
+    RUN_TEST(output_entry_json_reports_every_failed_write);
+    RUN_TEST(output_action_envelope_reports_every_failed_write);
+    RUN_TEST(output_deleted_list_reports_every_failed_write);
+    RUN_TEST(output_get_envelope_reports_every_failed_write);
+    RUN_TEST(output_list_envelope_reports_every_failed_write);
+    RUN_TEST(output_id_human_reports_every_failed_write);
+    RUN_TEST(output_text_human_reports_every_failed_write);
+    RUN_TEST(output_body_human_reports_every_failed_write);
+    RUN_TEST(output_tags_envelope_reports_every_failed_write);
+    RUN_TEST(output_tags_human_reports_every_failed_write);
+    RUN_TEST(output_links_write_envelope_reports_every_failed_write);
+    RUN_TEST(output_related_envelope_with_key_reports_every_failed_write);
+    RUN_TEST(output_related_envelope_without_key_reports_every_failed_write);
+    RUN_TEST(output_related_human_reports_every_failed_write);
+    RUN_TEST(output_import_envelope_reports_every_failed_write);
+    RUN_TEST(output_device_human_reports_every_failed_write);
+    RUN_TEST(output_device_envelope_reports_every_failed_write);
+    RUN_TEST(output_device_new_envelope_with_previous_reports_every_failed_write);
+    RUN_TEST(output_device_new_envelope_without_previous_reports_every_failed_write);
+    RUN_TEST(output_conflicts_envelope_reports_every_failed_write);
+    RUN_TEST(output_accepted_envelope_reports_every_failed_write);
+    RUN_TEST(output_rebuilt_json_reports_every_failed_write);
+    RUN_TEST(output_rebuilt_human_reports_every_failed_write);
+    RUN_TEST(output_entry_human_line_reports_every_failed_write);
 }
