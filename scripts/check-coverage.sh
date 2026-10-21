@@ -5,6 +5,8 @@
 # the green black-box gate + store unit suite, then requires:
 #   1. 100% function coverage on src/
 #   2. 100% *effective* line coverage on src/
+#   3. every branch side taken in the pure TUs (search_terms, unicode,
+#      normalize, output), with no exclusion of any kind (plan 18b)
 #
 # "Effective" line coverage excludes pure defensive exit lines that need
 # per-check I/O/OOM injection at every sequential site (exponential). Those
@@ -294,7 +296,7 @@ PY
 BRANCH_JSON="${BUILD_DIR}/coverage-branches.json"
 "$LLVM_COV" export "${COV_ARGS[@]}" -format=text -skip-functions >"$BRANCH_JSON"
 
-echo "== branch sides (report only) =="
+echo "== branch sides (pure TUs, every side) =="
 python3 - "$ROOT" "$BRANCH_JSON" <<'PY'
 import json, sys
 from pathlib import Path
@@ -302,6 +304,7 @@ from pathlib import Path
 root = sys.argv[1].rstrip("/") + "/"
 GATED = ("src/search_terms.c", "src/unicode.c", "src/normalize.c", "src/output.c")
 
+bad = 0
 files = {f["filename"]: f for f in json.loads(Path(sys.argv[2]).read_text())["data"][0]["files"]}
 for rel in GATED:
     f = files.get(root + rel)
@@ -318,6 +321,11 @@ for rel in GATED:
     print(f"{rel}: {2 * len(f['branches'])} branch sides, {len(missed)} missed")
     for m in missed:
         print(f"  {m}")
+    bad += len(missed)
+
+if bad:
+    print(f"error: {bad} branch side(s) not taken in the pure TUs (listed above)", file=sys.stderr)
+    sys.exit(1)
 PY
 
-echo "== coverage: functions 100% + effective lines 100% OK =="
+echo "== coverage: functions 100% + effective lines 100% + pure-TU branches 100% OK =="

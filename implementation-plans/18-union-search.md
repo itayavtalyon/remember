@@ -250,6 +250,7 @@ cmake --build build --target leaks-macos          # macOS only
       exception + blank search now succeeds).
 - [ ] Engineering notes: `store_search` and CLI search bullets rewritten.
 - [ ] Gate: ctest, lint, IWYU, coverage 100/100, `ci-linux.sh` all green.
+- [ ] Branch gate (plan 18b): `check-coverage.sh` shows 0 missed branch sides in `search_terms.c`, `unicode.c`, `normalize.c`, `output.c`, on macOS and in GitHub Actions `linux-coverage`.
 - [ ] Second review done; no open **blocking** item.
 - [ ] `implementation-plans/INDEX.md` row marked ✅.
 

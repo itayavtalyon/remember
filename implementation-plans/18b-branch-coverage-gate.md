@@ -154,13 +154,13 @@ opinion. On pause, update `status:remember`. Do not open a pull request.
 
 ## Definition of Done
 
-- [ ] `check-coverage.sh` fails on any missed branch side in the four TUs, proved by the two deleted-test mutations.
-- [ ] All four TUs show 100% branch sides in `llvm-cov report`.
-- [ ] No marker, no skip-list, and no new line-regex exclusion was added.
-- [ ] Every removed side is named in the notes with the reason it could not run.
-- [ ] Every fault hook is test-only (`REMEMBER_TEST_HOOKS`) and absent from a Release build.
-- [ ] Engineering notes, `QUALITY.md`, and plan 18's Definition of Done mention the branch gate.
-- [ ] Gate green, including GitHub Actions `linux-coverage`.
+- [x] `check-coverage.sh` fails on any missed branch side in the four TUs, proved by the two deleted-test mutations. (Stage 6 table: exit 1 naming `search_terms.c:358:13 true` and `output.c:832:9 true`.)
+- [x] All four TUs show 100% branch sides in `llvm-cov report`. (`build-cov/coverage-report.txt`: normalize 172/0, output 566/0, search_terms 176/0, unicode 80/0, each 100.00%.)
+- [x] No marker, no skip-list, and no new line-regex exclusion was added. (`git diff 59dc617 -- scripts/check-coverage.sh` changes 0 lines of the `DEFENSIVE` regex; no `coverage: ignore` / `LCOV_EXCL` in `src/`.)
+- [x] Every removed side is named in the notes with the reason it could not run. (Stage 2 table.)
+- [x] Every fault hook is test-only (`REMEMBER_TEST_HOOKS`) and absent from a Release build. (Stage 5: `nm build-release/remember` finds 0 hook symbols.)
+- [x] Engineering notes, `QUALITY.md`, and plan 18's Definition of Done mention the branch gate. (Stage 6.)
+- [ ] Gate green, including GitHub Actions `linux-coverage`. (Local gate green on macOS and in `ci-linux.sh`; the enforced `check-coverage.sh` passes in ubuntu 24.04 with LLVM 18, the job's image. The GitHub Actions run itself needs a push; not done.)
 - [ ] Second review done, no open blocking item.
 - [ ] INDEX row 18b marked ✅.
 
@@ -409,5 +409,28 @@ Linux IWYU asked to drop `<stddef.h>` from `test_alloc.h` and `test_alloc.c` (`s
 
 Gate on this tree (2026-10-21): macOS ctest 5/5 (VFS on), `leaks-macos` PASS, `lint-all.sh` LINT OK, `check-coverage.sh` exit 0 with all four TUs at 0 missed. `ci-linux.sh` exit 0 (5/5, iwyu PASS, scan-build PASS). Linux coverage (ubuntu 24.04, LLVM 18): all four TUs 0 missed, and the build printed no warnings.
 
+
+### 2026-10-21 — stage 6 (enforce and document)
+
+No grill. `scripts/check-coverage.sh` now exits 1 when any branch side in the four pure TUs is not taken, after printing every missed side; the header comment lists it as check 3, and the closing line reads `functions 100% + effective lines 100% + pure-TU branches 100% OK`. The line gate and its regex are unchanged.
+
+Gate mutations (each a full `./scripts/check-coverage.sh` run, then the file restored and `git diff --quiet` checked):
+
+| Mutation | Result |
+|---|---|
+| Delete `search_tag_order_puts_exact_first_from_either_side` (the `TEST` and its `RUN_TEST`) | exit 1; `src/search_terms.c: 176 branch sides, 1 missed`, `src/search_terms.c:358:13 true`, the `if (lhs->exact)` whose true side is the `return -1` on line 359 (the stage 2 bug) |
+| Delete `output_device_human_reports_every_failed_write` (and its now-unused `write_device_human` wrapper) | exit 1; `src/output.c:832:9 true`, the `fprintf` check in `output_device_human` |
+| Add `if (end > 100000U) { return SEARCH_ERR_INTERNAL; }` to `search_q`, which every test takes false | exit 1; `src/search_terms.c:194:9 true` (178 sides) |
+| The same through a TU-local macro `#define HUGE_QUERY(n) ((n) > 100000U && (n) != 7U)` | exit 1; three sides at the `#define`, each tagged `(macro)` (180 sides) |
+
+First attempts of the two deletions failed to build instead (exit 2): commenting out only the `RUN_TEST` leaves a static test (or wrapper) unused, which is a `-Werror` error. A deletion has to remove the definition too.
+
+The plan's must-pass row said the gate names the `return -1` line; llvm-cov reports a branch at its condition, so the gate names line 358 (`if (lhs->exact)`), true side, which is the `return -1` on line 359.
+
+Docs: `docs/QUALITY.md` (tier table row; a "Branch coverage of the pure TUs" section: no excuses, removal, fault hooks, failing stream, comparators, and why; the raw line figure is now the measured 84.95%, it said ~87%), `docs/engineering-notes.md` (the coverage-gate bullet), and plan 18's Definition of Done (a branch-gate box). `.github/workflows/ci.yml` is unchanged: the `linux-coverage` job already runs `check-coverage.sh`, Linux LLVM 18 produces the same branch records (stage 1), and the job's name may be a required check, so it was not renamed.
+
+Gate on this tree (2026-10-21): no C or test file changed since `ad515ea`, whose gate was green on both platforms (stage 5 notes). For the script and docs: `shellcheck scripts/check-coverage.sh` clean, `lint-all.sh` LINT OK, enforced `check-coverage.sh` exit 0 on macOS and in ubuntu 24.04 (LLVM 18), all four TUs at 0 missed.
+
+Open: the GitHub Actions `linux-coverage` run (needs a push), the stage second reviews (Itay asked to run the stages back to back; `.claude/REVIEW_REQUEST` now covers stages 1-6), and INDEX row 18b (ticked after the review).
 
 ## Review Notes

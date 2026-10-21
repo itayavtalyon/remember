@@ -12,6 +12,7 @@ How we keep C code safe: compile hard, analyze statically, run sanitizers, detec
 | **LSan** (`detect_leaks=1`) | off (unreliable) | **on** | off |
 | Black-box `step_gate` (from `tests/gate-suites`) | yes | yes | yes |
 | Line coverage `src/*.c` (functions 100% + effective lines 100%) | `check-coverage.sh` | GHA job | optional |
+| Branch coverage of the pure TUs (every side, no exclusion) | `check-coverage.sh` | GHA job | optional |
 | clang-format / clang-tidy / cppcheck | `scripts/lint-all.sh` | required | required |
 | misc-include-cleaner (IWYU-style) | via clang-tidy | via clang-tidy | via clang-tidy |
 | include-what-you-use | if installed / `REMEMBER_IWYU=1` | if package present | optional |
@@ -100,11 +101,25 @@ PATH="$(brew --prefix llvm)/bin:$PATH" ./scripts/check-coverage.sh
 | What is measured | `src/*.c` only (not `third_party/`, not `tests/`) |
 | What runs | Green gate + `remember_store_tests` (+ fault-injection hooks under `REMEMBER_TEST_HOOKS`) |
 | Pass bar | **100% function coverage** and **100% effective line coverage** |
-| Raw line % | ~87% today — remaining zeros are pure defensive exits (`return -1`, `goto fail`, error `err_msg`, etc.) excluded from the *effective* denominator |
+| Raw line % | 84.95% after plan 18b (2026-10-21, macOS) — remaining zeros are pure defensive exits (`return -1`, `goto fail`, error `err_msg`, etc.) excluded from the *effective* denominator |
 | What it protects | Untested production *logic* (every function entered; non-defensive lines hit) |
 | What `gate-suites` protects | Dropping whole green *suites* from CI |
 
 **Effective lines:** pure error-return / teardown / parser-kind exits need exponential fail-at-each-check injection to hit every sequential `if (write) return -1`. The gate still fails on any uncovered *logic* line. See the `DEFENSIVE` regex in `scripts/check-coverage.sh`.
+
+### Branch coverage of the pure TUs (plan 18b)
+
+`check-coverage.sh` also fails when any branch side in `src/search_terms.c`, `src/unicode.c`, `src/normalize.c`, or `src/output.c` is not taken. It reads `llvm-cov export -format=text` (`build-cov/coverage-branches.json`) and prints each missed side as `file:line:col true|false`; a branch inside a macro is counted and tagged `(macro)` at its `#define` (`decision:plan18b-macro-branches-counted`).
+
+| Rule | Detail |
+|------|--------|
+| No excuses | No inline marker, no skip-list, no regex (`decision:plan18b-no-branch-excuses`). The line regex above does not apply to these four files' branches. |
+| A side that cannot run | Remove or restructure it, and argue the removal in the plan notes. |
+| A side reached only by failure | Fault injection under `REMEMBER_TEST_HOOKS`: `test_alloc_fail_after(n)` (`src/test_alloc.c`, the allocation hook the pure TUs share) and `unicode_test_fail_after(n)` (the Nth decode / grapheme call fails). Release builds compile neither. |
+| A stream write | `tests/failing_stream.c` (`funopen` / `fopencookie`): writes fail past a byte limit. Drive a writer at every limit; it must return -1 and make no later write. |
+| Comparators and callbacks | Test the function directly in each argument order; the caller (`qsort`) need not reach every branch. |
+
+Why: in plan 18 stage 2, `search_tag_order`'s exact-first `return -1` never ran, and the line regex (which excludes `return -1;`) still read 100%.
 
 ## Portability (Linux glibc + strict C11)
 
