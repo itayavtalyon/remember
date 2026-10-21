@@ -24,7 +24,8 @@ enum {
     EURO_COUNT = 70, /* more three-byte scalars than the preview buffer holds */
     EURO_KEPT = 62,  /* how many of them fit before the cut */
     CONFLICT_FIELDS = 5,
-    READ_CAP = 4096
+    READ_CAP = 4096,
+    STREAM_LIMIT = 5 /* "ab" then "cde" would fill it exactly */
 };
 
 static const char NOW[] = "2026-10-20T00:00:00.000Z";
@@ -778,6 +779,36 @@ static int write_rebuilt_human(FILE *f)
     return output_rebuilt(f, false, 2);
 }
 
+/* The driver above leans on two helper rules: a write that reaches the limit
+   exactly still succeeds, and after one failure even a write that would fit
+   fails and is counted. */
+TEST(failing_stream_fails_past_the_limit_and_stays_failed)
+{
+    FailingStream s;
+    FILE *f = failing_stream_open(&s, STREAM_LIMIT);
+
+    ASSERT_TRUE(f != NULL);
+    if (f == NULL) {
+        return;
+    }
+    ASSERT_TRUE(fputs("ab", f) >= 0);
+    ASSERT_EQ_INT(fputs("cdef", f), EOF);
+    ASSERT_EQ_INT(s.late_writes, 0);
+    ASSERT_EQ_INT(fputs("cde", f), EOF);
+    ASSERT_EQ_INT(s.late_writes, 1);
+    ASSERT_STREQ(s.buf, "ab");
+    (void)fclose(f);
+
+    f = failing_stream_open(&s, 2);
+    ASSERT_TRUE(f != NULL);
+    if (f == NULL) {
+        return;
+    }
+    ASSERT_TRUE(fputs("ab", f) >= 0);
+    ASSERT_STREQ(s.buf, "ab");
+    (void)fclose(f);
+}
+
 TEST(output_json_string_reports_every_failed_write)
 {
     assert_reports_every_failed_write(write_json_string);
@@ -962,6 +993,7 @@ void register_output_tests(void)
     RUN_TEST(output_preview_cuts_by_bytes_before_the_scalar_cap);
     RUN_TEST(output_related_human_rejects_missing_arguments);
     RUN_TEST(output_related_human_omits_an_empty_preview);
+    RUN_TEST(failing_stream_fails_past_the_limit_and_stays_failed);
     RUN_TEST(output_json_string_reports_every_failed_write);
     RUN_TEST(output_entry_json_reports_every_failed_write);
     RUN_TEST(output_action_envelope_reports_every_failed_write);

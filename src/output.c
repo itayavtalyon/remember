@@ -391,7 +391,6 @@ enum { LIST_PREVIEW_CP = 80U, STUB_PREVIEW_CP = 40U, PREVIEW_BUF = 192U };
 
 static void fill_preview(char dst[PREVIEW_BUF], const char *body, size_t max_cp);
 
-/* First line, max 80 codepoints, ellipsis if truncated. Control bytes → '?'. */
 /* fputs that writes nothing for NULL. */
 static int write_text_or_nothing(FILE *out, const char *s)
 {
@@ -401,6 +400,7 @@ static int write_text_or_nothing(FILE *out, const char *s)
     return fputs(s, out) < 0 ? -1 : 0;
 }
 
+/* First line, max 80 codepoints, ellipsis if truncated. Control bytes → '?'. */
 static int write_preview(FILE *out, const char *body)
 {
     char buf[PREVIEW_BUF];
@@ -453,7 +453,8 @@ int output_tags_human(FILE *out, const TagCount *tags, size_t count)
         return -1;
     }
     for (i = 0; i < count; i++) {
-        /* Names are normalize_token output: no ASCII controls, raw print is safe. */
+        /* Printed raw. Local writes pass normalize_token (no ASCII controls), but
+           import does not re-check a peer's tags (open security follow-up). */
         if (fprintf(out, "%s\t%lld\n", tags[i].name != NULL ? tags[i].name : empty_str(),
                     tags[i].count) < 0) {
             return -1;
@@ -481,7 +482,8 @@ int output_entry_human_line(FILE *out, const Entry *e, const StoreNeighbor *link
     if (fprintf(out, "%lld | ", e->id) < 0) {
         return -1;
     }
-    /* Keys/tags are normalize_token output: no ASCII controls. Raw fputs is safe. */
+    /* Printed raw. Local writes pass normalize_token (no ASCII controls), but
+       import does not re-check a peer's keys/tags (open security follow-up). */
     if (write_text_or_nothing(out, e->key) != 0 || fputs(" | ", out) < 0) {
         return -1;
     }

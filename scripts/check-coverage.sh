@@ -318,7 +318,12 @@ for rel in GATED:
         for side, count in (("true", b[4]), ("false", b[5]))
         if count == 0
     ]
-    print(f"{rel}: {2 * len(f['branches'])} branch sides, {len(missed)} missed")
+    # A branch in a macro #defined in a header counts in the TU's report total
+    # but sits in the header's record (decision:plan18b-branch-list-equals-report).
+    sides, want = 2 * len(f["branches"]), f["summary"]["branches"]["count"]
+    if sides != want:
+        sys.exit(f"error: {rel}: {sides} listed branch sides, llvm-cov report counts {want} (a branch in a header macro?)")
+    print(f"{rel}: {sides} branch sides, {len(missed)} missed")
     for m in missed:
         print(f"  {m}")
     bad += len(missed)

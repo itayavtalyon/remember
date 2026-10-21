@@ -118,6 +118,8 @@ PATH="$(brew --prefix llvm)/bin:$PATH" ./scripts/check-coverage.sh
 | A side reached only by failure | Fault injection under `REMEMBER_TEST_HOOKS`: `test_alloc_fail_after(n)` (`src/test_alloc.c`, the allocation hook the pure TUs share) and `unicode_test_fail_after(n)` (the Nth decode / grapheme call fails). Release builds compile neither. |
 | A stream write | `tests/failing_stream.c` (`funopen` / `fopencookie`): writes fail past a byte limit. Drive a writer at every limit; it must return -1 and make no later write. |
 | Comparators and callbacks | Test the function directly in each argument order; the caller (`qsort`) need not reach every branch. |
+| No `assert` | An `assert` is a branch whose failing side never runs, so these four files have none; a removed guard is not replaced by one (`decision:plan18b-no-assert-pure-tus`). |
+| List equals report | Per file, the listed sides must equal `llvm-cov report`'s count, or the script fails: a branch in a macro `#define`d in a header counts in the report but sits in the header's record (`decision:plan18b-branch-list-equals-report`). |
 
 Why: in plan 18 stage 2, `search_tag_order`'s exact-first `return -1` never ran, and the line regex (which excludes `return -1;`) still read 100%.
 

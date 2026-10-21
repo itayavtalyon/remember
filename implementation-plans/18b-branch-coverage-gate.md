@@ -67,6 +67,9 @@ Examples of rule sides that no test takes today:
 | B2 | No excuses. No inline marker and no skip-list. A side that cannot be reached is removed or restructured, and the notes argue each removal. |
 | B3 | A side reached only by failure gets fault injection under `REMEMBER_TEST_HOOKS`, in the `store_test_fail_alloc_after(n)` style. |
 | B4 | Stream write failures are covered with a failing-stream test helper. They are not removed and not marked. |
+| B5 | A branch inside a macro is counted, and the listed sides of each TU must equal its `llvm-cov report` count, so a branch in a header macro cannot drop out of the list (`decision:plan18b-macro-branches-counted`, `decision:plan18b-branch-list-equals-report`, stage 1). |
+| B6 | No `assert()` in the four TUs: its failing side can never run, so the branch gate wins over `style:fail-fast` there. A removed guard is not replaced by an assert (`decision:plan18b-no-assert-pure-tus`, stage 1 second review). |
+| B7 | The pure TUs share one allocation fault hook, `test_alloc_fail_after(n)` in the hooks-only `src/test_alloc.c`; the store keeps its own (`decision:plan18b-shared-alloc-hook`, stage 5). |
 
 ## Scope
 
@@ -114,7 +117,10 @@ TDD. One red test, then the smallest change. Gate green after each stage.
    `branches` arrays) and print each missed side as `file:line:col true|false`.
    Count every record in the TU's `branches` array, including a branch inside
    a macro, tagged `(macro)` (amended 2026-10-20 by
-   `decision:plan18b-macro-branches-counted`; see the stage 1 notes). The script still exits on the line gate alone. Record the
+   `decision:plan18b-macro-branches-counted`; see the stage 1 notes). Exit 1
+   when a TU's listed sides differ from its `llvm-cov report` count
+   (`decision:plan18b-branch-list-equals-report`, second review). Otherwise the
+   script still exits on the line gate alone. Record the
    list in the notes, and check that it matches the baseline counts. Probe that
    the Linux LLVM in `ci-linux.sh` and in GitHub Actions emits the same records.
 2. **Remove what cannot run.** Go through each missed side. A NULL guard in a
@@ -160,9 +166,9 @@ opinion. On pause, update `status:remember`. Do not open a pull request.
 - [x] Every removed side is named in the notes with the reason it could not run. (Stage 2 table.)
 - [x] Every fault hook is test-only (`REMEMBER_TEST_HOOKS`) and absent from a Release build. (Stage 5: `nm build-release/remember` finds 0 hook symbols.)
 - [x] Engineering notes, `QUALITY.md`, and plan 18's Definition of Done mention the branch gate. (Stage 6.)
-- [ ] Gate green, including GitHub Actions `linux-coverage`. (Local gate green on macOS and in `ci-linux.sh`; the enforced `check-coverage.sh` passes in ubuntu 24.04 with LLVM 18, the job's image. The GitHub Actions run itself needs a push; not done.)
-- [ ] Second review done, no open blocking item.
-- [ ] INDEX row 18b marked ✅.
+- [x] Gate green, including GitHub Actions `linux-coverage`. (Final review: full gate `GATE-ALL-GREEN` on the fix tree; the `linux-coverage` job replayed locally in Docker per Itay, on a fresh checkout of the fix tree: `ubuntu:24.04`, the job's `apt-get install` list plus `python3` (preinstalled on the runner), `./scripts/check-coverage.sh` → exit 0, clang/LLVM 18.1.3, all four TUs 0 missed. The hosted run itself happens on the plan 18 PR.)
+- [x] Second review done, no open blocking item. (Review Notes: stage 1, FINAL.)
+- [x] INDEX row 18b marked ✅.
 
 ## Second review handover
 
@@ -434,3 +440,119 @@ Gate on this tree (2026-10-21): no C or test file changed since `ad515ea`, whose
 Open: the GitHub Actions `linux-coverage` run (needs a push), the stage second reviews (Itay asked to run the stages back to back; `.claude/REVIEW_REQUEST` now covers stages 1-6), and INDEX row 18b (ticked after the review).
 
 ## Review Notes
+
+### 2026-10-20 — second-opinion deep review (stage 1)
+
+Ref `743874e`. Baseline gate on a clean worktree of the ref: see the gate line at the end. Fixes in a clean worktree, full gate there before commit.
+
+**Verdict: stage 1 is done. No open blocking item.** Two grills, both answered with the recommended option.
+
+Findings:
+
+- **important (fixed): a branch in a header macro dropped out of the list.** `decision:plan18b-macro-branches-counted` rested on "the gate equals `llvm-cov report`, so no branch can hide in a macro". That is true for a macro `#define`d in the TU, not for one in a header. Probe (Homebrew LLVM 22.1.8, scratch `p.c` that includes `h.h` with `#define HPOS(x) ((x) > 0 ? 1 : 0)`, plus a local `POS` and an `assert`): `llvm-cov report` counts 6 branch sides for `p.c`; `p.c`'s `files[].branches` holds 2 records (4 sides); the `HPOS` record sits in `h.h`'s entry (`[1,18,1,25,1,0,2,0,4]`). Grilled; Itay chose `decision:plan18b-branch-list-equals-report`: per TU, the script exits 1 when `2 * len(branches)` differs from `summary.branches.count`. Fix in `check-coverage.sh` (4 lines). Real tree: all four TUs match (198/74/172/584 both ways), so the report output is unchanged. A `static inline` function in a header is attributed to the header in both the report and the export (probe `h2.h`/`q.c`: `q.c` 0 sides, `h2.h` 2), so it is out of B1's scope, not hidden. No `src/*.h` has a function-like macro or a `static inline` today.
+- **important (grilled, no code change): `assert` conflicts with B2.** An `assert` in a gated TU becomes a branch at its use site with `file_id` 0 (probe: `assert(x != 99)` → `[4,16,4,16,0,1,0,0,4]`, true side 0). Its failing side can never run, so under no-excuses it fails the gate, while `style:fail-fast` asks for asserts on programmer invariants. Stage 2 removes NULL guards, which is exactly where an assert would be the reflex. Itay chose `decision:plan18b-no-assert-pure-tus`: no `assert` in the four TUs, and a removed guard is not replaced by one. Recorded as B6. No `assert(` in `src/` today except `src/test_vfs.c`.
+- **nit (fixed):** the amended stage 1 text had one 130-column line; rewrapped while adding the B5 sentence.
+- **praise:** probing the plan's macro assumption before coding and grilling the correction; the independent `llvm-cov show` cross-check; rejecting the lcov source with a concrete reason (no column in `BRDA`); `COV_ARGS` (15 lines → 3); recording honestly that the must-pass row holds only on macOS.
+
+Verification by running:
+
+- Independent cross-check re-run: the report's 226 missed sides equal a `llvm-cov show -show-branches=count` parse of the three binaries (`diff` empty).
+- Per TU, the report's sides and missed count equal `summary.branches` (`count` / `notcovered`): 198/26, 74/0, 172/6, 584/194. 0 macro records, 0 duplicate positions.
+- Linux claim re-run (ubuntu 24.04, clang/llvm 18, `BUILD_DIR=build-cov-linux ./scripts/check-coverage.sh` in a fresh worktree of the ref): exit 0, 26 / 0 / 6 / 197. The `output.c` diff against macOS is exactly the coder's 11 lines (Linux only: 213, 268, 295, 320, 347, 359, 483; macOS only: 222, 271, 305, 663).
+- Binary probes (C tree equals `59dc617`): empty and spaced query → `empty search query` exit 1; newline, 300-byte, 100 KB, invalid UTF-8 → exit 0; ESC → `invalid search query`; `--db` with no value → exit 1; unwritable `--db` path → exit 1 with the mkdir reason; `get`/`list` under `TZ=Pacific/Kiritimati` and `America/Adak` print UTC stamps.
+- Zero-hit lines: the stage changed no C file, so no new uncovered line.
+
+Mutation table (one clause each, extracted report block run on the gate's real `coverage-branches.json`, compared with the independent list; the mismatch check also on a fake export whose `search_terms.c` record is the real `p.c` probe export):
+
+| Mutant | Result |
+|--------|--------|
+| Side labels swapped (`b[5]`/`b[4]`) | killed |
+| Line from `end_line` (`b[2]`) | killed |
+| Column from `end_col` (`b[3]`) | killed |
+| `count == 0` → `count <= 1` | killed |
+| Skip `file_id != 0` records (the plan's old text) | survived on the real tree (0 macro records, expected); the coder's fake export kills it |
+| New check: `if sides != want` → `if False` | survived on the real export, killed by the header-macro export (exit 0 instead of 1) |
+| New check: `want` computed from the list instead of the summary | killed by the header-macro export |
+| Unmutated on the header-macro export | exit 1, `error: src/search_terms.c: 4 listed branch sides, llvm-cov report counts 6 (a branch in a header macro?)` |
+
+Simplify pass:
+
+- Applied by the coder: `COV_ARGS`. Agree.
+- `json.loads(Path(...).read_text())` → `json.load(open(...))` drops the `pathlib` import (1 line). Declined: the line gate's heredoc uses `Path(...).read_text()`, so it stays consistent.
+- `root = sys.argv[1].rstrip("/") + "/"` → `sys.argv[1] + "/"` (0 lines; `pwd` never ends in `/` here). Not worth a change.
+- Merge the mismatch check into the `print` line: 1 line shorter but hides the error in an f-string conditional. Declined, for clarity.
+- The coder's four declines (merge heredocs, awk over `llvm-cov show`, lcov source, inline `BINS`) re-checked: agree with each reason.
+
+Coder rating: **8.5 / 10.** Strengths: probed the plan's macro assumption, found it wrong, and grilled instead of deciding; independent cross-check; one-clause mutants of every report clause; reproduced and explained the Linux difference, then deferred it to the stage that owns it; DRY'd the three `llvm-cov` calls. Misses: the macro probe tried one form (a macro in the TU) and then generalized to "no branch can hide in a macro" (round 5.4: try one more form, here a header); did not check the new strict gate against standing rules, so the `assert` vs no-excuses conflict surfaced only in review (round 8.3: grill when two decisions conflict); one overlong line in the amended plan text.
+
+Instructions for the coder:
+
+1. When a probe proves a tool's behavior for one form, repeat it across a file boundary (a macro or inline function in a header, an included file) before writing "no X can hide".
+2. When a gate's list should equal a tool's own total, check that equality in the script on every run, not once in the notes.
+3. Before a new strict gate lands, check each standing style rule (assertions, guards, defensive returns) against it and grill any conflict in the same stage.
+
+Gate (2026-10-20, clang + `REMEMBER_ENABLE_SANITIZERS=ON` + `REMEMBER_TEST_VFS=ON`, configured twice, cache flags checked): build, ctest, `lint-all.sh`, `check-coverage.sh`, `leaks-macos`, `ci-linux.sh` → `GATE-ALL-GREEN` on the ref `743874e`, and again on the fixed tree (the script fix plus these notes; this gate line added after it is Markdown only). `shellcheck scripts/check-coverage.sh`: clean. Standard filed: `standard:coding` ROUND 10.
+
+### 2026-10-21 — second-opinion deep review (FINAL)
+
+Ref `123ac31..20e2d3d` (stages 2–6 ran back to back at Itay's request; stage 1 was reviewed above as `e38eca8`). Baseline gate on a clean worktree of `20e2d3d`: `GATE-ALL-GREEN` (ctest 5/5, `lint-all.sh`, enforced `check-coverage.sh` with all four TUs at 0 missed, `leaks-macos`, `ci-linux.sh`). Fixes in a clean worktree, full gate there before commit.
+
+**Verdict: plan 18b is done. No open blocking item.** One grill, answered: `decision:import-control-bytes-followup`.
+
+Findings:
+
+- **important (fixed): the enforced gate shipped without the stage 1 review commit.** `e38eca8` (pushed 2026-10-20; `status:remember` said to pick it up) was never merged, so `20e2d3d`'s gate lacked the list-equals-report check, and the plan lacked B5/B6. Proof by mutant M3a below: with an untaken branch inside a macro `#define`d in `search_terms.h`, the coder's enforced gate **exits 0** while `llvm-cov report` reads `search_terms.c` 178 sides, 1 missed (99.44%); DoD box 2 would be false behind a green gate. Fix: `e38eca8` applied onto `20e2d3d` (clean auto-merge); the same mutant now exits 1 with `176 listed branch sides, llvm-cov report counts 178`. B7 (`decision:plan18b-shared-alloc-hook`) added to the table; `docs/QUALITY.md` and `docs/engineering-notes.md` now state the no-`assert` rule and the list-equals-report check.
+- **important (fixed): the failing stream's own rules were unpinned.** `assert_reports_every_failed_write` relies on two helper rules: a write that reaches the limit exactly succeeds, and after a failure even a write that would fit fails and is counted in `late_writes`. Without stickiness, a writer that ignores one failed write and returns -1 on a later one passes the driver. Mutants T6 (`n > limit - len` → `>=`) and T8 (stickiness off) survived the whole suite. Added `failing_stream_fails_past_the_limit_and_stays_failed` (macOS + glibc via the gate); T6 and T8 now fail it.
+- **important (grilled → follow-up): a hostile peer key reaches the terminal raw.** Older than 18b. A source db with key `evil\x1b[2J` (set with `sqlite3`) imports (`inserted 1`, exit 0), and the human `list` prints `033 [ 2 J` (`od -c`); JSON escapes it. Stage 4 rewrote those exact lines and kept the comment "Keys/tags are normalize_token output … Raw fputs is safe". Itay chose a separate session for the fix (import validation vs output masking). Here only the two comments in `output.c` now state the real trust boundary. `fix/plain-stderr-control-bytes` is stderr only; it also edits `output.c`, so it must meet this gate when merged.
+- **nit (fixed):** stage 4 left `write_preview`'s doc comment above the new `write_text_or_nothing`; moved back. `ci.yml`'s `linux-coverage` comment now mentions the branch gate (job name unchanged).
+- **nit (open):** the preview byte bound is not pinned to the byte: T4 (`o + clen + 4U` → `5U`) survives, because every uniform-width body cuts at the same scalar under both bounds. A mixed body (46 × 4-byte scalars + `ab`, then ASCII) tells them apart. Memory safety holds under either: `+3` is the smallest bound that still fits the dots and the NUL.
+- **nit (process):** stage 6's gate line ran `check-coverage.sh`, `lint-all.sh`, and `shellcheck`, but not `ctest`, `leaks-macos`, or `ci-linux.sh` on `20e2d3d` ("no C changed"). `standard:coding` 1.6 asks for the full gate on the exact tree. The baseline gate above closes it.
+- **praise:** the stage 2 removal table (each side, its reason, the change); 127/127 write-check mutants and 40/40 guard-clause mutants; the real fail-fast bug in `output_entry_human_line` (10 ignored writes) found by TDD; the `fmemopen` platform probe that led to `funopen`/`fopencookie`; arguing equivalent mutants (R5, the grapheme-open check) instead of hiding them; Release `nm` with a positive control.
+
+Verification by running:
+
+- Handover mutants re-run (full `check-coverage.sh` each, clean worktree of `20e2d3d`, restored and `git diff --quiet` after each):
+
+| Gate mutant | Result |
+|---|---|
+| M1: delete `search_tag_order_puts_exact_first_from_either_side` | exit 1, `src/search_terms.c:358:13 true` (the `if (lhs->exact)` over the `return -1`) |
+| M2: delete `output_device_human_reports_every_failed_write` + its wrapper | exit 1, `src/output.c:832:9 true` |
+| M3a: `#define SEARCH_HUGE_QUERY(n) ((n) > 100000U)` in `search_terms.h`, used in `search_q` (true side never taken), coder's script | **exit 0** (gate lists 176 / 0; report 178 / 1) |
+| M3b: the same, merged script | exit 1, `176 listed branch sides, llvm-cov report counts 178` |
+
+- One-clause test mutants (ASan build, `remember_store_tests`; T3 also `remember_tests --only link`):
+
+| Mutant | Result |
+|---|---|
+| T1 `write_text_or_nothing` NULL → -1 | killed (`…_skips_a_null_tag`, `…_leaves_a_null_updated_at_empty`) |
+| T2 human-line tag comma `i > 0U` → `i > 1U` | killed (`…_skips_a_null_tag`) |
+| T3 `cites` direction `==` → `!=` | survives the unit suite; killed by black-box `test_link.c` (4 tests assert `cited_by`) |
+| T4 preview byte bound `+4U` → `+5U` | survived (nit above) |
+| T5 `find_segment` last segment records `len` | killed (4 tier tests) |
+| T6 failing stream `>` → `>=` | survived → killed by the new self-test |
+| T7 human-line key write error ignored (`!= 0` → `< -1`) | killed, only through `late_writes` (`…_reports_every_failed_write`) |
+| T8 failing stream not sticky | survived → killed by the new self-test |
+
+- Release (`-DCMAKE_BUILD_TYPE=Release`, `REMEMBER_TEST_HOOKS=OFF`): `nm build-rel/remember` has 0 matches for `test_alloc|test_countdown|unicode_test|failing_stream|injected_failure` among 449 global text symbols; the dev ASan `remember` also has 0. Positive control: `remember_store_tests` exports `_test_alloc_fail_after`, `_test_alloc_malloc`, `_test_countdown_fires`, `_unicode_test_fail_after`.
+- Removed sides read against their reasons: `store_bin_of` returns only the three bins (`store_sqlite.c:2125`); `parse_edge_kind` rejects any other kind token before a `StoreNeighbor` exists; `output_json_string` maps NULL to `""`; `utf8_clen_bounded` returns 1 when a NUL falls inside a sequence; `fold_hebrew_marks` returns INTERNAL only for NULL `src`/`out`. All hold. No `assert` was added (B6).
+- Failing stream read on both platforms: `funopen` returns -1 on failure; glibc's cookie writer returns 0, which is glibc's error value for `fopencookie` writes. The self-test runs in both gates.
+- Binary probes: human `list` into a closed pipe with SIGPIPE ignored → exit 1, `remember: failed to write output` (the same as `--json`); a body with `\r`, DEL, and ESC previews up to the `\r`; the import ESC probe above.
+
+Simplify pass:
+
+- Applied by the coder: `from_norm` (16 lines → 1), `bin_token` + two NULL checks (18 → 5), the `fill_preview` dead block and its `dst_cap` parameter, `find_segment`'s `at_end` flag. Agree with each.
+- Candidate, not applied: the 25 `*_reports_every_failed_write` tests are 25 one-line wrappers + 25 `TEST`s + 25 `RUN_TEST`s; a named table `{ "device_human", write_device_human }` driven by one `TEST` saves about 90 lines. Kept: one named test per writer matches the suite's style and lets the gate mutation "delete one stream test" name a single writer.
+- `segment_starts_with`'s `if … return true; return false;` (4 lines) instead of one `return`: forced by `readability-implicit-bool-conversion` (in C, `&&` yields `int`). Agree.
+- `unicode.c`'s `injected_failure()` wraps one call for three call sites; inlining saves 4 lines but loses the comment on why the seam exists. Keep.
+
+Coder rating: **8 / 10.** Strengths: the removal table and its reasons; exhaustive generated mutants (127/127 writes, 40/40 guards); found and fixed a real silent-write bug by TDD; the platform probe behind the stream shim; honest equivalent-mutant notes; Release `nm` with a control. Misses: built five stages on a branch without merging the pushed review commit and its decisions, so the enforced gate had a proven hole (M3a); left the failing stream's load-bearing rules without a self-test (T6, T8); kept a false safety comment on lines it rewrote (the import ESC finding); stage 6 skipped part of the full gate.
+
+Instructions for the coder:
+
+1. At the start of every stage, fetch and merge the branch and re-read `status:remember`. A reviewer commit or decision is in force as soon as it is pushed or filed. Do not build on top of it without merging it.
+2. A test helper that your assertions rely on (a fake stream, a fault counter, a clock) gets its own small test pinning each rule the assertions depend on.
+3. When you rewrite a line that carries a safety claim ("raw print is safe", "cannot be NULL"), re-check the claim against every way the data can arrive (import, sync, migration, a hand-edited db), not only the local write path.
+
+Reviewer's own miss: the first fix-tree gate failed `lint-all.sh` on the new self-test (`5` is a magic number); now `STREAM_LIMIT`. Gate re-run from the start.
+
+Gate (fix tree, 2026-10-21; clang, `REMEMBER_ENABLE_SANITIZERS=ON`, `REMEMBER_TEST_VFS=ON`, configured twice, cache flags checked): build, ctest, `lint-all.sh`, `check-coverage.sh` (all four TUs 0 missed), `leaks-macos`, `ci-linux.sh` → `GATE-ALL-GREEN`. `linux-coverage` replay in Docker on the same tree: exit 0. After the gate only this file changed (Markdown: the gate line and the ticked boxes). Standard filed: `standard:coding` ROUND 11.
