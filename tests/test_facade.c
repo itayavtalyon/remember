@@ -275,6 +275,17 @@ TEST(facade_search_bad_query_matches_cli)
     free(db);
 }
 
+/* EN-03: the raw_query_ignored warning under --json-errors matches the CLI byte for byte. */
+TEST(facade_search_json_warning_matches_cli)
+{
+    char *db = make_temp_db_path();
+    const char *cmd[] = {"--json", "--json-errors", "search", "\"unterminated"};
+    ASSERT_TRUE(db != NULL);
+    seed_three(db);
+    assert_read_parity(db, cmd, sizeof(cmd) / sizeof(cmd[0]));
+    free(db);
+}
+
 TEST(facade_get_matches_cli)
 {
     char *db = make_temp_db_path();
@@ -840,6 +851,7 @@ void register_facade_tests(void)
     RUN_TEST(facade_list_sort_since_matches_cli);
     RUN_TEST(facade_search_matches_cli);
     RUN_TEST(facade_search_bad_query_matches_cli);
+    RUN_TEST(facade_search_json_warning_matches_cli);
     RUN_TEST(facade_get_matches_cli);
     RUN_TEST(facade_get_missing_matches_cli);
     RUN_TEST(facade_tags_matches_cli);

@@ -358,13 +358,17 @@ static int parse_search_args(int rest_argc, const char **rest_argv, SearchParse 
         if (kind < 0) {
             return -1;
         }
-        /* Positional: the FTS query (exactly one). */
+        /* Positional: the QUERY (exactly one). */
         if (search_set_query(out, arg, err) != 0) {
             return -1;
         }
     }
     if (out->query_raw == NULL) {
         *err = "missing search query";
+        return -1;
+    }
+    if (!utf8_is_valid(out->query_raw, strlen(out->query_raw))) {
+        *err = "invalid UTF-8 in search query"; /* D27 */
         return -1;
     }
     out->query = trim_query_copy(out->query_raw, err);
@@ -593,6 +597,7 @@ int cmd_search(Store *s, bool json, int rest_argc, const char **rest_argv)
     size_t total = 0U;
     StoreNeighbor *links = NULL;
     size_t nlinks = 0U;
+    char *warning = NULL;
     StoreStatus st = STORE_OK;
     int rc = REMEMBER_ERR;
     char now[ISO_TS_BUFSIZE];
@@ -619,11 +624,12 @@ int cmd_search(Store *s, bool json, int rest_argc, const char **rest_argv)
         goto cleanup;
     }
     {
-        PageResult page = store_search(s, &q, now);
-        st = page.st;
-        entries = page.entries;
-        count = page.count;
-        total = page.total;
+        SearchResult res = store_search(s, &q, now);
+        st = res.page.st;
+        entries = res.page.entries;
+        count = res.page.count;
+        total = res.page.total;
+        warning = res.warning;
     }
     if (st != STORE_OK) {
         err_store(s, st);
@@ -641,9 +647,13 @@ int cmd_search(Store *s, bool json, int rest_argc, const char **rest_argv)
         err_msg(DIAG_INTERNAL, "failed to write output");
         goto cleanup;
     }
+    if (warning != NULL) {
+        (void)diag_warning(DIAG_WARN_RAW_QUERY_IGNORED, warning);
+    }
     rc = REMEMBER_OK;
 
 cleanup:
+    free(warning);
     search_parse_free(&parsed);
     free_tag_list(tags_norm, ntags);
     store_neighbors_free(links, nlinks);

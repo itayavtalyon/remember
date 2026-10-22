@@ -1,6 +1,7 @@
 #include "store.h"
 
 #include "normalize.h"
+#include "search_terms.h"
 #include "sqlite3.h"
 
 #include <errno.h>
@@ -1788,8 +1789,6 @@ const char *store_status_message(StoreStatus st)
         return "out of memory";
     case STORE_ERR_INTERNAL:
         return "internal error";
-    case STORE_ERR_QUERY:
-        return "invalid search query";
     case STORE_ERR_CONFLICT:
         return "body hash conflict";
     case STORE_ERR_EXPIRED:
@@ -3340,7 +3339,8 @@ static int list_append_bin(char *sql, size_t sql_cap, size_t *pos, int *nbinds,
 
 /*
  * The only map from a list sort to a column name. List order and list
- * since/until both use it. Search asks for UPDATED and ignores ListQuery.sort.
+ * since/until both use it. Search ignores ListQuery.sort and always uses
+ * updated_at (E5.3).
  * NULL is an unknown sort (programmer error).
  */
 static const char *list_sort_column(StoreSort sort)
@@ -3356,7 +3356,8 @@ static const char *list_sort_column(StoreSort sort)
 }
 
 /* One bound. inclusive is >= (since); the other side is < (until). NULL skips.
-   column comes from list_sort_column. The timestamp is bound, never pasted. */
+   column is a fixed name (list_sort_column, or updated_at for search). The
+   timestamp is bound, never pasted. */
 static int list_append_cmp(char *sql, size_t sql_cap, size_t *pos, int *nbinds,
                            const char **bind_text, size_t bind_cap, const char *column,
                            bool inclusive, const char *value)
@@ -3445,59 +3446,47 @@ static int list_build_where(const ListQuery *q, const char *now, const char *tim
 }
 
 /*
- * Search WHERE: FTS MATCH on entries_fts (table name required — FTS5 rejects
- * aliases for MATCH/bm25), then the same entry filters as list.
- * Bind slot 1 is the MATCH query; filters continue from 2.
+ * Search WHERE: FTS MATCH on entries_fts (table name required: FTS5 rejects
+ * aliases for MATCH/bm25), then the same entry filters as list. Slot 1 is q
+ * (the ORDER BY reads it), slot 2 the MATCH text; filters continue from 3.
+ * The COUNT statement does not read ?1, but binding it is still in range
+ * because ?2 makes the parameter count at least 2.
  */
-static int search_build_where(const SearchQuery *q, const char *now, const char *time_column,
-                              char *sql, size_t sql_cap, int *out_nbinds, const char **bind_text,
+typedef struct {
+    const char *q;     /* ?1 */
+    const char *match; /* ?2 */
+} SearchBinds;
+
+static int search_build_where(const ListQuery *f, SearchBinds b, const char *now, char *sql,
+                              size_t sql_cap, int *out_nbinds, const char **bind_text,
                               size_t bind_cap)
 {
     size_t pos = 0U;
     int nbinds = 0;
     int n = 0;
 
-    if (q == NULL || q->query == NULL || now == NULL || time_column == NULL || sql == NULL ||
-        sql_cap == 0U || out_nbinds == NULL || bind_text == NULL || bind_cap < 1U) {
-        return -1;
-    }
-    n = snprintf(sql, sql_cap, " WHERE entries_fts MATCH ?1");
+    n = snprintf(sql, sql_cap, " WHERE entries_fts MATCH ?2");
     if (n < 0 || (size_t)n >= sql_cap) {
         return -1;
     }
     pos = (size_t)n;
-    bind_text[0] = q->query;
-    nbinds = 1;
+    bind_text[0] = b.q;
+    bind_text[1] = b.match;
+    nbinds = 2;
 
-    /* time_column is updated_at. Search ignores ListQuery.sort (E5.3). */
-    if (list_append_filters(&q->filters, sql, sql_cap, &pos, &nbinds, bind_text, bind_cap,
-                            time_column) != 0) {
+    /* Search ignores ListQuery.sort: since/until are on updated_at (E5.3). */
+    if (list_append_filters(f, sql, sql_cap, &pos, &nbinds, bind_text, bind_cap, "updated_at") !=
+        0) {
         return -1;
     }
-    if (list_append_bin(sql, sql_cap, &pos, &nbinds, bind_text, bind_cap, q->filters.bin, now) !=
-        0) {
+    if (list_append_bin(sql, sql_cap, &pos, &nbinds, bind_text, bind_cap, f->bin, now) != 0) {
         return -1;
     }
     *out_nbinds = nbinds;
     return 0;
 }
 
-/* Map a failed prepare/step to STORE_ERR_QUERY when SQLite reports FTS syntax. */
-static StoreStatus store_status_from_sqlite(sqlite3 *db, StoreError *serr)
-{
-    const char *msg = NULL;
-
-    capture_sqlite_error(db, serr);
-    msg = (serr != NULL) ? serr->sqlite_message : "";
-    if (msg[0] != '\0' &&
-        (strstr(msg, "fts5") != NULL || strstr(msg, "syntax error") != NULL ||
-         strstr(msg, "unrecognized token") != NULL || strstr(msg, "unterminated") != NULL)) {
-        return STORE_ERR_QUERY;
-    }
-    return STORE_ERR_SQLITE;
-}
-
-/* Error map for plain (non-FTS) queries: every failure is a database error. */
+/* Error map for list and search statements: every failure is a database error. */
 static StoreStatus store_status_plain(sqlite3 *db, StoreError *serr)
 {
     capture_sqlite_error(db, serr);
@@ -3520,6 +3509,7 @@ static StoreStatus list_bind_texts(sqlite3_stmt *stmt, const char **bind_text, i
 /* Enough for source + key + many tag EXISTS clauses. */
 enum { LIST_SQL_CAP = 8192 };
 enum { LIST_BIND_CAP = 64 };
+_Static_assert(LIST_BIND_CAP >= 2, "search binds q and the MATCH text ahead of the filters");
 
 /*
  * Bind filters + limit/offset, run the COUNT statement then the paged SELECT the
@@ -3528,15 +3518,12 @@ enum { LIST_BIND_CAP = 64 };
  * result rows, so it reports no total whenever the page is empty (offset past the
  * end), breaking the "total is the unpaged count" contract. Callers run this
  * inside one read transaction so both statements see a single snapshot.
- *
- * map_err classifies a failed prepare/step: list passes store_status_plain (any
- * failure is a database error); search passes store_status_from_sqlite (FTS-syntax
- * errors become STORE_ERR_QUERY). limit/offset bind at ?nbinds+1 / ?nbinds+2.
+ * Any failed prepare/step is a database error. limit/offset bind at
+ * ?nbinds+1 / ?nbinds+2.
  */
 static PageResult run_count_and_page(sqlite3 *db, const char *count_sql, const char *select_sql,
                                      const char **bind_text, int nbinds, size_t limit,
-                                     size_t offset, StoreStatus (*map_err)(sqlite3 *, StoreError *),
-                                     StoreError *serr)
+                                     size_t offset, StoreError *serr)
 {
     sqlite3_stmt *count_stmt = NULL;
     sqlite3_stmt *sel = NULL;
@@ -3549,7 +3536,7 @@ static PageResult run_count_and_page(sqlite3 *db, const char *count_sql, const c
 
     rc = sqlite3_prepare_v2(db, count_sql, -1, &count_stmt, NULL);
     if (rc != SQLITE_OK) {
-        return (PageResult){.st = map_err(db, serr)};
+        return (PageResult){.st = store_status_plain(db, serr)};
     }
     st = list_bind_texts(count_stmt, bind_text, nbinds, serr);
     if (st != STORE_OK) {
@@ -3558,7 +3545,7 @@ static PageResult run_count_and_page(sqlite3 *db, const char *count_sql, const c
     }
     rc = sqlite3_step(count_stmt);
     if (rc != SQLITE_ROW) {
-        st = map_err(db, serr);
+        st = store_status_plain(db, serr);
         (void)sqlite3_finalize(count_stmt);
         return (PageResult){.st = st};
     }
@@ -3567,7 +3554,7 @@ static PageResult run_count_and_page(sqlite3 *db, const char *count_sql, const c
 
     rc = sqlite3_prepare_v2(db, select_sql, -1, &sel, NULL);
     if (rc != SQLITE_OK) {
-        return (PageResult){.st = map_err(db, serr)};
+        return (PageResult){.st = store_status_plain(db, serr)};
     }
     st = list_bind_texts(sel, bind_text, nbinds, serr);
     if (st != STORE_OK) {
@@ -3590,7 +3577,7 @@ static PageResult run_count_and_page(sqlite3 *db, const char *count_sql, const c
         }
     }
     if (rc != SQLITE_DONE) {
-        st = map_err(db, serr);
+        st = store_status_plain(db, serr);
         free_entry_rows(rows, n);
         (void)sqlite3_finalize(sel);
         return (PageResult){.st = st};
@@ -3640,7 +3627,7 @@ static PageResult list_query_exec(sqlite3 *db, const ListQuery *q, const char *n
         return (PageResult){.st = STORE_ERR_INTERNAL};
     }
     return run_count_and_page(db, count_sql, select_sql, bind_text, nbinds, q->limit, q->offset,
-                              store_status_plain, serr);
+                              serr);
 }
 
 PageResult store_list(Store *s, const ListQuery *q, const char *now)
@@ -3674,28 +3661,24 @@ PageResult store_list(Store *s, const ListQuery *q, const char *now)
 }
 
 /*
- * COUNT + paged FTS SELECT. Same two-statement total contract as list_query_exec.
- * FROM joins entries_fts so MATCH/bm25 apply; filters reuse list_append_filters.
- * bm25 lower (more negative) = better match, then updated_at DESC; FTS5 requires
- * the real table name in bm25(), not an alias. count_sql/select_sql pad
- * LIST_SQL_CAP for the JOIN + bm25 ORDER BY text that frame where_sql.
+ * COUNT + paged FTS SELECT. Same two-statement total contract as
+ * list_query_exec. E2.4 order: exact key, key prefix of q, weighted bm25
+ * (key 10, body 1, tags 4; lower is better), then updated_at DESC, id DESC.
+ * IS, not =, so a NULL key ranks as a miss instead of below one.
  */
-static PageResult search_query_exec(sqlite3 *db, const SearchQuery *q, const char *now,
+static PageResult search_query_exec(sqlite3 *db, const ListQuery *f, SearchBinds b, const char *now,
                                     StoreError *serr)
 {
-    /* Headroom beyond where_sql for the COUNT / SELECT framing wrapped around it;
-       wider than the plain list path to hold the FTS join + snippet columns. */
-    enum { COUNT_FRAME_MARGIN = 128, SELECT_FRAME_MARGIN = 256 };
+    /* Headroom beyond where_sql for the COUNT / SELECT framing wrapped around it. */
+    enum { COUNT_FRAME_MARGIN = 128, SELECT_FRAME_MARGIN = 512 };
     char where_sql[LIST_SQL_CAP];
     char count_sql[(size_t)LIST_SQL_CAP + (size_t)COUNT_FRAME_MARGIN];
     char select_sql[(size_t)LIST_SQL_CAP + (size_t)SELECT_FRAME_MARGIN];
     const char *bind_text[LIST_BIND_CAP];
-    /* E5.3: search rank stays bm25, then updated_at. Sort on the query is ignored. */
-    const char *column = list_sort_column(STORE_SORT_UPDATED);
     int nbinds = 0;
     int sn = 0;
 
-    if (search_build_where(q, now, column, where_sql, sizeof(where_sql), &nbinds, bind_text,
+    if (search_build_where(f, b, now, where_sql, sizeof(where_sql), &nbinds, bind_text,
                            LIST_BIND_CAP) != 0) {
         return (PageResult){.st = STORE_ERR_INTERNAL};
     }
@@ -3711,41 +3694,160 @@ static PageResult search_query_exec(sqlite3 *db, const SearchQuery *q, const cha
                   "e.sync_id, e.deleted_at, e.version_vector "
                   "FROM entries e "
                   "JOIN entries_fts ON entries_fts.rowid = e.id%s "
-                  "ORDER BY bm25(entries_fts), e.%s DESC, e.id DESC "
+                  "ORDER BY e.key IS ?1 DESC, substr(e.key, 1, length(?1)) IS ?1 DESC, "
+                  "bm25(entries_fts, 10.0, 1.0, 4.0), e.updated_at DESC, e.id DESC "
                   "LIMIT ?%d OFFSET ?%d;",
-                  where_sql, column, nbinds + 1, nbinds + 2);
+                  where_sql, nbinds + 1, nbinds + 2);
     if (sn < 0 || (size_t)sn >= sizeof(select_sql)) {
         return (PageResult){.st = STORE_ERR_INTERNAL};
     }
-    return run_count_and_page(db, count_sql, select_sql, bind_text, nbinds, q->filters.limit,
-                              q->filters.offset, store_status_from_sqlite, serr);
+    return run_count_and_page(db, count_sql, select_sql, bind_text, nbinds, f->limit, f->offset,
+                              serr);
 }
 
-PageResult store_search(Store *s, const SearchQuery *q, const char *now)
+/* "t1"* "t2"* ...: each token quoted as a prefix, joined by one space. */
+enum { SEARCH_P_CAP = (SEARCH_TOKENS_MAX * (SEARCH_TOKEN_BYTES_MAX + 4)) + 1 };
+
+static void search_prefix_part(const SearchTokens *t, char p[SEARCH_P_CAP])
+{
+    size_t pos = 0U;
+    size_t i = 0U;
+
+    p[0] = '\0';
+    for (i = 0U; i < t->count; i++) {
+        pos += (size_t)snprintf(p + pos, SEARCH_P_CAP - pos, "%s\"%s\"*", (i > 0U) ? " " : "",
+                                t->tokens[i]);
+    }
+}
+
+/* E2.1 (3)-(5): (P) OR (R), or whichever is not empty. r is "" when R is
+   empty or does not parse. Empty out means no query (an empty result). */
+static void search_match(const char *p, const char *r, char *out, size_t cap)
+{
+    if (p[0] != '\0' && r[0] != '\0') {
+        (void)snprintf(out, cap, "(%s) OR (%s)", p, r);
+    } else {
+        (void)snprintf(out, cap, "%s%s", p, r);
+    }
+}
+
+/*
+ * E2.1a: does r parse alone? Runs on the caller's connection and read
+ * transaction. It does not parse only on SQLITE_ERROR with a D1 message:
+ * *warning (NULL on entry) is then a heap copy of that message. Any other
+ * failure is a real error, captured into serr.
+ */
+static StoreStatus search_probe_raw(sqlite3 *db, const char *r, char **warning, StoreError *serr)
+{
+    static const char *const no_parse[] = {"fts5:", "no such column", "unknown special query",
+                                           "unterminated string"};
+    sqlite3_stmt *stmt = NULL;
+    StoreStatus st = STORE_OK;
+    const char *msg = NULL;
+    size_t i = 0U;
+    int rc = 0;
+
+    rc = sqlite3_prepare_v2(db, "SELECT 1 FROM entries_fts WHERE entries_fts MATCH ?1 LIMIT 1;", -1,
+                            &stmt, NULL);
+    if (rc != SQLITE_OK) {
+        return store_status_plain(db, serr);
+    }
+    st = list_bind_texts(stmt, &r, 1, serr);
+    if (st != STORE_OK) {
+        goto cleanup;
+    }
+    rc = sqlite3_step(stmt);
+    if (rc == SQLITE_ROW || rc == SQLITE_DONE) {
+        goto cleanup;
+    }
+    msg = sqlite3_errmsg(db);
+    for (i = 0U; rc == SQLITE_ERROR && i < sizeof(no_parse) / sizeof(no_parse[0]); i++) {
+        if (strncmp(msg, no_parse[i], strlen(no_parse[i])) == 0) {
+            *warning = dup_str(msg);
+            st = (*warning == NULL) ? STORE_ERR_OOM : STORE_OK;
+            goto cleanup;
+        }
+    }
+    st = store_status_plain(db, serr);
+
+cleanup:
+    (void)sqlite3_finalize(stmt);
+    return st;
+}
+
+SearchResult store_search(Store *s, const SearchQuery *q, const char *now)
 {
     char err_unused[1];
-    PageResult page = {.st = STORE_OK};
+    SearchResult res = {.page = {.st = STORE_OK}, .warning = NULL};
+    SearchTokens tokens;
+    SearchStatus sst = SEARCH_OK;
+    char p[SEARCH_P_CAP];
+    char *r = NULL;
+    char *q_low = NULL;
+    char *match = NULL;
+    size_t start = 0U;
+    size_t end = 0U;
+    size_t match_cap = 0U;
 
     if (s == NULL || s->db == NULL || q == NULL || q->query == NULL || now == NULL) {
-        return (PageResult){.st = STORE_ERR_INTERNAL};
+        return (SearchResult){.page = {.st = STORE_ERR_INTERNAL}};
     }
+    end = strlen(q->query);
+    ascii_ws_trim(q->query, &start, &end);
+    r = (char *)malloc(end - start + 1U);
+    q_low = (char *)malloc(end - start + 1U);
+    match_cap = sizeof(p) + (end - start) + sizeof("() OR ()");
+    match = (char *)malloc(match_cap);
+    if (r == NULL || q_low == NULL || match == NULL) {
+        res.page.st = STORE_ERR_OOM;
+        goto cleanup;
+    }
+    memcpy(r, q->query + start, end - start);
+    r[end - start] = '\0';
+    sst = search_tokens_build(q->query, &tokens);
+    if (sst == SEARCH_OK) {
+        sst = search_q(r, q_low, end - start + 1U);
+    }
+    if (sst != SEARCH_OK) {
+        res.page.st = (sst == SEARCH_ERR_OOM) ? STORE_ERR_OOM : STORE_ERR_INTERNAL;
+        goto cleanup;
+    }
+    search_prefix_part(&tokens, p);
 
     memset(&s->last, 0, sizeof(s->last));
     if (exec_sql(s->db, "BEGIN;", err_unused, 0U, &s->last) != 0) {
-        return (PageResult){.st = STORE_ERR_SQLITE};
+        res.page.st = STORE_ERR_SQLITE;
+        goto cleanup;
     }
-    /* cppcheck-suppress redundantInitialization */
-    page = search_query_exec(s->db, q, now, &s->last);
-    if (page.st != STORE_OK) {
+    if (r[0] != '\0') {
+        res.page.st = search_probe_raw(s->db, r, &res.warning, &s->last);
+    }
+    if (res.page.st == STORE_OK) {
+        search_match(p, (res.warning == NULL) ? r : "", match, match_cap);
+        if (match[0] != '\0') {
+            res.page = search_query_exec(s->db, &q->filters,
+                                         (SearchBinds){.q = q_low, .match = match}, now, &s->last);
+        }
+    }
+    if (res.page.st != STORE_OK) {
         rollback_quiet(s->db);
-        return page;
+        goto cleanup;
     }
     if (exec_sql(s->db, "COMMIT;", err_unused, 0U, &s->last) != 0) {
         rollback_quiet(s->db);
-        free_entry_rows(page.entries, page.count);
-        return (PageResult){.st = STORE_ERR_SQLITE};
+        free_entry_rows(res.page.entries, res.page.count);
+        res.page = (PageResult){.st = STORE_ERR_SQLITE};
     }
-    return page;
+
+cleanup:
+    free(r);
+    free(q_low);
+    free(match);
+    if (res.page.st != STORE_OK) {
+        free(res.warning);
+        res.warning = NULL;
+    }
+    return res;
 }
 
 static const char k_fts_rebuild_sql[] = "INSERT INTO entries_fts(entries_fts) VALUES('rebuild');";

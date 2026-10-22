@@ -17,6 +17,7 @@ static const TestGroup k_groups[] = {
     {"add", register_add_tests},
     {"get_list_delete", register_get_list_delete_tests},
     {"search", register_search_tests},
+    {"union_search", register_union_search_tests},
     {"update", register_update_tests},
     {"json_db_config", register_json_db_config_tests},
     {"key_gld", register_key_gld_tests},

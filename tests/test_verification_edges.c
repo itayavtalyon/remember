@@ -409,9 +409,9 @@ TEST(search_diacritics_folded)
     free(db);
 }
 
-/* ---- V27 invalid FTS (unbalanced quote) ---------------------------------- */
+/* ---- V27 invalid FTS (unbalanced quote): a warning on exit 0 (006 E3.1) -- */
 
-TEST(search_unbalanced_quote_rejected)
+TEST(search_unbalanced_quote_warns)
 {
     char *db = make_temp_db_path();
     CmdResult r;
@@ -422,8 +422,8 @@ TEST(search_unbalanced_quote_rejected)
     r = run_remember(db, a, sizeof(a) / sizeof(a[0]), NULL);
     cmd_result_free(&r);
     s = run_remember(db, sargs, sizeof(sargs) / sizeof(sargs[0]), NULL);
-    ASSERT_EQ_INT(s.exit_code, 1);
-    ASSERT_TRUE(!str_is_blank(s.err));
+    ASSERT_EQ_INT(s.exit_code, 0);
+    ASSERT_STREQ(s.err, "remember: warning: unterminated string\n");
     cmd_result_free(&s);
     free(db);
 }
@@ -669,7 +669,7 @@ void register_verification_search_tests(void)
     RUN_TEST(fts_search_reflects_body_update);
     RUN_TEST(search_finds_compound_tag_component);
     RUN_TEST(search_diacritics_folded);
-    RUN_TEST(search_unbalanced_quote_rejected);
+    RUN_TEST(search_unbalanced_quote_warns);
 }
 
 void register_verification_edges_tests(void)

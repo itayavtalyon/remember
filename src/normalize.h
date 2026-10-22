@@ -63,6 +63,12 @@ NormStatus normalize_key(const char *src, char *out, size_t out_cap);
  */
 NormStatus fold_hebrew_marks(const char *src, size_t src_len, char **out);
 
+/*
+ * True when s[0..len) is well-formed UTF-8: no overlong encodings, no
+ * surrogates, nothing above U+10FFFF.
+ */
+bool utf8_is_valid(const char *s, size_t len);
+
 /* True for the E10.1 marks that fold_hebrew_marks removes. */
 bool is_hebrew_mark(unsigned int cp);
 

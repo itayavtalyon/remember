@@ -164,11 +164,7 @@ static bool utf8_cp_ok(Utf8Scalar dec)
     return true; /* 2-byte lead already rejected overlongs */
 }
 
-/*
- * Validate that s[0..len) is well-formed UTF-8.
- * Rejects overlong encodings, surrogates, and code points above U+10FFFF.
- */
-static bool utf8_is_valid(const char *s, size_t len)
+bool utf8_is_valid(const char *s, size_t len)
 {
     size_t i = 0;
 

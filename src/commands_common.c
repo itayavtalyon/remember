@@ -192,8 +192,6 @@ DiagCode code_for_store_status(StoreStatus st)
         return DIAG_OUT_OF_MEMORY;
     case STORE_ERR_INTERNAL:
         return DIAG_INTERNAL;
-    case STORE_ERR_QUERY:
-        return DIAG_INVALID_QUERY;
     case STORE_ERR_CONFLICT:
         return DIAG_BODY_CONFLICT;
     case STORE_ERR_EXPIRED:

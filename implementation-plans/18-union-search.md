@@ -462,6 +462,113 @@ Gate on this tree (2026-10-20), after the last C edit:
 
 One gate run failed `store_asan_gate` with eight trim tests red. That binary was the last mutant (`trim trailing dropped`): the mutation script restored the source but did not rebuild, and `ctest` does not build. A rebuild of the restored tree passed (the run above). The script now rebuilds after it restores.
 
+### 2026-10-22 — stage 3 (adapter: P quoting, E2.1a probe, union, dedup, E2.4 ranking)
+
+Start: fetched and merged (`plan18-union-search` = `origin`, `17f01e6`, plan 18b and 18c in). Build configured with the cached `/usr/bin/clang`; `ctest -N` lists 5.
+
+Grills, all answered and filed:
+
+- `decision:plan18-drop-quote-doubling`: E2.2 step 4 (double every `"`) is dropped. The adapter wraps each token as `"tok"*` and joins with one space. The must-pass unit row "`"` doubled" is replaced by `search_tokens_split_on_a_double_quote`.
+- `decision:plan18-warning-wired-stage3`: `cmd_query.c` prints `raw_query_ignored` from this stage, so no commit drops a failure silently. Stage 5 keeps the E2.3 text question (plain `raw query ignored: <msg>` vs JSON `<msg>`; `diag_warning` writes one message for both today).
+- `decision:plan18-delete-store-err-query`: `STORE_ERR_QUERY`, its `code_for_store_status` and `store_status_message` cases, and `store_status_from_sqlite` are deleted. The search mapper was the only producer (`grep -rn STORE_ERR_QUERY src` before the change). `invalid_query` stays in the diag catalog (E3.3). `run_count_and_page` lost its `map_err` parameter (both callers passed `store_status_plain`).
+- `decision:plan18-dash-query-needs-double-dash`: `search -- -x` is a search for the literal term `-x`; callers do not write FTS5 syntax. `search -x` stays a usage error. FTS5 reads a leading `-` as a negated column filter (probe on 3.53.3: `-key : zed` 1 row, `key : zed` 1, `zed` 2; `-x` → `no such column: x`), so R does not parse and P (`"x"*`) carries the search.
+
+Not stage-assigned, done here because the store contract needs it: D27. `cmd_query.c` rejects invalid UTF-8 before the trim (`invalid UTF-8 in search query`, usage). `normalize.c`'s `utf8_is_valid` is now public (was static); it adds no branch. The store treats invalid bytes as `STORE_ERR_INTERNAL` (contract).
+
+Design (`src/store_sqlite.c`, `src/store.h`):
+
+- `store_search` returns `SearchResult` = `PageResult` + heap `warning`. Every caller moved to `.page` (18 sites in `test_store.c`, `test_store_sync.c`, `test_schema_v5.c`; `cmd_query.c`).
+- R = QUERY ASCII-trimmed (heap). q = `search_q(R)`. P from `search_tokens_build`. Token OOM → `STORE_ERR_OOM`; any other token or q failure → `STORE_ERR_INTERNAL`.
+- Probe (E2.1a) after `BEGIN`, on the same connection, only when R is not empty. ROW/DONE parses. `SQLITE_ERROR` with a D1 prefix (`fts5:`, `no such column`, `unknown special query`, `unterminated string`) → the message is copied whole (heap, not the 256-byte `StoreError` field) into `warning`. Anything else → `store_status_plain`, so `capture_sqlite_error` keeps the E4 code (`cli_damaged_fts_search_reports_fts_only` stays green through the probe path: `corrupt`, `fts_only` true).
+- MATCH text: `(P) OR (R)`, else whichever is non-empty; R only when it parsed. Empty → no statement runs and the page is empty (E2.1 (4), (5)). One MATCH, so a row both parts match is one FTS row (E2.1b): no SQL `UNION`, no `DISTINCT`.
+- Binds: ?1 = q, ?2 = MATCH text, filters from ?3 (`SearchBinds`). The COUNT statement does not read ?1; binding it is in range because ?2 sets the parameter count (it runs: every search test binds both). `_Static_assert(LIST_BIND_CAP >= 2)` replaced a runtime guard on a constant.
+- ORDER BY (E2.4): `e.key IS ?1 DESC, substr(e.key, 1, length(?1)) IS ?1 DESC, bm25(entries_fts, 10.0, 1.0, 4.0), e.updated_at DESC, e.id DESC`. `IS`, not `=`: with `=`, a NULL key gives NULL, which sorts below the 0 of a keyed miss, so every keyed row would outrank every keyless row before bm25 (mutants M18a/M18b fail `store_search_ranks_a_keyless_row_by_bm25`).
+
+0.2.0 tests whose expectations changed (stage 5 lists the rest):
+
+| Test | Was | Now |
+|---|---|---|
+| `test_search.c` `search_invalid_fts_syntax_rejected` (`AND AND`) | exit 1 | deleted in the simplify pass: V27 below and `union_search_*` pin the warning |
+| `test_verification_edges.c` V27 `search_unbalanced_quote_rejected` | exit 1 | `search_unbalanced_quote_warns`: exit 0, `remember: warning: unterminated string` |
+| `test_errors.c` golden row `search "\""` → `invalid_query` | exit 1 | row removed (not an error any more) |
+| `test_errors.c` `json_errors_invalid_search_query_keeps_its_text` | exit 1 | deleted (E3.3) |
+| `test_errors.c` `code_for_store_status(STORE_ERR_QUERY)` | `invalid_query` | line removed with the status |
+| `test_store.c` `store_search_prepare_and_step_fail` | statement 0 = COUNT | the probe is statement 0; COUNT and SELECT are 1 and 2; a COUNT-step case was added |
+
+Must-pass rows proven this stage (the rest need facets or stage 5 CLI):
+
+| Plan row | Test |
+|---|---|
+| Example 2 warning `no such column: recs`, 1 entry | `store_search_warns_with_the_fts_message`, `store_search_runs_p_alone_when_r_does_not_parse` |
+| Example 3: 3 entries, no warning | `store_search_unions_the_raw_part`, `union_search_parsed_raw_part_has_no_warning` |
+| Example 5: exit 0, one JSON warning | `union_search_unparseable_raw_part_is_a_json_warning` |
+| E2 inputs each exit 0 (`-x` as `-- -x`), emoji, 10,000 characters | `union_search_no_input_fails`, `union_search_long_query_succeeds` |
+| 2000 nested `(` → warning `fts5: parser stack overflow` | `union_search_deep_nesting_is_a_warning` |
+| Whitespace-only → empty, no warning (store; the CLI still says `empty search query` until stage 5) | `store_search_blank_query_is_empty_without_warning` |
+| Only punctuation that does not parse → empty + warning | `store_search_without_p_and_unparseable_r_is_empty` |
+| Invalid UTF-8 → usage (D27) | `union_search_invalid_utf8_is_usage`; store contract `store_search_invalid_utf8_is_internal` |
+| Row matched by P and R once; count/total/paging de-duplicated | `store_search_counts_a_row_both_parts_match_once`, `store_search_pages_the_deduplicated_set` |
+| Ranking: exact key, key prefix, bm25 (key 10 > body), recency | `store_search_ranks_exact_key_then_key_prefix_first`, `..._ranks_a_keyless_row_by_bm25`, `..._ranks_by_weighted_bm25`, `store_search_ignores_sort_for_order`, `store_search_ties_break_by_id` |
+| `ספר` finds `סֵפֶר` (E10); vocalized query found through P (E10.1) | `store_search_hebrew_prefix_finds_niqqud`, `store_search_vocalized_query_matches_through_p` |
+| Damaged FTS → exit 1, `corrupt`, never a warning (E3.2) | `cli_damaged_fts_search_reports_fts_only` (kept green); probe real errors `store_search_probe_error_without_a_d1_message_is_real`, `..._probe_prepare_failure_is_real` |
+| `invalid search query` never printed (E3.3) | `union_search_no_input_fails` |
+| `search editor` finds `pref:editor` | `store_search_finds_a_key_segment` |
+| Facade byte-match incl. warning, both modes | `facade_search_bad_query_matches_cli` (plain stderr), `facade_search_json_warning_matches_cli` |
+
+TDD: each behavior started red. Red runs: word prefix (empty result), unparseable R (`STORE_ERR_SQLITE`), warning (compile-red: no `SearchResult`), CLI JSON warning (empty stderr), `"` (status 5 = old `STORE_ERR_QUERY` path through an empty MATCH), blank (warning set, then `() OR ()`), exact/prefix ranking (bm25 order), D27 (`internal`), token OOM (`internal`). Tests that passed on arrival (union, dedup, R alone, weights, keyless, paging, Hebrew, failure paths) are proven by the mutants below.
+
+Mutations (`scratchpad/mutate.py`): one clause at a time in `build-mut` (`/usr/bin/clang`, ASan/UBSan, VFS on), suites `store_asan_gate` + `store,search,union_search,errors,verification_edges,facade,coverage_edges`, source restored after each. 45 mutants in the first pass (M27b added later), then 10 reruns (M7, M17, M19, M19b, M20a, M20b, M27b, M29 after the fixture change; M7 and M8 after the guard). Killed, with the red tests:
+
+- M1 `*` dropped from `"tok"*`: word prefix, Hebrew prefix, paging, P-alone. M4/M5 each guard of `(P) OR (R)`: R-alone; P-alone, warning, V27, union CLI tests. M6b one-side form drops P: P-alone.
+- M7 ROW not a parse: first run aborted on an old `test_store.c` read of `rows[0]` after a failed search (round 2.4). Six such reads in search tests are now guarded; the rerun names semantic reds, among them `store_search_counts_a_row_both_parts_match_once`, `store_search_ranks_by_weighted_bm25`, and `store_list_and_search_bins`. M8 DONE not a parse: word prefix, Hebrew, R-alone, `search_no_matches_exits_zero`, CLI tables.
+- M9a–d each D1 prefix: `fts5:` → plain/JSON/deep-nesting warnings; `no such column` → warning tests; `unknown special query` → `union_search_no_input_fails` (`*`); `unterminated string` → `"` tests.
+- M12 warning not copied, M13 copy OOM ignored (`store_search_warning_copy_oom_is_oom`), M14 probe on blank R, M15 R kept after a warning, M16 empty MATCH queried, M30 R not trimmed (blank test).
+- M17 exact rule dropped, M19 prefix rule dropped, M19b prefix one character short, M20a/b either key rule ASC: `store_search_ranks_exact_key_then_key_prefix_first`. M19 and M19b **survived** the first fixture: my comment said each later row had the better bm25, and the run showed the prefix row already beat the pref row. The fixture now comes from a probe where bm25 alone gives the full reverse (pref −4.16e-06, prefix −3.94e-06, exact −3.83e-06), plus a key `editox` that differs from q only in q's last character; all five die.
+- M18a/b `IS` → `=`: keyless test. M21a–c each weight, M21d bm25 DESC: weighted test (probe: default weights give body, tags, key; (10,1,4) key, tags, body; each single change reorders). M22a/b recency and id ties: the two old order tests.
+- M23 MATCH reads ?1, M24 binds swapped, M29 q not lowercased: many search tests / the exact-key test (query `Editor`).
+- M25 warning never printed: V27 + union CLI tests. M25b guard dropped (a NULL warning printed): `union_search_parsed_raw_part_has_no_warning`, `cli_repair_search_index_rebuilds`.
+- M27 D27 check `if (false)`: `-Wunreachable-code` compile kill; rerun as `utf8_is_valid(raw, 0U)`: `union_search_invalid_utf8_is_usage`. M28a/b status map: token-OOM and invalid-UTF-8 store tests. M31 COMMIT failure keeps the page, M32 warning kept on error: `store_search_commit_failure_drops_page_and_warning`.
+
+Equivalent mutants, kept on purpose:
+
+- M2 tokens joined with no space, M3 a leading space: FTS5 reads `"zed"*"other"*` as an implicit AND and ignores a leading space (probe: same counts with and without the space). The space follows E2.2 step 5.
+- M6 the one-side form drops R when P is empty. P is empty only when every token was E10.1 marks, and FTS rows have those marks folded. Probe: a body that is only U+05B5 and a tag that is only U+05B5; queries `ֵ`, `ֵ*`, `"ֵ"`, `ֵ ַ` all total 0. `"%s%s"` keeps E2.1 (3) as written at no extra code.
+- M10 `rc == SQLITE_ERROR &&` dropped: another step code with a D1 message would need FTS5 to set a D1 text on a non-ERROR code; `CORRUPT_VTAB` reads `database disk image is malformed`. Kept because E2.1a names SQLITE_ERROR.
+- M11 prefix → substring match: every D1 text SQLite produces starts with its prefix.
+- M33 the probe's bind failure unchecked: `sqlite3_bind_text(..., -1, SQLITE_STATIC)` on index 1 fails only with `SQLITE_TOOBIG` (≥ 1,000,000,000 bytes). The check reuses `list_bind_texts`, which the list path covers.
+
+Coverage: functions 100%, effective lines 100%, 0 missed branch sides in the four pure TUs. Round 9.3 read of every zero-hit line in the touched code: in `store_sqlite.c` only `return -1;` / `return (PageResult){.st = STORE_ERR_INTERNAL};` for SQL-buffer truncation (fixed SQL into 8 KB buffers) and the probe's bind-failure `goto cleanup;` (M33). The first coverage run caught four real must-cover lines (NULL arguments, R/q/MATCH OOM, BEGIN failure, COMMIT failure); each got a test. In `cmd_query.c` the zero-hit lines are pre-existing (`trim_query_copy`'s NULL raw, `utc_now` and output failures).
+
+Probes beyond the plan (`build/remember`, ASan):
+
+- Fuzz: 1,000 strings from `"`, `(`, `)`, `*`, `:`, `^`, `-`, `+`, `,`, `.`, `{`, `}`, NEAR/AND/OR/NOT, column names, Hebrew, a lone mark, emoji, ESC, LF, TAB, `_`, with invalid UTF-8 (`ff`, `c0 80`, `ed a0 80`, `80`) in every tenth: 743 exit 0 with a warning, 141 exit 0 clean, 100 exit 1 `invalid UTF-8`, 16 exit 1 `empty search query` (whitespace-only; stage 5 makes those succeed). No sanitizer report. No input where R parsed alone but `(P) OR (R)` failed.
+- Echoed values (round 3.3): `a\nb:c` → `no such column: b` (FTS5 splits on LF, so no newline reaches the message). ESC → plain `?`, JSON `\u001b`. U+009B → plain `?`, JSON raw (`decision:plan18c-mask-c1`). A 300-byte column name → the full 335-character line (heap copy, no truncation).
+- `--db /nonexistent/dir/x.db --no-create` and a missing file with `--no-create`: `cannot_open`, exit 1. `search ''`: still `empty search query` (stage 5).
+- `search -x` without `--`: `unknown option '-x'` on `main` and here (the grill above).
+- Handover probe 3, `search "$(python3 -c 'print("a "*10000)')"`: exit 0, total 1; 0.47 s (ASan) and 0.68 s (Release), one cold run each. Probes 2 (fuzz), 7 (corrupt FTS) and 8 (facade with the warning) are above; 1, 4, 5 and 6 need facets (stage 4).
+
+Simplify pass:
+
+- Applied: `test_search.c` `search_unparseable_query_is_a_plain_warning` deleted (−18 lines): V27 already pins the plain warning line at the same layer.
+- Applied: `*warning = NULL` in the probe (−1 line): the caller's initializer sets it; the comment says "NULL on entry".
+- Applied: `store_status_from_sqlite` (−14) and `run_count_and_page`'s `map_err` parameter (one error map left); the runtime `bind_cap < 2U` guard → `_Static_assert` (−3); one rollback block for probe and query failures (−4).
+- Declined: merging `search_build_where` into `search_query_exec` (about −8 lines). It mirrors `list_build_where` / `list_query_exec`; one shape for both paths.
+- Declined: binding R by length instead of a heap copy (−3 lines). The NUL-terminated copy lets the probe reuse `list_bind_texts`; a length bind adds an `int` cast and its own failure line.
+- Declined: inlining `search_match` (−6 lines). It is the E2.1 (3)–(5) rule in one place.
+- Tests: `test_store_search.c` 24 tests, `test_union_search.c` 6. Store tests prove content; CLI tests prove only that the warning and exit reach the process (round 3.1).
+
+Handover items: Release (`-DCMAKE_BUILD_TYPE=Release`, `/usr/bin/clang`) against `17f01e6`: `remember` 1,887,176 → 1,903,752 B (+16,576 B), `libremember_core.a` 279,248 → 281,632 B (+2,384 B). From this stage `store_search` calls `search_terms` → `unicode` → utf8proc, so a non-CMake consumer of `libremember_core.a` must link `libutf8proc.a` next to `libsqlite3.a` and `libsha256.a`. The Mac app ships the `remember` binary (`App/Resources/remember`) and is not such a consumer.
+
+Docs: `docs/engineering-notes.md` `store_search` bullet and the diagnostics sentence on `STORE_ERR_QUERY`; `skills/remember/SKILL.md` FTS note (a query FTS5 cannot parse is a warning on exit 0); `tests/COVERAGE.md` (V27 row, two new files). Stage 6 still rewrites help, SKILL.md, and README.
+
+Gate on this tree (2026-10-22), after the last code edit (no file under `src`, `tests`, `docs`, `skills` or `scripts` is newer than the gate start):
+
+- `ctest --test-dir build` (ASan/UBSan, `REMEMBER_TEST_VFS=ON`, `ctest -N` = 5): 5/5. `remember_store_tests`: 411 tests, 0 failed.
+- `./scripts/lint-all.sh`: LINT OK (format, four boundaries, cppcheck src + tests, `gcc -fanalyzer`, clang-tidy).
+- `./scripts/check-coverage.sh`: functions 100%, effective lines 100%; `search_terms.c` 176, `unicode.c` 80, `normalize.c` 268, `output.c` 572 branch sides, 0 missed.
+- `./scripts/ci-linux.sh`: OK, 5/5, **iwyu PASS**, scan-build PASS.
+- `cmake --build build --target leaks-macos`: PASS.
+
 ## Review Notes
 
 ### 2026-10-20 — in-session deep review (stage 1)
@@ -581,3 +688,16 @@ Pragmatic write gate: DRY PASS after the fix (one trim, one fold, one decoder, o
 1. After check-coverage, list the zero-hit lines in the TUs you touched (llvm-cov show ... | awk -F'|' '$2 ~ /^ *0$/') and read each one. The regex excludes every "return -1;" and *_ERR_ return, so a real branch (a comparator side, a rule) can hide there.
 2. A qsort comparator gets a direct test with each argument order; qsort decides which side it calls, not your test.
 ```
+
+### 2026-10-22 — in-session deep review (stage 3)
+
+Lenses: `pref:review-lenses` 1–9, comprehensive, ponytail, `docs/STEP_REVIEW_CHECKLIST.md`. Bugbot is not installed.
+
+- **important, fixed.** M19 and M19b survived: the ranking fixture did not pin the key-prefix rule, and its comment claimed a bm25 order nobody had run. The fixture now comes from a probe (Implementation Notes).
+- **important, fixed.** Four must-cover failure lines in `store_search` (NULL arguments, OOM, BEGIN, COMMIT) had no test; the first coverage run named them.
+- **important, fixed (round 2.4).** Old search tests read `entries[0]` after a failed assert, so mutant M7 crashed the store suite instead of naming red tests. Six reads are guarded.
+- **nit, fixed.** Stale comments: `store_status_plain` ("non-FTS"), `list_sort_column` and `list_append_cmp` (search now passes `updated_at`), the CLI positional ("FTS query"); docs that still said `invalid search query`.
+- **grill ×4**, answered: `decision:plan18-drop-quote-doubling`, `decision:plan18-warning-wired-stage3`, `decision:plan18-delete-store-err-query`, `decision:plan18-dash-query-needs-double-dash`.
+- **praise.** One MATCH gives the dedup for free; a probe that keeps every non-D1 error real; `IS` closes the NULL-key ranking trap before it ships.
+
+Pragmatic write gate: DRY PASS (the probe reuses `list_bind_texts`, `store_status_plain`, `dup_str`; one `utf8_is_valid`; one error map in `run_count_and_page`). Easy-to-replace PASS (tokens and q stay in `search_terms.c`; SQLite stays in `store_sqlite.c`; the CLI sees only `SearchResult`). Orthogonal PASS (`list` code paths unchanged except the dropped `map_err` argument; output untouched).

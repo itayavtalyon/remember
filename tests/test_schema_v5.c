@@ -303,7 +303,7 @@ TEST(schema_v5_search_finds_key_word)
     memset(&q, 0, sizeof(q));
     q.query = "editor";
     q.filters.limit = SCHEMA_V5_LIMIT;
-    page = store_search(s, &q, k_now);
+    page = store_search(s, &q, k_now).page;
     ASSERT_EQ_STATUS(page.st, STORE_OK);
     ASSERT_EQ_INT((int)page.total, 1);
     ASSERT_STREQ(page.count > 0U ? page.entries[0].key : "", "pref:editor");
@@ -341,7 +341,7 @@ TEST(schema_v5_rekey_search_follows_the_new_key)
     memset(&q, 0, sizeof(q));
     q.query = "editor";
     q.filters.limit = SCHEMA_V5_LIMIT;
-    page = store_search(s, &q, k_now);
+    page = store_search(s, &q, k_now).page;
     ASSERT_EQ_STATUS(page.st, STORE_OK);
     ASSERT_EQ_INT((int)page.total, 0);
     free_page(page);
@@ -349,7 +349,7 @@ TEST(schema_v5_rekey_search_follows_the_new_key)
     memset(&q, 0, sizeof(q));
     q.query = "vim";
     q.filters.limit = SCHEMA_V5_LIMIT;
-    page = store_search(s, &q, k_now);
+    page = store_search(s, &q, k_now).page;
     ASSERT_EQ_STATUS(page.st, STORE_OK);
     ASSERT_EQ_INT((int)page.total, 1);
     ASSERT_STREQ(page.count > 0U ? page.entries[0].key : "", "pref:vim");
@@ -384,7 +384,7 @@ TEST(schema_v5_search_folds_hebrew_marks_in_the_row)
     memset(&q, 0, sizeof(q));
     q.query = k_plain_hebrew;
     q.filters.limit = SCHEMA_V5_LIMIT;
-    page = store_search(s, &q, k_now);
+    page = store_search(s, &q, k_now).page;
     ASSERT_EQ_STATUS(page.st, STORE_OK);
     ASSERT_EQ_INT((int)page.total, 1);
     ASSERT_STREQ(page.count > 0U ? page.entries[0].body : "", k_niqqud_body);
@@ -436,7 +436,7 @@ TEST(schema_v5_v4_migrates_to_the_fresh_schema)
     memset(&q, 0, sizeof(q));
     q.query = "editor";
     q.filters.limit = SCHEMA_V5_LIMIT;
-    page = store_search(s, &q, k_now);
+    page = store_search(s, &q, k_now).page;
     ASSERT_EQ_STATUS(page.st, STORE_OK);
     ASSERT_EQ_INT((int)page.total, 1);
     free_page(page);

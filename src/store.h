@@ -22,7 +22,6 @@ typedef enum {
     STORE_ERR_SQLITE,
     STORE_ERR_OOM,
     STORE_ERR_INTERNAL,
-    STORE_ERR_QUERY,             /* invalid FTS5 MATCH syntax (search) */
     STORE_ERR_CONFLICT,          /* keyless body-hash collision on update */
     STORE_ERR_EXPIRED,           /* locator hit expired without STORE_BIN_EXPIRED */
     STORE_ERR_NOT_EXPIRED,       /* locator used STORE_BIN_EXPIRED but row is live */
@@ -262,18 +261,27 @@ typedef struct {
 PageResult store_list(Store *s, const ListQuery *q, const char *now);
 
 /*
- * Ranked FTS5 search. query is raw FTS5 MATCH syntax (required, non-empty at CLI).
- * filters reuse ListQuery: tag AND, optional source/key, limit/offset, since/until.
- * Rank stays bm25(entries_fts) ASC, then updated_at DESC, id DESC. filters.sort
- * is ignored. since/until filter updated_at, not the sort column.
- * Same ownership as store_list (see PageResult). STORE_ERR_QUERY on bad MATCH syntax.
+ * Union search (006 E2.1). query is the user's QUERY, valid UTF-8 (the CLI
+ * checks, D27; invalid is STORE_ERR_INTERNAL). filters reuse ListQuery: tag
+ * AND, optional source/key, limit/offset, since/until on updated_at; sort is
+ * ignored.
  */
 typedef struct {
-    const char *query; /* FTS5 MATCH string */
+    const char *query;
     ListQuery filters;
 } SearchQuery;
 
-PageResult store_search(Store *s, const SearchQuery *q, const char *now);
+/*
+ * page as for store_list (see PageResult). warning is heap (free it): the
+ * FTS5 message when the raw part does not parse (E2.1 (5), E2.3), else NULL.
+ * NULL on error.
+ */
+typedef struct {
+    PageResult page;
+    char *warning;
+} SearchResult;
+
+SearchResult store_search(Store *s, const SearchQuery *q, const char *now);
 
 /*
  * Soft-delete one entry (locator: live or expired). Sets deleted_at=now, clears

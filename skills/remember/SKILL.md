@@ -276,7 +276,7 @@ Agents should always use `--json` when parsing.
 - Query language is SQLite FTS5 MATCH (document in help / SQLite docs)
 - The key is indexed: `search editor` finds `pref:editor`.
 - Hebrew marks are folded out of the index. The stored body keeps them.
-- Invalid MATCH syntax → exit 1 (`invalid search query`)
+- A query FTS5 cannot parse is not an error: exit 0, prefix matches, and a `warning` on stderr (`raw_query_ignored`)
 - Empty result set → exit 0 with `count:0` (not an error)
 
 ## Project status (handoff)

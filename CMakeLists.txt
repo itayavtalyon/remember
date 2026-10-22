@@ -296,10 +296,12 @@ set(REMEMBER_TEST_SOURCES
     tests/test_store.c
     tests/test_store_links.c
     tests/test_store_sync.c
+    tests/test_store_search.c
     tests/test_normalize.c
     tests/test_add.c
     tests/test_get_list_delete.c
     tests/test_search.c
+    tests/test_union_search.c
     tests/test_update.c
     tests/test_json_db_config.c
     tests/test_key.c
@@ -358,6 +360,7 @@ add_executable(remember_store_tests
     tests/test_store.c
     tests/test_store_links.c
     tests/test_store_sync.c
+    tests/test_store_search.c
     tests/test_normalize.c
     tests/test_schema_v5.c
     src/store_sqlite.c

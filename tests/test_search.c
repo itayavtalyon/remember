@@ -229,23 +229,6 @@ TEST(search_limit)
     free(db);
 }
 
-TEST(search_invalid_fts_syntax_rejected)
-{
-    char *db = make_temp_db_path();
-    const char *args[] = {"search", "AND AND"};
-    CmdResult r;
-    ASSERT_TRUE(db != NULL);
-    {
-        const char *a[] = {"add", "something searchable"};
-        CmdResult ar = run_remember(db, a, sizeof(a) / sizeof(a[0]), NULL);
-        cmd_result_free(&ar);
-    }
-    r = run_remember(db, args, sizeof(args) / sizeof(args[0]), NULL);
-    ASSERT_EQ_INT(r.exit_code, 1);
-    cmd_result_free(&r);
-    free(db);
-}
-
 TEST(search_multi_tag_and_filter)
 {
     char *db = make_temp_db_path();
@@ -281,6 +264,5 @@ void register_search_tests(void)
     RUN_TEST(search_json_includes_full_body);
     RUN_TEST(search_human_preview_not_only_id);
     RUN_TEST(search_limit);
-    RUN_TEST(search_invalid_fts_syntax_rejected);
     RUN_TEST(search_multi_tag_and_filter);
 }

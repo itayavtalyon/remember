@@ -663,23 +663,6 @@ TEST(json_errors_trash_is_deprecated_flag)
     free(db);
 }
 
-TEST(json_errors_invalid_search_query_keeps_its_text)
-{
-    char *db = make_temp_db_path();
-    const char *args[] = {"--json-errors", "search", "\""};
-    CmdResult r;
-
-    ASSERT_TRUE(db != NULL);
-    r = run_remember(db, args, sizeof(args) / sizeof(args[0]), NULL);
-    ASSERT_EQ_INT(r.exit_code, 1);
-    ASSERT_STREQ(r.out, "");
-    ASSERT_STREQ(r.err,
-                 "{\"version\":1,\"error\":{\"code\":\"invalid_query\",\"message\":\"invalid "
-                 "search query\"}}\n");
-    cmd_result_free(&r);
-    free(db);
-}
-
 TEST(json_errors_synced_folder_is_one_warning)
 {
     enum { PATH_CAP = 4096 };
@@ -756,7 +739,6 @@ TEST(store_text_codes_follow_the_locked_split)
     expect_diag(code_for_store_status(STORE_ERR_SQLITE), DIAG_DATABASE);
     expect_diag(code_for_store_status(STORE_ERR_OOM), DIAG_OUT_OF_MEMORY);
     expect_diag(code_for_store_status(STORE_ERR_INTERNAL), DIAG_INTERNAL);
-    expect_diag(code_for_store_status(STORE_ERR_QUERY), DIAG_INVALID_QUERY);
     expect_diag(code_for_store_status(STORE_ERR_CONFLICT), DIAG_BODY_CONFLICT);
     expect_diag(code_for_store_status(STORE_ERR_EXPIRED), DIAG_EXPIRED);
     expect_diag(code_for_store_status(STORE_ERR_NOT_EXPIRED), DIAG_NOT_EXPIRED);
@@ -917,7 +899,6 @@ TEST(golden_error_lines_and_d9_codes)
         {{"get", "999"}, "not found", "not_found", 2, false, {0}},
         {{"get", "--key", "k2"}, "deleted", "deleted", 3, false, {0}},
         {{"get", "--deleted", "--key", "k1"}, "not_deleted", "not_deleted", 3, false, {0}},
-        {{"search", "\""}, "invalid search query", "invalid_query", 1, false, {0}},
         {{"link", "1", "1"}, "self-link", "self_link", 1, false, {0}},
         {{"rekey", "--key", "k1", "--to-key", "k2"},
          "key conflicts with entry 2",
@@ -3764,7 +3745,6 @@ void register_errors_tests(void)
     RUN_TEST(plain_not_found_is_unchanged);
     RUN_TEST(plain_trash_warning_uses_warning_prefix);
     RUN_TEST(json_errors_trash_is_deprecated_flag);
-    RUN_TEST(json_errors_invalid_search_query_keeps_its_text);
     RUN_TEST(json_errors_synced_folder_is_one_warning);
     RUN_TEST(store_text_codes_follow_the_locked_split);
     RUN_TEST(err_fmt_keeps_a_long_unknown_option);
