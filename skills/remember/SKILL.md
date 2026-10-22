@@ -188,7 +188,8 @@ remember --json conflict accept --id 1 --keep local|incoming|both
 - Exit **0** even when conflicts were recorded. **Always run `conflicts` after import.**
 - Reasons: `concurrent_vv` | `key_clash` | `hash_clash`
 - `--keep both` remints incoming `sync_id` on `concurrent_vv`; on clash keeps incoming sync_id (keyless if the slot is taken)
-- JSON import: `action:imported` + `inserted`/`updated`/`unchanged`/`conflicts` counts
+- JSON import: `action:imported` + `inserted`/`updated`/`unchanged`/`conflicts`/`rejected` counts
+- `rejected`: rows skipped because a key or tag is not what a local write would store (a control byte, uppercase, too long). Nothing of that row is written.
 
 ### device
 

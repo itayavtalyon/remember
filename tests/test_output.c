@@ -582,6 +582,40 @@ TEST(output_preview_cuts_by_bytes_before_the_scalar_cap)
     assert_written(f, want);
 }
 
+/* decision:import-control-bytes-followup: a peer's stored text is not trusted. */
+TEST(output_entry_human_line_masks_control_bytes_in_key_tags_and_updated_at)
+{
+    char *tags[] = {(char *)"t\x1b", (char *)"\x7f\n"};
+    Entry e = given_entry();
+    FILE *f = given_stream();
+
+    e.key = (char *)"k\x1b[2J\n";
+    e.tags = tags;
+    e.ntags = 2;
+    e.updated_at = (char *)"u\x1b[31m\n";
+    ASSERT_EQ_INT(output_entry_human_line(f, &e, NULL, 0, NOW), 0);
+    assert_written(f, "7 | k?[2J? | t?,?? | body | u?[31m? | \n");
+}
+
+TEST(output_tags_human_masks_control_bytes)
+{
+    TagCount tag = {.name = (char *)"t\x1b[1m\n", .count = TAG_COUNT};
+    FILE *f = given_stream();
+
+    ASSERT_EQ_INT(output_tags_human(f, &tag, 1), 0);
+    assert_written(f, "t?[1m?\t3\n");
+}
+
+TEST(output_related_human_masks_a_neighbor_key)
+{
+    StoreNeighbor link = given_link(SUBJECT_ID, SUBJECT_ID, STORE_EDGE_RELATED);
+    FILE *f = given_stream();
+
+    link.neighbor_key = (char *)"n\x1b]0;x\x07\n";
+    ASSERT_EQ_INT(output_related_human(f, &link, 1, NOW), 0);
+    assert_written(f, "Related:\nrelated n?]0;x?? nb\n");
+}
+
 TEST(output_related_human_rejects_missing_arguments)
 {
     FILE *f = given_stream();
@@ -991,6 +1025,9 @@ void register_output_tests(void)
     RUN_TEST(output_preview_stops_at_a_carriage_return);
     RUN_TEST(output_preview_masks_del);
     RUN_TEST(output_preview_cuts_by_bytes_before_the_scalar_cap);
+    RUN_TEST(output_entry_human_line_masks_control_bytes_in_key_tags_and_updated_at);
+    RUN_TEST(output_tags_human_masks_control_bytes);
+    RUN_TEST(output_related_human_masks_a_neighbor_key);
     RUN_TEST(output_related_human_rejects_missing_arguments);
     RUN_TEST(output_related_human_omits_an_empty_preview);
     RUN_TEST(failing_stream_fails_past_the_limit_and_stays_failed);

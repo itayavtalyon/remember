@@ -471,6 +471,7 @@ typedef struct {
     size_t updated;
     size_t unchanged;
     size_t conflicts;
+    size_t rejected; /* key or tag not as a local write would store it; row skipped */
 } StoreImportCounts;
 
 /*
@@ -480,8 +481,9 @@ typedef struct {
  * STORE_ERR_SOURCE_TOO_OLD. user_version > 5 → STORE_ERR_SOURCE_TOO_NEW
  * ("database is newer than this remember"). A missing conflicts.origin column
  * or a missing bucket_prefixes / settings table is absent, not an error; those
- * rows are not copied. Exit-path JSON: action imported + these counts;
- * STORE_OK even when conflicts > 0.
+ * rows are not copied. A row whose key or a tag is not what normalize_token
+ * would store is skipped and counted in rejected. Exit-path JSON: action
+ * imported + these counts; STORE_OK even when conflicts or rejected > 0.
  */
 StoreStatus store_import(Store *dst, const char *src_path, const char *now,
                          StoreImportCounts *out_counts);

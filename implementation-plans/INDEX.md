@@ -41,6 +41,7 @@ main → cli_parse → commands.h (cmd_add | cmd_locator | cmd_query) → store_
 | 17a | [Plain notices + duplicate VV keys](17a-plain-line-and-duplicate-vv.md) | One plain notice stays one line; a repeated device key is a malformed version vector. After 17, before 18 ✅ |
 | 18 | [Union search](18-union-search.md) | Prefix ∪ raw FTS; never fails on input; `keys`/`tags` facets with tiers; utf8proc vendored (006 §2, §9) |
 | 18b | [Branch-coverage gate](18b-branch-coverage-gate.md) | `check-coverage.sh` fails on any untaken branch side in `search_terms.c`, `unicode.c`, `normalize.c`, `output.c`; no excuses. Runs on `plan18-union-search` between plan 18 stages 2 and 3 ✅ |
+| 18c | [Import control bytes](18c-import-control-bytes.md) | `import --from-db` skips and counts (`rejected`) rows whose key or tag is not canonical; human output masks C0/DEL in every stored string it prints. On `fix/import-control-bytes` (off plan 18b) ✅ |
 | 19 | [Bucket prefixes](19-bucket-prefixes.md) | `config get/set bucket-prefixes`; add-wins set + tombstones; cap 8 + overflow (006 §11) |
 | 20 | [Export](20-export.md) | `export --format json|md|csv`; deterministic; atomic write + `--force` (006 §5) |
 | 21 | [Import formats](21-import-formats.md) | `import --from-json/--from-md/--from-csv`; bad records listed; `origin`; prefix merge; round trip (006 §6) |

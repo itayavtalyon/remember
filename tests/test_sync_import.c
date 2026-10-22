@@ -2264,6 +2264,132 @@ TEST(cli_import_vv_zero_clock_in_a_membership)
     (void)rmdir(dir);
 }
 
+static void given_added(const char *db, const char *const *args, size_t nargs)
+{
+    CmdResult r = run_remember(db, args, nargs, NULL);
+
+    ASSERT_EQ_INT(r.exit_code, 0);
+    cmd_result_free(&r);
+}
+
+/* decision:import-control-bytes-followup: a row whose key or a tag is not what
+   normalize_token would store is skipped and counted, never written. */
+TEST(cli_import_skips_noncanonical_key_and_tag_rows)
+{
+    char *local = make_temp_db_path();
+    char *foreign = make_temp_db_path();
+    CmdResult r;
+    char *keys = NULL;
+    char *tags = NULL;
+    const char *good[] = {"add", "--key", "good", "--tag", "ok", "good body"};
+    const char *esc_key[] = {"add", "--key", "esckey", "b1"};
+    const char *esc_tag[] = {"add", "--tag", "esctag", "b2"};
+    const char *upper_key[] = {"add", "--key", "upperkey", "b3"};
+    const char *upper_tag[] = {"add", "--tag", "uppertag", "b4"};
+    const char *long_key[] = {"add", "--key", "longkey", "b5"};
+    const char *empty_key[] = {"add", "--key", "emptykey", "b6"};
+    const char *keyless[] = {"add", "keyless body"};
+    const char *imp[] = {"--json", "import", "--from-db", NULL};
+
+    ASSERT_TRUE(local != NULL && foreign != NULL);
+    given_added(foreign, good, sizeof(good) / sizeof(good[0]));
+    given_added(foreign, esc_key, sizeof(esc_key) / sizeof(esc_key[0]));
+    given_added(foreign, esc_tag, sizeof(esc_tag) / sizeof(esc_tag[0]));
+    given_added(foreign, upper_key, sizeof(upper_key) / sizeof(upper_key[0]));
+    given_added(foreign, upper_tag, sizeof(upper_tag) / sizeof(upper_tag[0]));
+    given_added(foreign, long_key, sizeof(long_key) / sizeof(long_key[0]));
+    given_added(foreign, empty_key, sizeof(empty_key) / sizeof(empty_key[0]));
+    given_added(foreign, keyless, sizeof(keyless) / sizeof(keyless[0]));
+    sqlite_exec(foreign, "UPDATE entries SET key='evil'||char(27)||'[2J' WHERE key='esckey';"
+                         "UPDATE tags SET name='t'||char(27)||'[1m' WHERE name='esctag';"
+                         "UPDATE entries SET key='Upper' WHERE key='upperkey';"
+                         "UPDATE tags SET name='Upper' WHERE name='uppertag';"
+                         "UPDATE entries SET key=printf('%.300c','k') WHERE key='longkey';"
+                         "UPDATE entries SET key='' WHERE key='emptykey';");
+
+    imp[3] = foreign;
+    r = run_remember(local, imp, sizeof(imp) / sizeof(imp[0]), NULL);
+    ASSERT_EQ_INT(r.exit_code, 0);
+    ASSERT_STR_CONTAINS(r.out, "\"inserted\":2,\"updated\":0,\"unchanged\":0,\"conflicts\":0,"
+                               "\"rejected\":6}");
+    cmd_result_free(&r);
+    keys = harness_sqlite_query_line(local, "SELECT group_concat(key) FROM entries;");
+    tags = harness_sqlite_query_line(local, "SELECT group_concat(name) FROM tags;");
+    ASSERT_TRUE(keys != NULL && tags != NULL);
+    if (keys != NULL && tags != NULL) {
+        ASSERT_STREQ(keys, "good");
+        ASSERT_STREQ(tags, "ok");
+    }
+    free(keys);
+    free(tags);
+    free(local);
+    free(foreign);
+}
+
+/* The check runs before the merge too: a present row stays as it is. */
+TEST(cli_import_skips_noncanonical_row_already_present)
+{
+    char *local = make_temp_db_path();
+    char *foreign = make_temp_db_path();
+    CmdResult r;
+    char *key = NULL;
+    const char *add[] = {"add", "--key", "k", "x"};
+    const char *imp[] = {"import", "--from-db", NULL};
+
+    ASSERT_TRUE(local != NULL && foreign != NULL);
+    given_added(local, add, sizeof(add) / sizeof(add[0]));
+    {
+        char cmd[PATH_BUF * 2];
+        (void)snprintf(cmd, sizeof(cmd), "cp '%s' '%s'", local, foreign);
+        ASSERT_EQ_INT(system(cmd), 0);
+    }
+    /* A foreign clock no local device has: without the check this row dominates. */
+    sqlite_exec(foreign, "UPDATE entries SET key='k'||char(27), "
+                         "version_vector=json_set(version_vector,'$.peer',9) WHERE id=1;");
+
+    imp[2] = foreign;
+    r = run_remember(local, imp, sizeof(imp) / sizeof(imp[0]), NULL);
+    ASSERT_EQ_INT(r.exit_code, 0);
+    ASSERT_STREQ(r.out, "inserted 0 updated 0 unchanged 0 conflicts 0 rejected 1\n");
+    cmd_result_free(&r);
+    key = harness_sqlite_query_line(local, "SELECT key FROM entries WHERE id=1;");
+    ASSERT_TRUE(key != NULL);
+    if (key != NULL) {
+        ASSERT_STREQ(key, "k");
+    }
+    free(key);
+    free(local);
+    free(foreign);
+}
+
+/* Plain conflicts prints the incoming sync_id, which import does not check. */
+TEST(cli_conflicts_human_masks_a_control_byte_in_the_sync_id)
+{
+    char *local = make_temp_db_path();
+    char *foreign = make_temp_db_path();
+    CmdResult r;
+    const char *add_local[] = {"add", "--key", "slot", "local body"};
+    const char *add_foreign[] = {"add", "--key", "slot", "foreign body"};
+    const char *imp[] = {"import", "--from-db", NULL};
+    const char *conflicts[] = {"conflicts"};
+
+    ASSERT_TRUE(local != NULL && foreign != NULL);
+    given_added(local, add_local, sizeof(add_local) / sizeof(add_local[0]));
+    given_added(foreign, add_foreign, sizeof(add_foreign) / sizeof(add_foreign[0]));
+    sqlite_exec(foreign, "UPDATE entries SET sync_id='s'||char(27)||'[2J'||char(10);");
+    imp[2] = foreign;
+    r = run_remember(local, imp, sizeof(imp) / sizeof(imp[0]), NULL);
+    ASSERT_EQ_INT(r.exit_code, 0);
+    cmd_result_free(&r);
+
+    r = run_remember(local, conflicts, sizeof(conflicts) / sizeof(conflicts[0]), NULL);
+    ASSERT_EQ_INT(r.exit_code, 0);
+    ASSERT_STREQ(r.out, "1\ts?[2J?\tkey_clash\n");
+    cmd_result_free(&r);
+    free(local);
+    free(foreign);
+}
+
 void register_sync_import_tests(void)
 {
     RUN_TEST(cli_import_inserts_preserves_sync_id_remaps_links_no_device_register);
@@ -2299,6 +2425,9 @@ void register_sync_import_tests(void)
     RUN_TEST(cli_conflict_accept_demote_hash_escape_refuses);
     RUN_TEST(cli_import_vv_zero_clock_in_a_membership);
     RUN_TEST(cli_import_concurrent_reimport_idempotent);
+    RUN_TEST(cli_import_skips_noncanonical_key_and_tag_rows);
+    RUN_TEST(cli_import_skips_noncanonical_row_already_present);
+    RUN_TEST(cli_conflicts_human_masks_a_control_byte_in_the_sync_id);
 }
 
 // NOLINTEND(readability-identifier-length,cppcoreguidelines-avoid-magic-numbers,readability-magic-numbers,android-cloexec-fopen,bugprone-command-processor,cert-env33-c,concurrency-mt-unsafe,bugprone-unchecked-string-to-number-conversion,cert-err34-c)

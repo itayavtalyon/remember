@@ -6835,12 +6835,43 @@ static StoreStatus import_merge_present(sqlite3 *dst, const char *device_id, con
     }
 }
 
+/* What a local write would store: a peer row that differs is never written
+   (decision:import-control-bytes-followup). */
+static bool import_token_canonical(const char *token)
+{
+    char buf[REMEMBER_TOKEN_MAX + 1];
+
+    if (normalize_token(token, buf, sizeof(buf)) != NORM_OK || strcmp(buf, token) != 0) {
+        return false;
+    }
+    return true;
+}
+
+static bool import_row_canonical(const ImportRow *row)
+{
+    size_t i = 0;
+
+    if (row->key != NULL && !import_token_canonical(row->key)) {
+        return false;
+    }
+    for (i = 0; i < row->ntags; i++) {
+        if (!import_token_canonical(row->tags[i])) {
+            return false;
+        }
+    }
+    return true;
+}
+
 static StoreStatus import_one_entry(sqlite3 *dst, const char *device_id, const ImportRow *row,
                                     const char *now, StoreImportCounts *counts, StoreError *serr)
 {
     Entry local;
     StoreStatus st = STORE_OK;
 
+    if (!import_row_canonical(row)) {
+        counts->rejected++;
+        return STORE_OK;
+    }
     memset(&local, 0, sizeof(local));
     st = load_entry_by_sync_id(dst, row->sync_id, &local, serr);
     if (st == STORE_ERR_NOT_FOUND) {

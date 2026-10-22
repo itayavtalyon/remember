@@ -391,22 +391,13 @@ enum { LIST_PREVIEW_CP = 80U, STUB_PREVIEW_CP = 40U, PREVIEW_BUF = 192U };
 
 static void fill_preview(char dst[PREVIEW_BUF], const char *body, size_t max_cp);
 
-/* fputs that writes nothing for NULL. */
-static int write_text_or_nothing(FILE *out, const char *s)
-{
-    if (s == NULL) {
-        return 0;
-    }
-    return fputs(s, out) < 0 ? -1 : 0;
-}
-
 /* First line, max 80 codepoints, ellipsis if truncated. Control bytes → '?'. */
 static int write_preview(FILE *out, const char *body)
 {
     char buf[PREVIEW_BUF];
 
     fill_preview(buf, body, LIST_PREVIEW_CP);
-    return write_text_or_nothing(out, buf);
+    return fputs(buf, out) < 0 ? -1 : 0;
 }
 
 int output_tags_envelope(FILE *out, const TagCount *tags, size_t count)
@@ -453,10 +444,9 @@ int output_tags_human(FILE *out, const TagCount *tags, size_t count)
         return -1;
     }
     for (i = 0; i < count; i++) {
-        /* Printed raw. Local writes pass normalize_token (no ASCII controls), but
-           import does not re-check a peer's tags (open security follow-up). */
-        if (fprintf(out, "%s\t%lld\n", tags[i].name != NULL ? tags[i].name : empty_str(),
-                    tags[i].count) < 0) {
+        /* Masked: stored text may come from a peer (decision:import-control-bytes-followup). */
+        if (output_text_human(out, tags[i].name, false) != 0 ||
+            fprintf(out, "\t%lld\n", tags[i].count) < 0) {
             return -1;
         }
     }
@@ -482,23 +472,22 @@ int output_entry_human_line(FILE *out, const Entry *e, const StoreNeighbor *link
     if (fprintf(out, "%lld | ", e->id) < 0) {
         return -1;
     }
-    /* Printed raw. Local writes pass normalize_token (no ASCII controls), but
-       import does not re-check a peer's keys/tags (open security follow-up). */
-    if (write_text_or_nothing(out, e->key) != 0 || fputs(" | ", out) < 0) {
+    /* Masked: stored text may come from a peer (decision:import-control-bytes-followup). */
+    if (output_text_human(out, e->key, false) != 0 || fputs(" | ", out) < 0) {
         return -1;
     }
     for (i = 0; i < e->ntags; i++) {
         if (i > 0U && fputc(',', out) == EOF) {
             return -1;
         }
-        if (write_text_or_nothing(out, e->tags[i]) != 0) {
+        if (output_text_human(out, e->tags[i], false) != 0) {
             return -1;
         }
     }
     if (fputs(" | ", out) < 0 || write_preview(out, e->body) != 0 || fputs(" | ", out) < 0) {
         return -1;
     }
-    if (write_text_or_nothing(out, e->updated_at) != 0 || fputs(" | ", out) < 0) {
+    if (output_text_human(out, e->updated_at, false) != 0 || fputs(" | ", out) < 0) {
         return -1;
     }
     if (write_related_ids_cell(out, e->id, links, nlinks, now) != 0) {
@@ -796,7 +785,7 @@ int output_related_human(FILE *out, const StoreNeighbor *links, size_t count, co
             return -1;
         }
         if (n->neighbor_key != NULL) {
-            if (fputs(n->neighbor_key, out) < 0) {
+            if (output_text_human(out, n->neighbor_key, false) != 0) {
                 return -1;
             }
         } else if (fprintf(out, "%lld", n->neighbor_id) < 0) {
@@ -884,8 +873,9 @@ int output_import_envelope(FILE *out, const StoreImportCounts *counts)
     }
     if (fprintf(out,
                 "{\"version\":1,\"action\":\"imported\",\"inserted\":%zu,\"updated\":%zu,"
-                "\"unchanged\":%zu,\"conflicts\":%zu}\n",
-                counts->inserted, counts->updated, counts->unchanged, counts->conflicts) < 0) {
+                "\"unchanged\":%zu,\"conflicts\":%zu,\"rejected\":%zu}\n",
+                counts->inserted, counts->updated, counts->unchanged, counts->conflicts,
+                counts->rejected) < 0) {
         return -1;
     }
     return 0;
