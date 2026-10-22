@@ -297,13 +297,9 @@ In the v5 → v6 transaction, before the log 007 settings steps:
 - Multiplexing several requests on one socket connection (PP).
 - Web (remote HTTP) plugins.
 
-## Implementation plan (draft, moves to `implementation-plans/` after the grill)
+## Implementation plan
 
-1. **Schema v6 identity rename.** Write the §8 steps in the one v5 → v6 migration (log 007 §10). This migration lands before the rewritten plan 19. Done: tests 11, 14 (M1–M3).
-2. **Store and locators.** Rename `sync_id` to `id` in `Entry`, `store_*` and the locator code. Remove `--sync-id` and `--offset`. Make the positional take a UUID or digits (#576). Add `remember brain new-id` and the JE-3.10 open check. Done: tests 8, 13, 14, 19.
-3. **Actors and the write table.** Store actors on memories and settings rows. Apply JE-5.1 to every write path. Done: tests 15–18, 20.
-4. **Output writer.** Rewrite every writer in `src/output.c` to the JE-2 envelope with `format` `remember-message`. Add `data.memory` for single-memory commands, `links` in write output, `warnings` on stdout, and cursor fields on lists. Done: tests 1–7.
-5. **Failures in the envelope.** Put the failure envelope on stdout with `--json`, with `unknown.result` when the command is unknown. Remove plan 16's `--json-errors` before 0.3.0 ships, and re-extract plans 16–18 and 22 tests and SKILL.md that cite it (#572). Done: tests 3, 4, 8.
+The plans are [`implementation-plans/19-schema-v6.md`](../implementation-plans/19-schema-v6.md) for §8 and [`implementation-plans/21-json-envelope.md`](../implementation-plans/21-json-envelope.md) for the envelope, locators, and actors. This log does not contain a second plan. Do not re-extract plans 16, 17, 18, or 22. Plan 21 updates tests that cite removed flags. JE-3.10 is plan 25.
 6. **Schemas and goldens.** Add `remember/schema/v1/*.json` and a test that validates every golden file. Add `REMEMBER_TEST_FIXED_IDS` to test builds. Done: tests 1, 10.
 7. **Export formats.** Write the JSON, CSV and Markdown exports with the v6 names (JE-8.2, JE-8.3). Done: test 12.
 8. **Docs.** Change the skills, README, handoff docs and the CHANGELOG ("JSON: one format, `remember-message` 1, clean break") per JS D9–D11.

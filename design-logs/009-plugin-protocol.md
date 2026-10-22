@@ -193,10 +193,6 @@ From the spec §6.3:
 - **A search result cache**: cache the filter chain output per query and index version, so a repeated search skips the plugins. It needs a cache key rule in the spec.
 - A list reply with paging, if a plugin ever returns long lists.
 
-## Implementation plan (draft, moves to `implementation-plans/` after the grill)
+## Implementation plan
 
-1. **Move the spec into the repo.** Copy revision 5 to `remember/docs/PLUGIN-PROTOCOL.md` and the changelog to `remember/docs/PLUGIN-PROTOCOL-CHANGES.md`. Apply the revision 6 amendment table in Design. Do not add a conformance section. Done: the spec cites logs 007–010 and the validator passes on revision 6. (2026-10-22: done on the box for this PR, M-06; the validator was updated for revision 6.)
-2. **Validator in CI.** Add `scripts/validate_plugin_spec.py` and a docs-only CI job. Done: Verification 1.
-3. **Schema extraction.** Write `schema/plugin/v1/*.json` from the spec and fail CI on a difference. Turn on GitHub Pages for the remember repo so the `$id` URLs resolve (R2-09, #659). Done: Verification 2.
-4. **Conformance fixtures.** Export the spec examples, including the §2.4 hello and log-ids plugins (#601), to `tests/fixtures/plugin/`. Log 010 and `remember plugin test` use them. Done: Verification 3.
-5. **Freeze protocol 1.** Leave `protocol` at 1. Record revision 6 in the changelog. The Interface review is done (PP-01 to PP-18). A later breaking wire change bumps `protocol` in a new log.
+The plan is [`implementation-plans/24-plugin-protocol.md`](../implementation-plans/24-plugin-protocol.md). This log does not contain a second plan. The spec and the validator are already in the repo. Itay turns on GitHub Pages. The plan does not change GitHub settings.

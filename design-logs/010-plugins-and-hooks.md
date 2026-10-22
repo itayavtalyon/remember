@@ -530,19 +530,6 @@ Must-pass tests (`tests/`).
 - Hybrid search and URL expansion: their own logs after these four (#485).
 - A trusted `share` origin (#577, with sharing).
 
-## Implementation plan (draft, moves to `implementation-plans/` after the grill)
+## Implementation plan
 
-Order: logs 007 and 008 land first (schema v6, plan 19 rewrite, the JSON format). Each step lists its must-pass tests.
-
-1. **Three-stage search.** Split `store_search` into `store_search_candidates` (local_id, id and BM25 score, up to the candidate pool, after the filters) and `store_load_entries` (full memories by id in the given order, dropping missing and Deleted ids). Keep `store_search` as the composition with an empty chain. Keep the JSON output byte-equal to the BM25 path. Done: test 20 and the existing search tests.
-2. **Schema v6 part, outbox and sweep.** Add the §17 steps to the v6 migration, the outbox insert in every write path, the write-time filter, and the post-command sweep. Done: tests 1–3, 6, 14, 18.
-3. **Brain list.** Add `brains.json`, the open check of log 008 JE-3.10, `remember brain list` and `brain prune`. Done: test 35 and log 008 test 19.
-4. **Manifest, install and trust.** Add the manifest parser (PP §2), the trust file, `plugin add|list|show|trust|remove`, `hook add`, the confirm callback and the CLI's typed-name callback. Done: tests 13, 30, 32 and log 007 tests 8, 10.
-5. **Dispatcher and pre-flight.** Add detached dispatch, the dispatch callback, the lock, per-entry order, 4 parallel runs, at-least-once, the kill switch, `plugin rerun`, `remember sweep`, and the pre-flight warnings. Done: tests 4, 5, 7–9, 12, 16, 17, 19, 29, 31.
-6. **Sync and import events.** Add `cause.origin`, the `origins` filter and `--hooks`. Done: test 15.
-7. **Plugin processes and the filter chain.** Add the runtime dir, state file, liveness, idle stop, strikes, the crash-loop state, the chain with manifest budgets and the cap, and provenance. Done: tests 21–23.
-8. **Persistent actions.** Add actions on the shared outbox and dispatcher, `event.result` acks, and the persistent-process env and cause rule. Done: tests 27, 33 and the PP §3 fixtures.
-9. **Backfill and index state.** Store `index.json` (H-13.2). A search or a write only marks a backfill pending. Done: tests 24, 34.
-10. **Hybrid built-in plugin.** Add the open core library, the desktop plugin folder and the conformance suite. Done: test 26. Its own log follows (#485).
-11. **URL expansion plugin and the remember-mac change.** Do not start this step until the URL expansion log is closed (H-14.4 parser choice, H-14.7 setting key). Move the remember-mac log 003 fetcher, parser and SSRF guard into the open core library. Ship the URL expansion plugin with one `memory.created` action (H-14). Remove the remember-mac coordinator that calls `store.update(body:)` on the original memory. Add the iOS in-app adapter. Done: test 25 and the remember-mac tests of the share path.
-12. **Fortkeeps layer.** Install the hourly LaunchAgent (H-18.1). Add `fk-terminal`, the three callbacks, the Plugins pane, the toast and **Empty Trash**. Done: remember-mac tests for each pane.
+The plan is [`implementation-plans/25-plugins-and-hooks.md`](../implementation-plans/25-plugins-and-hooks.md). The v6 table steps are [`implementation-plans/19-schema-v6.md`](../implementation-plans/19-schema-v6.md). This log does not contain a second plan. The URL plugin waits for its own log. The hybrid ranker waits for its own log. The daemon waits for its own log. This extract implements the CLI and the host only.
