@@ -566,9 +566,10 @@ TEST(facade_conflicts_matches_cli)
         (void)snprintf(cp, sizeof(cp), "cp '%s' '%s'", local, foreign);
         ASSERT_EQ_INT(system(cp), 0);
     }
+    /* The real sha256("incoming"): import rejects a forged hash. */
     free(harness_sqlite_query_line(
         foreign, "UPDATE entries SET body='incoming', "
-                 "body_hash='abababababababababababababababababababababababababababababababab',"
+                 "body_hash='3a7470e00c076b678c41c8ae4a4945198a9e243cdb42e044612535facb5f225d',"
                  "version_vector='{\"bbbbbbbb-bbbb-7bbb-bbbb-bbbbbbbbbbbb\":1}' WHERE id=1;"));
     dev = facade_sidecar_id(local);
     ASSERT_TRUE(dev != NULL);
@@ -631,9 +632,10 @@ TEST(facade_conflict_accept_matches_cli)
         (void)snprintf(cp, sizeof(cp), "cp '%s' '%s'", local1, foreign);
         ASSERT_EQ_INT(system(cp), 0);
     }
+    /* The real sha256("incoming"): import rejects a forged hash. */
     free(harness_sqlite_query_line(
         foreign, "UPDATE entries SET body='incoming', "
-                 "body_hash='abababababababababababababababababababababababababababababababab',"
+                 "body_hash='3a7470e00c076b678c41c8ae4a4945198a9e243cdb42e044612535facb5f225d',"
                  "version_vector='{\"bbbbbbbb-bbbb-7bbb-bbbb-bbbbbbbbbbbb\":1}' WHERE id=1;"));
     dev = facade_sidecar_id(local1);
     ASSERT_TRUE(dev != NULL);

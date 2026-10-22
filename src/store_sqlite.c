@@ -3,7 +3,6 @@
 #include "normalize.h"
 #include "sqlite3.h"
 
-#include <ctype.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <limits.h>
@@ -314,12 +313,6 @@ enum { IMPORT_MIN_USER_VERSION = 4 };
 static const char k_newer_database[] = "database is newer than this remember";
 /* RFC 4122 layout for canonical 8-4-4-4-12 and v7 mint. */
 enum {
-    UUID_DASH_0 = 8,
-    UUID_DASH_1 = 13,
-    UUID_DASH_2 = 18,
-    UUID_DASH_3 = 23,
-    UUID_VER_CHAR = 14,
-    UUID_VAR_CHAR = 19,
     UUID_VER_BYTE = 6,
     UUID_VAR_BYTE = 8,
     UUID_HEX_DASH_0 = 4,
@@ -939,36 +932,6 @@ static int apply_pragmas(sqlite3 *db, int busy_timeout_ms, char *err, size_t err
 }
 
 /* Canonical lowercase 8-4-4-4-12. Device sidecar and entry sync_id share this. */
-static int uuid_is_canonical(const char *s)
-{
-    size_t i = 0;
-
-    if (s == NULL || strlen(s) != (size_t)UUID_STR_LEN) {
-        return 0;
-    }
-    if (s[UUID_DASH_0] != '-' || s[UUID_DASH_1] != '-' || s[UUID_DASH_2] != '-' ||
-        s[UUID_DASH_3] != '-') {
-        return 0;
-    }
-    if (s[UUID_VER_CHAR] != '7') {
-        return 0;
-    }
-    if (s[UUID_VAR_CHAR] != '8' && s[UUID_VAR_CHAR] != '9' && s[UUID_VAR_CHAR] != 'a' &&
-        s[UUID_VAR_CHAR] != 'b') {
-        return 0;
-    }
-    for (i = 0; i < (size_t)UUID_STR_LEN; i++) {
-        unsigned char c = (unsigned char)s[i];
-        if (s[i] == '-') {
-            continue;
-        }
-        if (!isxdigit(c) || (isalpha(c) && !islower(c))) {
-            return 0;
-        }
-    }
-    return 1;
-}
-
 /* RFC 4122 v7 packing: shifts and nibble masks are the layout, not business
    constants clang-tidy can usefully name. */
 // NOLINTBEGIN(hicpp-signed-bitwise,cppcoreguidelines-avoid-magic-numbers,readability-magic-numbers)
@@ -1049,7 +1012,7 @@ static int read_sidecar(const char *path, char uuid[UUID_STR_LEN + 1])
     while (n > 0U && (buf[n - 1U] == '\n' || buf[n - 1U] == '\r')) {
         buf[--n] = '\0';
     }
-    if (!uuid_is_canonical(buf)) {
+    if (!uuid_v7_is_canonical(buf)) {
         (void)fclose(f);
         return -1;
     }
@@ -4834,7 +4797,10 @@ StoreStatus store_get_row_by_sync_id(Store *s, const char *sync_id, Entry *out_e
 
 int store_sync_id_is_canonical(const char *s)
 {
-    return uuid_is_canonical(s);
+    if (uuid_v7_is_canonical(s)) {
+        return 1;
+    }
+    return 0;
 }
 
 StoreStatus store_link(Store *s, StoreEdge edge, StoreEdgeKind kind, const char *now,
@@ -5992,8 +5958,8 @@ static StoreStatus entry_snapshot_json(const Entry *e, const char *now, char **o
     size_t i = 0;
 
     *out = NULL;
-    if (e == NULL || now == NULL || e->sync_id == NULL || e->version_vector == NULL ||
-        e->version_vector[0] != '{') {
+    if (e == NULL || now == NULL || e->sync_id == NULL ||
+        !vv_json_is_canonical(e->version_vector)) {
         return STORE_ERR_INTERNAL;
     }
     bin = bin_token_store(store_bin_of(e->deleted_at, e->expires_at, now));
@@ -6835,7 +6801,7 @@ static StoreStatus import_merge_present(sqlite3 *dst, const char *device_id, con
     }
 }
 
-/* What a local write would store: a peer row that differs is never written
+/* A peer token is kept only as a local write would store it
    (decision:import-control-bytes-followup). */
 static bool import_token_canonical(const char *token)
 {
@@ -6847,10 +6813,27 @@ static bool import_token_canonical(const char *token)
     return true;
 }
 
-static bool import_row_canonical(const ImportRow *row)
+static bool import_stamp_or_null(const char *stamp)
 {
+    if (stamp != NULL && !utc_stamp_is_canonical(stamp)) {
+        return false;
+    }
+    return true;
+}
+
+/* Every peer field import stores has the shape a local write produces
+   (decision:plan18c-validate-peer-fields); anything else skips the row. */
+static bool import_row_valid(const ImportRow *row)
+{
+    char hash[REMEMBER_SHA256_HEX_LEN + 1];
     size_t i = 0;
 
+    if (!uuid_v7_is_canonical(row->sync_id) || !source_is_valid(row->source) ||
+        !utc_stamp_is_canonical(row->created_at) || !utc_stamp_is_canonical(row->updated_at) ||
+        !import_stamp_or_null(row->expires_at) || !import_stamp_or_null(row->deleted_at) ||
+        !vv_json_is_canonical(row->version_vector)) {
+        return false;
+    }
     if (row->key != NULL && !import_token_canonical(row->key)) {
         return false;
     }
@@ -6858,6 +6841,10 @@ static bool import_row_canonical(const ImportRow *row)
         if (!import_token_canonical(row->tags[i])) {
             return false;
         }
+    }
+    body_hash_hex(row->body, strlen(row->body), hash);
+    if (strcmp(hash, row->body_hash) != 0) {
+        return false;
     }
     return true;
 }
@@ -6868,7 +6855,7 @@ static StoreStatus import_one_entry(sqlite3 *dst, const char *device_id, const I
     Entry local;
     StoreStatus st = STORE_OK;
 
-    if (!import_row_canonical(row)) {
+    if (!import_row_valid(row)) {
         counts->rejected++;
         return STORE_OK;
     }
@@ -7197,7 +7184,10 @@ StoreStatus store_conflicts_list(Store *s, StoreConflict **out_rows, size_t *out
     *out_count = 0U;
     memset(&s->last, 0, sizeof(s->last));
     rc = sqlite3_prepare_v2(s->db,
-                            "SELECT id, sync_id, reason, local_json, incoming_json, created_at "
+                            "SELECT id, sync_id, reason, local_json, incoming_json, created_at, "
+                            "CASE WHEN json_valid(local_json) AND json_valid(incoming_json) "
+                            "THEN json_type(local_json) = 'object' AND "
+                            "json_type(incoming_json) = 'object' ELSE 0 END "
                             "FROM conflicts ORDER BY id ASC;",
                             -1, &stmt, NULL);
     if (rc != SQLITE_OK) {
@@ -7211,7 +7201,8 @@ StoreStatus store_conflicts_list(Store *s, StoreConflict **out_rows, size_t *out
             COL_REASON = 2,
             COL_LOCAL = 3,
             COL_INCOMING = 4,
-            COL_CREATED_AT = 5
+            COL_CREATED_AT = 5,
+            COL_SNAPSHOTS_ARE_OBJECTS = 6
         };
         StoreConflict *grown = NULL;
         StoreConflict row;
@@ -7225,6 +7216,11 @@ StoreStatus store_conflicts_list(Store *s, StoreConflict **out_rows, size_t *out
         row.incoming_json = dup_str((const char *)sqlite3_column_text(stmt, COL_INCOMING));
         row.created_at = dup_str((const char *)sqlite3_column_text(stmt, COL_CREATED_AT));
         st = conflict_reason_parse(reason, &row.reason);
+        /* output prints the snapshots raw: refuse one that is not a JSON object
+           (decision:plan18c-validate-peer-fields). */
+        if (st == STORE_OK && sqlite3_column_int(stmt, COL_SNAPSHOTS_ARE_OBJECTS) == 0) {
+            st = STORE_ERR_INTERNAL;
+        }
         if (st != STORE_OK || row.sync_id == NULL || row.local_json == NULL ||
             row.incoming_json == NULL || row.created_at == NULL) {
             free(row.sync_id);

@@ -180,6 +180,21 @@ TEST(output_entry_json_rejects_an_incomplete_entry)
     assert_written(f, "");
 }
 
+/* The vector is written raw: only the canonical form may pass
+   (decision:plan18c-validate-peer-fields). */
+TEST(output_entry_json_rejects_a_non_canonical_version_vector)
+{
+    Entry injected = given_entry();
+    Entry not_uuid = given_entry();
+    FILE *f = given_stream();
+
+    injected.version_vector = (char *)"{\"01a16342-0f26-7dc1-8a46-88703a48341b\":1},\"pwn\":true";
+    not_uuid.version_vector = (char *)"{\"a\":1}";
+    ASSERT_EQ_INT(output_entry_json(f, &injected, NOW), -1);
+    ASSERT_EQ_INT(output_entry_json(f, &not_uuid, NOW), -1);
+    assert_written(f, "");
+}
+
 TEST(output_entry_json_renders_a_null_source_as_unknown)
 {
     Entry e = given_entry();
@@ -562,6 +577,50 @@ TEST(output_preview_masks_del)
                      "b";
     ASSERT_EQ_INT(output_entry_human_line(f, &e, NULL, 0, NOW), 0);
     assert_written(f, "7 | k:7 |  | a?b | u | \n");
+}
+
+/* decision:plan18c-mask-c1: U+0080..U+009F (C2 80..C2 9F) print as one '?'. */
+TEST(output_preview_masks_a_c1_control)
+{
+    Entry e = given_entry();
+    FILE *f = given_stream();
+
+    e.body = (char *)"a\xc2\x9b"
+                     "b";
+    ASSERT_EQ_INT(output_entry_human_line(f, &e, NULL, 0, NOW), 0);
+    assert_written(f, "7 | k:7 |  | a?b | u | \n");
+}
+
+TEST(output_text_human_masks_c1_controls)
+{
+    FILE *f = given_stream();
+
+    ASSERT_EQ_INT(output_text_human(f,
+                                    "a\xc2\x80"
+                                    "b\xc2\x9b"
+                                    "c\xc2\x9f"
+                                    "d",
+                                    false),
+                  0);
+    assert_written(f, "a?b?c?d");
+}
+
+/* Only C2 80..C2 9F: the next code point, another lead byte, or a stray C2 stay. */
+TEST(output_text_human_keeps_other_two_byte_text)
+{
+    FILE *f = given_stream();
+
+    ASSERT_EQ_INT(output_text_human(f,
+                                    "\xc2\xa0"
+                                    "\xc3\x80"
+                                    "\xc2"
+                                    "A",
+                                    false),
+                  0);
+    assert_written(f, "\xc2\xa0"
+                      "\xc3\x80"
+                      "\xc2"
+                      "A");
 }
 
 /* 192-byte buffer: the 63rd three-byte scalar would leave no room for "..." and
@@ -991,6 +1050,7 @@ void register_output_tests(void)
 {
     RUN_TEST(output_entry_json_rejects_missing_arguments);
     RUN_TEST(output_entry_json_rejects_an_incomplete_entry);
+    RUN_TEST(output_entry_json_rejects_a_non_canonical_version_vector);
     RUN_TEST(output_entry_json_renders_a_null_source_as_unknown);
     RUN_TEST(output_entry_json_renders_null_text_fields_as_empty_strings);
     RUN_TEST(output_action_envelope_rejects_missing_arguments);
@@ -1024,6 +1084,9 @@ void register_output_tests(void)
     RUN_TEST(output_entry_human_line_counts_only_the_subjects_links);
     RUN_TEST(output_preview_stops_at_a_carriage_return);
     RUN_TEST(output_preview_masks_del);
+    RUN_TEST(output_preview_masks_a_c1_control);
+    RUN_TEST(output_text_human_masks_c1_controls);
+    RUN_TEST(output_text_human_keeps_other_two_byte_text);
     RUN_TEST(output_preview_cuts_by_bytes_before_the_scalar_cap);
     RUN_TEST(output_entry_human_line_masks_control_bytes_in_key_tags_and_updated_at);
     RUN_TEST(output_tags_human_masks_control_bytes);

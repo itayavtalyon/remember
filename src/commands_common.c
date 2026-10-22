@@ -346,13 +346,6 @@ DiagCode code_for_store_text(const char *msg)
     return DIAG_INTERNAL;
 }
 
-int source_is_valid(const char *s)
-{
-    return s != NULL &&
-           (strcmp(s, "human") == 0 || strcmp(s, "agent") == 0 || strcmp(s, "tool") == 0 ||
-            strcmp(s, "share") == 0 || strcmp(s, "unknown") == 0);
-}
-
 const char *action_name(StoreAddAction a)
 {
     switch (a) {

@@ -189,7 +189,7 @@ remember --json conflict accept --id 1 --keep local|incoming|both
 - Reasons: `concurrent_vv` | `key_clash` | `hash_clash`
 - `--keep both` remints incoming `sync_id` on `concurrent_vv`; on clash keeps incoming sync_id (keyless if the slot is taken)
 - JSON import: `action:imported` + `inserted`/`updated`/`unchanged`/`conflicts`/`rejected` counts
-- `rejected`: rows skipped because a key or tag is not what a local write would store (a control byte, uppercase, too long). Nothing of that row is written.
+- `rejected`: rows skipped because a field is not what a local write would store: a key or tag (a control byte, uppercase, too long), a sync_id that is not a UUID v7, a timestamp not shaped `YYYY-MM-DDTHH:MM:SS.mmmZ`, a version vector that is not `{"<uuid v7>":<n>,...}`, a source outside the five tokens, or a body_hash that does not match the body. Nothing of that row is written.
 
 ### device
 

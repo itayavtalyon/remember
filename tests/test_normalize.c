@@ -476,6 +476,103 @@ TEST(norm_status_string_stable)
     ASSERT_TRUE(norm_status_string(NORM_OK) != NULL);
 }
 
+/* ---- canonical stored forms (plan 18c, decision:plan18c-validate-peer-fields) ---- */
+
+static const char UUID_A[] = "01a16342-0f26-7dc1-8a46-88703a48341b";
+
+TEST(uuid_v7_accepts_each_variant)
+{
+    ASSERT_TRUE(uuid_v7_is_canonical("01a16342-0f26-7dc1-8a46-88703a48341b"));
+    ASSERT_TRUE(uuid_v7_is_canonical("01a16342-0f26-7dc1-9a46-88703a48341b"));
+    ASSERT_TRUE(uuid_v7_is_canonical("01a16342-0f26-7dc1-aa46-88703a48341b"));
+    ASSERT_TRUE(uuid_v7_is_canonical("01a16342-0f26-7dc1-ba46-88703a48341b"));
+}
+
+TEST(uuid_v7_rejects_a_wrong_shape)
+{
+    ASSERT_FALSE(uuid_v7_is_canonical(NULL));
+    ASSERT_FALSE(uuid_v7_is_canonical("01a16342-0f26-7dc1-8a46-88703a48341"));   /* 35 */
+    ASSERT_FALSE(uuid_v7_is_canonical("01a16342-0f26-7dc1-8a46-88703a48341bb")); /* 37 */
+    ASSERT_FALSE(uuid_v7_is_canonical("01a16342x0f26-7dc1-8a46-88703a48341b"));  /* no dash */
+    ASSERT_FALSE(uuid_v7_is_canonical("01A16342-0f26-7dc1-8a46-88703a48341b"));  /* upper */
+    ASSERT_FALSE(uuid_v7_is_canonical("01g16342-0f26-7dc1-8a46-88703a48341b"));  /* past f */
+    ASSERT_FALSE(uuid_v7_is_canonical("01/16342-0f26-7dc1-8a46-88703a48341b"));  /* below 0 */
+    ASSERT_FALSE(uuid_v7_is_canonical("01a16342-0f26-4dc1-8a46-88703a48341b"));  /* v4 */
+    ASSERT_FALSE(uuid_v7_is_canonical("01a16342-0f26-7dc1-ca46-88703a48341b"));  /* variant */
+}
+
+TEST(utc_stamp_accepts_the_fixed_shape)
+{
+    ASSERT_TRUE(utc_stamp_is_canonical("2026-10-22T09:45:16.123Z"));
+}
+
+TEST(utc_stamp_rejects_any_other_shape)
+{
+    ASSERT_FALSE(utc_stamp_is_canonical(NULL));
+    ASSERT_FALSE(utc_stamp_is_canonical("2026-10-22T09:45:16Z"));       /* no ms: ends early */
+    ASSERT_FALSE(utc_stamp_is_canonical("2026-10-22 09:45:16.123Z"));   /* wrong literal */
+    ASSERT_FALSE(utc_stamp_is_canonical("2026-1a-22T09:45:16.123Z"));   /* letter for digit */
+    ASSERT_FALSE(utc_stamp_is_canonical("2026-1/-22T09:45:16.123Z"));   /* below 0 */
+    ASSERT_FALSE(utc_stamp_is_canonical("2026-10-22T09:45:16.123Z\t")); /* trailing byte */
+}
+
+TEST(vv_json_accepts_the_compact_forms)
+{
+    ASSERT_TRUE(vv_json_is_canonical("{}"));
+    ASSERT_TRUE(vv_json_is_canonical("{\"01a16342-0f26-7dc1-8a46-88703a48341b\":0}"));
+    ASSERT_TRUE(vv_json_is_canonical("{\"01a16342-0f26-7dc1-8a46-88703a48341b\":12,"
+                                     "\"01a16342-0f26-7dc1-8a46-88703a48341c\":999999999999999999,"
+                                     "\"01a16342-0f26-7dc1-8a46-88703a48341d\":3}"));
+}
+
+TEST(vv_json_rejects_an_injected_or_malformed_vector)
+{
+    ASSERT_FALSE(vv_json_is_canonical(NULL));
+    ASSERT_FALSE(vv_json_is_canonical("[]"));
+    ASSERT_FALSE(vv_json_is_canonical("{}x"));
+    ASSERT_FALSE(vv_json_is_canonical("{\"01a16342-0f26-7dc1-8a46-88703a48341b\":1},\"pwn\":true"));
+    ASSERT_FALSE(vv_json_is_canonical("{ \"01a16342-0f26-7dc1-8a46-88703a48341b\":1}"));
+    ASSERT_FALSE(vv_json_is_canonical("{\"a\":1}"));
+    ASSERT_FALSE(vv_json_is_canonical("{\"01a16342-0f26-7dc1-8a46-88703a48341bx:1}"));
+    ASSERT_FALSE(vv_json_is_canonical("{\"01a16342-0f26-7dc1-8a46-88703a48341b\" 1}"));
+    ASSERT_FALSE(vv_json_is_canonical("{\"01a16342-0f26-7dc1-8a46-88703a48341b\":1;"));
+    ASSERT_FALSE(vv_json_is_canonical("{\"01a16342-0f26-7dc1-8a46-88703a48341b\":1;"
+                                      "\"01a16342-0f26-7dc1-8a46-88703a48341c\":2}"));
+}
+
+TEST(vv_json_rejects_a_counter_that_is_not_a_small_whole_number)
+{
+    ASSERT_FALSE(vv_json_is_canonical("{\"01a16342-0f26-7dc1-8a46-88703a48341b\":}"));
+    ASSERT_FALSE(vv_json_is_canonical("{\"01a16342-0f26-7dc1-8a46-88703a48341b\":-1}"));
+    ASSERT_FALSE(vv_json_is_canonical("{\"01a16342-0f26-7dc1-8a46-88703a48341b\":01}"));
+    ASSERT_FALSE(vv_json_is_canonical("{\"01a16342-0f26-7dc1-8a46-88703a48341b\":1.5}"));
+    ASSERT_FALSE(
+        vv_json_is_canonical("{\"01a16342-0f26-7dc1-8a46-88703a48341b\":1000000000000000000}"));
+}
+
+/* decision:plan17a-duplicate-vv-key: the same device twice is malformed. */
+TEST(vv_json_rejects_a_repeated_device)
+{
+    ASSERT_FALSE(vv_json_is_canonical("{\"01a16342-0f26-7dc1-8a46-88703a48341b\":1,"
+                                      "\"01a16342-0f26-7dc1-8a46-88703a48341b\":1}"));
+    ASSERT_FALSE(vv_json_is_canonical("{\"01a16342-0f26-7dc1-8a46-88703a48341b\":1,"
+                                      "\"01a16342-0f26-7dc1-8a46-88703a48341c\":2,"
+                                      "\"01a16342-0f26-7dc1-8a46-88703a48341c\":2}"));
+}
+
+TEST(source_accepts_only_the_closed_tokens)
+{
+    ASSERT_TRUE(source_is_valid("human"));
+    ASSERT_TRUE(source_is_valid("agent"));
+    ASSERT_TRUE(source_is_valid("tool"));
+    ASSERT_TRUE(source_is_valid("share"));
+    ASSERT_TRUE(source_is_valid("unknown"));
+    ASSERT_FALSE(source_is_valid(NULL));
+    ASSERT_FALSE(source_is_valid("robot"));
+    ASSERT_FALSE(source_is_valid("hum"));
+    ASSERT_FALSE(source_is_valid(UUID_A));
+}
+
 void register_normalize_tests(void)
 {
     RUN_TEST(body_trim_basic);
@@ -508,4 +605,13 @@ void register_normalize_tests(void)
     RUN_TEST(body_trim_copy_reports_oom);
     RUN_TEST(fold_hebrew_marks_reports_oom);
     RUN_TEST(norm_status_string_stable);
+    RUN_TEST(uuid_v7_accepts_each_variant);
+    RUN_TEST(uuid_v7_rejects_a_wrong_shape);
+    RUN_TEST(utc_stamp_accepts_the_fixed_shape);
+    RUN_TEST(utc_stamp_rejects_any_other_shape);
+    RUN_TEST(vv_json_accepts_the_compact_forms);
+    RUN_TEST(vv_json_rejects_an_injected_or_malformed_vector);
+    RUN_TEST(vv_json_rejects_a_counter_that_is_not_a_small_whole_number);
+    RUN_TEST(vv_json_rejects_a_repeated_device);
+    RUN_TEST(source_accepts_only_the_closed_tokens);
 }

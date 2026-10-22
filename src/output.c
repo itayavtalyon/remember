@@ -1,5 +1,6 @@
 #include "output.h"
 
+#include "normalize.h"
 #include "store.h"
 
 #include <stdbool.h>
@@ -9,6 +10,9 @@
    mask arithmetic unsigned. */
 static const unsigned ASCII_FIRST_PRINTABLE = 0x20U; /* first non-control byte */
 static const unsigned ASCII_DEL = 0x7FU;             /* DEL control */
+static const unsigned UTF8_C1_LEAD = 0xC2U;          /* lead byte of U+0080..U+00BF */
+static const unsigned UTF8_C1_FIRST = 0x80U;         /* U+0080 continuation byte */
+static const unsigned UTF8_C1_LAST = 0x9FU;          /* U+009F continuation byte */
 static const unsigned UTF8_HIGH_BIT = 0x80U;         /* set => multibyte lead/continuation */
 static const unsigned UTF8_LEAD2_MASK = 0xE0U;
 static const unsigned UTF8_LEAD2_TAG = 0xC0U;
@@ -132,8 +136,9 @@ static int write_entry_core(FILE *out, const Entry *e, const char *now)
 {
     const char *bin = NULL;
 
-    if (now == NULL || e->sync_id == NULL || e->version_vector == NULL ||
-        e->version_vector[0] != '{') {
+    /* The vector is written raw, so only the canonical compact form may pass
+       (decision:plan18c-validate-peer-fields). */
+    if (now == NULL || e->sync_id == NULL || !vv_json_is_canonical(e->version_vector)) {
         return -1;
     }
     bin = BIN_TOKENS[store_bin_of(e->deleted_at, e->expires_at, now)];
@@ -324,6 +329,17 @@ static int is_terminal_ctrl(unsigned char c, bool keep_newline)
     return c < ASCII_FIRST_PRINTABLE || c == ASCII_DEL;
 }
 
+/* A UTF-8 C1 control (U+0080..U+009F, bytes C2 80..C2 9F) starts at p. Some
+   terminals honor U+009B as CSI (decision:plan18c-mask-c1). p[1] is read only
+   after p[0] matched, so a NUL ends the string first. */
+static bool is_c1_control_at(const unsigned char *p)
+{
+    if (p[0] == UTF8_C1_LEAD && p[1] >= UTF8_C1_FIRST && p[1] <= UTF8_C1_LAST) {
+        return true;
+    }
+    return false;
+}
+
 int output_text_human(FILE *out, const char *text, bool keep_newline)
 {
     const unsigned char *p = NULL;
@@ -332,7 +348,14 @@ int output_text_human(FILE *out, const char *text, bool keep_newline)
         return 0;
     }
     for (p = (const unsigned char *)text; *p != '\0'; p++) {
-        int ch = is_terminal_ctrl(*p, keep_newline) ? '?' : (int)*p;
+        int ch = (int)*p;
+
+        if (is_c1_control_at(p)) {
+            ch = '?';
+            p++; /* both bytes of the control become one '?' */
+        } else if (is_terminal_ctrl(*p, keep_newline)) {
+            ch = '?';
+        }
         if (fputc(ch, out) == EOF) {
             return -1;
         }
@@ -545,7 +568,8 @@ static void fill_preview(char dst[PREVIEW_BUF], const char *body, size_t max_cp)
             truncated = 1;
             break;
         }
-        if (c < ASCII_FIRST_PRINTABLE || c == ASCII_DEL) {
+        if (c < ASCII_FIRST_PRINTABLE || c == ASCII_DEL ||
+            is_c1_control_at((const unsigned char *)body + i)) {
             dst[o++] = '?';
         } else {
             size_t k = 0;

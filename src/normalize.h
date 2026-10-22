@@ -81,4 +81,22 @@ void body_hash_hex(const void *data, size_t len, char out_hex[REMEMBER_SHA256_HE
 /* Short ASCII label for st (no trailing newline). Never NULL. */
 const char *norm_status_string(NormStatus st);
 
+/*
+ * Canonical stored forms. Import accepts a peer row only when its fields have
+ * the shape a local write produces (decision:plan18c-validate-peer-fields).
+ */
+
+/* 36-char lowercase UUID v7 text: 8-4-4-4-12 hex, version 7, variant 8..b. */
+bool uuid_v7_is_canonical(const char *s);
+
+/* The UTC stamp every release writes: YYYY-MM-DDTHH:MM:SS.mmmZ (shape only). */
+bool utc_stamp_is_canonical(const char *s);
+
+/* A compact version vector: {} or {"<uuid v7>":<n>,...} with n a non-negative
+   integer of at most 18 digits, no spaces, and no device twice. */
+bool vv_json_is_canonical(const char *s);
+
+/* One of the closed source tokens: human, agent, tool, share, unknown. */
+bool source_is_valid(const char *s);
+
 #endif /* REMEMBER_NORMALIZE_H */
