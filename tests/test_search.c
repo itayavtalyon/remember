@@ -134,6 +134,21 @@ TEST(search_missing_query_rejected)
     free(db);
 }
 
+/* QUERY is exactly one positional: a second one is a usage error. */
+TEST(search_second_query_is_unexpected)
+{
+    char *db = make_temp_db_path();
+    const char *args[] = {"search", "a", "b"};
+    CmdResult r;
+    ASSERT_TRUE(db != NULL);
+    r = run_remember(db, args, sizeof(args) / sizeof(args[0]), NULL);
+    ASSERT_EQ_INT(r.exit_code, 1);
+    ASSERT_STREQ(r.out, "");
+    ASSERT_STR_CONTAINS(r.err, "unexpected argument");
+    cmd_result_free(&r);
+    free(db);
+}
+
 TEST(search_no_matches_exits_zero)
 {
     char *db = make_temp_db_path();
@@ -259,6 +274,7 @@ void register_search_tests(void)
     RUN_TEST(search_whitespace_only_query_rejected);
     RUN_TEST(search_query_trims_outer_whitespace);
     RUN_TEST(search_missing_query_rejected);
+    RUN_TEST(search_second_query_is_unexpected);
     RUN_TEST(search_no_matches_exits_zero);
     RUN_TEST(search_json_paging_fields);
     RUN_TEST(search_json_includes_full_body);

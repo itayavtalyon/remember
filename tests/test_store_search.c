@@ -249,6 +249,23 @@ TEST(store_search_ranks_exact_key_then_key_prefix_first)
     free(db);
 }
 
+/* E2.4: q is QUERY trimmed and lowercased in the store too (the CLI trims, but
+   the store owns E2.1's R and q). bm25 alone puts pref:editor first. */
+TEST(store_search_trims_the_query_before_ranking)
+{
+    char *db = NULL;
+    Store *s = given_store(&db);
+
+    given_memory(s, (GivenMemory){.body = "editor editor editor", .key = "pref:editor"});
+    given_memory(s,
+                 (GivenMemory){.body = "alpha beta gamma delta epsilon zeta eta theta iota kappa",
+                               .key = "editor"});
+    assert_bodies(s, "  Editor \t",
+                  "alpha beta gamma delta epsilon zeta eta theta iota kappa|editor editor editor");
+    store_close(s);
+    free(db);
+}
+
 /* E2.4 (1)-(2): a key that misses q does not outrank a keyless row with a better bm25. */
 TEST(store_search_ranks_a_keyless_row_by_bm25)
 {
@@ -484,6 +501,7 @@ void register_store_search_tests(void)
     RUN_TEST(store_search_counts_a_row_both_parts_match_once);
     RUN_TEST(store_search_runs_r_alone_when_p_is_empty);
     RUN_TEST(store_search_ranks_exact_key_then_key_prefix_first);
+    RUN_TEST(store_search_trims_the_query_before_ranking);
     RUN_TEST(store_search_ranks_a_keyless_row_by_bm25);
     RUN_TEST(store_search_ranks_by_weighted_bm25);
     RUN_TEST(store_search_probe_error_without_a_d1_message_is_real);

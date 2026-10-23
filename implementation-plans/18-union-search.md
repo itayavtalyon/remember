@@ -701,3 +701,47 @@ Lenses: `pref:review-lenses` 1–9, comprehensive, ponytail, `docs/STEP_REVIEW_C
 - **praise.** One MATCH gives the dedup for free; a probe that keeps every non-D1 error real; `IS` closes the NULL-key ranking trap before it ships.
 
 Pragmatic write gate: DRY PASS (the probe reuses `list_bind_texts`, `store_status_plain`, `dup_str`; one `utf8_is_valid`; one error map in `run_count_and_page`). Easy-to-replace PASS (tokens and q stay in `search_terms.c`; SQLite stays in `store_sqlite.c`; the CLI sees only `SearchResult`). Orthogonal PASS (`list` code paths unchanged except the dropped `map_err` argument; output untouched).
+
+### 2026-10-22 — second-opinion deep review (stage 3)
+
+Ref `fa3702a` (range `17f01e6..fa3702a`). Baseline gate on a clean worktree of the ref: `GATE-ALL-GREEN` (ctest, `lint-all.sh`, `check-coverage.sh` with search_terms 176 / unicode 80 / normalize 268 / output 572 sides and 0 missed, `leaks-macos`, `ci-linux.sh`). Decisions loaded and checked in the code: `plan18-drop-quote-doubling` (no doubling loop; `"tok"*`), `plan18-warning-wired-stage3` (`cmd_search` prints `raw_query_ignored` on success), `plan18-delete-store-err-query` (`STORE_ERR_QUERY` and `store_status_from_sqlite` gone; `invalid_query` stays in `diag.c`), `plan18-dash-query-needs-double-dash` (`search -x` → `unknown option '-x'`; `search -- -x` → exit 0, `no such column: x`).
+
+**Verdict: stage 3 is done. No open blocking item, no grill.**
+
+Findings:
+
+- **important (fixed): the store's trim of QUERY was untested.** E2.1 defines R and q as QUERY trimmed, and `store_search` trims, but every test reaches the store with an already-trimmed query, because the CLI trims first (`trim_query_copy`). Mutant X3 (`search_q` fed the untrimmed span, which makes `search_q` return INTERNAL on any trailing whitespace) survived the whole suite. Added `store_search_trims_the_query_before_ranking`: `"  Editor \t"` must put the exact key first, where bm25 alone puts `pref:editor` first. X3 now fails it.
+- **nit (fixed): a user error path was listed as pre-existing failure noise.** In `cmd_query.c` the zero-hit `return -1;` at the second positional (`search a b` → `unexpected argument`, exit 1) is a plain user path, not an OOM or output failure as the notes grouped it. Added `search_second_query_is_unexpected`; the mutant that lets a second positional overwrite the first fails it.
+- **nit (open, for stage 5): QUERY is trimmed twice**, by `trim_query_copy` in the CLI and by `store_search` (E2.1's R). Stage 5 reworks the CLI blank-query path; leave one owner there. The store owns E2.1 per D13, so the CLI trim is the one to go, unless stage 5 needs it for the usage text.
+- **praise:** one MATCH gives the dedup; the probe keeps every non-D1 error real and frees the warning when the query later fails (damaged index: exit 1, empty stdout, no warning, on every path that reads the index); `IS` instead of `=` caught before shipping; the coder found and fixed their own M19/M19b survivors and backed every equivalent mutant with a probe.
+
+Verification by running (ASan `remember` from the baseline build):
+
+- 006 Examples that stage 3 covers: Ex1 `boo` 2 entries, `recs:books` first; Ex2 `recs:bo` 1 entry + `remember: warning: no such column: recs`; Ex3 `book OR zed` 3 entries, empty stderr; Ex4 `boo --tag family` the dentist row only; Ex5 `--json --json-errors 'foo AND'` exit 0 with one `raw_query_ignored` JSON warning.
+- Grammar-aware fuzz, 3,000 queries built from FTS5 pieces (column filters, `{cols}:`, `-col:`, `NEAR(…)`, `^`, `+`, `*`, AND/OR/NOT, parentheses, quotes, Hebrew, emoji, a combining accent), each passed after `--`: 1,155 exit 0 clean, 1,845 exit 0 with a warning, 0 other exits, no sanitizer report. So no R that parses alone fails inside `(P) OR (R)`.
+- Damaged index (`entries_fts_data` blocks overwritten): `boo`, `book OR zed`, `recs:bo` → exit 1, empty stdout, `SQLITE_CORRUPT_VTAB` text. `"` → exit 0 + warning + empty result: R fails to compile and P is empty, so no statement reads the damaged data (no error exists to swallow).
+- Hostile input: ESC → plain `?`; `a\nb:c` → `no such column: b` (FTS5 splits on LF); a 300-byte column name → the full 336-byte line; `--db /nonexistent/x.db --no-create` → `cannot open`, exit 1; no query → `missing search query`; `\xff` → `invalid UTF-8 in search query` (D27); 10,000 tokens → exit 0 in 0.38 s.
+
+Mutation sample of the coder's table, re-run (one clause each, `remember_store_tests` + the coder's CLI suites): M1 `*` dropped, M9c `unknown special query`, M14 probe on blank R, M18a `IS` → `=`, M21a key weight 10 → 1, M31 COMMIT failure keeps the page: each killed by the test the notes name. My own:
+
+| Mutant | Result |
+|---|---|
+| X2 `(%s) OR (%s)` → `%s OR %s` | survived; equivalent in practice: base and mutant gave byte-identical stdout, stderr and exit codes on the same 3,000 fuzz queries (FTS5 binds NOT > AND > OR, and P uses only implicit AND). Kept, because E2.1 writes `(<P>) OR (<R>)`. |
+| X3 q from the untrimmed span | survived → killed by `store_search_trims_the_query_before_ranking` |
+| second positional overwrites the first (`cmd_query.c`) | survived (no test) → killed by `search_second_query_is_unexpected` |
+
+Handover size delta re-run (Release, `/usr/bin/clang`, clean worktrees of `17f01e6` and `fa3702a`): `remember` 1,887,176 → 1,903,752 B (+16,576), `libremember_core.a` 279,248 → 281,632 B (+2,384), the same numbers as the coder's.
+
+Zero-hit lines read in the touched code (round 9.3): `store_sqlite.c` search functions: only SQL-buffer truncation guards on fixed SQL and the probe's bind failure (the coder's M33). `cmd_query.c`: the second-positional path (now tested) and pre-existing `list_prepare_query` / `utc_now` / output failures.
+
+Simplify pass: nothing to shrink. `store_search`'s two equal-size buffers (`r`, `q_low`) could share one allocation (−2 lines, less clear); `SearchBinds` exists because two adjacent `const char *` parameters trip `bugprone-easily-swappable-parameters`; the coder's four applied simplifications (−22 lines) and three declines (one shape with the list path, the probe reusing `list_bind_texts`, the E2.1 rule kept in `search_match`) hold. Tests: `test_union_search.c` (6 tests) proves only that exit and warning reach the process; content is in `test_store_search.c`.
+
+Coder rating: **8.5 / 10.** Strengths: the most complete notes so far (every decision grilled and filed, 45+ one-clause mutants with the red test named, equivalents argued with probes, a 1,000-input fuzz, the size delta measured); found and fixed their own survivors (M19, M19b) and a test that read past a failed assert. Misses: the store's half of a rule both layers apply (the trim) had no test, so X3 survived; a user-reachable error path was filed under failure noise in the zero-hit list; the double trim went unnoticed.
+
+Instructions for the coder:
+
+1. When two layers apply the same rule to one input (trim, case fold, validation), test the inner layer directly with input the outer layer would have fixed, and name one owner of the rule in the notes.
+2. In the zero-hit list, name each line's trigger by running it. A path a user can reach is a test, not "pre-existing".
+3. For an "equivalent mutant" in a parser or query builder, back the claim with a differential run: base and mutant over the same fuzz corpus, outputs compared byte for byte.
+
+Gate (fix tree, 2026-10-23; clang, `REMEMBER_ENABLE_SANITIZERS=ON`, `REMEMBER_TEST_VFS=ON`, configured twice, cache flags checked): build, ctest, `lint-all.sh`, `check-coverage.sh` (search_terms 176, unicode 80, normalize 268, output 572 sides, 0 missed), `leaks-macos` all green. `ci-linux.sh` first failed on infrastructure: Docker's resolver returned only IPv6 for `ports.ubuntu.com`, so apt installed nothing (`Unable to locate package`). The same inner command (`docker run … ubuntu:24.04 bash /src/scripts/ci-linux.sh --inner --install`) with `--dns 1.1.1.1` on the unchanged tree: exit 0, iwyu PASS, scan-build PASS, LINT OK. Default DNS recovered before the push; the pre-push hook ran `ci-linux.sh` unmodified. After the gate only this file changed (Markdown). Standard filed: `standard:coding` ROUND 13.
