@@ -39,21 +39,41 @@ main → cli_parse → commands.h (cmd_add | cmd_locator | cmd_query) → store_
 | 16 | [Actionable errors](16-actionable-errors.md) | `--json-errors`; code catalog; SQLite cause split + fix text + `detail`; warnings; `--busy-timeout`; `--no-create`; `repair search-index`; test VFS shim (006 §3) ✅ |
 | 17 | [List dates + stale guard](17-list-dates-stale-guard.md) | `list --sort/--since/--until`; search date filters; `update --if-version-vector` → `stale` (006 §4, §7) ✅ |
 | 17a | [Plain notices + duplicate VV keys](17a-plain-line-and-duplicate-vv.md) | One plain notice stays one line; a repeated device key is a malformed version vector. After 17, before 18 ✅ |
-| 18 | [Union search](18-union-search.md) | Prefix ∪ raw FTS; never fails on input; `keys`/`tags` facets with tiers; utf8proc vendored (006 §2, §9) |
+| 18 | [Union search](18-union-search.md) | Prefix ∪ raw FTS; never fails on input; `keys`/`tags` facets with tiers; utf8proc vendored (006 §2, §9). Itay finishes this plan and merges it. Do not tick it here. |
 | 18b | [Branch-coverage gate](18b-branch-coverage-gate.md) | `check-coverage.sh` fails on any untaken branch side in `search_terms.c`, `unicode.c`, `normalize.c`, `output.c`; no excuses. Runs on `plan18-union-search` between plan 18 stages 2 and 3 ✅ |
 | 18c | [Import control bytes](18c-import-control-bytes.md) | `import --from-db` skips and counts (`rejected`) rows whose key or tag is not canonical; human output masks C0/DEL in every stored string it prints. On `fix/import-control-bytes` (off plan 18b) ✅ |
-| 19 | [Bucket prefixes](19-bucket-prefixes.md) | `config get/set bucket-prefixes`; add-wins set + tombstones; cap 8 + overflow (006 §11) |
-| 20 | [Export](20-export.md) | `export --format json|md|csv`; deterministic; atomic write + `--force` (006 §5) |
-| 21 | [Import formats](21-import-formats.md) | `import --from-json/--from-md/--from-csv`; bad records listed; `origin`; prefix merge; round trip (006 §6) |
-| 22 | [Brain path + skills + 0.3.0](22-brain-path-skills-release.md) | `~/.remember/default-db`; Codex skill; SKILL/help/What's New sweep; version 0.3.0 (006 §8, §13) |
+| 19 | [Schema v6](19-schema-v6.md) | One v5→v6 migration for 007 §10, 008 §8, and 010 §17. PENDING COPY (JSON `fix` for `schema_too_new`). |
+| 20 | [Settings](20-settings.md) | Registry, user.db, resolution, commands, credential helper, settings export/import. PENDING COPY AND DESIGN. After plan 19. Command JSON waits for plan 21. |
+| 21 | [JSON envelope](21-json-envelope.md) | `remember-message` 1, locators, actors, `--trash` means Trash. PENDING COPY. Does not implement `brains.json`. |
+| 22 | [Export](22-export.md) | JSON, Markdown, CSV memory export. PENDING DESIGN (settings bytes). |
+| 23 | [Import formats](23-import-formats.md) | JSON, Markdown, CSV, and `--from-db` v4–v6. PENDING DESIGN AND COPY. No old-name reader. No add-wins. |
+| 24 | [Plugin protocol](24-plugin-protocol.md) | Docs CI, schema extraction, fixtures. READY. Spec revision 6 is already in the repo. |
+| 25 | [Plugins and hooks](25-plugins-and-hooks.md) | CLI and host only. PENDING COPY AND DESIGN. No daemon, no URL plugin, no hybrid ranker. |
+| 26 | [Brain path + skills + 0.3.0](26-release-0.3.0.md) | `default-db`, Codex skill, version 0.3.0 last. PENDING COPY. Do not tag. |
 
-**Design 006 (0.3.0) plans 15–22:** do them in order; each plan names its
-prerequisites. Locked decisions from the 2026-10-12 plan grill are law, like
-the design log itself:
-[`006-locked-decisions.md`](006-locked-decisions.md). E11 (Android presets) is
-not planned here (mobile build, not CLI). Each plan carries its own workflow,
-coding standards, quality gate, Definition of Done and Second review handover,
-so it can be handed to an implementer alone.
+**Design 006 plans 15–18:** do them in order. Plan 18 is not done. Plans 18b
+and 18c land with the plan 18 merge. Do not tick plan 18.
+
+**Design 007–010 plans 19–26:** do them in the order in the table, with two
+exceptions that the plans state. Plan 20 stages 1–4 run after plan 19 and
+before plan 21. Plan 20's JSON command stages run after plan 21. Plan 26
+stage 4 runs after plans 19–25. A row marked PENDING is not ready. The
+implementer does the stages that the plan marks as specified and stops at the
+COPY or DESIGN gate. Missing sentences are in
+[`COPY-PENDING.md`](COPY-PENDING.md). Missing decisions are in
+[`DESIGN-PENDING.md`](DESIGN-PENDING.md). Do not invent either.
+
+Locked decisions from the 2026-10-12 plan grill remain law for behavior that
+007–010 did not replace:
+[`006-locked-decisions.md`](006-locked-decisions.md). Add-wins prefix merge
+(E12.6) and the E12.9 settings object are replaced. E11 (Android presets) is
+not planned here. Each plan carries its own workflow, coding standards,
+quality gate, Definition of Done, and second-review handover.
+
+The old plan files `19-bucket-prefixes.md`, `20-export.md`,
+`21-import-formats.md`, and `22-brain-path-skills-release.md` are deleted.
+Do not implement them. Log 008's draft line that says to re-extract plans
+16–18 and 22 is not a plan. Do not re-extract those plans.
 
 **Definition of done for the whole tool:** full suite green (all verification criteria 1–34 automated where practical), `cmake --build build --target lint` clean on `src/`, no `#include` of sqlite outside the store adapter. Plan 14 adds criteria from design 005.
 
