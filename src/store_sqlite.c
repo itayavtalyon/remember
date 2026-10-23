@@ -3775,6 +3775,243 @@ cleanup:
     return st;
 }
 
+static StoreStatus dup_col_req(sqlite3_stmt *stmt, int col, char **out);
+
+static void search_key_item_free(SearchKeyItem *item)
+{
+    free(item->key);
+    free(item->sync_id);
+    free(item->label);
+    free(item->source);
+    free(item->updated_at);
+}
+
+/*
+ * Facets (E2.5d, D13): one query per kind over the active bin and filters,
+ * fetched once per search; search_terms.c classifies and orders the rows.
+ * Key rows: key, sync_id, source, updated_at, body. Tag rows: name, count.
+ */
+typedef enum { FACET_KEYS = 0, FACET_TAGS } FacetKind;
+
+static const char *const k_facet_head[] = {
+    [FACET_KEYS] = "SELECT e.key, e.sync_id, e.source, e.updated_at, e.body FROM entries e",
+    [FACET_TAGS] = "SELECT tg.name, COUNT(*) FROM entries e"
+                   " JOIN entry_tags et ON et.entry_id = e.id JOIN tags tg ON tg.id = et.tag_id",
+};
+static const char *const k_facet_tail[] = {
+    [FACET_KEYS] = " AND e.key IS NOT NULL;",
+    [FACET_TAGS] = " GROUP BY tg.name;",
+};
+
+/* What every facet query of one search shares. */
+typedef struct {
+    sqlite3 *db;
+    const SearchQuery *sq;
+    const char *now;
+    const SearchTokens *tokens;
+    const char *q;
+    StoreError *serr;
+} FacetScope;
+
+/* A text-matching key or tag. facet comes first: the search_terms comparators
+   read each element as a SearchFacet. facet.text is item.key; a tag fills
+   item.key only. */
+typedef struct {
+    SearchFacet facet;
+    SearchKeyItem item;
+} FacetCandidate;
+
+typedef struct {
+    FacetCandidate *items;
+    size_t count;
+    size_t cap;
+} FacetCandidates;
+
+static void facet_candidates_free(FacetCandidates *c)
+{
+    size_t i = 0U;
+
+    for (i = 0U; i < c->count; i++) {
+        search_key_item_free(&c->items[i].item);
+    }
+    free(c->items);
+}
+
+/* Copy one row into c when its text matches. */
+static StoreStatus facet_append_row(const FacetScope *scope, sqlite3_stmt *stmt, FacetKind kind,
+                                    FacetCandidates *c)
+{
+    FacetCandidate k = {0};
+    long long count = (kind == FACET_TAGS) ? sqlite3_column_int64(stmt, 1) : 0;
+    SearchStatus sst = search_facet_classify(
+        scope->tokens, scope->q, (const char *)sqlite3_column_text(stmt, 0), count, &k.facet);
+
+    /* Only a hand-edited store holds text that is not UTF-8: a non-match
+       (decision:plan18-facet-invalid-utf8-no-match). */
+    if (sst == SEARCH_ERR_INVALID_UTF8 || (sst == SEARCH_OK && k.facet.tier == SEARCH_TIER_NONE)) {
+        return STORE_OK;
+    }
+    if (sst != SEARCH_OK) {
+        return (sst == SEARCH_ERR_OOM) ? STORE_ERR_OOM : STORE_ERR_INTERNAL;
+    }
+    if (dup_col_req(stmt, 0, &k.item.key) != STORE_OK) {
+        goto oom;
+    }
+    /* The columns are NOT NULL, so a NULL copy is out of memory. With a key the
+       label never decodes the body: it too fails only when a copy does. */
+    if (kind == FACET_KEYS && (dup_col_req(stmt, 1, &k.item.sync_id) != STORE_OK ||
+                               dup_col_req(stmt, 2, &k.item.source) != STORE_OK ||
+                               dup_col_req(stmt, 3, &k.item.updated_at) != STORE_OK ||
+                               search_label((const char *)sqlite3_column_text(stmt, 4), k.item.key,
+                                            &k.item.label) != SEARCH_OK)) {
+        goto oom;
+    }
+    if (c->count == c->cap) {
+        size_t ncap = (c->cap == 0U) ? (size_t)GROW_MIN_CAP : (c->cap * 2U);
+        FacetCandidate *grown = (FacetCandidate *)realloc((void *)c->items, ncap * sizeof(*grown));
+        if (grown == NULL) {
+            goto oom;
+        }
+        c->items = grown;
+        c->cap = ncap;
+    }
+    k.facet.text = k.item.key;
+    c->items[c->count++] = k;
+    return STORE_OK;
+
+oom:
+    search_key_item_free(&k.item);
+    return STORE_ERR_OOM;
+}
+
+/* Run kind's query and keep the rows that text-match, sorted (E2.6, D28). */
+static StoreStatus facet_fetch(const FacetScope *scope, FacetKind kind, FacetCandidates *c)
+{
+    /* Headroom beyond where_sql for the longest head + tail. */
+    enum { FRAME_MARGIN = 256 };
+    char where_sql[LIST_SQL_CAP];
+    char sql[(size_t)LIST_SQL_CAP + (size_t)FRAME_MARGIN];
+    const char *bind_text[LIST_BIND_CAP];
+    sqlite3_stmt *stmt = NULL;
+    StoreStatus st = STORE_OK;
+    int nbinds = 0;
+    int sn = 0;
+    int rc = 0;
+
+    if (list_build_where(&scope->sq->filters, scope->now, "updated_at", where_sql,
+                         sizeof(where_sql), &nbinds, bind_text, LIST_BIND_CAP) != 0) {
+        return STORE_ERR_INTERNAL;
+    }
+    sn = snprintf(sql, sizeof(sql), "%s%s%s", k_facet_head[kind], where_sql, k_facet_tail[kind]);
+    if (sn < 0 || (size_t)sn >= sizeof(sql)) {
+        return STORE_ERR_INTERNAL;
+    }
+    if (sqlite3_prepare_v2(scope->db, sql, -1, &stmt, NULL) != SQLITE_OK) {
+        return store_status_plain(scope->db, scope->serr);
+    }
+    st = list_bind_texts(stmt, bind_text, nbinds, scope->serr);
+    while (st == STORE_OK && (rc = sqlite3_step(stmt)) == SQLITE_ROW) {
+        st = facet_append_row(scope, stmt, kind, c);
+    }
+    if (st == STORE_OK && rc != SQLITE_DONE) {
+        st = store_status_plain(scope->db, scope->serr);
+    }
+    (void)sqlite3_finalize(stmt);
+    /* items is NULL when nothing matched, and qsort needs a valid pointer. */
+    if (st == STORE_OK && c->count > 0U) {
+        qsort(c->items, c->count, sizeof(*c->items),
+              (kind == FACET_KEYS) ? search_key_order : search_tag_order);
+    }
+    return st;
+}
+
+/* Move the first limit keys of c into out; total counts all. A moved item is
+   zeroed in c, so freeing c afterwards stays correct. */
+static StoreStatus facet_take_keys(FacetCandidates *c, size_t limit, SearchKeyFacet *out)
+{
+    size_t keep = (c->count < limit) ? c->count : limit;
+    size_t i = 0U;
+
+    out->total = c->count;
+    if (keep == 0U) {
+        return STORE_OK;
+    }
+    out->items = (SearchKeyItem *)malloc(keep * sizeof(*out->items));
+    if (out->items == NULL) {
+        return STORE_ERR_OOM;
+    }
+    for (i = 0U; i < keep; i++) {
+        out->items[i] = c->items[i].item;
+        memset(&c->items[i].item, 0, sizeof(c->items[i].item));
+    }
+    out->count = keep;
+    return STORE_OK;
+}
+
+/* Same for tags: the tag text moves, count comes from the facet. */
+static StoreStatus facet_take_tags(FacetCandidates *c, size_t limit, SearchTagFacet *out)
+{
+    size_t keep = (c->count < limit) ? c->count : limit;
+    size_t i = 0U;
+
+    out->total = c->count;
+    if (keep == 0U) {
+        return STORE_OK;
+    }
+    out->items = (SearchTagItem *)malloc(keep * sizeof(*out->items));
+    if (out->items == NULL) {
+        return STORE_ERR_OOM;
+    }
+    for (i = 0U; i < keep; i++) {
+        out->items[i] =
+            (SearchTagItem){.tag = c->items[i].item.key, .count = (size_t)c->items[i].facet.count};
+        c->items[i].item.key = NULL;
+    }
+    out->count = keep;
+    return STORE_OK;
+}
+
+/* Both facets of res, on the search's read transaction. */
+static StoreStatus search_facets(const FacetScope *scope, SearchResult *res)
+{
+    FacetCandidates keys = {0};
+    FacetCandidates tags = {0};
+    StoreStatus st = facet_fetch(scope, FACET_KEYS, &keys);
+
+    if (st == STORE_OK) {
+        st = facet_take_keys(&keys, scope->sq->facet_limit, &res->keys);
+    }
+    if (st == STORE_OK) {
+        st = facet_fetch(scope, FACET_TAGS, &tags);
+    }
+    if (st == STORE_OK) {
+        st = facet_take_tags(&tags, scope->sq->facet_limit, &res->tags);
+    }
+    facet_candidates_free(&keys);
+    facet_candidates_free(&tags);
+    return st;
+}
+
+void store_search_result_free(SearchResult *res)
+{
+    size_t i = 0U;
+
+    if (res == NULL) {
+        return;
+    }
+    free_entry_rows(res->page.entries, res->page.count);
+    for (i = 0U; i < res->keys.count; i++) {
+        search_key_item_free(&res->keys.items[i]);
+    }
+    free(res->keys.items);
+    for (i = 0U; i < res->tags.count; i++) {
+        free(res->tags.items[i].tag);
+    }
+    free(res->tags.items);
+    free(res->warning);
+    memset(res, 0, sizeof(*res));
+}
+
 SearchResult store_search(Store *s, const SearchQuery *q, const char *now)
 {
     char err_unused[1];
@@ -3829,14 +4066,19 @@ SearchResult store_search(Store *s, const SearchQuery *q, const char *now)
                                          (SearchBinds){.q = q_low, .match = match}, now, &s->last);
         }
     }
+    if (res.page.st == STORE_OK) {
+        FacetScope scope = {
+            .db = s->db, .sq = q, .now = now, .tokens = &tokens, .q = q_low, .serr = &s->last};
+
+        res.page.st = search_facets(&scope, &res);
+    }
     if (res.page.st != STORE_OK) {
         rollback_quiet(s->db);
         goto cleanup;
     }
     if (exec_sql(s->db, "COMMIT;", err_unused, 0U, &s->last) != 0) {
         rollback_quiet(s->db);
-        free_entry_rows(res.page.entries, res.page.count);
-        res.page = (PageResult){.st = STORE_ERR_SQLITE};
+        res.page.st = STORE_ERR_SQLITE;
     }
 
 cleanup:
@@ -3844,8 +4086,10 @@ cleanup:
     free(q_low);
     free(match);
     if (res.page.st != STORE_OK) {
-        free(res.warning);
-        res.warning = NULL;
+        StoreStatus st = res.page.st;
+
+        store_search_result_free(&res);
+        res.page.st = st;
     }
     return res;
 }

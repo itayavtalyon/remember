@@ -264,24 +264,62 @@ PageResult store_list(Store *s, const ListQuery *q, const char *now);
  * Union search (006 E2.1). query is the user's QUERY, valid UTF-8 (the CLI
  * checks, D27; invalid is STORE_ERR_INTERNAL). filters reuse ListQuery: tag
  * AND, optional source/key, limit/offset, since/until on updated_at; sort is
- * ignored.
+ * ignored. facet_limit caps keys.items and tags.items as given, like limit
+ * (the CLI enforces 1..200); zero returns totals and no items.
  */
 typedef struct {
     const char *query;
     ListQuery filters;
+    size_t facet_limit;
 } SearchQuery;
 
+/* One keys facet item (E2.6). */
+typedef struct {
+    char *key;
+    char *sync_id;
+    char *label;
+    char *source;
+    char *updated_at;
+} SearchKeyItem;
+
+/* One tags facet item (E2.6): count = memories in scope that carry tag. */
+typedef struct {
+    char *tag;
+    size_t count;
+} SearchTagItem;
+
+/* items: at most facet_limit, in E2.6 order; total: every scoped match. */
+typedef struct {
+    SearchKeyItem *items;
+    size_t count;
+    size_t total;
+} SearchKeyFacet;
+
+/* items: at most facet_limit, in D28 order; total: every scoped match. */
+typedef struct {
+    SearchTagItem *items;
+    size_t count;
+    size_t total;
+} SearchTagFacet;
+
 /*
- * page as for store_list (see PageResult). warning is heap (free it): the
- * FTS5 message when the raw part does not parse (E2.1 (5), E2.3), else NULL.
- * NULL on error.
+ * page as for store_list (see PageResult). keys and tags are the facets
+ * (E2.5, E2.6): scoped by bin + filters, not by the query match (E2.5d).
+ * warning is the FTS5 message when the raw part does not parse (E2.1 (5),
+ * E2.3), else NULL. Everything is heap: release with
+ * store_search_result_free. On error only page.st is set.
  */
 typedef struct {
     PageResult page;
+    SearchKeyFacet keys;
+    SearchTagFacet tags;
     char *warning;
 } SearchResult;
 
 SearchResult store_search(Store *s, const SearchQuery *q, const char *now);
+
+/* Free everything store_search returned and zero *res. NULL-safe. */
+void store_search_result_free(SearchResult *res);
 
 /*
  * Soft-delete one entry (locator: live or expired). Sets deleted_at=now, clears

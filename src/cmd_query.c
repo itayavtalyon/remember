@@ -592,13 +592,9 @@ int cmd_search(Store *s, bool json, int rest_argc, const char **rest_argv)
     char since[ISO_TS_BUFSIZE];
     char until[ISO_TS_BUFSIZE];
     SearchQuery q;
-    Entry *entries = NULL;
-    size_t count = 0U;
-    size_t total = 0U;
+    SearchResult res = {.page = {.st = STORE_OK}};
     StoreNeighbor *links = NULL;
     size_t nlinks = 0U;
-    char *warning = NULL;
-    StoreStatus st = STORE_OK;
     int rc = REMEMBER_ERR;
     char now[ISO_TS_BUFSIZE];
 
@@ -623,40 +619,32 @@ int cmd_search(Store *s, bool json, int rest_argc, const char **rest_argv)
         err_msg(DIAG_INTERNAL, "internal error");
         goto cleanup;
     }
-    {
-        SearchResult res = store_search(s, &q, now);
-        st = res.page.st;
-        entries = res.page.entries;
-        count = res.page.count;
-        total = res.page.total;
-        warning = res.warning;
-    }
-    if (st != STORE_OK) {
-        err_store(s, st);
+    res = store_search(s, &q, now);
+    if (res.page.st != STORE_OK) {
+        err_store(s, res.page.st);
         goto cleanup;
     }
-    if (load_page_neighbors(s, entries, count, now, &links, &nlinks) != 0) {
+    if (load_page_neighbors(s, res.page.entries, res.page.count, now, &links, &nlinks) != 0) {
         goto cleanup;
     }
     if (q.filters.bin != STORE_BIN_DELETED) {
         cmd_neighbors_drop_deleted(links, &nlinks, now);
     }
 
-    if (emit_entry_page(json, q.filters.offset, q.filters.limit, count, total, entries, links,
-                        nlinks, now) != 0) {
+    if (emit_entry_page(json, q.filters.offset, q.filters.limit, res.page.count, res.page.total,
+                        res.page.entries, links, nlinks, now) != 0) {
         err_msg(DIAG_INTERNAL, "failed to write output");
         goto cleanup;
     }
-    if (warning != NULL) {
-        (void)diag_warning(DIAG_WARN_RAW_QUERY_IGNORED, warning);
+    if (res.warning != NULL) {
+        (void)diag_warning(DIAG_WARN_RAW_QUERY_IGNORED, res.warning);
     }
     rc = REMEMBER_OK;
 
 cleanup:
-    free(warning);
     search_parse_free(&parsed);
     free_tag_list(tags_norm, ntags);
     store_neighbors_free(links, nlinks);
-    free_entry_page(entries, count);
+    store_search_result_free(&res);
     return rc;
 }

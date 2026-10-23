@@ -51,7 +51,7 @@ Dev tools for inspect tests: `sqlite3` on PATH (`brew install sqlite` if needed)
 | `test_add.c` | add keyless |
 | `test_get_list_delete.c` | get/list/delete/paging |
 | `test_search.c` | FTS search |
-| `test_store_search.c` | `store_search` union: P prefix part, E2.1a parse probe, `(P) OR (R)`, de-duplication, E2.4 ranking, failure paths (plan 18 stage 3; runs in the `store` suite and under ASan via `remember_store_tests`) |
+| `test_store_search.c` | `store_search` union: P prefix part, E2.1a parse probe, `(P) OR (R)`, de-duplication, E2.4 ranking; keys and tags facets: scope, tiers and order, counts, label, `facet_limit` cap and totals, invalid stored UTF-8, allocation sweeps; failure paths (plan 18 stages 3-4; runs in the `store` suite and under ASan via `remember_store_tests`) |
 | `test_union_search.c` | `search` CLI: warning on exit 0, the E2 verification inputs, D27 invalid UTF-8 (plan 18; gate suite `union_search`) |
 | `test_update.c` | update, including `--if-version-vector` wiring (gate suite `update`) |
 | `test_key.c` | `--key` (green slice suite: `key_gld`; WIP: `key`) |

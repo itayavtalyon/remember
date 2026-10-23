@@ -569,6 +569,106 @@ Gate on this tree (2026-10-22), after the last code edit (no file under `src`, `
 - `./scripts/ci-linux.sh`: OK, 5/5, **iwyu PASS**, scan-build PASS.
 - `cmake --build build --target leaks-macos`: PASS.
 
+### 2026-10-23 — stage 4 (facets: candidates in scope, classify, order, totals, cap)
+
+Start: `git fetch` brought nothing for this branch. The stage 3 second-review commit `54f1047` sat detached in the reviewer's worktree; `plan18-union-search` was fast-forwarded to it (`fa3702a..54f1047`). Its verdict closed stage 3. The stale `.claude/REVIEW_REQUEST` was removed. The open nit (QUERY trimmed twice) stays with stage 5. `standard:coding` ROUND 13 loaded. Build configured with the cached `/usr/bin/clang`; `ctest -N` lists 5.
+
+Grills, both answered and filed:
+
+- `decision:plan18-facets-independent` (Itay chose against the recommendation): facets do not depend on the memory query. The store fetches and classifies them whenever the probe succeeds, even when no MATCH runs. With E2.1 (5) and P empty (query `(`), the entries are empty but key `(draft)` is still a facet item (`store_search_facets_do_not_need_a_memory_match`). E2.1 (4) still has empty facets, because q and the tokens are both empty (`store_search_blank_query_has_no_facets`).
+- `decision:plan18-facet-invalid-utf8-no-match`: a stored key or tag that is not valid UTF-8 (only a hand-edited store; add, update and import validate) is a non-match when it is not tier 1. Search never fails on a stored row. Probe before the grill: such bytes print raw in `list`, `--json list` and `tags`, exit 0.
+
+Design (`src/store.h`, `src/store_sqlite.c`, `src/cmd_query.c`):
+
+- `SearchQuery.facet_limit` caps `keys.items` and `tags.items` as given, like `limit`. The CLI enforces 1..200 in stage 5. Zero returns the totals and no items, so the 18 callers that read only `.page` allocate nothing (`store_search_facet_limit_zero_returns_totals_only` pins items NULL).
+- `SearchResult` gains `keys` (`SearchKeyFacet`: items of key, sync_id, label, source, updated_at; count; total) and `tags` (`SearchTagFacet`: items of tag, count). `store_search_result_free` releases everything. On any failure the store frees everything and sets only `page.st`. The COMMIT failure path now uses the same cleanup.
+- One query per kind, built from `list_build_where(filters, now, "updated_at")` (the list WHERE without MATCH) between a fixed head and tail (`k_facet_head` / `k_facet_tail`): keyed memories (`key, sync_id, source, updated_at, body … AND e.key IS NOT NULL`), and tags with their scoped `COUNT(*)` (`… GROUP BY tg.name`). They run on the search's read transaction, after the probe and the page.
+- `facet_append_row` classifies column 0 with `search_facet_classify`. Tier NONE and `SEARCH_ERR_INVALID_UTF8` are skipped. OOM is `STORE_ERR_OOM`, any other failure `STORE_ERR_INTERNAL`. A match is copied into a `FacetCandidate` (`SearchFacet` first, so the search_terms comparators read each element as one; `facet.text` points at the owned copy). Key rows also copy sync_id, source, updated_at and the label `search_label(body, key)`.
+- `facet_fetch` sorts with `search_key_order` or `search_tag_order`. `facet_take_keys` / `facet_take_tags` set `total` to every match and move the first `facet_limit` into the result; a moved item is zeroed in the candidates, so one free path covers both.
+- `cmd_search` holds the whole `SearchResult` and frees it with `store_search_result_free`. It sets no `facet_limit` yet, so the CLI computes totals only until stage 5 parses `--facet-limit` and prints the facets.
+
+Ownership claim checked against every way data arrives (round 11.3): sync_id, source, updated_at and body are `NOT NULL` in the schema (`sqlite3 p.db "UPDATE entries SET source = NULL …"` → `NOT NULL constraint failed: entries.source`), so a NULL copy means out of memory. With a key, the label never decodes the body: a hand-edited body `# ok\xff` with a key gives the label `ok\xff` and exit 0 (probe binary against `libremember_core.a`).
+
+0.2.0 test changed: `test_search.c` `search_json_paging_fields` now checks `"total":3` instead of only `"total":`. Mutant C3 (total passed as count) survived the old assert. 3 is a hand count: all three corpus rows match `pref OR helix OR FTS5 OR Font`.
+
+Must-pass rows this stage proves at the store (the JSON, human and `--facet-limit` CLI rows belong to stage 5):
+
+| Plan row | Test |
+|---|---|
+| Example 1: keys [`recs:books`], label `Book recommendations`; tags [`type:books` (1)] | `store_search_facets_a_matching_key`, `store_search_labels_a_key_with_its_title`, `store_search_facets_a_matching_tag` |
+| Example 2: keys [`recs:books`]; tags [] | `store_search_facets_example_2` |
+| Example 4: keys []; tags [] (E2.5d scope) | `store_search_filters_scope_the_facets` |
+| Whitespace-only → keys and tags empty | `store_search_blank_query_has_no_facets` |
+| 60 matching tags → total 60, 50 items; limit 200 → 60 | `store_search_caps_tag_items_at_the_facet_limit` (store; usage values are stage 5) |
+| Tier 1 before tier 2; code point order inside a tier | `store_search_orders_keys_by_tier_then_code_point` (rules: stage 2 unit tests) |
+| Tag order exact, tier, count DESC, tag (D28) | `store_search_orders_tags_exact_tier_then_count` |
+| label title / key | `store_search_labels_a_key_with_its_title`, `store_search_labels_a_key_without_a_title_with_the_key` (60-grapheme rule: stage 2) |
+| Bins and filters scope the facets | `store_search_bin_scopes_the_keys` (handover probe 4), `store_search_filters_scope_the_facets`, `store_search_filters_scope_the_tag_counts`, `store_search_since_scopes_the_keys_on_updated_at`. The facet query takes the whole `ListQuery` (mutants F6a/F6b); `--expired`, `--source`, `--key`, `--until` reach `list_build_where`, which the list tests pin per axis (round 3.1). Stage 5 adds the CLI row. |
+| `--offset` / `--limit` page entries only (handover probe 6) | `store_search_paging_leaves_the_facets_whole` |
+
+Other new tests: `store_search_caps_key_items_and_counts_every_match`, `store_search_key_item_carries_its_memory_fields` (re-added later, so updated_at ≠ created_at), `store_search_counts_the_memories_that_carry_a_tag`, `store_search_skips_a_stored_key_with_invalid_utf8`, three failure-sweep tests (pure-TU allocations, store allocations, unicode calls; each failure must be OOM or INTERNAL and the clean run must hold every item and the label), `store_search_facet_failure_drops_the_page`, `store_search_tags_prepare_failure_is_sqlite`, `store_search_facet_step_failure_is_sqlite`, `store_search_too_many_filters_for_the_facets_is_internal`, `store_search_result_free_accepts_null`, and `test_search.c` `search_invalid_source_is_usage`.
+
+TDD red runs: matching key (link-red: no `store_search_result_free`), key order (`"a:b|b:z|…"` vs `"b:z|a:b|…"`; the first fixture passed without a sort because SQLite returned keys in index order, so it was rebuilt where index order and tier order differ), key cap (count 2 vs 1), both labels (`(null)`), facet failure dropping the page (entries non-NULL; the first fault index hit a row's tag load, because each page row prepares its own tag query), the pure-TU sweep (a classify OOM was swallowed as a non-match), invalid stored UTF-8 (status 4, INTERNAL), matching tag (empty). Tests that passed on arrival are proven by the mutants below.
+
+Mutations (`scratchpad/mutate.py`, `build-mut`: `/usr/bin/clang`, ASan/UBSan, VFS on; `remember_store_tests` plus `remember_tests --only search,union_search,errors,facade,verification_search,coverage_edges,verification_gld,get_list_delete`; source restored and rebuilt after each). 63 one-clause mutants, red tests named:
+
+- SQL: F1 `e.key IS NOT NULL` dropped: a keyless row reaches classify with NULL text and the search fails INTERNAL. The clause has no valid-but-wrong rewrite that still keeps NULL keys out, so this kill is the meaning. F2 `GROUP BY e.id`, F3 `COUNT(*)` → 1: the count and order tests. F5 time column `created_at`: `…since_scopes_the_keys_on_updated_at`. F6a filters dropped (bin kept): the filter and since tests. F6b bin forced live (filters kept): `…bin_scopes_the_keys`.
+- Row: F7 count never read, F8 count read for keys: the count/order/tag tests. F9 invalid UTF-8 not skipped: `…skips_a_stored_key_with_invalid_utf8`. F10 tier NONE kept: 10+ tests. F10b `sst == SEARCH_OK &&` dropped, F11 OOM → INTERNAL: the pure-TU sweep. F11b INTERNAL → OOM **survived** at first (no test injected a unicode failure during classify) → killed by the new `store_search_unicode_failure_is_internal_not_a_missing_key`. F12 key copy OOM swallowed, F20 growth OOM swallowed, F27c/d item array OOM ignored: the store alloc sweep. F13 key fields for tags: many. F14/F14b/F15 columns swapped: `…key_item_carries_its_memory_fields`. F16 label from the key column: title test. F17 label without the key: key-label test. F18 label failure ignored **survived** at first (the sweep did not read the label) → the pure-TU sweep now asserts the label.
+- Order, cap, move: F23b tags by the key order: tag order test. V24 sort only after an error: both order tests. F25/F25b limit ignored, F26/F26b total = keep: the cap tests. F27/F27b no early return on zero: `…facet_limit_zero_returns_totals_only`. F29 tag count 0: count tests. F28, F30 moved item not zeroed: ASan double free (the meaning: one owner per string).
+- Flow: V24b step error checked only after an error: step failure test + sweeps. V31a/V31c take only after an error, V32b facets only after a page error: many. F31b tags fetched after a keys error: facet failure tests + sweeps. F32 facets after a page error: the stage 3 probe and fault tests. F33 error cleanup frees only the warning, F35 no memset: the drop-the-page, commit and prepare tests. F34 NULL guard dropped: UBSan in `…result_free_accepts_null` (the meaning). F38 COMMIT failure keeps OK: `store_search_commit_failure_drops_page_and_warning`. F21 growth when `count > cap`: UBSan store to NULL (memory-safety mutant).
+- CLI: C3 total passed as count **survived** → `search_json_paging_fields` now asserts `"total":3`. C4 `list_prepare_query` failure ignored: `search_invalid_source_is_usage`. VC1 warning printed only when NULL: V27 and the union tests.
+- Compile kills rerun as valid-but-wrong rewrites (round 8.1): F24 → V24, F24b → V24b, F31a → V31a, F31c → V31c, F32b → V32b, C1 → VC1, all killed as listed.
+- Leak-only (macOS ASan has no LeakSanitizer): F31d keys candidates not freed, F36 / F37 `store_search_result_free` skips the key / tag items. Run in `ubuntu:24.04` with clang, `REMEMBER_ENABLE_LSAN=ON`, `ASAN_OPTIONS=detect_leaks=1`, as an unprivileged user (`scratchpad/lsan.py`): the control run exits 0 with no leak report; each of the three exits 134 with `LeakSanitizer: detected memory leaks`. `ci-linux.sh` runs the store suite that way.
+
+Equivalent mutants, kept on purpose:
+
+- F22 qsort guard `count > 1`: sorting one element is a no-op. The guard exists because `items` is NULL when nothing matched (the comment says so).
+- F23a keys sorted by `search_tag_order`: key items carry count 0, and an exact key is q itself, which is a prefix of every tier 1 key and so already sorts first by code point. Differential (round 13.3, `scratchpad/diff/diff.c` linked against `search_terms.c`): 20,000 random key sets and queries over `a b ab ba z é A abc b2 x` joined by every separator, with q itself injected; both orders give identical sequences, 19,311 trials with an exact item beside another tier 1 item. Kept, because E2.6 states the key order without an exact rule.
+- F25c `<` → `<=` in the min: equal operands give the same value.
+- VC2 `err_store(s, STORE_ERR_SQLITE)`: every store error a CLI search can reach is `STORE_ERR_SQLITE`. Invalid UTF-8 stops at D27 and more than 50 `--tag` stops at the CLI (probe: 61–70 tags → `too many --tag filters (max 50)`). The line is the stage 3 line with the variable renamed.
+
+Coverage (round 9.3 / 13.2): functions 100%, effective lines 100%, 0 missed branch sides in the four pure TUs. Zero-hit lines in the touched code, each trigger named by a run:
+
+- `facet_fetch` `list_build_where` failure: reached by `store_search_too_many_filters_for_the_facets_is_internal` (64 tags, no page query). The CLI cannot reach it: `--tag` is capped at 50, so the WHERE needs at most 55 of 64 binds and 6,057 of 8,192 SQL bytes (computed from the clause texts).
+- `facet_fetch` SQL truncation `return STORE_ERR_INTERNAL`: the WHERE is under 8,192 bytes and the margin (256) is larger than the longest head + tail (132 bytes, the tags query), so it cannot fire. It mirrors `list_query_exec`.
+- The first run also left OOM lines (copies, growth, item arrays) and `store_search_result_free(NULL)` at zero; the store alloc sweep and `…result_free_accepts_null` now reach them.
+- `cmd_search`: `list_prepare_query` failure is a user path, now `search_invalid_source_is_usage`. `utc_now` failure: not user-reachable (clock read). `load_page_neighbors` failure: a database error after the page, store fault injection only. `failed to write output`: reachable by a user. On Linux, `remember search body --limit 200 > /dev/full` with 300 rows printed `remember: failed to write output`, exit 1 (Release build in `ubuntu:24.04`). No CLI test can make stdout fail today; see the pre-existing finding below.
+
+Probes beyond the plan:
+
+- `facet_limit` through the store API (probe binary against Release `libremember_core.a`): `SIZE_MAX` → keys 2/2, tags 1/1; 1 → keys 1/2 (the tier 1 key first); 0 → keys 0/2, tags 0/1.
+- Hostile stored text (round 3.3 / 12.1): a title `# esc \033[31mred\r\n\302\233x` gives the label `esc \x1b[31mred`: the line stops at LF, the ASCII trim drops CR, and the ESC stays. The facet items carry key, tag, sync_id, source, updated_at and label raw from the store. Import validates the key, tags, sync_id, source and timestamps (plan 18c); the label comes from the body, which may hold ESC, C1 and invalid UTF-8. **Stage 5 must write every facet field through the JSON escaper and the human mask** (`decision:plan18c-mask-c1`), like entry bodies.
+- Cost (Release, 3,000 keyed memories under 300 key prefixes, 1,001 tags, `search boo`, 20 warm runs): stage 3 `fa3702a` 12.0 ms/run, this tree 16.6–17.1 ms/run. The facets add about 5 ms at that size.
+- `search -- '('` with `(draft)` stored: exit 0, no entries, `remember: warning: fts5: syntax error near ""`. The key `(draft)` is a facet item (`store_search_facets_do_not_need_a_memory_match`); the CLI prints facets from stage 5.
+
+Simplify pass:
+
+- Applied: one fetch and one row appender for both kinds (`FacetKind` indexes the SQL head and tail). A keys-only draft had its own fetch; a second copy for tags would have been about 60 more lines.
+- Applied: `store_search` error cleanup is `store_search_result_free` (the COMMIT path lost its own free, −2 lines).
+- Applied: `cmd_search` keeps the `SearchResult` instead of five locals (−12 lines net).
+- Applied (tests): the three failure sweeps share `when_each_failure_until_clean` (−27 lines); `store_search_keys_prepare_failure_is_sqlite` was deleted (−11): `store_search_facet_failure_drops_the_page` proves the same keys-prepare contract, and F31b still dies.
+- Declined: one `facet_take` for both kinds (about −10 lines). A key item moves whole; a tag item is built from the key slot and the facet count. One function needs a kind switch on both the element type and the move, which braids two outputs.
+- Declined: sorting keys with `search_tag_order` too (−1 line). It is equivalent (F23a), but E2.6 does not state an exact rule for keys, and a reader would have to repeat the differential to trust it.
+- Declined: skipping the facet SQL when q is empty (blank query). It adds a branch for a speed-up, and the facets are already empty (`store_search_blank_query_has_no_facets`).
+- Tests: `test_store_search.c` gained 28 tests (about 570 lines with helpers `assert_keys[_for]`, `assert_tags[_for]`, `given_facet_query`, `given_numbered_tags`, `given_facets_only`, `when_each_failure_until_clean`). The rules (tiers, segment match, label, order clauses) stay in the stage 2 unit tests. Each store test proves only that the store feeds them the right input; the order fixtures are chosen so that SQLite's own row order differs from the expected one.
+
+Pre-existing findings (not this stage, reported per round 4.2):
+
+- A failed final flush of stdout is never reported. On Linux, `remember search draft > /dev/full` and `remember list > /dev/full` with small output exit 0 and write nothing. No `fflush`/`ferror` check on stdout exists in `src/`. This affects every command (`style:fail-fast`).
+- `test_store.c` `store_list_and_search_bins` reads `rows[0]` after a failed assert when the `sqlite3` CLI is missing (UBSan `applying zero offset to null pointer` at line 978, seen in a container without `sqlite3`). Its helper reports `sqlite3: not found`, and the test goes on (round 2.4 / 12.4).
+
+Handover items: Release (`-DCMAKE_BUILD_TYPE=Release`, `/usr/bin/clang`) against `54f1047`: `remember` 1,903,752 → 1,904,104 B (+352 B), `libremember_core.a` 281,632 → 285,584 B (+3,952 B). There is no new library, so a non-CMake consumer links the same four archives as in stage 3.
+
+Gate on this tree (2026-10-23), after the last code edit (no file under `src`, `tests`, `docs`, `skills` or `scripts` is newer than the gate start; only this file changed after it):
+
+- `ctest --test-dir build` (ASan/UBSan, `REMEMBER_TEST_VFS=ON`, `ctest -N` = 5): 5/5. `remember_store_tests`: 440 tests, 0 failed.
+- `./scripts/lint-all.sh`: LINT OK (format, four boundaries, cppcheck src + tests, `gcc -fanalyzer`, clang-tidy).
+- `./scripts/check-coverage.sh`: functions 100%, effective lines 100%; `search_terms.c` 176, `unicode.c` 80, `normalize.c` 268, `output.c` 572 branch sides, 0 missed.
+- `cmake --build build --target leaks-macos`: PASS.
+- `./scripts/ci-linux.sh`: OK (LSan on), **iwyu PASS**, scan-build PASS.
+
+Stage 5 inherits: set `facet_limit` from `--facet-limit` (default 50); print `keys`/`tags` in the envelope and the human lines with every field escaped or masked (above); the double trim of QUERY.
+
 ## Review Notes
 
 ### 2026-10-20 — in-session deep review (stage 1)
@@ -745,3 +845,16 @@ Instructions for the coder:
 3. For an "equivalent mutant" in a parser or query builder, back the claim with a differential run: base and mutant over the same fuzz corpus, outputs compared byte for byte.
 
 Gate (fix tree, 2026-10-23; clang, `REMEMBER_ENABLE_SANITIZERS=ON`, `REMEMBER_TEST_VFS=ON`, configured twice, cache flags checked): build, ctest, `lint-all.sh`, `check-coverage.sh` (search_terms 176, unicode 80, normalize 268, output 572 sides, 0 missed), `leaks-macos` all green. `ci-linux.sh` first failed on infrastructure: Docker's resolver returned only IPv6 for `ports.ubuntu.com`, so apt installed nothing (`Unable to locate package`). The same inner command (`docker run … ubuntu:24.04 bash /src/scripts/ci-linux.sh --inner --install`) with `--dns 1.1.1.1` on the unchanged tree: exit 0, iwyu PASS, scan-build PASS, LINT OK. Default DNS recovered before the push; the pre-push hook ran `ci-linux.sh` unmodified. After the gate only this file changed (Markdown). Standard filed: `standard:coding` ROUND 13.
+
+### 2026-10-23 — in-session deep review (stage 4)
+
+Lenses: `pref:review-lenses` 1–9, comprehensive, ponytail, `docs/STEP_REVIEW_CHECKLIST.md`. Bugbot is not installed.
+
+- **critical (fail-fast), fixed before the gate.** The first draft dropped every `search_facet_classify` failure as a non-match, so an out-of-memory dropped a key silently. The pure-TU allocation sweep caught it; OOM is now `STORE_ERR_OOM`, any other failure is INTERNAL, and only invalid stored UTF-8 is skipped (grilled).
+- **important, fixed.** A facet failure after the page leaked the page entries. `store_search_facet_failure_drops_the_page` found it; the error cleanup is now `store_search_result_free`.
+- **important, fixed.** Three survivors: F11b (no unicode failure during classify), F18 (the label was never checked after a sweep), C3 (no CLI test with total ≠ count). Each has a test now.
+- **nit, fixed.** A comment sat inside the `if` condition of the key copies; it now precedes the `if` and states the NOT NULL reason that was probed.
+- **grill ×2**, answered: `decision:plan18-facets-independent`, `decision:plan18-facet-invalid-utf8-no-match`.
+- **finding, pre-existing (not fixed here):** stdout flush failures exit 0 (above). Proposed as its own task.
+
+Pragmatic write gate: DRY PASS (one fetch and one appender for both kinds; the WHERE is `list_build_where`; `dup_col_req`, `store_status_plain`, `list_bind_texts` reused; one free path). Easy-to-replace PASS (SQLite stays in `store_sqlite.c`; classification and order stay in `search_terms.c`; the CLI sees only `SearchResult`). Orthogonal PASS (`list` untouched; the page query and the facet queries share only the read transaction and the filters).

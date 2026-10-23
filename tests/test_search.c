@@ -149,6 +149,21 @@ TEST(search_second_query_is_unexpected)
     free(db);
 }
 
+/* A filter the list rules reject stops search too, before the store. */
+TEST(search_invalid_source_is_usage)
+{
+    char *db = make_temp_db_path();
+    const char *args[] = {"search", "boo", "--source", "bogus"};
+    CmdResult r;
+    ASSERT_TRUE(db != NULL);
+    r = run_remember(db, args, sizeof(args) / sizeof(args[0]), NULL);
+    ASSERT_EQ_INT(r.exit_code, 1);
+    ASSERT_STREQ(r.out, "");
+    ASSERT_STR_CONTAINS(r.err, "invalid source");
+    cmd_result_free(&r);
+    free(db);
+}
+
 TEST(search_no_matches_exits_zero)
 {
     char *db = make_temp_db_path();
@@ -178,7 +193,7 @@ TEST(search_json_paging_fields)
     ASSERT_STR_CONTAINS(r.out, "\"offset\":0");
     ASSERT_STR_CONTAINS(r.out, "\"limit\":1");
     ASSERT_STR_CONTAINS(r.out, "\"count\":1");
-    ASSERT_STR_CONTAINS(r.out, "\"total\":");
+    ASSERT_STR_CONTAINS(r.out, "\"total\":3"); /* all three corpus rows match */
     cmd_result_free(&r);
     free(db);
 }
@@ -275,6 +290,7 @@ void register_search_tests(void)
     RUN_TEST(search_query_trims_outer_whitespace);
     RUN_TEST(search_missing_query_rejected);
     RUN_TEST(search_second_query_is_unexpected);
+    RUN_TEST(search_invalid_source_is_usage);
     RUN_TEST(search_no_matches_exits_zero);
     RUN_TEST(search_json_paging_fields);
     RUN_TEST(search_json_includes_full_body);
