@@ -497,6 +497,13 @@ int remember_run(int argc, char *const *argv, FILE *out, FILE *err)
     cli_parse(argc, argv, &args);
     diag_set_json_errors(args.globals.json_errors);
     rc = run(&args);
+    /* Buffered output is written here or at exit, after every command's own
+       write checks; a failure then would otherwise exit 0 with nothing written.
+       A failed command already reported its error, so it keeps that one line. */
+    if (rc == REMEMBER_OK && (fflush(out) != 0 || ferror(out) != 0)) {
+        err_msg(DIAG_INTERNAL, "failed to write output");
+        rc = REMEMBER_ERR;
+    }
     diag_set_json_errors(false);
     cli_args_free(&args);
     app_set_streams((AppStreams){.out = NULL, .err = NULL});

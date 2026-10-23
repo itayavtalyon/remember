@@ -779,6 +779,173 @@ TEST(store_text_codes_follow_the_locked_split)
     }
 }
 
+/* A stdout that takes writes into its buffer and fails when they are flushed:
+   the descriptor under the FILE is replaced by a read-only one, so write(2)
+   fails with EBADF. NULL (after a failed assert) if it cannot be built. */
+static FILE *given_out_failing_at_flush(void)
+{
+    char *path = make_temp_db_path();
+    /* NOLINTNEXTLINE(android-cloexec-fopen) macOS fopen has no "e" mode */
+    FILE *file = (path != NULL) ? fopen(path, "w") : NULL;
+    int read_only = open("/dev/null", O_RDONLY | O_CLOEXEC);
+    bool built = false;
+
+    if (file != NULL && read_only >= 0 && dup2(read_only, fileno(file)) >= 0) {
+        built = true;
+    }
+
+    ASSERT_TRUE(built);
+    if (read_only >= 0) {
+        (void)close(read_only);
+    }
+    free(path);
+    if (!built && file != NULL) {
+        (void)fclose(file);
+        file = NULL;
+    }
+    return file;
+}
+
+/* A stdout that rejects every write at once (opened for reading). */
+static FILE *given_out_rejecting_writes(void)
+{
+    char *path = make_temp_db_path();
+    /* NOLINTNEXTLINE(android-cloexec-fopen) macOS fopen has no "e" mode */
+    FILE *made = (path != NULL) ? fopen(path, "w") : NULL;
+    FILE *file = NULL;
+
+    if (made != NULL) {
+        (void)fclose(made);
+        /* NOLINTNEXTLINE(android-cloexec-fopen) macOS fopen has no "e" mode */
+        file = fopen(path, "r");
+    }
+    ASSERT_TRUE(file != NULL);
+    free(path);
+    return file;
+}
+
+/* remember_run(argv) with stdout out; stderr is captured into *err_text
+   (heap). -1 (after a failed assert) if stderr cannot be captured. */
+static int when_run_with_out(const char *const *argv, int argc, FILE *out, char **err_text)
+{
+    size_t len = 0U;
+    FILE *err = open_memstream(err_text, &len);
+    int rc = -1;
+
+    ASSERT_TRUE(err != NULL);
+    if (err == NULL) {
+        return -1;
+    }
+    rc = remember_run(argc, (char *const *)argv, out, err);
+    (void)fclose(err);
+    return rc;
+}
+
+/* The fake itself: a write is buffered and accepted; the flush fails. */
+TEST(failing_flush_stream_accepts_a_write_and_fails_the_flush)
+{
+    FILE *out = given_out_failing_at_flush();
+
+    if (out == NULL) {
+        return;
+    }
+    ASSERT_TRUE(fputs("remember 0.2.0\n", out) >= 0);
+    ASSERT_EQ_INT(fflush(out), EOF);
+    (void)fclose(out);
+}
+
+/* The other fake: a write fails at once and sets the error flag. */
+TEST(rejecting_stream_fails_a_write_and_sets_the_error_flag)
+{
+    FILE *out = given_out_rejecting_writes();
+
+    if (out == NULL) {
+        return;
+    }
+    ASSERT_EQ_INT(fputs("remember 0.2.0\n", out), EOF);
+    ASSERT_TRUE(ferror(out) != 0);
+    (void)fclose(out);
+}
+
+/* Output that fails only at the final flush is an error, not exit 0. */
+TEST(run_reports_output_that_fails_at_the_final_flush)
+{
+    const char *const argv[] = {"remember", "--version"};
+    FILE *out = given_out_failing_at_flush();
+    char *err_text = NULL;
+    int rc = 0;
+
+    if (out == NULL) {
+        return;
+    }
+    rc = when_run_with_out(argv, (int)(sizeof(argv) / sizeof(argv[0])), out, &err_text);
+    ASSERT_EQ_INT(rc, 1);
+    ASSERT_STREQ(err_text, "remember: failed to write output\n");
+    (void)fclose(out);
+    free(err_text);
+}
+
+/* A write the command did not check still fails the run (ferror). */
+TEST(run_reports_a_write_the_command_did_not_check)
+{
+    const char *const argv[] = {"remember", "--version"};
+    FILE *out = given_out_rejecting_writes();
+    char *err_text = NULL;
+    int rc = 0;
+
+    if (out == NULL) {
+        return;
+    }
+    rc = when_run_with_out(argv, (int)(sizeof(argv) / sizeof(argv[0])), out, &err_text);
+    ASSERT_EQ_INT(rc, 1);
+    ASSERT_STREQ(err_text, "remember: failed to write output\n");
+    (void)fclose(out);
+    free(err_text);
+}
+
+/* With --json-errors the flush failure is a JSON error line. */
+TEST(run_reports_a_failed_flush_as_json_with_json_errors)
+{
+    const char *const argv[] = {"remember", "--json-errors", "--version"};
+    FILE *out = given_out_failing_at_flush();
+    char *err_text = NULL;
+    int rc = 0;
+
+    if (out == NULL) {
+        return;
+    }
+    rc = when_run_with_out(argv, (int)(sizeof(argv) / sizeof(argv[0])), out, &err_text);
+    ASSERT_EQ_INT(rc, 1);
+    ASSERT_STREQ(err_text, "{\"version\":1,\"error\":{\"code\":\"internal\",\"message\":"
+                           "\"failed to write output\"}}\n");
+    (void)fclose(out);
+    free(err_text);
+}
+
+/* A command whose own write failed reported it; the run adds no second line. */
+TEST(run_keeps_one_error_line_when_the_command_failed)
+{
+    char *db = make_temp_db_path();
+    const char *const argv[] = {"remember", "--db", db, "add", "hello"};
+    FILE *out = given_out_rejecting_writes();
+    char *err_text = NULL;
+    int rc = 0;
+
+    if (db == NULL || out == NULL) {
+        if (out != NULL) {
+            (void)fclose(out);
+        }
+        free(db);
+        return;
+    }
+    rc = when_run_with_out(argv, (int)(sizeof(argv) / sizeof(argv[0])), out, &err_text);
+    ASSERT_EQ_INT(rc, 1);
+    ASSERT_STREQ(err_text, "remember: failed to write output\n");
+    (void)fclose(out);
+    free(err_text);
+    free(db);
+}
+
 TEST(internal_parse_stays_a_plain_internal_line)
 {
     char *err_buf = NULL;
@@ -3769,6 +3936,12 @@ void register_errors_tests(void)
     RUN_TEST(store_text_codes_follow_the_locked_split);
     RUN_TEST(err_fmt_keeps_a_long_unknown_option);
     RUN_TEST(internal_parse_stays_a_plain_internal_line);
+    RUN_TEST(failing_flush_stream_accepts_a_write_and_fails_the_flush);
+    RUN_TEST(rejecting_stream_fails_a_write_and_sets_the_error_flag);
+    RUN_TEST(run_reports_output_that_fails_at_the_final_flush);
+    RUN_TEST(run_reports_a_write_the_command_did_not_check);
+    RUN_TEST(run_reports_a_failed_flush_as_json_with_json_errors);
+    RUN_TEST(run_keeps_one_error_line_when_the_command_failed);
     RUN_TEST(golden_error_lines_and_d9_codes);
     RUN_TEST(sqlite_busy_reports_cause_fix_and_detail);
     RUN_TEST(sqlite_cannot_open_carries_errno_reason_and_absolute_path);
