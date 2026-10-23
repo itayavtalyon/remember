@@ -963,8 +963,10 @@ TEST(store_list_and_search_bins)
         total = page.total;
     }
     ASSERT_EQ_INT((int)total, 1);
-    ASSERT_STREQ(rows[0].body, "live helix");
-    store_entry_free(&rows[0]);
+    if (rows != NULL && total == 1U) {
+        ASSERT_STREQ(rows[0].body, "live helix");
+        store_entry_free(&rows[0]);
+    }
     free(rows);
     rows = NULL;
     q.bin = STORE_BIN_EXPIRED;
@@ -975,8 +977,10 @@ TEST(store_list_and_search_bins)
         total = page.total;
     }
     ASSERT_EQ_INT((int)total, 1);
-    ASSERT_STREQ(rows[0].body, "dead helix");
-    store_entry_free(&rows[0]);
+    if (rows != NULL && total == 1U) {
+        ASSERT_STREQ(rows[0].body, "dead helix");
+        store_entry_free(&rows[0]);
+    }
     free(rows);
     rows = NULL;
 

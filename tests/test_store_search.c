@@ -929,6 +929,20 @@ TEST(store_search_facets_do_not_need_a_memory_match)
     free(db);
 }
 
+/* E2.5b / E2.6 compare the whole key with q, which is QUERY lowercased: an
+   uppercase query still prefixes a key that only the whole-prefix rule matches
+   (the token "draft" cannot match the segment "(draft)"). */
+TEST(store_search_facets_compare_the_lowercased_query)
+{
+    char *db = NULL;
+    Store *s = given_store(&db);
+
+    given_memory(s, (GivenMemory){.body = "todo", .key = "(draft)"});
+    assert_keys(s, "(DRAFT", "(draft)");
+    store_close(s);
+    free(db);
+}
+
 /* E2.1 (4): a blank query has empty facets. */
 TEST(store_search_blank_query_has_no_facets)
 {
@@ -1106,6 +1120,7 @@ void register_store_search_tests(void)
     RUN_TEST(store_search_caps_tag_items_at_the_facet_limit);
     RUN_TEST(store_search_facet_limit_zero_returns_totals_only);
     RUN_TEST(store_search_facets_do_not_need_a_memory_match);
+    RUN_TEST(store_search_facets_compare_the_lowercased_query);
     RUN_TEST(store_search_blank_query_has_no_facets);
     RUN_TEST(store_search_paging_leaves_the_facets_whole);
     RUN_TEST(store_search_tags_prepare_failure_is_sqlite);

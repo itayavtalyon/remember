@@ -858,3 +858,46 @@ Lenses: `pref:review-lenses` 1–9, comprehensive, ponytail, `docs/STEP_REVIEW_C
 - **finding, pre-existing (not fixed here):** stdout flush failures exit 0 (above). Proposed as its own task.
 
 Pragmatic write gate: DRY PASS (one fetch and one appender for both kinds; the WHERE is `list_build_where`; `dup_col_req`, `store_status_plain`, `list_bind_texts` reused; one free path). Easy-to-replace PASS (SQLite stays in `store_sqlite.c`; classification and order stay in `search_terms.c`; the CLI sees only `SearchResult`). Orthogonal PASS (`list` untouched; the page query and the facet queries share only the read transaction and the filters).
+
+### 2026-10-23 — second-opinion deep review (stage 4)
+
+Ref `62ab14c` (range `54f1047..62ab14c`). Decisions loaded and checked in the code: `plan18-facets-independent` (`store_search` runs `search_facets` whenever the probe succeeds, with or without a MATCH), `plan18-facet-invalid-utf8-no-match` (`facet_append_row` skips `SEARCH_ERR_INVALID_UTF8`).
+
+**Verdict: stage 4 is done. No open blocking item, no grill.**
+
+Findings:
+
+- **important (fixed): facets were never tested with an uppercase query.** E2.5b and E2.6 compare the whole key with q (QUERY lowercased), and `FacetScope.q` is `q_low`, but every facet test used a lowercase query. Mutant Y6 (facets classify against R, the trimmed but not lowercased query) survived the suite. Added `store_search_facets_compare_the_lowercased_query`: key `(draft)` matches only through the whole-prefix rule (the token `draft` cannot match the segment `(draft)`), and `(DRAFT` must return it. Y6 now fails it.
+- **nit (fixed, pre-existing, the coder's report): reads past a failed assert.** `test_store.c` `store_list_and_search_bins` read `rows[0]` after `ASSERT_EQ_INT(total, 1)` in its two list sections; when the harness's `sqlite3` UPDATE does not run, `rows` is NULL. Both reads are now guarded like the search section below them (round 2.4).
+- **important (pre-existing, confirmed; follow-up proposed): a failed final flush of stdout exits 0.** Reproduced on macOS with a closed pipe and SIGPIPE ignored: `search dentist`, `list`, and `--json get --key pref:editor` each exit 0 with no message and nothing written. `src/` has no final `fflush`/`ferror` check on stdout. It affects every command (`style:fail-fast`); out of this stage's scope.
+- **nit (pre-existing, follow-up proposed): test helpers that do nothing silently.** `harness_sqlite_query_line` returns NULL for "no row", "SQL longer than `CMD_BUFSIZE`" and "no `sqlite3` on PATH" alike, so fixture SQL can fail without failing the test (seen in plan 18c and in the finding above; `standard:coding` 12.4).
+- **praise:** one fetch and one appender for both facet kinds; a single owner per moved string (zeroed in the candidates, so one free path); leak-only mutants killed under LSan in Linux instead of left as "survived"; a 20,000-trial differential behind the one equivalent mutant that needed it (round 13.3, applied the day it was filed); both pre-existing bugs reported with a run.
+
+Verification by running:
+
+- Store-API probe (`probe.c` linked against the Release `libremember_core.a`, `libutf8proc.a`, `libsqlite3.a`, `libsha256.a`; the CLI prints no facets until stage 5):
+  - Example 1 `boo`: entries 2, keys `[recs:books | Book recommendations]`, tags `[type:books (1)]`. Example 2 `recs:bo`: entries 1, keys `[recs:books]`, tags `[]`, warning `no such column: recs`.
+  - Handover probe 4: `recs:books` deleted; `boo` live → keys 0/0; `boo` with `--deleted` → keys 1/1 and tags `type:books (1)`.
+  - Handover probe 5: keys `a:b`, `b:a`, `B:a`, `é:x` → stored `a:b`, `b:a`, `é:x` (`B:a` folds to the existing `b:a`); query `a` → `a:b` (tier 1), `b:a` (tier 2), `é:x` no match.
+  - Handover probe 6: `book --deleted` with limit 1 offset 1 → entries 0/1, keys 1/1, tags 1/1, the same facets as without paging.
+- Real data: a `.backup` copy of Itay's brain (760 rows), Release, six queries × 10 warm runs: stage 3 `54f1047` 6.5 ms/search, this tree 8.8 ms/search (+2.3 ms; the CLI already computes facet totals with `facet_limit` 0).
+- Size delta re-run (Release, `/usr/bin/clang`): `remember` 1,903,752 → 1,904,104 B (+352), `libremember_core.a` 281,632 → 285,584 B (+3,952), the coder's numbers.
+- Schema facts the facet SQL relies on: `ux_entries_key` makes `key` unique across bins, so the keys facet never lists one key twice; the bin clause is always emitted, so the `AND e.key IS NOT NULL` tail always follows a WHERE.
+
+Mutation sample of the coder's table, re-run: F1 key filter dropped (63 reds), F3 `COUNT(*)` → 1, F9 invalid UTF-8 not skipped, F29 tag count 0: each killed by the tests named. F25 first failed to compile (the rewrite left `limit` unused); rerun valid-but-wrong as "limit applies only past 1,000 items": killed by the cap and zero-limit tests. Mine:
+
+| Mutant | Result |
+|---|---|
+| Y4 facets run only when a MATCH runs (against `decision:plan18-facets-independent`) | killed (`…facets_do_not_need_a_memory_match`, the step-failure and alloc sweep tests) |
+| Y6 facets classify against R instead of q | survived → killed by `store_search_facets_compare_the_lowercased_query` |
+
+Simplify pass: nothing to shrink in production code. The coder's declined `facet_take` merge holds (a key item moves whole, a tag item is rebuilt from two sources). The key query reads every keyed body in scope while only matches need a label; at 760 rows that costs nothing measurable, so no change (a second query for matched bodies would be the upgrade if a brain grows to hundreds of thousands of keyed rows).
+
+Coder rating: **9 / 10.** Strengths: the facet design reuses one fetch, one appender and the list WHERE; 63 one-clause mutants with reds named, compile kills rerun as valid-but-wrong, leak-only mutants killed under LSan; ROUND 13 applied the same day (triggers named for every zero-hit line, a 20,000-trial differential); two grills before code; two pre-existing bugs reported with a run; the handover size delta and a cost probe. Miss: the facets take a derived input (q, lowercased), and no test made the derived value differ from the raw one, so Y6 survived. That is the stage 3 X3 pattern again (a rule applied through a derived value, tested only with input where raw and derived agree).
+
+Instructions for the coder:
+
+1. For every derived input a function uses (q lowercased, R trimmed, tokens folded), write at least one test where the derived value differs from the raw input (uppercase, padding, marks), so passing the raw value instead fails.
+2. After a fixture step that can silently do nothing (an external tool, a helper that returns NULL for both "no row" and "not run"), assert its effect before the test relies on it.
+
+Gate: baseline `62ab14c` and the fix tree (2026-10-23; clang, `REMEMBER_ENABLE_SANITIZERS=ON`, `REMEMBER_TEST_VFS=ON`, configured twice, cache flags checked): build, ctest, `lint-all.sh`, `check-coverage.sh` (search_terms 176, unicode 80, normalize 268, output 572 sides, 0 missed), `leaks-macos`, `ci-linux.sh` → `GATE-ALL-GREEN` on both. After the fix-tree gate only this file changed (Markdown). Standard filed: `standard:coding` ROUND 14.
