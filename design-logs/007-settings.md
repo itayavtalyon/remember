@@ -447,16 +447,6 @@ $ remember plugin enable hybrid --scope brain
 - A settings UI on the phones beyond the Fortkeeps rows.
 - Web (remote HTTP) plugins and their settings (log 010 Future Work).
 
-## Implementation plan (draft, moves to `implementation-plans/` after the grill)
+## Implementation plan
 
-Plan prose per `workflow:stepped-plans` (#5). Each step lists its must-pass tests from Verification.
-
-1. **Rewrite plan 19 before it lands.** Rename the command group from `config` to `settings`. Replace `bucket-prefixes` with the key `remember.buckets.prefixes` (ST-5.4). Replace the E12 tables with the ST-4.1 tables. Drop the E12 add-wins rules. Done: plan 19 cites this log and log 008; tests 2, 3, 14, 17.
-2. **Schema v6 with logs 008 and 010.** Write one v5 → v6 migration in the ST §10 order. Add the failing-VFS test from 006 for a mid-migration failure. Done: tests 14, 20, 27 and log 008 tests M1–M3 and 15.
-3. **Registry and resolution.** Add the compiled-in registry of ST-5.3. Add user.db (ST-2.8, ST-10.3). Implement ST-2.2 resolution. Done: tests 1, 4, 24.
-4. **Commands.** Add `list`, `get`, `set`, `reset`, `explain` and `history` with the log 008 envelope. Done: tests 1–7, 9, 16, 21, 25, 29.
-5. **Plugin keys.** Generate `plugin.<name>.enabled` and the manifest keys from installed manifests (ST-5.7 to ST-5.9). Done: tests 8, 10, 23. This step depends on log 010 step "manifest parser".
-6. **Credential helper.** Add the `env` lookup, the token callback, and the CLI helper runner (ST-3). Done: test 22.
-7. **Export and import.** Add `settings export` and `settings import`. Change plans 20 and 21 to ST-8.3. Done: tests 11–13, 18, 26.
-8. **API and MCP (Cloud and local MCP).** Add the read-only routes and the `remember_settings` tool. Done: test 15.
-9. **remember-mac.** Build the Settings rows from the registry. Add the hybrid ask-once prompt and the `keychain` token callback. Done: remember-mac log 011 tests for Settings.
+The plans are [`implementation-plans/19-schema-v6.md`](../implementation-plans/19-schema-v6.md) and [`implementation-plans/20-settings.md`](../implementation-plans/20-settings.md). This log does not contain a second plan. HTTP route schemas stay in the API surface v1 log. The Mac app stays in remember-mac.
