@@ -265,7 +265,8 @@ cmake --build build --target leaks-macos          # macOS only
 - [x] Gate: ctest, lint, IWYU, coverage 100/100, `ci-linux.sh` all green.
       Proof: the stage 6 gate block.
 - [ ] Branch gate (plan 18b): `check-coverage.sh` shows 0 missed branch sides in `search_terms.c`, `unicode.c`, `normalize.c`, `output.c`, on macOS and in GitHub Actions `linux-coverage`.
-- [ ] Second review done; no open **blocking** item.
+- [x] Second review done; no open **blocking** item. Proof: the FINAL
+      review below (2026-10-24). No code change.
 - [ ] `implementation-plans/INDEX.md` row marked ✅.
 
 ## Second review handover
@@ -1185,3 +1186,38 @@ Lenses: `pref:review-lenses` 1–9, comprehensive, ponytail, `docs/STEP_REVIEW_C
 - **open for the FINAL review.** The branch gate in GitHub Actions `linux-coverage` needs a push; the INDEX row stays unticked per main's INDEX text.
 
 Pragmatic write gate: DRY PASS (help, SKILL.md and README state each fact once per audience; the README warning line and the help line are the same bytes as `diag.c`). Easy-to-replace PASS (no code shape changed). Orthogonal PASS (help strings only in `src`; `list` help untouched).
+
+### 2026-10-24 — second-opinion deep review (stage 6 | FINAL)
+
+**Verdict:** approve. No code change. No grill. Do not start plan 19. INDEX stays unticked until Itay merges.
+
+**Ran, not read.** Clean worktree of `e8776e2` (not the coder checkout). `cmake` with `-DCMAKE_C_COMPILER=/usr/bin/clang`; `ctest -N` lists 5; `REMEMBER_TEST_VFS=ON`. Bugbot is not installed. Docker DNS resolved `ports.ubuntu.com`, so `ci-linux.sh` ran unmodified.
+
+Stage 6 claims, on `build/remember`:
+
+- `help search` contains each new line the stage 6 test pins. `Ranked by FTS relevance` and `FTS5 full-text query` are gone. The global-options line is 99 columns; that line is older than this stage.
+- README What's New starts with the E2.8 sentence. The next line is the warning, byte for byte: `remember: warning: raw query ignored: no such column: x` and `{"version":1,"warning":{"code":"raw_query_ignored","message":"fts5: syntax error near \"\""}}`.
+- `search --json boo` member order is `version`, `offset`, `limit`, `count`, `total`, `keys`, `tags`, `entries`. A key item is `key`, `sync_id`, `label`, `source`, `updated_at`. `label` for `# Book recommendations` is `Book recommendations`. `list --json` has no `keys` or `tags`.
+- Blank and whitespace queries exit 0 with no human output. `--json search '   '` is the empty envelope, facets included, totals 0.
+- `search boo`, `search editor`, `search fam`, `search edit`, and `search 'book OR zed'` (3 rows, empty stderr) match the SKILL examples. `search -- -x` exits 0 with the warning. `search -x` is `unknown option '-x'`.
+- `+5` and a leading space are usage on `--limit`, `--offset`, `--facet-limit`, and `--busy-timeout`. `--facet-limit 0` and `201` are `invalid --facet-limit (must be 1..200)`. `list`, `get`, `add`, `update`, and `tags` reject `--facet-limit`. `search --sort created boo` exits 0. `search --sort nope` is `invalid --sort`.
+- A closed pipe exits 1 with `remember: failed to write output`.
+- A newline inside the query stays one stderr line. ESC and DEL in the query become `?` inside that line. A 300-byte column name is one line (358 bytes). Invalid UTF-8 is `invalid UTF-8 in search query`.
+- A deleted `pref:editor` is absent from live `search edit` and present with `--deleted`. Query `(` returns key `(draft)` and no entries.
+- A stored key with ESC and UTF-8 U+009B prints one `?` for each (`hex` of stdout: `3f` for both). JSON is unchanged by that mask.
+- Design log 006: stage 6 commit `e8776e2` only, `git show --numstat` is 16 added, 0 removed. No earlier plan 18 commit touches it.
+- `tests/test_main.c` registers 28 suites. `tests/gate-suites` lists those 28, including `key` and `verification_edges`. Configure printed that list. `ci-linux` ran 815 tests, 0 failed, and `remember_store_tests` 455/0.
+
+**Safety.** The MATCH text is bound (`?2`), not pasted into SQL. P tokens are split on `"`, so a token cannot break the prefix quotes. A warning that echoes the query stays one line. A hand-edited key does not hide another live match.
+
+**Simplicity.** Nothing to cut.
+
+- `write_keys_human` and `write_tags_human` could share a callback (about 15 lines). The two item shapes would get harder to read. Kept, as stage 5 did.
+- `is_c1_control_at` as one `return` saves 3 lines. The `if` makes the two-byte read obvious. Kept.
+- The new help lines are already one fact each.
+
+**Pragmatic write-gate:** DRY PASS. Easy-to-replace PASS (utf8proc stays behind `unicode.c`; the lint boundary passed). Orthogonal PASS (list output bytes unchanged; `list --json` has no facets).
+
+**Grades.** Coding agent 9/10. Stage reviewers 9/10. No pointer beyond rounds 9–15, which already name the holes those reviews fixed (the store trim, facets against the lowercased query, `list` accepting `--facet-limit`, digits-only). Stage 6's claims matched the binary.
+
+**Gate** on this tree, before this note (Markdown only after it): ctest 5/5 in 101 s, `lint-all.sh` LINT OK, `check-coverage.sh` functions and effective lines 100%, raw lines 85.88% (the QUALITY.md figure), branch sides `search_terms.c` 176, `unicode.c` 80, `normalize.c` 268, `output.c` 678, 0 missed, `leaks-macos` PASS, `ci-linux.sh` OK (iwyu PASS, scan-build PASS, 815/0 and 455/0). The GitHub Actions `linux-coverage` job is the open Definition of Done box; it needs this push.
