@@ -12,15 +12,26 @@ How we keep C code safe: compile hard, analyze statically, run sanitizers, detec
 | **LSan** (`detect_leaks=1`) | off (unreliable) | **on** | off |
 | Black-box `step_gate` (from `tests/gate-suites`) | yes | yes | yes |
 | Line coverage `src/*.c` (functions 100% + effective lines 100%) | `check-coverage.sh` | GHA job | optional |
+| Branch coverage of the pure TUs (every side, no exclusion) | `check-coverage.sh` | GHA job | optional |
 | clang-format / clang-tidy / cppcheck | `scripts/lint-all.sh` | required | required |
 | misc-include-cleaner (IWYU-style) | via clang-tidy | via clang-tidy | via clang-tidy |
 | include-what-you-use | if installed / `REMEMBER_IWYU=1` | if package present | optional |
-
-**Vendor includes for IWYU/cppcheck:** tools that scan `src/*.c` must be told about every `third_party/<lib>` header directory that project code includes (not only via CMake `PUBLIC` link lines). When vendoring a new library, update `IWYU_VENDOR_INCLUDES` / cppcheck `-I` in `scripts/lint-all.sh` in the same change as the CMake target. Full checklist: `docs/engineering-notes.md` → *Vendoring third-party C*.
 | scan-build | `REMEMBER_SCAN_BUILD=1` or `cmake --build --target analyze` | **required** | **required** |
 | macOS `leaks(1)` on **`remember_plain`** | `cmake --build build --target leaks-macos` | n/a | **required** |
 | **CodeQL** (Code Scanning) | n/a | `.github/workflows/codeql.yml` | n/a |
 | Valgrind | **not used** | **not used** | **not used** |
+
+**Vendor includes for IWYU/cppcheck:** tools that scan `src/*.c` must be told about every `third_party/<lib>` header directory that project code includes (not only via CMake `PUBLIC` link lines). When vendoring a new library, update `IWYU_VENDOR_INCLUDES` / cppcheck `-I` in `scripts/lint-all.sh` in the same change as the CMake target. Full checklist: `docs/engineering-notes.md` → *Vendoring third-party C*.
+
+### Vendored C (`third_party/`)
+
+| Library | Build | Consumer | Sanitizer gate |
+|---------|-------|----------|----------------|
+| SQLite amalgamation | static lib `sqlite3`, `-w` | `src/store_sqlite.c` (and the test-only VFS shim `src/test_vfs.c`) | none: trusted, upstream has intentional suppressed UB |
+| sha256 | static lib `sha256`, `-w` | `src/normalize.c` only | also compiled into `remember_store_tests` under ASan/UBSan; NIST vectors in `test_normalize.c` |
+| utf8proc 2.12.0 (Unicode 18) | static lib `utf8proc`, `-w` | `src/unicode.c` only (plan 18, D2) | also compiled into `remember_store_tests` under ASan/UBSan; NFC, grapheme and category vectors in `test_unicode.c` |
+
+`scripts/lint-all.sh` fails when any other file under `src/` names a vendored header or symbol (the sqlite, sha256 and utf8proc boundaries; `check_boundary`).
 
 ### Code Scanning vs our `ci` workflow
 
@@ -100,11 +111,27 @@ PATH="$(brew --prefix llvm)/bin:$PATH" ./scripts/check-coverage.sh
 | What is measured | `src/*.c` only (not `third_party/`, not `tests/`) |
 | What runs | Green gate + `remember_store_tests` (+ fault-injection hooks under `REMEMBER_TEST_HOOKS`) |
 | Pass bar | **100% function coverage** and **100% effective line coverage** |
-| Raw line % | ~87% today — remaining zeros are pure defensive exits (`return -1`, `goto fail`, error `err_msg`, etc.) excluded from the *effective* denominator |
+| Raw line % | 85.86% after the plan 18 CodeQL fix (2026-10-24, macOS) — remaining zeros are pure defensive exits (`return -1`, `goto fail`, error `err_msg`, etc.) excluded from the *effective* denominator |
 | What it protects | Untested production *logic* (every function entered; non-defensive lines hit) |
 | What `gate-suites` protects | Dropping whole green *suites* from CI |
 
 **Effective lines:** pure error-return / teardown / parser-kind exits need exponential fail-at-each-check injection to hit every sequential `if (write) return -1`. The gate still fails on any uncovered *logic* line. See the `DEFENSIVE` regex in `scripts/check-coverage.sh`.
+
+### Branch coverage of the pure TUs (plan 18b)
+
+`check-coverage.sh` also fails when any branch side in `src/search_terms.c`, `src/unicode.c`, `src/normalize.c`, or `src/output.c` is not taken. It reads `llvm-cov export -format=text` (`build-cov/coverage-branches.json`) and prints each missed side as `file:line:col true|false`; a branch inside a macro is counted and tagged `(macro)` at its `#define` (`decision:plan18b-macro-branches-counted`).
+
+| Rule | Detail |
+|------|--------|
+| No excuses | No inline marker, no skip-list, no regex (`decision:plan18b-no-branch-excuses`). The line regex above does not apply to these four files' branches. |
+| A side that cannot run | Remove or restructure it, and argue the removal in the plan notes. |
+| A side reached only by failure | Fault injection under `REMEMBER_TEST_HOOKS`: `test_alloc_fail_after(n)` (`src/test_alloc.c`, the allocation hook the pure TUs share) and `unicode_test_fail_after(n)` (the Nth decode / grapheme call fails). Release builds compile neither. |
+| A stream write | `tests/failing_stream.c` (`funopen` / `fopencookie`): writes fail past a byte limit. Drive a writer at every limit; it must return -1 and make no later write. |
+| Comparators and callbacks | Test the function directly in each argument order; the caller (`qsort`) need not reach every branch. |
+| No `assert` | An `assert` is a branch whose failing side never runs, so these four files have none; a removed guard is not replaced by one (`decision:plan18b-no-assert-pure-tus`). |
+| List equals report | Per file, the listed sides must equal `llvm-cov report`'s count, or the script fails: a branch in a macro `#define`d in a header counts in the report but sits in the header's record (`decision:plan18b-branch-list-equals-report`). |
+
+Why: in plan 18 stage 2, `search_tag_order`'s exact-first `return -1` never ran, and the line regex (which excludes `return -1;`) still read 100%.
 
 ## Portability (Linux glibc + strict C11)
 

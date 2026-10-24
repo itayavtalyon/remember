@@ -6,6 +6,12 @@
 #include <stdlib.h>
 #include <string.h>
 
+/* Last: under REMEMBER_TEST_HOOKS every malloc below goes through the shared
+   fault hook (decision:plan18b-shared-alloc-hook). */
+#ifdef REMEMBER_TEST_HOOKS
+#include "test_alloc.h" // IWYU pragma: keep
+#endif
+
 /* ---- ASCII / UTF-8 byte constants (RFC 3629) -----------------------------
  * Kept unsigned so the mask/shift arithmetic below stays unsigned (avoids
  * sign-conversion on the unsigned-int code point and signed-bitwise shifts). */
@@ -72,25 +78,14 @@ static bool is_token_forbidden(unsigned char c)
     return false;
 }
 
-/* A half-open [start, end) byte range. */
-typedef struct {
-    size_t start;
-    size_t end;
-} Span;
-
-/* [start, end) after stripping leading/trailing ASCII whitespace. */
-static Span ascii_ws_trim_span(const char *s, size_t len)
+void ascii_ws_trim(const char *s, size_t *start, size_t *end)
 {
-    size_t start = 0;
-    size_t end = len;
-
-    while (start < end && is_ascii_ws((unsigned char)s[start])) {
-        start++;
+    while (*start < *end && is_ascii_ws((unsigned char)s[*start])) {
+        (*start)++;
     }
-    while (end > start && is_ascii_ws((unsigned char)s[end - 1U])) {
-        end--;
+    while (*end > *start && is_ascii_ws((unsigned char)s[*end - 1U])) {
+        (*end)--;
     }
-    return (Span){.start = start, .end = end};
 }
 
 /* ---- UTF-8 (RFC 3629) ---------------------------------------------------- */
@@ -169,11 +164,7 @@ static bool utf8_cp_ok(Utf8Scalar dec)
     return true; /* 2-byte lead already rejected overlongs */
 }
 
-/*
- * Validate that s[0..len) is well-formed UTF-8.
- * Rejects overlong encodings, surrogates, and code points above U+10FFFF.
- */
-static bool utf8_is_valid(const char *s, size_t len)
+bool utf8_is_valid(const char *s, size_t len)
 {
     size_t i = 0;
 
@@ -210,7 +201,7 @@ static const unsigned HEBREW_MARK_DOT_LO = 0x05C4U;
 static const unsigned HEBREW_MARK_DOT_HI = 0x05C5U;
 static const unsigned HEBREW_MARK_QAMATS = 0x05C7U;
 
-static bool is_hebrew_mark(unsigned int cp)
+bool is_hebrew_mark(unsigned int cp)
 {
     if (cp >= HEBREW_MARK_BLOCK_LO && cp <= HEBREW_MARK_BLOCK_HI) {
         return true;
@@ -332,11 +323,8 @@ NormStatus body_trim_copy(const char *src, size_t src_len, char **out, size_t *o
         }
     }
 
-    {
-        Span span = ascii_ws_trim_span(src, src_len);
-        start = span.start;
-        end = span.end;
-    }
+    end = src_len;
+    ascii_ws_trim(src, &start, &end);
     if (start >= end) {
         return NORM_ERR_EMPTY;
     }
@@ -381,11 +369,8 @@ NormStatus normalize_token(const char *src, char *out, size_t out_cap)
         return NORM_ERR_EMPTY;
     }
 
-    {
-        Span span = ascii_ws_trim_span(src, strlen(src));
-        start = span.start;
-        end = span.end;
-    }
+    end = strlen(src);
+    ascii_ws_trim(src, &start, &end);
     if (start >= end) {
         return NORM_ERR_EMPTY;
     }
@@ -424,6 +409,177 @@ NormStatus normalize_tag(const char *src, char *out, size_t out_cap)
 NormStatus normalize_key(const char *src, char *out, size_t out_cap)
 {
     return normalize_token(src, out, out_cap);
+}
+
+/* ---- canonical stored forms (plan 18c) ------------------------------------ */
+
+enum {
+    UUID_TEXT_LEN = 36,
+    UUID_DASH_A = 8,
+    UUID_DASH_B = 13,
+    UUID_DASH_C = 18,
+    UUID_DASH_D = 23,
+    UUID_VERSION_AT = 14,
+    UUID_VARIANT_AT = 19,
+    VV_COUNTER_DIGITS_MAX = 18 /* any 18-digit number fits int64: no range check */
+};
+
+static bool is_lower_hex(unsigned char c)
+{
+    if (c >= '0' && c <= '9') {
+        return true;
+    }
+    if (c >= 'a' && c <= 'f') {
+        return true;
+    }
+    return false;
+}
+
+/* s[0..36) is a UUID v7. It stops at the first wrong byte, so it never reads
+   past a NUL. */
+static bool uuid_v7_prefix(const char *s)
+{
+    size_t i = 0;
+
+    for (i = 0; i < (size_t)UUID_TEXT_LEN; i++) {
+        unsigned char c = (unsigned char)s[i];
+
+        if (i == UUID_DASH_A || i == UUID_DASH_B || i == UUID_DASH_C || i == UUID_DASH_D) {
+            if (c != '-') {
+                return false;
+            }
+        } else if (!is_lower_hex(c)) {
+            return false;
+        }
+    }
+    if (s[UUID_VERSION_AT] != '7') {
+        return false;
+    }
+    /* A lowercase hex digit is never NUL, so strchr finds only the variants. */
+    if (strchr("89ab", s[UUID_VARIANT_AT]) == NULL) {
+        return false;
+    }
+    return true;
+}
+
+bool uuid_v7_is_canonical(const char *s)
+{
+    if (s == NULL || !uuid_v7_prefix(s) || s[UUID_TEXT_LEN] != '\0') {
+        return false;
+    }
+    return true;
+}
+
+bool utc_stamp_is_canonical(const char *s)
+{
+    static const char shape[] = "dddd-dd-ddTdd:dd:dd.dddZ";
+    size_t i = 0;
+
+    if (s == NULL) {
+        return false;
+    }
+    for (i = 0; shape[i] != '\0'; i++) {
+        unsigned char c = (unsigned char)s[i];
+
+        if (shape[i] == 'd') {
+            if (c < '0' || c > '9') {
+                return false;
+            }
+        } else if (c != (unsigned char)shape[i]) {
+            return false;
+        }
+    }
+    if (s[i] != '\0') {
+        return false;
+    }
+    return true;
+}
+
+/* A JSON counter: "0", or a digit 1-9 and more digits, at most 18 in all. */
+static bool skip_vv_counter(const char **cursor)
+{
+    const char *p = *cursor;
+    size_t n = 0;
+
+    if (*p == '0') {
+        p++;
+        n = 1;
+    } else {
+        while (*p >= '0' && *p <= '9') {
+            p++;
+            n++;
+        }
+    }
+    if (n == 0U || n > (size_t)VV_COUNTER_DIGITS_MAX) {
+        return false;
+    }
+    *cursor = p;
+    return true;
+}
+
+/* The device that starts at vec[dev_at] already appears earlier in vec. The pairs
+   before it are canonical, so a device starts right after {" or ,". */
+// ponytail: rescans earlier pairs, O(n^2) over at most a few hundred bytes of devices.
+static bool vv_repeats_device(const char *vec, size_t dev_at)
+{
+    size_t i = 0;
+
+    for (i = 2; i < dev_at; i++) {
+        if (vec[i - 1U] == '"' && (vec[i - 2U] == '{' || vec[i - 2U] == ',') &&
+            memcmp(vec + i, vec + dev_at, (size_t)UUID_TEXT_LEN) == 0) {
+            return true;
+        }
+    }
+    return false;
+}
+
+bool vv_json_is_canonical(const char *s)
+{
+    const char *p = NULL;
+
+    if (s == NULL || s[0] != '{') {
+        return false;
+    }
+    p = s + 1;
+    if (*p != '}') {
+        for (;;) {
+            if (*p != '"' || !uuid_v7_prefix(p + 1) || p[1 + UUID_TEXT_LEN] != '"' ||
+                p[2 + UUID_TEXT_LEN] != ':' || vv_repeats_device(s, (size_t)(p + 1 - s))) {
+                return false;
+            }
+            p += UUID_TEXT_LEN + 3;
+            if (!skip_vv_counter(&p)) {
+                return false;
+            }
+            if (*p == '}') {
+                break;
+            }
+            if (*p != ',') {
+                return false;
+            }
+            p++;
+        }
+    }
+    if (p[1] != '\0') {
+        return false;
+    }
+    return true;
+}
+
+bool source_is_valid(const char *s)
+{
+    static const char *const tokens[] = {"human", "agent", "tool", "share", "unknown"};
+    size_t i = 0;
+
+    if (s == NULL) {
+        return false;
+    }
+    for (i = 0; i < sizeof(tokens) / sizeof(tokens[0]); i++) {
+        if (strcmp(s, tokens[i]) == 0) {
+            return true;
+        }
+    }
+    return false;
 }
 
 /* ---- hash ---------------------------------------------------------------- */

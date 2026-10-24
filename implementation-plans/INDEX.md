@@ -40,6 +40,8 @@ main → cli_parse → commands.h (cmd_add | cmd_locator | cmd_query) → store_
 | 17 | [List dates + stale guard](17-list-dates-stale-guard.md) | `list --sort/--since/--until`; search date filters; `update --if-version-vector` → `stale` (006 §4, §7) ✅ |
 | 17a | [Plain notices + duplicate VV keys](17a-plain-line-and-duplicate-vv.md) | One plain notice stays one line; a repeated device key is a malformed version vector. After 17, before 18 ✅ |
 | 18 | [Union search](18-union-search.md) | Prefix ∪ raw FTS; never fails on input; `keys`/`tags` facets with tiers; utf8proc vendored (006 §2, §9). Itay finishes this plan and merges it. Do not tick it here. |
+| 18b | [Branch-coverage gate](18b-branch-coverage-gate.md) | `check-coverage.sh` fails on any untaken branch side in `search_terms.c`, `unicode.c`, `normalize.c`, `output.c`; no excuses. Runs on `plan18-union-search` between plan 18 stages 2 and 3 ✅ |
+| 18c | [Import control bytes](18c-import-control-bytes.md) | `import --from-db` skips and counts (`rejected`) rows whose key or tag is not canonical; human output masks C0/DEL in every stored string it prints. On `fix/import-control-bytes` (off plan 18b) ✅ |
 | 19 | [Schema v6](19-schema-v6.md) | One v5→v6 migration for 007 §10, 008 §8, and 010 §17. PENDING COPY (JSON `fix` for `schema_too_new`). |
 | 20 | [Settings](20-settings.md) | Registry, user.db, resolution, commands, credential helper, settings export/import. PENDING COPY AND DESIGN. After plan 19. Command JSON waits for plan 21. |
 | 21 | [JSON envelope](21-json-envelope.md) | `remember-message` 1, locators, actors, `--trash` means Trash. PENDING COPY. Does not implement `brains.json`. |
@@ -50,8 +52,7 @@ main → cli_parse → commands.h (cmd_add | cmd_locator | cmd_query) → store_
 | 26 | [Brain path + skills + 0.3.0](26-release-0.3.0.md) | `default-db`, Codex skill, version 0.3.0 last. PENDING COPY. Do not tag. |
 
 **Design 006 plans 15–18:** do them in order. Plan 18 is not done. Plans 18b
-and 18c land with the plan 18 merge. They are not files on this branch. Do not
-add them here and do not tick plan 18.
+and 18c land with the plan 18 merge. Do not tick plan 18.
 
 **Design 007–010 plans 19–26:** do them in the order in the table, with two
 exceptions that the plans state. Plan 20 stages 1–4 run after plan 19 and

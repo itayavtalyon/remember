@@ -23,6 +23,7 @@ enum { LIST_LIMIT_MAX = 1000 };
 /* Bounded well under the store's per-query parameter budget (LIST_BIND_CAP) so
    an over-cap filter set is a clear user error here, not an opaque store one. */
 enum { LIST_TAG_FILTER_MAX = 50 };
+enum { FACET_LIMIT_DEFAULT = 50, FACET_LIMIT_MAX = 200 }; /* E2.1 */
 
 /* Parse a non-negative size_t from decimal text. Rejects empty, non-digits, ERANGE. */
 static int parse_size_token(const char *raw, size_t *out)
@@ -62,25 +63,28 @@ static void list_parse_free(ListParse *p)
     p->ntag_raw = 0U;
 }
 
-static int list_take_limit(int *i, int rest_argc, const char **rest_argv, size_t *out_limit,
-                           const char **err)
-{
-    const char *val = NULL;
-    size_t lim = 0U;
+/* One size option with its bounds 1..max and its two usage sentences. */
+typedef struct {
+    const char *missing;
+    const char *invalid;
+    size_t max;
+} SizeOption;
 
-    {
-        TakeValue taken = take_value(i, rest_argc, rest_argv, "missing value for --limit");
-        if (taken.rc != 0) {
-            *err = taken.err;
-            return -1;
-        }
-        val = taken.value;
-    }
-    if (parse_size_token(val, &lim) != 0 || lim == 0U || lim > LIST_LIMIT_MAX) {
-        *err = "invalid --limit (must be 1..1000)";
+static int take_size_option(int *i, int rest_argc, const char **rest_argv, SizeOption opt,
+                            size_t *out, const char **err)
+{
+    size_t value = 0U;
+    TakeValue taken = take_value(i, rest_argc, rest_argv, opt.missing);
+
+    if (taken.rc != 0) {
+        *err = taken.err;
         return -1;
     }
-    *out_limit = lim;
+    if (parse_size_token(taken.value, &value) != 0 || value == 0U || value > opt.max) {
+        *err = opt.invalid;
+        return -1;
+    }
+    *out = value;
     return 0;
 }
 
@@ -187,7 +191,11 @@ static int list_handle_opt(const char *arg, int *i, int rest_argc, const char **
         return 0;
     }
     if (strcmp(arg, "--limit") == 0) {
-        return list_take_limit(i, rest_argc, rest_argv, &out->limit, err);
+        return take_size_option(i, rest_argc, rest_argv,
+                                (SizeOption){.missing = "missing value for --limit",
+                                             .invalid = "invalid --limit (must be 1..1000)",
+                                             .max = LIST_LIMIT_MAX},
+                                &out->limit, err);
     }
     if (strcmp(arg, "--offset") == 0) {
         return list_take_offset(i, rest_argc, rest_argv, &out->offset, err);
@@ -263,76 +271,24 @@ static int parse_list_args(int rest_argc, const char **rest_argv, ListParse *out
 }
 
 /*
- * Same filters/paging as list, plus exactly one required QUERY positional
- * (FTS5 MATCH string; outer ASCII whitespace trimmed — same set as normalize).
+ * Same filters/paging as list, plus exactly one required QUERY positional and
+ * --facet-limit. QUERY goes to the store as given: the store owns E2.1's trim
+ * and blank rule (D13).
  */
 typedef struct {
     ListParse filters;
-    const char *query_raw; /* argv token during parse; not owned */
-    char *query;           /* heap-owned trimmed MATCH string */
+    const char *query; /* argv token; not owned */
+    size_t facet_limit;
 } SearchParse;
-
-static void search_parse_free(SearchParse *p)
-{
-    list_parse_free(&p->filters);
-    free(p->query);
-    p->query = NULL;
-    p->query_raw = NULL;
-}
-
-/* intentional: same ASCII ws as normalize.c (space/tab/LF/CR/VT/FF). */
-static int is_ascii_ws(unsigned char c)
-{
-    return c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '\v' || c == '\f';
-}
-
-/*
- * Heap-copy of raw with leading/trailing ASCII whitespace removed.
- * NULL + *err on empty-after-trim or OOM.
- */
-static char *trim_query_copy(const char *raw, const char **err)
-{
-    size_t len = 0;
-    size_t start = 0U;
-    size_t end = 0;
-    size_t n = 0;
-    char *out = NULL;
-
-    if (raw == NULL) {
-        *err = "empty search query";
-        return NULL;
-    }
-    len = strlen(raw);
-    end = len;
-    while (start < end && is_ascii_ws((unsigned char)raw[start])) {
-        start++;
-    }
-    while (end > start && is_ascii_ws((unsigned char)raw[end - 1U])) {
-        end--;
-    }
-    if (start == end) {
-        *err = "empty search query";
-        return NULL;
-    }
-    n = end - start;
-    out = (char *)malloc(n + 1U);
-    if (out == NULL) {
-        *err = "out of memory";
-        return NULL;
-    }
-    memcpy(out, raw + start, n);
-    out[n] = '\0';
-    return out;
-}
 
 /* Accept the single positional QUERY; a second positional is a user error. */
 static int search_set_query(SearchParse *out, const char *arg, const char **err)
 {
-    if (out->query_raw != NULL) {
+    if (out->query != NULL) {
         *err = "unexpected argument";
         return -1;
     }
-    out->query_raw = arg;
+    out->query = arg;
     return 0;
 }
 
@@ -344,8 +300,8 @@ static int parse_search_args(int rest_argc, const char **rest_argv, SearchParse 
     size_t tag_cap = 0U;
 
     list_parse_init(&out->filters);
-    out->query_raw = NULL;
     out->query = NULL;
+    out->facet_limit = FACET_LIMIT_DEFAULT;
     *err = NULL;
 
     for (i = 0; i < rest_argc; i++) {
@@ -354,6 +310,16 @@ static int parse_search_args(int rest_argc, const char **rest_argv, SearchParse 
 
         if (end_opts) {
             if (search_set_query(out, arg, err) != 0) {
+                return -1;
+            }
+            continue;
+        }
+        if (strcmp(arg, "--facet-limit") == 0) {
+            if (take_size_option(&i, rest_argc, rest_argv,
+                                 (SizeOption){.missing = "missing value for --facet-limit",
+                                              .invalid = "invalid --facet-limit (must be 1..200)",
+                                              .max = FACET_LIMIT_MAX},
+                                 &out->facet_limit, err) != 0) {
                 return -1;
             }
             continue;
@@ -369,17 +335,17 @@ static int parse_search_args(int rest_argc, const char **rest_argv, SearchParse 
         if (kind < 0) {
             return -1;
         }
-        /* Positional: the FTS query (exactly one). */
+        /* Positional: the QUERY (exactly one). */
         if (search_set_query(out, arg, err) != 0) {
             return -1;
         }
     }
-    if (out->query_raw == NULL) {
+    if (out->query == NULL) {
         *err = "missing search query";
         return -1;
     }
-    out->query = trim_query_copy(out->query_raw, err);
-    if (out->query == NULL) {
+    if (!utf8_is_valid(out->query, strlen(out->query))) {
+        *err = "invalid UTF-8 in search query"; /* D27 */
         return -1;
     }
     return 0;
@@ -505,6 +471,21 @@ static int emit_entry_page(bool json, size_t offset, size_t limit, size_t count,
     return 0;
 }
 
+/* search: the E2.6 envelope, or the E2.7 facet lines before the entry lines. */
+static int emit_search(bool json, const ListQuery *filters, const SearchResult *res,
+                       const StoreNeighbor *links, size_t nlinks, const char *now)
+{
+    if (json) {
+        return output_search_envelope(app_out(), res, filters->offset, filters->limit, links,
+                                      nlinks, now);
+    }
+    if (output_search_facets_human(app_out(), res) != 0) {
+        return -1;
+    }
+    return emit_entry_page(false, 0U, 0U, res->page.count, res->page.total, res->page.entries,
+                           links, nlinks, now);
+}
+
 static void free_entry_page(Entry *entries, size_t count)
 {
     size_t i = 0;
@@ -599,12 +580,9 @@ int cmd_search(Store *s, bool json, int rest_argc, const char **rest_argv)
     char since[ISO_TS_BUFSIZE];
     char until[ISO_TS_BUFSIZE];
     SearchQuery q;
-    Entry *entries = NULL;
-    size_t count = 0U;
-    size_t total = 0U;
+    SearchResult res = {.page = {.st = STORE_OK}};
     StoreNeighbor *links = NULL;
     size_t nlinks = 0U;
-    StoreStatus st = STORE_OK;
     int rc = REMEMBER_ERR;
     char now[ISO_TS_BUFSIZE];
 
@@ -615,7 +593,7 @@ int cmd_search(Store *s, bool json, int rest_argc, const char **rest_argv)
         if (err != NULL && err[0] != '\0') {
             err_msg(code_for_cmd_text(err), err);
         }
-        search_parse_free(&parsed);
+        list_parse_free(&parsed.filters);
         return REMEMBER_ERR;
     }
 
@@ -624,40 +602,37 @@ int cmd_search(Store *s, bool json, int rest_argc, const char **rest_argv)
         goto cleanup;
     }
     q.query = parsed.query;
+    q.facet_limit = parsed.facet_limit;
 
     if (utc_now(now, sizeof(now)) != 0) {
         err_msg(DIAG_INTERNAL, "internal error");
         goto cleanup;
     }
-    {
-        PageResult page = store_search(s, &q, now);
-        st = page.st;
-        entries = page.entries;
-        count = page.count;
-        total = page.total;
-    }
-    if (st != STORE_OK) {
-        err_store(s, st);
+    res = store_search(s, &q, now);
+    if (res.page.st != STORE_OK) {
+        err_store(s, res.page.st);
         goto cleanup;
     }
-    if (load_page_neighbors(s, entries, count, now, &links, &nlinks) != 0) {
+    if (load_page_neighbors(s, res.page.entries, res.page.count, now, &links, &nlinks) != 0) {
         goto cleanup;
     }
     if (q.filters.bin != STORE_BIN_DELETED) {
         cmd_neighbors_drop_deleted(links, &nlinks, now);
     }
 
-    if (emit_entry_page(json, q.filters.offset, q.filters.limit, count, total, entries, links,
-                        nlinks, now) != 0) {
+    if (emit_search(json, &q.filters, &res, links, nlinks, now) != 0) {
         err_msg(DIAG_INTERNAL, "failed to write output");
         goto cleanup;
+    }
+    if (res.warning != NULL) {
+        (void)diag_warning(DIAG_WARN_RAW_QUERY_IGNORED, res.warning);
     }
     rc = REMEMBER_OK;
 
 cleanup:
-    search_parse_free(&parsed);
+    list_parse_free(&parsed.filters);
     free_tag_list(tags_norm, ntags);
     store_neighbors_free(links, nlinks);
-    free_entry_page(entries, count);
+    store_search_result_free(&res);
     return rc;
 }

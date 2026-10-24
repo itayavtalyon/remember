@@ -66,8 +66,10 @@ int cmd_import(Store *s, bool json, int rest_argc, const char **rest_argv)
             err_msg(DIAG_INTERNAL, "failed to write output");
             return REMEMBER_ERR;
         }
-    } else if (fprintf(app_out(), "inserted %zu updated %zu unchanged %zu conflicts %zu\n",
-                       counts.inserted, counts.updated, counts.unchanged, counts.conflicts) < 0) {
+    } else if (fprintf(app_out(),
+                       "inserted %zu updated %zu unchanged %zu conflicts %zu rejected %zu\n",
+                       counts.inserted, counts.updated, counts.unchanged, counts.conflicts,
+                       counts.rejected) < 0) {
         err_msg(DIAG_INTERNAL, "failed to write output");
         return REMEMBER_ERR;
     }
@@ -99,9 +101,10 @@ int cmd_conflicts(Store *s, bool json, int rest_argc, const char **rest_argv)
     } else {
         for (i = 0; i < count; i++) {
             const char *reason = store_conflict_reason_str(rows[i].reason);
-            if (fprintf(app_out(), "%lld\t%s\t%s\n", rows[i].id,
-                        rows[i].sync_id != NULL ? rows[i].sync_id : "",
-                        reason != NULL ? reason : "?") < 0) {
+            /* The sync_id came from a peer: masked (decision:import-control-bytes-followup). */
+            if (fprintf(app_out(), "%lld\t", rows[i].id) < 0 ||
+                output_text_human(app_out(), rows[i].sync_id, false) != 0 ||
+                fprintf(app_out(), "\t%s\n", reason != NULL ? reason : "?") < 0) {
                 err_msg(DIAG_INTERNAL, "failed to write output");
                 goto cleanup;
             }

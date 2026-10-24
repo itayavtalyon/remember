@@ -11,11 +11,9 @@
 #include "util.h"
 
 #include <errno.h>
-#include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <unistd.h>
 
 /*
  * Extra edges for production line coverage: util/output/cli unit paths and
@@ -154,31 +152,6 @@ TEST(util_read_stdin_null_out)
 
 /* ---- output -------------------------------------------------------------- */
 
-static FILE *open_write_fail(void)
-{
-    FILE *f = NULL;
-    int p[2];
-
-#ifdef __linux__
-    f = fopen("/dev/full", "w");
-    if (f != NULL) {
-        return f;
-    }
-#endif
-    /* Portable: write end of pipe with read end closed → EPIPE after ignore. */
-    if (pipe(p) != 0) {
-        return NULL;
-    }
-    close(p[0]);
-    signal(SIGPIPE, SIG_IGN);
-    f = fdopen(p[1], "w");
-    if (f == NULL) {
-        close(p[1]);
-        return NULL;
-    }
-    return f;
-}
-
 TEST(output_json_string_null_out_fails)
 {
     ASSERT_EQ_INT(output_json_string(NULL, "x"), -1);
@@ -230,37 +203,6 @@ TEST(output_json_escapes_controls)
     ASSERT_STR_CONTAINS(got, "\\\\");
     free(got);
     (void)fclose(f);
-}
-
-TEST(output_write_fail_returns_error)
-{
-    FILE *f = open_write_fail();
-    Entry e;
-    ASSERT_TRUE(f != NULL);
-    memset(&e, 0, sizeof(e));
-    e.id = 1;
-    e.body = (char *)"x";
-    e.source = (char *)"unknown";
-    e.created_at = (char *)"t";
-    e.updated_at = (char *)"t";
-    /* Force a large write so a closed-pipe or /dev/full fails. */
-    {
-        int i;
-        for (i = 0; i < 10000; i++) {
-            if (output_json_string(f, "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx") != 0) {
-                break;
-            }
-        }
-        ASSERT_TRUE(i < 10000);
-    }
-    (void)output_entry_json(f, &e, "t");
-    (void)output_action_envelope(f, "created", &e, "t");
-    (void)output_get_envelope(f, &e, NULL, 0, "t");
-    (void)output_list_envelope(f, 0, 20, 1, 1, &e, NULL, 0, "t");
-    (void)output_id_human(f, 1);
-    (void)output_body_human(f, "body");
-    (void)output_entry_human_line(f, &e, NULL, 0, "t");
-    fclose(f);
 }
 
 TEST(output_null_entry_fails)
@@ -372,19 +314,6 @@ TEST(norm_status_string_unknown)
 }
 
 /* ---- black-box: main help + NYI ------------------------------------------ */
-
-TEST(search_empty_query_stderr)
-{
-    char *db = make_temp_db_path();
-    const char *args[] = {"search", ""};
-    CmdResult r;
-    ASSERT_TRUE(db != NULL);
-    r = run_remember(db, args, sizeof(args) / sizeof(args[0]), NULL);
-    ASSERT_EQ_INT(r.exit_code, 1);
-    ASSERT_STR_CONTAINS(r.err, "empty search query");
-    cmd_result_free(&r);
-    free(db);
-}
 
 TEST(help_update_topic)
 {
@@ -943,8 +872,24 @@ TEST(store_add_null_tag_slots_empty_join)
 }
 #endif
 
+/* The harness drains sqlite3's whole output before pclose: a result longer
+   than the pipe buffer must not die of SIGPIPE and fail the calling test. */
+TEST(harness_sqlite_reads_a_result_longer_than_the_pipe)
+{
+    char *db = make_temp_db_path();
+    char *first = NULL;
+
+    ASSERT_TRUE(db != NULL);
+    first = harness_sqlite_query_line(db, "WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 "
+                                          "FROM n WHERE i < 100000) SELECT i FROM n;");
+    ASSERT_STREQ(first != NULL ? first : "", "1");
+    free(first);
+    free(db);
+}
+
 void register_coverage_edges_tests(void)
 {
+    RUN_TEST(harness_sqlite_reads_a_result_longer_than_the_pipe);
     RUN_TEST(util_resolve_null_buffer_fails);
     RUN_TEST(util_resolve_zero_buflen_fails);
     RUN_TEST(util_resolve_empty_env_falls_through_to_home);
@@ -957,7 +902,6 @@ void register_coverage_edges_tests(void)
     RUN_TEST(output_json_string_null_out_fails);
     RUN_TEST(output_json_string_null_s_uses_empty);
     RUN_TEST(output_json_escapes_controls);
-    RUN_TEST(output_write_fail_returns_error);
     RUN_TEST(output_null_entry_fails);
     RUN_TEST(output_list_empty_ok);
     RUN_TEST(output_preview_multibyte_and_truncate);
@@ -966,7 +910,6 @@ void register_coverage_edges_tests(void)
     RUN_TEST(cli_parse_double_dash_literal);
     RUN_TEST(cli_parse_end_opts_then_subcommand_token);
     RUN_TEST(norm_status_string_unknown);
-    RUN_TEST(search_empty_query_stderr);
     RUN_TEST(help_update_topic);
     RUN_TEST(update_missing_text_value_rejected);
     RUN_TEST(update_invalid_id_token_rejected);

@@ -275,6 +275,17 @@ TEST(facade_search_bad_query_matches_cli)
     free(db);
 }
 
+/* EN-03: the raw_query_ignored warning under --json-errors matches the CLI byte for byte. */
+TEST(facade_search_json_warning_matches_cli)
+{
+    char *db = make_temp_db_path();
+    const char *cmd[] = {"--json", "--json-errors", "search", "\"unterminated"};
+    ASSERT_TRUE(db != NULL);
+    seed_three(db);
+    assert_read_parity(db, cmd, sizeof(cmd) / sizeof(cmd[0]));
+    free(db);
+}
+
 TEST(facade_get_matches_cli)
 {
     char *db = make_temp_db_path();
@@ -566,9 +577,10 @@ TEST(facade_conflicts_matches_cli)
         (void)snprintf(cp, sizeof(cp), "cp '%s' '%s'", local, foreign);
         ASSERT_EQ_INT(system(cp), 0);
     }
+    /* The real sha256("incoming"): import rejects a forged hash. */
     free(harness_sqlite_query_line(
         foreign, "UPDATE entries SET body='incoming', "
-                 "body_hash='abababababababababababababababababababababababababababababababab',"
+                 "body_hash='3a7470e00c076b678c41c8ae4a4945198a9e243cdb42e044612535facb5f225d',"
                  "version_vector='{\"bbbbbbbb-bbbb-7bbb-bbbb-bbbbbbbbbbbb\":1}' WHERE id=1;"));
     dev = facade_sidecar_id(local);
     ASSERT_TRUE(dev != NULL);
@@ -631,9 +643,10 @@ TEST(facade_conflict_accept_matches_cli)
         (void)snprintf(cp, sizeof(cp), "cp '%s' '%s'", local1, foreign);
         ASSERT_EQ_INT(system(cp), 0);
     }
+    /* The real sha256("incoming"): import rejects a forged hash. */
     free(harness_sqlite_query_line(
         foreign, "UPDATE entries SET body='incoming', "
-                 "body_hash='abababababababababababababababababababababababababababababababab',"
+                 "body_hash='3a7470e00c076b678c41c8ae4a4945198a9e243cdb42e044612535facb5f225d',"
                  "version_vector='{\"bbbbbbbb-bbbb-7bbb-bbbb-bbbbbbbbbbbb\":1}' WHERE id=1;"));
     dev = facade_sidecar_id(local1);
     ASSERT_TRUE(dev != NULL);
@@ -838,6 +851,7 @@ void register_facade_tests(void)
     RUN_TEST(facade_list_sort_since_matches_cli);
     RUN_TEST(facade_search_matches_cli);
     RUN_TEST(facade_search_bad_query_matches_cli);
+    RUN_TEST(facade_search_json_warning_matches_cli);
     RUN_TEST(facade_get_matches_cli);
     RUN_TEST(facade_get_missing_matches_cli);
     RUN_TEST(facade_tags_matches_cli);

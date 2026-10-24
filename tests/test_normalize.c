@@ -1,6 +1,7 @@
 #include "normalize.h"
 #include "register.h"
 #include "test.h"
+#include "test_alloc.h"
 
 #include <stdlib.h>
 #include <string.h>
@@ -155,6 +156,31 @@ TEST(body_trim_utf8_edge_rejections)
     assert_body_utf8_rejected("a\xc3\x28", 3);        /* bad continuation byte */
 }
 
+/* Assert body_trim_copy accepts bytes as one valid scalar. */
+static void assert_body_utf8_accepted(const char *bytes)
+{
+    char *out = NULL;
+
+    ASSERT_EQ_INT(body_trim_copy(bytes, strlen(bytes), &out, NULL), NORM_OK);
+    ASSERT_STREQ(out, bytes);
+    free(out);
+}
+
+TEST(body_trim_accepts_the_first_scalar_after_the_surrogates)
+{
+    assert_body_utf8_accepted("\xee\x80\x80"); /* U+E000 */
+}
+
+TEST(body_trim_accepts_the_first_four_byte_scalar)
+{
+    assert_body_utf8_accepted("\xf0\x90\x80\x80"); /* U+10000 */
+}
+
+TEST(body_trim_rejects_a_four_byte_overlong)
+{
+    assert_body_utf8_rejected("\xf0\x8f\xbf\xbf", 4); /* U+FFFF in four bytes */
+}
+
 /*
  * Policy: a body is a C string, so the first NUL ends it. Bytes after are
  * ignored, and *out_len stays equal to strlen(*out) — otherwise the stored
@@ -238,6 +264,22 @@ TEST(normalize_reports_bad_output_buffer)
         big[REMEMBER_TOKEN_MAX + 1U] = '\0';
         ASSERT_EQ_INT(normalize_token(big, out, sizeof(out)), NORM_ERR_TOO_LONG);
     }
+}
+
+TEST(normalize_token_zero_capacity_is_internal)
+{
+    char out[1] = {'x'};
+
+    ASSERT_EQ_INT(normalize_token("ab", out, 0), NORM_ERR_INTERNAL);
+    ASSERT_EQ_INT(out[0], 'x');
+}
+
+TEST(body_hash_of_null_data_is_the_empty_digest)
+{
+    char hex[REMEMBER_SHA256_HEX_LEN + 1];
+
+    body_hash_hex(NULL, 3, hex);
+    ASSERT_STREQ(hex, "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855");
 }
 
 TEST(body_hash_empty_and_abc)
@@ -386,6 +428,41 @@ TEST(token_utf8_non_ascii_not_casefolded)
     ASSERT_STREQ(out, in);
 }
 
+/* ---- allocation failure (plan 18b B3, shared hook) ----------------------- */
+
+TEST(test_alloc_fails_only_the_nth_allocation)
+{
+    char *first = NULL;
+    char *second = NULL;
+    char *third = NULL;
+
+    test_alloc_fail_after(1);
+    ASSERT_EQ_INT(body_trim_copy("a", 1, &first, NULL), NORM_OK);
+    ASSERT_EQ_INT(body_trim_copy("b", 1, &second, NULL), NORM_ERR_OOM);
+    ASSERT_EQ_INT(body_trim_copy("c", 1, &third, NULL), NORM_OK);
+    ASSERT_TRUE(second == NULL);
+    free(first);
+    free(third);
+}
+
+TEST(body_trim_copy_reports_oom)
+{
+    char *out = NULL;
+
+    test_alloc_fail_after(0);
+    ASSERT_EQ_INT(body_trim_copy("body", 4, &out, NULL), NORM_ERR_OOM);
+    ASSERT_TRUE(out == NULL);
+}
+
+TEST(fold_hebrew_marks_reports_oom)
+{
+    char *out = NULL;
+
+    test_alloc_fail_after(0);
+    ASSERT_EQ_INT(fold_hebrew_marks("abc", 3, &out), NORM_ERR_OOM);
+    ASSERT_TRUE(out == NULL);
+}
+
 TEST(norm_status_string_stable)
 {
     ASSERT_STREQ(norm_status_string(NORM_OK), "ok");
@@ -399,6 +476,103 @@ TEST(norm_status_string_stable)
     ASSERT_TRUE(norm_status_string(NORM_OK) != NULL);
 }
 
+/* ---- canonical stored forms (plan 18c, decision:plan18c-validate-peer-fields) ---- */
+
+static const char UUID_A[] = "01a16342-0f26-7dc1-8a46-88703a48341b";
+
+TEST(uuid_v7_accepts_each_variant)
+{
+    ASSERT_TRUE(uuid_v7_is_canonical("01a16342-0f26-7dc1-8a46-88703a48341b"));
+    ASSERT_TRUE(uuid_v7_is_canonical("01a16342-0f26-7dc1-9a46-88703a48341b"));
+    ASSERT_TRUE(uuid_v7_is_canonical("01a16342-0f26-7dc1-aa46-88703a48341b"));
+    ASSERT_TRUE(uuid_v7_is_canonical("01a16342-0f26-7dc1-ba46-88703a48341b"));
+}
+
+TEST(uuid_v7_rejects_a_wrong_shape)
+{
+    ASSERT_FALSE(uuid_v7_is_canonical(NULL));
+    ASSERT_FALSE(uuid_v7_is_canonical("01a16342-0f26-7dc1-8a46-88703a48341"));   /* 35 */
+    ASSERT_FALSE(uuid_v7_is_canonical("01a16342-0f26-7dc1-8a46-88703a48341bb")); /* 37 */
+    ASSERT_FALSE(uuid_v7_is_canonical("01a16342x0f26-7dc1-8a46-88703a48341b"));  /* no dash */
+    ASSERT_FALSE(uuid_v7_is_canonical("01A16342-0f26-7dc1-8a46-88703a48341b"));  /* upper */
+    ASSERT_FALSE(uuid_v7_is_canonical("01g16342-0f26-7dc1-8a46-88703a48341b"));  /* past f */
+    ASSERT_FALSE(uuid_v7_is_canonical("01/16342-0f26-7dc1-8a46-88703a48341b"));  /* below 0 */
+    ASSERT_FALSE(uuid_v7_is_canonical("01a16342-0f26-4dc1-8a46-88703a48341b"));  /* v4 */
+    ASSERT_FALSE(uuid_v7_is_canonical("01a16342-0f26-7dc1-ca46-88703a48341b"));  /* variant */
+}
+
+TEST(utc_stamp_accepts_the_fixed_shape)
+{
+    ASSERT_TRUE(utc_stamp_is_canonical("2026-10-22T09:45:16.123Z"));
+}
+
+TEST(utc_stamp_rejects_any_other_shape)
+{
+    ASSERT_FALSE(utc_stamp_is_canonical(NULL));
+    ASSERT_FALSE(utc_stamp_is_canonical("2026-10-22T09:45:16Z"));       /* no ms: ends early */
+    ASSERT_FALSE(utc_stamp_is_canonical("2026-10-22 09:45:16.123Z"));   /* wrong literal */
+    ASSERT_FALSE(utc_stamp_is_canonical("2026-1a-22T09:45:16.123Z"));   /* letter for digit */
+    ASSERT_FALSE(utc_stamp_is_canonical("2026-1/-22T09:45:16.123Z"));   /* below 0 */
+    ASSERT_FALSE(utc_stamp_is_canonical("2026-10-22T09:45:16.123Z\t")); /* trailing byte */
+}
+
+TEST(vv_json_accepts_the_compact_forms)
+{
+    ASSERT_TRUE(vv_json_is_canonical("{}"));
+    ASSERT_TRUE(vv_json_is_canonical("{\"01a16342-0f26-7dc1-8a46-88703a48341b\":0}"));
+    ASSERT_TRUE(vv_json_is_canonical("{\"01a16342-0f26-7dc1-8a46-88703a48341b\":12,"
+                                     "\"01a16342-0f26-7dc1-8a46-88703a48341c\":999999999999999999,"
+                                     "\"01a16342-0f26-7dc1-8a46-88703a48341d\":3}"));
+}
+
+TEST(vv_json_rejects_an_injected_or_malformed_vector)
+{
+    ASSERT_FALSE(vv_json_is_canonical(NULL));
+    ASSERT_FALSE(vv_json_is_canonical("[]"));
+    ASSERT_FALSE(vv_json_is_canonical("{}x"));
+    ASSERT_FALSE(vv_json_is_canonical("{\"01a16342-0f26-7dc1-8a46-88703a48341b\":1},\"pwn\":true"));
+    ASSERT_FALSE(vv_json_is_canonical("{ \"01a16342-0f26-7dc1-8a46-88703a48341b\":1}"));
+    ASSERT_FALSE(vv_json_is_canonical("{\"a\":1}"));
+    ASSERT_FALSE(vv_json_is_canonical("{\"01a16342-0f26-7dc1-8a46-88703a48341bx:1}"));
+    ASSERT_FALSE(vv_json_is_canonical("{\"01a16342-0f26-7dc1-8a46-88703a48341b\" 1}"));
+    ASSERT_FALSE(vv_json_is_canonical("{\"01a16342-0f26-7dc1-8a46-88703a48341b\":1;"));
+    ASSERT_FALSE(vv_json_is_canonical("{\"01a16342-0f26-7dc1-8a46-88703a48341b\":1;"
+                                      "\"01a16342-0f26-7dc1-8a46-88703a48341c\":2}"));
+}
+
+TEST(vv_json_rejects_a_counter_that_is_not_a_small_whole_number)
+{
+    ASSERT_FALSE(vv_json_is_canonical("{\"01a16342-0f26-7dc1-8a46-88703a48341b\":}"));
+    ASSERT_FALSE(vv_json_is_canonical("{\"01a16342-0f26-7dc1-8a46-88703a48341b\":-1}"));
+    ASSERT_FALSE(vv_json_is_canonical("{\"01a16342-0f26-7dc1-8a46-88703a48341b\":01}"));
+    ASSERT_FALSE(vv_json_is_canonical("{\"01a16342-0f26-7dc1-8a46-88703a48341b\":1.5}"));
+    ASSERT_FALSE(
+        vv_json_is_canonical("{\"01a16342-0f26-7dc1-8a46-88703a48341b\":1000000000000000000}"));
+}
+
+/* decision:plan17a-duplicate-vv-key: the same device twice is malformed. */
+TEST(vv_json_rejects_a_repeated_device)
+{
+    ASSERT_FALSE(vv_json_is_canonical("{\"01a16342-0f26-7dc1-8a46-88703a48341b\":1,"
+                                      "\"01a16342-0f26-7dc1-8a46-88703a48341b\":1}"));
+    ASSERT_FALSE(vv_json_is_canonical("{\"01a16342-0f26-7dc1-8a46-88703a48341b\":1,"
+                                      "\"01a16342-0f26-7dc1-8a46-88703a48341c\":2,"
+                                      "\"01a16342-0f26-7dc1-8a46-88703a48341c\":2}"));
+}
+
+TEST(source_accepts_only_the_closed_tokens)
+{
+    ASSERT_TRUE(source_is_valid("human"));
+    ASSERT_TRUE(source_is_valid("agent"));
+    ASSERT_TRUE(source_is_valid("tool"));
+    ASSERT_TRUE(source_is_valid("share"));
+    ASSERT_TRUE(source_is_valid("unknown"));
+    ASSERT_FALSE(source_is_valid(NULL));
+    ASSERT_FALSE(source_is_valid("robot"));
+    ASSERT_FALSE(source_is_valid("hum"));
+    ASSERT_FALSE(source_is_valid(UUID_A));
+}
+
 void register_normalize_tests(void)
 {
     RUN_TEST(body_trim_basic);
@@ -409,10 +583,15 @@ void register_normalize_tests(void)
     RUN_TEST(body_trim_invalid_utf8);
     RUN_TEST(body_trim_valid_utf8_multibyte);
     RUN_TEST(body_trim_utf8_edge_rejections);
+    RUN_TEST(body_trim_accepts_the_first_scalar_after_the_surrogates);
+    RUN_TEST(body_trim_accepts_the_first_four_byte_scalar);
+    RUN_TEST(body_trim_rejects_a_four_byte_overlong);
     RUN_TEST(body_trim_nul_terminates);
     RUN_TEST(body_hash_ignores_bytes_after_nul);
     RUN_TEST(body_trim_keeps_control_chars);
     RUN_TEST(normalize_reports_bad_output_buffer);
+    RUN_TEST(normalize_token_zero_capacity_is_internal);
+    RUN_TEST(body_hash_of_null_data_is_the_empty_digest);
     RUN_TEST(body_hash_empty_and_abc);
     RUN_TEST(body_hash_long_pad_and_multiblock);
     RUN_TEST(body_hash_matches_trimmed);
@@ -422,5 +601,17 @@ void register_normalize_tests(void)
     RUN_TEST(token_allows_internal_spaces);
     RUN_TEST(token_length_and_utf8);
     RUN_TEST(token_utf8_non_ascii_not_casefolded);
+    RUN_TEST(test_alloc_fails_only_the_nth_allocation);
+    RUN_TEST(body_trim_copy_reports_oom);
+    RUN_TEST(fold_hebrew_marks_reports_oom);
     RUN_TEST(norm_status_string_stable);
+    RUN_TEST(uuid_v7_accepts_each_variant);
+    RUN_TEST(uuid_v7_rejects_a_wrong_shape);
+    RUN_TEST(utc_stamp_accepts_the_fixed_shape);
+    RUN_TEST(utc_stamp_rejects_any_other_shape);
+    RUN_TEST(vv_json_accepts_the_compact_forms);
+    RUN_TEST(vv_json_rejects_an_injected_or_malformed_vector);
+    RUN_TEST(vv_json_rejects_a_counter_that_is_not_a_small_whole_number);
+    RUN_TEST(vv_json_rejects_a_repeated_device);
+    RUN_TEST(source_accepts_only_the_closed_tokens);
 }
