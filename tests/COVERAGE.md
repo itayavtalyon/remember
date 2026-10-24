@@ -35,7 +35,7 @@ Dev tools for inspect tests: `sqlite3` on PATH (`brew install sqlite` if needed)
 | 25 | FTS hand-sync | `fts_search_reflects_*` |
 | 26 | Compound tag / diacritics | `search_finds_compound_tag_*`, `search_diacritics_folded` |
 | 27 | Unparseable FTS is a warning on exit 0 (006 E3.1) | `search_unbalanced_quote_warns`, `union_search_*`, `store_search_*` (plan 18 stage 3) |
-| 28 | Empty = success | search/list empty total 0 |
+| 28 | Empty = success | search/list empty total 0; an empty or blank search query is an empty result (`search_empty_query_is_an_empty_result`, `search_whitespace_only_query_is_an_empty_result`, plan 18) |
 | 29 | stdin | add/update `-` |
 | 30 | Invalid UTF-8 body | `add_invalid_utf8_body_*`, `update_invalid_utf8_*` |
 | 31 | Filters/sort/limits | list/search suites; `list_dates` (`--sort`, `--since`, `--until`) |
@@ -52,9 +52,9 @@ Dev tools for inspect tests: `sqlite3` on PATH (`brew install sqlite` if needed)
 | `test_get_list_delete.c` | get/list/delete/paging |
 | `test_search.c` | FTS search |
 | `test_store_search.c` | `store_search` union: P prefix part, E2.1a parse probe, `(P) OR (R)`, de-duplication, E2.4 ranking; keys and tags facets: scope, tiers and order, counts, label, `facet_limit` cap and totals, invalid stored UTF-8, allocation sweeps; failure paths (plan 18 stages 3-4; runs in the `store` suite and under ASan via `remember_store_tests`) |
-| `test_union_search.c` | `search` CLI: warning on exit 0, the E2 verification inputs, D27 invalid UTF-8 (plan 18; gate suite `union_search`) |
+| `test_union_search.c` | `search` CLI: warning on exit 0 (plain and JSON text), the E2 verification inputs, D27 invalid UTF-8, `--facet-limit` (default, bounds, usage), the facets in `--json` and the human lines, Examples 1, 2 and 4, `-x` without `--`, and `help search` (plan 18; gate suite `union_search`) |
 | `test_update.c` | update, including `--if-version-vector` wiring (gate suite `update`) |
-| `test_key.c` | `--key` (green slice suite: `key_gld`; WIP: `key`) |
+| `test_key.c` | `--key` (gate suites `key_gld` and `key`) |
 | `test_json_db_config.c` | db path / JSON fields |
 | `test_store.c` | store_open/close, schema, user_version gate, create race + rollback, parent 0700/0600, error edges (step 02 unit; runs black-box **and** under ASan via `remember_store_tests`) |
 | `test_normalize.c` | body trim/size, UTF-8 edges, NUL-terminates, control-byte preserve, tag/key normalize, SHA-256 empty/abc + 56-byte NIST long-pad + 64-byte multi-block (step 03 pure unit; harness + ASan/UBSan unit binary, digest instrumented) |
@@ -65,8 +65,11 @@ Dev tools for inspect tests: `sqlite3` on PATH (`brew install sqlite` if needed)
 | `test_list_dates.c` | `parse_filter_ts`, `list`/`search` `--sort` `--since` `--until`, and their help (plan 17; gate suite `list_dates`) |
 | `test_facade.c` | `remember_run` byte-matches the CLI, including `--json-errors` on a miss and a busy lock (gate suite `facade`) |
 | `test_sync_import.c` | import merge and conflicts; a v4 or v5 source stays read-only and is not migrated (plan 15 stage 5; gate suite `sync_import`) |
-| `test_verification_edges.c` | V21–34 edges (green slice: `verification_gld`; WIP: `verification_edges`) |
-| `test_output.c` | `output.c` argument guards, NULL fields, link filtering per subject, preview cuts (CR, DEL, the byte bound), comma separators (plan 18b; ASan unit binary `remember_store_tests`) |
+| `test_verification_edges.c` | V21–34 edges (gate suites `verification_gld` and `verification_edges`) |
+| `test_search_terms.c` | `search_terms.c` (pure): E2.2 tokens (NFC, splits, 16 × 64 caps, Hebrew fold), q, segment match and E2.6 tiers, key and D28 tag order (each comparator in both argument orders), D12/P2 labels with graphemes, allocation failures (plan 18 stage 2; ASan unit binary `remember_store_tests`) |
+| `test_unicode.c` | `unicode.c` port over utf8proc: NFC, grapheme clusters, general categories, White_Space, the decoder, the fault hook (plan 18 stage 1; ASan unit binary `remember_store_tests`) |
+| `failing_stream.c` | Test-only stream whose writes fail past a byte limit, for every-failed-write tests (plan 18b) |
+| `test_output.c` | `output.c` argument guards, NULL fields, link filtering per subject, preview cuts (CR, DEL, the byte bound), comma separators (plan 18b); the search envelope with facets and the E2.7 human facet lines, escaping and masking, every failed write (plan 18 stage 5; ASan unit binary `remember_store_tests`) |
 
 ## Intentionally not automated
 

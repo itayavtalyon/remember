@@ -16,12 +16,22 @@ How we keep C code safe: compile hard, analyze statically, run sanitizers, detec
 | clang-format / clang-tidy / cppcheck | `scripts/lint-all.sh` | required | required |
 | misc-include-cleaner (IWYU-style) | via clang-tidy | via clang-tidy | via clang-tidy |
 | include-what-you-use | if installed / `REMEMBER_IWYU=1` | if package present | optional |
-
-**Vendor includes for IWYU/cppcheck:** tools that scan `src/*.c` must be told about every `third_party/<lib>` header directory that project code includes (not only via CMake `PUBLIC` link lines). When vendoring a new library, update `IWYU_VENDOR_INCLUDES` / cppcheck `-I` in `scripts/lint-all.sh` in the same change as the CMake target. Full checklist: `docs/engineering-notes.md` → *Vendoring third-party C*.
 | scan-build | `REMEMBER_SCAN_BUILD=1` or `cmake --build --target analyze` | **required** | **required** |
 | macOS `leaks(1)` on **`remember_plain`** | `cmake --build build --target leaks-macos` | n/a | **required** |
 | **CodeQL** (Code Scanning) | n/a | `.github/workflows/codeql.yml` | n/a |
 | Valgrind | **not used** | **not used** | **not used** |
+
+**Vendor includes for IWYU/cppcheck:** tools that scan `src/*.c` must be told about every `third_party/<lib>` header directory that project code includes (not only via CMake `PUBLIC` link lines). When vendoring a new library, update `IWYU_VENDOR_INCLUDES` / cppcheck `-I` in `scripts/lint-all.sh` in the same change as the CMake target. Full checklist: `docs/engineering-notes.md` → *Vendoring third-party C*.
+
+### Vendored C (`third_party/`)
+
+| Library | Build | Consumer | Sanitizer gate |
+|---------|-------|----------|----------------|
+| SQLite amalgamation | static lib `sqlite3`, `-w` | `src/store_sqlite.c` (and the test-only VFS shim `src/test_vfs.c`) | none: trusted, upstream has intentional suppressed UB |
+| sha256 | static lib `sha256`, `-w` | `src/normalize.c` only | also compiled into `remember_store_tests` under ASan/UBSan; NIST vectors in `test_normalize.c` |
+| utf8proc 2.12.0 (Unicode 18) | static lib `utf8proc`, `-w` | `src/unicode.c` only (plan 18, D2) | also compiled into `remember_store_tests` under ASan/UBSan; NFC, grapheme and category vectors in `test_unicode.c` |
+
+`scripts/lint-all.sh` fails when any other file under `src/` names a vendored header or symbol (the sqlite, sha256 and utf8proc boundaries; `check_boundary`).
 
 ### Code Scanning vs our `ci` workflow
 
@@ -101,7 +111,7 @@ PATH="$(brew --prefix llvm)/bin:$PATH" ./scripts/check-coverage.sh
 | What is measured | `src/*.c` only (not `third_party/`, not `tests/`) |
 | What runs | Green gate + `remember_store_tests` (+ fault-injection hooks under `REMEMBER_TEST_HOOKS`) |
 | Pass bar | **100% function coverage** and **100% effective line coverage** |
-| Raw line % | 84.95% after plan 18b (2026-10-21, macOS) — remaining zeros are pure defensive exits (`return -1`, `goto fail`, error `err_msg`, etc.) excluded from the *effective* denominator |
+| Raw line % | 85.88% after plan 18 (2026-10-24, macOS) — remaining zeros are pure defensive exits (`return -1`, `goto fail`, error `err_msg`, etc.) excluded from the *effective* denominator |
 | What it protects | Untested production *logic* (every function entered; non-defensive lines hit) |
 | What `gate-suites` protects | Dropping whole green *suites* from CI |
 

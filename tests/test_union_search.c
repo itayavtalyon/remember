@@ -327,6 +327,51 @@ TEST(union_search_facet_limit_without_a_value_is_usage)
     free(db);
 }
 
+/* Stage 6: search help names the union, --facet-limit, the facets, the blank
+   query and the warning line, in the binary's own words. */
+TEST(union_search_help_describes_prefixes_facets_and_the_warning)
+{
+    char *db = make_temp_db_path();
+    const char *const args[] = {"help", "search"};
+    CmdResult r;
+
+    ASSERT_TRUE(db != NULL);
+    r = run_remember(db, args, COUNT_OF(args), NULL);
+    ASSERT_EQ_INT(r.exit_code, 0);
+    ASSERT_STR_CONTAINS(
+        r.out, "  QUERY           Words or word prefixes; FTS5 syntax also works (required)\n");
+    ASSERT_STR_CONTAINS(r.out, "  --facet-limit N Keys and tags to return (default 50, max 200)\n");
+    ASSERT_STR_CONTAINS(r.out,
+                        "Matches word prefixes (boo finds Book) in keys, bodies and tags,\n"
+                        "and the query as FTS5 syntax. A query FTS5 cannot parse still\n"
+                        "returns the prefix matches, exits 0 and writes\n"
+                        "\"remember: warning: raw query ignored: <message>\" on stderr.\n"
+                        "An empty or blank query is an empty result.\n"
+                        "Put -- before a query that starts with '-'.\n"
+                        "Order: exact key, key prefix, relevance (bm25), then updated_at.\n"
+                        "JSON adds keys and tags (matches in scope) between total and entries.\n"
+                        "Human output prints keys: and tags: lines (at most 10 each) first.\n");
+    ASSERT_STR_NOT_CONTAINS(r.out, "Ranked by FTS relevance");
+    ASSERT_STREQ(r.err, "");
+    cmd_result_free(&r);
+    free(db);
+}
+
+/* decision:plan18-dash-query-needs-double-dash: without --, a leading '-' is
+   an option, as on every command; the help tells users to put -- first. */
+TEST(union_search_dash_query_without_double_dash_is_an_unknown_option)
+{
+    char *db = given_examples();
+    const char *const args[] = {"search", "-x"};
+    CmdResult r = run_remember(db, args, COUNT_OF(args), NULL);
+
+    ASSERT_EQ_INT(r.exit_code, 1);
+    ASSERT_STREQ(r.out, "");
+    ASSERT_STREQ(r.err, "remember: unknown option '-x'\n");
+    cmd_result_free(&r);
+    free(db);
+}
+
 void register_union_search_tests(void)
 {
     RUN_TEST(union_search_unparseable_raw_part_is_a_json_warning);
@@ -343,4 +388,6 @@ void register_union_search_tests(void)
     RUN_TEST(union_search_example_2_has_facets_and_the_plain_warning);
     RUN_TEST(union_search_example_4_filter_scopes_the_facets);
     RUN_TEST(union_search_facet_limit_without_a_value_is_usage);
+    RUN_TEST(union_search_help_describes_prefixes_facets_and_the_warning);
+    RUN_TEST(union_search_dash_query_without_double_dash_is_an_unknown_option);
 }

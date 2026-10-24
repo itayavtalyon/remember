@@ -240,16 +240,30 @@ cmake --build build --target leaks-macos          # macOS only
 
 ## Definition of Done
 
-- [ ] Design log 006 unchanged except Implementation Results rows for E2.*,
-      E3.*, E10.1 (and the utf8proc version used).
-- [ ] Every must-pass row green and in `tests/gate-suites`.
-- [ ] D1, D2, D12, D13, D27, D28, P2 implemented exactly.
-- [ ] utf8proc vendored per the full checklist; IWYU run green.
-- [ ] No search input exits non-zero except real E4 errors and usage flags.
-- [ ] Help, SKILL.md, README What's New (E2.8 verbatim + the E2.6 order
-      exception + blank search now succeeds).
-- [ ] Engineering notes: `store_search` and CLI search bullets rewritten.
-- [ ] Gate: ctest, lint, IWYU, coverage 100/100, `ci-linux.sh` all green.
+- [x] Design log 006 unchanged except Implementation Results rows for E2.*,
+      E3.*, E10.1 (and the utf8proc version used). Proof: stage 6 notes
+      (`git diff --numstat`: 16 added, 0 removed, one Implementation Results block).
+- [x] Every must-pass row green and in `tests/gate-suites`. Proof: the stage 6
+      must-pass table (each row's tests and suite).
+- [x] D1, D2, D12, D13, D27, D28, P2 implemented exactly. Proof: D1
+      `union_search_deep_nesting_is_a_warning` + M9a–d (stage 3); D2 the
+      utf8proc boundary (`lint-all.sh`) + stage 1 conformance; D12/P2
+      `search_label_*`; D13 the stage 2–4 split (`search_terms.c` pure,
+      SQLite in `store_sqlite.c`); D27 `union_search_invalid_utf8_is_usage`;
+      D28 `search_tag_order_is_exact_tier_count_then_code_point`.
+- [x] utf8proc vendored per the full checklist; IWYU run green. Proof: stage 1
+      notes and second review; iwyu PASS in this stage's `ci-linux.sh`.
+- [x] No search input exits non-zero except real E4 errors and usage flags.
+      Proof: `union_search_no_input_fails`, the stage 3/5 fuzz runs (1,000 and
+      3,000 queries), the stage 5 review's 2,000-run grammar fuzz.
+- [x] Help, SKILL.md, README What's New (E2.8 verbatim + the E2.6 order
+      exception + blank search now succeeds). Proof:
+      `union_search_help_describes_prefixes_facets_and_the_warning` and the
+      stage 6 runs of every SKILL.md and README claim.
+- [x] Engineering notes: `store_search` and CLI search bullets rewritten.
+      Proof: stage 3–5 notes; `docs/engineering-notes.md` "CLI search (plan 18 stage 5)".
+- [x] Gate: ctest, lint, IWYU, coverage 100/100, `ci-linux.sh` all green.
+      Proof: the stage 6 gate block.
 - [ ] Branch gate (plan 18b): `check-coverage.sh` shows 0 missed branch sides in `search_terms.c`, `unicode.c`, `normalize.c`, `output.c`, on macOS and in GitHub Actions `linux-coverage`.
 - [ ] Second review done; no open **blocking** item.
 - [ ] `implementation-plans/INDEX.md` row marked ✅.
@@ -779,6 +793,84 @@ Gate on this tree (2026-10-24). After the full run below, one comment line chang
 
 Stage 6 inherits: help (`--facet-limit`, blank query success, the warning text), SKILL.md, README What's New (E2.8 verbatim + the E2.6 order exception + blank search succeeds), QUALITY.md, COVERAGE.md, gate-suites.
 
+### 2026-10-24 — stage 6 (docs + full gate)
+
+Start: `git fetch`; the branch equalled `origin` (`bb317cf`, the stage 5 second review, in force) and `origin/main` was already merged. Loaded `standard:coding` ROUND 15 and the decisions it cites (`plan18-keep-stdout-flush-merge`, `plan18-merge-harness-fail-loud`, `plan18-push-after-green-gate`, `size-option-digits-only`). Build configured with the cached `/usr/bin/clang`; `ctest -N` lists 5.
+
+Grill, answered and filed (`decision:plan18-gate-all-green-suites`): `tests/gate-suites` left out two green suites, so ctest never ran them: `verification_edges` (26 tests, holds V27, which plan 18 rewrote) and `key` (20 tests). Both passed before the change (`remember_tests build/remember --only verification_edges` and `--only key`: 0 failed). Itay chose both. Every suite `test_main.c` registers is now gated (a script compared the `register_` table with the gate line: 28 registered, 28 gated).
+
+Help (`src/remember_app.c`, `remember help search`): the QUERY line, a `--facet-limit N` line, and nine lines on prefixes, the warning, the blank query, `--`, the order, and the facets in both formats replace "Ranked by FTS relevance (bm25), then updated_at." Test: `union_search_help_describes_prefixes_facets_and_the_warning` (byte-exact lines, and the old line is gone). Each sentence was run first: `search boo` finds "Book"; `search fam` lists `tags: family (1)`; `search edit` lists `keys: pref:editor`; `book OR zed` 3 rows; `foo AND` the warning line; `''` and `'   '` exit 0, no output; `search -x` → `unknown option '-x'`; `search -- -x` exit 0 with the warning; the order is the stage 3 ranking tests; the JSON members are the stage 5 envelope tests.
+
+ROUND 15.1 (a probe gets a test): `search -x` without `--` had only stage 3's probe. New `union_search_dash_query_without_double_dash_is_an_unknown_option` (exit 1, empty stdout, `remember: unknown option '-x'`).
+
+SKILL.md (`skills/remember/SKILL.md`): search is prefix-friendly (with examples), the order, `--` for a leading `-`, number options digits only, the search envelope with `keys` / `tags` and their item fields, "read `keys` before `add --key`" (a slot, not a rival), the human facet lines, and the warning line in both formats with "a warning on stderr is not an error". Run against the binary: every example command (`search boo`, `search 'book OR zed'`, the `--tag … --facet-limit 50` line, `"editor preference"`), the member order (`['version', 'offset', 'limit', 'count', 'total', 'keys', 'tags', 'entries']` for search, no facets for `list`), `list --limit +5` and `list --limit ' 5'` → `invalid --limit (must be 1..1000)`, both warning lines byte for byte.
+
+README What's New (v0.3.0): E2.8 verbatim, then the exact warning line in both formats, the order, "JSON `keys` and `tags` now sit between `total` and `entries`" with `--facet-limit`, the blank query (was `empty search query`), digits-only number options, and a failed output write exits 1. The last line ships with plan 18 (`decision:plan18-keep-stdout-flush-merge`); run: `bash -c 'trap "" PIPE; remember --db h.db search boo | true; echo ${PIPESTATUS[0]}'` → `remember: failed to write output`, 1; `exec 1>&-; remember --db h.db list` → the same. "A full disk" was not run here, so the README names only the closed pipe.
+
+Design log 006: one "Shipped in plan 18" block under Implementation Results (E2.1–E2.7, E3, E10.1 query side, D27, the utf8proc version); `git diff --numstat` shows 16 lines added, 0 removed; no earlier plan 18 commit touched 006.
+
+QUALITY.md: the vendor-includes paragraph sat inside the gate table and split it; it now follows the table. New "Vendored C" table (SQLite, sha256, utf8proc 2.12.0: build, the one consumer, the sanitizer gate), from `CMakeLists.txt` and `scripts/lint-all.sh` (`check_boundary`). The boundary claim was run: a temporary `src/zz_probe.c` naming `utf8proc_NFC` made `lint-all.sh` print `utf8proc boundary: FAIL` with that line; the file was deleted. The raw line percentage was refreshed from this gate's coverage run.
+
+COVERAGE.md: rows for `test_search_terms.c`, `test_unicode.c`, `failing_stream.c`; updated rows for `test_union_search.c`, `test_output.c`, `test_key.c`, `test_verification_edges.c` (both gated now); V28 names the blank-query tests. Each row's content was grepped (`test_alloc_fail_after` in `test_search_terms.c`, both-argument-order comparator tests, `unicode_test_fail_after_fails_only_the_nth_call`).
+
+Engineering notes: a "Gate suites (plan 18 stage 6)" bullet. The `store_search` and CLI search bullets were rewritten in stages 3–5.
+
+Mutations (`scratchpad/mutate6.py`, `build-mut`: `/usr/bin/clang`, ASan/UBSan, VFS on; restored from memory, then compared with saved copies: `restored-ok`):
+
+| Mutant | Red tests |
+|---|---|
+| S1 help without the `--facet-limit` line | `union_search_help_describes_prefixes_facets_and_the_warning` |
+| S2 the old bm25 line back | same |
+| S3 the warning words changed to `note:` | same |
+| S4 the blank-query line dropped | same |
+| S5 a leading `-` no longer an option (`arg[1] == '!'`) | `union_search_dash_query_without_double_dash_is_an_unknown_option`, `list_rejects_facet_limit` |
+
+Must-pass rows, each with its tests and their suite (`store` tests also run as ctest `store_asan_gate`):
+
+| Row | Tests | Suite |
+|---|---|---|
+| Example 1 | `store_search_matches_a_word_prefix`, `store_search_facets_a_matching_key`, `store_search_facets_a_matching_tag`, `union_search_json_carries_the_facets_before_entries` | store, union_search |
+| Example 2 | `store_search_runs_p_alone_when_r_does_not_parse`, `store_search_facets_example_2`, `union_search_example_2_has_facets_and_the_plain_warning` | store, union_search |
+| Example 3 | `store_search_unions_the_raw_part`, `union_search_parsed_raw_part_has_no_warning` | store, union_search |
+| Example 4, E2.5d | `store_search_filters_scope_the_facets`, `union_search_example_4_filter_scopes_the_facets` | store, union_search |
+| Example 5 | `union_search_unparseable_raw_part_is_a_json_warning` | union_search |
+| E2 verification inputs, 10,000 characters | `union_search_no_input_fails`, `union_search_long_query_succeeds` | union_search |
+| 2000 nested `(` | `union_search_deep_nesting_is_a_warning` | union_search |
+| Whitespace-only, E2.1 (4) | `store_search_blank_query_is_empty_without_warning`, `store_search_blank_query_has_no_facets`, `search_whitespace_only_query_is_an_empty_result` | store, search |
+| Only punctuation that does not parse, E2.1 (5) | `store_search_without_p_and_unparseable_r_is_empty`, `search_unbalanced_quote_warns` | store, verification_edges |
+| 60 tags, `--facet-limit` | `store_search_caps_tag_items_at_the_facet_limit`, `union_search_facet_limit_defaults_to_50`, `…_accepts_both_bounds`, `…_out_of_range_is_usage` | store, union_search |
+| Key `recs:books` matching | `search_tier_word_prefix_of_a_key_segment_matches`, `…_one_segment_serves_two_tokens`, `…_a_token_without_a_segment_does_not_match`, `…_whole_key_prefix_is_tier_1` | store |
+| Tag `project:fortkeeps-cloud` tiers | `search_tier_in_order_tokens_are_tier_2`, `search_tier_out_of_order_tokens_are_tier_3`, `store_search_orders_tags_exact_tier_then_count` | store |
+| D27 | `union_search_invalid_utf8_is_usage`, `store_search_invalid_utf8_is_internal` | union_search, store |
+| Tier then code point | `search_key_order_is_tier_then_code_point`, `store_search_orders_keys_by_tier_then_code_point` | store |
+| D28 tag order | `search_tag_order_is_exact_tier_count_then_code_point` and the four `…_from_either_side` tests, `store_search_orders_tags_exact_tier_then_count` | store |
+| E2.1b | `store_search_counts_a_row_both_parts_match_once`, `store_search_pages_the_deduplicated_set` | store |
+| E2.4 ranking | `store_search_ranks_exact_key_then_key_prefix_first`, `…_ranks_a_keyless_row_by_bm25`, `…_ranks_by_weighted_bm25`, `store_search_ties_break_by_id` | store |
+| `label` (D12, P2) | `search_label_*` (combining marks, ZWJ sequence, 60/61 graphemes), `store_search_labels_a_key_with_its_title`, `…_without_a_title_with_the_key` | store |
+| JSON member order | `output_search_envelope_writes_empty_facets`, `…_writes_the_facet_items`, `search_crossed_bounds_are_empty` | store, list_dates |
+| Human E2.7 | `output_search_facets_human_*`, `union_search_human_prints_the_facets_before_entries` | store, union_search |
+| E10 `ספר` / E10.1 | `store_search_hebrew_prefix_finds_niqqud`, `store_search_vocalized_query_matches_through_p` | store |
+| E3.2 damaged FTS | `cli_damaged_fts_search_reports_fts_only`, `store_search_probe_error_without_a_d1_message_is_real` | errors, store |
+| E3.3 | `union_search_no_input_fails` | union_search |
+| Bins and filters | `store_search_bin_scopes_the_keys`, `…_filters_scope_the_facets`, `…_filters_scope_the_tag_counts`, `…_since_scopes_the_keys_on_updated_at`, `union_search_example_4_filter_scopes_the_facets` | store, union_search |
+| `search editor` | `store_search_finds_a_key_segment` | store |
+| Facade byte-match incl. warning | `facade_search_matches_cli`, `facade_search_bad_query_matches_cli`, `facade_search_json_warning_matches_cli` | facade |
+| Unit (`search_terms`) E2.2 | `search_tokens_compose_to_nfc`, `…_split_on_ideographic_space`, `…_keep_the_first_16`, `…_keep_the_first_64_code_points`, `…_split_on_a_double_quote` (replaces "`"` doubled", `decision:plan18-drop-quote-doubling`), `…_remove_hebrew_marks` | store |
+
+`search_unbalanced_quote_warns` (row E2.1 (5)) ran in no ctest suite until this stage put `verification_edges` in the gate.
+
+Gate on this tree (2026-10-24, after the last edit to `src`, `tests`, `scripts` and `skills`; only Markdown changed after it: this file, `docs/QUALITY.md`'s raw line figure):
+
+- `ctest --test-dir build` (ASan/UBSan, `REMEMBER_TEST_VFS=ON`, `ctest -N` = 5): 5/5 in 71 s (load back to normal). `remember_tests --only "$(./scripts/read-gate-suites.sh)"`: 815 tests, 0 failed (now with `key` and `verification_edges`). `remember_store_tests`: 455 tests, 0 failed.
+- `./scripts/lint-all.sh`: LINT OK (format, four boundaries, cppcheck src + tests, `gcc -fanalyzer`, clang-tidy).
+- `./scripts/check-coverage.sh`: functions 100%, effective lines 100%, raw lines 85.88%; `search_terms.c` 176, `unicode.c` 80, `normalize.c` 268, `output.c` 678 branch sides, 0 missed.
+- `cmake --build build --target leaks-macos`: PASS.
+- `./scripts/ci-linux.sh`, unmodified (Docker DNS works again): 5/5 as an unprivileged user, iwyu PASS, scan-build PASS, LINT OK, `ci-linux: OK`.
+
+No new C logic this stage (help strings only), so no Release size delta is listed.
+
+Definition of Done: ticked above with the proof named beside each box. Not ticked: the branch gate in GitHub Actions `linux-coverage` (needs a push and a CI run; macOS shows 0 missed), the FINAL second review, and the INDEX row (main's INDEX says "Itay finishes this plan and merges it. Do not tick it here.").
+
 ## Review Notes
 
 ### 2026-10-20 — in-session deep review (stage 1)
@@ -1082,3 +1174,14 @@ Instructions for the coder:
 Gate (2026-10-24; clang, `REMEMBER_ENABLE_SANITIZERS=ON`, `REMEMBER_TEST_VFS=ON`, configured twice, cache flags checked): baseline `a89a22e` and the fix tree (`a89a22e` + the `95346f8` merge + these fixes) each ran build, ctest 5/5, `lint-all.sh` LINT OK, `check-coverage.sh` (functions and effective lines 100%; search_terms 176, unicode 80, normalize 268, output 678 branch sides, 0 missed), `leaks-macos` PASS, and `ci-linux.sh` unmodified (Docker `aarch64`, container apt healthy again: ctest 5/5 as an unprivileged user, iwyu PASS, scan-build PASS, LINT OK) → `GATE-ALL-GREEN` on both. ctest took 97 s and 80 s (machine load back to normal). This plan file was written while the fix-tree gate ran; nothing else changed after it (Markdown only). Standard filed: `standard:coding` ROUND 15.
 
 Stage 6 inherits, in addition to the list above: a What's New line that a number option (`--limit`, `--offset`, `--busy-timeout`, `--facet-limit`) now takes ASCII digits only (`decision:size-option-digits-only`).
+
+### 2026-10-24 — in-session deep review (stage 6)
+
+Lenses: `pref:review-lenses` 1–9, comprehensive, ponytail, `docs/STEP_REVIEW_CHECKLIST.md`. Bugbot is not installed. ROUND 15 applied: the one hand-probed contract left (`search -x` without `--`) got a test; the help and docs claims were each run before they were written.
+
+- **important, fixed.** Help still said "FTS5 full-text query" and "Ranked by FTS relevance (bm25), then updated_at", and SKILL.md said an empty query exits 1: all false since stages 3–5. Rewritten and pinned by `union_search_help_describes_prefixes_facets_and_the_warning` (mutants S1–S4).
+- **important, fixed (grilled).** Two green suites were outside the gate; `search_unbalanced_quote_warns` (must-pass E2.1 (5)) ran in no ctest suite (`decision:plan18-gate-all-green-suites`).
+- **nit, fixed.** A paragraph in `docs/QUALITY.md` split the gate table; `tests/COVERAGE.md` had no rows for the plan 18 unit files.
+- **open for the FINAL review.** The branch gate in GitHub Actions `linux-coverage` needs a push; the INDEX row stays unticked per main's INDEX text.
+
+Pragmatic write gate: DRY PASS (help, SKILL.md and README state each fact once per audience; the README warning line and the help line are the same bytes as `diag.c`). Easy-to-replace PASS (no code shape changed). Orthogonal PASS (help strings only in `src`; `list` help untouched).

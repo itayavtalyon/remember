@@ -168,7 +168,8 @@ static void print_command_help(CliCommand topic)
         (void)fprintf(out, "\n");
     } else if (topic == CLI_CMD_SEARCH) {
         (void)fprintf(out, "Options:\n");
-        (void)fprintf(out, "  QUERY           FTS5 full-text query (required)\n");
+        (void)fprintf(
+            out, "  QUERY           Words or word prefixes; FTS5 syntax also works (required)\n");
         (void)fprintf(out, "  --tag TAG       Require tag (repeatable; AND)\n");
         (void)fprintf(out, "  --source SRC    Filter by source\n");
         (void)fprintf(out, "  --key KEY       Exact key match\n");
@@ -177,11 +178,21 @@ static void print_command_help(CliCommand topic)
         (void)fprintf(out, "  --until TS      Exclusive upper bound on updated_at\n");
         (void)fprintf(out, "  --limit N       Page size (default 20, max 1000)\n");
         (void)fprintf(out, "  --offset M      Skip M matches (default 0)\n");
+        (void)fprintf(out, "  --facet-limit N Keys and tags to return (default 50, max 200)\n");
         (void)fprintf(out, "  --expired       Search expired only (default: live only)\n");
         (void)fprintf(out, "  --deleted       Search deleted only\n");
         (void)fprintf(out, "  --trash         Deprecated alias of --expired\n");
         (void)fprintf(out, "\n");
-        (void)fprintf(out, "Ranked by FTS relevance (bm25), then updated_at.\n");
+        (void)fprintf(out, "Matches word prefixes (boo finds Book) in keys, bodies and tags,\n");
+        (void)fprintf(out, "and the query as FTS5 syntax. A query FTS5 cannot parse still\n");
+        (void)fprintf(out, "returns the prefix matches, exits 0 and writes\n");
+        (void)fprintf(out, "\"remember: warning: raw query ignored: <message>\" on stderr.\n");
+        (void)fprintf(out, "An empty or blank query is an empty result.\n");
+        (void)fprintf(out, "Put -- before a query that starts with '-'.\n");
+        (void)fprintf(out, "Order: exact key, key prefix, relevance (bm25), then updated_at.\n");
+        (void)fprintf(out,
+                      "JSON adds keys and tags (matches in scope) between total and entries.\n");
+        (void)fprintf(out, "Human output prints keys: and tags: lines (at most 10 each) first.\n");
         (void)fprintf(out, "Search ignores --sort. --since and --until filter updated_at.\n");
         (void)fprintf(out, "TS is YYYY-MM-DD (local start of that day), YYYY-MM-DDTHH:MM:SSZ,\n");
         (void)fprintf(out, "or YYYY-MM-DDTHH:MM:SS.mmmZ.\n");
