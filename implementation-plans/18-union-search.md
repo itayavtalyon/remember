@@ -264,7 +264,7 @@ cmake --build build --target leaks-macos          # macOS only
       Proof: stage 3–5 notes; `docs/engineering-notes.md` "CLI search (plan 18 stage 5)".
 - [x] Gate: ctest, lint, IWYU, coverage 100/100, `ci-linux.sh` all green.
       Proof: the stage 6 gate block.
-- [ ] Branch gate (plan 18b): `check-coverage.sh` shows 0 missed branch sides in `search_terms.c`, `unicode.c`, `normalize.c`, `output.c`, on macOS and in GitHub Actions `linux-coverage`.
+- [x] Branch gate (plan 18b): `check-coverage.sh` shows 0 missed branch sides in `search_terms.c`, `unicode.c`, `normalize.c`, `output.c`, on macOS and in GitHub Actions `linux-coverage`. Proof: this review's macOS run (176/80/268/678, 0 missed) and PR #37 job `linux (line coverage on src/)` (the same counts, 0 missed).
 - [x] Second review done; no open **blocking** item. Proof: the FINAL
       review below (2026-10-24). No code change.
 - [ ] `implementation-plans/INDEX.md` row marked ✅.
@@ -1220,4 +1220,4 @@ Stage 6 claims, on `build/remember`:
 
 **Grades.** Coding agent 9/10. Stage reviewers 9/10. No pointer beyond rounds 9–15, which already name the holes those reviews fixed (the store trim, facets against the lowercased query, `list` accepting `--facet-limit`, digits-only). Stage 6's claims matched the binary.
 
-**Gate** on this tree, before this note (Markdown only after it): ctest 5/5 in 101 s, `lint-all.sh` LINT OK, `check-coverage.sh` functions and effective lines 100%, raw lines 85.88% (the QUALITY.md figure), branch sides `search_terms.c` 176, `unicode.c` 80, `normalize.c` 268, `output.c` 678, 0 missed, `leaks-macos` PASS, `ci-linux.sh` OK (iwyu PASS, scan-build PASS, 815/0 and 455/0). The GitHub Actions `linux-coverage` job is the open Definition of Done box; it needs this push.
+**Gate** on this tree, before this note (Markdown only after it): ctest 5/5 in 101 s, `lint-all.sh` LINT OK, `check-coverage.sh` functions and effective lines 100%, raw lines 85.88% (the QUALITY.md figure), branch sides `search_terms.c` 176, `unicode.c` 80, `normalize.c` 268, `output.c` 678, 0 missed, `leaks-macos` PASS, `ci-linux.sh` OK (iwyu PASS, scan-build PASS, 815/0 and 455/0). GitHub Actions `linux (line coverage on src/)` on PR #37 passed with the same four counts and 0 missed (raw lines there 85.92%).
