@@ -872,8 +872,24 @@ TEST(store_add_null_tag_slots_empty_join)
 }
 #endif
 
+/* The harness drains sqlite3's whole output before pclose: a result longer
+   than the pipe buffer must not die of SIGPIPE and fail the calling test. */
+TEST(harness_sqlite_reads_a_result_longer_than_the_pipe)
+{
+    char *db = make_temp_db_path();
+    char *first = NULL;
+
+    ASSERT_TRUE(db != NULL);
+    first = harness_sqlite_query_line(db, "WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 "
+                                          "FROM n WHERE i < 100000) SELECT i FROM n;");
+    ASSERT_STREQ(first != NULL ? first : "", "1");
+    free(first);
+    free(db);
+}
+
 void register_coverage_edges_tests(void)
 {
+    RUN_TEST(harness_sqlite_reads_a_result_longer_than_the_pipe);
     RUN_TEST(util_resolve_null_buffer_fails);
     RUN_TEST(util_resolve_zero_buflen_fails);
     RUN_TEST(util_resolve_empty_env_falls_through_to_home);
