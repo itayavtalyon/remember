@@ -266,7 +266,8 @@ cmake --build build --target leaks-macos          # macOS only
       Proof: the stage 6 gate block.
 - [x] Branch gate (plan 18b): `check-coverage.sh` shows 0 missed branch sides in `search_terms.c`, `unicode.c`, `normalize.c`, `output.c`, on macOS and in GitHub Actions `linux-coverage`. Proof: this review's macOS run (176/80/268/678, 0 missed) and PR #37 job `linux (line coverage on src/)` (the same counts, 0 missed).
 - [x] Second review done; no open **blocking** item. Proof: the FINAL
-      review below (2026-10-24). No code change.
+      review below (2026-10-24). The CodeQL high on `search_prefix_part`
+      is fixed in the follow-up on that review.
 - [ ] `implementation-plans/INDEX.md` row marked ✅.
 
 ## Second review handover
@@ -1221,3 +1222,13 @@ Stage 6 claims, on `build/remember`:
 **Grades.** Coding agent 9/10. Stage reviewers 9/10. No pointer beyond rounds 9–15, which already name the holes those reviews fixed (the store trim, facets against the lowercased query, `list` accepting `--facet-limit`, digits-only). Stage 6's claims matched the binary.
 
 **Gate** on this tree, before this note (Markdown only after it): ctest 5/5 in 101 s, `lint-all.sh` LINT OK, `check-coverage.sh` functions and effective lines 100%, raw lines 85.88% (the QUALITY.md figure), branch sides `search_terms.c` 176, `unicode.c` 80, `normalize.c` 268, `output.c` 678, 0 missed, `leaks-macos` PASS, `ci-linux.sh` OK (iwyu PASS, scan-build PASS, 815/0 and 455/0). GitHub Actions `linux (line coverage on src/)` on PR #37 passed with the same four counts and 0 missed (raw lines there 85.92%).
+
+### 2026-10-24 — CodeQL follow-up on the review head
+
+**Verdict:** approve, after one fix. No grill. Grades stay 9/10 and 9/10. No new `standard:coding` round.
+
+CodeQL on PR #37 (head `ec89d37`) reported one high alert: `search_prefix_part` added `snprintf`'s return to `pos`. That return is the length the call would have written, so a short write wraps the next size. `search_tokens_build` keeps the count at 16 and each token at 256 bytes, so the write does not happen on a real query. The function now returns -1 when the count is above 16 or the write is short or failed. `store_search` folds that into the existing internal-error arm with `||`, which does not read the token buffer when the build left it untouched. A successful query still produces the same prefix bytes.
+
+**Gate** on this tree: ctest 5/5 in 75 s (`/usr/bin/clang`, `ctest -N` lists 5, `REMEMBER_TEST_VFS=ON`), `lint-all.sh` LINT OK, `leaks-macos` PASS, `check-coverage.sh` functions and effective lines 100%, raw lines 85.86%, branch sides 176/80/268/678, 0 missed. `build-cov` is a fresh cache: Homebrew clang, `REMEMBER_TEST_VFS=ON`. `ci-linux.sh` OK unmodified (DNS resolved `ports.ubuntu.com`; iwyu PASS, scan-build PASS, 815/0 and 455/0). `docs/QUALITY.md` raw-line cell is 85.86% to match this run.
+
+Pointer, not filed: when the next `snprintf` size is `cap - pos` and `pos` grows by a previous `snprintf` return, check that return before adding it. Rounds 9–15 do not say this.

@@ -111,7 +111,7 @@ PATH="$(brew --prefix llvm)/bin:$PATH" ./scripts/check-coverage.sh
 | What is measured | `src/*.c` only (not `third_party/`, not `tests/`) |
 | What runs | Green gate + `remember_store_tests` (+ fault-injection hooks under `REMEMBER_TEST_HOOKS`) |
 | Pass bar | **100% function coverage** and **100% effective line coverage** |
-| Raw line % | 85.88% after plan 18 (2026-10-24, macOS) — remaining zeros are pure defensive exits (`return -1`, `goto fail`, error `err_msg`, etc.) excluded from the *effective* denominator |
+| Raw line % | 85.86% after the plan 18 CodeQL fix (2026-10-24, macOS) — remaining zeros are pure defensive exits (`return -1`, `goto fail`, error `err_msg`, etc.) excluded from the *effective* denominator |
 | What it protects | Untested production *logic* (every function entered; non-defensive lines hit) |
 | What `gate-suites` protects | Dropping whole green *suites* from CI |
 

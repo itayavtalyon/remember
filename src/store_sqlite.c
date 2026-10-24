@@ -3708,16 +3708,27 @@ static PageResult search_query_exec(sqlite3 *db, const ListQuery *f, SearchBinds
 /* "t1"* "t2"* ...: each token quoted as a prefix, joined by one space. */
 enum { SEARCH_P_CAP = (SEARCH_TOKENS_MAX * (SEARCH_TOKEN_BYTES_MAX + 4)) + 1 };
 
-static void search_prefix_part(const SearchTokens *t, char p[SEARCH_P_CAP])
+/* snprintf returns the length it would have written. Adding that after a short
+   write makes the next size wrap past the buffer. */
+static int search_prefix_part(const SearchTokens *t, char p[SEARCH_P_CAP])
 {
     size_t pos = 0U;
     size_t i = 0U;
 
+    if (t->count > (size_t)SEARCH_TOKENS_MAX) {
+        return -1;
+    }
     p[0] = '\0';
     for (i = 0U; i < t->count; i++) {
-        pos += (size_t)snprintf(p + pos, SEARCH_P_CAP - pos, "%s\"%s\"*", (i > 0U) ? " " : "",
-                                t->tokens[i]);
+        size_t room = (size_t)SEARCH_P_CAP - pos;
+        int wrote = snprintf(p + pos, room, "%s\"%s\"*", (i > 0U) ? " " : "", t->tokens[i]);
+
+        if (wrote < 0 || (size_t)wrote >= room) {
+            return -1;
+        }
+        pos += (size_t)wrote;
     }
+    return 0;
 }
 
 /* E2.1 (3)-(5): (P) OR (R), or whichever is not empty. r is "" when R is
@@ -4045,11 +4056,12 @@ SearchResult store_search(Store *s, const SearchQuery *q, const char *now)
     if (sst == SEARCH_OK) {
         sst = search_q(r, q_low, end - start + 1U);
     }
-    if (sst != SEARCH_OK) {
+    /* A failed prefix build is the same internal failure. || skips the build
+       when tokens were left untouched. */
+    if (sst != SEARCH_OK || search_prefix_part(&tokens, p) != 0) {
         res.page.st = (sst == SEARCH_ERR_OOM) ? STORE_ERR_OOM : STORE_ERR_INTERNAL;
         goto cleanup;
     }
-    search_prefix_part(&tokens, p);
 
     memset(&s->last, 0, sizeof(s->last));
     if (exec_sql(s->db, "BEGIN;", err_unused, 0U, &s->last) != 0) {
