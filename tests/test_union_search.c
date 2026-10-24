@@ -164,7 +164,8 @@ TEST(union_search_parsed_raw_part_has_no_warning)
 /* E2.1: a --facet-limit outside 1..200 is a usage error. */
 TEST(union_search_facet_limit_out_of_range_is_usage)
 {
-    static const char *const values[] = {"0", "201", "x", "-1", "", "18446744073709551616"};
+    static const char *const values[] = {"0",  "201", "x", "-1", "", "18446744073709551616",
+                                         " 5", "+5"};
     char *db = given_examples();
     size_t i = 0;
 

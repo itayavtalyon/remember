@@ -1114,6 +1114,30 @@ static void given_golden_brain(const char *db)
 
 /* E4.2 golden + D9 table: plain stderr is the 0.2.0 line byte for byte, and
    --json-errors gives the D9 code with the same message, one line, empty stdout. */
+/* cmd_list's own write check: the first entry line fails on a rejecting stdout. */
+TEST(list_reports_a_failed_entry_line)
+{
+    char *db = given_search_brain();
+    const char *const argv[] = {"remember", "--db", db, "list"};
+    FILE *out = given_out_rejecting_writes();
+    char *err_text = NULL;
+    int rc = 0;
+
+    if (db == NULL || out == NULL) {
+        if (out != NULL) {
+            (void)fclose(out);
+        }
+        free(db);
+        return;
+    }
+    rc = when_run_with_out(argv, (int)(sizeof(argv) / sizeof(argv[0])), out, &err_text);
+    ASSERT_EQ_INT(rc, 1);
+    ASSERT_STREQ(err_text, "remember: failed to write output\n");
+    (void)fclose(out);
+    free(err_text);
+    free(db);
+}
+
 TEST(golden_error_lines_and_d9_codes)
 {
     static const GoldenError rows[] = {
@@ -3609,6 +3633,7 @@ TEST(cli_busy_timeout_out_of_range_is_usage)
     const char *hi[] = {"--busy-timeout", "60001", "list"};
     const char *neg[] = {"--busy-timeout", "-1", "list"};
     const char *word[] = {"--busy-timeout", "abc", "list"};
+    const char *spaced[] = {"--busy-timeout", " 9", "list"};
     const char *json[] = {"--json-errors", "--busy-timeout", "60001", "list"};
     CmdResult r;
 
@@ -3628,6 +3653,11 @@ TEST(cli_busy_timeout_out_of_range_is_usage)
     ASSERT_STREQ(r.err, k_plain);
     cmd_result_free(&r);
     r = run_remember(db, word, sizeof(word) / sizeof(word[0]), NULL);
+    ASSERT_EQ_INT(r.exit_code, 1);
+    ASSERT_STREQ(r.out, "");
+    ASSERT_STREQ(r.err, k_plain);
+    cmd_result_free(&r);
+    r = run_remember(db, spaced, sizeof(spaced) / sizeof(spaced[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 1);
     ASSERT_STREQ(r.out, "");
     ASSERT_STREQ(r.err, k_plain);
@@ -3895,14 +3925,16 @@ TEST(cli_busy_timeout_without_a_value_is_usage)
     free(db);
 }
 
-/* The one decimal parser behind --limit, --offset and --busy-timeout. A minus
-   anywhere is rejected: strtoull skips leading space and would wrap " -1" to
-   ULLONG_MAX (0.2.0 accepted --offset " -1" that way). "+5" and " 7" stay
-   accepted, as 0.2.0 did. */
+/* The one decimal parser behind --limit, --offset, --facet-limit and
+   --busy-timeout takes ASCII digits only. strtoull alone skips leading space
+   and takes a sign, so it would wrap " -1" to ULLONG_MAX (0.2.0 accepted
+   --offset " -1" that way) and read "+5" and " 7" as numbers
+   (decision:size-option-digits-only). */
 TEST(util_parse_nonneg_rejects_every_sign)
 {
-    static const char *const k_bad[] = {"",    "-1", " -1", "\t-5",
-                                        "abc", "5x", "-0",  "99999999999999999999999"};
+    static const char *const k_bad[] = {"",    "-1",  " -1", "\t-5",
+                                        "abc", "5x",  "-0",  "+5",
+                                        " 7",  "\t7", "7 ",  "99999999999999999999999"};
     unsigned long long value = 0;
     size_t i = 0;
 
@@ -3910,9 +3942,7 @@ TEST(util_parse_nonneg_rejects_every_sign)
     ASSERT_TRUE(value == 0ULL);
     ASSERT_EQ_INT(util_parse_nonneg("60000", &value), 0);
     ASSERT_TRUE(value == 60000ULL);
-    ASSERT_EQ_INT(util_parse_nonneg("+5", &value), 0);
-    ASSERT_TRUE(value == 5ULL);
-    ASSERT_EQ_INT(util_parse_nonneg(" 7", &value), 0);
+    ASSERT_EQ_INT(util_parse_nonneg("007", &value), 0);
     ASSERT_TRUE(value == 7ULL);
     for (i = 0; i < sizeof(k_bad) / sizeof(k_bad[0]); i++) {
         ASSERT_EQ_INT(util_parse_nonneg(k_bad[i], &value), -1);
@@ -3996,6 +4026,7 @@ void register_errors_tests(void)
     RUN_TEST(run_keeps_one_error_line_when_the_command_failed);
     RUN_TEST(search_reports_a_failed_facet_line);
     RUN_TEST(search_reports_a_failed_entry_line_without_facets);
+    RUN_TEST(list_reports_a_failed_entry_line);
     RUN_TEST(golden_error_lines_and_d9_codes);
     RUN_TEST(sqlite_busy_reports_cause_fix_and_detail);
     RUN_TEST(sqlite_cannot_open_carries_errno_reason_and_absolute_path);

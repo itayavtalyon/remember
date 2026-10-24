@@ -240,6 +240,21 @@ TEST(list_limit_accepts_the_hard_cap)
     free(db);
 }
 
+/* --facet-limit is a search option; list must not take it silently. */
+TEST(list_rejects_facet_limit)
+{
+    char *db = make_temp_db_path();
+    const char *args[] = {"list", "--facet-limit", "5"};
+    CmdResult r;
+    ASSERT_TRUE(db != NULL);
+    r = run_remember(db, args, sizeof(args) / sizeof(args[0]), NULL);
+    ASSERT_EQ_INT(r.exit_code, 1);
+    ASSERT_STREQ(r.out, "");
+    ASSERT_STREQ(r.err, "remember: unknown option '--facet-limit'\n");
+    cmd_result_free(&r);
+    free(db);
+}
+
 TEST(list_limit_over_hard_cap_rejected)
 {
     char *db = make_temp_db_path();
@@ -497,6 +512,7 @@ void register_get_list_delete_tests(void)
     RUN_TEST(list_limit_zero_rejected);
     RUN_TEST(list_limit_without_a_value_is_usage);
     RUN_TEST(list_limit_accepts_the_hard_cap);
+    RUN_TEST(list_rejects_facet_limit);
     RUN_TEST(list_limit_over_hard_cap_rejected);
     RUN_TEST(list_too_many_tag_filters_rejected);
     RUN_TEST(list_filter_tag_with_quote_is_parameterized);

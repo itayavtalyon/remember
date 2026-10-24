@@ -1024,3 +1024,61 @@ Lenses: `pref:review-lenses` 1–9, comprehensive, ponytail, `docs/STEP_REVIEW_C
 - **finding, pre-existing:** `util_parse_nonneg` accepts a leading space and `+` (above).
 
 Pragmatic write gate: DRY PASS (one size-option parser, one envelope head/tail/guard, one masked writer, one plain-lead table). Easy-to-replace PASS (the CLI sees `SearchResult` only; formats live in `output.c`; the warning words live in `diag.c`). Orthogonal PASS (`list` output bytes unchanged: `output_list_envelope` tests and the list suites pass as before; `--facet-limit` is not a list option).
+
+### 2026-10-24 — second-opinion deep review (stage 5)
+
+Ref `a89a22e` (range `0790950..a89a22e`; `4743b0e` merges `origin/main`, docs and plans only; `12c4828` merges `fix/stdout-flush-fail-fast`, made from another session). Two reviewer sessions: the first read the code, probed, and ran a mutant sample, then stopped; this one reused those results and finished. Decisions loaded and checked in the code: `plan18-human-facet-line` (`write_facet_line_end`: N = total − shown; key only; `output_text_human`), `plan18-facets-independent` (blank query still gets the empty-facet envelope), `plan18-warning-wired-stage3` (the warning prints after the output), `plan18c-mask-c1` (facet lines mask C1). Every earlier review commit (`0790950`, `54f1047`, `17f01e6`, `a3f27d6`, `e38eca8`, …) is an ancestor of the ref.
+
+**Verdict: stage 5 is done. No open blocking item.** Four grills, answered and filed.
+
+Findings:
+
+- **important (fixed): `list` accepting `--facet-limit` had no test.** The coder probed `list --facet-limit 5` → `unknown option` and wrote it in the notes, but no test held it. Mutant Y7 (the shared `list_handle_opt` takes `--facet-limit` and drops it) survived the suite. Added `test_get_list_delete.c` `list_rejects_facet_limit` (exit 1, empty stdout, stderr exactly `remember: unknown option '--facet-limit'`); Y7 now fails it.
+- **important (fixed, round 13.2): `cmd_list`'s "failed to write output" had no test.** The notes filed it as "pre-existing, left for a list change", but a user reaches it (`remember list > /dev/full`), and the search twin of the line got a test this stage. Added `test_errors.c` `list_reports_a_failed_entry_line` (rejecting stdout → exit 1, one `remember: failed to write output`). Mutant Z3 (the message dropped, the failure kept) fails it. Dropping the whole check instead is equivalent through `remember_run`'s final `ferror` check (the coder's C7 argument).
+- **grill → fixed (`decision:size-option-digits-only`, asked twice).** `util_parse_nonneg` accepted a leading space and `+` (`strtoull`), so `--limit ' 5'`, `--offset +5`, `--busy-timeout ' 9'` and `--facet-limit ' 5'` parsed while `'5 '` did not. The second ask named plan 16's "kept for 0.2.0 compatibility"; Itay chose digits only. The guard is now `isdigit((unsigned char)raw[0])`, which also stops `strtoull` from skipping space or taking a sign, so the old "minus anywhere" check and the `end == raw` clause (unreachable after a leading digit) are gone. Tests: `util_parse_nonneg_rejects_every_sign` (`+5`, ` 7`, `\t7`, `7 ` rejected; `007` accepted), `cli_busy_timeout_out_of_range_is_usage` (` 9`), `union_search_facet_limit_out_of_range_is_usage` (` 5`, `+5`). The only callers are those four argv flags; no stored value goes through the parser. Stage 6 adds a What's New line (a leading space or `+` in a number option is now usage).
+- **grill (answered): keep `12c4828`** (`decision:plan18-keep-stdout-flush-merge`). The flush fix ships with plan 18. Its review: `search`, `list`, `--json get` on a closed pipe exit 1 `failed to write output`; a search with no output stays 0.
+- **grill (answered): merge `fix/harness-fail-loud`** (`95346f8`, tests only; `decision:plan18-merge-harness-fail-loud`). Merged in the fix tree before the gate, so the gate below covers it.
+- **grill (answered): push after a green gate** (`decision:plan18-push-after-green-gate`). Docker networking had recovered: `apt-get update && apt-cache show llvm` in `ubuntu:24.04` passed, and both gates ran `ci-linux.sh` unmodified.
+- **nit (fixed, simplify):** `output_search_envelope`'s two guard `if`s are one (`!page_args_ok(...) || !facets_ok(res)`), −3 lines, the same shape as `output_search_facets_human`'s guard.
+- **praise:** one size-option parser and one envelope head, tail and guard for list and search; the plain-lead table keeps E2.3's words in `diag.c`; the coder grilled the human line before writing it, reported the foreign merge instead of hiding it, and backed C12 with an 800-run differential.
+
+Verification by running (the fix-tree ASan `remember`, copied to the scratchpad):
+
+- Facets: 13 keyed matches; `search boo --facet-limit 3 --limit 1` prints three keys then `, … and 10 more` (3 + 10 = total 13); without `--facet-limit`, ten then `, … and 3 more`; JSON `keys.total` 13 with 3 items; `--limit 1` leaves both facets unchanged.
+- Hostile input: blank and `'   '` exit 0, no output; `--json '   ' --facet-limit 1` the empty envelope; `boo\n` matches (the store trims); `\xff` usage (D27); 300 bytes and 10,000 tokens exit 0 (0.39 s); ESC in the query → the warning masks it; `--db /nonexistent/x.db --no-create` → `cannot open`, exit 1; `--facet-limit` missing / repeated (last wins) / after `--` (searched as text).
+- Hostile stored row (`sqlite3` on a copy; the key's bytes checked with `hex(key)` first, round 14.2): `boo:evil` ESC `[2J` U+009B `x` prints `keys: boo:evil?[2J?x`.
+- Grammar fuzz (round 13.3 style): 1,000 queries built from FTS5 pieces (column filters, `{cols}:`, `-col:`, `NEAR`, `^`, `*`, quotes, parentheses, AND/OR/NOT, Hebrew, emoji, edge whitespace), each with a random `--facet-limit`, plain and `--json`, on that hostile brain: 2,000 runs, all exit 0, no sanitizer report, every JSON object parses with the E2.6 member order and `items ≤ min(facet-limit, total)`, and no control byte or C1 in human stdout.
+- Size delta re-run (Release, `/usr/bin/clang`, clean worktrees of `12c4828` and `a89a22e`): `remember` 1,904,152 → 1,904,392 B (+240), `libremember_core.a` 285,760 → 290,272 B (+4,512), the coder's numbers.
+
+Mutants (one clause each, ASan, `remember_store_tests` plus the CLI suites; restored in a `finally`, each rebuilt):
+
+| Mutant | Result |
+|---|---|
+| Coder sample O1 key raw, H3 `>=`, H4 keys N from count, C1 default 49, D1 raw prefix lost (first session) | killed by the tests the notes name |
+| Y4 entries before the facets in the JSON envelope (first session) | killed (the envelope tests) |
+| Y8 flush check skipped after a failed command (first session) | killed |
+| Y7 `list` takes `--facet-limit` and drops it | survived → killed by `list_rejects_facet_limit` |
+| Y16 human entries before the facet lines | killed (`union_search_human_prints_the_facets_before_entries`) |
+| Y20 human cap from `total` instead of the items held | killed (ASan stack overflow in `test_output.c`) |
+| Y21 search envelope skips `facets_ok` | killed (UBSan NULL member access in the guard test) |
+| Z1 digit guard back to "first byte not `-`" | killed (4 tests) |
+| Z2 digit guard back to "minus anywhere" | killed (3 tests) |
+| Z3 `cmd_list` write failure without its message | survived → killed by `list_reports_a_failed_entry_line` |
+| `end == raw` dropped after the digit guard | equivalent (a leading digit is always consumed); the clause is deleted |
+
+Zero-hit lines read in the touched code (baseline profile): `cmd_query.c` the `--tag` push OOM, `load_page_neighbors` OOM and store failure, both `utc_now` failures (clock read), `cmd_list`'s store and neighbor failures (store fault injection only), and line 560 (now tested, above). `diag.c`: stderr write failures only. `util.c`: OOM and `getcwd` failures. `output.c`: none (678 sides, 0 missed).
+
+Simplify pass: applied the guard merge and the dead `end == raw`. Considered and kept: one facet writer per format with a callback (the coder's decline holds: two typed loops read straight); `k_warning_plain_prefix` as a ternary on the one special code (the table states the rule per code and fails `every_warning_uses_the_warning_prefix` if a new code has no entry); `facet_shown`'s `<` vs `<=` (equivalent at 10, kept as written).
+
+Coder rating: **8.5 / 10.** Strengths: a grill before the human line, 49 one-clause mutants with reds named and three equivalents argued (C12 by an 800-run differential), ROUND 14 applied (padded raw input, fixture steps asserted), hostile stored rows probed through both formats, the size delta exact, and the foreign merge reported, not hidden. Misses: a negative contract it probed (`list --facet-limit`) was left as a note instead of a test, so Y7 survived; `cmd_list`'s write-failure line was called pre-existing while its search twin got a test (round 13.2); the `+5` / leading-space asymmetry was reported but not grilled, though it changes what a new flag accepts.
+
+Instructions for the coder:
+
+1. A contract you prove by hand in the notes (a probe) gets a test in the same stage; a probe alone does not stop a regression.
+2. When a new option goes through a parser that several commands share, test that each command that must not take it still rejects it.
+3. When you test a failure path in one command, test the same path in every sibling command with the same shape.
+4. When a new input inherits an odd rule from shared code (a parser that takes `+5` and ` 5` but not `5 `), grill the rule before the new input ships with it.
+
+Gate (2026-10-24; clang, `REMEMBER_ENABLE_SANITIZERS=ON`, `REMEMBER_TEST_VFS=ON`, configured twice, cache flags checked): baseline `a89a22e` and the fix tree (`a89a22e` + the `95346f8` merge + these fixes) each ran build, ctest 5/5, `lint-all.sh` LINT OK, `check-coverage.sh` (functions and effective lines 100%; search_terms 176, unicode 80, normalize 268, output 678 branch sides, 0 missed), `leaks-macos` PASS, and `ci-linux.sh` unmodified (Docker `aarch64`, container apt healthy again: ctest 5/5 as an unprivileged user, iwyu PASS, scan-build PASS, LINT OK) → `GATE-ALL-GREEN` on both. ctest took 97 s and 80 s (machine load back to normal). This plan file was written while the fix-tree gate ran; nothing else changed after it (Markdown only). Standard filed: `standard:coding` ROUND 15.
+
+Stage 6 inherits, in addition to the list above: a What's New line that a number option (`--limit`, `--offset`, `--busy-timeout`, `--facet-limit`) now takes ASCII digits only (`decision:size-option-digits-only`).

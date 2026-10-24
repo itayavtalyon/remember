@@ -412,10 +412,7 @@ int output_search_envelope(FILE *out, const SearchResult *res, size_t offset, si
         return -1;
     }
     page = &res->page;
-    if (!page_args_ok(out, now, page->entries, page->count, links, nlinks)) {
-        return -1;
-    }
-    if (!facets_ok(res)) {
+    if (!page_args_ok(out, now, page->entries, page->count, links, nlinks) || !facets_ok(res)) {
         return -1;
     }
     if (write_page_head(out, offset, limit, page->count, page->total) != 0) {
