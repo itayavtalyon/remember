@@ -669,6 +669,116 @@ Gate on this tree (2026-10-23), after the last code edit (no file under `src`, `
 
 Stage 5 inherits: set `facet_limit` from `--facet-limit` (default 50); print `keys`/`tags` in the envelope and the human lines with every field escaped or masked (above); the double trim of QUERY.
 
+### 2026-10-24 — stage 5 (CLI + output: `--facet-limit`, envelope, human facet lines, blank query, E2.3 text, one trim owner)
+
+Start: `git fetch`; the branch equalled `origin` (`0790950`, the stage 4 second review, in force). `origin/main` (`59e030d`, plans 19–26 and design logs 007–010) was merged (`4743b0e`). The one conflict was `implementation-plans/INDEX.md`: main's rows 18–26 kept, this branch's 18b/18c rows kept, and main's sentence "They are not files on this branch. Do not add them here" dropped, because on this branch they are files. `standard:coding` ROUND 14 and the stage 4 review's two instructions loaded. Build configured with the cached `/usr/bin/clang`; `ctest -N` lists 5; the baseline `ctest` was 5/5 before any edit.
+
+**Not mine, reported:** one minute after that merge, `fix/stdout-flush-fail-fast` (`4895a60`, "Report a failed stdout flush instead of exiting 0") was merged into this branch as `12c4828` from another session (reflog `2026-10-23 15:11:40`). The status card said to keep that fix local. It is local only (not pushed). Every gate in this stage ran with it in the tree. Itay decides whether it stays on this branch.
+
+Grill, answered and filed (`decision:plan18-human-facet-line`): E2.7's `… and N more` uses N = facet **total** − printed (not items − printed), so `--facet-limit` never changes the human count; the join is `, … and N more` (comma, space, U+2026); the key line shows the key only, masked. A line prints only when its facet has items (with the CLI's `--facet-limit ≥ 1` that is total > 0).
+
+Not grilled, because 006 states it: the E2.3 plain text. E2.3 writes plain `raw query ignored: <fts message>` and JSON `<fts message>`; the E4.6 amendment changed only the prefix (`note:` → `warning:`). So plain is `remember: warning: raw query ignored: <msg>`, JSON unchanged. `diag.c` holds one plain lead per warning code (`k_warning_plain_prefix`); `deprecated_flag` and `synced_folder` keep `warning: `.
+
+Design:
+
+- `cmd_query.c`: `--facet-limit` is parsed in `parse_search_args` only, before the shared `list_handle_opt`, so `list --facet-limit 5` stays `unknown option '--facet-limit'` (probe). One `take_size_option` (`SizeOption`: missing sentence, invalid sentence, max) parses `--facet-limit` and `--limit`; `list_take_limit` is gone. `SearchQuery.facet_limit` = the parsed value, default 50.
+- Trim owner (stage 3 review nit, round 13.1): `trim_query_copy` is deleted and `SearchParse` holds the argv token. The CLI checks only D27 and passes QUERY as given; the store owns E2.1's trim and blank rule (D13). The store side is pinned by `store_search_trims_the_query_before_ranking` and `store_search_blank_query_is_empty_without_warning`; `search_query_trims_outer_whitespace` (CLI) now proves only that untrimmed input reaches the store and still matches.
+- `output.c`: `write_page_head` / `write_page_entries` are the shared head and tail of `output_list_envelope` and the new `output_search_envelope` (`keys` then `tags` between `total` and `entries`, E2.6). `page_args_ok` is the one argument guard for both; `facets_ok` checks each facet's items against its count. Every facet string goes through `output_json_string` (key, sync_id, label, source, updated_at, tag). `output_search_facets_human` writes the E2.7 lines through `output_text_human` (C0 except tab, DEL, C1 → `?`, `decision:plan18c-mask-c1`).
+- `cmd_search` → `emit_search`: JSON envelope, or facet lines then the entry lines. The warning still prints after the output (stage 3).
+
+Ownership: `cmd_search` keeps the whole `SearchResult` and frees it with `store_search_result_free` on every path (stage 4); the output functions only read it.
+
+0.2.0 (and plan 16/17) tests whose behavior changed:
+
+| Test | Was | Now | Why |
+|---|---|---|---|
+| `test_search.c` `search_empty_query_rejected` | exit 1 `empty search query` | `search_empty_query_is_an_empty_result`: exit 0, empty stderr, the empty envelope with empty facets, on a seeded brain | E2.1 (4) |
+| `test_search.c` `search_whitespace_only_query_rejected` | exit 1 `empty search query` | `search_whitespace_only_query_is_an_empty_result` (same) | E2.1 (4) |
+| `test_coverage_edges.c` `search_empty_query_stderr` | exit 1 `empty search query` | deleted: the path is gone, the two rows above pin the new contract | E2.1 (4) |
+| `test_search.c` `search_query_trims_outer_whitespace` | comment: CLI trim coverage | same assert; comment says the store trims | one trim owner |
+| `test_verification_edges.c` V27 `search_unbalanced_quote_warns` | `remember: warning: unterminated string` | `remember: warning: raw query ignored: unterminated string` | E2.3 |
+| `test_errors.c` `plain_warning_is_remember_warning` | `remember: warning: x` for `raw_query_ignored` | `remember: warning: raw query ignored: x` | E2.3 |
+| `test_list_dates.c` `search_crossed_bounds_are_empty` | `…"total":0,"entries":[]}` | `…"total":0,"keys":{"total":0,"items":[]},"tags":{"total":0,"items":[]},"entries":[]}` | E2.6 |
+
+Ranking needed no 0.2.0 test change in this stage: stage 3 moved the order tests to E2.4, and no CLI test asserts a bm25-only order.
+
+New tests:
+
+- `test_output.c` (pure, under ASan, branch-gated TU): `output_search_envelope_writes_empty_facets`, `…_writes_the_facet_items`, `…_escapes_every_facet_field`, `…_rejects_missing_arguments`, `…_reports_every_failed_write`; `output_search_facets_human_lists_keys_then_tags`, `…_caps_at_ten_and_counts_the_rest_of_the_total`, `…_shows_ten_without_more`, `…_says_more_when_the_total_passes_the_items`, `…_omits_an_empty_keys_line`, `…_omits_an_empty_tags_line`, `…_masks_keys_and_tags`, `…_rejects_missing_arguments`, `…_reports_every_failed_write`. Helpers `given_search_facets`, `given_key_items`.
+- `test_union_search.c` (CLI wiring only, round 3.1): `union_search_facet_limit_out_of_range_is_usage` (`0`, `201`, `x`, `-1`, empty, 2^64), `…_without_a_value_is_usage`, `…_defaults_to_50`, `…_accepts_both_bounds` (`1` → 1 item, `200` → 60), `union_search_json_carries_the_facets_before_entries` (Example 1), `union_search_human_prints_the_facets_before_entries`, `union_search_example_2_has_facets_and_the_plain_warning`, `union_search_example_4_filter_scopes_the_facets`.
+- `test_errors.c` `search_reports_a_failed_facet_line`, `search_reports_a_failed_entry_line_without_facets` (zero-hit lines below; helper `given_search_brain`).
+- `test_get_list_delete.c` `list_limit_without_a_value_is_usage` (mutant C10) and `list_limit_accepts_the_hard_cap` (mutant C9): the `--limit` missing sentence and the upper bound had no test before the shared parser.
+
+TDD red runs: `--facet-limit 0` (`unknown option`), the envelope (compile-red: no `output_search_envelope`), the facet items (empty arrays), the argument guards (ASan SEGV on a NULL stream), the human lines (link-red), the human guards (SEGV), Example 1 CLI JSON (no `keys`), V27 plain text (old text), the two blank-query rows (`empty search query`). Tests that passed on arrival (cap and "more" rules, written with the human writer; masking; both bounds; default 50; Examples 2 and 4; the missing value) are proven by the mutants below.
+
+Mutations (`scratchpad/mutate.py`, `build-mut`: `/usr/bin/clang`, ASan/UBSan, VFS on; `remember_store_tests` plus `remember_tests --only search,union_search,errors,facade,verification_search,coverage_edges,verification_gld,get_list_delete,list_dates,verification_edges,cli_global,tags,ttl,device`; source restored and rebuilt after each). 49 one-clause mutants. Killed, with the red tests:
+
+- JSON: O1 key raw, O2b label not the item's, O6 tag raw → `output_search_envelope_escapes_every_facet_field` (O2b also the Example 1 CLI test). O2 `updated_at` dropped, O3/O4 total → count, O5 tag count 0, O7/O8 no comma after the first item → `…_writes_the_facet_items` (O4 also `union_search_facet_limit_defaults_to_50`). O9 tags before keys → the envelope tests, `search_crossed_bounds_are_empty`, both blank-query rows. O10 keys facet dropped: compile kill (`-Wunused-function`); the meaning is pinned by O9's reds and the items test. O11/O12 each `facets_ok` side, O13 `page_args_ok` skipped, O14 `facets_ok` skipped, O15 the list envelope's entries guard: UBSan/ASan in the guard tests (each mutant removes the guard, so the guarded NULL is read: the meaning).
+- Human: H1 cap 11, H2 cap ignored → `…_caps_at_ten_…`. H3 `>=` (writes "and 0 more") → six tests incl. `…_shows_ten_without_more`. H4 keys N from count → `…_caps_at_ten_…`, `…_says_more_…`; H5 tags N from count → `…_says_more_…`. H6/H7 unmasked → `…_masks_keys_and_tags`. H8 `(0)` → five tests. H9/H10 an empty line printed → the omit tests and two CLI human tests (`search_ignores_sort_for_order`, `search_since_filters_updated_at`). H11/H12 separator late → the line tests. H13/H14 a guard dropped: ASan/UBSan in `…_rejects_missing_arguments`. H15 tags line first → four tests incl. the CLI human test.
+- CLI: C1 default 49 → `…_defaults_to_50`. C2 max 199 → `…_accepts_both_bounds`; C2b max 201 → `…_out_of_range_is_usage`. C3 zero accepted → `…_out_of_range_is_usage`, `list_limit_zero_rejected`, `golden_error_lines_and_d9_codes`; C3b one rejected → `…_accepts_both_bounds`, `list_offset_pages`, `search_json_paging_fields`. C4 limit not passed → `…_accepts_both_bounds`. C5 list envelope for search → the blank rows, Examples 2 and 4, crossed bounds. C6 human facets skipped → `union_search_human_prints_the_facets_before_entries`. C8 sentences swapped → `…_without_a_value_is_usage`. C9 `--limit` max 999: the first run named only `cli_busy_timeout_zero_is_busy_immediately`, a timing test (`waited < 250` ms, no `--limit`) that failed from load during the mutation run; in fact no test accepted `--limit 1000`. Added `list_limit_accepts_the_hard_cap`; the rerun named it, and the busy test passed. C10 `--limit` missing sentence **survived** → `list_limit_without_a_value_is_usage` added; rerun killed. C11 `--facet-limit` after `--` read as a flag → three facet-limit tests.
+- Warning: D1 raw prefix lost → `plain_warning_is_remember_warning`, V27, Example 2. D2/D3 the other codes given the raw words → `every_warning_uses_the_warning_prefix` and two deprecation tests.
+
+Equivalent mutants, kept on purpose:
+
+- C3c `parse_size_token` failure ignored: `util_parse_nonneg` writes `*out` only on success, and `value` starts at 0, so every parse failure is then rejected by `value == 0U` with the same sentence. Kept: the `== 0U` clause would otherwise carry a parse rule it does not state.
+- C7 a failed facet write ignored in `emit_search`: a failed write leaves the stream's error flag set, so the entry writes fail too (`failed to write output`), and with no entries `remember_run`'s final `ferror` check (the merged `4895a60`) reports it. Same exit and text either way.
+- C12 the CLI trims leading spaces again: the store trims the whole ASCII set. Differential (round 13.3, `scratchpad/diff_c12.sh`): base and mutant binaries over 400 seeded queries (pads of space, TAB, LF, VT, FF, CR around Example terms, FTS syntax and `-x`), each plain and `--json`, against the Examples brain plus a key ` x`: 800 runs, 0 byte differences in stdout, stderr and exit code.
+
+Probes beyond the plan (`build/remember`, ASan, the Examples brain):
+
+- `--facet-limit` values: ` 5`, `+5`, `05`, `200` accepted; `201`, `1e2`, `5 `, empty rejected with the E2.1 sentence. The leading space and `+` come from `strtoull` in `util_parse_nonneg`, the same as `--limit` today (pre-existing; see below). A repeated `--facet-limit` keeps the last, like `--limit`. `search -- --facet-limit` searches for the text (exit 0, warning `fts5: syntax error near "-"`). `list --facet-limit 5` → `unknown option '--facet-limit'`. `--db /nonexistent/d/x.db --no-create search boo` → `cannot open`, exit 1.
+- Examples by hand: Ex1 human `keys: recs:books` / `tags: type:books (1)` then both entry rows; Ex2 `keys: recs:books`, no tags line, plain `remember: warning: raw query ignored: no such column: recs`; Ex3 three rows, no facet lines; Ex4 the dentist row only, no facet lines; Ex5 exit 0, one JSON warning. Blank `''` and `'   '`: exit 0, no output; `--json ''` the empty envelope.
+- Echoed values (round 3.3) in the new warning text: `a\nb:c` → `…raw query ignored: no such column: b`; ESC → plain `?`, JSON `\u001b`; a 300-byte column name → one 355-byte line.
+- Hostile stored facet text (round 12.1/12.2, a hand-edited brain): a key set by `sqlite3` to `evil:` ESC `[2J` U+00C2 U+009B prints `keys: evil:?[2JÂ?` (ESC and the C1 masked, the printable `Â` kept); a title `# t` ESC `[31mred` U+009B `x` gives JSON label `t\u001b[31mred` + raw U+009B + `x` (C1 is legal JSON, `decision:plan18c-mask-c1`). Raw writers of facet data: `grep` of `output.c` finds every facet string written through `output_json_string` or `output_text_human`; counts are `%zu` numbers.
+
+Zero-hit lines in the touched code (round 9.3 / 13.2), from `llvm-cov show build-cov/remember -object build-cov/remember_store_tests -object build-cov/remember_tests -instr-profile=build-cov/prof/merged.profdata <file> | awk -F'|' '$2 ~ /^ *0$/'` after the first full coverage run:
+
+- `src/output.c`: none.
+- `src/cmd_query.c`: three were search output failures a user can reach (`remember search boo > /dev/full`): the facet line in `emit_search`, the entry line in `emit_entry_page` (human), and `failed to write output` in `cmd_search`. Each got a test in `test_errors.c` on the rejecting stdout that came with `4895a60`: `search_reports_a_failed_facet_line` (`boo`: the keys line is the first write) and `search_reports_a_failed_entry_line_without_facets` (`dentist`: no facet matches, so the first write is an entry line); both exit 1 with one `remember: failed to write output`. The rest are not this stage's: the `--tag` push OOM, `load_page_neighbors` OOM and store failure (store fault injection only), `utc_now` failure (clock read), and `cmd_list`'s same three lines (list output failure; pre-existing, left for a list change).
+- `src/diag.c`: only stderr write failures in `write_notice` and the SQLite emitter, unchanged by this stage (the table it gained has no branch).
+
+Lint on the first full run: cppcheck asked for `const FILE *` in `page_args_ok` and a `const` names table in a test, and flagged four writes through `keys[0]` / `tags[0]` that the test reads through `res.keys.items` (cppcheck does not follow the alias). The tests now write through `res.keys.items[0]` / `res.tags.items[0]`; no suppression.
+
+Machine load: this run's `ctest` took 3,681 s (stage 4: about 100 s) at a load average of 338 with no CPU hog (`ps -Ao pcpu -r`); the repo sits in iCloud Drive and `bird` was syncing. `cli_busy_timeout_500_reports_busy_within_half_a_second` and `cli_busy_timeout_zero_is_busy_immediately` (wall-clock bounds) each failed once under that load and passed on rerun.
+
+Simplify pass:
+
+- Applied: one `take_size_option` for `--limit` and `--facet-limit`, and `list_take_limit` inlined into its one call (`cmd_query.c` is 12 lines shorter than before the stage, `git diff --stat`: +62 −74, with `--facet-limit` added and `trim_query_copy` removed).
+- Applied: one envelope head, one entries tail and one argument guard for the list and search envelopes, so the search envelope adds only the two facet writers instead of a second copy of the list envelope.
+- Applied (tests): `union_search_bin_flag_scopes_the_keys` deleted: the CLI's bin flag fills the same `ListQuery` the page uses, and `store_search_bin_scopes_the_keys` (stage 4, mutant F6b) proves the facet side. `search_empty_query_stderr` deleted with its path.
+- Declined: one facet writer for keys and tags in each format (it would save one of the two loops per format). The item types differ (a key item has five strings; a tag item a string and a count), so one loop needs a callback over `const void *` items; two short typed loops read straight.
+- Declined: dropping the `parse_size_token` check (C3c, −1 clause): equivalent only through `util_parse_nonneg`'s write-on-success rule.
+- Tests: 14 `test_output.c` tests prove the formats; the 8 CLI tests prove only that the flag, the envelope, the lines and the warning reach the process.
+
+Pre-existing (not this stage, round 4.2):
+
+- `util_parse_nonneg` accepts a leading space and `+` (`strtoull`): `--limit ' 5'`, `--offset +5`, `--busy-timeout ' 9'` and now `--facet-limit ' 5'` all parse. A trailing space is rejected. Harmless, but the asymmetry is real; not changed here.
+
+Handover items: Release (`-DCMAKE_BUILD_TYPE=Release`, `/usr/bin/clang`) against `12c4828` (this stage's base, with the stdout fix): `remember` 1,904,152 → 1,904,392 B (+240 B), `libremember_core.a` 285,760 → 290,272 B (+4,512 B). No new library or build step, so a non-CMake consumer links the same four archives as in stage 3.
+
+Must-pass rows this stage proves at the CLI (the store rows are stage 3 and 4):
+
+| Plan row | Test |
+|---|---|
+| Example 1 `--json` keys/tags | `union_search_json_carries_the_facets_before_entries` |
+| Example 2 keys [`recs:books`], tags [], warning | `union_search_example_2_has_facets_and_the_plain_warning` |
+| Example 4 entries, keys [], tags [] | `union_search_example_4_filter_scopes_the_facets` |
+| Whitespace-only → exit 0, empty, facets empty, no warning | `search_whitespace_only_query_is_an_empty_result` (and `search_empty_query_is_an_empty_result`) |
+| 60 tags: 50 items; `--facet-limit 200` → 60; `0`/`201`/`x` → usage | `union_search_facet_limit_defaults_to_50`, `…_accepts_both_bounds`, `…_out_of_range_is_usage` |
+| JSON member order `version, offset, limit, count, total, keys, tags, entries` | `output_search_envelope_writes_empty_facets`, `…_writes_the_facet_items` |
+| Human `keys:` / `tags: t (n)` before entries, max 10, `… and N more`, absent when empty | `output_search_facets_human_*` (7 tests), `union_search_human_prints_the_facets_before_entries` |
+| Bins and filters scope entries and facets | `union_search_example_4_filter_scopes_the_facets` (CLI); bins at the store (`store_search_bin_scopes_the_keys`) |
+
+Gate on this tree (2026-10-24). After the full run below, one comment line changed in `tests/test_output.c` (the `cppcheck-suppress` with its reason); the store suite, `lint-all.sh` and `ci-linux.sh` ran again on the final tree.
+
+- `ctest --test-dir build` (ASan/UBSan, `REMEMBER_TEST_VFS=ON`, `ctest -N` = 5): 5/5 (3,390 s under the load above). `remember_store_tests`: 455 tests, 0 failed (also on the final tree).
+- `./scripts/lint-all.sh` (final tree): LINT OK (format, four boundaries, cppcheck src + tests, `gcc -fanalyzer`, clang-tidy).
+- `./scripts/check-coverage.sh`: functions 100%, effective lines 100%; `search_terms.c` 176, `unicode.c` 80, `normalize.c` 268, `output.c` 678 branch sides, 0 missed.
+- `cmake --build build --target leaks-macos`: PASS.
+- `./scripts/ci-linux.sh` (final tree): Docker's resolver answered nothing for `ports.ubuntu.com` (`getent hosts` empty in the container, with and without `--dns 1.1.1.1`; the host fetched the mirror, HTTP 200). The script's own inner command, `docker run --rm --add-host ports.ubuntu.com:91.189.91.104 -v "$PWD":/src:rw -w /src -e REMEMBER_CI_LINUX_INNER=1 ubuntu:24.04 bash /src/scripts/ci-linux.sh --inner --install`, on the unchanged tree: 5/5 as an unprivileged user, **iwyu PASS**, scan-build PASS, LINT OK, `ci-linux: OK`.
+
+Stage 6 inherits: help (`--facet-limit`, blank query success, the warning text), SKILL.md, README What's New (E2.8 verbatim + the E2.6 order exception + blank search succeeds), QUALITY.md, COVERAGE.md, gate-suites.
+
 ## Review Notes
 
 ### 2026-10-20 — in-session deep review (stage 1)
@@ -901,3 +1011,16 @@ Instructions for the coder:
 2. After a fixture step that can silently do nothing (an external tool, a helper that returns NULL for both "no row" and "not run"), assert its effect before the test relies on it.
 
 Gate: baseline `62ab14c` and the fix tree (2026-10-23; clang, `REMEMBER_ENABLE_SANITIZERS=ON`, `REMEMBER_TEST_VFS=ON`, configured twice, cache flags checked): build, ctest, `lint-all.sh`, `check-coverage.sh` (search_terms 176, unicode 80, normalize 268, output 572 sides, 0 missed), `leaks-macos`, `ci-linux.sh` → `GATE-ALL-GREEN` on both. After the fix-tree gate only this file changed (Markdown). Standard filed: `standard:coding` ROUND 14.
+
+### 2026-10-24 — in-session deep review (stage 5)
+
+Lenses: `pref:review-lenses` 1–9, comprehensive, ponytail, `docs/STEP_REVIEW_CHECKLIST.md`. Bugbot is not installed. ROUND 14 applied: the derived input this stage feeds (QUERY to the store) is tested raw and padded (`search_query_trims_outer_whitespace`, the blank rows, the C12 differential); the fixture steps (`given_add`, `given_search_brain`) assert their exit code before the test relies on them.
+
+- **important, fixed.** Two survivors: C10 (the `--limit` missing sentence had no test) and C9 (no test accepted `--limit 1000`; its first "kill" was a wall-clock test failing under load). Both got tests; reruns name them.
+- **important, fixed (round 13.2).** Three search output-failure lines a user can reach had no test; `test_errors.c` now drives them through a rejecting stdout.
+- **nit, fixed.** cppcheck `constParameterPointer` / `constVariable` / four alias false positives; fixed in code, one justified suppression.
+- **grill ×1**, answered: `decision:plan18-human-facet-line`.
+- **finding, not mine:** `fix/stdout-flush-fail-fast` was merged into this branch (`12c4828`) from another session against the status card's "keep it local". Reported to Itay; not pushed.
+- **finding, pre-existing:** `util_parse_nonneg` accepts a leading space and `+` (above).
+
+Pragmatic write gate: DRY PASS (one size-option parser, one envelope head/tail/guard, one masked writer, one plain-lead table). Easy-to-replace PASS (the CLI sees `SearchResult` only; formats live in `output.c`; the warning words live in `diag.c`). Orthogonal PASS (`list` output bytes unchanged: `output_list_envelope` tests and the list suites pass as before; `--facet-limit` is not a list option).

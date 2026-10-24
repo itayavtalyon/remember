@@ -341,6 +341,8 @@ TEST(every_error_code_json_message_matches_the_plain_line)
     }
 }
 
+/* E2.3: the plain raw_query_ignored line names what was ignored; the JSON
+   message stays the bare FTS text (union_search_unparseable_raw_part_is_a_json_warning). */
 TEST(plain_warning_is_remember_warning)
 {
     char *buf = NULL;
@@ -354,7 +356,7 @@ TEST(plain_warning_is_remember_warning)
     app_set_streams((AppStreams){.out = NULL, .err = err});
     ASSERT_EQ_INT(diag_warning_as(false, DIAG_WARN_RAW_QUERY_IGNORED, "x"), 0);
     ASSERT_EQ_INT(fflush(err), 0);
-    ASSERT_STREQ(buf, "remember: warning: x\n");
+    ASSERT_STREQ(buf, "remember: warning: raw query ignored: x\n");
     app_set_streams((AppStreams){.out = NULL, .err = NULL});
     ASSERT_EQ_INT(fclose(err), 0);
     free(buf);
@@ -909,6 +911,76 @@ TEST(run_keeps_one_error_line_when_the_command_failed)
 {
     char *db = make_temp_db_path();
     const char *const argv[] = {"remember", "--db", db, "add", "hello"};
+    FILE *out = given_out_rejecting_writes();
+    char *err_text = NULL;
+    int rc = 0;
+
+    if (db == NULL || out == NULL) {
+        if (out != NULL) {
+            (void)fclose(out);
+        }
+        free(db);
+        return;
+    }
+    rc = when_run_with_out(argv, (int)(sizeof(argv) / sizeof(argv[0])), out, &err_text);
+    ASSERT_EQ_INT(rc, 1);
+    ASSERT_STREQ(err_text, "remember: failed to write output\n");
+    (void)fclose(out);
+    free(err_text);
+    free(db);
+}
+
+/* A keyed title and a keyless body, so "boo" has a keys facet and "dentist"
+   has none (heap path; NULL after a failed assert). */
+static char *given_search_brain(void)
+{
+    const char *const keyed[] = {"add", "--key", "recs:books", "--", "# Book recommendations"};
+    const char *const keyless[] = {"add", "Book the dentist"};
+    char *db = make_temp_db_path();
+    CmdResult r;
+
+    ASSERT_TRUE(db != NULL);
+    if (db == NULL) {
+        return NULL;
+    }
+    r = run_remember(db, keyed, sizeof(keyed) / sizeof(keyed[0]), NULL);
+    ASSERT_EQ_INT(r.exit_code, 0);
+    cmd_result_free(&r);
+    r = run_remember(db, keyless, sizeof(keyless) / sizeof(keyless[0]), NULL);
+    ASSERT_EQ_INT(r.exit_code, 0);
+    cmd_result_free(&r);
+    return db;
+}
+
+/* E2.7: the keys line is the first write; its failure is the command's error. */
+TEST(search_reports_a_failed_facet_line)
+{
+    char *db = given_search_brain();
+    const char *const argv[] = {"remember", "--db", db, "search", "boo"};
+    FILE *out = given_out_rejecting_writes();
+    char *err_text = NULL;
+    int rc = 0;
+
+    if (db == NULL || out == NULL) {
+        if (out != NULL) {
+            (void)fclose(out);
+        }
+        free(db);
+        return;
+    }
+    rc = when_run_with_out(argv, (int)(sizeof(argv) / sizeof(argv[0])), out, &err_text);
+    ASSERT_EQ_INT(rc, 1);
+    ASSERT_STREQ(err_text, "remember: failed to write output\n");
+    (void)fclose(out);
+    free(err_text);
+    free(db);
+}
+
+/* No facet matches "dentist", so the first write is an entry line. */
+TEST(search_reports_a_failed_entry_line_without_facets)
+{
+    char *db = given_search_brain();
+    const char *const argv[] = {"remember", "--db", db, "search", "dentist"};
     FILE *out = given_out_rejecting_writes();
     char *err_text = NULL;
     int rc = 0;
@@ -3922,6 +3994,8 @@ void register_errors_tests(void)
     RUN_TEST(run_reports_a_write_the_command_did_not_check);
     RUN_TEST(run_reports_a_failed_flush_as_json_with_json_errors);
     RUN_TEST(run_keeps_one_error_line_when_the_command_failed);
+    RUN_TEST(search_reports_a_failed_facet_line);
+    RUN_TEST(search_reports_a_failed_entry_line_without_facets);
     RUN_TEST(golden_error_lines_and_d9_codes);
     RUN_TEST(sqlite_busy_reports_cause_fix_and_detail);
     RUN_TEST(sqlite_cannot_open_carries_errno_reason_and_absolute_path);

@@ -25,7 +25,11 @@ enum {
     EURO_KEPT = 62,  /* how many of them fit before the cut */
     CONFLICT_FIELDS = 5,
     READ_CAP = 4096,
-    STREAM_LIMIT = 5 /* "ab" then "cde" would fill it exactly */
+    STREAM_LIMIT = 5, /* "ab" then "cde" would fill it exactly */
+    KEY_MATCHES = 5,  /* keys total in given_search_facets */
+    MAX_KEY_ITEMS = 12,
+    HUMAN_CAP = 10, /* E2.7: items one human facet line shows */
+    MANY_MATCHES = 60
 };
 
 static const char NOW[] = "2026-10-20T00:00:00.000Z";
@@ -300,6 +304,239 @@ TEST(output_list_envelope_rejects_missing_arguments)
     ASSERT_EQ_INT(output_list_envelope(f, 0, 1, 1, 1, &e, NULL, 0, NULL), -1);
     ASSERT_EQ_INT(output_list_envelope(f, 0, 1, 1, 1, NULL, NULL, 0, NOW), -1);
     ASSERT_EQ_INT(output_list_envelope(f, 0, 1, 1, 1, &e, NULL, 1, NOW), -1);
+    assert_written(f, "");
+}
+
+/* E2.1 (4): an empty search still carries both facets, empty. */
+TEST(output_search_envelope_writes_empty_facets)
+{
+    SearchResult res = {.page = {.st = STORE_OK}};
+    FILE *f = given_stream();
+
+    ASSERT_EQ_INT(output_search_envelope(f, &res, 0, 20, NULL, 0, NOW), 0);
+    assert_written(f, "{\"version\":1,\"offset\":0,\"limit\":20,\"count\":0,\"total\":0,"
+                      "\"keys\":{\"total\":0,\"items\":[]},\"tags\":{\"total\":0,\"items\":[]},"
+                      "\"entries\":[]}\n");
+}
+
+/* Two key items and two tag items, so the comma between items shows. */
+static SearchResult given_search_facets(SearchKeyItem keys[2], SearchTagItem tags[2])
+{
+    SearchResult res = {.page = {.st = STORE_OK}};
+
+    keys[0] = (SearchKeyItem){.key = (char *)"recs:books",
+                              .sync_id = (char *)"s-1",
+                              .label = (char *)"Book recommendations",
+                              .source = (char *)"agent",
+                              .updated_at = (char *)"u-1"};
+    keys[1] = (SearchKeyItem){.key = (char *)"recs:bonds",
+                              .sync_id = (char *)"s-2",
+                              .label = (char *)"recs:bonds",
+                              .source = (char *)"human",
+                              .updated_at = (char *)"u-2"};
+    tags[0] = (SearchTagItem){.tag = (char *)"type:books", .count = 1};
+    tags[1] = (SearchTagItem){.tag = (char *)"recs", .count = TAG_COUNT};
+    res.keys = (SearchKeyFacet){.items = keys, .count = 2, .total = KEY_MATCHES};
+    res.tags = (SearchTagFacet){.items = tags, .count = 2, .total = 4};
+    return res;
+}
+
+/* E2.6: each key item carries key, sync_id, label, source, updated_at; each
+   tag item tag and count; total counts every match, not only the items. */
+TEST(output_search_envelope_writes_the_facet_items)
+{
+    SearchKeyItem keys[2];
+    SearchTagItem tags[2];
+    SearchResult res = given_search_facets(keys, tags);
+    FILE *f = given_stream();
+
+    ASSERT_EQ_INT(output_search_envelope(f, &res, 0, 20, NULL, 0, NOW), 0);
+    assert_written(f,
+                   "{\"version\":1,\"offset\":0,\"limit\":20,\"count\":0,\"total\":0,"
+                   "\"keys\":{\"total\":5,\"items\":["
+                   "{\"key\":\"recs:books\",\"sync_id\":\"s-1\",\"label\":\"Book recommendations\","
+                   "\"source\":\"agent\",\"updated_at\":\"u-1\"},"
+                   "{\"key\":\"recs:bonds\",\"sync_id\":\"s-2\",\"label\":\"recs:bonds\","
+                   "\"source\":\"human\",\"updated_at\":\"u-2\"}]},"
+                   "\"tags\":{\"total\":4,\"items\":[{\"tag\":\"type:books\",\"count\":1},"
+                   "{\"tag\":\"recs\",\"count\":3}]},\"entries\":[]}\n");
+}
+
+/* Stage 4 handover: every facet field goes through the JSON escaper. The
+   label comes from a body, so it can hold anything; the others are guarded
+   on import but not trusted here. */
+TEST(output_search_envelope_escapes_every_facet_field)
+{
+    SearchKeyItem keys[2];
+    SearchTagItem tags[2];
+    SearchResult res = given_search_facets(keys, tags);
+    FILE *f = given_stream();
+
+    res.keys.items[0] = (SearchKeyItem){.key = (char *)"k\x1b",
+                                        .sync_id = (char *)"s\n",
+                                        .label = (char *)"l\"\x1b[31m",
+                                        .source = (char *)"a\\",
+                                        .updated_at = (char *)"u\t"};
+    res.tags.items[0].tag = (char *)"t\x01";
+    res.keys.count = 1;
+    res.tags.count = 1;
+    ASSERT_EQ_INT(output_search_envelope(f, &res, 0, 20, NULL, 0, NOW), 0);
+    assert_written(f, "{\"version\":1,\"offset\":0,\"limit\":20,\"count\":0,\"total\":0,"
+                      "\"keys\":{\"total\":5,\"items\":["
+                      "{\"key\":\"k\\u001b\",\"sync_id\":\"s\\n\",\"label\":\"l\\\"\\u001b[31m\","
+                      "\"source\":\"a\\\\\",\"updated_at\":\"u\\t\"}]},"
+                      "\"tags\":{\"total\":4,\"items\":[{\"tag\":\"t\\u0001\",\"count\":1}]},"
+                      "\"entries\":[]}\n");
+}
+
+TEST(output_search_envelope_rejects_missing_arguments)
+{
+    SearchKeyItem keys[2];
+    SearchTagItem tags[2];
+    SearchResult res = given_search_facets(keys, tags);
+    StoreNeighbor link = given_link(SUBJECT_ID, SUBJECT_ID, STORE_EDGE_RELATED);
+    FILE *f = given_stream();
+
+    ASSERT_EQ_INT(output_search_envelope(NULL, &res, 0, 1, NULL, 0, NOW), -1);
+    ASSERT_EQ_INT(output_search_envelope(f, NULL, 0, 1, NULL, 0, NOW), -1);
+    ASSERT_EQ_INT(output_search_envelope(f, &res, 0, 1, NULL, 0, NULL), -1);
+    ASSERT_EQ_INT(output_search_envelope(f, &res, 0, 1, NULL, 1, NOW), -1);
+    res.page.count = 1;
+    ASSERT_EQ_INT(output_search_envelope(f, &res, 0, 1, &link, 1, NOW), -1);
+    res.page.count = 0;
+    res.keys.items = NULL;
+    ASSERT_EQ_INT(output_search_envelope(f, &res, 0, 1, NULL, 0, NOW), -1);
+    res.keys.count = 0;
+    res.tags.items = NULL;
+    ASSERT_EQ_INT(output_search_envelope(f, &res, 0, 1, NULL, 0, NOW), -1);
+    assert_written(f, "");
+}
+
+/* E2.7: one keys line and one tags line, in the facet order. */
+TEST(output_search_facets_human_lists_keys_then_tags)
+{
+    SearchKeyItem keys[2];
+    SearchTagItem tags[2];
+    SearchResult res = given_search_facets(keys, tags);
+    FILE *f = given_stream();
+
+    res.keys.total = 2;
+    res.tags.total = 2;
+    ASSERT_EQ_INT(output_search_facets_human(f, &res), 0);
+    assert_written(f, "keys: recs:books, recs:bonds\ntags: type:books (1), recs (3)\n");
+}
+
+/* n key items k0, k1, ... (n <= MAX_KEY_ITEMS) with the given total. */
+static SearchResult given_key_items(SearchKeyItem keys[MAX_KEY_ITEMS], size_t n, size_t total)
+{
+    // cppcheck-suppress constVariable ; SearchKeyItem.key is char *, so const would need a
+    // cast-qual cast
+    static char *const names[] = {(char *)"k0", (char *)"k1", (char *)"k2",  (char *)"k3",
+                                  (char *)"k4", (char *)"k5", (char *)"k6",  (char *)"k7",
+                                  (char *)"k8", (char *)"k9", (char *)"k10", (char *)"k11"};
+    SearchResult res = {.page = {.st = STORE_OK}};
+    size_t i = 0;
+
+    for (i = 0; i < n; i++) {
+        keys[i] = (SearchKeyItem){.key = names[i]};
+    }
+    res.keys = (SearchKeyFacet){.items = keys, .count = n, .total = total};
+    return res;
+}
+
+/* E2.7 + decision:plan18-human-facet-line: 10 items, then the rest of the
+   total, not the rest of the items. */
+TEST(output_search_facets_human_caps_at_ten_and_counts_the_rest_of_the_total)
+{
+    SearchKeyItem keys[MAX_KEY_ITEMS];
+    SearchResult res = given_key_items(keys, MAX_KEY_ITEMS, MANY_MATCHES);
+    FILE *f = given_stream();
+
+    ASSERT_EQ_INT(output_search_facets_human(f, &res), 0);
+    assert_written(f, "keys: k0, k1, k2, k3, k4, k5, k6, k7, k8, k9, \xe2\x80\xa6 and 50 more\n");
+}
+
+TEST(output_search_facets_human_shows_ten_without_more)
+{
+    SearchKeyItem keys[MAX_KEY_ITEMS];
+    SearchResult res = given_key_items(keys, HUMAN_CAP, HUMAN_CAP);
+    FILE *f = given_stream();
+
+    ASSERT_EQ_INT(output_search_facets_human(f, &res), 0);
+    assert_written(f, "keys: k0, k1, k2, k3, k4, k5, k6, k7, k8, k9\n");
+}
+
+/* Fewer items than 10 (a small --facet-limit) still count the whole total. */
+TEST(output_search_facets_human_says_more_when_the_total_passes_the_items)
+{
+    SearchKeyItem keys[2];
+    SearchTagItem tags[2];
+    SearchResult res = given_search_facets(keys, tags);
+    FILE *f = given_stream();
+
+    ASSERT_EQ_INT(output_search_facets_human(f, &res), 0);
+    assert_written(f, "keys: recs:books, recs:bonds, \xe2\x80\xa6 and 3 more\n"
+                      "tags: type:books (1), recs (3), \xe2\x80\xa6 and 2 more\n");
+}
+
+TEST(output_search_facets_human_omits_an_empty_keys_line)
+{
+    SearchKeyItem keys[2];
+    SearchTagItem tags[2];
+    SearchResult res = given_search_facets(keys, tags);
+    FILE *f = given_stream();
+
+    res.keys = (SearchKeyFacet){0};
+    res.tags.total = 2;
+    ASSERT_EQ_INT(output_search_facets_human(f, &res), 0);
+    assert_written(f, "tags: type:books (1), recs (3)\n");
+}
+
+TEST(output_search_facets_human_omits_an_empty_tags_line)
+{
+    SearchKeyItem keys[2];
+    SearchTagItem tags[2];
+    SearchResult res = given_search_facets(keys, tags);
+    FILE *f = given_stream();
+
+    res.keys.total = 2;
+    res.tags = (SearchTagFacet){0};
+    ASSERT_EQ_INT(output_search_facets_human(f, &res), 0);
+    assert_written(f, "keys: recs:books, recs:bonds\n");
+}
+
+/* decision:plan18c-mask-c1: C0, DEL and C1 in a stored key or tag become '?'. */
+TEST(output_search_facets_human_masks_keys_and_tags)
+{
+    SearchKeyItem keys[2];
+    SearchTagItem tags[2];
+    SearchResult res = given_search_facets(keys, tags);
+    FILE *f = given_stream();
+
+    res.keys.items[0].key = (char *)"k\x1b[2J\n";
+    res.tags.items[0].tag = (char *)"t\xc2\x9b\x7f";
+    res.keys.count = 1;
+    res.keys.total = 1;
+    res.tags.count = 1;
+    res.tags.total = 1;
+    ASSERT_EQ_INT(output_search_facets_human(f, &res), 0);
+    assert_written(f, "keys: k?[2J?\ntags: t?? (1)\n");
+}
+
+TEST(output_search_facets_human_rejects_missing_arguments)
+{
+    SearchKeyItem keys[2];
+    SearchTagItem tags[2];
+    SearchResult res = given_search_facets(keys, tags);
+    FILE *f = given_stream();
+
+    ASSERT_EQ_INT(output_search_facets_human(NULL, &res), -1);
+    ASSERT_EQ_INT(output_search_facets_human(f, NULL), -1);
+    res.keys.items = NULL;
+    ASSERT_EQ_INT(output_search_facets_human(f, &res), -1);
+    res.keys.count = 0;
+    res.tags.items = NULL;
+    ASSERT_EQ_INT(output_search_facets_human(f, &res), -1);
     assert_written(f, "");
 }
 
@@ -760,6 +997,28 @@ static int write_list_envelope(FILE *f)
     return output_list_envelope(f, 0, 2, 2, 2, entries, links, 2, NOW);
 }
 
+static int write_search_envelope(FILE *f)
+{
+    Entry entries[] = {given_full_entry(), given_full_entry()};
+    StoreNeighbor links[2];
+    SearchKeyItem keys[2];
+    SearchTagItem tags[2];
+    SearchResult res = given_search_facets(keys, tags);
+
+    given_two_links(links);
+    res.page = (PageResult){.st = STORE_OK, .entries = entries, .count = 2, .total = 2};
+    return output_search_envelope(f, &res, 0, 2, links, 2, NOW);
+}
+
+static int write_search_facets_human(FILE *f)
+{
+    SearchKeyItem keys[2];
+    SearchTagItem tags[2];
+    SearchResult res = given_search_facets(keys, tags);
+
+    return output_search_facets_human(f, &res);
+}
+
 static int write_id_human(FILE *f)
 {
     return output_id_human(f, SUBJECT_ID);
@@ -932,6 +1191,16 @@ TEST(output_list_envelope_reports_every_failed_write)
     assert_reports_every_failed_write(write_list_envelope);
 }
 
+TEST(output_search_envelope_reports_every_failed_write)
+{
+    assert_reports_every_failed_write(write_search_envelope);
+}
+
+TEST(output_search_facets_human_reports_every_failed_write)
+{
+    assert_reports_every_failed_write(write_search_facets_human);
+}
+
 TEST(output_id_human_reports_every_failed_write)
 {
     assert_reports_every_failed_write(write_id_human);
@@ -1059,6 +1328,18 @@ void register_output_tests(void)
     RUN_TEST(output_get_envelope_rejects_missing_arguments);
     RUN_TEST(output_get_envelope_lists_only_the_subjects_links);
     RUN_TEST(output_list_envelope_rejects_missing_arguments);
+    RUN_TEST(output_search_envelope_writes_empty_facets);
+    RUN_TEST(output_search_envelope_writes_the_facet_items);
+    RUN_TEST(output_search_envelope_escapes_every_facet_field);
+    RUN_TEST(output_search_envelope_rejects_missing_arguments);
+    RUN_TEST(output_search_facets_human_lists_keys_then_tags);
+    RUN_TEST(output_search_facets_human_caps_at_ten_and_counts_the_rest_of_the_total);
+    RUN_TEST(output_search_facets_human_shows_ten_without_more);
+    RUN_TEST(output_search_facets_human_says_more_when_the_total_passes_the_items);
+    RUN_TEST(output_search_facets_human_omits_an_empty_keys_line);
+    RUN_TEST(output_search_facets_human_omits_an_empty_tags_line);
+    RUN_TEST(output_search_facets_human_masks_keys_and_tags);
+    RUN_TEST(output_search_facets_human_rejects_missing_arguments);
     RUN_TEST(output_tags_envelope_rejects_missing_arguments);
     RUN_TEST(output_links_write_envelope_rejects_missing_arguments);
     RUN_TEST(output_links_write_envelope_rejects_a_link_without_a_sync_id);
@@ -1100,6 +1381,8 @@ void register_output_tests(void)
     RUN_TEST(output_deleted_list_reports_every_failed_write);
     RUN_TEST(output_get_envelope_reports_every_failed_write);
     RUN_TEST(output_list_envelope_reports_every_failed_write);
+    RUN_TEST(output_search_envelope_reports_every_failed_write);
+    RUN_TEST(output_search_facets_human_reports_every_failed_write);
     RUN_TEST(output_id_human_reports_every_failed_write);
     RUN_TEST(output_text_human_reports_every_failed_write);
     RUN_TEST(output_body_human_reports_every_failed_write);

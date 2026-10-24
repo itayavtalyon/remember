@@ -315,19 +315,6 @@ TEST(norm_status_string_unknown)
 
 /* ---- black-box: main help + NYI ------------------------------------------ */
 
-TEST(search_empty_query_stderr)
-{
-    char *db = make_temp_db_path();
-    const char *args[] = {"search", ""};
-    CmdResult r;
-    ASSERT_TRUE(db != NULL);
-    r = run_remember(db, args, sizeof(args) / sizeof(args[0]), NULL);
-    ASSERT_EQ_INT(r.exit_code, 1);
-    ASSERT_STR_CONTAINS(r.err, "empty search query");
-    cmd_result_free(&r);
-    free(db);
-}
-
 TEST(help_update_topic)
 {
     char *db = make_temp_db_path();
@@ -907,7 +894,6 @@ void register_coverage_edges_tests(void)
     RUN_TEST(cli_parse_double_dash_literal);
     RUN_TEST(cli_parse_end_opts_then_subcommand_token);
     RUN_TEST(norm_status_string_unknown);
-    RUN_TEST(search_empty_query_stderr);
     RUN_TEST(help_update_topic);
     RUN_TEST(update_missing_text_value_rejected);
     RUN_TEST(update_invalid_id_token_rejected);

@@ -86,8 +86,9 @@ int diag_error(DiagCode code, const char *message);
 int diag_error_sqlite(DiagCode code, const StoreError *detail, const char *path);
 
 /*
- * Write one warning. Plain: "remember: warning: <message>\n" for every code
- * (Itay 2026-10-15; amends E4.6 "note:" and D5). JSON:
+ * Write one warning. Plain: "remember: warning: <message>\n" (Itay
+ * 2026-10-15; amends E4.6 "note:" and D5), except raw_query_ignored, which is
+ * "remember: warning: raw query ignored: <message>\n" (E2.3). JSON:
  * {"version":1,"warning":{"code":"<code>","message":"<message>"}}; message is
  * the <text> without "warning: ". NULL message is empty. deprecated_flag and
  * synced_folder print even when the command then fails (Itay 2026-10-15);

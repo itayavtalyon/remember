@@ -271,25 +271,22 @@ int output_get_envelope(FILE *out, const Entry *e, const StoreNeighbor *links, s
     return 0;
 }
 
-int output_list_envelope(FILE *out, size_t offset, size_t limit, size_t count, size_t total,
-                         const Entry *entries, const StoreNeighbor *links, size_t nlinks,
-                         const char *now)
+/* Shared head of the list and search envelopes, through "total". */
+static int write_page_head(FILE *out, size_t offset, size_t limit, size_t count, size_t total)
+{
+    return fprintf(out, "{\"version\":1,\"offset\":%zu,\"limit\":%zu,\"count\":%zu,\"total\":%zu",
+                   offset, limit, count, total) < 0
+               ? -1
+               : 0;
+}
+
+/* Shared tail: the entries array, then the closing brace and newline. */
+static int write_page_entries(FILE *out, const Entry *entries, size_t count,
+                              const StoreNeighbor *links, size_t nlinks, const char *now)
 {
     size_t i = 0;
 
-    if (out == NULL || now == NULL) {
-        return -1;
-    }
-    if (count > 0U && entries == NULL) {
-        return -1;
-    }
-    if (nlinks > 0U && links == NULL) {
-        return -1;
-    }
-    if (fprintf(out,
-                "{\"version\":1,\"offset\":%zu,\"limit\":%zu,\"count\":%zu,\"total\":%zu,"
-                "\"entries\":[",
-                offset, limit, count, total) < 0) {
+    if (fputs(",\"entries\":[", out) < 0) {
         return -1;
     }
     for (i = 0; i < count; i++) {
@@ -304,6 +301,199 @@ int output_list_envelope(FILE *out, size_t offset, size_t limit, size_t count, s
         return -1;
     }
     return 0;
+}
+
+/* The arguments both page envelopes share: a stream, now, and arrays that
+   hold what their counts say. */
+static bool page_args_ok(const FILE *out, const char *now, const Entry *entries, size_t count,
+                         const StoreNeighbor *links, size_t nlinks)
+{
+    if (out == NULL || now == NULL) {
+        return false;
+    }
+    if (count > 0U && entries == NULL) {
+        return false;
+    }
+    if (nlinks > 0U && links == NULL) {
+        return false;
+    }
+    return true;
+}
+
+int output_list_envelope(FILE *out, size_t offset, size_t limit, size_t count, size_t total,
+                         const Entry *entries, const StoreNeighbor *links, size_t nlinks,
+                         const char *now)
+{
+    if (!page_args_ok(out, now, entries, count, links, nlinks)) {
+        return -1;
+    }
+    if (write_page_head(out, offset, limit, count, total) != 0) {
+        return -1;
+    }
+    return write_page_entries(out, entries, count, links, nlinks, now);
+}
+
+/* Each facet holds the items its count says. */
+static bool facets_ok(const SearchResult *res)
+{
+    if (res->keys.count > 0U && res->keys.items == NULL) {
+        return false;
+    }
+    if (res->tags.count > 0U && res->tags.items == NULL) {
+        return false;
+    }
+    return true;
+}
+
+static int write_key_item(FILE *out, const SearchKeyItem *item)
+{
+    const JsonField rest[] = {
+        {.name = "sync_id", .value = item->sync_id},
+        {.name = "label", .value = item->label},
+        {.name = "source", .value = item->source},
+        {.name = "updated_at", .value = item->updated_at},
+    };
+    size_t i = 0;
+
+    if (fputs("{\"key\":", out) < 0 || output_json_string(out, item->key) != 0) {
+        return -1;
+    }
+    for (i = 0; i < sizeof rest / sizeof rest[0]; i++) {
+        if (write_json_field_str(out, rest[i]) != 0) {
+            return -1;
+        }
+    }
+    return fputc('}', out) == EOF ? -1 : 0;
+}
+
+static int write_key_facet(FILE *out, const SearchKeyFacet *keys)
+{
+    size_t i = 0;
+
+    if (fprintf(out, ",\"keys\":{\"total\":%zu,\"items\":[", keys->total) < 0) {
+        return -1;
+    }
+    for (i = 0; i < keys->count; i++) {
+        if (i > 0U && fputc(',', out) == EOF) {
+            return -1;
+        }
+        if (write_key_item(out, &keys->items[i]) != 0) {
+            return -1;
+        }
+    }
+    return fputs("]}", out) < 0 ? -1 : 0;
+}
+
+static int write_tag_facet(FILE *out, const SearchTagFacet *tags)
+{
+    size_t i = 0;
+
+    if (fprintf(out, ",\"tags\":{\"total\":%zu,\"items\":[", tags->total) < 0) {
+        return -1;
+    }
+    for (i = 0; i < tags->count; i++) {
+        if (i > 0U && fputc(',', out) == EOF) {
+            return -1;
+        }
+        if (fputs("{\"tag\":", out) < 0 || output_json_string(out, tags->items[i].tag) != 0 ||
+            fprintf(out, ",\"count\":%zu}", tags->items[i].count) < 0) {
+            return -1;
+        }
+    }
+    return fputs("]}", out) < 0 ? -1 : 0;
+}
+
+int output_search_envelope(FILE *out, const SearchResult *res, size_t offset, size_t limit,
+                           const StoreNeighbor *links, size_t nlinks, const char *now)
+{
+    const PageResult *page = NULL;
+
+    if (res == NULL) {
+        return -1;
+    }
+    page = &res->page;
+    if (!page_args_ok(out, now, page->entries, page->count, links, nlinks)) {
+        return -1;
+    }
+    if (!facets_ok(res)) {
+        return -1;
+    }
+    if (write_page_head(out, offset, limit, page->count, page->total) != 0) {
+        return -1;
+    }
+    if (write_key_facet(out, &res->keys) != 0 || write_tag_facet(out, &res->tags) != 0) {
+        return -1;
+    }
+    return write_page_entries(out, page->entries, page->count, links, nlinks, now);
+}
+
+enum { HUMAN_FACET_CAP = 10U }; /* E2.7 */
+
+/* Shown items are capped at E2.7's 10 and at what the facet holds. */
+static size_t facet_shown(size_t count)
+{
+    return count < HUMAN_FACET_CAP ? count : HUMAN_FACET_CAP;
+}
+
+/* Line end: ", ... and N more" when the facet has more matches than shown. */
+static int write_facet_line_end(FILE *out, size_t shown, size_t total)
+{
+    if (total > shown && fprintf(out, ", \xe2\x80\xa6 and %zu more", total - shown) < 0) {
+        return -1;
+    }
+    return fputc('\n', out) == EOF ? -1 : 0;
+}
+
+static int write_keys_human(FILE *out, const SearchKeyFacet *keys)
+{
+    size_t shown = facet_shown(keys->count);
+    size_t i = 0;
+
+    if (shown == 0U) {
+        return 0;
+    }
+    if (fputs("keys: ", out) < 0) {
+        return -1;
+    }
+    for (i = 0; i < shown; i++) {
+        if ((i > 0U && fputs(", ", out) < 0) ||
+            output_text_human(out, keys->items[i].key, false) != 0) {
+            return -1;
+        }
+    }
+    return write_facet_line_end(out, shown, keys->total);
+}
+
+static int write_tags_human(FILE *out, const SearchTagFacet *tags)
+{
+    size_t shown = facet_shown(tags->count);
+    size_t i = 0;
+
+    if (shown == 0U) {
+        return 0;
+    }
+    if (fputs("tags: ", out) < 0) {
+        return -1;
+    }
+    for (i = 0; i < shown; i++) {
+        if ((i > 0U && fputs(", ", out) < 0) ||
+            output_text_human(out, tags->items[i].tag, false) != 0 ||
+            fprintf(out, " (%zu)", tags->items[i].count) < 0) {
+            return -1;
+        }
+    }
+    return write_facet_line_end(out, shown, tags->total);
+}
+
+int output_search_facets_human(FILE *out, const SearchResult *res)
+{
+    if (out == NULL || res == NULL || !facets_ok(res)) {
+        return -1;
+    }
+    if (write_keys_human(out, &res->keys) != 0) {
+        return -1;
+    }
+    return write_tags_human(out, &res->tags);
 }
 
 int output_id_human(FILE *out, long long id)

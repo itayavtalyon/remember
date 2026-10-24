@@ -81,33 +81,35 @@ TEST(search_source_filter)
     free(db);
 }
 
-TEST(search_empty_query_rejected)
+/* E2.1 (4): an empty or whitespace-only QUERY is an empty result, not an error. */
+static void assert_blank_query_is_an_empty_result(const char *query)
 {
     char *db = make_temp_db_path();
-    const char *args[] = {"search", ""};
+    const char *args[] = {"--json", "search", query};
     CmdResult r;
     ASSERT_TRUE(db != NULL);
+    seed_search_corpus(db);
     r = run_remember(db, args, sizeof(args) / sizeof(args[0]), NULL);
-    ASSERT_EQ_INT(r.exit_code, 1);
-    ASSERT_STR_CONTAINS(r.err, "empty search query");
+    ASSERT_EQ_INT(r.exit_code, 0);
+    ASSERT_STREQ(r.err, "");
+    ASSERT_STREQ(r.out, "{\"version\":1,\"offset\":0,\"limit\":20,\"count\":0,\"total\":0,"
+                        "\"keys\":{\"total\":0,\"items\":[]},\"tags\":{\"total\":0,\"items\":[]},"
+                        "\"entries\":[]}\n");
     cmd_result_free(&r);
     free(db);
 }
 
-TEST(search_whitespace_only_query_rejected)
+TEST(search_empty_query_is_an_empty_result)
 {
-    char *db = make_temp_db_path();
-    const char *args[] = {"search", "   \t  "};
-    CmdResult r;
-    ASSERT_TRUE(db != NULL);
-    r = run_remember(db, args, sizeof(args) / sizeof(args[0]), NULL);
-    ASSERT_EQ_INT(r.exit_code, 1);
-    ASSERT_STR_CONTAINS(r.err, "empty search query");
-    cmd_result_free(&r);
-    free(db);
+    assert_blank_query_is_an_empty_result("");
 }
 
-/* Hits both leading and trailing ASCII-ws trim (coverage for end-- path). */
+TEST(search_whitespace_only_query_is_an_empty_result)
+{
+    assert_blank_query_is_an_empty_result("   \t  ");
+}
+
+/* The CLI passes QUERY as given; the store trims it (E2.1, D13: one owner). */
 TEST(search_query_trims_outer_whitespace)
 {
     char *db = make_temp_db_path();
@@ -285,8 +287,8 @@ void register_search_tests(void)
     RUN_TEST(search_finds_tag_token_via_fts);
     RUN_TEST(search_tag_filter_ands_with_query);
     RUN_TEST(search_source_filter);
-    RUN_TEST(search_empty_query_rejected);
-    RUN_TEST(search_whitespace_only_query_rejected);
+    RUN_TEST(search_empty_query_is_an_empty_result);
+    RUN_TEST(search_whitespace_only_query_is_an_empty_result);
     RUN_TEST(search_query_trims_outer_whitespace);
     RUN_TEST(search_missing_query_rejected);
     RUN_TEST(search_second_query_is_unexpected);
