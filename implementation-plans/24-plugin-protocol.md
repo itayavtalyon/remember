@@ -137,4 +137,18 @@ The `docs` job has a new step, "Fetch each schema $id". It fetches `main` with d
 
 ## Review Notes
 
-_(empty)_
+**2026-10-25, code review round 1 (whole plan: PR #38 and PR #39).** Ten findings. Itay's decisions:
+
+| # | Finding | Outcome |
+|---|---|---|
+| 1, 2 | The push-to-main run fetches before Pages redeploys, and `curl --retry` does not retry a byte mismatch. Every PR also depends on github.io. | Itay: keep "every run" and poll. The fetch step reruns the whole comparison every 20 s, up to 16 attempts (5 minutes), before it fails. A github.io outage still fails a PR after 5 minutes. |
+| 3, 4, 5 | Older validator code crashes with a traceback on a broken `$ref`, a schema without `$id`, or an example marker that names no schema. | Itay: harden. A schema must have a `$id` under the `$id` base. An unknown marker name is a FAIL line. When any schema problem exists, the example and edge tests are skipped, because they would raise. The file check still runs, and the summary says the tests were not run. Extraction reads the loaded schemas, so the misleading "reported above" comment is gone. |
+| 6 | The stray check and `--write` covered all of `tests/fixtures/plugin/`, so plan 25 fixtures there would fail and be deleted. | Itay: scope it. Only the folders the spec fills are checked (`schema/plugin/v1/`, `examples/`, `hello/`, `log_ids/`). Subfolders such as `__pycache__` and dot files are ignored. A spec rename of a captioned folder leaves the old folder unflagged. |
+| 7 | Fixture numbers shift when an example is inserted. | Stays. It follows from the layout Itay chose. `--write` renames the files. |
+| 8 | The fetch step's `jq` ran under `set -e`, so a bad file stopped the loop. | Fixed. `jq -e` failure or a missing `$id` prints `FAIL <file> on main: no $id`, and the loop goes on. |
+| 9 | The spec says CI runs the §2.4 plugins, but CI only compared bytes. | Itay: add a compile. New docs step: `compile()` on `tests/fixtures/plugin/*/*.py`. It writes no `__pycache__`. Running the plugins is still plan 25. |
+| 10 | 13 sequential fetches, and `main` fetched even on main pushes. | Stays. It costs a few seconds. |
+
+Probes run locally: the spec still gives 13/29/81/0/14 and 0 failures, and 39 files. A stray comma in the `control.json` block, a deleted `control.json` `$id`, and a marker named `plugin-statuz.json` each print FAIL lines and exit 1 with no traceback. A `bad_manifest/` folder and `hello/__pycache__/` are ignored, and a stray `examples/99-stray.json` is flagged and removed by `--write`. With a stand-in `curl` and `sleep`, the fetch passes at once (13 ok), passes on attempt 3 when Pages catches up, and fails after 16 attempts and 15 sleeps when Pages stays stale. A syntax error in `append.py` fails the compile step.
+
+Not fixed: an example that the edge tests need (for example the plugin status example) with broken JSON still ends in a `StopIteration` traceback. That code predates plan 24 and is outside this round's findings.
