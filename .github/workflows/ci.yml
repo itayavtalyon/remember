@@ -52,6 +52,28 @@ jobs:
       - name: Validate the plugin protocol spec
         run: '"$RUNNER_TEMP/venv/bin/python" scripts/validate_plugin_spec.py docs/PLUGIN-PROTOCOL.md'
 
+      # GitHub Pages publishes main, so each $id must serve the bytes of that
+      # schema file on main. The check above covers this checkout's files.
+      - name: Fetch each schema $id
+        shell: bash
+        run: |
+          git fetch --quiet --no-tags --depth=1 origin +refs/heads/main:refs/remotes/origin/main
+          files=$(git ls-tree --name-only origin/main schema/plugin/v1/)
+          [ -n "$files" ] || { echo "FAIL no schema files on main"; exit 1; }
+          fail=0
+          for f in $files; do
+            git show "origin/main:$f" > "$RUNNER_TEMP/want.json"
+            url=$(jq -r '."$id"' "$RUNNER_TEMP/want.json")
+            if ! curl -fsSL --retry 3 -o "$RUNNER_TEMP/got.json" "$url"; then
+              echo "FAIL $url: fetch failed"; fail=1
+            elif ! cmp -s "$RUNNER_TEMP/want.json" "$RUNNER_TEMP/got.json"; then
+              echo "FAIL $url: differs from $f on main"; fail=1
+            else
+              echo "ok   $url"
+            fi
+          done
+          exit $fail
+
   # Line coverage of src/*.c: 100% functions + 100% effective lines, plus every
   # branch side in the pure TUs (plan 18b; see scripts/check-coverage.sh). Add
   # this job name to branch protection required checks when ready.

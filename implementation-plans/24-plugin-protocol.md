@@ -129,6 +129,12 @@ Stages 2–3 (one commit, because both checks share one file walk). Extraction g
 
 009-4: the new comments and docstring cite no rule id. Stage 4 (the `$id` fetch) is not started. Itay's GitHub Pages note is not here yet. No GitHub setting changed. `protocol` in the spec is still 1. No C code changed, so the gate is the validator plus the file check.
 
+**2026-10-25, Itay: GitHub Pages is on.** (Said in the implementing session, after PR #38 merged.)
+
+**2026-10-25, stage 4.** Itay's decision on what the fetch compares against: each schema file as it is on `main`, on every run. Pages publishes `main`, so this check tells whether Pages serves `main`. A pull request that edits a schema stays green, because the byte check in the validator already covers that checkout's files. Right after a merge, Pages deploy lag can fail one run on `main`. Itay accepted that.
+
+The `docs` job has a new step, "Fetch each schema $id". It fetches `main` with depth 1. For each file under `schema/plugin/v1/` on `main`, it reads `$id` with `jq` and fetches that URL with `curl -fsSL --retry 3`. It then compares the response body to the file with `cmp`. The step fails if the URL cannot be fetched, if the body differs, or if `main` has no schema files. It has no flag, no repository variable, and no skip switch. This session's proxy blocks `itayavtalyon.github.io`, so the step was tested locally with a stand-in `curl`. Each URL is answered from the file on `main`. Matching bytes give 13 ok and exit 0. One changed byte in `common.json` fails with exit 1, and so does a failed fetch of `control.json`. CI on the pull request is the first real fetch. The gate ran again: the validator exits 0 (13 schemas, 29 examples, 81 negative, 0 code-check negative, 14 positive, 0 failures). No GitHub setting changed.
+
 ## Review Notes
 
 _(empty)_
