@@ -275,7 +275,7 @@ typedef int  (*remember_token_fn)(void *ctx, const char *helper_id, char *buf, s
 - H-7.1. Every event carries `cause.origin`: `local`, `sync` or `import`. The actor is `data.memory.updated_by` (#563, C-11). Every action has an `origins` filter, default `["local"]` `[decision:hook-origins-filter]` (#577), `[decision:g-11]`. Sharing later adds a trusted origin.
 - H-7.2. An action whose `origins` does not list the event's origin does not run. A sync or import command writes one `skipped_source` line for each action and event type that it skipped, with the count (2026-10-25, D-14). An action that the command did not skip gets no line. When one command skips `memory.created` and `memory.updated` events for one action, it writes two lines.
   - Remember writes the line to the run log (H-15.1) after the command commits. `remember plugin log <plugin>` shows it, because the line names that plugin.
-  - `remember plugin log <plugin>` prints the line as `<at>  skipped "<action>" for <count> <event_type> events from 'remember <command>', because its origins don't include <origin>.` When `count` is 1, it prints `<at>  skipped "<action>" for 1 <event_type> event from 'remember <command>', because its origins don't include <origin>.` The line has no plugin name, because the output holds only that plugin. Output that mixes plugins writes `"<plugin>/<action>"` in place of `"<action>"`. `<event_type>` is the field value, verbatim. `<at>` is the record's `at` (2026-10-25, Story Weaver).
+  - `remember plugin log <plugin>` prints the line as `<at>  skipped "<action>" for <count> <event_type> events from 'remember <command>', because its origins don't include <origin>.` When `count` is 1, it prints `<at>  skipped "<action>" for 1 <event_type> event from 'remember <command>', because its origins don't include <origin>.` The line has no plugin name, because the output holds only that plugin. Output that mixes plugins writes `"<plugin>/<action>"` in place of `"<action>"`. `<event_type>` is the field value, verbatim. `<at>` is the record's `at` in the human date form of log 007 ST-7.16. JSON output keeps `at` in RFC 3339 UTC (2026-10-25, Story Weaver).
   - The line is this JSON object, with the members in this order:
 
 ```json
@@ -382,7 +382,7 @@ typedef int  (*remember_token_fn)(void *ctx, const char *helper_id, char *buf, s
 
 - H-15.1. The run log is `<brain>.d/hooks.log`, JSON Lines, mode 0600 (#566). It holds every run of every plugin. Authors read it with `remember plugin log <name>`.
 - H-15.2. Rotation at 5 MB, 3 rotated files kept, entries older than 30 days deleted, whichever comes first (#424).
-- H-15.3. A log record has `version` and the HK §6.3 fields, with `event_type`. A `skipped_source` record has the H-7.2 fields, `event_type` included (2026-10-25, D-14). `remember plugin log <plugin>` prints it as the H-7.2 human line. `plugin log --follow --json` emits one `remember-message` per line: `type` `plugin.run` for a run record, and `type` `plugin.stderr` with `data {plugin, line, at}` for a `stderr.log` line (G-35.7).
+- H-15.3. A log record has `version` and the HK §6.3 fields, with `event_type`. A `skipped_source` record has the H-7.2 fields, `event_type` included (2026-10-25, D-14). `remember plugin log <plugin>` prints it as the H-7.2 human line, with `<at>` in the log 007 ST-7.16 human date form. `plugin log --follow --json` emits one `remember-message` per line: `type` `plugin.run` for a run record, and `type` `plugin.stderr` with `data {plugin, line, at}` for a `stderr.log` line (G-35.7).
 
 ### 16. CLI
 

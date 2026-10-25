@@ -12,7 +12,7 @@ Behavior in this plan is specified. A stage that prints a sentence in COPY-PENDI
 
 - Chain-cap warning: DESIGN-PENDING D-02 is answered (2026-10-25). Set status `skipped`, reason `chain_capped`, and warn `plugin_chain_capped`. The sentence waits on its COPY-PENDING row.
 - Non-timeout filter failure code: D-08 is answered (2026-10-25). It is `plugin_filter_failed`.
-- `skipped_source` log bytes: D-14 is answered (2026-10-25, 010 H-7.2). Write one line per skipped action and event type, with the H-7.2 fields (`at`, `event_type`, `count`). `remember plugin log <plugin>` prints `<at>  skipped "<action>" for <count> <event_type> events from 'remember <command>', because its origins don't include <origin>.`, or `<at>  skipped "<action>" for 1 <event_type> event from 'remember <command>', because its origins don't include <origin>.` when `count` is 1. Leave out the plugin name. Where the output mixes plugins, write `"<plugin>/<action>"`. Print `<event_type>` verbatim.
+- `skipped_source` log bytes: D-14 is answered (2026-10-25, 010 H-7.2). Write one line per skipped action and event type, with the H-7.2 fields (`at`, `event_type`, `count`). `remember plugin log <plugin>` prints `<at>  skipped "<action>" for <count> <event_type> events from 'remember <command>', because its origins don't include <origin>.`, or `<at>  skipped "<action>" for 1 <event_type> event from 'remember <command>', because its origins don't include <origin>.` when `count` is 1. Leave out the plugin name. Where the output mixes plugins, write `"<plugin>/<action>"`. Print `<event_type>` verbatim. Print `<at>` in the 007 ST-7.16 human date form. Keep `at` in RFC 3339 UTC in JSON.
 - Human `add` line: D-05. Do not change it.
 - Tool-undo name parse: D-13. Do not parse it in the engine.
 
