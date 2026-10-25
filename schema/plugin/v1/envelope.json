@@ -1,0 +1,61 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://itayavtalyon.github.io/remember/schema/plugin/v1/envelope.json",
+  "title": "remember-message envelope v1 (plugin messages)",
+  "type": "object",
+  "required": ["format", "version", "type"],
+  "properties": {
+    "format": {"const": "remember-message"},
+    "version": {"const": 1},
+    "type": {"anyOf": [
+      {"$ref": "#/$defs/known_types"},
+      {"type": "string", "pattern": "^[a-z][a-z0-9_.]*\\.result$", "description": "Failed reply to a request of an unknown type (R9.22)."}
+    ]},
+    "request_id": {"$ref": "common.json#/$defs/uuid"},
+    "data": {"type": "object"},
+    "error": {"$ref": "common.json#/$defs/error"},
+    "warnings": {"$ref": "common.json#/$defs/warnings"},
+    "next_cursor": false,
+    "has_more": false
+  },
+  "oneOf": [
+    {"required": ["data"], "not": {"required": ["error"]}},
+    {"required": ["error"], "not": {"required": ["data"]}}
+  ],
+  "$defs": {
+    "known_types": {"enum": [
+      "ready", "ping", "ping.result", "shutdown",
+      "event", "event.result",
+      "filter.search.query", "filter.search.query.result",
+      "filter.search.results", "filter.search.results.result",
+      "backfill", "backfill.result", "backfill.done", "backfill.done.result",
+      "backfill.pause", "backfill.resume"
+    ]},
+    "requests": {"enum": ["ping", "event", "filter.search.query", "filter.search.results", "backfill", "backfill.done"]},
+    "replies": {"enum": ["ping.result", "event.result", "filter.search.query.result", "filter.search.results.result", "backfill.result", "backfill.done.result"]},
+    "notifications": {"enum": ["ready", "shutdown", "backfill.pause", "backfill.resume"]}
+  },
+  "allOf": [
+    {"if": {"properties": {"type": {"$ref": "#/$defs/requests"}}}, "then": {"required": ["request_id", "data"]}},
+    {"if": {"properties": {"type": {"$ref": "#/$defs/replies"}}}, "then": {"required": ["request_id"]}},
+    {"if": {"properties": {"type": {"$ref": "#/$defs/notifications"}}}, "then": {"required": ["data"], "not": {"required": ["request_id"]}}},
+    {"if": {"required": ["error"]}, "then": {"required": ["request_id"], "properties": {"type": {"pattern": "\\.result$"}}}},
+    {"if": {"properties": {"type": {"not": {"$ref": "#/$defs/known_types"}}}}, "then": {"required": ["error"], "properties": {"error": {"properties": {"code": {"const": "unknown_message_type"}}}}}},
+    {"if": {"properties": {"type": {"const": "ready"}}}, "then": {"properties": {"data": {"$ref": "control.json#/$defs/ready"}}}},
+    {"if": {"properties": {"type": {"const": "ping"}}}, "then": {"properties": {"data": {"$ref": "control.json#/$defs/ping"}}}},
+    {"if": {"properties": {"type": {"const": "ping.result"}}}, "then": {"properties": {"data": {"$ref": "control.json#/$defs/ping_result"}}}},
+    {"if": {"properties": {"type": {"const": "shutdown"}}}, "then": {"properties": {"data": {"$ref": "control.json#/$defs/shutdown"}}}},
+    {"if": {"properties": {"type": {"const": "event"}}}, "then": {"properties": {"data": {"$ref": "event-data.json"}}}},
+    {"if": {"properties": {"type": {"const": "event.result"}}}, "then": {"properties": {"data": {"$ref": "event-result.json"}}}},
+    {"if": {"properties": {"type": {"const": "filter.search.query"}}}, "then": {"properties": {"data": {"$ref": "search-query-in.json"}}}},
+    {"if": {"properties": {"type": {"const": "filter.search.query.result"}}}, "then": {"properties": {"data": {"$ref": "search-query-out.json"}}}},
+    {"if": {"properties": {"type": {"const": "filter.search.results"}}}, "then": {"properties": {"data": {"$ref": "search-results-in.json"}}}},
+    {"if": {"properties": {"type": {"const": "filter.search.results.result"}}}, "then": {"properties": {"data": {"$ref": "search-results-out.json"}}}},
+    {"if": {"properties": {"type": {"const": "backfill"}}}, "then": {"properties": {"data": {"$ref": "backfill.json#/$defs/backfill"}}}},
+    {"if": {"properties": {"type": {"const": "backfill.result"}}}, "then": {"properties": {"data": {"$ref": "backfill.json#/$defs/backfill_result"}}}},
+    {"if": {"properties": {"type": {"const": "backfill.done"}}}, "then": {"properties": {"data": {"$ref": "backfill.json#/$defs/backfill_done"}}}},
+    {"if": {"properties": {"type": {"const": "backfill.done.result"}}}, "then": {"properties": {"data": {"$ref": "backfill.json#/$defs/backfill_result"}}}},
+    {"if": {"properties": {"type": {"const": "backfill.pause"}}}, "then": {"properties": {"data": {"$ref": "backfill.json#/$defs/backfill_pause"}}}},
+    {"if": {"properties": {"type": {"const": "backfill.resume"}}}, "then": {"properties": {"data": {"$ref": "backfill.json#/$defs/backfill_resume"}}}}
+  ]
+}

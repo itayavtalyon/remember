@@ -1,0 +1,14 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://itayavtalyon.github.io/remember/schema/plugin/v1/search-query-out.json",
+  "title": "filter.search.query.result data",
+  "type": "object",
+  "properties": {
+    "query": {"$ref": "common.json#/$defs/query"},
+    "skipped": {"type": "boolean", "default": false},
+    "note": {"type": "string"}
+  },
+  "if": {"properties": {"skipped": {"const": true}}, "required": ["skipped"]},
+  "then": {"required": ["note"]},
+  "else": {"required": ["query"]}
+}

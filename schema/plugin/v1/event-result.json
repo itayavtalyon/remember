@@ -1,0 +1,11 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://itayavtalyon.github.io/remember/schema/plugin/v1/event-result.json",
+  "title": "event.result data",
+  "type": "object",
+  "required": ["event_id"],
+  "properties": {
+    "event_id": {"$ref": "common.json#/$defs/uuid"},
+    "result": false
+  }
+}

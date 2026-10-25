@@ -1,0 +1,2 @@
+{"format":"remember-plugin","version":1,"name":"hello","plugin_version":"0.1.0","protocol":1,
+ "filters":[{"name":"rank","point":"search.results","run":{"process":"persistent","command":["hello.py"]},"permissions":{"needs":["body"]}}]}

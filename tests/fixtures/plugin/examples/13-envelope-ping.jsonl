@@ -1,0 +1,2 @@
+{"format":"remember-message","version":1,"type":"ping","request_id":"01a14524-0000-7000-8000-000000000302","data":{}}
+{"format":"remember-message","version":1,"type":"ping.result","request_id":"01a14524-0000-7000-8000-000000000302","data":{"pid":48213,"index_version":{"data_version":3,"model":"small"},"active_requests":0}}

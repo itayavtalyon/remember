@@ -1,0 +1,6 @@
+{"format":"remember-message","version":1,"type":"filter.search.query","request_id":"01a14522-0000-7000-8000-000000000101",
+ "data":{"entry":"expand",
+  "query":{"text":"k8s ingress last week","tags":[],"bins":["live"],"time_range":{"field":"updated_at","after":null,"before":null}},
+  "original_query":{"text":"k8s ingress last week","tags":[],"bins":["live"],"time_range":{"field":"updated_at","after":null,"before":null}},
+  "budget_ms":800,"cold":false,
+  "settings":[{"key":"plugin.synonyms.enabled","value":true}],"data_dir":"/Users/itay/.remember/remember.db.d/plugins/synonyms/data/"}}

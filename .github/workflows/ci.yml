@@ -35,7 +35,9 @@ jobs:
           ./scripts/ci-linux.sh --inner --install
 
   # Plugin protocol spec (plan 24): every schema and example in
-  # docs/PLUGIN-PROTOCOL.md must validate. Python is a docs tool here only.
+  # docs/PLUGIN-PROTOCOL.md must validate, and schema/plugin/v1/ and
+  # tests/fixtures/plugin/ must hold the same bytes as their spec blocks.
+  # Python is a docs tool here only.
   docs:
     name: docs (plugin protocol spec)
     runs-on: ubuntu-latest

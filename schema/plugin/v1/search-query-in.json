@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://itayavtalyon.github.io/remember/schema/plugin/v1/search-query-in.json",
+  "title": "filter.search.query data",
+  "type": "object",
+  "required": ["entry", "query", "original_query", "budget_ms", "cold", "settings", "data_dir"],
+  "properties": {
+    "entry": {"$ref": "common.json#/$defs/entry_name", "description": "Name of the filter entry in the manifest (routing key, R6.4)."},
+    "filter": false,
+    "query": {"$ref": "common.json#/$defs/query", "description": "Output of the previous filter, or the user's query."},
+    "original_query": {"$ref": "common.json#/$defs/query"},
+    "budget_ms": {"type": "integer", "minimum": 1},
+    "cold": {"type": "boolean", "description": "True on the first call after the process started."},
+    "settings": {"$ref": "common.json#/$defs/settings"},
+    "data_dir": {"type": "string"}
+  }
+}

@@ -1,0 +1,68 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://itayavtalyon.github.io/remember/schema/plugin/v1/search-response.json",
+  "title": "memory.search.result envelope (CLI --json without request_id; HTTP and MCP with it)",
+  "type": "object",
+  "required": ["format", "version", "type"],
+  "properties": {
+    "format": {"const": "remember-message"},
+    "version": {"const": 1},
+    "type": {"const": "memory.search.result"},
+    "request_id": {"$ref": "common.json#/$defs/uuid"},
+    "data": {"$ref": "#/$defs/data"},
+    "error": {"$ref": "common.json#/$defs/error"},
+    "next_cursor": false,
+    "has_more": false,
+    "warnings": {"$ref": "common.json#/$defs/warnings"}
+  },
+  "oneOf": [
+    {"required": ["data"], "not": {"required": ["error"]}},
+    {"required": ["error"], "not": {"required": ["data"]}}
+  ],
+  "allOf": [
+    {"if": {"not": {"required": ["request_id"]}},
+     "then": {"properties": {"data": {"properties": {"entries": {"items": {"$ref": "#/$defs/cli_memory"}}}}}}},
+    {"if": {"required": ["request_id"]},
+     "then": {"properties": {"data": {"properties": {"entries": {"items": {"properties": {"local_id": false}}}}}}}}
+  ],
+  "$defs": {
+    "response_memory": {
+      "allOf": [{"$ref": "common.json#/$defs/memory_fields"}],
+      "required": ["id", "key", "body", "tags", "created_at", "updated_at", "expires_at", "deleted_at", "bin", "version_vector", "links"]
+    },
+    "cli_memory": {"properties": {"local_id": {"type": "integer", "minimum": 1, "description": "CLI only (J6)."}}},
+    "data": {
+      "type": "object",
+      "required": ["count", "total", "entries", "query", "ranked_by", "filters", "keys", "tags"],
+      "properties": {
+        "count": {"type": "integer", "minimum": 0},
+        "total": {"type": "integer", "minimum": 0, "description": "The chain length before the limit (S-08)."},
+        "keys": {"type": "array", "description": "The 006 key facet (log 008 J-Q5)."},
+        "tags": {"type": "array", "description": "The 006 tag facet (log 008 J-Q5)."},
+        "entries": {"type": "array", "items": {"$ref": "#/$defs/response_memory"}},
+        "query": {"type": "object", "required": ["original", "rewritten"],
+          "properties": {"original": {"$ref": "common.json#/$defs/query"}, "rewritten": {"$ref": "common.json#/$defs/query"}}},
+        "ranked_by": {"type": "string"},
+        "filters": {"type": "array", "items": {"$ref": "#/$defs/filter_entry"}}
+      }
+    },
+    "filter_entry": {
+      "type": "object",
+      "required": ["name", "plugin_version", "point", "status", "duration_ms", "cold"],
+      "properties": {
+        "name": {"type": "string", "pattern": "^[a-z][a-z0-9_]*/[a-z][a-z0-9_]*$"},
+        "plugin_version": {"type": "string"},
+        "point": {"enum": ["search.query", "search.results"]},
+        "status": {"enum": ["applied", "skipped", "failed", "timeout"]},
+        "reason": {"type": "string", "description": "Open list: chain_capped, disabled, pass_through, budget, cold_grace, crash, malformed, error_reply, oversize, spawn_failed."},
+        "duration_ms": {"type": "integer", "minimum": 0},
+        "cold": {"type": "boolean"},
+        "note": {"type": "string", "maxLength": 120},
+        "scores": {"type": "array", "items": {"type": "object", "required": ["memory_id", "score"],
+          "properties": {"memory_id": {"$ref": "common.json#/$defs/uuid"}, "score": {"type": "number"}}}}
+      },
+      "if": {"properties": {"status": {"not": {"const": "applied"}}}},
+      "then": {"required": ["reason"]}
+    }
+  }
+}

@@ -112,7 +112,22 @@ Do not re-open: revision 6 amendments, no conformance section, `$id` host, proto
 
 ## Implementation Notes
 
-_(empty)_
+**2026-10-25, stages 1–3 (one branch, `claude/serene-shannon-m1pp1w`).** Itay asked for all stages first and review rounds after, so no stage stopped for a `.claude/REVIEW_REQUEST` handoff.
+
+Itay's decisions (2026-10-25, asked before stage 2):
+
+| Question | Answer |
+|---|---|
+| Where the extract and fixture checks live | In `scripts/validate_plugin_spec.py`, reusing its block parser, plus `--write` to regenerate both folders. The existing summary line is unchanged. One line before it counts the extracted files. |
+| Fixture layout | One file per spec block. A block captioned `` `dir/file` `` goes to that path: `hello/plugin.json`, `hello/hello.py`, `log_ids/plugin.json`, `log_ids/append.py`. The `.py` files are mode 0755 and the check fails without the exec bit. Every other marked example goes to `examples/NN-<schema>[-<type>].json`, or `.jsonl` for `example-lines`. `NN` is its order in the spec. `<type>` comes from the block's first document. |
+| File bytes | The block body plus one `\n`. |
+| Changelog | A dated "Repository note" at the top of `PLUGIN-PROTOCOL-CHANGES.md`. No revision bump. `PLUGIN-PROTOCOL.md` is unchanged. |
+
+Stage 1. The `docs` job in `.github/workflows/ci.yml` creates a venv, installs `jsonschema==4.26.0` and `referencing==0.37.0` (the versions the changelog names), and runs `scripts/validate_plugin_spec.py docs/PLUGIN-PROTOCOL.md`. A non-zero exit fails the job. Local run with the same pins: 13 schemas, 29 examples, 81 negative tests, 0 code-check negative tests, 14 positive edge tests, 0 failures, exit 0.
+
+Stages 2–3 (one commit, because both checks share one file walk). Extraction gives 39 files: 13 schemas and 26 fixtures (22 under `examples/`, plus the 4 §2.4 files). The check fails on a missing file, a changed byte (with a unified diff of up to 40 lines), a lost final newline, a missing exec bit on a `#!` file, a file in either folder that the spec does not produce, and two spec blocks that map to one path. Files whose names start with `.` are ignored, so a macOS `.DS_Store` does not fail a local run. An uncaptioned ```` ```python ```` block in the spec fails, just as an unmarked ```` ```json ```` block already does. The repo root is the script's parent folder, so the check works from any cwd. Probes run: one schema byte changed (fails, diff shown), restored (passes), a stray file, `chmod -x hello.py`, and a truncated final newline (each fails), `--write` (all pass again).
+
+009-4: the new comments and docstring cite no rule id. Stage 4 (the `$id` fetch) is not started. Itay's GitHub Pages note is not here yet. No GitHub setting changed. `protocol` in the spec is still 1. No C code changed, so the gate is the validator plus the file check.
 
 ## Review Notes
 

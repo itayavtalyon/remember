@@ -1,0 +1,32 @@
+{
+  "format": "remember-plugin",
+  "version": 1,
+  "name": "hybrid",
+  "plugin_version": "1.0.0",
+  "protocol": 1,
+  "description": "Semantic re-ranking of keyword search results.",
+  "data_version": 3,
+  "backfill": {"enabled": true, "max_batch_entries": 50, "max_batch_size": "2MiB"},
+  "actions": [
+    {
+      "name": "index",
+      "events": ["memory.created", "memory.updated", "memory.deleted", "memory.restored", "memory.purged", "memory.expired"],
+      "run": {"process": "persistent", "command": ["bin/remember-hybrid", "--serve"], "timeout": "30s"},
+      "permissions": {"needs": ["key", "body", "tags", "bin", "updated_at", "change_seq"]}
+    }
+  ],
+  "filters": [
+    {
+      "name": "rerank",
+      "point": "search.results",
+      "priority": 500,
+      "budget": "800ms",
+      "run": {"process": "persistent", "command": ["bin/remember-hybrid", "--serve"]},
+      "permissions": {"needs": ["remember.search.candidate_pool"]}
+    }
+  ],
+  "settings": [
+    {"key": "model", "description": "Which embedding model to use.", "type": "enum", "default": "small", "range": {"values": ["small", "base"]}, "scope": "user"},
+    {"key": "min_index_coverage", "description": "Rank only when this share of memories is indexed.", "type": "integer", "default": 50, "range": {"min": 0, "max": 100}, "scope": "both"}
+  ]
+}

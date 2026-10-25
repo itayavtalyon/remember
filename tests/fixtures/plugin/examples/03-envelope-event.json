@@ -1,0 +1,9 @@
+{"format":"remember-message","version":1,"type":"event","request_id":"01a14521-0b00-7000-8000-0000000000e8",
+ "data":{"event_id":"01a14521-0a00-7c11-9a00-0000000000e1","event_type":"memory.created","occurred_at":"2026-10-16T14:21:03.512Z","detected_at":"2026-10-16T14:21:03.512Z","batch_id":null,
+  "cause":{"command":"add","origin":"local","hook":null,"run_id":null,"depth":0,"chain":[]},
+  "brain":{"path":"~/.remember/remember.db","device_id":"01a0d90a-e71c-7a0a-bb2c-3b377482fa51"},
+  "memory":{"id":"01a14521-09ff-7d20-8c00-00000000aa01","body":"Read later: https://sqlite.org/fts5.html#the_bm25_function","tags":["reading"],"bin":"live"},
+  "changes":null,"truncated":false,"truncated_fields":[],"limits":{"max_bytes":262144},
+  "plugin":{"name":"url_expand","plugin_version":"0.4.0"},"entry":"fetch",
+  "data_dir":"/Users/itay/.remember/remember.db.d/plugins/url_expand/data/",
+  "settings":[{"key":"plugin.url_expand.enabled","value":true},{"key":"plugin.url_expand.max_bytes","value":"512KiB","value_bytes":524288}]}}

@@ -1,0 +1,47 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://itayavtalyon.github.io/remember/schema/plugin/v1/event-data.json",
+  "title": "Event data (the data of an event message), v1",
+  "type": "object",
+  "required": ["event_id", "event_type", "occurred_at", "detected_at", "batch_id", "cause", "brain", "memory", "changes", "truncated", "truncated_fields", "limits", "plugin", "entry", "data_dir", "settings"],
+  "properties": {
+    "event_id": {"$ref": "common.json#/$defs/uuid"},
+    "event_type": {"enum": ["memory.created", "memory.updated", "memory.deleted", "memory.restored", "memory.purged", "memory.expired"]},
+    "occurred_at": {"$ref": "common.json#/$defs/timestamp"},
+    "detected_at": {"$ref": "common.json#/$defs/timestamp"},
+    "batch_id": {"oneOf": [{"$ref": "common.json#/$defs/uuid"}, {"type": "null"}]},
+    "cause": {
+      "type": "object",
+      "required": ["command", "origin", "hook", "run_id", "depth", "chain"],
+      "properties": {
+        "command": {"enum": ["add", "update", "delete", "purge", "rekey", "link", "unlink", "import", "sync", "sweep", "app"]},
+        "origin": {"enum": ["local", "sync", "import"], "description": "R3.5a (#577)."},
+        "hook": {"type": ["string", "null"], "description": "plugin/<name>/<entry>, or null (R3.5a)."},
+        "plugin": false,
+        "run_id": {"oneOf": [{"$ref": "common.json#/$defs/uuid"}, {"type": "null"}]},
+        "depth": {"type": "integer", "minimum": 0},
+        "chain": {"type": "array", "maxItems": 100, "items": {
+          "type": "object", "required": ["hook", "event_id", "memory_id", "depth"],
+          "properties": {
+            "hook": {"type": "string"},
+            "event_id": {"$ref": "common.json#/$defs/uuid"},
+            "memory_id": {"$ref": "common.json#/$defs/uuid"},
+            "depth": {"type": "integer", "minimum": 1}}}}
+      }
+    },
+    "brain": {
+      "type": "object", "required": ["path", "device_id"],
+      "properties": {"path": {"type": "string", "description": "Shortened with ~ (OQ-14)."}, "device_id": {"$ref": "common.json#/$defs/uuid"}}
+    },
+    "memory": {"$ref": "common.json#/$defs/memory"},
+    "changes": {"type": ["object", "null"]},
+    "truncated": {"type": "boolean"},
+    "truncated_fields": {"type": "array", "items": {"type": "string"}},
+    "limits": {"type": "object", "required": ["max_bytes"], "properties": {"max_bytes": {"const": 262144}}},
+    "plugin": {"type": "object", "required": ["name", "plugin_version"],
+      "properties": {"name": {"$ref": "common.json#/$defs/plugin_name"}, "plugin_version": {"type": "string"}, "action": false}},
+    "entry": {"$ref": "common.json#/$defs/entry_name", "description": "The action entry (routing key, R6.4). Every hook is a plugin (S-01)."},
+    "data_dir": {"type": "string", "pattern": "^(/|[A-Za-z]:\\\\)", "description": "Absolute <brain>.d/plugins/<name>/data/ (OQ-14, G-28)."},
+    "settings": {"$ref": "common.json#/$defs/settings"}
+  }
+}

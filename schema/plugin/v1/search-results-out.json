@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://itayavtalyon.github.io/remember/schema/plugin/v1/search-results-out.json",
+  "title": "filter.search.results.result data",
+  "type": "object",
+  "properties": {
+    "results": {
+      "type": "array",
+      "items": {"type": "object", "required": ["memory_id", "score"],
+        "properties": {"memory_id": {"$ref": "common.json#/$defs/uuid"}, "score": {"type": "number"}}}
+    },
+    "additions": {"type": "array", "items": {"$ref": "common.json#/$defs/uuid"}},
+    "skipped": {"type": "boolean", "default": false},
+    "note": {"type": "string"}
+  },
+  "if": {"properties": {"skipped": {"const": true}}, "required": ["skipped"]},
+  "then": {"required": ["note"]},
+  "else": {"required": ["results"]}
+}

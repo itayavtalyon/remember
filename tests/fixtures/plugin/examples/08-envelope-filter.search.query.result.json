@@ -1,0 +1,2 @@
+{"format":"remember-message","version":1,"type":"filter.search.query.result","request_id":"01a14522-0000-7000-8000-000000000101",
+ "data":{"query":{"text":"(k8s OR kubernetes) ingress","tags":[],"bins":["live"],"time_range":{"field":"updated_at","after":"2026-10-09T00:00:00.000Z","before":null}},"note":"expanded k8s; last week as time range"}}

@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://itayavtalyon.github.io/remember/schema/plugin/v1/search-results-in.json",
+  "title": "filter.search.results data",
+  "type": "object",
+  "required": ["entry", "query", "original_query", "candidates", "max_results", "max_additions", "budget_ms", "cold", "settings", "data_dir"],
+  "properties": {
+    "entry": {"$ref": "common.json#/$defs/entry_name", "description": "Routing key (R6.4)."},
+    "filter": false,
+    "query": {"$ref": "common.json#/$defs/query", "description": "The query after the search.query chain."},
+    "original_query": {"$ref": "common.json#/$defs/query"},
+    "candidates": {
+      "type": "array", "maxItems": 2000,
+      "items": {
+        "allOf": [{"$ref": "common.json#/$defs/memory"}],
+        "required": ["id", "bm25", "scores"],
+        "properties": {
+          "bm25": {"type": "number"},
+          "scores": {"type": "array", "items": {"$ref": "common.json#/$defs/filter_score"}, "description": "Scores of earlier filters, labelled by filter."}
+        }
+      }
+    },
+    "max_results": {"type": "integer", "minimum": 1},
+    "max_additions": {"type": "integer", "minimum": 0},
+    "budget_ms": {"type": "integer", "minimum": 1},
+    "cold": {"type": "boolean"},
+    "settings": {"$ref": "common.json#/$defs/settings"},
+    "data_dir": {"type": "string"}
+  }
+}

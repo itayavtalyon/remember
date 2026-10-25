@@ -4,23 +4,41 @@
 Schemas: ```json blocks that contain "$schema".
 Examples: ```json blocks preceded by <!-- example: NAME --> (one document)
 or <!-- example-lines: NAME --> (one document per line).
+
+Extracted files (plan 24): each schema is schema/plugin/v1/<$id file name>.
+Each example is a fixture in tests/fixtures/plugin/: at the path of its
+`dir/file` caption (the section 2.4 plugins, with their ```python blocks),
+else examples/NN-<schema>[-<type>].json, or .jsonl for example-lines. A file
+holds the block body plus a newline. --write regenerates both folders.
 """
-import json, re, sys, copy
+import argparse, difflib, json, os, re, sys, copy
+from pathlib import Path
 from jsonschema import Draft202012Validator
 from referencing import Registry, Resource
 
 BASE = "https://itayavtalyon.github.io/remember/schema/plugin/v1/"
-path = sys.argv[1]
+ROOT = Path(__file__).resolve().parent.parent
+SCHEMA_DIR, FIXTURE_DIR = ROOT / "schema/plugin/v1", ROOT / "tests/fixtures/plugin"
+ap = argparse.ArgumentParser()
+ap.add_argument("spec")
+ap.add_argument("--write", action="store_true", help="regenerate the extracted schema and fixture files")
+args = ap.parse_args()
+path = args.spec
 text = open(path, encoding="utf-8").read()
 
-blocks = []  # (line, marker, body)
+def caption(start):
+    """The `dir/file` path that starts the last non-blank line before start, or None."""
+    m = re.match(r"`([a-z][a-z0-9_]*/[A-Za-z0-9_][A-Za-z0-9_.]*)`", text[:start].rstrip().rsplit("\n", 1)[-1])
+    return m and m.group(1)
+
+blocks = []  # (line, marker, name, body, caption)
 for m in re.finditer(r"(?:<!--\s*(example(?:-lines)?):\s*(\S+)\s*-->\s*\n)?```json\n(.*?)\n```", text, re.S):
     line = text[:m.start()].count("\n") + 1
-    blocks.append((line, m.group(1), m.group(2), m.group(3)))
+    blocks.append((line, m.group(1), m.group(2), m.group(3), caption(m.start())))
 
 fail = 0
 schemas, examples = {}, []
-for line, kind, name, body in blocks:
+for line, kind, name, body, _ in blocks:
     if '"$schema"' in body:
         try:
             s = json.loads(body)
@@ -229,5 +247,66 @@ for label, name, doc in pos:
     if not ok: fail += 1
     print(("ok   positive: " if ok else "FAIL positive: ") + label)
 
-print(f"\n{len(schemas)} schemas, {len(examples)} examples, {len(neg)} negative tests, {len(code_neg)} code-check negative tests, {len(pos)} positive edge tests, {fail} failures")
+# Extracted files: each must hold the same bytes as its spec block.
+files = {}  # path -> (spec line, bytes)
+def put(p, line, want):
+    global fail
+    if p in files:
+        print(f"FAIL line {line}: {p.relative_to(ROOT)} is also extracted from line {files[p][0]}"); fail += 1
+    files[p] = (line, want)
+for line, kind, name, body, cap in blocks:
+    if '"$schema"' in body:
+        try:
+            put(SCHEMA_DIR / json.loads(body)["$id"].rsplit("/", 1)[-1], line, body + "\n")
+        except (json.JSONDecodeError, KeyError):
+            pass  # reported above
+for m in re.finditer(r"```python\n(.*?)\n```", text, re.S):
+    line, cap = text[:m.start()].count("\n") + 1, caption(m.start())
+    if cap:
+        put(FIXTURE_DIR / cap, line, m.group(1) + "\n")
+    else:
+        print(f"FAIL line {line}: python block has no `dir/file` caption"); fail += 1
+n = 0
+for line, kind, name, body, cap in blocks:
+    if kind is None:
+        continue
+    if cap:
+        put(FIXTURE_DIR / cap, line, body + "\n")
+        continue
+    n += 1
+    try:
+        t = json.loads(body.splitlines()[0] if kind == "example-lines" else body).get("type")
+    except json.JSONDecodeError:
+        t = None  # reported above
+    stem = f"{n:02d}-{name.removesuffix('.json')}" + (f"-{t}" if t else "")
+    put(FIXTURE_DIR / "examples" / (stem + (".jsonl" if kind == "example-lines" else ".json")), line, body + "\n")
+on_disk = {p for d in (SCHEMA_DIR, FIXTURE_DIR) if d.is_dir() for p in d.rglob("*") if p.is_file() and not p.name.startswith(".")}
+if args.write:
+    for p in on_disk - files.keys():
+        p.unlink()
+    for p, (_, want) in files.items():
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(want, encoding="utf-8", newline="")
+        if want.startswith("#!"):
+            p.chmod(0o755)
+    on_disk = set(files)
+for p in sorted(on_disk - files.keys()):
+    print(f"FAIL file {p.relative_to(ROOT)}: not extracted from the spec (run with --write)"); fail += 1
+for p, (line, want) in sorted(files.items()):
+    rel = p.relative_to(ROOT)
+    if p not in on_disk:
+        print(f"FAIL file {rel}: missing, spec line {line} (run with --write)"); fail += 1; continue
+    have = p.read_bytes().decode("utf-8", "replace")
+    if have != want:
+        print(f"FAIL file {rel}: differs from spec line {line} (run with --write)"); fail += 1
+        if have.rstrip("\n") == want.rstrip("\n"):
+            print("  only the final newline differs")
+        else:
+            sys.stdout.writelines(list(difflib.unified_diff(want.splitlines(True), have.splitlines(True), "spec", str(rel)))[:40])
+    elif want.startswith("#!") and not os.access(p, os.X_OK):
+        print(f"FAIL file {rel}: is not executable"); fail += 1
+    else:
+        print(f"ok   file {rel}: spec line {line}")
+print(f"\n{len(files)} extracted files: {sum(p.parent == SCHEMA_DIR for p in files)} schemas, {sum(p.parent != SCHEMA_DIR for p in files)} fixtures")
+print(f"{len(schemas)} schemas, {len(examples)} examples, {len(neg)} negative tests, {len(code_neg)} code-check negative tests, {len(pos)} positive edge tests, {fail} failures")
 sys.exit(1 if fail else 0)

@@ -1,0 +1,18 @@
+{"format":"remember-message","version":1,"type":"memory.search.result",
+ "data":{"count":2,"total":2,"keys":[],"tags":[],
+  "entries":[
+   {"id":"01a13a8c-55f0-7c2e-9b1d-4e0c7f3a2b11","local_id":41,"key":null,"body":"Please review PR #88 (export path escaping).","tags":["to:reviewer"],"created_at":"2026-10-14T12:00:00.000Z","updated_at":"2026-10-14T12:30:00.000Z","expires_at":null,"deleted_at":null,"bin":"live","version_vector":{"01a13651-e244-717d-bd40-7850d5e2f27d":2},"links":[]},
+   {"id":"01a13b02-1a10-7e3d-8d2a-1b2c3d4e5f60","local_id":44,"key":"howto:export-escaping","body":"Export paths are escaped with sqlite3_mprintf %q.","tags":["howto"],"created_at":"2026-10-13T09:10:00.000Z","updated_at":"2026-10-13T09:10:00.000Z","expires_at":null,"deleted_at":null,"bin":"live","version_vector":{"01a13651-e244-717d-bd40-7850d5e2f27d":1},"links":[]}],
+  "query":{
+   "original":{"text":"how do we escape export paths","tags":[],"bins":["live"],"time_range":{"field":"updated_at","after":null,"before":null}},
+   "rewritten":{"text":"how do we escape (export OR exporter) paths","tags":[],"bins":["live"],"time_range":{"field":"updated_at","after":null,"before":null}}},
+  "ranked_by":"recency/boost",
+  "filters":[
+   {"name":"synonyms/expand","plugin_version":"0.2.0","point":"search.query","status":"applied","duration_ms":21,"cold":false,"note":"expanded export"},
+   {"name":"hybrid/rerank","plugin_version":"1.0.0","point":"search.results","status":"timeout","reason":"budget","duration_ms":800,"cold":false},
+   {"name":"recency/boost","plugin_version":"0.1.0","point":"search.results","status":"applied","duration_ms":679,"cold":false,
+    "scores":[{"memory_id":"01a13a8c-55f0-7c2e-9b1d-4e0c7f3a2b11","score":12.0},{"memory_id":"01a13b02-1a10-7e3d-8d2a-1b2c3d4e5f60","score":9.5}]},
+   {"name":"dedupe/collapse","plugin_version":"0.3.1","point":"search.results","status":"skipped","reason":"chain_capped","duration_ms":0,"cold":false}]},
+ "warnings":[
+  {"code":"plugin_filter_timeout","message":"Filter hybrid/rerank took longer than 800ms, so it did not rank these results. If this keeps happening, run 'remember plugin status hybrid'.","detail":{"plugin":"hybrid","filter":"rerank","reason":"budget","strikes":1}},
+  {"code":"plugin_chain_capped","message":"The filter chain reached its 1.5s cap, so filter dedupe/collapse did not run.","detail":{"plugin":"dedupe","filter":"collapse","reason":"chain_capped"}}]}

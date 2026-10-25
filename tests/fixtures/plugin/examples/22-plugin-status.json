@@ -1,0 +1,5 @@
+{"name":"hybrid","plugin_version":"1.0.0","protocol":1,"enabled":true,"disabled_reason":null,"dev":false,
+ "process":{"state":"running","pid":48213,"started_at":"2026-10-19T08:00:00.000Z","cold_start_ms":2300,"strikes":0,"crashes_10m":0},
+ "index":{"state":"ready","coverage":0.92,"index_version":{"data_version":3,"model":"small"},"backfill":{"pending":false,"mode":null,"seq":null,"total":null}},
+ "entries":[{"name":"rerank","point":"search.results","budget":"800ms","cold_start_grace":"10s","last_status":"applied","last_duration_ms":212},{"name":"index","point":"action","budget":null,"last_status":"ok","last_duration_ms":40}],
+ "last_problems":[{"at":"2026-10-19T08:00:02.300Z","code":"plugin_filter_cold_start","message":"Filter hybrid/rerank took 2300ms to start, longer than the 1.5s chain cap."}]}
