@@ -1,0 +1,126 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://itayavtalyon.github.io/remember/schema/plugin/v1/manifest.json",
+  "title": "Remember plugin manifest (plugin.json) v1",
+  "type": "object",
+  "required": ["format", "version", "name", "plugin_version", "protocol"],
+  "anyOf": [{"required": ["actions"]}, {"required": ["filters"]}],
+  "properties": {
+    "format": {"const": "remember-plugin"},
+    "version": {"const": 1},
+    "name": {"$ref": "common.json#/$defs/plugin_name"},
+    "plugin_version": {"type": "string", "pattern": "^\\d+\\.\\d+\\.\\d+([-+][0-9A-Za-z.-]+)?$", "description": "SemVer of the plugin."},
+    "protocol": {"const": 1},
+    "description": {"type": "string", "maxLength": 200},
+    "data_version": {"type": "integer", "minimum": 1, "default": 1},
+    "idle_timeout": {"$ref": "common.json#/$defs/duration", "description": "Overrides remember.plugins.idle_timeout for this plugin (R2.20)."},
+    "backfill": {"$ref": "#/$defs/backfill"},
+    "actions": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/action"}},
+    "filters": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/filter"}},
+    "settings": {"type": "array", "items": {"$ref": "#/$defs/setting"}}
+  },
+  "if": {"properties": {"backfill": {"properties": {"enabled": {"const": true}}, "required": ["enabled"]}}, "required": ["backfill"]},
+  "then": {
+    "anyOf": [
+      {"required": ["filters"]},
+      {"required": ["actions"], "properties": {"actions": {"contains": {"properties": {"run": {"properties": {"process": {"const": "persistent"}}, "required": ["process"]}}}}}}
+    ]
+  },
+  "$defs": {
+    "command": {"type": "array", "minItems": 1, "items": {"type": "string", "minLength": 1}},
+    "actor_kind": {"enum": ["human", "agent", "tool", "share", "import"]},
+    "memory_field": {"enum": ["key", "body", "tags", "bin", "created_at", "updated_at", "expires_at", "deleted_at", "change_seq", "created_by", "updated_by", "links"]},
+    "needs": {
+      "type": "array", "uniqueItems": true,
+      "items": {"anyOf": [{"$ref": "#/$defs/memory_field"}, {"$ref": "common.json#/$defs/global_setting_key"}]}
+    },
+    "permissions": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {"needs": {"$ref": "#/$defs/needs"}}
+    },
+    "event_type": {"enum": ["memory.created", "memory.updated", "memory.deleted", "memory.restored", "memory.purged", "memory.expired", "memory.*"]},
+    "action_run": {
+      "type": "object",
+      "required": ["command"],
+      "additionalProperties": false,
+      "properties": {
+        "process": {"enum": ["once", "persistent"], "default": "once"},
+        "command": {"$ref": "#/$defs/command"},
+        "timeout": {"$ref": "common.json#/$defs/duration", "default": "60s"}
+      }
+    },
+    "filter_run": {
+      "type": "object",
+      "required": ["process", "command"],
+      "additionalProperties": false,
+      "properties": {
+        "process": {"const": "persistent"},
+        "command": {"$ref": "#/$defs/command"}
+      }
+    },
+    "action": {
+      "type": "object",
+      "required": ["name", "events", "run"],
+      "properties": {
+        "name": {"$ref": "common.json#/$defs/entry_name"},
+        "events": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/event_type"}},
+        "filter": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "tags": {"type": "object", "properties": {"any": {"type": "array", "items": {"type": "string"}}, "all": {"type": "array", "items": {"type": "string"}}, "match_before": {"type": "boolean"}}},
+            "created_by": {"type": "array", "items": {"$ref": "#/$defs/actor_kind"}},
+            "updated_by": {"type": "array", "items": {"$ref": "#/$defs/actor_kind"}},
+            "bins": {"type": "array", "items": {"$ref": "common.json#/$defs/bin"}},
+            "not_caused_by": {"type": "array", "items": {"type": "string"}},
+            "origins": {"type": "array", "items": {"enum": ["local", "sync", "import"]}, "default": ["local"], "description": "R2.21 (G-11)."}
+          }
+        },
+        "run": {"$ref": "#/$defs/action_run"},
+        "permissions": {"$ref": "#/$defs/permissions"}
+      }
+    },
+    "filter": {
+      "type": "object",
+      "required": ["name", "point", "run"],
+      "properties": {
+        "name": {"$ref": "common.json#/$defs/entry_name"},
+        "point": {"enum": ["search.query", "search.results"]},
+        "priority": {"type": "integer", "minimum": 0, "maximum": 1000, "default": 500, "description": "Lower runs first."},
+        "budget": {"$ref": "common.json#/$defs/duration", "default": "800ms", "description": "The entry budget; no user setting overrides it (S-06)."},
+        "cold_start_grace": {"allOf": [{"$ref": "common.json#/$defs/duration"}, {"not": {"pattern": "^0+(ms|s|m|h)$"}}], "default": "10s", "description": "The cold-start grace, 1 ms to 30 s (R2.13, M-24 A, 2026-10-22); no user setting overrides it (S-06)."},
+        "run": {"$ref": "#/$defs/filter_run"},
+        "permissions": {"$ref": "#/$defs/permissions"}
+      }
+    },
+    "backfill": {
+      "type": "object",
+      "required": ["enabled"],
+      "properties": {
+        "enabled": {"type": "boolean"},
+        "max_batch_entries": {"type": "integer", "minimum": 1, "maximum": 100, "default": 100},
+        "max_batch_size": {"$ref": "common.json#/$defs/size", "default": "4MiB", "description": "At most 4MiB (R2.18)."}
+      }
+    },
+    "setting": {
+      "type": "object",
+      "required": ["key", "description", "type", "default"],
+      "properties": {
+        "key": {"type": "string", "pattern": "^[a-z][a-z0-9_]{0,39}$", "not": {"const": "enabled"}},
+        "description": {"type": "string", "maxLength": 200},
+        "type": {"enum": ["boolean", "integer", "enum", "duration", "size", "string", "string_list"]},
+        "default": {},
+        "range": {
+          "type": "object",
+          "properties": {
+            "min": {}, "max": {},
+            "values": {"type": "array", "items": {"type": "string"}},
+            "max_items": {"type": "integer", "minimum": 1}
+          }
+        },
+        "scope": {"enum": ["user", "brain", "both"], "default": "user"}
+      }
+    }
+  }
+}

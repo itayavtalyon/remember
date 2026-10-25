@@ -1,0 +1,2 @@
+{"format":"remember-plugin","version":1,"name":"log_ids","plugin_version":"0.1.0","protocol":1,
+ "actions":[{"name":"append","events":["memory.created"],"run":{"command":["append.py"]}}]}

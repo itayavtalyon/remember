@@ -2,6 +2,10 @@
 
 Before 1.0, breaking changes are clean breaks with a changelog note and no aliases. This file is that note.
 
+## Repository note (2026-10-25)
+
+No wire change. The spec stays revision 6, protocol 1. Plan 24 extracts each schema block to `schema/plugin/v1/<$id file name>` and each example, including the §2.4 `hello` and `log_ids` plugins, to `tests/fixtures/plugin/`. `scripts/validate_plugin_spec.py` fails when a file differs from its spec block, and `--write` regenerates the files. The docs CI job runs it.
+
 ## Revision 6 (2026-10-22)
 
 Applies the 24-row amendment table of log 009 (Design), as Itay chose on 2026-10-22 (M-06 A, `decision:2026-10-22-M-06`, 750), with the merge answers M-17 (757) and M-19 N2/N6/N7 (759) and the Interface review's warning-code fix. Still protocol 1, because no plugin shipped (log 009 P-Q4). Protocol 1 is frozen after this revision (PR-5). Spec section 0.7 lists the decisions.

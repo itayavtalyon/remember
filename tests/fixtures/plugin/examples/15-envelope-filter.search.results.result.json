@@ -1,0 +1,1 @@
+{"format":"remember-message","version":1,"type":"filter.search.results.result","request_id":"01a14523-0000-7000-8000-000000000201","error":{"code":"model_not_loaded","message":"The embedding model small is missing from the data folder.","fix":"Run 'remember plugin reindex hybrid'.","retryable":false}}

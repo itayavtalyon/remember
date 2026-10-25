@@ -1,0 +1,7 @@
+{"format":"remember-message","version":1,"type":"memory.search.result","request_id":"01a14530-0000-7000-8000-0000000000aa",
+ "data":{"count":1,"total":1,"keys":[],"tags":[],
+  "entries":[{"id":"01a13a8c-55f0-7c2e-9b1d-4e0c7f3a2b11","key":null,"body":"Please review PR #88 (export path escaping).","tags":["to:reviewer"],"created_at":"2026-10-14T12:00:00.000Z","updated_at":"2026-10-14T12:30:00.000Z","expires_at":null,"deleted_at":null,"bin":"live","version_vector":{"01a13651-e244-717d-bd40-7850d5e2f27d":2},"links":[]}],
+  "query":{
+   "original":{"text":"export paths","tags":[],"bins":["live"],"time_range":{"field":"updated_at","after":null,"before":null}},
+   "rewritten":{"text":"export paths","tags":[],"bins":["live"],"time_range":{"field":"updated_at","after":null,"before":null}}},
+  "ranked_by":"bm25","filters":[]}}

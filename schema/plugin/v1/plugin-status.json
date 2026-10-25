@@ -1,0 +1,47 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://itayavtalyon.github.io/remember/schema/plugin/v1/plugin-status.json",
+  "title": "One data.plugins[] item of remember plugin status --json",
+  "type": "object",
+  "required": ["name", "plugin_version", "protocol", "enabled", "disabled_reason", "dev", "process", "index", "entries", "last_problems"],
+  "properties": {
+    "name": {"$ref": "common.json#/$defs/plugin_name"},
+    "plugin_version": {"type": "string"},
+    "protocol": {"type": "integer", "minimum": 1},
+    "enabled": {"type": "boolean"},
+    "disabled_reason": {"enum": [null, "user", "untrusted", "crash_loop", "protocol_mismatch"]},
+    "dev": {"type": "boolean"},
+    "process": {"type": "object", "required": ["state", "pid", "started_at", "cold_start_ms", "strikes", "crashes_10m"],
+      "properties": {
+        "state": {"enum": ["running", "stopped", "starting"]},
+        "pid": {"type": ["integer", "null"]},
+        "started_at": {"$ref": "common.json#/$defs/nullable_timestamp"},
+        "cold_start_ms": {"type": ["integer", "null"], "minimum": 0},
+        "strikes": {"type": "integer", "minimum": 0},
+        "crashes_10m": {"type": "integer", "minimum": 0}}},
+    "index": {"type": "object", "required": ["state", "coverage", "index_version", "backfill"],
+      "properties": {
+        "state": {"enum": ["ready", "building", "stale", "missing", "failed", "disabled"]},
+        "coverage": {"type": ["number", "null"], "minimum": 0, "maximum": 1},
+        "index_version": {"oneOf": [{"type": "null"}, {"$ref": "control.json#/$defs/index_version"}]},
+        "backfill": {"type": "object", "required": ["pending", "mode", "seq", "total"],
+          "properties": {
+            "pending": {"type": "boolean"},
+            "mode": {"enum": [null, "full", "catch_up"]},
+            "seq": {"type": ["integer", "null"], "minimum": 0},
+            "total": {"type": ["integer", "null"], "minimum": 0}}}}},
+    "entries": {"type": "array", "items": {"type": "object", "required": ["name", "point", "budget", "last_status", "last_duration_ms"],
+      "properties": {
+        "name": {"$ref": "common.json#/$defs/entry_name"},
+        "point": {"enum": ["search.query", "search.results", "action"]},
+        "budget": {"oneOf": [{"$ref": "common.json#/$defs/duration"}, {"type": "null"}]},
+        "cold_start_grace": {"$ref": "common.json#/$defs/duration", "description": "Optional; filters only. The manifest grace (R9.2; 2026-10-22, M-24 A)."},
+        "last_status": {"enum": [null, "applied", "skipped", "failed", "timeout", "ok"]},
+        "last_duration_ms": {"type": ["integer", "null"], "minimum": 0}}}},
+    "last_problems": {"type": "array", "items": {"type": "object", "required": ["at", "code", "message"],
+      "properties": {
+        "at": {"$ref": "common.json#/$defs/timestamp"},
+        "code": {"type": "string", "pattern": "^[a-z][a-z0-9_]*$"},
+        "message": {"type": "string", "minLength": 1}}}}
+  }
+}

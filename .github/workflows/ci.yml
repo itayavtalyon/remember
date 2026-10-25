@@ -34,6 +34,24 @@ jobs:
           chmod +x scripts/ci-linux.sh scripts/read-gate-suites.sh scripts/check-coverage.sh
           ./scripts/ci-linux.sh --inner --install
 
+  # Plugin protocol spec (plan 24): every schema and example in
+  # docs/PLUGIN-PROTOCOL.md must validate, and schema/plugin/v1/ and
+  # tests/fixtures/plugin/ must hold the same bytes as their spec blocks.
+  # Python is a docs tool here only.
+  docs:
+    name: docs (plugin protocol spec)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install jsonschema
+        run: |
+          python3 -m venv "$RUNNER_TEMP/venv"
+          "$RUNNER_TEMP/venv/bin/pip" install --quiet jsonschema==4.26.0 referencing==0.37.0
+
+      - name: Validate the plugin protocol spec
+        run: '"$RUNNER_TEMP/venv/bin/python" scripts/validate_plugin_spec.py docs/PLUGIN-PROTOCOL.md'
+
   # Line coverage of src/*.c: 100% functions + 100% effective lines, plus every
   # branch side in the pure TUs (plan 18b; see scripts/check-coverage.sh). Add
   # this job name to branch protection required checks when ready.

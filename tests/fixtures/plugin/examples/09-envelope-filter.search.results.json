@@ -1,0 +1,11 @@
+{"format":"remember-message","version":1,"type":"filter.search.results","request_id":"01a14523-0000-7000-8000-000000000201",
+ "data":{"entry":"rerank",
+  "query":{"text":"how do we escape export paths","tags":[],"bins":["live"],"time_range":{"field":"updated_at","after":null,"before":null}},
+  "original_query":{"text":"how do we escape export paths","tags":[],"bins":["live"],"time_range":{"field":"updated_at","after":null,"before":null}},
+  "candidates":[
+   {"id":"01a13a8c-55f0-7c2e-9b1d-4e0c7f3a2b11","bm25":7.41,"scores":[]},
+   {"id":"01a13b02-1a10-7e3d-8d2a-1b2c3d4e5f60","bm25":5.02,"scores":[]},
+   {"id":"01a13c55-3b21-7a0e-9f11-aa00bb11cc22","bm25":4.88,"scores":[]}],
+  "max_results":20,"max_additions":200,"budget_ms":800,"cold":false,
+  "settings":[{"key":"plugin.hybrid.enabled","value":true},{"key":"plugin.hybrid.min_index_coverage","value":50},{"key":"plugin.hybrid.model","value":"small"},{"key":"remember.search.candidate_pool","value":200}],
+  "data_dir":"/Users/itay/.remember/remember.db.d/plugins/hybrid/data/"}}

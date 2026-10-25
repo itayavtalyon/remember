@@ -1,0 +1,33 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://itayavtalyon.github.io/remember/schema/plugin/v1/control.json",
+  "title": "Control message data",
+  "$defs": {
+    "ready": {"type": "object", "required": ["protocol", "pid", "index_version"],
+      "properties": {
+        "protocol": {"const": 1},
+        "pid": {"type": "integer", "minimum": 1},
+        "plugin": {"$ref": "common.json#/$defs/plugin_name"},
+        "plugin_version": {"type": "string"},
+        "index_version": {"$ref": "#/$defs/index_version", "description": "Always present (R6.13)."},
+        "backfill_needed": {"$ref": "#/$defs/backfill_needed"}}},
+    "ping": {"type": "object"},
+    "ping_result": {"type": "object", "required": ["pid", "index_version"],
+      "properties": {
+        "pid": {"type": "integer", "minimum": 1},
+        "index_version": {"$ref": "#/$defs/index_version", "description": "Always present (R6.13)."},
+        "active_requests": {"type": "integer", "minimum": 0},
+        "backfill_needed": {"$ref": "#/$defs/backfill_needed"}}},
+    "shutdown": {"type": "object", "required": ["reason", "grace_ms"],
+      "properties": {
+        "reason": {"enum": ["idle", "strikes", "disabled", "removed", "upgrade", "user"]},
+        "grace_ms": {"type": "integer", "minimum": 0}}},
+    "index_version": {"type": "object", "required": ["data_version", "model"],
+      "properties": {
+        "data_version": {"type": "integer", "minimum": 1},
+        "model": {"type": ["string", "null"], "description": "Model id, or null for a plugin without a model."}}},
+    "backfill_needed": {"type": "object", "required": ["applied_through_seq"],
+      "properties": {
+        "applied_through_seq": {"type": "integer", "minimum": 0, "description": "change_seq of the last applied change; 0 asks for every memory (R6.14, #599)."}}}
+  }
+}

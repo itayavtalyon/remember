@@ -1,0 +1,37 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://itayavtalyon.github.io/remember/schema/plugin/v1/backfill.json",
+  "title": "Backfill message data",
+  "$defs": {
+    "backfill": {"type": "object", "required": ["backfill_id", "seq", "total", "reason", "mode", "entries"],
+      "properties": {
+        "backfill_id": {"$ref": "common.json#/$defs/uuid"},
+        "seq": {"type": "integer", "minimum": 1},
+        "total": {"type": "integer", "minimum": 0, "description": "Number of memories this stream sends."},
+        "reason": {"enum": ["enabled", "plugin_request", "reindex", "data_version", "index_version", "resume"], "description": "data_version: the manifest changed (R2.14). index_version: the plugin reported a different index_version (R6.13)."},
+        "mode": {"enum": ["full", "catch_up"]},
+        "since_seq": {"type": "integer", "minimum": 0, "description": "catch_up only: the plugin's applied_through_seq (R7.4)."},
+        "since": false,
+        "data_dir": {"type": "string"},
+        "settings": {"$ref": "common.json#/$defs/settings"},
+        "entries": {"type": "array", "maxItems": 100, "items": {"anyOf": [
+          {"allOf": [{"$ref": "common.json#/$defs/memory"}], "required": ["id", "bin", "updated_at", "change_seq"]},
+          {"type": "object", "required": ["id", "bin", "change_seq"], "properties": {"id": {"$ref": "common.json#/$defs/uuid"}, "bin": {"const": "purged"}, "change_seq": {"$ref": "common.json#/$defs/change_seq"}}, "description": "A purge tombstone in a catch_up (R7.4, G-09)."}]}}},
+      "if": {"properties": {"mode": {"const": "catch_up"}}},
+      "then": {"required": ["since_seq"]}},
+    "backfill_result": {"type": "object", "required": ["backfill_id", "seq"],
+      "properties": {
+        "backfill_id": {"$ref": "common.json#/$defs/uuid"},
+        "seq": {"type": "integer", "minimum": 0},
+        "failed_memory_ids": {"type": "array", "items": {"$ref": "common.json#/$defs/uuid"}, "description": "Memories the plugin could not index."}}},
+    "backfill_done": {"type": "object", "required": ["backfill_id", "last_seq", "sent"],
+      "properties": {
+        "backfill_id": {"$ref": "common.json#/$defs/uuid"},
+        "last_seq": {"type": "integer", "minimum": 0},
+        "sent": {"type": "integer", "minimum": 0}}},
+    "backfill_pause": {"type": "object", "required": ["backfill_id"],
+      "properties": {"backfill_id": {"$ref": "common.json#/$defs/uuid"}, "reason": {"type": "string", "maxLength": 200}}},
+    "backfill_resume": {"type": "object", "required": ["backfill_id", "resume_after_seq"],
+      "properties": {"backfill_id": {"$ref": "common.json#/$defs/uuid"}, "resume_after_seq": {"type": "integer", "minimum": 0}}}
+  }
+}
