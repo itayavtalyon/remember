@@ -10,8 +10,8 @@ PENDING COPY AND DESIGN.
 
 Behavior in this plan is specified. A stage that prints a sentence in COPY-PENDING C-02 or C-15 through C-38 does not start until that row is approved. These stages also wait:
 
-- Chain-cap warning: DESIGN-PENDING D-02. Set status `skipped` and reason `chain_capped`. Do not emit `plugin_chain_capped`.
-- Non-timeout filter failure code: D-08. `plugin_filter_timeout` is locked. Do not emit a second failure code until D-08 names it.
+- Chain-cap warning: DESIGN-PENDING D-02 is answered (2026-10-25). Set status `skipped`, reason `chain_capped`, and warn `plugin_chain_capped`. The sentence waits on its COPY-PENDING row.
+- Non-timeout filter failure code: D-08 is answered (2026-10-25). It is `plugin_filter_failed`.
 - `skipped_source` log bytes: D-14.
 - Human `add` line: D-05. Do not change it.
 - Tool-undo name parse: D-13. Do not parse it in the engine.
@@ -46,7 +46,7 @@ A plugin never changes, blocks, or rolls back a write. Memory text reaches an ac
 
 No synced, imported, or exported data creates a plugin.
 
-`REMEMBER_PROCESSES=0`: `hook add`, folder `plugin add`, and dispatch return `plugin_unsupported`. Writes insert no outbox rows. Built-in C-ABI filters still run. Phones never run folder plugins or hooks. The sentence is C-23.
+`REMEMBER_PROCESSES=0`: `hook add` and folder `plugin add` return `plugin_unsupported`. Writes insert no outbox rows. A write that matches an enabled folder-plugin action is saved and warns `plugin_unsupported`, exit 0 (4 with `--strict`) (010 H-0.7, C-23). Built-in C-ABI filters still run. Phones never run folder plugins or hooks. The sentence is C-23.
 
 A plugin problem during a search or a write is a warning and exit 0. `--strict` or `REMEMBER_STRICT=1` makes any warning exit 4. Exit 4 has no other meaning. A backfill that does not finish is exit 1 `plugin_backfill_incomplete`, not exit 4. The sentence is C-24.
 
@@ -121,7 +121,7 @@ When `cause.chain` reaches 100, do not run that entry for that event. Set the re
 
 ### Pre-flight
 
-For each matching once-action, after commit: each trusted file exists and matches its hash, and `run.command[0]` is executable. A failed check sets that recipient to `failed`, logs it, and warns `plugin_preflight_failed`. The sentence is C-20. Do not print it until C-20 is approved. The state change may land. Remember does not run that recipient again by itself. `plugin rerun` runs it. The write exits 0, or 4 with `--strict`. The next `remember dispatch` does not start that recipient.
+For each matching once-action, after commit: each trusted file exists and matches its hash, and `run.command[0]` is executable. A failed check sets that recipient to `failed`, logs it, and warns. A missing file or a `run.command[0]` that is not executable warns `plugin_preflight_failed`. A hash mismatch warns `plugin_untrusted` and follows 010 H-9.5 (010 H-6.2, C-20). Writes never wait for a handler. `plugin_action_timeout` and `plugin_action_failed` print only in a command that runs the action synchronously, for example `plugin run` (010 H-6.4, PP R8.16). The sentence is C-20. Do not print it until C-20 is approved. The state change may land. Remember does not run that recipient again by itself. `plugin rerun` runs it. The write exits 0, or 4 with `--strict`. The next `remember dispatch` does not start that recipient.
 
 When the dispatcher cannot start, warn `plugin_dispatch_failed` (C-21). Exit 0, or 4 with `--strict`. After a successful start, a failed handler does not change the user command's exit. The failure shows in `plugin log` and the app toast. The toast is remember-mac (C-39). Do not print it from the CLI.
 
@@ -177,11 +177,11 @@ No enabled filters, or `--no-filters`: the result is BM25 order.
 
 Priority: lower number first, default 500. Tie: plugin name, then entry name, byte order. No user setting changes priority, budget, or cold-start grace.
 
-`remember.plugins.chain_budget` caps the chain. When the cap is reached, do not run the remaining filters. Status `skipped`, reason `chain_capped`. Do not emit `time_budget_capped`. Clip a budget that is larger than the time left. The clipped value is the `budget_ms` that is sent. No warning for the clip. Do not emit `plugin_chain_capped` until D-02 says to.
+`remember.plugins.chain_budget` caps the chain. When the cap is reached, do not run the remaining filters. Status `skipped`, reason `chain_capped`. Do not emit `time_budget_capped`. Clip a budget that is larger than the time left. The clipped value is the `budget_ms` that is sent. No warning for the clip. Warn `plugin_chain_capped` as well (D-02).
 
 `cold_start_grace` comes from the manifest. Default 10s. Range 1 ms to 30 s. `0ms` makes the manifest invalid. `plugin status` shows it next to `budget`. A cold filter that does not answer: the whole result is BM25 order, and the code is `plugin_filter_cold_start`. The locked sentence names hybrid/rerank only. Any other filter's sentence is C-29. The filter keeps loading.
 
-A filter that sleeps past its budget: status `timeout`, code `plugin_filter_timeout`, input passes on. The sentence is C-27. A failure that is not a timeout waits on D-08 and C-28.
+A filter that sleeps past its budget: status `timeout`, code `plugin_filter_timeout`, input passes on. The sentence is C-27. A failure that is not a timeout is `plugin_filter_failed` (D-08). Its sentence waits on C-28.
 
 Every search response has `data.filters[]`: name, version, status (`applied`, `skipped`, `failed`, `timeout`), time, and an optional note. Warnings that a plugin sends in its reply go only to the plugin log and `plugin status`. They do not enter command output. Warnings Remember raises do enter command output.
 
@@ -282,7 +282,7 @@ Use the 010 verification numbers. Skip any assertion whose sentence is still in 
 | 6 | Each filter miss inserts nothing, logs nothing, and increments `skipped_filter`. |
 | 7 | A hook that writes the memory it listens for sees `REMEMBER_CAUSE_HOOK` equal to `plugin/<name>/run`. |
 | 8 | Chain 100 halts, plugin stays enabled, locked `plugin_loop_halted` line, rerun resets depth. `plugin_not_rerunnable` code when there is nothing to rerun. Sentence C-22 waits. |
-| 9 | Pre-flight failure: recipient `failed`, no run, exit 0, exit 4 with `--strict`. State only until C-20. |
+| 9 | Pre-flight failure: recipient `failed`, no run, exit 0, exit 4 with `--strict`. A missing or non-executable file is `plugin_preflight_failed`, and a changed hash is `plugin_untrusted`. State only until C-20. |
 | 10 | Truncation order at 256 KiB. |
 | 11 | argv and env contain no body and no tag text. |
 | 12 | No self-retry. Drop after 7 days with `dropped_stale`. |
@@ -308,7 +308,7 @@ Use the 010 verification numbers. Skip any assertion whose sentence is still in 
 | 35 | `brain list` after a read-write open. `brain prune` drops a missing path. |
 | 36 | `hook add wake --command /bin/echo --event memory.created` writes `plugin.wake.enabled` true on the user layer. `--disabled` writes no row. |
 | copy | A copied brain file mints a new `brain_id`. The warning waits on C-38. A moved brain keeps the id and updates the path. |
-| chain cap | Remaining filters are `skipped` / `chain_capped`. No `time_budget_capped`. No `plugin_chain_capped` while D-02 is open. |
+| chain cap | Remaining filters are `skipped` / `chain_capped`. No `time_budget_capped`. The `plugin_chain_capped` warning as well (D-02). |
 | hybrid | Search order with `plugin.hybrid.enabled` true equals BM25. |
 
 Do not implement 010 test 25 (URL). Do not implement test 18 beyond "default origins insert no row", which test 15 already covers.
@@ -323,7 +323,7 @@ Do not implement 010 test 25 (URL). Do not implement test 18 beyond "default ori
 4. Trust file and confirm callback. Sentences C-15, C-16, C-17, C-18, and C-37 wait. State changes do not.
 5. `hook add` and `plugin add` / `enable` / `disable` / `remove` / `list` / `show`.
 6. Dispatcher, pre-flight, kill switch, rerun, sweep. Locked sentences that are already approved (`plugin_loop_halted`, `plugin_run_forbidden`, purge-live) land here.
-7. Search stages, manifest budgets, chain cap without `plugin_chain_capped`.
+7. Search stages, manifest budgets, chain cap with `plugin_chain_capped` (D-02).
 8. Persistent processes, acks, backfill, `index.json`.
 9. `plugin test` against plan 24 fixtures.
 10. Stop for every remaining COPY-PENDING and DESIGN-PENDING row this plan names. Apply the approved sentences only. Do not start URL, hybrid ranking, or the daemon.

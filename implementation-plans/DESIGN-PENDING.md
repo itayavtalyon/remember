@@ -20,6 +20,8 @@ These are recorded so a later session does not grill them again.
 
 ### D-01. Bucket-prefix error words and code
 
+**Answered 2026-10-25:** 007 ST-5.4. There is no item limit. A bad shape or a duplicate is `setting_invalid_value` with fixed sentences. A sync apply or import skips the row with `setting_invalid`.
+
 007 ST-5.4 says a bad prefix fails with `setting_invalid_value` and the 006 E12.4 message. The E12.4 messages are `invalid bucket prefix: <p>`, `duplicate bucket prefix: <p>`, and `too many bucket prefixes (max 8)`, and E12.4 uses code `usage`.
 
 007 ST-7.12 says the copy is SETTINGS-SCHEME §5.1. That table uses `setting_invalid_value` with `remember.buckets.prefixes: "Project:" must be lowercase and end in ":", like project:.` and uses `setting_out_of_range` with `remember.buckets.prefixes can hold up to 8 prefixes; you gave 9.`
@@ -30,6 +32,8 @@ Blocks: plan 20, the prefix-validation stage. Until this is answered, that stage
 
 ### D-02. `plugin_chain_capped`
 
+**Answered 2026-10-25:** both. The status is `skipped`/`chain_capped`, and the warning is `plugin_chain_capped` (010 H-12.4, PP revision 7).
+
 010 H-12.4: when the chain reaches the cap, the remaining filters are not run. Their status is `skipped` with reason `chain_capped`. There is no `time_budget_capped` warning. A budget larger than the time left is clipped silently. The clipped value is the `budget_ms` Remember sends.
 
 Plugin protocol §8.2 lists `plugin_chain_capped` as a warning code.
@@ -39,6 +43,8 @@ Question: does the user see a `plugin_chain_capped` warning, or only the status 
 Blocks: plan 25, the chain-cap stage. Until this is answered, the implementer sets the status reason and does not emit `plugin_chain_capped`.
 
 ### D-03. Success JSON for settings commands
+
+**Answered 2026-10-25:** 007 ST-7.11a–7.11b, ST-7.14 and ST-7.16 define one setting object and its wrappers, `action`, the page sizes (`list` 100, `history` 50, at most 1000), the cursor, `changed_at`, and human dates. Plan 20 quotes them.
 
 007 ST-7.11 names the envelope types: `setting.list.result`, `setting.get.result`, `setting.set.result`, `setting.reset.result`, `setting.explain.result`, `setting.history.result`, `setting.import.result`.
 
@@ -104,6 +110,8 @@ The Linux daemon unit name `io.github.itayavtalyon.remember.daemon.service` (G-0
 Do not implement the URL plugin in plan 25. Do not pick a parser.
 
 ### D-08. Filter failure code
+
+**Answered 2026-10-25:** `plugin_filter_failed` (010 H-12.5).
 
 010 H-12.5: a failed or timed-out filter is skipped, and the command warns with a code that names the filter. Verification 21 names `plugin_filter_timeout` for a filter that sleeps past its budget. The spec lists `plugin_filter_failed` as well.
 
