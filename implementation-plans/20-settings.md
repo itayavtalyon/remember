@@ -10,7 +10,7 @@ PENDING COPY AND DESIGN.
 
 Storage, resolution, the credential helper, and `settings export` are specified. Do those stages.
 
-Do not start a stage that prints a sentence listed in [`COPY-PENDING.md`](COPY-PENDING.md) C-01 or C-03 through C-14. Do not start prefix error text until [`DESIGN-PENDING.md`](DESIGN-PENDING.md) D-01 is answered. Do not start success JSON for set, reset, list, or import until D-03 is answered. Do not generate `plugin.<name>.*` keys in this plan. Plan 25 generates them after the manifest parser exists.
+Do not start a stage that prints a sentence listed in [`COPY-PENDING.md`](COPY-PENDING.md) C-01 or C-03 through C-14. [`DESIGN-PENDING.md`](DESIGN-PENDING.md) D-01 and D-03 are answered (2026-10-25, 007 ST-5.4 and ST-7.11a–7.16). The prefix errors, the success JSON, the page sizes, the cursor and the human date form are specified below. Do not generate `plugin.<name>.*` keys in this plan. Plan 25 generates them after the manifest parser exists.
 
 This plan is not ready as a whole.
 
@@ -19,7 +19,7 @@ This plan is not ready as a whole.
 - [`design-logs/007-settings.md`](../design-logs/007-settings.md) Design ST-1 through ST-9, and ST-10.3 for user.db. §10's brain migration is plan 19.
 - [`design-logs/008-json-envelope.md`](../design-logs/008-json-envelope.md) JE-2 and JE-4.4 for the envelope and actors. Plan 21 owns the envelope writer for every other command. This plan uses that writer for settings commands. When plan 21 has not merged, stop before any settings command that prints JSON.
 - SETTINGS-SCHEME §5.1 for the cells 007 did not delete. Deleted codes: `setting_ambiguous`, `setting_read_only`, `time_budget_capped`, `setting_overridden`. Do not emit them.
-- 006 E12.4 is the prefix grammar only. The error sentence is D-01. Do not apply E12.6.
+- 006 E12.4 is the prefix grammar only. The error sentences are 007 ST-5.4 (D-01, answered 2026-10-25). Do not apply E12.6.
 
 ## Context
 
@@ -61,13 +61,13 @@ Undo is not a command. The newest history row for that key in that layer is the 
 
 Actor on a settings row is `updated_by`. Without `--as` and without `--actor`, store `{"kind":"human","id":null}`. `--as KIND` replaces `kind` and allows only `human`, `agent`, `tool`, or `share`. `--actor ID` replaces only `id`. `ID` is 1 to 64 characters of `[A-Za-z0-9_./:-]`. `--as` does not clear an `--actor` id. When `REMEMBER_HOOK_DEPTH` is 1 or more, `settings set`, `settings reset`, and `settings import` fail with `setting_from_hook` before key lookup. The plain line is `a hook or plugin run can't change settings. Change them in your own terminal.` JSON `fix` waits on C-01. Also reject `--as` and `--actor` when depth is 1 or more, with `invalid_argument`, before the settings ban when both apply. The `invalid_argument` sentence for that rejection is not written. Treat it as part of C-01. Do not invent it.
 
-Sync merge of a brain row: version vector, then later `updated_at`, then larger `device_id`. The loser stays in history. A synced apply keeps the author's `updated_by`. An invalid synced value is skipped with `setting_invalid` and is not written. The plain line is C-14. Do not print it until C-14 is approved. Do not invent a sync wire (D-11).
+Sync merge of a brain row: version vector, then later `updated_at`, then larger `device_id`. The loser stays in history. A synced apply keeps the author's `updated_by`. An invalid synced value is skipped with the warning `setting_invalid` and is not written. `detail` has `key`, `value` and `reason` (ST-7.15). A command that applies such a batch exits 0, or 4 with `--strict`. When the value is the subject of one command (`settings set`), it is the error `setting_invalid_value` instead. The plain line is C-14. Do not print it until C-14 is approved. Do not invent a sync wire (D-11).
 
 Registry, compiled in. Do not add a key that is not in this table.
 
 | Key | Type | Default | Range | Scopes |
 |---|---|---|---|---|
-| `remember.buckets.prefixes` | string_list | `["project:","status:"]` | at most 8 items, each one bucket prefix | brain |
+| `remember.buckets.prefixes` | string_list | `["project:","status:"]` | any number of items, each one bucket prefix, no duplicates | brain |
 | `remember.sync.credential_helper` | string | unset | helper id `[a-z][a-z0-9_-]{0,39}` | user |
 | `remember.search.candidate_pool` | integer | `200` | 20–2000 | user, brain |
 | `remember.search.max_results` | integer | `20` | 1–1000 | user, brain |
@@ -80,7 +80,14 @@ There is no `remember.search.hybrid` key. There is no `fortkeeps.` namespace. Th
 
 Keys: `namespace "." segment { "." segment }`. A segment matches `[a-z][a-z0-9_]{0,39}`. At most 96 characters. At most 3 segments after the namespace. Typed input rewrites `-` to `_` before lookup. A full key only. A short name, a colon key, or an alias is exit 2 `setting_unknown`. Did-you-mean: when exactly one key has that final segment, offer that key. Otherwise offer at most 3 keys at edit distance 2 or less. With no candidate, the message has no did-you-mean (C-03).
 
-A bucket prefix is 1 to 32 code points of letters, numbers, `-`, `_`, or `.`, then one `:`. ASCII letters fold to lowercase. A duplicate fails. The code for a bad prefix is `setting_invalid_value` (ST-5.4). The sentence is D-01. Do not print a prefix error until D-01 is answered. Store a valid list. Default when no row exists: `project:` and `status:`, with no row written until `set`.
+A bucket prefix is 1 to 32 code points of letters, numbers, `-`, `_`, or `.`, then one `:`. ASCII letters fold to lowercase. The list has no item limit. The 16 KiB value limit still applies. Two items that are equal after folding are a duplicate. A bad prefix and a duplicate are each `setting_invalid_value`, with `detail` `key`, `value`, `type`, `allowed` and `item`, plus `other` for a folded duplicate (ST-5.4):
+
+- Bad shape. Message: `"<item>" isn't a bucket prefix.` Fix: `Use 1 to 32 letters, digits, "-", "_" or ".", then one ":", like "project:".`
+- Duplicate. Message: `"<item>" is in the list twice.`, or `"<item>" and "<other>" are the same prefix.` when folding made them match. Fix: `List each prefix once.`
+- `<item>` and `<other>` are the items as typed, before folding.
+- `settings set` fails with exit 1 and writes nothing. `settings import` and a sync apply skip the row with the warning `setting_invalid`, reason `bad_prefix_shape` or `duplicate_prefix`, and go on. There is no ninth-prefix error.
+
+Store a valid list. Default when no row exists: `project:` and `status:`, with no row written until `set`.
 
 Values:
 
@@ -90,7 +97,7 @@ Values:
 - Output adds `value_ms` or `value_bytes` next to `value`.
 - `string_list` is one CLI argument per item. `settings set KEY --clear` stores an empty list.
 
-Flags that are not stored: `--no-filters` skips search filters for one search (plan 25). `--candidate-pool N` overrides `remember.search.candidate_pool`. `--limit N` overrides `remember.search.max_results`. A flag outside the key's range is `setting_out_of_range`. The sentence is C-06.
+Flags that are not stored: `--no-filters` skips search filters for one search (plan 25). `--candidate-pool N` overrides `remember.search.candidate_pool`. `--limit N` overrides `remember.search.max_results`. A flag outside the key's range is `setting_out_of_range`. The message names the flag and the key. `detail.flag` is the flag and `detail.key` is the setting key (ST-2.5). The sentence is C-06.
 
 `remember.search.max_results` limits the final search output. Plan 21 and plan 25 apply it. This plan only stores the value.
 
@@ -108,7 +115,7 @@ Credential helper:
 Commands:
 
 ```
-remember settings list [--scope brain|user] [--namespace NS] [--changed] [PREFIX]
+remember settings list [--scope brain|user] [--namespace NS] [--changed] [--limit N] [--cursor C] [PREFIX]
 remember settings get KEY [--scope brain|user] [--value]
 remember settings set KEY VALUE… [--scope brain|user] [--as KIND] [--actor ID]
 remember settings set KEY --clear [--scope brain|user] [--as KIND] [--actor ID]
@@ -116,7 +123,7 @@ remember settings reset KEY [--scope brain|user]
 remember settings reset --namespace NS [--scope brain|user] --yes
 remember settings reset --all --scope brain|user --yes
 remember settings explain KEY | --all
-remember settings history [KEY] [--scope brain|user] [--limit N]
+remember settings history [KEY] [--scope brain|user] [--limit N] [--cursor C]
 remember settings export [--scope brain|user|all]
 remember settings import FILE [--dry-run] [--scope brain|user]
 ```
@@ -133,13 +140,42 @@ remember.search.candidate_pool = 400
 
 Use that layout for `get`. Other human layouts are C-13. Do not invent them.
 
+Human dates (ST-7.16), in `get`, `list`, `history` and `explain`: the short local form `21 Oct at 12:04`, with the local time zone, a 24-hour clock and English month names. When the year is not the current year, show it: `21 Oct 2025 at 12:04`. When the local zone can't be read, use UTC and add ` UTC`. JSON always carries the RFC 3339 UTC `_at` fields.
+
 `get --scope` and `list --scope` show only that layer. No row: print `(unset)`, exit 0. JSON: `value` null, `from` the requested scope, `changed` false. `get --value` on an empty layer prints `(unset)`.
 
 `list --changed` shows only keys that have a row in some layer.
 
-`history` without `--scope` reads both databases. Each item includes `scope` `user` or `brain`. Newest `at` first. A tie breaks by scope `brain` then `user`, then by `key` in byte order.
+`history` without `--scope` reads both databases. Each item includes `scope` `user` or `brain`. Newest `changed_at` first (the JSON field; the column stays `at`). A tie breaks by scope `brain` then `user`, then by `key` in byte order.
 
-`reset --namespace` and `reset --all` require `--yes`. The refusal sentence is C-11.
+`reset --namespace` and `reset --all` require `--yes`. Without it, nothing changes, and the command fails with `confirmation_required`. The refusal names the number of settings keys that would change (keys, not rows) and the command to confirm. The refusal sentence is C-11.
+
+JSON (ST-7.11a–7.11b). Every settings command uses one setting object: `{key, type, value, value_ms?|value_bytes?, from, changed, layers{default, user?, brain?}}`.
+
+- `layers.default` is `{value}`. A stored layer is `{value, value_ms?|value_bytes?, updated_by, updated_at}`. A layer with no row, or a tombstone, is null. A layer that the key does not allow is absent.
+- With `--scope X`, `from` is X, `value` is that layer's value or null, and `layers` has only X.
+
+The wrappers:
+
+| Type | `data` |
+|---|---|
+| `setting.get.result` | `{setting}` |
+| `setting.set.result` | `{setting, scope, old_value, changed}` |
+| `setting.reset.result` | `{setting, scope, old_value, changed, action}` |
+| `setting.list.result` | `{count, settings[]}`, plus `next_cursor` and `has_more` |
+| `setting.history.result` | `{count, changes[]}`, plus `next_cursor` and `has_more` |
+| `setting.import.result` | `{count, written, unchanged, skipped, rows[]}` |
+
+- In `set` and `reset`, `setting` is the object after the write. `scope` is the layer that was written. `old_value` is that layer's value before, or null. `changed` is false for a no-op.
+- `reset` `action` is `tombstone` for a brain row, `delete` for a user row, and `none` for a layer with no row.
+- A history item is `{key, scope, action, old_value, new_value, updated_by, changed_at}`. `action` is `set`, `tombstone` or `delete`. Derive it from the row: a null `new_value` is `tombstone` in a brain and `delete` in user.db.
+- An import row is `{key, scope, result, action, reason?}`. `result` is `written`, `unchanged`, `skipped` or `kept_local`, and a `kept_local` row counts as `unchanged`. `action` is `set` or `tombstone` for a written row, and `none` otherwise. `reason` is on `skipped` only. `--dry-run` returns the same shape.
+
+Paging (ST-7.14). `list` returns 100 items by default and `history` returns 50. `--limit` is 1 to 1000. Outside that range, the command fails with `setting_out_of_range`, naming the flag. `next_cursor` is opaque base64url JSON, null on the last page:
+
+- `list`: `{"v":1,"k":"<last key>","s":"<scope or all>","c":<--changed>}`, sorted by key in byte order.
+- `history`: `{"v":1,"t":"<changed_at>","s":"<scope>","k":"<key>","r":<row id>}`, in the history order.
+- A bad or old cursor, or one reused with a different `--scope` or `--changed`, is `invalid_argument`.
 
 Export prints one plain document, not a `remember-message` envelope:
 
@@ -150,9 +186,9 @@ Export prints one plain document, not a `remember-message` envelope:
 
 Each element has `key`, `scope`, `value`, `updated_by`, `updated_at`, `device_id`, `version_vector`, and `deleted_at`. A duration or size also has `value_ms` or `value_bytes`. A user row exports `device_id` `""`, `version_vector` `{}`, and `deleted_at` null. Sort by `key`, then `scope`. `--scope` defaults to `all`. Tombstones are included. `remember.sync.credential_helper` exports as its id. User rows never appear in a brain export. Brain export of settings is plan 22 and waits on D-04. This command's document does not wait.
 
-Import validates the whole file first. An unknown key or a bad value writes nothing and exits 1 with `setting_import_invalid`. The sentence is C-08. A `version` above 1 fails with the JSON-STYLE §1.7 message. Quote that message from `docs/JSON-STYLE.md` §1.7. Do not paraphrase it.
+Import validates the whole file first, and no row fails the import (ST-8.4, overriding S-Q21). An unknown key skips the row with the warning `setting_import_skipped`, reason `unknown_key`. A bad value skips the row with the warning `setting_invalid`, reason `invalid_value`. The import writes the other rows. A `version` above 1 fails with the JSON-STYLE §1.7 message. Quote that message from `docs/JSON-STYLE.md` §1.7. Do not paraphrase it.
 
-Import skips three kinds of row, names each skipped row, and writes the rest. The name sentence is C-12. The three kinds are: a plugin that is not installed, the other scope when `--scope` is set, and a layer the target does not allow. This plan has no plugin keys, so the first kind does not fire until plan 25. Implement the skip so plan 25 does not add a second merge.
+Import also skips three kinds of row, names each skipped row, and writes the rest. Each is the warning `setting_import_skipped`, with `detail` `key`, `scope` and `reason`, and an import row with `result` `skipped`. The name sentence is C-12. The three kinds are: a plugin that is not installed (`plugin_not_installed`), the other scope when `--scope` is set (`other_scope`), and a layer the target does not allow (`layer_not_allowed`). This plan has no plugin keys, so the first kind does not fire until plan 25. Implement the skip so plan 25 does not add a second merge.
 
 When the target has no row, write the file row and keep the file's `updated_by`. Do not stamp `{kind: import, id: null}` on a settings row. When the target has a row, compare version vector and `updated_at` only (ST-2.7). A user row has no vector, so the later `updated_at` wins. When `updated_at` ties and `device_id` does not pick a winner, the local row stays. The losing value stays in history.
 
@@ -203,7 +239,7 @@ Tests: `tests/test_settings.c`. Gate suite `settings`.
 
 ## Must-pass tests
 
-Assert stored rows, codes, exits, and locked sentences. Skip plain text that COPY-PENDING still owns. Skip success JSON until D-03.
+Assert stored rows, codes, exits, locked sentences, and the ST-7.11b success JSON. Skip plain text that COPY-PENDING still owns.
 
 | Test | Proves |
 |---|---|
@@ -215,7 +251,7 @@ Assert stored rows, codes, exits, and locked sentences. Skip plain text that COP
 | 007-7 | `remember.plugins.chain_budget` `45s` is `setting_out_of_range`. Sentence waits on C-06. |
 | 007-9 | `REMEMBER_HOOK_DEPTH=1` on `settings set` of a known key is `setting_from_hook` and the locked plain line. |
 | 007-11 | `settings export` then `settings import` into an empty user.db matches, except `exported_at`. `updated_by` is the file actor, not `{import, null}`. |
-| 007-12 | One bad value imports nothing. Code `setting_import_invalid`. |
+| 007-12 | One bad value: every other row imports, the warning is `setting_invalid`, and that row is `skipped` with reason `invalid_value`. One unknown key: every other row imports, with the warning `setting_import_skipped`, reason `unknown_key`. |
 | 007-16 | 51 writes of one key leave the newest 50 history rows. A 2-year-old row inside those 50 stays. |
 | 007-17 | `set remember.buckets.prefixes project: area:` without `--scope` writes the brain layer. `--scope user` is `setting_scope_mismatch`. A new brain with no row resolves `project:` and `status:`. |
 | 007-18 | Brain `reset` writes a tombstone. `get` then shows the user or default value. |
@@ -229,6 +265,12 @@ Assert stored rows, codes, exits, and locked sentences. Skip plain text that COP
 | 007-29 | `--as agent --actor bot1` stores `{"kind":"agent","id":"bot1"}` on the row and in history. |
 | 007-31 | A newer file row keeps that row's `updated_by`. An older file row leaves the local actor. Two user rows with the same `updated_at` keep the local row. |
 | 007-32 | `history` items include `scope`. Undo of a brain item with null `old_value` resets the brain layer. |
+| 007-34 | 20 valid prefixes set fine. `my project:` is `setting_invalid_value` with the ST-5.4 bad-prefix message. `status: Status:` gives the folded-duplicate message. A synced row with a bad prefix is skipped with `setting_invalid`, and the brain row is unchanged. |
+| 007-35 | `set`, `reset`, `get` and `list` with `--json` carry the same setting object. `reset` gives `action` `tombstone` for a brain row, `delete` for a user row, and `none` for a missing row. History items and import rows carry `action`. |
+| 007-36 | `list` returns 100 items and a `next_cursor` when there are more. `history` returns 50. `--limit 0` and `--limit 1001` are `setting_out_of_range`, naming the flag. A list cursor reused with another `--scope` is `invalid_argument`. |
+| 007-37 | Human `history` prints `21 Oct at 12:04` for a row from this year and `21 Oct 2025 at 12:04` for an older one. `--json` prints `changed_at` in RFC 3339 UTC. |
+| 007-38 | Importing a file with a row of an uninstalled plugin warns `setting_import_skipped`, reason `plugin_not_installed`. It fires once plan 25 exists. Until then, test it with an unknown key. |
+| 007-39 | `reset --all --scope user` without `--yes` fails with `confirmation_required`, changes nothing, and names the number of keys. |
 | no hybrid key | `remember.search.hybrid` is `setting_unknown`. |
 | M-24 | `settings set plugin.hybrid.budget 1s` is exit 2. The fix is the locked M-24 sentence. |
 | quota | The 257th brain row is `quota_exceeded` with `detail.quota` `settings_limit`. Assert the locked brain sentence only. |
@@ -242,10 +284,10 @@ Assert stored rows, codes, exits, and locked sentences. Skip plain text that COP
 3. Implement resolution and brain and user writes, including tombstone reset, history cap, no-op set, and `change_seq`. Test through the store, not through unapproved CLI sentences.
 4. Implement the token callback and the CLI runner. Test 007-22 with the locked sentences.
 5. Stop until plan 21's envelope writer is merged. Then add `get` with the locked human layout and the locked JSON fields from ST-7.3 and ST-7.4.
-6. Add `set` and `reset` storage flags (`--scope`, `--as`, `--actor`, `--clear`, `--yes`). Assert codes and stored JSON. Do not assert success `data` until D-03. Do not assert C-03, C-06, C-07, C-09, C-10, or C-11.
+6. Add `set` and `reset` storage flags (`--scope`, `--as`, `--actor`, `--clear`, `--yes`). Assert codes, stored rows and the ST-7.11b success `data`, including `action` and `confirmation_required`. Do not assert C-03, C-06, C-07, C-09, C-10, or C-11.
 7. Add `settings export` as the ST-8.1 document. Test 007-11 at the file level.
-8. Add import merge per ST-8.4 through ST-8.7. Assert that a bad file writes nothing. Do not assert C-08 or C-12.
-9. After D-01, D-03, and the copy rows are approved, add the remaining sentences and the success payloads exactly as those answers state. Then tick the matching tests.
+8. Add import merge per ST-8.4 through ST-8.7. Assert that a bad value or an unknown key skips only that row with its warning code, and that the other rows are written. Do not assert C-12 sentences.
+9. After the copy rows are approved (D-01 and D-03 are answered), add the remaining sentences and the success payloads exactly as those answers state. Then tick the matching tests.
 
 Each stage's definition of done: one red test first, the gate green, review closed, then the next stage.
 
@@ -293,7 +335,8 @@ Probes:
 7. `REMEMBER_HOOK_DEPTH=1 remember settings set remember.search.max_results 5`. [locked `setting_from_hook` line, no row change]
 8. Export, import into an empty user.db, export again. [equal except `exported_at`]
 9. Helper `pass` with a fake program that prints `secret\n`. [sync sees `secret`, and `secret` is not in the command output]
-10. Confirm no success JSON was asserted for `setting.set.result` if D-03 is still open.
+10. `settings reset remember.search.max_results --json` on a user row. [`action` `delete`, `setting.layers.user` null]
+11. `settings import` of a file with one unknown key and one bad value. [two warnings, two `skipped` rows, the other rows written]
 
 Do not re-open: two layers, plain prefix list, full keys, user rows do not travel, hook ban, file actor on settings import.
 

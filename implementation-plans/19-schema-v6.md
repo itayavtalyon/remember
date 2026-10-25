@@ -70,7 +70,7 @@ CREATE TABLE settings_history (
 );
 ```
 
-2. When the E12 tables hold any prefix row, write one `remember.buckets.prefixes` row. `value` is a JSON array of the 006 E12.7 effective list. That list is at most 8 prefixes. Drop the overflow. `updated_by` is `{"kind":"human","id":null}`. `updated_at` is the old order time (`settings.bucket_prefix_order`'s `updated_at`), or the migration time when there is none. `device_id` is the local device id. `version_vector` is `{"<local device id>":1}`. `deleted_at` is null. `change_seq` is 1. Set `brain_meta.change_seq` to 1.
+2. When the E12 tables hold any prefix row, write one `remember.buckets.prefixes` row. `value` is a JSON array of every prefix in the 006 E12.7 effective list, in that order, with no item limit (007 §10 step 2, 2026-10-25). A prefix that fails 007 ST-5.4 is left out of the row and warns `setting_invalid`, with `detail.reason` `bad_prefix_shape` and `detail.item` the prefix. Never drop a prefix silently. When every prefix fails, write no row. `updated_by` is `{"kind":"human","id":null}`. `updated_at` is the old order time (`settings.bucket_prefix_order`'s `updated_at`), or the migration time when there is none. `device_id` is the local device id. `version_vector` is `{"<local device id>":1}`. `deleted_at` is null. `change_seq` is 1. Set `brain_meta.change_seq` to 1.
 3. Drop the E12 tables `settings` and `bucket_prefixes`.
 4. Rename the new tables to `settings` and `settings_history`.
 
@@ -145,7 +145,7 @@ Assert codes, row values, and the locked plain line. Do not assert `error.fix` f
 | M1 | Every old `sync_id` value is `entries.id`. Every old integer `id` is `entries.local_id`. |
 | M2 | Links, tags, conflicts, and FTS still resolve through `local_id`. |
 | M3 | A failing VFS during the transaction leaves `user_version` 5 and leaves the old sidecar in place. |
-| 007-14 | A v5 brain with prefix rows gets one `remember.buckets.prefixes` value equal to the E12.7 effective list, at most 8, overflow absent. |
+| 007-14 | A v5 brain with prefix rows gets one `remember.buckets.prefixes` value equal to the E12.7 effective list, with no item limit (10 prefixes stay 10). A bad old prefix is left out and warns `setting_invalid`, reason `bad_prefix_shape`. |
 | 007-27 | A crash after the sidecar copy and before `COMMIT` leaves `<brain>.device_id`. The next open keeps that device id and finishes the copy. |
 | 008-14 | One `brain_meta` row. `brain_id` matches UUID v7. `change_seq` is 0, or 1 when a prefix row was written. `min_reader_version` is `0.3.0`. `tombstones` is empty. The next memory write is plan 21. This plan only checks the counter value after migration. |
 | 010-14 migration clause | Already-due non-deleted rows have `expired_at = expires_at`. The outbox is empty. |
