@@ -2076,8 +2076,8 @@ TEST(sqlite_corrupt_marks_fts_only_and_keeps_base_text)
 {
     static const char *const k_base_plain =
         "remember: database error: the brain file is damaged (SQLITE_CORRUPT). "
-        "Copy the file somewhere safe before anything else, then run `remember export`, or "
-        "restore a backup.\n";
+        "Copy the file somewhere safe before anything else, then restore a backup, "
+        "or recover what can be read with `remember --db NEW.db import --from-db COPY`.\n";
     static const char *const k_fts_plain =
         "remember: database error: the search index is damaged (SQLITE_CORRUPT_VTAB). "
         "Run `remember repair search-index`. Your memories are not affected.\n";
@@ -2107,8 +2107,9 @@ TEST(sqlite_corrupt_marks_fts_only_and_keeps_base_text)
         "file is "
         "damaged\",\"detail\":{\"sqlite_code\":11,\"sqlite_extended\":11,\"sqlite_name\":\"SQLITE_"
         "CORRUPT\",\"sqlite_message\":\"database disk image is malformed\",\"fix\":\"Copy the file "
-        "somewhere safe before anything else, then run `remember export`, or restore a "
-        "backup.\",\"path\":\"/tmp/b.db\",\"fts_only\":false}}}\n");
+        "somewhere safe before anything else, then restore a backup, "
+        "or recover what can be read with `remember --db NEW.db import --from-db COPY`.\","
+        "\"path\":\"/tmp/b.db\",\"fts_only\":false}}}\n");
     app_set_streams((AppStreams){.out = NULL, .err = NULL});
     ASSERT_EQ_INT(fclose(err), 0);
     free(buf);
@@ -2849,8 +2850,8 @@ TEST(cli_repair_refuses_damaged_base_table)
 {
     static const char *const k_plain =
         "remember: database error: the brain file is damaged (SQLITE_CORRUPT). "
-        "Copy the file somewhere safe before anything else, then run `remember export`, or "
-        "restore a backup.\n";
+        "Copy the file somewhere safe before anything else, then restore a backup, "
+        "or recover what can be read with `remember --db NEW.db import --from-db COPY`.\n";
     char *db = make_temp_db_path();
     const char *seed[] = {"add", "alpha seed memory"};
     const char *repair[] = {"repair", "search-index"};
@@ -2879,8 +2880,9 @@ TEST(cli_repair_refuses_damaged_base_table)
         "damaged\",\"detail\":{\"sqlite_code\":11,\"sqlite_extended\":11,\"sqlite_name\":\"SQLITE_"
         "CORRUPT\",\"sqlite_message\":\"*** in database main ***\\nTree 2 page 2: btreeInitPage() "
         "returns error code 11\",\"fix\":\"Copy the file "
-        "somewhere safe before anything else, then run `remember export`, or restore a "
-        "backup.\",\"path\":\"%s\",\"fts_only\":false}}}\n",
+        "somewhere safe before anything else, then restore a backup, "
+        "or recover what can be read with `remember --db NEW.db import --from-db COPY`.\","
+        "\"path\":\"%s\",\"fts_only\":false}}}\n",
         db);
     ASSERT_EQ_INT(r.exit_code, 1);
     ASSERT_STREQ(r.out, "");
@@ -3012,8 +3014,8 @@ TEST(cli_repair_refuses_truncated_brain)
 {
     static const char *const k_plain =
         "remember: database error: the brain file is damaged (SQLITE_CORRUPT). "
-        "Copy the file somewhere safe before anything else, then run `remember export`, or "
-        "restore a backup.\n";
+        "Copy the file somewhere safe before anything else, then restore a backup, "
+        "or recover what can be read with `remember --db NEW.db import --from-db COPY`.\n";
     char *db = make_temp_db_path();
     const char *seed[] = {"add", "seed"};
     const char *repair[] = {"repair", "search-index"};
@@ -3047,8 +3049,9 @@ TEST(cli_repair_refuses_truncated_brain)
         "file is "
         "damaged\",\"detail\":{\"sqlite_code\":11,\"sqlite_extended\":11,\"sqlite_name\":\"SQLITE_"
         "CORRUPT\",\"sqlite_message\":\"database disk image is malformed\",\"fix\":\"Copy the file "
-        "somewhere safe before anything else, then run `remember export`, or restore a "
-        "backup.\",\"path\":\"%s\",\"fts_only\":false}}}\n",
+        "somewhere safe before anything else, then restore a backup, "
+        "or recover what can be read with `remember --db NEW.db import --from-db COPY`.\","
+        "\"path\":\"%s\",\"fts_only\":false}}}\n",
         db);
     ASSERT_EQ_INT(r.exit_code, 1);
     ASSERT_STREQ(r.out, "");
@@ -3062,8 +3065,8 @@ TEST(cli_search_on_damaged_base_is_not_fts_only)
 {
     static const char *const k_plain =
         "remember: database error: the brain file is damaged (SQLITE_CORRUPT). "
-        "Copy the file somewhere safe before anything else, then run `remember export`, or "
-        "restore a backup.\n";
+        "Copy the file somewhere safe before anything else, then restore a backup, "
+        "or recover what can be read with `remember --db NEW.db import --from-db COPY`.\n";
     char *db = make_temp_db_path();
     const char *seed[] = {"add", "alpha seed memory"};
     const char *search[] = {"search", "alpha"};
@@ -3091,8 +3094,9 @@ TEST(cli_search_on_damaged_base_is_not_fts_only)
         "file is "
         "damaged\",\"detail\":{\"sqlite_code\":11,\"sqlite_extended\":11,\"sqlite_name\":\"SQLITE_"
         "CORRUPT\",\"sqlite_message\":\"database disk image is malformed\",\"fix\":\"Copy the file "
-        "somewhere safe before anything else, then run `remember export`, or restore a "
-        "backup.\",\"path\":\"%s\",\"fts_only\":false}}}\n",
+        "somewhere safe before anything else, then restore a backup, "
+        "or recover what can be read with `remember --db NEW.db import --from-db COPY`.\","
+        "\"path\":\"%s\",\"fts_only\":false}}}\n",
         db);
     ASSERT_EQ_INT(r.exit_code, 1);
     ASSERT_STREQ(r.out, "");
@@ -3236,8 +3240,8 @@ TEST(cli_truncated_brain_reports_corrupt)
 {
     static const char *const k_plain =
         "remember: database error: the brain file is damaged (SQLITE_CORRUPT). "
-        "Copy the file somewhere safe before anything else, then run `remember export`, or "
-        "restore a backup.\n";
+        "Copy the file somewhere safe before anything else, then restore a backup, "
+        "or recover what can be read with `remember --db NEW.db import --from-db COPY`.\n";
     char *db = make_temp_db_path();
     const char *seed[] = {"add", "seed"};
     const char *get[] = {"get", "1"};
@@ -3271,8 +3275,9 @@ TEST(cli_truncated_brain_reports_corrupt)
         "file is "
         "damaged\",\"detail\":{\"sqlite_code\":11,\"sqlite_extended\":11,\"sqlite_name\":\"SQLITE_"
         "CORRUPT\",\"sqlite_message\":\"database disk image is malformed\",\"fix\":\"Copy the file "
-        "somewhere safe before anything else, then run `remember export`, or restore a "
-        "backup.\",\"path\":\"%s\",\"fts_only\":false}}}\n",
+        "somewhere safe before anything else, then restore a backup, "
+        "or recover what can be read with `remember --db NEW.db import --from-db COPY`.\","
+        "\"path\":\"%s\",\"fts_only\":false}}}\n",
         db);
     ASSERT_EQ_INT(r.exit_code, 1);
     ASSERT_STREQ(r.out, "");
@@ -3481,8 +3486,8 @@ TEST(cli_repair_read_fault_during_check_is_corrupt)
 {
     static const char *const k_plain =
         "remember: database error: the brain file is damaged (SQLITE_IOERR_READ). "
-        "Copy the file somewhere safe before anything else, then run `remember export`, or "
-        "restore a backup.\n";
+        "Copy the file somewhere safe before anything else, then restore a backup, "
+        "or recover what can be read with `remember --db NEW.db import --from-db COPY`.\n";
     char *db = make_temp_db_path();
     const char *seed[] = {"add", "seed"};
     const char *repair[] = {"repair", "search-index"};
@@ -3515,8 +3520,9 @@ TEST(cli_repair_read_fault_during_check_is_corrupt)
         "file is "
         "damaged\",\"detail\":{\"sqlite_code\":10,\"sqlite_extended\":266,\"sqlite_name\":\"SQLITE_"
         "IOERR_READ\",\"sqlite_message\":\"disk I/O error\",\"fix\":\"Copy the file "
-        "somewhere safe before anything else, then run `remember export`, or restore a "
-        "backup.\",\"errno\":%d,\"path\":\"%s\",\"fts_only\":false}}}\n",
+        "somewhere safe before anything else, then restore a backup, "
+        "or recover what can be read with `remember --db NEW.db import --from-db COPY`.\","
+        "\"errno\":%d,\"path\":\"%s\",\"fts_only\":false}}}\n",
         ENOENT, db);
     ASSERT_EQ_INT(r.exit_code, 1);
     ASSERT_STREQ(r.out, "");

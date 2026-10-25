@@ -175,7 +175,7 @@ shape this log:
 | `disk_full` | disk is full | disk is full | Free some space and try again. |
 | `cannot_open` | cannot open brain | cannot open the brain file | Check that the folder exists and that you can read and write it. |
 | `not_a_database` | not a remember brain | the file is not a remember database | Point --db at a remember brain, or move this file away. |
-| `corrupt` | brain is damaged | the brain file is damaged | Copy the file somewhere safe before anything else, then run `remember export`, or restore a backup. |
+| `corrupt` | brain is damaged | the brain file is damaged | Copy the file somewhere safe before anything else, then run `remember export`, or restore a backup. *(2026-10-22: until export ships (0.3.0, E6), the hint points to `remember --db NEW.db import --from-db COPY` instead; switch the hint back when export lands.)* |
 | `corrupt` with `fts_only` | search index is damaged | the search index is damaged | Run `remember repair search-index`. Your memories are not affected. |
 | `io_error` | disk error | the disk reported a read or write error | Check the disk or drive, then try again. |
 | `database` | database error | — | plain: `remember: database error (<SQLITE_NAME>). Try again. If it keeps happening, report the details from --json-errors.` |

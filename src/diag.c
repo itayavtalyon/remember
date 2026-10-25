@@ -248,8 +248,8 @@ static const SqliteAdvice k_sqlite_advice[DIAG_CODE_COUNT] = {
                              "Point --db at a remember brain, or move this file away."},
     [DIAG_CORRUPT] =
         {"the brain file is damaged",
-         "Copy the file somewhere safe before anything else, then run `remember export`, or "
-         "restore a backup."},
+         "Copy the file somewhere safe before anything else, then restore a backup, "
+         "or recover what can be read with `remember --db NEW.db import --from-db COPY`."},
     [DIAG_IO_ERROR] = {"the disk reported a read or write error",
                        "Check the disk or drive, then try again."},
 };
