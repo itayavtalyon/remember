@@ -52,9 +52,9 @@ jobs:
       - name: Validate the plugin protocol spec
         run: '"$RUNNER_TEMP/venv/bin/python" scripts/validate_plugin_spec.py docs/PLUGIN-PROTOCOL.md'
 
-  # Line coverage of src/*.c: 100% functions + 100% effective lines
-  # (see scripts/check-coverage.sh). Add this job name to branch protection
-  # required checks when ready.
+  # Line coverage of src/*.c: 100% functions + 100% effective lines, plus every
+  # branch side in the pure TUs (plan 18b; see scripts/check-coverage.sh). Add
+  # this job name to branch protection required checks when ready.
   linux-coverage:
     name: linux (line coverage on src/)
     runs-on: ubuntu-latest

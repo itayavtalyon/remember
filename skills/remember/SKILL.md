@@ -41,6 +41,7 @@ The device id is the sidecar `<db-path>.device_id` (never copy on import). Run `
 - User says **deep review** / strict review / critical review: `get --key workflow:deep-review` and the keys it lists, then execute that workflow
 - Project pickup / "where did we leave off" / new conversation on a known repo: follow **Project status (handoff)** below
 - Before `add` on a subject: search first; if an entry covers it, **`update`** that id (or re-`add --key`) instead of creating a rival
+- Before `add --key`: read the search's `keys` facet. It lists the existing keys that match the query, so you reuse a slot instead of inventing a rival key
 
 ## Global flags
 
@@ -119,16 +120,20 @@ remember --json add --source agent -- -
 
 ```bash
 remember --json search "editor preference"
-remember --json search --tag project:foo --limit 20 --offset 0 "FTS query"
+remember --json search boo                      # word prefixes: finds "Book"
+remember --json search 'book OR zed'            # FTS5 syntax still works
+remember --json search --tag project:foo --limit 20 --offset 0 --facet-limit 50 "query"
 remember --json list --tag pref --limit 20
 remember --json list --sort created --since 2026-10-19
 remember --json list --expired
 remember --json tags
 ```
 
-- search: one required QUERY (FTS5 MATCH). Outer whitespace trimmed; empty after trim → exit 1.
-- Filters: `--tag` (AND, repeatable), `--key`, `--source`, `--limit` (default 20, max 1000), `--offset` (≥ 0), `--expired` / `--deleted` (default **live only**)
-- JSON envelope: `version`, `offset`, `limit`, `count`, `total`, `entries` (full bodies + `links` stubs; empty array if none)
+- search: one required QUERY. Word prefixes match in keys, bodies and tags (`boo` finds "Book", `edit` finds `pref:editor`), and the QUERY also runs as FTS5 syntax. A QUERY FTS5 cannot parse still exits 0 with the prefix matches and a warning (FTS notes below). An empty or blank QUERY exits 0 with an empty result. Put `--` before a QUERY that starts with `-` (`search -- -x`); without it, `-x` is an unknown option.
+- Order: exact key, then key prefix, then relevance (bm25), then `updated_at`.
+- Filters: `--tag` (AND, repeatable), `--key`, `--source`, `--limit` (default 20, max 1000), `--offset` (≥ 0), `--expired` / `--deleted` (default **live only**). Number options take ASCII digits only (`+5` or ` 5` is a usage error).
+- JSON envelope (list): `version`, `offset`, `limit`, `count`, `total`, `entries` (full bodies + `links` stubs; empty array if none)
+- JSON envelope (search): `version`, `offset`, `limit`, `count`, `total`, `keys`, `tags`, `entries`. `keys` is `{"total":N,"items":[{"key","sync_id","label","source","updated_at"}]}`, `tags` is `{"total":N,"items":[{"tag","count"}]}`: the keys and tags that match the QUERY among the memories in the active bin and filters (not only the matched rows). `--facet-limit N` (default 50, 1..200) caps each `items`; `total` counts them all; `--limit` / `--offset` page `entries` only. `label` is the memory's `# ` title, else the key.
 - If `total` > rows received, page with `--offset` or raise `--limit` before concluding nothing else exists
 - list: same filters/paging; no FTS. `--sort updated` (default) orders by `updated_at DESC, id DESC`. `--sort created` orders by `created_at DESC, id DESC`.
 - `--since TS` is inclusive and `--until TS` is exclusive. On `list` they filter the sort field. On `search` they filter `updated_at`. `search --sort` is validated, then ignored.
@@ -188,7 +193,8 @@ remember --json conflict accept --id 1 --keep local|incoming|both
 - Exit **0** even when conflicts were recorded. **Always run `conflicts` after import.**
 - Reasons: `concurrent_vv` | `key_clash` | `hash_clash`
 - `--keep both` remints incoming `sync_id` on `concurrent_vv`; on clash keeps incoming sync_id (keyless if the slot is taken)
-- JSON import: `action:imported` + `inserted`/`updated`/`unchanged`/`conflicts` counts
+- JSON import: `action:imported` + `inserted`/`updated`/`unchanged`/`conflicts`/`rejected` counts
+- `rejected`: rows skipped because a field is not what a local write would store: a key or tag (a control byte, uppercase, too long), a sync_id that is not a UUID v7, a timestamp not shaped `YYYY-MM-DDTHH:MM:SS.mmmZ`, a version vector that is not `{"<uuid v7>":<n>,...}`, a source outside the five tokens, or a body_hash that does not match the body. Nothing of that row is written.
 
 ### device
 
@@ -266,16 +272,17 @@ Keyed slots make duplicate rivals impossible. Keyless facts still resolve by rec
 
 - `add` / `update` / `rekey`: id (or JSON envelope with `--json`); human `delete` is silent
 - `list` / `search`: `id | key | tags | preview | updated_at | related` (preview ≤ 80 codepoints; related ids cap 5)
+- `search` first prints `keys: k1, k2` and `tags: t1 (n), t2 (m)` lines, each only when not empty, at most 10 items, then `, … and N more` (N = total − shown)
 - `get` / `related`: `Related:` block after the body (`related` has no body)
 
 Agents should always use `--json` when parsing.
 
 ## FTS notes
 
-- Query language is SQLite FTS5 MATCH (document in help / SQLite docs)
+- Word prefixes match first; the QUERY also runs as SQLite FTS5 MATCH syntax (`remember help search`)
 - The key is indexed: `search editor` finds `pref:editor`.
 - Hebrew marks are folded out of the index. The stored body keeps them.
-- Invalid MATCH syntax → exit 1 (`invalid search query`)
+- A query FTS5 cannot parse is not an error: exit 0, prefix matches, and one stderr line `remember: warning: raw query ignored: <message>` (with `--json-errors`: `{"version":1,"warning":{"code":"raw_query_ignored","message":"<message>"}}`). A warning on stderr is not an error: trust the exit code
 - Empty result set → exit 0 with `count:0` (not an error)
 
 ## Project status (handoff)

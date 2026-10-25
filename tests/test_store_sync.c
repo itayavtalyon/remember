@@ -47,7 +47,7 @@ static void assert_search_total(Store *s, SearchExpect check)
     sq.query = check.query;
     sq.filters.limit = (size_t)LIST_PAGE;
     sq.filters.bin = check.bin;
-    page = store_search(s, &sq, k_now);
+    page = store_search(s, &sq, k_now).page;
     ASSERT_EQ_STATUS(page.st, STORE_OK);
     ASSERT_EQ_INT((int)page.total, (int)check.want);
     for (i = 0; i < page.count; i++) {

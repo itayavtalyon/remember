@@ -76,54 +76,36 @@ else
   fi
 fi
 
-echo "== no sqlite outside store_sqlite.c =="
-# test_vfs.c is the X-E02 shim. It is the one other TU allowed to include sqlite.
-if grep -RIn --include='*.c' --include='*.h' -E 'sqlite3\.h|sqlite3_' "$SRC_DIR" 2>/dev/null \
-  | grep -v 'store_sqlite\.c' | grep -v 'test_vfs\.c' | grep -v 'third_party' \
-  >/tmp/remember-sqlite-leak.txt 2>/dev/null; then
-  if [[ -s /tmp/remember-sqlite-leak.txt ]]; then
-    echo "sqlite leak: FAIL"
-    cat /tmp/remember-sqlite-leak.txt
+# Fail when a src/ line matches pattern and does not match the allow ERE.
+check_boundary() {
+  local name="$1" pattern="$2" allow="$3" leaks
+  leaks="$(grep -RIn --include='*.c' --include='*.h' -E "$pattern" "$SRC_DIR" 2>/dev/null \
+    | grep -vE "$allow" || true)"
+  if [[ -n "$leaks" ]]; then
+    echo "$name boundary: FAIL"
+    echo "$leaks"
     fail=1
   else
-    echo "sqlite boundary: PASS"
+    echo "$name boundary: PASS"
   fi
-else
-  echo "sqlite boundary: PASS (no leaks)"
-fi
+}
+
+echo "== no sqlite outside store_sqlite.c =="
+# test_vfs.c is the X-E02 shim. It is the one other TU allowed to include sqlite.
+check_boundary sqlite 'sqlite3\.h|sqlite3_' 'store_sqlite\.c|test_vfs\.c|third_party'
 
 echo "== no error writes outside diag.c =="
 # app_err() is the emitter's stream. Command code calls err_msg / diag_*.
 # Raw stderr and perror bypass it too; remember_main is the one place that binds stderr.
-if grep -RIn --include='*.c' --include='*.h' -E 'app_err\(|[(, ]stderr[,)]|perror\(' "$SRC_DIR" 2>/dev/null \
-  | grep -v 'diag\.c' | grep -v 'appio\.' | grep -vF 'remember_run(argc, argv, stdout, stderr)' \
-  >/tmp/remember-diag-leak.txt 2>/dev/null; then
-  if [[ -s /tmp/remember-diag-leak.txt ]]; then
-    echo "diag boundary: FAIL"
-    cat /tmp/remember-diag-leak.txt
-    fail=1
-  else
-    echo "diag boundary: PASS"
-  fi
-else
-  echo "diag boundary: PASS (no leaks)"
-fi
+check_boundary diag 'app_err\(|[(, ]stderr[,)]|perror\(' \
+  'diag\.c|appio\.|remember_run\(argc, argv, stdout, stderr\)'
 
 echo "== no sha256 outside normalize.c =="
 # Allow REMEMBER_SHA256_HEX_LEN (public normalize API); forbid vendor symbols/includes.
-if grep -RIn --include='*.c' --include='*.h' -E 'sha256\.h|SHA256_|sha256_' "$SRC_DIR" 2>/dev/null \
-  | grep -v 'normalize\.c' | grep -v 'normalize\.h' | grep -v 'REMEMBER_SHA256' \
-  >/tmp/remember-sha256-leak.txt 2>/dev/null; then
-  if [[ -s /tmp/remember-sha256-leak.txt ]]; then
-    echo "sha256 leak: FAIL"
-    cat /tmp/remember-sha256-leak.txt
-    fail=1
-  else
-    echo "sha256 boundary: PASS"
-  fi
-else
-  echo "sha256 boundary: PASS (no leaks)"
-fi
+check_boundary sha256 'sha256\.h|SHA256_|sha256_' 'normalize\.c|normalize\.h|REMEMBER_SHA256'
+
+echo "== no utf8proc outside unicode.c =="
+check_boundary utf8proc 'utf8proc\.h|utf8proc_|UTF8PROC_' 'unicode\.c'
 
 echo "== cppcheck =="
 if [[ -n "$CPPCHECK" ]] && [[ -d "$SRC_DIR" ]]; then
@@ -157,6 +139,7 @@ if [[ -n "$CPPCHECK" ]] && [[ -d "$SRC_DIR" ]]; then
       -I "$SRC_DIR" \
       -I third_party/sqlite \
       -I third_party/sha256 \
+      -I third_party/utf8proc \
       $(find "$SRC_DIR" -name '*.c' 2>/dev/null) \
       2>"$REPORT_DIR/cppcheck.txt"; then
     echo "cppcheck (src): FAIL"
@@ -176,6 +159,7 @@ if [[ -n "$CPPCHECK" ]] && [[ -d "$SRC_DIR" ]]; then
         -I "$TESTS_DIR" \
         -I third_party/sqlite \
         -I third_party/sha256 \
+        -I third_party/utf8proc \
         $(find "$TESTS_DIR" -name '*.c' 2>/dev/null) \
         2>"$REPORT_DIR/cppcheck-tests.txt"; then
       echo "cppcheck (tests): FAIL"
@@ -208,6 +192,7 @@ if [[ -n "$GCC_ANALYZER" ]] && [[ -d "$SRC_DIR" ]]; then
         -I "$SRC_DIR" \
         -isystem third_party/sqlite \
         -isystem third_party/sha256 \
+        -isystem third_party/utf8proc \
         "$f" >>"$REPORT_DIR/gcc-analyzer.txt" 2>&1; then
       an_fail=1
     fi
@@ -270,10 +255,11 @@ if [[ "$run_iwyu" -eq 1 ]]; then
     : >"$REPORT_DIR/iwyu.txt"
     iwyu_fail=0
     # Vendor headers used by src/ (PUBLIC includes of linked libs). Keep in sync
-    # with CMake targets: sqlite3 → third_party/sqlite, sha256 → third_party/sha256.
+    # with CMake targets: sqlite3 → third_party/sqlite, sha256 → third_party/sha256,
+    # utf8proc → third_party/utf8proc.
     # Required for the direct-iwyu fallback; also passed after -- for iwyu_tool so
     # a stale/partial compile_commands still finds sha256.h (normalize.c).
-    IWYU_VENDOR_INCLUDES=(-I"$ROOT/third_party/sqlite" -I"$ROOT/third_party/sha256")
+    IWYU_VENDOR_INCLUDES=(-I"$ROOT/third_party/sqlite" -I"$ROOT/third_party/sha256" -I"$ROOT/third_party/utf8proc")
     # Match CMake Linux project targets: glibc + pure -std=c11 hides POSIX
     # prototypes unless feature-test macros are visible to the IWYU clang parse.
     IWYU_POSIX_FLAGS=()

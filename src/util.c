@@ -1,5 +1,6 @@
 #include "util.h"
 
+#include <ctype.h>
 #include <errno.h>
 #include <limits.h>
 #include <stdio.h>
@@ -283,7 +284,7 @@ int util_absolute_path(const char *path, char *buf, size_t buflen)
     return rc;
 }
 
-/* Shared by --limit/--offset and --busy-timeout so the decimal rules stay one place. */
+/* Shared by the size options and --busy-timeout so the decimal rules stay one place. */
 enum { DECIMAL_BASE = 10 };
 
 int util_parse_nonneg(const char *raw, unsigned long long *out)
@@ -291,13 +292,15 @@ int util_parse_nonneg(const char *raw, unsigned long long *out)
     char *end = NULL;
     unsigned long long value = 0;
 
-    /* A minus anywhere: strtoull skips leading space and wraps " -1" to ULLONG_MAX. */
-    if (raw == NULL || raw[0] == '\0' || strchr(raw, '-') != NULL) {
+    /* ASCII digits only (decision:size-option-digits-only). A leading digit stops
+       strtoull from skipping space or taking a sign (" -1" would wrap to
+       ULLONG_MAX); the end check below rejects anything after the digits. */
+    if (raw == NULL || !isdigit((unsigned char)raw[0])) {
         return -1;
     }
     errno = 0;
     value = strtoull(raw, &end, DECIMAL_BASE);
-    if (end == raw || (end != NULL && *end != '\0') || errno == ERANGE) {
+    if ((end != NULL && *end != '\0') || errno == ERANGE) {
         return -1;
     }
     *out = value;

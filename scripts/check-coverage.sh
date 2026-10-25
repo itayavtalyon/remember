@@ -5,6 +5,8 @@
 # the green black-box gate + store unit suite, then requires:
 #   1. 100% function coverage on src/
 #   2. 100% *effective* line coverage on src/
+#   3. every branch side taken in the pure TUs (search_terms, unicode,
+#      normalize, output), with no exclusion of any kind (plan 18b)
 #
 # "Effective" line coverage excludes pure defensive exit lines that need
 # per-check I/O/OOM injection at every sequential site (exponential). Those
@@ -80,21 +82,14 @@ echo "== merge ${#raws[@]} profiles =="
 "$LLVM_PROFDATA" merge -sparse "${raws[@]}" -o "$PROF_DIR/merged.profdata"
 
 BINS=("${BUILD_DIR}/remember" "${BUILD_DIR}/remember_store_tests" "${BUILD_DIR}/remember_tests")
-IGNORE_REGEX='(/third_party/|/tests/)'
+COV_ARGS=("${BINS[@]}" -instr-profile="$PROF_DIR/merged.profdata" -ignore-filename-regex='(/third_party/|/tests/)')
 
 echo "== llvm-cov report =="
 REPORT_TXT="${BUILD_DIR}/coverage-report.txt"
-"$LLVM_COV" report "${BINS[@]}" \
-  -instr-profile="$PROF_DIR/merged.profdata" \
-  -ignore-filename-regex="$IGNORE_REGEX" \
-  | tee "$REPORT_TXT"
+"$LLVM_COV" report "${COV_ARGS[@]}" | tee "$REPORT_TXT"
 
 LCOV_OUT="${BUILD_DIR}/coverage.lcov"
-"$LLVM_COV" export "${BINS[@]}" \
-  -instr-profile="$PROF_DIR/merged.profdata" \
-  -format=lcov \
-  -ignore-filename-regex="$IGNORE_REGEX" \
-  >"$LCOV_OUT"
+"$LLVM_COV" export "${COV_ARGS[@]}" -format=lcov >"$LCOV_OUT"
 
 # Function coverage: 3rd percentage is lines; functions executed is 2nd % field...
 # Columns: Regions% FunctionsExecuted% Lines% Branches%
@@ -155,6 +150,7 @@ DEFENSIVE = re.compile(
     |^\s*return\s+REMEMBER_OK\b
     |^\s*return\s+NORM_ERR_
     |^\s*return\s+NORM_OK\b
+    |^\s*return\s+SEARCH_ERR_
     |^\s*return\s+st\s*;\s*$
     |^\s*return\s+rc\s*;\s*$
     |^\s*return\s+[012]\s*;              # parser kind (allows trailing comment)
@@ -293,4 +289,48 @@ print("effective line coverage (src, non-defensive): 100%")
 sys.exit(0)
 PY
 
-echo "== coverage: functions 100% + effective lines 100% OK =="
+# Branch sides of the pure TUs (plan 18b). The line regex above cannot tell a
+# defensive `return -1;` from a rule branch; branch records can. A branch
+# inside a macro is counted too (llvm-cov report counts it), reported at its
+# #define with a "(macro)" tag (decision:plan18b-macro-branches-counted).
+BRANCH_JSON="${BUILD_DIR}/coverage-branches.json"
+"$LLVM_COV" export "${COV_ARGS[@]}" -format=text -skip-functions >"$BRANCH_JSON"
+
+echo "== branch sides (pure TUs, every side) =="
+python3 - "$ROOT" "$BRANCH_JSON" <<'PY'
+import json, sys
+from pathlib import Path
+
+root = sys.argv[1].rstrip("/") + "/"
+GATED = ("src/search_terms.c", "src/unicode.c", "src/normalize.c", "src/output.c")
+
+bad = 0
+files = {f["filename"]: f for f in json.loads(Path(sys.argv[2]).read_text())["data"][0]["files"]}
+for rel in GATED:
+    f = files.get(root + rel)
+    if f is None:
+        sys.exit(f"error: {rel} has no coverage record")
+    # A branch record: [line, col, end_line, end_col, true_count, false_count,
+    # file_id, ...]; file_id 0 is the TU, any other id is a macro expansion.
+    missed = [
+        f"{rel}:{b[0]}:{b[1]} {side}" + (" (macro)" if b[6] else "")
+        for b in sorted(f["branches"])
+        for side, count in (("true", b[4]), ("false", b[5]))
+        if count == 0
+    ]
+    # A branch in a macro #defined in a header counts in the TU's report total
+    # but sits in the header's record (decision:plan18b-branch-list-equals-report).
+    sides, want = 2 * len(f["branches"]), f["summary"]["branches"]["count"]
+    if sides != want:
+        sys.exit(f"error: {rel}: {sides} listed branch sides, llvm-cov report counts {want} (a branch in a header macro?)")
+    print(f"{rel}: {sides} branch sides, {len(missed)} missed")
+    for m in missed:
+        print(f"  {m}")
+    bad += len(missed)
+
+if bad:
+    print(f"error: {bad} branch side(s) not taken in the pure TUs (listed above)", file=sys.stderr)
+    sys.exit(1)
+PY
+
+echo "== coverage: functions 100% + effective lines 100% + pure-TU branches 100% OK =="

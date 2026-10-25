@@ -192,8 +192,6 @@ DiagCode code_for_store_status(StoreStatus st)
         return DIAG_OUT_OF_MEMORY;
     case STORE_ERR_INTERNAL:
         return DIAG_INTERNAL;
-    case STORE_ERR_QUERY:
-        return DIAG_INVALID_QUERY;
     case STORE_ERR_CONFLICT:
         return DIAG_BODY_CONFLICT;
     case STORE_ERR_EXPIRED:
@@ -344,13 +342,6 @@ DiagCode code_for_store_text(const char *msg)
         return DIAG_DATABASE;
     }
     return DIAG_INTERNAL;
-}
-
-int source_is_valid(const char *s)
-{
-    return s != NULL &&
-           (strcmp(s, "human") == 0 || strcmp(s, "agent") == 0 || strcmp(s, "tool") == 0 ||
-            strcmp(s, "share") == 0 || strcmp(s, "unknown") == 0);
 }
 
 const char *action_name(StoreAddAction a)

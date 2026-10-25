@@ -52,6 +52,14 @@ static const char *const k_warning_codes[DIAG_WARN_COUNT] = {
     [DIAG_WARN_SYNCED_FOLDER] = "synced_folder",
 };
 
+/* Plain line lead per warning. E2.3 gives raw_query_ignored its own words; the
+   JSON message stays the bare text. */
+static const char *const k_warning_plain_prefix[DIAG_WARN_COUNT] = {
+    [DIAG_WARN_RAW_QUERY_IGNORED] = "warning: raw query ignored: ",
+    [DIAG_WARN_DEPRECATED_FLAG] = "warning: ",
+    [DIAG_WARN_SYNCED_FOLDER] = "warning: ",
+};
+
 static const char *catalog_name(const char *const *names, size_t count, size_t index)
 {
     if (index >= count) {
@@ -121,7 +129,7 @@ static const char *message_or_empty(const char *message)
     return message != NULL ? message : "";
 }
 
-/* One plain or JSON notice. plain_prefix is "" for errors and "warning: " for warnings. */
+/* One plain or JSON notice. plain_prefix is "" for errors and starts "warning: " for warnings. */
 typedef struct {
     const char *json_kind;
     const char *plain_prefix;
@@ -211,7 +219,7 @@ int diag_warning(DiagWarning code, const char *message)
     }
     return write_notice((Notice){
         .json_kind = "warning",
-        .plain_prefix = "warning: ",
+        .plain_prefix = k_warning_plain_prefix[code],
         .code = name,
         .message = message,
         .json_errors = g_json_errors,

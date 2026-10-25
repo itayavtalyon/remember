@@ -5,10 +5,12 @@ void register_cli_global_tests(void);
 void register_store_tests(void);
 void register_store_link_tests(void);
 void register_store_sync_tests(void);
+void register_store_search_tests(void);
 void register_normalize_tests(void);
 void register_add_tests(void);
 void register_get_list_delete_tests(void);
 void register_search_tests(void);
+void register_union_search_tests(void);
 void register_update_tests(void);
 void register_json_db_config_tests(void);
 void register_key_gld_tests(void);
@@ -30,5 +32,8 @@ void register_schema_v5_tests(void);
 void register_device_tests(void);
 void register_errors_tests(void);
 void register_list_dates_tests(void);
+void register_unicode_tests(void);
+void register_search_terms_tests(void);
+void register_output_tests(void);
 
 #endif /* REMEMBER_REGISTER_H */

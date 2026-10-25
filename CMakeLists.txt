@@ -101,6 +101,8 @@ set_property(SOURCE
     src/cli.c
     src/store_sqlite.c
     src/normalize.c
+    src/unicode.c
+    src/search_terms.c
     src/commands_common.c
     src/cmd_add.c
     src/cmd_locator.c
@@ -115,6 +117,7 @@ set_property(SOURCE
     src/util.c
     src/diag.c
     src/test_vfs.c
+    src/test_alloc.c
     APPEND PROPERTY COMPILE_OPTIONS -Wcast-qual
 )
 
@@ -159,6 +162,7 @@ endfunction()
 function(remember_apply_test_hooks target)
     if(REMEMBER_TEST_HOOKS)
         target_compile_definitions(${target} PRIVATE REMEMBER_TEST_HOOKS)
+        target_sources(${target} PRIVATE ${CMAKE_SOURCE_DIR}/src/test_alloc.c)
     endif()
 endfunction()
 
@@ -209,6 +213,12 @@ add_library(sha256 STATIC third_party/sha256/sha256.c)
 target_include_directories(sha256 SYSTEM PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/third_party/sha256)
 target_compile_options(sha256 PRIVATE -w)
 
+# --- utf8proc (MIT; Unicode 18; sole consumer is unicode.c) ------------------
+# utf8proc.c includes utf8proc_data.c. Do not also compile the data file.
+add_library(utf8proc STATIC third_party/utf8proc/utf8proc.c)
+target_include_directories(utf8proc SYSTEM PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/third_party/utf8proc)
+target_compile_options(utf8proc PRIVATE -w)
+
 # Shared app sources (compiled per-target so the fork/exec harness parent can
 # stay uninstrumented while the CLI and store unit binary take sanitizers).
 set(REMEMBER_LIB_SOURCES
@@ -217,6 +227,8 @@ set(REMEMBER_LIB_SOURCES
     src/cli.c
     src/store_sqlite.c
     src/normalize.c
+    src/unicode.c
+    src/search_terms.c
     src/commands_common.c
     src/cmd_add.c
     src/cmd_locator.c
@@ -238,7 +250,7 @@ add_executable(remember
     ${REMEMBER_LIB_SOURCES}
 )
 target_include_directories(remember PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
-target_link_libraries(remember PRIVATE sqlite3 sha256)
+target_link_libraries(remember PRIVATE sqlite3 sha256 utf8proc)
 target_compile_definitions(remember PRIVATE
     REMEMBER_VERSION="${PROJECT_VERSION}"
 )
@@ -257,7 +269,7 @@ add_executable(remember_plain
     ${REMEMBER_LIB_SOURCES}
 )
 target_include_directories(remember_plain PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
-target_link_libraries(remember_plain PRIVATE sqlite3 sha256)
+target_link_libraries(remember_plain PRIVATE sqlite3 sha256 utf8proc)
 target_compile_definitions(remember_plain PRIVATE
     REMEMBER_VERSION="${PROJECT_VERSION}"
 )
@@ -269,7 +281,7 @@ remember_apply_test_hooks(remember_plain)
 # so an in-process caller reuses the exact pipeline and byte-identical JSON.
 add_library(remember_core STATIC ${REMEMBER_LIB_SOURCES})
 target_include_directories(remember_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
-target_link_libraries(remember_core PUBLIC sqlite3 sha256)
+target_link_libraries(remember_core PUBLIC sqlite3 sha256 utf8proc)
 target_compile_definitions(remember_core PRIVATE
     REMEMBER_VERSION="${PROJECT_VERSION}"
 )
@@ -284,10 +296,12 @@ set(REMEMBER_TEST_SOURCES
     tests/test_store.c
     tests/test_store_links.c
     tests/test_store_sync.c
+    tests/test_store_search.c
     tests/test_normalize.c
     tests/test_add.c
     tests/test_get_list_delete.c
     tests/test_search.c
+    tests/test_union_search.c
     tests/test_update.c
     tests/test_json_db_config.c
     tests/test_key.c
@@ -310,12 +324,13 @@ set(REMEMBER_TEST_SOURCES
 add_executable(remember_tests
     ${REMEMBER_TEST_SOURCES}
     ${REMEMBER_LIB_SOURCES}
+    src/test_alloc.c
 )
 target_include_directories(remember_tests PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/tests
     ${CMAKE_CURRENT_SOURCE_DIR}/src
 )
-target_link_libraries(remember_tests PRIVATE sqlite3 sha256)
+target_link_libraries(remember_tests PRIVATE sqlite3 sha256 utf8proc)
 target_compile_definitions(remember_tests PRIVATE
     REMEMBER_VERSION="${PROJECT_VERSION}"
     REMEMBER_TEST_HOOKS
@@ -345,11 +360,21 @@ add_executable(remember_store_tests
     tests/test_store.c
     tests/test_store_links.c
     tests/test_store_sync.c
+    tests/test_store_search.c
     tests/test_normalize.c
     tests/test_schema_v5.c
     src/store_sqlite.c
     src/normalize.c
+    src/unicode.c
+    src/search_terms.c
+    src/output.c
+    src/test_alloc.c
+    tests/test_unicode.c
+    tests/test_search_terms.c
+    tests/test_output.c
+    tests/failing_stream.c
     third_party/sha256/sha256.c
+    third_party/utf8proc/utf8proc.c
 )
 target_include_directories(remember_store_tests PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/tests
@@ -357,15 +382,16 @@ target_include_directories(remember_store_tests PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/third_party/sha256
 )
 # Warnings off for the vendored digest only; sanitizer flags still apply to it.
-set_property(SOURCE third_party/sha256/sha256.c
+set_property(SOURCE third_party/sha256/sha256.c third_party/utf8proc/utf8proc.c
     TARGET_DIRECTORY remember_store_tests
     APPEND PROPERTY COMPILE_OPTIONS -w
 )
 target_link_libraries(remember_store_tests PRIVATE sqlite3)
-# Vendored sha256 header included directly here: treat as system so -Weverything
+# Vendored headers included directly here: treat as system so -Weverything
 # does not flag upstream header style. And exempt the argv const-casts as above.
 target_include_directories(remember_store_tests SYSTEM PRIVATE
-    ${CMAKE_CURRENT_SOURCE_DIR}/third_party/sha256)
+    ${CMAKE_CURRENT_SOURCE_DIR}/third_party/sha256
+    ${CMAKE_CURRENT_SOURCE_DIR}/third_party/utf8proc)
 target_compile_options(remember_store_tests PRIVATE -Wno-cast-qual)
 remember_apply_posix_feature_macros(remember_store_tests)
 remember_apply_sanitizers(remember_store_tests)

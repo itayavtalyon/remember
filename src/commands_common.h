@@ -49,7 +49,6 @@ int parse_entry_id(const char *raw, long long *out_id);
 
 const char *norm_token_message(NormStatus st, const char *kind);
 
-int source_is_valid(const char *s);
 const char *action_name(StoreAddAction a);
 
 /* Growable argv-alias list (tags). Does not own the strings. */

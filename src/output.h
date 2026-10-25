@@ -30,6 +30,22 @@ int output_list_envelope(FILE *out, size_t offset, size_t limit, size_t count, s
                          const Entry *entries, const StoreNeighbor *links, size_t nlinks,
                          const char *now);
 
+/*
+ * search --json: the list envelope with the keys and tags facets between
+ * total and entries (006 E2.6). count, total and entries come from res->page.
+ */
+int output_search_envelope(FILE *out, const SearchResult *res, size_t offset, size_t limit,
+                           const StoreNeighbor *links, size_t nlinks, const char *now);
+
+/*
+ * search human facets (006 E2.7, decision:plan18-human-facet-line): a
+ * "keys: " line, then a "tags: " line with "tag (n)" items, each only when it
+ * has items. At most 10 items each, masked like every stored string; when the
+ * facet total is larger, the line ends ", ... and N more" (U+2026) with
+ * N = total - printed. Writes nothing when both facets are empty.
+ */
+int output_search_facets_human(FILE *out, const SearchResult *res);
+
 /* Human add/get id line. */
 int output_id_human(FILE *out, long long id);
 
