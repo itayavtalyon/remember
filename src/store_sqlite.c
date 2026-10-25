@@ -1,9 +1,9 @@
 #include "store.h"
 
 #include "normalize.h"
+#include "search_terms.h"
 #include "sqlite3.h"
 
-#include <ctype.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <limits.h>
@@ -314,12 +314,6 @@ enum { IMPORT_MIN_USER_VERSION = 4 };
 static const char k_newer_database[] = "database is newer than this remember";
 /* RFC 4122 layout for canonical 8-4-4-4-12 and v7 mint. */
 enum {
-    UUID_DASH_0 = 8,
-    UUID_DASH_1 = 13,
-    UUID_DASH_2 = 18,
-    UUID_DASH_3 = 23,
-    UUID_VER_CHAR = 14,
-    UUID_VAR_CHAR = 19,
     UUID_VER_BYTE = 6,
     UUID_VAR_BYTE = 8,
     UUID_HEX_DASH_0 = 4,
@@ -939,36 +933,6 @@ static int apply_pragmas(sqlite3 *db, int busy_timeout_ms, char *err, size_t err
 }
 
 /* Canonical lowercase 8-4-4-4-12. Device sidecar and entry sync_id share this. */
-static int uuid_is_canonical(const char *s)
-{
-    size_t i = 0;
-
-    if (s == NULL || strlen(s) != (size_t)UUID_STR_LEN) {
-        return 0;
-    }
-    if (s[UUID_DASH_0] != '-' || s[UUID_DASH_1] != '-' || s[UUID_DASH_2] != '-' ||
-        s[UUID_DASH_3] != '-') {
-        return 0;
-    }
-    if (s[UUID_VER_CHAR] != '7') {
-        return 0;
-    }
-    if (s[UUID_VAR_CHAR] != '8' && s[UUID_VAR_CHAR] != '9' && s[UUID_VAR_CHAR] != 'a' &&
-        s[UUID_VAR_CHAR] != 'b') {
-        return 0;
-    }
-    for (i = 0; i < (size_t)UUID_STR_LEN; i++) {
-        unsigned char c = (unsigned char)s[i];
-        if (s[i] == '-') {
-            continue;
-        }
-        if (!isxdigit(c) || (isalpha(c) && !islower(c))) {
-            return 0;
-        }
-    }
-    return 1;
-}
-
 /* RFC 4122 v7 packing: shifts and nibble masks are the layout, not business
    constants clang-tidy can usefully name. */
 // NOLINTBEGIN(hicpp-signed-bitwise,cppcoreguidelines-avoid-magic-numbers,readability-magic-numbers)
@@ -1049,7 +1013,7 @@ static int read_sidecar(const char *path, char uuid[UUID_STR_LEN + 1])
     while (n > 0U && (buf[n - 1U] == '\n' || buf[n - 1U] == '\r')) {
         buf[--n] = '\0';
     }
-    if (!uuid_is_canonical(buf)) {
+    if (!uuid_v7_is_canonical(buf)) {
         (void)fclose(f);
         return -1;
     }
@@ -1825,8 +1789,6 @@ const char *store_status_message(StoreStatus st)
         return "out of memory";
     case STORE_ERR_INTERNAL:
         return "internal error";
-    case STORE_ERR_QUERY:
-        return "invalid search query";
     case STORE_ERR_CONFLICT:
         return "body hash conflict";
     case STORE_ERR_EXPIRED:
@@ -3377,7 +3339,8 @@ static int list_append_bin(char *sql, size_t sql_cap, size_t *pos, int *nbinds,
 
 /*
  * The only map from a list sort to a column name. List order and list
- * since/until both use it. Search asks for UPDATED and ignores ListQuery.sort.
+ * since/until both use it. Search ignores ListQuery.sort and always uses
+ * updated_at (E5.3).
  * NULL is an unknown sort (programmer error).
  */
 static const char *list_sort_column(StoreSort sort)
@@ -3393,7 +3356,8 @@ static const char *list_sort_column(StoreSort sort)
 }
 
 /* One bound. inclusive is >= (since); the other side is < (until). NULL skips.
-   column comes from list_sort_column. The timestamp is bound, never pasted. */
+   column is a fixed name (list_sort_column, or updated_at for search). The
+   timestamp is bound, never pasted. */
 static int list_append_cmp(char *sql, size_t sql_cap, size_t *pos, int *nbinds,
                            const char **bind_text, size_t bind_cap, const char *column,
                            bool inclusive, const char *value)
@@ -3482,59 +3446,47 @@ static int list_build_where(const ListQuery *q, const char *now, const char *tim
 }
 
 /*
- * Search WHERE: FTS MATCH on entries_fts (table name required — FTS5 rejects
- * aliases for MATCH/bm25), then the same entry filters as list.
- * Bind slot 1 is the MATCH query; filters continue from 2.
+ * Search WHERE: FTS MATCH on entries_fts (table name required: FTS5 rejects
+ * aliases for MATCH/bm25), then the same entry filters as list. Slot 1 is q
+ * (the ORDER BY reads it), slot 2 the MATCH text; filters continue from 3.
+ * The COUNT statement does not read ?1, but binding it is still in range
+ * because ?2 makes the parameter count at least 2.
  */
-static int search_build_where(const SearchQuery *q, const char *now, const char *time_column,
-                              char *sql, size_t sql_cap, int *out_nbinds, const char **bind_text,
+typedef struct {
+    const char *q;     /* ?1 */
+    const char *match; /* ?2 */
+} SearchBinds;
+
+static int search_build_where(const ListQuery *f, SearchBinds b, const char *now, char *sql,
+                              size_t sql_cap, int *out_nbinds, const char **bind_text,
                               size_t bind_cap)
 {
     size_t pos = 0U;
     int nbinds = 0;
     int n = 0;
 
-    if (q == NULL || q->query == NULL || now == NULL || time_column == NULL || sql == NULL ||
-        sql_cap == 0U || out_nbinds == NULL || bind_text == NULL || bind_cap < 1U) {
-        return -1;
-    }
-    n = snprintf(sql, sql_cap, " WHERE entries_fts MATCH ?1");
+    n = snprintf(sql, sql_cap, " WHERE entries_fts MATCH ?2");
     if (n < 0 || (size_t)n >= sql_cap) {
         return -1;
     }
     pos = (size_t)n;
-    bind_text[0] = q->query;
-    nbinds = 1;
+    bind_text[0] = b.q;
+    bind_text[1] = b.match;
+    nbinds = 2;
 
-    /* time_column is updated_at. Search ignores ListQuery.sort (E5.3). */
-    if (list_append_filters(&q->filters, sql, sql_cap, &pos, &nbinds, bind_text, bind_cap,
-                            time_column) != 0) {
+    /* Search ignores ListQuery.sort: since/until are on updated_at (E5.3). */
+    if (list_append_filters(f, sql, sql_cap, &pos, &nbinds, bind_text, bind_cap, "updated_at") !=
+        0) {
         return -1;
     }
-    if (list_append_bin(sql, sql_cap, &pos, &nbinds, bind_text, bind_cap, q->filters.bin, now) !=
-        0) {
+    if (list_append_bin(sql, sql_cap, &pos, &nbinds, bind_text, bind_cap, f->bin, now) != 0) {
         return -1;
     }
     *out_nbinds = nbinds;
     return 0;
 }
 
-/* Map a failed prepare/step to STORE_ERR_QUERY when SQLite reports FTS syntax. */
-static StoreStatus store_status_from_sqlite(sqlite3 *db, StoreError *serr)
-{
-    const char *msg = NULL;
-
-    capture_sqlite_error(db, serr);
-    msg = (serr != NULL) ? serr->sqlite_message : "";
-    if (msg[0] != '\0' &&
-        (strstr(msg, "fts5") != NULL || strstr(msg, "syntax error") != NULL ||
-         strstr(msg, "unrecognized token") != NULL || strstr(msg, "unterminated") != NULL)) {
-        return STORE_ERR_QUERY;
-    }
-    return STORE_ERR_SQLITE;
-}
-
-/* Error map for plain (non-FTS) queries: every failure is a database error. */
+/* Error map for list and search statements: every failure is a database error. */
 static StoreStatus store_status_plain(sqlite3 *db, StoreError *serr)
 {
     capture_sqlite_error(db, serr);
@@ -3557,6 +3509,7 @@ static StoreStatus list_bind_texts(sqlite3_stmt *stmt, const char **bind_text, i
 /* Enough for source + key + many tag EXISTS clauses. */
 enum { LIST_SQL_CAP = 8192 };
 enum { LIST_BIND_CAP = 64 };
+_Static_assert(LIST_BIND_CAP >= 2, "search binds q and the MATCH text ahead of the filters");
 
 /*
  * Bind filters + limit/offset, run the COUNT statement then the paged SELECT the
@@ -3565,15 +3518,12 @@ enum { LIST_BIND_CAP = 64 };
  * result rows, so it reports no total whenever the page is empty (offset past the
  * end), breaking the "total is the unpaged count" contract. Callers run this
  * inside one read transaction so both statements see a single snapshot.
- *
- * map_err classifies a failed prepare/step: list passes store_status_plain (any
- * failure is a database error); search passes store_status_from_sqlite (FTS-syntax
- * errors become STORE_ERR_QUERY). limit/offset bind at ?nbinds+1 / ?nbinds+2.
+ * Any failed prepare/step is a database error. limit/offset bind at
+ * ?nbinds+1 / ?nbinds+2.
  */
 static PageResult run_count_and_page(sqlite3 *db, const char *count_sql, const char *select_sql,
                                      const char **bind_text, int nbinds, size_t limit,
-                                     size_t offset, StoreStatus (*map_err)(sqlite3 *, StoreError *),
-                                     StoreError *serr)
+                                     size_t offset, StoreError *serr)
 {
     sqlite3_stmt *count_stmt = NULL;
     sqlite3_stmt *sel = NULL;
@@ -3586,7 +3536,7 @@ static PageResult run_count_and_page(sqlite3 *db, const char *count_sql, const c
 
     rc = sqlite3_prepare_v2(db, count_sql, -1, &count_stmt, NULL);
     if (rc != SQLITE_OK) {
-        return (PageResult){.st = map_err(db, serr)};
+        return (PageResult){.st = store_status_plain(db, serr)};
     }
     st = list_bind_texts(count_stmt, bind_text, nbinds, serr);
     if (st != STORE_OK) {
@@ -3595,7 +3545,7 @@ static PageResult run_count_and_page(sqlite3 *db, const char *count_sql, const c
     }
     rc = sqlite3_step(count_stmt);
     if (rc != SQLITE_ROW) {
-        st = map_err(db, serr);
+        st = store_status_plain(db, serr);
         (void)sqlite3_finalize(count_stmt);
         return (PageResult){.st = st};
     }
@@ -3604,7 +3554,7 @@ static PageResult run_count_and_page(sqlite3 *db, const char *count_sql, const c
 
     rc = sqlite3_prepare_v2(db, select_sql, -1, &sel, NULL);
     if (rc != SQLITE_OK) {
-        return (PageResult){.st = map_err(db, serr)};
+        return (PageResult){.st = store_status_plain(db, serr)};
     }
     st = list_bind_texts(sel, bind_text, nbinds, serr);
     if (st != STORE_OK) {
@@ -3627,7 +3577,7 @@ static PageResult run_count_and_page(sqlite3 *db, const char *count_sql, const c
         }
     }
     if (rc != SQLITE_DONE) {
-        st = map_err(db, serr);
+        st = store_status_plain(db, serr);
         free_entry_rows(rows, n);
         (void)sqlite3_finalize(sel);
         return (PageResult){.st = st};
@@ -3677,7 +3627,7 @@ static PageResult list_query_exec(sqlite3 *db, const ListQuery *q, const char *n
         return (PageResult){.st = STORE_ERR_INTERNAL};
     }
     return run_count_and_page(db, count_sql, select_sql, bind_text, nbinds, q->limit, q->offset,
-                              store_status_plain, serr);
+                              serr);
 }
 
 PageResult store_list(Store *s, const ListQuery *q, const char *now)
@@ -3711,28 +3661,24 @@ PageResult store_list(Store *s, const ListQuery *q, const char *now)
 }
 
 /*
- * COUNT + paged FTS SELECT. Same two-statement total contract as list_query_exec.
- * FROM joins entries_fts so MATCH/bm25 apply; filters reuse list_append_filters.
- * bm25 lower (more negative) = better match, then updated_at DESC; FTS5 requires
- * the real table name in bm25(), not an alias. count_sql/select_sql pad
- * LIST_SQL_CAP for the JOIN + bm25 ORDER BY text that frame where_sql.
+ * COUNT + paged FTS SELECT. Same two-statement total contract as
+ * list_query_exec. E2.4 order: exact key, key prefix of q, weighted bm25
+ * (key 10, body 1, tags 4; lower is better), then updated_at DESC, id DESC.
+ * IS, not =, so a NULL key ranks as a miss instead of below one.
  */
-static PageResult search_query_exec(sqlite3 *db, const SearchQuery *q, const char *now,
+static PageResult search_query_exec(sqlite3 *db, const ListQuery *f, SearchBinds b, const char *now,
                                     StoreError *serr)
 {
-    /* Headroom beyond where_sql for the COUNT / SELECT framing wrapped around it;
-       wider than the plain list path to hold the FTS join + snippet columns. */
-    enum { COUNT_FRAME_MARGIN = 128, SELECT_FRAME_MARGIN = 256 };
+    /* Headroom beyond where_sql for the COUNT / SELECT framing wrapped around it. */
+    enum { COUNT_FRAME_MARGIN = 128, SELECT_FRAME_MARGIN = 512 };
     char where_sql[LIST_SQL_CAP];
     char count_sql[(size_t)LIST_SQL_CAP + (size_t)COUNT_FRAME_MARGIN];
     char select_sql[(size_t)LIST_SQL_CAP + (size_t)SELECT_FRAME_MARGIN];
     const char *bind_text[LIST_BIND_CAP];
-    /* E5.3: search rank stays bm25, then updated_at. Sort on the query is ignored. */
-    const char *column = list_sort_column(STORE_SORT_UPDATED);
     int nbinds = 0;
     int sn = 0;
 
-    if (search_build_where(q, now, column, where_sql, sizeof(where_sql), &nbinds, bind_text,
+    if (search_build_where(f, b, now, where_sql, sizeof(where_sql), &nbinds, bind_text,
                            LIST_BIND_CAP) != 0) {
         return (PageResult){.st = STORE_ERR_INTERNAL};
     }
@@ -3748,41 +3694,416 @@ static PageResult search_query_exec(sqlite3 *db, const SearchQuery *q, const cha
                   "e.sync_id, e.deleted_at, e.version_vector "
                   "FROM entries e "
                   "JOIN entries_fts ON entries_fts.rowid = e.id%s "
-                  "ORDER BY bm25(entries_fts), e.%s DESC, e.id DESC "
+                  "ORDER BY e.key IS ?1 DESC, substr(e.key, 1, length(?1)) IS ?1 DESC, "
+                  "bm25(entries_fts, 10.0, 1.0, 4.0), e.updated_at DESC, e.id DESC "
                   "LIMIT ?%d OFFSET ?%d;",
-                  where_sql, column, nbinds + 1, nbinds + 2);
+                  where_sql, nbinds + 1, nbinds + 2);
     if (sn < 0 || (size_t)sn >= sizeof(select_sql)) {
         return (PageResult){.st = STORE_ERR_INTERNAL};
     }
-    return run_count_and_page(db, count_sql, select_sql, bind_text, nbinds, q->filters.limit,
-                              q->filters.offset, store_status_from_sqlite, serr);
+    return run_count_and_page(db, count_sql, select_sql, bind_text, nbinds, f->limit, f->offset,
+                              serr);
 }
 
-PageResult store_search(Store *s, const SearchQuery *q, const char *now)
+/* "t1"* "t2"* ...: each token quoted as a prefix, joined by one space. */
+enum { SEARCH_P_CAP = (SEARCH_TOKENS_MAX * (SEARCH_TOKEN_BYTES_MAX + 4)) + 1 };
+
+/* snprintf returns the length it would have written. Adding that after a short
+   write makes the next size wrap past the buffer. */
+static int search_prefix_part(const SearchTokens *t, char p[SEARCH_P_CAP])
+{
+    size_t pos = 0U;
+    size_t i = 0U;
+
+    if (t->count > (size_t)SEARCH_TOKENS_MAX) {
+        return -1;
+    }
+    p[0] = '\0';
+    for (i = 0U; i < t->count; i++) {
+        size_t room = (size_t)SEARCH_P_CAP - pos;
+        int wrote = snprintf(p + pos, room, "%s\"%s\"*", (i > 0U) ? " " : "", t->tokens[i]);
+
+        if (wrote < 0 || (size_t)wrote >= room) {
+            return -1;
+        }
+        pos += (size_t)wrote;
+    }
+    return 0;
+}
+
+/* E2.1 (3)-(5): (P) OR (R), or whichever is not empty. r is "" when R is
+   empty or does not parse. Empty out means no query (an empty result). */
+static void search_match(const char *p, const char *r, char *out, size_t cap)
+{
+    if (p[0] != '\0' && r[0] != '\0') {
+        (void)snprintf(out, cap, "(%s) OR (%s)", p, r);
+    } else {
+        (void)snprintf(out, cap, "%s%s", p, r);
+    }
+}
+
+/*
+ * E2.1a: does r parse alone? Runs on the caller's connection and read
+ * transaction. It does not parse only on SQLITE_ERROR with a D1 message:
+ * *warning (NULL on entry) is then a heap copy of that message. Any other
+ * failure is a real error, captured into serr.
+ */
+static StoreStatus search_probe_raw(sqlite3 *db, const char *r, char **warning, StoreError *serr)
+{
+    static const char *const no_parse[] = {"fts5:", "no such column", "unknown special query",
+                                           "unterminated string"};
+    sqlite3_stmt *stmt = NULL;
+    StoreStatus st = STORE_OK;
+    const char *msg = NULL;
+    size_t i = 0U;
+    int rc = 0;
+
+    rc = sqlite3_prepare_v2(db, "SELECT 1 FROM entries_fts WHERE entries_fts MATCH ?1 LIMIT 1;", -1,
+                            &stmt, NULL);
+    if (rc != SQLITE_OK) {
+        return store_status_plain(db, serr);
+    }
+    st = list_bind_texts(stmt, &r, 1, serr);
+    if (st != STORE_OK) {
+        goto cleanup;
+    }
+    rc = sqlite3_step(stmt);
+    if (rc == SQLITE_ROW || rc == SQLITE_DONE) {
+        goto cleanup;
+    }
+    msg = sqlite3_errmsg(db);
+    for (i = 0U; rc == SQLITE_ERROR && i < sizeof(no_parse) / sizeof(no_parse[0]); i++) {
+        if (strncmp(msg, no_parse[i], strlen(no_parse[i])) == 0) {
+            *warning = dup_str(msg);
+            st = (*warning == NULL) ? STORE_ERR_OOM : STORE_OK;
+            goto cleanup;
+        }
+    }
+    st = store_status_plain(db, serr);
+
+cleanup:
+    (void)sqlite3_finalize(stmt);
+    return st;
+}
+
+static StoreStatus dup_col_req(sqlite3_stmt *stmt, int col, char **out);
+
+static void search_key_item_free(SearchKeyItem *item)
+{
+    free(item->key);
+    free(item->sync_id);
+    free(item->label);
+    free(item->source);
+    free(item->updated_at);
+}
+
+/*
+ * Facets (E2.5d, D13): one query per kind over the active bin and filters,
+ * fetched once per search; search_terms.c classifies and orders the rows.
+ * Key rows: key, sync_id, source, updated_at, body. Tag rows: name, count.
+ */
+typedef enum { FACET_KEYS = 0, FACET_TAGS } FacetKind;
+
+static const char *const k_facet_head[] = {
+    [FACET_KEYS] = "SELECT e.key, e.sync_id, e.source, e.updated_at, e.body FROM entries e",
+    [FACET_TAGS] = "SELECT tg.name, COUNT(*) FROM entries e"
+                   " JOIN entry_tags et ON et.entry_id = e.id JOIN tags tg ON tg.id = et.tag_id",
+};
+static const char *const k_facet_tail[] = {
+    [FACET_KEYS] = " AND e.key IS NOT NULL;",
+    [FACET_TAGS] = " GROUP BY tg.name;",
+};
+
+/* What every facet query of one search shares. */
+typedef struct {
+    sqlite3 *db;
+    const SearchQuery *sq;
+    const char *now;
+    const SearchTokens *tokens;
+    const char *q;
+    StoreError *serr;
+} FacetScope;
+
+/* A text-matching key or tag. facet comes first: the search_terms comparators
+   read each element as a SearchFacet. facet.text is item.key; a tag fills
+   item.key only. */
+typedef struct {
+    SearchFacet facet;
+    SearchKeyItem item;
+} FacetCandidate;
+
+typedef struct {
+    FacetCandidate *items;
+    size_t count;
+    size_t cap;
+} FacetCandidates;
+
+static void facet_candidates_free(FacetCandidates *c)
+{
+    size_t i = 0U;
+
+    for (i = 0U; i < c->count; i++) {
+        search_key_item_free(&c->items[i].item);
+    }
+    free(c->items);
+}
+
+/* Copy one row into c when its text matches. */
+static StoreStatus facet_append_row(const FacetScope *scope, sqlite3_stmt *stmt, FacetKind kind,
+                                    FacetCandidates *c)
+{
+    FacetCandidate k = {0};
+    long long count = (kind == FACET_TAGS) ? sqlite3_column_int64(stmt, 1) : 0;
+    SearchStatus sst = search_facet_classify(
+        scope->tokens, scope->q, (const char *)sqlite3_column_text(stmt, 0), count, &k.facet);
+
+    /* Only a hand-edited store holds text that is not UTF-8: a non-match
+       (decision:plan18-facet-invalid-utf8-no-match). */
+    if (sst == SEARCH_ERR_INVALID_UTF8 || (sst == SEARCH_OK && k.facet.tier == SEARCH_TIER_NONE)) {
+        return STORE_OK;
+    }
+    if (sst != SEARCH_OK) {
+        return (sst == SEARCH_ERR_OOM) ? STORE_ERR_OOM : STORE_ERR_INTERNAL;
+    }
+    if (dup_col_req(stmt, 0, &k.item.key) != STORE_OK) {
+        goto oom;
+    }
+    /* The columns are NOT NULL, so a NULL copy is out of memory. With a key the
+       label never decodes the body: it too fails only when a copy does. */
+    if (kind == FACET_KEYS && (dup_col_req(stmt, 1, &k.item.sync_id) != STORE_OK ||
+                               dup_col_req(stmt, 2, &k.item.source) != STORE_OK ||
+                               dup_col_req(stmt, 3, &k.item.updated_at) != STORE_OK ||
+                               search_label((const char *)sqlite3_column_text(stmt, 4), k.item.key,
+                                            &k.item.label) != SEARCH_OK)) {
+        goto oom;
+    }
+    if (c->count == c->cap) {
+        size_t ncap = (c->cap == 0U) ? (size_t)GROW_MIN_CAP : (c->cap * 2U);
+        FacetCandidate *grown = (FacetCandidate *)realloc((void *)c->items, ncap * sizeof(*grown));
+        if (grown == NULL) {
+            goto oom;
+        }
+        c->items = grown;
+        c->cap = ncap;
+    }
+    k.facet.text = k.item.key;
+    c->items[c->count++] = k;
+    return STORE_OK;
+
+oom:
+    search_key_item_free(&k.item);
+    return STORE_ERR_OOM;
+}
+
+/* Run kind's query and keep the rows that text-match, sorted (E2.6, D28). */
+static StoreStatus facet_fetch(const FacetScope *scope, FacetKind kind, FacetCandidates *c)
+{
+    /* Headroom beyond where_sql for the longest head + tail. */
+    enum { FRAME_MARGIN = 256 };
+    char where_sql[LIST_SQL_CAP];
+    char sql[(size_t)LIST_SQL_CAP + (size_t)FRAME_MARGIN];
+    const char *bind_text[LIST_BIND_CAP];
+    sqlite3_stmt *stmt = NULL;
+    StoreStatus st = STORE_OK;
+    int nbinds = 0;
+    int sn = 0;
+    int rc = 0;
+
+    if (list_build_where(&scope->sq->filters, scope->now, "updated_at", where_sql,
+                         sizeof(where_sql), &nbinds, bind_text, LIST_BIND_CAP) != 0) {
+        return STORE_ERR_INTERNAL;
+    }
+    sn = snprintf(sql, sizeof(sql), "%s%s%s", k_facet_head[kind], where_sql, k_facet_tail[kind]);
+    if (sn < 0 || (size_t)sn >= sizeof(sql)) {
+        return STORE_ERR_INTERNAL;
+    }
+    if (sqlite3_prepare_v2(scope->db, sql, -1, &stmt, NULL) != SQLITE_OK) {
+        return store_status_plain(scope->db, scope->serr);
+    }
+    st = list_bind_texts(stmt, bind_text, nbinds, scope->serr);
+    while (st == STORE_OK && (rc = sqlite3_step(stmt)) == SQLITE_ROW) {
+        st = facet_append_row(scope, stmt, kind, c);
+    }
+    if (st == STORE_OK && rc != SQLITE_DONE) {
+        st = store_status_plain(scope->db, scope->serr);
+    }
+    (void)sqlite3_finalize(stmt);
+    /* items is NULL when nothing matched, and qsort needs a valid pointer. */
+    if (st == STORE_OK && c->count > 0U) {
+        qsort(c->items, c->count, sizeof(*c->items),
+              (kind == FACET_KEYS) ? search_key_order : search_tag_order);
+    }
+    return st;
+}
+
+/* Move the first limit keys of c into out; total counts all. A moved item is
+   zeroed in c, so freeing c afterwards stays correct. */
+static StoreStatus facet_take_keys(FacetCandidates *c, size_t limit, SearchKeyFacet *out)
+{
+    size_t keep = (c->count < limit) ? c->count : limit;
+    size_t i = 0U;
+
+    out->total = c->count;
+    if (keep == 0U) {
+        return STORE_OK;
+    }
+    out->items = (SearchKeyItem *)malloc(keep * sizeof(*out->items));
+    if (out->items == NULL) {
+        return STORE_ERR_OOM;
+    }
+    for (i = 0U; i < keep; i++) {
+        out->items[i] = c->items[i].item;
+        memset(&c->items[i].item, 0, sizeof(c->items[i].item));
+    }
+    out->count = keep;
+    return STORE_OK;
+}
+
+/* Same for tags: the tag text moves, count comes from the facet. */
+static StoreStatus facet_take_tags(FacetCandidates *c, size_t limit, SearchTagFacet *out)
+{
+    size_t keep = (c->count < limit) ? c->count : limit;
+    size_t i = 0U;
+
+    out->total = c->count;
+    if (keep == 0U) {
+        return STORE_OK;
+    }
+    out->items = (SearchTagItem *)malloc(keep * sizeof(*out->items));
+    if (out->items == NULL) {
+        return STORE_ERR_OOM;
+    }
+    for (i = 0U; i < keep; i++) {
+        out->items[i] =
+            (SearchTagItem){.tag = c->items[i].item.key, .count = (size_t)c->items[i].facet.count};
+        c->items[i].item.key = NULL;
+    }
+    out->count = keep;
+    return STORE_OK;
+}
+
+/* Both facets of res, on the search's read transaction. */
+static StoreStatus search_facets(const FacetScope *scope, SearchResult *res)
+{
+    FacetCandidates keys = {0};
+    FacetCandidates tags = {0};
+    StoreStatus st = facet_fetch(scope, FACET_KEYS, &keys);
+
+    if (st == STORE_OK) {
+        st = facet_take_keys(&keys, scope->sq->facet_limit, &res->keys);
+    }
+    if (st == STORE_OK) {
+        st = facet_fetch(scope, FACET_TAGS, &tags);
+    }
+    if (st == STORE_OK) {
+        st = facet_take_tags(&tags, scope->sq->facet_limit, &res->tags);
+    }
+    facet_candidates_free(&keys);
+    facet_candidates_free(&tags);
+    return st;
+}
+
+void store_search_result_free(SearchResult *res)
+{
+    size_t i = 0U;
+
+    if (res == NULL) {
+        return;
+    }
+    free_entry_rows(res->page.entries, res->page.count);
+    for (i = 0U; i < res->keys.count; i++) {
+        search_key_item_free(&res->keys.items[i]);
+    }
+    free(res->keys.items);
+    for (i = 0U; i < res->tags.count; i++) {
+        free(res->tags.items[i].tag);
+    }
+    free(res->tags.items);
+    free(res->warning);
+    memset(res, 0, sizeof(*res));
+}
+
+SearchResult store_search(Store *s, const SearchQuery *q, const char *now)
 {
     char err_unused[1];
-    PageResult page = {.st = STORE_OK};
+    SearchResult res = {.page = {.st = STORE_OK}, .warning = NULL};
+    SearchTokens tokens;
+    SearchStatus sst = SEARCH_OK;
+    char p[SEARCH_P_CAP];
+    char *r = NULL;
+    char *q_low = NULL;
+    char *match = NULL;
+    size_t start = 0U;
+    size_t end = 0U;
+    size_t match_cap = 0U;
 
     if (s == NULL || s->db == NULL || q == NULL || q->query == NULL || now == NULL) {
-        return (PageResult){.st = STORE_ERR_INTERNAL};
+        return (SearchResult){.page = {.st = STORE_ERR_INTERNAL}};
+    }
+    end = strlen(q->query);
+    ascii_ws_trim(q->query, &start, &end);
+    r = (char *)malloc(end - start + 1U);
+    q_low = (char *)malloc(end - start + 1U);
+    match_cap = sizeof(p) + (end - start) + sizeof("() OR ()");
+    match = (char *)malloc(match_cap);
+    if (r == NULL || q_low == NULL || match == NULL) {
+        res.page.st = STORE_ERR_OOM;
+        goto cleanup;
+    }
+    memcpy(r, q->query + start, end - start);
+    r[end - start] = '\0';
+    sst = search_tokens_build(q->query, &tokens);
+    if (sst == SEARCH_OK) {
+        sst = search_q(r, q_low, end - start + 1U);
+    }
+    /* A failed prefix build is the same internal failure. || skips the build
+       when tokens were left untouched. */
+    if (sst != SEARCH_OK || search_prefix_part(&tokens, p) != 0) {
+        res.page.st = (sst == SEARCH_ERR_OOM) ? STORE_ERR_OOM : STORE_ERR_INTERNAL;
+        goto cleanup;
     }
 
     memset(&s->last, 0, sizeof(s->last));
     if (exec_sql(s->db, "BEGIN;", err_unused, 0U, &s->last) != 0) {
-        return (PageResult){.st = STORE_ERR_SQLITE};
+        res.page.st = STORE_ERR_SQLITE;
+        goto cleanup;
     }
-    /* cppcheck-suppress redundantInitialization */
-    page = search_query_exec(s->db, q, now, &s->last);
-    if (page.st != STORE_OK) {
+    if (r[0] != '\0') {
+        res.page.st = search_probe_raw(s->db, r, &res.warning, &s->last);
+    }
+    if (res.page.st == STORE_OK) {
+        search_match(p, (res.warning == NULL) ? r : "", match, match_cap);
+        if (match[0] != '\0') {
+            res.page = search_query_exec(s->db, &q->filters,
+                                         (SearchBinds){.q = q_low, .match = match}, now, &s->last);
+        }
+    }
+    if (res.page.st == STORE_OK) {
+        FacetScope scope = {
+            .db = s->db, .sq = q, .now = now, .tokens = &tokens, .q = q_low, .serr = &s->last};
+
+        res.page.st = search_facets(&scope, &res);
+    }
+    if (res.page.st != STORE_OK) {
         rollback_quiet(s->db);
-        return page;
+        goto cleanup;
     }
     if (exec_sql(s->db, "COMMIT;", err_unused, 0U, &s->last) != 0) {
         rollback_quiet(s->db);
-        free_entry_rows(page.entries, page.count);
-        return (PageResult){.st = STORE_ERR_SQLITE};
+        res.page.st = STORE_ERR_SQLITE;
     }
-    return page;
+
+cleanup:
+    free(r);
+    free(q_low);
+    free(match);
+    if (res.page.st != STORE_OK) {
+        StoreStatus st = res.page.st;
+
+        store_search_result_free(&res);
+        res.page.st = st;
+    }
+    return res;
 }
 
 static const char k_fts_rebuild_sql[] = "INSERT INTO entries_fts(entries_fts) VALUES('rebuild');";
@@ -4834,7 +5155,10 @@ StoreStatus store_get_row_by_sync_id(Store *s, const char *sync_id, Entry *out_e
 
 int store_sync_id_is_canonical(const char *s)
 {
-    return uuid_is_canonical(s);
+    if (uuid_v7_is_canonical(s)) {
+        return 1;
+    }
+    return 0;
 }
 
 StoreStatus store_link(Store *s, StoreEdge edge, StoreEdgeKind kind, const char *now,
@@ -5992,8 +6316,8 @@ static StoreStatus entry_snapshot_json(const Entry *e, const char *now, char **o
     size_t i = 0;
 
     *out = NULL;
-    if (e == NULL || now == NULL || e->sync_id == NULL || e->version_vector == NULL ||
-        e->version_vector[0] != '{') {
+    if (e == NULL || now == NULL || e->sync_id == NULL ||
+        !vv_json_is_canonical(e->version_vector)) {
         return STORE_ERR_INTERNAL;
     }
     bin = bin_token_store(store_bin_of(e->deleted_at, e->expires_at, now));
@@ -6835,12 +7159,64 @@ static StoreStatus import_merge_present(sqlite3 *dst, const char *device_id, con
     }
 }
 
+/* A peer token is kept only as a local write would store it
+   (decision:import-control-bytes-followup). */
+static bool import_token_canonical(const char *token)
+{
+    char buf[REMEMBER_TOKEN_MAX + 1];
+
+    if (normalize_token(token, buf, sizeof(buf)) != NORM_OK || strcmp(buf, token) != 0) {
+        return false;
+    }
+    return true;
+}
+
+static bool import_stamp_or_null(const char *stamp)
+{
+    if (stamp != NULL && !utc_stamp_is_canonical(stamp)) {
+        return false;
+    }
+    return true;
+}
+
+/* Every peer field import stores has the shape a local write produces
+   (decision:plan18c-validate-peer-fields); anything else skips the row. */
+static bool import_row_valid(const ImportRow *row)
+{
+    char hash[REMEMBER_SHA256_HEX_LEN + 1];
+    size_t i = 0;
+
+    if (!uuid_v7_is_canonical(row->sync_id) || !source_is_valid(row->source) ||
+        !utc_stamp_is_canonical(row->created_at) || !utc_stamp_is_canonical(row->updated_at) ||
+        !import_stamp_or_null(row->expires_at) || !import_stamp_or_null(row->deleted_at) ||
+        !vv_json_is_canonical(row->version_vector)) {
+        return false;
+    }
+    if (row->key != NULL && !import_token_canonical(row->key)) {
+        return false;
+    }
+    for (i = 0; i < row->ntags; i++) {
+        if (!import_token_canonical(row->tags[i])) {
+            return false;
+        }
+    }
+    body_hash_hex(row->body, strlen(row->body), hash);
+    if (strcmp(hash, row->body_hash) != 0) {
+        return false;
+    }
+    return true;
+}
+
 static StoreStatus import_one_entry(sqlite3 *dst, const char *device_id, const ImportRow *row,
                                     const char *now, StoreImportCounts *counts, StoreError *serr)
 {
     Entry local;
     StoreStatus st = STORE_OK;
 
+    if (!import_row_valid(row)) {
+        counts->rejected++;
+        return STORE_OK;
+    }
     memset(&local, 0, sizeof(local));
     st = load_entry_by_sync_id(dst, row->sync_id, &local, serr);
     if (st == STORE_ERR_NOT_FOUND) {
@@ -7166,7 +7542,10 @@ StoreStatus store_conflicts_list(Store *s, StoreConflict **out_rows, size_t *out
     *out_count = 0U;
     memset(&s->last, 0, sizeof(s->last));
     rc = sqlite3_prepare_v2(s->db,
-                            "SELECT id, sync_id, reason, local_json, incoming_json, created_at "
+                            "SELECT id, sync_id, reason, local_json, incoming_json, created_at, "
+                            "CASE WHEN json_valid(local_json) AND json_valid(incoming_json) "
+                            "THEN json_type(local_json) = 'object' AND "
+                            "json_type(incoming_json) = 'object' ELSE 0 END "
                             "FROM conflicts ORDER BY id ASC;",
                             -1, &stmt, NULL);
     if (rc != SQLITE_OK) {
@@ -7180,7 +7559,8 @@ StoreStatus store_conflicts_list(Store *s, StoreConflict **out_rows, size_t *out
             COL_REASON = 2,
             COL_LOCAL = 3,
             COL_INCOMING = 4,
-            COL_CREATED_AT = 5
+            COL_CREATED_AT = 5,
+            COL_SNAPSHOTS_ARE_OBJECTS = 6
         };
         StoreConflict *grown = NULL;
         StoreConflict row;
@@ -7194,6 +7574,11 @@ StoreStatus store_conflicts_list(Store *s, StoreConflict **out_rows, size_t *out
         row.incoming_json = dup_str((const char *)sqlite3_column_text(stmt, COL_INCOMING));
         row.created_at = dup_str((const char *)sqlite3_column_text(stmt, COL_CREATED_AT));
         st = conflict_reason_parse(reason, &row.reason);
+        /* output prints the snapshots raw: refuse one that is not a JSON object
+           (decision:plan18c-validate-peer-fields). */
+        if (st == STORE_OK && sqlite3_column_int(stmt, COL_SNAPSHOTS_ARE_OBJECTS) == 0) {
+            st = STORE_ERR_INTERNAL;
+        }
         if (st != STORE_OK || row.sync_id == NULL || row.local_json == NULL ||
             row.incoming_json == NULL || row.created_at == NULL) {
             free(row.sync_id);

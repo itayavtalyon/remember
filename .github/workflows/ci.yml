@@ -34,9 +34,9 @@ jobs:
           chmod +x scripts/ci-linux.sh scripts/read-gate-suites.sh scripts/check-coverage.sh
           ./scripts/ci-linux.sh --inner --install
 
-  # Line coverage of src/*.c: 100% functions + 100% effective lines
-  # (see scripts/check-coverage.sh). Add this job name to branch protection
-  # required checks when ready.
+  # Line coverage of src/*.c: 100% functions + 100% effective lines, plus every
+  # branch side in the pure TUs (plan 18b; see scripts/check-coverage.sh). Add
+  # this job name to branch protection required checks when ready.
   linux-coverage:
     name: linux (line coverage on src/)
     runs-on: ubuntu-latest

@@ -1,6 +1,7 @@
 #ifndef REMEMBER_NORMALIZE_H
 #define REMEMBER_NORMALIZE_H
 
+#include <stdbool.h>
 #include <stddef.h>
 
 /* Design: body max after trim is 64 KiB. */
@@ -63,6 +64,21 @@ NormStatus normalize_key(const char *src, char *out, size_t out_cap);
 NormStatus fold_hebrew_marks(const char *src, size_t src_len, char **out);
 
 /*
+ * True when s[0..len) is well-formed UTF-8: no overlong encodings, no
+ * surrogates, nothing above U+10FFFF.
+ */
+bool utf8_is_valid(const char *s, size_t len);
+
+/* True for the E10.1 marks that fold_hebrew_marks removes. */
+bool is_hebrew_mark(unsigned int cp);
+
+/*
+ * Shrink [*start, *end) of s past leading and trailing ASCII whitespace (space,
+ * tab, LF, CR, VT, FF): the one trim every design rule means by "ASCII-trimmed".
+ */
+void ascii_ws_trim(const char *s, size_t *start, size_t *end);
+
+/*
  * Lowercase hex SHA-256 of data[0..len) into out_hex
  * (must provide REMEMBER_SHA256_HEX_LEN + 1 bytes).
  */
@@ -70,5 +86,23 @@ void body_hash_hex(const void *data, size_t len, char out_hex[REMEMBER_SHA256_HE
 
 /* Short ASCII label for st (no trailing newline). Never NULL. */
 const char *norm_status_string(NormStatus st);
+
+/*
+ * Canonical stored forms. Import accepts a peer row only when its fields have
+ * the shape a local write produces (decision:plan18c-validate-peer-fields).
+ */
+
+/* 36-char lowercase UUID v7 text: 8-4-4-4-12 hex, version 7, variant 8..b. */
+bool uuid_v7_is_canonical(const char *s);
+
+/* The UTC stamp every release writes: YYYY-MM-DDTHH:MM:SS.mmmZ (shape only). */
+bool utc_stamp_is_canonical(const char *s);
+
+/* A compact version vector: {} or {"<uuid v7>":<n>,...} with n a non-negative
+   integer of at most 18 digits, no spaces, and no device twice. */
+bool vv_json_is_canonical(const char *s);
+
+/* One of the closed source tokens: human, agent, tool, share, unknown. */
+bool source_is_valid(const char *s);
 
 #endif /* REMEMBER_NORMALIZE_H */

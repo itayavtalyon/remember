@@ -1,4 +1,5 @@
 #include "harness.h"
+#include "normalize.h"
 #include "register.h"
 #include "store.h"
 #include "test.h"
@@ -13,7 +14,9 @@
 
 enum { SYNC_BUF = 40, PATH_BUF = 192, SQL_BUF = 512, VV_BUF = 160 };
 
-static const char k_hash_a[] = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+/* sha256("body"): import rejects a forged hash (decision:plan18c-validate-peer-fields). */
+static const char k_hash_body[] =
+    "230d8358dc8e8890b4c58deeb62912ee2f20357ae92a5cc861b98e68fe31acb5";
 static const char k_now[] = "2026-06-15T12:00:00.000Z";
 
 static int json_copy_quoted(const char *json, const char *key, char *out, size_t outlen)
@@ -104,10 +107,14 @@ static void force_vv(const char *db, long long id, const char *vv_json)
     free(harness_sqlite_query_line(db, sql));
 }
 
-static void force_body(const char *db, long long id, const char *body, const char *hash)
+/* The hash is the body's real one: import rejects a forged hash
+   (decision:plan18c-validate-peer-fields). */
+static void force_body(const char *db, long long id, const char *body)
 {
     char sql[SQL_BUF];
+    char hash[REMEMBER_SHA256_HEX_LEN + 1];
 
+    body_hash_hex(body, strlen(body), hash);
     (void)snprintf(sql, sizeof(sql), "UPDATE entries SET body='%s', body_hash='%s' WHERE id=%lld;",
                    body, hash, id);
     free(harness_sqlite_query_line(db, sql));
@@ -287,12 +294,14 @@ static void given_v4_import_source(const char *db)
                 "id INTEGER PRIMARY KEY, sync_id TEXT NOT NULL, reason TEXT NOT NULL, "
                 "local_json TEXT NOT NULL, incoming_json TEXT NOT NULL, "
                 "created_at TEXT NOT NULL);");
-    sqlite_exec(db, "INSERT INTO entries(id, key, body, body_hash, source, created_at, updated_at, "
-                    "sync_id, version_vector) VALUES (1, 'pref:editor', 'notes', "
-                    "'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', "
-                    "'human', '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z', "
-                    "'018f6b2e-7c3a-7c00-8000-000000000001', "
-                    "'{\"018f6b2e-7c3a-7b2e-8f3a-7c3a7b2e8f3a\":1}');");
+    sqlite_exec(
+        db,
+        "INSERT INTO entries(id, key, body, body_hash, source, created_at, updated_at, "
+        "sync_id, version_vector) VALUES (1, 'pref:editor', 'notes', "
+        "'ab5aa97074c454a0632057e704220d9a6678fbf773a0a5806fc09b8173b07309', " /* sha256("notes") */
+        "'human', '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z', "
+        "'018f6b2e-7c3a-7c00-8000-000000000001', "
+        "'{\"018f6b2e-7c3a-7b2e-8f3a-7c3a7b2e8f3a\":1}');");
     sqlite_exec(db, "INSERT INTO devices(device_id, first_seen, last_seen) VALUES "
                     "('018f6b2e-7c3a-7b2e-8f3a-7c3a7b2e8f3a', '2026-01-01T00:00:00.000Z', "
                     "'2026-01-01T00:00:00.000Z');"
@@ -539,8 +548,7 @@ TEST(cli_import_identical_automerge_concurrent_conflict)
     cmd_result_free(&r);
 
     /* Concurrent + different body → conflict. */
-    force_body(foreign, 1, "other body",
-               "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb");
+    force_body(foreign, 1, "other body");
     {
         char vv_foreign[VV_BUF];
         (void)snprintf(vv_foreign, sizeof(vv_foreign),
@@ -675,8 +683,7 @@ TEST(cli_import_key_clash_reimport_idempotent)
     ASSERT_STREQ(nconf != NULL ? nconf : "", "1");
     free(nconf);
 
-    force_body(foreign, 1, "foreign body v2",
-               "bebebebebebebebebebebebebebebebebebebebebebebebebebebebebebebebe");
+    force_body(foreign, 1, "foreign body v2");
     r = run_remember(local, imp, sizeof(imp) / sizeof(imp[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 0);
     ASSERT_STR_CONTAINS(r.out, "\"conflicts\":0");
@@ -729,8 +736,7 @@ TEST(cli_conflict_accept_keep_both_concurrent_remints)
     }
     dev = read_sidecar_id(local);
     ASSERT_TRUE(dev != NULL);
-    force_body(foreign, 1, "incoming-body",
-               "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc");
+    force_body(foreign, 1, "incoming-body");
     {
         char vv_l[VV_BUF];
         char vv_f[VV_BUF];
@@ -860,8 +866,7 @@ TEST(cli_import_incoming_dominates_updates)
         (void)snprintf(cmd, sizeof(cmd), "cp '%s' '%s'", local, foreign);
         ASSERT_EQ_INT(system(cmd), 0);
     }
-    force_body(foreign, 1, "new",
-               "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd");
+    force_body(foreign, 1, "new");
     dev = read_sidecar_id(local);
     ASSERT_TRUE(dev != NULL);
     {
@@ -915,7 +920,8 @@ TEST(store_import_no_sidecar_copy_devices_stay_one)
     src = store_open(foreign, err, sizeof(err));
     ASSERT_TRUE(src != NULL);
     ASSERT_EQ_STATUS(
-        store_add(src, "body", k_hash_a, "k", NULL, 0U, "agent", NULL, k_now, &act, &e), STORE_OK);
+        store_add(src, "body", k_hash_body, "k", NULL, 0U, "agent", NULL, k_now, &act, &e),
+        STORE_OK);
     store_entry_free(&e);
     store_close(src);
 
@@ -970,8 +976,7 @@ TEST(cli_conflict_accept_keep_local_and_incoming)
         (void)snprintf(cmd, sizeof(cmd), "cp '%s' '%s'", local, foreign);
         ASSERT_EQ_INT(system(cmd), 0);
     }
-    force_body(foreign, 1, "incoming-body",
-               "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee");
+    force_body(foreign, 1, "incoming-body");
     dev = read_sidecar_id(local);
     ASSERT_TRUE(dev != NULL);
     {
@@ -1009,8 +1014,7 @@ TEST(cli_conflict_accept_keep_local_and_incoming)
     cmd_result_free(&r);
 
     /* Fresh conflict for keep incoming. */
-    force_body(foreign, 1, "win-body",
-               "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff");
+    force_body(foreign, 1, "win-body");
     {
         char vv_l[VV_BUF];
         char vv_f[VV_BUF];
@@ -1215,8 +1219,7 @@ TEST(cli_import_local_dominates_unchanged)
         (void)snprintf(cmd, sizeof(cmd), "cp '%s' '%s'", local, foreign);
         ASSERT_EQ_INT(system(cmd), 0);
     }
-    force_body(foreign, 1, "stale-foreign",
-               "1111111111111111111111111111111111111111111111111111111111111111");
+    force_body(foreign, 1, "stale-foreign");
     dev = read_sidecar_id(local);
     ASSERT_TRUE(dev != NULL);
     {
@@ -1331,8 +1334,7 @@ TEST(cli_import_conflict_snapshot_json_escapes)
         (void)snprintf(cmd, sizeof(cmd), "cp '%s' '%s'", local, foreign);
         ASSERT_EQ_INT(system(cmd), 0);
     }
-    force_body(foreign, 1, "other",
-               "2222222222222222222222222222222222222222222222222222222222222222");
+    force_body(foreign, 1, "other");
     dev = read_sidecar_id(local);
     ASSERT_TRUE(dev != NULL);
     {
@@ -1554,15 +1556,19 @@ TEST(cli_import_incoming_dominates_keyless_hash_clash)
     }
     free(harness_sqlite_query_line(foreign, "DELETE FROM entries WHERE key IS NULL;"));
     {
+        /* A real hash clash: the same body, so the same hash. */
+        char *body =
+            harness_sqlite_query_line(local, "SELECT body FROM entries WHERE key IS NULL LIMIT 1;");
         char *hash = harness_sqlite_query_line(
             local, "SELECT body_hash FROM entries WHERE key IS NULL LIMIT 1;");
         char sql[SQL_BUF];
-        ASSERT_TRUE(hash != NULL);
+        ASSERT_TRUE(body != NULL && hash != NULL);
         (void)snprintf(sql, sizeof(sql),
-                       "UPDATE entries SET key=NULL, body='shared-hash-body', body_hash='%s' "
+                       "UPDATE entries SET key=NULL, body='%s', body_hash='%s' "
                        "WHERE sync_id='%s';",
-                       hash, sync_s);
+                       body != NULL ? body : "", hash != NULL ? hash : "", sync_s);
         free(harness_sqlite_query_line(foreign, sql));
+        free(body);
         free(hash);
     }
     dev = read_sidecar_id(local);
@@ -1636,8 +1642,7 @@ TEST(cli_conflict_accept_incoming_many_tags)
         (void)snprintf(cmd, sizeof(cmd), "cp '%s' '%s'", local, foreign);
         ASSERT_EQ_INT(system(cmd), 0);
     }
-    force_body(foreign, 1, "body-in",
-               "3333333333333333333333333333333333333333333333333333333333333333");
+    force_body(foreign, 1, "body-in");
     /* Keep the 10 tags on foreign; only body differs for concurrent_vv. */
     dev = read_sidecar_id(local);
     ASSERT_TRUE(dev != NULL);
@@ -1758,10 +1763,9 @@ TEST(cli_import_incoming_dominates_expires_deleted_keyless)
     /* Soft-deleted occupies deleted bin; expires cleared on soft-delete in product,
        but import apply still binds whatever foreign sends. */
     free(harness_sqlite_query_line(
-        foreign, "UPDATE entries SET key=NULL, body='gone', "
-                 "body_hash='4444444444444444444444444444444444444444444444444444444444444444',"
-                 "expires_at='2020-06-01T00:00:00.000Z',"
+        foreign, "UPDATE entries SET key=NULL, expires_at='2020-06-01T00:00:00.000Z',"
                  "deleted_at='2026-01-01T00:00:00.000Z' WHERE id=1;"));
+    force_body(foreign, 1, "gone");
     get_del[0] = "--json";
     get_del[1] = "get";
     get_del[2] = "--sync-id";
@@ -1802,8 +1806,9 @@ TEST(cli_import_incoming_dominates_expires_deleted_keyless)
     (void)rmdir(dir);
 }
 
-/* Bad VV on foreign → import fail path (close + rollback). */
-TEST(cli_import_bad_vv_fails_cleanly)
+/* A malformed VV on a foreign row skips that row and counts it; the local row
+   stays (decision:plan18c-validate-peer-fields). */
+TEST(cli_import_bad_vv_row_is_rejected)
 {
     char tmpl[] = "/tmp/remember-badvv-XXXXXX";
     char *dir = NULL;
@@ -1833,7 +1838,9 @@ TEST(cli_import_bad_vv_fails_cleanly)
 
     imp[3] = foreign;
     r = run_remember(local, imp, sizeof(imp) / sizeof(imp[0]), NULL);
-    ASSERT_EQ_INT(r.exit_code, 1);
+    ASSERT_EQ_INT(r.exit_code, 0);
+    ASSERT_STR_CONTAINS(r.out, "\"inserted\":0,\"updated\":0,\"unchanged\":0,\"conflicts\":0,"
+                               "\"rejected\":1}");
     cmd_result_free(&r);
 
     (void)remove(local);
@@ -1919,10 +1926,19 @@ TEST(cli_conflict_accept_concurrent_keep_incoming_demotes_other_key)
     {
         char sql[SQL_BUF];
         (void)snprintf(sql, sizeof(sql),
-                       "UPDATE entries SET key='other', body='incoming-body', "
-                       "body_hash='%s', version_vector="
+                       "UPDATE entries SET key='other', version_vector="
                        "'{\"bbbbbbbb-bbbb-7bbb-bbbb-bbbbbbbbbbbb\":1}' WHERE sync_id='%s';",
-                       k_hash_a, sync_shared);
+                       sync_shared);
+        free(harness_sqlite_query_line(foreign, sql));
+    }
+    {
+        char sql[SQL_BUF];
+        char hash[REMEMBER_SHA256_HEX_LEN + 1];
+        body_hash_hex("incoming-body", strlen("incoming-body"), hash);
+        (void)snprintf(
+            sql, sizeof(sql),
+            "UPDATE entries SET body='incoming-body', body_hash='%s' WHERE sync_id='%s';", hash,
+            sync_shared);
         free(harness_sqlite_query_line(foreign, sql));
     }
     dev = read_sidecar_id(local);
@@ -2007,13 +2023,17 @@ TEST(cli_conflict_accept_concurrent_keep_incoming_hash_taken_refuses)
     }
     free(harness_sqlite_query_line(foreign, "DELETE FROM entries WHERE key IS NULL;"));
     {
+        /* A real hash clash: the local keyless row's own body. */
+        char *body =
+            harness_sqlite_query_line(local, "SELECT body FROM entries WHERE key IS NULL LIMIT 1;");
         char sql[SQL_BUF];
+        ASSERT_TRUE(body != NULL);
         (void)snprintf(sql, sizeof(sql),
-                       "UPDATE entries SET key=NULL, body='contested-hash-body', "
-                       "body_hash='%s', version_vector="
+                       "UPDATE entries SET key=NULL, body='%s', body_hash='%s', version_vector="
                        "'{\"bbbbbbbb-bbbb-7bbb-bbbb-bbbbbbbbbbbb\":1}' WHERE sync_id='%s';",
-                       hash, sync_shared);
+                       body != NULL ? body : "", hash, sync_shared);
         free(harness_sqlite_query_line(foreign, sql));
+        free(body);
     }
     dev = read_sidecar_id(local);
     ASSERT_TRUE(dev != NULL);
@@ -2143,8 +2163,7 @@ TEST(cli_import_concurrent_reimport_idempotent)
         (void)snprintf(cmd, sizeof(cmd), "cp '%s' '%s'", local, foreign);
         ASSERT_EQ_INT(system(cmd), 0);
     }
-    force_body(foreign, 1, "incoming-body",
-               "abababababababababababababababababababababababababababababababab");
+    force_body(foreign, 1, "incoming-body");
     dev = read_sidecar_id(local);
     ASSERT_TRUE(dev != NULL);
     {
@@ -2178,8 +2197,7 @@ TEST(cli_import_concurrent_reimport_idempotent)
     free(nconf);
 
     /* Advance foreign VV while still concurrent → refresh same row (no insert). */
-    force_body(foreign, 1, "incoming-body-v2",
-               "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd");
+    force_body(foreign, 1, "incoming-body-v2");
     force_vv(foreign, 1, "{\"dddddddd-dddd-7ddd-bddd-dddddddddddd\":2}");
     r = run_remember(local, imp, sizeof(imp) / sizeof(imp[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 0);
@@ -2264,6 +2282,252 @@ TEST(cli_import_vv_zero_clock_in_a_membership)
     (void)rmdir(dir);
 }
 
+static void given_added(const char *db, const char *const *args, size_t nargs)
+{
+    CmdResult r = run_remember(db, args, nargs, NULL);
+
+    ASSERT_EQ_INT(r.exit_code, 0);
+    cmd_result_free(&r);
+}
+
+/* decision:import-control-bytes-followup: a row whose key or a tag is not what
+   normalize_token would store is skipped and counted, never written. */
+TEST(cli_import_skips_noncanonical_key_and_tag_rows)
+{
+    char *local = make_temp_db_path();
+    char *foreign = make_temp_db_path();
+    CmdResult r;
+    char *keys = NULL;
+    char *tags = NULL;
+    const char *good[] = {"add", "--key", "good", "--tag", "ok", "good body"};
+    const char *esc_key[] = {"add", "--key", "esckey", "b1"};
+    const char *esc_tag[] = {"add", "--tag", "esctag", "b2"};
+    const char *upper_key[] = {"add", "--key", "upperkey", "b3"};
+    const char *upper_tag[] = {"add", "--tag", "uppertag", "b4"};
+    const char *long_key[] = {"add", "--key", "longkey", "b5"};
+    const char *empty_key[] = {"add", "--key", "emptykey", "b6"};
+    const char *keyless[] = {"add", "keyless body"};
+    const char *imp[] = {"--json", "import", "--from-db", NULL};
+
+    ASSERT_TRUE(local != NULL && foreign != NULL);
+    given_added(foreign, good, sizeof(good) / sizeof(good[0]));
+    given_added(foreign, esc_key, sizeof(esc_key) / sizeof(esc_key[0]));
+    given_added(foreign, esc_tag, sizeof(esc_tag) / sizeof(esc_tag[0]));
+    given_added(foreign, upper_key, sizeof(upper_key) / sizeof(upper_key[0]));
+    given_added(foreign, upper_tag, sizeof(upper_tag) / sizeof(upper_tag[0]));
+    given_added(foreign, long_key, sizeof(long_key) / sizeof(long_key[0]));
+    given_added(foreign, empty_key, sizeof(empty_key) / sizeof(empty_key[0]));
+    given_added(foreign, keyless, sizeof(keyless) / sizeof(keyless[0]));
+    sqlite_exec(foreign, "UPDATE entries SET key='evil'||char(27)||'[2J' WHERE key='esckey';"
+                         "UPDATE tags SET name='t'||char(27)||'[1m' WHERE name='esctag';"
+                         "UPDATE entries SET key='Upper' WHERE key='upperkey';"
+                         "UPDATE tags SET name='Upper' WHERE name='uppertag';"
+                         "UPDATE entries SET key=printf('%.300c','k') WHERE key='longkey';"
+                         "UPDATE entries SET key='' WHERE key='emptykey';");
+
+    imp[3] = foreign;
+    r = run_remember(local, imp, sizeof(imp) / sizeof(imp[0]), NULL);
+    ASSERT_EQ_INT(r.exit_code, 0);
+    ASSERT_STR_CONTAINS(r.out, "\"inserted\":2,\"updated\":0,\"unchanged\":0,\"conflicts\":0,"
+                               "\"rejected\":6}");
+    cmd_result_free(&r);
+    keys = harness_sqlite_query_line(local, "SELECT group_concat(key) FROM entries;");
+    tags = harness_sqlite_query_line(local, "SELECT group_concat(name) FROM tags;");
+    ASSERT_TRUE(keys != NULL && tags != NULL);
+    if (keys != NULL && tags != NULL) {
+        ASSERT_STREQ(keys, "good");
+        ASSERT_STREQ(tags, "ok");
+    }
+    free(keys);
+    free(tags);
+    free(local);
+    free(foreign);
+}
+
+/* The check runs before the merge too: a present row stays as it is. */
+TEST(cli_import_skips_noncanonical_row_already_present)
+{
+    char *local = make_temp_db_path();
+    char *foreign = make_temp_db_path();
+    CmdResult r;
+    char *key = NULL;
+    const char *add[] = {"add", "--key", "k", "x"};
+    const char *imp[] = {"import", "--from-db", NULL};
+
+    ASSERT_TRUE(local != NULL && foreign != NULL);
+    given_added(local, add, sizeof(add) / sizeof(add[0]));
+    {
+        char cmd[PATH_BUF * 2];
+        (void)snprintf(cmd, sizeof(cmd), "cp '%s' '%s'", local, foreign);
+        ASSERT_EQ_INT(system(cmd), 0);
+    }
+    /* A foreign clock no local device has: without the check this row dominates. */
+    sqlite_exec(foreign, "UPDATE entries SET key='k'||char(27), "
+                         "version_vector=json_set(version_vector,'$.peer',9) WHERE id=1;");
+
+    imp[2] = foreign;
+    r = run_remember(local, imp, sizeof(imp) / sizeof(imp[0]), NULL);
+    ASSERT_EQ_INT(r.exit_code, 0);
+    ASSERT_STREQ(r.out, "inserted 0 updated 0 unchanged 0 conflicts 0 rejected 1\n");
+    cmd_result_free(&r);
+    key = harness_sqlite_query_line(local, "SELECT key FROM entries WHERE id=1;");
+    ASSERT_TRUE(key != NULL);
+    if (key != NULL) {
+        ASSERT_STREQ(key, "k");
+    }
+    free(key);
+    free(local);
+    free(foreign);
+}
+
+/* Import now rejects such a sync_id, but a conflict stored by an older build
+   may still carry one, and plain conflicts prints it. */
+TEST(cli_conflicts_human_masks_a_control_byte_in_the_sync_id)
+{
+    char *local = make_temp_db_path();
+    char *foreign = make_temp_db_path();
+    CmdResult r;
+    const char *add_local[] = {"add", "--key", "slot", "local body"};
+    const char *add_foreign[] = {"add", "--key", "slot", "foreign body"};
+    const char *imp[] = {"import", "--from-db", NULL};
+    const char *conflicts[] = {"conflicts"};
+
+    ASSERT_TRUE(local != NULL && foreign != NULL);
+    given_added(local, add_local, sizeof(add_local) / sizeof(add_local[0]));
+    given_added(foreign, add_foreign, sizeof(add_foreign) / sizeof(add_foreign[0]));
+    imp[2] = foreign;
+    r = run_remember(local, imp, sizeof(imp) / sizeof(imp[0]), NULL);
+    ASSERT_EQ_INT(r.exit_code, 0);
+    cmd_result_free(&r);
+    sqlite_exec(local, "UPDATE conflicts SET sync_id='s'||char(27)||'[2J'||char(10);");
+
+    r = run_remember(local, conflicts, sizeof(conflicts) / sizeof(conflicts[0]), NULL);
+    ASSERT_EQ_INT(r.exit_code, 0);
+    ASSERT_STREQ(r.out, "1\ts?[2J?\tkey_clash\n");
+    cmd_result_free(&r);
+    free(local);
+    free(foreign);
+}
+
+/* decision:plan18c-validate-peer-fields: one bad field skips the whole row. Each
+   foreign row below breaks exactly one rule; only "good" imports. */
+TEST(cli_import_skips_rows_with_a_non_canonical_peer_field)
+{
+    char *local = make_temp_db_path();
+    char *foreign = make_temp_db_path();
+    CmdResult r;
+    char *keys = NULL;
+    const char *names[] = {"good",  "tabsync", "created", "updated", "expires", "deleted",
+                           "vvpwn", "vvpeer",  "vvneg",   "vvtwice", "source",  "hash"};
+    const char *imp[] = {"--json", "import", "--from-db", NULL};
+    size_t i = 0;
+
+    ASSERT_TRUE(local != NULL && foreign != NULL);
+    for (i = 0; i < sizeof(names) / sizeof(names[0]); i++) {
+        const char *add[] = {"add", "--key", names[i], names[i]};
+        given_added(foreign, add, sizeof(add) / sizeof(add[0]));
+    }
+    sqlite_exec(foreign, "UPDATE entries SET sync_id=sync_id||char(9)||'x' WHERE key='tabsync';");
+    sqlite_exec(foreign,
+                "UPDATE entries SET created_at='2026-10-22T09:45:16Z' WHERE key='created';");
+    sqlite_exec(foreign, "UPDATE entries SET updated_at=updated_at||char(27) WHERE key='updated';");
+    sqlite_exec(foreign, "UPDATE entries SET expires_at='tomorrow' WHERE key='expires';");
+    sqlite_exec(foreign, "UPDATE entries SET deleted_at='2026-01-01' WHERE key='deleted';");
+    sqlite_exec(foreign, "UPDATE entries SET version_vector='{\"01a16342-0f26-7dc1-8a46-"
+                         "88703a48341b\":1},\"pwn\":true' WHERE key='vvpwn';");
+    sqlite_exec(foreign, "UPDATE entries SET version_vector='{\"peer\":1}' WHERE key='vvpeer';");
+    sqlite_exec(foreign, "UPDATE entries SET version_vector='{\"01a16342-0f26-7dc1-8a46-"
+                         "88703a48341b\":-1}' WHERE key='vvneg';");
+    sqlite_exec(foreign, "UPDATE entries SET version_vector='{\"01a16342-0f26-7dc1-8a46-"
+                         "88703a48341b\":1,\"01a16342-0f26-7dc1-8a46-88703a48341b\":1}' "
+                         "WHERE key='vvtwice';");
+    sqlite_exec(foreign, "UPDATE entries SET source='robot' WHERE key='source';");
+    sqlite_exec(foreign, "UPDATE entries SET body_hash=printf('%.64c','0') WHERE key='hash';");
+
+    imp[3] = foreign;
+    r = run_remember(local, imp, sizeof(imp) / sizeof(imp[0]), NULL);
+    ASSERT_EQ_INT(r.exit_code, 0);
+    ASSERT_STR_CONTAINS(r.out, "\"inserted\":1,\"updated\":0,\"unchanged\":0,\"conflicts\":0,"
+                               "\"rejected\":11}");
+    cmd_result_free(&r);
+    keys = harness_sqlite_query_line(local, "SELECT group_concat(key) FROM entries;");
+    ASSERT_TRUE(keys != NULL);
+    if (keys != NULL) {
+        ASSERT_STREQ(keys, "good");
+    }
+    free(keys);
+    free(local);
+    free(foreign);
+}
+
+/* A conflict stored by an older build may hold a snapshot that is not a JSON
+   object; conflicts refuses to print it raw. */
+TEST(cli_conflicts_refuses_a_snapshot_that_is_not_an_object)
+{
+    char *local = make_temp_db_path();
+    char *foreign = make_temp_db_path();
+    CmdResult r;
+    const char *add_local[] = {"add", "--key", "slot", "local body"};
+    const char *add_foreign[] = {"add", "--key", "slot", "foreign body"};
+    const char *imp[] = {"import", "--from-db", NULL};
+    const char *conflicts[] = {"--json", "conflicts"};
+
+    ASSERT_TRUE(local != NULL && foreign != NULL);
+    given_added(local, add_local, sizeof(add_local) / sizeof(add_local[0]));
+    given_added(foreign, add_foreign, sizeof(add_foreign) / sizeof(add_foreign[0]));
+    imp[2] = foreign;
+    r = run_remember(local, imp, sizeof(imp) / sizeof(imp[0]), NULL);
+    ASSERT_EQ_INT(r.exit_code, 0);
+    cmd_result_free(&r);
+
+    sqlite_exec(local, "UPDATE conflicts SET local_json='[]';");
+    r = run_remember(local, conflicts, sizeof(conflicts) / sizeof(conflicts[0]), NULL);
+    ASSERT_EQ_INT(r.exit_code, 1);
+    ASSERT_STREQ(r.out, "");
+    cmd_result_free(&r);
+
+    sqlite_exec(local, "UPDATE conflicts SET local_json='{}', incoming_json='[]';");
+    r = run_remember(local, conflicts, sizeof(conflicts) / sizeof(conflicts[0]), NULL);
+    ASSERT_EQ_INT(r.exit_code, 1);
+    ASSERT_STREQ(r.out, "");
+    cmd_result_free(&r);
+
+    sqlite_exec(local, "UPDATE conflicts SET incoming_json='{\"a\":1},\"pwn\":{';");
+    r = run_remember(local, conflicts, sizeof(conflicts) / sizeof(conflicts[0]), NULL);
+    ASSERT_EQ_INT(r.exit_code, 1);
+    ASSERT_STREQ(r.out, "");
+    cmd_result_free(&r);
+    free(local);
+    free(foreign);
+}
+
+/* The store's snapshot of the local row writes the vector raw too: a local
+   vector that is not canonical stops the import before a conflict is stored. */
+TEST(cli_import_refuses_to_snapshot_a_non_canonical_local_vector)
+{
+    char *local = make_temp_db_path();
+    char *foreign = make_temp_db_path();
+    CmdResult r;
+    char *n = NULL;
+    const char *add_local[] = {"add", "--key", "slot", "local body"};
+    const char *add_foreign[] = {"add", "--key", "slot", "foreign body"};
+    const char *imp[] = {"import", "--from-db", NULL};
+
+    ASSERT_TRUE(local != NULL && foreign != NULL);
+    given_added(local, add_local, sizeof(add_local) / sizeof(add_local[0]));
+    given_added(foreign, add_foreign, sizeof(add_foreign) / sizeof(add_foreign[0]));
+    sqlite_exec(local, "UPDATE entries SET version_vector='{\"a\":1}';");
+    imp[2] = foreign;
+    r = run_remember(local, imp, sizeof(imp) / sizeof(imp[0]), NULL);
+    ASSERT_EQ_INT(r.exit_code, 1);
+    cmd_result_free(&r);
+    n = harness_sqlite_query_line(local, "SELECT COUNT(*) FROM conflicts;");
+    ASSERT_STREQ(n != NULL ? n : "", "0");
+    free(n);
+    free(local);
+    free(foreign);
+}
+
 void register_sync_import_tests(void)
 {
     RUN_TEST(cli_import_inserts_preserves_sync_id_remaps_links_no_device_register);
@@ -2291,7 +2555,7 @@ void register_sync_import_tests(void)
     RUN_TEST(cli_conflict_accept_incoming_many_tags);
     RUN_TEST(cli_conflict_accept_hash_clash_keep_incoming_and_both_refuse_fake_key);
     RUN_TEST(cli_import_incoming_dominates_expires_deleted_keyless);
-    RUN_TEST(cli_import_bad_vv_fails_cleanly);
+    RUN_TEST(cli_import_bad_vv_row_is_rejected);
     RUN_TEST(cli_conflicts_bad_reason_errors);
     RUN_TEST(cli_conflict_accept_concurrent_keep_incoming_demotes_other_key);
     RUN_TEST(cli_conflict_accept_concurrent_keep_incoming_hash_taken_refuses);
@@ -2299,6 +2563,12 @@ void register_sync_import_tests(void)
     RUN_TEST(cli_conflict_accept_demote_hash_escape_refuses);
     RUN_TEST(cli_import_vv_zero_clock_in_a_membership);
     RUN_TEST(cli_import_concurrent_reimport_idempotent);
+    RUN_TEST(cli_import_skips_noncanonical_key_and_tag_rows);
+    RUN_TEST(cli_import_skips_noncanonical_row_already_present);
+    RUN_TEST(cli_conflicts_human_masks_a_control_byte_in_the_sync_id);
+    RUN_TEST(cli_import_skips_rows_with_a_non_canonical_peer_field);
+    RUN_TEST(cli_conflicts_refuses_a_snapshot_that_is_not_an_object);
+    RUN_TEST(cli_import_refuses_to_snapshot_a_non_canonical_local_vector);
 }
 
 // NOLINTEND(readability-identifier-length,cppcoreguidelines-avoid-magic-numbers,readability-magic-numbers,android-cloexec-fopen,bugprone-command-processor,cert-env33-c,concurrency-mt-unsafe,bugprone-unchecked-string-to-number-conversion,cert-err34-c)

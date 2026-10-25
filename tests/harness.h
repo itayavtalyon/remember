@@ -59,10 +59,21 @@ long parse_id_stdout(const char *out);
 bool str_is_blank(const char *s);
 
 /*
- * Run `sqlite3 <db> <sql>` and return first line of stdout (heap; caller frees).
- * Returns NULL if sqlite3 missing or command failed.
+ * Run `sqlite3 <db> <sql>` and return the first line of stdout (heap; caller
+ * frees), or NULL when the statement printed nothing (an UPDATE, no row).
+ * A run that cannot do its job fails the calling test at the caller's line:
+ * the command does not fit the buffer, the shell cannot start, or sqlite3
+ * exits non-zero (not on PATH, an SQL error). Fixture SQL never fails quietly.
  */
-char *harness_sqlite_query_line(const char *db_path, const char *sql);
+/* Where a harness call came from, so a failure names the caller's line. */
+typedef struct {
+    const char *file;
+    long line;
+} HarnessSite;
+
+char *harness_sqlite_query_line_at(const char *db_path, const char *sql, HarnessSite site);
+#define harness_sqlite_query_line(db_path, sql)                                                    \
+    harness_sqlite_query_line_at((db_path), (sql), (HarnessSite){__FILE__, __LINE__})
 
 /* Directory containing path (heap; caller frees). */
 char *dir_of_path(const char *file_path);

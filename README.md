@@ -80,6 +80,13 @@ Opening an existing database migrates it to `user_version` **5**.
 - `list --sort updated|created` (default `updated`) orders by that time, newest first, then id.
 - `list` and `search` take `--since` / `--until`. `since` is inclusive and `until` is exclusive. Search filters `updated_at` and ignores `--sort`.
 - `update --if-version-vector` writes only when that memory's `version_vector` still matches. A mismatch is code `stale` and writes nothing.
+- `remember search` now also matches word prefixes and returns matching keys and tags. FTS5 queries work as before; a query that FTS5 cannot parse no longer fails: it returns prefix matches and prints a note on stderr.
+- That note is one line: `remember: warning: raw query ignored: <message>`. With `--json-errors` it is `{"version":1,"warning":{"code":"raw_query_ignored","message":"<message>"}}`.
+- Search order: exact key, then key prefix, then relevance (bm25), then `updated_at`.
+- JSON `keys` and `tags` now sit between `total` and `entries` in `search --json`. `--facet-limit N` (default 50, 1..200) caps their `items`; `total` counts every match. Human `search` prints `keys:` and `tags:` lines before the rows.
+- An empty or blank `search` query is an empty result on exit 0. It was a usage error (`empty search query`).
+- `--limit`, `--offset`, `--busy-timeout` and `--facet-limit` take ASCII digits only. A leading space or `+` is now a usage error.
+- A command whose output cannot be written (for example a closed pipe) exits 1 with `failed to write output`. It used to exit 0.
 
 ### v0.2.0 — local sync foundations
 

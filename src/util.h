@@ -28,7 +28,7 @@ int util_read_stdin(char **out, size_t *out_len, size_t max_len);
  */
 int util_absolute_path(const char *path, char *buf, size_t buflen);
 
-/* Non-negative decimal. Rejects empty text, any minus sign, trailing junk, and ERANGE. */
+/* ASCII decimal digits only. Rejects empty text, space, any sign, trailing junk, and ERANGE. */
 int util_parse_nonneg(const char *raw, unsigned long long *out);
 
 #endif /* REMEMBER_UTIL_H */

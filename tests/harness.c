@@ -1,5 +1,7 @@
 #include "harness.h"
 
+#include "test.h"
+
 #include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
@@ -519,29 +521,37 @@ static bool shell_quote_append(char *dst, size_t cap, size_t *len, const char *s
     return true;
 }
 
-char *harness_sqlite_query_line(const char *db_path, const char *sql)
+/* Fail the calling test at its own line. */
+static void harness_fail(HarnessSite site, const char *what)
+{
+    tst_assert_true(false, what, site.file, (int)site.line);
+}
+
+char *harness_sqlite_query_line_at(const char *db_path, const char *sql, HarnessSite site)
 {
     char cmd[CMD_BUFSIZE];
     FILE *fp = NULL;
-    char line[LINE_BUFSIZE];
-    char *out = NULL;
+    char first[LINE_BUFSIZE];
+    char rest[LINE_BUFSIZE];
+    bool have_first = false;
+    int status = 0;
     size_t len = 0;
 
     if (db_path == NULL || sql == NULL) {
+        harness_fail(site, "sqlite3 fixture has a db path and SQL");
         return NULL;
     }
     /* Requires sqlite3 CLI on PATH (dev dependency for inspect-only tests). */
     len = (size_t)snprintf(cmd, sizeof(cmd), "sqlite3 ");
-    if (!shell_quote_append(cmd, sizeof(cmd), &len, db_path)) {
-        return NULL;
-    }
-    if (len + 1U >= sizeof(cmd)) {
+    if (!shell_quote_append(cmd, sizeof(cmd), &len, db_path) || len + 1U >= sizeof(cmd)) {
+        harness_fail(site, "sqlite3 command fits CMD_BUFSIZE");
         return NULL;
     }
     cmd[len] = ' ';
     len++;
     cmd[len] = '\0';
     if (!shell_quote_append(cmd, sizeof(cmd), &len, sql)) {
+        harness_fail(site, "sqlite3 command fits CMD_BUFSIZE");
         return NULL;
     }
     /* Test-only DB inspection; command is built from test-controlled paths/SQL,
@@ -549,16 +559,23 @@ char *harness_sqlite_query_line(const char *db_path, const char *sql)
     /* NOLINTNEXTLINE(cert-env33-c,bugprone-command-processor) */
     fp = popen(cmd, "r");
     if (fp == NULL) {
+        harness_fail(site, "sqlite3 command starts");
         return NULL;
     }
-    if (fgets(line, sizeof(line), fp) == NULL) {
-        (void)pclose(fp);
+    have_first = fgets(first, sizeof(first), fp) != NULL;
+    /* Read the rest too, so sqlite3 never dies of SIGPIPE on a long result. */
+    while (fgets(rest, sizeof(rest), fp) != NULL) {
+    }
+    status = pclose(fp);
+    if (status == -1 || !WIFEXITED(status) || WEXITSTATUS(status) != 0) {
+        harness_fail(site, "sqlite3 exits 0 (on PATH, valid SQL)");
         return NULL;
     }
-    (void)pclose(fp);
-    trim_trailing_newlines(line);
-    out = strdup(line);
-    return out;
+    if (!have_first) {
+        return NULL;
+    }
+    trim_trailing_newlines(first);
+    return strdup(first);
 }
 
 char *dir_of_path(const char *file_path)

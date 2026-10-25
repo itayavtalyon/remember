@@ -22,7 +22,6 @@ typedef enum {
     STORE_ERR_SQLITE,
     STORE_ERR_OOM,
     STORE_ERR_INTERNAL,
-    STORE_ERR_QUERY,             /* invalid FTS5 MATCH syntax (search) */
     STORE_ERR_CONFLICT,          /* keyless body-hash collision on update */
     STORE_ERR_EXPIRED,           /* locator hit expired without STORE_BIN_EXPIRED */
     STORE_ERR_NOT_EXPIRED,       /* locator used STORE_BIN_EXPIRED but row is live */
@@ -262,18 +261,65 @@ typedef struct {
 PageResult store_list(Store *s, const ListQuery *q, const char *now);
 
 /*
- * Ranked FTS5 search. query is raw FTS5 MATCH syntax (required, non-empty at CLI).
- * filters reuse ListQuery: tag AND, optional source/key, limit/offset, since/until.
- * Rank stays bm25(entries_fts) ASC, then updated_at DESC, id DESC. filters.sort
- * is ignored. since/until filter updated_at, not the sort column.
- * Same ownership as store_list (see PageResult). STORE_ERR_QUERY on bad MATCH syntax.
+ * Union search (006 E2.1). query is the user's QUERY, valid UTF-8 (the CLI
+ * checks, D27; invalid is STORE_ERR_INTERNAL). filters reuse ListQuery: tag
+ * AND, optional source/key, limit/offset, since/until on updated_at; sort is
+ * ignored. facet_limit caps keys.items and tags.items as given, like limit
+ * (the CLI enforces 1..200); zero returns totals and no items.
  */
 typedef struct {
-    const char *query; /* FTS5 MATCH string */
+    const char *query;
     ListQuery filters;
+    size_t facet_limit;
 } SearchQuery;
 
-PageResult store_search(Store *s, const SearchQuery *q, const char *now);
+/* One keys facet item (E2.6). */
+typedef struct {
+    char *key;
+    char *sync_id;
+    char *label;
+    char *source;
+    char *updated_at;
+} SearchKeyItem;
+
+/* One tags facet item (E2.6): count = memories in scope that carry tag. */
+typedef struct {
+    char *tag;
+    size_t count;
+} SearchTagItem;
+
+/* items: at most facet_limit, in E2.6 order; total: every scoped match. */
+typedef struct {
+    SearchKeyItem *items;
+    size_t count;
+    size_t total;
+} SearchKeyFacet;
+
+/* items: at most facet_limit, in D28 order; total: every scoped match. */
+typedef struct {
+    SearchTagItem *items;
+    size_t count;
+    size_t total;
+} SearchTagFacet;
+
+/*
+ * page as for store_list (see PageResult). keys and tags are the facets
+ * (E2.5, E2.6): scoped by bin + filters, not by the query match (E2.5d).
+ * warning is the FTS5 message when the raw part does not parse (E2.1 (5),
+ * E2.3), else NULL. Everything is heap: release with
+ * store_search_result_free. On error only page.st is set.
+ */
+typedef struct {
+    PageResult page;
+    SearchKeyFacet keys;
+    SearchTagFacet tags;
+    char *warning;
+} SearchResult;
+
+SearchResult store_search(Store *s, const SearchQuery *q, const char *now);
+
+/* Free everything store_search returned and zero *res. NULL-safe. */
+void store_search_result_free(SearchResult *res);
 
 /*
  * Soft-delete one entry (locator: live or expired). Sets deleted_at=now, clears
@@ -471,6 +517,7 @@ typedef struct {
     size_t updated;
     size_t unchanged;
     size_t conflicts;
+    size_t rejected; /* key or tag not as a local write would store it; row skipped */
 } StoreImportCounts;
 
 /*
@@ -480,8 +527,9 @@ typedef struct {
  * STORE_ERR_SOURCE_TOO_OLD. user_version > 5 → STORE_ERR_SOURCE_TOO_NEW
  * ("database is newer than this remember"). A missing conflicts.origin column
  * or a missing bucket_prefixes / settings table is absent, not an error; those
- * rows are not copied. Exit-path JSON: action imported + these counts;
- * STORE_OK even when conflicts > 0.
+ * rows are not copied. A row whose key or a tag is not what normalize_token
+ * would store is skipped and counted in rejected. Exit-path JSON: action
+ * imported + these counts; STORE_OK even when conflicts or rejected > 0.
  */
 StoreStatus store_import(Store *dst, const char *src_path, const char *now,
                          StoreImportCounts *out_counts);

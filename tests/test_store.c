@@ -963,8 +963,10 @@ TEST(store_list_and_search_bins)
         total = page.total;
     }
     ASSERT_EQ_INT((int)total, 1);
-    ASSERT_STREQ(rows[0].body, "live helix");
-    store_entry_free(&rows[0]);
+    if (rows != NULL && total == 1U) {
+        ASSERT_STREQ(rows[0].body, "live helix");
+        store_entry_free(&rows[0]);
+    }
     free(rows);
     rows = NULL;
     q.bin = STORE_BIN_EXPIRED;
@@ -975,8 +977,10 @@ TEST(store_list_and_search_bins)
         total = page.total;
     }
     ASSERT_EQ_INT((int)total, 1);
-    ASSERT_STREQ(rows[0].body, "dead helix");
-    store_entry_free(&rows[0]);
+    if (rows != NULL && total == 1U) {
+        ASSERT_STREQ(rows[0].body, "dead helix");
+        store_entry_free(&rows[0]);
+    }
     free(rows);
     rows = NULL;
 
@@ -984,26 +988,30 @@ TEST(store_list_and_search_bins)
     sq.query = "helix";
     sq.filters.limit = LIST_LIMIT;
     {
-        PageResult page = store_search(s, &sq, k_now);
+        PageResult page = store_search(s, &sq, k_now).page;
         ASSERT_EQ_INT((int)page.st, (int)STORE_OK);
         rows = page.entries;
         total = page.total;
     }
     ASSERT_EQ_INT((int)total, 1);
-    ASSERT_STREQ(rows[0].body, "live helix");
-    store_entry_free(&rows[0]);
+    if (rows != NULL) {
+        ASSERT_STREQ(rows[0].body, "live helix");
+        store_entry_free(&rows[0]);
+    }
     free(rows);
     rows = NULL;
     sq.filters.bin = STORE_BIN_EXPIRED;
     {
-        PageResult page = store_search(s, &sq, k_now);
+        PageResult page = store_search(s, &sq, k_now).page;
         ASSERT_EQ_INT((int)page.st, (int)STORE_OK);
         rows = page.entries;
         total = page.total;
     }
     ASSERT_EQ_INT((int)total, 1);
-    ASSERT_STREQ(rows[0].body, "dead helix");
-    store_entry_free(&rows[0]);
+    if (rows != NULL) {
+        ASSERT_STREQ(rows[0].body, "dead helix");
+        store_entry_free(&rows[0]);
+    }
     free(rows);
 
     ASSERT_EQ_STATUS(store_tags(s, STORE_BIN_LIVE, k_now, &tc, &ntags), STORE_OK);
@@ -1962,27 +1970,31 @@ TEST(store_search_since_filters_updated_at)
     sq.filters.limit = LIST_LIMIT;
     sq.filters.sort = STORE_SORT_CREATED;
     sq.filters.since = "2026-07-15T00:00:00.000Z";
-    page = store_search(s, &sq, k_now);
+    page = store_search(s, &sq, k_now).page;
     ASSERT_EQ_INT((int)page.st, (int)STORE_OK);
     ASSERT_EQ_INT((int)page.count, 1);
     ASSERT_EQ_INT((int)page.total, 1);
-    ASSERT_STREQ(page.entries[0].body, "edited alpha");
+    if (page.count == 1U) {
+        ASSERT_STREQ(page.entries[0].body, "edited alpha");
+    }
     free_page(page);
 
     sq.filters.since = "2026-08-01T00:00:00.000Z";
     sq.filters.until = "2026-08-01T00:00:00.000Z";
-    page = store_search(s, &sq, k_now);
+    page = store_search(s, &sq, k_now).page;
     ASSERT_EQ_INT((int)page.st, (int)STORE_OK);
     ASSERT_EQ_INT((int)page.count, 0);
     ASSERT_EQ_INT((int)page.total, 0);
     free_page(page);
 
     sq.filters.until = "2026-08-01T00:00:00.001Z";
-    page = store_search(s, &sq, k_now);
+    page = store_search(s, &sq, k_now).page;
     ASSERT_EQ_INT((int)page.st, (int)STORE_OK);
     ASSERT_EQ_INT((int)page.count, 1);
     ASSERT_EQ_INT((int)page.total, 1);
-    ASSERT_STREQ(page.entries[0].body, "edited alpha");
+    if (page.count == 1U) {
+        ASSERT_STREQ(page.entries[0].body, "edited alpha");
+    }
     free_page(page);
     store_close(s);
     free(db);
@@ -2010,11 +2022,13 @@ TEST(store_search_ignores_sort_for_order)
     sq.query = "alpha";
     sq.filters.limit = LIST_LIMIT;
     sq.filters.sort = STORE_SORT_CREATED;
-    page = store_search(s, &sq, k_now);
+    page = store_search(s, &sq, k_now).page;
     ASSERT_EQ_INT((int)page.st, (int)STORE_OK);
     ASSERT_EQ_INT((int)page.count, 2);
-    ASSERT_EQ_INT((int)page.entries[0].id, 1);
-    ASSERT_EQ_INT((int)page.entries[1].id, 2);
+    if (page.count == 2U) {
+        ASSERT_EQ_INT((int)page.entries[0].id, 1);
+        ASSERT_EQ_INT((int)page.entries[1].id, 2);
+    }
     free_page(page);
     store_close(s);
     free(db);
@@ -2040,11 +2054,13 @@ TEST(store_search_ties_break_by_id)
     memset(&sq, 0, sizeof(sq));
     sq.query = "alpha";
     sq.filters.limit = LIST_LIMIT;
-    page = store_search(s, &sq, k_now);
+    page = store_search(s, &sq, k_now).page;
     ASSERT_EQ_INT((int)page.st, (int)STORE_OK);
     ASSERT_EQ_INT((int)page.count, 2);
-    ASSERT_EQ_INT((int)page.entries[0].id, 2);
-    ASSERT_EQ_INT((int)page.entries[1].id, 1);
+    if (page.count == 2U) {
+        ASSERT_EQ_INT((int)page.entries[0].id, 2);
+        ASSERT_EQ_INT((int)page.entries[1].id, 1);
+    }
     free_page(page);
     store_close(s);
     free(db);
@@ -3087,17 +3103,21 @@ TEST(store_search_prepare_and_step_fail)
     q.query = "helix";
     q.filters.limit = LIST_LIMIT;
 
-    /* Fail COUNT prepare. */
-    store_test_fail_prepare_after(0);
-    ASSERT_EQ_STATUS(store_search(s, &q, k_now).st, STORE_ERR_SQLITE);
+    /* The parse probe is statement 0 (test_store_search.c). Fail COUNT prepare. */
+    store_test_fail_prepare_after(1);
+    ASSERT_EQ_STATUS(store_search(s, &q, k_now).page.st, STORE_ERR_SQLITE);
 
     /* COUNT prepare ok; fail SELECT prepare. */
-    store_test_fail_prepare_after(1);
-    ASSERT_EQ_STATUS(store_search(s, &q, k_now).st, STORE_ERR_SQLITE);
+    store_test_fail_prepare_after(2);
+    ASSERT_EQ_STATUS(store_search(s, &q, k_now).page.st, STORE_ERR_SQLITE);
+
+    /* Fail the COUNT step. */
+    store_test_fail_step_after(1);
+    ASSERT_EQ_STATUS(store_search(s, &q, k_now).page.st, STORE_ERR_SQLITE);
 
     /* COUNT step ok; fail first SELECT step. */
-    store_test_fail_step_after(1);
-    ASSERT_EQ_STATUS(store_search(s, &q, k_now).st, STORE_ERR_SQLITE);
+    store_test_fail_step_after(2);
+    ASSERT_EQ_STATUS(store_search(s, &q, k_now).page.st, STORE_ERR_SQLITE);
 
     store_close(s);
     free(db);
@@ -3199,14 +3219,14 @@ static void sweep_search_faults(Store *s, const char *const *tags, int i)
     sq.filters.ntags = 1U;
     store_test_fail_prepare_after(i % 4);
     {
-        PageResult page = store_search(s, &sq, k_now);
+        PageResult page = store_search(s, &sq, k_now).page;
         rows = page.entries;
         count = page.count;
     }
     sweep_free_page(&rows, count);
     store_test_fail_step_after(i % 3);
     {
-        PageResult page = store_search(s, &sq, k_now);
+        PageResult page = store_search(s, &sq, k_now).page;
         rows = page.entries;
         count = page.count;
     }
@@ -3507,6 +3527,7 @@ void register_store_tests(void)
     RUN_TEST(store_tags_counts_and_sorted);
     register_store_link_tests();
     register_store_sync_tests();
+    register_store_search_tests();
 #ifdef REMEMBER_TEST_HOOKS
     RUN_TEST(store_open_oom_on_store_struct);
     RUN_TEST(store_tags_prepare_fail);

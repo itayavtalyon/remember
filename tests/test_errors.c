@@ -341,6 +341,8 @@ TEST(every_error_code_json_message_matches_the_plain_line)
     }
 }
 
+/* E2.3: the plain raw_query_ignored line names what was ignored; the JSON
+   message stays the bare FTS text (union_search_unparseable_raw_part_is_a_json_warning). */
 TEST(plain_warning_is_remember_warning)
 {
     char *buf = NULL;
@@ -354,7 +356,7 @@ TEST(plain_warning_is_remember_warning)
     app_set_streams((AppStreams){.out = NULL, .err = err});
     ASSERT_EQ_INT(diag_warning_as(false, DIAG_WARN_RAW_QUERY_IGNORED, "x"), 0);
     ASSERT_EQ_INT(fflush(err), 0);
-    ASSERT_STREQ(buf, "remember: warning: x\n");
+    ASSERT_STREQ(buf, "remember: warning: raw query ignored: x\n");
     app_set_streams((AppStreams){.out = NULL, .err = NULL});
     ASSERT_EQ_INT(fclose(err), 0);
     free(buf);
@@ -663,23 +665,6 @@ TEST(json_errors_trash_is_deprecated_flag)
     free(db);
 }
 
-TEST(json_errors_invalid_search_query_keeps_its_text)
-{
-    char *db = make_temp_db_path();
-    const char *args[] = {"--json-errors", "search", "\""};
-    CmdResult r;
-
-    ASSERT_TRUE(db != NULL);
-    r = run_remember(db, args, sizeof(args) / sizeof(args[0]), NULL);
-    ASSERT_EQ_INT(r.exit_code, 1);
-    ASSERT_STREQ(r.out, "");
-    ASSERT_STREQ(r.err,
-                 "{\"version\":1,\"error\":{\"code\":\"invalid_query\",\"message\":\"invalid "
-                 "search query\"}}\n");
-    cmd_result_free(&r);
-    free(db);
-}
-
 TEST(json_errors_synced_folder_is_one_warning)
 {
     enum { PATH_CAP = 4096 };
@@ -756,7 +741,6 @@ TEST(store_text_codes_follow_the_locked_split)
     expect_diag(code_for_store_status(STORE_ERR_SQLITE), DIAG_DATABASE);
     expect_diag(code_for_store_status(STORE_ERR_OOM), DIAG_OUT_OF_MEMORY);
     expect_diag(code_for_store_status(STORE_ERR_INTERNAL), DIAG_INTERNAL);
-    expect_diag(code_for_store_status(STORE_ERR_QUERY), DIAG_INVALID_QUERY);
     expect_diag(code_for_store_status(STORE_ERR_CONFLICT), DIAG_BODY_CONFLICT);
     expect_diag(code_for_store_status(STORE_ERR_EXPIRED), DIAG_EXPIRED);
     expect_diag(code_for_store_status(STORE_ERR_NOT_EXPIRED), DIAG_NOT_EXPIRED);
@@ -777,6 +761,243 @@ TEST(store_text_codes_follow_the_locked_split)
 
         expect_diag(code_for_store_status(unknown), DIAG_INTERNAL);
     }
+}
+
+/* A stdout that takes writes into its buffer and fails when they are flushed:
+   the descriptor under the FILE is replaced by a read-only one, so write(2)
+   fails with EBADF. NULL (after a failed assert) if it cannot be built. */
+static FILE *given_out_failing_at_flush(void)
+{
+    char *path = make_temp_db_path();
+    /* NOLINTNEXTLINE(android-cloexec-fopen) macOS fopen has no "e" mode */
+    FILE *file = (path != NULL) ? fopen(path, "w") : NULL;
+    int read_only = open("/dev/null", O_RDONLY | O_CLOEXEC);
+    bool built = false;
+
+    if (file != NULL && read_only >= 0 && dup2(read_only, fileno(file)) >= 0) {
+        built = true;
+    }
+
+    ASSERT_TRUE(built);
+    if (read_only >= 0) {
+        (void)close(read_only);
+    }
+    free(path);
+    if (!built && file != NULL) {
+        (void)fclose(file);
+        file = NULL;
+    }
+    return file;
+}
+
+/* A stdout that rejects every write at once (opened for reading). */
+static FILE *given_out_rejecting_writes(void)
+{
+    char *path = make_temp_db_path();
+    /* NOLINTNEXTLINE(android-cloexec-fopen) macOS fopen has no "e" mode */
+    FILE *made = (path != NULL) ? fopen(path, "w") : NULL;
+    FILE *file = NULL;
+
+    if (made != NULL) {
+        (void)fclose(made);
+        /* NOLINTNEXTLINE(android-cloexec-fopen) macOS fopen has no "e" mode */
+        file = fopen(path, "r");
+    }
+    ASSERT_TRUE(file != NULL);
+    free(path);
+    return file;
+}
+
+/* remember_run(argv) with stdout out; stderr is captured into *err_text
+   (heap). -1 (after a failed assert) if stderr cannot be captured. */
+static int when_run_with_out(const char *const *argv, int argc, FILE *out, char **err_text)
+{
+    size_t len = 0U;
+    FILE *err = open_memstream(err_text, &len);
+    int rc = -1;
+
+    ASSERT_TRUE(err != NULL);
+    if (err == NULL) {
+        return -1;
+    }
+    rc = remember_run(argc, (char *const *)argv, out, err);
+    (void)fclose(err);
+    return rc;
+}
+
+/* The fake itself: a write is buffered and accepted; the flush fails. */
+TEST(failing_flush_stream_accepts_a_write_and_fails_the_flush)
+{
+    FILE *out = given_out_failing_at_flush();
+
+    if (out == NULL) {
+        return;
+    }
+    ASSERT_TRUE(fputs("remember 0.2.0\n", out) >= 0);
+    ASSERT_EQ_INT(fflush(out), EOF);
+    (void)fclose(out);
+}
+
+/* The other fake: a write fails at once and sets the error flag. */
+TEST(rejecting_stream_fails_a_write_and_sets_the_error_flag)
+{
+    FILE *out = given_out_rejecting_writes();
+
+    if (out == NULL) {
+        return;
+    }
+    ASSERT_EQ_INT(fputs("remember 0.2.0\n", out), EOF);
+    ASSERT_TRUE(ferror(out) != 0);
+    (void)fclose(out);
+}
+
+/* Output that fails only at the final flush is an error, not exit 0. */
+TEST(run_reports_output_that_fails_at_the_final_flush)
+{
+    const char *const argv[] = {"remember", "--version"};
+    FILE *out = given_out_failing_at_flush();
+    char *err_text = NULL;
+    int rc = 0;
+
+    if (out == NULL) {
+        return;
+    }
+    rc = when_run_with_out(argv, (int)(sizeof(argv) / sizeof(argv[0])), out, &err_text);
+    ASSERT_EQ_INT(rc, 1);
+    ASSERT_STREQ(err_text, "remember: failed to write output\n");
+    (void)fclose(out);
+    free(err_text);
+}
+
+/* A write the command did not check still fails the run (ferror). */
+TEST(run_reports_a_write_the_command_did_not_check)
+{
+    const char *const argv[] = {"remember", "--version"};
+    FILE *out = given_out_rejecting_writes();
+    char *err_text = NULL;
+    int rc = 0;
+
+    if (out == NULL) {
+        return;
+    }
+    rc = when_run_with_out(argv, (int)(sizeof(argv) / sizeof(argv[0])), out, &err_text);
+    ASSERT_EQ_INT(rc, 1);
+    ASSERT_STREQ(err_text, "remember: failed to write output\n");
+    (void)fclose(out);
+    free(err_text);
+}
+
+/* With --json-errors the flush failure is a JSON error line. */
+TEST(run_reports_a_failed_flush_as_json_with_json_errors)
+{
+    const char *const argv[] = {"remember", "--json-errors", "--version"};
+    FILE *out = given_out_failing_at_flush();
+    char *err_text = NULL;
+    int rc = 0;
+
+    if (out == NULL) {
+        return;
+    }
+    rc = when_run_with_out(argv, (int)(sizeof(argv) / sizeof(argv[0])), out, &err_text);
+    ASSERT_EQ_INT(rc, 1);
+    ASSERT_STREQ(err_text, "{\"version\":1,\"error\":{\"code\":\"internal\",\"message\":"
+                           "\"failed to write output\"}}\n");
+    (void)fclose(out);
+    free(err_text);
+}
+
+/* A command whose own write failed reported it; the run adds no second line. */
+TEST(run_keeps_one_error_line_when_the_command_failed)
+{
+    char *db = make_temp_db_path();
+    const char *const argv[] = {"remember", "--db", db, "add", "hello"};
+    FILE *out = given_out_rejecting_writes();
+    char *err_text = NULL;
+    int rc = 0;
+
+    if (db == NULL || out == NULL) {
+        if (out != NULL) {
+            (void)fclose(out);
+        }
+        free(db);
+        return;
+    }
+    rc = when_run_with_out(argv, (int)(sizeof(argv) / sizeof(argv[0])), out, &err_text);
+    ASSERT_EQ_INT(rc, 1);
+    ASSERT_STREQ(err_text, "remember: failed to write output\n");
+    (void)fclose(out);
+    free(err_text);
+    free(db);
+}
+
+/* A keyed title and a keyless body, so "boo" has a keys facet and "dentist"
+   has none (heap path; NULL after a failed assert). */
+static char *given_search_brain(void)
+{
+    const char *const keyed[] = {"add", "--key", "recs:books", "--", "# Book recommendations"};
+    const char *const keyless[] = {"add", "Book the dentist"};
+    char *db = make_temp_db_path();
+    CmdResult r;
+
+    ASSERT_TRUE(db != NULL);
+    if (db == NULL) {
+        return NULL;
+    }
+    r = run_remember(db, keyed, sizeof(keyed) / sizeof(keyed[0]), NULL);
+    ASSERT_EQ_INT(r.exit_code, 0);
+    cmd_result_free(&r);
+    r = run_remember(db, keyless, sizeof(keyless) / sizeof(keyless[0]), NULL);
+    ASSERT_EQ_INT(r.exit_code, 0);
+    cmd_result_free(&r);
+    return db;
+}
+
+/* E2.7: the keys line is the first write; its failure is the command's error. */
+TEST(search_reports_a_failed_facet_line)
+{
+    char *db = given_search_brain();
+    const char *const argv[] = {"remember", "--db", db, "search", "boo"};
+    FILE *out = given_out_rejecting_writes();
+    char *err_text = NULL;
+    int rc = 0;
+
+    if (db == NULL || out == NULL) {
+        if (out != NULL) {
+            (void)fclose(out);
+        }
+        free(db);
+        return;
+    }
+    rc = when_run_with_out(argv, (int)(sizeof(argv) / sizeof(argv[0])), out, &err_text);
+    ASSERT_EQ_INT(rc, 1);
+    ASSERT_STREQ(err_text, "remember: failed to write output\n");
+    (void)fclose(out);
+    free(err_text);
+    free(db);
+}
+
+/* No facet matches "dentist", so the first write is an entry line. */
+TEST(search_reports_a_failed_entry_line_without_facets)
+{
+    char *db = given_search_brain();
+    const char *const argv[] = {"remember", "--db", db, "search", "dentist"};
+    FILE *out = given_out_rejecting_writes();
+    char *err_text = NULL;
+    int rc = 0;
+
+    if (db == NULL || out == NULL) {
+        if (out != NULL) {
+            (void)fclose(out);
+        }
+        free(db);
+        return;
+    }
+    rc = when_run_with_out(argv, (int)(sizeof(argv) / sizeof(argv[0])), out, &err_text);
+    ASSERT_EQ_INT(rc, 1);
+    ASSERT_STREQ(err_text, "remember: failed to write output\n");
+    (void)fclose(out);
+    free(err_text);
+    free(db);
 }
 
 TEST(internal_parse_stays_a_plain_internal_line)
@@ -893,6 +1114,30 @@ static void given_golden_brain(const char *db)
 
 /* E4.2 golden + D9 table: plain stderr is the 0.2.0 line byte for byte, and
    --json-errors gives the D9 code with the same message, one line, empty stdout. */
+/* cmd_list's own write check: the first entry line fails on a rejecting stdout. */
+TEST(list_reports_a_failed_entry_line)
+{
+    char *db = given_search_brain();
+    const char *const argv[] = {"remember", "--db", db, "list"};
+    FILE *out = given_out_rejecting_writes();
+    char *err_text = NULL;
+    int rc = 0;
+
+    if (db == NULL || out == NULL) {
+        if (out != NULL) {
+            (void)fclose(out);
+        }
+        free(db);
+        return;
+    }
+    rc = when_run_with_out(argv, (int)(sizeof(argv) / sizeof(argv[0])), out, &err_text);
+    ASSERT_EQ_INT(rc, 1);
+    ASSERT_STREQ(err_text, "remember: failed to write output\n");
+    (void)fclose(out);
+    free(err_text);
+    free(db);
+}
+
 TEST(golden_error_lines_and_d9_codes)
 {
     static const GoldenError rows[] = {
@@ -917,7 +1162,6 @@ TEST(golden_error_lines_and_d9_codes)
         {{"get", "999"}, "not found", "not_found", 2, false, {0}},
         {{"get", "--key", "k2"}, "deleted", "deleted", 3, false, {0}},
         {{"get", "--deleted", "--key", "k1"}, "not_deleted", "not_deleted", 3, false, {0}},
-        {{"search", "\""}, "invalid search query", "invalid_query", 1, false, {0}},
         {{"link", "1", "1"}, "self-link", "self_link", 1, false, {0}},
         {{"rekey", "--key", "k1", "--to-key", "k2"},
          "key conflicts with entry 2",
@@ -3395,6 +3639,7 @@ TEST(cli_busy_timeout_out_of_range_is_usage)
     const char *hi[] = {"--busy-timeout", "60001", "list"};
     const char *neg[] = {"--busy-timeout", "-1", "list"};
     const char *word[] = {"--busy-timeout", "abc", "list"};
+    const char *spaced[] = {"--busy-timeout", " 9", "list"};
     const char *json[] = {"--json-errors", "--busy-timeout", "60001", "list"};
     CmdResult r;
 
@@ -3414,6 +3659,11 @@ TEST(cli_busy_timeout_out_of_range_is_usage)
     ASSERT_STREQ(r.err, k_plain);
     cmd_result_free(&r);
     r = run_remember(db, word, sizeof(word) / sizeof(word[0]), NULL);
+    ASSERT_EQ_INT(r.exit_code, 1);
+    ASSERT_STREQ(r.out, "");
+    ASSERT_STREQ(r.err, k_plain);
+    cmd_result_free(&r);
+    r = run_remember(db, spaced, sizeof(spaced) / sizeof(spaced[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 1);
     ASSERT_STREQ(r.out, "");
     ASSERT_STREQ(r.err, k_plain);
@@ -3681,14 +3931,16 @@ TEST(cli_busy_timeout_without_a_value_is_usage)
     free(db);
 }
 
-/* The one decimal parser behind --limit, --offset and --busy-timeout. A minus
-   anywhere is rejected: strtoull skips leading space and would wrap " -1" to
-   ULLONG_MAX (0.2.0 accepted --offset " -1" that way). "+5" and " 7" stay
-   accepted, as 0.2.0 did. */
+/* The one decimal parser behind --limit, --offset, --facet-limit and
+   --busy-timeout takes ASCII digits only. strtoull alone skips leading space
+   and takes a sign, so it would wrap " -1" to ULLONG_MAX (0.2.0 accepted
+   --offset " -1" that way) and read "+5" and " 7" as numbers
+   (decision:size-option-digits-only). */
 TEST(util_parse_nonneg_rejects_every_sign)
 {
-    static const char *const k_bad[] = {"",    "-1", " -1", "\t-5",
-                                        "abc", "5x", "-0",  "99999999999999999999999"};
+    static const char *const k_bad[] = {"",    "-1",  " -1", "\t-5",
+                                        "abc", "5x",  "-0",  "+5",
+                                        " 7",  "\t7", "7 ",  "99999999999999999999999"};
     unsigned long long value = 0;
     size_t i = 0;
 
@@ -3696,9 +3948,7 @@ TEST(util_parse_nonneg_rejects_every_sign)
     ASSERT_TRUE(value == 0ULL);
     ASSERT_EQ_INT(util_parse_nonneg("60000", &value), 0);
     ASSERT_TRUE(value == 60000ULL);
-    ASSERT_EQ_INT(util_parse_nonneg("+5", &value), 0);
-    ASSERT_TRUE(value == 5ULL);
-    ASSERT_EQ_INT(util_parse_nonneg(" 7", &value), 0);
+    ASSERT_EQ_INT(util_parse_nonneg("007", &value), 0);
     ASSERT_TRUE(value == 7ULL);
     for (i = 0; i < sizeof(k_bad) / sizeof(k_bad[0]); i++) {
         ASSERT_EQ_INT(util_parse_nonneg(k_bad[i], &value), -1);
@@ -3770,11 +4020,19 @@ void register_errors_tests(void)
     RUN_TEST(plain_not_found_is_unchanged);
     RUN_TEST(plain_trash_warning_uses_warning_prefix);
     RUN_TEST(json_errors_trash_is_deprecated_flag);
-    RUN_TEST(json_errors_invalid_search_query_keeps_its_text);
     RUN_TEST(json_errors_synced_folder_is_one_warning);
     RUN_TEST(store_text_codes_follow_the_locked_split);
     RUN_TEST(err_fmt_keeps_a_long_unknown_option);
     RUN_TEST(internal_parse_stays_a_plain_internal_line);
+    RUN_TEST(failing_flush_stream_accepts_a_write_and_fails_the_flush);
+    RUN_TEST(rejecting_stream_fails_a_write_and_sets_the_error_flag);
+    RUN_TEST(run_reports_output_that_fails_at_the_final_flush);
+    RUN_TEST(run_reports_a_write_the_command_did_not_check);
+    RUN_TEST(run_reports_a_failed_flush_as_json_with_json_errors);
+    RUN_TEST(run_keeps_one_error_line_when_the_command_failed);
+    RUN_TEST(search_reports_a_failed_facet_line);
+    RUN_TEST(search_reports_a_failed_entry_line_without_facets);
+    RUN_TEST(list_reports_a_failed_entry_line);
     RUN_TEST(golden_error_lines_and_d9_codes);
     RUN_TEST(sqlite_busy_reports_cause_fix_and_detail);
     RUN_TEST(sqlite_cannot_open_carries_errno_reason_and_absolute_path);

@@ -13,7 +13,10 @@
  * real arguments start at argv[1] — e.g. {"remember", "--db", PATH, "--json",
  * "add", "body"}. Normal output goes to `out`, diagnostics to `err`; both must
  * be non-NULL. Returns the stable exit code (0 ok / 1 usage|error / 2 not found)
- * and restores the default stdout/stderr streams before returning.
+ * and restores the default stdout/stderr streams before returning. `out` is
+ * flushed before returning: when that flush fails, or `out` has its error flag
+ * set, a command that succeeded returns 1 with `failed to write output`. So pass
+ * an `out` whose error flag is clear.
  */
 int remember_run(int argc, char *const *argv, FILE *out, FILE *err);
 

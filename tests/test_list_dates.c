@@ -888,6 +888,7 @@ TEST(search_crossed_bounds_are_empty)
     ASSERT_EQ_INT(r.exit_code, 0);
     ASSERT_STREQ(r.err, "");
     ASSERT_STREQ(r.out, "{\"version\":1,\"offset\":0,\"limit\":20,\"count\":0,\"total\":0,"
+                        "\"keys\":{\"total\":0,\"items\":[]},\"tags\":{\"total\":0,\"items\":[]},"
                         "\"entries\":[]}\n");
     cmd_result_free(&r);
     free(db);
