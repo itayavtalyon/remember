@@ -63,6 +63,8 @@ Blocks: plan 20, the command stage. Storage and resolution do not need this answ
 
 ### D-04. Markdown `settings.json` and the CSV `#settings` row
 
+**Answered 2026-10-25:** 007 ST-8.3 and ST-8.3a. The JSON `settings` member is a nested `remember-settings-export` version 1 document, and a brain with no settings rows writes it with an empty list. Markdown `settings.json` is the same document, omitted when the brain has no rows. CSV has no `#settings` row; the same document goes to `<CSV basename>.settings.json` beside the CSV file, with the same omit rule. Import reads it by ST-8.4 to ST-8.7. 006 E7.11 is dead.
+
 006 E6.b says Markdown `settings.json` is the E12.9 object. 006 E6.c says the CSV `#settings` row carries that object in `body`. E12.9 is the add-wins object. 007 ST-5.4 deletes add-wins. 007 ST-8.3 says `remember export` carries every brain settings row, tombstones included, in the ST-8.2 shape, and never a user row. 008 JE-1.5 says a stored file starts with `format` and `version`. The only settings document Design defines is `remember-settings-export` version 1 (ST-8.1).
 
 008 JE-8.3 replaces the CSV header and does not mention a `#settings` row.
@@ -163,6 +165,8 @@ Engine contracts the app calls are in plans 20 and 25: `RememberEnv` callbacks (
 This is app copy, not a remember C plan. Do not invent the parse in plan 20 or plan 25.
 
 ### D-14. `skipped_source` log line
+
+**Answered 2026-10-25:** 010 H-7.2. One line per skipped action and event type in the run log, shown by `remember plugin log <plugin>`: `{"version","at","event":"skipped_source","event_type","command","origin","plugin","action","count"}`.
 
 010 H-7.2: a sync or import command writes one `skipped_source` log line, with the count, when an action's `origins` does not list the event origin. The line's fields are not listed. H-15.3 points at HK §6.3 for a run record and does not list `skipped_source` fields.
 
