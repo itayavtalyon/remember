@@ -1232,3 +1232,37 @@ CodeQL on PR #37 (head `ec89d37`) reported one high alert: `search_prefix_part` 
 **Gate** on this tree: ctest 5/5 in 75 s (`/usr/bin/clang`, `ctest -N` lists 5, `REMEMBER_TEST_VFS=ON`), `lint-all.sh` LINT OK, `leaks-macos` PASS, `check-coverage.sh` functions and effective lines 100%, raw lines 85.86%, branch sides 176/80/268/678, 0 missed. `build-cov` is a fresh cache: Homebrew clang, `REMEMBER_TEST_VFS=ON`. `ci-linux.sh` OK unmodified (DNS resolved `ports.ubuntu.com`; iwyu PASS, scan-build PASS, 815/0 and 455/0). `docs/QUALITY.md` raw-line cell is 85.86% to match this run.
 
 Pointer, not filed: when the next `snprintf` size is `cap - pos` and `pos` grows by a previous `snprintf` return, check that return before adding it. Rounds 9–15 do not say this.
+
+### 2026-10-24 — simplicity round and review lenses (whole plan)
+
+The FINAL note above named simplicity in one paragraph and the pragmatic gate in one line. This is those two passes, run on `4cb65c8` (the snprintf fix included). No code change. No grill. Grades stay 9/10 and 9/10.
+
+**(S) Simplicity.** net 0 lines. Lean already.
+
+1. `write_keys_human` and `write_tags_human` (`output.c`). The repeated part is the empty return, the label, the comma, and the line end, about 12 lines. Sketch: one writer plus an item callback. The tag line prints ` (n)` and the key line does not. The callback is longer than the two loops and hides the two shapes. Kept.
+2. `is_c1_control_at`. Sketch: one `return` of the lead-byte test, −3 lines. Stage 2 hit `readability-implicit-bool-conversion` on that shape in `is_ascii_alnum`. Kept.
+3. `search_prefix_part`. Sketch: drop the count check and add `snprintf`'s return straight into `pos`, −8 lines. That is the wrap CodeQL reported. Kept.
+4. `search_build_where` beside the list WHERE builder. The search function already calls `list_append_filters` and `list_append_bin`. The rest is the MATCH head and binds `?1` / `?2`. Folding the heads together would hide that slot split. Kept.
+5. The new help lines are already one fact each. 0 lines.
+
+**(1) Clean Code.** Pass. `search_prefix_part` names why the return is checked. `store_search` is the long function. The form that clang-tidy rejected was cognitive complexity 26, limit 25. The `||` form is the one that passed on this head. Pulling the transaction into another function is a larger move, not a local shrink.
+
+**(2) SOLID.** Pass. `search_terms.c` stays free of SQL and I/O. The store adapter owns the MATCH. utf8proc stays behind `unicode.c`.
+
+**(3) DRY.** Pass. Entry filters have one implementation, `list_append_filters`. The warning text has one implementation, `diag.c`. The two human facet writers are candidate 1. No third copy.
+
+**(4) Pragmatic write-gate.** DRY pass. Easy-to-replace pass: `sqlite3.h` stays in `store_sqlite.c` and `test_vfs.c`, utf8proc stays in `unicode.c`, and the lint boundary passed on this head. Orthogonal pass: `list` JSON has no `keys` or `tags`, and `list` help has no `--facet-limit`.
+
+**(5) C11.** Pass. The room is a `size_t`. A negative `snprintf` returns before that value is cast and added.
+
+**(6) Fail fast.** Pass. One site considered: `search_match` ignores its `snprintf` return. The caller sizes the buffer as `sizeof(p)` plus the raw length plus the `() OR ()` frame, which holds the whole text, so the call does not truncate on a real query. A check would add a decision to `store_search` on top of the form that just passed the complexity limit. No user-facing silent failure.
+
+**(7) Resource ownership.** Pass. `store_search` frees the query copy, the lowercased query, and the MATCH buffer on every exit. A prefix failure returns before `BEGIN`. The warning allocation is freed with the result.
+
+**(8) Tests and coverage.** Pass. The union-search suite runs the success prefix (`boo`, `editor`, the warning path). The new `-1` returns are defensive exits. This head's coverage gate was 100% functions, 100% effective lines, and 0 missed branch sides in the four pure TUs. No new contract.
+
+**(9) Simplicity.** The round above. No auto-fix.
+
+**(10) Trust claims.** Pass. A prefix token cannot break its quotes: `splits_token` drops every ASCII byte outside `[A-Za-z0-9]`, including `"` and `\`, before the quotes are added. The MATCH text is bound as `?2`. `is_c1_control_at` reads the second byte only after the lead byte matches, and a string that ends on that lead has NUL there, so the range check fails. A hand-edited key is masked on the human path. JSON is left as stored, which is the locked rule.
+
+No Critical. No open Improvement. Bugbot is not installed. Ponytail: lean already.
