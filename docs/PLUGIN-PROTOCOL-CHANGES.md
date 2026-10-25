@@ -7,7 +7,8 @@ Before 1.0, breaking changes are clean breaks with a changelog note and no alias
 Document revision of protocol 1 (log 009 P-Q4). No wire change. Applies Itay's copy-pending answers (`fk-review/copy-pending/ITAY-ANSWERS.md`), section 0.8:
 - C-20: a pre-flight hash mismatch warns `plugin_untrusted`. `plugin_preflight_failed` covers a missing or non-executable file only (R8.15, §8.2).
 - D-02: a capped chain warns `plugin_chain_capped` and sets status `skipped`, reason `chain_capped` (§8.2).
-- C-30/C-31: `plugin_action_timeout` and `plugin_action_failed` print only in a command that runs the action synchronously (for example `plugin run`); writes never wait (R8.16).
+- C-30/C-31: `plugin_action_timeout` and `plugin_action_failed` print only in a command that runs the action synchronously; writes never wait (R8.16).
+- D-17 (2026-10-25): those commands are `remember plugin test <name>`, `remember plugin rerun <name> <event-id>`, and the backfill in `remember plugin reindex` and `remember plugin enable`. A backfill that does not finish exits 1 with `plugin_backfill_incomplete`. No other command prints the two warnings, and a write's exit code does not change (R3.21, R8.16, section 8.2).
 - D-08: `plugin_filter_failed` is confirmed as the non-timeout filter code.
 - C-23: §8.2 adds `plugin_unsupported` as a warning for dispatch in a `REMEMBER_PROCESSES=0` build (R8.15).
 

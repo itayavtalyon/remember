@@ -1,7 +1,7 @@
 # 010 - Plugins and hooks
 
 **Status:** Design (grill closed 2026-10-21). Amended 2026-10-22: the daemon stays in v1 (S-11 reversed), Empty Trash has no Touch ID, `--trash` means the Trash. 2026-10-22 merge answers applied: M-13, M-14, M-17 to M-21. H-Q1 to H-Q25 closed 2026-10-20. The deep review of 2026-10-21 (G-01 to G-36) reopened the log. Rounds 2 and 3 (simplification) closed the same day. Round 4 closed the same day. The grill is closed. Design states each winner. Daemon IPC is Future Work (S-11).
-**Changes:** 2026-10-25 (Itay, copy-pending answers 2, 4, 5 and 13; PP revision 7): a pre-flight hash mismatch warns `plugin_untrusted`, not `plugin_preflight_failed` (C-20, H-6.2); a capped chain warns `plugin_chain_capped` as well as setting the status (D-02, H-12.4); the non-timeout filter code is `plugin_filter_failed` (D-08, H-12.5); dispatch in a `REMEMBER_PROCESSES=0` build is a warning, and the write is saved (C-23, H-0.7); action timeout and failure warnings print only in a command that runs the action synchronously (C-30/C-31, H-6.4).
+**Changes:** 2026-10-25 (Itay, copy-pending answers 2, 4, 5 and 13; PP revision 7): a pre-flight hash mismatch warns `plugin_untrusted`, not `plugin_preflight_failed` (C-20, H-6.2); a capped chain warns `plugin_chain_capped` as well as setting the status (D-02, H-12.4); the non-timeout filter code is `plugin_filter_failed` (D-08, H-12.5); dispatch in a `REMEMBER_PROCESSES=0` build is a warning, and the write is saved (C-23, H-0.7); action timeout and failure warnings print only in a command that runs the action synchronously (C-30/C-31, H-6.4). 2026-10-25 (Itay, `chief-architect-unblock` D-14, D-17): one `skipped_source` line per skipped action and event type, with `at` and `event_type` (H-7.2, H-15.3); the commands that print `plugin_action_timeout` and `plugin_action_failed` are named, and `plugin rerun` is synchronous (H-5.7), and no other command prints them (H-6.4, PP R3.21, R8.16).
 **Author:** Itay (+ agent facilitation)
 **Created:** 2026-10-15 (as 007-event-hooks), merged and renumbered 2026-10-18
 
@@ -256,19 +256,41 @@ typedef int  (*remember_token_fn)(void *ctx, const char *helper_id, char *buf, s
   - Every other command fails with exit 1 and `plugin_run_forbidden`. The plain message is `a hook or plugin run can't run "<command>". Run it in your own terminal.`
   - The CLI checks the variable when it dispatches a command, against one table in which each command has an `allowed_in_run` flag. A new command defaults to not allowed `[decision:g2-07]`.
 - H-5.6. When `cause.chain` reaches 100, the dispatcher does not run that entry for that event, sets the recipient `state` to `halted`, logs `halted`, and keeps the plugin enabled. Every later command in that brain warns `plugin_loop_halted` until a rerun, `plugin status --ack NAME`, or until the row is dropped (G-35.4). (2026-10-22, M-19 N6/N7: renamed from `plugin_chain_halted`; `--ack` clears the sticky warning so `--strict` does not fail every command.) The plain warning is `remember: warning: "<name>" was stopped after 100 hook runs in a row set each other off. The write was saved. To run it once more, run 'remember plugin rerun <name> <event-id>' within 7 days. To clear this warning without rerunning, run 'remember plugin status --ack <name>'.` (Story Weaver final, COPY-STORY-WEAVER entry 19, 2026-10-22).
-- H-5.7. `remember plugin rerun NAME EVENT_ID` runs a `failed` or `halted` recipient of that event once, with the chain reset `[decision:s-15]`. When the event has no such recipient for that plugin, the command exits 1 with `plugin_not_rerunnable`.
+- H-5.7. `remember plugin rerun NAME EVENT_ID` runs a `failed` or `halted` recipient of that event once, with the chain reset `[decision:s-15]`. The command is synchronous: it runs the recipient in the foreground and waits for the run to end before it exits (2026-10-25, D-17). It prints `plugin_action_timeout` or `plugin_action_failed` for a persistent action (H-6.4). When the event has no such recipient for that plugin, the command exits 1 with `plugin_not_rerunnable`.
 
 ### 6. Pre-flight checks
 
 - H-6.1. After the commit, for each matching once-action, the engine checks that each trusted file (H-9.1) exists and matches its hash, and that `run.command[0]` is executable `[decision:hooks-exit-code-4]`, `[decision:g-29]`.
 - H-6.2. A failed check sets that recipient's state to `failed`, logs the failure, and warns, naming the plugin. A missing file or a `run.command[0]` that is not executable warns `plugin_preflight_failed`. A hash mismatch is its own warning, `plugin_untrusted`, and follows H-9.5 (2026-10-25, C-20). Remember does not run it again by itself (H-4.8). `plugin rerun` runs it (H-5.7). The write exits 0, or 4 with `--strict`.
 - H-6.3. When the dispatcher cannot start, the command warns `plugin_dispatch_failed`. It exits 0, or 4 with `--strict`.
-- H-6.4. Remember never waits for a handler. After a successful start, the handler owns the result. A failed run shows only in `remember plugin log` and the app toast. `plugin_action_timeout` and `plugin_action_failed` print only in a command that runs the action synchronously, for example `plugin run`. A write never waits and never prints them (2026-10-25, C-30/C-31; PP R8.16).
+- H-6.4. Remember never waits for a handler. After a successful start, the handler owns the result. A failed run shows only in `remember plugin log` and the app toast. `plugin_action_timeout` and `plugin_action_failed` print only in a command that runs the action synchronously (2026-10-25, C-30/C-31, D-17; PP R3.21, R8.16). These are the commands, and no other command prints them:
+  - `remember plugin test NAME`, which runs an installed entry in the foreground (H-16.3). Its exit code stays H-16.3.
+  - `remember plugin rerun NAME EVENT_ID`, which runs in the foreground and waits for the run (H-5.7). Its exit code stays H-5.7.
+  - The backfill in `remember plugin reindex NAME` (H-13.4). When the backfill does not finish, the command exits 1 with `plugin_backfill_incomplete` (H-13.6).
+  - The backfill in `remember plugin enable NAME` (H-10.5, H-13.4). When the backfill does not finish, the command exits 1 with `plugin_backfill_incomplete` (H-13.6).
+  - A write never waits and never prints them. A write's exit code does not change, also with `--strict` (PP R8.16).
 
 ### 7. Synced and imported memories
 
 - H-7.1. Every event carries `cause.origin`: `local`, `sync` or `import`. The actor is `data.memory.updated_by` (#563, C-11). Every action has an `origins` filter, default `["local"]` `[decision:hook-origins-filter]` (#577), `[decision:g-11]`. Sharing later adds a trusted origin.
-- H-7.2. An action whose `origins` does not list the event's origin does not run. A sync or import command writes one `skipped_source` log line, with the count.
+- H-7.2. An action whose `origins` does not list the event's origin does not run. A sync or import command writes one `skipped_source` line for each action and event type that it skipped, with the count (2026-10-25, D-14). An action that the command did not skip gets no line. When one command skips `memory.created` and `memory.updated` events for one action, it writes two lines.
+  - Remember writes the line to the run log (H-15.1) after the command commits. `remember plugin log <plugin>` shows it, because the line names that plugin.
+  - `remember plugin log <plugin>` prints the line as `<at>  skipped "<action>" for <count> <event_type> events from 'remember <command>', because its origins don't include <origin>.` When `count` is 1, it prints `<at>  skipped "<action>" for 1 <event_type> event from 'remember <command>', because its origins don't include <origin>.` The line has no plugin name, because the output holds only that plugin. Output that mixes plugins writes `"<plugin>/<action>"` in place of `"<action>"`. `<event_type>` is the field value, verbatim. `<at>` is the record's `at` (2026-10-25, Story Weaver).
+  - The line is this JSON object, with the members in this order:
+
+```json
+{"version":1,"at":"2026-10-25T18:00:00.000Z","event":"skipped_source","event_type":"memory.created","command":"sync","origin":"sync","plugin":"wake_coder","action":"run","count":12}
+```
+
+  - `version` is the log record version, `1` (H-15.3).
+  - `at` is the time that Remember wrote the line, in RFC 3339 UTC with milliseconds (JSON-STYLE §1.3).
+  - `event` is `skipped_source`.
+  - `event_type` is the H-3.2 `event_type` of the skipped events: `memory.created`, `memory.updated`, `memory.deleted`, `memory.restored`, `memory.purged` or `memory.expired` (PP R3.3). It is never `memory.*`.
+  - `command` is the `cause.command` of the skipped events: `sync` or `import` (H-7.3).
+  - `origin` is the `cause.origin` of the skipped events: `sync` or `import`.
+  - `plugin` is the plugin name.
+  - `action` is the entry name of the action, the last part of `plugin/<name>/<entry>`.
+  - `count` is the number of events of that type in that command that the action did not get. It is 1 or more.
 - H-7.3. A sync or import gets one event per memory, a shared `batch_id`, and `cause.command` `sync` or `import`.
 
 ### 8. Platforms
@@ -360,7 +382,7 @@ typedef int  (*remember_token_fn)(void *ctx, const char *helper_id, char *buf, s
 
 - H-15.1. The run log is `<brain>.d/hooks.log`, JSON Lines, mode 0600 (#566). It holds every run of every plugin. Authors read it with `remember plugin log <name>`.
 - H-15.2. Rotation at 5 MB, 3 rotated files kept, entries older than 30 days deleted, whichever comes first (#424).
-- H-15.3. A log record has `version` and the HK §6.3 fields, with `event_type`. `plugin log --follow --json` emits one `remember-message` per line: `type` `plugin.run` for a run record, and `type` `plugin.stderr` with `data {plugin, line, at}` for a `stderr.log` line (G-35.7).
+- H-15.3. A log record has `version` and the HK §6.3 fields, with `event_type`. A `skipped_source` record has the H-7.2 fields, `event_type` included (2026-10-25, D-14). `remember plugin log <plugin>` prints it as the H-7.2 human line. `plugin log --follow --json` emits one `remember-message` per line: `type` `plugin.run` for a run record, and `type` `plugin.stderr` with `data {plugin, line, at}` for a `stderr.log` line (G-35.7).
 
 ### 16. CLI
 
@@ -481,7 +503,7 @@ Must-pass tests (`tests/`).
 12. A failed run is not retried. Its outbox row stays, `plugin rerun` runs it, and after 7 days the row is dropped with `dropped_stale`.
 13. Script edited after trust: no run, `disabled_reason` `untrusted`, `plugin_untrusted`. A successful `plugin trust` sets `disabled_reason` back to null, leaves `enabled` unchanged, and the next use runs the plugin. `plugin trust` without a terminal exits 1 `plugin_approval_required`. A wrong typed name exits 1 `plugin_approval_denied`. A confirm callback that returns false records nothing.
 14. `memory.expired`: the first command after `expires_at` emits one event after its own commit; a second command emits nothing; a revival clears `expired_at` and a later expiry emits again; a purge of an unmarked expired row emits only `memory.purged`; the v6 migration marks already-expired rows and emits nothing; setting `expired_at` changes neither `updated_at`, the version vector nor `change_seq` (#570).
-15. Sync and import: an action with the default `origins` does not run for a sync or import event, and the log gets `skipped_source`; an action with `origins: ["local", "sync"]` gets one event per synced memory with a shared `batch_id` and `cause.origin` `sync`. `sync --hooks` runs the default-`origins` action too.
+15. Sync and import: an action with the default `origins` does not run for a sync or import event, and the log gets one `skipped_source` line for that action and event type, with the H-7.2 fields and the count; an action with `origins: ["local", "sync"]` gets one event per synced memory with a shared `batch_id` and `cause.origin` `sync`. `sync --hooks` runs the default-`origins` action too.
 16. `remember sweep` on a brain with no plugins sweeps and inserts no outbox rows.
 17. `REMEMBER_PROCESSES=0` build: `hook add` and `plugin add DIR` return `plugin_unsupported`; a write that matches an enabled folder-plugin action is saved and warns `plugin_unsupported`; writes insert no outbox rows; a built-in filter still runs.
 18. A sync of 1,000 memories with only default-`origins` actions inserts no outbox row.

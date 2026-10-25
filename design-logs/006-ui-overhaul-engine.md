@@ -1,6 +1,7 @@
 # 006 - Engine changes for the Fortkeeps UI overhaul (0.3.0)
 
 **Status:** Design (closed 2026-10-11, amended 2026-10-12)
+**Changes:** 2026-10-25 (Itay, D-04): the settings bytes of `remember export` and of `remember import` are log 007 ST-8.3 and ST-8.3a. E6.a (the `settings` member), E6.b (`settings.json`), E6.c (the `#settings` row), E7.8, E7.11, E7.12, E12.9 and the E7.6 `prefixes_merged` field are superseded by log 007.
 **Author:** Itay (+ agent facilitation)
 **Created:** 2026-10-11
 
@@ -206,13 +207,13 @@ shape this log:
 - E6.4. The sidecar is not exported. The `conflicts` table is not exported. Brain settings are exported.
 - E6.5. Output: `{"version":1,"action":"exported","format":"<f>","path":"…","count":N,"links":M}`.
 - E6.6. The engine writes to a temporary file beside PATH and renames it onto PATH. When PATH exists and `--force` is absent, the engine writes nothing, exits 1 with code `usage`, and sets the message to `output already exists: <path>`. `--force` replaces PATH by that rename.
-- E6.a. JSON (UTF-8, no BOM): `{"format":"remember-export","version":1,"exported_at":"…Z","engine":"0.3.0","schema":5,"entries":[…],"links":[…],"settings":{…}}`. Entry members are in the E6.2 order with `bin` before `version_vector`. Entries sort by `created_at`, then `sync_id`. `settings` is last; an untouched brain writes `{}`.
-- E6.b. Markdown is a folder: `README.txt`, `settings.json`, `memories/`, `expired/`, `deleted/`. `settings.json` is the E12.9 settings object.
+- E6.a. JSON (UTF-8, no BOM): `{"format":"remember-export","version":1,"exported_at":"…Z","engine":"0.3.0","schema":5,"entries":[…],"links":[…],"settings":{…}}`. Entry members are in the E6.2 order with `bin` before `version_vector`. Entries sort by `created_at`, then `sync_id`. `settings` is last; an untouched brain writes `{}`. *(Superseded 2026-10-25 by log 007 ST-8.3, D-04: `settings` is a nested `remember-settings-export` version 1 document. An untouched brain writes that document with an empty `settings` list.)*
+- E6.b. Markdown is a folder: `README.txt`, `settings.json`, `memories/`, `expired/`, `deleted/`. `settings.json` is the E12.9 settings object. *(Superseded 2026-10-25 by log 007 ST-8.3, D-04: `settings.json` is the `remember-settings-export` version 1 document, and the folder has no `settings.json` when the brain has no settings rows.)*
 - E6.b1. `README.txt` is exactly this sentence: `This folder is a Fortkeeps export. Import it with: remember import --from-md <folder>`.
 - E6.b2. A file name is `<slug>--<last 12 hex of sync_id>.md`. The slug is the key, else the `# ` heading text, else the first 6 words. The engine lowercases ASCII in the slug. The engine replaces every run outside `[a-z0-9]` with `-`. The engine trims `-`. The slug max is 48 characters. An empty slug becomes `memory`.
 - E6.b3. A memory file starts with a line `---`. The next lines are one field per line, in this order: `remember_export`, `sync_id`, `key`, `tags`, `source`, `created_at`, `updated_at`, `expires_at`, `deleted_at`, `version_vector`, `links`. Each line is `<field>: <JSON>`. A line `---` closes the front matter. The body bytes follow. The file ends with one newline.
 - E6.b4. `remember_export` is the JSON number `1`. A null field is JSON `null`. `links` is a JSON array of `{to, kind, created_at, updated_at}`. A link object has no `from`. `links` lists the edges whose `from` is this memory.
-- E6.c. CSV: RFC 4180, UTF-8 with BOM, CRLF, every field quoted, `"` doubled. Header: `sync_id,key,body,tags,source,created_at,updated_at,expires_at,deleted_at,bin,version_vector,links`. `tags`, `version_vector` and `links` cells hold JSON. NULL is an empty cell. Settings are one extra last row with `sync_id` `#settings` and the E12.9 settings object in `body`. That row is not a memory.
+- E6.c. CSV: RFC 4180, UTF-8 with BOM, CRLF, every field quoted, `"` doubled. Header: `sync_id,key,body,tags,source,created_at,updated_at,expires_at,deleted_at,bin,version_vector,links`. `tags`, `version_vector` and `links` cells hold JSON. NULL is an empty cell. Settings are one extra last row with `sync_id` `#settings` and the E12.9 settings object in `body`. That row is not a memory. *(Superseded 2026-10-25 by log 007 ST-8.3, D-04: the CSV file has no `#settings` row. Settings go in a separate `<CSV basename>.settings.json` next to the CSV file. The header is log 008 JE-8.3.)*
 
 ### 6. Import (E7)
 
@@ -222,13 +223,13 @@ shape this log:
 - E7.3. A record without `sync_id` is added with a new `sync_id` under the normal add rules, except that a key clash records `key_clash` (no keyed upsert). Missing timestamps are now. A missing source is `unknown`.
 - E7.4. A `.md` file without front matter imports as one memory with the whole file, trimmed, as its body.
 - E7.5. Links apply after all entries. A link to a missing `sync_id` increments `skipped`. The `errors` array gains one object whose message is `missing link target: <sync_id>`.
-- E7.6. Bad records do not stop the import. Output: `{"version":1,"action":"imported","inserted","updated","unchanged","conflicts","skipped","errors":[{"file","line","message"}],"prefixes_merged":bool}`.
+- E7.6. *(Output superseded 2026-10-25 by log 007 ST-8.3a: `prefixes_merged` is removed, and the output has `settings` `{written, unchanged, skipped}`.)* Bad records do not stop the import. Output: `{"version":1,"action":"imported","inserted","updated","unchanged","conflicts","skipped","errors":[{"file","line","message"}],"prefixes_merged":bool}`.
 - E7.7. The engine reads no zip.
-- E7.8. Every import source merges bucket prefixes by E12.6.
+- E7.8. Every import source merges bucket prefixes by E12.6. *(Superseded 2026-10-25 by log 007 ST-8.3a, D-04: import reads export settings by log 007 ST-8.4 to ST-8.7. No add-wins merge exists.)*
 - E7.9. The engine applies one import in one transaction. A JSON value that does not parse exits 1 with code `import_parse`. A CSV file that does not parse exits 1 with code `import_parse`. A `--from-md` path that is not a directory exits 1 with code `import_parse`. The brain does not change. `--from-db` keeps the database codes in E4.
 - E7.10. A parsed file with bad records commits the good records and exits 0. The `errors` array lists each bad record.
-- E7.11. Markdown `settings.json` is the E12.9 settings object. The CSV `#settings` body is that same object. Import reads `bucket_prefixes` and ignores other keys. The `#settings` row is not a memory.
-- E7.12. A missing `settings.json` is an empty settings object. A present `settings.json` that does not parse exits 1 with code `import_parse`. The brain does not change.
+- E7.11. Markdown `settings.json` is the E12.9 settings object. The CSV `#settings` body is that same object. Import reads `bucket_prefixes` and ignores other keys. The `#settings` row is not a memory. *(Superseded 2026-10-25 by log 007 ST-8.3a, D-04. This rule is dead. Import reads export settings by log 007 ST-8.4 to ST-8.7, the same as `settings import`.)*
+- E7.12. A missing `settings.json` is an empty settings object. A present `settings.json` that does not parse exits 1 with code `import_parse`. The brain does not change. *(Superseded 2026-10-25 by log 007 ST-8.3a, D-04.)*
 - E7.13. These whole-file failures also exit 1 with code `import_parse` and leave the brain unchanged. The JSON root `format` is not `remember-export`. The JSON root `version` is not `1`. The CSV header is not the E6.c header.
 - E7.14. `--from-md` selects files as follows. When `memories/`, `expired/`, or `deleted/` exists, the engine imports only `*.md` files directly inside those three folders. Otherwise the engine imports only `*.md` files directly in the directory. The engine does not recurse. The engine ignores `README.txt` and every other file.
 - E7.15. A record is bad in these cases. The body is missing. The body is empty after trim. The body is longer than 65536 bytes. `sync_id` is present and is not a canonical UUID (`8-4-4-4-12` hex, either case). A present timestamp is not `YYYY-MM-DDTHH:MM:SS.mmmZ`. `source` is present and is not `human`, `agent`, `tool`, `share`, or `unknown`. A present key or tag fails the key and tag checks of log 001. `version_vector` is present and is not a JSON object of device id to a JSON integer greater than 0. A device id in that object is not a canonical UUID. A link object lacks `to` or `kind`. A link `kind` is not `related`, `cites`, or `supersedes`. A `sync_id` repeats in the file. The second copy is the bad record. A CSV row's column count differs from the header. A JSON entry is not an object.
@@ -270,7 +271,7 @@ shape this log:
 - E12.6. Merge (import, later sync): for each prefix in the union, `added_at = max`, `removed_at = max` (NULL is lowest), `device_id` from the side of the later timestamp (ties: the larger device id). The order with the later `updated_at` wins (ties: local). No conflict rows. `prefixes_merged` is true when any row or the order changed.
 - E12.7. The effective list is computed on every read: start from `bucket_prefix_order` without non-live entries; append live prefixes missing from it by `added_at`, then prefix; when more than 8 are live, keep the 8 earliest-added in that order and report the rest as `overflow`. Removing a visible prefix lets the earliest-added overflow prefix fill the slot at the end.
 - E12.8. `config get bucket-prefixes --json`: `{"version":1,"name":"bucket_prefixes","value":[…],"overflow":[…],"updated_at":"…Z"|null,"default":bool}`. Human output: one prefix per line, then `(not shown: x:, y:)` when overflow is not empty.
-- E12.9. Export writes `settings.bucket_prefixes = {"order":{"value":[…],"updated_at":"…Z"},"items":[{"prefix","added_at","removed_at","device_id"}]}` with tombstones.
+- E12.9. Export writes `settings.bucket_prefixes = {"order":{"value":[…],"updated_at":"…Z"},"items":[{"prefix","added_at","removed_at","device_id"}]}` with tombstones. *(Superseded by log 007 ST-5.4 and ST-8.3, 2026-10-25, D-04. Export never writes this object.)*
 
 ### 12. Device id (E14)
 

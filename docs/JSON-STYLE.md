@@ -239,8 +239,8 @@ Event (hook stdin, plugin socket, webhook):
   - filter `status` = `applied|skipped|failed|timeout`;
   - `disabled_reason` = `user|untrusted|crash_loop|protocol_mismatch`;
   - settings `action` = `set|tombstone|delete|none` (reset uses `tombstone|delete|none`, history uses `set|tombstone|delete`, import rows use `set|tombstone|none`; log 007 ST-7.11b);
-  - settings import `result` = `written|unchanged|skipped|kept_local`, and `reason` = `plugin_not_installed|other_scope|layer_not_allowed|unknown_key|invalid_value`;
-  - `setting_invalid` `reason` includes `bad_prefix_shape|duplicate_prefix` (log 007 ST-7.15).
+  - settings import `result` = `written|unchanged|skipped|kept_local`, and `reason` = `plugin_not_installed|other_scope|layer_not_allowed|unknown_key|invalid_value|bad_shape`;
+  - `setting_invalid` `reason` includes `bad_prefix_shape|duplicate_prefix|bad_shape` (log 007 ST-7.15, ST-8.4).
 - Warning and error codes are open too: a new code is additive. The plugin warning catalog is PP §8.2. Every plugin code starts with `plugin_` (for example `plugin_filter_timeout` and `plugin_loop_halted`), and no `hook_` code exists. CLI codes such as `flag_meaning_changed` and `deprecated_flag` are in the CLI code catalog (the API surface v1 log, #583). The error catalog is the API surface v1 log too. No `time_budget_capped` code exists (M-22 A).
 - ✓ `"bin":"deleted"` · ✗ `"bin":"trash"`, `"bin":2`, `"source":"agent"` (no `source` field, G-33)
 
