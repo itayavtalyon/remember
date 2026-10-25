@@ -1,12 +1,13 @@
 # 010 - Plugins and hooks
 
 **Status:** Design (grill closed 2026-10-21). Amended 2026-10-22: the daemon stays in v1 (S-11 reversed), Empty Trash has no Touch ID, `--trash` means the Trash. 2026-10-22 merge answers applied: M-13, M-14, M-17 to M-21. H-Q1 to H-Q25 closed 2026-10-20. The deep review of 2026-10-21 (G-01 to G-36) reopened the log. Rounds 2 and 3 (simplification) closed the same day. Round 4 closed the same day. The grill is closed. Design states each winner. Daemon IPC is Future Work (S-11).
+**Changes:** 2026-10-25 (Itay, copy-pending answers 2, 4, 5 and 13; PP revision 7): a pre-flight hash mismatch warns `plugin_untrusted`, not `plugin_preflight_failed` (C-20, H-6.2); a capped chain warns `plugin_chain_capped` as well as setting the status (D-02, H-12.4); the non-timeout filter code is `plugin_filter_failed` (D-08, H-12.5); dispatch in a `REMEMBER_PROCESSES=0` build is a warning, and the write is saved (C-23, H-0.7); action timeout and failure warnings print only in a command that runs the action synchronously (C-30/C-31, H-6.4).
 **Author:** Itay (+ agent facilitation)
 **Created:** 2026-10-15 (as 007-event-hooks), merged and renumbered 2026-10-18
 
 Cross-refs: [001](001-foundations.md), [002](002-core-facade.md), [003](003-ttl.md), [004](004-related-memories.md),
 [005](005-sync-foundations.md), [006](006-ui-overhaul-engine.md), [007](007-settings.md), [008](008-json-envelope.md),
-[009](009-plugin-protocol.md) and its spec `docs/PLUGIN-PROTOCOL.md` (cited **PP**, revision 5).
+[009](009-plugin-protocol.md) and its spec `docs/PLUGIN-PROTOCOL.md` (cited **PP**, revision 7).
 remember-mac [003](../../remember-mac/design-logs/003-url-fetch.md) (URL fetch, moves into a plugin, §14).
 Sources: `fk-review/HOOKS-INTERFACE.md` (cited **HK**), `fk-review/SETTINGS-SCHEME.md` (**SS**), `fk-review/JSON-STYLE.md`
 (**JS**), the old draft `drafts/remember/design-logs/007-event-hooks.md` (**old 007**), `fortkeeps/PRINCIPLES.md`, and the
@@ -193,7 +194,7 @@ typedef int  (*remember_token_fn)(void *ctx, const char *helper_id, char *buf, s
   - A NULL confirm callback never counts as a confirmation (H-9.4).
   - A NULL dispatch callback leaves the outbox rows for the next CLI command or `remember sweep` (H-4.3).
   - A NULL token callback leaves only the id `env` (log 007 ST-3.2).
-- H-0.7. Builds without process support set `REMEMBER_PROCESSES=0`. Those builds return `plugin_unsupported` for `hook add`, `plugin add` of a folder, and dispatch. Writes insert no outbox rows. Built-in C-ABI plugins still filter search, and their `enabled` setting still works. Phones never run folder plugins.
+- H-0.7. Builds without process support set `REMEMBER_PROCESSES=0`. Those builds return `plugin_unsupported` for `hook add` and `plugin add` of a folder. Writes insert no outbox rows. A write that matches an enabled folder-plugin action is saved and warns `plugin_unsupported`, exit 0 (4 with `--strict`) (2026-10-25, C-23). Built-in C-ABI plugins still filter search, and their `enabled` setting still works. Phones never run folder plugins.
 - H-0.8. A plugin problem during a search or a write is a warning, with exit code 0. With `--strict` or `REMEMBER_STRICT=1`, any warning gives exit code 4 `[decision:g2-03]`. Exit code 4 has no other meaning `[decision:s-09]`.
 
 ### 1. Events
@@ -260,9 +261,9 @@ typedef int  (*remember_token_fn)(void *ctx, const char *helper_id, char *buf, s
 ### 6. Pre-flight checks
 
 - H-6.1. After the commit, for each matching once-action, the engine checks that each trusted file (H-9.1) exists and matches its hash, and that `run.command[0]` is executable `[decision:hooks-exit-code-4]`, `[decision:g-29]`.
-- H-6.2. A failed check sets that recipient's state to `failed`, logs the failure, and warns `plugin_preflight_failed`, naming the plugin. Remember does not run it again by itself (H-4.8). `plugin rerun` runs it (H-5.7). The write exits 0, or 4 with `--strict`.
+- H-6.2. A failed check sets that recipient's state to `failed`, logs the failure, and warns, naming the plugin. A missing file or a `run.command[0]` that is not executable warns `plugin_preflight_failed`. A hash mismatch is its own warning, `plugin_untrusted`, and follows H-9.5 (2026-10-25, C-20). Remember does not run it again by itself (H-4.8). `plugin rerun` runs it (H-5.7). The write exits 0, or 4 with `--strict`.
 - H-6.3. When the dispatcher cannot start, the command warns `plugin_dispatch_failed`. It exits 0, or 4 with `--strict`.
-- H-6.4. Remember never waits for a handler. After a successful start, the handler owns the result. A failed run shows only in `remember plugin log` and the app toast.
+- H-6.4. Remember never waits for a handler. After a successful start, the handler owns the result. A failed run shows only in `remember plugin log` and the app toast. `plugin_action_timeout` and `plugin_action_failed` print only in a command that runs the action synchronously, for example `plugin run`. A write never waits and never prints them (2026-10-25, C-30/C-31; PP R8.16).
 
 ### 7. Synced and imported memories
 
@@ -327,8 +328,8 @@ typedef int  (*remember_token_fn)(void *ctx, const char *helper_id, char *buf, s
   2. **Chain.** Load the full rows of the pool once. Send each filter only the fields in its `needs`. Run the `search.results` chain on the pool (#435) `[decision:s-16]`. Each filter returns ids, scores and an optional note.
   3. **Result.** Keep the chain's order. Drop ids that do not exist or are in Deleted. Apply the limit: `--limit N` when given, else `remember.search.max_results` (default 20, log 007 ST-5.6, #440). `data.total` is the length before the limit.
 - H-12.3. Without enabled filters, or with `--no-filters`, both chains are empty, and the result equals today's BM25 order.
-- H-12.4. Budgets and the chain cap follow PP R9.4. Each budget and grace comes from the manifest. `remember.plugins.chain_budget` caps the chain (log 007 ST-5.5). When the chain reaches the cap, Remember does not run the remaining filters. Their status is `skipped` with reason `chain_capped`. There is no `time_budget_capped` warning (log 007 ST-7.12; 2026-10-22, M-22 A, `decision:2026-10-22-M-22`): a budget larger than the time left in the chain cap is clipped silently, and the clipped value is the `budget_ms` Remember sends. A filter's `cold_start_grace` defaults to 10 s, must be 1 ms to 30 s (`0ms` makes the manifest invalid), and `plugin status` shows it next to `budget`. `settings set` on a budget or grace key is `setting_unknown` (exit 2) with the fix `Budgets and cold-start grace are set by the plugin's manifest. Raise remember.plugins.chain_budget instead.` (2026-10-22, M-24 A, `decision:2026-10-22-M-24`). A cold filter that does not answer in time gives the BM25 order and `plugin_filter_cold_start`. The filter keeps loading (#509 as amended by #516).
-- H-12.5. A failed or timed-out filter is skipped, and its input passes on. The command warns with a code that names the filter (#435, #516).
+- H-12.4. Budgets and the chain cap follow PP R9.4. Each budget and grace comes from the manifest. `remember.plugins.chain_budget` caps the chain (log 007 ST-5.5). When the chain reaches the cap, Remember does not run the remaining filters. Their status is `skipped` with reason `chain_capped`, and the command warns `plugin_chain_capped`, so the user sees both (2026-10-25, D-02). There is no `time_budget_capped` warning (log 007 ST-7.12; 2026-10-22, M-22 A, `decision:2026-10-22-M-22`): a budget larger than the time left in the chain cap is clipped silently, and the clipped value is the `budget_ms` Remember sends. A filter's `cold_start_grace` defaults to 10 s, must be 1 ms to 30 s (`0ms` makes the manifest invalid), and `plugin status` shows it next to `budget`. `settings set` on a budget or grace key is `setting_unknown` (exit 2) with the fix `Budgets and cold-start grace are set by the plugin's manifest. Raise remember.plugins.chain_budget instead.` (2026-10-22, M-24 A, `decision:2026-10-22-M-24`). A cold filter that does not answer in time gives the BM25 order and `plugin_filter_cold_start`. The filter keeps loading (#509 as amended by #516).
+- H-12.5. A failed or timed-out filter is skipped, and its input passes on. The command warns with a code that names the filter (#435, #516): `plugin_filter_timeout` for a timeout, and `plugin_filter_failed` for any other failure (2026-10-25, D-08).
 - H-12.6. Every search response has `data.filters[]`: name, version, status (`applied`, `skipped`, `failed`, `timeout`), time and an optional note (#462, PP §8).
 - H-12.7. The `warnings` that a plugin sends in its replies go only to the plugin log and `remember plugin status`, never into command output (NQ-17, PP R9.21). The warnings that Remember raises about a plugin (H-12.4, H-12.5) go into command output.
 - H-12.8. Human search prints no extra line when every filter applied. `remember search --explain` prints the filter table and `ranked by <plugin>/<entry>`. A cold start prints `remember: warning: hybrid/rerank is still starting, so results are in keyword order.` (#608).
@@ -474,7 +475,7 @@ Must-pass tests (`tests/`).
 6. Filters `tags.any`, `tags.all`, prefix `*`, `match_before`, `created_by`, `updated_by`, `bins`, `not_caused_by`, `origins`: a miss inserts no row, writes no log line, and increments `skipped_filter`.
 7. A hook that writes the memory it listens for gets its own event with `REMEMBER_CAUSE_HOOK` equal to `plugin/<name>/run`.
 8. A chain of 100 hops: run 100 is `halted`, the plugin stays enabled, the write commits, `plugin_loop_halted` appears on the next command, `plugin rerun` runs it with depth 1, and `plugin rerun` of an event with no failed or halted run exits 1 `plugin_not_rerunnable`.
-9. Pre-flight: a missing script, a non-executable script and a changed hash each give exit 0 with `plugin_preflight_failed`, the memory saved, the recipient `failed`, and no run. The next `remember dispatch` does not start that recipient. `plugin rerun` does. With `--strict`, the write exits 4. A dispatcher that cannot start gives exit 0 with `plugin_dispatch_failed` (4 with `--strict`). A hook that starts and exits 3 gives exit 0 and a `failed` log line, also with `--strict`.
+9. Pre-flight: a missing script and a non-executable script each give exit 0 with `plugin_preflight_failed`; a changed hash gives exit 0 with `plugin_untrusted` (C-20); each with the memory saved, the recipient `failed`, and no run. The next `remember dispatch` does not start that recipient. `plugin rerun` does. With `--strict`, the write exits 4. A dispatcher that cannot start gives exit 0 with `plugin_dispatch_failed` (4 with `--strict`). A hook that starts and exits 3 gives exit 0 and a `failed` log line, also with `--strict`.
 10. Event data over 256 KiB: truncation order and `truncated_fields`.
 11. argv and env contain no body or tag text.
 12. A failed run is not retried. Its outbox row stays, `plugin rerun` runs it, and after 7 days the row is dropped with `dropped_stale`.
@@ -482,7 +483,7 @@ Must-pass tests (`tests/`).
 14. `memory.expired`: the first command after `expires_at` emits one event after its own commit; a second command emits nothing; a revival clears `expired_at` and a later expiry emits again; a purge of an unmarked expired row emits only `memory.purged`; the v6 migration marks already-expired rows and emits nothing; setting `expired_at` changes neither `updated_at`, the version vector nor `change_seq` (#570).
 15. Sync and import: an action with the default `origins` does not run for a sync or import event, and the log gets `skipped_source`; an action with `origins: ["local", "sync"]` gets one event per synced memory with a shared `batch_id` and `cause.origin` `sync`. `sync --hooks` runs the default-`origins` action too.
 16. `remember sweep` on a brain with no plugins sweeps and inserts no outbox rows.
-17. `REMEMBER_PROCESSES=0` build: `hook add`, `plugin add DIR` and dispatch return `plugin_unsupported`; writes insert no outbox rows; a built-in filter still runs.
+17. `REMEMBER_PROCESSES=0` build: `hook add` and `plugin add DIR` return `plugin_unsupported`; a write that matches an enabled folder-plugin action is saved and warns `plugin_unsupported`; writes insert no outbox rows; a built-in filter still runs.
 18. A sync of 1,000 memories with only default-`origins` actions inserts no outbox row.
 19. Every event's `cause.origin` matches how the change arrived. From a run (`REMEMBER_HOOK_DEPTH=1`), `settings set` fails with `setting_from_hook`; `delete --expired`, `purge`, `import` and `sweep` fail with `plugin_run_forbidden`.
 20. Three-stage search: with no filter, the result equals the BM25 order of today's `store_search` for the 006 fixture; stage 3 drops an id that a filter added but that is in Deleted.
