@@ -2,6 +2,14 @@
 
 ## Changelog
 
+- **2026-10-25 (rev 2.2, architect; Itay approved D-01, D-03 and the date answer as written).**
+  - The settings `data` objects follow log 007 ST-7.11a–7.11b: one setting object, `setting.set|reset.result` `{setting, scope, old_value, changed}` (plus `action` on reset), `settings[]`, `changes[]`, and import `rows[]`. The §2 table shows them.
+  - The settings history JSON field is `changed_at`, not `at` (§1.3).
+  - The new enum `action` is `set|tombstone|delete|none` (§1.10).
+  - Settings `list` pages 100 items by default, `history` 50, and both allow at most 1000 (§1.11).
+  - Human dates are a CLI rule, not JSON: JSON keeps RFC 3339 UTC (§1.3, log 007 ST-7.16).
+  - A bad value in `settings import` is the warning `setting_invalid`, and the row is skipped with reason `invalid_value`. An unknown key is `setting_import_skipped` with reason `unknown_key`. `settings reset --all` or `--namespace` without `--yes` fails with `confirmation_required`.
+  - PLUGIN-PROTOCOL is revision 7.
 - **2026-10-22 (rev 2.1, Interface).** Applies Itay's M-22 A, M-23 A and M-24 A.
   - `time_budget_capped` is gone. A budget larger than the time left in the chain cap is clipped silently, and the clipped value is the `budget_ms` that Remember sends.
   - The CLI warning `flag_meaning_changed` is added (§1.8a, §1.10).
@@ -79,7 +87,8 @@ Each rule states the rule, says why, and gives a correct example (✓) and a wro
 
 - Rule: an instant is an RFC 3339 UTC string with `Z` and exactly 3 fraction digits, in a field ending in `_at`. A calendar date is `YYYY-MM-DD`, in a field ending in `_on`.
 - Input accepts any RFC 3339 offset and normalizes it. Output is always canonical. JSON has no epoch numbers and no local time.
-- ✓ `"occurred_at":"2026-10-14T12:06:31.512Z"` · ✗ `"created":"1697461061"` · `"exported_at":"2026-10-16T08:00:00Z"`
+- ✓ `"occurred_at":"2026-10-14T12:06:31.512Z"` · ✗ `"created":"1697461061"` · `"exported_at":"2026-10-16T08:00:00Z"` · `"at":…` (settings history uses `changed_at`)
+- Human output is not JSON. It shows the short local form `21 Oct at 12:04`, with the year when it is not the current year (log 007 ST-7.16). `--json` never does.
 
 ### 1.4 Durations
 
@@ -228,7 +237,10 @@ Event (hook stdin, plugin socket, webhook):
   - `bin` = `live|expired|deleted`, plus `purged` in events only. `deleted` is the bin that users see as the **Trash** (CLI `--trash`, 010 H-16.9a);
   - `cause.origin` = `local|sync|import`;
   - filter `status` = `applied|skipped|failed|timeout`;
-  - `disabled_reason` = `user|untrusted|crash_loop|protocol_mismatch`.
+  - `disabled_reason` = `user|untrusted|crash_loop|protocol_mismatch`;
+  - settings `action` = `set|tombstone|delete|none` (reset uses `tombstone|delete|none`, history uses `set|tombstone|delete`, import rows use `set|tombstone|none`; log 007 ST-7.11b);
+  - settings import `result` = `written|unchanged|skipped|kept_local`, and `reason` = `plugin_not_installed|other_scope|layer_not_allowed|unknown_key|invalid_value`;
+  - `setting_invalid` `reason` includes `bad_prefix_shape|duplicate_prefix` (log 007 ST-7.15).
 - Warning and error codes are open too: a new code is additive. The plugin warning catalog is PP §8.2. Every plugin code starts with `plugin_` (for example `plugin_filter_timeout` and `plugin_loop_halted`), and no `hook_` code exists. CLI codes such as `flag_meaning_changed` and `deprecated_flag` are in the CLI code catalog (the API surface v1 log, #583). The error catalog is the API surface v1 log too. No `time_budget_capped` code exists (M-22 A).
 - ✓ `"bin":"deleted"` · ✗ `"bin":"trash"`, `"bin":2`, `"source":"agent"` (no `source` field, G-33)
 
@@ -237,7 +249,7 @@ Event (hook stdin, plugin socket, webhook):
 - A list command pages **by cursor only**. Request: `limit` and `cursor`. Response: `next_cursor` (an opaque string, `null` on the last page) and `has_more` (boolean), **at the top level of the envelope**, always together. `count`, the list and an optional `total` stay in `data`.
 - **Search does not page.** It returns the top `--limit` results, or `remember.search.max_results`. A search response has no `next_cursor` and no `has_more` (JE-2.11, PP R8.3).
 - **No command has `--offset`, and no envelope has `offset`** (JE-2.12). This breaks 0.2.0.
-- A bad cursor is `invalid_argument`. The names are the same everywhere: CLI `--limit` and `--cursor`, HTTP `?limit=&cursor=`, MCP `limit` and `cursor`.
+- Default page sizes: settings `list` 100, settings `history` 50, and both at most 1000 (log 007 ST-7.14). A bad cursor is `invalid_argument`. The names are the same everywhere: CLI `--limit` and `--cursor`, HTTP `?limit=&cursor=`, MCP `limit` and `cursor`.
 - Why cursors: offsets skip or repeat items while sync and agents write.
 - ✓ `{"format":"remember-message","version":1,"type":"memory.list.result","data":{"count":20,"entries":[…]},"next_cursor":"eyJ1Ijoi…","has_more":true}`
 - ✗ paging inside `data` · `"next_cursor":null,"has_more":false` on a search or a `get` · `"offset":40` · `{"page":2}`
@@ -302,8 +314,9 @@ Event (hook stdin, plugin socket, webhook):
 | CLI `--json` read, one | `get` | `E(memory.get.result)` + `data{memory{}}`, `warnings?` |
 | CLI `--json` list | `list` | `E(memory.list.result)` + `data{count, entries[], total?}`, `next_cursor`, `has_more`, `warnings?` |
 | CLI `--json` search | `search` | `E(memory.search.result)` + `data{count, total, entries[], query{original, rewritten}, ranked_by, filters[], keys{}, tags{}}`, `warnings?`. **No `next_cursor` and no `has_more`** (S-08, PP §8). |
-| CLI `--json` other lists | `tags`, `conflicts`, `settings list`, `settings history`, `plugin list`, `brain list` | `E(<noun>.list.result \| setting.history.result)` + `data{count, <plural>[]}`, `next_cursor` and `has_more` when the command pages, `warnings?` |
-| CLI `--json` single | `settings get\|explain\|set`, `plugin show\|add\|rerun`, `hook add`, `brain new-id`, `sweep`, `dispatch` | `E(<noun>.<verb>.result)` + `data{…}`, `warnings?` (for example `brain.new_id.result` `data{brain_id, previous_brain_id}`) |
+| CLI `--json` settings | `settings get\|set\|reset\|list\|history\|import` | `E(setting.<verb>.result)` + `data`: get `{setting}`; set `{setting, scope, old_value, changed}`; reset the same plus `action`; list `{count, settings[]}` and history `{count, changes[]}`, each with `next_cursor`, `has_more`; import `{count, written, unchanged, skipped, rows[]}`. `setting` = `{key, type, value, value_ms?\|value_bytes?, from, changed, layers{default, user?, brain?}}`; a history item = `{key, scope, action, old_value, new_value, updated_by, changed_at}`; an import row = `{key, scope, result, action, reason?}` (log 007 ST-7.11a–7.11b). `warnings?` |
+| CLI `--json` other lists | `tags`, `conflicts`, `plugin list`, `brain list` | `E(<noun>.list.result)` + `data{count, <plural>[]}`, `next_cursor` and `has_more` when the command pages, `warnings?` |
+| CLI `--json` single | `settings explain`, `plugin show\|add\|rerun`, `hook add`, `brain new-id`, `sweep`, `dispatch` | `E(<noun>.<verb>.result)` + `data{…}`, `warnings?` (for example `brain.new_id.result` `data{brain_id, previous_brain_id}`) |
 | CLI plugin status | `plugin status` | `E(plugin.status.result)` + `data{plugins[]}`; each item follows PP §10 `plugin-status.json`. Each filter item in `entries[]` has `budget` and an optional `cold_start_grace` (M-24 A) |
 | CLI failure | any command with `--json` | `E(<request type>.result)` + `error{code, message, fix, retryable, detail?}`, `warnings?`; `unknown.result` when no command is known; stdout only; stderr empty |
 | CLI memory object | `data.memory`, `data.entries[]` | `{id, local_id, key, body, tags[], created_by{kind,id}, updated_by{kind,id}, created_at, updated_at, expires_at, deleted_at, bin, version_vector{}, links[]}` (no `source`) |

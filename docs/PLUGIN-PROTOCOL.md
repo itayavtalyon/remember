@@ -1,6 +1,6 @@
 # Remember plugin and hook protocol, version 1 (draft)
 
-Author: Grok Bot, for Itay. Draft of 2026-10-16. Revisions 1, 2, 3 and 4 of 2026-10-18. Revision 5 of 2026-10-19 (Interface review PP-01 to PP-18 decided, FX answers applied). Amended 2026-10-22 (R2.16a, read-only settings). Revision 6 of 2026-10-22: the log 009 amendment table applied (Itay, M-06), plus the 2026-10-22 merge answers M-17 and M-19 N2/N6/N7 and the Interface warning-code fix; section 0.7. Status: **draft for Itay's approval** (Interface reviewed revision 4 in `fk-review/PLUGIN-PROTOCOL-REVIEW.md`) (decision:plugins-filter-needs requires both). The changes of each revision are in `PLUGIN-PROTOCOL-CHANGES.md`.
+Author: Grok Bot, for Itay. Draft of 2026-10-16. Revisions 1, 2, 3 and 4 of 2026-10-18. Revision 5 of 2026-10-19 (Interface review PP-01 to PP-18 decided, FX answers applied). Amended 2026-10-22 (R2.16a, read-only settings). Revision 6 of 2026-10-22: the log 009 amendment table applied (Itay, M-06), plus the 2026-10-22 merge answers M-17 and M-19 N2/N6/N7 and the Interface warning-code fix; section 0.7. Revision 7 of 2026-10-25: warning-code wording from Itay's copy-pending answers (C-20, C-23, D-02, D-08), still protocol 1; section 0.8. Status: **draft for Itay's approval** (Interface reviewed revision 4 in `fk-review/PLUGIN-PROTOCOL-REVIEW.md`) (decision:plugins-filter-needs requires both). The changes of each revision are in `PLUGIN-PROTOCOL-CHANGES.md`.
 
 Sources of truth, in priority order:
 1. Itay's locked decisions. The decisions of 2026-10-18 are in sections 0.1 to 0.4. Older decisions in his Remember DB are cited as `[key]`, for example `[decision:plugins-strikes]`.
@@ -184,6 +184,18 @@ Revision 6 applies the amendment table of log 009 (Design) and is still protocol
 | warning codes | Interface review R2 (S-01) | `hook_preflight_failed` and `hook_dispatch_failed` are `plugin_preflight_failed` and `plugin_dispatch_failed`. Section 8.2 adds `plugin_loop_halted`, `plugin_untrusted` and `plugin_dev_mode`. No `hook_` code remains. |
 | M-22 | `decision:2026-10-22-M-22` (763) | No `time_budget_capped` warning, as S-06 says. A budget above the time left in the chain cap is clipped silently; the clipped value is the `budget_ms` Remember sends (R2.13, section 8.2). Dated 2026-10-22. |
 | M-24 | `decision:2026-10-22-M-24` (765) | `cold_start_grace` defaults to 10 s, with 1 ms minimum and 30 s maximum; `plugin status` `entries[]` shows it (R2.13, R9.2, R9.3, section 10). Dated 2026-10-22. |
+
+### 0.8 Decisions of revision 7 (Itay, 2026-10-25)
+
+Revision 7 is a document revision of protocol 1. No wire shape changes (log 009 P-Q4).
+
+| Item | Decision | Summary |
+|---|---|---|
+| C-20 | copy-pending answer 5 | A hash mismatch is its own warning, `plugin_untrusted`, not a `plugin_preflight_failed` reason (R8.15, section 8.2, log 010 H-6.2). |
+| D-02 | copy-pending answer 2 | A capped chain gives both the `chain_capped` status (R8.9) and the `plugin_chain_capped` warning. |
+| D-08 | copy-pending answer 4 | The non-timeout filter failure code is exactly `plugin_filter_failed`. |
+| C-30, C-31 | Itay, 2026-10-25 | `plugin_action_timeout` and `plugin_action_failed` print only in a command that runs the action synchronously (for example `plugin run`). A write never waits (R8.16, log 010 H-6.4). |
+| C-23 | copy-pending answer 13 | In a `REMEMBER_PROCESSES=0` build, a write that matches a folder-plugin action is saved and warns `plugin_unsupported` (log 010 H-0.7). |
 
 ---
 
@@ -1271,7 +1283,7 @@ Second connection (resume, later batches, done):
 - R8.12. With `--json`, warnings go only into `warnings` on stdout. Without `--json`, the CLI prints one `remember: warning: …` line on stderr per warning (`[decision:plan16-warning-prefix-and-failure]` #409). Human search prints no extra line when every filter applied. `remember search --explain` prints the filter table (name, status, ms, note) and `ranked by <plugin>/<entry>`. A cold start prints one line: `remember: warning: hybrid/rerank is still starting, so results are in keyword order.` MCP and HTTP return the structured fields. The MCP search tool description explains `ranked_by`, with `bm25` meaning keyword order `[decision:plugin-provenance-human]` **(J7, PP-15)**.
 - R8.13. A plugin or hook problem during a search or a write is a warning, with exit code 0. With `--strict` or `REMEMBER_STRICT=1`, any warning gives exit code 4 `[decision:g2-03]`. Exit code 4 has no other meaning `[decision:s-09]`. stdout holds the normal result **(OQ-1, PP-01)**.
 - R8.14. With `--strict`, Remember returns exit code 4 when `warnings` holds at least one item, whatever its code `[decision:g2-03]`.
-- R8.15. Each of these is a warning (section 8.2): a filter fails, times out, or sends an oversize message; the chain reaches its cap; a cold filter does not answer within its grace or the chain cap, so the search falls back to the BM25 results (R9.2, SET-2); a crash loop disables a plugin; a plugin fails its pre-flight check (file exists, file is executable, hash matches); or the dispatcher cannot start. A `plugin reindex` or `plugin enable` backfill that does not finish exits 1 with `plugin_backfill_incomplete` `[decision:s-09]`.
+- R8.15. Each of these is a warning (section 8.2): a filter fails, times out, or sends an oversize message; the chain reaches its cap; a cold filter does not answer within its grace or the chain cap, so the search falls back to the BM25 results (R9.2, SET-2); a crash loop disables a plugin; a plugin fails its pre-flight check (file exists, file is executable); a plugin's code hash has no trust record (`plugin_untrusted`, revision 7); a process-less build cannot dispatch (`plugin_unsupported`, revision 7); or the dispatcher cannot start. A `plugin reindex` or `plugin enable` backfill that does not finish exits 1 with `plugin_backfill_incomplete` `[decision:s-09]`.
 - R8.16. A hook or action failure after the handler starts never changes the exit code of a write, also with `--strict`. The write records it in the plugin log and in plugin status `[principle:engine-os-agnostic]`, `[decision:hooks-never-wait]` **(NQ-3)**.
 
 ### 8.2 Warning codes
@@ -1285,14 +1297,15 @@ Under `--strict` or `REMEMBER_STRICT=1`, every code below gives exit code 4 `[de
 | `plugin_filter_failed` | OQ-28. Failed reply, malformed output, crash, or oversize message. |
 | `plugin_filter_timeout` | OQ-28. Warm budget passed. |
 | `plugin_filter_cold_start` | OQ-28, SET-2. A cold filter did not answer within its grace or the chain cap. The search fell back to the BM25 results, and the filter keeps loading. |
-| `plugin_chain_capped` | OQ-28. The chain cap stopped the chain. |
+| `plugin_chain_capped` | OQ-28. The chain cap stopped the chain. Shown together with the `chain_capped` status of each filter that did not run (R8.9, revision 7, D-02). |
 | `plugin_disabled_crash_loop` | OQ-28. 3 crashes in 10 minutes. |
-| `plugin_preflight_failed` | OQ-28 (was `hook_preflight_failed`, renamed in revision 6, S-01). File missing, not executable, or hash mismatch. |
+| `plugin_preflight_failed` | OQ-28 (was `hook_preflight_failed`, renamed in revision 6, S-01). File missing or not executable. A hash mismatch is `plugin_untrusted` (revision 7, C-20). |
 | `plugin_dispatch_failed` | OQ-28 (was `hook_dispatch_failed`, renamed in revision 6, S-01). The dispatcher could not start. |
 | `plugin_loop_halted` | Log 010 H-5.6 (M-19 N6: renamed from `plugin_chain_halted`). A cause chain reached 100, so an entry did not run. Sticky until `remember plugin rerun` or `remember plugin status --ack NAME` (M-19 N7). |
-| `plugin_untrusted` | Log 010 H-9.5. The plugin's current code hash has no trust record, so it did not run. |
-| `plugin_action_timeout` | NQ-2. A persistent action did not reply in time, in a command that waits (NQ-3). |
-| `plugin_action_failed` | NQ-2. A persistent action sent a failed reply, in a command that waits (NQ-3). |
+| `plugin_untrusted` | Log 010 H-9.5. The plugin's current code hash has no trust record, so it did not run. Includes a hash mismatch found by the pre-flight check (log 010 H-6.2, revision 7). |
+| `plugin_unsupported` | Log 010 H-0.7 (revision 7, C-23). A build without process support saved a write that matches a folder-plugin action, and nothing was dispatched. |
+| `plugin_action_timeout` | NQ-2. A persistent action did not reply in time, only in a command that runs the action synchronously, for example `plugin run` (NQ-3, revision 7). A write never prints it (R8.16). |
+| `plugin_action_failed` | NQ-2. A persistent action sent a failed reply, only in a command that runs the action synchronously, for example `plugin run` (NQ-3, revision 7). A write never prints it (R8.16). |
 | `plugin_additions_capped` | NQ-4. OQ-19. |
 | `plugin_note_truncated` | NQ-4. OQ-21. |
 | `plugin_request_trimmed` | NQ-12, CF-9. Remember trimmed the candidate pool to fit 16 MiB. |

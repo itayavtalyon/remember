@@ -2,9 +2,20 @@
 
 Before 1.0, breaking changes are clean breaks with a changelog note and no aliases. This file is that note.
 
+## Revision 7 (2026-10-25)
+
+Document revision of protocol 1 (log 009 P-Q4). No wire change. Applies Itay's copy-pending answers (`fk-review/copy-pending/ITAY-ANSWERS.md`), section 0.8:
+- C-20: a pre-flight hash mismatch warns `plugin_untrusted`. `plugin_preflight_failed` covers a missing or non-executable file only (R8.15, §8.2).
+- D-02: a capped chain warns `plugin_chain_capped` and sets status `skipped`, reason `chain_capped` (§8.2).
+- C-30/C-31: `plugin_action_timeout` and `plugin_action_failed` print only in a command that runs the action synchronously (for example `plugin run`); writes never wait (R8.16).
+- D-08: `plugin_filter_failed` is confirmed as the non-timeout filter code.
+- C-23: §8.2 adds `plugin_unsupported` as a warning for dispatch in a `REMEMBER_PROCESSES=0` build (R8.15).
+
+Validator: unchanged, and it still passes (no example changed).
+
 ## Repository note (2026-10-25)
 
-No wire change. The spec stays revision 6, protocol 1. Plan 24 extracts each schema block to `schema/plugin/v1/<$id file name>` and each example, including the §2.4 `hello` and `log_ids` plugins, to `tests/fixtures/plugin/`. `scripts/validate_plugin_spec.py` fails when a file differs from its spec block, and `--write` regenerates the files. The docs CI job runs it.
+No wire change, protocol 1. The schema and example extraction landed on revision 6: plan 24 extracts each schema block to `schema/plugin/v1/<$id file name>` and each example, including the §2.4 `hello` and `log_ids` plugins, to `tests/fixtures/plugin/`. `scripts/validate_plugin_spec.py` fails when a file differs from its spec block, and `--write` regenerates the files. The docs CI job runs it. Revision 7 (above) followed with the 2026-10-25 settings decisions; it changes no schema block or example, so the extracted files are unchanged.
 
 ## Revision 6 (2026-10-22)
 
