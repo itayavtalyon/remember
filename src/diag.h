@@ -40,6 +40,7 @@ typedef enum {
     DIAG_NOT_A_DATABASE,
     DIAG_CORRUPT,
     DIAG_IO_ERROR,
+    DIAG_SCHEMA_TOO_NEW,
     DIAG_CODE_COUNT
 } DiagCode;
 

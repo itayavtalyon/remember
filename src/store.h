@@ -33,8 +33,10 @@ typedef enum {
     STORE_ERR_SOURCE_TOO_OLD,    /* import --from-db: source user_version < 4 */
     STORE_ERR_SOURCE_TOO_NEW,    /* import --from-db: source user_version > 5 */
     STORE_ERR_UNIQUE_TAKEN,      /* accept cannot free key/hash without inventing a key */
-    STORE_ERR_STALE, /* if_version_vector is not the row's version vector; nothing was written */
-    STORE_ERR_BAD_VV /* if_version_vector is not an object of non-negative integers */
+    STORE_ERR_STALE,  /* if_version_vector is not the row's version vector; nothing was written */
+    STORE_ERR_BAD_VV, /* if_version_vector is not an object of non-negative integers */
+    STORE_ERR_SCHEMA_TOO_NEW /* brain_meta.min_reader_version is newer than this engine
+                                (007 ST-10.2): the store reads, every write refuses */
 } StoreStatus;
 
 /* Locator / list / search / tags bin. LIVE is the zero value (zero-init queries). */

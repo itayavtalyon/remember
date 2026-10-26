@@ -38,9 +38,10 @@ struct Store {
     MigrationWarning *warnings; /* this open's v6 step; nwarnings items */
     size_t nwarnings;
     ChangeSeqTx change_tx;
+    bool schema_too_new;          /* min_reader_version is newer than this engine: read only */
     bool replace_invalid_sidecar; /* device new only: invalid counts as missing */
     /* NOLINTNEXTLINE(readability-magic-numbers,cppcoreguidelines-avoid-magic-numbers) */
-    char pad_[7]; /* explicit tail padding (kept -Wpadded-clean) */
+    char pad_[6]; /* explicit tail padding (kept -Wpadded-clean) */
 };
 
 /* Directory mode for the DB parent (rwx for owner only). */
@@ -473,6 +474,9 @@ static const char k_e12_effective_sql[] =
 enum { SCHEMA_VERSION = 6, UUID_BYTES = 16, UUID_STR_LEN = STORE_DEVICE_ID_LEN };
 /* The v6 step stores this in brain_meta (007 ST-10.2, G-20). */
 static const char k_min_reader_version[] = "0.3.0";
+/* The newest schema this engine reads and writes. It is not REMEMBER_VERSION:
+   the release number moves to 0.3.0 only in plan 26 (Itay 2026-10-25). */
+static const char k_reader_version[] = "0.3.0";
 /* import --from-db accepts 4 and 5 (a v6 source is plan 23). Above that, the
    open message. */
 enum { IMPORT_MIN_USER_VERSION = 4, IMPORT_MAX_USER_VERSION = 5 };
@@ -2267,6 +2271,72 @@ static void delete_legacy_sidecar(const Store *s)
     }
 }
 
+/* MAJOR.MINOR.PATCH as three non-negative integers. -1 when s is not that. */
+static int parse_version(const char *s, long parts[3])
+{
+    enum { VERSION_PARTS = 3, VERSION_BASE = 10 };
+    const char *p = s;
+    int i = 0;
+
+    for (i = 0; i < VERSION_PARTS; i++) {
+        char *end = NULL;
+
+        if (*p < '0' || *p > '9') {
+            return -1;
+        }
+        errno = 0;
+        parts[i] = strtol(p, &end, VERSION_BASE);
+        if (errno != 0 || *end != (i < VERSION_PARTS - 1 ? '.' : '\0')) {
+            return -1;
+        }
+        p = end + 1;
+    }
+    return 0;
+}
+
+/* True when the brain asks for a newer reader than this engine. A value this
+   engine cannot parse counts as newer: it cannot promise to understand it. */
+static bool reader_too_old(const char *min_reader_version)
+{
+    long need[3] = {0, 0, 0};
+    long have[3] = {0, 0, 0};
+    int i = 0;
+
+    if (min_reader_version == NULL || parse_version(min_reader_version, need) != 0 ||
+        parse_version(k_reader_version, have) != 0) {
+        return true;
+    }
+    for (i = 0; i < 3; i++) {
+        if (need[i] != have[i]) {
+            return need[i] > have[i];
+        }
+    }
+    return false;
+}
+
+/* 007 ST-10.2: an engine older than min_reader_version opens the brain read
+   only. Writes then fail with schema_too_new; query_only backs that up. */
+static int check_reader_version(Store *s, char *err, size_t errlen)
+{
+    char *need = NULL;
+
+    if (select_text(s->db, "SELECT min_reader_version FROM brain_meta;", &need, err, errlen,
+                    &s->last) != 0) {
+        return -1;
+    }
+    s->schema_too_new = reader_too_old(need);
+    free(need);
+    if (s->schema_too_new) {
+        return exec_sql(s->db, "PRAGMA query_only = ON;", err, errlen, &s->last);
+    }
+    return 0;
+}
+
+static bool write_refused(const Store *s)
+{
+    return s->schema_too_new;
+}
+
 static int ensure_schema(Store *s, char *err, size_t errlen)
 {
     int version = 0;
@@ -2375,7 +2445,7 @@ Store *store_open_opts(const char *path, const StoreOpenOpts *opts, char *err, s
     if (apply_pragmas(db, timeout_ms, err, errlen, &s->last) != 0) {
         goto cleanup_fail;
     }
-    if (ensure_schema(s, err, errlen) != 0) {
+    if (ensure_schema(s, err, errlen) != 0 || check_reader_version(s, err, errlen) != 0) {
         goto cleanup_fail;
     }
 
@@ -2492,6 +2562,10 @@ const char *store_status_message(StoreStatus st)
         return "memory changed since it was read";
     case STORE_ERR_BAD_VV:
         return "invalid version vector";
+    case STORE_ERR_SCHEMA_TOO_NEW:
+        /* 007 ST-10.2, locked. The JSON fix waits on COPY-PENDING C-01. */
+        return "this brain was written by a newer remember. You can read it. Upgrade to write to "
+               "it.";
     default:
         return "store error";
     }
@@ -3862,6 +3936,9 @@ StoreStatus store_add(Store *s, const char *body, const char *body_hash, const c
     if (ntags > 0U && tags == NULL) {
         return STORE_ERR_INTERNAL;
     }
+    if (write_refused(s)) {
+        return STORE_ERR_SCHEMA_TOO_NEW;
+    }
     memset(&s->last, 0, sizeof(s->last));
     if (exec_sql(s->db, "BEGIN IMMEDIATE;", err_unused, 0U, &s->last) != 0) {
         return STORE_ERR_SQLITE;
@@ -5009,6 +5086,9 @@ StoreStatus store_repair_search_index(Store *s, size_t *out_entries)
     if (s == NULL || s->db == NULL || out_entries == NULL) {
         return STORE_ERR_INTERNAL;
     }
+    if (write_refused(s)) {
+        return STORE_ERR_SCHEMA_TOO_NEW;
+    }
     memset(&s->last, 0, sizeof(s->last));
     if (check_base_tables(s->db, &s->last) != 0) {
         return STORE_ERR_SQLITE;
@@ -5133,6 +5213,9 @@ static StoreStatus soft_delete_tx(Store *s, long long id_or_zero, const char *ke
     }
     memset(out, 0, sizeof(*out));
     memset(&cur, 0, sizeof(cur));
+    if (write_refused(s)) {
+        return STORE_ERR_SCHEMA_TOO_NEW;
+    }
     memset(&s->last, 0, sizeof(s->last));
     if (exec_sql(s->db, "BEGIN IMMEDIATE;", err_unused, 0U, &s->last) != 0) {
         return STORE_ERR_SQLITE;
@@ -5175,6 +5258,9 @@ static StoreStatus hard_delete_tx(Store *s, long long id_or_zero, const char *ke
     memset(out_deleted, 0, sizeof(*out_deleted));
     if (bin == STORE_BIN_LIVE) {
         return STORE_ERR_INTERNAL;
+    }
+    if (write_refused(s)) {
+        return STORE_ERR_SCHEMA_TOO_NEW;
     }
     memset(&s->last, 0, sizeof(s->last));
     if (exec_sql(s->db, "BEGIN IMMEDIATE;", err_unused, 0U, &s->last) != 0) {
@@ -5421,6 +5507,9 @@ StoreStatus store_update(Store *s, long long id, const StoreUpdate *u, const cha
 
     memset(&current, 0, sizeof(current));
     memset(out_entry, 0, sizeof(*out_entry));
+    if (write_refused(s)) {
+        return STORE_ERR_SCHEMA_TOO_NEW;
+    }
     memset(&s->last, 0, sizeof(s->last));
 
     if (exec_sql(s->db, "BEGIN IMMEDIATE;", err_unused, 0U, &s->last) != 0) {
@@ -5501,6 +5590,9 @@ StoreStatus store_purge(Store *s, StoreBin bin, const char *now, Entry **out_ent
     }
     *out_entries = NULL;
     *out_count = 0U;
+    if (write_refused(s)) {
+        return STORE_ERR_SCHEMA_TOO_NEW;
+    }
     memset(&s->last, 0, sizeof(s->last));
 
     if (exec_sql(s->db, "BEGIN IMMEDIATE;", err_unused, 0U, &s->last) != 0) {
@@ -6012,6 +6104,9 @@ StoreStatus store_link(Store *s, StoreEdge edge, StoreEdgeKind kind, const char 
         stored_to = (from_id < to_id) ? to_id : from_id;
     }
 
+    if (write_refused(s)) {
+        return STORE_ERR_SCHEMA_TOO_NEW;
+    }
     memset(&s->last, 0, sizeof(s->last));
     if (exec_sql(s->db, "BEGIN IMMEDIATE;", err_unused, 0U, &s->last) != 0) {
         return STORE_ERR_SQLITE;
@@ -6171,6 +6266,9 @@ StoreStatus store_unlink(Store *s, long long from_id, long long to_id, const Sto
         }
     }
 
+    if (write_refused(s)) {
+        return STORE_ERR_SCHEMA_TOO_NEW;
+    }
     memset(&s->last, 0, sizeof(s->last));
     if (exec_sql(s->db, "BEGIN IMMEDIATE;", err_unused, 0U, &s->last) != 0) {
         return STORE_ERR_SQLITE;
@@ -6624,6 +6722,9 @@ StoreStatus store_rekey(Store *s, long long id, RekeyKeys keys, StoreBin bin, co
     }
     memset(&current, 0, sizeof(current));
     memset(out_entry, 0, sizeof(*out_entry));
+    if (write_refused(s)) {
+        return STORE_ERR_SCHEMA_TOO_NEW;
+    }
     memset(&s->last, 0, sizeof(s->last));
 
     if (exec_sql(s->db, "BEGIN IMMEDIATE;", err_unused, 0U, &s->last) != 0) {
@@ -8303,6 +8404,9 @@ StoreStatus store_import(Store *dst, const char *src_path, const char *now,
         now == NULL || out_counts == NULL) {
         return STORE_ERR_INTERNAL;
     }
+    if (write_refused(dst)) {
+        return STORE_ERR_SCHEMA_TOO_NEW;
+    }
     memset(&dst->last, 0, sizeof(dst->last));
     rc = sqlite3_open_v2(src_path, &src, SQLITE_OPEN_READONLY, NULL);
     if (rc != SQLITE_OK) {
@@ -9106,6 +9210,9 @@ StoreStatus store_conflict_accept(Store *s, long long conflict_id, StoreConflict
     *out_count = 0U;
     memset(&local, 0, sizeof(local));
     memset(&incoming, 0, sizeof(incoming));
+    if (write_refused(s)) {
+        return STORE_ERR_SCHEMA_TOO_NEW;
+    }
     memset(&s->last, 0, sizeof(s->last));
 
     if (exec_sql(s->db, "BEGIN IMMEDIATE;", err_unused, 0U, &s->last) != 0) {

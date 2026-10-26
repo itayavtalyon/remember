@@ -218,6 +218,8 @@ DiagCode code_for_store_status(StoreStatus st)
         return DIAG_STALE;
     case STORE_ERR_BAD_VV:
         return DIAG_USAGE;
+    case STORE_ERR_SCHEMA_TOO_NEW:
+        return DIAG_SCHEMA_TOO_NEW;
     default:
         return DIAG_INTERNAL;
     }

@@ -917,6 +917,130 @@ TEST(schema_v6_an_invalid_old_device_id_file_is_an_error)
     free(db);
 }
 
+/* ---- schema_too_new (007 ST-10.2) ----------------------------------------- */
+
+/* A brain asking for a newer reader opens; every read works; every write is
+   refused and changes nothing. */
+TEST(schema_v6_a_newer_min_reader_version_makes_the_brain_read_only)
+{
+    char *db = make_temp_db_path();
+    char *peer = make_temp_db_path();
+    Store *s = NULL;
+    Entry e;
+    Entry *rows = NULL;
+    size_t nrows = 0U;
+    StoreAddAction act = STORE_ADD_CREATED;
+    StoreUpdate u;
+    StoreNeighbor stub;
+    StoreNeighbor *stubs = NULL;
+    size_t nstubs = 0U;
+    StoreLinkAction action = STORE_LINK_CREATED;
+    StoreImportCounts counts;
+    size_t entries = 0U;
+    ListQuery q;
+    PageResult page;
+
+    ASSERT_TRUE(db != NULL && peer != NULL);
+    s = given_open(db);
+    (void)given_added(s, "one", k_hash_one, NULL);
+    (void)given_added(s, "two", k_hash_two, NULL);
+    store_close(s);
+    store_close(given_open(peer));
+    harness_make_v5_source(peer);
+    exec_sql(db, "UPDATE brain_meta SET min_reader_version = '0.4.0';");
+
+    s = given_open(db);
+    memset(&e, 0, sizeof(e));
+    ASSERT_EQ_STATUS(store_get(s, 1, STORE_BIN_LIVE, k_now, &e), STORE_OK);
+    store_entry_free(&e);
+    memset(&q, 0, sizeof(q));
+    q.limit = V6_SEARCH_LIMIT;
+    page = store_list(s, &q, k_now);
+    ASSERT_EQ_INT((int)page.total, 2);
+    free_page(page);
+
+    ASSERT_EQ_STATUS(
+        store_add(s, "three", k_hash_one, NULL, NULL, 0U, "human", NULL, k_now, &act, &e),
+        STORE_ERR_SCHEMA_TOO_NEW);
+    memset(&u, 0, sizeof(u));
+    u.set_tags = true;
+    ASSERT_EQ_STATUS(store_update(s, 1, &u, k_now, &e, NULL), STORE_ERR_SCHEMA_TOO_NEW);
+    ASSERT_EQ_STATUS(store_soft_delete_by_id(s, 1, k_now, &e), STORE_ERR_SCHEMA_TOO_NEW);
+    ASSERT_EQ_STATUS(store_hard_delete_by_id(s, 1, STORE_BIN_DELETED, k_now, &e),
+                     STORE_ERR_SCHEMA_TOO_NEW);
+    ASSERT_EQ_STATUS(store_purge(s, STORE_BIN_DELETED, k_now, &rows, &nrows),
+                     STORE_ERR_SCHEMA_TOO_NEW);
+    ASSERT_EQ_STATUS(store_link(s, (StoreEdge){.from_id = 1, .to_id = 2}, STORE_EDGE_CITES, k_now,
+                                &action, &stub),
+                     STORE_ERR_SCHEMA_TOO_NEW);
+    ASSERT_EQ_STATUS(store_unlink(s, 1, 2, NULL, k_now, &stubs, &nstubs), STORE_ERR_SCHEMA_TOO_NEW);
+    ASSERT_EQ_STATUS(store_rekey(s, 1, (RekeyKeys){.key_or_null = NULL, .new_key_or_null = "k"},
+                                 STORE_BIN_LIVE, k_now, &e, NULL),
+                     STORE_ERR_SCHEMA_TOO_NEW);
+    ASSERT_EQ_STATUS(store_import(s, peer, k_now, &counts), STORE_ERR_SCHEMA_TOO_NEW);
+    ASSERT_EQ_STATUS(store_conflict_accept(s, 1, STORE_KEEP_LOCAL, k_now, &rows, &nrows),
+                     STORE_ERR_SCHEMA_TOO_NEW);
+    ASSERT_EQ_STATUS(store_repair_search_index(s, &entries), STORE_ERR_SCHEMA_TOO_NEW);
+    ASSERT_STREQ(store_status_message(STORE_ERR_SCHEMA_TOO_NEW),
+                 "this brain was written by a newer remember. You can read it. Upgrade to write "
+                 "to it.");
+    store_close(s);
+    assert_seqs(db, "1:1 2:2", "2");
+    free(db);
+    free(peer);
+}
+
+/* The comparison is numeric per part; a value this engine cannot parse counts
+   as newer. Equal or older reads and writes. */
+TEST(schema_v6_min_reader_version_compares_each_part)
+{
+    static const struct {
+        const char *value;
+        int refused;
+        char pad_[4];
+    } k_cases[] = {
+        {"0.3.0", 0, {0}},
+        {"0.2.9", 0, {0}},
+        {"0.2.10", 0, {0}},
+        {"0.3.1", 1, {0}},
+        {"0.10.0", 1, {0}},
+        {"1.0.0", 1, {0}},
+        {"0.3", 1, {0}},
+        {"0.3.0.1", 1, {0}},
+        {"v0.3.0", 1, {0}},
+        {"0.3.x", 1, {0}},
+        {"", 1, {0}},
+        {"0.-1.0", 1, {0}},
+        {"99999999999999999999.0.0", 1, {0}},
+    };
+    char *db = make_temp_db_path();
+    size_t i = 0;
+
+    ASSERT_TRUE(db != NULL);
+    store_close(given_open(db));
+    for (i = 0; i < sizeof(k_cases) / sizeof(k_cases[0]); i++) {
+        char sql[V6_SQL_BUF];
+        Store *s = NULL;
+        StoreStatus st = STORE_OK;
+        Entry e;
+        StoreAddAction act = STORE_ADD_CREATED;
+        char hash[REMEMBER_SHA256_HEX_LEN + 1];
+
+        (void)snprintf(sql, sizeof(sql), "UPDATE brain_meta SET min_reader_version = '%s';",
+                       k_cases[i].value);
+        exec_sql(db, sql);
+        (void)snprintf(sql, sizeof(sql), "body %zu", i);
+        body_hash_hex(sql, strlen(sql), hash);
+        s = given_open(db);
+        memset(&e, 0, sizeof(e));
+        st = store_add(s, sql, hash, NULL, NULL, 0U, "human", NULL, k_now, &act, &e);
+        store_entry_free(&e);
+        store_close(s);
+        ASSERT_EQ_STATUS(st, k_cases[i].refused ? STORE_ERR_SCHEMA_TOO_NEW : STORE_OK);
+    }
+    free(db);
+}
+
 #ifdef REMEMBER_TEST_HOOKS
 /* The v5 shape is still there: user_version, the old columns, the E12 tables. */
 static void assert_still_v5(const char *db)
@@ -956,8 +1080,18 @@ static void sweep_v5_open(FaultSetter set_fault)
         s = store_open(db, err, sizeof(err));
         set_fault(-1);
         if (s == NULL) {
+            char *version = harness_sqlite_query_line(db, "PRAGMA user_version;");
+
             ASSERT_TRUE(err[0] != '\0');
-            assert_still_v5(db);
+            /* All of v6 or none of it: a fault after COMMIT (the reader-version
+               read) leaves the finished v6 file. */
+            if (version != NULL && strcmp(version, "6") == 0) {
+                assert_query_is(
+                    db, (QueryExpect){.sql = "SELECT value FROM settings;", .want = "[\"a:\"]"});
+            } else {
+                assert_still_v5(db);
+            }
+            free(version);
         }
     }
     ASSERT_TRUE(s != NULL);
@@ -1078,6 +1212,8 @@ void register_schema_v6_tests(void)
     RUN_TEST(schema_v6_the_device_id_moves_into_the_brain_folder);
     RUN_TEST(schema_v6_a_v6_open_finishes_a_half_done_move);
     RUN_TEST(schema_v6_an_invalid_old_device_id_file_is_an_error);
+    RUN_TEST(schema_v6_a_newer_min_reader_version_makes_the_brain_read_only);
+    RUN_TEST(schema_v6_min_reader_version_compares_each_part);
 #ifdef REMEMBER_TEST_HOOKS
     RUN_TEST(schema_v6_exec_fault_anywhere_keeps_v5);
     RUN_TEST(schema_v6_prepare_fault_anywhere_keeps_v5);
@@ -1127,6 +1263,44 @@ TEST(schema_v6_cli_prints_setting_invalid_for_a_left_out_prefix)
     free(db2);
 }
 
+/* 007 ST-10.2 plain line. The JSON fix waits on COPY-PENDING C-01, so the JSON
+   check reads only the code. */
+TEST(schema_v6_cli_a_write_to_a_newer_brain_prints_schema_too_new)
+{
+    static const char k_plain[] = "remember: this brain was written by a newer remember. You can "
+                                  "read it. Upgrade to write to it.\n";
+    char *db = make_temp_db_path();
+    const char *add[] = {"add", "seed"};
+    const char *list[] = {"list"};
+    const char *add_json[] = {"--json-errors", "add", "another"};
+    CmdResult r;
+
+    ASSERT_TRUE(db != NULL);
+    r = run_remember(db, add, sizeof(add) / sizeof(add[0]), NULL);
+    ASSERT_EQ_INT(r.exit_code, 0);
+    cmd_result_free(&r);
+    exec_sql(db, "UPDATE brain_meta SET min_reader_version = '0.4.0';");
+
+    r = run_remember(db, list, sizeof(list) / sizeof(list[0]), NULL);
+    ASSERT_EQ_INT(r.exit_code, 0);
+    ASSERT_STR_CONTAINS(r.out, "seed");
+    ASSERT_STREQ(r.err, "");
+    cmd_result_free(&r);
+
+    r = run_remember(db, add, sizeof(add) / sizeof(add[0]), NULL);
+    ASSERT_EQ_INT(r.exit_code, 1);
+    ASSERT_STREQ(r.out, "");
+    ASSERT_STREQ(r.err, k_plain);
+    cmd_result_free(&r);
+
+    r = run_remember(db, add_json, sizeof(add_json) / sizeof(add_json[0]), NULL);
+    ASSERT_EQ_INT(r.exit_code, 1);
+    ASSERT_STR_CONTAINS(r.err, "\"code\":\"schema_too_new\"");
+    cmd_result_free(&r);
+    assert_query_is(db, (QueryExpect){.sql = "SELECT COUNT(*) FROM entries;", .want = "1"});
+    free(db);
+}
+
 #ifdef REMEMBER_TEST_VFS
 /* M3: a failing VFS write anywhere in the v6 step leaves user_version 5 and
    the old device id file; the first open with no fault migrates. */
@@ -1171,6 +1345,7 @@ TEST(schema_v6_cli_a_failing_write_keeps_v5_and_the_old_device_id)
 void register_schema_v6_cli_tests(void)
 {
     RUN_TEST(schema_v6_cli_prints_setting_invalid_for_a_left_out_prefix);
+    RUN_TEST(schema_v6_cli_a_write_to_a_newer_brain_prints_schema_too_new);
 #ifdef REMEMBER_TEST_VFS
     RUN_TEST(schema_v6_cli_a_failing_write_keeps_v5_and_the_old_device_id);
 #endif

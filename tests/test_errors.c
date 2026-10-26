@@ -72,6 +72,7 @@ static const char *const k_error_codes[] = {
     "not_a_database",
     "corrupt",
     "io_error",
+    "schema_too_new",
 };
 
 /* Unit tests pick the --json-errors mode per call; the flag is cleared after. */
@@ -3505,7 +3506,7 @@ TEST(cli_repair_read_fault_during_check_is_corrupt)
     ASSERT_EQ_INT(r.exit_code, 0);
     cmd_result_free(&r);
 
-    ASSERT_EQ_INT(setenv("REMEMBER_TEST_FAIL_READ", "2", 1), 0);
+    ASSERT_EQ_INT(setenv("REMEMBER_TEST_FAIL_READ", "7", 1), 0);
     r = run_remember(db, repair, sizeof(repair) / sizeof(repair[0]), NULL);
     ASSERT_EQ_INT(unsetenv("REMEMBER_TEST_FAIL_READ"), 0);
     ASSERT_EQ_INT(r.exit_code, 1);
@@ -3513,7 +3514,7 @@ TEST(cli_repair_read_fault_during_check_is_corrupt)
     ASSERT_STREQ(r.err, k_plain);
     cmd_result_free(&r);
 
-    ASSERT_EQ_INT(setenv("REMEMBER_TEST_FAIL_READ", "2", 1), 0);
+    ASSERT_EQ_INT(setenv("REMEMBER_TEST_FAIL_READ", "7", 1), 0);
     r = run_remember(db, json, sizeof(json) / sizeof(json[0]), NULL);
     ASSERT_EQ_INT(unsetenv("REMEMBER_TEST_FAIL_READ"), 0);
     (void)snprintf(

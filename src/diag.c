@@ -44,6 +44,7 @@ static const char *const k_error_codes[DIAG_CODE_COUNT] = {
     [DIAG_NOT_A_DATABASE] = "not_a_database",
     [DIAG_CORRUPT] = "corrupt",
     [DIAG_IO_ERROR] = "io_error",
+    [DIAG_SCHEMA_TOO_NEW] = "schema_too_new",
 };
 
 static const char *const k_warning_codes[DIAG_WARN_COUNT] = {
