@@ -5,7 +5,6 @@
 #include "sqlite3.h"
 
 #include <errno.h>
-#include <fcntl.h>
 #include <limits.h>
 #include <stdbool.h>
 #include <stdint.h>
@@ -2089,18 +2088,17 @@ cleanup:
 static int integrity_ok(sqlite3 *db, char *err, size_t errlen, StoreError *serr)
 {
     char *answer = NULL;
-    bool sound = false;
 
     if (select_text(db, "PRAGMA integrity_check;", &answer, err, errlen, serr) != 0) {
         return -1;
     }
-    sound = (answer != NULL && strcmp(answer, "ok") == 0);
-    free(answer);
-    if (!sound) {
-        set_err(err, errlen, "migration failed the integrity check");
-        return -1;
+    if (answer != NULL && strcmp(answer, "ok") == 0) {
+        free(answer);
+        return 0;
     }
-    return 0;
+    free(answer);
+    set_err(err, errlen, "migration failed the integrity check");
+    return -1;
 }
 
 /* Inside the caller's transaction, on a v5-shaped brain with a bound device id:
