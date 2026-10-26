@@ -98,6 +98,10 @@ __attribute__((returns_nonnull)) char *harness_side_path(const char *db_path, co
 /* The device id file, <db_path>.d/device_id (heap; caller frees). Never NULL. */
 __attribute__((returns_nonnull)) char *harness_sidecar_path(const char *db_path);
 
+/* Copy the file at from to to, replacing to. 0 on success, -1 on any failure.
+   In-process, so no path goes through a shell. */
+int harness_copy_file(const char *from, const char *to);
+
 /* First line of path without its newline (heap), or NULL when there is none. */
 char *harness_read_line(const char *path);
 

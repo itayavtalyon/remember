@@ -7,6 +7,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
 /* mkdtemp: Darwin in unistd.h; glibc via stdlib + _POSIX_C_SOURCE. */
 #ifdef __APPLE__
 #include <unistd.h>
@@ -15,7 +16,6 @@
 enum {
     FACADE_ARGV_MAX = 32, /* max argv slots built for remember_run */
     FACADE_PATH_BUF = 192,
-    FACADE_CMD_BUF = 400,
     FACADE_SQL_BUF = 320,
     FACADE_SIDE_BUF = 208,
     FACADE_LINE_BUF = 80
@@ -575,11 +575,7 @@ TEST(facade_conflicts_matches_cli)
     r = run_remember(local, add, sizeof(add) / sizeof(add[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 0);
     cmd_result_free(&r);
-    {
-        char cp[FACADE_CMD_BUF];
-        (void)snprintf(cp, sizeof(cp), "cp '%s' '%s'", local, foreign);
-        ASSERT_EQ_INT(system(cp), 0);
-    }
+    ASSERT_EQ_INT(harness_copy_file(local, foreign), 0);
     /* The real sha256("incoming"): import rejects a forged hash. */
     free(harness_sqlite_query_line(
         foreign,
@@ -636,11 +632,7 @@ TEST(facade_conflict_accept_matches_cli)
     r = run_remember(local1, add, sizeof(add) / sizeof(add[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 0);
     cmd_result_free(&r);
-    {
-        char cp[FACADE_CMD_BUF];
-        (void)snprintf(cp, sizeof(cp), "cp '%s' '%s'", local1, foreign);
-        ASSERT_EQ_INT(system(cp), 0);
-    }
+    ASSERT_EQ_INT(harness_copy_file(local1, foreign), 0);
     /* The real sha256("incoming"): import rejects a forged hash. */
     free(harness_sqlite_query_line(
         foreign,
@@ -663,12 +655,17 @@ TEST(facade_conflict_accept_matches_cli)
     ASSERT_EQ_INT(r.exit_code, 0);
     cmd_result_free(&r);
     {
-        char cp[FACADE_CMD_BUF];
         /* Same writer id, or accept bumps a freshly minted id and the vectors differ. */
-        (void)snprintf(cp, sizeof(cp),
-                       "cp '%s' '%s' && mkdir -p '%s.d' && cp '%s.d/device_id' '%s.d/device_id'",
-                       local1, local2, local2, local1, local2);
-        ASSERT_EQ_INT(system(cp), 0);
+        char *dir2 = harness_side_path(local2, ".d");
+        char *id1 = harness_sidecar_path(local1);
+        char *id2 = harness_sidecar_path(local2);
+
+        ASSERT_EQ_INT(harness_copy_file(local1, local2), 0);
+        ASSERT_EQ_INT(mkdir(dir2, S_IRWXU), 0);
+        ASSERT_EQ_INT(harness_copy_file(id1, id2), 0);
+        free(id2);
+        free(id1);
+        free(dir2);
     }
 
     r = run_remember(local1, accept, sizeof(accept) / sizeof(accept[0]), NULL);

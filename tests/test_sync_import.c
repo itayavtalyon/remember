@@ -10,7 +10,7 @@
 #include <unistd.h>
 
 /* Stage 5: import --from-db + conflicts + conflict accept (005 Round 7). */
-// NOLINTBEGIN(readability-identifier-length,cppcoreguidelines-avoid-magic-numbers,readability-magic-numbers,android-cloexec-fopen,bugprone-command-processor,cert-env33-c,concurrency-mt-unsafe,bugprone-unchecked-string-to-number-conversion,cert-err34-c)
+// NOLINTBEGIN(readability-identifier-length,cppcoreguidelines-avoid-magic-numbers,readability-magic-numbers,android-cloexec-fopen,bugprone-unchecked-string-to-number-conversion,cert-err34-c)
 
 enum { SYNC_BUF = 40, PATH_BUF = 192, SQL_BUF = 512, VV_BUF = 160 };
 
@@ -517,11 +517,7 @@ TEST(cli_import_identical_automerge_concurrent_conflict)
     cmd_result_free(&r);
 
     /* Copy DB only (no sidecar) so foreign is a distinct replica file. */
-    {
-        char cmd[PATH_BUF * 2];
-        (void)snprintf(cmd, sizeof(cmd), "cp '%s' '%s'", local, foreign);
-        ASSERT_EQ_INT(system(cmd), 0);
-    }
+    ASSERT_EQ_INT(harness_copy_file(local, foreign), 0);
 
     /* Identical content + concurrent VV → auto-merge (no conflict). */
     dev = read_sidecar_id(local);
@@ -718,11 +714,7 @@ TEST(cli_conflict_accept_keep_both_concurrent_remints)
     ASSERT_EQ_INT(r.exit_code, 0);
     ASSERT_EQ_INT(json_copy_quoted(r.out, "sync_id", sync_orig, sizeof(sync_orig)), 0);
     cmd_result_free(&r);
-    {
-        char cmd[PATH_BUF * 2];
-        (void)snprintf(cmd, sizeof(cmd), "cp '%s' '%s'", local, foreign);
-        ASSERT_EQ_INT(system(cmd), 0);
-    }
+    ASSERT_EQ_INT(harness_copy_file(local, foreign), 0);
     dev = read_sidecar_id(local);
     ASSERT_TRUE(dev != NULL);
     force_body(foreign, 1, "incoming-body");
@@ -843,11 +835,7 @@ TEST(cli_import_incoming_dominates_updates)
     r = run_remember(local, add, sizeof(add) / sizeof(add[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 0);
     cmd_result_free(&r);
-    {
-        char cmd[PATH_BUF * 2];
-        (void)snprintf(cmd, sizeof(cmd), "cp '%s' '%s'", local, foreign);
-        ASSERT_EQ_INT(system(cmd), 0);
-    }
+    ASSERT_EQ_INT(harness_copy_file(local, foreign), 0);
     force_body(foreign, 1, "new");
     dev = read_sidecar_id(local);
     ASSERT_TRUE(dev != NULL);
@@ -947,11 +935,7 @@ TEST(cli_conflict_accept_keep_local_and_incoming)
     r = run_remember(local, add, sizeof(add) / sizeof(add[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 0);
     cmd_result_free(&r);
-    {
-        char cmd[PATH_BUF * 2];
-        (void)snprintf(cmd, sizeof(cmd), "cp '%s' '%s'", local, foreign);
-        ASSERT_EQ_INT(system(cmd), 0);
-    }
+    ASSERT_EQ_INT(harness_copy_file(local, foreign), 0);
     force_body(foreign, 1, "incoming-body");
     dev = read_sidecar_id(local);
     ASSERT_TRUE(dev != NULL);
@@ -1128,12 +1112,8 @@ TEST(cli_import_insert_and_accept_incoming_resync_the_fts_key)
     r = run_remember(local, add, sizeof(add) / sizeof(add[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 0);
     cmd_result_free(&r);
-    {
-        char cmd[PATH_BUF * 2];
-        /* The copy has no sidecar, so its writes count under a new device id. */
-        (void)snprintf(cmd, sizeof(cmd), "cp '%s' '%s'", local, foreign);
-        ASSERT_EQ_INT(system(cmd), 0);
-    }
+    /* The copy has no sidecar, so its writes count under a new device id. */
+    ASSERT_EQ_INT(harness_copy_file(local, foreign), 0);
     r = run_remember(foreign, add_new, sizeof(add_new) / sizeof(add_new[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 0);
     cmd_result_free(&r);
@@ -1183,11 +1163,7 @@ TEST(cli_import_local_dominates_unchanged)
     r = run_remember(local, add, sizeof(add) / sizeof(add[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 0);
     cmd_result_free(&r);
-    {
-        char cmd[PATH_BUF * 2];
-        (void)snprintf(cmd, sizeof(cmd), "cp '%s' '%s'", local, foreign);
-        ASSERT_EQ_INT(system(cmd), 0);
-    }
+    ASSERT_EQ_INT(harness_copy_file(local, foreign), 0);
     force_body(foreign, 1, "stale-foreign");
     dev = read_sidecar_id(local);
     ASSERT_TRUE(dev != NULL);
@@ -1291,11 +1267,7 @@ TEST(cli_import_conflict_snapshot_json_escapes)
     r = run_remember(local, add, sizeof(add) / sizeof(add[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 0);
     cmd_result_free(&r);
-    {
-        char cmd[PATH_BUF * 2];
-        (void)snprintf(cmd, sizeof(cmd), "cp '%s' '%s'", local, foreign);
-        ASSERT_EQ_INT(system(cmd), 0);
-    }
+    ASSERT_EQ_INT(harness_copy_file(local, foreign), 0);
     force_body(foreign, 1, "other");
     dev = read_sidecar_id(local);
     ASSERT_TRUE(dev != NULL);
@@ -1504,11 +1476,7 @@ TEST(cli_import_incoming_dominates_keyless_hash_clash)
     cmd_result_free(&r);
 
     /* Foreign has only the sync_s row (no occupant) so keyless+hash is legal there. */
-    {
-        char cmd[PATH_BUF * 2];
-        (void)snprintf(cmd, sizeof(cmd), "cp '%s' '%s'", local, foreign);
-        ASSERT_EQ_INT(system(cmd), 0);
-    }
+    ASSERT_EQ_INT(harness_copy_file(local, foreign), 0);
     free(harness_sqlite_query_line(foreign, "DELETE FROM entries WHERE key IS NULL;"));
     {
         /* A real hash clash: the same body, so the same hash. */
@@ -1585,11 +1553,7 @@ TEST(cli_conflict_accept_incoming_many_tags)
     r = run_remember(local, add, sizeof(add) / sizeof(add[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 0);
     cmd_result_free(&r);
-    {
-        char cmd[PATH_BUF * 2];
-        (void)snprintf(cmd, sizeof(cmd), "cp '%s' '%s'", local, foreign);
-        ASSERT_EQ_INT(system(cmd), 0);
-    }
+    ASSERT_EQ_INT(harness_copy_file(local, foreign), 0);
     force_body(foreign, 1, "body-in");
     /* Keep the 10 tags on foreign; only body differs for concurrent_vv. */
     dev = read_sidecar_id(local);
@@ -1696,11 +1660,7 @@ TEST(cli_import_incoming_dominates_expires_deleted_keyless)
     ASSERT_EQ_INT(r.exit_code, 0);
     ASSERT_EQ_INT(json_copy_quoted(r.out, "sync_id", sync, sizeof(sync)), 0);
     cmd_result_free(&r);
-    {
-        char cmd[PATH_BUF * 2];
-        (void)snprintf(cmd, sizeof(cmd), "cp '%s' '%s'", local, foreign);
-        ASSERT_EQ_INT(system(cmd), 0);
-    }
+    ASSERT_EQ_INT(harness_copy_file(local, foreign), 0);
     /* Soft-deleted occupies deleted bin; expires cleared on soft-delete in product,
        but import apply still binds whatever foreign sends. */
     free(harness_sqlite_query_line(
@@ -1763,11 +1723,7 @@ TEST(cli_import_bad_vv_row_is_rejected)
     r = run_remember(local, add, sizeof(add) / sizeof(add[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 0);
     cmd_result_free(&r);
-    {
-        char cmd[PATH_BUF * 2];
-        (void)snprintf(cmd, sizeof(cmd), "cp '%s' '%s'", local, foreign);
-        ASSERT_EQ_INT(system(cmd), 0);
-    }
+    ASSERT_EQ_INT(harness_copy_file(local, foreign), 0);
     force_vv(foreign, 1, "not-a-vv");
 
     imp[3] = foreign;
@@ -1844,11 +1800,7 @@ TEST(cli_conflict_accept_concurrent_keep_incoming_demotes_other_key)
     r = run_remember(local, add_other, sizeof(add_other) / sizeof(add_other[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 0);
     cmd_result_free(&r);
-    {
-        char cmd[PATH_BUF * 2];
-        (void)snprintf(cmd, sizeof(cmd), "cp '%s' '%s'", local, foreign);
-        ASSERT_EQ_INT(system(cmd), 0);
-    }
+    ASSERT_EQ_INT(harness_copy_file(local, foreign), 0);
     free(harness_sqlite_query_line(foreign, "DELETE FROM entries WHERE key='other';"));
     {
         char sql[SQL_BUF];
@@ -1935,11 +1887,7 @@ TEST(cli_conflict_accept_concurrent_keep_incoming_hash_taken_refuses)
     hash = harness_sqlite_query_line(local,
                                      "SELECT body_hash FROM entries WHERE key IS NULL LIMIT 1;");
     ASSERT_TRUE(hash != NULL && hash[0] != '\0');
-    {
-        char cmd[PATH_BUF * 2];
-        (void)snprintf(cmd, sizeof(cmd), "cp '%s' '%s'", local, foreign);
-        ASSERT_EQ_INT(system(cmd), 0);
-    }
+    ASSERT_EQ_INT(harness_copy_file(local, foreign), 0);
     free(harness_sqlite_query_line(foreign, "DELETE FROM entries WHERE key IS NULL;"));
     {
         /* A real hash clash: the local keyless row's own body. */
@@ -2070,11 +2018,7 @@ TEST(cli_import_concurrent_reimport_idempotent)
     r = run_remember(local, add, sizeof(add) / sizeof(add[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 0);
     cmd_result_free(&r);
-    {
-        char cmd[PATH_BUF * 2];
-        (void)snprintf(cmd, sizeof(cmd), "cp '%s' '%s'", local, foreign);
-        ASSERT_EQ_INT(system(cmd), 0);
-    }
+    ASSERT_EQ_INT(harness_copy_file(local, foreign), 0);
     force_body(foreign, 1, "incoming-body");
     dev = read_sidecar_id(local);
     ASSERT_TRUE(dev != NULL);
@@ -2153,11 +2097,7 @@ TEST(cli_import_vv_zero_clock_in_a_membership)
     r = run_remember(local, add, sizeof(add) / sizeof(add[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 0);
     cmd_result_free(&r);
-    {
-        char cmd[PATH_BUF * 2];
-        (void)snprintf(cmd, sizeof(cmd), "cp '%s' '%s'", local, foreign);
-        ASSERT_EQ_INT(system(cmd), 0);
-    }
+    ASSERT_EQ_INT(harness_copy_file(local, foreign), 0);
     dev = read_sidecar_id(local);
     ASSERT_TRUE(dev != NULL);
     {
@@ -2254,11 +2194,7 @@ TEST(cli_import_skips_noncanonical_row_already_present)
 
     ASSERT_TRUE(local != NULL && foreign != NULL);
     given_added(local, add, sizeof(add) / sizeof(add[0]));
-    {
-        char cmd[PATH_BUF * 2];
-        (void)snprintf(cmd, sizeof(cmd), "cp '%s' '%s'", local, foreign);
-        ASSERT_EQ_INT(system(cmd), 0);
-    }
+    ASSERT_EQ_INT(harness_copy_file(local, foreign), 0);
     /* A foreign clock no local device has: without the check this row dominates. */
     sqlite_exec(foreign, "UPDATE entries SET key='k'||char(27), "
                          "version_vector=json_set(version_vector,'$.peer',9) WHERE rowid=1;");
@@ -2470,4 +2406,4 @@ void register_sync_import_tests(void)
     RUN_TEST(cli_import_refuses_to_snapshot_a_non_canonical_local_vector);
 }
 
-// NOLINTEND(readability-identifier-length,cppcoreguidelines-avoid-magic-numbers,readability-magic-numbers,android-cloexec-fopen,bugprone-command-processor,cert-env33-c,concurrency-mt-unsafe,bugprone-unchecked-string-to-number-conversion,cert-err34-c)
+// NOLINTEND(readability-identifier-length,cppcoreguidelines-avoid-magic-numbers,readability-magic-numbers,android-cloexec-fopen,bugprone-unchecked-string-to-number-conversion,cert-err34-c)

@@ -668,6 +668,43 @@ char *harness_sidecar_path(const char *db_path)
     return harness_side_path(db_path, ".d/device_id");
 }
 
+int harness_copy_file(const char *from, const char *to)
+{
+    FILE *in = NULL;
+    FILE *out = NULL;
+    char buf[PATH_BUFSIZE];
+    size_t n = 0;
+    int rc = -1;
+
+    if (from == NULL || to == NULL) {
+        return -1;
+    }
+    /* NOLINTNEXTLINE(android-cloexec-fopen) */
+    in = fopen(from, "rb");
+    /* NOLINTNEXTLINE(android-cloexec-fopen) */
+    out = (in != NULL) ? fopen(to, "wb") : NULL;
+    if (out == NULL) {
+        goto cleanup;
+    }
+    while ((n = fread(buf, 1, sizeof(buf), in)) > 0) {
+        if (fwrite(buf, 1, n, out) != n) {
+            goto cleanup;
+        }
+    }
+    if (ferror(in) == 0) {
+        rc = 0;
+    }
+
+cleanup:
+    if (out != NULL && fclose(out) != 0) {
+        rc = -1;
+    }
+    if (in != NULL) {
+        (void)fclose(in);
+    }
+    return rc;
+}
+
 char *harness_read_line(const char *path)
 {
     FILE *f = NULL;
