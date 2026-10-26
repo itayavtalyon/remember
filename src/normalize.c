@@ -612,14 +612,11 @@ NormStatus bucket_prefix_fold(const char *src, char *out, size_t out_cap)
         return NORM_ERR_INTERNAL;
     }
     len = strlen(src);
-    if (len == 0U || src[len - 1U] != ':') {
-        out[0] = '\0';
-        return NORM_ERR_INVALID_CHAR;
-    }
-    name_len = len - 1U;
-    if (name_len == 0U) {
-        out[0] = '\0';
-        return NORM_ERR_EMPTY;
+    name_len = (len > 0U) ? len - 1U : 0U;
+    if (len == 0U || src[name_len] != ':') {
+        st = NORM_ERR_INVALID_CHAR;
+    } else if (name_len == 0U) {
+        st = NORM_ERR_EMPTY;
     }
     while (st == NORM_OK && i < name_len) {
         uint32_t cp = 0;

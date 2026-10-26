@@ -646,6 +646,49 @@ void harness_make_v5_source_at(const char *db_path, HarnessSite site)
     free(version);
 }
 
+char *harness_side_path(const char *db_path, const char *suffix)
+{
+    size_t n = 0;
+    char *out = NULL;
+
+    if (db_path == NULL || suffix == NULL) {
+        return NULL;
+    }
+    n = strlen(db_path) + strlen(suffix) + 1U;
+    out = (char *)malloc(n);
+    if (out != NULL) {
+        (void)snprintf(out, n, "%s%s", db_path, suffix);
+    }
+    return out;
+}
+
+char *harness_sidecar_path(const char *db_path)
+{
+    return harness_side_path(db_path, ".d/device_id");
+}
+
+char *harness_read_line(const char *path)
+{
+    FILE *f = NULL;
+    char buf[LINE_BUFSIZE];
+
+    if (path == NULL) {
+        return NULL;
+    }
+    /* NOLINTNEXTLINE(android-cloexec-fopen) */
+    f = fopen(path, "r");
+    if (f == NULL) {
+        return NULL;
+    }
+    if (fgets(buf, (int)sizeof(buf), f) == NULL) {
+        (void)fclose(f);
+        return NULL;
+    }
+    (void)fclose(f);
+    trim_trailing_newlines(buf);
+    return strdup(buf);
+}
+
 char *dir_of_path(const char *file_path)
 {
     char *copy = NULL;

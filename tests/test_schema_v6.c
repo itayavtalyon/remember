@@ -762,56 +762,17 @@ TEST(schema_v6_import_stamps_written_rows_only)
 
 /* ---- the device id file moves into <brain>.d (007 §10 steps 1, 3, 4) ---- */
 
-static char *side_file(const char *db, const char *suffix)
-{
-    size_t n = 0U;
-    char *out = NULL;
-
-    if (db == NULL) {
-        return NULL;
-    }
-    n = strlen(db) + strlen(suffix) + 1U;
-    out = (char *)malloc(n);
-    if (out != NULL) {
-        (void)snprintf(out, n, "%s%s", db, suffix);
-    }
-    return out;
-}
-
-static char *read_line(const char *path)
-{
-    char buf[STORE_DEVICE_ID_LEN + V6_LINE_SLACK];
-    FILE *f = NULL;
-    size_t n = 0;
-
-    /* NOLINTNEXTLINE(android-cloexec-fopen) */
-    f = fopen(path, "r");
-    if (f == NULL) {
-        return NULL;
-    }
-    if (fgets(buf, (int)sizeof(buf), f) == NULL) {
-        (void)fclose(f);
-        return NULL;
-    }
-    (void)fclose(f);
-    n = strlen(buf);
-    if (n > 0U && buf[n - 1U] == '\n') {
-        buf[n - 1U] = '\0';
-    }
-    return strdup(buf);
-}
-
 /* Put the brain's device id back where v5 kept it: <brain>.device_id, and no
    <brain>.d. Returns the id (heap). */
 static char *given_legacy_sidecar(const char *db)
 {
-    char *side = side_file(db, ".d/device_id");
-    char *dir = side_file(db, ".d");
-    char *legacy = side_file(db, ".device_id");
+    char *side = harness_side_path(db, ".d/device_id");
+    char *dir = harness_side_path(db, ".d");
+    char *legacy = harness_side_path(db, ".device_id");
     char *id = NULL;
 
     ASSERT_TRUE(side != NULL && dir != NULL && legacy != NULL);
-    id = read_line(side);
+    id = harness_read_line(side);
     ASSERT_TRUE(uuid_v7_is_canonical(id));
     ASSERT_EQ_INT(rename(side, legacy), 0);
     ASSERT_EQ_INT(rmdir(dir), 0);
@@ -824,8 +785,8 @@ static char *given_legacy_sidecar(const char *db)
 // NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
 static void assert_file_is(const char *db, const char *suffix, const char *want)
 {
-    char *path = side_file(db, suffix);
-    char *line = path != NULL ? read_line(path) : NULL;
+    char *path = harness_side_path(db, suffix);
+    char *line = path != NULL ? harness_read_line(path) : NULL;
 
     if (want == NULL) {
         ASSERT_TRUE(path != NULL && access(path, F_OK) != 0);
@@ -854,8 +815,8 @@ TEST(schema_v6_the_device_id_moves_into_the_brain_folder)
 
     assert_file_is(db, ".d/device_id", id);
     assert_file_is(db, ".device_id", NULL);
-    dir = side_file(db, ".d");
-    side = side_file(db, ".d/device_id");
+    dir = harness_side_path(db, ".d");
+    side = harness_side_path(db, ".d/device_id");
     ASSERT_EQ_INT(stat(dir, &st), 0);
     ASSERT_EQ_INT((int)(st.st_mode & (unsigned)PERM_BITS_MASK), DIR_PERMS);
     ASSERT_EQ_INT(stat(side, &st), 0);
@@ -899,7 +860,7 @@ TEST(schema_v6_an_invalid_old_device_id_file_is_an_error)
     ASSERT_TRUE(db != NULL);
     given_v5_brain(db);
     free(given_legacy_sidecar(db));
-    legacy = side_file(db, ".device_id");
+    legacy = harness_side_path(db, ".device_id");
     ASSERT_TRUE(legacy != NULL);
     /* NOLINTNEXTLINE(android-cloexec-fopen) */
     f = fopen(legacy, "w");
@@ -1226,8 +1187,8 @@ TEST(schema_v6_a_crash_before_commit_keeps_the_device_id)
             assert_file_is(db, ".device_id", id);
             /* A fault before the copy leaves no new file; after it, the same id. */
             {
-                char *side = side_file(db, ".d/device_id");
-                char *line = side != NULL ? read_line(side) : NULL;
+                char *side = harness_side_path(db, ".d/device_id");
+                char *line = side != NULL ? harness_read_line(side) : NULL;
 
                 ASSERT_TRUE(line == NULL || strcmp(line, id) == 0);
                 copied += (line != NULL) ? 1 : 0;
@@ -1398,7 +1359,7 @@ TEST(schema_v6_cli_parallel_first_opens_of_a_v5_brain_all_succeed)
         }
         given_v5_brain(db);
         id = given_legacy_sidecar(db);
-        fails = side_file(db, ".fails");
+        fails = harness_side_path(db, ".fails");
         ASSERT_TRUE(fails != NULL);
         (void)snprintf(cmd, sizeof(cmd),
                        "for i in 1 2 3 4 5 6 7 8; do ('%s' --db '%s' list >/dev/null 2>&1 || "

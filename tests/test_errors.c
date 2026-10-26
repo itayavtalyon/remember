@@ -199,7 +199,7 @@ TEST(warning_catalog_round_trips_every_code)
     }
 }
 
-TEST(warning_catalog_rejects_names_outside_the_three)
+TEST(warning_catalog_rejects_names_outside_the_catalog)
 {
     DiagWarning parsed = DIAG_WARN_RAW_QUERY_IGNORED;
 
@@ -3996,7 +3996,7 @@ void register_errors_tests(void)
     RUN_TEST(error_catalog_round_trips_every_e4_3_code);
     RUN_TEST(error_catalog_rejects_names_outside_e4_3);
     RUN_TEST(warning_catalog_round_trips_every_code);
-    RUN_TEST(warning_catalog_rejects_names_outside_the_three);
+    RUN_TEST(warning_catalog_rejects_names_outside_the_catalog);
     RUN_TEST(plain_error_is_remember_prefix_and_the_message);
     RUN_TEST(json_error_is_one_line_and_not_the_plain_line);
     RUN_TEST(error_outside_the_catalog_writes_nothing);

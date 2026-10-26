@@ -48,64 +48,6 @@ static void exec_sql(const char *db, const char *sql)
 static const char k_v4_device[] = "018f6b2e-7c3a-7b2e-8f3a-7c3a7b2e8f3a";
 static const char k_sidecar_other[] = "01900000-0000-7000-8000-0000000000ab";
 
-static char *side_path(const char *db, const char *suffix)
-{
-    size_t n = 0;
-    char *out = NULL;
-
-    if (db == NULL) {
-        return NULL;
-    }
-    n = strlen(db) + strlen(suffix) + 1U;
-    out = (char *)malloc(n);
-    if (out == NULL) {
-        return NULL;
-    }
-    (void)snprintf(out, n, "%s%s", db, suffix);
-    return out;
-}
-
-/* The v6 device id file (007 §10, G-19). */
-static char *sidecar_path(const char *db)
-{
-    return side_path(db, ".d/device_id");
-}
-
-/* Where a v5 brain kept it. */
-static char *legacy_sidecar_path(const char *db)
-{
-    return side_path(db, ".device_id");
-}
-
-static char *read_sidecar_line(const char *path)
-{
-    FILE *f = NULL;
-    char buf[SIDECAR_READ_BUF];
-    size_t n = 0;
-    char *out = NULL;
-
-    /* NOLINTNEXTLINE(android-cloexec-fopen) */
-    f = fopen(path, "r");
-    if (f == NULL) {
-        return NULL;
-    }
-    if (fgets(buf, (int)sizeof(buf), f) == NULL) {
-        (void)fclose(f);
-        return NULL;
-    }
-    (void)fclose(f);
-    n = strlen(buf);
-    while (n > 0U && (buf[n - 1U] == '\n' || buf[n - 1U] == '\r')) {
-        buf[--n] = '\0';
-    }
-    out = (char *)malloc(n + 1U);
-    if (out == NULL) {
-        return NULL;
-    }
-    memcpy(out, buf, n + 1U);
-    return out;
-}
-
 /* path then contents. */
 // NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
 static void write_text(const char *path, const char *text)
@@ -710,12 +652,12 @@ TEST(schema_v5_v4_missing_sidecar_mints_a_new_id)
 
     ASSERT_TRUE(db != NULL);
     given_v4_brain(db);
-    side = sidecar_path(db);
+    side = harness_sidecar_path(db);
     ASSERT_TRUE(side != NULL);
     s = given_open(db);
     store_close(s);
 
-    id = read_sidecar_line(side);
+    id = harness_read_line(side);
     ASSERT_TRUE(id != NULL);
     ASSERT_TRUE(strcmp(id != NULL ? id : "", k_v4_device) != 0);
     assert_no_devices_table(db);
@@ -737,14 +679,14 @@ TEST(schema_v5_v4_sidecar_is_kept_and_devices_row_is_ignored)
 
     ASSERT_TRUE(db != NULL);
     given_v4_brain(db);
-    legacy = legacy_sidecar_path(db);
-    side = sidecar_path(db);
+    legacy = harness_side_path(db, ".device_id");
+    side = harness_sidecar_path(db);
     ASSERT_TRUE(side != NULL && legacy != NULL);
     (void)snprintf(line, sizeof(line), "%s\n", k_sidecar_other);
     write_text(legacy, line);
     s = given_open(db);
     /* The v6 step moved the id into <brain>.d (007 §10 steps 1 and 3). */
-    id = read_sidecar_line(side);
+    id = harness_read_line(side);
     ASSERT_STREQ(id, k_sidecar_other);
     ASSERT_TRUE(access(legacy, F_OK) != 0);
     free(legacy);
@@ -775,7 +717,7 @@ static void assert_invalid_sidecar_unchanged(const char *text)
     ASSERT_TRUE(db != NULL);
     s = given_open(db);
     store_close(s);
-    side = sidecar_path(db);
+    side = harness_sidecar_path(db);
     ASSERT_TRUE(side != NULL);
     write_text(side, text);
     before = read_text(side);
@@ -845,9 +787,9 @@ TEST(store_device_new_keeps_the_vector_until_the_next_edit)
     ASSERT_TRUE(had_prev);
     ASSERT_STREQ(previous, old_id);
     ASSERT_TRUE(strcmp(store_device_id(s), old_id) != 0);
-    side = sidecar_path(db);
+    side = harness_sidecar_path(db);
     {
-        char *line = read_sidecar_line(side);
+        char *line = harness_read_line(side);
 
         ASSERT_STREQ(line != NULL ? line : "", store_device_id(s));
         free(line);
@@ -904,7 +846,7 @@ TEST(store_device_new_missing_file_has_no_previous)
     ASSERT_TRUE(snprintf(saved_vv, sizeof(saved_vv), "%s",
                          entry.version_vector != NULL ? entry.version_vector : "") > 0);
     store_entry_free(&entry);
-    side = sidecar_path(db);
+    side = harness_sidecar_path(db);
     ASSERT_EQ_INT(remove(side), 0);
 
     err[0] = '\0';
@@ -914,7 +856,7 @@ TEST(store_device_new_missing_file_has_no_previous)
     ASSERT_FALSE(had_prev);
     ASSERT_STREQ(previous, "");
     {
-        char *line = read_sidecar_line(side);
+        char *line = harness_read_line(side);
 
         ASSERT_STREQ(line != NULL ? line : "", store_device_id(s));
         free(line);
@@ -951,7 +893,7 @@ TEST(store_device_new_replaces_an_invalid_sidecar)
     }
     ASSERT_TRUE(snprintf(old_id, sizeof(old_id), "%s",
                          store_device_id(s) != NULL ? store_device_id(s) : "") > 0);
-    side = sidecar_path(db);
+    side = harness_sidecar_path(db);
     write_text(side, "GARBAGE\n");
     err[0] = '\0';
     ASSERT_EQ_STATUS(store_device_new(s, previous, sizeof(previous), &had_prev, err, sizeof(err)),
@@ -1005,21 +947,21 @@ TEST(store_device_new_rename_failure_keeps_the_old_id)
     }
     ASSERT_TRUE(snprintf(old_id, sizeof(old_id), "%s",
                          store_device_id(s) != NULL ? store_device_id(s) : "") > 0);
-    side = sidecar_path(db);
+    side = harness_sidecar_path(db);
     store_test_fail_sidecar_rename(1);
     err[0] = '\0';
     ASSERT_EQ_STATUS(store_device_new(s, previous, sizeof(previous), &had_prev, err, sizeof(err)),
                      STORE_ERR_INTERNAL);
     ASSERT_STR_CONTAINS(err, "cannot write device_id sidecar");
     {
-        char *line = read_sidecar_line(side);
+        char *line = harness_read_line(side);
 
         ASSERT_STREQ(line != NULL ? line : "", old_id);
         free(line);
     }
     ASSERT_STREQ(store_device_id(s), old_id);
     /* The failed write leaves no temp file behind: <brain>.d holds device_id only. */
-    tmp = side_path(db, ".d");
+    tmp = harness_side_path(db, ".d");
     ASSERT_TRUE(tmp != NULL);
     if (tmp != NULL) {
         DIR *dir = opendir(tmp);

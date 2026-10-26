@@ -56,51 +56,6 @@ static void assert_search_total(Store *s, SearchExpect check)
     free(page.entries);
 }
 
-static char *sidecar_path(const char *db)
-{
-    size_t n = 0;
-    char *out = NULL;
-
-    if (db == NULL) {
-        return NULL;
-    }
-    n = strlen(db) + strlen(".d/device_id") + 1U;
-    out = (char *)malloc(n);
-    if (out == NULL) {
-        return NULL;
-    }
-    (void)snprintf(out, n, "%s.d/device_id", db);
-    return out;
-}
-
-static char *read_first_line(const char *path)
-{
-    FILE *f = NULL;
-    char buf[80];
-    size_t n = 0;
-    char *out = NULL;
-
-    f = fopen(path, "r");
-    if (f == NULL) {
-        return NULL;
-    }
-    if (fgets(buf, (int)sizeof(buf), f) == NULL) {
-        (void)fclose(f);
-        return NULL;
-    }
-    (void)fclose(f);
-    n = strlen(buf);
-    while (n > 0U && (buf[n - 1U] == '\n' || buf[n - 1U] == '\r')) {
-        buf[--n] = '\0';
-    }
-    out = (char *)malloc(n + 1U);
-    if (out == NULL) {
-        return NULL;
-    }
-    memcpy(out, buf, n + 1U);
-    return out;
-}
-
 static int is_uuid_v7(const char *s)
 {
     static const char *hex = "0123456789abcdef";
@@ -166,11 +121,11 @@ TEST(store_open_creates_v6_sidecar_and_device)
                                  "name='ux_entries_sync_id';",
                           .want = "0"});
 
-    side = sidecar_path(db);
+    side = harness_sidecar_path(db);
     ASSERT_TRUE(side != NULL);
     ASSERT_EQ_INT(stat(side, &st), 0);
     ASSERT_EQ_STATUS((st.st_mode & (unsigned)PERM_BITS_MASK), DB_FILE_PERMS);
-    uuid = read_first_line(side);
+    uuid = harness_read_line(side);
     ASSERT_TRUE(is_uuid_v7(uuid));
     free(uuid);
     free(side);
@@ -208,8 +163,8 @@ TEST(store_open_two_dbs_in_one_dir_distinct_sidecars)
         char side_b[176];
         (void)snprintf(side_a, sizeof(side_a), "%s.d/device_id", path_a);
         (void)snprintf(side_b, sizeof(side_b), "%s.d/device_id", path_b);
-        ua = read_first_line(side_a);
-        ub = read_first_line(side_b);
+        ua = harness_read_line(side_a);
+        ub = harness_read_line(side_b);
     }
     ASSERT_TRUE(is_uuid_v7(ua));
     ASSERT_TRUE(is_uuid_v7(ub));
@@ -288,8 +243,8 @@ TEST(store_open_migrates_v3_to_v6_preserves_rows)
                                  "tbl_name='entries' AND name LIKE 'sqlite_autoindex%';",
                           .want = "1"});
 
-    side = sidecar_path(db);
-    dev = read_first_line(side);
+    side = harness_sidecar_path(db);
+    dev = harness_read_line(side);
     ASSERT_TRUE(is_uuid_v7(dev));
     {
         char sql[160];
@@ -397,8 +352,8 @@ TEST(store_get_does_not_rewrite_sidecar)
     store_entry_free(&e);
     store_close(s);
 
-    side = sidecar_path(db);
-    before = read_first_line(side);
+    side = harness_sidecar_path(db);
+    before = harness_read_line(side);
     ASSERT_TRUE(is_uuid_v7(before));
 
     s = store_open(db, err, sizeof(err));
@@ -408,7 +363,7 @@ TEST(store_get_does_not_rewrite_sidecar)
     store_entry_free(&e);
     store_close(s);
 
-    after = read_first_line(side);
+    after = harness_read_line(side);
     ASSERT_STREQ(before, after);
     free(before);
     free(after);
@@ -431,8 +386,8 @@ TEST(store_missing_sidecar_mints_a_new_id)
     ASSERT_TRUE(s != NULL);
     store_close(s);
 
-    side = sidecar_path(db);
-    orig = read_first_line(side);
+    side = harness_sidecar_path(db);
+    orig = harness_read_line(side);
     ASSERT_TRUE(is_uuid_v7(orig));
     ASSERT_EQ_INT(remove(side), 0);
 
@@ -442,7 +397,7 @@ TEST(store_missing_sidecar_mints_a_new_id)
 
     ASSERT_EQ_INT(stat(side, &st), 0);
     ASSERT_EQ_STATUS((st.st_mode & (unsigned)PERM_BITS_MASK), DB_FILE_PERMS);
-    minted = read_first_line(side);
+    minted = harness_read_line(side);
     ASSERT_TRUE(is_uuid_v7(minted));
     ASSERT_TRUE(orig != NULL && minted != NULL && strcmp(orig, minted) != 0);
     free(orig);
@@ -605,7 +560,7 @@ TEST(store_invalid_sidecar_refuses_open)
     ASSERT_TRUE(s != NULL);
     store_close(s);
 
-    side = sidecar_path(db);
+    side = harness_sidecar_path(db);
     ASSERT_TRUE(side != NULL);
     f = fopen(side, "w");
     ASSERT_TRUE(f != NULL);
@@ -635,13 +590,13 @@ TEST(store_reopen_keeps_sidecar)
     ASSERT_TRUE(s != NULL);
     store_close(s);
 
-    side = sidecar_path(db);
-    orig = read_first_line(side);
+    side = harness_sidecar_path(db);
+    orig = harness_read_line(side);
     ASSERT_TRUE(is_uuid_v7(orig));
     s = store_open(db, err, sizeof(err));
     ASSERT_TRUE(s != NULL);
     store_close(s);
-    after = read_first_line(side);
+    after = harness_read_line(side);
     ASSERT_STREQ(orig, after);
     free(orig);
     free(after);
@@ -729,7 +684,7 @@ TEST(store_empty_sidecar_refuses_open)
     s = store_open(db, err, sizeof(err));
     ASSERT_TRUE(s != NULL);
     store_close(s);
-    side = sidecar_path(db);
+    side = harness_sidecar_path(db);
     ASSERT_TRUE(side != NULL);
     f = fopen(side, "w");
     ASSERT_TRUE(f != NULL);
@@ -1157,7 +1112,7 @@ TEST(store_sidecar_rename_failure_leaves_no_file)
     s = store_open(db, err, sizeof(err));
     ASSERT_TRUE(s != NULL);
     store_close(s);
-    side = sidecar_path(db);
+    side = harness_sidecar_path(db);
     ASSERT_TRUE(side != NULL);
     ASSERT_EQ_INT(remove(side), 0);
     (void)snprintf(tmp, sizeof(tmp), "%s.tmp", side);
