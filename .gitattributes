@@ -1,0 +1,5 @@
+# Plan 24: these files are byte copies of spec blocks, and the validator compares
+# bytes. Never convert their line endings on checkout.
+docs/PLUGIN-PROTOCOL.md -text
+schema/plugin/** -text
+tests/fixtures/plugin/** -text

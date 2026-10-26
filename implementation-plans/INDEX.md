@@ -47,7 +47,7 @@ main → cli_parse → commands.h (cmd_add | cmd_locator | cmd_query) → store_
 | 21 | [JSON envelope](21-json-envelope.md) | `remember-message` 1, locators, actors, `--trash` means Trash. PENDING COPY. Does not implement `brains.json`. |
 | 22 | [Export](22-export.md) | JSON, Markdown, CSV memory export. PENDING DESIGN (settings bytes). |
 | 23 | [Import formats](23-import-formats.md) | JSON, Markdown, CSV, and `--from-db` v4–v6. PENDING DESIGN AND COPY. No old-name reader. No add-wins. |
-| 24 | [Plugin protocol](24-plugin-protocol.md) | Docs CI, schema extraction, fixtures. READY. Spec revision 6 is already in the repo. |
+| 24 | [Plugin protocol](24-plugin-protocol.md) | Docs CI, schema extraction, fixtures. READY. Spec revision 6 is already in the repo. ✅ |
 | 25 | [Plugins and hooks](25-plugins-and-hooks.md) | CLI and host only. PENDING COPY AND DESIGN. No daemon, no URL plugin, no hybrid ranker. |
 | 26 | [Brain path + skills + 0.3.0](26-release-0.3.0.md) | `default-db`, Codex skill, version 0.3.0 last. PENDING COPY. Do not tag. |
 
