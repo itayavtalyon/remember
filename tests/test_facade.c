@@ -7,7 +7,6 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <unistd.h>
 
 enum {
     FACADE_ARGV_MAX = 32, /* max argv slots built for remember_run */
@@ -552,7 +551,7 @@ TEST(facade_import_matches_cli)
 TEST(facade_conflicts_matches_cli)
 {
     char tmpl[] = "/tmp/remember-facade-c-XXXXXX";
-    char *dir = NULL;
+    const char *dir = NULL;
     char local[FACADE_PATH_BUF];
     char foreign[FACADE_PATH_BUF];
     CmdResult r;
@@ -608,7 +607,7 @@ TEST(facade_conflicts_matches_cli)
 TEST(facade_conflict_accept_matches_cli)
 {
     char tmpl[] = "/tmp/remember-facade-a-XXXXXX";
-    char *dir = NULL;
+    const char *dir = NULL;
     char local1[FACADE_PATH_BUF];
     char local2[FACADE_PATH_BUF];
     char foreign[FACADE_PATH_BUF];

@@ -652,13 +652,14 @@ char *harness_side_path(const char *db_path, const char *suffix)
     char *out = NULL;
 
     if (db_path == NULL || suffix == NULL) {
-        return NULL;
+        abort();
     }
     n = strlen(db_path) + strlen(suffix) + 1U;
     out = (char *)malloc(n);
-    if (out != NULL) {
-        (void)snprintf(out, n, "%s%s", db_path, suffix);
+    if (out == NULL) {
+        abort();
     }
+    (void)snprintf(out, n, "%s%s", db_path, suffix);
     return out;
 }
 

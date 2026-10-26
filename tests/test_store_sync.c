@@ -135,7 +135,7 @@ TEST(store_open_creates_v6_sidecar_and_device)
 TEST(store_open_two_dbs_in_one_dir_distinct_sidecars)
 {
     char tmpl[] = "/tmp/remember-two-db-XXXXXX";
-    char *dir = NULL;
+    const char *dir = NULL;
     char path_a[160];
     char path_b[160];
     char err[ERR_BUFSIZE];

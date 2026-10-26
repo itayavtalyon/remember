@@ -91,11 +91,12 @@ void harness_make_v5_source_at(const char *db_path, HarnessSite site);
    made itself, which also hold each brain's <db>.d folder. */
 void harness_remove_tree(const char *dir);
 
-/* <db_path><suffix> (heap; caller frees). NULL when either is NULL. */
-char *harness_side_path(const char *db_path, const char *suffix);
+/* <db_path><suffix> (heap; caller frees). Never NULL: a NULL argument or an
+   allocation failure aborts the test run. */
+__attribute__((returns_nonnull)) char *harness_side_path(const char *db_path, const char *suffix);
 
-/* The device id file, <db_path>.d/device_id (heap; caller frees). */
-char *harness_sidecar_path(const char *db_path);
+/* The device id file, <db_path>.d/device_id (heap; caller frees). Never NULL. */
+__attribute__((returns_nonnull)) char *harness_sidecar_path(const char *db_path);
 
 /* First line of path without its newline (heap), or NULL when there is none. */
 char *harness_read_line(const char *path);

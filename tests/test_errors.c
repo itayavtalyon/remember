@@ -671,7 +671,7 @@ TEST(json_errors_synced_folder_is_one_warning)
 {
     enum { PATH_CAP = 4096 };
     char tmpl[] = "/tmp/Dropbox-remember-XXXXXX";
-    char *dir = mkdtemp(tmpl);
+    const char *dir = mkdtemp(tmpl);
     char path[PATH_CAP];
     const char *args[] = {"--json-errors", "list"};
     CmdResult r;

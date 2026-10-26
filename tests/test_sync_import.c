@@ -104,6 +104,7 @@ static void force_body(const char *db, long long id, const char *body)
 
 /* import --from-db reads v4 and v5 sources until plan 23: rewrite the brain
    this build wrote to the v5 shape, then run the import argv. */
+// NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
 static CmdResult run_import(const char *local, const char *foreign, const char *const *args,
                             size_t nargs)
 {
@@ -492,7 +493,7 @@ TEST(cli_import_v5_source_is_read_only_and_optional_rows_stay_there)
 TEST(cli_import_identical_automerge_concurrent_conflict)
 {
     char tmpl[] = "/tmp/remember-imp-XXXXXX";
-    char *dir = NULL;
+    const char *dir = NULL;
     char local[PATH_BUF];
     char foreign[PATH_BUF];
     CmdResult r;
@@ -694,7 +695,7 @@ TEST(cli_import_key_clash_reimport_idempotent)
 TEST(cli_conflict_accept_keep_both_concurrent_remints)
 {
     char tmpl[] = "/tmp/remember-both-XXXXXX";
-    char *dir = NULL;
+    const char *dir = NULL;
     char local[PATH_BUF];
     char foreign[PATH_BUF];
     CmdResult r;
@@ -822,7 +823,7 @@ TEST(cli_conflict_accept_keep_both_key_clash_keeps_incoming_sync_id)
 TEST(cli_import_incoming_dominates_updates)
 {
     char tmpl[] = "/tmp/remember-dom-XXXXXX";
-    char *dir = NULL;
+    const char *dir = NULL;
     char local[PATH_BUF];
     char foreign[PATH_BUF];
     CmdResult r;
@@ -924,7 +925,7 @@ TEST(store_import_no_sidecar_copy_devices_stay_one)
 TEST(cli_conflict_accept_keep_local_and_incoming)
 {
     char tmpl[] = "/tmp/remember-keep-XXXXXX";
-    char *dir = NULL;
+    const char *dir = NULL;
     char local[PATH_BUF];
     char foreign[PATH_BUF];
     CmdResult r;
@@ -1162,7 +1163,7 @@ TEST(cli_import_insert_and_accept_incoming_resync_the_fts_key)
 TEST(cli_import_local_dominates_unchanged)
 {
     char tmpl[] = "/tmp/remember-locdom-XXXXXX";
-    char *dir = NULL;
+    const char *dir = NULL;
     char local[PATH_BUF];
     char foreign[PATH_BUF];
     CmdResult r;
@@ -1269,7 +1270,7 @@ TEST(cli_import_soft_deleted_and_expired_rows)
 TEST(cli_import_conflict_snapshot_json_escapes)
 {
     char tmpl[] = "/tmp/remember-esc-XXXXXX";
-    char *dir = NULL;
+    const char *dir = NULL;
     char local[PATH_BUF];
     char foreign[PATH_BUF];
     CmdResult r;
@@ -1475,7 +1476,7 @@ TEST(cli_conflict_accept_human)
 TEST(cli_import_incoming_dominates_keyless_hash_clash)
 {
     char tmpl[] = "/tmp/remember-hashdom-XXXXXX";
-    char *dir = NULL;
+    const char *dir = NULL;
     char local[PATH_BUF];
     char foreign[PATH_BUF];
     CmdResult r;
@@ -1560,7 +1561,7 @@ TEST(cli_import_incoming_dominates_keyless_hash_clash)
 TEST(cli_conflict_accept_incoming_many_tags)
 {
     char tmpl[] = "/tmp/remember-tags-XXXXXX";
-    char *dir = NULL;
+    const char *dir = NULL;
     char local[PATH_BUF];
     char foreign[PATH_BUF];
     CmdResult r;
@@ -1673,7 +1674,7 @@ TEST(cli_conflict_accept_hash_clash_keep_incoming_and_both_refuse_fake_key)
 TEST(cli_import_incoming_dominates_expires_deleted_keyless)
 {
     char tmpl[] = "/tmp/remember-dom2-XXXXXX";
-    char *dir = NULL;
+    const char *dir = NULL;
     char local[PATH_BUF];
     char foreign[PATH_BUF];
     CmdResult r;
@@ -1744,7 +1745,7 @@ TEST(cli_import_incoming_dominates_expires_deleted_keyless)
 TEST(cli_import_bad_vv_row_is_rejected)
 {
     char tmpl[] = "/tmp/remember-badvv-XXXXXX";
-    char *dir = NULL;
+    const char *dir = NULL;
     char local[PATH_BUF];
     char foreign[PATH_BUF];
     CmdResult r;
@@ -1816,7 +1817,7 @@ TEST(cli_conflicts_bad_reason_errors)
 TEST(cli_conflict_accept_concurrent_keep_incoming_demotes_other_key)
 {
     char tmpl[] = "/tmp/remember-cvi-XXXXXX";
-    char *dir = NULL;
+    const char *dir = NULL;
     char local[PATH_BUF];
     char foreign[PATH_BUF];
     CmdResult r;
@@ -1903,7 +1904,7 @@ TEST(cli_conflict_accept_concurrent_keep_incoming_demotes_other_key)
 TEST(cli_conflict_accept_concurrent_keep_incoming_hash_taken_refuses)
 {
     char tmpl[] = "/tmp/remember-cvh-XXXXXX";
-    char *dir = NULL;
+    const char *dir = NULL;
     char local[PATH_BUF];
     char foreign[PATH_BUF];
     CmdResult r;
@@ -2048,7 +2049,7 @@ TEST(cli_conflict_accept_demote_hash_escape_refuses)
 TEST(cli_import_concurrent_reimport_idempotent)
 {
     char tmpl[] = "/tmp/remember-reimp-XXXXXX";
-    char *dir = NULL;
+    const char *dir = NULL;
     char local[PATH_BUF];
     char foreign[PATH_BUF];
     CmdResult r;
@@ -2133,7 +2134,7 @@ TEST(cli_import_concurrent_reimport_idempotent)
 TEST(cli_import_vv_zero_clock_in_a_membership)
 {
     char tmpl[] = "/tmp/remember-vv0-XXXXXX";
-    char *dir = NULL;
+    const char *dir = NULL;
     char local[PATH_BUF];
     char foreign[PATH_BUF];
     CmdResult r;

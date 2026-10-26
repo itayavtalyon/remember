@@ -8115,7 +8115,6 @@ static StoreStatus import_one_entry(sqlite3 *dst, const char *device_id, const I
     return st;
 }
 
-// NOLINTNEXTLINE(readability-function-cognitive-complexity)
 /* One imported link through ins: a new UUID v7 and the source's times. OR
    IGNORE keeps an edge the brain already has, and that changes nothing, so
    only an inserted row takes a change_seq value. */
@@ -8156,6 +8155,7 @@ static StoreStatus insert_imported_link(sqlite3 *dst, sqlite3_stmt *ins, StoreEd
         dst, (ChangeSeqRow){.id = edge.from_id, .to_id = edge.to_id, .kind = kind}, serr);
 }
 
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
 static StoreStatus import_remap_links(sqlite3 *dst, sqlite3 *src, StoreError *serr)
 {
     sqlite3_stmt *sel = NULL;
