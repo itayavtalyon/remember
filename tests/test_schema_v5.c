@@ -8,6 +8,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <unistd.h>
 
 enum {
     SCHEMA_V5_LIMIT = 20,
@@ -46,7 +47,7 @@ static void exec_sql(const char *db, const char *sql)
 static const char k_v4_device[] = "018f6b2e-7c3a-7b2e-8f3a-7c3a7b2e8f3a";
 static const char k_sidecar_other[] = "01900000-0000-7000-8000-0000000000ab";
 
-static char *sidecar_path(const char *db)
+static char *side_path(const char *db, const char *suffix)
 {
     size_t n = 0;
     char *out = NULL;
@@ -54,13 +55,25 @@ static char *sidecar_path(const char *db)
     if (db == NULL) {
         return NULL;
     }
-    n = strlen(db) + strlen(".device_id") + 1U;
+    n = strlen(db) + strlen(suffix) + 1U;
     out = (char *)malloc(n);
     if (out == NULL) {
         return NULL;
     }
-    (void)snprintf(out, n, "%s.device_id", db);
+    (void)snprintf(out, n, "%s%s", db, suffix);
     return out;
+}
+
+/* The v6 device id file (007 §10, G-19). */
+static char *sidecar_path(const char *db)
+{
+    return side_path(db, ".d/device_id");
+}
+
+/* Where a v5 brain kept it. */
+static char *legacy_sidecar_path(const char *db)
+{
+    return side_path(db, ".device_id");
 }
 
 static char *read_sidecar_line(const char *path)
@@ -714,6 +727,7 @@ TEST(schema_v5_v4_sidecar_is_kept_and_devices_row_is_ignored)
 {
     char *db = make_temp_db_path();
     char *side = NULL;
+    char *legacy = NULL;
     char *id = NULL;
     char line[SIDECAR_READ_BUF];
     Store *s = NULL;
@@ -722,13 +736,17 @@ TEST(schema_v5_v4_sidecar_is_kept_and_devices_row_is_ignored)
 
     ASSERT_TRUE(db != NULL);
     given_v4_brain(db);
+    legacy = legacy_sidecar_path(db);
     side = sidecar_path(db);
-    ASSERT_TRUE(side != NULL);
+    ASSERT_TRUE(side != NULL && legacy != NULL);
     (void)snprintf(line, sizeof(line), "%s\n", k_sidecar_other);
-    write_text(side, line);
+    write_text(legacy, line);
     s = given_open(db);
+    /* The v6 step moved the id into <brain>.d (007 §10 steps 1 and 3). */
     id = read_sidecar_line(side);
     ASSERT_STREQ(id, k_sidecar_other);
+    ASSERT_TRUE(access(legacy, F_OK) != 0);
+    free(legacy);
     assert_no_devices_table(db);
 
     memset(&e, 0, sizeof(e));

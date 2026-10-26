@@ -7,6 +7,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
+#include <unistd.h>
 
 /*
  * Plan 19: the one v5 -> v6 migration (007 §10, 008 §8, 010 §17).
@@ -754,6 +756,167 @@ TEST(schema_v6_import_stamps_written_rows_only)
     free(peer);
 }
 
+/* ---- the device id file moves into <brain>.d (007 §10 steps 1, 3, 4) ---- */
+
+static char *side_file(const char *db, const char *suffix)
+{
+    size_t n = strlen(db) + strlen(suffix) + 1U;
+    char *out = (char *)malloc(n);
+
+    if (out != NULL) {
+        (void)snprintf(out, n, "%s%s", db, suffix);
+    }
+    return out;
+}
+
+static char *read_line(const char *path)
+{
+    char buf[STORE_DEVICE_ID_LEN + 8];
+    FILE *f = NULL;
+    size_t n = 0;
+
+    /* NOLINTNEXTLINE(android-cloexec-fopen) */
+    f = fopen(path, "r");
+    if (f == NULL) {
+        return NULL;
+    }
+    if (fgets(buf, (int)sizeof(buf), f) == NULL) {
+        (void)fclose(f);
+        return NULL;
+    }
+    (void)fclose(f);
+    n = strlen(buf);
+    if (n > 0U && buf[n - 1U] == '\n') {
+        buf[n - 1U] = '\0';
+    }
+    return strdup(buf);
+}
+
+/* Put the brain's device id back where v5 kept it: <brain>.device_id, and no
+   <brain>.d. Returns the id (heap). */
+static char *given_legacy_sidecar(const char *db)
+{
+    char *side = side_file(db, ".d/device_id");
+    char *dir = side_file(db, ".d");
+    char *legacy = side_file(db, ".device_id");
+    char *id = NULL;
+
+    ASSERT_TRUE(side != NULL && dir != NULL && legacy != NULL);
+    id = read_line(side);
+    ASSERT_TRUE(uuid_v7_is_canonical(id));
+    ASSERT_EQ_INT(rename(side, legacy), 0);
+    ASSERT_EQ_INT(rmdir(dir), 0);
+    free(side);
+    free(dir);
+    free(legacy);
+    return id;
+}
+
+static void assert_file_is(const char *db, const char *suffix, const char *want)
+{
+    char *path = side_file(db, suffix);
+    char *line = path != NULL ? read_line(path) : NULL;
+
+    if (want == NULL) {
+        ASSERT_TRUE(path != NULL && access(path, F_OK) != 0);
+    } else {
+        ASSERT_STREQ(line != NULL ? line : "(missing)", want);
+    }
+    free(line);
+    free(path);
+}
+
+TEST(schema_v6_the_device_id_moves_into_the_brain_folder)
+{
+    char *db = make_temp_db_path();
+    char *id = NULL;
+    char *dir = NULL;
+    char *side = NULL;
+    Store *s = NULL;
+    struct stat st;
+
+    ASSERT_TRUE(db != NULL);
+    given_v5_brain(db);
+    id = given_legacy_sidecar(db);
+    s = given_open(db);
+    ASSERT_STREQ(store_device_id(s), id);
+    store_close(s);
+
+    assert_file_is(db, ".d/device_id", id);
+    assert_file_is(db, ".device_id", NULL);
+    dir = side_file(db, ".d");
+    side = side_file(db, ".d/device_id");
+    ASSERT_EQ_INT(stat(dir, &st), 0);
+    ASSERT_EQ_INT((int)(st.st_mode & (unsigned)PERM_BITS_MASK), DIR_PERMS);
+    ASSERT_EQ_INT(stat(side, &st), 0);
+    ASSERT_EQ_INT((int)(st.st_mode & (unsigned)PERM_BITS_MASK), DB_FILE_PERMS);
+    free(dir);
+    free(side);
+    free(id);
+    free(db);
+}
+
+/* Step 4: a v6 brain whose old file is still the only one (a crash between
+   COMMIT and the copy). The open finishes the copy and the delete. */
+TEST(schema_v6_a_v6_open_finishes_a_half_done_move)
+{
+    char *db = make_temp_db_path();
+    char *id = NULL;
+    Store *s = NULL;
+
+    ASSERT_TRUE(db != NULL);
+    store_close(given_open(db));
+    id = given_legacy_sidecar(db);
+    s = given_open(db);
+    ASSERT_STREQ(store_device_id(s), id);
+    store_close(s);
+    assert_file_is(db, ".d/device_id", id);
+    assert_file_is(db, ".device_id", NULL);
+    free(id);
+    free(db);
+}
+
+/* An invalid old file is the open's error, as an invalid sidecar is, and
+   stays; `device new` mints over it and the old file goes. */
+TEST(schema_v6_an_invalid_old_device_id_file_is_an_error)
+{
+    char *db = make_temp_db_path();
+    char *legacy = NULL;
+    char err[ERR_BUFSIZE];
+    Store *s = NULL;
+    FILE *f = NULL;
+
+    ASSERT_TRUE(db != NULL);
+    given_v5_brain(db);
+    free(given_legacy_sidecar(db));
+    legacy = side_file(db, ".device_id");
+    ASSERT_TRUE(legacy != NULL);
+    /* NOLINTNEXTLINE(android-cloexec-fopen) */
+    f = fopen(legacy, "w");
+    ASSERT_TRUE(f != NULL);
+    if (f != NULL) {
+        (void)fputs("not-a-uuid\n", f);
+        (void)fclose(f);
+    }
+    err[0] = '\0';
+    ASSERT_TRUE(store_open(db, err, sizeof(err)) == NULL);
+    ASSERT_STREQ(err, "invalid device_id sidecar");
+    assert_file_is(db, ".device_id", "not-a-uuid");
+    assert_file_is(db, ".d/device_id", NULL);
+    assert_query_is(db, (QueryExpect){.sql = "PRAGMA user_version;", .want = "5"});
+
+    s = store_open_opts(db,
+                        &(StoreOpenOpts){.busy_timeout_ms = STORE_DEFAULT_BUSY_TIMEOUT_MS,
+                                         .replace_invalid_sidecar = true},
+                        err, sizeof(err), NULL);
+    ASSERT_TRUE(s != NULL);
+    assert_file_is(db, ".d/device_id", s != NULL ? store_device_id(s) : "");
+    assert_file_is(db, ".device_id", NULL);
+    store_close(s);
+    free(legacy);
+    free(db);
+}
+
 #ifdef REMEMBER_TEST_HOOKS
 /* The v5 shape is still there: user_version, the old columns, the E12 tables. */
 static void assert_still_v5(const char *db)
@@ -826,6 +989,54 @@ TEST(schema_v6_alloc_fault_anywhere_keeps_v5)
     sweep_v5_open(store_test_fail_alloc_after);
 }
 
+/* 007-27: a failure after the copy and before COMMIT leaves <brain>.device_id;
+   the next open keeps that id and finishes the move. */
+TEST(schema_v6_a_crash_before_commit_keeps_the_device_id)
+{
+    char *db = make_temp_db_path();
+    char *id = NULL;
+    Store *s = NULL;
+    int n = 0;
+    int failed = 0;
+    int copied = 0;
+
+    ASSERT_TRUE(db != NULL);
+    given_v5_brain(db);
+    id = given_legacy_sidecar(db);
+    for (n = 0; n < V6_FAULT_TRIES && s == NULL; n++) {
+        char err[ERR_BUFSIZE];
+
+        err[0] = '\0';
+        store_test_fail_exec_after(n);
+        s = store_open(db, err, sizeof(err));
+        store_test_fail_exec_after(-1);
+        if (s == NULL) {
+            failed++;
+            assert_still_v5(db);
+            assert_file_is(db, ".device_id", id);
+            /* A fault before the copy leaves no new file; after it, the same id. */
+            {
+                char *side = side_file(db, ".d/device_id");
+                char *line = side != NULL ? read_line(side) : NULL;
+
+                ASSERT_TRUE(line == NULL || strcmp(line, id) == 0);
+                copied += (line != NULL) ? 1 : 0;
+                free(line);
+                free(side);
+            }
+        }
+    }
+    ASSERT_TRUE(failed > 1);
+    ASSERT_TRUE(copied > 0);
+    ASSERT_TRUE(s != NULL);
+    ASSERT_STREQ(s != NULL ? store_device_id(s) : "", id);
+    store_close(s);
+    assert_file_is(db, ".d/device_id", id);
+    assert_file_is(db, ".device_id", NULL);
+    free(id);
+    free(db);
+}
+
 /* A broken foreign key fails the check before user_version moves. */
 TEST(schema_v6_dangling_reference_keeps_v5)
 {
@@ -864,12 +1075,16 @@ void register_schema_v6_tests(void)
     RUN_TEST(schema_v6_purge_writes_one_tombstone_per_row);
     RUN_TEST(schema_v6_the_first_write_after_a_prefix_row_is_two);
     RUN_TEST(schema_v6_import_stamps_written_rows_only);
+    RUN_TEST(schema_v6_the_device_id_moves_into_the_brain_folder);
+    RUN_TEST(schema_v6_a_v6_open_finishes_a_half_done_move);
+    RUN_TEST(schema_v6_an_invalid_old_device_id_file_is_an_error);
 #ifdef REMEMBER_TEST_HOOKS
     RUN_TEST(schema_v6_exec_fault_anywhere_keeps_v5);
     RUN_TEST(schema_v6_prepare_fault_anywhere_keeps_v5);
     RUN_TEST(schema_v6_step_fault_anywhere_keeps_v5);
     RUN_TEST(schema_v6_alloc_fault_anywhere_keeps_v5);
     RUN_TEST(schema_v6_dangling_reference_keeps_v5);
+    RUN_TEST(schema_v6_a_crash_before_commit_keeps_the_device_id);
 #endif
 }
 
@@ -912,7 +1127,51 @@ TEST(schema_v6_cli_prints_setting_invalid_for_a_left_out_prefix)
     free(db2);
 }
 
+#ifdef REMEMBER_TEST_VFS
+/* M3: a failing VFS write anywhere in the v6 step leaves user_version 5 and
+   the old device id file; the first open with no fault migrates. */
+TEST(schema_v6_cli_a_failing_write_keeps_v5_and_the_old_device_id)
+{
+    char *db = make_temp_db_path();
+    char *id = NULL;
+    const char *list[] = {"list"};
+    char budget[16];
+    CmdResult r;
+    int n = 0;
+    int failed = 0;
+    bool done = false;
+
+    ASSERT_TRUE(db != NULL);
+    given_v5_brain(db);
+    id = given_legacy_sidecar(db);
+    for (n = 0; n < V6_FAULT_TRIES && !done; n++) {
+        (void)snprintf(budget, sizeof(budget), "%d", n);
+        ASSERT_EQ_INT(setenv("REMEMBER_TEST_FAIL_WRITE", budget, 1), 0);
+        r = run_remember(db, list, sizeof(list) / sizeof(list[0]), NULL);
+        ASSERT_EQ_INT(unsetenv("REMEMBER_TEST_FAIL_WRITE"), 0);
+        if (r.exit_code != 0) {
+            failed++;
+            assert_query_is(db, (QueryExpect){.sql = "PRAGMA user_version;", .want = "5"});
+            assert_file_is(db, ".device_id", id);
+        } else {
+            done = true;
+        }
+        cmd_result_free(&r);
+    }
+    ASSERT_TRUE(failed > 0);
+    ASSERT_TRUE(done);
+    assert_query_is(db, (QueryExpect){.sql = "PRAGMA user_version;", .want = "6"});
+    assert_file_is(db, ".d/device_id", id);
+    assert_file_is(db, ".device_id", NULL);
+    free(id);
+    free(db);
+}
+#endif
+
 void register_schema_v6_cli_tests(void)
 {
     RUN_TEST(schema_v6_cli_prints_setting_invalid_for_a_left_out_prefix);
+#ifdef REMEMBER_TEST_VFS
+    RUN_TEST(schema_v6_cli_a_failing_write_keeps_v5_and_the_old_device_id);
+#endif
 }

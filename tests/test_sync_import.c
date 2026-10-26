@@ -89,12 +89,12 @@ static char *sidecar_path(const char *db)
     if (db == NULL) {
         return NULL;
     }
-    n = strlen(db) + strlen(".device_id") + 1U;
+    n = strlen(db) + strlen(".d/device_id") + 1U;
     out = (char *)malloc(n);
     if (out == NULL) {
         return NULL;
     }
-    (void)snprintf(out, n, "%s.device_id", db);
+    (void)snprintf(out, n, "%s.d/device_id", db);
     return out;
 }
 
@@ -589,7 +589,7 @@ TEST(cli_import_identical_automerge_concurrent_conflict)
     (void)remove(foreign);
     {
         char side[PATH_BUF + 16];
-        (void)snprintf(side, sizeof(side), "%s.device_id", local);
+        (void)snprintf(side, sizeof(side), "%s.d/device_id", local);
         (void)remove(side);
     }
     (void)rmdir(dir);
@@ -799,7 +799,7 @@ TEST(cli_conflict_accept_keep_both_concurrent_remints)
     (void)remove(foreign);
     {
         char side[PATH_BUF + 16];
-        (void)snprintf(side, sizeof(side), "%s.device_id", local);
+        (void)snprintf(side, sizeof(side), "%s.d/device_id", local);
         (void)remove(side);
     }
     (void)rmdir(dir);
@@ -914,7 +914,7 @@ TEST(cli_import_incoming_dominates_updates)
     (void)remove(foreign);
     {
         char side[PATH_BUF + 16];
-        (void)snprintf(side, sizeof(side), "%s.device_id", local);
+        (void)snprintf(side, sizeof(side), "%s.d/device_id", local);
         (void)remove(side);
     }
     (void)rmdir(dir);
@@ -1085,7 +1085,7 @@ TEST(cli_conflict_accept_keep_local_and_incoming)
     (void)remove(foreign);
     {
         char side[PATH_BUF + 16];
-        (void)snprintf(side, sizeof(side), "%s.device_id", local);
+        (void)snprintf(side, sizeof(side), "%s.d/device_id", local);
         (void)remove(side);
     }
     (void)rmdir(dir);
@@ -1274,7 +1274,7 @@ TEST(cli_import_local_dominates_unchanged)
     (void)remove(foreign);
     {
         char side[PATH_BUF + 16];
-        (void)snprintf(side, sizeof(side), "%s.device_id", local);
+        (void)snprintf(side, sizeof(side), "%s.d/device_id", local);
         (void)remove(side);
     }
     (void)rmdir(dir);
@@ -1396,7 +1396,7 @@ TEST(cli_import_conflict_snapshot_json_escapes)
     (void)remove(foreign);
     {
         char side[PATH_BUF + 16];
-        (void)snprintf(side, sizeof(side), "%s.device_id", local);
+        (void)snprintf(side, sizeof(side), "%s.d/device_id", local);
         (void)remove(side);
     }
     (void)rmdir(dir);
@@ -1634,7 +1634,7 @@ TEST(cli_import_incoming_dominates_keyless_hash_clash)
     (void)remove(foreign);
     {
         char side[PATH_BUF + 16];
-        (void)snprintf(side, sizeof(side), "%s.device_id", local);
+        (void)snprintf(side, sizeof(side), "%s.d/device_id", local);
         (void)remove(side);
     }
     (void)rmdir(dir);
@@ -1709,7 +1709,7 @@ TEST(cli_conflict_accept_incoming_many_tags)
     (void)remove(foreign);
     {
         char side[PATH_BUF + 16];
-        (void)snprintf(side, sizeof(side), "%s.device_id", local);
+        (void)snprintf(side, sizeof(side), "%s.d/device_id", local);
         (void)remove(side);
     }
     (void)rmdir(dir);
@@ -1834,7 +1834,7 @@ TEST(cli_import_incoming_dominates_expires_deleted_keyless)
     (void)remove(foreign);
     {
         char side[PATH_BUF + 16];
-        (void)snprintf(side, sizeof(side), "%s.device_id", local);
+        (void)snprintf(side, sizeof(side), "%s.d/device_id", local);
         (void)remove(side);
     }
     (void)rmdir(dir);
@@ -1882,7 +1882,7 @@ TEST(cli_import_bad_vv_row_is_rejected)
     (void)remove(foreign);
     {
         char side[PATH_BUF + 16];
-        (void)snprintf(side, sizeof(side), "%s.device_id", local);
+        (void)snprintf(side, sizeof(side), "%s.d/device_id", local);
         (void)remove(side);
     }
     (void)rmdir(dir);
@@ -2007,7 +2007,7 @@ TEST(cli_conflict_accept_concurrent_keep_incoming_demotes_other_key)
     (void)remove(foreign);
     {
         char side[PATH_BUF + 16];
-        (void)snprintf(side, sizeof(side), "%s.device_id", local);
+        (void)snprintf(side, sizeof(side), "%s.d/device_id", local);
         (void)remove(side);
     }
     (void)rmdir(dir);
@@ -2104,7 +2104,7 @@ TEST(cli_conflict_accept_concurrent_keep_incoming_hash_taken_refuses)
     (void)remove(foreign);
     {
         char side[PATH_BUF + 16];
-        (void)snprintf(side, sizeof(side), "%s.device_id", local);
+        (void)snprintf(side, sizeof(side), "%s.d/device_id", local);
         (void)remove(side);
     }
     (void)rmdir(dir);
@@ -2259,7 +2259,7 @@ TEST(cli_import_concurrent_reimport_idempotent)
     (void)remove(foreign);
     {
         char side[PATH_BUF + 16];
-        (void)snprintf(side, sizeof(side), "%s.device_id", local);
+        (void)snprintf(side, sizeof(side), "%s.d/device_id", local);
         (void)remove(side);
     }
     (void)rmdir(dir);
@@ -2317,7 +2317,7 @@ TEST(cli_import_vv_zero_clock_in_a_membership)
     (void)remove(foreign);
     {
         char side[PATH_BUF + 16];
-        (void)snprintf(side, sizeof(side), "%s.device_id", local);
+        (void)snprintf(side, sizeof(side), "%s.d/device_id", local);
         (void)remove(side);
     }
     (void)rmdir(dir);

@@ -129,8 +129,11 @@ typedef struct {
  * Schema: user_version 0 creates 6; 1..5 climb to the v5 shape and take the
  * one v6 step (007 §10) in the same transaction; 6 is current; >6 refuses
  * with "database is newer than this remember".
- * Sidecar <path>.device_id (mode 0600) is the only device id. A missing file
- * is minted. An invalid file is an error and is left unchanged.
+ * Sidecar <path>.d/device_id (mode 0600, folder 0700) is the only device id.
+ * A missing file is minted. An invalid file is an error and is left
+ * unchanged. A v5 brain's <path>.device_id is copied there before the v6
+ * transaction and deleted after COMMIT; a later open that still finds only
+ * the old file finishes that copy and delete first (007 §10).
  */
 Store *store_open(const char *path, char *err, size_t errlen);
 
@@ -186,7 +189,7 @@ const char *store_device_id(const Store *s);
 /*
  * Mint a new sidecar id and bind it. Does not change any version_vector.
  * Takes the same write lock as a missing-sidecar open, so parallel mints cannot
- * share <path>.device_id.tmp.
+ * share <path>.d/device_id.tmp.
  * On STORE_OK, the sidecar and this handle both hold the new id. *had_prev is
  * true and prev_out (STORE_DEVICE_ID_LEN + 1) holds the id the file had. A
  * missing or invalid file sets *had_prev false and prev_out empty (JSON null)

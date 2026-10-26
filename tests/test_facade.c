@@ -26,7 +26,7 @@ static char *facade_sidecar_id(const char *db)
     size_t n = 0;
     char *out = NULL;
 
-    (void)snprintf(side, sizeof(side), "%s.device_id", db);
+    (void)snprintf(side, sizeof(side), "%s.d/device_id", db);
     /* NOLINTNEXTLINE(android-cloexec-fopen) */
     f = fopen(side, "r");
     if (f == NULL || fgets(buf, (int)sizeof(buf), f) == NULL) {
@@ -606,7 +606,7 @@ TEST(facade_conflicts_matches_cli)
     (void)remove(foreign);
     {
         char side[FACADE_SIDE_BUF];
-        (void)snprintf(side, sizeof(side), "%s.device_id", local);
+        (void)snprintf(side, sizeof(side), "%s.d/device_id", local);
         (void)remove(side);
     }
     (void)rmdir(dir);
@@ -669,8 +669,9 @@ TEST(facade_conflict_accept_matches_cli)
     {
         char cp[FACADE_CMD_BUF];
         /* Same writer id, or accept bumps a freshly minted id and the vectors differ. */
-        (void)snprintf(cp, sizeof(cp), "cp '%s' '%s' && cp '%s.device_id' '%s.device_id'", local1,
-                       local2, local1, local2);
+        (void)snprintf(cp, sizeof(cp),
+                       "cp '%s' '%s' && mkdir -p '%s.d' && cp '%s.d/device_id' '%s.d/device_id'",
+                       local1, local2, local2, local1, local2);
         ASSERT_EQ_INT(system(cp), 0);
     }
 
@@ -691,9 +692,9 @@ TEST(facade_conflict_accept_matches_cli)
     (void)remove(foreign);
     {
         char side[FACADE_SIDE_BUF];
-        (void)snprintf(side, sizeof(side), "%s.device_id", local1);
+        (void)snprintf(side, sizeof(side), "%s.d/device_id", local1);
         (void)remove(side);
-        (void)snprintf(side, sizeof(side), "%s.device_id", local2);
+        (void)snprintf(side, sizeof(side), "%s.d/device_id", local2);
         (void)remove(side);
     }
     (void)rmdir(dir);

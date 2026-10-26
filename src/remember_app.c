@@ -53,7 +53,7 @@ static void print_general_help(void)
                                "\n"
                                "Expiry is optional. Default list/search/get show live only.\n"
                                "Bins: --expired / --deleted (mutex). --trash aliases --expired.\n"
-                               "Device id lives next to the DB as <path>.device_id.\n"
+                               "Device id lives next to the DB as <path>.d/device_id.\n"
                                "\n"
                                "Global options (allowed before or after the command):\n"
                                "  --db PATH          Database file (overrides REMEMBER_DB)\n"

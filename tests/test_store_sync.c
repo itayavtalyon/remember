@@ -64,12 +64,12 @@ static char *sidecar_path(const char *db)
     if (db == NULL) {
         return NULL;
     }
-    n = strlen(db) + strlen(".device_id") + 1U;
+    n = strlen(db) + strlen(".d/device_id") + 1U;
     out = (char *)malloc(n);
     if (out == NULL) {
         return NULL;
     }
-    (void)snprintf(out, n, "%s.device_id", db);
+    (void)snprintf(out, n, "%s.d/device_id", db);
     return out;
 }
 
@@ -206,8 +206,8 @@ TEST(store_open_two_dbs_in_one_dir_distinct_sidecars)
     {
         char side_a[176];
         char side_b[176];
-        (void)snprintf(side_a, sizeof(side_a), "%s.device_id", path_a);
-        (void)snprintf(side_b, sizeof(side_b), "%s.device_id", path_b);
+        (void)snprintf(side_a, sizeof(side_a), "%s.d/device_id", path_a);
+        (void)snprintf(side_b, sizeof(side_b), "%s.d/device_id", path_b);
         ua = read_first_line(side_a);
         ub = read_first_line(side_b);
     }
@@ -221,8 +221,8 @@ TEST(store_open_two_dbs_in_one_dir_distinct_sidecars)
     {
         char side_a[176];
         char side_b[176];
-        (void)snprintf(side_a, sizeof(side_a), "%s.device_id", path_a);
-        (void)snprintf(side_b, sizeof(side_b), "%s.device_id", path_b);
+        (void)snprintf(side_a, sizeof(side_a), "%s.d/device_id", path_a);
+        (void)snprintf(side_b, sizeof(side_b), "%s.d/device_id", path_b);
         (void)remove(side_a);
         (void)remove(side_b);
     }

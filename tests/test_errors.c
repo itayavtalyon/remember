@@ -690,7 +690,7 @@ TEST(json_errors_synced_folder_is_one_warning)
                  "path looks like a synced folder "
                  "(iCloud/Dropbox/Google Drive); corruption risk - prefer a local disk\"}}\n");
     cmd_result_free(&r);
-    wrote = snprintf(sidecar, sizeof(sidecar), "%s.device_id", path);
+    wrote = snprintf(sidecar, sizeof(sidecar), "%s.d/device_id", path);
     ASSERT_TRUE(wrote > 0 && (size_t)wrote < sizeof(sidecar));
     (void)unlink(path);
     (void)unlink(sidecar);
@@ -3775,7 +3775,7 @@ TEST(cli_no_create_missing_path_creates_nothing)
     ASSERT_EQ_INT(rmdir(tmpl), 0);
     wrote = snprintf(path, sizeof(path), "%s/x.db", tmpl);
     ASSERT_TRUE(wrote > 0 && (size_t)wrote < sizeof(path));
-    wrote = snprintf(sidecar, sizeof(sidecar), "%s.device_id", path);
+    wrote = snprintf(sidecar, sizeof(sidecar), "%s.d/device_id", path);
     ASSERT_TRUE(wrote > 0 && (size_t)wrote < sizeof(sidecar));
 
     r = run_remember(path, list, sizeof(list) / sizeof(list[0]), NULL);
@@ -3820,7 +3820,7 @@ TEST(cli_no_create_missing_file_creates_nothing)
     if (db == NULL) {
         return;
     }
-    wrote = snprintf(sidecar, sizeof(sidecar), "%s.device_id", db);
+    wrote = snprintf(sidecar, sizeof(sidecar), "%s.d/device_id", db);
     ASSERT_TRUE(wrote > 0 && (size_t)wrote < sizeof(sidecar));
     r = run_remember(db, list, sizeof(list) / sizeof(list[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 1);

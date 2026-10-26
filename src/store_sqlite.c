@@ -498,6 +498,7 @@ enum {
     UUID_MS_SHIFT_4 = 8U,
     SIDECAR_LINE_BUF = 64,
     SIDECAR_FILE_MODE = 0600,
+    SIDECAR_DIR_MODE = 0700,
     SIDECAR_PATH_PAD = 16,
     SIDECAR_TMP_EXTRA = 4, /* ".tmp" */
     VV_JSON_BUFLEN = 80,
@@ -1143,18 +1144,31 @@ static int mint_uuid_v7(char out[UUID_STR_LEN + 1])
 }
 // NOLINTEND(hicpp-signed-bitwise,cppcoreguidelines-avoid-magic-numbers,readability-magic-numbers)
 
-static int sidecar_path(const char *db_path, char *out, size_t outlen)
+/* <brain> + suffix into out. The suffixes are the fixed sidecar names. */
+// NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
+static int brain_side_path(const char *db_path, const char *suffix, char *out, size_t outlen)
 {
     int n = 0;
 
     if (db_path == NULL || out == NULL) {
         return -1;
     }
-    n = snprintf(out, outlen, "%s.device_id", db_path);
+    n = snprintf(out, outlen, "%s%s", db_path, suffix);
     if (n < 0 || (size_t)n >= outlen) {
         return -1;
     }
     return 0;
+}
+
+/* The device id file is <brain>.d/device_id (007 §10 step 1, G-19). */
+static const char k_sidecar_dir_suffix[] = ".d";
+static const char k_sidecar_suffix[] = ".d/device_id";
+/* The v5 location. A v6 open copies it, then deletes it (007 §10). */
+static const char k_legacy_sidecar_suffix[] = ".device_id";
+
+static int sidecar_path(const char *db_path, char *out, size_t outlen)
+{
+    return brain_side_path(db_path, k_sidecar_suffix, out, outlen);
 }
 
 /* 0 = one canonical line, 1 = missing, -1 = invalid or unreadable. */
@@ -1206,6 +1220,31 @@ static int rename_sidecar_tmp(const char *tmp, const char *path)
     }
 #endif
     return rename(tmp, path);
+}
+
+/* <brain>.d at mode 0700 (G-19). An existing directory is kept as it is. */
+static int ensure_sidecar_dir(const char *db_path, char *err, size_t errlen)
+{
+    char dir[REMEMBER_PATH_MAX + SIDECAR_PATH_PAD];
+    struct stat st;
+
+    if (brain_side_path(db_path, k_sidecar_dir_suffix, dir, sizeof(dir)) != 0) {
+        set_err(err, errlen, "database path is too long");
+        return -1;
+    }
+    if (mkdir(dir, SIDECAR_DIR_MODE) == 0) {
+        /* mkdir honors the umask; the mode is the rule, so set it. */
+        if (chmod(dir, SIDECAR_DIR_MODE) != 0) {
+            set_err(err, errlen, "cannot create the device id folder");
+            return -1;
+        }
+        return 0;
+    }
+    if (errno != EEXIST || stat(dir, &st) != 0 || !S_ISDIR(st.st_mode)) {
+        set_err(err, errlen, "cannot create the device id folder");
+        return -1;
+    }
+    return 0;
 }
 
 /* path then uuid: sidecar file vs contents; call sites pass them in that order.
@@ -1305,7 +1344,8 @@ static int ensure_device_identity(Store *s, char *err, size_t errlen)
             set_err(err, errlen, "cannot mint device_id");
             return -1;
         }
-        if (write_sidecar(side, file_uuid, err, errlen) != 0) {
+        if (ensure_sidecar_dir(s->path, err, errlen) != 0 ||
+            write_sidecar(side, file_uuid, err, errlen) != 0) {
             return -1;
         }
     }
@@ -1389,7 +1429,8 @@ StoreStatus store_device_new(Store *s, char *prev_out, size_t prev_len, bool *ha
         set_err(err, errlen, "out of memory");
         return STORE_ERR_OOM;
     }
-    if (write_sidecar(side, minted, err, errlen) != 0) {
+    if (ensure_sidecar_dir(s->path, err, errlen) != 0 ||
+        write_sidecar(side, minted, err, errlen) != 0) {
         free(next);
         rollback_quiet(s->db);
         return STORE_ERR_INTERNAL;
@@ -2173,6 +2214,59 @@ cleanup_fail:
  * The already-current and concurrent-adopt paths share bind_identity so the
  * bind is covered by every normal reopen.
  */
+/*
+ * 007 §10 step 1 (and step 4 on a v6 open): when <brain>.d/device_id is
+ * missing, copy a valid <brain>.device_id into it, through the same temp file
+ * and rename. The old file stays. A missing old file copies nothing. An
+ * invalid old file is the open's error, like an invalid sidecar, unless this
+ * is a `device new` open, which mints over it.
+ */
+static int copy_legacy_sidecar(Store *s, char *err, size_t errlen)
+{
+    char side[REMEMBER_PATH_MAX + SIDECAR_PATH_PAD];
+    char legacy[REMEMBER_PATH_MAX + SIDECAR_PATH_PAD];
+    char uuid[UUID_STR_LEN + 1];
+    int legacy_rc = 0;
+
+    if (sidecar_path(s->path, side, sizeof(side)) != 0 ||
+        brain_side_path(s->path, k_legacy_sidecar_suffix, legacy, sizeof(legacy)) != 0) {
+        set_err(err, errlen, "database path is too long");
+        return -1;
+    }
+    if (read_sidecar(side, uuid) != 1) {
+        return 0; /* already there (valid or not); the read below reports it */
+    }
+    legacy_rc = read_sidecar(legacy, uuid);
+    if (legacy_rc == 1 || (legacy_rc < 0 && s->replace_invalid_sidecar)) {
+        return 0;
+    }
+    if (legacy_rc < 0) {
+        set_err(err, errlen, "invalid device_id sidecar");
+        return -1;
+    }
+    if (ensure_sidecar_dir(s->path, err, errlen) != 0) {
+        return -1;
+    }
+    return write_sidecar(side, uuid, err, errlen);
+}
+
+/* 007 §10 step 3: once <brain>.d/device_id holds a valid id, the old file
+   goes. A failed unlink leaves it for the next open to retry. */
+static void delete_legacy_sidecar(const Store *s)
+{
+    char side[REMEMBER_PATH_MAX + SIDECAR_PATH_PAD];
+    char legacy[REMEMBER_PATH_MAX + SIDECAR_PATH_PAD];
+    char uuid[UUID_STR_LEN + 1];
+
+    if (sidecar_path(s->path, side, sizeof(side)) != 0 ||
+        brain_side_path(s->path, k_legacy_sidecar_suffix, legacy, sizeof(legacy)) != 0) {
+        return;
+    }
+    if (read_sidecar(side, uuid) == 0) {
+        (void)unlink(legacy);
+    }
+}
+
 static int ensure_schema(Store *s, char *err, size_t errlen)
 {
     int version = 0;
@@ -2189,6 +2283,10 @@ static int ensure_schema(Store *s, char *err, size_t errlen)
     if (version < 0 || version > SCHEMA_VERSION - 1) {
         return check_version(version, err, errlen);
     }
+    /* 007 §10 step 1: before BEGIN. */
+    if (copy_legacy_sidecar(s, err, errlen) != 0) {
+        return -1;
+    }
     if (exec_sql(db, "PRAGMA foreign_keys = OFF;", err, errlen, serr) != 0) {
         return -1;
     }
@@ -2198,11 +2296,17 @@ static int ensure_schema(Store *s, char *err, size_t errlen)
         return -1;
     }
     if (rc == 0) {
-        return 0; /* migrated + committed; identity already bound */
+        delete_legacy_sidecar(s); /* step 3: after COMMIT */
+        return 0;                 /* migrated + committed; identity already bound */
     }
 
 bind_identity:
-    return bind_current_identity(s, err, errlen);
+    /* Step 4: finish a copy a crash left half done, then read the id. */
+    if (copy_legacy_sidecar(s, err, errlen) != 0 || bind_current_identity(s, err, errlen) != 0) {
+        return -1;
+    }
+    delete_legacy_sidecar(s);
+    return 0;
 }
 
 static int change_seq_attach(Store *s);
