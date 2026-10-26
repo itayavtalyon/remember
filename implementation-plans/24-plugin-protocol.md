@@ -90,13 +90,13 @@ Quality gate: plan 19's commands, plus the validator. Coverage stays 100/100 if 
 
 ## Definition of done
 
-- [ ] Validator exits 0 in CI.
-- [ ] Schema files match the spec.
-- [ ] Fixtures match the spec examples.
-- [ ] `protocol` is still 1.
-- [ ] GitHub settings are unchanged.
-- [ ] The `$id` fetch is either not started, or Itay's note is in Implementation Notes and the fetch matches.
-- [ ] Gate green. Second review clear. INDEX row 24 ticked after that review.
+- [x] Validator exits 0 in CI.
+- [x] Schema files match the spec.
+- [x] Fixtures match the spec examples.
+- [x] `protocol` is still 1.
+- [x] GitHub settings are unchanged.
+- [x] The `$id` fetch is either not started, or Itay's note is in Implementation Notes and the fetch matches.
+- [x] Gate green. Second review clear. INDEX row 24 ticked after that review.
 
 ## Second review handover
 
@@ -123,12 +123,58 @@ Itay's decisions (2026-10-25, asked before stage 2):
 | File bytes | The block body plus one `\n`. |
 | Changelog | A dated "Repository note" at the top of `PLUGIN-PROTOCOL-CHANGES.md`. No revision bump. `PLUGIN-PROTOCOL.md` is unchanged. |
 
-Stage 1. The `docs` job in `.github/workflows/ci.yml` creates a venv, installs `jsonschema==4.26.0` and `referencing==0.37.0` (the versions the changelog names), and runs `scripts/validate_plugin_spec.py docs/PLUGIN-PROTOCOL.md`. A non-zero exit fails the job. Local run with the same pins: 13 schemas, 29 examples, 81 negative tests, 0 code-check negative tests, 14 positive edge tests, 0 failures, exit 0.
+Stage 1. The `docs` job in `.github/workflows/ci.yml` creates a venv, installs `jsonschema==4.26.0` and `referencing==0.37.0` (the changelog names jsonschema 4.26; referencing 0.37.0 was the version installed with it), and runs `scripts/validate_plugin_spec.py docs/PLUGIN-PROTOCOL.md`. A non-zero exit fails the job. Local run with the same pins: 13 schemas, 29 examples, 81 negative tests, 0 code-check negative tests, 14 positive edge tests, 0 failures, exit 0.
 
-Stages 2–3 (one commit, because both checks share one file walk). Extraction gives 39 files: 13 schemas and 26 fixtures (22 under `examples/`, plus the 4 §2.4 files). The check fails on a missing file, a changed byte (with a unified diff of up to 40 lines), a lost final newline, a missing exec bit on a `#!` file, a file in either folder that the spec does not produce, and two spec blocks that map to one path. Files whose names start with `.` are ignored, so a macOS `.DS_Store` does not fail a local run. An uncaptioned ```` ```python ```` block in the spec fails, just as an unmarked ```` ```json ```` block already does. The repo root is the script's parent folder, so the check works from any cwd. Probes run: one schema byte changed (fails, diff shown), restored (passes), a stray file, `chmod -x hello.py`, and a truncated final newline (each fails), `--write` (all pass again).
+Stages 2–3 (one commit, because both checks share one file walk). Extraction gives 39 files: 13 schemas and 26 fixtures (22 under `examples/`, plus the 4 §2.4 files). The check fails on a missing file, a changed byte (with a unified diff of up to 40 lines), a lost final newline, a missing exec bit on a `#!` file, a file in either folder that the spec does not produce, and two spec blocks that map to one path. Files whose names start with `.` are ignored, so a macOS `.DS_Store` does not fail a local run. An uncaptioned ```` ```python ```` block in the spec fails, just as an unmarked ```` ```json ```` block already does. The repo root is the parent of the script's folder, so the check works from any cwd. Probes run: one schema byte changed (fails, diff shown), restored (passes), a stray file, `chmod -x hello.py`, and a truncated final newline (each fails), `--write` (all pass again).
 
 009-4: the new comments and docstring cite no rule id. Stage 4 (the `$id` fetch) is not started. Itay's GitHub Pages note is not here yet. No GitHub setting changed. `protocol` in the spec is still 1. No C code changed, so the gate is the validator plus the file check.
 
+**2026-10-25, Itay: GitHub Pages is on.** Itay said this in the implementing session after PR #38 merged, and later that Pages publishes `main` from the repo root. The implementer wrote the note down. Itay merged it with the fetch in PR #39.
+
+**2026-10-25, stage 4.** Itay's decision on what the fetch compares against: each schema file as it is on `main`, on every run. Pages publishes `main`, so this check tells whether Pages serves `main`. A pull request that edits a schema stays green, because the byte check in the validator already covers that checkout's files. Right after a merge, Pages deploy lag can fail one run on `main`. Itay accepted that.
+
+The `docs` job has a new step, "Fetch each schema $id". It fetches `main` with depth 1. For each file under `schema/plugin/v1/` on `main`, it reads `$id` with `jq` and fetches that URL with `curl -fsSL --retry 3`. It then compares the response body to the file with `cmp`. The step fails if the URL cannot be fetched, if the body differs, or if `main` has no schema files. It has no flag, no repository variable, and no skip switch. This session's proxy blocks `itayavtalyon.github.io`, so the step was tested locally with a stand-in `curl`. Each URL is answered from the file on `main`. Matching bytes give 13 ok and exit 0. One changed byte in `common.json` fails with exit 1, and so does a failed fetch of `control.json`. CI on the pull request is the first real fetch. The gate ran again: the validator exits 0 (13 schemas, 29 examples, 81 negative, 0 code-check negative, 14 positive, 0 failures). No GitHub setting changed.
+
 ## Review Notes
 
-_(empty)_
+**2026-10-25, code review round 1 (whole plan: PR #38 and PR #39).** Ten findings. Itay's decisions:
+
+| # | Finding | Outcome |
+|---|---|---|
+| 1, 2 | The push-to-main run fetches before Pages redeploys, and `curl --retry` does not retry a byte mismatch. Every PR also depends on github.io. | Itay: keep "every run" and poll. The fetch step reruns the whole comparison every 20 s, up to 16 attempts (5 minutes), before it fails. A github.io outage still fails a PR after 5 minutes. |
+| 3, 4, 5 | Older validator code crashes with a traceback on a broken `$ref`, a schema without `$id`, or an example marker that names no schema. | Itay: harden. A schema must have a `$id` under the `$id` base. An unknown marker name is a FAIL line. When any schema problem exists, the example and edge tests are skipped, because they would raise. The file check still runs, and the summary says the tests were not run. Extraction reads the loaded schemas, so the misleading "reported above" comment is gone. |
+| 6 | The stray check and `--write` covered all of `tests/fixtures/plugin/`, so plan 25 fixtures there would fail and be deleted. | Itay: scope it. Only the folders the spec fills are checked (`schema/plugin/v1/`, `examples/`, `hello/`, `log_ids/`). Subfolders such as `__pycache__` and dot files are ignored. A spec rename of a captioned folder leaves the old folder unflagged. |
+| 7 | Fixture numbers shift when an example is inserted. | Stays. It follows from the layout Itay chose. `--write` renames the files. |
+| 8 | The fetch step's `jq` ran under `set -e`, so a bad file stopped the loop. | Fixed. `jq -e` failure or a missing `$id` prints `FAIL <file> on main: no $id`, and the loop goes on. |
+| 9 | The spec says CI runs the §2.4 plugins, but CI only compared bytes. | Itay: add a compile. New docs step: `compile()` on `tests/fixtures/plugin/*/*.py`. It writes no `__pycache__`. Running the plugins is still plan 25. |
+| 10 | 13 sequential fetches, and `main` fetched even on main pushes. | Stays. It costs a few seconds. |
+
+Probes run locally: the spec still gives 13/29/81/0/14 and 0 failures, and 39 files. A stray comma in the `control.json` block, a deleted `control.json` `$id`, and a marker named `plugin-statuz.json` each print FAIL lines and exit 1 with no traceback. A `bad_manifest/` folder and `hello/__pycache__/` are ignored, and a stray `examples/99-stray.json` is flagged and removed by `--write`. With a stand-in `curl` and `sleep`, the fetch passes at once (13 ok), passes on attempt 3 when Pages catches up, and fails after 16 attempts and 15 sleeps when Pages stays stale. A syntax error in `append.py` fails the compile step.
+
+Not fixed: an example that the edge tests need (for example the plugin status example) with broken JSON still ends in a `StopIteration` traceback. That code predates plan 24 and is outside this round's findings.
+
+**2026-10-26, deep review round 2 and simplification (whole plan as merged, PR #38 and PR #39).** 18 findings. Itay's decisions and the outcomes:
+
+| # | Finding | Outcome |
+|---|---|---|
+| 1 | Round 1 regression: two schema blocks with one `$id` shared one dict entry, so one block was dropped silently. | Fixed. A repeated `$id` is a FAIL and stops the run. |
+| 2 | The fetch had no time limit: `curl --retry 3` inside 16 attempts, and nothing caught a hung connection. | Fixed. `curl --connect-timeout 10 --max-time 30`, no `--retry` (the loop retries), and `timeout-minutes: 10` on the job. |
+| 3 | The docs job is not a required check, so PR-3 is not enforced at merge. | Itay: split. The fetch is now its own job, `docs (schema $id on GitHub Pages)`, so a github.io outage never fails `docs (plugin protocol spec)`. **Open for Itay:** add `docs (plugin protocol spec)` to the `main` ruleset's required checks. This plan does not change GitHub settings. |
+| 4, 5 | `--write` could write and delete outside the fixture folders through `..` in a marker name, and on a broken schema it deleted that schema's file. | Itay: when a schema problem exists, stop before any file is checked or written. Every extracted path must also stay inside `schema/plugin/v1/` or `tests/fixtures/plugin/`. This replaces round 1's "the file check still runs". |
+| 6 | The fetch read every tree entry under `schema/plugin/v1/` on `main`, dot files and folders included. | Fixed. The job checks out `main` and reads only `schema/plugin/v1/*.json`, the same set the validator writes. |
+| 7 | An `$id` with a subpath passed the validator, then 404ed on Pages. | Fixed. The `$id` must be exactly `<base><name>.json`. |
+| 8 | A marked example that contains `$schema` was read as a schema. | Fixed. A marked block is always an example. |
+| 9 | The CI compile globbed every `tests/fixtures/plugin/*/*.py`, plan 25's broken test scripts included. | Itay: move it. The validator compiles exactly the spec's captioned python blocks. The CI step is gone. |
+| 10 | A failed Jekyll build of the repo would stop schema deploys. | Itay: add `.nojekyll`. Pages now serves files as they are. Markdown on the Pages site is no longer rendered. |
+| 11 | A non-object example crashed the validator. | Fixed. It is a FAIL line. |
+| 12 | Nothing kept the byte-compared files at LF on a Windows checkout. | Itay: add `.gitattributes`. The spec, `schema/plugin/**`, and `tests/fixtures/plugin/**` are `-text`. |
+| 13 | The compare decoded bytes with `errors="replace"`. | Fixed. Files are compared and written as bytes. |
+| 14 | Only two Python packages were pinned. | Itay: pin all. `scripts/plugin-spec-requirements.txt` pins all six, and CI installs it with `--no-deps`. |
+| 15, 17, 18 | Notes wording: the pins' source, the repo root, and who wrote the Pages note. | Fixed in Implementation Notes above. |
+| 16 | The validator docstring named revision 6. | Fixed. The docstring names no revision. |
+
+Simplification (Itay: one parse pass). One loop now reads every fenced block (json and python), sorts each one by marker first, and records its output path. Duplicate, path, and shape checks all live in `put()` and `problem()`. `check_files()` only compares and writes. The second regex pass, the JSON re-parse, `schema_blocks`, and the nested `global fail` are gone. On the real spec the output is byte for byte the same as before (13/29/81/0/14, 0 failures, 39 files).
+
+Probes run locally: a copied schema with the same `$id`, a marker of `../../../../../../docs/zz.json`, a stray comma in the envelope schema, a `status/` subpath `$id`, `$schema` inside the hello manifest example, a syntax error in the hello.py block, and a non-object example. Each prints FAIL lines with no traceback. In the cases that stop the run, `--write` touches no file. The round 1 probes still fail, and `--write` restores them: a changed schema byte, a stray `examples/99-stray.json`, `chmod -x hello.py`, and a lost final newline. A broken `bad_manifest/main.py` beside the spec folders and `hello/__pycache__/` are ignored. The new fetch job, with a stand-in `curl` and `sleep`, passes at once (13 ok, `.gitkeep` and a subfolder ignored), passes on attempt 3, and fails after 16 attempts. The pinned set installs with `--no-deps` and validates. Python 3.12 wheels resolve for every pin.
+
+Still not fixed: a broken example that the edge tests look up by type (for example the plugin status example) ends in `StopIteration`. That code predates plan 24.
