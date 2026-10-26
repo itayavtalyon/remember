@@ -7,6 +7,10 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+/* mkdtemp: Darwin in unistd.h; glibc via stdlib + _POSIX_C_SOURCE. */
+#ifdef __APPLE__
+#include <unistd.h>
+#endif
 
 enum {
     FACADE_ARGV_MAX = 32, /* max argv slots built for remember_run */
