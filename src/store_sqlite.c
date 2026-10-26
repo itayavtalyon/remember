@@ -1839,6 +1839,7 @@ static void free_open_warnings(Store *s)
 }
 
 /* Keep the prefix that was left out for store_open_warning (007 ST-7.15). */
+// NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
 static int add_open_warning(Store *s, const char *prefix, const char *reason)
 {
     MigrationWarning *grown = NULL;
@@ -1859,11 +1860,54 @@ static int add_open_warning(Store *s, const char *prefix, const char *reason)
     return 0;
 }
 
-/* Valid prefixes become the JSON array in *json; each other prefix warns.
-   Valid prefixes hold no '"' or '\\', so each item is written as is, and a
-   quoted search finds a folded duplicate. Sets *nvalid and *nlive. */
-static int collect_prefixes(Store *s, char **json, size_t *nvalid, size_t *nlive, char *err,
-                            size_t errlen)
+/* What collect_prefixes counted: live prefixes, and the valid ones written. */
+typedef struct {
+    size_t live;
+    size_t valid;
+} PrefixCounts;
+
+/* NULL when prefix is valid and new (quoted then holds "<folded>"), else the
+   setting_invalid reason. Valid prefixes hold no '"' or '\\', so the quoted
+   form found in the array so far is exactly a folded duplicate. */
+static const char *prefix_skip_reason(const char *prefix, const char *json_so_far,
+                                      char quoted[REMEMBER_BUCKET_PREFIX_BUF + 2])
+{
+    char folded[REMEMBER_BUCKET_PREFIX_BUF];
+
+    if (bucket_prefix_fold(prefix, folded, sizeof(folded)) != NORM_OK) {
+        return "bad_prefix_shape";
+    }
+    (void)snprintf(quoted, REMEMBER_BUCKET_PREFIX_BUF + 2, "\"%s\"", folded);
+    if (strstr(json_so_far, quoted) != NULL) {
+        return "duplicate_prefix";
+    }
+    return NULL;
+}
+
+/* One effective-list row: append it to the array, or keep its warning. */
+static int take_prefix(Store *s, FILE *fp, char **json, const char *prefix, PrefixCounts *counts)
+{
+    char quoted[REMEMBER_BUCKET_PREFIX_BUF + 2];
+    const char *reason = NULL;
+
+    counts->live++;
+    if (fflush(fp) != 0) {
+        return -1;
+    }
+    reason = prefix_skip_reason(prefix, *json, quoted);
+    if (reason != NULL) {
+        return add_open_warning(s, prefix, reason);
+    }
+    if (fprintf(fp, "%s%s", counts->valid > 0U ? "," : "", quoted) < 0) {
+        return -1;
+    }
+    counts->valid++;
+    return 0;
+}
+
+/* The E12.7 effective list: valid prefixes become the JSON array in *json;
+   each other prefix warns. */
+static int collect_prefixes(Store *s, char **json, PrefixCounts *counts, char *err, size_t errlen)
 {
     sqlite3 *db = s->db;
     sqlite3_stmt *sel = NULL;
@@ -1885,35 +1929,11 @@ static int collect_prefixes(Store *s, char **json, size_t *nvalid, size_t *nlive
     }
     while ((rc = sqlite3_step(sel)) == SQLITE_ROW) {
         const char *prefix = (const char *)sqlite3_column_text(sel, 0);
-        char folded[REMEMBER_BUCKET_PREFIX_BUF];
-        char quoted[REMEMBER_BUCKET_PREFIX_BUF + 2];
-        const char *reason = NULL;
 
-        (*nlive)++;
-        if (bucket_prefix_fold(prefix != NULL ? prefix : "", folded, sizeof(folded)) != NORM_OK) {
-            reason = "bad_prefix_shape";
-        } else {
-            (void)snprintf(quoted, sizeof(quoted), "\"%s\"", folded);
-            if (fflush(fp) != 0) {
-                set_err(err, errlen, "out of memory");
-                goto cleanup;
-            }
-            if (strstr(*json, quoted) != NULL) {
-                reason = "duplicate_prefix";
-            }
-        }
-        if (reason != NULL) {
-            if (add_open_warning(s, prefix != NULL ? prefix : "", reason) != 0) {
-                set_err(err, errlen, "out of memory");
-                goto cleanup;
-            }
-            continue;
-        }
-        if (fprintf(fp, "%s%s", *nvalid > 0U ? "," : "", quoted) < 0) {
+        if (take_prefix(s, fp, json, prefix != NULL ? prefix : "", counts) != 0) {
             set_err(err, errlen, "out of memory");
             goto cleanup;
         }
-        (*nvalid)++;
     }
     if (rc != SQLITE_DONE) {
         capture_sqlite_error(db, &s->last);
@@ -1950,10 +1970,10 @@ static int migrate_prefix_row(Store *s, const char *now, char *err, size_t errle
     sqlite3 *db = s->db;
     char *json = NULL;
     char *order_at = NULL;
-    char vv[VV_JSON_BUFLEN];
-    const char *binds[5];
-    size_t nvalid = 0U;
-    size_t nlive = 0U;
+    enum { ROW_BINDS = 5 };
+    char vv_json[VV_JSON_BUFLEN];
+    const char *binds[ROW_BINDS];
+    PrefixCounts counts = {0U, 0U};
     int rows = 0;
     int result = -1;
 
@@ -1964,10 +1984,10 @@ static int migrate_prefix_row(Store *s, const char *now, char *err, size_t errle
     if (rows == 0) {
         return 0; /* ST-10.1 */
     }
-    if (collect_prefixes(s, &json, &nvalid, &nlive, err, errlen) != 0) {
+    if (collect_prefixes(s, &json, &counts, err, errlen) != 0) {
         return -1;
     }
-    if (nlive > 0U && nvalid == 0U) {
+    if (counts.live > 0U && counts.valid == 0U) {
         free(json);
         return 0; /* every prefix failed: no row */
     }
@@ -1975,17 +1995,17 @@ static int migrate_prefix_row(Store *s, const char *now, char *err, size_t errle
                     &order_at, err, errlen, &s->last) != 0) {
         goto cleanup;
     }
-    (void)snprintf(vv, sizeof(vv), "{\"%s\":1}", s->device_id);
+    (void)snprintf(vv_json, sizeof(vv_json), "{\"%s\":1}", s->device_id);
     binds[0] = k_prefixes_key;
     binds[1] = json;
     binds[2] = order_at != NULL ? order_at : now;
     binds[3] = s->device_id;
-    binds[4] = vv;
+    binds[4] = vv_json;
     if (exec_bound(db,
                    "INSERT INTO settings_v6(key, value, updated_by, updated_at, device_id, "
                    "version_vector, deleted_at, change_seq) VALUES (?1, ?2, "
                    "'{\"kind\":\"human\",\"id\":null}', ?3, ?4, ?5, NULL, 1);",
-                   binds, 5, err, errlen, &s->last) != 0 ||
+                   binds, ROW_BINDS, err, errlen, &s->last) != 0 ||
         exec_sql(db, "UPDATE brain_meta SET change_seq = 1;", err, errlen, &s->last) != 0) {
         goto cleanup;
     }
@@ -2001,14 +2021,14 @@ cleanup:
 static int integrity_ok(sqlite3 *db, char *err, size_t errlen, StoreError *serr)
 {
     char *answer = NULL;
-    int ok = 0;
+    bool sound = false;
 
     if (select_text(db, "PRAGMA integrity_check;", &answer, err, errlen, serr) != 0) {
         return -1;
     }
-    ok = (answer != NULL && strcmp(answer, "ok") == 0);
+    sound = (answer != NULL && strcmp(answer, "ok") == 0);
     free(answer);
-    if (!ok) {
+    if (!sound) {
         set_err(err, errlen, "migration failed the integrity check");
         return -1;
     }
@@ -5539,6 +5559,7 @@ static StoreStatus insert_edge(sqlite3 *db, StoreEdge edge, StoreEdgeKind kind, 
     int rc = 0;
     const char *tok = edge_kind_token(kind);
     char link_id[UUID_STR_LEN + 1];
+    enum { BIND_LINK_ID = 5 };
 
     if (tok == NULL || mint_uuid_v7(link_id) != 0) {
         return STORE_ERR_INTERNAL;
@@ -5556,7 +5577,7 @@ static StoreStatus insert_edge(sqlite3 *db, StoreEdge edge, StoreEdgeKind kind, 
     (void)sqlite3_bind_int64(stmt, 2, edge.to_id);
     (void)sqlite3_bind_text(stmt, 3, tok, -1, SQLITE_STATIC);
     (void)sqlite3_bind_text(stmt, 4, now, -1, SQLITE_STATIC);
-    (void)sqlite3_bind_text(stmt, 5, link_id, -1, SQLITE_TRANSIENT);
+    (void)sqlite3_bind_text(stmt, BIND_LINK_ID, link_id, -1, SQLITE_TRANSIENT);
     rc = sqlite3_step(stmt);
     if (rc != SQLITE_DONE) {
         capture_sqlite_error(db, serr);
