@@ -512,6 +512,248 @@ TEST(schema_v6_a_new_write_stores_the_source_as_an_actor)
     free(db);
 }
 
+/* ---- change_seq on writes (008 JE-5.2; Itay 2026-10-25: bump it now) ---- */
+
+static const char k_hash_one[] = "1111111111111111111111111111111111111111111111111111111111111111";
+static const char k_hash_two[] = "2222222222222222222222222222222222222222222222222222222222222222";
+
+static void assert_seqs(const char *db, const char *want_entries, const char *want_brain)
+{
+    assert_query_is(db, (QueryExpect){.sql = "SELECT group_concat(local_id || ':' || change_seq, "
+                                             "' ') FROM (SELECT * FROM entries ORDER BY local_id);",
+                                      .want = want_entries});
+    assert_query_is(db,
+                    (QueryExpect){.sql = "SELECT change_seq FROM brain_meta;", .want = want_brain});
+}
+
+static long long given_added(Store *s, const char *body, const char *hash, const char *tag)
+{
+    Entry e;
+    StoreAddAction act = STORE_ADD_CREATED;
+    const char *tags[] = {tag};
+    long long id = 0;
+
+    memset(&e, 0, sizeof(e));
+    ASSERT_EQ_STATUS(
+        store_add(s, body, hash, NULL, tags, tag != NULL ? 1U : 0U, "human", NULL, k_now, &act, &e),
+        STORE_OK);
+    id = e.id;
+    store_entry_free(&e);
+    return id;
+}
+
+/* Each changed row takes the next value once per write; a no-op takes none. */
+TEST(schema_v6_each_changed_entry_takes_the_next_counter_value_once)
+{
+    char *db = make_temp_db_path();
+    Store *s = NULL;
+    Entry e;
+    StoreUpdate u;
+
+    ASSERT_TRUE(db != NULL);
+    s = given_open(db);
+    ASSERT_EQ_INT((int)given_added(s, "one", k_hash_one, NULL), 1);
+    assert_seqs(db, "1:1", "1");
+    /* The same keyless body with nothing new changes nothing. */
+    (void)given_added(s, "one", k_hash_one, NULL);
+    assert_seqs(db, "1:1", "1");
+    /* A merge that adds a tag changes the row: one value. */
+    (void)given_added(s, "one", k_hash_one, "t");
+    assert_seqs(db, "1:2", "2");
+
+    /* An update touching body, tags and the vector still takes one value. */
+    memset(&u, 0, sizeof(u));
+    u.set_body = true;
+    u.body = "uno";
+    u.body_hash = k_hash_two;
+    u.set_tags = true;
+    memset(&e, 0, sizeof(e));
+    ASSERT_EQ_STATUS(store_update(s, 1, &u, k_now, &e, NULL), STORE_OK);
+    store_entry_free(&e);
+    assert_seqs(db, "1:3", "3");
+
+    ASSERT_EQ_STATUS(store_soft_delete_by_id(s, 1, k_now, &e), STORE_OK);
+    store_entry_free(&e);
+    assert_seqs(db, "1:4", "4");
+    memset(&u, 0, sizeof(u));
+    u.undelete = true;
+    u.bin = STORE_BIN_DELETED;
+    ASSERT_EQ_STATUS(store_update(s, 1, &u, k_now, &e, NULL), STORE_OK);
+    store_entry_free(&e);
+    assert_seqs(db, "1:5", "5");
+    ASSERT_EQ_STATUS(store_rekey(s, 1, (RekeyKeys){.key_or_null = NULL, .new_key_or_null = "k"},
+                                 STORE_BIN_LIVE, k_now, &e, NULL),
+                     STORE_OK);
+    store_entry_free(&e);
+    assert_seqs(db, "1:6", "6");
+    store_close(s);
+    free(db);
+}
+
+/* A write that rolls back takes no value, and the next write starts clean. */
+TEST(schema_v6_a_rolled_back_write_leaves_the_counter)
+{
+    char *db = make_temp_db_path();
+    Store *s = NULL;
+    Entry e;
+    StoreUpdate u;
+    long long other = 0;
+
+    ASSERT_TRUE(db != NULL);
+    s = given_open(db);
+    (void)given_added(s, "one", k_hash_one, NULL);
+    (void)given_added(s, "two", k_hash_two, NULL);
+    memset(&u, 0, sizeof(u));
+    u.set_body = true;
+    u.body = "two";
+    u.body_hash = k_hash_two;
+    memset(&e, 0, sizeof(e));
+    ASSERT_EQ_STATUS(store_update(s, 1, &u, k_now, &e, &other), STORE_ERR_CONFLICT);
+    assert_seqs(db, "1:1 2:2", "2");
+    memset(&u, 0, sizeof(u));
+    u.set_tags = true;
+    ASSERT_EQ_STATUS(store_update(s, 1, &u, k_now, &e, NULL), STORE_OK);
+    store_entry_free(&e);
+    assert_seqs(db, "1:3 2:2", "3");
+    store_close(s);
+    free(db);
+}
+
+/* link: the link row and both ends; unlink: both ends. */
+TEST(schema_v6_link_and_unlink_take_counter_values)
+{
+    char *db = make_temp_db_path();
+    Store *s = NULL;
+    StoreNeighbor stub;
+    StoreNeighbor *stubs = NULL;
+    size_t nstubs = 0U;
+    StoreLinkAction action = STORE_LINK_CREATED;
+
+    ASSERT_TRUE(db != NULL);
+    s = given_open(db);
+    (void)given_added(s, "one", k_hash_one, NULL);
+    (void)given_added(s, "two", k_hash_two, NULL);
+    memset(&stub, 0, sizeof(stub));
+    ASSERT_EQ_STATUS(store_link(s, (StoreEdge){.from_id = 1, .to_id = 2}, STORE_EDGE_CITES, k_now,
+                                &action, &stub),
+                     STORE_OK);
+    store_neighbor_free(&stub);
+    assert_query_is(db, (QueryExpect){.sql = "SELECT change_seq FROM entry_links;", .want = "3"});
+    assert_seqs(db, "1:4 2:5", "5");
+    /* Linking again touches the edge: three new values. */
+    ASSERT_EQ_STATUS(store_link(s, (StoreEdge){.from_id = 1, .to_id = 2}, STORE_EDGE_CITES, k_now,
+                                &action, &stub),
+                     STORE_OK);
+    ASSERT_EQ_INT((int)action, (int)STORE_LINK_MERGED);
+    store_neighbor_free(&stub);
+    assert_query_is(db, (QueryExpect){.sql = "SELECT change_seq FROM entry_links;", .want = "6"});
+    assert_seqs(db, "1:7 2:8", "8");
+    ASSERT_EQ_STATUS(store_unlink(s, 1, 2, NULL, k_now, &stubs, &nstubs), STORE_OK);
+    store_neighbors_free(stubs, nstubs);
+    assert_seqs(db, "1:9 2:10", "10");
+    store_close(s);
+    free(db);
+}
+
+/* Purge deletes the row and writes one tombstone with the next value. */
+TEST(schema_v6_purge_writes_one_tombstone_per_row)
+{
+    char *db = make_temp_db_path();
+    Store *s = NULL;
+    Entry e;
+    Entry *rows = NULL;
+    size_t nrows = 0U;
+    char sql[V6_SQL_BUF];
+    char id_one[STORE_DEVICE_ID_LEN + 1];
+
+    ASSERT_TRUE(db != NULL);
+    s = given_open(db);
+    (void)given_added(s, "one", k_hash_one, NULL);
+    (void)given_added(s, "two", k_hash_two, NULL);
+    memset(&e, 0, sizeof(e));
+    ASSERT_EQ_STATUS(store_soft_delete_by_id(s, 1, k_now, &e), STORE_OK);
+    (void)snprintf(id_one, sizeof(id_one), "%s", e.sync_id);
+    store_entry_free(&e);
+    ASSERT_EQ_STATUS(store_hard_delete_by_id(s, 1, STORE_BIN_DELETED, k_now, &e), STORE_OK);
+    store_entry_free(&e);
+    (void)snprintf(sql, sizeof(sql),
+                   "SELECT (id = '%s') || '|' || change_seq || '|' || purged_at FROM tombstones;",
+                   id_one);
+    assert_query_is(db, (QueryExpect){.sql = sql, .want = "1|4|2026-06-15T12:00:00.000Z"});
+    assert_seqs(db, "2:2", "4");
+
+    ASSERT_EQ_STATUS(store_soft_delete_by_id(s, 2, k_now, &e), STORE_OK);
+    store_entry_free(&e);
+    ASSERT_EQ_STATUS(store_purge(s, STORE_BIN_DELETED, k_now, &rows, &nrows), STORE_OK);
+    ASSERT_EQ_INT((int)nrows, 1);
+    store_entry_free(&rows[0]);
+    free(rows);
+    assert_query_is(db, (QueryExpect){.sql = "SELECT group_concat(change_seq, ' ') FROM (SELECT * "
+                                             "FROM tombstones ORDER BY change_seq);",
+                                      .want = "4 6"});
+    assert_query_is(db, (QueryExpect){.sql = "SELECT change_seq FROM brain_meta;", .want = "6"});
+    store_close(s);
+    free(db);
+}
+
+/* After a migration that wrote the prefix row (counter 1), the next write is 2. */
+TEST(schema_v6_the_first_write_after_a_prefix_row_is_two)
+{
+    char *db = make_temp_db_path();
+    Store *s = NULL;
+
+    ASSERT_TRUE(db != NULL);
+    given_empty_v5_brain(db);
+    exec_sql(db, "INSERT INTO bucket_prefixes(prefix, added_at, removed_at, device_id) VALUES "
+                 "('a:', '2026-01-01T00:00:00.000Z', NULL, 'd');");
+    s = given_open(db);
+    (void)given_added(s, "one", k_hash_one, NULL);
+    assert_seqs(db, "1:2", "2");
+    store_close(s);
+    free(db);
+}
+
+/* Import: each written row takes a value; an identical re-import takes none. */
+TEST(schema_v6_import_stamps_written_rows_only)
+{
+    char *db = make_temp_db_path();
+    char *peer = make_temp_db_path();
+    Store *s = NULL;
+    StoreImportCounts counts;
+    StoreNeighbor stub;
+    StoreLinkAction action = STORE_LINK_CREATED;
+    char hash_one[REMEMBER_SHA256_HEX_LEN + 1];
+    char hash_two[REMEMBER_SHA256_HEX_LEN + 1];
+
+    ASSERT_TRUE(db != NULL && peer != NULL);
+    /* Import checks each body against its hash. */
+    body_hash_hex("one", strlen("one"), hash_one);
+    body_hash_hex("two", strlen("two"), hash_two);
+    s = given_open(peer);
+    (void)given_added(s, "one", hash_one, NULL);
+    (void)given_added(s, "two", hash_two, NULL);
+    memset(&stub, 0, sizeof(stub));
+    ASSERT_EQ_STATUS(store_link(s, (StoreEdge){.from_id = 1, .to_id = 2}, STORE_EDGE_CITES, k_now,
+                                &action, &stub),
+                     STORE_OK);
+    store_neighbor_free(&stub);
+    store_close(s);
+    harness_make_v5_source(peer);
+
+    s = given_open(db);
+    memset(&counts, 0, sizeof(counts));
+    ASSERT_EQ_STATUS(store_import(s, peer, k_now, &counts), STORE_OK);
+    ASSERT_EQ_INT((int)counts.inserted, 2);
+    assert_seqs(db, "1:1 2:2", "3");
+    assert_query_is(db, (QueryExpect){.sql = "SELECT change_seq FROM entry_links;", .want = "3"});
+    ASSERT_EQ_STATUS(store_import(s, peer, k_now, &counts), STORE_OK);
+    ASSERT_EQ_INT((int)counts.unchanged, 2);
+    assert_seqs(db, "1:1 2:2", "3");
+    store_close(s);
+    free(db);
+    free(peer);
+}
+
 #ifdef REMEMBER_TEST_HOOKS
 /* The v5 shape is still there: user_version, the old columns, the E12 tables. */
 static void assert_still_v5(const char *db)
@@ -616,6 +858,12 @@ void register_schema_v6_tests(void)
     RUN_TEST(schema_v6_empty_e12_writes_no_row);
     RUN_TEST(schema_v6_fresh_and_migrated_schemas_are_equal);
     RUN_TEST(schema_v6_a_new_write_stores_the_source_as_an_actor);
+    RUN_TEST(schema_v6_each_changed_entry_takes_the_next_counter_value_once);
+    RUN_TEST(schema_v6_a_rolled_back_write_leaves_the_counter);
+    RUN_TEST(schema_v6_link_and_unlink_take_counter_values);
+    RUN_TEST(schema_v6_purge_writes_one_tombstone_per_row);
+    RUN_TEST(schema_v6_the_first_write_after_a_prefix_row_is_two);
+    RUN_TEST(schema_v6_import_stamps_written_rows_only);
 #ifdef REMEMBER_TEST_HOOKS
     RUN_TEST(schema_v6_exec_fault_anywhere_keeps_v5);
     RUN_TEST(schema_v6_prepare_fault_anywhere_keeps_v5);

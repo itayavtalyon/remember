@@ -16,6 +16,14 @@
 #include <time.h>
 #include <unistd.h>
 
+/* change_seq state of the open write transaction (stamp_change_seq). */
+typedef struct {
+    long long base; /* brain_meta.change_seq when this transaction first stamped */
+    bool active;
+    /* NOLINTNEXTLINE(readability-magic-numbers,cppcoreguidelines-avoid-magic-numbers) */
+    char pad_[7]; /* explicit tail padding (kept -Wpadded-clean) */
+} ChangeSeqTx;
+
 /* A prefix the v5 -> v6 step left out (store_open_warning). */
 typedef struct {
     char *value;
@@ -29,6 +37,7 @@ struct Store {
     char *device_id;
     MigrationWarning *warnings; /* this open's v6 step; nwarnings items */
     size_t nwarnings;
+    ChangeSeqTx change_tx;
     bool replace_invalid_sidecar; /* device new only: invalid counts as missing */
     /* NOLINTNEXTLINE(readability-magic-numbers,cppcoreguidelines-avoid-magic-numbers) */
     char pad_[7]; /* explicit tail padding (kept -Wpadded-clean) */
@@ -2196,6 +2205,8 @@ bind_identity:
     return bind_current_identity(s, err, errlen);
 }
 
+static int change_seq_attach(Store *s);
+
 Store *store_open_opts(const char *path, const StoreOpenOpts *opts, char *err, size_t errlen,
                        StoreError *out_error)
 {
@@ -2253,6 +2264,10 @@ Store *store_open_opts(const char *path, const StoreOpenOpts *opts, char *err, s
         goto cleanup_fail;
     }
     s->db = db;
+    if (change_seq_attach(s) != 0) {
+        set_err(err, errlen, "out of memory");
+        goto cleanup_fail;
+    }
     if (apply_pragmas(db, timeout_ms, err, errlen, &s->last) != 0) {
         goto cleanup_fail;
     }
@@ -2810,6 +2825,147 @@ static int vv_increment(const char *in, const char *device_id, char *out, size_t
     }
 }
 
+/* ---- change_seq (008 JE-5.2) ------------------------------------------------
+ * Each row a write changes takes the next brain counter value, once per write
+ * transaction. The counter's value when this transaction first stamps a row is
+ * kept on the connection (sqlite3_set_clientdata): a row whose change_seq is
+ * above it already holds this write's value, so a helper that touches the
+ * same row twice in one write does not take a second value. The commit and
+ * rollback hooks end that state. */
+static const char k_change_seq_tx[] = "remember.change_seq_tx";
+
+static int change_seq_tx_commit(void *arg)
+{
+    ((ChangeSeqTx *)arg)->active = false;
+    return 0; /* 0 lets the commit go ahead */
+}
+
+static void change_seq_tx_rollback(void *arg)
+{
+    ((ChangeSeqTx *)arg)->active = false;
+}
+
+static int change_seq_attach(Store *s)
+{
+    if (sqlite3_set_clientdata(s->db, k_change_seq_tx, &s->change_tx, NULL) != SQLITE_OK) {
+        return -1;
+    }
+    (void)sqlite3_commit_hook(s->db, change_seq_tx_commit, &s->change_tx);
+    (void)sqlite3_rollback_hook(s->db, change_seq_tx_rollback, &s->change_tx);
+    return 0;
+}
+
+/* The row a write changed: an entry by local_id when kind is NULL, else the
+   link (from_id, to_id, kind). */
+typedef struct {
+    long long local_id;
+    StoreEdge edge;
+    const char *kind;
+} ChangeSeqRow;
+
+static StoreStatus stamp_change_seq(sqlite3 *db, ChangeSeqRow row, StoreError *serr)
+{
+    /* ?1..?3 name the row; ?4 is the transaction's base value. */
+    static const char *const k_bump[] = {
+        "UPDATE brain_meta SET change_seq = change_seq + 1 WHERE "
+        "(SELECT change_seq FROM entries WHERE local_id = ?1) <= ?4;",
+        "UPDATE brain_meta SET change_seq = change_seq + 1 WHERE (SELECT change_seq FROM "
+        "entry_links WHERE from_id = ?1 AND to_id = ?2 AND kind = ?3) <= ?4;",
+    };
+    static const char *const k_set[] = {
+        "UPDATE entries SET change_seq = (SELECT change_seq FROM brain_meta) WHERE local_id = ?1;",
+        "UPDATE entry_links SET change_seq = (SELECT change_seq FROM brain_meta) "
+        "WHERE from_id = ?1 AND to_id = ?2 AND kind = ?3;",
+    };
+    enum { BIND_KEY = 1, BIND_TO = 2, BIND_KIND = 3, BIND_BASE = 4 };
+    ChangeSeqTx *tx = (ChangeSeqTx *)sqlite3_get_clientdata(db, k_change_seq_tx);
+    size_t which = (row.kind == NULL) ? 0U : 1U;
+    sqlite3_stmt *stmt = NULL;
+    int step = 0;
+
+    if (tx == NULL) {
+        return STORE_ERR_INTERNAL;
+    }
+    if (!tx->active) {
+        int base = 0;
+
+        if (select_int(db, "SELECT change_seq FROM brain_meta;", NULL, &base, NULL, 0U, serr) !=
+            0) {
+            return STORE_ERR_SQLITE;
+        }
+        tx->base = base;
+        tx->active = true;
+    }
+    if (sqlite3_prepare_v2(db, k_bump[which], -1, &stmt, NULL) != SQLITE_OK) {
+        capture_sqlite_error(db, serr);
+        return STORE_ERR_SQLITE;
+    }
+    (void)sqlite3_bind_int64(stmt, BIND_KEY, which == 0U ? row.local_id : row.edge.from_id);
+    (void)sqlite3_bind_int64(stmt, BIND_TO, row.edge.to_id);
+    (void)sqlite3_bind_text(stmt, BIND_KIND, row.kind, -1, SQLITE_STATIC);
+    (void)sqlite3_bind_int64(stmt, BIND_BASE, tx->base);
+    step = sqlite3_step(stmt);
+    (void)sqlite3_finalize(stmt);
+    if (step != SQLITE_DONE) {
+        capture_sqlite_error(db, serr);
+        return STORE_ERR_SQLITE;
+    }
+    if (sqlite3_changes(db) == 0) {
+        return STORE_OK; /* already stamped by this write */
+    }
+    if (sqlite3_prepare_v2(db, k_set[which], -1, &stmt, NULL) != SQLITE_OK) {
+        capture_sqlite_error(db, serr);
+        return STORE_ERR_SQLITE;
+    }
+    (void)sqlite3_bind_int64(stmt, BIND_KEY, which == 0U ? row.local_id : row.edge.from_id);
+    (void)sqlite3_bind_int64(stmt, BIND_TO, row.edge.to_id);
+    (void)sqlite3_bind_text(stmt, BIND_KIND, row.kind, -1, SQLITE_STATIC);
+    step = sqlite3_step(stmt);
+    (void)sqlite3_finalize(stmt);
+    if (step != SQLITE_DONE) {
+        capture_sqlite_error(db, serr);
+        return STORE_ERR_SQLITE;
+    }
+    return STORE_OK;
+}
+
+static StoreStatus stamp_entry(sqlite3 *db, long long local_id, StoreError *serr)
+{
+    return stamp_change_seq(db, (ChangeSeqRow){.local_id = local_id}, serr);
+}
+
+/* Purge (JE-5.2, G-09): one tombstones row with the next counter value. A
+   memory id purged before and imported again keeps one row, the newest. */
+static StoreStatus insert_tombstone(sqlite3 *db, const char *id, const char *now, StoreError *serr)
+{
+    sqlite3_stmt *stmt = NULL;
+    int step = 0;
+    char err_unused[1];
+
+    if (exec_sql(db, "UPDATE brain_meta SET change_seq = change_seq + 1;", err_unused, 0U, serr) !=
+        0) {
+        return STORE_ERR_SQLITE;
+    }
+    if (sqlite3_prepare_v2(db,
+                           "INSERT INTO tombstones(id, change_seq, purged_at) "
+                           "VALUES (?1, (SELECT change_seq FROM brain_meta), ?2) "
+                           "ON CONFLICT(id) DO UPDATE SET change_seq = excluded.change_seq, "
+                           "purged_at = excluded.purged_at;",
+                           -1, &stmt, NULL) != SQLITE_OK) {
+        capture_sqlite_error(db, serr);
+        return STORE_ERR_SQLITE;
+    }
+    (void)sqlite3_bind_text(stmt, 1, id, -1, SQLITE_STATIC);
+    (void)sqlite3_bind_text(stmt, 2, now, -1, SQLITE_STATIC);
+    step = sqlite3_step(stmt);
+    (void)sqlite3_finalize(stmt);
+    if (step != SQLITE_DONE) {
+        capture_sqlite_error(db, serr);
+        return STORE_ERR_SQLITE;
+    }
+    return STORE_OK;
+}
+
 static StoreStatus apply_vv_bump(sqlite3 *db, long long id, const char *device_id,
                                  const char *vv_in, StoreError *serr)
 {
@@ -2837,7 +2993,7 @@ static StoreStatus apply_vv_bump(sqlite3 *db, long long id, const char *device_i
         return STORE_ERR_SQLITE;
     }
     (void)sqlite3_finalize(stmt);
-    return STORE_OK;
+    return stamp_entry(db, id, serr);
 }
 
 static StoreStatus load_entry_by_id(sqlite3 *db, long long id, Entry *out, StoreError *serr)
@@ -3333,7 +3489,7 @@ static StoreStatus insert_entry(sqlite3 *db, const char *body, const char *body_
     }
     *out_id = sqlite3_last_insert_rowid(db);
     (void)sqlite3_finalize(stmt);
-    return STORE_OK;
+    return stamp_entry(db, *out_id, serr);
 }
 
 static StoreStatus touch_updated_at(sqlite3 *db, long long id, const char *now, StoreError *serr)
@@ -4857,7 +5013,7 @@ static StoreStatus apply_soft_delete(sqlite3 *db, long long id, const char *now,
         return STORE_ERR_SQLITE;
     }
     (void)sqlite3_finalize(stmt);
-    return STORE_OK;
+    return stamp_entry(db, id, serr);
 }
 
 static StoreStatus soft_delete_tx(Store *s, long long id_or_zero, const char *key_or_null,
@@ -4928,6 +5084,9 @@ static StoreStatus hard_delete_tx(Store *s, long long id_or_zero, const char *ke
     id = out_deleted->id;
 
     st = fts_delete(s->db, id, &s->last);
+    if (st == STORE_OK) {
+        st = insert_tombstone(s->db, out_deleted->sync_id, now, &s->last);
+    }
     if (st != STORE_OK) {
         goto fail_free;
     }
@@ -5275,6 +5434,9 @@ StoreStatus store_purge(Store *s, StoreBin bin, const char *now, Entry **out_ent
 
     for (i = 0; i < n; i++) {
         st = fts_delete(s->db, rows[i].id, &s->last);
+        if (st == STORE_OK) {
+            st = insert_tombstone(s->db, rows[i].sync_id, now, &s->last);
+        }
         if (st != STORE_OK) {
             free_entry_rows(rows, n);
             rollback_quiet(s->db);
@@ -5586,7 +5748,7 @@ static StoreStatus insert_edge(sqlite3 *db, StoreEdge edge, StoreEdgeKind kind, 
         return STORE_ERR_SQLITE;
     }
     (void)sqlite3_finalize(stmt);
-    return STORE_OK;
+    return stamp_change_seq(db, (ChangeSeqRow){.edge = edge, .kind = tok}, serr);
 }
 
 static StoreStatus touch_edge(sqlite3 *db, StoreEdge edge, StoreEdgeKind kind, const char *now,
@@ -5618,7 +5780,7 @@ static StoreStatus touch_edge(sqlite3 *db, StoreEdge edge, StoreEdgeKind kind, c
         return STORE_ERR_SQLITE;
     }
     (void)sqlite3_finalize(stmt);
-    return STORE_OK;
+    return stamp_change_seq(db, (ChangeSeqRow){.edge = edge, .kind = tok}, serr);
 }
 
 StoreStatus store_get_any(Store *s, long long id, Entry *out_entry)
@@ -6744,14 +6906,17 @@ static StoreStatus vv_pairwise_max(sqlite3 *db, const char *a_vv, const char *b_
     return STORE_OK;
 }
 
+/* Writes vv_json when it differs; only a real change takes a counter value. */
 static StoreStatus write_version_vector(sqlite3 *db, long long id, const char *vv_json,
                                         StoreError *serr)
 {
     sqlite3_stmt *stmt = NULL;
     int rc = 0;
 
-    rc = sqlite3_prepare_v2(db, "UPDATE entries SET version_vector = ?1 WHERE local_id = ?2;", -1,
-                            &stmt, NULL);
+    rc = sqlite3_prepare_v2(db,
+                            "UPDATE entries SET version_vector = ?1 WHERE local_id = ?2 AND "
+                            "version_vector IS NOT ?1;",
+                            -1, &stmt, NULL);
     if (rc != SQLITE_OK) {
         capture_sqlite_error(db, serr);
         return STORE_ERR_SQLITE;
@@ -6764,7 +6929,10 @@ static StoreStatus write_version_vector(sqlite3 *db, long long id, const char *v
         return STORE_ERR_SQLITE;
     }
     (void)sqlite3_finalize(stmt);
-    return STORE_OK;
+    if (sqlite3_changes(db) == 0) {
+        return STORE_OK;
+    }
+    return stamp_entry(db, id, serr);
 }
 
 /* Union a and b then bump local device; write VV (+ optional updated_at). */
@@ -7224,7 +7392,7 @@ static StoreStatus insert_entry_imported(sqlite3 *db, const char *key_or_null, c
     }
     *out_id = sqlite3_last_insert_rowid(db);
     (void)sqlite3_finalize(stmt);
-    return STORE_OK;
+    return stamp_entry(db, *out_id, serr);
 }
 
 static int keys_equal(const char *a, const char *b)
@@ -7932,6 +8100,22 @@ static StoreStatus import_remap_links(sqlite3 *dst, sqlite3 *src, StoreError *se
                 (void)sqlite3_finalize(ins);
                 return STORE_ERR_SQLITE;
             }
+            /* OR IGNORE kept an existing edge: nothing changed. */
+            st = (sqlite3_changes(dst) > 0)
+                     ? stamp_change_seq(
+                           dst,
+                           (ChangeSeqRow){.edge = {.from_id = from_entry.id, .to_id = to_entry.id},
+                                          .kind = kind != NULL ? kind : "related"},
+                           serr)
+                     : STORE_OK;
+            if (st != STORE_OK) {
+                store_entry_free(&from_entry);
+                store_entry_free(&to_entry);
+                (void)sqlite3_finalize(sel);
+                (void)sqlite3_finalize(sync_of);
+                (void)sqlite3_finalize(ins);
+                return st;
+            }
             store_entry_free(&from_entry);
             store_entry_free(&to_entry);
         }
@@ -8632,6 +8816,9 @@ static StoreStatus demote_occupant_key(sqlite3 *db, long long occupant_id, Store
         return STORE_ERR_UNIQUE_TAKEN;
     }
     st = write_key(db, occupant_id, NULL, serr);
+    if (st == STORE_OK) {
+        st = stamp_entry(db, occupant_id, serr);
+    }
     if (st == STORE_OK) {
         st = fts_resync(db, occupant_id, serr);
     }
