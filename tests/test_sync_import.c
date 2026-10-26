@@ -585,14 +585,7 @@ TEST(cli_import_identical_automerge_concurrent_conflict)
     cmd_result_free(&r);
 
     free(dev);
-    (void)remove(local);
-    (void)remove(foreign);
-    {
-        char side[PATH_BUF + 16];
-        (void)snprintf(side, sizeof(side), "%s.d/device_id", local);
-        (void)remove(side);
-    }
-    (void)rmdir(dir);
+    harness_remove_tree(dir);
 }
 
 TEST(cli_import_key_clash_and_hash_clash_exit_0)
@@ -795,14 +788,7 @@ TEST(cli_conflict_accept_keep_both_concurrent_remints)
     cmd_result_free(&r);
 
     free(dev);
-    (void)remove(local);
-    (void)remove(foreign);
-    {
-        char side[PATH_BUF + 16];
-        (void)snprintf(side, sizeof(side), "%s.d/device_id", local);
-        (void)remove(side);
-    }
-    (void)rmdir(dir);
+    harness_remove_tree(dir);
 }
 
 TEST(cli_conflict_accept_keep_both_key_clash_keeps_incoming_sync_id)
@@ -910,14 +896,7 @@ TEST(cli_import_incoming_dominates_updates)
     cmd_result_free(&r);
 
     free(dev);
-    (void)remove(local);
-    (void)remove(foreign);
-    {
-        char side[PATH_BUF + 16];
-        (void)snprintf(side, sizeof(side), "%s.d/device_id", local);
-        (void)remove(side);
-    }
-    (void)rmdir(dir);
+    harness_remove_tree(dir);
 }
 
 TEST(store_import_no_sidecar_copy_devices_stay_one)
@@ -1081,14 +1060,7 @@ TEST(cli_conflict_accept_keep_local_and_incoming)
     cmd_result_free(&r);
 
     free(dev);
-    (void)remove(local);
-    (void)remove(foreign);
-    {
-        char side[PATH_BUF + 16];
-        (void)snprintf(side, sizeof(side), "%s.d/device_id", local);
-        (void)remove(side);
-    }
-    (void)rmdir(dir);
+    harness_remove_tree(dir);
 }
 
 TEST(cli_conflict_accept_keep_incoming_key_clash_demotes)
@@ -1270,14 +1242,7 @@ TEST(cli_import_local_dominates_unchanged)
     cmd_result_free(&r);
 
     free(dev);
-    (void)remove(local);
-    (void)remove(foreign);
-    {
-        char side[PATH_BUF + 16];
-        (void)snprintf(side, sizeof(side), "%s.d/device_id", local);
-        (void)remove(side);
-    }
-    (void)rmdir(dir);
+    harness_remove_tree(dir);
 }
 
 /* Insert soft-deleted and expired foreign rows (bind + load expires/deleted). */
@@ -1392,14 +1357,7 @@ TEST(cli_import_conflict_snapshot_json_escapes)
     cmd_result_free(&r);
 
     free(dev);
-    (void)remove(local);
-    (void)remove(foreign);
-    {
-        char side[PATH_BUF + 16];
-        (void)snprintf(side, sizeof(side), "%s.d/device_id", local);
-        (void)remove(side);
-    }
-    (void)rmdir(dir);
+    harness_remove_tree(dir);
 }
 
 TEST(cli_import_and_conflict_human_and_help)
@@ -1630,14 +1588,7 @@ TEST(cli_import_incoming_dominates_keyless_hash_clash)
     cmd_result_free(&r);
 
     free(dev);
-    (void)remove(local);
-    (void)remove(foreign);
-    {
-        char side[PATH_BUF + 16];
-        (void)snprintf(side, sizeof(side), "%s.d/device_id", local);
-        (void)remove(side);
-    }
-    (void)rmdir(dir);
+    harness_remove_tree(dir);
 }
 
 /* Accept keep incoming with 10+ tags exercises json_each tag growth. */
@@ -1705,14 +1656,7 @@ TEST(cli_conflict_accept_incoming_many_tags)
     cmd_result_free(&r);
 
     free(dev);
-    (void)remove(local);
-    (void)remove(foreign);
-    {
-        char side[PATH_BUF + 16];
-        (void)snprintf(side, sizeof(side), "%s.d/device_id", local);
-        (void)remove(side);
-    }
-    (void)rmdir(dir);
+    harness_remove_tree(dir);
 }
 
 TEST(cli_conflict_accept_hash_clash_keep_incoming_and_both_refuse_fake_key)
@@ -1830,14 +1774,7 @@ TEST(cli_import_incoming_dominates_expires_deleted_keyless)
     cmd_result_free(&r);
 
     free(dev);
-    (void)remove(local);
-    (void)remove(foreign);
-    {
-        char side[PATH_BUF + 16];
-        (void)snprintf(side, sizeof(side), "%s.d/device_id", local);
-        (void)remove(side);
-    }
-    (void)rmdir(dir);
+    harness_remove_tree(dir);
 }
 
 /* A malformed VV on a foreign row skips that row and counts it; the local row
@@ -1878,14 +1815,7 @@ TEST(cli_import_bad_vv_row_is_rejected)
                                "\"rejected\":1}");
     cmd_result_free(&r);
 
-    (void)remove(local);
-    (void)remove(foreign);
-    {
-        char side[PATH_BUF + 16];
-        (void)snprintf(side, sizeof(side), "%s.d/device_id", local);
-        (void)remove(side);
-    }
-    (void)rmdir(dir);
+    harness_remove_tree(dir);
 }
 
 /* Corrupt conflicts.reason → conflicts list / accept return store error. */
@@ -2003,14 +1933,7 @@ TEST(cli_conflict_accept_concurrent_keep_incoming_demotes_other_key)
     cmd_result_free(&r);
 
     free(dev);
-    (void)remove(local);
-    (void)remove(foreign);
-    {
-        char side[PATH_BUF + 16];
-        (void)snprintf(side, sizeof(side), "%s.d/device_id", local);
-        (void)remove(side);
-    }
-    (void)rmdir(dir);
+    harness_remove_tree(dir);
 }
 
 /*
@@ -2100,14 +2023,7 @@ TEST(cli_conflict_accept_concurrent_keep_incoming_hash_taken_refuses)
 
     free(hash);
     free(dev);
-    (void)remove(local);
-    (void)remove(foreign);
-    {
-        char side[PATH_BUF + 16];
-        (void)snprintf(side, sizeof(side), "%s.d/device_id", local);
-        (void)remove(side);
-    }
-    (void)rmdir(dir);
+    harness_remove_tree(dir);
 }
 
 TEST(cli_import_missing_source_errors)
@@ -2255,14 +2171,7 @@ TEST(cli_import_concurrent_reimport_idempotent)
     cmd_result_free(&r);
 
     free(dev);
-    (void)remove(local);
-    (void)remove(foreign);
-    {
-        char side[PATH_BUF + 16];
-        (void)snprintf(side, sizeof(side), "%s.d/device_id", local);
-        (void)remove(side);
-    }
-    (void)rmdir(dir);
+    harness_remove_tree(dir);
 }
 
 /* Pairwise-max path where a device is present in local VV with clock 0. */
@@ -2313,14 +2222,7 @@ TEST(cli_import_vv_zero_clock_in_a_membership)
     cmd_result_free(&r);
 
     free(dev);
-    (void)remove(local);
-    (void)remove(foreign);
-    {
-        char side[PATH_BUF + 16];
-        (void)snprintf(side, sizeof(side), "%s.d/device_id", local);
-        (void)remove(side);
-    }
-    (void)rmdir(dir);
+    harness_remove_tree(dir);
 }
 
 static void given_added(const char *db, const char *const *args, size_t nargs)

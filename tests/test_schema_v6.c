@@ -4,6 +4,7 @@
 #include "store.h"
 #include "test.h"
 
+#include <sqlite3.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -16,7 +17,7 @@
  * harness_make_v5_source, with the rows each test needs added by SQL.
  */
 
-enum { V6_SQL_BUF = 1024, V6_FAULT_TRIES = 200, V6_SEARCH_LIMIT = 20 };
+enum { V6_SQL_BUF = 1024, V6_FAULT_TRIES = 200, V6_SEARCH_LIMIT = 20, V6_LINE_SLACK = 8 };
 
 static const char k_now[] = "2026-06-15T12:00:00.000Z";
 
@@ -506,9 +507,11 @@ TEST(schema_v6_a_new_write_stores_the_source_as_an_actor)
     ASSERT_EQ_INT((int)page.total, 1);
     ASSERT_STREQ(page.count > 0U ? page.entries[0].body : "", "two");
     free_page(page);
+    /* unknown is stored as human, and the filter maps it the same way. */
     q.source = "unknown";
     page = store_list(s, &q, k_now);
-    ASSERT_EQ_INT((int)page.total, 0);
+    ASSERT_EQ_INT((int)page.total, 1);
+    ASSERT_STREQ(page.count > 0U ? page.entries[0].body : "", "one");
     free_page(page);
     store_close(s);
     free(db);
@@ -519,6 +522,7 @@ TEST(schema_v6_a_new_write_stores_the_source_as_an_actor)
 static const char k_hash_one[] = "1111111111111111111111111111111111111111111111111111111111111111";
 static const char k_hash_two[] = "2222222222222222222222222222222222222222222222222222222222222222";
 
+// NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
 static void assert_seqs(const char *db, const char *want_entries, const char *want_brain)
 {
     assert_query_is(db, (QueryExpect){.sql = "SELECT group_concat(local_id || ':' || change_seq, "
@@ -760,9 +764,14 @@ TEST(schema_v6_import_stamps_written_rows_only)
 
 static char *side_file(const char *db, const char *suffix)
 {
-    size_t n = strlen(db) + strlen(suffix) + 1U;
-    char *out = (char *)malloc(n);
+    size_t n = 0U;
+    char *out = NULL;
 
+    if (db == NULL) {
+        return NULL;
+    }
+    n = strlen(db) + strlen(suffix) + 1U;
+    out = (char *)malloc(n);
     if (out != NULL) {
         (void)snprintf(out, n, "%s%s", db, suffix);
     }
@@ -771,7 +780,7 @@ static char *side_file(const char *db, const char *suffix)
 
 static char *read_line(const char *path)
 {
-    char buf[STORE_DEVICE_ID_LEN + 8];
+    char buf[STORE_DEVICE_ID_LEN + V6_LINE_SLACK];
     FILE *f = NULL;
     size_t n = 0;
 
@@ -812,6 +821,7 @@ static char *given_legacy_sidecar(const char *db)
     return id;
 }
 
+// NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
 static void assert_file_is(const char *db, const char *suffix, const char *want)
 {
     char *path = side_file(db, suffix);
@@ -1041,6 +1051,72 @@ TEST(schema_v6_min_reader_version_compares_each_part)
     free(db);
 }
 
+/* Review 2026-10-26: a v5 brain whose search index is damaged still migrates.
+   The index is derived, so the v6 step rebuilds it from the rows. */
+TEST(schema_v6_a_damaged_v5_search_index_is_rebuilt)
+{
+    char *db = make_temp_db_path();
+    Store *s = NULL;
+    SearchQuery q;
+    PageResult page;
+
+    ASSERT_TRUE(db != NULL);
+    given_v5_brain(db);
+    /* The sqlite3 shell is defensive and will not write a shadow table. */
+    {
+        sqlite3 *raw = NULL;
+
+        ASSERT_EQ_INT(sqlite3_open(db, &raw), SQLITE_OK);
+        ASSERT_EQ_INT(sqlite3_exec(raw,
+                                   "UPDATE entries_fts_data SET block = zeroblob(32) "
+                                   "WHERE id = (SELECT MIN(id) FROM entries_fts_data);",
+                                   NULL, NULL, NULL),
+                      SQLITE_OK);
+        (void)sqlite3_close(raw);
+    }
+    assert_query_is(db, (QueryExpect){.sql = "PRAGMA integrity_check;",
+                                      .want = "malformed inverted index for FTS5 table "
+                                              "main.entries_fts"});
+    s = given_open(db);
+    memset(&q, 0, sizeof(q));
+    q.query = "notes";
+    q.filters.limit = V6_SEARCH_LIMIT;
+    page = store_search(s, &q, k_now).page;
+    ASSERT_EQ_STATUS(page.st, STORE_OK);
+    ASSERT_EQ_INT((int)page.total, 1);
+    free_page(page);
+    store_close(s);
+    assert_query_is(db, (QueryExpect){.sql = "PRAGMA user_version;", .want = "6"});
+    assert_query_is(db, (QueryExpect){.sql = "PRAGMA integrity_check;", .want = "ok"});
+    free(db);
+}
+
+/* `device new` writes the sidecar, not the brain, so a read-only brain allows it. */
+TEST(schema_v6_device_new_runs_on_a_read_only_brain)
+{
+    char *db = make_temp_db_path();
+    Store *s = NULL;
+    char previous[STORE_DEVICE_ID_LEN + 1];
+    char before[STORE_DEVICE_ID_LEN + 1];
+    char err[ERR_BUFSIZE];
+    bool had_prev = false;
+
+    ASSERT_TRUE(db != NULL);
+    store_close(given_open(db));
+    exec_sql(db, "UPDATE brain_meta SET min_reader_version = '0.4.0';");
+    s = given_open(db);
+    (void)snprintf(before, sizeof(before), "%s", store_device_id(s));
+    err[0] = '\0';
+    ASSERT_EQ_STATUS(store_device_new(s, previous, sizeof(previous), &had_prev, err, sizeof(err)),
+                     STORE_OK);
+    ASSERT_TRUE(had_prev);
+    ASSERT_STREQ(previous, before);
+    ASSERT_TRUE(strcmp(store_device_id(s), before) != 0);
+    assert_file_is(db, ".d/device_id", store_device_id(s));
+    store_close(s);
+    free(db);
+}
+
 #ifdef REMEMBER_TEST_HOOKS
 /* The v5 shape is still there: user_version, the old columns, the E12 tables. */
 static void assert_still_v5(const char *db)
@@ -1214,6 +1290,8 @@ void register_schema_v6_tests(void)
     RUN_TEST(schema_v6_an_invalid_old_device_id_file_is_an_error);
     RUN_TEST(schema_v6_a_newer_min_reader_version_makes_the_brain_read_only);
     RUN_TEST(schema_v6_min_reader_version_compares_each_part);
+    RUN_TEST(schema_v6_a_damaged_v5_search_index_is_rebuilt);
+    RUN_TEST(schema_v6_device_new_runs_on_a_read_only_brain);
 #ifdef REMEMBER_TEST_HOOKS
     RUN_TEST(schema_v6_exec_fault_anywhere_keeps_v5);
     RUN_TEST(schema_v6_prepare_fault_anywhere_keeps_v5);
@@ -1301,7 +1379,46 @@ TEST(schema_v6_cli_a_write_to_a_newer_brain_prints_schema_too_new)
     free(db);
 }
 
+/* Review 2026-10-26: parallel first opens of a v5 brain all succeed and agree
+   on the device id (the copy before BEGIN uses a unique temp file). */
+TEST(schema_v6_cli_parallel_first_opens_of_a_v5_brain_all_succeed)
+{
+    enum { V6_PARALLEL_ROUNDS = 5, V6_CMD_BUF = 2048 };
+    int round = 0;
+
+    for (round = 0; round < V6_PARALLEL_ROUNDS; round++) {
+        char *db = make_temp_db_path();
+        char *id = NULL;
+        char *fails = NULL;
+        char cmd[V6_CMD_BUF];
+
+        ASSERT_TRUE(db != NULL);
+        if (db == NULL) {
+            return;
+        }
+        given_v5_brain(db);
+        id = given_legacy_sidecar(db);
+        fails = side_file(db, ".fails");
+        ASSERT_TRUE(fails != NULL);
+        (void)snprintf(cmd, sizeof(cmd),
+                       "for i in 1 2 3 4 5 6 7 8; do ('%s' --db '%s' list >/dev/null 2>&1 || "
+                       "echo fail >> '%s') & done; wait",
+                       g_remember_bin, db, fails != NULL ? fails : "");
+        /* NOLINTNEXTLINE(cert-env33-c,bugprone-command-processor) -- test-made paths */
+        ASSERT_EQ_INT(system(cmd), 0);
+        ASSERT_TRUE(fails != NULL && access(fails, F_OK) != 0);
+        assert_query_is(db, (QueryExpect){.sql = "PRAGMA user_version;", .want = "6"});
+        assert_file_is(db, ".d/device_id", id);
+        assert_file_is(db, ".device_id", NULL);
+        free(fails);
+        free(id);
+        free(db);
+    }
+}
+
 #ifdef REMEMBER_TEST_VFS
+/* setenv/unsetenv drive the shim; the test runner is single-threaded. */
+// NOLINTBEGIN(concurrency-mt-unsafe)
 /* M3: a failing VFS write anywhere in the v6 step leaves user_version 5 and
    the old device id file; the first open with no fault migrates. */
 TEST(schema_v6_cli_a_failing_write_keeps_v5_and_the_old_device_id)
@@ -1309,7 +1426,7 @@ TEST(schema_v6_cli_a_failing_write_keeps_v5_and_the_old_device_id)
     char *db = make_temp_db_path();
     char *id = NULL;
     const char *list[] = {"list"};
-    char budget[16];
+    char budget[V6_SQL_BUF];
     CmdResult r;
     int n = 0;
     int failed = 0;
@@ -1340,12 +1457,14 @@ TEST(schema_v6_cli_a_failing_write_keeps_v5_and_the_old_device_id)
     free(id);
     free(db);
 }
+// NOLINTEND(concurrency-mt-unsafe)
 #endif
 
 void register_schema_v6_cli_tests(void)
 {
     RUN_TEST(schema_v6_cli_prints_setting_invalid_for_a_left_out_prefix);
     RUN_TEST(schema_v6_cli_a_write_to_a_newer_brain_prints_schema_too_new);
+    RUN_TEST(schema_v6_cli_parallel_first_opens_of_a_v5_brain_all_succeed);
 #ifdef REMEMBER_TEST_VFS
     RUN_TEST(schema_v6_cli_a_failing_write_keeps_v5_and_the_old_device_id);
 #endif

@@ -340,7 +340,7 @@ static bool g_atexit_registered;
    single-level unlink sweep would leave the whole tree behind in /tmp. Intentional
    recursion; depth is bounded by the test layout. */
 // NOLINTNEXTLINE(misc-no-recursion)
-static void remove_temp_dir(const char *dir)
+void harness_remove_tree(const char *dir)
 {
     DIR *d = opendir(dir);
 
@@ -360,7 +360,7 @@ static void remove_temp_dir(const char *dir)
                 continue;
             }
             if (lstat(path, &st) == 0 && S_ISDIR(st.st_mode)) {
-                remove_temp_dir(path);
+                harness_remove_tree(path);
             } else {
                 (void)unlink(path);
             }
@@ -374,7 +374,7 @@ static void cleanup_temp_dirs(void)
 {
     size_t i = 0;
     for (i = 0; i < g_temp_count; i++) {
-        remove_temp_dir(g_temp_dirs[i]);
+        harness_remove_tree(g_temp_dirs[i]);
         free(g_temp_dirs[i]);
     }
     free((void *)g_temp_dirs);

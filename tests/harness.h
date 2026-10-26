@@ -87,6 +87,10 @@ void harness_make_v5_source_at(const char *db_path, HarnessSite site);
 #define harness_make_v5_source(db_path)                                                            \
     harness_make_v5_source_at((db_path), (HarnessSite){__FILE__, __LINE__})
 
+/* Remove dir and everything under it (best effort). For mkdtemp folders a test
+   made itself, which also hold each brain's <db>.d folder. */
+void harness_remove_tree(const char *dir);
+
 /* Directory containing path (heap; caller frees). */
 char *dir_of_path(const char *file_path);
 

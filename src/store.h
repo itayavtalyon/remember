@@ -190,8 +190,8 @@ const char *store_device_id(const Store *s);
 
 /*
  * Mint a new sidecar id and bind it. Does not change any version_vector.
- * Takes the same write lock as a missing-sidecar open, so parallel mints cannot
- * share <path>.d/device_id.tmp.
+ * Takes the same write lock as a missing-sidecar open, and writes through a
+ * unique temp file and a rename, so parallel writers never share a temp file.
  * On STORE_OK, the sidecar and this handle both hold the new id. *had_prev is
  * true and prev_out (STORE_DEVICE_ID_LEN + 1) holds the id the file had. A
  * missing or invalid file sets *had_prev false and prev_out empty (JSON null)

@@ -4,6 +4,7 @@
 #include "store.h"
 #include "test.h"
 
+#include <dirent.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -19,9 +20,9 @@ enum {
 enum { SIDECAR_READ_BUF = 80, SIDECAR_FILE_BUF = 128 };
 /* Successful sqlite3_exec calls before CREATE settings on a v4 open:
    foreign_keys ON, busy_timeout, foreign_keys OFF, BEGIN IMMEDIATE,
-   DROP entries_fts, CREATE entries_fts, CREATE bucket_prefixes.
+   CREATE bucket_prefixes (the v6 step rebuilds the search index later).
    The next exec is the first one after E1.3 step 3. */
-enum { SCHEMA_V5_EXEC_AFTER_STEP3 = 7, SCHEMA_V5_EXEC_TRIES = 40 };
+enum { SCHEMA_V5_EXEC_AFTER_STEP3 = 5, SCHEMA_V5_EXEC_TRIES = 60 };
 
 static const char k_hash_a[] = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 static const char k_now[] = "2026-06-15T12:00:00.000Z";
@@ -1017,20 +1018,26 @@ TEST(store_device_new_rename_failure_keeps_the_old_id)
         free(line);
     }
     ASSERT_STREQ(store_device_id(s), old_id);
-    if (side != NULL) {
-        size_t tmp_len = strlen(side) + strlen(".tmp") + 1U;
+    /* The failed write leaves no temp file behind: <brain>.d holds device_id only. */
+    tmp = side_path(db, ".d");
+    ASSERT_TRUE(tmp != NULL);
+    if (tmp != NULL) {
+        DIR *dir = opendir(tmp);
+        const struct dirent *ent = NULL;
+        int others = 0;
 
-        tmp = (char *)malloc(tmp_len);
-        ASSERT_TRUE(tmp != NULL);
-        if (tmp != NULL) {
-            char *body = NULL;
-
-            (void)snprintf(tmp, tmp_len, "%s.tmp", side);
-            body = read_text(tmp);
-            ASSERT_TRUE(body == NULL);
-            free(body);
-            free(tmp);
+        ASSERT_TRUE(dir != NULL);
+        while (dir != NULL && (ent = readdir(dir)) != NULL) {
+            if (strcmp(ent->d_name, ".") != 0 && strcmp(ent->d_name, "..") != 0 &&
+                strcmp(ent->d_name, "device_id") != 0) {
+                others++;
+            }
         }
+        if (dir != NULL) {
+            (void)closedir(dir);
+        }
+        ASSERT_EQ_INT(others, 0);
+        free(tmp);
     }
     store_close(s);
     free(side);

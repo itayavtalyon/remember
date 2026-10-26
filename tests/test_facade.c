@@ -602,14 +602,7 @@ TEST(facade_conflicts_matches_cli)
 
     assert_read_parity(local, cmd, sizeof(cmd) / sizeof(cmd[0]));
 
-    (void)remove(local);
-    (void)remove(foreign);
-    {
-        char side[FACADE_SIDE_BUF];
-        (void)snprintf(side, sizeof(side), "%s.d/device_id", local);
-        (void)remove(side);
-    }
-    (void)rmdir(dir);
+    harness_remove_tree(dir);
 }
 
 TEST(facade_conflict_accept_matches_cli)
@@ -687,17 +680,7 @@ TEST(facade_conflict_accept_matches_cli)
     free(ferr);
     cmd_result_free(&r);
 
-    (void)remove(local1);
-    (void)remove(local2);
-    (void)remove(foreign);
-    {
-        char side[FACADE_SIDE_BUF];
-        (void)snprintf(side, sizeof(side), "%s.d/device_id", local1);
-        (void)remove(side);
-        (void)snprintf(side, sizeof(side), "%s.d/device_id", local2);
-        (void)remove(side);
-    }
-    (void)rmdir(dir);
+    harness_remove_tree(dir);
 }
 // NOLINTEND(bugprone-command-processor,cert-env33-c,concurrency-mt-unsafe)
 

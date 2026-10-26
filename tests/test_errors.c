@@ -673,7 +673,6 @@ TEST(json_errors_synced_folder_is_one_warning)
     char tmpl[] = "/tmp/Dropbox-remember-XXXXXX";
     char *dir = mkdtemp(tmpl);
     char path[PATH_CAP];
-    char sidecar[PATH_CAP];
     const char *args[] = {"--json-errors", "list"};
     CmdResult r;
     int wrote = 0;
@@ -691,11 +690,7 @@ TEST(json_errors_synced_folder_is_one_warning)
                  "path looks like a synced folder "
                  "(iCloud/Dropbox/Google Drive); corruption risk - prefer a local disk\"}}\n");
     cmd_result_free(&r);
-    wrote = snprintf(sidecar, sizeof(sidecar), "%s.d/device_id", path);
-    ASSERT_TRUE(wrote > 0 && (size_t)wrote < sizeof(sidecar));
-    (void)unlink(path);
-    (void)unlink(sidecar);
-    (void)rmdir(dir);
+    harness_remove_tree(dir);
 }
 
 static void expect_diag(DiagCode got, DiagCode want)
@@ -724,6 +719,8 @@ TEST(store_text_codes_follow_the_locked_split)
     expect_diag(code_for_store_text("database is newer than this remember"), DIAG_NEWER_DATABASE);
     expect_diag(code_for_store_text("unsupported database version"), DIAG_UNSUPPORTED_DATABASE);
     expect_diag(code_for_store_text("migration left a dangling reference"), DIAG_CORRUPT);
+    expect_diag(code_for_store_text("migration failed the integrity check"), DIAG_CORRUPT);
+    expect_diag(code_for_store_text("cannot create the device id folder"), DIAG_CANNOT_OPEN);
     expect_diag(code_for_store_text("internal error"), DIAG_INTERNAL);
     expect_diag(code_for_store_text("internal error: path buffer missing"), DIAG_INTERNAL);
     expect_diag(code_for_store_text("cannot write device_id sidecar"), DIAG_INTERNAL);

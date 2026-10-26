@@ -356,9 +356,8 @@ static void print_parse_error(const CliArgs *args)
     err_msg(code, base);
 }
 
-/* Resolve path, optional sync-path warning, then open. Store stays path-pure. */
-/* 007 ST-7.15: each prefix the v6 step left out. The open also wrote memories'
-   brain, so the line has no second sentence. */
+/* 007 ST-7.15: one setting_invalid warning per prefix the v6 step left out.
+   The same step rewrote every memory, so the line has no second sentence. */
 static void warn_open_settings(const Store *s)
 {
     enum { WARN_LINE_BUF = 512 };
@@ -377,6 +376,7 @@ static void warn_open_settings(const Store *s)
     }
 }
 
+/* Resolve path, optional sync-path warning, then open. Store stays path-pure. */
 static Store *open_store(const CliArgs *args, int *out_rc)
 {
     enum { ERR_BUFSIZE = 256 }; /* store_open error-message buffer */

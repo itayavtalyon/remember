@@ -504,7 +504,7 @@ enum {
     SIDECAR_FILE_MODE = 0600,
     SIDECAR_DIR_MODE = 0700,
     SIDECAR_PATH_PAD = 16,
-    SIDECAR_TMP_EXTRA = 4, /* ".tmp" */
+    SIDECAR_TMP_EXTRA = 7, /* ".XXXXXX" */
     VV_JSON_BUFLEN = 80,
     VV_OUT_MAX = 4096,   /* import may merge many foreign device keys */
     VV_JSON_MIN_OUT = 8, /* shortest compact object we emit: {"d":1} */
@@ -1252,7 +1252,10 @@ static int ensure_sidecar_dir(const char *db_path, char *err, size_t errlen)
 }
 
 /* path then uuid: sidecar file vs contents; call sites pass them in that order.
-   Writes a temp file and renames it over path so a crash cannot leave a partial sidecar. */
+   Writes a temp file and renames it over path so a crash cannot leave a partial
+   sidecar. The temp name is unique (mkstemp): the pre-transaction copy of the
+   v5 file runs without the write lock, so parallel first opens must not share
+   one temp file. */
 // NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
 static int write_sidecar(const char *path, const char *uuid, char *err, size_t errlen)
 {
@@ -1268,14 +1271,12 @@ static int write_sidecar(const char *path, const char *uuid, char *err, size_t e
         set_err(err, errlen, "cannot write device_id sidecar");
         return -1;
     }
-    sn = snprintf(tmp, sizeof(tmp), "%s.tmp", path);
+    sn = snprintf(tmp, sizeof(tmp), "%s.XXXXXX", path);
     if (sn < 0 || (size_t)sn >= sizeof(tmp)) {
         set_err(err, errlen, "cannot write device_id sidecar");
         return -1;
     }
-    /* O_* are signed-int flag macros. */
-    // NOLINTNEXTLINE(hicpp-signed-bitwise,android-cloexec-open)
-    fd = open(tmp, O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, SIDECAR_FILE_MODE);
+    fd = mkstemp(tmp);
     if (fd < 0) {
         set_err(err, errlen, "cannot write device_id sidecar");
         return -1;
@@ -1768,14 +1769,7 @@ static int repopulate_fts(sqlite3 *db, char *err, size_t errlen, StoreError *ser
    Drop devices last: the row is not copied into the sidecar. */
 static int apply_v5_delta(sqlite3 *db, char *err, size_t errlen, StoreError *serr)
 {
-    if (exec_sql(db, "DROP TABLE IF EXISTS entries_fts;", err, errlen, serr) != 0) {
-        return -1;
-    }
-    /* Filled after the v6 rebuild (migrate_to_current): the rows are the same,
-       and repopulate reads the v6 names. */
-    if (exec_sql(db, K_FTS_SQL, err, errlen, serr) != 0) {
-        return -1;
-    }
+    /* The search index is rebuilt once, by the v6 step. */
     if (create_table_if_missing(db, "bucket_prefixes", K_BUCKET_PREFIXES_SQL, err, errlen, serr) !=
         0) {
         return -1;
@@ -2092,8 +2086,10 @@ static int integrity_ok(sqlite3 *db, char *err, size_t errlen, StoreError *serr)
 
 /* Inside the caller's transaction, on a v5-shaped brain with a bound device id:
    the 008 rebuild, the settings steps, the 010 steps, then both checks. The
-   caller sets user_version only after this returns 0. */
-static int migrate_v5_to_v6(Store *s, bool refill_fts, char *err, size_t errlen)
+   caller sets user_version only after this returns 0. The search index is
+   derived, so it is rebuilt from the rows for every source: an old index (a
+   v1..v4 shape, or a damaged v5 one) never fails the integrity check. */
+static int migrate_v5_to_v6(Store *s, char *err, size_t errlen)
 {
     sqlite3 *db = s->db;
     StoreError *serr = &s->last;
@@ -2109,7 +2105,9 @@ static int migrate_v5_to_v6(Store *s, bool refill_fts, char *err, size_t errlen)
         insert_brain_meta(db, err, errlen, serr) != 0) {
         return -1;
     }
-    if (refill_fts && repopulate_fts(db, err, errlen, serr) != 0) {
+    if (exec_sql(db, "DROP TABLE IF EXISTS entries_fts;", err, errlen, serr) != 0 ||
+        exec_sql(db, K_FTS_SQL, err, errlen, serr) != 0 ||
+        repopulate_fts(db, err, errlen, serr) != 0) {
         return -1;
     }
     if (exec_sql(db, k_v6_settings_tables_sql, err, errlen, serr) != 0 ||
@@ -2194,7 +2192,7 @@ static int migrate_to_current(Store *s, char *err, size_t errlen)
     if (s->device_id == NULL && ensure_device_identity(s, err, errlen) != 0) {
         goto cleanup_fail;
     }
-    if (migrate_v5_to_v6(s, version <= 4, err, errlen) != 0) {
+    if (migrate_v5_to_v6(s, err, errlen) != 0) {
         goto cleanup_fail;
     }
     if (exec_sql(db, "PRAGMA user_version = 6;", err, errlen, serr) != 0) {
@@ -2211,21 +2209,13 @@ cleanup_fail:
 }
 
 /*
- * Bring an open database to schema version 5 and bind local device identity.
- *
- * The v1/2/3 migration rebuilds entries, so foreign_keys is toggled OFF around
- * it (the PRAGMA is a no-op inside a transaction) and restored ON afterward.
- * The already-current and concurrent-adopt paths share bind_identity so the
- * bind is covered by every normal reopen.
- */
-/*
  * 007 §10 step 1 (and step 4 on a v6 open): when <brain>.d/device_id is
  * missing, copy a valid <brain>.device_id into it, through the same temp file
  * and rename. The old file stays. A missing old file copies nothing. An
  * invalid old file is the open's error, like an invalid sidecar, unless this
  * is a `device new` open, which mints over it.
  */
-static int copy_legacy_sidecar(Store *s, char *err, size_t errlen)
+static int copy_legacy_sidecar(const Store *s, char *err, size_t errlen)
 {
     char side[REMEMBER_PATH_MAX + SIDECAR_PATH_PAD];
     char legacy[REMEMBER_PATH_MAX + SIDECAR_PATH_PAD];
@@ -2315,7 +2305,32 @@ static bool reader_too_old(const char *min_reader_version)
 }
 
 /* 007 ST-10.2: an engine older than min_reader_version opens the brain read
-   only. Writes then fail with schema_too_new; query_only backs that up. */
+   only: every brain write then fails with schema_too_new (begin_write). */
+/* The v6 open's device id: one read when <brain>.d/device_id is valid (then a
+   best-effort retry of step 3's delete); otherwise step 4 finishes a copy a
+   crash left half done, then binds or mints under the write lock. */
+static int bind_v6_identity(Store *s, char *err, size_t errlen)
+{
+    char side[REMEMBER_PATH_MAX + SIDECAR_PATH_PAD];
+    char legacy[REMEMBER_PATH_MAX + SIDECAR_PATH_PAD];
+    char uuid[UUID_STR_LEN + 1];
+
+    if (sidecar_path(s->path, side, sizeof(side)) != 0 ||
+        brain_side_path(s->path, k_legacy_sidecar_suffix, legacy, sizeof(legacy)) != 0) {
+        set_err(err, errlen, "database path is too long");
+        return -1;
+    }
+    if (read_sidecar(side, uuid) == 0) {
+        (void)unlink(legacy);
+        return bind_device_id(s, uuid, err, errlen);
+    }
+    if (copy_legacy_sidecar(s, err, errlen) != 0 || bind_current_identity(s, err, errlen) != 0) {
+        return -1;
+    }
+    delete_legacy_sidecar(s);
+    return 0;
+}
+
 static int check_reader_version(Store *s, char *err, size_t errlen)
 {
     char *need = NULL;
@@ -2326,9 +2341,6 @@ static int check_reader_version(Store *s, char *err, size_t errlen)
     }
     s->schema_too_new = reader_too_old(need);
     free(need);
-    if (s->schema_too_new) {
-        return exec_sql(s->db, "PRAGMA query_only = ON;", err, errlen, &s->last);
-    }
     return 0;
 }
 
@@ -2337,6 +2349,31 @@ static bool write_refused(const Store *s)
     return s->schema_too_new;
 }
 
+/* Every brain write starts here: refuse on a newer brain (007 ST-10.2), clear
+   the last error, take the write lock. store_import and repair, which read
+   before they lock, call write_refused themselves. */
+static StoreStatus begin_write(Store *s)
+{
+    char err_unused[1];
+
+    if (write_refused(s)) {
+        return STORE_ERR_SCHEMA_TOO_NEW;
+    }
+    memset(&s->last, 0, sizeof(s->last));
+    if (exec_sql(s->db, "BEGIN IMMEDIATE;", err_unused, 0U, &s->last) != 0) {
+        return STORE_ERR_SQLITE;
+    }
+    return STORE_OK;
+}
+
+/*
+ * Bring an open database to schema version 6 and bind local device identity.
+ *
+ * The rebuilds drop and rename tables, so foreign_keys is toggled OFF around
+ * the migration (the PRAGMA is a no-op inside a transaction) and restored ON
+ * afterward. The already-current and concurrent-adopt paths share
+ * bind_identity so the bind is covered by every normal reopen.
+ */
 static int ensure_schema(Store *s, char *err, size_t errlen)
 {
     int version = 0;
@@ -2371,12 +2408,14 @@ static int ensure_schema(Store *s, char *err, size_t errlen)
     }
 
 bind_identity:
-    /* Step 4: finish a copy a crash left half done, then read the id. */
-    if (copy_legacy_sidecar(s, err, errlen) != 0 || bind_current_identity(s, err, errlen) != 0) {
+    if (bind_v6_identity(s, err, errlen) != 0) {
         return -1;
     }
-    delete_legacy_sidecar(s);
-    return 0;
+    /* Only a brain this open did not just migrate can ask for a newer reader:
+       the v6 step writes k_min_reader_version, which this engine reads. So
+       nothing after a migration's COMMIT can fail the open and lose its
+       warnings. */
+    return check_reader_version(s, err, errlen);
 }
 
 static int change_seq_attach(Store *s);
@@ -2445,7 +2484,7 @@ Store *store_open_opts(const char *path, const StoreOpenOpts *opts, char *err, s
     if (apply_pragmas(db, timeout_ms, err, errlen, &s->last) != 0) {
         goto cleanup_fail;
     }
-    if (ensure_schema(s, err, errlen) != 0 || check_reader_version(s, err, errlen) != 0) {
+    if (ensure_schema(s, err, errlen) != 0) {
         goto cleanup_fail;
     }
 
@@ -3056,23 +3095,23 @@ static StoreStatus stamp_change_seq(sqlite3 *db, ChangeSeqRow row, StoreError *s
         "WHERE from_id = ?1 AND to_id = ?2 AND kind = ?3;",
     };
     enum { BIND_KEY = 1, BIND_TO = 2, BIND_KIND = 3, BIND_BASE = 4 };
-    ChangeSeqTx *tx = (ChangeSeqTx *)sqlite3_get_clientdata(db, k_change_seq_tx);
+    ChangeSeqTx *state = (ChangeSeqTx *)sqlite3_get_clientdata(db, k_change_seq_tx);
     size_t which = (row.kind == NULL) ? 0U : 1U;
     sqlite3_stmt *stmt = NULL;
     int step = 0;
 
-    if (tx == NULL) {
+    if (state == NULL) {
         return STORE_ERR_INTERNAL;
     }
-    if (!tx->active) {
+    if (!state->active) {
         int base = 0;
 
         if (select_int(db, "SELECT change_seq FROM brain_meta;", NULL, &base, NULL, 0U, serr) !=
             0) {
             return STORE_ERR_SQLITE;
         }
-        tx->base = base;
-        tx->active = true;
+        state->base = base;
+        state->active = true;
     }
     if (sqlite3_prepare_v2(db, k_bump[which], -1, &stmt, NULL) != SQLITE_OK) {
         capture_sqlite_error(db, serr);
@@ -3081,7 +3120,7 @@ static StoreStatus stamp_change_seq(sqlite3 *db, ChangeSeqRow row, StoreError *s
     (void)sqlite3_bind_int64(stmt, BIND_KEY, which == 0U ? row.local_id : row.edge.from_id);
     (void)sqlite3_bind_int64(stmt, BIND_TO, row.edge.to_id);
     (void)sqlite3_bind_text(stmt, BIND_KIND, row.kind, -1, SQLITE_STATIC);
-    (void)sqlite3_bind_int64(stmt, BIND_BASE, tx->base);
+    (void)sqlite3_bind_int64(stmt, BIND_BASE, state->base);
     step = sqlite3_step(stmt);
     (void)sqlite3_finalize(stmt);
     if (step != SQLITE_DONE) {
@@ -3924,6 +3963,7 @@ StoreStatus store_add(Store *s, const char *body, const char *body_hash, const c
                       const char *expires_at, const char *now, StoreAddAction *out_action,
                       Entry *out_entry)
 {
+    StoreStatus began = STORE_OK;
     long long id = 0;
     StoreAddAction action = STORE_ADD_CREATED;
     StoreStatus st = STORE_OK;
@@ -3936,12 +3976,9 @@ StoreStatus store_add(Store *s, const char *body, const char *body_hash, const c
     if (ntags > 0U && tags == NULL) {
         return STORE_ERR_INTERNAL;
     }
-    if (write_refused(s)) {
-        return STORE_ERR_SCHEMA_TOO_NEW;
-    }
-    memset(&s->last, 0, sizeof(s->last));
-    if (exec_sql(s->db, "BEGIN IMMEDIATE;", err_unused, 0U, &s->last) != 0) {
-        return STORE_ERR_SQLITE;
+    began = begin_write(s);
+    if (began != STORE_OK) {
+        return began;
     }
 
     if (key_or_null != NULL) {
@@ -4277,6 +4314,16 @@ static int list_append_cmp(char *sql, size_t sql_cap, size_t *pos, int *nbinds,
     return 0;
 }
 
+/* The source filter reads the stored actor kind, so it goes through the same
+   map as K_ACTOR_FROM_SOURCE: unknown is stored, and matched, as human. */
+static const char *actor_kind_of_source(const char *source)
+{
+    if (source != NULL && strcmp(source, "unknown") == 0) {
+        return "human";
+    }
+    return source;
+}
+
 static int list_append_filters(const ListQuery *q, char *sql, size_t sql_cap, size_t *pos,
                                int *nbinds, const char **bind_text, size_t bind_cap,
                                const char *time_column)
@@ -4287,7 +4334,8 @@ static int list_append_filters(const ListQuery *q, char *sql, size_t sql_cap, si
         return -1;
     }
     if (list_append_eq(sql, sql_cap, pos, nbinds, bind_text, bind_cap,
-                       (SqlEq){.col = K_SOURCE_COL, .value = q->source}) != 0 ||
+                       (SqlEq){.col = K_SOURCE_COL, .value = actor_kind_of_source(q->source)}) !=
+            0 ||
         list_append_eq(sql, sql_cap, pos, nbinds, bind_text, bind_cap,
                        (SqlEq){.col = "key", .value = q->key}) != 0) {
         return -1;
@@ -5203,6 +5251,7 @@ static StoreStatus apply_soft_delete(sqlite3 *db, long long id, const char *now,
 static StoreStatus soft_delete_tx(Store *s, long long id_or_zero, const char *key_or_null,
                                   const char *now, Entry *out)
 {
+    StoreStatus began = STORE_OK;
     char err_unused[1];
     StoreStatus st = STORE_OK;
     long long id = id_or_zero;
@@ -5213,12 +5262,9 @@ static StoreStatus soft_delete_tx(Store *s, long long id_or_zero, const char *ke
     }
     memset(out, 0, sizeof(*out));
     memset(&cur, 0, sizeof(cur));
-    if (write_refused(s)) {
-        return STORE_ERR_SCHEMA_TOO_NEW;
-    }
-    memset(&s->last, 0, sizeof(s->last));
-    if (exec_sql(s->db, "BEGIN IMMEDIATE;", err_unused, 0U, &s->last) != 0) {
-        return STORE_ERR_SQLITE;
+    began = begin_write(s);
+    if (began != STORE_OK) {
+        return began;
     }
     st = load_for_soft_delete(s->db, id, key_or_null, now, &cur, &s->last);
     if (st != STORE_OK) {
@@ -5249,6 +5295,7 @@ fail:
 static StoreStatus hard_delete_tx(Store *s, long long id_or_zero, const char *key_or_null,
                                   StoreBin bin, const char *now, Entry *out_deleted)
 {
+    StoreStatus began = STORE_OK;
     char err_unused[1];
     StoreStatus st = STORE_OK;
     sqlite3_stmt *del = NULL;
@@ -5259,12 +5306,9 @@ static StoreStatus hard_delete_tx(Store *s, long long id_or_zero, const char *ke
     if (bin == STORE_BIN_LIVE) {
         return STORE_ERR_INTERNAL;
     }
-    if (write_refused(s)) {
-        return STORE_ERR_SCHEMA_TOO_NEW;
-    }
-    memset(&s->last, 0, sizeof(s->last));
-    if (exec_sql(s->db, "BEGIN IMMEDIATE;", err_unused, 0U, &s->last) != 0) {
-        return STORE_ERR_SQLITE;
+    began = begin_write(s);
+    if (began != STORE_OK) {
+        return began;
     }
 
     st = load_then_check_bin(s->db, id, key_or_null, NULL, bin, now, out_deleted, &s->last);
@@ -5487,6 +5531,7 @@ static StoreStatus update_apply_changes(sqlite3 *db, long long entry_id, bool is
 StoreStatus store_update(Store *s, long long id, const StoreUpdate *u, const char *now,
                          Entry *out_entry, long long *out_conflict_id)
 {
+    StoreStatus began = STORE_OK;
     char err_unused[1];
     StoreStatus st = STORE_OK;
     Entry current;
@@ -5507,13 +5552,9 @@ StoreStatus store_update(Store *s, long long id, const StoreUpdate *u, const cha
 
     memset(&current, 0, sizeof(current));
     memset(out_entry, 0, sizeof(*out_entry));
-    if (write_refused(s)) {
-        return STORE_ERR_SCHEMA_TOO_NEW;
-    }
-    memset(&s->last, 0, sizeof(s->last));
-
-    if (exec_sql(s->db, "BEGIN IMMEDIATE;", err_unused, 0U, &s->last) != 0) {
-        return STORE_ERR_SQLITE;
+    began = begin_write(s);
+    if (began != STORE_OK) {
+        return began;
     }
 
     st = load_then_check_bin(s->db, id, u->key_or_null, NULL, u->bin, now, &current, &s->last);
@@ -5557,6 +5598,7 @@ StoreStatus store_update(Store *s, long long id, const StoreUpdate *u, const cha
 StoreStatus store_purge(Store *s, StoreBin bin, const char *now, Entry **out_entries,
                         size_t *out_count)
 {
+    StoreStatus began = STORE_OK;
     sqlite3_stmt *sel = NULL;
     sqlite3_stmt *del = NULL;
     char err_unused[1];
@@ -5590,13 +5632,9 @@ StoreStatus store_purge(Store *s, StoreBin bin, const char *now, Entry **out_ent
     }
     *out_entries = NULL;
     *out_count = 0U;
-    if (write_refused(s)) {
-        return STORE_ERR_SCHEMA_TOO_NEW;
-    }
-    memset(&s->last, 0, sizeof(s->last));
-
-    if (exec_sql(s->db, "BEGIN IMMEDIATE;", err_unused, 0U, &s->last) != 0) {
-        return STORE_ERR_SQLITE;
+    began = begin_write(s);
+    if (began != STORE_OK) {
+        return began;
     }
 
     rc = sqlite3_prepare_v2(s->db, sel_sql, -1, &sel, NULL);
@@ -6080,6 +6118,7 @@ int store_sync_id_is_canonical(const char *s)
 StoreStatus store_link(Store *s, StoreEdge edge, StoreEdgeKind kind, const char *now,
                        StoreLinkAction *out_action, StoreNeighbor *out_stub)
 {
+    StoreStatus began = STORE_OK;
     char err_unused[1];
     long long from_id = edge.from_id;
     long long to_id = edge.to_id;
@@ -6104,12 +6143,9 @@ StoreStatus store_link(Store *s, StoreEdge edge, StoreEdgeKind kind, const char 
         stored_to = (from_id < to_id) ? to_id : from_id;
     }
 
-    if (write_refused(s)) {
-        return STORE_ERR_SCHEMA_TOO_NEW;
-    }
-    memset(&s->last, 0, sizeof(s->last));
-    if (exec_sql(s->db, "BEGIN IMMEDIATE;", err_unused, 0U, &s->last) != 0) {
-        return STORE_ERR_SQLITE;
+    began = begin_write(s);
+    if (began != STORE_OK) {
+        return began;
     }
     st = require_entry_id(s->db, from_id, &s->last);
     if (st == STORE_OK) {
@@ -6238,6 +6274,7 @@ static int bind_edge_ends(sqlite3_stmt *stmt, long long from_id, long long to_id
 StoreStatus store_unlink(Store *s, long long from_id, long long to_id, const StoreEdgeKind *kind,
                          const char *now, StoreNeighbor **out_stubs, size_t *out_count)
 {
+    StoreStatus began = STORE_OK;
     char err_unused[1];
     sqlite3_stmt *sel = NULL;
     sqlite3_stmt *del = NULL;
@@ -6266,12 +6303,9 @@ StoreStatus store_unlink(Store *s, long long from_id, long long to_id, const Sto
         }
     }
 
-    if (write_refused(s)) {
-        return STORE_ERR_SCHEMA_TOO_NEW;
-    }
-    memset(&s->last, 0, sizeof(s->last));
-    if (exec_sql(s->db, "BEGIN IMMEDIATE;", err_unused, 0U, &s->last) != 0) {
-        return STORE_ERR_SQLITE;
+    began = begin_write(s);
+    if (began != STORE_OK) {
+        return began;
     }
 
     rc = sqlite3_prepare_v2(
@@ -6701,6 +6735,7 @@ static StoreStatus rekey_clear(sqlite3 *db, long long entry_id, const char *curr
 StoreStatus store_rekey(Store *s, long long id, RekeyKeys keys, StoreBin bin, const char *now,
                         Entry *out_entry, long long *out_conflict_id)
 {
+    StoreStatus began = STORE_OK;
     const char *key_or_null = keys.key_or_null;
     const char *new_key_or_null = keys.new_key_or_null;
     char err_unused[1];
@@ -6722,13 +6757,9 @@ StoreStatus store_rekey(Store *s, long long id, RekeyKeys keys, StoreBin bin, co
     }
     memset(&current, 0, sizeof(current));
     memset(out_entry, 0, sizeof(*out_entry));
-    if (write_refused(s)) {
-        return STORE_ERR_SCHEMA_TOO_NEW;
-    }
-    memset(&s->last, 0, sizeof(s->last));
-
-    if (exec_sql(s->db, "BEGIN IMMEDIATE;", err_unused, 0U, &s->last) != 0) {
-        return STORE_ERR_SQLITE;
+    began = begin_write(s);
+    if (began != STORE_OK) {
+        return began;
     }
     st = load_then_check_bin(s->db, id, key_or_null, NULL, bin, now, &current, &s->last);
     if (st != STORE_OK) {
@@ -9193,6 +9224,7 @@ StoreStatus store_conflict_accept(Store *s, long long conflict_id, StoreConflict
                                   const char *now, Entry **out_entries, size_t *out_count)
 // NOLINTEND(bugprone-easily-swappable-parameters)
 {
+    StoreStatus began = STORE_OK;
     char err_unused[1];
     char *sync_id = NULL;
     char *local_json = NULL;
@@ -9210,13 +9242,9 @@ StoreStatus store_conflict_accept(Store *s, long long conflict_id, StoreConflict
     *out_count = 0U;
     memset(&local, 0, sizeof(local));
     memset(&incoming, 0, sizeof(incoming));
-    if (write_refused(s)) {
-        return STORE_ERR_SCHEMA_TOO_NEW;
-    }
-    memset(&s->last, 0, sizeof(s->last));
-
-    if (exec_sql(s->db, "BEGIN IMMEDIATE;", err_unused, 0U, &s->last) != 0) {
-        return STORE_ERR_SQLITE;
+    began = begin_write(s);
+    if (began != STORE_OK) {
+        return began;
     }
     st = accept_load_conflict(s->db, conflict_id, &sync_id, &local_json, &incoming_json, &reason,
                               &s->last);

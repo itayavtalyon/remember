@@ -284,6 +284,24 @@ Interpretations to confirm in review:
 
 Gate (Linux container, clang 18, `REMEMBER_ENABLE_SANITIZERS=ON`, `REMEMBER_TEST_VFS=ON`): build, `remember_store_tests` 0 failed, `remember_tests --only <gate-suites>` 0 failed, `check-coverage.sh` OK (functions 100%, effective lines 100%, normalize 306 branch sides, 0 missed). `lint-all.sh`: format and cppcheck clean; clang-tidy findings in the new code fixed in the follow-up commit. Not run: `leaks-macos` (no macOS), `ci-linux.sh` (no Docker in the session).
 
+
+### 2026-10-26 — change_seq on writes, stage 6, stage 7
+
+**change_seq (Itay: bump it now).** `stamp_change_seq` gives each changed entry or link row the next `brain_meta.change_seq`, once per write transaction (base value on the connection via `sqlite3_set_clientdata`, cleared by the commit and rollback hooks). Stamped: inserts, a version-vector write that changes the vector, soft delete, a demoted key, link insert and touch, imported links. Purge writes one `tombstones` row per removed memory (upsert on `id`). Not done here, because they change behavior plan 21 owns: unlink still deletes the link row (G-10 soft unlink), the link vector stays `{}`, link does not bump `updated_by`. Tests: one value per row per write, none for a no-op, a rolled-back write leaves the counter, link/unlink, purge tombstones, import, and the first write after a prefix row is 2.
+
+**Stage 6.** `<brain>.d/device_id` (folder 0700 set with `chmod` after `mkdir`, file 0600). Copy before `BEGIN`, delete after `COMMIT`, and a later open finishes a half-done move. An invalid old file is `invalid device_id sidecar` and stays, unless the open is `device new`. The `--help` line that names the sidecar now says `<path>.d/device_id`. 007-27 is a store test (exec-fault sweep after the copy); M3 is a CLI test through the plan 16 VFS shim (`REMEMBER_TEST_FAIL_WRITE` sweep).
+
+**Stage 7.** `k_reader_version` `0.3.0` vs `brain_meta.min_reader_version` at open. Newer, or not `MAJOR.MINOR.PATCH`, opens read only: `PRAGMA query_only`, and every public write returns `STORE_ERR_SCHEMA_TOO_NEW` (exit 1, `schema_too_new`, the locked line). The test sets the brain's `min_reader_version` to `0.4.0` instead of adding a hook that lowers the engine's version; the comparison is the same. `--json-errors` is checked for the code only. `device new` still runs on a read-only brain (it writes the sidecar, not the brain).
+
+**Open items for review**
+
+- `README.md` and `skills/remember/SKILL.md` still say `<db-path>.device_id`. They are user copy (plan 26 owns the skills and release text), so they are not edited here.
+- `import --from-db` of a brain this build wrote fails with `database is newer than this remember` until plan 23 (Itay 2026-10-25).
+- The repair read-fault test moved its `REMEMBER_TEST_FAIL_READ` budget from 2 to 7: open now reads `brain_meta`.
+- `.claude/` is git-ignored, so the stage and whole-plan review requests are this section, not a `.claude/REVIEW_REQUEST` file. No `workflow:deep-review` ran in this session.
+
+Definition of done, where this session stands: must-pass rows green and in `tests/gate-suites` (`schema_v6`, `schema_v6_cli`); `user_version` 6 set once at the end of the transaction; no `config` command and no add-wins code; plain `schema_too_new` matches ST-10.2, JSON `fix` not asserted; `docs/engineering-notes.md` records the v6 order and sidecar path. Not done: the second review, `leaks-macos`, `ci-linux.sh`, ticking INDEX row 19.
+
 ## Review Notes
 
 _(empty; second review appends here)_

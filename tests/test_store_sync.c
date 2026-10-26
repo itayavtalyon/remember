@@ -216,17 +216,7 @@ TEST(store_open_two_dbs_in_one_dir_distinct_sidecars)
     ASSERT_TRUE(ua != NULL && ub != NULL && strcmp(ua, ub) != 0);
     free(ua);
     free(ub);
-    (void)remove(path_a);
-    (void)remove(path_b);
-    {
-        char side_a[176];
-        char side_b[176];
-        (void)snprintf(side_a, sizeof(side_a), "%s.d/device_id", path_a);
-        (void)snprintf(side_b, sizeof(side_b), "%s.d/device_id", path_b);
-        (void)remove(side_a);
-        (void)remove(side_b);
-    }
-    (void)rmdir(dir);
+    harness_remove_tree(dir);
 }
 
 TEST(store_open_migrates_v3_to_v6_preserves_rows)
