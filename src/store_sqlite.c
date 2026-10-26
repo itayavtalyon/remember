@@ -1869,6 +1869,7 @@ typedef struct {
 /* NULL when prefix is valid and new (quoted then holds "<folded>"), else the
    setting_invalid reason. Valid prefixes hold no '"' or '\\', so the quoted
    form found in the array so far is exactly a folded duplicate. */
+// NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
 static const char *prefix_skip_reason(const char *prefix, const char *json_so_far,
                                       char quoted[REMEMBER_BUCKET_PREFIX_BUF + 2])
 {

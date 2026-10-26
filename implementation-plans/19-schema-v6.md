@@ -254,7 +254,35 @@ Review output: append `### <date> — second-opinion deep review (stage N | FINA
 
 ## Implementation Notes
 
-_(empty; fill per stage)_
+### 2026-10-26 — stages 1–5 (one commit)
+
+Start: branch `claude/ecstatic-fermi-2yj6fn` off `main` at `c4854d0`, clean. The brain was not reachable from the cloud session, so `standard:coding` came from `docs/STEP_REVIEW_CHECKLIST.md`, `docs/engineering-notes.md` and `docs/QUALITY.md`. Linux container: clang 18, cppcheck 2.13, sqlite3 3.45, iwyu installed from apt. No macOS, so `leaks-macos` did not run; `ci-linux.sh` needs Docker and did not run.
+
+Decisions from Itay (2026-10-25, asked before coding):
+
+- **Reader version.** `schema_too_new` compares `min_reader_version` with a store constant `0.3.0` (the schema this code reads), not `REMEMBER_VERSION` (still 0.2.0 until plan 26). A test hook reports an older version.
+- **New writes, source `unknown`.** New writes store the actor through the same map as the migration: `unknown` becomes `{"kind":"human","id":null}`. `add` with no `--source` now reads back `source` `human`.
+- **change_seq on new writes.** Bump the counter now (JE-5.2), not 0 until plan 21.
+- **Migration warning value.** `<value>` and `detail.value` are the left-out prefix; `detail.item` is the same prefix.
+- **v6 import source.** `import --from-db` keeps refusing a v6 source until plan 23 (`database is newer than this remember`). Tests that import a brain this build wrote rewrite it to the v5 shape first (`harness_make_v5_source`).
+
+Stage order deviation: the five in-transaction stages landed as one change. Renaming `entries.id`/`sync_id`/`source` breaks every query in `store_sqlite.c` at once, so no intermediate stage builds a tree that passes the old suite. The new tests were written against the finished migration, not red-first per stage. A reviewer can see them fail on `main` (they assert `user_version` 6 and v6 columns).
+
+Resolved by the plan's own precedence rule (a later Design section wins), not by choice:
+
+- **No 8-prefix cap.** The plan's E12.7 paragraph and second-review probe 2 still say "keep the 8 earliest". 007 §10 step 2 and must-pass 007-14 say no item limit (D-01, 2026-10-25). The code keeps every live prefix. Probe 2's expected result is stale.
+- **No FTS triggers exist** in v5, so 008 §8 step 4's "FTS triggers" rebuild is nothing. FTS rows keep their rowids (= `local_id`).
+
+Interpretations to confirm in review:
+
+- A folded duplicate (`Project:` next to `project:`) is left out with `setting_invalid` reason `duplicate_prefix` (ST-5.4 + ST-7.15). The plan names only `bad_prefix_shape`.
+- `bucket_prefixes` that holds only tombstones writes a `[]` row (the table holds a prefix row; no live prefix failed). No released command writes E12 tables, so no real brain has this.
+- Migration validation does not NFC-normalize: it folds ASCII and checks ST-5.4 on the stored text.
+- The entry UUID keeps the spec's inline `UNIQUE` (an autoindex); `ux_entries_sync_id` is gone.
+- `conflicts.sync_id` is not renamed: 008 §8 does not list `conflicts`.
+- The settings tables are renamed into place (spec step 4), so `sqlite_master` quotes `"settings"`. A fresh brain takes the same step, so fresh and migrated schemas are byte-equal.
+
+Gate (Linux container, clang 18, `REMEMBER_ENABLE_SANITIZERS=ON`, `REMEMBER_TEST_VFS=ON`): build, `remember_store_tests` 0 failed, `remember_tests --only <gate-suites>` 0 failed, `check-coverage.sh` OK (functions 100%, effective lines 100%, normalize 306 branch sides, 0 missed). `lint-all.sh`: format and cppcheck clean; clang-tidy findings in the new code fixed in the follow-up commit. Not run: `leaks-macos` (no macOS), `ci-linux.sh` (no Docker in the session).
 
 ## Review Notes
 
