@@ -179,9 +179,10 @@ static const char *const k_warning_codes[] = {
     "raw_query_ignored",
     "deprecated_flag",
     "synced_folder",
+    "setting_invalid",
 };
 
-TEST(warning_catalog_round_trips_the_three_codes)
+TEST(warning_catalog_round_trips_every_code)
 {
     size_t i = 0;
     size_t count = sizeof(k_warning_codes) / sizeof(k_warning_codes[0]);
@@ -2878,7 +2879,8 @@ TEST(cli_repair_refuses_damaged_base_table)
         "{\"version\":1,\"error\":{\"code\":\"corrupt\",\"message\":\"database error: the brain "
         "file is "
         "damaged\",\"detail\":{\"sqlite_code\":11,\"sqlite_extended\":11,\"sqlite_name\":\"SQLITE_"
-        "CORRUPT\",\"sqlite_message\":\"*** in database main ***\\nTree 2 page 2: btreeInitPage() "
+        "CORRUPT\",\"sqlite_message\":\"*** in database main ***\\nTree 23 page 23: "
+        "btreeInitPage() "
         "returns error code 11\",\"fix\":\"Copy the file "
         "somewhere safe before anything else, then restore a backup, "
         "or recover what can be read with `remember --db NEW.db import --from-db COPY`.\","
@@ -3995,7 +3997,7 @@ void register_errors_tests(void)
 #endif
     RUN_TEST(error_catalog_round_trips_every_e4_3_code);
     RUN_TEST(error_catalog_rejects_names_outside_e4_3);
-    RUN_TEST(warning_catalog_round_trips_the_three_codes);
+    RUN_TEST(warning_catalog_round_trips_every_code);
     RUN_TEST(warning_catalog_rejects_names_outside_the_three);
     RUN_TEST(plain_error_is_remember_prefix_and_the_message);
     RUN_TEST(json_error_is_one_line_and_not_the_plain_line);

@@ -579,20 +579,22 @@ TEST(facade_conflicts_matches_cli)
     }
     /* The real sha256("incoming"): import rejects a forged hash. */
     free(harness_sqlite_query_line(
-        foreign, "UPDATE entries SET body='incoming', "
-                 "body_hash='3a7470e00c076b678c41c8ae4a4945198a9e243cdb42e044612535facb5f225d',"
-                 "version_vector='{\"bbbbbbbb-bbbb-7bbb-bbbb-bbbbbbbbbbbb\":1}' WHERE id=1;"));
+        foreign,
+        "UPDATE entries SET body='incoming', "
+        "body_hash='3a7470e00c076b678c41c8ae4a4945198a9e243cdb42e044612535facb5f225d',"
+        "version_vector='{\"bbbbbbbb-bbbb-7bbb-bbbb-bbbbbbbbbbbb\":1}' WHERE local_id=1;"));
     dev = facade_sidecar_id(local);
     ASSERT_TRUE(dev != NULL);
     {
         char sql[FACADE_SQL_BUF];
         (void)snprintf(sql, sizeof(sql),
-                       "UPDATE entries SET version_vector='{\"%s\":1}' WHERE id=1;", dev);
+                       "UPDATE entries SET version_vector='{\"%s\":1}' WHERE local_id=1;", dev);
         free(harness_sqlite_query_line(local, sql));
     }
     free(dev);
 
     imp[3] = foreign;
+    harness_make_v5_source(foreign);
     r = run_remember(local, imp, sizeof(imp) / sizeof(imp[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 0);
     ASSERT_STR_CONTAINS(r.out, "\"conflicts\":1");
@@ -645,20 +647,22 @@ TEST(facade_conflict_accept_matches_cli)
     }
     /* The real sha256("incoming"): import rejects a forged hash. */
     free(harness_sqlite_query_line(
-        foreign, "UPDATE entries SET body='incoming', "
-                 "body_hash='3a7470e00c076b678c41c8ae4a4945198a9e243cdb42e044612535facb5f225d',"
-                 "version_vector='{\"bbbbbbbb-bbbb-7bbb-bbbb-bbbbbbbbbbbb\":1}' WHERE id=1;"));
+        foreign,
+        "UPDATE entries SET body='incoming', "
+        "body_hash='3a7470e00c076b678c41c8ae4a4945198a9e243cdb42e044612535facb5f225d',"
+        "version_vector='{\"bbbbbbbb-bbbb-7bbb-bbbb-bbbbbbbbbbbb\":1}' WHERE local_id=1;"));
     dev = facade_sidecar_id(local1);
     ASSERT_TRUE(dev != NULL);
     {
         char sql[FACADE_SQL_BUF];
         (void)snprintf(sql, sizeof(sql),
-                       "UPDATE entries SET version_vector='{\"%s\":1}' WHERE id=1;", dev);
+                       "UPDATE entries SET version_vector='{\"%s\":1}' WHERE local_id=1;", dev);
         free(harness_sqlite_query_line(local1, sql));
     }
     free(dev);
 
     imp[3] = foreign;
+    harness_make_v5_source(foreign);
     r = run_remember(local1, imp, sizeof(imp) / sizeof(imp[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 0);
     cmd_result_free(&r);

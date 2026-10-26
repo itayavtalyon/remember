@@ -2,6 +2,7 @@
 #define REMEMBER_DIAG_H
 
 #include <stdbool.h>
+#include <stddef.h>
 
 #include "store.h"
 
@@ -53,6 +54,7 @@ typedef enum {
     DIAG_WARN_RAW_QUERY_IGNORED = 0,
     DIAG_WARN_DEPRECATED_FLAG,
     DIAG_WARN_SYNCED_FOLDER,
+    DIAG_WARN_SETTING_INVALID,
     DIAG_WARN_COUNT
 } DiagWarning;
 
@@ -96,6 +98,21 @@ int diag_error_sqlite(DiagCode code, const StoreError *detail, const char *path)
  * Returns -1 when code is outside the warning catalog or the write fails.
  */
 int diag_warning(DiagWarning code, const char *message);
+
+/* One string member of a warning's JSON "detail" object. */
+typedef struct {
+    const char *name;
+    const char *value;
+} DiagDetailField;
+
+/*
+ * diag_warning plus a JSON "detail" object of string members, in the given
+ * order, after "message". The plain line is the same as diag_warning's.
+ * nfields 0 writes no detail. Returns -1 like diag_warning, or when fields is
+ * NULL and nfields is not 0.
+ */
+int diag_warning_detail(DiagWarning code, const char *message, const DiagDetailField *fields,
+                        size_t nfields);
 
 /*
  * Process-wide --json-errors switch. remember_run sets it for one call and

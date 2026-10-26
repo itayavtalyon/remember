@@ -20,7 +20,7 @@ enum {
     CAPTURE_INITIAL_CAP = 4096, /* first pipe-read buffer; doubles thereafter */
     READ_CHUNK = 4096,          /* per-read scratch buffer */
     PATH_BUFSIZE = 4096,        /* filesystem path buffer */
-    CMD_BUFSIZE = 1024,         /* sqlite3 CLI command buffer */
+    CMD_BUFSIZE = 8192,         /* sqlite3 CLI command buffer (fits the v5 rewrite) */
     LINE_BUFSIZE = 512,         /* single output line buffer */
     REGISTRY_INITIAL_CAP = 16,  /* temp-dir registry initial slots */
     EXIT_SIGNAL_BASE = 128,     /* shell convention: 128 + signal number */
@@ -576,6 +576,74 @@ char *harness_sqlite_query_line_at(const char *db_path, const char *sql, Harness
     }
     trim_trailing_newlines(first);
     return strdup(first);
+}
+
+/* The v5 DDL text a fresh 0.2.0 brain carries (store_sqlite.c K_*_V5). */
+static const char k_to_v5_sql[] =
+    "PRAGMA foreign_keys=OFF; BEGIN;"
+    "CREATE TABLE entries_v5 (\n"
+    "  id INTEGER PRIMARY KEY,\n"
+    "  key TEXT,\n"
+    "  body TEXT NOT NULL,\n"
+    "  body_hash TEXT NOT NULL,\n"
+    "  source TEXT NOT NULL,\n"
+    "  created_at TEXT NOT NULL,\n"
+    "  updated_at TEXT NOT NULL,\n"
+    "  expires_at TEXT,\n"
+    "  sync_id TEXT NOT NULL,\n"
+    "  deleted_at TEXT,\n"
+    "  version_vector TEXT NOT NULL\n"
+    ");"
+    "INSERT INTO entries_v5 SELECT local_id, key, body, body_hash, created_by ->> '$.kind', "
+    "created_at, updated_at, expires_at, id, deleted_at, version_vector FROM entries;"
+    "CREATE TABLE entry_tags_v5 (\n"
+    "  entry_id INTEGER NOT NULL REFERENCES entries(id) ON DELETE CASCADE,\n"
+    "  tag_id INTEGER NOT NULL REFERENCES tags(id) ON DELETE CASCADE,\n"
+    "  PRIMARY KEY (entry_id, tag_id)\n"
+    ");"
+    "INSERT INTO entry_tags_v5 SELECT entry_id, tag_id FROM entry_tags;"
+    "CREATE TABLE entry_links_v5 (\n"
+    "  from_id    INTEGER NOT NULL REFERENCES entries(id) ON DELETE CASCADE,\n"
+    "  to_id      INTEGER NOT NULL REFERENCES entries(id) ON DELETE CASCADE,\n"
+    "  kind       TEXT NOT NULL CHECK (kind IN ('related', 'supersedes', 'cites')),\n"
+    "  created_at TEXT NOT NULL,\n"
+    "  updated_at TEXT NOT NULL,\n"
+    "  CHECK (from_id != to_id)\n"
+    ");"
+    "INSERT INTO entry_links_v5 SELECT from_id, to_id, kind, created_at, updated_at "
+    "FROM entry_links WHERE deleted_at IS NULL;"
+    "DROP TABLE entry_links; DROP TABLE entry_tags; DROP TABLE entries;"
+    "ALTER TABLE entries_v5 RENAME TO entries;"
+    "ALTER TABLE entry_tags_v5 RENAME TO entry_tags;"
+    "ALTER TABLE entry_links_v5 RENAME TO entry_links;"
+    "CREATE UNIQUE INDEX ux_entries_key ON entries(key) WHERE key IS NOT NULL;"
+    "CREATE UNIQUE INDEX ux_entries_bodyhash ON entries(body_hash) WHERE key IS NULL;"
+    "CREATE UNIQUE INDEX ux_entries_sync_id ON entries(sync_id);"
+    "CREATE UNIQUE INDEX entry_links_edge\n  ON entry_links(from_id, to_id, kind);"
+    "CREATE INDEX entry_links_to ON entry_links(to_id);"
+    "DROP TABLE brain_meta; DROP TABLE tombstones; DROP TABLE outbox;"
+    "DROP TABLE settings; DROP TABLE settings_history;"
+    "CREATE TABLE bucket_prefixes (\n"
+    "  prefix TEXT PRIMARY KEY,\n"
+    "  added_at TEXT NOT NULL,\n"
+    "  removed_at TEXT,\n"
+    "  device_id TEXT NOT NULL\n"
+    ");"
+    "CREATE TABLE settings (\n"
+    "  name TEXT PRIMARY KEY,\n"
+    "  value TEXT NOT NULL,\n"
+    "  updated_at TEXT NOT NULL\n"
+    ");"
+    "PRAGMA user_version=5; COMMIT;";
+
+void harness_make_v5_source_at(const char *db_path, HarnessSite site)
+{
+    char *version = harness_sqlite_query_line_at(db_path, "PRAGMA user_version;", site);
+
+    if (version != NULL && strcmp(version, "6") == 0) {
+        free(harness_sqlite_query_line_at(db_path, k_to_v5_sql, site));
+    }
+    free(version);
 }
 
 char *dir_of_path(const char *file_path)

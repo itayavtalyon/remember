@@ -487,7 +487,7 @@ TEST(get_expired_exits_three)
     ASSERT_EQ_INT(r.exit_code, 0);
     cmd_result_free(&r);
     free(harness_sqlite_query_line(
-        db, "UPDATE entries SET expires_at='2020-01-01T00:00:00.000Z' WHERE id=1;"));
+        db, "UPDATE entries SET expires_at='2020-01-01T00:00:00.000Z' WHERE local_id=1;"));
 
     g = run_remember(db, gargs, sizeof(gargs) / sizeof(gargs[0]), NULL);
     ASSERT_EQ_INT(g.exit_code, 3);

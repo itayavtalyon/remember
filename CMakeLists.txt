@@ -317,6 +317,7 @@ set(REMEMBER_TEST_SOURCES
     tests/test_sync_locators.c
     tests/test_sync_import.c
     tests/test_schema_v5.c
+    tests/test_schema_v6.c
     tests/test_device.c
     tests/test_errors.c
     tests/test_list_dates.c
@@ -363,6 +364,7 @@ add_executable(remember_store_tests
     tests/test_store_search.c
     tests/test_normalize.c
     tests/test_schema_v5.c
+    tests/test_schema_v6.c
     src/store_sqlite.c
     src/normalize.c
     src/unicode.c

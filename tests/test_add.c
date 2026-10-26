@@ -56,7 +56,8 @@ TEST(add_with_tags_and_source_human)
     free(db);
 }
 
-TEST(add_default_source_is_unknown)
+/* source defaults to unknown, which a v6 actor stores as human (008 §8 step 1). */
+TEST(add_default_source_reads_back_as_human)
 {
     char *db = make_temp_db_path();
     const char *args[] = {"add", "no source flag"};
@@ -69,7 +70,7 @@ TEST(add_default_source_is_unknown)
     cmd_result_free(&r);
     g = run_remember(db, gargs, sizeof(gargs) / sizeof(gargs[0]), NULL);
     ASSERT_EQ_INT(g.exit_code, 0);
-    ASSERT_STR_CONTAINS(g.out, "\"source\":\"unknown\"");
+    ASSERT_STR_CONTAINS(g.out, "\"source\":\"human\"");
     cmd_result_free(&g);
     free(db);
 }
@@ -483,7 +484,7 @@ TEST(add_json_body_with_control_and_quotes_stays_valid)
         hex_expect[(i * 2U) + 1U] = k_hex[b & HEX_NIBBLE_MASK];
     }
     hex_expect[body_len * 2U] = '\0';
-    hex_stored = harness_sqlite_query_line(db, "SELECT hex(body) FROM entries WHERE id=1;");
+    hex_stored = harness_sqlite_query_line(db, "SELECT hex(body) FROM entries WHERE local_id=1;");
     ASSERT_TRUE(hex_stored != NULL);
     if (hex_stored != NULL) {
         ASSERT_STREQ(hex_stored, hex_expect);
@@ -624,7 +625,7 @@ void register_add_tests(void)
 {
     RUN_TEST(add_basic_prints_id_one);
     RUN_TEST(add_with_tags_and_source_human);
-    RUN_TEST(add_default_source_is_unknown);
+    RUN_TEST(add_default_source_reads_back_as_human);
     RUN_TEST(add_source_agent_tool_accepted);
     RUN_TEST(add_source_share_accepted);
     RUN_TEST(add_invalid_source_rejected);

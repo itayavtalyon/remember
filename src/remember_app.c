@@ -357,6 +357,26 @@ static void print_parse_error(const CliArgs *args)
 }
 
 /* Resolve path, optional sync-path warning, then open. Store stays path-pure. */
+/* 007 ST-7.15: each prefix the v6 step left out. The open also wrote memories'
+   brain, so the line has no second sentence. */
+static void warn_open_settings(const Store *s)
+{
+    enum { WARN_LINE_BUF = 512 };
+    size_t i = 0;
+
+    for (i = 0; i < store_open_warning_count(s); i++) {
+        StoreSettingWarning w = store_open_warning(s, i);
+        char line[WARN_LINE_BUF];
+        DiagDetailField fields[] = {
+            {"key", w.key}, {"value", w.value}, {"reason", w.reason}, {"item", w.value}};
+
+        (void)snprintf(line, sizeof(line), "skipped \"%s\": \"%s\" isn't a valid value.", w.key,
+                       w.value);
+        (void)diag_warning_detail(DIAG_WARN_SETTING_INVALID, line, fields,
+                                  sizeof(fields) / sizeof(fields[0]));
+    }
+}
+
 static Store *open_store(const CliArgs *args, int *out_rc)
 {
     enum { ERR_BUFSIZE = 256 }; /* store_open error-message buffer */
@@ -407,6 +427,7 @@ static Store *open_store(const CliArgs *args, int *out_rc)
         *out_rc = REMEMBER_ERR;
         return NULL;
     }
+    warn_open_settings(s);
     return s;
 }
 

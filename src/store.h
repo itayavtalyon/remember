@@ -126,8 +126,9 @@ typedef struct {
 /* Open or create a store at path. Creates parent directories (mode 0700).
  * On success returns a non-NULL Store*. On failure returns NULL and, if
  * err/errlen are usable, writes a short message into err (NUL-terminated).
- * Schema: user_version 0 creates 5; 1/2/3 climb to 5; 4 migrates to 5; 5 is
- * current; >5 refuses with "database is newer than this remember".
+ * Schema: user_version 0 creates 6; 1..5 climb to the v5 shape and take the
+ * one v6 step (007 §10) in the same transaction; 6 is current; >6 refuses
+ * with "database is newer than this remember".
  * Sidecar <path>.device_id (mode 0600) is the only device id. A missing file
  * is minted. An invalid file is an error and is left unchanged.
  */
@@ -150,6 +151,24 @@ Store *store_open_opts(const char *path, const StoreOpenOpts *opts, char *err, s
  * op on s or store_close. Never NULL when s is non-NULL.
  */
 const StoreError *store_last_error(const Store *s);
+
+/*
+ * One setting_invalid warning (007 ST-7.15) that this open's v5 -> v6 step
+ * produced: a bucket prefix it left out of remember.buckets.prefixes (007 §10
+ * step 2). key is that setting, value is the prefix as stored, reason is
+ * bad_prefix_shape or duplicate_prefix. Strings are borrowed from s.
+ */
+typedef struct {
+    const char *key;
+    const char *value;
+    const char *reason;
+} StoreSettingWarning;
+
+/* Number of warnings the open produced (0 when s is NULL or none). */
+size_t store_open_warning_count(const Store *s);
+
+/* Warning i in the order the step found them; zeroed when i is out of range. */
+StoreSettingWarning store_open_warning(const Store *s, size_t i);
 
 /* Path s was opened with (borrowed; valid until store_close). NULL if s NULL. */
 const char *store_path(const Store *s);

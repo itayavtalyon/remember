@@ -105,4 +105,21 @@ bool vv_json_is_canonical(const char *s);
 /* One of the closed source tokens: human, agent, tool, share, unknown. */
 bool source_is_valid(const char *s);
 
+/* Bucket prefix (007 ST-5.4): at most 32 code points before the ':'. */
+enum { REMEMBER_BUCKET_PREFIX_MAX_POINTS = 32 };
+/* Output bytes: 32 four-byte code points, the ':', and the NUL. */
+enum { REMEMBER_BUCKET_PREFIX_BUF = (REMEMBER_BUCKET_PREFIX_MAX_POINTS * 4) + 2 };
+
+/*
+ * 007 ST-5.4: 1 to 32 code points of \p{L}, \p{Nd}, '-', '_' or '.', then one
+ * ':'. ASCII letters fold to lowercase. No trim and no NFC: the input is the
+ * stored text. NORM_OK writes the folded prefix into out. An empty name or no
+ * final ':' is NORM_ERR_EMPTY or NORM_ERR_INVALID_CHAR, any other code point
+ * is NORM_ERR_INVALID_CHAR, more than 32 is NORM_ERR_TOO_LONG, ill-formed
+ * UTF-8 is NORM_ERR_INVALID_UTF8; each of these leaves out empty. NULL src
+ * or out, or out_cap below REMEMBER_BUCKET_PREFIX_BUF, is NORM_ERR_INTERNAL
+ * and writes nothing.
+ */
+NormStatus bucket_prefix_fold(const char *src, char *out, size_t out_cap);
+
 #endif /* REMEMBER_NORMALIZE_H */

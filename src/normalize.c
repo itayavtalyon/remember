@@ -1,8 +1,10 @@
 #include "normalize.h"
 
 #include "sha256.h"
+#include "unicode.h"
 
 #include <stdbool.h>
+#include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -580,6 +582,70 @@ bool source_is_valid(const char *s)
         }
     }
     return false;
+}
+
+/* ---- bucket prefixes (007 ST-5.4) ---------------------------------------- */
+
+static bool bucket_prefix_point_ok(uint32_t cp)
+{
+    /* \p{L} is the five letter categories, LU through LO in the enum. */
+    UnicodeCategory cat = unicode_category(cp);
+
+    if (cp == (uint32_t)'-' || cp == (uint32_t)'_' || cp == (uint32_t)'.') {
+        return true;
+    }
+    if (cat >= UNICODE_CAT_LU && cat <= UNICODE_CAT_LO) {
+        return true;
+    }
+    return cat == UNICODE_CAT_ND;
+}
+
+NormStatus bucket_prefix_fold(const char *src, char *out, size_t out_cap)
+{
+    NormStatus st = NORM_OK;
+    size_t len = 0;
+    size_t name_len = 0;
+    size_t i = 0;
+    size_t points = 0;
+
+    if (src == NULL || out == NULL || out_cap < (size_t)REMEMBER_BUCKET_PREFIX_BUF) {
+        return NORM_ERR_INTERNAL;
+    }
+    len = strlen(src);
+    if (len == 0U || src[len - 1U] != ':') {
+        out[0] = '\0';
+        return NORM_ERR_INVALID_CHAR;
+    }
+    name_len = len - 1U;
+    if (name_len == 0U) {
+        out[0] = '\0';
+        return NORM_ERR_EMPTY;
+    }
+    while (st == NORM_OK && i < name_len) {
+        uint32_t cp = 0;
+        size_t nbytes = 0;
+
+        if (unicode_decode(src + i, name_len - i, &cp, &nbytes) != UNICODE_OK) {
+            st = NORM_ERR_INVALID_UTF8;
+        } else if (!bucket_prefix_point_ok(cp)) {
+            st = NORM_ERR_INVALID_CHAR;
+        } else if (++points > (size_t)REMEMBER_BUCKET_PREFIX_MAX_POINTS) {
+            st = NORM_ERR_TOO_LONG;
+        } else {
+            memcpy(out + i, src + i, nbytes);
+            if (cp >= (uint32_t)'A' && cp <= (uint32_t)'Z') {
+                out[i] = (char)(cp - (uint32_t)'A' + (uint32_t)'a');
+            }
+            i += nbytes;
+        }
+    }
+    if (st != NORM_OK) {
+        out[0] = '\0';
+        return st;
+    }
+    out[name_len] = ':';
+    out[len] = '\0';
+    return NORM_OK;
 }
 
 /* ---- hash ---------------------------------------------------------------- */

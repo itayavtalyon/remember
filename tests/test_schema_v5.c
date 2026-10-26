@@ -244,7 +244,7 @@ static void given_v4_brain(const char *db)
                  "PRAGMA user_version=4;");
 }
 
-TEST(schema_v5_fresh_has_v5_objects)
+TEST(schema_v5_fresh_keeps_the_v5_objects_v6_did_not_replace)
 {
     char *db = make_temp_db_path();
     Store *s = NULL;
@@ -253,7 +253,7 @@ TEST(schema_v5_fresh_has_v5_objects)
     s = given_open(db);
     store_close(s);
 
-    assert_query_is(db, (QueryExpect){.sql = "PRAGMA user_version;", .want = "5"});
+    assert_query_is(db, (QueryExpect){.sql = "PRAGMA user_version;", .want = "6"});
     assert_query_is(db, (QueryExpect){.sql = "SELECT name FROM pragma_table_info('entries_fts') "
                                              "WHERE cid=0;",
                                       .want = "key"});
@@ -263,14 +263,14 @@ TEST(schema_v5_fresh_has_v5_objects)
     assert_query_is(db, (QueryExpect){.sql = "SELECT name FROM pragma_table_info('entries_fts') "
                                              "WHERE cid=2;",
                                       .want = "tags"});
-    assert_query_is(db,
-                    (QueryExpect){.sql = "SELECT name FROM sqlite_master WHERE type='table' AND "
-                                         "name='bucket_prefixes';",
-                                  .want = "bucket_prefixes"});
-    assert_query_is(db,
-                    (QueryExpect){.sql = "SELECT name FROM sqlite_master WHERE type='table' AND "
-                                         "name='settings';",
-                                  .want = "settings"});
+    /* v6 replaced the E12 tables (007 §10 settings steps 3 and 4). */
+    assert_query_is(
+        db, (QueryExpect){.sql = "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND "
+                                 "name='bucket_prefixes';",
+                          .want = "0"});
+    assert_query_is(db, (QueryExpect){.sql = "SELECT COUNT(*) FROM pragma_table_info('settings') "
+                                             "WHERE name='key';",
+                                      .want = "1"});
     assert_query_is(db, (QueryExpect){.sql = "SELECT COUNT(*) FROM pragma_table_info('conflicts') "
                                              "WHERE name='origin';",
                                       .want = "1"});
@@ -393,7 +393,7 @@ TEST(schema_v5_search_folds_hebrew_marks_in_the_row)
     free(db);
 }
 
-TEST(schema_v5_v4_migrates_to_the_fresh_schema)
+TEST(schema_v5_v4_migrates_to_the_fresh_v6_schema)
 {
     char *fresh = make_temp_db_path();
     char *old = make_temp_db_path();
@@ -410,7 +410,7 @@ TEST(schema_v5_v4_migrates_to_the_fresh_schema)
     given_v4_brain(old);
     assert_query_is(old, (QueryExpect){.sql = "PRAGMA user_version;", .want = "4"});
     s = given_open(old);
-    assert_query_is(old, (QueryExpect){.sql = "PRAGMA user_version;", .want = "5"});
+    assert_query_is(old, (QueryExpect){.sql = "PRAGMA user_version;", .want = "6"});
     {
         char *devices = harness_sqlite_query_line(
             old, "SELECT name FROM sqlite_master WHERE type='table' AND name='devices';");
@@ -478,7 +478,7 @@ TEST(schema_v5_v4_body_and_tag_search_is_unchanged_by_migration)
     }
     s = given_open(db);
     store_close(s);
-    assert_query_is(db, (QueryExpect){.sql = "PRAGMA user_version;", .want = "5"});
+    assert_query_is(db, (QueryExpect){.sql = "PRAGMA user_version;", .want = "6"});
     for (i = 0; i < NQ; i++) {
         (void)snprintf(sql, sizeof(sql),
                        "SELECT IFNULL(group_concat(rowid), '-') FROM (SELECT rowid FROM "
@@ -500,7 +500,7 @@ TEST(schema_v5_v4_missing_conflicts_creates_the_table)
     given_v4_brain(db);
     exec_sql(db, "DROP TABLE conflicts;");
     s = given_open(db);
-    assert_query_is(db, (QueryExpect){.sql = "PRAGMA user_version;", .want = "5"});
+    assert_query_is(db, (QueryExpect){.sql = "PRAGMA user_version;", .want = "6"});
     assert_query_is(db, (QueryExpect){.sql = "SELECT COUNT(*) FROM pragma_table_info('conflicts') "
                                              "WHERE name='origin';",
                                       .want = "1"});
@@ -574,7 +574,7 @@ TEST(schema_v5_fault_after_step3_keeps_v4)
     assert_query_is(db, (QueryExpect){.sql = "SELECT COUNT(*) FROM devices;", .want = "1"});
 
     s = given_open(db);
-    assert_query_is(db, (QueryExpect){.sql = "PRAGMA user_version;", .want = "5"});
+    assert_query_is(db, (QueryExpect){.sql = "PRAGMA user_version;", .want = "6"});
     assert_query_is(db, (QueryExpect){.sql = "SELECT name FROM pragma_table_info('entries_fts') "
                                              "WHERE cid=0;",
                                       .want = "key"});
@@ -622,7 +622,7 @@ TEST(schema_v5_v4_open_exec_fault_sweep)
     }
     ASSERT_TRUE(s != NULL);
     ASSERT_TRUE(n > SCHEMA_V5_EXEC_AFTER_STEP3);
-    assert_query_is(db, (QueryExpect){.sql = "PRAGMA user_version;", .want = "5"});
+    assert_query_is(db, (QueryExpect){.sql = "PRAGMA user_version;", .want = "6"});
     store_close(s);
     free(db);
 }
@@ -1033,6 +1033,7 @@ TEST(store_import_probe_prepare_fail_imports_nothing)
     src = store_open(foreign, err, sizeof(err));
     ASSERT_TRUE(dst != NULL && src != NULL);
     store_close(src);
+    harness_make_v5_source(foreign);
     /* user_version prepare succeeds; the next prepare is the origin probe. */
     store_test_fail_prepare_after(1);
     memset(&counts, 0, sizeof(counts));
@@ -1048,7 +1049,7 @@ TEST(store_import_probe_prepare_fail_imports_nothing)
 
 void register_schema_v5_tests(void)
 {
-    RUN_TEST(schema_v5_fresh_has_v5_objects);
+    RUN_TEST(schema_v5_fresh_keeps_the_v5_objects_v6_did_not_replace);
     RUN_TEST(schema_v5_v4_missing_sidecar_mints_a_new_id);
     RUN_TEST(schema_v5_v4_sidecar_is_kept_and_devices_row_is_ignored);
     RUN_TEST(schema_v5_invalid_sidecar_is_left_unchanged);
@@ -1061,7 +1062,7 @@ void register_schema_v5_tests(void)
     RUN_TEST(schema_v5_search_finds_key_word);
     RUN_TEST(schema_v5_rekey_search_follows_the_new_key);
     RUN_TEST(schema_v5_search_folds_hebrew_marks_in_the_row);
-    RUN_TEST(schema_v5_v4_migrates_to_the_fresh_schema);
+    RUN_TEST(schema_v5_v4_migrates_to_the_fresh_v6_schema);
     RUN_TEST(schema_v5_v4_body_and_tag_search_is_unchanged_by_migration);
     RUN_TEST(schema_v5_v4_missing_conflicts_creates_the_table);
 #ifdef REMEMBER_TEST_HOOKS

@@ -75,6 +75,18 @@ char *harness_sqlite_query_line_at(const char *db_path, const char *sql, Harness
 #define harness_sqlite_query_line(db_path, sql)                                                    \
     harness_sqlite_query_line_at((db_path), (sql), (HarnessSite){__FILE__, __LINE__})
 
+/*
+ * Rewrite a v6 brain this build wrote into the v5 shape, in place, so
+ * `import --from-db` (v4 and v5 sources until plan 23) can read it: entries
+ * get the v5 columns back (id = local_id, sync_id = id, source = the creating
+ * actor's kind), live links keep from_id/to_id/kind/times, the v6-only tables
+ * go, and empty E12 tables come back. A file that is not at v6 is left as is.
+ * Fails the calling test like harness_sqlite_query_line.
+ */
+void harness_make_v5_source_at(const char *db_path, HarnessSite site);
+#define harness_make_v5_source(db_path)                                                            \
+    harness_make_v5_source_at((db_path), (HarnessSite){__FILE__, __LINE__})
+
 /* Directory containing path (heap; caller frees). */
 char *dir_of_path(const char *file_path);
 
