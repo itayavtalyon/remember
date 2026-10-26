@@ -1,15 +1,18 @@
 #!/usr/bin/env python3
-"""Validate every JSON Schema and every example in PLUGIN-PROTOCOL.md (revision 6, 2026-10-22).
+"""Validate every JSON Schema and every example in PLUGIN-PROTOCOL.md.
 
-Schemas: ```json blocks that contain "$schema".
+Schemas: ```json blocks with no example marker that contain "$schema".
 Examples: ```json blocks preceded by <!-- example: NAME --> (one document)
 or <!-- example-lines: NAME --> (one document per line).
 
 Extracted files (plan 24): each schema is schema/plugin/v1/<$id file name>.
 Each example is a fixture in tests/fixtures/plugin/: at the path of its
-`dir/file` caption (the section 2.4 plugins, with their ```python blocks),
-else examples/NN-<schema>[-<type>].json, or .jsonl for example-lines. A file
-holds the block body plus a newline. --write regenerates both folders.
+`dir/file` caption (the section 2.4 plugins, with their ```python blocks,
+which must compile), else examples/NN-<schema>[-<type>].json, or .jsonl for
+example-lines. A file holds the block body plus a newline. --write regenerates
+the files. Stray files count only in the folders the spec fills, so other
+fixtures may sit beside them. A schema problem stops the run before any file
+is checked or written.
 """
 import argparse, difflib, json, os, re, sys, copy
 from pathlib import Path
@@ -31,34 +34,104 @@ def caption(start):
     m = re.match(r"`([a-z][a-z0-9_]*/[A-Za-z0-9_][A-Za-z0-9_.]*)`", text[:start].rstrip().rsplit("\n", 1)[-1])
     return m and m.group(1)
 
-blocks = []  # (line, marker, name, body, caption)
-for m in re.finditer(r"(?:<!--\s*(example(?:-lines)?):\s*(\S+)\s*-->\s*\n)?```json\n(.*?)\n```", text, re.S):
-    line = text[:m.start()].count("\n") + 1
-    blocks.append((line, m.group(1), m.group(2), m.group(3), caption(m.start())))
+fail = broken = 0  # broken: problems that make validation raise or extraction unsafe
+schemas, examples, files = {}, [], {}  # files: extracted path -> (spec line, bytes)
 
-fail = 0
-schemas, examples = {}, []
-for line, kind, name, body, _ in blocks:
-    if '"$schema"' in body:
+def problem(msg, breaks=False):
+    global fail, broken
+    print(f"FAIL {msg}"); fail += 1; broken += breaks
+
+def put(rel, line, body):
+    """Record a file extracted from the spec block at line."""
+    p = (ROOT / rel).resolve()
+    if not any(p.is_relative_to(d) for d in (SCHEMA_DIR, FIXTURE_DIR)):
+        return problem(f"line {line}: {rel} is outside {SCHEMA_DIR.relative_to(ROOT)} and {FIXTURE_DIR.relative_to(ROOT)}", True)
+    if p in files:
+        return problem(f"line {line}: {rel} is also extracted from line {files[p][0]}", True)
+    files[p] = (line, (body + "\n").encode("utf-8"))
+
+# One pass over every fenced block. A marked block is an example, an unmarked one with "$schema" a schema.
+n = 0  # examples without a caption, numbered in spec order
+for m in re.finditer(r"(?:<!--\s*(example(?:-lines)?):\s*(\S+)\s*-->\s*\n)?```(json|python)\n(.*?)\n```", text, re.S):
+    kind, name, lang, body = m.groups()
+    line, cap = text[:m.start()].count("\n") + 1, caption(m.start())
+    fixture = cap and f"{FIXTURE_DIR.relative_to(ROOT)}/{cap}"
+    if lang == "python":
+        if not cap:
+            problem(f"line {line}: python block has no `dir/file` caption"); continue
+        try:
+            compile(body, cap, "exec")
+        except SyntaxError as e:
+            problem(f"line {line}: {cap} does not compile: {e}")
+        put(fixture, line, body)
+    elif kind is None and '"$schema"' in body:
         try:
             s = json.loads(body)
         except json.JSONDecodeError as e:
-            print(f"FAIL line {line}: schema is not valid JSON: {e}"); fail += 1; continue
+            problem(f"line {line}: schema is not valid JSON: {e}", True); continue
+        sid = s.get("$id") if isinstance(s, dict) else None
+        if not re.fullmatch(re.escape(BASE) + r"[A-Za-z0-9_-]+\.json", str(sid)):
+            problem(f"line {line}: schema $id {sid} is not {BASE}<name>.json", True); continue
+        if sid in schemas:
+            problem(f"line {line}: schema $id {sid} is also used by line {schemas[sid][0]}", True); continue
         try:
             Draft202012Validator.check_schema(s)
         except Exception as e:
-            print(f"FAIL line {line}: {s.get('$id')} is not a valid 2020-12 schema: {e.message}"); fail += 1; continue
-        schemas[s["$id"]] = s
-        print(f"ok   line {line}: schema {s['$id'].replace(BASE, '')}")
+            problem(f"line {line}: {sid} is not a valid 2020-12 schema: {e.message}", True); continue
+        schemas[sid] = (line, s)
+        put(f"{SCHEMA_DIR.relative_to(ROOT)}/{sid.removeprefix(BASE)}", line, body)
+        print(f"ok   line {line}: schema {sid.removeprefix(BASE)}")
     elif kind is None:
-        print(f"FAIL line {line}: json block has no example marker"); fail += 1
+        problem(f"line {line}: json block has no example marker")
     else:
-        docs = body.splitlines() if kind == "example-lines" else [body]
-        for i, d in enumerate(docs):
+        docs = []
+        for i, d in enumerate(body.splitlines() if kind == "example-lines" else [body]):
             try:
-                examples.append((line, i, name, json.loads(d)))
+                doc = json.loads(d)
             except json.JSONDecodeError as e:
-                print(f"FAIL line {line}.{i}: example is not valid JSON: {e}"); fail += 1
+                problem(f"line {line}.{i}: example is not valid JSON: {e}"); continue
+            if not isinstance(doc, dict):
+                problem(f"line {line}.{i}: example is not a JSON object"); continue
+            docs.append(doc); examples.append((line, i, name, doc))
+        if not fixture:
+            n += 1
+            t = docs[0].get("type") if docs else None
+            fixture = f"{FIXTURE_DIR.relative_to(ROOT)}/examples/{n:02d}-{name.removesuffix('.json')}" + (f"-{t}" if t else "") + (".jsonl" if kind == "example-lines" else ".json")
+        put(fixture, line, body)
+schemas = {sid: s for sid, (_, s) in schemas.items()}
+
+def check_files():
+    """Compare each extracted file with its spec block; --write regenerates them first."""
+    # Only the folders the spec fills are checked, so other fixtures may sit beside them.
+    on_disk = {p for d in {p.parent for p in files} if d.is_dir() for p in d.iterdir() if p.is_file() and not p.name.startswith(".")}
+    if args.write:
+        for p in on_disk - files.keys():
+            p.unlink()
+        for p, (_, want) in files.items():
+            p.parent.mkdir(parents=True, exist_ok=True)
+            p.write_bytes(want)
+            if want.startswith(b"#!"):
+                p.chmod(0o755)
+        on_disk = set(files)
+    for p in sorted(on_disk - files.keys()):
+        problem(f"file {p.relative_to(ROOT)}: not extracted from the spec (run with --write)")
+    for p, (line, want) in sorted(files.items()):
+        rel = p.relative_to(ROOT)
+        if p not in on_disk:
+            problem(f"file {rel}: missing, spec line {line} (run with --write)"); continue
+        have = p.read_bytes()
+        if have != want:
+            problem(f"file {rel}: differs from spec line {line} (run with --write)")
+            if have.rstrip(b"\n") == want.rstrip(b"\n"):
+                print("  only the final newline differs")
+            else:
+                diff = difflib.unified_diff(want.decode().splitlines(True), have.decode("utf-8", "replace").splitlines(True), "spec", str(rel))
+                sys.stdout.writelines(list(diff)[:40])
+        elif want.startswith(b"#!") and not os.access(p, os.X_OK):
+            problem(f"file {rel}: is not executable")
+        else:
+            print(f"ok   file {rel}: spec line {line}")
+    print(f"\n{len(files)} extracted files: {sum(p.parent == SCHEMA_DIR for p in files)} schemas, {sum(p.parent != SCHEMA_DIR for p in files)} fixtures")
 
 registry = Registry().with_resources([(k, Resource.from_contents(v)) for k, v in schemas.items()])
 
@@ -79,7 +152,13 @@ for sid, s in schemas.items():
         try:
             res.lookup(r)
         except Exception as e:
-            print(f"FAIL {sid.replace(BASE,'')}: $ref {r} does not resolve: {e}"); fail += 1
+            problem(f"{sid.removeprefix(BASE)}: $ref {r} does not resolve: {e}", True)
+for name in sorted({n for _, _, n, _ in examples} - {k.removeprefix(BASE) for k in schemas}):
+    problem(f"example marker names {name}, which is not a schema in the spec", True)
+if broken:
+    # Validation would raise, and extraction would write or delete the wrong files, so stop here.
+    print(f"\n{len(schemas)} schemas, {len(examples)} examples, edge tests and files not checked, {fail} failures")
+    sys.exit(1)
 
 ENV_ORDER = ["format", "version", "type", "request_id", "data", "error", "next_cursor", "has_more", "warnings"]
 OLD_FORMATS = ('"remember-plugin-message"', '"remember-cli-message"', '"remember-api-message"')  # rev 6 (S-07)
@@ -247,66 +326,6 @@ for label, name, doc in pos:
     if not ok: fail += 1
     print(("ok   positive: " if ok else "FAIL positive: ") + label)
 
-# Extracted files: each must hold the same bytes as its spec block.
-files = {}  # path -> (spec line, bytes)
-def put(p, line, want):
-    global fail
-    if p in files:
-        print(f"FAIL line {line}: {p.relative_to(ROOT)} is also extracted from line {files[p][0]}"); fail += 1
-    files[p] = (line, want)
-for line, kind, name, body, cap in blocks:
-    if '"$schema"' in body:
-        try:
-            put(SCHEMA_DIR / json.loads(body)["$id"].rsplit("/", 1)[-1], line, body + "\n")
-        except (json.JSONDecodeError, KeyError):
-            pass  # reported above
-for m in re.finditer(r"```python\n(.*?)\n```", text, re.S):
-    line, cap = text[:m.start()].count("\n") + 1, caption(m.start())
-    if cap:
-        put(FIXTURE_DIR / cap, line, m.group(1) + "\n")
-    else:
-        print(f"FAIL line {line}: python block has no `dir/file` caption"); fail += 1
-n = 0
-for line, kind, name, body, cap in blocks:
-    if kind is None:
-        continue
-    if cap:
-        put(FIXTURE_DIR / cap, line, body + "\n")
-        continue
-    n += 1
-    try:
-        t = json.loads(body.splitlines()[0] if kind == "example-lines" else body).get("type")
-    except json.JSONDecodeError:
-        t = None  # reported above
-    stem = f"{n:02d}-{name.removesuffix('.json')}" + (f"-{t}" if t else "")
-    put(FIXTURE_DIR / "examples" / (stem + (".jsonl" if kind == "example-lines" else ".json")), line, body + "\n")
-on_disk = {p for d in (SCHEMA_DIR, FIXTURE_DIR) if d.is_dir() for p in d.rglob("*") if p.is_file() and not p.name.startswith(".")}
-if args.write:
-    for p in on_disk - files.keys():
-        p.unlink()
-    for p, (_, want) in files.items():
-        p.parent.mkdir(parents=True, exist_ok=True)
-        p.write_text(want, encoding="utf-8", newline="")
-        if want.startswith("#!"):
-            p.chmod(0o755)
-    on_disk = set(files)
-for p in sorted(on_disk - files.keys()):
-    print(f"FAIL file {p.relative_to(ROOT)}: not extracted from the spec (run with --write)"); fail += 1
-for p, (line, want) in sorted(files.items()):
-    rel = p.relative_to(ROOT)
-    if p not in on_disk:
-        print(f"FAIL file {rel}: missing, spec line {line} (run with --write)"); fail += 1; continue
-    have = p.read_bytes().decode("utf-8", "replace")
-    if have != want:
-        print(f"FAIL file {rel}: differs from spec line {line} (run with --write)"); fail += 1
-        if have.rstrip("\n") == want.rstrip("\n"):
-            print("  only the final newline differs")
-        else:
-            sys.stdout.writelines(list(difflib.unified_diff(want.splitlines(True), have.splitlines(True), "spec", str(rel)))[:40])
-    elif want.startswith("#!") and not os.access(p, os.X_OK):
-        print(f"FAIL file {rel}: is not executable"); fail += 1
-    else:
-        print(f"ok   file {rel}: spec line {line}")
-print(f"\n{len(files)} extracted files: {sum(p.parent == SCHEMA_DIR for p in files)} schemas, {sum(p.parent != SCHEMA_DIR for p in files)} fixtures")
+check_files()
 print(f"{len(schemas)} schemas, {len(examples)} examples, {len(neg)} negative tests, {len(code_neg)} code-check negative tests, {len(pos)} positive edge tests, {fail} failures")
 sys.exit(1 if fail else 0)
