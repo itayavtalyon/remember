@@ -2350,8 +2350,8 @@ static bool write_refused(const Store *s)
 }
 
 /* Every brain write starts here: refuse on a newer brain (007 ST-10.2), clear
-   the last error, take the write lock. store_import and repair, which read
-   before they lock, call write_refused themselves. */
+   the last error, take the write lock. Repair, which checks the base tables
+   before it locks, calls write_refused itself. */
 static StoreStatus begin_write(Store *s)
 {
     char err_unused[1];
@@ -8435,9 +8435,6 @@ StoreStatus store_import(Store *dst, const char *src_path, const char *now,
         now == NULL || out_counts == NULL) {
         return STORE_ERR_INTERNAL;
     }
-    if (write_refused(dst)) {
-        return STORE_ERR_SCHEMA_TOO_NEW;
-    }
     memset(&dst->last, 0, sizeof(dst->last));
     rc = sqlite3_open_v2(src_path, &src, SQLITE_OPEN_READONLY, NULL);
     if (rc != SQLITE_OK) {
@@ -8460,9 +8457,11 @@ StoreStatus store_import(Store *dst, const char *src_path, const char *now,
         return st;
     }
 
-    if (exec_sql(dst->db, "BEGIN IMMEDIATE;", err_unused, 0U, &dst->last) != 0) {
+    /* The source is read before the lock, so the refusal comes with it. */
+    st = begin_write(dst);
+    if (st != STORE_OK) {
         (void)sqlite3_close(src);
-        return STORE_ERR_SQLITE;
+        return st;
     }
 
     rc = sqlite3_prepare_v2(src,

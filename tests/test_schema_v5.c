@@ -1027,6 +1027,7 @@ TEST(store_device_new_rename_failure_keeps_the_old_id)
         int others = 0;
 
         ASSERT_TRUE(dir != NULL);
+        /* NOLINTNEXTLINE(concurrency-mt-unsafe) -- single-threaded test runner */
         while (dir != NULL && (ent = readdir(dir)) != NULL) {
             if (strcmp(ent->d_name, ".") != 0 && strcmp(ent->d_name, "..") != 0 &&
                 strcmp(ent->d_name, "device_id") != 0) {

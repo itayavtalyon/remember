@@ -1404,7 +1404,7 @@ TEST(schema_v6_cli_parallel_first_opens_of_a_v5_brain_all_succeed)
                        "for i in 1 2 3 4 5 6 7 8; do ('%s' --db '%s' list >/dev/null 2>&1 || "
                        "echo fail >> '%s') & done; wait",
                        g_remember_bin, db, fails != NULL ? fails : "");
-        /* NOLINTNEXTLINE(cert-env33-c,bugprone-command-processor) -- test-made paths */
+        /* NOLINTNEXTLINE(cert-env33-c,bugprone-command-processor,concurrency-mt-unsafe) */
         ASSERT_EQ_INT(system(cmd), 0);
         ASSERT_TRUE(fails != NULL && access(fails, F_OK) != 0);
         assert_query_is(db, (QueryExpect){.sql = "PRAGMA user_version;", .want = "6"});
