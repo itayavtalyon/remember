@@ -4,11 +4,13 @@
 #include "store.h"
 #include "test.h"
 
+#include <fcntl.h>
 #include <sqlite3.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <sys/wait.h>
 #include <unistd.h>
 
 /*
@@ -1340,18 +1342,57 @@ TEST(schema_v6_cli_a_write_to_a_newer_brain_prints_schema_too_new)
     free(db);
 }
 
+enum { V6_PARALLEL_OPENS = 8, V6_EXIT_EXEC_FAIL = 127 };
+
+/* Starts V6_PARALLEL_OPENS `remember --db <db> list` runs at once and waits for
+   all of them; returns how many did not exit 0 (a failed fork counts). fork and
+   execv, not a shell, so the paths need no quoting. */
+static int count_failed_parallel_lists(const char *db)
+{
+    pid_t pids[V6_PARALLEL_OPENS];
+    int started = 0;
+    int succeeded = 0;
+    int i = 0;
+    /* execv wants char *const[]; the child does not write through these. */
+    /* NOLINTBEGIN(clang-diagnostic-cast-qual) */
+    char *argv[] = {(char *)g_remember_bin, (char *)"--db", (char *)db, (char *)"list", NULL};
+    /* NOLINTEND(clang-diagnostic-cast-qual) */
+
+    for (started = 0; started < V6_PARALLEL_OPENS; started++) {
+        pids[started] = fork();
+        if (pids[started] < 0) {
+            break;
+        }
+        if (pids[started] == 0) {
+            int devnull = open("/dev/null", O_WRONLY | O_CLOEXEC);
+            if (devnull >= 0) {
+                (void)dup2(devnull, STDOUT_FILENO);
+                (void)dup2(devnull, STDERR_FILENO);
+            }
+            execv(g_remember_bin, argv);
+            _exit(V6_EXIT_EXEC_FAIL);
+        }
+    }
+    for (i = 0; i < started; i++) {
+        int status = 0;
+        if (waitpid(pids[i], &status, 0) == pids[i] && WIFEXITED(status) &&
+            WEXITSTATUS(status) == 0) {
+            succeeded++;
+        }
+    }
+    return V6_PARALLEL_OPENS - succeeded;
+}
+
 /* Review 2026-10-26: parallel first opens of a v5 brain all succeed and agree
    on the device id (the copy before BEGIN uses a unique temp file). */
 TEST(schema_v6_cli_parallel_first_opens_of_a_v5_brain_all_succeed)
 {
-    enum { V6_PARALLEL_ROUNDS = 5, V6_CMD_BUF = 2048 };
+    enum { V6_PARALLEL_ROUNDS = 5 };
     int round = 0;
 
     for (round = 0; round < V6_PARALLEL_ROUNDS; round++) {
         char *db = make_temp_db_path();
         char *id = NULL;
-        char *fails = NULL;
-        char cmd[V6_CMD_BUF];
 
         ASSERT_TRUE(db != NULL);
         if (db == NULL) {
@@ -1359,19 +1400,10 @@ TEST(schema_v6_cli_parallel_first_opens_of_a_v5_brain_all_succeed)
         }
         given_v5_brain(db);
         id = given_legacy_sidecar(db);
-        fails = harness_side_path(db, ".fails");
-        ASSERT_TRUE(fails != NULL);
-        (void)snprintf(cmd, sizeof(cmd),
-                       "for i in 1 2 3 4 5 6 7 8; do ('%s' --db '%s' list >/dev/null 2>&1 || "
-                       "echo fail >> '%s') & done; wait",
-                       g_remember_bin, db, fails != NULL ? fails : "");
-        /* NOLINTNEXTLINE(cert-env33-c,bugprone-command-processor,concurrency-mt-unsafe) */
-        ASSERT_EQ_INT(system(cmd), 0);
-        ASSERT_TRUE(fails != NULL && access(fails, F_OK) != 0);
+        ASSERT_EQ_INT(count_failed_parallel_lists(db), 0);
         assert_query_is(db, (QueryExpect){.sql = "PRAGMA user_version;", .want = "6"});
         assert_file_is(db, ".d/device_id", id);
         assert_file_is(db, ".device_id", NULL);
-        free(fails);
         free(id);
         free(db);
     }
