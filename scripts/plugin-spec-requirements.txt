@@ -1,0 +1,8 @@
+# The exact Python packages scripts/validate_plugin_spec.py runs on (plan 24).
+# CI installs these with --no-deps, so a new upstream release cannot change the result.
+attrs==26.1.0
+jsonschema==4.26.0
+jsonschema-specifications==2025.9.1
+referencing==0.37.0
+rpds-py==2026.9.1
+typing-extensions==4.15.0; python_version < "3.13"

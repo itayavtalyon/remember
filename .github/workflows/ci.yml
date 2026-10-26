@@ -35,46 +35,52 @@ jobs:
           ./scripts/ci-linux.sh --inner --install
 
   # Plugin protocol spec (plan 24): every schema and example in
-  # docs/PLUGIN-PROTOCOL.md must validate, and schema/plugin/v1/ and
-  # tests/fixtures/plugin/ must hold the same bytes as their spec blocks.
-  # Python is a docs tool here only.
+  # docs/PLUGIN-PROTOCOL.md must validate, its plugin scripts must compile, and
+  # schema/plugin/v1/ and tests/fixtures/plugin/ must hold the same bytes as
+  # their spec blocks. Python is a docs tool here only. This job depends only on
+  # the repo, so it can be a required check.
   docs:
     name: docs (plugin protocol spec)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
 
-      - name: Install jsonschema
+      - name: Install the pinned validator packages
         run: |
           python3 -m venv "$RUNNER_TEMP/venv"
-          "$RUNNER_TEMP/venv/bin/pip" install --quiet jsonschema==4.26.0 referencing==0.37.0
+          "$RUNNER_TEMP/venv/bin/pip" install --quiet --no-deps -r scripts/plugin-spec-requirements.txt
 
       - name: Validate the plugin protocol spec
         run: '"$RUNNER_TEMP/venv/bin/python" scripts/validate_plugin_spec.py docs/PLUGIN-PROTOCOL.md'
 
-      # The spec's plugin scripts must at least parse. Running them is plan 25.
-      - name: Compile the plugin fixture scripts
-        run: python3 -c 'import sys; [compile(open(p, encoding="utf-8").read(), p, "exec") for p in sys.argv[1:]]' tests/fixtures/plugin/*/*.py
+  # GitHub Pages publishes main, so each schema $id must serve the bytes of that
+  # file on main. The docs job covers this checkout's files. Pages redeploys after
+  # a push to main, so a failed comparison is retried every 20 s, 16 times (about
+  # 5 minutes) before the job fails. A separate job, so a github.io outage never
+  # blocks the docs check.
+  docs-pages:
+    name: docs (schema $id on GitHub Pages)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: main
 
-      # GitHub Pages publishes main, so each $id must serve the bytes of that
-      # schema file on main. The check above covers this checkout's files.
-      # Pages redeploys after a push to main, so a mismatch is retried every
-      # 20 s for up to 5 minutes before the step fails.
       - name: Fetch each schema $id
         shell: bash
         run: |
-          git fetch --quiet --no-tags --depth=1 origin +refs/heads/main:refs/remotes/origin/main
-          files=$(git ls-tree --name-only origin/main schema/plugin/v1/)
-          [ -n "$files" ] || { echo "FAIL no schema files on main"; exit 1; }
+          shopt -s nullglob
+          files=(schema/plugin/v1/*.json)
+          [ ${#files[@]} -gt 0 ] || { echo "FAIL no schema files on main"; exit 1; }
           check() {
             local f url fail=0
-            for f in $files; do
-              git show "origin/main:$f" > "$RUNNER_TEMP/want.json"
-              if ! url=$(jq -er '."$id"' "$RUNNER_TEMP/want.json"); then
+            for f in "${files[@]}"; do
+              if ! url=$(jq -er '."$id"' "$f"); then
                 echo "FAIL $f on main: no \$id"; fail=1
-              elif ! curl -fsSL --retry 3 -o "$RUNNER_TEMP/got.json" "$url"; then
+              elif ! curl -fsSL --connect-timeout 10 --max-time 30 -o "$RUNNER_TEMP/got.json" "$url"; then
                 echo "FAIL $url: fetch failed"; fail=1
-              elif ! cmp -s "$RUNNER_TEMP/want.json" "$RUNNER_TEMP/got.json"; then
+              elif ! cmp -s "$f" "$RUNNER_TEMP/got.json"; then
                 echo "FAIL $url: differs from $f on main"; fail=1
               else
                 echo "ok   $url"
