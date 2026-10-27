@@ -42,7 +42,7 @@ main → cli_parse → commands.h (cmd_add | cmd_locator | cmd_query) → store_
 | 18 | [Union search](18-union-search.md) | Prefix ∪ raw FTS; never fails on input; `keys`/`tags` facets with tiers; utf8proc vendored (006 §2, §9). Itay finishes this plan and merges it. Do not tick it here. |
 | 18b | [Branch-coverage gate](18b-branch-coverage-gate.md) | `check-coverage.sh` fails on any untaken branch side in `search_terms.c`, `unicode.c`, `normalize.c`, `output.c`; no excuses. Runs on `plan18-union-search` between plan 18 stages 2 and 3 ✅ |
 | 18c | [Import control bytes](18c-import-control-bytes.md) | `import --from-db` skips and counts (`rejected`) rows whose key or tag is not canonical; human output masks C0/DEL in every stored string it prints. On `fix/import-control-bytes` (off plan 18b) ✅ |
-| 19 | [Schema v6](19-schema-v6.md) | One v5→v6 migration for 007 §10, 008 §8, and 010 §17. PENDING COPY (JSON `fix` for `schema_too_new`). |
+| 19 | [Schema v6](19-schema-v6.md) | One v5→v6 migration for 007 §10, 008 §8, and 010 §17. JSON `fix` for `schema_too_new` still waits on COPY-PENDING C-01. ✅ |
 | 20 | [Settings](20-settings.md) | Registry, user.db, resolution, commands, credential helper, settings export/import. PENDING COPY AND DESIGN. After plan 19. Command JSON waits for plan 21. |
 | 21 | [JSON envelope](21-json-envelope.md) | `remember-message` 1, locators, actors, `--trash` means Trash. PENDING COPY. Does not implement `brains.json`. |
 | 22 | [Export](22-export.md) | JSON, Markdown, CSV memory export. PENDING DESIGN (settings bytes). |

@@ -5,6 +5,7 @@
 #include "sqlite3.h"
 
 #include <errno.h>
+#include <fcntl.h>
 #include <limits.h>
 #include <stdbool.h>
 #include <stdint.h>
@@ -1239,14 +1240,25 @@ static int rename_sidecar_tmp(const char *tmp, const char *path)
     return rename(tmp, path);
 }
 
-/* The folder that holds path, <brain>.d, at mode 0700 (G-19). An existing
-   directory is kept as it is. */
+/* Darwin hides O_NOFOLLOW when _POSIX_C_SOURCE is set, which is how
+   gcc -fanalyzer compiles this file. The value is the one in <sys/fcntl.h>. */
+#if defined(__APPLE__) && !defined(O_NOFOLLOW)
+#define O_NOFOLLOW 0x00000100
+#endif
+
+/* The folder that holds path, <brain>.d, at mode 0700 (G-19). mkdir follows
+   the umask, and a directory that already exists may be looser. Open that
+   directory (O_NOFOLLOW | O_DIRECTORY) and fchmod the descriptor: a path
+   lstat then chmod is a TOCTOU, and chmod would follow a symlink swapped in
+   after the check. Already 0700: skip fchmod so a read-only volume that is
+   already right still opens. */
 static int ensure_sidecar_dir(const char *path, char *err, size_t errlen)
 {
     static const char k_dir_error[] = "cannot create the device id folder";
     char dir[REMEMBER_PATH_MAX + SIDECAR_PATH_PAD];
     char *slash = NULL;
     struct stat st;
+    int fd = -1;
     int n = snprintf(dir, sizeof(dir), "%s", path);
 
     slash = (n > 0 && (size_t)n < sizeof(dir)) ? strrchr(dir, '/') : NULL;
@@ -1255,18 +1267,23 @@ static int ensure_sidecar_dir(const char *path, char *err, size_t errlen)
         return -1;
     }
     *slash = '\0';
-    if (mkdir(dir, SIDECAR_DIR_MODE) == 0) {
-        /* mkdir honors the umask; the mode is the rule, so set it. */
-        if (chmod(dir, SIDECAR_DIR_MODE) != 0) {
-            set_err(err, errlen, k_dir_error);
-            return -1;
-        }
-        return 0;
-    }
-    if (errno != EEXIST || stat(dir, &st) != 0 || !S_ISDIR(st.st_mode)) {
+    if (mkdir(dir, SIDECAR_DIR_MODE) != 0 && errno != EEXIST) {
         set_err(err, errlen, k_dir_error);
         return -1;
     }
+    fd = open(dir, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
+    if (fd < 0) {
+        set_err(err, errlen, k_dir_error);
+        return -1;
+    }
+    if (fstat(fd, &st) != 0 ||
+        ((st.st_mode & (unsigned)(S_IRWXU | S_IRWXG | S_IRWXO)) != (unsigned)SIDECAR_DIR_MODE &&
+         fchmod(fd, SIDECAR_DIR_MODE) != 0)) {
+        (void)close(fd);
+        set_err(err, errlen, k_dir_error);
+        return -1;
+    }
+    (void)close(fd);
     return 0;
 }
 
@@ -1641,9 +1658,10 @@ static int rebuild_entries_notnull(sqlite3 *db, char *err, size_t errlen, StoreE
 
 static StoreStatus fts_resync(sqlite3 *db, long long entry_id, StoreError *serr);
 
-/* One integer column. bind NULL means the statement has no parameter. */
+/* One integer column as int64. bind NULL means the statement has no parameter.
+   sqlite3_column_int wraps past 2^31-1, so a counter uses this. */
 // NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
-static int select_int(sqlite3 *db, const char *sql, const char *bind, int *out, char *err,
+static int select_i64(sqlite3 *db, const char *sql, const char *bind, long long *out, char *err,
                       size_t errlen, StoreError *serr)
 {
     sqlite3_stmt *stmt = NULL;
@@ -1665,8 +1683,22 @@ static int select_int(sqlite3 *db, const char *sql, const char *bind, int *out, 
         set_errf(err, errlen, "sqlite", sqlite3_errmsg(db));
         return -1;
     }
-    *out = sqlite3_column_int(stmt, 0);
+    *out = sqlite3_column_int64(stmt, 0);
     (void)sqlite3_finalize(stmt);
+    return 0;
+}
+
+/* Same column, narrowed to int. Counts fit. A counter calls select_i64. */
+// NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
+static int select_int(sqlite3 *db, const char *sql, const char *bind, int *out, char *err,
+                      size_t errlen, StoreError *serr)
+{
+    long long value = 0;
+
+    if (select_i64(db, sql, bind, &value, err, errlen, serr) != 0) {
+        return -1;
+    }
+    *out = (int)value;
     return 0;
 }
 
@@ -2322,6 +2354,10 @@ static int bind_v6_identity(Store *s, char *err, size_t errlen)
     char uuid[UUID_STR_LEN + 1];
 
     if (sidecar_paths(s->path, &paths, err, errlen) != 0) {
+        return -1;
+    }
+    /* Every v6 open, not only the open that creates the file. */
+    if (ensure_sidecar_dir(paths.side, err, errlen) != 0) {
         return -1;
     }
     if (read_sidecar(paths.side, uuid) == 0) {
@@ -3105,9 +3141,9 @@ static StoreStatus stamp_change_seq(sqlite3 *db, ChangeSeqRow row, StoreError *s
         return STORE_ERR_INTERNAL;
     }
     if (!state->active) {
-        int base = 0;
+        long long base = 0;
 
-        if (select_int(db, "SELECT change_seq FROM brain_meta;", NULL, &base, NULL, 0U, serr) !=
+        if (select_i64(db, "SELECT change_seq FROM brain_meta;", NULL, &base, NULL, 0U, serr) !=
             0) {
             return STORE_ERR_SQLITE;
         }

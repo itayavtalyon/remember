@@ -11,6 +11,7 @@
 
 #include <stdbool.h>
 #include <stdio.h>
+#include <stdlib.h>
 
 #ifndef REMEMBER_VERSION
 #define REMEMBER_VERSION "0.2.0"
@@ -360,19 +361,22 @@ static void print_parse_error(const CliArgs *args)
    The same step rewrote every memory, so the line has no second sentence. */
 static void warn_open_settings(const Store *s)
 {
-    enum { WARN_LINE_BUF = 512 };
+    static const char k_skipped[] = "skipped \"%s\": \"%s\" isn't a valid value.";
     size_t i = 0;
 
     for (i = 0; i < store_open_warning_count(s); i++) {
         StoreSettingWarning w = store_open_warning(s, i);
-        char line[WARN_LINE_BUF];
-        DiagDetailField fields[] = {
-            {"key", w.key}, {"value", w.value}, {"reason", w.reason}, {"item", w.value}};
+        int need = snprintf(NULL, 0, k_skipped, w.key, w.value);
+        char *line = (need >= 0) ? (char *)malloc((size_t)need + 1U) : NULL;
 
-        (void)snprintf(line, sizeof(line), "skipped \"%s\": \"%s\" isn't a valid value.", w.key,
-                       w.value);
-        (void)diag_warning_detail(DIAG_WARN_SETTING_INVALID, line, fields,
-                                  sizeof(fields) / sizeof(fields[0]));
+        if (line != NULL && snprintf(line, (size_t)need + 1U, k_skipped, w.key, w.value) == need) {
+            DiagDetailField fields[] = {
+                {"key", w.key}, {"value", w.value}, {"reason", w.reason}, {"item", w.value}};
+
+            (void)diag_warning_detail(DIAG_WARN_SETTING_INVALID, line, fields,
+                                      sizeof(fields) / sizeof(fields[0]));
+        }
+        free(line);
     }
 }
 

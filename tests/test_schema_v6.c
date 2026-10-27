@@ -598,6 +598,24 @@ TEST(schema_v6_each_changed_entry_takes_the_next_counter_value_once)
     free(db);
 }
 
+/* sqlite3_column_int wraps 2147483648 to a negative int on this LP64 clang.
+   A new row stores change_seq 0, and 0 <= that base is false, so the counter
+   would stop. The base is read as int64. */
+TEST(schema_v6_the_counter_keeps_moving_past_31_bits)
+{
+    char *db = make_temp_db_path();
+    Store *s = NULL;
+
+    ASSERT_TRUE(db != NULL);
+    store_close(given_open(db));
+    exec_sql(db, "UPDATE brain_meta SET change_seq = 2147483648;");
+    s = given_open(db);
+    (void)given_added(s, "one", k_hash_one, NULL);
+    assert_seqs(db, "1:2147483649", "2147483649");
+    store_close(s);
+    free(db);
+}
+
 /* A write that rolls back takes no value, and the next write starts clean. */
 TEST(schema_v6_a_rolled_back_write_leaves_the_counter)
 {
@@ -826,6 +844,57 @@ TEST(schema_v6_the_device_id_moves_into_the_brain_folder)
     free(dir);
     free(side);
     free(id);
+    free(db);
+}
+
+/* G-19 is the mode, not only the mkdir argument. A looser folder is tightened. */
+TEST(schema_v6_an_existing_device_folder_is_forced_to_owner_only)
+{
+    enum { LOOSE_DIR_MODE = 0755 };
+    char *db = make_temp_db_path();
+    char *dir = NULL;
+    struct stat st;
+
+    ASSERT_TRUE(db != NULL);
+    store_close(given_open(db));
+    dir = harness_side_path(db, ".d");
+    ASSERT_TRUE(dir != NULL);
+    ASSERT_EQ_INT(chmod(dir, (mode_t)LOOSE_DIR_MODE), 0);
+    ASSERT_EQ_INT(lstat(dir, &st), 0);
+    ASSERT_EQ_INT((int)(st.st_mode & (unsigned)PERM_BITS_MASK), LOOSE_DIR_MODE);
+    store_close(given_open(db));
+    ASSERT_EQ_INT(lstat(dir, &st), 0);
+    ASSERT_EQ_INT((int)(st.st_mode & (unsigned)PERM_BITS_MASK), DIR_PERMS);
+    free(dir);
+    free(db);
+}
+
+/* A symlink named <brain>.d is not the folder. stat would follow it. */
+TEST(schema_v6_a_symlinked_device_folder_is_refused)
+{
+    char *db = make_temp_db_path();
+    char *dir = NULL;
+    char *target = NULL;
+    char *planted = NULL;
+    char err[ERR_BUFSIZE];
+    Store *s = NULL;
+
+    ASSERT_TRUE(db != NULL);
+    dir = harness_side_path(db, ".d");
+    target = harness_side_path(db, ".d-target");
+    planted = harness_side_path(db, ".d-target/device_id");
+    ASSERT_TRUE(dir != NULL && target != NULL && planted != NULL);
+    ASSERT_EQ_INT(mkdir(target, (mode_t)DIR_PERMS), 0);
+    ASSERT_EQ_INT(symlink(target, dir), 0);
+    err[0] = '\0';
+    s = store_open(db, err, sizeof(err));
+    ASSERT_TRUE(s == NULL);
+    ASSERT_STREQ(err, "cannot create the device id folder");
+    ASSERT_TRUE(access(planted, F_OK) != 0);
+    store_close(s);
+    free(planted);
+    free(target);
+    free(dir);
     free(db);
 }
 
@@ -1243,12 +1312,15 @@ void register_schema_v6_tests(void)
     RUN_TEST(schema_v6_fresh_and_migrated_schemas_are_equal);
     RUN_TEST(schema_v6_a_new_write_stores_the_source_as_an_actor);
     RUN_TEST(schema_v6_each_changed_entry_takes_the_next_counter_value_once);
+    RUN_TEST(schema_v6_the_counter_keeps_moving_past_31_bits);
     RUN_TEST(schema_v6_a_rolled_back_write_leaves_the_counter);
     RUN_TEST(schema_v6_link_and_unlink_take_counter_values);
     RUN_TEST(schema_v6_purge_writes_one_tombstone_per_row);
     RUN_TEST(schema_v6_the_first_write_after_a_prefix_row_is_two);
     RUN_TEST(schema_v6_import_stamps_written_rows_only);
     RUN_TEST(schema_v6_the_device_id_moves_into_the_brain_folder);
+    RUN_TEST(schema_v6_an_existing_device_folder_is_forced_to_owner_only);
+    RUN_TEST(schema_v6_a_symlinked_device_folder_is_refused);
     RUN_TEST(schema_v6_a_v6_open_finishes_a_half_done_move);
     RUN_TEST(schema_v6_an_invalid_old_device_id_file_is_an_error);
     RUN_TEST(schema_v6_a_newer_min_reader_version_makes_the_brain_read_only);
@@ -1302,6 +1374,59 @@ TEST(schema_v6_cli_prints_setting_invalid_for_a_left_out_prefix)
     cmd_result_free(&r);
     free(db);
     free(db2);
+}
+
+/* The plain line is the whole value (ST-7.15). A fixed buffer used to cut it. */
+TEST(schema_v6_cli_a_long_prefix_warning_is_the_whole_line)
+{
+    enum { LONG_PREFIX = 600, SQL_PAD = 160, WANT_PAD = 160 };
+    char *db = make_temp_db_path();
+    char prefix[LONG_PREFIX + 1];
+    char sql[LONG_PREFIX + SQL_PAD];
+    char want[LONG_PREFIX + WANT_PAD];
+    const char *list[] = {"list"};
+    CmdResult r;
+    int n = 0;
+
+    ASSERT_TRUE(db != NULL);
+    given_empty_v5_brain(db);
+    memset(prefix, 'a', (size_t)LONG_PREFIX);
+    prefix[LONG_PREFIX] = '\0';
+    n = snprintf(sql, sizeof(sql),
+                 "INSERT INTO bucket_prefixes(prefix, added_at, removed_at, device_id) "
+                 "VALUES ('%s', '2026-01-01T00:00:00.000Z', NULL, 'd');",
+                 prefix);
+    ASSERT_TRUE(n > 0 && (size_t)n < sizeof(sql));
+    exec_sql(db, sql);
+    n = snprintf(want, sizeof(want),
+                 "remember: warning: skipped \"remember.buckets.prefixes\": \"%s\" isn't a "
+                 "valid value.\n",
+                 prefix);
+    ASSERT_TRUE(n > 0 && (size_t)n < sizeof(want));
+    r = run_remember(db, list, sizeof(list) / sizeof(list[0]), NULL);
+    ASSERT_EQ_INT(r.exit_code, 0);
+    ASSERT_STREQ(r.err, want);
+    cmd_result_free(&r);
+    free(db);
+}
+
+/* output_text_human maps a newline to '?', so the warning stays one line. */
+TEST(schema_v6_cli_a_newline_in_a_prefix_warning_stays_one_line)
+{
+    char *db = make_temp_db_path();
+    const char *list[] = {"list"};
+    CmdResult r;
+
+    ASSERT_TRUE(db != NULL);
+    given_empty_v5_brain(db);
+    exec_sql(db, "INSERT INTO bucket_prefixes(prefix, added_at, removed_at, device_id) VALUES "
+                 "('bad' || char(10) || 'value', '2026-01-01T00:00:00.000Z', NULL, 'd');");
+    r = run_remember(db, list, sizeof(list) / sizeof(list[0]), NULL);
+    ASSERT_EQ_INT(r.exit_code, 0);
+    ASSERT_STREQ(r.err, "remember: warning: skipped \"remember.buckets.prefixes\": \"bad?value\" "
+                        "isn't a valid value.\n");
+    cmd_result_free(&r);
+    free(db);
 }
 
 /* 007 ST-10.2 plain line. The JSON fix waits on COPY-PENDING C-01, so the JSON
@@ -1456,6 +1581,8 @@ TEST(schema_v6_cli_a_failing_write_keeps_v5_and_the_old_device_id)
 void register_schema_v6_cli_tests(void)
 {
     RUN_TEST(schema_v6_cli_prints_setting_invalid_for_a_left_out_prefix);
+    RUN_TEST(schema_v6_cli_a_long_prefix_warning_is_the_whole_line);
+    RUN_TEST(schema_v6_cli_a_newline_in_a_prefix_warning_stays_one_line);
     RUN_TEST(schema_v6_cli_a_write_to_a_newer_brain_prints_schema_too_new);
     RUN_TEST(schema_v6_cli_parallel_first_opens_of_a_v5_brain_all_succeed);
 #ifdef REMEMBER_TEST_VFS
