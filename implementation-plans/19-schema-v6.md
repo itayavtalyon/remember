@@ -254,7 +254,53 @@ Review output: append `### <date> — second-opinion deep review (stage N | FINA
 
 ## Implementation Notes
 
-_(empty; fill per stage)_
+### 2026-10-26 — stages 1–5 (one commit)
+
+Start: branch `claude/ecstatic-fermi-2yj6fn` off `main` at `c4854d0`, clean. The brain was not reachable from the cloud session, so `standard:coding` came from `docs/STEP_REVIEW_CHECKLIST.md`, `docs/engineering-notes.md` and `docs/QUALITY.md`. Linux container: clang 18, cppcheck 2.13, sqlite3 3.45, iwyu installed from apt. No macOS, so `leaks-macos` did not run; `ci-linux.sh` needs Docker and did not run.
+
+Decisions from Itay (2026-10-25, asked before coding):
+
+- **Reader version.** `schema_too_new` compares `min_reader_version` with a store constant `0.3.0` (the schema this code reads), not `REMEMBER_VERSION` (still 0.2.0 until plan 26). A test hook reports an older version.
+- **New writes, source `unknown`.** New writes store the actor through the same map as the migration: `unknown` becomes `{"kind":"human","id":null}`. `add` with no `--source` now reads back `source` `human`.
+- **change_seq on new writes.** Bump the counter now (JE-5.2), not 0 until plan 21.
+- **Migration warning value.** `<value>` and `detail.value` are the left-out prefix; `detail.item` is the same prefix.
+- **v6 import source.** `import --from-db` keeps refusing a v6 source until plan 23 (`database is newer than this remember`). Tests that import a brain this build wrote rewrite it to the v5 shape first (`harness_make_v5_source`).
+
+Stage order deviation: the five in-transaction stages landed as one change. Renaming `entries.id`/`sync_id`/`source` breaks every query in `store_sqlite.c` at once, so no intermediate stage builds a tree that passes the old suite. The new tests were written against the finished migration, not red-first per stage. A reviewer can see them fail on `main` (they assert `user_version` 6 and v6 columns).
+
+Resolved by the plan's own precedence rule (a later Design section wins), not by choice:
+
+- **No 8-prefix cap.** The plan's E12.7 paragraph and second-review probe 2 still say "keep the 8 earliest". 007 §10 step 2 and must-pass 007-14 say no item limit (D-01, 2026-10-25). The code keeps every live prefix. Probe 2's expected result is stale.
+- **No FTS triggers exist** in v5, so 008 §8 step 4's "FTS triggers" rebuild is nothing. FTS rows keep their rowids (= `local_id`).
+
+Interpretations to confirm in review:
+
+- A folded duplicate (`Project:` next to `project:`) is left out with `setting_invalid` reason `duplicate_prefix` (ST-5.4 + ST-7.15). The plan names only `bad_prefix_shape`.
+- `bucket_prefixes` that holds only tombstones writes a `[]` row (the table holds a prefix row; no live prefix failed). No released command writes E12 tables, so no real brain has this.
+- Migration validation does not NFC-normalize: it folds ASCII and checks ST-5.4 on the stored text.
+- The entry UUID keeps the spec's inline `UNIQUE` (an autoindex); `ux_entries_sync_id` is gone.
+- `conflicts.sync_id` is not renamed: 008 §8 does not list `conflicts`.
+- The settings tables are renamed into place (spec step 4), so `sqlite_master` quotes `"settings"`. A fresh brain takes the same step, so fresh and migrated schemas are byte-equal.
+
+Gate (Linux container, clang 18, `REMEMBER_ENABLE_SANITIZERS=ON`, `REMEMBER_TEST_VFS=ON`): build, `remember_store_tests` 0 failed, `remember_tests --only <gate-suites>` 0 failed, `check-coverage.sh` OK (functions 100%, effective lines 100%, normalize 306 branch sides, 0 missed). `lint-all.sh`: format and cppcheck clean; clang-tidy findings in the new code fixed in the follow-up commit. Not run: `leaks-macos` (no macOS), `ci-linux.sh` (no Docker in the session).
+
+
+### 2026-10-26 — change_seq on writes, stage 6, stage 7
+
+**change_seq (Itay: bump it now).** `stamp_change_seq` gives each changed entry or link row the next `brain_meta.change_seq`, once per write transaction (base value on the connection via `sqlite3_set_clientdata`, reset by `begin_write`, where every stamping write starts). Stamped: inserts, a version-vector write that changes the vector, soft delete, a demoted key, link insert and touch, imported links. Purge writes one `tombstones` row per removed memory (upsert on `id`). Not done here, because they change behavior plan 21 owns: unlink still deletes the link row (G-10 soft unlink), the link vector stays `{}`, link does not bump `updated_by`. Tests: one value per row per write, none for a no-op, a rolled-back write leaves the counter, link/unlink, purge tombstones, import, and the first write after a prefix row is 2.
+
+**Stage 6.** `<brain>.d/device_id` (folder 0700 set with `chmod` after `mkdir`, file 0600). Copy before `BEGIN`, delete after `COMMIT`, and a later open finishes a half-done move. An invalid old file is `invalid device_id sidecar` and stays, unless the open is `device new`. The `--help` line that names the sidecar now says `<path>.d/device_id`. 007-27 is a store test (exec-fault sweep after the copy); M3 is a CLI test through the plan 16 VFS shim (`REMEMBER_TEST_FAIL_WRITE` sweep).
+
+**Stage 7.** `k_reader_version` `0.3.0` vs `brain_meta.min_reader_version` at open. Newer, or not `MAJOR.MINOR.PATCH`, opens read only: every brain write starts in `begin_write`, which returns `STORE_ERR_SCHEMA_TOO_NEW` (exit 1, `schema_too_new`, the locked line); repair checks the flag itself. There is no `PRAGMA query_only`: it would also block `device new` and a sidecar mint, which take the write lock but do not write the brain (deep review, 2026-10-26). The test sets the brain's `min_reader_version` to `0.4.0` instead of adding a hook that lowers the engine's version; the comparison is the same. `--json-errors` is checked for the code only. `device new` still runs on a read-only brain (it writes the sidecar, not the brain).
+
+**Open items for review**
+
+- `README.md` and `skills/remember/SKILL.md` still say `<db-path>.device_id`. They are user copy (plan 26 owns the skills and release text), so they are not edited here.
+- `import --from-db` of a brain this build wrote fails with `database is newer than this remember` until plan 23 (Itay 2026-10-25).
+- The repair read-fault test moved its `REMEMBER_TEST_FAIL_READ` budget from 2 to 7: open now reads `brain_meta`.
+- `.claude/` is git-ignored, so the stage and whole-plan review requests are this section, not a `.claude/REVIEW_REQUEST` file. No `workflow:deep-review` ran in this session.
+
+Definition of done, where this session stands: must-pass rows green and in `tests/gate-suites` (`schema_v6`, `schema_v6_cli`); `user_version` 6 set once at the end of the transaction; no `config` command and no add-wins code; plain `schema_too_new` matches ST-10.2, JSON `fix` not asserted; `docs/engineering-notes.md` records the v6 order and sidecar path. Not done: the second review, `leaks-macos`, `ci-linux.sh`, ticking INDEX row 19.
 
 ## Review Notes
 

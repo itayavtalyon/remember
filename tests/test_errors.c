@@ -72,6 +72,7 @@ static const char *const k_error_codes[] = {
     "not_a_database",
     "corrupt",
     "io_error",
+    "schema_too_new",
 };
 
 /* Unit tests pick the --json-errors mode per call; the flag is cleared after. */
@@ -179,9 +180,10 @@ static const char *const k_warning_codes[] = {
     "raw_query_ignored",
     "deprecated_flag",
     "synced_folder",
+    "setting_invalid",
 };
 
-TEST(warning_catalog_round_trips_the_three_codes)
+TEST(warning_catalog_round_trips_every_code)
 {
     size_t i = 0;
     size_t count = sizeof(k_warning_codes) / sizeof(k_warning_codes[0]);
@@ -197,7 +199,7 @@ TEST(warning_catalog_round_trips_the_three_codes)
     }
 }
 
-TEST(warning_catalog_rejects_names_outside_the_three)
+TEST(warning_catalog_rejects_names_outside_the_catalog)
 {
     DiagWarning parsed = DIAG_WARN_RAW_QUERY_IGNORED;
 
@@ -669,9 +671,8 @@ TEST(json_errors_synced_folder_is_one_warning)
 {
     enum { PATH_CAP = 4096 };
     char tmpl[] = "/tmp/Dropbox-remember-XXXXXX";
-    char *dir = mkdtemp(tmpl);
+    const char *dir = mkdtemp(tmpl);
     char path[PATH_CAP];
-    char sidecar[PATH_CAP];
     const char *args[] = {"--json-errors", "list"};
     CmdResult r;
     int wrote = 0;
@@ -689,11 +690,7 @@ TEST(json_errors_synced_folder_is_one_warning)
                  "path looks like a synced folder "
                  "(iCloud/Dropbox/Google Drive); corruption risk - prefer a local disk\"}}\n");
     cmd_result_free(&r);
-    wrote = snprintf(sidecar, sizeof(sidecar), "%s.device_id", path);
-    ASSERT_TRUE(wrote > 0 && (size_t)wrote < sizeof(sidecar));
-    (void)unlink(path);
-    (void)unlink(sidecar);
-    (void)rmdir(dir);
+    harness_remove_tree(dir);
 }
 
 static void expect_diag(DiagCode got, DiagCode want)
@@ -722,6 +719,8 @@ TEST(store_text_codes_follow_the_locked_split)
     expect_diag(code_for_store_text("database is newer than this remember"), DIAG_NEWER_DATABASE);
     expect_diag(code_for_store_text("unsupported database version"), DIAG_UNSUPPORTED_DATABASE);
     expect_diag(code_for_store_text("migration left a dangling reference"), DIAG_CORRUPT);
+    expect_diag(code_for_store_text("migration failed the integrity check"), DIAG_CORRUPT);
+    expect_diag(code_for_store_text("cannot create the device id folder"), DIAG_CANNOT_OPEN);
     expect_diag(code_for_store_text("internal error"), DIAG_INTERNAL);
     expect_diag(code_for_store_text("internal error: path buffer missing"), DIAG_INTERNAL);
     expect_diag(code_for_store_text("cannot write device_id sidecar"), DIAG_INTERNAL);
@@ -2878,7 +2877,8 @@ TEST(cli_repair_refuses_damaged_base_table)
         "{\"version\":1,\"error\":{\"code\":\"corrupt\",\"message\":\"database error: the brain "
         "file is "
         "damaged\",\"detail\":{\"sqlite_code\":11,\"sqlite_extended\":11,\"sqlite_name\":\"SQLITE_"
-        "CORRUPT\",\"sqlite_message\":\"*** in database main ***\\nTree 2 page 2: btreeInitPage() "
+        "CORRUPT\",\"sqlite_message\":\"*** in database main ***\\nTree 23 page 23: "
+        "btreeInitPage() "
         "returns error code 11\",\"fix\":\"Copy the file "
         "somewhere safe before anything else, then restore a backup, "
         "or recover what can be read with `remember --db NEW.db import --from-db COPY`.\","
@@ -3503,7 +3503,7 @@ TEST(cli_repair_read_fault_during_check_is_corrupt)
     ASSERT_EQ_INT(r.exit_code, 0);
     cmd_result_free(&r);
 
-    ASSERT_EQ_INT(setenv("REMEMBER_TEST_FAIL_READ", "2", 1), 0);
+    ASSERT_EQ_INT(setenv("REMEMBER_TEST_FAIL_READ", "7", 1), 0);
     r = run_remember(db, repair, sizeof(repair) / sizeof(repair[0]), NULL);
     ASSERT_EQ_INT(unsetenv("REMEMBER_TEST_FAIL_READ"), 0);
     ASSERT_EQ_INT(r.exit_code, 1);
@@ -3511,7 +3511,7 @@ TEST(cli_repair_read_fault_during_check_is_corrupt)
     ASSERT_STREQ(r.err, k_plain);
     cmd_result_free(&r);
 
-    ASSERT_EQ_INT(setenv("REMEMBER_TEST_FAIL_READ", "2", 1), 0);
+    ASSERT_EQ_INT(setenv("REMEMBER_TEST_FAIL_READ", "7", 1), 0);
     r = run_remember(db, json, sizeof(json) / sizeof(json[0]), NULL);
     ASSERT_EQ_INT(unsetenv("REMEMBER_TEST_FAIL_READ"), 0);
     (void)snprintf(
@@ -3773,7 +3773,7 @@ TEST(cli_no_create_missing_path_creates_nothing)
     ASSERT_EQ_INT(rmdir(tmpl), 0);
     wrote = snprintf(path, sizeof(path), "%s/x.db", tmpl);
     ASSERT_TRUE(wrote > 0 && (size_t)wrote < sizeof(path));
-    wrote = snprintf(sidecar, sizeof(sidecar), "%s.device_id", path);
+    wrote = snprintf(sidecar, sizeof(sidecar), "%s.d/device_id", path);
     ASSERT_TRUE(wrote > 0 && (size_t)wrote < sizeof(sidecar));
 
     r = run_remember(path, list, sizeof(list) / sizeof(list[0]), NULL);
@@ -3818,7 +3818,7 @@ TEST(cli_no_create_missing_file_creates_nothing)
     if (db == NULL) {
         return;
     }
-    wrote = snprintf(sidecar, sizeof(sidecar), "%s.device_id", db);
+    wrote = snprintf(sidecar, sizeof(sidecar), "%s.d/device_id", db);
     ASSERT_TRUE(wrote > 0 && (size_t)wrote < sizeof(sidecar));
     r = run_remember(db, list, sizeof(list) / sizeof(list[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 1);
@@ -3995,8 +3995,8 @@ void register_errors_tests(void)
 #endif
     RUN_TEST(error_catalog_round_trips_every_e4_3_code);
     RUN_TEST(error_catalog_rejects_names_outside_e4_3);
-    RUN_TEST(warning_catalog_round_trips_the_three_codes);
-    RUN_TEST(warning_catalog_rejects_names_outside_the_three);
+    RUN_TEST(warning_catalog_round_trips_every_code);
+    RUN_TEST(warning_catalog_rejects_names_outside_the_catalog);
     RUN_TEST(plain_error_is_remember_prefix_and_the_message);
     RUN_TEST(json_error_is_one_line_and_not_the_plain_line);
     RUN_TEST(error_outside_the_catalog_writes_nothing);

@@ -269,14 +269,15 @@ static int stamp_id(const char *db, long id, const char *created, const char *up
     int stamped = 0;
 
     if (snprintf(sql, sizeof(sql),
-                 "UPDATE entries SET created_at='%s', updated_at='%s' WHERE id=%ld;", created,
+                 "UPDATE entries SET created_at='%s', updated_at='%s' WHERE local_id=%ld;", created,
                  updated, id) < 0 ||
         snprintf(want, sizeof(want), "%s %s", created, updated) < 0) {
         return -1;
     }
     free(harness_sqlite_query_line(db, sql));
     if (snprintf(sql, sizeof(sql),
-                 "SELECT created_at || ' ' || updated_at FROM entries WHERE id=%ld;", id) < 0) {
+                 "SELECT created_at || ' ' || updated_at FROM entries WHERE local_id=%ld;",
+                 id) < 0) {
         return -1;
     }
     got = harness_sqlite_query_line(db, sql);
@@ -764,11 +765,11 @@ TEST(list_bounds_compose_with_tag_source_and_key)
     r = run_remember(db, early, sizeof(early) / sizeof(early[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 0);
     cmd_result_free(&r);
-    free(harness_sqlite_query_line(db,
-                                   "UPDATE entries SET created_at='2026-04-01T00:00:00.000Z', "
-                                   "updated_at='2026-04-01T00:00:00.000Z' WHERE id IN (1, 2);"));
+    free(harness_sqlite_query_line(
+        db, "UPDATE entries SET created_at='2026-04-01T00:00:00.000Z', "
+            "updated_at='2026-04-01T00:00:00.000Z' WHERE local_id IN (1, 2);"));
     free(harness_sqlite_query_line(db, "UPDATE entries SET created_at='2026-01-01T00:00:00.000Z', "
-                                       "updated_at='2026-01-01T00:00:00.000Z' WHERE id=3;"));
+                                       "updated_at='2026-01-01T00:00:00.000Z' WHERE local_id=3;"));
     r = run_remember(db, args, sizeof(args) / sizeof(args[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 0);
     ASSERT_STREQ(r.err, "");

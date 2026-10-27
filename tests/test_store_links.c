@@ -39,7 +39,7 @@ TEST(store_open_creates_entry_links)
     ASSERT_STREQ(err, "");
     store_close(s);
 
-    assert_query_is(db, (QueryExpect){.sql = "PRAGMA user_version;", .want = "5"});
+    assert_query_is(db, (QueryExpect){.sql = "PRAGMA user_version;", .want = "6"});
     assert_query_is(
         db, (QueryExpect){
                 .sql = "SELECT name FROM sqlite_master WHERE type='table' AND name='entry_links';",
@@ -67,7 +67,7 @@ TEST(store_open_creates_entry_links)
     free(db);
 }
 
-TEST(store_open_migrates_v2_to_v5)
+TEST(store_open_migrates_v2_to_v6)
 {
     char *db = make_temp_db_path();
     char err[ERR_BUFSIZE];
@@ -99,9 +99,9 @@ TEST(store_open_migrates_v2_to_v5)
     ASSERT_STREQ(err, "");
     store_close(s);
 
-    assert_query_is(db, (QueryExpect){.sql = "PRAGMA user_version;", .want = "5"});
-    assert_query_is(db,
-                    (QueryExpect){.sql = "SELECT body FROM entries WHERE id=1;", .want = "v2 row"});
+    assert_query_is(db, (QueryExpect){.sql = "PRAGMA user_version;", .want = "6"});
+    assert_query_is(
+        db, (QueryExpect){.sql = "SELECT body FROM entries WHERE local_id=1;", .want = "v2 row"});
     assert_query_is(db, (QueryExpect){.sql = "SELECT COUNT(*) FROM entry_links;", .want = "0"});
     assert_query_is(
         db,
@@ -860,7 +860,7 @@ TEST(store_links_fault_injection_sweep)
 void register_store_link_tests(void)
 {
     RUN_TEST(store_open_creates_entry_links);
-    RUN_TEST(store_open_migrates_v2_to_v5);
+    RUN_TEST(store_open_migrates_v2_to_v6);
     RUN_TEST(store_link_related_is_one_canonical_row);
     RUN_TEST(store_link_directed_and_kinds_independent);
     RUN_TEST(store_link_self_and_missing);

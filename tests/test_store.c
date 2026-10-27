@@ -56,7 +56,7 @@ static void assert_query_is(const char *db, QueryExpect check)
     free(row);
 }
 
-TEST(store_open_creates_user_version_5)
+TEST(store_open_creates_user_version_6)
 {
     char *db = make_temp_db_path();
     char err[ERR_BUFSIZE];
@@ -69,7 +69,7 @@ TEST(store_open_creates_user_version_5)
     ASSERT_STREQ(err, "");
     store_close(s);
 
-    assert_query_is(db, (QueryExpect){.sql = "PRAGMA user_version;", .want = "5"});
+    assert_query_is(db, (QueryExpect){.sql = "PRAGMA user_version;", .want = "6"});
     assert_query_is(
         db, (QueryExpect){
                 .sql = "SELECT COUNT(*) FROM pragma_table_info('entries') WHERE name='expires_at';",
@@ -83,7 +83,7 @@ TEST(store_open_creates_user_version_5)
     free(db);
 }
 
-TEST(store_open_migrates_v1_to_v5)
+TEST(store_open_migrates_v1_to_v6)
 {
     char *db = make_temp_db_path();
     char err[ERR_BUFSIZE];
@@ -117,15 +117,15 @@ TEST(store_open_migrates_v1_to_v5)
     ASSERT_STREQ(err, "");
     store_close(s);
 
-    assert_query_is(db, (QueryExpect){.sql = "PRAGMA user_version;", .want = "5"});
+    assert_query_is(db, (QueryExpect){.sql = "PRAGMA user_version;", .want = "6"});
     assert_query_is(
         db, (QueryExpect){
                 .sql = "SELECT COUNT(*) FROM pragma_table_info('entries') WHERE name='expires_at';",
                 .want = "1"});
     assert_query_is(
-        db, (QueryExpect){.sql = "SELECT body FROM entries WHERE id=1;", .want = "old row"});
+        db, (QueryExpect){.sql = "SELECT body FROM entries WHERE local_id=1;", .want = "old row"});
     assert_query_is(
-        db, (QueryExpect){.sql = "SELECT IFNULL(expires_at, 'NULL') FROM entries WHERE id=1;",
+        db, (QueryExpect){.sql = "SELECT IFNULL(expires_at, 'NULL') FROM entries WHERE local_id=1;",
                           .want = "NULL"});
     assert_query_is(
         db,
@@ -329,7 +329,8 @@ TEST(store_open_has_expected_schema)
                 .want = "conflicts"});
     assert_query_is(
         db, (QueryExpect){
-                .sql = "SELECT COUNT(*) FROM pragma_table_info('entries') WHERE name='sync_id';",
+                .sql = "SELECT COUNT(*) FROM pragma_table_info('entries') WHERE name='id' AND "
+                       "type='TEXT';",
                 .want = "1"});
     assert_query_is(
         db, (QueryExpect){
@@ -408,7 +409,7 @@ TEST(store_open_concurrent_create_all_succeed)
         }
     }
     ASSERT_EQ_INT(failures, 0);
-    assert_query_is(db, (QueryExpect){.sql = "PRAGMA user_version;", .want = "5"});
+    assert_query_is(db, (QueryExpect){.sql = "PRAGMA user_version;", .want = "6"});
     free(db);
 }
 
@@ -702,8 +703,8 @@ static void set_updated_at(const char *db, long long id, const char *updated)
 {
     char sql[SQL_BUFSIZE];
 
-    (void)snprintf(sql, sizeof(sql), "UPDATE entries SET updated_at='%s' WHERE id=%lld;", updated,
-                   id);
+    (void)snprintf(sql, sizeof(sql), "UPDATE entries SET updated_at='%s' WHERE local_id=%lld;",
+                   updated, id);
     free(harness_sqlite_query_line(db, sql));
 }
 
@@ -752,7 +753,7 @@ TEST(store_get_loads_expires_at)
     store_entry_free(&e);
 
     free(harness_sqlite_query_line(
-        db, "UPDATE entries SET expires_at='2026-12-31T23:59:59.000Z' WHERE id=1;"));
+        db, "UPDATE entries SET expires_at='2026-12-31T23:59:59.000Z' WHERE local_id=1;"));
 
     memset(&e, 0, sizeof(e));
     ASSERT_EQ_STATUS(store_get(s, 1, STORE_BIN_LIVE, k_now, &e), STORE_OK);
@@ -778,7 +779,7 @@ TEST(store_get_expired_without_trash_is_expired)
                      STORE_OK);
     store_entry_free(&e);
     free(harness_sqlite_query_line(db, "UPDATE entries SET expires_at='2020-01-01T00:00:00.000Z' "
-                                       "WHERE id=1;"));
+                                       "WHERE local_id=1;"));
 
     memset(&e, 0, sizeof(e));
     ASSERT_EQ_STATUS(store_get(s, 1, STORE_BIN_LIVE, k_now, &e), STORE_ERR_EXPIRED);
@@ -797,7 +798,8 @@ static void sql_set_expires(ExpiresUpdate upd)
 {
     char sql[SQL_BUFSIZE];
 
-    (void)snprintf(sql, sizeof(sql), "UPDATE entries SET expires_at='%s' WHERE id=1;", upd.iso);
+    (void)snprintf(sql, sizeof(sql), "UPDATE entries SET expires_at='%s' WHERE local_id=1;",
+                   upd.iso);
     free(harness_sqlite_query_line(upd.db, sql));
 }
 
@@ -952,7 +954,7 @@ TEST(store_list_and_search_bins)
         STORE_OK);
     store_entry_free(&e);
     free(harness_sqlite_query_line(db, "UPDATE entries SET expires_at='2020-01-01T00:00:00.000Z' "
-                                       "WHERE id=2;"));
+                                       "WHERE local_id=2;"));
 
     memset(&q, 0, sizeof(q));
     q.limit = LIST_LIMIT;
@@ -1689,7 +1691,7 @@ TEST(store_purge_trash_deletes_only_expired)
         STORE_OK);
     store_entry_free(&e);
     free(harness_sqlite_query_line(db, "UPDATE entries SET expires_at='2020-01-01T00:00:00.000Z' "
-                                       "WHERE id=2;"));
+                                       "WHERE local_id=2;"));
 
     ASSERT_EQ_STATUS(store_purge_trash(s, k_now, &gone, &n), STORE_OK);
     ASSERT_EQ_INT((int)n, 1);
@@ -2113,7 +2115,7 @@ TEST(store_list_bounds_compose_with_filters)
                                       .ntags = 1U,
                                       .created = "2026-06-11T00:00:00.000Z"});
     free(harness_sqlite_query_line(
-        db, "UPDATE entries SET expires_at='2020-01-01T00:00:00.000Z' WHERE id=6;"));
+        db, "UPDATE entries SET expires_at='2020-01-01T00:00:00.000Z' WHERE local_id=6;"));
 
     memset(&q, 0, sizeof(q));
     q.tags = tag_t;
@@ -2533,8 +2535,8 @@ static void given_row_version_vector(const char *db, const char *vector)
 {
     char sql[SQL_BUFSIZE];
 
-    ASSERT_TRUE(snprintf(sql, sizeof(sql), "UPDATE entries SET version_vector='%s' WHERE id=1;",
-                         vector) > 0);
+    ASSERT_TRUE(snprintf(sql, sizeof(sql),
+                         "UPDATE entries SET version_vector='%s' WHERE local_id=1;", vector) > 0);
     free(harness_sqlite_query_line(db, sql));
 }
 
@@ -2768,7 +2770,7 @@ TEST(store_update_wrong_bin_wins_over_stale)
                      STORE_OK);
     store_entry_free(&e);
     free(harness_sqlite_query_line(db, "UPDATE entries SET expires_at='2020-01-01T00:00:00.000Z' "
-                                       "WHERE id=1;"));
+                                       "WHERE local_id=1;"));
 
     memset(&e, 0, sizeof(e));
     st = store_update(s, 1,
@@ -3450,8 +3452,8 @@ TEST(store_tags_step_fail)
 
 void register_store_tests(void)
 {
-    RUN_TEST(store_open_creates_user_version_5);
-    RUN_TEST(store_open_migrates_v1_to_v5);
+    RUN_TEST(store_open_creates_user_version_6);
+    RUN_TEST(store_open_migrates_v1_to_v6);
     RUN_TEST(store_open_reopens_existing);
     RUN_TEST(store_open_refuses_user_version_too_new);
     RUN_TEST(store_open_refuses_negative_user_version);

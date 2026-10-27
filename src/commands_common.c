@@ -218,6 +218,8 @@ DiagCode code_for_store_status(StoreStatus st)
         return DIAG_STALE;
     case STORE_ERR_BAD_VV:
         return DIAG_USAGE;
+    case STORE_ERR_SCHEMA_TOO_NEW:
+        return DIAG_SCHEMA_TOO_NEW;
     default:
         return DIAG_INTERNAL;
     }
@@ -316,10 +318,12 @@ DiagCode code_for_store_text(const char *msg)
     if (strcmp(msg, "unsupported database version") == 0) {
         return DIAG_UNSUPPORTED_DATABASE;
     }
-    if (strcmp(msg, "migration left a dangling reference") == 0) {
+    if (strcmp(msg, "migration left a dangling reference") == 0 ||
+        strcmp(msg, "migration failed the integrity check") == 0) {
         return DIAG_CORRUPT;
     }
     if (strcmp(msg, "database path component is not a directory") == 0 ||
+        strcmp(msg, "cannot create the device id folder") == 0 ||
         store_text_has_prefix(msg, "cannot create database directory")) {
         return DIAG_CANNOT_OPEN;
     }

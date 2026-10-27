@@ -26,7 +26,7 @@ static char *sidecar_text(const char *db)
     size_t n = 0;
     char *out = NULL;
 
-    (void)snprintf(path, sizeof(path), "%s.device_id", db);
+    (void)snprintf(path, sizeof(path), "%s.d/device_id", db);
     /* NOLINTNEXTLINE(android-cloexec-fopen) */
     file = fopen(path, "r");
     if (file == NULL || fgets(buf, (int)sizeof(buf), file) == NULL) {
@@ -323,7 +323,7 @@ static void write_sidecar_text(const char *db, const char *text)
     char path[REMEMBER_PATH_MAX];
     FILE *file = NULL;
 
-    (void)snprintf(path, sizeof(path), "%s.device_id", db);
+    (void)snprintf(path, sizeof(path), "%s.d/device_id", db);
     /* NOLINTNEXTLINE(android-cloexec-fopen) */
     file = fopen(path, "w");
     ASSERT_TRUE(file != NULL);
