@@ -1,3 +1,10 @@
+/* gcc -fanalyzer passes _POSIX_C_SOURCE, which hides O_NOFOLLOW on Darwin
+   unless this is set. <brain>.d is opened with that flag. */
+#ifdef __APPLE__
+// NOLINTNEXTLINE(bugprone-reserved-identifier,cert-dcl37-c,cert-dcl51-cpp)
+#define _DARWIN_C_SOURCE
+#endif
+
 #include "store.h"
 
 #include "normalize.h"
