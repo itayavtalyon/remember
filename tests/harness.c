@@ -686,11 +686,14 @@ int harness_copy_file(const char *from, const char *to)
     if (out == NULL) {
         goto cleanup;
     }
-    while ((n = fread(buf, 1, sizeof(buf), in)) > 0) {
+    /* A short read means EOF or an error; stop there rather than read again
+       from a stream in that state. */
+    do {
+        n = fread(buf, 1, sizeof(buf), in);
         if (fwrite(buf, 1, n, out) != n) {
             goto cleanup;
         }
-    }
+    } while (n == sizeof(buf));
     if (ferror(in) == 0) {
         rc = 0;
     }
