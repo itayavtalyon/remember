@@ -41,6 +41,7 @@ static const TestGroup k_groups[] = {
     {"device", register_device_tests},
     {"errors", register_errors_tests},
     {"list_dates", register_list_dates_tests},
+    {"settings", register_settings_tests},
 };
 
 /* Exact comma-token match: "key" must not select "key_gld" (or vice versa),

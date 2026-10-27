@@ -342,7 +342,17 @@ Do not re-open: two layers, plain prefix list, full keys, user rows do not trave
 
 ## Implementation Notes
 
-_(empty)_
+### Stage 1 — registry and parsers (2026-10-27)
+
+Pure code only. No CLI, no store, no printed error. `src/settings.c` holds the six-key registry, the key fold, and the integer grammar. `src/normalize.c` holds duration and size (canonical form and whole milliseconds or bytes). Integer grammar stayed in `settings.c` so `normalize.c` did not gain another branch-gated parser for a rule that is not a measure.
+
+Key fold rewrites `-` to `_`, then checks segments. A segment is `[a-z][a-z0-9_]{0,39}`. The whole key is 2 to 4 segments and at most 96 characters. Duration and size keep at most 15 fraction digits so the scale stays in `long long`. The canonical unit is the largest one that is at least 1 and has at most 3 fraction digits. `0` stays `0ms` or `0B`. A fraction that is not a whole millisecond or a whole byte is rejected and does not write the whole-value out-parameter.
+
+The six registry rows are the plan table: prefixes (string list, no default row, brain only), credential helper (string, unset, user only), candidate pool (200, 20–2000, both), max results (20, 1–1000, both), chain budget (`1.5s`, 100–30000 ms, user only), idle timeout (`10m`, 60000–86400000 ms, user only).
+
+Tests: `tests/test_settings.c`, suite `settings`, in `tests/gate-suites`. Sanitizer build, `./build/remember_tests ./build/remember --only settings`: 7 tests, 0 failed, 205 asserts. `check-coverage.sh` on this logic: functions 100%, effective lines 100%, `normalize.c` 382 branch sides, 0 missed (`search_terms.c` 176, `unicode.c` 80, `output.c` 678). Character-class tails (`1a`, `ab~`, `ab:`, `~a`, a zero-size key buffer) were added after that coverage run; the pre-push gate reruns coverage on the committed tree.
+
+Not started: stages 2–9. No sentence was invented. INDEX row 20 stays unticked. Stage 2 waits until this stage's review is closed.
 
 ## Review Notes
 

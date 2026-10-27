@@ -34,6 +34,7 @@ void register_schema_v6_cli_tests(void);
 void register_device_tests(void);
 void register_errors_tests(void);
 void register_list_dates_tests(void);
+void register_settings_tests(void);
 void register_unicode_tests(void);
 void register_search_terms_tests(void);
 void register_output_tests(void);
