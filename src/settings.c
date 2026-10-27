@@ -104,7 +104,7 @@ bool setting_key_fold(const char *src, char *out, size_t out_cap)
         return false;
     }
     for (i = 0; i < n; i++) {
-        out[i] = (src[i] == '-') ? '_' : src[i];
+        out[i] = (char)((src[i] == '-') ? '_' : src[i]);
     }
     out[n] = '\0';
     if (!key_segments_ok(out, n)) {

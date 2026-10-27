@@ -382,3 +382,5 @@ Confirmed by running, and already true before the fix: `90m` is `1.5h`, `61m` st
 Simplification. Applied: the buffer rule is one helper, because leaving it inline put `measure_canonical` at cognitive complexity 27 (limit 25). Declined: one digit loop for integers and measures (a duration allows `01s`, an integer rejects `01`, so the helper grows flags and saves no reading); dropping `ScaledParts` (clang-tidy treats the adjacent integers as swappable); one macro for the six registry NULL checks (the analyzer only sees the sink when the check is written at the field read).
 
 Fraction digits stay capped at 15, which the header already states. A 16th digit is rejected even when it is zero. That is the overflow bound, not a second grammar.
+
+GitHub's Linux clang-tidy 18 (on `be3ad6a`) rejected `out[i] = (src[i] == '-') ? '_' : src[i]` as a narrowing conversion into `char`. The assignment is now an explicit `(char)` cast. macOS clang-tidy 22 did not flag that line.
