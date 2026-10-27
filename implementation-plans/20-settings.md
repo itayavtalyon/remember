@@ -350,10 +350,23 @@ Key fold rewrites `-` to `_`, then checks segments. A segment is `[a-z][a-z0-9_]
 
 The six registry rows are the plan table: prefixes (string list, no default row, brain only), credential helper (string, unset, user only), candidate pool (200, 20–2000, both), max results (20, 1–1000, both), chain budget (`1.5s`, 100–30000 ms, user only), idle timeout (`10m`, 60000–86400000 ms, user only).
 
-Tests: `tests/test_settings.c`, suite `settings`, in `tests/gate-suites`. Sanitizer build, `./build/remember_tests ./build/remember --only settings`: 7 tests, 0 failed, 205 asserts. `check-coverage.sh` on this logic: functions 100%, effective lines 100%, `normalize.c` 382 branch sides, 0 missed (`search_terms.c` 176, `unicode.c` 80, `output.c` 678). Character-class tails (`1a`, `ab~`, `ab:`, `~a`, a zero-size key buffer) were added after that coverage run. They do not change `src/`. The settings tests suppress magic-number tidy on those plan examples, and each registry row is checked for NULL before a field read, because `ASSERT_TRUE` does not count as a sink for the analyzer.
+Tests: `tests/test_settings.c`, suite `settings`, in `tests/gate-suites`. Sanitizer build, `./build/remember_tests ./build/remember --only settings`: 7 tests, 0 failed, 246 asserts. `check-coverage.sh` on the pre-review logic: functions 100%, effective lines 100%, `normalize.c` 382 branch sides, 0 missed (`search_terms.c` 176, `unicode.c` 80, `output.c` 678). Character-class tails (`1a`, `ab~`, `ab:`, `~a`, a zero-size key buffer) were added after that coverage run. The settings tests suppress magic-number tidy on those plan examples, and each registry row is checked for NULL before a field read, because `ASSERT_TRUE` does not count as a sink for the analyzer.
 
-Not started: stages 2–9. No sentence was invented. INDEX row 20 stays unticked. Stage 2 waits until this stage's review is closed.
+A false duration or size parse now empties a full output buffer before it rejects a NULL argument. A shorter buffer is not written. The command was `./build/remember_tests ./build/remember --only settings` after the change, 7 tests, 0 failed, 246 asserts. A mutant that skips `out[0] = '\0'` in `measure_args_ok` fails `duration_rejects_what_is_not_a_whole_millisecond` and `size_rejects_a_fraction_of_a_byte`. The tree was restored and the suite passed again. `check-coverage.sh` on this tree exited 0: functions 100%, effective lines 100%, `normalize.c` 384 branch sides, 0 missed.
+
+No sentence was invented. INDEX row 20 stays unticked.
 
 ## Review Notes
 
-_(empty)_
+**2026-10-27, stage 1 deep review.** In-session, on `be3ad6a` plus this fix. Itay asked for the review, a simplify pass, and the next stage in the same session, so this note closes stage 1. Local Bugbot is not installed.
+
+| # | Severity | Finding | Outcome |
+|---|---|---|---|
+| 1 | important | `norm_duration_canonical` said a false return empties a large enough buffer. NULL `src` and NULL `whole` returned first, so the caller's bytes stayed (`xxxxxxxxxxxxxxxxxxxxxxx`). | Fixed. `measure_args_ok` empties a full buffer, then rejects NULL. A 23-byte buffer stays untouched (`Q`). Mutant that skips the clear fails the two reject tests. |
+| 2 | nit | `default_text` was described as "unset until written" for every NULL default. Prefixes still resolve to `project:` and `status:` with no row until set. | Comment only. The list stays a stage 3 resolution rule, not a stored string. |
+
+Confirmed by running, and already true before the fix: `90m` is `1.5h`, `61m` stays `61m`, `0s` and `0h` are `0ms`, `1.000s` is `1s`, `1024KiB` is `1MiB`, `1536KiB` is `1.5MiB`, `0KiB` and `0MiB` are `0B`. `+1s`, `1 s`, `1S`, and `1.2.3s` are rejected. A failed integer parse leaves `9223372036854775807` in the out-parameter. `1ms` does not match the `m` suffix. The registry is the six plan rows. No SQLite, no CLI, no invented sentence.
+
+Simplification. Applied: the buffer rule is one helper, because leaving it inline put `measure_canonical` at cognitive complexity 27 (limit 25). Declined: one digit loop for integers and measures (a duration allows `01s`, an integer rejects `01`, so the helper grows flags and saves no reading); dropping `ScaledParts` (clang-tidy treats the adjacent integers as swappable); one macro for the six registry NULL checks (the analyzer only sees the sink when the check is written at the field read).
+
+Fraction digits stay capped at 15, which the header already states. A 16th digit is rejected even when it is zero. That is the overflow bound, not a second grammar.

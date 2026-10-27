@@ -16,7 +16,9 @@ typedef enum SettingType {
 
 /* One compiled-in registry row. min/max are milliseconds for a duration
    and the integer itself for an integer. Both 0 means the type has no
-   numeric range. default_text is NULL when the key is unset until written. */
+   numeric range. default_text is NULL when the row has no single stored
+   default. Prefixes still resolve to project: and status: with no row
+   written until set. */
 typedef struct SettingSpec {
     const char *key;
     const char *default_text;

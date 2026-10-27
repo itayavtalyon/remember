@@ -763,6 +763,21 @@ static void format_canonical(long long whole, const MeasureUnit *units, int n, c
     *p = '\0';
 }
 
+/* A full buffer is emptied on every false return, including NULL src.
+   A short buffer is left untouched. */
+static bool measure_args_ok(const char *src, const long long *whole, char *out, size_t out_cap)
+{
+    if (out != NULL && out_cap >= (size_t)NORM_MEASURE_CANON_CAP) {
+        out[0] = '\0';
+    } else {
+        return false;
+    }
+    if (src == NULL || whole == NULL) {
+        return false;
+    }
+    return true;
+}
+
 static bool measure_canonical(const char *src, const MeasureUnit *units, int n, long long *whole,
                               char *out, size_t out_cap)
 {
@@ -773,10 +788,9 @@ static bool measure_canonical(const char *src, const MeasureUnit *units, int n, 
     int idx = 0;
     bool matched = false;
 
-    if (src == NULL || whole == NULL || out == NULL || out_cap < (size_t)NORM_MEASURE_CANON_CAP) {
+    if (!measure_args_ok(src, whole, out, out_cap)) {
         return false;
     }
-    out[0] = '\0';
     p = src;
     if (*p < '0' || *p > '9') {
         return false;

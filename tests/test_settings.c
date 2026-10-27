@@ -54,6 +54,12 @@ TEST(duration_canonical_examples)
     assert_duration("1ms", 1, "1ms");
     assert_duration("1m", 60000, "1m");
     assert_duration("10m", 600000, "10m");
+    assert_duration("90m", 5400000, "1.5h");
+    assert_duration("1.5h", 5400000, "1.5h");
+    assert_duration("61m", 3660000, "61m");
+    assert_duration("0s", 0, "0ms");
+    assert_duration("0h", 0, "0ms");
+    assert_duration("1.000s", 1000, "1s");
 }
 
 TEST(duration_rejects_what_is_not_a_whole_millisecond)
@@ -62,11 +68,20 @@ TEST(duration_rejects_what_is_not_a_whole_millisecond)
     long long got = 1;
     char tiny[CANON - 1];
 
-    memset(out, 'x', sizeof(out));
+    memset(out, 'x', sizeof(out) - 1U);
+    out[sizeof(out) - 1U] = '\0';
     ASSERT_FALSE(norm_duration_canonical(NULL, &got, out, sizeof(out)));
+    ASSERT_STREQ(out, "");
+    ASSERT_EQ_INT(got, 1);
+    memset(out, 'x', sizeof(out) - 1U);
+    out[sizeof(out) - 1U] = '\0';
     ASSERT_FALSE(norm_duration_canonical("1s", NULL, out, sizeof(out)));
+    ASSERT_STREQ(out, "");
+    ASSERT_EQ_INT(got, 1);
     ASSERT_FALSE(norm_duration_canonical("1s", &got, NULL, sizeof(out)));
+    memset(tiny, 'Q', sizeof(tiny));
     ASSERT_FALSE(norm_duration_canonical("1s", &got, tiny, sizeof(tiny)));
+    ASSERT_EQ_INT((unsigned char)tiny[0], 'Q');
     ASSERT_FALSE(norm_duration_canonical("0.5ms", &got, out, sizeof(out)));
     ASSERT_STREQ(out, "");
     ASSERT_FALSE(norm_duration_canonical("1.s", &got, out, sizeof(out)));
@@ -82,6 +97,10 @@ TEST(duration_rejects_what_is_not_a_whole_millisecond)
     ASSERT_FALSE(norm_duration_canonical("0.999999999999999h", &got, out, sizeof(out)));
     ASSERT_FALSE(norm_duration_canonical("9223372036854775.9s", &got, out, sizeof(out)));
     ASSERT_FALSE(norm_duration_canonical("1.1234567890123456s", &got, out, sizeof(out)));
+    ASSERT_FALSE(norm_duration_canonical("+1s", &got, out, sizeof(out)));
+    ASSERT_FALSE(norm_duration_canonical("1 s", &got, out, sizeof(out)));
+    ASSERT_FALSE(norm_duration_canonical("1S", &got, out, sizeof(out)));
+    ASSERT_FALSE(norm_duration_canonical("1.2.3s", &got, out, sizeof(out)));
     ASSERT_EQ_INT(got, 1);
 }
 
@@ -97,16 +116,21 @@ TEST(size_canonical_examples)
     assert_size("0.5KiB", 512, "512B");
     assert_size("0B", 0, "0B");
     assert_size("2.00KiB", 2048, "2KiB");
+    assert_size("1024KiB", 1048576, "1MiB");
+    assert_size("1536KiB", 1572864, "1.5MiB");
+    assert_size("0KiB", 0, "0B");
+    assert_size("0MiB", 0, "0B");
 }
 
 TEST(size_rejects_a_fraction_of_a_byte)
 {
     char out[CANON];
-    long long got = 0;
+    long long got = 4;
 
     ASSERT_FALSE(norm_size_canonical("0.5B", &got, out, sizeof(out)));
     ASSERT_FALSE(norm_size_canonical("1X", &got, out, sizeof(out)));
     ASSERT_STREQ(out, "");
+    ASSERT_EQ_INT(got, 4);
 }
 
 TEST(integer_grammar)
@@ -129,6 +153,7 @@ TEST(integer_grammar)
     ASSERT_FALSE(setting_integer("", &v));
     ASSERT_FALSE(setting_integer(NULL, &v));
     ASSERT_FALSE(setting_integer("1", NULL));
+    ASSERT_EQ_INT(v, 9223372036854775807LL);
 }
 
 TEST(key_grammar_folds_hyphens_and_requires_a_full_key)

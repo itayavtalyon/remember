@@ -130,8 +130,9 @@ enum { NORM_MEASURE_CANON_CAP = 24 };
  * Duration grammar ^[0-9]+(\.[0-9]{1,15})?(ms|s|m|h)$ as a whole number of
  * milliseconds, then the canonical unit: the largest of h, m, s, ms in which
  * the number is at least 1 and has at most 3 fraction digits. No trailing
- * zeros. 0 uses ms. False leaves *whole_ms unchanged and out empty when out
- * is large enough to write.
+ * zeros. 0 uses ms. False leaves *whole_ms unchanged. A buffer of
+ * NORM_MEASURE_CANON_CAP bytes is left empty, including when src or
+ * whole_ms is NULL. A shorter buffer is not written.
  */
 bool norm_duration_canonical(const char *src, long long *whole_ms, char *out, size_t out_cap);
 
