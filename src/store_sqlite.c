@@ -1239,8 +1239,10 @@ static int rename_sidecar_tmp(const char *tmp, const char *path)
     return rename(tmp, path);
 }
 
-/* The folder that holds path, <brain>.d, at mode 0700 (G-19). An existing
-   directory is kept as it is. */
+/* The folder that holds path, <brain>.d, at mode 0700 (G-19). mkdir follows
+   the umask, and a directory that already exists may be looser, so chmod
+   when the mode is not 0700. lstat refuses a symlink: stat would follow it
+   and chmod the target, then the device id would be written there. */
 static int ensure_sidecar_dir(const char *path, char *err, size_t errlen)
 {
     static const char k_dir_error[] = "cannot create the device id folder";
@@ -1255,15 +1257,18 @@ static int ensure_sidecar_dir(const char *path, char *err, size_t errlen)
         return -1;
     }
     *slash = '\0';
-    if (mkdir(dir, SIDECAR_DIR_MODE) == 0) {
-        /* mkdir honors the umask; the mode is the rule, so set it. */
-        if (chmod(dir, SIDECAR_DIR_MODE) != 0) {
-            set_err(err, errlen, k_dir_error);
-            return -1;
-        }
-        return 0;
+    if (mkdir(dir, SIDECAR_DIR_MODE) != 0 && errno != EEXIST) {
+        set_err(err, errlen, k_dir_error);
+        return -1;
     }
-    if (errno != EEXIST || stat(dir, &st) != 0 || !S_ISDIR(st.st_mode)) {
+    if (lstat(dir, &st) != 0 || S_ISLNK(st.st_mode) || !S_ISDIR(st.st_mode)) {
+        set_err(err, errlen, k_dir_error);
+        return -1;
+    }
+    /* Already 0700: skip chmod so a read-only volume that is already right
+       still opens. A looser directory is tightened, or the open fails. */
+    if ((st.st_mode & (unsigned)(S_IRWXU | S_IRWXG | S_IRWXO)) != (unsigned)SIDECAR_DIR_MODE &&
+        chmod(dir, SIDECAR_DIR_MODE) != 0) {
         set_err(err, errlen, k_dir_error);
         return -1;
     }
@@ -1641,9 +1646,10 @@ static int rebuild_entries_notnull(sqlite3 *db, char *err, size_t errlen, StoreE
 
 static StoreStatus fts_resync(sqlite3 *db, long long entry_id, StoreError *serr);
 
-/* One integer column. bind NULL means the statement has no parameter. */
+/* One integer column as int64. bind NULL means the statement has no parameter.
+   sqlite3_column_int wraps past 2^31-1, so a counter uses this. */
 // NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
-static int select_int(sqlite3 *db, const char *sql, const char *bind, int *out, char *err,
+static int select_i64(sqlite3 *db, const char *sql, const char *bind, long long *out, char *err,
                       size_t errlen, StoreError *serr)
 {
     sqlite3_stmt *stmt = NULL;
@@ -1665,8 +1671,22 @@ static int select_int(sqlite3 *db, const char *sql, const char *bind, int *out, 
         set_errf(err, errlen, "sqlite", sqlite3_errmsg(db));
         return -1;
     }
-    *out = sqlite3_column_int(stmt, 0);
+    *out = sqlite3_column_int64(stmt, 0);
     (void)sqlite3_finalize(stmt);
+    return 0;
+}
+
+/* Same column, narrowed to int. Counts fit. A counter calls select_i64. */
+// NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
+static int select_int(sqlite3 *db, const char *sql, const char *bind, int *out, char *err,
+                      size_t errlen, StoreError *serr)
+{
+    long long value = 0;
+
+    if (select_i64(db, sql, bind, &value, err, errlen, serr) != 0) {
+        return -1;
+    }
+    *out = (int)value;
     return 0;
 }
 
@@ -2322,6 +2342,10 @@ static int bind_v6_identity(Store *s, char *err, size_t errlen)
     char uuid[UUID_STR_LEN + 1];
 
     if (sidecar_paths(s->path, &paths, err, errlen) != 0) {
+        return -1;
+    }
+    /* Every v6 open, not only the open that creates the file. */
+    if (ensure_sidecar_dir(paths.side, err, errlen) != 0) {
         return -1;
     }
     if (read_sidecar(paths.side, uuid) == 0) {
@@ -3105,9 +3129,9 @@ static StoreStatus stamp_change_seq(sqlite3 *db, ChangeSeqRow row, StoreError *s
         return STORE_ERR_INTERNAL;
     }
     if (!state->active) {
-        int base = 0;
+        long long base = 0;
 
-        if (select_int(db, "SELECT change_seq FROM brain_meta;", NULL, &base, NULL, 0U, serr) !=
+        if (select_i64(db, "SELECT change_seq FROM brain_meta;", NULL, &base, NULL, 0U, serr) !=
             0) {
             return STORE_ERR_SQLITE;
         }

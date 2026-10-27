@@ -6,11 +6,9 @@ Replace the v5 brain schema with schema v6 in one migration. The migration cover
 
 ## Status
 
-PENDING COPY.
+Implemented on main (2026-10-26). Reviewed 2026-10-27.
 
-The migration stages do not print a sentence. Start those stages. The write refusal prints `schema_too_new`. The plain line is locked. The JSON `fix` is COPY-PENDING C-01. Do not assert `error.fix` until C-01 is approved. Do not invent the fix.
-
-This plan is not ready for a full implementation. The migration is specified. The JSON refusal is not.
+The migration does not print a sentence. A left-out prefix prints the locked ST-7.15 warning. The write refusal prints `schema_too_new`. The plain line is locked. The JSON `fix` is still COPY-PENDING C-01. Do not assert `error.fix` until C-01 is approved. Do not invent the fix.
 
 ## Source of truth
 
@@ -300,8 +298,27 @@ Gate (Linux container, clang 18, `REMEMBER_ENABLE_SANITIZERS=ON`, `REMEMBER_TEST
 - The repair read-fault test moved its `REMEMBER_TEST_FAIL_READ` budget from 2 to 7: open now reads `brain_meta`.
 - `.claude/` is git-ignored, so the stage and whole-plan review requests are this section, not a `.claude/REVIEW_REQUEST` file. No `workflow:deep-review` ran in this session.
 
-Definition of done, where this session stands: must-pass rows green and in `tests/gate-suites` (`schema_v6`, `schema_v6_cli`); `user_version` 6 set once at the end of the transaction; no `config` command and no add-wins code; plain `schema_too_new` matches ST-10.2, JSON `fix` not asserted; `docs/engineering-notes.md` records the v6 order and sidecar path. Not done: the second review, `leaks-macos`, `ci-linux.sh`, ticking INDEX row 19.
+Definition of done, where the implementation session stood: must-pass rows green and in `tests/gate-suites` (`schema_v6`, `schema_v6_cli`); `user_version` 6 set once at the end of the transaction; no `config` command and no add-wins code; plain `schema_too_new` matches ST-10.2, JSON `fix` not asserted; `docs/engineering-notes.md` records the v6 order and sidecar path. The second review is below.
 
 ## Review Notes
 
-_(empty; second review appends here)_
+**2026-10-27, whole-plan deep review.** The implementation on `c33318f` (PR #43) is the migration the plan locks. No `workflow:deep-review` had run on it. This pass fixed three holes and left the locked behavior alone. JSON `error.fix` for `schema_too_new` is still COPY-PENDING C-01. Local Bugbot is not installed. Prefix order was probed and is not a bug: `json_each` array keys are integers, and `MIN(j.key)` already orders `a11:` after `a9:`.
+
+| # | Severity | Finding | Outcome |
+|---|---|---|---|
+| 1 | important | `stamp_change_seq` read `brain_meta.change_seq` with `sqlite3_column_int`. On this LP64 clang, 2147483648 becomes -2147483648, a new row stored at 0 is not `<=` that base, and the counter stops. | Fixed. `select_i64` reads `sqlite3_column_int64`. `select_int` calls it and narrows, for the counts. Test sets the counter to 2147483648 and expects 2147483649. A platform that saturates `column_int` at `INT_MAX` would not fail the old code; this machine wraps, and the amalgamation casts with `(int)`. |
+| 2 | important | `<brain>.d` was chmod 0700 only when `mkdir` created it. An existing directory stayed as it was (a crash between `mkdir` and `chmod` left 0755). `stat` follows a symlink, so a symlink named `<brain>.d` was treated as the folder and the device id was written into the target. | Fixed. `lstat`, refuse a symlink or a non-directory, and chmod 0700 when the mode is looser. A directory that is already 0700 is left alone, so a read-only volume that is already right still opens. Every v6 open does this, not only the open that creates the file. Tests: loosen to 0755 and reopen; symlink the folder and expect `cannot create the device id folder` with nothing planted in the target. |
+| 3 | important | The migration warning was built in a 512-byte stack buffer. A long left-out prefix was cut, so the plain line was not the ST-7.15 sentence. | Fixed. Measure with `snprintf(NULL, 0, ...)`, allocate the line, print, free. A 600-byte prefix is the whole line. A newline in the prefix is `?`, so the line stays one line (`output_text_human`). |
+| 4 | nit | `insert_tombstone` always increments, including a row this transaction already stamped. `brain_meta` has no primary key (the CREATE matches the plan). `exec_bound` ignores bind results, which is the file's style. Directory fsync after the sidecar rename is untested and can fail an open that already published the file. | Left. |
+| 5 | nit | `README.md` and `skills/remember/SKILL.md` still say `<db>.device_id`. | Left. Plan 26 owns that copy. |
+| 6 | doc | Engineering notes said FTS is refilled only for v1–v4 sources. `migrate_v5_to_v6` drops and rebuilds the index for every source, and the function comment already said so. | Corrected. |
+
+Confirmed, not changed: `duplicate_prefix` (ST-5.4, ST-7.15); a tombstone-only bucket list writes `[]` and `change_seq` 1; no 8-prefix cap (D-01); `unknown` → `human` on new writes; `change_seq` bumps on writes now; `import --from-db` still refuses a v6 source until plan 23; no JSON `fix` text invented.
+
+Simplification. Applied: the sidecar check is one path (mkdir, then lstat and chmod) instead of a success return and a separate EEXIST return. `select_int` is a narrow wrapper over `select_i64` instead of a second prepare/step. The warning drops the fixed buffer. Declined, with the reason: `collect_prefixes` / `open_memstream` is the short way to build an unbounded JSON array (a fixed buffer was the warning bug); `k_v6_rebuild_steps` is the migration, and joining it into one string saves no reading; the plan 24 validator is already one fenced-block pass (round 2). A repo-wide NOLINT purge is out of scope.
+
+Adversarial. Hostile `min_reader_version` (newer or unparsable) stays read-only. An invalid legacy sidecar is still an error; `device new` is still the only replace. The symlink folder and the long or control-byte prefix are the fixes above. The version-vector JSON in `migrate_prefix_row` is `snprintf` of a canonical device id. Parallel first opens still use `mkstemp`. `foreign_keys` is OFF only around the migration and restored ON on failure. A failure before COMMIT leaves `user_version` 5. A crash after the copy and before the delete leaves the legacy file; the next open finishes the move. A multi-megabyte bad prefix allocates a warning of that size, which is the value the sentence has to print.
+
+INDEX row 19 is ticked. The JSON `fix` still waits on C-01.
+
+Coder: 7/10. The migration order, the recorded deviations, and the tests match the locked plan. Missed the counter read, the sidecar mode and symlink, and the cut warning line. No stage second-opinion ran (the implementation notes say so), so there is no prior-reviewer score.
