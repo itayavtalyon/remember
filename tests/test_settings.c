@@ -6,6 +6,10 @@
 #include <stdio.h>
 #include <string.h>
 
+/* The numbers are the plan's examples (1500ms, 1.5KiB, the registry bounds).
+   A name for each one hides that table. */
+// NOLINTBEGIN(cppcoreguidelines-avoid-magic-numbers,readability-magic-numbers)
+
 enum { SEGMENT_MAX = 40 };
 
 enum { CANON = NORM_MEASURE_CANON_CAP };
@@ -214,6 +218,9 @@ TEST(registry_lists_the_six_keys)
     ASSERT_TRUE(setting_registry(NULL) == all);
     pool = setting_by_key("remember.search.candidate-pool");
     ASSERT_TRUE(pool != NULL);
+    if (pool == NULL) {
+        return;
+    }
     ASSERT_EQ_INT(pool->type, SETTING_INTEGER);
     ASSERT_STREQ(pool->default_text, "200");
     ASSERT_EQ_INT(pool->min_value, 20);
@@ -222,12 +229,18 @@ TEST(registry_lists_the_six_keys)
     ASSERT_TRUE(pool->allow_user);
     prefixes = setting_by_key("remember.buckets.prefixes");
     ASSERT_TRUE(prefixes != NULL);
+    if (prefixes == NULL) {
+        return;
+    }
     ASSERT_EQ_INT(prefixes->type, SETTING_STRING_LIST);
     ASSERT_TRUE(prefixes->default_text == NULL);
     ASSERT_TRUE(prefixes->allow_brain);
     ASSERT_FALSE(prefixes->allow_user);
     budget = setting_by_key("remember.plugins.chain_budget");
     ASSERT_TRUE(budget != NULL);
+    if (budget == NULL) {
+        return;
+    }
     ASSERT_EQ_INT(budget->type, SETTING_DURATION);
     ASSERT_STREQ(budget->default_text, "1.5s");
     ASSERT_EQ_INT(budget->min_value, 100);
@@ -236,6 +249,9 @@ TEST(registry_lists_the_six_keys)
     ASSERT_TRUE(budget->allow_user);
     max_results = setting_by_key("remember.search.max_results");
     ASSERT_TRUE(max_results != NULL);
+    if (max_results == NULL) {
+        return;
+    }
     ASSERT_EQ_INT(max_results->type, SETTING_INTEGER);
     ASSERT_STREQ(max_results->default_text, "20");
     ASSERT_EQ_INT(max_results->min_value, 1);
@@ -244,6 +260,9 @@ TEST(registry_lists_the_six_keys)
     ASSERT_TRUE(max_results->allow_user);
     idle = setting_by_key("remember.plugins.idle_timeout");
     ASSERT_TRUE(idle != NULL);
+    if (idle == NULL) {
+        return;
+    }
     ASSERT_EQ_INT(idle->type, SETTING_DURATION);
     ASSERT_STREQ(idle->default_text, "10m");
     ASSERT_EQ_INT(idle->min_value, 60000);
@@ -252,6 +271,9 @@ TEST(registry_lists_the_six_keys)
     ASSERT_TRUE(idle->allow_user);
     helper = setting_by_key("remember.sync.credential_helper");
     ASSERT_TRUE(helper != NULL);
+    if (helper == NULL) {
+        return;
+    }
     ASSERT_EQ_INT(helper->type, SETTING_STRING);
     ASSERT_TRUE(helper->default_text == NULL);
     ASSERT_EQ_INT(helper->min_value, 0);
@@ -272,3 +294,4 @@ void register_settings_tests(void)
     RUN_TEST(key_grammar_folds_hyphens_and_requires_a_full_key);
     RUN_TEST(registry_lists_the_six_keys);
 }
+// NOLINTEND(cppcoreguidelines-avoid-magic-numbers,readability-magic-numbers)
