@@ -1,10 +1,3 @@
-/* gcc -fanalyzer passes _POSIX_C_SOURCE, which hides O_NOFOLLOW on Darwin
-   unless this is set. <brain>.d is opened with that flag. */
-#ifdef __APPLE__
-// NOLINTNEXTLINE(bugprone-reserved-identifier,cert-dcl37-c,cert-dcl51-cpp)
-#define _DARWIN_C_SOURCE
-#endif
-
 #include "store.h"
 
 #include "normalize.h"
@@ -1246,6 +1239,12 @@ static int rename_sidecar_tmp(const char *tmp, const char *path)
 #endif
     return rename(tmp, path);
 }
+
+/* Darwin hides O_NOFOLLOW when _POSIX_C_SOURCE is set, which is how
+   gcc -fanalyzer compiles this file. The value is the one in <sys/fcntl.h>. */
+#if defined(__APPLE__) && !defined(O_NOFOLLOW)
+#define O_NOFOLLOW 0x00000100
+#endif
 
 /* The folder that holds path, <brain>.d, at mode 0700 (G-19). mkdir follows
    the umask, and a directory that already exists may be looser. Open that
