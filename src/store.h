@@ -139,6 +139,14 @@ typedef struct {
  */
 Store *store_open(const char *path, char *err, size_t errlen);
 
+/* Create user.db at path on the first user-layer write (007 ST-10.3, ST-2.8).
+   Mode 0600. user_version 1, one user_meta row 0.3.0, empty settings and
+   settings_history. A second call leaves existing rows in place and restores
+   mode 0600. Does not run from store_open. 0 on success, -1 and err on failure.
+   A user_version above 1 fails with "database is newer than this remember".
+   A user_version below 0 fails with "unsupported database version". */
+int store_user_db_ensure(const char *path, char *err, size_t errlen);
+
 /*
  * store_open with options and a structured SQLite failure. opts NULL means
  * defaults (STORE_DEFAULT_BUSY_TIMEOUT_MS, create, keep an invalid sidecar an

@@ -356,6 +356,18 @@ A false duration or size parse now empties a full output buffer before it reject
 
 No sentence was invented. INDEX row 20 stays unticked.
 
+### Stage 2 — user.db on the first ensure (2026-10-27)
+
+The settings suite was red before these symbols existed: `remember_tests` failed to compile on implicit declarations of `util_resolve_user_db_path` and `store_user_db_ensure`.
+
+`util_resolve_user_db_path` does not create a file. A non-empty `REMEMBER_USER_DB` wins, else a non-empty `$XDG_DATA_HOME/remember/user.db`, else `$HOME/.remember/user.db`. An empty variable counts as unset. `:memory:` and `file:` reuse `database path must be a regular file (not :memory: or file: URI)`. A missing or empty `HOME` is `HOME is not set`. The brain resolver's missing-HOME sentence still names `--db`, because user.db has no `--db`. The copy, the join, and the HOME read are shared with `util_resolve_db_path`. There is no third `getenv("HOME")`.
+
+`store_user_db_ensure` creates the file. `store_open` does not. The file is opened with `O_NOFOLLOW`, mode 0600, and `fchmod` runs only when the mode is looser. Schema is `user_version` 1, one `user_meta` row `0.3.0`, and empty `settings` and `settings_history`. The settings table has no `device_id`, `version_vector`, `deleted_at`, or `change_seq`. A second call leaves the rows in place and restores mode 0600. `user_version` above 1 reuses `database is newer than this remember`. Below 0 reuses `unsupported database version`. A symlink is rejected and the target is not created.
+
+Sanitizer build, `./build/remember_tests ./build/remember --only settings`: 9 tests, 0 failed, 300 asserts. `check-coverage.sh` exited 0: functions 100%, effective lines 100%, `normalize.c` 384 branch sides, 0 missed. `src/util.c` and `src/store_sqlite.c` stay on the line gate, not the pure-TU branch list.
+
+No sentence was invented. INDEX row 20 stays unticked. Stage 3 has not started.
+
 ## Review Notes
 
 **2026-10-27, stage 1 deep review.** In-session, on `be3ad6a` plus this fix. Itay asked for the review, a simplify pass, and the next stage in the same session, so this note closes stage 1. Local Bugbot is not installed.

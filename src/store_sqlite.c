@@ -16,6 +16,12 @@
 #include <time.h>
 #include <unistd.h>
 
+/* Darwin hides O_NOFOLLOW when _POSIX_C_SOURCE is set, which is how
+   gcc -fanalyzer compiles this file. The value is the one in <sys/fcntl.h>. */
+#if defined(__APPLE__) && !defined(O_NOFOLLOW)
+#define O_NOFOLLOW 0x00000100
+#endif
+
 /* change_seq state of the open write transaction (stamp_change_seq). It sits on
    the connection under k_change_seq_tx (sqlite3_set_clientdata) so helpers that
    take only the sqlite3 handle reach it; begin_write resets it. */
@@ -480,6 +486,7 @@ static const long k_reader_version[VERSION_PARTS] = {0, 3, 0};
    open message. */
 enum { IMPORT_MIN_USER_VERSION = 4, IMPORT_MAX_USER_VERSION = 5 };
 static const char k_newer_database[] = "database is newer than this remember";
+static const char k_unsupported_version[] = "unsupported database version";
 /* RFC 4122 layout for canonical 8-4-4-4-12 and v7 mint. */
 enum {
     UUID_VER_BYTE = 6,
@@ -1062,6 +1069,101 @@ static int read_user_version(sqlite3 *db, int *out, char *err, size_t errlen, St
     return 0;
 }
 
+static int apply_pragmas(sqlite3 *db, int busy_timeout_ms, char *err, size_t errlen,
+                         StoreError *serr);
+
+static const char k_user_db_sql[] = "BEGIN IMMEDIATE;\n"
+                                    "CREATE TABLE user_meta (min_reader_version TEXT NOT NULL);\n"
+                                    "INSERT INTO user_meta (min_reader_version) VALUES ('0.3.0');\n"
+                                    "CREATE TABLE settings (\n"
+                                    "  key TEXT PRIMARY KEY,\n"
+                                    "  value TEXT NOT NULL,\n"
+                                    "  updated_by TEXT NOT NULL,\n"
+                                    "  updated_at TEXT NOT NULL\n"
+                                    ");\n"
+                                    "CREATE TABLE settings_history (\n"
+                                    "  key TEXT NOT NULL,\n"
+                                    "  old_value TEXT,\n"
+                                    "  new_value TEXT,\n"
+                                    "  updated_by TEXT NOT NULL,\n"
+                                    "  at TEXT NOT NULL\n"
+                                    ");\n"
+                                    "PRAGMA user_version = 1;\n"
+                                    "COMMIT;\n";
+
+/* Create at 0600 on this descriptor. fchmod only when an existing file is
+   looser, so a file that is already 0600 still opens on a read-only volume.
+   O_NOFOLLOW: a symlink is not a place to write user.db. */
+static int open_user_db_file(const char *path, char *err, size_t errlen)
+{
+    struct stat st;
+    int fd = -1;
+
+    fd = open(path, O_RDWR | O_CREAT | O_CLOEXEC | O_NOFOLLOW, SIDECAR_FILE_MODE);
+    if (fd < 0) {
+        set_err(err, errlen, "cannot create user.db");
+        return -1;
+    }
+    if (fstat(fd, &st) != 0 || !S_ISREG(st.st_mode) ||
+        ((st.st_mode & (unsigned)(S_IRWXU | S_IRWXG | S_IRWXO)) != (unsigned)SIDECAR_FILE_MODE &&
+         fchmod(fd, SIDECAR_FILE_MODE) != 0)) {
+        (void)close(fd);
+        set_err(err, errlen, "cannot create user.db");
+        return -1;
+    }
+    if (close(fd) != 0) {
+        set_err(err, errlen, "cannot create user.db");
+        return -1;
+    }
+    return 0;
+}
+
+/* cppcheck-suppress staticFunction ; public API (store.h); used by tests */
+int store_user_db_ensure(const char *path, char *err, size_t errlen)
+{
+    sqlite3 *db = NULL;
+    int version = 0;
+    int rc = 0;
+
+    if (path == NULL || path[0] == '\0') {
+        set_err(err, errlen, "database path is missing");
+        return -1;
+    }
+    if (ensure_parent_dirs(path, err, errlen) != 0) {
+        return -1;
+    }
+    if (open_user_db_file(path, err, errlen) != 0) {
+        return -1;
+    }
+    rc = sqlite3_open_v2(path, &db, SQLITE_OPEN_READWRITE, NULL);
+    if (rc != SQLITE_OK) {
+        set_errf(err, errlen, "cannot create user.db", sqlite3_errmsg(db));
+        (void)sqlite3_close(db);
+        return -1;
+    }
+    if (apply_pragmas(db, STORE_DEFAULT_BUSY_TIMEOUT_MS, err, errlen, NULL) != 0 ||
+        read_user_version(db, &version, err, errlen, NULL) != 0) {
+        (void)sqlite3_close(db);
+        return -1;
+    }
+    if (version < 0) {
+        set_err(err, errlen, k_unsupported_version);
+        (void)sqlite3_close(db);
+        return -1;
+    }
+    if (version > 1) {
+        set_err(err, errlen, k_newer_database);
+        (void)sqlite3_close(db);
+        return -1;
+    }
+    if (version == 0 && exec_sql(db, k_user_db_sql, err, errlen, NULL) != 0) {
+        (void)sqlite3_close(db);
+        return -1;
+    }
+    (void)sqlite3_close(db);
+    return 0;
+}
+
 /* Default busy wait when the caller passes no options (plan 16 stage 5 owns
  * the --busy-timeout flag; the store applies the value as given). */
 
@@ -1239,12 +1341,6 @@ static int rename_sidecar_tmp(const char *tmp, const char *path)
 #endif
     return rename(tmp, path);
 }
-
-/* Darwin hides O_NOFOLLOW when _POSIX_C_SOURCE is set, which is how
-   gcc -fanalyzer compiles this file. The value is the one in <sys/fcntl.h>. */
-#if defined(__APPLE__) && !defined(O_NOFOLLOW)
-#define O_NOFOLLOW 0x00000100
-#endif
 
 /* The folder that holds path, <brain>.d, at mode 0700 (G-19). mkdir follows
    the umask, and a directory that already exists may be looser. Open that
@@ -1555,7 +1651,7 @@ static int check_version(int version, char *err, size_t errlen)
     if (version > SCHEMA_VERSION) {
         set_err(err, errlen, k_newer_database);
     } else {
-        set_err(err, errlen, "unsupported database version");
+        set_err(err, errlen, k_unsupported_version);
     }
     return -1;
 }

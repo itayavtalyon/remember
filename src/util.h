@@ -14,6 +14,13 @@
  */
 int util_resolve_db_path(const char *cli_db, char *buf, size_t buflen, char *err, size_t errlen);
 
+/* user.db path. Does not create the file.
+   REMEMBER_USER_DB when it is set and non-empty, else
+   $XDG_DATA_HOME/remember/user.db when XDG_DATA_HOME is set and non-empty,
+   else $HOME/.remember/user.db. An empty variable counts as unset.
+   Rejects :memory: and file: URIs. */
+int util_resolve_user_db_path(char *buf, size_t buflen, char *err, size_t errlen);
+
 /* Substring markers only (not a real FS-type probe). Callers warn on stderr. */
 int util_path_looks_synced(const char *path);
 

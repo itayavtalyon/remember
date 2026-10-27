@@ -1,10 +1,16 @@
+#include "harness.h"
 #include "normalize.h"
 #include "register.h"
 #include "settings.h"
+#include "store.h"
 #include "test.h"
+#include "util.h"
 
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
+#include <unistd.h>
 
 /* The numbers are the plan's examples (1500ms, 1.5KiB, the registry bounds).
    A name for each one hides that table. */
@@ -309,6 +315,194 @@ TEST(registry_lists_the_six_keys)
     ASSERT_TRUE(setting_by_key("candidate_pool") == NULL);
 }
 
+/* Single-threaded tests. getenv and setenv have no portable reentrant form. */
+static void restore_env(const char *name, bool had, const char *saved)
+{
+    if (had) {
+        // NOLINTNEXTLINE(concurrency-mt-unsafe)
+        (void)setenv(name, saved, 1);
+    } else {
+        // NOLINTNEXTLINE(concurrency-mt-unsafe)
+        (void)unsetenv(name);
+    }
+}
+
+TEST(user_db_path_follows_remember_user_db_then_xdg_then_home)
+{
+    char buf[REMEMBER_PATH_MAX];
+    char err[128];
+    char saved_user[REMEMBER_PATH_MAX] = {0};
+    char saved_xdg[REMEMBER_PATH_MAX] = {0};
+    char saved_home[REMEMBER_PATH_MAX] = {0};
+    char expect[REMEMBER_PATH_MAX];
+    const char *home = NULL;
+    bool had_user = false;
+    bool had_xdg = false;
+    bool had_home = false;
+    const char *env = NULL;
+
+    // NOLINTNEXTLINE(concurrency-mt-unsafe)
+    env = getenv("REMEMBER_USER_DB");
+    if (env != NULL) {
+        had_user = true;
+        (void)snprintf(saved_user, sizeof(saved_user), "%s", env);
+    }
+    // NOLINTNEXTLINE(concurrency-mt-unsafe)
+    env = getenv("XDG_DATA_HOME");
+    if (env != NULL) {
+        had_xdg = true;
+        (void)snprintf(saved_xdg, sizeof(saved_xdg), "%s", env);
+    }
+    // NOLINTNEXTLINE(concurrency-mt-unsafe)
+    home = getenv("HOME");
+    ASSERT_TRUE(home != NULL && home[0] != '\0');
+    if (home != NULL) {
+        had_home = true;
+        (void)snprintf(saved_home, sizeof(saved_home), "%s", home);
+    }
+
+    (void)unlink("/tmp/remember-explicit-user.db");
+    // NOLINTNEXTLINE(concurrency-mt-unsafe)
+    ASSERT_EQ_INT(setenv("REMEMBER_USER_DB", "/tmp/remember-explicit-user.db", 1), 0);
+    // NOLINTNEXTLINE(concurrency-mt-unsafe)
+    ASSERT_EQ_INT(setenv("XDG_DATA_HOME", "/tmp/remember-xdg", 1), 0);
+    ASSERT_EQ_INT(util_resolve_user_db_path(buf, sizeof(buf), err, sizeof(err)), 0);
+    ASSERT_STREQ(buf, "/tmp/remember-explicit-user.db");
+    ASSERT_TRUE(access(buf, F_OK) != 0);
+
+    // NOLINTNEXTLINE(concurrency-mt-unsafe)
+    ASSERT_EQ_INT(setenv("REMEMBER_USER_DB", "", 1), 0);
+    ASSERT_EQ_INT(util_resolve_user_db_path(buf, sizeof(buf), err, sizeof(err)), 0);
+    ASSERT_STREQ(buf, "/tmp/remember-xdg/remember/user.db");
+
+    // NOLINTNEXTLINE(concurrency-mt-unsafe)
+    (void)unsetenv("REMEMBER_USER_DB");
+    // NOLINTNEXTLINE(concurrency-mt-unsafe)
+    ASSERT_EQ_INT(setenv("XDG_DATA_HOME", "", 1), 0);
+    ASSERT_EQ_INT(util_resolve_user_db_path(buf, sizeof(buf), err, sizeof(err)), 0);
+    (void)snprintf(expect, sizeof(expect), "%s/.remember/user.db", saved_home);
+    ASSERT_STREQ(buf, expect);
+
+    // NOLINTNEXTLINE(concurrency-mt-unsafe)
+    (void)unsetenv("XDG_DATA_HOME");
+    ASSERT_EQ_INT(util_resolve_user_db_path(buf, sizeof(buf), err, sizeof(err)), 0);
+    ASSERT_STREQ(buf, expect);
+
+    // NOLINTNEXTLINE(concurrency-mt-unsafe)
+    ASSERT_EQ_INT(setenv("REMEMBER_USER_DB", ":memory:", 1), 0);
+    ASSERT_TRUE(util_resolve_user_db_path(buf, sizeof(buf), err, sizeof(err)) != 0);
+    ASSERT_STREQ(err, "database path must be a regular file (not :memory: or file: URI)");
+    // NOLINTNEXTLINE(concurrency-mt-unsafe)
+    ASSERT_EQ_INT(setenv("REMEMBER_USER_DB", "file:user.db", 1), 0);
+    ASSERT_TRUE(util_resolve_user_db_path(buf, sizeof(buf), err, sizeof(err)) != 0);
+    ASSERT_STREQ(err, "database path must be a regular file (not :memory: or file: URI)");
+
+    // NOLINTNEXTLINE(concurrency-mt-unsafe)
+    (void)unsetenv("REMEMBER_USER_DB");
+    // NOLINTNEXTLINE(concurrency-mt-unsafe)
+    (void)unsetenv("HOME");
+    ASSERT_TRUE(util_resolve_user_db_path(buf, sizeof(buf), err, sizeof(err)) != 0);
+    ASSERT_STREQ(err, "HOME is not set");
+
+    restore_env("HOME", had_home, saved_home);
+    restore_env("REMEMBER_USER_DB", had_user, saved_user);
+    restore_env("XDG_DATA_HOME", had_xdg, saved_xdg);
+}
+
+TEST(user_db_is_created_on_ensure_not_when_a_brain_opens)
+{
+    char tmpl[] = "/tmp/remember-udb-XXXXXX";
+    const char *dir = NULL;
+    char brain[REMEMBER_PATH_MAX];
+    char userdb[REMEMBER_PATH_MAX];
+    char linkpath[REMEMBER_PATH_MAX];
+    char target[REMEMBER_PATH_MAX];
+    char err[256];
+    struct stat st;
+    Store *store = NULL;
+    char *line = NULL;
+
+    ASSERT_TRUE(store_user_db_ensure(NULL, err, sizeof(err)) != 0);
+    ASSERT_STREQ(err, "database path is missing");
+    ASSERT_TRUE(store_user_db_ensure("", err, sizeof(err)) != 0);
+    ASSERT_STREQ(err, "database path is missing");
+
+    dir = mkdtemp(tmpl);
+    ASSERT_TRUE(dir != NULL);
+    if (dir == NULL) {
+        return;
+    }
+    (void)snprintf(brain, sizeof(brain), "%s/brain.db", dir);
+    (void)snprintf(userdb, sizeof(userdb), "%s/nested/user.db", dir);
+
+    store = store_open(brain, err, sizeof(err));
+    ASSERT_TRUE(store != NULL);
+    if (store == NULL) {
+        harness_remove_tree(dir);
+        return;
+    }
+    store_close(store);
+    ASSERT_TRUE(access(userdb, F_OK) != 0);
+
+    ASSERT_EQ_INT(store_user_db_ensure(userdb, err, sizeof(err)), 0);
+    ASSERT_EQ_INT(stat(userdb, &st), 0);
+    ASSERT_EQ_INT((int)(st.st_mode & (unsigned)0777), 0600);
+    line = harness_sqlite_query_line(userdb, "PRAGMA user_version;");
+    ASSERT_STREQ(line, "1");
+    free(line);
+    line = harness_sqlite_query_line(userdb, "SELECT min_reader_version FROM user_meta;");
+    ASSERT_STREQ(line, "0.3.0");
+    free(line);
+    line = harness_sqlite_query_line(userdb, "SELECT COUNT(*) FROM user_meta;");
+    ASSERT_STREQ(line, "1");
+    free(line);
+    line = harness_sqlite_query_line(userdb, "SELECT COUNT(*) FROM settings;");
+    ASSERT_STREQ(line, "0");
+    free(line);
+    line = harness_sqlite_query_line(userdb, "SELECT COUNT(*) FROM settings_history;");
+    ASSERT_STREQ(line, "0");
+    free(line);
+    line = harness_sqlite_query_line(
+        userdb, "SELECT COUNT(*) FROM pragma_table_info('settings') WHERE name IN "
+                "('device_id','version_vector','deleted_at','change_seq');");
+    ASSERT_STREQ(line, "0");
+    free(line);
+
+    ASSERT_EQ_INT(chmod(userdb, 0644), 0);
+    ASSERT_EQ_INT(store_user_db_ensure(userdb, err, sizeof(err)), 0);
+    ASSERT_EQ_INT(stat(userdb, &st), 0);
+    ASSERT_EQ_INT((int)(st.st_mode & (unsigned)0777), 0600);
+    line = harness_sqlite_query_line(userdb, "SELECT COUNT(*) FROM user_meta;");
+    ASSERT_STREQ(line, "1");
+    free(line);
+
+    free(harness_sqlite_query_line(userdb, "PRAGMA user_version = 2;"));
+    ASSERT_TRUE(store_user_db_ensure(userdb, err, sizeof(err)) != 0);
+    ASSERT_STREQ(err, "database is newer than this remember");
+    line = harness_sqlite_query_line(userdb, "PRAGMA user_version;");
+    ASSERT_STREQ(line, "2");
+    free(line);
+    line = harness_sqlite_query_line(userdb, "SELECT COUNT(*) FROM user_meta;");
+    ASSERT_STREQ(line, "1");
+    free(line);
+
+    free(harness_sqlite_query_line(userdb, "PRAGMA user_version = -1;"));
+    ASSERT_TRUE(store_user_db_ensure(userdb, err, sizeof(err)) != 0);
+    ASSERT_STREQ(err, "unsupported database version");
+    line = harness_sqlite_query_line(userdb, "PRAGMA user_version;");
+    ASSERT_STREQ(line, "-1");
+    free(line);
+
+    (void)snprintf(target, sizeof(target), "%s/secret.db", dir);
+    (void)snprintf(linkpath, sizeof(linkpath), "%s/link.db", dir);
+    ASSERT_EQ_INT(symlink(target, linkpath), 0);
+    ASSERT_TRUE(store_user_db_ensure(linkpath, err, sizeof(err)) != 0);
+    ASSERT_STREQ(err, "cannot create user.db");
+    ASSERT_TRUE(access(target, F_OK) != 0);
+
+    harness_remove_tree(dir);
+}
+
 void register_settings_tests(void)
 {
     RUN_TEST(duration_canonical_examples);
@@ -318,5 +512,7 @@ void register_settings_tests(void)
     RUN_TEST(integer_grammar);
     RUN_TEST(key_grammar_folds_hyphens_and_requires_a_full_key);
     RUN_TEST(registry_lists_the_six_keys);
+    RUN_TEST(user_db_path_follows_remember_user_db_then_xdg_then_home);
+    RUN_TEST(user_db_is_created_on_ensure_not_when_a_brain_opens);
 }
 // NOLINTEND(cppcoreguidelines-avoid-magic-numbers,readability-magic-numbers)
