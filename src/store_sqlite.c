@@ -5,6 +5,7 @@
 #include "sqlite3.h"
 
 #include <errno.h>
+#include <fcntl.h>
 #include <limits.h>
 #include <stdbool.h>
 #include <stdint.h>
@@ -1240,15 +1241,18 @@ static int rename_sidecar_tmp(const char *tmp, const char *path)
 }
 
 /* The folder that holds path, <brain>.d, at mode 0700 (G-19). mkdir follows
-   the umask, and a directory that already exists may be looser, so chmod
-   when the mode is not 0700. lstat refuses a symlink: stat would follow it
-   and chmod the target, then the device id would be written there. */
+   the umask, and a directory that already exists may be looser. Open that
+   directory (O_NOFOLLOW | O_DIRECTORY) and fchmod the descriptor: a path
+   lstat then chmod is a TOCTOU, and chmod would follow a symlink swapped in
+   after the check. Already 0700: skip fchmod so a read-only volume that is
+   already right still opens. */
 static int ensure_sidecar_dir(const char *path, char *err, size_t errlen)
 {
     static const char k_dir_error[] = "cannot create the device id folder";
     char dir[REMEMBER_PATH_MAX + SIDECAR_PATH_PAD];
     char *slash = NULL;
     struct stat st;
+    int fd = -1;
     int n = snprintf(dir, sizeof(dir), "%s", path);
 
     slash = (n > 0 && (size_t)n < sizeof(dir)) ? strrchr(dir, '/') : NULL;
@@ -1261,17 +1265,19 @@ static int ensure_sidecar_dir(const char *path, char *err, size_t errlen)
         set_err(err, errlen, k_dir_error);
         return -1;
     }
-    if (lstat(dir, &st) != 0 || S_ISLNK(st.st_mode) || !S_ISDIR(st.st_mode)) {
+    fd = open(dir, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
+    if (fd < 0) {
         set_err(err, errlen, k_dir_error);
         return -1;
     }
-    /* Already 0700: skip chmod so a read-only volume that is already right
-       still opens. A looser directory is tightened, or the open fails. */
-    if ((st.st_mode & (unsigned)(S_IRWXU | S_IRWXG | S_IRWXO)) != (unsigned)SIDECAR_DIR_MODE &&
-        chmod(dir, SIDECAR_DIR_MODE) != 0) {
+    if (fstat(fd, &st) != 0 ||
+        ((st.st_mode & (unsigned)(S_IRWXU | S_IRWXG | S_IRWXO)) != (unsigned)SIDECAR_DIR_MODE &&
+         fchmod(fd, SIDECAR_DIR_MODE) != 0)) {
+        (void)close(fd);
         set_err(err, errlen, k_dir_error);
         return -1;
     }
+    (void)close(fd);
     return 0;
 }
 
