@@ -384,3 +384,20 @@ Simplification. Applied: the buffer rule is one helper, because leaving it inlin
 Fraction digits stay capped at 15, which the header already states. A 16th digit is rejected even when it is zero. That is the overflow bound, not a second grammar.
 
 GitHub's Linux clang-tidy 18 (on `be3ad6a`) rejected `out[i] = (src[i] == '-') ? '_' : src[i]` as a narrowing conversion into `char`. The assignment is now an explicit `(char)` cast. macOS clang-tidy 22 did not flag that line.
+
+**2026-10-28, stage 2 deep review.** In-session, on `9d86269` after PR #46 merged. Itay said to proceed with the next stage, review or coding. This note closes stage 2. Local Bugbot is not installed.
+
+| # | Severity | Finding | Outcome |
+|---|---|---|---|
+| 1 | important | `open_user_db_file` called `fchmod` on every regular file whose mode was not `0600`, before SQLite looked at it. A non-empty text file at the path was chmod'd to `0600` and then rejected. | Fixed. `fchmod` runs only for an empty file or a file whose header is `SQLite format 3`. A text file keeps its bytes and its mode. |
+| 2 | important | `database path is missing`, `HOME is not set`, and `cannot create user.db` were not in `code_for_store_text`, so a later CLI report would call them `internal`. | Fixed. An empty path reuses `empty database path` (`usage`). `HOME is not set` is `usage`. `cannot create user.db` is `cannot_open`. A SQLite open failure reuses `cannot open database` (`database`). |
+
+Confirmed by running, sanitizer build. `./build/remember_tests ./build/remember --only settings,errors` on the first form of the fix: 116 tests, 0 failed, 1758 asserts. After the file check moved to `open`/`read`, `./build/remember_tests ./build/remember --only settings`: 10 tests, 0 failed, 314 asserts. That includes `ensure_leaves_a_non_database_file_unchanged` (`notes\n` stays, mode stays `0644`, error `cannot read user_version: file is not a database`) and the second ensure still returning the inserted `remember.search.max_results` value `20`. The `HOME is not set` and `cannot create user.db` lines in `store_text_codes_follow_the_locked_split` passed in that combined run; those classifier lines did not change after it.
+
+Mutants, then the tree restored and the same suites passed again. `fd_is_sqlite` returning true on a short read chmods the text file: `ensure_leaves_a_non_database_file_unchanged` fails `ASSERT_EQ_INT(actual=384, expected=420)` (`0600` vs `0644`). Deleting the `HOME is not set` classifier makes `store_text_codes_follow_the_locked_split` fail `ASSERT_EQ_INT(actual=4, expected=0)` (`internal` vs `usage`).
+
+Simplification. Applied: one empty-path sentence, the one the brain already uses; one SQLite-open sentence, `cannot open database`. Declined: a `goto` cleanup in `store_user_db_ensure` (the descriptor is closed inside `open_user_db_file`, and four `sqlite3_close` returns read as the failure); splicing `k_min_reader_version` into the schema SQL (a format buffer, while the test locks the literal `0.3.0`); one opener shared with `ensure_sidecar_dir` (a directory at `0700` versus a file at `0600` plus a header check).
+
+The SQLite open is still by path after `close`, so a swapped directory entry can be opened. Holding the descriptor open does not keep the journal names on the real path. `store_open` has the same window. No second opener.
+
+No new sentence. INDEX row 20 stays unticked. Stage 3 has not started.
