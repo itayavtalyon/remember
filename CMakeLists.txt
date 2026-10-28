@@ -101,6 +101,7 @@ set_property(SOURCE
     src/cli.c
     src/store_sqlite.c
     src/normalize.c
+    src/settings.c
     src/unicode.c
     src/search_terms.c
     src/commands_common.c
@@ -227,6 +228,7 @@ set(REMEMBER_LIB_SOURCES
     src/cli.c
     src/store_sqlite.c
     src/normalize.c
+    src/settings.c
     src/unicode.c
     src/search_terms.c
     src/commands_common.c
@@ -321,6 +323,7 @@ set(REMEMBER_TEST_SOURCES
     tests/test_device.c
     tests/test_errors.c
     tests/test_list_dates.c
+    tests/test_settings.c
 )
 add_executable(remember_tests
     ${REMEMBER_TEST_SOURCES}
