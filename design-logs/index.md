@@ -17,4 +17,4 @@
 ## Roadmap
 | # | Title | Description | Status |
 |---|-------|-------------|--------|
-| 018 | [v1-roadmap-decisions](018-v1-roadmap-decisions.md) | Itay's answers to the v1 roadmap sheet (V1-01 to V1-54): stack and repos (V1-42 A), versions, schema v6, archive, API, sync, Cloud, daemon, plugins, hybrid, packaging, onboarding; 10 open questions. R 011-R 017 stay reserved for the feature logs | Decisions recorded (2026-10-29) |
+| 018 | [v1-roadmap-decisions](018-v1-roadmap-decisions.md) | Itay's answers to the v1 roadmap sheet (V1-01 to V1-54): stack and repos (V1-42 A), versions, schema v6, archive, API, sync, Cloud, daemon, plugins, hybrid, packaging, onboarding; 8 open questions. R 011-R 017 stay reserved for the feature logs | Decisions recorded (2026-10-29) |
