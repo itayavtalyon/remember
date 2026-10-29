@@ -712,6 +712,7 @@ TEST(store_text_codes_follow_the_locked_split)
     expect_diag(code_for_store_text("database path is too long"), DIAG_USAGE);
     expect_diag(code_for_store_text("empty database path"), DIAG_USAGE);
     expect_diag(code_for_store_text("HOME is not set; pass --db PATH"), DIAG_USAGE);
+    expect_diag(code_for_store_text("HOME is not set"), DIAG_USAGE);
     expect_diag(
         code_for_store_text("database path must be a regular file (not :memory: or file: URI)"),
         DIAG_USAGE);
@@ -721,6 +722,7 @@ TEST(store_text_codes_follow_the_locked_split)
     expect_diag(code_for_store_text("migration left a dangling reference"), DIAG_CORRUPT);
     expect_diag(code_for_store_text("migration failed the integrity check"), DIAG_CORRUPT);
     expect_diag(code_for_store_text("cannot create the device id folder"), DIAG_CANNOT_OPEN);
+    expect_diag(code_for_store_text("cannot create user.db"), DIAG_CANNOT_OPEN);
     expect_diag(code_for_store_text("internal error"), DIAG_INTERNAL);
     expect_diag(code_for_store_text("internal error: path buffer missing"), DIAG_INTERNAL);
     expect_diag(code_for_store_text("cannot write device_id sidecar"), DIAG_INTERNAL);

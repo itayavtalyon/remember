@@ -1091,22 +1091,49 @@ static const char k_user_db_sql[] = "BEGIN IMMEDIATE;\n"
                                     "PRAGMA user_version = 1;\n"
                                     "COMMIT;\n";
 
-/* Create at 0600 on this descriptor. fchmod only when an existing file is
-   looser, so a file that is already 0600 still opens on a read-only volume.
-   O_NOFOLLOW: a symlink is not a place to write user.db. */
+/* 16-byte header, including the trailing NUL. */
+static const char k_sqlite_header[] = "SQLite format 3";
+
+static bool fd_is_sqlite(int fd)
+{
+    char hdr[sizeof(k_sqlite_header)];
+    ssize_t n = 0;
+
+    n = pread(fd, hdr, sizeof(hdr), 0);
+    if (n != (ssize_t)sizeof(hdr)) {
+        return false;
+    }
+    if (memcmp(hdr, k_sqlite_header, sizeof(hdr)) == 0) {
+        return true;
+    }
+    return false;
+}
+
+/* Create at 0600. fchmod only an empty file or a SQLite database whose mode
+   is not already 0600, so a read-only volume can still open a 0600 file and a
+   non-database file is left unchanged. O_NOFOLLOW: a symlink is not followed. */
 static int open_user_db_file(const char *path, char *err, size_t errlen)
 {
     struct stat st;
     int fd = -1;
+    bool adopt = false;
 
     fd = open(path, O_RDWR | O_CREAT | O_CLOEXEC | O_NOFOLLOW, SIDECAR_FILE_MODE);
     if (fd < 0) {
         set_err(err, errlen, "cannot create user.db");
         return -1;
     }
-    if (fstat(fd, &st) != 0 || !S_ISREG(st.st_mode) ||
-        ((st.st_mode & (unsigned)(S_IRWXU | S_IRWXG | S_IRWXO)) != (unsigned)SIDECAR_FILE_MODE &&
-         fchmod(fd, SIDECAR_FILE_MODE) != 0)) {
+    if (fstat(fd, &st) != 0 || !S_ISREG(st.st_mode)) {
+        (void)close(fd);
+        set_err(err, errlen, "cannot create user.db");
+        return -1;
+    }
+    if (st.st_size == 0 || fd_is_sqlite(fd)) {
+        adopt = true;
+    }
+    if (adopt &&
+        (st.st_mode & (unsigned)(S_IRWXU | S_IRWXG | S_IRWXO)) != (unsigned)SIDECAR_FILE_MODE &&
+        fchmod(fd, SIDECAR_FILE_MODE) != 0) {
         (void)close(fd);
         set_err(err, errlen, "cannot create user.db");
         return -1;
@@ -1126,7 +1153,7 @@ int store_user_db_ensure(const char *path, char *err, size_t errlen)
     int rc = 0;
 
     if (path == NULL || path[0] == '\0') {
-        set_err(err, errlen, "database path is missing");
+        set_err(err, errlen, "empty database path");
         return -1;
     }
     if (ensure_parent_dirs(path, err, errlen) != 0) {
@@ -1137,7 +1164,7 @@ int store_user_db_ensure(const char *path, char *err, size_t errlen)
     }
     rc = sqlite3_open_v2(path, &db, SQLITE_OPEN_READWRITE, NULL);
     if (rc != SQLITE_OK) {
-        set_errf(err, errlen, "cannot create user.db", sqlite3_errmsg(db));
+        set_errf(err, errlen, "cannot open database", sqlite3_errmsg(db));
         (void)sqlite3_close(db);
         return -1;
     }

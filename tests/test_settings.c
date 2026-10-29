@@ -6,6 +6,7 @@
 #include "test.h"
 #include "util.h"
 
+#include <fcntl.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -423,9 +424,9 @@ TEST(user_db_is_created_on_ensure_not_when_a_brain_opens)
     char *line = NULL;
 
     ASSERT_TRUE(store_user_db_ensure(NULL, err, sizeof(err)) != 0);
-    ASSERT_STREQ(err, "database path is missing");
+    ASSERT_STREQ(err, "empty database path");
     ASSERT_TRUE(store_user_db_ensure("", err, sizeof(err)) != 0);
-    ASSERT_STREQ(err, "database path is missing");
+    ASSERT_STREQ(err, "empty database path");
 
     dir = mkdtemp(tmpl);
     ASSERT_TRUE(dir != NULL);
@@ -459,6 +460,9 @@ TEST(user_db_is_created_on_ensure_not_when_a_brain_opens)
     line = harness_sqlite_query_line(userdb, "SELECT COUNT(*) FROM settings;");
     ASSERT_STREQ(line, "0");
     free(line);
+    free(harness_sqlite_query_line(
+        userdb, "INSERT INTO settings (key, value, updated_by, updated_at) VALUES "
+                "('remember.search.max_results', '20', 'user', '2020-01-01T00:00:00Z');"));
     line = harness_sqlite_query_line(userdb, "SELECT COUNT(*) FROM settings_history;");
     ASSERT_STREQ(line, "0");
     free(line);
@@ -474,6 +478,10 @@ TEST(user_db_is_created_on_ensure_not_when_a_brain_opens)
     ASSERT_EQ_INT((int)(st.st_mode & (unsigned)0777), 0600);
     line = harness_sqlite_query_line(userdb, "SELECT COUNT(*) FROM user_meta;");
     ASSERT_STREQ(line, "1");
+    free(line);
+    line = harness_sqlite_query_line(
+        userdb, "SELECT value FROM settings WHERE key = 'remember.search.max_results';");
+    ASSERT_STREQ(line, "20");
     free(line);
 
     free(harness_sqlite_query_line(userdb, "PRAGMA user_version = 2;"));
@@ -503,6 +511,56 @@ TEST(user_db_is_created_on_ensure_not_when_a_brain_opens)
     harness_remove_tree(dir);
 }
 
+TEST(ensure_leaves_a_non_database_file_unchanged)
+{
+    char tmpl[] = "/tmp/remember-udb-XXXXXX";
+    const char *dir = NULL;
+    char path[REMEMBER_PATH_MAX];
+    char err[256];
+    char got[16];
+    struct stat st;
+    int fd = -1;
+    ssize_t n = 0;
+
+    dir = mkdtemp(tmpl);
+    ASSERT_TRUE(dir != NULL);
+    if (dir == NULL) {
+        return;
+    }
+    (void)snprintf(path, sizeof(path), "%s/notes.txt", dir);
+    fd = open(path, O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0644);
+    ASSERT_TRUE(fd >= 0);
+    if (fd < 0) {
+        harness_remove_tree(dir);
+        return;
+    }
+    n = write(fd, "notes\n", 6);
+    ASSERT_EQ_INT(fchmod(fd, 0644), 0);
+    ASSERT_EQ_INT(close(fd), 0);
+    ASSERT_EQ_INT((int)n, 6);
+
+    ASSERT_TRUE(store_user_db_ensure(path, err, sizeof(err)) != 0);
+    ASSERT_STREQ(err, "cannot read user_version: file is not a database");
+    fd = open(path, O_RDONLY | O_CLOEXEC);
+    ASSERT_TRUE(fd >= 0);
+    if (fd < 0) {
+        harness_remove_tree(dir);
+        return;
+    }
+    ASSERT_EQ_INT(fstat(fd, &st), 0);
+    ASSERT_EQ_INT((int)(st.st_mode & (unsigned)0777), 0644);
+    n = read(fd, got, sizeof(got) - 1U);
+    ASSERT_EQ_INT(close(fd), 0);
+    ASSERT_TRUE(n >= 0);
+    if (n < 0) {
+        harness_remove_tree(dir);
+        return;
+    }
+    got[n] = '\0';
+    ASSERT_STREQ(got, "notes\n");
+    harness_remove_tree(dir);
+}
+
 void register_settings_tests(void)
 {
     RUN_TEST(duration_canonical_examples);
@@ -514,5 +572,6 @@ void register_settings_tests(void)
     RUN_TEST(registry_lists_the_six_keys);
     RUN_TEST(user_db_path_follows_remember_user_db_then_xdg_then_home);
     RUN_TEST(user_db_is_created_on_ensure_not_when_a_brain_opens);
+    RUN_TEST(ensure_leaves_a_non_database_file_unchanged);
 }
 // NOLINTEND(cppcoreguidelines-avoid-magic-numbers,readability-magic-numbers)
