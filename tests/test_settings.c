@@ -2811,8 +2811,17 @@ TEST(cli_runner_reads_the_trimmed_first_line)
     n = (ssize_t)fread(out_got, 1, sizeof(out_got) - 1U, outf);
     ASSERT_TRUE(n >= 0);
     out_got[n > 0 ? (size_t)n : 0U] = '\0';
-    ASSERT_EQ_INT(fclose(errf), 0);
-    ASSERT_EQ_INT(fclose(outf), 0);
+    {
+        /* fclose as a statement. Linux cppcheck does not treat fclose inside
+           ASSERT_EQ_INT as a close, so the success path looked like a leak. */
+        int err_close = fclose(errf);
+        int out_close = fclose(outf);
+
+        errf = NULL;
+        outf = NULL;
+        ASSERT_EQ_INT(err_close, 0);
+        ASSERT_EQ_INT(out_close, 0);
+    }
     ASSERT_EQ_INT(rc, 0);
     ASSERT_STREQ(token, "secret");
     ASSERT_STR_CONTAINS(err_got, "enter passphrase");

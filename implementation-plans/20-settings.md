@@ -470,6 +470,7 @@ INDEX row 20 stays unticked. The definition of done stays unticked. Stages 4–9
 | # | Severity | Finding | Outcome |
 |---|---|---|---|
 | 1 | important | `take_env_token` copied `REMEMBER_SYNC_TOKEN` and left the rest of the caller buffer. A shorter token kept the preloaded bytes after the NUL. | Fixed. When the buffer is longer than the token, the bytes after the NUL are wiped. `no_row_reads_remember_sync_token` checks that no `Z` remains after the NUL. A mutant that deletes that wipe fails the assert at `tests/test_settings.c:1770`. The tree was restored. `./build/remember_tests ./build/remember --only settings,errors`: 154 tests, 0 failed, 2576 asserts. |
+| 2 | important | Linux cppcheck reported `resourceLeak` on `errf` and `outf` at the end of `cli_runner_reads_the_trimmed_first_line`. The success path closed them inside `ASSERT_EQ_INT`, which that cppcheck does not treat as a close. macOS cppcheck had not reported it. | Fixed. `fclose` is a statement, the pointers are cleared, and the saved results are asserted. |
 
 Confirmed by running, sanitizer build, the gate in the stage 4 implementation note. After the restore and before that combined run, `./build/remember_tests ./build/remember --only settings` was 48 tests, 0 failed, 1117 asserts.
 
