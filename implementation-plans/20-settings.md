@@ -366,7 +366,33 @@ The settings suite was red before these symbols existed: `remember_tests` failed
 
 Sanitizer build, `./build/remember_tests ./build/remember --only settings`: 9 tests, 0 failed, 300 asserts. `check-coverage.sh` exited 0: functions 100%, effective lines 100%, `normalize.c` 384 branch sides, 0 missed. `src/util.c` and `src/store_sqlite.c` stay on the line gate, not the pure-TU branch list.
 
-No sentence was invented. INDEX row 20 stays unticked. Stage 3 has not started.
+No sentence was invented. INDEX row 20 stays unticked.
+
+### Stage 3 — resolution and writes (2026-10-29)
+
+Resolution walks flag, then a live brain row, then a user row, then the registry default. A tombstone is no value. The prefix default, when no row exists, is the JSON `["project:","status:"]`, and nothing is written until a set. The credential helper default is empty. Integer defaults are the registry text (`200`, `20`). Duration defaults are JSON strings of that text (`"1.5s"`, `"10m"`).
+
+A set or reset with no scope writes the user layer, except a brain-only key, which writes the brain. `remember.buckets.prefixes` is that key. An explicit user scope on a brain-only key, or a brain scope on a user-only key, is `setting_scope_mismatch`. The idle-timeout brain sentence is the one locked for that key. Every other scope mismatch returns the code and an empty sentence. Unknown keys (`candidate_pool`, `remember.search.hybrid`) return `setting_unknown` and an empty sentence on set, reset, and read. Did-you-mean stays in the CLI. Invalid values and out-of-range values return their codes and an empty sentence. C-05 and C-06 are still open.
+
+The value column is JSON. An integer is a JSON number. A duration and the helper id are JSON strings of the canonical form. A prefix list is a compact JSON array in input order, after the ST-5.4 fold. The locked prefix sentences are asserted: `"my project:" isn't a bucket prefix.`, `"status:" is in the list twice.`, and `"status:" and "Status:" are the same prefix.`
+
+An omitted actor is stored as `{"kind":"human","id":null}`. A caller-supplied actor string is stored as given. This stage does not check `--as`.
+
+History keeps the newest 50 rows per key per database, ordered by insertion `rowid`. There is no age limit. The test writes 51 user values, checks that `1` is gone and `51` remains, backdates the newest row's `at` to `2020-01-01T00:00:00.000Z`, writes again, and checks that the 2020 row stays while the oldest `new_value` is gone. History rows do not count toward the 256-row quota. A tombstone does.
+
+A set of the value the live layer already stores writes no history and does not bump `change_seq`. A set on a brain tombstone clears `deleted_at` and writes history with `old_value` NULL, even when the kept text matches. A user reset deletes the row. A brain reset sets `deleted_at`, keeps `value`, bumps the local version vector, and bumps `change_seq`. A reset of a missing layer, or of a row that is already a tombstone, changes nothing. The store does not print `(unset)`.
+
+A brain write calls `vv_increment` and `UPDATE brain_meta SET change_seq = change_seq + 1`, then stores that integer on the settings row. It does not call `stamp_change_seq`. A fresh brain starts at `change_seq` 0. The first brain settings write makes it 1. A user write does not bump `change_seq` and does not open a brain write transaction. A read does not call `store_user_db_ensure`. An invalid set does not create user.db. A user set validates first, then ensures.
+
+The row cap is 256 `settings` rows in the brain and in user.db. An update of an existing row, including a tombstone, is allowed at the cap. The brain failure uses `quota_exceeded` and the locked sentence. The user failure uses `quota_exceeded` and an empty sentence. C-09 still holds that prose, and `detail.quota` waits for the JSON stage. The 16 KiB cap is 16384 bytes of the stored JSON. A prefix list past that cap is `quota_exceeded` with an empty sentence on either layer. The brain sentence belongs to the 256-row cap only. The early refuse is `nitems > 16384/5`. 2340 prefixes of length 4 store 16381 bytes. The 2341st is refused in the loop. 2339 of those plus one 8-character prefix is 16385 bytes and is refused after the buffer is filled.
+
+`schema_too_new` is refused by `begin_write` with `SETTING_ERR_STORE` and the locked store sentence (`this brain was written by a newer remember. You can read it. Upgrade to write to it.`). The flag is set at open. The JSON fix stays COPY-PENDING C-01. `setting_status_code` returns an empty string for `SETTING_ERR_STORE`.
+
+A set against a text file at the user path fails in ensure with `cannot read user_version: file is not a database` and leaves the bytes and the mode. A read of that file, and a reset of that file, fail with `sqlite: file is not a database`. The reset reaches that sentence from `BEGIN IMMEDIATE`, because `PRAGMA foreign_keys` and `PRAGMA busy_timeout` do not read the database header. A directory path fails in `sqlite3_open_v2` and is `cannot open database` plus SQLite's own reason. No new sentence was written for it. The test checks that the sentence is non-empty.
+
+`remember_store_tests` links `src/settings.c`. Sanitizer build, `./build/remember_tests ./build/remember --only settings`: 16 tests, 0 failed, 747 asserts. `./build/remember_store_tests`: 491 tests, 0 failed, 19263 asserts. `CI=true BUILD_DIR=build REMEMBER_SCAN_BUILD=1 REMEMBER_IWYU=0 ./scripts/lint-all.sh` exited 0 (IWYU skipped). `./scripts/check-coverage.sh` exited 0: functions 100%, effective lines 100%, `normalize.c` 384 branch sides, 0 missed (`output.c` 678, `search_terms.c` 176, `unicode.c` 80). `settings.c` and `store_sqlite.c` stay on the line gate.
+
+No sentence was invented. INDEX row 20 stays unticked. The definition of done stays unticked. Stages 4–9 have not started.
 
 ## Review Notes
 
@@ -400,6 +426,23 @@ Simplification. Applied: one empty-path sentence, the one the brain already uses
 
 The SQLite open is still by path after `close`, so a swapped directory entry can be opened. Holding the descriptor open does not keep the journal names on the real path. `store_open` has the same window. No second opener.
 
-No new sentence. INDEX row 20 stays unticked. Stage 3 has not started.
+No new sentence. INDEX row 20 stays unticked.
 
 GitHub CodeQL on `be4beb2` flagged `chmod` on the text-file path after `close` as a time-of-check race. The test now `fchmod`s the descriptor it still holds, and reads the mode back with `fstat` on the descriptor it opens to check the bytes.
+
+**2026-10-29, stage 3 deep review.** In-session, on `plan/20-stage3-writes` before its commit. Itay said to proceed with the next stage. This note records that review. It does not mark stage 3 done. A second Claude opinion did not happen. Local Bugbot is not installed.
+
+| # | Severity | Finding | Outcome |
+|---|---|---|---|
+| 1 | important | `store_setting_reset` returned from `open_user_existing` on failure, and that return had 0 hits. A text file at the user path gets past `sqlite3_open_v2` and past the two pragmas, because those pragmas do not read the header. `BEGIN IMMEDIATE` is what reports `sqlite: file is not a database`. | Fixed. The reset of the temp directory, the same path the read already rejects, takes the open-failure return. |
+| 2 | important | The injected `BEGIN` failure was ordered after `write_notes` replaced user.db. The next set cannot recreate a non-database file, so that assertion could not pass. | Fixed. The `BEGIN` injection runs while user.db is still a database. `write_notes` runs after it. |
+
+Confirmed by running, sanitizer build. `./build/remember_tests ./build/remember --only settings`: 16 tests, 0 failed, 747 asserts. `./build/remember_store_tests`: 491 tests, 0 failed, 19263 asserts. `lint-all.sh` with `REMEMBER_IWYU=0` exited 0. `check-coverage.sh` exited 0: functions 100%, effective lines 100%, `normalize.c` 384 branch sides, 0 missed. The first coverage run on this stage named `store_sqlite.c` lines 9984 and 9985, the open-failure return in `store_setting_reset`. The rerun after the directory reset exited 0.
+
+Mutant, then the tree restored and the settings suite passed again (16 tests, 747 asserts). Treating every failed user.db open as a missing file makes `programmer_errors_and_a_failed_prepare` fail `ASSERT_EQ_INT(actual=0, expected=6)` on the directory read and on the directory reset.
+
+Simplification. Applied: the unreachable quota returns in `canon_integer`, `canon_duration`, and `canon_helper` (the caller passes `SETTING_VALUE_CAP`, and those forms fit); a NULL source in `copy_cap` shares the existing false return; `open_user_write`'s sqlite-open failure uses the same NULL-safe `sqlite3_errmsg` and `sqlite3_close` as `store_open`, which the coverage script already treats as defensive; `canon_prefixes` and `mutate_setting` were split so each function stays under cognitive complexity 25. Declined: replacing the `goto` in `mutate_setting` (the rollback labels match the rest of this file); sending the settings counter through `stamp_change_seq` (that helper stamps entries and links; a settings write adds one to `brain_meta.change_seq` and copies that integer onto the row); one opener for a user.db read and a user.db write (a write calls `store_user_db_ensure`; a read of a missing file is an absent layer and must leave the path absent).
+
+No product or architecture question. The path-reopen window recorded in the stage 2 note is unchanged.
+
+INDEX row 20 stays unticked. The definition of done stays unticked. Stages 4–9 have not started.

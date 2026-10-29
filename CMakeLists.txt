@@ -370,6 +370,7 @@ add_executable(remember_store_tests
     tests/test_schema_v6.c
     src/store_sqlite.c
     src/normalize.c
+    src/settings.c
     src/unicode.c
     src/search_terms.c
     src/output.c

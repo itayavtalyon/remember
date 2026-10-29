@@ -4,6 +4,7 @@
 #include "settings.h"
 #include "store.h"
 #include "test.h"
+#include "test_alloc.h"
 #include "util.h"
 
 #include <fcntl.h>
@@ -561,6 +562,1116 @@ TEST(ensure_leaves_a_non_database_file_unchanged)
     harness_remove_tree(dir);
 }
 
+static const char k_human[] = "{\"kind\":\"human\",\"id\":null}";
+static const char k_brain_quota[] =
+    "this brain has 256 settings, the most it can hold. Reset settings you don't need with "
+    "'remember settings reset'.";
+static const char k_idle_scope[] =
+    "remember.plugins.idle_timeout is a user setting; it can't be set for one brain. Run the "
+    "command again with --scope user, or without --scope.";
+static const char k_newer_brain[] =
+    "this brain was written by a newer remember. You can read it. Upgrade to write to it.";
+
+// NOLINTBEGIN(bugprone-easily-swappable-parameters) paths, then the SQL or the key
+static Store *open_pair(char *tmpl, char *brain, size_t brain_cap, char *userdb, size_t user_cap)
+{
+    const char *dir = NULL;
+    char err[256];
+    Store *store = NULL;
+
+    dir = mkdtemp(tmpl);
+    ASSERT_TRUE(dir != NULL);
+    if (dir == NULL) {
+        return NULL;
+    }
+    (void)snprintf(brain, brain_cap, "%s/brain.db", dir);
+    (void)snprintf(userdb, user_cap, "%s/user.db", dir);
+    store = store_open(brain, err, sizeof(err));
+    ASSERT_TRUE(store != NULL);
+    if (store == NULL) {
+        harness_remove_tree(tmpl);
+    }
+    return store;
+}
+
+static char *q(const char *db, const char *sql)
+{
+    return harness_sqlite_query_line(db, sql);
+}
+
+static void close_pair(Store *store, const char *tmpl)
+{
+    store_close(store);
+    harness_remove_tree(tmpl);
+}
+
+static void exec_fixture(const char *db, const char *sql)
+{
+    free(q(db, sql));
+}
+
+static void assert_query(const char *db, const char *sql, const char *expect)
+{
+    char *line = q(db, sql);
+
+    ASSERT_STREQ(line, expect);
+    free(line);
+}
+
+static SettingStatus set_items(Store *store, const char *userdb, const char *key,
+                               const char *const *items, size_t nitems, SettingLayer layer,
+                               const char *actor, SettingWriteResult *wr, char *err, size_t errlen)
+{
+    SettingWrite w;
+
+    memset(&w, 0, sizeof(w));
+    w.key = key;
+    w.items = items;
+    w.nitems = nitems;
+    w.layer = layer;
+    w.updated_by = actor;
+    return store_setting_set(store, userdb, &w, wr, err, errlen);
+}
+
+static SettingStatus set_one(Store *store, const char *userdb, const char *key, const char *value,
+                             SettingLayer layer, const char *actor, SettingWriteResult *wr,
+                             char *err, size_t errlen)
+{
+    const char *item = value;
+
+    return set_items(store, userdb, key, &item, 1U, layer, actor, wr, err, errlen);
+}
+// NOLINTEND(bugprone-easily-swappable-parameters)
+
+static int dummy_settings_head(char *sql, size_t cap, bool brain)
+{
+    if (brain) {
+        return snprintf(sql, cap,
+                        "INSERT INTO settings (key, value, updated_by, updated_at, device_id, "
+                        "version_vector, deleted_at, change_seq) VALUES ");
+    }
+    return snprintf(sql, cap, "INSERT INTO settings (key, value, updated_by, updated_at) VALUES ");
+}
+
+/* cap and pos are adjacent sizes. The order is buffer, then the write offset. */
+// NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
+static int dummy_settings_row(char *sql, size_t cap, int pos, bool brain, const char *sep,
+                              int index)
+{
+    if (brain) {
+        return snprintf(sql + pos, cap - (size_t)pos,
+                        "%s('q%03d','1','{\"kind\":\"human\",\"id\":null}',"
+                        "'2020-01-01T00:00:00.000Z','d','{}',NULL,0)",
+                        sep, index);
+    }
+    return snprintf(sql + pos, cap - (size_t)pos,
+                    "%s('q%03d','1','{\"kind\":\"human\",\"id\":null}',"
+                    "'2020-01-01T00:00:00.000Z')",
+                    sep, index);
+}
+
+static void insert_dummy_settings(const char *db, bool brain, int count)
+{
+    enum { BATCH = 40, SQL_CAP = 7000 };
+    char sql[SQL_CAP];
+    int base = 0;
+
+    while (base < count) {
+        int n = count - base;
+        int i = 0;
+        int pos = 0;
+        int wrote = 0;
+        const char *sep = "";
+
+        if (n > BATCH) {
+            n = BATCH;
+        }
+        wrote = dummy_settings_head(sql, sizeof(sql), brain);
+        if (wrote < 0 || (size_t)wrote >= sizeof(sql)) {
+            ASSERT_TRUE(wrote > 0);
+            return;
+        }
+        pos = wrote;
+        for (i = 0; i < n; i++) {
+            wrote = dummy_settings_row(sql, sizeof(sql), pos, brain, sep, base + i);
+            if (wrote < 0 || (size_t)wrote >= sizeof(sql) - (size_t)pos) {
+                ASSERT_TRUE(wrote > 0);
+                return;
+            }
+            pos += wrote;
+            sep = ",";
+        }
+        if ((size_t)pos + 2U > sizeof(sql)) {
+            ASSERT_TRUE(pos > 0);
+            return;
+        }
+        sql[pos] = ';';
+        sql[pos + 1] = '\0';
+        exec_fixture(db, sql);
+        base += n;
+    }
+}
+
+static void insert_dummy_history(const char *db, int count)
+{
+    enum { BATCH = 40, SQL_CAP = 7000 };
+    char sql[SQL_CAP];
+    int base = 0;
+
+    while (base < count) {
+        int n = count - base;
+        int i = 0;
+        int pos = 0;
+        int wrote = 0;
+
+        if (n > BATCH) {
+            n = BATCH;
+        }
+        wrote = snprintf(sql, sizeof(sql),
+                         "INSERT INTO settings_history (key, old_value, new_value, updated_by, at) "
+                         "VALUES ");
+        if (wrote < 0 || (size_t)wrote >= sizeof(sql)) {
+            ASSERT_TRUE(wrote > 0);
+            return;
+        }
+        pos = wrote;
+        for (i = 0; i < n; i++) {
+            wrote = snprintf(sql + pos, sizeof(sql) - (size_t)pos,
+                             "%s('h','1','2','{\"kind\":\"human\",\"id\":null}',"
+                             "'2020-01-01T00:00:00.000Z')",
+                             i == 0 ? "" : ",");
+            if (wrote < 0 || (size_t)wrote >= sizeof(sql) - (size_t)pos) {
+                ASSERT_TRUE(wrote > 0);
+                return;
+            }
+            pos += wrote;
+        }
+        if ((size_t)pos + 2U > sizeof(sql)) {
+            ASSERT_TRUE(pos > 0);
+            return;
+        }
+        sql[pos] = ';';
+        sql[pos + 1] = '\0';
+        exec_fixture(db, sql);
+        base += n;
+    }
+}
+
+/* n prefixes "a00:" .. of three name characters. Caller frees the block and *items_out. */
+static char *make_prefixes(size_t n, const char ***items_out)
+{
+    enum { SLOT = 8 };
+    char *block = NULL;
+    const char **items = NULL;
+    size_t i = 0;
+
+    block = (char *)malloc(n * (size_t)SLOT);
+    items = (const char **)malloc(n * sizeof(*items));
+    if (block == NULL || items == NULL) {
+        free(block);
+        free((void *)items);
+        ASSERT_TRUE(block != NULL && items != NULL);
+        return NULL;
+    }
+    for (i = 0; i < n; i++) {
+        char *p = block + (i * (size_t)SLOT);
+
+        (void)snprintf(p, (size_t)SLOT, "%c%02d:", 'a' + (int)(i / 100U), (int)(i % 100U));
+        items[i] = p;
+    }
+    *items_out = items;
+    return block;
+}
+
+static void write_notes(const char *path)
+{
+    int fd = -1;
+    ssize_t n = 0;
+
+    fd = open(path, O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0644);
+    ASSERT_TRUE(fd >= 0);
+    if (fd < 0) {
+        return;
+    }
+    n = write(fd, "notes\n", 6);
+    ASSERT_EQ_INT(fchmod(fd, 0644), 0);
+    ASSERT_EQ_INT(close(fd), 0);
+    ASSERT_EQ_INT((int)n, 6);
+}
+
+static void assert_notes(const char *path)
+{
+    char got[16];
+    struct stat st;
+    int fd = -1;
+    ssize_t n = 0;
+
+    fd = open(path, O_RDONLY | O_CLOEXEC);
+    ASSERT_TRUE(fd >= 0);
+    if (fd < 0) {
+        return;
+    }
+    ASSERT_EQ_INT(fstat(fd, &st), 0);
+    ASSERT_EQ_INT((int)(st.st_mode & (unsigned)0777), 0644);
+    n = read(fd, got, sizeof(got) - 1U);
+    ASSERT_EQ_INT(close(fd), 0);
+    ASSERT_TRUE(n >= 0);
+    if (n < 0) {
+        return;
+    }
+    got[n] = '\0';
+    ASSERT_STREQ(got, "notes\n");
+}
+
+TEST(resolution_user_then_brain_then_tombstone_and_change_seq)
+{
+    char tmpl[] = "/tmp/remember-set-XXXXXX";
+    char brain[REMEMBER_PATH_MAX];
+    char userdb[REMEMBER_PATH_MAX];
+    char err[256];
+    Store *store = NULL;
+    SettingWrite w;
+    SettingWriteResult wr;
+    SettingRead got;
+    char *seq = NULL;
+    char *line = NULL;
+    const char *one = "30";
+    const char *two = "40";
+    const char *again = "40";
+    char expect[80];
+
+    store = open_pair(tmpl, brain, sizeof(brain), userdb, sizeof(userdb));
+    if (store == NULL) {
+        return;
+    }
+    ASSERT_EQ_INT(store_setting_read(store, userdb, "remember.search.max_results", NULL, &got, err,
+                                     sizeof(err)),
+                  SETTING_OK);
+    ASSERT_EQ_INT(got.from, SETTING_FROM_DEFAULT);
+    ASSERT_STREQ(got.value, "20");
+    ASSERT_FALSE(got.user_live);
+    ASSERT_FALSE(got.brain_live);
+    ASSERT_TRUE(access(userdb, F_OK) != 0);
+
+    memset(&w, 0, sizeof(w));
+    w.key = "remember.search.max_results";
+    w.items = &one;
+    w.nitems = 1;
+    w.layer = SETTING_LAYER_USER;
+    ASSERT_EQ_INT(store_setting_set(store, userdb, &w, &wr, err, sizeof(err)), SETTING_OK);
+    ASSERT_TRUE(wr.changed);
+    ASSERT_EQ_INT(wr.layer, SETTING_LAYER_USER);
+    seq = q(brain, "SELECT change_seq FROM brain_meta;");
+    ASSERT_STREQ(seq, "0");
+    free(seq);
+    line = q(userdb, "SELECT value FROM settings WHERE key = 'remember.search.max_results';");
+    ASSERT_STREQ(line, "30");
+    free(line);
+    line = q(userdb, "SELECT updated_by FROM settings WHERE key = 'remember.search.max_results';");
+    ASSERT_STREQ(line, k_human);
+    free(line);
+
+    w.items = &two;
+    w.layer = SETTING_LAYER_BRAIN;
+    ASSERT_EQ_INT(store_setting_set(store, userdb, &w, &wr, err, sizeof(err)), SETTING_OK);
+    ASSERT_TRUE(wr.changed);
+    seq = q(brain, "SELECT change_seq FROM brain_meta;");
+    ASSERT_STREQ(seq, "1");
+    free(seq);
+    line = q(brain, "SELECT value FROM settings WHERE key = 'remember.search.max_results';");
+    ASSERT_STREQ(line, "40");
+    free(line);
+    line = q(brain, "SELECT change_seq FROM settings WHERE key = 'remember.search.max_results';");
+    ASSERT_STREQ(line, "1");
+    free(line);
+    (void)snprintf(expect, sizeof(expect), "{\"%s\":1}", store_device_id(store));
+    line =
+        q(brain, "SELECT version_vector FROM settings WHERE key = 'remember.search.max_results';");
+    ASSERT_STREQ(line, expect);
+    free(line);
+    ASSERT_EQ_INT(store_setting_read(store, userdb, "remember.search.max_results", NULL, &got, err,
+                                     sizeof(err)),
+                  SETTING_OK);
+    ASSERT_EQ_INT(got.from, SETTING_FROM_BRAIN);
+    ASSERT_STREQ(got.value, "40");
+    ASSERT_STREQ(got.user_value, "30");
+
+    w.items = &again;
+    ASSERT_EQ_INT(store_setting_set(store, userdb, &w, &wr, err, sizeof(err)), SETTING_OK);
+    ASSERT_FALSE(wr.changed);
+    seq = q(brain, "SELECT change_seq FROM brain_meta;");
+    ASSERT_STREQ(seq, "1");
+    free(seq);
+    line = q(brain, "SELECT COUNT(*) FROM settings_history WHERE key = "
+                    "'remember.search.max_results';");
+    ASSERT_STREQ(line, "1");
+    free(line);
+
+    ASSERT_EQ_INT(store_setting_reset(store, userdb, "remember.search.max_results",
+                                      SETTING_LAYER_BRAIN, NULL, &wr, err, sizeof(err)),
+                  SETTING_OK);
+    ASSERT_TRUE(wr.changed);
+    seq = q(brain, "SELECT change_seq FROM brain_meta;");
+    ASSERT_STREQ(seq, "2");
+    free(seq);
+    line = q(brain, "SELECT value FROM settings WHERE key = 'remember.search.max_results';");
+    ASSERT_STREQ(line, "40");
+    free(line);
+    line = q(brain, "SELECT deleted_at FROM settings WHERE key = 'remember.search.max_results';");
+    ASSERT_TRUE(line != NULL && line[0] != '\0');
+    free(line);
+    ASSERT_EQ_INT(store_setting_read(store, userdb, "remember.search.max_results", NULL, &got, err,
+                                     sizeof(err)),
+                  SETTING_OK);
+    ASSERT_EQ_INT(got.from, SETTING_FROM_USER);
+    ASSERT_STREQ(got.value, "30");
+    ASSERT_FALSE(got.brain_live);
+
+    line = q(brain, "SELECT COUNT(*) FROM settings_history WHERE key = "
+                    "'remember.search.max_results';");
+    ASSERT_STREQ(line, "2");
+    free(line);
+    ASSERT_EQ_INT(store_setting_reset(store, userdb, "remember.search.max_results",
+                                      SETTING_LAYER_BRAIN, NULL, &wr, err, sizeof(err)),
+                  SETTING_OK);
+    ASSERT_FALSE(wr.changed);
+    seq = q(brain, "SELECT change_seq FROM brain_meta;");
+    ASSERT_STREQ(seq, "2");
+    free(seq);
+    line = q(brain, "SELECT COUNT(*) FROM settings_history WHERE key = "
+                    "'remember.search.max_results';");
+    ASSERT_STREQ(line, "2");
+    free(line);
+
+    w.items = &two;
+    ASSERT_EQ_INT(store_setting_set(store, userdb, &w, &wr, err, sizeof(err)), SETTING_OK);
+    ASSERT_TRUE(wr.changed);
+    seq = q(brain, "SELECT change_seq FROM brain_meta;");
+    ASSERT_STREQ(seq, "3");
+    free(seq);
+    line = q(brain, "SELECT change_seq FROM settings WHERE key = 'remember.search.max_results';");
+    ASSERT_STREQ(line, "3");
+    free(line);
+    line = q(brain, "SELECT COUNT(*) FROM settings WHERE key = 'remember.search.max_results' AND "
+                    "deleted_at IS NULL;");
+    ASSERT_STREQ(line, "1");
+    free(line);
+    (void)snprintf(expect, sizeof(expect), "{\"%s\":3}", store_device_id(store));
+    line = q(brain, "SELECT version_vector FROM settings WHERE key = "
+                    "'remember.search.max_results';");
+    ASSERT_STREQ(line, expect);
+    free(line);
+    line = q(brain, "SELECT COUNT(*) FROM settings_history WHERE key = "
+                    "'remember.search.max_results' AND rowid = (SELECT MAX(rowid) FROM "
+                    "settings_history WHERE key = 'remember.search.max_results') AND "
+                    "old_value IS NULL AND new_value = '40';");
+    ASSERT_STREQ(line, "1");
+    free(line);
+    ASSERT_EQ_INT(store_setting_read(store, userdb, "remember.search.max_results", NULL, &got, err,
+                                     sizeof(err)),
+                  SETTING_OK);
+    ASSERT_EQ_INT(got.from, SETTING_FROM_BRAIN);
+    ASSERT_STREQ(got.value, "40");
+    ASSERT_TRUE(got.brain_live);
+
+    store_close(store);
+    harness_remove_tree(tmpl);
+}
+
+TEST(user_history_keeps_the_newest_fifty_by_rowid)
+{
+    char tmpl[] = "/tmp/remember-set-XXXXXX";
+    char brain[REMEMBER_PATH_MAX];
+    char userdb[REMEMBER_PATH_MAX];
+    char err[256];
+    char num[8];
+    Store *store = NULL;
+    SettingWriteResult wr;
+    SettingRead got;
+    SettingStatus st = SETTING_OK;
+    char *oldest = NULL;
+    char *line = NULL;
+    const char *actor = "{\"kind\":\"agent\",\"id\":\"bot1\"}";
+    int i = 0;
+
+    store = open_pair(tmpl, brain, sizeof(brain), userdb, sizeof(userdb));
+    if (store == NULL) {
+        return;
+    }
+    st = store_setting_reset(store, userdb, "remember.search.max_results", SETTING_LAYER_USER, NULL,
+                             &wr, err, sizeof(err));
+    ASSERT_EQ_INT(st, SETTING_OK);
+    ASSERT_FALSE(wr.changed);
+    ASSERT_TRUE(access(userdb, F_OK) != 0);
+
+    for (i = 1; i <= 51; i++) {
+        (void)snprintf(num, sizeof(num), "%d", i);
+        st = set_one(store, userdb, "remember.search.max_results", num, SETTING_LAYER_USER, NULL,
+                     &wr, err, sizeof(err));
+        ASSERT_EQ_INT(st, SETTING_OK);
+        ASSERT_TRUE(wr.changed);
+    }
+    assert_query(userdb,
+                 "SELECT COUNT(*) FROM settings_history WHERE key = "
+                 "'remember.search.max_results';",
+                 "50");
+    assert_query(userdb,
+                 "SELECT COUNT(*) FROM settings_history WHERE key = "
+                 "'remember.search.max_results' AND new_value = '1';",
+                 "0");
+    assert_query(userdb,
+                 "SELECT new_value FROM settings_history WHERE key = "
+                 "'remember.search.max_results' ORDER BY rowid DESC LIMIT 1;",
+                 "51");
+    st = set_one(store, userdb, "remember.search.max_results", "51", SETTING_LAYER_USER, NULL, &wr,
+                 err, sizeof(err));
+    ASSERT_EQ_INT(st, SETTING_OK);
+    ASSERT_FALSE(wr.changed);
+    assert_query(userdb,
+                 "SELECT COUNT(*) FROM settings_history WHERE key = "
+                 "'remember.search.max_results';",
+                 "50");
+
+    for (i = 52; i <= 61; i++) {
+        (void)snprintf(num, sizeof(num), "%d", i);
+        st = set_one(store, userdb, "remember.search.max_results", num, SETTING_LAYER_USER, NULL,
+                     &wr, err, sizeof(err));
+        ASSERT_EQ_INT(st, SETTING_OK);
+    }
+    oldest = q(userdb, "SELECT new_value FROM settings_history WHERE key = "
+                       "'remember.search.max_results' ORDER BY rowid ASC LIMIT 1;");
+    ASSERT_TRUE(oldest != NULL);
+    exec_fixture(userdb, "UPDATE settings_history SET at = '2020-01-01T00:00:00.000Z' WHERE rowid "
+                         "= (SELECT MAX(rowid) FROM settings_history WHERE key = "
+                         "'remember.search.max_results');");
+    st = set_one(store, userdb, "remember.search.max_results", "62", SETTING_LAYER_USER, NULL, &wr,
+                 err, sizeof(err));
+    ASSERT_EQ_INT(st, SETTING_OK);
+    ASSERT_TRUE(wr.changed);
+    assert_query(userdb,
+                 "SELECT COUNT(*) FROM settings_history WHERE key = "
+                 "'remember.search.max_results' AND at = '2020-01-01T00:00:00.000Z';",
+                 "1");
+    if (oldest != NULL) {
+        char probe[160];
+
+        (void)snprintf(probe, sizeof(probe),
+                       "SELECT COUNT(*) FROM settings_history WHERE key = "
+                       "'remember.search.max_results' AND new_value = '%s';",
+                       oldest);
+        assert_query(userdb, probe, "0");
+    }
+    free(oldest);
+    assert_query(userdb,
+                 "SELECT COUNT(*) FROM settings_history WHERE key = "
+                 "'remember.search.max_results';",
+                 "50");
+    assert_query(userdb,
+                 "SELECT new_value FROM settings_history WHERE key = "
+                 "'remember.search.max_results' ORDER BY rowid DESC LIMIT 1;",
+                 "62");
+
+    st = store_setting_reset(store, userdb, "remember.search.max_results", SETTING_LAYER_USER, NULL,
+                             &wr, err, sizeof(err));
+    ASSERT_EQ_INT(st, SETTING_OK);
+    ASSERT_TRUE(wr.changed);
+    assert_query(userdb, "SELECT COUNT(*) FROM settings WHERE key = 'remember.search.max_results';",
+                 "0");
+    assert_query(userdb,
+                 "SELECT COUNT(*) FROM settings_history WHERE key = "
+                 "'remember.search.max_results' AND rowid = (SELECT MAX(rowid) FROM "
+                 "settings_history WHERE key = 'remember.search.max_results') AND "
+                 "new_value IS NULL;",
+                 "1");
+    st = store_setting_read(store, userdb, "remember.search.max_results", NULL, &got, err,
+                            sizeof(err));
+    ASSERT_EQ_INT(st, SETTING_OK);
+    ASSERT_EQ_INT(got.from, SETTING_FROM_DEFAULT);
+    ASSERT_STREQ(got.value, "20");
+    ASSERT_FALSE(got.user_live);
+    st = store_setting_reset(store, userdb, "remember.search.max_results", SETTING_LAYER_USER, NULL,
+                             &wr, err, sizeof(err));
+    ASSERT_EQ_INT(st, SETTING_OK);
+    ASSERT_FALSE(wr.changed);
+    assert_query(userdb,
+                 "SELECT COUNT(*) FROM settings_history WHERE key = "
+                 "'remember.search.max_results';",
+                 "50");
+    assert_query(brain, "SELECT change_seq FROM brain_meta;", "0");
+
+    st = set_one(store, userdb, "remember.search.max_results", "7", SETTING_LAYER_USER, actor, &wr,
+                 err, sizeof(err));
+    ASSERT_EQ_INT(st, SETTING_OK);
+    ASSERT_TRUE(wr.changed);
+    assert_query(userdb,
+                 "SELECT updated_by FROM settings WHERE key = 'remember.search.max_results';",
+                 actor);
+    line = q(userdb, "SELECT updated_at FROM settings WHERE key = 'remember.search.max_results';");
+    ASSERT_TRUE(line != NULL && utc_stamp_is_canonical(line));
+    free(line);
+    assert_query(userdb,
+                 "SELECT updated_by FROM settings WHERE key = 'remember.search.max_results';",
+                 actor);
+    close_pair(store, tmpl);
+}
+
+TEST(quota_counts_settings_rows_not_history)
+{
+    char tmpl[] = "/tmp/remember-set-XXXXXX";
+    char brain[REMEMBER_PATH_MAX];
+    char userdb[REMEMBER_PATH_MAX];
+    char err[256];
+    Store *store = NULL;
+    SettingWriteResult wr;
+    SettingStatus st = SETTING_OK;
+
+    store = open_pair(tmpl, brain, sizeof(brain), userdb, sizeof(userdb));
+    if (store == NULL) {
+        return;
+    }
+    st = set_one(store, userdb, "remember.search.max_results", "40", SETTING_LAYER_BRAIN, NULL, &wr,
+                 err, sizeof(err));
+    ASSERT_EQ_INT(st, SETTING_OK);
+    st = store_setting_reset(store, userdb, "remember.search.max_results", SETTING_LAYER_BRAIN,
+                             NULL, &wr, err, sizeof(err));
+    ASSERT_EQ_INT(st, SETTING_OK);
+    ASSERT_TRUE(wr.changed);
+    insert_dummy_settings(brain, true, SETTING_ROW_QUOTA - 1);
+    st = set_one(store, userdb, "remember.search.candidate_pool", "30", SETTING_LAYER_BRAIN, NULL,
+                 &wr, err, sizeof(err));
+    ASSERT_EQ_INT(st, SETTING_ERR_QUOTA);
+    ASSERT_STREQ(setting_status_code(st), "quota_exceeded");
+    ASSERT_STREQ(err, k_brain_quota);
+    ASSERT_FALSE(wr.changed);
+    assert_query(brain, "SELECT change_seq FROM brain_meta;", "2");
+    assert_query(
+        brain, "SELECT COUNT(*) FROM settings WHERE key = 'remember.search.candidate_pool';", "0");
+    st = set_one(store, userdb, "remember.search.max_results", "41", SETTING_LAYER_BRAIN, NULL, &wr,
+                 err, sizeof(err));
+    ASSERT_EQ_INT(st, SETTING_OK);
+    ASSERT_TRUE(wr.changed);
+    assert_query(brain, "SELECT value FROM settings WHERE key = 'remember.search.max_results';",
+                 "41");
+    assert_query(brain,
+                 "SELECT COUNT(*) FROM settings WHERE key = 'remember.search.max_results' "
+                 "AND deleted_at IS NULL;",
+                 "1");
+    assert_query(brain, "SELECT change_seq FROM brain_meta;", "3");
+    st = set_one(store, userdb, "remember.search.candidate_pool", "30", SETTING_LAYER_BRAIN, NULL,
+                 &wr, err, sizeof(err));
+    ASSERT_EQ_INT(st, SETTING_ERR_QUOTA);
+    exec_fixture(brain, "DELETE FROM settings WHERE key = 'q000';");
+    st = set_one(store, userdb, "remember.search.candidate_pool", "30", SETTING_LAYER_BRAIN, NULL,
+                 &wr, err, sizeof(err));
+    ASSERT_EQ_INT(st, SETTING_OK);
+    ASSERT_TRUE(wr.changed);
+    assert_query(brain, "SELECT change_seq FROM brain_meta;", "4");
+
+    ASSERT_EQ_INT(store_user_db_ensure(userdb, err, sizeof(err)), 0);
+    insert_dummy_history(userdb, 300);
+    insert_dummy_settings(userdb, false, SETTING_ROW_QUOTA - 1);
+    st = set_one(store, userdb, "remember.search.max_results", "6", SETTING_LAYER_USER, NULL, &wr,
+                 err, sizeof(err));
+    ASSERT_EQ_INT(st, SETTING_OK);
+    ASSERT_TRUE(wr.changed);
+    assert_query(userdb, "SELECT COUNT(*) FROM settings_history WHERE key = 'h';", "300");
+    st = set_one(store, userdb, "remember.search.candidate_pool", "20", SETTING_LAYER_USER, NULL,
+                 &wr, err, sizeof(err));
+    ASSERT_EQ_INT(st, SETTING_ERR_QUOTA);
+    ASSERT_STREQ(setting_status_code(st), "quota_exceeded");
+    ASSERT_STREQ(err, "");
+    assert_query(brain, "SELECT change_seq FROM brain_meta;", "4");
+    exec_fixture(userdb, "DELETE FROM settings WHERE key = 'q000';");
+    st = set_one(store, userdb, "remember.search.candidate_pool", "20", SETTING_LAYER_USER, NULL,
+                 &wr, err, sizeof(err));
+    ASSERT_EQ_INT(st, SETTING_OK);
+    assert_query(userdb, "SELECT value FROM settings WHERE key = 'remember.search.candidate_pool';",
+                 "20");
+    close_pair(store, tmpl);
+}
+
+TEST(prefixes_default_scope_and_sixteen_kib)
+{
+    enum { PREFIX_FITS = 2340, PREFIX_OVER = 2341, PREFIX_BEFORE = 2339, PREFIX_JSON_FITS = 16381 };
+    char tmpl[] = "/tmp/remember-set-XXXXXX";
+    char brain[REMEMBER_PATH_MAX];
+    char userdb[REMEMBER_PATH_MAX];
+    char err[256];
+    char tail[16];
+    Store *store = NULL;
+    SettingWriteResult wr;
+    SettingRead got;
+    SettingStatus st = SETTING_OK;
+    const char *pair[] = {"project:", "area:"};
+    const char *bad = "my project:";
+    const char *twice[] = {"status:", "status:"};
+    const char *same[] = {"Status:", "status:"};
+    const char **shortest = NULL;
+    const char **items = NULL;
+    const char **extra = NULL;
+    char *block = NULL;
+    size_t nshort = ((size_t)SETTING_VALUE_MAX / 5U) + 1U;
+    size_t i = 0;
+
+    store = open_pair(tmpl, brain, sizeof(brain), userdb, sizeof(userdb));
+    if (store == NULL) {
+        return;
+    }
+    st = store_setting_read(store, userdb, "remember.buckets.prefixes", NULL, &got, err,
+                            sizeof(err));
+    ASSERT_EQ_INT(st, SETTING_OK);
+    ASSERT_EQ_INT(got.from, SETTING_FROM_DEFAULT);
+    ASSERT_STREQ(got.value, "[\"project:\",\"status:\"]");
+    ASSERT_TRUE(access(userdb, F_OK) != 0);
+
+    st = set_items(store, NULL, "remember.buckets.prefixes", pair, 2U, SETTING_LAYER_AUTO, NULL,
+                   &wr, err, sizeof(err));
+    ASSERT_EQ_INT(st, SETTING_OK);
+    ASSERT_TRUE(wr.changed);
+    ASSERT_EQ_INT(wr.layer, SETTING_LAYER_BRAIN);
+    assert_query(brain, "SELECT value FROM settings WHERE key = 'remember.buckets.prefixes';",
+                 "[\"project:\",\"area:\"]");
+    assert_query(brain, "SELECT change_seq FROM brain_meta;", "1");
+    ASSERT_TRUE(access(userdb, F_OK) != 0);
+
+    st = set_items(store, userdb, "remember.buckets.prefixes", pair, 2U, SETTING_LAYER_USER, NULL,
+                   &wr, err, sizeof(err));
+    ASSERT_EQ_INT(st, SETTING_ERR_SCOPE);
+    ASSERT_STREQ(setting_status_code(st), "setting_scope_mismatch");
+    ASSERT_STREQ(err, "");
+    assert_query(brain, "SELECT change_seq FROM brain_meta;", "1");
+    ASSERT_TRUE(access(userdb, F_OK) != 0);
+
+    st = set_items(store, NULL, "remember.buckets.prefixes", &bad, 1U, SETTING_LAYER_AUTO, NULL,
+                   &wr, err, sizeof(err));
+    ASSERT_EQ_INT(st, SETTING_ERR_INVALID);
+    ASSERT_STREQ(err, "\"my project:\" isn't a bucket prefix.");
+    st = set_items(store, NULL, "remember.buckets.prefixes", twice, 2U, SETTING_LAYER_AUTO, NULL,
+                   &wr, err, sizeof(err));
+    ASSERT_EQ_INT(st, SETTING_ERR_INVALID);
+    ASSERT_STREQ(err, "\"status:\" is in the list twice.");
+    st = set_items(store, NULL, "remember.buckets.prefixes", same, 2U, SETTING_LAYER_AUTO, NULL,
+                   &wr, err, sizeof(err));
+    ASSERT_EQ_INT(st, SETTING_ERR_INVALID);
+    ASSERT_STREQ(err, "\"status:\" and \"Status:\" are the same prefix.");
+    assert_query(brain, "SELECT value FROM settings WHERE key = 'remember.buckets.prefixes';",
+                 "[\"project:\",\"area:\"]");
+
+    shortest = (const char **)malloc(nshort * sizeof(*shortest));
+    ASSERT_TRUE(shortest != NULL);
+    if (shortest == NULL) {
+        close_pair(store, tmpl);
+        return;
+    }
+    for (i = 0; i < nshort; i++) {
+        shortest[i] = "a:";
+    }
+    st = set_items(store, NULL, "remember.buckets.prefixes", shortest, nshort, SETTING_LAYER_AUTO,
+                   NULL, &wr, err, sizeof(err));
+    ASSERT_EQ_INT(st, SETTING_ERR_QUOTA);
+    ASSERT_STREQ(setting_status_code(st), "quota_exceeded");
+    ASSERT_STREQ(err, "");
+    free((void *)shortest);
+
+    block = make_prefixes((size_t)PREFIX_OVER, &items);
+    if (block == NULL) {
+        close_pair(store, tmpl);
+        return;
+    }
+    st = set_items(store, NULL, "remember.buckets.prefixes", items, (size_t)PREFIX_OVER,
+                   SETTING_LAYER_AUTO, NULL, &wr, err, sizeof(err));
+    ASSERT_EQ_INT(st, SETTING_ERR_QUOTA);
+    ASSERT_STREQ(err, "");
+    free(block);
+    free((void *)items);
+
+    block = make_prefixes((size_t)PREFIX_BEFORE, &items);
+    extra = (const char **)malloc(((size_t)PREFIX_BEFORE + 1U) * sizeof(*extra));
+    if (block == NULL || extra == NULL) {
+        free(block);
+        free((void *)items);
+        free((void *)extra);
+        close_pair(store, tmpl);
+        return;
+    }
+    for (i = 0; i < (size_t)PREFIX_BEFORE; i++) {
+        extra[i] = items[i];
+    }
+    extra[PREFIX_BEFORE] = "abcdefg:";
+    st = set_items(store, NULL, "remember.buckets.prefixes", extra, (size_t)PREFIX_BEFORE + 1U,
+                   SETTING_LAYER_AUTO, NULL, &wr, err, sizeof(err));
+    ASSERT_EQ_INT(st, SETTING_ERR_QUOTA);
+    ASSERT_STREQ(err, "");
+    free(block);
+    free((void *)items);
+    free((void *)extra);
+    assert_query(brain, "SELECT value FROM settings WHERE key = 'remember.buckets.prefixes';",
+                 "[\"project:\",\"area:\"]");
+    assert_query(brain, "SELECT change_seq FROM brain_meta;", "1");
+
+    block = make_prefixes((size_t)PREFIX_FITS, &items);
+    if (block == NULL) {
+        close_pair(store, tmpl);
+        return;
+    }
+    st = set_items(store, NULL, "remember.buckets.prefixes", items, (size_t)PREFIX_FITS,
+                   SETTING_LAYER_AUTO, NULL, &wr, err, sizeof(err));
+    ASSERT_EQ_INT(st, SETTING_OK);
+    ASSERT_TRUE(wr.changed);
+    st = store_setting_read(store, NULL, "remember.buckets.prefixes", NULL, &got, err, sizeof(err));
+    ASSERT_EQ_INT(st, SETTING_OK);
+    ASSERT_EQ_INT(got.from, SETTING_FROM_BRAIN);
+    ASSERT_EQ_INT((int)strlen(got.value), PREFIX_JSON_FITS);
+    ASSERT_TRUE(strncmp(got.value, "[\"a00:\"", 7) == 0);
+    (void)snprintf(tail, sizeof(tail), "\"%c%02d:\"]", 'a' + ((PREFIX_FITS - 1) / 100),
+                   (PREFIX_FITS - 1) % 100);
+    ASSERT_STREQ(got.value + PREFIX_JSON_FITS - (int)strlen(tail), tail);
+    assert_query(brain, "SELECT change_seq FROM brain_meta;", "2");
+    ASSERT_TRUE(access(userdb, F_OK) != 0);
+    free(block);
+    free((void *)items);
+    close_pair(store, tmpl);
+}
+
+TEST(rejected_values_do_not_create_user_db)
+{
+    char tmpl[] = "/tmp/remember-set-XXXXXX";
+    char brain[REMEMBER_PATH_MAX];
+    char userdb[REMEMBER_PATH_MAX];
+    char user2[REMEMBER_PATH_MAX];
+    char err[256];
+    Store *store = NULL;
+    SettingWriteResult wr;
+    SettingRead got;
+    SettingStatus st = SETTING_OK;
+    const char *project = "project:";
+
+    store = open_pair(tmpl, brain, sizeof(brain), userdb, sizeof(userdb));
+    if (store == NULL) {
+        return;
+    }
+    (void)snprintf(user2, sizeof(user2), "%s/real.db", tmpl);
+    st = store_setting_reset(store, userdb, "remember.search.max_results", SETTING_LAYER_BRAIN,
+                             NULL, &wr, err, sizeof(err));
+    ASSERT_EQ_INT(st, SETTING_OK);
+    ASSERT_FALSE(wr.changed);
+    assert_query(brain, "SELECT change_seq FROM brain_meta;", "0");
+
+    st = set_one(store, userdb, "remember.plugins.idle_timeout", "10m", SETTING_LAYER_BRAIN, NULL,
+                 &wr, err, sizeof(err));
+    ASSERT_EQ_INT(st, SETTING_ERR_SCOPE);
+    ASSERT_STREQ(setting_status_code(st), "setting_scope_mismatch");
+    ASSERT_STREQ(err, k_idle_scope);
+    st = set_one(store, userdb, "remember.plugins.chain_budget", "1.5s", SETTING_LAYER_BRAIN, NULL,
+                 &wr, err, sizeof(err));
+    ASSERT_EQ_INT(st, SETTING_ERR_SCOPE);
+    ASSERT_STREQ(err, "");
+    st = set_items(store, userdb, "remember.buckets.prefixes", &project, 1U, SETTING_LAYER_USER,
+                   NULL, &wr, err, sizeof(err));
+    ASSERT_EQ_INT(st, SETTING_ERR_SCOPE);
+    ASSERT_STREQ(err, "");
+    ASSERT_TRUE(access(userdb, F_OK) != 0);
+    assert_query(brain, "SELECT COUNT(*) FROM settings;", "0");
+
+    st = set_one(store, userdb, "remember.plugins.chain_budget", "0.5ms", SETTING_LAYER_USER, NULL,
+                 &wr, err, sizeof(err));
+    ASSERT_EQ_INT(st, SETTING_ERR_INVALID);
+    ASSERT_STREQ(setting_status_code(st), "setting_invalid_value");
+    ASSERT_STREQ(err, "");
+    st = set_one(store, userdb, "remember.plugins.chain_budget", "45s", SETTING_LAYER_USER, NULL,
+                 &wr, err, sizeof(err));
+    ASSERT_EQ_INT(st, SETTING_ERR_RANGE);
+    ASSERT_STREQ(setting_status_code(st), "setting_out_of_range");
+    ASSERT_STREQ(err, "");
+    st = set_one(store, userdb, "remember.search.candidate_pool", "19", SETTING_LAYER_USER, NULL,
+                 &wr, err, sizeof(err));
+    ASSERT_EQ_INT(st, SETTING_ERR_RANGE);
+    ASSERT_STREQ(err, "");
+    st = set_one(store, userdb, "remember.search.max_results", "abc", SETTING_LAYER_USER, NULL, &wr,
+                 err, sizeof(err));
+    ASSERT_EQ_INT(st, SETTING_ERR_INVALID);
+    ASSERT_STREQ(err, "");
+    st = store_setting_read(store, NULL, "remember.sync.credential_helper", NULL, &got, err,
+                            sizeof(err));
+    ASSERT_EQ_INT(st, SETTING_OK);
+    ASSERT_EQ_INT(got.from, SETTING_FROM_DEFAULT);
+    ASSERT_STREQ(got.value, "");
+    ASSERT_FALSE(got.user_live);
+    st = set_one(store, userdb, "remember.sync.credential_helper", "~/bin/helper",
+                 SETTING_LAYER_USER, NULL, &wr, err, sizeof(err));
+    ASSERT_EQ_INT(st, SETTING_ERR_INVALID);
+    ASSERT_STREQ(err, "");
+    st = set_one(store, userdb, "candidate_pool", "20", SETTING_LAYER_USER, NULL, &wr, err,
+                 sizeof(err));
+    ASSERT_EQ_INT(st, SETTING_ERR_UNKNOWN);
+    ASSERT_STREQ(setting_status_code(st), "setting_unknown");
+    ASSERT_STREQ(err, "");
+    st = set_one(store, userdb, "remember.search.hybrid", "1", SETTING_LAYER_USER, NULL, &wr, err,
+                 sizeof(err));
+    ASSERT_EQ_INT(st, SETTING_ERR_UNKNOWN);
+    ASSERT_STREQ(err, "");
+    st = store_setting_read(store, userdb, "candidate_pool", NULL, &got, err, sizeof(err));
+    ASSERT_EQ_INT(st, SETTING_ERR_UNKNOWN);
+    ASSERT_STREQ(err, "");
+    ASSERT_TRUE(access(userdb, F_OK) != 0);
+
+    st = set_one(store, "", "remember.search.max_results", "3", SETTING_LAYER_USER, NULL, &wr, err,
+                 sizeof(err));
+    ASSERT_EQ_INT(st, SETTING_ERR_STORE);
+    ASSERT_STREQ(err, "empty database path");
+    st = set_one(store, NULL, "remember.search.max_results", "8", SETTING_LAYER_BRAIN, NULL, &wr,
+                 err, sizeof(err));
+    ASSERT_EQ_INT(st, SETTING_OK);
+    ASSERT_TRUE(wr.changed);
+    assert_query(brain, "SELECT change_seq FROM brain_meta;", "1");
+    st = store_setting_read(store, NULL, "remember.search.max_results", NULL, &got, err,
+                            sizeof(err));
+    ASSERT_EQ_INT(st, SETTING_OK);
+    ASSERT_EQ_INT(got.from, SETTING_FROM_BRAIN);
+    ASSERT_STREQ(got.value, "8");
+    ASSERT_TRUE(access(userdb, F_OK) != 0);
+
+    write_notes(userdb);
+    st = set_one(store, userdb, "remember.search.max_results", "3", SETTING_LAYER_USER, NULL, &wr,
+                 err, sizeof(err));
+    ASSERT_EQ_INT(st, SETTING_ERR_STORE);
+    ASSERT_STREQ(err, "cannot read user_version: file is not a database");
+    assert_notes(userdb);
+    err[0] = '\0';
+    st = store_setting_read(store, userdb, "remember.search.max_results", NULL, &got, err,
+                            sizeof(err));
+    ASSERT_EQ_INT(st, SETTING_ERR_STORE);
+    ASSERT_STREQ(err, "sqlite: file is not a database");
+    assert_notes(userdb);
+
+    st = store_setting_read(store, user2, "remember.plugins.chain_budget", "1500ms", &got, err,
+                            sizeof(err));
+    ASSERT_EQ_INT(st, SETTING_OK);
+    ASSERT_EQ_INT(got.from, SETTING_FROM_FLAG);
+    ASSERT_STREQ(got.value, "\"1.5s\"");
+    ASSERT_TRUE(access(user2, F_OK) != 0);
+    st = store_setting_read(store, user2, "remember.search.max_results", "0", &got, err,
+                            sizeof(err));
+    ASSERT_EQ_INT(st, SETTING_ERR_RANGE);
+    ASSERT_STREQ(err, "");
+    assert_query(brain, "SELECT change_seq FROM brain_meta;", "1");
+
+    st = set_one(store, user2, "remember.plugins.chain_budget", "1500ms", SETTING_LAYER_USER, NULL,
+                 &wr, err, sizeof(err));
+    ASSERT_EQ_INT(st, SETTING_OK);
+    assert_query(user2, "SELECT value FROM settings WHERE key = 'remember.plugins.chain_budget';",
+                 "\"1.5s\"");
+    st = set_one(store, user2, "remember.plugins.chain_budget", "1.5s", SETTING_LAYER_USER, NULL,
+                 &wr, err, sizeof(err));
+    ASSERT_EQ_INT(st, SETTING_OK);
+    ASSERT_FALSE(wr.changed);
+    assert_query(user2,
+                 "SELECT COUNT(*) FROM settings_history WHERE key = "
+                 "'remember.plugins.chain_budget';",
+                 "1");
+    st = set_one(store, user2, "remember.sync.credential_helper", "env", SETTING_LAYER_AUTO, NULL,
+                 &wr, err, sizeof(err));
+    ASSERT_EQ_INT(st, SETTING_OK);
+    assert_query(user2, "SELECT value FROM settings WHERE key = 'remember.sync.credential_helper';",
+                 "\"env\"");
+    st = store_setting_read(store, user2, "remember.sync.credential_helper", NULL, &got, err,
+                            sizeof(err));
+    ASSERT_EQ_INT(st, SETTING_OK);
+    ASSERT_EQ_INT(got.from, SETTING_FROM_USER);
+    ASSERT_STREQ(got.value, "\"env\"");
+    st = store_setting_read(store, user2, "remember.plugins.idle_timeout", NULL, &got, err,
+                            sizeof(err));
+    ASSERT_EQ_INT(st, SETTING_OK);
+    ASSERT_EQ_INT(got.from, SETTING_FROM_DEFAULT);
+    ASSERT_STREQ(got.value, "\"10m\"");
+    st = store_setting_read(store, NULL, "remember.search.candidate_pool", NULL, &got, err,
+                            sizeof(err));
+    ASSERT_EQ_INT(st, SETTING_OK);
+    ASSERT_EQ_INT(got.from, SETTING_FROM_DEFAULT);
+    ASSERT_STREQ(got.value, "200");
+    assert_query(brain, "SELECT change_seq FROM brain_meta;", "1");
+
+    exec_fixture(brain, "UPDATE brain_meta SET min_reader_version = '99.0.0';");
+    store_close(store);
+    store = store_open(brain, err, sizeof(err));
+    ASSERT_TRUE(store != NULL);
+    if (store == NULL) {
+        harness_remove_tree(tmpl);
+        return;
+    }
+    st = store_setting_read(store, user2, "remember.search.max_results", NULL, &got, err,
+                            sizeof(err));
+    ASSERT_EQ_INT(st, SETTING_OK);
+    ASSERT_EQ_INT(got.from, SETTING_FROM_BRAIN);
+    ASSERT_STREQ(got.value, "8");
+    st = set_one(store, user2, "remember.search.max_results", "9", SETTING_LAYER_BRAIN, NULL, &wr,
+                 err, sizeof(err));
+    ASSERT_EQ_INT(st, SETTING_ERR_STORE);
+    ASSERT_STREQ(err, k_newer_brain);
+    assert_query(brain, "SELECT value FROM settings WHERE key = 'remember.search.max_results';",
+                 "8");
+    assert_query(brain, "SELECT change_seq FROM brain_meta;", "1");
+    st = set_one(store, user2, "remember.plugins.chain_budget", "2s", SETTING_LAYER_USER, NULL, &wr,
+                 err, sizeof(err));
+    ASSERT_EQ_INT(st, SETTING_OK);
+    assert_query(user2, "SELECT value FROM settings WHERE key = 'remember.plugins.chain_budget';",
+                 "\"2s\"");
+    close_pair(store, tmpl);
+}
+
+TEST(programmer_errors_and_a_failed_prepare)
+{
+    char tmpl[] = "/tmp/remember-set-XXXXXX";
+    char brain[REMEMBER_PATH_MAX];
+    char userdb[REMEMBER_PATH_MAX];
+    char err[256];
+    char tiny[8];
+    char one_byte[1];
+    Store *store = NULL;
+    SettingWrite w;
+    SettingWriteResult wr;
+    SettingRead got;
+    SettingLayer layer = SETTING_LAYER_AUTO;
+    SettingStatus st = SETTING_OK;
+    const char *three = "3";
+    const char *project = "project:";
+    const char *blank = NULL;
+
+    memset(&w, 0, sizeof(w));
+    w.key = "remember.search.max_results";
+    w.items = &three;
+    w.nitems = 1;
+    st = store_setting_set(NULL, NULL, &w, &wr, err, sizeof(err));
+    ASSERT_EQ_INT(st, SETTING_ERR_STORE);
+    ASSERT_STREQ(err, "internal error");
+    st = store_setting_reset(NULL, NULL, "remember.search.max_results", SETTING_LAYER_USER, NULL,
+                             &wr, err, sizeof(err));
+    ASSERT_EQ_INT(st, SETTING_ERR_STORE);
+    ASSERT_STREQ(err, "internal error");
+    st =
+        store_setting_read(NULL, NULL, "remember.search.max_results", NULL, &got, err, sizeof(err));
+    ASSERT_EQ_INT(st, SETTING_ERR_STORE);
+    ASSERT_STREQ(err, "internal error");
+    st = setting_choose_layer("remember.search.max_results", SETTING_LAYER_USER, NULL, NULL, err,
+                              sizeof(err));
+    ASSERT_EQ_INT(st, SETTING_ERR_STORE);
+    ASSERT_STREQ(err, "internal error");
+    st = setting_prepare("remember.search.max_results", &three, 1U, SETTING_LAYER_USER, tiny,
+                         sizeof(tiny), NULL, &layer, err, sizeof(err));
+    ASSERT_EQ_INT(st, SETTING_ERR_STORE);
+    ASSERT_STREQ(err, "internal error");
+    one_byte[0] = 'x';
+    st = setting_choose_layer("remember.plugins.idle_timeout", SETTING_LAYER_BRAIN, NULL, &layer,
+                              one_byte, sizeof(one_byte));
+    ASSERT_EQ_INT(st, SETTING_ERR_SCOPE);
+    ASSERT_EQ_INT(one_byte[0], '\0');
+
+    store = open_pair(tmpl, brain, sizeof(brain), userdb, sizeof(userdb));
+    if (store == NULL) {
+        return;
+    }
+    st = store_setting_set(store, userdb, &w, NULL, err, sizeof(err));
+    ASSERT_EQ_INT(st, SETTING_ERR_STORE);
+    ASSERT_STREQ(err, "internal error");
+    st = set_items(store, userdb, "remember.search.max_results", NULL, 1U, SETTING_LAYER_USER, NULL,
+                   &wr, err, sizeof(err));
+    ASSERT_EQ_INT(st, SETTING_ERR_INVALID);
+    ASSERT_STREQ(err, "");
+    st = set_items(store, NULL, "remember.buckets.prefixes", NULL, 1U, SETTING_LAYER_BRAIN, NULL,
+                   &wr, err, sizeof(err));
+    ASSERT_EQ_INT(st, SETTING_ERR_INVALID);
+    ASSERT_STREQ(err, "");
+    st = set_items(store, NULL, "remember.buckets.prefixes", &blank, 1U, SETTING_LAYER_BRAIN, NULL,
+                   &wr, err, sizeof(err));
+    ASSERT_EQ_INT(st, SETTING_ERR_INVALID);
+    ASSERT_STREQ(err, "\"\" isn't a bucket prefix.");
+    ASSERT_TRUE(access(userdb, F_OK) != 0);
+
+    test_alloc_fail_after(0);
+    st = set_items(store, NULL, "remember.buckets.prefixes", &project, 1U, SETTING_LAYER_BRAIN,
+                   NULL, &wr, err, sizeof(err));
+    ASSERT_EQ_INT(st, SETTING_ERR_STORE);
+    ASSERT_STREQ(err, "out of memory");
+    ASSERT_FALSE(wr.changed);
+    test_alloc_fail_after(-1);
+
+    store_test_fail_prepare_after(0);
+    st = set_one(store, NULL, "remember.search.max_results", "4", SETTING_LAYER_BRAIN, NULL, &wr,
+                 err, sizeof(err));
+    ASSERT_EQ_INT(st, SETTING_ERR_STORE);
+    store_test_fail_prepare_after(-1);
+    st = set_one(store, NULL, "remember.search.max_results", "4", SETTING_LAYER_BRAIN, NULL, &wr,
+                 err, sizeof(err));
+    ASSERT_EQ_INT(st, SETTING_OK);
+    ASSERT_TRUE(wr.changed);
+    /* Load's prepare succeeds. The new-key COUNT prepare is the one that fails. */
+    store_test_fail_prepare_after(1);
+    st = set_one(store, NULL, "remember.search.candidate_pool", "30", SETTING_LAYER_BRAIN, NULL,
+                 &wr, err, sizeof(err));
+    ASSERT_EQ_INT(st, SETTING_ERR_STORE);
+    store_test_fail_prepare_after(-1);
+    st = set_one(store, NULL, "remember.search.candidate_pool", "30", SETTING_LAYER_BRAIN, NULL,
+                 &wr, err, sizeof(err));
+    ASSERT_EQ_INT(st, SETTING_OK);
+    ASSERT_TRUE(wr.changed);
+    st = store_setting_read(store, tmpl, "remember.search.max_results", NULL, &got, err,
+                            sizeof(err));
+    ASSERT_EQ_INT(st, SETTING_ERR_STORE);
+    ASSERT_TRUE(err[0] != '\0');
+    st = store_setting_reset(store, tmpl, "remember.search.max_results", SETTING_LAYER_USER, NULL,
+                             &wr, err, sizeof(err));
+    ASSERT_EQ_INT(st, SETTING_ERR_STORE);
+    ASSERT_TRUE(err[0] != '\0');
+    store_test_fail_prepare_after(0);
+    st = store_setting_read(store, NULL, "remember.search.max_results", NULL, &got, err,
+                            sizeof(err));
+    ASSERT_EQ_INT(st, SETTING_ERR_STORE);
+    store_test_fail_prepare_after(-1);
+    st = store_setting_reset(store, NULL, "candidate_pool", SETTING_LAYER_USER, NULL, &wr, err,
+                             sizeof(err));
+    ASSERT_EQ_INT(st, SETTING_ERR_UNKNOWN);
+    ASSERT_STREQ(err, "");
+
+    st = set_one(store, userdb, "remember.search.max_results", "6", SETTING_LAYER_USER, NULL, &wr,
+                 err, sizeof(err));
+    ASSERT_EQ_INT(st, SETTING_OK);
+    /* ensure's two pragmas, then the write connection's two, then BEGIN. */
+    store_test_fail_exec_after(4);
+    st = set_one(store, userdb, "remember.search.max_results", "7", SETTING_LAYER_USER, NULL, &wr,
+                 err, sizeof(err));
+    ASSERT_EQ_INT(st, SETTING_ERR_STORE);
+    store_test_fail_exec_after(-1);
+    st = set_one(store, userdb, "remember.search.max_results", "7", SETTING_LAYER_USER, NULL, &wr,
+                 err, sizeof(err));
+    ASSERT_EQ_INT(st, SETTING_OK);
+    ASSERT_TRUE(wr.changed);
+    /* Two pragmas on the existing file, then BEGIN. */
+    store_test_fail_exec_after(2);
+    st = store_setting_reset(store, userdb, "remember.search.max_results", SETTING_LAYER_USER, NULL,
+                             &wr, err, sizeof(err));
+    ASSERT_EQ_INT(st, SETTING_ERR_STORE);
+    store_test_fail_exec_after(-1);
+    write_notes(userdb);
+    st = store_setting_reset(store, userdb, "remember.search.max_results", SETTING_LAYER_USER, NULL,
+                             &wr, err, sizeof(err));
+    ASSERT_EQ_INT(st, SETTING_ERR_STORE);
+    ASSERT_STREQ(err, "sqlite: file is not a database");
+    assert_notes(userdb);
+    exec_fixture(brain, "UPDATE brain_meta SET min_reader_version = '99.0.0';");
+    store_close(store);
+    store = store_open(brain, err, sizeof(err));
+    ASSERT_TRUE(store != NULL);
+    if (store == NULL) {
+        harness_remove_tree(tmpl);
+        return;
+    }
+    st = store_setting_reset(store, NULL, "remember.search.max_results", SETTING_LAYER_BRAIN, NULL,
+                             &wr, err, sizeof(err));
+    ASSERT_EQ_INT(st, SETTING_ERR_STORE);
+    ASSERT_STREQ(err, k_newer_brain);
+    close_pair(store, tmpl);
+}
+
 void register_settings_tests(void)
 {
     RUN_TEST(duration_canonical_examples);
@@ -573,5 +1684,11 @@ void register_settings_tests(void)
     RUN_TEST(user_db_path_follows_remember_user_db_then_xdg_then_home);
     RUN_TEST(user_db_is_created_on_ensure_not_when_a_brain_opens);
     RUN_TEST(ensure_leaves_a_non_database_file_unchanged);
+    RUN_TEST(resolution_user_then_brain_then_tombstone_and_change_seq);
+    RUN_TEST(user_history_keeps_the_newest_fifty_by_rowid);
+    RUN_TEST(quota_counts_settings_rows_not_history);
+    RUN_TEST(prefixes_default_scope_and_sixteen_kib);
+    RUN_TEST(rejected_values_do_not_create_user_db);
+    RUN_TEST(programmer_errors_and_a_failed_prepare);
 }
 // NOLINTEND(cppcoreguidelines-avoid-magic-numbers,readability-magic-numbers)

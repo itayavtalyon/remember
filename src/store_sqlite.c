@@ -2,6 +2,7 @@
 
 #include "normalize.h"
 #include "search_terms.h"
+#include "settings.h"
 #include "sqlite3.h"
 
 #include <errno.h>
@@ -9379,3 +9380,722 @@ fail:
     rollback_quiet(s->db);
     return st;
 }
+
+/* ---- settings writes (007 ST-4.3 through ST-4.6) --------------------------- */
+
+enum {
+    HISTORY_AT_PARAM = 5,
+    HISTORY_TRIM_SQL = 192,
+    BRAIN_RESET_BINDS = 5,
+    BRAIN_WRITE_BINDS = 6,
+    BIND_VECTOR = 5,
+    OPEN_ERR_CAP = 256
+};
+
+/* Column order and the public (user_db, key, flag) order are fixed. */
+// NOLINTBEGIN(bugprone-easily-swappable-parameters)
+
+static const char k_setting_actor[] = "{\"kind\":\"human\",\"id\":null}";
+static const char k_brain_quota[] =
+    "this brain has 256 settings, the most it can hold. Reset settings you don't need with "
+    "'remember settings reset'.";
+
+static const char *setting_actor(const char *updated_by)
+{
+    if (updated_by != NULL && updated_by[0] != '\0') {
+        return updated_by;
+    }
+    return k_setting_actor;
+}
+
+static void setting_fail(SettingWriteResult *out, SettingStatus st)
+{
+    if (out == NULL) {
+        return;
+    }
+    out->status = st;
+    out->changed = false;
+}
+
+static int bind_text_or_null(sqlite3_stmt *stmt, int index, const char *text)
+{
+    if (text == NULL) {
+        return sqlite3_bind_null(stmt, index);
+    }
+    return sqlite3_bind_text(stmt, index, text, -1, SQLITE_TRANSIENT);
+}
+
+static int load_user_row(sqlite3 *db, const char *key, bool *found, char **value, char *err,
+                         size_t errlen)
+{
+    sqlite3_stmt *stmt = NULL;
+    int rc = 0;
+
+    *found = false;
+    *value = NULL;
+    if (sqlite3_prepare_v2(db, "SELECT value FROM settings WHERE key = ?1;", -1, &stmt, NULL) !=
+        SQLITE_OK) {
+        set_errf(err, errlen, "sqlite", sqlite3_errmsg(db));
+        return -1;
+    }
+    (void)sqlite3_bind_text(stmt, 1, key, -1, SQLITE_TRANSIENT);
+    rc = sqlite3_step(stmt);
+    if (rc == SQLITE_DONE) {
+        (void)sqlite3_finalize(stmt);
+        return 0;
+    }
+    if (rc != SQLITE_ROW) {
+        set_errf(err, errlen, "sqlite", sqlite3_errmsg(db));
+        (void)sqlite3_finalize(stmt);
+        return -1;
+    }
+    *found = true;
+    if (sqlite3_column_text(stmt, 0) != NULL) {
+        *value = dup_str((const char *)sqlite3_column_text(stmt, 0));
+    }
+    (void)sqlite3_finalize(stmt);
+    if (*value == NULL) {
+        set_err(err, errlen, "out of memory");
+        return -1;
+    }
+    return 0;
+}
+
+static int load_brain_row(sqlite3 *db, const char *key, bool *found, bool *live, char **value,
+                          char **vector, char *err, size_t errlen, StoreError *serr)
+{
+    sqlite3_stmt *stmt = NULL;
+    int rc = 0;
+
+    *found = false;
+    *live = false;
+    *value = NULL;
+    *vector = NULL;
+    if (sqlite3_prepare_v2(db,
+                           "SELECT value, version_vector, deleted_at FROM settings WHERE key = ?1;",
+                           -1, &stmt, NULL) != SQLITE_OK) {
+        capture_sqlite_error(db, serr);
+        set_errf(err, errlen, "sqlite", sqlite3_errmsg(db));
+        return -1;
+    }
+    (void)sqlite3_bind_text(stmt, 1, key, -1, SQLITE_TRANSIENT);
+    rc = sqlite3_step(stmt);
+    if (rc == SQLITE_DONE) {
+        (void)sqlite3_finalize(stmt);
+        return 0;
+    }
+    if (rc != SQLITE_ROW) {
+        capture_sqlite_error(db, serr);
+        set_errf(err, errlen, "sqlite", sqlite3_errmsg(db));
+        (void)sqlite3_finalize(stmt);
+        return -1;
+    }
+    *found = true;
+    if (sqlite3_column_type(stmt, 2) == SQLITE_NULL) {
+        *live = true;
+    }
+    if (sqlite3_column_text(stmt, 0) != NULL) {
+        *value = dup_str((const char *)sqlite3_column_text(stmt, 0));
+    }
+    if (sqlite3_column_text(stmt, 1) != NULL) {
+        *vector = dup_str((const char *)sqlite3_column_text(stmt, 1));
+    }
+    (void)sqlite3_finalize(stmt);
+    if (*value == NULL || *vector == NULL) {
+        free(*value);
+        free(*vector);
+        *value = NULL;
+        *vector = NULL;
+        set_err(err, errlen, "out of memory");
+        return -1;
+    }
+    return 0;
+}
+
+static int row_quota_hit(sqlite3 *db, bool found, bool *hit, char *err, size_t errlen,
+                         StoreError *serr)
+{
+    long long count = 0;
+
+    *hit = false;
+    if (found) {
+        return 0;
+    }
+    if (select_i64(db, "SELECT COUNT(*) FROM settings;", NULL, &count, err, errlen, serr) != 0) {
+        return -1;
+    }
+    if (count >= (long long)SETTING_ROW_QUOTA) {
+        *hit = true;
+    }
+    return 0;
+}
+
+static int insert_setting_history(sqlite3 *db, const char *key, const char *old_value,
+                                  const char *new_value, const char *actor, const char *now,
+                                  char *err, size_t errlen, StoreError *serr)
+{
+    sqlite3_stmt *stmt = NULL;
+
+    if (sqlite3_prepare_v2(db,
+                           "INSERT INTO settings_history (key, old_value, new_value, updated_by, "
+                           "at) VALUES (?1, ?2, ?3, ?4, ?5);",
+                           -1, &stmt, NULL) != SQLITE_OK) {
+        capture_sqlite_error(db, serr);
+        set_errf(err, errlen, "sqlite", sqlite3_errmsg(db));
+        return -1;
+    }
+    (void)sqlite3_bind_text(stmt, 1, key, -1, SQLITE_TRANSIENT);
+    (void)bind_text_or_null(stmt, 2, old_value);
+    (void)bind_text_or_null(stmt, 3, new_value);
+    (void)sqlite3_bind_text(stmt, 4, actor, -1, SQLITE_TRANSIENT);
+    (void)sqlite3_bind_text(stmt, HISTORY_AT_PARAM, now, -1, SQLITE_TRANSIENT);
+    if (sqlite3_step(stmt) != SQLITE_DONE) {
+        capture_sqlite_error(db, serr);
+        set_errf(err, errlen, "sqlite", sqlite3_errmsg(db));
+        (void)sqlite3_finalize(stmt);
+        return -1;
+    }
+    (void)sqlite3_finalize(stmt);
+    return 0;
+}
+
+static int trim_setting_history(sqlite3 *db, const char *key, char *err, size_t errlen,
+                                StoreError *serr)
+{
+    char sql[HISTORY_TRIM_SQL];
+    const char *binds[1];
+    int n = 0;
+
+    n = snprintf(sql, sizeof(sql),
+                 "DELETE FROM settings_history WHERE key = ?1 AND rowid NOT IN "
+                 "(SELECT rowid FROM settings_history WHERE key = ?1 "
+                 "ORDER BY rowid DESC LIMIT %d);",
+                 SETTING_HISTORY_KEEP);
+    if (n < 0 || (size_t)n >= sizeof(sql)) {
+        set_err(err, errlen, "internal error");
+        return -1;
+    }
+    binds[0] = key;
+    return exec_bound(db, sql, binds, 1, err, errlen, serr);
+}
+
+static int bump_setting_seq(sqlite3 *db, const char *device_id, const char *vv_in, char *vv_out,
+                            size_t vv_cap, char *err, size_t errlen, StoreError *serr)
+{
+    if (vv_increment(vv_in != NULL ? vv_in : "{}", device_id, vv_out, vv_cap) != 0) {
+        set_err(err, errlen, "internal error");
+        return -1;
+    }
+    return exec_sql(db, "UPDATE brain_meta SET change_seq = change_seq + 1;", err, errlen, serr);
+}
+
+static int write_user_row(sqlite3 *db, bool found, const char *key, const char *json,
+                          const char *actor, const char *now, bool reset, char *err, size_t errlen)
+{
+    const char *sql = NULL;
+    const char *binds[4];
+
+    if (reset) {
+        binds[0] = key;
+        return exec_bound(db, "DELETE FROM settings WHERE key = ?1;", binds, 1, err, errlen, NULL);
+    }
+    if (found) {
+        sql = "UPDATE settings SET value = ?2, updated_by = ?3, updated_at = ?4 WHERE key = ?1;";
+    } else {
+        sql = "INSERT INTO settings (key, value, updated_by, updated_at) VALUES (?1, ?2, ?3, ?4);";
+    }
+    binds[0] = key;
+    binds[1] = json;
+    binds[2] = actor;
+    binds[3] = now;
+    return exec_bound(db, sql, binds, 4, err, errlen, NULL);
+}
+
+static int write_brain_row(sqlite3 *db, bool found, bool reset, const char *key, const char *json,
+                           const char *actor, const char *now, const char *device_id,
+                           const char *vector, char *err, size_t errlen, StoreError *serr)
+{
+    const char *sql = NULL;
+    const char *binds[BRAIN_WRITE_BINDS];
+
+    if (reset) {
+        sql = "UPDATE settings SET updated_by = ?2, updated_at = ?3, device_id = ?4, "
+              "version_vector = ?5, deleted_at = ?3, change_seq = (SELECT change_seq FROM "
+              "brain_meta) WHERE key = ?1;";
+        binds[0] = key;
+        binds[1] = actor;
+        binds[2] = now;
+        binds[3] = device_id;
+        binds[4] = vector;
+        return exec_bound(db, sql, binds, BRAIN_RESET_BINDS, err, errlen, serr);
+    }
+    if (found) {
+        sql = "UPDATE settings SET value = ?2, updated_by = ?3, updated_at = ?4, device_id = ?5, "
+              "version_vector = ?6, deleted_at = NULL, change_seq = (SELECT change_seq FROM "
+              "brain_meta) WHERE key = ?1;";
+    } else {
+        sql = "INSERT INTO settings (key, value, updated_by, updated_at, device_id, "
+              "version_vector, deleted_at, change_seq) VALUES (?1, ?2, ?3, ?4, ?5, ?6, NULL, "
+              "(SELECT change_seq FROM brain_meta));";
+    }
+    binds[0] = key;
+    binds[1] = json;
+    binds[2] = actor;
+    binds[3] = now;
+    binds[4] = device_id;
+    binds[BIND_VECTOR] = vector;
+    return exec_bound(db, sql, binds, BRAIN_WRITE_BINDS, err, errlen, serr);
+}
+
+static int load_mutate_row(Store *s, sqlite3 *db, bool brain, const char *key, bool *found,
+                           bool *live, char **value, char **vector, char *err, size_t errlen,
+                           StoreError **serr_out)
+{
+    *found = false;
+    *live = false;
+    *value = NULL;
+    *vector = NULL;
+    *serr_out = NULL;
+    if (brain) {
+        *serr_out = &s->last;
+        return load_brain_row(db, key, found, live, value, vector, err, errlen, *serr_out);
+    }
+    if (load_user_row(db, key, found, value, err, errlen) != 0) {
+        return -1;
+    }
+    if (*found) {
+        *live = true;
+    }
+    return 0;
+}
+
+static bool setting_write_noop(bool reset, bool live, const char *value, const char *json)
+{
+    if (reset) {
+        if (live) {
+            return false;
+        }
+        return true;
+    }
+    if (live && value != NULL && json != NULL && strcmp(value, json) == 0) {
+        return true;
+    }
+    return false;
+}
+
+/* 1 when a new key is over quota (sentence already stored), -1 on a store
+   failure, 0 to continue. An existing row, including a tombstone, is 0. */
+static int refuse_new_key(sqlite3 *db, bool brain, bool found, char *err, size_t errlen,
+                          StoreError *serr)
+{
+    bool hit = false;
+
+    if (row_quota_hit(db, found, &hit, err, errlen, serr) != 0) {
+        return -1;
+    }
+    if (!hit) {
+        return 0;
+    }
+    if (brain) {
+        set_err(err, errlen, k_brain_quota);
+    } else if (err != NULL && errlen > 0U) {
+        err[0] = '\0';
+    }
+    return 1;
+}
+
+static int write_changed_row(const Store *s, sqlite3 *db, bool brain, bool found, bool reset,
+                             const char *key, const char *json, const char *actor, const char *now,
+                             const char *vector, char *err, size_t errlen, StoreError *serr)
+{
+    char vector_out[VV_OUT_MAX];
+    const char *vector_in = "{}";
+
+    if (!brain) {
+        return write_user_row(db, found, key, json, actor, now, reset, err, errlen);
+    }
+    if (found) {
+        vector_in = vector;
+    }
+    if (bump_setting_seq(db, s->device_id, vector_in, vector_out, sizeof(vector_out), err, errlen,
+                         serr) != 0) {
+        return -1;
+    }
+    return write_brain_row(db, found, reset, key, json, actor, now, s->device_id, vector_out, err,
+                           errlen, serr);
+}
+
+/* Transaction is already open. Commits a real write and rolls a no-op or a
+   refusal back. */
+static SettingStatus mutate_setting(Store *s, sqlite3 *db, bool brain, bool reset, const char *key,
+                                    const char *json, const char *actor, SettingWriteResult *out,
+                                    char *err, size_t errlen)
+{
+    StoreError *serr = NULL;
+    bool found = false;
+    bool live = false;
+    char *value = NULL;
+    char *vector = NULL;
+    char now[ISO_TS_MIN_BUFLEN];
+    const char *old_value = NULL;
+    const char *new_value = NULL;
+    int over = 0;
+
+    if (load_mutate_row(s, db, brain, key, &found, &live, &value, &vector, err, errlen, &serr) !=
+        0) {
+        goto store_fail;
+    }
+    if (setting_write_noop(reset, live, value, json)) {
+        goto noop;
+    }
+    if (!reset && !found) {
+        SettingStatus st = SETTING_ERR_QUOTA;
+
+        over = refuse_new_key(db, brain, found, err, errlen, serr);
+        if (over != 0) {
+            if (over < 0) {
+                st = SETTING_ERR_STORE;
+            }
+            rollback_quiet(db);
+            free(value);
+            free(vector);
+            setting_fail(out, st);
+            return st;
+        }
+    }
+    if (utc_now(now, sizeof(now)) != 0) {
+        set_err(err, errlen, "internal error");
+        goto store_fail;
+    }
+    if (write_changed_row(s, db, brain, found, reset, key, json, actor, now, vector, err, errlen,
+                          serr) != 0) {
+        goto store_fail;
+    }
+    if (live) {
+        old_value = value;
+    }
+    if (!reset) {
+        new_value = json;
+    }
+    if (insert_setting_history(db, key, old_value, new_value, actor, now, err, errlen, serr) != 0 ||
+        trim_setting_history(db, key, err, errlen, serr) != 0 ||
+        exec_sql(db, "COMMIT;", err, errlen, serr) != 0) {
+        goto store_fail;
+    }
+    free(value);
+    free(vector);
+    out->status = SETTING_OK;
+    out->changed = true;
+    return SETTING_OK;
+
+noop:
+    rollback_quiet(db);
+    free(value);
+    free(vector);
+    out->status = SETTING_OK;
+    out->changed = false;
+    return SETTING_OK;
+
+store_fail:
+    rollback_quiet(db);
+    free(value);
+    free(vector);
+    setting_fail(out, SETTING_ERR_STORE);
+    return SETTING_ERR_STORE;
+}
+
+static int open_user_write(const char *path, sqlite3 **out, char *err, size_t errlen)
+{
+    int rc = 0;
+
+    *out = NULL;
+    if (path == NULL || path[0] == '\0') {
+        set_err(err, errlen, "empty database path");
+        return -1;
+    }
+    if (store_user_db_ensure(path, err, errlen) != 0) {
+        return -1;
+    }
+    rc = sqlite3_open_v2(path, out, SQLITE_OPEN_READWRITE, NULL);
+    if (rc != SQLITE_OK) {
+        /* sqlite3_errmsg(NULL) is "out of memory". sqlite3_close(NULL) is a no-op. */
+        set_errf(err, errlen, "cannot open database", sqlite3_errmsg(*out));
+        (void)sqlite3_close(*out);
+        *out = NULL;
+        return -1;
+    }
+    if (apply_pragmas(*out, STORE_DEFAULT_BUSY_TIMEOUT_MS, err, errlen, NULL) != 0) {
+        (void)sqlite3_close(*out);
+        *out = NULL;
+        return -1;
+    }
+    return 0;
+}
+
+/* Read-write open that does not create the file. A missing file is absent. */
+static int open_user_existing(const char *path, sqlite3 **out, bool *absent, char *err,
+                              size_t errlen)
+{
+    int rc = 0;
+
+    *out = NULL;
+    *absent = false;
+    if (path == NULL || path[0] == '\0') {
+        *absent = true;
+        return 0;
+    }
+    rc = sqlite3_open_v2(path, out, SQLITE_OPEN_READWRITE, NULL);
+    if (rc != SQLITE_OK) {
+        int sys = ENOENT;
+        char message[OPEN_ERR_CAP];
+
+        message[0] = '\0';
+        if (*out != NULL) {
+            sys = sqlite3_system_errno(*out);
+            (void)snprintf(message, sizeof(message), "%s", sqlite3_errmsg(*out));
+            (void)sqlite3_close(*out);
+            *out = NULL;
+        }
+        if (sys == ENOENT) {
+            *absent = true;
+            return 0;
+        }
+        set_errf(err, errlen, "cannot open database", message[0] != '\0' ? message : "missing");
+        return -1;
+    }
+    if (apply_pragmas(*out, STORE_DEFAULT_BUSY_TIMEOUT_MS, err, errlen, NULL) != 0) {
+        (void)sqlite3_close(*out);
+        *out = NULL;
+        return -1;
+    }
+    return 0;
+}
+
+static SettingStatus begin_user_tx(sqlite3 *db, char *err, size_t errlen)
+{
+    if (exec_sql(db, "BEGIN IMMEDIATE;", err, errlen, NULL) != 0) {
+        return SETTING_ERR_STORE;
+    }
+    return SETTING_OK;
+}
+
+static SettingStatus begin_brain_tx(Store *s, char *err, size_t errlen)
+{
+    StoreStatus st = STORE_OK;
+
+    st = begin_write(s);
+    if (st != STORE_OK) {
+        set_err(err, errlen, store_status_message(st));
+        return SETTING_ERR_STORE;
+    }
+    return SETTING_OK;
+}
+
+static void fill_layer_json(const char *src, char *dest, size_t cap, bool *live)
+{
+    size_t n = 0;
+
+    *live = false;
+    dest[0] = '\0';
+    if (src == NULL) {
+        return;
+    }
+    n = strlen(src);
+    if (n >= cap) {
+        return;
+    }
+    memcpy(dest, src, n + 1U);
+    *live = true;
+}
+
+SettingStatus store_setting_set(Store *brain, const char *user_db, const SettingWrite *w,
+                                SettingWriteResult *out, char *err, size_t errlen)
+{
+    const SettingSpec *spec = NULL;
+    SettingLayer layer = SETTING_LAYER_AUTO;
+    SettingStatus st = SETTING_OK;
+    char json[SETTING_VALUE_CAP];
+    sqlite3 *udb = NULL;
+
+    if (out != NULL) {
+        memset(out, 0, sizeof(*out));
+    }
+    if (brain == NULL || brain->db == NULL || w == NULL || out == NULL) {
+        set_err(err, errlen, "internal error");
+        setting_fail(out, SETTING_ERR_STORE);
+        return SETTING_ERR_STORE;
+    }
+    st = setting_prepare(w->key, w->items, w->nitems, w->layer, json, sizeof(json), &spec, &layer,
+                         err, errlen);
+    if (st != SETTING_OK) {
+        setting_fail(out, st);
+        return st;
+    }
+    out->layer = layer;
+    if (layer == SETTING_LAYER_USER) {
+        if (open_user_write(user_db, &udb, err, errlen) != 0 ||
+            begin_user_tx(udb, err, errlen) != SETTING_OK) {
+            if (udb != NULL) {
+                (void)sqlite3_close(udb);
+            }
+            setting_fail(out, SETTING_ERR_STORE);
+            return SETTING_ERR_STORE;
+        }
+        st = mutate_setting(brain, udb, false, false, spec->key, json, setting_actor(w->updated_by),
+                            out, err, errlen);
+        (void)sqlite3_close(udb);
+        return st;
+    }
+    st = begin_brain_tx(brain, err, errlen);
+    if (st != SETTING_OK) {
+        setting_fail(out, st);
+        return st;
+    }
+    return mutate_setting(brain, brain->db, true, false, spec->key, json,
+                          setting_actor(w->updated_by), out, err, errlen);
+}
+
+SettingStatus store_setting_reset(Store *brain, const char *user_db, const char *key,
+                                  SettingLayer layer, const char *updated_by,
+                                  SettingWriteResult *out, char *err, size_t errlen)
+{
+    const SettingSpec *spec = NULL;
+    SettingLayer chosen = SETTING_LAYER_AUTO;
+    SettingStatus st = SETTING_OK;
+    sqlite3 *udb = NULL;
+    bool absent = false;
+
+    if (out != NULL) {
+        memset(out, 0, sizeof(*out));
+    }
+    if (brain == NULL || brain->db == NULL || out == NULL) {
+        set_err(err, errlen, "internal error");
+        setting_fail(out, SETTING_ERR_STORE);
+        return SETTING_ERR_STORE;
+    }
+    st = setting_choose_layer(key, layer, &spec, &chosen, err, errlen);
+    if (st != SETTING_OK) {
+        setting_fail(out, st);
+        return st;
+    }
+    out->layer = chosen;
+    if (chosen == SETTING_LAYER_USER) {
+        if (open_user_existing(user_db, &udb, &absent, err, errlen) != 0) {
+            setting_fail(out, SETTING_ERR_STORE);
+            return SETTING_ERR_STORE;
+        }
+        if (absent) {
+            out->status = SETTING_OK;
+            out->changed = false;
+            return SETTING_OK;
+        }
+        if (begin_user_tx(udb, err, errlen) != SETTING_OK) {
+            (void)sqlite3_close(udb);
+            setting_fail(out, SETTING_ERR_STORE);
+            return SETTING_ERR_STORE;
+        }
+        st = mutate_setting(brain, udb, false, true, spec->key, NULL, setting_actor(updated_by),
+                            out, err, errlen);
+        (void)sqlite3_close(udb);
+        return st;
+    }
+    st = begin_brain_tx(brain, err, errlen);
+    if (st != SETTING_OK) {
+        setting_fail(out, st);
+        return st;
+    }
+    return mutate_setting(brain, brain->db, true, true, spec->key, NULL, setting_actor(updated_by),
+                          out, err, errlen);
+}
+
+SettingStatus store_setting_read(Store *brain, const char *user_db, const char *key,
+                                 const char *flag_text, SettingRead *out, char *err, size_t errlen)
+{
+    const SettingSpec *spec = NULL;
+    SettingLayer ignored = SETTING_LAYER_AUTO;
+    char flag_json[SETTING_VALUE_CAP];
+    const char *flag = NULL;
+    const char *one = NULL;
+    sqlite3 *udb = NULL;
+    bool absent = false;
+    bool found = false;
+    bool live = false;
+    char *user_value = NULL;
+    char *brain_value = NULL;
+    char *vector = NULL;
+
+    if (out != NULL) {
+        memset(out, 0, sizeof(*out));
+    }
+    if (err != NULL && errlen > 0U) {
+        err[0] = '\0';
+    }
+    if (brain == NULL || brain->db == NULL || out == NULL) {
+        set_err(err, errlen, "internal error");
+        return SETTING_ERR_STORE;
+    }
+    spec = setting_by_key(key);
+    if (spec == NULL) {
+        out->status = SETTING_ERR_UNKNOWN;
+        return SETTING_ERR_UNKNOWN;
+    }
+    if (flag_text != NULL) {
+        SettingStatus st = SETTING_OK;
+
+        one = flag_text;
+        st = setting_prepare(key, &one, 1, SETTING_LAYER_AUTO, flag_json, sizeof(flag_json), &spec,
+                             &ignored, err, errlen);
+        if (st != SETTING_OK) {
+            out->status = st;
+            return st;
+        }
+        flag = flag_json;
+    }
+    (void)ignored;
+    if (open_user_existing(user_db, &udb, &absent, err, errlen) != 0) {
+        out->status = SETTING_ERR_STORE;
+        return SETTING_ERR_STORE;
+    }
+    if (!absent) {
+        if (load_user_row(udb, spec->key, &found, &user_value, err, errlen) != 0) {
+            free(user_value);
+            (void)sqlite3_close(udb);
+            out->status = SETTING_ERR_STORE;
+            return SETTING_ERR_STORE;
+        }
+        (void)sqlite3_close(udb);
+    }
+    if (load_brain_row(brain->db, spec->key, &found, &live, &brain_value, &vector, err, errlen,
+                       &brain->last) != 0) {
+        free(user_value);
+        free(brain_value);
+        free(vector);
+        out->status = SETTING_ERR_STORE;
+        return SETTING_ERR_STORE;
+    }
+    free(vector);
+    if (!live) {
+        free(brain_value);
+        brain_value = NULL;
+    }
+    fill_layer_json(user_value, out->user_value, sizeof(out->user_value), &out->user_live);
+    fill_layer_json(brain_value, out->brain_value, sizeof(out->brain_value), &out->brain_live);
+    {
+        const char *user_json = NULL;
+        const char *brain_json = NULL;
+
+        if (out->user_live) {
+            user_json = out->user_value;
+        }
+        if (out->brain_live) {
+            brain_json = out->brain_value;
+        }
+        out->from = setting_pick(spec, user_json, brain_json, flag, out->value, sizeof(out->value));
+    }
+    free(user_value);
+    free(brain_value);
+    out->status = SETTING_OK;
+    return SETTING_OK;
+}
+
+// NOLINTEND(bugprone-easily-swappable-parameters)
