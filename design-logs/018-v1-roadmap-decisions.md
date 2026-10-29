@@ -41,7 +41,7 @@ How to read this section: "A", "B" and so on are Itay's letters, written out. "r
 - **V1-01. What "v1" means as a version number?**
   A: **A.** 0.3.0 = schema v6 + plugins + archive/export. 0.4.0 = daemon, MCP, sync client. 1.0.0 = the whole v1 target; from 1.0.0 the CLI and JSON are stable. Rationale: 0.3.0 unblocks the Mac app early, and 1.0.0 marks the stability promise.
 - **V1-45. Mac v1 feature list beyond Mac 011?**
-  A: **A** (Mac v1 = Mac 011 + Mac 014-017: alignment, agents and plugins, account and sync, archive and export; the sync UI can be hidden until Cloud ships), with Itay's caveat: "but I am not sure the accounts and sync will be included in v1. I want to release that when the offering of Fortkeeps cloud is ready." **OPEN** for Mac 016 (account and sync): see OQ-1.
+  A: **A** (Mac v1 = Mac 011 + Mac 014-017: alignment, agents and plugins, account and sync, archive and export; the sync UI can be hidden until Cloud ships), with Itay's caveat: "but I am not sure the accounts and sync will be included in v1. I want to release that when the offering of Fortkeeps cloud is ready." **OPEN** for Mac 016 (account and sync): see OQ-1. **Closed in Round 2:** Mac v1 is local-only.
 
 #### 2. Schema v6
 
@@ -65,7 +65,7 @@ How to read this section: "A", "B" and so on are Itay's letters, written out. "r
 - **V1-11. Migrate old `cites` + "[Amended …]" rows to `amends`?**
   A: **A**, with Itay's scope: "but it's something personal to be done for my Brain file, not part of the software we ship." So one guarded script converts Itay's own brain rows after v6 ships. It is not a shipped migration and not part of the engine.
 - **V1-12. Mac keyboard shortcut for Archive?**
-  A: **B.** Archive = ⌘E; Export = ⇧⌘E. (The sheet notes that ⌘E is the macOS "Use Selection for Find" shortcut; the Mac log must say how that system item is handled. See follow-up work.)
+  A: **B.** Archive = ⌘E; Export = ⇧⌘E. (The sheet notes that ⌘E is the macOS "Use Selection for Find" shortcut; the Mac log must say how that system item is handled. See follow-up work.) **Replaced in Round 2:** Archive = ⌃⌘A.
 
 #### 4. API surface and library (R 012)
 
@@ -119,7 +119,7 @@ How to read this section: "A", "B" and so on are Itay's letters, written out. "r
 #### 7. URL expansion (R 016)
 
 - **V1-31. HTML parser?**
-  A: **A.** lexbor (Apache-2.0). FK Scroll's paste converter uses it if it is ready in time (see follow-up work: the Scroll log currently says hand-written).
+  A: **A.** lexbor (Apache-2.0). FK Scroll's paste converter uses it if it is ready in time (see follow-up work: the Scroll log currently says hand-written). **Replaced in Round 2:** the hand-written parser stays primary; lexbor is the backup.
 - **V1-28. One name for the URL plugin?**
   A: **A.** Plugin `url_expand` (display name "URL expansion"); the C library is `remember-urlfetch`.
 - **V1-29. Where the plugin lives and how CLI users get it?**
@@ -143,7 +143,7 @@ How to read this section: "A", "B" and so on are Itay's letters, written out. "r
 #### 9. Packaging and release (R 017, Mac 018)
 
 - **V1-46. How the Fortkeeps Mac app is distributed?**
-  A: Not decided. Itay: "Haven't we solved the sandboxed problem yet? I need tradeoffs, though I lean to the App Store (also for the brand)". **OPEN** (OQ-9).
+  A: Not decided. Itay: "Haven't we solved the sandboxed problem yet? I need tradeoffs, though I lean to the App Store (also for the brand)". **OPEN** (OQ-9). **Closed in Round 2:** direct download, not sandboxed.
 - **V1-47. CLI channels and Linux?**
   A: **B.** Homebrew (macOS and Linux), a static Linux tarball on each GitHub release, and `.deb` / `.rpm` packages. Itay: "If we are going to support Linux, let's not do it half measures."
 - **V1-48. What GitHub Pages hosts?**
@@ -165,6 +165,27 @@ How to read this section: "A", "B" and so on are Itay's letters, written out. "r
 - **V1-49. Where the contradiction lint runs?**
   A: **A.** `remember/scripts/lint-decisions.py`, run by the design-log-grill workflow before a log closes.
 
+### Round 2 (2026-10-29 evening: Itay, closing OQ-1 and OQ-9, and two changes)
+
+These answers replace the Round 1 answers to the same IDs. Items marked **PROPOSED** are recommendations, not decisions.
+
+- **V1-12. Mac keyboard shortcut for Archive?** (replaces Round 1 B)
+  A: Archive is ⌃⌘A, not ⌘E (⌘E clashes with macOS's Use Selection for Find, and ⌘E stays with that system item). The menu item stays `Archive`, and help text reads `Archive (⌃⌘A)`. Any tooltip reads the same.
+- **V1-46. How the Fortkeeps Mac app is distributed?** (closes OQ-9)
+  A: Decided: the Fortkeeps Mac app is distributed outside the Mac App Store (direct download: a DMG from fortkeeps.com) and is NOT sandboxed. This keeps the LaunchAgent background service (V1-17) and `bot connect` editing other apps' settings (V1-23) possible. iPhone still goes through the App Store. The release (update) feed is hosted by us on fortkeeps.app, e.g. fortkeeps.app/appcast.xml.
+  - **PROPOSED** (Interface's recommendation, awaiting Itay's OK): updates use Sparkle (MIT, open source) with a signed appcast feed. The update UI is a quiet window with version, release notes and `Install Update`, `Remind Me Later` and `Skip This Version`; nothing installs without consent, no nagging; `Check for Updates…` in the app menu; Settings › General has `Automatically check for updates` (on by default) and `Automatically download and install` (off by default); full keyboard and VoiceOver support.
+  - Signing: public Mac downloads need Developer ID signing and notarization, which need the $99 Apple Developer membership (V1-43). Until then the app is dogfood-only.
+  - Business Developer: Mac v1 is free with no account, so no billing or Merchant of Record is needed until Mac v2 and Cloud. The MoR is Paddle or Polar, only once paid Cloud arrives with sync. Exact fees and the Israeli sole-trader registration steps are still open.
+  - Art (Leonardo): the art list changes to a download-page hero, a DMG install-window background and an update-available image (iPhone keeps App Store screenshots). The Mac art is built from Interface's brand set: the tower mark and the colors Keep blue, Stone and Ink.
+  - Copy (Story Weaver): Story Weaver will write the update prompt, release notes, download page and DMG copy. The update prompt and download-page copy wait for the updates design.
+  - The exact update and new-version-discovery design needs its own future log.
+- **V1-31. HTML parser?** (replaces Round 1 A)
+  A: Scroll's hand-written paste-HTML parser stays primary. lexbor is the backup, and we take lexbor's tests and make our parser pass them too.
+- **V1-45. Mac v1 feature list beyond Mac 011?** (closes OQ-1)
+  A: Mac v1 is local-only, with no sign-in, accounts or sync. Sync is revealed only when the offering is ready. The sequence is Mac v1, then sync and cloud, then Mac v2. Interface notes that v1 has no sign-in, account or Cloud screens. So Mac 016 (account and sync) is not in Mac v1.
+- **V1-14** (MCP only, or REST and MCP) stays **OPEN** (OQ-4).
+- Still open: V1-04, V1-06, V1-07, V1-14, V1-24, V1-29, V1-33 and V1-48 (OQ-2 to OQ-8 and OQ-10).
+
 ## Design
 
 This log decides no new engine behaviour of its own. Each answer above is the input to the feature log named in its section:
@@ -177,7 +198,7 @@ This log decides no new engine behaviour of its own. Each answer above is the in
 | R 014 sync | V1-03, V1-35, V1-37, V1-38, V1-41 |
 | R 015 hybrid search | V1-24, V1-25, V1-26, V1-27 |
 | R 016 URL expansion | V1-28, V1-29, V1-30, V1-31, V1-32, V1-33 |
-| R 017 packaging | V1-01, V1-43, V1-46 (open), V1-47, V1-48 |
+| R 017 packaging | V1-01, V1-43, V1-46 (Round 2; update design PROPOSED, own future log), V1-47, V1-48 |
 | Not engine | V1-11 (Itay's own brain), V1-49 (script, not yet written) |
 
 When a feature log is written, it cites the question ID and this log. Where a feature log needs to change an answer, it amends this log with a dated round.
@@ -200,7 +221,7 @@ When a feature log is written, it cites the question ID and this log. Where a fe
 
 | ID | Question | Why it is open |
 |---|---|---|
-| OQ-1 | V1-45: is Mac 016 (account and sync) in the first Mac release? | Itay answered A but is "not sure the accounts and sync will be included in v1" and wants them when the Cloud offering is ready. |
+| OQ-1 | V1-45: is Mac 016 (account and sync) in the first Mac release? | **Closed 2026-10-29 (Round 2):** no; Mac v1 is local-only. |
 | OQ-2 | V1-06: `archive` / `unarchive` verbs. | A is conditional on Interface approving a unified command set. |
 | OQ-3 | V1-07: does the message format expose `archived` / `archived_at` on a memory? | The reason for B is a question. V1-34 puts `archived_at` in schema v6; whether log 008 exposes it is not stated. B stands either way unless Itay changes it. |
 | OQ-4 | V1-14: does the daemon serve REST routes as well as `/mcp`? | Itay asked for trade-offs and product reasons. |
@@ -208,11 +229,13 @@ When a feature log is written, it cites the question ID and this log. Where a fe
 | OQ-6 | V1-33: where `url_expand` runs for Cloud API/MCP writes, and its cost. | The rule is decided (an MCP write is not a sync write); the execution and cost are not. Also interacts with V1-29 (plugin in a separate repo). |
 | OQ-7 | V1-29: how Homebrew users and the apps get plugins from `fortkeeps-plugins`. | B replaced A, which had said Homebrew installs it and the apps bundle it. |
 | OQ-8 | V1-24: per-platform embedding models, Apple built-in capabilities. | A is provisional pending research. |
-| OQ-9 | V1-46: Mac distribution. | Itay asked for trade-offs and leans to the App Store. A sandboxed App Store build bears on V1-17 (the app installs a LaunchAgent) and V1-23 (`bot connect` writes other apps' configs). |
+| OQ-9 | V1-46: Mac distribution. | **Closed 2026-10-29 (Round 2):** direct DMG download, not sandboxed; iPhone on the App Store. Sparkle and the update UI are PROPOSED. |
 | OQ-10 | V1-48: the fortkeeps.com mirror and the use of each domain. | Business Manager is to propose. |
 
 ## Future Work
 
 - R 011-R 017 feature logs, citing this log.
+- A log for the Mac update and new-version-discovery design (V1-46; Sparkle and the update UI are PROPOSED until then).
+- Business Developer: MoR fees (Paddle or Polar) and the Israeli sole-trader registration steps, before paid Cloud.
 - `scripts/lint-decisions.py` (V1-49).
 - Itay's personal `cites` → `amends` script (V1-11), outside the shipped software.
