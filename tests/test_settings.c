@@ -535,20 +535,20 @@ TEST(ensure_leaves_a_non_database_file_unchanged)
         return;
     }
     n = write(fd, "notes\n", 6);
+    ASSERT_EQ_INT(fchmod(fd, 0644), 0);
     ASSERT_EQ_INT(close(fd), 0);
     ASSERT_EQ_INT((int)n, 6);
-    ASSERT_EQ_INT(chmod(path, 0644), 0);
 
     ASSERT_TRUE(store_user_db_ensure(path, err, sizeof(err)) != 0);
     ASSERT_STREQ(err, "cannot read user_version: file is not a database");
-    ASSERT_EQ_INT(stat(path, &st), 0);
-    ASSERT_EQ_INT((int)(st.st_mode & (unsigned)0777), 0644);
     fd = open(path, O_RDONLY | O_CLOEXEC);
     ASSERT_TRUE(fd >= 0);
     if (fd < 0) {
         harness_remove_tree(dir);
         return;
     }
+    ASSERT_EQ_INT(fstat(fd, &st), 0);
+    ASSERT_EQ_INT((int)(st.st_mode & (unsigned)0777), 0644);
     n = read(fd, got, sizeof(got) - 1U);
     ASSERT_EQ_INT(close(fd), 0);
     ASSERT_TRUE(n >= 0);

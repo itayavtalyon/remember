@@ -401,3 +401,5 @@ Simplification. Applied: one empty-path sentence, the one the brain already uses
 The SQLite open is still by path after `close`, so a swapped directory entry can be opened. Holding the descriptor open does not keep the journal names on the real path. `store_open` has the same window. No second opener.
 
 No new sentence. INDEX row 20 stays unticked. Stage 3 has not started.
+
+GitHub CodeQL on `be4beb2` flagged `chmod` on the text-file path after `close` as a time-of-check race. The test now `fchmod`s the descriptor it still holds, and reads the mode back with `fstat` on the descriptor it opens to check the bytes.
