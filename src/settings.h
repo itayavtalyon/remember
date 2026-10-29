@@ -109,6 +109,9 @@ typedef struct {
 /* Locked error code, or "" when the status has no settings code. */
 const char *setting_status_code(SettingStatus st);
 
+/* [a-z][a-z0-9_-]{0,39}. The credential helper id grammar (G2-01). */
+bool helper_id_ok(const char *src);
+
 /* Fold the key and choose the layer a set or reset writes. */
 SettingStatus setting_choose_layer(const char *key, SettingLayer requested,
                                    const SettingSpec **spec_out, SettingLayer *layer_out, char *err,

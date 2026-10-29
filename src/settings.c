@@ -252,7 +252,8 @@ static bool json_quote(const char *src, char *out, size_t cap)
     return true;
 }
 
-static bool helper_id_ok(const char *src)
+/* cppcheck-suppress staticFunction ; public API (settings.h); credential lookup */
+bool helper_id_ok(const char *src)
 {
     size_t i = 0;
     size_t n = 0;

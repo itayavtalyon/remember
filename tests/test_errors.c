@@ -73,6 +73,7 @@ static const char *const k_error_codes[] = {
     "corrupt",
     "io_error",
     "schema_too_new",
+    "sync_credential_unavailable",
 };
 
 /* Unit tests pick the --json-errors mode per call; the flag is cleared after. */

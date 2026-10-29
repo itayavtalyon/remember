@@ -41,6 +41,8 @@ typedef enum {
     DIAG_CORRUPT,
     DIAG_IO_ERROR,
     DIAG_SCHEMA_TOO_NEW,
+    /* ST-3.6. Not an E4.3 code. Appended so the E4.3 order stays put. */
+    DIAG_SYNC_CREDENTIAL_UNAVAILABLE,
     DIAG_CODE_COUNT
 } DiagCode;
 
@@ -71,6 +73,11 @@ bool diag_warning_from_name(const char *name, DiagWarning *out);
  * code is outside the catalog or the write fails.
  */
 int diag_error(DiagCode code, const char *message);
+
+/* diag_error plus a fix sentence. Plain is one line: "remember: <message> <fix>".
+   JSON adds "fix" after "message" and does not add "retryable" (that field
+   waits for plan 21's envelope). NULL fix is diag_error. */
+int diag_error_fix(DiagCode code, const char *message, const char *fix);
 
 /*
  * Write one SQLite failure (E4.8 text, E4.9 detail). code is one of the eight

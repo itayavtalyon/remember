@@ -22,6 +22,9 @@ FILE *app_out(void);
 /* Current error stream (never NULL — falls back to stderr). */
 FILE *app_err(void);
 
+/* File descriptor of the error stream, or -1. For a child to inherit. */
+int app_err_fileno(void);
+
 /* Output/error stream pair. Passed by value so callers name each end and cannot
    transpose the two FILE* arguments. */
 typedef struct {

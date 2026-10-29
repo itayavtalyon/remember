@@ -394,6 +394,24 @@ A set against a text file at the user path fails in ensure with `cannot read use
 
 No sentence was invented. INDEX row 20 stays unticked. The definition of done stays unticked. Stages 4–9 have not started.
 
+### Stage 4 — token callback and CLI runner (2026-10-29)
+
+`RememberEnv` holds the three H-0.6 callbacks and one `callback_ctx`. Confirm and dispatch are plan 25. This stage does not call them. `sync_credential.c` is the lookup. It has no process spawn. `cmd_settings.c` is the only translation unit that spawns, and it is the CLI host callback.
+
+The lookup reads `remember.sync.credential_helper`. No row is `SETTING_FROM_DEFAULT` with an empty value, including a missing user.db. That path reads `REMEMBER_SYNC_TOKEN` untrimmed. A non-empty value, including whitespace only, is the token. A missing or empty variable returns an empty token and does not fail. The id `env` is the same read, and it does not call the host. Every other id goes to the host `token` callback. A NULL host or a NULL callback can serve only `env`. The engine runs no helper.
+
+A stored value is a JSON string. `json_quote` does not escape, so a grammar id is stored as `"id"`. The id in the message is the unquoted inside when that fits the 41-byte buffer. Otherwise it is the raw stored text. A hand-edited id outside `[a-z][a-z0-9_-]{0,39}` is still a set key: the callback is not called and nothing is spawned. `set` still does not check that a helper exists. The grammar is not narrowed to `env`, `keychain`, and `pass`. Diag maps C0 except tab, and DEL, to `?`.
+
+A set key with no usable token returns 1. The code is `sync_credential_unavailable`. The message is `the sync credential helper "<id>" did not return a token.` The fix is `Check the helper, or set remember.sync.credential_helper to env and export REMEMBER_SYNC_TOKEN.` `diag_error` stays byte-identical and calls `diag_error_fix` with a NULL fix. `diag_error_fix` appends that fix on the plain line and adds a JSON `fix` string after `message`. It does not add `retryable`. The JE-2.6 envelope waits for plan 21. An allocation failure while naming the helper uses the existing `remember: out of memory` line. A store failure returns -1 with the existing store sentence in `err` and does not emit `sync_credential_unavailable`.
+
+The token is absent from stdout, stderr, logs, and JSON. `sync_credential_wipe` clears the caller buffer. Failure wipes before the notice. Success leaves the token in the caller buffer so the test can read it, and the caller wipes. A shorter `REMEMBER_SYNC_TOKEN` also clears the bytes after the new NUL. A token that does not fit the caller buffer is wiped and is not truncated. With no row, that stays success and writes no notice, because this stage has no locked failure sentence for it. With the key set, it is the locked unavailable line, and the secret is not in that line.
+
+The CLI callback runs `remember-credential-<id>` from `PATH`. Argv is that bare name and `get`. There is no shell. Stdin is empty. Stderr is the user stderr. The token is the first stdout line with ASCII whitespace trimmed (space, tab, CR, LF, VT, FF). The process group is `SIGKILL` at 30000 ms. Return -1 when the program is not on `PATH`. Return -2 when it exits non-zero, times out, prints an empty first line, the line does not fit, or exec fails for a reason other than `ENOENT`. A non-grammar id is not spawned. `REMEMBER_TEST_HOOKS` may shorten the deadline. The `remember` binary does not get that hook unless the option is on. The production constant stays 30000. There is no sync command. The tests call the lookup. `tests/credential_helper.c` is an unsanitized Mach-O stand-in named `remember-credential-pass`.
+
+Sanitizer build, `./build/remember_tests ./build/remember --only settings,errors`: 154 tests, 0 failed, 2576 asserts. The store did not change, so `remember_store_tests` was not part of this stage. `CI=true BUILD_DIR=build REMEMBER_SCAN_BUILD=1 REMEMBER_IWYU=0 ./scripts/lint-all.sh` exited 0 (IWYU skipped). `./scripts/check-coverage.sh` exited 0: functions 100%, effective lines 100%, must-cover 0, `normalize.c` 384 branch sides, 0 missed (`output.c` 678, `search_terms.c` 176, `unicode.c` 80). `sync_credential.c` and `cmd_settings.c` stay on the line gate.
+
+No sentence was invented. INDEX row 20 stays unticked. The definition of done stays unticked. Stage 4 is not marked done. Stages 5–9 have not started. Stage 5 waits until plan 21's envelope writer has merged. Linux CI runs on this commit before the push.
+
 ## Review Notes
 
 **2026-10-27, stage 1 deep review.** In-session, on `be3ad6a` plus this fix. Itay asked for the review, a simplify pass, and the next stage in the same session, so this note closes stage 1. Local Bugbot is not installed.
@@ -446,3 +464,17 @@ Simplification. Applied: the unreachable quota returns in `canon_integer`, `cano
 No product or architecture question. The path-reopen window recorded in the stage 2 note is unchanged.
 
 INDEX row 20 stays unticked. The definition of done stays unticked. Stages 4–9 have not started.
+
+**2026-10-29, stage 4 deep review.** In-session, on `plan/20-stage4-token` before its commit. This note records that review. It does not mark stage 4 done. The second opinion has not happened. Local Bugbot is not installed. Stage 3's second opinion did not happen.
+
+| # | Severity | Finding | Outcome |
+|---|---|---|---|
+| 1 | important | `take_env_token` copied `REMEMBER_SYNC_TOKEN` and left the rest of the caller buffer. A shorter token kept the preloaded bytes after the NUL. | Fixed. When the buffer is longer than the token, the bytes after the NUL are wiped. `no_row_reads_remember_sync_token` checks that no `Z` remains after the NUL. A mutant that deletes that wipe fails the assert at `tests/test_settings.c:1770`. The tree was restored. `./build/remember_tests ./build/remember --only settings,errors`: 154 tests, 0 failed, 2576 asserts. |
+
+Confirmed by running, sanitizer build, the gate in the stage 4 implementation note. After the restore and before that combined run, `./build/remember_tests ./build/remember --only settings` was 48 tests, 0 failed, 1117 asserts.
+
+No product or architecture question was opened. The readings in the implementation note stay: a JSON `fix` string and no `retryable` (plan 21 owns the envelope); `RememberEnv` keeps the unused plan 25 pointers; the deadline is the 30000 ms constant, and `REMEMBER_TEST_HOOKS` may shorten it; an unquoted stored value is shown raw; `set` does not check that a helper exists; the grammar stays `[a-z][a-z0-9_-]{0,39}`.
+
+Simplification. Applied earlier in the stage: `read_first_line` was split so the function stays under cognitive complexity 25, and the runner tests share one fixture. Declined: one save/restore helper for every `getenv` in the settings tests (the variables differ, and the runner tests already share a fixture); a larger stdout read, which would be a second secret buffer; closing every inherited descriptor (the law names stdin, stdout, stderr, and the process group).
+
+INDEX row 20 stays unticked. The definition of done stays unticked. Stage 4 is not marked done. Stages 5–9 have not started.

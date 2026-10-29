@@ -45,6 +45,7 @@ static const char *const k_error_codes[DIAG_CODE_COUNT] = {
     [DIAG_CORRUPT] = "corrupt",
     [DIAG_IO_ERROR] = "io_error",
     [DIAG_SCHEMA_TOO_NEW] = "schema_too_new",
+    [DIAG_SYNC_CREDENTIAL_UNAVAILABLE] = "sync_credential_unavailable",
 };
 
 static const char *const k_warning_codes[DIAG_WARN_COUNT] = {
@@ -138,6 +139,7 @@ typedef struct {
     const char *plain_prefix;
     const char *code;
     const char *message;
+    const char *fix;               /* NULL: diag_error's shape, no fix field */
     const DiagDetailField *fields; /* JSON detail members; NULL when none */
     size_t nfields;
     bool json_errors;
@@ -200,6 +202,14 @@ static int write_notice(Notice notice)
         if (write_json_notice_head(err, notice.json_kind, notice.code, message) != 0) {
             return -1;
         }
+        if (notice.fix != NULL) {
+            if (fputs(",\"fix\":", err) < 0) {
+                return -1;
+            }
+            if (output_json_string(err, notice.fix) != 0) {
+                return -1;
+            }
+        }
         if (write_json_detail_fields(err, notice.fields, notice.nfields) != 0) {
             return -1;
         }
@@ -216,6 +226,14 @@ static int write_notice(Notice notice)
     if (output_text_human(err, message, false) != 0) {
         return -1;
     }
+    if (notice.fix != NULL) {
+        if (fputc(' ', err) == EOF) {
+            return -1;
+        }
+        if (output_text_human(err, notice.fix, false) != 0) {
+            return -1;
+        }
+    }
     if (fputc('\n', err) == EOF) {
         return -1;
     }
@@ -223,6 +241,12 @@ static int write_notice(Notice notice)
 }
 
 int diag_error(DiagCode code, const char *message)
+{
+    return diag_error_fix(code, message, NULL);
+}
+
+/* cppcheck-suppress staticFunction ; public API (diag.h) */
+int diag_error_fix(DiagCode code, const char *message, const char *fix)
 {
     const char *name = diag_code_name(code);
 
@@ -234,6 +258,7 @@ int diag_error(DiagCode code, const char *message)
         .plain_prefix = "",
         .code = name,
         .message = message,
+        .fix = fix,
         .json_errors = g_json_errors,
     });
 }

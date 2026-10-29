@@ -20,6 +20,11 @@ FILE *app_err(void)
     return g_err != NULL ? g_err : stderr;
 }
 
+int app_err_fileno(void)
+{
+    return fileno(app_err());
+}
+
 void app_set_streams(AppStreams streams)
 {
     g_out = streams.out;
