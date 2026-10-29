@@ -1,6 +1,8 @@
 #ifndef REMEMBER_STORE_H
 #define REMEMBER_STORE_H
 
+#include "settings.h"
+
 #include <stdbool.h>
 #include <stddef.h>
 
@@ -147,6 +149,20 @@ Store *store_open(const char *path, char *err, size_t errlen);
    A user_version above 1 fails with "database is newer than this remember".
    A user_version below 0 fails with "unsupported database version". */
 int store_user_db_ensure(const char *path, char *err, size_t errlen);
+
+/* Resolution and writes (007 ST-2.2, ST-4.3 through ST-4.6). Test through
+   these, not through a settings command. user_db NULL is no user layer.
+   A brain write bumps change_seq. A user write does not, and does not create
+   user.db until the value is stored. 0 is not the return: the status is. */
+SettingStatus store_setting_set(Store *brain, const char *user_db, const SettingWrite *w,
+                                SettingWriteResult *out, char *err, size_t errlen);
+SettingStatus store_setting_reset(Store *brain, const char *user_db, const char *key,
+                                  SettingLayer layer, const char *updated_by,
+                                  SettingWriteResult *out, char *err, size_t errlen);
+/* flag_text NULL is no flag. A flag outside the key's range is
+   setting_out_of_range and writes nothing. */
+SettingStatus store_setting_read(Store *brain, const char *user_db, const char *key,
+                                 const char *flag_text, SettingRead *out, char *err, size_t errlen);
 
 /*
  * store_open with options and a structured SQLite failure. opts NULL means
