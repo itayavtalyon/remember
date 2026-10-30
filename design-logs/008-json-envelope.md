@@ -1,7 +1,7 @@
 # 008 - JSON style and the message envelope
 
 **Status:** Design (grill closed 2026-10-21). J-Q1 to J-Q10 closed 2026-10-20. The deep review of 2026-10-21 (G-01 to G-36) reopened the log. Rounds 2 and 3 (simplification) closed the same day. Round 4 closed the same day. The grill is closed. Design states each winner. Amended 2026-10-22: §6 says the log wins where a JSON-STYLE row differs (M-05); `--as` replaces `--source` on writes (M-19 N8).
-**Changes:** 2026-10-25 (Itay, copy-pending answer 17): `--source` is gone completely, and J-Q9 now names `--as` and `--actor`. The settings `data` objects and page sizes are log 007 ST-7.11a–7.14 (D-03), shown in JSON-STYLE rev 2.2.
+**Changes:** 2026-10-25 copy final (`ANSWERS-FINAL.md`, K-1): JE-3.4 uses the Story Weaver locator line. Earlier the same day (Itay, copy-pending answer 17): `--source` is gone completely, and J-Q9 now names `--as` and `--actor`. The settings `data` objects and page sizes are log 007 ST-7.11a–7.14 (D-03), shown in JSON-STYLE rev 2.2.
 **Author:** Itay (+ agent facilitation)
 **Created:** 2026-10-18
 
@@ -157,7 +157,7 @@ Normative. JS gives the full rules and examples. This section states the contrac
 - JE-3.1. A memory's id is `id`: a lowercase hyphenated UUID v7 with no prefix `[decision:json-id-format]`.
 - JE-3.2. Input accepts only that form. A prefixed or brace form fails with `invalid_argument`.
 - JE-3.3. The integer row id is `local_id`. Only CLI output shows it `[decision:json-local-id]`.
-- JE-3.4. A CLI locator is the positional or `--key KEY` `[decision:s-13]`. The positional accepts a UUID (matched as `id`) or digits (matched as `local_id`) `[decision:positional-locator]` (#576). Any other positional fails with `invalid_argument`. The plain message is `"abc" isn't a memory id. Use a UUID, a number from 'remember list', or --key.` No `--id`, `--local-id` or `--sync-id` flag exists.
+- JE-3.4. A CLI locator is the positional or `--key KEY` `[decision:s-13]`. The positional accepts a UUID (matched as `id`) or digits (matched as `local_id`) `[decision:positional-locator]` (#576). Any other positional fails with `invalid_argument`. The plain message is `"<value>" isn't a memory id. Use a number from 'remember list', a UUID, or --key KEY.` (2026-10-25, K-1). `message` is `"<value>" isn't a memory id.` The fix is `Use a number from 'remember list', a UUID, or --key KEY.` `<value>` is the positional the user typed. No `--id`, `--local-id` or `--sync-id` flag exists.
 - JE-3.5. HTTP, MCP, plugin messages, events and export files never contain `local_id`.
 - JE-3.6. A reference to another object is `<noun>_id` (`memory_id`, `event_id`, `backfill_id`).
 - JE-3.7. The SQLite schema uses the same names: `entries.id TEXT` (the UUID) and `entries.local_id INTEGER PRIMARY KEY` `[decision:json-id-rename]`.

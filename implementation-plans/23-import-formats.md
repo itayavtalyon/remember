@@ -10,11 +10,11 @@ remember import --from-json PATH | --from-md PATH | --from-csv PATH | --from-db 
 
 ## Status
 
-PENDING DESIGN AND COPY.
+Copy approved 2026-10-25. PENDING DESIGN for the settings bytes (D-04).
 
 The memory merge, the JSON reader, and `--from-db` for v4, v5, and v6 are specified. Start those stages.
 
-Do not import settings bytes until DESIGN-PENDING D-04 names them. Do not emit `unknown_field` until COPY-PENDING C-35 names the line. Until C-35, do not silently ignore an unknown member in an export file. Stop that stage instead.
+Do not import settings bytes until DESIGN-PENDING D-04 names them. `unknown_field` is C-35 in [`COPY-PENDING.md`](COPY-PENDING.md). Print it. Do not silently ignore an unknown member in an export file.
 
 ## Source of truth
 
@@ -33,7 +33,7 @@ JSON reader: `src/jsonread.c`. Pure. No I/O. Own RFC 8259 reader. No vendored JS
 
 No old-name reader. A file that uses `sync_id` or `source` is not mapped to `id` or actors. Those members are unknown fields (JE-8.2, G2-16). No `remember-export` shipped before 0.3.0.
 
-Unknown field rule (JE-4.1 wins over old D33): an unknown member is a warning `unknown_field`, once per file, not a silent ignore. `bin`, `exported_at`, `engine`, and `schema` are known and ignored for merge, because export writes them for readers. `sync_id` and `source` are not known. The warning sentence is C-35. Do not print it and do not drop the member until C-35 is approved.
+Unknown field rule (JE-4.1 wins over old D33): an unknown member is a warning `unknown_field`, once per file, not a silent ignore. `bin`, `exported_at`, `engine`, and `schema` are known and ignored for merge, because export writes them for readers. `sync_id` and `source` are not known. The warning lines are C-35. Print them. Do not drop the member.
 
 `--from-db` is the exception that still reads old columns. It reads a v4 or v5 SQLite file that has `sync_id`, and a v6 file that has `id` (JE-8.1, ST-10.4). It reads those files read-only and does not migrate them. It ignores `outbox` (H-17.1). It reads bucket prefixes from the E12 tables, using the same E12.7 effective list as plan 19, or from the v6 `remember.buckets.prefixes` row. It does not apply E12.6. A v6 prefix row imports as a brain settings row under ST-8.6. An E12 effective list imports as one `remember.buckets.prefixes` value, the same shape plan 19 writes, with `updated_by` `{kind: import, id: null}` only when the memory rule applies. A settings row keeps the source actor when the source is v6 (ST-8.7). An E12 table has no actor. Store `{kind: human, id: null}` for that one migrated list, the same actor plan 19 uses. This is the plan 19 migration actor, not a new choice.
 
@@ -174,7 +174,7 @@ Tests: `tests/test_import_formats.c`, suite `import_formats`. Unit tests for the
 3. Links, including the cycle check and the JE-5.1 bumps.
 4. `--from-db` for v4, v5, and v6. Ignore `outbox`. Map E12 to one prefix row.
 5. Origin and the `errors` envelope.
-6. Stop until D-04 and C-35 are approved. Then import settings bytes and emit `unknown_field` with the approved line, once per file.
+6. Emit `unknown_field` with the C-35 line, once per file. Stop the settings-bytes import until D-04 is approved. Then import those bytes.
 
 ## Cloud contract
 
@@ -201,7 +201,7 @@ Quality gate: plan 19's commands. Coverage 100/100.
 - [ ] No E12.6 code.
 - [ ] No reader maps `sync_id` inside a JSON, Markdown, or CSV export.
 - [ ] Gate green. Second review clear.
-- [ ] INDEX row 23 is ticked only when D-04 and C-35 are closed and the review is closed.
+- [ ] INDEX row 23 is ticked only when D-04 is closed and the review is closed. C-35 is already approved.
 
 ## Second review handover
 

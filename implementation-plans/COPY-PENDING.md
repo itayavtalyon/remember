@@ -1,151 +1,312 @@
-# Copy pending — sentences the design logs do not lock
+# Approved copy — 2026-10-25
 
-Hand this file to the copy editor. It is not a plan. An implementer does not invent a sentence from it.
+Nothing in this file is pending. Itay approved `ANSWERS-FINAL.md` (25 Oct 2026, 20:50 UTC+2), including the Story Weaver wording (K-1). An implementer prints these lines and does not invent another.
 
-A row is missing when a command must print words and no Design section states those words. A proposed sentence in this file would be a decision. This file does not propose one.
+A plain line includes the printer prefix. JSON `message` is the text after that prefix, up to the fix. `fix` is the last next-action sentence. A warning has no `fix`. Keys and values go in double quotes. Commands go in single quotes.
 
-Quoted lines below are already locked. They are voice examples. Do not change them.
+The design logs quote the plain lines this file names. Where a log and this file disagree on a product rule, the log wins and the row is in [`DESIGN-PENDING.md`](DESIGN-PENDING.md). The sentences themselves are approved.
 
-When a row is approved, paste the approved sentence into the plan named in the row, clear that row, and change the plan status only when every row that blocks that plan is gone. Until then the plan stays pending and the stage named in the row does not start.
+## C-01
 
-## How to cut a plain line into JSON
+| Code | Plain line | message | fix |
+|---|---|---|---|
+| `schema_too_new` | `remember: this brain was made by a newer version of remember, so it is read-only here. You can still read and export it. Upgrade remember to make changes.` | `this brain was made by a newer version of remember, so it is read-only here. You can still read and export it.` | `Upgrade remember to make changes.` |
+| `setting_from_hook` | `remember: a hook or plugin can't change settings. Change them yourself in a terminal or in Settings.` | `a hook or plugin can't change settings.` | `Change them yourself in a terminal or in Settings.` |
+| `plugin_run_forbidden` | `remember: a hook or plugin can't run "<command>". Run it yourself in a terminal.` | `a hook or plugin can't run "<command>".` | `Run it yourself in a terminal.` |
+| positional locator (`invalid_argument`) | `remember: "<value>" isn't a memory id. Use a number from 'remember list', a UUID, or --key KEY.` | `"<value>" isn't a memory id.` | `Use a number from 'remember list', a UUID, or --key KEY.` |
+| `wrong_bin` | `remember: "<key>" isn't deleted, so it can't be purged. Run 'remember delete <key>' first.` | `"<key>" isn't deleted, so it can't be purged.` | `Run 'remember delete <key>' first.` |
+| Trash wrong list | `remember: "<key>" is in the Trash. Add --trash to use it.` | `"<key>" is in the Trash.` | `Add --trash to use it.` |
+| expired wrong list | `remember: "<key>" has expired. Add --expired to use it.` | `"<key>" has expired.` | `Add --expired to use it.` |
 
-`error` requires `code`, `message`, `fix`, and `retryable`. `fix` is a non-empty string (log 008 JE-2.6). A warning item has `code` and `message` and no `fix` (JE-2.7).
+`<command>` is the refused command. `<value>` is the positional the user typed. `<key>` is the key, or the id when the row has no key.
 
-SETTINGS-SCHEME §5.2 shows one split, for `setting_out_of_range`:
+Unchanged, and still locked:
 
-- message: `plugin.hybrid.rerank.budget can be 100ms to 30s; you gave 45s.`
-- fix: `Set a value from 100ms to 30s.`
+- `flag_meaning_changed`: `remember: warning: --trash now means the Trash (deleted memories). For expired memories, use --expired.` Detail `{"flag":"--trash","use":"--expired"}`.
+- `plugin_loop_halted`: `remember: warning: "<name>" was stopped after 100 hook runs in a row set each other off. The write was saved. To run it once more, run 'remember plugin rerun <name> <event-id>' within 7 days. To clear this warning without rerunning, run 'remember plugin status --ack <name>'.`
+- Did-you-mean: `remember: unknown setting "<input>". Did you mean "<full key>"? Run 'remember settings list' to see all settings.`
+- Budget or grace `setting_unknown` fix: `Budgets and cold-start grace are set by the plugin's manifest. Raise remember.plugins.chain_budget instead.` The message is the `setting_unknown` line.
+- Help: `--trash` is `Use the Trash: memories you deleted. Restore them, or purge them for good.` `--expired` is `Use expired memories: ones past their expiry time. They are not in the Trash.` `--hooks` is `Run matching hooks for this write, also ones you turned off for local writes.` `--no-hooks` is `Run no hooks for this write.`
+- Trust bodies: `Allow "<name>" to read your memories? It can send them off this Mac.` and `Allow hook "<name>" to run <path>?`
+- TTY prompt: `Type "<name>" to allow it, or press Enter to cancel:`
 
-That key no longer exists. The split shape is the only approved cut, and it is approved only for that example.
+Also replaced (warnings, no fix):
 
-Log 007 ST-3.6 already splits one code:
+- hybrid/rerank cold start: `remember: warning: hybrid/rerank is still starting, so these results are in keyword order. Search again in a moment.`
+- `brain_missing`: `remember: warning: brain "<path>" is in the list but isn't on disk. If you moved it, open it once from its new place. Otherwise run 'remember brain prune' to remove it from the list.`
 
-- message: `the sync credential helper "<id>" did not return a token.`
-- fix: `Check the helper, or set remember.sync.credential_helper to env and export REMEMBER_SYNC_TOKEN.`
+Plans: 19 (`schema_too_new`), 20 (`setting_from_hook`), 21 (locator, Trash, expired), 25 (`plugin_run_forbidden`, `wrong_bin`, cold start, `brain_missing`, trust prompt).
 
-Every other locked line in the logs is one sentence. The logs do not say which words are `message` and which words are `fix`. The existing `src/diag.c` pattern (problem in `message`, next action in `fix`) is code, not an approved cut.
+## C-02
 
-**C-01. One-sentence errors.** For each locked one-sentence error below, write `message` and `fix`. Do not leave `fix` empty. Blocks plans 19, 20, 21, 23, and 25 wherever that code is printed with `--json`.
+- `--color     Use color: auto, always, or never. auto uses color only on a terminal, when NO_COLOR is unset and TERM isn't dumb.`
+- `--quiet     Turn off progress lines on stderr.`
 
-Locked one-sentence errors to split:
+Plan 25 prints these. Plan 21 lists the flags and uses the same lines.
 
-| Code | Locked plain line | Where it fires |
+## C-03
+
+`setting_unknown`, no candidate. Plain: `remember: unknown setting "<key>". Run 'remember settings list' to see all settings.` Message: `unknown setting "<key>".` Fix: `Run 'remember settings list' to see all settings.` Plan 20.
+
+## C-04
+
+`setting_unknown`, plugin not installed. Plain: `remember: unknown setting "<key>": plugin <name> isn't installed. Run 'remember settings list' to see all settings.` Message: `unknown setting "<key>": plugin <name> isn't installed.` Fix: `Run 'remember settings list' to see all settings.` Plan 20, after plan 25 generates plugin keys.
+
+## C-05
+
+`setting_invalid_value`. Plain line is `remember: <message> <fix>`.
+
+| Case | message | fix |
 |---|---|---|
-| `schema_too_new` | `this brain was written by a newer remember. You can read it. Upgrade to write to it.` | A write to a brain whose `min_reader_version` is newer than the engine (007 ST-10.2). Exit 1. |
-| `setting_from_hook` | `a hook or plugin run can't change settings. Change them in your own terminal.` | `settings set`, `settings reset`, or `settings import` when `REMEMBER_HOOK_DEPTH` is 1 or more. Fails before key lookup (007 ST-7.10). Exit 1. `detail` has `key` and `hook`. |
-| `plugin_run_forbidden` | `a hook or plugin run can't run "<command>". Run it in your own terminal.` | Any command that is not on the H-5.5 allow list, when `REMEMBER_HOOK_DEPTH` is 1 or more (010 H-5.5). Exit 1. |
-| positional locator | `"abc" isn't a memory id. Use a UUID, a number from 'remember list', or --key.` | A positional locator that is neither a UUID nor digits (008 JE-3.4). Exit is `invalid_argument`. |
-| purge of a live row | `"<key>" is live. Delete it first, then purge it.` | `remember purge` of a live row. The id is used when the row has no key (010 H-16.7). Exit 3 `wrong_bin`. |
-| Trash wrong list | `remember: "<key>" is in the Trash. Add --trash to use it.` | Exit 3 when the row is in Deleted and the command did not pass `--trash` (010 H-16.9a). |
-| expired wrong list | `remember: "<key>" has expired. Add --expired to use it.` | Exit 3 when the row is expired and the command did not pass `--expired` (010 H-16.9a). |
+| Duration | `"<key>" needs a duration with a unit; you gave "<value>".` | `Use a number with ms, s, m, or h, like 800ms or 2s.` |
+| Sub-millisecond duration | `"<key>" can't be "<value>": a duration must be a whole number of milliseconds.` | `Use a whole number of milliseconds, like 800ms or 1.5s.` |
+| Size | `"<key>" needs a size with a unit; you gave "<value>".` | `Use a number with B, KiB, or MiB, like 512KiB or 2MiB.` |
+| Sub-byte size | `"<key>" can't be "<value>": a size must be a whole number of bytes.` | `Use a whole number of bytes, like 512B or 2KiB.` |
+| Boolean | `"<key>" must be true or false; you gave "<value>".` | `Use true or false.` |
+| Integer | `"<key>" needs a whole number; you gave "<value>".` | `Write it in plain digits, like 200, with no sign, leading zero, "_", or exponent.` |
+| Helper id | `"<value>" isn't a helper id.` | `Use a lowercase name that starts with a letter, up to 40 letters, digits, "_" or "-", like "keychain".` |
+| Bad prefix | `"<item>" isn't a bucket prefix.` | `Use 1 to 32 letters, digits, "-", "_" or ".", then one ":", like "project:".` |
+| Duplicate prefix | `"<item>" is in the list twice.` | `List each prefix once.` |
+| Folded duplicate | `"<item>" and "<other>" are the same prefix.` | `List each prefix once.` |
 
-Locked warnings are one `message`. They need no `fix`. Do not rewrite them:
+`<item>` is the prefix as typed, before folding. `<other>` is the other typed form. Detail for a prefix error adds `item`, and `other` when folding made the two match. There is no count limit. The 16 KiB cap is C-09.
 
-| Code | Locked plain line |
-|---|---|
-| `flag_meaning_changed` | `remember: warning: --trash now means the Trash (deleted memories). For expired memories, use --expired.` Detail `{"flag":"--trash","use":"--expired"}`. Once per command that uses `--trash`. Removed in the release after 0.3.0 (010 H-16.9a). |
-| `plugin_loop_halted` | `remember: warning: "<name>" was stopped after 100 hook runs in a row set each other off. The write was saved. To run it once more, run 'remember plugin rerun <name> <event-id>' within 7 days. To clear this warning without rerunning, run 'remember plugin status --ack <name>'.` (010 H-5.6) |
-| `plugin_filter_cold_start` for hybrid/rerank only | `remember: warning: hybrid/rerank is still starting, so results are in keyword order.` (010 H-12.8) |
-| `brain_missing` | `brain "<path>" is in the list and is not on disk. Run 'remember brain prune' to remove it.` (010 H-2.3) |
-| `setting_unknown` did-you-mean example | `remember: unknown setting "candidate_pool". Did you mean "remember.search.candidate_pool"? Run 'remember settings list' to see all settings.` (007 Examples). SETTINGS-SCHEME §5.1 uses the same shape with a different input: `unknown setting "remember.search.candidates". Did you mean "remember.search.candidate_pool"? Run 'remember settings list' to see all settings.` |
-| budget or grace `setting_unknown` fix | `Budgets and cold-start grace are set by the plugin's manifest. Raise remember.plugins.chain_budget instead.` (010 H-12.4, M-24). This is the `fix`. The `message` is still the `setting_unknown` line. |
+`settings set` exits 1. A sync apply uses C-14. The v5 to v6 migration warns `remember: warning: dropped "<item>" from "remember.buckets.prefixes": it isn't a bucket prefix.` Code `setting_invalid`, reason `bad_prefix_shape`.
 
-Help lines already locked (010 H-16.9a, H-16.11, H-16.10):
+Import of a bad prefix follows 007 ST-8.4, not a failed file. See DESIGN-PENDING for the code on that skip.
 
+Plan 20. The migration line is plan 19.
+
+## C-06
+
+From a setting: `remember: "<key>" can be <min> to <max>; you gave <value>. Set a value from <min> to <max>.`
+
+From a flag: message `<flag> ("<key>") can be <min> to <max>; you gave <value>.` Fix: `Use a value from <min> to <max>.` Example: `remember: --limit ("remember.search.max_results") can be 1 to 1000; you gave 5000. Use a value from 1 to 1000.` `<flag>` is `--candidate-pool` or `--limit`. `--limit` on `settings list` and `settings history` uses this flag form, range 1–1000. There is no ninth-prefix case. Plan 20.
+
+## C-07
+
+Message: `"<key>" is a brain setting; it can't be set for your user.` Fix: `Run the command again with --scope brain, or without --scope.` Plan 20.
+
+## C-08
+
+An unknown key or a bad value does not fail the file. Those rows skip and the import continues (007 ST-8.4, C-12, C-14). Do not print the old "nothing was changed" line for that case.
+
+`setting_import_invalid` is not given a new sentence here. What remains of that code is DESIGN-PENDING D-16. Plan 20 does not invent one.
+
+## C-09
+
+257th user.db row. Message: `you have 256 user settings, the most remember can hold.` Fix: `Reset settings you don't need with 'remember settings reset --scope user'.`
+
+Over 16 KiB. Message: `the value for "<key>" is over 16 KiB, the most a setting can hold.` Fix: `Use a shorter value.`
+
+The brain sentence stays `this brain has 256 settings, the most it can hold. Reset settings you don't need with 'remember settings reset'.` Plan 20.
+
+## C-10
+
+Plain: `"<key>" was reset. It's now <value>.` `<value>` is the effective value. With `--scope`, an empty layer shows `(unset)`.
+
+JSON `setting.reset.result` `data` is `{setting, scope, old_value, changed, action}`. `action` is `tombstone` (brain), `delete` (user), or `none` (no row, so `changed` is false). `setting.layers.<scope>` is null. Plan 20.
+
+## C-11
+
+Code `confirmation_required`, exit 1, nothing written. Plain: `remember: this resets <count> settings. Run '<command> --yes' to confirm.` Message: `this resets <count> settings.` Fix: `Run '<command> --yes' to confirm.` `<count>` is the number of keys. `<command>` is the command as typed.
+
+With `--yes`, JSON is `setting.reset.result` and `data` is `{count, settings[]}`. Each item is `{setting, scope, old_value, changed, action}`. Plan 20.
+
+## C-12
+
+Warning `setting_import_skipped`. Plain shape: `remember: warning: skipped "<key>": <reason>.` No fix.
+
+- Plugin not installed: `remember: warning: skipped "<key>": plugin <name> isn't installed.`
+- Other scope: `remember: warning: skipped "<key>": it's a brain setting, and you ran with --scope user.` and `remember: warning: skipped "<key>": it's a user setting, and you ran with --scope brain.`
+- Layer not allowed: `remember: warning: skipped "<key>": it can't be stored for your user.` and `remember: warning: skipped "<key>": it can't be stored for one brain.`
+- Unknown key uses the same shape, `remember: warning: skipped "<key>": <reason>.` The words of `<reason>` for `unknown_key` are not in the approved answers. Do not invent them. The copy editor writes that phrase. The other unwritten sentence is the hook-depth `--as`/`--actor` rejection in plans 20 and 21. Its code stays `invalid_argument`.
+
+Detail `reason` for the lines above is `plugin_not_installed`, `other_scope`, `layer_not_allowed`, or `unknown_key`. The import row has `result` `skipped`, the same `reason`, and `action` `none`.
+
+A bad value on import is 007 ST-8.4: warning `setting_invalid`, reason `invalid_value`, and the C-14 line. ANSWERS-FINAL also offered the C-12 shape for a bad value. That code choice is DESIGN-PENDING D-15. Until the log changes, print C-14 for a bad value and C-12 for the four reasons above. Plan 20.
+
+## C-13
+
+Human dates: `21 Oct at 12:04` (local, 24-hour, English). Add the year when it is not this year: `21 Oct 2025 at 12:04`. With no readable zone: `21 Oct at 10:04 UTC`. JSON stays RFC 3339 UTC.
+
+`get` stays:
+
+```text
+remember.search.candidate_pool = 400
+  from brain, set by human on 21 Oct at 12:04
+  user: (unset) · default: 200
 ```
---trash     Use the Trash: memories you deleted. Restore them, or purge them for good.
---expired   Use expired memories: ones past their expiry time. They are not in the Trash.
---hooks     Run matching hooks for this write, also ones you turned off for local writes.
---no-hooks  Run no hooks for this write.
+
+`set` success: `"<key>" is now <value> for this brain.` or `"<key>" is now <value> for your user.` with `--scope user`. No-op: `"<key>" is already <value>. Nothing changed.` JSON `setting.set.result`: `{setting, scope, old_value, changed}`.
+
+`list`, page 100, max 1000. One line: `<key> = <value>   (<from>)`. `<from>` is `default`, `user`, `brain`, or `flag`. When more pages follow, stderr (not a warning code): `remember: more settings. Run 'remember settings list --cursor <value>' to see them.` JSON: `{count, settings[]}` plus `next_cursor` and `has_more`.
+
+`history`, page 50, max 1000, newest first. Columns: when, scope, key, old → new, actor. The actor is `by <kind>`, plus `"<id>"` when the id is not null. Example: `21 Oct at 12:04  brain  remember.search.candidate_pool  200 → 400  by human`. The more-pages line names `history`. JSON: `{count, changes[]}`. Each change is `{key, scope, old_value, new_value, updated_by, changed_at, action}`. ANSWERS-FINAL says `action` is `tombstone` or `delete` for a reset, and `none` for a set. 007 ST-7.11b says a set is `action` `set`. Plan 20 follows the log. That difference is DESIGN-PENDING D-18. Do not change the plan until the log changes.
+
+`explain`:
+
+```text
+remember.search.candidate_pool  (integer, 20–2000, default 200)
+  How many keyword matches search looks at before filters rank them.
+  Can be set for: user, brain
+  Now: 400, from brain, set by human on 21 Oct at 12:04
+  Related: remember.search.max_results
 ```
 
-`--color` and `--quiet` are global flags beside `--db`, `--json`, `--strict`, `--busy-timeout`, and `--no-create`. The logs do not give a longer help sentence for `--color` or `--quiet`. **C-02.** Write those two help lines. Block: plan 25, the global-flag stage.
+The description line is the registry's own text. `effect`, `since`, and `status` show only when they are present.
 
-Trust dialog and the TTY prompt are locked (010 H-9.4). The error sentences for a missing callback and a false return are not.
+Import success: `Imported "<path>": <count> settings written, <count> unchanged, <count> skipped.` JSON `setting.import.result`: `{count, written, unchanged, skipped, rows[]}`. Each row is `{key, scope, result, reason?, action}`. The log also allows `result` `kept_local`, counted as `unchanged`, and an import row keeps both `result` and `action`. Plan 20 follows the log. Do not drop `kept_local`. Skipped lines print first (C-12). Plan 20.
 
-- Body, folder plugin: `Allow "<name>" to read your memories? It can send them off this Mac.`
-- Body, hook: `Allow hook "<name>" to run <path>?`
-- TTY prompt: `Type "<name>" to approve:`
+## C-14
 
-## Settings (plan 20)
+Sync apply, Cloud, and migration. Warning, no fix: `remember: warning: skipped "<key>": "<value>" isn't a valid value. This brain wasn't changed.` Detail: `key`, `value`, `reason` (for example `bad_prefix_shape`). `settings set` of a bad value is C-05, not this code. Plan 20. Plan 19 prints the migration prefix line in C-05, which is this code with reason `bad_prefix_shape`.
 
-SETTINGS-SCHEME §5.1 is the copy source log 007 ST-7.12 names, minus `setting_ambiguous`, `setting_read_only`, `time_budget_capped`, and `setting_overridden`. Several §5.1 examples name keys that 007 deleted (`plugin.hybrid.model`, `plugin.hybrid.rerank.budget`, `remember.hooks.<key>`, `remember.search.hybrid`). Do not print a deleted key. Write a live sentence.
+## C-15
 
-| ID | Code | Where it fires | What the user must learn | Voice nearby | Blocks |
-|---|---|---|---|---|---|
-| C-03 | `setting_unknown` with no candidate | Exit 2. ST-1.5: when no key matches, the message has no did-you-mean. | The key is unknown, and there is no suggestion. | The did-you-mean line above. | Plan 20 set/get/reset/explain. |
-| C-04 | `setting_unknown` plus the uninstalled-plugin hint | ST-5.10: a key of a plugin that is not installed is `setting_unknown`, with the hint `plugin <name> isn't installed`. | The plugin name is not installed. | Did-you-mean line. The hint words are locked. The sentence they sit in is not. | Plan 20, after plan 25 generates plugin keys. |
-| C-05 | `setting_invalid_value` | Exit 1. A duration, size, boolean, integer, helper id, or bucket prefix that fails its grammar. `detail`: `key`, `value`, `type`, `allowed`. | The value is the wrong shape, and what shape is legal. | §5.1 examples, which name deleted keys: `plugin.hybrid.model can't be "huge". Use one of: small, base.` and `plugin.hybrid.rerank.budget needs a duration with a unit, like 800ms or 2s.` and `remember.buckets.prefixes: "Project:" must be lowercase and end in ":", like project:.` The prefix row also conflicts with 006 E12.4. See DESIGN-PENDING D-01 before writing the prefix sentence. | Plan 20. |
-| C-06 | `setting_out_of_range` | Exit 1. A number or duration outside the registry range, including a flag (`--candidate-pool`, `--limit`). `detail`: `key`, `value`, `min`, `max`. | The allowed range, and the value that was given. | §5.1: `plugin.hybrid.rerank.budget can be 100ms to 30s; you gave 45s.` and `remember.buckets.prefixes can hold up to 8 prefixes; you gave 9.` Verification 7 says `remember.plugins.chain_budget` of `45s` uses this code. The live sentence is not written. The §5.2 fix `Set a value from 100ms to 30s.` matches the deleted key's range, not every key. | Plan 20. |
-| C-07 | `setting_scope_mismatch` for a brain-only key | Exit 1. `set --scope user` on `remember.buckets.prefixes`. `detail` names the allowed layers (ST-2.4). | This key can be stored only on the brain. | §5.1 user-only sentence, which is locked for `remember.plugins.idle_timeout`: `remember.plugins.idle_timeout is a user setting; it can't be set for one brain. Run the command again with --scope user, or without --scope.` | Plan 20. |
-| C-08 | `setting_import_invalid` | **Superseded 2026-10-25 (007 ST-8.4):** an unknown key is the warning `setting_import_skipped` and a bad value is the warning `setting_invalid`, and import continues, so no row fails the import. Old text: Exit 1. One unknown key or one bad value. Nothing is written (ST-8.4). `detail.errors[]`. | How many values failed, which failure is first, and that nothing changed. | §5.1: `settings.json wasn't imported: 2 values failed (first: plugin.hybrid.rerank.budget "fast" needs a duration). Nothing was changed. Fix the file or run with --dry-run to see all problems.` The example key is deleted. | Plan 20 import stage. |
-| C-09 | `quota_exceeded` for user.db | Exit 1. The 257th user.db settings row, or a value over 16 KiB. `detail.quota` is `settings_limit`. | The cap, and that reset frees a slot. | Brain sentence, locked: `this brain has 256 settings, the most it can hold. Reset settings you don't need with 'remember settings reset'.` The user.db sentence is not written. The 16 KiB sentence is not written. | Plan 20. |
-| C-10 | reset success | `reset` of a row that exists. SS §6.1 example: `remember.search.candidate_pool reset for this brain. Now: 200 (from your user setting).` ST-7.12 does not cite §6.1. A brain reset writes a tombstone. A user reset deletes the row. The example does not say which. | Which layer was cleared, and what value is effective now. | The §6.1 example. Also `(unset)` is locked for a layer with no row (ST-7.4, G-34.7). | Plan 20. |
-| C-11 | `reset --namespace` or `reset --all` without `--yes` | ST-7.8 requires `--yes`. The refusal sentence is not in Design. SS §6.1 has `this resets 6 settings for this brain. Run again with --yes to confirm, or see them with 'remember settings list --changed --scope brain'.` ST-7.12 does not adopt §6.1. | How many rows would change, and the exact command to confirm. | The §6.1 line. | Plan 20. |
-| C-12 | settings import skipped-row line | ST-8.5: import names each skipped row and writes the rest. Three skip kinds: uninstalled plugin, other scope when `--scope` is set, layer the target does not allow. | Which key was skipped, and which of the three reasons. | None locked. | Plan 20 import stage. |
-| C-13 | human lines for `settings list`, `settings history`, `settings explain`, and `settings set` success | JSON field names that Design names are in plan 20. The plain layout is specified only for `get` (007 Examples). | What a person reads on success. | `get` example: `remember.search.candidate_pool = 400` / `from brain, set by human on 21 Oct at 12:04` / `user: (unset) · default: 200`. The date shape `21 Oct at 12:04` appears only in that example. | Plan 20 command stage. |
+`plugin_approval_required`. Message: `"<name>" has to be allowed first, and there's no terminal to ask you in. Nothing was installed.` Fix: `Run '<command>' in your own terminal.` Plan 25.
 
-`setting_invalid` (ST-2.7, a synced value that is skipped and not written) has no plain line. **C-14.** Write it. Say that the brain was not changed. Block: plan 20, the sync-apply stage. Cloud uses the same skip.
+## C-16
 
-## Plugins and hooks (plan 25)
+`plugin_approval_denied`. Message: `"<name>" wasn't allowed, so nothing was installed.` Fix: `To try again, run '<command>' and type "<name>" to allow it.` Plan 25.
 
-Dialog bodies and the TTY prompt are locked. See the trust block above. These rows are the other words.
+## C-17
 
-| ID | Code | Where it fires | What the user must learn | Blocks |
-|---|---|---|---|---|
-| C-15 | `plugin_approval_required` | Exit 1. No confirm callback, or the CLI has no terminal (H-9.4). Nothing is recorded. | Approval is required, and nothing was installed. | Plan 25 trust stage. |
-| C-16 | `plugin_approval_denied` | Exit 1. The callback returned false, or the typed text was not the name (H-9.4). Nothing is recorded. | The install did not happen. | Plan 25 trust stage. |
-| C-17 | `plugin_untrusted` | Warning. Hash mismatch before a run (H-9.5). `disabled_reason` becomes `untrusted`. The plugin does not run. | Which plugin, and that `remember plugin trust NAME` is the way to approve the new files. | Plan 25. |
-| C-18 | `plugin_exists` | Exit 1. `plugin add` of a built-in name (H-10.2). | That name is built in. `hybrid` is the built-in name this release reserves. | Plan 25 install stage. |
-| C-19 | `plugin_missing` | Warning. A brain has `plugin.<name>.enabled` true and the plugin is not installed (H-10.6). Status lists it as `missing`. | The name, and that the brain row is still there. | Plan 25. |
-| C-20 | `plugin_preflight_failed` | Warning. Exit 0, or 4 with `--strict` (H-6.2). The write is saved. The recipient state is `failed`. | Which plugin, and why the check failed (missing file, not executable, or hash mismatch). | Plan 25. The 010 Examples transcript shows one line for a missing script: `remember: warning: hook "wake_coder" did not start: /Users/itay/bin/fk-wake doesn't exist. Run 'remember plugin show wake_coder'.` Design does not say that this line is the template for the other two failures. |
-| C-21 | `plugin_dispatch_failed` | Warning. The dispatcher cannot start (H-6.3). Exit 0, or 4 with `--strict`. | The write was saved, and the runs did not start. | Plan 25. |
-| C-22 | `plugin_not_rerunnable` | Exit 1. `plugin rerun` when that event has no `failed` or `halted` recipient for that plugin (H-5.7). | There is nothing to rerun. | Plan 25. |
-| C-23 | `plugin_unsupported` | `hook add`, folder `plugin add`, and dispatch when `REMEMBER_PROCESSES=0` (H-0.7). | This build cannot start a program. | Plan 25. |
-| C-24 | `plugin_backfill_incomplete` | Error, exit 1, not a warning (H-13.6, S-09). `plugin reindex` or `plugin enable` backfill that does not finish. A second run resumes. | The backfill stopped, and the command to resume. | Plan 25. Needs `message` and `fix` (C-01). |
-| C-25 | `plugin_dev_mode` | Warning on searches while `plugin add --dev` is in use (H-9.7, PP R2.19). | Results can include an unreleased plugin. | Plan 25. |
-| C-26 | `plugin_disabled_crash_loop` | Warning. 3 crashes in 10 minutes (H-11.8). `enabled` does not change. | Which brain, which plugin, and that `plugin enable` clears it. | Plan 25. |
-| C-27 | `plugin_filter_timeout` | Warning. A filter sleeps past its budget (010 verification 21). Status `timeout`. Input passes on. Exit 0, or 4 with `--strict`. | Which filter was skipped, and that the order is unchanged from its input. | Plan 25. |
-| C-28 | `plugin_filter_failed` | Warning. A filter returns a failure that is not a timeout (H-12.5, spec §8.2). Status `failed`. Input passes on. | Which filter failed, and that its input was kept. | Plan 25. Confirm the code is `plugin_filter_failed` in DESIGN-PENDING D-08 before writing the line. |
-| C-29 | `plugin_filter_cold_start` for a filter other than hybrid/rerank | The locked line names `hybrid/rerank` only (H-12.8). Any other cold filter uses the same code (H-12.4). | The filter name, and that results are in keyword order. | Plan 25. |
-| C-30 | `plugin_action_timeout` | Spec §8.2 lists the code. 010 H-4.10 states the SIGTERM / SIGKILL behavior and does not give the words. | Which action timed out. | Plan 25, only if the command prints this code. If Design never tells the CLI to print it, say so in the answer and the plan will not print it. |
-| C-31 | `plugin_action_failed` | Spec §8.2 lists the code. H-6.4 says a failed run shows only in `plugin log` and the app toast. | Whether the CLI prints this at all. | Same as C-30. |
-| C-32 | `plugin_additions_capped` | Spec §8.2. The additions cap is a protocol rule (PP OQ-19). The plain line is not in 010. | How many additions were dropped. | Plan 25 search stage, if the CLI prints it. |
-| C-33 | `plugin_note_truncated` | Spec §8.2. No 010 sentence. | The note was shortened. | Plan 25, if the CLI prints it. |
-| C-34 | `plugin_request_trimmed` | Spec §8.2. A search request over 16 MiB is trimmed, exit 0 (NQ-12). No plain line. | The request was trimmed, and the search still ran. | Plan 25. |
-| C-35 | `unknown_field` | Warning, once per file or stream, everywhere except `plugin.json` `run`, `permissions`, and `filter` (008 JE-4.1). Those three are `plugin_manifest_invalid`. | The field name, and that the rest of the file was still read. | Plans 21, 23, and 25. |
-| C-36 | `plugin_manifest_invalid` fix that suggests `_` | A hyphen in a manifest name or entry name (007 ST-1.3, M-17). The code is locked. The fix must suggest the `_` form. The sentence is not written. Example pairs: `url-expand` → `url_expand`, `log-ids` → `log_ids`. | The illegal name, and the legal name. | Plan 25 manifest stage. Also the manifest setting key `enabled` (ST-5.9) needs its own sentence. |
-| C-37 | `plugin remove` kept-data line | H-10.8: remove deletes the install and the trust record, keeps every `<brain>.d/plugins/<name>/`, and says so. `--delete-data` also deletes those folders. There is no prompt (H-Q22). | Data was kept, or data was deleted, and there was no question. | Plan 25 remove stage. |
-| C-38 | `brain_id_cloned` | Warning. JE-3.10: a copied brain gets a new `brain_id` on open. The code is locked. The sentence is not. | This file is a copy, and it now has a new id. The old id is the one still on the other path. | Plan 25 brain-list stage. |
-| C-39 | app toast | H-18.5: `Saved. Hook “router” failed (exit 3).` with **Show Log**. This is remember-mac, not a C plan. Listed so the editor can write it with the rest. | The write was saved, which hook failed, and where the log is. | remember-mac, not plan 25. |
+`plugin_untrusted`. `remember: warning: "<name>" changed since you allowed it, so it didn't run. Run 'remember plugin trust <name>' to review the changes and allow it again.` Plan 25.
 
-`plugin_chain_capped` is not in this list until DESIGN-PENDING D-02 chooses whether a warning exists. Do not write a sentence for it before that.
+## C-18
 
-## Release (plan 26)
+`plugin_exists`. Message: `"<name>" is built in, so you can't add a plugin with that name.` Fix: `Give your plugin another name in its plugin.json.` Plan 25.
 
-**C-40.** Replace 006 E12.10. That sentence tells the skill to run `remember config get bucket-prefixes`. That command does not exist after plan 20. The skill must tell a reader that bucket prefixes are the brain setting `remember.buckets.prefixes`, default `project:` and `status:`, and that `remember settings get remember.buckets.prefixes` shows the effective list. Write the skill sentence. Block: plan 26 skill stage.
+## C-19
 
-**C-41.** `SKILL.md` and README What's New for 0.3.0, after the feature plans have their lines. Each feature plan writes its own What's New line (006 EN-04). This row is the skill page that replaces `--json-errors`, `--offset`, `--sync-id`, `--source`, `purge-trash`, and the `--trash` alias. Write it only from behavior the plans mark locked. Block: plan 26 skill stage.
+`plugin_missing`. `remember: warning: plugin "<name>" is turned on for this brain but isn't installed. The brain's setting "plugin.<name>.enabled" is still there.` Plan 25.
 
-## Not missing
+## C-20
 
-Do not send these back as new copy. They are locked in Design:
+Missing file: `remember: warning: hook "<name>" did not start: <path> doesn't exist. Run 'remember plugin show <name>'.`
 
-- Credential helper message and fix (ST-3.6).
-- `schema_too_new` plain line (ST-10.2). The JSON cut is C-01. The words are not open.
-- `setting_from_hook` plain line (ST-7.10).
-- `plugin_run_forbidden` plain line (H-5.5).
-- Positional locator plain line (JE-3.4).
-- `--trash` warning, both wrong-list lines, both help lines (H-16.9a).
-- Purge-live line (H-16.7).
-- Loop-halted warning (H-5.6).
-- Hybrid/rerank cold-start line (H-12.8).
-- `brain_missing` (H-2.3).
-- M-24 budget/grace fix (H-12.4).
-- Did-you-mean shape in the 007 Examples block.
-- `(unset)` for an empty layer (ST-7.4).
-- Human `get` example in 007 Examples.
-- Trust bodies and `Type "<name>" to approve:` (H-9.4).
-- Brain quota sentence in SETTINGS-SCHEME §5.1.
-- User-only scope sentence for `remember.plugins.idle_timeout` in §5.1.
+Not executable: `remember: warning: hook "<name>" did not start: <path> isn't executable. Run 'remember plugin show <name>'.`
+
+A hash mismatch reuses C-17. It does not use `plugin_preflight_failed`. The recipient state is `failed`. A folder plugin says `plugin` instead of `hook`. Plan 25.
+
+## C-21
+
+`plugin_dispatch_failed`. `remember: warning: the write was saved, but its hooks and plugins didn't run because the dispatcher couldn't start.` Plan 25.
+
+## C-22
+
+`plugin_not_rerunnable`. Message: `"<name>" has nothing to rerun for event <event-id>.` Fix: `Run 'remember plugin log <name>' to see its runs.` Plan 25.
+
+## C-23
+
+`hook add` and folder `plugin add`, error. Message: `this build of remember can't start programs, so it can't run "<command>".` Fix: `Use a build of remember that can start programs.`
+
+Dispatch, warning: `remember: warning: the write was saved, but this build of remember can't start programs, so its hooks and plugins didn't run.` Plan 25.
+
+## C-24
+
+`plugin_backfill_incomplete`, error. Message: `"<name>" stopped before it finished indexing. Your memories are fine.` Fix: `Run '<command>' again to continue where it stopped.` Plan 25.
+
+## C-25
+
+`plugin_dev_mode`. `remember: warning: results can include "<name>", a plugin you're testing with --dev that isn't released.` Plan 25.
+
+## C-26
+
+`plugin_disabled_crash_loop`. `remember: warning: "<name>" crashed 3 times in 10 minutes, so it is paused in brain "<path>". Run 'remember plugin enable <name>' to start it again.` Plan 25.
+
+## C-27
+
+`plugin_filter_timeout`. `remember: warning: <name> took too long, so it was skipped. These results keep the order they had before it.` `<name>` is `<plugin>/<entry>`. Plan 25.
+
+## C-28
+
+`plugin_filter_failed`. `remember: warning: <name> failed, so it was skipped. These results keep the order they had before it.` `<name>` is `<plugin>/<entry>`. Status `failed`. Plan 25.
+
+## C-29
+
+`plugin_filter_cold_start` for a filter other than hybrid/rerank. `remember: warning: <name> is still starting, so these results are in keyword order. Search again in a moment.` Plan 25. The hybrid/rerank line is C-01.
+
+## C-30
+
+`plugin_action_timeout`. `remember: warning: <name> didn't answer in time, so it was skipped.` `<name>` is `<plugin>/<action>`. Which commands print it is DESIGN-PENDING D-17. Until the log changes, print it only where 010 H-6.4 allows. A write's exit code does not change (R8.16). Plan 25.
+
+## C-31
+
+`plugin_action_failed`. `remember: warning: "<name>" failed. Run 'remember plugin log <name>' to see why.` `<name>` is the plugin. Same print-when question as C-30 (D-17). Plan 25.
+
+## C-32
+
+`plugin_additions_capped`. `remember: warning: <name> added more results than allowed, so <count> were dropped.` `<count>` is `detail.dropped`. Plan 25.
+
+## C-33
+
+`plugin_note_truncated`. `remember: warning: the note from <name> was over 120 characters, so it was shortened.` Plan 25.
+
+## C-34
+
+`plugin_request_trimmed`. `remember: warning: the search request was over 16 MiB, so <count> results were left out of it. The search still ran.` `<count>` is `detail.dropped`. Plan 25.
+
+## C-35
+
+File: `remember: warning: "<path>" has a field remember doesn't know, "<name>". The rest of the file was read.`
+
+Stream: `remember: warning: stdin has a field remember doesn't know, "<name>". The rest of the input was read.`
+
+Plans 21, 23, and 25. A plugin's own `unknown_field` stays in the plugin log and `plugin status`. `plugin.json` members `run`, `permissions`, and `filter` are `plugin_manifest_invalid`, not this warning.
+
+## C-36
+
+Hyphen. Message: `"<name>" in plugin.json can't contain "-".` Fix: `Use "<value>".` Example: `remember: "url-expand" in plugin.json can't contain "-". Use "url_expand".`
+
+Reserved key. Message: `"<name>" declares a setting named "enabled", and that name is reserved.` Fix: `Rename that setting in plugin.json.` Plan 25.
+
+## C-37
+
+Kept, one brain: `Removed "<name>". Its data in 1 brain was kept. To delete that data too, run 'remember plugin remove <name> --delete-data'.` Use `<count> brains` when the count is not 1. No data: `Removed "<name>".`
+
+Deleted: `Removed "<name>" and deleted its data in <count> brains. Your memories are not affected. This can't be undone.` Use `1 brain` when the count is 1. Plan 25.
+
+## C-38
+
+`brain_id_cloned`. `remember: warning: brain "<path>" looks like a copy of another brain, so it got its own new id, <id>. The original keeps the old id. Both now sync and run hooks as separate brains.` Plan 25.
+
+## C-39
+
+remember-mac, not a plan in this repo. Toast: `Saved. Hook “<name>” failed (exit <code>).` Action label: **Show Log** on Mac, **Show log** on iOS and Android. The Plugins row keeps `Last run failed (exit <code>)`. This does not change the CLI `add` success line (D-05). No file in this repo changes for C-39.
+
+## C-40
+
+Skill sentence:
+
+> Tags that start with a bucket prefix group memories into buckets, for example `project:fortkeeps`. Bucket prefixes are the brain setting `remember.buckets.prefixes`, which is `project:` and `status:` by default; run `remember settings get remember.buckets.prefixes` to see the list in use.
+
+Plan 26.
+
+## C-41
+
+README › What's New:
+
+- `--json` now puts success and failure in one `remember-message` version 1 envelope on stdout, and stderr stays empty. `--json-errors` is gone.
+- Lists page with a cursor. Search doesn't page. `--offset` is gone.
+- A memory's id in output is `id`, a lowercase hyphenated UUID. `--sync-id` is gone. The integer `local_id` appears only in CLI output.
+- Actors replace `source`. `--source` is gone completely.
+- `--trash` now means the Trash: memories you deleted. For expired memories, use `--expired`. For this release, `--trash` prints: `remember: warning: --trash now means the Trash (deleted memories). For expired memories, use --expired.`
+- `purge-trash` is gone. To delete memories in the Trash for good, run `remember purge <locator>` for each one.
+
+SKILL.md:
+
+- Use `--json` to get one `remember-message` version 1 envelope on stdout, for success and failure alike. There is no `--json-errors`.
+- To page a list, pass back its `next_cursor`. Search returns its top results and doesn't page. There is no `--offset`.
+- Refer to a memory by `id`, a lowercase hyphenated UUID. The number `local_id` is for this device's CLI only. There is no `--sync-id`.
+- Writes record actors, not `source`. There is no `--source`.
+- `--trash` is the Trash (deleted memories). `--expired` is expired memories.
+- To empty the Trash, run `remember purge <locator>` once for each memory in it. There is no `purge-trash`.
+- Settings commands: see C-13. For scripts and agents, use `--json`, because human dates are local.
+
+Plan 26, stage 4, after plans 19 through 25 have merged. Each feature plan still writes its own feature line. This page is only the flag and identity changes above.
+
+## plugin_chain_capped
+
+`remember: warning: <name> didn't run because the search reached its time limit, "remember.plugins.chain_budget". These results keep the order they had before it.` Status stays `skipped` with reason `chain_capped`. A clipped budget still gets no warning. Plan 25.

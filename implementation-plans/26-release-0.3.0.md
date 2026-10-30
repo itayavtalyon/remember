@@ -8,11 +8,9 @@ This plan runs last. It does not ship 0.3.0 before plans 19 through 25.
 
 ## Status
 
-PENDING COPY.
+Copy approved 2026-10-25. C-40 and C-41 are in [`COPY-PENDING.md`](COPY-PENDING.md). Paste them in stage 4. Do not invent another sentence.
 
-Stages 1 and 2 are specified and may start after the prerequisites merge. Do not bump the version in those stages.
-
-The skill sentence that replaces 006 E12.10 is COPY-PENDING C-40. The 0.3.0 skill page and What's New consolidation are C-41. Do not start stage 4 until C-40 and C-41 are approved. Do not invent those sentences.
+Stages 1 and 2 are specified and may start from a clean `main`. Do not bump the version in those stages. Stage 4 waits until plans 19 through 25 have merged. Do not tag.
 
 ## Source of truth
 
@@ -39,18 +37,18 @@ A path from `default-db` still goes through the existing `:memory:` and `file:` 
 
 X-E04: before writing the Codex path into the installer, check the Codex documentation for the user skill folder. When the documented folder is not `~/.codex/skills/`, write the documented path into 006 Implementation Results and use that path. Do not guess a third path. When the documentation is unavailable, stop and ask Itay. Do not pick `~/.codex/skills/` as a fallback in that case. The locked default applies only when the documentation confirms it, or when Itay confirms the spike cannot be run.
 
-Version: set `0.3.0` in `CMakeLists.txt` and in the `REMEMBER_VERSION` fallback in `src/remember_app.c`. They must match. Do this in stage 4 only, after C-40 and C-41, and after plans 19 through 25 have merged.
+Version: set `0.3.0` in `CMakeLists.txt` and in the `REMEMBER_VERSION` fallback in `src/remember_app.c`. They must match. Do this in stage 4 only, after plans 19 through 25 have merged.
 
-What's New: each feature plan adds its own line under the 0.3.0 heading (006 EN-04). This plan consolidates those lines. It does not rewrite a feature. The skill page must drop `--json-errors`, `--offset`, `--sync-id`, `--source`, `purge-trash`, and the claim that `--trash` aliases `--expired`. The replacement page is C-41.
+What's New: each feature plan adds its own line under the 0.3.0 heading (006 EN-04). This plan consolidates those lines. It does not rewrite a feature. The skill page must drop `--json-errors`, `--offset`, `--sync-id`, `--source`, `purge-trash`, and the claim that `--trash` aliases `--expired`. Paste C-41. The bucket sentence is C-40. Do not write the E12.10 sentence.
 
-Upgrade notes that are already decided and may be included once C-41 is approved, using these facts and no others:
+Upgrade notes that are already decided and may be included with C-41, using these facts and no others:
 
 - Opening a v5 brain migrates it to v6.
 - An engine older than the brain's `min_reader_version` can read and cannot write. The write error is `schema_too_new`.
 - `min_reader_version` is `0.3.0`.
 - `--trash` selects Deleted memories. `--expired` selects expired memories.
 
-Do not write the E12.10 bucket sentence. Use C-40.
+Do not write the E12.10 bucket sentence. Paste C-40.
 
 Tagging, the GitHub release, and the Homebrew formula are Itay's steps. This plan prepares the tree and stops.
 
@@ -100,8 +98,8 @@ Tests for the path live in the existing schema or config test file. Suite name s
 
 1. Implement E15 and D24 and D36. Do not bump the version.
 2. Run the X-E04 check. Then implement the Codex install path the check confirmed. Do not bump the version.
-3. Stop until plans 19 through 25 are merged and C-40 and C-41 are approved.
-4. Paste the approved skill sentence and the approved What's New page. Set the version to 0.3.0 in both places. Run the full gate. Write a release checklist in Implementation Notes that tells Itay the tag name, the schema version, and that this plan did not tag.
+3. Stop until plans 19 through 25 are merged.
+4. Paste C-40 and C-41. Set the version to 0.3.0 in both places. Run the full gate. Write a release checklist in Implementation Notes that tells Itay the tag name, the schema version, and that this plan did not tag.
 
 ## How to work
 
@@ -109,14 +107,14 @@ Same loop as plan 19. Load `standard:coding` and the review docs. Also read [`do
 
 Branch from clean `main`. One branch. One pull request.
 
-Do not tag. Do not push a release. Do not invent the skill sentence.
+Do not tag. Do not push a release. Do not invent a sentence past C-40 and C-41.
 
 Quality gate: plan 19's commands. Coverage 100/100.
 
 ## Definition of done
 
 - [ ] Path tests and installer tests are green.
-- [ ] Version is still the pre-0.3.0 value, or stage 4 has run with C-40 and C-41 quoted in this plan and the version is `0.3.0` in both files.
+- [ ] Version is still the pre-0.3.0 value, or stage 4 has run and the version is `0.3.0` in both files, with C-40 and C-41 pasted.
 - [ ] No `remember config get bucket-prefixes` remains in the skill.
 - [ ] The git history of this plan contains no tag.
 - [ ] Gate green. Second review clear.

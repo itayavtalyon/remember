@@ -10,7 +10,7 @@ remember export --format json|md|csv --out PATH [--bins live,expired,deleted] [-
 
 ## Status
 
-PENDING DESIGN.
+PENDING DESIGN (D-04). No copy row. Copy does not block this plan.
 
 Memory rows, links, atomic write, slugs, and the CSV memory header are specified. Start those stages.
 

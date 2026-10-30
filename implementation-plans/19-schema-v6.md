@@ -6,11 +6,9 @@ Replace the v5 brain schema with schema v6 in one migration. The migration cover
 
 ## Status
 
-PENDING COPY.
+Copy approved 2026-10-25. Ready to implement. Plan 18 is on `main`.
 
-The migration stages do not print a sentence. Start those stages. The write refusal prints `schema_too_new`. The plain line is locked. The JSON `fix` is COPY-PENDING C-01. Do not assert `error.fix` until C-01 is approved. Do not invent the fix.
-
-This plan is not ready for a full implementation. The migration is specified. The JSON refusal is not.
+The migration stages do not invent a sentence. The write refusal prints `schema_too_new`. The plain line, `message`, and `fix` are C-01 in [`COPY-PENDING.md`](COPY-PENDING.md). A bad old prefix warns with the C-05 migration line in that file. Assert both.
 
 ## Source of truth
 
@@ -27,7 +25,7 @@ A later Design section wins. 007, 008, and 010 win over 006 where they name the 
 
 The brain file is SQLite. Today `user_version` is 5. Plan 18 merges before this plan starts. This plan does not edit plan 18, plan 18b, or plan 18c.
 
-v6 is not additive. `min_reader_version` is `0.3.0`. An engine older than that version opens the brain read-only. A write then fails with exit 1 and `schema_too_new`. The plain message is `this brain was written by a newer remember. You can read it. Upgrade to write to it.`
+v6 is not additive. `min_reader_version` is `0.3.0`. An engine older than that version opens the brain read-only. A write then fails with exit 1 and `schema_too_new`. The plain message is the C-01 `schema_too_new` line in [`COPY-PENDING.md`](COPY-PENDING.md).
 
 Names:
 
@@ -70,7 +68,7 @@ CREATE TABLE settings_history (
 );
 ```
 
-2. When the E12 tables hold any prefix row, write one `remember.buckets.prefixes` row. `value` is a JSON array of every prefix in the 006 E12.7 effective list, in that order, with no item limit (007 §10 step 2, 2026-10-25). A prefix that fails 007 ST-5.4 is left out of the row and warns `setting_invalid`, with `detail.reason` `bad_prefix_shape` and `detail.item` the prefix. Never drop a prefix silently. When every prefix fails, write no row. `updated_by` is `{"kind":"human","id":null}`. `updated_at` is the old order time (`settings.bucket_prefix_order`'s `updated_at`), or the migration time when there is none. `device_id` is the local device id. `version_vector` is `{"<local device id>":1}`. `deleted_at` is null. `change_seq` is 1. Set `brain_meta.change_seq` to 1.
+2. When the E12 tables hold any prefix row, write one `remember.buckets.prefixes` row. `value` is a JSON array of every prefix in the 006 E12.7 effective list, in that order, with no item limit (007 §10 step 2, 2026-10-25). A prefix that fails 007 ST-5.4 is left out of the row and warns `setting_invalid`, with `detail.reason` `bad_prefix_shape` and `detail.item` the prefix. The plain line is the C-05 migration line in [`COPY-PENDING.md`](COPY-PENDING.md). Never drop a prefix silently. When every prefix fails, write no row. `updated_by` is `{"kind":"human","id":null}`. `updated_at` is the old order time (`settings.bucket_prefix_order`'s `updated_at`), or the migration time when there is none. `device_id` is the local device id. `version_vector` is `{"<local device id>":1}`. `deleted_at` is null. `change_seq` is 1. Set `brain_meta.change_seq` to 1.
 3. Drop the E12 tables `settings` and `bucket_prefixes`.
 4. Rename the new tables to `settings` and `settings_history`.
 
@@ -101,7 +99,7 @@ Do not create `brains.json` here. Until plan 25, open does not read `brains.json
 | S-03 | One prefix row, or no row. No add-wins. No item tombstones. No overflow column. |
 | G-09 | `tombstones` exists and is empty after migration. |
 | #570 | Migration sets `expired_at` and emits nothing. |
-| schema_too_new | Plain line locked above. JSON `fix` waits on C-01. |
+| schema_too_new | Plain line, message, and fix are C-01 in COPY-PENDING.md. |
 
 ## Prerequisites
 
@@ -138,7 +136,7 @@ Do not add a settings module in this plan.
 
 ## Must-pass tests
 
-Assert codes, row values, and the locked plain line. Do not assert `error.fix` for `schema_too_new` until C-01 is approved.
+Assert codes, row values, and the C-01 plain line, message, and fix.
 
 | Test | Proves |
 |---|---|
@@ -149,7 +147,7 @@ Assert codes, row values, and the locked plain line. Do not assert `error.fix` f
 | 007-27 | A crash after the sidecar copy and before `COMMIT` leaves `<brain>.device_id`. The next open keeps that device id and finishes the copy. |
 | 008-14 | One `brain_meta` row. `brain_id` matches UUID v7. `change_seq` is 0, or 1 when a prefix row was written. `min_reader_version` is `0.3.0`. `tombstones` is empty. The next memory write is plan 21. This plan only checks the counter value after migration. |
 | 010-14 migration clause | Already-due non-deleted rows have `expired_at = expires_at`. The outbox is empty. |
-| schema_too_new plain | A test engine that reports an older version than `0.3.0` can read. A write exits 1. The plain line is the locked sentence. `--json` waits on C-01. |
+| schema_too_new plain | A test engine that reports an older version than `0.3.0` can read. A write exits 1. The plain line and the JSON `message` and `fix` are C-01. |
 | empty E12 | No prefix rows. No `remember.buckets.prefixes` row. `change_seq` is 0. |
 | actor backfill | `source` `agent` becomes `{"kind":"agent","id":null}`. `source` `unknown` becomes `{"kind":"human","id":null}`. The `source` column is gone. |
 
@@ -161,7 +159,7 @@ Assert codes, row values, and the locked plain line. Do not assert `error.fix` f
 4. Write the red prefix test and the empty-E12 test. Then run the settings steps. Quote E12.7 in a comment only when the computation is not obvious from the function name. Keep the computation next to the migration in `store_sqlite.c`. Do not export it as a public config API.
 5. Write the red `expired_at` and empty-outbox test. Then run the 010 steps. Set `user_version` to 6 only at the end of this stage, after the earlier steps are in the same transaction.
 6. Write the red sidecar-copy test and the crash test (007-27, M3). Then copy sidecars before `BEGIN` and delete the old files after `COMMIT`.
-7. Write the red plain `schema_too_new` test. Then refuse writes when the engine is older than `min_reader_version`. Stop before the `--json` assertion. That assertion starts only after C-01 names `message` and `fix`.
+7. Write the `schema_too_new` test, including `--json` `message` and `fix`. Then refuse writes when the engine is older than `min_reader_version`.
 
 Each stage's definition of done: the new test is red before the production change, green after it, and the quality gate below is green on the committed tree.
 
@@ -197,7 +195,7 @@ Coding constraints for this plan:
 - SQLite is included only in `store_sqlite.c`.
 - A new translation unit is not required. Do not add one for the migration.
 - Timestamps are `YYYY-MM-DDTHH:MM:SS.mmmZ`. Use one `now` for the migration transaction.
-- User-facing strings are ASCII. The only new string in this plan is the locked `schema_too_new` line.
+- User-facing strings are ASCII. The new strings in this plan are the C-01 `schema_too_new` line and the C-05 migration warning.
 - `goto cleanup` with a single exit. NULL-safe frees.
 
 Quality gate, on macOS with `PATH="$(brew --prefix llvm)/bin:$PATH"` prefixed:
@@ -220,7 +218,7 @@ Coverage stays 100% functions and 100% effective lines.
 - [ ] Every must-pass row above is green and listed in `tests/gate-suites`.
 - [ ] `user_version` 6 is set once, at the end of the one transaction.
 - [ ] No `config` command and no add-wins code.
-- [ ] `schema_too_new` plain line matches ST-10.2. JSON `fix` is either the approved C-01 text or not asserted.
+- [ ] `schema_too_new` plain line, message, and fix match C-01. The migration prefix warning matches the C-05 line.
 - [ ] `docs/engineering-notes.md` records the v6 order and the sidecar path.
 - [ ] The quality gate is green on the committed tree.
 - [ ] Second review has no open blocking item.
