@@ -11,7 +11,7 @@ Each answer must land in a Design section. A chat reply is not enough for an imp
 These are recorded so a later session does not grill them again.
 
 - Itay will finish plan 18 and merge it. Plans 18b and 18c stay as they are on that branch. This extract does not tick plan 18 and does not edit 18, 18b, or 18c.
-- Missing sentences go to the copy editor. Plans that still need one of those sentences are pending. See COPY-PENDING.
+- Approved sentences are in COPY-PENDING. Nothing in that file is pending. Two phrases are still unwritten, and the copy editor writes them: the `unknown_key` reason words (C-12), and the `--as`/`--actor` rejection when `REMEMBER_HOOK_DEPTH` is 1 or more (code `invalid_argument`, plans 20 and 21). Do not invent either.
 - The daemon log is not part of this extract. Plans 19–26 implement the CLI and the host path only. When the daemon is not running, the CLI and the host run each job as the logs already write it. The hourly sweep stays the fallback (010 H-18.1).
 - Add-wins for bucket prefixes is deleted (007 ST-5.4, decision S-03). Plan 19 in this folder is the schema migration, not the old prefix command.
 - Do not re-extract plans 16, 17, 17a, or 18. Log 008's draft step 5 says to re-extract them. That draft is not a plan. Plan 21 updates tests that still cite `--json-errors`. It does not rewrite those plan files.
@@ -28,7 +28,7 @@ These are recorded so a later session does not grill them again.
 
 Question: for a bad prefix shape, a duplicate, and a ninth prefix, what is the code, and what is the sentence?
 
-Blocks: plan 20, the prefix-validation stage. Until this is answered, that stage does not print a prefix error. Grammar checks that do not print (accept `project:` and `status:`, reject by code only in a test that does not assert the sentence) may wait with the rest of the stage. Do not choose the sentence in the test.
+Blocks: none. Answered. Plan 20 prints the C-05 prefix lines.
 
 ### D-02. `plugin_chain_capped`
 
@@ -40,7 +40,7 @@ Plugin protocol §8.2 lists `plugin_chain_capped` as a warning code.
 
 Question: does the user see a `plugin_chain_capped` warning, or only the status reason? If they see a warning, the plain sentence is also missing (add it to COPY-PENDING after the answer).
 
-Blocks: plan 25, the chain-cap stage. Until this is answered, the implementer sets the status reason and does not emit `plugin_chain_capped`.
+Blocks: none. Answered. Plan 25 sets the status and prints the `plugin_chain_capped` line in COPY-PENDING.
 
 ### D-03. Success JSON for settings commands
 
@@ -59,7 +59,7 @@ Design does not name the `data` object for `setting.set.result`, `setting.reset.
 
 Question: write the `data` object for set, reset, list, and import, and write the page size for list and history. Name every field. Say what human `set` prints. Human `get` is the 007 Examples block and is not open.
 
-Blocks: plan 20, the command stage. Storage and resolution do not need this answer.
+Blocks: none. Answered. Plan 20 quotes ST-7.11a–7.16. History `action` for a set stays `set` until D-18.
 
 ### D-04. Markdown `settings.json` and the CSV `#settings` row
 
@@ -69,13 +69,15 @@ Blocks: plan 20, the command stage. Storage and resolution do not need this answ
 
 008 JE-8.3 replaces the CSV header and does not mention a `#settings` row.
 
+**Who answers:** Chief Architect.
+
 Question:
 
 1. Is Markdown `settings.json` a `remember-settings-export` version 1 document whose `settings` array holds only that brain's brain rows, including tombstones?
 2. Does the CSV file still end with a `#settings` row? If it does, what are the exact bytes of that row?
 3. In `remember-export` JSON, is `settings` an array of ST-8.2 objects, or a nested `remember-settings-export` document? 006 E6.a used an object. An untouched brain wrote `{}`.
 
-Blocks: plan 22, the settings-bytes stage, and plan 23, the settings-import stage. Memory rows, links, atomic write, and the CSV memory header do not need this answer.
+Blocks: plan 22, the settings-bytes stage, and plan 23, the settings-import stage. Memory rows, links, atomic write, and the CSV memory header do not need this answer. Memory export and memory import may start.
 
 ### D-05. Human `add` line in the 010 example
 
@@ -89,9 +91,11 @@ remember: warning: hook "wake_coder" did not start: ...
 
 The shipped human success line for `add` is the id. 010 Design does not say to replace it with `Saved.`
 
+**Who answers:** Itay.
+
 Question: does human `add` stay the id, or does it print `Saved.`?
 
-Blocks: nothing in plans 19–24. Plan 25 must not change the `add` success line until this is answered.
+Blocks: nothing in plans 19–24. Plan 25 must not change the `add` success line until this is answered. C-39's toast does not decide it. The rest of plan 25 does not wait.
 
 ### D-06. Daemon log
 
@@ -105,11 +109,15 @@ Itay's answer for this extract: CLI and host only. No daemon plan. No HTTP MCP s
 
 The Linux daemon unit name `io.github.itayavtalyon.remember.daemon.service` (G-07) belongs to the daemon log. Do not install it.
 
+**Who answers:** a later daemon log. Not plans 19–26.
+
 ### D-07. URL expansion log
 
 010 H-14.4 leaves the HTML parser choice to the URL plugin log. H-14.7 leaves the enrichment setting key to that log. 010's draft step 11 says not to start until that log is closed.
 
 Do not implement the URL plugin in plan 25. Do not pick a parser.
+
+**Who answers:** the URL plugin log. Not plan 25.
 
 ### D-08. Filter failure code
 
@@ -119,7 +127,7 @@ Do not implement the URL plugin in plan 25. Do not pick a parser.
 
 Question: is the non-timeout failure code exactly `plugin_filter_failed`? If not, name the code.
 
-The plain lines are C-27 and C-28. Blocks: plan 25, the filter-failure stage. The timeout code `plugin_filter_timeout` is locked by verification 21. The failure code is not, until this row is answered. Do not emit a failure warning under a guessed code.
+The plain lines are C-27 and C-28. Print them. Blocks: none. Answered.
 
 ### D-09. Hybrid ranking log
 
@@ -129,11 +137,15 @@ Plan 25 reserves the built-in name `hybrid`. It is trusted. `plugin.<name>.enabl
 
 Do not implement the ranker in these plans.
 
+**Who answers:** the hybrid ranking log. Not these plans.
+
 ### D-10. API surface v1
 
 Remember #583. The full error catalog, the HTTP status for each code, the MCP tool schemas, and the `GET /v1/settings` route schemas are not written.
 
 Engine plans name only codes that 007–010 or the plugin spec already name. They do not assign HTTP status numbers. Cloud and MCP implementers cannot start the catalog from these plans.
+
+**Who answers:** the API surface v1 log. Not the engine plans.
 
 Locked for Cloud without that log, quoted in the plans that need them:
 
@@ -152,11 +164,15 @@ Locked for Cloud without that log, quoted in the plans that need them:
 
 Settings merge is locked (007 ST-2.7). Tombstone confirmation, the change feed, and the sync protocol wire are a later log (008 Future Work, 007 Future Work). Engine plans do not invent the wire. Cloud plans that move bytes on the wire wait for that log. The merge rule itself does not wait.
 
+**Who answers:** the sync wire log. Not plans 19–26.
+
 ### D-12. remember-mac log 011
 
 App accessibility tests moved to remember-mac log 011 (010, M-19 N9). That log is not in this repo. Plans 19–26 do not write the Mac app.
 
 Engine contracts the app calls are in plans 20 and 25: `RememberEnv` callbacks (010 H-0.6), `remember_call` for settings writes, the hourly LaunchAgent command line `remember sweep --all` (the app installs it, the engine does not), and Empty Trash as one `purge` per Deleted memory with no Touch ID (010 H-16.9).
+
+**Who answers:** remember-mac, in log 011. C-39's toast is recorded in COPY-PENDING for that owner. This repo has no Mac plan. Do not edit remember-mac from plans 19–26.
 
 ### D-13. Tool-undo name parse
 
@@ -164,15 +180,70 @@ Engine contracts the app calls are in plans 20 and 25: `RememberEnv` callbacks (
 
 This is app copy, not a remember C plan. Do not invent the parse in plan 20 or plan 25.
 
+**Who answers:** remember-mac.
+
 ### D-14. `skipped_source` log line
 
 **Answered 2026-10-25:** 010 H-7.2. One line per skipped action and event type in the run log, shown by `remember plugin log <plugin>`: `{"version","at","event":"skipped_source","event_type","command","origin","plugin","action","count"}`.
 
 010 H-7.2: a sync or import command writes one `skipped_source` log line, with the count, when an action's `origins` does not list the event origin. The line's fields are not listed. H-15.3 points at HK §6.3 for a run record and does not list `skipped_source` fields.
 
+**Who answers:** Chief Architect.
+
 Question: what are the JSON fields of that one log line?
 
-Blocks: plan 25, the sync-origin stage. The count behavior is locked. The bytes of the line are not.
+Blocks: plan 25, the sync-origin stage only. The count behavior is locked. The bytes of the line are not. The other plan 25 stages may start.
+
+### D-15. Bad imported value: `setting_invalid` or `setting_import_skipped`
+
+**Answered 2026-10-25:** 007 ST-7.15 and ST-8.4. The code stays `setting_invalid`. The plain line is `remember: warning: skipped "<key>": "<value>" isn't a valid value.` Remember adds ` This brain wasn't changed.` only when the batch has one row and the command writes no other row, memory or link.
+
+
+007 ST-8.4 skips a bad imported value with warning `setting_invalid`, reason `invalid_value`, and the import continues. The plain line is C-14. ANSWERS-FINAL C-08 and C-12 also offered warning `setting_import_skipped` for a bad value. C-14's phrase "This brain wasn't changed" is a poor fit for an import that writes the other rows.
+
+**Who answers:** Chief Architect.
+
+Until the log changes, plan 20 prints C-14 and keeps `setting_invalid`. Do not fail the whole import for one bad row. Do not restore "nothing was written."
+
+Blocks: the warning code and the plain line for that one row. The rest of import may proceed.
+
+### D-16. What `setting_import_invalid` still means
+
+**Answered 2026-10-25:** 007 ST-8.4. `setting_import_invalid` is deleted. A file that is not a settings document is `import_parse`.
+
+
+ANSWERS-FINAL C-08 says keep `setting_import_invalid` only for a file that cannot be read as settings at all, and asks the Chief Architect to confirm. No new sentence was approved.
+
+**Who answers:** Chief Architect.
+
+Plan 20 does not invent a sentence and does not retarget the code.
+
+### D-17. Which commands print `plugin_action_timeout` and `plugin_action_failed`
+
+**Answered 2026-10-25:** 010 H-6.4 and H-5.7, PP R3.21 and R8.16. Only `remember plugin test <name>`, `remember plugin rerun <name> <event-id>` (synchronous), and the backfill in `remember plugin reindex` and `remember plugin enable` print them. That backfill then exits 1 with `plugin_backfill_incomplete`. A write never prints them, and its exit code does not change.
+
+
+010 H-6.4 prints them only in a command that runs the action synchronously, for example `plugin run`. A write never prints them. R8.16 still holds: they never change a write's exit code. ANSWERS-FINAL says any command that has a plugin set up prints them.
+
+**Who answers:** Chief Architect.
+
+Until the log changes, plan 25 follows H-6.4. The warning sentences are C-30 and C-31. Print them where H-6.4 allows.
+
+### D-18. History `action` for a set: `set` or `none`
+
+**Answered 2026-10-25:** 007 ST-7.11b. A history row for a set stays `action` `set`. Import rows are unchanged.
+
+
+007 ST-7.11b says a history item's `action` is `set`, `tombstone`, or `delete`, and any row that is not a reset is `set`. ANSWERS-FINAL C-13 says `none` for a set. Plan 20 follows the log.
+
+**Who answers:** Chief Architect.
+
+Do not change plan 20 until the log changes.
+
+## Already in the log — confirm, do not wait
+
+- Import rows already have both `result` and `action`, including `kept_local`, and a `kept_local` row counts as `unchanged` (ST-7.11b). The Chief Architect may confirm that. The implementer follows the log and does not add a result value.
+- Prefix sentences use `<item>`, the name in ST-5.4. ANSWERS-FINAL used `<value>` and said `<value>` is an allowed placeholder. The detail field stays `item`. Plans use `<item>`. This is not a behavior change.
 
 ## Known limitation, not a question
 
