@@ -44,12 +44,14 @@ static const char *const k_error_codes[DIAG_CODE_COUNT] = {
     [DIAG_NOT_A_DATABASE] = "not_a_database",
     [DIAG_CORRUPT] = "corrupt",
     [DIAG_IO_ERROR] = "io_error",
+    [DIAG_SCHEMA_TOO_NEW] = "schema_too_new",
 };
 
 static const char *const k_warning_codes[DIAG_WARN_COUNT] = {
     [DIAG_WARN_RAW_QUERY_IGNORED] = "raw_query_ignored",
     [DIAG_WARN_DEPRECATED_FLAG] = "deprecated_flag",
     [DIAG_WARN_SYNCED_FOLDER] = "synced_folder",
+    [DIAG_WARN_SETTING_INVALID] = "setting_invalid",
 };
 
 /* Plain line lead per warning. E2.3 gives raw_query_ignored its own words; the
@@ -58,6 +60,7 @@ static const char *const k_warning_plain_prefix[DIAG_WARN_COUNT] = {
     [DIAG_WARN_RAW_QUERY_IGNORED] = "warning: raw query ignored: ",
     [DIAG_WARN_DEPRECATED_FLAG] = "warning: ",
     [DIAG_WARN_SYNCED_FOLDER] = "warning: ",
+    [DIAG_WARN_SETTING_INVALID] = "warning: ",
 };
 
 static const char *catalog_name(const char *const *names, size_t count, size_t index)
@@ -135,6 +138,8 @@ typedef struct {
     const char *plain_prefix;
     const char *code;
     const char *message;
+    const DiagDetailField *fields; /* JSON detail members; NULL when none */
+    size_t nfields;
     bool json_errors;
     /* NOLINTNEXTLINE(readability-magic-numbers,cppcoreguidelines-avoid-magic-numbers) */
     char pad_[7]; /* explicit tail padding (kept -Wpadded-clean) */
@@ -160,6 +165,32 @@ static int write_json_notice_head(FILE *err, const char *kind, const char *code,
     return 0;
 }
 
+/* ,"detail":{"<name>":"<value>",...} in the given order; nothing when n is 0. */
+static int write_json_detail_fields(FILE *err, const DiagDetailField *fields, size_t n)
+{
+    size_t i = 0;
+
+    if (n == 0U) {
+        return 0;
+    }
+    if (fputs(",\"detail\":{", err) < 0) {
+        return -1;
+    }
+    for (i = 0; i < n; i++) {
+        if (i > 0U && fputc(',', err) == EOF) {
+            return -1;
+        }
+        if (output_json_string(err, fields[i].name) != 0 || fputc(':', err) == EOF ||
+            output_json_string(err, fields[i].value) != 0) {
+            return -1;
+        }
+    }
+    if (fputc('}', err) == EOF) {
+        return -1;
+    }
+    return 0;
+}
+
 static int write_notice(Notice notice)
 {
     FILE *err = app_err();
@@ -167,6 +198,9 @@ static int write_notice(Notice notice)
 
     if (notice.json_errors) {
         if (write_json_notice_head(err, notice.json_kind, notice.code, message) != 0) {
+            return -1;
+        }
+        if (write_json_detail_fields(err, notice.fields, notice.nfields) != 0) {
             return -1;
         }
         if (fputs("}}\n", err) < 0) {
@@ -212,9 +246,15 @@ void diag_set_json_errors(bool enabled)
 
 int diag_warning(DiagWarning code, const char *message)
 {
+    return diag_warning_detail(code, message, NULL, 0U);
+}
+
+int diag_warning_detail(DiagWarning code, const char *message, const DiagDetailField *fields,
+                        size_t nfields)
+{
     const char *name = diag_warning_name(code);
 
-    if (name == NULL) {
+    if (name == NULL || (fields == NULL && nfields > 0U)) {
         return -1;
     }
     return write_notice((Notice){
@@ -222,6 +262,8 @@ int diag_warning(DiagWarning code, const char *message)
         .plain_prefix = k_warning_plain_prefix[code],
         .code = name,
         .message = message,
+        .fields = fields,
+        .nfields = nfields,
         .json_errors = g_json_errors,
     });
 }

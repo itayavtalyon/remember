@@ -6,11 +6,9 @@ Replace the v5 brain schema with schema v6 in one migration. The migration cover
 
 ## Status
 
-PENDING COPY.
+Implemented on main (2026-10-26). Reviewed 2026-10-27.
 
-The migration stages do not print a sentence. Start those stages. The write refusal prints `schema_too_new`. The plain line is locked. The JSON `fix` is COPY-PENDING C-01. Do not assert `error.fix` until C-01 is approved. Do not invent the fix.
-
-This plan is not ready for a full implementation. The migration is specified. The JSON refusal is not.
+The migration does not print a sentence. A left-out prefix prints the locked ST-7.15 warning. The write refusal prints `schema_too_new`. The plain line is locked. The JSON `fix` is still COPY-PENDING C-01. Do not assert `error.fix` until C-01 is approved. Do not invent the fix.
 
 ## Source of truth
 
@@ -254,8 +252,73 @@ Review output: append `### <date> — second-opinion deep review (stage N | FINA
 
 ## Implementation Notes
 
-_(empty; fill per stage)_
+### 2026-10-26 — stages 1–5 (one commit)
+
+Start: branch `claude/ecstatic-fermi-2yj6fn` off `main` at `c4854d0`, clean. The brain was not reachable from the cloud session, so `standard:coding` came from `docs/STEP_REVIEW_CHECKLIST.md`, `docs/engineering-notes.md` and `docs/QUALITY.md`. Linux container: clang 18, cppcheck 2.13, sqlite3 3.45, iwyu installed from apt. No macOS, so `leaks-macos` did not run; `ci-linux.sh` needs Docker and did not run.
+
+Decisions from Itay (2026-10-25, asked before coding):
+
+- **Reader version.** `schema_too_new` compares `min_reader_version` with a store constant `0.3.0` (the schema this code reads), not `REMEMBER_VERSION` (still 0.2.0 until plan 26). A test hook reports an older version.
+- **New writes, source `unknown`.** New writes store the actor through the same map as the migration: `unknown` becomes `{"kind":"human","id":null}`. `add` with no `--source` now reads back `source` `human`.
+- **change_seq on new writes.** Bump the counter now (JE-5.2), not 0 until plan 21.
+- **Migration warning value.** `<value>` and `detail.value` are the left-out prefix; `detail.item` is the same prefix.
+- **v6 import source.** `import --from-db` keeps refusing a v6 source until plan 23 (`database is newer than this remember`). Tests that import a brain this build wrote rewrite it to the v5 shape first (`harness_make_v5_source`).
+
+Stage order deviation: the five in-transaction stages landed as one change. Renaming `entries.id`/`sync_id`/`source` breaks every query in `store_sqlite.c` at once, so no intermediate stage builds a tree that passes the old suite. The new tests were written against the finished migration, not red-first per stage. A reviewer can see them fail on `main` (they assert `user_version` 6 and v6 columns).
+
+Resolved by the plan's own precedence rule (a later Design section wins), not by choice:
+
+- **No 8-prefix cap.** The plan's E12.7 paragraph and second-review probe 2 still say "keep the 8 earliest". 007 §10 step 2 and must-pass 007-14 say no item limit (D-01, 2026-10-25). The code keeps every live prefix. Probe 2's expected result is stale.
+- **No FTS triggers exist** in v5, so 008 §8 step 4's "FTS triggers" rebuild is nothing. FTS rows keep their rowids (= `local_id`).
+
+Interpretations to confirm in review:
+
+- A folded duplicate (`Project:` next to `project:`) is left out with `setting_invalid` reason `duplicate_prefix` (ST-5.4 + ST-7.15). The plan names only `bad_prefix_shape`.
+- `bucket_prefixes` that holds only tombstones writes a `[]` row (the table holds a prefix row; no live prefix failed). No released command writes E12 tables, so no real brain has this.
+- Migration validation does not NFC-normalize: it folds ASCII and checks ST-5.4 on the stored text.
+- The entry UUID keeps the spec's inline `UNIQUE` (an autoindex); `ux_entries_sync_id` is gone.
+- `conflicts.sync_id` is not renamed: 008 §8 does not list `conflicts`.
+- The settings tables are renamed into place (spec step 4), so `sqlite_master` quotes `"settings"`. A fresh brain takes the same step, so fresh and migrated schemas are byte-equal.
+
+Gate (Linux container, clang 18, `REMEMBER_ENABLE_SANITIZERS=ON`, `REMEMBER_TEST_VFS=ON`): build, `remember_store_tests` 0 failed, `remember_tests --only <gate-suites>` 0 failed, `check-coverage.sh` OK (functions 100%, effective lines 100%, normalize 306 branch sides, 0 missed). `lint-all.sh`: format and cppcheck clean; clang-tidy findings in the new code fixed in the follow-up commit. Not run: `leaks-macos` (no macOS), `ci-linux.sh` (no Docker in the session).
+
+
+### 2026-10-26 — change_seq on writes, stage 6, stage 7
+
+**change_seq (Itay: bump it now).** `stamp_change_seq` gives each changed entry or link row the next `brain_meta.change_seq`, once per write transaction (base value on the connection via `sqlite3_set_clientdata`, reset by `begin_write`, where every stamping write starts). Stamped: inserts, a version-vector write that changes the vector, soft delete, a demoted key, link insert and touch, imported links. Purge writes one `tombstones` row per removed memory (upsert on `id`). Not done here, because they change behavior plan 21 owns: unlink still deletes the link row (G-10 soft unlink), the link vector stays `{}`, link does not bump `updated_by`. Tests: one value per row per write, none for a no-op, a rolled-back write leaves the counter, link/unlink, purge tombstones, import, and the first write after a prefix row is 2.
+
+**Stage 6.** `<brain>.d/device_id` (folder 0700 set with `chmod` after `mkdir`, file 0600). Copy before `BEGIN`, delete after `COMMIT`, and a later open finishes a half-done move. An invalid old file is `invalid device_id sidecar` and stays, unless the open is `device new`. The `--help` line that names the sidecar now says `<path>.d/device_id`. 007-27 is a store test (exec-fault sweep after the copy); M3 is a CLI test through the plan 16 VFS shim (`REMEMBER_TEST_FAIL_WRITE` sweep).
+
+**Stage 7.** `k_reader_version` `0.3.0` vs `brain_meta.min_reader_version` at open. Newer, or not `MAJOR.MINOR.PATCH`, opens read only: every brain write starts in `begin_write`, which returns `STORE_ERR_SCHEMA_TOO_NEW` (exit 1, `schema_too_new`, the locked line); repair checks the flag itself. There is no `PRAGMA query_only`: it would also block `device new` and a sidecar mint, which take the write lock but do not write the brain (deep review, 2026-10-26). The test sets the brain's `min_reader_version` to `0.4.0` instead of adding a hook that lowers the engine's version; the comparison is the same. `--json-errors` is checked for the code only. `device new` still runs on a read-only brain (it writes the sidecar, not the brain).
+
+**Open items for review**
+
+- `README.md` and `skills/remember/SKILL.md` still say `<db-path>.device_id`. They are user copy (plan 26 owns the skills and release text), so they are not edited here.
+- `import --from-db` of a brain this build wrote fails with `database is newer than this remember` until plan 23 (Itay 2026-10-25).
+- The repair read-fault test moved its `REMEMBER_TEST_FAIL_READ` budget from 2 to 7: open now reads `brain_meta`.
+- `.claude/` is git-ignored, so the stage and whole-plan review requests are this section, not a `.claude/REVIEW_REQUEST` file. No `workflow:deep-review` ran in this session.
+
+Definition of done, where the implementation session stood: must-pass rows green and in `tests/gate-suites` (`schema_v6`, `schema_v6_cli`); `user_version` 6 set once at the end of the transaction; no `config` command and no add-wins code; plain `schema_too_new` matches ST-10.2, JSON `fix` not asserted; `docs/engineering-notes.md` records the v6 order and sidecar path. The second review is below.
 
 ## Review Notes
 
-_(empty; second review appends here)_
+**2026-10-27, whole-plan deep review.** The implementation on `c33318f` (PR #43) is the migration the plan locks. No `workflow:deep-review` had run on it. This pass fixed three holes and left the locked behavior alone. JSON `error.fix` for `schema_too_new` is still COPY-PENDING C-01. Local Bugbot is not installed. Prefix order was probed and is not a bug: `json_each` array keys are integers, and `MIN(j.key)` already orders `a11:` after `a9:`.
+
+| # | Severity | Finding | Outcome |
+|---|---|---|---|
+| 1 | important | `stamp_change_seq` read `brain_meta.change_seq` with `sqlite3_column_int`. On this LP64 clang, 2147483648 becomes -2147483648, a new row stored at 0 is not `<=` that base, and the counter stops. | Fixed. `select_i64` reads `sqlite3_column_int64`. `select_int` calls it and narrows, for the counts. Test sets the counter to 2147483648 and expects 2147483649. A platform that saturates `column_int` at `INT_MAX` would not fail the old code; this machine wraps, and the amalgamation casts with `(int)`. |
+| 2 | important | `<brain>.d` was chmod 0700 only when `mkdir` created it. An existing directory stayed as it was (a crash between `mkdir` and `chmod` left 0755). `stat` follows a symlink, so a symlink named `<brain>.d` was treated as the folder and the device id was written into the target. | Fixed. Open the directory with `O_NOFOLLOW | O_DIRECTORY` and `fchmod` that descriptor when the mode is looser. A path `lstat` then `chmod` is the CodeQL TOCTOU (`cpp/toctou-race-condition`). A directory that is already 0700 is left alone, so a read-only volume that is already right still opens. Every v6 open does this, not only the open that creates the file. Tests: loosen to 0755 and reopen; symlink the folder and expect `cannot create the device id folder` with nothing planted in the target. |
+| 3 | important | The migration warning was built in a 512-byte stack buffer. A long left-out prefix was cut, so the plain line was not the ST-7.15 sentence. | Fixed. Measure with `snprintf(NULL, 0, ...)`, allocate the line, print, free. A 600-byte prefix is the whole line. A newline in the prefix is `?`, so the line stays one line (`output_text_human`). |
+| 4 | nit | `insert_tombstone` always increments, including a row this transaction already stamped. `brain_meta` has no primary key (the CREATE matches the plan). `exec_bound` ignores bind results, which is the file's style. Directory fsync after the sidecar rename is untested and can fail an open that already published the file. | Left. |
+| 5 | nit | `README.md` and `skills/remember/SKILL.md` still say `<db>.device_id`. | Left. Plan 26 owns that copy. |
+| 6 | doc | Engineering notes said FTS is refilled only for v1–v4 sources. `migrate_v5_to_v6` drops and rebuilds the index for every source, and the function comment already said so. | Corrected. |
+
+Confirmed, not changed: `duplicate_prefix` (ST-5.4, ST-7.15); a tombstone-only bucket list writes `[]` and `change_seq` 1; no 8-prefix cap (D-01); `unknown` → `human` on new writes; `change_seq` bumps on writes now; `import --from-db` still refuses a v6 source until plan 23; no JSON `fix` text invented.
+
+Simplification. Applied: the sidecar check is one path (mkdir, then lstat and chmod) instead of a success return and a separate EEXIST return. `select_int` is a narrow wrapper over `select_i64` instead of a second prepare/step. The warning drops the fixed buffer. Declined, with the reason: `collect_prefixes` / `open_memstream` is the short way to build an unbounded JSON array (a fixed buffer was the warning bug); `k_v6_rebuild_steps` is the migration, and joining it into one string saves no reading; the plan 24 validator is already one fenced-block pass (round 2). A repo-wide NOLINT purge is out of scope.
+
+Adversarial. Hostile `min_reader_version` (newer or unparsable) stays read-only. An invalid legacy sidecar is still an error; `device new` is still the only replace. The symlink folder and the long or control-byte prefix are the fixes above. The version-vector JSON in `migrate_prefix_row` is `snprintf` of a canonical device id. Parallel first opens still use `mkstemp`. `foreign_keys` is OFF only around the migration and restored ON on failure. A failure before COMMIT leaves `user_version` 5. A crash after the copy and before the delete leaves the legacy file; the next open finishes the move. A multi-megabyte bad prefix allocates a warning of that size, which is the value the sentence has to print.
+
+INDEX row 19 is ticked. The JSON `fix` still waits on C-01.
+
+Coder: 7/10. The migration order, the recorded deviations, and the tests match the locked plan. Missed the counter read, the sidecar mode and symlink, and the cut warning line. No stage second-opinion ran (the implementation notes say so), so there is no prior-reviewer score.

@@ -308,7 +308,7 @@ TEST(cli_invalid_sidecar_exits_1_and_keeps_the_file)
     ASSERT_EQ_INT(r.exit_code, 0);
     cmd_result_free(&r);
 
-    sn = snprintf(side, sizeof(side), "%s.device_id", db);
+    sn = snprintf(side, sizeof(side), "%s.d/device_id", db);
     ASSERT_TRUE(sn > 0 && (size_t)sn < sizeof(side));
     /* NOLINTNEXTLINE(android-cloexec-fopen) */
     f = fopen(side, "w");
@@ -389,7 +389,7 @@ TEST(cli_parallel_opens_mint_one_sidecar_id)
     r = run_remember(db, a, sizeof(a) / sizeof(a[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 0);
     cmd_result_free(&r);
-    sn = snprintf(side, sizeof(side), "%s.device_id", db);
+    sn = snprintf(side, sizeof(side), "%s.d/device_id", db);
     ASSERT_TRUE(sn > 0 && (size_t)sn < sizeof(side));
 
     for (round = 0; round < ROUNDS; round++) {

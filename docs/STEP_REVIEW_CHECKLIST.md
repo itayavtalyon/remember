@@ -31,7 +31,7 @@ Run this after each `implementation-plans/NN-*.md` step is “done” (required 
 ## 5. Tooling
 
 - [ ] `cmake --build build` clean with `-Werror`
-- [ ] `PATH="$(brew --prefix llvm)/bin:$PATH" ./scripts/lint-all.sh` → LINT OK
+- [ ] `./scripts/lint-all.sh` → LINT OK (clang-tidy at the CI pin, IWYU and scan-build on; no SKIP or WARN lines)
 - [ ] Sanitizers clean on the CLI binary for the exercised paths
 
 ## 6. Capture

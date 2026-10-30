@@ -4,9 +4,13 @@
 #
 # Optional env:
 #   BUILD_DIR          default: build
-#   REMEMBER_SCAN_BUILD=1   force scan-build gate when scan-build is installed
-#   REMEMBER_IWYU=1         force IWYU gate when include-what-you-use is installed
-#   CI=true                 enables scan-build + IWYU when tools exist
+#   REMEMBER_SCAN_BUILD=0   skip the scan-build gate (on by default, as in CI)
+#   REMEMBER_IWYU=0         skip the IWYU gate (on by default when installed, as in CI)
+#   REMEMBER_ALLOW_OLD_TIDY=1  accept a clang-tidy older than LLVM_PIN (it misses
+#                           checks macOS CI runs; the run says so)
+#   CI=true                 a missing tool fails its gate instead of skipping
+#
+# A local run checks what CI checks, so CI does not find a lint failure first.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -18,17 +22,50 @@ TESTS_DIR="tests"
 REPORT_DIR="lint-reports"
 mkdir -p "$REPORT_DIR"
 
-# Prefer Homebrew LLVM tools when present (macOS). Skip quietly on Linux CI.
-if command -v brew >/dev/null 2>&1; then
-  brew_llvm_bin="$(brew --prefix llvm 2>/dev/null)/bin"
-  if [[ -d "$brew_llvm_bin" ]]; then
-    export PATH="$brew_llvm_bin:$PATH"
-  fi
-fi
+# The LLVM major the macOS CI job installs (brew install llvm@N in ci.yml). Each
+# release adds clang-tidy and analyzer checks, so an older clang-tidy passes code
+# that CI rejects. Raise it together with ci.yml.
+LLVM_PIN=22
 
-CLANG_TIDY=$(command -v clang-tidy || true)
+# Put the pinned LLVM first: Homebrew llvm@N (macOS), then the apt.llvm.org
+# layout (Linux), then an unpinned Homebrew llvm.
+for llvm_bin in \
+    "$(brew --prefix "llvm@$LLVM_PIN" 2>/dev/null || true)/bin" \
+    "/usr/lib/llvm-$LLVM_PIN/bin" \
+    "$(brew --prefix llvm 2>/dev/null || true)/bin"; do
+  if [[ "$llvm_bin" != "/bin" && -x "$llvm_bin/clang-tidy" ]]; then
+    export PATH="$llvm_bin:$PATH"
+    break
+  fi
+done
+
+# Major LLVM version of a clang-tidy binary, or empty.
+tidy_major() {
+  "$1" --version 2>/dev/null | sed -nE 's/.*LLVM version ([0-9]+).*/\1/p' | sed -n 1p || true
+}
+# The pinned clang-tidy wherever it is (PATH above, a versioned name, or a pip
+# --user install), else whatever clang-tidy is on PATH.
+CLANG_TIDY=""
+for cand in clang-tidy "clang-tidy-$LLVM_PIN" "$HOME/.local/bin/clang-tidy"; do
+  path=$(command -v "$cand" || true)
+  if [[ -n "$path" && "$(tidy_major "$path")" == "$LLVM_PIN" ]]; then
+    CLANG_TIDY="$path"
+    break
+  fi
+done
+if [[ -z "$CLANG_TIDY" ]]; then
+  CLANG_TIDY=$(command -v clang-tidy || true)
+fi
 CPPCHECK=$(command -v cppcheck || true)
 SCAN_BUILD=$(command -v scan-build || true)
+if [[ -z "$SCAN_BUILD" ]]; then
+  # Ubuntu's clang-tools installs only the versioned name (scan-build-18).
+  for cand in /usr/bin/scan-build-[0-9]*; do
+    if [[ -x "$cand" && "$cand" =~ scan-build-[0-9]+$ ]]; then
+      SCAN_BUILD="$cand"
+    fi
+  done
+fi
 CLANG_FORMAT=$(command -v clang-format || true)
 IWYU=$(command -v include-what-you-use || true)
 IWYU_TOOL=$(command -v iwyu_tool.py || true)
@@ -106,6 +143,33 @@ check_boundary sha256 'sha256\.h|SHA256_|sha256_' 'normalize\.c|normalize\.h|REM
 
 echo "== no utf8proc outside unicode.c =="
 check_boundary utf8proc 'utf8proc\.h|utf8proc_|UTF8PROC_' 'unicode\.c'
+
+echo "== no shell commands outside the sqlite3 harness helper =="
+# A command string built from a path is CodeQL's "uncontrolled data used in OS
+# command". Spawn with fork/execv or copy in process instead (harness.h).
+shell_calls="$(grep -RIn --include='*.c' --include='*.h' -E '\b(system|popen)\(' \
+  "$SRC_DIR" "$TESTS_DIR" 2>/dev/null | grep -vE '^tests/harness\.c:' || true)"
+if [[ -n "$shell_calls" ]]; then
+  echo "shell commands: FAIL"
+  echo "$shell_calls"
+  fail=1
+else
+  echo "shell commands: PASS"
+fi
+
+echo "== mkdtemp callers include unistd.h =="
+# Darwin declares mkdtemp in unistd.h, glibc in stdlib.h. A Linux build cannot see
+# a missing include, and Linux clang-tidy calls it unused; keep it under __APPLE__.
+missing_unistd=""
+for f in $(grep -lE '\bmkdtemp\(' "$SRC_DIR"/*.c "$TESTS_DIR"/*.c 2>/dev/null || true); do
+  grep -q '^#include <unistd\.h>' "$f" || missing_unistd+="$f "
+done
+if [[ -n "$missing_unistd" ]]; then
+  echo "mkdtemp header: FAIL (add <unistd.h>, under #ifdef __APPLE__ if unused on Linux): $missing_unistd"
+  fail=1
+else
+  echo "mkdtemp header: PASS"
+fi
 
 echo "== cppcheck =="
 if [[ -n "$CPPCHECK" ]] && [[ -d "$SRC_DIR" ]]; then
@@ -222,9 +286,38 @@ if [[ -n "$CLANG_TIDY" ]] && [[ -f "$BUILD_DIR/compile_commands.json" ]]; then
   fi
   : >"$REPORT_DIR/clang-tidy.txt"
   tidy_fail=0
+  TIDY_MAJOR="$(tidy_major "$CLANG_TIDY")"
+  # The distro clang-tidy (Linux CI's) when the pinned one runs on Linux. The
+  # pinned build's include-cleaner has no glibc symbol map (it wants EINTR from
+  # an asm/ header), so on Linux that one check runs on the distro build instead.
+  CLEANER_TIDY=""
+  if [[ "$(uname -s)" == "Linux" && "$TIDY_MAJOR" == "$LLVM_PIN" ]]; then
+    for cand in /usr/bin/clang-tidy /usr/bin/clang-tidy-[0-9]*; do
+      if [[ -x "$cand" && "$(tidy_major "$cand")" != "$LLVM_PIN" ]]; then
+        CLEANER_TIDY="$cand"
+        break
+      fi
+    done
+    EXTRA_ARGS+=(--checks=-misc-include-cleaner)
+  fi
+  echo "clang-tidy: $CLANG_TIDY (LLVM ${TIDY_MAJOR:-?}; CI pin $LLVM_PIN)"
+  if [[ -z "$TIDY_MAJOR" || "$TIDY_MAJOR" -lt "$LLVM_PIN" ]]; then
+    tidy_old="clang-tidy is LLVM ${TIDY_MAJOR:-?}, older than the macOS CI pin $LLVM_PIN: CI runs checks this one lacks. Install it: brew install llvm@$LLVM_PIN (macOS) or python3 -m pip install --user 'clang-tidy==$LLVM_PIN.*' (Linux)"
+    if [[ "$in_ci" -eq 1 || "${REMEMBER_ALLOW_OLD_TIDY:-0}" == "1" ]]; then
+      echo "clang-tidy: WARN ($tidy_old)"
+    else
+      echo "clang-tidy: FAIL ($tidy_old; REMEMBER_ALLOW_OLD_TIDY=1 runs it anyway)"
+      fail=1
+    fi
+  fi
   for f in "$SRC_DIR"/*.c tests/*.c; do
     [[ -f "$f" ]] || continue
     if ! "$CLANG_TIDY" -p "$BUILD_DIR" "${EXTRA_ARGS[@]}" "$f" >>"$REPORT_DIR/clang-tidy.txt" 2>&1; then
+      tidy_fail=1
+    fi
+    if [[ -n "$CLEANER_TIDY" ]] &&
+        ! "$CLEANER_TIDY" -p "$BUILD_DIR" --checks='-*,misc-include-cleaner' "$f" \
+          >>"$REPORT_DIR/clang-tidy.txt" 2>&1; then
       tidy_fail=1
     fi
   done
@@ -243,12 +336,12 @@ else
   fi
 fi
 
-# IWYU (include-what-you-use). Layer B. Optional locally; on in CI when tool present
-# or when REMEMBER_IWYU=1.
+# IWYU (include-what-you-use). Layer B. On whenever installed (Linux CI runs it);
+# REMEMBER_IWYU=0 skips it (macOS CI, which has no package).
 echo "== include-what-you-use =="
-run_iwyu=0
-if [[ "${REMEMBER_IWYU:-0}" == "1" || "$in_ci" -eq 1 ]]; then
-  run_iwyu=1
+run_iwyu=1
+if [[ "${REMEMBER_IWYU:-1}" == "0" ]]; then
+  run_iwyu=0
 fi
 if [[ "$run_iwyu" -eq 1 ]]; then
   if [[ -n "$IWYU" || -n "$IWYU_TOOL" ]]; then
@@ -294,22 +387,22 @@ if [[ "$run_iwyu" -eq 1 ]]; then
     else
       echo "iwyu: PASS"
     fi
+  elif [[ "$(uname -s)" == "Linux" ]]; then
+    # Linux CI runs IWYU, so a Linux run without it would miss what CI finds.
+    echo "iwyu: FAIL (include-what-you-use not installed: apt-get install iwyu, or REMEMBER_IWYU=0)"
+    fail=1
   else
-    echo "iwyu: SKIP (include-what-you-use not installed)"
-    if [[ "$in_ci" -eq 1 ]]; then
-      # Soft on CI until package is in the image; prefer clang-tidy include-cleaner.
-      echo "iwyu: WARN (install iwyu for full Layer B; misc-include-cleaner covers much of this)"
-    fi
+    echo "iwyu: SKIP (include-what-you-use not installed; Linux CI runs it)"
   fi
 else
-  echo "iwyu: SKIP (set REMEMBER_IWYU=1 or run in CI)"
+  echo "iwyu: SKIP (REMEMBER_IWYU=0)"
 fi
 
-# scan-build: real gate when REMEMBER_SCAN_BUILD=1 or CI=true and tool exists.
+# scan-build: on by default, as in CI; REMEMBER_SCAN_BUILD=0 skips it.
 echo "== scan-build =="
-run_scan=0
-if [[ "${REMEMBER_SCAN_BUILD:-0}" == "1" || "$in_ci" -eq 1 ]]; then
-  run_scan=1
+run_scan=1
+if [[ "${REMEMBER_SCAN_BUILD:-1}" == "0" ]]; then
+  run_scan=0
 fi
 if [[ "$run_scan" -eq 1 ]]; then
   if [[ -n "$SCAN_BUILD" ]]; then
@@ -346,17 +439,11 @@ if [[ "$run_scan" -eq 1 ]]; then
     # Best-effort cleanup of /tmp trees (ignore sticky host-mount leftovers).
     rm -rf "$ANALYZE_DIR" 2>/dev/null || true
   else
-    echo "scan-build: SKIP (scan-build not installed)"
-    if [[ "$in_ci" -eq 1 ]]; then
-      fail=1
-    fi
+    echo "scan-build: FAIL (scan-build not installed: brew install llvm@$LLVM_PIN or apt-get install clang-tools; REMEMBER_SCAN_BUILD=0 skips it)"
+    fail=1
   fi
 else
-  if [[ -n "$SCAN_BUILD" ]]; then
-    echo "scan-build: available (enable with REMEMBER_SCAN_BUILD=1 or CI=true)"
-  else
-    echo "scan-build: SKIP"
-  fi
+  echo "scan-build: SKIP (REMEMBER_SCAN_BUILD=0)"
 fi
 
 if [[ "$fail" -ne 0 ]]; then

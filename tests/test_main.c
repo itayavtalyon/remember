@@ -36,9 +36,12 @@ static const TestGroup k_groups[] = {
     {"sync_locators", register_sync_locators_tests},
     {"sync_import", register_sync_import_tests},
     {"schema_v5", register_schema_v5_tests},
+    {"schema_v6", register_schema_v6_tests},
+    {"schema_v6_cli", register_schema_v6_cli_tests},
     {"device", register_device_tests},
     {"errors", register_errors_tests},
     {"list_dates", register_list_dates_tests},
+    {"settings", register_settings_tests},
 };
 
 /* Exact comma-token match: "key" must not select "key_gld" (or vice versa),

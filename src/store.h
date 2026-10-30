@@ -1,6 +1,8 @@
 #ifndef REMEMBER_STORE_H
 #define REMEMBER_STORE_H
 
+#include "settings.h"
+
 #include <stdbool.h>
 #include <stddef.h>
 
@@ -33,8 +35,10 @@ typedef enum {
     STORE_ERR_SOURCE_TOO_OLD,    /* import --from-db: source user_version < 4 */
     STORE_ERR_SOURCE_TOO_NEW,    /* import --from-db: source user_version > 5 */
     STORE_ERR_UNIQUE_TAKEN,      /* accept cannot free key/hash without inventing a key */
-    STORE_ERR_STALE, /* if_version_vector is not the row's version vector; nothing was written */
-    STORE_ERR_BAD_VV /* if_version_vector is not an object of non-negative integers */
+    STORE_ERR_STALE,  /* if_version_vector is not the row's version vector; nothing was written */
+    STORE_ERR_BAD_VV, /* if_version_vector is not an object of non-negative integers */
+    STORE_ERR_SCHEMA_TOO_NEW /* brain_meta.min_reader_version is newer than this engine
+                                (007 ST-10.2): the store reads, every write refuses */
 } StoreStatus;
 
 /* Locator / list / search / tags bin. LIVE is the zero value (zero-init queries). */
@@ -126,12 +130,39 @@ typedef struct {
 /* Open or create a store at path. Creates parent directories (mode 0700).
  * On success returns a non-NULL Store*. On failure returns NULL and, if
  * err/errlen are usable, writes a short message into err (NUL-terminated).
- * Schema: user_version 0 creates 5; 1/2/3 climb to 5; 4 migrates to 5; 5 is
- * current; >5 refuses with "database is newer than this remember".
- * Sidecar <path>.device_id (mode 0600) is the only device id. A missing file
- * is minted. An invalid file is an error and is left unchanged.
+ * Schema: user_version 0 creates 6; 1..5 climb to the v5 shape and take the
+ * one v6 step (007 §10) in the same transaction; 6 is current; >6 refuses
+ * with "database is newer than this remember".
+ * Sidecar <path>.d/device_id (mode 0600, folder 0700) is the only device id.
+ * A missing file is minted. An invalid file is an error and is left
+ * unchanged. A v5 brain's <path>.device_id is copied there before the v6
+ * transaction and deleted after COMMIT; a later open that still finds only
+ * the old file finishes that copy and delete first (007 §10).
  */
 Store *store_open(const char *path, char *err, size_t errlen);
+
+/* Create user.db at path on the first user-layer write (007 ST-10.3, ST-2.8).
+   Mode 0600. user_version 1, one user_meta row 0.3.0, empty settings and
+   settings_history. A second call leaves existing rows in place and restores
+   mode 0600. A non-empty file that is not a SQLite database is left unchanged.
+   Does not run from store_open. 0 on success, -1 and err on failure.
+   A user_version above 1 fails with "database is newer than this remember".
+   A user_version below 0 fails with "unsupported database version". */
+int store_user_db_ensure(const char *path, char *err, size_t errlen);
+
+/* Resolution and writes (007 ST-2.2, ST-4.3 through ST-4.6). Test through
+   these, not through a settings command. user_db NULL is no user layer.
+   A brain write bumps change_seq. A user write does not, and does not create
+   user.db until the value is stored. 0 is not the return: the status is. */
+SettingStatus store_setting_set(Store *brain, const char *user_db, const SettingWrite *w,
+                                SettingWriteResult *out, char *err, size_t errlen);
+SettingStatus store_setting_reset(Store *brain, const char *user_db, const char *key,
+                                  SettingLayer layer, const char *updated_by,
+                                  SettingWriteResult *out, char *err, size_t errlen);
+/* flag_text NULL is no flag. A flag outside the key's range is
+   setting_out_of_range and writes nothing. */
+SettingStatus store_setting_read(Store *brain, const char *user_db, const char *key,
+                                 const char *flag_text, SettingRead *out, char *err, size_t errlen);
 
 /*
  * store_open with options and a structured SQLite failure. opts NULL means
@@ -151,6 +182,24 @@ Store *store_open_opts(const char *path, const StoreOpenOpts *opts, char *err, s
  */
 const StoreError *store_last_error(const Store *s);
 
+/*
+ * One setting_invalid warning (007 ST-7.15) that this open's v5 -> v6 step
+ * produced: a bucket prefix it left out of remember.buckets.prefixes (007 §10
+ * step 2). key is that setting, value is the prefix as stored, reason is
+ * bad_prefix_shape or duplicate_prefix. Strings are borrowed from s.
+ */
+typedef struct {
+    const char *key;
+    const char *value;
+    const char *reason;
+} StoreSettingWarning;
+
+/* Number of warnings the open produced (0 when s is NULL or none). */
+size_t store_open_warning_count(const Store *s);
+
+/* Warning i in the order the step found them; zeroed when i is out of range. */
+StoreSettingWarning store_open_warning(const Store *s, size_t i);
+
 /* Path s was opened with (borrowed; valid until store_close). NULL if s NULL. */
 const char *store_path(const Store *s);
 
@@ -166,8 +215,8 @@ const char *store_device_id(const Store *s);
 
 /*
  * Mint a new sidecar id and bind it. Does not change any version_vector.
- * Takes the same write lock as a missing-sidecar open, so parallel mints cannot
- * share <path>.device_id.tmp.
+ * Takes the same write lock as a missing-sidecar open, and writes through a
+ * unique temp file and a rename, so parallel writers never share a temp file.
  * On STORE_OK, the sidecar and this handle both hold the new id. *had_prev is
  * true and prev_out (STORE_DEVICE_ID_LEN + 1) holds the id the file had. A
  * missing or invalid file sets *had_prev false and prev_out empty (JSON null)

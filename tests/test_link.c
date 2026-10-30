@@ -250,8 +250,8 @@ TEST(link_bumps_both_and_human_id)
     ASSERT_EQ_INT(r.exit_code, 0);
     ASSERT_EQ_INT(parse_id_stdout(r.out), 1);
     cmd_result_free(&r);
-    e1 = harness_sqlite_query_line(db, "SELECT updated_at FROM entries WHERE id=1;");
-    e2 = harness_sqlite_query_line(db, "SELECT updated_at FROM entries WHERE id=2;");
+    e1 = harness_sqlite_query_line(db, "SELECT updated_at FROM entries WHERE local_id=1;");
+    e2 = harness_sqlite_query_line(db, "SELECT updated_at FROM entries WHERE local_id=2;");
     edge = harness_sqlite_query_line(db, "SELECT updated_at FROM entry_links;");
     ASSERT_TRUE(e1 != NULL && e2 != NULL && edge != NULL);
     ASSERT_STREQ(e1, e2);

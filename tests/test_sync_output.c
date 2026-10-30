@@ -22,7 +22,8 @@ static void mark_deleted(const char *db, long long id)
     char sql[SQL_BUFSIZE];
 
     (void)snprintf(sql, sizeof(sql),
-                   "UPDATE entries SET deleted_at='2020-01-01T00:00:00.000Z' WHERE id=%lld;", id);
+                   "UPDATE entries SET deleted_at='2020-01-01T00:00:00.000Z' WHERE local_id=%lld;",
+                   id);
     free(harness_sqlite_query_line(db, sql));
 }
 
