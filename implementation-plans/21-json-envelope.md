@@ -234,7 +234,56 @@ Do not re-open: one format, no envelope id, no offset, actors replace source, `-
 
 ## Implementation Notes
 
-_(empty)_
+### Stage 1 — the envelope writer (2026-10-30)
+
+Branch `plan/21-json-envelope`, from `origin/main` 132f89c. The approved copy is PR #54 (docs only). Merge `main` into this branch after #54 merges (`decision:plan21-docs-pr-first`).
+
+What changed:
+
+- `src/output.c` has one head, `write_envelope_head(out, type)`, which writes `{"format":"remember-message","version":1,"type":<type>,"data":{`, and one tail, `ENVELOPE_END` (`}}\n`). Every `--json` success writer in `output.c` uses that pair. There is no second writer.
+- `get` writes `data.memory` (the old `count` and `entries` are gone). `add` writes `data{action, memory{... links}}` and loads its links like `get` does: deleted neighbors are left out. `update` and `rekey` write `data{action, memory}` without links. `delete`, `purge`, and `conflict accept` share `output_entries_envelope`: `data{action, count, entries[]}`. `output_deleted_list`, `output_get_envelope`, and `output_accepted_envelope` are deleted.
+- Reply types: JSON-STYLE §1.7a for the commands it names. For the five it does not name, `decision:plan21-derived-reply-types`: `device.get.result`, `device.new.result`, `memory.related.result`, `memory.import.result`, `repair.search_index.result`.
+- `repair search-index --help` names the new JSON type.
+- `tests/test_envelope.c` (suite `envelope`, in `tests/gate-suites`). `tests/test.c` gets `ASSERT_STR_PREFIX`.
+
+Not in stage 1, on purpose:
+
+- Errors and warnings still use the old `diag.c` lines. Stage 2 moves them into the stdout envelope with the `--json-errors` removal.
+- The memory object still has `"id":<int>,"sync_id":…` and `source`. Stage 2 renames identity (`id`, `local_id`). Stage 4 replaces `source` with actors.
+- List and search `data` still carry `offset` and `limit`. Stage 2 deletes `--offset` and adds the cursor.
+- `import` still prints counts only. `decision:plan21-import-problem-rows` (conflicts and rejected groups) needs store work and is open.
+- Search `query` (`decision:plan21-search-query-original-only`) and `filters` are not written yet.
+
+Grill locks this stage: `decision:plan21-derived-reply-types`, `decision:plan21-import-problem-rows`, `decision:plan21-search-query-original-only`, `decision:plan21-add-action-names-kept`, `decision:plan21-docs-pr-first`.
+
+Mutants (one clause each). The runner restores a file with `mv`, which keeps the old mtime, so the first run reused mutated objects. It now touches the file after the restore. Rerun results:
+
+| Mutant | Red tests |
+|---|---|
+| M1 head writes `type` before `version` | `envelope_get_head_is_format_version_type_then_data_memory`, every `output_*_envelope` literal in `test_output.c` |
+| M2 `get` passes an action | `envelope_get_head_…`, `get_existing_json_envelope` |
+| M3 `output_memory_envelope` drops links | `output_memory_envelope_with_action_…`, `…_without_action_…`; by hand also `list_search_get_json_links_empty_after_expires`, `get_list_json_stubs_five_name_preview` (the runner's CLI capture missed those, so it was run by hand) |
+| M4 `ENVELOPE_END` loses a brace | `list_equal_bounds_are_empty`, `search_crossed_bounds_are_empty`, `tags_empty_db_json`, the `test_output.c` literals |
+| M5 `action` written only when NULL | `add_json_created_shape`, `add_json_merged_shape`, `update_json_shape`, `output_action_envelope_writes_the_memory_without_links` |
+| M6 `add` keeps deleted neighbors | `envelope_add_leaves_out_a_neighbor_in_the_trash_like_get` (added after M6 survived) |
+
+Found while updating tests: `tests/test_device.c` built its expected line in a 160-byte buffer, and a longer line was cut silently. The buffer is 256 bytes now, and the test asserts that `snprintf` fit.
+
+Probe, the add-with-a-deleted-neighbor case, by hand:
+
+```
+remember --db D add --key hub hub; remember --db D add other; remember --db D link 1 2
+remember --db D delete 2; remember --db D --json add --key hub hub2   # "links":[]
+```
+
+Gate on the committed tree (after the two clang-tidy fixes: a `NOLINTNEXTLINE(bugprone-easily-swappable-parameters)` on `write_memory_envelope`, whose `type, action` order matches every public writer, and an `if`/`else` in place of a ternary that LLVM 22 read as bool to int): `ctest` 5/5 passed. `check-coverage.sh`: functions 100%, effective lines 100%, `output.c` 708 branch sides with 0 missed. `lint-all.sh`: LINT OK. `leaks-macos`: PASS. `ci-linux.sh`: OK (IWYU PASS, scan-build PASS).
+
+Simplify pass:
+
+1. `output_deleted_list` and `output_accepted_envelope` were the same writer with a different action word. Both became `output_entries_envelope` (about 35 lines saved, and `delete` moves to it too).
+2. `output_get_envelope` and the old one-memory envelope became `write_memory_envelope` behind two public names (about 20 lines saved).
+3. Each writer's open and close is one head and one `ENVELOPE_END`, not a `{"version":1,` and `]}\n` pair per function.
+4. Kept: `output_action_envelope` and `output_memory_envelope` stay two public functions. Merging them needs a `with_links` flag at every call site, and the flag is the difference the plan states (only `add` and `get` carry links).
 
 ## Review Notes
 

@@ -249,10 +249,8 @@ TEST(add_json_created_shape)
     ASSERT_TRUE(db != NULL);
     r = run_remember(db, args, sizeof(args) / sizeof(args[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 0);
-    ASSERT_STR_CONTAINS(r.out, "\"version\":1");
-    ASSERT_STR_CONTAINS(r.out, "\"action\":\"created\"");
-    ASSERT_STR_CONTAINS(r.out, "\"count\":1");
-    ASSERT_STR_CONTAINS(r.out, "\"entries\"");
+    ASSERT_STR_PREFIX(r.out, "{\"format\":\"remember-message\",\"version\":1,\"type\":\"memory.add."
+                             "result\",\"data\":{\"action\":\"created\",\"memory\":{");
     ASSERT_STR_CONTAINS(r.out, "json body");
     ASSERT_STR_CONTAINS(r.out, "t");
     cmd_result_free(&r);
@@ -271,8 +269,8 @@ TEST(add_json_merged_shape)
     r2 = run_remember(db, a2, sizeof(a2) / sizeof(a2[0]), NULL);
     ASSERT_EQ_INT(r1.exit_code, 0);
     ASSERT_EQ_INT(r2.exit_code, 0);
-    ASSERT_STR_CONTAINS(r2.out, "\"action\":\"merged\"");
-    ASSERT_STR_CONTAINS(r2.out, "\"entries\"");
+    ASSERT_STR_PREFIX(r2.out, "{\"format\":\"remember-message\",\"version\":1,\"type\":\"memory."
+                              "add.result\",\"data\":{\"action\":\"merged\",\"memory\":{");
     cmd_result_free(&r1);
     cmd_result_free(&r2);
     free(db);

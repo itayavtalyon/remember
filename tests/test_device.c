@@ -12,7 +12,7 @@
 enum {
     DEVICE_ID_LEN = 36,
     DEVICE_ID_BUF = 37,
-    DEVICE_JSON_BUF = 160,
+    DEVICE_JSON_BUF = 256,
     DEVICE_VV_BUF = 192,
     DEVICE_COUNTER_BUF = 48
 };
@@ -129,8 +129,10 @@ TEST(device_prints_the_sidecar_id)
 
     result = run_remember(db, json, sizeof(json) / sizeof(json[0]), NULL);
     ASSERT_EQ_INT(result.exit_code, 0);
-    (void)snprintf(expect, sizeof(expect), "{\"version\":1,\"device_id\":\"%s\"}\n",
-                   id != NULL ? id : "");
+    ASSERT_TRUE((size_t)snprintf(expect, sizeof(expect),
+                                 "{\"format\":\"remember-message\",\"version\":1,\"type\":\"device."
+                                 "get.result\",\"data\":{\"device_id\":\"%s\"}}\n",
+                                 id != NULL ? id : "") < sizeof(expect));
     ASSERT_STREQ(result.out, expect);
     cmd_result_free(&result);
     free(id);
@@ -181,8 +183,11 @@ TEST(device_new_keeps_the_old_vector_and_counts_the_next_edit_under_the_new_id)
     ASSERT_STREQ(previous, first != NULL ? first : "");
     ASSERT_EQ_INT(copy_json_field(result.out, "device_id", minted, sizeof(minted)), 0);
     ASSERT_TRUE(strcmp(minted, previous) != 0);
-    (void)snprintf(expect, sizeof(expect),
-                   "{\"version\":1,\"device_id\":\"%s\",\"previous\":\"%s\"}\n", minted, previous);
+    ASSERT_TRUE((size_t)snprintf(expect, sizeof(expect),
+                                 "{\"format\":\"remember-message\",\"version\":1,\"type\":\"device."
+                                 "new.result\",\"data\":{"
+                                 "\"device_id\":\"%s\",\"previous\":\"%s\"}}\n",
+                                 minted, previous) < sizeof(expect));
     ASSERT_STREQ(result.out, expect);
     cmd_result_free(&result);
     second = sidecar_text(db);
@@ -311,8 +316,9 @@ TEST(device_new_json_previous_is_null_when_missing)
     }
     ASSERT_EQ_INT(output_device_new_envelope(out, id, NULL), 0);
     ASSERT_EQ_INT(fclose(out), 0);
-    ASSERT_STREQ(buf, "{\"version\":1,\"device_id\":\"018f6b2e-7c3a-7b2e-8f3a-7c3a7b2e8f3a\","
-                      "\"previous\":null}\n");
+    ASSERT_STREQ(buf, "{\"format\":\"remember-message\",\"version\":1,\"type\":\"device.new."
+                      "result\",\"data\":{\"device_id\":\"018f6b2e-7c3a-7b2e-8f3a-7c3a7b2e8f3a\","
+                      "\"previous\":null}}\n");
     free(buf);
 }
 

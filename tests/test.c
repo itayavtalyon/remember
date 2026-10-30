@@ -84,6 +84,16 @@ static bool substring_present(const char *haystack, const char *needle)
     return false;
 }
 
+void tst_assert_prefix(const char *s, const char *prefix, const char *file, int line)
+{
+    g_asserts_run++;
+    if (s == NULL || prefix == NULL || strncmp(s, prefix, strlen(prefix)) != 0) {
+        g_asserts_failed++;
+        (void)fprintf(stderr, "FAIL %s (%s:%d): ASSERT_STR_PREFIX(\"%s\", \"%s\")\n",
+                      current_test(), file, line, or_null(s), or_null(prefix));
+    }
+}
+
 void tst_assert_contains(const char *haystack, const char *needle, bool want, const char *file,
                          int line)
 {

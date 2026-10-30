@@ -2723,7 +2723,8 @@ TEST(cli_repair_search_index_rebuilds)
     r = run_remember(db, repair, sizeof(repair) / sizeof(repair[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 0);
     ASSERT_STREQ(r.err, "");
-    ASSERT_STREQ(r.out, "{\"version\":1,\"action\":\"rebuilt\",\"entries\":1}\n");
+    ASSERT_STREQ(r.out, "{\"format\":\"remember-message\",\"version\":1,\"type\":\"repair.search_"
+                        "index.result\",\"data\":{\"action\":\"rebuilt\",\"entries\":1}}\n");
     cmd_result_free(&r);
     r = run_remember(db, search, sizeof(search) / sizeof(search[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 0);
@@ -2782,7 +2783,8 @@ TEST(cli_repair_counts_deleted_entries)
     r = run_remember(db, repair, sizeof(repair) / sizeof(repair[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 0);
     ASSERT_STREQ(r.err, "");
-    ASSERT_STREQ(r.out, "{\"version\":1,\"action\":\"rebuilt\",\"entries\":2}\n");
+    ASSERT_STREQ(r.out, "{\"format\":\"remember-message\",\"version\":1,\"type\":\"repair.search_"
+                        "index.result\",\"data\":{\"action\":\"rebuilt\",\"entries\":2}}\n");
     cmd_result_free(&r);
     free(db);
 }
@@ -2920,7 +2922,8 @@ static void expect_repair_heals(const char *shadow)
     r = run_remember(db, repair, sizeof(repair) / sizeof(repair[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 0);
     ASSERT_STREQ(r.err, "");
-    ASSERT_STREQ(r.out, "{\"version\":1,\"action\":\"rebuilt\",\"entries\":2}\n");
+    ASSERT_STREQ(r.out, "{\"format\":\"remember-message\",\"version\":1,\"type\":\"repair.search_"
+                        "index.result\",\"data\":{\"action\":\"rebuilt\",\"entries\":2}}\n");
     cmd_result_free(&r);
     r = run_remember(db, search, sizeof(search) / sizeof(search[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 0);

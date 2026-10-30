@@ -234,65 +234,106 @@ TEST(output_action_envelope_rejects_missing_arguments)
     Entry e = given_entry();
     FILE *f = given_stream();
 
-    ASSERT_EQ_INT(output_action_envelope(NULL, "created", &e, NOW), -1);
-    ASSERT_EQ_INT(output_action_envelope(f, NULL, &e, NOW), -1);
-    ASSERT_EQ_INT(output_action_envelope(f, "created", NULL, NOW), -1);
+    ASSERT_EQ_INT(output_action_envelope(NULL, "memory.update.result", "updated", &e, NOW), -1);
+    ASSERT_EQ_INT(output_action_envelope(f, NULL, "updated", &e, NOW), -1);
+    ASSERT_EQ_INT(output_action_envelope(f, "memory.update.result", NULL, &e, NOW), -1);
+    ASSERT_EQ_INT(output_action_envelope(f, "memory.update.result", "updated", NULL, NOW), -1);
     assert_written(f, "");
 }
 
-TEST(output_deleted_list_rejects_missing_arguments)
+TEST(output_entries_envelope_rejects_missing_arguments)
 {
     FILE *f = given_stream();
 
-    ASSERT_EQ_INT(output_deleted_list(NULL, NULL, 0, NOW), -1);
-    ASSERT_EQ_INT(output_deleted_list(f, NULL, 1, NOW), -1);
+    ASSERT_EQ_INT(output_entries_envelope(NULL, "memory.purge.result", "deleted", NULL, 0, NOW),
+                  -1);
+    ASSERT_EQ_INT(output_entries_envelope(f, NULL, "deleted", NULL, 0, NOW), -1);
+    ASSERT_EQ_INT(output_entries_envelope(f, "memory.purge.result", NULL, NULL, 0, NOW), -1);
+    ASSERT_EQ_INT(output_entries_envelope(f, "memory.purge.result", "deleted", NULL, 1, NOW), -1);
     assert_written(f, "");
 }
 
-TEST(output_deleted_list_separates_entries_with_a_comma)
+TEST(output_entries_envelope_separates_entries_with_a_comma)
 {
     Entry entries[] = {given_entry(), given_entry()};
     FILE *f = given_stream();
 
     entries[1].id = OTHER_ID;
-    ASSERT_EQ_INT(output_deleted_list(f, entries, 2, NOW), 0);
-    assert_written(f, "{\"version\":1,\"action\":\"deleted\",\"count\":2,\"entries\":["
-                      "{\"id\":7,\"sync_id\":\"s-7\",\"key\":\"k:7\",\"body\":\"body\","
-                      "\"tags\":[],\"source\":\"agent\",\"created_at\":\"c\",\"updated_at\":\"u\","
-                      "\"expires_at\":null,\"deleted_at\":null,\"bin\":\"live\","
-                      "\"version_vector\":{}},"
-                      "{\"id\":8,\"sync_id\":\"s-7\",\"key\":\"k:7\",\"body\":\"body\","
-                      "\"tags\":[],\"source\":\"agent\",\"created_at\":\"c\",\"updated_at\":\"u\","
-                      "\"expires_at\":null,\"deleted_at\":null,\"bin\":\"live\","
-                      "\"version_vector\":{}}]}\n");
+    ASSERT_EQ_INT(output_entries_envelope(f, "memory.purge.result", "deleted", entries, 2, NOW), 0);
+    assert_written(
+        f,
+        "{\"format\":\"remember-message\",\"version\":1,\"type\":\"memory.purge.result\",\"data\":{"
+        "\"action\":\"deleted\",\"count\":2,\"entries\":["
+        "{\"id\":7,\"sync_id\":\"s-7\",\"key\":\"k:7\",\"body\":\"body\","
+        "\"tags\":[],\"source\":\"agent\",\"created_at\":\"c\",\"updated_at\":\"u\","
+        "\"expires_at\":null,\"deleted_at\":null,\"bin\":\"live\","
+        "\"version_vector\":{}},"
+        "{\"id\":8,\"sync_id\":\"s-7\",\"key\":\"k:7\",\"body\":\"body\","
+        "\"tags\":[],\"source\":\"agent\",\"created_at\":\"c\",\"updated_at\":\"u\","
+        "\"expires_at\":null,\"deleted_at\":null,\"bin\":\"live\","
+        "\"version_vector\":{}}]}}\n");
 }
 
-TEST(output_get_envelope_rejects_missing_arguments)
+TEST(output_memory_envelope_rejects_missing_arguments)
 {
     Entry e = given_entry();
     FILE *f = given_stream();
 
-    ASSERT_EQ_INT(output_get_envelope(NULL, &e, NULL, 0, NOW), -1);
-    ASSERT_EQ_INT(output_get_envelope(f, NULL, NULL, 0, NOW), -1);
-    ASSERT_EQ_INT(output_get_envelope(f, &e, NULL, 0, NULL), -1);
-    ASSERT_EQ_INT(output_get_envelope(f, &e, NULL, 1, NOW), -1);
+    ASSERT_EQ_INT(output_memory_envelope(NULL, "memory.get.result", NULL, &e, NULL, 0, NOW), -1);
+    ASSERT_EQ_INT(output_memory_envelope(f, NULL, NULL, &e, NULL, 0, NOW), -1);
+    ASSERT_EQ_INT(output_memory_envelope(f, "memory.get.result", NULL, NULL, NULL, 0, NOW), -1);
+    ASSERT_EQ_INT(output_memory_envelope(f, "memory.get.result", NULL, &e, NULL, 0, NULL), -1);
+    ASSERT_EQ_INT(output_memory_envelope(f, "memory.get.result", NULL, &e, NULL, 1, NOW), -1);
     assert_written(f, "");
 }
 
-TEST(output_get_envelope_lists_only_the_subjects_links)
+TEST(output_memory_envelope_without_action_lists_only_the_subjects_links)
 {
     Entry e = given_entry();
     StoreNeighbor links[] = {given_link(OTHER_ID, OTHER_ID, STORE_EDGE_RELATED),
                              given_link(SUBJECT_ID, SUBJECT_ID, STORE_EDGE_RELATED)};
     FILE *f = given_stream();
 
-    ASSERT_EQ_INT(output_get_envelope(f, &e, links, 2, NOW), 0);
-    assert_written(f, "{\"version\":1,\"count\":1,\"entries\":[{\"id\":7,\"sync_id\":\"s-7\","
+    ASSERT_EQ_INT(output_memory_envelope(f, "memory.get.result", NULL, &e, links, 2, NOW), 0);
+    assert_written(
+        f,
+        "{\"format\":\"remember-message\",\"version\":1,\"type\":\"memory.get.result\",\"data\":{"
+        "\"memory\":{\"id\":7,\"sync_id\":\"s-7\","
+        "\"key\":\"k:7\",\"body\":\"body\",\"tags\":[],\"source\":\"agent\","
+        "\"created_at\":\"c\",\"updated_at\":\"u\",\"expires_at\":null,"
+        "\"deleted_at\":null,\"bin\":\"live\",\"version_vector\":{},"
+        "\"links\":[{\"id\":3,\"sync_id\":\"n-3\",\"key\":null,\"type\":\"related\","
+        "\"bin\":\"live\",\"preview\":\"nb\"}]}}}\n");
+}
+
+TEST(output_memory_envelope_with_action_puts_action_before_memory)
+{
+    Entry e = given_entry();
+    FILE *f = given_stream();
+
+    ASSERT_EQ_INT(output_memory_envelope(f, "memory.add.result", "created", &e, NULL, 0, NOW), 0);
+    assert_written(
+        f,
+        "{\"format\":\"remember-message\",\"version\":1,\"type\":\"memory.add.result\",\"data\":{"
+        "\"action\":\"created\",\"memory\":{\"id\":7,\"sync_id\":\"s-7\","
+        "\"key\":\"k:7\",\"body\":\"body\",\"tags\":[],\"source\":\"agent\","
+        "\"created_at\":\"c\",\"updated_at\":\"u\",\"expires_at\":null,"
+        "\"deleted_at\":null,\"bin\":\"live\",\"version_vector\":{},"
+        "\"links\":[]}}}\n");
+}
+
+TEST(output_action_envelope_writes_the_memory_without_links)
+{
+    Entry e = given_entry();
+    FILE *f = given_stream();
+
+    ASSERT_EQ_INT(output_action_envelope(f, "memory.update.result", "updated", &e, NOW), 0);
+    assert_written(f, "{\"format\":\"remember-message\",\"version\":1,\"type\":\"memory.update."
+                      "result\",\"data\":{"
+                      "\"action\":\"updated\",\"memory\":{\"id\":7,\"sync_id\":\"s-7\","
                       "\"key\":\"k:7\",\"body\":\"body\",\"tags\":[],\"source\":\"agent\","
                       "\"created_at\":\"c\",\"updated_at\":\"u\",\"expires_at\":null,"
-                      "\"deleted_at\":null,\"bin\":\"live\",\"version_vector\":{},"
-                      "\"links\":[{\"id\":3,\"sync_id\":\"n-3\",\"key\":null,\"type\":\"related\","
-                      "\"bin\":\"live\",\"preview\":\"nb\"}]}]}\n");
+                      "\"deleted_at\":null,\"bin\":\"live\",\"version_vector\":{}}}}\n");
 }
 
 TEST(output_list_envelope_rejects_missing_arguments)
@@ -314,9 +355,10 @@ TEST(output_search_envelope_writes_empty_facets)
     FILE *f = given_stream();
 
     ASSERT_EQ_INT(output_search_envelope(f, &res, 0, 20, NULL, 0, NOW), 0);
-    assert_written(f, "{\"version\":1,\"offset\":0,\"limit\":20,\"count\":0,\"total\":0,"
+    assert_written(f, "{\"format\":\"remember-message\",\"version\":1,\"type\":\"memory.search."
+                      "result\",\"data\":{\"offset\":0,\"limit\":20,\"count\":0,\"total\":0,"
                       "\"keys\":{\"total\":0,\"items\":[]},\"tags\":{\"total\":0,\"items\":[]},"
-                      "\"entries\":[]}\n");
+                      "\"entries\":[]}}\n");
 }
 
 /* Two key items and two tag items, so the comma between items shows. */
@@ -352,14 +394,15 @@ TEST(output_search_envelope_writes_the_facet_items)
 
     ASSERT_EQ_INT(output_search_envelope(f, &res, 0, 20, NULL, 0, NOW), 0);
     assert_written(f,
-                   "{\"version\":1,\"offset\":0,\"limit\":20,\"count\":0,\"total\":0,"
+                   "{\"format\":\"remember-message\",\"version\":1,\"type\":\"memory.search."
+                   "result\",\"data\":{\"offset\":0,\"limit\":20,\"count\":0,\"total\":0,"
                    "\"keys\":{\"total\":5,\"items\":["
                    "{\"key\":\"recs:books\",\"sync_id\":\"s-1\",\"label\":\"Book recommendations\","
                    "\"source\":\"agent\",\"updated_at\":\"u-1\"},"
                    "{\"key\":\"recs:bonds\",\"sync_id\":\"s-2\",\"label\":\"recs:bonds\","
                    "\"source\":\"human\",\"updated_at\":\"u-2\"}]},"
                    "\"tags\":{\"total\":4,\"items\":[{\"tag\":\"type:books\",\"count\":1},"
-                   "{\"tag\":\"recs\",\"count\":3}]},\"entries\":[]}\n");
+                   "{\"tag\":\"recs\",\"count\":3}]},\"entries\":[]}}\n");
 }
 
 /* Stage 4 handover: every facet field goes through the JSON escaper. The
@@ -381,12 +424,13 @@ TEST(output_search_envelope_escapes_every_facet_field)
     res.keys.count = 1;
     res.tags.count = 1;
     ASSERT_EQ_INT(output_search_envelope(f, &res, 0, 20, NULL, 0, NOW), 0);
-    assert_written(f, "{\"version\":1,\"offset\":0,\"limit\":20,\"count\":0,\"total\":0,"
+    assert_written(f, "{\"format\":\"remember-message\",\"version\":1,\"type\":\"memory.search."
+                      "result\",\"data\":{\"offset\":0,\"limit\":20,\"count\":0,\"total\":0,"
                       "\"keys\":{\"total\":5,\"items\":["
                       "{\"key\":\"k\\u001b\",\"sync_id\":\"s\\n\",\"label\":\"l\\\"\\u001b[31m\","
                       "\"source\":\"a\\\\\",\"updated_at\":\"u\\t\"}]},"
                       "\"tags\":{\"total\":4,\"items\":[{\"tag\":\"t\\u0001\",\"count\":1}]},"
-                      "\"entries\":[]}\n");
+                      "\"entries\":[]}}\n");
 }
 
 TEST(output_search_envelope_rejects_missing_arguments)
@@ -549,15 +593,18 @@ TEST(output_tags_envelope_rejects_missing_arguments)
     assert_written(f, "");
 }
 
+static const char LINK_T[] = "memory.link.result";
+
 TEST(output_links_write_envelope_rejects_missing_arguments)
 {
     StoreNeighbor link = given_link(SUBJECT_ID, SUBJECT_ID, STORE_EDGE_RELATED);
     FILE *f = given_stream();
 
-    ASSERT_EQ_INT(output_links_write_envelope(NULL, "created", &link, 1, NOW), -1);
-    ASSERT_EQ_INT(output_links_write_envelope(f, NULL, &link, 1, NOW), -1);
-    ASSERT_EQ_INT(output_links_write_envelope(f, "created", &link, 1, NULL), -1);
-    ASSERT_EQ_INT(output_links_write_envelope(f, "created", NULL, 1, NOW), -1);
+    ASSERT_EQ_INT(output_links_write_envelope(NULL, LINK_T, "created", &link, 1, NOW), -1);
+    ASSERT_EQ_INT(output_links_write_envelope(f, NULL, "created", &link, 1, NOW), -1);
+    ASSERT_EQ_INT(output_links_write_envelope(f, LINK_T, NULL, &link, 1, NOW), -1);
+    ASSERT_EQ_INT(output_links_write_envelope(f, LINK_T, "created", &link, 1, NULL), -1);
+    ASSERT_EQ_INT(output_links_write_envelope(f, LINK_T, "created", NULL, 1, NOW), -1);
     assert_written(f, "");
 }
 
@@ -567,7 +614,7 @@ TEST(output_links_write_envelope_rejects_a_link_without_a_sync_id)
     FILE *f = given_stream();
 
     link.neighbor_sync_id = NULL;
-    ASSERT_EQ_INT(output_links_write_envelope(f, "created", &link, 1, NOW), -1);
+    ASSERT_EQ_INT(output_links_write_envelope(f, LINK_T, "created", &link, 1, NOW), -1);
     (void)fclose(f);
 }
 
@@ -577,12 +624,15 @@ TEST(output_links_write_envelope_names_both_supersedes_directions)
                              given_link(SUBJECT_ID, NEIGHBOR_ID, STORE_EDGE_SUPERSEDES)};
     FILE *f = given_stream();
 
-    ASSERT_EQ_INT(output_links_write_envelope(f, "created", links, 2, NOW), 0);
-    assert_written(f, "{\"version\":1,\"action\":\"created\",\"count\":2,\"links\":["
-                      "{\"id\":3,\"sync_id\":\"n-3\",\"key\":null,\"type\":\"supersedes\","
-                      "\"bin\":\"live\",\"preview\":\"nb\"},"
-                      "{\"id\":3,\"sync_id\":\"n-3\",\"key\":null,\"type\":\"superseded_by\","
-                      "\"bin\":\"live\",\"preview\":\"nb\"}]}\n");
+    ASSERT_EQ_INT(output_links_write_envelope(f, LINK_T, "created", links, 2, NOW), 0);
+    assert_written(
+        f,
+        "{\"format\":\"remember-message\",\"version\":1,\"type\":\"memory.link.result\",\"data\":{"
+        "\"action\":\"created\",\"count\":2,\"links\":["
+        "{\"id\":3,\"sync_id\":\"n-3\",\"key\":null,\"type\":\"supersedes\","
+        "\"bin\":\"live\",\"preview\":\"nb\"},"
+        "{\"id\":3,\"sync_id\":\"n-3\",\"key\":null,\"type\":\"superseded_by\","
+        "\"bin\":\"live\",\"preview\":\"nb\"}]}}\n");
 }
 
 TEST(output_related_envelope_rejects_missing_arguments)
@@ -630,7 +680,8 @@ TEST(output_conflicts_envelope_lists_no_conflicts)
     FILE *f = given_stream();
 
     ASSERT_EQ_INT(output_conflicts_envelope(f, NULL, 0), 0);
-    assert_written(f, "{\"version\":1,\"count\":0,\"conflicts\":[]}\n");
+    assert_written(f, "{\"format\":\"remember-message\",\"version\":1,\"type\":\"conflict.list."
+                      "result\",\"data\":{\"count\":0,\"conflicts\":[]}}\n");
 }
 
 TEST(output_conflicts_envelope_separates_conflicts_with_a_comma)
@@ -640,11 +691,12 @@ TEST(output_conflicts_envelope_separates_conflicts_with_a_comma)
 
     rows[1].id = 2;
     ASSERT_EQ_INT(output_conflicts_envelope(f, rows, 2), 0);
-    assert_written(f, "{\"version\":1,\"count\":2,\"conflicts\":["
+    assert_written(f, "{\"format\":\"remember-message\",\"version\":1,\"type\":\"conflict.list."
+                      "result\",\"data\":{\"count\":2,\"conflicts\":["
                       "{\"id\":1,\"sync_id\":\"s-1\",\"reason\":\"key_clash\",\"local\":{},"
                       "\"incoming\":{},\"created_at\":\"c\"},"
                       "{\"id\":2,\"sync_id\":\"s-1\",\"reason\":\"key_clash\",\"local\":{},"
-                      "\"incoming\":{},\"created_at\":\"c\"}]}\n");
+                      "\"incoming\":{},\"created_at\":\"c\"}]}}\n");
 }
 
 /* Each field the conflict row needs, missing in turn. The envelope header is
@@ -670,22 +722,15 @@ TEST(output_conflicts_envelope_rejects_an_incomplete_conflict)
     (void)fclose(f);
 }
 
-TEST(output_accepted_envelope_rejects_missing_arguments)
+TEST(output_entries_envelope_lists_no_entries)
 {
     FILE *f = given_stream();
 
-    ASSERT_EQ_INT(output_accepted_envelope(NULL, NULL, 0, NOW), -1);
-    ASSERT_EQ_INT(output_accepted_envelope(f, NULL, 0, NULL), -1);
-    ASSERT_EQ_INT(output_accepted_envelope(f, NULL, 1, NOW), -1);
-    assert_written(f, "");
-}
-
-TEST(output_accepted_envelope_lists_no_entries)
-{
-    FILE *f = given_stream();
-
-    ASSERT_EQ_INT(output_accepted_envelope(f, NULL, 0, NOW), 0);
-    assert_written(f, "{\"version\":1,\"action\":\"accepted\",\"count\":0,\"entries\":[]}\n");
+    ASSERT_EQ_INT(output_entries_envelope(f, "conflict.accept.result", "accepted", NULL, 0, NOW),
+                  0);
+    assert_written(f, "{\"format\":\"remember-message\",\"version\":1,\"type\":\"conflict.accept."
+                      "result\",\"data\":{"
+                      "\"action\":\"accepted\",\"count\":0,\"entries\":[]}}\n");
 }
 
 /* ---- human ---------------------------------------------------------------- */
@@ -969,14 +1014,14 @@ static int write_action_envelope(FILE *f)
 {
     Entry e = given_full_entry();
 
-    return output_action_envelope(f, "created", &e, NOW);
+    return output_action_envelope(f, "memory.update.result", "updated", &e, NOW);
 }
 
-static int write_deleted_list(FILE *f)
+static int write_entries_envelope(FILE *f)
 {
     Entry entries[] = {given_full_entry(), given_full_entry()};
 
-    return output_deleted_list(f, entries, 2, NOW);
+    return output_entries_envelope(f, "memory.purge.result", "deleted", entries, 2, NOW);
 }
 
 static int write_get_envelope(FILE *f)
@@ -985,7 +1030,14 @@ static int write_get_envelope(FILE *f)
     StoreNeighbor links[2];
 
     given_two_links(links);
-    return output_get_envelope(f, &e, links, 2, NOW);
+    return output_memory_envelope(f, "memory.get.result", NULL, &e, links, 2, NOW);
+}
+
+static int write_add_envelope(FILE *f)
+{
+    Entry e = given_full_entry();
+
+    return output_memory_envelope(f, "memory.add.result", "created", &e, NULL, 0, NOW);
 }
 
 static int write_list_envelope(FILE *f)
@@ -1056,7 +1108,7 @@ static int write_links_write_envelope(FILE *f)
     StoreNeighbor links[2];
 
     given_two_links(links);
-    return output_links_write_envelope(f, "created", links, 2, NOW);
+    return output_links_write_envelope(f, LINK_T, "created", links, 2, NOW);
 }
 
 static int write_related_envelope_with_key(FILE *f)
@@ -1114,13 +1166,6 @@ static int write_conflicts_envelope(FILE *f)
     return output_conflicts_envelope(f, rows, 2);
 }
 
-static int write_accepted_envelope(FILE *f)
-{
-    Entry entries[] = {given_full_entry(), given_full_entry()};
-
-    return output_accepted_envelope(f, entries, 2, NOW);
-}
-
 static int write_rebuilt_json(FILE *f)
 {
     return output_rebuilt(f, true, 2);
@@ -1176,12 +1221,12 @@ TEST(output_action_envelope_reports_every_failed_write)
     assert_reports_every_failed_write(write_action_envelope);
 }
 
-TEST(output_deleted_list_reports_every_failed_write)
+TEST(output_entries_envelope_reports_every_failed_write)
 {
-    assert_reports_every_failed_write(write_deleted_list);
+    assert_reports_every_failed_write(write_entries_envelope);
 }
 
-TEST(output_get_envelope_reports_every_failed_write)
+TEST(output_memory_envelope_get_reports_every_failed_write)
 {
     assert_reports_every_failed_write(write_get_envelope);
 }
@@ -1276,9 +1321,9 @@ TEST(output_conflicts_envelope_reports_every_failed_write)
     assert_reports_every_failed_write(write_conflicts_envelope);
 }
 
-TEST(output_accepted_envelope_reports_every_failed_write)
+TEST(output_memory_envelope_add_reports_every_failed_write)
 {
-    assert_reports_every_failed_write(write_accepted_envelope);
+    assert_reports_every_failed_write(write_add_envelope);
 }
 
 TEST(output_rebuilt_json_reports_every_failed_write)
@@ -1323,10 +1368,12 @@ void register_output_tests(void)
     RUN_TEST(output_entry_json_renders_a_null_source_as_unknown);
     RUN_TEST(output_entry_json_renders_null_text_fields_as_empty_strings);
     RUN_TEST(output_action_envelope_rejects_missing_arguments);
-    RUN_TEST(output_deleted_list_rejects_missing_arguments);
-    RUN_TEST(output_deleted_list_separates_entries_with_a_comma);
-    RUN_TEST(output_get_envelope_rejects_missing_arguments);
-    RUN_TEST(output_get_envelope_lists_only_the_subjects_links);
+    RUN_TEST(output_entries_envelope_rejects_missing_arguments);
+    RUN_TEST(output_entries_envelope_separates_entries_with_a_comma);
+    RUN_TEST(output_memory_envelope_rejects_missing_arguments);
+    RUN_TEST(output_memory_envelope_without_action_lists_only_the_subjects_links);
+    RUN_TEST(output_memory_envelope_with_action_puts_action_before_memory);
+    RUN_TEST(output_action_envelope_writes_the_memory_without_links);
     RUN_TEST(output_list_envelope_rejects_missing_arguments);
     RUN_TEST(output_search_envelope_writes_empty_facets);
     RUN_TEST(output_search_envelope_writes_the_facet_items);
@@ -1351,8 +1398,7 @@ void register_output_tests(void)
     RUN_TEST(output_conflicts_envelope_lists_no_conflicts);
     RUN_TEST(output_conflicts_envelope_separates_conflicts_with_a_comma);
     RUN_TEST(output_conflicts_envelope_rejects_an_incomplete_conflict);
-    RUN_TEST(output_accepted_envelope_rejects_missing_arguments);
-    RUN_TEST(output_accepted_envelope_lists_no_entries);
+    RUN_TEST(output_entries_envelope_lists_no_entries);
     RUN_TEST(output_human_writers_reject_a_missing_stream);
     RUN_TEST(output_device_human_rejects_a_missing_id);
     RUN_TEST(output_tags_human_rejects_missing_arguments);
@@ -1378,8 +1424,8 @@ void register_output_tests(void)
     RUN_TEST(output_json_string_reports_every_failed_write);
     RUN_TEST(output_entry_json_reports_every_failed_write);
     RUN_TEST(output_action_envelope_reports_every_failed_write);
-    RUN_TEST(output_deleted_list_reports_every_failed_write);
-    RUN_TEST(output_get_envelope_reports_every_failed_write);
+    RUN_TEST(output_entries_envelope_reports_every_failed_write);
+    RUN_TEST(output_memory_envelope_get_reports_every_failed_write);
     RUN_TEST(output_list_envelope_reports_every_failed_write);
     RUN_TEST(output_search_envelope_reports_every_failed_write);
     RUN_TEST(output_search_facets_human_reports_every_failed_write);
@@ -1398,7 +1444,7 @@ void register_output_tests(void)
     RUN_TEST(output_device_new_envelope_with_previous_reports_every_failed_write);
     RUN_TEST(output_device_new_envelope_without_previous_reports_every_failed_write);
     RUN_TEST(output_conflicts_envelope_reports_every_failed_write);
-    RUN_TEST(output_accepted_envelope_reports_every_failed_write);
+    RUN_TEST(output_memory_envelope_add_reports_every_failed_write);
     RUN_TEST(output_rebuilt_json_reports_every_failed_write);
     RUN_TEST(output_rebuilt_human_reports_every_failed_write);
     RUN_TEST(output_entry_human_line_reports_every_failed_write);

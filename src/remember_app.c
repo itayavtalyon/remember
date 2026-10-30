@@ -292,7 +292,8 @@ static void print_command_help(CliCommand topic)
         (void)fprintf(out, "Refuses when a base table fails its check.\n");
         (void)fprintf(out, "A missing brain fails with cannot_open. Repair creates nothing.\n");
         (void)fprintf(out, "Human stdout: rebuilt N\n");
-        (void)fprintf(out, "JSON: {\"version\":1,\"action\":\"rebuilt\",\"entries\":N}\n");
+        (void)fprintf(out, "JSON: type repair.search_index.result, data "
+                           "{\"action\":\"rebuilt\",\"entries\":N}\n");
         (void)fprintf(out, "N is the number of rows in entries, in every bin.\n");
         (void)fprintf(out, "\n");
     } else if (topic == CLI_CMD_DEVICE) {

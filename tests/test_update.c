@@ -155,8 +155,8 @@ TEST(update_same_text_still_succeeds_and_returns_entry)
     seed_tagged(db);
     u = run_remember(db, uargs, sizeof(uargs) / sizeof(uargs[0]), NULL);
     ASSERT_EQ_INT(u.exit_code, 0);
-    ASSERT_STR_CONTAINS(u.out, "\"action\":\"updated\"");
-    ASSERT_STR_CONTAINS(u.out, "\"entries\"");
+    ASSERT_STR_PREFIX(u.out, "{\"format\":\"remember-message\",\"version\":1,\"type\":\"memory."
+                             "update.result\",\"data\":{\"action\":\"updated\",\"memory\":{");
     ASSERT_STR_CONTAINS(u.out, "original body");
     cmd_result_free(&u);
     free(db);
@@ -270,10 +270,8 @@ TEST(update_json_shape)
     seed_tagged(db);
     u = run_remember(db, uargs, sizeof(uargs) / sizeof(uargs[0]), NULL);
     ASSERT_EQ_INT(u.exit_code, 0);
-    ASSERT_STR_CONTAINS(u.out, "\"version\":1");
-    ASSERT_STR_CONTAINS(u.out, "\"action\":\"updated\"");
-    ASSERT_STR_CONTAINS(u.out, "\"count\":1");
-    ASSERT_STR_CONTAINS(u.out, "\"entries\"");
+    ASSERT_STR_PREFIX(u.out, "{\"format\":\"remember-message\",\"version\":1,\"type\":\"memory."
+                             "update.result\",\"data\":{\"action\":\"updated\",\"memory\":{");
     ASSERT_STR_CONTAINS(u.out, "json update");
     cmd_result_free(&u);
     free(db);

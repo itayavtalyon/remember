@@ -99,6 +99,18 @@ static int write_json_nullable(FILE *out, const char *name, const char *value)
     return write_json_field_str(out, (JsonField){.name = name, .value = value});
 }
 
+/* remember-message 1 through the opening brace of data (008 JE-2.1). A writer
+   then puts the data fields and closes with ENVELOPE_END. */
+static int write_envelope_head(FILE *out, const char *type)
+{
+    return fprintf(out, "{\"format\":\"remember-message\",\"version\":1,\"type\":\"%s\",\"data\":{",
+                   type) < 0
+               ? -1
+               : 0;
+}
+
+static const char ENVELOPE_END[] = "}}\n";
+
 /* Indexed by a store_bin_of result, which is always one of the three bins. */
 static const char *const BIN_TOKENS[] = {
     [STORE_BIN_LIVE] = "live",
@@ -199,41 +211,71 @@ int output_entry_json(FILE *out, const Entry *e, const char *now)
 static int write_entry_with_links(FILE *out, const Entry *e, const StoreNeighbor *links,
                                   size_t nlinks, const char *now);
 
-int output_action_envelope(FILE *out, const char *action, const Entry *e, const char *now)
+/* data{[action,] memory{}}: links only when with_links (get and add). type then
+   action, the same order as every public envelope writer. */
+// NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
+static int write_memory_envelope(FILE *out, const char *type, const char *action, const Entry *e,
+                                 const StoreNeighbor *links, size_t nlinks, bool with_links,
+                                 const char *now)
 {
-    if (out == NULL || action == NULL || e == NULL) {
+    int rc = 0;
+
+    if (write_envelope_head(out, type) != 0) {
         return -1;
     }
-    if (fprintf(out, "{\"version\":1,\"action\":") < 0) {
+    if (action != NULL && (fputs("\"action\":", out) < 0 || output_json_string(out, action) != 0 ||
+                           fputc(',', out) == EOF)) {
         return -1;
     }
-    if (output_json_string(out, action) != 0) {
+    if (fputs("\"memory\":", out) < 0) {
         return -1;
     }
-    if (fputs(",\"count\":1,\"entries\":[", out) < 0) {
+    if (with_links) {
+        rc = write_entry_with_links(out, e, links, nlinks, now);
+    } else {
+        rc = output_entry_json(out, e, now);
+    }
+    if (rc != 0) {
         return -1;
     }
-    if (output_entry_json(out, e, now) != 0) {
-        return -1;
-    }
-    if (fputs("]}\n", out) < 0) {
-        return -1;
-    }
-    return 0;
+    return fputs(ENVELOPE_END, out) < 0 ? -1 : 0;
 }
 
-int output_deleted_list(FILE *out, const Entry *entries, size_t count, const char *now)
+int output_action_envelope(FILE *out, const char *type, const char *action, const Entry *e,
+                           const char *now)
+{
+    if (out == NULL || type == NULL || action == NULL || e == NULL) {
+        return -1;
+    }
+    return write_memory_envelope(out, type, action, e, NULL, 0U, false, now);
+}
+
+int output_memory_envelope(FILE *out, const char *type, const char *action, const Entry *e,
+                           const StoreNeighbor *links, size_t nlinks, const char *now)
+{
+    if (out == NULL || type == NULL || e == NULL || now == NULL) {
+        return -1;
+    }
+    if (nlinks > 0U && links == NULL) {
+        return -1;
+    }
+    return write_memory_envelope(out, type, action, e, links, nlinks, true, now);
+}
+
+int output_entries_envelope(FILE *out, const char *type, const char *action, const Entry *entries,
+                            size_t count, const char *now)
 {
     size_t i = 0;
 
-    if (out == NULL) {
+    if (out == NULL || type == NULL || action == NULL) {
         return -1;
     }
     if (count > 0U && entries == NULL) {
         return -1;
     }
-    if (fprintf(out, "{\"version\":1,\"action\":\"deleted\",\"count\":%zu,\"entries\":[", count) <
-        0) {
+    if (write_envelope_head(out, type) != 0 || fputs("\"action\":", out) < 0 ||
+        output_json_string(out, action) != 0 ||
+        fprintf(out, ",\"count\":%zu,\"entries\":[", count) < 0) {
         return -1;
     }
     for (i = 0; i < count; i++) {
@@ -244,38 +286,21 @@ int output_deleted_list(FILE *out, const Entry *entries, size_t count, const cha
             return -1;
         }
     }
-    if (fputs("]}\n", out) < 0) {
-        return -1;
-    }
-    return 0;
-}
-
-int output_get_envelope(FILE *out, const Entry *e, const StoreNeighbor *links, size_t nlinks,
-                        const char *now)
-{
-    if (out == NULL || e == NULL || now == NULL) {
-        return -1;
-    }
-    if (nlinks > 0U && links == NULL) {
-        return -1;
-    }
-    if (fputs("{\"version\":1,\"count\":1,\"entries\":[", out) < 0) {
-        return -1;
-    }
-    if (write_entry_with_links(out, e, links, nlinks, now) != 0) {
-        return -1;
-    }
-    if (fputs("]}\n", out) < 0) {
+    if (fputc(']', out) == EOF || fputs(ENVELOPE_END, out) < 0) {
         return -1;
     }
     return 0;
 }
 
 /* Shared head of the list and search envelopes, through "total". */
-static int write_page_head(FILE *out, size_t offset, size_t limit, size_t count, size_t total)
+static int write_page_head(FILE *out, const char *type, size_t offset, size_t limit, size_t count,
+                           size_t total)
 {
-    return fprintf(out, "{\"version\":1,\"offset\":%zu,\"limit\":%zu,\"count\":%zu,\"total\":%zu",
-                   offset, limit, count, total) < 0
+    if (write_envelope_head(out, type) != 0) {
+        return -1;
+    }
+    return fprintf(out, "\"offset\":%zu,\"limit\":%zu,\"count\":%zu,\"total\":%zu", offset, limit,
+                   count, total) < 0
                ? -1
                : 0;
 }
@@ -297,7 +322,7 @@ static int write_page_entries(FILE *out, const Entry *entries, size_t count,
             return -1;
         }
     }
-    if (fputs("]}\n", out) < 0) {
+    if (fputc(']', out) == EOF || fputs(ENVELOPE_END, out) < 0) {
         return -1;
     }
     return 0;
@@ -327,7 +352,7 @@ int output_list_envelope(FILE *out, size_t offset, size_t limit, size_t count, s
     if (!page_args_ok(out, now, entries, count, links, nlinks)) {
         return -1;
     }
-    if (write_page_head(out, offset, limit, count, total) != 0) {
+    if (write_page_head(out, "memory.list.result", offset, limit, count, total) != 0) {
         return -1;
     }
     return write_page_entries(out, entries, count, links, nlinks, now);
@@ -415,7 +440,8 @@ int output_search_envelope(FILE *out, const SearchResult *res, size_t offset, si
     if (!page_args_ok(out, now, page->entries, page->count, links, nlinks) || !facets_ok(res)) {
         return -1;
     }
-    if (write_page_head(out, offset, limit, page->count, page->total) != 0) {
+    if (write_page_head(out, "memory.search.result", offset, limit, page->count, page->total) !=
+        0) {
         return -1;
     }
     if (write_key_facet(out, &res->keys) != 0 || write_tag_facet(out, &res->tags) != 0) {
@@ -620,7 +646,8 @@ int output_tags_envelope(FILE *out, const TagCount *tags, size_t count)
     if (count > 0U && tags == NULL) {
         return -1;
     }
-    if (fprintf(out, "{\"version\":1,\"count\":%zu,\"tags\":[", count) < 0) {
+    if (write_envelope_head(out, "tag.list.result") != 0 ||
+        fprintf(out, "\"count\":%zu,\"tags\":[", count) < 0) {
         return -1;
     }
     for (i = 0; i < count; i++) {
@@ -637,7 +664,7 @@ int output_tags_envelope(FILE *out, const TagCount *tags, size_t count)
             return -1;
         }
     }
-    if (fputs("]}\n", out) < 0) {
+    if (fputc(']', out) == EOF || fputs(ENVELOPE_END, out) < 0) {
         return -1;
     }
     return 0;
@@ -900,18 +927,18 @@ static int write_related_ids_cell(FILE *out, long long subject_id, const StoreNe
     return 0;
 }
 
-int output_links_write_envelope(FILE *out, const char *action, const StoreNeighbor *links,
-                                size_t count, const char *now)
+int output_links_write_envelope(FILE *out, const char *type, const char *action,
+                                const StoreNeighbor *links, size_t count, const char *now)
 {
     size_t i = 0;
 
-    if (out == NULL || action == NULL || now == NULL) {
+    if (out == NULL || type == NULL || action == NULL || now == NULL) {
         return -1;
     }
     if (count > 0U && links == NULL) {
         return -1;
     }
-    if (fprintf(out, "{\"version\":1,\"action\":") < 0) {
+    if (write_envelope_head(out, type) != 0 || fputs("\"action\":", out) < 0) {
         return -1;
     }
     if (output_json_string(out, action) != 0) {
@@ -928,7 +955,7 @@ int output_links_write_envelope(FILE *out, const char *action, const StoreNeighb
             return -1;
         }
     }
-    if (fputs("]}\n", out) < 0) {
+    if (fputc(']', out) == EOF || fputs(ENVELOPE_END, out) < 0) {
         return -1;
     }
     return 0;
@@ -945,7 +972,8 @@ int output_related_envelope(FILE *out, long long id, const char *key, const Stor
     if (count > 0U && links == NULL) {
         return -1;
     }
-    if (fprintf(out, "{\"version\":1,\"id\":%lld,\"key\":", id) < 0) {
+    if (write_envelope_head(out, "memory.related.result") != 0 ||
+        fprintf(out, "\"id\":%lld,\"key\":", id) < 0) {
         return -1;
     }
     if (key == NULL) {
@@ -966,7 +994,7 @@ int output_related_envelope(FILE *out, long long id, const char *key, const Stor
             return -1;
         }
     }
-    if (fputs("]}\n", out) < 0) {
+    if (fputc(']', out) == EOF || fputs(ENVELOPE_END, out) < 0) {
         return -1;
     }
     return 0;
@@ -1020,7 +1048,7 @@ int output_related_human(FILE *out, const StoreNeighbor *links, size_t count, co
 
 static int write_device_id_field(FILE *out, const char *device_id)
 {
-    if (fputs("{\"version\":1,\"device_id\":", out) < 0) {
+    if (fputs("\"device_id\":", out) < 0) {
         return -1;
     }
     return output_json_string(out, device_id);
@@ -1042,10 +1070,11 @@ int output_device_envelope(FILE *out, const char *device_id)
     if (out == NULL || device_id == NULL) {
         return -1;
     }
-    if (write_device_id_field(out, device_id) != 0) {
+    if (write_envelope_head(out, "device.get.result") != 0 ||
+        write_device_id_field(out, device_id) != 0) {
         return -1;
     }
-    if (fputs("}\n", out) < 0) {
+    if (fputs(ENVELOPE_END, out) < 0) {
         return -1;
     }
     return 0;
@@ -1058,7 +1087,8 @@ int output_device_new_envelope(FILE *out, const char *device_id, const char *pre
     if (out == NULL || device_id == NULL) {
         return -1;
     }
-    if (write_device_id_field(out, device_id) != 0) {
+    if (write_envelope_head(out, "device.new.result") != 0 ||
+        write_device_id_field(out, device_id) != 0) {
         return -1;
     }
     if (fputs(",\"previous\":", out) < 0) {
@@ -1071,7 +1101,7 @@ int output_device_new_envelope(FILE *out, const char *device_id, const char *pre
     } else if (fputs("null", out) < 0) {
         return -1;
     }
-    if (fputs("}\n", out) < 0) {
+    if (fputs(ENVELOPE_END, out) < 0) {
         return -1;
     }
     return 0;
@@ -1082,9 +1112,12 @@ int output_import_envelope(FILE *out, const StoreImportCounts *counts)
     if (out == NULL || counts == NULL) {
         return -1;
     }
+    if (write_envelope_head(out, "memory.import.result") != 0) {
+        return -1;
+    }
     if (fprintf(out,
-                "{\"version\":1,\"action\":\"imported\",\"inserted\":%zu,\"updated\":%zu,"
-                "\"unchanged\":%zu,\"conflicts\":%zu,\"rejected\":%zu}\n",
+                "\"action\":\"imported\",\"inserted\":%zu,\"updated\":%zu,"
+                "\"unchanged\":%zu,\"conflicts\":%zu,\"rejected\":%zu}}\n",
                 counts->inserted, counts->updated, counts->unchanged, counts->conflicts,
                 counts->rejected) < 0) {
         return -1;
@@ -1133,7 +1166,8 @@ int output_conflicts_envelope(FILE *out, const StoreConflict *rows, size_t count
     if (count > 0U && rows == NULL) {
         return -1;
     }
-    if (fprintf(out, "{\"version\":1,\"count\":%zu,\"conflicts\":[", count) < 0) {
+    if (write_envelope_head(out, "conflict.list.result") != 0 ||
+        fprintf(out, "\"count\":%zu,\"conflicts\":[", count) < 0) {
         return -1;
     }
     for (i = 0; i < count; i++) {
@@ -1144,35 +1178,7 @@ int output_conflicts_envelope(FILE *out, const StoreConflict *rows, size_t count
             return -1;
         }
     }
-    if (fputs("]}\n", out) < 0) {
-        return -1;
-    }
-    return 0;
-}
-
-int output_accepted_envelope(FILE *out, const Entry *entries, size_t count, const char *now)
-{
-    size_t i = 0;
-
-    if (out == NULL || now == NULL) {
-        return -1;
-    }
-    if (count > 0U && entries == NULL) {
-        return -1;
-    }
-    if (fprintf(out, "{\"version\":1,\"action\":\"accepted\",\"count\":%zu,\"entries\":[", count) <
-        0) {
-        return -1;
-    }
-    for (i = 0; i < count; i++) {
-        if (i > 0U && fputc(',', out) == EOF) {
-            return -1;
-        }
-        if (output_entry_json(out, &entries[i], now) != 0) {
-            return -1;
-        }
-    }
-    if (fputs("]}\n", out) < 0) {
+    if (fputc(']', out) == EOF || fputs(ENVELOPE_END, out) < 0) {
         return -1;
     }
     return 0;
@@ -1186,7 +1192,9 @@ int output_rebuilt(FILE *out, bool json, size_t entries)
         return -1;
     }
     if (json) {
-        n = fprintf(out, "{\"version\":1,\"action\":\"rebuilt\",\"entries\":%zu}\n", entries);
+        n = write_envelope_head(out, "repair.search_index.result") != 0
+                ? -1
+                : fprintf(out, "\"action\":\"rebuilt\",\"entries\":%zu}}\n", entries);
     } else {
         n = fprintf(out, "rebuilt %zu\n", entries);
     }

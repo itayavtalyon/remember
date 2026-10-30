@@ -15,15 +15,23 @@ int output_json_string(FILE *out, const char *s);
  * to compute bin. */
 int output_entry_json(FILE *out, const Entry *e, const char *now);
 
-/* Uniform mutation envelope: version/action/count/entries:[one]. */
-int output_action_envelope(FILE *out, const char *action, const Entry *e, const char *now);
+/*
+ * Every --json success is one remember-message 1 envelope (008 JE-2.1):
+ * {"format":"remember-message","version":1,"type":<type>,"data":{...}}.
+ * type is the reply type, <noun>.<verb>.result (JSON-STYLE 1.7a).
+ */
 
-/* purge-trash JSON: action deleted, count N, all snapshots (no cap). */
-int output_deleted_list(FILE *out, const Entry *entries, size_t count, const char *now);
+/* One-memory write (update, rekey): data{action, memory{}}, memory without links. */
+int output_action_envelope(FILE *out, const char *type, const char *action, const Entry *e,
+                           const char *now);
 
-/* Get envelope: version/count/entries:[one] (no action). links after version_vector. */
-int output_get_envelope(FILE *out, const Entry *e, const StoreNeighbor *links, size_t nlinks,
-                        const char *now);
+/* data{[action,] memory{... links}}. get passes a NULL action; add passes its action. */
+int output_memory_envelope(FILE *out, const char *type, const char *action, const Entry *e,
+                           const StoreNeighbor *links, size_t nlinks, const char *now);
+
+/* Many-memory write (delete, purge, conflict accept): data{action, count, entries[]}. */
+int output_entries_envelope(FILE *out, const char *type, const char *action, const Entry *entries,
+                            size_t count, const char *now);
 
 /* List/search-style paged envelope. Each entry gets subject-relative stubs. */
 int output_list_envelope(FILE *out, size_t offset, size_t limit, size_t count, size_t total,
@@ -75,8 +83,8 @@ int output_tags_envelope(FILE *out, const TagCount *tags, size_t count);
 int output_tags_human(FILE *out, const TagCount *tags, size_t count);
 
 /* link/unlink write envelope: action + count + links stubs. now is command utc. */
-int output_links_write_envelope(FILE *out, const char *action, const StoreNeighbor *links,
-                                size_t count, const char *now);
+int output_links_write_envelope(FILE *out, const char *type, const char *action,
+                                const StoreNeighbor *links, size_t count, const char *now);
 
 /* remember related --json */
 int output_related_envelope(FILE *out, long long id, const char *key, const StoreNeighbor *links,
@@ -88,7 +96,7 @@ int output_related_human(FILE *out, const StoreNeighbor *links, size_t count, co
 /* import --json counts envelope (no entry dump). */
 int output_import_envelope(FILE *out, const StoreImportCounts *counts);
 
-/* device: plain id, or {"version":1,"device_id":"…"}. */
+/* device: plain id, or data{device_id}. */
 int output_device_human(FILE *out, const char *device_id);
 int output_device_envelope(FILE *out, const char *device_id);
 
@@ -97,9 +105,6 @@ int output_device_new_envelope(FILE *out, const char *device_id, const char *pre
 
 /* conflicts --json list. */
 int output_conflicts_envelope(FILE *out, const StoreConflict *rows, size_t count);
-
-/* conflict accept --json: action accepted + entries. */
-int output_accepted_envelope(FILE *out, const Entry *entries, size_t count, const char *now);
 
 /* repair search-index. JSON is the E4.14 object; human is D8 "rebuilt N". */
 int output_rebuilt(FILE *out, bool json, size_t entries);

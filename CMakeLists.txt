@@ -324,6 +324,7 @@ set(REMEMBER_TEST_SOURCES
     tests/test_errors.c
     tests/test_list_dates.c
     tests/test_settings.c
+    tests/test_envelope.c
 )
 add_executable(remember_tests
     ${REMEMBER_TEST_SOURCES}

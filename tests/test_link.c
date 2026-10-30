@@ -423,7 +423,7 @@ TEST(list_search_get_json_links_empty_after_expires)
     ASSERT_TRUE(db != NULL);
     r = run_remember(db, add, sizeof(add) / sizeof(add[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 0);
-    ASSERT_STR_NOT_CONTAINS(r.out, "\"links\"");
+    ASSERT_STR_CONTAINS(r.out, "\"links\":[]");
     cmd_result_free(&r);
 
     r = run_remember(db, lst, sizeof(lst) / sizeof(lst[0]), NULL);

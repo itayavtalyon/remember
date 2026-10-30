@@ -210,8 +210,8 @@ TEST(output_null_entry_fails)
     FILE *f = tmpfile();
     ASSERT_TRUE(f != NULL);
     ASSERT_EQ_INT(output_entry_json(f, NULL, "t"), -1);
-    ASSERT_EQ_INT(output_action_envelope(f, "x", NULL, "t"), -1);
-    ASSERT_EQ_INT(output_get_envelope(f, NULL, NULL, 0, "t"), -1);
+    ASSERT_EQ_INT(output_action_envelope(f, "x", "y", NULL, "t"), -1);
+    ASSERT_EQ_INT(output_memory_envelope(f, "x", NULL, NULL, NULL, 0, "t"), -1);
     ASSERT_EQ_INT(output_entry_human_line(f, NULL, NULL, 0, "t"), -1);
     ASSERT_EQ_INT(output_list_envelope(f, 0, 1, 1, 1, NULL, NULL, 0, "t"), -1);
     // cppcheck-suppress nullPointerOutOfResources ; test-only: tmpfile()/malloc exhaustion is

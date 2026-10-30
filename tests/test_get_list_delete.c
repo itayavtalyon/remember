@@ -42,8 +42,8 @@ TEST(get_existing_json_envelope)
     cmd_result_free(&r);
     g = run_remember(db, gargs, sizeof(gargs) / sizeof(gargs[0]), NULL);
     ASSERT_EQ_INT(g.exit_code, 0);
-    ASSERT_STR_CONTAINS(g.out, "\"version\":1");
-    ASSERT_STR_CONTAINS(g.out, "\"entries\"");
+    ASSERT_STR_PREFIX(g.out, "{\"format\":\"remember-message\",\"version\":1,\"type\":\"memory.get."
+                             "result\",\"data\":{\"memory\":{");
     ASSERT_STR_CONTAINS(g.out, "get me");
     ASSERT_STR_CONTAINS(g.out, "\"id\":1");
     cmd_result_free(&g);

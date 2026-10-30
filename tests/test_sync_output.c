@@ -120,7 +120,7 @@ TEST(json_entry_field_order_bin_always_enum)
 
     r = run_remember(db, g, sizeof(g) / sizeof(g[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 0);
-    entry = first_obj_after(r.out, "\"entries\":");
+    entry = first_obj_after(r.out, "\"memory\":");
     ASSERT_TRUE(keys_in_order(entry, k_fields, sizeof(k_fields) / sizeof(k_fields[0])));
     ASSERT_TRUE(json_sync_id_is_v7(r.out));
     ASSERT_STR_CONTAINS(r.out, "\"bin\":\"live\"");

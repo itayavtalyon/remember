@@ -256,11 +256,11 @@ static int resolve_end(Store *s, EndRef ref, bool include_deleted, long long *ou
     return REMEMBER_OK;
 }
 
-static int emit_links_result(bool json, const char *action, long long subject_id,
+static int emit_links_result(bool json, const char *type, const char *action, long long subject_id,
                              const StoreNeighbor *links, size_t count, const char *now)
 {
     if (json) {
-        if (output_links_write_envelope(app_out(), action, links, count, now) != 0) {
+        if (output_links_write_envelope(app_out(), type, action, links, count, now) != 0) {
             err_msg(DIAG_INTERNAL, "failed to write output");
             return -1;
         }
@@ -337,7 +337,8 @@ static int run_pair(Store *s, bool json, int rest_argc, const char **rest_argv, 
             store_neighbors_free(gone, n);
             return rc;
         }
-        if (emit_links_result(json, "deleted", from_id, gone, n, now) != 0) {
+        if (emit_links_result(json, "memory.unlink.result", "deleted", from_id, gone, n, now) !=
+            0) {
             store_neighbors_free(gone, n);
             return REMEMBER_ERR;
         }
@@ -349,8 +350,9 @@ static int run_pair(Store *s, bool json, int rest_argc, const char **rest_argv, 
     if (rc != REMEMBER_OK) {
         return rc;
     }
-    if (emit_links_result(json, (act == STORE_LINK_MERGED) ? "merged" : "created", from_id, &stub,
-                          1U, now) != 0) {
+    if (emit_links_result(json, "memory.link.result",
+                          (act == STORE_LINK_MERGED) ? "merged" : "created", from_id, &stub, 1U,
+                          now) != 0) {
         store_neighbor_free(&stub);
         return REMEMBER_ERR;
     }

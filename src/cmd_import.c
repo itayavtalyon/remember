@@ -224,7 +224,8 @@ static int conflict_accept_emit(bool json, const Entry *entries, size_t count, c
     size_t i = 0;
 
     if (json) {
-        if (output_accepted_envelope(app_out(), entries, count, now) != 0) {
+        if (output_entries_envelope(app_out(), "conflict.accept.result", "accepted", entries, count,
+                                    now) != 0) {
             err_msg(DIAG_INTERNAL, "failed to write output");
             return REMEMBER_ERR;
         }
