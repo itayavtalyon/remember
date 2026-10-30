@@ -1,7 +1,7 @@
 # 008 - JSON style and the message envelope
 
 **Status:** Design (grill closed 2026-10-21). J-Q1 to J-Q10 closed 2026-10-20. The deep review of 2026-10-21 (G-01 to G-36) reopened the log. Rounds 2 and 3 (simplification) closed the same day. Round 4 closed the same day. The grill is closed. Design states each winner. Amended 2026-10-22: §6 says the log wins where a JSON-STYLE row differs (M-05); `--as` replaces `--source` on writes (M-19 N8).
-**Changes:** 2026-10-25 copy final (`ANSWERS-FINAL.md`, K-1): JE-3.4 uses the Story Weaver locator line. Earlier the same day (Itay, copy-pending answer 17): `--source` is gone completely, and J-Q9 now names `--as` and `--actor`. The settings `data` objects and page sizes are log 007 ST-7.11a–7.14 (D-03), shown in JSON-STYLE rev 2.2.
+**Changes:** 2026-10-25 copy final (`ANSWERS-FINAL.md`, K-1): JE-3.4 uses the Story Weaver locator line. Earlier the same day (Itay, copy-pending answer 17): `--source` is gone completely, and J-Q9 now names `--as` and `--actor`. The settings `data` objects and page sizes are log 007 ST-7.11a–7.14 (D-03), shown in JSON-STYLE rev 2.2. 2026-10-25 (Itay, D-04): the CSV export has no `#settings` row (JE-8.3, log 007 ST-8.3).
 **Author:** Itay (+ agent facilitation)
 **Created:** 2026-10-18
 
@@ -226,7 +226,7 @@ In the v5 → v6 transaction, before the log 007 settings steps:
 
 - JE-8.1. `import --from-db` reads a v4 or v5 source with `sync_id` and a v6 source with `id`. These are SQLite files that 0.2.0 wrote, so this reader stays.
 - JE-8.2. `import` of a JSON, CSV or Markdown export reads only the v6 names (`id`, `created_by`, `updated_by`). No export shipped before 0.3.0, so no old-name reader exists `[decision:g2-16]`, `[decision:r3-00b]`.
-- JE-8.3. The CSV header is `id,key,body,tags,created_by,updated_by,created_at,updated_at,expires_at,deleted_at,bin,version_vector,links`. The actor, tag, vector and link cells hold JSON. Markdown front matter uses the same names (amends 006 E6.b, E6.c).
+- JE-8.3. The CSV header is `id,key,body,tags,created_by,updated_by,created_at,updated_at,expires_at,deleted_at,bin,version_vector,links`. The actor, tag, vector and link cells hold JSON. Markdown front matter uses the same names (amends 006 E6.b, E6.c). The CSV file has no `#settings` row. Settings go in `<CSV basename>.settings.json` next to the CSV file (log 007 ST-8.3, 2026-10-25, D-04).
 
 ## Cross-repo dependencies
 

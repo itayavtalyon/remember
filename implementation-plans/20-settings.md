@@ -61,7 +61,7 @@ Undo is not a command. The newest history row for that key in that layer is the 
 
 Actor on a settings row is `updated_by`. Without `--as` and without `--actor`, store `{"kind":"human","id":null}`. `--as KIND` replaces `kind` and allows only `human`, `agent`, `tool`, or `share`. `--actor ID` replaces only `id`. `ID` is 1 to 64 characters of `[A-Za-z0-9_./:-]`. `--as` does not clear an `--actor` id. When `REMEMBER_HOOK_DEPTH` is 1 or more, `settings set`, `settings reset`, and `settings import` fail with `setting_from_hook` before key lookup. The plain line, message, and fix are the C-01 `setting_from_hook` row. Also reject `--as` and `--actor` when depth is 1 or more, with `invalid_argument`, before the settings ban when both apply. The sentence for that rejection is not written. Do not invent it. The copy editor writes it. The code stays `invalid_argument`.
 
-Sync merge of a brain row: version vector, then later `updated_at`, then larger `device_id`. The loser stays in history. A synced apply keeps the author's `updated_by`. An invalid synced value is skipped with the warning `setting_invalid` and is not written. `detail` has `key`, `value` and `reason` (ST-7.15). A command that applies such a batch exits 0, or 4 with `--strict`. When the value is the subject of one command (`settings set`), it is the error `setting_invalid_value` instead. The plain line is C-14. Print it. Do not invent a sync wire (D-11).
+Sync merge of a brain row: version vector, then later `updated_at`, then larger `device_id`. The loser stays in history. A synced apply keeps the author's `updated_by`. An invalid synced value is skipped with the warning `setting_invalid` and is not written. `detail` has `key`, `value` and `reason` (ST-7.15). A command that applies such a batch exits 0, or 4 with `--strict`. When the value is the subject of one command (`settings set`), it is the error `setting_invalid_value` instead. The plain line is `remember: warning: skipped "<key>": "<value>" isn't a valid value.` (ST-7.15, D-15). Add ` This brain wasn't changed.` only when the batch has one row and the command writes no other row, memory or link. Do not invent a sync wire (D-11).
 
 Registry, compiled in. Do not add a key that is not in this table.
 
@@ -184,9 +184,9 @@ Export prints one plain document, not a `remember-message` envelope:
  "settings":[…]}
 ```
 
-Each element has `key`, `scope`, `value`, `updated_by`, `updated_at`, `device_id`, `version_vector`, and `deleted_at`. A duration or size also has `value_ms` or `value_bytes`. A user row exports `device_id` `""`, `version_vector` `{}`, and `deleted_at` null. Sort by `key`, then `scope`. `--scope` defaults to `all`. Tombstones are included. `remember.sync.credential_helper` exports as its id. User rows never appear in a brain export. Brain export of settings is plan 22 and waits on D-04. This command's document does not wait.
+Each element has `key`, `scope`, `value`, `updated_by`, `updated_at`, `device_id`, `version_vector`, and `deleted_at`. A duration or size also has `value_ms` or `value_bytes`. A user row exports `device_id` `""`, `version_vector` `{}`, and `deleted_at` null. Sort by `key`, then `scope`. `--scope` defaults to `all`. Tombstones are included. `remember.sync.credential_helper` exports as its id. User rows never appear in a brain export. Brain export of settings is plan 22. It nests this same document (ST-8.3, D-04 answered 2026-10-25).
 
-Import validates the whole file first, and no row fails the import (ST-8.4, overriding S-Q21). An unknown key skips the row with the warning `setting_import_skipped`, reason `unknown_key`. A bad value skips the row with the warning `setting_invalid`, reason `invalid_value`. The import writes the other rows. A `version` above 1 fails with the JSON-STYLE §1.7 message. Quote that message from `docs/JSON-STYLE.md` §1.7. Do not paraphrase it.
+Import validates the whole file first, and no row fails the import (ST-8.4, overriding S-Q21). An unknown key skips the row with the warning `setting_import_skipped`, reason `unknown_key`. A bad value skips the row with the warning `setting_invalid`, reason `invalid_value`, and the ST-7.15 plain line. The import writes the other rows. A `version` above 1 fails with the JSON-STYLE §1.7 message. Do not implement `setting_import_invalid`. It is deleted (ST-8.4, D-16). A file that is not a settings document fails with `import_parse`, exit 1, and the brain does not change. The cases are: the JSON does not parse, the root is not an object, the root `format` is not `remember-settings-export`, or `settings` is absent or not an array (ST-8.4). An element that is not an object, or has no `key` string, is skipped with `setting_invalid`, reason `bad_shape`, and the import continues. Its import row has `key` and `scope` null when absent, `result` `skipped`, `action` `none`. Print `remember: warning: skipped row <row> in the settings file because it isn't a setting (each row needs a "key").`, where `<row>` is the 1-based position in `settings`. With no row number, print `remember: warning: skipped a row in the settings file because it isn't a setting (each row needs a "key").` (007 ST-7.15, C-14a). Quote that message from `docs/JSON-STYLE.md` §1.7. Do not paraphrase it.
 
 Import also skips three kinds of row, names each skipped row, and writes the rest. Each is the warning `setting_import_skipped`, with `detail` `key`, `scope` and `reason`, and an import row with `result` `skipped`. The name sentences are C-12. Print the ones whose reason words are written. Do not invent the `unknown_key` reason. The three kinds are: a plugin that is not installed (`plugin_not_installed`), the other scope when `--scope` is set (`other_scope`), and a layer the target does not allow (`layer_not_allowed`). This plan has no plugin keys, so the first kind does not fire until plan 25. Implement the skip so plan 25 does not add a second merge.
 
@@ -342,8 +342,107 @@ Do not re-open: two layers, plain prefix list, full keys, user rows do not trave
 
 ## Implementation Notes
 
-_(empty)_
+### Stage 1 — registry and parsers (2026-10-27)
+
+Pure code only. No CLI, no store, no printed error. `src/settings.c` holds the six-key registry, the key fold, and the integer grammar. `src/normalize.c` holds duration and size (canonical form and whole milliseconds or bytes). Integer grammar stayed in `settings.c` so `normalize.c` did not gain another branch-gated parser for a rule that is not a measure.
+
+Key fold rewrites `-` to `_`, then checks segments. A segment is `[a-z][a-z0-9_]{0,39}`. The whole key is 2 to 4 segments and at most 96 characters. Duration and size keep at most 15 fraction digits so the scale stays in `long long`. The canonical unit is the largest one that is at least 1 and has at most 3 fraction digits. `0` stays `0ms` or `0B`. A fraction that is not a whole millisecond or a whole byte is rejected and does not write the whole-value out-parameter.
+
+The six registry rows are the plan table: prefixes (string list, no default row, brain only), credential helper (string, unset, user only), candidate pool (200, 20–2000, both), max results (20, 1–1000, both), chain budget (`1.5s`, 100–30000 ms, user only), idle timeout (`10m`, 60000–86400000 ms, user only).
+
+Tests: `tests/test_settings.c`, suite `settings`, in `tests/gate-suites`. Sanitizer build, `./build/remember_tests ./build/remember --only settings`: 7 tests, 0 failed, 246 asserts. `check-coverage.sh` on the pre-review logic: functions 100%, effective lines 100%, `normalize.c` 382 branch sides, 0 missed (`search_terms.c` 176, `unicode.c` 80, `output.c` 678). Character-class tails (`1a`, `ab~`, `ab:`, `~a`, a zero-size key buffer) were added after that coverage run. The settings tests suppress magic-number tidy on those plan examples, and each registry row is checked for NULL before a field read, because `ASSERT_TRUE` does not count as a sink for the analyzer.
+
+A false duration or size parse now empties a full output buffer before it rejects a NULL argument. A shorter buffer is not written. The command was `./build/remember_tests ./build/remember --only settings` after the change, 7 tests, 0 failed, 246 asserts. A mutant that skips `out[0] = '\0'` in `measure_args_ok` fails `duration_rejects_what_is_not_a_whole_millisecond` and `size_rejects_a_fraction_of_a_byte`. The tree was restored and the suite passed again. `check-coverage.sh` on this tree exited 0: functions 100%, effective lines 100%, `normalize.c` 384 branch sides, 0 missed.
+
+No sentence was invented. INDEX row 20 stays unticked.
+
+### Stage 2 — user.db on the first ensure (2026-10-27)
+
+The settings suite was red before these symbols existed: `remember_tests` failed to compile on implicit declarations of `util_resolve_user_db_path` and `store_user_db_ensure`.
+
+`util_resolve_user_db_path` does not create a file. A non-empty `REMEMBER_USER_DB` wins, else a non-empty `$XDG_DATA_HOME/remember/user.db`, else `$HOME/.remember/user.db`. An empty variable counts as unset. `:memory:` and `file:` reuse `database path must be a regular file (not :memory: or file: URI)`. A missing or empty `HOME` is `HOME is not set`. The brain resolver's missing-HOME sentence still names `--db`, because user.db has no `--db`. The copy, the join, and the HOME read are shared with `util_resolve_db_path`. There is no third `getenv("HOME")`.
+
+`store_user_db_ensure` creates the file. `store_open` does not. The file is opened with `O_NOFOLLOW`, mode 0600, and `fchmod` runs only when the mode is looser. Schema is `user_version` 1, one `user_meta` row `0.3.0`, and empty `settings` and `settings_history`. The settings table has no `device_id`, `version_vector`, `deleted_at`, or `change_seq`. A second call leaves the rows in place and restores mode 0600. `user_version` above 1 reuses `database is newer than this remember`. Below 0 reuses `unsupported database version`. A symlink is rejected and the target is not created.
+
+Sanitizer build, `./build/remember_tests ./build/remember --only settings`: 9 tests, 0 failed, 300 asserts. `check-coverage.sh` exited 0: functions 100%, effective lines 100%, `normalize.c` 384 branch sides, 0 missed. `src/util.c` and `src/store_sqlite.c` stay on the line gate, not the pure-TU branch list.
+
+No sentence was invented. INDEX row 20 stays unticked.
+
+### Stage 3 — resolution and writes (2026-10-29)
+
+Resolution walks flag, then a live brain row, then a user row, then the registry default. A tombstone is no value. The prefix default, when no row exists, is the JSON `["project:","status:"]`, and nothing is written until a set. The credential helper default is empty. Integer defaults are the registry text (`200`, `20`). Duration defaults are JSON strings of that text (`"1.5s"`, `"10m"`).
+
+A set or reset with no scope writes the user layer, except a brain-only key, which writes the brain. `remember.buckets.prefixes` is that key. An explicit user scope on a brain-only key, or a brain scope on a user-only key, is `setting_scope_mismatch`. The idle-timeout brain sentence is the one locked for that key. Every other scope mismatch returns the code and an empty sentence. Unknown keys (`candidate_pool`, `remember.search.hybrid`) return `setting_unknown` and an empty sentence on set, reset, and read. Did-you-mean stays in the CLI. Invalid values and out-of-range values return their codes and an empty sentence. C-05 and C-06 are still open.
+
+The value column is JSON. An integer is a JSON number. A duration and the helper id are JSON strings of the canonical form. A prefix list is a compact JSON array in input order, after the ST-5.4 fold. The locked prefix sentences are asserted: `"my project:" isn't a bucket prefix.`, `"status:" is in the list twice.`, and `"status:" and "Status:" are the same prefix.`
+
+An omitted actor is stored as `{"kind":"human","id":null}`. A caller-supplied actor string is stored as given. This stage does not check `--as`.
+
+History keeps the newest 50 rows per key per database, ordered by insertion `rowid`. There is no age limit. The test writes 51 user values, checks that `1` is gone and `51` remains, backdates the newest row's `at` to `2020-01-01T00:00:00.000Z`, writes again, and checks that the 2020 row stays while the oldest `new_value` is gone. History rows do not count toward the 256-row quota. A tombstone does.
+
+A set of the value the live layer already stores writes no history and does not bump `change_seq`. A set on a brain tombstone clears `deleted_at` and writes history with `old_value` NULL, even when the kept text matches. A user reset deletes the row. A brain reset sets `deleted_at`, keeps `value`, bumps the local version vector, and bumps `change_seq`. A reset of a missing layer, or of a row that is already a tombstone, changes nothing. The store does not print `(unset)`.
+
+A brain write calls `vv_increment` and `UPDATE brain_meta SET change_seq = change_seq + 1`, then stores that integer on the settings row. It does not call `stamp_change_seq`. A fresh brain starts at `change_seq` 0. The first brain settings write makes it 1. A user write does not bump `change_seq` and does not open a brain write transaction. A read does not call `store_user_db_ensure`. An invalid set does not create user.db. A user set validates first, then ensures.
+
+The row cap is 256 `settings` rows in the brain and in user.db. An update of an existing row, including a tombstone, is allowed at the cap. The brain failure uses `quota_exceeded` and the locked sentence. The user failure uses `quota_exceeded` and an empty sentence. C-09 still holds that prose, and `detail.quota` waits for the JSON stage. The 16 KiB cap is 16384 bytes of the stored JSON. A prefix list past that cap is `quota_exceeded` with an empty sentence on either layer. The brain sentence belongs to the 256-row cap only. The early refuse is `nitems > 16384/5`. 2340 prefixes of length 4 store 16381 bytes. The 2341st is refused in the loop. 2339 of those plus one 8-character prefix is 16385 bytes and is refused after the buffer is filled.
+
+`schema_too_new` is refused by `begin_write` with `SETTING_ERR_STORE` and the locked store sentence (`this brain was written by a newer remember. You can read it. Upgrade to write to it.`). The flag is set at open. The JSON fix stays COPY-PENDING C-01. `setting_status_code` returns an empty string for `SETTING_ERR_STORE`.
+
+A set against a text file at the user path fails in ensure with `cannot read user_version: file is not a database` and leaves the bytes and the mode. A read of that file, and a reset of that file, fail with `sqlite: file is not a database`. The reset reaches that sentence from `BEGIN IMMEDIATE`, because `PRAGMA foreign_keys` and `PRAGMA busy_timeout` do not read the database header. A directory path fails in `sqlite3_open_v2` and is `cannot open database` plus SQLite's own reason. No new sentence was written for it. The test checks that the sentence is non-empty.
+
+`remember_store_tests` links `src/settings.c`. Sanitizer build, `./build/remember_tests ./build/remember --only settings`: 16 tests, 0 failed, 747 asserts. `./build/remember_store_tests`: 491 tests, 0 failed, 19263 asserts. `CI=true BUILD_DIR=build REMEMBER_SCAN_BUILD=1 REMEMBER_IWYU=0 ./scripts/lint-all.sh` exited 0 (IWYU skipped). `./scripts/check-coverage.sh` exited 0: functions 100%, effective lines 100%, `normalize.c` 384 branch sides, 0 missed (`output.c` 678, `search_terms.c` 176, `unicode.c` 80). `settings.c` and `store_sqlite.c` stay on the line gate.
+
+No sentence was invented. INDEX row 20 stays unticked. The definition of done stays unticked. Stages 4–9 have not started.
 
 ## Review Notes
 
-_(empty)_
+**2026-10-27, stage 1 deep review.** In-session, on `be3ad6a` plus this fix. Itay asked for the review, a simplify pass, and the next stage in the same session, so this note closes stage 1. Local Bugbot is not installed.
+
+| # | Severity | Finding | Outcome |
+|---|---|---|---|
+| 1 | important | `norm_duration_canonical` said a false return empties a large enough buffer. NULL `src` and NULL `whole` returned first, so the caller's bytes stayed (`xxxxxxxxxxxxxxxxxxxxxxx`). | Fixed. `measure_args_ok` empties a full buffer, then rejects NULL. A 23-byte buffer stays untouched (`Q`). Mutant that skips the clear fails the two reject tests. |
+| 2 | nit | `default_text` was described as "unset until written" for every NULL default. Prefixes still resolve to `project:` and `status:` with no row until set. | Comment only. The list stays a stage 3 resolution rule, not a stored string. |
+
+Confirmed by running, and already true before the fix: `90m` is `1.5h`, `61m` stays `61m`, `0s` and `0h` are `0ms`, `1.000s` is `1s`, `1024KiB` is `1MiB`, `1536KiB` is `1.5MiB`, `0KiB` and `0MiB` are `0B`. `+1s`, `1 s`, `1S`, and `1.2.3s` are rejected. A failed integer parse leaves `9223372036854775807` in the out-parameter. `1ms` does not match the `m` suffix. The registry is the six plan rows. No SQLite, no CLI, no invented sentence.
+
+Simplification. Applied: the buffer rule is one helper, because leaving it inline put `measure_canonical` at cognitive complexity 27 (limit 25). Declined: one digit loop for integers and measures (a duration allows `01s`, an integer rejects `01`, so the helper grows flags and saves no reading); dropping `ScaledParts` (clang-tidy treats the adjacent integers as swappable); one macro for the six registry NULL checks (the analyzer only sees the sink when the check is written at the field read).
+
+Fraction digits stay capped at 15, which the header already states. A 16th digit is rejected even when it is zero. That is the overflow bound, not a second grammar.
+
+GitHub's Linux clang-tidy 18 (on `be3ad6a`) rejected `out[i] = (src[i] == '-') ? '_' : src[i]` as a narrowing conversion into `char`. The assignment is now an explicit `(char)` cast. macOS clang-tidy 22 did not flag that line.
+
+**2026-10-28, stage 2 deep review.** In-session, on `9d86269` after PR #46 merged. Itay said to proceed with the next stage, review or coding. This note closes stage 2. Local Bugbot is not installed.
+
+| # | Severity | Finding | Outcome |
+|---|---|---|---|
+| 1 | important | `open_user_db_file` called `fchmod` on every regular file whose mode was not `0600`, before SQLite looked at it. A non-empty text file at the path was chmod'd to `0600` and then rejected. | Fixed. `fchmod` runs only for an empty file or a file whose header is `SQLite format 3`. A text file keeps its bytes and its mode. |
+| 2 | important | `database path is missing`, `HOME is not set`, and `cannot create user.db` were not in `code_for_store_text`, so a later CLI report would call them `internal`. | Fixed. An empty path reuses `empty database path` (`usage`). `HOME is not set` is `usage`. `cannot create user.db` is `cannot_open`. A SQLite open failure reuses `cannot open database` (`database`). |
+
+Confirmed by running, sanitizer build. `./build/remember_tests ./build/remember --only settings,errors` on the first form of the fix: 116 tests, 0 failed, 1758 asserts. After the file check moved to `open`/`read`, `./build/remember_tests ./build/remember --only settings`: 10 tests, 0 failed, 314 asserts. That includes `ensure_leaves_a_non_database_file_unchanged` (`notes\n` stays, mode stays `0644`, error `cannot read user_version: file is not a database`) and the second ensure still returning the inserted `remember.search.max_results` value `20`. The `HOME is not set` and `cannot create user.db` lines in `store_text_codes_follow_the_locked_split` passed in that combined run; those classifier lines did not change after it.
+
+Mutants, then the tree restored and the same suites passed again. `fd_is_sqlite` returning true on a short read chmods the text file: `ensure_leaves_a_non_database_file_unchanged` fails `ASSERT_EQ_INT(actual=384, expected=420)` (`0600` vs `0644`). Deleting the `HOME is not set` classifier makes `store_text_codes_follow_the_locked_split` fail `ASSERT_EQ_INT(actual=4, expected=0)` (`internal` vs `usage`).
+
+Simplification. Applied: one empty-path sentence, the one the brain already uses; one SQLite-open sentence, `cannot open database`. Declined: a `goto` cleanup in `store_user_db_ensure` (the descriptor is closed inside `open_user_db_file`, and four `sqlite3_close` returns read as the failure); splicing `k_min_reader_version` into the schema SQL (a format buffer, while the test locks the literal `0.3.0`); one opener shared with `ensure_sidecar_dir` (a directory at `0700` versus a file at `0600` plus a header check).
+
+The SQLite open is still by path after `close`, so a swapped directory entry can be opened. Holding the descriptor open does not keep the journal names on the real path. `store_open` has the same window. No second opener.
+
+No new sentence. INDEX row 20 stays unticked.
+
+GitHub CodeQL on `be4beb2` flagged `chmod` on the text-file path after `close` as a time-of-check race. The test now `fchmod`s the descriptor it still holds, and reads the mode back with `fstat` on the descriptor it opens to check the bytes.
+
+**2026-10-29, stage 3 deep review.** In-session, on `plan/20-stage3-writes` before its commit. Itay said to proceed with the next stage. This note records that review. It does not mark stage 3 done. A second Claude opinion did not happen. Local Bugbot is not installed.
+
+| # | Severity | Finding | Outcome |
+|---|---|---|---|
+| 1 | important | `store_setting_reset` returned from `open_user_existing` on failure, and that return had 0 hits. A text file at the user path gets past `sqlite3_open_v2` and past the two pragmas, because those pragmas do not read the header. `BEGIN IMMEDIATE` is what reports `sqlite: file is not a database`. | Fixed. The reset of the temp directory, the same path the read already rejects, takes the open-failure return. |
+| 2 | important | The injected `BEGIN` failure was ordered after `write_notes` replaced user.db. The next set cannot recreate a non-database file, so that assertion could not pass. | Fixed. The `BEGIN` injection runs while user.db is still a database. `write_notes` runs after it. |
+
+Confirmed by running, sanitizer build. `./build/remember_tests ./build/remember --only settings`: 16 tests, 0 failed, 747 asserts. `./build/remember_store_tests`: 491 tests, 0 failed, 19263 asserts. `lint-all.sh` with `REMEMBER_IWYU=0` exited 0. `check-coverage.sh` exited 0: functions 100%, effective lines 100%, `normalize.c` 384 branch sides, 0 missed. The first coverage run on this stage named `store_sqlite.c` lines 9984 and 9985, the open-failure return in `store_setting_reset`. The rerun after the directory reset exited 0.
+
+Mutant, then the tree restored and the settings suite passed again (16 tests, 747 asserts). Treating every failed user.db open as a missing file makes `programmer_errors_and_a_failed_prepare` fail `ASSERT_EQ_INT(actual=0, expected=6)` on the directory read and on the directory reset.
+
+Simplification. Applied: the unreachable quota returns in `canon_integer`, `canon_duration`, and `canon_helper` (the caller passes `SETTING_VALUE_CAP`, and those forms fit); a NULL source in `copy_cap` shares the existing false return; `open_user_write`'s sqlite-open failure uses the same NULL-safe `sqlite3_errmsg` and `sqlite3_close` as `store_open`, which the coverage script already treats as defensive; `canon_prefixes` and `mutate_setting` were split so each function stays under cognitive complexity 25. Declined: replacing the `goto` in `mutate_setting` (the rollback labels match the rest of this file); sending the settings counter through `stamp_change_seq` (that helper stamps entries and links; a settings write adds one to `brain_meta.change_seq` and copies that integer onto the row); one opener for a user.db read and a user.db write (a write calls `store_user_db_ensure`; a read of a missing file is an absent layer and must leave the path absent).
+
+No product or architecture question. The path-reopen window recorded in the stage 2 note is unchanged.
+
+INDEX row 20 stays unticked. The definition of done stays unticked. Stages 4–9 have not started.

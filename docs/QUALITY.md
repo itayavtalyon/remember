@@ -15,8 +15,10 @@ How we keep C code safe: compile hard, analyze statically, run sanitizers, detec
 | Branch coverage of the pure TUs (every side, no exclusion) | `check-coverage.sh` | GHA job | optional |
 | clang-format / clang-tidy / cppcheck | `scripts/lint-all.sh` | required | required |
 | misc-include-cleaner (IWYU-style) | via clang-tidy | via clang-tidy | via clang-tidy |
-| include-what-you-use | if installed / `REMEMBER_IWYU=1` | if package present | optional |
-| scan-build | `REMEMBER_SCAN_BUILD=1` or `cmake --build --target analyze` | **required** | **required** |
+| include-what-you-use | on Linux, required (`REMEMBER_IWYU=0` skips) | **required** | not installed |
+| scan-build | on (`REMEMBER_SCAN_BUILD=0` skips) or `cmake --build --target analyze` | **required** | **required** |
+| clang-tidy at the CI pin (LLVM 22) | **required** (an older one fails lint) | clang-tidy 18 | LLVM 22 |
+| no `system()`/`popen()` outside `tests/harness.c`; `mkdtemp` callers include `<unistd.h>` | `scripts/lint-all.sh` | required | required |
 | macOS `leaks(1)` on **`remember_plain`** | `cmake --build build --target leaks-macos` | n/a | **required** |
 | **CodeQL** (Code Scanning) | n/a | `.github/workflows/codeql.yml` | n/a |
 | Valgrind | **not used** | **not used** | **not used** |
@@ -68,17 +70,23 @@ When a step lands more green suites, **edit `tests/gate-suites` only** — CMake
 # Skip one push: SKIP_LINUX_CI=1 git push   or   git push --no-verify
 ```
 
-> **Toolchain skew — a green local `lint-all.sh` is not proof CI is green.**
-> CI runs *older* tools than a typical macOS dev box (Ubuntu 24.04: clang /
-> clang-tidy / clang-format 18, cppcheck 2.13; macOS Homebrew: clang 22,
-> cppcheck 2.21). The newer tools are more lenient and silently tolerate things
-> the older ones reject — a `-Wno-<name>` for a warning that only exists in a
-> newer clang, a magic number clang-tidy 18 flags but 22 does not, a cppcheck
-> check that exists in only one version. So **before pushing any change to the C
-> sources or the lint config, run `./scripts/ci-linux.sh`** (or install the
-> pre-push hook above); it reproduces CI's exact toolchain in Docker and is the
-> real gate. Match CI's flags in hand-rolled gates too (e.g. pass the project's
-> POSIX feature macros to any standalone compiler invocation).
+> **Toolchain skew — CI runs two clang-tidy versions, and each rejects code the
+> other passes.** Linux CI uses Ubuntu 24.04's tools (clang / clang-tidy /
+> clang-format 18, cppcheck 2.13, IWYU); macOS CI pins Homebrew `llvm@22`
+> (`LLVM_PIN` in `lint-all.sh`, cppcheck 2.21). 18 flags things 22 tolerates
+> (a magic number, a `-Wno-<name>` for a warning only a newer clang has); 22 adds
+> analyzer and readability checks 18 lacks (`unix.Stream` on a read after EOF,
+> an `&&` result stored in a `bool`). `lint-all.sh` therefore runs clang-tidy at
+> the pin and fails when only an older one is found. On Linux it also runs the
+> distro clang-tidy for `misc-include-cleaner` (the pinned build has no glibc
+> symbol map, so its own include-cleaner is off there). On a Linux box without
+> the pin: `python3 -m pip install --user 'clang-tidy==22.*'`.
+> **Before pushing a change to the C sources or the lint config, run
+> `./scripts/ci-linux.sh`** too (or install the pre-push hook above); it
+> reproduces Linux CI's exact toolchain in Docker. Match CI's flags in
+> hand-rolled gates too (e.g. pass the project's POSIX feature macros to any
+> standalone compiler invocation). A header only Darwin needs (`mkdtemp` is in
+> `unistd.h` there) cannot show up in a Linux build; `lint-all.sh` greps for it.
 
 ## Targets
 
@@ -94,8 +102,8 @@ GATE=$(./scripts/read-gate-suites.sh)
 ./build/remember_tests ./build/remember --only "$GATE"
 ./build/remember_store_tests          # store port under ASan
 
-PATH="$(brew --prefix llvm)/bin:$PATH" ./scripts/lint-all.sh
-REMEMBER_SCAN_BUILD=1 ./scripts/lint-all.sh   # full analyzer (slow)
+./scripts/lint-all.sh                         # finds llvm@22 itself; IWYU + scan-build on
+REMEMBER_SCAN_BUILD=0 ./scripts/lint-all.sh   # quick pass without the analyzer build
 cmake --build build --target analyze          # same idea via CMake
 cmake --build build --target leaks-macos      # macOS only
 ```

@@ -11,6 +11,7 @@
 
 #include <stdbool.h>
 #include <stdio.h>
+#include <stdlib.h>
 
 #ifndef REMEMBER_VERSION
 #define REMEMBER_VERSION "0.2.0"
@@ -53,7 +54,7 @@ static void print_general_help(void)
                                "\n"
                                "Expiry is optional. Default list/search/get show live only.\n"
                                "Bins: --expired / --deleted (mutex). --trash aliases --expired.\n"
-                               "Device id lives next to the DB as <path>.device_id.\n"
+                               "Device id lives next to the DB as <path>.d/device_id.\n"
                                "\n"
                                "Global options (allowed before or after the command):\n"
                                "  --db PATH          Database file (overrides REMEMBER_DB)\n"
@@ -356,6 +357,29 @@ static void print_parse_error(const CliArgs *args)
     err_msg(code, base);
 }
 
+/* 007 ST-7.15: one setting_invalid warning per prefix the v6 step left out.
+   The same step rewrote every memory, so the line has no second sentence. */
+static void warn_open_settings(const Store *s)
+{
+    static const char k_skipped[] = "skipped \"%s\": \"%s\" isn't a valid value.";
+    size_t i = 0;
+
+    for (i = 0; i < store_open_warning_count(s); i++) {
+        StoreSettingWarning w = store_open_warning(s, i);
+        int need = snprintf(NULL, 0, k_skipped, w.key, w.value);
+        char *line = (need >= 0) ? (char *)malloc((size_t)need + 1U) : NULL;
+
+        if (line != NULL && snprintf(line, (size_t)need + 1U, k_skipped, w.key, w.value) == need) {
+            DiagDetailField fields[] = {
+                {"key", w.key}, {"value", w.value}, {"reason", w.reason}, {"item", w.value}};
+
+            (void)diag_warning_detail(DIAG_WARN_SETTING_INVALID, line, fields,
+                                      sizeof(fields) / sizeof(fields[0]));
+        }
+        free(line);
+    }
+}
+
 /* Resolve path, optional sync-path warning, then open. Store stays path-pure. */
 static Store *open_store(const CliArgs *args, int *out_rc)
 {
@@ -407,6 +431,7 @@ static Store *open_store(const CliArgs *args, int *out_rc)
         *out_rc = REMEMBER_ERR;
         return NULL;
     }
+    warn_open_settings(s);
     return s;
 }
 

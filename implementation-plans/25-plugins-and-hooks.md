@@ -10,11 +10,9 @@ Copy approved 2026-10-25. PENDING DESIGN for the `skipped_source` log fields (D-
 
 Print C-15 through C-38, the C-01 lines this plan owns (`plugin_run_forbidden`, `wrong_bin`, cold start, `brain_missing`, the trust prompt), and `plugin_chain_capped` from [`COPY-PENDING.md`](COPY-PENDING.md). C-02 is printed by plan 21. Do not invent a sentence past that file.
 
-D-02 and D-08 are answered. Warn `plugin_chain_capped`. The non-timeout filter code is `plugin_filter_failed`. Print C-28.
-
-These stay open. They do not block a stage that does not need them:
-
-- `skipped_source` log bytes: D-14. The count behavior is locked. Stop before writing the line's fields.
+- Chain-cap warning: DESIGN-PENDING D-02 is answered (2026-10-25). Set status `skipped`, reason `chain_capped`, and warn `plugin_chain_capped`. Print the `plugin_chain_capped` line in [`COPY-PENDING.md`](COPY-PENDING.md).
+- Non-timeout filter failure code: D-08 is answered (2026-10-25). It is `plugin_filter_failed`. Print C-28.
+- `skipped_source` log bytes: D-14 is answered (2026-10-25, 010 H-7.2). Write one line per skipped action and event type, with the H-7.2 fields (`at`, `event_type`, `count`). `remember plugin log <plugin>` prints `<at>  skipped "<action>" for <count> <event_type> events from 'remember <command>', because its origins don't include <origin>.`, or `<at>  skipped "<action>" for 1 <event_type> event from 'remember <command>', because its origins don't include <origin>.` when `count` is 1. Leave out the plugin name. Where the output mixes plugins, write `"<plugin>/<action>"`. Print `<event_type>` verbatim. Print `<at>` in the 007 ST-7.16 human date form. Keep `at` in RFC 3339 UTC in JSON.
 - Human `add` line: D-05. Do not change it. C-39 does not decide it.
 - Tool-undo name parse: D-13. Do not parse it in the engine.
 - `plugin_action_timeout` and `plugin_action_failed`: print C-30 and C-31 only in a command that runs the action synchronously, for example `plugin run` (010 H-6.4). A write never prints them, and a write's exit code does not change (R8.16). ANSWERS-FINAL would print them from any command that has a plugin set up. That print-when choice is DESIGN-PENDING D-17. Until the log changes, follow H-6.4.
@@ -120,11 +118,11 @@ When `cause.chain` reaches 100, do not run that entry for that event. Set the re
 
 `remember: warning: "<name>" was stopped after 100 hook runs in a row set each other off. The write was saved. To run it once more, run 'remember plugin rerun <name> <event-id>' within 7 days. To clear this warning without rerunning, run 'remember plugin status --ack <name>'.`
 
-`remember plugin rerun NAME EVENT_ID` runs one `failed` or `halted` recipient once, with the chain reset. Otherwise exit 1 `plugin_not_rerunnable`. Print C-22.
+`remember plugin rerun NAME EVENT_ID` runs one `failed` or `halted` recipient once, with the chain reset. Run it in the foreground and wait for the run before exiting (010 H-5.7, D-17). For a persistent action, print `plugin_action_timeout` or `plugin_action_failed`. Otherwise exit 1 `plugin_not_rerunnable`. Print C-22.
 
 ### Pre-flight
 
-For each matching once-action, after commit: each trusted file exists and matches its hash, and `run.command[0]` is executable. A failed check sets that recipient to `failed`, logs it, and warns. A missing file or a `run.command[0]` that is not executable warns `plugin_preflight_failed`. Print the C-20 lines. A hash mismatch warns `plugin_untrusted` and follows 010 H-9.5 (010 H-6.2). Print C-17. It does not use `plugin_preflight_failed`. Writes never wait for a handler. `plugin_action_timeout` and `plugin_action_failed` print only where H-6.4 allows (D-17). Print C-30 and C-31 there. Remember does not run that recipient again by itself. `plugin rerun` runs it. The write exits 0, or 4 with `--strict`. The next `remember dispatch` does not start that recipient.
+For each matching once-action, after commit: each trusted file exists and matches its hash, and `run.command[0]` is executable. A failed check sets that recipient to `failed`, logs it, and warns. A missing file or a `run.command[0]` that is not executable warns `plugin_preflight_failed`. Print the C-20 lines. A hash mismatch warns `plugin_untrusted` and follows 010 H-9.5 (010 H-6.2). Print C-17. It does not use `plugin_preflight_failed`. Writes never wait for a handler. `plugin_action_timeout` and `plugin_action_failed` print only in `remember plugin test NAME`, in `remember plugin rerun NAME EVENT_ID`, and in the backfill of `plugin reindex` and `plugin enable`, which then exits 1 with `plugin_backfill_incomplete` (010 H-6.4, PP R3.21, R8.16, D-17). Print C-30 and C-31 there. A write never prints them, and its exit code does not change. Remember does not run that recipient again by itself. `plugin rerun` runs it. The write exits 0, or 4 with `--strict`. The next `remember dispatch` does not start that recipient.
 
 When the dispatcher cannot start, warn `plugin_dispatch_failed`. Print C-21. Exit 0, or 4 with `--strict`. After a successful start, a failed handler does not change the user command's exit. The failure shows in `plugin log` and the app toast. The toast is remember-mac (C-39). Do not print it from the CLI. Do not change the human `add` line.
 
@@ -291,7 +289,7 @@ Use the 010 verification numbers. Assert the approved lines in COPY-PENDING. The
 | 12 | No self-retry. Drop after 7 days with `dropped_stale`. |
 | 13 | Hash mismatch sets `untrusted` and does not run. Trust clears the reason and keeps `enabled`. No callback prints C-15. A refusal prints C-16. |
 | 14 | Expiry sweep emits once. Revival clears `expired_at`. Purge of an unmarked expired row emits only `memory.purged`. |
-| 15 | Default origins skip sync and import. `--hooks` runs them. `skipped_source` bytes wait on D-14. The count behavior does not. |
+| 15 | Default origins skip sync and import. `--hooks` runs them. One `skipped_source` line per skipped action and event type, with the H-7.2 fields, `event_type` and `count`. |
 | 16 | Sweep with no plugins inserts no outbox row. |
 | 17 | `REMEMBER_PROCESSES=0` returns `plugin_unsupported` and inserts nothing. A built-in filter path still runs. Hybrid has no filter, so this test uses a test double built-in registered only in the test binary. Do not ship that double. |
 | 19 | Hook depth blocks `delete --expired`, `purge`, `import`, and `sweep` with the C-01 `plugin_run_forbidden` line. |

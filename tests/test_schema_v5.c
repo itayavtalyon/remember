@@ -4,10 +4,12 @@
 #include "store.h"
 #include "test.h"
 
+#include <dirent.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <unistd.h>
 
 enum {
     SCHEMA_V5_LIMIT = 20,
@@ -18,9 +20,9 @@ enum {
 enum { SIDECAR_READ_BUF = 80, SIDECAR_FILE_BUF = 128 };
 /* Successful sqlite3_exec calls before CREATE settings on a v4 open:
    foreign_keys ON, busy_timeout, foreign_keys OFF, BEGIN IMMEDIATE,
-   DROP entries_fts, CREATE entries_fts, CREATE bucket_prefixes.
+   CREATE bucket_prefixes (the v6 step rebuilds the search index later).
    The next exec is the first one after E1.3 step 3. */
-enum { SCHEMA_V5_EXEC_AFTER_STEP3 = 7, SCHEMA_V5_EXEC_TRIES = 40 };
+enum { SCHEMA_V5_EXEC_AFTER_STEP3 = 5, SCHEMA_V5_EXEC_TRIES = 60 };
 
 static const char k_hash_a[] = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 static const char k_now[] = "2026-06-15T12:00:00.000Z";
@@ -45,52 +47,6 @@ static void exec_sql(const char *db, const char *sql)
 /* The v4 fixture's devices row. Open must not copy this into the sidecar. */
 static const char k_v4_device[] = "018f6b2e-7c3a-7b2e-8f3a-7c3a7b2e8f3a";
 static const char k_sidecar_other[] = "01900000-0000-7000-8000-0000000000ab";
-
-static char *sidecar_path(const char *db)
-{
-    size_t n = 0;
-    char *out = NULL;
-
-    if (db == NULL) {
-        return NULL;
-    }
-    n = strlen(db) + strlen(".device_id") + 1U;
-    out = (char *)malloc(n);
-    if (out == NULL) {
-        return NULL;
-    }
-    (void)snprintf(out, n, "%s.device_id", db);
-    return out;
-}
-
-static char *read_sidecar_line(const char *path)
-{
-    FILE *f = NULL;
-    char buf[SIDECAR_READ_BUF];
-    size_t n = 0;
-    char *out = NULL;
-
-    /* NOLINTNEXTLINE(android-cloexec-fopen) */
-    f = fopen(path, "r");
-    if (f == NULL) {
-        return NULL;
-    }
-    if (fgets(buf, (int)sizeof(buf), f) == NULL) {
-        (void)fclose(f);
-        return NULL;
-    }
-    (void)fclose(f);
-    n = strlen(buf);
-    while (n > 0U && (buf[n - 1U] == '\n' || buf[n - 1U] == '\r')) {
-        buf[--n] = '\0';
-    }
-    out = (char *)malloc(n + 1U);
-    if (out == NULL) {
-        return NULL;
-    }
-    memcpy(out, buf, n + 1U);
-    return out;
-}
 
 /* path then contents. */
 // NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
@@ -244,7 +200,7 @@ static void given_v4_brain(const char *db)
                  "PRAGMA user_version=4;");
 }
 
-TEST(schema_v5_fresh_has_v5_objects)
+TEST(schema_v5_fresh_keeps_the_v5_objects_v6_did_not_replace)
 {
     char *db = make_temp_db_path();
     Store *s = NULL;
@@ -253,7 +209,7 @@ TEST(schema_v5_fresh_has_v5_objects)
     s = given_open(db);
     store_close(s);
 
-    assert_query_is(db, (QueryExpect){.sql = "PRAGMA user_version;", .want = "5"});
+    assert_query_is(db, (QueryExpect){.sql = "PRAGMA user_version;", .want = "6"});
     assert_query_is(db, (QueryExpect){.sql = "SELECT name FROM pragma_table_info('entries_fts') "
                                              "WHERE cid=0;",
                                       .want = "key"});
@@ -263,14 +219,14 @@ TEST(schema_v5_fresh_has_v5_objects)
     assert_query_is(db, (QueryExpect){.sql = "SELECT name FROM pragma_table_info('entries_fts') "
                                              "WHERE cid=2;",
                                       .want = "tags"});
-    assert_query_is(db,
-                    (QueryExpect){.sql = "SELECT name FROM sqlite_master WHERE type='table' AND "
-                                         "name='bucket_prefixes';",
-                                  .want = "bucket_prefixes"});
-    assert_query_is(db,
-                    (QueryExpect){.sql = "SELECT name FROM sqlite_master WHERE type='table' AND "
-                                         "name='settings';",
-                                  .want = "settings"});
+    /* v6 replaced the E12 tables (007 §10 settings steps 3 and 4). */
+    assert_query_is(
+        db, (QueryExpect){.sql = "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND "
+                                 "name='bucket_prefixes';",
+                          .want = "0"});
+    assert_query_is(db, (QueryExpect){.sql = "SELECT COUNT(*) FROM pragma_table_info('settings') "
+                                             "WHERE name='key';",
+                                      .want = "1"});
     assert_query_is(db, (QueryExpect){.sql = "SELECT COUNT(*) FROM pragma_table_info('conflicts') "
                                              "WHERE name='origin';",
                                       .want = "1"});
@@ -393,7 +349,7 @@ TEST(schema_v5_search_folds_hebrew_marks_in_the_row)
     free(db);
 }
 
-TEST(schema_v5_v4_migrates_to_the_fresh_schema)
+TEST(schema_v5_v4_migrates_to_the_fresh_v6_schema)
 {
     char *fresh = make_temp_db_path();
     char *old = make_temp_db_path();
@@ -410,7 +366,7 @@ TEST(schema_v5_v4_migrates_to_the_fresh_schema)
     given_v4_brain(old);
     assert_query_is(old, (QueryExpect){.sql = "PRAGMA user_version;", .want = "4"});
     s = given_open(old);
-    assert_query_is(old, (QueryExpect){.sql = "PRAGMA user_version;", .want = "5"});
+    assert_query_is(old, (QueryExpect){.sql = "PRAGMA user_version;", .want = "6"});
     {
         char *devices = harness_sqlite_query_line(
             old, "SELECT name FROM sqlite_master WHERE type='table' AND name='devices';");
@@ -478,7 +434,7 @@ TEST(schema_v5_v4_body_and_tag_search_is_unchanged_by_migration)
     }
     s = given_open(db);
     store_close(s);
-    assert_query_is(db, (QueryExpect){.sql = "PRAGMA user_version;", .want = "5"});
+    assert_query_is(db, (QueryExpect){.sql = "PRAGMA user_version;", .want = "6"});
     for (i = 0; i < NQ; i++) {
         (void)snprintf(sql, sizeof(sql),
                        "SELECT IFNULL(group_concat(rowid), '-') FROM (SELECT rowid FROM "
@@ -500,7 +456,7 @@ TEST(schema_v5_v4_missing_conflicts_creates_the_table)
     given_v4_brain(db);
     exec_sql(db, "DROP TABLE conflicts;");
     s = given_open(db);
-    assert_query_is(db, (QueryExpect){.sql = "PRAGMA user_version;", .want = "5"});
+    assert_query_is(db, (QueryExpect){.sql = "PRAGMA user_version;", .want = "6"});
     assert_query_is(db, (QueryExpect){.sql = "SELECT COUNT(*) FROM pragma_table_info('conflicts') "
                                              "WHERE name='origin';",
                                       .want = "1"});
@@ -574,7 +530,7 @@ TEST(schema_v5_fault_after_step3_keeps_v4)
     assert_query_is(db, (QueryExpect){.sql = "SELECT COUNT(*) FROM devices;", .want = "1"});
 
     s = given_open(db);
-    assert_query_is(db, (QueryExpect){.sql = "PRAGMA user_version;", .want = "5"});
+    assert_query_is(db, (QueryExpect){.sql = "PRAGMA user_version;", .want = "6"});
     assert_query_is(db, (QueryExpect){.sql = "SELECT name FROM pragma_table_info('entries_fts') "
                                              "WHERE cid=0;",
                                       .want = "key"});
@@ -622,7 +578,7 @@ TEST(schema_v5_v4_open_exec_fault_sweep)
     }
     ASSERT_TRUE(s != NULL);
     ASSERT_TRUE(n > SCHEMA_V5_EXEC_AFTER_STEP3);
-    assert_query_is(db, (QueryExpect){.sql = "PRAGMA user_version;", .want = "5"});
+    assert_query_is(db, (QueryExpect){.sql = "PRAGMA user_version;", .want = "6"});
     store_close(s);
     free(db);
 }
@@ -696,12 +652,12 @@ TEST(schema_v5_v4_missing_sidecar_mints_a_new_id)
 
     ASSERT_TRUE(db != NULL);
     given_v4_brain(db);
-    side = sidecar_path(db);
+    side = harness_sidecar_path(db);
     ASSERT_TRUE(side != NULL);
     s = given_open(db);
     store_close(s);
 
-    id = read_sidecar_line(side);
+    id = harness_read_line(side);
     ASSERT_TRUE(id != NULL);
     ASSERT_TRUE(strcmp(id != NULL ? id : "", k_v4_device) != 0);
     assert_no_devices_table(db);
@@ -714,6 +670,7 @@ TEST(schema_v5_v4_sidecar_is_kept_and_devices_row_is_ignored)
 {
     char *db = make_temp_db_path();
     char *side = NULL;
+    char *legacy = NULL;
     char *id = NULL;
     char line[SIDECAR_READ_BUF];
     Store *s = NULL;
@@ -722,13 +679,17 @@ TEST(schema_v5_v4_sidecar_is_kept_and_devices_row_is_ignored)
 
     ASSERT_TRUE(db != NULL);
     given_v4_brain(db);
-    side = sidecar_path(db);
-    ASSERT_TRUE(side != NULL);
+    legacy = harness_side_path(db, ".device_id");
+    side = harness_sidecar_path(db);
+    ASSERT_TRUE(side != NULL && legacy != NULL);
     (void)snprintf(line, sizeof(line), "%s\n", k_sidecar_other);
-    write_text(side, line);
+    write_text(legacy, line);
     s = given_open(db);
-    id = read_sidecar_line(side);
+    /* The v6 step moved the id into <brain>.d (007 §10 steps 1 and 3). */
+    id = harness_read_line(side);
     ASSERT_STREQ(id, k_sidecar_other);
+    ASSERT_TRUE(access(legacy, F_OK) != 0);
+    free(legacy);
     assert_no_devices_table(db);
 
     memset(&e, 0, sizeof(e));
@@ -756,7 +717,7 @@ static void assert_invalid_sidecar_unchanged(const char *text)
     ASSERT_TRUE(db != NULL);
     s = given_open(db);
     store_close(s);
-    side = sidecar_path(db);
+    side = harness_sidecar_path(db);
     ASSERT_TRUE(side != NULL);
     write_text(side, text);
     before = read_text(side);
@@ -826,9 +787,9 @@ TEST(store_device_new_keeps_the_vector_until_the_next_edit)
     ASSERT_TRUE(had_prev);
     ASSERT_STREQ(previous, old_id);
     ASSERT_TRUE(strcmp(store_device_id(s), old_id) != 0);
-    side = sidecar_path(db);
+    side = harness_sidecar_path(db);
     {
-        char *line = read_sidecar_line(side);
+        char *line = harness_read_line(side);
 
         ASSERT_STREQ(line != NULL ? line : "", store_device_id(s));
         free(line);
@@ -885,7 +846,7 @@ TEST(store_device_new_missing_file_has_no_previous)
     ASSERT_TRUE(snprintf(saved_vv, sizeof(saved_vv), "%s",
                          entry.version_vector != NULL ? entry.version_vector : "") > 0);
     store_entry_free(&entry);
-    side = sidecar_path(db);
+    side = harness_sidecar_path(db);
     ASSERT_EQ_INT(remove(side), 0);
 
     err[0] = '\0';
@@ -895,7 +856,7 @@ TEST(store_device_new_missing_file_has_no_previous)
     ASSERT_FALSE(had_prev);
     ASSERT_STREQ(previous, "");
     {
-        char *line = read_sidecar_line(side);
+        char *line = harness_read_line(side);
 
         ASSERT_STREQ(line != NULL ? line : "", store_device_id(s));
         free(line);
@@ -932,7 +893,7 @@ TEST(store_device_new_replaces_an_invalid_sidecar)
     }
     ASSERT_TRUE(snprintf(old_id, sizeof(old_id), "%s",
                          store_device_id(s) != NULL ? store_device_id(s) : "") > 0);
-    side = sidecar_path(db);
+    side = harness_sidecar_path(db);
     write_text(side, "GARBAGE\n");
     err[0] = '\0';
     ASSERT_EQ_STATUS(store_device_new(s, previous, sizeof(previous), &had_prev, err, sizeof(err)),
@@ -986,33 +947,40 @@ TEST(store_device_new_rename_failure_keeps_the_old_id)
     }
     ASSERT_TRUE(snprintf(old_id, sizeof(old_id), "%s",
                          store_device_id(s) != NULL ? store_device_id(s) : "") > 0);
-    side = sidecar_path(db);
+    side = harness_sidecar_path(db);
     store_test_fail_sidecar_rename(1);
     err[0] = '\0';
     ASSERT_EQ_STATUS(store_device_new(s, previous, sizeof(previous), &had_prev, err, sizeof(err)),
                      STORE_ERR_INTERNAL);
     ASSERT_STR_CONTAINS(err, "cannot write device_id sidecar");
     {
-        char *line = read_sidecar_line(side);
+        char *line = harness_read_line(side);
 
         ASSERT_STREQ(line != NULL ? line : "", old_id);
         free(line);
     }
     ASSERT_STREQ(store_device_id(s), old_id);
-    if (side != NULL) {
-        size_t tmp_len = strlen(side) + strlen(".tmp") + 1U;
+    /* The failed write leaves no temp file behind: <brain>.d holds device_id only. */
+    tmp = harness_side_path(db, ".d");
+    ASSERT_TRUE(tmp != NULL);
+    if (tmp != NULL) {
+        DIR *dir = opendir(tmp);
+        const struct dirent *ent = NULL;
+        int others = 0;
 
-        tmp = (char *)malloc(tmp_len);
-        ASSERT_TRUE(tmp != NULL);
-        if (tmp != NULL) {
-            char *body = NULL;
-
-            (void)snprintf(tmp, tmp_len, "%s.tmp", side);
-            body = read_text(tmp);
-            ASSERT_TRUE(body == NULL);
-            free(body);
-            free(tmp);
+        ASSERT_TRUE(dir != NULL);
+        /* NOLINTNEXTLINE(concurrency-mt-unsafe) -- single-threaded test runner */
+        while (dir != NULL && (ent = readdir(dir)) != NULL) {
+            if (strcmp(ent->d_name, ".") != 0 && strcmp(ent->d_name, "..") != 0 &&
+                strcmp(ent->d_name, "device_id") != 0) {
+                others++;
+            }
         }
+        if (dir != NULL) {
+            (void)closedir(dir);
+        }
+        ASSERT_EQ_INT(others, 0);
+        free(tmp);
     }
     store_close(s);
     free(side);
@@ -1033,6 +1001,7 @@ TEST(store_import_probe_prepare_fail_imports_nothing)
     src = store_open(foreign, err, sizeof(err));
     ASSERT_TRUE(dst != NULL && src != NULL);
     store_close(src);
+    harness_make_v5_source(foreign);
     /* user_version prepare succeeds; the next prepare is the origin probe. */
     store_test_fail_prepare_after(1);
     memset(&counts, 0, sizeof(counts));
@@ -1048,7 +1017,7 @@ TEST(store_import_probe_prepare_fail_imports_nothing)
 
 void register_schema_v5_tests(void)
 {
-    RUN_TEST(schema_v5_fresh_has_v5_objects);
+    RUN_TEST(schema_v5_fresh_keeps_the_v5_objects_v6_did_not_replace);
     RUN_TEST(schema_v5_v4_missing_sidecar_mints_a_new_id);
     RUN_TEST(schema_v5_v4_sidecar_is_kept_and_devices_row_is_ignored);
     RUN_TEST(schema_v5_invalid_sidecar_is_left_unchanged);
@@ -1061,7 +1030,7 @@ void register_schema_v5_tests(void)
     RUN_TEST(schema_v5_search_finds_key_word);
     RUN_TEST(schema_v5_rekey_search_follows_the_new_key);
     RUN_TEST(schema_v5_search_folds_hebrew_marks_in_the_row);
-    RUN_TEST(schema_v5_v4_migrates_to_the_fresh_schema);
+    RUN_TEST(schema_v5_v4_migrates_to_the_fresh_v6_schema);
     RUN_TEST(schema_v5_v4_body_and_tag_search_is_unchanged_by_migration);
     RUN_TEST(schema_v5_v4_missing_conflicts_creates_the_table);
 #ifdef REMEMBER_TEST_HOOKS

@@ -20,7 +20,7 @@ enum {
     CAPTURE_INITIAL_CAP = 4096, /* first pipe-read buffer; doubles thereafter */
     READ_CHUNK = 4096,          /* per-read scratch buffer */
     PATH_BUFSIZE = 4096,        /* filesystem path buffer */
-    CMD_BUFSIZE = 1024,         /* sqlite3 CLI command buffer */
+    CMD_BUFSIZE = 8192,         /* sqlite3 CLI command buffer (fits the v5 rewrite) */
     LINE_BUFSIZE = 512,         /* single output line buffer */
     REGISTRY_INITIAL_CAP = 16,  /* temp-dir registry initial slots */
     EXIT_SIGNAL_BASE = 128,     /* shell convention: 128 + signal number */
@@ -340,7 +340,7 @@ static bool g_atexit_registered;
    single-level unlink sweep would leave the whole tree behind in /tmp. Intentional
    recursion; depth is bounded by the test layout. */
 // NOLINTNEXTLINE(misc-no-recursion)
-static void remove_temp_dir(const char *dir)
+void harness_remove_tree(const char *dir)
 {
     DIR *d = opendir(dir);
 
@@ -360,7 +360,7 @@ static void remove_temp_dir(const char *dir)
                 continue;
             }
             if (lstat(path, &st) == 0 && S_ISDIR(st.st_mode)) {
-                remove_temp_dir(path);
+                harness_remove_tree(path);
             } else {
                 (void)unlink(path);
             }
@@ -374,7 +374,7 @@ static void cleanup_temp_dirs(void)
 {
     size_t i = 0;
     for (i = 0; i < g_temp_count; i++) {
-        remove_temp_dir(g_temp_dirs[i]);
+        harness_remove_tree(g_temp_dirs[i]);
         free(g_temp_dirs[i]);
     }
     free((void *)g_temp_dirs);
@@ -576,6 +576,158 @@ char *harness_sqlite_query_line_at(const char *db_path, const char *sql, Harness
     }
     trim_trailing_newlines(first);
     return strdup(first);
+}
+
+/* The v5 DDL text a fresh 0.2.0 brain carries (store_sqlite.c K_*_V5). */
+static const char k_to_v5_sql[] =
+    "PRAGMA foreign_keys=OFF; BEGIN;"
+    "CREATE TABLE entries_v5 (\n"
+    "  id INTEGER PRIMARY KEY,\n"
+    "  key TEXT,\n"
+    "  body TEXT NOT NULL,\n"
+    "  body_hash TEXT NOT NULL,\n"
+    "  source TEXT NOT NULL,\n"
+    "  created_at TEXT NOT NULL,\n"
+    "  updated_at TEXT NOT NULL,\n"
+    "  expires_at TEXT,\n"
+    "  sync_id TEXT NOT NULL,\n"
+    "  deleted_at TEXT,\n"
+    "  version_vector TEXT NOT NULL\n"
+    ");"
+    "INSERT INTO entries_v5 SELECT local_id, key, body, body_hash, created_by ->> '$.kind', "
+    "created_at, updated_at, expires_at, id, deleted_at, version_vector FROM entries;"
+    "CREATE TABLE entry_tags_v5 (\n"
+    "  entry_id INTEGER NOT NULL REFERENCES entries(id) ON DELETE CASCADE,\n"
+    "  tag_id INTEGER NOT NULL REFERENCES tags(id) ON DELETE CASCADE,\n"
+    "  PRIMARY KEY (entry_id, tag_id)\n"
+    ");"
+    "INSERT INTO entry_tags_v5 SELECT entry_id, tag_id FROM entry_tags;"
+    "CREATE TABLE entry_links_v5 (\n"
+    "  from_id    INTEGER NOT NULL REFERENCES entries(id) ON DELETE CASCADE,\n"
+    "  to_id      INTEGER NOT NULL REFERENCES entries(id) ON DELETE CASCADE,\n"
+    "  kind       TEXT NOT NULL CHECK (kind IN ('related', 'supersedes', 'cites')),\n"
+    "  created_at TEXT NOT NULL,\n"
+    "  updated_at TEXT NOT NULL,\n"
+    "  CHECK (from_id != to_id)\n"
+    ");"
+    "INSERT INTO entry_links_v5 SELECT from_id, to_id, kind, created_at, updated_at "
+    "FROM entry_links WHERE deleted_at IS NULL;"
+    "DROP TABLE entry_links; DROP TABLE entry_tags; DROP TABLE entries;"
+    "ALTER TABLE entries_v5 RENAME TO entries;"
+    "ALTER TABLE entry_tags_v5 RENAME TO entry_tags;"
+    "ALTER TABLE entry_links_v5 RENAME TO entry_links;"
+    "CREATE UNIQUE INDEX ux_entries_key ON entries(key) WHERE key IS NOT NULL;"
+    "CREATE UNIQUE INDEX ux_entries_bodyhash ON entries(body_hash) WHERE key IS NULL;"
+    "CREATE UNIQUE INDEX ux_entries_sync_id ON entries(sync_id);"
+    "CREATE UNIQUE INDEX entry_links_edge\n  ON entry_links(from_id, to_id, kind);"
+    "CREATE INDEX entry_links_to ON entry_links(to_id);"
+    "DROP TABLE brain_meta; DROP TABLE tombstones; DROP TABLE outbox;"
+    "DROP TABLE settings; DROP TABLE settings_history;"
+    "CREATE TABLE bucket_prefixes (\n"
+    "  prefix TEXT PRIMARY KEY,\n"
+    "  added_at TEXT NOT NULL,\n"
+    "  removed_at TEXT,\n"
+    "  device_id TEXT NOT NULL\n"
+    ");"
+    "CREATE TABLE settings (\n"
+    "  name TEXT PRIMARY KEY,\n"
+    "  value TEXT NOT NULL,\n"
+    "  updated_at TEXT NOT NULL\n"
+    ");"
+    "PRAGMA user_version=5; COMMIT;";
+
+void harness_make_v5_source_at(const char *db_path, HarnessSite site)
+{
+    char *version = harness_sqlite_query_line_at(db_path, "PRAGMA user_version;", site);
+
+    if (version != NULL && strcmp(version, "6") == 0) {
+        free(harness_sqlite_query_line_at(db_path, k_to_v5_sql, site));
+    }
+    free(version);
+}
+
+char *harness_side_path(const char *db_path, const char *suffix)
+{
+    size_t n = 0;
+    char *out = NULL;
+
+    if (db_path == NULL || suffix == NULL) {
+        abort();
+    }
+    n = strlen(db_path) + strlen(suffix) + 1U;
+    out = (char *)malloc(n);
+    if (out == NULL) {
+        abort();
+    }
+    (void)snprintf(out, n, "%s%s", db_path, suffix);
+    return out;
+}
+
+char *harness_sidecar_path(const char *db_path)
+{
+    return harness_side_path(db_path, ".d/device_id");
+}
+
+int harness_copy_file(const char *from, const char *to)
+{
+    FILE *in = NULL;
+    FILE *out = NULL;
+    char buf[PATH_BUFSIZE];
+    size_t n = 0;
+    int rc = -1;
+
+    if (from == NULL || to == NULL) {
+        return -1;
+    }
+    /* NOLINTNEXTLINE(android-cloexec-fopen) */
+    in = fopen(from, "rb");
+    /* NOLINTNEXTLINE(android-cloexec-fopen) */
+    out = (in != NULL) ? fopen(to, "wb") : NULL;
+    if (out == NULL) {
+        goto cleanup;
+    }
+    /* A short read means EOF or an error; stop there rather than read again
+       from a stream in that state. */
+    do {
+        n = fread(buf, 1, sizeof(buf), in);
+        if (fwrite(buf, 1, n, out) != n) {
+            goto cleanup;
+        }
+    } while (n == sizeof(buf));
+    if (ferror(in) == 0) {
+        rc = 0;
+    }
+
+cleanup:
+    if (out != NULL && fclose(out) != 0) {
+        rc = -1;
+    }
+    if (in != NULL) {
+        (void)fclose(in);
+    }
+    return rc;
+}
+
+char *harness_read_line(const char *path)
+{
+    FILE *f = NULL;
+    char buf[LINE_BUFSIZE];
+
+    if (path == NULL) {
+        return NULL;
+    }
+    /* NOLINTNEXTLINE(android-cloexec-fopen) */
+    f = fopen(path, "r");
+    if (f == NULL) {
+        return NULL;
+    }
+    if (fgets(buf, (int)sizeof(buf), f) == NULL) {
+        (void)fclose(f);
+        return NULL;
+    }
+    (void)fclose(f);
+    trim_trailing_newlines(buf);
+    return strdup(buf);
 }
 
 char *dir_of_path(const char *file_path)

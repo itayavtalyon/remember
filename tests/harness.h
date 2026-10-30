@@ -75,6 +75,36 @@ char *harness_sqlite_query_line_at(const char *db_path, const char *sql, Harness
 #define harness_sqlite_query_line(db_path, sql)                                                    \
     harness_sqlite_query_line_at((db_path), (sql), (HarnessSite){__FILE__, __LINE__})
 
+/*
+ * Rewrite a v6 brain this build wrote into the v5 shape, in place, so
+ * `import --from-db` (v4 and v5 sources until plan 23) can read it: entries
+ * get the v5 columns back (id = local_id, sync_id = id, source = the creating
+ * actor's kind), live links keep from_id/to_id/kind/times, the v6-only tables
+ * go, and empty E12 tables come back. A file that is not at v6 is left as is.
+ * Fails the calling test like harness_sqlite_query_line.
+ */
+void harness_make_v5_source_at(const char *db_path, HarnessSite site);
+#define harness_make_v5_source(db_path)                                                            \
+    harness_make_v5_source_at((db_path), (HarnessSite){__FILE__, __LINE__})
+
+/* Remove dir and everything under it (best effort). For mkdtemp folders a test
+   made itself, which also hold each brain's <db>.d folder. */
+void harness_remove_tree(const char *dir);
+
+/* <db_path><suffix> (heap; caller frees). Never NULL: a NULL argument or an
+   allocation failure aborts the test run. */
+__attribute__((returns_nonnull)) char *harness_side_path(const char *db_path, const char *suffix);
+
+/* The device id file, <db_path>.d/device_id (heap; caller frees). Never NULL. */
+__attribute__((returns_nonnull)) char *harness_sidecar_path(const char *db_path);
+
+/* Copy the file at from to to, replacing to. 0 on success, -1 on any failure.
+   In-process, so no path goes through a shell. */
+int harness_copy_file(const char *from, const char *to);
+
+/* First line of path without its newline (heap), or NULL when there is none. */
+char *harness_read_line(const char *path);
+
 /* Directory containing path (heap; caller frees). */
 char *dir_of_path(const char *file_path);
 

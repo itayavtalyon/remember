@@ -42,13 +42,13 @@ main → cli_parse → commands.h (cmd_add | cmd_locator | cmd_query) → store_
 | 18 | [Union search](18-union-search.md) | Prefix ∪ raw FTS; never fails on input; `keys`/`tags` facets with tiers; utf8proc vendored (006 §2, §9). Itay finishes this plan and merges it. Do not tick it here. |
 | 18b | [Branch-coverage gate](18b-branch-coverage-gate.md) | `check-coverage.sh` fails on any untaken branch side in `search_terms.c`, `unicode.c`, `normalize.c`, `output.c`; no excuses. Runs on `plan18-union-search` between plan 18 stages 2 and 3 ✅ |
 | 18c | [Import control bytes](18c-import-control-bytes.md) | `import --from-db` skips and counts (`rejected`) rows whose key or tag is not canonical; human output masks C0/DEL in every stored string it prints. On `fix/import-control-bytes` (off plan 18b) ✅ |
-| 19 | [Schema v6](19-schema-v6.md) | One v5→v6 migration for 007 §10, 008 §8, and 010 §17. Copy approved 2026-10-25. Ready to implement. Plan 18 is on main. |
-| 20 | [Settings](20-settings.md) | Registry, user.db, resolution, commands, credential helper, settings export/import. Copy approved 2026-10-25. After plan 19. Command JSON after plan 21. A bad imported value follows ST-8.4 until D-15. The `unknown_key` reason words are still unwritten. |
+| 19 | [Schema v6](19-schema-v6.md) | One v5→v6 migration for 007 §10, 008 §8, and 010 §17. Copy approved 2026-10-25 (C-01 `schema_too_new`). ✅ |
+| 20 | [Settings](20-settings.md) | Registry, user.db, resolution, commands, credential helper, settings export/import. Copy approved 2026-10-25. After plan 19. Command JSON after plan 21. The `unknown_key` reason words are still unwritten. |
 | 21 | [JSON envelope](21-json-envelope.md) | `remember-message` 1, locators, actors, `--trash` means Trash. Copy approved 2026-10-25. After plan 19. Does not implement `brains.json`. The hook-depth `--as`/`--actor` sentence is still unwritten. |
-| 22 | [Export](22-export.md) | JSON, Markdown, CSV memory export. PENDING DESIGN (D-04, settings bytes). No copy row. Memory export may start. |
-| 23 | [Import formats](23-import-formats.md) | JSON, Markdown, CSV, and `--from-db` v4–v6. Copy approved 2026-10-25. PENDING DESIGN for the settings bytes (D-04). Memory import may start. No old-name reader. No add-wins. |
-| 24 | [Plugin protocol](24-plugin-protocol.md) | Docs CI, schema extraction, fixtures. READY. Spec revision 6 is already in the repo. |
-| 25 | [Plugins and hooks](25-plugins-and-hooks.md) | CLI and host only. Copy approved 2026-10-25. PENDING DESIGN for `skipped_source` fields (D-14). Do not change the human `add` line (D-05). No daemon, no URL plugin, no hybrid ranker. |
+| 22 | [Export](22-export.md) | JSON, Markdown, CSV memory export. READY. D-04 is answered (2026-10-25). |
+| 23 | [Import formats](23-import-formats.md) | JSON, Markdown, CSV, and `--from-db` v4–v6. Copy approved 2026-10-25. D-04 is answered (2026-10-25). No old-name reader. No add-wins. |
+| 24 | [Plugin protocol](24-plugin-protocol.md) | Docs CI, schema extraction, fixtures. READY. Spec revision 6 is already in the repo. ✅ |
+| 25 | [Plugins and hooks](25-plugins-and-hooks.md) | CLI and host only. Copy approved 2026-10-25. D-14 is answered (2026-10-25). Do not change the human `add` line (D-05). No daemon, no URL plugin, no hybrid ranker. |
 | 26 | [Brain path + skills + 0.3.0](26-release-0.3.0.md) | `default-db`, Codex skill, version 0.3.0 last. Copy approved 2026-10-25 (C-40, C-41). Stage 4 after plans 19–25 merge. Do not tag. Do not bump the version in stages 1–2. |
 
 **Design 006 plans 15–18:** do them in order. Plan 18 is not done. Plans 18b

@@ -10,17 +10,17 @@ remember import --from-json PATH | --from-md PATH | --from-csv PATH | --from-db 
 
 ## Status
 
-Copy approved 2026-10-25. PENDING DESIGN for the settings bytes (D-04).
+Copy approved 2026-10-25. DESIGN-PENDING D-04 is answered (2026-10-25, 007 ST-8.3a).
 
 The memory merge, the JSON reader, and `--from-db` for v4, v5, and v6 are specified. Start those stages.
 
-Do not import settings bytes until DESIGN-PENDING D-04 names them. `unknown_field` is C-35 in [`COPY-PENDING.md`](COPY-PENDING.md). Print it. Do not silently ignore an unknown member in an export file.
+`unknown_field` is C-35 in [`COPY-PENDING.md`](COPY-PENDING.md). Print it. Do not silently ignore an unknown member in an export file.
 
 ## Source of truth
 
 - 006 §6, amended by this plan. The old plan 21 decisions D3, D20, D21, D23, D25, D31, D32, D35, D37, P7, P8, P9, and P10 still apply and are restated below.
 - [`design-logs/008-json-envelope.md`](../design-logs/008-json-envelope.md) JE-4.1, JE-4.4, JE-5.1, JE-8.1, JE-8.2.
-- [`design-logs/007-settings.md`](../design-logs/007-settings.md) ST-8.6, ST-8.7, ST-10.4.
+- [`design-logs/007-settings.md`](../design-logs/007-settings.md) ST-8.3, ST-8.3a, ST-8.4 to ST-8.7, ST-10.4.
 - [`design-logs/010-plugins-and-hooks.md`](../design-logs/010-plugins-and-hooks.md) H-17.1.
 
 D22, D33, and D34 are amended below. Do not implement the old text. E12.6 is deleted. Do not merge prefixes with add-wins.
@@ -59,16 +59,18 @@ Links (amended D34, JE-5.1 replaces the old "no endpoint bump"):
 
 Events and `cause.origin` `import` are plan 25. This plan sets the fields in the write table. It does not insert outbox rows until plan 25's insert exists. Call the same write path plan 21 uses so the field changes stay one implementation.
 
-Settings inside a JSON, Markdown, or CSV export: do not read them until D-04. When D-04 is approved, apply ST-8.6 and ST-8.7. Do not apply E12.6. User rows never appear. A brain tombstone imports as a tombstone.
+Settings inside a JSON, Markdown, or CSV export (007 ST-8.3a): read the JSON `settings` member, the Markdown folder's `settings.json`, or `<CSV basename>.settings.json` beside the CSV file (`brain.csv` → `brain.settings.json`; read no other name, and read a stale matching file as the user's file). Each is a `remember-settings-export` version 1 document. Apply ST-8.4 to ST-8.7, the same as `settings import --scope brain`. An absent member or file writes no settings row. 006 E7.11 is dead. Do not apply E12.6. User rows never appear. A brain tombstone imports as a tombstone.
 
 Whole-file failures roll back. Exit 1 `import_parse`. The brain is unchanged.
 
 - JSON root `format` is not `remember-export`.
 - JSON root `version` is not 1.
 - CSV header is not the JE-8.3 header.
-- Markdown `settings.json` is present and unparseable. Until D-04, a missing `settings.json` is not an error, because plan 22 does not write it yet.
+- The JSON `settings` member, Markdown `settings.json`, or the matching `<CSV basename>.settings.json` is present and is not a settings document (007 ST-8.4). A missing `settings.json` is not an error.
 
 A parsed file with bad records commits the good records and exits 0. `errors` lists each bad record.
+
+The import result has no `prefixes_merged` (006 E7.6 is superseded). It has `settings` `{written, unchanged, skipped}` (007 ST-8.3a). A `kept_local` row counts as `unchanged`. An import with no settings writes all three as 0. Settings rows are not counted in `inserted`, `updated`, `unchanged`, `skipped` or `errors`. A skipped settings row gives its warning in `warnings`.
 
 `errors[]` file and line (D20, D37):
 
@@ -130,13 +132,13 @@ A version above 1 fails with the JSON-STYLE §1.7 message. Quote that section. D
 
 ## Prerequisites
 
-Plans 19, 21, and 22 are merged. Settings import from an export also needs D-04 and plan 20's settings write path.
+Plans 19, 21, and 22 are merged. Settings import from an export also needs plan 20's settings write path.
 
 ## Scope
 
-In: `jsonread`, the three file readers, `--from-db` v4/v5/v6, shared merge, link rules, origin, the envelope fields `skipped` and `errors`.
+In: `jsonread`, the three file readers, `--from-db` v4/v5/v6, shared merge, link rules, origin, the envelope fields `skipped`, `errors` and `settings`.
 
-Out: zip, registering devices, creating plugins from imported data (H-0.3), outbox inserts (plan 25), settings bytes until D-04, E12.6.
+Out: zip, registering devices, creating plugins from imported data (H-0.3), outbox inserts (plan 25), E12.6.
 
 ## Files
 
@@ -163,9 +165,9 @@ Tests: `tests/test_import_formats.c`, suite `import_formats`. Unit tests for the
 | from-db v6 | `id` is copied. The v6 prefix row follows ST-8.6. |
 | sidecar | The destination device id is unchanged after each format. |
 | brain id | Empty target takes the file `brain_id`. A non-empty target keeps its own. |
-| settings wait | While D-04 is open, a JSON export without `settings` imports. A test does not require `settings.json`. |
+| settings | The plan 22 one-tombstone export imports into an empty brain as a tombstone in all three formats. A JSON export without `settings` imports with no settings row. A Markdown folder without `settings.json`, or a CSV without its matching `<basename>.settings.json`, imports. A `settings.json` beside `brain.csv` is not read. A bad value is skipped with `setting_invalid` and the other rows are written. A `settings` member that is not a settings document fails with `import_parse` and the brain is unchanged. |
 
-008 verification 12's settings half waits on D-04.
+008 verification 12's settings half is the `settings` test above.
 
 ## Stages
 
@@ -174,7 +176,8 @@ Tests: `tests/test_import_formats.c`, suite `import_formats`. Unit tests for the
 3. Links, including the cycle check and the JE-5.1 bumps.
 4. `--from-db` for v4, v5, and v6. Ignore `outbox`. Map E12 to one prefix row.
 5. Origin and the `errors` envelope.
-6. Emit `unknown_field` with the C-35 line, once per file. Stop the settings-bytes import until D-04 is approved. Then import those bytes.
+6. Import export settings per 007 ST-8.3a.
+7. Emit `unknown_field` with the C-35 line, once per file.
 
 ## Cloud contract
 
@@ -197,11 +200,11 @@ Quality gate: plan 19's commands. Coverage 100/100.
 ## Definition of done
 
 - [ ] Memory import and `--from-db` tests are green.
-- [ ] Settings import is absent, or it matches approved D-04 and ST-8.6.
+- [ ] Settings import matches 007 ST-8.3a and ST-8.4 to ST-8.7.
 - [ ] No E12.6 code.
 - [ ] No reader maps `sync_id` inside a JSON, Markdown, or CSV export.
 - [ ] Gate green. Second review clear.
-- [ ] INDEX row 23 is ticked only when D-04 is closed and the review is closed. C-35 is already approved.
+- [ ] INDEX row 23 is ticked only when the review is closed. D-04 and C-35 are closed.
 
 ## Second review handover
 

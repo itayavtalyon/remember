@@ -10,7 +10,7 @@
 #include <unistd.h>
 
 /* Stage 5: import --from-db + conflicts + conflict accept (005 Round 7). */
-// NOLINTBEGIN(readability-identifier-length,cppcoreguidelines-avoid-magic-numbers,readability-magic-numbers,android-cloexec-fopen,bugprone-command-processor,cert-env33-c,concurrency-mt-unsafe,bugprone-unchecked-string-to-number-conversion,cert-err34-c)
+// NOLINTBEGIN(readability-identifier-length,cppcoreguidelines-avoid-magic-numbers,readability-magic-numbers,android-cloexec-fopen,bugprone-unchecked-string-to-number-conversion,cert-err34-c)
 
 enum { SYNC_BUF = 40, PATH_BUF = 192, SQL_BUF = 512, VV_BUF = 160 };
 
@@ -45,8 +45,6 @@ static int json_copy_quoted(const char *json, const char *key, char *out, size_t
     return 0;
 }
 
-static char *sidecar_path(const char *db);
-
 static char *read_sidecar_id(const char *db)
 {
     char *side = NULL;
@@ -55,7 +53,7 @@ static char *read_sidecar_id(const char *db)
     size_t n = 0;
     char *out = NULL;
 
-    side = sidecar_path(db);
+    side = harness_sidecar_path(db);
     if (side == NULL) {
         return NULL;
     }
@@ -81,28 +79,11 @@ static char *read_sidecar_id(const char *db)
     return out;
 }
 
-static char *sidecar_path(const char *db)
-{
-    size_t n = 0;
-    char *out = NULL;
-
-    if (db == NULL) {
-        return NULL;
-    }
-    n = strlen(db) + strlen(".device_id") + 1U;
-    out = (char *)malloc(n);
-    if (out == NULL) {
-        return NULL;
-    }
-    (void)snprintf(out, n, "%s.device_id", db);
-    return out;
-}
-
 static void force_vv(const char *db, long long id, const char *vv_json)
 {
     char sql[SQL_BUF];
 
-    (void)snprintf(sql, sizeof(sql), "UPDATE entries SET version_vector='%s' WHERE id=%lld;",
+    (void)snprintf(sql, sizeof(sql), "UPDATE entries SET version_vector='%s' WHERE rowid=%lld;",
                    vv_json, id);
     free(harness_sqlite_query_line(db, sql));
 }
@@ -115,9 +96,20 @@ static void force_body(const char *db, long long id, const char *body)
     char hash[REMEMBER_SHA256_HEX_LEN + 1];
 
     body_hash_hex(body, strlen(body), hash);
-    (void)snprintf(sql, sizeof(sql), "UPDATE entries SET body='%s', body_hash='%s' WHERE id=%lld;",
-                   body, hash, id);
+    (void)snprintf(sql, sizeof(sql),
+                   "UPDATE entries SET body='%s', body_hash='%s' WHERE rowid=%lld;", body, hash,
+                   id);
     free(harness_sqlite_query_line(db, sql));
+}
+
+/* import --from-db reads v4 and v5 sources until plan 23: rewrite the brain
+   this build wrote to the v5 shape, then run the import argv. */
+// NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
+static CmdResult run_import(const char *local, const char *foreign, const char *const *args,
+                            size_t nargs)
+{
+    harness_make_v5_source(foreign);
+    return run_remember(local, args, nargs, NULL);
 }
 
 TEST(cli_import_inserts_preserves_sync_id_remaps_links_no_device_register)
@@ -158,7 +150,7 @@ TEST(cli_import_inserts_preserves_sync_id_remaps_links_no_device_register)
     }
 
     imp[3] = foreign;
-    r = run_remember(local, imp, sizeof(imp) / sizeof(imp[0]), NULL);
+    r = run_import(local, foreign, imp, sizeof(imp) / sizeof(imp[0]));
     ASSERT_EQ_INT(r.exit_code, 0);
     ASSERT_STR_CONTAINS(r.out, "\"action\":\"imported\"");
     ASSERT_STR_CONTAINS(r.out, "\"inserted\":2");
@@ -210,7 +202,7 @@ TEST(cli_import_refuses_v3_source)
                  "PRAGMA user_version=3;"));
 
     imp[3] = foreign;
-    r = run_remember(local, imp, sizeof(imp) / sizeof(imp[0]), NULL);
+    r = run_import(local, foreign, imp, sizeof(imp) / sizeof(imp[0]));
     ASSERT_EQ_INT(r.exit_code, 1);
     ASSERT_STR_CONTAINS(r.err, "source database is older than this remember");
     cmd_result_free(&r);
@@ -330,6 +322,7 @@ TEST(cli_import_refuses_source_newer_than_v5)
     ASSERT_STREQ(ver, "6");
     free(ver);
 
+    /* A v6 source is refused until plan 23 reads it. */
     imp[3] = foreign;
     r = run_remember(local, imp, sizeof(imp) / sizeof(imp[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 1);
@@ -384,7 +377,7 @@ TEST(cli_import_v4_source_is_read_only_and_optional_objects_are_absent)
     ASSERT_EQ_INT(r.exit_code, 0);
     cmd_result_free(&r);
     imp[3] = foreign;
-    r = run_remember(local, imp, sizeof(imp) / sizeof(imp[0]), NULL);
+    r = run_import(local, foreign, imp, sizeof(imp) / sizeof(imp[0]));
     ASSERT_EQ_INT(r.exit_code, 0);
     ASSERT_STR_CONTAINS(r.out, "\"inserted\":1");
     cmd_result_free(&r);
@@ -396,7 +389,7 @@ TEST(cli_import_v4_source_is_read_only_and_optional_objects_are_absent)
     line = harness_sqlite_query_line(foreign, "SELECT device_id FROM devices;");
     ASSERT_STREQ(line, "018f6b2e-7c3a-7b2e-8f3a-7c3a7b2e8f3a");
     free(line);
-    side = sidecar_path(foreign);
+    side = harness_sidecar_path(foreign);
     ASSERT_TRUE(side != NULL);
     ASSERT_TRUE(access(side, F_OK) != 0);
     free(side);
@@ -407,7 +400,8 @@ TEST(cli_import_v4_source_is_read_only_and_optional_objects_are_absent)
     line = harness_sqlite_query_line(local, "SELECT COUNT(*) FROM settings;");
     ASSERT_STREQ(line, "0");
     free(line);
-    line = harness_sqlite_query_line(local, "SELECT COUNT(*) FROM bucket_prefixes;");
+    line = harness_sqlite_query_line(
+        local, "SELECT COUNT(*) FROM settings WHERE key='remember.buckets.prefixes';");
     ASSERT_STREQ(line, "0");
     free(line);
     r = run_remember(local, get, sizeof(get) / sizeof(get[0]), NULL);
@@ -438,6 +432,7 @@ TEST(cli_import_v5_source_is_read_only_and_optional_rows_stay_there)
     r = run_remember(foreign, add, sizeof(add) / sizeof(add[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 0);
     cmd_result_free(&r);
+    harness_make_v5_source(foreign); /* the E12 rows below are v5 tables */
     sqlite_exec(foreign, "INSERT INTO settings(name, value, updated_at) VALUES "
                          "('ui.theme', 'dark', '2026-01-01T00:00:00.000Z');"
                          "INSERT INTO bucket_prefixes(prefix, added_at, device_id) VALUES "
@@ -456,7 +451,7 @@ TEST(cli_import_v5_source_is_read_only_and_optional_rows_stay_there)
     ASSERT_TRUE(line == NULL);
     free(line);
     before = read_file(foreign, &before_n);
-    side = sidecar_path(foreign);
+    side = harness_sidecar_path(foreign);
     ASSERT_TRUE(before != NULL && side != NULL);
     side_before = read_file(side, &side_n);
     ASSERT_TRUE(side_before != NULL);
@@ -465,7 +460,7 @@ TEST(cli_import_v5_source_is_read_only_and_optional_rows_stay_there)
     ASSERT_EQ_INT(r.exit_code, 0);
     cmd_result_free(&r);
     imp[3] = foreign;
-    r = run_remember(local, imp, sizeof(imp) / sizeof(imp[0]), NULL);
+    r = run_import(local, foreign, imp, sizeof(imp) / sizeof(imp[0]));
     ASSERT_EQ_INT(r.exit_code, 0);
     ASSERT_STR_CONTAINS(r.out, "\"inserted\":1");
     cmd_result_free(&r);
@@ -478,10 +473,11 @@ TEST(cli_import_v5_source_is_read_only_and_optional_rows_stay_there)
     line = harness_sqlite_query_line(foreign, "SELECT value FROM settings WHERE name='ui.theme';");
     ASSERT_STREQ(line, "dark");
     free(line);
-    line = harness_sqlite_query_line(local, "SELECT COUNT(*) FROM settings WHERE name='ui.theme';");
+    line = harness_sqlite_query_line(local, "SELECT COUNT(*) FROM settings WHERE key='ui.theme';");
     ASSERT_STREQ(line, "0");
     free(line);
-    line = harness_sqlite_query_line(local, "SELECT COUNT(*) FROM bucket_prefixes;");
+    line = harness_sqlite_query_line(
+        local, "SELECT COUNT(*) FROM settings WHERE key='remember.buckets.prefixes';");
     ASSERT_STREQ(line, "0");
     free(line);
     line = harness_sqlite_query_line(local, "SELECT COUNT(*) FROM conflicts;");
@@ -497,7 +493,7 @@ TEST(cli_import_v5_source_is_read_only_and_optional_rows_stay_there)
 TEST(cli_import_identical_automerge_concurrent_conflict)
 {
     char tmpl[] = "/tmp/remember-imp-XXXXXX";
-    char *dir = NULL;
+    const char *dir = NULL;
     char local[PATH_BUF];
     char foreign[PATH_BUF];
     CmdResult r;
@@ -521,11 +517,7 @@ TEST(cli_import_identical_automerge_concurrent_conflict)
     cmd_result_free(&r);
 
     /* Copy DB only (no sidecar) so foreign is a distinct replica file. */
-    {
-        char cmd[PATH_BUF * 2];
-        (void)snprintf(cmd, sizeof(cmd), "cp '%s' '%s'", local, foreign);
-        ASSERT_EQ_INT(system(cmd), 0);
-    }
+    ASSERT_EQ_INT(harness_copy_file(local, foreign), 0);
 
     /* Identical content + concurrent VV → auto-merge (no conflict). */
     dev = read_sidecar_id(local);
@@ -541,7 +533,7 @@ TEST(cli_import_identical_automerge_concurrent_conflict)
     }
 
     imp[3] = foreign;
-    r = run_remember(local, imp, sizeof(imp) / sizeof(imp[0]), NULL);
+    r = run_import(local, foreign, imp, sizeof(imp) / sizeof(imp[0]));
     ASSERT_EQ_INT(r.exit_code, 0);
     ASSERT_STR_CONTAINS(r.out, "\"unchanged\":1");
     ASSERT_STR_CONTAINS(r.out, "\"conflicts\":0");
@@ -562,7 +554,7 @@ TEST(cli_import_identical_automerge_concurrent_conflict)
         force_vv(local, 1, vv_local);
     }
 
-    r = run_remember(local, imp, sizeof(imp) / sizeof(imp[0]), NULL);
+    r = run_import(local, foreign, imp, sizeof(imp) / sizeof(imp[0]));
     ASSERT_EQ_INT(r.exit_code, 0);
     ASSERT_STR_CONTAINS(r.out, "\"conflicts\":1");
     cmd_result_free(&r);
@@ -574,14 +566,7 @@ TEST(cli_import_identical_automerge_concurrent_conflict)
     cmd_result_free(&r);
 
     free(dev);
-    (void)remove(local);
-    (void)remove(foreign);
-    {
-        char side[PATH_BUF + 16];
-        (void)snprintf(side, sizeof(side), "%s.device_id", local);
-        (void)remove(side);
-    }
-    (void)rmdir(dir);
+    harness_remove_tree(dir);
 }
 
 TEST(cli_import_key_clash_and_hash_clash_exit_0)
@@ -605,7 +590,7 @@ TEST(cli_import_key_clash_and_hash_clash_exit_0)
     cmd_result_free(&r);
 
     imp[3] = foreign;
-    r = run_remember(local, imp, sizeof(imp) / sizeof(imp[0]), NULL);
+    r = run_import(local, foreign, imp, sizeof(imp) / sizeof(imp[0]));
     ASSERT_EQ_INT(r.exit_code, 0);
     ASSERT_STR_CONTAINS(r.out, "\"conflicts\":1");
     cmd_result_free(&r);
@@ -631,7 +616,7 @@ TEST(cli_import_key_clash_and_hash_clash_exit_0)
     /* Same body_hash merge on add within one DB — foreign add creates its own sync_id.
        Import of that sync_id against local's keyless hash → hash_clash. */
     imp[3] = foreign;
-    r = run_remember(local, imp, sizeof(imp) / sizeof(imp[0]), NULL);
+    r = run_import(local, foreign, imp, sizeof(imp) / sizeof(imp[0]));
     ASSERT_EQ_INT(r.exit_code, 0);
     ASSERT_STR_CONTAINS(r.out, "\"conflicts\":1");
     cmd_result_free(&r);
@@ -664,7 +649,7 @@ TEST(cli_import_key_clash_reimport_idempotent)
     cmd_result_free(&r);
 
     imp[3] = foreign;
-    r = run_remember(local, imp, sizeof(imp) / sizeof(imp[0]), NULL);
+    r = run_import(local, foreign, imp, sizeof(imp) / sizeof(imp[0]));
     ASSERT_EQ_INT(r.exit_code, 0);
     ASSERT_STR_CONTAINS(r.out, "\"conflicts\":1");
     cmd_result_free(&r);
@@ -674,7 +659,7 @@ TEST(cli_import_key_clash_reimport_idempotent)
     ASSERT_STR_CONTAINS(r.out, "\"count\":1");
     cmd_result_free(&r);
 
-    r = run_remember(local, imp, sizeof(imp) / sizeof(imp[0]), NULL);
+    r = run_import(local, foreign, imp, sizeof(imp) / sizeof(imp[0]));
     ASSERT_EQ_INT(r.exit_code, 0);
     ASSERT_STR_CONTAINS(r.out, "\"conflicts\":0");
     cmd_result_free(&r);
@@ -684,7 +669,7 @@ TEST(cli_import_key_clash_reimport_idempotent)
     free(nconf);
 
     force_body(foreign, 1, "foreign body v2");
-    r = run_remember(local, imp, sizeof(imp) / sizeof(imp[0]), NULL);
+    r = run_import(local, foreign, imp, sizeof(imp) / sizeof(imp[0]));
     ASSERT_EQ_INT(r.exit_code, 0);
     ASSERT_STR_CONTAINS(r.out, "\"conflicts\":0");
     cmd_result_free(&r);
@@ -706,7 +691,7 @@ TEST(cli_import_key_clash_reimport_idempotent)
 TEST(cli_conflict_accept_keep_both_concurrent_remints)
 {
     char tmpl[] = "/tmp/remember-both-XXXXXX";
-    char *dir = NULL;
+    const char *dir = NULL;
     char local[PATH_BUF];
     char foreign[PATH_BUF];
     CmdResult r;
@@ -729,11 +714,7 @@ TEST(cli_conflict_accept_keep_both_concurrent_remints)
     ASSERT_EQ_INT(r.exit_code, 0);
     ASSERT_EQ_INT(json_copy_quoted(r.out, "sync_id", sync_orig, sizeof(sync_orig)), 0);
     cmd_result_free(&r);
-    {
-        char cmd[PATH_BUF * 2];
-        (void)snprintf(cmd, sizeof(cmd), "cp '%s' '%s'", local, foreign);
-        ASSERT_EQ_INT(system(cmd), 0);
-    }
+    ASSERT_EQ_INT(harness_copy_file(local, foreign), 0);
     dev = read_sidecar_id(local);
     ASSERT_TRUE(dev != NULL);
     force_body(foreign, 1, "incoming-body");
@@ -747,7 +728,7 @@ TEST(cli_conflict_accept_keep_both_concurrent_remints)
     }
 
     imp[3] = foreign;
-    r = run_remember(local, imp, sizeof(imp) / sizeof(imp[0]), NULL);
+    r = run_import(local, foreign, imp, sizeof(imp) / sizeof(imp[0]));
     ASSERT_EQ_INT(r.exit_code, 0);
     ASSERT_STR_CONTAINS(r.out, "\"conflicts\":1");
     cmd_result_free(&r);
@@ -778,14 +759,7 @@ TEST(cli_conflict_accept_keep_both_concurrent_remints)
     cmd_result_free(&r);
 
     free(dev);
-    (void)remove(local);
-    (void)remove(foreign);
-    {
-        char side[PATH_BUF + 16];
-        (void)snprintf(side, sizeof(side), "%s.device_id", local);
-        (void)remove(side);
-    }
-    (void)rmdir(dir);
+    harness_remove_tree(dir);
 }
 
 TEST(cli_conflict_accept_keep_both_key_clash_keeps_incoming_sync_id)
@@ -811,7 +785,7 @@ TEST(cli_conflict_accept_keep_both_key_clash_keeps_incoming_sync_id)
     cmd_result_free(&r);
 
     imp[3] = foreign;
-    r = run_remember(local, imp, sizeof(imp) / sizeof(imp[0]), NULL);
+    r = run_import(local, foreign, imp, sizeof(imp) / sizeof(imp[0]));
     ASSERT_EQ_INT(r.exit_code, 0);
     ASSERT_STR_CONTAINS(r.out, "\"conflicts\":1");
     cmd_result_free(&r);
@@ -841,7 +815,7 @@ TEST(cli_conflict_accept_keep_both_key_clash_keeps_incoming_sync_id)
 TEST(cli_import_incoming_dominates_updates)
 {
     char tmpl[] = "/tmp/remember-dom-XXXXXX";
-    char *dir = NULL;
+    const char *dir = NULL;
     char local[PATH_BUF];
     char foreign[PATH_BUF];
     CmdResult r;
@@ -861,11 +835,7 @@ TEST(cli_import_incoming_dominates_updates)
     r = run_remember(local, add, sizeof(add) / sizeof(add[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 0);
     cmd_result_free(&r);
-    {
-        char cmd[PATH_BUF * 2];
-        (void)snprintf(cmd, sizeof(cmd), "cp '%s' '%s'", local, foreign);
-        ASSERT_EQ_INT(system(cmd), 0);
-    }
+    ASSERT_EQ_INT(harness_copy_file(local, foreign), 0);
     force_body(foreign, 1, "new");
     dev = read_sidecar_id(local);
     ASSERT_TRUE(dev != NULL);
@@ -879,7 +849,7 @@ TEST(cli_import_incoming_dominates_updates)
     }
 
     imp[3] = foreign;
-    r = run_remember(local, imp, sizeof(imp) / sizeof(imp[0]), NULL);
+    r = run_import(local, foreign, imp, sizeof(imp) / sizeof(imp[0]));
     ASSERT_EQ_INT(r.exit_code, 0);
     ASSERT_STR_CONTAINS(r.out, "\"updated\":1");
     ASSERT_STR_CONTAINS(r.out, "\"conflicts\":0");
@@ -891,14 +861,7 @@ TEST(cli_import_incoming_dominates_updates)
     cmd_result_free(&r);
 
     free(dev);
-    (void)remove(local);
-    (void)remove(foreign);
-    {
-        char side[PATH_BUF + 16];
-        (void)snprintf(side, sizeof(side), "%s.device_id", local);
-        (void)remove(side);
-    }
-    (void)rmdir(dir);
+    harness_remove_tree(dir);
 }
 
 TEST(store_import_no_sidecar_copy_devices_stay_one)
@@ -925,10 +888,11 @@ TEST(store_import_no_sidecar_copy_devices_stay_one)
     store_entry_free(&e);
     store_close(src);
 
-    side_f = sidecar_path(foreign);
+    side_f = harness_sidecar_path(foreign);
     ASSERT_TRUE(side_f != NULL);
     ASSERT_EQ_INT(unlink(side_f), 0); /* remove so import must not recreate it */
 
+    harness_make_v5_source(foreign);
     dst = store_open(local, err, sizeof(err));
     ASSERT_TRUE(dst != NULL);
     ASSERT_EQ_STATUS(store_import(dst, foreign, k_now, &counts), STORE_OK);
@@ -949,7 +913,7 @@ TEST(store_import_no_sidecar_copy_devices_stay_one)
 TEST(cli_conflict_accept_keep_local_and_incoming)
 {
     char tmpl[] = "/tmp/remember-keep-XXXXXX";
-    char *dir = NULL;
+    const char *dir = NULL;
     char local[PATH_BUF];
     char foreign[PATH_BUF];
     CmdResult r;
@@ -971,11 +935,7 @@ TEST(cli_conflict_accept_keep_local_and_incoming)
     r = run_remember(local, add, sizeof(add) / sizeof(add[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 0);
     cmd_result_free(&r);
-    {
-        char cmd[PATH_BUF * 2];
-        (void)snprintf(cmd, sizeof(cmd), "cp '%s' '%s'", local, foreign);
-        ASSERT_EQ_INT(system(cmd), 0);
-    }
+    ASSERT_EQ_INT(harness_copy_file(local, foreign), 0);
     force_body(foreign, 1, "incoming-body");
     dev = read_sidecar_id(local);
     ASSERT_TRUE(dev != NULL);
@@ -989,7 +949,7 @@ TEST(cli_conflict_accept_keep_local_and_incoming)
     }
 
     imp[3] = foreign;
-    r = run_remember(local, imp, sizeof(imp) / sizeof(imp[0]), NULL);
+    r = run_import(local, foreign, imp, sizeof(imp) / sizeof(imp[0]));
     ASSERT_EQ_INT(r.exit_code, 0);
     ASSERT_STR_CONTAINS(r.out, "\"conflicts\":1");
     cmd_result_free(&r);
@@ -1023,7 +983,7 @@ TEST(cli_conflict_accept_keep_local_and_incoming)
         force_vv(local, 1, vv_l);
         force_vv(foreign, 1, vv_f);
     }
-    r = run_remember(local, imp, sizeof(imp) / sizeof(imp[0]), NULL);
+    r = run_import(local, foreign, imp, sizeof(imp) / sizeof(imp[0]));
     ASSERT_EQ_INT(r.exit_code, 0);
     ASSERT_STR_CONTAINS(r.out, "\"conflicts\":1");
     cmd_result_free(&r);
@@ -1059,14 +1019,7 @@ TEST(cli_conflict_accept_keep_local_and_incoming)
     cmd_result_free(&r);
 
     free(dev);
-    (void)remove(local);
-    (void)remove(foreign);
-    {
-        char side[PATH_BUF + 16];
-        (void)snprintf(side, sizeof(side), "%s.device_id", local);
-        (void)remove(side);
-    }
-    (void)rmdir(dir);
+    harness_remove_tree(dir);
 }
 
 TEST(cli_conflict_accept_keep_incoming_key_clash_demotes)
@@ -1090,7 +1043,7 @@ TEST(cli_conflict_accept_keep_incoming_key_clash_demotes)
     cmd_result_free(&r);
 
     imp[3] = foreign;
-    r = run_remember(local, imp, sizeof(imp) / sizeof(imp[0]), NULL);
+    r = run_import(local, foreign, imp, sizeof(imp) / sizeof(imp[0]));
     ASSERT_EQ_INT(r.exit_code, 0);
     ASSERT_STR_CONTAINS(r.out, "\"conflicts\":1");
     cmd_result_free(&r);
@@ -1159,12 +1112,8 @@ TEST(cli_import_insert_and_accept_incoming_resync_the_fts_key)
     r = run_remember(local, add, sizeof(add) / sizeof(add[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 0);
     cmd_result_free(&r);
-    {
-        char cmd[PATH_BUF * 2];
-        /* The copy has no sidecar, so its writes count under a new device id. */
-        (void)snprintf(cmd, sizeof(cmd), "cp '%s' '%s'", local, foreign);
-        ASSERT_EQ_INT(system(cmd), 0);
-    }
+    /* The copy has no sidecar, so its writes count under a new device id. */
+    ASSERT_EQ_INT(harness_copy_file(local, foreign), 0);
     r = run_remember(foreign, add_new, sizeof(add_new) / sizeof(add_new[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 0);
     cmd_result_free(&r);
@@ -1177,7 +1126,7 @@ TEST(cli_import_insert_and_accept_incoming_resync_the_fts_key)
     cmd_result_free(&r);
 
     imp[3] = foreign;
-    r = run_remember(local, imp, sizeof(imp) / sizeof(imp[0]), NULL);
+    r = run_import(local, foreign, imp, sizeof(imp) / sizeof(imp[0]));
     ASSERT_EQ_INT(r.exit_code, 0);
     ASSERT_STR_CONTAINS(r.out, "\"inserted\":1");
     ASSERT_STR_CONTAINS(r.out, "\"conflicts\":1");
@@ -1194,7 +1143,7 @@ TEST(cli_import_insert_and_accept_incoming_resync_the_fts_key)
 TEST(cli_import_local_dominates_unchanged)
 {
     char tmpl[] = "/tmp/remember-locdom-XXXXXX";
-    char *dir = NULL;
+    const char *dir = NULL;
     char local[PATH_BUF];
     char foreign[PATH_BUF];
     CmdResult r;
@@ -1214,11 +1163,7 @@ TEST(cli_import_local_dominates_unchanged)
     r = run_remember(local, add, sizeof(add) / sizeof(add[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 0);
     cmd_result_free(&r);
-    {
-        char cmd[PATH_BUF * 2];
-        (void)snprintf(cmd, sizeof(cmd), "cp '%s' '%s'", local, foreign);
-        ASSERT_EQ_INT(system(cmd), 0);
-    }
+    ASSERT_EQ_INT(harness_copy_file(local, foreign), 0);
     force_body(foreign, 1, "stale-foreign");
     dev = read_sidecar_id(local);
     ASSERT_TRUE(dev != NULL);
@@ -1232,7 +1177,7 @@ TEST(cli_import_local_dominates_unchanged)
     }
 
     imp[3] = foreign;
-    r = run_remember(local, imp, sizeof(imp) / sizeof(imp[0]), NULL);
+    r = run_import(local, foreign, imp, sizeof(imp) / sizeof(imp[0]));
     ASSERT_EQ_INT(r.exit_code, 0);
     ASSERT_STR_CONTAINS(r.out, "\"unchanged\":1");
     ASSERT_STR_CONTAINS(r.out, "\"updated\":0");
@@ -1245,14 +1190,7 @@ TEST(cli_import_local_dominates_unchanged)
     cmd_result_free(&r);
 
     free(dev);
-    (void)remove(local);
-    (void)remove(foreign);
-    {
-        char side[PATH_BUF + 16];
-        (void)snprintf(side, sizeof(side), "%s.device_id", local);
-        (void)remove(side);
-    }
-    (void)rmdir(dir);
+    harness_remove_tree(dir);
 }
 
 /* Insert soft-deleted and expired foreign rows (bind + load expires/deleted). */
@@ -1286,7 +1224,7 @@ TEST(cli_import_soft_deleted_and_expired_rows)
     cmd_result_free(&r);
 
     imp[3] = foreign;
-    r = run_remember(local, imp, sizeof(imp) / sizeof(imp[0]), NULL);
+    r = run_import(local, foreign, imp, sizeof(imp) / sizeof(imp[0]));
     ASSERT_EQ_INT(r.exit_code, 0);
     ASSERT_STR_CONTAINS(r.out, "\"inserted\":2");
     cmd_result_free(&r);
@@ -1308,7 +1246,7 @@ TEST(cli_import_soft_deleted_and_expired_rows)
 TEST(cli_import_conflict_snapshot_json_escapes)
 {
     char tmpl[] = "/tmp/remember-esc-XXXXXX";
-    char *dir = NULL;
+    const char *dir = NULL;
     char local[PATH_BUF];
     char foreign[PATH_BUF];
     CmdResult r;
@@ -1329,11 +1267,7 @@ TEST(cli_import_conflict_snapshot_json_escapes)
     r = run_remember(local, add, sizeof(add) / sizeof(add[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 0);
     cmd_result_free(&r);
-    {
-        char cmd[PATH_BUF * 2];
-        (void)snprintf(cmd, sizeof(cmd), "cp '%s' '%s'", local, foreign);
-        ASSERT_EQ_INT(system(cmd), 0);
-    }
+    ASSERT_EQ_INT(harness_copy_file(local, foreign), 0);
     force_body(foreign, 1, "other");
     dev = read_sidecar_id(local);
     ASSERT_TRUE(dev != NULL);
@@ -1347,7 +1281,7 @@ TEST(cli_import_conflict_snapshot_json_escapes)
     }
 
     imp[3] = foreign;
-    r = run_remember(local, imp, sizeof(imp) / sizeof(imp[0]), NULL);
+    r = run_import(local, foreign, imp, sizeof(imp) / sizeof(imp[0]));
     ASSERT_EQ_INT(r.exit_code, 0);
     ASSERT_STR_CONTAINS(r.out, "\"conflicts\":1");
     cmd_result_free(&r);
@@ -1365,14 +1299,7 @@ TEST(cli_import_conflict_snapshot_json_escapes)
     cmd_result_free(&r);
 
     free(dev);
-    (void)remove(local);
-    (void)remove(foreign);
-    {
-        char side[PATH_BUF + 16];
-        (void)snprintf(side, sizeof(side), "%s.device_id", local);
-        (void)remove(side);
-    }
-    (void)rmdir(dir);
+    harness_remove_tree(dir);
 }
 
 TEST(cli_import_and_conflict_human_and_help)
@@ -1396,7 +1323,7 @@ TEST(cli_import_and_conflict_human_and_help)
     cmd_result_free(&r);
 
     imp[2] = foreign;
-    r = run_remember(local, imp, sizeof(imp) / sizeof(imp[0]), NULL);
+    r = run_import(local, foreign, imp, sizeof(imp) / sizeof(imp[0]));
     ASSERT_EQ_INT(r.exit_code, 0);
     ASSERT_STR_CONTAINS(r.out, "inserted 1");
     ASSERT_STR_CONTAINS(r.out, "unchanged 0");
@@ -1445,7 +1372,7 @@ TEST(cli_import_conflict_error_paths)
     cmd_result_free(&r);
 
     imp_unknown[2] = foreign;
-    r = run_remember(local, imp_unknown, sizeof(imp_unknown) / sizeof(imp_unknown[0]), NULL);
+    r = run_import(local, foreign, imp_unknown, sizeof(imp_unknown) / sizeof(imp_unknown[0]));
     ASSERT_EQ_INT(r.exit_code, 1);
     ASSERT_STR_CONTAINS(r.err, "unknown option");
     cmd_result_free(&r);
@@ -1500,7 +1427,7 @@ TEST(cli_conflict_accept_human)
     cmd_result_free(&r);
 
     imp[3] = foreign;
-    r = run_remember(local, imp, sizeof(imp) / sizeof(imp[0]), NULL);
+    r = run_import(local, foreign, imp, sizeof(imp) / sizeof(imp[0]));
     ASSERT_EQ_INT(r.exit_code, 0);
     cmd_result_free(&r);
 
@@ -1521,7 +1448,7 @@ TEST(cli_conflict_accept_human)
 TEST(cli_import_incoming_dominates_keyless_hash_clash)
 {
     char tmpl[] = "/tmp/remember-hashdom-XXXXXX";
-    char *dir = NULL;
+    const char *dir = NULL;
     char local[PATH_BUF];
     char foreign[PATH_BUF];
     CmdResult r;
@@ -1549,11 +1476,7 @@ TEST(cli_import_incoming_dominates_keyless_hash_clash)
     cmd_result_free(&r);
 
     /* Foreign has only the sync_s row (no occupant) so keyless+hash is legal there. */
-    {
-        char cmd[PATH_BUF * 2];
-        (void)snprintf(cmd, sizeof(cmd), "cp '%s' '%s'", local, foreign);
-        ASSERT_EQ_INT(system(cmd), 0);
-    }
+    ASSERT_EQ_INT(harness_copy_file(local, foreign), 0);
     free(harness_sqlite_query_line(foreign, "DELETE FROM entries WHERE key IS NULL;"));
     {
         /* A real hash clash: the same body, so the same hash. */
@@ -1565,7 +1488,7 @@ TEST(cli_import_incoming_dominates_keyless_hash_clash)
         ASSERT_TRUE(body != NULL && hash != NULL);
         (void)snprintf(sql, sizeof(sql),
                        "UPDATE entries SET key=NULL, body='%s', body_hash='%s' "
-                       "WHERE sync_id='%s';",
+                       "WHERE id='%s';",
                        body != NULL ? body : "", hash != NULL ? hash : "", sync_s);
         free(harness_sqlite_query_line(foreign, sql));
         free(body);
@@ -1579,16 +1502,16 @@ TEST(cli_import_incoming_dominates_keyless_hash_clash)
         char sql[SQL_BUF];
         (void)snprintf(vv_l, sizeof(vv_l), "{\"%s\":1}", dev);
         (void)snprintf(vv_f, sizeof(vv_f), "{\"%s\":5}", dev);
-        (void)snprintf(sql, sizeof(sql),
-                       "UPDATE entries SET version_vector='%s' WHERE sync_id='%s';", vv_l, sync_s);
+        (void)snprintf(sql, sizeof(sql), "UPDATE entries SET version_vector='%s' WHERE id='%s';",
+                       vv_l, sync_s);
         free(harness_sqlite_query_line(local, sql));
-        (void)snprintf(sql, sizeof(sql),
-                       "UPDATE entries SET version_vector='%s' WHERE sync_id='%s';", vv_f, sync_s);
+        (void)snprintf(sql, sizeof(sql), "UPDATE entries SET version_vector='%s' WHERE id='%s';",
+                       vv_f, sync_s);
         free(harness_sqlite_query_line(foreign, sql));
     }
 
     imp[3] = foreign;
-    r = run_remember(local, imp, sizeof(imp) / sizeof(imp[0]), NULL);
+    r = run_import(local, foreign, imp, sizeof(imp) / sizeof(imp[0]));
     ASSERT_EQ_INT(r.exit_code, 0);
     ASSERT_STR_CONTAINS(r.out, "\"conflicts\":1");
     cmd_result_free(&r);
@@ -1599,21 +1522,14 @@ TEST(cli_import_incoming_dominates_keyless_hash_clash)
     cmd_result_free(&r);
 
     free(dev);
-    (void)remove(local);
-    (void)remove(foreign);
-    {
-        char side[PATH_BUF + 16];
-        (void)snprintf(side, sizeof(side), "%s.device_id", local);
-        (void)remove(side);
-    }
-    (void)rmdir(dir);
+    harness_remove_tree(dir);
 }
 
 /* Accept keep incoming with 10+ tags exercises json_each tag growth. */
 TEST(cli_conflict_accept_incoming_many_tags)
 {
     char tmpl[] = "/tmp/remember-tags-XXXXXX";
-    char *dir = NULL;
+    const char *dir = NULL;
     char local[PATH_BUF];
     char foreign[PATH_BUF];
     CmdResult r;
@@ -1637,11 +1553,7 @@ TEST(cli_conflict_accept_incoming_many_tags)
     r = run_remember(local, add, sizeof(add) / sizeof(add[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 0);
     cmd_result_free(&r);
-    {
-        char cmd[PATH_BUF * 2];
-        (void)snprintf(cmd, sizeof(cmd), "cp '%s' '%s'", local, foreign);
-        ASSERT_EQ_INT(system(cmd), 0);
-    }
+    ASSERT_EQ_INT(harness_copy_file(local, foreign), 0);
     force_body(foreign, 1, "body-in");
     /* Keep the 10 tags on foreign; only body differs for concurrent_vv. */
     dev = read_sidecar_id(local);
@@ -1656,7 +1568,7 @@ TEST(cli_conflict_accept_incoming_many_tags)
     }
 
     imp[3] = foreign;
-    r = run_remember(local, imp, sizeof(imp) / sizeof(imp[0]), NULL);
+    r = run_import(local, foreign, imp, sizeof(imp) / sizeof(imp[0]));
     ASSERT_EQ_INT(r.exit_code, 0);
     ASSERT_STR_CONTAINS(r.out, "\"conflicts\":1");
     cmd_result_free(&r);
@@ -1673,14 +1585,7 @@ TEST(cli_conflict_accept_incoming_many_tags)
     cmd_result_free(&r);
 
     free(dev);
-    (void)remove(local);
-    (void)remove(foreign);
-    {
-        char side[PATH_BUF + 16];
-        (void)snprintf(side, sizeof(side), "%s.device_id", local);
-        (void)remove(side);
-    }
-    (void)rmdir(dir);
+    harness_remove_tree(dir);
 }
 
 TEST(cli_conflict_accept_hash_clash_keep_incoming_and_both_refuse_fake_key)
@@ -1704,7 +1609,7 @@ TEST(cli_conflict_accept_hash_clash_keep_incoming_and_both_refuse_fake_key)
     cmd_result_free(&r);
 
     imp[3] = foreign;
-    r = run_remember(local, imp, sizeof(imp) / sizeof(imp[0]), NULL);
+    r = run_import(local, foreign, imp, sizeof(imp) / sizeof(imp[0]));
     ASSERT_EQ_INT(r.exit_code, 0);
     ASSERT_STR_CONTAINS(r.out, "\"conflicts\":1");
     cmd_result_free(&r);
@@ -1733,7 +1638,7 @@ TEST(cli_conflict_accept_hash_clash_keep_incoming_and_both_refuse_fake_key)
 TEST(cli_import_incoming_dominates_expires_deleted_keyless)
 {
     char tmpl[] = "/tmp/remember-dom2-XXXXXX";
-    char *dir = NULL;
+    const char *dir = NULL;
     char local[PATH_BUF];
     char foreign[PATH_BUF];
     CmdResult r;
@@ -1755,16 +1660,12 @@ TEST(cli_import_incoming_dominates_expires_deleted_keyless)
     ASSERT_EQ_INT(r.exit_code, 0);
     ASSERT_EQ_INT(json_copy_quoted(r.out, "sync_id", sync, sizeof(sync)), 0);
     cmd_result_free(&r);
-    {
-        char cmd[PATH_BUF * 2];
-        (void)snprintf(cmd, sizeof(cmd), "cp '%s' '%s'", local, foreign);
-        ASSERT_EQ_INT(system(cmd), 0);
-    }
+    ASSERT_EQ_INT(harness_copy_file(local, foreign), 0);
     /* Soft-deleted occupies deleted bin; expires cleared on soft-delete in product,
        but import apply still binds whatever foreign sends. */
     free(harness_sqlite_query_line(
         foreign, "UPDATE entries SET key=NULL, expires_at='2020-06-01T00:00:00.000Z',"
-                 "deleted_at='2026-01-01T00:00:00.000Z' WHERE id=1;"));
+                 "deleted_at='2026-01-01T00:00:00.000Z' WHERE rowid=1;"));
     force_body(foreign, 1, "gone");
     get_del[0] = "--json";
     get_del[1] = "get";
@@ -1783,7 +1684,7 @@ TEST(cli_import_incoming_dominates_expires_deleted_keyless)
     }
 
     imp[3] = foreign;
-    r = run_remember(local, imp, sizeof(imp) / sizeof(imp[0]), NULL);
+    r = run_import(local, foreign, imp, sizeof(imp) / sizeof(imp[0]));
     ASSERT_EQ_INT(r.exit_code, 0);
     ASSERT_STR_CONTAINS(r.out, "\"updated\":1");
     cmd_result_free(&r);
@@ -1796,14 +1697,7 @@ TEST(cli_import_incoming_dominates_expires_deleted_keyless)
     cmd_result_free(&r);
 
     free(dev);
-    (void)remove(local);
-    (void)remove(foreign);
-    {
-        char side[PATH_BUF + 16];
-        (void)snprintf(side, sizeof(side), "%s.device_id", local);
-        (void)remove(side);
-    }
-    (void)rmdir(dir);
+    harness_remove_tree(dir);
 }
 
 /* A malformed VV on a foreign row skips that row and counts it; the local row
@@ -1811,7 +1705,7 @@ TEST(cli_import_incoming_dominates_expires_deleted_keyless)
 TEST(cli_import_bad_vv_row_is_rejected)
 {
     char tmpl[] = "/tmp/remember-badvv-XXXXXX";
-    char *dir = NULL;
+    const char *dir = NULL;
     char local[PATH_BUF];
     char foreign[PATH_BUF];
     CmdResult r;
@@ -1829,28 +1723,17 @@ TEST(cli_import_bad_vv_row_is_rejected)
     r = run_remember(local, add, sizeof(add) / sizeof(add[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 0);
     cmd_result_free(&r);
-    {
-        char cmd[PATH_BUF * 2];
-        (void)snprintf(cmd, sizeof(cmd), "cp '%s' '%s'", local, foreign);
-        ASSERT_EQ_INT(system(cmd), 0);
-    }
+    ASSERT_EQ_INT(harness_copy_file(local, foreign), 0);
     force_vv(foreign, 1, "not-a-vv");
 
     imp[3] = foreign;
-    r = run_remember(local, imp, sizeof(imp) / sizeof(imp[0]), NULL);
+    r = run_import(local, foreign, imp, sizeof(imp) / sizeof(imp[0]));
     ASSERT_EQ_INT(r.exit_code, 0);
     ASSERT_STR_CONTAINS(r.out, "\"inserted\":0,\"updated\":0,\"unchanged\":0,\"conflicts\":0,"
                                "\"rejected\":1}");
     cmd_result_free(&r);
 
-    (void)remove(local);
-    (void)remove(foreign);
-    {
-        char side[PATH_BUF + 16];
-        (void)snprintf(side, sizeof(side), "%s.device_id", local);
-        (void)remove(side);
-    }
-    (void)rmdir(dir);
+    harness_remove_tree(dir);
 }
 
 /* Corrupt conflicts.reason → conflicts list / accept return store error. */
@@ -1890,7 +1773,7 @@ TEST(cli_conflicts_bad_reason_errors)
 TEST(cli_conflict_accept_concurrent_keep_incoming_demotes_other_key)
 {
     char tmpl[] = "/tmp/remember-cvi-XXXXXX";
-    char *dir = NULL;
+    const char *dir = NULL;
     char local[PATH_BUF];
     char foreign[PATH_BUF];
     CmdResult r;
@@ -1917,17 +1800,13 @@ TEST(cli_conflict_accept_concurrent_keep_incoming_demotes_other_key)
     r = run_remember(local, add_other, sizeof(add_other) / sizeof(add_other[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 0);
     cmd_result_free(&r);
-    {
-        char cmd[PATH_BUF * 2];
-        (void)snprintf(cmd, sizeof(cmd), "cp '%s' '%s'", local, foreign);
-        ASSERT_EQ_INT(system(cmd), 0);
-    }
+    ASSERT_EQ_INT(harness_copy_file(local, foreign), 0);
     free(harness_sqlite_query_line(foreign, "DELETE FROM entries WHERE key='other';"));
     {
         char sql[SQL_BUF];
         (void)snprintf(sql, sizeof(sql),
                        "UPDATE entries SET key='other', version_vector="
-                       "'{\"bbbbbbbb-bbbb-7bbb-bbbb-bbbbbbbbbbbb\":1}' WHERE sync_id='%s';",
+                       "'{\"bbbbbbbb-bbbb-7bbb-bbbb-bbbbbbbbbbbb\":1}' WHERE id='%s';",
                        sync_shared);
         free(harness_sqlite_query_line(foreign, sql));
     }
@@ -1935,10 +1814,9 @@ TEST(cli_conflict_accept_concurrent_keep_incoming_demotes_other_key)
         char sql[SQL_BUF];
         char hash[REMEMBER_SHA256_HEX_LEN + 1];
         body_hash_hex("incoming-body", strlen("incoming-body"), hash);
-        (void)snprintf(
-            sql, sizeof(sql),
-            "UPDATE entries SET body='incoming-body', body_hash='%s' WHERE sync_id='%s';", hash,
-            sync_shared);
+        (void)snprintf(sql, sizeof(sql),
+                       "UPDATE entries SET body='incoming-body', body_hash='%s' WHERE id='%s';",
+                       hash, sync_shared);
         free(harness_sqlite_query_line(foreign, sql));
     }
     dev = read_sidecar_id(local);
@@ -1950,7 +1828,7 @@ TEST(cli_conflict_accept_concurrent_keep_incoming_demotes_other_key)
     }
 
     imp[3] = foreign;
-    r = run_remember(local, imp, sizeof(imp) / sizeof(imp[0]), NULL);
+    r = run_import(local, foreign, imp, sizeof(imp) / sizeof(imp[0]));
     ASSERT_EQ_INT(r.exit_code, 0);
     ASSERT_STR_CONTAINS(r.out, "\"conflicts\":1");
     cmd_result_free(&r);
@@ -1968,14 +1846,7 @@ TEST(cli_conflict_accept_concurrent_keep_incoming_demotes_other_key)
     cmd_result_free(&r);
 
     free(dev);
-    (void)remove(local);
-    (void)remove(foreign);
-    {
-        char side[PATH_BUF + 16];
-        (void)snprintf(side, sizeof(side), "%s.device_id", local);
-        (void)remove(side);
-    }
-    (void)rmdir(dir);
+    harness_remove_tree(dir);
 }
 
 /*
@@ -1985,7 +1856,7 @@ TEST(cli_conflict_accept_concurrent_keep_incoming_demotes_other_key)
 TEST(cli_conflict_accept_concurrent_keep_incoming_hash_taken_refuses)
 {
     char tmpl[] = "/tmp/remember-cvh-XXXXXX";
-    char *dir = NULL;
+    const char *dir = NULL;
     char local[PATH_BUF];
     char foreign[PATH_BUF];
     CmdResult r;
@@ -2016,11 +1887,7 @@ TEST(cli_conflict_accept_concurrent_keep_incoming_hash_taken_refuses)
     hash = harness_sqlite_query_line(local,
                                      "SELECT body_hash FROM entries WHERE key IS NULL LIMIT 1;");
     ASSERT_TRUE(hash != NULL && hash[0] != '\0');
-    {
-        char cmd[PATH_BUF * 2];
-        (void)snprintf(cmd, sizeof(cmd), "cp '%s' '%s'", local, foreign);
-        ASSERT_EQ_INT(system(cmd), 0);
-    }
+    ASSERT_EQ_INT(harness_copy_file(local, foreign), 0);
     free(harness_sqlite_query_line(foreign, "DELETE FROM entries WHERE key IS NULL;"));
     {
         /* A real hash clash: the local keyless row's own body. */
@@ -2030,7 +1897,7 @@ TEST(cli_conflict_accept_concurrent_keep_incoming_hash_taken_refuses)
         ASSERT_TRUE(body != NULL);
         (void)snprintf(sql, sizeof(sql),
                        "UPDATE entries SET key=NULL, body='%s', body_hash='%s', version_vector="
-                       "'{\"bbbbbbbb-bbbb-7bbb-bbbb-bbbbbbbbbbbb\":1}' WHERE sync_id='%s';",
+                       "'{\"bbbbbbbb-bbbb-7bbb-bbbb-bbbbbbbbbbbb\":1}' WHERE id='%s';",
                        body != NULL ? body : "", hash, sync_shared);
         free(harness_sqlite_query_line(foreign, sql));
         free(body);
@@ -2042,17 +1909,17 @@ TEST(cli_conflict_accept_concurrent_keep_incoming_hash_taken_refuses)
         char vv_l[VV_BUF];
         char sql[SQL_BUF];
 
-        sid = harness_sqlite_query_line(local, "SELECT id FROM entries WHERE key='shared';");
+        sid = harness_sqlite_query_line(local, "SELECT local_id FROM entries WHERE key='shared';");
         ASSERT_TRUE(sid != NULL);
         (void)snprintf(vv_l, sizeof(vv_l), "{\"%s\":1}", dev);
-        (void)snprintf(sql, sizeof(sql), "UPDATE entries SET version_vector='%s' WHERE id=%s;",
+        (void)snprintf(sql, sizeof(sql), "UPDATE entries SET version_vector='%s' WHERE rowid=%s;",
                        vv_l, sid);
         free(harness_sqlite_query_line(local, sql));
         free(sid);
     }
 
     imp[3] = foreign;
-    r = run_remember(local, imp, sizeof(imp) / sizeof(imp[0]), NULL);
+    r = run_import(local, foreign, imp, sizeof(imp) / sizeof(imp[0]));
     ASSERT_EQ_INT(r.exit_code, 0);
     ASSERT_STR_CONTAINS(r.out, "\"conflicts\":1");
     cmd_result_free(&r);
@@ -2064,14 +1931,7 @@ TEST(cli_conflict_accept_concurrent_keep_incoming_hash_taken_refuses)
 
     free(hash);
     free(dev);
-    (void)remove(local);
-    (void)remove(foreign);
-    {
-        char side[PATH_BUF + 16];
-        (void)snprintf(side, sizeof(side), "%s.device_id", local);
-        (void)remove(side);
-    }
-    (void)rmdir(dir);
+    harness_remove_tree(dir);
 }
 
 TEST(cli_import_missing_source_errors)
@@ -2120,7 +1980,7 @@ TEST(cli_conflict_accept_demote_hash_escape_refuses)
     cmd_result_free(&r);
 
     imp[3] = foreign;
-    r = run_remember(local, imp, sizeof(imp) / sizeof(imp[0]), NULL);
+    r = run_import(local, foreign, imp, sizeof(imp) / sizeof(imp[0]));
     ASSERT_EQ_INT(r.exit_code, 0);
     ASSERT_STR_CONTAINS(r.out, "\"conflicts\":1");
     cmd_result_free(&r);
@@ -2137,7 +1997,7 @@ TEST(cli_conflict_accept_demote_hash_escape_refuses)
 TEST(cli_import_concurrent_reimport_idempotent)
 {
     char tmpl[] = "/tmp/remember-reimp-XXXXXX";
-    char *dir = NULL;
+    const char *dir = NULL;
     char local[PATH_BUF];
     char foreign[PATH_BUF];
     CmdResult r;
@@ -2158,11 +2018,7 @@ TEST(cli_import_concurrent_reimport_idempotent)
     r = run_remember(local, add, sizeof(add) / sizeof(add[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 0);
     cmd_result_free(&r);
-    {
-        char cmd[PATH_BUF * 2];
-        (void)snprintf(cmd, sizeof(cmd), "cp '%s' '%s'", local, foreign);
-        ASSERT_EQ_INT(system(cmd), 0);
-    }
+    ASSERT_EQ_INT(harness_copy_file(local, foreign), 0);
     force_body(foreign, 1, "incoming-body");
     dev = read_sidecar_id(local);
     ASSERT_TRUE(dev != NULL);
@@ -2176,7 +2032,7 @@ TEST(cli_import_concurrent_reimport_idempotent)
     }
 
     imp[3] = foreign;
-    r = run_remember(local, imp, sizeof(imp) / sizeof(imp[0]), NULL);
+    r = run_import(local, foreign, imp, sizeof(imp) / sizeof(imp[0]));
     ASSERT_EQ_INT(r.exit_code, 0);
     ASSERT_STR_CONTAINS(r.out, "\"conflicts\":1");
     cmd_result_free(&r);
@@ -2187,7 +2043,7 @@ TEST(cli_import_concurrent_reimport_idempotent)
     cmd_result_free(&r);
 
     /* Re-import identical foreign: local now dominates → unchanged, still 1 row. */
-    r = run_remember(local, imp, sizeof(imp) / sizeof(imp[0]), NULL);
+    r = run_import(local, foreign, imp, sizeof(imp) / sizeof(imp[0]));
     ASSERT_EQ_INT(r.exit_code, 0);
     ASSERT_STR_CONTAINS(r.out, "\"conflicts\":0");
     cmd_result_free(&r);
@@ -2199,7 +2055,7 @@ TEST(cli_import_concurrent_reimport_idempotent)
     /* Advance foreign VV while still concurrent → refresh same row (no insert). */
     force_body(foreign, 1, "incoming-body-v2");
     force_vv(foreign, 1, "{\"dddddddd-dddd-7ddd-bddd-dddddddddddd\":2}");
-    r = run_remember(local, imp, sizeof(imp) / sizeof(imp[0]), NULL);
+    r = run_import(local, foreign, imp, sizeof(imp) / sizeof(imp[0]));
     ASSERT_EQ_INT(r.exit_code, 0);
     ASSERT_STR_CONTAINS(r.out, "\"conflicts\":0");
     cmd_result_free(&r);
@@ -2215,21 +2071,14 @@ TEST(cli_import_concurrent_reimport_idempotent)
     cmd_result_free(&r);
 
     free(dev);
-    (void)remove(local);
-    (void)remove(foreign);
-    {
-        char side[PATH_BUF + 16];
-        (void)snprintf(side, sizeof(side), "%s.device_id", local);
-        (void)remove(side);
-    }
-    (void)rmdir(dir);
+    harness_remove_tree(dir);
 }
 
 /* Pairwise-max path where a device is present in local VV with clock 0. */
 TEST(cli_import_vv_zero_clock_in_a_membership)
 {
     char tmpl[] = "/tmp/remember-vv0-XXXXXX";
-    char *dir = NULL;
+    const char *dir = NULL;
     char local[PATH_BUF];
     char foreign[PATH_BUF];
     CmdResult r;
@@ -2248,11 +2097,7 @@ TEST(cli_import_vv_zero_clock_in_a_membership)
     r = run_remember(local, add, sizeof(add) / sizeof(add[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 0);
     cmd_result_free(&r);
-    {
-        char cmd[PATH_BUF * 2];
-        (void)snprintf(cmd, sizeof(cmd), "cp '%s' '%s'", local, foreign);
-        ASSERT_EQ_INT(system(cmd), 0);
-    }
+    ASSERT_EQ_INT(harness_copy_file(local, foreign), 0);
     dev = read_sidecar_id(local);
     ASSERT_TRUE(dev != NULL);
     {
@@ -2266,20 +2111,13 @@ TEST(cli_import_vv_zero_clock_in_a_membership)
     }
 
     imp[3] = foreign;
-    r = run_remember(local, imp, sizeof(imp) / sizeof(imp[0]), NULL);
+    r = run_import(local, foreign, imp, sizeof(imp) / sizeof(imp[0]));
     ASSERT_EQ_INT(r.exit_code, 0);
     ASSERT_STR_CONTAINS(r.out, "\"unchanged\":1");
     cmd_result_free(&r);
 
     free(dev);
-    (void)remove(local);
-    (void)remove(foreign);
-    {
-        char side[PATH_BUF + 16];
-        (void)snprintf(side, sizeof(side), "%s.device_id", local);
-        (void)remove(side);
-    }
-    (void)rmdir(dir);
+    harness_remove_tree(dir);
 }
 
 static void given_added(const char *db, const char *const *args, size_t nargs)
@@ -2326,7 +2164,7 @@ TEST(cli_import_skips_noncanonical_key_and_tag_rows)
                          "UPDATE entries SET key='' WHERE key='emptykey';");
 
     imp[3] = foreign;
-    r = run_remember(local, imp, sizeof(imp) / sizeof(imp[0]), NULL);
+    r = run_import(local, foreign, imp, sizeof(imp) / sizeof(imp[0]));
     ASSERT_EQ_INT(r.exit_code, 0);
     ASSERT_STR_CONTAINS(r.out, "\"inserted\":2,\"updated\":0,\"unchanged\":0,\"conflicts\":0,"
                                "\"rejected\":6}");
@@ -2356,21 +2194,17 @@ TEST(cli_import_skips_noncanonical_row_already_present)
 
     ASSERT_TRUE(local != NULL && foreign != NULL);
     given_added(local, add, sizeof(add) / sizeof(add[0]));
-    {
-        char cmd[PATH_BUF * 2];
-        (void)snprintf(cmd, sizeof(cmd), "cp '%s' '%s'", local, foreign);
-        ASSERT_EQ_INT(system(cmd), 0);
-    }
+    ASSERT_EQ_INT(harness_copy_file(local, foreign), 0);
     /* A foreign clock no local device has: without the check this row dominates. */
     sqlite_exec(foreign, "UPDATE entries SET key='k'||char(27), "
-                         "version_vector=json_set(version_vector,'$.peer',9) WHERE id=1;");
+                         "version_vector=json_set(version_vector,'$.peer',9) WHERE rowid=1;");
 
     imp[2] = foreign;
-    r = run_remember(local, imp, sizeof(imp) / sizeof(imp[0]), NULL);
+    r = run_import(local, foreign, imp, sizeof(imp) / sizeof(imp[0]));
     ASSERT_EQ_INT(r.exit_code, 0);
     ASSERT_STREQ(r.out, "inserted 0 updated 0 unchanged 0 conflicts 0 rejected 1\n");
     cmd_result_free(&r);
-    key = harness_sqlite_query_line(local, "SELECT key FROM entries WHERE id=1;");
+    key = harness_sqlite_query_line(local, "SELECT key FROM entries WHERE local_id=1;");
     ASSERT_TRUE(key != NULL);
     if (key != NULL) {
         ASSERT_STREQ(key, "k");
@@ -2396,7 +2230,7 @@ TEST(cli_conflicts_human_masks_a_control_byte_in_the_sync_id)
     given_added(local, add_local, sizeof(add_local) / sizeof(add_local[0]));
     given_added(foreign, add_foreign, sizeof(add_foreign) / sizeof(add_foreign[0]));
     imp[2] = foreign;
-    r = run_remember(local, imp, sizeof(imp) / sizeof(imp[0]), NULL);
+    r = run_import(local, foreign, imp, sizeof(imp) / sizeof(imp[0]));
     ASSERT_EQ_INT(r.exit_code, 0);
     cmd_result_free(&r);
     sqlite_exec(local, "UPDATE conflicts SET sync_id='s'||char(27)||'[2J'||char(10);");
@@ -2427,6 +2261,7 @@ TEST(cli_import_skips_rows_with_a_non_canonical_peer_field)
         const char *add[] = {"add", "--key", names[i], names[i]};
         given_added(foreign, add, sizeof(add) / sizeof(add[0]));
     }
+    harness_make_v5_source(foreign); /* the peer fields below are v5 columns */
     sqlite_exec(foreign, "UPDATE entries SET sync_id=sync_id||char(9)||'x' WHERE key='tabsync';");
     sqlite_exec(foreign,
                 "UPDATE entries SET created_at='2026-10-22T09:45:16Z' WHERE key='created';");
@@ -2445,7 +2280,7 @@ TEST(cli_import_skips_rows_with_a_non_canonical_peer_field)
     sqlite_exec(foreign, "UPDATE entries SET body_hash=printf('%.64c','0') WHERE key='hash';");
 
     imp[3] = foreign;
-    r = run_remember(local, imp, sizeof(imp) / sizeof(imp[0]), NULL);
+    r = run_import(local, foreign, imp, sizeof(imp) / sizeof(imp[0]));
     ASSERT_EQ_INT(r.exit_code, 0);
     ASSERT_STR_CONTAINS(r.out, "\"inserted\":1,\"updated\":0,\"unchanged\":0,\"conflicts\":0,"
                                "\"rejected\":11}");
@@ -2476,7 +2311,7 @@ TEST(cli_conflicts_refuses_a_snapshot_that_is_not_an_object)
     given_added(local, add_local, sizeof(add_local) / sizeof(add_local[0]));
     given_added(foreign, add_foreign, sizeof(add_foreign) / sizeof(add_foreign[0]));
     imp[2] = foreign;
-    r = run_remember(local, imp, sizeof(imp) / sizeof(imp[0]), NULL);
+    r = run_import(local, foreign, imp, sizeof(imp) / sizeof(imp[0]));
     ASSERT_EQ_INT(r.exit_code, 0);
     cmd_result_free(&r);
 
@@ -2518,7 +2353,7 @@ TEST(cli_import_refuses_to_snapshot_a_non_canonical_local_vector)
     given_added(foreign, add_foreign, sizeof(add_foreign) / sizeof(add_foreign[0]));
     sqlite_exec(local, "UPDATE entries SET version_vector='{\"a\":1}';");
     imp[2] = foreign;
-    r = run_remember(local, imp, sizeof(imp) / sizeof(imp[0]), NULL);
+    r = run_import(local, foreign, imp, sizeof(imp) / sizeof(imp[0]));
     ASSERT_EQ_INT(r.exit_code, 1);
     cmd_result_free(&r);
     n = harness_sqlite_query_line(local, "SELECT COUNT(*) FROM conflicts;");
@@ -2571,4 +2406,4 @@ void register_sync_import_tests(void)
     RUN_TEST(cli_import_refuses_to_snapshot_a_non_canonical_local_vector);
 }
 
-// NOLINTEND(readability-identifier-length,cppcoreguidelines-avoid-magic-numbers,readability-magic-numbers,android-cloexec-fopen,bugprone-command-processor,cert-env33-c,concurrency-mt-unsafe,bugprone-unchecked-string-to-number-conversion,cert-err34-c)
+// NOLINTEND(readability-identifier-length,cppcoreguidelines-avoid-magic-numbers,readability-magic-numbers,android-cloexec-fopen,bugprone-unchecked-string-to-number-conversion,cert-err34-c)

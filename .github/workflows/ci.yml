@@ -35,22 +35,67 @@ jobs:
           ./scripts/ci-linux.sh --inner --install
 
   # Plugin protocol spec (plan 24): every schema and example in
-  # docs/PLUGIN-PROTOCOL.md must validate, and schema/plugin/v1/ and
-  # tests/fixtures/plugin/ must hold the same bytes as their spec blocks.
-  # Python is a docs tool here only.
+  # docs/PLUGIN-PROTOCOL.md must validate, its plugin scripts must compile, and
+  # schema/plugin/v1/ and tests/fixtures/plugin/ must hold the same bytes as
+  # their spec blocks. Python is a docs tool here only. This job depends only on
+  # the repo, so it can be a required check.
   docs:
     name: docs (plugin protocol spec)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
 
-      - name: Install jsonschema
+      - name: Install the pinned validator packages
         run: |
           python3 -m venv "$RUNNER_TEMP/venv"
-          "$RUNNER_TEMP/venv/bin/pip" install --quiet jsonschema==4.26.0 referencing==0.37.0
+          "$RUNNER_TEMP/venv/bin/pip" install --quiet --no-deps -r scripts/plugin-spec-requirements.txt
 
       - name: Validate the plugin protocol spec
         run: '"$RUNNER_TEMP/venv/bin/python" scripts/validate_plugin_spec.py docs/PLUGIN-PROTOCOL.md'
+
+  # GitHub Pages publishes main, so each schema $id must serve the bytes of that
+  # file on main. The docs job covers this checkout's files. Pages redeploys after
+  # a push to main, so a failed comparison is retried every 20 s, 16 times (about
+  # 5 minutes) before the job fails. A separate job, so a github.io outage never
+  # blocks the docs check.
+  docs-pages:
+    name: docs (schema $id on GitHub Pages)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: main
+
+      - name: Fetch each schema $id
+        shell: bash
+        run: |
+          shopt -s nullglob
+          files=(schema/plugin/v1/*.json)
+          [ ${#files[@]} -gt 0 ] || { echo "FAIL no schema files on main"; exit 1; }
+          check() {
+            local f url fail=0
+            for f in "${files[@]}"; do
+              if ! url=$(jq -er '."$id"' "$f"); then
+                echo "FAIL $f on main: no \$id"; fail=1
+              elif ! curl -fsSL --connect-timeout 10 --max-time 30 -o "$RUNNER_TEMP/got.json" "$url"; then
+                echo "FAIL $url: fetch failed"; fail=1
+              elif ! cmp -s "$f" "$RUNNER_TEMP/got.json"; then
+                echo "FAIL $url: differs from $f on main"; fail=1
+              else
+                echo "ok   $url"
+              fi
+            done
+            return $fail
+          }
+          for attempt in $(seq 16); do
+            if check; then exit 0; fi
+            if [ "$attempt" -lt 16 ]; then
+              echo "Attempt $attempt of 16 failed. Pages may still be deploying main. Retrying in 20 s."
+              sleep 20
+            fi
+          done
+          exit 1
 
   # Line coverage of src/*.c: 100% functions + 100% effective lines, plus every
   # branch side in the pure TUs (plan 18b; see scripts/check-coverage.sh). Add

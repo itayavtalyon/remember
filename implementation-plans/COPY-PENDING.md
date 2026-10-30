@@ -124,7 +124,7 @@ Warning `setting_import_skipped`. Plain shape: `remember: warning: skipped "<key
 
 Detail `reason` for the lines above is `plugin_not_installed`, `other_scope`, `layer_not_allowed`, or `unknown_key`. The import row has `result` `skipped`, the same `reason`, and `action` `none`.
 
-A bad value on import is 007 ST-8.4: warning `setting_invalid`, reason `invalid_value`, and the C-14 line. ANSWERS-FINAL also offered the C-12 shape for a bad value. That code choice is DESIGN-PENDING D-15. Until the log changes, print C-14 for a bad value and C-12 for the four reasons above. Plan 20.
+A bad value on import is 007 ST-8.4: warning `setting_invalid`, reason `invalid_value`, and the C-14 line (D-15, answered 2026-10-25). Print C-12 for the four reasons above. Plan 20.
 
 ## C-13
 
@@ -160,7 +160,11 @@ Import success: `Imported "<path>": <count> settings written, <count> unchanged,
 
 ## C-14
 
-Sync apply, Cloud, and migration. Warning, no fix: `remember: warning: skipped "<key>": "<value>" isn't a valid value. This brain wasn't changed.` Detail: `key`, `value`, `reason` (for example `bad_prefix_shape`). `settings set` of a bad value is C-05, not this code. Plan 20. Plan 19 prints the migration prefix line in C-05, which is this code with reason `bad_prefix_shape`.
+Sync apply, Cloud, migration, and import. Warning, no fix: `remember: warning: skipped "<key>": "<value>" isn't a valid value.` Add ` This brain wasn't changed.` only when the batch has one row and the command writes no other row, memory or link (D-15, 007 ST-7.15). Detail: `key`, `value`, `reason` (for example `bad_prefix_shape`). `settings set` of a bad value is C-05, not this code. Plan 20. Plan 19 prints the migration prefix line in C-05, which is this code with reason `bad_prefix_shape`.
+
+## C-14a
+
+`setting_invalid`, reason `bad_shape` (007 ST-7.15, ST-8.4). Warning, no fix: `remember: warning: skipped row <row> in the settings file because it isn't a setting (each row needs a "key").` `<row>` is the 1-based position in the `settings` list. With no row number: `remember: warning: skipped a row in the settings file because it isn't a setting (each row needs a "key").` Plan 20.
 
 ## C-15
 
@@ -230,11 +234,11 @@ Dispatch, warning: `remember: warning: the write was saved, but this build of re
 
 ## C-30
 
-`plugin_action_timeout`. `remember: warning: <name> didn't answer in time, so it was skipped.` `<name>` is `<plugin>/<action>`. Which commands print it is DESIGN-PENDING D-17. Until the log changes, print it only where 010 H-6.4 allows. A write's exit code does not change (R8.16). Plan 25.
+`plugin_action_timeout`. `remember: warning: <name> didn't answer in time, so it was skipped.` `<name>` is `<plugin>/<action>`. Print it only in `remember plugin test <name>`, `remember plugin rerun <name> <event-id>`, and the backfill in `remember plugin reindex` and `remember plugin enable` (D-17, 010 H-6.4). A write never prints it, and its exit code does not change (R8.16). Plan 25.
 
 ## C-31
 
-`plugin_action_failed`. `remember: warning: "<name>" failed. Run 'remember plugin log <name>' to see why.` `<name>` is the plugin. Same print-when question as C-30 (D-17). Plan 25.
+`plugin_action_failed`. `remember: warning: "<name>" failed. Run 'remember plugin log <name>' to see why.` `<name>` is the plugin. Printed only where C-30 is printed (D-17). Plan 25.
 
 ## C-32
 

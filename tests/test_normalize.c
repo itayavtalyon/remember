@@ -573,8 +573,52 @@ TEST(source_accepts_only_the_closed_tokens)
     ASSERT_FALSE(source_is_valid(UUID_A));
 }
 
+static void assert_prefix(const char *src, NormStatus want, const char *want_out)
+{
+    char out[REMEMBER_BUCKET_PREFIX_BUF];
+
+    ASSERT_EQ_STATUS(bucket_prefix_fold(src, out, sizeof(out)), want);
+    ASSERT_STREQ(out, want_out);
+}
+
+/* 007 ST-5.4, every branch side of bucket_prefix_fold. */
+TEST(bucket_prefix_fold_follows_st_5_4)
+{
+    char out[REMEMBER_BUCKET_PREFIX_BUF];
+    char long_name[REMEMBER_BUCKET_PREFIX_MAX_POINTS + 3];
+
+    assert_prefix("project:", NORM_OK, "project:");
+    assert_prefix("Pro_j-e.c9:", NORM_OK, "pro_j-e.c9:");
+    /* U+05E9 (Lo), U+01C5 (Lt), U+02B0 (Lm), U+0661 (Nd): kept as is. */
+    assert_prefix("\xD7\xA9\xC7\x85\xCA\xB0\xD9\xA1:", NORM_OK,
+                  "\xD7\xA9\xC7\x85\xCA\xB0\xD9\xA1:");
+    assert_prefix("", NORM_ERR_INVALID_CHAR, "");
+    assert_prefix("project", NORM_ERR_INVALID_CHAR, "");
+    assert_prefix(":", NORM_ERR_EMPTY, "");
+    assert_prefix("my project:", NORM_ERR_INVALID_CHAR, "");
+    assert_prefix("a:b:", NORM_ERR_INVALID_CHAR, "");
+    /* U+0378 is unassigned (Cn, below Lu); U+0301 is a mark (Mn, above Lo). */
+    assert_prefix("a\xCD\xB8:", NORM_ERR_INVALID_CHAR, "");
+    assert_prefix("a\xCC\x81:", NORM_ERR_INVALID_CHAR, "");
+    assert_prefix("a\xFF:", NORM_ERR_INVALID_UTF8, "");
+
+    memset(long_name, 'a', sizeof(long_name));
+    long_name[REMEMBER_BUCKET_PREFIX_MAX_POINTS] = ':';
+    long_name[REMEMBER_BUCKET_PREFIX_MAX_POINTS + 1] = '\0';
+    ASSERT_EQ_STATUS(bucket_prefix_fold(long_name, out, sizeof(out)), NORM_OK);
+    long_name[REMEMBER_BUCKET_PREFIX_MAX_POINTS] = 'a';
+    long_name[REMEMBER_BUCKET_PREFIX_MAX_POINTS + 1] = ':';
+    long_name[REMEMBER_BUCKET_PREFIX_MAX_POINTS + 2] = '\0';
+    ASSERT_EQ_STATUS(bucket_prefix_fold(long_name, out, sizeof(out)), NORM_ERR_TOO_LONG);
+
+    ASSERT_EQ_STATUS(bucket_prefix_fold(NULL, out, sizeof(out)), NORM_ERR_INTERNAL);
+    ASSERT_EQ_STATUS(bucket_prefix_fold("a:", NULL, sizeof(out)), NORM_ERR_INTERNAL);
+    ASSERT_EQ_STATUS(bucket_prefix_fold("a:", out, sizeof(out) - 1U), NORM_ERR_INTERNAL);
+}
+
 void register_normalize_tests(void)
 {
+    RUN_TEST(bucket_prefix_fold_follows_st_5_4);
     RUN_TEST(body_trim_basic);
     RUN_TEST(body_trim_all_ws_kinds);
     RUN_TEST(body_trim_preserves_internal_ws);

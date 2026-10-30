@@ -1,6 +1,6 @@
 # Remember plugin and hook protocol, version 1 (draft)
 
-Author: Grok Bot, for Itay. Draft of 2026-10-16. Revisions 1, 2, 3 and 4 of 2026-10-18. Revision 5 of 2026-10-19 (Interface review PP-01 to PP-18 decided, FX answers applied). Amended 2026-10-22 (R2.16a, read-only settings). Revision 6 of 2026-10-22: the log 009 amendment table applied (Itay, M-06), plus the 2026-10-22 merge answers M-17 and M-19 N2/N6/N7 and the Interface warning-code fix; section 0.7. Revision 7 of 2026-10-25: warning-code wording from Itay's copy-pending answers (C-20, C-23, D-02, D-08), still protocol 1; section 0.8. Status: **draft for Itay's approval** (Interface reviewed revision 4 in `fk-review/PLUGIN-PROTOCOL-REVIEW.md`) (decision:plugins-filter-needs requires both). The changes of each revision are in `PLUGIN-PROTOCOL-CHANGES.md`.
+Author: Grok Bot, for Itay. Draft of 2026-10-16. Revisions 1, 2, 3 and 4 of 2026-10-18. Revision 5 of 2026-10-19 (Interface review PP-01 to PP-18 decided, FX answers applied). Amended 2026-10-22 (R2.16a, read-only settings). Revision 6 of 2026-10-22: the log 009 amendment table applied (Itay, M-06), plus the 2026-10-22 merge answers M-17 and M-19 N2/N6/N7 and the Interface warning-code fix; section 0.7. Revision 7 of 2026-10-25: warning-code wording from Itay's copy-pending answers (C-20, C-23, D-02, D-08), and the commands that print the action warnings (D-17), still protocol 1; section 0.8. Status: **draft for Itay's approval** (Interface reviewed revision 4 in `fk-review/PLUGIN-PROTOCOL-REVIEW.md`) (decision:plugins-filter-needs requires both). The changes of each revision are in `PLUGIN-PROTOCOL-CHANGES.md`.
 
 Sources of truth, in priority order:
 1. Itay's locked decisions. The decisions of 2026-10-18 are in sections 0.1 to 0.4. Older decisions in his Remember DB are cited as `[key]`, for example `[decision:plugins-strikes]`.
@@ -194,7 +194,8 @@ Revision 7 is a document revision of protocol 1. No wire shape changes (log 009 
 | C-20 | copy-pending answer 5 | A hash mismatch is its own warning, `plugin_untrusted`, not a `plugin_preflight_failed` reason (R8.15, section 8.2, log 010 H-6.2). |
 | D-02 | copy-pending answer 2 | A capped chain gives both the `chain_capped` status (R8.9) and the `plugin_chain_capped` warning. |
 | D-08 | copy-pending answer 4 | The non-timeout filter failure code is exactly `plugin_filter_failed`. |
-| C-30, C-31 | Itay, 2026-10-25 | `plugin_action_timeout` and `plugin_action_failed` print only in a command that runs the action synchronously (for example `plugin run`). A write never waits (R8.16, log 010 H-6.4). |
+| C-30, C-31 | Itay, 2026-10-25 | `plugin_action_timeout` and `plugin_action_failed` print only in a command that runs the action synchronously. A write never waits (R8.16, log 010 H-6.4). The D-17 row names the commands. |
+| D-17 | Itay, 2026-10-25 | `plugin_action_timeout` and `plugin_action_failed` print only in `remember plugin test <name>`, in `remember plugin rerun <name> <event-id>` (synchronous), and in the backfill of `remember plugin reindex` and `remember plugin enable`. That backfill then exits 1 with `plugin_backfill_incomplete`. No other command prints them. A write never prints them, and its exit code does not change (R3.21, R8.16, section 8.2, log 010 H-6.4). |
 | C-23 | copy-pending answer 13 | In a `REMEMBER_PROCESSES=0` build, a write that matches a folder-plugin action is saved and warns `plugin_unsupported` (log 010 H-0.7). |
 
 ---
@@ -754,7 +755,7 @@ sys.exit(0)
 - R3.11. The `data` of an event must not exceed 256 KiB. Over the limit, Remember drops `changes.before.body`, then `memory.links`, then cuts `memory.body` to 16,384 bytes, and lists the cut paths in `truncated_fields` (HK §2.2) **(OQ-6)**.
 - R3.12. The plugin must not change a memory to react to an event. The plugin may write a **new** memory, for example a linked memory tagged `source:url` `[decision:url-expansion-linked-memory]`, `[principle:plugins-never-change-writes]`.
 - R3.13. Remember never waits for a handler. A handler result never changes the exit code or the output of the write `[decision:hooks-never-wait]` **(NQ-3)**.
-- R3.14. A once-process ends with an exit code. `0` means handled. Any other code means failed, and Remember does not retry. No exit code is retried. `remember plugin rerun` reruns a failed run `[decision:s-15]`.
+- R3.14. A once-process ends with an exit code. `0` means handled. Any other code means failed, and Remember does not retry. No exit code is retried. `remember plugin rerun` reruns a failed run `[decision:s-15]`. It runs in the foreground and waits for the run (R3.21, revision 7, D-17).
 - R3.15. Remember ignores the stdout of a once-process and of a hook. Only the exit code counts. Remember writes stderr to the per-run output file that the hooks log in `<brain>.d/` names (HK §6.3) **(OQ-13)**.
 - R3.16. For a link change (a `memory.updated` on each end, `[decision:s-10]`), `changes` holds `{"link": {kind, direction, other{id, key}}}` (HK §1.2).
 
@@ -846,7 +847,13 @@ sys.exit(0)
 - R3.18. The plugin must answer with `event.result` before the action `run.timeout`. The reply echoes `request_id`. A success carries `data {event_id}`. A failure carries `error {code, message, fix}` in place of `data` (R1.11). `event.result` has no `result` field `[decision:plugin-protocol-small-fixes]` **(OQ-12, PP-08)**.
 - R3.19. A missing reply after the timeout is a `timeout`. It is one strike for the process (section 9.2) **(OQ-12, NQ-3)**.
 - R3.20. A write never waits for the reply. When the reply is missing or carries `error`, Remember records it in the plugin log (the shared hooks log, R9.28) and in `remember plugin status` (`last_problems`). A write command keeps its own exit code **(NQ-3)**.
-- R3.21. A command whose own job waits for the reply (for example a backfill in `remember plugin reindex`) exits 1 with `plugin_backfill_incomplete` when the job does not finish `[decision:s-09]`. Its warning is `plugin_action_timeout` for a missing reply and `plugin_action_failed` for a failed reply. `remember plugin status` never waits for a reply. It reports a missed ack in `last_problems` and exits 0 `[decision:plugin-cli-table]` **(NQ-2, NQ-3, PP-05)**.
+- R3.21. Only these commands wait for a reply, and only these commands print `plugin_action_timeout` for a missing reply and `plugin_action_failed` for a failed reply (revision 7, D-17, log 010 H-6.4):
+  - `remember plugin test <name>`, which runs an installed entry in the foreground. Its exit code stays as in section 10.
+  - `remember plugin rerun <name> <event-id>`, which runs the recipient in the foreground and waits for the run. Its exit code stays as in section 10.
+  - The backfill in `remember plugin reindex <name>`. When the backfill does not finish, the command exits 1 with `plugin_backfill_incomplete` `[decision:s-09]`.
+  - The backfill in `remember plugin enable <name>`. When the backfill does not finish, the command exits 1 with `plugin_backfill_incomplete` `[decision:s-09]`.
+
+  A write never prints these warnings (R3.20, R8.16). `remember plugin status` never waits for a reply. It reports a missed ack in `last_problems` and exits 0 `[decision:plugin-cli-table]` **(NQ-2, NQ-3, PP-05)**.
 - R3.22. A well-formed failed `event.result` is not a strike **(OQ-22, PP-08)**.
 - R3.23. A persistent process gets `REMEMBER_HOOK_DEPTH=1` and `REMEMBER_HOOK_NAME=plugin/<name>` (R6.1). When it writes through the CLI for an event, it sets `REMEMBER_CAUSE_EVENT_ID` and `REMEMBER_HOOK_CHAIN` from that event's `data.cause` `[decision:g2-06]`.
 
@@ -1284,7 +1291,7 @@ Second connection (resume, later batches, done):
 - R8.13. A plugin or hook problem during a search or a write is a warning, with exit code 0. With `--strict` or `REMEMBER_STRICT=1`, any warning gives exit code 4 `[decision:g2-03]`. Exit code 4 has no other meaning `[decision:s-09]`. stdout holds the normal result **(OQ-1, PP-01)**.
 - R8.14. With `--strict`, Remember returns exit code 4 when `warnings` holds at least one item, whatever its code `[decision:g2-03]`.
 - R8.15. Each of these is a warning (section 8.2): a filter fails, times out, or sends an oversize message; the chain reaches its cap; a cold filter does not answer within its grace or the chain cap, so the search falls back to the BM25 results (R9.2, SET-2); a crash loop disables a plugin; a plugin fails its pre-flight check (file exists, file is executable); a plugin's code hash has no trust record (`plugin_untrusted`, revision 7); a process-less build cannot dispatch (`plugin_unsupported`, revision 7); or the dispatcher cannot start. A `plugin reindex` or `plugin enable` backfill that does not finish exits 1 with `plugin_backfill_incomplete` `[decision:s-09]`.
-- R8.16. A hook or action failure after the handler starts never changes the exit code of a write, also with `--strict`. The write records it in the plugin log and in plugin status `[principle:engine-os-agnostic]`, `[decision:hooks-never-wait]` **(NQ-3)**.
+- R8.16. A hook or action failure after the handler starts never changes the exit code of a write, also with `--strict`. A write never prints `plugin_action_timeout` or `plugin_action_failed`. Only the R3.21 commands print them (revision 7, D-17). The write records it in the plugin log and in plugin status `[principle:engine-os-agnostic]`, `[decision:hooks-never-wait]` **(NQ-3)**.
 
 ### 8.2 Warning codes
 
@@ -1304,8 +1311,8 @@ Under `--strict` or `REMEMBER_STRICT=1`, every code below gives exit code 4 `[de
 | `plugin_loop_halted` | Log 010 H-5.6 (M-19 N6: renamed from `plugin_chain_halted`). A cause chain reached 100, so an entry did not run. Sticky until `remember plugin rerun` or `remember plugin status --ack NAME` (M-19 N7). |
 | `plugin_untrusted` | Log 010 H-9.5. The plugin's current code hash has no trust record, so it did not run. Includes a hash mismatch found by the pre-flight check (log 010 H-6.2, revision 7). |
 | `plugin_unsupported` | Log 010 H-0.7 (revision 7, C-23). A build without process support saved a write that matches a folder-plugin action, and nothing was dispatched. |
-| `plugin_action_timeout` | NQ-2. A persistent action did not reply in time, only in a command that runs the action synchronously, for example `plugin run` (NQ-3, revision 7). A write never prints it (R8.16). |
-| `plugin_action_failed` | NQ-2. A persistent action sent a failed reply, only in a command that runs the action synchronously, for example `plugin run` (NQ-3, revision 7). A write never prints it (R8.16). |
+| `plugin_action_timeout` | NQ-2. A persistent action did not reply in time. Printed only by the R3.21 commands: `remember plugin test <name>`, `remember plugin rerun <name> <event-id>`, and the backfill in `remember plugin reindex` and `remember plugin enable` (NQ-3, revision 7, D-17). A write never prints it (R8.16). |
+| `plugin_action_failed` | NQ-2. A persistent action sent a failed reply. Printed only by the R3.21 commands: `remember plugin test <name>`, `remember plugin rerun <name> <event-id>`, and the backfill in `remember plugin reindex` and `remember plugin enable` (NQ-3, revision 7, D-17). A write never prints it (R8.16). |
 | `plugin_additions_capped` | NQ-4. OQ-19. |
 | `plugin_note_truncated` | NQ-4. OQ-21. |
 | `plugin_request_trimmed` | NQ-12, CF-9. Remember trimmed the candidate pool to fit 16 MiB. |
@@ -1512,7 +1519,7 @@ Without `--json`, the human CLI prints on stderr: `remember: warning: hybrid/rer
 | `remember plugin disable <name> [--scope brain]` | A shortcut for `settings set plugin.<name>.enabled false`. `shutdown` reason `disabled`. | 0 |
 | `remember plugin remove <name> [--delete-data]` | `shutdown` reason `removed`, delete the install. Data is kept by default and the command says so; `--delete-data` deletes it. | 0 |
 | `remember plugin reindex <name> [--full]` | Backfill with progress on stderr. Ctrl-C resumes later (R7.5b). The daemon runs it when it runs (R7.5a). | 0; 1 `plugin_backfill_incomplete` |
-| `remember plugin rerun <name> <event-id>` | Rerun a `failed` or `halted` run once, with the chain reset (R3.14). Clears `plugin_loop_halted`. | 0; 1 `plugin_not_rerunnable` |
+| `remember plugin rerun <name> <event-id>` | Rerun a `failed` or `halted` run once, with the chain reset (R3.14). Runs in the foreground and waits for the run (R3.21). Clears `plugin_loop_halted`. | 0; 1 `plugin_not_rerunnable` |
 | `remember plugin status [<name>] [--ack <name>]` | Report only. Never waits for an ack. A missed ack goes in `last_problems`. `--ack` clears the sticky `plugin_loop_halted` warning (M-19 N7). | 0 whenever it can report |
 | `remember plugin log <name> [--follow] [--since <duration>]` | The plugin's lines from the hooks log plus its stderr log (R6.15, R9.28). | 0 |
 | `remember plugin test <name>|<dir> [--entry <entry>] [--query <text>]` | `<name>`: run an installed entry now. `<dir>`: run the conformance suite against the folder in a scratch brain. No install, no trust prompt. | 0 pass; 1 fail |

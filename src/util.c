@@ -62,11 +62,67 @@ int util_path_looks_synced(const char *path)
     return 0;
 }
 
+/* Empty counts as unset. Single-threaded CLI; getenv has no portable
+   thread-safe variant in C11/POSIX. */
+static const char *env_nonempty(const char *name)
+{
+    const char *value = NULL;
+
+    // NOLINTNEXTLINE(concurrency-mt-unsafe)
+    value = getenv(name);
+    if (value != NULL && value[0] == '\0') {
+        return NULL;
+    }
+    return value;
+}
+
+static int copy_regular_db_path(const char *chosen, char *buf, size_t buflen, char *err,
+                                size_t errlen)
+{
+    size_t n = 0;
+
+    if (path_is_ephemeral(chosen)) {
+        set_err(err, errlen, "database path must be a regular file (not :memory: or file: URI)");
+        return -1;
+    }
+    n = strlen(chosen);
+    if (n >= buflen) {
+        set_err(err, errlen, "database path is too long");
+        return -1;
+    }
+    memcpy(buf, chosen, n + 1U);
+    return 0;
+}
+
+/* root and suffix are different roles (directory, then the fixed tail). */
+// NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
+static int format_db_path(char *buf, size_t buflen, char *err, size_t errlen, const char *root,
+                          const char *suffix)
+{
+    int n = snprintf(buf, buflen, "%s%s", root, suffix);
+
+    if (n < 0 || (size_t)n >= buflen) {
+        set_err(err, errlen, "database path is too long");
+        return -1;
+    }
+    return 0;
+}
+
+static const char *home_dir(char *err, size_t errlen, const char *missing)
+{
+    const char *home = env_nonempty("HOME");
+
+    if (home == NULL) {
+        set_err(err, errlen, missing);
+        return NULL;
+    }
+    return home;
+}
+
 int util_resolve_db_path(const char *cli_db, char *buf, size_t buflen, char *err, size_t errlen)
 {
     const char *chosen = NULL;
     const char *home = NULL;
-    int n = 0;
 
     if (buf == NULL || buflen == 0U) {
         set_err(err, errlen, "internal error: path buffer missing");
@@ -76,41 +132,42 @@ int util_resolve_db_path(const char *cli_db, char *buf, size_t buflen, char *err
     if (cli_db != NULL && cli_db[0] != '\0') {
         chosen = cli_db;
     } else {
-        /* Single-threaded CLI; getenv has no portable thread-safe variant in C11/POSIX. */
-        // NOLINTNEXTLINE(concurrency-mt-unsafe)
-        chosen = getenv("REMEMBER_DB");
-        if (chosen != NULL && chosen[0] == '\0') {
-            chosen = NULL;
-        }
+        chosen = env_nonempty("REMEMBER_DB");
     }
-
     if (chosen != NULL) {
-        if (path_is_ephemeral(chosen)) {
-            set_err(err, errlen,
-                    "database path must be a regular file (not :memory: or file: URI)");
-            return -1;
-        }
-        if (strlen(chosen) >= buflen) {
-            set_err(err, errlen, "database path is too long");
-            return -1;
-        }
-        memcpy(buf, chosen, strlen(chosen) + 1U);
-        return 0;
+        return copy_regular_db_path(chosen, buf, buflen, err, errlen);
+    }
+    home = home_dir(err, errlen, "HOME is not set; pass --db PATH");
+    if (home == NULL) {
+        return -1;
+    }
+    return format_db_path(buf, buflen, err, errlen, home, "/.remember/remember.db");
+}
+
+/* cppcheck-suppress staticFunction ; public API (util.h); used by tests */
+int util_resolve_user_db_path(char *buf, size_t buflen, char *err, size_t errlen)
+{
+    const char *chosen = NULL;
+    const char *home = NULL;
+
+    if (buf == NULL || buflen == 0U) {
+        set_err(err, errlen, "internal error: path buffer missing");
+        return -1;
     }
 
-    /* Single-threaded CLI; getenv has no portable thread-safe variant in C11/POSIX. */
-    // NOLINTNEXTLINE(concurrency-mt-unsafe)
-    home = getenv("HOME");
-    if (home == NULL || home[0] == '\0') {
-        set_err(err, errlen, "HOME is not set; pass --db PATH");
+    chosen = env_nonempty("REMEMBER_USER_DB");
+    if (chosen != NULL) {
+        return copy_regular_db_path(chosen, buf, buflen, err, errlen);
+    }
+    chosen = env_nonempty("XDG_DATA_HOME");
+    if (chosen != NULL) {
+        return format_db_path(buf, buflen, err, errlen, chosen, "/remember/user.db");
+    }
+    home = home_dir(err, errlen, "HOME is not set");
+    if (home == NULL) {
         return -1;
     }
-    n = snprintf(buf, buflen, "%s/.remember/remember.db", home);
-    if (n < 0 || (size_t)n >= buflen) {
-        set_err(err, errlen, "database path is too long");
-        return -1;
-    }
-    return 0;
+    return format_db_path(buf, buflen, err, errlen, home, "/.remember/user.db");
 }
 
 int util_read_stdin(char **out, size_t *out_len, size_t max_len)

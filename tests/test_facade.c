@@ -7,12 +7,15 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
+/* mkdtemp: Darwin in unistd.h; glibc via stdlib + _POSIX_C_SOURCE. */
+#ifdef __APPLE__
 #include <unistd.h>
+#endif
 
 enum {
     FACADE_ARGV_MAX = 32, /* max argv slots built for remember_run */
     FACADE_PATH_BUF = 192,
-    FACADE_CMD_BUF = 400,
     FACADE_SQL_BUF = 320,
     FACADE_SIDE_BUF = 208,
     FACADE_LINE_BUF = 80
@@ -26,7 +29,7 @@ static char *facade_sidecar_id(const char *db)
     size_t n = 0;
     char *out = NULL;
 
-    (void)snprintf(side, sizeof(side), "%s.device_id", db);
+    (void)snprintf(side, sizeof(side), "%s.d/device_id", db);
     /* NOLINTNEXTLINE(android-cloexec-fopen) */
     f = fopen(side, "r");
     if (f == NULL || fgets(buf, (int)sizeof(buf), f) == NULL) {
@@ -552,7 +555,7 @@ TEST(facade_import_matches_cli)
 TEST(facade_conflicts_matches_cli)
 {
     char tmpl[] = "/tmp/remember-facade-c-XXXXXX";
-    char *dir = NULL;
+    const char *dir = NULL;
     char local[FACADE_PATH_BUF];
     char foreign[FACADE_PATH_BUF];
     CmdResult r;
@@ -572,27 +575,25 @@ TEST(facade_conflicts_matches_cli)
     r = run_remember(local, add, sizeof(add) / sizeof(add[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 0);
     cmd_result_free(&r);
-    {
-        char cp[FACADE_CMD_BUF];
-        (void)snprintf(cp, sizeof(cp), "cp '%s' '%s'", local, foreign);
-        ASSERT_EQ_INT(system(cp), 0);
-    }
+    ASSERT_EQ_INT(harness_copy_file(local, foreign), 0);
     /* The real sha256("incoming"): import rejects a forged hash. */
     free(harness_sqlite_query_line(
-        foreign, "UPDATE entries SET body='incoming', "
-                 "body_hash='3a7470e00c076b678c41c8ae4a4945198a9e243cdb42e044612535facb5f225d',"
-                 "version_vector='{\"bbbbbbbb-bbbb-7bbb-bbbb-bbbbbbbbbbbb\":1}' WHERE id=1;"));
+        foreign,
+        "UPDATE entries SET body='incoming', "
+        "body_hash='3a7470e00c076b678c41c8ae4a4945198a9e243cdb42e044612535facb5f225d',"
+        "version_vector='{\"bbbbbbbb-bbbb-7bbb-bbbb-bbbbbbbbbbbb\":1}' WHERE local_id=1;"));
     dev = facade_sidecar_id(local);
     ASSERT_TRUE(dev != NULL);
     {
         char sql[FACADE_SQL_BUF];
         (void)snprintf(sql, sizeof(sql),
-                       "UPDATE entries SET version_vector='{\"%s\":1}' WHERE id=1;", dev);
+                       "UPDATE entries SET version_vector='{\"%s\":1}' WHERE local_id=1;", dev);
         free(harness_sqlite_query_line(local, sql));
     }
     free(dev);
 
     imp[3] = foreign;
+    harness_make_v5_source(foreign);
     r = run_remember(local, imp, sizeof(imp) / sizeof(imp[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 0);
     ASSERT_STR_CONTAINS(r.out, "\"conflicts\":1");
@@ -600,20 +601,13 @@ TEST(facade_conflicts_matches_cli)
 
     assert_read_parity(local, cmd, sizeof(cmd) / sizeof(cmd[0]));
 
-    (void)remove(local);
-    (void)remove(foreign);
-    {
-        char side[FACADE_SIDE_BUF];
-        (void)snprintf(side, sizeof(side), "%s.device_id", local);
-        (void)remove(side);
-    }
-    (void)rmdir(dir);
+    harness_remove_tree(dir);
 }
 
 TEST(facade_conflict_accept_matches_cli)
 {
     char tmpl[] = "/tmp/remember-facade-a-XXXXXX";
-    char *dir = NULL;
+    const char *dir = NULL;
     char local1[FACADE_PATH_BUF];
     char local2[FACADE_PATH_BUF];
     char foreign[FACADE_PATH_BUF];
@@ -638,36 +632,40 @@ TEST(facade_conflict_accept_matches_cli)
     r = run_remember(local1, add, sizeof(add) / sizeof(add[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 0);
     cmd_result_free(&r);
-    {
-        char cp[FACADE_CMD_BUF];
-        (void)snprintf(cp, sizeof(cp), "cp '%s' '%s'", local1, foreign);
-        ASSERT_EQ_INT(system(cp), 0);
-    }
+    ASSERT_EQ_INT(harness_copy_file(local1, foreign), 0);
     /* The real sha256("incoming"): import rejects a forged hash. */
     free(harness_sqlite_query_line(
-        foreign, "UPDATE entries SET body='incoming', "
-                 "body_hash='3a7470e00c076b678c41c8ae4a4945198a9e243cdb42e044612535facb5f225d',"
-                 "version_vector='{\"bbbbbbbb-bbbb-7bbb-bbbb-bbbbbbbbbbbb\":1}' WHERE id=1;"));
+        foreign,
+        "UPDATE entries SET body='incoming', "
+        "body_hash='3a7470e00c076b678c41c8ae4a4945198a9e243cdb42e044612535facb5f225d',"
+        "version_vector='{\"bbbbbbbb-bbbb-7bbb-bbbb-bbbbbbbbbbbb\":1}' WHERE local_id=1;"));
     dev = facade_sidecar_id(local1);
     ASSERT_TRUE(dev != NULL);
     {
         char sql[FACADE_SQL_BUF];
         (void)snprintf(sql, sizeof(sql),
-                       "UPDATE entries SET version_vector='{\"%s\":1}' WHERE id=1;", dev);
+                       "UPDATE entries SET version_vector='{\"%s\":1}' WHERE local_id=1;", dev);
         free(harness_sqlite_query_line(local1, sql));
     }
     free(dev);
 
     imp[3] = foreign;
+    harness_make_v5_source(foreign);
     r = run_remember(local1, imp, sizeof(imp) / sizeof(imp[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 0);
     cmd_result_free(&r);
     {
-        char cp[FACADE_CMD_BUF];
         /* Same writer id, or accept bumps a freshly minted id and the vectors differ. */
-        (void)snprintf(cp, sizeof(cp), "cp '%s' '%s' && cp '%s.device_id' '%s.device_id'", local1,
-                       local2, local1, local2);
-        ASSERT_EQ_INT(system(cp), 0);
+        char *dir2 = harness_side_path(local2, ".d");
+        char *id1 = harness_sidecar_path(local1);
+        char *id2 = harness_sidecar_path(local2);
+
+        ASSERT_EQ_INT(harness_copy_file(local1, local2), 0);
+        ASSERT_EQ_INT(mkdir(dir2, S_IRWXU), 0);
+        ASSERT_EQ_INT(harness_copy_file(id1, id2), 0);
+        free(id2);
+        free(id1);
+        free(dir2);
     }
 
     r = run_remember(local1, accept, sizeof(accept) / sizeof(accept[0]), NULL);
@@ -682,17 +680,7 @@ TEST(facade_conflict_accept_matches_cli)
     free(ferr);
     cmd_result_free(&r);
 
-    (void)remove(local1);
-    (void)remove(local2);
-    (void)remove(foreign);
-    {
-        char side[FACADE_SIDE_BUF];
-        (void)snprintf(side, sizeof(side), "%s.device_id", local1);
-        (void)remove(side);
-        (void)snprintf(side, sizeof(side), "%s.device_id", local2);
-        (void)remove(side);
-    }
-    (void)rmdir(dir);
+    harness_remove_tree(dir);
 }
 // NOLINTEND(bugprone-command-processor,cert-env33-c,concurrency-mt-unsafe)
 

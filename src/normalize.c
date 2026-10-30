@@ -1,8 +1,11 @@
 #include "normalize.h"
 
 #include "sha256.h"
+#include "unicode.h"
 
+#include <limits.h>
 #include <stdbool.h>
+#include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -580,6 +583,288 @@ bool source_is_valid(const char *s)
         }
     }
     return false;
+}
+
+/* ---- bucket prefixes (007 ST-5.4) ---------------------------------------- */
+
+static bool bucket_prefix_point_ok(uint32_t cp)
+{
+    /* \p{L} is the five letter categories, LU through LO in the enum. */
+    UnicodeCategory cat = unicode_category(cp);
+
+    if (cp == (uint32_t)'-' || cp == (uint32_t)'_' || cp == (uint32_t)'.') {
+        return true;
+    }
+    if (cat >= UNICODE_CAT_LU && cat <= UNICODE_CAT_LO) {
+        return true;
+    }
+    return cat == UNICODE_CAT_ND;
+}
+
+NormStatus bucket_prefix_fold(const char *src, char *out, size_t out_cap)
+{
+    NormStatus st = NORM_OK;
+    size_t len = 0;
+    size_t name_len = 0;
+    size_t i = 0;
+    size_t points = 0;
+
+    if (src == NULL || out == NULL || out_cap < (size_t)REMEMBER_BUCKET_PREFIX_BUF) {
+        return NORM_ERR_INTERNAL;
+    }
+    len = strlen(src);
+    name_len = (len > 0U) ? len - 1U : 0U;
+    if (len == 0U || src[name_len] != ':') {
+        st = NORM_ERR_INVALID_CHAR;
+    } else if (name_len == 0U) {
+        st = NORM_ERR_EMPTY;
+    }
+    while (st == NORM_OK && i < name_len) {
+        uint32_t cp = 0;
+        size_t nbytes = 0;
+
+        if (unicode_decode(src + i, name_len - i, &cp, &nbytes) != UNICODE_OK) {
+            st = NORM_ERR_INVALID_UTF8;
+        } else if (!bucket_prefix_point_ok(cp)) {
+            st = NORM_ERR_INVALID_CHAR;
+        } else if (++points > (size_t)REMEMBER_BUCKET_PREFIX_MAX_POINTS) {
+            st = NORM_ERR_TOO_LONG;
+        } else {
+            memcpy(out + i, src + i, nbytes);
+            if (cp >= (uint32_t)'A' && cp <= (uint32_t)'Z') {
+                out[i] = (char)(cp - (uint32_t)'A' + (uint32_t)'a');
+            }
+            i += nbytes;
+        }
+    }
+    if (st != NORM_OK) {
+        out[0] = '\0';
+        return st;
+    }
+    out[name_len] = ':';
+    out[len] = '\0';
+    return NORM_OK;
+}
+
+/* ---- duration and size (plan 20) ---------------------------------------- */
+
+enum {
+    MEASURE_FRAC_MAX = 15,
+    DECIMAL_BASE = 10,
+    CANON_FRAC_SCALE = 1000, /* 10^3: at most three fraction digits */
+    LLONG_DIGIT_CAP = 20     /* 19 digits of LLONG_MAX, plus one */
+};
+
+typedef struct MeasureUnit {
+    const char *suffix;
+    long long mul;
+} MeasureUnit;
+
+static char *write_ll(char *p, long long v)
+{
+    char tmp[LLONG_DIGIT_CAP];
+    int n = 0;
+    int i = 0;
+
+    if (v == 0) {
+        *p++ = '0';
+        return p;
+    }
+    while (v > 0) {
+        tmp[n++] = (char)('0' + (int)(v % DECIMAL_BASE));
+        v /= DECIMAL_BASE;
+    }
+    for (i = n - 1; i >= 0; i--) {
+        *p++ = tmp[i];
+    }
+    return p;
+}
+
+typedef struct ScaledParts {
+    long long lead;
+    long long frac;
+    long long mul;
+    int frac_n;
+    char pad_[4]; /* explicit tail padding (kept -Wpadded-clean) */
+} ScaledParts;
+
+static bool scaled_whole(ScaledParts parts, long long *whole)
+{
+    long long scale = 1;
+    long long base = 0;
+    long long add = 0;
+    int i = 0;
+
+    for (i = 0; i < parts.frac_n; i++) {
+        scale *= DECIMAL_BASE;
+    }
+    if (parts.lead > LLONG_MAX / parts.mul) {
+        return false;
+    }
+    base = parts.lead * parts.mul;
+    if (parts.frac > 0 && parts.mul > LLONG_MAX / parts.frac) {
+        return false;
+    }
+    add = parts.frac * parts.mul;
+    if (add % scale != 0) {
+        return false;
+    }
+    add /= scale;
+    if (base > LLONG_MAX - add) {
+        return false;
+    }
+    *whole = base + add;
+    return true;
+}
+
+/* Largest unit whose quotient is at least 1 and has at most 3 fraction digits.
+   0 stays on the smallest unit, which is the last row. */
+static void format_canonical(long long whole, const MeasureUnit *units, int n, char *out)
+{
+    int i = 0;
+    const MeasureUnit *chosen = &units[n - 1];
+    long long rem = 0;
+    int d3 = 0;
+    int len = 3;
+    char digits[3];
+    char *p = NULL;
+
+    for (i = 0; i < n; i++) {
+        if (whole < units[i].mul) {
+            continue;
+        }
+        rem = whole % units[i].mul;
+        if ((rem * CANON_FRAC_SCALE) % units[i].mul != 0) {
+            continue;
+        }
+        chosen = &units[i];
+        break;
+    }
+    rem = whole % chosen->mul;
+    d3 = (int)((rem * CANON_FRAC_SCALE) / chosen->mul);
+    digits[0] = (char)('0' + (d3 / (DECIMAL_BASE * DECIMAL_BASE)));
+    digits[1] = (char)('0' + ((d3 / DECIMAL_BASE) % DECIMAL_BASE));
+    digits[2] = (char)('0' + (d3 % DECIMAL_BASE));
+    while (len > 0 && digits[len - 1] == '0') {
+        len--;
+    }
+    p = write_ll(out, whole / chosen->mul);
+    if (len > 0) {
+        int k = 0;
+
+        *p++ = '.';
+        for (k = 0; k < len; k++) {
+            *p++ = digits[k];
+        }
+    }
+    for (i = 0; chosen->suffix[i] != '\0'; i++) {
+        *p++ = chosen->suffix[i];
+    }
+    *p = '\0';
+}
+
+/* A full buffer is emptied on every false return, including NULL src.
+   A short buffer is left untouched. */
+static bool measure_args_ok(const char *src, const long long *whole, char *out, size_t out_cap)
+{
+    if (out != NULL && out_cap >= (size_t)NORM_MEASURE_CANON_CAP) {
+        out[0] = '\0';
+    } else {
+        return false;
+    }
+    if (src == NULL || whole == NULL) {
+        return false;
+    }
+    return true;
+}
+
+static bool measure_canonical(const char *src, const MeasureUnit *units, int n, long long *whole,
+                              char *out, size_t out_cap)
+{
+    const char *p = NULL;
+    long long lead = 0;
+    long long frac = 0;
+    int frac_n = 0;
+    int idx = 0;
+    bool matched = false;
+
+    if (!measure_args_ok(src, whole, out, out_cap)) {
+        return false;
+    }
+    p = src;
+    if (*p < '0' || *p > '9') {
+        return false;
+    }
+    while (*p >= '0' && *p <= '9') {
+        int dig = *p - '0';
+
+        if (lead > (LLONG_MAX - dig) / DECIMAL_BASE) {
+            return false;
+        }
+        lead = (lead * DECIMAL_BASE) + dig;
+        p++;
+    }
+    if (*p == '.') {
+        p++;
+        if (*p < '0' || *p > '9') {
+            return false;
+        }
+        while (*p >= '0' && *p <= '9') {
+            int dig = *p - '0';
+
+            if (frac_n == MEASURE_FRAC_MAX) {
+                return false;
+            }
+            frac = (frac * DECIMAL_BASE) + dig;
+            frac_n++;
+            p++;
+        }
+    }
+    for (idx = 0; idx < n; idx++) {
+        size_t len = strlen(units[idx].suffix);
+
+        if (strncmp(p, units[idx].suffix, len) == 0 && p[len] == '\0') {
+            matched = true;
+            break;
+        }
+    }
+    if (!matched) {
+        return false;
+    }
+    if (!scaled_whole(
+            (ScaledParts){.lead = lead, .frac = frac, .mul = units[idx].mul, .frac_n = frac_n},
+            whole)) {
+        return false;
+    }
+    format_canonical(*whole, units, n, out);
+    return true;
+}
+
+/* cppcheck-suppress staticFunction ; public API (normalize.h); used by tests */
+bool norm_duration_canonical(const char *src, long long *whole_ms, char *out, size_t out_cap)
+{
+    static const MeasureUnit units[] = {
+        {"h", 3600000LL},
+        {"m", 60000LL},
+        {"s", 1000LL},
+        {"ms", 1LL},
+    };
+
+    return measure_canonical(src, units, (int)(sizeof(units) / sizeof(units[0])), whole_ms, out,
+                             out_cap);
+}
+
+/* cppcheck-suppress staticFunction ; public API (normalize.h); used by tests */
+bool norm_size_canonical(const char *src, long long *whole_bytes, char *out, size_t out_cap)
+{
+    static const MeasureUnit units[] = {
+        {"MiB", 1048576LL},
+        {"KiB", 1024LL},
+        {"B", 1LL},
+    };
+
+    return measure_canonical(src, units, (int)(sizeof(units) / sizeof(units[0])), whole_bytes, out,
+                             out_cap);
 }
 
 /* ---- hash ---------------------------------------------------------------- */

@@ -105,4 +105,39 @@ bool vv_json_is_canonical(const char *s);
 /* One of the closed source tokens: human, agent, tool, share, unknown. */
 bool source_is_valid(const char *s);
 
+/* Bucket prefix (007 ST-5.4): at most 32 code points before the ':'. */
+enum { REMEMBER_BUCKET_PREFIX_MAX_POINTS = 32 };
+/* Output bytes: 32 four-byte code points, the ':', and the NUL. */
+enum { REMEMBER_BUCKET_PREFIX_BUF = (REMEMBER_BUCKET_PREFIX_MAX_POINTS * 4) + 2 };
+
+/*
+ * 007 ST-5.4: 1 to 32 code points of \p{L}, \p{Nd}, '-', '_' or '.', then one
+ * ':'. ASCII letters fold to lowercase. No trim and no NFC: the input is the
+ * stored text. NORM_OK writes the folded prefix into out. An empty name or no
+ * final ':' is NORM_ERR_EMPTY or NORM_ERR_INVALID_CHAR, any other code point
+ * is NORM_ERR_INVALID_CHAR, more than 32 is NORM_ERR_TOO_LONG, ill-formed
+ * UTF-8 is NORM_ERR_INVALID_UTF8; each of these leaves out empty. NULL src
+ * or out, or out_cap below REMEMBER_BUCKET_PREFIX_BUF, is NORM_ERR_INTERNAL
+ * and writes nothing.
+ */
+NormStatus bucket_prefix_fold(const char *src, char *out, size_t out_cap);
+
+/* Canonical duration or size text, including the NUL. Long enough for any
+   whole-millisecond or whole-byte value that fits in a long long. */
+enum { NORM_MEASURE_CANON_CAP = 24 };
+
+/*
+ * Duration grammar ^[0-9]+(\.[0-9]{1,15})?(ms|s|m|h)$ as a whole number of
+ * milliseconds, then the canonical unit: the largest of h, m, s, ms in which
+ * the number is at least 1 and has at most 3 fraction digits. No trailing
+ * zeros. 0 uses ms. False leaves *whole_ms unchanged. A buffer of
+ * NORM_MEASURE_CANON_CAP bytes is left empty, including when src or
+ * whole_ms is NULL. A shorter buffer is not written.
+ */
+bool norm_duration_canonical(const char *src, long long *whole_ms, char *out, size_t out_cap);
+
+/* Same rules for ^[0-9]+(\.[0-9]{1,15})?(MiB|KiB|B)$ and a whole number of
+   bytes. 0 uses B. */
+bool norm_size_canonical(const char *src, long long *whole_bytes, char *out, size_t out_cap);
+
 #endif /* REMEMBER_NORMALIZE_H */
