@@ -18,9 +18,13 @@ typedef struct SyncCredentialLookup {
     size_t err_cap;
 } SyncCredentialLookup;
 
-/* 0: token holds a secret, or "" when no row and REMEMBER_SYNC_TOKEN is
-   missing or empty. 1: the key is set and no token came back; the diag
-   emitter wrote sync_credential_unavailable and token is wiped. -1: the
+/* A token is ASCII-trimmed (env) or the trimmed first line (CLI helper), and
+   holds no C0 control and no DEL.
+   0: token holds a secret, or "" when no row and REMEMBER_SYNC_TOKEN is
+   missing, empty or only whitespace. 1: the key is set and no usable token
+   came back; the diag emitter wrote sync_credential_unavailable and token is
+   wiped. 2: no row, and REMEMBER_SYNC_TOKEN is too long or holds a control
+   byte; nothing is printed (COPY-PENDING C-42) and token is wiped. -1: the
    store failed; err holds that existing sentence; token is wiped. */
 int sync_credential_lookup(SyncCredentialLookup *in);
 

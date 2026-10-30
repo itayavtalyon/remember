@@ -1,6 +1,7 @@
 #include "cmd_settings.h"
 
 #include "appio.h"
+#include "normalize.h"
 #include "settings.h"
 #include "sync_credential.h"
 
@@ -81,14 +82,6 @@ static int remaining_ms(long long deadline)
     return (int)left;
 }
 
-static bool ascii_space(unsigned char c)
-{
-    if (c == ' ' || c == '\t' || c == '\n' || c == '\v' || c == '\f' || c == '\r') {
-        return true;
-    }
-    return false;
-}
-
 /* EINTR is a retry. Any other negative rc is a real failure. */
 static bool interrupted(int rc)
 {
@@ -98,29 +91,17 @@ static bool interrupted(int rc)
     return false;
 }
 
-/* n is bytes already read; cap is the buffer size. */
+/* n is bytes already read, below cap; cap is the buffer size. */
 // NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
 static void trim_line(char *buf, size_t n, size_t cap)
 {
     size_t start = 0U;
     size_t end = n;
 
-    while (start < end && ascii_space((unsigned char)buf[start])) {
-        start++;
-    }
-    while (end > start && ascii_space((unsigned char)buf[end - 1U])) {
-        end--;
-    }
-    if (start > 0U) {
-        memmove(buf, buf + start, end - start);
-    }
-    n = end - start;
-    if (n < cap) {
-        buf[n] = '\0';
-    }
-    if (cap > n + 1U) {
-        sync_credential_wipe(buf + n + 1U, cap - n - 1U);
-    }
+    ascii_ws_trim(buf, &start, &end);
+    memmove(buf, buf + start, end - start);
+    /* n < cap, so this writes the NUL and clears the moved-from tail. */
+    sync_credential_wipe(buf + (end - start), cap - (end - start));
 }
 
 /* pid is the child. deadline is a CLOCK_MONOTONIC millisecond stamp. */
@@ -205,13 +186,14 @@ static int drain_stdout(int fd, long long deadline)
     }
 }
 
-/* Read the first stdout line into buf. 0 finished the line, -2 timed out or the read failed. */
-static int read_first_line(int read_fd, char *buf, size_t cap, bool *too_long, long long deadline)
+/* Read the first stdout line into buf. 0 finished the line, -2 timed out or the read failed.
+   refused: the line does not fit, or holds a NUL that would cut the token. */
+static int read_first_line(int read_fd, char *buf, size_t cap, bool *refused, long long deadline)
 {
     size_t n = 0U;
     bool line_done = false;
 
-    *too_long = false;
+    *refused = false;
     while (!line_done) {
         unsigned char byte = 0;
         ssize_t got = 0;
@@ -230,23 +212,18 @@ static int read_first_line(int read_fd, char *buf, size_t cap, bool *too_long, l
             line_done = true;
             continue;
         }
-        if (n + 1U < cap) {
+        if (byte != '\0' && n + 1U < cap) {
             buf[n] = (char)byte;
             n++;
             continue;
         }
-        *too_long = true;
+        *refused = true;
     }
-    if (n < cap) {
-        buf[n] = '\0';
-    }
-    if (!*too_long) {
+    /* A refused line is not terminated; the caller wipes it. */
+    if (!*refused) {
         trim_line(buf, n, cap);
     }
-    if (drain_stdout(read_fd, deadline) != 0) {
-        goto fail;
-    }
-    return 0;
+    return drain_stdout(read_fd, deadline);
 fail:
     return -2;
 }
@@ -326,7 +303,7 @@ int cli_credential_token(void *ctx, const char *helper_id, char *buf, size_t buf
     int errfd = 0;
     int spawned = 0;
     int wrote = 0;
-    bool too_long = false;
+    bool refused = false;
 
     (void)ctx;
     if (buf == NULL || buflen == 0U || helper_id == NULL || !helper_id_ok(helper_id)) {
@@ -346,7 +323,7 @@ int cli_credential_token(void *ctx, const char *helper_id, char *buf, size_t buf
     if (spawned != 0) {
         return spawned;
     }
-    if (read_first_line(read_fd, buf, buflen, &too_long, deadline) != 0 || too_long ||
+    if (read_first_line(read_fd, buf, buflen, &refused, deadline) != 0 || refused ||
         buf[0] == '\0') {
         sync_credential_wipe(buf, buflen);
         (void)killpg(pid, SIGKILL);

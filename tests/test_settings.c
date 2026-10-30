@@ -830,6 +830,28 @@ static void assert_notes(const char *path)
     ASSERT_STREQ(got, "notes\n");
 }
 
+/* A row in a layer the key does not allow is no value, on each side. */
+TEST(pick_ignores_a_layer_the_key_does_not_allow)
+{
+    const SettingSpec *budget = setting_by_key("remember.plugins.chain_budget");
+    const SettingSpec *prefixes = setting_by_key("remember.buckets.prefixes");
+    char out[SETTING_VALUE_CAP];
+
+    ASSERT_TRUE(budget != NULL && prefixes != NULL);
+    if (budget == NULL || prefixes == NULL) {
+        return;
+    }
+    ASSERT_EQ_INT(setting_pick(budget, "\"2s\"", "\"30s\"", NULL, out, sizeof(out)),
+                  SETTING_FROM_USER);
+    ASSERT_STREQ(out, "\"2s\"");
+    ASSERT_EQ_INT(setting_pick(budget, NULL, "\"30s\"", NULL, out, sizeof(out)),
+                  SETTING_FROM_DEFAULT);
+    ASSERT_STREQ(out, "\"1.5s\"");
+    ASSERT_EQ_INT(setting_pick(prefixes, "[\"a:\"]", NULL, NULL, out, sizeof(out)),
+                  SETTING_FROM_DEFAULT);
+    ASSERT_STREQ(out, "[\"project:\",\"status:\"]");
+}
+
 TEST(resolution_user_then_brain_then_tombstone_and_change_seq)
 {
     char tmpl[] = "/tmp/remember-set-XXXXXX";
@@ -1683,6 +1705,70 @@ TEST(programmer_errors_and_a_failed_prepare)
    reentrant form. macOS fopen has no "e" mode. */
 // NOLINTBEGIN(concurrency-mt-unsafe,android-cloexec-fopen)
 
+/* Copy REMEMBER_SYNC_TOKEN so the test can change it. False after a failed
+   assert when the copy cannot be made. */
+static bool save_sync_token(char **saved)
+{
+    const char *live = getenv("REMEMBER_SYNC_TOKEN");
+
+    *saved = NULL;
+    if (live == NULL) {
+        return true;
+    }
+    *saved = strdup(live);
+    ASSERT_TRUE(*saved != NULL);
+    return *saved != NULL;
+}
+
+static void restore_sync_token(char *saved)
+{
+    if (saved == NULL) {
+        (void)unsetenv("REMEMBER_SYNC_TOKEN");
+    } else {
+        (void)setenv("REMEMBER_SYNC_TOKEN", saved, 1);
+    }
+    free(saved);
+}
+
+static void preload(char *token, size_t cap)
+{
+    memset(token, 'Z', cap - 1U);
+    token[cap - 1U] = '\0';
+}
+
+static bool bytes_are_zero(const char *p, size_t n)
+{
+    size_t i = 0U;
+
+    for (i = 0U; i < n; i++) {
+        if (p[i] != '\0') {
+            return false;
+        }
+    }
+    return true;
+}
+
+/* Run one lookup with the diag stream captured into *diag_out. */
+static int cred_lookup(SyncCredentialLookup in, char **diag_out)
+{
+    char *diag_buf = NULL;
+    size_t diag_len = 0U;
+    FILE *diag = open_memstream(&diag_buf, &diag_len);
+    int rc = 99;
+
+    *diag_out = NULL;
+    if (diag == NULL) {
+        return 99;
+    }
+    app_set_streams((AppStreams){.out = NULL, .err = diag});
+    rc = sync_credential_lookup(&in);
+    ASSERT_EQ_INT(fflush(diag), 0);
+    app_set_streams((AppStreams){.out = NULL, .err = NULL});
+    ASSERT_EQ_INT(fclose(diag), 0);
+    *diag_out = diag_buf;
+    return rc;
+}
+
 /* Matches remember_token_fn. This stub does not write buf. */
 // NOLINTNEXTLINE(readability-non-const-parameter)
 static int fail_if_token_called(void *ctx, const char *helper_id, char *buf, size_t buflen)
@@ -1709,22 +1795,13 @@ TEST(no_row_reads_remember_sync_token)
     char token[64];
     char *saved = NULL;
     char *diag_buf = NULL;
-    size_t diag_len = 0U;
-    const char *live = NULL;
-    FILE *diag = NULL;
     Store *store = NULL;
     RememberEnv host;
-    SyncCredentialLookup lookup;
     int calls = 0;
     int rc = 99;
 
-    live = getenv("REMEMBER_SYNC_TOKEN");
-    if (live != NULL) {
-        saved = strdup(live);
-        ASSERT_TRUE(saved != NULL);
-        if (saved == NULL) {
-            return;
-        }
+    if (!save_sync_token(&saved)) {
+        return;
     }
     store = open_pair(tmpl, brain, sizeof(brain), userdb, sizeof(userdb));
     if (store == NULL) {
@@ -1739,31 +1816,14 @@ TEST(no_row_reads_remember_sync_token)
     memset(token, 'Z', sizeof(token) - 1U);
     token[sizeof(token) - 1U] = '\0';
     err[0] = '\0';
-    diag = open_memstream(&diag_buf, &diag_len);
-    ASSERT_TRUE(diag != NULL);
-    if (diag == NULL) {
-        if (saved == NULL) {
-            (void)unsetenv("REMEMBER_SYNC_TOKEN");
-        } else {
-            (void)setenv("REMEMBER_SYNC_TOKEN", saved, 1);
-        }
-        free(saved);
-        close_pair(store, tmpl);
-        return;
-    }
-    app_set_streams((AppStreams){.out = NULL, .err = diag});
-    memset(&lookup, 0, sizeof(lookup));
-    lookup.store = store;
-    lookup.user_db = userdb;
-    lookup.host = &host;
-    lookup.token = token;
-    lookup.token_cap = sizeof(token);
-    lookup.err = err;
-    lookup.err_cap = sizeof(err);
-    rc = sync_credential_lookup(&lookup);
-    ASSERT_EQ_INT(fflush(diag), 0);
-    app_set_streams((AppStreams){.out = NULL, .err = NULL});
-    ASSERT_EQ_INT(fclose(diag), 0);
+    rc = cred_lookup((SyncCredentialLookup){.store = store,
+                                            .user_db = userdb,
+                                            .host = &host,
+                                            .token = token,
+                                            .token_cap = sizeof(token),
+                                            .err = err,
+                                            .err_cap = sizeof(err)},
+                     &diag_buf);
     ASSERT_EQ_INT(rc, 0);
     ASSERT_STREQ(token, "s3cret-token");
     ASSERT_TRUE(memchr(token + strlen(token) + 1U, 'Z', sizeof(token) - strlen(token) - 1U) ==
@@ -1771,12 +1831,7 @@ TEST(no_row_reads_remember_sync_token)
     ASSERT_EQ_INT(calls, 0);
     ASSERT_STREQ(diag_buf, "");
     ASSERT_STR_NOT_CONTAINS(diag_buf, "s3cret-token");
-    if (saved == NULL) {
-        (void)unsetenv("REMEMBER_SYNC_TOKEN");
-    } else {
-        (void)setenv("REMEMBER_SYNC_TOKEN", saved, 1);
-    }
-    free(saved);
+    restore_sync_token(saved);
     free(diag_buf);
     close_pair(store, tmpl);
 }
@@ -1792,22 +1847,13 @@ TEST(no_row_without_remember_sync_token_returns_no_token)
     char token[64];
     char *saved = NULL;
     char *diag_buf = NULL;
-    size_t diag_len = 0U;
-    const char *live = NULL;
-    FILE *diag = NULL;
     Store *store = NULL;
     RememberEnv host;
-    SyncCredentialLookup lookup;
     int calls = 0;
     int rc = 99;
 
-    live = getenv("REMEMBER_SYNC_TOKEN");
-    if (live != NULL) {
-        saved = strdup(live);
-        ASSERT_TRUE(saved != NULL);
-        if (saved == NULL) {
-            return;
-        }
+    if (!save_sync_token(&saved)) {
+        return;
     }
     store = open_pair(tmpl, brain, sizeof(brain), userdb, sizeof(userdb));
     if (store == NULL) {
@@ -1820,41 +1866,19 @@ TEST(no_row_without_remember_sync_token_returns_no_token)
     host.callback_ctx = &calls;
     memset(token, 'Z', sizeof(token) - 1U);
     token[sizeof(token) - 1U] = '\0';
-    diag = open_memstream(&diag_buf, &diag_len);
-    ASSERT_TRUE(diag != NULL);
-    if (diag == NULL) {
-        if (saved == NULL) {
-            (void)unsetenv("REMEMBER_SYNC_TOKEN");
-        } else {
-            (void)setenv("REMEMBER_SYNC_TOKEN", saved, 1);
-        }
-        free(saved);
-        close_pair(store, tmpl);
-        return;
-    }
-    app_set_streams((AppStreams){.out = NULL, .err = diag});
-    memset(&lookup, 0, sizeof(lookup));
-    lookup.store = store;
-    lookup.user_db = userdb;
-    lookup.host = &host;
-    lookup.token = token;
-    lookup.token_cap = sizeof(token);
-    lookup.err = err;
-    lookup.err_cap = sizeof(err);
-    rc = sync_credential_lookup(&lookup);
-    ASSERT_EQ_INT(fflush(diag), 0);
-    app_set_streams((AppStreams){.out = NULL, .err = NULL});
-    ASSERT_EQ_INT(fclose(diag), 0);
+    rc = cred_lookup((SyncCredentialLookup){.store = store,
+                                            .user_db = userdb,
+                                            .host = &host,
+                                            .token = token,
+                                            .token_cap = sizeof(token),
+                                            .err = err,
+                                            .err_cap = sizeof(err)},
+                     &diag_buf);
     ASSERT_EQ_INT(rc, 0);
     ASSERT_STREQ(token, "");
     ASSERT_EQ_INT(calls, 0);
     ASSERT_STREQ(diag_buf, "");
-    if (saved == NULL) {
-        (void)unsetenv("REMEMBER_SYNC_TOKEN");
-    } else {
-        (void)setenv("REMEMBER_SYNC_TOKEN", saved, 1);
-    }
-    free(saved);
+    restore_sync_token(saved);
     free(diag_buf);
     close_pair(store, tmpl);
 }
@@ -1869,20 +1893,11 @@ TEST(no_row_with_empty_remember_sync_token_returns_no_token)
     char token[64];
     char *saved = NULL;
     char *diag_buf = NULL;
-    size_t diag_len = 0U;
-    const char *live = NULL;
-    FILE *diag = NULL;
     Store *store = NULL;
-    SyncCredentialLookup lookup;
     int rc = 99;
 
-    live = getenv("REMEMBER_SYNC_TOKEN");
-    if (live != NULL) {
-        saved = strdup(live);
-        ASSERT_TRUE(saved != NULL);
-        if (saved == NULL) {
-            return;
-        }
+    if (!save_sync_token(&saved)) {
+        return;
     }
     store = open_pair(tmpl, brain, sizeof(brain), userdb, sizeof(userdb));
     if (store == NULL) {
@@ -1892,40 +1907,18 @@ TEST(no_row_with_empty_remember_sync_token_returns_no_token)
     ASSERT_EQ_INT(setenv("REMEMBER_SYNC_TOKEN", "", 1), 0);
     memset(token, 'Z', sizeof(token) - 1U);
     token[sizeof(token) - 1U] = '\0';
-    diag = open_memstream(&diag_buf, &diag_len);
-    ASSERT_TRUE(diag != NULL);
-    if (diag == NULL) {
-        if (saved == NULL) {
-            (void)unsetenv("REMEMBER_SYNC_TOKEN");
-        } else {
-            (void)setenv("REMEMBER_SYNC_TOKEN", saved, 1);
-        }
-        free(saved);
-        close_pair(store, tmpl);
-        return;
-    }
-    app_set_streams((AppStreams){.out = NULL, .err = diag});
-    memset(&lookup, 0, sizeof(lookup));
-    lookup.store = store;
-    lookup.user_db = userdb;
-    lookup.host = NULL;
-    lookup.token = token;
-    lookup.token_cap = sizeof(token);
-    lookup.err = err;
-    lookup.err_cap = sizeof(err);
-    rc = sync_credential_lookup(&lookup);
-    ASSERT_EQ_INT(fflush(diag), 0);
-    app_set_streams((AppStreams){.out = NULL, .err = NULL});
-    ASSERT_EQ_INT(fclose(diag), 0);
+    rc = cred_lookup((SyncCredentialLookup){.store = store,
+                                            .user_db = userdb,
+                                            .host = NULL,
+                                            .token = token,
+                                            .token_cap = sizeof(token),
+                                            .err = err,
+                                            .err_cap = sizeof(err)},
+                     &diag_buf);
     ASSERT_EQ_INT(rc, 0);
     ASSERT_STREQ(token, "");
     ASSERT_STREQ(diag_buf, "");
-    if (saved == NULL) {
-        (void)unsetenv("REMEMBER_SYNC_TOKEN");
-    } else {
-        (void)setenv("REMEMBER_SYNC_TOKEN", saved, 1);
-    }
-    free(saved);
+    restore_sync_token(saved);
     free(diag_buf);
     close_pair(store, tmpl);
 }
@@ -1940,24 +1933,15 @@ TEST(env_helper_reads_remember_sync_token)
     char token[64];
     char *saved = NULL;
     char *diag_buf = NULL;
-    size_t diag_len = 0U;
-    const char *live = NULL;
-    FILE *diag = NULL;
     Store *store = NULL;
     RememberEnv host;
-    SyncCredentialLookup lookup;
     SettingWriteResult wr;
     SettingStatus st = SETTING_OK;
     int calls = 0;
     int rc = 99;
 
-    live = getenv("REMEMBER_SYNC_TOKEN");
-    if (live != NULL) {
-        saved = strdup(live);
-        ASSERT_TRUE(saved != NULL);
-        if (saved == NULL) {
-            return;
-        }
+    if (!save_sync_token(&saved)) {
+        return;
     }
     store = open_pair(tmpl, brain, sizeof(brain), userdb, sizeof(userdb));
     if (store == NULL) {
@@ -1973,94 +1957,21 @@ TEST(env_helper_reads_remember_sync_token)
     host.callback_ctx = &calls;
     memset(token, 'Z', sizeof(token) - 1U);
     token[sizeof(token) - 1U] = '\0';
-    diag = open_memstream(&diag_buf, &diag_len);
-    ASSERT_TRUE(diag != NULL);
-    if (diag == NULL) {
-        if (saved == NULL) {
-            (void)unsetenv("REMEMBER_SYNC_TOKEN");
-        } else {
-            (void)setenv("REMEMBER_SYNC_TOKEN", saved, 1);
-        }
-        free(saved);
-        close_pair(store, tmpl);
-        return;
-    }
-    app_set_streams((AppStreams){.out = NULL, .err = diag});
-    memset(&lookup, 0, sizeof(lookup));
-    lookup.store = store;
-    lookup.user_db = userdb;
-    lookup.host = &host;
-    lookup.token = token;
-    lookup.token_cap = sizeof(token);
-    lookup.err = err;
-    lookup.err_cap = sizeof(err);
-    rc = sync_credential_lookup(&lookup);
-    ASSERT_EQ_INT(fflush(diag), 0);
-    app_set_streams((AppStreams){.out = NULL, .err = NULL});
-    ASSERT_EQ_INT(fclose(diag), 0);
+    rc = cred_lookup((SyncCredentialLookup){.store = store,
+                                            .user_db = userdb,
+                                            .host = &host,
+                                            .token = token,
+                                            .token_cap = sizeof(token),
+                                            .err = err,
+                                            .err_cap = sizeof(err)},
+                     &diag_buf);
     ASSERT_EQ_INT(rc, 0);
     ASSERT_STREQ(token, "s3cret-token");
     ASSERT_EQ_INT(calls, 0);
     ASSERT_STREQ(diag_buf, "");
-    if (saved == NULL) {
-        (void)unsetenv("REMEMBER_SYNC_TOKEN");
-    } else {
-        (void)setenv("REMEMBER_SYNC_TOKEN", saved, 1);
-    }
-    free(saved);
+    restore_sync_token(saved);
     free(diag_buf);
     close_pair(store, tmpl);
-}
-
-static bool bytes_are_zero(const char *p, size_t n)
-{
-    size_t i = 0U;
-
-    for (i = 0U; i < n; i++) {
-        if (p[i] != '\0') {
-            return false;
-        }
-    }
-    return true;
-}
-
-typedef struct {
-    Store *store;
-    const char *user_db;
-    RememberEnv *host;
-    char *token;
-    size_t token_cap;
-    char *err;
-    size_t err_cap;
-} CredIn;
-
-static int cred_lookup(CredIn in, char **diag_out)
-{
-    char *diag_buf = NULL;
-    size_t diag_len = 0U;
-    FILE *diag = open_memstream(&diag_buf, &diag_len);
-    SyncCredentialLookup lookup;
-    int rc = 99;
-
-    *diag_out = NULL;
-    if (diag == NULL) {
-        return 99;
-    }
-    app_set_streams((AppStreams){.out = NULL, .err = diag});
-    memset(&lookup, 0, sizeof(lookup));
-    lookup.store = in.store;
-    lookup.user_db = in.user_db;
-    lookup.host = in.host;
-    lookup.token = in.token;
-    lookup.token_cap = in.token_cap;
-    lookup.err = in.err;
-    lookup.err_cap = in.err_cap;
-    rc = sync_credential_lookup(&lookup);
-    ASSERT_EQ_INT(fflush(diag), 0);
-    app_set_streams((AppStreams){.out = NULL, .err = NULL});
-    ASSERT_EQ_INT(fclose(diag), 0);
-    *diag_out = diag_buf;
-    return rc;
 }
 
 /* ST-3.6. The key is env and REMEMBER_SYNC_TOKEN is missing or empty. */
@@ -2073,12 +1984,11 @@ TEST(env_helper_without_token_is_sync_credential_unavailable)
     char token[64];
     char *saved = NULL;
     char *diag_buf = NULL;
-    const char *live = NULL;
     Store *store = NULL;
     RememberEnv host;
     SettingWriteResult wr;
     SettingStatus st = SETTING_OK;
-    CredIn in;
+    SyncCredentialLookup in;
     int calls = 0;
     int rc = 99;
     const char *plain =
@@ -2086,13 +1996,8 @@ TEST(env_helper_without_token_is_sync_credential_unavailable)
         "Check the helper, or set remember.sync.credential_helper to env and export "
         "REMEMBER_SYNC_TOKEN.\n";
 
-    live = getenv("REMEMBER_SYNC_TOKEN");
-    if (live != NULL) {
-        saved = strdup(live);
-        ASSERT_TRUE(saved != NULL);
-        if (saved == NULL) {
-            return;
-        }
+    if (!save_sync_token(&saved)) {
+        return;
     }
     store = open_pair(tmpl, brain, sizeof(brain), userdb, sizeof(userdb));
     if (store == NULL) {
@@ -2134,12 +2039,7 @@ TEST(env_helper_without_token_is_sync_credential_unavailable)
     ASSERT_STR_NOT_CONTAINS(diag_buf, "LEAKED-SECRET");
     ASSERT_TRUE(bytes_are_zero(token, sizeof(token)));
     free(diag_buf);
-    if (saved == NULL) {
-        (void)unsetenv("REMEMBER_SYNC_TOKEN");
-    } else {
-        (void)setenv("REMEMBER_SYNC_TOKEN", saved, 1);
-    }
-    free(saved);
+    restore_sync_token(saved);
     close_pair(store, tmpl);
 }
 
@@ -2208,22 +2108,16 @@ TEST(pass_helper_reads_the_callback_not_the_env_var)
     char token[64];
     char *saved = NULL;
     char *diag_buf = NULL;
-    const char *live = NULL;
     Store *store = NULL;
     RememberEnv host;
     SettingWriteResult wr;
     SettingStatus st = SETTING_OK;
-    CredIn in;
+    SyncCredentialLookup in;
     TokGive give;
     int rc = 99;
 
-    live = getenv("REMEMBER_SYNC_TOKEN");
-    if (live != NULL) {
-        saved = strdup(live);
-        ASSERT_TRUE(saved != NULL);
-        if (saved == NULL) {
-            return;
-        }
+    if (!save_sync_token(&saved)) {
+        return;
     }
     store = open_pair(tmpl, brain, sizeof(brain), userdb, sizeof(userdb));
     if (store == NULL) {
@@ -2262,12 +2156,7 @@ TEST(pass_helper_reads_the_callback_not_the_env_var)
     ASSERT_STR_NOT_CONTAINS(diag_buf, "from-helper");
     ASSERT_STR_NOT_CONTAINS(diag_buf, "from-env");
     free(diag_buf);
-    if (saved == NULL) {
-        (void)unsetenv("REMEMBER_SYNC_TOKEN");
-    } else {
-        (void)setenv("REMEMBER_SYNC_TOKEN", saved, 1);
-    }
-    free(saved);
+    restore_sync_token(saved);
     close_pair(store, tmpl);
 }
 
@@ -2283,7 +2172,7 @@ TEST(pass_without_a_callback_is_sync_credential_unavailable)
     Store *store = NULL;
     SettingWriteResult wr;
     SettingStatus st = SETTING_OK;
-    CredIn in;
+    SyncCredentialLookup in;
     int rc = 99;
     const char *plain =
         "remember: the sync credential helper \"pass\" did not return a token. "
@@ -2344,7 +2233,7 @@ TEST(callback_without_a_nul_is_sync_credential_unavailable)
     RememberEnv host;
     SettingWriteResult wr;
     SettingStatus st = SETTING_OK;
-    CredIn in;
+    SyncCredentialLookup in;
     int calls = 0;
     int rc = 99;
 
@@ -2389,7 +2278,7 @@ TEST(callback_failure_wipes_the_token)
     RememberEnv host;
     SettingWriteResult wr;
     SettingStatus st = SETTING_OK;
-    CredIn in;
+    SyncCredentialLookup in;
     TokGive give;
     int rc = 99;
 
@@ -2432,8 +2321,10 @@ TEST(callback_failure_wipes_the_token)
     close_pair(store, tmpl);
 }
 
-/* ST-3.5 does not trim REMEMBER_SYNC_TOKEN. Trim is only for helper stdout. */
-TEST(no_row_keeps_whitespace_in_remember_sync_token)
+/* Itay 2026-10-30. REMEMBER_SYNC_TOKEN is ASCII-trimmed like the helper line.
+   Only whitespace is no token. A control byte or DEL inside is refused: 2 with
+   no row (C-42), the locked unavailable line with the id env. */
+TEST(remember_sync_token_is_trimmed_and_checked)
 {
     char tmpl[] = "/tmp/remember-cred-XXXXXX";
     char brain[REMEMBER_PATH_MAX];
@@ -2442,25 +2333,21 @@ TEST(no_row_keeps_whitespace_in_remember_sync_token)
     char token[64];
     char *saved = NULL;
     char *diag_buf = NULL;
-    const char *live = NULL;
     Store *store = NULL;
-    CredIn in;
+    SettingWriteResult wr;
+    SyncCredentialLookup in;
+    static const char *const refused[] = {"a\x1b[31mb", "a\rb", "a\nb", "a\tb", "\x7f"};
+    size_t i = 0U;
     int rc = 99;
 
-    live = getenv("REMEMBER_SYNC_TOKEN");
-    if (live != NULL) {
-        saved = strdup(live);
-        ASSERT_TRUE(saved != NULL);
-        if (saved == NULL) {
-            return;
-        }
+    if (!save_sync_token(&saved)) {
+        return;
     }
     store = open_pair(tmpl, brain, sizeof(brain), userdb, sizeof(userdb));
     if (store == NULL) {
         free(saved);
         return;
     }
-    ASSERT_EQ_INT(setenv("REMEMBER_SYNC_TOKEN", "  tok\t", 1), 0);
     memset(&in, 0, sizeof(in));
     in.store = store;
     in.user_db = userdb;
@@ -2468,17 +2355,93 @@ TEST(no_row_keeps_whitespace_in_remember_sync_token)
     in.token_cap = sizeof(token);
     in.err = err;
     in.err_cap = sizeof(err);
+    ASSERT_EQ_INT(setenv("REMEMBER_SYNC_TOKEN", "  tok\t\r\n", 1), 0);
+    preload(token, sizeof(token));
     rc = cred_lookup(in, &diag_buf);
     ASSERT_EQ_INT(rc, 0);
-    ASSERT_STREQ(token, "  tok\t");
+    ASSERT_STREQ(token, "tok");
+    ASSERT_TRUE(bytes_are_zero(token + 3, sizeof(token) - 3U));
     ASSERT_STREQ(diag_buf, "");
     free(diag_buf);
-    if (saved == NULL) {
-        (void)unsetenv("REMEMBER_SYNC_TOKEN");
-    } else {
-        (void)setenv("REMEMBER_SYNC_TOKEN", saved, 1);
+    ASSERT_EQ_INT(setenv("REMEMBER_SYNC_TOKEN", " \t\v\f ", 1), 0);
+    preload(token, sizeof(token));
+    rc = cred_lookup(in, &diag_buf);
+    ASSERT_EQ_INT(rc, 0);
+    ASSERT_TRUE(bytes_are_zero(token, sizeof(token)));
+    ASSERT_STREQ(diag_buf, "");
+    free(diag_buf);
+    for (i = 0U; i < sizeof(refused) / sizeof(refused[0]); i++) {
+        ASSERT_EQ_INT(setenv("REMEMBER_SYNC_TOKEN", refused[i], 1), 0);
+        preload(token, sizeof(token));
+        rc = cred_lookup(in, &diag_buf);
+        ASSERT_EQ_INT(rc, 2);
+        ASSERT_TRUE(bytes_are_zero(token, sizeof(token)));
+        ASSERT_STREQ(diag_buf, "");
+        free(diag_buf);
     }
-    free(saved);
+    ASSERT_EQ_INT(set_one(store, userdb, "remember.sync.credential_helper", "env",
+                          SETTING_LAYER_USER, NULL, &wr, err, sizeof(err)),
+                  SETTING_OK);
+    ASSERT_EQ_INT(setenv("REMEMBER_SYNC_TOKEN", "a\rLEAKED-SECRET", 1), 0);
+    preload(token, sizeof(token));
+    rc = cred_lookup(in, &diag_buf);
+    ASSERT_EQ_INT(rc, 1);
+    ASSERT_TRUE(bytes_are_zero(token, sizeof(token)));
+    ASSERT_STR_CONTAINS(diag_buf, "helper \"env\" did not return a token.");
+    ASSERT_STR_NOT_CONTAINS(diag_buf, "LEAKED-SECRET");
+    free(diag_buf);
+    ASSERT_EQ_INT(setenv("REMEMBER_SYNC_TOKEN", "   ", 1), 0);
+    rc = cred_lookup(in, &diag_buf);
+    ASSERT_EQ_INT(rc, 1);
+    ASSERT_STR_CONTAINS(diag_buf, "helper \"env\" did not return a token.");
+    free(diag_buf);
+    restore_sync_token(saved);
+    close_pair(store, tmpl);
+}
+
+/* A host callback that answers with a control byte gives no token. */
+TEST(callback_token_with_a_control_byte_is_unavailable)
+{
+    char tmpl[] = "/tmp/remember-cred-XXXXXX";
+    char brain[REMEMBER_PATH_MAX];
+    char userdb[REMEMBER_PATH_MAX];
+    char err[64];
+    char token[64];
+    char *diag_buf = NULL;
+    Store *store = NULL;
+    RememberEnv host;
+    SettingWriteResult wr;
+    SyncCredentialLookup in;
+    TokGive give;
+    int rc = 99;
+
+    store = open_pair(tmpl, brain, sizeof(brain), userdb, sizeof(userdb));
+    if (store == NULL) {
+        return;
+    }
+    ASSERT_EQ_INT(set_one(store, userdb, "remember.sync.credential_helper", "pass",
+                          SETTING_LAYER_USER, NULL, &wr, err, sizeof(err)),
+                  SETTING_OK);
+    memset(&give, 0, sizeof(give));
+    give.give = "tok\r\nX-Evil: 1";
+    memset(&host, 0, sizeof(host));
+    host.token = give_token;
+    host.callback_ctx = &give;
+    memset(&in, 0, sizeof(in));
+    in.store = store;
+    in.user_db = userdb;
+    in.host = &host;
+    in.token = token;
+    in.token_cap = sizeof(token);
+    in.err = err;
+    in.err_cap = sizeof(err);
+    rc = cred_lookup(in, &diag_buf);
+    ASSERT_EQ_INT(rc, 1);
+    ASSERT_EQ_INT(give.calls, 1);
+    ASSERT_TRUE(bytes_are_zero(token, sizeof(token)));
+    ASSERT_STR_CONTAINS(diag_buf, "helper \"pass\" did not return a token.");
+    ASSERT_STR_NOT_CONTAINS(diag_buf, "X-Evil");
+    free(diag_buf);
     close_pair(store, tmpl);
 }
 
@@ -2493,7 +2456,7 @@ TEST(unavailable_json_names_the_fix_and_hides_the_token)
     Store *store = NULL;
     SettingWriteResult wr;
     SettingStatus st = SETTING_OK;
-    CredIn in;
+    SyncCredentialLookup in;
     int rc = 99;
     const char *json =
         "{\"version\":1,\"error\":{\"code\":\"sync_credential_unavailable\",\"message\":\"the "
@@ -2538,7 +2501,7 @@ TEST(store_failure_keeps_the_store_sentence)
     char token[32];
     char *diag_buf = NULL;
     Store *store = NULL;
-    CredIn in;
+    SyncCredentialLookup in;
     int rc = 99;
 
     store = open_pair(tmpl, brain, sizeof(brain), userdb, sizeof(userdb));
@@ -2580,7 +2543,7 @@ TEST(non_grammar_helper_does_not_call_the_callback)
     RememberEnv host;
     SettingWriteResult wr;
     SettingStatus st = SETTING_OK;
-    CredIn in;
+    SyncCredentialLookup in;
     TokGive give;
     int rc = 99;
 
@@ -2631,8 +2594,81 @@ TEST(non_grammar_helper_does_not_call_the_callback)
     close_pair(store, tmpl);
 }
 
-/* A secret that does not fit is not truncated. No row stays success with no
-   token. A set key is unavailable, and the secret is not in the notice. */
+static size_t count_char(const char *s, char c)
+{
+    size_t n = 0U;
+
+    if (s == NULL) {
+        return 0U;
+    }
+    for (; *s != '\0'; s++) {
+        n += (*s == c) ? 1U : 0U;
+    }
+    return n;
+}
+
+/* Round 3.3. A hand-edited id with a newline, an ESC, or 300 bytes is echoed
+   on one plain line, escaped in JSON, and not cut. */
+TEST(unavailable_echo_stays_one_line_in_both_formats)
+{
+    char tmpl[] = "/tmp/remember-cred-XXXXXX";
+    char brain[REMEMBER_PATH_MAX];
+    char userdb[REMEMBER_PATH_MAX];
+    char err[64];
+    char token[64];
+    char longid[301];
+    char sql[512];
+    char *diag_buf = NULL;
+    Store *store = NULL;
+    SettingWriteResult wr;
+    SyncCredentialLookup in;
+    int rc = 99;
+
+    store = open_pair(tmpl, brain, sizeof(brain), userdb, sizeof(userdb));
+    if (store == NULL) {
+        return;
+    }
+    ASSERT_EQ_INT(set_one(store, userdb, "remember.sync.credential_helper", "pass",
+                          SETTING_LAYER_USER, NULL, &wr, err, sizeof(err)),
+                  SETTING_OK);
+    memset(&in, 0, sizeof(in));
+    in.store = store;
+    in.user_db = userdb;
+    in.token = token;
+    in.token_cap = sizeof(token);
+    in.err = err;
+    in.err_cap = sizeof(err);
+    exec_fixture(userdb, "UPDATE settings SET value = '\"a' || char(10) || 'b' || char(27) || "
+                         "'[31mc\"' WHERE key = 'remember.sync.credential_helper';");
+    rc = cred_lookup(in, &diag_buf);
+    ASSERT_EQ_INT(rc, 1);
+    ASSERT_STR_CONTAINS(diag_buf, "helper \"a?b?[31mc\" did not");
+    ASSERT_EQ_INT((int)count_char(diag_buf, '\n'), 1);
+    ASSERT_EQ_INT((int)count_char(diag_buf, '\x1b'), 0);
+    free(diag_buf);
+    diag_set_json_errors(true);
+    rc = cred_lookup(in, &diag_buf);
+    ASSERT_EQ_INT(rc, 1);
+    diag_set_json_errors(false);
+    ASSERT_STR_CONTAINS(diag_buf, "helper \\\"a\\nb\\u001b[31mc\\\" did not");
+    ASSERT_EQ_INT((int)count_char(diag_buf, '\n'), 1);
+    free(diag_buf);
+    memset(longid, 'x', sizeof(longid) - 1U);
+    longid[sizeof(longid) - 1U] = '\0';
+    ASSERT_TRUE(snprintf(sql, sizeof(sql),
+                         "UPDATE settings SET value = '\"%s\"' WHERE key = "
+                         "'remember.sync.credential_helper';",
+                         longid) < (int)sizeof(sql));
+    exec_fixture(userdb, sql);
+    rc = cred_lookup(in, &diag_buf);
+    ASSERT_EQ_INT(rc, 1);
+    ASSERT_STR_CONTAINS(diag_buf, longid);
+    free(diag_buf);
+    close_pair(store, tmpl);
+}
+
+/* A secret that does not fit is not truncated. No row is 2 (C-42), with no
+   notice. A set key is unavailable, and the secret is not in the notice. */
 TEST(token_that_does_not_fit_is_not_truncated)
 {
     char tmpl[] = "/tmp/remember-cred-XXXXXX";
@@ -2643,20 +2679,14 @@ TEST(token_that_does_not_fit_is_not_truncated)
     char exact[6];
     char *saved = NULL;
     char *diag_buf = NULL;
-    const char *live = NULL;
     Store *store = NULL;
     SettingWriteResult wr;
     SettingStatus st = SETTING_OK;
-    CredIn in;
+    SyncCredentialLookup in;
     int rc = 99;
 
-    live = getenv("REMEMBER_SYNC_TOKEN");
-    if (live != NULL) {
-        saved = strdup(live);
-        ASSERT_TRUE(saved != NULL);
-        if (saved == NULL) {
-            return;
-        }
+    if (!save_sync_token(&saved)) {
+        return;
     }
     store = open_pair(tmpl, brain, sizeof(brain), userdb, sizeof(userdb));
     if (store == NULL) {
@@ -2673,7 +2703,7 @@ TEST(token_that_does_not_fit_is_not_truncated)
     in.err = err;
     in.err_cap = sizeof(err);
     rc = cred_lookup(in, &diag_buf);
-    ASSERT_EQ_INT(rc, 0);
+    ASSERT_EQ_INT(rc, 2);
     ASSERT_TRUE(bytes_are_zero(token, sizeof(token)));
     ASSERT_STREQ(diag_buf, "");
     free(diag_buf);
@@ -2683,6 +2713,13 @@ TEST(token_that_does_not_fit_is_not_truncated)
     ASSERT_EQ_INT(rc, 0);
     ASSERT_STREQ(exact, "hello");
     free(diag_buf);
+    /* Seven bytes raw, five after the trim: the trimmed length is what must fit. */
+    ASSERT_EQ_INT(setenv("REMEMBER_SYNC_TOKEN", " hello ", 1), 0);
+    rc = cred_lookup(in, &diag_buf);
+    ASSERT_EQ_INT(rc, 0);
+    ASSERT_STREQ(exact, "hello");
+    free(diag_buf);
+    ASSERT_EQ_INT(setenv("REMEMBER_SYNC_TOKEN", "hello", 1), 0);
     st = set_one(store, userdb, "remember.sync.credential_helper", "env", SETTING_LAYER_USER, NULL,
                  &wr, err, sizeof(err));
     ASSERT_EQ_INT(st, SETTING_OK);
@@ -2695,12 +2732,7 @@ TEST(token_that_does_not_fit_is_not_truncated)
     ASSERT_STR_CONTAINS(diag_buf, "helper \"env\"");
     ASSERT_STR_NOT_CONTAINS(diag_buf, "hello");
     free(diag_buf);
-    if (saved == NULL) {
-        (void)unsetenv("REMEMBER_SYNC_TOKEN");
-    } else {
-        (void)setenv("REMEMBER_SYNC_TOKEN", saved, 1);
-    }
-    free(saved);
+    restore_sync_token(saved);
     close_pair(store, tmpl);
 }
 
@@ -2824,6 +2856,8 @@ TEST(cli_runner_reads_the_trimmed_first_line)
     }
     ASSERT_EQ_INT(rc, 0);
     ASSERT_STREQ(token, "secret");
+    /* "  secret  " moved left two bytes. Nothing of it stays after the NUL. */
+    ASSERT_TRUE(bytes_are_zero(token + 6, sizeof(token) - 6U));
     ASSERT_STR_CONTAINS(err_got, "enter passphrase");
     ASSERT_STR_CONTAINS(err_got, "argv0=remember-credential-pass");
     ASSERT_STR_CONTAINS(err_got, "argv1=get");
@@ -2959,12 +2993,6 @@ static void run_finish(RunFx *run)
         run->armed = 0;
     }
     cli_credential_test_set_timeout_ms(0);
-}
-
-static void preload(char *token, size_t cap)
-{
-    memset(token, 'Z', cap - 1U);
-    token[cap - 1U] = '\0';
 }
 
 static int install_script(const RunFx *run, const char *body, mode_t mode)
@@ -3129,6 +3157,20 @@ TEST(empty_stdout_is_lookup_failed)
     ASSERT_TRUE(bytes_are_zero(token, sizeof(token)));
     run_finish(&run);
     ASSERT_STR_NOT_CONTAINS(run.err_got, "LEAKED-SECRET");
+}
+
+/* A NUL inside the first line would cut the token short. It is refused. */
+TEST(nul_in_the_first_line_is_lookup_failed)
+{
+    RunFx run;
+    char token[32];
+
+    ASSERT_EQ_INT(run_begin(&run), 0);
+    ASSERT_EQ_INT(install_script(&run, "#!/bin/sh\nprintf 'ab\\000cd\\n'\nexit 0\n", 0755), 0);
+    preload(token, sizeof(token));
+    ASSERT_EQ_INT(cli_credential_token(NULL, "pass", token, sizeof(token)), -2);
+    ASSERT_TRUE(bytes_are_zero(token, sizeof(token)));
+    run_finish(&run);
 }
 
 /* Leading and trailing ASCII whitespace go. An internal space stays. No newline is still a line. */
@@ -3480,12 +3522,7 @@ TEST(pass_on_path_lookup_reads_the_trimmed_line)
     ASSERT_STR_NOT_CONTAINS(run.err_got, "secret");
     ASSERT_STR_NOT_CONTAINS(run.err_got, "LEAKED-SECRET");
     ASSERT_STR_NOT_CONTAINS(run.out_got, "secret");
-    if (saved == NULL) {
-        (void)unsetenv("REMEMBER_SYNC_TOKEN");
-    } else {
-        (void)setenv("REMEMBER_SYNC_TOKEN", saved, 1);
-    }
-    free(saved);
+    restore_sync_token(saved);
 }
 
 TEST(pass_missing_on_path_lookup_is_sync_credential_unavailable)
@@ -3545,12 +3582,7 @@ TEST(pass_missing_on_path_lookup_is_sync_credential_unavailable)
     ASSERT_STREQ(run.err_got, plain);
     ASSERT_STR_NOT_CONTAINS(run.err_got, "LEAKED-SECRET");
     ASSERT_STR_NOT_CONTAINS(run.out_got, "LEAKED-SECRET");
-    if (saved == NULL) {
-        (void)unsetenv("REMEMBER_SYNC_TOKEN");
-    } else {
-        (void)setenv("REMEMBER_SYNC_TOKEN", saved, 1);
-    }
-    free(saved);
+    restore_sync_token(saved);
 }
 
 /* The message allocation fails. The existing out-of-memory sentence, not a new one. */
@@ -3629,6 +3661,57 @@ TEST(out_of_memory_while_naming_the_helper)
     close_pair(store, tmpl);
 }
 
+/* ST-3.1 scope is user. A brain row (sync, a peer, a hand edit) never picks the helper. */
+TEST(brain_row_does_not_pick_the_credential_helper)
+{
+    char tmpl[] = "/tmp/remember-cred-XXXXXX";
+    char brain[REMEMBER_PATH_MAX];
+    char userdb[REMEMBER_PATH_MAX];
+    char err[64];
+    char token[64];
+    char *diag_buf = NULL;
+    Store *store = NULL;
+    RememberEnv host;
+    SettingWriteResult wr;
+    SyncCredentialLookup in;
+    TokGive give;
+    int rc = 99;
+
+    store = open_pair(tmpl, brain, sizeof(brain), userdb, sizeof(userdb));
+    if (store == NULL) {
+        return;
+    }
+    exec_fixture(brain, "INSERT INTO settings (key, value, updated_by, updated_at, device_id, "
+                        "version_vector, deleted_at, change_seq) VALUES "
+                        "('remember.sync.credential_helper','\"evil\"',"
+                        "'{\"kind\":\"human\",\"id\":null}','2030-01-01T00:00:00.000Z','peer',"
+                        "'{}',NULL,1)");
+    assert_query(brain, "SELECT value FROM settings", "\"evil\"");
+    ASSERT_EQ_INT(set_one(store, userdb, "remember.sync.credential_helper", "pass",
+                          SETTING_LAYER_USER, NULL, &wr, err, sizeof(err)),
+                  SETTING_OK);
+    memset(&give, 0, sizeof(give));
+    give.give = "from-helper";
+    memset(&host, 0, sizeof(host));
+    host.token = give_token;
+    host.callback_ctx = &give;
+    memset(&in, 0, sizeof(in));
+    in.store = store;
+    in.user_db = userdb;
+    in.host = &host;
+    in.token = token;
+    in.token_cap = sizeof(token);
+    in.err = err;
+    in.err_cap = sizeof(err);
+    rc = cred_lookup(in, &diag_buf);
+    ASSERT_EQ_INT(rc, 0);
+    ASSERT_EQ_INT(give.calls, 1);
+    ASSERT_STREQ(give.seen, "pass");
+    ASSERT_STREQ(token, "from-helper");
+    free(diag_buf);
+    close_pair(store, tmpl);
+}
+
 // NOLINTEND(concurrency-mt-unsafe,android-cloexec-fopen)
 
 void register_settings_tests(void)
@@ -3643,6 +3726,7 @@ void register_settings_tests(void)
     RUN_TEST(user_db_path_follows_remember_user_db_then_xdg_then_home);
     RUN_TEST(user_db_is_created_on_ensure_not_when_a_brain_opens);
     RUN_TEST(ensure_leaves_a_non_database_file_unchanged);
+    RUN_TEST(pick_ignores_a_layer_the_key_does_not_allow);
     RUN_TEST(resolution_user_then_brain_then_tombstone_and_change_seq);
     RUN_TEST(user_history_keeps_the_newest_fifty_by_rowid);
     RUN_TEST(quota_counts_settings_rows_not_history);
@@ -3658,10 +3742,12 @@ void register_settings_tests(void)
     RUN_TEST(pass_without_a_callback_is_sync_credential_unavailable);
     RUN_TEST(callback_without_a_nul_is_sync_credential_unavailable);
     RUN_TEST(callback_failure_wipes_the_token);
-    RUN_TEST(no_row_keeps_whitespace_in_remember_sync_token);
+    RUN_TEST(remember_sync_token_is_trimmed_and_checked);
+    RUN_TEST(callback_token_with_a_control_byte_is_unavailable);
     RUN_TEST(unavailable_json_names_the_fix_and_hides_the_token);
     RUN_TEST(store_failure_keeps_the_store_sentence);
     RUN_TEST(non_grammar_helper_does_not_call_the_callback);
+    RUN_TEST(unavailable_echo_stays_one_line_in_both_formats);
     RUN_TEST(token_that_does_not_fit_is_not_truncated);
     RUN_TEST(cli_runner_reads_the_trimmed_first_line);
     RUN_TEST(cli_credential_timeout_ms_is_thirty_seconds);
@@ -3669,6 +3755,7 @@ void register_settings_tests(void)
     RUN_TEST(helper_not_executable_is_lookup_failed);
     RUN_TEST(helper_nonzero_exit_wipes_the_token);
     RUN_TEST(empty_stdout_is_lookup_failed);
+    RUN_TEST(nul_in_the_first_line_is_lookup_failed);
     RUN_TEST(first_line_keeps_an_internal_space);
     RUN_TEST(token_line_longer_than_the_buffer_is_lookup_failed);
     RUN_TEST(hanging_helper_group_is_killed);
@@ -3681,5 +3768,6 @@ void register_settings_tests(void)
     RUN_TEST(pass_on_path_lookup_reads_the_trimmed_line);
     RUN_TEST(pass_missing_on_path_lookup_is_sync_credential_unavailable);
     RUN_TEST(out_of_memory_while_naming_the_helper);
+    RUN_TEST(brain_row_does_not_pick_the_credential_helper);
 }
 // NOLINTEND(cppcoreguidelines-avoid-magic-numbers,readability-magic-numbers)

@@ -58,7 +58,7 @@ static bool is_ascii_ws(unsigned char c)
     return false;
 }
 
-static bool is_ascii_control(unsigned char c)
+bool is_ascii_control(unsigned char c)
 {
     if (c < ASCII_FIRST_PRINTABLE || c == ASCII_DEL) {
         return true;

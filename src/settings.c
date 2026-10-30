@@ -600,11 +600,13 @@ SettingFrom setting_pick(const SettingSpec *spec, const char *user_json, const c
         (void)copy_cap(flag_json, out, out_cap);
         return SETTING_FROM_FLAG;
     }
-    if (brain_json != NULL) {
+    /* A row in a layer the key does not allow (a synced or hand-edited brain)
+       is no value. */
+    if (brain_json != NULL && spec->allow_brain) {
         (void)copy_cap(brain_json, out, out_cap);
         return SETTING_FROM_BRAIN;
     }
-    if (user_json != NULL) {
+    if (user_json != NULL && spec->allow_user) {
         (void)copy_cap(user_json, out, out_cap);
         return SETTING_FROM_USER;
     }

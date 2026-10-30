@@ -125,8 +125,9 @@ SettingStatus setting_prepare(const char *key, const char *const *items, size_t 
                               const SettingSpec **spec_out, SettingLayer *layer_out, char *err,
                               size_t errlen);
 
-/* Last layer with a value wins. A NULL layer pointer is no row. Copies the
-   winning JSON into out. An unset key with no default leaves out empty. */
+/* Last layer with a value wins. A NULL layer pointer, or a layer the key
+   does not allow, is no row. Copies the winning JSON into out. An unset key
+   with no default leaves out empty. */
 SettingFrom setting_pick(const SettingSpec *spec, const char *user_json, const char *brain_json,
                          const char *flag_json, char *out, size_t out_cap);
 

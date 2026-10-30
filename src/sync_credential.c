@@ -1,6 +1,7 @@
 #include "sync_credential.h"
 
 #include "diag.h"
+#include "normalize.h"
 #include "settings.h"
 #include "store.h"
 
@@ -20,6 +21,8 @@ static const char k_unavailable_fix[] =
     "REMEMBER_SYNC_TOKEN.";
 
 /* Key is set and nothing usable came back. Wipes token before the notice. */
+/* TODO(pragmatic:) err_fmt measures and allocates the same way. When stage 9
+   adds more fix sentences, give it a fix argument and call it here. */
 static int emit_unavailable(const char *id, char *token, size_t token_cap)
 {
     const char *shown = id != NULL ? id : "";
@@ -65,28 +68,45 @@ static bool unquote_helper(const char *json, char *id, size_t cap)
     return true;
 }
 
-/* 1 when dst holds REMEMBER_SYNC_TOKEN. 0 when the variable is missing or
-   empty; dst is then "". */
+/* True when s has no C0 control and no DEL. A token goes into a C string and
+   later a header, so a NUL, CR, LF or ESC inside it is not a token. */
+static bool token_bytes_ok(const char *s)
+{
+    for (; *s != '\0'; s++) {
+        if (is_ascii_control((unsigned char)*s)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+/* 1 when dst holds REMEMBER_SYNC_TOKEN, trimmed of ASCII whitespace like the
+   helper line. 0 when the variable is missing, empty, or only whitespace; dst
+   is then "". -1 when it does not fit cap or holds a control byte; dst is
+   wiped. */
 static int take_env_token(char *dst, size_t cap)
 {
     // NOLINTNEXTLINE(concurrency-mt-unsafe) -- single-threaded; no reentrant getenv
     const char *env = getenv("REMEMBER_SYNC_TOKEN");
-    size_t n = 0U;
+    size_t start = 0U;
+    size_t end = 0U;
 
-    if (env == NULL || env[0] == '\0') {
-        if (cap > 0U) {
-            dst[0] = '\0';
-        }
+    sync_credential_wipe(dst, cap);
+    if (env == NULL) {
         return 0;
     }
-    n = strlen(env);
-    if (n >= cap) {
+    end = strlen(env);
+    ascii_ws_trim(env, &start, &end);
+    if (start == end) {
+        return 0;
+    }
+    if (end - start >= cap) {
+        return -1;
+    }
+    memcpy(dst, env + start, end - start);
+    if (!token_bytes_ok(dst)) {
         sync_credential_wipe(dst, cap);
-        return 0;
-    }
-    memcpy(dst, env, n + 1U);
-    if (cap > n + 1U) {
-        sync_credential_wipe(dst + n + 1U, cap - n - 1U);
+        return -1;
     }
     return 1;
 }
@@ -108,8 +128,8 @@ int sync_credential_lookup(SyncCredentialLookup *in)
         return -1;
     }
     if (got.from == SETTING_FROM_DEFAULT && got.value[0] == '\0') {
-        (void)take_env_token(in->token, in->token_cap);
-        return 0;
+        /* C-42: a refused variable has no sentence yet. */
+        return take_env_token(in->token, in->token_cap) < 0 ? 2 : 0;
     }
     quoted = unquote_helper(got.value, id, sizeof(id));
     if (quoted) {
@@ -118,7 +138,7 @@ int sync_credential_lookup(SyncCredentialLookup *in)
         shown = got.value;
     }
     if (strcmp(shown, "env") == 0) {
-        if (take_env_token(in->token, in->token_cap) == 0) {
+        if (take_env_token(in->token, in->token_cap) != 1) {
             return emit_unavailable(shown, in->token, in->token_cap);
         }
         return 0;
@@ -128,7 +148,8 @@ int sync_credential_lookup(SyncCredentialLookup *in)
 
         memset(in->token, 0, in->token_cap);
         rc = in->host->token(in->host->callback_ctx, id, in->token, in->token_cap);
-        if (rc == 0 && memchr(in->token, '\0', in->token_cap) != NULL && in->token[0] != '\0') {
+        if (rc == 0 && memchr(in->token, '\0', in->token_cap) != NULL && in->token[0] != '\0' &&
+            token_bytes_ok(in->token)) {
             return 0;
         }
     }
