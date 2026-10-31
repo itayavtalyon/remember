@@ -6,17 +6,18 @@ Run hooks and plugins from the CLI and from a host process. Trust the code hash.
 
 ## Status
 
-PENDING COPY AND DESIGN.
+Copy approved 2026-10-25. PENDING DESIGN for the `skipped_source` log fields (D-14).
 
-Behavior in this plan is specified. A stage that prints a sentence in COPY-PENDING C-02 or C-15 through C-38 does not start until that row is approved. These stages also wait:
+Print C-15 through C-38, the C-01 lines this plan owns (`plugin_run_forbidden`, `wrong_bin`, cold start, `brain_missing`, the trust prompt), and `plugin_chain_capped` from [`COPY-PENDING.md`](COPY-PENDING.md). C-02 is printed by plan 21. Do not invent a sentence past that file.
 
-- Chain-cap warning: DESIGN-PENDING D-02 is answered (2026-10-25). Set status `skipped`, reason `chain_capped`, and warn `plugin_chain_capped`. The sentence waits on its COPY-PENDING row.
-- Non-timeout filter failure code: D-08 is answered (2026-10-25). It is `plugin_filter_failed`.
+- Chain-cap warning: DESIGN-PENDING D-02 is answered (2026-10-25). Set status `skipped`, reason `chain_capped`, and warn `plugin_chain_capped`. Print the `plugin_chain_capped` line in [`COPY-PENDING.md`](COPY-PENDING.md).
+- Non-timeout filter failure code: D-08 is answered (2026-10-25). It is `plugin_filter_failed`. Print C-28.
 - `skipped_source` log bytes: D-14 is answered (2026-10-25, 010 H-7.2). Write one line per skipped action and event type, with the H-7.2 fields (`at`, `event_type`, `count`). `remember plugin log <plugin>` prints `<at>  skipped "<action>" for <count> <event_type> events from 'remember <command>', because its origins don't include <origin>.`, or `<at>  skipped "<action>" for 1 <event_type> event from 'remember <command>', because its origins don't include <origin>.` when `count` is 1. Leave out the plugin name. Where the output mixes plugins, write `"<plugin>/<action>"`. Print `<event_type>` verbatim. Print `<at>` in the 007 ST-7.16 human date form. Keep `at` in RFC 3339 UTC in JSON.
-- Human `add` line: D-05. Do not change it.
+- Human `add` line: D-05. Do not change it. C-39 does not decide it.
 - Tool-undo name parse: D-13. Do not parse it in the engine.
+- `plugin_action_timeout` and `plugin_action_failed`: print C-30 and C-31 only in a command that runs the action synchronously, for example `plugin run` (010 H-6.4). A write never prints them, and a write's exit code does not change (R8.16). ANSWERS-FINAL would print them from any command that has a plugin set up. That print-when choice is DESIGN-PENDING D-17. Until the log changes, follow H-6.4.
 
-This plan is not ready as a whole.
+Do not build the daemon, the URL plugin, or the hybrid ranker.
 
 ## Source of truth
 
@@ -46,9 +47,9 @@ A plugin never changes, blocks, or rolls back a write. Memory text reaches an ac
 
 No synced, imported, or exported data creates a plugin.
 
-`REMEMBER_PROCESSES=0`: `hook add` and folder `plugin add` return `plugin_unsupported`. Writes insert no outbox rows. A write that matches an enabled folder-plugin action is saved and warns `plugin_unsupported`, exit 0 (4 with `--strict`) (010 H-0.7, C-23). Built-in C-ABI filters still run. Phones never run folder plugins or hooks. The sentence is C-23.
+`REMEMBER_PROCESSES=0`: `hook add` and folder `plugin add` return `plugin_unsupported`. Writes insert no outbox rows. A write that matches an enabled folder-plugin action is saved and warns `plugin_unsupported`, exit 0 (4 with `--strict`) (010 H-0.7, C-23). Built-in C-ABI filters still run. Phones never run folder plugins or hooks. Print C-23.
 
-A plugin problem during a search or a write is a warning and exit 0. `--strict` or `REMEMBER_STRICT=1` makes any warning exit 4. Exit 4 has no other meaning. A backfill that does not finish is exit 1 `plugin_backfill_incomplete`, not exit 4. The sentence is C-24.
+A plugin problem during a search or a write is a warning and exit 0. `--strict` or `REMEMBER_STRICT=1` makes any warning exit 4. Exit 4 has no other meaning. A backfill that does not finish is exit 1 `plugin_backfill_incomplete`, not exit 4. Print C-24.
 
 ### Events
 
@@ -77,11 +78,11 @@ Remember is the only writer. On each read-write open, read the file. Write it on
 
 JE-3.10:
 
-- Same `brain_id` at another path, and that path still has that brain: this file is a copy. Mint a new `brain_id`, add this path, warn `brain_id_cloned`. The sentence is C-38. Do not warn until C-38 is approved. The mint itself is specified and may land. The warning print waits.
+- Same `brain_id` at another path, and that path still has that brain: this file is a copy. Mint a new `brain_id`, add this path, warn `brain_id_cloned`. Print C-38.
 - Same `brain_id` at another path, and that path has no such brain: the file moved. Change the path. Keep the id.
 - No entry has this `brain_id`: add an entry.
 
-`remember brain list` lists entries. `remember brain prune` removes entries whose path has no brain. `remember sweep --all` reads only this file. A missing path warns `brain_missing` with the locked line `brain "<path>" is in the list and is not on disk. Run 'remember brain prune' to remove it.` The entry stays until prune.
+`remember brain list` lists entries. `remember brain prune` removes entries whose path has no brain. `remember sweep --all` reads only this file. A missing path warns `brain_missing`. Print the C-01 line. Do not print the shorter line that only says the brain is not on disk. The entry stays until prune.
 
 ### Delivery
 
@@ -111,19 +112,19 @@ Every plugin write, including a hook, stores `{kind: tool, id: plugin/<name>/<en
 
 Allow list when depth is 1 or more: `add`, `update`, `delete` of one locator, `link`, `unlink`, `rekey`, restore, and reads. The list is complete. One table. Each command has an `allowed_in_run` flag. A new command defaults to not allowed.
 
-Settings writes fail with `setting_from_hook` (plan 20). Every other banned command fails with exit 1 `plugin_run_forbidden` and the locked line `a hook or plugin run can't run "<command>". Run it in your own terminal.` JSON `fix` waits on C-01. Banned commands include `plugin` subcommands, `hook add`, `delete --expired`, and `purge`.
+Settings writes fail with `setting_from_hook` (plan 20). Every other banned command fails with exit 1 `plugin_run_forbidden`. Print the C-01 row. Do not print `a hook or plugin run can't run "<command>". Run it in your own terminal.` Banned commands include `plugin` subcommands, `hook add`, `delete --expired`, and `purge`.
 
 When `cause.chain` reaches 100, do not run that entry for that event. Set the recipient to `halted`. Keep the plugin enabled. Later commands in that brain warn `plugin_loop_halted` until a rerun, `plugin status --ack NAME`, or until the row is dropped. The plain warning is locked:
 
 `remember: warning: "<name>" was stopped after 100 hook runs in a row set each other off. The write was saved. To run it once more, run 'remember plugin rerun <name> <event-id>' within 7 days. To clear this warning without rerunning, run 'remember plugin status --ack <name>'.`
 
-`remember plugin rerun NAME EVENT_ID` runs one `failed` or `halted` recipient once, with the chain reset. Run it in the foreground and wait for the run before exiting (010 H-5.7, D-17). For a persistent action, print `plugin_action_timeout` or `plugin_action_failed`. Otherwise exit 1 `plugin_not_rerunnable`. The sentence is C-22.
+`remember plugin rerun NAME EVENT_ID` runs one `failed` or `halted` recipient once, with the chain reset. Run it in the foreground and wait for the run before exiting (010 H-5.7, D-17). For a persistent action, print `plugin_action_timeout` or `plugin_action_failed`. Otherwise exit 1 `plugin_not_rerunnable`. Print C-22.
 
 ### Pre-flight
 
-For each matching once-action, after commit: each trusted file exists and matches its hash, and `run.command[0]` is executable. A failed check sets that recipient to `failed`, logs it, and warns. A missing file or a `run.command[0]` that is not executable warns `plugin_preflight_failed`. A hash mismatch warns `plugin_untrusted` and follows 010 H-9.5 (010 H-6.2, C-20). Writes never wait for a handler. `plugin_action_timeout` and `plugin_action_failed` print only in `remember plugin test NAME`, in `remember plugin rerun NAME EVENT_ID`, and in the backfill of `plugin reindex` and `plugin enable`, which then exits 1 with `plugin_backfill_incomplete` (010 H-6.4, PP R3.21, R8.16, D-17). A write never prints them, and its exit code does not change. The sentence is C-20. Do not print it until C-20 is approved. The state change may land. Remember does not run that recipient again by itself. `plugin rerun` runs it. The write exits 0, or 4 with `--strict`. The next `remember dispatch` does not start that recipient.
+For each matching once-action, after commit: each trusted file exists and matches its hash, and `run.command[0]` is executable. A failed check sets that recipient to `failed`, logs it, and warns. A missing file or a `run.command[0]` that is not executable warns `plugin_preflight_failed`. Print the C-20 lines. A hash mismatch warns `plugin_untrusted` and follows 010 H-9.5 (010 H-6.2). Print C-17. It does not use `plugin_preflight_failed`. Writes never wait for a handler. `plugin_action_timeout` and `plugin_action_failed` print only in `remember plugin test NAME`, in `remember plugin rerun NAME EVENT_ID`, and in the backfill of `plugin reindex` and `plugin enable`, which then exits 1 with `plugin_backfill_incomplete` (010 H-6.4, PP R3.21, R8.16, D-17). Print C-30 and C-31 there. A write never prints them, and its exit code does not change. Remember does not run that recipient again by itself. `plugin rerun` runs it. The write exits 0, or 4 with `--strict`. The next `remember dispatch` does not start that recipient.
 
-When the dispatcher cannot start, warn `plugin_dispatch_failed` (C-21). Exit 0, or 4 with `--strict`. After a successful start, a failed handler does not change the user command's exit. The failure shows in `plugin log` and the app toast. The toast is remember-mac (C-39). Do not print it from the CLI.
+When the dispatcher cannot start, warn `plugin_dispatch_failed`. Print C-21. Exit 0, or 4 with `--strict`. After a successful start, a failed handler does not change the user command's exit. The failure shows in `plugin log` and the app toast. The toast is remember-mac (C-39). Do not print it from the CLI. Do not change the human `add` line.
 
 ### Trust and install
 
@@ -133,23 +134,23 @@ Hash the plugin folder and the manifest. Also hash `command[0]` and every later 
 
 A built-in has no trust record and is trusted.
 
-Confirm at `plugin add`, `hook add`, `plugin trust`, and `plugin add` of an installed name. Do not confirm at `plugin enable`. The CLI on a TTY prints the body, then `Type "<name>" to approve:`, and returns true only when the typed text equals the name. No TTY means no callback. No callback: exit 1 `plugin_approval_required`, record nothing (C-15). False: exit 1 `plugin_approval_denied`, record nothing (C-16). No `--confirm` flag. The folder body is `Allow "<name>" to read your memories? It can send them off this Mac.` Then the needs, permissions, and settings. The hook body is `Allow hook "<name>" to run <path>?`
+Confirm at `plugin add`, `hook add`, `plugin trust`, and `plugin add` of an installed name. Do not confirm at `plugin enable`. The CLI on a TTY prints the body, then the C-01 prompt `Type "<name>" to allow it, or press Enter to cancel:`. It returns true only when the typed text equals the name. Enter with no name returns false. No TTY means no callback. No callback: exit 1 `plugin_approval_required`, record nothing. Print C-15. False: exit 1 `plugin_approval_denied`, record nothing. Print C-16. No `--confirm` flag. The folder body is `Allow "<name>" to read your memories? It can send them off this Mac.` Then the needs, permissions, and settings. The hook body is `Allow hook "<name>" to run <path>?`
 
-Before each start, compare the record to the files. A mismatch does not run the entry, sets `disabled_reason` `untrusted` in that brain's `index.json`, and warns `plugin_untrusted` (C-17). `plugin trust` re-hashes, shows the changed needs, and asks again. True stores the new hash and sets `disabled_reason` to null. `enabled` stays. The next use runs the plugin when `enabled` resolves true.
+Before each start, compare the record to the files. A mismatch does not run the entry, sets `disabled_reason` `untrusted` in that brain's `index.json`, and warns `plugin_untrusted`. Print C-17. `plugin trust` re-hashes, shows the changed needs, and asks again. True stores the new hash and sets `disabled_reason` to null. `enabled` stays. The next use runs the plugin when `enabled` resolves true.
 
-`plugin add --dev <dir>` uses the folder in place, re-hashes at each start, needs a terminal, and marks searches with `plugin_dev_mode` (C-25).
+`plugin add --dev <dir>` uses the folder in place, re-hashes at each start, needs a terminal, and marks searches with `plugin_dev_mode`. Print C-25.
 
-Install once per user into `<data dir>/plugins/<name>/`. `plugin add DIR` copies the folder. An installed name updates: confirm, copy, new hash, `shutdown` reason `upgrade`. `plugin add` of a built-in name fails with `plugin_exists` (C-18).
+Install once per user into `<data dir>/plugins/<name>/`. `plugin add DIR` copies the folder. An installed name updates: confirm, copy, new hash, `shutdown` reason `upgrade`. `plugin add` of a built-in name fails with `plugin_exists`. Print C-18.
 
 `hook add` is the only hook command. It writes `plugin.json` with one once-action named `run`. The name is the typed name after `-` becomes `_`, and it must match a settings segment. The action holds the command, the events, the filter, `timeout` default `60s` range 1s–1h, and `working_directory` default `~`. After a true confirm, write `plugin.<name>.enabled` true on the user layer. `hook add --disabled` writes no enabled row.
 
 `plugin enable NAME [--scope brain]` and `plugin disable NAME [--scope brain]` are `settings set` of `plugin.<name>.enabled`. No prompt. `plugin enable` also clears `crash_loop` for this brain, starts warm-up, and runs a pending backfill.
 
-A brain with enabled true for a plugin that is not installed lists `missing` and warns `plugin_missing` (C-19).
+A brain with enabled true for a plugin that is not installed lists `missing` and warns `plugin_missing`. Print C-19.
 
-`plugin remove NAME` sends `shutdown` reason `removed`, deletes the install and the trust record, and keeps every `<brain>.d/plugins/<name>/`. It says so (C-37). `--delete-data` also deletes those folders for brains in `brains.json`. No prompt.
+`plugin remove NAME` sends `shutdown` reason `removed`, deletes the install and the trust record, and keeps every `<brain>.d/plugins/<name>/`. Print C-37. `--delete-data` also deletes those folders for brains in `brains.json`. No prompt.
 
-Reserve the built-in name `hybrid`. It is trusted. It has no filter entry. `plugin add hybrid` fails with `plugin_exists` once C-18 is approved. Until C-18, still reject the add and assert only the code. Do not rank. The ranker is D-09. Enabling `plugin.hybrid.enabled` changes the setting and does not change search order, because there is no filter entry.
+Reserve the built-in name `hybrid`. It is trusted. It has no filter entry. `plugin add hybrid` fails with `plugin_exists`. Print C-18. Do not rank. The ranker is D-09. Enabling `plugin.hybrid.enabled` changes the setting and does not change search order, because there is no filter entry.
 
 ### Processes
 
@@ -161,7 +162,7 @@ A process is alive only when `ping` answers within 200 ms. Hold an OS advisory l
 
 Every CLI run sends `shutdown` reason `idle` to every process past its idle timeout. The timeout is `remember.plugins.idle_timeout` (default 10 minutes) unless the manifest sets `idle_timeout`.
 
-Strikes: timeout, crash, malformed output, or oversize output. A well-formed error reply is not a strike. 3 consecutive strikes stop the process. 3 crashes in 10 minutes set `disabled_reason` `crash_loop` in `index.json` and warn `plugin_disabled_crash_loop` (C-26). Do not change the `enabled` setting. `plugin enable` clears `crash_loop`. A `ready.protocol` that differs from the manifest is not a strike. Set `disabled_reason` `protocol_mismatch`.
+Strikes: timeout, crash, malformed output, or oversize output. A well-formed error reply is not a strike. 3 consecutive strikes stop the process. 3 crashes in 10 minutes set `disabled_reason` `crash_loop` in `index.json` and warn `plugin_disabled_crash_loop`. Print C-26. Do not change the `enabled` setting. `plugin enable` clears `crash_loop`. A `ready.protocol` that differs from the manifest is not a strike. Set `disabled_reason` `protocol_mismatch`.
 
 A plugin runs only when `enabled` resolves true, the trust record matches or the plugin is built-in, and the stored `disabled_reason` is null. Status value `user` is computed when the setting resolves false and the stored reason is null. Do not write `user` into `index.json`. Stored values are null, `crash_loop`, `protocol_mismatch`, or `untrusted`.
 
@@ -177,13 +178,13 @@ No enabled filters, or `--no-filters`: the result is BM25 order.
 
 Priority: lower number first, default 500. Tie: plugin name, then entry name, byte order. No user setting changes priority, budget, or cold-start grace.
 
-`remember.plugins.chain_budget` caps the chain. When the cap is reached, do not run the remaining filters. Status `skipped`, reason `chain_capped`. Do not emit `time_budget_capped`. Clip a budget that is larger than the time left. The clipped value is the `budget_ms` that is sent. No warning for the clip. Warn `plugin_chain_capped` as well (D-02).
+`remember.plugins.chain_budget` caps the chain. When the cap is reached, do not run the remaining filters. Status `skipped`, reason `chain_capped`. Do not emit `time_budget_capped`. Clip a budget that is larger than the time left. The clipped value is the `budget_ms` that is sent. No warning for the clip. Warn `plugin_chain_capped` as well (D-02). Print that line from COPY-PENDING.
 
-`cold_start_grace` comes from the manifest. Default 10s. Range 1 ms to 30 s. `0ms` makes the manifest invalid. `plugin status` shows it next to `budget`. A cold filter that does not answer: the whole result is BM25 order, and the code is `plugin_filter_cold_start`. The locked sentence names hybrid/rerank only. Any other filter's sentence is C-29. The filter keeps loading.
+`cold_start_grace` comes from the manifest. Default 10s. Range 1 ms to 30 s. `0ms` makes the manifest invalid. `plugin status` shows it next to `budget`. A cold filter that does not answer: the whole result is BM25 order, and the code is `plugin_filter_cold_start`. Hybrid/rerank prints the C-01 cold-start line. Any other filter prints C-29. The filter keeps loading.
 
-A filter that sleeps past its budget: status `timeout`, code `plugin_filter_timeout`, input passes on. The sentence is C-27. A failure that is not a timeout is `plugin_filter_failed` (D-08). Its sentence waits on C-28.
+A filter that sleeps past its budget: status `timeout`, code `plugin_filter_timeout`, input passes on. Print C-27. A failure that is not a timeout is `plugin_filter_failed` (D-08). Print C-28.
 
-Every search response has `data.filters[]`: name, version, status (`applied`, `skipped`, `failed`, `timeout`), time, and an optional note. Warnings that a plugin sends in its reply go only to the plugin log and `plugin status`. They do not enter command output. Warnings Remember raises do enter command output.
+Every search response has `data.filters[]`: name, version, status (`applied`, `skipped`, `failed`, `timeout`), time, and an optional note. Warnings that a plugin sends in its reply go only to the plugin log and `plugin status`. They do not enter command output. Warnings Remember raises do enter command output. When Remember raises `plugin_additions_capped`, `plugin_note_truncated`, or `plugin_request_trimmed`, print C-32, C-33, and C-34. At `plugin add`, an unknown manifest field warns `unknown_field` (PP R2.6). Print the C-35 file line. `plugin.json` members `run`, `permissions`, and `filter` are `plugin_manifest_invalid`, not C-35. A plugin reply's own `unknown_field` stays in the plugin log and `plugin status` (PP R9.21).
 
 Human search prints no extra line when every filter applied. `remember search --explain` prints the filter table and `ranked by <plugin>/<entry>`.
 
@@ -234,13 +235,13 @@ remember purge LOCATOR
 
 `remember sweep` sweeps one brain and then dispatches. `sweep --all` does that for each brain in `brains.json`.
 
-`remember purge LOCATOR` permanently deletes one row that is already expired or deleted. A live row exits 3 `wrong_bin`. The plain line is `"<key>" is live. Delete it first, then purge it.` Use the id when there is no key. Purge writes one tombstone. `delete --expired` moves every due, not-yet-deleted row to Deleted in one transaction, emits `memory.deleted` only, and has no cap. Bots never get purge. A run cannot purge or `delete --expired`.
+`remember purge LOCATOR` permanently deletes one row that is already expired or deleted. A live row exits 3 `wrong_bin`. Print the C-01 `wrong_bin` row. `<key>` is the key, or the id when there is no key. Do not print `"<key>" is live. Delete it first, then purge it.` Purge writes one tombstone. `delete --expired` moves every due, not-yet-deleted row to Deleted in one transaction, emits `memory.deleted` only, and has no cap. Bots never get purge. A run cannot purge or `delete --expired`.
 
 Exit codes: 0 ok, including a degraded command with a warning. 1 usage or error. 2 not found. 3 wrong bin. 4 a warning under strict. `plugin status` exits 0 whenever it can report.
 
 JSON types follow `<noun>.<verb>.result`. A hook appears in `plugin.list.result` like any plugin, with `timeout` and `timeout_ms` on its action.
 
-Manifest names match `^[a-z][a-z0-9_]{0,39}$`. A hyphen in a manifest is `plugin_manifest_invalid`. The fix suggests the `_` form (C-36). A manifest setting key `enabled` is `plugin_manifest_invalid`. Generate `plugin.<name>.enabled` for each installed plugin, scopes user and brain, default false. Generate other keys from the manifest `settings` list. Do this in this plan, not in plan 20.
+Manifest names match `^[a-z][a-z0-9_]{0,39}$`. A hyphen in a manifest is `plugin_manifest_invalid`. Print C-36. A manifest setting key `enabled` is `plugin_manifest_invalid`. Print the C-36 reserved-key lines. Generate `plugin.<name>.enabled` for each installed plugin, scopes user and brain, default false. Generate other keys from the manifest `settings` list. Do this in this plan, not in plan 20.
 
 ### App contract, not the app
 
@@ -270,7 +271,7 @@ Tests: `tests/test_plugins.c`, suite `plugins`. Use the plan 24 fixtures.
 
 ## Must-pass tests
 
-Use the 010 verification numbers. Skip any assertion whose sentence is still in COPY-PENDING. Assert the code and the stored state instead.
+Use the 010 verification numbers. Assert the approved lines in COPY-PENDING. The only unprinted bytes in this plan are the `skipped_source` fields (D-14) and the human `add` line (D-05).
 
 | Test | Proves |
 |---|---|
@@ -281,52 +282,52 @@ Use the 010 verification numbers. Skip any assertion whose sentence is still in 
 | 5 | Two dispatchers. Only one holds the lock. |
 | 6 | Each filter miss inserts nothing, logs nothing, and increments `skipped_filter`. |
 | 7 | A hook that writes the memory it listens for sees `REMEMBER_CAUSE_HOOK` equal to `plugin/<name>/run`. |
-| 8 | Chain 100 halts, plugin stays enabled, locked `plugin_loop_halted` line, rerun resets depth. `plugin_not_rerunnable` code when there is nothing to rerun. Sentence C-22 waits. |
-| 9 | Pre-flight failure: recipient `failed`, no run, exit 0, exit 4 with `--strict`. A missing or non-executable file is `plugin_preflight_failed`, and a changed hash is `plugin_untrusted`. State only until C-20. |
+| 8 | Chain 100 halts, plugin stays enabled, locked `plugin_loop_halted` line, rerun resets depth. Nothing to rerun prints C-22. |
+| 9 | Pre-flight failure: recipient `failed`, no run, exit 0, exit 4 with `--strict`. A missing or non-executable file prints C-20. A changed hash prints C-17. |
 | 10 | Truncation order at 256 KiB. |
 | 11 | argv and env contain no body and no tag text. |
 | 12 | No self-retry. Drop after 7 days with `dropped_stale`. |
-| 13 | Hash mismatch sets `untrusted` and does not run. Trust clears the reason and keeps `enabled`. Codes for approval wait on C-15 and C-16 for their sentences. |
+| 13 | Hash mismatch sets `untrusted` and does not run. Trust clears the reason and keeps `enabled`. No callback prints C-15. A refusal prints C-16. |
 | 14 | Expiry sweep emits once. Revival clears `expired_at`. Purge of an unmarked expired row emits only `memory.purged`. |
 | 15 | Default origins skip sync and import. `--hooks` runs them. One `skipped_source` line per skipped action and event type, with the H-7.2 fields, `event_type` and `count`. |
 | 16 | Sweep with no plugins inserts no outbox row. |
 | 17 | `REMEMBER_PROCESSES=0` returns `plugin_unsupported` and inserts nothing. A built-in filter path still runs. Hybrid has no filter, so this test uses a test double built-in registered only in the test binary. Do not ship that double. |
-| 19 | Hook depth blocks `delete --expired`, `purge`, `import`, and `sweep` with the locked `plugin_run_forbidden` line. |
+| 19 | Hook depth blocks `delete --expired`, `purge`, `import`, and `sweep` with the C-01 `plugin_run_forbidden` line. |
 | 20 | No filter matches today's BM25 order. Stage 3 drops a Deleted id. |
-| 21 | Timeout code `plugin_filter_timeout`, status `timeout`, exit 0. Sentence waits on C-27. |
-| 22 | Cold filter: BM25, code `plugin_filter_cold_start`, process keeps loading. Sentence for a non-hybrid name waits on C-29. |
+| 21 | Timeout code `plugin_filter_timeout`, status `timeout`, exit 0. Print C-27. |
+| 22 | Cold filter: BM25, code `plugin_filter_cold_start`, process keeps loading. Hybrid/rerank prints the C-01 line. Any other name prints C-29. |
 | 23 | Three crashes in brain A set `crash_loop` in A's `index.json` only. `enabled` is unchanged. |
 | 24 | A new `index_version` marks `stale` and pending. Search does not start the backfill. |
 | 26 | Plan 24 fixtures pass `plugin test DIR`. Hybrid is not in this suite. |
 | 27 | `plugin status --json` exits 0. |
-| 28 | `delete --deleted` is unknown. Purge of a live row exits 3 with the locked line. Purge of a deleted row writes one tombstone. |
+| 28 | `delete --deleted` is unknown. Purge of a live row exits 3 with the C-01 `wrong_bin` line. Purge of a deleted row writes one tombstone. |
 | 29 | One plugin's second run starts after the first ends. |
 | 31 | `remember_call` invokes the dispatch callback once and does not fork. |
 | 32 | Update shows changed needs and shuts down with `upgrade`. `plugin add hybrid` is `plugin_exists`. |
 | 33 | A persistent plugin that sets the cause env extends the chain. |
-| 34 | A lost reindex exits 1 `plugin_backfill_incomplete` and resumes. Sentence waits on C-24. |
+| 34 | A lost reindex exits 1 `plugin_backfill_incomplete` and resumes. Print C-24. |
 | 35 | `brain list` after a read-write open. `brain prune` drops a missing path. |
 | 36 | `hook add wake --command /bin/echo --event memory.created` writes `plugin.wake.enabled` true on the user layer. `--disabled` writes no row. |
-| copy | A copied brain file mints a new `brain_id`. The warning waits on C-38. A moved brain keeps the id and updates the path. |
-| chain cap | Remaining filters are `skipped` / `chain_capped`. No `time_budget_capped`. The `plugin_chain_capped` warning as well (D-02). |
+| copy | A copied brain file mints a new `brain_id` and prints C-38. A moved brain keeps the id and updates the path. |
+| chain cap | Remaining filters are `skipped` / `chain_capped`. No `time_budget_capped`. Print the `plugin_chain_capped` line (D-02). |
 | hybrid | Search order with `plugin.hybrid.enabled` true equals BM25. |
 
 Do not implement 010 test 25 (URL). Do not implement test 18 beyond "default origins insert no row", which test 15 already covers.
 
-007 tests 8, 10, 23, and 30 move here: manifest key `enabled` is invalid, untrusted `settings set` of `plugin.<name>.enabled` fails with `plugin_untrusted` once C-17 exists, `plugin enable` and `plugin disable --scope brain`, and `hook add url-expand` creates `url_expand`.
+007 tests 8, 10, 23, and 30 move here: manifest key `enabled` is invalid and prints the C-36 reserved-key lines, untrusted `settings set` of `plugin.<name>.enabled` fails with `plugin_untrusted` and prints C-17, `plugin enable` and `plugin disable --scope brain`, and `hook add url-expand` creates `url_expand`.
 
 ## Stages
 
 1. Manifest parser and name rule. Generated settings keys through plan 20's registry. No process yet.
-2. `brains.json` and JE-3.10. Warning text waits on C-38.
+2. `brains.json` and JE-3.10. Print C-38 and the C-01 `brain_missing` line.
 3. Outbox insert, write-time filter, post-command sweep. No spawn yet.
-4. Trust file and confirm callback. Sentences C-15, C-16, C-17, C-18, and C-37 wait. State changes do not.
+4. Trust file and confirm callback. Print C-15, C-16, C-17, C-18, and C-37.
 5. `hook add` and `plugin add` / `enable` / `disable` / `remove` / `list` / `show`.
-6. Dispatcher, pre-flight, kill switch, rerun, sweep. Locked sentences that are already approved (`plugin_loop_halted`, `plugin_run_forbidden`, purge-live) land here.
-7. Search stages, manifest budgets, chain cap with `plugin_chain_capped` (D-02).
+6. Dispatcher, pre-flight, kill switch, rerun, sweep. Print `plugin_loop_halted`, the C-01 `plugin_run_forbidden` and `wrong_bin` rows, and C-20 through C-24.
+7. Search stages, manifest budgets, chain cap with the `plugin_chain_capped` line (D-02). Print C-27, C-28, C-29, and C-32 through C-34. Print C-30 and C-31 only where H-6.4 allows.
 8. Persistent processes, acks, backfill, `index.json`.
 9. `plugin test` against plan 24 fixtures.
-10. Stop for every remaining COPY-PENDING and DESIGN-PENDING row this plan names. Apply the approved sentences only. Do not start URL, hybrid ranking, or the daemon.
+10. Stop for D-14 before writing `skipped_source` fields. Do not change the human `add` line (D-05). Do not start URL, hybrid ranking, or the daemon.
 
 Each stage: one red test, the gate, review, then the next stage.
 
@@ -349,11 +350,11 @@ Quality gate: plan 19's commands. Coverage 100/100.
 
 ## Definition of done
 
-- [ ] Must-pass rows that are not waiting on copy or design are green.
+- [ ] Must-pass rows are green. The `skipped_source` fields stay unprinted until D-14. The human `add` line is unchanged.
 - [ ] No daemon, no URL plugin, no ranker, no `hooks.json`, no `time_budget_capped`.
-- [ ] Waiting sentences are unprinted, or they match an approved COPY-PENDING row quoted here.
+- [ ] Printed sentences match COPY-PENDING. C-30 and C-31 follow H-6.4 until D-17.
 - [ ] Gate green. Second review clear.
-- [ ] INDEX row 25 is ticked only when the waiting rows are closed and the review is closed.
+- [ ] INDEX row 25 is ticked only when D-14 is closed and the review is closed. D-05 does not have to be closed to tick it, because this plan does not change the `add` line.
 
 ## Second review handover
 
