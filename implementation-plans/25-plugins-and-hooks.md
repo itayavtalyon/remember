@@ -206,7 +206,7 @@ Index states the plugin reports: `ready`, `building`, `stale`, `missing`, `faile
 
 ### Logs and CLI
 
-Run log: `<brain>.d/hooks.log`, JSON Lines, mode 0600. Rotate at 5 MB, keep 3 files, delete entries older than 30 days, whichever comes first. `plugin log --follow --json` emits one `remember-message` per line. Type `plugin.run` for a run record. Type `plugin.stderr` with `data` `{plugin, line, at}` for a stderr line.
+Run log: `<brain>.d/hooks.log`, JSON Lines, mode 0600. Rotate at 5 MB, keep 3 files, delete entries older than 30 days, whichever comes first. `plugin log --follow --json` emits one `remember-message` per line. Type `plugin.run` for a run record. Type `plugin.stderr` with `data` `{plugin, line, at}` for a stderr line. A `skipped_source` record streams the same way, in the same run-record shape: a `plugin.run` line whose `data` is `{"version":1,"at","event":"skipped_source","event_type","command","origin","plugin","action","count"}`. There is no separate message type for it (Itay 2026-10-26).
 
 Commands:
 
