@@ -156,7 +156,7 @@ Settings merge is locked (007 ST-2.7). Tombstone confirmation, the change feed, 
 
 App accessibility tests moved to remember-mac log 011 (010, M-19 N9). That log is not in this repo. Plans 19–26 do not write the Mac app.
 
-Engine contracts the app calls are in plans 20 and 25: `RememberEnv` callbacks (010 H-0.6), `remember_call` for settings writes, the hourly LaunchAgent command line `remember sweep --all` (the app installs it, the engine does not), and Empty Trash as one `purge` per Deleted memory with no Touch ID (010 H-16.9).
+Engine contracts the app calls are in plans 20 and 25: `RememberEnv` callbacks (010 H-0.6), `remember_call` for settings writes, the daemon LaunchAgent `app.fortkeeps.daemon` running `remember daemon` (the app installs it, the engine does not; no sweep agent, log 020 D-3), and Empty Trash as one `purge` per Deleted memory with no Touch ID (010 H-16.9).
 
 ### D-13. Tool-undo name parse
 
