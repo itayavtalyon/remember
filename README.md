@@ -41,7 +41,7 @@ flowchart LR
 - **Automate** — `--json` on every command; ships an agent skill for Claude / Cursor / others.
 - **Merge** — `import --from-db` merges another brain by `sync_id`; run `conflicts` after.
 
-Design: [`design-logs/001-foundations.md`](design-logs/001-foundations.md) ·
+Specs: [`specs/README.md`](specs/README.md) ·
 Plans: [`implementation-plans/INDEX.md`](implementation-plans/INDEX.md).
 
 ## Install

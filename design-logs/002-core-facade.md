@@ -1,5 +1,7 @@
 # 002 - Core façade: in-process entrypoint for a native GUI
 
+> **Frozen 2026-10-31.** This log is history, not the source of truth. What remember does today: Spec: [`specs/README.md`](../specs/README.md) (no spec yet). Decisions made after this log, and changes to its own, are Remember entries tagged `project:remember`. Where they disagree with this log, they win.
+
 **Status:** Implemented (step 11) — 2026-07-30
 **Author:** Itay (solo) + agent
 **Created:** 2026-07-30

@@ -21,7 +21,7 @@ Do not build the daemon, the URL plugin, or the hybrid ranker.
 
 ## Source of truth
 
-- [`design-logs/010-plugins-and-hooks.md`](../design-logs/010-plugins-and-hooks.md) Design. The wire format is [`docs/PLUGIN-PROTOCOL.md`](../docs/PLUGIN-PROTOCOL.md) revision 6 (plan 24). Cite spec rule ids. Do not copy the spec into code comments.
+- [`design-logs/010-plugins-and-hooks.md`](../design-logs/010-plugins-and-hooks.md) Design. The wire format is [`specs/PLUGIN-PROTOCOL.md`](../specs/PLUGIN-PROTOCOL.md) revision 6 (plan 24). Cite spec rule ids. Do not copy the spec into code comments.
 - [`design-logs/007-settings.md`](../design-logs/007-settings.md) ST-5.7 through ST-5.10 and ST-9.6.
 - [`design-logs/008-json-envelope.md`](../design-logs/008-json-envelope.md) JE-3.10 and JE-4.4.
 

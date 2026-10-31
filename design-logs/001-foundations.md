@@ -1,5 +1,7 @@
 # 001 - Foundations: `remember` CLI (personal second brain)
 
+> **Frozen 2026-10-31.** This log is history, not the source of truth. What remember does today: Spec: [`specs/README.md`](../specs/README.md) (no spec yet; this log is still the reference for the CLI surface). Decisions made after this log, and changes to its own, are Remember entries tagged `project:remember`. Where they disagree with this log, they win.
+
 **Status:** Design (immutable — deviations go in Implementation Results)
 **Author:** Itay (solo)
 **Created:** 2026-07-20
