@@ -245,7 +245,7 @@ Manifest names match `^[a-z][a-z0-9_]{0,39}$`. A hyphen in a manifest is `plugin
 
 ### App contract, not the app
 
-The engine does not install launchd or systemd. The Mac app installs LaunchAgent label `app.fortkeeps.remember-sweep`, command `remember sweep --all`, `StartInterval` 3600, only as the fallback when the daemon is not running. Linux docs name user units `io.github.itayavtalyon.remember.sweep.service` and `io.github.itayavtalyon.remember.sweep.timer` with `OnUnitActiveSec=1h`. Do not install the daemon unit. Do not use label `app.fortkeeps.daemon`.
+The engine does not install launchd or systemd. There is no sweep LaunchAgent (log 018 V1-17, log 020 D-3): the Mac app installs one LaunchAgent, `app.fortkeeps.daemon`, which runs `remember daemon`; the daemon sweeps, and the CLI sweeps after each command. Linux docs name the daemon user unit only. Only one daemon runs per user and brain (log 020 D-4; lock in R 013). Do not install the daemon from the engine.
 
 Empty Trash in the app is one `purge` per Deleted memory. No Touch ID. The engine has no Empty Trash command.
 
