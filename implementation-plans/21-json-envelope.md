@@ -287,4 +287,14 @@ Simplify pass:
 
 ## Review Notes
 
-_(empty)_
+Stage flow (`decision:plan21-stage-flow`, Itay 2026-10-31): after each stage, run the in-session deep review, fix, and continue. There is no per-stage `REVIEW_REQUEST`. One whole-plan review runs at the end.
+
+### Stage 1 deep review (2026-10-31, in session)
+
+Probes run: every `--json` success command on one brain (add, get, list, search, update, link, related, unlink, tags, delete, purge, device, device new, conflicts, repair search-index) parses as JSON, starts `format`, `version`, `type`, has `data` and no `error`, exits 0, and leaves stderr empty. `import --from-db` takes v4 and v5 sources only, so its envelope is proved in `test_output.c`, `test_sync_import.c`, and `test_facade.c`, not in this probe.
+
+Findings:
+
+- **Important, fixed (grill):** `add --json` reads the row's links after the write commits. A `REMEMBER_TEST_FAIL_READ` sweep shows N=17 to 20 save the memory and exit 1 with `SQLITE_IOERR_READ`. Itay chose fail loud (`decision:plan21-add-link-read-fails-loud`). Test `envelope_add_link_read_error_after_the_write_exits_1_and_keeps_the_write`. Mutant: skip the neighbor-status check; that test goes red.
+- **Important, fixed:** `docs/engineering-notes.md` (Output, Repair, `tags`) and `skills/remember/SKILL.md` (add, list, search, device, entry placement) still described `{"version":1,...}`. Both are corrected. The notes name the consumer impact: remember-mac and scripts must read `data`.
+- **Nit, kept:** reply types go into the head through `%s` unescaped. Every caller passes a string literal. No stored or user value reaches it.

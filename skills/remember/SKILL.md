@@ -114,7 +114,7 @@ remember --json add --source agent -- -
 - Keyless → body-hash merge (duplicate body merges tags). Hitting an **expired or soft-deleted** same key/hash **revives** it (same sync_id).
 - Body token `-` alone means **stdin**; after `--`, `-` is a one-character body
 - `--source`: `human` | `agent` | `tool` | `share` | `unknown` (default `unknown`). **Agents pass `--source agent` on add only.** `share` is used by the Mac app Share/Service/Intent surfaces — agents should not set it.
-- Human stdout: id only. JSON: `{"version":1,"action":"created"|"merged"|"updated","count":1,"entries":[…]}`
+- Human stdout: id only. JSON: type `memory.add.result`, `data` is `{"action":"created"|"merged"|"updated","memory":{…}}`; the memory includes `links`, like `get`.
 
 ### search / list / tags
 
@@ -132,8 +132,8 @@ remember --json tags
 - search: one required QUERY. Word prefixes match in keys, bodies and tags (`boo` finds "Book", `edit` finds `pref:editor`), and the QUERY also runs as FTS5 syntax. A QUERY FTS5 cannot parse still exits 0 with the prefix matches and a warning (FTS notes below). An empty or blank QUERY exits 0 with an empty result. Put `--` before a QUERY that starts with `-` (`search -- -x`); without it, `-x` is an unknown option.
 - Order: exact key, then key prefix, then relevance (bm25), then `updated_at`.
 - Filters: `--tag` (AND, repeatable), `--key`, `--source`, `--limit` (default 20, max 1000), `--offset` (≥ 0), `--expired` / `--deleted` (default **live only**). Number options take ASCII digits only (`+5` or ` 5` is a usage error).
-- JSON envelope (list): `version`, `offset`, `limit`, `count`, `total`, `entries` (full bodies + `links` stubs; empty array if none)
-- JSON envelope (search): `version`, `offset`, `limit`, `count`, `total`, `keys`, `tags`, `entries`. `keys` is `{"total":N,"items":[{"key","sync_id","label","source","updated_at"}]}`, `tags` is `{"total":N,"items":[{"tag","count"}]}`: the keys and tags that match the QUERY among the memories in the active bin and filters (not only the matched rows). `--facet-limit N` (default 50, 1..200) caps each `items`; `total` counts them all; `--limit` / `--offset` page `entries` only. `label` is the memory's `# ` title, else the key.
+- JSON (list): type `memory.list.result`; `data` has `offset`, `limit`, `count`, `total`, `entries` (full bodies + `links` stubs; empty array if none)
+- JSON (search): type `memory.search.result`; `data` has `offset`, `limit`, `count`, `total`, `keys`, `tags`, `entries`. `keys` is `{"total":N,"items":[{"key","sync_id","label","source","updated_at"}]}`, `tags` is `{"total":N,"items":[{"tag","count"}]}`: the keys and tags that match the QUERY among the memories in the active bin and filters (not only the matched rows). `--facet-limit N` (default 50, 1..200) caps each `items`; `total` counts them all; `--limit` / `--offset` page `entries` only. `label` is the memory's `# ` title, else the key.
 - If `total` > rows received, page with `--offset` or raise `--limit` before concluding nothing else exists
 - list: same filters/paging; no FTS. `--sort updated` (default) orders by `updated_at DESC, id DESC`. `--sort created` orders by `created_at DESC, id DESC`.
 - `--since TS` is inclusive and `--until TS` is exclusive. On `list` they filter the sort field. On `search` they filter `updated_at`. `search --sort` is validated, then ignored.
@@ -204,7 +204,7 @@ remember --json device new
 ```
 
 - The device id is the sidecar `<db-path>.device_id` (one lowercase UUID, mode 0600). The database holds no second copy.
-- `device` prints that id. `--json` is `{"version":1,"device_id":"…"}`.
+- `device` prints that id. `--json` is type `device.get.result` with `data` `{"device_id":"…"}`.
 - `device new` mints a new id after a restore or a copied brain. It writes the sidecar and does not change version vectors. Plain output is the new id. `--json` adds `"previous"`.
 - `device new` also repairs an invalid sidecar. No other command does.
 - A missing sidecar is minted on open, so `"previous"` is that id. JSON `null` is only the type.
@@ -250,7 +250,7 @@ remember --json related --deleted --key gonek
 }
 ```
 
-Field order is fixed. `key` is JSON `null` when keyless. On **list / search / get** only, `"links"` follows `"version_vector"`. Stubs are `{id,sync_id,key,type,bin,preview}` — preview ≤ 40 codepoints. Human list/search sixth column is neighbor **ids** only (`[expired]`/`[deleted]` suffix; never `[trash]`).
+With `--json` the entry is `data.memory` (get, add, update, rekey) or one item of `data.entries` (list, search, delete, purge). Field order is fixed. `key` is JSON `null` when keyless. On **list / search / get / add** only, `"links"` follows `"version_vector"`. Stubs are `{id,sync_id,key,type,bin,preview}` — preview ≤ 40 codepoints. Human list/search sixth column is neighbor **ids** only (`[expired]`/`[deleted]` suffix; never `[trash]`).
 
 ## Evolving facts — use `--key`
 
