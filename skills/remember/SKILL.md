@@ -79,9 +79,9 @@ With `--json`, a failure is the same one envelope on stdout: the command's `type
 
 ## Locators and bins
 
-Exactly **one** of: positional integer (`local_id`) | `--key KEY`.
+Exactly **one** of: a positional UUID or digits (`local_id`) | `--key KEY`.
 
-JSON `id` is the memory's lowercase hyphenated UUID. Pass `local_id` or `--key` to address a memory. `--id`, `--local-id`, and `--sync-id` are unknown options. There is no alias.
+JSON `id` is the memory's lowercase hyphenated UUID. Pass that UUID, a number from `remember list`, or `--key` to address a memory. `--id`, `--local-id`, and `--sync-id` are unknown options. There is no alias.
 
 **Bins** (orthogonal flags; mutex):
 
@@ -223,7 +223,7 @@ remember --json related --deleted --key gonek
 
 **Stub `type` (output, 5 names):** `related`, `cites`, `cited_by`, `supersedes`, `superseded_by`.
 
-**Locators:** each end is exactly one of the integer id or `--*-key`. `--from-sync-id` and `--to-sync-id` are unknown options. Default resolves **live+expired**; `--deleted` includes deleted ends. No exit 3 on graph commands. Default related/stubs **omit deleted** neighbors; expired neighbors stay visible with `bin=expired`.
+**Locators:** each end is exactly one of a UUID, digits (`local_id`), or `--*-key`. `--from-sync-id` and `--to-sync-id` are unknown options. Default resolves **live+expired**; `--deleted` includes deleted ends. No exit 3 on graph commands. Default related/stubs **omit deleted** neighbors; expired neighbors stay visible with `bin=expired`.
 
 **rekey:** change a key in place (`--to-key` / `--clear-key`). **Never delete + re-add to rename** — that CASCADE-drops edges.
 

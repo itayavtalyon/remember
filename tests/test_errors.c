@@ -1250,7 +1250,8 @@ typedef struct {
     int exit_code;
     bool with_detail; /* JSON error carries the E4.9 cannot_open detail (import row) */
     /* NOLINTNEXTLINE(readability-magic-numbers,cppcoreguidelines-avoid-magic-numbers) */
-    char pad_[3]; /* explicit tail padding (kept -Wpadded-clean) */
+    char pad_[3];             /* explicit tail padding (kept -Wpadded-clean) */
+    const char *json_message; /* NULL: JSON message is the plain message. C-01 quotes differ. */
 } GoldenError;
 
 /* Count leading non-NULL args (rows are NULL-padded). */
@@ -1318,7 +1319,8 @@ TEST(golden_error_lines_and_d9_codes)
          "Run 'remember --help' to see the commands.",
          1,
          false,
-         {0}},
+         {0},
+         NULL},
         {{"--bogus", "list"},
          "unknown option '--bogus'",
          "usage",
@@ -1326,7 +1328,8 @@ TEST(golden_error_lines_and_d9_codes)
          "Run 'remember --help' to see the commands.",
          1,
          false,
-         {0}},
+         {0},
+         NULL},
         {{"list", "--limit", "0"},
          "invalid --limit (must be 1..1000)",
          "usage",
@@ -1334,15 +1337,17 @@ TEST(golden_error_lines_and_d9_codes)
          "Run 'remember list --help' to see how to use it.",
          1,
          false,
-         {0}},
+         {0},
+         NULL},
         {{"get", "abc"},
-         "invalid id",
-         "usage",
+         "\"abc\" isn't a memory id. Use a number from 'remember list', a UUID, or --key KEY.",
+         "invalid_argument",
          "memory.get",
-         "Run 'remember get --help' to see how to use it.",
+         "Use a number from 'remember list', a UUID, or --key KEY.",
          1,
          false,
-         {0}},
+         {0},
+         "\\\"abc\\\" isn't a memory id."},
         {{"add", "--source", "martian", "x"},
          "invalid source (use human, agent, tool, share, or unknown)",
          "usage",
@@ -1350,7 +1355,8 @@ TEST(golden_error_lines_and_d9_codes)
          "Run 'remember add --help' to see how to use it.",
          1,
          false,
-         {0}},
+         {0},
+         NULL},
         {{"add", "--key", "", "x"},
          "empty key",
          "usage",
@@ -1358,7 +1364,8 @@ TEST(golden_error_lines_and_d9_codes)
          "Run 'remember add --help' to see how to use it.",
          1,
          false,
-         {0}},
+         {0},
+         NULL},
         {{"conflict", "accept", "--id", "1", "--keep", "sideways"},
          "--keep must be local, incoming, or both",
          "usage",
@@ -1366,7 +1373,8 @@ TEST(golden_error_lines_and_d9_codes)
          "Run 'remember conflict --help' to see how to use it.",
          1,
          false,
-         {0}},
+         {0},
+         NULL},
         {{"device", "extra"},
          "device takes 'new' or no arguments",
          "usage",
@@ -1374,7 +1382,8 @@ TEST(golden_error_lines_and_d9_codes)
          "Run 'remember device --help' to see how to use it.",
          1,
          false,
-         {0}},
+         {0},
+         NULL},
         {{"get", "999"},
          "not found",
          "not_found",
@@ -1382,7 +1391,8 @@ TEST(golden_error_lines_and_d9_codes)
          "Run 'remember list' to see keys.",
          2,
          false,
-         {0}},
+         {0},
+         NULL},
         {{"get", "--key", "k2"},
          "deleted",
          "deleted",
@@ -1390,7 +1400,8 @@ TEST(golden_error_lines_and_d9_codes)
          "Add --deleted to use it.",
          3,
          false,
-         {0}},
+         {0},
+         NULL},
         {{"get", "--deleted", "--key", "k1"},
          "not_deleted",
          "not_deleted",
@@ -1398,7 +1409,8 @@ TEST(golden_error_lines_and_d9_codes)
          "Run 'remember delete' on it first.",
          3,
          false,
-         {0}},
+         {0},
+         NULL},
         {{"link", "1", "1"},
          "self-link",
          "self_link",
@@ -1406,7 +1418,8 @@ TEST(golden_error_lines_and_d9_codes)
          "Link two different memories.",
          1,
          false,
-         {0}},
+         {0},
+         NULL},
         {{"rekey", "--key", "k1", "--to-key", "k2"},
          "key conflicts with entry 2",
          "key_conflict",
@@ -1414,7 +1427,8 @@ TEST(golden_error_lines_and_d9_codes)
          "Pick another key, or rekey the other memory first.",
          1,
          false,
-         {0}},
+         {0},
+         NULL},
         {{"update", "4", "--text", "gamma"},
          "body hash conflicts with entry 3",
          "body_conflict",
@@ -1422,7 +1436,8 @@ TEST(golden_error_lines_and_d9_codes)
          "Change the text, or update the memory that already has it.",
          1,
          false,
-         {0}},
+         {0},
+         NULL},
         {{"import", "--from-db", "/nonexistent/remember-golden.db"},
          "database error: cannot open the import source (SQLITE_CANTOPEN). Check the --from-db "
          "path.",
@@ -1431,7 +1446,8 @@ TEST(golden_error_lines_and_d9_codes)
          "Check the --from-db path.",
          1,
          true,
-         {0}},
+         {0},
+         NULL},
     };
     char *db = make_temp_db_path();
     size_t i = 0;
@@ -1474,11 +1490,13 @@ TEST(golden_error_lines_and_d9_codes)
                 "\"missing\"}}}\n",
                 row->type, row->code, row->fix, ENOENT, row->args[2]);
         } else {
+            const char *json_message = row->json_message != NULL ? row->json_message : row->message;
+
             (void)snprintf(want, sizeof(want),
                            "{\"format\":\"remember-message\",\"version\":1,\"type\":\"%s.result\","
                            "\"error\":{\"code\":\"%s\",\"message\":\"%s\",\"fix\":\"%s\","
                            "\"retryable\":false}}\n",
-                           row->type, row->code, row->message, row->fix);
+                           row->type, row->code, json_message, row->fix);
         }
         ASSERT_STREQ(r.out, want);
         ASSERT_EQ_INT(r.exit_code, row->exit_code);

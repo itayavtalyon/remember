@@ -79,7 +79,7 @@ Each rule states the rule, says why, and gives a correct example (✓) and a wro
 
 ### 1.2a CLI locators (S-13, #576)
 
-- A memory is found by the positional or by `--key KEY`. The positional accepts a UUID, matched as `id`, or digits, matched as `local_id`. Any other positional fails with `invalid_argument`: `"abc" isn't a memory id. Use a UUID, a number from 'remember list', or --key.` (JE-3.4).
+- A memory is found by the positional or by `--key KEY`. The positional accepts a UUID, matched as `id`, or digits, matched as `local_id`. Any other positional fails with `invalid_argument`: `"abc" isn't a memory id. Use a number from 'remember list', a UUID, or --key KEY.` (JE-3.4, K-1 2026-10-25).
 - No `--id`, `--local-id` or `--sync-id` flag exists. `REMEMBER_SYNC_ID` and `sync_id` are gone, with no alias (JE-3.8). The hook env is `REMEMBER_ID`, which is `data.memory.id`.
 - HTTP and MCP use `id` (`GET /v1/memories/{id}`, `remember_get {"id":"…"}`).
 

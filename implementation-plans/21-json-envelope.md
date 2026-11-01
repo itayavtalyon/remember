@@ -466,3 +466,56 @@ DRY / easy to replace / orthogonal / simplify:
 - `write_entry_core` is the memory object. Stubs share that `id` / `local_id` prefix. The snapshot writer in `store_sqlite.c` repeats it. The existing ponytail note already records the duplicated escape. SQLite stays in that file, so the snapshot writer stays there.
 - A search key item's own id is `id`. A conflict's reference is `memory_id` (JE-3.6). The conflict row's integer `id` is not a memory id.
 - The deleted flags fall through the existing unknown-option path. There is no alias table.
+
+### Stage 3: a positional is a UUID or digits (2026-11-01)
+
+A positional accepts a canonical lowercase hyphenated UUID v7, matched as the memory id, or digits, matched as `local_id`. `get 1` and `get <that memory's uuid>` are the same memory (008-13). The same rule covers get, delete, update, rekey, and graph ends. Anything else, including `mem_…`, is `invalid_argument` (008-8, JE-3.4, `decision:positional-locator`, `decision:s-13`).
+
+The plain line is `remember: "<value>" isn't a memory id. Use a number from 'remember list', a UUID, or --key KEY.` JSON `message` is `"<value>" isn't a memory id.` JSON `fix` is `Use a number from 'remember list', a UUID, or --key KEY.` `<value>` is the token the user typed (K-1, 2026-10-25). This replaces the older plan sentence and the older sentence in `docs/JSON-STYLE.md` §1.2a.
+
+What changed:
+
+- `classify_memory_positional` is the check. A canonical UUID (`store_sync_id_is_canonical`) is the memory id. An all-digits token that `parse_entry_id` accepts is `local_id`. `parse_entry_id` is unchanged, so `conflict accept --id` stays the conflict row. A sign or a space is not digits, so `+1` and ` 1` are not local ids. `0` and an overflow stay `invalid_argument`. An uppercase UUID, braces, and `mem_…` are `invalid_argument`, not `not_found`. A missing canonical UUID is `not_found` (exit 2).
+- `err_not_a_memory_id` builds the message for the token the user typed and passes the approved fix through `diag_error_split`. `k_fix[invalid_argument]` stays the cursor draft (`Run 'remember list' again without --cursor.`). Plain joins the two sentences. JSON keeps them split.
+- get by UUID uses `store_get_by_sync_id` with the requested bin. delete, update, and rekey resolve the UUID with `store_get_row_by_sync_id` (no bin) and then the existing by-id write, so an unflagged delete of an expired row is still a soft delete. `cmd_update` keeps that bind result off `rc`. `rc` starts as `REMEMBER_ERR` and the cleanup path returns it, so a later body-hash conflict must not exit 0.
+- Graph ends use the same classify. A UUID loads through `store_get_any_by_sync_id`, or `store_get_row_by_sync_id` with `--deleted`. Digits use `store_get_any` or `store_get_row`. `--id`, `--local-id`, `--sync-id`, `--offset`, and `--json-errors` stay unknown options.
+
+Tests, red before the production change: `envelope_get_by_digits_and_by_uuid_is_the_same_memory`. Also `envelope_uuid_positional_updates_deletes_and_links`, `envelope_positional_rejects_what_is_not_a_memory_id`, `envelope_delete_expired_by_uuid_is_a_soft_delete`. The golden `get abc` row in `tests/test_errors.c` is the C-01 split. `get_overflow_id_rejected` and `link_invalid_id_is_exit_1` expect the new sentence.
+
+Gate (Apple clang, Debug, sanitizers on, LSAN off, `REMEMBER_TEST_VFS=ON`, Unix Makefiles; coverage with Homebrew LLVM 22). `BUILD_DIR` was not exported. ninja is absent. `origin/main` was not merged (`standard:coding` rule 7 says merge at stage start; this stage's prompt says stage 9 merges `origin/main`). ctest 5/5. Coverage: 888 tests, 0 failed, 10734 asserts; functions 100%; effective lines 100% (zero-hit 2021, all defensive, must-cover 0); branch sides 0 missed on `output.c` (710), `search_terms.c` (176), `unicode.c` (80), `normalize.c` (384). Lint `LINT OK` (LLVM 22 clang-tidy, cppcheck, gcc -fanalyzer, scan-build; include-what-you-use skipped, not installed). `default.profraw` stays untracked. Version stays 0.2.0. The 16 stage-2a mutants were not re-run. M5 stays.
+
+### Stage 3 deep review (2026-11-01, in session)
+
+`decision:plan21-stage-flow`: in-session deep review, fix, continue. No `.claude/REVIEW_REQUEST`. Local Bugbot is not installed (`command -v bugbot` is empty). No product question is open. `standard:coding` says merge `main` at the start of a stage. This prompt says stage 9 merges `origin/main`, so it was not merged. The handoff template says write `.claude/WHOLE_PLAN_REVIEW` after stage 8. `decision:2026-11-01-legacy-plans-spec-step` says stage 9 is the spec stage and the whole-plan review is after that. This stage does not write the marker. `quality:linters-max` allows a local `NOLINT`. None was added.
+
+Probe: `get nope`, `get mem_…`, `get 0`, `get +1`, `get` with a leading space, an uppercase UUID, braces, a newline, ESC, and 300 `a`s. Plain maps the controls. JSON escapes them. A missing UUID is exit 2 on get, delete, update, and link. `link --from-key` of a missing key is exit 2 with and without `--deleted`. Unflagged `delete` of an expired UUID exits 0 and the row is in the deleted bin. `delete`, `update`, `rekey`, `link`, `unlink`, and `related` of `nope` print the full plain C-01 line and exit 1.
+
+Findings:
+
+- **Important, fixed:** `cmd_update` stored `locator_bind_local_id`'s 0 in `rc`. A body-hash conflict then printed the error and exited 0. The bind result is a separate `bound`. `golden_error_lines_and_d9_codes` exits 1 again.
+- **Nit, fixed:** cppcheck `variableScope` and clang-tidy `cppcoreguidelines-init-variables` disagreed about `StoreStatus st`, and a bool ternary is `readability-implicit-bool-conversion`. Each status is now initialized with the store call inside the branch that reads it.
+- **Nit, kept:** `resolve_end` and `related_load_subject` both load a key with `store_get_row_by_key` or `store_get_any_by_key` (about 15 lines twice). A helper saves about 4 lines. They differ: `resolve_end` copies the id and frees the entry; `related` keeps the entry for the neighbor query.
+- **Nit, kept:** `load_positional` and `locator_bind_local_id` both turn a positional into a row. They stay split. get applies the bin to the UUID. Writes resolve with no bin, then the by-id write applies the bin, so an expired UUID still soft-deletes. Graph uses `store_get_any*` or `store_get_row*`. One function with a mode flag would braid those three rules.
+- **Kept:** `err_not_a_memory_id`'s three failure returns are uncovered and defensive. Triggers: `snprintf` returns negative, `malloc` returns NULL, and the second `snprintf` length does not match the first. No fault hook. Same shape as `err_fmt`. `diag_error_split` returns -1 when the code is outside the catalog. The only caller passes `DIAG_INVALID_ARGUMENT`.
+- **Kept, not a defect:** M5. The 16 stage-2a mutants were not re-run.
+
+Mutants, one clause at a time, each rebuilt (a same-second rewrite can skip `make`). No survivor. A drop of `parse_entry_id` did not build (`out_id` unused) and is not a survivor. The valid rewrite is listed.
+
+| Mutant | Change | Red test |
+|---|---|---|
+| M1 | skip the canonical-UUID check | `envelope_get_by_digits_and_by_uuid_is_the_same_memory` |
+| M2 | `all_digits` rejects only bytes above `'9'` | `envelope_positional_rejects_what_is_not_a_memory_id` |
+| M3 | `parse_entry_id(...) == 0` becomes `!= 0` | `envelope_get_by_digits_and_by_uuid_is_the_same_memory` |
+| M4 | swap the C-01 message and fix | `envelope_get_by_digits_and_by_uuid_is_the_same_memory` |
+| M5 | JSON fix always comes from `k_fix` | `envelope_get_by_digits_and_by_uuid_is_the_same_memory` |
+| M6 | plain notice does not append `fix` | `envelope_get_by_digits_and_by_uuid_is_the_same_memory` |
+| M7 | bind a UUID with `store_get_by_sync_id` on the live bin | `envelope_delete_expired_by_uuid_is_a_soft_delete` |
+| M8 | `--deleted` UUID load uses `store_get_any_by_sync_id` | `envelope_uuid_positional_updates_deletes_and_links` |
+| M9 | `cmd_update` stores the bind result in `rc` | `golden_error_lines_and_d9_codes` |
+| M10 | `kind > 0` becomes `kind == 0` in `load_positional` | `envelope_uuid_positional_updates_deletes_and_links` |
+
+DRY / easy to replace / orthogonal / simplify:
+
+- One classifier (`classify_memory_positional`). get, delete, update, rekey, and both graph ends call it. The C-01 sentence has one writer (`err_not_a_memory_id`).
+- The cursor draft and the locator fix are different sentences for one code. `diag_error_split` is the split. `diag_error` is unchanged, so every other `invalid_argument` still uses the draft.
+- Digits are a scan plus the existing id parse. The scan is the new rule. The parse stays the shared `>= 1` check, including `conflict accept --id`.

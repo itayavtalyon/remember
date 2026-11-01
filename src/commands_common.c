@@ -95,6 +95,61 @@ int parse_entry_id(const char *raw, long long *out_id)
     return 0;
 }
 
+/* Digits only. A sign or a space is not a local id (JE-3.4). */
+static int all_digits(const char *raw)
+{
+    const unsigned char *p = (const unsigned char *)raw;
+
+    if (raw == NULL || *p == '\0') {
+        return 0;
+    }
+    for (; *p != '\0'; p++) {
+        if (*p < '0' || *p > '9') {
+            return 0;
+        }
+    }
+    return 1;
+}
+
+int classify_memory_positional(const char *raw, long long *out_id)
+{
+    if (store_sync_id_is_canonical(raw) != 0) {
+        return 1;
+    }
+    if (all_digits(raw) && parse_entry_id(raw, out_id) == 0) {
+        return 0;
+    }
+    return -1;
+}
+
+/* COPY-PENDING C-01. The plain line joins these two sentences. */
+static const char k_locator_fix[] = "Use a number from 'remember list', a UUID, or --key KEY.";
+
+void err_not_a_memory_id(const char *value)
+{
+    int wrote = 0;
+    char *buf = NULL;
+
+    wrote = snprintf(NULL, 0, "\"%s\" isn't a memory id.", value);
+    if (wrote < 0) {
+        err_msg(DIAG_INTERNAL, "internal error");
+        return;
+    }
+    buf = (char *)malloc((size_t)wrote + 1U);
+    if (buf == NULL) {
+        err_msg(DIAG_OUT_OF_MEMORY, "out of memory");
+        return;
+    }
+    if (snprintf(buf, (size_t)wrote + 1U, "\"%s\" isn't a memory id.", value) != wrote) {
+        err_msg(DIAG_INTERNAL, "internal error");
+        free(buf);
+        return;
+    }
+    (void)diag_error_split(DIAG_INVALID_ARGUMENT,
+                           (DiagSplit){.message = buf, .fix = k_locator_fix});
+    free(buf);
+}
+
 static const char *norm_body_message(NormStatus st)
 {
     switch (st) {

@@ -214,6 +214,7 @@ typedef struct {
     const char *plain_prefix;
     const char *code;
     const char *message;
+    const char *fix;               /* NULL: catalog or usage fix. Else this sentence. */
     const DiagDetailField *fields; /* JSON detail members; NULL when none */
     size_t nfields;
     DiagCode error_code; /* errors only: picks fix and retryable */
@@ -322,8 +323,12 @@ static int write_json_notice(Notice notice, const char *message)
         return -1;
     }
     if (is_error) {
-        const char *fix = notice.error_code == DIAG_USAGE ? usage_fix(buf, sizeof(buf))
-                                                          : k_fix[notice.error_code];
+        const char *fix = notice.fix;
+
+        if (fix == NULL) {
+            fix = notice.error_code == DIAG_USAGE ? usage_fix(buf, sizeof(buf))
+                                                  : k_fix[notice.error_code];
+        }
         if (write_fix_retryable(fp, fix, notice.error_code) != 0) {
             return -1;
         }
@@ -350,10 +355,31 @@ static int write_notice(Notice notice)
     if (output_text_human(err, message, false) != 0) {
         return -1;
     }
+    if (notice.fix != NULL &&
+        (fputc(' ', err) == EOF || output_text_human(err, notice.fix, false) != 0)) {
+        return -1;
+    }
     if (fputc('\n', err) == EOF) {
         return -1;
     }
     return 0;
+}
+
+int diag_error_split(DiagCode code, DiagSplit split)
+{
+    const char *name = diag_code_name(code);
+
+    if (name == NULL) {
+        return -1;
+    }
+    return write_notice((Notice){
+        .json_kind = "error",
+        .plain_prefix = "",
+        .code = name,
+        .message = split.message,
+        .fix = split.fix,
+        .error_code = code,
+    });
 }
 
 int diag_error(DiagCode code, const char *message)

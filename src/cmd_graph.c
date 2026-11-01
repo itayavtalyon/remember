@@ -181,37 +181,60 @@ static int pair_apply_sugar(PairParse *p)
     return 0;
 }
 
+/* Positional end: UUID is the memory id, digits are local_id. */
+static int load_positional(Store *s, const char *raw, bool include_deleted, Entry *out)
+{
+    long long id = 0;
+    int kind = classify_memory_positional(raw, &id);
+
+    if (kind < 0) {
+        err_not_a_memory_id(raw);
+        return REMEMBER_ERR;
+    }
+    if (kind > 0) {
+        if (include_deleted) {
+            return store_status_to_exit(s, store_get_row_by_sync_id(s, raw, out));
+        }
+        return store_status_to_exit(s, store_get_any_by_sync_id(s, raw, out));
+    }
+    if (include_deleted) {
+        return store_status_to_exit(s, store_get_row(s, id, out));
+    }
+    return store_status_to_exit(s, store_get_any(s, id, out));
+}
+
 static int resolve_end(Store *s, EndRef ref, bool include_deleted, long long *out_id)
 {
     Entry e;
-    StoreStatus st = STORE_OK;
 
     memset(&e, 0, sizeof(e));
     if (ref.key_raw != NULL) {
         char key_norm[REMEMBER_TOKEN_MAX + 1];
         NormStatus ns = normalize_key(ref.key_raw, key_norm, sizeof(key_norm));
+
         if (ns != NORM_OK) {
             err_norm(ns, "key");
             return REMEMBER_ERR;
         }
         if (include_deleted) {
-            st = store_get_row_by_key(s, key_norm, &e);
+            StoreStatus st = store_get_row_by_key(s, key_norm, &e);
+
+            if (st != STORE_OK) {
+                return store_status_to_exit(s, st);
+            }
         } else {
-            st = store_get_any_by_key(s, key_norm, &e);
+            StoreStatus st = store_get_any_by_key(s, key_norm, &e);
+
+            if (st != STORE_OK) {
+                return store_status_to_exit(s, st);
+            }
         }
     } else {
-        if (parse_entry_id(ref.id_raw, out_id) != 0) {
-            err_msg(DIAG_USAGE, "invalid id");
-            return REMEMBER_ERR;
+        int rc = load_positional(s, ref.id_raw, include_deleted, &e);
+
+        if (rc != REMEMBER_OK) {
+            return rc;
         }
-        if (include_deleted) {
-            st = store_get_row(s, *out_id, &e);
-        } else {
-            st = store_get_any(s, *out_id, &e);
-        }
-    }
-    if (st != STORE_OK) {
-        return store_status_to_exit(s, st);
     }
     *out_id = e.id;
     store_entry_free(&e);
@@ -413,34 +436,27 @@ static int parse_related_args(int rest_argc, const char **rest_argv, RelatedPars
 static int related_load_subject(Store *s, const RelatedParse *p, bool include_deleted,
                                 Entry *subject)
 {
-    StoreStatus st = STORE_OK;
-
     memset(subject, 0, sizeof(*subject));
     if (p->key_raw != NULL) {
         char key_norm[REMEMBER_TOKEN_MAX + 1];
         NormStatus ns = normalize_key(p->key_raw, key_norm, sizeof(key_norm));
+
         if (ns != NORM_OK) {
             err_norm(ns, "key");
             return REMEMBER_ERR;
         }
         if (include_deleted) {
-            st = store_get_row_by_key(s, key_norm, subject);
-        } else {
-            st = store_get_any_by_key(s, key_norm, subject);
+            StoreStatus st = store_get_row_by_key(s, key_norm, subject);
+
+            return store_status_to_exit(s, st);
         }
-    } else {
-        long long id = 0;
-        if (parse_entry_id(p->id_raw, &id) != 0) {
-            err_msg(DIAG_USAGE, "invalid id");
-            return REMEMBER_ERR;
-        }
-        if (include_deleted) {
-            st = store_get_row(s, id, subject);
-        } else {
-            st = store_get_any(s, id, subject);
+        {
+            StoreStatus st = store_get_any_by_key(s, key_norm, subject);
+
+            return store_status_to_exit(s, st);
         }
     }
-    return store_status_to_exit(s, st);
+    return load_positional(s, p->id_raw, include_deleted, subject);
 }
 
 int cmd_related(Store *s, bool json, int rest_argc, const char **rest_argv)

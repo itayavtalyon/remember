@@ -371,7 +371,7 @@ TEST(link_invalid_id_is_exit_1)
 
     r = run_remember(db, bad, sizeof(bad) / sizeof(bad[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 1);
-    ASSERT_STR_CONTAINS(r.err, "invalid id");
+    ASSERT_STR_CONTAINS(r.err, "\"abc\" isn't a memory id");
     cmd_result_free(&r);
 
     r = run_remember(db, emptyk, sizeof(emptyk) / sizeof(emptyk[0]), NULL);

@@ -103,22 +103,24 @@ static int locator_validate(const LocatorParse *p)
 }
 
 /* Which form the locator uses after validate. */
-typedef enum { LOC_ID = 0, LOC_KEY } LocatorKind;
+typedef enum { LOC_ID = 0, LOC_KEY, LOC_UUID } LocatorKind;
 
 typedef struct {
     long long id;
-    const char *key; /* points into key_norm when kind==KEY */
+    const char *key;     /* points into key_norm when kind==KEY */
+    const char *sync_id; /* points at the positional when kind==UUID */
     LocatorKind kind;
     char pad_[4]; /* explicit tail padding (kept -Wpadded-clean) */
 } LocatorResolved;
 
-/* Normalize key / parse the integer id. */
+/* Normalize a key, or classify the positional as a local id or a UUID. */
 static int locator_resolve(const LocatorParse *p, char *key_norm, size_t key_norm_sz,
                            LocatorResolved *out)
 {
     out->kind = LOC_ID;
     out->id = 0;
     out->key = NULL;
+    out->sync_id = NULL;
     if (p->key_raw != NULL) {
         NormStatus ns = normalize_key(p->key_raw, key_norm, key_norm_sz);
         if (ns != NORM_OK) {
@@ -129,11 +131,43 @@ static int locator_resolve(const LocatorParse *p, char *key_norm, size_t key_nor
         out->key = key_norm;
         return 0;
     }
-    if (parse_entry_id(p->id_raw, &out->id) != 0) {
-        err_msg(DIAG_USAGE, "invalid id");
-        return -1;
+    {
+        int kind = classify_memory_positional(p->id_raw, &out->id);
+
+        if (kind < 0) {
+            err_not_a_memory_id(p->id_raw);
+            return -1;
+        }
+        if (kind > 0) {
+            out->kind = LOC_UUID;
+            out->sync_id = p->id_raw;
+            return 0;
+        }
     }
     out->kind = LOC_ID;
+    return 0;
+}
+
+/* Writes take a local id. Resolve the UUID with no bin check: unflagged
+   delete still soft-deletes an expired row, and the write applies the bin. */
+static int locator_bind_local_id(Store *s, LocatorResolved *loc)
+{
+    Entry found;
+    StoreStatus st = STORE_OK;
+
+    if (loc->kind != LOC_UUID) {
+        return 0;
+    }
+    memset(&found, 0, sizeof(found));
+    st = store_get_row_by_sync_id(s, loc->sync_id, &found);
+    if (st != STORE_OK) {
+        store_entry_free(&found);
+        return store_status_to_exit(s, st);
+    }
+    loc->id = found.id;
+    loc->kind = LOC_ID;
+    loc->sync_id = NULL;
+    store_entry_free(&found);
     return 0;
 }
 
@@ -169,6 +203,8 @@ int cmd_get(Store *s, bool json, int rest_argc, const char **rest_argv)
 
     if (loc.kind == LOC_KEY) {
         st = store_get_by_key(s, loc.key, bin, now, &entry);
+    } else if (loc.kind == LOC_UUID) {
+        st = store_get_by_sync_id(s, loc.sync_id, bin, now, &entry);
     } else {
         st = store_get(s, loc.id, bin, now, &entry);
     }
@@ -249,6 +285,10 @@ int cmd_delete(Store *s, bool json, int rest_argc, const char **rest_argv)
     }
     if (locator_resolve(&parsed, key_norm, sizeof(key_norm), &loc) != 0) {
         return REMEMBER_ERR;
+    }
+    rc = locator_bind_local_id(s, &loc);
+    if (rc != 0) {
+        return rc;
     }
     if (utc_now(now, sizeof(now)) != 0) {
         err_msg(DIAG_INTERNAL, "internal error");
@@ -642,6 +682,14 @@ int cmd_update(Store *s, bool json, int rest_argc, const char **rest_argv)
         update_parse_free(&parsed);
         return REMEMBER_ERR;
     }
+    {
+        int bound = locator_bind_local_id(s, &loc);
+
+        if (bound != 0) {
+            update_parse_free(&parsed);
+            return bound;
+        }
+    }
     if (utc_now(now, sizeof(now)) != 0) {
         err_msg(DIAG_INTERNAL, "internal error");
         update_parse_free(&parsed);
@@ -819,6 +867,10 @@ int cmd_rekey(Store *s, bool json, int rest_argc, const char **rest_argv)
     }
     if (locator_resolve(&parsed.loc, key_norm, sizeof(key_norm), &loc) != 0) {
         return REMEMBER_ERR;
+    }
+    rc = locator_bind_local_id(s, &loc);
+    if (rc != 0) {
+        return rc;
     }
     if (!parsed.clear_key) {
         NormStatus ns = normalize_key(parsed.to_key_raw, new_norm, sizeof(new_norm));

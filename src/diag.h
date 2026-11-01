@@ -81,6 +81,16 @@ bool diag_warning_from_name(const char *name, DiagWarning *out);
  */
 int diag_error(DiagCode code, const char *message);
 
+/* message and fix are named so the two sentences cannot be swapped.
+   Plain prints message, a space, and fix. JSON keeps them split and uses
+   fix instead of the catalog sentence. */
+typedef struct {
+    const char *message;
+    const char *fix;
+} DiagSplit;
+
+int diag_error_split(DiagCode code, DiagSplit split);
+
 /*
  * Write one SQLite failure (E4.8 text, E4.9 detail). code is one of the eight
  * SQLite codes (busy, read_only, disk_full, cannot_open, not_a_database,

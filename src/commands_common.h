@@ -47,6 +47,13 @@ void err_store_sqlite(const StoreError *detail, const char *path);
 /* Parse a positive entry id token. 0 ok, -1 invalid (does not print). */
 int parse_entry_id(const char *raw, long long *out_id);
 
+/* 0: raw is digits and *out_id is that local id. 1: raw is a canonical UUID
+   (the memory id). -1: neither. Does not print. */
+int classify_memory_positional(const char *raw, long long *out_id);
+
+/* C-01 positional locator (JE-3.4). value is the token the user typed. */
+void err_not_a_memory_id(const char *value);
+
 const char *norm_token_message(NormStatus st, const char *kind);
 
 const char *action_name(StoreAddAction a);

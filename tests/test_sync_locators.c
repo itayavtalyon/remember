@@ -190,7 +190,7 @@ TEST(cli_link_from_to_sync_id)
     const char *a1[] = {"--json", "add", "alpha"};
     const char *a2[] = {"--json", "add", "beta"};
     const char *link[] = {"--json", "link", "--from", "1", "--to", "2", "--kind", "cites"};
-    const char *sugar[3];
+    const char *sugar[4];
     const char *bad[] = {"link", "--from", "1", "--from-key", "k", "--to", "2"};
 
     ASSERT_TRUE(db != NULL);
@@ -209,12 +209,15 @@ TEST(cli_link_from_to_sync_id)
     ASSERT_STR_CONTAINS(r.out, "\"type\":\"cites\"");
     cmd_result_free(&r);
 
-    sugar[0] = "link";
-    sugar[1] = sa;
-    sugar[2] = sb;
-    r = run_remember(db, sugar, 3U, NULL);
-    ASSERT_EQ_INT(r.exit_code, 1);
-    ASSERT_STR_CONTAINS(r.err, "invalid id");
+    /* Sugar has no --kind, so this is a related edge, not a second cites. */
+    sugar[0] = "--json";
+    sugar[1] = "link";
+    sugar[2] = sa;
+    sugar[3] = sb;
+    r = run_remember(db, sugar, 4U, NULL);
+    ASSERT_EQ_INT(r.exit_code, 0);
+    ASSERT_STR_CONTAINS(r.out, "\"action\":\"created\"");
+    ASSERT_STR_CONTAINS(r.out, "\"type\":\"related\"");
     cmd_result_free(&r);
 
     r = run_remember(db, bad, sizeof(bad) / sizeof(bad[0]), NULL);

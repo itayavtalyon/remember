@@ -604,7 +604,7 @@ TEST(get_human_body_preserves_newlines)
     free(db);
 }
 
-/* An id that overflows long long is an invalid id (exit 1), not a lookup miss. */
+/* An id that overflows long long is not a memory id (exit 1), not a lookup miss. */
 TEST(get_overflow_id_rejected)
 {
     char *db = make_temp_db_path();
@@ -614,7 +614,7 @@ TEST(get_overflow_id_rejected)
     ASSERT_TRUE(db != NULL);
     g = run_remember(db, gargs, sizeof(gargs) / sizeof(gargs[0]), NULL);
     ASSERT_EQ_INT(g.exit_code, 1);
-    ASSERT_STR_CONTAINS(g.err, "invalid id");
+    ASSERT_STR_CONTAINS(g.err, "\"99999999999999999999999\" isn't a memory id");
     cmd_result_free(&g);
     free(db);
 }
