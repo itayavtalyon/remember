@@ -178,6 +178,7 @@ Tests: update `tests/test_errors.c` and the search and store tests that still ex
 6. Add `remember brain new-id` with the locked JSON object.
 7. Add `--color` and `--quiet` as globals. Use the C-02 help lines.
 8. Emit `unknown_field` with the C-35 lines. Do not drop unknown fields silently in new parsers.
+9. Spec (`decision:2026-11-01-legacy-plans-spec-step`). Do this stage last, before `.claude/WHOLE_PLAN_REVIEW`. Merge `origin/main` first, so `specs/` exists. Write `specs/JSON-ENVELOPE.md`. Describe only the behavior this branch ships: the `remember-message` version 1 fields and their order, the reply types, errors and warnings in the envelope, locators and `id`, actors, the bins and `--trash`, cursor paging, `brain new-id`, `--color` and `--quiet`, and `unknown_field`. Each section names the `decision:json-*` keys it describes (`remember --json list --tag subject:json-envelope`). When no key exists, name the 008 JE section. `specs/JSON-STYLE.md` stays the value rules. Link the two specs to each other. When `JSON-STYLE.md` disagrees with what ships, change `JSON-STYLE.md`. Move the Message envelope row in `specs/README.md` from "Not written yet" to "Specs". Set `state:implemented` on each `subject:json-envelope` decision this plan built, per `workflow:decision-tags`. This stage has no red test. The whole-plan review checks the spec against the code.
 
 Each stage: one red test, then the change, then the gate, then review.
 
@@ -212,6 +213,7 @@ Quality gate: the plan 19 commands. Coverage 100/100.
 - [ ] Plan files 16, 17, 17a, 18, 18b, and 18c are unchanged.
 - [ ] `--json` `fix` values are previously locked splits or the approved C-01 text.
 - [ ] Open still does not implement JE-3.10.
+- [ ] `specs/JSON-ENVELOPE.md` describes what this branch ships, `specs/JSON-STYLE.md` agrees with it, and `specs/README.md` lists it (stage 9).
 - [ ] Gate green. Second review clear. INDEX ticked only then.
 
 ## Second review handover
