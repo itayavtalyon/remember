@@ -1369,7 +1369,8 @@ TEST(schema_v6_cli_prints_setting_invalid_for_a_left_out_prefix)
     ASSERT_STREQ(r.err, "");
     ASSERT_STREQ(r.out,
                  "{\"format\":\"remember-message\",\"version\":1,\"type\":\"memory.list.result\","
-                 "\"data\":{\"offset\":0,\"limit\":20,\"count\":0,\"total\":0,\"entries\":[]},"
+                 "\"data\":{\"count\":0,\"total\":0,\"entries\":[]},"
+                 "\"next_cursor\":null,\"has_more\":false,"
                  "\"warnings\":[{\"code\":\"setting_invalid\",\"message\":"
                  "\"skipped \\\"remember.buckets.prefixes\\\": \\\"my project:\\\" isn't a "
                  "valid value.\",\"detail\":{\"key\":\"remember.buckets.prefixes\","

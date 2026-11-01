@@ -516,8 +516,8 @@ TEST(list_equal_bounds_are_empty)
     ASSERT_EQ_INT(r.exit_code, 0);
     ASSERT_STREQ(r.err, "");
     ASSERT_STREQ(r.out, "{\"format\":\"remember-message\",\"version\":1,\"type\":\"memory.list."
-                        "result\",\"data\":{\"offset\":0,\"limit\":20,\"count\":0,\"total\":0,"
-                        "\"entries\":[]}}\n");
+                        "result\",\"data\":{\"count\":0,\"total\":0,\"entries\":[]},"
+                        "\"next_cursor\":null,\"has_more\":false}\n");
     cmd_result_free(&r);
     free(db);
 }
@@ -899,7 +899,7 @@ TEST(search_crossed_bounds_are_empty)
     ASSERT_EQ_INT(r.exit_code, 0);
     ASSERT_STREQ(r.err, "");
     ASSERT_STREQ(r.out, "{\"format\":\"remember-message\",\"version\":1,\"type\":\"memory.search."
-                        "result\",\"data\":{\"offset\":0,\"limit\":20,\"count\":0,\"total\":0,"
+                        "result\",\"data\":{\"count\":0,\"total\":0,"
                         "\"keys\":{\"total\":0,\"items\":[]},\"tags\":{\"total\":0,\"items\":[]},"
                         "\"entries\":[]}}\n");
     cmd_result_free(&r);

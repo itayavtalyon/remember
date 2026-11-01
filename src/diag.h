@@ -42,6 +42,7 @@ typedef enum {
     DIAG_CORRUPT,
     DIAG_IO_ERROR,
     DIAG_SCHEMA_TOO_NEW,
+    DIAG_INVALID_ARGUMENT,
     DIAG_CODE_COUNT
 } DiagCode;
 

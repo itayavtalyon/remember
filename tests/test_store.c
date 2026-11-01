@@ -2122,30 +2122,46 @@ TEST(store_list_bounds_compose_with_filters)
     q.ntags = 1U;
     q.source = "human";
     q.limit = 1U;
-    q.offset = 0U;
     q.since = "2026-06-01T00:00:00.000Z";
     q.until = "2026-07-01T00:00:00.000Z";
     page = store_list(s, &q, k_now);
     ASSERT_EQ_INT((int)page.st, (int)STORE_OK);
     ASSERT_EQ_INT((int)page.count, 1);
     ASSERT_EQ_INT((int)page.total, 2);
+    ASSERT_TRUE(page.has_more);
     ASSERT_STREQ(page.entries[0].body, "in-b");
-    free_page(page);
+    {
+        char at_b[STAMP_TS_CAP];
+        char at_a[STAMP_TS_CAP];
+        long long id_b = page.entries[0].id;
+        long long id_a = 0;
 
-    q.offset = 1U;
-    page = store_list(s, &q, k_now);
-    ASSERT_EQ_INT((int)page.st, (int)STORE_OK);
-    ASSERT_EQ_INT((int)page.count, 1);
-    ASSERT_EQ_INT((int)page.total, 2);
-    ASSERT_STREQ(page.entries[0].body, "in-a");
-    free_page(page);
+        ASSERT_TRUE(page.entries[0].updated_at != NULL);
+        ASSERT_TRUE(snprintf(at_b, sizeof(at_b), "%s", page.entries[0].updated_at) > 0);
+        free_page(page);
 
-    q.offset = 2U;
-    page = store_list(s, &q, k_now);
-    ASSERT_EQ_INT((int)page.st, (int)STORE_OK);
-    ASSERT_EQ_INT((int)page.count, 0);
-    ASSERT_EQ_INT((int)page.total, 2);
-    free_page(page);
+        q.after_at = at_b;
+        q.after_local_id = id_b;
+        page = store_list(s, &q, k_now);
+        ASSERT_EQ_INT((int)page.st, (int)STORE_OK);
+        ASSERT_EQ_INT((int)page.count, 1);
+        ASSERT_EQ_INT((int)page.total, 2);
+        ASSERT_FALSE(page.has_more);
+        ASSERT_STREQ(page.entries[0].body, "in-a");
+        id_a = page.entries[0].id;
+        ASSERT_TRUE(page.entries[0].updated_at != NULL);
+        ASSERT_TRUE(snprintf(at_a, sizeof(at_a), "%s", page.entries[0].updated_at) > 0);
+        free_page(page);
+
+        q.after_at = at_a;
+        q.after_local_id = id_a;
+        page = store_list(s, &q, k_now);
+        ASSERT_EQ_INT((int)page.st, (int)STORE_OK);
+        ASSERT_EQ_INT((int)page.count, 0);
+        ASSERT_EQ_INT((int)page.total, 2);
+        ASSERT_FALSE(page.has_more);
+        free_page(page);
+    }
 
     memset(&q, 0, sizeof(q));
     q.key = "slot";
@@ -2239,7 +2255,6 @@ TEST(store_list_filters_and_paging)
     q.tags = tags_ab;
     q.ntags = 2U;
     q.limit = LIST_LIMIT;
-    q.offset = 0U;
     {
         PageResult page = store_list(s, &q, k_now);
         ASSERT_EQ_INT((int)page.st, (int)STORE_OK);
@@ -3216,7 +3231,6 @@ static void sweep_search_faults(Store *s, const char *const *tags, int i)
     memset(&sq, 0, sizeof(sq));
     sq.query = "sweep";
     sq.filters.limit = 10U;
-    sq.filters.offset = 0U;
     sq.filters.tags = tags;
     sq.filters.ntags = 1U;
     store_test_fail_prepare_after(i % 4);

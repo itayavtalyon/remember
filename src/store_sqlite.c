@@ -4535,19 +4535,62 @@ enum { LIST_SQL_CAP = 8192 };
 enum { LIST_BIND_CAP = 64 };
 _Static_assert(LIST_BIND_CAP >= 2, "search binds q and the MATCH text ahead of the filters");
 
+/* Bind the SELECT window. after_at NULL is the first page: limit sits at
+   ?nbinds+1. A keyset binds the timestamp twice and the local id, then limit
+   at ?nbinds+4. The COUNT statement does not receive these binds.
+   nbinds counts the text binds already placed; fetch is the row window. */
+// NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
+static StoreStatus bind_page_window(sqlite3_stmt *sel, int nbinds, size_t fetch,
+                                    const char *after_at, long long after_local_id,
+                                    StoreError *serr)
+{
+    int limit_index = nbinds + 1;
+
+    if (after_at != NULL) {
+        if (sqlite3_bind_text(sel, nbinds + 1, after_at, -1, SQLITE_STATIC) != SQLITE_OK ||
+            sqlite3_bind_text(sel, nbinds + 2, after_at, -1, SQLITE_STATIC) != SQLITE_OK ||
+            sqlite3_bind_int64(sel, nbinds + 3, (sqlite3_int64)after_local_id) != SQLITE_OK) {
+            capture_sqlite_error(sqlite3_db_handle(sel), serr);
+            return STORE_ERR_SQLITE;
+        }
+        limit_index = nbinds + 4;
+    }
+    if (sqlite3_bind_int64(sel, limit_index, (sqlite3_int64)fetch) != SQLITE_OK) {
+        capture_sqlite_error(sqlite3_db_handle(sel), serr);
+        return STORE_ERR_SQLITE;
+    }
+    return STORE_OK;
+}
+
+/* Drop rows past limit. One extra row means another page exists. */
+static bool trim_page(Entry *rows, size_t *n, size_t limit, bool probe)
+{
+    if (!probe || *n <= limit) {
+        return false;
+    }
+    while (*n > limit) {
+        *n -= 1U;
+        store_entry_free(&rows[*n]);
+    }
+    return true;
+}
+
 /*
- * Bind filters + limit/offset, run the COUNT statement then the paged SELECT the
- * caller built, and collect rows. Split into two statements (COUNT then paged
- * SELECT) rather than one query: a single COUNT(*) OVER() would ride on the
- * result rows, so it reports no total whenever the page is empty (offset past the
- * end), breaking the "total is the unpaged count" contract. Callers run this
- * inside one read transaction so both statements see a single snapshot.
- * Any failed prepare/step is a database error. limit/offset bind at
- * ?nbinds+1 / ?nbinds+2.
+ * Bind filters, run the COUNT statement then the paged SELECT the caller built,
+ * and collect rows. Split into two statements rather than one query: a single
+ * COUNT(*) OVER() would ride on the result rows, so it reports no total whenever
+ * the page is empty, breaking the "total is the unpaged count" contract. Callers
+ * run this inside one read transaction so both statements see one snapshot.
+ * The keyset, when after_at is set, is on the SELECT only. Fetch limit+1 and
+ * drop the extra row so has_more does not need a second count. Any failed
+ * prepare/step is a database error.
+ * nbinds is the text-bind count; limit is the page size.
  */
 static PageResult run_count_and_page(sqlite3 *db, const char *count_sql, const char *select_sql,
+                                     // NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
                                      const char **bind_text, int nbinds, size_t limit,
-                                     size_t offset, StoreError *serr)
+                                     const char *after_at, long long after_local_id,
+                                     StoreError *serr)
 {
     sqlite3_stmt *count_stmt = NULL;
     sqlite3_stmt *sel = NULL;
@@ -4556,7 +4599,14 @@ static PageResult run_count_and_page(sqlite3 *db, const char *count_sql, const c
     size_t cap = 0U;
     size_t total = 0U;
     int rc = 0;
+    bool probe = false;
+    size_t fetch = limit;
     StoreStatus st = STORE_OK;
+
+    if (limit > 0U && limit < SIZE_MAX) {
+        probe = true;
+        fetch = limit + 1U;
+    }
 
     rc = sqlite3_prepare_v2(db, count_sql, -1, &count_stmt, NULL);
     if (rc != SQLITE_OK) {
@@ -4585,11 +4635,10 @@ static PageResult run_count_and_page(sqlite3 *db, const char *count_sql, const c
         (void)sqlite3_finalize(sel);
         return (PageResult){.st = st};
     }
-    if (sqlite3_bind_int64(sel, nbinds + 1, (sqlite3_int64)limit) != SQLITE_OK ||
-        sqlite3_bind_int64(sel, nbinds + 2, (sqlite3_int64)offset) != SQLITE_OK) {
-        capture_sqlite_error(db, serr);
+    st = bind_page_window(sel, nbinds, fetch, after_at, after_local_id, serr);
+    if (st != STORE_OK) {
         (void)sqlite3_finalize(sel);
-        return (PageResult){.st = STORE_ERR_SQLITE};
+        return (PageResult){.st = st};
     }
 
     while ((rc = sqlite3_step(sel)) == SQLITE_ROW) {
@@ -4607,21 +4656,25 @@ static PageResult run_count_and_page(sqlite3 *db, const char *count_sql, const c
         return (PageResult){.st = st};
     }
     (void)sqlite3_finalize(sel);
+    {
+        bool has_more = trim_page(rows, &n, limit, probe);
 
-    return (PageResult){.st = STORE_OK, .entries = rows, .count = n, .total = total};
+        return (PageResult){
+            .st = STORE_OK, .entries = rows, .count = n, .total = total, .has_more = has_more};
+    }
 }
 
 /*
  * List: page ordered by the sort column DESC, then id DESC. count_sql/select_sql
- * pad LIST_SQL_CAP for the fixed SELECT column list + ORDER BY + LIMIT/OFFSET
+ * pad LIST_SQL_CAP for the fixed SELECT column list + ORDER BY + keyset + LIMIT
  * that frame where_sql.
  */
 static PageResult list_query_exec(sqlite3 *db, const ListQuery *q, const char *now,
                                   StoreError *serr)
 {
     /* Headroom beyond where_sql for the COUNT / SELECT framing (columns,
-       ORDER BY, LIMIT/OFFSET) wrapped around it. */
-    enum { COUNT_FRAME_MARGIN = 64, SELECT_FRAME_MARGIN = 160 };
+       ORDER BY, the keyset, LIMIT) wrapped around it. */
+    enum { COUNT_FRAME_MARGIN = 64, SELECT_FRAME_MARGIN = 256 };
     char where_sql[LIST_SQL_CAP];
     char count_sql[(size_t)LIST_SQL_CAP + (size_t)COUNT_FRAME_MARGIN];
     char select_sql[(size_t)LIST_SQL_CAP + (size_t)SELECT_FRAME_MARGIN];
@@ -4641,16 +4694,24 @@ static PageResult list_query_exec(sqlite3 *db, const ListQuery *q, const char *n
     if (sn < 0 || (size_t)sn >= sizeof(count_sql)) {
         return (PageResult){.st = STORE_ERR_INTERNAL};
     }
-    sn = snprintf(select_sql, sizeof(select_sql),
-                  "SELECT " K_ENTRY_COLS " "
-                  "FROM entries e%s ORDER BY e.%s DESC, e.local_id DESC "
-                  "LIMIT ?%d OFFSET ?%d;",
-                  where_sql, column, nbinds + 1, nbinds + 2);
+    if (q->after_at != NULL) {
+        sn = snprintf(select_sql, sizeof(select_sql),
+                      "SELECT " K_ENTRY_COLS " "
+                      "FROM entries e%s AND (e.%s < ?%d OR (e.%s = ?%d AND e.local_id < ?%d)) "
+                      "ORDER BY e.%s DESC, e.local_id DESC LIMIT ?%d;",
+                      where_sql, column, nbinds + 1, column, nbinds + 2, nbinds + 3, column,
+                      nbinds + 4);
+    } else {
+        sn = snprintf(select_sql, sizeof(select_sql),
+                      "SELECT " K_ENTRY_COLS " "
+                      "FROM entries e%s ORDER BY e.%s DESC, e.local_id DESC LIMIT ?%d;",
+                      where_sql, column, nbinds + 1);
+    }
     if (sn < 0 || (size_t)sn >= sizeof(select_sql)) {
         return (PageResult){.st = STORE_ERR_INTERNAL};
     }
-    return run_count_and_page(db, count_sql, select_sql, bind_text, nbinds, q->limit, q->offset,
-                              serr);
+    return run_count_and_page(db, count_sql, select_sql, bind_text, nbinds, q->limit, q->after_at,
+                              q->after_local_id, serr);
 }
 
 PageResult store_list(Store *s, const ListQuery *q, const char *now)
@@ -4718,12 +4779,12 @@ static PageResult search_query_exec(sqlite3 *db, const ListQuery *f, SearchBinds
                   "JOIN entries_fts ON entries_fts.rowid = e.local_id%s "
                   "ORDER BY e.key IS ?1 DESC, substr(e.key, 1, length(?1)) IS ?1 DESC, "
                   "bm25(entries_fts, 10.0, 1.0, 4.0), e.updated_at DESC, e.local_id DESC "
-                  "LIMIT ?%d OFFSET ?%d;",
-                  where_sql, nbinds + 1, nbinds + 2);
+                  "LIMIT ?%d;",
+                  where_sql, nbinds + 1);
     if (sn < 0 || (size_t)sn >= sizeof(select_sql)) {
         return (PageResult){.st = STORE_ERR_INTERNAL};
     }
-    return run_count_and_page(db, count_sql, select_sql, bind_text, nbinds, f->limit, f->offset,
+    return run_count_and_page(db, count_sql, select_sql, bind_text, nbinds, f->limit, NULL, 0LL,
                               serr);
 }
 

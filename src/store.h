@@ -269,20 +269,24 @@ StoreStatus store_get_by_sync_id(Store *s, const char *sync_id, StoreBin bin, co
 /*
  * List filters (AND across tags). All string fields are normalized by the
  * command layer; NULL / ntags==0 means "no filter on that axis".
- * limit and offset are required as given (CLI enforces default/max/min).
+ * limit is required as given (CLI enforces default/max).
+ * after_at NULL is the first page. Otherwise the page starts after that
+ * sort-column value and after_local_id (column DESC, local_id DESC).
  * sort is the list time column (order and since/until). Zero is updated.
  * since is inclusive and until is exclusive; both are canonical .mmmZ or NULL.
- * Search reuses the struct: it ignores sort and applies since/until to updated_at.
+ * Search reuses the struct: it ignores sort and after_at, and applies
+ * since/until to updated_at.
  */
 typedef struct {
     const char *const *tags; /* may be NULL when ntags == 0 */
     const char *source;      /* NULL = any */
     const char *key;         /* NULL = any; exact match */
+    const char *after_at;    /* NULL = first page; not freed by the store */
     size_t ntags;
     size_t limit;
-    size_t offset;
-    StoreBin bin;   /* LIVE (default) / EXPIRED / DELETED */
-    StoreSort sort; /* UPDATED (zero) / CREATED */
+    long long after_local_id; /* read only when after_at != NULL */
+    StoreBin bin;             /* LIVE (default) / EXPIRED / DELETED */
+    StoreSort sort;           /* UPDATED (zero) / CREATED */
     const char *since;
     const char *until;
 } ListQuery;
@@ -292,13 +296,16 @@ typedef struct {
  * entries is a heap array of count Entries (free each with store_entry_free, then
  * free the array) and total is the unpaged count; on error entries is NULL and
  * count/total are 0. count and total travel together so they cannot be transposed.
+ * has_more is true when another row matched past this page. total stays the
+ * unpaged filter count. Search leaves has_more unused.
  */
 typedef struct {
     Entry *entries;
     size_t count;
     size_t total;
     StoreStatus st;
-    char pad_[4]; /* explicit tail padding (kept -Wpadded-clean) */
+    bool has_more;
+    char pad_[3]; /* explicit tail padding (kept -Wpadded-clean) */
 } PageResult;
 
 /*
@@ -312,8 +319,8 @@ PageResult store_list(Store *s, const ListQuery *q, const char *now);
 /*
  * Union search (006 E2.1). query is the user's QUERY, valid UTF-8 (the CLI
  * checks, D27; invalid is STORE_ERR_INTERNAL). filters reuse ListQuery: tag
- * AND, optional source/key, limit/offset, since/until on updated_at; sort is
- * ignored. facet_limit caps keys.items and tags.items as given, like limit
+ * AND, optional source/key, limit, since/until on updated_at; sort and
+ * after_at are ignored. facet_limit caps keys.items and tags.items as given, like limit
  * (the CLI enforces 1..200); zero returns totals and no items.
  */
 typedef struct {

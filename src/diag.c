@@ -62,6 +62,7 @@ static const char *const k_error_codes[DIAG_CODE_COUNT] = {
     [DIAG_CORRUPT] = "corrupt",
     [DIAG_IO_ERROR] = "io_error",
     [DIAG_SCHEMA_TOO_NEW] = "schema_too_new",
+    [DIAG_INVALID_ARGUMENT] = "invalid_argument",
 };
 
 /* error.fix per code (decision:plan21-error-fix-drafts-c42). The SQLite codes
@@ -98,6 +99,8 @@ static const char *const k_fix[DIAG_CODE_COUNT] = {
     [DIAG_CORRUPT] = "Copy the file somewhere safe, then restore a backup.",
     [DIAG_IO_ERROR] = "Check the disk or drive, then try again.",
     [DIAG_SCHEMA_TOO_NEW] = "Upgrade remember to make changes.",
+    /* Draft, not approved copy. Plan 21 stage 2b. */
+    [DIAG_INVALID_ARGUMENT] = "Run 'remember list' again without --cursor.",
 };
 
 /* cppcheck-suppress staticFunction ; public API (diag.h); remember_run */

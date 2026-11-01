@@ -1,6 +1,7 @@
 #ifndef REMEMBER_APPIO_H
 #define REMEMBER_APPIO_H
 
+#include <stdbool.h>
 #include <stdio.h>
 
 /*
@@ -31,5 +32,14 @@ typedef struct {
 
 /* Swap the streams. NULL fields restore the stdout/stderr default. */
 void app_set_streams(AppStreams streams);
+
+/*
+ * List paging for the JSON envelope. The command sets the slot; remember_run
+ * takes it. A set slot with a NULL cursor is the last page (JSON null).
+ * An unset slot omits next_cursor and has_more. The cursor string is copied.
+ */
+void app_clear_list_page(void);
+int app_set_list_page(const char *next_cursor);
+bool app_take_list_page(char **out_cursor);
 
 #endif /* REMEMBER_APPIO_H */

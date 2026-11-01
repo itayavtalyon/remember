@@ -286,16 +286,13 @@ int output_entries_data(FILE *out, const char *action, const Entry *entries, siz
     return 0;
 }
 
-/* Shared head of the list and search envelopes, through "total". */
-static int write_page_head(FILE *out, size_t offset, size_t limit, size_t count, size_t total)
+/* Shared head of list and search data, through "total". */
+static int write_page_head(FILE *out, size_t count, size_t total)
 {
     if (write_data_open(out) != 0) {
         return -1;
     }
-    return fprintf(out, "\"offset\":%zu,\"limit\":%zu,\"count\":%zu,\"total\":%zu", offset, limit,
-                   count, total) < 0
-               ? -1
-               : 0;
+    return fprintf(out, "\"count\":%zu,\"total\":%zu", count, total) < 0 ? -1 : 0;
 }
 
 /* Shared tail: the entries array, then the closing brace and newline. */
@@ -338,14 +335,13 @@ static bool page_args_ok(const FILE *out, const char *now, const Entry *entries,
     return true;
 }
 
-int output_list_data(FILE *out, size_t offset, size_t limit, size_t count, size_t total,
-                     const Entry *entries, const StoreNeighbor *links, size_t nlinks,
-                     const char *now)
+int output_list_data(FILE *out, size_t count, size_t total, const Entry *entries,
+                     const StoreNeighbor *links, size_t nlinks, const char *now)
 {
     if (!page_args_ok(out, now, entries, count, links, nlinks)) {
         return -1;
     }
-    if (write_page_head(out, offset, limit, count, total) != 0) {
+    if (write_page_head(out, count, total) != 0) {
         return -1;
     }
     return write_page_entries(out, entries, count, links, nlinks, now);
@@ -421,8 +417,8 @@ static int write_tag_facet(FILE *out, const SearchTagFacet *tags)
     return fputs("]}", out) < 0 ? -1 : 0;
 }
 
-int output_search_data(FILE *out, const SearchResult *res, size_t offset, size_t limit,
-                       const StoreNeighbor *links, size_t nlinks, const char *now)
+int output_search_data(FILE *out, const SearchResult *res, const StoreNeighbor *links,
+                       size_t nlinks, const char *now)
 {
     const PageResult *page = NULL;
 
@@ -433,7 +429,7 @@ int output_search_data(FILE *out, const SearchResult *res, size_t offset, size_t
     if (!page_args_ok(out, now, page->entries, page->count, links, nlinks) || !facets_ok(res)) {
         return -1;
     }
-    if (write_page_head(out, offset, limit, page->count, page->total) != 0) {
+    if (write_page_head(out, page->count, page->total) != 0) {
         return -1;
     }
     if (write_key_facet(out, &res->keys) != 0 || write_tag_facet(out, &res->tags) != 0) {

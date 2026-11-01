@@ -32,17 +32,16 @@ int output_memory_data(FILE *out, const char *action, const Entry *e, const Stor
 int output_entries_data(FILE *out, const char *action, const Entry *entries, size_t count,
                         const char *now);
 
-/* List/search-style paged envelope. Each entry gets subject-relative stubs. */
-int output_list_data(FILE *out, size_t offset, size_t limit, size_t count, size_t total,
-                     const Entry *entries, const StoreNeighbor *links, size_t nlinks,
-                     const char *now);
+/* List data: count, total, entries. Paging lives on the envelope, not here. */
+int output_list_data(FILE *out, size_t count, size_t total, const Entry *entries,
+                     const StoreNeighbor *links, size_t nlinks, const char *now);
 
 /*
- * search --json: the list envelope with the keys and tags facets between
- * total and entries (006 E2.6). count, total and entries come from res->page.
+ * search --json: the list data with the keys and tags facets between total and
+ * entries (006 E2.6). count, total and entries come from res->page.
  */
-int output_search_data(FILE *out, const SearchResult *res, size_t offset, size_t limit,
-                       const StoreNeighbor *links, size_t nlinks, const char *now);
+int output_search_data(FILE *out, const SearchResult *res, const StoreNeighbor *links,
+                       size_t nlinks, const char *now);
 
 /*
  * search human facets (006 E2.7, decision:plan18-human-facet-line): a

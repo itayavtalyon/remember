@@ -6,6 +6,7 @@
 #include "commands_common.h"
 #include "diag.h"
 #include "exit_codes.h"
+#include "output.h"
 #include "store.h"
 #include "util.h"
 
@@ -161,7 +162,7 @@ static void print_command_help(CliCommand topic)
         (void)fprintf(out, "  --since TS      Inclusive lower bound on the sort field\n");
         (void)fprintf(out, "  --until TS      Exclusive upper bound on the sort field\n");
         (void)fprintf(out, "  --limit N       Page size (default 20, max 1000)\n");
-        (void)fprintf(out, "  --offset M      Skip M matches (default 0)\n");
+        (void)fprintf(out, "  --cursor CURSOR Resume after the last row\n");
         (void)fprintf(out, "  --expired       List expired only (default: live only)\n");
         (void)fprintf(out, "  --deleted       List deleted only\n");
         (void)fprintf(out, "  --trash         Deprecated alias of --expired\n");
@@ -183,7 +184,6 @@ static void print_command_help(CliCommand topic)
         (void)fprintf(out, "  --since TS      Inclusive lower bound on updated_at\n");
         (void)fprintf(out, "  --until TS      Exclusive upper bound on updated_at\n");
         (void)fprintf(out, "  --limit N       Page size (default 20, max 1000)\n");
-        (void)fprintf(out, "  --offset M      Skip M matches (default 0)\n");
         (void)fprintf(out, "  --facet-limit N Keys and tags to return (default 50, max 200)\n");
         (void)fprintf(out, "  --expired       Search expired only (default: live only)\n");
         (void)fprintf(out, "  --deleted       Search deleted only\n");
@@ -594,10 +594,30 @@ static bool writes_envelope(const CliArgs *args)
     return true;
 }
 
+/* next_cursor and has_more travel together, only when the list set a page.
+   A NULL cursor on a set page is JSON null (the last page). */
+static int write_page_fields(FILE *out, bool page, const char *cursor)
+{
+    if (!page) {
+        return 0;
+    }
+    if (fputs(",\"next_cursor\":", out) < 0) {
+        return -1;
+    }
+    if (cursor == NULL) {
+        if (fputs("null", out) < 0) {
+            return -1;
+        }
+    } else if (output_json_string(out, cursor) != 0) {
+        return -1;
+    }
+    return fputs(cursor != NULL ? ",\"has_more\":true" : ",\"has_more\":false", out) < 0 ? -1 : 0;
+}
+
 /* The envelope around the buffered data, or around the run's first error:
-   {format, version, type, data | error, warnings?} (JE-2.1). */
+   {format, version, type, data | error, next_cursor?, has_more?, warnings?} (JE-2.1). */
 static int write_envelope(FILE *out, const char *noun_verb, bool failed, const char *data,
-                          size_t len)
+                          size_t len, bool page, const char *cursor)
 {
     if (fprintf(out, "{\"format\":\"remember-message\",\"version\":1,\"type\":\"%s.result\",",
                 noun_verb) < 0) {
@@ -610,7 +630,8 @@ static int write_envelope(FILE *out, const char *noun_verb, bool failed, const c
     } else if (fputs("\"data\":", out) < 0 || fwrite(data, 1U, len, out) != len) {
         return -1;
     }
-    if (diag_json_write_warnings(out) != 0 || fputs("}\n", out) < 0) {
+    if (write_page_fields(out, page, cursor) != 0 || diag_json_write_warnings(out) != 0 ||
+        fputs("}\n", out) < 0) {
         return -1;
     }
     return 0;
@@ -626,6 +647,8 @@ static int run_json(const CliArgs *args, AppStreams streams)
     char *data = NULL;
     size_t len = 0U;
     FILE *data_fp = open_memstream(&data, &len);
+    char *cursor = NULL;
+    bool page = false;
     int rc = REMEMBER_ERR;
 
     if (data_fp == NULL || diag_json_begin(cli_command_name(args->command)) != 0) {
@@ -643,8 +666,14 @@ static int run_json(const CliArgs *args, AppStreams streams)
         err_msg(DIAG_INTERNAL, "internal error");
     }
     rc = (rc == REMEMBER_OK && diag_json_has_error()) ? REMEMBER_ERR : rc;
-    if (write_envelope(out, noun_verb, diag_json_has_error(), data, len) != 0 || fflush(out) != 0 ||
-        ferror(out) != 0) {
+    page = app_take_list_page(&cursor);
+    if (rc != REMEMBER_OK || diag_json_has_error()) {
+        page = false;
+        free(cursor);
+        cursor = NULL;
+    }
+    if (write_envelope(out, noun_verb, diag_json_has_error(), data, len, page, cursor) != 0 ||
+        fflush(out) != 0 || ferror(out) != 0) {
         /* stdout is gone: stderr is the one place left to say so. */
         diag_json_end();
         err_msg(DIAG_INTERNAL, "failed to write output");
@@ -656,6 +685,7 @@ cleanup:
         (void)fclose(data_fp);
     }
     free(data);
+    free(cursor);
     return rc;
 }
 
@@ -666,6 +696,7 @@ int remember_run(int argc, char *const *argv, FILE *out, FILE *err)
     CliArgs args;
     int rc = 0;
 
+    app_clear_list_page();
     app_set_streams((AppStreams){.out = out, .err = err});
     cli_parse(argc, argv, &args);
     if (writes_envelope(&args)) {
@@ -681,6 +712,7 @@ int remember_run(int argc, char *const *argv, FILE *out, FILE *err)
         }
     }
     cli_args_free(&args);
+    app_clear_list_page();
     app_set_streams((AppStreams){.out = NULL, .err = NULL});
     return rc;
 }

@@ -353,6 +353,29 @@ Mutation (the 16 mutants in the other agent's `mutants2a.py`, run 2026-10-31). T
 
 Gate on this tree, after the help-topic test (Apple clang, Debug, sanitizers on, LSAN off, `REMEMBER_TEST_VFS=ON`, Unix Makefiles; coverage with Homebrew LLVM 22). Started 2026-10-31T21:05:09Z at HEAD `0acd7bd` with stage 2a uncommitted. `EXIT: ctest=0 coverage=0 lint=0` at 2026-11-01T00:33:35Z. ctest 5/5. Coverage: functions 100%, effective lines 100% (must-cover lines missed: 0), branch sides 0 missed on `output.c` (698), `search_terms.c` (176), `unicode.c` (80), `normalize.c` (384). Lint OK. `default.profraw` stays untracked.
 
+### Stage 2b: `--offset` becomes an opaque `--cursor` (2026-11-01)
+
+Itay (2026-11-01): the cursor is standard base64 (with padding) of one canonical JSON object. `--limit` stays a flag. Any other flag that changes the SELECT or the WHERE, including `--sort`, is a different query. The resume key is the last row's sort-column timestamp plus `local_id`. The UUID (`entries.id`) is not in the ORDER BY, so a UUID-only cursor cannot break a timestamp tie, and looking the row up fails if that row was deleted.
+
+What changed:
+
+- Only `remember list` pages. `next_cursor` and `has_more` sit on the envelope, after `data` or `error` and before `warnings`. The last page has `"next_cursor":null` and `"has_more":false`. A failure drops data and omits the paging fields. Search has neither field and no `--offset`. `--offset` on list is `unknown option '--offset'`.
+- List data is `{count, entries, total}`. `total` is the unpaged filter count. The page is `LIMIT limit+1` with the extra row dropped, so `has_more` does not need a second count. The keyset is on the SELECT only: `(e.{updated_at|created_at} < ? OR (same column = ? AND e.local_id < ?))`.
+- The cursor JSON, opaque to clients, is `{"v":1,"sort":"updated"|"created","bin":"live"|"expired"|"deleted", optional tags/source/key/since/until, "at","local_id"}`. Absent optionals are omitted. Tags are sorted with `strcmp`. A different `--limit` is the same query. Default sort and `--sort updated` match. `--trash` and `--expired` match until stage 5. `--source` compares the flag the user passed. The cursor field is `local_id` so stage 2c does not change the bytes. `Entry.id` is still the integer local id until 2c.
+- A bad cursor, or a cursor reused with a different query, is `invalid_argument`. Missing or duplicate `--cursor` stays usage. Search `--cursor` is an unknown option. Plain list still pages and does not print the cursor.
+
+Draft, not approved copy. Same status as C-42. Copy approves or rewrites this before INDEX is ticked.
+
+| Code | message | fix |
+|---|---|---|
+| `invalid_argument` | `invalid --cursor` | `Run 'remember list' again without --cursor.` |
+
+`retryable` stays false. `k_fix` says the sentence is a draft.
+
+Tests: `list_json_cursor_pages`, `list_json_cursor_filters_and_rejects`, `list_cursor_past_end_keeps_total`, `list_offset_is_an_unknown_option`. The reject table covers non-canonical JSON, non-canonical base64 (including non-zero padding bits), tag count and tag text mismatches, and a 51-tag cursor.
+
+Gate (Apple clang, Debug, sanitizers on, LSAN off, `REMEMBER_TEST_VFS=ON`, Unix Makefiles; coverage with Homebrew LLVM 22). Started 2026-11-01T17:03:21Z at HEAD `42f6793` with stage 2b uncommitted. ctest 5/5. Coverage: functions 100%, effective lines 100% (must-cover lines missed: 0), branch sides 0 missed on `output.c` (698), `search_terms.c` (176), `unicode.c` (80), `normalize.c` (384). The first lint failed cppcheck `variableScope` / `unreadVariable` on two locals in the 51-tag fixture. They moved inside the `if`. Lint re-run 2026-11-01T17:12:24Z: `LINT OK`, `EXIT:0`. `default.profraw` stays untracked.
+
 ## Review Notes
 
 Stage flow (`decision:plan21-stage-flow`, Itay 2026-10-31): after each stage, run the in-session deep review, fix, and continue. There is no per-stage `REVIEW_REQUEST`. One whole-plan review runs at the end.
@@ -384,3 +407,20 @@ DRY / easy to replace / orthogonal / simplify:
 
 - One reply-type table (`reply_noun_verb`). One closer (`run_json`). `diag.c` buffers notices and does not write the envelope. Plan 20's `diag_error_fix` path (fix, no `retryable`) stays a different path. `k_fix` covers a failure with no SQLite cause. The E4.8 sentence stays on the SQLite path.
 - C-42 rows in `k_fix` and `k_error_fixes` are the plan's drafts. The `deleted` fix is still `Add --deleted to use it.` Stage 5 changes it.
+
+### Stage 2b deep review (2026-11-01, in session)
+
+`decision:plan21-stage-flow`: in-session deep review, fix, continue. No `.claude/REVIEW_REQUEST`. Local Bugbot is not installed. No product question is open. The cursor bytes and the resume key are Itay's 2026-11-01 answer. The `invalid_argument` sentence stays a draft, recorded the way C-42 was recorded.
+
+Findings:
+
+- **Nit, fixed:** cppcheck wanted `used` and `wrote` inside the 51-tag `if`. The initializers were unused. They now live in that block. `get_list_delete` stayed 25 tests, 0 failed, 465 asserts. Lint was re-run and is `LINT OK`.
+- **Nit, fixed:** the list SQL comment still said `LIMIT/OFFSET`. It now says keyset + LIMIT.
+- **Nit, kept:** the test file has its own base64 encoder so the reject table can build cursors. The production codec stays `static` in `cmd_query.c`, so CMake does not gain a source. Exporting it would be a second public surface for an opaque token.
+- **Nit, kept:** base64 shifts and alphabet offsets are silenced with `NOLINT`, the same way UUID v7 packing is. Naming every shift does not make the layout easier to read. `json_escape`, `append_decoded`, and `write_cursor_tags` are the splits that keep the three hot functions under the complexity limit of 25. OOM returns stay literal `return -1` so an untested malloc miss stays defensive.
+
+DRY / easy to replace / orthogonal / simplify:
+
+- One closer still writes the envelope. The list command only sets a page slot. A failure clears the slot, so paging fields never ride on an error.
+- The keyset is one predicate on the SELECT. COUNT stays the full filter, so an empty page still reports `total`.
+- `--limit` is not in the cursor. Sort, bin, tags, source, key, since, and until are. Clients do not parse the cursor.

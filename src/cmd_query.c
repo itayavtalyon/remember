@@ -52,7 +52,7 @@ typedef struct {
     const char **tag_raw;
     size_t ntag_raw;
     size_t limit;
-    size_t offset;
+    const char *cursor; /* argv token; not owned. NULL = first page */
     CmdBinOpts bins;
 } ListParse;
 
@@ -123,34 +123,13 @@ static int list_take_sort(int *i, int rest_argc, const char **rest_argv, ListPar
     return 0;
 }
 
-static int list_take_offset(int *i, int rest_argc, const char **rest_argv, size_t *out_offset,
-                            const char **err)
-{
-    const char *val = NULL;
-    size_t off = 0U;
-
-    {
-        TakeValue taken = take_value(i, rest_argc, rest_argv, "missing value for --offset");
-        if (taken.rc != 0) {
-            *err = taken.err;
-            return -1;
-        }
-        val = taken.value;
-    }
-    if (parse_size_token(val, &off) != 0) {
-        *err = "invalid --offset (must be >= 0)";
-        return -1;
-    }
-    *out_offset = off;
-    return 0;
-}
-
 /*
  * Handle one list/search option. Returns: 0 handled, 1 end-opts, 2 positional
  * for caller, -1 error (*err set; empty string if message already printed).
+ * --cursor is a list flag. Search rejects it as an unknown option.
  */
 static int list_handle_opt(const char *arg, int *i, int rest_argc, const char **rest_argv,
-                           ListParse *out, size_t *tag_cap, const char **err)
+                           ListParse *out, size_t *tag_cap, bool allow_cursor, const char **err)
 {
     const char *val = NULL;
 
@@ -197,8 +176,14 @@ static int list_handle_opt(const char *arg, int *i, int rest_argc, const char **
                                              .max = LIST_LIMIT_MAX},
                                 &out->limit, err);
     }
-    if (strcmp(arg, "--offset") == 0) {
-        return list_take_offset(i, rest_argc, rest_argv, &out->offset, err);
+    if (strcmp(arg, "--cursor") == 0) {
+        if (!allow_cursor) {
+            err_fmt(DIAG_USAGE, "unknown option '%s'", arg);
+            *err = "";
+            return -1;
+        }
+        return list_take_raw(i, rest_argc, rest_argv, &out->cursor, "duplicate --cursor",
+                             "missing value for --cursor", err);
     }
     if (strcmp(arg, "--sort") == 0) {
         return list_take_sort(i, rest_argc, rest_argv, out, err);
@@ -232,7 +217,7 @@ static void list_parse_init(ListParse *out)
     out->tag_raw = NULL;
     out->ntag_raw = 0U;
     out->limit = LIST_LIMIT_DEFAULT;
-    out->offset = 0U;
+    out->cursor = NULL;
     memset(&out->bins, 0, sizeof(out->bins));
 }
 
@@ -253,7 +238,7 @@ static int parse_list_args(int rest_argc, const char **rest_argv, ListParse *out
             *err = "unexpected argument";
             return -1;
         }
-        kind = list_handle_opt(arg, &i, rest_argc, rest_argv, out, &tag_cap, err);
+        kind = list_handle_opt(arg, &i, rest_argc, rest_argv, out, &tag_cap, true, err);
         if (kind == 1) {
             end_opts = 1;
             continue;
@@ -324,7 +309,7 @@ static int parse_search_args(int rest_argc, const char **rest_argv, SearchParse 
             }
             continue;
         }
-        kind = list_handle_opt(arg, &i, rest_argc, rest_argv, &out->filters, &tag_cap, err);
+        kind = list_handle_opt(arg, &i, rest_argc, rest_argv, &out->filters, &tag_cap, false, err);
         if (kind == 1) {
             end_opts = 1;
             continue;
@@ -407,7 +392,8 @@ static int list_prepare_query(const ListParse *parsed, char *key_norm, size_t ke
     q->ntags = *out_ntags;
     q->source = parsed->source;
     q->limit = parsed->limit;
-    q->offset = parsed->offset;
+    q->after_at = NULL;
+    q->after_local_id = 0;
     q->sort = STORE_SORT_UPDATED;
     if (parsed->sort_raw != NULL && strcmp(parsed->sort_raw, "created") == 0) {
         q->sort = STORE_SORT_CREATED;
@@ -452,16 +438,14 @@ static int load_page_neighbors(Store *s, const Entry *entries, size_t count, con
     return 0;
 }
 
-/* Emit list/search page: JSON envelope or human preview lines. */
-static int emit_entry_page(bool json, size_t offset, size_t limit, size_t count, size_t total,
-                           const Entry *entries, const StoreNeighbor *links, size_t nlinks,
-                           const char *now)
+/* Emit list/search page: JSON data or human preview lines. */
+static int emit_entry_page(bool json, size_t count, size_t total, const Entry *entries,
+                           const StoreNeighbor *links, size_t nlinks, const char *now)
 {
     size_t i = 0;
 
     if (json) {
-        return output_list_data(app_out(), offset, limit, count, total, entries, links, nlinks,
-                                now);
+        return output_list_data(app_out(), count, total, entries, links, nlinks, now);
     }
     for (i = 0; i < count; i++) {
         if (output_entry_human_line(app_out(), &entries[i], links, nlinks, now) != 0) {
@@ -471,19 +455,18 @@ static int emit_entry_page(bool json, size_t offset, size_t limit, size_t count,
     return 0;
 }
 
-/* search: the E2.6 envelope, or the E2.7 facet lines before the entry lines. */
-static int emit_search(bool json, const ListQuery *filters, const SearchResult *res,
-                       const StoreNeighbor *links, size_t nlinks, const char *now)
+/* search: the E2.6 data object, or the E2.7 facet lines before the entry lines. */
+static int emit_search(bool json, const SearchResult *res, const StoreNeighbor *links,
+                       size_t nlinks, const char *now)
 {
     if (json) {
-        return output_search_data(app_out(), res, filters->offset, filters->limit, links, nlinks,
-                                  now);
+        return output_search_data(app_out(), res, links, nlinks, now);
     }
     if (output_search_facets_human(app_out(), res) != 0) {
         return -1;
     }
-    return emit_entry_page(false, 0U, 0U, res->page.count, res->page.total, res->page.entries,
-                           links, nlinks, now);
+    return emit_entry_page(false, res->page.count, res->page.total, res->page.entries, links,
+                           nlinks, now);
 }
 
 static void free_entry_page(Entry *entries, size_t count)
@@ -497,6 +480,751 @@ static void free_entry_page(Entry *entries, size_t count)
         store_entry_free(&entries[i]);
     }
     free(entries);
+}
+
+/* Opaque list cursor: standard base64 of one canonical JSON object.
+   Field order is fixed. Absent filters are omitted. Limit stays a flag. */
+
+/* OOM is literal -1 so an untested malloc miss stays a defensive return. */
+enum { CURSOR_OK = 0, CURSOR_OOM = -1, CURSOR_BAD = -2 };
+enum { CURSOR_JSON_MAX = 65536, CURSOR_TAG_MAX = 50 };
+enum { CURSOR_BUF_INIT = 16, HEX_LETTER_BASE = 10, JSON_MAX_UNIT = 0x7F, DECIMAL_BASE = 10 };
+
+typedef struct {
+    char *sort;
+    char *bin;
+    char *tags[CURSOR_TAG_MAX];
+    size_t ntags;
+    char *source;
+    char *key;
+    char *since;
+    char *until;
+    char *at;
+    long long local_id;
+} CursorDoc;
+
+static void cursor_doc_free(CursorDoc *doc)
+{
+    size_t i = 0U;
+
+    if (doc == NULL) {
+        return;
+    }
+    free(doc->sort);
+    free(doc->bin);
+    free(doc->source);
+    free(doc->key);
+    free(doc->since);
+    free(doc->until);
+    free(doc->at);
+    for (i = 0U; i < doc->ntags; i++) {
+        free(doc->tags[i]);
+    }
+    memset(doc, 0, sizeof(*doc));
+}
+
+/* Alphabet offsets and the 6-bit shifts are the base64 layout. */
+// NOLINTBEGIN(hicpp-signed-bitwise,cppcoreguidelines-avoid-magic-numbers,readability-magic-numbers)
+static int b64_digit(unsigned char c)
+{
+    if (c >= 'A' && c <= 'Z') {
+        return (int)(c - 'A');
+    }
+    if (c >= 'a' && c <= 'z') {
+        return (int)(c - 'a') + 26;
+    }
+    if (c >= '0' && c <= '9') {
+        return (int)(c - '0') + 52;
+    }
+    if (c == '+') {
+        return 62;
+    }
+    if (c == '/') {
+        return 63;
+    }
+    return -1;
+}
+
+static char *base64_encode(const unsigned char *raw, size_t len)
+{
+    static const char k_alpha[] =
+        "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    size_t out_len = 4U * ((len + 2U) / 3U);
+    char *out = (char *)malloc(out_len + 1U);
+    size_t i = 0U;
+    size_t j = 0U;
+
+    if (out == NULL) {
+        return NULL;
+    }
+    while (i + 3U <= len) {
+        unsigned n =
+            ((unsigned)raw[i] << 16) | ((unsigned)raw[i + 1U] << 8) | (unsigned)raw[i + 2U];
+        out[j++] = k_alpha[(n >> 18) & 63U];
+        out[j++] = k_alpha[(n >> 12) & 63U];
+        out[j++] = k_alpha[(n >> 6) & 63U];
+        out[j++] = k_alpha[n & 63U];
+        i += 3U;
+    }
+    if (i < len) {
+        unsigned n = (unsigned)raw[i] << 16;
+        if (i + 1U < len) {
+            n |= (unsigned)raw[i + 1U] << 8;
+        }
+        out[j++] = k_alpha[(n >> 18) & 63U];
+        out[j++] = k_alpha[(n >> 12) & 63U];
+        out[j++] = (i + 1U < len) ? k_alpha[(n >> 6) & 63U] : '=';
+        out[j++] = '=';
+    }
+    out[j] = '\0';
+    return out;
+}
+
+/* One decoded quartet. Rejects padding that is not at the end of the last group
+   and padding whose hidden bits are not zero. */
+static int append_decoded(unsigned char *buf, size_t *j, unsigned value, const char *quartet)
+{
+    buf[(*j)++] = (unsigned char)((value >> 16) & 0xFFU);
+    if (quartet[2] != '=') {
+        buf[(*j)++] = (unsigned char)((value >> 8) & 0xFFU);
+    } else if ((value & 0xFFFFU) != 0U) {
+        return CURSOR_BAD;
+    }
+    if (quartet[3] != '=') {
+        buf[(*j)++] = (unsigned char)(value & 0xFFU);
+    } else if (quartet[2] != '=' && (value & 0xFFU) != 0U) {
+        return CURSOR_BAD;
+    }
+    return CURSOR_OK;
+}
+
+/* Reject a length that is not a multiple of 4, whitespace, and non-zero pad bits. */
+static int base64_decode(const char *text, unsigned char **out, size_t *out_len)
+{
+    size_t n = strlen(text);
+    size_t i = 0U;
+    size_t j = 0U;
+    unsigned char *buf = NULL;
+
+    if (n == 0U || (n % 4U) != 0U || (n / 4U) * 3U > (size_t)CURSOR_JSON_MAX) {
+        return CURSOR_BAD;
+    }
+    buf = (unsigned char *)malloc(((n / 4U) * 3U) + 1U);
+    if (buf == NULL) {
+        return -1;
+    }
+    for (i = 0U; i < n; i += 4U) {
+        int digit[4];
+        unsigned value = 0U;
+        int k = 0;
+
+        for (k = 0; k < 4; k++) {
+            unsigned char c = (unsigned char)text[i + (size_t)k];
+            if (c == '=') {
+                if (i + 4U != n || k < 2 || (k == 2 && text[i + 3U] != '=')) {
+                    free(buf);
+                    return CURSOR_BAD;
+                }
+                digit[k] = 0;
+            } else {
+                digit[k] = b64_digit(c);
+                if (digit[k] < 0) {
+                    free(buf);
+                    return CURSOR_BAD;
+                }
+            }
+        }
+        value = ((unsigned)digit[0] << 18) | ((unsigned)digit[1] << 12) |
+                ((unsigned)digit[2] << 6) | (unsigned)digit[3];
+        if (append_decoded(buf, &j, value, text + i) != CURSOR_OK) {
+            free(buf);
+            return CURSOR_BAD;
+        }
+    }
+    buf[j] = 0U;
+    *out = buf;
+    *out_len = j;
+    return CURSOR_OK;
+}
+// NOLINTEND(hicpp-signed-bitwise,cppcoreguidelines-avoid-magic-numbers,readability-magic-numbers)
+
+static int buf_add(char **buf, size_t *n, size_t *cap, char c)
+{
+    if (*n + 1U >= *cap) {
+        size_t ncap = (*cap == 0U) ? (size_t)CURSOR_BUF_INIT : (*cap * 2U);
+        char *grown = (char *)realloc(*buf, ncap);
+
+        if (grown == NULL) {
+            return -1;
+        }
+        *buf = grown;
+        *cap = ncap;
+    }
+    (*buf)[(*n)++] = c;
+    (*buf)[*n] = '\0';
+    return CURSOR_OK;
+}
+
+static int hex_nibble(char c)
+{
+    if (c >= '0' && c <= '9') {
+        return c - '0';
+    }
+    if (c >= 'a' && c <= 'f') {
+        return c - 'a' + HEX_LETTER_BASE;
+    }
+    if (c >= 'A' && c <= 'F') {
+        return c - 'A' + HEX_LETTER_BASE;
+    }
+    return -1;
+}
+
+/* One JSON escape, after the backslash. Rejects \\u above ASCII. */
+static int json_escape(const char **s, unsigned char *out)
+{
+    const char *p = *s;
+
+    if (*p == '"' || *p == '\\' || *p == '/') {
+        *out = (unsigned char)*p;
+    } else if (*p == 'b') {
+        *out = (unsigned char)'\b';
+    } else if (*p == 'f') {
+        *out = (unsigned char)'\f';
+    } else if (*p == 'n') {
+        *out = (unsigned char)'\n';
+    } else if (*p == 'r') {
+        *out = (unsigned char)'\r';
+    } else if (*p == 't') {
+        *out = (unsigned char)'\t';
+    } else if (*p == 'u') {
+        unsigned unit = 0U;
+        int k = 0;
+
+        for (k = 0; k < 4; k++) {
+            int nib = hex_nibble(p[1 + k]);
+
+            if (nib < 0) {
+                return CURSOR_BAD;
+            }
+            unit = (unit << 4U) | (unsigned)nib;
+        }
+        if (unit > (unsigned)JSON_MAX_UNIT) {
+            return CURSOR_BAD;
+        }
+        *out = (unsigned char)unit;
+        p += 4;
+    } else {
+        return CURSOR_BAD;
+    }
+    p++;
+    *s = p;
+    return CURSOR_OK;
+}
+
+static int parse_json_string(const char **p, char **out)
+{
+    char *buf = NULL;
+    size_t n = 0U;
+    size_t cap = 0U;
+    const char *s = *p;
+
+    *out = NULL;
+    if (*s != '"') {
+        return CURSOR_BAD;
+    }
+    s++;
+    for (;;) {
+        unsigned char c = 0;
+        int st = CURSOR_OK;
+
+        if (*s == '\0') {
+            free(buf);
+            return CURSOR_BAD;
+        }
+        if (*s == '"') {
+            s++;
+            break;
+        }
+        if (*s == '\\') {
+            s++;
+            st = json_escape(&s, &c);
+            if (st != CURSOR_OK) {
+                free(buf);
+                return st;
+            }
+        } else if ((unsigned char)*s < ' ') {
+            free(buf);
+            return CURSOR_BAD;
+        } else {
+            c = (unsigned char)*s;
+            s++;
+        }
+        st = buf_add(&buf, &n, &cap, (char)c);
+        if (st != CURSOR_OK) {
+            free(buf);
+            return st;
+        }
+    }
+    if (buf == NULL) {
+        buf = (char *)malloc(1U);
+        if (buf == NULL) {
+            return -1;
+        }
+        buf[0] = '\0';
+    }
+    *out = buf;
+    *p = s;
+    return CURSOR_OK;
+}
+
+static int parse_json_uint(const char **p, long long *out)
+{
+    const char *s = *p;
+    unsigned long long value = 0ULL;
+
+    if (*s < '0' || *s > '9') {
+        return CURSOR_BAD;
+    }
+    if (*s == '0' && s[1] >= '0' && s[1] <= '9') {
+        return CURSOR_BAD;
+    }
+    while (*s >= '0' && *s <= '9') {
+        unsigned digit = (unsigned)(*s - '0');
+        if (value > ((unsigned long long)LLONG_MAX - digit) / (unsigned long long)DECIMAL_BASE) {
+            return CURSOR_BAD;
+        }
+        value = (value * (unsigned long long)DECIMAL_BASE) + digit;
+        s++;
+    }
+    *out = (long long)value;
+    *p = s;
+    return CURSOR_OK;
+}
+
+static bool starts_with_key(const char *p, const char *key)
+{
+    size_t n = strlen(key);
+
+    if (p[0] == ',' && p[1] == '"' && strncmp(p + 2, key, n) == 0 && p[2U + n] == '"') {
+        return true;
+    }
+    return false;
+}
+
+static int take_key(const char **p, const char *key, bool comma)
+{
+    char *got = NULL;
+    int st = CURSOR_OK;
+
+    if (comma) {
+        if (**p != ',') {
+            return CURSOR_BAD;
+        }
+        (*p)++;
+    }
+    st = parse_json_string(p, &got);
+    if (st != CURSOR_OK) {
+        return st;
+    }
+    if (strcmp(got, key) != 0) {
+        free(got);
+        return CURSOR_BAD;
+    }
+    free(got);
+    if (**p != ':') {
+        return CURSOR_BAD;
+    }
+    (*p)++;
+    return CURSOR_OK;
+}
+
+static int take_req_string(const char **p, const char *key, bool comma, char **slot)
+{
+    int st = take_key(p, key, comma);
+
+    if (st != CURSOR_OK) {
+        return st;
+    }
+    st = parse_json_string(p, slot);
+    if (st != CURSOR_OK) {
+        return st;
+    }
+    if ((*slot)[0] == '\0') {
+        return CURSOR_BAD;
+    }
+    return CURSOR_OK;
+}
+
+static int take_opt_string(const char **p, const char *key, char **slot)
+{
+    int st = CURSOR_OK;
+
+    if (!starts_with_key(*p, key)) {
+        return CURSOR_OK;
+    }
+    st = take_req_string(p, key, true, slot);
+    return st;
+}
+
+static int take_tags(const char **p, CursorDoc *doc)
+{
+    int st = CURSOR_OK;
+
+    if (!starts_with_key(*p, "tags")) {
+        return CURSOR_OK;
+    }
+    st = take_key(p, "tags", true);
+    if (st != CURSOR_OK) {
+        return st;
+    }
+    if (**p != '[') {
+        return CURSOR_BAD;
+    }
+    (*p)++;
+    if (**p == ']') {
+        return CURSOR_BAD;
+    }
+    for (;;) {
+        char *tag = NULL;
+
+        if (doc->ntags >= (size_t)CURSOR_TAG_MAX) {
+            return CURSOR_BAD;
+        }
+        st = parse_json_string(p, &tag);
+        if (st != CURSOR_OK) {
+            return st;
+        }
+        if (tag[0] == '\0' || (doc->ntags > 0U && strcmp(doc->tags[doc->ntags - 1U], tag) > 0)) {
+            free(tag);
+            return CURSOR_BAD;
+        }
+        doc->tags[doc->ntags++] = tag;
+        if (**p == ',') {
+            (*p)++;
+            continue;
+        }
+        if (**p == ']') {
+            (*p)++;
+            return CURSOR_OK;
+        }
+        return CURSOR_BAD;
+    }
+}
+
+static bool sort_token_ok(const char *text)
+{
+    if (strcmp(text, "updated") == 0 || strcmp(text, "created") == 0) {
+        return true;
+    }
+    return false;
+}
+
+static bool bin_token_ok(const char *text)
+{
+    if (strcmp(text, "live") == 0 || strcmp(text, "expired") == 0 || strcmp(text, "deleted") == 0) {
+        return true;
+    }
+    return false;
+}
+
+static int cursor_decode(const char *raw, CursorDoc *doc)
+{
+    unsigned char *json = NULL;
+    size_t n = 0U;
+    const char *p = NULL;
+    int st = CURSOR_OK;
+    long long version = 0;
+
+    memset(doc, 0, sizeof(*doc));
+    st = base64_decode(raw, &json, &n);
+    if (st != CURSOR_OK) {
+        return st;
+    }
+    p = (const char *)json;
+    if (*p != '{') {
+        free(json);
+        return CURSOR_BAD;
+    }
+    p++;
+    st = take_key(&p, "v", false);
+    if (st == CURSOR_OK) {
+        st = parse_json_uint(&p, &version);
+    }
+    if (st == CURSOR_OK && version != 1) {
+        st = CURSOR_BAD;
+    }
+    if (st == CURSOR_OK) {
+        st = take_req_string(&p, "sort", true, &doc->sort);
+    }
+    if (st == CURSOR_OK && !sort_token_ok(doc->sort)) {
+        st = CURSOR_BAD;
+    }
+    if (st == CURSOR_OK) {
+        st = take_req_string(&p, "bin", true, &doc->bin);
+    }
+    if (st == CURSOR_OK && !bin_token_ok(doc->bin)) {
+        st = CURSOR_BAD;
+    }
+    if (st == CURSOR_OK) {
+        st = take_tags(&p, doc);
+    }
+    if (st == CURSOR_OK) {
+        st = take_opt_string(&p, "source", &doc->source);
+    }
+    if (st == CURSOR_OK) {
+        st = take_opt_string(&p, "key", &doc->key);
+    }
+    if (st == CURSOR_OK) {
+        st = take_opt_string(&p, "since", &doc->since);
+    }
+    if (st == CURSOR_OK) {
+        st = take_opt_string(&p, "until", &doc->until);
+    }
+    if (st == CURSOR_OK) {
+        st = take_req_string(&p, "at", true, &doc->at);
+    }
+    if (st == CURSOR_OK) {
+        st = take_key(&p, "local_id", true);
+    }
+    if (st == CURSOR_OK) {
+        st = parse_json_uint(&p, &doc->local_id);
+    }
+    if (st == CURSOR_OK && (*p != '}' || p[1] != '\0')) {
+        st = CURSOR_BAD;
+    }
+    free(json);
+    return st;
+}
+
+static const char *sort_token(StoreSort sort)
+{
+    return sort == STORE_SORT_CREATED ? "created" : "updated";
+}
+
+static const char *bin_token(StoreBin bin)
+{
+    switch (bin) {
+    case STORE_BIN_LIVE:
+        return "live";
+    case STORE_BIN_EXPIRED:
+        return "expired";
+    case STORE_BIN_DELETED:
+        return "deleted";
+    default:
+        return NULL;
+    }
+}
+
+/* qsort passes the two element slots. The caller cannot swap the parameters. */
+// NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
+static int cmp_cstr(const void *left, const void *right)
+{
+    const char *const *a = (const char *const *)left;
+    const char *const *b = (const char *const *)right;
+
+    return strcmp(*a, *b);
+}
+
+static bool same_text(const char *a, const char *b)
+{
+    if (a == NULL || b == NULL) {
+        return a == b;
+    }
+    return strcmp(a, b) == 0;
+}
+
+static int tags_match(const ListQuery *q, const CursorDoc *doc)
+{
+    const char **sorted = NULL;
+    size_t i = 0U;
+
+    if (q->ntags != doc->ntags) {
+        return CURSOR_BAD;
+    }
+    if (q->ntags == 0U) {
+        return CURSOR_OK;
+    }
+    sorted = (const char **)malloc(q->ntags * sizeof(*sorted));
+    if (sorted == NULL) {
+        return -1;
+    }
+    for (i = 0U; i < q->ntags; i++) {
+        sorted[i] = q->tags[i];
+    }
+    qsort((void *)sorted, q->ntags, sizeof(*sorted), cmp_cstr);
+    for (i = 0U; i < q->ntags; i++) {
+        if (sorted[i] == NULL || strcmp(sorted[i], doc->tags[i]) != 0) {
+            free((void *)sorted);
+            return CURSOR_BAD;
+        }
+    }
+    free((void *)sorted);
+    return CURSOR_OK;
+}
+
+static int cursor_matches(const ListQuery *q, const CursorDoc *doc)
+{
+    const char *sort = sort_token(q->sort);
+    const char *bin = bin_token(q->bin);
+
+    if (bin == NULL || !same_text(sort, doc->sort) || !same_text(bin, doc->bin) ||
+        !same_text(q->source, doc->source) || !same_text(q->key, doc->key) ||
+        !same_text(q->since, doc->since) || !same_text(q->until, doc->until)) {
+        return CURSOR_BAD;
+    }
+    return tags_match(q, doc);
+}
+
+static int write_opt_string(FILE *fp, const char *key, const char *value)
+{
+    if (value == NULL) {
+        return 0;
+    }
+    if (fprintf(fp, ",\"%s\":", key) < 0 || output_json_string(fp, value) != 0) {
+        return -1;
+    }
+    return 0;
+}
+
+static int write_cursor_tags(FILE *fp, const char *const *tags, size_t ntags)
+{
+    size_t i = 0U;
+
+    if (ntags == 0U) {
+        return 0;
+    }
+    if (fputs(",\"tags\":[", fp) < 0) {
+        return -1;
+    }
+    for (i = 0U; i < ntags; i++) {
+        if ((i > 0U && fputc(',', fp) == EOF) || output_json_string(fp, tags[i]) != 0) {
+            return -1;
+        }
+    }
+    if (fputc(']', fp) == EOF) {
+        return -1;
+    }
+    return 0;
+}
+
+static char *list_cursor_encode(const ListQuery *q, const char *at, long long local_id)
+{
+    char *json = NULL;
+    size_t len = 0U;
+    FILE *fp = open_memstream(&json, &len);
+    char *encoded = NULL;
+    const char **tags = NULL;
+    const char *sort = sort_token(q->sort);
+    const char *bin = bin_token(q->bin);
+    size_t i = 0U;
+
+    if (fp == NULL) {
+        return NULL;
+    }
+    if (at == NULL || bin == NULL) {
+        goto fail;
+    }
+    if (q->ntags > 0U) {
+        tags = (const char **)malloc(q->ntags * sizeof(*tags));
+        if (tags == NULL) {
+            goto fail;
+        }
+        for (i = 0U; i < q->ntags; i++) {
+            tags[i] = q->tags[i];
+        }
+        qsort((void *)tags, q->ntags, sizeof(*tags), cmp_cstr);
+    }
+    if (fputs("{\"v\":1,\"sort\":", fp) < 0 || output_json_string(fp, sort) != 0 ||
+        fputs(",\"bin\":", fp) < 0 || output_json_string(fp, bin) != 0) {
+        goto fail;
+    }
+    if (write_cursor_tags(fp, tags, q->ntags) != 0) {
+        goto fail;
+    }
+    if (write_opt_string(fp, "source", q->source) != 0 ||
+        write_opt_string(fp, "key", q->key) != 0 || write_opt_string(fp, "since", q->since) != 0 ||
+        write_opt_string(fp, "until", q->until) != 0 || fputs(",\"at\":", fp) < 0 ||
+        output_json_string(fp, at) != 0 || fprintf(fp, ",\"local_id\":%lld}", local_id) < 0) {
+        goto fail;
+    }
+    if (fclose(fp) != 0) {
+        free(json);
+        free((void *)tags);
+        return NULL;
+    }
+    encoded = base64_encode((const unsigned char *)json, len);
+    free(json);
+    free((void *)tags);
+    return encoded;
+
+fail:
+    (void)fclose(fp);
+    free(json);
+    free((void *)tags);
+    return NULL;
+}
+
+static int list_bind_cursor(const char *raw, ListQuery *q, char **out_at)
+{
+    CursorDoc doc;
+    int st = cursor_decode(raw, &doc);
+
+    if (st != CURSOR_OK) {
+        if (st == CURSOR_OOM) {
+            err_msg(DIAG_OUT_OF_MEMORY, "out of memory");
+        } else {
+            err_msg(DIAG_INVALID_ARGUMENT, "invalid --cursor");
+        }
+        cursor_doc_free(&doc);
+        return -1;
+    }
+    st = cursor_matches(q, &doc);
+    if (st != CURSOR_OK) {
+        if (st == CURSOR_OOM) {
+            err_msg(DIAG_OUT_OF_MEMORY, "out of memory");
+        } else {
+            err_msg(DIAG_INVALID_ARGUMENT, "invalid --cursor");
+        }
+        cursor_doc_free(&doc);
+        return -1;
+    }
+    *out_at = doc.at;
+    doc.at = NULL;
+    q->after_local_id = doc.local_id;
+    cursor_doc_free(&doc);
+    return 0;
+}
+
+static int list_publish_page(const ListQuery *q, const Entry *entries, size_t count, bool has_more)
+{
+    const char *at = NULL;
+    char *cursor = NULL;
+    int rc = 0;
+
+    if (!has_more) {
+        return app_set_list_page(NULL);
+    }
+    if (count == 0U) {
+        err_msg(DIAG_INTERNAL, "internal error");
+        return -1;
+    }
+    at = (q->sort == STORE_SORT_CREATED) ? entries[count - 1U].created_at
+                                         : entries[count - 1U].updated_at;
+    if (at == NULL) {
+        err_msg(DIAG_INTERNAL, "internal error");
+        return -1;
+    }
+    cursor = list_cursor_encode(q, at, entries[count - 1U].id);
+    if (cursor == NULL) {
+        err_msg(DIAG_OUT_OF_MEMORY, "out of memory");
+        return -1;
+    }
+    rc = app_set_list_page(cursor);
+    free(cursor);
+    if (rc != 0) {
+        err_msg(DIAG_OUT_OF_MEMORY, "out of memory");
+    }
+    return rc;
 }
 
 int cmd_list(Store *s, bool json, int rest_argc, const char **rest_argv)
@@ -517,6 +1245,8 @@ int cmd_list(Store *s, bool json, int rest_argc, const char **rest_argv)
     StoreStatus st = STORE_OK;
     int rc = REMEMBER_ERR;
     char now[ISO_TS_BUFSIZE];
+    char *cursor_at = NULL;
+    bool has_more = false;
 
     memset(&q, 0, sizeof(q));
     memset(key_norm, 0, sizeof(key_norm));
@@ -533,6 +1263,12 @@ int cmd_list(Store *s, bool json, int rest_argc, const char **rest_argv)
                            until) != 0) {
         goto cleanup;
     }
+    if (parsed.cursor != NULL && list_bind_cursor(parsed.cursor, &q, &cursor_at) != 0) {
+        goto cleanup;
+    }
+    if (cursor_at != NULL) {
+        q.after_at = cursor_at;
+    }
 
     if (utc_now(now, sizeof(now)) != 0) {
         err_msg(DIAG_INTERNAL, "internal error");
@@ -544,6 +1280,7 @@ int cmd_list(Store *s, bool json, int rest_argc, const char **rest_argv)
         entries = page.entries;
         count = page.count;
         total = page.total;
+        has_more = page.has_more;
     }
     if (st != STORE_OK) {
         err_store(s, st);
@@ -556,14 +1293,18 @@ int cmd_list(Store *s, bool json, int rest_argc, const char **rest_argv)
         cmd_neighbors_drop_deleted(links, &nlinks, now);
     }
 
-    if (emit_entry_page(json, q.offset, q.limit, count, total, entries, links, nlinks, now) != 0) {
+    if (emit_entry_page(json, count, total, entries, links, nlinks, now) != 0) {
         err_msg(DIAG_INTERNAL, "failed to write output");
+        goto cleanup;
+    }
+    if (json && list_publish_page(&q, entries, count, has_more) != 0) {
         goto cleanup;
     }
     rc = REMEMBER_OK;
 
 cleanup:
     list_parse_free(&parsed);
+    free(cursor_at);
     free_tag_list(tags_norm, ntags);
     store_neighbors_free(links, nlinks);
     free_entry_page(entries, count);
@@ -620,7 +1361,7 @@ int cmd_search(Store *s, bool json, int rest_argc, const char **rest_argv)
         cmd_neighbors_drop_deleted(links, &nlinks, now);
     }
 
-    if (emit_search(json, &q.filters, &res, links, nlinks, now) != 0) {
+    if (emit_search(json, &res, links, nlinks, now) != 0) {
         err_msg(DIAG_INTERNAL, "failed to write output");
         goto cleanup;
     }

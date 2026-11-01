@@ -325,10 +325,10 @@ TEST(output_list_envelope_rejects_missing_arguments)
     Entry e = given_entry();
     FILE *f = given_stream();
 
-    ASSERT_EQ_INT(output_list_data(NULL, 0, 1, 1, 1, &e, NULL, 0, NOW), -1);
-    ASSERT_EQ_INT(output_list_data(f, 0, 1, 1, 1, &e, NULL, 0, NULL), -1);
-    ASSERT_EQ_INT(output_list_data(f, 0, 1, 1, 1, NULL, NULL, 0, NOW), -1);
-    ASSERT_EQ_INT(output_list_data(f, 0, 1, 1, 1, &e, NULL, 1, NOW), -1);
+    ASSERT_EQ_INT(output_list_data(NULL, 1, 1, &e, NULL, 0, NOW), -1);
+    ASSERT_EQ_INT(output_list_data(f, 1, 1, &e, NULL, 0, NULL), -1);
+    ASSERT_EQ_INT(output_list_data(f, 1, 1, NULL, NULL, 0, NOW), -1);
+    ASSERT_EQ_INT(output_list_data(f, 1, 1, &e, NULL, 1, NOW), -1);
     assert_written(f, "");
 }
 
@@ -338,10 +338,9 @@ TEST(output_search_envelope_writes_empty_facets)
     SearchResult res = {.page = {.st = STORE_OK}};
     FILE *f = given_stream();
 
-    ASSERT_EQ_INT(output_search_data(f, &res, 0, 20, NULL, 0, NOW), 0);
-    assert_written(
-        f, "{\"offset\":0,\"limit\":20,\"count\":0,\"total\":0,\"keys\":{\"total\":0,\"items\":["
-           "]},\"tags\":{\"total\":0,\"items\":[]},\"entries\":[]}");
+    ASSERT_EQ_INT(output_search_data(f, &res, NULL, 0, NOW), 0);
+    assert_written(f, "{\"count\":0,\"total\":0,\"keys\":{\"total\":0,\"items\":["
+                      "]},\"tags\":{\"total\":0,\"items\":[]},\"entries\":[]}");
 }
 
 /* Two key items and two tag items, so the comma between items shows. */
@@ -375,9 +374,9 @@ TEST(output_search_envelope_writes_the_facet_items)
     SearchResult res = given_search_facets(keys, tags);
     FILE *f = given_stream();
 
-    ASSERT_EQ_INT(output_search_data(f, &res, 0, 20, NULL, 0, NOW), 0);
+    ASSERT_EQ_INT(output_search_data(f, &res, NULL, 0, NOW), 0);
     assert_written(
-        f, "{\"offset\":0,\"limit\":20,\"count\":0,\"total\":0,\"keys\":{\"total\":5,\"items\":["
+        f, "{\"count\":0,\"total\":0,\"keys\":{\"total\":5,\"items\":["
            "{\"key\":\"recs:books\",\"sync_id\":\"s-1\",\"label\":\"Book recommendations\",\"sou"
            "rce\":\"agent\",\"updated_at\":\"u-1\"},{\"key\":\"recs:bonds\",\"sync_id\":\"s-2\","
            "\"label\":\"recs:bonds\",\"source\":\"human\",\"updated_at\":\"u-2\"}]},\"tags\":{\""
@@ -403,9 +402,9 @@ TEST(output_search_envelope_escapes_every_facet_field)
     res.tags.items[0].tag = (char *)"t\x01";
     res.keys.count = 1;
     res.tags.count = 1;
-    ASSERT_EQ_INT(output_search_data(f, &res, 0, 20, NULL, 0, NOW), 0);
+    ASSERT_EQ_INT(output_search_data(f, &res, NULL, 0, NOW), 0);
     assert_written(
-        f, "{\"offset\":0,\"limit\":20,\"count\":0,\"total\":0,\"keys\":{\"total\":5,\"items\":["
+        f, "{\"count\":0,\"total\":0,\"keys\":{\"total\":5,\"items\":["
            "{\"key\":\"k\\u001b\",\"sync_id\":\"s\\n\",\"label\":\"l\\\"\\u001b[31m\",\"source\""
            ":\"a\\\\\",\"updated_at\":\"u\\t\"}]},\"tags\":{\"total\":4,\"items\":[{\"tag\":\"t"
            "\\u0001\",\"count\":1}]},\"entries\":[]}");
@@ -419,18 +418,18 @@ TEST(output_search_envelope_rejects_missing_arguments)
     StoreNeighbor link = given_link(SUBJECT_ID, SUBJECT_ID, STORE_EDGE_RELATED);
     FILE *f = given_stream();
 
-    ASSERT_EQ_INT(output_search_data(NULL, &res, 0, 1, NULL, 0, NOW), -1);
-    ASSERT_EQ_INT(output_search_data(f, NULL, 0, 1, NULL, 0, NOW), -1);
-    ASSERT_EQ_INT(output_search_data(f, &res, 0, 1, NULL, 0, NULL), -1);
-    ASSERT_EQ_INT(output_search_data(f, &res, 0, 1, NULL, 1, NOW), -1);
+    ASSERT_EQ_INT(output_search_data(NULL, &res, NULL, 0, NOW), -1);
+    ASSERT_EQ_INT(output_search_data(f, NULL, NULL, 0, NOW), -1);
+    ASSERT_EQ_INT(output_search_data(f, &res, NULL, 0, NULL), -1);
+    ASSERT_EQ_INT(output_search_data(f, &res, NULL, 1, NOW), -1);
     res.page.count = 1;
-    ASSERT_EQ_INT(output_search_data(f, &res, 0, 1, &link, 1, NOW), -1);
+    ASSERT_EQ_INT(output_search_data(f, &res, &link, 1, NOW), -1);
     res.page.count = 0;
     res.keys.items = NULL;
-    ASSERT_EQ_INT(output_search_data(f, &res, 0, 1, NULL, 0, NOW), -1);
+    ASSERT_EQ_INT(output_search_data(f, &res, NULL, 0, NOW), -1);
     res.keys.count = 0;
     res.tags.items = NULL;
-    ASSERT_EQ_INT(output_search_data(f, &res, 0, 1, NULL, 0, NOW), -1);
+    ASSERT_EQ_INT(output_search_data(f, &res, NULL, 0, NOW), -1);
     assert_written(f, "");
 }
 
@@ -1012,7 +1011,7 @@ static int write_list_envelope(FILE *f)
     StoreNeighbor links[2];
 
     given_two_links(links);
-    return output_list_data(f, 0, 2, 2, 2, entries, links, 2, NOW);
+    return output_list_data(f, 2, 2, entries, links, 2, NOW);
 }
 
 static int write_search_envelope(FILE *f)
@@ -1025,7 +1024,7 @@ static int write_search_envelope(FILE *f)
 
     given_two_links(links);
     res.page = (PageResult){.st = STORE_OK, .entries = entries, .count = 2, .total = 2};
-    return output_search_data(f, &res, 0, 2, links, 2, NOW);
+    return output_search_data(f, &res, links, 2, NOW);
 }
 
 static int write_search_facets_human(FILE *f)

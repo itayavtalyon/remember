@@ -185,7 +185,8 @@ TEST(envelope_warnings_keep_their_order_with_a_comma_between)
     r = run_remember(db, list, sizeof list / sizeof list[0], NULL);
     ASSERT_EQ_INT(r.exit_code, 0);
     ASSERT_STREQ(r.err, "");
-    ASSERT_STR_CONTAINS(r.out, "\"entries\":[]},\"warnings\":[{\"code\":\"synced_folder\",");
+    ASSERT_STR_CONTAINS(r.out, "\"entries\":[]},\"next_cursor\":null,\"has_more\":false,"
+                               "\"warnings\":[{\"code\":\"synced_folder\",");
     ASSERT_STR_CONTAINS(r.out, "local disk\"},{\"code\":\"deprecated_flag\",\"message\":"
                                "\"--trash is deprecated; use --expired\"}]}\n");
     cmd_result_free(&r);

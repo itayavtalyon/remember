@@ -73,6 +73,7 @@ static const char *const k_error_codes[] = {
     "corrupt",
     "io_error",
     "schema_too_new",
+    "invalid_argument",
 };
 
 /* error.fix and retryable per code, in catalog order (decision:plan21-error-fix-drafts-c42,
@@ -111,6 +112,7 @@ static const ExpectedFix k_error_fixes[] = {
     {"Copy the file somewhere safe, then restore a backup.", "false"},
     {"Check the disk or drive, then try again.", "true"},
     {"Upgrade remember to make changes.", "false"},
+    {"Run 'remember list' again without --cursor.", "false"},
 };
 
 /* Unit tests pick the mode per call. JSON mode buffers the notice for the
@@ -797,7 +799,8 @@ TEST(json_trash_warning_is_in_the_list_envelope)
     ASSERT_STREQ(r.err, "");
     ASSERT_STREQ(r.out,
                  "{\"format\":\"remember-message\",\"version\":1,\"type\":\"memory.list.result\","
-                 "\"data\":{\"offset\":0,\"limit\":20,\"count\":0,\"total\":0,\"entries\":[]},"
+                 "\"data\":{\"count\":0,\"total\":0,\"entries\":[]},"
+                 "\"next_cursor\":null,\"has_more\":false,"
                  "\"warnings\":[{\"code\":\"deprecated_flag\","
                  "\"message\":\"--trash is deprecated; use --expired\"}]}\n");
     cmd_result_free(&r);
@@ -825,7 +828,8 @@ TEST(json_synced_folder_warning_is_in_the_list_envelope)
     ASSERT_STREQ(r.err, "");
     ASSERT_STREQ(r.out,
                  "{\"format\":\"remember-message\",\"version\":1,\"type\":\"memory.list.result\","
-                 "\"data\":{\"offset\":0,\"limit\":20,\"count\":0,\"total\":0,\"entries\":[]},"
+                 "\"data\":{\"count\":0,\"total\":0,\"entries\":[]},"
+                 "\"next_cursor\":null,\"has_more\":false,"
                  "\"warnings\":[{\"code\":\"synced_folder\",\"message\":\"database path looks "
                  "like a synced folder (iCloud/Dropbox/Google Drive); corruption risk - prefer "
                  "a local disk\"}]}\n");
@@ -4222,7 +4226,7 @@ TEST(util_parse_nonneg_rejects_every_sign)
 TEST(cli_offset_spaced_negative_is_usage)
 {
     char *db = make_temp_db_path();
-    const char *args[] = {"list", "--offset", " -1"};
+    const char *args[] = {"list", "--limit", " -1"};
     CmdResult r;
 
     ASSERT_TRUE(db != NULL);
@@ -4232,7 +4236,7 @@ TEST(cli_offset_spaced_negative_is_usage)
     r = run_remember(db, args, sizeof(args) / sizeof(args[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 1);
     ASSERT_STREQ(r.out, "");
-    ASSERT_STREQ(r.err, "remember: invalid --offset (must be >= 0)\n");
+    ASSERT_STREQ(r.err, "remember: invalid --limit (must be 1..1000)\n");
     cmd_result_free(&r);
     free(db);
 }

@@ -93,7 +93,7 @@ static void assert_blank_query_is_an_empty_result(const char *query)
     ASSERT_EQ_INT(r.exit_code, 0);
     ASSERT_STREQ(r.err, "");
     ASSERT_STREQ(r.out, "{\"format\":\"remember-message\",\"version\":1,\"type\":\"memory.search."
-                        "result\",\"data\":{\"offset\":0,\"limit\":20,\"count\":0,\"total\":0,"
+                        "result\",\"data\":{\"count\":0,\"total\":0,"
                         "\"keys\":{\"total\":0,\"items\":[]},\"tags\":{\"total\":0,\"items\":[]},"
                         "\"entries\":[]}}\n");
     cmd_result_free(&r);
@@ -186,15 +186,15 @@ TEST(search_no_matches_exits_zero)
 TEST(search_json_paging_fields)
 {
     char *db = make_temp_db_path();
-    const char *args[] = {
-        "search", "--json", "--limit", "1", "--offset", "0", "pref OR helix OR FTS5 OR Font"};
+    const char *args[] = {"search", "--json", "--limit", "1", "pref OR helix OR FTS5 OR Font"};
     CmdResult r;
     ASSERT_TRUE(db != NULL);
     seed_search_corpus(db);
     r = run_remember(db, args, sizeof(args) / sizeof(args[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 0);
-    ASSERT_STR_CONTAINS(r.out, "\"offset\":0");
-    ASSERT_STR_CONTAINS(r.out, "\"limit\":1");
+    ASSERT_STR_NOT_CONTAINS(r.out, "\"offset\"");
+    ASSERT_STR_NOT_CONTAINS(r.out, "next_cursor");
+    ASSERT_STR_NOT_CONTAINS(r.out, "has_more");
     ASSERT_STR_CONTAINS(r.out, "\"count\":1");
     ASSERT_STR_CONTAINS(r.out, "\"total\":3"); /* all three corpus rows match */
     cmd_result_free(&r);
