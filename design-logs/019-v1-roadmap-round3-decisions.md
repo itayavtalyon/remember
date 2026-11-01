@@ -1,5 +1,7 @@
 # 019 — v1 roadmap round 3 decisions
 
+> **Frozen 2026-10-31.** This log is history. The living roadmap is the Remember entry `roadmap:remember`, which folds in these decisions. Where it disagrees with this log, it wins.
+
 **Status:** Decisions recorded (2026-10-29). Closes open questions OQ-2 to OQ-8 and OQ-10 of log 018 (PR #51). Log 018 is not edited.
 **Author:** Itay (answers) + Chief Architect (recording)
 **Created:** 2026-10-29

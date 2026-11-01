@@ -1,6 +1,6 @@
 # Implementation plans — `remember`
 
-Source of truth for product behavior: [`design-logs/001-foundations.md`](../design-logs/001-foundations.md).  
+Source of truth for product behavior: [`specs/`](../specs/README.md). It lists the specs and, for a subject with no spec yet, the frozen design log that still describes it.  
 Test matrix: [`tests/COVERAGE.md`](../tests/COVERAGE.md).
 
 ## Pragmatic architecture (all steps)
