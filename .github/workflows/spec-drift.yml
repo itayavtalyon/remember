@@ -1,0 +1,28 @@
+# A PR that changes src/ must change specs/ too, or say why in its body:
+# a line that starts with "No spec change:" and gives the reason
+# (specs/README.md). Its own workflow, so editing the PR body re-runs only
+# this check and not the build jobs in ci.yml.
+name: spec-drift
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, edited]
+
+permissions:
+  contents: read
+
+jobs:
+  spec:
+    name: spec (src/ changes need specs/)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 2
+
+      # HEAD is the PR merge commit; HEAD^1 is the base tip. The body goes
+      # through env, never into the script text.
+      - name: Check the changed paths
+        env:
+          PR_BODY: ${{ github.event.pull_request.body }}
+        run: git diff --name-only HEAD^1 HEAD | ./scripts/spec-drift.sh
