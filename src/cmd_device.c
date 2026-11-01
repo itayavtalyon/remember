@@ -52,7 +52,7 @@ static int emit_current_device(bool json, const char *device_id)
         return REMEMBER_ERR;
     }
     if (json) {
-        rc = output_device_envelope(app_out(), device_id);
+        rc = output_device_data(app_out(), device_id);
     } else {
         rc = output_device_human(app_out(), device_id);
     }
@@ -85,7 +85,7 @@ static int emit_new_device(Store *s, bool json)
         if (had_prev) {
             shown = previous;
         }
-        rc = output_device_new_envelope(app_out(), store_device_id(s), shown);
+        rc = output_device_new_data(app_out(), store_device_id(s), shown);
     } else {
         rc = output_device_human(app_out(), store_device_id(s));
     }

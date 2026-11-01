@@ -99,17 +99,14 @@ static int write_json_nullable(FILE *out, const char *name, const char *value)
     return write_json_field_str(out, (JsonField){.name = name, .value = value});
 }
 
-/* remember-message 1 through the opening brace of data (008 JE-2.1). A writer
-   then puts the data fields and closes with ENVELOPE_END. */
-static int write_envelope_head(FILE *out, const char *type)
+/* A --json writer writes only the data object; remember_run wraps it in the
+   remember-message envelope (decision:plan21-envelope-closed-by-app). */
+static int write_data_open(FILE *out)
 {
-    return fprintf(out, "{\"format\":\"remember-message\",\"version\":1,\"type\":\"%s\",\"data\":{",
-                   type) < 0
-               ? -1
-               : 0;
+    return fputc('{', out) == EOF ? -1 : 0;
 }
 
-static const char ENVELOPE_END[] = "}}\n";
+static const char DATA_END[] = "}";
 
 /* Indexed by a store_bin_of result, which is always one of the three bins. */
 static const char *const BIN_TOKENS[] = {
@@ -211,16 +208,14 @@ int output_entry_json(FILE *out, const Entry *e, const char *now)
 static int write_entry_with_links(FILE *out, const Entry *e, const StoreNeighbor *links,
                                   size_t nlinks, const char *now);
 
-/* data{[action,] memory{}}: links only when with_links (get and add). type then
-   action, the same order as every public envelope writer. */
-// NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
-static int write_memory_envelope(FILE *out, const char *type, const char *action, const Entry *e,
-                                 const StoreNeighbor *links, size_t nlinks, bool with_links,
-                                 const char *now)
+/* data{[action,] memory{}}: links only when with_links (get and add). */
+static int write_memory_data(FILE *out, const char *action, const Entry *e,
+                             const StoreNeighbor *links, size_t nlinks, bool with_links,
+                             const char *now)
 {
     int rc = 0;
 
-    if (write_envelope_head(out, type) != 0) {
+    if (write_data_open(out) != 0) {
         return -1;
     }
     if (action != NULL && (fputs("\"action\":", out) < 0 || output_json_string(out, action) != 0 ||
@@ -238,42 +233,41 @@ static int write_memory_envelope(FILE *out, const char *type, const char *action
     if (rc != 0) {
         return -1;
     }
-    return fputs(ENVELOPE_END, out) < 0 ? -1 : 0;
+    return fputs(DATA_END, out) < 0 ? -1 : 0;
 }
 
-int output_action_envelope(FILE *out, const char *type, const char *action, const Entry *e,
-                           const char *now)
+int output_action_data(FILE *out, const char *action, const Entry *e, const char *now)
 {
-    if (out == NULL || type == NULL || action == NULL || e == NULL) {
+    if (out == NULL || action == NULL || e == NULL) {
         return -1;
     }
-    return write_memory_envelope(out, type, action, e, NULL, 0U, false, now);
+    return write_memory_data(out, action, e, NULL, 0U, false, now);
 }
 
-int output_memory_envelope(FILE *out, const char *type, const char *action, const Entry *e,
-                           const StoreNeighbor *links, size_t nlinks, const char *now)
+int output_memory_data(FILE *out, const char *action, const Entry *e, const StoreNeighbor *links,
+                       size_t nlinks, const char *now)
 {
-    if (out == NULL || type == NULL || e == NULL || now == NULL) {
+    if (out == NULL || e == NULL || now == NULL) {
         return -1;
     }
     if (nlinks > 0U && links == NULL) {
         return -1;
     }
-    return write_memory_envelope(out, type, action, e, links, nlinks, true, now);
+    return write_memory_data(out, action, e, links, nlinks, true, now);
 }
 
-int output_entries_envelope(FILE *out, const char *type, const char *action, const Entry *entries,
-                            size_t count, const char *now)
+int output_entries_data(FILE *out, const char *action, const Entry *entries, size_t count,
+                        const char *now)
 {
     size_t i = 0;
 
-    if (out == NULL || type == NULL || action == NULL) {
+    if (out == NULL || action == NULL) {
         return -1;
     }
     if (count > 0U && entries == NULL) {
         return -1;
     }
-    if (write_envelope_head(out, type) != 0 || fputs("\"action\":", out) < 0 ||
+    if (write_data_open(out) != 0 || fputs("\"action\":", out) < 0 ||
         output_json_string(out, action) != 0 ||
         fprintf(out, ",\"count\":%zu,\"entries\":[", count) < 0) {
         return -1;
@@ -286,17 +280,16 @@ int output_entries_envelope(FILE *out, const char *type, const char *action, con
             return -1;
         }
     }
-    if (fputc(']', out) == EOF || fputs(ENVELOPE_END, out) < 0) {
+    if (fputc(']', out) == EOF || fputs(DATA_END, out) < 0) {
         return -1;
     }
     return 0;
 }
 
 /* Shared head of the list and search envelopes, through "total". */
-static int write_page_head(FILE *out, const char *type, size_t offset, size_t limit, size_t count,
-                           size_t total)
+static int write_page_head(FILE *out, size_t offset, size_t limit, size_t count, size_t total)
 {
-    if (write_envelope_head(out, type) != 0) {
+    if (write_data_open(out) != 0) {
         return -1;
     }
     return fprintf(out, "\"offset\":%zu,\"limit\":%zu,\"count\":%zu,\"total\":%zu", offset, limit,
@@ -322,7 +315,7 @@ static int write_page_entries(FILE *out, const Entry *entries, size_t count,
             return -1;
         }
     }
-    if (fputc(']', out) == EOF || fputs(ENVELOPE_END, out) < 0) {
+    if (fputc(']', out) == EOF || fputs(DATA_END, out) < 0) {
         return -1;
     }
     return 0;
@@ -345,14 +338,14 @@ static bool page_args_ok(const FILE *out, const char *now, const Entry *entries,
     return true;
 }
 
-int output_list_envelope(FILE *out, size_t offset, size_t limit, size_t count, size_t total,
-                         const Entry *entries, const StoreNeighbor *links, size_t nlinks,
-                         const char *now)
+int output_list_data(FILE *out, size_t offset, size_t limit, size_t count, size_t total,
+                     const Entry *entries, const StoreNeighbor *links, size_t nlinks,
+                     const char *now)
 {
     if (!page_args_ok(out, now, entries, count, links, nlinks)) {
         return -1;
     }
-    if (write_page_head(out, "memory.list.result", offset, limit, count, total) != 0) {
+    if (write_page_head(out, offset, limit, count, total) != 0) {
         return -1;
     }
     return write_page_entries(out, entries, count, links, nlinks, now);
@@ -428,8 +421,8 @@ static int write_tag_facet(FILE *out, const SearchTagFacet *tags)
     return fputs("]}", out) < 0 ? -1 : 0;
 }
 
-int output_search_envelope(FILE *out, const SearchResult *res, size_t offset, size_t limit,
-                           const StoreNeighbor *links, size_t nlinks, const char *now)
+int output_search_data(FILE *out, const SearchResult *res, size_t offset, size_t limit,
+                       const StoreNeighbor *links, size_t nlinks, const char *now)
 {
     const PageResult *page = NULL;
 
@@ -440,8 +433,7 @@ int output_search_envelope(FILE *out, const SearchResult *res, size_t offset, si
     if (!page_args_ok(out, now, page->entries, page->count, links, nlinks) || !facets_ok(res)) {
         return -1;
     }
-    if (write_page_head(out, "memory.search.result", offset, limit, page->count, page->total) !=
-        0) {
+    if (write_page_head(out, offset, limit, page->count, page->total) != 0) {
         return -1;
     }
     if (write_key_facet(out, &res->keys) != 0 || write_tag_facet(out, &res->tags) != 0) {
@@ -636,7 +628,7 @@ static int write_preview(FILE *out, const char *body)
     return fputs(buf, out) < 0 ? -1 : 0;
 }
 
-int output_tags_envelope(FILE *out, const TagCount *tags, size_t count)
+int output_tags_data(FILE *out, const TagCount *tags, size_t count)
 {
     size_t i = 0;
 
@@ -646,8 +638,7 @@ int output_tags_envelope(FILE *out, const TagCount *tags, size_t count)
     if (count > 0U && tags == NULL) {
         return -1;
     }
-    if (write_envelope_head(out, "tag.list.result") != 0 ||
-        fprintf(out, "\"count\":%zu,\"tags\":[", count) < 0) {
+    if (write_data_open(out) != 0 || fprintf(out, "\"count\":%zu,\"tags\":[", count) < 0) {
         return -1;
     }
     for (i = 0; i < count; i++) {
@@ -664,7 +655,7 @@ int output_tags_envelope(FILE *out, const TagCount *tags, size_t count)
             return -1;
         }
     }
-    if (fputc(']', out) == EOF || fputs(ENVELOPE_END, out) < 0) {
+    if (fputc(']', out) == EOF || fputs(DATA_END, out) < 0) {
         return -1;
     }
     return 0;
@@ -927,18 +918,18 @@ static int write_related_ids_cell(FILE *out, long long subject_id, const StoreNe
     return 0;
 }
 
-int output_links_write_envelope(FILE *out, const char *type, const char *action,
-                                const StoreNeighbor *links, size_t count, const char *now)
+int output_links_write_data(FILE *out, const char *action, const StoreNeighbor *links, size_t count,
+                            const char *now)
 {
     size_t i = 0;
 
-    if (out == NULL || type == NULL || action == NULL || now == NULL) {
+    if (out == NULL || action == NULL || now == NULL) {
         return -1;
     }
     if (count > 0U && links == NULL) {
         return -1;
     }
-    if (write_envelope_head(out, type) != 0 || fputs("\"action\":", out) < 0) {
+    if (write_data_open(out) != 0 || fputs("\"action\":", out) < 0) {
         return -1;
     }
     if (output_json_string(out, action) != 0) {
@@ -955,14 +946,14 @@ int output_links_write_envelope(FILE *out, const char *type, const char *action,
             return -1;
         }
     }
-    if (fputc(']', out) == EOF || fputs(ENVELOPE_END, out) < 0) {
+    if (fputc(']', out) == EOF || fputs(DATA_END, out) < 0) {
         return -1;
     }
     return 0;
 }
 
-int output_related_envelope(FILE *out, long long id, const char *key, const StoreNeighbor *links,
-                            size_t count, const char *now)
+int output_related_data(FILE *out, long long id, const char *key, const StoreNeighbor *links,
+                        size_t count, const char *now)
 {
     size_t i = 0;
 
@@ -972,8 +963,7 @@ int output_related_envelope(FILE *out, long long id, const char *key, const Stor
     if (count > 0U && links == NULL) {
         return -1;
     }
-    if (write_envelope_head(out, "memory.related.result") != 0 ||
-        fprintf(out, "\"id\":%lld,\"key\":", id) < 0) {
+    if (write_data_open(out) != 0 || fprintf(out, "\"id\":%lld,\"key\":", id) < 0) {
         return -1;
     }
     if (key == NULL) {
@@ -994,7 +984,7 @@ int output_related_envelope(FILE *out, long long id, const char *key, const Stor
             return -1;
         }
     }
-    if (fputc(']', out) == EOF || fputs(ENVELOPE_END, out) < 0) {
+    if (fputc(']', out) == EOF || fputs(DATA_END, out) < 0) {
         return -1;
     }
     return 0;
@@ -1065,16 +1055,15 @@ int output_device_human(FILE *out, const char *device_id)
     return 0;
 }
 
-int output_device_envelope(FILE *out, const char *device_id)
+int output_device_data(FILE *out, const char *device_id)
 {
     if (out == NULL || device_id == NULL) {
         return -1;
     }
-    if (write_envelope_head(out, "device.get.result") != 0 ||
-        write_device_id_field(out, device_id) != 0) {
+    if (write_data_open(out) != 0 || write_device_id_field(out, device_id) != 0) {
         return -1;
     }
-    if (fputs(ENVELOPE_END, out) < 0) {
+    if (fputs(DATA_END, out) < 0) {
         return -1;
     }
     return 0;
@@ -1082,13 +1071,12 @@ int output_device_envelope(FILE *out, const char *device_id)
 
 /* device_id then previous: the new id, then the id it replaced (NULL is JSON null). */
 // NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
-int output_device_new_envelope(FILE *out, const char *device_id, const char *previous)
+int output_device_new_data(FILE *out, const char *device_id, const char *previous)
 {
     if (out == NULL || device_id == NULL) {
         return -1;
     }
-    if (write_envelope_head(out, "device.new.result") != 0 ||
-        write_device_id_field(out, device_id) != 0) {
+    if (write_data_open(out) != 0 || write_device_id_field(out, device_id) != 0) {
         return -1;
     }
     if (fputs(",\"previous\":", out) < 0) {
@@ -1101,18 +1089,18 @@ int output_device_new_envelope(FILE *out, const char *device_id, const char *pre
     } else if (fputs("null", out) < 0) {
         return -1;
     }
-    if (fputs(ENVELOPE_END, out) < 0) {
+    if (fputs(DATA_END, out) < 0) {
         return -1;
     }
     return 0;
 }
 
-int output_import_envelope(FILE *out, const StoreImportCounts *counts)
+int output_import_data(FILE *out, const StoreImportCounts *counts)
 {
     if (out == NULL || counts == NULL) {
         return -1;
     }
-    if (write_envelope_head(out, "memory.import.result") != 0) {
+    if (write_data_open(out) != 0) {
         return -1;
     }
     if (fprintf(out,
@@ -1156,7 +1144,7 @@ static int output_one_conflict_json(FILE *out, const StoreConflict *row)
     return (fputc('}', out) == EOF) ? -1 : 0;
 }
 
-int output_conflicts_envelope(FILE *out, const StoreConflict *rows, size_t count)
+int output_conflicts_data(FILE *out, const StoreConflict *rows, size_t count)
 {
     size_t i = 0;
 
@@ -1166,8 +1154,7 @@ int output_conflicts_envelope(FILE *out, const StoreConflict *rows, size_t count
     if (count > 0U && rows == NULL) {
         return -1;
     }
-    if (write_envelope_head(out, "conflict.list.result") != 0 ||
-        fprintf(out, "\"count\":%zu,\"conflicts\":[", count) < 0) {
+    if (write_data_open(out) != 0 || fprintf(out, "\"count\":%zu,\"conflicts\":[", count) < 0) {
         return -1;
     }
     for (i = 0; i < count; i++) {
@@ -1178,7 +1165,7 @@ int output_conflicts_envelope(FILE *out, const StoreConflict *rows, size_t count
             return -1;
         }
     }
-    if (fputc(']', out) == EOF || fputs(ENVELOPE_END, out) < 0) {
+    if (fputc(']', out) == EOF || fputs(DATA_END, out) < 0) {
         return -1;
     }
     return 0;
@@ -1192,9 +1179,7 @@ int output_rebuilt(FILE *out, bool json, size_t entries)
         return -1;
     }
     if (json) {
-        n = write_envelope_head(out, "repair.search_index.result") != 0
-                ? -1
-                : fprintf(out, "\"action\":\"rebuilt\",\"entries\":%zu}}\n", entries);
+        n = fprintf(out, "{\"action\":\"rebuilt\",\"entries\":%zu}", entries);
     } else {
         n = fprintf(out, "rebuilt %zu\n", entries);
     }

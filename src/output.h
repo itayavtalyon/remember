@@ -16,34 +16,33 @@ int output_json_string(FILE *out, const char *s);
 int output_entry_json(FILE *out, const Entry *e, const char *now);
 
 /*
- * Every --json success is one remember-message 1 envelope (008 JE-2.1):
- * {"format":"remember-message","version":1,"type":<type>,"data":{...}}.
- * type is the reply type, <noun>.<verb>.result (JSON-STYLE 1.7a).
+ * The *_data writers write the data object of a --json success, with no
+ * newline. remember_run wraps it in the one remember-message 1 envelope
+ * (008 JE-2.1) with the reply type, any warnings, and the newline.
  */
 
 /* One-memory write (update, rekey): data{action, memory{}}, memory without links. */
-int output_action_envelope(FILE *out, const char *type, const char *action, const Entry *e,
-                           const char *now);
+int output_action_data(FILE *out, const char *action, const Entry *e, const char *now);
 
 /* data{[action,] memory{... links}}. get passes a NULL action; add passes its action. */
-int output_memory_envelope(FILE *out, const char *type, const char *action, const Entry *e,
-                           const StoreNeighbor *links, size_t nlinks, const char *now);
+int output_memory_data(FILE *out, const char *action, const Entry *e, const StoreNeighbor *links,
+                       size_t nlinks, const char *now);
 
 /* Many-memory write (delete, purge, conflict accept): data{action, count, entries[]}. */
-int output_entries_envelope(FILE *out, const char *type, const char *action, const Entry *entries,
-                            size_t count, const char *now);
+int output_entries_data(FILE *out, const char *action, const Entry *entries, size_t count,
+                        const char *now);
 
 /* List/search-style paged envelope. Each entry gets subject-relative stubs. */
-int output_list_envelope(FILE *out, size_t offset, size_t limit, size_t count, size_t total,
-                         const Entry *entries, const StoreNeighbor *links, size_t nlinks,
-                         const char *now);
+int output_list_data(FILE *out, size_t offset, size_t limit, size_t count, size_t total,
+                     const Entry *entries, const StoreNeighbor *links, size_t nlinks,
+                     const char *now);
 
 /*
  * search --json: the list envelope with the keys and tags facets between
  * total and entries (006 E2.6). count, total and entries come from res->page.
  */
-int output_search_envelope(FILE *out, const SearchResult *res, size_t offset, size_t limit,
-                           const StoreNeighbor *links, size_t nlinks, const char *now);
+int output_search_data(FILE *out, const SearchResult *res, size_t offset, size_t limit,
+                       const StoreNeighbor *links, size_t nlinks, const char *now);
 
 /*
  * search human facets (006 E2.7, decision:plan18-human-facet-line): a
@@ -77,34 +76,34 @@ int output_entry_human_line(FILE *out, const Entry *e, const StoreNeighbor *link
                             const char *now);
 
 /* Tags JSON envelope: version/count/tags:[{name,count}]. */
-int output_tags_envelope(FILE *out, const TagCount *tags, size_t count);
+int output_tags_data(FILE *out, const TagCount *tags, size_t count);
 
 /* Human tags: one "name<TAB>count" line per tag (names are control-free tokens). */
 int output_tags_human(FILE *out, const TagCount *tags, size_t count);
 
 /* link/unlink write envelope: action + count + links stubs. now is command utc. */
-int output_links_write_envelope(FILE *out, const char *type, const char *action,
-                                const StoreNeighbor *links, size_t count, const char *now);
+int output_links_write_data(FILE *out, const char *action, const StoreNeighbor *links, size_t count,
+                            const char *now);
 
 /* remember related --json */
-int output_related_envelope(FILE *out, long long id, const char *key, const StoreNeighbor *links,
-                            size_t count, const char *now);
+int output_related_data(FILE *out, long long id, const char *key, const StoreNeighbor *links,
+                        size_t count, const char *now);
 
 /* Human Related: block (omit entirely when count==0). */
 int output_related_human(FILE *out, const StoreNeighbor *links, size_t count, const char *now);
 
 /* import --json counts envelope (no entry dump). */
-int output_import_envelope(FILE *out, const StoreImportCounts *counts);
+int output_import_data(FILE *out, const StoreImportCounts *counts);
 
 /* device: plain id, or data{device_id}. */
 int output_device_human(FILE *out, const char *device_id);
-int output_device_envelope(FILE *out, const char *device_id);
+int output_device_data(FILE *out, const char *device_id);
 
 /* device new JSON. previous NULL is JSON null (the file was missing). */
-int output_device_new_envelope(FILE *out, const char *device_id, const char *previous);
+int output_device_new_data(FILE *out, const char *device_id, const char *previous);
 
 /* conflicts --json list. */
-int output_conflicts_envelope(FILE *out, const StoreConflict *rows, size_t count);
+int output_conflicts_data(FILE *out, const StoreConflict *rows, size_t count);
 
 /* repair search-index. JSON is the E4.14 object; human is D8 "rebuilt N". */
 int output_rebuilt(FILE *out, bool json, size_t entries);

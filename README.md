@@ -72,7 +72,7 @@ Opening an existing database migrates it to `user_version` **5**.
 - `remember device` prints the device id. `remember device new` mints a new one after a restore or a copied brain, and it repairs an invalid sidecar.
 - The device id is only the sidecar `<db-path>.device_id`. The database holds no copy.
 - Hard wipe (`delete --expired|--deleted`, `purge --expired|--deleted`) no longer needs one registered device.
-- `--json-errors` writes one JSON object per error or warning on stderr. Read `code`.
+- With `--json`, every reply is one `remember-message` envelope on stdout, success or failure: `{"format":"remember-message","version":1,"type":"memory.get.result","data":{...}}`. A failure keeps its type and has `error{code,message,fix,retryable,detail?}` instead of `data`. Warnings are a `warnings` array at the end. stderr stays empty. `--json-errors` is gone.
 - A database error names one of seven causes: `busy`, `read_only`, `disk_full`, `cannot_open`, `not_a_database`, `corrupt`, `io_error`. Anything else is `database`.
 - `--busy-timeout MS` sets the lock wait (0..60000, default 5000).
 - `--no-create` fails when the brain file is missing and creates nothing.
@@ -81,7 +81,7 @@ Opening an existing database migrates it to `user_version` **5**.
 - `list` and `search` take `--since` / `--until`. `since` is inclusive and `until` is exclusive. Search filters `updated_at` and ignores `--sort`.
 - `update --if-version-vector` writes only when that memory's `version_vector` still matches. A mismatch is code `stale` and writes nothing.
 - `remember search` now also matches word prefixes and returns matching keys and tags. FTS5 queries work as before; a query that FTS5 cannot parse no longer fails: it returns prefix matches and prints a note on stderr.
-- That note is one line: `remember: warning: raw query ignored: <message>`. With `--json-errors` it is `{"version":1,"warning":{"code":"raw_query_ignored","message":"<message>"}}`.
+- That note is one line: `remember: warning: raw query ignored: <message>`. With `--json` it is `{"code":"raw_query_ignored","message":"<message>"}` in the envelope's `warnings`.
 - Search order: exact key, then key prefix, then relevance (bm25), then `updated_at`.
 - JSON `keys` and `tags` now sit between `total` and `entries` in `search --json`. `--facet-limit N` (default 50, 1..200) caps their `items`; `total` counts every match. Human `search` prints `keys:` and `tags:` lines before the rows.
 - An empty or blank `search` query is an empty result on exit 0. It was a usage error (`empty search query`).

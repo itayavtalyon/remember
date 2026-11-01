@@ -218,8 +218,7 @@ int cmd_get(Store *s, bool json, int rest_argc, const char **rest_argv)
             cmd_neighbors_drop_deleted(links, &nlinks, now);
         }
         if (json) {
-            wr = output_memory_envelope(app_out(), "memory.get.result", NULL, &entry, links, nlinks,
-                                        now);
+            wr = output_memory_data(app_out(), NULL, &entry, links, nlinks, now);
         } else {
             wr = output_body_human(app_out(), entry.body);
             if (wr == 0) {
@@ -315,8 +314,7 @@ int cmd_delete(Store *s, bool json, int rest_argc, const char **rest_argv)
     }
 
     if (json) {
-        if (output_entries_envelope(app_out(), "memory.delete.result", "deleted", &entry, 1U,
-                                    now) != 0) {
+        if (output_entries_data(app_out(), "deleted", &entry, 1U, now) != 0) {
             store_entry_free(&entry);
             err_msg(DIAG_INTERNAL, "failed to write output");
             return REMEMBER_ERR;
@@ -563,7 +561,7 @@ static int update_validate_changes(const UpdateParse *p, const char **err)
 static int emit_update_result(bool json, const Entry *entry, const char *now)
 {
     if (json) {
-        if (output_action_envelope(app_out(), "memory.update.result", "updated", entry, now) != 0) {
+        if (output_action_data(app_out(), "updated", entry, now) != 0) {
             err_msg(DIAG_INTERNAL, "failed to write output");
             return -1;
         }
@@ -948,7 +946,7 @@ int cmd_rekey(Store *s, bool json, int rest_argc, const char **rest_argv)
         return rc;
     }
     if (json) {
-        if (output_action_envelope(app_out(), "memory.rekey.result", "updated", &entry, now) != 0) {
+        if (output_action_data(app_out(), "updated", &entry, now) != 0) {
             store_entry_free(&entry);
             err_msg(DIAG_INTERNAL, "failed to write output");
             return REMEMBER_ERR;

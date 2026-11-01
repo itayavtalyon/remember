@@ -314,11 +314,9 @@ TEST(device_new_json_previous_is_null_when_missing)
     if (out == NULL) {
         return;
     }
-    ASSERT_EQ_INT(output_device_new_envelope(out, id, NULL), 0);
+    ASSERT_EQ_INT(output_device_new_data(out, id, NULL), 0);
     ASSERT_EQ_INT(fclose(out), 0);
-    ASSERT_STREQ(buf, "{\"format\":\"remember-message\",\"version\":1,\"type\":\"device.new."
-                      "result\",\"data\":{\"device_id\":\"018f6b2e-7c3a-7b2e-8f3a-7c3a7b2e8f3a\","
-                      "\"previous\":null}}\n");
+    ASSERT_STREQ(buf, "{\"device_id\":\"018f6b2e-7c3a-7b2e-8f3a-7c3a7b2e8f3a\",\"previous\":null}");
     free(buf);
 }
 

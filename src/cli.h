@@ -43,9 +43,9 @@ typedef struct {
     const char *db_path; /* NULL if omitted; aliases argv */
     int busy_timeout_ms; /* set when busy_timeout_set; otherwise unused */
     bool json;
-    bool json_errors;
     bool no_create;
     bool busy_timeout_set;
+    char pad_[1]; /* explicit tail padding (kept -Wpadded-clean) */
 } CliGlobals;
 
 /*
@@ -58,7 +58,7 @@ typedef struct {
     const char *error_option; /* option name missing a value, e.g. "--db" */
     /*
      * The subcommand's own arguments: every token after the subcommand name
-     * with globals (--db/--json/--json-errors/--busy-timeout/--no-create) and
+     * with globals (--db/--json/--busy-timeout/--no-create) and
      * meta flags (--help/--version) already removed, in original order. Tokens
      * after a "--" separator are included
      * verbatim (end-of-options). Subcommand parsers see only what is theirs.

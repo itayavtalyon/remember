@@ -17,6 +17,12 @@
 #define REMEMBER_VERSION "0.2.0"
 #endif
 
+/* The envelope when --json cannot get the memory to build one: type, then fix. */
+static const char k_out_of_memory_reply[] =
+    "{\"format\":\"remember-message\",\"version\":1,\"type\":\"%s.result\",\"error\":{"
+    "\"code\":\"out_of_memory\",\"message\":\"out of "
+    "memory\",\"fix\":\"%s\",\"retryable\":true}}\n";
+
 static void print_version(void)
 {
     (void)fprintf(app_out(), "remember %s\n", REMEMBER_VERSION);
@@ -27,7 +33,7 @@ static void print_general_help(void)
     static const char help[] = "remember - local personal memory (SQLite + FTS5)\n"
                                "\n"
                                "Usage:\n"
-                               "  remember [--db PATH] [--json] [--json-errors] "
+                               "  remember [--db PATH] [--json] "
                                "[--busy-timeout MS] [--no-create] <command> [options] [args]\n"
                                "\n"
                                "Commands:\n"
@@ -59,7 +65,6 @@ static void print_general_help(void)
                                "Global options (allowed before or after the command):\n"
                                "  --db PATH          Database file (overrides REMEMBER_DB)\n"
                                "  --json             Machine-readable JSON on stdout\n"
-                               "  --json-errors      JSON errors and warnings on stderr\n"
                                "  --busy-timeout MS  Lock wait in ms (0..60000, default 5000)\n"
                                "  --no-create        Do not create a missing brain file\n"
                                "  --help, -h         Show help\n"
@@ -308,7 +313,7 @@ static void print_command_help(CliCommand topic)
         (void)fprintf(out, "JSON adds \"previous\", the id it replaced.\n");
         (void)fprintf(out, "\n");
     }
-    (void)fprintf(out, "Global options: --db PATH, --json, --json-errors, "
+    (void)fprintf(out, "Global options: --db PATH, --json, "
                        "--busy-timeout MS, --no-create, --help, --version\n");
     (void)fprintf(out, "See also: remember --help\n");
 }
@@ -523,6 +528,137 @@ static int run(const CliArgs *args)
     }
 }
 
+/* <noun>.<verb> of the request's reply type (JSON-STYLE 1.7a), the one place
+   it is named (decision:plan21-envelope-closed-by-app). "unknown" when the CLI
+   cannot tell the command. */
+static const char *reply_noun_verb(const CliArgs *args)
+{
+    switch (args->command) {
+    case CLI_CMD_ADD:
+        return "memory.add";
+    case CLI_CMD_SEARCH:
+        return "memory.search";
+    case CLI_CMD_LIST:
+        return "memory.list";
+    case CLI_CMD_GET:
+        return "memory.get";
+    case CLI_CMD_UPDATE:
+        return "memory.update";
+    case CLI_CMD_DELETE:
+        return "memory.delete";
+    case CLI_CMD_TAGS:
+        return "tag.list";
+    case CLI_CMD_PURGE_TRASH:
+    case CLI_CMD_PURGE:
+        return "memory.purge";
+    case CLI_CMD_LINK:
+        return "memory.link";
+    case CLI_CMD_UNLINK:
+        return "memory.unlink";
+    case CLI_CMD_RELATED:
+        return "memory.related";
+    case CLI_CMD_REKEY:
+        return "memory.rekey";
+    case CLI_CMD_IMPORT:
+        return "memory.import";
+    case CLI_CMD_CONFLICTS:
+        return "conflict.list";
+    case CLI_CMD_CONFLICT:
+        return "conflict.accept";
+    case CLI_CMD_DEVICE:
+        if (cmd_device_mints(args->rest_argc, args->rest_argv)) {
+            return "device.new";
+        }
+        return "device.get";
+    case CLI_CMD_REPAIR:
+        return "repair.search_index";
+    case CLI_CMD_NONE:
+    case CLI_CMD_HELP:
+    case CLI_CMD_VERSION:
+    case CLI_CMD_UNKNOWN:
+    default:
+        return "unknown";
+    }
+}
+
+/* Help and version print text even with --json. */
+static bool writes_envelope(const CliArgs *args)
+{
+    if (!args->globals.json) {
+        return false;
+    }
+    if (args->error == CLI_ERR_OK &&
+        (args->command == CLI_CMD_HELP || args->command == CLI_CMD_VERSION)) {
+        return false;
+    }
+    return true;
+}
+
+/* The envelope around the buffered data, or around the run's first error:
+   {format, version, type, data | error, warnings?} (JE-2.1). */
+static int write_envelope(FILE *out, const char *noun_verb, bool failed, const char *data,
+                          size_t len)
+{
+    if (fprintf(out, "{\"format\":\"remember-message\",\"version\":1,\"type\":\"%s.result\",",
+                noun_verb) < 0) {
+        return -1;
+    }
+    if (failed) {
+        if (diag_json_write_error(out) != 0) {
+            return -1;
+        }
+    } else if (fputs("\"data\":", out) < 0 || fwrite(data, 1U, len, out) != len) {
+        return -1;
+    }
+    if (diag_json_write_warnings(out) != 0 || fputs("}\n", out) < 0) {
+        return -1;
+    }
+    return 0;
+}
+
+/* --json: the command writes its data object into a buffer and diag buffers
+   notices, then one envelope goes to out and stderr stays empty (JE-2.8). A
+   failure keeps the type and drops any data. */
+static int run_json(const CliArgs *args, AppStreams streams)
+{
+    FILE *out = streams.out;
+    const char *noun_verb = reply_noun_verb(args);
+    char *data = NULL;
+    size_t len = 0U;
+    FILE *data_fp = open_memstream(&data, &len);
+    int rc = REMEMBER_ERR;
+
+    if (data_fp == NULL || diag_json_begin(cli_command_name(args->command)) != 0) {
+        (void)fprintf(out, k_out_of_memory_reply, noun_verb, diag_code_fix(DIAG_OUT_OF_MEMORY));
+        goto cleanup;
+    }
+    /* Keep the caller's error stream. diag.c is the only writer of it. */
+    app_set_streams((AppStreams){.out = data_fp, .err = streams.err});
+    rc = run(args);
+    if (fflush(data_fp) != 0 || ferror(data_fp) != 0) {
+        err_msg(DIAG_OUT_OF_MEMORY, "out of memory");
+    }
+    /* A failure with no report of its own still gets one error. */
+    if (rc != REMEMBER_OK && !diag_json_has_error()) {
+        err_msg(DIAG_INTERNAL, "internal error");
+    }
+    rc = (rc == REMEMBER_OK && diag_json_has_error()) ? REMEMBER_ERR : rc;
+    if (write_envelope(out, noun_verb, diag_json_has_error(), data, len) != 0 || fflush(out) != 0 ||
+        ferror(out) != 0) {
+        /* stdout is gone: stderr is the one place left to say so. */
+        diag_json_end();
+        err_msg(DIAG_INTERNAL, "failed to write output");
+        rc = REMEMBER_ERR;
+    }
+cleanup:
+    diag_json_end();
+    if (data_fp != NULL) {
+        (void)fclose(data_fp);
+    }
+    free(data);
+    return rc;
+}
+
 /* cppcheck-suppress staticFunction ; public entry point (remember_app.h); used by main + GUI +
  * tests */
 int remember_run(int argc, char *const *argv, FILE *out, FILE *err)
@@ -532,16 +668,18 @@ int remember_run(int argc, char *const *argv, FILE *out, FILE *err)
 
     app_set_streams((AppStreams){.out = out, .err = err});
     cli_parse(argc, argv, &args);
-    diag_set_json_errors(args.globals.json_errors);
-    rc = run(&args);
-    /* Buffered output is written here or at exit, after every command's own
-       write checks; a failure then would otherwise exit 0 with nothing written.
-       A failed command already reported its error, so it keeps that one line. */
-    if (rc == REMEMBER_OK && (fflush(out) != 0 || ferror(out) != 0)) {
-        err_msg(DIAG_INTERNAL, "failed to write output");
-        rc = REMEMBER_ERR;
+    if (writes_envelope(&args)) {
+        rc = run_json(&args, (AppStreams){.out = out, .err = err});
+    } else {
+        rc = run(&args);
+        /* Buffered output is written here or at exit, after every command's own
+           write checks; a failure then would otherwise exit 0 with nothing written.
+           A failed command already reported its error, so it keeps that one line. */
+        if (rc == REMEMBER_OK && (fflush(out) != 0 || ferror(out) != 0)) {
+            err_msg(DIAG_INTERNAL, "failed to write output");
+            rc = REMEMBER_ERR;
+        }
     }
-    diag_set_json_errors(false);
     cli_args_free(&args);
     app_set_streams((AppStreams){.out = NULL, .err = NULL});
     return rc;

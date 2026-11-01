@@ -46,14 +46,13 @@ The device id is the sidecar `<db-path>.device_id` (never copy on import). Run `
 ## Global flags
 
 ```text
-remember [--db PATH] [--json] [--json-errors] [--busy-timeout MS] [--no-create] <command> …
+remember [--db PATH] [--json] [--busy-timeout MS] [--no-create] <command> …
 ```
 
 | Flag | Meaning |
 |------|---------|
 | `--db PATH` | Overrides `REMEMBER_DB` and default `~/.remember/remember.db` |
-| `--json` | Machine-readable JSON on stdout (use this from agents) |
-| `--json-errors` | One JSON object per error or warning on stderr. Read `error.code` |
+| `--json` | One JSON envelope on stdout, also for errors and warnings (use this from agents) |
 | `--busy-timeout MS` | Milliseconds to wait for a lock (0..60000, default 5000) |
 | `--no-create` | A missing brain file fails. Creates nothing |
 
@@ -72,7 +71,7 @@ Never invent ids, keys, or sync_ids. On exit `2`, the entry is missing — do no
 
 ## Errors
 
-Pass `--json-errors` when a command can fail. Each stderr line is then one JSON object, and there is no plain line. Warning lines (`warning.code`) can come before the error line, also when the command fails. Parse stderr line by line. Read `error.code`.
+With `--json`, a failure is the same one envelope on stdout: the command's `type`, then `error{code, message, fix, retryable, detail?}` instead of `data`. stderr stays empty. Warnings are `warnings[]` (`{code, message, detail?}`) at the end of the envelope, on success or failure. Read `error.code`; `error.fix` is the next step; `retryable` true (`busy`, `io_error`, `out_of_memory`) means the same command may work later.
 
 `busy` means another process holds the brain. Retry later. The tool does not retry.
 
@@ -282,7 +281,7 @@ Agents should always use `--json` when parsing.
 - Word prefixes match first; the QUERY also runs as SQLite FTS5 MATCH syntax (`remember help search`)
 - The key is indexed: `search editor` finds `pref:editor`.
 - Hebrew marks are folded out of the index. The stored body keeps them.
-- A query FTS5 cannot parse is not an error: exit 0, prefix matches, and one stderr line `remember: warning: raw query ignored: <message>` (with `--json-errors`: `{"version":1,"warning":{"code":"raw_query_ignored","message":"<message>"}}`). A warning on stderr is not an error: trust the exit code
+- A query FTS5 cannot parse is not an error: exit 0, prefix matches, and one stderr line `remember: warning: raw query ignored: <message>` (with `--json`: the item `{"code":"raw_query_ignored","message":"<message>"}` in `warnings`). A warning on stderr is not an error: trust the exit code
 - Empty result set → exit 0 with `count:0` (not an error)
 
 ## Project status (handoff)

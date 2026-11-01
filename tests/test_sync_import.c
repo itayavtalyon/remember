@@ -204,7 +204,7 @@ TEST(cli_import_refuses_v3_source)
     imp[3] = foreign;
     r = run_import(local, foreign, imp, sizeof(imp) / sizeof(imp[0]));
     ASSERT_EQ_INT(r.exit_code, 1);
-    ASSERT_STR_CONTAINS(r.err, "source database is older than this remember");
+    ASSERT_STR_CONTAINS(r.out, "source database is older than this remember");
     cmd_result_free(&r);
     free(local);
     free(foreign);
@@ -326,7 +326,7 @@ TEST(cli_import_refuses_source_newer_than_v5)
     imp[3] = foreign;
     r = run_remember(local, imp, sizeof(imp) / sizeof(imp[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 1);
-    ASSERT_STR_CONTAINS(r.err, "database is newer than this remember");
+    ASSERT_STR_CONTAINS(r.out, "database is newer than this remember");
     cmd_result_free(&r);
 
     ver = harness_sqlite_query_line(foreign, "PRAGMA user_version;");
@@ -1617,12 +1617,12 @@ TEST(cli_conflict_accept_hash_clash_keep_incoming_and_both_refuse_fake_key)
     /* decision:sync-import-hash-demote — no key=sync_id; refuse until keep local. */
     r = run_remember(local, accept_in, sizeof(accept_in) / sizeof(accept_in[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 1);
-    ASSERT_STR_CONTAINS(r.err, "cannot free unique key or body hash");
+    ASSERT_STR_CONTAINS(r.out, "cannot free unique key or body hash");
     cmd_result_free(&r);
 
     r = run_remember(local, accept_both, sizeof(accept_both) / sizeof(accept_both[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 1);
-    ASSERT_STR_CONTAINS(r.err, "cannot free unique key or body hash");
+    ASSERT_STR_CONTAINS(r.out, "cannot free unique key or body hash");
     cmd_result_free(&r);
 
     r = run_remember(local, accept_local, sizeof(accept_local) / sizeof(accept_local[0]), NULL);
@@ -1926,7 +1926,7 @@ TEST(cli_conflict_accept_concurrent_keep_incoming_hash_taken_refuses)
 
     r = run_remember(local, accept, sizeof(accept) / sizeof(accept[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 1);
-    ASSERT_STR_CONTAINS(r.err, "cannot free unique key or body hash");
+    ASSERT_STR_CONTAINS(r.out, "cannot free unique key or body hash");
     cmd_result_free(&r);
 
     free(hash);
@@ -1987,7 +1987,7 @@ TEST(cli_conflict_accept_demote_hash_escape_refuses)
 
     r = run_remember(local, accept, sizeof(accept) / sizeof(accept[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 1);
-    ASSERT_STR_CONTAINS(r.err, "cannot free unique key or body hash");
+    ASSERT_STR_CONTAINS(r.out, "cannot free unique key or body hash");
     cmd_result_free(&r);
 
     free(local);
@@ -2318,19 +2318,25 @@ TEST(cli_conflicts_refuses_a_snapshot_that_is_not_an_object)
     sqlite_exec(local, "UPDATE conflicts SET local_json='[]';");
     r = run_remember(local, conflicts, sizeof(conflicts) / sizeof(conflicts[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 1);
-    ASSERT_STREQ(r.out, "");
+    ASSERT_STR_PREFIX(r.out, "{\"format\":\"remember-message\",\"version\":1,"
+                             "\"type\":\"conflict.list.result\",\"error\":{\"code\":\"internal\"");
+    ASSERT_STREQ(r.err, "");
     cmd_result_free(&r);
 
     sqlite_exec(local, "UPDATE conflicts SET local_json='{}', incoming_json='[]';");
     r = run_remember(local, conflicts, sizeof(conflicts) / sizeof(conflicts[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 1);
-    ASSERT_STREQ(r.out, "");
+    ASSERT_STR_PREFIX(r.out, "{\"format\":\"remember-message\",\"version\":1,"
+                             "\"type\":\"conflict.list.result\",\"error\":{\"code\":\"internal\"");
+    ASSERT_STREQ(r.err, "");
     cmd_result_free(&r);
 
     sqlite_exec(local, "UPDATE conflicts SET incoming_json='{\"a\":1},\"pwn\":{';");
     r = run_remember(local, conflicts, sizeof(conflicts) / sizeof(conflicts[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 1);
-    ASSERT_STREQ(r.out, "");
+    ASSERT_STR_PREFIX(r.out, "{\"format\":\"remember-message\",\"version\":1,"
+                             "\"type\":\"conflict.list.result\",\"error\":{\"code\":\"internal\"");
+    ASSERT_STREQ(r.err, "");
     cmd_result_free(&r);
     free(local);
     free(foreign);

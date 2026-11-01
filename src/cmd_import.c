@@ -62,7 +62,7 @@ int cmd_import(Store *s, bool json, int rest_argc, const char **rest_argv)
         return store_status_to_exit(s, st);
     }
     if (json) {
-        if (output_import_envelope(app_out(), &counts) != 0) {
+        if (output_import_data(app_out(), &counts) != 0) {
             err_msg(DIAG_INTERNAL, "failed to write output");
             return REMEMBER_ERR;
         }
@@ -94,7 +94,7 @@ int cmd_conflicts(Store *s, bool json, int rest_argc, const char **rest_argv)
         return store_status_to_exit(s, st);
     }
     if (json) {
-        if (output_conflicts_envelope(app_out(), rows, count) != 0) {
+        if (output_conflicts_data(app_out(), rows, count) != 0) {
             err_msg(DIAG_INTERNAL, "failed to write output");
             goto cleanup;
         }
@@ -224,8 +224,7 @@ static int conflict_accept_emit(bool json, const Entry *entries, size_t count, c
     size_t i = 0;
 
     if (json) {
-        if (output_entries_envelope(app_out(), "conflict.accept.result", "accepted", entries, count,
-                                    now) != 0) {
+        if (output_entries_data(app_out(), "accepted", entries, count, now) != 0) {
             err_msg(DIAG_INTERNAL, "failed to write output");
             return REMEMBER_ERR;
         }

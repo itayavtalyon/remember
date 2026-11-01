@@ -1343,7 +1343,7 @@ TEST(schema_v6_cli_prints_setting_invalid_for_a_left_out_prefix)
     char *db = make_temp_db_path();
     char *db2 = make_temp_db_path();
     const char *list[] = {"list"};
-    const char *list_json[] = {"--json-errors", "list"};
+    const char *list_json[] = {"--json", "list"};
     CmdResult r;
 
     ASSERT_TRUE(db != NULL && db2 != NULL);
@@ -1366,11 +1366,15 @@ TEST(schema_v6_cli_prints_setting_invalid_for_a_left_out_prefix)
                   "('my project:', '2026-01-02T00:00:00.000Z', NULL, 'd');");
     r = run_remember(db2, list_json, sizeof(list_json) / sizeof(list_json[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 0);
-    ASSERT_STREQ(r.err, "{\"version\":1,\"warning\":{\"code\":\"setting_invalid\",\"message\":"
-                        "\"skipped \\\"remember.buckets.prefixes\\\": \\\"my project:\\\" isn't a "
-                        "valid value.\",\"detail\":{\"key\":\"remember.buckets.prefixes\","
-                        "\"value\":\"my project:\",\"reason\":\"bad_prefix_shape\","
-                        "\"item\":\"my project:\"}}}\n");
+    ASSERT_STREQ(r.err, "");
+    ASSERT_STREQ(r.out,
+                 "{\"format\":\"remember-message\",\"version\":1,\"type\":\"memory.list.result\","
+                 "\"data\":{\"offset\":0,\"limit\":20,\"count\":0,\"total\":0,\"entries\":[]},"
+                 "\"warnings\":[{\"code\":\"setting_invalid\",\"message\":"
+                 "\"skipped \\\"remember.buckets.prefixes\\\": \\\"my project:\\\" isn't a "
+                 "valid value.\",\"detail\":{\"key\":\"remember.buckets.prefixes\","
+                 "\"value\":\"my project:\",\"reason\":\"bad_prefix_shape\","
+                 "\"item\":\"my project:\"}}]}\n");
     cmd_result_free(&r);
     free(db);
     free(db2);
@@ -1438,7 +1442,7 @@ TEST(schema_v6_cli_a_write_to_a_newer_brain_prints_schema_too_new)
     char *db = make_temp_db_path();
     const char *add[] = {"add", "seed"};
     const char *list[] = {"list"};
-    const char *add_json[] = {"--json-errors", "add", "another"};
+    const char *add_json[] = {"--json", "add", "another"};
     CmdResult r;
 
     ASSERT_TRUE(db != NULL);
@@ -1461,7 +1465,7 @@ TEST(schema_v6_cli_a_write_to_a_newer_brain_prints_schema_too_new)
 
     r = run_remember(db, add_json, sizeof(add_json) / sizeof(add_json[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 1);
-    ASSERT_STR_CONTAINS(r.err, "\"code\":\"schema_too_new\"");
+    ASSERT_STR_CONTAINS(r.out, "\"code\":\"schema_too_new\"");
     cmd_result_free(&r);
     assert_query_is(db, (QueryExpect){.sql = "SELECT COUNT(*) FROM entries;", .want = "1"});
     free(db);

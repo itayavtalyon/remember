@@ -15,8 +15,7 @@
 static int emit_purge_result(bool json, const Entry *entries, size_t count, const char *now)
 {
     if (json) {
-        if (output_entries_envelope(app_out(), "memory.purge.result", "deleted", entries, count,
-                                    now) != 0) {
+        if (output_entries_data(app_out(), "deleted", entries, count, now) != 0) {
             err_msg(DIAG_INTERNAL, "failed to write output");
             return -1;
         }

@@ -557,8 +557,8 @@ TEST(update_if_version_vector_match_writes)
 TEST(update_if_version_vector_mismatch_is_stale)
 {
     char *db = make_temp_db_path();
-    const char *args[] = {"--json-errors",        "update", "1",       "--if-version-vector",
-                          "{\"other-device\":1}", "--text", "new body"};
+    const char *args[] = {"--json", "update",  "1", "--if-version-vector", "{\"other-device\":1}",
+                          "--text", "new body"};
     CmdResult r;
 
     ASSERT_TRUE(db != NULL);
@@ -568,9 +568,11 @@ TEST(update_if_version_vector_mismatch_is_stale)
     seed_tagged(db);
     r = run_remember(db, args, sizeof(args) / sizeof(args[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 1);
-    ASSERT_STREQ(r.out, "");
-    ASSERT_STREQ(r.err, "{\"version\":1,\"error\":{\"code\":\"stale\",\"message\":\"memory "
-                        "changed since it was read\"}}\n");
+    ASSERT_STREQ(r.err, "");
+    ASSERT_STREQ(
+        r.out, "{\"format\":\"remember-message\",\"version\":1,\"type\":\"memory.update.result\","
+               "\"error\":{\"code\":\"stale\",\"message\":\"memory changed since it was read\","
+               "\"fix\":\"Read the memory again, then retry the change.\",\"retryable\":false}}\n");
     cmd_result_free(&r);
     free(db);
 }

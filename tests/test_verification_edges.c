@@ -598,7 +598,7 @@ TEST(schema_user_version_too_new_refused)
 
 /* ---- V34 errors under --json --------------------------------------------- */
 
-TEST(json_get_missing_empty_stdout)
+TEST(json_get_missing_is_an_error_envelope)
 {
     char *db = make_temp_db_path();
     CmdResult r;
@@ -610,14 +610,14 @@ TEST(json_get_missing_empty_stdout)
     cmd_result_free(&r);
     g = run_remember(db, gargs, sizeof(gargs) / sizeof(gargs[0]), NULL);
     ASSERT_EQ_INT(g.exit_code, 2);
-    ASSERT_TRUE(str_is_blank(g.out));
-    ASSERT_TRUE(!str_is_blank(g.err));
-    ASSERT_STR_NOT_CONTAINS(g.err, "\"version\"");
+    ASSERT_STR_PREFIX(g.out, "{\"format\":\"remember-message\",\"version\":1,"
+                             "\"type\":\"memory.get.result\",\"error\":{\"code\":\"not_found\"");
+    ASSERT_STREQ(g.err, "");
     cmd_result_free(&g);
     free(db);
 }
 
-TEST(json_add_error_empty_stdout)
+TEST(json_add_error_is_an_error_envelope)
 {
     char *db = make_temp_db_path();
     CmdResult r;
@@ -625,8 +625,9 @@ TEST(json_add_error_empty_stdout)
     ASSERT_TRUE(db != NULL);
     r = run_remember(db, args, sizeof(args) / sizeof(args[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 1);
-    ASSERT_TRUE(str_is_blank(r.out));
-    ASSERT_TRUE(!str_is_blank(r.err));
+    ASSERT_STR_PREFIX(r.out, "{\"format\":\"remember-message\",\"version\":1,"
+                             "\"type\":\"memory.add.result\",\"error\":{\"code\":\"usage\"");
+    ASSERT_STREQ(r.err, "");
     cmd_result_free(&r);
     free(db);
 }
@@ -644,14 +645,14 @@ void register_verification_gld_tests(void)
     RUN_TEST(keyless_merge_keeps_created_at);
     RUN_TEST(add_invalid_utf8_body_rejected);
     RUN_TEST(db_parent_dir_mode_0700);
-    RUN_TEST(json_add_error_empty_stdout);
+    RUN_TEST(json_add_error_is_an_error_envelope);
     RUN_TEST(get_rejects_source_flag);
     RUN_TEST(delete_rejects_source_flag);
     RUN_TEST(update_rejects_source_flag);
     RUN_TEST(update_preserves_id_key_source_created_at);
     RUN_TEST(update_invalid_utf8_text_rejected);
     RUN_TEST(schema_user_version_too_new_refused);
-    RUN_TEST(json_get_missing_empty_stdout);
+    RUN_TEST(json_get_missing_is_an_error_envelope);
     RUN_TEST(human_list_preview_first_line_only);
     RUN_TEST(human_list_preview_truncates_long_line);
     RUN_TEST(orphan_tag_removed_when_last_use_deleted);

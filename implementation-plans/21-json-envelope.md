@@ -285,6 +285,76 @@ Simplify pass:
 3. Each writer's open and close is one head and one `ENVELOPE_END`, not a `{"version":1,` and `]}\n` pair per function.
 4. Kept: `output_action_envelope` and `output_memory_envelope` stay two public functions. Merging them needs a `with_links` flag at every call site, and the flag is the difference the plan states (only `add` and `get` carry links).
 
+### Stage 2a: errors and warnings in the envelope, `--json-errors` gone (2026-10-31)
+
+Stage 2 is split into three parts, each with its own deep review: 2a errors and warnings, 2b `--offset` to `--cursor`, and 2c identity flags with the `id`/`local_id` rename.
+
+What changed:
+
+- The `output_*_envelope` writers are renamed `output_*_data`. They write only the data object, with no type and no newline. `remember_run` (`run_json`) writes the envelope (`decision:plan21-envelope-closed-by-app`). With `--json` it points `app_out()` at a memstream and runs the command. It then writes `{"format","version","type"`, then `data` or the run's first error, then `warnings` and `}\n`. A failure drops any data. The reply type has one table, `reply_noun_verb`, keyed by the command; `device new` is `device.new`. A parse error before the command is known gives `unknown.result`. `--help` and `--version` stay text.
+- With `--json`, `diag.c` writes nothing. `diag_json_begin` opens two memstreams, and errors and warnings are buffered there. Only the first error is kept. An error is `{code, message, fix, retryable, detail?}`. A SQLite error's E4.8 fix moves from `detail.fix` to `error.fix`. stderr stays empty, except when stdout itself cannot be written: then the plain `failed to write output` line goes to stderr, the one place left.
+- `retryable` is true for `busy`, `io_error`, and `out_of_memory` (`decision:plan21-retryable-codes`).
+- `--json-errors` is removed (it is now an unknown option), with its help lines. The `database` fix says `--json` instead of `--json-errors`, in the plain line too.
+- If `--json` cannot get memory for its buffers, a fixed out-of-memory envelope is written directly.
+
+C-42, drafts for copy (`decision:plan21-error-fix-drafts-c42`). Copy approves or rewrites these before INDEX is ticked. Rows marked locked are not drafts.
+
+| Code | `fix` |
+|---|---|
+| `usage` | `Run 'remember <command> --help' to see how to use it.` With no command: `Run 'remember --help' to see the commands.` Copy may ask for one fix per usage message. |
+| `not_found` | `Run 'remember list' to see keys.` (JSON-STYLE example, locked) |
+| `database` | `Try again. If it keeps happening, report the details from --json.` (E4.8 sentence; only `--json-errors` changed) |
+| `out_of_memory` | `Close other apps to free memory, then try again.` |
+| `internal` | `This is a bug in remember. Report it with the command you ran.` |
+| `invalid_query` | `Check the search words, or put the query in double quotes.` (no producer today) |
+| `key_conflict` | `Pick another key, or rekey the other memory first.` |
+| `body_conflict` | `Change the text, or update the memory that already has it.` |
+| `expired` | `Add --expired to use it.` (C-01 expired row, locked) |
+| `not_expired` | `Run the command without --expired.` |
+| `deleted` | `Add --deleted to use it.` Stage 5 changes it to the C-01 `Add --trash to use it.` |
+| `not_deleted` | `Run 'remember delete' on it first.` (C-01 `wrong_bin` shape, without `<key>`) |
+| `not_single_device` | `Delete it instead; it stays in the Trash and syncs as deleted.` |
+| `self_link` | `Link two different memories.` |
+| `cycle` | `Remove the link that closes the loop, then try again.` |
+| `source_too_old` | `Open the source brain once with this remember, then import it.` |
+| `unique_taken` | `Rekey or delete the memory that holds the key or text, then try again.` |
+| `stale` | `Read the memory again, then retry the change.` |
+| `newer_database` | `Upgrade remember, then try again.` |
+| `unsupported_database` | `Open the brain with the remember that made it, and export it.` |
+| `import_parse` | `Check the import source, then try again.` |
+| `schema_too_new` | `Upgrade remember to make changes.` (C-01, locked) |
+| SQLite codes | The E4.8 fix (locked). The `k_fix` rows for these codes cover a failure without a SQLite cause. |
+
+Tests:
+
+- The `--json-errors` tests now assert the stdout envelope with an empty stderr. `k_error_fixes` in `test_errors.c` is the literal table above.
+- New: `json_keeps_only_the_first_error`, `diag_code_fix_is_the_codes_sentence`, `run_reports_a_failed_json_flush_on_stderr`, `json_help_and_version_print_text`, `envelope_every_command_names_its_reply_type`, `envelope_failure_keeps_its_type_and_carries_the_warnings_after_the_error`, `envelope_warnings_keep_their_order_with_a_comma_between`.
+
+Tests also lock `remember --json help not-a-command` as one `unknown.result` envelope (`json_help_with_an_unknown_topic_is_an_envelope`). Help's command stays `help` when the topic is unknown, and the error is still an envelope.
+
+Mutation (the 16 mutants in the other agent's `mutants2a.py`, run 2026-10-31). Three needles no longer matched the tree (count 0). The same clause was applied to the current line and run again. That retarget is named below. A mutant that does not build is not a survivor. A segfault that drops piped FAIL lines is not a survivor. One expected survivor: M5.
+
+| Mutant | Result | Red tests |
+|---|---|---|
+| M1 retryable drops `out_of_memory` | Agent needle not applied. Retarget drops ` \|\| code == DIAG_OUT_OF_MEMORY`. Build ok. Killed. | `every_error_code_json_message_matches_the_plain_line` (errors, 1 of 109) |
+| M2 a later error replaces the first | `if (g_json.has_error)` becomes `if (false)`. Build ok. Killed. | `json_keeps_only_the_first_error` |
+| M3 comma before the first warning | `> 0U` becomes `>= 0U`. Build failed (`-Wtautological-unsigned-zero-compare`). Not a survivor. | none (did not build) |
+| M4 usage fix ignores the command | `g_json.command == NULL` becomes `!= NULL`. Build ok. Killed. | `cli_busy_timeout_out_of_range_is_usage`, `every_error_code_json_message_matches_the_plain_line`, `golden_error_lines_and_d9_codes`, `json_error_escapes_message_bytes`, `json_keeps_only_the_first_error`, `json_usage_error_is_one_stdout_envelope` |
+| M5 exit code stays 0 when an error was buffered | Deletes `rc = (rc == REMEMBER_OK && diag_json_has_error()) ? REMEMBER_ERR : rc`. Build ok. Store 0. CLI 343 tests, 0 failed. Expected survivor. | none. The only path with `rc == REMEMBER_OK` and a later buffered error is the data memstream `fflush`/`ferror` treated as out of memory. Tests cannot force that. The line stays. |
+| M6 help with a parse error skips the envelope | Agent needle not applied. Retarget drops `args->error == CLI_ERR_OK &&`, so help and version skip the envelope even on error. First run, before the help-topic test: 343 tests, 0 failed (untested clause). After `json_help_with_an_unknown_topic_is_an_envelope`: errors 110 run, 1 failed. Killed. | `json_help_with_an_unknown_topic_is_an_envelope` |
+| M7 `device new` named `device.get` | Agent ternary needle not applied. Retarget returns `"device.get"` from the mint branch. Build ok. Killed. | `envelope_every_command_names_its_reply_type` (envelope, 1 of 6) |
+| M8 `purge-trash` has no type | Deletes the `CLI_CMD_PURGE_TRASH` case. Build failed (`-Wswitch-enum`). Not a survivor. | none (did not build) |
+| M9 a failure writes `data` | `if (failed)` becomes `if (!failed)`. Build ok. First pass reported no red tests because `remember_tests` segfaulted (exit 139) and the pipe dropped the FAIL lines. Follow-up to a file: 43 red tests, then the same segfault. Not a survivor. | `add_tag_casefold_merges_to_one_tag_name`, `facade_busy_json_matches_cli`, `facade_json_not_found_matches_cli`, `facade_update_stale_matches_cli`, `fts_reflects_tag_update`, `fts_search_empty_after_delete`, `fts_search_reflects_body_update`, `fts_search_reflects_keyed_upsert`, `json_add_error_is_an_error_envelope`, `json_get_missing_is_an_error_envelope`, `keyless_merge_keeps_created_at`, `list_no_matches_json_total_zero`, `search_diacritics_folded`, `search_finds_compound_tag_component`, `union_search_deep_nesting_is_a_warning`, `union_search_example_2_has_facets_and_the_warning`, `union_search_example_4_filter_scopes_the_facets`, `union_search_facet_limit_accepts_both_bounds`, `union_search_facet_limit_defaults_to_50`, `union_search_facet_limit_out_of_range_is_usage`, `union_search_invalid_utf8_is_usage`, `union_search_json_carries_the_facets_before_entries`, `union_search_parsed_raw_part_has_no_warning`, `union_search_unparseable_raw_part_is_a_json_warning`, `update_bumps_updated_at`, `update_by_key_clear_tags`, `update_clear_tags_flag`, `update_if_version_vector_match_by_key_writes`, `update_if_version_vector_match_writes`, `update_if_version_vector_mismatch_is_stale`, `update_json_shape`, `update_moves_entry_to_top_of_list`, `update_positional_body_not_accepted`, `update_preserves_id_key_source_created_at`, `update_replace_tags_keeps_shared_tag_on_other_entry`, `update_replace_tags_multiple`, `update_same_text_still_succeeds_and_returns_entry`, `update_source_immutable`, `update_tags_only_keeps_body`, `update_text_and_tags_together`, `update_text_literal_dash_equals_form`, `update_text_only_keeps_tags`, `update_text_stdin_dash` |
+| M10 an empty warnings array is written | Deletes the `nwarnings == 0` return. Build ok. CLI 343 run, 51 failed. Killed. | `cli_busy_timeout_500_reports_busy_within_half_a_second`, `cli_busy_timeout_out_of_range_is_usage`, `cli_damaged_fts_search_reports_fts_only`, `cli_db_under_a_file_keeps_the_legacy_open_line`, `cli_enospc_shim_reports_disk_full`, `cli_fail_read_shim_reports_io_error`, `cli_fail_write_shim_reports_io_error`, `cli_import_text_source_names_the_source`, `cli_mode_000_reports_cannot_open_permission`, `cli_no_create_missing_path_creates_nothing`, `cli_nomem_shim_reports_database`, `cli_read_only_file_reports_read_only_on_write`, `cli_readonly_directory_reports_read_only`, `cli_relative_db_emits_absolute_detail_path`, `cli_repair_counts_deleted_entries`, `cli_repair_heals_page_damaged_fts_content`, `cli_repair_heals_page_damaged_fts_data`, `cli_repair_read_fault_during_check_is_corrupt`, `cli_repair_refuses_damaged_base_table`, `cli_repair_refuses_truncated_brain`, `cli_repair_search_index_rebuilds`, `cli_search_on_damaged_base_is_not_fts_only`, `cli_text_file_reports_not_a_database`, `cli_truncated_brain_reports_corrupt`, `device_new_keeps_the_old_vector_and_counts_the_next_edit_under_the_new_id`, `device_prints_the_sidecar_id`, `envelope_add_leaves_out_a_neighbor_in_the_trash_like_get`, `error_outside_the_catalog_writes_nothing`, `every_error_code_json_message_matches_the_plain_line`, `golden_error_lines_and_d9_codes`, `json_error_escapes_message_bytes`, `json_error_is_one_line_and_not_the_plain_line`, `json_keeps_only_the_first_error`, `json_not_found_is_one_stdout_envelope`, `json_usage_error_is_one_stdout_envelope`, `list_equal_bounds_are_empty`, `list_rejects_a_bad_timestamp`, `list_rejects_a_newline_timestamp_as_one_json_line`, `list_sort_rejects_a_bad_value`, `null_message_is_empty_text`, `search_crossed_bounds_are_empty`, `sqlite_busy_reports_cause_fix_and_detail`, `sqlite_cannot_open_carries_errno_reason_and_absolute_path`, `sqlite_corrupt_marks_fts_only_and_keeps_base_text`, `sqlite_database_keeps_its_own_text_without_a_path`, `sqlite_emitter_rejects_misuse_quietly`, `sqlite_out_of_range_reason_falls_back_to_other`, `union_search_facet_limit_out_of_range_is_usage`, `union_search_invalid_utf8_is_usage`, `update_if_version_vector_mismatch_is_stale`, `warning_outside_the_catalog_writes_nothing` |
+| M11 a SQLite error replaces the first | Deletes the `has_error` return in `diag_error_sqlite`. Build ok. Killed. | `json_keeps_only_the_first_error` |
+| M12 a SQLite error takes `fix` from `k_fix` | `write_fix_retryable(err, fix, code)` becomes `k_fix[code]`. Build ok. Errors 109 run, 14 failed. Killed. | `cli_busy_timeout_500_reports_busy_within_half_a_second`, `cli_damaged_fts_search_reports_fts_only`, `cli_import_text_source_names_the_source`, `cli_read_only_file_reports_read_only_on_write`, `cli_readonly_directory_reports_read_only`, `cli_repair_read_fault_during_check_is_corrupt`, `cli_repair_refuses_damaged_base_table`, `cli_repair_refuses_truncated_brain`, `cli_search_on_damaged_base_is_not_fts_only`, `cli_text_file_reports_not_a_database`, `cli_truncated_brain_reports_corrupt`, `golden_error_lines_and_d9_codes`, `sqlite_busy_reports_cause_fix_and_detail`, `sqlite_corrupt_marks_fts_only_and_keeps_base_text` |
+| M13 stdout gone stays in JSON mode | Deletes `diag_json_end()` before the failed-to-write `err_msg`. Build ok. Killed. | `run_reports_a_failed_json_flush_on_stderr` |
+| M14 no internal error when a command fails silently | The guard becomes `if (false)`. Build failed (`-Wunreachable-code`). Not a survivor. The compiler guards the clause. | none (did not build) |
+| M15 help and version are wrapped | Drops `CLI_CMD_VERSION` from the text skip. Build ok. Killed. | `json_help_and_version_print_text` |
+| M16 a JSON error drops `detail` | Deletes the `write_json_detail_fields` call. Build failed (`-Wunused-function`). Not a survivor. | none (did not build) |
+
+Gate on this tree, after the help-topic test (Apple clang, Debug, sanitizers on, LSAN off, `REMEMBER_TEST_VFS=ON`, Unix Makefiles; coverage with Homebrew LLVM 22). Started 2026-10-31T21:05:09Z at HEAD `0acd7bd` with stage 2a uncommitted. `EXIT: ctest=0 coverage=0 lint=0` at 2026-11-01T00:33:35Z. ctest 5/5. Coverage: functions 100%, effective lines 100% (must-cover lines missed: 0), branch sides 0 missed on `output.c` (698), `search_terms.c` (176), `unicode.c` (80), `normalize.c` (384). Lint OK. `default.profraw` stays untracked.
+
 ## Review Notes
 
 Stage flow (`decision:plan21-stage-flow`, Itay 2026-10-31): after each stage, run the in-session deep review, fix, and continue. There is no per-stage `REVIEW_REQUEST`. One whole-plan review runs at the end.
@@ -298,3 +368,21 @@ Findings:
 - **Important, fixed (grill):** `add --json` reads the row's links after the write commits. A `REMEMBER_TEST_FAIL_READ` sweep shows N=17 to 20 save the memory and exit 1 with `SQLITE_IOERR_READ`. Itay chose fail loud (`decision:plan21-add-link-read-fails-loud`). Test `envelope_add_link_read_error_after_the_write_exits_1_and_keeps_the_write`. Mutant: skip the neighbor-status check; that test goes red.
 - **Important, fixed:** `docs/engineering-notes.md` (Output, Repair, `tags`) and `skills/remember/SKILL.md` (add, list, search, device, entry placement) still described `{"version":1,...}`. Both are corrected. The notes name the consumer impact: remember-mac and scripts must read `data`.
 - **Nit, kept:** reply types go into the head through `%s` unescaped. Every caller passes a string literal. No stored or user value reaches it.
+
+### Stage 2a deep review (2026-10-31, in session)
+
+`decision:plan21-stage-flow`: in-session deep review, fix, continue. No `.claude/REVIEW_REQUEST`. Local Bugbot is not installed (`command -v bugbot` is empty, and there is no bugbot skill). `quality:linters-max` allows a local `NOLINT`. This repo's engineering notes, and the `AppStreams` comment, pack the two `FILE*` into a struct so the ends cannot be swapped. The struct is what shipped. `standard:coding` says merge `main` at the start of a stage. This session's prompt says merge `origin/main` after the 2a commit and not during the gate. The merge waits until after this commit.
+
+No product or architecture question is open. The help-topic envelope was a specified contract with no test. The test is the fix.
+
+Findings:
+
+- **Important, fixed:** `writes_envelope` skipped the envelope for every help or version command only when `error == CLI_ERR_OK`. `remember --json help not-a-command` keeps command `help` and sets `CLI_ERR_UNKNOWN_COMMAND`, because `cli_parse` returns before `apply_help_request`. M6's first retarget survived 343 tests. `json_help_with_an_unknown_topic_is_an_envelope` locks the probed bytes: type `unknown.result`, code `usage`, message `unknown command 'not-a-command'`, fix `Run 'remember help --help' to see how to use it.`, `retryable` false, stderr empty, exit 1. The same retarget then fails that one test.
+- **Nit, fixed:** `tests/COVERAGE.md` still named `--json-errors`. `docs/engineering-notes.md` still named `output_tags_envelope` and `output_search_envelope`. Those names are now `remember_run`, `output_tags_data`, and `output_search_data`.
+- **Nit, kept:** the first-error gate is in `json_slot` and again in `diag_error_sqlite` (about 4 lines). A SQLite notice is not a `Notice`. Folding them adds a bool and a NULL check and saves nothing. `CliGlobals` keeps `pad_[1]` so `-Wpadded` stays clean. `usage_fix` uses a 96-byte stack buffer. The longest catalog command name (`purge-trash`) makes a sentence of about 56 bytes.
+- **Kept, not a defect:** M5. Deleting the exit-code line would hide an out-of-memory failure of the data buffer. There is no fault hook, and this review does not add one.
+
+DRY / easy to replace / orthogonal / simplify:
+
+- One reply-type table (`reply_noun_verb`). One closer (`run_json`). `diag.c` buffers notices and does not write the envelope. Plan 20's `diag_error_fix` path (fix, no `retryable`) stays a different path. `k_fix` covers a failure with no SQLite cause. The E4.8 sentence stays on the SQLite path.
+- C-42 rows in `k_fix` and `k_error_fixes` are the plan's drafts. The `deleted` fix is still `Add --deleted to use it.` Stage 5 changes it.

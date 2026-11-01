@@ -45,12 +45,13 @@ static char *given_examples(void)
 TEST(union_search_unparseable_raw_part_is_a_json_warning)
 {
     char *db = given_examples();
-    const char *const args[] = {"--json", "--json-errors", "search", "foo AND"};
+    const char *const args[] = {"--json", "search", "foo AND"};
     CmdResult r = run_remember(db, args, COUNT_OF(args), NULL);
 
     ASSERT_EQ_INT(r.exit_code, 0);
-    ASSERT_STREQ(r.err, "{\"version\":1,\"warning\":{\"code\":\"raw_query_ignored\",\"message\":"
-                        "\"fts5: syntax error near \\\"\\\"\"}}\n");
+    ASSERT_STREQ(r.err, "");
+    ASSERT_STR_CONTAINS(r.out, "]},\"warnings\":[{\"code\":\"raw_query_ignored\",\"message\":"
+                               "\"fts5: syntax error near \\\"\\\"\"}]}\n");
     cmd_result_free(&r);
     free(db);
 }
@@ -122,12 +123,13 @@ TEST(union_search_deep_nesting_is_a_warning)
     memset(query, '(', NESTED_PARENS);
     query[NESTED_PARENS] = '\0';
     {
-        const char *const args[] = {"--json-errors", "search", query};
+        const char *const args[] = {"--json", "search", query};
         r = run_remember(db, args, COUNT_OF(args), NULL);
     }
     ASSERT_EQ_INT(r.exit_code, 0);
-    ASSERT_STREQ(r.err, "{\"version\":1,\"warning\":{\"code\":\"raw_query_ignored\",\"message\":"
-                        "\"fts5: parser stack overflow\"}}\n");
+    ASSERT_STREQ(r.err, "");
+    ASSERT_STR_CONTAINS(r.out, "]},\"warnings\":[{\"code\":\"raw_query_ignored\",\"message\":"
+                               "\"fts5: parser stack overflow\"}]}\n");
     cmd_result_free(&r);
     free(db);
 }
@@ -136,13 +138,16 @@ TEST(union_search_deep_nesting_is_a_warning)
 TEST(union_search_invalid_utf8_is_usage)
 {
     char *db = given_examples();
-    const char *const args[] = {"--json-errors", "search", "boo\xff"};
+    const char *const args[] = {"--json", "search", "boo\xff"};
     CmdResult r = run_remember(db, args, COUNT_OF(args), NULL);
 
     ASSERT_EQ_INT(r.exit_code, 1);
-    ASSERT_STREQ(r.out, "");
-    ASSERT_STREQ(r.err, "{\"version\":1,\"error\":{\"code\":\"usage\",\"message\":"
-                        "\"invalid UTF-8 in search query\"}}\n");
+    ASSERT_STREQ(r.err, "");
+    ASSERT_STREQ(
+        r.out,
+        "{\"format\":\"remember-message\",\"version\":1,\"type\":\"memory.search.result\",\"e"
+        "rror\":{\"code\":\"usage\",\"message\":\"invalid UTF-8 in search query\",\"fix\":\"R"
+        "un 'remember search --help' to see how to use it.\",\"retryable\":false}}\n");
     cmd_result_free(&r);
     free(db);
 }
@@ -151,7 +156,7 @@ TEST(union_search_invalid_utf8_is_usage)
 TEST(union_search_parsed_raw_part_has_no_warning)
 {
     char *db = given_examples();
-    const char *const args[] = {"--json", "--json-errors", "search", "book OR zed"};
+    const char *const args[] = {"--json", "search", "book OR zed"};
     CmdResult r = run_remember(db, args, COUNT_OF(args), NULL);
 
     ASSERT_EQ_INT(r.exit_code, 0);
@@ -170,13 +175,16 @@ TEST(union_search_facet_limit_out_of_range_is_usage)
     size_t i = 0;
 
     for (i = 0; i < COUNT_OF(values); i++) {
-        const char *const args[] = {"--json-errors", "search", "--facet-limit", values[i], "boo"};
+        const char *const args[] = {"--json", "search", "--facet-limit", values[i], "boo"};
         CmdResult r = run_remember(db, args, COUNT_OF(args), NULL);
 
         ASSERT_EQ_INT(r.exit_code, 1);
-        ASSERT_STREQ(r.out, "");
-        ASSERT_STREQ(r.err, "{\"version\":1,\"error\":{\"code\":\"usage\",\"message\":"
-                            "\"invalid --facet-limit (must be 1..200)\"}}\n");
+        ASSERT_STREQ(r.err, "");
+        ASSERT_STREQ(
+            r.out,
+            "{\"format\":\"remember-message\",\"version\":1,\"type\":\"memory.search.result\",\"e"
+            "rror\":{\"code\":\"usage\",\"message\":\"invalid --facet-limit (must be 1..200)\",\""
+            "fix\":\"Run 'remember search --help' to see how to use it.\",\"retryable\":false}}\n");
         cmd_result_free(&r);
     }
     free(db);
@@ -284,8 +292,8 @@ TEST(union_search_facet_limit_accepts_both_bounds)
     free(db);
 }
 
-/* Example 2 / E2.3: the facets print and the plain warning names what was ignored. */
-TEST(union_search_example_2_has_facets_and_the_plain_warning)
+/* Example 2 / E2.3: the facets print and the warning names what was ignored. */
+TEST(union_search_example_2_has_facets_and_the_warning)
 {
     char *db = given_examples();
     const char *const args[] = {"--json", "search", "recs:bo"};
@@ -295,7 +303,9 @@ TEST(union_search_example_2_has_facets_and_the_plain_warning)
     ASSERT_STR_CONTAINS(r.out, "\"count\":1,\"total\":1,\"keys\":{\"total\":1,\"items\":[{"
                                "\"key\":\"recs:books\",");
     ASSERT_STR_CONTAINS(r.out, "\"tags\":{\"total\":0,\"items\":[]},\"entries\":[{");
-    ASSERT_STREQ(r.err, "remember: warning: raw query ignored: no such column: recs\n");
+    ASSERT_STREQ(r.err, "");
+    ASSERT_STR_CONTAINS(r.out, "]},\"warnings\":[{\"code\":\"raw_query_ignored\","
+                               "\"message\":\"no such column: recs\"}]}\n");
     cmd_result_free(&r);
     free(db);
 }
@@ -385,7 +395,7 @@ void register_union_search_tests(void)
     RUN_TEST(union_search_human_prints_the_facets_before_entries);
     RUN_TEST(union_search_facet_limit_defaults_to_50);
     RUN_TEST(union_search_facet_limit_accepts_both_bounds);
-    RUN_TEST(union_search_example_2_has_facets_and_the_plain_warning);
+    RUN_TEST(union_search_example_2_has_facets_and_the_warning);
     RUN_TEST(union_search_example_4_filter_scopes_the_facets);
     RUN_TEST(union_search_facet_limit_without_a_value_is_usage);
     RUN_TEST(union_search_help_describes_prefixes_facets_and_the_warning);

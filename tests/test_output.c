@@ -234,10 +234,9 @@ TEST(output_action_envelope_rejects_missing_arguments)
     Entry e = given_entry();
     FILE *f = given_stream();
 
-    ASSERT_EQ_INT(output_action_envelope(NULL, "memory.update.result", "updated", &e, NOW), -1);
-    ASSERT_EQ_INT(output_action_envelope(f, NULL, "updated", &e, NOW), -1);
-    ASSERT_EQ_INT(output_action_envelope(f, "memory.update.result", NULL, &e, NOW), -1);
-    ASSERT_EQ_INT(output_action_envelope(f, "memory.update.result", "updated", NULL, NOW), -1);
+    ASSERT_EQ_INT(output_action_data(NULL, "updated", &e, NOW), -1);
+    ASSERT_EQ_INT(output_action_data(f, NULL, &e, NOW), -1);
+    ASSERT_EQ_INT(output_action_data(f, "updated", NULL, NOW), -1);
     assert_written(f, "");
 }
 
@@ -245,11 +244,9 @@ TEST(output_entries_envelope_rejects_missing_arguments)
 {
     FILE *f = given_stream();
 
-    ASSERT_EQ_INT(output_entries_envelope(NULL, "memory.purge.result", "deleted", NULL, 0, NOW),
-                  -1);
-    ASSERT_EQ_INT(output_entries_envelope(f, NULL, "deleted", NULL, 0, NOW), -1);
-    ASSERT_EQ_INT(output_entries_envelope(f, "memory.purge.result", NULL, NULL, 0, NOW), -1);
-    ASSERT_EQ_INT(output_entries_envelope(f, "memory.purge.result", "deleted", NULL, 1, NOW), -1);
+    ASSERT_EQ_INT(output_entries_data(NULL, "deleted", NULL, 0, NOW), -1);
+    ASSERT_EQ_INT(output_entries_data(f, NULL, NULL, 0, NOW), -1);
+    ASSERT_EQ_INT(output_entries_data(f, "deleted", NULL, 1, NOW), -1);
     assert_written(f, "");
 }
 
@@ -259,19 +256,14 @@ TEST(output_entries_envelope_separates_entries_with_a_comma)
     FILE *f = given_stream();
 
     entries[1].id = OTHER_ID;
-    ASSERT_EQ_INT(output_entries_envelope(f, "memory.purge.result", "deleted", entries, 2, NOW), 0);
+    ASSERT_EQ_INT(output_entries_data(f, "deleted", entries, 2, NOW), 0);
     assert_written(
-        f,
-        "{\"format\":\"remember-message\",\"version\":1,\"type\":\"memory.purge.result\",\"data\":{"
-        "\"action\":\"deleted\",\"count\":2,\"entries\":["
-        "{\"id\":7,\"sync_id\":\"s-7\",\"key\":\"k:7\",\"body\":\"body\","
-        "\"tags\":[],\"source\":\"agent\",\"created_at\":\"c\",\"updated_at\":\"u\","
-        "\"expires_at\":null,\"deleted_at\":null,\"bin\":\"live\","
-        "\"version_vector\":{}},"
-        "{\"id\":8,\"sync_id\":\"s-7\",\"key\":\"k:7\",\"body\":\"body\","
-        "\"tags\":[],\"source\":\"agent\",\"created_at\":\"c\",\"updated_at\":\"u\","
-        "\"expires_at\":null,\"deleted_at\":null,\"bin\":\"live\","
-        "\"version_vector\":{}}]}}\n");
+        f, "{\"action\":\"deleted\",\"count\":2,\"entries\":[{\"id\":7,\"sync_id\":\"s-7\",\"key"
+           "\":\"k:7\",\"body\":\"body\",\"tags\":[],\"source\":\"agent\",\"created_at\":\"c\","
+           "\"updated_at\":\"u\",\"expires_at\":null,\"deleted_at\":null,\"bin\":\"live\",\"vers"
+           "ion_vector\":{}},{\"id\":8,\"sync_id\":\"s-7\",\"key\":\"k:7\",\"body\":\"body\",\"t"
+           "ags\":[],\"source\":\"agent\",\"created_at\":\"c\",\"updated_at\":\"u\",\"expires_at"
+           "\":null,\"deleted_at\":null,\"bin\":\"live\",\"version_vector\":{}}]}");
 }
 
 TEST(output_memory_envelope_rejects_missing_arguments)
@@ -279,11 +271,10 @@ TEST(output_memory_envelope_rejects_missing_arguments)
     Entry e = given_entry();
     FILE *f = given_stream();
 
-    ASSERT_EQ_INT(output_memory_envelope(NULL, "memory.get.result", NULL, &e, NULL, 0, NOW), -1);
-    ASSERT_EQ_INT(output_memory_envelope(f, NULL, NULL, &e, NULL, 0, NOW), -1);
-    ASSERT_EQ_INT(output_memory_envelope(f, "memory.get.result", NULL, NULL, NULL, 0, NOW), -1);
-    ASSERT_EQ_INT(output_memory_envelope(f, "memory.get.result", NULL, &e, NULL, 0, NULL), -1);
-    ASSERT_EQ_INT(output_memory_envelope(f, "memory.get.result", NULL, &e, NULL, 1, NOW), -1);
+    ASSERT_EQ_INT(output_memory_data(NULL, NULL, &e, NULL, 0, NOW), -1);
+    ASSERT_EQ_INT(output_memory_data(f, NULL, NULL, NULL, 0, NOW), -1);
+    ASSERT_EQ_INT(output_memory_data(f, NULL, &e, NULL, 0, NULL), -1);
+    ASSERT_EQ_INT(output_memory_data(f, NULL, &e, NULL, 1, NOW), -1);
     assert_written(f, "");
 }
 
@@ -294,16 +285,13 @@ TEST(output_memory_envelope_without_action_lists_only_the_subjects_links)
                              given_link(SUBJECT_ID, SUBJECT_ID, STORE_EDGE_RELATED)};
     FILE *f = given_stream();
 
-    ASSERT_EQ_INT(output_memory_envelope(f, "memory.get.result", NULL, &e, links, 2, NOW), 0);
+    ASSERT_EQ_INT(output_memory_data(f, NULL, &e, links, 2, NOW), 0);
     assert_written(
-        f,
-        "{\"format\":\"remember-message\",\"version\":1,\"type\":\"memory.get.result\",\"data\":{"
-        "\"memory\":{\"id\":7,\"sync_id\":\"s-7\","
-        "\"key\":\"k:7\",\"body\":\"body\",\"tags\":[],\"source\":\"agent\","
-        "\"created_at\":\"c\",\"updated_at\":\"u\",\"expires_at\":null,"
-        "\"deleted_at\":null,\"bin\":\"live\",\"version_vector\":{},"
-        "\"links\":[{\"id\":3,\"sync_id\":\"n-3\",\"key\":null,\"type\":\"related\","
-        "\"bin\":\"live\",\"preview\":\"nb\"}]}}}\n");
+        f, "{\"memory\":{\"id\":7,\"sync_id\":\"s-7\",\"key\":\"k:7\",\"body\":\"body\",\"tags\""
+           ":[],\"source\":\"agent\",\"created_at\":\"c\",\"updated_at\":\"u\",\"expires_at\":nu"
+           "ll,\"deleted_at\":null,\"bin\":\"live\",\"version_vector\":{},\"links\":[{\"id\":3,"
+           "\"sync_id\":\"n-3\",\"key\":null,\"type\":\"related\",\"bin\":\"live\",\"preview\":"
+           "\"nb\"}]}}");
 }
 
 TEST(output_memory_envelope_with_action_puts_action_before_memory)
@@ -311,15 +299,12 @@ TEST(output_memory_envelope_with_action_puts_action_before_memory)
     Entry e = given_entry();
     FILE *f = given_stream();
 
-    ASSERT_EQ_INT(output_memory_envelope(f, "memory.add.result", "created", &e, NULL, 0, NOW), 0);
+    ASSERT_EQ_INT(output_memory_data(f, "created", &e, NULL, 0, NOW), 0);
     assert_written(
-        f,
-        "{\"format\":\"remember-message\",\"version\":1,\"type\":\"memory.add.result\",\"data\":{"
-        "\"action\":\"created\",\"memory\":{\"id\":7,\"sync_id\":\"s-7\","
-        "\"key\":\"k:7\",\"body\":\"body\",\"tags\":[],\"source\":\"agent\","
-        "\"created_at\":\"c\",\"updated_at\":\"u\",\"expires_at\":null,"
-        "\"deleted_at\":null,\"bin\":\"live\",\"version_vector\":{},"
-        "\"links\":[]}}}\n");
+        f, "{\"action\":\"created\",\"memory\":{\"id\":7,\"sync_id\":\"s-7\",\"key\":\"k:7\",\"b"
+           "ody\":\"body\",\"tags\":[],\"source\":\"agent\",\"created_at\":\"c\",\"updated_at\":"
+           "\"u\",\"expires_at\":null,\"deleted_at\":null,\"bin\":\"live\",\"version_vector\":{}"
+           ",\"links\":[]}}");
 }
 
 TEST(output_action_envelope_writes_the_memory_without_links)
@@ -327,13 +312,12 @@ TEST(output_action_envelope_writes_the_memory_without_links)
     Entry e = given_entry();
     FILE *f = given_stream();
 
-    ASSERT_EQ_INT(output_action_envelope(f, "memory.update.result", "updated", &e, NOW), 0);
-    assert_written(f, "{\"format\":\"remember-message\",\"version\":1,\"type\":\"memory.update."
-                      "result\",\"data\":{"
-                      "\"action\":\"updated\",\"memory\":{\"id\":7,\"sync_id\":\"s-7\","
-                      "\"key\":\"k:7\",\"body\":\"body\",\"tags\":[],\"source\":\"agent\","
-                      "\"created_at\":\"c\",\"updated_at\":\"u\",\"expires_at\":null,"
-                      "\"deleted_at\":null,\"bin\":\"live\",\"version_vector\":{}}}}\n");
+    ASSERT_EQ_INT(output_action_data(f, "updated", &e, NOW), 0);
+    assert_written(
+        f, "{\"action\":\"updated\",\"memory\":{\"id\":7,\"sync_id\":\"s-7\",\"key\":\"k:7\",\"b"
+           "ody\":\"body\",\"tags\":[],\"source\":\"agent\",\"created_at\":\"c\",\"updated_at\":"
+           "\"u\",\"expires_at\":null,\"deleted_at\":null,\"bin\":\"live\",\"version_vector\":{}"
+           "}}");
 }
 
 TEST(output_list_envelope_rejects_missing_arguments)
@@ -341,10 +325,10 @@ TEST(output_list_envelope_rejects_missing_arguments)
     Entry e = given_entry();
     FILE *f = given_stream();
 
-    ASSERT_EQ_INT(output_list_envelope(NULL, 0, 1, 1, 1, &e, NULL, 0, NOW), -1);
-    ASSERT_EQ_INT(output_list_envelope(f, 0, 1, 1, 1, &e, NULL, 0, NULL), -1);
-    ASSERT_EQ_INT(output_list_envelope(f, 0, 1, 1, 1, NULL, NULL, 0, NOW), -1);
-    ASSERT_EQ_INT(output_list_envelope(f, 0, 1, 1, 1, &e, NULL, 1, NOW), -1);
+    ASSERT_EQ_INT(output_list_data(NULL, 0, 1, 1, 1, &e, NULL, 0, NOW), -1);
+    ASSERT_EQ_INT(output_list_data(f, 0, 1, 1, 1, &e, NULL, 0, NULL), -1);
+    ASSERT_EQ_INT(output_list_data(f, 0, 1, 1, 1, NULL, NULL, 0, NOW), -1);
+    ASSERT_EQ_INT(output_list_data(f, 0, 1, 1, 1, &e, NULL, 1, NOW), -1);
     assert_written(f, "");
 }
 
@@ -354,11 +338,10 @@ TEST(output_search_envelope_writes_empty_facets)
     SearchResult res = {.page = {.st = STORE_OK}};
     FILE *f = given_stream();
 
-    ASSERT_EQ_INT(output_search_envelope(f, &res, 0, 20, NULL, 0, NOW), 0);
-    assert_written(f, "{\"format\":\"remember-message\",\"version\":1,\"type\":\"memory.search."
-                      "result\",\"data\":{\"offset\":0,\"limit\":20,\"count\":0,\"total\":0,"
-                      "\"keys\":{\"total\":0,\"items\":[]},\"tags\":{\"total\":0,\"items\":[]},"
-                      "\"entries\":[]}}\n");
+    ASSERT_EQ_INT(output_search_data(f, &res, 0, 20, NULL, 0, NOW), 0);
+    assert_written(
+        f, "{\"offset\":0,\"limit\":20,\"count\":0,\"total\":0,\"keys\":{\"total\":0,\"items\":["
+           "]},\"tags\":{\"total\":0,\"items\":[]},\"entries\":[]}");
 }
 
 /* Two key items and two tag items, so the comma between items shows. */
@@ -392,17 +375,14 @@ TEST(output_search_envelope_writes_the_facet_items)
     SearchResult res = given_search_facets(keys, tags);
     FILE *f = given_stream();
 
-    ASSERT_EQ_INT(output_search_envelope(f, &res, 0, 20, NULL, 0, NOW), 0);
-    assert_written(f,
-                   "{\"format\":\"remember-message\",\"version\":1,\"type\":\"memory.search."
-                   "result\",\"data\":{\"offset\":0,\"limit\":20,\"count\":0,\"total\":0,"
-                   "\"keys\":{\"total\":5,\"items\":["
-                   "{\"key\":\"recs:books\",\"sync_id\":\"s-1\",\"label\":\"Book recommendations\","
-                   "\"source\":\"agent\",\"updated_at\":\"u-1\"},"
-                   "{\"key\":\"recs:bonds\",\"sync_id\":\"s-2\",\"label\":\"recs:bonds\","
-                   "\"source\":\"human\",\"updated_at\":\"u-2\"}]},"
-                   "\"tags\":{\"total\":4,\"items\":[{\"tag\":\"type:books\",\"count\":1},"
-                   "{\"tag\":\"recs\",\"count\":3}]},\"entries\":[]}}\n");
+    ASSERT_EQ_INT(output_search_data(f, &res, 0, 20, NULL, 0, NOW), 0);
+    assert_written(
+        f, "{\"offset\":0,\"limit\":20,\"count\":0,\"total\":0,\"keys\":{\"total\":5,\"items\":["
+           "{\"key\":\"recs:books\",\"sync_id\":\"s-1\",\"label\":\"Book recommendations\",\"sou"
+           "rce\":\"agent\",\"updated_at\":\"u-1\"},{\"key\":\"recs:bonds\",\"sync_id\":\"s-2\","
+           "\"label\":\"recs:bonds\",\"source\":\"human\",\"updated_at\":\"u-2\"}]},\"tags\":{\""
+           "total\":4,\"items\":[{\"tag\":\"type:books\",\"count\":1},{\"tag\":\"recs\",\"count"
+           "\":3}]},\"entries\":[]}");
 }
 
 /* Stage 4 handover: every facet field goes through the JSON escaper. The
@@ -423,14 +403,12 @@ TEST(output_search_envelope_escapes_every_facet_field)
     res.tags.items[0].tag = (char *)"t\x01";
     res.keys.count = 1;
     res.tags.count = 1;
-    ASSERT_EQ_INT(output_search_envelope(f, &res, 0, 20, NULL, 0, NOW), 0);
-    assert_written(f, "{\"format\":\"remember-message\",\"version\":1,\"type\":\"memory.search."
-                      "result\",\"data\":{\"offset\":0,\"limit\":20,\"count\":0,\"total\":0,"
-                      "\"keys\":{\"total\":5,\"items\":["
-                      "{\"key\":\"k\\u001b\",\"sync_id\":\"s\\n\",\"label\":\"l\\\"\\u001b[31m\","
-                      "\"source\":\"a\\\\\",\"updated_at\":\"u\\t\"}]},"
-                      "\"tags\":{\"total\":4,\"items\":[{\"tag\":\"t\\u0001\",\"count\":1}]},"
-                      "\"entries\":[]}}\n");
+    ASSERT_EQ_INT(output_search_data(f, &res, 0, 20, NULL, 0, NOW), 0);
+    assert_written(
+        f, "{\"offset\":0,\"limit\":20,\"count\":0,\"total\":0,\"keys\":{\"total\":5,\"items\":["
+           "{\"key\":\"k\\u001b\",\"sync_id\":\"s\\n\",\"label\":\"l\\\"\\u001b[31m\",\"source\""
+           ":\"a\\\\\",\"updated_at\":\"u\\t\"}]},\"tags\":{\"total\":4,\"items\":[{\"tag\":\"t"
+           "\\u0001\",\"count\":1}]},\"entries\":[]}");
 }
 
 TEST(output_search_envelope_rejects_missing_arguments)
@@ -441,18 +419,18 @@ TEST(output_search_envelope_rejects_missing_arguments)
     StoreNeighbor link = given_link(SUBJECT_ID, SUBJECT_ID, STORE_EDGE_RELATED);
     FILE *f = given_stream();
 
-    ASSERT_EQ_INT(output_search_envelope(NULL, &res, 0, 1, NULL, 0, NOW), -1);
-    ASSERT_EQ_INT(output_search_envelope(f, NULL, 0, 1, NULL, 0, NOW), -1);
-    ASSERT_EQ_INT(output_search_envelope(f, &res, 0, 1, NULL, 0, NULL), -1);
-    ASSERT_EQ_INT(output_search_envelope(f, &res, 0, 1, NULL, 1, NOW), -1);
+    ASSERT_EQ_INT(output_search_data(NULL, &res, 0, 1, NULL, 0, NOW), -1);
+    ASSERT_EQ_INT(output_search_data(f, NULL, 0, 1, NULL, 0, NOW), -1);
+    ASSERT_EQ_INT(output_search_data(f, &res, 0, 1, NULL, 0, NULL), -1);
+    ASSERT_EQ_INT(output_search_data(f, &res, 0, 1, NULL, 1, NOW), -1);
     res.page.count = 1;
-    ASSERT_EQ_INT(output_search_envelope(f, &res, 0, 1, &link, 1, NOW), -1);
+    ASSERT_EQ_INT(output_search_data(f, &res, 0, 1, &link, 1, NOW), -1);
     res.page.count = 0;
     res.keys.items = NULL;
-    ASSERT_EQ_INT(output_search_envelope(f, &res, 0, 1, NULL, 0, NOW), -1);
+    ASSERT_EQ_INT(output_search_data(f, &res, 0, 1, NULL, 0, NOW), -1);
     res.keys.count = 0;
     res.tags.items = NULL;
-    ASSERT_EQ_INT(output_search_envelope(f, &res, 0, 1, NULL, 0, NOW), -1);
+    ASSERT_EQ_INT(output_search_data(f, &res, 0, 1, NULL, 0, NOW), -1);
     assert_written(f, "");
 }
 
@@ -588,23 +566,20 @@ TEST(output_tags_envelope_rejects_missing_arguments)
 {
     FILE *f = given_stream();
 
-    ASSERT_EQ_INT(output_tags_envelope(NULL, NULL, 0), -1);
-    ASSERT_EQ_INT(output_tags_envelope(f, NULL, 1), -1);
+    ASSERT_EQ_INT(output_tags_data(NULL, NULL, 0), -1);
+    ASSERT_EQ_INT(output_tags_data(f, NULL, 1), -1);
     assert_written(f, "");
 }
-
-static const char LINK_T[] = "memory.link.result";
 
 TEST(output_links_write_envelope_rejects_missing_arguments)
 {
     StoreNeighbor link = given_link(SUBJECT_ID, SUBJECT_ID, STORE_EDGE_RELATED);
     FILE *f = given_stream();
 
-    ASSERT_EQ_INT(output_links_write_envelope(NULL, LINK_T, "created", &link, 1, NOW), -1);
-    ASSERT_EQ_INT(output_links_write_envelope(f, NULL, "created", &link, 1, NOW), -1);
-    ASSERT_EQ_INT(output_links_write_envelope(f, LINK_T, NULL, &link, 1, NOW), -1);
-    ASSERT_EQ_INT(output_links_write_envelope(f, LINK_T, "created", &link, 1, NULL), -1);
-    ASSERT_EQ_INT(output_links_write_envelope(f, LINK_T, "created", NULL, 1, NOW), -1);
+    ASSERT_EQ_INT(output_links_write_data(NULL, "created", &link, 1, NOW), -1);
+    ASSERT_EQ_INT(output_links_write_data(f, NULL, &link, 1, NOW), -1);
+    ASSERT_EQ_INT(output_links_write_data(f, "created", &link, 1, NULL), -1);
+    ASSERT_EQ_INT(output_links_write_data(f, "created", NULL, 1, NOW), -1);
     assert_written(f, "");
 }
 
@@ -614,7 +589,7 @@ TEST(output_links_write_envelope_rejects_a_link_without_a_sync_id)
     FILE *f = given_stream();
 
     link.neighbor_sync_id = NULL;
-    ASSERT_EQ_INT(output_links_write_envelope(f, LINK_T, "created", &link, 1, NOW), -1);
+    ASSERT_EQ_INT(output_links_write_data(f, "created", &link, 1, NOW), -1);
     (void)fclose(f);
 }
 
@@ -624,24 +599,21 @@ TEST(output_links_write_envelope_names_both_supersedes_directions)
                              given_link(SUBJECT_ID, NEIGHBOR_ID, STORE_EDGE_SUPERSEDES)};
     FILE *f = given_stream();
 
-    ASSERT_EQ_INT(output_links_write_envelope(f, LINK_T, "created", links, 2, NOW), 0);
+    ASSERT_EQ_INT(output_links_write_data(f, "created", links, 2, NOW), 0);
     assert_written(
-        f,
-        "{\"format\":\"remember-message\",\"version\":1,\"type\":\"memory.link.result\",\"data\":{"
-        "\"action\":\"created\",\"count\":2,\"links\":["
-        "{\"id\":3,\"sync_id\":\"n-3\",\"key\":null,\"type\":\"supersedes\","
-        "\"bin\":\"live\",\"preview\":\"nb\"},"
-        "{\"id\":3,\"sync_id\":\"n-3\",\"key\":null,\"type\":\"superseded_by\","
-        "\"bin\":\"live\",\"preview\":\"nb\"}]}}\n");
+        f, "{\"action\":\"created\",\"count\":2,\"links\":[{\"id\":3,\"sync_id\":\"n-3\",\"key\""
+           ":null,\"type\":\"supersedes\",\"bin\":\"live\",\"preview\":\"nb\"},{\"id\":3,\"sync_"
+           "id\":\"n-3\",\"key\":null,\"type\":\"superseded_by\",\"bin\":\"live\",\"preview\":\""
+           "nb\"}]}");
 }
 
 TEST(output_related_envelope_rejects_missing_arguments)
 {
     FILE *f = given_stream();
 
-    ASSERT_EQ_INT(output_related_envelope(NULL, 1, NULL, NULL, 0, NOW), -1);
-    ASSERT_EQ_INT(output_related_envelope(f, 1, NULL, NULL, 0, NULL), -1);
-    ASSERT_EQ_INT(output_related_envelope(f, 1, NULL, NULL, 1, NOW), -1);
+    ASSERT_EQ_INT(output_related_data(NULL, 1, NULL, NULL, 0, NOW), -1);
+    ASSERT_EQ_INT(output_related_data(f, 1, NULL, NULL, 0, NULL), -1);
+    ASSERT_EQ_INT(output_related_data(f, 1, NULL, NULL, 1, NOW), -1);
     assert_written(f, "");
 }
 
@@ -650,8 +622,8 @@ TEST(output_import_envelope_rejects_missing_arguments)
     StoreImportCounts counts = {0};
     FILE *f = given_stream();
 
-    ASSERT_EQ_INT(output_import_envelope(NULL, &counts), -1);
-    ASSERT_EQ_INT(output_import_envelope(f, NULL), -1);
+    ASSERT_EQ_INT(output_import_data(NULL, &counts), -1);
+    ASSERT_EQ_INT(output_import_data(f, NULL), -1);
     assert_written(f, "");
 }
 
@@ -659,10 +631,10 @@ TEST(output_device_envelopes_reject_missing_arguments)
 {
     FILE *f = given_stream();
 
-    ASSERT_EQ_INT(output_device_envelope(NULL, "d"), -1);
-    ASSERT_EQ_INT(output_device_envelope(f, NULL), -1);
-    ASSERT_EQ_INT(output_device_new_envelope(NULL, "d", NULL), -1);
-    ASSERT_EQ_INT(output_device_new_envelope(f, NULL, NULL), -1);
+    ASSERT_EQ_INT(output_device_data(NULL, "d"), -1);
+    ASSERT_EQ_INT(output_device_data(f, NULL), -1);
+    ASSERT_EQ_INT(output_device_new_data(NULL, "d", NULL), -1);
+    ASSERT_EQ_INT(output_device_new_data(f, NULL, NULL), -1);
     assert_written(f, "");
 }
 
@@ -670,8 +642,8 @@ TEST(output_conflicts_envelope_rejects_missing_arguments)
 {
     FILE *f = given_stream();
 
-    ASSERT_EQ_INT(output_conflicts_envelope(NULL, NULL, 0), -1);
-    ASSERT_EQ_INT(output_conflicts_envelope(f, NULL, 1), -1);
+    ASSERT_EQ_INT(output_conflicts_data(NULL, NULL, 0), -1);
+    ASSERT_EQ_INT(output_conflicts_data(f, NULL, 1), -1);
     assert_written(f, "");
 }
 
@@ -679,9 +651,8 @@ TEST(output_conflicts_envelope_lists_no_conflicts)
 {
     FILE *f = given_stream();
 
-    ASSERT_EQ_INT(output_conflicts_envelope(f, NULL, 0), 0);
-    assert_written(f, "{\"format\":\"remember-message\",\"version\":1,\"type\":\"conflict.list."
-                      "result\",\"data\":{\"count\":0,\"conflicts\":[]}}\n");
+    ASSERT_EQ_INT(output_conflicts_data(f, NULL, 0), 0);
+    assert_written(f, "{\"count\":0,\"conflicts\":[]}");
 }
 
 TEST(output_conflicts_envelope_separates_conflicts_with_a_comma)
@@ -690,13 +661,11 @@ TEST(output_conflicts_envelope_separates_conflicts_with_a_comma)
     FILE *f = given_stream();
 
     rows[1].id = 2;
-    ASSERT_EQ_INT(output_conflicts_envelope(f, rows, 2), 0);
-    assert_written(f, "{\"format\":\"remember-message\",\"version\":1,\"type\":\"conflict.list."
-                      "result\",\"data\":{\"count\":2,\"conflicts\":["
-                      "{\"id\":1,\"sync_id\":\"s-1\",\"reason\":\"key_clash\",\"local\":{},"
-                      "\"incoming\":{},\"created_at\":\"c\"},"
-                      "{\"id\":2,\"sync_id\":\"s-1\",\"reason\":\"key_clash\",\"local\":{},"
-                      "\"incoming\":{},\"created_at\":\"c\"}]}}\n");
+    ASSERT_EQ_INT(output_conflicts_data(f, rows, 2), 0);
+    assert_written(
+        f, "{\"count\":2,\"conflicts\":[{\"id\":1,\"sync_id\":\"s-1\",\"reason\":\"key_clash\","
+           "\"local\":{},\"incoming\":{},\"created_at\":\"c\"},{\"id\":2,\"sync_id\":\"s-1\",\"r"
+           "eason\":\"key_clash\",\"local\":{},\"incoming\":{},\"created_at\":\"c\"}]}");
 }
 
 /* Each field the conflict row needs, missing in turn. The envelope header is
@@ -714,11 +683,11 @@ TEST(output_conflicts_envelope_rejects_an_incomplete_conflict)
     rows[2].local_json = NULL;
     rows[3].incoming_json = NULL;
     rows[4].created_at = NULL;
-    ASSERT_EQ_INT(output_conflicts_envelope(f, &rows[0], 1), -1);
-    ASSERT_EQ_INT(output_conflicts_envelope(f, &rows[1], 1), -1);
-    ASSERT_EQ_INT(output_conflicts_envelope(f, &rows[2], 1), -1);
-    ASSERT_EQ_INT(output_conflicts_envelope(f, &rows[3], 1), -1);
-    ASSERT_EQ_INT(output_conflicts_envelope(f, &rows[4], 1), -1);
+    ASSERT_EQ_INT(output_conflicts_data(f, &rows[0], 1), -1);
+    ASSERT_EQ_INT(output_conflicts_data(f, &rows[1], 1), -1);
+    ASSERT_EQ_INT(output_conflicts_data(f, &rows[2], 1), -1);
+    ASSERT_EQ_INT(output_conflicts_data(f, &rows[3], 1), -1);
+    ASSERT_EQ_INT(output_conflicts_data(f, &rows[4], 1), -1);
     (void)fclose(f);
 }
 
@@ -726,11 +695,8 @@ TEST(output_entries_envelope_lists_no_entries)
 {
     FILE *f = given_stream();
 
-    ASSERT_EQ_INT(output_entries_envelope(f, "conflict.accept.result", "accepted", NULL, 0, NOW),
-                  0);
-    assert_written(f, "{\"format\":\"remember-message\",\"version\":1,\"type\":\"conflict.accept."
-                      "result\",\"data\":{"
-                      "\"action\":\"accepted\",\"count\":0,\"entries\":[]}}\n");
+    ASSERT_EQ_INT(output_entries_data(f, "accepted", NULL, 0, NOW), 0);
+    assert_written(f, "{\"action\":\"accepted\",\"count\":0,\"entries\":[]}");
 }
 
 /* ---- human ---------------------------------------------------------------- */
@@ -1014,14 +980,14 @@ static int write_action_envelope(FILE *f)
 {
     Entry e = given_full_entry();
 
-    return output_action_envelope(f, "memory.update.result", "updated", &e, NOW);
+    return output_action_data(f, "updated", &e, NOW);
 }
 
 static int write_entries_envelope(FILE *f)
 {
     Entry entries[] = {given_full_entry(), given_full_entry()};
 
-    return output_entries_envelope(f, "memory.purge.result", "deleted", entries, 2, NOW);
+    return output_entries_data(f, "deleted", entries, 2, NOW);
 }
 
 static int write_get_envelope(FILE *f)
@@ -1030,14 +996,14 @@ static int write_get_envelope(FILE *f)
     StoreNeighbor links[2];
 
     given_two_links(links);
-    return output_memory_envelope(f, "memory.get.result", NULL, &e, links, 2, NOW);
+    return output_memory_data(f, NULL, &e, links, 2, NOW);
 }
 
 static int write_add_envelope(FILE *f)
 {
     Entry e = given_full_entry();
 
-    return output_memory_envelope(f, "memory.add.result", "created", &e, NULL, 0, NOW);
+    return output_memory_data(f, "created", &e, NULL, 0, NOW);
 }
 
 static int write_list_envelope(FILE *f)
@@ -1046,7 +1012,7 @@ static int write_list_envelope(FILE *f)
     StoreNeighbor links[2];
 
     given_two_links(links);
-    return output_list_envelope(f, 0, 2, 2, 2, entries, links, 2, NOW);
+    return output_list_data(f, 0, 2, 2, 2, entries, links, 2, NOW);
 }
 
 static int write_search_envelope(FILE *f)
@@ -1059,7 +1025,7 @@ static int write_search_envelope(FILE *f)
 
     given_two_links(links);
     res.page = (PageResult){.st = STORE_OK, .entries = entries, .count = 2, .total = 2};
-    return output_search_envelope(f, &res, 0, 2, links, 2, NOW);
+    return output_search_data(f, &res, 0, 2, links, 2, NOW);
 }
 
 static int write_search_facets_human(FILE *f)
@@ -1093,7 +1059,7 @@ static int write_tags_envelope(FILE *f)
 {
     TagCount tags[] = {{.name = (char *)"a", .count = 1}, {.name = (char *)"b", .count = 2}};
 
-    return output_tags_envelope(f, tags, 2);
+    return output_tags_data(f, tags, 2);
 }
 
 static int write_tags_human(FILE *f)
@@ -1108,7 +1074,7 @@ static int write_links_write_envelope(FILE *f)
     StoreNeighbor links[2];
 
     given_two_links(links);
-    return output_links_write_envelope(f, LINK_T, "created", links, 2, NOW);
+    return output_links_write_data(f, "created", links, 2, NOW);
 }
 
 static int write_related_envelope_with_key(FILE *f)
@@ -1116,12 +1082,12 @@ static int write_related_envelope_with_key(FILE *f)
     StoreNeighbor links[2];
 
     given_two_links(links);
-    return output_related_envelope(f, SUBJECT_ID, "k:7", links, 2, NOW);
+    return output_related_data(f, SUBJECT_ID, "k:7", links, 2, NOW);
 }
 
 static int write_related_envelope_without_key(FILE *f)
 {
-    return output_related_envelope(f, SUBJECT_ID, NULL, NULL, 0, NOW);
+    return output_related_data(f, SUBJECT_ID, NULL, NULL, 0, NOW);
 }
 
 static int write_related_human(FILE *f)
@@ -1136,7 +1102,7 @@ static int write_import_envelope(FILE *f)
 {
     StoreImportCounts counts = {.inserted = 1, .updated = 2, .unchanged = 3, .conflicts = 4};
 
-    return output_import_envelope(f, &counts);
+    return output_import_data(f, &counts);
 }
 
 static int write_device_human(FILE *f)
@@ -1146,24 +1112,24 @@ static int write_device_human(FILE *f)
 
 static int write_device_envelope(FILE *f)
 {
-    return output_device_envelope(f, "dev");
+    return output_device_data(f, "dev");
 }
 
 static int write_device_new_envelope_with_previous(FILE *f)
 {
-    return output_device_new_envelope(f, "dev", "old");
+    return output_device_new_data(f, "dev", "old");
 }
 
 static int write_device_new_envelope_without_previous(FILE *f)
 {
-    return output_device_new_envelope(f, "dev", NULL);
+    return output_device_new_data(f, "dev", NULL);
 }
 
 static int write_conflicts_envelope(FILE *f)
 {
     StoreConflict rows[] = {given_conflict(), given_conflict()};
 
-    return output_conflicts_envelope(f, rows, 2);
+    return output_conflicts_data(f, rows, 2);
 }
 
 static int write_rebuilt_json(FILE *f)

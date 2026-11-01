@@ -278,11 +278,11 @@ TEST(facade_search_bad_query_matches_cli)
     free(db);
 }
 
-/* EN-03: the raw_query_ignored warning under --json-errors matches the CLI byte for byte. */
+/* EN-03: the raw_query_ignored warning under --json matches the CLI byte for byte. */
 TEST(facade_search_json_warning_matches_cli)
 {
     char *db = make_temp_db_path();
-    const char *cmd[] = {"--json", "--json-errors", "search", "\"unterminated"};
+    const char *cmd[] = {"--json", "search", "\"unterminated"};
     ASSERT_TRUE(db != NULL);
     seed_three(db);
     assert_read_parity(db, cmd, sizeof(cmd) / sizeof(cmd[0]));
@@ -767,11 +767,11 @@ TEST(facade_device_new_matches_cli)
     free(db2);
 }
 
-/* EN-03: --json-errors not_found bytes match the CLI. */
-TEST(facade_json_errors_not_found_matches_cli)
+/* EN-03: --json not_found bytes match the CLI. */
+TEST(facade_json_not_found_matches_cli)
 {
     char *db = make_temp_db_path();
-    const char *cmd[] = {"--json-errors", "get", "--key", "nope"};
+    const char *cmd[] = {"--json", "get", "--key", "nope"};
     CmdResult sub;
 
     ASSERT_TRUE(db != NULL);
@@ -781,17 +781,17 @@ TEST(facade_json_errors_not_found_matches_cli)
     seed_three(db);
     sub = read_parity(db, cmd, sizeof(cmd) / sizeof(cmd[0]));
     ASSERT_EQ_INT(sub.exit_code, 2);
-    ASSERT_STREQ(sub.out, "");
-    ASSERT_STR_CONTAINS(sub.err, "\"code\":\"not_found\"");
+    ASSERT_STREQ(sub.err, "");
+    ASSERT_STR_CONTAINS(sub.out, "\"code\":\"not_found\"");
     cmd_result_free(&sub);
     free(db);
 }
 
 /* EN-03: a held lock plus --busy-timeout 0 is the same busy line in-process. */
-TEST(facade_busy_json_errors_matches_cli)
+TEST(facade_busy_json_matches_cli)
 {
     char *db = make_temp_db_path();
-    const char *cmd[] = {"--json-errors", "--busy-timeout", "0", "add", "blocked"};
+    const char *cmd[] = {"--json", "--busy-timeout", "0", "add", "blocked"};
     sqlite3 *lock = NULL;
     CmdResult sub;
 
@@ -806,8 +806,8 @@ TEST(facade_busy_json_errors_matches_cli)
     ASSERT_EQ_INT(sqlite3_exec(lock, "ROLLBACK;", NULL, NULL, NULL), SQLITE_OK);
     (void)sqlite3_close(lock);
     ASSERT_EQ_INT(sub.exit_code, 1);
-    ASSERT_STREQ(sub.out, "");
-    ASSERT_STR_CONTAINS(sub.err, "\"code\":\"busy\"");
+    ASSERT_STREQ(sub.err, "");
+    ASSERT_STR_CONTAINS(sub.out, "\"code\":\"busy\"");
     cmd_result_free(&sub);
     free(db);
 }
@@ -815,8 +815,8 @@ TEST(facade_busy_json_errors_matches_cli)
 TEST(facade_update_stale_matches_cli)
 {
     char *db = make_temp_db_path();
-    const char *cmd[] = {"--json-errors",        "update", "1",    "--if-version-vector",
-                         "{\"other-device\":1}", "--text", "newer"};
+    const char *cmd[] = {"--json", "update", "1", "--if-version-vector", "{\"other-device\":1}",
+                         "--text", "newer"};
     CmdResult sub;
 
     ASSERT_TRUE(db != NULL);
@@ -826,15 +826,16 @@ TEST(facade_update_stale_matches_cli)
     seed_three(db);
     sub = read_parity(db, cmd, sizeof(cmd) / sizeof(cmd[0]));
     ASSERT_EQ_INT(sub.exit_code, 1);
-    ASSERT_STREQ(sub.out, "");
+    ASSERT_STREQ(sub.err, "");
+    ASSERT_STR_CONTAINS(sub.out, "\"code\":\"stale\"");
     cmd_result_free(&sub);
     free(db);
 }
 
 void register_facade_tests(void)
 {
-    RUN_TEST(facade_json_errors_not_found_matches_cli);
-    RUN_TEST(facade_busy_json_errors_matches_cli);
+    RUN_TEST(facade_json_not_found_matches_cli);
+    RUN_TEST(facade_busy_json_matches_cli);
     RUN_TEST(facade_list_matches_cli);
     RUN_TEST(facade_list_sort_since_matches_cli);
     RUN_TEST(facade_search_matches_cli);

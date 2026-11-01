@@ -153,8 +153,7 @@ static int emit_add_json(Store *s, StoreAddAction action, const Entry *entry, co
         return -1;
     }
     cmd_neighbors_drop_deleted(links, &nlinks, now);
-    rc = output_memory_envelope(app_out(), "memory.add.result", action_name(action), entry, links,
-                                nlinks, now);
+    rc = output_memory_data(app_out(), action_name(action), entry, links, nlinks, now);
     store_neighbors_free(links, nlinks);
     if (rc != 0) {
         err_msg(DIAG_INTERNAL, "failed to write output");

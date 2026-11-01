@@ -401,7 +401,7 @@ static void assert_sort_rejected(const char *db, const char *token)
 TEST(list_sort_rejects_a_bad_value)
 {
     char *db = make_temp_db_path();
-    const char *json[] = {"--json-errors", "list", "--sort", "bogus"};
+    const char *json[] = {"--json", "list", "--sort", "bogus"};
     const char *huge = "uuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuu";
     CmdResult r;
 
@@ -418,9 +418,12 @@ TEST(list_sort_rejects_a_bad_value)
     assert_sort_rejected(db, huge);
     r = run_remember(db, json, sizeof(json) / sizeof(json[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 1);
-    ASSERT_STREQ(r.out, "");
-    ASSERT_STREQ(r.err, "{\"version\":1,\"error\":{\"code\":\"usage\",\"message\":\"invalid --sort "
-                        "(use updated or created)\"}}\n");
+    ASSERT_STREQ(r.err, "");
+    ASSERT_STREQ(
+        r.out,
+        "{\"format\":\"remember-message\",\"version\":1,\"type\":\"memory.list.result\",\"err"
+        "or\":{\"code\":\"usage\",\"message\":\"invalid --sort (use updated or created)\",\"f"
+        "ix\":\"Run 'remember list --help' to see how to use it.\",\"retryable\":false}}\n");
     cmd_result_free(&r);
     free(db);
 }
@@ -619,7 +622,7 @@ static void assert_timestamp_rejected(const char *db, const char *flag, const ch
 TEST(list_rejects_a_bad_timestamp)
 {
     char *db = make_temp_db_path();
-    const char *json[] = {"--json-errors", "list", "--since", "now"};
+    const char *json[] = {"--json", "list", "--since", "now"};
     char huge[HUGE_TS_LEN + 1];
     char want[HUGE_ERR_BUF];
     const char *huge_args[] = {"list", "--since", huge};
@@ -652,9 +655,12 @@ TEST(list_rejects_a_bad_timestamp)
     cmd_result_free(&r);
     r = run_remember(db, json, sizeof(json) / sizeof(json[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 1);
-    ASSERT_STREQ(r.out, "");
-    ASSERT_STREQ(r.err, "{\"version\":1,\"error\":{\"code\":\"usage\",\"message\":\"invalid "
-                        "timestamp: now\"}}\n");
+    ASSERT_STREQ(r.err, "");
+    ASSERT_STREQ(
+        r.out,
+        "{\"format\":\"remember-message\",\"version\":1,\"type\":\"memory.list.result\",\"err"
+        "or\":{\"code\":\"usage\",\"message\":\"invalid timestamp: now\",\"fix\":\"Run 'remem"
+        "ber list --help' to see how to use it.\",\"retryable\":false}}\n");
     cmd_result_free(&r);
     free(db);
 }
@@ -663,7 +669,7 @@ TEST(list_rejects_a_bad_timestamp)
 TEST(list_rejects_a_newline_timestamp_as_one_json_line)
 {
     char *db = make_temp_db_path();
-    const char *args[] = {"--json-errors", "list", "--since", "bad\ninjected"};
+    const char *args[] = {"--json", "list", "--since", "bad\ninjected"};
     CmdResult r;
 
     ASSERT_TRUE(db != NULL);
@@ -672,9 +678,12 @@ TEST(list_rejects_a_newline_timestamp_as_one_json_line)
     }
     r = run_remember(db, args, sizeof(args) / sizeof(args[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 1);
-    ASSERT_STREQ(r.out, "");
-    ASSERT_STREQ(r.err, "{\"version\":1,\"error\":{\"code\":\"usage\",\"message\":\"invalid "
-                        "timestamp: bad\\ninjected\"}}\n");
+    ASSERT_STREQ(r.err, "");
+    ASSERT_STREQ(
+        r.out,
+        "{\"format\":\"remember-message\",\"version\":1,\"type\":\"memory.list.result\",\"err"
+        "or\":{\"code\":\"usage\",\"message\":\"invalid timestamp: bad\\ninjected\",\"fix\":"
+        "\"Run 'remember list --help' to see how to use it.\",\"retryable\":false}}\n");
     cmd_result_free(&r);
     free(db);
 }

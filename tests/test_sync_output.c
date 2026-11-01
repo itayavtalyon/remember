@@ -218,7 +218,9 @@ TEST(trash_alias_expired_deprecation_skips_deleted)
 
     r = run_remember(db, lst_trash, sizeof(lst_trash) / sizeof(lst_trash[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 0);
-    ASSERT_STR_CONTAINS(r.err, "remember: warning: --trash is deprecated; use --expired");
+    ASSERT_STREQ(r.err, "");
+    ASSERT_STR_CONTAINS(r.out, "\"warnings\":[{\"code\":\"deprecated_flag\","
+                               "\"message\":\"--trash is deprecated; use --expired\"}]}\n");
     ASSERT_STR_CONTAINS(r.out, "old");
     ASSERT_STR_NOT_CONTAINS(r.out, "fresh");
     cmd_result_free(&r);

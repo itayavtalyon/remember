@@ -460,8 +460,8 @@ static int emit_entry_page(bool json, size_t offset, size_t limit, size_t count,
     size_t i = 0;
 
     if (json) {
-        return output_list_envelope(app_out(), offset, limit, count, total, entries, links, nlinks,
-                                    now);
+        return output_list_data(app_out(), offset, limit, count, total, entries, links, nlinks,
+                                now);
     }
     for (i = 0; i < count; i++) {
         if (output_entry_human_line(app_out(), &entries[i], links, nlinks, now) != 0) {
@@ -476,8 +476,8 @@ static int emit_search(bool json, const ListQuery *filters, const SearchResult *
                        const StoreNeighbor *links, size_t nlinks, const char *now)
 {
     if (json) {
-        return output_search_envelope(app_out(), res, filters->offset, filters->limit, links,
-                                      nlinks, now);
+        return output_search_data(app_out(), res, filters->offset, filters->limit, links, nlinks,
+                                  now);
     }
     if (output_search_facets_human(app_out(), res) != 0) {
         return -1;
