@@ -6,11 +6,9 @@ Make every CLI `--json` response one `remember-message` version 1. Rename memory
 
 ## Status
 
-PENDING COPY.
+Copy approved 2026-10-25. Print the C-01 locator line, the Trash and expired wrong-list lines, and C-35 from [`COPY-PENDING.md`](COPY-PENDING.md). Help for `--color` and `--quiet` is C-02. Do not invent a sentence past that file.
 
-Plain text that Design locks may be implemented. `--json` `error.fix` for a one-sentence error waits on COPY-PENDING C-01. The `unknown_field` warning waits on C-35. Do not invent either string.
-
-This plan is not ready as a whole. The field list, the write table, and the flag removals are specified.
+The field list, the write table, and the flag removals are specified. This plan starts after plan 19.
 
 ## Source of truth
 
@@ -28,7 +26,7 @@ Envelope field order: `format`, `version`, `type`, `request_id`, then `data` or 
 
 No envelope `id`. No `type` `error`. A failed response keeps `<noun>.<verb>.result` and has `error` instead of `data`. Never both. Never null. When the CLI cannot tell the command, `type` is `unknown.result`.
 
-`error` has `code`, `message`, `fix`, `retryable`, and optional `detail`. `fix` is a non-empty string. For a code whose message and fix are already split in a merged plan (plan 16 catalog) or in ST-3.6, keep that split. For a new one-sentence line, wait on C-01.
+`error` has `code`, `message`, `fix`, `retryable`, and optional `detail`. `fix` is a non-empty string. For a code whose message and fix are already split in a merged plan (plan 16 catalog), in ST-3.6, or in COPY-PENDING C-01, keep that split.
 
 `warnings` appears only when it has one or more items. Each item has `code`, `message`, and optional `detail`. With `--json`, warnings and failures go only to the stdout envelope. stderr is empty. Plain mode keeps `remember: …` on stderr. Delete `--json-errors`. There is no replacement flag.
 
@@ -40,7 +38,7 @@ Search `data` has `count`, `entries`, `total`, `query`, `ranked_by`, `filters`, 
 
 A memory id is `id`: lowercase hyphenated UUID v7, no prefix. A prefixed form such as `mem_…` or a brace form fails with `invalid_argument`. The integer is `local_id`. Only CLI output includes `local_id`. HTTP, MCP, plugin messages, events, and export files do not. Plan 22 omits it.
 
-A CLI locator is the positional argument or `--key KEY`. The positional accepts a UUID, matched as `id`, or digits, matched as `local_id`. Anything else fails with `invalid_argument`. The plain line is `"abc" isn't a memory id. Use a UUID, a number from 'remember list', or --key.` Put the actual token in place of `abc`. Delete `--id`, `--local-id`, and `--sync-id`. Delete the field `sync_id`. Delete the env name `REMEMBER_SYNC_ID`. No alias.
+A CLI locator is the positional argument or `--key KEY`. The positional accepts a UUID, matched as `id`, or digits, matched as `local_id`. Anything else fails with `invalid_argument`. The plain line, message, and fix are the C-01 positional-locator row. `<value>` is the token the user typed. Delete `--id`, `--local-id`, and `--sync-id`. Delete the field `sync_id`. Delete the env name `REMEMBER_SYNC_ID`. No alias.
 
 `get`, `add`, `update`, and `rekey` return `data.memory`. A list returns `data.entries` and `data.count`. `add` output includes `links`, the same fields as `get`.
 
@@ -50,7 +48,7 @@ Actors. A memory has `created_by` and `updated_by`. Each is `{kind, id}`. `kind`
 - `--as KIND` replaces `kind`. Allowed input: `human`, `agent`, `tool`, `share`. Not `sync`. Not `import`.
 - `--actor ID` replaces only `id`. `ID` is 1 to 64 characters of `[A-Za-z0-9_./:-]`. `--as` does not clear `--actor`.
 - `--as` replaces the old `--source` flag. Delete `--source`.
-- Every plugin write, including a hook, is `{kind: tool, id: plugin/<name>/<entry>}`. A hook id is `plugin/<name>/run`. Plan 25 stamps those writes. This plan rejects `--as` and `--actor` when `REMEMBER_HOOK_DEPTH` is 1 or more, with `invalid_argument`. The sentence waits on C-01.
+- Every plugin write, including a hook, is `{kind: tool, id: plugin/<name>/<entry>}`. A hook id is `plugin/<name>/run`. Plan 25 stamps those writes. This plan rejects `--as` and `--actor` when `REMEMBER_HOOK_DEPTH` is 1 or more, with `invalid_argument`. That sentence is not written. Do not invent it. The copy editor writes it. It is the same hole plan 20 names. The code stays `invalid_argument`.
 - Import keeps the file `created_by` and sets `updated_by` to `{kind: import, id: null}` on each memory row it writes. Plan 23 does that write. This plan stores the columns and the rule. Settings import is different and is plan 20.
 - Sync keeps the author's `created_by` and `updated_by`.
 
@@ -90,7 +88,7 @@ Wrong list, exit 3. Use the key when the row has one, otherwise the id:
 - `remember: "<key>" is in the Trash. Add --trash to use it.`
 - `remember: "<key>" has expired. Add --expired to use it.`
 
-`purge-trash` does not exist. Do not add `empty --trash`. Purge of one live row is plan 25 and uses `"<key>" is live. Delete it first, then purge it.`
+`purge-trash` does not exist. Do not add `empty --trash`. Purge of one live row is plan 25. It prints the C-01 `wrong_bin` row.
 
 `delete --deleted` does not exist. Restore from Trash is `update --trash --undelete`.
 
@@ -100,7 +98,7 @@ Color and quiet (H-16.10). Apply them in this plan because they wrap every comma
 - Status is a word. Do not print checkmarks. Do not encode meaning by color alone.
 - Progress goes to stderr only, when stderr is a TTY, as whole lines, at most once a second, with no spinner. `--quiet` turns it off. Progress is never in stdout and never in `--json`.
 - Prompts echo typed input.
-- `--color` and `--quiet` are global, listed with `--db`, `--json`, `--strict`, `--busy-timeout`, and `--no-create`. Help sentences for `--color` and `--quiet` are C-02. List the flags. Do not invent the help sentences. Use the flag name alone until C-02 is approved.
+- `--color` and `--quiet` are global, listed with `--db`, `--json`, `--strict`, `--busy-timeout`, and `--no-create`. Help sentences for `--color` and `--quiet` are C-02. Print them.
 
 Hook help lines, exact, even though the flags act in plan 25:
 
@@ -113,7 +111,7 @@ Accept the flags in the parser now. Plan 25 implements their delivery effect. Un
 
 `REMEMBER_TEST_FIXED_IDS=1` makes ids and timestamps predictable in a test build. A release build ignores the variable.
 
-An unknown field is an error in `plugin.json` `run`, `permissions`, and `filter` (plan 25). Everywhere else it is a warning `unknown_field`, once per file or stream. The plain line is C-35. Do not emit the warning until C-35 is approved. Do not silently ignore the field either. Until C-35, reject the stage that prints it, and do not drop the field without a warning. Practical rule for this plan: do not add new unknown-field behavior in CLI JSON parsers beyond what plan 16 already does, until C-35 names the line. Export and import files are plans 22 and 23.
+An unknown field is an error in `plugin.json` `run`, `permissions`, and `filter` (plan 25). Everywhere else it is a warning `unknown_field`, once per file or stream. The plain lines are C-35. Print them. Do not silently ignore the field. Export and import files are plans 22 and 23.
 
 ## Locked decisions
 
@@ -174,12 +172,12 @@ Tests: update `tests/test_errors.c` and the search and store tests that still ex
 
 1. Write a red test that a `get --json` object has `format`, `version`, and `type` in that order and has `data.memory`. Then change `output.c`. Keep one writer.
 2. Remove `--json-errors`, `--offset`, `--sync-id`, `--id`, and `--local-id`. Update the plan 16 and plan 18 tests that cited them. Point those tests at the stdout envelope.
-3. Change the positional locator. Assert the locked plain line. Do not assert `error.fix` until C-01.
+3. Change the positional locator. Assert the C-01 plain line, message, and fix.
 4. Delete `source` from memory JSON. Add `created_by` and `updated_by` on new writes. Replace `--source` with `--as` and add `--actor`. Apply the write table to add, update, delete, restore, link, unlink, rekey, and purge.
 5. Change `--trash` and add the locked warning and the locked wrong-list lines. Delete `purge-trash`.
 6. Add `remember brain new-id` with the locked JSON object.
-7. Add `--color` and `--quiet` as globals. Do not write help sentences until C-02.
-8. Stop the `unknown_field` work until C-35. Do not drop unknown fields silently in new parsers.
+7. Add `--color` and `--quiet` as globals. Use the C-02 help lines.
+8. Emit `unknown_field` with the C-35 lines. Do not drop unknown fields silently in new parsers.
 
 Each stage: one red test, then the change, then the gate, then review.
 
@@ -203,7 +201,7 @@ Same loop as plan 19. Load `standard:coding` and the review keys. Docs: [`docs/S
 
 Branch from clean `main` after plan 19. One branch. One pull request.
 
-Do not invent `error.fix`, an `unknown_field` sentence, a page size, or a copy-detection rule.
+Do not invent `error.fix`, an `unknown_field` sentence, a page size, or a copy-detection rule. The approved lines are C-01, C-02, and C-35.
 
 Quality gate: the plan 19 commands. Coverage 100/100.
 
@@ -212,7 +210,7 @@ Quality gate: the plan 19 commands. Coverage 100/100.
 - [ ] Must-pass rows for this plan are green.
 - [ ] `--json-errors`, `--offset`, `--sync-id`, `--source`, and `purge-trash` are gone from the CLI and from tests.
 - [ ] Plan files 16, 17, 17a, 18, 18b, and 18c are unchanged.
-- [ ] `--json` `fix` values are either previously locked splits or approved C-01 text.
+- [ ] `--json` `fix` values are previously locked splits or the approved C-01 text.
 - [ ] Open still does not implement JE-3.10.
 - [ ] Gate green. Second review clear. INDEX ticked only then.
 

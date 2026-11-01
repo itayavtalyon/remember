@@ -24,6 +24,21 @@ if [[ -z "$ROOT" ]]; then
 fi
 cd "$ROOT"
 
+# Docs-only pushes skip CI, like the GitHub linux/macos jobs. Files come from
+# commits not yet on any remote; -m lists merge commits against each parent.
+# stdin: <local ref> <local sha> <remote ref> <remote sha>, one line per ref.
+code=0
+while read -r _ local_sha _ _; do
+  [[ "$local_sha" =~ ^0+$ ]] && continue # ref deletion
+  if git log --format= --name-only -m "$local_sha" --not --remotes | ./scripts/touches-code.sh; then
+    code=1
+  fi
+done
+if [[ "$code" == 0 ]]; then
+  echo "pre-push: docs-only push — skipping ./scripts/ci-linux.sh" >&2
+  exit 0
+fi
+
 if [[ ! -x ./scripts/ci-linux.sh ]]; then
   echo "pre-push: missing executable ./scripts/ci-linux.sh" >&2
   exit 1

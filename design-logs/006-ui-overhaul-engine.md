@@ -1,7 +1,7 @@
 # 006 - Engine changes for the Fortkeeps UI overhaul (0.3.0)
 
 **Status:** Design (closed 2026-10-11, amended 2026-10-12)
-**Changes:** 2026-10-25 (Itay, D-04): the settings bytes of `remember export` and of `remember import` are log 007 ST-8.3 and ST-8.3a. E6.a (the `settings` member), E6.b (`settings.json`), E6.c (the `#settings` row), E7.8, E7.11, E7.12, E12.9 and the E7.6 `prefixes_merged` field are superseded by log 007.
+**Changes:** 2026-10-25 (Itay, D-04): the settings bytes of `remember export` and of `remember import` are log 007 ST-8.3 and ST-8.3a. E6.a (the `settings` member), E6.b (`settings.json`), E6.c (the `#settings` row), E7.8, E7.11, E7.12, E12.9 and the E7.6 `prefixes_merged` field are superseded by log 007. 2026-10-26 (Itay; decided 2026-10-21, log 007 ST-5.4, D-01): bucket prefixes have no count limit. The cap of 8, `too many bucket prefixes (max 8)`, `n ≤ 8` and the E12.7 overflow are superseded. A bad shape or a duplicate is `setting_invalid_value` on set and import, and the warning `setting_invalid` (row skipped) in sync.
 **Author:** Itay (+ agent facilitation)
 **Created:** 2026-10-11
 
@@ -47,7 +47,7 @@ shape this log:
   `database error` prefix and adds cause and fix; JSON adds `detail` (Rounds 5–6).
 - Engine additions accepted: `--no-create`, `--busy-timeout`, `repair search-index`,
   `detail.reason`, `detail.fts_only`, a test-only failing VFS shim (Round 7).
-- Bucket prefixes live in the brain as an add-wins set with tombstones, cap 8 (Q7, Q20).
+- Bucket prefixes live in the brain as an add-wins set with tombstones, cap 8 (Q7, Q20). *(Superseded 2026-10-26: no count limit, log 007 ST-5.4.)*
 - E5, E9 and E10 ship in 0.3.0. E11 keeps only the Android presets (the apps compile the C
   sources for iOS through SwiftPM).
 - E2.6 JSON order: `keys` and `tags` go before `entries` (Itay, Round 7), an exception to
@@ -263,13 +263,13 @@ shape this log:
 
 - E12.2. A prefix is live when `removed_at IS NULL OR added_at >= removed_at`. A row that is not live is a tombstone. Tombstones are kept.
 - E12.3. With an empty table, `config get` reports `project:`, `status:` with `"default":true` and writes nothing. The first write stores those defaults with `added_at = "1970-01-01T00:00:00.000Z"`, then applies E12.5, in that same transaction.
-- E12.4. A prefix is 1–32 code points of `\p{L}`, `\p{Nd}`, `-`, `_`, `.`, then one `:`. ASCII folds to lowercase. Errors exit 1 with code `usage`: `invalid bucket prefix: <p>`, `duplicate bucket prefix: <p>`, `too many bucket prefixes (max 8)`.
-- E12.5. `config set bucket-prefixes P1 … Pn` (n ≤ 8; `--clear` = an empty list), in one transaction with now = the current time:
+- E12.4. A prefix is 1–32 code points of `\p{L}`, `\p{Nd}`, `-`, `_`, `.`, then one `:`. ASCII folds to lowercase. Errors exit 1 with code `usage`: `invalid bucket prefix: <p>`, `duplicate bucket prefix: <p>`, `too many bucket prefixes (max 8)`. *(Superseded 2026-10-26 by log 007 ST-5.4: no count limit; a bad shape or a duplicate is `setting_invalid_value` on set and import, and the warning `setting_invalid`, skipping the row, in sync.)*
+- E12.5. `config set bucket-prefixes P1 … Pn` (any n; `--clear` = an empty list; the `n ≤ 8` cap is superseded 2026-10-26 by log 007 ST-5.4), in one transaction with now = the current time:
   1. Each Pi that is not live gets `added_at = now` and `device_id = local`.
   2. Each visible live prefix not in the list gets `removed_at = now` and `device_id = local`. Overflow prefixes are not touched.
   3. `settings.bucket_prefix_order` becomes `[P1 … Pn]` with `updated_at = now`.
 - E12.6. Merge (import, later sync): for each prefix in the union, `added_at = max`, `removed_at = max` (NULL is lowest), `device_id` from the side of the later timestamp (ties: the larger device id). The order with the later `updated_at` wins (ties: local). No conflict rows. `prefixes_merged` is true when any row or the order changed.
-- E12.7. The effective list is computed on every read: start from `bucket_prefix_order` without non-live entries; append live prefixes missing from it by `added_at`, then prefix; when more than 8 are live, keep the 8 earliest-added in that order and report the rest as `overflow`. Removing a visible prefix lets the earliest-added overflow prefix fill the slot at the end.
+- E12.7. The effective list is computed on every read: start from `bucket_prefix_order` without non-live entries; append live prefixes missing from it by `added_at`, then prefix; when more than 8 are live, keep the 8 earliest-added in that order and report the rest as `overflow`. Removing a visible prefix lets the earliest-added overflow prefix fill the slot at the end. *(The 8 cap and overflow are superseded 2026-10-26 by log 007 ST-5.4: no count limit. 007 §10 step 2 uses this rule only to order the migrated list, with every live prefix kept.)*
 - E12.8. `config get bucket-prefixes --json`: `{"version":1,"name":"bucket_prefixes","value":[…],"overflow":[…],"updated_at":"…Z"|null,"default":bool}`. Human output: one prefix per line, then `(not shown: x:, y:)` when overflow is not empty.
 - E12.9. Export writes `settings.bucket_prefixes = {"order":{"value":[…],"updated_at":"…Z"},"items":[{"prefix","added_at","removed_at","device_id"}]}` with tombstones. *(Superseded by log 007 ST-5.4 and ST-8.3, 2026-10-25, D-04. Export never writes this object.)*
 

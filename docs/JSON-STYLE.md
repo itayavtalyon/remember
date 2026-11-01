@@ -293,7 +293,7 @@ Event (hook stdin, plugin socket, webhook):
 ### 1.17 JSON Lines for logs and streams
 
 - Logs (`<brain>.d/hooks.log`) and streams (the plugin socket, `plugin log --follow --json`) use JSON Lines.
-- A stream line is a full envelope. `plugin log --follow --json` emits `type` `plugin.run` for a run record and `plugin.stderr` (`data {plugin, line, at}`) for a stderr line (010 H-15.3, PP R9.28).
+- A stream line is a full envelope. `plugin log --follow --json` emits `type` `plugin.run` for a run record and `plugin.stderr` (`data {plugin, line, at}`) for a stderr line (010 H-15.3, PP R9.28). A `skipped_source` record is also a `plugin.run` line, with no separate type (2026-10-26).
 - A record in the log file is a file line, not a message, and carries `version` only.
 - `--json --pretty` is for humans only.
 
