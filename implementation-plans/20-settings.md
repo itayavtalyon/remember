@@ -288,6 +288,7 @@ Assert stored rows, codes, exits, locked sentences, and the ST-7.11b success JSO
 7. Add `settings export` as the ST-8.1 document. Test 007-11 at the file level.
 8. Add import merge per ST-8.4 through ST-8.7. Assert that a bad value or an unknown key skips only that row with its warning code, and that the other rows are written. Do not assert C-12 sentences.
 9. After the copy rows are approved (D-01 and D-03 are answered), add the remaining sentences and the success payloads exactly as those answers state. Then tick the matching tests.
+10. Spec (`decision:2026-11-01-legacy-plans-spec-step`). Do this stage last, also when stage 9 has not started, and before `.claude/WHOLE_PLAN_REVIEW`. Merge `origin/main` first, so `specs/` exists. Write `specs/SETTINGS.md`. Describe only the behavior this branch ships: the registry and the key grammar, the layers and the resolution order, the user.db path, history and tombstones, the token callback and the credential helper, the `settings` commands with their flags and JSON fields, and export and import. Each section names the `decision:settings-*` keys it describes (`remember --json list --tag subject:settings`). When no key exists, name the 007 ST section. Do not put a sentence that is still open in COPY-PENDING into the spec. Move the Settings row in `specs/README.md` from "Not written yet" to "Specs". Set `state:implemented` on each `subject:settings` decision this plan built, per `workflow:decision-tags`. This stage has no red test. The whole-plan review checks the spec against the code.
 
 Each stage's definition of done: one red test first, the gate green, review closed, then the next stage.
 
@@ -318,6 +319,7 @@ SQLite only in `store_sqlite.c`. Pure logic in `settings.c` has no I/O. Write CL
 - [ ] Stages 5, 6, and 8 assert codes and stored rows only.
 - [ ] Stage 9 has not started, or every blocking COPY-PENDING and DESIGN-PENDING row it needs is approved and quoted in this plan.
 - [ ] No `config` command, no add-wins, no `remember.search.hybrid`, no plugin budget keys.
+- [ ] `specs/SETTINGS.md` describes what this branch ships, and `specs/README.md` lists it (stage 10).
 - [ ] Gate green on the committed tree.
 - [ ] Second review has no open blocking item.
 - [ ] INDEX row 20 is ticked only when stage 9 is done and the review is closed. Until then the row stays pending.
