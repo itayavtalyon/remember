@@ -449,6 +449,9 @@ add_test(NAME store_asan_gate
 add_test(NAME install_skill
     COMMAND bash "${CMAKE_SOURCE_DIR}/tests/test_install_skill.sh"
 )
+add_test(NAME spec_drift
+    COMMAND bash "${CMAKE_SOURCE_DIR}/tests/test_spec_drift.sh"
+)
 if(REMEMBER_TEST_VFS)
     add_test(NAME no_shim_symbols
         COMMAND bash "${CMAKE_SOURCE_DIR}/tests/test_no_shim.sh"
