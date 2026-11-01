@@ -45,8 +45,8 @@ TEST(add_key_upsert_same_id_replaces_body)
     ASSERT_EQ_INT(r1.exit_code, 0);
     ASSERT_EQ_INT(r2.exit_code, 0);
     ASSERT_STR_CONTAINS(r2.out, "\"action\":\"updated\"");
-    ASSERT_STR_CONTAINS(r1.out, "\"id\":1");
-    ASSERT_STR_CONTAINS(r2.out, "\"id\":1");
+    ASSERT_STR_CONTAINS(r1.out, "\"local_id\":1");
+    ASSERT_STR_CONTAINS(r2.out, "\"local_id\":1");
     cmd_result_free(&r1);
     cmd_result_free(&r2);
     g = run_remember(db, gargs, sizeof(gargs) / sizeof(gargs[0]), NULL);
@@ -71,7 +71,7 @@ TEST(add_key_changed_body_shows_the_bumped_vector)
     ASSERT_EQ_INT(r1.exit_code, 0);
     ASSERT_EQ_INT(r2.exit_code, 0);
     ASSERT_STR_CONTAINS(r1.out, "\":1}");
-    ASSERT_STR_CONTAINS(r2.out, "\"id\":1");
+    ASSERT_STR_CONTAINS(r2.out, "\"local_id\":1");
     ASSERT_STR_CONTAINS(r2.out, "\"action\":\"updated\"");
     ASSERT_STR_CONTAINS(r2.out, "\":2}");
     cmd_result_free(&r1);
@@ -142,8 +142,8 @@ TEST(keyed_entries_may_share_body_text)
     r2 = run_remember(db, a2, sizeof(a2) / sizeof(a2[0]), NULL);
     ASSERT_EQ_INT(r1.exit_code, 0);
     ASSERT_EQ_INT(r2.exit_code, 0);
-    ASSERT_STR_CONTAINS(r1.out, "\"id\":1");
-    ASSERT_STR_CONTAINS(r2.out, "\"id\":2");
+    ASSERT_STR_CONTAINS(r1.out, "\"local_id\":1");
+    ASSERT_STR_CONTAINS(r2.out, "\"local_id\":2");
     cmd_result_free(&r1);
     cmd_result_free(&r2);
     l = run_remember(db, largs, sizeof(largs) / sizeof(largs[0]), NULL);

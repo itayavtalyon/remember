@@ -15,10 +15,8 @@
 typedef struct {
     const char *from_id_raw;
     const char *from_key_raw;
-    const char *from_sync_id_raw;
     const char *to_id_raw;
     const char *to_key_raw;
-    const char *to_sync_id_raw;
     const char *kind_raw;
     const char *pos[2];
     CmdBinOpts bins;
@@ -71,15 +69,6 @@ static int handle_pair_flag(const char *arg, int *i, int rest_argc, const char *
         out->from_key_raw = taken.value;
         return 1;
     }
-    if (strcmp(arg, "--from-sync-id") == 0) {
-        TakeValue taken = take_value(i, rest_argc, rest_argv, "missing value for --from-sync-id");
-        if (taken.rc != 0) {
-            err_msg(DIAG_USAGE, taken.err);
-            return -1;
-        }
-        out->from_sync_id_raw = taken.value;
-        return 1;
-    }
     if (strcmp(arg, "--to") == 0) {
         TakeValue taken = take_value(i, rest_argc, rest_argv, "missing value for --to");
         if (taken.rc != 0) {
@@ -96,15 +85,6 @@ static int handle_pair_flag(const char *arg, int *i, int rest_argc, const char *
             return -1;
         }
         out->to_key_raw = taken.value;
-        return 1;
-    }
-    if (strcmp(arg, "--to-sync-id") == 0) {
-        TakeValue taken = take_value(i, rest_argc, rest_argv, "missing value for --to-sync-id");
-        if (taken.rc != 0) {
-            err_msg(DIAG_USAGE, taken.err);
-            return -1;
-        }
-        out->to_sync_id_raw = taken.value;
         return 1;
     }
     if (strcmp(arg, "--kind") == 0) {
@@ -157,11 +137,10 @@ static int parse_pair_args(int rest_argc, const char **rest_argv, PairParse *out
     return 0;
 }
 
-/* One endpoint locator: exactly one of id / key / sync_id. */
+/* One endpoint locator: exactly one of id / key. */
 typedef struct {
     const char *id_raw;
     const char *key_raw;
-    const char *sync_id_raw;
 } EndRef;
 
 static int end_form_count(EndRef ref)
@@ -174,18 +153,13 @@ static int end_form_count(EndRef ref)
     if (ref.key_raw != NULL) {
         n++;
     }
-    if (ref.sync_id_raw != NULL) {
-        n++;
-    }
     return n;
 }
 
 static int pair_apply_sugar(PairParse *p)
 {
-    EndRef from = {
-        .id_raw = p->from_id_raw, .key_raw = p->from_key_raw, .sync_id_raw = p->from_sync_id_raw};
-    EndRef to = {
-        .id_raw = p->to_id_raw, .key_raw = p->to_key_raw, .sync_id_raw = p->to_sync_id_raw};
+    EndRef from = {.id_raw = p->from_id_raw, .key_raw = p->from_key_raw};
+    EndRef to = {.id_raw = p->to_id_raw, .key_raw = p->to_key_raw};
 
     if (p->npos == 2) {
         if (end_form_count(from) != 0 || end_form_count(to) != 0) {
@@ -198,12 +172,10 @@ static int pair_apply_sugar(PairParse *p)
         err_msg(DIAG_USAGE, "missing --from/--to (or two ids)");
         return -1;
     }
-    from = (EndRef){
-        .id_raw = p->from_id_raw, .key_raw = p->from_key_raw, .sync_id_raw = p->from_sync_id_raw};
-    to = (EndRef){
-        .id_raw = p->to_id_raw, .key_raw = p->to_key_raw, .sync_id_raw = p->to_sync_id_raw};
+    from = (EndRef){.id_raw = p->from_id_raw, .key_raw = p->from_key_raw};
+    to = (EndRef){.id_raw = p->to_id_raw, .key_raw = p->to_key_raw};
     if (end_form_count(from) != 1 || end_form_count(to) != 1) {
-        err_msg(DIAG_USAGE, "each end needs exactly one of id, --key, or --sync-id");
+        err_msg(DIAG_USAGE, "each end needs exactly one of id or --key");
         return -1;
     }
     return 0;
@@ -215,17 +187,7 @@ static int resolve_end(Store *s, EndRef ref, bool include_deleted, long long *ou
     StoreStatus st = STORE_OK;
 
     memset(&e, 0, sizeof(e));
-    if (ref.sync_id_raw != NULL) {
-        if (store_sync_id_is_canonical(ref.sync_id_raw) == 0) {
-            err_msg(DIAG_USAGE, "invalid sync-id");
-            return REMEMBER_ERR;
-        }
-        if (include_deleted) {
-            st = store_get_row_by_sync_id(s, ref.sync_id_raw, &e);
-        } else {
-            st = store_get_any_by_sync_id(s, ref.sync_id_raw, &e);
-        }
-    } else if (ref.key_raw != NULL) {
+    if (ref.key_raw != NULL) {
         char key_norm[REMEMBER_TOKEN_MAX + 1];
         NormStatus ns = normalize_key(ref.key_raw, key_norm, sizeof(key_norm));
         if (ns != NORM_OK) {
@@ -315,18 +277,13 @@ static int run_pair(Store *s, bool json, int rest_argc, const char **rest_argv, 
         err_msg(DIAG_INTERNAL, "internal error");
         return REMEMBER_ERR;
     }
-    rc = resolve_end(s,
-                     (EndRef){.id_raw = p.from_id_raw,
-                              .key_raw = p.from_key_raw,
-                              .sync_id_raw = p.from_sync_id_raw},
+    rc = resolve_end(s, (EndRef){.id_raw = p.from_id_raw, .key_raw = p.from_key_raw},
                      include_deleted, &from_id);
     if (rc != REMEMBER_OK) {
         return rc;
     }
-    rc = resolve_end(
-        s,
-        (EndRef){.id_raw = p.to_id_raw, .key_raw = p.to_key_raw, .sync_id_raw = p.to_sync_id_raw},
-        include_deleted, &to_id);
+    rc = resolve_end(s, (EndRef){.id_raw = p.to_id_raw, .key_raw = p.to_key_raw}, include_deleted,
+                     &to_id);
     if (rc != REMEMBER_OK) {
         return rc;
     }
@@ -371,7 +328,6 @@ int cmd_unlink(Store *s, bool json, int rest_argc, const char **rest_argv)
 typedef struct {
     const char *id_raw;
     const char *key_raw;
-    const char *sync_id_raw;
     const char *kind_raw;
     bool outgoing;
     bool incoming;
@@ -394,15 +350,6 @@ static int handle_related_flag(const char *arg, int *i, int rest_argc, const cha
             return -1;
         }
         out->key_raw = taken.value;
-        return 1;
-    }
-    if (strcmp(arg, "--sync-id") == 0) {
-        TakeValue taken = take_value(i, rest_argc, rest_argv, "missing value for --sync-id");
-        if (taken.rc != 0) {
-            err_msg(DIAG_USAGE, taken.err);
-            return -1;
-        }
-        out->sync_id_raw = taken.value;
         return 1;
     }
     if (strcmp(arg, "--kind") == 0) {
@@ -466,23 +413,12 @@ static int parse_related_args(int rest_argc, const char **rest_argv, RelatedPars
 static int related_load_subject(Store *s, const RelatedParse *p, bool include_deleted,
                                 Entry *subject)
 {
-    EndRef ref = {.id_raw = p->id_raw, .key_raw = p->key_raw, .sync_id_raw = p->sync_id_raw};
     StoreStatus st = STORE_OK;
 
     memset(subject, 0, sizeof(*subject));
-    if (ref.sync_id_raw != NULL) {
-        if (store_sync_id_is_canonical(ref.sync_id_raw) == 0) {
-            err_msg(DIAG_USAGE, "invalid sync-id");
-            return REMEMBER_ERR;
-        }
-        if (include_deleted) {
-            st = store_get_row_by_sync_id(s, ref.sync_id_raw, subject);
-        } else {
-            st = store_get_any_by_sync_id(s, ref.sync_id_raw, subject);
-        }
-    } else if (ref.key_raw != NULL) {
+    if (p->key_raw != NULL) {
         char key_norm[REMEMBER_TOKEN_MAX + 1];
-        NormStatus ns = normalize_key(ref.key_raw, key_norm, sizeof(key_norm));
+        NormStatus ns = normalize_key(p->key_raw, key_norm, sizeof(key_norm));
         if (ns != NORM_OK) {
             err_norm(ns, "key");
             return REMEMBER_ERR;
@@ -494,7 +430,7 @@ static int related_load_subject(Store *s, const RelatedParse *p, bool include_de
         }
     } else {
         long long id = 0;
-        if (parse_entry_id(ref.id_raw, &id) != 0) {
+        if (parse_entry_id(p->id_raw, &id) != 0) {
             err_msg(DIAG_USAGE, "invalid id");
             return REMEMBER_ERR;
         }
@@ -545,15 +481,12 @@ int cmd_related(Store *s, bool json, int rest_argc, const char **rest_argv)
     if (p.id_raw != NULL) {
         forms++;
     }
-    if (p.sync_id_raw != NULL) {
-        forms++;
-    }
     if (forms > 1) {
-        err_msg(DIAG_USAGE, "provide exactly one of id, --key, or --sync-id");
+        err_msg(DIAG_USAGE, "provide exactly one of id or --key");
         return REMEMBER_ERR;
     }
     if (forms == 0) {
-        err_msg(DIAG_USAGE, "missing id, --key, or --sync-id");
+        err_msg(DIAG_USAGE, "missing id or --key");
         return REMEMBER_ERR;
     }
     if (p.kind_raw != NULL) {
@@ -585,7 +518,7 @@ int cmd_related(Store *s, bool json, int rest_argc, const char **rest_argv)
         cmd_neighbors_drop_deleted(rows, &n, now);
     }
     if (json) {
-        rc = output_related_data(app_out(), subject.id, subject.key, rows, n, now);
+        rc = output_related_data(app_out(), &subject, rows, n, now);
     } else {
         rc = output_related_human(app_out(), rows, n, now);
     }

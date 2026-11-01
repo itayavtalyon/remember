@@ -47,7 +47,7 @@ TEST(get_existing_json_envelope)
     ASSERT_STR_PREFIX(g.out, "{\"format\":\"remember-message\",\"version\":1,\"type\":\"memory.get."
                              "result\",\"data\":{\"memory\":{");
     ASSERT_STR_CONTAINS(g.out, "get me");
-    ASSERT_STR_CONTAINS(g.out, "\"id\":1");
+    ASSERT_STR_CONTAINS(g.out, "\"local_id\":1");
     cmd_result_free(&g);
     free(db);
 }
@@ -112,8 +112,8 @@ TEST(list_default_order_updated_at_desc)
     ASSERT_EQ_INT(r.exit_code, 0);
     /* newest first: id 3 before id 1 in JSON text order of entries array */
     {
-        const char *p3 = strstr(r.out, "\"id\":3");
-        const char *p1 = strstr(r.out, "\"id\":1");
+        const char *p3 = strstr(r.out, "\"local_id\":3");
+        const char *p1 = strstr(r.out, "\"local_id\":1");
         ASSERT_TRUE(p3 != NULL && p1 != NULL);
         ASSERT_TRUE(p3 < p1);
     }
@@ -484,8 +484,8 @@ TEST(list_json_cursor_pages)
     ASSERT_STR_CONTAINS(r.out, "\"count\":1");
     ASSERT_STR_CONTAINS(r.out, "\"total\":3");
     ASSERT_STR_CONTAINS(r.out, "\"has_more\":true");
-    ASSERT_STR_CONTAINS(r.out, "\"id\":3");
-    ASSERT_STR_NOT_CONTAINS(r.out, "\"id\":2");
+    ASSERT_STR_CONTAINS(r.out, "\"local_id\":3");
+    ASSERT_STR_NOT_CONTAINS(r.out, "\"local_id\":2");
     ASSERT_STR_NOT_CONTAINS(r.out, "\"offset\"");
     ASSERT_STR_NOT_CONTAINS(r.out, "\"limit\"");
     cursor = take_next_cursor(r.out);
@@ -502,8 +502,8 @@ TEST(list_json_cursor_pages)
     ASSERT_STR_CONTAINS(r.out, "\"count\":1");
     ASSERT_STR_CONTAINS(r.out, "\"total\":3");
     ASSERT_STR_CONTAINS(r.out, "\"has_more\":true");
-    ASSERT_STR_CONTAINS(r.out, "\"id\":2");
-    ASSERT_STR_NOT_CONTAINS(r.out, "\"id\":3");
+    ASSERT_STR_CONTAINS(r.out, "\"local_id\":2");
+    ASSERT_STR_NOT_CONTAINS(r.out, "\"local_id\":3");
     free(cursor);
     cursor = take_next_cursor(r.out);
     ASSERT_TRUE(cursor != NULL && cursor[0] != '\0');
@@ -518,7 +518,7 @@ TEST(list_json_cursor_pages)
     ASSERT_STREQ(r.err, "");
     ASSERT_STR_CONTAINS(r.out, "\"count\":1");
     ASSERT_STR_CONTAINS(r.out, "\"total\":3");
-    ASSERT_STR_CONTAINS(r.out, "\"id\":1");
+    ASSERT_STR_CONTAINS(r.out, "\"local_id\":1");
     ASSERT_STR_CONTAINS(r.out, "\"next_cursor\":null");
     ASSERT_STR_CONTAINS(r.out, "\"has_more\":false");
     cmd_result_free(&r);
@@ -702,10 +702,10 @@ TEST(list_json_cursor_filters_and_rejects)
     ASSERT_STREQ(r.err, "");
     ASSERT_STR_CONTAINS(r.out, "\"count\":2");
     ASSERT_STR_CONTAINS(r.out, "\"total\":3");
-    ASSERT_STR_CONTAINS(r.out, "\"id\":2");
-    ASSERT_STR_CONTAINS(r.out, "\"id\":1");
+    ASSERT_STR_CONTAINS(r.out, "\"local_id\":2");
+    ASSERT_STR_CONTAINS(r.out, "\"local_id\":1");
     ASSERT_STR_CONTAINS(r.out, "\"has_more\":false");
-    ASSERT_STR_NOT_CONTAINS(r.out, "\"id\":3");
+    ASSERT_STR_NOT_CONTAINS(r.out, "\"local_id\":3");
     cmd_result_free(&r);
 
     plain[4] = cursor;

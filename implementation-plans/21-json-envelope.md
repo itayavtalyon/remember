@@ -378,6 +378,24 @@ Tests: `list_json_cursor_pages`, `list_json_cursor_filters_and_rejects`, `list_c
 
 Gate (Apple clang, Debug, sanitizers on, LSAN off, `REMEMBER_TEST_VFS=ON`, Unix Makefiles; coverage with Homebrew LLVM 22). Started 2026-11-01T17:03:21Z at HEAD `42f6793` with stage 2b uncommitted. ctest 5/5. Coverage: functions 100%, effective lines 100% (must-cover lines missed: 0), branch sides 0 missed on `output.c` (698), `search_terms.c` (176), `unicode.c` (80), `normalize.c` (384). The first lint failed cppcheck `variableScope` / `unreadVariable` on two locals in the 51-tag fixture. They moved inside the `if`. Lint re-run 2026-11-01T17:12:24Z: `LINT OK`, `EXIT:0`. `default.profraw` stays untracked.
 
+### Stage 2c: JSON `id` is the UUID, and the old locator flags are gone (2026-11-01)
+
+A memory's JSON `id` is the lowercase hyphenated UUID (the old `sync_id`). The integer is `local_id`, and only CLI output includes it. The field `sync_id` is gone. `REMEMBER_SYNC_ID` was never set by C; the name is gone from the docs. No alias (JE-3.8, #485).
+
+What changed:
+
+- Memory JSON and stubs are `{"id":"<uuid>","local_id":<int>,...}`. A search key item uses `id` for the UUID and has no `local_id`. A conflict row keeps its integer `id` and names the memory UUID `memory_id`. Snapshots write that shape. `snapshot_parse` reads `$.id` and does not read `$.sync_id`.
+- `--sync-id`, `--from-sync-id`, and `--to-sync-id` are unknown options. `--id` and `--local-id` were already unknown and stay unknown. `conflict accept --id` stays the conflict row.
+- The cursor's opaque field stays `local_id`. `src/cmd_query.c` was not edited, so the cursor bytes do not change.
+- A positional token that is not digits is still `invalid id`. Stage 3 owns the C-01 sentence and UUID-or-digits lookup. This stage does not print that sentence. `store_get_by_sync_id` stays for import. `store_sync_id_is_canonical` stays for stage 3. `store_sync_id_is_canonical_matches_v7` calls it.
+- The C `Entry` still names the integer `id` and the UUID `sync_id`. SQLite is already v6 (`entries.local_id`, `entries.id`). There is no migration. Human list lines still print the integer.
+
+`locator_bind_write` only copies the integer id or the key. After the UUID branch left, its store, bin, and now parameters were unused, and both `bind_rc != 0` returns could not run.
+
+Tests: `envelope_memory_id_is_the_uuid_and_the_old_flags_are_unknown`. It was red before the writers changed (`"id":1,"sync_id":"…"` and `invalid sync-id`).
+
+Gate (Apple clang, Debug, sanitizers on, LSAN off, `REMEMBER_TEST_VFS=ON`, Unix Makefiles; coverage with Homebrew LLVM 22). `BUILD_DIR` was not exported. ninja is absent. Coverage and lint ran on the final tree at 2026-11-01T19:27:16Z, parent `61c32e6` (the stage 9 plan lines, already committed). ctest 5/5. Coverage: functions 100%, effective lines 100% (must-cover lines missed: 0), branch sides 0 missed on `output.c` (710), `search_terms.c` (176), `unicode.c` (80), `normalize.c` (384). Lint `LINT OK`. `default.profraw` stays untracked. The 16 stage-2a mutants were not re-run. M5 stays.
+
 ## Review Notes
 
 Stage flow (`decision:plan21-stage-flow`, Itay 2026-10-31): after each stage, run the in-session deep review, fix, and continue. There is no per-stage `REVIEW_REQUEST`. One whole-plan review runs at the end.
@@ -426,3 +444,25 @@ DRY / easy to replace / orthogonal / simplify:
 - One closer still writes the envelope. The list command only sets a page slot. A failure clears the slot, so paging fields never ride on an error.
 - The keyset is one predicate on the SELECT. COUNT stays the full filter, so an empty page still reports `total`.
 - `--limit` is not in the cursor. Sort, bin, tags, source, key, since, and until are. Clients do not parse the cursor.
+
+### Stage 2c deep review (2026-11-01, in session)
+
+`decision:plan21-stage-flow`: in-session deep review, fix, continue. No `.claude/REVIEW_REQUEST`. Local Bugbot is not installed. No product question is open. `standard:coding` says merge `main` at the start of a stage. This prompt says stage 9 merges `origin/main`, so `e35558b` was not merged. The handoff template says write `.claude/WHOLE_PLAN_REVIEW` after stage 8. `decision:2026-11-01-legacy-plans-spec-step` says stage 9 is the spec stage and the whole-plan review is after that. This stage does not write the marker.
+
+Probe: `add` then `--json get 1` returns `id` as a lowercase UUID v7, then `local_id` 1. `get <that uuid>` prints `invalid id` and exits 1. `--sync-id`, `--id`, and `--local-id` are unknown options. `help conflict` still says `accept --id`.
+
+Findings:
+
+- **Important, fixed:** `locator_bind_write` always returned 0, so two `bind_rc != 0` returns were uncovered (must-cover) and cppcheck reported `knownConditionTrueFalse`. The function is now `void` and only copies the id or the key. Those returns are gone. Coverage must-cover is 0.
+- **Nit, fixed:** `docs/engineering-notes.md`, `README.md`, and `skills/remember/SKILL.md` still described `sync_id` and `--sync-id`. The skill also still told agents to pass `--offset`. List paging is `--cursor`. JSON `id` is the UUID. Pass `local_id` or `--key` until stage 3.
+- **Nit, kept:** `Entry.id` and `Entry.sync_id` stay the C names. Renaming the struct would touch every store call and the cursor keyset, and it would not change what the CLI prints. JSON and the flags are the contract.
+- **Nit, kept:** `tests/test_envelope.c` and `tests/test_sync_output.c` each have a static `uuid_v7_at`. A harness export would be a second home for a test predicate.
+- **Kept, not a defect:** a conflict snapshot stored by an older build as `"id":<int>,"sync_id":"<uuid>"` does not parse. JE-3.8 says no alias. Snapshots this build writes use `$.id`. Accept of those rows is covered.
+- **Kept:** `docs/JSON-STYLE.md` §1.2a still has the older C-01 sentence. Stage 3 replaces it with the approved 2026-10-25 sentence. This stage does not print either sentence.
+- **Kept, not a defect:** M5. The 16 stage-2a mutants were not re-run.
+
+DRY / easy to replace / orthogonal / simplify:
+
+- `write_entry_core` is the memory object. Stubs share that `id` / `local_id` prefix. The snapshot writer in `store_sqlite.c` repeats it. The existing ponytail note already records the duplicated escape. SQLite stays in that file, so the snapshot writer stays there.
+- A search key item's own id is `id`. A conflict's reference is `memory_id` (JE-3.6). The conflict row's integer `id` is not a memory id.
+- The deleted flags fall through the existing unknown-option path. There is no alias table.

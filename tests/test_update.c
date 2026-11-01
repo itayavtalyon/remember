@@ -5,7 +5,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-enum { TS_BUFSIZE = 32, SYNC_ID_CAP = 40, VV_CAP = 128 }; /* stamp, UUID, version vector */
+enum { TS_BUFSIZE = 32, VV_CAP = 128 }; /* stamp, version vector */
 
 /* Copy the value of a `"key":"..."` JSON string field into out (empty if absent). */
 static void extract_json_str(const char *json, const char *key, char *out, size_t outsz)
@@ -459,8 +459,8 @@ TEST(update_moves_entry_to_top_of_list)
     cmd_result_free(&u);
     l = run_remember(db, largs, sizeof(largs) / sizeof(largs[0]), NULL);
     ASSERT_EQ_INT(l.exit_code, 0);
-    p1 = (l.out != NULL) ? strstr(l.out, "\"id\":1") : NULL;
-    p2 = (l.out != NULL) ? strstr(l.out, "\"id\":2") : NULL;
+    p1 = (l.out != NULL) ? strstr(l.out, "\"local_id\":1") : NULL;
+    p2 = (l.out != NULL) ? strstr(l.out, "\"local_id\":2") : NULL;
     ASSERT_TRUE(p1 != NULL);
     ASSERT_TRUE(p2 != NULL);
     ASSERT_TRUE(p1 < p2); /* updated id 1 precedes untouched id 2 */
@@ -667,39 +667,6 @@ TEST(update_if_version_vector_match_by_key_writes)
     free(db);
 }
 
-TEST(update_if_version_vector_match_by_sync_id_writes)
-{
-    char *db = make_temp_db_path();
-    char vector[VV_CAP];
-    char sync_id[SYNC_ID_CAP];
-    CmdResult got;
-    const char *add[] = {"add", "--json", "original body"};
-
-    ASSERT_TRUE(db != NULL);
-    if (db == NULL) {
-        return;
-    }
-    got = run_remember(db, add, sizeof(add) / sizeof(add[0]), NULL);
-    ASSERT_EQ_INT(got.exit_code, 0);
-    extract_version_vector(got.out, vector, sizeof(vector));
-    extract_json_str(got.out, "\"sync_id\":\"", sync_id, sizeof(sync_id));
-    cmd_result_free(&got);
-    if (vector[0] == '\0' || sync_id[0] == '\0') {
-        free(db);
-        return;
-    }
-    {
-        const char *args[] = {"update", "--sync-id", sync_id,   "--if-version-vector",
-                              vector,   "--text",    "new body"};
-        CmdResult updated = run_remember(db, args, sizeof(args) / sizeof(args[0]), NULL);
-
-        ASSERT_EQ_INT(updated.exit_code, 0);
-        ASSERT_STREQ(updated.err, "");
-        cmd_result_free(&updated);
-    }
-    free(db);
-}
-
 TEST(update_if_version_vector_undelete_match_restores)
 {
     char *db = make_temp_db_path();
@@ -800,7 +767,6 @@ void register_update_tests(void)
     RUN_TEST(update_if_version_vector_rejects_a_missing_value);
     RUN_TEST(update_if_version_vector_alone_is_not_a_change);
     RUN_TEST(update_if_version_vector_match_by_key_writes);
-    RUN_TEST(update_if_version_vector_match_by_sync_id_writes);
     RUN_TEST(update_if_version_vector_undelete_match_restores);
     RUN_TEST(update_help_names_the_version_vector_guard);
 }

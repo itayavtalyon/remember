@@ -131,11 +131,11 @@ TEST(cli_import_inserts_preserves_sync_id_remaps_links_no_device_register)
     ASSERT_TRUE(local != NULL && foreign != NULL);
     r = run_remember(foreign, add_a, sizeof(add_a) / sizeof(add_a[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 0);
-    ASSERT_EQ_INT(json_copy_quoted(r.out, "sync_id", sync_a, sizeof(sync_a)), 0);
+    ASSERT_EQ_INT(json_copy_quoted(r.out, "id", sync_a, sizeof(sync_a)), 0);
     cmd_result_free(&r);
     r = run_remember(foreign, add_b, sizeof(add_b) / sizeof(add_b[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 0);
-    ASSERT_EQ_INT(json_copy_quoted(r.out, "sync_id", sync_b, sizeof(sync_b)), 0);
+    ASSERT_EQ_INT(json_copy_quoted(r.out, "id", sync_b, sizeof(sync_b)), 0);
     cmd_result_free(&r);
     r = run_remember(foreign, link, sizeof(link) / sizeof(link[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 0);
@@ -513,7 +513,7 @@ TEST(cli_import_identical_automerge_concurrent_conflict)
 
     r = run_remember(local, add, sizeof(add) / sizeof(add[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 0);
-    ASSERT_EQ_INT(json_copy_quoted(r.out, "sync_id", sync_id, sizeof(sync_id)), 0);
+    ASSERT_EQ_INT(json_copy_quoted(r.out, "id", sync_id, sizeof(sync_id)), 0);
     cmd_result_free(&r);
 
     /* Copy DB only (no sidecar) so foreign is a distinct replica file. */
@@ -712,7 +712,7 @@ TEST(cli_conflict_accept_keep_both_concurrent_remints)
 
     r = run_remember(local, add, sizeof(add) / sizeof(add[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 0);
-    ASSERT_EQ_INT(json_copy_quoted(r.out, "sync_id", sync_orig, sizeof(sync_orig)), 0);
+    ASSERT_EQ_INT(json_copy_quoted(r.out, "id", sync_orig, sizeof(sync_orig)), 0);
     cmd_result_free(&r);
     ASSERT_EQ_INT(harness_copy_file(local, foreign), 0);
     dev = read_sidecar_id(local);
@@ -772,7 +772,6 @@ TEST(cli_conflict_accept_keep_both_key_clash_keeps_incoming_sync_id)
     const char *add_f[] = {"--json", "add", "--key", "slot", "F"};
     const char *imp[] = {"--json", "import", "--from-db", NULL};
     const char *accept[] = {"--json", "conflict", "accept", "--id", "1", "--keep", "both"};
-    const char *get_in[] = {"--json", "get", "--sync-id", NULL};
     const char *list_del[] = {"--json", "list"};
 
     ASSERT_TRUE(local != NULL && foreign != NULL);
@@ -781,7 +780,7 @@ TEST(cli_conflict_accept_keep_both_key_clash_keeps_incoming_sync_id)
     cmd_result_free(&r);
     r = run_remember(foreign, add_f, sizeof(add_f) / sizeof(add_f[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 0);
-    ASSERT_EQ_INT(json_copy_quoted(r.out, "sync_id", sync_in, sizeof(sync_in)), 0);
+    ASSERT_EQ_INT(json_copy_quoted(r.out, "id", sync_in, sizeof(sync_in)), 0);
     cmd_result_free(&r);
 
     imp[3] = foreign;
@@ -795,15 +794,11 @@ TEST(cli_conflict_accept_keep_both_key_clash_keeps_incoming_sync_id)
     ASSERT_STR_CONTAINS(r.out, "\"count\":2");
     cmd_result_free(&r);
 
-    get_in[3] = sync_in;
-    r = run_remember(local, get_in, sizeof(get_in) / sizeof(get_in[0]), NULL);
+    r = run_remember(local, list_del, sizeof(list_del) / sizeof(list_del[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 0);
     ASSERT_STR_CONTAINS(r.out, "\"body\":\"F\"");
     ASSERT_STR_CONTAINS(r.out, "\"key\":null"); /* keyless — slot taken */
-    cmd_result_free(&r);
-
-    r = run_remember(local, list_del, sizeof(list_del) / sizeof(list_del[0]), NULL);
-    ASSERT_EQ_INT(r.exit_code, 0);
+    ASSERT_STR_CONTAINS(r.out, sync_in);
     ASSERT_STR_CONTAINS(r.out, "\"body\":\"L\"");
     ASSERT_STR_CONTAINS(r.out, "\"key\":\"slot\"");
     cmd_result_free(&r);
@@ -1469,7 +1464,7 @@ TEST(cli_import_incoming_dominates_keyless_hash_clash)
 
     r = run_remember(local, add_s, sizeof(add_s) / sizeof(add_s[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 0);
-    ASSERT_EQ_INT(json_copy_quoted(r.out, "sync_id", sync_s, sizeof(sync_s)), 0);
+    ASSERT_EQ_INT(json_copy_quoted(r.out, "id", sync_s, sizeof(sync_s)), 0);
     cmd_result_free(&r);
     r = run_remember(local, add_occ, sizeof(add_occ) / sizeof(add_occ[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 0);
@@ -1643,10 +1638,9 @@ TEST(cli_import_incoming_dominates_expires_deleted_keyless)
     char foreign[PATH_BUF];
     CmdResult r;
     char *dev = NULL;
-    char sync[SYNC_BUF];
     const char *add[] = {"--json", "add", "--key", "k", "live"};
     const char *imp[] = {"--json", "import", "--from-db", NULL};
-    const char *get_del[5];
+    const char *get_del[] = {"--json", "get", "--deleted", "1"};
 
     dir = mkdtemp(tmpl);
     ASSERT_TRUE(dir != NULL);
@@ -1658,7 +1652,6 @@ TEST(cli_import_incoming_dominates_expires_deleted_keyless)
 
     r = run_remember(local, add, sizeof(add) / sizeof(add[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 0);
-    ASSERT_EQ_INT(json_copy_quoted(r.out, "sync_id", sync, sizeof(sync)), 0);
     cmd_result_free(&r);
     ASSERT_EQ_INT(harness_copy_file(local, foreign), 0);
     /* Soft-deleted occupies deleted bin; expires cleared on soft-delete in product,
@@ -1667,11 +1660,6 @@ TEST(cli_import_incoming_dominates_expires_deleted_keyless)
         foreign, "UPDATE entries SET key=NULL, expires_at='2020-06-01T00:00:00.000Z',"
                  "deleted_at='2026-01-01T00:00:00.000Z' WHERE rowid=1;"));
     force_body(foreign, 1, "gone");
-    get_del[0] = "--json";
-    get_del[1] = "get";
-    get_del[2] = "--sync-id";
-    get_del[3] = sync;
-    get_del[4] = "--deleted";
     dev = read_sidecar_id(local);
     ASSERT_TRUE(dev != NULL);
     {
@@ -1795,7 +1783,7 @@ TEST(cli_conflict_accept_concurrent_keep_incoming_demotes_other_key)
 
     r = run_remember(local, add_shared, sizeof(add_shared) / sizeof(add_shared[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 0);
-    ASSERT_EQ_INT(json_copy_quoted(r.out, "sync_id", sync_shared, sizeof(sync_shared)), 0);
+    ASSERT_EQ_INT(json_copy_quoted(r.out, "id", sync_shared, sizeof(sync_shared)), 0);
     cmd_result_free(&r);
     r = run_remember(local, add_other, sizeof(add_other) / sizeof(add_other[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 0);
@@ -1881,7 +1869,7 @@ TEST(cli_conflict_accept_concurrent_keep_incoming_hash_taken_refuses)
     cmd_result_free(&r);
     r = run_remember(local, add_shared, sizeof(add_shared) / sizeof(add_shared[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 0);
-    ASSERT_EQ_INT(json_copy_quoted(r.out, "sync_id", sync_shared, sizeof(sync_shared)), 0);
+    ASSERT_EQ_INT(json_copy_quoted(r.out, "id", sync_shared, sizeof(sync_shared)), 0);
     cmd_result_free(&r);
 
     hash = harness_sqlite_query_line(local,

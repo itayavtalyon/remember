@@ -221,7 +221,7 @@ TEST(update_preserves_id_key_source_created_at)
     }
     u = run_remember(db, uargs, sizeof(uargs) / sizeof(uargs[0]), NULL);
     ASSERT_EQ_INT(u.exit_code, 0);
-    ASSERT_STR_CONTAINS(u.out, "\"id\":1");
+    ASSERT_STR_CONTAINS(u.out, "\"local_id\":1");
     ASSERT_STR_CONTAINS(u.out, "\"key\":\"slot\"");
     ASSERT_STR_CONTAINS(u.out, "\"source\":\"human\"");
     ASSERT_STR_CONTAINS(u.out, created);

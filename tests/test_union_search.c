@@ -199,7 +199,7 @@ TEST(union_search_json_carries_the_facets_before_entries)
 
     ASSERT_EQ_INT(r.exit_code, 0);
     ASSERT_STR_CONTAINS(r.out, "\"count\":2,\"total\":2,\"keys\":{\"total\":1,\"items\":[{"
-                               "\"key\":\"recs:books\",\"sync_id\":\"");
+                               "\"key\":\"recs:books\",\"id\":\"");
     ASSERT_STR_CONTAINS(r.out, "\"label\":\"Book recommendations\"");
     ASSERT_STR_CONTAINS(r.out, "\"tags\":{\"total\":1,\"items\":[{\"tag\":\"type:books\","
                                "\"count\":1}]},\"entries\":[{");

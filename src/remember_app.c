@@ -42,8 +42,8 @@ static void print_general_help(void)
                                "  search    Full-text search\n"
                                "  repair    Rebuild the search index\n"
                                "  list      List memories with filters\n"
-                               "  get       Fetch one entry by id, --key, or --sync-id\n"
-                               "  update    Change body and/or tags by id, --key, or --sync-id\n"
+                               "  get       Fetch one entry by id or --key\n"
+                               "  update    Change body and/or tags by id or --key\n"
                                "  delete    Soft-delete (or hard-wipe with --expired/--deleted)\n"
                                "  tags        List all tags with entry counts\n"
                                "  purge       Permanently delete one bin (--expired or --deleted)\n"
@@ -111,12 +111,11 @@ static void print_command_help(CliCommand topic)
         (void)fprintf(out, "Options:\n");
         (void)fprintf(out, "  ID              Entry id (positional)\n");
         (void)fprintf(out, "  --key KEY       Locate by key instead of id\n");
-        (void)fprintf(out, "  --sync-id UUID  Locate by sync_id (canonical UUID v7)\n");
         (void)fprintf(out, "  --expired       Locate in expired bin\n");
         (void)fprintf(out, "  --deleted       Locate in deleted bin\n");
         (void)fprintf(out, "  --trash         Deprecated alias of --expired\n");
         (void)fprintf(out, "\n");
-        (void)fprintf(out, "Exactly one of ID, --key, or --sync-id is required.\n");
+        (void)fprintf(out, "Exactly one of ID or --key is required.\n");
         (void)fprintf(out, "Default locators are live-only; --expired/--deleted select one bin.\n");
         if (topic == CLI_CMD_GET) {
             (void)fprintf(out, "JSON entries include links stubs after version_vector.\n");
@@ -130,7 +129,6 @@ static void print_command_help(CliCommand topic)
         (void)fprintf(out, "Options:\n");
         (void)fprintf(out, "  ID              Entry id (positional)\n");
         (void)fprintf(out, "  --key KEY       Locate by key instead of id\n");
-        (void)fprintf(out, "  --sync-id UUID  Locate by sync_id (canonical UUID v7)\n");
         (void)fprintf(out, "  --expired       Locate in expired bin\n");
         (void)fprintf(out, "  --deleted       Locate in deleted bin (required for --undelete)\n");
         (void)fprintf(out, "  --trash         Deprecated alias of --expired\n");
@@ -145,7 +143,7 @@ static void print_command_help(CliCommand topic)
         (void)fprintf(out, "  --if-version-vector VV\n");
         (void)fprintf(out, "                  Write only when version_vector equals VV\n");
         (void)fprintf(out, "\n");
-        (void)fprintf(out, "Exactly one of ID, --key, or --sync-id is required.\n");
+        (void)fprintf(out, "Exactly one of ID or --key is required.\n");
         (void)fprintf(out, "At least one of --text, --tag, --clear-tags, --ttl, --expires,\n");
         (void)fprintf(out, "--clear-expires, or --undelete is required.\n");
         (void)fprintf(out, "Cannot combine --tag with --clear-tags.\n");
@@ -231,15 +229,13 @@ static void print_command_help(CliCommand topic)
         (void)fprintf(out, "Options:\n");
         (void)fprintf(out, "  --from ID       Source entry id\n");
         (void)fprintf(out, "  --from-key KEY  Source entry key\n");
-        (void)fprintf(out, "  --from-sync-id  Source sync_id (UUID v7)\n");
         (void)fprintf(out, "  --to ID         Target entry id\n");
         (void)fprintf(out, "  --to-key KEY    Target entry key\n");
-        (void)fprintf(out, "  --to-sync-id    Target sync_id (UUID v7)\n");
         (void)fprintf(out, "  --kind KIND     related (default on link) | supersedes | cites\n");
         (void)fprintf(out, "  --deleted       Allow deleted ends\n");
         (void)fprintf(out, "  ID ID           Sugar for --from / --to numeric ids\n");
         (void)fprintf(out, "\n");
-        (void)fprintf(out, "Each end is exactly one of id, --*-key, or --*-sync-id.\n");
+        (void)fprintf(out, "Each end is exactly one of id or --*-key.\n");
         (void)fprintf(out, "Default resolves live+expired; --deleted includes deleted ends.\n");
         if (topic == CLI_CMD_UNLINK) {
             (void)fprintf(out, "Omit --kind to remove every kind between the pair.\n");
@@ -249,34 +245,32 @@ static void print_command_help(CliCommand topic)
         (void)fprintf(out, "Options:\n");
         (void)fprintf(out, "  ID              Entry id (positional)\n");
         (void)fprintf(out, "  --key KEY       Locate by key instead of id\n");
-        (void)fprintf(out, "  --sync-id UUID  Locate by sync_id\n");
         (void)fprintf(out, "  --kind KIND     Filter stored kind (related|supersedes|cites)\n");
         (void)fprintf(out, "  --outgoing      Directed from this entry; related still included\n");
         (void)fprintf(out, "  --incoming      Directed to this entry; related still included\n");
         (void)fprintf(out, "  --deleted       Include deleted subject/neighbors\n");
         (void)fprintf(out, "\n");
-        (void)fprintf(out, "Exactly one of ID, --key, or --sync-id.\n");
+        (void)fprintf(out, "Exactly one of ID or --key.\n");
         (void)fprintf(out, "Cannot combine --outgoing and --incoming.\n");
         (void)fprintf(out, "\n");
     } else if (topic == CLI_CMD_REKEY) {
         (void)fprintf(out, "Options:\n");
         (void)fprintf(out, "  ID              Entry id (positional)\n");
         (void)fprintf(out, "  --key KEY       Locate by key instead of id\n");
-        (void)fprintf(out, "  --sync-id UUID  Locate by sync_id\n");
         (void)fprintf(out, "  --expired       Locate in expired bin\n");
         (void)fprintf(out, "  --deleted       Locate in deleted bin\n");
         (void)fprintf(out, "  --trash         Deprecated alias of --expired\n");
         (void)fprintf(out, "  --to-key NEW    Set or rename the key (non-empty)\n");
         (void)fprintf(out, "  --clear-key     Remove the key (keyed becomes keyless)\n");
         (void)fprintf(out, "\n");
-        (void)fprintf(out, "Exactly one of ID, --key, or --sync-id, and exactly one of\n");
+        (void)fprintf(out, "Exactly one of ID or --key, and exactly one of\n");
         (void)fprintf(out, "--to-key or --clear-key. Empty --to-key is illegal (not a clear).\n");
         (void)fprintf(out, "\n");
     } else if (topic == CLI_CMD_IMPORT) {
         (void)fprintf(out, "Options:\n");
         (void)fprintf(out, "  --from-db PATH  Source remember database (read-only)\n");
         (void)fprintf(out, "\n");
-        (void)fprintf(out, "Merges by sync_id. Conflicts are recorded; exit 0 even if any.\n");
+        (void)fprintf(out, "Merges by id. Conflicts are recorded; exit 0 even if any.\n");
         (void)fprintf(out, "Run 'conflicts' after import. Source must be schema v4 or v5.\n");
         (void)fprintf(out, "Does not copy the foreign device_id sidecar.\n");
         (void)fprintf(out, "\n");
@@ -287,8 +281,7 @@ static void print_command_help(CliCommand topic)
         (void)fprintf(out, "Usage:\n");
         (void)fprintf(out, "  remember conflict accept --id N --keep local|incoming|both\n");
         (void)fprintf(out, "\n");
-        (void)fprintf(out,
-                      "both remints sync_id on concurrent_vv; clash keeps incoming sync_id.\n");
+        (void)fprintf(out, "both remints id on concurrent_vv; clash keeps incoming id.\n");
         (void)fprintf(out, "\n");
     } else if (topic == CLI_CMD_REPAIR) {
         (void)fprintf(out, "Rebuilds the search index after the index itself is damaged.\n");

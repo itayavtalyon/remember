@@ -181,7 +181,7 @@ TEST(keyless_add_revives_expired_cli)
     ASSERT_EQ_INT(r.exit_code, 0);
     ASSERT_STR_CONTAINS(r.out, "\"action\":\"merged\"");
     ASSERT_STR_CONTAINS(r.out, "\"expires_at\":null");
-    ASSERT_STR_CONTAINS(r.out, "\"id\":1");
+    ASSERT_STR_CONTAINS(r.out, "\"local_id\":1");
     cmd_result_free(&r);
     free(db);
 }

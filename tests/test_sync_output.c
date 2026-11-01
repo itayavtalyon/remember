@@ -92,18 +92,18 @@ static int json_sync_id_is_v7(const char *json)
     if (json == NULL) {
         return 0;
     }
-    p = strstr(json, "\"sync_id\":\"");
+    p = strstr(json, "\"id\":\"");
     if (p == NULL) {
         return 0;
     }
-    p += strlen("\"sync_id\":\"");
+    p += strlen("\"id\":\"");
     return uuid_v7_at(p);
 }
 
 TEST(json_entry_field_order_bin_always_enum)
 {
     static const char *const k_fields[] = {
-        "\"id\":",         "\"sync_id\":",    "\"key\":",        "\"body\":",
+        "\"id\":",         "\"local_id\":",   "\"key\":",        "\"body\":",
         "\"tags\":",       "\"source\":",     "\"created_at\":", "\"updated_at\":",
         "\"expires_at\":", "\"deleted_at\":", "\"bin\":",        "\"version_vector\":",
         "\"links\":"};
@@ -167,7 +167,7 @@ TEST(json_expired_and_deleted_bins)
 TEST(json_stubs_sync_id_bin_no_trash)
 {
     static const char *const k_stub[] = {
-        "\"id\":", "\"sync_id\":", "\"key\":", "\"type\":", "\"bin\":", "\"preview\":"};
+        "\"id\":", "\"local_id\":", "\"key\":", "\"type\":", "\"bin\":", "\"preview\":"};
     char *db = make_temp_db_path();
     const char *keep[] = {"add", "keep"};
     const char *exp[] = {"add", "--expires", "2020-01-01T00:00:00Z", "gone-n"};
@@ -441,7 +441,7 @@ TEST(human_expired_and_deleted_neighbor_marks)
     r = run_remember(db, jrel_d, sizeof(jrel_d) / sizeof(jrel_d[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 0);
     ASSERT_STR_CONTAINS(r.out, "\"bin\":\"deleted\"");
-    ASSERT_STR_CONTAINS(r.out, "\"sync_id\":\"");
+    ASSERT_STR_CONTAINS(r.out, "\"id\":\"");
     ASSERT_STR_NOT_CONTAINS(r.out, "\"trash\"");
     cmd_result_free(&r);
     free(db);

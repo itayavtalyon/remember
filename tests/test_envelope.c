@@ -4,6 +4,7 @@
 
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include <unistd.h> /* mkdtemp on Darwin */
 
 /* One memory with this key and the body "a body"; it is number 1 on a new brain. */
@@ -226,8 +227,92 @@ TEST(envelope_add_link_read_error_after_the_write_exits_1_and_keeps_the_write)
 // NOLINTEND(concurrency-mt-unsafe)
 #endif /* REMEMBER_TEST_VFS */
 
+enum {
+    UUID_CANON_LEN = 36,
+    UUID_DASH_0 = 8,
+    UUID_DASH_1 = 13,
+    UUID_DASH_2 = 18,
+    UUID_DASH_3 = 23,
+    UUID_VER_CHAR = 14
+};
+
+/* 1 when s starts with a canonical lowercase UUID v7. */
+static int uuid_v7_at(const char *s)
+{
+    size_t i = 0;
+
+    if (s == NULL || strlen(s) < UUID_CANON_LEN) {
+        return 0;
+    }
+    for (i = 0; i < UUID_CANON_LEN; i++) {
+        char c = s[i];
+
+        if (i == (size_t)UUID_DASH_0 || i == (size_t)UUID_DASH_1 || i == (size_t)UUID_DASH_2 ||
+            i == (size_t)UUID_DASH_3) {
+            if (c != '-') {
+                return 0;
+            }
+            continue;
+        }
+        if ((c < '0' || c > '9') && (c < 'a' || c > 'f')) {
+            return 0;
+        }
+    }
+    return s[UUID_VER_CHAR] == '7';
+}
+
+/* JSON id is the old sync_id. The integer is local_id. The three flags are gone.
+   Stage 3 owns the C-01 locator sentence. */
+TEST(envelope_memory_id_is_the_uuid_and_the_old_flags_are_unknown)
+{
+    static const char *const flags[] = {"--sync-id", "--local-id", "--id"};
+    char *db = make_temp_db_path();
+    const char *get[] = {"--json", "get", "1"};
+    const char *memory = NULL;
+    CmdResult r;
+    size_t i = 0;
+
+    ASSERT_TRUE(db != NULL);
+    given_one_memory_with_key(db, "k");
+    r = run_remember(db, get, sizeof get / sizeof get[0], NULL);
+    ASSERT_EQ_INT(r.exit_code, 0);
+    memory = strstr(r.out, "\"memory\":{\"id\":\"");
+    ASSERT_TRUE(memory != NULL);
+    if (memory != NULL) {
+        ASSERT_EQ_INT(uuid_v7_at(memory + strlen("\"memory\":{\"id\":\"")), 1);
+    }
+    ASSERT_STR_CONTAINS(r.out, "\",\"local_id\":1,\"key\":\"k\"");
+    ASSERT_STR_NOT_CONTAINS(r.out, "sync_id");
+    cmd_result_free(&r);
+
+    for (i = 0; i < sizeof flags / sizeof flags[0]; i++) {
+        const char *args[] = {"get", flags[i], "1"};
+
+        r = run_remember(db, args, sizeof args / sizeof args[0], NULL);
+        ASSERT_EQ_INT(r.exit_code, 1);
+        ASSERT_STR_CONTAINS(r.err, "unknown option '");
+        ASSERT_STR_CONTAINS(r.err, flags[i]);
+        cmd_result_free(&r);
+    }
+    {
+        const char *from_sync[] = {"link", "--from-sync-id", "1", "--to", "2"};
+        const char *to_sync[] = {"link", "--from", "1", "--to-sync-id", "2"};
+
+        r = run_remember(db, from_sync, sizeof from_sync / sizeof from_sync[0], NULL);
+        ASSERT_EQ_INT(r.exit_code, 1);
+        ASSERT_STR_CONTAINS(r.err, "unknown option '--from-sync-id'");
+        cmd_result_free(&r);
+        r = run_remember(db, to_sync, sizeof to_sync / sizeof to_sync[0], NULL);
+        ASSERT_EQ_INT(r.exit_code, 1);
+        ASSERT_STR_CONTAINS(r.err, "unknown option '--to-sync-id'");
+        cmd_result_free(&r);
+    }
+    free(db);
+}
+
 void register_envelope_tests(void)
 {
+    RUN_TEST(envelope_memory_id_is_the_uuid_and_the_old_flags_are_unknown);
     RUN_TEST(envelope_get_head_is_format_version_type_then_data_memory);
     RUN_TEST(envelope_add_leaves_out_a_neighbor_in_the_trash_like_get);
     RUN_TEST(envelope_every_command_names_its_reply_type);

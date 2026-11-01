@@ -7407,7 +7407,8 @@ static const char *bin_token_store(StoreBin bin)
     }
 }
 
-/* Entry-like JSON without links (005 field order). Caller frees *out.
+/* Entry-like JSON without links. id is the memory UUID; local_id is the integer.
+ * Caller frees *out.
  * ponytail: RFC 8259 escape is duplicated with output.c; extract if snapshots drift. */
 static StoreStatus entry_snapshot_json(const Entry *e, const char *now, char **out)
 {
@@ -7430,10 +7431,10 @@ static StoreStatus entry_snapshot_json(const Entry *e, const char *now, char **o
     if (fp == NULL) {
         return STORE_ERR_OOM;
     }
-    if (fprintf(fp, "{\"id\":%lld,\"sync_id\":", e->id) < 0 ||
-        json_write_string(fp, e->sync_id) != 0 || json_write_nullable(fp, "key", e->key) != 0 ||
-        fprintf(fp, ",\"body\":") < 0 || json_write_string(fp, e->body) != 0 ||
-        fputs(",\"tags\":[", fp) < 0) {
+    if (fputs("{\"id\":", fp) < 0 || json_write_string(fp, e->sync_id) != 0 ||
+        fprintf(fp, ",\"local_id\":%lld", e->id) < 0 ||
+        json_write_nullable(fp, "key", e->key) != 0 || fprintf(fp, ",\"body\":") < 0 ||
+        json_write_string(fp, e->body) != 0 || fputs(",\"tags\":[", fp) < 0) {
         (void)fclose(fp);
         free(buf);
         return STORE_ERR_OOM;
@@ -8897,7 +8898,7 @@ static StoreStatus snapshot_parse(sqlite3 *db, const char *json, SnapshotFields 
     StoreStatus st = STORE_OK;
 
     memset(out, 0, sizeof(*out));
-    out->sync_id = json_extract_text(db, json, "$.sync_id", &is_null, serr);
+    out->sync_id = json_extract_text(db, json, "$.id", &is_null, serr);
     if (out->sync_id == NULL) {
         return STORE_ERR_INTERNAL;
     }

@@ -1136,11 +1136,19 @@ TEST(store_sidecar_rename_failure_leaves_no_file)
 }
 #endif
 
+TEST(store_sync_id_is_canonical_matches_v7)
+{
+    ASSERT_EQ_INT(store_sync_id_is_canonical("018f0000-0000-7000-8000-000000000001"), 1);
+    ASSERT_EQ_INT(store_sync_id_is_canonical("018F0000-0000-7000-8000-000000000001"), 0);
+    ASSERT_EQ_INT(store_sync_id_is_canonical(NULL), 0);
+}
+
 void register_store_sync_tests(void)
 {
     RUN_TEST(store_open_creates_v6_sidecar_and_device);
     RUN_TEST(store_open_two_dbs_in_one_dir_distinct_sidecars);
     RUN_TEST(store_open_migrates_v3_to_v6_preserves_rows);
+    RUN_TEST(store_sync_id_is_canonical_matches_v7);
     RUN_TEST(store_add_mints_v7_sync_id_and_get_by_sync_id);
     RUN_TEST(store_sync_id_stable_across_update);
     RUN_TEST(store_get_does_not_rewrite_sidecar);

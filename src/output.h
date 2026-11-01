@@ -84,9 +84,9 @@ int output_tags_human(FILE *out, const TagCount *tags, size_t count);
 int output_links_write_data(FILE *out, const char *action, const StoreNeighbor *links, size_t count,
                             const char *now);
 
-/* remember related --json */
-int output_related_data(FILE *out, long long id, const char *key, const StoreNeighbor *links,
-                        size_t count, const char *now);
+/* remember related --json. id is the memory UUID; local_id is the integer. */
+int output_related_data(FILE *out, const Entry *subject, const StoreNeighbor *links, size_t count,
+                        const char *now);
 
 /* Human Related: block (omit entirely when count==0). */
 int output_related_human(FILE *out, const StoreNeighbor *links, size_t count, const char *now);

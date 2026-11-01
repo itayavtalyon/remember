@@ -187,7 +187,7 @@ TEST(cli_add_revives_deleted)
     ASSERT_TRUE(db != NULL);
     r = run_remember(db, a, sizeof(a) / sizeof(a[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 0);
-    ASSERT_STR_CONTAINS(r.out, "\"sync_id\":");
+    ASSERT_STR_CONTAINS(r.out, "\"id\":\"");
     cmd_result_free(&r);
     r = run_remember(db, soft, sizeof(soft) / sizeof(soft[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 0);
@@ -195,7 +195,7 @@ TEST(cli_add_revives_deleted)
     r = run_remember(db, again, sizeof(again) / sizeof(again[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 0);
     ASSERT_STR_CONTAINS(r.out, "\"action\":\"updated\"");
-    ASSERT_STR_CONTAINS(r.out, "\"id\":1");
+    ASSERT_STR_CONTAINS(r.out, "\"local_id\":1");
     ASSERT_STR_CONTAINS(r.out, "second");
     ASSERT_STR_CONTAINS(r.out, "\"bin\":\"live\"");
     cmd_result_free(&r);
@@ -214,7 +214,7 @@ TEST(cli_add_revives_deleted)
         r = run_remember(db, keyless_again, sizeof(keyless_again) / sizeof(keyless_again[0]), NULL);
         ASSERT_EQ_INT(r.exit_code, 0);
         ASSERT_STR_CONTAINS(r.out, "\"action\":\"merged\"");
-        ASSERT_STR_CONTAINS(r.out, "\"id\":2");
+        ASSERT_STR_CONTAINS(r.out, "\"local_id\":2");
         ASSERT_STR_CONTAINS(r.out, "\"bin\":\"live\"");
         cmd_result_free(&r);
     }

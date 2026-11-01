@@ -206,10 +206,11 @@ TEST(output_entry_json_renders_a_null_source_as_unknown)
 
     e.source = NULL;
     ASSERT_EQ_INT(output_entry_json(f, &e, NOW), 0);
-    assert_written(f, "{\"id\":7,\"sync_id\":\"s-7\",\"key\":\"k:7\",\"body\":\"body\",\"tags\":[],"
-                      "\"source\":\"unknown\",\"created_at\":\"c\",\"updated_at\":\"u\","
-                      "\"expires_at\":null,\"deleted_at\":null,\"bin\":\"live\","
-                      "\"version_vector\":{}}");
+    assert_written(f,
+                   "{\"id\":\"s-7\",\"local_id\":7,\"key\":\"k:7\",\"body\":\"body\",\"tags\":[],"
+                   "\"source\":\"unknown\",\"created_at\":\"c\",\"updated_at\":\"u\","
+                   "\"expires_at\":null,\"deleted_at\":null,\"bin\":\"live\","
+                   "\"version_vector\":{}}");
 }
 
 TEST(output_entry_json_renders_null_text_fields_as_empty_strings)
@@ -221,7 +222,7 @@ TEST(output_entry_json_renders_null_text_fields_as_empty_strings)
     e.created_at = NULL;
     e.updated_at = NULL;
     ASSERT_EQ_INT(output_entry_json(f, &e, NOW), 0);
-    assert_written(f, "{\"id\":7,\"sync_id\":\"s-7\",\"key\":\"k:7\",\"body\":\"\",\"tags\":[],"
+    assert_written(f, "{\"id\":\"s-7\",\"local_id\":7,\"key\":\"k:7\",\"body\":\"\",\"tags\":[],"
                       "\"source\":\"agent\",\"created_at\":\"\",\"updated_at\":\"\","
                       "\"expires_at\":null,\"deleted_at\":null,\"bin\":\"live\","
                       "\"version_vector\":{}}");
@@ -258,10 +259,10 @@ TEST(output_entries_envelope_separates_entries_with_a_comma)
     entries[1].id = OTHER_ID;
     ASSERT_EQ_INT(output_entries_data(f, "deleted", entries, 2, NOW), 0);
     assert_written(
-        f, "{\"action\":\"deleted\",\"count\":2,\"entries\":[{\"id\":7,\"sync_id\":\"s-7\",\"key"
+        f, "{\"action\":\"deleted\",\"count\":2,\"entries\":[{\"id\":\"s-7\",\"local_id\":7,\"key"
            "\":\"k:7\",\"body\":\"body\",\"tags\":[],\"source\":\"agent\",\"created_at\":\"c\","
            "\"updated_at\":\"u\",\"expires_at\":null,\"deleted_at\":null,\"bin\":\"live\",\"vers"
-           "ion_vector\":{}},{\"id\":8,\"sync_id\":\"s-7\",\"key\":\"k:7\",\"body\":\"body\",\"t"
+           "ion_vector\":{}},{\"id\":\"s-7\",\"local_id\":8,\"key\":\"k:7\",\"body\":\"body\",\"t"
            "ags\":[],\"source\":\"agent\",\"created_at\":\"c\",\"updated_at\":\"u\",\"expires_at"
            "\":null,\"deleted_at\":null,\"bin\":\"live\",\"version_vector\":{}}]}");
 }
@@ -287,10 +288,11 @@ TEST(output_memory_envelope_without_action_lists_only_the_subjects_links)
 
     ASSERT_EQ_INT(output_memory_data(f, NULL, &e, links, 2, NOW), 0);
     assert_written(
-        f, "{\"memory\":{\"id\":7,\"sync_id\":\"s-7\",\"key\":\"k:7\",\"body\":\"body\",\"tags\""
+        f, "{\"memory\":{\"id\":\"s-7\",\"local_id\":7,\"key\":\"k:7\",\"body\":\"body\",\"tags\""
            ":[],\"source\":\"agent\",\"created_at\":\"c\",\"updated_at\":\"u\",\"expires_at\":nu"
-           "ll,\"deleted_at\":null,\"bin\":\"live\",\"version_vector\":{},\"links\":[{\"id\":3,"
-           "\"sync_id\":\"n-3\",\"key\":null,\"type\":\"related\",\"bin\":\"live\",\"preview\":"
+           "ll,\"deleted_at\":null,\"bin\":\"live\",\"version_vector\":{},\"links\":[{\"id\":\"n-"
+           "3\",\"local_id\":3,"
+           "\"key\":null,\"type\":\"related\",\"bin\":\"live\",\"preview\":"
            "\"nb\"}]}}");
 }
 
@@ -301,7 +303,7 @@ TEST(output_memory_envelope_with_action_puts_action_before_memory)
 
     ASSERT_EQ_INT(output_memory_data(f, "created", &e, NULL, 0, NOW), 0);
     assert_written(
-        f, "{\"action\":\"created\",\"memory\":{\"id\":7,\"sync_id\":\"s-7\",\"key\":\"k:7\",\"b"
+        f, "{\"action\":\"created\",\"memory\":{\"id\":\"s-7\",\"local_id\":7,\"key\":\"k:7\",\"b"
            "ody\":\"body\",\"tags\":[],\"source\":\"agent\",\"created_at\":\"c\",\"updated_at\":"
            "\"u\",\"expires_at\":null,\"deleted_at\":null,\"bin\":\"live\",\"version_vector\":{}"
            ",\"links\":[]}}");
@@ -314,7 +316,7 @@ TEST(output_action_envelope_writes_the_memory_without_links)
 
     ASSERT_EQ_INT(output_action_data(f, "updated", &e, NOW), 0);
     assert_written(
-        f, "{\"action\":\"updated\",\"memory\":{\"id\":7,\"sync_id\":\"s-7\",\"key\":\"k:7\",\"b"
+        f, "{\"action\":\"updated\",\"memory\":{\"id\":\"s-7\",\"local_id\":7,\"key\":\"k:7\",\"b"
            "ody\":\"body\",\"tags\":[],\"source\":\"agent\",\"created_at\":\"c\",\"updated_at\":"
            "\"u\",\"expires_at\":null,\"deleted_at\":null,\"bin\":\"live\",\"version_vector\":{}"
            "}}");
@@ -365,7 +367,7 @@ static SearchResult given_search_facets(SearchKeyItem keys[2], SearchTagItem tag
     return res;
 }
 
-/* E2.6: each key item carries key, sync_id, label, source, updated_at; each
+/* E2.6: each key item carries key, id, label, source, updated_at; each
    tag item tag and count; total counts every match, not only the items. */
 TEST(output_search_envelope_writes_the_facet_items)
 {
@@ -377,8 +379,8 @@ TEST(output_search_envelope_writes_the_facet_items)
     ASSERT_EQ_INT(output_search_data(f, &res, NULL, 0, NOW), 0);
     assert_written(
         f, "{\"count\":0,\"total\":0,\"keys\":{\"total\":5,\"items\":["
-           "{\"key\":\"recs:books\",\"sync_id\":\"s-1\",\"label\":\"Book recommendations\",\"sou"
-           "rce\":\"agent\",\"updated_at\":\"u-1\"},{\"key\":\"recs:bonds\",\"sync_id\":\"s-2\","
+           "{\"key\":\"recs:books\",\"id\":\"s-1\",\"label\":\"Book recommendations\",\"sou"
+           "rce\":\"agent\",\"updated_at\":\"u-1\"},{\"key\":\"recs:bonds\",\"id\":\"s-2\","
            "\"label\":\"recs:bonds\",\"source\":\"human\",\"updated_at\":\"u-2\"}]},\"tags\":{\""
            "total\":4,\"items\":[{\"tag\":\"type:books\",\"count\":1},{\"tag\":\"recs\",\"count"
            "\":3}]},\"entries\":[]}");
@@ -405,7 +407,7 @@ TEST(output_search_envelope_escapes_every_facet_field)
     ASSERT_EQ_INT(output_search_data(f, &res, NULL, 0, NOW), 0);
     assert_written(
         f, "{\"count\":0,\"total\":0,\"keys\":{\"total\":5,\"items\":["
-           "{\"key\":\"k\\u001b\",\"sync_id\":\"s\\n\",\"label\":\"l\\\"\\u001b[31m\",\"source\""
+           "{\"key\":\"k\\u001b\",\"id\":\"s\\n\",\"label\":\"l\\\"\\u001b[31m\",\"source\""
            ":\"a\\\\\",\"updated_at\":\"u\\t\"}]},\"tags\":{\"total\":4,\"items\":[{\"tag\":\"t"
            "\\u0001\",\"count\":1}]},\"entries\":[]}");
 }
@@ -600,19 +602,25 @@ TEST(output_links_write_envelope_names_both_supersedes_directions)
 
     ASSERT_EQ_INT(output_links_write_data(f, "created", links, 2, NOW), 0);
     assert_written(
-        f, "{\"action\":\"created\",\"count\":2,\"links\":[{\"id\":3,\"sync_id\":\"n-3\",\"key\""
-           ":null,\"type\":\"supersedes\",\"bin\":\"live\",\"preview\":\"nb\"},{\"id\":3,\"sync_"
-           "id\":\"n-3\",\"key\":null,\"type\":\"superseded_by\",\"bin\":\"live\",\"preview\":\""
+        f, "{\"action\":\"created\",\"count\":2,\"links\":[{\"id\":\"n-3\",\"local_id\":3,\"key\""
+           ":null,\"type\":\"supersedes\",\"bin\":\"live\",\"preview\":\"nb\"},{\"id\":\"n-3\","
+           "\"local_"
+           "id\":3,\"key\":null,\"type\":\"superseded_by\",\"bin\":\"live\",\"preview\":\""
            "nb\"}]}");
 }
 
 TEST(output_related_envelope_rejects_missing_arguments)
 {
+    Entry subject = given_entry();
+    Entry no_id = given_entry();
     FILE *f = given_stream();
 
-    ASSERT_EQ_INT(output_related_data(NULL, 1, NULL, NULL, 0, NOW), -1);
-    ASSERT_EQ_INT(output_related_data(f, 1, NULL, NULL, 0, NULL), -1);
-    ASSERT_EQ_INT(output_related_data(f, 1, NULL, NULL, 1, NOW), -1);
+    no_id.sync_id = NULL;
+    ASSERT_EQ_INT(output_related_data(NULL, &subject, NULL, 0, NOW), -1);
+    ASSERT_EQ_INT(output_related_data(f, &subject, NULL, 0, NULL), -1);
+    ASSERT_EQ_INT(output_related_data(f, NULL, NULL, 0, NOW), -1);
+    ASSERT_EQ_INT(output_related_data(f, &no_id, NULL, 0, NOW), -1);
+    ASSERT_EQ_INT(output_related_data(f, &subject, NULL, 1, NOW), -1);
     assert_written(f, "");
 }
 
@@ -662,8 +670,8 @@ TEST(output_conflicts_envelope_separates_conflicts_with_a_comma)
     rows[1].id = 2;
     ASSERT_EQ_INT(output_conflicts_data(f, rows, 2), 0);
     assert_written(
-        f, "{\"count\":2,\"conflicts\":[{\"id\":1,\"sync_id\":\"s-1\",\"reason\":\"key_clash\","
-           "\"local\":{},\"incoming\":{},\"created_at\":\"c\"},{\"id\":2,\"sync_id\":\"s-1\",\"r"
+        f, "{\"count\":2,\"conflicts\":[{\"id\":1,\"memory_id\":\"s-1\",\"reason\":\"key_clash\","
+           "\"local\":{},\"incoming\":{},\"created_at\":\"c\"},{\"id\":2,\"memory_id\":\"s-1\",\"r"
            "eason\":\"key_clash\",\"local\":{},\"incoming\":{},\"created_at\":\"c\"}]}");
 }
 
@@ -1079,14 +1087,18 @@ static int write_links_write_envelope(FILE *f)
 static int write_related_envelope_with_key(FILE *f)
 {
     StoreNeighbor links[2];
+    Entry subject = given_entry();
 
     given_two_links(links);
-    return output_related_data(f, SUBJECT_ID, "k:7", links, 2, NOW);
+    return output_related_data(f, &subject, links, 2, NOW);
 }
 
 static int write_related_envelope_without_key(FILE *f)
 {
-    return output_related_data(f, SUBJECT_ID, NULL, NULL, 0, NOW);
+    Entry subject = given_entry();
+
+    subject.key = NULL;
+    return output_related_data(f, &subject, NULL, 0, NOW);
 }
 
 static int write_related_human(FILE *f)

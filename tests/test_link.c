@@ -645,7 +645,7 @@ TEST(get_marks_trash_neighbor_restore_keeps_edge)
     r = run_remember(db, get, sizeof(get) / sizeof(get[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 0);
     ASSERT_STR_CONTAINS(r.out, "\"bin\":\"expired\"");
-    ASSERT_STR_CONTAINS(r.out, "\"id\":2");
+    ASSERT_STR_CONTAINS(r.out, "\"local_id\":2");
     cmd_result_free(&r);
 
     r = run_remember(db, hget, sizeof(hget) / sizeof(hget[0]), NULL);
@@ -659,7 +659,7 @@ TEST(get_marks_trash_neighbor_restore_keeps_edge)
 
     r = run_remember(db, get, sizeof(get) / sizeof(get[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 0);
-    ASSERT_STR_CONTAINS(r.out, "\"id\":2");
+    ASSERT_STR_CONTAINS(r.out, "\"local_id\":2");
     ASSERT_STR_CONTAINS(r.out, "\"bin\":\"live\"");
     cmd_result_free(&r);
     free(db);
@@ -690,7 +690,10 @@ TEST(help_lists_graph_commands)
         r = run_remember(db, hl, sizeof(hl) / sizeof(hl[0]), NULL);
         ASSERT_EQ_INT(r.exit_code, 0);
         ASSERT_STR_CONTAINS(r.out, "live+expired");
-        ASSERT_STR_CONTAINS(r.out, "--from-sync-id");
+        ASSERT_STR_CONTAINS(r.out, "--from-key");
+        ASSERT_STR_NOT_CONTAINS(r.out, "--from-sync-id");
+        ASSERT_STR_NOT_CONTAINS(r.out, "--to-sync-id");
+        ASSERT_STR_NOT_CONTAINS(r.out, "--sync-id");
         cmd_result_free(&r);
         r = run_remember(db, hu, sizeof(hu) / sizeof(hu[0]), NULL);
         ASSERT_EQ_INT(r.exit_code, 0);

@@ -13,16 +13,15 @@
 #include <stdlib.h>
 #include <string.h>
 
-/* Locator (get / delete): exactly one of id | --key | --sync-id. */
+/* Locator (get / delete): exactly one of id | --key. */
 
 typedef struct {
     const char *key_raw;
     const char *id_raw;
-    const char *sync_id_raw;
     CmdBinOpts bins;
 } LocatorParse;
 
-/* Shared by get/delete: --key / --sync-id, positional id, reject --source and unknowns. */
+/* Shared by get/delete: --key, positional id, reject --source and unknowns. */
 static int locator_take_option(const char *arg, int *i, int rest_argc, const char **rest_argv,
                                LocatorParse *out)
 {
@@ -32,14 +31,6 @@ static int locator_take_option(const char *arg, int *i, int rest_argc, const cha
             return -1;
         }
         out->key_raw = rest_argv[++(*i)];
-        return 1;
-    }
-    if (strcmp(arg, "--sync-id") == 0) {
-        if (*i + 1 >= rest_argc) {
-            err_msg(DIAG_USAGE, "missing value for --sync-id");
-            return -1;
-        }
-        out->sync_id_raw = rest_argv[++(*i)];
         return 1;
     }
     if (cmd_bin_take_flag(arg, &out->bins) != 0) {
@@ -63,7 +54,6 @@ static int parse_locator_args(int rest_argc, const char **rest_argv, LocatorPars
 
     out->key_raw = NULL;
     out->id_raw = NULL;
-    out->sync_id_raw = NULL;
     memset(&out->bins, 0, sizeof(out->bins));
 
     for (i = 0; i < rest_argc; i++) {
@@ -101,39 +91,34 @@ static int locator_validate(const LocatorParse *p)
     if (p->id_raw != NULL) {
         n++;
     }
-    if (p->sync_id_raw != NULL) {
-        n++;
-    }
     if (n > 1) {
-        err_msg(DIAG_USAGE, "provide exactly one of id, --key, or --sync-id");
+        err_msg(DIAG_USAGE, "provide exactly one of id or --key");
         return -1;
     }
     if (n == 0) {
-        err_msg(DIAG_USAGE, "missing id, --key, or --sync-id");
+        err_msg(DIAG_USAGE, "missing id or --key");
         return -1;
     }
     return 0;
 }
 
 /* Which form the locator uses after validate. */
-typedef enum { LOC_ID = 0, LOC_KEY, LOC_SYNC_ID } LocatorKind;
+typedef enum { LOC_ID = 0, LOC_KEY } LocatorKind;
 
 typedef struct {
     long long id;
-    const char *key;     /* points into key_norm when kind==KEY */
-    const char *sync_id; /* points into parse when kind==SYNC_ID */
+    const char *key; /* points into key_norm when kind==KEY */
     LocatorKind kind;
     char pad_[4]; /* explicit tail padding (kept -Wpadded-clean) */
 } LocatorResolved;
 
-/* Normalize key / parse id / check sync_id canonical. */
+/* Normalize key / parse the integer id. */
 static int locator_resolve(const LocatorParse *p, char *key_norm, size_t key_norm_sz,
                            LocatorResolved *out)
 {
     out->kind = LOC_ID;
     out->id = 0;
     out->key = NULL;
-    out->sync_id = NULL;
     if (p->key_raw != NULL) {
         NormStatus ns = normalize_key(p->key_raw, key_norm, key_norm_sz);
         if (ns != NORM_OK) {
@@ -142,15 +127,6 @@ static int locator_resolve(const LocatorParse *p, char *key_norm, size_t key_nor
         }
         out->kind = LOC_KEY;
         out->key = key_norm;
-        return 0;
-    }
-    if (p->sync_id_raw != NULL) {
-        if (store_sync_id_is_canonical(p->sync_id_raw) == 0) {
-            err_msg(DIAG_USAGE, "invalid sync-id");
-            return -1;
-        }
-        out->kind = LOC_SYNC_ID;
-        out->sync_id = p->sync_id_raw;
         return 0;
     }
     if (parse_entry_id(p->id_raw, &out->id) != 0) {
@@ -193,8 +169,6 @@ int cmd_get(Store *s, bool json, int rest_argc, const char **rest_argv)
 
     if (loc.kind == LOC_KEY) {
         st = store_get_by_key(s, loc.key, bin, now, &entry);
-    } else if (loc.kind == LOC_SYNC_ID) {
-        st = store_get_by_sync_id(s, loc.sync_id, bin, now, &entry);
     } else {
         st = store_get(s, loc.id, bin, now, &entry);
     }
@@ -239,32 +213,6 @@ int cmd_get(Store *s, bool json, int rest_argc, const char **rest_argv)
 static StoreStatus delete_resolved(Store *s, const LocatorResolved *loc, StoreBin bin,
                                    const char *now, Entry *entry)
 {
-    if (loc->kind == LOC_SYNC_ID) {
-        Entry found;
-        memset(&found, 0, sizeof(found));
-        if (bin == STORE_BIN_LIVE) {
-            StoreStatus st = store_get_row_by_sync_id(s, loc->sync_id, &found);
-            if (st == STORE_OK && found.deleted_at != NULL) {
-                store_entry_free(&found);
-                return STORE_ERR_DELETED;
-            }
-            if (st == STORE_OK) {
-                long long sid = found.id;
-                store_entry_free(&found);
-                return store_soft_delete_by_id(s, sid, now, entry);
-            }
-            return st;
-        }
-        {
-            StoreStatus st = store_get_by_sync_id(s, loc->sync_id, bin, now, &found);
-            if (st == STORE_OK) {
-                long long hid = found.id;
-                store_entry_free(&found);
-                return store_hard_delete_by_id(s, hid, bin, now, entry);
-            }
-            return st;
-        }
-    }
     if (loc->kind == LOC_KEY) {
         if (bin == STORE_BIN_LIVE) {
             return store_soft_delete_by_key(s, loc->key, now, entry);
@@ -368,15 +316,6 @@ static int handle_update_flag(const char *arg, int *i, int rest_argc, const char
             return taken.rc;
         }
         out->loc.key_raw = taken.value;
-        return 0;
-    }
-    if (strcmp(arg, "--sync-id") == 0) {
-        TakeValue taken = take_value(i, rest_argc, rest_argv, "missing value for --sync-id");
-        if (taken.rc != 0) {
-            *err = taken.err;
-            return taken.rc;
-        }
-        out->loc.sync_id_raw = taken.value;
         return 0;
     }
     /* `--text=-` (or any `--text=VALUE`) is always a literal body, including "-". */
@@ -491,7 +430,6 @@ static int parse_update_args(int rest_argc, const char **rest_argv, UpdateParse 
 
     out->loc.key_raw = NULL;
     out->loc.id_raw = NULL;
-    out->loc.sync_id_raw = NULL;
     out->text_raw = NULL;
     out->set_text = false;
     out->text_literal = false;
@@ -640,31 +578,16 @@ static int update_resolve_expiry(const UpdateParse *parsed, const char *now, cha
     return 0;
 }
 
-/* Map a resolved locator to store_update/store_rekey (id or key_or_null).
-   For SYNC_ID, loads the row and sets *out_id. Returns process exit or 0. */
-static int locator_bind_write(Store *s, const LocatorResolved *loc, StoreBin bin, const char *now,
-                              long long *out_id, const char **out_key)
+/* Map a resolved locator to store_update/store_rekey (id or key_or_null). */
+static void locator_bind_write(const LocatorResolved *loc, long long *out_id, const char **out_key)
 {
     *out_id = 0;
     *out_key = NULL;
     if (loc->kind == LOC_KEY) {
         *out_key = loc->key;
-        return 0;
-    }
-    if (loc->kind == LOC_SYNC_ID) {
-        Entry found;
-        StoreStatus st = STORE_OK;
-        memset(&found, 0, sizeof(found));
-        st = store_get_by_sync_id(s, loc->sync_id, bin, now, &found);
-        if (st != STORE_OK) {
-            return store_status_to_exit(s, st);
-        }
-        *out_id = found.id;
-        store_entry_free(&found);
-        return 0;
+        return;
     }
     *out_id = loc->id;
-    return 0;
 }
 
 int cmd_update(Store *s, bool json, int rest_argc, const char **rest_argv)
@@ -691,7 +614,6 @@ int cmd_update(Store *s, bool json, int rest_argc, const char **rest_argv)
     StoreBin bin = STORE_BIN_LIVE;
     long long conflict_id = 0;
     int rc = REMEMBER_ERR;
-    int bind_rc = 0;
 
     memset(&entry, 0, sizeof(entry));
     memset(&loc, 0, sizeof(loc));
@@ -725,11 +647,7 @@ int cmd_update(Store *s, bool json, int rest_argc, const char **rest_argv)
         update_parse_free(&parsed);
         return REMEMBER_ERR;
     }
-    bind_rc = locator_bind_write(s, &loc, bin, now, &id, &key_or_null);
-    if (bind_rc != 0) {
-        update_parse_free(&parsed);
-        return bind_rc;
-    }
+    locator_bind_write(&loc, &id, &key_or_null);
     if (update_prepare_payload(&parsed, &body, &body_len, hash, &tags_norm, &ntags, &set_tags) !=
         0) {
         goto cleanup;
@@ -804,15 +722,6 @@ static int handle_rekey_flag(const char *arg, int *i, int rest_argc, const char 
             return -1;
         }
         out->loc.key_raw = taken.value;
-        return 1;
-    }
-    if (strcmp(arg, "--sync-id") == 0) {
-        TakeValue taken = take_value(i, rest_argc, rest_argv, "missing value for --sync-id");
-        if (taken.rc != 0) {
-            err_msg(DIAG_USAGE, taken.err);
-            return -1;
-        }
-        out->loc.sync_id_raw = taken.value;
         return 1;
     }
     if (strcmp(arg, "--to-key") == 0) {
@@ -923,12 +832,7 @@ int cmd_rekey(Store *s, bool json, int rest_argc, const char **rest_argv)
         err_msg(DIAG_INTERNAL, "internal error");
         return REMEMBER_ERR;
     }
-    {
-        int bind_rc = locator_bind_write(s, &loc, bin, now, &id, &key);
-        if (bind_rc != 0) {
-            return bind_rc;
-        }
-    }
+    locator_bind_write(&loc, &id, &key);
     st = store_rekey(s, id, (RekeyKeys){.key_or_null = key, .new_key_or_null = new_key}, bin, now,
                      &entry, &conflict_id);
     if (st == STORE_ERR_CONFLICT) {

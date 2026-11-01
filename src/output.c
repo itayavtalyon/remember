@@ -151,10 +151,8 @@ static int write_entry_core(FILE *out, const Entry *e, const char *now)
         return -1;
     }
     bin = BIN_TOKENS[store_bin_of(e->deleted_at, e->expires_at, now)];
-    if (fprintf(out, "{\"id\":%lld,\"sync_id\":", e->id) < 0) {
-        return -1;
-    }
-    if (output_json_string(out, e->sync_id) != 0) {
+    if (fputs("{\"id\":", out) < 0 || output_json_string(out, e->sync_id) != 0 ||
+        fprintf(out, ",\"local_id\":%lld", e->id) < 0) {
         return -1;
     }
     if (write_json_nullable(out, "key", e->key) != 0) {
@@ -362,7 +360,7 @@ static bool facets_ok(const SearchResult *res)
 static int write_key_item(FILE *out, const SearchKeyItem *item)
 {
     const JsonField rest[] = {
-        {.name = "sync_id", .value = item->sync_id},
+        {.name = "id", .value = item->sync_id},
         {.name = "label", .value = item->label},
         {.name = "source", .value = item->source},
         {.name = "updated_at", .value = item->updated_at},
@@ -801,10 +799,8 @@ static int write_stub_json(FILE *out, const StoreNeighbor *n, const char *now)
     }
     bin = BIN_TOKENS[neighbor_bin(n, now)];
     fill_preview(preview, n->neighbor_body, STUB_PREVIEW_CP);
-    if (fprintf(out, "{\"id\":%lld,\"sync_id\":", n->neighbor_id) < 0) {
-        return -1;
-    }
-    if (output_json_string(out, n->neighbor_sync_id) != 0) {
+    if (fputs("{\"id\":", out) < 0 || output_json_string(out, n->neighbor_sync_id) != 0 ||
+        fprintf(out, ",\"local_id\":%lld", n->neighbor_id) < 0) {
         return -1;
     }
     if (write_json_nullable(out, "key", n->neighbor_key) != 0) {
@@ -948,25 +944,27 @@ int output_links_write_data(FILE *out, const char *action, const StoreNeighbor *
     return 0;
 }
 
-int output_related_data(FILE *out, long long id, const char *key, const StoreNeighbor *links,
-                        size_t count, const char *now)
+int output_related_data(FILE *out, const Entry *subject, const StoreNeighbor *links, size_t count,
+                        const char *now)
 {
     size_t i = 0;
 
-    if (out == NULL || now == NULL) {
+    if (out == NULL || now == NULL || subject == NULL || subject->sync_id == NULL) {
         return -1;
     }
     if (count > 0U && links == NULL) {
         return -1;
     }
-    if (write_data_open(out) != 0 || fprintf(out, "\"id\":%lld,\"key\":", id) < 0) {
+    if (write_data_open(out) != 0 || fputs("\"id\":", out) < 0 ||
+        output_json_string(out, subject->sync_id) != 0 ||
+        fprintf(out, ",\"local_id\":%lld,\"key\":", subject->id) < 0) {
         return -1;
     }
-    if (key == NULL) {
+    if (subject->key == NULL) {
         if (fputs("null", out) < 0) {
             return -1;
         }
-    } else if (output_json_string(out, key) != 0) {
+    } else if (output_json_string(out, subject->key) != 0) {
         return -1;
     }
     if (fprintf(out, ",\"count\":%zu,\"links\":[", count) < 0) {
@@ -1118,10 +1116,8 @@ static int output_one_conflict_json(FILE *out, const StoreConflict *row)
         row->incoming_json == NULL || row->created_at == NULL) {
         return -1;
     }
-    if (fprintf(out, "{\"id\":%lld,\"sync_id\":", row->id) < 0) {
-        return -1;
-    }
-    if (output_json_string(out, row->sync_id) != 0) {
+    if (fprintf(out, "{\"id\":%lld,\"memory_id\":", row->id) < 0 ||
+        output_json_string(out, row->sync_id) != 0) {
         return -1;
     }
     if (fprintf(out, ",\"reason\":") < 0) {

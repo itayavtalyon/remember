@@ -57,7 +57,7 @@ static char *facade_sidecar_id(const char *db)
  * paths share output.c and the run() pipeline, so this guards the stream
  * injection (appio) and any future drift.
  *
- * Timestamps, sync_id, and version_vector are the fields that legitimately
+ * Timestamps, the memory id, and version_vector are the fields that legitimately
  * differ between two separate writes, so mutation cases mask those values
  * before comparing; read cases compare exact bytes (stored ids are identical
  * across reads of the same DB).
@@ -146,7 +146,7 @@ static void mask_timestamps(char *s)
     mask_field(s, "\"created_at\":\"");
     mask_field(s, "\"updated_at\":\"");
     mask_field(s, "\"deleted_at\":\"");
-    mask_field(s, "\"sync_id\":\"");
+    mask_field(s, "\"id\":\"");
     mask_version_vector(s);
 }
 
@@ -207,7 +207,7 @@ static void seed_three_linked(const char *db)
 typedef void (*SeedFn)(const char *db);
 
 /* Mutations: seed identical pre-state on two DBs, run cmd on each, compare
-   timestamp/sync_id-masked stdout + exit. */
+   timestamp/id-masked stdout + exit. */
 static void assert_mutation_parity(SeedFn seed, const char *const *cmd, size_t ncmd)
 {
     char *db1 = make_temp_db_path();

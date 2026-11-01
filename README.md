@@ -39,7 +39,7 @@ flowchart LR
 - **Connect** — link memories as `related`, `cites`, or `supersedes`.
 - **Expire / delete** — optional TTL (`--expired` bin) and soft-delete (`--deleted`); hard wipe via `purge` / flagged `delete`. Nothing vanishes silently.
 - **Automate** — `--json` on every command; ships an agent skill for Claude / Cursor / others.
-- **Merge** — `import --from-db` merges another brain by `sync_id`; run `conflicts` after.
+- **Merge** — `import --from-db` merges another brain by `id`; run `conflicts` after.
 
 Design: [`design-logs/001-foundations.md`](design-logs/001-foundations.md) ·
 Plans: [`implementation-plans/INDEX.md`](implementation-plans/INDEX.md).
@@ -85,6 +85,7 @@ Opening an existing database migrates it to `user_version` **5**.
 - Search order: exact key, then key prefix, then relevance (bm25), then `updated_at`.
 - JSON `keys` and `tags` now sit between `total` and `entries` in `search --json`. `--facet-limit N` (default 50, 1..200) caps their `items`; `total` counts every match. Human `search` prints `keys:` and `tags:` lines before the rows.
 - An empty or blank `search` query is an empty result on exit 0. It was a usage error (`empty search query`).
+- A memory's JSON `id` is the lowercase hyphenated UUID. The integer is `local_id`, and only CLI output includes it. `--id`, `--local-id`, and `--sync-id` are gone. There is no alias. Pass `local_id` or `--key` to fetch a memory.
 - `--limit`, `--offset`, `--busy-timeout` and `--facet-limit` take ASCII digits only. A leading space or `+` is now a usage error.
 - A command whose output cannot be written (for example a closed pipe) exits 1 with `failed to write output`. It used to exit 0.
 
