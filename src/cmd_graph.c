@@ -296,7 +296,7 @@ static int run_pair(Store *s, bool json, int rest_argc, const char **rest_argv, 
     if (cmd_bin_resolve(&p.bins, &bin) != 0) {
         return REMEMBER_ERR;
     }
-    if (p.bins.expired || p.bins.trash_alias) {
+    if (p.bins.expired) {
         err_msg(DIAG_USAGE, "graph commands use --deleted for deleted ends (not --expired)");
         return REMEMBER_ERR;
     }
@@ -500,7 +500,7 @@ int cmd_related(Store *s, bool json, int rest_argc, const char **rest_argv)
     if (cmd_bin_resolve(&p.bins, &bin) != 0) {
         return REMEMBER_ERR;
     }
-    if (p.bins.expired || p.bins.trash_alias) {
+    if (p.bins.expired) {
         err_msg(DIAG_USAGE, "graph commands use --deleted for deleted ends (not --expired)");
         return REMEMBER_ERR;
     }

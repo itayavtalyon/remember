@@ -333,9 +333,9 @@ TEST(rekey_rename_promote_demote_and_errors)
     ASSERT_EQ_INT(r.exit_code, 3);
     cmd_result_free(&r);
 
-    /* --trash reaches a trashed row (t:k is in the trash bin from `exp`). */
+    /* --expired reaches an expired row (t:k is expired from `exp`). */
     {
-        const char *rt[] = {"rekey", "--trash", "--key", "t:k", "--to-key", "t2:k"};
+        const char *rt[] = {"rekey", "--expired", "--key", "t:k", "--to-key", "t2:k"};
         r = run_remember(db, rt, sizeof(rt) / sizeof(rt[0]), NULL);
         ASSERT_EQ_INT(r.exit_code, 0);
         cmd_result_free(&r);
@@ -424,7 +424,7 @@ TEST(list_search_get_json_links_empty_after_expires)
     const char *get[] = {"--json", "get", "1"};
     const char *upd[] = {"--json", "update", "1", "--text", "solo2"};
     const char *del[] = {"--json", "delete", "1"};
-    const char *prg[] = {"--json", "purge-trash"};
+    const char *prg[] = {"--json", "purge", "--expired"};
 
     ASSERT_TRUE(db != NULL);
     r = run_remember(db, add, sizeof(add) / sizeof(add[0]), NULL);
@@ -637,7 +637,7 @@ TEST(get_marks_trash_neighbor_restore_keeps_edge)
     const char *link[] = {"link", "1", "2"};
     const char *get[] = {"--json", "get", "1"};
     const char *hget[] = {"get", "1"};
-    const char *rest[] = {"update", "--trash", "2", "--clear-expires"};
+    const char *rest[] = {"update", "--expired", "2", "--clear-expires"};
 
     ASSERT_TRUE(db != NULL);
     ASSERT_EQ_INT(add_body((BodyInput){.db = db, .body = "keep"}), 1);

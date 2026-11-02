@@ -14,7 +14,6 @@ typedef enum {
     CLI_CMD_UPDATE,
     CLI_CMD_DELETE,
     CLI_CMD_TAGS,
-    CLI_CMD_PURGE_TRASH,
     CLI_CMD_PURGE,
     CLI_CMD_LINK,
     CLI_CMD_UNLINK,
@@ -45,7 +44,7 @@ typedef struct {
     bool json;
     bool no_create;
     bool busy_timeout_set;
-    char pad_[1]; /* explicit tail padding (kept -Wpadded-clean) */
+    bool strict; /* --strict or REMEMBER_STRICT=1 (G2-03) */
 } CliGlobals;
 
 /*
@@ -58,7 +57,7 @@ typedef struct {
     const char *error_option; /* option name missing a value, e.g. "--db" */
     /*
      * The subcommand's own arguments: every token after the subcommand name
-     * with globals (--db/--json/--busy-timeout/--no-create) and
+     * with globals (--db/--json/--strict/--busy-timeout/--no-create) and
      * meta flags (--help/--version) already removed, in original order. Tokens
      * after a "--" separator are included
      * verbatim (end-of-options). Subcommand parsers see only what is theirs.

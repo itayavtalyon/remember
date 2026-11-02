@@ -575,3 +575,65 @@ DRY / easy to replace / orthogonal / simplify:
 - The stamp stays in the command that already writes (`set_updated_by`, `note_link_end`, `update_apply_changes`, soft delete, rekey). Link and unlink share `note_link_end`.
 - `created_by` does not move on a later local write. `updated_by` does. Kind `import` is stored and searchable. `--as` rejects it. Plan 23 does the file write.
 - Actor JSON is `memcpy`. `snprintf` in `normalize.c` leaves llvm-cov branch sides at 0. `same_tag_set` is two loops. A shared `const char *const *` helper discarded qualifiers on `Entry.tags`.
+
+### Stage 5: --trash selects the Deleted bin (2026-11-02)
+
+`--trash` selects Deleted. `--expired` selects expired memories. They are not aliases. This replaces the 0.2 plan-12 behavior (`decision:2026-10-22-M-23`, `decision:2026-10-22-trash-flag` as amended, `decision:g2-03`, `decision:s-09`).
+
+What changed:
+
+- `cmd_bin_resolve` maps `--trash` to `STORE_BIN_DELETED` and prints one warning. Code `flag_meaning_changed`. Detail `{"flag":"--trash","use":"--expired"}` (flag, then use). Plain: `remember: warning: --trash now means the Trash (deleted memories). For expired memories, use --expired.` With `--json`, that item is in `warnings` and stderr is empty. `--strict` or `REMEMBER_STRICT=1` (exactly `1`) makes any warning exit 4, including when the command also failed. `REMEMBER_STRICT` is 4. Exit 4 has no other meaning. The warning stays for this plan.
+- Help on get, update, list, search, tags, and rekey prints the two locked lines. Delete does not. General help names `[--strict]`, the bins line `--trash selects the Deleted bin.`, and `4  a warning under --strict`. The command footer does not list `--strict` (stage 7). The delete summary drops `--deleted`.
+- Wrong list, exit 3. The label is the key, otherwise the id (the UUID). `k_fix[DIAG_DELETED]` is `Add --trash to use it.` `k_fix[DIAG_EXPIRED]` stays `Add --expired to use it.` `not_expired` and `not_deleted` stay the catalog tokens. A row with no key and an empty id has nothing to quote, so the line stays `remember: deleted`.
+- `purge-trash` is an unknown command. `store_purge_trash` and its store tests stay. Do not add empty `--trash`. `delete --deleted` is an unknown option. `delete --trash` prints the locked warning, then the existing `unknown option '--trash'`, and does not wipe. Restore is `update --trash --undelete`. `update --deleted --undelete` still restores (same bin). `--trash` with `--deleted` is that bin, not a conflict. `--trash` with `--expired` is `cannot combine --expired and --trash`.
+- `purge --trash` uses the shared resolver, so it selects Deleted and warns. Graph `--trash` includes deleted ends and still warns. Graph still rejects only `--expired`. A list cursor's bin token follows the resolved bin, so `--trash` is `deleted`.
+
+Not in stage 5, on purpose: `remember brain new-id` (stage 6), `--color` and `--quiet` (stage 7), `unknown_field` (stage 8), the spec (stage 9). No one-row CLI purge (plan 25). `delete --expired` stays a one-row hard wipe. `decision:purge-command` / H-16.8 describes a bulk soft-delete of every due expired row. The stage-5 paragraphs do not name that, so it was not built. Other C-42 fixes stay drafts. Approved lines stay C-01, C-02, and C-35. M5 stays `rc = (rc == REMEMBER_OK && diag_json_has_error()) ? REMEMBER_ERR : rc;`. The strict override is after that line, in `remember_run`. Actors, the positional locator, and `--hooks` / `--no-hooks` stay as stage 4 left them. INDEX row 21 and the definition of done stay unticked. No `state:implemented`.
+
+Tests: `envelope_trash_is_the_deleted_bin` was the red test. The gate also covers strict exit 4, the help lines, `update --trash --undelete`, the keyless UUID line, the mutex, `purge --trash`, and a live row that `delete --trash` does not wipe.
+
+Gate (Apple clang, Debug, sanitizers on, LSAN off, `REMEMBER_TEST_VFS=ON`, Unix Makefiles; coverage with Homebrew LLVM 22). `BUILD_DIR` was not exported. ninja is absent. `origin/main` was not merged (`standard:coding` rule 7 says merge at stage start; this stage's prompt says stage 9 merges `origin/main`). ctest 5/5 (step_gate 60.91s, step05_gate 57.41s, store_asan_gate 12.62s, install_skill 2.34s, no_shim_symbols 0.76s). Coverage: store 497 and CLI 905, both 0 failed; functions 100%; effective lines 100% (zero-hit 2079, all defensive, must-cover 0); branch sides 0 missed on `normalize.c` (504), `output.c` (720), `search_terms.c` (176), `unicode.c` (80). Lint `LINT OK` (LLVM 22 clang-tidy, cppcheck, gcc -fanalyzer, scan-build; include-what-you-use skipped, not installed). `default.profraw` stays untracked. Version stays 0.2.0. The 16 stage-2a mutants, the 10 stage-3 mutants, and the 10 stage-4 mutants were not re-run.
+
+Docs that named the old alias were updated with the locked lines: `docs/engineering-notes.md`, the current claims in `README.md`, and `skills/remember/SKILL.md` in this worktree. Design logs, old plans, INDEX, and `docs/JSON-STYLE.md` were not edited. The v0.1.0 README history was left. The installed grok skill was not edited. The worktree skill still has `--source` in the add examples (stage 4 left that).
+
+### Stage 5 deep review (2026-11-02, in session)
+
+`decision:plan21-stage-flow`: in-session deep review, fix, continue. No `.claude/REVIEW_REQUEST`. Local Bugbot is not installed. No product question is open. `standard:coding` says merge `main` at the start of a stage. This prompt says stage 9 merges `origin/main`, so it was not merged. `decision:2026-11-01-legacy-plans-spec-step` says stage 9 is the spec stage and the whole-plan review is after that. This stage does not write `.claude/WHOLE_PLAN_REVIEW`. `quality:linters-max` allows a local `NOLINT`. `g_warning_count` has the same note as `g_json`. The `getenv` note was already there.
+
+The first coverage run failed on two lines (`src/cmd_locator.c` label fallback, `src/diag.c` plain warning write failure). The first lint run failed on an `int`/`bool` conversion, the new counter, two short test names, and two `variableScope` warnings. Those are fixed in the tree the gate above measured.
+
+Findings:
+
+- **Important, fixed:** `delete --trash` on a live row returned before any wipe, and the test did not read the row afterward. `cli_delete_expired_hard_wipes_one_row` now gets local id 2 and expects the body `stay`.
+- **Important, fixed:** a missing label (no key, empty id) fell through to `store_status_to_exit` and nothing covered that line. `envelope_blank_id_wrong_list_keeps_the_deleted_token` expects `remember: deleted`.
+- **Important, fixed:** a plain warning whose stderr rejects the write set `rc = -1` and nothing covered it. `plain_warning_that_cannot_be_written_does_not_count` expects failure and a warning count of 0, so `--strict` does not see a warning that was not written.
+- **Kept:** `delete --expired` is still one row, hard. H-16.8 is not this stage.
+- **Kept:** `delete --trash` fails with the existing unknown-option sentence after the locked warning. The stage paragraphs do not lock a different failure sentence.
+- **Kept:** `purge --trash` selects Deleted and warns. The shared resolver is why. Empty `--trash` was not added.
+- **Kept:** M5. The prior mutant sets were not re-run. The 14 stage-5 mutants below were killed before the tidy rewrite that split `||` and the ternary into `if`s. Those predicates are unchanged, and the tests that killed M1 and M12 passed again in the gate. The 14 were not re-run after that spelling change.
+- **Kept:** three test names still say the old alias or hard-wipe. The assertions match this stage.
+
+Mutants, one clause at a time, each rebuilt. No survivor. Sources were restored after the last one (hash check).
+
+| Mutant | Change | Red test |
+|---|---|---|
+| M1 | `want_expired` includes trash; `want_deleted` does not | `envelope_trash_is_the_deleted_bin` |
+| M2 | warning only if trash, expired, and deleted | `envelope_trash_is_the_deleted_bin` |
+| M3 | detail field order swapped | `envelope_warnings_keep_their_order_with_a_comma_between` |
+| M4 | strict block ignores `rc` | `envelope_strict_makes_a_trash_warning_exit_4` |
+| M5 | `REMEMBER_STRICT` matches `strcmp == 1` | `envelope_strict_makes_a_trash_warning_exit_4` |
+| M6 | keyed wrong-list label is the local id | `envelope_trash_is_the_deleted_bin` |
+| M7 | keyless label is the local id | `envelope_keyless_wrong_list_uses_the_uuid` |
+| M8 | the two wrong-list sentences are swapped | `envelope_trash_is_the_deleted_bin` |
+| M9 | plain wrong-list omits the fix | `envelope_trash_is_the_deleted_bin` |
+| M10 | command table registers `purge-trash` | `envelope_help_states_trash_and_expired` |
+| M11 | delete accepts `--deleted` | `cli_delete_deleted_hard_wipes_the_row` |
+| M12 | `--trash` and `--expired` are both allowed | `envelope_trash_and_expired_cannot_combine` |
+| M13 | JSON warnings also go to stderr | `envelope_warnings_keep_their_order_with_a_comma_between` |
+| M14 | the warning is emitted twice | `envelope_trash_is_the_deleted_bin` |
+
+DRY / easy to replace / orthogonal / simplify:
+
+- One resolver (`cmd_bin_resolve`) owns the bin and the one warning. Delete rejects `--trash` and `--deleted` after that resolve, so the warning still prints and the row is not wiped.
+- One wrong-list writer (`exit_wrong_list`). get, delete, update, and rekey call `exit_after_store` for `STORE_ERR_EXPIRED` and `STORE_ERR_DELETED` only.
+- The warning counter lives in `diag.c`, survives `diag_json_end`, and resets at `remember_run`. Exit 4 is only that counter under `--strict`.

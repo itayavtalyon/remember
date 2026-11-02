@@ -7,9 +7,10 @@
 #include <string.h>
 
 enum {
-    SEED_ROWS = 25,     /* rows seeded for the list/paging tests */
-    BODY_BUFSIZE = 64,  /* scratch body buffer */
-    TAG_PAIRS_OVER = 51 /* one past the 50-tag-filter limit */
+    SEED_ROWS = 25,      /* rows seeded for the list/paging tests */
+    BODY_BUFSIZE = 64,   /* scratch body buffer */
+    TAG_PAIRS_OVER = 51, /* one past the 50-tag-filter limit */
+    WRONG_LIST_LINE = 128
 };
 
 static char *take_next_cursor(const char *json);
@@ -384,7 +385,19 @@ TEST(delete_existing)
     cmd_result_free(&d);
     g = run_remember(db, gargs, sizeof(gargs) / sizeof(gargs[0]), NULL);
     ASSERT_EQ_INT(g.exit_code, 3);
-    ASSERT_STREQ(g.err, "remember: deleted\n");
+    {
+        char *id = harness_sqlite_query_line(db, "SELECT id FROM entries WHERE local_id=1;");
+
+        ASSERT_TRUE(id != NULL);
+        if (id != NULL) {
+            char want[WRONG_LIST_LINE];
+
+            (void)snprintf(want, sizeof(want),
+                           "remember: \"%s\" is in the Trash. Add --trash to use it.\n", id);
+            ASSERT_STREQ(g.err, want);
+        }
+        free(id);
+    }
     cmd_result_free(&g);
     {
         const char *get_deleted[] = {"get", "--deleted", "1"};
@@ -827,8 +840,10 @@ TEST(list_json_cursor_filters_and_rejects)
         cmd_result_free(&r);
         trash[6] = cursor;
         r = run_remember(db, trash, sizeof(trash) / sizeof(trash[0]), NULL);
-        ASSERT_EQ_INT(r.exit_code, 0);
-        ASSERT_STR_CONTAINS(r.out, "old one");
+        ASSERT_EQ_INT(r.exit_code, 1);
+        ASSERT_STREQ(r.err, "");
+        ASSERT_STR_CONTAINS(r.out, "\"code\":\"invalid_argument\"");
+        ASSERT_STR_CONTAINS(r.out, "\"code\":\"flag_meaning_changed\"");
         cmd_result_free(&r);
         free(cursor);
 
@@ -856,6 +871,29 @@ TEST(list_json_cursor_filters_and_rejects)
         ASSERT_STR_CONTAINS(r.out, "gone one");
         cmd_result_free(&r);
         free(cursor);
+
+        {
+            const char *trash_list[] = {"list", "--json", "--trash", "--limit", "1"};
+            const char *trash_page[] = {"list", "--json",   "--trash", "--limit",
+                                        "1",    "--cursor", NULL};
+
+            r = run_remember(db, trash_list, sizeof(trash_list) / sizeof(trash_list[0]), NULL);
+            ASSERT_EQ_INT(r.exit_code, 0);
+            ASSERT_STREQ(r.err, "");
+            ASSERT_STR_CONTAINS(r.out, "\"code\":\"flag_meaning_changed\"");
+            ASSERT_STR_CONTAINS(r.out, "\"has_more\":true");
+            cursor = take_next_cursor(r.out);
+            ASSERT_TRUE(cursor != NULL);
+            cmd_result_free(&r);
+            trash_page[6] = cursor;
+            r = run_remember(db, trash_page, sizeof(trash_page) / sizeof(trash_page[0]), NULL);
+            ASSERT_EQ_INT(r.exit_code, 0);
+            ASSERT_STREQ(r.err, "");
+            ASSERT_STR_CONTAINS(r.out, "gone one");
+            ASSERT_STR_CONTAINS(r.out, "\"code\":\"flag_meaning_changed\"");
+            cmd_result_free(&r);
+            free(cursor);
+        }
 
         r = run_remember(db, created, sizeof(created) / sizeof(created[0]), NULL);
         ASSERT_EQ_INT(r.exit_code, 0);
@@ -964,7 +1002,19 @@ TEST(get_expired_exits_three)
 
     g = run_remember(db, gargs, sizeof(gargs) / sizeof(gargs[0]), NULL);
     ASSERT_EQ_INT(g.exit_code, 3);
-    ASSERT_STREQ(g.err, "remember: expired\n");
+    {
+        char *id = harness_sqlite_query_line(db, "SELECT id FROM entries WHERE local_id=1;");
+
+        ASSERT_TRUE(id != NULL);
+        if (id != NULL) {
+            char want[WRONG_LIST_LINE];
+
+            (void)snprintf(want, sizeof(want),
+                           "remember: \"%s\" has expired. Add --expired to use it.\n", id);
+            ASSERT_STREQ(g.err, want);
+        }
+        free(id);
+    }
     ASSERT_TRUE(g.out == NULL || g.out[0] == '\0');
     cmd_result_free(&g);
     free(db);

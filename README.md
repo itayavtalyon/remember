@@ -71,7 +71,7 @@ Opening an existing database migrates it to `user_version` **5**.
 - Hebrew marks are folded out of the search index. The stored body keeps them.
 - `remember device` prints the device id. `remember device new` mints a new one after a restore or a copied brain, and it repairs an invalid sidecar.
 - The device id is only the sidecar `<db-path>.device_id`. The database holds no copy.
-- Hard wipe (`delete --expired|--deleted`, `purge --expired|--deleted`) no longer needs one registered device.
+- Hard wipe is `delete --expired` (one expired row) or `purge --expired` / `purge --deleted` (one whole bin). `delete --deleted` does not exist. `--trash` selects the Deleted bin. It no longer needs one registered device.
 - With `--json`, every reply is one `remember-message` envelope on stdout, success or failure: `{"format":"remember-message","version":1,"type":"memory.get.result","data":{...}}`. A failure keeps its type and has `error{code,message,fix,retryable,detail?}` instead of `data`. Warnings are a `warnings` array at the end. stderr stays empty. `--json-errors` is gone.
 - A database error names one of seven causes: `busy`, `read_only`, `disk_full`, `cannot_open`, `not_a_database`, `corrupt`, `io_error`. Anything else is `database`.
 - `--busy-timeout MS` sets the lock wait (0..60000, default 5000).
@@ -124,11 +124,10 @@ remember --json purge --deleted                   # whole deleted bin; 1 device
 | JSON `"trash": true/false` on entries and stubs | `"bin": "live"\|"expired"\|"deleted"` (always present, never null). Stubs also carry `sync_id`. |
 | Exit 3 token `not_in_trash` | `not_expired`. Soft-delete adds `deleted` / `not_deleted`. |
 | Unflagged `delete` permanently CASCADE-wiped the row | Soft-delete (`deleted_at` set, body and edges kept). |
-| `delete --trash` / `purge-trash` were the only hard paths | Hard wipe is `delete --expired\|--deleted` or `purge --expired\|--deleted` (single-device hatch). |
+| `delete --trash` / `purge-trash` were the only hard paths | Hard wipe is `delete --expired` or `purge --expired` / `purge --deleted`. `delete --deleted` does not exist. `--trash` selects the Deleted bin. |
 | JSON fields ended at `expires_at` then optional `links` | Order is `id, sync_id, key, body, tags, source, created_at, updated_at, expires_at, deleted_at, bin, version_vector` then `links` on list/search/get. |
 
-`--trash` and `purge-trash` still run as aliases of `--expired`, with one
-stderr deprecation line per invocation. They never select the deleted bin.
+`--trash` selects the Deleted bin. `--expired` selects expired memories. `--trash` is not an alias of `--expired`. `purge-trash` does not exist. For one release, a command that uses `--trash` prints `remember: warning: --trash now means the Trash (deleted memories). For expired memories, use --expired.` With `--json`, that item is in `warnings` and stderr is empty. Code `flag_meaning_changed`. Detail `{"flag":"--trash","use":"--expired"}`.
 
 **Upgrade notes**
 
@@ -136,8 +135,7 @@ stderr deprecation line per invocation. They never select the deleted bin.
   copy that is meant to be a different replica.
 - JSON parsers must stop reading `"trash"` and must accept `"bin"` +
   `"sync_id"` (kits should hard-require `sync_id`).
-- Scripts that used `delete` as "forget forever" should switch to
-  `delete --deleted` after a soft-delete, or `purge --deleted`.
+- Scripts that used `delete` as "forget forever" should use `purge --deleted` for the whole Deleted bin. `delete --expired` hard-wipes one expired row. `delete --deleted` does not exist. Restore from the Trash with `update --trash --undelete`.
 - After `import --from-db`, always run `conflicts` (import exits 0 even when
   conflicts were recorded).
 

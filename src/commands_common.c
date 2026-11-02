@@ -526,8 +526,7 @@ int cmd_bin_take_flag(const char *arg, CmdBinOpts *opts)
         return 0;
     }
     if (strcmp(arg, "--trash") == 0) {
-        opts->expired = true;
-        opts->trash_alias = true;
+        opts->trash = true;
         return 1;
     }
     if (strcmp(arg, "--expired") == 0) {
@@ -543,20 +542,46 @@ int cmd_bin_take_flag(const char *arg, CmdBinOpts *opts)
 
 int cmd_bin_resolve(const CmdBinOpts *opts, StoreBin *out)
 {
+    bool want_deleted = false;
+    bool want_expired = false;
+
     if (opts == NULL || out == NULL) {
         err_msg(DIAG_INTERNAL, "internal error");
         return -1;
     }
-    if (opts->trash_alias) {
-        (void)diag_warning(DIAG_WARN_DEPRECATED_FLAG, "--trash is deprecated; use --expired");
-    }
-    if (opts->expired && opts->deleted) {
-        err_msg(DIAG_USAGE, "cannot combine --expired and --deleted");
-        return -1;
+    if (opts->trash) {
+        static const DiagDetailField detail[] = {
+            {.name = "flag", .value = "--trash"},
+            {.name = "use", .value = "--expired"},
+        };
+
+        (void)diag_warning_detail(
+            DIAG_WARN_FLAG_MEANING_CHANGED,
+            "--trash now means the Trash (deleted memories). For expired memories, use --expired.",
+            detail, sizeof detail / sizeof detail[0]);
     }
     if (opts->deleted) {
+        want_deleted = true;
+    }
+    if (opts->trash) {
+        want_deleted = true;
+    }
+    if (opts->expired) {
+        want_expired = true;
+    }
+    if (want_expired && want_deleted) {
+        /* Name --trash when they passed it. --expired with --deleted keeps its sentence. */
+        const char *mix = "cannot combine --expired and --deleted";
+
+        if (opts->trash) {
+            mix = "cannot combine --expired and --trash";
+        }
+        err_msg(DIAG_USAGE, mix);
+        return -1;
+    }
+    if (want_deleted) {
         *out = STORE_BIN_DELETED;
-    } else if (opts->expired) {
+    } else if (want_expired) {
         *out = STORE_BIN_EXPIRED;
     } else {
         *out = STORE_BIN_LIVE;
@@ -603,6 +628,50 @@ int store_status_to_exit(const Store *s, StoreStatus st)
         return REMEMBER_ERR;
     }
     return REMEMBER_OK;
+}
+
+int exit_wrong_list(StoreStatus st, const char *label)
+{
+    DiagCode code = DIAG_EXPIRED;
+    int need = 0;
+    int wrote = 0;
+    char *buf = NULL;
+
+    if (label == NULL || (st != STORE_ERR_DELETED && st != STORE_ERR_EXPIRED)) {
+        err_msg(DIAG_INTERNAL, "internal error");
+        return REMEMBER_ERR;
+    }
+    if (st == STORE_ERR_DELETED) {
+        code = DIAG_DELETED;
+        need = snprintf(NULL, 0, "\"%s\" is in the Trash.", label);
+    } else {
+        need = snprintf(NULL, 0, "\"%s\" has expired.", label);
+    }
+    if (need < 0) {
+        err_msg(DIAG_INTERNAL, "internal error");
+        return REMEMBER_ERR;
+    }
+    buf = (char *)malloc((size_t)need + 1U);
+    if (buf == NULL) {
+        err_msg(DIAG_OUT_OF_MEMORY, "out of memory");
+        return REMEMBER_ERR;
+    }
+    if (st == STORE_ERR_DELETED) {
+        wrote = snprintf(buf, (size_t)need + 1U, "\"%s\" is in the Trash.", label);
+    } else {
+        wrote = snprintf(buf, (size_t)need + 1U, "\"%s\" has expired.", label);
+    }
+    if (wrote != need) {
+        err_msg(DIAG_INTERNAL, "internal error");
+        free(buf);
+        return REMEMBER_ERR;
+    }
+    wrote = diag_error_split(code, (DiagSplit){.message = buf, .fix = diag_code_fix(code)});
+    free(buf);
+    if (wrote != 0) {
+        return REMEMBER_ERR;
+    }
+    return REMEMBER_WRONG_BIN;
 }
 
 int load_body(const char *body_raw, int dash_is_stdin, char **out_body, size_t *out_len,

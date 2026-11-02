@@ -243,7 +243,7 @@ TEST(delete_by_key)
     cmd_result_free(&d);
     g = run_remember(db, gargs, sizeof(gargs) / sizeof(gargs[0]), NULL);
     ASSERT_EQ_INT(g.exit_code, 3);
-    ASSERT_STREQ(g.err, "remember: deleted\n");
+    ASSERT_STREQ(g.err, "remember: \"k\" is in the Trash. Add --trash to use it.\n");
     cmd_result_free(&g);
     free(db);
 }

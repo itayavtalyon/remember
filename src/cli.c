@@ -72,9 +72,6 @@ static const CommandEntry k_commands[] = {
      .summary = "Change body and/or tags by id or --key"},
     {.name = "delete", .command = CLI_CMD_DELETE, .summary = "Soft-delete an entry by id or --key"},
     {.name = "tags", .command = CLI_CMD_TAGS, .summary = "List all tags with entry counts"},
-    {.name = "purge-trash",
-     .command = CLI_CMD_PURGE_TRASH,
-     .summary = "Permanently delete every expired memory"},
     {.name = "purge",
      .command = CLI_CMD_PURGE,
      .summary = "Permanently delete every expired or deleted memory"},
@@ -179,6 +176,7 @@ static void cli_args_clear(CliArgs *out)
     out->globals.json = false;
     out->globals.no_create = false;
     out->globals.busy_timeout_set = false;
+    out->globals.strict = false;
     out->rest_argc = 0;
     out->rest_argv = NULL;
 }
@@ -244,6 +242,11 @@ static bool take_global(ArgCursor *cur, CliArgs *out)
     if (strcmp(arg, "--json") == 0) {
         (void)cursor_next(cur);
         out->globals.json = true;
+        return true;
+    }
+    if (strcmp(arg, "--strict") == 0) {
+        (void)cursor_next(cur);
+        out->globals.strict = true;
         return true;
     }
     if (strcmp(arg, "--no-create") == 0) {
@@ -431,7 +434,7 @@ static bool scan_option(ArgCursor *cur, CliArgs *out, const char *arg, int at, S
 }
 
 /*
- * Single pass over argv. Globals (--db/--json/--busy-timeout/--no-create)
+ * Single pass over argv. Globals (--db/--json/--strict/--busy-timeout/--no-create)
  * and meta flags (--help/--version) are recognized wherever they appear and
  * stripped out; the first bare token is the subcommand; every other token
  * becomes a subcommand arg in rest_argv. A "--" ends option processing:
@@ -459,6 +462,18 @@ static void scan_argv(ArgCursor *cur, CliArgs *out, ScanState *st)
     }
 }
 
+/* REMEMBER_STRICT=1 turns warnings into exit 4. Any other value leaves it off. */
+static void apply_strict_env(CliArgs *out)
+{
+    const char *value = NULL;
+
+    // NOLINTNEXTLINE(concurrency-mt-unsafe) -- single-threaded CLI; no C11 thread-safe getenv
+    value = getenv("REMEMBER_STRICT");
+    if (value != NULL && strcmp(value, "1") == 0) {
+        out->globals.strict = true;
+    }
+}
+
 void cli_parse(int argc, char *const *argv, CliArgs *out)
 {
     ArgCursor cur;
@@ -468,6 +483,7 @@ void cli_parse(int argc, char *const *argv, CliArgs *out)
         return;
     }
     cli_args_clear(out);
+    apply_strict_env(out);
 
     if (argc < 1 || argv == NULL) {
         out->error = CLI_ERR_INTERNAL;

@@ -62,6 +62,7 @@ typedef enum {
     DIAG_WARN_DEPRECATED_FLAG,
     DIAG_WARN_SYNCED_FOLDER,
     DIAG_WARN_SETTING_INVALID,
+    DIAG_WARN_FLAG_MEANING_CHANGED, /* --trash, one release (M-23) */
     DIAG_WARN_COUNT
 } DiagWarning;
 
@@ -133,6 +134,12 @@ typedef struct {
  */
 int diag_warning_detail(DiagWarning code, const char *message, const DiagDetailField *fields,
                         size_t nfields);
+
+/* Zero the warning count at the start of remember_run. */
+void diag_warnings_reset(void);
+
+/* Warnings written since the reset, plain and JSON. */
+size_t diag_warning_count(void);
 
 /*
  * --json for one remember_run: from diag_json_begin to diag_json_end, errors

@@ -31,53 +31,62 @@ static void print_version(void)
 
 static void print_general_help(void)
 {
-    static const char help[] = "remember - local personal memory (SQLite + FTS5)\n"
-                               "\n"
-                               "Usage:\n"
-                               "  remember [--db PATH] [--json] "
-                               "[--busy-timeout MS] [--no-create] <command> [options] [args]\n"
-                               "\n"
-                               "Commands:\n"
-                               "  add       Store a memory (optional --key, --tag, --as)\n"
-                               "  search    Full-text search\n"
-                               "  repair    Rebuild the search index\n"
-                               "  list      List memories with filters\n"
-                               "  get       Fetch one entry by id or --key\n"
-                               "  update    Change body and/or tags by id or --key\n"
-                               "  delete    Soft-delete (or hard-wipe with --expired/--deleted)\n"
-                               "  tags        List all tags with entry counts\n"
-                               "  purge       Permanently delete one bin (--expired or --deleted)\n"
-                               "  purge-trash Permanently delete every expired memory\n"
-                               "  link        Create or merge an entry link\n"
-                               "  unlink      Remove entry links\n"
-                               "  related     List neighbors of an entry\n"
-                               "  rekey       Rename, set, or clear an entry key in place\n"
-                               "  import      Merge another remember database (--from-db)\n"
-                               "  conflicts   List unresolved merge conflicts\n"
-                               "  conflict    Resolve a merge conflict (accept)\n"
-                               "  device      Print the device id, or mint one with 'new'\n"
-                               "  help        Show this help (help <command> for a command)\n"
-                               "  version     Show version\n"
-                               "\n"
-                               "Expiry is optional. Default list/search/get show live only.\n"
-                               "Bins: --expired / --deleted (mutex). --trash aliases --expired.\n"
-                               "Device id lives next to the DB as <path>.d/device_id.\n"
-                               "\n"
-                               "Global options (allowed before or after the command):\n"
-                               "  --db PATH          Database file (overrides REMEMBER_DB)\n"
-                               "  --json             Machine-readable JSON on stdout\n"
-                               "  --busy-timeout MS  Lock wait in ms (0..60000, default 5000)\n"
-                               "  --no-create        Do not create a missing brain file\n"
-                               "  --help, -h         Show help\n"
-                               "  --version          Show version\n"
-                               "\n"
-                               "Exit codes:\n"
-                               "  0  success (including empty search/list)\n"
-                               "  1  usage or error\n"
-                               "  2  not found (get/delete/update)\n"
-                               "  3  wrong bin (expired / not_expired / deleted / not_deleted)\n";
+    static const char help[] =
+        "remember - local personal memory (SQLite + FTS5)\n"
+        "\n"
+        "Usage:\n"
+        "  remember [--db PATH] [--json] [--strict] "
+        "[--busy-timeout MS] [--no-create] <command> [options] [args]\n"
+        "\n"
+        "Commands:\n"
+        "  add       Store a memory (optional --key, --tag, --as)\n"
+        "  search    Full-text search\n"
+        "  repair    Rebuild the search index\n"
+        "  list      List memories with filters\n"
+        "  get       Fetch one entry by id or --key\n"
+        "  update    Change body and/or tags by id or --key\n"
+        "  delete    Soft-delete (or hard-wipe with --expired)\n"
+        "  tags        List all tags with entry counts\n"
+        "  purge       Permanently delete one bin (--expired or --deleted)\n"
+        "  link        Create or merge an entry link\n"
+        "  unlink      Remove entry links\n"
+        "  related     List neighbors of an entry\n"
+        "  rekey       Rename, set, or clear an entry key in place\n"
+        "  import      Merge another remember database (--from-db)\n"
+        "  conflicts   List unresolved merge conflicts\n"
+        "  conflict    Resolve a merge conflict (accept)\n"
+        "  device      Print the device id, or mint one with 'new'\n"
+        "  help        Show this help (help <command> for a command)\n"
+        "  version     Show version\n"
+        "\n"
+        "Expiry is optional. Default list/search/get show live only.\n"
+        "Bins: --expired / --deleted (mutex). --trash selects the Deleted bin.\n"
+        "Device id lives next to the DB as <path>.d/device_id.\n"
+        "\n"
+        "Global options (allowed before or after the command):\n"
+        "  --db PATH          Database file (overrides REMEMBER_DB)\n"
+        "  --json             Machine-readable JSON on stdout\n"
+        "  --busy-timeout MS  Lock wait in ms (0..60000, default 5000)\n"
+        "  --no-create        Do not create a missing brain file\n"
+        "  --help, -h         Show help\n"
+        "  --version          Show version\n"
+        "\n"
+        "Exit codes:\n"
+        "  0  success (including empty search/list)\n"
+        "  1  usage or error\n"
+        "  2  not found (get/delete/update)\n"
+        "  3  wrong bin (expired / not_expired / deleted / not_deleted)\n"
+        "  4  a warning under --strict\n";
 
     (void)fputs(help, app_out());
+}
+
+static void print_trash_expired_help(FILE *out)
+{
+    (void)fprintf(out, "  --trash     Use the Trash: memories you deleted. Restore them, or purge "
+                       "them for good.\n");
+    (void)fprintf(out, "  --expired   Use expired memories: ones past their expiry time. They are "
+                       "not in the Trash.\n");
 }
 
 // NOLINTNEXTLINE(readability-function-cognitive-complexity) — one help block per command
@@ -109,35 +118,37 @@ static void print_command_help(CliCommand topic)
         (void)fprintf(out, "\n");
         (void)fprintf(out, "Cannot combine --ttl with --expires.\n");
         (void)fprintf(out, "\n");
-    } else if (topic == CLI_CMD_GET || topic == CLI_CMD_DELETE) {
+    } else if (topic == CLI_CMD_GET) {
+        (void)fprintf(out, "Options:\n");
+        (void)fprintf(out, "  ID              Entry id (positional)\n");
+        (void)fprintf(out, "  --key KEY       Locate by key instead of id\n");
+        print_trash_expired_help(out);
+        (void)fprintf(out, "  --deleted       Locate in deleted bin\n");
+        (void)fprintf(out, "\n");
+        (void)fprintf(out, "Exactly one of ID or --key is required.\n");
+        (void)fprintf(out, "Default locators are live-only; --expired/--deleted select one bin.\n");
+        (void)fprintf(out, "JSON entries include links stubs after version_vector.\n");
+        (void)fprintf(out, "Human get prints the body, then a Related: block if any.\n");
+        (void)fprintf(out, "\n");
+    } else if (topic == CLI_CMD_DELETE) {
         (void)fprintf(out, "Options:\n");
         (void)fprintf(out, "  ID              Entry id (positional)\n");
         (void)fprintf(out, "  --key KEY       Locate by key instead of id\n");
         (void)fprintf(out, "  --expired       Locate in expired bin\n");
-        (void)fprintf(out, "  --deleted       Locate in deleted bin\n");
-        (void)fprintf(out, "  --trash         Deprecated alias of --expired\n");
-        if (topic == CLI_CMD_DELETE) {
-            (void)fprintf(out, "  --as KIND       human|agent|tool|share (default human)\n");
-            (void)fprintf(out, "  --actor ID      1 to 64 of A-Za-z0-9_./:-\n");
-        }
+        (void)fprintf(out, "  --as KIND       human|agent|tool|share (default human)\n");
+        (void)fprintf(out, "  --actor ID      1 to 64 of A-Za-z0-9_./:-\n");
         (void)fprintf(out, "\n");
         (void)fprintf(out, "Exactly one of ID or --key is required.\n");
-        (void)fprintf(out, "Default locators are live-only; --expired/--deleted select one bin.\n");
-        if (topic == CLI_CMD_GET) {
-            (void)fprintf(out, "JSON entries include links stubs after version_vector.\n");
-            (void)fprintf(out, "Human get prints the body, then a Related: block if any.\n");
-        } else {
-            (void)fprintf(out, "Unflagged delete soft-deletes (live or expired).\n");
-            (void)fprintf(out, "delete --expired|--deleted hard-wipes one row.\n");
-        }
+        (void)fprintf(out, "Default locators are live-only.\n");
+        (void)fprintf(out, "Unflagged delete soft-deletes (live or expired).\n");
+        (void)fprintf(out, "delete --expired hard-wipes one row.\n");
         (void)fprintf(out, "\n");
     } else if (topic == CLI_CMD_UPDATE) {
         (void)fprintf(out, "Options:\n");
         (void)fprintf(out, "  ID              Entry id (positional)\n");
         (void)fprintf(out, "  --key KEY       Locate by key instead of id\n");
-        (void)fprintf(out, "  --expired       Locate in expired bin\n");
-        (void)fprintf(out, "  --deleted       Locate in deleted bin (required for --undelete)\n");
-        (void)fprintf(out, "  --trash         Deprecated alias of --expired\n");
+        print_trash_expired_help(out);
+        (void)fprintf(out, "  --deleted       Locate in deleted bin\n");
         (void)fprintf(out, "  --text BODY|-   New body text, or - for stdin\n");
         (void)fprintf(out, "  --text=-        Literal body \"-\" (not stdin)\n");
         (void)fprintf(out, "  --tag TAG       Replace tag set (repeatable)\n");
@@ -145,7 +156,7 @@ static void print_command_help(CliCommand topic)
         (void)fprintf(out, "  --ttl 7d        Set relative expiry from this update\n");
         (void)fprintf(out, "  --expires TS    Set absolute expiry\n");
         (void)fprintf(out, "  --clear-expires Remove expiry\n");
-        (void)fprintf(out, "  --undelete      Clear deleted_at (use with --deleted)\n");
+        (void)fprintf(out, "  --undelete      Clear deleted_at\n");
         (void)fprintf(out, "  --if-version-vector VV\n");
         (void)fprintf(out, "                  Write only when version_vector equals VV\n");
         (void)fprintf(out, "  --as KIND       human|agent|tool|share (default human)\n");
@@ -170,9 +181,8 @@ static void print_command_help(CliCommand topic)
         (void)fprintf(out, "  --until TS      Exclusive upper bound on the sort field\n");
         (void)fprintf(out, "  --limit N       Page size (default 20, max 1000)\n");
         (void)fprintf(out, "  --cursor CURSOR Resume after the last row\n");
-        (void)fprintf(out, "  --expired       List expired only (default: live only)\n");
+        print_trash_expired_help(out);
         (void)fprintf(out, "  --deleted       List deleted only\n");
-        (void)fprintf(out, "  --trash         Deprecated alias of --expired\n");
         (void)fprintf(out, "\n");
         (void)fprintf(out, "--since is inclusive and --until is exclusive.\n");
         (void)fprintf(out, "TS is YYYY-MM-DD (local start of that day), YYYY-MM-DDTHH:MM:SSZ,\n");
@@ -193,9 +203,8 @@ static void print_command_help(CliCommand topic)
         (void)fprintf(out, "  --until TS      Exclusive upper bound on updated_at\n");
         (void)fprintf(out, "  --limit N       Page size (default 20, max 1000)\n");
         (void)fprintf(out, "  --facet-limit N Keys and tags to return (default 50, max 200)\n");
-        (void)fprintf(out, "  --expired       Search expired only (default: live only)\n");
+        print_trash_expired_help(out);
         (void)fprintf(out, "  --deleted       Search deleted only\n");
-        (void)fprintf(out, "  --trash         Deprecated alias of --expired\n");
         (void)fprintf(out, "\n");
         (void)fprintf(out, "Matches word prefixes (boo finds Book) in keys, bodies and tags,\n");
         (void)fprintf(out, "and the query as FTS5 syntax. A query FTS5 cannot parse still\n");
@@ -214,9 +223,8 @@ static void print_command_help(CliCommand topic)
         (void)fprintf(out, "\n");
     } else if (topic == CLI_CMD_TAGS) {
         (void)fprintf(out, "Options:\n");
-        (void)fprintf(out, "  --expired       Count tags among expired only (default: live)\n");
+        print_trash_expired_help(out);
         (void)fprintf(out, "  --deleted       Count tags among deleted only\n");
-        (void)fprintf(out, "  --trash         Deprecated alias of --expired\n");
         (void)fprintf(out, "\n");
         (void)fprintf(out, "Lists every in-use tag with its entry count, sorted by name.\n");
         (void)fprintf(out, "Human: one \"name<TAB>count\" line per tag.\n");
@@ -228,12 +236,6 @@ static void print_command_help(CliCommand topic)
         (void)fprintf(out, "  --deleted       Wipe deleted rows\n");
         (void)fprintf(out, "Exactly one of --expired or --deleted is required.\n");
         (void)fprintf(out, "Human stdout: the count of deleted entries.\n");
-        (void)fprintf(out, "\n");
-    } else if (topic == CLI_CMD_PURGE_TRASH) {
-        (void)fprintf(out, "Deprecated alias of: purge --expired\n");
-        (void)fprintf(out, "Permanently delete every expired row (no prompt).\n");
-        (void)fprintf(out, "Human stdout: the count of deleted entries.\n");
-        (void)fprintf(out, "Takes no options.\n");
         (void)fprintf(out, "\n");
     } else if (topic == CLI_CMD_LINK || topic == CLI_CMD_UNLINK) {
         (void)fprintf(out, "Options:\n");
@@ -269,9 +271,8 @@ static void print_command_help(CliCommand topic)
         (void)fprintf(out, "Options:\n");
         (void)fprintf(out, "  ID              Entry id (positional)\n");
         (void)fprintf(out, "  --key KEY       Locate by key instead of id\n");
-        (void)fprintf(out, "  --expired       Locate in expired bin\n");
+        print_trash_expired_help(out);
         (void)fprintf(out, "  --deleted       Locate in deleted bin\n");
-        (void)fprintf(out, "  --trash         Deprecated alias of --expired\n");
         (void)fprintf(out, "  --to-key NEW    Set or rename the key (non-empty)\n");
         (void)fprintf(out, "  --clear-key     Remove the key (keyed becomes keyless)\n");
         (void)fprintf(out, "  --as KIND       human|agent|tool|share (default human)\n");
@@ -496,8 +497,6 @@ static int run(const CliArgs *args)
         return run_with_store(args, cmd_update);
     case CLI_CMD_TAGS:
         return run_with_store(args, cmd_tags);
-    case CLI_CMD_PURGE_TRASH:
-        return run_with_store(args, cmd_purge_trash);
     case CLI_CMD_PURGE:
         return run_with_store(args, cmd_purge);
     case CLI_CMD_LINK:
@@ -555,7 +554,6 @@ static const char *reply_noun_verb(const CliArgs *args)
         return "memory.delete";
     case CLI_CMD_TAGS:
         return "tag.list";
-    case CLI_CMD_PURGE_TRASH:
     case CLI_CMD_PURGE:
         return "memory.purge";
     case CLI_CMD_LINK:
@@ -703,6 +701,7 @@ int remember_run(int argc, char *const *argv, FILE *out, FILE *err)
     CliArgs args;
     int rc = 0;
 
+    diag_warnings_reset();
     app_clear_list_page();
     app_set_streams((AppStreams){.out = out, .err = err});
     cli_parse(argc, argv, &args);
@@ -717,6 +716,10 @@ int remember_run(int argc, char *const *argv, FILE *out, FILE *err)
             err_msg(DIAG_INTERNAL, "failed to write output");
             rc = REMEMBER_ERR;
         }
+    }
+    /* G2-03: any warning under --strict exits 4, including when the command also failed. */
+    if (args.globals.strict && diag_warning_count() > 0U) {
+        rc = REMEMBER_STRICT;
     }
     cli_args_free(&args);
     app_clear_list_page();

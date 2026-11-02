@@ -88,18 +88,3 @@ int cmd_purge(Store *s, bool json, int rest_argc, const char **rest_argv)
     }
     return run_purge_bin(s, json, bin);
 }
-
-int cmd_purge_trash(Store *s, bool json, int rest_argc, const char **rest_argv)
-{
-    (void)diag_warning(DIAG_WARN_DEPRECATED_FLAG, "purge-trash is deprecated; use purge --expired");
-    if (rest_argc > 0) {
-        if (rest_argv != NULL && rest_argv[0] != NULL && rest_argv[0][0] == '-' &&
-            rest_argv[0][1] != '\0') {
-            err_fmt(DIAG_USAGE, "unknown option '%s'", rest_argv[0]);
-        } else {
-            err_msg(DIAG_USAGE, "purge-trash takes no arguments");
-        }
-        return REMEMBER_ERR;
-    }
-    return run_purge_bin(s, json, STORE_BIN_EXPIRED);
-}

@@ -34,7 +34,7 @@ TEST(cli_unflagged_delete_is_soft)
     cmd_result_free(&r);
     r = run_remember(db, g, sizeof(g) / sizeof(g[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 3);
-    ASSERT_STREQ(r.err, "remember: deleted\n");
+    ASSERT_STREQ(r.err, "remember: \"k\" is in the Trash. Add --trash to use it.\n");
     cmd_result_free(&r);
     r = run_remember(db, get_deleted, sizeof(get_deleted) / sizeof(get_deleted[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 0);
@@ -67,7 +67,7 @@ TEST(cli_unflagged_delete_expired_clears_expires)
     cmd_result_free(&r);
     r = run_remember(db, g, sizeof(g) / sizeof(g[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 3);
-    ASSERT_STREQ(r.err, "remember: deleted\n");
+    ASSERT_STR_CONTAINS(r.err, "\" is in the Trash. Add --trash to use it.\n");
     cmd_result_free(&r);
     free(db);
 }
@@ -110,10 +110,19 @@ TEST(cli_delete_expired_hard_wipes_one_row)
     ASSERT_EQ_INT(r.exit_code, 2);
     cmd_result_free(&r);
     r = run_remember(db, alias, sizeof(alias) / sizeof(alias[0]), NULL);
-    ASSERT_EQ_INT(r.exit_code, 3);
-    ASSERT_STR_CONTAINS(r.err, "remember: warning: --trash is deprecated; use --expired");
-    ASSERT_STR_CONTAINS(r.err, "not_expired");
+    ASSERT_EQ_INT(r.exit_code, 1);
+    ASSERT_STR_CONTAINS(r.err, "remember: warning: --trash now means the Trash (deleted memories). "
+                               "For expired memories, use --expired.");
+    ASSERT_STR_CONTAINS(r.err, "unknown option '--trash'");
     cmd_result_free(&r);
+    {
+        const char *stay[] = {"get", "2"};
+
+        r = run_remember(db, stay, sizeof(stay) / sizeof(stay[0]), NULL);
+        ASSERT_EQ_INT(r.exit_code, 0);
+        ASSERT_STREQ(r.out, "stay\n");
+        cmd_result_free(&r);
+    }
     free(db);
 }
 
@@ -134,10 +143,12 @@ TEST(cli_delete_deleted_hard_wipes_the_row)
     ASSERT_EQ_INT(r.exit_code, 0);
     cmd_result_free(&r);
     r = run_remember(db, hard, sizeof(hard) / sizeof(hard[0]), NULL);
-    ASSERT_EQ_INT(r.exit_code, 0);
+    ASSERT_EQ_INT(r.exit_code, 1);
+    ASSERT_STREQ(r.err, "remember: unknown option '--deleted'\n");
     cmd_result_free(&r);
     r = run_remember(db, gone, sizeof(gone) / sizeof(gone[0]), NULL);
-    ASSERT_EQ_INT(r.exit_code, 2);
+    ASSERT_EQ_INT(r.exit_code, 0);
+    ASSERT_STR_CONTAINS(r.out, "wipe");
     cmd_result_free(&r);
     free(db);
 }
@@ -161,7 +172,7 @@ TEST(cli_update_undelete)
     cmd_result_free(&r);
     r = run_remember(db, bad, sizeof(bad) / sizeof(bad[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 3);
-    ASSERT_STREQ(r.err, "remember: deleted\n");
+    ASSERT_STREQ(r.err, "remember: \"slot\" is in the Trash. Add --trash to use it.\n");
     cmd_result_free(&r);
     r = run_remember(db, undelete_ok, sizeof(undelete_ok) / sizeof(undelete_ok[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 0);
@@ -258,7 +269,7 @@ TEST(cli_purge_deleted_and_purge_trash_alias)
     const char *exp[] = {"add", "--expires", "2020-01-01T00:00:00Z", "old"};
     const char *soft[] = {"delete", "1"};
     const char *pdel[] = {"--json", "purge", "--deleted"};
-    const char *ptrash[] = {"purge-trash"};
+    const char *ptrash[] = {"purge", "--expired"};
     const char *g[] = {"get", "--deleted", "1"};
     const char *get_expired[] = {"get", "--expired", "2"};
 
@@ -282,7 +293,7 @@ TEST(cli_purge_deleted_and_purge_trash_alias)
     cmd_result_free(&r);
     r = run_remember(db, ptrash, sizeof(ptrash) / sizeof(ptrash[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 0);
-    ASSERT_STR_CONTAINS(r.err, "remember: warning: purge-trash is deprecated; use purge --expired");
+    ASSERT_STREQ(r.err, "");
     trim_trailing_newlines(r.out);
     ASSERT_STREQ(r.out, "1");
     cmd_result_free(&r);

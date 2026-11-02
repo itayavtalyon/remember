@@ -429,12 +429,12 @@ TEST(facade_delete_matches_cli)
     free(db2);
 }
 
-TEST(facade_purge_trash_matches_cli)
+TEST(facade_purge_expired_matches_cli)
 {
     char *db1 = make_temp_db_path();
     char *db2 = make_temp_db_path();
     const char *seed[] = {"add", "--expires", "2020-01-01T00:00:00Z", "gone"};
-    const char *cmd[] = {"--json", "purge-trash"};
+    const char *cmd[] = {"--json", "purge", "--expired"};
     CmdResult s1;
     CmdResult s2;
     CmdResult sub;
@@ -448,7 +448,8 @@ TEST(facade_purge_trash_matches_cli)
     s2 = run_remember(db2, seed, sizeof(seed) / sizeof(seed[0]), NULL);
     cmd_result_free(&s2);
     sub = run_remember(db1, cmd, sizeof(cmd) / sizeof(cmd[0]), NULL);
-    frc = facade_run(db2, cmd, 2, (FacadeCapture){.out = &fout, .err = &ferr});
+    frc = facade_run(db2, cmd, sizeof(cmd) / sizeof(cmd[0]),
+                     (FacadeCapture){.out = &fout, .err = &ferr});
     ASSERT_EQ_INT(frc, sub.exit_code);
     mask_timestamps(sub.out);
     mask_timestamps(fout);
@@ -464,12 +465,23 @@ TEST(facade_purge_trash_matches_cli)
 TEST(facade_list_trash_matches_cli)
 {
     char *db = make_temp_db_path();
-    const char *seed[] = {"add", "--expires", "2020-01-01T00:00:00Z", "gone"};
+    const char *seed[] = {"add", "gone"};
+    const char *del[] = {"delete", "1"};
     const char *cmd[] = {"--json", "list", "--trash"};
     CmdResult r;
 
     ASSERT_TRUE(db != NULL);
     r = run_remember(db, seed, sizeof(seed) / sizeof(seed[0]), NULL);
+    ASSERT_EQ_INT(r.exit_code, 0);
+    cmd_result_free(&r);
+    r = run_remember(db, del, sizeof(del) / sizeof(del[0]), NULL);
+    ASSERT_EQ_INT(r.exit_code, 0);
+    cmd_result_free(&r);
+    r = run_remember(db, cmd, sizeof(cmd) / sizeof(cmd[0]), NULL);
+    ASSERT_EQ_INT(r.exit_code, 0);
+    ASSERT_STREQ(r.err, "");
+    ASSERT_STR_CONTAINS(r.out, "gone");
+    ASSERT_STR_CONTAINS(r.out, "flag_meaning_changed");
     cmd_result_free(&r);
     assert_read_parity(db, cmd, sizeof(cmd) / sizeof(cmd[0]));
     free(db);
@@ -850,7 +862,7 @@ void register_facade_tests(void)
     RUN_TEST(facade_update_matches_cli);
     RUN_TEST(facade_update_stale_matches_cli);
     RUN_TEST(facade_delete_matches_cli);
-    RUN_TEST(facade_purge_trash_matches_cli);
+    RUN_TEST(facade_purge_expired_matches_cli);
     RUN_TEST(facade_list_trash_matches_cli);
     RUN_TEST(facade_related_matches_cli);
     RUN_TEST(facade_get_with_links_matches_cli);

@@ -207,7 +207,8 @@ TEST(json_stubs_sync_id_bin_no_trash)
     free(db);
 }
 
-TEST(trash_alias_expired_deprecation_skips_deleted)
+/* --trash is the Deleted bin. --expired stays the expired bin. */
+TEST(trash_lists_deleted_and_expired_lists_expired)
 {
     char *db = make_temp_db_path();
     const char *exp[] = {"add", "--expires", "2020-01-01T00:00:00Z", "old"};
@@ -228,15 +229,18 @@ TEST(trash_alias_expired_deprecation_skips_deleted)
     r = run_remember(db, lst_trash, sizeof(lst_trash) / sizeof(lst_trash[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 0);
     ASSERT_STREQ(r.err, "");
-    ASSERT_STR_CONTAINS(r.out, "\"warnings\":[{\"code\":\"deprecated_flag\","
-                               "\"message\":\"--trash is deprecated; use --expired\"}]}\n");
-    ASSERT_STR_CONTAINS(r.out, "old");
-    ASSERT_STR_NOT_CONTAINS(r.out, "fresh");
+    ASSERT_STR_CONTAINS(r.out, "\"code\":\"flag_meaning_changed\"");
+    ASSERT_STR_CONTAINS(r.out, "\"message\":\"--trash now means the Trash (deleted memories). "
+                               "For expired memories, use --expired.\"");
+    ASSERT_STR_CONTAINS(r.out, "\"detail\":{\"flag\":\"--trash\",\"use\":\"--expired\"}");
+    ASSERT_STR_CONTAINS(r.out, "fresh");
+    ASSERT_STR_NOT_CONTAINS(r.out, "old");
     cmd_result_free(&r);
 
     r = run_remember(db, lst_exp, sizeof(lst_exp) / sizeof(lst_exp[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 0);
-    ASSERT_TRUE(r.err == NULL || strstr(r.err, "deprecated") == NULL);
+    ASSERT_STREQ(r.err, "");
+    ASSERT_STR_NOT_CONTAINS(r.out, "flag_meaning_changed");
     ASSERT_STR_CONTAINS(r.out, "old");
     ASSERT_STR_NOT_CONTAINS(r.out, "fresh");
     cmd_result_free(&r);
@@ -248,7 +252,8 @@ TEST(expired_deleted_mutex)
     char *db = make_temp_db_path();
     const char *a[] = {"add", "x"};
     const char *both[] = {"list", "--expired", "--deleted"};
-    const char *alias[] = {"get", "--trash", "--deleted", "1"};
+    const char *same[] = {"get", "--trash", "--deleted", "1"};
+    const char *mix[] = {"list", "--trash", "--expired"};
     const char *upd_both[] = {"update", "--expired", "--deleted", "1", "--text", "z"};
     CmdResult r;
 
@@ -262,10 +267,19 @@ TEST(expired_deleted_mutex)
     ASSERT_STR_CONTAINS(r.err, "cannot combine --expired and --deleted");
     cmd_result_free(&r);
 
-    r = run_remember(db, alias, sizeof(alias) / sizeof(alias[0]), NULL);
+    /* --trash and --deleted are the same bin. A live row is not_deleted. */
+    r = run_remember(db, same, sizeof(same) / sizeof(same[0]), NULL);
+    ASSERT_EQ_INT(r.exit_code, 3);
+    ASSERT_STREQ(r.err, "remember: warning: --trash now means the Trash (deleted memories). "
+                        "For expired memories, use --expired.\n"
+                        "remember: not_deleted\n");
+    cmd_result_free(&r);
+
+    r = run_remember(db, mix, sizeof(mix) / sizeof(mix[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 1);
-    ASSERT_STR_CONTAINS(r.err, "cannot combine --expired and --deleted");
-    ASSERT_STR_CONTAINS(r.err, "remember: warning: --trash is deprecated; use --expired");
+    ASSERT_STREQ(r.err, "remember: warning: --trash now means the Trash (deleted memories). "
+                        "For expired memories, use --expired.\n"
+                        "remember: cannot combine --expired and --trash\n");
     cmd_result_free(&r);
 
     r = run_remember(db, upd_both, sizeof(upd_both) / sizeof(upd_both[0]), NULL);
@@ -283,6 +297,8 @@ TEST(exit3_matrix_round7)
     const char *del[] = {"add", "deleted"};
     CmdResult r;
     size_t i = 0;
+    char *exp_id = NULL;
+    char *del_id = NULL;
     /* Looked-in flag, locator id, want exit, stderr token (NULL if ok). */
     static const struct {
         const char *flag;
@@ -321,6 +337,15 @@ TEST(exit3_matrix_round7)
     ASSERT_EQ_INT(r.exit_code, 0);
     cmd_result_free(&r);
     mark_deleted(db, 3);
+    exp_id = harness_sqlite_query_line(db, "SELECT id FROM entries WHERE local_id=2;");
+    del_id = harness_sqlite_query_line(db, "SELECT id FROM entries WHERE local_id=3;");
+    ASSERT_TRUE(exp_id != NULL && del_id != NULL);
+    if (exp_id == NULL || del_id == NULL) {
+        free(exp_id);
+        free(del_id);
+        free(db);
+        return;
+    }
 
     for (i = 0; i < sizeof(k_cases) / sizeof(k_cases[0]); i++) {
         const char *argv[GET_ARGV_MAX];
@@ -334,11 +359,22 @@ TEST(exit3_matrix_round7)
         ASSERT_EQ_INT(r.exit_code, k_cases[i].exit_code);
         if (k_cases[i].token != NULL) {
             char want[SQL_BUFSIZE];
-            (void)snprintf(want, sizeof(want), "remember: %s\n", k_cases[i].token);
+            if (strcmp(k_cases[i].token, "expired") == 0) {
+                (void)snprintf(want, sizeof(want),
+                               "remember: \"%s\" has expired. Add --expired to use it.\n", exp_id);
+            } else if (strcmp(k_cases[i].token, "deleted") == 0) {
+                (void)snprintf(want, sizeof(want),
+                               "remember: \"%s\" is in the Trash. Add --trash to use it.\n",
+                               del_id);
+            } else {
+                (void)snprintf(want, sizeof(want), "remember: %s\n", k_cases[i].token);
+            }
             ASSERT_STREQ(r.err, want);
         }
         cmd_result_free(&r);
     }
+    free(exp_id);
+    free(del_id);
     free(db);
 }
 
@@ -461,7 +497,7 @@ void register_sync_output_tests(void)
     RUN_TEST(json_entry_field_order_bin_always_enum);
     RUN_TEST(json_expired_and_deleted_bins);
     RUN_TEST(json_stubs_sync_id_bin_no_trash);
-    RUN_TEST(trash_alias_expired_deprecation_skips_deleted);
+    RUN_TEST(trash_lists_deleted_and_expired_lists_expired);
     RUN_TEST(expired_deleted_mutex);
     RUN_TEST(exit3_matrix_round7);
     RUN_TEST(default_list_omits_expired_and_deleted);

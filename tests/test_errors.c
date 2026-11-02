@@ -93,7 +93,7 @@ static const ExpectedFix k_error_fixes[] = {
     {"Change the text, or update the memory that already has it.", "false"},
     {"Add --expired to use it.", "false"},
     {"Run the command without --expired.", "false"},
-    {"Add --deleted to use it.", "false"},
+    {"Add --trash to use it.", "false"},
     {"Run 'remember delete' on it first.", "false"},
     {"Delete it instead; it stays in the Trash and syncs as deleted.", "false"},
     {"Link two different memories.", "false"},
@@ -239,10 +239,8 @@ TEST(error_catalog_rejects_names_outside_e4_3)
 }
 
 static const char *const k_warning_codes[] = {
-    "raw_query_ignored",
-    "deprecated_flag",
-    "synced_folder",
-    "setting_invalid",
+    "raw_query_ignored", "deprecated_flag",      "synced_folder",
+    "setting_invalid",   "flag_meaning_changed",
 };
 
 TEST(warning_catalog_round_trips_every_code)
@@ -782,7 +780,8 @@ TEST(plain_trash_warning_uses_warning_prefix)
     ASSERT_TRUE(db != NULL);
     r = run_remember(db, args, sizeof(args) / sizeof(args[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 0);
-    ASSERT_STREQ(r.err, "remember: warning: --trash is deprecated; use --expired\n");
+    ASSERT_STREQ(r.err, "remember: warning: --trash now means the Trash (deleted memories). "
+                        "For expired memories, use --expired.\n");
     cmd_result_free(&r);
     free(db);
 }
@@ -801,8 +800,10 @@ TEST(json_trash_warning_is_in_the_list_envelope)
                  "{\"format\":\"remember-message\",\"version\":1,\"type\":\"memory.list.result\","
                  "\"data\":{\"count\":0,\"total\":0,\"entries\":[]},"
                  "\"next_cursor\":null,\"has_more\":false,"
-                 "\"warnings\":[{\"code\":\"deprecated_flag\","
-                 "\"message\":\"--trash is deprecated; use --expired\"}]}\n");
+                 "\"warnings\":[{\"code\":\"flag_meaning_changed\","
+                 "\"message\":\"--trash now means the Trash (deleted memories). "
+                 "For expired memories, use --expired.\","
+                 "\"detail\":{\"flag\":\"--trash\",\"use\":\"--expired\"}}]}\n");
     cmd_result_free(&r);
     free(db);
 }
@@ -994,6 +995,25 @@ TEST(rejecting_stream_fails_a_write_and_sets_the_error_flag)
     ASSERT_EQ_INT(fputs("remember 0.2.0\n", out), EOF);
     ASSERT_TRUE(ferror(out) != 0);
     (void)fclose(out);
+}
+
+/* A warning stderr cannot take is a failed write. It does not count for --strict. */
+TEST(plain_warning_that_cannot_be_written_does_not_count)
+{
+    FILE *err = given_out_rejecting_writes();
+
+    if (err == NULL) {
+        return;
+    }
+    diag_warnings_reset();
+    app_set_streams((AppStreams){.out = NULL, .err = err});
+    ASSERT_EQ_INT(diag_warning(DIAG_WARN_FLAG_MEANING_CHANGED,
+                               "--trash now means the Trash (deleted memories). For expired "
+                               "memories, use --expired."),
+                  -1);
+    ASSERT_EQ_INT(diag_warning_count(), 0U);
+    app_set_streams((AppStreams){.out = NULL, .err = NULL});
+    (void)fclose(err);
 }
 
 /* Output that fails only at the final flush is an error, not exit 0. */
@@ -1394,14 +1414,14 @@ TEST(golden_error_lines_and_d9_codes)
          {0},
          NULL},
         {{"get", "--key", "k2"},
-         "deleted",
+         "\"k2\" is in the Trash. Add --trash to use it.",
          "deleted",
          "memory.get",
-         "Add --deleted to use it.",
+         "Add --trash to use it.",
          3,
          false,
          {0},
-         NULL},
+         "\\\"k2\\\" is in the Trash."},
         {{"get", "--deleted", "--key", "k1"},
          "not_deleted",
          "not_deleted",
@@ -3502,7 +3522,7 @@ TEST(cli_help_names_json_busy_timeout_and_no_create)
     r = run_remember(db, general, sizeof(general) / sizeof(general[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 0);
     ASSERT_STREQ(r.err, "");
-    ASSERT_STR_CONTAINS(r.out, "[--json] [--busy-timeout MS] [--no-create]");
+    ASSERT_STR_CONTAINS(r.out, "[--json] [--strict] [--busy-timeout MS] [--no-create]");
     ASSERT_STR_NOT_CONTAINS(r.out, "--json-errors");
     ASSERT_STR_CONTAINS(r.out, "--busy-timeout MS  Lock wait in ms (0..60000, default 5000)");
     ASSERT_STR_CONTAINS(r.out, "--no-create        Do not create a missing brain file");
@@ -4291,6 +4311,7 @@ void register_errors_tests(void)
     RUN_TEST(plain_warning_is_remember_warning);
     RUN_TEST(json_warning_is_one_line_without_the_prefix);
     RUN_TEST(every_warning_uses_the_warning_prefix);
+    RUN_TEST(plain_warning_that_cannot_be_written_does_not_count);
     RUN_TEST(null_message_is_empty_text);
     RUN_TEST(plain_error_keeps_quote_and_backslash);
     RUN_TEST(plain_error_turns_a_newline_into_a_question_mark);

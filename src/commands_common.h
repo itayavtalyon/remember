@@ -79,11 +79,14 @@ void free_tag_list(char **tags, size_t ntags);
 /* Map store status to process exit; prints the E4.8 line for SQLITE failures. */
 int store_status_to_exit(const Store *s, StoreStatus st);
 
-/* Parsed --expired / --deleted / --trash (alias of --expired). */
+/* C-01 wrong-list line. label is the key, or the id when the row has no key. */
+int exit_wrong_list(StoreStatus st, const char *label);
+
+/* Parsed --expired / --deleted / --trash (the Deleted bin). */
 typedef struct {
     bool expired;
     bool deleted;
-    bool trash_alias;
+    bool trash;
     /* NOLINTNEXTLINE(readability-magic-numbers,cppcoreguidelines-avoid-magic-numbers) */
     char pad_[5]; /* explicit tail padding (kept -Wpadded-clean) */
 } CmdBinOpts;
@@ -107,7 +110,7 @@ int cmd_actor_json(const CmdActorFlags *flags, char out[ACTOR_JSON_CAP]);
 /* 0 when kind is NULL or a stored kind (human, agent, tool, share, import). */
 int cmd_reject_filter_kind(const char *flag, const char *kind);
 
-/* Deprecation stderr for --trash; mutex --expired/--deleted. 0 ok. */
+/* --trash warns and selects Deleted. --expired with --trash or --deleted is an error. 0 ok. */
 int cmd_bin_resolve(const CmdBinOpts *opts, StoreBin *out);
 
 /* Compact *n in place, freeing neighbors whose bin is deleted. */

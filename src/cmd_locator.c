@@ -183,6 +183,63 @@ static int locator_bind_local_id(Store *s, LocatorResolved *loc)
     return 0;
 }
 
+/* Key when the row has one; otherwise the id (the UUID). */
+static const char *wrong_list_label(const Entry *row)
+{
+    if (row->key != NULL && row->key[0] != '\0') {
+        return row->key;
+    }
+    if (row->sync_id != NULL && row->sync_id[0] != '\0') {
+        return row->sync_id;
+    }
+    return NULL;
+}
+
+/* STORE_ERR_EXPIRED and STORE_ERR_DELETED name the row. Other statuses stay tokens. */
+static int exit_after_store(Store *s, StoreStatus st, const LocatorResolved *loc)
+{
+    Entry row;
+    StoreStatus load = STORE_OK;
+    const char *label = NULL;
+    int rc = 0;
+
+    if (st != STORE_ERR_EXPIRED && st != STORE_ERR_DELETED) {
+        return store_status_to_exit(s, st);
+    }
+    memset(&row, 0, sizeof(row));
+    if (loc->kind == LOC_KEY) {
+        load = store_get_row_by_key(s, loc->key, &row);
+    } else if (loc->kind == LOC_UUID) {
+        load = store_get_row_by_sync_id(s, loc->sync_id, &row);
+    } else {
+        load = store_get_row(s, loc->id, &row);
+    }
+    if (load == STORE_OK) {
+        label = wrong_list_label(&row);
+    }
+    if (label == NULL) {
+        store_entry_free(&row);
+        return store_status_to_exit(s, st);
+    }
+    rc = exit_wrong_list(st, label);
+    store_entry_free(&row);
+    return rc;
+}
+
+/* delete --deleted does not exist. --trash selects Deleted on other commands. */
+static int delete_reject_bin_flags(const CmdBinOpts *bins)
+{
+    if (bins->trash) {
+        err_fmt(DIAG_USAGE, "unknown option '%s'", "--trash");
+        return -1;
+    }
+    if (bins->deleted) {
+        err_fmt(DIAG_USAGE, "unknown option '%s'", "--deleted");
+        return -1;
+    }
+    return 0;
+}
+
 int cmd_get(Store *s, bool json, int rest_argc, const char **rest_argv)
 {
     LocatorParse parsed;
@@ -220,7 +277,7 @@ int cmd_get(Store *s, bool json, int rest_argc, const char **rest_argv)
     } else {
         st = store_get(s, loc.id, bin, now, &entry);
     }
-    rc = store_status_to_exit(s, st);
+    rc = exit_after_store(s, st, &loc);
     if (rc != REMEMBER_OK) {
         return rc;
     }
@@ -299,6 +356,9 @@ int cmd_delete(Store *s, bool json, int rest_argc, const char **rest_argv)
     if (cmd_bin_resolve(&parsed.bins, &bin) != 0) {
         return REMEMBER_ERR;
     }
+    if (delete_reject_bin_flags(&parsed.bins) != 0) {
+        return REMEMBER_ERR;
+    }
     if (locator_resolve(&parsed, key_norm, sizeof(key_norm), &loc) != 0) {
         return REMEMBER_ERR;
     }
@@ -312,7 +372,7 @@ int cmd_delete(Store *s, bool json, int rest_argc, const char **rest_argv)
     }
 
     st = delete_resolved(s, &loc, bin, actor_buf, now, &entry);
-    rc = store_status_to_exit(s, st);
+    rc = exit_after_store(s, st, &loc);
     if (rc != REMEMBER_OK) {
         return rc;
     }
@@ -760,7 +820,7 @@ int cmd_update(Store *s, bool json, int rest_argc, const char **rest_argv)
         goto cleanup;
     }
     if (st != STORE_OK) {
-        rc = store_status_to_exit(s, st);
+        rc = exit_after_store(s, st, &loc);
         goto cleanup;
     }
     if (emit_update_result(json, &entry, now) != 0) {
@@ -937,7 +997,7 @@ int cmd_rekey(Store *s, bool json, int rest_argc, const char **rest_argv)
         store_entry_free(&entry);
         return REMEMBER_ERR;
     }
-    rc = store_status_to_exit(s, st);
+    rc = exit_after_store(s, st, &loc);
     if (rc != REMEMBER_OK) {
         store_entry_free(&entry);
         return rc;

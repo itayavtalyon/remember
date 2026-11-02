@@ -110,7 +110,6 @@ TEST(envelope_every_command_names_its_reply_type)
         {{"--json", "rekey", "--key", "a", "--to-key", "c"}, "memory.rekey"},
         {{"--json", "delete", "2"}, "memory.delete"},
         {{"--json", "purge", "--deleted"}, "memory.purge"},
-        {{"--json", "purge-trash"}, "memory.purge"},
         {{"--json", "conflicts"}, "conflict.list"},
         {{"--json", "device"}, "device.get"},
         {{"--json", "device", "new"}, "device.new"},
@@ -205,11 +204,319 @@ TEST(envelope_warnings_keep_their_order_with_a_comma_between)
     ASSERT_STREQ(r.err, "");
     ASSERT_STR_CONTAINS(r.out, "\"entries\":[]},\"next_cursor\":null,\"has_more\":false,"
                                "\"warnings\":[{\"code\":\"synced_folder\",");
-    ASSERT_STR_CONTAINS(r.out, "local disk\"},{\"code\":\"deprecated_flag\",\"message\":"
-                               "\"--trash is deprecated; use --expired\"}]}\n");
+    ASSERT_STR_CONTAINS(r.out, "local disk\"},{\"code\":\"flag_meaning_changed\",\"message\":"
+                               "\"--trash now means the Trash (deleted memories). For expired "
+                               "memories, use --expired.\",\"detail\":{\"flag\":\"--trash\","
+                               "\"use\":\"--expired\"}}]}\n");
     cmd_result_free(&r);
     free(db);
     harness_remove_tree(dir);
+}
+
+/* --trash is the Deleted bin. --expired is expired memories. They are not aliases. */
+TEST(envelope_trash_is_the_deleted_bin)
+{
+    char *db = make_temp_db_path();
+    const char *live[] = {"add", "--key", "livek", "live body"};
+    const char *exp[] = {"add", "--key", "expk", "--expires", "2020-01-01T00:00:00Z", "old body"};
+    const char *del[] = {"add", "--key", "delk", "gone body"};
+    const char *drop[] = {"delete", "--key", "delk"};
+    const char *trash[] = {"list", "--trash"};
+    const char *expired[] = {"list", "--expired"};
+    const char *get_del[] = {"get", "--key", "delk"};
+    const char *get_exp[] = {"get", "--key", "expk"};
+    CmdResult r;
+
+    ASSERT_TRUE(db != NULL);
+    r = run_remember(db, live, sizeof live / sizeof live[0], NULL);
+    ASSERT_EQ_INT(r.exit_code, 0);
+    cmd_result_free(&r);
+    r = run_remember(db, exp, sizeof exp / sizeof exp[0], NULL);
+    ASSERT_EQ_INT(r.exit_code, 0);
+    cmd_result_free(&r);
+    r = run_remember(db, del, sizeof del / sizeof del[0], NULL);
+    ASSERT_EQ_INT(r.exit_code, 0);
+    cmd_result_free(&r);
+    r = run_remember(db, drop, sizeof drop / sizeof drop[0], NULL);
+    ASSERT_EQ_INT(r.exit_code, 0);
+    cmd_result_free(&r);
+
+    r = run_remember(db, trash, sizeof trash / sizeof trash[0], NULL);
+    ASSERT_EQ_INT(r.exit_code, 0);
+    ASSERT_STREQ(r.err, "remember: warning: --trash now means the Trash (deleted memories). "
+                        "For expired memories, use --expired.\n");
+    ASSERT_STR_CONTAINS(r.out, "delk");
+    ASSERT_STR_NOT_CONTAINS(r.out, "expk");
+    ASSERT_STR_NOT_CONTAINS(r.out, "livek");
+    cmd_result_free(&r);
+
+    r = run_remember(db, expired, sizeof expired / sizeof expired[0], NULL);
+    ASSERT_EQ_INT(r.exit_code, 0);
+    ASSERT_STREQ(r.err, "");
+    ASSERT_STR_CONTAINS(r.out, "expk");
+    ASSERT_STR_NOT_CONTAINS(r.out, "delk");
+    cmd_result_free(&r);
+
+    r = run_remember(db, get_del, sizeof get_del / sizeof get_del[0], NULL);
+    ASSERT_EQ_INT(r.exit_code, 3);
+    ASSERT_STREQ(r.err, "remember: \"delk\" is in the Trash. Add --trash to use it.\n");
+    cmd_result_free(&r);
+
+    r = run_remember(db, get_exp, sizeof get_exp / sizeof get_exp[0], NULL);
+    ASSERT_EQ_INT(r.exit_code, 3);
+    ASSERT_STREQ(r.err, "remember: \"expk\" has expired. Add --expired to use it.\n");
+    cmd_result_free(&r);
+    free(db);
+}
+
+static const char k_trash_warn[] =
+    "remember: warning: --trash now means the Trash (deleted memories). "
+    "For expired memories, use --expired.\n";
+
+/* --strict and REMEMBER_STRICT=1 turn any warning into exit 4. Exit 4 has no other meaning. */
+// NOLINTBEGIN(concurrency-mt-unsafe)
+TEST(envelope_strict_makes_a_trash_warning_exit_4)
+{
+    char *db = make_temp_db_path();
+    const char *trash[] = {"--strict", "list", "--trash"};
+    const char *json[] = {"--json", "--strict", "list", "--trash"};
+    const char *plain[] = {"list", "--trash"};
+    const char *miss[] = {"--strict", "get", "--key", "missing"};
+    const char *bad[] = {"--strict", "delete", "--trash", "--key", "nope"};
+    CmdResult r;
+
+    ASSERT_TRUE(db != NULL);
+    (void)unsetenv("REMEMBER_STRICT");
+
+    r = run_remember(db, trash, sizeof trash / sizeof trash[0], NULL);
+    ASSERT_EQ_INT(r.exit_code, 4);
+    ASSERT_STREQ(r.err, k_trash_warn);
+    cmd_result_free(&r);
+
+    r = run_remember(db, json, sizeof json / sizeof json[0], NULL);
+    ASSERT_EQ_INT(r.exit_code, 4);
+    ASSERT_STREQ(r.err, "");
+    ASSERT_STR_CONTAINS(r.out, "\"code\":\"flag_meaning_changed\"");
+    ASSERT_STR_CONTAINS(r.out, "\"detail\":{\"flag\":\"--trash\",\"use\":\"--expired\"}");
+    cmd_result_free(&r);
+
+    ASSERT_EQ_INT(setenv("REMEMBER_STRICT", "1", 1), 0);
+    r = run_remember(db, plain, sizeof plain / sizeof plain[0], NULL);
+    ASSERT_EQ_INT(unsetenv("REMEMBER_STRICT"), 0);
+    ASSERT_EQ_INT(r.exit_code, 4);
+    ASSERT_STREQ(r.err, k_trash_warn);
+    cmd_result_free(&r);
+
+    ASSERT_EQ_INT(setenv("REMEMBER_STRICT", "0", 1), 0);
+    r = run_remember(db, plain, sizeof plain / sizeof plain[0], NULL);
+    ASSERT_EQ_INT(unsetenv("REMEMBER_STRICT"), 0);
+    ASSERT_EQ_INT(r.exit_code, 0);
+    ASSERT_STREQ(r.err, k_trash_warn);
+    cmd_result_free(&r);
+
+    r = run_remember(db, miss, sizeof miss / sizeof miss[0], NULL);
+    ASSERT_EQ_INT(r.exit_code, 2);
+    ASSERT_STREQ(r.err, "remember: not found\n");
+    cmd_result_free(&r);
+
+    r = run_remember(db, bad, sizeof bad / sizeof bad[0], NULL);
+    ASSERT_EQ_INT(r.exit_code, 4);
+    ASSERT_STREQ(r.err, "remember: warning: --trash now means the Trash (deleted memories). "
+                        "For expired memories, use --expired.\n"
+                        "remember: unknown option '--trash'\n");
+    cmd_result_free(&r);
+    free(db);
+}
+// NOLINTEND(concurrency-mt-unsafe)
+
+TEST(envelope_help_states_trash_and_expired)
+{
+    char *db = make_temp_db_path();
+    static const char *topics[] = {"get", "update", "list", "search", "tags", "rekey"};
+    static const char trash_line[] =
+        "  --trash     Use the Trash: memories you deleted. Restore them, or purge "
+        "them for good.\n";
+    static const char expired_line[] =
+        "  --expired   Use expired memories: ones past their expiry time. They are "
+        "not in the Trash.\n";
+    size_t i = 0;
+    CmdResult r;
+
+    ASSERT_TRUE(db != NULL);
+    for (i = 0; i < sizeof topics / sizeof topics[0]; i++) {
+        const char *args[] = {"help", topics[i]};
+
+        r = run_remember(db, args, sizeof args / sizeof args[0], NULL);
+        ASSERT_EQ_INT(r.exit_code, 0);
+        ASSERT_STR_CONTAINS(r.out, trash_line);
+        ASSERT_STR_CONTAINS(r.out, expired_line);
+        cmd_result_free(&r);
+    }
+    {
+        const char *del[] = {"help", "delete"};
+
+        r = run_remember(db, del, sizeof del / sizeof del[0], NULL);
+        ASSERT_EQ_INT(r.exit_code, 0);
+        ASSERT_STR_CONTAINS(r.out, "delete --expired hard-wipes one row.\n");
+        ASSERT_STR_NOT_CONTAINS(r.out, "Use the Trash:");
+        cmd_result_free(&r);
+    }
+    {
+        const char *gone[] = {"purge-trash"};
+
+        r = run_remember(db, gone, sizeof gone / sizeof gone[0], NULL);
+        ASSERT_EQ_INT(r.exit_code, 1);
+        ASSERT_STREQ(r.err, "remember: unknown command 'purge-trash'\n");
+        cmd_result_free(&r);
+    }
+    free(db);
+}
+
+TEST(envelope_update_trash_undelete_restores)
+{
+    char *db = make_temp_db_path();
+    const char *add[] = {"add", "--key", "slot", "kept body"};
+    const char *drop[] = {"delete", "--key", "slot"};
+    const char *back[] = {"update", "--trash", "--key", "slot", "--undelete"};
+    const char *get[] = {"get", "--key", "slot"};
+    CmdResult r;
+
+    ASSERT_TRUE(db != NULL);
+    r = run_remember(db, add, sizeof add / sizeof add[0], NULL);
+    ASSERT_EQ_INT(r.exit_code, 0);
+    cmd_result_free(&r);
+    r = run_remember(db, drop, sizeof drop / sizeof drop[0], NULL);
+    ASSERT_EQ_INT(r.exit_code, 0);
+    cmd_result_free(&r);
+    r = run_remember(db, back, sizeof back / sizeof back[0], NULL);
+    ASSERT_EQ_INT(r.exit_code, 0);
+    ASSERT_STREQ(r.err, k_trash_warn);
+    cmd_result_free(&r);
+    r = run_remember(db, get, sizeof get / sizeof get[0], NULL);
+    ASSERT_EQ_INT(r.exit_code, 0);
+    ASSERT_STREQ(r.out, "kept body\n");
+    cmd_result_free(&r);
+    free(db);
+}
+
+TEST(envelope_keyless_wrong_list_uses_the_uuid)
+{
+    char *db = make_temp_db_path();
+    const char *add[] = {"add", "solo"};
+    const char *drop[] = {"delete", "1"};
+    const char *get[] = {"get", "1"};
+    const char *json[] = {"--json", "get", "1"};
+    enum { WRONG_LIST_LINE = 160, JSON_FRAG = 120 };
+    char *id = NULL;
+    char want[WRONG_LIST_LINE];
+    char frag[JSON_FRAG];
+    CmdResult r;
+
+    ASSERT_TRUE(db != NULL);
+    r = run_remember(db, add, sizeof add / sizeof add[0], NULL);
+    ASSERT_EQ_INT(r.exit_code, 0);
+    cmd_result_free(&r);
+    r = run_remember(db, drop, sizeof drop / sizeof drop[0], NULL);
+    ASSERT_EQ_INT(r.exit_code, 0);
+    cmd_result_free(&r);
+    id = harness_sqlite_query_line(db, "SELECT id FROM entries WHERE local_id=1;");
+    ASSERT_TRUE(id != NULL);
+    if (id == NULL) {
+        free(db);
+        return;
+    }
+    (void)snprintf(want, sizeof want, "remember: \"%s\" is in the Trash. Add --trash to use it.\n",
+                   id);
+    r = run_remember(db, get, sizeof get / sizeof get[0], NULL);
+    ASSERT_EQ_INT(r.exit_code, 3);
+    ASSERT_STREQ(r.err, want);
+    ASSERT_STR_NOT_CONTAINS(r.err, "\"1\"");
+    cmd_result_free(&r);
+
+    (void)snprintf(frag, sizeof frag, "\"message\":\"\\\"%s\\\" is in the Trash.\"", id);
+    r = run_remember(db, json, sizeof json / sizeof json[0], NULL);
+    ASSERT_EQ_INT(r.exit_code, 3);
+    ASSERT_STREQ(r.err, "");
+    ASSERT_STR_CONTAINS(r.out, "\"code\":\"deleted\"");
+    ASSERT_STR_CONTAINS(r.out, frag);
+    ASSERT_STR_CONTAINS(r.out, "\"fix\":\"Add --trash to use it.\"");
+    cmd_result_free(&r);
+    free(id);
+    free(db);
+}
+
+/* A row with no key and an empty id has nothing to quote. The line stays the token. */
+TEST(envelope_blank_id_wrong_list_keeps_the_deleted_token)
+{
+    char *db = make_temp_db_path();
+    const char *add[] = {"add", "solo"};
+    const char *drop[] = {"delete", "1"};
+    const char *get[] = {"get", "1"};
+    CmdResult r;
+
+    ASSERT_TRUE(db != NULL);
+    r = run_remember(db, add, sizeof add / sizeof add[0], NULL);
+    ASSERT_EQ_INT(r.exit_code, 0);
+    cmd_result_free(&r);
+    r = run_remember(db, drop, sizeof drop / sizeof drop[0], NULL);
+    ASSERT_EQ_INT(r.exit_code, 0);
+    cmd_result_free(&r);
+    free(harness_sqlite_query_line(db, "UPDATE entries SET id='' WHERE local_id=1;"));
+    r = run_remember(db, get, sizeof get / sizeof get[0], NULL);
+    ASSERT_EQ_INT(r.exit_code, 3);
+    ASSERT_STREQ(r.err, "remember: deleted\n");
+    cmd_result_free(&r);
+    free(db);
+}
+
+TEST(envelope_trash_and_expired_cannot_combine)
+{
+    char *db = make_temp_db_path();
+    const char *mix[] = {"list", "--trash", "--expired"};
+    const char *del[] = {"delete", "--trash", "--expired", "1"};
+    CmdResult r;
+
+    ASSERT_TRUE(db != NULL);
+    r = run_remember(db, mix, sizeof mix / sizeof mix[0], NULL);
+    ASSERT_EQ_INT(r.exit_code, 1);
+    ASSERT_STREQ(r.err, "remember: warning: --trash now means the Trash (deleted memories). "
+                        "For expired memories, use --expired.\n"
+                        "remember: cannot combine --expired and --trash\n");
+    cmd_result_free(&r);
+    r = run_remember(db, del, sizeof del / sizeof del[0], NULL);
+    ASSERT_EQ_INT(r.exit_code, 1);
+    ASSERT_STR_CONTAINS(r.err, "cannot combine --expired and --trash");
+    ASSERT_STR_NOT_CONTAINS(r.err, "unknown option");
+    cmd_result_free(&r);
+    free(db);
+}
+
+/* purge --trash selects the Deleted bin and warns. It is not an empty flag. */
+TEST(envelope_purge_trash_selects_the_deleted_bin)
+{
+    char *db = make_temp_db_path();
+    const char *add[] = {"add", "gone"};
+    const char *drop[] = {"delete", "1"};
+    const char *purge[] = {"purge", "--trash"};
+    const char *get[] = {"get", "--deleted", "1"};
+    CmdResult r;
+
+    ASSERT_TRUE(db != NULL);
+    r = run_remember(db, add, sizeof add / sizeof add[0], NULL);
+    ASSERT_EQ_INT(r.exit_code, 0);
+    cmd_result_free(&r);
+    r = run_remember(db, drop, sizeof drop / sizeof drop[0], NULL);
+    ASSERT_EQ_INT(r.exit_code, 0);
+    cmd_result_free(&r);
+    r = run_remember(db, purge, sizeof purge / sizeof purge[0], NULL);
+    ASSERT_EQ_INT(r.exit_code, 0);
+    ASSERT_STREQ(r.err, k_trash_warn);
+    ASSERT_STREQ(r.out, "1\n");
+    cmd_result_free(&r);
+    r = run_remember(db, get, sizeof get / sizeof get[0], NULL);
+    ASSERT_EQ_INT(r.exit_code, 2);
+    cmd_result_free(&r);
+    free(db);
 }
 
 /* The shim test needs the CLI built with REMEMBER_TEST_VFS (the gate configures it ON).
@@ -892,6 +1199,14 @@ void register_envelope_tests(void)
     RUN_TEST(envelope_every_command_names_its_reply_type);
     RUN_TEST(envelope_failure_keeps_its_type_and_carries_the_warnings_after_the_error);
     RUN_TEST(envelope_warnings_keep_their_order_with_a_comma_between);
+    RUN_TEST(envelope_trash_is_the_deleted_bin);
+    RUN_TEST(envelope_strict_makes_a_trash_warning_exit_4);
+    RUN_TEST(envelope_help_states_trash_and_expired);
+    RUN_TEST(envelope_update_trash_undelete_restores);
+    RUN_TEST(envelope_keyless_wrong_list_uses_the_uuid);
+    RUN_TEST(envelope_blank_id_wrong_list_keeps_the_deleted_token);
+    RUN_TEST(envelope_trash_and_expired_cannot_combine);
+    RUN_TEST(envelope_purge_trash_selects_the_deleted_bin);
 #ifdef REMEMBER_TEST_VFS
     RUN_TEST(envelope_add_link_read_error_after_the_write_exits_1_and_keeps_the_write);
 #else

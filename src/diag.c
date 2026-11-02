@@ -31,6 +31,11 @@ typedef struct {
 // NOLINTNEXTLINE(cppcoreguidelines-avoid-non-const-global-variables)
 static JsonNotices g_json;
 
+/* Survives diag_json_end so --strict can see a warning after the envelope is written.
+   Deliberately mutable; one call at a time (reset at remember_run). */
+// NOLINTNEXTLINE(cppcoreguidelines-avoid-non-const-global-variables)
+static size_t g_warning_count;
+
 /* E4.3 order. One token per code; diag_code_name / diag_code_from_name share it. */
 static const char *const k_error_codes[DIAG_CODE_COUNT] = {
     [DIAG_USAGE] = "usage",
@@ -67,9 +72,9 @@ static const char *const k_error_codes[DIAG_CODE_COUNT] = {
 
 /* error.fix per code (decision:plan21-error-fix-drafts-c42). The SQLite codes
    take their E4.8 fix in diag_error_sqlite; their rows here serve a non-SQLite
-   failure under the same code. schema_too_new and the not_found example are
-   locked text (C-01, JSON-STYLE); the rest are C-42 drafts. usage is built from
-   the command in usage_fix. */
+   failure under the same code. schema_too_new, not_found, expired, and deleted
+   are locked text (C-01, JSON-STYLE); the rest are C-42 drafts. usage is built
+   from the command in usage_fix. */
 static const char *const k_fix[DIAG_CODE_COUNT] = {
     [DIAG_NOT_FOUND] = "Run 'remember list' to see keys.",
     [DIAG_DATABASE] = "Try again. If it keeps happening, report the details from --json.",
@@ -80,7 +85,7 @@ static const char *const k_fix[DIAG_CODE_COUNT] = {
     [DIAG_BODY_CONFLICT] = "Change the text, or update the memory that already has it.",
     [DIAG_EXPIRED] = "Add --expired to use it.",
     [DIAG_NOT_EXPIRED] = "Run the command without --expired.",
-    [DIAG_DELETED] = "Add --deleted to use it.",
+    [DIAG_DELETED] = "Add --trash to use it.",
     [DIAG_NOT_DELETED] = "Run 'remember delete' on it first.",
     [DIAG_NOT_SINGLE_DEVICE] = "Delete it instead; it stays in the Trash and syncs as deleted.",
     [DIAG_SELF_LINK] = "Link two different memories.",
@@ -128,6 +133,7 @@ static const char *const k_warning_codes[DIAG_WARN_COUNT] = {
     [DIAG_WARN_DEPRECATED_FLAG] = "deprecated_flag",
     [DIAG_WARN_SYNCED_FOLDER] = "synced_folder",
     [DIAG_WARN_SETTING_INVALID] = "setting_invalid",
+    [DIAG_WARN_FLAG_MEANING_CHANGED] = "flag_meaning_changed",
 };
 
 /* Plain line lead per warning. E2.3 gives raw_query_ignored its own words; the
@@ -137,6 +143,7 @@ static const char *const k_warning_plain_prefix[DIAG_WARN_COUNT] = {
     [DIAG_WARN_DEPRECATED_FLAG] = "warning: ",
     [DIAG_WARN_SYNCED_FOLDER] = "warning: ",
     [DIAG_WARN_SETTING_INVALID] = "warning: ",
+    [DIAG_WARN_FLAG_MEANING_CHANGED] = "warning: ",
 };
 
 static const char *catalog_name(const char *const *names, size_t count, size_t index)
@@ -343,26 +350,33 @@ static int write_notice(Notice notice)
 {
     FILE *err = app_err();
     const char *message = message_or_empty(notice.message);
+    int rc = 0;
 
     if (g_json.on) {
-        return write_json_notice(notice, message);
+        rc = write_json_notice(notice, message);
+    } else if (fprintf(err, "remember: %s", notice.plain_prefix) < 0 ||
+               output_text_human(err, message, false) != 0 ||
+               (notice.fix != NULL &&
+                (fputc(' ', err) == EOF || output_text_human(err, notice.fix, false) != 0)) ||
+               fputc('\n', err) == EOF) {
+        /* decision:plan17a-plain-notice-one-line: an echoed token cannot split the
+           line or drive the terminal. JSON escapes the same bytes above. */
+        rc = -1;
     }
-    /* decision:plan17a-plain-notice-one-line: an echoed token cannot split the
-       line or drive the terminal. JSON escapes the same bytes above. */
-    if (fprintf(err, "remember: %s", notice.plain_prefix) < 0) {
-        return -1;
+    if (rc == 0 && strcmp(notice.json_kind, "warning") == 0) {
+        g_warning_count++;
     }
-    if (output_text_human(err, message, false) != 0) {
-        return -1;
-    }
-    if (notice.fix != NULL &&
-        (fputc(' ', err) == EOF || output_text_human(err, notice.fix, false) != 0)) {
-        return -1;
-    }
-    if (fputc('\n', err) == EOF) {
-        return -1;
-    }
-    return 0;
+    return rc;
+}
+
+void diag_warnings_reset(void)
+{
+    g_warning_count = 0U;
+}
+
+size_t diag_warning_count(void)
+{
+    return g_warning_count;
 }
 
 int diag_error_split(DiagCode code, DiagSplit split)

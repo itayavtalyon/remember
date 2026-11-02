@@ -401,9 +401,16 @@ TEST(cli_graph_deleted_via_key_and_sync_id)
     cmd_result_free(&r);
 
     r = run_remember(db, hard, sizeof(hard) / sizeof(hard[0]), NULL);
-    ASSERT_EQ_INT(r.exit_code, 0);
-    ASSERT_STR_CONTAINS(r.out, "\"action\":\"deleted\"");
+    ASSERT_EQ_INT(r.exit_code, 1);
+    ASSERT_STR_CONTAINS(r.out, "unknown option '--deleted'");
     cmd_result_free(&r);
+    {
+        const char *still[] = {"get", "--deleted", "--key", "gonek"};
+        r = run_remember(db, still, sizeof(still) / sizeof(still[0]), NULL);
+        ASSERT_EQ_INT(r.exit_code, 0);
+        ASSERT_STR_CONTAINS(r.out, "gone");
+        cmd_result_free(&r);
+    }
 
     r = run_remember(db, upd_miss, sizeof(upd_miss) / sizeof(upd_miss[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 2);

@@ -65,7 +65,8 @@ remember [--db PATH] [--json] [--busy-timeout MS] [--no-create] <command> …
 | `0` | Success (including empty search/list; import with conflicts still exits 0) |
 | `1` | Usage or error |
 | `2` | Not found (`get` / `delete` / `update` / `rekey`) in either bin; `link`/`unlink`/`related` missing end |
-| `3` | Wrong bin. Tokens: `expired` / `not_expired` / `deleted` / `not_deleted`. Flip `--expired` or `--deleted`. **Not** used by `link`/`unlink`/`related` (those resolve live+expired by default). |
+| `3` | Wrong bin. `not_expired` / `not_deleted` stay those tokens. Trash: `remember: "<key>" is in the Trash. Add --trash to use it.` Expired: `remember: "<key>" has expired. Add --expired to use it.` `<key>` is the key, or the id when the row has no key. **Not** used by `link`/`unlink`/`related` (those resolve live+expired by default). |
+| `4` | A warning under `--strict` or `REMEMBER_STRICT=1`. Exit 4 has no other meaning. |
 
 Never invent ids, keys, or `local_id`s. On exit `2`, the entry is missing — do not fabricate one. On exit `3`, the row exists in another bin.
 
@@ -88,11 +89,22 @@ JSON `id` is the memory's lowercase hyphenated UUID. Pass that UUID, a number fr
 | Flag | Meaning |
 |------|---------|
 | (default) | **live** only |
-| `--expired` | expired bin only |
-| `--deleted` | soft-deleted bin only |
-| `--trash` | **deprecated** alias of `--expired` (one stderr deprecation line) |
+| `--expired` | expired memories: ones past their expiry time. They are not in the Trash. |
+| `--deleted` | soft-deleted bin only (the same bin as `--trash`) |
+| `--trash` | the Trash: memories you deleted. Not an alias of `--expired`. One warning this release (below). |
 
-There is no include-all-bins flag. JSON always has `"bin":"live"|"expired"|"deleted"` (never null, never omit). No `"trash"` field — stubs use `"bin"`.
+There is no include-all-bins flag. `--trash` and `--expired` cannot combine (`cannot combine --expired and --trash`). `--expired` and `--deleted` cannot combine. `--trash` and `--deleted` are the same bin.
+
+For one release, a command that uses `--trash` prints one warning. Code `flag_meaning_changed`. Detail `{"flag":"--trash","use":"--expired"}`. Plain: `remember: warning: --trash now means the Trash (deleted memories). For expired memories, use --expired.` With `--json`, that item is in `warnings` and stderr is empty. Under `--strict` or `REMEMBER_STRICT=1`, any warning exits 4.
+
+Help, on get, update, list, search, tags, and rekey:
+
+```text
+--trash     Use the Trash: memories you deleted. Restore them, or purge them for good.
+--expired   Use expired memories: ones past their expiry time. They are not in the Trash.
+```
+
+JSON always has `"bin":"live"|"expired"|"deleted"` (never null, never omit). No `"trash"` field — stubs use `"bin"`.
 
 ## Commands (agent style: always `--json` when parsing)
 
@@ -147,24 +159,22 @@ remember --json get --key pref:editor
 remember --json get --deleted 3
 remember --json delete 3                          # soft-delete (live or expired)
 remember --json delete --expired 3                # hard wipe one expired row
-remember --json delete --deleted 3                # hard wipe one deleted row
 remember --json update 3 --text "new body"
 remember --json update --key pref:editor --if-version-vector '{"<device>":1}' --text "nvim"
-remember --json update --deleted 3 --undelete     # restore from deleted
+remember --json update --trash 3 --undelete       # restore from the Trash
+remember --json update --deleted 3 --undelete     # same bin as --trash
 remember --json update --expired 3 --clear-expires
 remember --json rekey --key decision:old --to-key decision:new
 remember --json rekey 12 --clear-key
 remember --json purge --expired                   # wipe whole expired bin
-remember --json purge --deleted
-remember --json purge-trash                       # deprecated ≡ purge --expired
+remember --json purge --deleted                   # wipe the Trash (the Deleted bin)
 ```
 
 **Soft vs hard delete:**
 
 - Unflagged `delete` = **soft** (sets `deleted_at`, clears `expires_at`, keeps body/tags/key/id/edges/FTS)
-- `delete --expired` / `delete --deleted` = **one-row hard** CASCADE
-- `purge --expired|--deleted` = whole-bin hard wipe
-- `--trash` ≡ `--expired` + deprecation stderr
+- `delete --expired` hard-wipes one row. `delete --deleted` does not exist. `delete --trash` does not wipe.
+- `purge --expired` / `purge --deleted` = whole-bin hard wipe. `purge --trash` selects the Deleted bin and warns. `purge-trash` does not exist.
 
 **Update rules:**
 
@@ -172,7 +182,7 @@ remember --json purge-trash                       # deprecated ≡ purge --expir
 - `--tag` + `--clear-tags` together → usage error
 - Omit tag flags → tags unchanged
 - Body only via `--text` (or `--text -` for stdin; `--text=-` for literal hyphen)
-- `--undelete` needs `--deleted`; mutex with ttl/expires flags
+- `--undelete` restores a deleted row. Pass `--trash` or `--deleted`. Mutex with ttl/expires flags
 - Never changes `source` or `key` (use `rekey` for keys)
 - Read `version_vector` from the entry. Pass that object back with `--if-version-vector` (spacing does not matter). On code `stale` (`memory changed since it was read`), re-read and retry. A malformed vector is `usage` `invalid version vector: <vv>`. A wrong bin is still exit 3; the vector is checked only after the row is in the requested bin.
 - Keyless body-hash collision → exit 1 + conflicting id on stderr
@@ -256,7 +266,7 @@ For anything that changes over time:
 1. `add --key pref:editor "value"` (first write or overwrite)
 2. Read/correct: `get --key` / `update --key --text …`
 3. Rename/promote/demote the key: `rekey --to-key` / `--clear-key` (keeps `id`, `local_id`, and edges)
-4. Soft-remove: `delete --key` (recover with `update --deleted … --undelete`)
+4. Soft-remove: `delete --key` (recover with `update --trash … --undelete`)
 
 Keyed slots make duplicate rivals impossible. Keyless facts still resolve by recency (`updated_at`).
 
