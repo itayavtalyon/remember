@@ -2,7 +2,7 @@
 
 A spec describes what `remember` does today. It is normative.
 
-- The plan that ships a behavior edits its spec in the same PR. A spec never describes planned behavior.
+- The plan that ships a behavior edits its spec in the same PR. A spec never describes planned behavior. CI fails a PR that changes `src/` and not `specs/`, unless a line of the PR body starts with `No spec change:` and gives the reason ([`spec-drift.yml`](../.github/workflows/spec-drift.yml)).
 - Each section names the decision keys behind it (`decision:…`). The rationale and its later changes live as linked entries in the maintainer's Remember brain, tagged `subject:<name>`.
 - When a spec and a design log disagree, the spec wins. Design logs in [`design-logs/`](../design-logs/index.md) are frozen history (2026-10-31).
 - The roadmap is the Remember entry `roadmap:remember`.
