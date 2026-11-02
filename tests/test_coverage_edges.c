@@ -239,7 +239,6 @@ TEST(output_preview_multibyte_and_truncate)
     memset(&e, 0, sizeof(e));
     e.id = 1;
     e.body = (char *)"café\nmore"; /* utf-8 multi-byte in preview path */
-    e.source = (char *)"unknown";
     e.created_at = (char *)"c";
     e.updated_at = (char *)"u";
     ASSERT_EQ_INT(output_entry_human_line(f, &e, NULL, 0, "t"), 0);
@@ -407,12 +406,12 @@ TEST(add_json_body_with_all_json_escapes)
 TEST(list_invalid_source_rejected)
 {
     char *db = make_temp_db_path();
-    const char *args[] = {"list", "--source", "nope"};
+    const char *args[] = {"list", "--created-by", "nope"};
     CmdResult r;
     ASSERT_TRUE(db != NULL);
     r = run_remember(db, args, sizeof(args) / sizeof(args[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 1);
-    ASSERT_STR_CONTAINS(r.err, "invalid source");
+    ASSERT_STR_CONTAINS(r.err, "invalid --created-by (use human, agent, tool, share, or import)");
     cmd_result_free(&r);
     free(db);
 }
@@ -425,7 +424,7 @@ TEST(list_missing_option_values)
     const char *a2[] = {"list", "--limit"};
     const char *a3[] = {"list", "--offset"};
     const char *a4[] = {"list", "--key"};
-    const char *a5[] = {"list", "--source"};
+    const char *a5[] = {"list", "--created-by"};
     ASSERT_TRUE(db != NULL);
     r = run_remember(db, a1, sizeof(a1) / sizeof(a1[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 1);
@@ -604,7 +603,6 @@ TEST(output_utf8_3_and_4_byte_preview)
     memset(&e, 0, sizeof(e));
     e.id = 1;
     e.body = body;
-    e.source = (char *)"unknown";
     e.created_at = (char *)"c";
     e.updated_at = (char *)"u";
     e.key = (char *)"k";
@@ -810,7 +808,6 @@ TEST(output_invalid_utf8_lead_byte)
     memset(&e, 0, sizeof(e));
     e.id = 1;
     e.body = body;
-    e.source = (char *)"unknown";
     e.created_at = (char *)"c";
     e.updated_at = (char *)"u";
     ASSERT_EQ_INT(output_entry_human_line(f, &e, NULL, 0, "t"), 0);

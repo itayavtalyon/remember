@@ -17,9 +17,9 @@ static char *take_next_cursor(const char *json);
 static void seed_three(const char *db)
 {
     CmdResult r;
-    const char *a1[] = {"add", "--tag", "a", "--source", "human", "alpha first"};
-    const char *a2[] = {"add", "--tag", "b", "--source", "agent", "beta second"};
-    const char *a3[] = {"add", "--tag", "a", "--tag", "b", "--source", "tool", "gamma third"};
+    const char *a1[] = {"add", "--tag", "a", "--as", "human", "alpha first"};
+    const char *a2[] = {"add", "--tag", "b", "--as", "agent", "beta second"};
+    const char *a3[] = {"add", "--tag", "a", "--tag", "b", "--as", "tool", "gamma third"};
     r = run_remember(db, a1, sizeof(a1) / sizeof(a1[0]), NULL);
     cmd_result_free(&r);
     /* ensure updated_at ordering: tiny sleep not portable enough; rely on
@@ -141,7 +141,7 @@ TEST(list_filter_source)
 {
     char *db = make_temp_db_path();
     CmdResult r;
-    const char *largs[] = {"list", "--json", "--source", "agent"};
+    const char *largs[] = {"list", "--json", "--created-by", "agent"};
     ASSERT_TRUE(db != NULL);
     seed_three(db);
     r = run_remember(db, largs, sizeof(largs) / sizeof(largs[0]), NULL);
@@ -164,9 +164,9 @@ TEST(list_limit)
     r = run_remember(db, largs, sizeof(largs) / sizeof(largs[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 0);
     p = r.out;
-    while ((p = strstr(p, "\"id\":")) != NULL) {
+    while ((p = strstr(p, "\"local_id\":")) != NULL) {
         count++;
-        p += sizeof("\"id\":") - 1;
+        p += sizeof("\"local_id\":") - 1;
     }
     ASSERT_EQ_INT(count, 2);
     cmd_result_free(&r);
@@ -195,9 +195,9 @@ TEST(list_limit_default_is_twenty)
     r = run_remember(db, largs, sizeof(largs) / sizeof(largs[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 0);
     p = r.out;
-    while ((p = strstr(p, "\"id\":")) != NULL) {
+    while ((p = strstr(p, "\"local_id\":")) != NULL) {
         count++;
-        p += sizeof("\"id\":") - 1;
+        p += sizeof("\"local_id\":") - 1;
     }
     ASSERT_EQ_INT(count, 20);
     cmd_result_free(&r);
@@ -720,17 +720,18 @@ TEST(list_json_cursor_filters_and_rejects)
     cursor = NULL;
 
     {
-        const char *t1[] = {"add", "--tag", "x", "--tag", "aa", "--source", "agent", "tag one"};
-        const char *t2[] = {"add", "--tag", "x", "--tag", "aa", "--source", "agent", "tag two"};
-        const char *p1[] = {"list",    "--json",     "--limit", "1",         "--tag",
-                            "aa",      "--tag",      "x",       "--source",  "agent",
-                            "--since", "2000-01-01", "--until", "2999-01-01"};
+        const char *t1[] = {"add", "--tag", "x", "--tag", "aa", "--as", "agent", "tag one"};
+        const char *t2[] = {"add", "--tag", "x", "--tag", "aa", "--as", "agent", "tag two"};
+        const char *p1[] = {
+            "list", "--json",       "--limit", "1",       "--tag",      "aa",      "--tag",
+            "x",    "--created-by", "agent",   "--since", "2000-01-01", "--until", "2999-01-01"};
         const char *p2[16];
-        const char *swap[] = {"list",    "--json",     "--limit",  "1",     "--tag",   "x",
-                              "--tag",   "aa",         "--source", "agent", "--since", "2000-01-01",
-                              "--until", "2999-01-01", "--cursor", NULL};
+        const char *swap[] = {"list",         "--json",     "--limit",  "1",
+                              "--tag",        "x",          "--tag",    "aa",
+                              "--created-by", "agent",      "--since",  "2000-01-01",
+                              "--until",      "2999-01-01", "--cursor", NULL};
         const char *only_x[] = {"list", "--json", "--limit", "1", "--tag", "x"};
-        const char *other_source[] = {"list", "--json", "--source", "human", "--cursor", NULL};
+        const char *other_source[] = {"list", "--json", "--created-by", "human", "--cursor", NULL};
 
         r = run_remember(db, t1, sizeof(t1) / sizeof(t1[0]), NULL);
         ASSERT_EQ_INT(r.exit_code, 0);
@@ -768,11 +769,11 @@ TEST(list_json_cursor_filters_and_rejects)
         ASSERT_STR_CONTAINS(r.out, "\"code\":\"invalid_argument\"");
         cmd_result_free(&r);
         {
-            const char *notags[] = {"list",       "--json",  "--source",   "agent",    "--since",
-                                    "2000-01-01", "--until", "2999-01-01", "--cursor", NULL};
-            const char *wrong[] = {"list",    "--json",     "--tag",    "yy",      "--tag",
-                                   "zz",      "--source",   "agent",    "--since", "2000-01-01",
-                                   "--until", "2999-01-01", "--cursor", NULL};
+            const char *notags[] = {"list",       "--json",  "--created-by", "agent",    "--since",
+                                    "2000-01-01", "--until", "2999-01-01",   "--cursor", NULL};
+            const char *wrong[] = {"list",    "--json",       "--tag",    "yy",      "--tag",
+                                   "zz",      "--created-by", "agent",    "--since", "2000-01-01",
+                                   "--until", "2999-01-01",   "--cursor", NULL};
 
             notags[9] = tagged;
             wrong[13] = tagged;

@@ -314,12 +314,12 @@ TEST(cli_link_unlink_bump_vv_noop_unlink_does_not)
     r = run_remember(db, ga, sizeof(ga) / sizeof(ga[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 0);
     ASSERT_EQ_INT(json_copy_vv(r.out, vv_a1, sizeof(vv_a1)), 0);
-    ASSERT_TRUE(strcmp(vv_a0, vv_a1) != 0);
+    ASSERT_STREQ(vv_a1, vv_a0);
     cmd_result_free(&r);
     r = run_remember(db, gb, sizeof(gb) / sizeof(gb[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 0);
     ASSERT_EQ_INT(json_copy_vv(r.out, vv_b1, sizeof(vv_b1)), 0);
-    ASSERT_TRUE(strcmp(vv_b0, vv_b1) != 0);
+    ASSERT_STREQ(vv_b1, vv_b0);
     cmd_result_free(&r);
 
     r = run_remember(db, unlink, sizeof(unlink) / sizeof(unlink[0]), NULL);
@@ -329,12 +329,12 @@ TEST(cli_link_unlink_bump_vv_noop_unlink_does_not)
     r = run_remember(db, ga, sizeof(ga) / sizeof(ga[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 0);
     ASSERT_EQ_INT(json_copy_vv(r.out, vv_a2, sizeof(vv_a2)), 0);
-    ASSERT_TRUE(strcmp(vv_a1, vv_a2) != 0);
+    ASSERT_STREQ(vv_a2, vv_a1);
     cmd_result_free(&r);
     r = run_remember(db, gb, sizeof(gb) / sizeof(gb[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 0);
     ASSERT_EQ_INT(json_copy_vv(r.out, vv_b2, sizeof(vv_b2)), 0);
-    ASSERT_TRUE(strcmp(vv_b1, vv_b2) != 0);
+    ASSERT_STREQ(vv_b2, vv_b1);
     cmd_result_free(&r);
 
     r = run_remember(db, noop, sizeof(noop) / sizeof(noop[0]), NULL);

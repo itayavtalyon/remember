@@ -141,13 +141,26 @@ static int write_json_raw_object(FILE *out, JsonField field)
     return fputs(field.value, out) < 0 ? -1 : 0;
 }
 
+/* Actors are written raw. Only the compact form actor_json writes may pass. */
+static int actors_ok(const Entry *e)
+{
+    if (e->created_by == NULL || !actor_json_is_canonical(e->created_by)) {
+        return 0;
+    }
+    if (e->updated_by == NULL || !actor_json_is_canonical(e->updated_by)) {
+        return 0;
+    }
+    return 1;
+}
+
 static int write_entry_core(FILE *out, const Entry *e, const char *now)
 {
     const char *bin = NULL;
 
     /* The vector is written raw, so only the canonical compact form may pass
        (decision:plan18c-validate-peer-fields). */
-    if (now == NULL || e->sync_id == NULL || !vv_json_is_canonical(e->version_vector)) {
+    if (now == NULL || e->sync_id == NULL || !actors_ok(e) ||
+        !vv_json_is_canonical(e->version_vector)) {
         return -1;
     }
     bin = BIN_TOKENS[store_bin_of(e->deleted_at, e->expires_at, now)];
@@ -164,9 +177,10 @@ static int write_entry_core(FILE *out, const Entry *e, const char *now)
     if (write_json_tags(out, e->tags, e->ntags) != 0) {
         return -1;
     }
-    if (write_json_field_str(
-            out, (JsonField){.name = "source",
-                             .value = e->source != NULL ? e->source : "unknown"}) != 0) {
+    if (write_json_raw_object(out, (JsonField){.name = "created_by", .value = e->created_by}) !=
+            0 ||
+        write_json_raw_object(out, (JsonField){.name = "updated_by", .value = e->updated_by}) !=
+            0) {
         return -1;
     }
     if (write_json_field_str(out, (JsonField){.name = "created_at", .value = e->created_at}) != 0) {
@@ -362,7 +376,6 @@ static int write_key_item(FILE *out, const SearchKeyItem *item)
     const JsonField rest[] = {
         {.name = "id", .value = item->sync_id},
         {.name = "label", .value = item->label},
-        {.name = "source", .value = item->source},
         {.name = "updated_at", .value = item->updated_at},
     };
     size_t i = 0;

@@ -1143,3 +1143,58 @@ ExpiryResult resolve_expiry_flags(ExpiryFlags flags, const char *now, char *out,
     }
     return (ExpiryResult){.rc = 0, .expires = NULL, .err = NULL};
 }
+
+int cmd_take_actor_flag(const char *arg, int *i, int rest_argc, const char **rest_argv,
+                        CmdActorFlags *out, const char **err)
+{
+    const char *missing = NULL;
+    const char **slot = NULL;
+    TakeValue taken;
+
+    if (strcmp(arg, "--as") == 0) {
+        missing = "missing value for --as";
+        slot = &out->kind;
+    } else if (strcmp(arg, "--actor") == 0) {
+        missing = "missing value for --actor";
+        slot = &out->id;
+    } else {
+        return 0;
+    }
+    taken = take_value(i, rest_argc, rest_argv, missing);
+    if (taken.rc != 0) {
+        *err = taken.err;
+        return -1;
+    }
+    *slot = taken.value;
+    return 1;
+}
+
+int cmd_actor_json(const CmdActorFlags *flags, char out[ACTOR_JSON_CAP])
+{
+    ActorStatus st =
+        actor_from_cli((Actor){.kind = flags->kind, .id = flags->id}, out, (size_t)ACTOR_JSON_CAP);
+
+    if (st == ACTOR_OK) {
+        return 0;
+    }
+    if (st == ACTOR_HOOK) {
+        (void)diag_error(DIAG_INVALID_ARGUMENT, NULL);
+        return -1;
+    }
+    if (st == ACTOR_BAD_ID) {
+        err_msg(DIAG_USAGE, "invalid --actor (1 to 64 of A-Za-z0-9_./:-)");
+        return -1;
+    }
+    err_msg(DIAG_USAGE, "invalid --as (use human, agent, tool, or share)");
+    return -1;
+}
+
+// NOLINTNEXTLINE(bugprone-easily-swappable-parameters) — flag name, then the kind token
+int cmd_reject_filter_kind(const char *flag, const char *kind)
+{
+    if (kind == NULL || actor_kind_is_stored(kind)) {
+        return 0;
+    }
+    err_fmt(DIAG_USAGE, "invalid %s (use human, agent, tool, share, or import)", flag);
+    return -1;
+}

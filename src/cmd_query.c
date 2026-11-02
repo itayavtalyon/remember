@@ -44,7 +44,8 @@ static int parse_size_token(const char *raw, size_t *out)
 }
 
 typedef struct {
-    const char *source;
+    const char *created_by;
+    const char *updated_by;
     const char *key_raw;
     const char *sort_raw; /* NULL when --sort was omitted (default updated) */
     const char *since_raw;
@@ -151,13 +152,22 @@ static int list_handle_opt(const char *arg, int *i, int rest_argc, const char **
         }
         return 0;
     }
-    if (strcmp(arg, "--source") == 0) {
-        TakeValue taken = take_value(i, rest_argc, rest_argv, "missing value for --source");
+    if (strcmp(arg, "--created-by") == 0) {
+        TakeValue taken = take_value(i, rest_argc, rest_argv, "missing value for --created-by");
         if (taken.rc != 0) {
             *err = taken.err;
             return taken.rc;
         }
-        out->source = taken.value;
+        out->created_by = taken.value;
+        return 0;
+    }
+    if (strcmp(arg, "--updated-by") == 0) {
+        TakeValue taken = take_value(i, rest_argc, rest_argv, "missing value for --updated-by");
+        if (taken.rc != 0) {
+            *err = taken.err;
+            return taken.rc;
+        }
+        out->updated_by = taken.value;
         return 0;
     }
     if (strcmp(arg, "--key") == 0) {
@@ -209,7 +219,8 @@ static int list_handle_opt(const char *arg, int *i, int rest_argc, const char **
 
 static void list_parse_init(ListParse *out)
 {
-    out->source = NULL;
+    out->created_by = NULL;
+    out->updated_by = NULL;
     out->key_raw = NULL;
     out->sort_raw = NULL;
     out->since_raw = NULL;
@@ -367,8 +378,8 @@ static int list_prepare_query(const ListParse *parsed, char *key_norm, size_t ke
     *out_ntags = 0U;
     q->key = NULL; /* default; set below only when --key was given */
 
-    if (parsed->source != NULL && !source_is_valid(parsed->source)) {
-        err_msg(DIAG_USAGE, "invalid source (use human, agent, tool, share, or unknown)");
+    if (cmd_reject_filter_kind("--created-by", parsed->created_by) != 0 ||
+        cmd_reject_filter_kind("--updated-by", parsed->updated_by) != 0) {
         return -1;
     }
     if (parsed->ntag_raw > LIST_TAG_FILTER_MAX) {
@@ -390,7 +401,8 @@ static int list_prepare_query(const ListParse *parsed, char *key_norm, size_t ke
     }
     q->tags = (const char *const *)*out_tags;
     q->ntags = *out_ntags;
-    q->source = parsed->source;
+    q->created_by = parsed->created_by;
+    q->updated_by = parsed->updated_by;
     q->limit = parsed->limit;
     q->after_at = NULL;
     q->after_local_id = 0;
@@ -495,7 +507,8 @@ typedef struct {
     char *bin;
     char *tags[CURSOR_TAG_MAX];
     size_t ntags;
-    char *source;
+    char *created_by;
+    char *updated_by;
     char *key;
     char *since;
     char *until;
@@ -512,7 +525,8 @@ static void cursor_doc_free(CursorDoc *doc)
     }
     free(doc->sort);
     free(doc->bin);
-    free(doc->source);
+    free(doc->created_by);
+    free(doc->updated_by);
     free(doc->key);
     free(doc->since);
     free(doc->until);
@@ -969,7 +983,10 @@ static int cursor_decode(const char *raw, CursorDoc *doc)
         st = take_tags(&p, doc);
     }
     if (st == CURSOR_OK) {
-        st = take_opt_string(&p, "source", &doc->source);
+        st = take_opt_string(&p, "created_by", &doc->created_by);
+    }
+    if (st == CURSOR_OK) {
+        st = take_opt_string(&p, "updated_by", &doc->updated_by);
     }
     if (st == CURSOR_OK) {
         st = take_opt_string(&p, "key", &doc->key);
@@ -1068,8 +1085,9 @@ static int cursor_matches(const ListQuery *q, const CursorDoc *doc)
     const char *bin = bin_token(q->bin);
 
     if (bin == NULL || !same_text(sort, doc->sort) || !same_text(bin, doc->bin) ||
-        !same_text(q->source, doc->source) || !same_text(q->key, doc->key) ||
-        !same_text(q->since, doc->since) || !same_text(q->until, doc->until)) {
+        !same_text(q->created_by, doc->created_by) || !same_text(q->updated_by, doc->updated_by) ||
+        !same_text(q->key, doc->key) || !same_text(q->since, doc->since) ||
+        !same_text(q->until, doc->until)) {
         return CURSOR_BAD;
     }
     return tags_match(q, doc);
@@ -1141,7 +1159,8 @@ static char *list_cursor_encode(const ListQuery *q, const char *at, long long lo
     if (write_cursor_tags(fp, tags, q->ntags) != 0) {
         goto fail;
     }
-    if (write_opt_string(fp, "source", q->source) != 0 ||
+    if (write_opt_string(fp, "created_by", q->created_by) != 0 ||
+        write_opt_string(fp, "updated_by", q->updated_by) != 0 ||
         write_opt_string(fp, "key", q->key) != 0 || write_opt_string(fp, "since", q->since) != 0 ||
         write_opt_string(fp, "until", q->until) != 0 || fputs(",\"at\":", fp) < 0 ||
         output_json_string(fp, at) != 0 || fprintf(fp, ",\"local_id\":%lld}", local_id) < 0) {

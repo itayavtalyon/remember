@@ -64,7 +64,7 @@ static void extract_version_vector(const char *json, char *out, size_t outsz)
 
 static void seed_tagged(const char *db)
 {
-    const char *args[] = {"add", "--tag", "a", "--tag", "b", "--source", "human", "original body"};
+    const char *args[] = {"add", "--tag", "a", "--tag", "b", "--as", "human", "original body"};
     CmdResult r = run_remember(db, args, sizeof(args) / sizeof(args[0]), NULL);
     cmd_result_free(&r);
 }
@@ -256,8 +256,52 @@ TEST(update_source_immutable)
     cmd_result_free(&u);
     g = run_remember(db, gargs, sizeof(gargs) / sizeof(gargs[0]), NULL);
     ASSERT_EQ_INT(g.exit_code, 0);
-    ASSERT_STR_CONTAINS(g.out, "\"source\":\"human\"");
+    ASSERT_STR_CONTAINS(g.out, "\"created_by\":{\"kind\":\"human\",\"id\":null}");
     cmd_result_free(&g);
+    free(db);
+}
+
+TEST(update_as_sets_updated_by_and_same_tags_do_not)
+{
+    char *db = make_temp_db_path();
+    CmdResult u;
+    CmdResult g;
+    char updated[TS_BUFSIZE];
+    char again[TS_BUFSIZE];
+    char vector_before[VV_CAP];
+    char vector_after[VV_CAP];
+    const char *uargs[] = {"update", "1", "--as", "agent", "--actor", "bot", "--text", "edited"};
+    const char *same[] = {"update", "1", "--tag", "a", "--tag", "b"};
+    const char *gargs[] = {"get", "--json", "1"};
+    const char *miss[] = {"update", "1", "--as"};
+
+    ASSERT_TRUE(db != NULL);
+    seed_tagged(db);
+    u = run_remember(db, uargs, sizeof(uargs) / sizeof(uargs[0]), NULL);
+    ASSERT_EQ_INT(u.exit_code, 0);
+    cmd_result_free(&u);
+    g = run_remember(db, gargs, sizeof(gargs) / sizeof(gargs[0]), NULL);
+    ASSERT_EQ_INT(g.exit_code, 0);
+    ASSERT_STR_CONTAINS(g.out, "\"created_by\":{\"kind\":\"human\",\"id\":null}");
+    ASSERT_STR_CONTAINS(g.out, "\"updated_by\":{\"kind\":\"agent\",\"id\":\"bot\"}");
+    extract_json_str(g.out, "\"updated_at\":\"", updated, sizeof(updated));
+    extract_version_vector(g.out, vector_before, sizeof(vector_before));
+    cmd_result_free(&g);
+    u = run_remember(db, same, sizeof(same) / sizeof(same[0]), NULL);
+    ASSERT_EQ_INT(u.exit_code, 0);
+    cmd_result_free(&u);
+    g = run_remember(db, gargs, sizeof(gargs) / sizeof(gargs[0]), NULL);
+    ASSERT_EQ_INT(g.exit_code, 0);
+    extract_json_str(g.out, "\"updated_at\":\"", again, sizeof(again));
+    extract_version_vector(g.out, vector_after, sizeof(vector_after));
+    ASSERT_STREQ(again, updated);
+    ASSERT_STREQ(vector_after, vector_before);
+    ASSERT_STR_CONTAINS(g.out, "\"updated_by\":{\"kind\":\"agent\",\"id\":\"bot\"}");
+    cmd_result_free(&g);
+    u = run_remember(db, miss, sizeof(miss) / sizeof(miss[0]), NULL);
+    ASSERT_EQ_INT(u.exit_code, 1);
+    ASSERT_STR_CONTAINS(u.err, "missing value for --as");
+    cmd_result_free(&u);
     free(db);
 }
 
@@ -750,6 +794,7 @@ void register_update_tests(void)
     RUN_TEST(update_body_hash_collision_rejected);
     RUN_TEST(update_empty_text_rejected);
     RUN_TEST(update_source_immutable);
+    RUN_TEST(update_as_sets_updated_by_and_same_tags_do_not);
     RUN_TEST(update_json_shape);
     RUN_TEST(update_text_stdin_dash);
     RUN_TEST(update_text_literal_dash_equals_form);

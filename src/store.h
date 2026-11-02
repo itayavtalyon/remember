@@ -64,7 +64,8 @@ typedef struct {
     char *body;
     char **tags; /* ntags heap strings; may be NULL when ntags == 0 */
     size_t ntags;
-    char *source;
+    char *created_by; /* canonical actor JSON; never NULL after a successful load */
+    char *updated_by; /* canonical actor JSON; never NULL after a successful load */
     char *created_at;
     char *updated_at;
     char *expires_at;     /* NULL if none (durable) */
@@ -237,7 +238,9 @@ int utc_now(char *buf, size_t buflen);
 /*
  * Insert or merge/upsert one memory.
  *
- * body / body_hash / source are required (already normalized by the command).
+ * body / body_hash / actor are required (already normalized by the command).
+ * actor is a kind token (human, agent, tool, share, import; unknown means human)
+ * or canonical actor JSON. id is null when actor is a kind token.
  * key_or_null is NULL for keyless, or a normalized key.
  * tags are normalized names (ntags may be 0; tags may be NULL then).
  * expires_at is NULL (durable) or a canonical .mmmZ string.
@@ -250,7 +253,7 @@ int utc_now(char *buf, size_t buflen);
  * On failure, *out_entry is left untouched / zeroed by the caller first.
  */
 StoreStatus store_add(Store *s, const char *body, const char *body_hash, const char *key_or_null,
-                      const char *const *tags, size_t ntags, const char *source,
+                      const char *const *tags, size_t ntags, const char *actor,
                       const char *expires_at, const char *now, StoreAddAction *out_action,
                       Entry *out_entry);
 
@@ -279,7 +282,8 @@ StoreStatus store_get_by_sync_id(Store *s, const char *sync_id, StoreBin bin, co
  */
 typedef struct {
     const char *const *tags; /* may be NULL when ntags == 0 */
-    const char *source;      /* NULL = any */
+    const char *created_by;  /* kind, or NULL = any */
+    const char *updated_by;  /* kind, or NULL = any */
     const char *key;         /* NULL = any; exact match */
     const char *after_at;    /* NULL = first page; not freed by the store */
     size_t ntags;
@@ -319,7 +323,7 @@ PageResult store_list(Store *s, const ListQuery *q, const char *now);
 /*
  * Union search (006 E2.1). query is the user's QUERY, valid UTF-8 (the CLI
  * checks, D27; invalid is STORE_ERR_INTERNAL). filters reuse ListQuery: tag
- * AND, optional source/key, limit, since/until on updated_at; sort and
+ * AND, optional created_by/updated_by kind, key, limit, since/until on updated_at; sort and
  * after_at are ignored. facet_limit caps keys.items and tags.items as given, like limit
  * (the CLI enforces 1..200); zero returns totals and no items.
  */
@@ -334,7 +338,6 @@ typedef struct {
     char *key;
     char *sync_id;
     char *label;
-    char *source;
     char *updated_at;
 } SearchKeyItem;
 
@@ -379,11 +382,14 @@ void store_search_result_free(SearchResult *res);
 
 /*
  * Soft-delete one entry (locator: live or expired). Sets deleted_at=now, clears
- * expires_at, keeps body/tags/key/sync_id/edges/FTS, bumps VV + updated_at.
+ * expires_at, keeps body/tags/key/sync_id/edges/FTS, bumps VV + updated_at
+ * and sets updated_by from actor (NULL actor is human, id null).
  * Already deleted → STORE_ERR_DELETED. *out is the post-mutation snapshot.
  */
-StoreStatus store_soft_delete_by_id(Store *s, long long id, const char *now, Entry *out);
-StoreStatus store_soft_delete_by_key(Store *s, const char *key, const char *now, Entry *out);
+StoreStatus store_soft_delete_by_id(Store *s, long long id, const char *actor, const char *now,
+                                    Entry *out);
+StoreStatus store_soft_delete_by_key(Store *s, const char *key, const char *actor, const char *now,
+                                     Entry *out);
 
 /*
  * Hard CASCADE one row. bin must be EXPIRED or DELETED (LIVE → INTERNAL; hard
@@ -408,6 +414,7 @@ typedef struct {
     const char *const *tags; /* may be NULL when ntags == 0 */
     const char *expires_at;  /* with set_expires: NULL clears, ISO writes */
     const char *if_version_vector;
+    const char *actor; /* kind token, canonical JSON, or NULL (human, id null) */
     size_t ntags;
     StoreBin bin;
     bool set_body;
@@ -423,8 +430,9 @@ typedef struct {
  * set_expires + expires_at NULL clears expiry; set_expires + ISO writes it.
  * undelete clears deleted_at (locator is normally STORE_BIN_DELETED).
  * bin + now apply the locator bin (same as get/delete).
- * On success always refreshes updated_at and re-syncs FTS in the same write
- * transaction. Never changes source or key.
+ * A change refreshes updated_at, updated_by, the memory vector, and FTS in the
+ * same write transaction. created_by stays. A write that changes nothing does
+ * not. Never changes the key.
  *
  * Keyless body-hash conflict: if set_body and the entry has no key and another
  * keyless row already owns body_hash → STORE_ERR_CONFLICT and, when
@@ -532,19 +540,23 @@ int store_sync_id_is_canonical(const char *s);
 /*
  * Upsert one edge. related is stored as (min,max,related). Directed is
  * (from,to,kind). Self-link → SELF_LINK; missing id → NOT_FOUND; supersedes
- * cycle → CYCLE. Real write bumps updated_at on both endpoints.
+ * cycle → CYCLE. A real write sets updated_at and updated_by on both
+ * endpoints and does not change either memory vector. The link row's vector
+ * goes up by one. actor NULL is human, id null.
  * *out_stub is subject-relative to from_id (caller frees).
  */
-StoreStatus store_link(Store *s, StoreEdge edge, StoreEdgeKind kind, const char *now,
-                       StoreLinkAction *out_action, StoreNeighbor *out_stub);
+StoreStatus store_link(Store *s, StoreEdge edge, StoreEdgeKind kind, const char *actor,
+                       const char *now, StoreLinkAction *out_action, StoreNeighbor *out_stub);
 
 /*
  * Delete edges. kind NULL = all kinds between the unordered pair. related
  * canonicalizes. Directed deletes the given (from,to,kind) only. Missing is
- * OK (count 0, no bump). Real delete bumps both endpoints.
+ * OK (count 0, no bump). A real unlink keeps the row and sets deleted_at.
+ * Endpoints get updated_at and updated_by and no memory-vector change.
  */
 StoreStatus store_unlink(Store *s, long long from_id, long long to_id, const StoreEdgeKind *kind,
-                         const char *now, StoreNeighbor **out_stubs, size_t *out_count);
+                         const char *actor, const char *now, StoreNeighbor **out_stubs,
+                         size_t *out_count);
 
 /*
  * Neighbors of one subject. kind NULL = all stored kinds. related edges appear
@@ -562,10 +574,11 @@ StoreStatus store_list_neighbors_for(Store *s, const long long *ids, size_t nids
  * Change key in place. Locator like update (id or key_or_null, bin+now).
  * new_key_or_null NULL = clear (demote); non-NULL = set/rename (must be
  * non-empty). Id and edges preserved. NEWKEY taken or demote body-hash
- * collision → CONFLICT + *out_conflict_id. Always bumps updated_at.
+ * collision → CONFLICT + *out_conflict_id. A real change bumps updated_at,
+ * updated_by, and the memory vector. The same key does not.
  */
-StoreStatus store_rekey(Store *s, long long id, RekeyKeys keys, StoreBin bin, const char *now,
-                        Entry *out_entry, long long *out_conflict_id);
+StoreStatus store_rekey(Store *s, long long id, RekeyKeys keys, StoreBin bin, const char *actor,
+                        const char *now, Entry *out_entry, long long *out_conflict_id);
 
 /* Counts from store_import (JSON envelope fields). */
 typedef struct {

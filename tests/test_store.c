@@ -1062,7 +1062,7 @@ TEST(store_update_and_delete_wrong_bin)
     ASSERT_EQ_STATUS(store_hard_delete_by_id(s, 1, STORE_BIN_LIVE, k_now, &e), STORE_ERR_INTERNAL);
     store_entry_free(&e);
     memset(&e, 0, sizeof(e));
-    ASSERT_EQ_STATUS(store_soft_delete_by_id(s, 1, k_now, &e), STORE_OK);
+    ASSERT_EQ_STATUS(store_soft_delete_by_id(s, 1, NULL, k_now, &e), STORE_OK);
     ASSERT_TRUE(e.deleted_at != NULL);
     ASSERT_TRUE(e.expires_at == NULL);
     store_entry_free(&e);
@@ -1552,7 +1552,7 @@ TEST(store_add_keyless_deleted_revive_bumps_once)
         free(db);
         return;
     }
-    ASSERT_EQ_STATUS(store_soft_delete_by_id(s, 1, k_now, &e), STORE_OK);
+    ASSERT_EQ_STATUS(store_soft_delete_by_id(s, 1, NULL, k_now, &e), STORE_OK);
     store_entry_free(&e);
     device = store_device_id(s);
     ASSERT_TRUE(device != NULL);
@@ -2120,7 +2120,7 @@ TEST(store_list_bounds_compose_with_filters)
     memset(&q, 0, sizeof(q));
     q.tags = tag_t;
     q.ntags = 1U;
-    q.source = "human";
+    q.created_by = "human";
     q.limit = 1U;
     q.since = "2026-06-01T00:00:00.000Z";
     q.until = "2026-07-01T00:00:00.000Z";
@@ -2178,7 +2178,7 @@ TEST(store_list_bounds_compose_with_filters)
     memset(&q, 0, sizeof(q));
     q.tags = tag_t;
     q.ntags = 1U;
-    q.source = "human";
+    q.created_by = "human";
     q.bin = STORE_BIN_EXPIRED;
     q.limit = LIST_LIMIT;
     q.since = "2026-06-01T00:00:00.000Z";
@@ -2273,7 +2273,7 @@ TEST(store_list_filters_and_paging)
     rows = NULL;
 
     memset(&q, 0, sizeof(q));
-    q.source = "agent";
+    q.created_by = "agent";
     q.limit = LIST_LIMIT;
     {
         PageResult page = store_list(s, &q, k_now);
@@ -2835,6 +2835,19 @@ TEST(store_update_body_and_tags)
         store_add(s, "old", k_hash_a, NULL, tags_ab, 2U, "human", NULL, k_now, &act, &e), STORE_OK);
     store_entry_free(&e);
 
+    /* The same tag set is not a change, so updated_at stays. */
+    ASSERT_EQ_STATUS(store_update(s, 1,
+                                  &(StoreUpdate){
+                                      .set_tags = true,
+                                      .tags = tags_ab,
+                                      .ntags = 2U,
+                                  },
+                                  k_later, &e, &conflict),
+                     STORE_OK);
+    ASSERT_STREQ(e.updated_at, k_now);
+    ASSERT_EQ_INT((int)e.ntags, 2);
+    store_entry_free(&e);
+
     /* Body-only: tags unchanged. */
     ASSERT_EQ_STATUS(store_update(s, 1,
                                   &(StoreUpdate){
@@ -2846,7 +2859,7 @@ TEST(store_update_body_and_tags)
                      STORE_OK);
     ASSERT_STREQ(e.body, "new");
     ASSERT_EQ_INT((int)e.ntags, 2);
-    ASSERT_STREQ(e.source, "human");
+    ASSERT_STREQ(e.created_by, "{\"kind\":\"human\",\"id\":null}");
     store_entry_free(&e);
 
     /* Tags-only replace + clear path via empty set. */
@@ -2907,6 +2920,57 @@ TEST(store_update_body_and_tags)
     free(db);
 }
 
+TEST(store_update_duplicate_tags_follow_the_stored_set)
+{
+    char *db = make_temp_db_path();
+    char err[ERR_BUFSIZE];
+    Store *s = NULL;
+    Entry e;
+    StoreAddAction act = STORE_ADD_CREATED;
+    const char *tags_ab[] = {"a", "b"};
+    const char *tags_aa[] = {"a", "a"};
+    long long conflict = 0;
+
+    ASSERT_TRUE(db != NULL);
+    s = store_open(db, err, sizeof(err));
+    ASSERT_TRUE(s != NULL);
+    memset(&e, 0, sizeof(e));
+    ASSERT_EQ_STATUS(
+        store_add(s, "old", k_hash_a, NULL, tags_ab, 2U, "human", NULL, k_now, &act, &e), STORE_OK);
+    store_entry_free(&e);
+
+    /* a,a is not the set a,b. entry_tags keeps one a. */
+    ASSERT_EQ_STATUS(store_update(s, 1,
+                                  &(StoreUpdate){
+                                      .set_tags = true,
+                                      .tags = tags_aa,
+                                      .ntags = 2U,
+                                  },
+                                  k_later, &e, &conflict),
+                     STORE_OK);
+    ASSERT_STREQ(e.updated_at, k_later);
+    ASSERT_EQ_INT((int)e.ntags, 1);
+    ASSERT_STREQ(e.tags[0], "a");
+    store_entry_free(&e);
+
+    /* The stored set is already a. Repeating a,a changes nothing. */
+    ASSERT_EQ_STATUS(store_update(s, 1,
+                                  &(StoreUpdate){
+                                      .set_tags = true,
+                                      .tags = tags_aa,
+                                      .ntags = 2U,
+                                  },
+                                  k_now, &e, &conflict),
+                     STORE_OK);
+    ASSERT_STREQ(e.updated_at, k_later);
+    ASSERT_EQ_INT((int)e.ntags, 1);
+    ASSERT_STREQ(e.tags[0], "a");
+    store_entry_free(&e);
+
+    store_close(s);
+    free(db);
+}
+
 TEST(store_delete_by_id_gcs_orphan_tags)
 {
     char *db = make_temp_db_path();
@@ -2927,7 +2991,7 @@ TEST(store_delete_by_id_gcs_orphan_tags)
     ASSERT_EQ_INT((int)e.id, 1);
     store_entry_free(&e);
 
-    ASSERT_EQ_STATUS(store_soft_delete_by_id(s, 1, k_now, &e), STORE_OK);
+    ASSERT_EQ_STATUS(store_soft_delete_by_id(s, 1, NULL, k_now, &e), STORE_OK);
     ASSERT_STREQ(e.body, "only");
     store_entry_free(&e);
     ASSERT_EQ_STATUS(store_get(s, 1, STORE_BIN_LIVE, k_now, &e), STORE_ERR_DELETED);
@@ -2961,7 +3025,7 @@ TEST(store_delete_by_key_missing)
     s = store_open(db, err, sizeof(err));
     ASSERT_TRUE(s != NULL);
     memset(&e, 0, sizeof(e));
-    ASSERT_EQ_STATUS(store_soft_delete_by_key(s, "nope", k_now, &e), STORE_ERR_NOT_FOUND);
+    ASSERT_EQ_STATUS(store_soft_delete_by_key(s, "nope", NULL, k_now, &e), STORE_ERR_NOT_FOUND);
     store_close(s);
     free(db);
 }
@@ -3302,7 +3366,7 @@ TEST(store_fault_injection_sweep)
         q.limit = LIST_LIMIT;
         q.tags = tags;
         q.ntags = (size_t)(1U + (size_t)(i % 3));
-        q.source = (i % 4 == 0) ? "agent" : NULL;
+        q.created_by = (i % 4 == 0) ? "agent" : NULL;
         q.key = (i % 7 == 0) ? "k" : NULL;
         sweep_list_faults(s, &q, i);
         sweep_search_faults(s, tags, i);
@@ -3318,13 +3382,13 @@ TEST(store_fault_injection_sweep)
         store_entry_free(&e);
 
         store_test_fail_prepare_after(i % 10);
-        (void)store_soft_delete_by_id(s, 1, k_now, &e);
+        (void)store_soft_delete_by_id(s, 1, NULL, k_now, &e);
         store_entry_free(&e);
         store_test_fail_step_after(i % 8);
         (void)store_hard_delete_by_id(s, 1, STORE_BIN_DELETED, k_now, &e);
         store_entry_free(&e);
         store_test_fail_exec_after(i % 6);
-        (void)store_soft_delete_by_key(s, "k", k_now, &e);
+        (void)store_soft_delete_by_key(s, "k", NULL, k_now, &e);
         store_entry_free(&e);
         store_test_fail_alloc_after(i % 10);
         (void)store_hard_delete_by_key(s, "k", STORE_BIN_EXPIRED, k_now, &e);
@@ -3537,6 +3601,7 @@ void register_store_tests(void)
     RUN_TEST(store_update_same_timestamp_is_still_stale);
     RUN_TEST(store_update_wrong_bin_wins_over_stale);
     RUN_TEST(store_update_body_and_tags);
+    RUN_TEST(store_update_duplicate_tags_follow_the_stored_set);
     RUN_TEST(store_delete_by_id_gcs_orphan_tags);
     RUN_TEST(store_delete_by_key_missing);
     RUN_TEST(store_tags_empty_db);

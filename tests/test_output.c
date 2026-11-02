@@ -78,7 +78,8 @@ static Entry given_entry(void)
         .sync_id = (char *)"s-7",
         .key = (char *)"k:7",
         .body = (char *)"body",
-        .source = (char *)"agent",
+        .created_by = (char *)"{\"kind\":\"agent\",\"id\":null}",
+        .updated_by = (char *)"{\"kind\":\"agent\",\"id\":null}",
         .created_at = (char *)"c",
         .updated_at = (char *)"u",
         .version_vector = (char *)"{}",
@@ -199,18 +200,23 @@ TEST(output_entry_json_rejects_a_non_canonical_version_vector)
     assert_written(f, "");
 }
 
-TEST(output_entry_json_renders_a_null_source_as_unknown)
+TEST(output_entry_json_rejects_a_bad_actor)
 {
-    Entry e = given_entry();
+    Entry missing = given_entry();
+    Entry bad_created = given_entry();
+    Entry missing_updated = given_entry();
+    Entry bad_updated = given_entry();
     FILE *f = given_stream();
 
-    e.source = NULL;
-    ASSERT_EQ_INT(output_entry_json(f, &e, NOW), 0);
-    assert_written(f,
-                   "{\"id\":\"s-7\",\"local_id\":7,\"key\":\"k:7\",\"body\":\"body\",\"tags\":[],"
-                   "\"source\":\"unknown\",\"created_at\":\"c\",\"updated_at\":\"u\","
-                   "\"expires_at\":null,\"deleted_at\":null,\"bin\":\"live\","
-                   "\"version_vector\":{}}");
+    missing.created_by = NULL;
+    bad_created.created_by = (char *)"human";
+    missing_updated.updated_by = NULL;
+    bad_updated.updated_by = (char *)"{\"kind\":\"human\"}";
+    ASSERT_EQ_INT(output_entry_json(f, &missing, NOW), -1);
+    ASSERT_EQ_INT(output_entry_json(f, &bad_created, NOW), -1);
+    ASSERT_EQ_INT(output_entry_json(f, &missing_updated, NOW), -1);
+    ASSERT_EQ_INT(output_entry_json(f, &bad_updated, NOW), -1);
+    assert_written(f, "");
 }
 
 TEST(output_entry_json_renders_null_text_fields_as_empty_strings)
@@ -223,7 +229,9 @@ TEST(output_entry_json_renders_null_text_fields_as_empty_strings)
     e.updated_at = NULL;
     ASSERT_EQ_INT(output_entry_json(f, &e, NOW), 0);
     assert_written(f, "{\"id\":\"s-7\",\"local_id\":7,\"key\":\"k:7\",\"body\":\"\",\"tags\":[],"
-                      "\"source\":\"agent\",\"created_at\":\"\",\"updated_at\":\"\","
+                      "\"created_by\":{\"kind\":\"agent\",\"id\":null},"
+                      "\"updated_by\":{\"kind\":\"agent\",\"id\":null},"
+                      "\"created_at\":\"\",\"updated_at\":\"\","
                       "\"expires_at\":null,\"deleted_at\":null,\"bin\":\"live\","
                       "\"version_vector\":{}}");
 }
@@ -260,10 +268,12 @@ TEST(output_entries_envelope_separates_entries_with_a_comma)
     ASSERT_EQ_INT(output_entries_data(f, "deleted", entries, 2, NOW), 0);
     assert_written(
         f, "{\"action\":\"deleted\",\"count\":2,\"entries\":[{\"id\":\"s-7\",\"local_id\":7,\"key"
-           "\":\"k:7\",\"body\":\"body\",\"tags\":[],\"source\":\"agent\",\"created_at\":\"c\","
+           "\":\"k:7\",\"body\":\"body\",\"tags\":[],\"created_by\":{\"kind\":\"agent\",\"id\":"
+           "null},\"updated_by\":{\"kind\":\"agent\",\"id\":null},\"created_at\":\"c\","
            "\"updated_at\":\"u\",\"expires_at\":null,\"deleted_at\":null,\"bin\":\"live\",\"vers"
            "ion_vector\":{}},{\"id\":\"s-7\",\"local_id\":8,\"key\":\"k:7\",\"body\":\"body\",\"t"
-           "ags\":[],\"source\":\"agent\",\"created_at\":\"c\",\"updated_at\":\"u\",\"expires_at"
+           "ags\":[],\"created_by\":{\"kind\":\"agent\",\"id\":null},\"updated_by\":{\"kind\":"
+           "\"agent\",\"id\":null},\"created_at\":\"c\",\"updated_at\":\"u\",\"expires_at"
            "\":null,\"deleted_at\":null,\"bin\":\"live\",\"version_vector\":{}}]}");
 }
 
@@ -289,7 +299,8 @@ TEST(output_memory_envelope_without_action_lists_only_the_subjects_links)
     ASSERT_EQ_INT(output_memory_data(f, NULL, &e, links, 2, NOW), 0);
     assert_written(
         f, "{\"memory\":{\"id\":\"s-7\",\"local_id\":7,\"key\":\"k:7\",\"body\":\"body\",\"tags\""
-           ":[],\"source\":\"agent\",\"created_at\":\"c\",\"updated_at\":\"u\",\"expires_at\":nu"
+           ":[],\"created_by\":{\"kind\":\"agent\",\"id\":null},\"updated_by\":{\"kind\":\"agent\","
+           "\"id\":null},\"created_at\":\"c\",\"updated_at\":\"u\",\"expires_at\":nu"
            "ll,\"deleted_at\":null,\"bin\":\"live\",\"version_vector\":{},\"links\":[{\"id\":\"n-"
            "3\",\"local_id\":3,"
            "\"key\":null,\"type\":\"related\",\"bin\":\"live\",\"preview\":"
@@ -304,7 +315,8 @@ TEST(output_memory_envelope_with_action_puts_action_before_memory)
     ASSERT_EQ_INT(output_memory_data(f, "created", &e, NULL, 0, NOW), 0);
     assert_written(
         f, "{\"action\":\"created\",\"memory\":{\"id\":\"s-7\",\"local_id\":7,\"key\":\"k:7\",\"b"
-           "ody\":\"body\",\"tags\":[],\"source\":\"agent\",\"created_at\":\"c\",\"updated_at\":"
+           "ody\":\"body\",\"tags\":[],\"created_by\":{\"kind\":\"agent\",\"id\":null},\"updated_"
+           "by\":{\"kind\":\"agent\",\"id\":null},\"created_at\":\"c\",\"updated_at\":"
            "\"u\",\"expires_at\":null,\"deleted_at\":null,\"bin\":\"live\",\"version_vector\":{}"
            ",\"links\":[]}}");
 }
@@ -317,7 +329,8 @@ TEST(output_action_envelope_writes_the_memory_without_links)
     ASSERT_EQ_INT(output_action_data(f, "updated", &e, NOW), 0);
     assert_written(
         f, "{\"action\":\"updated\",\"memory\":{\"id\":\"s-7\",\"local_id\":7,\"key\":\"k:7\",\"b"
-           "ody\":\"body\",\"tags\":[],\"source\":\"agent\",\"created_at\":\"c\",\"updated_at\":"
+           "ody\":\"body\",\"tags\":[],\"created_by\":{\"kind\":\"agent\",\"id\":null},\"updated_"
+           "by\":{\"kind\":\"agent\",\"id\":null},\"created_at\":\"c\",\"updated_at\":"
            "\"u\",\"expires_at\":null,\"deleted_at\":null,\"bin\":\"live\",\"version_vector\":{}"
            "}}");
 }
@@ -353,12 +366,10 @@ static SearchResult given_search_facets(SearchKeyItem keys[2], SearchTagItem tag
     keys[0] = (SearchKeyItem){.key = (char *)"recs:books",
                               .sync_id = (char *)"s-1",
                               .label = (char *)"Book recommendations",
-                              .source = (char *)"agent",
                               .updated_at = (char *)"u-1"};
     keys[1] = (SearchKeyItem){.key = (char *)"recs:bonds",
                               .sync_id = (char *)"s-2",
                               .label = (char *)"recs:bonds",
-                              .source = (char *)"human",
                               .updated_at = (char *)"u-2"};
     tags[0] = (SearchTagItem){.tag = (char *)"type:books", .count = 1};
     tags[1] = (SearchTagItem){.tag = (char *)"recs", .count = TAG_COUNT};
@@ -367,7 +378,7 @@ static SearchResult given_search_facets(SearchKeyItem keys[2], SearchTagItem tag
     return res;
 }
 
-/* E2.6: each key item carries key, id, label, source, updated_at; each
+/* E2.6: each key item carries key, id, label, updated_at; each
    tag item tag and count; total counts every match, not only the items. */
 TEST(output_search_envelope_writes_the_facet_items)
 {
@@ -379,9 +390,9 @@ TEST(output_search_envelope_writes_the_facet_items)
     ASSERT_EQ_INT(output_search_data(f, &res, NULL, 0, NOW), 0);
     assert_written(
         f, "{\"count\":0,\"total\":0,\"keys\":{\"total\":5,\"items\":["
-           "{\"key\":\"recs:books\",\"id\":\"s-1\",\"label\":\"Book recommendations\",\"sou"
-           "rce\":\"agent\",\"updated_at\":\"u-1\"},{\"key\":\"recs:bonds\",\"id\":\"s-2\","
-           "\"label\":\"recs:bonds\",\"source\":\"human\",\"updated_at\":\"u-2\"}]},\"tags\":{\""
+           "{\"key\":\"recs:books\",\"id\":\"s-1\",\"label\":\"Book recommendations\","
+           "\"updated_at\":\"u-1\"},{\"key\":\"recs:bonds\",\"id\":\"s-2\","
+           "\"label\":\"recs:bonds\",\"updated_at\":\"u-2\"}]},\"tags\":{\""
            "total\":4,\"items\":[{\"tag\":\"type:books\",\"count\":1},{\"tag\":\"recs\",\"count"
            "\":3}]},\"entries\":[]}");
 }
@@ -399,17 +410,15 @@ TEST(output_search_envelope_escapes_every_facet_field)
     res.keys.items[0] = (SearchKeyItem){.key = (char *)"k\x1b",
                                         .sync_id = (char *)"s\n",
                                         .label = (char *)"l\"\x1b[31m",
-                                        .source = (char *)"a\\",
                                         .updated_at = (char *)"u\t"};
     res.tags.items[0].tag = (char *)"t\x01";
     res.keys.count = 1;
     res.tags.count = 1;
     ASSERT_EQ_INT(output_search_data(f, &res, NULL, 0, NOW), 0);
-    assert_written(
-        f, "{\"count\":0,\"total\":0,\"keys\":{\"total\":5,\"items\":["
-           "{\"key\":\"k\\u001b\",\"id\":\"s\\n\",\"label\":\"l\\\"\\u001b[31m\",\"source\""
-           ":\"a\\\\\",\"updated_at\":\"u\\t\"}]},\"tags\":{\"total\":4,\"items\":[{\"tag\":\"t"
-           "\\u0001\",\"count\":1}]},\"entries\":[]}");
+    assert_written(f, "{\"count\":0,\"total\":0,\"keys\":{\"total\":5,\"items\":["
+                      "{\"key\":\"k\\u001b\",\"id\":\"s\\n\",\"label\":\"l\\\"\\u001b[31m\","
+                      "\"updated_at\":\"u\\t\"}]},\"tags\":{\"total\":4,\"items\":[{\"tag\":\"t"
+                      "\\u0001\",\"count\":1}]},\"entries\":[]}");
 }
 
 TEST(output_search_envelope_rejects_missing_arguments)
@@ -1342,7 +1351,7 @@ void register_output_tests(void)
     RUN_TEST(output_entry_json_rejects_missing_arguments);
     RUN_TEST(output_entry_json_rejects_an_incomplete_entry);
     RUN_TEST(output_entry_json_rejects_a_non_canonical_version_vector);
-    RUN_TEST(output_entry_json_renders_a_null_source_as_unknown);
+    RUN_TEST(output_entry_json_rejects_a_bad_actor);
     RUN_TEST(output_entry_json_renders_null_text_fields_as_empty_strings);
     RUN_TEST(output_action_envelope_rejects_missing_arguments);
     RUN_TEST(output_entries_envelope_rejects_missing_arguments);

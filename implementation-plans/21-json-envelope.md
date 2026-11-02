@@ -519,3 +519,59 @@ DRY / easy to replace / orthogonal / simplify:
 - One classifier (`classify_memory_positional`). get, delete, update, rekey, and both graph ends call it. The C-01 sentence has one writer (`err_not_a_memory_id`).
 - The cursor draft and the locator fix are different sentences for one code. `diag_error_split` is the split. `diag_error` is unchanged, so every other `invalid_argument` still uses the draft.
 - Digits are a scan plus the existing id parse. The scan is the new rule. The parse stays the shared `>= 1` check, including `conflict accept --id`.
+
+### Stage 4: actors replace source (2026-11-02)
+
+A memory has `created_by` and `updated_by`. Each is `{kind, id}`. `kind` is `human`, `agent`, `tool`, `share`, or `import`. `id` is a string or null. There is no `source` field. There is no actor kind `sync` (JE-4.4, the Actors paragraph, `decision:g2-02`). `decision:provenance-actors` still lists `sync`; this plan does not store it.
+
+What changed:
+
+- New writes bind canonical actor JSON from `actor_write` in `normalize.c`. `sqlite3` `json_object` omits null, so the text is built in C. A person at the CLI is `human` and id null. `--as` is `human`, `agent`, `tool`, or `share`. Not `sync`. Not `import`. `--actor` replaces only `id` (1 to 64 of `[A-Za-z0-9_./:-]`). `--as` does not clear `--actor`. `--source` is an unknown option, including as a search filter. Search filters are `--created-by` and `--updated-by`. Those accept the five stored kinds, including `import`, and reject `sync`.
+- `REMEMBER_HOOK_DEPTH` of 1 or more rejects `--as` and `--actor` with `invalid_argument`. The depth is a full-string integer, so `01` blocks and `00` does not. A hook write with neither flag stays `human` and id null. Plan 25 stamps `{kind: tool, id: plugin/<name>/run}`. The rejection calls `diag_error(DIAG_INVALID_ARGUMENT, NULL)`. The message is empty. JSON `fix` stays the cursor draft (`Run 'remember list' again without --cursor.`). `k_fix` is unchanged. Plain does not append that draft, so the line is `remember: ` and a newline. The sentence is not written.
+- The write table is the field changes only. Plan 25 inserts the outbox. Body, tags, key, or `expires_at` changes, soft delete, and restore set `updated_at` and `updated_by`, add 1 to the memory vector, and set `change_seq`. `created_by` stays the original author. Link and unlink do that stamp on each end and do not change either memory vector. The link row's own vector moves, and both the end and the link row get `change_seq`. Unlink keeps the row and sets `deleted_at`. A later link of that pair clears `deleted_at` (CREATED). A repeat of a live link is MERGED. A same-key rekey and an identical update change nothing and emit no event. Purge removes the row and writes one tombstone. It does not set `updated_by`. Expiry marking writes `expired_at` only. Hard delete validates `--as` and `--actor` when the parser sees them and does not store an actor.
+- Sync apply (`import --from-db` of v4 or v5) keeps the author's `created_by`, `updated_by`, and `updated_at` (008-18). A v4/v5 `source` token becomes both actors, `unknown` to `human`, id null. User version above 5 is refused. There is no plan 23 file reader. Kind `import` is accepted by the actor helper and by the search filter. A unit test stores it. Settings import is plan 20.
+- The list cursor's optional `source` slot is `created_by` and `updated_by`. No new sentence. An old cursor still fails at the required `at` field with the existing invalid-cursor error.
+
+Not in stage 4, on purpose: `--trash`, the `flag_meaning_changed` warning, the wrong-list lines, `purge-trash`, and the deleted fix. That fix stays `Add --deleted to use it.` Stage 5 changes it. C-42 rows stay drafts. Approved lines stay C-01, C-02, and C-35. `--hooks` and `--no-hooks` are accepted and do not change delivery. The positional locator stays. M5 stays. No one-row CLI purge. 008-16 calls `store_purge` on a deleted row.
+
+Tests: `envelope_a_new_memory_has_created_by_and_updated_by_and_no_source` (008-2, no `source`). Also 008-16, 008-17, 008-18, and 008-20 (`search --created-by agent`).
+
+Gate (Apple clang, Debug, sanitizers on, LSAN off, `REMEMBER_TEST_VFS=ON`, Unix Makefiles; coverage with Homebrew LLVM 22). `BUILD_DIR` was not exported. ninja is absent. `origin/main` was not merged (`standard:coding` rule 7 says merge at stage start; this stage's prompt says stage 9 merges `origin/main`). ctest 5/5. Coverage: store 497 and CLI 896, both 0 failed; functions 100%; effective lines 100% (zero-hit 2072, all defensive, must-cover 0); branch sides 0 missed on `normalize.c` (504), `output.c` (720), `search_terms.c` (176), `unicode.c` (80). Lint `LINT OK` (LLVM 22 clang-tidy, cppcheck, gcc -fanalyzer, scan-build; include-what-you-use skipped, not installed). `default.profraw` stays untracked. Version stays 0.2.0. The 16 stage-2a mutants and the 10 stage-3 mutants were not re-run. M5 stays.
+
+### Stage 4 deep review (2026-11-02, in session)
+
+`decision:plan21-stage-flow`: in-session deep review, fix, continue. No `.claude/REVIEW_REQUEST`. Local Bugbot is not installed. No product question is open. `standard:coding` says merge `main` at the start of a stage. This prompt says stage 9 merges `origin/main`, so it was not merged. `decision:2026-11-01-legacy-plans-spec-step` says stage 9 is the spec stage and the whole-plan review is after that. This stage does not write `.claude/WHOLE_PLAN_REVIEW`. `quality:linters-max` allows a local `NOLINT`. The swappable-parameter, cognitive-complexity, and `getenv` notes are that allowance. No `NOLINT` was added to silence coverage.
+
+The gate above is the production tree. The review then added two assertions and did not change production. `remember_store_tests` 497/0 and `sync_import` 39/0 passed again under ASan. Coverage was not re-run.
+
+Findings:
+
+- **Important, fixed:** `same_tag_set` treated a repeated `--tag` as the same set when the request was only a subset. `a,a` on stored `{a,b}` did not write. `entry_tags` collapses duplicates, so equality is both directions and ignores the request length. `store_update_duplicate_tags_follow_the_stored_set` covers it.
+- **Important, fixed before the gate:** `import_row_from_stmt` called `actor_resolve`, and gcc -fanalyzer reported a leak of the source string because that function is in the same TU. The stamp now calls `actor_json`. A valid v4/v5 token into `ACTOR_JSON_CAP` cannot fail. The `(void)` is that fact. An error return would be an uncovered line.
+- **Nit, fixed:** `store_link_bumps_both_endpoints` passed a null actor, which is the same `human` the add already stored, so a skipped `set_updated_by` still passed. The link now passes `agent` and both ends keep `created_by` human. `store_import_no_sidecar_copy_devices_stay_one` now requires the imported `agent` stamp. An empty stamp becomes `human` through `actor_resolve("")`.
+- **Kept:** the import stamp's `unknown` to `human` writes the same bytes as an empty buffer. `actor_resolve` is the map `store_add` of token `unknown` uses, and those calls expect `STORE_OK`.
+- **Kept:** the hook sentence stays unprinted. Empty `invalid_argument` plus the cursor-draft `k_fix` is the shape.
+- **Kept:** `Entry.id` and `Entry.sync_id` stay the C names. Two static uuid helpers in tests stay. The cursor codec stays in `cmd_query.c`. SQLite stays in `store_sqlite.c`. The flag table stays in `src/cli.c`. No new module.
+- **Kept, not a defect:** M5. The 16 stage-2a mutants and the 10 stage-3 mutants were not re-run. `skills/remember/SKILL.md` still documents `source`. This plan's Files list does not edit it.
+
+Mutants, one clause at a time, each rebuilt. No survivor. Sources were restored after the last one (hash check).
+
+| Mutant | Change | Red test |
+|---|---|---|
+| M1 | `same_tag_set` returns after the request loop | `store_update_duplicate_tags_follow_the_stored_set` |
+| M2 | hook depth never blocks | `actor_from_cli_stamps_a_person_and_blocks_a_hook` |
+| M3 | hook depth blocks with no flags | `actor_from_cli_stamps_a_person_and_blocks_a_hook` |
+| M4 | v5 import skips the actor stamp | `store_import_no_sidecar_copy_devices_stay_one` |
+| M5 | a link end skips `set_updated_by` | `store_link_bumps_both_endpoints` |
+| M6 | a link end also bumps the memory vector | `store_link_bumps_both_endpoints` |
+| M7 | unlink binds `deleted_at` null | `store_unlink_idempotent_and_pair` |
+| M8 | `--as` accepts `import` | `actor_from_cli_stamps_a_person_and_blocks_a_hook` |
+| M9 | `--updated-by` rejects `import` | `search_updated_by_import_is_that_kind_only` |
+| M10 | `set_updated_by` also writes `created_by` | `store_link_bumps_both_endpoints` |
+
+DRY / easy to replace / orthogonal / simplify:
+
+- One actor writer (`actor_write`). The store binds that text. Output writes the stored object. One CLI helper (`cmd_actor_json`) and one filter check (`cmd_reject_filter_kind`).
+- The stamp stays in the command that already writes (`set_updated_by`, `note_link_end`, `update_apply_changes`, soft delete, rekey). Link and unlink share `note_link_end`.
+- `created_by` does not move on a later local write. `updated_by` does. Kind `import` is stored and searchable. `--as` rejects it. Plan 23 does the file write.
+- Actor JSON is `memcpy`. `snprintf` in `normalize.c` leaves llvm-cov branch sides at 0. `same_tag_set` is two loops. A shared `const char *const *` helper discarded qualifiers on `Entry.tags`.

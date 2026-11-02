@@ -176,8 +176,8 @@ static void assert_read_parity(const char *db, const char *const *cmd, size_t nc
 
 static void seed_three(const char *db)
 {
-    const char *a1[] = {"add", "--tag", "a", "--source", "human", "alpha first"};
-    const char *a2[] = {"add", "--tag", "b", "--source", "agent", "beta second"};
+    const char *a1[] = {"add", "--tag", "a", "--as", "human", "alpha first"};
+    const char *a2[] = {"add", "--tag", "b", "--as", "agent", "beta second"};
     const char *a3[] = {"add", "--key", "k", "--tag", "a", "gamma third"};
     CmdResult r;
 

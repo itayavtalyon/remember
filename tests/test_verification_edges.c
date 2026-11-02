@@ -143,7 +143,7 @@ TEST(keyless_merge_keeps_created_at)
     CmdResult r;
     CmdResult g1;
     CmdResult g2;
-    const char *a1[] = {"add", "--json", "--source", "human", "stable created"};
+    const char *a1[] = {"add", "--json", "--as", "human", "stable created"};
     const char *a2[] = {"add", "--json", "--tag", "t", "stable created"};
     const char *gargs[] = {"get", "--json", "1"};
     char *created1 = NULL;
@@ -181,7 +181,7 @@ TEST(keyless_merge_keeps_created_at)
     g2 = run_remember(db, gargs, sizeof(gargs) / sizeof(gargs[0]), NULL);
     ASSERT_EQ_INT(g2.exit_code, 0);
     ASSERT_STR_CONTAINS(g2.out, created1);
-    ASSERT_STR_CONTAINS(g2.out, "\"source\":\"human\"");
+    ASSERT_STR_CONTAINS(g2.out, "\"created_by\":{\"kind\":\"human\",\"id\":null}");
     cmd_result_free(&g2);
     free(created1);
     free(db);
@@ -195,7 +195,7 @@ TEST(update_preserves_id_key_source_created_at)
     CmdResult r;
     CmdResult u;
     CmdResult g;
-    const char *a[] = {"add", "--json", "--key", "slot", "--source", "human", "v1"};
+    const char *a[] = {"add", "--json", "--key", "slot", "--as", "human", "v1"};
     const char *uargs[] = {"update", "--json", "--key", "slot", "--text", "v2"};
     const char *gargs[] = {"get", "--json", "--key", "slot"};
     char created[TS_BUFSIZE];
@@ -223,7 +223,7 @@ TEST(update_preserves_id_key_source_created_at)
     ASSERT_EQ_INT(u.exit_code, 0);
     ASSERT_STR_CONTAINS(u.out, "\"local_id\":1");
     ASSERT_STR_CONTAINS(u.out, "\"key\":\"slot\"");
-    ASSERT_STR_CONTAINS(u.out, "\"source\":\"human\"");
+    ASSERT_STR_CONTAINS(u.out, "\"created_by\":{\"kind\":\"human\",\"id\":null}");
     ASSERT_STR_CONTAINS(u.out, created);
     ASSERT_STR_CONTAINS(u.out, "v2");
     cmd_result_free(&u);

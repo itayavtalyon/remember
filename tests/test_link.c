@@ -160,10 +160,11 @@ TEST(unlink_idempotent_and_kinds)
     ASSERT_TRUE(json_count_is(r.out, 1));
     cmd_result_free(&r);
     {
-        char *n = harness_sqlite_query_line(db, "SELECT COUNT(*) FROM entry_links;");
+        char *n = harness_sqlite_query_line(
+            db, "SELECT COUNT(*) FROM entry_links WHERE deleted_at IS NULL;");
         ASSERT_STREQ(n != NULL ? n : "", "1");
         free(n);
-        n = harness_sqlite_query_line(db, "SELECT kind FROM entry_links;");
+        n = harness_sqlite_query_line(db, "SELECT kind FROM entry_links WHERE deleted_at IS NULL;");
         ASSERT_STREQ(n != NULL ? n : "", "cites");
         free(n);
     }
@@ -173,8 +174,13 @@ TEST(unlink_idempotent_and_kinds)
     ASSERT_TRUE(json_count_is(r.out, 1));
     cmd_result_free(&r);
     {
-        char *n = harness_sqlite_query_line(db, "SELECT COUNT(*) FROM entry_links;");
+        char *n = harness_sqlite_query_line(
+            db, "SELECT COUNT(*) FROM entry_links WHERE deleted_at IS NULL;");
         ASSERT_STREQ(n != NULL ? n : "", "0");
+        free(n);
+        n = harness_sqlite_query_line(
+            db, "SELECT COUNT(*) FROM entry_links WHERE deleted_at IS NOT NULL;");
+        ASSERT_STREQ(n != NULL ? n : "", "2");
         free(n);
     }
     free(db);

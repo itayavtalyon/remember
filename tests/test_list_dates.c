@@ -746,9 +746,9 @@ TEST(list_bound_flags_reject_duplicates_and_missing_values)
 TEST(list_bounds_compose_with_tag_source_and_key)
 {
     char *db = make_temp_db_path();
-    const char *kept[] = {"add", "--tag", "keep", "--source", "human", "--key", "slot", "kept"};
+    const char *kept[] = {"add", "--tag", "keep", "--as", "human", "--key", "slot", "kept"};
     const char *other[] = {"add", "other"};
-    const char *early[] = {"add", "--tag", "keep", "--source", "human", "--key", "early", "early"};
+    const char *early[] = {"add", "--tag", "keep", "--as", "human", "--key", "early", "early"};
     const char *args[] = {"list",
                           "--since",
                           "2026-03-01T00:00:00.000Z",
@@ -756,7 +756,7 @@ TEST(list_bounds_compose_with_tag_source_and_key)
                           "2026-05-01T00:00:00.000Z",
                           "--tag",
                           "keep",
-                          "--source",
+                          "--created-by",
                           "human",
                           "--key",
                           "slot"};

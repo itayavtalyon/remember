@@ -38,7 +38,7 @@ static void print_general_help(void)
                                "[--busy-timeout MS] [--no-create] <command> [options] [args]\n"
                                "\n"
                                "Commands:\n"
-                               "  add       Store a memory (optional --key, --tag, --source)\n"
+                               "  add       Store a memory (optional --key, --tag, --as)\n"
                                "  search    Full-text search\n"
                                "  repair    Rebuild the search index\n"
                                "  list      List memories with filters\n"
@@ -80,6 +80,7 @@ static void print_general_help(void)
     (void)fputs(help, app_out());
 }
 
+// NOLINTNEXTLINE(readability-function-cognitive-complexity) — one help block per command
 static void print_command_help(CliCommand topic)
 {
     FILE *out = app_out();
@@ -99,7 +100,8 @@ static void print_command_help(CliCommand topic)
         (void)fprintf(out, "Options:\n");
         (void)fprintf(out, "  --key KEY       Upsert into a named slot\n");
         (void)fprintf(out, "  --tag TAG       Attach a tag (repeatable; union on merge)\n");
-        (void)fprintf(out, "  --source SRC    human|agent|tool|share|unknown (default unknown)\n");
+        (void)fprintf(out, "  --as KIND       human|agent|tool|share (default human)\n");
+        (void)fprintf(out, "  --actor ID      1 to 64 of A-Za-z0-9_./:-\n");
         (void)fprintf(out, "  --ttl 7d        Relative expiry from write time (Nm/Nh/Nd/Nw)\n");
         (void)fprintf(out, "  --expires TS    Absolute expiry (YYYY-MM-DD local EOD, or ...Z)\n");
         (void)fprintf(out, "  BODY|-          Memory text, or - to read stdin\n");
@@ -114,6 +116,10 @@ static void print_command_help(CliCommand topic)
         (void)fprintf(out, "  --expired       Locate in expired bin\n");
         (void)fprintf(out, "  --deleted       Locate in deleted bin\n");
         (void)fprintf(out, "  --trash         Deprecated alias of --expired\n");
+        if (topic == CLI_CMD_DELETE) {
+            (void)fprintf(out, "  --as KIND       human|agent|tool|share (default human)\n");
+            (void)fprintf(out, "  --actor ID      1 to 64 of A-Za-z0-9_./:-\n");
+        }
         (void)fprintf(out, "\n");
         (void)fprintf(out, "Exactly one of ID or --key is required.\n");
         (void)fprintf(out, "Default locators are live-only; --expired/--deleted select one bin.\n");
@@ -142,6 +148,8 @@ static void print_command_help(CliCommand topic)
         (void)fprintf(out, "  --undelete      Clear deleted_at (use with --deleted)\n");
         (void)fprintf(out, "  --if-version-vector VV\n");
         (void)fprintf(out, "                  Write only when version_vector equals VV\n");
+        (void)fprintf(out, "  --as KIND       human|agent|tool|share (default human)\n");
+        (void)fprintf(out, "  --actor ID      1 to 64 of A-Za-z0-9_./:-\n");
         (void)fprintf(out, "\n");
         (void)fprintf(out, "Exactly one of ID or --key is required.\n");
         (void)fprintf(out, "At least one of --text, --tag, --clear-tags, --ttl, --expires,\n");
@@ -154,7 +162,8 @@ static void print_command_help(CliCommand topic)
     } else if (topic == CLI_CMD_LIST) {
         (void)fprintf(out, "Options:\n");
         (void)fprintf(out, "  --tag TAG       Require tag (repeatable; AND)\n");
-        (void)fprintf(out, "  --source SRC    Filter by source\n");
+        (void)fprintf(out, "  --created-by KIND  human|agent|tool|share|import\n");
+        (void)fprintf(out, "  --updated-by KIND  human|agent|tool|share|import\n");
         (void)fprintf(out, "  --key KEY       Exact key match\n");
         (void)fprintf(out, "  --sort SORT     updated or created (default updated)\n");
         (void)fprintf(out, "  --since TS      Inclusive lower bound on the sort field\n");
@@ -176,7 +185,8 @@ static void print_command_help(CliCommand topic)
         (void)fprintf(
             out, "  QUERY           Words or word prefixes; FTS5 syntax also works (required)\n");
         (void)fprintf(out, "  --tag TAG       Require tag (repeatable; AND)\n");
-        (void)fprintf(out, "  --source SRC    Filter by source\n");
+        (void)fprintf(out, "  --created-by KIND  human|agent|tool|share|import\n");
+        (void)fprintf(out, "  --updated-by KIND  human|agent|tool|share|import\n");
         (void)fprintf(out, "  --key KEY       Exact key match\n");
         (void)fprintf(out, "  --sort SORT     updated or created; accepted, then ignored\n");
         (void)fprintf(out, "  --since TS      Inclusive lower bound on updated_at\n");
@@ -233,6 +243,8 @@ static void print_command_help(CliCommand topic)
         (void)fprintf(out, "  --to-key KEY    Target entry key\n");
         (void)fprintf(out, "  --kind KIND     related (default on link) | supersedes | cites\n");
         (void)fprintf(out, "  --deleted       Allow deleted ends\n");
+        (void)fprintf(out, "  --as KIND       human|agent|tool|share (default human)\n");
+        (void)fprintf(out, "  --actor ID      1 to 64 of A-Za-z0-9_./:-\n");
         (void)fprintf(out, "  ID ID           Sugar for --from / --to numeric ids\n");
         (void)fprintf(out, "\n");
         (void)fprintf(out, "Each end is exactly one of id or --*-key.\n");
@@ -262,6 +274,8 @@ static void print_command_help(CliCommand topic)
         (void)fprintf(out, "  --trash         Deprecated alias of --expired\n");
         (void)fprintf(out, "  --to-key NEW    Set or rename the key (non-empty)\n");
         (void)fprintf(out, "  --clear-key     Remove the key (keyed becomes keyless)\n");
+        (void)fprintf(out, "  --as KIND       human|agent|tool|share (default human)\n");
+        (void)fprintf(out, "  --actor ID      1 to 64 of A-Za-z0-9_./:-\n");
         (void)fprintf(out, "\n");
         (void)fprintf(out, "Exactly one of ID or --key, and exactly one of\n");
         (void)fprintf(out, "--to-key or --clear-key. Empty --to-key is illegal (not a clear).\n");

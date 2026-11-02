@@ -12,8 +12,8 @@ static void seed_search_corpus(const char *db)
 {
     CmdResult r;
     const char *a1[] = {"add", "--tag", "pref", "--tag", "editor", "Preferred editor is helix"};
-    const char *a2[] = {"add", "--tag", "decision", "--source", "agent", "Use FTS5 not embeddings"};
-    const char *a3[] = {"add", "--tag", "pref", "--source", "human", "Font size 14 in terminal"};
+    const char *a2[] = {"add", "--tag", "decision", "--as", "agent", "Use FTS5 not embeddings"};
+    const char *a3[] = {"add", "--tag", "pref", "--as", "human", "Font size 14 in terminal"};
     r = run_remember(db, a1, sizeof(a1) / sizeof(a1[0]), NULL);
     cmd_result_free(&r);
     r = run_remember(db, a2, sizeof(a2) / sizeof(a2[0]), NULL);
@@ -69,7 +69,7 @@ TEST(search_tag_filter_ands_with_query)
 TEST(search_source_filter)
 {
     char *db = make_temp_db_path();
-    const char *args[] = {"search", "--json", "--source", "agent", "FTS5"};
+    const char *args[] = {"search", "--json", "--created-by", "agent", "FTS5"};
     CmdResult r;
     ASSERT_TRUE(db != NULL);
     seed_search_corpus(db);
@@ -156,13 +156,13 @@ TEST(search_second_query_is_unexpected)
 TEST(search_invalid_source_is_usage)
 {
     char *db = make_temp_db_path();
-    const char *args[] = {"search", "boo", "--source", "bogus"};
+    const char *args[] = {"search", "boo", "--created-by", "bogus"};
     CmdResult r;
     ASSERT_TRUE(db != NULL);
     r = run_remember(db, args, sizeof(args) / sizeof(args[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 1);
     ASSERT_STREQ(r.out, "");
-    ASSERT_STR_CONTAINS(r.err, "invalid source");
+    ASSERT_STR_CONTAINS(r.err, "invalid --created-by (use human, agent, tool, share, or import)");
     cmd_result_free(&r);
     free(db);
 }
@@ -253,7 +253,7 @@ TEST(search_limit)
     r = run_remember(db, args, sizeof(args) / sizeof(args[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 0);
     p = r.out;
-    while ((p = strstr(p, "\"id\":")) != NULL) {
+    while ((p = strstr(p, "\"local_id\":")) != NULL) {
         count++;
         p += sizeof("\"id\":") - 1;
     }
@@ -282,12 +282,39 @@ TEST(search_multi_tag_and_filter)
     free(db);
 }
 
+/* 008-20: --created-by is the kind, and --updated-by is the other column. */
+TEST(search_updated_by_import_is_that_kind_only)
+{
+    char *db = make_temp_db_path();
+    const char *by_import[] = {"search", "--json", "--updated-by", "import", "helix"};
+    const char *by_sync[] = {"search", "--updated-by", "sync", "helix"};
+    CmdResult r;
+
+    ASSERT_TRUE(db != NULL);
+    seed_search_corpus(db);
+    free(harness_sqlite_query_line(
+        db, "UPDATE entries SET updated_by='{\"kind\":\"import\",\"id\":null}' "
+            "WHERE body LIKE '%helix%';"));
+    r = run_remember(db, by_import, sizeof(by_import) / sizeof(by_import[0]), NULL);
+    ASSERT_EQ_INT(r.exit_code, 0);
+    ASSERT_STR_CONTAINS(r.out, "helix");
+    ASSERT_STR_NOT_CONTAINS(r.out, "embeddings");
+    ASSERT_STR_CONTAINS(r.out, "\"updated_by\":{\"kind\":\"import\",\"id\":null}");
+    cmd_result_free(&r);
+    r = run_remember(db, by_sync, sizeof(by_sync) / sizeof(by_sync[0]), NULL);
+    ASSERT_EQ_INT(r.exit_code, 1);
+    ASSERT_STR_CONTAINS(r.err, "invalid --updated-by (use human, agent, tool, share, or import)");
+    cmd_result_free(&r);
+    free(db);
+}
+
 void register_search_tests(void)
 {
     RUN_TEST(search_finds_body_token);
     RUN_TEST(search_finds_tag_token_via_fts);
     RUN_TEST(search_tag_filter_ands_with_query);
     RUN_TEST(search_source_filter);
+    RUN_TEST(search_updated_by_import_is_that_kind_only);
     RUN_TEST(search_empty_query_is_an_empty_result);
     RUN_TEST(search_whitespace_only_query_is_an_empty_result);
     RUN_TEST(search_query_trims_outer_whitespace);

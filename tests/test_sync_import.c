@@ -842,6 +842,9 @@ TEST(cli_import_incoming_dominates_updates)
         force_vv(local, 1, vv_l);
         force_vv(foreign, 1, vv_f);
     }
+    free(harness_sqlite_query_line(
+        foreign, "UPDATE entries SET created_by='{\"kind\":\"agent\",\"id\":null}', "
+                 "updated_at='2020-01-02T00:00:00.000Z' WHERE rowid=1;"));
 
     imp[3] = foreign;
     r = run_import(local, foreign, imp, sizeof(imp) / sizeof(imp[0]));
@@ -853,6 +856,9 @@ TEST(cli_import_incoming_dominates_updates)
     r = run_remember(local, get, sizeof(get) / sizeof(get[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 0);
     ASSERT_STR_CONTAINS(r.out, "\"body\":\"new\"");
+    ASSERT_STR_CONTAINS(r.out, "\"created_by\":{\"kind\":\"agent\",\"id\":null}");
+    ASSERT_STR_CONTAINS(r.out, "\"updated_by\":{\"kind\":\"agent\",\"id\":null}");
+    ASSERT_STR_CONTAINS(r.out, "\"updated_at\":\"2020-01-02T00:00:00.000Z\"");
     cmd_result_free(&r);
 
     free(dev);
@@ -893,6 +899,15 @@ TEST(store_import_no_sidecar_copy_devices_stay_one)
     ASSERT_EQ_STATUS(store_import(dst, foreign, k_now, &counts), STORE_OK);
     ASSERT_TRUE(counts.inserted == 1U);
     ASSERT_TRUE(counts.conflicts == 0U);
+    {
+        Entry got;
+
+        memset(&got, 0, sizeof(got));
+        ASSERT_EQ_STATUS(store_get_any(dst, 1, &got), STORE_OK);
+        ASSERT_STREQ(got.created_by, "{\"kind\":\"agent\",\"id\":null}");
+        ASSERT_STREQ(got.updated_by, "{\"kind\":\"agent\",\"id\":null}");
+        store_entry_free(&got);
+    }
     store_close(dst);
 
     devices = harness_sqlite_query_line(

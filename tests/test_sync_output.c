@@ -102,11 +102,20 @@ static int json_sync_id_is_v7(const char *json)
 
 TEST(json_entry_field_order_bin_always_enum)
 {
-    static const char *const k_fields[] = {
-        "\"id\":",         "\"local_id\":",   "\"key\":",        "\"body\":",
-        "\"tags\":",       "\"source\":",     "\"created_at\":", "\"updated_at\":",
-        "\"expires_at\":", "\"deleted_at\":", "\"bin\":",        "\"version_vector\":",
-        "\"links\":"};
+    static const char *const k_fields[] = {"\"id\":",
+                                           "\"local_id\":",
+                                           "\"key\":",
+                                           "\"body\":",
+                                           "\"tags\":",
+                                           "\"created_by\":",
+                                           "\"updated_by\":",
+                                           "\"created_at\":",
+                                           "\"updated_at\":",
+                                           "\"expires_at\":",
+                                           "\"deleted_at\":",
+                                           "\"bin\":",
+                                           "\"version_vector\":",
+                                           "\"links\":"};
     char *db = make_temp_db_path();
     const char *a[] = {"add", "--key", "k:live", "hello"};
     const char *g[] = {"--json", "get", "1"};

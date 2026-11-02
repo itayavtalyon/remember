@@ -110,8 +110,8 @@ TEST(add_key_keeps_original_source)
     CmdResult r1;
     CmdResult r2;
     CmdResult g;
-    const char *a1[] = {"add", "--key", "k", "--source", "human", "one"};
-    const char *a2[] = {"add", "--key", "k", "--source", "agent", "two"};
+    const char *a1[] = {"add", "--key", "k", "--as", "human", "one"};
+    const char *a2[] = {"add", "--key", "k", "--as", "agent", "two"};
     const char *gargs[] = {"get", "--json", "--key", "k"};
     ASSERT_TRUE(db != NULL);
     r1 = run_remember(db, a1, sizeof(a1) / sizeof(a1[0]), NULL);
@@ -122,7 +122,7 @@ TEST(add_key_keeps_original_source)
     cmd_result_free(&r2);
     g = run_remember(db, gargs, sizeof(gargs) / sizeof(gargs[0]), NULL);
     ASSERT_EQ_INT(g.exit_code, 0);
-    ASSERT_STR_CONTAINS(g.out, "\"source\":\"human\"");
+    ASSERT_STR_CONTAINS(g.out, "\"created_by\":{\"kind\":\"human\",\"id\":null}");
     ASSERT_STR_CONTAINS(g.out, "two");
     cmd_result_free(&g);
     free(db);

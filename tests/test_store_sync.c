@@ -494,7 +494,7 @@ TEST(store_link_unlink_rekey_bump_vv)
 
     memset(&stub, 0, sizeof(stub));
     ASSERT_EQ_STATUS(
-        store_link(s, (StoreEdge){.from_id = 1, .to_id = 2}, related, k_later, &lact, &stub),
+        store_link(s, (StoreEdge){.from_id = 1, .to_id = 2}, related, NULL, k_later, &lact, &stub),
         STORE_OK);
     store_neighbor_free(&stub);
 
@@ -502,28 +502,33 @@ TEST(store_link_unlink_rekey_bump_vv)
     memset(&eb, 0, sizeof(eb));
     ASSERT_EQ_STATUS(store_get_any(s, 1, &ea), STORE_OK);
     ASSERT_EQ_STATUS(store_get_any(s, 2, &eb), STORE_OK);
-    ASSERT_TRUE(strcmp(ea.version_vector, vv_a0) != 0);
-    ASSERT_TRUE(strcmp(eb.version_vector, vv_b0) != 0);
-    (void)snprintf(vv_a0, sizeof(vv_a0), "%s", ea.version_vector);
-    (void)snprintf(vv_b0, sizeof(vv_b0), "%s", eb.version_vector);
+    ASSERT_STREQ(ea.version_vector, vv_a0);
+    ASSERT_STREQ(eb.version_vector, vv_b0);
+    ASSERT_STREQ(ea.updated_at, k_later);
+    ASSERT_STREQ(eb.updated_by, "{\"kind\":\"human\",\"id\":null}");
     store_entry_free(&ea);
     store_entry_free(&eb);
 
-    ASSERT_EQ_STATUS(store_unlink(s, 1, 2, &related, k_later, &gone, &n), STORE_OK);
+    ASSERT_EQ_STATUS(store_unlink(s, 1, 2, &related, NULL, k_later, &gone, &n), STORE_OK);
     ASSERT_EQ_INT((int)n, 1);
     store_neighbors_free(gone, n);
     memset(&ea, 0, sizeof(ea));
     memset(&eb, 0, sizeof(eb));
     ASSERT_EQ_STATUS(store_get_any(s, 1, &ea), STORE_OK);
     ASSERT_EQ_STATUS(store_get_any(s, 2, &eb), STORE_OK);
-    ASSERT_TRUE(strcmp(ea.version_vector, vv_a0) != 0);
-    ASSERT_TRUE(strcmp(eb.version_vector, vv_b0) != 0);
-    (void)snprintf(vv_a0, sizeof(vv_a0), "%s", ea.version_vector);
+    ASSERT_STREQ(ea.version_vector, vv_a0);
+    ASSERT_STREQ(eb.version_vector, vv_b0);
+    {
+        char *gone_at = harness_sqlite_query_line(db, "SELECT deleted_at FROM entry_links;");
+
+        ASSERT_STREQ(gone_at != NULL ? gone_at : "", k_later);
+        free(gone_at);
+    }
     store_entry_free(&ea);
     store_entry_free(&eb);
 
     /* no-op unlink does not bump */
-    ASSERT_EQ_STATUS(store_unlink(s, 1, 2, &related, k_now, &gone, &n), STORE_OK);
+    ASSERT_EQ_STATUS(store_unlink(s, 1, 2, &related, NULL, k_now, &gone, &n), STORE_OK);
     ASSERT_EQ_INT((int)n, 0);
     memset(&ea, 0, sizeof(ea));
     ASSERT_EQ_STATUS(store_get_any(s, 1, &ea), STORE_OK);
@@ -532,7 +537,7 @@ TEST(store_link_unlink_rekey_bump_vv)
 
     memset(&ea, 0, sizeof(ea));
     ASSERT_EQ_STATUS(store_rekey(s, 1, (RekeyKeys){.key_or_null = NULL, .new_key_or_null = "kb"},
-                                 STORE_BIN_LIVE, k_later, &ea, &conflict),
+                                 STORE_BIN_LIVE, NULL, k_later, &ea, &conflict),
                      STORE_OK);
     ASSERT_STREQ(ea.sync_id, sync);
     ASSERT_TRUE(strcmp(ea.version_vector, vv_a0) != 0);
@@ -774,13 +779,13 @@ TEST(store_soft_delete_live_keeps_body_fts_edges)
         store_add(s, "peer", k_hash_b, NULL, NULL, 0U, "human", NULL, k_now, &act, &peer),
         STORE_OK);
     ASSERT_EQ_STATUS(store_link(s, (StoreEdge){.from_id = 1, .to_id = peer.id}, STORE_EDGE_RELATED,
-                                k_now, &lact, &stub),
+                                NULL, k_now, &lact, &stub),
                      STORE_OK);
     store_neighbor_free(&stub);
     store_entry_free(&peer);
 
     memset(&e, 0, sizeof(e));
-    ASSERT_EQ_STATUS(store_soft_delete_by_id(s, 1, k_now, &e), STORE_OK);
+    ASSERT_EQ_STATUS(store_soft_delete_by_id(s, 1, NULL, k_now, &e), STORE_OK);
     ASSERT_STREQ(e.body, "keep-me");
     ASSERT_STREQ(e.key, "ksoft");
     ASSERT_STREQ(e.sync_id, sync);
@@ -830,13 +835,13 @@ TEST(store_soft_delete_expired_clears_expires)
                                "2020-01-01T00:00:00.000Z", k_now, &act, &e),
                      STORE_OK);
     store_entry_free(&e);
-    ASSERT_EQ_STATUS(store_soft_delete_by_key(s, "kexp", k_now, &e), STORE_OK);
+    ASSERT_EQ_STATUS(store_soft_delete_by_key(s, "kexp", NULL, k_now, &e), STORE_OK);
     ASSERT_TRUE(e.deleted_at != NULL);
     ASSERT_TRUE(e.expires_at == NULL);
     store_entry_free(&e);
     ASSERT_EQ_STATUS(store_get(s, 1, STORE_BIN_EXPIRED, k_now, &e), STORE_ERR_DELETED);
     store_entry_free(&e);
-    ASSERT_EQ_STATUS(store_soft_delete_by_id(s, 1, k_now, &e), STORE_ERR_DELETED);
+    ASSERT_EQ_STATUS(store_soft_delete_by_id(s, 1, NULL, k_now, &e), STORE_ERR_DELETED);
     store_entry_free(&e);
     store_close(s);
     free(db);
@@ -864,7 +869,7 @@ TEST(store_hard_delete_expired_cascades_fts)
     ASSERT_EQ_STATUS(store_add(s, "peer", k_hash_b, NULL, NULL, 0U, "human", NULL, k_now, &act, &e),
                      STORE_OK);
     ASSERT_EQ_STATUS(store_link(s, (StoreEdge){.from_id = 1, .to_id = e.id}, STORE_EDGE_RELATED,
-                                k_now, &lact, &stub),
+                                NULL, k_now, &lact, &stub),
                      STORE_OK);
     store_neighbor_free(&stub);
     store_entry_free(&e);
@@ -926,7 +931,7 @@ TEST(store_purge_deleted_and_expired)
     ASSERT_EQ_STATUS(store_add(s, "del", k_hash_a, "kd", NULL, 0U, "human", NULL, k_now, &act, &e),
                      STORE_OK);
     store_entry_free(&e);
-    ASSERT_EQ_STATUS(store_soft_delete_by_id(s, 1, k_now, &e), STORE_OK);
+    ASSERT_EQ_STATUS(store_soft_delete_by_id(s, 1, NULL, k_now, &e), STORE_OK);
     store_entry_free(&e);
     ASSERT_EQ_STATUS(store_add(s, "live", k_hash_b, NULL, NULL, 0U, "human", NULL, k_now, &act, &e),
                      STORE_OK);
@@ -975,7 +980,7 @@ TEST(store_add_revives_deleted_same_sync_id)
         STORE_OK);
     (void)snprintf(sync_k, sizeof(sync_k), "%s", e.sync_id);
     store_entry_free(&e);
-    ASSERT_EQ_STATUS(store_soft_delete_by_key(s, "slot", k_now, &e), STORE_OK);
+    ASSERT_EQ_STATUS(store_soft_delete_by_key(s, "slot", NULL, k_now, &e), STORE_OK);
     store_entry_free(&e);
     ASSERT_EQ_STATUS(
         store_add(s, "keyed-new", k_hash_b, "slot", NULL, 0U, "agent", NULL, k_now, &act, &e),
@@ -993,7 +998,7 @@ TEST(store_add_revives_deleted_same_sync_id)
         STORE_OK);
     (void)snprintf(sync_h, sizeof(sync_h), "%s", e.sync_id);
     store_entry_free(&e);
-    ASSERT_EQ_STATUS(store_soft_delete_by_id(s, 2, k_now, &e), STORE_OK);
+    ASSERT_EQ_STATUS(store_soft_delete_by_id(s, 2, NULL, k_now, &e), STORE_OK);
     store_entry_free(&e);
     ASSERT_EQ_STATUS(
         store_add(s, "hashbody", k_hash_a, NULL, tags, 1U, "tool", NULL, k_now, &act, &e),
@@ -1023,7 +1028,7 @@ TEST(store_vv_increment_inserts_missing_device_key)
         STORE_OK);
     store_entry_free(&e);
     free(harness_sqlite_query_line(db, "UPDATE entries SET version_vector='{}' WHERE local_id=1;"));
-    ASSERT_EQ_STATUS(store_soft_delete_by_id(s, 1, k_now, &e), STORE_OK);
+    ASSERT_EQ_STATUS(store_soft_delete_by_id(s, 1, NULL, k_now, &e), STORE_OK);
     ASSERT_TRUE(e.version_vector != NULL);
     if (e.version_vector != NULL) {
         ASSERT_STR_CONTAINS(e.version_vector, "\":1}");
@@ -1038,7 +1043,7 @@ TEST(store_vv_increment_inserts_missing_device_key)
     free(harness_sqlite_query_line(
         db, "UPDATE entries SET version_vector="
             "'{\"00000000-0000-7000-8000-000000000001\":3}' WHERE local_id=2;"));
-    ASSERT_EQ_STATUS(store_soft_delete_by_id(s, 2, k_now, &e), STORE_OK);
+    ASSERT_EQ_STATUS(store_soft_delete_by_id(s, 2, NULL, k_now, &e), STORE_OK);
     ASSERT_TRUE(e.version_vector != NULL);
     if (e.version_vector != NULL) {
         ASSERT_STR_CONTAINS(e.version_vector, "00000000-0000-7000-8000-000000000001\":3");
@@ -1051,7 +1056,7 @@ TEST(store_vv_increment_inserts_missing_device_key)
         STORE_OK);
     store_entry_free(&e);
     free(harness_sqlite_query_line(db, "UPDATE entries SET version_vector='{' WHERE local_id=3;"));
-    ASSERT_EQ_STATUS(store_soft_delete_by_id(s, 3, k_now, &e), STORE_ERR_INTERNAL);
+    ASSERT_EQ_STATUS(store_soft_delete_by_id(s, 3, NULL, k_now, &e), STORE_ERR_INTERNAL);
     store_entry_free(&e);
     store_close(s);
     free(db);
@@ -1076,7 +1081,7 @@ TEST(store_update_undelete_deleted)
                      STORE_OK);
     (void)snprintf(sync, sizeof(sync), "%s", e.sync_id);
     store_entry_free(&e);
-    ASSERT_EQ_STATUS(store_soft_delete_by_id(s, 1, k_now, &e), STORE_OK);
+    ASSERT_EQ_STATUS(store_soft_delete_by_id(s, 1, NULL, k_now, &e), STORE_OK);
     (void)snprintf(vv_before, sizeof(vv_before), "%s", e.version_vector);
     store_entry_free(&e);
 

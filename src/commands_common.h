@@ -91,6 +91,22 @@ typedef struct {
 /* 1 if arg is a bin flag and was recorded; 0 if not a bin flag. */
 int cmd_bin_take_flag(const char *arg, CmdBinOpts *opts);
 
+/* --as KIND and --actor ID. NULL means the flag was omitted. */
+typedef struct {
+    const char *kind;
+    const char *id;
+} CmdActorFlags;
+
+/* 1 if arg was --as or --actor. 0 if not. -1 on a missing value (*err set, not printed). */
+int cmd_take_actor_flag(const char *arg, int *i, int rest_argc, const char **rest_argv,
+                        CmdActorFlags *out, const char **err);
+
+/* Canonical actor JSON for a write. Prints on failure. 0 ok, -1 error. */
+int cmd_actor_json(const CmdActorFlags *flags, char out[ACTOR_JSON_CAP]);
+
+/* 0 when kind is NULL or a stored kind (human, agent, tool, share, import). */
+int cmd_reject_filter_kind(const char *flag, const char *kind);
+
 /* Deprecation stderr for --trash; mutex --expired/--deleted. 0 ok. */
 int cmd_bin_resolve(const CmdBinOpts *opts, StoreBin *out);
 

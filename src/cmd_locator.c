@@ -18,12 +18,13 @@
 typedef struct {
     const char *key_raw;
     const char *id_raw;
+    CmdActorFlags actor;
     CmdBinOpts bins;
 } LocatorParse;
 
-/* Shared by get/delete: --key, positional id, reject --source and unknowns. */
+/* Shared by get/delete. allow_actor: delete accepts --as and --actor; get does not. */
 static int locator_take_option(const char *arg, int *i, int rest_argc, const char **rest_argv,
-                               LocatorParse *out)
+                               LocatorParse *out, int allow_actor)
 {
     if (strcmp(arg, "--key") == 0) {
         if (*i + 1 >= rest_argc) {
@@ -36,9 +37,17 @@ static int locator_take_option(const char *arg, int *i, int rest_argc, const cha
     if (cmd_bin_take_flag(arg, &out->bins) != 0) {
         return 1;
     }
-    if (strcmp(arg, "--source") == 0) {
-        err_msg(DIAG_USAGE, "--source is only valid on add");
-        return -1;
+    if (allow_actor) {
+        const char *err = NULL;
+        int took = cmd_take_actor_flag(arg, i, rest_argc, rest_argv, &out->actor, &err);
+
+        if (took < 0) {
+            err_msg(DIAG_USAGE, err);
+            return -1;
+        }
+        if (took > 0) {
+            return 1;
+        }
     }
     if (arg[0] == '-' && arg[1] != '\0') {
         err_fmt(DIAG_USAGE, "unknown option '%s'", arg);
@@ -47,13 +56,16 @@ static int locator_take_option(const char *arg, int *i, int rest_argc, const cha
     return 0;
 }
 
-static int parse_locator_args(int rest_argc, const char **rest_argv, LocatorParse *out)
+static int parse_locator_args(int rest_argc, const char **rest_argv, LocatorParse *out,
+                              int allow_actor)
 {
     int i = 0;
     int end_opts = 0;
 
     out->key_raw = NULL;
     out->id_raw = NULL;
+    out->actor.kind = NULL;
+    out->actor.id = NULL;
     memset(&out->bins, 0, sizeof(out->bins));
 
     for (i = 0; i < rest_argc; i++) {
@@ -64,7 +76,7 @@ static int parse_locator_args(int rest_argc, const char **rest_argv, LocatorPars
             continue;
         }
         if (!end_opts) {
-            int kind = locator_take_option(arg, &i, rest_argc, rest_argv, out);
+            int kind = locator_take_option(arg, &i, rest_argc, rest_argv, out, allow_actor);
             if (kind < 0) {
                 return -1;
             }
@@ -184,7 +196,7 @@ int cmd_get(Store *s, bool json, int rest_argc, const char **rest_argv)
 
     memset(&entry, 0, sizeof(entry));
     memset(&loc, 0, sizeof(loc));
-    if (parse_locator_args(rest_argc, rest_argv, &parsed) != 0) {
+    if (parse_locator_args(rest_argc, rest_argv, &parsed, 0) != 0) {
         return REMEMBER_ERR;
     }
     if (locator_validate(&parsed) != 0) {
@@ -247,16 +259,16 @@ int cmd_get(Store *s, bool json, int rest_argc, const char **rest_argv)
 
 /* Soft or hard delete after locator_resolve. */
 static StoreStatus delete_resolved(Store *s, const LocatorResolved *loc, StoreBin bin,
-                                   const char *now, Entry *entry)
+                                   const char *actor, const char *now, Entry *entry)
 {
     if (loc->kind == LOC_KEY) {
         if (bin == STORE_BIN_LIVE) {
-            return store_soft_delete_by_key(s, loc->key, now, entry);
+            return store_soft_delete_by_key(s, loc->key, actor, now, entry);
         }
         return store_hard_delete_by_key(s, loc->key, bin, now, entry);
     }
     if (bin == STORE_BIN_LIVE) {
-        return store_soft_delete_by_id(s, loc->id, now, entry);
+        return store_soft_delete_by_id(s, loc->id, actor, now, entry);
     }
     return store_hard_delete_by_id(s, loc->id, bin, now, entry);
 }
@@ -268,13 +280,17 @@ int cmd_delete(Store *s, bool json, int rest_argc, const char **rest_argv)
     Entry entry;
     char key_norm[REMEMBER_TOKEN_MAX + 1];
     char now[ISO_TS_BUFSIZE];
+    char actor_buf[ACTOR_JSON_CAP];
     StoreStatus st = STORE_OK;
     StoreBin bin = STORE_BIN_LIVE;
     int rc = 0;
 
     memset(&entry, 0, sizeof(entry));
     memset(&loc, 0, sizeof(loc));
-    if (parse_locator_args(rest_argc, rest_argv, &parsed) != 0) {
+    if (parse_locator_args(rest_argc, rest_argv, &parsed, 1) != 0) {
+        return REMEMBER_ERR;
+    }
+    if (cmd_actor_json(&parsed.actor, actor_buf) != 0) {
         return REMEMBER_ERR;
     }
     if (locator_validate(&parsed) != 0) {
@@ -295,7 +311,7 @@ int cmd_delete(Store *s, bool json, int rest_argc, const char **rest_argv)
         return REMEMBER_ERR;
     }
 
-    st = delete_resolved(s, &loc, bin, now, &entry);
+    st = delete_resolved(s, &loc, bin, actor_buf, now, &entry);
     rc = store_status_to_exit(s, st);
     if (rc != REMEMBER_OK) {
         return rc;
@@ -322,6 +338,7 @@ typedef struct {
     const char *ttl_raw;
     const char *expires_raw;
     const char *if_version_vector_raw;
+    CmdActorFlags actor;
     size_t ntag_raw;
     bool set_text;
     /* True for `--text=VALUE` (VALUE may be "-"); false for `--text -` (stdin). */
@@ -449,9 +466,12 @@ static int handle_update_ttl_flag(const char *arg, int *i, int rest_argc, const 
         out->undelete = true;
         return 0;
     }
-    if (strcmp(arg, "--source") == 0) {
-        *err = "--source is only valid on add";
-        return -1;
+    {
+        int took = cmd_take_actor_flag(arg, i, rest_argc, rest_argv, &out->actor, err);
+
+        if (took != 0) {
+            return took < 0 ? -1 : 0;
+        }
     }
     if (arg[0] == '-' && arg[1] != '\0') {
         err_fmt(DIAG_USAGE, "unknown option '%s'", arg);
@@ -481,6 +501,8 @@ static int parse_update_args(int rest_argc, const char **rest_argv, UpdateParse 
     out->if_version_vector_raw = NULL;
     out->clear_expires = false;
     out->undelete = false;
+    out->actor.kind = NULL;
+    out->actor.id = NULL;
     memset(&out->loc.bins, 0, sizeof(out->loc.bins));
     *err = NULL;
 
@@ -630,6 +652,7 @@ static void locator_bind_write(const LocatorResolved *loc, long long *out_id, co
     *out_id = loc->id;
 }
 
+// NOLINTNEXTLINE(readability-function-cognitive-complexity) — validate, resolve, then the write
 int cmd_update(Store *s, bool json, int rest_argc, const char **rest_argv)
 {
     UpdateParse parsed;
@@ -645,6 +668,7 @@ int cmd_update(Store *s, bool json, int rest_argc, const char **rest_argv)
     char hash[REMEMBER_SHA256_HEX_LEN + 1];
     char now[ISO_TS_BUFSIZE];
     char expires_iso[ISO_TS_BUFSIZE];
+    char actor_buf[ACTOR_JSON_CAP];
     const char *expires_at = NULL;
     bool set_expires = false;
     bool set_tags = false;
@@ -707,6 +731,9 @@ int cmd_update(Store *s, bool json, int rest_argc, const char **rest_argv)
                               &expires_at) != 0) {
         goto cleanup;
     }
+    if (cmd_actor_json(&parsed.actor, actor_buf) != 0) {
+        goto cleanup;
+    }
     st = store_update(s, id,
                       &(StoreUpdate){
                           .key_or_null = key_or_null,
@@ -721,6 +748,7 @@ int cmd_update(Store *s, bool json, int rest_argc, const char **rest_argv)
                           .undelete = parsed.undelete,
                           .bin = bin,
                           .if_version_vector = parsed.if_version_vector_raw,
+                          .actor = actor_buf,
                       },
                       now, &entry, &conflict_id);
     if (st == STORE_ERR_CONFLICT) {
@@ -751,6 +779,7 @@ cleanup:
 typedef struct {
     LocatorParse loc;
     const char *to_key_raw;
+    CmdActorFlags actor;
     bool clear_key;
     /* NOLINTNEXTLINE(readability-magic-numbers,cppcoreguidelines-avoid-magic-numbers) */
     char pad_[7]; /* explicit tail padding (kept -Wpadded-clean) */
@@ -788,9 +817,17 @@ static int handle_rekey_flag(const char *arg, int *i, int rest_argc, const char 
     if (cmd_bin_take_flag(arg, &out->loc.bins) != 0) {
         return 1;
     }
-    if (strcmp(arg, "--source") == 0) {
-        err_msg(DIAG_USAGE, "--source is only valid on add");
-        return -1;
+    {
+        const char *err = NULL;
+        int took = cmd_take_actor_flag(arg, i, rest_argc, rest_argv, &out->actor, &err);
+
+        if (took < 0) {
+            err_msg(DIAG_USAGE, err);
+            return -1;
+        }
+        if (took > 0) {
+            return 1;
+        }
     }
     if (arg[0] == '-' && arg[1] != '\0') {
         err_fmt(DIAG_USAGE, "unknown option '%s'", arg);
@@ -840,6 +877,7 @@ int cmd_rekey(Store *s, bool json, int rest_argc, const char **rest_argv)
     const char *new_key = NULL;
     long long id = 0;
     char now[ISO_TS_BUFSIZE];
+    char actor_buf[ACTOR_JSON_CAP];
     Entry entry;
     StoreStatus st = STORE_OK;
     StoreBin bin = STORE_BIN_LIVE;
@@ -884,9 +922,12 @@ int cmd_rekey(Store *s, bool json, int rest_argc, const char **rest_argv)
         err_msg(DIAG_INTERNAL, "internal error");
         return REMEMBER_ERR;
     }
+    if (cmd_actor_json(&parsed.actor, actor_buf) != 0) {
+        return REMEMBER_ERR;
+    }
     locator_bind_write(&loc, &id, &key);
-    st = store_rekey(s, id, (RekeyKeys){.key_or_null = key, .new_key_or_null = new_key}, bin, now,
-                     &entry, &conflict_id);
+    st = store_rekey(s, id, (RekeyKeys){.key_or_null = key, .new_key_or_null = new_key}, bin,
+                     actor_buf, now, &entry, &conflict_id);
     if (st == STORE_ERR_CONFLICT) {
         if (new_key != NULL) {
             err_fmt(DIAG_KEY_CONFLICT, "key conflicts with entry %lld", conflict_id);

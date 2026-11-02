@@ -63,7 +63,7 @@ static const CommandEntry k_commands[] = {
     {.name = "version", .command = CLI_CMD_VERSION, .summary = "Show version"},
     {.name = "add",
      .command = CLI_CMD_ADD,
-     .summary = "Store a memory (optional --key, --tag, --source)"},
+     .summary = "Store a memory (optional --key, --tag, --as)"},
     {.name = "search", .command = CLI_CMD_SEARCH, .summary = "Full-text search"},
     {.name = "list", .command = CLI_CMD_LIST, .summary = "List memories with filters"},
     {.name = "get", .command = CLI_CMD_GET, .summary = "Fetch one entry by id or --key"},

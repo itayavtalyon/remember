@@ -19,6 +19,7 @@ typedef struct {
     const char *to_key_raw;
     const char *kind_raw;
     const char *pos[2];
+    CmdActorFlags actor;
     CmdBinOpts bins;
     int npos;
     char pad_[4]; /* explicit tail padding (kept -Wpadded-clean) */
@@ -98,6 +99,18 @@ static int handle_pair_flag(const char *arg, int *i, int rest_argc, const char *
     }
     if (cmd_bin_take_flag(arg, &out->bins) != 0) {
         return 1;
+    }
+    {
+        const char *err = NULL;
+        int took = cmd_take_actor_flag(arg, i, rest_argc, rest_argv, &out->actor, &err);
+
+        if (took < 0) {
+            err_msg(DIAG_USAGE, err);
+            return -1;
+        }
+        if (took > 0) {
+            return 1;
+        }
     }
     if (arg[0] == '-' && arg[1] != '\0') {
         err_fmt(DIAG_USAGE, "unknown option '%s'", arg);
@@ -264,6 +277,7 @@ static int run_pair(Store *s, bool json, int rest_argc, const char **rest_argv, 
     StoreEdgeKind kind = STORE_EDGE_RELATED;
     const StoreEdgeKind *kind_ptr = NULL;
     char now[ISO_TS_BUFSIZE];
+    char actor_buf[ACTOR_JSON_CAP];
     long long from_id = 0;
     long long to_id = 0;
     int rc = 0;
@@ -300,6 +314,9 @@ static int run_pair(Store *s, bool json, int rest_argc, const char **rest_argv, 
         err_msg(DIAG_INTERNAL, "internal error");
         return REMEMBER_ERR;
     }
+    if (cmd_actor_json(&p.actor, actor_buf) != 0) {
+        return REMEMBER_ERR;
+    }
     rc = resolve_end(s, (EndRef){.id_raw = p.from_id_raw, .key_raw = p.from_key_raw},
                      include_deleted, &from_id);
     if (rc != REMEMBER_OK) {
@@ -311,7 +328,7 @@ static int run_pair(Store *s, bool json, int rest_argc, const char **rest_argv, 
         return rc;
     }
     if (is_unlink) {
-        st = store_unlink(s, from_id, to_id, kind_ptr, now, &gone, &n);
+        st = store_unlink(s, from_id, to_id, kind_ptr, actor_buf, now, &gone, &n);
         rc = store_status_to_exit(s, st);
         if (rc != REMEMBER_OK) {
             store_neighbors_free(gone, n);
@@ -324,7 +341,8 @@ static int run_pair(Store *s, bool json, int rest_argc, const char **rest_argv, 
         store_neighbors_free(gone, n);
         return REMEMBER_OK;
     }
-    st = store_link(s, (StoreEdge){.from_id = from_id, .to_id = to_id}, kind, now, &act, &stub);
+    st = store_link(s, (StoreEdge){.from_id = from_id, .to_id = to_id}, kind, actor_buf, now, &act,
+                    &stub);
     rc = store_status_to_exit(s, st);
     if (rc != REMEMBER_OK) {
         return rc;

@@ -14,7 +14,7 @@
 #include <string.h>
 
 typedef struct {
-    const char *source;
+    CmdActorFlags actor;
     const char *key_raw;
     const char *body_raw;
     const char **tag_raw;
@@ -40,14 +40,15 @@ static int handle_add_flag(const char *arg, int *i, int rest_argc, const char **
     if (strcmp(arg, "--") == 0) {
         return 1; /* end opts */
     }
-    if (strcmp(arg, "--source") == 0) {
-        TakeValue taken = take_value(i, rest_argc, rest_argv, "missing value for --source");
-        if (taken.rc != 0) {
-            *err = taken.err;
-            return taken.rc;
+    {
+        int took = cmd_take_actor_flag(arg, i, rest_argc, rest_argv, &out->actor, err);
+
+        if (took < 0) {
+            return -1;
         }
-        out->source = taken.value;
-        return 0;
+        if (took > 0) {
+            return 0;
+        }
     }
     if (strcmp(arg, "--key") == 0) {
         TakeValue taken = take_value(i, rest_argc, rest_argv, "missing value for --key");
@@ -102,7 +103,8 @@ static int parse_add_args(int rest_argc, const char **rest_argv, AddParse *out, 
     int end_opts = 0;
     size_t tag_cap = 0U;
 
-    out->source = "unknown";
+    out->actor.kind = NULL;
+    out->actor.id = NULL;
     out->key_raw = NULL;
     out->body_raw = NULL;
     out->tag_raw = NULL;
@@ -187,6 +189,7 @@ int cmd_add(Store *s, bool json, int rest_argc, const char **rest_argv)
     char hash[REMEMBER_SHA256_HEX_LEN + 1];
     char now[ISO_TS_BUFSIZE];
     char expires_iso[ISO_TS_BUFSIZE];
+    char actor_buf[ACTOR_JSON_CAP];
     const char *expires_at = NULL;
     const char *key_or_null = NULL;
     Entry entry;
@@ -205,8 +208,7 @@ int cmd_add(Store *s, bool json, int rest_argc, const char **rest_argv)
         return REMEMBER_ERR;
     }
 
-    if (!source_is_valid(parsed.source)) {
-        err_msg(DIAG_USAGE, "invalid source (use human, agent, tool, share, or unknown)");
+    if (cmd_actor_json(&parsed.actor, actor_buf) != 0) {
         goto cleanup;
     }
     if (parsed.body_raw == NULL) {
@@ -252,7 +254,7 @@ int cmd_add(Store *s, bool json, int rest_argc, const char **rest_argv)
         }
         expires_at = exp.expires;
     }
-    st = store_add(s, body, hash, key_or_null, (const char *const *)tags_norm, ntags, parsed.source,
+    st = store_add(s, body, hash, key_or_null, (const char *const *)tags_norm, ntags, actor_buf,
                    expires_at, now, &action, &entry);
     if (st != STORE_OK) {
         err_store(s, st);

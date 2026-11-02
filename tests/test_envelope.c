@@ -67,6 +67,23 @@ TEST(envelope_add_leaves_out_a_neighbor_in_the_trash_like_get)
     free(db);
 }
 
+/* A person at the CLI is human with a null id. The memory has no source. */
+TEST(envelope_a_new_memory_has_created_by_and_updated_by_and_no_source)
+{
+    char *db = make_temp_db_path();
+    const char *add[] = {"--json", "add", "a body"};
+    CmdResult r;
+
+    ASSERT_TRUE(db != NULL);
+    r = run_remember(db, add, sizeof add / sizeof add[0], NULL);
+    ASSERT_EQ_INT(r.exit_code, 0);
+    ASSERT_STR_CONTAINS(r.out, "\"tags\":[],\"created_by\":{\"kind\":\"human\",\"id\":null},"
+                               "\"updated_by\":{\"kind\":\"human\",\"id\":null},\"created_at\":");
+    ASSERT_STR_NOT_CONTAINS(r.out, "\"source\"");
+    cmd_result_free(&r);
+    free(db);
+}
+
 enum { TYPE_STEP_ARGS = 7, TYPE_PREFIX_CAP = 128 };
 
 /* One command in order on one brain, and the reply type its envelope names. */
@@ -871,6 +888,7 @@ void register_envelope_tests(void)
     RUN_TEST(envelope_memory_id_is_the_uuid_and_the_old_flags_are_unknown);
     RUN_TEST(envelope_get_head_is_format_version_type_then_data_memory);
     RUN_TEST(envelope_add_leaves_out_a_neighbor_in_the_trash_like_get);
+    RUN_TEST(envelope_a_new_memory_has_created_by_and_updated_by_and_no_source);
     RUN_TEST(envelope_every_command_names_its_reply_type);
     RUN_TEST(envelope_failure_keeps_its_type_and_carries_the_warnings_after_the_error);
     RUN_TEST(envelope_warnings_keep_their_order_with_a_comma_between);
