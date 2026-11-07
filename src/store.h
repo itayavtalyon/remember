@@ -161,7 +161,8 @@ SettingStatus store_setting_reset(Store *brain, const char *user_db, const char 
                                   SettingLayer layer, const char *updated_by,
                                   SettingWriteResult *out, char *err, size_t errlen);
 /* flag_text NULL is no flag. A flag outside the key's range is
-   setting_out_of_range and writes nothing. */
+   setting_out_of_range and writes nothing. A live layer also fills that
+   layer's updated_by and updated_at. A stamp that does not fit fails the read. */
 SettingStatus store_setting_read(Store *brain, const char *user_db, const char *key,
                                  const char *flag_text, SettingRead *out, char *err, size_t errlen);
 

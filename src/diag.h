@@ -45,6 +45,8 @@ typedef enum {
     DIAG_INVALID_ARGUMENT,
     /* ST-3.6. Appended so the E4.3 order stays put. */
     DIAG_SYNC_CREDENTIAL_UNAVAILABLE,
+    /* C-03. Appended so the E4.3 order stays put. */
+    DIAG_SETTING_UNKNOWN,
     DIAG_CODE_COUNT
 } DiagCode;
 

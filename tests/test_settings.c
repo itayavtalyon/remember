@@ -3724,6 +3724,1192 @@ TEST(brain_row_does_not_pick_the_credential_helper)
     close_pair(store, tmpl);
 }
 
+/* 007 example and ST-7.3. TZ=UTC makes 10:04Z print as 21 Oct at 10:04.
+   The middle dot is the locked example character. */
+TEST(get_reports_the_winning_layer_and_every_other_layer)
+{
+    char tmpl[] = "/tmp/remember-get-XXXXXX";
+    char brain[REMEMBER_PATH_MAX];
+    char userdb[REMEMBER_PATH_MAX];
+    char err[256];
+    char user_copy[REMEMBER_PATH_MAX];
+    char tz_copy[64];
+    char human_want[320];
+    const char *saved_user = getenv("REMEMBER_USER_DB");
+    const char *saved_tz = getenv("TZ");
+    const char *when_text = "21 Oct 2026 at 10:04";
+    bool had_user = saved_user != NULL;
+    bool had_tz = saved_tz != NULL;
+    Store *store = NULL;
+    SettingWriteResult wr;
+    const char *human_args[] = {"settings", "get", "remember.search.candidate_pool"};
+    const char *json_args[] = {"--json", "settings", "get", "remember.search.candidate_pool"};
+    CmdResult human;
+    CmdResult json;
+    time_t now_sec = 0;
+    struct tm now_tm;
+
+    if (had_user) {
+        ASSERT_TRUE(snprintf(user_copy, sizeof(user_copy), "%s", saved_user) > 0);
+        saved_user = user_copy;
+    }
+    if (had_tz) {
+        ASSERT_TRUE(snprintf(tz_copy, sizeof(tz_copy), "%s", saved_tz) > 0);
+        saved_tz = tz_copy;
+    }
+    store = open_pair(tmpl, brain, sizeof(brain), userdb, sizeof(userdb));
+    if (store == NULL) {
+        return;
+    }
+    ASSERT_EQ_INT(set_one(store, userdb, "remember.search.candidate_pool", "400",
+                          SETTING_LAYER_BRAIN, NULL, &wr, err, sizeof(err)),
+                  SETTING_OK);
+    exec_fixture(brain, "UPDATE settings SET updated_at = '2026-10-21T10:04:00.000Z' "
+                        "WHERE key = 'remember.search.candidate_pool';");
+    store_close(store);
+    ASSERT_EQ_INT(setenv("REMEMBER_USER_DB", userdb, 1), 0);
+    ASSERT_EQ_INT(setenv("TZ", "UTC", 1), 0);
+    now_sec = time(NULL);
+    ASSERT_TRUE(localtime_r(&now_sec, &now_tm) != NULL);
+    if (now_tm.tm_year + 1900 == 2026) {
+        when_text = "21 Oct at 10:04";
+    }
+    human = run_remember(brain, human_args, sizeof(human_args) / sizeof(human_args[0]), NULL);
+    json = run_remember(brain, json_args, sizeof(json_args) / sizeof(json_args[0]), NULL);
+    restore_env("REMEMBER_USER_DB", had_user, saved_user);
+    restore_env("TZ", had_tz, saved_tz);
+    ASSERT_TRUE(snprintf(human_want, sizeof(human_want),
+                         "remember.search.candidate_pool = 400\n"
+                         "  from brain, set by human on %s\n"
+                         "  user: (unset) · default: 200\n",
+                         when_text) > 0);
+    ASSERT_EQ_INT(human.exit_code, 0);
+    ASSERT_STREQ(human.err, "");
+    ASSERT_STREQ(human.out, human_want);
+    ASSERT_EQ_INT(json.exit_code, 0);
+    ASSERT_STREQ(json.err, "");
+    ASSERT_STREQ(json.out,
+                 "{\"format\":\"remember-message\",\"version\":1,\"type\":\"setting.get.result\","
+                 "\"data\":{\"setting\":{\"key\":\"remember.search.candidate_pool\","
+                 "\"type\":\"integer\",\"value\":400,\"from\":\"brain\",\"changed\":true,"
+                 "\"layers\":{\"default\":{\"value\":200},\"user\":null,"
+                 "\"brain\":{\"value\":400,\"updated_by\":{\"kind\":\"human\",\"id\":null},"
+                 "\"updated_at\":\"2026-10-21T10:04:00.000Z\"}}}}}\n");
+    cmd_result_free(&human);
+    cmd_result_free(&json);
+    harness_remove_tree(tmpl);
+}
+
+typedef struct {
+    char user_copy[REMEMBER_PATH_MAX];
+    char home_copy[REMEMBER_PATH_MAX];
+    char xdg_copy[REMEMBER_PATH_MAX];
+    char tz_copy[128];
+    bool had_user;
+    bool had_home;
+    bool had_xdg;
+    bool had_tz;
+    char pad_[4];
+} EnvHold;
+
+static void env_hold_one(char *copy, size_t cap, const char *name, bool *had)
+{
+    const char *value = getenv(name);
+
+    *had = value != NULL;
+    copy[0] = '\0';
+    if (value != NULL) {
+        ASSERT_TRUE(snprintf(copy, cap, "%s", value) > 0);
+    }
+}
+
+static void env_hold(EnvHold *hold)
+{
+    env_hold_one(hold->user_copy, sizeof(hold->user_copy), "REMEMBER_USER_DB", &hold->had_user);
+    env_hold_one(hold->home_copy, sizeof(hold->home_copy), "HOME", &hold->had_home);
+    env_hold_one(hold->xdg_copy, sizeof(hold->xdg_copy), "XDG_DATA_HOME", &hold->had_xdg);
+    env_hold_one(hold->tz_copy, sizeof(hold->tz_copy), "TZ", &hold->had_tz);
+}
+
+static void env_release(const EnvHold *hold)
+{
+    restore_env("REMEMBER_USER_DB", hold->had_user, hold->user_copy);
+    restore_env("HOME", hold->had_home, hold->home_copy);
+    restore_env("XDG_DATA_HOME", hold->had_xdg, hold->xdg_copy);
+    restore_env("TZ", hold->had_tz, hold->tz_copy);
+}
+
+/* NOLINTNEXTLINE(bugprone-easily-swappable-parameters) — brain path, then user db path */
+static CmdResult get_at(const char *brain, const char *userdb, const char *const *args, size_t n)
+{
+    EnvHold hold;
+    CmdResult got;
+
+    env_hold(&hold);
+    ASSERT_EQ_INT(setenv("REMEMBER_USER_DB", userdb, 1), 0);
+    ASSERT_EQ_INT(setenv("TZ", "UTC", 1), 0);
+    got = run_remember(brain, args, n, NULL);
+    env_release(&hold);
+    return got;
+}
+
+static const char k_agent[] = "{\"kind\":\"agent\",\"id\":\"bot1\"}";
+static const char k_past[] = "2020-01-02T03:04:00.000Z";
+
+TEST(format_when_prints_the_locked_date_and_the_utc_fallback)
+{
+    SettingWhen now_year = {.year = 2026,
+                            .month = 10,
+                            .day = 21,
+                            .hour = 10,
+                            .minute = 4,
+                            .year_now = 2026,
+                            .utc_suffix = false};
+    SettingWhen other = {.year = 2025,
+                         .month = 10,
+                         .day = 21,
+                         .hour = 12,
+                         .minute = 4,
+                         .year_now = 2026,
+                         .utc_suffix = true};
+    SettingWhen day = {.year = 2026,
+                       .month = 1,
+                       .day = 2,
+                       .hour = 3,
+                       .minute = 4,
+                       .year_now = 2026,
+                       .utc_suffix = false};
+    char buf[64];
+
+    ASSERT_TRUE(setting_format_when(now_year, buf, sizeof(buf)));
+    ASSERT_STREQ(buf, "21 Oct at 10:04");
+    ASSERT_TRUE(setting_format_when(other, buf, sizeof(buf)));
+    ASSERT_STREQ(buf, "21 Oct 2025 at 12:04 UTC");
+    ASSERT_TRUE(setting_format_when(day, buf, sizeof(buf)));
+    ASSERT_STREQ(buf, "2 Jan at 03:04");
+    ASSERT_FALSE(setting_format_when(day, buf, 4));
+}
+
+TEST(suggestion_names_one_key_or_nothing)
+{
+    char long_key[128];
+
+    memset(long_key, 'a', sizeof(long_key) - 1U);
+    long_key[sizeof(long_key) - 1U] = '\0';
+    ASSERT_TRUE(setting_suggestion(NULL) == NULL);
+    ASSERT_TRUE(setting_suggestion("") == NULL);
+    ASSERT_STREQ(setting_suggestion("candidate_pool"), "remember.search.candidate_pool");
+    ASSERT_STREQ(setting_suggestion("remember:search/candidate_pool"),
+                 "remember.search.candidate_pool");
+    ASSERT_TRUE(setting_suggestion("remember:search:candidate_poo") == NULL);
+    ASSERT_STREQ(setting_suggestion("remember.search.candidate_poo"),
+                 "remember.search.candidate_pool");
+    ASSERT_TRUE(setting_suggestion("remember.search.hybrid") == NULL);
+    ASSERT_TRUE(setting_suggestion("remember.search.max_resXXXX") == NULL);
+    ASSERT_TRUE(setting_suggestion(long_key) == NULL);
+}
+
+TEST(get_default_only_names_every_allowed_layer)
+{
+    char tmpl[] = "/tmp/remember-get-def-XXXXXX";
+    char brain[REMEMBER_PATH_MAX];
+    char userdb[REMEMBER_PATH_MAX];
+    Store *store = open_pair(tmpl, brain, sizeof(brain), userdb, sizeof(userdb));
+    const char *args[] = {"settings", "get", "remember.search.candidate_pool"};
+    const char *json_args[] = {"--json", "settings", "get", "remember.search.candidate_pool"};
+    CmdResult human;
+    CmdResult json;
+
+    if (store == NULL) {
+        return;
+    }
+    store_close(store);
+    human = get_at(brain, userdb, args, sizeof(args) / sizeof(args[0]));
+    json = get_at(brain, userdb, json_args, sizeof(json_args) / sizeof(json_args[0]));
+    ASSERT_EQ_INT(human.exit_code, 0);
+    ASSERT_STREQ(human.err, "");
+    ASSERT_STREQ(human.out, "remember.search.candidate_pool = 200\n"
+                            "  from default\n"
+                            "  user: (unset) · brain: (unset)\n");
+    ASSERT_EQ_INT(json.exit_code, 0);
+    ASSERT_STREQ(json.err, "");
+    ASSERT_STREQ(json.out,
+                 "{\"format\":\"remember-message\",\"version\":1,\"type\":\"setting.get.result\","
+                 "\"data\":{\"setting\":{\"key\":\"remember.search.candidate_pool\","
+                 "\"type\":\"integer\",\"value\":200,\"from\":\"default\",\"changed\":false,"
+                 "\"layers\":{\"default\":{\"value\":200},\"user\":null,\"brain\":null}}}}\n");
+    cmd_result_free(&human);
+    cmd_result_free(&json);
+    harness_remove_tree(tmpl);
+}
+
+TEST(get_duration_quotes_the_text_and_adds_value_ms)
+{
+    char tmpl[] = "/tmp/remember-get-dur-XXXXXX";
+    char brain[REMEMBER_PATH_MAX];
+    char userdb[REMEMBER_PATH_MAX];
+    char err[256];
+    char sql[256];
+    Store *store = open_pair(tmpl, brain, sizeof(brain), userdb, sizeof(userdb));
+    SettingWriteResult wr;
+    const char *args[] = {"settings", "get", "remember.plugins.chain_budget"};
+    CmdResult human;
+
+    if (store == NULL) {
+        return;
+    }
+    ASSERT_EQ_INT(set_one(store, userdb, "remember.plugins.chain_budget", "2s", SETTING_LAYER_USER,
+                          NULL, &wr, err, sizeof(err)),
+                  SETTING_OK);
+    ASSERT_TRUE(snprintf(sql, sizeof(sql),
+                         "UPDATE settings SET updated_at = '%s' WHERE key = "
+                         "'remember.plugins.chain_budget';",
+                         k_past) > 0);
+    exec_fixture(userdb, sql);
+    store_close(store);
+    human = get_at(brain, userdb, args, sizeof(args) / sizeof(args[0]));
+    ASSERT_EQ_INT(human.exit_code, 0);
+    ASSERT_STREQ(human.err, "");
+    ASSERT_STREQ(human.out, "remember.plugins.chain_budget = 2s\n"
+                            "  from user, set by human on 2 Jan 2020 at 03:04\n"
+                            "  default: 1.5s\n");
+    cmd_result_free(&human);
+    {
+        const char *json_args[] = {"--json", "settings", "get", "remember.plugins.chain_budget"};
+        CmdResult json = get_at(brain, userdb, json_args, sizeof(json_args) / sizeof(json_args[0]));
+
+        ASSERT_EQ_INT(json.exit_code, 0);
+        ASSERT_STREQ(json.err, "");
+        ASSERT_STREQ(json.out, "{\"format\":\"remember-message\",\"version\":1,\"type\":\"setting."
+                               "get.result\",\"data\":{\"setting\":{\"key\":\"remember.plugins."
+                               "chain_budget\",\"type\":\"duration\",\"value\":\"2s\","
+                               "\"value_ms\":2000,\"from\":\"user\",\"changed\":true,\"layers\":{"
+                               "\"default\":{\"value\":\"1.5s\",\"value_ms\":1500},\"user\":{"
+                               "\"value\":\"2s\",\"value_ms\":2000,\"updated_by\":{\"kind\":"
+                               "\"human\",\"id\":null},\"updated_at\":\"2020-01-02T03:04:00.000Z\""
+                               "}}}}}\n");
+        cmd_result_free(&json);
+    }
+    harness_remove_tree(tmpl);
+}
+
+TEST(get_prefixes_join_with_a_space)
+{
+    char tmpl[] = "/tmp/remember-get-pre-XXXXXX";
+    char brain[REMEMBER_PATH_MAX];
+    char userdb[REMEMBER_PATH_MAX];
+    Store *store = open_pair(tmpl, brain, sizeof(brain), userdb, sizeof(userdb));
+    const char *args[] = {"settings", "get", "remember.buckets.prefixes"};
+    const char *json_args[] = {"--json", "settings", "get", "remember.buckets.prefixes"};
+    CmdResult human;
+    CmdResult json;
+
+    if (store == NULL) {
+        return;
+    }
+    store_close(store);
+    human = get_at(brain, userdb, args, sizeof(args) / sizeof(args[0]));
+    json = get_at(brain, userdb, json_args, sizeof(json_args) / sizeof(json_args[0]));
+    ASSERT_EQ_INT(human.exit_code, 0);
+    ASSERT_STREQ(human.out, "remember.buckets.prefixes = project: status:\n"
+                            "  from default\n"
+                            "  brain: (unset)\n");
+    ASSERT_STREQ(json.out, "{\"format\":\"remember-message\",\"version\":1,\"type\":\"setting.get."
+                           "result\",\"data\":{\"setting\":{\"key\":\"remember.buckets.prefixes\","
+                           "\"type\":\"string_list\",\"value\":[\"project:\",\"status:\"],"
+                           "\"from\":\"default\",\"changed\":false,\"layers\":{\"default\":{"
+                           "\"value\":[\"project:\",\"status:\"]},\"brain\":null}}}}\n");
+    cmd_result_free(&human);
+    cmd_result_free(&json);
+    harness_remove_tree(tmpl);
+}
+
+TEST(get_string_with_no_compiled_default_is_null)
+{
+    char tmpl[] = "/tmp/remember-get-str-XXXXXX";
+    char brain[REMEMBER_PATH_MAX];
+    char userdb[REMEMBER_PATH_MAX];
+    char err[256];
+    char sql[256];
+    Store *store = open_pair(tmpl, brain, sizeof(brain), userdb, sizeof(userdb));
+    SettingWriteResult wr;
+    const char *args[] = {"settings", "get", "remember.sync.credential_helper"};
+    CmdResult human;
+
+    if (store == NULL) {
+        return;
+    }
+    ASSERT_EQ_INT(set_one(store, userdb, "remember.sync.credential_helper", "pass",
+                          SETTING_LAYER_USER, NULL, &wr, err, sizeof(err)),
+                  SETTING_OK);
+    ASSERT_TRUE(snprintf(sql, sizeof(sql),
+                         "UPDATE settings SET updated_at = '%s' WHERE key = "
+                         "'remember.sync.credential_helper';",
+                         k_past) > 0);
+    exec_fixture(userdb, sql);
+    store_close(store);
+    human = get_at(brain, userdb, args, sizeof(args) / sizeof(args[0]));
+    ASSERT_EQ_INT(human.exit_code, 0);
+    ASSERT_STREQ(human.out, "remember.sync.credential_helper = pass\n"
+                            "  from user, set by human on 2 Jan 2020 at 03:04\n"
+                            "  default: (unset)\n");
+    cmd_result_free(&human);
+    {
+        const char *scope_args[] = {"settings", "get", "--scope", "user",
+                                    "remember.sync.credential_helper"};
+        const char *scope_json[] = {"--json",  "settings", "get",
+                                    "--scope", "user",     "remember.sync.credential_helper"};
+        CmdResult scoped =
+            get_at(brain, userdb, scope_args, sizeof(scope_args) / sizeof(scope_args[0]));
+        CmdResult scoped_json =
+            get_at(brain, userdb, scope_json, sizeof(scope_json) / sizeof(scope_json[0]));
+
+        ASSERT_EQ_INT(scoped.exit_code, 0);
+        ASSERT_STREQ(scoped.out, "remember.sync.credential_helper = pass\n"
+                                 "  from user, set by human on 2 Jan 2020 at 03:04\n");
+        ASSERT_STREQ(scoped.err, "");
+        ASSERT_EQ_INT(scoped_json.exit_code, 0);
+        ASSERT_STREQ(scoped_json.out,
+                     "{\"format\":\"remember-message\",\"version\":1,\"type\":\"setting.get."
+                     "result\",\"data\":{\"setting\":{\"key\":\"remember.sync.credential_helper\","
+                     "\"type\":\"string\",\"value\":\"pass\",\"from\":\"user\",\"changed\":true,"
+                     "\"layers\":{\"user\":{\"value\":\"pass\",\"updated_by\":{\"kind\":\"human\","
+                     "\"id\":null},\"updated_at\":\"2020-01-02T03:04:00.000Z\"}}}}}\n");
+        cmd_result_free(&scoped);
+        cmd_result_free(&scoped_json);
+    }
+    {
+        const char *json_args[] = {"--json", "settings", "get", "remember.sync.credential_helper"};
+        CmdResult json = get_at(brain, userdb, json_args, sizeof(json_args) / sizeof(json_args[0]));
+
+        ASSERT_EQ_INT(json.exit_code, 0);
+        ASSERT_STREQ(json.out,
+                     "{\"format\":\"remember-message\",\"version\":1,\"type\":\"setting.get."
+                     "result\",\"data\":{\"setting\":{\"key\":\"remember.sync.credential_helper\","
+                     "\"type\":\"string\",\"value\":\"pass\",\"from\":\"user\",\"changed\":true,"
+                     "\"layers\":{\"default\":null,\"user\":{\"value\":\"pass\",\"updated_by\":{"
+                     "\"kind\":\"human\",\"id\":null},\"updated_at\":\"2020-01-02T03:04:00.000Z\""
+                     "}}}}}\n");
+        cmd_result_free(&json);
+    }
+    harness_remove_tree(tmpl);
+}
+
+TEST(get_brain_beats_user_and_scope_hides_the_other_layers)
+{
+    char tmpl[] = "/tmp/remember-get-win-XXXXXX";
+    char brain[REMEMBER_PATH_MAX];
+    char userdb[REMEMBER_PATH_MAX];
+    char err[256];
+    char sql[320];
+    Store *store = open_pair(tmpl, brain, sizeof(brain), userdb, sizeof(userdb));
+    SettingWriteResult wr;
+    const char *args[] = {"settings", "get", "remember.search.candidate_pool"};
+    const char *scope_args[] = {"settings", "get", "--scope", "brain",
+                                "remember.search.candidate_pool"};
+    CmdResult human;
+    CmdResult scoped;
+
+    if (store == NULL) {
+        return;
+    }
+    ASSERT_EQ_INT(set_one(store, userdb, "remember.search.candidate_pool", "30", SETTING_LAYER_USER,
+                          NULL, &wr, err, sizeof(err)),
+                  SETTING_OK);
+    ASSERT_EQ_INT(set_one(store, userdb, "remember.search.candidate_pool", "400",
+                          SETTING_LAYER_BRAIN, NULL, &wr, err, sizeof(err)),
+                  SETTING_OK);
+    ASSERT_TRUE(snprintf(sql, sizeof(sql),
+                         "UPDATE settings SET updated_at = '%s' WHERE key = "
+                         "'remember.search.candidate_pool';",
+                         k_past) > 0);
+    exec_fixture(userdb, sql);
+    exec_fixture(brain, sql);
+    store_close(store);
+    human = get_at(brain, userdb, args, sizeof(args) / sizeof(args[0]));
+    scoped = get_at(brain, userdb, scope_args, sizeof(scope_args) / sizeof(scope_args[0]));
+    ASSERT_EQ_INT(human.exit_code, 0);
+    ASSERT_STREQ(human.out, "remember.search.candidate_pool = 400\n"
+                            "  from brain, set by human on 2 Jan 2020 at 03:04\n"
+                            "  user: 30 · default: 200\n");
+    ASSERT_EQ_INT(scoped.exit_code, 0);
+    ASSERT_STREQ(scoped.out, "remember.search.candidate_pool = 400\n"
+                             "  from brain, set by human on 2 Jan 2020 at 03:04\n");
+    cmd_result_free(&human);
+    cmd_result_free(&scoped);
+    {
+        const char *scope_json[] = {"--json",  "settings", "get",
+                                    "--scope", "brain",    "remember.search.candidate_pool"};
+        CmdResult brain_json =
+            get_at(brain, userdb, scope_json, sizeof(scope_json) / sizeof(scope_json[0]));
+
+        ASSERT_EQ_INT(brain_json.exit_code, 0);
+        ASSERT_STREQ(brain_json.err, "");
+        ASSERT_STREQ(brain_json.out,
+                     "{\"format\":\"remember-message\",\"version\":1,\"type\":\"setting.get."
+                     "result\",\"data\":{\"setting\":{\"key\":\"remember.search.candidate_pool\","
+                     "\"type\":\"integer\",\"value\":400,\"from\":\"brain\",\"changed\":true,"
+                     "\"layers\":{\"brain\":{\"value\":400,\"updated_by\":{\"kind\":\"human\","
+                     "\"id\":null},\"updated_at\":\"2020-01-02T03:04:00.000Z\"}}}}}\n");
+        cmd_result_free(&brain_json);
+    }
+    harness_remove_tree(tmpl);
+}
+
+TEST(get_scope_on_an_empty_layer_prints_unset)
+{
+    char tmpl[] = "/tmp/remember-get-empty-XXXXXX";
+    char brain[REMEMBER_PATH_MAX];
+    char userdb[REMEMBER_PATH_MAX];
+    Store *store = open_pair(tmpl, brain, sizeof(brain), userdb, sizeof(userdb));
+    const char *user_args[] = {"settings", "get", "remember.buckets.prefixes", "--scope", "user"};
+    const char *brain_args[] = {"--json",  "settings", "get",
+                                "--scope", "brain",    "remember.plugins.chain_budget"};
+    CmdResult human;
+    CmdResult json;
+
+    if (store == NULL) {
+        return;
+    }
+    store_close(store);
+    human = get_at(brain, userdb, user_args, sizeof(user_args) / sizeof(user_args[0]));
+    json = get_at(brain, userdb, brain_args, sizeof(brain_args) / sizeof(brain_args[0]));
+    ASSERT_EQ_INT(human.exit_code, 0);
+    ASSERT_STREQ(human.err, "");
+    ASSERT_STREQ(human.out, "(unset)\n");
+    cmd_result_free(&human);
+    {
+        const char *value_args[] = {"settings", "get",  "--value",
+                                    "--scope",  "user", "remember.buckets.prefixes"};
+        CmdResult valued =
+            get_at(brain, userdb, value_args, sizeof(value_args) / sizeof(value_args[0]));
+
+        ASSERT_EQ_INT(valued.exit_code, 0);
+        ASSERT_STREQ(valued.err, "");
+        ASSERT_STREQ(valued.out, "(unset)\n");
+        cmd_result_free(&valued);
+    }
+    ASSERT_EQ_INT(json.exit_code, 0);
+    ASSERT_STREQ(json.err, "");
+    ASSERT_STREQ(json.out,
+                 "{\"format\":\"remember-message\",\"version\":1,\"type\":\"setting.get.result\","
+                 "\"data\":{\"setting\":{\"key\":\"remember.plugins.chain_budget\","
+                 "\"type\":\"duration\",\"value\":null,\"from\":\"brain\",\"changed\":false,"
+                 "\"layers\":{\"brain\":null}}}}\n");
+    cmd_result_free(&json);
+    harness_remove_tree(tmpl);
+}
+
+TEST(get_tombstone_is_not_a_value)
+{
+    char tmpl[] = "/tmp/remember-get-tomb-XXXXXX";
+    char brain[REMEMBER_PATH_MAX];
+    char userdb[REMEMBER_PATH_MAX];
+    char err[256];
+    Store *store = open_pair(tmpl, brain, sizeof(brain), userdb, sizeof(userdb));
+    SettingWriteResult wr;
+    const char *args[] = {"settings", "get", "remember.search.candidate_pool"};
+    CmdResult human;
+
+    if (store == NULL) {
+        return;
+    }
+    ASSERT_EQ_INT(set_one(store, userdb, "remember.search.candidate_pool", "400",
+                          SETTING_LAYER_BRAIN, NULL, &wr, err, sizeof(err)),
+                  SETTING_OK);
+    ASSERT_EQ_INT(store_setting_reset(store, userdb, "remember.search.candidate_pool",
+                                      SETTING_LAYER_BRAIN, NULL, &wr, err, sizeof(err)),
+                  SETTING_OK);
+    store_close(store);
+    human = get_at(brain, userdb, args, sizeof(args) / sizeof(args[0]));
+    ASSERT_EQ_INT(human.exit_code, 0);
+    ASSERT_STREQ(human.out, "remember.search.candidate_pool = 200\n"
+                            "  from default\n"
+                            "  user: (unset) · brain: (unset)\n");
+    cmd_result_free(&human);
+    harness_remove_tree(tmpl);
+}
+
+TEST(get_value_is_one_line_and_json_stays_the_object)
+{
+    char tmpl[] = "/tmp/remember-get-val-XXXXXX";
+    char brain[REMEMBER_PATH_MAX];
+    char userdb[REMEMBER_PATH_MAX];
+    Store *store = open_pair(tmpl, brain, sizeof(brain), userdb, sizeof(userdb));
+    const char *plain[] = {"settings", "get", "--value", "remember.search.candidate_pool"};
+    const char *full[] = {"--json", "settings", "get", "remember.search.candidate_pool"};
+    const char *valued[] = {"--json", "settings", "get", "--value",
+                            "remember.search.candidate_pool"};
+    CmdResult human;
+    CmdResult json;
+    CmdResult same;
+
+    if (store == NULL) {
+        return;
+    }
+    store_close(store);
+    human = get_at(brain, userdb, plain, sizeof(plain) / sizeof(plain[0]));
+    json = get_at(brain, userdb, full, sizeof(full) / sizeof(full[0]));
+    same = get_at(brain, userdb, valued, sizeof(valued) / sizeof(valued[0]));
+    ASSERT_EQ_INT(human.exit_code, 0);
+    ASSERT_STREQ(human.out, "200\n");
+    ASSERT_STREQ(human.err, "");
+    ASSERT_EQ_INT(json.exit_code, 0);
+    ASSERT_STREQ(same.out, json.out);
+    ASSERT_STREQ(same.err, "");
+    cmd_result_free(&human);
+    cmd_result_free(&json);
+    cmd_result_free(&same);
+    harness_remove_tree(tmpl);
+}
+
+TEST(get_names_an_actor_id)
+{
+    char tmpl[] = "/tmp/remember-get-actor-XXXXXX";
+    char brain[REMEMBER_PATH_MAX];
+    char userdb[REMEMBER_PATH_MAX];
+    char err[256];
+    char sql[320];
+    Store *store = open_pair(tmpl, brain, sizeof(brain), userdb, sizeof(userdb));
+    SettingWriteResult wr;
+    const char *args[] = {"settings", "get", "remember.search.candidate_pool"};
+    CmdResult human;
+
+    if (store == NULL) {
+        return;
+    }
+    ASSERT_EQ_INT(set_one(store, userdb, "remember.search.candidate_pool", "400",
+                          SETTING_LAYER_BRAIN, k_agent, &wr, err, sizeof(err)),
+                  SETTING_OK);
+    ASSERT_TRUE(snprintf(sql, sizeof(sql),
+                         "UPDATE settings SET updated_at = '%s' WHERE key = "
+                         "'remember.search.candidate_pool';",
+                         k_past) > 0);
+    exec_fixture(brain, sql);
+    store_close(store);
+    human = get_at(brain, userdb, args, sizeof(args) / sizeof(args[0]));
+    ASSERT_EQ_INT(human.exit_code, 0);
+    ASSERT_STREQ(human.out, "remember.search.candidate_pool = 400\n"
+                            "  from brain, set by agent \"bot1\" on 2 Jan 2020 at 03:04\n"
+                            "  user: (unset) · default: 200\n");
+    cmd_result_free(&human);
+    harness_remove_tree(tmpl);
+}
+
+TEST(get_omits_a_stamp_that_is_not_canonical)
+{
+    char tmpl[] = "/tmp/remember-get-bad-XXXXXX";
+    char brain[REMEMBER_PATH_MAX];
+    char userdb[REMEMBER_PATH_MAX];
+    char err[256];
+    Store *store = open_pair(tmpl, brain, sizeof(brain), userdb, sizeof(userdb));
+    SettingWriteResult wr;
+    const char *args[] = {"settings", "get", "remember.search.max_results"};
+    const char *pool[] = {"--json", "settings", "get", "remember.search.candidate_pool"};
+    CmdResult human;
+    CmdResult json;
+
+    if (store == NULL) {
+        return;
+    }
+    ASSERT_EQ_INT(set_one(store, userdb, "remember.search.max_results", "20", SETTING_LAYER_USER,
+                          NULL, &wr, err, sizeof(err)),
+                  SETTING_OK);
+    ASSERT_EQ_INT(set_one(store, userdb, "remember.search.candidate_pool", "400",
+                          SETTING_LAYER_BRAIN, NULL, &wr, err, sizeof(err)),
+                  SETTING_OK);
+    exec_fixture(userdb, "UPDATE settings SET updated_at = 'yesterday' WHERE key = "
+                         "'remember.search.max_results';");
+    exec_fixture(brain, "UPDATE settings SET updated_by = 'nope' WHERE key = "
+                        "'remember.search.candidate_pool';");
+    store_close(store);
+    human = get_at(brain, userdb, args, sizeof(args) / sizeof(args[0]));
+    json = get_at(brain, userdb, pool, sizeof(pool) / sizeof(pool[0]));
+    ASSERT_EQ_INT(human.exit_code, 0);
+    ASSERT_STREQ(human.out, "remember.search.max_results = 20\n"
+                            "  from user, set by human\n"
+                            "  brain: (unset) · default: 20\n");
+    ASSERT_EQ_INT(json.exit_code, 0);
+    ASSERT_STREQ(json.out,
+                 "{\"format\":\"remember-message\",\"version\":1,\"type\":\"setting.get.result\","
+                 "\"data\":{\"setting\":{\"key\":\"remember.search.candidate_pool\","
+                 "\"type\":\"integer\",\"value\":400,\"from\":\"brain\",\"changed\":true,"
+                 "\"layers\":{\"default\":{\"value\":200},\"user\":null,\"brain\":{\"value\":"
+                 "400}}}}}\n");
+    cmd_result_free(&human);
+    cmd_result_free(&json);
+    harness_remove_tree(tmpl);
+}
+
+TEST(get_unknown_offers_one_key)
+{
+    char tmpl[] = "/tmp/remember-get-unk-XXXXXX";
+    char brain[REMEMBER_PATH_MAX];
+    char userdb[REMEMBER_PATH_MAX];
+    Store *store = open_pair(tmpl, brain, sizeof(brain), userdb, sizeof(userdb));
+    const char *short_args[] = {"settings", "get", "candidate_pool"};
+    const char *slash_args[] = {"--json", "settings", "get", "remember:search/candidate_pool"};
+    CmdResult human;
+    CmdResult json;
+
+    if (store == NULL) {
+        return;
+    }
+    store_close(store);
+    human = get_at(brain, userdb, short_args, sizeof(short_args) / sizeof(short_args[0]));
+    json = get_at(brain, userdb, slash_args, sizeof(slash_args) / sizeof(slash_args[0]));
+    ASSERT_EQ_INT(human.exit_code, 2);
+    ASSERT_STREQ(human.out, "");
+    ASSERT_STREQ(human.err, "remember: unknown setting \"candidate_pool\". Did you mean "
+                            "\"remember.search.candidate_pool\"? Run 'remember settings list' to "
+                            "see all settings.\n");
+    ASSERT_EQ_INT(json.exit_code, 2);
+    ASSERT_STREQ(json.err, "");
+    ASSERT_STREQ(json.out,
+                 "{\"format\":\"remember-message\",\"version\":1,\"type\":\"setting.get.result\","
+                 "\"error\":{\"code\":\"setting_unknown\",\"message\":\"unknown setting "
+                 "\\\"remember:search/candidate_pool\\\". Did you mean "
+                 "\\\"remember.search.candidate_pool\\\"?\",\"fix\":\"Run 'remember settings list' "
+                 "to see all settings.\",\"retryable\":false}}\n");
+    cmd_result_free(&human);
+    cmd_result_free(&json);
+    harness_remove_tree(tmpl);
+}
+
+TEST(get_unknown_without_one_candidate_uses_the_list_fix)
+{
+    char tmpl[] = "/tmp/remember-get-c03-XXXXXX";
+    char brain[REMEMBER_PATH_MAX];
+    char userdb[REMEMBER_PATH_MAX];
+    Store *store = open_pair(tmpl, brain, sizeof(brain), userdb, sizeof(userdb));
+    const char *args[] = {"settings", "get", "remember.search.hybrid"};
+    const char *far[] = {"settings", "get", "remember.search.max_resXXXX"};
+    CmdResult human;
+    CmdResult none;
+
+    if (store == NULL) {
+        return;
+    }
+    store_close(store);
+    human = get_at(brain, userdb, args, sizeof(args) / sizeof(args[0]));
+    none = get_at(brain, userdb, far, sizeof(far) / sizeof(far[0]));
+    ASSERT_EQ_INT(human.exit_code, 2);
+    ASSERT_STREQ(human.err, "remember: unknown setting \"remember.search.hybrid\". Run 'remember "
+                            "settings list' to see all settings.\n");
+    ASSERT_EQ_INT(none.exit_code, 2);
+    ASSERT_STREQ(none.err, "remember: unknown setting \"remember.search.max_resXXXX\". Run "
+                           "'remember settings list' to see all settings.\n");
+    ASSERT_STR_NOT_CONTAINS(human.err, "Did you mean");
+    ASSERT_STR_NOT_CONTAINS(none.err, "Did you mean");
+    cmd_result_free(&human);
+    cmd_result_free(&none);
+    harness_remove_tree(tmpl);
+}
+
+TEST(get_plugin_budget_uses_the_manifest_fix)
+{
+    char tmpl[] = "/tmp/remember-get-plug-XXXXXX";
+    char brain[REMEMBER_PATH_MAX];
+    char userdb[REMEMBER_PATH_MAX];
+    Store *store = open_pair(tmpl, brain, sizeof(brain), userdb, sizeof(userdb));
+    const char *budget[] = {"settings", "get", "plugin.foo.budget"};
+    const char *grace[] = {"--json", "settings", "get", "plugin.foo.cold_start_grace"};
+    CmdResult human;
+    CmdResult json;
+
+    if (store == NULL) {
+        return;
+    }
+    store_close(store);
+    human = get_at(brain, userdb, budget, sizeof(budget) / sizeof(budget[0]));
+    json = get_at(brain, userdb, grace, sizeof(grace) / sizeof(grace[0]));
+    ASSERT_EQ_INT(human.exit_code, 2);
+    ASSERT_STREQ(human.err, "remember: unknown setting \"plugin.foo.budget\". Budgets and "
+                            "cold-start grace are set by the plugin's manifest. Raise "
+                            "remember.plugins.chain_budget instead.\n");
+    ASSERT_EQ_INT(json.exit_code, 2);
+    ASSERT_STREQ(json.err, "");
+    ASSERT_STR_CONTAINS(json.out, "\"code\":\"setting_unknown\"");
+    ASSERT_STR_CONTAINS(json.out,
+                        "\"message\":\"unknown setting \\\"plugin.foo.cold_start_grace\\\".\"");
+    ASSERT_STR_CONTAINS(json.out, "Raise remember.plugins.chain_budget instead.");
+    cmd_result_free(&human);
+    cmd_result_free(&json);
+    harness_remove_tree(tmpl);
+}
+
+TEST(get_usage_rejects_a_bad_invocation)
+{
+    char tmpl[] = "/tmp/remember-get-use-XXXXXX";
+    char brain[REMEMBER_PATH_MAX];
+    char userdb[REMEMBER_PATH_MAX];
+    Store *store = open_pair(tmpl, brain, sizeof(brain), userdb, sizeof(userdb));
+    const char *bare[] = {"settings"};
+    const char *missing[] = {"settings", "get"};
+    const char *two[] = {"settings", "get", "remember.search.candidate_pool", "extra"};
+    const char *bogus[] = {"--json", "settings", "get", "--bogus"};
+    const char *scope[] = {"settings", "get", "--scope", "all", "remember.search.candidate_pool"};
+    const char *dup[] = {"settings", "get", "--value", "--value", "remember.search.candidate_pool"};
+    const char *noscope[] = {"settings", "get", "--scope"};
+    CmdResult got;
+
+    if (store == NULL) {
+        return;
+    }
+    store_close(store);
+    got = get_at(brain, userdb, bare, sizeof(bare) / sizeof(bare[0]));
+    ASSERT_EQ_INT(got.exit_code, 1);
+    ASSERT_STREQ(got.err, "remember: settings takes 'get'\n");
+    cmd_result_free(&got);
+    got = get_at(brain, userdb, missing, sizeof(missing) / sizeof(missing[0]));
+    ASSERT_EQ_INT(got.exit_code, 1);
+    ASSERT_STREQ(got.err, "remember: settings get requires a key\n");
+    cmd_result_free(&got);
+    got = get_at(brain, userdb, two, sizeof(two) / sizeof(two[0]));
+    ASSERT_EQ_INT(got.exit_code, 1);
+    ASSERT_STREQ(got.err, "remember: settings get takes one key\n");
+    cmd_result_free(&got);
+    got = get_at(brain, userdb, bogus, sizeof(bogus) / sizeof(bogus[0]));
+    ASSERT_EQ_INT(got.exit_code, 1);
+    ASSERT_STREQ(got.err, "");
+    ASSERT_STR_CONTAINS(got.out, "\"type\":\"setting.get.result\"");
+    ASSERT_STR_CONTAINS(got.out, "\"message\":\"unknown option '--bogus'\"");
+    cmd_result_free(&got);
+    got = get_at(brain, userdb, scope, sizeof(scope) / sizeof(scope[0]));
+    ASSERT_EQ_INT(got.exit_code, 1);
+    ASSERT_STREQ(got.err, "remember: invalid --scope (use brain or user)\n");
+    cmd_result_free(&got);
+    got = get_at(brain, userdb, dup, sizeof(dup) / sizeof(dup[0]));
+    ASSERT_EQ_INT(got.exit_code, 1);
+    ASSERT_STREQ(got.err, "remember: duplicate --value\n");
+    cmd_result_free(&got);
+    got = get_at(brain, userdb, noscope, sizeof(noscope) / sizeof(noscope[0]));
+    ASSERT_EQ_INT(got.exit_code, 1);
+    ASSERT_STREQ(got.err, "remember: missing value for --scope\n");
+    cmd_result_free(&got);
+    {
+        const char *dupscope[] = {"settings",
+                                  "get",
+                                  "--scope",
+                                  "user",
+                                  "--scope",
+                                  "user",
+                                  "remember.search.candidate_pool"};
+        const char *equals[] = {"settings", "get", "--scope=user",
+                                "remember.search.candidate_pool"};
+        const char *end[] = {"settings", "get", "--", "--value"};
+
+        got = get_at(brain, userdb, dupscope, sizeof(dupscope) / sizeof(dupscope[0]));
+        ASSERT_EQ_INT(got.exit_code, 1);
+        ASSERT_STREQ(got.err, "remember: duplicate --scope\n");
+        cmd_result_free(&got);
+        got = get_at(brain, userdb, equals, sizeof(equals) / sizeof(equals[0]));
+        ASSERT_EQ_INT(got.exit_code, 1);
+        ASSERT_STREQ(got.err, "remember: unknown option '--scope=user'\n");
+        cmd_result_free(&got);
+        got = get_at(brain, userdb, end, sizeof(end) / sizeof(end[0]));
+        ASSERT_EQ_INT(got.exit_code, 2);
+        ASSERT_STREQ(got.err, "remember: unknown setting \"--value\". Run 'remember settings list' "
+                              "to see all settings.\n");
+        ASSERT_STR_NOT_CONTAINS(got.err, "Did you mean");
+        cmd_result_free(&got);
+    }
+    harness_remove_tree(tmpl);
+}
+
+TEST(get_help_names_the_command)
+{
+    char tmpl[] = "/tmp/remember-get-help-XXXXXX";
+    char brain[REMEMBER_PATH_MAX];
+    char userdb[REMEMBER_PATH_MAX];
+    Store *store = open_pair(tmpl, brain, sizeof(brain), userdb, sizeof(userdb));
+    const char *args[] = {"settings", "--help"};
+    CmdResult got;
+
+    if (store == NULL) {
+        return;
+    }
+    store_close(store);
+    got = get_at(brain, userdb, args, sizeof(args) / sizeof(args[0]));
+    ASSERT_EQ_INT(got.exit_code, 0);
+    ASSERT_STREQ(got.err, "");
+    ASSERT_STR_CONTAINS(got.out, "Show one setting");
+    ASSERT_STR_CONTAINS(got.out, "remember settings get KEY");
+    cmd_result_free(&got);
+    harness_remove_tree(tmpl);
+}
+
+TEST(get_stamp_that_does_not_fit_is_a_store_error)
+{
+    char tmpl[] = "/tmp/remember-get-fit-XXXXXX";
+    char brain[REMEMBER_PATH_MAX];
+    char userdb[REMEMBER_PATH_MAX];
+    char err[256];
+    char by[97];
+    char sql[256];
+    Store *store = open_pair(tmpl, brain, sizeof(brain), userdb, sizeof(userdb));
+    SettingWriteResult wr;
+    const char *user_args[] = {"settings", "get", "remember.search.max_results"};
+    const char *brain_args[] = {"settings", "get", "remember.search.candidate_pool"};
+    CmdResult user;
+    CmdResult brain_got;
+
+    if (store == NULL) {
+        return;
+    }
+    memset(by, 'a', sizeof(by) - 1U);
+    by[sizeof(by) - 1U] = '\0';
+    ASSERT_EQ_INT(set_one(store, userdb, "remember.search.max_results", "20", SETTING_LAYER_USER,
+                          NULL, &wr, err, sizeof(err)),
+                  SETTING_OK);
+    ASSERT_EQ_INT(set_one(store, userdb, "remember.search.candidate_pool", "400",
+                          SETTING_LAYER_BRAIN, NULL, &wr, err, sizeof(err)),
+                  SETTING_OK);
+    ASSERT_TRUE(snprintf(sql, sizeof(sql),
+                         "UPDATE settings SET updated_by = '%s' WHERE key = "
+                         "'remember.search.max_results';",
+                         by) > 0);
+    exec_fixture(userdb, sql);
+    ASSERT_TRUE(snprintf(sql, sizeof(sql),
+                         "UPDATE settings SET updated_by = '%s' WHERE key = "
+                         "'remember.search.candidate_pool';",
+                         by) > 0);
+    exec_fixture(brain, sql);
+    store_close(store);
+    user = get_at(brain, userdb, user_args, sizeof(user_args) / sizeof(user_args[0]));
+    brain_got = get_at(brain, userdb, brain_args, sizeof(brain_args) / sizeof(brain_args[0]));
+    ASSERT_EQ_INT(user.exit_code, 1);
+    ASSERT_STREQ(user.out, "");
+    ASSERT_STREQ(user.err, "remember: internal error\n");
+    ASSERT_EQ_INT(brain_got.exit_code, 1);
+    ASSERT_STREQ(brain_got.err, "remember: internal error\n");
+    cmd_result_free(&user);
+    cmd_result_free(&brain_got);
+    harness_remove_tree(tmpl);
+}
+
+TEST(get_reports_home_only_after_the_key_is_known)
+{
+    char tmpl[] = "/tmp/remember-get-home-XXXXXX";
+    char brain[REMEMBER_PATH_MAX];
+    char userdb[REMEMBER_PATH_MAX];
+    char dir[REMEMBER_PATH_MAX];
+    Store *store = open_pair(tmpl, brain, sizeof(brain), userdb, sizeof(userdb));
+    EnvHold hold;
+    const char *known[] = {"settings", "get", "remember.search.candidate_pool"};
+    const char *unknown[] = {"settings", "get", "remember.search.hybrid"};
+    const char *dir_args[] = {"--json", "settings", "get", "remember.search.candidate_pool"};
+    CmdResult got;
+
+    if (store == NULL) {
+        return;
+    }
+    store_close(store);
+    env_hold(&hold);
+    ASSERT_EQ_INT(unsetenv("HOME"), 0);
+    ASSERT_EQ_INT(unsetenv("XDG_DATA_HOME"), 0);
+    ASSERT_EQ_INT(unsetenv("REMEMBER_USER_DB"), 0);
+    got = run_remember(brain, unknown, sizeof(unknown) / sizeof(unknown[0]), NULL);
+    ASSERT_EQ_INT(got.exit_code, 2);
+    ASSERT_STR_CONTAINS(got.err, "unknown setting \"remember.search.hybrid\"");
+    ASSERT_STR_NOT_CONTAINS(got.err, "HOME");
+    cmd_result_free(&got);
+    got = run_remember(brain, known, sizeof(known) / sizeof(known[0]), NULL);
+    ASSERT_EQ_INT(got.exit_code, 1);
+    ASSERT_STREQ(got.err, "remember: HOME is not set\n");
+    cmd_result_free(&got);
+    env_release(&hold);
+    ASSERT_TRUE(snprintf(dir, sizeof(dir), "%s/not-a-file", tmpl) > 0);
+    ASSERT_EQ_INT(mkdir(dir, 0700), 0);
+    env_hold(&hold);
+    ASSERT_EQ_INT(setenv("REMEMBER_USER_DB", dir, 1), 0);
+    got = run_remember(brain, dir_args, sizeof(dir_args) / sizeof(dir_args[0]), NULL);
+    env_release(&hold);
+    ASSERT_EQ_INT(got.exit_code, 1);
+    ASSERT_STREQ(got.err, "");
+    ASSERT_STR_CONTAINS(got.out, "\"code\":\"database\"");
+    ASSERT_STR_CONTAINS(got.out, "cannot open database");
+    cmd_result_free(&got);
+    harness_remove_tree(tmpl);
+}
+
+TEST(get_rejects_a_value_that_is_not_json)
+{
+    char tmpl[] = "/tmp/remember-get-json-XXXXXX";
+    char brain[REMEMBER_PATH_MAX];
+    char userdb[REMEMBER_PATH_MAX];
+    char err[256];
+    Store *store = open_pair(tmpl, brain, sizeof(brain), userdb, sizeof(userdb));
+    SettingWriteResult wr;
+    const char *args[] = {"settings", "get", "remember.search.candidate_pool"};
+    CmdResult got;
+
+    if (store == NULL) {
+        return;
+    }
+    ASSERT_EQ_INT(set_one(store, userdb, "remember.search.candidate_pool", "400",
+                          SETTING_LAYER_BRAIN, NULL, &wr, err, sizeof(err)),
+                  SETTING_OK);
+    exec_fixture(brain, "UPDATE settings SET value = 'nope' WHERE key = "
+                        "'remember.search.candidate_pool';");
+    store_close(store);
+    got = get_at(brain, userdb, args, sizeof(args) / sizeof(args[0]));
+    ASSERT_EQ_INT(got.exit_code, 1);
+    ASSERT_STREQ(got.out, "");
+    ASSERT_STREQ(got.err, "remember: internal error\n");
+    cmd_result_free(&got);
+    harness_remove_tree(tmpl);
+}
+
+/* The columns are NOT NULL, so this is the hand edit the schema does allow. */
+TEST(get_rejects_a_nul_or_overlong_stamp)
+{
+    char tmpl[] = "/tmp/remember-get-nul-XXXXXX";
+    char brain[REMEMBER_PATH_MAX];
+    char userdb[REMEMBER_PATH_MAX];
+    char err[256];
+    Store *store = open_pair(tmpl, brain, sizeof(brain), userdb, sizeof(userdb));
+    SettingWriteResult wr;
+    const char *args[] = {"settings", "get", "remember.search.max_results"};
+    const char *sqls[] = {
+        "UPDATE settings SET updated_by = 'ab' || char(0) || 'c', "
+        "updated_at = '2020-01-02T03:04:00.000Z' WHERE key = 'remember.search.max_results';",
+        "UPDATE settings SET updated_by = '{\"kind\":\"human\",\"id\":null}', "
+        "updated_at = '2020-01-02T03:04:00.000Z' || char(0) WHERE key = "
+        "'remember.search.max_results';",
+        "UPDATE settings SET updated_by = '{\"kind\":\"human\",\"id\":null}', "
+        "updated_at = '2020-01-02T03:04:00.000Zxxxxxxxx' WHERE key = "
+        "'remember.search.max_results';",
+    };
+    size_t i = 0;
+
+    if (store == NULL) {
+        return;
+    }
+    ASSERT_EQ_INT(set_one(store, userdb, "remember.search.max_results", "20", SETTING_LAYER_USER,
+                          NULL, &wr, err, sizeof(err)),
+                  SETTING_OK);
+    store_close(store);
+    for (i = 0; i < sizeof(sqls) / sizeof(sqls[0]); i++) {
+        CmdResult got;
+
+        exec_fixture(userdb, sqls[i]);
+        got = get_at(brain, userdb, args, sizeof(args) / sizeof(args[0]));
+        ASSERT_EQ_INT(got.exit_code, 1);
+        ASSERT_STREQ(got.out, "");
+        ASSERT_STREQ(got.err, "remember: internal error\n");
+        cmd_result_free(&got);
+    }
+    harness_remove_tree(tmpl);
+}
+
+/* 1900 is not a leap year and 2000 is. A shape-valid 31 Feb must not print a date. */
+TEST(get_shows_a_leap_day_and_omits_an_impossible_date)
+{
+    char tmpl[] = "/tmp/remember-get-cal-XXXXXX";
+    char brain[REMEMBER_PATH_MAX];
+    char userdb[REMEMBER_PATH_MAX];
+    char err[256];
+    char sql[160];
+    char expect[192];
+    Store *store = open_pair(tmpl, brain, sizeof(brain), userdb, sizeof(userdb));
+    SettingWriteResult wr;
+    const char *args[] = {"settings", "get", "remember.search.max_results"};
+    const char *json_args[] = {"--json", "settings", "get", "remember.search.max_results"};
+    struct {
+        const char *stamp;
+        const char *date;
+    } cases[] = {
+        {"2026-02-31T03:04:00.000Z", NULL},
+        {"2026-02-29T03:04:00.000Z", NULL},
+        {"2026-04-31T03:04:00.000Z", NULL},
+        {"1900-02-29T03:04:00.000Z", NULL},
+        {"2024-02-29T03:04:00.000Z", "29 Feb 2024 at 03:04"},
+        {"2000-02-29T03:04:00.000Z", "29 Feb 2000 at 03:04"},
+    };
+    size_t i = 0;
+
+    if (store == NULL) {
+        return;
+    }
+    ASSERT_EQ_INT(set_one(store, userdb, "remember.search.max_results", "20", SETTING_LAYER_USER,
+                          NULL, &wr, err, sizeof(err)),
+                  SETTING_OK);
+    store_close(store);
+    for (i = 0; i < sizeof(cases) / sizeof(cases[0]); i++) {
+        CmdResult human;
+        CmdResult json;
+
+        ASSERT_TRUE(snprintf(sql, sizeof(sql),
+                             "UPDATE settings SET updated_at = '%s' WHERE key = "
+                             "'remember.search.max_results';",
+                             cases[i].stamp) > 0);
+        exec_fixture(userdb, sql);
+        human = get_at(brain, userdb, args, sizeof(args) / sizeof(args[0]));
+        json = get_at(brain, userdb, json_args, sizeof(json_args) / sizeof(json_args[0]));
+        if (cases[i].date == NULL) {
+            ASSERT_TRUE(snprintf(expect, sizeof(expect),
+                                 "remember.search.max_results = 20\n"
+                                 "  from user, set by human\n"
+                                 "  brain: (unset) · default: 20\n") > 0);
+        } else {
+            ASSERT_TRUE(snprintf(expect, sizeof(expect),
+                                 "remember.search.max_results = 20\n"
+                                 "  from user, set by human on %s\n"
+                                 "  brain: (unset) · default: 20\n",
+                                 cases[i].date) > 0);
+        }
+        ASSERT_EQ_INT(human.exit_code, 0);
+        ASSERT_STREQ(human.err, "");
+        ASSERT_STREQ(human.out, expect);
+        ASSERT_EQ_INT(json.exit_code, 0);
+        ASSERT_STREQ(json.err, "");
+        ASSERT_STR_CONTAINS(json.out, "\"updated_by\":{\"kind\":\"human\",\"id\":null}");
+        if (cases[i].date == NULL) {
+            ASSERT_STR_NOT_CONTAINS(json.out, "updated_at");
+            ASSERT_STR_NOT_CONTAINS(human.out, " on ");
+        } else {
+            ASSERT_STR_CONTAINS(json.out, cases[i].stamp);
+        }
+        cmd_result_free(&human);
+        cmd_result_free(&json);
+    }
+    harness_remove_tree(tmpl);
+}
+
+TEST(get_credential_helper_omits_a_disallowed_brain_row)
+{
+    char tmpl[] = "/tmp/remember-get-cred-XXXXXX";
+    char brain[REMEMBER_PATH_MAX];
+    char userdb[REMEMBER_PATH_MAX];
+    Store *store = open_pair(tmpl, brain, sizeof(brain), userdb, sizeof(userdb));
+    const char *args[] = {"settings", "get", "remember.sync.credential_helper"};
+    const char *json_args[] = {"--json", "settings", "get", "remember.sync.credential_helper"};
+    CmdResult human;
+    CmdResult json;
+
+    if (store == NULL) {
+        return;
+    }
+    exec_fixture(brain, "INSERT INTO settings (key, value, updated_by, updated_at, device_id, "
+                        "version_vector, deleted_at, change_seq) VALUES "
+                        "('remember.sync.credential_helper','\"evil\"',"
+                        "'{\"kind\":\"human\",\"id\":null}','2030-01-01T00:00:00.000Z','peer',"
+                        "'{}',NULL,1)");
+    store_close(store);
+    human = get_at(brain, userdb, args, sizeof(args) / sizeof(args[0]));
+    json = get_at(brain, userdb, json_args, sizeof(json_args) / sizeof(json_args[0]));
+    ASSERT_EQ_INT(human.exit_code, 0);
+    ASSERT_STREQ(human.err, "");
+    ASSERT_STREQ(human.out, "remember.sync.credential_helper = (unset)\n"
+                            "  from default\n"
+                            "  user: (unset)\n");
+    ASSERT_STR_NOT_CONTAINS(human.out, "evil");
+    ASSERT_EQ_INT(json.exit_code, 0);
+    ASSERT_STREQ(json.err, "");
+    ASSERT_STREQ(json.out,
+                 "{\"format\":\"remember-message\",\"version\":1,\"type\":\"setting.get.result\","
+                 "\"data\":{\"setting\":{\"key\":\"remember.sync.credential_helper\","
+                 "\"type\":\"string\",\"value\":null,\"from\":\"default\",\"changed\":false,"
+                 "\"layers\":{\"default\":null,\"user\":null}}}}\n");
+    ASSERT_STR_NOT_CONTAINS(json.out, "evil");
+    ASSERT_STR_NOT_CONTAINS(json.out, "brain");
+    cmd_result_free(&human);
+    cmd_result_free(&json);
+    harness_remove_tree(tmpl);
+}
+
+TEST(get_folds_a_hyphen_and_ends_options)
+{
+    char tmpl[] = "/tmp/remember-get-fold-XXXXXX";
+    char brain[REMEMBER_PATH_MAX];
+    char userdb[REMEMBER_PATH_MAX];
+    Store *store = open_pair(tmpl, brain, sizeof(brain), userdb, sizeof(userdb));
+    const char *fold[] = {"settings", "get", "remember.search.candidate-pool"};
+    const char *end[] = {"settings", "get", "--", "remember.search.candidate_pool"};
+    const char *value[] = {"settings", "get", "--value", "--", "remember.search.candidate_pool"};
+    CmdResult folded;
+    CmdResult stopped;
+    CmdResult one;
+
+    if (store == NULL) {
+        return;
+    }
+    store_close(store);
+    folded = get_at(brain, userdb, fold, sizeof(fold) / sizeof(fold[0]));
+    stopped = get_at(brain, userdb, end, sizeof(end) / sizeof(end[0]));
+    one = get_at(brain, userdb, value, sizeof(value) / sizeof(value[0]));
+    ASSERT_EQ_INT(folded.exit_code, 0);
+    ASSERT_STREQ(folded.err, "");
+    ASSERT_STREQ(folded.out, "remember.search.candidate_pool = 200\n"
+                             "  from default\n"
+                             "  user: (unset) · brain: (unset)\n");
+    ASSERT_STREQ(stopped.out, folded.out);
+    ASSERT_EQ_INT(stopped.exit_code, 0);
+    ASSERT_EQ_INT(one.exit_code, 0);
+    ASSERT_STREQ(one.err, "");
+    ASSERT_STREQ(one.out, "200\n");
+    cmd_result_free(&folded);
+    cmd_result_free(&stopped);
+    cmd_result_free(&one);
+    harness_remove_tree(tmpl);
+}
+
+TEST(get_quotes_the_typed_key)
+{
+    char tmpl[] = "/tmp/remember-get-quote-XXXXXX";
+    char brain[REMEMBER_PATH_MAX];
+    char userdb[REMEMBER_PATH_MAX];
+    char long_key[301];
+    char expect[512];
+    char nl_key[] = {'a', '\n', 'b', '\0'};
+    char esc_key[] = {'a', '\033', 'b', '\0'};
+    Store *store = open_pair(tmpl, brain, sizeof(brain), userdb, sizeof(userdb));
+    const char *long_args[] = {"settings", "get", long_key};
+    const char *nl_args[] = {"settings", "get", nl_key};
+    const char *esc_args[] = {"settings", "get", esc_key};
+    const char *nl_json[] = {"--json", "settings", "get", nl_key};
+    const char *esc_json[] = {"--json", "settings", "get", esc_key};
+    CmdResult got;
+
+    if (store == NULL) {
+        return;
+    }
+    store_close(store);
+    memset(long_key, 'a', sizeof(long_key) - 1U);
+    long_key[sizeof(long_key) - 1U] = '\0';
+    ASSERT_TRUE(snprintf(expect, sizeof(expect),
+                         "remember: unknown setting \"%s\". Run 'remember settings list' to see "
+                         "all settings.\n",
+                         long_key) > 0);
+    got = get_at(brain, userdb, long_args, sizeof(long_args) / sizeof(long_args[0]));
+    ASSERT_EQ_INT(got.exit_code, 2);
+    ASSERT_STREQ(got.out, "");
+    ASSERT_STREQ(got.err, expect);
+    cmd_result_free(&got);
+    got = get_at(brain, userdb, nl_args, sizeof(nl_args) / sizeof(nl_args[0]));
+    ASSERT_EQ_INT(got.exit_code, 2);
+    ASSERT_STREQ(got.err, "remember: unknown setting \"a?b\". Run 'remember settings list' to see "
+                          "all settings.\n");
+    cmd_result_free(&got);
+    got = get_at(brain, userdb, esc_args, sizeof(esc_args) / sizeof(esc_args[0]));
+    ASSERT_EQ_INT(got.exit_code, 2);
+    ASSERT_STREQ(got.err, "remember: unknown setting \"a?b\". Run 'remember settings list' to see "
+                          "all settings.\n");
+    cmd_result_free(&got);
+    got = get_at(brain, userdb, nl_json, sizeof(nl_json) / sizeof(nl_json[0]));
+    ASSERT_EQ_INT(got.exit_code, 2);
+    ASSERT_STREQ(got.err, "");
+    ASSERT_STR_CONTAINS(got.out, "unknown setting \\\"a\\nb\\\".");
+    ASSERT_EQ_INT((int)(strchr(got.out, '\n') - got.out), (int)strlen(got.out) - 1);
+    cmd_result_free(&got);
+    got = get_at(brain, userdb, esc_json, sizeof(esc_json) / sizeof(esc_json[0]));
+    ASSERT_EQ_INT(got.exit_code, 2);
+    ASSERT_STR_CONTAINS(got.out, "unknown setting \\\"a\\u001bb\\\".");
+    cmd_result_free(&got);
+    harness_remove_tree(tmpl);
+}
+
 // NOLINTEND(concurrency-mt-unsafe,android-cloexec-fopen)
 
 void register_settings_tests(void)
@@ -3781,5 +4967,31 @@ void register_settings_tests(void)
     RUN_TEST(pass_missing_on_path_lookup_is_sync_credential_unavailable);
     RUN_TEST(out_of_memory_while_naming_the_helper);
     RUN_TEST(brain_row_does_not_pick_the_credential_helper);
+    RUN_TEST(get_reports_the_winning_layer_and_every_other_layer);
+    RUN_TEST(format_when_prints_the_locked_date_and_the_utc_fallback);
+    RUN_TEST(suggestion_names_one_key_or_nothing);
+    RUN_TEST(get_default_only_names_every_allowed_layer);
+    RUN_TEST(get_duration_quotes_the_text_and_adds_value_ms);
+    RUN_TEST(get_prefixes_join_with_a_space);
+    RUN_TEST(get_string_with_no_compiled_default_is_null);
+    RUN_TEST(get_brain_beats_user_and_scope_hides_the_other_layers);
+    RUN_TEST(get_scope_on_an_empty_layer_prints_unset);
+    RUN_TEST(get_tombstone_is_not_a_value);
+    RUN_TEST(get_value_is_one_line_and_json_stays_the_object);
+    RUN_TEST(get_names_an_actor_id);
+    RUN_TEST(get_omits_a_stamp_that_is_not_canonical);
+    RUN_TEST(get_unknown_offers_one_key);
+    RUN_TEST(get_unknown_without_one_candidate_uses_the_list_fix);
+    RUN_TEST(get_plugin_budget_uses_the_manifest_fix);
+    RUN_TEST(get_usage_rejects_a_bad_invocation);
+    RUN_TEST(get_help_names_the_command);
+    RUN_TEST(get_stamp_that_does_not_fit_is_a_store_error);
+    RUN_TEST(get_rejects_a_nul_or_overlong_stamp);
+    RUN_TEST(get_reports_home_only_after_the_key_is_known);
+    RUN_TEST(get_rejects_a_value_that_is_not_json);
+    RUN_TEST(get_shows_a_leap_day_and_omits_an_impossible_date);
+    RUN_TEST(get_credential_helper_omits_a_disallowed_brain_row);
+    RUN_TEST(get_folds_a_hyphen_and_ends_options);
+    RUN_TEST(get_quotes_the_typed_key);
 }
 // NOLINTEND(cppcoreguidelines-avoid-magic-numbers,readability-magic-numbers)

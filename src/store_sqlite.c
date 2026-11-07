@@ -10243,6 +10243,55 @@ static SettingStatus begin_brain_tx(Store *s, char *err, size_t errlen)
     return SETTING_OK;
 }
 
+/* updated_by / updated_at for one live row. A value that does not fit, or that
+   contains a NUL, fails the read. Truncating it would hide a hand edit. */
+static int load_stamp(sqlite3 *db, const char *key, char *actor, size_t actor_cap, char *at,
+                      size_t at_cap, char *err, size_t errlen)
+{
+    sqlite3_stmt *stmt = NULL;
+    int rc = 0;
+    const unsigned char *by_text = NULL;
+    const unsigned char *at_text = NULL;
+    int by_n = 0;
+    int at_n = 0;
+
+    actor[0] = '\0';
+    at[0] = '\0';
+    if (sqlite3_prepare_v2(db, "SELECT updated_by, updated_at FROM settings WHERE key = ?1;", -1,
+                           &stmt, NULL) != SQLITE_OK) {
+        set_errf(err, errlen, "sqlite", sqlite3_errmsg(db));
+        return -1;
+    }
+    (void)sqlite3_bind_text(stmt, 1, key, -1, SQLITE_TRANSIENT);
+    rc = sqlite3_step(stmt);
+    if (rc == SQLITE_DONE) {
+        (void)sqlite3_finalize(stmt);
+        return 0;
+    }
+    if (rc != SQLITE_ROW) {
+        set_errf(err, errlen, "sqlite", sqlite3_errmsg(db));
+        (void)sqlite3_finalize(stmt);
+        return -1;
+    }
+    by_text = sqlite3_column_text(stmt, 0);
+    at_text = sqlite3_column_text(stmt, 1);
+    by_n = sqlite3_column_bytes(stmt, 0);
+    at_n = sqlite3_column_bytes(stmt, 1);
+    if (by_text == NULL || at_text == NULL || by_n < 0 || at_n < 0 || (size_t)by_n >= actor_cap ||
+        (size_t)at_n >= at_cap || (size_t)by_n != strlen((const char *)by_text) ||
+        (size_t)at_n != strlen((const char *)at_text)) {
+        (void)sqlite3_finalize(stmt);
+        set_err(err, errlen, "internal error");
+        return SETTING_ERR_STORE;
+    }
+    memcpy(actor, by_text, (size_t)by_n);
+    actor[(size_t)by_n] = '\0';
+    memcpy(at, at_text, (size_t)at_n);
+    at[(size_t)at_n] = '\0';
+    (void)sqlite3_finalize(stmt);
+    return 0;
+}
+
 static void fill_layer_json(const char *src, char *dest, size_t cap, bool *live)
 {
     size_t n = 0;
@@ -10415,6 +10464,14 @@ SettingStatus store_setting_read(Store *brain, const char *user_db, const char *
             out->status = SETTING_ERR_STORE;
             return SETTING_ERR_STORE;
         }
+        if (user_value != NULL &&
+            load_stamp(udb, spec->key, out->user_by, sizeof(out->user_by), out->user_at,
+                       sizeof(out->user_at), err, errlen) != 0) {
+            free(user_value);
+            (void)sqlite3_close(udb);
+            out->status = SETTING_ERR_STORE;
+            return SETTING_ERR_STORE;
+        }
         (void)sqlite3_close(udb);
     }
     if (load_brain_row(brain->db, spec->key, &found, &live, &brain_value, &vector, err, errlen,
@@ -10429,6 +10486,12 @@ SettingStatus store_setting_read(Store *brain, const char *user_db, const char *
     if (!live) {
         free(brain_value);
         brain_value = NULL;
+    } else if (load_stamp(brain->db, spec->key, out->brain_by, sizeof(out->brain_by), out->brain_at,
+                          sizeof(out->brain_at), err, errlen) != 0) {
+        free(user_value);
+        free(brain_value);
+        out->status = SETTING_ERR_STORE;
+        return SETTING_ERR_STORE;
     }
     fill_layer_json(user_value, out->user_value, sizeof(out->user_value), &out->user_live);
     fill_layer_json(brain_value, out->brain_value, sizeof(out->brain_value), &out->brain_live);

@@ -25,6 +25,7 @@ typedef enum {
     CLI_CMD_DEVICE,
     CLI_CMD_REPAIR,
     CLI_CMD_BRAIN,
+    CLI_CMD_SETTINGS,
     CLI_CMD_UNKNOWN
 } CliCommand;
 

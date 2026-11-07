@@ -80,6 +80,7 @@ static const char *const k_error_codes[DIAG_CODE_COUNT] = {
     [DIAG_SCHEMA_TOO_NEW] = "schema_too_new",
     [DIAG_INVALID_ARGUMENT] = "invalid_argument",
     [DIAG_SYNC_CREDENTIAL_UNAVAILABLE] = "sync_credential_unavailable",
+    [DIAG_SETTING_UNKNOWN] = "setting_unknown",
 };
 
 /* error.fix per code (decision:plan21-error-fix-drafts-c42). The SQLite codes
@@ -118,10 +119,13 @@ static const char *const k_fix[DIAG_CODE_COUNT] = {
     [DIAG_SCHEMA_TOO_NEW] = "Upgrade remember to make changes.",
     /* Draft, not approved copy. Plan 21 stage 2b. */
     [DIAG_INVALID_ARGUMENT] = "Run 'remember list' again without --cursor.",
-    /* Locked, 007 ST-3.6. */
+    /* Locked, 007 ST-3.6. One sentence wrapped at the column limit. */
     [DIAG_SYNC_CREDENTIAL_UNAVAILABLE] =
-        "Check the helper, or set remember.sync.credential_helper to env and export "
-        "REMEMBER_SYNC_TOKEN.",
+        // NOLINTNEXTLINE(bugprone-suspicious-missing-comma)
+    "Check the helper, or set remember.sync.credential_helper to env and export "
+    "REMEMBER_SYNC_TOKEN.",
+    /* Locked, C-03. */
+    [DIAG_SETTING_UNKNOWN] = "Run 'remember settings list' to see all settings.",
 };
 
 /* cppcheck-suppress staticFunction ; public API (diag.h); remember_run */

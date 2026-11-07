@@ -58,6 +58,7 @@ static void print_general_help(void)
         "  conflict    Resolve a merge conflict (accept)\n"
         "  device      Print the device id, or mint one with 'new'\n"
         "  brain       Replace the brain id\n"
+        "  settings    Show one setting\n"
         "  help        Show this help (help <command> for a command)\n"
         "  version     Show version\n"
         "\n"
@@ -332,6 +333,12 @@ static void print_command_help(CliCommand topic)
         (void)fprintf(out, "--json type is brain.new_id.result.\n");
         (void)fprintf(out, "data is {brain_id, previous_brain_id}.\n");
         (void)fprintf(out, "\n");
+    } else if (topic == CLI_CMD_SETTINGS) {
+        (void)fprintf(out, "Show one setting and the layer it comes from.\n");
+        (void)fprintf(out, "  remember settings get KEY [--scope brain|user] [--value]\n");
+        (void)fprintf(out, "--scope shows only that layer. --value prints only the value.\n");
+        (void)fprintf(out, "An empty layer prints (unset).\n");
+        (void)fprintf(out, "\n");
     }
     (void)fprintf(out, "Global options: --db PATH, --json, --strict, "
                        "--color=auto|always|never, --quiet, "
@@ -540,6 +547,8 @@ static int run(const CliArgs *args)
             return REMEMBER_ERR;
         }
         return run_with_store(args, cmd_brain);
+    case CLI_CMD_SETTINGS:
+        return run_with_store(args, cmd_settings);
     case CLI_CMD_NONE:
         /* Defensive: parse should set CLI_ERR_MISSING_COMMAND first. */
         err_msg(DIAG_USAGE, cli_error_message(CLI_ERR_MISSING_COMMAND));
@@ -599,6 +608,8 @@ static const char *reply_noun_verb(const CliArgs *args)
         return "repair.search_index";
     case CLI_CMD_BRAIN:
         return "brain.new_id";
+    case CLI_CMD_SETTINGS:
+        return cmd_settings_reply(args->rest_argc, args->rest_argv);
     case CLI_CMD_NONE:
     case CLI_CMD_HELP:
     case CLI_CMD_VERSION:

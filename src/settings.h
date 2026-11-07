@@ -49,7 +49,10 @@ enum {
     SETTING_VALUE_MAX = 16384,
     SETTING_VALUE_CAP = 16388,
     SETTING_ROW_QUOTA = 256,
-    SETTING_HISTORY_KEEP = 50
+    SETTING_HISTORY_KEEP = 50,
+    /* One canonical actor (ACTOR_JSON_CAP) and one 24-character UTC stamp. */
+    SETTING_ACTOR_CAP = 96,
+    SETTING_AT_CAP = 32
 };
 
 typedef enum SettingStatus {
@@ -93,18 +96,37 @@ typedef struct {
     char pad_[3];
 } SettingWriteResult;
 
-/* value is the effective JSON. A layer the key does not allow is empty and
-   its live flag is false. A tombstone is not live. */
+/* value is the effective JSON. user_live and brain_live mean a stored row's
+   value fit. A tombstone is not live. A live row in a layer the key does not
+   allow still has its value here; setting_pick ignores that layer. Stamps are
+   empty unless that layer is live. */
 typedef struct {
     char value[SETTING_VALUE_CAP];
     char user_value[SETTING_VALUE_CAP];
     char brain_value[SETTING_VALUE_CAP];
+    char user_by[SETTING_ACTOR_CAP];
+    char brain_by[SETTING_ACTOR_CAP];
+    char user_at[SETTING_AT_CAP];
+    char brain_at[SETTING_AT_CAP];
     SettingStatus status;
     SettingFrom from;
     bool user_live;
     bool brain_live;
     char pad_[2];
 } SettingRead;
+
+/* Local calendar fields for "21 Oct at 10:04". month is 1..12. utc_suffix
+   appends " UTC" when the zone could not be read (ST-7.16). */
+typedef struct {
+    int year;
+    int month;
+    int day;
+    int hour;
+    int minute;
+    int year_now;
+    bool utc_suffix;
+    char pad_[3];
+} SettingWhen;
 
 /* Locked error code, or "" when the status has no settings code. */
 const char *setting_status_code(SettingStatus st);
@@ -130,5 +152,16 @@ SettingStatus setting_prepare(const char *key, const char *const *items, size_t 
    with no default leaves out empty. */
 SettingFrom setting_pick(const SettingSpec *spec, const char *user_json, const char *brain_json,
                          const char *flag_json, char *out, size_t out_cap);
+
+/* Canonical JSON of the compiled default. False leaves out empty. */
+bool setting_default_json(const SettingSpec *spec, char *out, size_t cap);
+
+/* "21 Oct at 10:04", with the year when it is not year_now, and " UTC" when
+   utc_suffix is set. False when the fields are not a date or buf is short. */
+bool setting_format_when(SettingWhen when, char *buf, size_t cap);
+
+/* The one full key ST-1.5 would name, or NULL when there is not exactly one.
+   Two or three candidates have no approved sentence. */
+const char *setting_suggestion(const char *typed);
 
 #endif /* REMEMBER_SETTINGS_H */

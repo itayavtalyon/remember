@@ -13,6 +13,17 @@
 #include "test_alloc.h" // IWYU pragma: keep
 #endif
 
+/* Two anonymous enums. The casts keep -Wanon-enum-enum-conversion quiet. */
+// NOLINTNEXTLINE(readability-redundant-casting)
+_Static_assert((int)SETTING_ACTOR_CAP == (int)ACTOR_JSON_CAP,
+               "actor stamp holds one canonical actor");
+// NOLINTNEXTLINE(readability-magic-numbers,cppcoreguidelines-avoid-magic-numbers)
+enum { UTC_FORM_CAP = 25, MONTH_MAX = 12, DAY_MAX = 31, HOUR_MAX = 23, MINUTE_MAX = 59 };
+/* Two anonymous enums. The cast keeps -Wanon-enum-enum-conversion quiet. */
+// NOLINTNEXTLINE(readability-redundant-casting)
+_Static_assert((int)SETTING_AT_CAP >= (int)UTC_FORM_CAP,
+               "updated_at stamp holds the 24-character UTC form");
+
 enum {
     SETTING_SEGMENT_MAX = 40,
     HELPER_ID_MAX = 40,
@@ -308,6 +319,15 @@ static void default_json(const SettingSpec *spec, char *out, size_t cap, bool *h
     }
     memcpy(out, spec->default_text, strlen(spec->default_text) + 1U);
     *has = true;
+}
+
+/* cppcheck-suppress staticFunction ; public API (settings.h); used by tests */
+bool setting_default_json(const SettingSpec *spec, char *out, size_t cap)
+{
+    bool has = false;
+
+    default_json(spec, out, cap, &has);
+    return has;
 }
 
 static SettingStatus canon_integer(const SettingSpec *spec, const char *src, char *json,
@@ -615,4 +635,125 @@ SettingFrom setting_pick(const SettingSpec *spec, const char *user_json, const c
         (void)copy_cap(fallback, out, out_cap);
     }
     return SETTING_FROM_DEFAULT;
+}
+
+/* cppcheck-suppress staticFunction ; public API (settings.h); used by tests */
+bool setting_format_when(SettingWhen when, char *buf, size_t cap)
+{
+    static const char *const k_months[] = {"Jan", "Feb", "Mar", "Apr", "May", "Jun",
+                                           "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"};
+    int n = 0;
+
+    if (buf == NULL || cap == 0U) {
+        return false;
+    }
+    buf[0] = '\0';
+    if (when.month < 1 || when.month > MONTH_MAX || when.day < 1 || when.day > DAY_MAX ||
+        when.hour < 0 || when.hour > HOUR_MAX || when.minute < 0 || when.minute > MINUTE_MAX) {
+        return false;
+    }
+    if (when.year != when.year_now) {
+        n = snprintf(buf, cap, "%d %s %d at %02d:%02d", when.day, k_months[when.month - 1],
+                     when.year, when.hour, when.minute);
+    } else {
+        n = snprintf(buf, cap, "%d %s at %02d:%02d", when.day, k_months[when.month - 1], when.hour,
+                     when.minute);
+    }
+    if (n < 0 || (size_t)n >= cap) {
+        return false;
+    }
+    if (when.utc_suffix) {
+        int extra = snprintf(buf + n, cap - (size_t)n, " UTC");
+
+        if (extra < 0 || (size_t)n + (size_t)extra >= cap) {
+            return false;
+        }
+    }
+    return true;
+}
+
+/* Length diff above 2 cannot be within distance 2. Inputs longer than a key
+   plus 2 cannot either. Both skip with continue so the distance itself stays
+   the value the caller compares. */
+static int edit_distance(const char *a, const char *b)
+{
+    size_t len_a = strlen(a);
+    size_t len_b = strlen(b);
+    unsigned int prev[SETTING_KEY_MAX + 3];
+    unsigned int cur[SETTING_KEY_MAX + 3];
+    size_t i = 0;
+    size_t j = 0;
+
+    for (j = 0; j <= len_b; j++) {
+        prev[j] = (unsigned int)j;
+    }
+    for (i = 1; i <= len_a; i++) {
+        cur[0] = (unsigned int)i;
+        for (j = 1; j <= len_b; j++) {
+            unsigned int cost = (a[i - 1U] == b[j - 1U]) ? 0U : 1U;
+            unsigned int del = prev[j] + 1U;
+            unsigned int ins = cur[j - 1U] + 1U;
+            unsigned int sub = prev[j - 1U] + cost;
+            unsigned int best = del;
+
+            if (ins < best) {
+                best = ins;
+            }
+            if (sub < best) {
+                best = sub;
+            }
+            cur[j] = best;
+        }
+        memcpy(prev, cur, (len_b + 1U) * sizeof(prev[0]));
+    }
+    return (int)prev[len_b];
+}
+
+/* cppcheck-suppress staticFunction ; public API (settings.h); used by tests */
+const char *setting_suggestion(const char *typed)
+{
+    size_t nregs = 0;
+    const SettingSpec *specs = setting_registry(&nregs);
+    const char *hit = NULL;
+    size_t hits = 0;
+    size_t i = 0;
+    size_t n = 0;
+    bool comparable = false;
+
+    if (typed == NULL || typed[0] == '\0') {
+        return NULL;
+    }
+    for (i = 0; i < nregs; i++) {
+        const char *dot = strrchr(specs[i].key, '.');
+
+        if (dot != NULL && strcmp(dot + 1, typed) == 0) {
+            hits++;
+            hit = specs[i].key;
+        }
+    }
+    if (hits == 1U) {
+        return hit;
+    }
+    /* ST-1.5 measures the typed bytes. A colon is not a dot. */
+    n = strlen(typed);
+    comparable = n <= (size_t)SETTING_KEY_MAX + 2U;
+    hits = 0U;
+    hit = NULL;
+    for (i = 0; i < nregs; i++) {
+        size_t nb = strlen(specs[i].key);
+        int dist = 0;
+
+        if (!comparable || n > nb + 2U || nb > n + 2U) {
+            continue;
+        }
+        dist = edit_distance(typed, specs[i].key);
+        if (dist <= 2) {
+            hits++;
+            hit = specs[i].key;
+        }
+    }
+    if (hits == 1U) {
+        return hit;
+    }
+    return NULL;
 }

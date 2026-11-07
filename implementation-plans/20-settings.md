@@ -414,6 +414,20 @@ Sanitizer build, `./build/remember_tests ./build/remember --only settings,errors
 
 No sentence was invented. INDEX row 20 stays unticked. The definition of done stays unticked. Stage 4 is not marked done. Stages 5–9 have not started. Stage 5 waits until plan 21's envelope writer has merged. Linux CI runs on this commit before the push.
 
+### Stage 5 — settings get (2026-11-07)
+
+`remember settings get KEY [--scope brain|user] [--value]` prints the ST-7.3 human layout and the ST-7.11a setting object inside the plan 21 envelope (`setting.get.result`). The branch is `plan/20-stage5-get`. Its merge parent is `fa84e27`; the first parent of that merge is the unmerged plan 21 tip `9dcd717`. Itay overrode the wait in the stage 4 note for this branch. That sentence stays. This section supersedes it.
+
+`--scope=user` is an unknown option. `--` ends options. A key the registry does not have is `setting_unknown`, exit 2, with the C-03 fix `Run 'remember settings list' to see all settings.` One ST-1.5 candidate adds `Did you mean "<key>"?`. Two or more candidates add nothing. Distance is the typed bytes. A colon is not rewritten to a dot. `remember:search/candidate_pool` is the one suggestion. `remember:search:candidate_poo` is not.
+
+A layer the key does not allow is absent from `layers`, including a hand-edited brain row for `remember.sync.credential_helper`. An empty requested layer is `(unset)`, exit 0. JSON `value` is null, `from` is that scope, `changed` is false, and `layers` holds only that layer. `--value` on that shape is also `(unset)`. `--value` is one human line. JSON stays the full object.
+
+The human date is the local ST-7.16 form. The separator between the other layers is U+00B7, the character in the locked 007 example. An actor id is appended only when the canonical actor has one. A stamp that is not a real calendar day omits `on <date>` and JSON `updated_at`, and keeps `set by`. `2024-02-29` and `2000-02-29` are shown. A NUL in `updated_by` or `updated_at`, or a stamp that does not fit the column, fails the read with `internal error`.
+
+`settings` without `get` is `settings takes 'get'`. Set, reset, list, history, explain, export, and import are not this stage. `specs/SETTINGS.md` stays as the stage 10 commit left it. Stage 10 rewrites it after stages 6–9.
+
+No new error sentence. COPY-PENDING C-42 is still the unwritten plural suggestion. INDEX row 20 stays unticked.
+
 ## Review Notes
 
 **2026-10-27, stage 1 deep review.** In-session, on `be3ad6a` plus this fix. Itay asked for the review, a simplify pass, and the next stage in the same session, so this note closes stage 1. Local Bugbot is not installed.
@@ -505,3 +519,37 @@ Simplification. Applied: rows 3, 4 and 5 (`cmd_settings.c` −26 lines, tests �
 Gate on the committed tree. Sanitizer build: `./build/remember_tests ./build/remember --only settings,errors` gave 159 tests, 0 failed, 2679 asserts, and `ctest --test-dir build` passed 5 of 5. `CI=true BUILD_DIR=build REMEMBER_SCAN_BUILD=1 REMEMBER_IWYU=0 ./scripts/lint-all.sh` exited 0. `./scripts/check-coverage.sh` exited 0: functions 100%, effective lines 100%, `normalize.c` 384 branch sides, 0 missed. `./scripts/ci-linux.sh` exited 0. Its first run caught a NULL read in the new `count_char` test helper (clang-tidy 18), and that helper is now NULL-safe.
 
 Stage 4 is done. INDEX row 20 stays unticked. The definition of done stays unticked. Stage 5 waits until plan 21's envelope writer has merged.
+
+**2026-11-07, stage 5 deep review.** In-session, on `plan/20-stage5-get` before its commit. The branch is based on the unmerged plan 21 tip `9dcd717` (merge `fa84e27`). Itay overrode the wait. This note supersedes the two stage 4 sentences that say stage 5 waits. Those sentences stay. Local Bugbot is not installed. `decision:plan21-stage-flow` says no per-stage `.claude/REVIEW_REQUEST`. This note does not mark the plan done.
+
+| # | Severity | Finding | Outcome |
+|---|---|---|---|
+| 1 | — | No defect in the get path, the suggestion, or `load_stamp` needed a change after the gate. | Readings below stay. |
+
+Readings a later stage must not undo:
+
+- The other-layer separator is U+00B7 (` \xC2\xB7 `). That disagrees with `style:user-strings-ascii`. The locked 007 example wins.
+- More than one key within distance 2 returns no suggestion and uses the C-03 list fix. There is no plural sentence. COPY-PENDING C-42 stays unwritten. The header still says nothing is pending.
+- ST-1.5 and `decision:s-12` measure the typed bytes. The colon-to-dot rewrite is gone. `remember:search/candidate_pool` is still the unique distance-2 hit. `remember:search:candidate_poo` is distance 3 and returns NULL.
+- A shape-valid impossible date (`2026-02-31`, `2026-02-29`, `2026-04-31`, `1900-02-29`) omits the human date and JSON `updated_at` and keeps `set by`. `2024-02-29` and `2000-02-29` are shown. `utc_stamp_is_canonical` stays a shape check.
+- A bad actor omits `set by` and the human date. JSON omits `updated_by` and `updated_at`.
+- Stage 4's review required a disallowed layer to stay out of `layers`. `get_credential_helper_omits_a_disallowed_brain_row` pins that: no `evil`, no `brain` member.
+- `changed` is true when an allowed layer is live. With `--scope`, only that layer counts. An empty scoped get is `(unset)` even with `--value`.
+- M-24 on get: an unknown key that starts with `plugin.` and ends with `.budget` or `.cold_start_grace` keeps the `setting_unknown` line and uses the manifest fix. That fix is not the catalog default.
+
+Zero-hit lines in the touched files are defensive. Triggers, with no new test:
+
+- `from_token` returns `"flag"`. Get never produces a flag layer.
+- An empty list `[]` takes `array_plain`'s `n == 2` return and `fill_list_display`'s `return 0`. A hand edit only. Set is stage 6. The human value would be empty.
+- `write_others` returns 0 when no other layer remains. Every current key still has one non-winner line.
+- `cmd_settings_reply` returns `"unknown"`. `settings` without `get` hits that branch. The literal return is excluded.
+- `load_stamp`'s `SQLITE_DONE`, NULL text, and negative `column_bytes` arms. The columns are `TEXT NOT NULL`. The NUL and the 32-byte stamp hit the same `return SETTING_ERR_STORE`.
+- `fill_layer_json` returns without marking the layer live when the value does not fit `SETTING_VALUE_CAP`. A hand-edited overlong value. The existing stage 3 path.
+
+Mutants, one clause each, then the tree restored. The first pass killed: dropping the leap-day assignment (1 fail in `get_shows_a_leap_day_and_omits_an_impossible_date`); the brain-layer guard (3 fails); `dist <= 1` (2 fails); treating `--` as not ending options (1 fail); accepting a NUL in `updated_by` (1 fail); `has_id = false` (1 fail); treating a colon as a dot (1 fail). Two mutants did not compile. Replacing `days_in_month` with `part->day > 31` left `days_in_month` unused. `if (false && opt->scope_set)` tripped a constant warning. The compiling replacements, on this tree: dropping `year % 400 == 0` while still calling `days_in_month` makes `2000-02-29` omit the date and the JSON stamp (2 asserts, `get_shows_a_leap_day_and_omits_an_impossible_date`). Deleting the duplicate `--scope` return makes that invocation exit 0 with an empty stderr (2 asserts, `get_usage_rejects_a_bad_invocation`). Both killed. `cmd_settings.c` was copied back and compared. `./build/remember_tests ./build/remember --only settings` on the restored tree: 79 tests, 0 failed, 1741 asserts.
+
+Simplification. Declined: sharing `days_in_month` with `commands_common.c` (that copy is static); a plural did-you-mean sentence (C-42 is unwritten); putting the colon rewrite back.
+
+Gate on this tree, before the mutation pass. Sanitizer build. `CI=true BUILD_DIR=build REMEMBER_SCAN_BUILD=1 REMEMBER_IWYU=0 ./scripts/lint-all.sh` exited 0 (`LINT OK`; IWYU skipped, Linux CI runs it). `./scripts/check-coverage.sh` exited 0: functions 100%, effective lines 100%, zero-hit 2286, defensive-excluded 2286, must-cover 0. Pure-TU branches, 0 missed: `search_terms.c` 176, `unicode.c` 80, `normalize.c` 504, `output.c` 736. `ctest --test-dir build` passed 6 of 6. The settings suite above is the same 79 tests and 1741 asserts.
+
+Stage 5 get is done on this branch. INDEX row 20 stays unticked. The definition of done stays unticked. Stages 6–9 have not started. Stage 10 still rewrites `specs/SETTINGS.md` after them. Plan 21 tip `9dcd717` is not on origin/main.
