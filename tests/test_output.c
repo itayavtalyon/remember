@@ -654,6 +654,25 @@ TEST(output_device_envelopes_reject_missing_arguments)
     assert_written(f, "");
 }
 
+static StoreBrainId given_brain_ids(void)
+{
+    StoreBrainId ids = {0};
+
+    (void)snprintf(ids.id, sizeof(ids.id), "11111111-1111-7111-8111-111111111111");
+    (void)snprintf(ids.previous, sizeof(ids.previous), "22222222-2222-7222-8222-222222222222");
+    return ids;
+}
+
+TEST(output_brain_new_id_envelope_rejects_missing_arguments)
+{
+    StoreBrainId ids = given_brain_ids();
+    FILE *f = given_stream();
+
+    ASSERT_EQ_INT(output_brain_new_id_data(NULL, &ids), -1);
+    ASSERT_EQ_INT(output_brain_new_id_data(f, NULL), -1);
+    assert_written(f, "");
+}
+
 TEST(output_conflicts_envelope_rejects_missing_arguments)
 {
     FILE *f = given_stream();
@@ -1145,6 +1164,13 @@ static int write_device_new_envelope_without_previous(FILE *f)
     return output_device_new_data(f, "dev", NULL);
 }
 
+static int write_brain_new_id_envelope(FILE *f)
+{
+    StoreBrainId ids = given_brain_ids();
+
+    return output_brain_new_id_data(f, &ids);
+}
+
 static int write_conflicts_envelope(FILE *f)
 {
     StoreConflict rows[] = {given_conflict(), given_conflict()};
@@ -1302,6 +1328,11 @@ TEST(output_device_new_envelope_without_previous_reports_every_failed_write)
     assert_reports_every_failed_write(write_device_new_envelope_without_previous);
 }
 
+TEST(output_brain_new_id_envelope_reports_every_failed_write)
+{
+    assert_reports_every_failed_write(write_brain_new_id_envelope);
+}
+
 TEST(output_conflicts_envelope_reports_every_failed_write)
 {
     assert_reports_every_failed_write(write_conflicts_envelope);
@@ -1380,6 +1411,7 @@ void register_output_tests(void)
     RUN_TEST(output_related_envelope_rejects_missing_arguments);
     RUN_TEST(output_import_envelope_rejects_missing_arguments);
     RUN_TEST(output_device_envelopes_reject_missing_arguments);
+    RUN_TEST(output_brain_new_id_envelope_rejects_missing_arguments);
     RUN_TEST(output_conflicts_envelope_rejects_missing_arguments);
     RUN_TEST(output_conflicts_envelope_lists_no_conflicts);
     RUN_TEST(output_conflicts_envelope_separates_conflicts_with_a_comma);
@@ -1429,6 +1461,7 @@ void register_output_tests(void)
     RUN_TEST(output_device_envelope_reports_every_failed_write);
     RUN_TEST(output_device_new_envelope_with_previous_reports_every_failed_write);
     RUN_TEST(output_device_new_envelope_without_previous_reports_every_failed_write);
+    RUN_TEST(output_brain_new_id_envelope_reports_every_failed_write);
     RUN_TEST(output_conflicts_envelope_reports_every_failed_write);
     RUN_TEST(output_memory_envelope_add_reports_every_failed_write);
     RUN_TEST(output_rebuilt_json_reports_every_failed_write);

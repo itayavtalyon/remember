@@ -101,6 +101,9 @@ int output_device_data(FILE *out, const char *device_id);
 /* device new JSON. previous NULL is JSON null (the file was missing). */
 int output_device_new_data(FILE *out, const char *device_id, const char *previous);
 
+/* brain new-id data{brain_id, previous_brain_id}. */
+int output_brain_new_id_data(FILE *out, const StoreBrainId *ids);
+
 /* conflicts --json list. */
 int output_conflicts_data(FILE *out, const StoreConflict *rows, size_t count);
 

@@ -1102,6 +1102,20 @@ int output_device_new_data(FILE *out, const char *device_id, const char *previou
     return 0;
 }
 
+/* brain_id then previous_brain_id: the new id, then the id it replaced. */
+int output_brain_new_id_data(FILE *out, const StoreBrainId *ids)
+{
+    if (out == NULL || ids == NULL) {
+        return -1;
+    }
+    if (write_data_open(out) != 0 || fputs("\"brain_id\":", out) < 0 ||
+        output_json_string(out, ids->id) != 0 || fputs(",\"previous_brain_id\":", out) < 0 ||
+        output_json_string(out, ids->previous) != 0 || fputs(DATA_END, out) < 0) {
+        return -1;
+    }
+    return 0;
+}
+
 int output_import_data(FILE *out, const StoreImportCounts *counts)
 {
     if (out == NULL || counts == NULL) {

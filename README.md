@@ -71,6 +71,7 @@ Opening an existing database migrates it to `user_version` **5**.
 - Hebrew marks are folded out of the search index. The stored body keeps them.
 - `remember device` prints the device id. `remember device new` mints a new one after a restore or a copied brain, and it repairs an invalid sidecar.
 - The device id is only the sidecar `<db-path>.device_id`. The database holds no copy.
+- `remember brain new-id` replaces `brain_meta.brain_id` with a new lowercase UUID v7 and prints that id. It does not change `change_seq`, a version vector, or a memory. `--json` type is `brain.new_id.result`. `data` is `{brain_id, previous_brain_id}`.
 - Hard wipe is `delete --expired` (one expired row) or `purge --expired` / `purge --deleted` (one whole bin). `delete --deleted` does not exist. `--trash` selects the Deleted bin. It no longer needs one registered device.
 - With `--json`, every reply is one `remember-message` envelope on stdout, success or failure: `{"format":"remember-message","version":1,"type":"memory.get.result","data":{...}}`. A failure keeps its type and has `error{code,message,fix,retryable,detail?}` instead of `data`. Warnings are a `warnings` array at the end. stderr stays empty. `--json-errors` is gone.
 - A database error names one of seven causes: `busy`, `read_only`, `disk_full`, `cannot_open`, `not_a_database`, `corrupt`, `io_error`. Anything else is `database`.

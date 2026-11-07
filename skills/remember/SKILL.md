@@ -10,7 +10,7 @@ description: >
   chat-only notes for facts that must survive sessions. On deep review, get
   --key workflow:deep-review and follow it. On project pickup or pause, follow
   workflow:project-status (status:<slug> cards + links). Use with /remember or
-  remember add|search|list|get|update|delete|tags|purge|import|conflicts|device|link|unlink|related|rekey.
+  remember add|search|list|get|update|delete|tags|purge|import|conflicts|device|brain|link|unlink|related|rekey.
 ---
 
 # remember — agent skill
@@ -216,6 +216,18 @@ remember --json device new
 - `device new` mints a new id after a restore or a copied brain. It writes the sidecar and does not change version vectors. Plain output is the new id. `--json` adds `"previous"`.
 - `device new` also repairs an invalid sidecar. No other command does.
 - A missing sidecar is minted on open, so `"previous"` is that id. JSON `null` is only the type.
+
+### brain
+
+```bash
+remember brain new-id
+remember --json brain new-id
+```
+
+- `remember brain new-id` replaces `brain_meta.brain_id` with a new lowercase UUID v7 and prints that id. It does not change `change_seq`, a version vector, or a memory.
+- `--json` type is `brain.new_id.result`. `data` is `{brain_id, previous_brain_id}`.
+- The command name is `remember brain new-id`. There is no `remember brains`.
+- Opening a copied brain file does not change `brain_id`.
 
 ### link / unlink / related
 

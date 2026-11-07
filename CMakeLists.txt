@@ -114,6 +114,7 @@ set_property(SOURCE
     src/cmd_import.c
     src/cmd_device.c
     src/cmd_repair.c
+    src/cmd_brain.c
     src/output.c
     src/util.c
     src/diag.c
@@ -241,6 +242,7 @@ set(REMEMBER_LIB_SOURCES
     src/cmd_import.c
     src/cmd_device.c
     src/cmd_repair.c
+    src/cmd_brain.c
     src/output.c
     src/util.c
     src/diag.c

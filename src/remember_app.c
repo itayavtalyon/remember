@@ -56,6 +56,7 @@ static void print_general_help(void)
         "  conflicts   List unresolved merge conflicts\n"
         "  conflict    Resolve a merge conflict (accept)\n"
         "  device      Print the device id, or mint one with 'new'\n"
+        "  brain       Replace the brain id\n"
         "  help        Show this help (help <command> for a command)\n"
         "  version     Show version\n"
         "\n"
@@ -320,6 +321,13 @@ static void print_command_help(CliCommand topic)
         (void)fprintf(out, "It also replaces an invalid sidecar (no other command does).\n");
         (void)fprintf(out, "JSON adds \"previous\", the id it replaced.\n");
         (void)fprintf(out, "\n");
+    } else if (topic == CLI_CMD_BRAIN) {
+        (void)fprintf(out, "remember brain new-id replaces brain_meta.brain_id with a new "
+                           "lowercase UUID v7 and prints that id.\n");
+        (void)fprintf(out, "It does not change change_seq, a version vector, or a memory.\n");
+        (void)fprintf(out, "--json type is brain.new_id.result.\n");
+        (void)fprintf(out, "data is {brain_id, previous_brain_id}.\n");
+        (void)fprintf(out, "\n");
     }
     (void)fprintf(out, "Global options: --db PATH, --json, "
                        "--busy-timeout MS, --no-create, --help, --version\n");
@@ -520,6 +528,11 @@ static int run(const CliArgs *args)
             return REMEMBER_ERR;
         }
         return run_with_store(args, cmd_repair);
+    case CLI_CMD_BRAIN:
+        if (cmd_brain_reject_args(args->rest_argc, args->rest_argv) != 0) {
+            return REMEMBER_ERR;
+        }
+        return run_with_store(args, cmd_brain);
     case CLI_CMD_NONE:
         /* Defensive: parse should set CLI_ERR_MISSING_COMMAND first. */
         err_msg(DIAG_USAGE, cli_error_message(CLI_ERR_MISSING_COMMAND));
@@ -577,6 +590,8 @@ static const char *reply_noun_verb(const CliArgs *args)
         return "device.get";
     case CLI_CMD_REPAIR:
         return "repair.search_index";
+    case CLI_CMD_BRAIN:
+        return "brain.new_id";
     case CLI_CMD_NONE:
     case CLI_CMD_HELP:
     case CLI_CMD_VERSION:

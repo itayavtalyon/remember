@@ -779,6 +779,55 @@ TEST(facade_device_new_matches_cli)
     free(db2);
 }
 
+TEST(facade_brain_new_id_matches_cli)
+{
+    const char *json[] = {"--json", "brain", "new-id"};
+    const char *human[] = {"brain", "new-id"};
+    const char *help[] = {"help", "brain"};
+    char *db1 = make_temp_db_path();
+    char *db2 = make_temp_db_path();
+    CmdResult sub;
+    char *fout = NULL;
+    char *ferr = NULL;
+    int frc = 0;
+
+    ASSERT_TRUE(db1 != NULL && db2 != NULL);
+    if (db1 == NULL || db2 == NULL) {
+        free(db1);
+        free(db2);
+        return;
+    }
+    assert_read_parity(db1, help, sizeof(help) / sizeof(help[0]));
+
+    sub = run_remember(db1, json, sizeof(json) / sizeof(json[0]), NULL);
+    frc = facade_run(db2, json, sizeof(json) / sizeof(json[0]),
+                     (FacadeCapture){.out = &fout, .err = &ferr});
+    ASSERT_EQ_INT(frc, sub.exit_code);
+    mask_field(sub.out, "\"brain_id\":\"");
+    mask_field(sub.out, "\"previous_brain_id\":\"");
+    mask_field(fout, "\"brain_id\":\"");
+    mask_field(fout, "\"previous_brain_id\":\"");
+    ASSERT_STREQ(fout, sub.out);
+    ASSERT_STREQ(ferr, sub.err);
+    free(fout);
+    free(ferr);
+    cmd_result_free(&sub);
+
+    sub = run_remember(db1, human, sizeof(human) / sizeof(human[0]), NULL);
+    frc = facade_run(db2, human, sizeof(human) / sizeof(human[0]),
+                     (FacadeCapture){.out = &fout, .err = &ferr});
+    ASSERT_EQ_INT(frc, sub.exit_code);
+    mask_through_newline(sub.out);
+    mask_through_newline(fout);
+    ASSERT_STREQ(fout, sub.out);
+    ASSERT_STREQ(ferr, sub.err);
+    free(fout);
+    free(ferr);
+    cmd_result_free(&sub);
+    free(db1);
+    free(db2);
+}
+
 /* EN-03: --json not_found bytes match the CLI. */
 TEST(facade_json_not_found_matches_cli)
 {
@@ -875,4 +924,5 @@ void register_facade_tests(void)
     RUN_TEST(facade_repair_matches_cli);
     RUN_TEST(facade_device_matches_cli);
     RUN_TEST(facade_device_new_matches_cli);
+    RUN_TEST(facade_brain_new_id_matches_cli);
 }

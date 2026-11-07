@@ -637,3 +637,56 @@ DRY / easy to replace / orthogonal / simplify:
 - One resolver (`cmd_bin_resolve`) owns the bin and the one warning. Delete rejects `--trash` and `--deleted` after that resolve, so the warning still prints and the row is not wiped.
 - One wrong-list writer (`exit_wrong_list`). get, delete, update, and rekey call `exit_after_store` for `STORE_ERR_EXPIRED` and `STORE_ERR_DELETED` only.
 - The warning counter lives in `diag.c`, survives `diag_json_end`, and resets at `remember_run`. Exit 4 is only that counter under `--strict`.
+
+### Stage 6: remember brain new-id (2026-11-07)
+
+`remember brain new-id` replaces `brain_meta.brain_id` with a new lowercase UUID v7 and prints that id. It does not change `change_seq`, a version vector, or a memory. `--json` type is `brain.new_id.result`. `data` is `{brain_id, previous_brain_id}`. The command name is `remember brain new-id`. Do not add `remember brains`. (`decision:brain-id`. 008-14 write half: `brain new-id` replaces `brain_id` only. Probe 7.)
+
+What changed:
+
+- `src/cmd_brain.c`. `cmd_brain_reject_args` accepts exactly `new-id` and runs before open, so `remember brain` does not create a file. Usage is `remember: brain takes 'new-id'` and `remember: brain new-id takes no arguments`. `cmd_brain` calls `store_brain_new_id` and prints the new id. Plain output reuses `output_device_human`. `--json` uses `output_brain_new_id_data`. Field order is `brain_id`, then `previous_brain_id`.
+- `store_brain_new_id` starts in `begin_write`, so a newer `min_reader_version` is `STORE_ERR_SCHEMA_TOO_NEW` and writes nothing. It reads `brain_meta.brain_id`, refuses a non-canonical id (`STORE_ERR_INTERNAL`, rollback, no write), mints a lowercase UUID v7, and updates only that column. `sqlite3_changes != 1` rolls back. It does not call `stamp_change_seq`. `out` is filled after `COMMIT`.
+- `reply_noun_verb` returns `brain.new_id` for this command, including a usage failure. The command table registers `brain` only.
+- `remember help brain` prints the four locked sentences. General help lists `brain` as `Replace the brain id`.
+- Tests: `envelope_brain_new_id_replaces_only_the_brain_id` was the red test. It covers a missing path, one memory left unchanged (row, vector, `change_seq`, counts of entries, links, and tombstones), a second call whose `previous_brain_id` equals the first `brain_id`, a copied file opened with `--no-create` whose `brain_id` stays, extra-arg usage, unknown `brains`, help, and `min_reader_version` `0.4.0`. Output has the null-argument reject and the failed-write path. `facade_brain_new_id_matches_cli` matches the CLI bytes.
+
+Not in stage 6, on purpose: JE-3.10 (`decision:g2-05`). Until plan 25, open does not read `brains.json`, does not mint a new id for a copy, and does not rewrite a path for a move. Stages 7, 8, and 9. `--color` and `--quiet`. `unknown_field`. The spec. `--trash` stays the Deleted bin and is not an alias of `--expired`. The `flag_meaning_changed` warning stays. Actors, `--as`, `--actor`, `--created-by`, and `--updated-by` stay. The positional locator stays. `--hooks` and `--no-hooks` stay accepted and do not change delivery. Approved lines stay C-01, C-02, and C-35. Other C-42 fix lines stay drafts. M5 stays `rc = (rc == REMEMBER_OK && diag_json_has_error()) ? REMEMBER_ERR : rc;` in `run_json`. The 16 stage-2a mutants, the 10 stage-3 mutants, the 10 stage-4 mutants, and the 14 stage-5 mutants were not re-run. INDEX row 21 and the definition of done stay unticked. No `state:implemented`. Version stays 0.2.0.
+
+Gate (Apple clang, Debug, sanitizers on, LSAN off, `REMEMBER_TEST_VFS=ON`, Unix Makefiles; coverage with Homebrew LLVM 22). `BUILD_DIR` was not exported. ninja is absent. `origin/main` was not merged (`standard:coding` rule 7 says merge at stage start; this stage's prompt says stage 9 merges `origin/main`). ctest 5/5, real 8189.47s (step_gate 3941.56s, step05_gate 3031.00s, store_asan_gate 414.29s, install_skill 789.35s, no_shim_symbols 13.26s). Load average during that run was 50.74 53.52 55.20 on 10 cores. Stage 5 on a quiet machine was 60.91s, 57.41s, 12.62s, 2.34s, 0.76s. Coverage: store 499 and CLI 907, both 0 failed; functions 100%; raw lines 87.51%; effective lines 100% (zero-hit 2103, all defensive, must-cover 0); branch sides 0 missed on `search_terms.c` (176), `unicode.c` (80), `normalize.c` (504), `output.c` (736). Lint `LINT OK` (LLVM 22 clang-tidy, cppcheck, gcc -fanalyzer, scan-build; include-what-you-use skipped, not installed). `default.profraw` stays untracked.
+
+Docs that name the command: `docs/engineering-notes.md` (the `change_seq` bullet, a `cmd_brain.c` bullet, and `brain.new_id` next to `device.new`), one locked sentence in the `README.md` v0.3.0 section, and `skills/remember/SKILL.md` in this worktree (frontmatter token plus a `brain` section). Design logs, old plans, INDEX, `docs/JSON-STYLE.md`, and the installed grok skill were not edited. The worktree skill still has `--source` in the add examples (stage 4 left that).
+
+### Stage 6 deep review (2026-11-07, in session)
+
+`decision:plan21-stage-flow`: in-session deep review, fix, continue. No `.claude/REVIEW_REQUEST`. Local Bugbot is not installed. No product question is open. `standard:coding` says merge `main` at the start of a stage. This prompt says stage 9 merges `origin/main`, so it was not merged. `decision:2026-11-01-legacy-plans-spec-step` says stage 9 is the spec stage and the whole-plan review is after that. This stage does not write `.claude/WHOLE_PLAN_REVIEW`. `quality:linters-max` allows a local `NOLINT`. `take_field_uuid` has that note. The magic sizes became `FIELD_KEY_CAP` and `BRAIN_REPLY_CAP` before the gate. No `NOLINT` was added to silence coverage.
+
+The gate above is the production tree. The review found no product bug. Docs and these notes were written after the gate and do not change C, so coverage and lint were not re-run.
+
+Findings:
+
+- **Kept:** a stored `brain_id` that is not a canonical UUID v7 is `STORE_ERR_INTERNAL`. The transaction rolls back and nothing is written, so `previous_brain_id` is never a non-UUID.
+- **Kept:** `sqlite3_changes != 1` rolls back. `brain_meta` is one row.
+- **Kept:** the two usage sentences match device and repair. The envelope test locks them. Plain usage does not append the JSON fix. The JSON fix is `Run 'remember brain --help' to see how to use it.`
+- **Kept:** the general-help summary `Replace the brain id` is not a locked sentence. The command list needs a summary. Help body is the four locked sentences. "Do not add `remember brains`" and "Do not implement JE-3.10" are implementer constraints, not help text.
+- **Kept:** `output_brain_new_id_data` is its own writer. Field order is `brain_id`, then `previous_brain_id`. Plain output reuses `output_device_human`.
+- **Kept:** M5. The earlier mutant sets were not re-run. This stage did not edit those clauses.
+- **Kept:** `skills/remember/SKILL.md` still shows `--source` on add. Stage 4 left that. The brain section is the stage 6 edit.
+
+Mutants, one clause at a time, each rebuilt. No survivor. The envelope suite killed each one (`envelope_brain_new_id_replaces_only_the_brain_id`). Sources were restored after the last one. `cmake --build build --target remember` then exited 0.
+
+| Mutant | Change | Red test |
+|---|---|---|
+| bump-change-seq | `UPDATE` also sets `change_seq = change_seq + 1` | `envelope_brain_new_id_replaces_only_the_brain_id` |
+| swap-json-fields | JSON writes `previous_brain_id` before `brain_id` | `envelope_brain_new_id_replaces_only_the_brain_id` |
+| previous-is-new | `previous` is copied from the minted id | `envelope_brain_new_id_replaces_only_the_brain_id` |
+| wrong-type | `reply_noun_verb` returns `brain.new` | `envelope_brain_new_id_replaces_only_the_brain_id` |
+| register-brains | the command table also registers `brains` | `envelope_brain_new_id_replaces_only_the_brain_id` |
+| print-previous | plain output prints `previous` | `envelope_brain_new_id_replaces_only_the_brain_id` |
+| skip-begin-write | `BEGIN IMMEDIATE` instead of `begin_write` | `envelope_brain_new_id_replaces_only_the_brain_id` |
+
+DRY / easy to replace / orthogonal / simplify:
+
+- One store write (`store_brain_new_id`). `begin_write` is the write gate. `stamp_change_seq` is what takes a value, and this command does not call it.
+- One data writer (`output_brain_new_id_data`). The device sidecar and `brain_meta.brain_id` stay separate.
+- Argument rejection sits in front of open, the same place repair uses, so a typo does not create a brain file.
+- `decision:g2-05` stays unimplemented. A copied file keeps `brain_id` until this command runs.

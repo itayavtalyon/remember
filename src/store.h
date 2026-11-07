@@ -229,6 +229,20 @@ const char *store_device_id(const Store *s);
 StoreStatus store_device_new(Store *s, char *prev_out, size_t prev_len, bool *had_prev, char *err,
                              size_t errlen);
 
+/* The id `brain new-id` wrote, and the id it replaced. Both are canonical. */
+typedef struct {
+    char id[STORE_DEVICE_ID_LEN + 1];
+    char previous[STORE_DEVICE_ID_LEN + 1];
+} StoreBrainId;
+
+/*
+ * Replace brain_meta.brain_id with a new lowercase UUID v7 (JE-3.9).
+ * Does not change change_seq, a version vector, or a memory.
+ * On STORE_OK, out->id is the new id and out->previous is the one it replaced.
+ * A newer min_reader_version is STORE_ERR_SCHEMA_TOO_NEW and writes nothing.
+ */
+StoreStatus store_brain_new_id(Store *s, StoreBrainId *out);
+
 /* Release heap fields of *e and zero it. Safe with NULL e or zeroed Entry. */
 void store_entry_free(Entry *e);
 

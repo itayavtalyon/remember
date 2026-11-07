@@ -1,11 +1,12 @@
 #include "harness.h"
+#include "normalize.h"
 #include "register.h"
 #include "test.h"
 
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <unistd.h> /* mkdtemp on Darwin */
+#include <unistd.h> /* mkdtemp on Darwin; access */
 
 /* One memory with this key and the body "a body"; it is number 1 on a new brain. */
 // NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
@@ -113,6 +114,7 @@ TEST(envelope_every_command_names_its_reply_type)
         {{"--json", "conflicts"}, "conflict.list"},
         {{"--json", "device"}, "device.get"},
         {{"--json", "device", "new"}, "device.new"},
+        {{"--json", "brain", "new-id"}, "brain.new_id"},
         {{"--json", "repair", "search-index"}, "repair.search_index"},
         {{"--json", "conflict", "accept", "--id", "9", "--keep", "local"}, "conflict.accept"},
         {{"--json", "import", "--from-db", "/nonexistent/remember-type.db"}, "memory.import"},
@@ -1186,6 +1188,236 @@ TEST(envelope_memory_id_is_the_uuid_and_the_old_flags_are_unknown)
     free(db);
 }
 
+enum { FIELD_KEY_CAP = 64, BRAIN_REPLY_CAP = 320 };
+
+/* Copy the UUID at `at` when it is canonical. -1 leaves `out` untouched. */
+static int take_uuid(const char *at, char out[UUID_CANON_LEN + 1])
+{
+    size_t i = 0;
+
+    if (at == NULL) {
+        return -1;
+    }
+    for (i = 0; i < (size_t)UUID_CANON_LEN; i++) {
+        if (at[i] == '\0') {
+            return -1;
+        }
+        out[i] = at[i];
+    }
+    out[UUID_CANON_LEN] = '\0';
+    if (!uuid_v7_is_canonical(out)) {
+        return -1;
+    }
+    return 0;
+}
+
+/* The UUID after `"<field>":"` in one JSON object. */
+// NOLINTNEXTLINE(bugprone-easily-swappable-parameters) json, then the field name
+static int take_field_uuid(const char *json, const char *field, char out[UUID_CANON_LEN + 1])
+{
+    char key[FIELD_KEY_CAP];
+    const char *found = NULL;
+    int wrote = 0;
+
+    wrote = snprintf(key, sizeof(key), "\"%s\":\"", field);
+    if (wrote < 0 || (size_t)wrote >= sizeof(key) || json == NULL) {
+        return -1;
+    }
+    found = strstr(json, key);
+    if (found == NULL) {
+        return -1;
+    }
+    return take_uuid(found + (size_t)wrote, out);
+}
+
+/* Plain stdout is the new id and one newline. A short line is not indexed. */
+static void assert_plain_new_id(const char *out, char id[UUID_CANON_LEN + 1])
+{
+    ASSERT_TRUE(out != NULL && strlen(out) == (size_t)UUID_CANON_LEN + 1U);
+    if (out == NULL || strlen(out) != (size_t)UUID_CANON_LEN + 1U) {
+        return;
+    }
+    ASSERT_EQ_INT(take_uuid(out, id), 0);
+    ASSERT_EQ_INT(out[UUID_CANON_LEN], '\n');
+}
+
+/* JE-3.9 / 008-14 write half / probe 7. JE-3.10 stays out: a copied file keeps brain_id. */
+TEST(envelope_brain_new_id_replaces_only_the_brain_id)
+{
+    static const char k_memory[] = "SELECT body || '|' || version_vector || '|' || change_seq || "
+                                   "'|' || updated_at || '|' || created_at || '|' || created_by "
+                                   "|| '|' || updated_by FROM entries WHERE local_id = 1;";
+    static const char k_meta[] = "SELECT change_seq || '|' || min_reader_version FROM brain_meta;";
+    static const char k_counts[] = "SELECT (SELECT COUNT(*) FROM entries) || '|' || (SELECT "
+                                   "COUNT(*) FROM entry_links) || '|' || (SELECT COUNT(*) FROM "
+                                   "tombstones);";
+    static const char k_newer[] = "remember: this brain was written by a newer remember. You can "
+                                  "read it. Upgrade to write to it.\n";
+    char *db = make_temp_db_path();
+    char *bare = make_temp_db_path();
+    char *born = make_temp_db_path();
+    const char *add[] = {"add", "--key", "k", "a body"};
+    const char *plain[] = {"brain", "new-id"};
+    const char *again[] = {"--json", "brain", "new-id"};
+    const char *extra[] = {"--json", "brain", "new-id", "extra"};
+    const char *alone[] = {"brain"};
+    const char *brains[] = {"brains"};
+    const char *help[] = {"help", "brain"};
+    const char *open_copy[] = {"--no-create", "get", "1"};
+    char first_id[UUID_CANON_LEN + 1] = {0};
+    char second_id[UUID_CANON_LEN + 1] = {0};
+    char previous_id[UUID_CANON_LEN + 1] = {0};
+    char want[BRAIN_REPLY_CAP];
+    char *original_id = NULL;
+    char *memory_before = NULL;
+    char *meta_before = NULL;
+    char *counts_before = NULL;
+    char *copy_path = NULL;
+    char *copy_id = NULL;
+    char *source_id = NULL;
+    CmdResult r;
+
+    ASSERT_TRUE(db != NULL && bare != NULL && born != NULL);
+    if (db == NULL || bare == NULL || born == NULL) {
+        free(db);
+        free(bare);
+        free(born);
+        return;
+    }
+
+    r = run_remember(bare, alone, sizeof alone / sizeof alone[0], NULL);
+    ASSERT_EQ_INT(r.exit_code, 1);
+    ASSERT_STREQ(r.err, "remember: brain takes 'new-id'\n");
+    ASSERT_TRUE(access(bare, F_OK) != 0);
+    cmd_result_free(&r);
+
+    r = run_remember(born, plain, sizeof plain / sizeof plain[0], NULL);
+    ASSERT_EQ_INT(r.exit_code, 0);
+    ASSERT_STREQ(r.err, "");
+    assert_plain_new_id(r.out, first_id);
+    cmd_result_free(&r);
+    original_id = harness_sqlite_query_line(born, "SELECT brain_id FROM brain_meta;");
+    ASSERT_STREQ(original_id, first_id);
+    free(original_id);
+
+    r = run_remember(db, add, sizeof add / sizeof add[0], NULL);
+    ASSERT_EQ_INT(r.exit_code, 0);
+    cmd_result_free(&r);
+    original_id = harness_sqlite_query_line(db, "SELECT brain_id FROM brain_meta;");
+    memory_before = harness_sqlite_query_line(db, k_memory);
+    meta_before = harness_sqlite_query_line(db, k_meta);
+    counts_before = harness_sqlite_query_line(db, k_counts);
+    ASSERT_TRUE(original_id != NULL && memory_before != NULL && meta_before != NULL &&
+                counts_before != NULL);
+
+    r = run_remember(db, plain, sizeof plain / sizeof plain[0], NULL);
+    ASSERT_EQ_INT(r.exit_code, 0);
+    ASSERT_STREQ(r.err, "");
+    assert_plain_new_id(r.out, first_id);
+    ASSERT_TRUE(strcmp(first_id, original_id != NULL ? original_id : "") != 0);
+    cmd_result_free(&r);
+    source_id = harness_sqlite_query_line(db, "SELECT brain_id FROM brain_meta;");
+    ASSERT_STREQ(source_id, first_id);
+    free(source_id);
+    source_id = harness_sqlite_query_line(db, k_memory);
+    ASSERT_STREQ(source_id, memory_before);
+    free(source_id);
+    source_id = harness_sqlite_query_line(db, k_meta);
+    ASSERT_STREQ(source_id, meta_before);
+    free(source_id);
+    source_id = harness_sqlite_query_line(db, k_counts);
+    ASSERT_STREQ(source_id, counts_before);
+    free(source_id);
+
+    r = run_remember(db, again, sizeof again / sizeof again[0], NULL);
+    ASSERT_EQ_INT(r.exit_code, 0);
+    ASSERT_STREQ(r.err, "");
+    ASSERT_EQ_INT(take_field_uuid(r.out, "brain_id", second_id), 0);
+    ASSERT_EQ_INT(take_field_uuid(r.out, "previous_brain_id", previous_id), 0);
+    ASSERT_STREQ(previous_id, first_id);
+    ASSERT_TRUE(strcmp(second_id, first_id) != 0);
+    ASSERT_TRUE((size_t)snprintf(want, sizeof(want),
+                                 "{\"format\":\"remember-message\",\"version\":1,"
+                                 "\"type\":\"brain.new_id.result\",\"data\":{\"brain_id\":\"%s\","
+                                 "\"previous_brain_id\":\"%s\"}}\n",
+                                 second_id, previous_id) < sizeof(want));
+    ASSERT_STREQ(r.out, want);
+    cmd_result_free(&r);
+    source_id = harness_sqlite_query_line(db, "SELECT brain_id FROM brain_meta;");
+    ASSERT_STREQ(source_id, second_id);
+    free(source_id);
+    source_id = harness_sqlite_query_line(db, k_memory);
+    ASSERT_STREQ(source_id, memory_before);
+    free(source_id);
+    source_id = harness_sqlite_query_line(db, k_meta);
+    ASSERT_STREQ(source_id, meta_before);
+    free(source_id);
+
+    copy_path = harness_side_path(db, ".copy");
+    ASSERT_EQ_INT(harness_copy_file(db, copy_path), 0);
+    r = run_remember(copy_path, open_copy, sizeof open_copy / sizeof open_copy[0], NULL);
+    ASSERT_EQ_INT(r.exit_code, 0);
+    ASSERT_STR_CONTAINS(r.out, "a body");
+    cmd_result_free(&r);
+    copy_id = harness_sqlite_query_line(copy_path, "SELECT brain_id FROM brain_meta;");
+    source_id = harness_sqlite_query_line(db, "SELECT brain_id FROM brain_meta;");
+    ASSERT_STREQ(copy_id, second_id);
+    ASSERT_STREQ(source_id, second_id);
+    free(copy_id);
+    free(source_id);
+    copy_id = harness_sqlite_query_line(copy_path, k_memory);
+    ASSERT_STREQ(copy_id, memory_before);
+    free(copy_id);
+    free(copy_path);
+
+    r = run_remember(db, extra, sizeof extra / sizeof extra[0], NULL);
+    ASSERT_EQ_INT(r.exit_code, 1);
+    ASSERT_STREQ(r.err, "");
+    ASSERT_STREQ(r.out, "{\"format\":\"remember-message\",\"version\":1,\"type\":\"brain.new_id."
+                        "result\",\"error\":{\"code\":\"usage\",\"message\":\"brain new-id takes "
+                        "no arguments\",\"fix\":\"Run 'remember brain --help' to see how to use "
+                        "it.\",\"retryable\":false}}\n");
+    cmd_result_free(&r);
+    source_id = harness_sqlite_query_line(db, "SELECT brain_id FROM brain_meta;");
+    ASSERT_STREQ(source_id, second_id);
+    free(source_id);
+
+    r = run_remember(db, brains, sizeof brains / sizeof brains[0], NULL);
+    ASSERT_EQ_INT(r.exit_code, 1);
+    ASSERT_STREQ(r.err, "remember: unknown command 'brains'\n");
+    cmd_result_free(&r);
+
+    r = run_remember(db, help, sizeof help / sizeof help[0], NULL);
+    ASSERT_EQ_INT(r.exit_code, 0);
+    ASSERT_STR_CONTAINS(r.out, "remember brain new-id");
+    ASSERT_STR_CONTAINS(r.out, "lowercase UUID v7");
+    ASSERT_STR_CONTAINS(r.out, "does not change change_seq, a version vector, or a memory");
+    ASSERT_STR_CONTAINS(r.out, "brain.new_id.result");
+    ASSERT_STR_CONTAINS(r.out, "previous_brain_id");
+    cmd_result_free(&r);
+
+    free(harness_sqlite_query_line(db, "UPDATE brain_meta SET min_reader_version = '0.4.0';"));
+    r = run_remember(db, plain, sizeof plain / sizeof plain[0], NULL);
+    ASSERT_EQ_INT(r.exit_code, 1);
+    ASSERT_STREQ(r.out, "");
+    ASSERT_STREQ(r.err, k_newer);
+    cmd_result_free(&r);
+    source_id = harness_sqlite_query_line(db, "SELECT brain_id FROM brain_meta;");
+    ASSERT_STREQ(source_id, second_id);
+    free(source_id);
+    source_id = harness_sqlite_query_line(db, k_memory);
+    ASSERT_STREQ(source_id, memory_before);
+    free(source_id);
+
+    free(original_id);
+    free(memory_before);
+    free(meta_before);
+    free(counts_before);
+    free(db);
+    free(bare);
+    free(born);
+}
+
 void register_envelope_tests(void)
 {
     RUN_TEST(envelope_get_by_digits_and_by_uuid_is_the_same_memory);
@@ -1207,6 +1439,7 @@ void register_envelope_tests(void)
     RUN_TEST(envelope_blank_id_wrong_list_keeps_the_deleted_token);
     RUN_TEST(envelope_trash_and_expired_cannot_combine);
     RUN_TEST(envelope_purge_trash_selects_the_deleted_bin);
+    RUN_TEST(envelope_brain_new_id_replaces_only_the_brain_id);
 #ifdef REMEMBER_TEST_VFS
     RUN_TEST(envelope_add_link_read_error_after_the_write_exits_1_and_keeps_the_write);
 #else

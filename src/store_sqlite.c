@@ -2528,6 +2528,59 @@ static StoreStatus begin_write(Store *s)
     return STORE_OK;
 }
 
+/* JE-3.9: a new brain_id only. change_seq, version vectors, and memories stay.
+   begin_write refuses a newer min_reader_version before the UPDATE. */
+StoreStatus store_brain_new_id(Store *s, StoreBrainId *out)
+{
+    char previous[STORE_DEVICE_ID_LEN + 1];
+    char minted[STORE_DEVICE_ID_LEN + 1];
+    char *stored = NULL;
+    const char *binds[1];
+    char err_unused[1];
+    StoreStatus st = STORE_OK;
+
+    if (s == NULL || out == NULL) {
+        return STORE_ERR_INTERNAL;
+    }
+    st = begin_write(s);
+    if (st != STORE_OK) {
+        return st;
+    }
+    if (select_text(s->db, "SELECT brain_id FROM brain_meta;", &stored, err_unused, 0U, &s->last) !=
+        0) {
+        rollback_quiet(s->db);
+        return STORE_ERR_SQLITE;
+    }
+    if (stored == NULL || !uuid_v7_is_canonical(stored)) {
+        free(stored);
+        rollback_quiet(s->db);
+        return STORE_ERR_INTERNAL;
+    }
+    memcpy(previous, stored, sizeof(previous));
+    free(stored);
+    if (mint_uuid_v7(minted) != 0) {
+        rollback_quiet(s->db);
+        return STORE_ERR_INTERNAL;
+    }
+    binds[0] = minted;
+    if (exec_bound(s->db, "UPDATE brain_meta SET brain_id = ?1;", binds, 1, err_unused, 0U,
+                   &s->last) != 0) {
+        rollback_quiet(s->db);
+        return STORE_ERR_SQLITE;
+    }
+    if (sqlite3_changes(s->db) != 1) {
+        rollback_quiet(s->db);
+        return STORE_ERR_INTERNAL;
+    }
+    if (exec_sql(s->db, "COMMIT;", err_unused, 0U, &s->last) != 0) {
+        rollback_quiet(s->db);
+        return STORE_ERR_SQLITE;
+    }
+    memcpy(out->id, minted, sizeof(out->id));
+    memcpy(out->previous, previous, sizeof(out->previous));
+    return STORE_OK;
+}
+
 /*
  * Bring an open database to schema version 6 and bind local device identity.
  *
