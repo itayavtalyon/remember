@@ -1126,7 +1126,7 @@ int output_import_data(FILE *out, const StoreImportCounts *counts)
     }
     if (fprintf(out,
                 "\"action\":\"imported\",\"inserted\":%zu,\"updated\":%zu,"
-                "\"unchanged\":%zu,\"conflicts\":%zu,\"rejected\":%zu}}\n",
+                "\"unchanged\":%zu,\"conflicts\":%zu,\"rejected\":%zu}",
                 counts->inserted, counts->updated, counts->unchanged, counts->conflicts,
                 counts->rejected) < 0) {
         return -1;

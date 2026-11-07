@@ -14,6 +14,7 @@ A spec describes what `remember` does today. It is normative.
 | [PLUGIN-PROTOCOL.md](PLUGIN-PROTOCOL.md) | `subject:plugin-protocol` | Plugin protocol 1 (revision 6): manifest, messages, schemas |
 | [PLUGIN-PROTOCOL-CHANGES.md](PLUGIN-PROTOCOL-CHANGES.md) | `subject:plugin-protocol` | Changelog of the plugin protocol |
 | [JSON-STYLE.md](JSON-STYLE.md) | `subject:json-envelope` | JSON value rules for every surface |
+| [JSON-ENVELOPE.md](JSON-ENVELOPE.md) | `subject:json-envelope` | Message envelope for CLI `--json` |
 
 ## Not written yet
 
@@ -28,5 +29,4 @@ These subjects have no spec yet. Until the plan that next changes a subject writ
 | Sync, import merge, conflicts (`subject:sync`) | 005 |
 | Union search, errors, export and import (`subject:search`, `subject:export`) | 006 |
 | Settings (`subject:settings`) | 007 |
-| Message envelope (`subject:json-envelope`) | 008, with [JSON-STYLE.md](JSON-STYLE.md) |
 | Plugins and hooks in the engine (`subject:plugins-and-hooks`) | 010, with [PLUGIN-PROTOCOL.md](PLUGIN-PROTOCOL.md) |

@@ -157,6 +157,12 @@ TEST(cli_import_inserts_preserves_sync_id_remaps_links_no_device_register)
     ASSERT_STR_CONTAINS(r.out, "\"updated\":0");
     ASSERT_STR_CONTAINS(r.out, "\"unchanged\":0");
     ASSERT_STR_CONTAINS(r.out, "\"conflicts\":0");
+    /* The data object is only the counts. The envelope writer adds the one newline. */
+    {
+        const char *nl = strchr(r.out, '\n');
+
+        ASSERT_TRUE(nl != NULL && nl[1] == '\0');
+    }
     cmd_result_free(&r);
 
     r = run_remember(local, get_a, sizeof(get_a) / sizeof(get_a[0]), NULL);

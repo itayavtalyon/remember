@@ -829,3 +829,41 @@ DRY / easy to replace / orthogonal / simplify:
 - Not taken: a second JSON parser. Nothing on this branch reads a JSON document.
 - Not taken: turn the list cursor's unknown member into this warning. C-35 names a file or stdin. The cursor stays `invalid_argument`.
 - Not taken: free the path set at the end of `remember_run` as well as the start. The next run already frees it, and the count has to stay until the strict check.
+
+### Stage 9: spec (2026-11-07)
+
+`decision:2026-11-01-legacy-plans-spec-step`. No red test. Merged `origin/main` first (`01f01e5`, parents `3efafb5` and `960b55f`) so `specs/` exists. `standard:coding` rule 7 and this stage agree.
+
+`specs/JSON-ENVELOPE.md` describes the CLI `remember-message` version 1 object this branch ships. `specs/JSON-STYLE.md` stays the value rules and links to it. CLI rows that disagreed with this binary were changed. The Message envelope row in `specs/README.md` is under Specs.
+
+`state:implemented` (other tags kept, `--as agent`) on `decision:json-errors-in-envelope`, `decision:json-warnings-stdout`, `decision:json-optional-warnings`, `decision:json-failed-reply-type`, `decision:json-envelope-no-id`, `decision:json-paging-envelope`, `decision:json-id-format`, `decision:json-id-rename`, `decision:json-local-id`, `decision:s-07`, `decision:s-08`, `decision:s-13`, `decision:positional-locator`, `decision:plan21-retryable-codes`, `decision:plan21-error-fix-drafts-c42`, `decision:plan21-envelope-closed-by-app`, `decision:plan21-add-link-read-fails-loud`, `decision:plan21-add-action-names-kept`, `decision:plan21-derived-reply-types`.
+
+Left `state:accepted` on purpose:
+
+- `decision:plan21-cursor-binds-whole-query`. Its stored text says base64url and that `--cursor` alone continues the query. The binary writes standard base64 with padding, and the flags on the call must match the cursor. The spec describes the binary and names the key. The body was not rewritten.
+- `decision:json-data-wrapper`. The payload is in `data`. The stored example `{version, data, warnings}` omits `format` and `type` and always shows `warnings`. Marking it implemented would contradict the envelope. `decision:json-envelope-no-id` is the field list.
+- `decision:json-unknown-fields`. The writer and the C-35 lines ship. No command calls the writer. The stored text still makes an unknown field an error in `hooks.json` and in plugin `run` and `permissions`.
+- `decision:plan21-search-query-original-only`, `decision:plan21-import-problem-rows`, `decision:provenance-actors`, `decision:g-33`, `decision:g2-02`, `decision:g2-10`, `decision:q4-03`, `decision:c-11`, `decision:id-rename-cut`, `decision:json-export-plain`, `decision:json-test-fixed-ids`, `decision:2026-10-22-m-05`, and the socket and shutdown keys. This plan did not build those bodies. Superseded keys stay superseded.
+
+`output_import_data` used to write an extra `}` and a newline inside the data buffer, so a successful `import --json` was two lines and the second line was `}`. The data object is now the counts only. The envelope writer adds the one newline. `cli_import_inserts_preserves_sync_id_remaps_links_no_device_register` asserts a single trailing newline. Putting `}}\n` back fails that assert. This is not one of the stage 2a–8 mutant clauses. Those sets were not re-run. M5 stays.
+
+`cmake --build build` regenerated the cache because the merge changed `CMakeLists.txt` (`spec_drift`). The flags stayed Debug, Apple clang, sanitizers on, LSAN off, `REMEMBER_TEST_VFS=ON`, Unix Makefiles. No new `cmake -S` was passed. ninja is absent. `BUILD_DIR` was not exported.
+
+Not in stage 9, on purpose: plan 25, plan 20 stages 5–9, `remember brains`, JE-3.10, hook acceptance, and a lock on the hook rejection. `--hooks` and `--no-hooks` stay unknown options and are absent from the spec. `--color` and `--quiet` stay. `remember brain new-id` stays. `--trash` stays the Deleted bin. Actors and the positional locator stay. Approved lines stay C-01, C-02, and C-35. Other C-42 fixes stay drafts. INDEX row 21 and the definition of done stay unticked. Version stays 0.2.0.
+
+Gate (Apple clang, Debug, sanitizers on, LSAN off, `REMEMBER_TEST_VFS=ON`, Unix Makefiles; coverage with Homebrew LLVM 22). ctest 6/6, real 190.17s (step_gate 82.72s, step05_gate 84.31s, store_asan_gate 16.34s, install_skill 5.66s, spec_drift 0.18s, no_shim_symbols 0.95s). The coverage run and the lint run overlapped that ctest. Coverage: store 499 and CLI 922, both 0 failed; functions 100%; raw lines 87.57%; effective lines 100% (zero-hit 2128, all defensive, must-cover 0); branch sides 0 missed on `search_terms.c` (176), `unicode.c` (80), `normalize.c` (504), `output.c` (736). Lint `LINT OK` (LLVM 22 clang-tidy, cppcheck, gcc -fanalyzer, scan-build; include-what-you-use skipped, not installed). `leaks-macos: PASS`. `default.profraw` stays untracked.
+
+### Stage 9 deep review (2026-11-07, in session)
+
+`decision:plan21-stage-flow`: in-session deep review, then these notes, then one commit, then `.claude/WHOLE_PLAN_REVIEW`, then stop. No `.claude/REVIEW_REQUEST`. Local Bugbot is not installed. No product question blocks the commit. The cursor-body mismatch and the `json-data-wrapper` example are recorded above for Itay. `quality:linters-max` allows `NOLINT`. None was added.
+
+The gate above includes the import-writer fix. These review notes do not change C.
+
+Findings:
+
+- **Fixed:** `output_import_data` closed the envelope inside the data buffer. Stdout is one JSON object and one newline.
+- **Kept:** list cursor unknown member is `invalid_argument`, message `invalid --cursor`, not `unknown_field`.
+- **Kept:** `--hooks` and `--no-hooks` stay unknown options. This stage did not lock that.
+- **Kept:** M5. The stage 2a–8 mutant sets were not re-run.
+- **Kept:** INDEX row 21 and the definition of done stay unticked. The spec checkbox stays unticked until the whole-plan review.
+- **Kept:** `decision:plan21-cursor-binds-whole-query` stays `state:accepted` because its body disagrees with the binary.
