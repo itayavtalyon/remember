@@ -109,6 +109,9 @@ typedef struct {
 /* Locked error code, or "" when the status has no settings code. */
 const char *setting_status_code(SettingStatus st);
 
+/* [a-z][a-z0-9_-]{0,39}. The credential helper id grammar (G2-01). */
+bool helper_id_ok(const char *src);
+
 /* Fold the key and choose the layer a set or reset writes. */
 SettingStatus setting_choose_layer(const char *key, SettingLayer requested,
                                    const SettingSpec **spec_out, SettingLayer *layer_out, char *err,
@@ -122,8 +125,9 @@ SettingStatus setting_prepare(const char *key, const char *const *items, size_t 
                               const SettingSpec **spec_out, SettingLayer *layer_out, char *err,
                               size_t errlen);
 
-/* Last layer with a value wins. A NULL layer pointer is no row. Copies the
-   winning JSON into out. An unset key with no default leaves out empty. */
+/* Last layer with a value wins. A NULL layer pointer, or a layer the key
+   does not allow, is no row. Copies the winning JSON into out. An unset key
+   with no default leaves out empty. */
 SettingFrom setting_pick(const SettingSpec *spec, const char *user_json, const char *brain_json,
                          const char *flag_json, char *out, size_t out_cap);
 

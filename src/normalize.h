@@ -78,6 +78,10 @@ bool is_hebrew_mark(unsigned int cp);
  */
 void ascii_ws_trim(const char *s, size_t *start, size_t *end);
 
+/* A C0 control (below 0x20, tab included) or DEL: the one byte class the
+   token rules and the credential lookup refuse. */
+bool is_ascii_control(unsigned char c);
+
 /*
  * Lowercase hex SHA-256 of data[0..len) into out_hex
  * (must provide REMEMBER_SHA256_HEX_LEN + 1 bytes).

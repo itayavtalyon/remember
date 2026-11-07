@@ -79,6 +79,7 @@ static const char *const k_error_codes[DIAG_CODE_COUNT] = {
     [DIAG_IO_ERROR] = "io_error",
     [DIAG_SCHEMA_TOO_NEW] = "schema_too_new",
     [DIAG_INVALID_ARGUMENT] = "invalid_argument",
+    [DIAG_SYNC_CREDENTIAL_UNAVAILABLE] = "sync_credential_unavailable",
 };
 
 /* error.fix per code (decision:plan21-error-fix-drafts-c42). The SQLite codes
@@ -117,6 +118,10 @@ static const char *const k_fix[DIAG_CODE_COUNT] = {
     [DIAG_SCHEMA_TOO_NEW] = "Upgrade remember to make changes.",
     /* Draft, not approved copy. Plan 21 stage 2b. */
     [DIAG_INVALID_ARGUMENT] = "Run 'remember list' again without --cursor.",
+    /* Locked, 007 ST-3.6. */
+    [DIAG_SYNC_CREDENTIAL_UNAVAILABLE] =
+        "Check the helper, or set remember.sync.credential_helper to env and export "
+        "REMEMBER_SYNC_TOKEN.",
 };
 
 /* cppcheck-suppress staticFunction ; public API (diag.h); remember_run */
@@ -501,6 +506,12 @@ int diag_error_split(DiagCode code, DiagSplit split)
 
 int diag_error(DiagCode code, const char *message)
 {
+    return diag_error_fix(code, message, NULL);
+}
+
+/* cppcheck-suppress staticFunction ; public API (diag.h) */
+int diag_error_fix(DiagCode code, const char *message, const char *fix)
+{
     const char *name = diag_code_name(code);
 
     if (name == NULL) {
@@ -511,6 +522,7 @@ int diag_error(DiagCode code, const char *message)
         .plain_prefix = "",
         .code = name,
         .message = message,
+        .fix = fix,
         .error_code = code,
     });
 }

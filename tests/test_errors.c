@@ -74,6 +74,7 @@ static const char *const k_error_codes[] = {
     "io_error",
     "schema_too_new",
     "invalid_argument",
+    "sync_credential_unavailable",
 };
 
 /* error.fix and retryable per code, in catalog order (decision:plan21-error-fix-drafts-c42,
@@ -113,6 +114,9 @@ static const ExpectedFix k_error_fixes[] = {
     {"Check the disk or drive, then try again.", "true"},
     {"Upgrade remember to make changes.", "false"},
     {"Run 'remember list' again without --cursor.", "false"},
+    {"Check the helper, or set remember.sync.credential_helper to env and export "
+     "REMEMBER_SYNC_TOKEN.",
+     "false"},
 };
 
 /* Unit tests pick the mode per call. JSON mode buffers the notice for the

@@ -43,6 +43,8 @@ typedef enum {
     DIAG_IO_ERROR,
     DIAG_SCHEMA_TOO_NEW,
     DIAG_INVALID_ARGUMENT,
+    /* ST-3.6. Appended so the E4.3 order stays put. */
+    DIAG_SYNC_CREDENTIAL_UNAVAILABLE,
     DIAG_CODE_COUNT
 } DiagCode;
 
@@ -92,6 +94,10 @@ typedef struct {
 } DiagSplit;
 
 int diag_error_split(DiagCode code, DiagSplit split);
+
+/* diag_error with an explicit fix. NULL fix uses the catalog sentence.
+   Plain joins message and fix. JSON uses this fix and still writes retryable. */
+int diag_error_fix(DiagCode code, const char *message, const char *fix);
 
 /*
  * Write one SQLite failure (E4.8 text, E4.9 detail). code is one of the eight

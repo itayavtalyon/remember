@@ -314,3 +314,7 @@ Plan 26, stage 4, after plans 19 through 25 have merged. Each feature plan still
 ## plugin_chain_capped
 
 `remember: warning: <name> didn't run because the search reached its time limit, "remember.plugins.chain_budget". These results keep the order they had before it.` Status stays `skipped` with reason `chain_capped`. A clipped budget still gets no warning. Plan 25.
+
+## Still open
+
+**C-42.** Refused `REMEMBER_SYNC_TOKEN` with no helper row (plan 20 stage 4 second opinion, 2026-10-30). With no `remember.sync.credential_helper` row, a variable that is too long for the token buffer, or holds a C0 control or DEL inside it, fails the lookup. The code is not chosen. The lookup returns 2 and prints nothing until this row is answered. The variable is set and cannot be used, and why (too long, or a control byte). The token is never echoed. ST-3.6 names a helper id, so it does not fit. Plan 20 sync caller, or the first stage that runs sync.
