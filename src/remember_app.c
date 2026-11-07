@@ -36,6 +36,7 @@ static void print_general_help(void)
         "\n"
         "Usage:\n"
         "  remember [--db PATH] [--json] [--strict] "
+        "[--color=auto|always|never] [--quiet] "
         "[--busy-timeout MS] [--no-create] <command> [options] [args]\n"
         "\n"
         "Commands:\n"
@@ -67,6 +68,9 @@ static void print_general_help(void)
         "Global options (allowed before or after the command):\n"
         "  --db PATH          Database file (overrides REMEMBER_DB)\n"
         "  --json             Machine-readable JSON on stdout\n"
+        "  --color     Use color: auto, always, or never. auto uses color only on a terminal, "
+        "when NO_COLOR is unset and TERM isn't dumb.\n"
+        "  --quiet     Turn off progress lines on stderr.\n"
         "  --busy-timeout MS  Lock wait in ms (0..60000, default 5000)\n"
         "  --no-create        Do not create a missing brain file\n"
         "  --help, -h         Show help\n"
@@ -329,7 +333,8 @@ static void print_command_help(CliCommand topic)
         (void)fprintf(out, "data is {brain_id, previous_brain_id}.\n");
         (void)fprintf(out, "\n");
     }
-    (void)fprintf(out, "Global options: --db PATH, --json, "
+    (void)fprintf(out, "Global options: --db PATH, --json, --strict, "
+                       "--color=auto|always|never, --quiet, "
                        "--busy-timeout MS, --no-create, --help, --version\n");
     (void)fprintf(out, "See also: remember --help\n");
 }
@@ -342,6 +347,7 @@ static DiagCode code_for_cli_error(CliError err)
     case CLI_ERR_UNKNOWN_OPTION:
     case CLI_ERR_MISSING_OPTION_VALUE:
     case CLI_ERR_INVALID_BUSY_TIMEOUT:
+    case CLI_ERR_INVALID_COLOR:
         return DIAG_USAGE;
     case CLI_ERR_OK:
     case CLI_ERR_INTERNAL:
@@ -372,6 +378,7 @@ static void print_parse_error(const CliArgs *args)
     case CLI_ERR_OK:
     case CLI_ERR_MISSING_COMMAND:
     case CLI_ERR_INVALID_BUSY_TIMEOUT:
+    case CLI_ERR_INVALID_COLOR:
     case CLI_ERR_INTERNAL:
     default:
         break;
@@ -720,6 +727,18 @@ int remember_run(int argc, char *const *argv, FILE *out, FILE *err)
     app_clear_list_page();
     app_set_streams((AppStreams){.out = out, .err = err});
     cli_parse(argc, argv, &args);
+    {
+        AppPresentation presentation = {
+            .color = args.globals.color,
+            .quiet = args.globals.quiet,
+            .json = args.globals.json,
+            .pad_ = {'\0', '\0'},
+        };
+
+        /* Left in place so a caller can read the mode after this run.
+           The next remember_run replaces it. */
+        app_set_presentation(presentation);
+    }
     if (writes_envelope(&args)) {
         rc = run_json(&args, (AppStreams){.out = out, .err = err});
     } else {

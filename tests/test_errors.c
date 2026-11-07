@@ -3507,7 +3507,7 @@ TEST(cli_repair_help_names_the_command)
     free(db);
 }
 
-/* Stage 7: general help and every command footer name the three globals. */
+/* General help and every command footer name the globals. */
 TEST(cli_help_names_json_busy_timeout_and_no_create)
 {
     char *db = make_temp_db_path();
@@ -3522,7 +3522,8 @@ TEST(cli_help_names_json_busy_timeout_and_no_create)
     r = run_remember(db, general, sizeof(general) / sizeof(general[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 0);
     ASSERT_STREQ(r.err, "");
-    ASSERT_STR_CONTAINS(r.out, "[--json] [--strict] [--busy-timeout MS] [--no-create]");
+    ASSERT_STR_CONTAINS(r.out, "[--json] [--strict] [--color=auto|always|never] [--quiet] "
+                               "[--busy-timeout MS] [--no-create]");
     ASSERT_STR_NOT_CONTAINS(r.out, "--json-errors");
     ASSERT_STR_CONTAINS(r.out, "--busy-timeout MS  Lock wait in ms (0..60000, default 5000)");
     ASSERT_STR_CONTAINS(r.out, "--no-create        Do not create a missing brain file");
@@ -3530,7 +3531,8 @@ TEST(cli_help_names_json_busy_timeout_and_no_create)
     r = run_remember(db, topic, sizeof(topic) / sizeof(topic[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 0);
     ASSERT_STREQ(r.err, "");
-    ASSERT_STR_CONTAINS(r.out, "Global options: --db PATH, --json, "
+    ASSERT_STR_CONTAINS(r.out, "Global options: --db PATH, --json, --strict, "
+                               "--color=auto|always|never, --quiet, "
                                "--busy-timeout MS, --no-create, --help, --version");
     cmd_result_free(&r);
     free(db);

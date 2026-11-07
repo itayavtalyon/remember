@@ -46,13 +46,15 @@ The device id is the sidecar `<db-path>.device_id` (never copy on import). Run `
 ## Global flags
 
 ```text
-remember [--db PATH] [--json] [--busy-timeout MS] [--no-create] <command> …
+remember [--db PATH] [--json] [--strict] [--color=auto|always|never] [--quiet] [--busy-timeout MS] [--no-create] <command> [options] [args]
 ```
 
 | Flag | Meaning |
 |------|---------|
 | `--db PATH` | Overrides `REMEMBER_DB` and default `~/.remember/remember.db` |
 | `--json` | One JSON envelope on stdout, also for errors and warnings (use this from agents) |
+| `--color auto\|always\|never` | Use color: auto, always, or never. auto uses color only on a terminal, when NO_COLOR is unset and TERM isn't dumb. |
+| `--quiet` | Turn off progress lines on stderr. |
 | `--busy-timeout MS` | Milliseconds to wait for a lock (0..60000, default 5000) |
 | `--no-create` | A missing brain file fails. Creates nothing |
 

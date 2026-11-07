@@ -89,7 +89,7 @@ Learned while growing past ~1000 lines at step 06 (search):
 - `cli_parse` is **`void`**. Source of truth for failures: `out->error` (`CliError`) + optional `error_arg` / `error_option`.
 - User-facing base strings: **`cli_error_message()`** only. `main` formats with arg pointers.
 - **ArgCursor** walks argv; do not mutate the for-loop index inside helpers.
-- **Globals** (`--db`, `--json`) allowed before or after the subcommand.
+- **Globals** (`--db`, `--json`, `--strict`, `--color`, `--quiet`, `--busy-timeout`, `--no-create`) are recognized before or after the subcommand and stripped. After `--` they stay literal. `--color=auto|always|never`, or `--color` and the next token. `auto` uses color only on a terminal, when `NO_COLOR` is unset and `TERM` isn't `dumb`. `always` and `never` override. An empty `NO_COLOR` is set. A bad value is `invalid --color (must be auto, always, or never)`. `--quiet` turns off progress lines on stderr. Progress goes to stderr only, when stderr is a TTY, as whole lines, at most once a second, with no spinner. It is never in stdout and never in `--json`. Prompts echo typed input. The `--color` and `--quiet` help sentences are the C-02 lines. The command footer lists `--strict` with the other globals.
 - **Before** subcommand, unknown `-flag` → usage error.
 - **After** subcommand, unknown-looking flags stay in `rest_*` for command parsers.
 - **Command registry:** single table `k_commands[]` with **linear** name lookup (n is tiny). Add a command once in that table (+ dispatch in `main` until function pointers land).

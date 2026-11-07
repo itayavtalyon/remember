@@ -77,6 +77,11 @@ Opening an existing database migrates it to `user_version` **5**.
 - A database error names one of seven causes: `busy`, `read_only`, `disk_full`, `cannot_open`, `not_a_database`, `corrupt`, `io_error`. Anything else is `database`.
 - `--busy-timeout MS` sets the lock wait (0..60000, default 5000).
 - `--no-create` fails when the brain file is missing and creates nothing.
+- `--color` and `--quiet` are global, listed with `--db`, `--json`, `--strict`, `--busy-timeout`, and `--no-create`.
+- Color only on a TTY, when `NO_COLOR` is unset and `TERM` is not `dumb`. `--color=auto|always|never` overrides.
+- Status is a word. Do not print checkmarks. Do not encode meaning by color alone.
+- Progress goes to stderr only, when stderr is a TTY, as whole lines, at most once a second, with no spinner. `--quiet` turns it off. Progress is never in stdout and never in `--json`.
+- Prompts echo typed input.
 - `remember repair search-index` rebuilds a damaged search index. `corrupt` with `fts_only` true means that command. It never creates a missing brain.
 - `list --sort updated|created` (default `updated`) orders by that time, newest first, then id.
 - `list` and `search` take `--since` / `--until`. `since` is inclusive and `until` is exclusive. Search filters `updated_at` and ignores `--sort`.

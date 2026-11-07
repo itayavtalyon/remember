@@ -1,11 +1,23 @@
+#ifdef __linux__
+#define _GNU_SOURCE // NOLINT(bugprone-reserved-identifier,cert-dcl37-c,cert-dcl51-cpp) glibc
+                    // feature macro
+#endif
+
+#include "appio.h"
+#include "cli.h"
 #include "harness.h"
 #include "normalize.h"
 #include "register.h"
+#include "remember_app.h"
 #include "test.h"
 
+#include <errno.h>
+#include <fcntl.h>
+#include <poll.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <termios.h>
 #include <unistd.h> /* mkdtemp on Darwin; access */
 
 /* One memory with this key and the body "a body"; it is number 1 on a new brain. */
@@ -1418,6 +1430,897 @@ TEST(envelope_brain_new_id_replaces_only_the_brain_id)
     free(born);
 }
 
+/* C-02. General help prints the locked lines. The command footer lists the flags
+   with the other globals, including --strict (left out until this stage). */
+TEST(envelope_help_prints_the_color_and_quiet_lines)
+{
+    char *db = make_temp_db_path();
+    const char *general[] = {"--help"};
+    const char *topic[] = {"help", "get"};
+    static const char color_line[] =
+        "  --color     Use color: auto, always, or never. auto uses color only on a terminal, "
+        "when NO_COLOR is unset and TERM isn't dumb.\n";
+    static const char quiet_line[] = "  --quiet     Turn off progress lines on stderr.\n";
+    static const char usage_globals[] =
+        "[--db PATH] [--json] [--strict] [--color=auto|always|never] [--quiet] "
+        "[--busy-timeout MS] [--no-create]";
+    static const char footer[] = "Global options: --db PATH, --json, --strict, "
+                                 "--color=auto|always|never, --quiet, "
+                                 "--busy-timeout MS, --no-create, --help, --version\n";
+    CmdResult r;
+
+    ASSERT_TRUE(db != NULL);
+    if (db == NULL) {
+        return;
+    }
+    r = run_remember(db, general, sizeof general / sizeof general[0], NULL);
+    ASSERT_EQ_INT(r.exit_code, 0);
+    ASSERT_STREQ(r.err, "");
+    ASSERT_STR_CONTAINS(r.out, color_line);
+    ASSERT_STR_CONTAINS(r.out, quiet_line);
+    ASSERT_STR_CONTAINS(r.out, usage_globals);
+    cmd_result_free(&r);
+    r = run_remember(db, topic, sizeof topic / sizeof topic[0], NULL);
+    ASSERT_EQ_INT(r.exit_code, 0);
+    ASSERT_STREQ(r.err, "");
+    ASSERT_STR_CONTAINS(r.out, footer);
+    cmd_result_free(&r);
+    free(db);
+}
+
+/* Single-threaded tests. getenv, setenv, unsetenv, and ptsname have no C11 form. */
+// NOLINTBEGIN(concurrency-mt-unsafe)
+
+enum {
+    PROGRESS_GAP_MS = 1000,   /* plan: at most one progress line per second */
+    PROGRESS_WIDE = 300,      /* a line long enough to show it is not truncated */
+    PROGRESS_DUE_GAPS = 5,    /* later than the one-second line, so another line is due */
+    PROGRESS_REWIND_GAPS = 4, /* earlier than DUE, so the clock suppresses it */
+    PROGRESS_EXACT_GAPS = 6,  /* exactly one second after DUE, so a line is due again */
+    PROMPT_SLOT = 8,          /* "Ask: " and "yes\r\n" both fit */
+    PROMPT_TINY = 3,          /* fgets keeps two characters, so "yes\n" does not fit */
+    PTY_POLL_MS = 200,        /* a ready pty returns at once; this is only the failure wait */
+    CAPTURE_ARGV = 8
+};
+
+typedef struct {
+    char *saved;
+    bool had;
+    /* NOLINTNEXTLINE(readability-magic-numbers,cppcoreguidelines-avoid-magic-numbers) */
+    char pad_[7];
+} SavedEnv;
+
+typedef struct {
+    const char *typed;
+    const char *prompt;
+    size_t cap;
+} PromptAsk;
+
+typedef struct {
+    char *text;
+    size_t text_cap;
+    char *shown;
+    size_t shown_cap;
+    char *echo;
+    size_t echo_cap;
+    int *echo_on;
+} PromptOut;
+
+/* A stream whose fileno is -1 and whose writes fail. Covers the not-a-terminal
+   side and a prompt that must stop before it reads. */
+#ifdef __APPLE__
+static int dead_write(void *cookie, const char *data, int length)
+{
+    (void)cookie;
+    (void)data;
+    (void)length;
+    errno = EIO;
+    return -1;
+}
+
+static FILE *open_dead_stream(void)
+{
+    FILE *stream = funopen(NULL, NULL, dead_write, NULL, NULL);
+
+    if (stream != NULL) {
+        (void)setvbuf(stream, NULL, _IONBF, 0);
+    }
+    return stream;
+}
+#elif defined(__GLIBC__)
+static ssize_t dead_write(void *cookie, const char *data, size_t length)
+{
+    (void)cookie;
+    (void)data;
+    (void)length;
+    errno = EIO;
+    return 0;
+}
+
+static FILE *open_dead_stream(void)
+{
+    cookie_io_functions_t funcs = {.read = NULL, .write = dead_write, .seek = NULL, .close = NULL};
+    FILE *stream = fopencookie(NULL, "w", funcs);
+
+    if (stream != NULL) {
+        (void)setvbuf(stream, NULL, _IONBF, 0);
+    }
+    return stream;
+}
+#else
+/* No cookie stream here. tmpfile is not a dead stream; macOS and glibc do not
+   use this branch. It exists so a config with neither symbol still typechecks. */
+static FILE *open_dead_stream(void)
+{
+    return tmpfile();
+}
+#endif
+
+static int save_env(const char *name, SavedEnv *slot)
+{
+    const char *old = getenv(name);
+
+    slot->had = old != NULL;
+    slot->saved = NULL;
+    if (!slot->had) {
+        return 0;
+    }
+    slot->saved = strdup(old);
+    if (slot->saved == NULL) {
+        return -1;
+    }
+    return 0;
+}
+
+static void restore_env(const char *name, SavedEnv *slot)
+{
+    if (slot->saved != NULL) {
+        (void)setenv(name, slot->saved, 1);
+    } else if (!slot->had) {
+        (void)unsetenv(name);
+    }
+    free(slot->saved);
+    slot->saved = NULL;
+    slot->had = false;
+}
+
+static AppPresentation auto_presentation(void)
+{
+    AppPresentation mode = {
+        .color = CLI_COLOR_AUTO,
+        .quiet = false,
+        .json = false,
+        .pad_ = {'\0', '\0'},
+    };
+
+    return mode;
+}
+
+static void restore_presentation(void)
+{
+    app_set_presentation(auto_presentation());
+    app_set_streams((AppStreams){.out = NULL, .err = NULL});
+}
+
+/* The slave is a terminal. O_NOCTTY keeps it from becoming this process's
+   controlling terminal. The caller fclose()s the result and close()s *master_fd. */
+static FILE *open_pty_slave(int *master_fd, const char *mode)
+{
+    int master = -1;
+    int slave_fd = -1;
+    const char *name = NULL;
+    FILE *slave = NULL;
+
+    *master_fd = -1;
+    master = posix_openpt(O_RDWR | O_NOCTTY);
+    if (master < 0) {
+        return NULL;
+    }
+    if (grantpt(master) != 0 || unlockpt(master) != 0) {
+        (void)close(master);
+        return NULL;
+    }
+    name = ptsname(master);
+    if (name == NULL) {
+        (void)close(master);
+        return NULL;
+    }
+    slave_fd = open(name, O_RDWR | O_NOCTTY | O_CLOEXEC);
+    if (slave_fd < 0) {
+        (void)close(master);
+        return NULL;
+    }
+    slave = fdopen(slave_fd, mode);
+    if (slave == NULL) {
+        (void)close(slave_fd);
+        (void)close(master);
+        return NULL;
+    }
+    *master_fd = master;
+    return slave;
+}
+
+/* Progress is read back from the master. Turn off output processing so the
+   terminal does not rewrite a newline as CR LF before the test sees it. */
+static int slave_writes_raw(FILE *slave)
+{
+    struct termios mode;
+    int descriptor = fileno(slave);
+
+    if (descriptor < 0 || tcgetattr(descriptor, &mode) != 0) {
+        return -1;
+    }
+    mode.c_oflag &= ~(tcflag_t)OPOST;
+    if (tcsetattr(descriptor, TCSANOW, &mode) != 0) {
+        return -1;
+    }
+    return 0;
+}
+
+/* NOLINTNEXTLINE(bugprone-easily-swappable-parameters) capacity, then the poll wait */
+static int read_pty(int master_fd, char *buf, size_t cap, int wait_ms)
+{
+    struct pollfd ready;
+    ssize_t nread = 0;
+    size_t got = 0U;
+
+    buf[0] = '\0';
+    if (cap < 2U) {
+        return -1;
+    }
+    ready.fd = master_fd;
+    ready.events = POLLIN;
+    if (poll(&ready, 1, wait_ms) <= 0) {
+        return 0;
+    }
+    nread = read(master_fd, buf, cap - 1U);
+    if (nread <= 0) {
+        buf[0] = '\0';
+        return nread < 0 ? -1 : 0;
+    }
+    got = (size_t)nread;
+    buf[got] = '\0';
+    return (int)got;
+}
+
+/* NOLINTNEXTLINE(bugprone-easily-swappable-parameters) stdout text, then stderr text */
+static int run_captured(const char *db, const char *const *extra, size_t nextra, char **out_text,
+                        char **err_text)
+{
+    const char *argv[CAPTURE_ARGV];
+    size_t n = 0U;
+    size_t i = 0U;
+    char *out_buf = NULL;
+    char *err_buf = NULL;
+    size_t out_len = 0U;
+    size_t err_len = 0U;
+    FILE *out_fp = NULL;
+    FILE *err_fp = NULL;
+    int rc = 0;
+
+    *out_text = NULL;
+    *err_text = NULL;
+    if (db == NULL || nextra + 3U > (size_t)CAPTURE_ARGV) {
+        return -1;
+    }
+    argv[n++] = "remember";
+    argv[n++] = "--db";
+    argv[n++] = db;
+    for (i = 0U; i < nextra; i++) {
+        argv[n++] = extra[i];
+    }
+    out_fp = open_memstream(&out_buf, &out_len);
+    err_fp = open_memstream(&err_buf, &err_len);
+    if (out_fp == NULL || err_fp == NULL) {
+        if (out_fp != NULL) {
+            (void)fclose(out_fp);
+        }
+        if (err_fp != NULL) {
+            (void)fclose(err_fp);
+        }
+        free(out_buf);
+        free(err_buf);
+        return -1;
+    }
+    rc = remember_run((int)n, (char *const *)argv, out_fp, err_fp);
+    (void)fclose(out_fp);
+    (void)fclose(err_fp);
+    *out_text = out_buf;
+    *err_text = err_buf;
+    return rc;
+}
+
+/* NOLINTNEXTLINE(bugprone-easily-swappable-parameters) argument count, then the exit code */
+static void assert_run(const char *db, const char *const *args, size_t n, int exit_code,
+                       const char *out, const char *err)
+{
+    CmdResult r = run_remember(db, args, n, NULL);
+
+    ASSERT_EQ_INT(r.exit_code, exit_code);
+    ASSERT_STREQ(r.out, out);
+    ASSERT_STREQ(r.err, err);
+    cmd_result_free(&r);
+}
+
+/* typed NULL closes the master first, so the read sees EOF. "Ask: " is
+   test-only text, not a product sentence. */
+static int prompt_once(PromptAsk ask, PromptOut out)
+{
+    int master_fd = -1;
+    FILE *slave = NULL;
+    char *shown_buf = NULL;
+    size_t shown_len = 0U;
+    FILE *shown_fp = NULL;
+    struct termios mode;
+    int status = -1;
+    ssize_t wrote = 0;
+
+    out.text[0] = '\0';
+    out.shown[0] = '\0';
+    out.echo[0] = '\0';
+    slave = open_pty_slave(&master_fd, "r");
+    if (slave == NULL) {
+        return -1;
+    }
+    if (tcgetattr(fileno(slave), &mode) != 0 || (mode.c_lflag & (unsigned)ECHO) == 0U) {
+        goto cleanup;
+    }
+    shown_fp = open_memstream(&shown_buf, &shown_len);
+    if (shown_fp == NULL) {
+        goto cleanup;
+    }
+    app_set_streams((AppStreams){.out = NULL, .err = shown_fp});
+    if (ask.typed != NULL) {
+        size_t typed_len = strlen(ask.typed);
+
+        wrote = write(master_fd, ask.typed, typed_len);
+        if (wrote < 0 || (size_t)wrote != typed_len) {
+            goto cleanup;
+        }
+    } else if (master_fd >= 0) {
+        (void)close(master_fd);
+        master_fd = -1;
+    }
+    status = app_prompt_line(slave, ask.prompt, out.text, ask.cap);
+    (void)fflush(shown_fp);
+    if (shown_buf != NULL && shown_len < out.shown_cap) {
+        memcpy(out.shown, shown_buf, shown_len + 1U);
+    }
+    if (master_fd >= 0) {
+        (void)read_pty(master_fd, out.echo, out.echo_cap, PTY_POLL_MS);
+    }
+    if (tcgetattr(fileno(slave), &mode) == 0 && out.echo_on != NULL) {
+        *out.echo_on = ((mode.c_lflag & (unsigned)ECHO) != 0U) ? 1 : 0;
+    }
+cleanup:
+    app_set_streams((AppStreams){.out = NULL, .err = NULL});
+    if (shown_fp != NULL) {
+        (void)fclose(shown_fp);
+    }
+    free(shown_buf);
+    (void)fclose(slave);
+    if (master_fd >= 0) {
+        (void)close(master_fd);
+    }
+    return status;
+}
+
+static void progress_line(int master_fd, const char *line, long long now_ms, const char *expect)
+{
+    char got[PROGRESS_WIDE + 2];
+    const char *want = expect != NULL ? expect : "";
+    int wait_ms = want[0] == '\0' ? 0 : PTY_POLL_MS;
+
+    got[0] = '\0';
+    app_progress(line, now_ms);
+    (void)read_pty(master_fd, got, sizeof got, wait_ms);
+    ASSERT_STREQ(got, want);
+}
+
+/* The flags parse as globals. Version text stays plain. Bodies stay the
+   caller's words. "applied" is not a product sentence. */
+TEST(envelope_color_and_quiet_are_accepted_as_globals)
+{
+    static const char version_line[] = "remember 0.2.0\n";
+    static const char invalid[] = "remember: invalid --color (must be auto, always, or never)\n";
+    static const char missing[] = "remember: --color: option requires a value\n";
+    static const char json_invalid[] =
+        "{\"format\":\"remember-message\",\"version\":1,\"type\":\"unknown.result\",\"error\":{"
+        "\"code\":\"usage\",\"message\":\"invalid --color (must be auto, always, or never)\","
+        "\"fix\":\"Run 'remember --help' to see the commands.\",\"retryable\":false}}\n";
+    char *db = make_temp_db_path();
+    CliArgs args;
+    char p0[] = "remember";
+    char p1[] = "--color=always";
+    char p2[] = "--quiet";
+    char p3[] = "--color=never";
+    char p4[] = "add";
+    char p5[] = "hello-color";
+    char *parsed[] = {p0, p1, p2, p3, p4, p5};
+    char d0[] = "remember";
+    char d1[] = "add";
+    char d2[] = "--";
+    char d3[] = "--quiet";
+    char *dashed[] = {d0, d1, d2, d3};
+    char s0[] = "remember";
+    char s1[] = "--color";
+    char s2[] = "never";
+    char s3[] = "version";
+    char *spaced[] = {s0, s1, s2, s3};
+    const char *never[] = {"--color=never", "--quiet", "version"};
+    const char *always[] = {"--color=always", "version"};
+    const char *after[] = {"version", "--color=auto", "--quiet"};
+    const char *json_ok[] = {"--json", "--color=always", "--quiet", "version"};
+    const char *rainbow[] = {"--color=rainbow", "version"};
+    const char *upper[] = {"--color=AUTO", "version"};
+    const char *longer[] = {"--color=nevermore", "version"};
+    const char *json_bad[] = {"--json", "--color=rainbow", "version"};
+    const char *bare[] = {"--color"};
+    const char *empty[] = {"--color=", "version"};
+    const char *looks[] = {"--color", "--quiet", "version"};
+    const char *dashed_value[] = {"--color", "-never", "version"};
+    const char *space_ok[] = {"--color", "never", "version"};
+    const char *flag_after[] = {"version", "--color=never"};
+    const char *quiet_eq[] = {"--quiet=1", "version"};
+    const char *colorful[] = {"--colorful", "version"};
+    const char *add[] = {"add", "--color=never", "--quiet", "hello-color"};
+    const char *get_body[] = {"get", "1"};
+    const char *literal[] = {"add", "--", "--quiet"};
+    const char *get_literal[] = {"get", "2"};
+
+    cli_parse((int)(sizeof parsed / sizeof parsed[0]), parsed, &args);
+    ASSERT_EQ_INT((int)args.error, (int)CLI_ERR_OK);
+    ASSERT_EQ_INT((int)args.globals.color, (int)CLI_COLOR_NEVER);
+    ASSERT_TRUE(args.globals.quiet);
+    ASSERT_EQ_INT(args.rest_argc, 1);
+    if (args.rest_argc == 1) {
+        ASSERT_STREQ(args.rest_argv[0], "hello-color");
+    }
+    cli_args_free(&args);
+
+    cli_parse(4, dashed, &args);
+    ASSERT_EQ_INT((int)args.error, (int)CLI_ERR_OK);
+    ASSERT_FALSE(args.globals.quiet);
+    ASSERT_EQ_INT((int)args.globals.color, (int)CLI_COLOR_AUTO);
+    ASSERT_EQ_INT(args.rest_argc, 2);
+    if (args.rest_argc == 2) {
+        ASSERT_STREQ(args.rest_argv[0], "--");
+        ASSERT_STREQ(args.rest_argv[1], "--quiet");
+    }
+    cli_args_free(&args);
+
+    cli_parse(4, spaced, &args);
+    ASSERT_EQ_INT((int)args.error, (int)CLI_ERR_OK);
+    ASSERT_EQ_INT((int)args.globals.color, (int)CLI_COLOR_NEVER);
+    ASSERT_EQ_INT((int)args.command, (int)CLI_CMD_VERSION);
+    cli_args_free(&args);
+
+    ASSERT_TRUE(db != NULL);
+    if (db == NULL) {
+        return;
+    }
+    assert_run(db, never, sizeof never / sizeof never[0], 0, version_line, "");
+    assert_run(db, always, sizeof always / sizeof always[0], 0, version_line, "");
+    assert_run(db, after, sizeof after / sizeof after[0], 0, version_line, "");
+    assert_run(db, json_ok, sizeof json_ok / sizeof json_ok[0], 0, version_line, "");
+    assert_run(db, rainbow, sizeof rainbow / sizeof rainbow[0], 1, "", invalid);
+    assert_run(db, upper, sizeof upper / sizeof upper[0], 1, "", invalid);
+    assert_run(db, longer, sizeof longer / sizeof longer[0], 1, "", invalid);
+    assert_run(db, json_bad, sizeof json_bad / sizeof json_bad[0], 1, json_invalid, "");
+    assert_run(db, bare, sizeof bare / sizeof bare[0], 1, "", missing);
+    assert_run(db, empty, sizeof empty / sizeof empty[0], 1, "", missing);
+    assert_run(db, looks, sizeof looks / sizeof looks[0], 1, "", missing);
+    assert_run(db, dashed_value, sizeof dashed_value / sizeof dashed_value[0], 1, "", missing);
+    assert_run(db, space_ok, sizeof space_ok / sizeof space_ok[0], 0, version_line, "");
+    assert_run(db, flag_after, sizeof flag_after / sizeof flag_after[0], 0, version_line, "");
+    assert_run(db, quiet_eq, sizeof quiet_eq / sizeof quiet_eq[0], 1, "",
+               "remember: unknown option '--quiet=1'\n");
+    assert_run(db, colorful, sizeof colorful / sizeof colorful[0], 1, "",
+               "remember: unknown option '--colorful'\n");
+    assert_run(db, add, sizeof add / sizeof add[0], 0, "1\n", "");
+    assert_run(db, get_body, sizeof get_body / sizeof get_body[0], 0, "hello-color\n", "");
+    assert_run(db, literal, sizeof literal / sizeof literal[0], 0, "2\n", "");
+    assert_run(db, get_literal, sizeof get_literal / sizeof get_literal[0], 0, "--quiet\n", "");
+    free(db);
+}
+
+TEST(envelope_color_follows_the_tty_and_the_environment)
+{
+    SavedEnv no_color = {0};
+    SavedEnv term = {0};
+    int master_fd = -1;
+    FILE *tty = NULL;
+    FILE *plain = NULL;
+    FILE *broken_fp = NULL;
+    char *db = NULL;
+    AppPresentation mode;
+    const char *always_args[] = {"--color=always", "version"};
+    const char *auto_args[] = {"version"};
+    char *out_text = NULL;
+    char *err_text = NULL;
+    int rc = 0;
+
+    ASSERT_EQ_INT(save_env("NO_COLOR", &no_color), 0);
+    ASSERT_EQ_INT(save_env("TERM", &term), 0);
+    if ((no_color.had && no_color.saved == NULL) || (term.had && term.saved == NULL)) {
+        goto cleanup;
+    }
+    tty = open_pty_slave(&master_fd, "r");
+    plain = tmpfile();
+    broken_fp = open_dead_stream();
+    if (tty == NULL || plain == NULL || broken_fp == NULL) {
+        ASSERT_TRUE(tty != NULL);
+        ASSERT_TRUE(plain != NULL);
+        ASSERT_TRUE(broken_fp != NULL);
+        goto cleanup;
+    }
+
+    mode = auto_presentation();
+    mode.color = CLI_COLOR_ALWAYS;
+    app_set_presentation(mode);
+    ASSERT_EQ_INT(setenv("NO_COLOR", "1", 1), 0);
+    ASSERT_EQ_INT(setenv("TERM", "dumb", 1), 0);
+    ASSERT_TRUE(app_use_color(plain));
+    ASSERT_TRUE(app_use_color(NULL));
+
+    mode.color = CLI_COLOR_NEVER;
+    app_set_presentation(mode);
+    ASSERT_EQ_INT(unsetenv("NO_COLOR"), 0);
+    ASSERT_EQ_INT(setenv("TERM", "xterm", 1), 0);
+    ASSERT_FALSE(app_use_color(tty));
+    ASSERT_FALSE(app_use_color(NULL));
+
+    mode.color = CLI_COLOR_AUTO;
+    app_set_presentation(mode);
+    ASSERT_TRUE(app_use_color(tty));
+    ASSERT_EQ_INT(setenv("NO_COLOR", "", 1), 0);
+    ASSERT_FALSE(app_use_color(tty));
+    ASSERT_EQ_INT(setenv("NO_COLOR", "1", 1), 0);
+    ASSERT_FALSE(app_use_color(tty));
+    ASSERT_EQ_INT(unsetenv("NO_COLOR"), 0);
+    ASSERT_EQ_INT(setenv("TERM", "dumb", 1), 0);
+    ASSERT_FALSE(app_use_color(tty));
+    ASSERT_EQ_INT(unsetenv("TERM"), 0);
+    ASSERT_TRUE(app_use_color(tty));
+    ASSERT_EQ_INT(setenv("TERM", "Dumb", 1), 0);
+    ASSERT_TRUE(app_use_color(tty));
+    ASSERT_EQ_INT(setenv("TERM", "", 1), 0);
+    ASSERT_TRUE(app_use_color(tty));
+    ASSERT_EQ_INT(setenv("TERM", "xterm", 1), 0);
+    ASSERT_FALSE(app_use_color(plain));
+    ASSERT_FALSE(app_use_color(NULL));
+    ASSERT_FALSE(app_use_color(broken_fp));
+
+    db = make_temp_db_path();
+    ASSERT_TRUE(db != NULL);
+    if (db == NULL) {
+        goto cleanup;
+    }
+    ASSERT_EQ_INT(setenv("NO_COLOR", "1", 1), 0);
+    ASSERT_EQ_INT(setenv("TERM", "dumb", 1), 0);
+    rc = run_captured(db, always_args, sizeof always_args / sizeof always_args[0], &out_text,
+                      &err_text);
+    ASSERT_EQ_INT(rc, 0);
+    ASSERT_STREQ(out_text, "remember 0.2.0\n");
+    ASSERT_STREQ(err_text, "");
+    ASSERT_TRUE(app_use_color(plain));
+    free(out_text);
+    free(err_text);
+    out_text = NULL;
+    err_text = NULL;
+    rc = run_captured(db, auto_args, sizeof auto_args / sizeof auto_args[0], &out_text, &err_text);
+    ASSERT_EQ_INT(rc, 0);
+    ASSERT_FALSE(app_use_color(plain));
+    ASSERT_FALSE(app_use_color(tty));
+    free(out_text);
+    free(err_text);
+
+cleanup:
+    restore_presentation();
+    restore_env("NO_COLOR", &no_color);
+    restore_env("TERM", &term);
+    if (broken_fp != NULL) {
+        (void)fclose(broken_fp);
+    }
+    if (plain != NULL) {
+        (void)fclose(plain);
+    }
+    if (tty != NULL) {
+        (void)fclose(tty);
+    }
+    if (master_fd >= 0) {
+        (void)close(master_fd);
+    }
+    free(db);
+}
+
+/* "applied" and "failed" are the H-16.10 examples passed into the writer.
+   They are not product copy. */
+TEST(envelope_progress_is_a_stderr_line_and_quiet_json_stop_it)
+{
+    int master_fd = -1;
+    int dead_master = -1;
+    FILE *slave = NULL;
+    FILE *dead_slave = NULL;
+    FILE *plain = NULL;
+    char *out_buf = NULL;
+    size_t out_len = 0U;
+    FILE *out_fp = NULL;
+    char *db = NULL;
+    char wide[PROGRESS_WIDE + 1];
+    char wide_expect[PROGRESS_WIDE + 2];
+    AppPresentation mode;
+    const char *quiet_args[] = {"--quiet", "version"};
+    const char *plain_args[] = {"version"};
+    const char *json_args[] = {"--json", "version"};
+    char *out_text = NULL;
+    char *err_text = NULL;
+    int rc = 0;
+
+    memset(wide, 'a', sizeof wide);
+    wide[PROGRESS_WIDE] = '\0';
+    memset(wide_expect, 'a', PROGRESS_WIDE);
+    wide_expect[PROGRESS_WIDE] = '\n';
+    wide_expect[PROGRESS_WIDE + 1] = '\0';
+
+    slave = open_pty_slave(&master_fd, "w");
+    if (slave != NULL && slave_writes_raw(slave) != 0) {
+        (void)fclose(slave);
+        slave = NULL;
+        if (master_fd >= 0) {
+            (void)close(master_fd);
+            master_fd = -1;
+        }
+    }
+    plain = tmpfile();
+    out_fp = open_memstream(&out_buf, &out_len);
+    if (slave == NULL || plain == NULL || out_fp == NULL) {
+        ASSERT_TRUE(slave != NULL);
+        ASSERT_TRUE(plain != NULL);
+        ASSERT_TRUE(out_fp != NULL);
+        goto cleanup;
+    }
+    app_set_streams((AppStreams){.out = out_fp, .err = slave});
+    app_set_presentation(auto_presentation());
+    progress_line(master_fd, "applied", 0, "applied\n");
+    progress_line(master_fd, "applied", PROGRESS_GAP_MS - 1, "");
+    progress_line(master_fd, "failed", PROGRESS_GAP_MS, "failed\n");
+    progress_line(master_fd, "applied", (long long)PROGRESS_GAP_MS * PROGRESS_DUE_GAPS,
+                  "applied\n");
+    progress_line(master_fd, "nope", (long long)PROGRESS_GAP_MS * PROGRESS_REWIND_GAPS, "");
+    progress_line(master_fd, "later", (long long)PROGRESS_GAP_MS * PROGRESS_EXACT_GAPS, "later\n");
+
+    app_set_presentation(auto_presentation());
+    progress_line(master_fd, NULL, 0, "");
+    progress_line(master_fd, "", 0, "");
+    app_set_presentation(auto_presentation());
+    progress_line(master_fd, "applied\x1b[2K", 0, "applied?[2K\n");
+    app_set_presentation(auto_presentation());
+    progress_line(master_fd, "spin\r", 0, "spin?\n");
+    app_set_presentation(auto_presentation());
+    progress_line(master_fd, "one\ntwo", 0, "one?two\n");
+    app_set_presentation(auto_presentation());
+    progress_line(master_fd, wide, 0, wide_expect);
+
+    mode = auto_presentation();
+    mode.color = CLI_COLOR_ALWAYS;
+    app_set_presentation(mode);
+    progress_line(master_fd, "applied", 0, "applied\n");
+
+    mode.quiet = true;
+    app_set_presentation(mode);
+    progress_line(master_fd, "applied", 0, "");
+    mode.quiet = false;
+    mode.json = true;
+    app_set_presentation(mode);
+    progress_line(master_fd, "applied", 0, "");
+
+    mode.json = false;
+    mode.color = CLI_COLOR_ALWAYS;
+    app_set_presentation(mode);
+    app_set_streams((AppStreams){.out = out_fp, .err = plain});
+    app_progress("applied", 0);
+    ASSERT_EQ_INT(fflush(plain), 0);
+    ASSERT_EQ_INT((int)ftell(plain), 0);
+
+    dead_slave = open_pty_slave(&dead_master, "w");
+    ASSERT_TRUE(dead_slave != NULL);
+    if (dead_slave != NULL) {
+        (void)setvbuf(dead_slave, NULL, _IONBF, 0);
+        (void)close(dead_master);
+        dead_master = -1;
+        app_set_streams((AppStreams){.out = out_fp, .err = dead_slave});
+        app_set_presentation(auto_presentation());
+        app_progress("applied", 0);
+        app_set_streams((AppStreams){.out = out_fp, .err = slave});
+        progress_line(master_fd, "applied", 0, "applied\n");
+        (void)fclose(dead_slave);
+        dead_slave = NULL;
+    }
+
+    db = make_temp_db_path();
+    ASSERT_TRUE(db != NULL);
+    if (db == NULL) {
+        goto cleanup;
+    }
+    rc = run_captured(db, quiet_args, sizeof quiet_args / sizeof quiet_args[0], &out_text,
+                      &err_text);
+    ASSERT_EQ_INT(rc, 0);
+    ASSERT_STREQ(out_text, "remember 0.2.0\n");
+    ASSERT_STREQ(err_text, "");
+    free(out_text);
+    free(err_text);
+    app_set_streams((AppStreams){.out = out_fp, .err = slave});
+    progress_line(master_fd, "applied", 0, "");
+
+    rc = run_captured(db, plain_args, sizeof plain_args / sizeof plain_args[0], &out_text,
+                      &err_text);
+    ASSERT_EQ_INT(rc, 0);
+    free(out_text);
+    free(err_text);
+    app_set_streams((AppStreams){.out = out_fp, .err = slave});
+    progress_line(master_fd, "applied", 0, "applied\n");
+
+    rc = run_captured(db, json_args, sizeof json_args / sizeof json_args[0], &out_text, &err_text);
+    ASSERT_EQ_INT(rc, 0);
+    ASSERT_STREQ(out_text, "remember 0.2.0\n");
+    ASSERT_STREQ(err_text, "");
+    free(out_text);
+    free(err_text);
+    app_set_streams((AppStreams){.out = out_fp, .err = slave});
+    progress_line(master_fd, "applied", 0, "");
+
+    ASSERT_EQ_INT(fflush(out_fp), 0);
+    ASSERT_STREQ(out_buf, "");
+
+cleanup:
+    restore_presentation();
+    if (dead_slave != NULL) {
+        (void)fclose(dead_slave);
+    }
+    if (dead_master >= 0) {
+        (void)close(dead_master);
+    }
+    if (out_fp != NULL) {
+        (void)fclose(out_fp);
+    }
+    free(out_buf);
+    if (plain != NULL) {
+        (void)fclose(plain);
+    }
+    if (slave != NULL) {
+        (void)fclose(slave);
+    }
+    if (master_fd >= 0) {
+        (void)close(master_fd);
+    }
+    free(db);
+}
+
+TEST(envelope_prompt_echoes_the_typed_line)
+{
+    char text[PROMPT_SLOT];
+    char shown[PROMPT_SLOT];
+    char echo[PROMPT_SLOT];
+    int echo_on = 0;
+    PromptOut out = {0};
+    int ends[2] = {-1, -1};
+    FILE *input = NULL;
+    FILE *sink_fp = NULL;
+    char buf[PROMPT_SLOT];
+    char left[PROMPT_SLOT];
+    size_t got = 0U;
+    ssize_t wrote = 0;
+    PromptAsk ask;
+
+    text[0] = 'x';
+    ASSERT_EQ_INT(app_prompt_line(NULL, "Ask: ", text, sizeof text), -1);
+    ASSERT_STREQ(text, "");
+    ASSERT_EQ_INT(app_prompt_line(NULL, "Ask: ", NULL, sizeof text), -1);
+    text[0] = 'x';
+    ASSERT_EQ_INT(app_prompt_line(NULL, "Ask: ", text, 1), -1);
+    ASSERT_STREQ(text, "");
+    text[0] = 'x';
+    ASSERT_EQ_INT(app_prompt_line(NULL, "Ask: ", text, 0), -1);
+    ASSERT_EQ_INT(text[0], (int)'x');
+
+    out.text = text;
+    out.text_cap = sizeof text;
+    out.shown = shown;
+    out.shown_cap = sizeof shown;
+    out.echo = echo;
+    out.echo_cap = sizeof echo;
+    out.echo_on = &echo_on;
+
+    ask.typed = "yes\n";
+    ask.prompt = "Ask: ";
+    ask.cap = sizeof text;
+    ASSERT_EQ_INT(prompt_once(ask, out), 0);
+    ASSERT_STREQ(text, "yes");
+    ASSERT_STREQ(shown, "Ask: ");
+    ASSERT_STR_CONTAINS(echo, "yes");
+    ASSERT_STR_CONTAINS(echo, "\n");
+    ASSERT_STR_NOT_CONTAINS(shown, "yes");
+    ASSERT_EQ_INT(echo_on, 1);
+
+    ask.typed = "\n";
+    ask.prompt = "";
+    ASSERT_EQ_INT(prompt_once(ask, out), 0);
+    ASSERT_STREQ(text, "");
+    ASSERT_STREQ(shown, "");
+
+    ask.typed = "z\n";
+    ask.prompt = NULL;
+    ASSERT_EQ_INT(prompt_once(ask, out), 0);
+    ASSERT_STREQ(text, "z");
+    ASSERT_STREQ(shown, "");
+
+    ask.typed = "ok\n";
+    ask.prompt = "\r\x1b";
+    ASSERT_EQ_INT(prompt_once(ask, out), 0);
+    ASSERT_STREQ(text, "ok");
+    ASSERT_STREQ(shown, "??");
+
+    ask.typed = "yes\n";
+    ask.prompt = "Ask: ";
+    ask.cap = PROMPT_TINY;
+    ASSERT_EQ_INT(prompt_once(ask, out), -1);
+    ASSERT_STREQ(text, "");
+
+    ask.typed = NULL;
+    ask.cap = sizeof text;
+    ASSERT_EQ_INT(prompt_once(ask, out), -1);
+    ASSERT_STREQ(text, "");
+
+    // NOLINTNEXTLINE(android-cloexec-pipe)
+    ASSERT_EQ_INT(pipe(ends), 0);
+    if (ends[0] < 0) {
+        return;
+    }
+    wrote = write(ends[1], "yes\n", 4);
+    ASSERT_EQ_INT((int)wrote, 4);
+    if (wrote != 4) {
+        goto cleanup;
+    }
+    (void)close(ends[1]);
+    ends[1] = -1;
+    input = fdopen(ends[0], "r");
+    if (input != NULL) {
+        ends[0] = -1;
+    }
+    sink_fp = open_dead_stream();
+    if (input == NULL || sink_fp == NULL) {
+        ASSERT_TRUE(input != NULL);
+        ASSERT_TRUE(sink_fp != NULL);
+        goto cleanup;
+    }
+    app_set_streams((AppStreams){.out = NULL, .err = sink_fp});
+    buf[0] = 'x';
+    ASSERT_EQ_INT(app_prompt_line(input, "Ask: ", buf, sizeof buf), -1);
+    ASSERT_STREQ(buf, "");
+    got = fread(left, 1, 4, input);
+    left[got] = '\0';
+    ASSERT_EQ_INT((int)got, 4);
+    ASSERT_STREQ(left, "yes\n");
+
+cleanup:
+    restore_presentation();
+    if (sink_fp != NULL) {
+        (void)fclose(sink_fp);
+    }
+    if (input != NULL) {
+        (void)fclose(input);
+    }
+    if (ends[0] >= 0) {
+        (void)close(ends[0]);
+    }
+    if (ends[1] >= 0) {
+        (void)close(ends[1]);
+    }
+}
+
+// NOLINTEND(concurrency-mt-unsafe)
+
 void register_envelope_tests(void)
 {
     RUN_TEST(envelope_get_by_digits_and_by_uuid_is_the_same_memory);
@@ -1440,6 +2343,11 @@ void register_envelope_tests(void)
     RUN_TEST(envelope_trash_and_expired_cannot_combine);
     RUN_TEST(envelope_purge_trash_selects_the_deleted_bin);
     RUN_TEST(envelope_brain_new_id_replaces_only_the_brain_id);
+    RUN_TEST(envelope_help_prints_the_color_and_quiet_lines);
+    RUN_TEST(envelope_color_and_quiet_are_accepted_as_globals);
+    RUN_TEST(envelope_color_follows_the_tty_and_the_environment);
+    RUN_TEST(envelope_progress_is_a_stderr_line_and_quiet_json_stop_it);
+    RUN_TEST(envelope_prompt_echoes_the_typed_line);
 #ifdef REMEMBER_TEST_VFS
     RUN_TEST(envelope_add_link_read_error_after_the_write_exits_1_and_keeps_the_write);
 #else

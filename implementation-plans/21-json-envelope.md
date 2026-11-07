@@ -690,3 +690,73 @@ DRY / easy to replace / orthogonal / simplify:
 - One data writer (`output_brain_new_id_data`). The device sidecar and `brain_meta.brain_id` stay separate.
 - Argument rejection sits in front of open, the same place repair uses, so a typo does not create a brain file.
 - `decision:g2-05` stays unimplemented. A copied file keeps `brain_id` until this command runs.
+
+### Stage 7: --color and --quiet globals (2026-11-07)
+
+`--color` and `--quiet` are globals. Color is on only for a terminal, when `NO_COLOR` is unset and `TERM` is not the string `dumb`. `--color=auto|always|never` overrides. Status is a word. No checkmarks. No meaning by color alone. Progress goes to stderr only, when stderr is a terminal, as whole lines, at most once a second, with no spinner. `--quiet` turns it off. `--json` turns it off too. Progress is never in stdout and never inside `--json`. Prompts echo typed input. (`decision:2026-10-22-m-18`. H-16.10.)
+
+What changed:
+
+- `src/cli.c`. `--quiet` is a bare flag. `--color` takes `auto`, `always`, or `never`, as `--color=VALUE` or as the next token. A next token that looks like an option is a missing value. Last assignment wins. After `--`, both stay literal. A bad word is `invalid --color (must be auto, always, or never)`. That sentence is the busy-timeout house shape. It is not a COPY-PENDING line. An empty value is `option requires a value`.
+- `src/appio.c`. `app_use_color`, `app_progress`, and `app_prompt_line`. `auto` needs a terminal, an unset `NO_COLOR` (empty counts as set), and `TERM` other than `dumb`. Unset `TERM` is not dumb. `always` is on even when the stream is null, `NO_COLOR` is set, or `TERM` is dumb. `never` is off. Progress writes one masked line and a newline to stderr, then waits 1000 ms. Exactly 1000 ms allows the next line. A clock that goes backwards suppresses the line. A failed write does not move the clock and does not fail the command. The prompt writes through the same mask, flushes, and reads with `fgets`. It does not call `tcsetattr`.
+- `remember_run` stores the mode after `cli_parse`. The next `remember_run` replaces it. No current command prints color, a progress line, or a prompt. Plan 25 is the first caller.
+- General help prints the two C-02 lines. The usage line and every command footer list the globals, including `--strict`, which stage 5 left off the footer. There is no invented `--strict` help sentence.
+- Tests: `envelope_help_prints_the_color_and_quiet_lines` was the red test. Acceptance, the color matrix, progress, and the prompt are separate tests.
+
+Not in stage 7, on purpose: stage 8 (`unknown_field`, C-35) and stage 9 (the spec). `remember brain new-id` stays. Do not add `remember brains`. JE-3.10 stays unimplemented. `--trash` stays the Deleted bin and is not an alias of `--expired`. The `flag_meaning_changed` warning stays. Actors, `--as`, `--actor`, `--created-by`, and `--updated-by` stay. The positional locator stays. Exit 5 and `--yes` stay unimplemented (`decision:2026-11-03-confirmation-required-exit-5`). Approved lines stay C-01, C-02, and C-35. Other C-42 fix lines stay drafts. M5 stays `rc = (rc == REMEMBER_OK && diag_json_has_error()) ? REMEMBER_ERR : rc;` in `run_json`. The 16 stage-2a mutants, the 10 stage-3 mutants, the 10 stage-4 mutants, the 14 stage-5 mutants, and the 7 stage-6 mutants were not re-run. INDEX row 21 and the definition of done stay unticked. No `state:implemented`. Version stays 0.2.0. No `.claude/WHOLE_PLAN_REVIEW`.
+
+`--hooks` and `--no-hooks`: the plan says accept them and do not change delivery until plan 25. The stage-6 binary rejects both as unknown options. Stage 7 left that as it is. It does not lock the rejection.
+
+Gate (Apple clang, Debug, sanitizers on, LSAN off, `REMEMBER_TEST_VFS=ON`, Unix Makefiles; coverage with Homebrew LLVM 22). `BUILD_DIR` was not exported. ninja is absent. `origin/main` was not merged (`standard:coding` rule 7 says merge at stage start; this stage's prompt says stage 9 merges `origin/main`). ctest 5/5, real 155.59s (step_gate 68.87s, step05_gate 68.69s, store_asan_gate 15.36s, install_skill 1.94s, no_shim_symbols 0.72s). Load average during that run was 8.78 8.85 7.15. Coverage: store 499 and CLI 912, both 0 failed; functions 100%; raw lines 87.60%; effective lines 100% (zero-hit 2111, all defensive, must-cover 0); branch sides 0 missed on `search_terms.c` (176), `unicode.c` (80), `normalize.c` (504), `output.c` (736). Lint `LINT OK` (LLVM 22 clang-tidy, cppcheck, gcc -fanalyzer, scan-build; include-what-you-use skipped, not installed). `leaks-macos: PASS`. `default.profraw` stays untracked.
+
+The first lint run failed on two cppcheck notes (`constVariablePointer` on the prompt read, and `knownConditionTrueFalse` where a config with neither `__APPLE__` nor `__GLIBC__` saw `open_dead_stream` return NULL). Those are fixed in the tree the gate above measured. The dead stream is local to the envelope test. `failing_stream.c` stays linked only into `remember_store_tests`, so CMake was not reconfigured.
+
+Docs that name the flags: `docs/engineering-notes.md` (the globals bullet), the current claims in `README.md`, and `skills/remember/SKILL.md` in this worktree (the usage line and the two C-02 rows). Design logs, old plans, INDEX, `docs/JSON-STYLE.md`, and the installed grok skill were not edited. The worktree skill still has `--source` in the add examples (stage 4 left that).
+
+### Stage 7 deep review (2026-11-07, in session)
+
+`decision:plan21-stage-flow`: in-session deep review, fix, continue. No `.claude/REVIEW_REQUEST`. Local Bugbot is not installed. No product question is open. `standard:coding` says merge `main` at the start of a stage. This prompt says stage 9 merges `origin/main`, so it was not merged. `decision:2026-11-01-legacy-plans-spec-step` says stage 9 is the spec stage and the whole-plan review is after that. This stage does not write `.claude/WHOLE_PLAN_REVIEW`. `quality:linters-max` allows a local `NOLINT`. The new notes are the same kind already used for `getenv`, padding, and swappable test parameters.
+
+The gate above is the production tree. The review found no product bug. These notes were written after the gate and do not change C.
+
+Findings:
+
+- **Kept:** no command prints color, progress, or a prompt yet. The rules live in `appio.c` and `remember_run` stores the mode. Plan 25 is the caller.
+- **Kept:** an invalid `--color` uses the busy-timeout sentence shape. COPY-PENDING has no sentence for it.
+- **Kept:** `--hooks` and `--no-hooks` stay unknown options. The plan says accept them. This stage did not change that and did not lock it.
+- **Kept:** exit 5 is not implemented. A prompt does not require a terminal.
+- **Kept:** M5. The earlier mutant sets were not re-run. This stage did not edit those clauses.
+- **Kept:** `skills/remember/SKILL.md` still shows `--source` on add. Stage 4 left that.
+- **Kept:** progress clears output processing only in the test, so a program `\r` is visible. The prompt test leaves the terminal's echo on. The assertion is that the echo contains the typed word and a newline.
+
+Mutants, one clause at a time, each rebuilt (`cmake --build build --target remember remember_tests -j 8`, then `./build/remember_tests ./build/remember --only envelope`). No survivor. Sources were restored after the last one (hash check). A first spelling of the space-form mutant, `strcmp(arg, "--color") == 1`, was not a valid mutant: on this libc `strcmp("--db", "--color")` is 1, so every `--db` run failed. The row below is the rewrite that rejects only the space form.
+
+| Mutant | Change | Red test |
+|---|---|---|
+| never-always-swapped | `never` returns true and `always` returns false | `envelope_color_follows_the_tty_and_the_environment` |
+| auto-ignores-no-color | `NO_COLOR` disables color only for the sentinel `___never___` | `envelope_color_follows_the_tty_and_the_environment` |
+| empty-no-color-unset | an empty `NO_COLOR` allows color | `envelope_color_follows_the_tty_and_the_environment` |
+| term-dumb-ok | `TERM=dumb` does not disable color | `envelope_color_follows_the_tty_and_the_environment` |
+| unset-term-dumb | an unset `TERM` disables color | `envelope_color_follows_the_tty_and_the_environment` |
+| auto-ignores-isatty | the terminal check's result is discarded | `envelope_color_follows_the_tty_and_the_environment` |
+| always-requires-tty | `always` still requires a terminal | `envelope_color_follows_the_tty_and_the_environment` |
+| progress-writes-stdout | the line is written to stdout | `envelope_progress_is_a_stderr_line_and_quiet_json_stop_it` |
+| progress-ignores-quiet | `--quiet` does not stop a real line | `envelope_progress_is_a_stderr_line_and_quiet_json_stop_it` |
+| progress-ignores-json | `--json` does not stop a real line | `envelope_progress_is_a_stderr_line_and_quiet_json_stop_it` |
+| progress-ignores-tty | a non-terminal still gets a line | `envelope_progress_is_a_stderr_line_and_quiet_json_stop_it` |
+| interval-le | the gap test is `<=` 1000 ms | `envelope_progress_is_a_stderr_line_and_quiet_json_stop_it` |
+| progress-adds-cr | a CR is written before the newline | `envelope_progress_is_a_stderr_line_and_quiet_json_stop_it` |
+| color-eq-unknown | the `--color=` prefix is `--colour=` | `envelope_color_and_quiet_are_accepted_as_globals` |
+| space-form-rejected | the space form matches `--color-space` | `envelope_color_and_quiet_are_accepted_as_globals` |
+| flag-after-dd-consumed | `--` does not end option scanning | `envelope_color_and_quiet_are_accepted_as_globals` |
+| footer-omits-strict | the footer drops `--strict` | `envelope_help_prints_the_color_and_quiet_lines` |
+| help-sentence-drifted | the C-02 line says `tty` instead of `terminal` | `envelope_help_prints_the_color_and_quiet_lines` |
+
+DRY / easy to replace / orthogonal / simplify:
+
+- One parser (`take_quiet_or_color`) owns both spellings of `--color` and the bare `--quiet`. `take_global` calls it first.
+- One mode (`AppPresentation`) is stored by `remember_run`. Color, progress, and prompts read that mode. They do not read `argv` again.
+- `remember_run` fills the mode from the parsed globals. An earlier draft set `auto` and then overwrote the three fields. That extra write is gone.
+- Not taken: fold the three progress writes into one condition. Each call can fail, and the clock moves only after all three succeed. About four lines. The separate checks stay.
+- Not taken: inline `take_quiet_or_color` into `take_global`. `take_global` already owns the other globals. The two color spellings are one function.
+- Not taken: link `failing_stream.c` into `remember_tests`. That reconfigures CMake. The envelope test keeps a local dead stream. The Linux branch defines `_GNU_SOURCE` before the includes, the same way `failing_stream.c` does.
