@@ -760,3 +760,72 @@ DRY / easy to replace / orthogonal / simplify:
 - Not taken: fold the three progress writes into one condition. Each call can fail, and the clock moves only after all three succeed. About four lines. The separate checks stay.
 - Not taken: inline `take_quiet_or_color` into `take_global`. `take_global` already owns the other globals. The two color spellings are one function.
 - Not taken: link `failing_stream.c` into `remember_tests`. That reconfigures CMake. The envelope test keeps a local dead stream. The Linux branch defines `_GNU_SOURCE` before the includes, the same way `failing_stream.c` does.
+
+### Stage 8: unknown_field (2026-11-07)
+
+An unknown field is a warning `unknown_field`, once per file or stream. The plain lines are C-35. Do not silently ignore the field. (`decision:json-unknown-fields`. 008 JE-4.1. JSON-STYLE §1.13.) `plugin.json` members `run`, `permissions`, and `filter` are `plugin_manifest_invalid`, not this warning (plan 25). A plugin's own `unknown_field` stays in the plugin log and plugin status. Export and import files are plans 22 and 23.
+
+What changed:
+
+- `DIAG_WARN_UNKNOWN_FIELD` is the last warning. The token is `unknown_field`. The plain prefix is `warning: `, so the line is `remember: warning: ` plus the C-35 sentence.
+- `diag_unknown_field` takes a `DiagUnknownField` (`path`, `name`). `path` NULL is stdin. The file sentence quotes the path. The stream sentence says `stdin` with no quotes around that word. JSON `detail` is `field`, then `where` (the raw path, or `stdin`).
+- The same path bytes warn once, even from a different pointer. A second field in that file or stream prints nothing. Stdin and a file do not share a slot. Two paths each warn. `diag_warnings_reset` drops the set. A failed write does not mark the path, so a later write of that path still prints. A NULL name returns -1 and writes nothing. An empty name is a real key.
+- The sentence is allocated to fit the path and the name. Plain output goes through `output_text_human` (newline, ESC, DEL, and a UTF-8 C1 become `?`; tab stays; the line stays one line). JSON escapes the same bytes. The message is not masked before it is stored.
+- No command reads a JSON file or JSON stdin. The list cursor still rejects an unknown member (`invalid_argument`). There is no cursor sentence in C-35.
+
+Not in stage 8, on purpose: stage 9 (the spec). `remember brain new-id` stays. Do not add `remember brains`. JE-3.10 stays unimplemented. `--trash` stays the Deleted bin and is not an alias of `--expired`. The `flag_meaning_changed` warning stays. Actors, `--as`, `--actor`, `--created-by`, and `--updated-by` stay. The positional locator stays. Exit 5 and `--yes` stay unimplemented. Approved lines stay C-01, C-02, and C-35. Other C-42 fix lines stay drafts. M5 stays `rc = (rc == REMEMBER_OK && diag_json_has_error()) ? REMEMBER_ERR : rc;` in `run_json`. The 16 stage-2a mutants, the 10 stage-3 mutants, the 10 stage-4 mutants, the 14 stage-5 mutants, the 7 stage-6 mutants, and the 18 stage-7 mutants were not re-run. INDEX row 21 and the definition of done stay unticked. No `state:implemented`. Version stays 0.2.0. No `.claude/WHOLE_PLAN_REVIEW`.
+
+`--hooks` and `--no-hooks`: the plan says accept them and do not change delivery until plan 25. The binary still rejects both as unknown options. Stage 7 left that. Stage 8 did not implement acceptance and did not lock the rejection.
+
+Gate (Apple clang, Debug, sanitizers on, LSAN off, `REMEMBER_TEST_VFS=ON`, Unix Makefiles; coverage with Homebrew LLVM 22). `BUILD_DIR` was not exported. `build/` was not reconfigured. ninja is absent. `origin/main` was not merged (`standard:coding` rule 7 says merge at stage start; this stage's prompt says stage 9 merges `origin/main`). ctest 5/5, real 162.70s (step_gate 70.71s, step05_gate 69.23s, store_asan_gate 16.54s, install_skill 4.49s, no_shim_symbols 1.71s). The coverage run and the lint run overlapped that ctest. Load after the three finished: 20.52 17.14 13.30. Coverage: store 499 and CLI 922, both 0 failed; functions 100%; raw lines 87.57%; effective lines 100% (zero-hit 2128, all defensive, must-cover 0); branch sides 0 missed on `search_terms.c` (176), `unicode.c` (80), `normalize.c` (504), `output.c` (736). Lint `LINT OK` (LLVM 22 clang-tidy, cppcheck, gcc -fanalyzer, scan-build; include-what-you-use skipped, not installed). `leaks-macos: PASS`. `default.profraw` stays untracked.
+
+`docs/engineering-notes.md` names `unknown_field` and the two C-35 lines. The same sentence now also names `setting_invalid`, which was already a warning token and was missing from that list. Design logs, `docs/JSON-STYLE.md`, INDEX, `README.md`, and both skill copies were not edited. JSON-STYLE already lists `unknown_field` on the exit-4 line. The worktree skill still has `--source` on add (stage 4 left that).
+
+### Stage 8 deep review (2026-11-07, in session)
+
+`decision:plan21-stage-flow`: in-session deep review, fix, continue. No `.claude/REVIEW_REQUEST`. Local Bugbot is not installed. No product question is open. `standard:coding` says merge `main` at the start of a stage. This prompt says stage 9 merges `origin/main`, so it was not merged. `decision:2026-11-01-legacy-plans-spec-step` says stage 9 is the spec stage and the whole-plan review is after that. This stage does not write `.claude/WHOLE_PLAN_REVIEW`. `quality:linters-max` allows the existing `NOLINT` on the new globals. The new notes are the same kind already used for the warning-count global.
+
+The gate above is the production tree. These notes were written after the gate and do not change C. The review found no product bug.
+
+Findings:
+
+- **Kept:** no command calls `diag_unknown_field` yet. Plans 22, 23, and 25 are the readers. The list cursor still returns `invalid_argument` for an unknown member. C-35 has no cursor line, so that rejection stays.
+- **Kept:** `--strict` is the existing count check. `unknown_field` is not special-cased.
+- **Kept:** a missed mark after a written line returns 0. The sentence says the rest of the file was read. A second warning on that OOM is the rare case.
+- **Kept:** the path set is freed on the next `diag_warnings_reset`. One `remember_run` frees the previous run's paths at the start. The strings stay reachable from the global until then.
+- **Kept:** `--hooks` and `--no-hooks` stay unknown options. This stage did not lock that.
+- **Kept:** M5. The earlier mutant sets were not re-run. This stage did not edit those clauses.
+- **Kept:** `skills/remember/SKILL.md` still shows `--source` on add. Stage 4 left that.
+
+Mutants, one clause at a time, each rebuilt, then `remember_tests --only envelope` (the failed-write mutant used `--only errors`). No survivor. `diag.c` was restored after the last one (byte check) and `remember_tests` was rebuilt. Three first spellings were not valid mutants: swapping the two format strings fails `-Wformat` because the file sentence takes two arguments and the stream sentence takes one; deleting the seen check leaves `unknown_field_seen` unused; deleting the `unknown_fields_reset` call leaves that function unused. The rows below are the rewrites that compile.
+
+| Mutant | Change | Red test |
+|---|---|---|
+| sentences-swapped | a file gets the stdin sentence, and stdin gets the file sentence with the word stdin as the path | `envelope_unknown_field_warns_once_for_a_file` |
+| file-says-input | the file sentence says `input` | `envelope_unknown_field_warns_once_for_a_file` |
+| stream-says-file | the stream sentence says `file` | `envelope_unknown_field_warns_once_for_stdin` |
+| path-unquoted | the file sentence does not quote the path | `envelope_unknown_field_warns_once_for_a_file` |
+| stdin-quoted | the stream sentence quotes stdin | `envelope_unknown_field_warns_once_for_stdin` |
+| second-call-warns | the seen check's result is discarded | `envelope_unknown_field_warns_once_for_a_file` |
+| files-share-one-slot | any path is seen after the first file | `envelope_unknown_field_warns_once_per_path` |
+| stdin-consumes-a-file | a warning on stdin swallows a later file | `envelope_unknown_field_warns_once_for_stdin` |
+| detail-swapped | `where` is emitted before `field` | `envelope_unknown_field_json_names_the_field_and_the_file` |
+| detail-omitted | the warning has no `detail` | `envelope_unknown_field_json_names_the_field_and_the_file` |
+| token-unknown-fields | the catalog token is `unknown_fields` | `envelope_unknown_field_json_names_the_field_and_the_file` |
+| message-includes-prefix | the file sentence starts with `remember: warning: ` | `envelope_unknown_field_warns_once_for_a_file` |
+| newline-splits-the-line | `unknown_field` keeps a newline | `envelope_unknown_field_masks_the_plain_line_and_escapes_json` |
+| mark-before-write | the path is recorded before the write | `unknown_field_that_cannot_be_written_does_not_stick` |
+| pointer-compare | the same bytes in a new buffer warn again | `envelope_unknown_field_warns_once_for_a_file` |
+| only-first-path | only `paths[0]` is remembered | `envelope_unknown_field_warns_once_per_path` |
+| reset-leaves-the-set | `unknown_fields_reset` is empty | `envelope_unknown_field_warns_once_for_stdin` |
+| where-quotes-stdin | `detail.where` is `"stdin"` with quotes in the value | `envelope_unknown_field_json_names_stdin` |
+| where-is-null | stdin stores the NULL path as `where` | `envelope_unknown_field_json_names_stdin` |
+
+DRY / easy to replace / orthogonal / simplify:
+
+- One function, `diag_unknown_field`, owns the sentence, the once-set, and the detail order. Callers pass the path and the name.
+- The two sentences are two literals. A change to one does not change the other. The file format takes the path and the name. The stream format takes the name.
+- The once-set is path bytes plus one stdin flag. It is cleared in the same function that clears the warning count.
+- Not taken: a second JSON parser. Nothing on this branch reads a JSON document.
+- Not taken: turn the list cursor's unknown member into this warning. C-35 names a file or stdin. The cursor stays `invalid_argument`.
+- Not taken: free the path set at the end of `remember_run` as well as the start. The next run already frees it, and the count has to stay until the strict check.

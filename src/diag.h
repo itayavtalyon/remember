@@ -63,6 +63,7 @@ typedef enum {
     DIAG_WARN_SYNCED_FOLDER,
     DIAG_WARN_SETTING_INVALID,
     DIAG_WARN_FLAG_MEANING_CHANGED, /* --trash, one release (M-23) */
+    DIAG_WARN_UNKNOWN_FIELD,        /* C-35, once per file or stdin */
     DIAG_WARN_COUNT
 } DiagWarning;
 
@@ -135,7 +136,22 @@ typedef struct {
 int diag_warning_detail(DiagWarning code, const char *message, const DiagDetailField *fields,
                         size_t nfields);
 
-/* Zero the warning count at the start of remember_run. */
+/* path NULL is stdin. name is the unknown field. */
+typedef struct {
+    const char *path;
+    const char *name;
+} DiagUnknownField;
+
+/*
+ * C-35. Warn once for this path, or once for stdin. The caller keeps reading.
+ * Plain is the file line or the stdin line. JSON code is unknown_field.
+ * detail is field, then where (the path, or stdin). Returns -1 when name is
+ * NULL or the warning cannot be written. A later field in the same file or
+ * stream returns 0 and prints nothing.
+ */
+int diag_unknown_field(DiagUnknownField field);
+
+/* Zero the warning count and the once-per-file set at the start of remember_run. */
 void diag_warnings_reset(void);
 
 /* Warnings written since the reset, plain and JSON. */

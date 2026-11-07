@@ -5,6 +5,7 @@
 
 #include "appio.h"
 #include "cli.h"
+#include "diag.h"
 #include "harness.h"
 #include "normalize.h"
 #include "register.h"
@@ -2321,6 +2322,425 @@ cleanup:
 
 // NOLINTEND(concurrency-mt-unsafe)
 
+/* Join parts in order. The caller frees. NULL when the allocation fails. */
+static char *join_parts(const char *const *parts, size_t n)
+{
+    size_t i = 0U;
+    size_t total = 0U;
+    char *buf = NULL;
+    char *at = NULL;
+
+    for (i = 0U; i < n; i++) {
+        total += strlen(parts[i]);
+    }
+    buf = (char *)malloc(total + 1U);
+    if (buf == NULL) {
+        return NULL;
+    }
+    at = buf;
+    for (i = 0U; i < n; i++) {
+        size_t len = strlen(parts[i]);
+
+        memcpy(at, parts[i], len);
+        at += len;
+    }
+    *at = '\0';
+    return buf;
+}
+
+/* C-35 file line. The same path bytes, not the same pointer, warn once. */
+TEST(envelope_unknown_field_warns_once_for_a_file)
+{
+    char path_a[] = "/tmp/note.json";
+    char path_b[] = "/tmp/note.json";
+    char *buf = NULL;
+    size_t len = 0U;
+    FILE *err = open_memstream(&buf, &len);
+
+    ASSERT_TRUE(err != NULL);
+    if (err == NULL) {
+        return;
+    }
+    diag_json_end();
+    diag_warnings_reset();
+    app_set_streams((AppStreams){.out = NULL, .err = err});
+    ASSERT_EQ_INT(diag_unknown_field((DiagUnknownField){.path = path_a, .name = "extra"}), 0);
+    ASSERT_EQ_INT(diag_unknown_field((DiagUnknownField){.path = path_b, .name = "other"}), 0);
+    ASSERT_EQ_INT(diag_warning_count(), 1U);
+    ASSERT_EQ_INT(fflush(err), 0);
+    ASSERT_STREQ(buf, "remember: warning: \"/tmp/note.json\" has a field remember doesn't know, "
+                      "\"extra\". The rest of the file was read.\n");
+    app_set_streams((AppStreams){.out = NULL, .err = NULL});
+    diag_warnings_reset();
+    ASSERT_EQ_INT(fclose(err), 0);
+    free(buf);
+}
+
+/* C-35 stdin line. A file in the same stretch still warns. */
+TEST(envelope_unknown_field_warns_once_for_stdin)
+{
+    char *buf = NULL;
+    size_t len = 0U;
+    FILE *err = open_memstream(&buf, &len);
+
+    ASSERT_TRUE(err != NULL);
+    if (err == NULL) {
+        return;
+    }
+    diag_json_end();
+    diag_warnings_reset();
+    app_set_streams((AppStreams){.out = NULL, .err = err});
+    ASSERT_EQ_INT(diag_unknown_field((DiagUnknownField){.path = NULL, .name = "extra"}), 0);
+    ASSERT_EQ_INT(diag_unknown_field((DiagUnknownField){.path = NULL, .name = "other"}), 0);
+    ASSERT_EQ_INT(
+        diag_unknown_field((DiagUnknownField){.path = "/tmp/note.json", .name = "filefield"}), 0);
+    ASSERT_EQ_INT(diag_warning_count(), 2U);
+    ASSERT_EQ_INT(fflush(err), 0);
+    ASSERT_STREQ(buf, "remember: warning: stdin has a field remember doesn't know, \"extra\". "
+                      "The rest of the input was read.\n"
+                      "remember: warning: \"/tmp/note.json\" has a field remember doesn't know, "
+                      "\"filefield\". The rest of the file was read.\n");
+    app_set_streams((AppStreams){.out = NULL, .err = NULL});
+    diag_warnings_reset();
+    ASSERT_EQ_INT(fclose(err), 0);
+    free(buf);
+}
+
+/* Each path warns once. A later field on the first or the second is silent. */
+TEST(envelope_unknown_field_warns_once_per_path)
+{
+    char first[] = "/tmp/a.json";
+    char first_copy[] = "/tmp/a.json";
+    char second[] = "/tmp/b.json";
+    char second_copy[] = "/tmp/b.json";
+    char third[] = "/tmp/c.json";
+    char *buf = NULL;
+    size_t len = 0U;
+    FILE *err = open_memstream(&buf, &len);
+
+    ASSERT_TRUE(err != NULL);
+    if (err == NULL) {
+        return;
+    }
+    diag_json_end();
+    diag_warnings_reset();
+    app_set_streams((AppStreams){.out = NULL, .err = err});
+    ASSERT_EQ_INT(diag_unknown_field((DiagUnknownField){.path = first, .name = "extra"}), 0);
+    ASSERT_EQ_INT(diag_unknown_field((DiagUnknownField){.path = second, .name = "extra"}), 0);
+    ASSERT_EQ_INT(diag_unknown_field((DiagUnknownField){.path = first_copy, .name = "other"}), 0);
+    ASSERT_EQ_INT(diag_unknown_field((DiagUnknownField){.path = second_copy, .name = "other"}), 0);
+    ASSERT_EQ_INT(diag_unknown_field((DiagUnknownField){.path = third, .name = "extra"}), 0);
+    ASSERT_EQ_INT(diag_warning_count(), 3U);
+    ASSERT_EQ_INT(fflush(err), 0);
+    ASSERT_STREQ(buf, "remember: warning: \"/tmp/a.json\" has a field remember doesn't know, "
+                      "\"extra\". The rest of the file was read.\n"
+                      "remember: warning: \"/tmp/b.json\" has a field remember doesn't know, "
+                      "\"extra\". The rest of the file was read.\n"
+                      "remember: warning: \"/tmp/c.json\" has a field remember doesn't know, "
+                      "\"extra\". The rest of the file was read.\n");
+    app_set_streams((AppStreams){.out = NULL, .err = NULL});
+    diag_warnings_reset();
+    ASSERT_EQ_INT(fclose(err), 0);
+    free(buf);
+}
+
+/* diag_warnings_reset clears the once-per-file set, so the next run can warn. */
+TEST(envelope_unknown_field_warns_again_after_a_reset)
+{
+    char *buf = NULL;
+    size_t len = 0U;
+    FILE *err = open_memstream(&buf, &len);
+
+    ASSERT_TRUE(err != NULL);
+    if (err == NULL) {
+        return;
+    }
+    diag_json_end();
+    diag_warnings_reset();
+    app_set_streams((AppStreams){.out = NULL, .err = err});
+    ASSERT_EQ_INT(diag_unknown_field((DiagUnknownField){.path = "/tmp/note.json", .name = "extra"}),
+                  0);
+    diag_warnings_reset();
+    ASSERT_EQ_INT(diag_unknown_field((DiagUnknownField){.path = "/tmp/note.json", .name = "extra"}),
+                  0);
+    ASSERT_EQ_INT(diag_warning_count(), 1U);
+    ASSERT_EQ_INT(fflush(err), 0);
+    ASSERT_STREQ(buf, "remember: warning: \"/tmp/note.json\" has a field remember doesn't know, "
+                      "\"extra\". The rest of the file was read.\n"
+                      "remember: warning: \"/tmp/note.json\" has a field remember doesn't know, "
+                      "\"extra\". The rest of the file was read.\n");
+    app_set_streams((AppStreams){.out = NULL, .err = NULL});
+    diag_warnings_reset();
+    ASSERT_EQ_INT(fclose(err), 0);
+    free(buf);
+}
+
+/* JSON code, message, and detail. A second field in the same file adds nothing. */
+TEST(envelope_unknown_field_json_names_the_field_and_the_file)
+{
+    char *err_buf = NULL;
+    char *out_buf = NULL;
+    size_t err_len = 0U;
+    size_t out_len = 0U;
+    FILE *err = open_memstream(&err_buf, &err_len);
+    FILE *out = open_memstream(&out_buf, &out_len);
+
+    ASSERT_TRUE(err != NULL);
+    ASSERT_TRUE(out != NULL);
+    if (err == NULL || out == NULL) {
+        if (err != NULL) {
+            (void)fclose(err);
+        }
+        if (out != NULL) {
+            (void)fclose(out);
+        }
+        free(err_buf);
+        free(out_buf);
+        return;
+    }
+    diag_json_end();
+    diag_warnings_reset();
+    app_set_streams((AppStreams){.out = NULL, .err = err});
+    ASSERT_EQ_INT(diag_json_begin(NULL), 0);
+    ASSERT_EQ_INT(diag_unknown_field((DiagUnknownField){.path = "/tmp/note.json", .name = "extra"}),
+                  0);
+    ASSERT_EQ_INT(diag_unknown_field((DiagUnknownField){.path = "/tmp/note.json", .name = "other"}),
+                  0);
+    ASSERT_EQ_INT(diag_warning_count(), 1U);
+    ASSERT_EQ_INT(diag_json_write_warnings(out), 0);
+    diag_json_end();
+    ASSERT_EQ_INT(fflush(err), 0);
+    ASSERT_EQ_INT(fflush(out), 0);
+    ASSERT_STREQ(err_buf, "");
+    ASSERT_STREQ(out_buf,
+                 ",\"warnings\":[{\"code\":\"unknown_field\",\"message\":\"\\\"/tmp/note.json\\\" "
+                 "has a field remember doesn't know, \\\"extra\\\". The rest of the file was "
+                 "read.\",\"detail\":{\"field\":\"extra\",\"where\":\"/tmp/note.json\"}}]");
+    app_set_streams((AppStreams){.out = NULL, .err = NULL});
+    diag_warnings_reset();
+    ASSERT_EQ_INT(fclose(err), 0);
+    ASSERT_EQ_INT(fclose(out), 0);
+    free(err_buf);
+    free(out_buf);
+}
+
+/* JSON where for a stream is stdin, and the message is the stream sentence. */
+TEST(envelope_unknown_field_json_names_stdin)
+{
+    char *err_buf = NULL;
+    char *out_buf = NULL;
+    size_t err_len = 0U;
+    size_t out_len = 0U;
+    FILE *err = open_memstream(&err_buf, &err_len);
+    FILE *out = open_memstream(&out_buf, &out_len);
+
+    ASSERT_TRUE(err != NULL);
+    ASSERT_TRUE(out != NULL);
+    if (err == NULL || out == NULL) {
+        if (err != NULL) {
+            (void)fclose(err);
+        }
+        if (out != NULL) {
+            (void)fclose(out);
+        }
+        free(err_buf);
+        free(out_buf);
+        return;
+    }
+    diag_json_end();
+    diag_warnings_reset();
+    app_set_streams((AppStreams){.out = NULL, .err = err});
+    ASSERT_EQ_INT(diag_json_begin(NULL), 0);
+    ASSERT_EQ_INT(diag_unknown_field((DiagUnknownField){.path = NULL, .name = "extra"}), 0);
+    ASSERT_EQ_INT(diag_warning_count(), 1U);
+    ASSERT_EQ_INT(diag_json_write_warnings(out), 0);
+    diag_json_end();
+    ASSERT_EQ_INT(fflush(err), 0);
+    ASSERT_EQ_INT(fflush(out), 0);
+    ASSERT_STREQ(err_buf, "");
+    ASSERT_STREQ(out_buf, ",\"warnings\":[{\"code\":\"unknown_field\",\"message\":\"stdin has a "
+                          "field remember doesn't know, \\\"extra\\\". The rest of the input was "
+                          "read.\",\"detail\":{\"field\":\"extra\",\"where\":\"stdin\"}}]");
+    app_set_streams((AppStreams){.out = NULL, .err = NULL});
+    diag_warnings_reset();
+    ASSERT_EQ_INT(fclose(err), 0);
+    ASSERT_EQ_INT(fclose(out), 0);
+    free(err_buf);
+    free(out_buf);
+}
+
+/* Hostile bytes stay one plain line. JSON keeps the real escapes, not '?'. */
+enum { HOSTILE_PAD = 300 };
+
+TEST(envelope_unknown_field_masks_the_plain_line_and_escapes_json)
+{
+    const char raw_head[] = "\n\"\x1b\x7f\t\xc2\x9b";
+    const char plain_head[] = "?\"??\t?";
+    const char json_head[] = "\\n\\\"\\u001b\x7f\\t\xc2\x9b";
+    char probe[sizeof raw_head + HOSTILE_PAD];
+    char masked[sizeof plain_head + HOSTILE_PAD];
+    char jprobe[sizeof json_head + HOSTILE_PAD];
+    const char *plain_parts[] = {"remember: warning: \"", masked,
+                                 "\" has a field remember doesn't know, \"", masked,
+                                 "\". The rest of the file was read.\n"};
+    const char *json_parts[] = {",\"warnings\":[{\"code\":\"unknown_field\",\"message\":\"\\\"",
+                                jprobe,
+                                "\\\" has a field remember doesn't know, \\\"",
+                                jprobe,
+                                "\\\". The rest of the file was read.\",\"detail\":{\"field\":\"",
+                                jprobe,
+                                "\",\"where\":\"",
+                                jprobe,
+                                "\"}}]"};
+    char *plain_expect = NULL;
+    char *json_expect = NULL;
+    char *err_buf = NULL;
+    char *out_buf = NULL;
+    size_t err_len = 0U;
+    size_t out_len = 0U;
+    FILE *err = NULL;
+    FILE *out = NULL;
+    size_t plain_n = 0U;
+
+    memcpy(probe, raw_head, sizeof raw_head - 1U);
+    memset(probe + (sizeof raw_head - 1U), 'a', HOSTILE_PAD);
+    probe[sizeof raw_head - 1U + HOSTILE_PAD] = '\0';
+    memcpy(masked, plain_head, sizeof plain_head - 1U);
+    memset(masked + (sizeof plain_head - 1U), 'a', HOSTILE_PAD);
+    masked[sizeof plain_head - 1U + HOSTILE_PAD] = '\0';
+    memcpy(jprobe, json_head, sizeof json_head - 1U);
+    memset(jprobe + (sizeof json_head - 1U), 'a', HOSTILE_PAD);
+    jprobe[sizeof json_head - 1U + HOSTILE_PAD] = '\0';
+    plain_expect = join_parts(plain_parts, sizeof plain_parts / sizeof plain_parts[0]);
+    json_expect = join_parts(json_parts, sizeof json_parts / sizeof json_parts[0]);
+    err = open_memstream(&err_buf, &err_len);
+    ASSERT_TRUE(plain_expect != NULL);
+    ASSERT_TRUE(json_expect != NULL);
+    ASSERT_TRUE(err != NULL);
+    if (plain_expect == NULL || json_expect == NULL || err == NULL) {
+        free(plain_expect);
+        free(json_expect);
+        if (err != NULL) {
+            (void)fclose(err);
+        }
+        free(err_buf);
+        return;
+    }
+    diag_json_end();
+    diag_warnings_reset();
+    app_set_streams((AppStreams){.out = NULL, .err = err});
+    ASSERT_EQ_INT(diag_unknown_field((DiagUnknownField){.path = probe, .name = probe}), 0);
+    ASSERT_EQ_INT(fflush(err), 0);
+    ASSERT_STREQ(err_buf, plain_expect);
+    plain_n = strlen(err_buf);
+    ASSERT_TRUE(plain_n > 0U && err_buf[plain_n - 1U] == '\n');
+    ASSERT_TRUE(memchr(err_buf, '\n', plain_n - 1U) == NULL);
+    ASSERT_TRUE(memchr(err_buf, '\x1b', plain_n) == NULL);
+    ASSERT_TRUE(memchr(err_buf, '\x7f', plain_n) == NULL);
+    ASSERT_TRUE(memchr(err_buf, (int)(unsigned char)'\xc2', plain_n) == NULL);
+    app_set_streams((AppStreams){.out = NULL, .err = NULL});
+    ASSERT_EQ_INT(fclose(err), 0);
+    free(err_buf);
+    err_buf = NULL;
+    diag_warnings_reset();
+
+    err_len = 0U;
+    err = open_memstream(&err_buf, &err_len);
+    out = open_memstream(&out_buf, &out_len);
+    ASSERT_TRUE(err != NULL);
+    ASSERT_TRUE(out != NULL);
+    if (err == NULL || out == NULL) {
+        if (err != NULL) {
+            (void)fclose(err);
+        }
+        if (out != NULL) {
+            (void)fclose(out);
+        }
+        free(err_buf);
+        free(out_buf);
+        free(plain_expect);
+        free(json_expect);
+        diag_warnings_reset();
+        return;
+    }
+    app_set_streams((AppStreams){.out = NULL, .err = err});
+    ASSERT_EQ_INT(diag_json_begin(NULL), 0);
+    ASSERT_EQ_INT(diag_unknown_field((DiagUnknownField){.path = probe, .name = probe}), 0);
+    ASSERT_EQ_INT(diag_json_write_warnings(out), 0);
+    diag_json_end();
+    ASSERT_EQ_INT(fflush(err), 0);
+    ASSERT_EQ_INT(fflush(out), 0);
+    ASSERT_STREQ(err_buf, "");
+    ASSERT_STREQ(out_buf, json_expect);
+    ASSERT_TRUE(memchr(out_buf, '\n', out_len) == NULL);
+    ASSERT_TRUE(memchr(out_buf, '\x1b', out_len) == NULL);
+    ASSERT_TRUE(memchr(out_buf, '\x7f', out_len) != NULL);
+    ASSERT_TRUE(memchr(out_buf, (int)(unsigned char)'\x9b', out_len) != NULL);
+    app_set_streams((AppStreams){.out = NULL, .err = NULL});
+    diag_warnings_reset();
+    ASSERT_EQ_INT(fclose(err), 0);
+    ASSERT_EQ_INT(fclose(out), 0);
+    free(err_buf);
+    free(out_buf);
+    free(plain_expect);
+    free(json_expect);
+}
+
+/* A NULL name writes nothing and does not consume the file or stdin. */
+TEST(envelope_unknown_field_rejects_a_null_name)
+{
+    char *buf = NULL;
+    size_t len = 0U;
+    FILE *err = open_memstream(&buf, &len);
+
+    ASSERT_TRUE(err != NULL);
+    if (err == NULL) {
+        return;
+    }
+    diag_json_end();
+    diag_warnings_reset();
+    app_set_streams((AppStreams){.out = NULL, .err = err});
+    ASSERT_EQ_INT(diag_unknown_field((DiagUnknownField){.path = NULL, .name = NULL}), -1);
+    ASSERT_EQ_INT(diag_unknown_field((DiagUnknownField){.path = "/tmp/note.json", .name = NULL}),
+                  -1);
+    ASSERT_EQ_INT(diag_warning_count(), 0U);
+    ASSERT_EQ_INT(fflush(err), 0);
+    ASSERT_STREQ(buf, "");
+    ASSERT_EQ_INT(diag_unknown_field((DiagUnknownField){.path = NULL, .name = "extra"}), 0);
+    ASSERT_EQ_INT(diag_unknown_field((DiagUnknownField){.path = "/tmp/note.json", .name = "extra"}),
+                  0);
+    ASSERT_EQ_INT(diag_warning_count(), 2U);
+    app_set_streams((AppStreams){.out = NULL, .err = NULL});
+    diag_warnings_reset();
+    ASSERT_EQ_INT(fclose(err), 0);
+    free(buf);
+}
+
+/* An empty name is a real key. The sentence quotes it as "". */
+TEST(envelope_unknown_field_quotes_an_empty_name)
+{
+    char *buf = NULL;
+    size_t len = 0U;
+    FILE *err = open_memstream(&buf, &len);
+
+    ASSERT_TRUE(err != NULL);
+    if (err == NULL) {
+        return;
+    }
+    diag_json_end();
+    diag_warnings_reset();
+    app_set_streams((AppStreams){.out = NULL, .err = err});
+    ASSERT_EQ_INT(diag_unknown_field((DiagUnknownField){.path = "/tmp/empty.json", .name = ""}), 0);
+    ASSERT_EQ_INT(diag_warning_count(), 1U);
+    ASSERT_EQ_INT(fflush(err), 0);
+    ASSERT_STREQ(buf, "remember: warning: \"/tmp/empty.json\" has a field remember doesn't know, "
+                      "\"\". The rest of the file was read.\n");
+    app_set_streams((AppStreams){.out = NULL, .err = NULL});
+    diag_warnings_reset();
+    ASSERT_EQ_INT(fclose(err), 0);
+    free(buf);
+}
+
 void register_envelope_tests(void)
 {
     RUN_TEST(envelope_get_by_digits_and_by_uuid_is_the_same_memory);
@@ -2348,6 +2768,15 @@ void register_envelope_tests(void)
     RUN_TEST(envelope_color_follows_the_tty_and_the_environment);
     RUN_TEST(envelope_progress_is_a_stderr_line_and_quiet_json_stop_it);
     RUN_TEST(envelope_prompt_echoes_the_typed_line);
+    RUN_TEST(envelope_unknown_field_warns_once_for_a_file);
+    RUN_TEST(envelope_unknown_field_warns_once_for_stdin);
+    RUN_TEST(envelope_unknown_field_warns_once_per_path);
+    RUN_TEST(envelope_unknown_field_warns_again_after_a_reset);
+    RUN_TEST(envelope_unknown_field_json_names_the_field_and_the_file);
+    RUN_TEST(envelope_unknown_field_json_names_stdin);
+    RUN_TEST(envelope_unknown_field_masks_the_plain_line_and_escapes_json);
+    RUN_TEST(envelope_unknown_field_rejects_a_null_name);
+    RUN_TEST(envelope_unknown_field_quotes_an_empty_name);
 #ifdef REMEMBER_TEST_VFS
     RUN_TEST(envelope_add_link_read_error_after_the_write_exits_1_and_keeps_the_write);
 #else

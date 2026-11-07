@@ -36,6 +36,17 @@ static JsonNotices g_json;
 // NOLINTNEXTLINE(cppcoreguidelines-avoid-non-const-global-variables)
 static size_t g_warning_count;
 
+/* Paths that already warned unknown_field. stdin is the separate flag.
+   Deliberately mutable; one call at a time (reset with the warning count). */
+// NOLINTNEXTLINE(cppcoreguidelines-avoid-non-const-global-variables)
+static char **g_unknown_paths;
+
+// NOLINTNEXTLINE(cppcoreguidelines-avoid-non-const-global-variables)
+static size_t g_unknown_npaths;
+
+// NOLINTNEXTLINE(cppcoreguidelines-avoid-non-const-global-variables)
+static bool g_unknown_stdin;
+
 /* E4.3 order. One token per code; diag_code_name / diag_code_from_name share it. */
 static const char *const k_error_codes[DIAG_CODE_COUNT] = {
     [DIAG_USAGE] = "usage",
@@ -134,6 +145,7 @@ static const char *const k_warning_codes[DIAG_WARN_COUNT] = {
     [DIAG_WARN_SYNCED_FOLDER] = "synced_folder",
     [DIAG_WARN_SETTING_INVALID] = "setting_invalid",
     [DIAG_WARN_FLAG_MEANING_CHANGED] = "flag_meaning_changed",
+    [DIAG_WARN_UNKNOWN_FIELD] = "unknown_field",
 };
 
 /* Plain line lead per warning. E2.3 gives raw_query_ignored its own words; the
@@ -144,6 +156,7 @@ static const char *const k_warning_plain_prefix[DIAG_WARN_COUNT] = {
     [DIAG_WARN_SYNCED_FOLDER] = "warning: ",
     [DIAG_WARN_SETTING_INVALID] = "warning: ",
     [DIAG_WARN_FLAG_MEANING_CHANGED] = "warning: ",
+    [DIAG_WARN_UNKNOWN_FIELD] = "warning: ",
 };
 
 static const char *catalog_name(const char *const *names, size_t count, size_t index)
@@ -369,9 +382,99 @@ static int write_notice(Notice notice)
     return rc;
 }
 
+static const char k_unknown_file[] =
+    "\"%s\" has a field remember doesn't know, \"%s\". The rest of the file was read.";
+static const char k_unknown_stream[] =
+    "stdin has a field remember doesn't know, \"%s\". The rest of the input was read.";
+
+static void unknown_fields_reset(void)
+{
+    size_t i = 0U;
+
+    for (i = 0U; i < g_unknown_npaths; i++) {
+        free(g_unknown_paths[i]);
+    }
+    free((void *)g_unknown_paths);
+    g_unknown_paths = NULL;
+    g_unknown_npaths = 0U;
+    g_unknown_stdin = false;
+}
+
+static bool unknown_field_seen(const char *path)
+{
+    size_t i = 0U;
+
+    if (path == NULL) {
+        return g_unknown_stdin;
+    }
+    for (i = 0U; i < g_unknown_npaths; i++) {
+        if (strcmp(g_unknown_paths[i], path) == 0) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static void unknown_field_mark(const char *path)
+{
+    size_t n = 0U;
+    char *copy = NULL;
+    char **grown = NULL;
+
+    if (path == NULL) {
+        g_unknown_stdin = true;
+        return;
+    }
+    n = strlen(path);
+    copy = (char *)malloc(n + 1U);
+    if (copy == NULL) {
+        return;
+    }
+    memcpy(copy, path, n + 1U);
+    grown = (char **)realloc((void *)g_unknown_paths, (g_unknown_npaths + 1U) * sizeof(*grown));
+    if (grown == NULL) {
+        free(copy);
+        return;
+    }
+    grown[g_unknown_npaths] = copy;
+    g_unknown_paths = grown;
+    g_unknown_npaths++;
+}
+
+/* The C-35 sentence, without the warning prefix. path NULL is the stdin line. */
+static char *unknown_field_message(DiagUnknownField field)
+{
+    int need = 0;
+    char *buf = NULL;
+
+    if (field.path != NULL) {
+        need = snprintf(NULL, 0, k_unknown_file, field.path, field.name);
+    } else {
+        need = snprintf(NULL, 0, k_unknown_stream, field.name);
+    }
+    if (need < 0) {
+        return NULL;
+    }
+    buf = (char *)malloc((size_t)need + 1U);
+    if (buf == NULL) {
+        return NULL;
+    }
+    if (field.path != NULL) {
+        if (snprintf(buf, (size_t)need + 1U, k_unknown_file, field.path, field.name) != need) {
+            free(buf);
+            return NULL;
+        }
+    } else if (snprintf(buf, (size_t)need + 1U, k_unknown_stream, field.name) != need) {
+        free(buf);
+        return NULL;
+    }
+    return buf;
+}
+
 void diag_warnings_reset(void)
 {
     g_warning_count = 0U;
+    unknown_fields_reset();
 }
 
 size_t diag_warning_count(void)
@@ -433,6 +536,38 @@ int diag_warning_detail(DiagWarning code, const char *message, const DiagDetailF
         .fields = fields,
         .nfields = nfields,
     });
+}
+
+/* cppcheck-suppress staticFunction ; public API (diag.h); used by tests and later readers */
+int diag_unknown_field(DiagUnknownField field)
+{
+    const char *where = field.path != NULL ? field.path : "stdin";
+    const DiagDetailField detail[] = {
+        {.name = "field", .value = field.name},
+        {.name = "where", .value = where},
+    };
+    char *message = NULL;
+    int rc = 0;
+
+    if (field.name == NULL) {
+        return -1;
+    }
+    if (unknown_field_seen(field.path)) {
+        return 0;
+    }
+    message = unknown_field_message(field);
+    if (message == NULL) {
+        return -1;
+    }
+    rc = diag_warning_detail(DIAG_WARN_UNKNOWN_FIELD, message, detail,
+                             sizeof detail / sizeof detail[0]);
+    free(message);
+    if (rc != 0) {
+        return rc;
+    }
+    /* A missed mark can warn again. The line was already written, so the read continues. */
+    unknown_field_mark(field.path);
+    return 0;
 }
 
 /* E4.8 cause + fix per SQLite code. corrupt with fts_only uses the repair

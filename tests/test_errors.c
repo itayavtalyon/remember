@@ -240,7 +240,7 @@ TEST(error_catalog_rejects_names_outside_e4_3)
 
 static const char *const k_warning_codes[] = {
     "raw_query_ignored", "deprecated_flag",      "synced_folder",
-    "setting_invalid",   "flag_meaning_changed",
+    "setting_invalid",   "flag_meaning_changed", "unknown_field",
 };
 
 TEST(warning_catalog_round_trips_every_code)
@@ -1014,6 +1014,44 @@ TEST(plain_warning_that_cannot_be_written_does_not_count)
     ASSERT_EQ_INT(diag_warning_count(), 0U);
     app_set_streams((AppStreams){.out = NULL, .err = NULL});
     (void)fclose(err);
+}
+
+/* A failed unknown_field write does not count, and the same file still warns later. */
+TEST(unknown_field_that_cannot_be_written_does_not_stick)
+{
+    char *buf = NULL;
+    size_t len = 0U;
+    FILE *bad = given_out_rejecting_writes();
+    FILE *err = NULL;
+
+    if (bad == NULL) {
+        return;
+    }
+    diag_json_end();
+    diag_warnings_reset();
+    app_set_streams((AppStreams){.out = NULL, .err = bad});
+    ASSERT_EQ_INT(diag_unknown_field((DiagUnknownField){.path = "/tmp/note.json", .name = "extra"}),
+                  -1);
+    ASSERT_EQ_INT(diag_warning_count(), 0U);
+    (void)fclose(bad);
+    err = open_memstream(&buf, &len);
+    ASSERT_TRUE(err != NULL);
+    if (err == NULL) {
+        app_set_streams((AppStreams){.out = NULL, .err = NULL});
+        diag_warnings_reset();
+        return;
+    }
+    app_set_streams((AppStreams){.out = NULL, .err = err});
+    ASSERT_EQ_INT(diag_unknown_field((DiagUnknownField){.path = "/tmp/note.json", .name = "extra"}),
+                  0);
+    ASSERT_EQ_INT(diag_warning_count(), 1U);
+    ASSERT_EQ_INT(fflush(err), 0);
+    ASSERT_STREQ(buf, "remember: warning: \"/tmp/note.json\" has a field remember doesn't know, "
+                      "\"extra\". The rest of the file was read.\n");
+    app_set_streams((AppStreams){.out = NULL, .err = NULL});
+    diag_warnings_reset();
+    ASSERT_EQ_INT(fclose(err), 0);
+    free(buf);
 }
 
 /* Output that fails only at the final flush is an error, not exit 0. */
@@ -4314,6 +4352,7 @@ void register_errors_tests(void)
     RUN_TEST(json_warning_is_one_line_without_the_prefix);
     RUN_TEST(every_warning_uses_the_warning_prefix);
     RUN_TEST(plain_warning_that_cannot_be_written_does_not_count);
+    RUN_TEST(unknown_field_that_cannot_be_written_does_not_stick);
     RUN_TEST(null_message_is_empty_text);
     RUN_TEST(plain_error_keeps_quote_and_backslash);
     RUN_TEST(plain_error_turns_a_newline_into_a_question_mark);
