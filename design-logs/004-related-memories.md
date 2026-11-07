@@ -1,5 +1,7 @@
 # 004 - Related memories (entry links)
 
+> **Frozen 2026-10-31.** This log is history, not the source of truth. What remember does today: Spec: [`specs/README.md`](../specs/README.md) (no spec yet). Decisions made after this log, and changes to its own, are Remember entries tagged `subject:wiki-links`. Where they disagree with this log, they win.
+
 **Status:** Design (finalized — immutable once implementation starts)
 **Author:** Itay (+ agent facilitation)
 **Created:** 2026-08-31

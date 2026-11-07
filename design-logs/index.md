@@ -1,5 +1,7 @@
 # Design Log Index
 
+> **Frozen 2026-10-31.** No new design logs are written. What remember does today is in [`specs/`](../specs/README.md). Decisions are Remember `decision:*` entries tagged `subject:<name>`; the roadmap is `roadmap:remember`. These logs are history: where a spec or a later decision disagrees, it wins.
+
 ## Core
 | # | Title | Description | Status |
 |---|-------|-------------|--------|

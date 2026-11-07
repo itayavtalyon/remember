@@ -14,7 +14,7 @@ The field list, the write table, and the flag removals are specified. This plan 
 
 - [`design-logs/008-json-envelope.md`](../design-logs/008-json-envelope.md) Design JE-1 through JE-7. §8 is plan 19.
 - [`design-logs/010-plugins-and-hooks.md`](../design-logs/010-plugins-and-hooks.md) H-16.7 for the purge-live sentence, H-16.9a for `--trash` and `--expired`, H-16.10 for color and quiet, H-16.11 for the hook help lines.
-- [`docs/JSON-STYLE.md`](../docs/JSON-STYLE.md) for the value rules JE-4 names. Where JSON-STYLE and log 008 disagree, log 008 wins.
+- [`specs/JSON-STYLE.md`](../specs/JSON-STYLE.md) for the value rules JE-4 names. Where JSON-STYLE and log 008 disagree, log 008 wins.
 
 Do not follow the draft step that says to re-extract plans 16, 17, 18, and 22. Update tests that still require `--json-errors`, `--offset`, `--sync-id`, or `source`. Do not edit those plan files.
 

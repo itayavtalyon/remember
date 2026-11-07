@@ -39,7 +39,7 @@ Covers every JSON surface:
 - stored documents (exports, `plugin.json`, plugin state and index files, `brains.json`);
 - the run log.
 
-The plugin wire details are in `remember/docs/PLUGIN-PROTOCOL.md` (PP). The design decisions are in logs 007 (settings), 008 (envelope), 009 (protocol) and 010 (plugins and hooks).
+The plugin wire details are in `remember/specs/PLUGIN-PROTOCOL.md` (PP). The design decisions are in logs 007 (settings), 008 (envelope), 009 (protocol) and 010 (plugins and hooks).
 
 **Compatibility policy (Itay, 2026-10-18):** before 1.0, a breaking change ships as a clean break with a CHANGELOG note. It has no aliases and no compatibility shims (PP R9.25, J9). The typed-input `-`→`_` normalization (M-17, 007 ST-1.3) is an input convenience, not an alias. The one-release `--trash` meaning warning (M-21 B, 010 H-16.9a) is a warning, not an alias.
 

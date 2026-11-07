@@ -1,5 +1,7 @@
 # 006 - Engine changes for the Fortkeeps UI overhaul (0.3.0)
 
+> **Frozen 2026-10-31.** This log is history, not the source of truth. What remember does today: Spec: [`specs/README.md`](../specs/README.md) (no spec yet). Decisions made after this log, and changes to its own, are Remember entries tagged `subject:search` and `subject:export`. Where they disagree with this log, they win.
+
 **Status:** Design (closed 2026-10-11, amended 2026-10-12)
 **Changes:** 2026-10-25 (Itay, D-04): the settings bytes of `remember export` and of `remember import` are log 007 ST-8.3 and ST-8.3a. E6.a (the `settings` member), E6.b (`settings.json`), E6.c (the `#settings` row), E7.8, E7.11, E7.12, E12.9 and the E7.6 `prefixes_merged` field are superseded by log 007. 2026-10-26 (Itay; decided 2026-10-21, log 007 ST-5.4, D-01): bucket prefixes have no count limit. The cap of 8, `too many bucket prefixes (max 8)`, `n ≤ 8` and the E12.7 overflow are superseded. A bad shape or a duplicate is `setting_invalid_value` on set and import, and the warning `setting_invalid` (row skipped) in sync.
 **Author:** Itay (+ agent facilitation)

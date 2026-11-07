@@ -1,12 +1,14 @@
 # 009 - Plugin protocol, version 1
 
+> **Frozen 2026-10-31.** This log is history, not the source of truth. What remember does today: [`specs/PLUGIN-PROTOCOL.md`](../specs/PLUGIN-PROTOCOL.md). Decisions made after this log, and changes to its own, are Remember entries tagged `subject:plugin-protocol`. Where they disagree with this log, they win.
+
 **Status:** Design (grill closed 2026-10-21). Amended 2026-10-22: the daemon stays in v1 (S-11 reversed) and plugins read settings read-only (rev 6 table). 2026-10-25: spec revision 7, a document revision of protocol 1 (warning-code wording only, no wire change, P-Q4): a pre-flight hash mismatch is `plugin_untrusted` (C-20), `plugin_chain_capped` is shown with the `chain_capped` status (D-02), `plugin_filter_failed` is confirmed (D-08), and dispatch under `REMEMBER_PROCESSES=0` warns `plugin_unsupported` (C-23). 2026-10-22: spec revision 6 applied in this PR (M-06), names and codes amended (M-17, M-19, Interface R2), the Cloud index cache line deleted (M-13). Revision 5 is protocol 1. P-Q1 to P-Q5 closed 2026-10-20. The deep review of 2026-10-21 reopened the log. Rounds 2 to 4 closed the same day. Revision 6 below carries every amendment. The spec file is revised to revision 6 for the amendments in Design before implementation starts.
 **Author:** Itay (+ agent facilitation)
 **Created:** 2026-10-18
 
 Cross-refs: [007](007-settings.md) (budgets, plugin settings), [008](008-json-envelope.md) (envelope, ids),
 [010](010-plugins-and-hooks.md) (plugin and hook runtime, commands, trust).
-**Spec:** [`docs/PLUGIN-PROTOCOL.md`](../docs/PLUGIN-PROTOCOL.md) (proposed path; today the box draft
+**Spec:** [`specs/PLUGIN-PROTOCOL.md`](../specs/PLUGIN-PROTOCOL.md) (moved from `docs/` on 2026-10-31) (proposed path; today the box draft
 `fk-review/drafts/remember/PLUGIN-PROTOCOL.md`; revision 6 since 2026-10-22, M-06) with its changelog `docs/PLUGIN-PROTOCOL-CHANGES.md`
 and its validator.
 

@@ -1,5 +1,7 @@
 # 018 - v1 roadmap decisions
 
+> **Frozen 2026-10-31.** This log is history. The living roadmap is the Remember entry `roadmap:remember`, which folds in these decisions. Where it disagrees with this log, it wins.
+
 **Status:** Decisions recorded (2026-10-29). Not a feature design: this log records Itay's answers to the v1 roadmap sheet so the feature logs can cite one source. Open items are listed in Known Limitations › Open questions and are not decided here.
 **Author:** Itay (answers) + Chief Architect (recording)
 **Created:** 2026-10-29

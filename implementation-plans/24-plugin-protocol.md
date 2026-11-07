@@ -8,13 +8,13 @@ Keep protocol 1, revision 6, as the spec in this repo. CI checks the spec. Schem
 
 READY.
 
-The spec, the changelog, `docs/JSON-STYLE.md`, and `scripts/validate_plugin_spec.py` are already on this branch. Do not edit the spec to add a behavior. A wording fix after revision 6 is a changelog revision and does not bump `protocol`. A breaking wire change is a new design log, not this plan.
+The spec, the changelog, `specs/JSON-STYLE.md`, and `scripts/validate_plugin_spec.py` are already on this branch. Do not edit the spec to add a behavior. A wording fix after revision 6 is a changelog revision and does not bump `protocol`. A breaking wire change is a new design log, not this plan.
 
 ## Source of truth
 
 - [`design-logs/009-plugin-protocol.md`](../design-logs/009-plugin-protocol.md) Design, including PR-1 through PR-6 and the revision 6 amendment table.
-- [`docs/PLUGIN-PROTOCOL.md`](../docs/PLUGIN-PROTOCOL.md) revision 6. The spec is the only normative wire text. Cite rule ids. Do not copy rules into comments.
-- [`docs/PLUGIN-PROTOCOL-CHANGES.md`](../docs/PLUGIN-PROTOCOL-CHANGES.md).
+- [`specs/PLUGIN-PROTOCOL.md`](../specs/PLUGIN-PROTOCOL.md) revision 6. The spec is the only normative wire text. Cite rule ids. Do not copy rules into comments.
+- [`specs/PLUGIN-PROTOCOL-CHANGES.md`](../specs/PLUGIN-PROTOCOL-CHANGES.md).
 
 Log 010 is the engine. It is plan 25. This plan does not implement the engine.
 

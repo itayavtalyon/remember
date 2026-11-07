@@ -1,5 +1,7 @@
 # 008 - JSON style and the message envelope
 
+> **Frozen 2026-10-31.** This log is history, not the source of truth. What remember does today: [`specs/JSON-STYLE.md`](../specs/JSON-STYLE.md). Decisions made after this log, and changes to its own, are Remember entries tagged `subject:json-envelope`. Where they disagree with this log, they win.
+
 **Status:** Design (grill closed 2026-10-21). J-Q1 to J-Q10 closed 2026-10-20. The deep review of 2026-10-21 (G-01 to G-36) reopened the log. Rounds 2 and 3 (simplification) closed the same day. Round 4 closed the same day. The grill is closed. Design states each winner. Amended 2026-10-22: §6 says the log wins where a JSON-STYLE row differs (M-05); `--as` replaces `--source` on writes (M-19 N8).
 **Changes:** 2026-10-25 copy final (`ANSWERS-FINAL.md`, K-1): JE-3.4 uses the Story Weaver locator line. Earlier the same day (Itay, copy-pending answer 17): `--source` is gone completely, and J-Q9 now names `--as` and `--actor`. The settings `data` objects and page sizes are log 007 ST-7.11a–7.14 (D-03), shown in JSON-STYLE rev 2.2. 2026-10-25 (Itay, D-04): the CSV export has no `#settings` row (JE-8.3, log 007 ST-8.3). 2026-10-26 (Itay): J-Q6 `--follow --json` lines are `type` `plugin.run`, not `hook.run`, matching log 010 H-15.3 and PLUGIN-PROTOCOL R9.28.
 **Author:** Itay (+ agent facilitation)

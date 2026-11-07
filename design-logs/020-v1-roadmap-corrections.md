@@ -1,5 +1,7 @@
 # 020 — v1 roadmap corrections: domains, Mac updates, sweep, daemon labels
 
+> **Frozen 2026-10-31.** This log is history. Its answers are Remember entries `decision:2026-10-31-domains`, `decision:2026-10-31-no-sweep-agent` and `decision:2026-10-31-daemon-two-labels`, and the living roadmap is `roadmap:remember`. Where they disagree with this log, they win.
+
 **Status:** Decisions recorded (2026-10-31). Corrects log 018 and log 010 H-18.1. Logs 018, 019 and 010 are not edited.
 **Author:** Itay (answers) + Chief Architect (recording)
 **Created:** 2026-10-31

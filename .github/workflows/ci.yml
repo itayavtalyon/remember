@@ -64,7 +64,7 @@ jobs:
           ./scripts/ci-linux.sh --inner --install
 
   # Plugin protocol spec (plan 24): every schema and example in
-  # docs/PLUGIN-PROTOCOL.md must validate, its plugin scripts must compile, and
+  # specs/PLUGIN-PROTOCOL.md must validate, its plugin scripts must compile, and
   # schema/plugin/v1/ and tests/fixtures/plugin/ must hold the same bytes as
   # their spec blocks. Python is a docs tool here only. This job depends only on
   # the repo, so it can be a required check.
@@ -80,7 +80,7 @@ jobs:
           "$RUNNER_TEMP/venv/bin/pip" install --quiet --no-deps -r scripts/plugin-spec-requirements.txt
 
       - name: Validate the plugin protocol spec
-        run: '"$RUNNER_TEMP/venv/bin/python" scripts/validate_plugin_spec.py docs/PLUGIN-PROTOCOL.md'
+        run: '"$RUNNER_TEMP/venv/bin/python" scripts/validate_plugin_spec.py specs/PLUGIN-PROTOCOL.md'
 
   # GitHub Pages publishes main, so each schema $id must serve the bytes of that
   # file on main. The docs job covers this checkout's files. Pages redeploys after
