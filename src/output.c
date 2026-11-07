@@ -108,14 +108,14 @@ static int write_data_open(FILE *out)
 
 static const char DATA_END[] = "}";
 
-/* Indexed by a store_bin_of result, which is always one of the three bins. */
+/* Indexed by one of the three bins: a store_bin_of result, or a checked query bin. */
 static const char *const BIN_TOKENS[] = {
     [STORE_BIN_LIVE] = "live",
     [STORE_BIN_EXPIRED] = "expired",
     [STORE_BIN_DELETED] = "deleted",
 };
 
-static int write_json_tags(FILE *out, char *const *tags, size_t ntags)
+static int write_json_tags(FILE *out, const char *const *tags, size_t ntags)
 {
     size_t i = 0;
 
@@ -174,7 +174,7 @@ static int write_entry_core(FILE *out, const Entry *e, const char *now)
     if (write_json_field_str(out, (JsonField){.name = "body", .value = e->body}) != 0) {
         return -1;
     }
-    if (write_json_tags(out, e->tags, e->ntags) != 0) {
+    if (write_json_tags(out, (const char *const *)e->tags, e->ntags) != 0) {
         return -1;
     }
     if (write_json_raw_object(out, (JsonField){.name = "created_by", .value = e->created_by}) !=
@@ -307,7 +307,7 @@ static int write_page_head(FILE *out, size_t count, size_t total)
     return fprintf(out, "\"count\":%zu,\"total\":%zu", count, total) < 0 ? -1 : 0;
 }
 
-/* Shared tail: the entries array, then the closing brace and newline. */
+/* Shared tail: the entries array. The caller closes the data object. */
 static int write_page_entries(FILE *out, const Entry *entries, size_t count,
                               const StoreNeighbor *links, size_t nlinks, const char *now)
 {
@@ -324,10 +324,16 @@ static int write_page_entries(FILE *out, const Entry *entries, size_t count,
             return -1;
         }
     }
-    if (fputc(']', out) == EOF || fputs(DATA_END, out) < 0) {
-        return -1;
+    return fputc(']', out) == EOF ? -1 : 0;
+}
+
+/* A JSON string, or null when s is NULL. */
+static int write_string_or_null(FILE *out, const char *s)
+{
+    if (s == NULL) {
+        return fputs("null", out) < 0 ? -1 : 0;
     }
-    return 0;
+    return output_json_string(out, s);
 }
 
 /* The arguments both page envelopes share: a stream, now, and arrays that
@@ -353,10 +359,11 @@ int output_list_data(FILE *out, size_t count, size_t total, const Entry *entries
     if (!page_args_ok(out, now, entries, count, links, nlinks)) {
         return -1;
     }
-    if (write_page_head(out, count, total) != 0) {
+    if (write_page_head(out, count, total) != 0 ||
+        write_page_entries(out, entries, count, links, nlinks, now) != 0) {
         return -1;
     }
-    return write_page_entries(out, entries, count, links, nlinks, now);
+    return fputs(DATA_END, out) < 0 ? -1 : 0;
 }
 
 /* Each facet holds the items its count says. */
@@ -428,12 +435,29 @@ static int write_tag_facet(FILE *out, const SearchTagFacet *tags)
     return fputs("]}", out) < 0 ? -1 : 0;
 }
 
-int output_search_data(FILE *out, const SearchResult *res, const StoreNeighbor *links,
-                       size_t nlinks, const char *now)
+/* query.original in the common query shape, then ranked_by and filters. */
+static int write_search_query(FILE *out, const SearchQuery *q)
+{
+    if (fputs(",\"query\":{\"original\":{\"text\":", out) < 0 ||
+        output_json_string(out, q->query) != 0 ||
+        write_json_tags(out, q->filters.tags, q->filters.ntags) != 0 ||
+        fprintf(out, ",\"bins\":[\"%s\"],\"time_range\":{\"field\":\"updated_at\",\"after\":",
+                BIN_TOKENS[q->filters.bin]) < 0 ||
+        write_string_or_null(out, q->filters.since) != 0 || fputs(",\"before\":", out) < 0 ||
+        write_string_or_null(out, q->filters.until) != 0 ||
+        fputs("}}},\"ranked_by\":\"bm25\",\"filters\":[]", out) < 0) {
+        return -1;
+    }
+    return 0;
+}
+
+int output_search_data(FILE *out, const SearchQuery *q, const SearchResult *res,
+                       const StoreNeighbor *links, size_t nlinks, const char *now)
 {
     const PageResult *page = NULL;
 
-    if (res == NULL) {
+    if (q == NULL || q->query == NULL || q->filters.bin > STORE_BIN_DELETED || res == NULL ||
+        (q->filters.ntags > 0U && q->filters.tags == NULL)) {
         return -1;
     }
     page = &res->page;
@@ -443,10 +467,12 @@ int output_search_data(FILE *out, const SearchResult *res, const StoreNeighbor *
     if (write_page_head(out, page->count, page->total) != 0) {
         return -1;
     }
-    if (write_key_facet(out, &res->keys) != 0 || write_tag_facet(out, &res->tags) != 0) {
+    if (write_key_facet(out, &res->keys) != 0 || write_tag_facet(out, &res->tags) != 0 ||
+        write_page_entries(out, page->entries, page->count, links, nlinks, now) != 0 ||
+        write_search_query(out, q) != 0) {
         return -1;
     }
-    return write_page_entries(out, page->entries, page->count, links, nlinks, now);
+    return fputs(DATA_END, out) < 0 ? -1 : 0;
 }
 
 enum { HUMAN_FACET_CAP = 10U }; /* E2.7 */
@@ -973,14 +999,8 @@ int output_related_data(FILE *out, const Entry *subject, const StoreNeighbor *li
         fprintf(out, ",\"local_id\":%lld,\"key\":", subject->id) < 0) {
         return -1;
     }
-    if (subject->key == NULL) {
-        if (fputs("null", out) < 0) {
-            return -1;
-        }
-    } else if (output_json_string(out, subject->key) != 0) {
-        return -1;
-    }
-    if (fprintf(out, ",\"count\":%zu,\"links\":[", count) < 0) {
+    if (write_string_or_null(out, subject->key) != 0 ||
+        fprintf(out, ",\"count\":%zu,\"links\":[", count) < 0) {
         return -1;
     }
     for (i = 0; i < count; i++) {
@@ -1089,11 +1109,7 @@ int output_device_new_data(FILE *out, const char *device_id, const char *previou
     if (fputs(",\"previous\":", out) < 0) {
         return -1;
     }
-    if (previous != NULL) {
-        if (output_json_string(out, previous) != 0) {
-            return -1;
-        }
-    } else if (fputs("null", out) < 0) {
+    if (write_string_or_null(out, previous) != 0) {
         return -1;
     }
     if (fputs(DATA_END, out) < 0) {
@@ -1111,24 +1127,6 @@ int output_brain_new_id_data(FILE *out, const StoreBrainId *ids)
     if (write_data_open(out) != 0 || fputs("\"brain_id\":", out) < 0 ||
         output_json_string(out, ids->id) != 0 || fputs(",\"previous_brain_id\":", out) < 0 ||
         output_json_string(out, ids->previous) != 0 || fputs(DATA_END, out) < 0) {
-        return -1;
-    }
-    return 0;
-}
-
-int output_import_data(FILE *out, const StoreImportCounts *counts)
-{
-    if (out == NULL || counts == NULL) {
-        return -1;
-    }
-    if (write_data_open(out) != 0) {
-        return -1;
-    }
-    if (fprintf(out,
-                "\"action\":\"imported\",\"inserted\":%zu,\"updated\":%zu,"
-                "\"unchanged\":%zu,\"conflicts\":%zu,\"rejected\":%zu}",
-                counts->inserted, counts->updated, counts->unchanged, counts->conflicts,
-                counts->rejected) < 0) {
         return -1;
     }
     return 0;
@@ -1188,6 +1186,50 @@ int output_conflicts_data(FILE *out, const StoreConflict *rows, size_t count)
         return -1;
     }
     return 0;
+}
+
+static int write_import_rejects(FILE *out, const StoreImportReject *items, size_t count)
+{
+    size_t i = 0;
+
+    if (fprintf(out, ",\"rejected\":{\"count\":%zu,\"items\":[", count) < 0) {
+        return -1;
+    }
+    for (i = 0; i < count; i++) {
+        if (items[i].field == NULL || (i > 0U && fputc(',', out) == EOF) ||
+            fprintf(out, "{\"source_local_id\":%lld,\"field\":", items[i].source_local_id) < 0 ||
+            output_json_string(out, items[i].field) != 0 || fputc('}', out) == EOF) {
+            return -1;
+        }
+    }
+    return fputs("]}", out) < 0 ? -1 : 0;
+}
+
+int output_import_data(FILE *out, const StoreImportResult *r)
+{
+    size_t i = 0;
+
+    if (out == NULL || r == NULL || (r->nconflicts > 0U && r->conflicts == NULL) ||
+        (r->nrejected > 0U && r->rejected == NULL)) {
+        return -1;
+    }
+    if (write_data_open(out) != 0 ||
+        fprintf(out,
+                "\"action\":\"imported\",\"inserted\":%zu,\"updated\":%zu,\"unchanged\":%zu,"
+                "\"conflicts\":{\"count\":%zu,\"items\":[",
+                r->inserted, r->updated, r->unchanged, r->nconflicts) < 0) {
+        return -1;
+    }
+    for (i = 0; i < r->nconflicts; i++) {
+        if ((i > 0U && fputc(',', out) == EOF) ||
+            output_one_conflict_json(out, &r->conflicts[i]) != 0) {
+            return -1;
+        }
+    }
+    if (fputs("]}", out) < 0 || write_import_rejects(out, r->rejected, r->nrejected) != 0) {
+        return -1;
+    }
+    return fputs(DATA_END, out) < 0 ? -1 : 0;
 }
 
 int output_rebuilt(FILE *out, bool json, size_t entries)

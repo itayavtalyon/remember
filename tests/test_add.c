@@ -690,7 +690,8 @@ TEST(add_actor_flags_and_a_hook_rejects_them)
     r = run_remember(db, hook_flag, sizeof(hook_flag) / sizeof(hook_flag[0]), NULL);
     (void)unsetenv("REMEMBER_HOOK_DEPTH");
     ASSERT_EQ_INT(r.exit_code, 1);
-    ASSERT_STREQ(r.err, "remember: \n");
+    ASSERT_STREQ(r.err, "remember: --as and --actor can't be used inside a hook. Remove --as and "
+                        "--actor. remember stamps hook writes itself.\n");
     cmd_result_free(&r);
     (void)setenv("REMEMBER_HOOK_DEPTH", "1", 1);
     r = run_remember(db, hook_json, sizeof(hook_json) / sizeof(hook_json[0]), NULL);
@@ -698,8 +699,10 @@ TEST(add_actor_flags_and_a_hook_rejects_them)
     ASSERT_EQ_INT(r.exit_code, 1);
     ASSERT_STREQ(r.err, "");
     ASSERT_STR_CONTAINS(r.out, "\"code\":\"invalid_argument\"");
-    ASSERT_STR_CONTAINS(r.out, "\"message\":\"\"");
-    ASSERT_STR_CONTAINS(r.out, "Run 'remember list' again without --cursor.");
+    ASSERT_STR_CONTAINS(
+        r.out, "\"error\":{\"code\":\"invalid_argument\",\"message\":\"--as and --actor "
+               "can't be used inside a hook.\",\"fix\":\"Remove --as and --actor. remember "
+               "stamps hook writes itself.\",\"retryable\":false}");
     cmd_result_free(&r);
     (void)setenv("REMEMBER_HOOK_DEPTH", "1", 1);
     r = run_remember(db, hook_plain, sizeof(hook_plain) / sizeof(hook_plain[0]), NULL);

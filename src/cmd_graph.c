@@ -102,7 +102,7 @@ static int handle_pair_flag(const char *arg, int *i, int rest_argc, const char *
     }
     {
         const char *err = NULL;
-        int took = cmd_take_actor_flag(arg, i, rest_argc, rest_argv, &out->actor, &err);
+        int took = cmd_take_write_flag(arg, i, rest_argc, rest_argv, &out->actor, &err);
 
         if (took < 0) {
             err_msg(DIAG_USAGE, err);

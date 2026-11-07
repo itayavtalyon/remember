@@ -994,7 +994,7 @@ TEST(store_import_probe_prepare_fail_imports_nothing)
     char err[ERR_BUFSIZE];
     Store *dst = NULL;
     Store *src = NULL;
-    StoreImportCounts counts;
+    StoreImportResult counts;
 
     ASSERT_TRUE(local != NULL && foreign != NULL);
     dst = store_open(local, err, sizeof(err));

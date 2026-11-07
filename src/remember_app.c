@@ -94,6 +94,14 @@ static void print_trash_expired_help(FILE *out)
                        "not in the Trash.\n");
 }
 
+/* H-16.11, locked. Every write accepts both. */
+static void print_hooks_help(FILE *out)
+{
+    (void)fprintf(out, "  --hooks     Run matching hooks for this write, also ones you turned off "
+                       "for local writes.\n");
+    (void)fprintf(out, "  --no-hooks  Run no hooks for this write.\n");
+}
+
 // NOLINTNEXTLINE(readability-function-cognitive-complexity) — one help block per command
 static void print_command_help(CliCommand topic)
 {
@@ -116,6 +124,7 @@ static void print_command_help(CliCommand topic)
         (void)fprintf(out, "  --tag TAG       Attach a tag (repeatable; union on merge)\n");
         (void)fprintf(out, "  --as KIND       human|agent|tool|share (default human)\n");
         (void)fprintf(out, "  --actor ID      1 to 64 of A-Za-z0-9_./:-\n");
+        print_hooks_help(out);
         (void)fprintf(out, "  --ttl 7d        Relative expiry from write time (Nm/Nh/Nd/Nw)\n");
         (void)fprintf(out, "  --expires TS    Absolute expiry (YYYY-MM-DD local EOD, or ...Z)\n");
         (void)fprintf(out, "  BODY|-          Memory text, or - to read stdin\n");
@@ -142,6 +151,7 @@ static void print_command_help(CliCommand topic)
         (void)fprintf(out, "  --expired       Locate in expired bin\n");
         (void)fprintf(out, "  --as KIND       human|agent|tool|share (default human)\n");
         (void)fprintf(out, "  --actor ID      1 to 64 of A-Za-z0-9_./:-\n");
+        print_hooks_help(out);
         (void)fprintf(out, "\n");
         (void)fprintf(out, "Exactly one of ID or --key is required.\n");
         (void)fprintf(out, "Default locators are live-only.\n");
@@ -166,6 +176,7 @@ static void print_command_help(CliCommand topic)
         (void)fprintf(out, "                  Write only when version_vector equals VV\n");
         (void)fprintf(out, "  --as KIND       human|agent|tool|share (default human)\n");
         (void)fprintf(out, "  --actor ID      1 to 64 of A-Za-z0-9_./:-\n");
+        print_hooks_help(out);
         (void)fprintf(out, "\n");
         (void)fprintf(out, "Exactly one of ID or --key is required.\n");
         (void)fprintf(out, "At least one of --text, --tag, --clear-tags, --ttl, --expires,\n");
@@ -239,6 +250,7 @@ static void print_command_help(CliCommand topic)
         (void)fprintf(out, "Options:\n");
         (void)fprintf(out, "  --expired       Wipe expired rows\n");
         (void)fprintf(out, "  --deleted       Wipe deleted rows\n");
+        print_hooks_help(out);
         (void)fprintf(out, "Exactly one of --expired or --deleted is required.\n");
         (void)fprintf(out, "Human stdout: the count of deleted entries.\n");
         (void)fprintf(out, "\n");
@@ -252,6 +264,7 @@ static void print_command_help(CliCommand topic)
         (void)fprintf(out, "  --deleted       Allow deleted ends\n");
         (void)fprintf(out, "  --as KIND       human|agent|tool|share (default human)\n");
         (void)fprintf(out, "  --actor ID      1 to 64 of A-Za-z0-9_./:-\n");
+        print_hooks_help(out);
         (void)fprintf(out, "  ID ID           Sugar for --from / --to numeric ids\n");
         (void)fprintf(out, "\n");
         (void)fprintf(out, "Each end is exactly one of id or --*-key.\n");
@@ -282,6 +295,7 @@ static void print_command_help(CliCommand topic)
         (void)fprintf(out, "  --clear-key     Remove the key (keyed becomes keyless)\n");
         (void)fprintf(out, "  --as KIND       human|agent|tool|share (default human)\n");
         (void)fprintf(out, "  --actor ID      1 to 64 of A-Za-z0-9_./:-\n");
+        print_hooks_help(out);
         (void)fprintf(out, "\n");
         (void)fprintf(out, "Exactly one of ID or --key, and exactly one of\n");
         (void)fprintf(out, "--to-key or --clear-key. Empty --to-key is illegal (not a clear).\n");
@@ -289,6 +303,7 @@ static void print_command_help(CliCommand topic)
     } else if (topic == CLI_CMD_IMPORT) {
         (void)fprintf(out, "Options:\n");
         (void)fprintf(out, "  --from-db PATH  Source remember database (read-only)\n");
+        print_hooks_help(out);
         (void)fprintf(out, "\n");
         (void)fprintf(out, "Merges by id. Conflicts are recorded; exit 0 even if any.\n");
         (void)fprintf(out, "Run 'conflicts' after import. Source must be schema v4 or v5.\n");
@@ -300,6 +315,7 @@ static void print_command_help(CliCommand topic)
     } else if (topic == CLI_CMD_CONFLICT) {
         (void)fprintf(out, "Usage:\n");
         (void)fprintf(out, "  remember conflict accept --id N --keep local|incoming|both\n");
+        print_hooks_help(out);
         (void)fprintf(out, "\n");
         (void)fprintf(out, "both remints id on concurrent_vv; clash keeps incoming id.\n");
         (void)fprintf(out, "\n");

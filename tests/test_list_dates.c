@@ -898,10 +898,14 @@ TEST(search_crossed_bounds_are_empty)
     r = run_remember(db, args, sizeof(args) / sizeof(args[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 0);
     ASSERT_STREQ(r.err, "");
-    ASSERT_STREQ(r.out, "{\"format\":\"remember-message\",\"version\":1,\"type\":\"memory.search."
-                        "result\",\"data\":{\"count\":0,\"total\":0,"
-                        "\"keys\":{\"total\":0,\"items\":[]},\"tags\":{\"total\":0,\"items\":[]},"
-                        "\"entries\":[]}}\n");
+    ASSERT_STREQ(
+        r.out, "{\"format\":\"remember-message\",\"version\":1,\"type\":\"memory.search."
+               "result\",\"data\":{\"count\":0,\"total\":0,"
+               "\"keys\":{\"total\":0,\"items\":[]},\"tags\":{\"total\":0,\"items\":[]},"
+               "\"entries\":[],\"query\":{\"original\":{\"text\":\"alpha\",\"tags\":[],"
+               "\"bins\":[\"live\"],\"time_range\":{\"field\":\"updated_at\","
+               "\"after\":\"2026-06-16T00:00:00.000Z\",\"before\":\"2026-06-15T00:00:00.000Z\"}}},"
+               "\"ranked_by\":\"bm25\",\"filters\":[]}}\n");
     cmd_result_free(&r);
     free(db);
 }

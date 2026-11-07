@@ -39,7 +39,7 @@ static int locator_take_option(const char *arg, int *i, int rest_argc, const cha
     }
     if (allow_actor) {
         const char *err = NULL;
-        int took = cmd_take_actor_flag(arg, i, rest_argc, rest_argv, &out->actor, &err);
+        int took = cmd_take_write_flag(arg, i, rest_argc, rest_argv, &out->actor, &err);
 
         if (took < 0) {
             err_msg(DIAG_USAGE, err);
@@ -527,7 +527,7 @@ static int handle_update_ttl_flag(const char *arg, int *i, int rest_argc, const 
         return 0;
     }
     {
-        int took = cmd_take_actor_flag(arg, i, rest_argc, rest_argv, &out->actor, err);
+        int took = cmd_take_write_flag(arg, i, rest_argc, rest_argv, &out->actor, err);
 
         if (took != 0) {
             return took < 0 ? -1 : 0;
@@ -879,7 +879,7 @@ static int handle_rekey_flag(const char *arg, int *i, int rest_argc, const char 
     }
     {
         const char *err = NULL;
-        int took = cmd_take_actor_flag(arg, i, rest_argc, rest_argv, &out->actor, &err);
+        int took = cmd_take_write_flag(arg, i, rest_argc, rest_argv, &out->actor, &err);
 
         if (took < 0) {
             err_msg(DIAG_USAGE, err);

@@ -90,11 +90,11 @@ A memory object, in order: `id`, `local_id`, `key`, `body`, `tags`, `created_by`
 | `unlink` | `{action, count, links}`. `action` is `deleted`. |
 | `related` | `{id, local_id, key, count, links}`. |
 | `list` | `{count, total, entries}`. `count` is the number of entries in this reply. `total` is the unpaged count. Paging fields sit on the envelope (§ Cursor paging). |
-| `search` | `{count, total, keys, tags, entries}`. `count` is the number of entries in this reply. `total` is the unpaged match count. `keys` is `{total, items}` and each item is `{key, id, label, updated_at}`. `tags` is `{total, items}` and each item is `{tag, count}`. `keys.total` and `tags.total` count every facet match. `items` holds at most the facet limit (default 50, maximum 200). Entries include `links`. The object has no `query`, `ranked_by`, or `filters`. The envelope has no paging fields. |
+| `search` | `{count, total, keys, tags, entries}`. `count` is the number of entries in this reply. `total` is the unpaged match count. `keys` is `{total, items}` and each item is `{key, id, label, updated_at}`. `tags` is `{total, items}` and each item is `{tag, count}`. `keys.total` and `tags.total` count every facet match. `items` holds at most the facet limit (default 50, maximum 200). Entries include `links`. Then `query`, `ranked_by`, `filters` (`decision:plan21-search-query-original-only`): `query` is `{original}`, and `original` is `{text, tags, bins, time_range}`. `text` is the query as typed. `tags` is the normalized `--tag` values in the order given, `[]` when none. `bins` is one of `["live"]`, `["expired"]`, `["deleted"]`. `time_range` is `{field, after, before}`: `field` is `updated_at`, and `after` and `before` are the `--since` and `--until` instants, or JSON `null`. `ranked_by` is `"bm25"`. `filters` is `[]`. The envelope has no paging fields. |
 | `tags` | `{count, tags}`. Each tag is `{name, count}`. No paging fields. |
 | `conflicts` | `{count, conflicts}`. Each row is `{id, memory_id, reason, local, incoming, created_at}`. `id` is the integer conflict-row id. `memory_id` is the memory UUID. `local` and `incoming` are JSON objects. No paging fields. |
 | `conflict accept` | `{action, count, entries}`. `action` is `accepted`. The command takes `--id` (that conflict-row id) and `--keep` `local`, `incoming`, or `both`. |
-| `import` | `{action, inserted, updated, unchanged, conflicts, rejected}`. `action` is `imported`. The four counts after `action`, and `conflicts` and `rejected`, are numbers. |
+| `import` | `{action, inserted, updated, unchanged, conflicts, rejected}` (`decision:plan21-import-problem-rows`). `action` is `imported`. `inserted`, `updated`, and `unchanged` are numbers. `conflicts` is `{count, items}`: the conflict rows this import opened or refreshed, id ascending, each the same object as a `conflicts` row. A re-import that rewrites an open conflict lists it again. `rejected` is `{count, items}`: each item is `{source_local_id, field}`, the source row's integer id and the first field that failed, checked in the order `key`, `tags`, `id`, `created_at`, `updated_at`, `expires_at`, `deleted_at`, `version_vector`, `source`, `body_hash`. The plain line is `inserted N updated N unchanged N conflicts N rejected N` with the two item counts. |
 | `device` | `{device_id}`. |
 | `device new` | `{device_id, previous}`. `previous` is the replaced id, or JSON `null`. |
 | `repair search-index` | `{action, entries}`. `action` is `rebuilt`. `entries` is the number of entries rebuilt. |
@@ -175,7 +175,18 @@ A bad `--as` is usage: `invalid --as (use human, agent, tool, or share)`. A bad 
 
 `--created-by` and `--updated-by` filter on the stored kind, including `import`.
 
-When `REMEMBER_HOOK_DEPTH` is a whole integer of 1 or more, passing `--as` or `--actor` fails with `invalid_argument`. The approved sentence for that case is unwritten, so this spec does not quote one.
+When `REMEMBER_HOOK_DEPTH` is a whole integer of 1 or more, passing `--as` or `--actor` fails with `invalid_argument` (`decision:plan21-hook-actor-draft`). The message is `--as and --actor can't be used inside a hook.` and the fix is `Remove --as and --actor. remember stamps hook writes itself.` Both are C-42-style drafts, not approved copy.
+
+## Hook flags
+
+No `decision:json-*` key. The rule is 010 H-16.11.
+
+Every write (`add`, `update`, `delete`, `purge`, `link`, `unlink`, `rekey`, `import`, `conflict accept`) accepts `--hooks` and `--no-hooks`, and its help prints these two lines after the actor lines:
+
+- `--hooks     Run matching hooks for this write, also ones you turned off for local writes.`
+- `--no-hooks  Run no hooks for this write.`
+
+Until plan 25 runs hooks, both flags change nothing. A read (`get`, `list`, `search`, `related`, `tags`, `conflicts`, `device`) rejects them as `unknown option`.
 
 Memory JSON has `created_by` and `updated_by`. It has no `source` field.
 
@@ -203,7 +214,7 @@ A live command aimed at an expired row exits 3 with the expired wrong-list line.
 
 `next_cursor` and `has_more` sit on the envelope, together. `count`, `total`, and `entries` stay in `data`. Search, tags, conflicts, and every write omit both paging fields. The CLI has no `--offset`. Search rejects `--cursor` as an unknown option.
 
-The cursor is standard base64, with `+`, `/`, and `=` padding, of one JSON object. Field order:
+The cursor is unpadded base64url (RFC 4648 §5: `-` and `_`, no `=`) of one JSON object (`decision:plan21-cursor-binds-whole-query`). Field order:
 
 `v`, `sort`, `bin`, then any of `tags`, `created_by`, `updated_by`, `key`, `since`, `until` that are set, then `at`, `local_id`.
 
@@ -212,14 +223,22 @@ The cursor is standard base64, with `+`, `/`, and `=` padding, of one JSON objec
 | `v` | `1` |
 | `sort` | `updated` or `created` |
 | `bin` | `live`, `expired`, or `deleted` |
-| `tags` | Omitted when the list has no tag filter. Otherwise a non-empty array of strings in `strcmp` order. An empty array is invalid. |
-| `created_by`, `updated_by`, `key`, `since`, `until` | Omitted when that filter was not set. |
-| `at` | The sort timestamp of the last row on the page. |
+| `tags` | Omitted when the list has no tag filter. Otherwise a non-empty array of normalized tags in `strcmp` order. An empty array is invalid. |
+| `created_by`, `updated_by` | A stored actor kind. Omitted when that filter was not set. |
+| `key` | The normalized key. Omitted when not set. |
+| `since`, `until` | The instant as `YYYY-MM-DDTHH:MM:SS.mmmZ`. Omitted when not set. |
+| `at` | The sort timestamp of the last row on the page, in the same form. |
 | `local_id` | The integer id of that row. No leading zero on a multi-digit number. |
 
-`--limit` is not in the cursor and may differ on the next call. The cursor matches the flags of the call that presents it: the same sort, bin, tags, and the same optional filters. A bad cursor, an unknown member, or a mismatch is `invalid_argument`, message `invalid --cursor`. That path is not `unknown_field`. The `fix` on that error is the shared `invalid_argument` draft in § Errors and warnings.
+The cursor is the whole query. `--cursor` comes alone: with it, `list` takes only `--limit` and the global options. `--limit` is not in the cursor and may differ on the next call. Any filter, sort, or bin flag next to `--cursor` is `invalid_argument` `invalid --cursor`. `--trash` there still warns first, as it does everywhere.
 
-`decision:plan21-cursor-binds-whole-query` is the subject key for this cursor. Its stored text says base64url and that `--cursor` alone continues the query. This binary writes standard base64, and the flags travel with the cursor.
+A cursor is valid only when it decodes, holds the members above in that order with valid values, and encodes back to the same bytes. Padding, a standard-base64 `+` or `/`, non-zero unused bits, an unknown member, a value that is not canonical, and bytes after the object all fail. A bad cursor is `invalid_argument`, message `invalid --cursor`. That path is not `unknown_field`. The `fix` on that error is the shared `invalid_argument` draft in § Errors and warnings.
+
+## Test builds
+
+`decision:json-test-fixed-ids`. 008 JE-7.1, 008-10.
+
+In the test CLI build (CMake `REMEMBER_TEST_VFS=ON`, which Release forces off), `REMEMBER_TEST_FIXED_IDS=N` with N a decimal number from 1 to 2^48−1 makes every minted UUID `00000000-0000-7000-8000-<12 hex digits>`, counting up from N, and every timestamp `2026-01-01T00:00:00.000Z`. The first id a new brain mints is the device id. Each process starts again at N, so a test that runs several writes on one brain gives each a start past the ids the last one used. Any other value is ignored. Release builds, `remember_plain`, and libremember never read the variable.
 
 ## Brain id
 

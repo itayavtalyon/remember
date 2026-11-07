@@ -12,15 +12,29 @@
 #include <stdlib.h>
 #include <string.h>
 
+/* The import reply: the JSON data object, or one plain line of counts. */
+static int import_write(bool json, const StoreImportResult *r)
+{
+    if (json) {
+        return output_import_data(app_out(), r);
+    }
+    if (fprintf(app_out(), "inserted %zu updated %zu unchanged %zu conflicts %zu rejected %zu\n",
+                r->inserted, r->updated, r->unchanged, r->nconflicts, r->nrejected) < 0) {
+        return -1;
+    }
+    return 0;
+}
+
 int cmd_import(Store *s, bool json, int rest_argc, const char **rest_argv)
 {
     const char *from_db = NULL;
     char now[ISO_TS_BUFSIZE];
-    StoreImportCounts counts;
+    StoreImportResult result;
+    int rc = 0;
     StoreStatus st = STORE_OK;
     int i = 0;
 
-    memset(&counts, 0, sizeof(counts));
+    memset(&result, 0, sizeof(result));
     for (i = 0; i < rest_argc; i++) {
         const char *arg = rest_argv[i];
 
@@ -35,6 +49,9 @@ int cmd_import(Store *s, bool json, int rest_argc, const char **rest_argv)
                 return REMEMBER_ERR;
             }
             from_db = taken.value;
+            continue;
+        }
+        if (arg != NULL && cmd_is_hooks_flag(arg)) {
             continue;
         }
         if (arg != NULL && arg[0] == '-' && arg[1] != '\0') {
@@ -52,7 +69,7 @@ int cmd_import(Store *s, bool json, int rest_argc, const char **rest_argv)
         err_msg(DIAG_INTERNAL, "internal error");
         return REMEMBER_ERR;
     }
-    st = store_import(s, from_db, now, &counts);
+    st = store_import(s, from_db, now, &result);
     if (st == STORE_ERR_SQLITE && store_last_error(s)->import_source) {
         /* The source failed, not the brain: name the --from-db file. */
         err_store_sqlite(store_last_error(s), from_db);
@@ -61,15 +78,9 @@ int cmd_import(Store *s, bool json, int rest_argc, const char **rest_argv)
     if (st != STORE_OK) {
         return store_status_to_exit(s, st);
     }
-    if (json) {
-        if (output_import_data(app_out(), &counts) != 0) {
-            err_msg(DIAG_INTERNAL, "failed to write output");
-            return REMEMBER_ERR;
-        }
-    } else if (fprintf(app_out(),
-                       "inserted %zu updated %zu unchanged %zu conflicts %zu rejected %zu\n",
-                       counts.inserted, counts.updated, counts.unchanged, counts.conflicts,
-                       counts.rejected) < 0) {
+    rc = import_write(json, &result);
+    store_import_result_free(&result);
+    if (rc != 0) {
         err_msg(DIAG_INTERNAL, "failed to write output");
         return REMEMBER_ERR;
     }
@@ -203,6 +214,9 @@ static int conflict_accept_parse(int rest_argc, const char **rest_argv, long lon
             if (conflict_accept_take_keep(&arg_i, rest_argc, rest_argv, keep, &have_keep) != 0) {
                 return REMEMBER_ERR;
             }
+            continue;
+        }
+        if (arg != NULL && cmd_is_hooks_flag(arg)) {
             continue;
         }
         if (arg != NULL && arg[0] == '-' && arg[1] != '\0') {

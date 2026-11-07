@@ -756,7 +756,7 @@ TEST(schema_v6_import_stamps_written_rows_only)
     char *db = make_temp_db_path();
     char *peer = make_temp_db_path();
     Store *s = NULL;
-    StoreImportCounts counts;
+    StoreImportResult counts;
     StoreNeighbor stub;
     StoreLinkAction action = STORE_LINK_CREATED;
     char hash_one[REMEMBER_SHA256_HEX_LEN + 1];
@@ -783,8 +783,10 @@ TEST(schema_v6_import_stamps_written_rows_only)
     ASSERT_EQ_INT((int)counts.inserted, 2);
     assert_seqs(db, "1:1 2:2", "3");
     assert_query_is(db, (QueryExpect){.sql = "SELECT change_seq FROM entry_links;", .want = "3"});
+    store_import_result_free(&counts);
     ASSERT_EQ_STATUS(store_import(s, peer, k_now, &counts), STORE_OK);
     ASSERT_EQ_INT((int)counts.unchanged, 2);
+    store_import_result_free(&counts);
     assert_seqs(db, "1:1 2:2", "3");
     store_close(s);
     free(db);
@@ -988,7 +990,7 @@ TEST(schema_v6_a_newer_min_reader_version_makes_the_brain_read_only)
     StoreNeighbor *stubs = NULL;
     size_t nstubs = 0U;
     StoreLinkAction action = STORE_LINK_CREATED;
-    StoreImportCounts counts;
+    StoreImportResult counts;
     size_t entries = 0U;
     ListQuery q;
     PageResult page;

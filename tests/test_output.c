@@ -347,15 +347,56 @@ TEST(output_list_envelope_rejects_missing_arguments)
     assert_written(f, "");
 }
 
-/* E2.1 (4): an empty search still carries both facets, empty. */
+/* The search "boo" on the live bin with no filter. */
+static SearchQuery given_search_query(void)
+{
+    SearchQuery q;
+
+    memset(&q, 0, sizeof(q));
+    q.query = "boo";
+    q.filters.bin = STORE_BIN_LIVE;
+    return q;
+}
+
+/* E2.1 (4): an empty search still carries both facets, empty. The query
+   follows entries (decision:plan21-search-query-original-only). */
 TEST(output_search_envelope_writes_empty_facets)
 {
     SearchResult res = {.page = {.st = STORE_OK}};
+    SearchQuery q = given_search_query();
     FILE *f = given_stream();
 
-    ASSERT_EQ_INT(output_search_data(f, &res, NULL, 0, NOW), 0);
+    ASSERT_EQ_INT(output_search_data(f, &q, &res, NULL, 0, NOW), 0);
     assert_written(f, "{\"count\":0,\"total\":0,\"keys\":{\"total\":0,\"items\":["
-                      "]},\"tags\":{\"total\":0,\"items\":[]},\"entries\":[]}");
+                      "]},\"tags\":{\"total\":0,\"items\":[]},\"entries\":[]"
+                      ",\"query\":{\"original\":{\"text\":\"boo\",\"tags\":[],\"bins\":[\"live\"],"
+                      "\"time_range\":{\"field\":\"updated_at\",\"after\":null,\"before\":null}}},"
+                      "\"ranked_by\":\"bm25\",\"filters\":[]}");
+}
+
+/* query.original carries the text, the tag filter, the one bin, and the
+   updated_at bounds, each through the JSON escaper. */
+TEST(output_search_envelope_echoes_the_query_filters)
+{
+    static const char *const tags[] = {"a\"b", "c"};
+    SearchResult res = {.page = {.st = STORE_OK}};
+    SearchQuery q = given_search_query();
+    FILE *f = given_stream();
+
+    q.query = "x\ny";
+    q.filters.tags = tags;
+    q.filters.ntags = 2U;
+    q.filters.bin = STORE_BIN_DELETED;
+    q.filters.since = "2026-01-01T00:00:00.000Z";
+    q.filters.until = "2026-02-01T00:00:00.000Z";
+    ASSERT_EQ_INT(output_search_data(f, &q, &res, NULL, 0, NOW), 0);
+    assert_written(
+        f, "{\"count\":0,\"total\":0,\"keys\":{\"total\":0,\"items\":["
+           "]},\"tags\":{\"total\":0,\"items\":[]},\"entries\":[],\"query\":{"
+           "\"original\":{\"text\":\"x\\ny\",\"tags\":[\"a\\\"b\",\"c\"],"
+           "\"bins\":[\"deleted\"],\"time_range\":{\"field\":\"updated_at\","
+           "\"after\":\"2026-01-01T00:00:00.000Z\",\"before\":\"2026-02-01T00:00:00.000Z\"}}},"
+           "\"ranked_by\":\"bm25\",\"filters\":[]}");
 }
 
 /* Two key items and two tag items, so the comma between items shows. */
@@ -385,16 +426,20 @@ TEST(output_search_envelope_writes_the_facet_items)
     SearchKeyItem keys[2];
     SearchTagItem tags[2];
     SearchResult res = given_search_facets(keys, tags);
+    SearchQuery q = given_search_query();
     FILE *f = given_stream();
 
-    ASSERT_EQ_INT(output_search_data(f, &res, NULL, 0, NOW), 0);
+    ASSERT_EQ_INT(output_search_data(f, &q, &res, NULL, 0, NOW), 0);
     assert_written(
         f, "{\"count\":0,\"total\":0,\"keys\":{\"total\":5,\"items\":["
            "{\"key\":\"recs:books\",\"id\":\"s-1\",\"label\":\"Book recommendations\","
            "\"updated_at\":\"u-1\"},{\"key\":\"recs:bonds\",\"id\":\"s-2\","
            "\"label\":\"recs:bonds\",\"updated_at\":\"u-2\"}]},\"tags\":{\""
            "total\":4,\"items\":[{\"tag\":\"type:books\",\"count\":1},{\"tag\":\"recs\",\"count"
-           "\":3}]},\"entries\":[]}");
+           "\":3}]},\"entries\":[]"
+           ",\"query\":{\"original\":{\"text\":\"boo\",\"tags\":[],\"bins\":[\"live\"],"
+           "\"time_range\":{\"field\":\"updated_at\",\"after\":null,\"before\":null}}},"
+           "\"ranked_by\":\"bm25\",\"filters\":[]}");
 }
 
 /* Stage 4 handover: every facet field goes through the JSON escaper. The
@@ -405,6 +450,7 @@ TEST(output_search_envelope_escapes_every_facet_field)
     SearchKeyItem keys[2];
     SearchTagItem tags[2];
     SearchResult res = given_search_facets(keys, tags);
+    SearchQuery q = given_search_query();
     FILE *f = given_stream();
 
     res.keys.items[0] = (SearchKeyItem){.key = (char *)"k\x1b",
@@ -414,11 +460,14 @@ TEST(output_search_envelope_escapes_every_facet_field)
     res.tags.items[0].tag = (char *)"t\x01";
     res.keys.count = 1;
     res.tags.count = 1;
-    ASSERT_EQ_INT(output_search_data(f, &res, NULL, 0, NOW), 0);
+    ASSERT_EQ_INT(output_search_data(f, &q, &res, NULL, 0, NOW), 0);
     assert_written(f, "{\"count\":0,\"total\":0,\"keys\":{\"total\":5,\"items\":["
                       "{\"key\":\"k\\u001b\",\"id\":\"s\\n\",\"label\":\"l\\\"\\u001b[31m\","
                       "\"updated_at\":\"u\\t\"}]},\"tags\":{\"total\":4,\"items\":[{\"tag\":\"t"
-                      "\\u0001\",\"count\":1}]},\"entries\":[]}");
+                      "\\u0001\",\"count\":1}]},\"entries\":[]"
+                      ",\"query\":{\"original\":{\"text\":\"boo\",\"tags\":[],\"bins\":[\"live\"],"
+                      "\"time_range\":{\"field\":\"updated_at\",\"after\":null,\"before\":null}}},"
+                      "\"ranked_by\":\"bm25\",\"filters\":[]}");
 }
 
 TEST(output_search_envelope_rejects_missing_arguments)
@@ -427,20 +476,33 @@ TEST(output_search_envelope_rejects_missing_arguments)
     SearchTagItem tags[2];
     SearchResult res = given_search_facets(keys, tags);
     StoreNeighbor link = given_link(SUBJECT_ID, SUBJECT_ID, STORE_EDGE_RELATED);
+    SearchQuery q = given_search_query();
     FILE *f = given_stream();
 
-    ASSERT_EQ_INT(output_search_data(NULL, &res, NULL, 0, NOW), -1);
-    ASSERT_EQ_INT(output_search_data(f, NULL, NULL, 0, NOW), -1);
-    ASSERT_EQ_INT(output_search_data(f, &res, NULL, 0, NULL), -1);
-    ASSERT_EQ_INT(output_search_data(f, &res, NULL, 1, NOW), -1);
+    ASSERT_EQ_INT(output_search_data(NULL, &q, &res, NULL, 0, NOW), -1);
+    ASSERT_EQ_INT(output_search_data(f, &q, NULL, NULL, 0, NOW), -1);
+    ASSERT_EQ_INT(output_search_data(f, &q, &res, NULL, 0, NULL), -1);
+    ASSERT_EQ_INT(output_search_data(f, &q, &res, NULL, 1, NOW), -1);
     res.page.count = 1;
-    ASSERT_EQ_INT(output_search_data(f, &res, &link, 1, NOW), -1);
+    ASSERT_EQ_INT(output_search_data(f, &q, &res, &link, 1, NOW), -1);
     res.page.count = 0;
     res.keys.items = NULL;
-    ASSERT_EQ_INT(output_search_data(f, &res, NULL, 0, NOW), -1);
+    ASSERT_EQ_INT(output_search_data(f, &q, &res, NULL, 0, NOW), -1);
     res.keys.count = 0;
     res.tags.items = NULL;
-    ASSERT_EQ_INT(output_search_data(f, &res, NULL, 0, NOW), -1);
+    ASSERT_EQ_INT(output_search_data(f, &q, &res, NULL, 0, NOW), -1);
+    res.tags.count = 0;
+    res.tags.items = tags;
+    ASSERT_EQ_INT(output_search_data(f, NULL, &res, NULL, 0, NOW), -1);
+    q.query = NULL;
+    ASSERT_EQ_INT(output_search_data(f, &q, &res, NULL, 0, NOW), -1);
+    q = given_search_query();
+    // NOLINTNEXTLINE(clang-analyzer-optin.core.EnumCastOutOfRange) the guard under test
+    q.filters.bin = (StoreBin)(STORE_BIN_DELETED + 1);
+    ASSERT_EQ_INT(output_search_data(f, &q, &res, NULL, 0, NOW), -1);
+    q = given_search_query();
+    q.filters.ntags = 1U;
+    ASSERT_EQ_INT(output_search_data(f, &q, &res, NULL, 0, NOW), -1);
     assert_written(f, "");
 }
 
@@ -635,12 +697,32 @@ TEST(output_related_envelope_rejects_missing_arguments)
 
 TEST(output_import_envelope_rejects_missing_arguments)
 {
-    StoreImportCounts counts = {0};
+    StoreImportResult counts = {0};
     FILE *f = given_stream();
+
+    StoreImportResult no_conflicts = {.nconflicts = 1};
+    StoreImportResult no_rejects = {.nrejected = 1};
 
     ASSERT_EQ_INT(output_import_data(NULL, &counts), -1);
     ASSERT_EQ_INT(output_import_data(f, NULL), -1);
+    ASSERT_EQ_INT(output_import_data(f, &no_conflicts), -1);
+    ASSERT_EQ_INT(output_import_data(f, &no_rejects), -1);
     assert_written(f, "");
+}
+
+/* A reject with no field name and a broken conflict row both stop the reply. */
+TEST(output_import_envelope_rejects_an_incomplete_item)
+{
+    StoreImportReject no_field = {.source_local_id = 1, .field = NULL};
+    StoreConflict broken = given_conflict();
+    StoreImportResult bad_reject = {.rejected = &no_field, .nrejected = 1};
+    StoreImportResult bad_conflict = {.conflicts = &broken, .nconflicts = 1};
+    FILE *f = given_stream();
+
+    broken.sync_id = NULL;
+    ASSERT_EQ_INT(output_import_data(f, &bad_reject), -1);
+    ASSERT_EQ_INT(output_import_data(f, &bad_conflict), -1);
+    (void)fclose(f);
 }
 
 TEST(output_device_envelopes_reject_missing_arguments)
@@ -1058,9 +1140,16 @@ static int write_search_envelope(FILE *f)
     SearchTagItem tags[2];
     SearchResult res = given_search_facets(keys, tags);
 
+    static const char *const filter_tags[] = {"a", "b"};
+    SearchQuery q = given_search_query();
+
+    q.filters.tags = filter_tags;
+    q.filters.ntags = 2U;
+    q.filters.since = "2026-01-01T00:00:00.000Z";
+    q.filters.until = "2026-02-01T00:00:00.000Z";
     given_two_links(links);
     res.page = (PageResult){.st = STORE_OK, .entries = entries, .count = 2, .total = 2};
-    return output_search_data(f, &res, links, 2, NOW);
+    return output_search_data(f, &q, &res, links, 2, NOW);
 }
 
 static int write_search_facets_human(FILE *f)
@@ -1137,10 +1226,20 @@ static int write_related_human(FILE *f)
     return output_related_human(f, links, 2, NOW);
 }
 
+enum { REJECT_ROW_A = 7, REJECT_ROW_B = 9 };
+
 static int write_import_envelope(FILE *f)
 {
-    StoreImportCounts counts = {.inserted = 1, .updated = 2, .unchanged = 3, .conflicts = 4};
+    StoreConflict conflicts[] = {given_conflict(), given_conflict()};
+    StoreImportReject rejected[] = {{.source_local_id = REJECT_ROW_A, .field = "key"},
+                                    {.source_local_id = REJECT_ROW_B, .field = "body_hash"}};
+    StoreImportResult counts = {.inserted = 1, .updated = 2, .unchanged = 3};
 
+    conflicts[1].id = 2;
+    counts.conflicts = conflicts;
+    counts.nconflicts = 2;
+    counts.rejected = rejected;
+    counts.nrejected = 2;
     return output_import_data(f, &counts);
 }
 
@@ -1303,6 +1402,23 @@ TEST(output_related_human_reports_every_failed_write)
     assert_reports_every_failed_write(write_related_human);
 }
 
+/* 21 stage 1 grill: the import reply names each row it opened a conflict for or
+   refused, so an agent need not run conflicts after every import. */
+TEST(output_import_envelope_lists_conflicts_and_rejected_rows)
+{
+    FILE *f = given_stream();
+
+    ASSERT_EQ_INT(write_import_envelope(f), 0);
+    assert_written(f,
+                   "{\"action\":\"imported\",\"inserted\":1,\"updated\":2,\"unchanged\":3,"
+                   "\"conflicts\":{\"count\":2,\"items\":[{\"id\":1,\"memory_id\":\"s-1\","
+                   "\"reason\":\"key_clash\",\"local\":{},\"incoming\":{},\"created_at\":\"c\"},"
+                   "{\"id\":2,\"memory_id\":\"s-1\",\"reason\":\"key_clash\",\"local\":{},"
+                   "\"incoming\":{},\"created_at\":\"c\"}]},\"rejected\":{\"count\":2,\"items\":["
+                   "{\"source_local_id\":7,\"field\":\"key\"},{\"source_local_id\":9,"
+                   "\"field\":\"body_hash\"}]}}");
+}
+
 TEST(output_import_envelope_reports_every_failed_write)
 {
     assert_reports_every_failed_write(write_import_envelope);
@@ -1393,6 +1509,7 @@ void register_output_tests(void)
     RUN_TEST(output_action_envelope_writes_the_memory_without_links);
     RUN_TEST(output_list_envelope_rejects_missing_arguments);
     RUN_TEST(output_search_envelope_writes_empty_facets);
+    RUN_TEST(output_search_envelope_echoes_the_query_filters);
     RUN_TEST(output_search_envelope_writes_the_facet_items);
     RUN_TEST(output_search_envelope_escapes_every_facet_field);
     RUN_TEST(output_search_envelope_rejects_missing_arguments);
@@ -1410,6 +1527,8 @@ void register_output_tests(void)
     RUN_TEST(output_links_write_envelope_names_both_supersedes_directions);
     RUN_TEST(output_related_envelope_rejects_missing_arguments);
     RUN_TEST(output_import_envelope_rejects_missing_arguments);
+    RUN_TEST(output_import_envelope_lists_conflicts_and_rejected_rows);
+    RUN_TEST(output_import_envelope_rejects_an_incomplete_item);
     RUN_TEST(output_device_envelopes_reject_missing_arguments);
     RUN_TEST(output_brain_new_id_envelope_rejects_missing_arguments);
     RUN_TEST(output_conflicts_envelope_rejects_missing_arguments);

@@ -156,7 +156,7 @@ TEST(cli_import_inserts_preserves_sync_id_remaps_links_no_device_register)
     ASSERT_STR_CONTAINS(r.out, "\"inserted\":2");
     ASSERT_STR_CONTAINS(r.out, "\"updated\":0");
     ASSERT_STR_CONTAINS(r.out, "\"unchanged\":0");
-    ASSERT_STR_CONTAINS(r.out, "\"conflicts\":0");
+    ASSERT_STR_CONTAINS(r.out, "\"conflicts\":{\"count\":0,\"items\":[]}");
     /* The data object is only the counts. The envelope writer adds the one newline. */
     {
         const char *nl = strchr(r.out, '\n');
@@ -542,7 +542,7 @@ TEST(cli_import_identical_automerge_concurrent_conflict)
     r = run_import(local, foreign, imp, sizeof(imp) / sizeof(imp[0]));
     ASSERT_EQ_INT(r.exit_code, 0);
     ASSERT_STR_CONTAINS(r.out, "\"unchanged\":1");
-    ASSERT_STR_CONTAINS(r.out, "\"conflicts\":0");
+    ASSERT_STR_CONTAINS(r.out, "\"conflicts\":{\"count\":0,\"items\":[]}");
     cmd_result_free(&r);
 
     /* Concurrent + different body → conflict. */
@@ -562,7 +562,7 @@ TEST(cli_import_identical_automerge_concurrent_conflict)
 
     r = run_import(local, foreign, imp, sizeof(imp) / sizeof(imp[0]));
     ASSERT_EQ_INT(r.exit_code, 0);
-    ASSERT_STR_CONTAINS(r.out, "\"conflicts\":1");
+    ASSERT_STR_CONTAINS(r.out, "\"conflicts\":{\"count\":1,");
     cmd_result_free(&r);
 
     r = run_remember(local, conflicts, sizeof(conflicts) / sizeof(conflicts[0]), NULL);
@@ -598,7 +598,7 @@ TEST(cli_import_key_clash_and_hash_clash_exit_0)
     imp[3] = foreign;
     r = run_import(local, foreign, imp, sizeof(imp) / sizeof(imp[0]));
     ASSERT_EQ_INT(r.exit_code, 0);
-    ASSERT_STR_CONTAINS(r.out, "\"conflicts\":1");
+    ASSERT_STR_CONTAINS(r.out, "\"conflicts\":{\"count\":1,");
     cmd_result_free(&r);
 
     r = run_remember(local, conflicts, sizeof(conflicts) / sizeof(conflicts[0]), NULL);
@@ -624,7 +624,7 @@ TEST(cli_import_key_clash_and_hash_clash_exit_0)
     imp[3] = foreign;
     r = run_import(local, foreign, imp, sizeof(imp) / sizeof(imp[0]));
     ASSERT_EQ_INT(r.exit_code, 0);
-    ASSERT_STR_CONTAINS(r.out, "\"conflicts\":1");
+    ASSERT_STR_CONTAINS(r.out, "\"conflicts\":{\"count\":1,");
     cmd_result_free(&r);
     r = run_remember(local, conflicts, sizeof(conflicts) / sizeof(conflicts[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 0);
@@ -657,7 +657,7 @@ TEST(cli_import_key_clash_reimport_idempotent)
     imp[3] = foreign;
     r = run_import(local, foreign, imp, sizeof(imp) / sizeof(imp[0]));
     ASSERT_EQ_INT(r.exit_code, 0);
-    ASSERT_STR_CONTAINS(r.out, "\"conflicts\":1");
+    ASSERT_STR_CONTAINS(r.out, "\"conflicts\":{\"count\":1,");
     cmd_result_free(&r);
 
     r = run_remember(local, conflicts, sizeof(conflicts) / sizeof(conflicts[0]), NULL);
@@ -667,7 +667,7 @@ TEST(cli_import_key_clash_reimport_idempotent)
 
     r = run_import(local, foreign, imp, sizeof(imp) / sizeof(imp[0]));
     ASSERT_EQ_INT(r.exit_code, 0);
-    ASSERT_STR_CONTAINS(r.out, "\"conflicts\":0");
+    ASSERT_STR_CONTAINS(r.out, "\"conflicts\":{\"count\":1,\"items\":[{\"id\":1,");
     cmd_result_free(&r);
 
     nconf = harness_sqlite_query_line(local, "SELECT COUNT(*) FROM conflicts;");
@@ -677,7 +677,7 @@ TEST(cli_import_key_clash_reimport_idempotent)
     force_body(foreign, 1, "foreign body v2");
     r = run_import(local, foreign, imp, sizeof(imp) / sizeof(imp[0]));
     ASSERT_EQ_INT(r.exit_code, 0);
-    ASSERT_STR_CONTAINS(r.out, "\"conflicts\":0");
+    ASSERT_STR_CONTAINS(r.out, "\"conflicts\":{\"count\":1,\"items\":[{\"id\":1,");
     cmd_result_free(&r);
 
     nconf = harness_sqlite_query_line(local, "SELECT COUNT(*) FROM conflicts;");
@@ -736,7 +736,7 @@ TEST(cli_conflict_accept_keep_both_concurrent_remints)
     imp[3] = foreign;
     r = run_import(local, foreign, imp, sizeof(imp) / sizeof(imp[0]));
     ASSERT_EQ_INT(r.exit_code, 0);
-    ASSERT_STR_CONTAINS(r.out, "\"conflicts\":1");
+    ASSERT_STR_CONTAINS(r.out, "\"conflicts\":{\"count\":1,");
     cmd_result_free(&r);
 
     r = run_remember(local, accept, sizeof(accept) / sizeof(accept[0]), NULL);
@@ -792,7 +792,7 @@ TEST(cli_conflict_accept_keep_both_key_clash_keeps_incoming_sync_id)
     imp[3] = foreign;
     r = run_import(local, foreign, imp, sizeof(imp) / sizeof(imp[0]));
     ASSERT_EQ_INT(r.exit_code, 0);
-    ASSERT_STR_CONTAINS(r.out, "\"conflicts\":1");
+    ASSERT_STR_CONTAINS(r.out, "\"conflicts\":{\"count\":1,");
     cmd_result_free(&r);
 
     r = run_remember(local, accept, sizeof(accept) / sizeof(accept[0]), NULL);
@@ -856,7 +856,7 @@ TEST(cli_import_incoming_dominates_updates)
     r = run_import(local, foreign, imp, sizeof(imp) / sizeof(imp[0]));
     ASSERT_EQ_INT(r.exit_code, 0);
     ASSERT_STR_CONTAINS(r.out, "\"updated\":1");
-    ASSERT_STR_CONTAINS(r.out, "\"conflicts\":0");
+    ASSERT_STR_CONTAINS(r.out, "\"conflicts\":{\"count\":0,\"items\":[]}");
     cmd_result_free(&r);
 
     r = run_remember(local, get, sizeof(get) / sizeof(get[0]), NULL);
@@ -878,7 +878,7 @@ TEST(store_import_no_sidecar_copy_devices_stay_one)
     char err[ERR_BUFSIZE];
     Store *dst = NULL;
     Store *src = NULL;
-    StoreImportCounts counts;
+    StoreImportResult counts;
     StoreAddAction act = STORE_ADD_CREATED;
     Entry e;
     char *devices = NULL;
@@ -904,7 +904,8 @@ TEST(store_import_no_sidecar_copy_devices_stay_one)
     ASSERT_TRUE(dst != NULL);
     ASSERT_EQ_STATUS(store_import(dst, foreign, k_now, &counts), STORE_OK);
     ASSERT_TRUE(counts.inserted == 1U);
-    ASSERT_TRUE(counts.conflicts == 0U);
+    ASSERT_TRUE(counts.nconflicts == 0U);
+    store_import_result_free(&counts);
     {
         Entry got;
 
@@ -967,7 +968,7 @@ TEST(cli_conflict_accept_keep_local_and_incoming)
     imp[3] = foreign;
     r = run_import(local, foreign, imp, sizeof(imp) / sizeof(imp[0]));
     ASSERT_EQ_INT(r.exit_code, 0);
-    ASSERT_STR_CONTAINS(r.out, "\"conflicts\":1");
+    ASSERT_STR_CONTAINS(r.out, "\"conflicts\":{\"count\":1,");
     cmd_result_free(&r);
 
     r = run_remember(local, conflicts_human, sizeof(conflicts_human) / sizeof(conflicts_human[0]),
@@ -1001,7 +1002,7 @@ TEST(cli_conflict_accept_keep_local_and_incoming)
     }
     r = run_import(local, foreign, imp, sizeof(imp) / sizeof(imp[0]));
     ASSERT_EQ_INT(r.exit_code, 0);
-    ASSERT_STR_CONTAINS(r.out, "\"conflicts\":1");
+    ASSERT_STR_CONTAINS(r.out, "\"conflicts\":{\"count\":1,");
     cmd_result_free(&r);
 
     {
@@ -1061,7 +1062,7 @@ TEST(cli_conflict_accept_keep_incoming_key_clash_demotes)
     imp[3] = foreign;
     r = run_import(local, foreign, imp, sizeof(imp) / sizeof(imp[0]));
     ASSERT_EQ_INT(r.exit_code, 0);
-    ASSERT_STR_CONTAINS(r.out, "\"conflicts\":1");
+    ASSERT_STR_CONTAINS(r.out, "\"conflicts\":{\"count\":1,");
     cmd_result_free(&r);
 
     r = run_remember(local, accept, sizeof(accept) / sizeof(accept[0]), NULL);
@@ -1145,7 +1146,7 @@ TEST(cli_import_insert_and_accept_incoming_resync_the_fts_key)
     r = run_import(local, foreign, imp, sizeof(imp) / sizeof(imp[0]));
     ASSERT_EQ_INT(r.exit_code, 0);
     ASSERT_STR_CONTAINS(r.out, "\"inserted\":1");
-    ASSERT_STR_CONTAINS(r.out, "\"conflicts\":1");
+    ASSERT_STR_CONTAINS(r.out, "\"conflicts\":{\"count\":1,");
     cmd_result_free(&r);
     assert_search_total(local, "zebra", "\"total\":1");
 
@@ -1197,7 +1198,7 @@ TEST(cli_import_local_dominates_unchanged)
     ASSERT_EQ_INT(r.exit_code, 0);
     ASSERT_STR_CONTAINS(r.out, "\"unchanged\":1");
     ASSERT_STR_CONTAINS(r.out, "\"updated\":0");
-    ASSERT_STR_CONTAINS(r.out, "\"conflicts\":0");
+    ASSERT_STR_CONTAINS(r.out, "\"conflicts\":{\"count\":0,\"items\":[]}");
     cmd_result_free(&r);
 
     r = run_remember(local, get, sizeof(get) / sizeof(get[0]), NULL);
@@ -1299,7 +1300,7 @@ TEST(cli_import_conflict_snapshot_json_escapes)
     imp[3] = foreign;
     r = run_import(local, foreign, imp, sizeof(imp) / sizeof(imp[0]));
     ASSERT_EQ_INT(r.exit_code, 0);
-    ASSERT_STR_CONTAINS(r.out, "\"conflicts\":1");
+    ASSERT_STR_CONTAINS(r.out, "\"conflicts\":{\"count\":1,");
     cmd_result_free(&r);
 
     r = run_remember(local, conflicts, sizeof(conflicts) / sizeof(conflicts[0]), NULL);
@@ -1529,7 +1530,7 @@ TEST(cli_import_incoming_dominates_keyless_hash_clash)
     imp[3] = foreign;
     r = run_import(local, foreign, imp, sizeof(imp) / sizeof(imp[0]));
     ASSERT_EQ_INT(r.exit_code, 0);
-    ASSERT_STR_CONTAINS(r.out, "\"conflicts\":1");
+    ASSERT_STR_CONTAINS(r.out, "\"conflicts\":{\"count\":1,");
     cmd_result_free(&r);
 
     r = run_remember(local, conflicts, sizeof(conflicts) / sizeof(conflicts[0]), NULL);
@@ -1586,7 +1587,7 @@ TEST(cli_conflict_accept_incoming_many_tags)
     imp[3] = foreign;
     r = run_import(local, foreign, imp, sizeof(imp) / sizeof(imp[0]));
     ASSERT_EQ_INT(r.exit_code, 0);
-    ASSERT_STR_CONTAINS(r.out, "\"conflicts\":1");
+    ASSERT_STR_CONTAINS(r.out, "\"conflicts\":{\"count\":1,");
     cmd_result_free(&r);
 
     r = run_remember(local, accept, sizeof(accept) / sizeof(accept[0]), NULL);
@@ -1627,7 +1628,7 @@ TEST(cli_conflict_accept_hash_clash_keep_incoming_and_both_refuse_fake_key)
     imp[3] = foreign;
     r = run_import(local, foreign, imp, sizeof(imp) / sizeof(imp[0]));
     ASSERT_EQ_INT(r.exit_code, 0);
-    ASSERT_STR_CONTAINS(r.out, "\"conflicts\":1");
+    ASSERT_STR_CONTAINS(r.out, "\"conflicts\":{\"count\":1,");
     cmd_result_free(&r);
 
     /* decision:sync-import-hash-demote — no key=sync_id; refuse until keep local. */
@@ -1738,8 +1739,10 @@ TEST(cli_import_bad_vv_row_is_rejected)
     imp[3] = foreign;
     r = run_import(local, foreign, imp, sizeof(imp) / sizeof(imp[0]));
     ASSERT_EQ_INT(r.exit_code, 0);
-    ASSERT_STR_CONTAINS(r.out, "\"inserted\":0,\"updated\":0,\"unchanged\":0,\"conflicts\":0,"
-                               "\"rejected\":1}");
+    ASSERT_STR_CONTAINS(r.out,
+                        "\"inserted\":0,\"updated\":0,\"unchanged\":0,\"conflicts\":{\"count\":0,"
+                        "\"items\":[]},\"rejected\":{\"count\":1,\"items\":[{\"source_local_id\":1,"
+                        "\"field\":\"version_vector\"}]}}");
     cmd_result_free(&r);
 
     harness_remove_tree(dir);
@@ -1839,7 +1842,7 @@ TEST(cli_conflict_accept_concurrent_keep_incoming_demotes_other_key)
     imp[3] = foreign;
     r = run_import(local, foreign, imp, sizeof(imp) / sizeof(imp[0]));
     ASSERT_EQ_INT(r.exit_code, 0);
-    ASSERT_STR_CONTAINS(r.out, "\"conflicts\":1");
+    ASSERT_STR_CONTAINS(r.out, "\"conflicts\":{\"count\":1,");
     cmd_result_free(&r);
 
     r = run_remember(local, accept, sizeof(accept) / sizeof(accept[0]), NULL);
@@ -1930,7 +1933,7 @@ TEST(cli_conflict_accept_concurrent_keep_incoming_hash_taken_refuses)
     imp[3] = foreign;
     r = run_import(local, foreign, imp, sizeof(imp) / sizeof(imp[0]));
     ASSERT_EQ_INT(r.exit_code, 0);
-    ASSERT_STR_CONTAINS(r.out, "\"conflicts\":1");
+    ASSERT_STR_CONTAINS(r.out, "\"conflicts\":{\"count\":1,");
     cmd_result_free(&r);
 
     r = run_remember(local, accept, sizeof(accept) / sizeof(accept[0]), NULL);
@@ -1991,7 +1994,7 @@ TEST(cli_conflict_accept_demote_hash_escape_refuses)
     imp[3] = foreign;
     r = run_import(local, foreign, imp, sizeof(imp) / sizeof(imp[0]));
     ASSERT_EQ_INT(r.exit_code, 0);
-    ASSERT_STR_CONTAINS(r.out, "\"conflicts\":1");
+    ASSERT_STR_CONTAINS(r.out, "\"conflicts\":{\"count\":1,");
     cmd_result_free(&r);
 
     r = run_remember(local, accept, sizeof(accept) / sizeof(accept[0]), NULL);
@@ -2043,7 +2046,7 @@ TEST(cli_import_concurrent_reimport_idempotent)
     imp[3] = foreign;
     r = run_import(local, foreign, imp, sizeof(imp) / sizeof(imp[0]));
     ASSERT_EQ_INT(r.exit_code, 0);
-    ASSERT_STR_CONTAINS(r.out, "\"conflicts\":1");
+    ASSERT_STR_CONTAINS(r.out, "\"conflicts\":{\"count\":1,");
     cmd_result_free(&r);
 
     r = run_remember(local, clist, sizeof(clist) / sizeof(clist[0]), NULL);
@@ -2054,7 +2057,7 @@ TEST(cli_import_concurrent_reimport_idempotent)
     /* Re-import identical foreign: local now dominates → unchanged, still 1 row. */
     r = run_import(local, foreign, imp, sizeof(imp) / sizeof(imp[0]));
     ASSERT_EQ_INT(r.exit_code, 0);
-    ASSERT_STR_CONTAINS(r.out, "\"conflicts\":0");
+    ASSERT_STR_CONTAINS(r.out, "\"conflicts\":{\"count\":0,\"items\":[]}");
     cmd_result_free(&r);
 
     nconf = harness_sqlite_query_line(local, "SELECT COUNT(*) FROM conflicts;");
@@ -2066,7 +2069,7 @@ TEST(cli_import_concurrent_reimport_idempotent)
     force_vv(foreign, 1, "{\"dddddddd-dddd-7ddd-bddd-dddddddddddd\":2}");
     r = run_import(local, foreign, imp, sizeof(imp) / sizeof(imp[0]));
     ASSERT_EQ_INT(r.exit_code, 0);
-    ASSERT_STR_CONTAINS(r.out, "\"conflicts\":0");
+    ASSERT_STR_CONTAINS(r.out, "\"conflicts\":{\"count\":1,\"items\":[{\"id\":1,");
     cmd_result_free(&r);
 
     nconf = harness_sqlite_query_line(local, "SELECT COUNT(*) FROM conflicts;");
@@ -2171,12 +2174,21 @@ TEST(cli_import_skips_noncanonical_key_and_tag_rows)
                          "UPDATE tags SET name='Upper' WHERE name='uppertag';"
                          "UPDATE entries SET key=printf('%.300c','k') WHERE key='longkey';"
                          "UPDATE entries SET key='' WHERE key='emptykey';");
+    /* A bad key and a bad tag on one row: the reply names the key first. */
+    sqlite_exec(foreign, "UPDATE entries SET key='Bad' WHERE body='b4';");
 
     imp[3] = foreign;
     r = run_import(local, foreign, imp, sizeof(imp) / sizeof(imp[0]));
     ASSERT_EQ_INT(r.exit_code, 0);
-    ASSERT_STR_CONTAINS(r.out, "\"inserted\":2,\"updated\":0,\"unchanged\":0,\"conflicts\":0,"
-                               "\"rejected\":6}");
+    ASSERT_STR_CONTAINS(r.out,
+                        "\"inserted\":2,\"updated\":0,\"unchanged\":0,\"conflicts\":{\"count\":0,"
+                        "\"items\":[]},\"rejected\":{\"count\":6,\"items\":["
+                        "{\"source_local_id\":2,\"field\":\"key\"},"
+                        "{\"source_local_id\":3,\"field\":\"tags\"},"
+                        "{\"source_local_id\":4,\"field\":\"key\"},"
+                        "{\"source_local_id\":5,\"field\":\"key\"},"
+                        "{\"source_local_id\":6,\"field\":\"key\"},"
+                        "{\"source_local_id\":7,\"field\":\"key\"}]}}");
     cmd_result_free(&r);
     keys = harness_sqlite_query_line(local, "SELECT group_concat(key) FROM entries;");
     tags = harness_sqlite_query_line(local, "SELECT group_concat(name) FROM tags;");
@@ -2287,12 +2299,27 @@ TEST(cli_import_skips_rows_with_a_non_canonical_peer_field)
                          "WHERE key='vvtwice';");
     sqlite_exec(foreign, "UPDATE entries SET source='robot' WHERE key='source';");
     sqlite_exec(foreign, "UPDATE entries SET body_hash=printf('%.64c','0') WHERE key='hash';");
+    /* Two bad fields: the reply names the first in the documented order. */
+    sqlite_exec(foreign, "UPDATE entries SET created_at='x' WHERE key='tabsync';");
+    sqlite_exec(foreign, "UPDATE entries SET body_hash=printf('%.64c','0') WHERE key='source';");
 
     imp[3] = foreign;
     r = run_import(local, foreign, imp, sizeof(imp) / sizeof(imp[0]));
     ASSERT_EQ_INT(r.exit_code, 0);
-    ASSERT_STR_CONTAINS(r.out, "\"inserted\":1,\"updated\":0,\"unchanged\":0,\"conflicts\":0,"
-                               "\"rejected\":11}");
+    ASSERT_STR_CONTAINS(r.out,
+                        "\"inserted\":1,\"updated\":0,\"unchanged\":0,\"conflicts\":{\"count\":0,"
+                        "\"items\":[]},\"rejected\":{\"count\":11,\"items\":["
+                        "{\"source_local_id\":2,\"field\":\"id\"},"
+                        "{\"source_local_id\":3,\"field\":\"created_at\"},"
+                        "{\"source_local_id\":4,\"field\":\"updated_at\"},"
+                        "{\"source_local_id\":5,\"field\":\"expires_at\"},"
+                        "{\"source_local_id\":6,\"field\":\"deleted_at\"},"
+                        "{\"source_local_id\":7,\"field\":\"version_vector\"},"
+                        "{\"source_local_id\":8,\"field\":\"version_vector\"},"
+                        "{\"source_local_id\":9,\"field\":\"version_vector\"},"
+                        "{\"source_local_id\":10,\"field\":\"version_vector\"},"
+                        "{\"source_local_id\":11,\"field\":\"source\"},"
+                        "{\"source_local_id\":12,\"field\":\"body_hash\"}]}}");
     cmd_result_free(&r);
     keys = harness_sqlite_query_line(local, "SELECT group_concat(key) FROM entries;");
     ASSERT_TRUE(keys != NULL);

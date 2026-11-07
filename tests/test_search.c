@@ -81,33 +81,44 @@ TEST(search_source_filter)
     free(db);
 }
 
-/* E2.1 (4): an empty or whitespace-only QUERY is an empty result, not an error. */
-static void assert_blank_query_is_an_empty_result(const char *query)
+enum { BLANK_WANT_CAP = 1024 };
+
+/* E2.1 (4): an empty or whitespace-only QUERY is an empty result, not an error.
+   query.original.text is the QUERY as typed; json_text is its JSON form. */
+// NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
+static void assert_blank_query_is_an_empty_result(const char *query, const char *json_text)
 {
     char *db = make_temp_db_path();
     const char *args[] = {"--json", "search", query};
+    char want[BLANK_WANT_CAP];
     CmdResult r;
     ASSERT_TRUE(db != NULL);
     seed_search_corpus(db);
+    ASSERT_TRUE(snprintf(want, sizeof(want),
+                         "{\"format\":\"remember-message\",\"version\":1,\"type\":\"memory.search."
+                         "result\",\"data\":{\"count\":0,\"total\":0,"
+                         "\"keys\":{\"total\":0,\"items\":[]},\"tags\":{\"total\":0,\"items\":[]},"
+                         "\"entries\":[],\"query\":{\"original\":{\"text\":\"%s\",\"tags\":[],"
+                         "\"bins\":[\"live\"],\"time_range\":{\"field\":\"updated_at\","
+                         "\"after\":null,\"before\":null}}},\"ranked_by\":\"bm25\","
+                         "\"filters\":[]}}\n",
+                         json_text) > 0);
     r = run_remember(db, args, sizeof(args) / sizeof(args[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 0);
     ASSERT_STREQ(r.err, "");
-    ASSERT_STREQ(r.out, "{\"format\":\"remember-message\",\"version\":1,\"type\":\"memory.search."
-                        "result\",\"data\":{\"count\":0,\"total\":0,"
-                        "\"keys\":{\"total\":0,\"items\":[]},\"tags\":{\"total\":0,\"items\":[]},"
-                        "\"entries\":[]}}\n");
+    ASSERT_STREQ(r.out, want);
     cmd_result_free(&r);
     free(db);
 }
 
 TEST(search_empty_query_is_an_empty_result)
 {
-    assert_blank_query_is_an_empty_result("");
+    assert_blank_query_is_an_empty_result("", "");
 }
 
 TEST(search_whitespace_only_query_is_an_empty_result)
 {
-    assert_blank_query_is_an_empty_result("   \t  ");
+    assert_blank_query_is_an_empty_result("   \t  ", "   \\t  ");
 }
 
 /* The CLI passes QUERY as given; the store trims it (E2.1, D13: one owner). */
