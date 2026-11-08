@@ -41,7 +41,7 @@ static int handle_add_flag(const char *arg, int *i, int rest_argc, const char **
         return 1; /* end opts */
     }
     {
-        int took = cmd_take_actor_flag(arg, i, rest_argc, rest_argv, &out->actor, err);
+        int took = cmd_take_write_flag(arg, i, rest_argc, rest_argv, &out->actor, err);
 
         if (took < 0) {
             return -1;

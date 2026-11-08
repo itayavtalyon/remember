@@ -2,7 +2,7 @@
 
 ## Changelog
 
-- **2026-11-07 (CLI envelope).** [JSON-ENVELOPE.md](JSON-ENVELOPE.md) is the `remember-message` version 1 object this binary writes. This guide stays the value rules. CLI rows below that disagreed with that binary now match it: positional ids are canonical lowercase, reply types include `device`, `related`, `import`, and `repair search-index`, list and search `data` lead with `count` then `total`, search omits `query`, `ranked_by`, and `filters`, and `links` are on `get`, `add`, `list`, and `search`.
+- **2026-11-07 (CLI envelope).** [JSON-ENVELOPE.md](JSON-ENVELOPE.md) is the `remember-message` version 1 object this binary writes. This guide stays the value rules. CLI rows below that disagreed with that binary now match it: positional ids are canonical lowercase, reply types include `device`, `related`, `import`, and `repair search-index`, list and search `data` lead with `count` then `total`, search ends with `query{original}`, `ranked_by`, and `filters` (2026-11-07 review), and `links` are on `get`, `add`, `list`, and `search`.
 - **2026-10-25 (rev 2.2, architect; Itay approved D-01, D-03 and the date answer as written).**
   - The settings `data` objects follow log 007 ST-7.11a–7.11b: one setting object, `setting.set|reset.result` `{setting, scope, old_value, changed}` (plus `action` on reset), `settings[]`, `changes[]`, and import `rows[]`. The §2 table shows them.
   - The settings history JSON field is `changed_at`, not `at` (§1.3).
@@ -148,7 +148,7 @@ Each rule states the rule, says why, and gives a correct example (✓) and a wro
 - An `event` also carries one on stdin, where it gets no reply, so the run log can name the delivery. Deduplicate on `data.event_id`, never on `request_id`.
 - Messages that get no reply carry no `request_id`: `ready`, `shutdown`, `backfill.pause` and `backfill.resume`.
 - HTTP sets `request_id` on every response: from the `Request-Id` header when the client sends one, otherwise minted by the server. On MCP, it is the server's id for the tool call, separate from the JSON-RPC `id`.
-- CLI output has no `request_id`, because it is not a reply (JE-2.9). This binary does not read `REMEMBER_TEST_FIXED_IDS`.
+- CLI output has no `request_id`, because it is not a reply (JE-2.9). Only the test CLI build reads `REMEMBER_TEST_FIXED_IDS` (JSON-ENVELOPE § Test builds).
 
 ### 1.7b Stored documents (JE-1.5)
 
@@ -195,10 +195,11 @@ Success (CLI):
 {"format":"remember-message","version":1,"type":"memory.add.result",
  "data":{"action":"created","memory":{"id":"01a14513-6501-7928-b9c4-2cc649cb59a9","local_id":1,…}}}
 ```
-Search (CLI; no paging fields, S-08). `keys` and `tags` precede `entries`. This binary's search object has no `query`, `ranked_by`, or `filters`:
+Search (CLI; no paging fields, S-08). `keys` and `tags` precede `entries`. After `entries` come `query`, `ranked_by`, and `filters` (JSON-ENVELOPE § Payloads):
 ```json
 {"format":"remember-message","version":1,"type":"memory.search.result",
- "data":{"count":3,"total":3,"keys":{"total":0,"items":[]},"tags":{"total":0,"items":[]},"entries":[…]}}
+ "data":{"count":3,"total":3,"keys":{"total":0,"items":[]},"tags":{"total":0,"items":[]},"entries":[…],
+ "query":{"original":{"text":"boo","tags":[],"bins":["live"],"time_range":{"field":"updated_at","after":null,"before":null}}},"ranked_by":"bm25","filters":[]}}
 ```
 Failure (CLI `--json`, stdout):
 ```json
@@ -320,7 +321,7 @@ Event (hook stdin, plugin socket, webhook):
 | CLI `--json` write, many | `import` | `E(memory.import.result)` + `data{action, inserted, updated, unchanged, conflicts, rejected}`, `warnings?`. `action` is `imported`. The counts are numbers. |
 | CLI `--json` read, one | `get` | `E(memory.get.result)` + `data{memory{}}` with `links`, `warnings?` |
 | CLI `--json` list | `list` | `E(memory.list.result)` + `data{count, total, entries[]}`, `next_cursor`, `has_more`, `warnings?` |
-| CLI `--json` search | `search` | `E(memory.search.result)` + `data{count, total, keys{}, tags{}, entries[]}`, `warnings?`. **No `query`, `ranked_by`, `filters`, `next_cursor`, or `has_more`** (S-08). |
+| CLI `--json` search | `search` | `E(memory.search.result)` + `data{count, total, keys{}, tags{}, entries[], query{original}, ranked_by, filters[]}`, `warnings?`. **No `next_cursor` or `has_more`** (S-08). |
 | CLI `--json` settings | `settings get\|set\|reset\|list\|history\|import` | `E(setting.<verb>.result)` + `data`: get `{setting}`; set `{setting, scope, old_value, changed}`; reset the same plus `action`; list `{count, settings[]}` and history `{count, changes[]}`, each with `next_cursor`, `has_more`; import `{count, written, unchanged, skipped, rows[]}`. `setting` = `{key, type, value, value_ms?\|value_bytes?, from, changed, layers{default, user?, brain?}}`; a history item = `{key, scope, action, old_value, new_value, updated_by, changed_at}`; an import row = `{key, scope, result, action, reason?}` (log 007 ST-7.11a–7.11b). `warnings?` |
 | CLI `--json` other lists | `tags` | `E(tag.list.result)` + `data{count, tags[{name, count}]}`, `warnings?`. No paging fields. |
 | CLI `--json` other lists | `conflicts` | `E(conflict.list.result)` + `data{count, conflicts[{id, memory_id, reason, local, incoming, created_at}]}`, `warnings?`. No paging fields. |

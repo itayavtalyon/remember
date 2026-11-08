@@ -38,10 +38,13 @@ int output_list_data(FILE *out, size_t count, size_t total, const Entry *entries
 
 /*
  * search --json: the list data with the keys and tags facets between total and
- * entries (006 E2.6). count, total and entries come from res->page.
+ * entries (006 E2.6). count, total and entries come from res->page. After
+ * entries: query.original is q in the common query shape (PLUGIN-PROTOCOL
+ * R8.6, decision:plan21-search-query-original-only), then ranked_by and
+ * filters. No filter runs before plan 25, so they are "bm25" and [].
  */
-int output_search_data(FILE *out, const SearchResult *res, const StoreNeighbor *links,
-                       size_t nlinks, const char *now);
+int output_search_data(FILE *out, const SearchQuery *q, const SearchResult *res,
+                       const StoreNeighbor *links, size_t nlinks, const char *now);
 
 /*
  * search human facets (006 E2.7, decision:plan18-human-facet-line): a
@@ -91,8 +94,12 @@ int output_related_data(FILE *out, const Entry *subject, const StoreNeighbor *li
 /* Human Related: block (omit entirely when count==0). */
 int output_related_human(FILE *out, const StoreNeighbor *links, size_t count, const char *now);
 
-/* import --json counts envelope (no entry dump). */
-int output_import_data(FILE *out, const StoreImportCounts *counts);
+/*
+ * import --json (decision:plan21-import-problem-rows): action and the three
+ * counts, then conflicts {count, items} with the objects conflicts --json
+ * writes, then rejected {count, items} with {source_local_id, field}.
+ */
+int output_import_data(FILE *out, const StoreImportResult *r);
 
 /* device: plain id, or data{device_id}. */
 int output_device_human(FILE *out, const char *device_id);

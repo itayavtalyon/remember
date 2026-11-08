@@ -1799,7 +1799,7 @@ static int take_write_actor(int *index, int argc, const char **argv, WriteOpts *
     memset(&flags, 0, sizeof(flags));
     flags.kind = opt->actor_kind;
     flags.id = opt->actor_id;
-    took = cmd_take_actor_flag(argv[*index], index, argc, argv, &flags, &err);
+    took = cmd_take_write_flag(argv[*index], index, argc, argv, &flags, &err);
     if (took < 0) {
         err_msg(DIAG_USAGE, err != NULL ? err : "internal error");
         return -1;
@@ -1835,7 +1835,7 @@ static int take_set_option(int *index, int argc, const char **argv, WriteOpts *o
         opt->clear = true;
         return 1;
     }
-    if (strcmp(arg, "--as") == 0 || strcmp(arg, "--actor") == 0) {
+    if (strcmp(arg, "--as") == 0 || strcmp(arg, "--actor") == 0 || cmd_is_hooks_flag(arg)) {
         if (take_write_actor(index, argc, argv, opt) != 0) {
             return -1;
         }
@@ -1952,7 +1952,7 @@ static int take_reset_option(int *index, int argc, const char **argv, WriteOpts 
         opt->all = true;
         return 1;
     }
-    if (strcmp(arg, "--as") == 0 || strcmp(arg, "--actor") == 0) {
+    if (strcmp(arg, "--as") == 0 || strcmp(arg, "--actor") == 0 || cmd_is_hooks_flag(arg)) {
         if (take_write_actor(index, argc, argv, opt) != 0) {
             return -1;
         }

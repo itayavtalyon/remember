@@ -608,7 +608,7 @@ TEST(facade_conflicts_matches_cli)
     harness_make_v5_source(foreign);
     r = run_remember(local, imp, sizeof(imp) / sizeof(imp[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 0);
-    ASSERT_STR_CONTAINS(r.out, "\"conflicts\":1");
+    ASSERT_STR_CONTAINS(r.out, "\"conflicts\":{\"count\":1,");
     cmd_result_free(&r);
 
     assert_read_parity(local, cmd, sizeof(cmd) / sizeof(cmd[0]));

@@ -208,13 +208,13 @@ Quality gate: the plan 19 commands. Coverage 100/100.
 
 ## Definition of done
 
-- [ ] Must-pass rows for this plan are green.
-- [ ] `--json-errors`, `--offset`, `--sync-id`, `--source`, and `purge-trash` are gone from the CLI and from tests.
-- [ ] Plan files 16, 17, 17a, 18, 18b, and 18c are unchanged.
-- [ ] `--json` `fix` values are previously locked splits or the approved C-01 text.
-- [ ] Open still does not implement JE-3.10.
-- [ ] `specs/JSON-ENVELOPE.md` describes what this branch ships, `specs/JSON-STYLE.md` agrees with it, and `specs/README.md` lists it (stage 9).
-- [ ] Gate green. Second review clear. INDEX ticked only then.
+- [x] Must-pass rows for this plan are green.
+- [x] `--json-errors`, `--offset`, `--sync-id`, `--source`, and `purge-trash` are gone from the CLI and from tests.
+- [x] Plan files 16, 17, 17a, 18, 18b, and 18c are unchanged.
+- [x] `--json` `fix` values are previously locked splits or the approved C-01 text.
+- [x] Open still does not implement JE-3.10.
+- [x] `specs/JSON-ENVELOPE.md` describes what this branch ships, `specs/JSON-STYLE.md` agrees with it, and `specs/README.md` lists it (stage 9).
+- [x] Gate green. Second review clear. INDEX ticked only then.
 
 ## Second review handover
 
@@ -867,3 +867,68 @@ Findings:
 - **Kept:** M5. The stage 2a–8 mutant sets were not re-run.
 - **Kept:** INDEX row 21 and the definition of done stay unticked. The spec checkbox stays unticked until the whole-plan review.
 - **Kept:** `decision:plan21-cursor-binds-whole-query` stays `state:accepted` because its body disagrees with the binary.
+
+### Whole-plan deep review (2026-11-07, second reviewer)
+
+Scope: `.claude/WHOLE_PLAN_REVIEW` (plan 21, stage 9, ref `9dcd717`), legacy-plan scope of `workflow:whole-plan-deep-review`. Recall: `standard:coding`, the review keys, every `subject:json-envelope` decision, the stage 1 and stage 2 grill answers. Baseline gate on `9dcd717` was green. The review compared the shipped code and `specs/JSON-ENVELOPE.md` against the stored decisions, not against the stage notes.
+
+Grill (2026-11-07, Itay):
+
+- Hook-depth `--as`/`--actor`: **C-42-style draft.** Message `--as and --actor can't be used inside a hook.`, fix `Remove --as and --actor. remember stamps hook writes itself.` Filed as `decision:plan21-hook-actor-draft` (id 1136).
+- List cursor: **the stored decision stands.** Unpadded base64url, `--cursor` alone carries the whole query, `--limit` may still change. Body of `decision:plan21-cursor-binds-whole-query` reconfirmed.
+
+Decision states (`--as agent`): `state:implemented` on `decision:plan21-cursor-binds-whole-query` (its stray `remember` tag replaced by `project:remember`), `decision:plan21-search-query-original-only`, `decision:plan21-import-problem-rows`, `decision:json-test-fixed-ids`, and `decision:plan21-hook-actor-draft`. `decision:json-data-wrapper` got a dated note: the payload-in-`data` rule ships, and the field list supersedes its example shape. It is `state:implemented`. `decision:json-unknown-fields` stays `accepted`, because no command calls the writer. DoD "fix values": every `fix` is a locked split, the C-01 text, or a C-42 draft Itay approved as a draft (`decision:plan21-error-fix-drafts-c42`, `decision:plan21-hook-actor-draft`).
+
+Findings (all fixed on this branch unless marked):
+
+- **Critical, fixed:** `decision:plan21-cursor-binds-whole-query` (base64url, cursor alone) was never built. The binary wrote standard base64 with padding and made the caller repeat every flag. Stage 9 then documented the binary and left the decision `accepted`. Now: `base64url_encode`/`base64url_decode` (rejects length ≡ 1 mod 4, `=`, `+`, `/`, non-zero unused bits); `list_query_from_cursor` decodes, validates every member the way the flags are validated (`actor_kind_is_stored`, canonical `at`, `parse_filter_ts`, `normalize_key`, `normalize_tags`), re-encodes, and accepts only a byte-identical round trip. Any filter, sort, or bin flag next to `--cursor` is `invalid --cursor`; `--trash` still warns first. Test `list_cursor_alone_is_the_query_and_must_be_canonical`.
+- **Critical, fixed:** `decision:plan21-search-query-original-only` (stage 1 grill) was not built, and the spec said search "has no `query`, `ranked_by`, or `filters`". Search data now ends with `query{original{text,tags,bins,time_range}}`, `ranked_by:"bm25"`, `filters:[]`. `output_search_data` takes the `SearchQuery`. Byte tests in `test_output.c`, `test_search.c`, `test_list_dates.c`.
+- **Critical, fixed:** `decision:plan21-import-problem-rows` (stage 1 grill) was not built. Import data is now `conflicts{count,items}` (the rows this import opened or refreshed, same objects as `conflicts --json`) and `rejected{count,items}` with `{source_local_id, field}`, field in the stored order. Store: `StoreImportResult`, `import_row_bad_field`, `import_note_conflict`/`import_note_reject`, `import_load_conflicts` (one `json_each` select before COMMIT), `store_import_result_free`. A key-clash re-import rewrites the open row, so it is listed again ("refreshed"); an identical concurrent re-import is `unchanged`. CLI tests assert full item lists and the first-field order on rows with two bad fields.
+- **Important, fixed:** H-16.11 `--hooks`/`--no-hooks` were deferred through three stages and never built. Every write accepts both and prints the two locked help lines; reads reject them. `cmd_is_hooks_flag`, `cmd_take_write_flag` (renamed from `cmd_take_actor_flag`). Test `envelope_every_write_accepts_the_hook_flags`.
+- **Important, fixed:** the hook-depth actor error printed an empty message with the cursor fix, and a test locked that output. Now the grilled draft via `diag_error_split`; `test_add.c` asserts the plain line and the JSON error object.
+- **Important, fixed:** `decision:json-test-fixed-ids` / must-pass 008-10 was not built; JSON-STYLE said "this binary does not read `REMEMBER_TEST_FIXED_IDS`". CMake defines `REMEMBER_TEST_CLI` on `remember` in the `REMEMBER_TEST_VFS` block (Release forces it off). There, `REMEMBER_TEST_FIXED_IDS=N` (decimal, 1..2^48−1) makes `mint_uuid_v7` count `00000000-0000-7000-8000-<hex>` up from N and `utc_now` return `2026-01-01T00:00:00.000Z`. Tests: a whole `add` reply byte-for-byte, a later start, the 2^48−1 bound, five bad values, and the in-process copy (no define) ignoring the variable.
+- **Important, fixed:** 008-1/008-2 had no checker. `assert_envelope_shape` reads the top-level keys of every reply in `envelope_every_command_names_its_reply_type` (now with a paged list, a `--trash` warning, and an unknown command): `format`, `version`, `type`, `data`|`error`, then only `next_cursor`, `has_more` (data only), `warnings`, in that order; no `"type":"error"`, `sync_id`, `source`, or `offset`. `envelope_top_keys` has its own test.
+- **Minor, fixed:** `skills/remember/SKILL.md` still taught `--source agent`, `--source` as a filter, a `source` field in the entry sample and in key facets, cursor reuse "with the same query", and "always run `conflicts` after import". Facts corrected; C-41 wording is plan 26's.
+- **Minor, fixed:** `docs/engineering-notes.md` described the empty hook message, count-only import, and the old cursor.
+- **Minor, fixed:** `output.c` duplicated the string-or-null writer twice; `write_string_or_null` replaces both. `write_page_entries` no longer closes the object, so list and search close their own.
+- **Plan 26, not fixed here:** C-41 tells users to empty the Trash with `remember purge <locator>` once per memory. `purge` takes no locator; a single Deleted row is wiped by `purge --deleted` (whole bin) only. Plan 26 must change that line or add the command.
+- **Kept:** `decision:json-data-wrapper` example omits `format`/`type`; annotated, left `accepted`. `decision:json-unknown-fields` stays `accepted` (no caller).
+
+Mutants (this review's code, each must fail a test): 38 mutant runs over the new code in two passes (`mutants.py`, `mutants2.py` in the review scratchpad).
+
+- **Pass 1 (27 runs):** 14 killed, 5 compile-killed by `-Werror`, 7 survived, 1 skipped (its target text appeared twice). Killed: the actor-kind check; `--no-hooks` in `cmd_is_hooks_flag`; the purge hook skip; the search echo's since/until swap, tags, and bin guard; the import NULL-array and NULL-field guards; `"tags"`→`"key"` and `"source"`→`"body_hash"` in `import_row_bad_field`; the conflict id off by one; the fixed-id bound, trailing-junk check, and counter increment.
+- **Pass 2 (11 runs, all killed):** the compile-killed mutants in forms that compile (the round-trip compare as `<` and as a prefix compare, `cursor_at_ok`, the flags-next-to-cursor check, skipping `conflicts_select`, the frozen clock); the `-`→62 survivor and the new `_`→63 mutant, both killed by new cursors whose keys force those digits; the leading-digit survivor, killed by the new `01` value; the two import and conflict-accept hook skips that pass 1 skipped.
+- **Removed, not survived (3):** the decoder's length ≡ 1 mod 4 check and its two unused-bit checks survived because the byte-identical re-encode already rejects those inputs. They were deleted. New tests pin the behavior: a stray trailing digit, set unused bits on a real cursor, and an over-long cursor.
+- **Equivalent (2):** ignoring a `normalize_key` or `normalize_tags` failure in `cursor_fill_query` is caught by the round trip. The checks stay because they stop code from reading an output buffer after a failed normalize.
+- **Earlier stage sets:** the stage 2a–8 mutant sets (M5) were not re-run. This pass covers only the code this review wrote.
+
+S pass (simplicity): - Deleted three redundant decoder checks and the `errno` check in `fixed_ids_start`. An overflow returns `ULLONG_MAX`, which the bound rejects.
+- `write_string_or_null` replaced two hand-rolled null writers.
+- `import_all_rows` and `import_write` came out of `store_import` and `cmd_import`. `list_query_from_cursor` now owns the whole cursor branch of `cmd_list`.
+- The cursor accepts exactly what the encoder writes, so the decoder needs no separate canonical rules.
+- **Kept:** `StoreImportResult` carries its working id list (`conflict_ids`, `nconflict_ids`, `conflict_cap`) in the public struct. A temp table would hide it, but it would cost more code. The struct comment marks the list as empty on return.
+- **Kept:** a separate `REMEMBER_TEST_CLI` define instead of reusing `REMEMBER_TEST_VFS`. It costs one CMake word, and the clock code then does not read as VFS code.
+
+A pass (safety and security): - **Cursor (untrusted input):** the length is bounded before `malloc` (decoded size ≤ 65536). The decoder writes at most `(n/4+1)*3` bytes into a buffer of that size plus 1. Every member is validated the way the matching flag is: actor kind, canonical `at`, `parse_filter_ts`, `normalize_key`, `normalize_tags`. Only the canonical bytes are accepted, so no extra member, duplicate member, or alternate spelling reaches the store. Any flag next to `--cursor` fails before decoding.
+- **Import reply:** a reject item echoes only the source row's integer id and a static field name, never peer bytes. Conflict items reuse the `conflicts` writer, which escapes JSON. The result is freed on every path: the store's fail path, and the CLI after the write. LSAN in Linux CI checks it.
+- **Search echo:** the query text goes through `output_json_string`. Tags and bounds are the normalized values.
+- **Fixed ids:** compiled only into the test CLI. Release forces `REMEMBER_TEST_VFS` off, and `install.sh` refuses a binary that carries the test VFS, so no installed `remember` reads the variable. The parse is bounded and needs a leading `1`–`9`.
+- **Hook flags:** parsed and ignored, with no side effect until plan 25.
+
+Gate: Local (Apple clang, Debug, sanitizers on, LSAN off, `REMEMBER_TEST_VFS=ON`; Homebrew LLVM 22 for coverage and lint): ctest 6/6 (CLI 928, store suite 0 failed); coverage functions 100%, effective lines 100% (must-cover 0), branch sides 0 missed on `search_terms.c` (176), `unicode.c` (80), `normalize.c` (504), `output.c` (806); `LINT OK` (IWYU not installed on macOS); `leaks-macos: PASS`. Linux (`scripts/ci-linux.sh`, Docker, LSAN on, IWYU on): `== ci-linux: OK ==`. The first Linux runs failed IWYU only, on stage 4 and stage 7 leftovers: an unused `<stdio.h>` in `normalize.c`, and `<stddef.h>` in `appio.h`. Both are removed. The coder's stage notes said IWYU was skipped locally at every stage, so these were never seen.
+
+Grades:
+
+- **Coding agent: 6/10.** Strong: stage-2a design (`run_json`, `reply_noun_verb`, `writes_envelope`, diag memstreams) matches the intended design; mutants and edge probes per stage; the spec's structure. Weak: three grilled decisions (cursor shape, search query echo, import problem rows) were answered in the stage 1 grill and not built, then the spec documented the opposite and left the decisions `accepted` instead of raising it (`implementation-plans/21-json-envelope.md` stage 9 "Left `state:accepted` on purpose"); H-16.11 hook flags deferred three times; the empty hook-depth message was locked by a test instead of grilled; 008-1 and 008-10 never built (JSON-STYLE line 151 documented the gap as behavior); an "Itay" quote about the cursor at 11-01 was never filed in Remember and Itay later contradicted it; stage 2a–8 mutant sets never re-run after later stages (M5); IWYU skipped locally; `origin/main` merged only at stage 9.
+- **Previous in-session reviewers (stages 1–9): 5/10.** They caught real defects (the import writer's stray `}`, doc drift on `{"version":1,...}`, `--offset` in the skill) but recorded each missing grilled behavior as "Kept" or "not in this plan" instead of blocking (stage 9 deep review "Kept: `decision:plan21-cursor-binds-whole-query` stays `state:accepted` because its body disagrees with the binary"; stages 4–8 "Kept: SKILL.md still shows `--source`"). A review that finds the code contradicting a stored decision must fail the stage or grill, not annotate.
+
+Instructions for the coding agent (paste-ready):
+
+1. Before writing a stage, list every `decision:plan<N>-*` key and every grill answer in this plan's notes; each must map to a test or to a grill that changes it. "Left `accepted`" is not an outcome.
+2. Never lock a placeholder (an empty message, a borrowed fix) with a test. Grill it with a C-42-style draft.
+3. Do not quote Itay unless the quote is filed in Remember with its date.
+4. A must-pass row (008-1, 008-10) is built or explicitly descoped by Itay. Documenting the gap as behavior in a spec is not descoping.
+5. Re-run every earlier stage's mutant set at the end of the plan; record kills.
+6. Install and run IWYU locally (or run `ci-linux.sh`) before calling the gate green.
+7. Merge `origin/main` at the start of each stage, not only at the spec stage.
+8. Docs the plan touches (skill, notes, README) are checked against the binary at every stage; "stage N left that" is not allowed past the stage that caused it.

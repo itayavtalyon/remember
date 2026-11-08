@@ -1213,13 +1213,24 @@ ExpiryResult resolve_expiry_flags(ExpiryFlags flags, const char *now, char *out,
     return (ExpiryResult){.rc = 0, .expires = NULL, .err = NULL};
 }
 
-int cmd_take_actor_flag(const char *arg, int *i, int rest_argc, const char **rest_argv,
+bool cmd_is_hooks_flag(const char *arg)
+{
+    if (strcmp(arg, "--hooks") == 0 || strcmp(arg, "--no-hooks") == 0) {
+        return true;
+    }
+    return false;
+}
+
+int cmd_take_write_flag(const char *arg, int *i, int rest_argc, const char **rest_argv,
                         CmdActorFlags *out, const char **err)
 {
     const char *missing = NULL;
     const char **slot = NULL;
     TakeValue taken;
 
+    if (cmd_is_hooks_flag(arg)) {
+        return 1;
+    }
     if (strcmp(arg, "--as") == 0) {
         missing = "missing value for --as";
         slot = &out->kind;
@@ -1247,7 +1258,11 @@ int cmd_actor_json(const CmdActorFlags *flags, char out[ACTOR_JSON_CAP])
         return 0;
     }
     if (st == ACTOR_HOOK) {
-        (void)diag_error(DIAG_INVALID_ARGUMENT, NULL);
+        /* C-42-style draft for copy (decision:plan21-hook-actor-draft). */
+        (void)diag_error_split(
+            DIAG_INVALID_ARGUMENT,
+            (DiagSplit){.message = "--as and --actor can't be used inside a hook.",
+                        .fix = "Remove --as and --actor. remember stamps hook writes itself."});
         return -1;
     }
     if (st == ACTOR_BAD_ID) {

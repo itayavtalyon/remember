@@ -100,8 +100,13 @@ typedef struct {
     const char *id;
 } CmdActorFlags;
 
-/* 1 if arg was --as or --actor. 0 if not. -1 on a missing value (*err set, not printed). */
-int cmd_take_actor_flag(const char *arg, int *i, int rest_argc, const char **rest_argv,
+/* --hooks and --no-hooks (H-16.11): every write accepts them. They do not change
+   delivery until plan 25 adds the outbox writer. */
+bool cmd_is_hooks_flag(const char *arg);
+
+/* 1 if arg was --as, --actor, --hooks, or --no-hooks. 0 if not. -1 on a missing
+   value (*err set, not printed). */
+int cmd_take_write_flag(const char *arg, int *i, int rest_argc, const char **rest_argv,
                         CmdActorFlags *out, const char **err);
 
 /* Canonical actor JSON for a write. Prints on failure. 0 ok, -1 error. */

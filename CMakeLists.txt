@@ -268,7 +268,8 @@ remember_apply_coverage(remember)
 remember_apply_test_hooks(remember)
 if(REMEMBER_TEST_VFS)
     target_sources(remember PRIVATE src/test_vfs.c)
-    target_compile_definitions(remember PRIVATE REMEMBER_TEST_VFS)
+    # REMEMBER_TEST_CLI: the test CLI honours REMEMBER_TEST_FIXED_IDS (008-10).
+    target_compile_definitions(remember PRIVATE REMEMBER_TEST_VFS REMEMBER_TEST_CLI)
 endif()
 
 # Non-sanitized CLI for macOS leaks(1) (leaks cannot inspect ASan heaps).

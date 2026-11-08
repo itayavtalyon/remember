@@ -4539,6 +4539,9 @@ TEST(get_help_names_the_command)
     ASSERT_STR_CONTAINS(got.out, "remember settings set KEY");
     ASSERT_STR_CONTAINS(got.out, "remember settings reset");
     ASSERT_STR_CONTAINS(got.out, "Without --scope, set and reset write the user layer");
+    ASSERT_STR_CONTAINS(got.out, "  --hooks     Run matching hooks for this write, also ones you "
+                                 "turned off for local writes.\n  --no-hooks  Run no hooks for "
+                                 "this write.\n");
     cmd_result_free(&got);
     harness_remove_tree(tmpl);
 }
@@ -5512,6 +5515,48 @@ TEST(set_unknown_key_offers_one_suggestion)
     got = get_at(brain, userdb, none, sizeof(none) / sizeof(none[0]));
     ASSERT_EQ_INT(got.exit_code, 2);
     ASSERT_STR_NOT_CONTAINS(got.err, "Did you mean");
+    cmd_result_free(&got);
+    harness_remove_tree(tmpl);
+}
+
+/* H-16.11: every write takes --hooks and --no-hooks. A read does not. */
+TEST(set_and_reset_take_the_hook_flags)
+{
+    char tmpl[] = "/tmp/remember-set-hooks-XXXXXX";
+    char brain[REMEMBER_PATH_MAX];
+    char userdb[REMEMBER_PATH_MAX];
+    Store *store = open_pair(tmpl, brain, sizeof(brain), userdb, sizeof(userdb));
+    const char *set_hooks[] = {"settings", "set", "--hooks", "remember.search.candidate_pool",
+                               "400"};
+    const char *set_none[] = {"settings", "set", "remember.search.candidate_pool", "500",
+                              "--no-hooks"};
+    const char *reset_none[] = {"settings", "reset", "--no-hooks",
+                                "remember.search.candidate_pool"};
+    const char *get_hooks[] = {"settings", "get", "remember.search.candidate_pool", "--hooks"};
+    CmdResult got;
+
+    if (store == NULL) {
+        return;
+    }
+    store_close(store);
+    got = get_at(brain, userdb, set_hooks, sizeof(set_hooks) / sizeof(set_hooks[0]));
+    ASSERT_EQ_INT(got.exit_code, 0);
+    ASSERT_STREQ(got.err, "");
+    assert_query(userdb, "SELECT value FROM settings WHERE key = 'remember.search.candidate_pool'",
+                 "400");
+    cmd_result_free(&got);
+    got = get_at(brain, userdb, set_none, sizeof(set_none) / sizeof(set_none[0]));
+    ASSERT_EQ_INT(got.exit_code, 0);
+    assert_query(userdb, "SELECT value FROM settings WHERE key = 'remember.search.candidate_pool'",
+                 "500");
+    cmd_result_free(&got);
+    got = get_at(brain, userdb, reset_none, sizeof(reset_none) / sizeof(reset_none[0]));
+    ASSERT_EQ_INT(got.exit_code, 0);
+    assert_query(userdb, "SELECT COUNT(*) FROM settings", "0");
+    cmd_result_free(&got);
+    got = get_at(brain, userdb, get_hooks, sizeof(get_hooks) / sizeof(get_hooks[0]));
+    ASSERT_EQ_INT(got.exit_code, 1);
+    ASSERT_STREQ(got.err, "remember: unknown option '--hooks'\n");
     cmd_result_free(&got);
     harness_remove_tree(tmpl);
 }
@@ -6882,6 +6927,7 @@ void register_settings_tests(void)
     RUN_TEST(set_brain_quota_names_the_brain);
     RUN_TEST(set_unknown_key_offers_one_suggestion);
     RUN_TEST(set_usage_rejects_a_bad_invocation);
+    RUN_TEST(set_and_reset_take_the_hook_flags);
     RUN_TEST(a_hook_cannot_set_or_reset);
     RUN_TEST(reset_user_layer_prints_the_effective_value);
     RUN_TEST(reset_scope_prints_unset);

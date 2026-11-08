@@ -10,6 +10,7 @@
 #include "normalize.h"
 #include "register.h"
 #include "remember_app.h"
+#include "store.h"
 #include "test.h"
 
 #include <errno.h>
@@ -106,8 +107,109 @@ typedef struct {
     const char *type;
 } TypeStep;
 
+enum { ENVELOPE_KEYS_MAX = 8, ENVELOPE_KEY_CAP = 16 };
+
+/* The top-level keys of one JSON object, in order. Strings may hold braces and
+   escaped quotes; only depth-1 keys count. Returns how many, or -1 if malformed. */
+// NOLINTNEXTLINE(readability-function-cognitive-complexity) one small JSON scanner
+static int envelope_top_keys(const char *json, char keys[][ENVELOPE_KEY_CAP])
+{
+    int depth = 0;
+    int n = 0;
+    bool in_str = false;
+    bool want_key = false;
+    const char *p = json;
+    const char *start = NULL;
+
+    for (; *p != '\0'; p++) {
+        if (in_str) {
+            if (*p == '\\') {
+                p++;
+                continue;
+            }
+            if (*p != '"') {
+                continue;
+            }
+            in_str = false;
+            if (start != NULL) {
+                if (n >= ENVELOPE_KEYS_MAX || p - start >= ENVELOPE_KEY_CAP) {
+                    return -1;
+                }
+                (void)snprintf(keys[n++], ENVELOPE_KEY_CAP, "%.*s", (int)(p - start), start);
+                start = NULL;
+            }
+        } else if (*p == '"') {
+            in_str = true;
+            start = (depth == 1 && want_key) ? p + 1 : NULL;
+            want_key = false;
+        } else if (*p == '{' || *p == '[') {
+            depth++;
+            want_key = depth == 1;
+        } else if (*p == '}' || *p == ']') {
+            depth--;
+        } else if (*p == ',' && depth == 1) {
+            want_key = true;
+        }
+    }
+    return depth == 0 ? n : -1;
+}
+
+/* 008-1 / 008-2: format, version, type, then data or error, then only
+   next_cursor, has_more (with data), and warnings, in that order. No envelope
+   id, sync_id, source, or offset, and no "type":"error" anywhere. */
+static void assert_envelope_shape(const char *out)
+{
+    static const char *const tail[] = {"next_cursor", "has_more", "warnings"};
+    char keys[ENVELOPE_KEYS_MAX][ENVELOPE_KEY_CAP];
+    int n = envelope_top_keys(out, keys);
+    int i = 0;
+    size_t t = 0;
+    bool data = false;
+
+    ASSERT_TRUE(n >= 4);
+    if (n < 4) {
+        return;
+    }
+    ASSERT_STREQ(keys[0], "format");
+    ASSERT_STREQ(keys[1], "version");
+    ASSERT_STREQ(keys[2], "type");
+    data = strcmp(keys[3], "data") == 0;
+    ASSERT_TRUE(data || strcmp(keys[3], "error") == 0);
+    for (i = 4; i < n; i++) {
+        while (t < sizeof tail / sizeof tail[0] && strcmp(keys[i], tail[t]) != 0) {
+            t++;
+        }
+        ASSERT_TRUE(t < sizeof tail / sizeof tail[0]);
+        ASSERT_TRUE(data || t == 2U);
+        t++;
+    }
+    ASSERT_STR_NOT_CONTAINS(out, "\"type\":\"error\"");
+    ASSERT_STR_NOT_CONTAINS(out, "\"sync_id\"");
+    ASSERT_STR_NOT_CONTAINS(out, "\"source\"");
+    ASSERT_STR_NOT_CONTAINS(out, "\"offset\"");
+}
+
+/* The checker itself: a misordered or unknown top-level key fails it. */
+TEST(envelope_shape_checker_reads_only_top_level_keys)
+{
+    char keys[ENVELOPE_KEYS_MAX][ENVELOPE_KEY_CAP];
+
+    ASSERT_EQ_INT(envelope_top_keys("{\"a\":{\"b\":1},\"c\":\"}\\\"{\",\"d\":[{\"e\":2}]}", keys),
+                  3);
+    ASSERT_STREQ(keys[0], "a");
+    ASSERT_STREQ(keys[1], "c");
+    ASSERT_STREQ(keys[2], "d");
+    ASSERT_EQ_INT(envelope_top_keys("{\"a\":1", keys), -1);
+    ASSERT_EQ_INT(envelope_top_keys("{\"a_key_far_too_long_for_this\":1}", keys), -1);
+    ASSERT_EQ_INT(envelope_top_keys("{\"a\":1,\"b\":1,\"c\":1,\"d\":1,\"e\":1,\"f\":1,\"g\":1,"
+                                    "\"h\":1,\"i\":1}",
+                                    keys),
+                  -1);
+}
+
 /* The one reply-type table (reply_noun_verb): every command names its type,
-   on success and on failure (the last two fail). */
+   on success and on failure (the last three fail), and every reply has the
+   envelope shape. */
 TEST(envelope_every_command_names_its_reply_type)
 {
     static const TypeStep steps[] = {
@@ -115,6 +217,8 @@ TEST(envelope_every_command_names_its_reply_type)
         {{"--json", "add", "--key", "b", "second body"}, "memory.add"},
         {{"--json", "search", "body"}, "memory.search"},
         {{"--json", "list"}, "memory.list"},
+        {{"--json", "list", "--limit", "1"}, "memory.list"},
+        {{"--json", "list", "--trash"}, "memory.list"},
         {{"--json", "get", "1"}, "memory.get"},
         {{"--json", "update", "1", "--text", "new body"}, "memory.update"},
         {{"--json", "tags"}, "tag.list"},
@@ -131,6 +235,7 @@ TEST(envelope_every_command_names_its_reply_type)
         {{"--json", "repair", "search-index"}, "repair.search_index"},
         {{"--json", "conflict", "accept", "--id", "9", "--keep", "local"}, "conflict.accept"},
         {{"--json", "import", "--from-db", "/nonexistent/remember-type.db"}, "memory.import"},
+        {{"--json", "bogus"}, "unknown"},
     };
     char *db = make_temp_db_path();
     size_t i = 0;
@@ -153,6 +258,7 @@ TEST(envelope_every_command_names_its_reply_type)
                                      "\"type\":\"%s.result\",",
                                      steps[i].type) < sizeof want);
         ASSERT_STR_PREFIX(r.out, want);
+        assert_envelope_shape(r.out);
         ASSERT_STREQ(r.err, "");
         cmd_result_free(&r);
     }
@@ -1433,6 +1539,177 @@ TEST(envelope_brain_new_id_replaces_only_the_brain_id)
 
 /* C-02. General help prints the locked lines. The command footer lists the flags
    with the other globals, including --strict (left out until this stage). */
+enum { UUID_TEXT = 36, ID_CAP = 64, KEY_CAP = 8, NOW_CAP = 32 };
+
+/* Add one memory with REMEMBER_TEST_FIXED_IDS set to value; copy out its id. */
+// NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
+static void add_with_fixed_ids(const char *db, const char *value, const char *key, char *id,
+                               size_t idsz)
+{
+    const char *add[] = {"--json", "add", "--key", key, "b"};
+    const char *at = NULL;
+    CmdResult r;
+
+    // NOLINTBEGIN(concurrency-mt-unsafe) the child inherits this process-global
+    (void)setenv("REMEMBER_TEST_FIXED_IDS", value, 1);
+    r = run_remember(db, add, sizeof add / sizeof add[0], NULL);
+    (void)unsetenv("REMEMBER_TEST_FIXED_IDS");
+    // NOLINTEND(concurrency-mt-unsafe)
+    ASSERT_EQ_INT(r.exit_code, 0);
+    at = strstr(r.out, "{\"id\":\"");
+    ASSERT_TRUE(at != NULL && idsz > UUID_TEXT);
+    if (at != NULL && idsz > UUID_TEXT) {
+        (void)snprintf(id, idsz, "%.36s", at + strlen("{\"id\":\""));
+    }
+    cmd_result_free(&r);
+}
+
+/* 008-10 / decision:json-test-fixed-ids: the test CLI counts ids up from N and stops
+   the clock, so a golden can hold whole replies. The device id is minted first. */
+TEST(envelope_fixed_ids_make_replies_predictable)
+{
+    char *db = make_temp_db_path();
+    const char *add[] = {"--json", "add", "--key", "k", "hello"};
+    char id[ID_CAP];
+    CmdResult r;
+
+    ASSERT_TRUE(db != NULL);
+    // NOLINTBEGIN(concurrency-mt-unsafe) the child inherits this process-global
+    (void)setenv("REMEMBER_TEST_FIXED_IDS", "1", 1);
+    r = run_remember(db, add, sizeof add / sizeof add[0], NULL);
+    (void)unsetenv("REMEMBER_TEST_FIXED_IDS");
+    // NOLINTEND(concurrency-mt-unsafe)
+    ASSERT_EQ_INT(r.exit_code, 0);
+    ASSERT_STREQ(r.out,
+                 "{\"format\":\"remember-message\",\"version\":1,\"type\":\"memory.add.result\","
+                 "\"data\":{\"action\":\"created\",\"memory\":{\"id\":\"00000000-0000-7000-8000-"
+                 "000000000003\",\"local_id\":1,\"key\":\"k\",\"body\":\"hello\",\"tags\":[],"
+                 "\"created_by\":{\"kind\":\"human\",\"id\":null},\"updated_by\":{\"kind\":"
+                 "\"human\",\"id\":null},\"created_at\":\"2026-01-01T00:00:00.000Z\","
+                 "\"updated_at\":\"2026-01-01T00:00:00.000Z\",\"expires_at\":null,"
+                 "\"deleted_at\":null,\"bin\":\"live\",\"version_vector\":{\"00000000-0000-7000-"
+                 "8000-000000000001\":1},\"links\":[]}}}\n");
+    cmd_result_free(&r);
+    /* A later command starts where the caller says, so ids stay unique. N is decimal. */
+    add_with_fixed_ids(db, "100", "k2", id, sizeof id);
+    ASSERT_STREQ(id, "00000000-0000-7000-8000-000000000064");
+    add_with_fixed_ids(db, "281474976710655", "k3", id, sizeof id);
+    ASSERT_STREQ(id, "00000000-0000-7000-8000-ffffffffffff");
+    free(db);
+}
+
+/* Anything but a number in [1, 2^48) leaves ids and time real. */
+TEST(envelope_fixed_ids_ignore_a_bad_value)
+{
+    const char *bad[] = {"0", "01", " 1", "x", "1x", "281474976710656", "99999999999999999999999"};
+    char key[KEY_CAP];
+    char id[ID_CAP];
+    size_t i = 0;
+    char *db = make_temp_db_path();
+
+    ASSERT_TRUE(db != NULL);
+    for (i = 0; i < sizeof bad / sizeof bad[0]; i++) {
+        (void)snprintf(key, sizeof key, "k%zu", i);
+        add_with_fixed_ids(db, bad[i], key, id, sizeof id);
+        ASSERT_TRUE(strncmp(id, "00000000-", 9) != 0);
+    }
+    free(db);
+}
+
+/* 008-10: a build without the test CLI define (release, libremember, this
+   in-process copy) ignores the variable. */
+TEST(envelope_fixed_ids_are_ignored_outside_the_test_cli)
+{
+    char now[NOW_CAP];
+
+    // NOLINTBEGIN(concurrency-mt-unsafe) one thread; restored before the assert
+    (void)setenv("REMEMBER_TEST_FIXED_IDS", "1", 1);
+    ASSERT_EQ_INT(utc_now(now, sizeof now), 0);
+    (void)unsetenv("REMEMBER_TEST_FIXED_IDS");
+    // NOLINTEND(concurrency-mt-unsafe)
+    ASSERT_TRUE(strcmp(now, "2026-01-01T00:00:00.000Z") != 0);
+}
+
+/* H-16.11: every write accepts --hooks and --no-hooks and prints the locked help
+   lines. Until plan 25 they change nothing. A read rejects them. */
+// NOLINTBEGIN(cppcoreguidelines-avoid-magic-numbers,readability-magic-numbers)
+TEST(envelope_every_write_accepts_the_hook_flags)
+{
+    static const char hooks_line[] = "  --hooks     Run matching hooks for this write, also ones "
+                                     "you turned off for local writes.\n";
+    static const char no_hooks_line[] = "  --no-hooks  Run no hooks for this write.\n";
+    static const char *const write_topics[] = {"add",    "update", "delete", "rekey",   "link",
+                                               "unlink", "purge",  "import", "conflict"};
+    static const char *const read_topics[] = {"get", "list", "search", "related"};
+    const char *add1[] = {"add", "--hooks", "one"};
+    const char *add2[] = {"add", "--no-hooks", "two"};
+    const char *update[] = {"update", "--no-hooks", "--text", "uno", "1"};
+    const char *link[] = {"link", "--hooks", "1", "2"};
+    const char *unlink[] = {"unlink", "--no-hooks", "1", "2"};
+    const char *rekey[] = {"rekey", "--hooks", "--to-key", "k:one", "1"};
+    const char *del[] = {"delete", "--no-hooks", "2"};
+    const char *purge[] = {"purge", "--deleted", "--hooks"};
+    const char *import[] = {"import", "--no-hooks"};
+    const char *accept[] = {"conflict", "accept", "--hooks", "--id", "1", "--keep", "local"};
+    const char *get[] = {"get", "--hooks", "1"};
+    const char *list[] = {"list", "--no-hooks"};
+    const char *search[] = {"search", "--hooks", "uno"};
+    const char *related[] = {"related", "--no-hooks", "1"};
+    const char *const *writes[] = {add1, add2, update, link, unlink, rekey, del, purge};
+    const size_t writes_n[] = {3U, 3U, 5U, 4U, 4U, 5U, 3U, 3U};
+    const char *const *reads[] = {get, list, search, related};
+    const size_t reads_n[] = {3U, 2U, 3U, 3U};
+    char *db = make_temp_db_path();
+    CmdResult r;
+    size_t i = 0U;
+
+    ASSERT_TRUE(db != NULL);
+    if (db == NULL) {
+        return;
+    }
+    for (i = 0U; i < sizeof(writes) / sizeof(writes[0]); i++) {
+        r = run_remember(db, writes[i], writes_n[i], NULL);
+        ASSERT_EQ_INT(r.exit_code, 0);
+        ASSERT_STREQ(r.err, "");
+        cmd_result_free(&r);
+    }
+    /* import and conflict accept fail later, on their own required options. */
+    r = run_remember(db, import, sizeof(import) / sizeof(import[0]), NULL);
+    ASSERT_EQ_INT(r.exit_code, 1);
+    ASSERT_STREQ(r.err, "remember: import requires --from-db PATH\n");
+    cmd_result_free(&r);
+    r = run_remember(db, accept, sizeof(accept) / sizeof(accept[0]), NULL);
+    ASSERT_STR_NOT_CONTAINS(r.err, "unknown option");
+    ASSERT_STR_NOT_CONTAINS(r.err, "takes no positional");
+    cmd_result_free(&r);
+    for (i = 0U; i < sizeof(reads) / sizeof(reads[0]); i++) {
+        r = run_remember(db, reads[i], reads_n[i], NULL);
+        ASSERT_EQ_INT(r.exit_code, 1);
+        ASSERT_STR_CONTAINS(r.err, "remember: unknown option '--");
+        ASSERT_STR_CONTAINS(r.err, "hooks'");
+        cmd_result_free(&r);
+    }
+    for (i = 0U; i < sizeof(write_topics) / sizeof(write_topics[0]); i++) {
+        const char *help[] = {"help", write_topics[i]};
+
+        r = run_remember(db, help, 2U, NULL);
+        ASSERT_EQ_INT(r.exit_code, 0);
+        ASSERT_STR_CONTAINS(r.out, hooks_line);
+        ASSERT_STR_CONTAINS(r.out, no_hooks_line);
+        cmd_result_free(&r);
+    }
+    for (i = 0U; i < sizeof(read_topics) / sizeof(read_topics[0]); i++) {
+        const char *help[] = {"help", read_topics[i]};
+
+        r = run_remember(db, help, 2U, NULL);
+        ASSERT_EQ_INT(r.exit_code, 0);
+        ASSERT_STR_NOT_CONTAINS(r.out, "--hooks");
+        cmd_result_free(&r);
+    }
+    free(db);
+}
+// NOLINTEND(cppcoreguidelines-avoid-magic-numbers,readability-magic-numbers)
+
 TEST(envelope_help_prints_the_color_and_quiet_lines)
 {
     char *db = make_temp_db_path();
@@ -2751,6 +3028,7 @@ void register_envelope_tests(void)
     RUN_TEST(envelope_get_head_is_format_version_type_then_data_memory);
     RUN_TEST(envelope_add_leaves_out_a_neighbor_in_the_trash_like_get);
     RUN_TEST(envelope_a_new_memory_has_created_by_and_updated_by_and_no_source);
+    RUN_TEST(envelope_shape_checker_reads_only_top_level_keys);
     RUN_TEST(envelope_every_command_names_its_reply_type);
     RUN_TEST(envelope_failure_keeps_its_type_and_carries_the_warnings_after_the_error);
     RUN_TEST(envelope_warnings_keep_their_order_with_a_comma_between);
@@ -2764,6 +3042,10 @@ void register_envelope_tests(void)
     RUN_TEST(envelope_purge_trash_selects_the_deleted_bin);
     RUN_TEST(envelope_brain_new_id_replaces_only_the_brain_id);
     RUN_TEST(envelope_help_prints_the_color_and_quiet_lines);
+    RUN_TEST(envelope_fixed_ids_make_replies_predictable);
+    RUN_TEST(envelope_fixed_ids_ignore_a_bad_value);
+    RUN_TEST(envelope_fixed_ids_are_ignored_outside_the_test_cli);
+    RUN_TEST(envelope_every_write_accepts_the_hook_flags);
     RUN_TEST(envelope_color_and_quiet_are_accepted_as_globals);
     RUN_TEST(envelope_color_follows_the_tty_and_the_environment);
     RUN_TEST(envelope_progress_is_a_stderr_line_and_quiet_json_stop_it);

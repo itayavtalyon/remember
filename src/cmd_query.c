@@ -468,11 +468,11 @@ static int emit_entry_page(bool json, size_t count, size_t total, const Entry *e
 }
 
 /* search: the E2.6 data object, or the E2.7 facet lines before the entry lines. */
-static int emit_search(bool json, const SearchResult *res, const StoreNeighbor *links,
-                       size_t nlinks, const char *now)
+static int emit_search(bool json, const SearchQuery *q, const SearchResult *res,
+                       const StoreNeighbor *links, size_t nlinks, const char *now)
 {
     if (json) {
-        return output_search_data(app_out(), res, links, nlinks, now);
+        return output_search_data(app_out(), q, res, links, nlinks, now);
     }
     if (output_search_facets_human(app_out(), res) != 0) {
         return -1;
@@ -494,8 +494,9 @@ static void free_entry_page(Entry *entries, size_t count)
     free(entries);
 }
 
-/* Opaque list cursor: standard base64 of one canonical JSON object.
-   Field order is fixed. Absent filters are omitted. Limit stays a flag. */
+/* Opaque list cursor: unpadded base64url (RFC 4648 section 5) of one canonical
+   JSON object (decision:plan21-cursor-binds-whole-query). Field order is fixed.
+   Absent filters are omitted. --limit stays a flag. */
 
 /* OOM is literal -1 so an untested malloc miss stays a defensive return. */
 enum { CURSOR_OK = 0, CURSOR_OOM = -1, CURSOR_BAD = -2 };
@@ -537,7 +538,7 @@ static void cursor_doc_free(CursorDoc *doc)
     memset(doc, 0, sizeof(*doc));
 }
 
-/* Alphabet offsets and the 6-bit shifts are the base64 layout. */
+/* Alphabet offsets and the 6-bit shifts are the base64url layout. */
 // NOLINTBEGIN(hicpp-signed-bitwise,cppcoreguidelines-avoid-magic-numbers,readability-magic-numbers)
 static int b64_digit(unsigned char c)
 {
@@ -550,109 +551,89 @@ static int b64_digit(unsigned char c)
     if (c >= '0' && c <= '9') {
         return (int)(c - '0') + 52;
     }
-    if (c == '+') {
+    if (c == '-') {
         return 62;
     }
-    if (c == '/') {
+    if (c == '_') {
         return 63;
     }
     return -1;
 }
 
-static char *base64_encode(const unsigned char *raw, size_t len)
+static char *base64url_encode(const unsigned char *raw, size_t len)
 {
     static const char k_alpha[] =
-        "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-    size_t out_len = 4U * ((len + 2U) / 3U);
-    char *out = (char *)malloc(out_len + 1U);
+        "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+    char *out = (char *)malloc((4U * ((len + 2U) / 3U)) + 1U);
     size_t i = 0U;
     size_t j = 0U;
 
     if (out == NULL) {
         return NULL;
     }
-    while (i + 3U <= len) {
-        unsigned n =
-            ((unsigned)raw[i] << 16) | ((unsigned)raw[i + 1U] << 8) | (unsigned)raw[i + 2U];
-        out[j++] = k_alpha[(n >> 18) & 63U];
-        out[j++] = k_alpha[(n >> 12) & 63U];
-        out[j++] = k_alpha[(n >> 6) & 63U];
-        out[j++] = k_alpha[n & 63U];
-        i += 3U;
-    }
-    if (i < len) {
+    for (i = 0U; i < len; i += 3U) {
+        size_t left = len - i;
         unsigned n = (unsigned)raw[i] << 16;
-        if (i + 1U < len) {
+
+        if (left > 1U) {
             n |= (unsigned)raw[i + 1U] << 8;
+        }
+        if (left > 2U) {
+            n |= (unsigned)raw[i + 2U];
         }
         out[j++] = k_alpha[(n >> 18) & 63U];
         out[j++] = k_alpha[(n >> 12) & 63U];
-        out[j++] = (i + 1U < len) ? k_alpha[(n >> 6) & 63U] : '=';
-        out[j++] = '=';
+        if (left > 1U) {
+            out[j++] = k_alpha[(n >> 6) & 63U];
+        }
+        if (left > 2U) {
+            out[j++] = k_alpha[n & 63U];
+        }
     }
     out[j] = '\0';
     return out;
 }
 
-/* One decoded quartet. Rejects padding that is not at the end of the last group
-   and padding whose hidden bits are not zero. */
-static int append_decoded(unsigned char *buf, size_t *j, unsigned value, const char *quartet)
-{
-    buf[(*j)++] = (unsigned char)((value >> 16) & 0xFFU);
-    if (quartet[2] != '=') {
-        buf[(*j)++] = (unsigned char)((value >> 8) & 0xFFU);
-    } else if ((value & 0xFFFFU) != 0U) {
-        return CURSOR_BAD;
-    }
-    if (quartet[3] != '=') {
-        buf[(*j)++] = (unsigned char)(value & 0xFFU);
-    } else if (quartet[2] != '=' && (value & 0xFFU) != 0U) {
-        return CURSOR_BAD;
-    }
-    return CURSOR_OK;
-}
-
-/* Reject a length that is not a multiple of 4, whitespace, and non-zero pad bits. */
-static int base64_decode(const char *text, unsigned char **out, size_t *out_len)
+/* Rejects any byte outside the alphabet (padding too). A short last group is
+   taken as is: list_query_from_cursor re-encodes and accepts only the same
+   bytes, so a stray length or non-zero unused bits fail there. */
+static int base64url_decode(const char *text, unsigned char **out, size_t *out_len)
 {
     size_t n = strlen(text);
     size_t i = 0U;
     size_t j = 0U;
     unsigned char *buf = NULL;
 
-    if (n == 0U || (n % 4U) != 0U || (n / 4U) * 3U > (size_t)CURSOR_JSON_MAX) {
+    if (n == 0U || ((n / 4U) + 1U) * 3U > (size_t)CURSOR_JSON_MAX) {
         return CURSOR_BAD;
     }
-    buf = (unsigned char *)malloc(((n / 4U) * 3U) + 1U);
+    buf = (unsigned char *)malloc((((n / 4U) + 1U) * 3U) + 1U);
     if (buf == NULL) {
         return -1;
     }
     for (i = 0U; i < n; i += 4U) {
-        int digit[4];
+        size_t chars = (n - i < 4U) ? n - i : 4U;
         unsigned value = 0U;
-        int k = 0;
+        size_t k = 0U;
 
-        for (k = 0; k < 4; k++) {
-            unsigned char c = (unsigned char)text[i + (size_t)k];
-            if (c == '=') {
-                if (i + 4U != n || k < 2 || (k == 2 && text[i + 3U] != '=')) {
-                    free(buf);
-                    return CURSOR_BAD;
-                }
-                digit[k] = 0;
-            } else {
-                digit[k] = b64_digit(c);
-                if (digit[k] < 0) {
-                    free(buf);
-                    return CURSOR_BAD;
-                }
+        for (k = 0U; k < 4U; k++) {
+            int digit = 0;
+
+            if (k < chars) {
+                digit = b64_digit((unsigned char)text[i + k]);
             }
+            if (digit < 0) {
+                free(buf);
+                return CURSOR_BAD;
+            }
+            value = (value << 6) | (unsigned)digit;
         }
-        value = ((unsigned)digit[0] << 18) | ((unsigned)digit[1] << 12) |
-                ((unsigned)digit[2] << 6) | (unsigned)digit[3];
-        if (append_decoded(buf, &j, value, text + i) != CURSOR_OK) {
-            free(buf);
-            return CURSOR_BAD;
+        buf[j++] = (unsigned char)((value >> 16) & 0xFFU);
+        if (chars > 2U) {
+            buf[j++] = (unsigned char)((value >> 8) & 0xFFU);
+        }
+        if (chars > 3U) {
+            buf[j++] = (unsigned char)(value & 0xFFU);
         }
     }
     buf[j] = 0U;
@@ -950,7 +931,7 @@ static int cursor_decode(const char *raw, CursorDoc *doc)
     long long version = 0;
 
     memset(doc, 0, sizeof(*doc));
-    st = base64_decode(raw, &json, &n);
+    st = base64url_decode(raw, &json, &n);
     if (st != CURSOR_OK) {
         return st;
     }
@@ -1042,57 +1023,6 @@ static int cmp_cstr(const void *left, const void *right)
     return strcmp(*a, *b);
 }
 
-static bool same_text(const char *a, const char *b)
-{
-    if (a == NULL || b == NULL) {
-        return a == b;
-    }
-    return strcmp(a, b) == 0;
-}
-
-static int tags_match(const ListQuery *q, const CursorDoc *doc)
-{
-    const char **sorted = NULL;
-    size_t i = 0U;
-
-    if (q->ntags != doc->ntags) {
-        return CURSOR_BAD;
-    }
-    if (q->ntags == 0U) {
-        return CURSOR_OK;
-    }
-    sorted = (const char **)malloc(q->ntags * sizeof(*sorted));
-    if (sorted == NULL) {
-        return -1;
-    }
-    for (i = 0U; i < q->ntags; i++) {
-        sorted[i] = q->tags[i];
-    }
-    qsort((void *)sorted, q->ntags, sizeof(*sorted), cmp_cstr);
-    for (i = 0U; i < q->ntags; i++) {
-        if (sorted[i] == NULL || strcmp(sorted[i], doc->tags[i]) != 0) {
-            free((void *)sorted);
-            return CURSOR_BAD;
-        }
-    }
-    free((void *)sorted);
-    return CURSOR_OK;
-}
-
-static int cursor_matches(const ListQuery *q, const CursorDoc *doc)
-{
-    const char *sort = sort_token(q->sort);
-    const char *bin = bin_token(q->bin);
-
-    if (bin == NULL || !same_text(sort, doc->sort) || !same_text(bin, doc->bin) ||
-        !same_text(q->created_by, doc->created_by) || !same_text(q->updated_by, doc->updated_by) ||
-        !same_text(q->key, doc->key) || !same_text(q->since, doc->since) ||
-        !same_text(q->until, doc->until)) {
-        return CURSOR_BAD;
-    }
-    return tags_match(q, doc);
-}
-
 static int write_opt_string(FILE *fp, const char *key, const char *value)
 {
     if (value == NULL) {
@@ -1171,7 +1101,7 @@ static char *list_cursor_encode(const ListQuery *q, const char *at, long long lo
         free((void *)tags);
         return NULL;
     }
-    encoded = base64_encode((const unsigned char *)json, len);
+    encoded = base64url_encode((const unsigned char *)json, len);
     free(json);
     free((void *)tags);
     return encoded;
@@ -1183,34 +1113,119 @@ fail:
     return NULL;
 }
 
-static int list_bind_cursor(const char *raw, ListQuery *q, char **out_at)
+/* A filter, sort or bin flag next to --cursor (the cursor carries the query). */
+static bool list_has_query_flags(const ListParse *p)
 {
-    CursorDoc doc;
-    int st = cursor_decode(raw, &doc);
+    if (p->created_by != NULL || p->updated_by != NULL || p->key_raw != NULL ||
+        p->sort_raw != NULL || p->since_raw != NULL || p->until_raw != NULL || p->ntag_raw > 0U ||
+        p->bins.expired || p->bins.deleted || p->bins.trash) {
+        return true;
+    }
+    return false;
+}
 
-    if (st != CURSOR_OK) {
-        if (st == CURSOR_OOM) {
-            err_msg(DIAG_OUT_OF_MEMORY, "out of memory");
-        } else {
-            err_msg(DIAG_INVALID_ARGUMENT, "invalid --cursor");
+/* The cursor's sort value is a stored timestamp: parsing it gives the same bytes.
+   since and until need no such check: the re-encode in list_query_from_cursor
+   rejects a bound that is not canonical. */
+static bool cursor_at_ok(const char *at)
+{
+    char canonical[ISO_TS_BUFSIZE];
+
+    if (parse_filter_ts(at, canonical) != 0 || strcmp(canonical, at) != 0) {
+        return false;
+    }
+    return true;
+}
+
+/* The query a decoded cursor names, checked the way the flags are, without
+   printing. key_norm, since and until are the caller's buffers. */
+static int cursor_fill_query(const CursorDoc *doc, ListQuery *q, char *key_norm, size_t key_norm_sz,
+                             char ***out_tags, size_t *out_ntags, char since[ISO_TS_BUFSIZE],
+                             char until[ISO_TS_BUFSIZE])
+{
+    const char *err = NULL;
+
+    q->sort = (strcmp(doc->sort, "created") == 0) ? STORE_SORT_CREATED : STORE_SORT_UPDATED;
+    q->bin = STORE_BIN_LIVE;
+    if (strcmp(doc->bin, "expired") == 0) {
+        q->bin = STORE_BIN_EXPIRED;
+    } else if (strcmp(doc->bin, "deleted") == 0) {
+        q->bin = STORE_BIN_DELETED;
+    }
+    if ((doc->created_by != NULL && !actor_kind_is_stored(doc->created_by)) ||
+        (doc->updated_by != NULL && !actor_kind_is_stored(doc->updated_by)) ||
+        !cursor_at_ok(doc->at) || (doc->since != NULL && parse_filter_ts(doc->since, since) != 0) ||
+        (doc->until != NULL && parse_filter_ts(doc->until, until) != 0)) {
+        return CURSOR_BAD;
+    }
+    if (doc->key != NULL) {
+        if (normalize_key(doc->key, key_norm, key_norm_sz) != NORM_OK) {
+            return CURSOR_BAD;
         }
-        cursor_doc_free(&doc);
+        q->key = key_norm;
+    }
+    if (normalize_tags((const char *const *)doc->tags, doc->ntags, out_tags, out_ntags, &err) !=
+        0) {
+        return CURSOR_BAD;
+    }
+    q->tags = (const char *const *)*out_tags;
+    q->ntags = *out_ntags;
+    q->created_by = doc->created_by;
+    q->updated_by = doc->updated_by;
+    q->since = (doc->since != NULL) ? since : NULL;
+    q->until = (doc->until != NULL) ? until : NULL;
+    q->after_at = doc->at;
+    q->after_local_id = doc->local_id;
+    return CURSOR_OK;
+}
+
+/* --cursor alone continues the query it names (decision:plan21-cursor-binds-whole-query).
+   Only --limit may come with it. The cursor must be the one this binary writes
+   for that query, byte for byte, so a normalized or reordered copy is rejected.
+   doc owns the strings q points at. */
+static int list_query_from_cursor(const ListParse *parsed, CursorDoc *doc, ListQuery *q,
+                                  char *key_norm, size_t key_norm_sz, char ***out_tags,
+                                  size_t *out_ntags, char since[ISO_TS_BUFSIZE],
+                                  char until[ISO_TS_BUFSIZE])
+{
+    const char *raw = parsed->cursor;
+    StoreBin flagged = STORE_BIN_LIVE;
+    int st = CURSOR_OK;
+
+    /* The resolver still warns on --trash and rejects a bad bin pair. */
+    if (cmd_bin_resolve(&parsed->bins, &flagged) != 0) {
         return -1;
     }
-    st = cursor_matches(q, &doc);
-    if (st != CURSOR_OK) {
-        if (st == CURSOR_OOM) {
-            err_msg(DIAG_OUT_OF_MEMORY, "out of memory");
-        } else {
-            err_msg(DIAG_INVALID_ARGUMENT, "invalid --cursor");
-        }
-        cursor_doc_free(&doc);
+    if (list_has_query_flags(parsed)) {
+        err_msg(DIAG_INVALID_ARGUMENT, "invalid --cursor");
         return -1;
     }
-    *out_at = doc.at;
-    doc.at = NULL;
-    q->after_local_id = doc.local_id;
-    cursor_doc_free(&doc);
+    q->limit = parsed->limit;
+    st = cursor_decode(raw, doc);
+
+    if (st == CURSOR_OK) {
+        st = cursor_fill_query(doc, q, key_norm, key_norm_sz, out_tags, out_ntags, since, until);
+    }
+    if (st == CURSOR_OK) {
+        char *again = list_cursor_encode(q, doc->at, doc->local_id);
+
+        if (again == NULL) {
+            err_msg(DIAG_OUT_OF_MEMORY, "out of memory");
+            return -1;
+        }
+        if (strcmp(again, raw) != 0) {
+            st = CURSOR_BAD;
+        }
+        free(again);
+    }
+    if (st == CURSOR_OOM) {
+        err_msg(DIAG_OUT_OF_MEMORY, "out of memory");
+        return -1;
+    }
+    if (st != CURSOR_OK) {
+        err_msg(DIAG_INVALID_ARGUMENT, "invalid --cursor");
+        return -1;
+    }
     return 0;
 }
 
@@ -1264,10 +1279,11 @@ int cmd_list(Store *s, bool json, int rest_argc, const char **rest_argv)
     StoreStatus st = STORE_OK;
     int rc = REMEMBER_ERR;
     char now[ISO_TS_BUFSIZE];
-    char *cursor_at = NULL;
+    CursorDoc doc;
     bool has_more = false;
 
     memset(&q, 0, sizeof(q));
+    memset(&doc, 0, sizeof(doc));
     memset(key_norm, 0, sizeof(key_norm));
 
     if (parse_list_args(rest_argc, rest_argv, &parsed, &err) != 0) {
@@ -1278,15 +1294,14 @@ int cmd_list(Store *s, bool json, int rest_argc, const char **rest_argv)
         return REMEMBER_ERR;
     }
 
-    if (list_prepare_query(&parsed, key_norm, sizeof(key_norm), &tags_norm, &ntags, &q, since,
-                           until) != 0) {
+    if (parsed.cursor == NULL) {
+        if (list_prepare_query(&parsed, key_norm, sizeof(key_norm), &tags_norm, &ntags, &q, since,
+                               until) != 0) {
+            goto cleanup;
+        }
+    } else if (list_query_from_cursor(&parsed, &doc, &q, key_norm, sizeof(key_norm), &tags_norm,
+                                      &ntags, since, until) != 0) {
         goto cleanup;
-    }
-    if (parsed.cursor != NULL && list_bind_cursor(parsed.cursor, &q, &cursor_at) != 0) {
-        goto cleanup;
-    }
-    if (cursor_at != NULL) {
-        q.after_at = cursor_at;
     }
 
     if (utc_now(now, sizeof(now)) != 0) {
@@ -1323,7 +1338,7 @@ int cmd_list(Store *s, bool json, int rest_argc, const char **rest_argv)
 
 cleanup:
     list_parse_free(&parsed);
-    free(cursor_at);
+    cursor_doc_free(&doc);
     free_tag_list(tags_norm, ntags);
     store_neighbors_free(links, nlinks);
     free_entry_page(entries, count);
@@ -1380,7 +1395,7 @@ int cmd_search(Store *s, bool json, int rest_argc, const char **rest_argv)
         cmd_neighbors_drop_deleted(links, &nlinks, now);
     }
 
-    if (emit_search(json, &res, links, nlinks, now) != 0) {
+    if (emit_search(json, &q, &res, links, nlinks, now) != 0) {
         err_msg(DIAG_INTERNAL, "failed to write output");
         goto cleanup;
     }

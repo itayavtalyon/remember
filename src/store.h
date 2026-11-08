@@ -618,29 +618,6 @@ StoreStatus store_list_neighbors_for(Store *s, const long long *ids, size_t nids
 StoreStatus store_rekey(Store *s, long long id, RekeyKeys keys, StoreBin bin, const char *actor,
                         const char *now, Entry *out_entry, long long *out_conflict_id);
 
-/* Counts from store_import (JSON envelope fields). */
-typedef struct {
-    size_t inserted;
-    size_t updated;
-    size_t unchanged;
-    size_t conflicts;
-    size_t rejected; /* key or tag not as a local write would store it; row skipped */
-} StoreImportCounts;
-
-/*
- * Merge another remember DB by sync_id (Round 7 VV / unique rules). Opens
- * src_path read-only inside the adapter (never store_open; never touches the
- * foreign sidecar; never reads devices). user_version < 4 →
- * STORE_ERR_SOURCE_TOO_OLD. user_version > 5 → STORE_ERR_SOURCE_TOO_NEW
- * ("database is newer than this remember"). A missing conflicts.origin column
- * or a missing bucket_prefixes / settings table is absent, not an error; those
- * rows are not copied. A row whose key or a tag is not what normalize_token
- * would store is skipped and counted in rejected. Exit-path JSON: action
- * imported + these counts; STORE_OK even when conflicts or rejected > 0.
- */
-StoreStatus store_import(Store *dst, const char *src_path, const char *now,
-                         StoreImportCounts *out_counts);
-
 /* Closed conflict reason enum (Round 7). Unknown on disk → store error. */
 typedef enum {
     STORE_CONFLICT_CONCURRENT_VV = 0,
@@ -664,6 +641,45 @@ typedef struct {
 /* List open conflicts (id ASC). Caller frees with store_conflicts_free. */
 StoreStatus store_conflicts_list(Store *s, StoreConflict **out_rows, size_t *out_count);
 void store_conflicts_free(StoreConflict *rows, size_t count);
+
+/* A source row import skipped (decision:plan21-import-problem-rows). */
+typedef struct {
+    long long source_local_id; /* the row's integer id in the source brain */
+    const char *field;         /* static: the first field that failed, in the order
+                                  key, tags, id, created_at, updated_at, expires_at,
+                                  deleted_at, version_vector, source, body_hash */
+} StoreImportReject;
+
+/* What store_import did. Release with store_import_result_free. */
+typedef struct {
+    size_t inserted;
+    size_t updated;
+    size_t unchanged;
+    StoreConflict *conflicts; /* rows this import opened or refreshed, id ASC */
+    size_t nconflicts;
+    long long *conflict_ids; /* working list while importing; empty on return */
+    size_t nconflict_ids;
+    size_t conflict_cap;
+    StoreImportReject *rejected;
+    size_t nrejected;
+    size_t rejected_cap;
+} StoreImportResult;
+
+void store_import_result_free(StoreImportResult *r);
+
+/*
+ * Merge another remember DB by sync_id (Round 7 VV / unique rules). Opens
+ * src_path read-only inside the adapter (never store_open; never touches the
+ * foreign sidecar; never reads devices). user_version < 4 →
+ * STORE_ERR_SOURCE_TOO_OLD. user_version > 5 → STORE_ERR_SOURCE_TOO_NEW
+ * ("database is newer than this remember"). A missing conflicts.origin column
+ * or a missing bucket_prefixes / settings table is absent, not an error; those
+ * rows are not copied. A row whose key or a tag is not what normalize_token
+ * would store, or any other peer field that is not the shape a local write
+ * stores, is skipped and listed in rejected. STORE_OK even when conflicts or
+ * rejected are not empty. On any other status the result is empty.
+ */
+StoreStatus store_import(Store *dst, const char *src_path, const char *now, StoreImportResult *out);
 
 typedef enum { STORE_KEEP_LOCAL = 0, STORE_KEEP_INCOMING, STORE_KEEP_BOTH } StoreConflictKeep;
 

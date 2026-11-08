@@ -572,12 +572,11 @@ TEST(list_json_cursor_pages)
     free(db);
 }
 
-/* Same layout as the production encoder. The shifts are the encoding. */
+/* Unpadded base64url (RFC 4648 section 5) of len bytes. The shifts are the encoding. */
 // NOLINTBEGIN(hicpp-signed-bitwise,cppcoreguidelines-avoid-magic-numbers,readability-magic-numbers)
-static char *b64_encode(const char *text)
+static char *b64url_encode_n(const char *text, size_t len)
 {
-    static const char alpha[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-    size_t len = strlen(text);
+    static const char alpha[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
     size_t out_len = 4U * ((len + 2U) / 3U);
     char *out = (char *)malloc(out_len + 1U);
     size_t i = 0U;
@@ -603,11 +602,17 @@ static char *b64_encode(const char *text)
         }
         out[j++] = alpha[(n >> 18) & 63U];
         out[j++] = alpha[(n >> 12) & 63U];
-        out[j++] = (i + 1U < len) ? alpha[(n >> 6) & 63U] : '=';
-        out[j++] = '=';
+        if (i + 1U < len) {
+            out[j++] = alpha[(n >> 6) & 63U];
+        }
     }
     out[j] = '\0';
     return out;
+}
+
+static char *b64_encode(const char *text)
+{
+    return b64url_encode_n(text, strlen(text));
 }
 // NOLINTEND(hicpp-signed-bitwise,cppcoreguidelines-avoid-magic-numbers,readability-magic-numbers)
 
@@ -636,6 +641,29 @@ static void assert_bad_json_cursor(const char *db, const char *json)
         return;
     }
     assert_bad_cursor(db, cursor);
+    free(cursor);
+}
+
+/* A cursor this binary would write for a query with no rows after it: list
+   reads it, exits 0, and returns nothing. */
+// NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
+static void assert_empty_json_cursor(const char *db, const char *json)
+{
+    char *cursor = b64_encode(json);
+    CmdResult r;
+
+    ASSERT_TRUE(cursor != NULL);
+    if (cursor == NULL) {
+        return;
+    }
+    {
+        const char *args[] = {"list", "--json", "--cursor", cursor};
+
+        r = run_remember(db, args, sizeof(args) / sizeof(args[0]), NULL);
+    }
+    ASSERT_EQ_INT(r.exit_code, 0);
+    ASSERT_STR_CONTAINS(r.out, "\"count\":0,\"total\":0");
+    cmd_result_free(&r);
     free(cursor);
 }
 
@@ -680,13 +708,15 @@ TEST(list_json_cursor_filters_and_rejects)
         "[]",
         "   ",
     };
-    const char *bad_raw[] = {"!!!", "++++", "////", "====", "YR==", "YWJ=", "QQ==QQ=="};
+    const char *bad_raw[] = {"!!!",  "A",    "QQQQQ", "++++", "////",
+                             "====", "QQ==", "YR",    "YWJ",  "QQ==QQ=="};
     size_t i = 0U;
     const char *add1[] = {"add", "one"};
     const char *add2[] = {"add", "two"};
     const char *add3[] = {"add", "three"};
     const char *page1[] = {"list", "--json", "--limit", "1"};
-    const char *wider[] = {"list", "--json", "--limit", "2", "--sort", "updated", "--cursor", NULL};
+    const char *wider[] = {"list", "--json", "--limit", "2", "--cursor", NULL};
+    const char *sorted[] = {"list", "--json", "--sort", "updated", "--cursor", NULL};
     const char *plain[] = {"list", "--limit", "1", "--cursor", NULL};
     const char *dup[] = {"list", "--cursor", "aaaa", "--cursor", "bbbb"};
     const char *missing[] = {"list", "--cursor"};
@@ -709,7 +739,15 @@ TEST(list_json_cursor_filters_and_rejects)
     ASSERT_TRUE(cursor != NULL);
     cmd_result_free(&r);
 
-    wider[7] = cursor;
+    sorted[5] = cursor;
+    r = run_remember(db, sorted, sizeof(sorted) / sizeof(sorted[0]), NULL);
+    ASSERT_EQ_INT(r.exit_code, 1);
+    ASSERT_STREQ(r.err, "");
+    ASSERT_STR_CONTAINS(r.out, "\"code\":\"invalid_argument\"");
+    ASSERT_STR_CONTAINS(r.out, "\"message\":\"invalid --cursor\"");
+    cmd_result_free(&r);
+
+    wider[5] = cursor;
     r = run_remember(db, wider, sizeof(wider) / sizeof(wider[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 0);
     ASSERT_STREQ(r.err, "");
@@ -738,7 +776,7 @@ TEST(list_json_cursor_filters_and_rejects)
         const char *p1[] = {
             "list", "--json",       "--limit", "1",       "--tag",      "aa",      "--tag",
             "x",    "--created-by", "agent",   "--since", "2000-01-01", "--until", "2999-01-01"};
-        const char *p2[16];
+        const char *p2[] = {"list", "--json", "--limit", "1", "--cursor", NULL};
         const char *swap[] = {"list",         "--json",     "--limit",  "1",
                               "--tag",        "x",          "--tag",    "aa",
                               "--created-by", "agent",      "--since",  "2000-01-01",
@@ -759,10 +797,8 @@ TEST(list_json_cursor_filters_and_rejects)
         ASSERT_TRUE(tagged != NULL);
         cmd_result_free(&r);
 
-        memcpy((void *)p2, (const void *)p1, sizeof(p1));
-        p2[14] = "--cursor";
-        p2[15] = tagged;
-        r = run_remember(db, p2, 16U, NULL);
+        p2[5] = tagged;
+        r = run_remember(db, p2, sizeof(p2) / sizeof(p2[0]), NULL);
         ASSERT_EQ_INT(r.exit_code, 0);
         ASSERT_STREQ(r.err, "");
         ASSERT_STR_CONTAINS(r.out, "\"count\":1");
@@ -772,8 +808,8 @@ TEST(list_json_cursor_filters_and_rejects)
 
         swap[15] = tagged;
         r = run_remember(db, swap, sizeof(swap) / sizeof(swap[0]), NULL);
-        ASSERT_EQ_INT(r.exit_code, 0);
-        ASSERT_STR_CONTAINS(r.out, "tag one");
+        ASSERT_EQ_INT(r.exit_code, 1);
+        ASSERT_STR_CONTAINS(r.out, "\"code\":\"invalid_argument\"");
         cmd_result_free(&r);
 
         other_source[5] = tagged;
@@ -821,11 +857,10 @@ TEST(list_json_cursor_filters_and_rejects)
         const char *del1[] = {"delete", "--key", "gone:one"};
         const char *del2[] = {"delete", "--key", "gone:two"};
         const char *deleted_list[] = {"list", "--json", "--deleted", "--limit", "1"};
-        const char *deleted_page[] = {"list", "--json",   "--deleted", "--limit",
-                                      "1",    "--cursor", NULL};
+        const char *deleted_page[] = {"list", "--json", "--limit", "1", "--cursor", NULL};
+        const char *deleted_again[] = {"list", "--json", "--deleted", "--cursor", NULL};
         const char *created[] = {"list", "--json", "--sort", "created", "--limit", "1"};
-        const char *created2[] = {"list",    "--json", "--sort",   "created",
-                                  "--limit", "1",      "--cursor", NULL};
+        const char *created2[] = {"list", "--json", "--limit", "1", "--cursor", NULL};
 
         r = run_remember(db, e1, sizeof(e1) / sizeof(e1[0]), NULL);
         ASSERT_EQ_INT(r.exit_code, 0);
@@ -865,17 +900,23 @@ TEST(list_json_cursor_filters_and_rejects)
         cursor = take_next_cursor(r.out);
         ASSERT_TRUE(cursor != NULL);
         cmd_result_free(&r);
-        deleted_page[6] = cursor;
+        deleted_page[5] = cursor;
         r = run_remember(db, deleted_page, sizeof(deleted_page) / sizeof(deleted_page[0]), NULL);
         ASSERT_EQ_INT(r.exit_code, 0);
         ASSERT_STR_CONTAINS(r.out, "gone one");
+        ASSERT_STR_NOT_CONTAINS(r.out, "flag_meaning_changed");
+        cmd_result_free(&r);
+        deleted_again[4] = cursor;
+        r = run_remember(db, deleted_again, sizeof(deleted_again) / sizeof(deleted_again[0]), NULL);
+        ASSERT_EQ_INT(r.exit_code, 1);
+        ASSERT_STR_CONTAINS(r.out, "\"code\":\"invalid_argument\"");
         cmd_result_free(&r);
         free(cursor);
 
         {
             const char *trash_list[] = {"list", "--json", "--trash", "--limit", "1"};
-            const char *trash_page[] = {"list", "--json",   "--trash", "--limit",
-                                        "1",    "--cursor", NULL};
+            const char *trash_page[] = {"list", "--json", "--limit", "1", "--cursor", NULL};
+            const char *trash_again[] = {"list", "--json", "--trash", "--cursor", NULL};
 
             r = run_remember(db, trash_list, sizeof(trash_list) / sizeof(trash_list[0]), NULL);
             ASSERT_EQ_INT(r.exit_code, 0);
@@ -885,11 +926,17 @@ TEST(list_json_cursor_filters_and_rejects)
             cursor = take_next_cursor(r.out);
             ASSERT_TRUE(cursor != NULL);
             cmd_result_free(&r);
-            trash_page[6] = cursor;
+            trash_page[5] = cursor;
             r = run_remember(db, trash_page, sizeof(trash_page) / sizeof(trash_page[0]), NULL);
             ASSERT_EQ_INT(r.exit_code, 0);
             ASSERT_STREQ(r.err, "");
             ASSERT_STR_CONTAINS(r.out, "gone one");
+            ASSERT_STR_NOT_CONTAINS(r.out, "flag_meaning_changed");
+            cmd_result_free(&r);
+            trash_again[4] = cursor;
+            r = run_remember(db, trash_again, sizeof(trash_again) / sizeof(trash_again[0]), NULL);
+            ASSERT_EQ_INT(r.exit_code, 1);
+            ASSERT_STR_CONTAINS(r.out, "\"code\":\"invalid_argument\"");
             ASSERT_STR_CONTAINS(r.out, "\"code\":\"flag_meaning_changed\"");
             cmd_result_free(&r);
             free(cursor);
@@ -900,7 +947,7 @@ TEST(list_json_cursor_filters_and_rejects)
         cursor = take_next_cursor(r.out);
         ASSERT_TRUE(cursor != NULL);
         cmd_result_free(&r);
-        created2[7] = cursor;
+        created2[5] = cursor;
         r = run_remember(db, created2, sizeof(created2) / sizeof(created2[0]), NULL);
         ASSERT_EQ_INT(r.exit_code, 0);
         ASSERT_STREQ(r.err, "");
@@ -922,18 +969,20 @@ TEST(list_json_cursor_filters_and_rejects)
         if (json != NULL) {
             int wrote =
                 snprintf(json, 4096U, "{\"v\":1,\"sort\":\"updated\",\"bin\":\"live\",\"tags\":[");
-            size_t used = (size_t)wrote;
+            size_t used = 0U;
 
-            ASSERT_TRUE(wrote > 0);
-            for (i = 0U; i < 51U; i++) {
+            for (i = 0U; i < 51U && wrote > 0 && (size_t)wrote < 4096U - used; i++) {
+                used += (size_t)wrote;
                 wrote =
                     snprintf(json + used, 4096U - used, "%s\"a%02zu\"", (i == 0U) ? "" : ",", i);
-                ASSERT_TRUE(wrote > 0);
-                used += (size_t)wrote;
             }
-            wrote = snprintf(json + used, 4096U - used, "],\"at\":\"t\",\"local_id\":1}");
-            ASSERT_TRUE(wrote > 0);
-            assert_bad_json_cursor(db, json);
+            ASSERT_TRUE(wrote > 0 && (size_t)wrote < 4096U - used);
+            if (wrote > 0 && (size_t)wrote < 4096U - used) {
+                used += (size_t)wrote;
+                wrote = snprintf(json + used, 4096U - used, "],\"at\":\"t\",\"local_id\":1}");
+                ASSERT_TRUE(wrote > 0 && (size_t)wrote < 4096U - used);
+                assert_bad_json_cursor(db, json);
+            }
             free(json);
         }
     }
@@ -950,6 +999,135 @@ TEST(list_json_cursor_filters_and_rejects)
     ASSERT_EQ_INT(r.exit_code, 1);
     ASSERT_STR_CONTAINS(r.err, "unknown option '--cursor'");
     cmd_result_free(&r);
+    free(db);
+}
+// NOLINTEND(cppcoreguidelines-avoid-magic-numbers,readability-magic-numbers)
+
+/* --cursor alone continues the query the cursor names
+   (decision:plan21-cursor-binds-whole-query). A well-formed cursor that this
+   binary would not have written for that query is invalid. */
+// NOLINTBEGIN(cppcoreguidelines-avoid-magic-numbers,readability-magic-numbers)
+TEST(list_cursor_alone_is_the_query_and_must_be_canonical)
+{
+    char *db = make_temp_db_path();
+    CmdResult r;
+    char *cursor = NULL;
+    const char *add_key[] = {"add", "--key", "pref:one", "keyed"};
+    const char *add_other[] = {"add", "other"};
+    const char *head = "{\"v\":1,\"sort\":\"updated\",\"bin\":\"live\"";
+    const char *tail = ",\"at\":\"2999-01-01T00:00:00.000Z\",\"local_id\":999}";
+    const char *middles[] = {
+        ",\"created_by\":\"sync\"",  ",\"updated_by\":\"sync\"", ",\"key\":\"Pref:One\"",
+        ",\"key\":\"a\\tb\"",        ",\"tags\":[\"A\"]",        ",\"tags\":[\"a\\tb\"]",
+        ",\"since\":\"2000-01-01\"", ",\"since\":\"nope\"",      ",\"until\":\"nope\"",
+    };
+    char json[512];
+    size_t i = 0U;
+
+    ASSERT_TRUE(db != NULL);
+    r = run_remember(db, add_key, sizeof(add_key) / sizeof(add_key[0]), NULL);
+    ASSERT_EQ_INT(r.exit_code, 0);
+    cmd_result_free(&r);
+    r = run_remember(db, add_other, sizeof(add_other) / sizeof(add_other[0]), NULL);
+    ASSERT_EQ_INT(r.exit_code, 0);
+    cmd_result_free(&r);
+
+    /* The key filter travels in the cursor: only the keyed row, not "other". */
+    ASSERT_TRUE(snprintf(json, sizeof(json), "%s,\"key\":\"pref:one\"%s", head, tail) > 0);
+    cursor = b64_encode(json);
+    ASSERT_TRUE(cursor != NULL);
+    {
+        const char *args[] = {"list", "--json", "--cursor", cursor};
+
+        r = run_remember(db, args, sizeof(args) / sizeof(args[0]), NULL);
+    }
+    ASSERT_EQ_INT(r.exit_code, 0);
+    ASSERT_STREQ(r.err, "");
+    ASSERT_STR_CONTAINS(r.out, "\"count\":1,\"total\":1");
+    ASSERT_STR_CONTAINS(r.out, "keyed");
+    ASSERT_STR_NOT_CONTAINS(r.out, "other");
+    cmd_result_free(&r);
+    free(cursor);
+
+    /* The two base64url-only digits: these keys put '-' and then '_' in the cursor. */
+    {
+        static const char *const url_keys[] = {"\xd7\x90\xc3\xbe", "\xd7\x90\xc3\xbf"};
+        static const char url_digit[] = {'-', '_'};
+
+        for (i = 0U; i < 2U; i++) {
+            ASSERT_TRUE(
+                snprintf(json, sizeof(json), "%s,\"key\":\"%s\"%s", head, url_keys[i], tail) > 0);
+            cursor = b64_encode(json);
+            ASSERT_TRUE(cursor != NULL && strchr(cursor, url_digit[i]) != NULL);
+            {
+                const char *args[] = {"list", "--json", "--cursor", cursor};
+
+                r = run_remember(db, args, sizeof(args) / sizeof(args[0]), NULL);
+            }
+            ASSERT_EQ_INT(r.exit_code, 0);
+            ASSERT_STR_CONTAINS(r.out, "\"count\":0,\"total\":0");
+            cmd_result_free(&r);
+            free(cursor);
+        }
+    }
+
+    for (i = 0U; i < sizeof(middles) / sizeof(middles[0]); i++) {
+        ASSERT_TRUE(snprintf(json, sizeof(json), "%s%s%s", head, middles[i], tail) > 0);
+        assert_bad_json_cursor(db, json);
+    }
+    /* The sort value must be a canonical stored timestamp. */
+    assert_bad_json_cursor(db, "{\"v\":1,\"sort\":\"updated\",\"bin\":\"live\","
+                               "\"at\":\"2999-01-01\",\"local_id\":1}");
+    /* Bytes after the object, and standard base64 padding, are not this binary's cursor. */
+    {
+        static const char k_nul_tail[] = "{\"v\":1,\"sort\":\"updated\",\"bin\":\"live\","
+                                         "\"at\":\"2999-01-01T00:00:00.000Z\",\"local_id\":1}\0x";
+        char *with_nul = b64url_encode_n(k_nul_tail, sizeof(k_nul_tail) - 1U);
+
+        ASSERT_TRUE(with_nul != NULL);
+        if (with_nul != NULL) {
+            char padded[256];
+
+            assert_bad_cursor(db, with_nul);
+            ASSERT_TRUE(snprintf(padded, sizeof(padded), "%s==", with_nul) > 0);
+            assert_bad_cursor(db, padded);
+        }
+        free(with_nul);
+    }
+    /* A cursor for the Expired bin reads that bin: the two live rows are not in it. */
+    assert_empty_json_cursor(db, "{\"v\":1,\"sort\":\"updated\",\"bin\":\"expired\","
+                                 "\"at\":\"2999-01-01T00:00:00.000Z\",\"local_id\":999}");
+    /* A cursor longer than any object this binary writes is refused before decoding. */
+    {
+        enum { LONG_CURSOR = 90000 };
+        char *huge = (char *)malloc(LONG_CURSOR + 1);
+
+        ASSERT_TRUE(huge != NULL);
+        if (huge != NULL) {
+            memset(huge, 'A', LONG_CURSOR);
+            huge[LONG_CURSOR] = '\0';
+            assert_bad_cursor(db, huge);
+        }
+        free(huge);
+    }
+    /* A good cursor with its unused low bits set, or one stray digit added, decodes
+       to the same object but is not the bytes this binary writes. */
+    {
+        ASSERT_TRUE(snprintf(json, sizeof(json), "%s,\"key\":\"pref:one\"%s", head, tail) > 0);
+        cursor = b64_encode(json);
+        ASSERT_TRUE(cursor != NULL && strlen(cursor) % 4U == 3U &&
+                    cursor[strlen(cursor) - 1U] == '0');
+        if (cursor != NULL && strlen(cursor) > 0U) {
+            char altered[256];
+
+            ASSERT_TRUE(snprintf(altered, sizeof(altered), "%s", cursor) > 0);
+            altered[strlen(altered) - 1U] = '1';
+            assert_bad_cursor(db, altered);
+            ASSERT_TRUE(snprintf(altered, sizeof(altered), "%sA", cursor) > 0);
+            assert_bad_cursor(db, altered);
+        }
+        free(cursor);
+    }
     free(db);
 }
 // NOLINTEND(cppcoreguidelines-avoid-magic-numbers,readability-magic-numbers)
@@ -1045,6 +1223,7 @@ void register_get_list_delete_tests(void)
     RUN_TEST(delete_json_shape);
     RUN_TEST(list_json_cursor_pages);
     RUN_TEST(list_json_cursor_filters_and_rejects);
+    RUN_TEST(list_cursor_alone_is_the_query_and_must_be_canonical);
     RUN_TEST(list_offset_is_an_unknown_option);
     RUN_TEST(json_entry_includes_key_field_null_when_keyless);
 }
