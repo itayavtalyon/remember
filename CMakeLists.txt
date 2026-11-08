@@ -337,6 +337,7 @@ add_executable(remember_tests
     ${REMEMBER_TEST_SOURCES}
     ${REMEMBER_LIB_SOURCES}
     src/test_alloc.c
+    tests/failing_stream.c
 )
 target_include_directories(remember_tests PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/tests

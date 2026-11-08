@@ -10875,6 +10875,878 @@ SettingStatus store_setting_export(Store *brain, const char *user_db, SettingLay
     return SETTING_OK;
 }
 
+/* ---- settings import (007 ST-8.4 through ST-8.7) ---------------------------- */
+
+enum { IMPORT_MEMBERS = 8, IMPORT_BRAIN_BINDS = 7, IMPORT_PREPARE_ERR = 512 };
+
+/* ST-8.2 member order. bad_field reports the first bad one in this order. */
+typedef enum {
+    IM_KEY = 0,
+    IM_SCOPE,
+    IM_VALUE,
+    IM_BY,
+    IM_AT,
+    IM_DEVICE,
+    IM_VECTOR,
+    IM_DELETED
+} ImportMember;
+
+/* One settings element as the file has it. Per member: json_type (NULL when
+   absent), the SQL value (a string unescaped), and the JSON text. */
+typedef struct {
+    char *type[IMPORT_MEMBERS];
+    char *text[IMPORT_MEMBERS];
+    char *json[IMPORT_MEMBERS];
+    bool nul[IMPORT_MEMBERS]; /* the text holds a NUL, so it is not that string */
+    bool object;
+    /* NOLINTNEXTLINE(readability-magic-numbers,cppcoreguidelines-avoid-magic-numbers) */
+    char pad_[7]; /* explicit tail padding (kept -Wpadded-clean) */
+} ImportIn;
+
+/* The target row, when there is one. A user row has device "", vector "{}". */
+typedef struct {
+    char *value;
+    char *by;
+    char *at;
+    char *device;
+    char *vector;
+    char *deleted;
+    bool found;
+    /* NOLINTNEXTLINE(readability-magic-numbers,cppcoreguidelines-avoid-magic-numbers) */
+    char pad_[7]; /* explicit tail padding (kept -Wpadded-clean) */
+} ImportLocal;
+
+typedef struct {
+    Store *brain;
+    const char *user_db;
+    sqlite3 *udb;
+    char *err;
+    size_t errlen;
+    SettingLayer only;
+    bool dry_run;
+    bool udb_tried;
+    char pad_[2];
+} ImportCtx;
+
+#define IMPORT_MEMBER_SQL(name)                                                                    \
+    ", CASE WHEN e.type = 'object' THEN json_type(e.value, '$." name "') END"                      \
+    ", CASE WHEN e.type = 'object' THEN json_extract(e.value, '$." name "') END"                   \
+    ", CASE WHEN e.type = 'object' THEN json_quote(json_extract(e.value, '$." name "')) END"
+
+static const char k_import_rows_sql[] =
+    "SELECT e.type" IMPORT_MEMBER_SQL("key") IMPORT_MEMBER_SQL("scope") IMPORT_MEMBER_SQL("value")
+        IMPORT_MEMBER_SQL("updated_by") IMPORT_MEMBER_SQL("updated_at")
+            IMPORT_MEMBER_SQL("device_id") IMPORT_MEMBER_SQL("version_vector")
+                IMPORT_MEMBER_SQL("deleted_at") " FROM json_each(?1, '$.settings') AS e "
+                                                "ORDER BY e.key;";
+
+#undef IMPORT_MEMBER_SQL
+
+/* 1 a settings document, 2 a later version, 0 anything else (ST-8.4). CASE
+   evaluates one branch, so json_valid guards every json_type. */
+static const char k_import_doc_sql[] =
+    "SELECT CASE WHEN json_valid(?1) IS NOT 1 THEN 0 WHEN json_type(?1) != 'object' THEN 0 "
+    "WHEN json_type(?1, '$.format') IS NOT 'text' THEN 0 "
+    "WHEN json_extract(?1, '$.format') != 'remember-settings-export' THEN 0 "
+    "WHEN json_type(?1, '$.version') IS NOT 'integer' THEN 0 "
+    "WHEN json_extract(?1, '$.version') < 1 THEN 0 "
+    "WHEN json_extract(?1, '$.version') > 1 THEN 2 "
+    "WHEN json_type(?1, '$.settings') IS NOT 'array' THEN 0 ELSE 1 END, "
+    "CASE WHEN json_valid(?1) IS NOT 1 THEN 0 WHEN json_type(?1) != 'object' THEN 0 "
+    "WHEN json_type(?1, '$.version') IS NOT 'integer' THEN 0 "
+    "ELSE json_extract(?1, '$.version') END;";
+
+static void import_in_free(ImportIn *rows, size_t n)
+{
+    size_t i = 0;
+
+    if (rows == NULL) {
+        return;
+    }
+    while (i < n) {
+        size_t m = 0;
+
+        while (m < (size_t)IMPORT_MEMBERS) {
+            free(rows[i].type[m]);
+            free(rows[i].text[m]);
+            free(rows[i].json[m]);
+            m++;
+        }
+        i++;
+    }
+    free(rows);
+}
+
+static void import_local_free(ImportLocal *loc)
+{
+    free(loc->value);
+    free(loc->by);
+    free(loc->at);
+    free(loc->device);
+    free(loc->vector);
+    free(loc->deleted);
+    memset(loc, 0, sizeof(*loc));
+}
+
+void store_setting_import_free(SettingImportReport *r)
+{
+    size_t i = 0;
+
+    if (r == NULL) {
+        return;
+    }
+    for (i = 0; i < r->nrows; i++) {
+        /* NOLINTNEXTLINE(clang-analyzer-security.ArrayBound): nrows <= the calloc count */
+        free(r->rows[i].key);
+        free(r->rows[i].value);
+    }
+    free(r->rows);
+    r->rows = NULL;
+    r->nrows = 0U;
+}
+
+/* SQL NULL stays NULL. -1 is out of memory. */
+static int import_col(sqlite3_stmt *stmt, int col, char **out, bool *nul)
+{
+    const char *text = NULL;
+
+    *out = NULL;
+    if (sqlite3_column_type(stmt, col) == SQLITE_NULL) {
+        return 0;
+    }
+    text = (const char *)sqlite3_column_text(stmt, col);
+    if (text == NULL) {
+        return -1;
+    }
+    if ((size_t)sqlite3_column_bytes(stmt, col) != strlen(text)) {
+        *nul = true;
+    }
+    *out = dup_str(text);
+    return *out == NULL ? -1 : 0;
+}
+
+static int import_in_fill(sqlite3_stmt *stmt, ImportIn *in)
+{
+    const char *type = (const char *)sqlite3_column_text(stmt, 0);
+    int m = 0;
+
+    memset(in, 0, sizeof(*in));
+    if (type == NULL) {
+        return -1;
+    }
+    in->object = strcmp(type, "object") == 0;
+    for (m = 0; m < IMPORT_MEMBERS; m++) {
+        int col = 1 + (m * 3);
+
+        if (import_col(stmt, col, &in->type[m], &in->nul[m]) != 0 ||
+            import_col(stmt, col + 1, &in->text[m], &in->nul[m]) != 0 ||
+            import_col(stmt, col + 2, &in->json[m], &in->nul[m]) != 0) {
+            return -1;
+        }
+    }
+    return 0;
+}
+
+static bool import_bind_doc(sqlite3_stmt *stmt, const char *doc, size_t len)
+{
+    if (len > (size_t)INT_MAX) {
+        return false;
+    }
+    return sqlite3_bind_text(stmt, 1, doc, (int)len, SQLITE_STATIC) == SQLITE_OK;
+}
+
+static SettingStatus import_check_doc(sqlite3 *db, const char *doc, size_t len,
+                                      SettingImportReport *out, char *err, size_t errlen)
+{
+    sqlite3_stmt *stmt = NULL;
+    int kind = 0;
+
+    if (sqlite3_prepare_v2(db, k_import_doc_sql, -1, &stmt, NULL) != SQLITE_OK) {
+        set_errf(err, errlen, "sqlite", sqlite3_errmsg(db));
+        return SETTING_ERR_STORE;
+    }
+    if (import_bind_doc(stmt, doc, len)) {
+        if (sqlite3_step(stmt) != SQLITE_ROW) {
+            set_errf(err, errlen, "sqlite", sqlite3_errmsg(db));
+            (void)sqlite3_finalize(stmt);
+            return SETTING_ERR_STORE;
+        }
+        kind = sqlite3_column_int(stmt, 0);
+        out->version = sqlite3_column_int64(stmt, 1);
+    }
+    (void)sqlite3_finalize(stmt);
+    if (kind == 1) {
+        return SETTING_OK;
+    }
+    out->doc_error = (kind == 2) ? SETTING_DOC_VERSION : SETTING_DOC_NOT_SETTINGS;
+    return SETTING_ERR_DOCUMENT;
+}
+
+static SettingStatus import_read_rows(sqlite3 *db, const char *doc, size_t len, ImportIn **out,
+                                      size_t *out_n, char *err, size_t errlen)
+{
+    sqlite3_stmt *stmt = NULL;
+    ImportIn *rows = NULL;
+    size_t n = 0;
+    size_t cap = 0;
+    int rc = SQLITE_OK;
+
+    *out = NULL;
+    *out_n = 0U;
+    if (sqlite3_prepare_v2(db, k_import_rows_sql, -1, &stmt, NULL) != SQLITE_OK) {
+        set_errf(err, errlen, "sqlite", sqlite3_errmsg(db));
+        return SETTING_ERR_STORE;
+    }
+    (void)import_bind_doc(stmt, doc, len); /* import_check_doc already bound it */
+    while ((rc = sqlite3_step(stmt)) == SQLITE_ROW) {
+        if (n == cap) {
+            size_t next = (cap == 0U) ? (size_t)GROW_MIN_CAP : (cap * 2U);
+            ImportIn *grown = (ImportIn *)realloc(rows, next * sizeof(*grown));
+
+            if (grown == NULL) {
+                break;
+            }
+            rows = grown;
+            cap = next;
+        }
+        n += 1U; /* a partly filled row is freed with the rest */
+        if (import_in_fill(stmt, &rows[n - 1U]) != 0) {
+            break;
+        }
+    }
+    if (rc != SQLITE_ROW && rc != SQLITE_DONE) {
+        set_errf(err, errlen, "sqlite", sqlite3_errmsg(db));
+    } else if (rc == SQLITE_ROW) {
+        set_err(err, errlen, "out of memory");
+    }
+    (void)sqlite3_finalize(stmt);
+    if (rc != SQLITE_DONE) {
+        import_in_free(rows, n);
+        return SETTING_ERR_STORE;
+    }
+    *out = rows;
+    *out_n = n;
+    return SETTING_OK;
+}
+
+static bool member_is(const ImportIn *in, ImportMember m, const char *type)
+{
+    if (in->type[m] == NULL || in->nul[m]) {
+        return false;
+    }
+    return strcmp(in->type[m], type) == 0;
+}
+
+static bool member_null(const ImportIn *in, ImportMember m)
+{
+    if (in->type[m] == NULL) {
+        return true;
+    }
+    return strcmp(in->type[m], "null") == 0;
+}
+
+static SettingLayer import_scope(const ImportIn *in)
+{
+    if (!member_is(in, IM_SCOPE, "text")) {
+        return SETTING_LAYER_AUTO;
+    }
+    if (strcmp(in->text[IM_SCOPE], "brain") == 0) {
+        return SETTING_LAYER_BRAIN;
+    }
+    if (strcmp(in->text[IM_SCOPE], "user") == 0) {
+        return SETTING_LAYER_USER;
+    }
+    return SETTING_LAYER_AUTO;
+}
+
+static void free_items(char **items, size_t n)
+{
+    size_t i = 0;
+
+    for (i = 0; i < n; i++) {
+        free(items[i]);
+    }
+    free((void *)items);
+}
+
+/* 0 every element is a string, 1 one is not, -1 a store failure. */
+static int import_list_items(sqlite3 *db, const char *array, char ***out, size_t *out_n, char *err,
+                             size_t errlen)
+{
+    sqlite3_stmt *stmt = NULL;
+    char **items = NULL;
+    size_t n = 0;
+    size_t cap = 0;
+    int rc = SQLITE_OK;
+    int verdict = 0;
+
+    *out = NULL;
+    *out_n = 0U;
+    if (sqlite3_prepare_v2(db, "SELECT type, value FROM json_each(?1) ORDER BY key;", -1, &stmt,
+                           NULL) != SQLITE_OK) {
+        set_errf(err, errlen, "sqlite", sqlite3_errmsg(db));
+        return -1;
+    }
+    (void)sqlite3_bind_text(stmt, 1, array, -1, SQLITE_STATIC);
+    while (verdict == 0 && (rc = sqlite3_step(stmt)) == SQLITE_ROW) {
+        const char *type = (const char *)sqlite3_column_text(stmt, 0);
+        char *item = NULL;
+        bool nul = false;
+
+        if (type == NULL || strcmp(type, "text") != 0) {
+            verdict = 1;
+            break;
+        }
+        if (import_col(stmt, 1, &item, &nul) != 0 || item == NULL) {
+            verdict = -1;
+            break;
+        }
+        if (nul) {
+            free(item);
+            verdict = 1;
+            break;
+        }
+        if (n == cap) {
+            size_t next = (cap == 0U) ? (size_t)GROW_MIN_CAP : (cap * 2U);
+            char **grown = (char **)realloc((void *)items, next * sizeof(*grown));
+
+            if (grown == NULL) {
+                free(item);
+                verdict = -1;
+                break;
+            }
+            items = grown;
+            cap = next;
+        }
+        items[n++] = item;
+    }
+    if (verdict == 0 && rc != SQLITE_DONE) {
+        set_errf(err, errlen, "sqlite", sqlite3_errmsg(db));
+        verdict = -1;
+    } else if (verdict < 0 && rc == SQLITE_ROW) {
+        set_err(err, errlen, "out of memory");
+    }
+    (void)sqlite3_finalize(stmt);
+    if (verdict != 0) {
+        free_items(items, n);
+        return verdict;
+    }
+    *out = items;
+    *out_n = n;
+    return 0;
+}
+
+/* The canonical stored value, as settings set would write it. 0 valid, 1 not
+   (invalid_value, including over 16 KiB), -1 a store failure. */
+static int import_value(sqlite3 *db, const SettingSpec *spec, SettingLayer layer,
+                        const ImportIn *in, char *json, size_t cap, char *err, size_t errlen)
+{
+    char perr[IMPORT_PREPARE_ERR];
+    SettingLayer chosen = SETTING_LAYER_AUTO;
+    SettingStatus st = SETTING_OK;
+
+    if (spec->type == SETTING_STRING_LIST) {
+        char **items = NULL;
+        size_t n = 0;
+        int rc = 0;
+
+        if (!member_is(in, IM_VALUE, "array")) {
+            return 1;
+        }
+        rc = import_list_items(db, in->json[IM_VALUE], &items, &n, err, errlen);
+        if (rc != 0) {
+            return rc;
+        }
+        st = setting_prepare(spec->key, (const char *const *)items, n, layer, json, cap, NULL,
+                             &chosen, perr, sizeof(perr));
+        free_items(items, n);
+    } else {
+        const char *one[1];
+
+        if (!member_is(in, IM_VALUE, spec->type == SETTING_INTEGER ? "integer" : "text")) {
+            return 1;
+        }
+        one[0] = in->text[IM_VALUE];
+        st = setting_prepare(spec->key, one, 1U, layer, json, cap, NULL, &chosen, perr,
+                             sizeof(perr));
+    }
+    return st == SETTING_OK ? 0 : 1;
+}
+
+/* decision:plan20-import-bad-field. A user row stores no device or vector. */
+static const char *import_bad_field(const ImportIn *in, SettingLayer layer)
+{
+    if (!member_is(in, IM_BY, "object") || !actor_json_is_canonical(in->json[IM_BY])) {
+        return "updated_by";
+    }
+    if (!member_is(in, IM_AT, "text") || !utc_stamp_is_canonical(in->text[IM_AT])) {
+        return "updated_at";
+    }
+    if (layer == SETTING_LAYER_USER) {
+        if (member_null(in, IM_DELETED)) {
+            return NULL;
+        }
+        return "deleted_at";
+    }
+    if (!member_is(in, IM_DEVICE, "text") || !uuid_v7_is_canonical(in->text[IM_DEVICE])) {
+        return "device_id";
+    }
+    if (!member_is(in, IM_VECTOR, "object") || !vv_json_is_canonical(in->json[IM_VECTOR])) {
+        return "version_vector";
+    }
+    if (!member_null(in, IM_DELETED) &&
+        (!member_is(in, IM_DELETED, "text") || !utc_stamp_is_canonical(in->text[IM_DELETED]))) {
+        return "deleted_at";
+    }
+    return NULL;
+}
+
+/* ST-8.4 and ST-8.5, in ST-8.2 member order. -1 is a store failure. */
+static int import_validate(const ImportCtx *ctx, const ImportIn *in, const SettingSpec **spec,
+                           char *json, SettingImportRow *row)
+{
+    int rc = 0;
+
+    if (!in->object || !member_is(in, IM_KEY, "text")) {
+        row->reason = SETTING_SKIP_BAD_SHAPE;
+        return 0;
+    }
+    *spec = setting_by_key(in->text[IM_KEY]);
+    if (*spec == NULL) {
+        row->reason = SETTING_SKIP_UNKNOWN_KEY;
+        return 0;
+    }
+    if (row->scope == SETTING_LAYER_AUTO) {
+        row->reason = SETTING_SKIP_BAD_FIELD;
+        row->field = "scope";
+        return 0;
+    }
+    if (ctx->only != SETTING_LAYER_AUTO && row->scope != ctx->only) {
+        row->reason = SETTING_SKIP_OTHER_SCOPE;
+        return 0;
+    }
+    if ((row->scope == SETTING_LAYER_USER && !(*spec)->allow_user) ||
+        (row->scope == SETTING_LAYER_BRAIN && !(*spec)->allow_brain)) {
+        row->reason = SETTING_SKIP_LAYER_NOT_ALLOWED;
+        return 0;
+    }
+    rc = import_value(ctx->brain->db, *spec, row->scope, in, json, SETTING_VALUE_CAP, ctx->err,
+                      ctx->errlen);
+    if (rc != 0) {
+        row->reason = SETTING_SKIP_INVALID_VALUE;
+        return rc < 0 ? -1 : 0;
+    }
+    row->field = import_bad_field(in, row->scope);
+    if (row->field != NULL) {
+        row->reason = SETTING_SKIP_BAD_FIELD;
+    }
+    return 0;
+}
+
+/* user.db opens on the first user row. A dry run does not create it: a missing
+   file has no rows. */
+static int import_user_db(ImportCtx *ctx)
+{
+    bool absent = false;
+
+    if (ctx->udb_tried) {
+        return 0;
+    }
+    ctx->udb_tried = true;
+    if (ctx->dry_run) {
+        if (open_user_existing(ctx->user_db, &ctx->udb, &absent, ctx->err, ctx->errlen) != 0) {
+            return -1;
+        }
+        if (absent) {
+            return 0;
+        }
+    } else if (open_user_write(ctx->user_db, &ctx->udb, ctx->err, ctx->errlen) != 0) {
+        return -1;
+    }
+    if (begin_user_tx(ctx->udb, ctx->err, ctx->errlen) != SETTING_OK) {
+        (void)sqlite3_close(ctx->udb);
+        ctx->udb = NULL;
+        return -1;
+    }
+    return 0;
+}
+
+static int import_load_local(sqlite3 *db, bool brain, const char *key, ImportLocal *loc, char *err,
+                             size_t errlen)
+{
+    static const char brain_sql[] = "SELECT value, updated_by, updated_at, device_id, "
+                                    "version_vector, deleted_at FROM settings WHERE key = ?1;";
+    static const char user_sql[] =
+        "SELECT value, updated_by, updated_at, '', '{}', NULL FROM settings WHERE key = ?1;";
+    char **slots[] = {&loc->value, &loc->by, &loc->at, &loc->device, &loc->vector, &loc->deleted};
+    const size_t nslots = sizeof(slots) / sizeof(slots[0]);
+    const char *sql = user_sql;
+    sqlite3_stmt *stmt = NULL;
+    bool nul = false;
+    int rc = 0;
+
+    memset(loc, 0, sizeof(*loc));
+    if (db == NULL) {
+        return 0;
+    }
+    if (brain) {
+        sql = brain_sql;
+    }
+    if (sqlite3_prepare_v2(db, sql, -1, &stmt, NULL) != SQLITE_OK) {
+        set_errf(err, errlen, "sqlite", sqlite3_errmsg(db));
+        return -1;
+    }
+    (void)sqlite3_bind_text(stmt, 1, key, -1, SQLITE_STATIC);
+    rc = sqlite3_step(stmt);
+    if (rc == SQLITE_ROW) {
+        size_t i = 0;
+
+        loc->found = true;
+        for (; i < nslots; i++) {
+            /* Only deleted_at, the last slot, may be NULL. Any other NULL is out of memory. */
+            if (import_col(stmt, (int)i, slots[i], &nul) != 0 ||
+                (*slots[i] == NULL && i + 1U < nslots)) {
+                set_err(err, errlen, "out of memory");
+                rc = SQLITE_NOMEM;
+                break;
+            }
+        }
+    }
+    if (rc != SQLITE_ROW && rc != SQLITE_DONE && rc != SQLITE_NOMEM) {
+        set_errf(err, errlen, "sqlite", sqlite3_errmsg(db));
+    }
+    (void)sqlite3_finalize(stmt);
+    if (rc != SQLITE_ROW && rc != SQLITE_DONE) {
+        import_local_free(loc);
+        return -1;
+    }
+    return 0;
+}
+
+static bool same_or_both_null(const char *a, const char *b)
+{
+    if (a == NULL || b == NULL) {
+        return a == b;
+    }
+    return strcmp(a, b) == 0;
+}
+
+static const char *import_deleted(const ImportIn *in)
+{
+    if (member_null(in, IM_DELETED)) {
+        return NULL;
+    }
+    return in->text[IM_DELETED];
+}
+
+/* The file row is the local row: unchanged, nothing to write. */
+static int import_same(sqlite3 *db, bool brain, const ImportLocal *loc, const char *json,
+                       const ImportIn *in, bool *same, StoreError *serr)
+{
+    StoreStatus st = STORE_OK;
+
+    *same = false;
+    if (strcmp(loc->value, json) != 0 || strcmp(loc->by, in->json[IM_BY]) != 0 ||
+        strcmp(loc->at, in->text[IM_AT]) != 0) {
+        return 0;
+    }
+    if (!brain) {
+        *same = true;
+        return 0;
+    }
+    if (strcmp(loc->device, in->text[IM_DEVICE]) != 0 ||
+        !same_or_both_null(loc->deleted, import_deleted(in))) {
+        return 0;
+    }
+    st = version_vector_guard(db, loc->vector, in->json[IM_VECTOR], serr);
+    if (st == STORE_OK) {
+        *same = true;
+    } else if (st != STORE_ERR_STALE) {
+        return -1;
+    }
+    return 0;
+}
+
+/* ST-8.6 with ST-2.7: version vector (brain only), then the later updated_at,
+   then the larger device_id (brain only). A tie keeps the local row. */
+static int import_file_wins(sqlite3 *db, bool brain, const ImportLocal *loc, const ImportIn *in,
+                            bool *wins, StoreError *serr)
+{
+    int order = 0;
+    int cmp = 0;
+
+    if (brain && vv_compare(db, loc->vector, in->json[IM_VECTOR], &order, serr) != STORE_OK) {
+        return -1;
+    }
+    if (order != 0) {
+        *wins = order > 0;
+        return 0;
+    }
+    cmp = strcmp(in->text[IM_AT], loc->at);
+    if (cmp == 0 && brain) {
+        cmp = strcmp(in->text[IM_DEVICE], loc->device);
+    }
+    *wins = cmp > 0;
+    return 0;
+}
+
+/* decision:plan20-import-brain-merge: the file row, the pointwise-max vector,
+   no local counter bump, and a change_seq bump. */
+static int import_write_brain(sqlite3 *db, const char *key, const char *json, const ImportIn *in,
+                              const ImportLocal *loc, char *err, size_t errlen, StoreError *serr)
+{
+    static const char sql[] =
+        "INSERT INTO settings (key, value, updated_by, updated_at, device_id, version_vector, "
+        "deleted_at, change_seq) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, (SELECT change_seq FROM "
+        "brain_meta)) ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_by = "
+        "excluded.updated_by, updated_at = excluded.updated_at, device_id = excluded.device_id, "
+        "version_vector = excluded.version_vector, deleted_at = excluded.deleted_at, change_seq = "
+        "excluded.change_seq;";
+    char vector[VV_OUT_MAX];
+    const char *binds[IMPORT_BRAIN_BINDS];
+    const char *local_vector = "{}";
+
+    if (loc->found) {
+        local_vector = loc->vector;
+    }
+    if (vv_pairwise_max(db, local_vector, in->json[IM_VECTOR], vector, sizeof(vector), serr) !=
+        STORE_OK) {
+        set_err(err, errlen, "internal error");
+        return -1;
+    }
+    if (exec_sql(db, "UPDATE brain_meta SET change_seq = change_seq + 1;", err, errlen, serr) !=
+        0) {
+        return -1;
+    }
+    binds[0] = key;
+    binds[1] = json;
+    binds[2] = in->json[IM_BY];
+    binds[3] = in->text[IM_AT];
+    binds[4] = in->text[IM_DEVICE];
+    binds[BIND_VECTOR] = vector;
+    binds[IMPORT_BRAIN_BINDS - 1] = import_deleted(in);
+    return exec_bound(db, sql, binds, IMPORT_BRAIN_BINDS, err, errlen, serr);
+}
+
+/* The row, then one history row with the file actor and stamp (ST-8.7,
+   decision:plan20-import-history-at). */
+static int import_write(sqlite3 *db, bool brain, const char *key, const char *json,
+                        const ImportIn *in, const ImportLocal *loc, char *err, size_t errlen,
+                        StoreError *serr)
+{
+    const char *old_value = NULL;
+    const char *new_value = json;
+
+    if (brain) {
+        if (import_write_brain(db, key, json, in, loc, err, errlen, serr) != 0) {
+            return -1;
+        }
+        if (import_deleted(in) != NULL) {
+            new_value = NULL;
+        }
+    } else if (write_user_row(db, loc->found, key, json, in->json[IM_BY], in->text[IM_AT], false,
+                              err, errlen) != 0) {
+        return -1;
+    }
+    if (loc->found && loc->deleted == NULL) {
+        old_value = loc->value;
+    }
+    if (insert_setting_history(db, key, old_value, new_value, in->json[IM_BY], in->text[IM_AT], err,
+                               errlen, serr) != 0) {
+        return -1;
+    }
+    return trim_setting_history(db, key, err, errlen, serr);
+}
+
+static SettingStatus import_merge(ImportCtx *ctx, const SettingSpec *spec, const ImportIn *in,
+                                  const char *json, SettingImportRow *row)
+{
+    bool brain = row->scope == SETTING_LAYER_BRAIN;
+    StoreError *serr = &ctx->brain->last;
+    sqlite3 *db = ctx->brain->db;
+    ImportLocal loc;
+    bool same = false;
+    bool wins = true;
+    bool hit = false;
+
+    if (!brain) {
+        if (import_user_db(ctx) != 0) {
+            return SETTING_ERR_STORE;
+        }
+        db = ctx->udb;
+    }
+    if (import_load_local(db, brain, spec->key, &loc, ctx->err, ctx->errlen) != 0) {
+        return SETTING_ERR_STORE;
+    }
+    if (loc.found && (import_same(db, brain, &loc, json, in, &same, serr) != 0 ||
+                      (!same && import_file_wins(db, brain, &loc, in, &wins, serr) != 0))) {
+        set_err(ctx->err, ctx->errlen, "internal error");
+        import_local_free(&loc);
+        return SETTING_ERR_STORE;
+    }
+    if (same || !wins) {
+        row->result = SETTING_IMPORT_KEPT_LOCAL;
+        if (same) {
+            row->result = SETTING_IMPORT_UNCHANGED;
+        }
+        import_local_free(&loc);
+        return SETTING_OK;
+    }
+    if (db != NULL && row_quota_hit(db, loc.found, &hit, ctx->err, ctx->errlen, serr) != 0) {
+        import_local_free(&loc);
+        return SETTING_ERR_STORE;
+    }
+    if (hit) {
+        import_local_free(&loc);
+        return SETTING_ERR_QUOTA; /* decision:plan20-import-quota: nothing is written */
+    }
+    if (db != NULL &&
+        import_write(db, brain, spec->key, json, in, &loc, ctx->err, ctx->errlen, serr) != 0) {
+        import_local_free(&loc);
+        return SETTING_ERR_STORE;
+    }
+    import_local_free(&loc);
+    row->result = SETTING_IMPORT_WRITTEN;
+    if (brain && import_deleted(in) != NULL) {
+        row->tombstone = true;
+    }
+    return SETTING_OK;
+}
+
+static char *dup_or_null(const char *text, bool nul, bool *oom)
+{
+    char *copy = NULL;
+
+    if (text == NULL || nul) {
+        return NULL;
+    }
+    copy = dup_str(text);
+    if (copy == NULL) {
+        *oom = true;
+    }
+    return copy;
+}
+
+static SettingStatus import_one(ImportCtx *ctx, const ImportIn *in, size_t position,
+                                SettingImportRow *row)
+{
+    const SettingSpec *spec = NULL;
+    char json[SETTING_VALUE_CAP];
+    bool oom = false;
+
+    memset(row, 0, sizeof(*row));
+    row->position = position;
+    row->scope = import_scope(in);
+    row->result = SETTING_IMPORT_SKIPPED;
+    if (member_is(in, IM_KEY, "text")) {
+        row->key = dup_or_null(in->text[IM_KEY], false, &oom);
+    }
+    row->value = dup_or_null(in->text[IM_VALUE], in->nul[IM_VALUE], &oom);
+    if (oom) {
+        set_err(ctx->err, ctx->errlen, "out of memory");
+        return SETTING_ERR_STORE;
+    }
+    if (import_validate(ctx, in, &spec, json, row) != 0) {
+        return SETTING_ERR_STORE;
+    }
+    if (row->reason != SETTING_SKIP_NONE) {
+        return SETTING_OK;
+    }
+    return import_merge(ctx, spec, in, json, row);
+}
+
+/* Commit both databases, or roll both back (a dry run, a refusal, a failure). */
+static SettingStatus import_finish(ImportCtx *ctx, SettingStatus st)
+{
+    StoreError *serr = &ctx->brain->last;
+
+    if (st == SETTING_OK && !ctx->dry_run) {
+        if (exec_sql(ctx->brain->db, "COMMIT;", ctx->err, ctx->errlen, serr) != 0 ||
+            (ctx->udb != NULL && exec_sql(ctx->udb, "COMMIT;", ctx->err, ctx->errlen, NULL) != 0)) {
+            st = SETTING_ERR_STORE;
+        }
+    }
+    rollback_quiet(ctx->brain->db);
+    if (ctx->udb != NULL) {
+        rollback_quiet(ctx->udb);
+        (void)sqlite3_close(ctx->udb);
+        ctx->udb = NULL;
+    }
+    return st;
+}
+
+static void import_count(SettingImportReport *out)
+{
+    size_t i = 0;
+
+    for (i = 0; i < out->nrows; i++) {
+        /* NOLINTNEXTLINE(clang-analyzer-security.ArrayBound): nrows <= the calloc count */
+        if (out->rows[i].result == SETTING_IMPORT_WRITTEN) {
+            out->written++;
+        } else if (out->rows[i].result == SETTING_IMPORT_SKIPPED) {
+            out->skipped++;
+        } else {
+            out->unchanged++; /* kept_local counts as unchanged (ST-7.11b) */
+        }
+    }
+}
+
+SettingStatus store_setting_import(Store *brain, const char *user_db, const char *doc, size_t len,
+                                   SettingLayer only, bool dry_run, SettingImportReport *out,
+                                   char *err, size_t errlen)
+{
+    ImportCtx ctx;
+    ImportIn *ins = NULL;
+    size_t n = 0;
+    size_t i = 0;
+    SettingStatus st = SETTING_OK;
+
+    if (out != NULL) {
+        memset(out, 0, sizeof(*out));
+    }
+    if (brain == NULL || brain->db == NULL || doc == NULL || out == NULL) {
+        set_err(err, errlen, "internal error");
+        return SETTING_ERR_STORE;
+    }
+    st = import_check_doc(brain->db, doc, len, out, err, errlen);
+    if (st != SETTING_OK) {
+        return st;
+    }
+    st = import_read_rows(brain->db, doc, len, &ins, &n, err, errlen);
+    if (st != SETTING_OK) {
+        return st;
+    }
+    out->rows = (SettingImportRow *)calloc(n > 0U ? n : 1U, sizeof(*out->rows));
+    if (out->rows == NULL) {
+        import_in_free(ins, n);
+        set_err(err, errlen, "out of memory");
+        return SETTING_ERR_STORE;
+    }
+    st = begin_brain_tx(brain, err, errlen);
+    memset(&ctx, 0, sizeof(ctx));
+    ctx.brain = brain;
+    ctx.user_db = user_db;
+    ctx.err = err;
+    ctx.errlen = errlen;
+    ctx.only = only;
+    ctx.dry_run = dry_run;
+    for (i = 0; i < n && st == SETTING_OK; i++) {
+        out->nrows = i + 1U;
+        st = import_one(&ctx, &ins[i], i + 1U, &out->rows[i]);
+        if (st == SETTING_ERR_QUOTA) {
+            out->quota_layer = out->rows[i].scope;
+        }
+    }
+    st = import_finish(&ctx, st);
+    import_in_free(ins, n);
+    if (st != SETTING_OK) {
+        store_setting_import_free(out);
+        return st;
+    }
+    import_count(out);
+    return SETTING_OK;
+}
+
 SettingStatus store_setting_read(Store *brain, const char *user_db, const char *key,
                                  const char *flag_text, SettingRead *out, char *err, size_t errlen)
 {

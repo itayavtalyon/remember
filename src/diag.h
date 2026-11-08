@@ -73,8 +73,9 @@ typedef enum {
     DIAG_WARN_DEPRECATED_FLAG,
     DIAG_WARN_SYNCED_FOLDER,
     DIAG_WARN_SETTING_INVALID,
-    DIAG_WARN_FLAG_MEANING_CHANGED, /* --trash, one release (M-23) */
-    DIAG_WARN_UNKNOWN_FIELD,        /* C-35, once per file or stdin */
+    DIAG_WARN_FLAG_MEANING_CHANGED,   /* --trash, one release (M-23) */
+    DIAG_WARN_UNKNOWN_FIELD,          /* C-35, once per file or stdin */
+    DIAG_WARN_SETTING_IMPORT_SKIPPED, /* C-12 */
     DIAG_WARN_COUNT
 } DiagWarning;
 

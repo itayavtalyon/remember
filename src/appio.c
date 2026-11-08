@@ -61,6 +61,7 @@ static char *dup_cstr(const char *s)
     return copy;
 }
 
+/* NOLINTNEXTLINE(cppcoreguidelines-avoid-non-const-global-variables) */
 static bool g_document;
 
 void app_mark_document(void)

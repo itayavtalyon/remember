@@ -62,7 +62,8 @@ typedef enum SettingStatus {
     SETTING_ERR_RANGE,   /* setting_out_of_range */
     SETTING_ERR_SCOPE,   /* setting_scope_mismatch */
     SETTING_ERR_QUOTA,   /* quota_exceeded */
-    SETTING_ERR_STORE    /* brain or user.db failure; err holds that sentence */
+    SETTING_ERR_STORE,   /* brain or user.db failure; err holds that sentence */
+    SETTING_ERR_DOCUMENT /* import_parse: the file is not a settings document */
 } SettingStatus;
 
 typedef enum SettingLayer {

@@ -1,6 +1,7 @@
 #include "appio.h"
 #include "cmd_settings.h"
 #include "diag.h"
+#include "failing_stream.h"
 #include "harness.h"
 #include "normalize.h"
 #include "register.h"
@@ -4460,7 +4461,8 @@ TEST(get_usage_rejects_a_bad_invocation)
     store_close(store);
     got = get_at(brain, userdb, bare, sizeof(bare) / sizeof(bare[0]));
     ASSERT_EQ_INT(got.exit_code, 1);
-    ASSERT_STREQ(got.err, "remember: settings takes 'get', 'set', 'reset', or 'export'\n");
+    ASSERT_STREQ(got.err,
+                 "remember: settings takes 'get', 'set', 'reset', 'export', or 'import'\n");
     cmd_result_free(&got);
     got = get_at(brain, userdb, missing, sizeof(missing) / sizeof(missing[0]));
     ASSERT_EQ_INT(got.exit_code, 1);
@@ -5795,6 +5797,1107 @@ TEST(export_usage_errors_use_the_envelope_under_json)
     harness_remove_tree(tmpl);
 }
 
+/* Store faults: every one fails the export and leaves no rows. */
+TEST(export_reports_a_failed_read)
+{
+    char tmpl[] = "/tmp/remember-export-fail-XXXXXX";
+    char brain[REMEMBER_PATH_MAX];
+    char userdb[REMEMBER_PATH_MAX];
+    char dir[REMEMBER_PATH_MAX];
+    char err[256];
+    Store *store = open_pair(tmpl, brain, sizeof(brain), userdb, sizeof(userdb));
+    SettingWriteResult wr;
+    SettingExportRow *rows = NULL;
+    size_t n = 1;
+    SettingStatus st = SETTING_OK;
+    int fault = 0;
+
+    st = store_setting_export(NULL, NULL, SETTING_LAYER_AUTO, &rows, &n, err, sizeof(err));
+    ASSERT_EQ_INT(st, SETTING_ERR_STORE);
+    ASSERT_STREQ(err, "internal error");
+    ASSERT_EQ_INT((int)n, 0);
+    store_setting_export_free(NULL, 0);
+    if (store == NULL) {
+        return;
+    }
+    ASSERT_EQ_INT(set_one(store, userdb, "remember.search.candidate_pool", "400",
+                          SETTING_LAYER_BRAIN, NULL, &wr, err, sizeof(err)),
+                  SETTING_OK);
+    store_test_fail_prepare_after(0);
+    st = store_setting_export(store, userdb, SETTING_LAYER_BRAIN, &rows, &n, err, sizeof(err));
+    store_test_fail_prepare_after(-1);
+    ASSERT_EQ_INT(st, SETTING_ERR_STORE);
+    ASSERT_TRUE(strstr(err, "sqlite:") == err);
+    store_test_fail_step_after(0);
+    st = store_setting_export(store, userdb, SETTING_LAYER_BRAIN, &rows, &n, err, sizeof(err));
+    store_test_fail_step_after(-1);
+    ASSERT_EQ_INT(st, SETTING_ERR_STORE);
+    ASSERT_TRUE(strstr(err, "sqlite:") == err);
+    for (fault = 0; fault < 7; fault++) {
+        store_test_fail_alloc_after(fault);
+        st = store_setting_export(store, userdb, SETTING_LAYER_BRAIN, &rows, &n, err, sizeof(err));
+        store_test_fail_alloc_after(-1);
+        ASSERT_EQ_INT(st, SETTING_ERR_STORE);
+        ASSERT_STREQ(err, "out of memory");
+        ASSERT_TRUE(rows == NULL);
+    }
+    ASSERT_TRUE(snprintf(dir, sizeof(dir), "%s/not-a-file", tmpl) > 0);
+    ASSERT_EQ_INT(mkdir(dir, 0700), 0);
+    st = store_setting_export(store, dir, SETTING_LAYER_AUTO, &rows, &n, err, sizeof(err));
+    ASSERT_EQ_INT(st, SETTING_ERR_STORE);
+    ASSERT_TRUE(strstr(err, "cannot open database") != NULL);
+    ASSERT_TRUE(rows == NULL);
+    close_pair(store, tmpl);
+}
+
+/* No HOME: the user layer has no path, the brain layer needs none. */
+TEST(export_without_home_fails_unless_the_scope_is_brain)
+{
+    char tmpl[] = "/tmp/remember-export-home-XXXXXX";
+    char brain[REMEMBER_PATH_MAX];
+    char userdb[REMEMBER_PATH_MAX];
+    char want[256];
+    Store *store = open_pair(tmpl, brain, sizeof(brain), userdb, sizeof(userdb));
+    EnvHold hold;
+    const char *all[] = {"settings", "export"};
+    const char *only_brain[] = {"settings", "export", "--scope", "brain"};
+    CmdResult got;
+
+    if (store == NULL) {
+        return;
+    }
+    store_close(store);
+    env_hold(&hold);
+    ASSERT_EQ_INT(unsetenv("HOME"), 0);
+    ASSERT_EQ_INT(unsetenv("XDG_DATA_HOME"), 0);
+    ASSERT_EQ_INT(unsetenv("REMEMBER_USER_DB"), 0);
+    ASSERT_EQ_INT(setenv("REMEMBER_TEST_FIXED_IDS", "1", 1), 0);
+    got = run_remember(brain, all, sizeof(all) / sizeof(all[0]), NULL);
+    ASSERT_EQ_INT(got.exit_code, 1);
+    ASSERT_STREQ(got.out, "");
+    ASSERT_STREQ(got.err, "remember: HOME is not set\n");
+    cmd_result_free(&got);
+    got = run_remember(brain, only_brain, sizeof(only_brain) / sizeof(only_brain[0]), NULL);
+    ASSERT_EQ_INT(unsetenv("REMEMBER_TEST_FIXED_IDS"), 0);
+    env_release(&hold);
+    ASSERT_TRUE(snprintf(want, sizeof(want), "%s]}\n", k_export_head) > 0);
+    ASSERT_EQ_INT(got.exit_code, 0);
+    ASSERT_STREQ(got.out, want);
+    cmd_result_free(&got);
+    harness_remove_tree(tmpl);
+}
+
+/* A short stdout fails the document, plain or --json, with one internal line. */
+TEST(export_reports_a_failed_write)
+{
+    char tmpl[] = "/tmp/remember-export-write-XXXXXX";
+    char brain[REMEMBER_PATH_MAX];
+    char userdb[REMEMBER_PATH_MAX];
+    Store *store = open_pair(tmpl, brain, sizeof(brain), userdb, sizeof(userdb));
+    EnvHold hold;
+    const char *plain[] = {"remember", "--db", brain, "settings", "export"};
+    const char *json[] = {"remember", "--db", brain, "--json", "settings", "export"};
+    const char *const *runs[] = {plain, json};
+    const int argcs[] = {5, 6};
+    size_t r = 0;
+
+    if (store == NULL) {
+        return;
+    }
+    store_close(store);
+    env_hold(&hold);
+    ASSERT_EQ_INT(setenv("REMEMBER_USER_DB", userdb, 1), 0);
+    for (r = 0; r < 2U; r++) {
+        FailingStream sink;
+        char *err = NULL;
+        size_t elen = 0U;
+        FILE *of = failing_stream_open(&sink, 10U);
+        FILE *ef = open_memstream(&err, &elen);
+        int rc = 0;
+
+        if (of == NULL || ef == NULL) {
+            if (of != NULL) {
+                (void)fclose(of);
+            }
+            if (ef != NULL) {
+                (void)fclose(ef);
+            }
+            free(err);
+            break;
+        }
+        rc = remember_run(argcs[r], (char *const *)runs[r], of, ef);
+        (void)fclose(of);
+        ASSERT_EQ_INT(fclose(ef), 0);
+        ASSERT_EQ_INT(rc, 1);
+        ASSERT_STR_CONTAINS(err, "failed to write output");
+        free(err);
+    }
+    env_release(&hold);
+    harness_remove_tree(tmpl);
+}
+
+/* ---- stage 8: settings import ------------------------------------------- */
+
+static const char k_imp_head[] =
+    "{\"format\":\"remember-settings-export\",\"version\":1,\"exported_at\":"
+    "\"2026-01-01T00:00:00.000Z\",\"settings\":[";
+static const char k_imp_pool_user[] =
+    "{\"key\":\"remember.search.candidate_pool\",\"scope\":\"user\",\"value\":300,\"updated_by\":"
+    "{\"kind\":\"agent\",\"id\":\"bot2\"},\"updated_at\":\"2026-10-16T07:58:00.000Z\","
+    "\"device_id\":\"\",\"version_vector\":{},\"deleted_at\":null}";
+static const char k_imp_max_user[] =
+    "{\"key\":\"remember.search.max_results\",\"scope\":\"user\",\"value\":30,\"updated_by\":"
+    "{\"kind\":\"human\",\"id\":null},\"updated_at\":\"2026-10-16T07:58:00.000Z\","
+    "\"device_id\":\"\",\"version_vector\":{},\"deleted_at\":null}";
+static const char k_imp_bad_pool[] =
+    "{\"key\":\"remember.search.candidate_pool\",\"scope\":\"user\",\"value\":\"abc\","
+    "\"updated_by\":{\"kind\":\"human\",\"id\":null},\"updated_at\":\"2026-10-16T07:58:00.000Z\","
+    "\"device_id\":\"\",\"version_vector\":{},\"deleted_at\":null}";
+static const char k_imp_unknown[] =
+    "{\"key\":\"plugin.hybrid.weight\",\"scope\":\"brain\",\"value\":1,\"updated_by\":"
+    "{\"kind\":\"human\",\"id\":null},\"updated_at\":\"2026-10-16T07:58:00.000Z\","
+    "\"device_id\":\"01a0d90a-e71c-7a0a-bb2c-3b377482fa51\",\"version_vector\":{},"
+    "\"deleted_at\":null}";
+static const char k_dev_a[] = "01a0d90a-e71c-7a0a-bb2c-3b377482fa51";
+static const char k_dev_b[] = "01a0d90a-e71c-7a0a-bb2c-3b377482fa52";
+
+/* NOLINTNEXTLINE(bugprone-easily-swappable-parameters) -- path, then its text */
+static void write_text(const char *path, const char *text)
+{
+    FILE *f = fopen(path, "w");
+    int wrote = 0;
+    int closed = 0;
+
+    ASSERT_TRUE(f != NULL);
+    if (f == NULL) {
+        return;
+    }
+    wrote = fputs(text, f);
+    closed = fclose(f);
+    ASSERT_TRUE(wrote >= 0);
+    ASSERT_EQ_INT(closed, 0);
+}
+
+/* The settings document of these elements, written to <dir>/<name>. */
+static void write_doc(char *path, size_t cap, const char *dir, const char *name,
+                      const char *const *rows, size_t n)
+{
+    char doc[8192];
+    size_t pos = 0;
+    size_t i = 0;
+    int wrote = 0;
+
+    ASSERT_TRUE(snprintf(path, cap, "%s/%s", dir, name) > 0);
+    wrote = snprintf(doc, sizeof(doc), "%s", k_imp_head);
+    ASSERT_TRUE(wrote > 0 && (size_t)wrote < sizeof(doc));
+    if (wrote < 0 || (size_t)wrote >= sizeof(doc)) {
+        return;
+    }
+    pos = (size_t)wrote;
+    for (i = 0; i < n; i++) {
+        wrote = snprintf(doc + pos, sizeof(doc) - pos, "%s%s", i > 0U ? "," : "", rows[i]);
+        ASSERT_TRUE(wrote > 0 && (size_t)wrote < sizeof(doc) - pos);
+        if (wrote < 0 || (size_t)wrote >= sizeof(doc) - pos) {
+            return;
+        }
+        pos += (size_t)wrote;
+    }
+    ASSERT_TRUE(snprintf(doc + pos, sizeof(doc) - pos, "]}") == 2);
+    write_text(path, doc);
+}
+
+/* A brain element. deleted is NULL for a live row. */
+/* NOLINTBEGIN(bugprone-easily-swappable-parameters) */
+static void brain_elem(char *out, size_t cap, const char *key, const char *value, const char *at,
+                       const char *device, const char *vector, const char *deleted)
+/* NOLINTEND(bugprone-easily-swappable-parameters) */
+{
+    char del[64];
+
+    if (deleted == NULL) {
+        ASSERT_TRUE(snprintf(del, sizeof(del), "null") > 0);
+    } else {
+        ASSERT_TRUE(snprintf(del, sizeof(del), "\"%s\"", deleted) > 0);
+    }
+    ASSERT_TRUE(snprintf(out, cap,
+                         "{\"key\":\"%s\",\"scope\":\"brain\",\"value\":%s,\"updated_by\":"
+                         "{\"kind\":\"agent\",\"id\":\"peer\"},\"updated_at\":\"%s\","
+                         "\"device_id\":\"%s\",\"version_vector\":%s,\"deleted_at\":%s}",
+                         key, value, at, device, vector, del) > 0);
+}
+
+static CmdResult import_at(const char *brain, const char *userdb, const char *const *args, size_t n)
+{
+    return export_at(brain, userdb, args, n);
+}
+
+/* 007-11: export, import into an empty brain and user.db, export again. Fixed ids
+   make even exported_at equal. The file actor and stamp reach the row and history. */
+TEST(import_round_trips_an_export)
+{
+    char tmpl[] = "/tmp/remember-import-trip-XXXXXX";
+    char tmpl2[] = "/tmp/remember-import-trip2-XXXXXX";
+    char brain[REMEMBER_PATH_MAX];
+    char userdb[REMEMBER_PATH_MAX];
+    char brain2[REMEMBER_PATH_MAX];
+    char userdb2[REMEMBER_PATH_MAX];
+    char file[REMEMBER_PATH_MAX];
+    char pool[512];
+    char tomb[512];
+    const char *budget[] = {"settings", "set", "remember.plugins.chain_budget", "2s"};
+    const char *user_pool[] = {"settings", "set",  "remember.search.candidate_pool",
+                               "500",      "--as", "agent",
+                               "--actor",  "bot1"};
+    const char *exp[] = {"settings", "export"};
+    const char *imp[] = {"settings", "import", file};
+    char want[160];
+    Store *store = open_pair(tmpl, brain, sizeof(brain), userdb, sizeof(userdb));
+    Store *other = NULL;
+    CmdResult first;
+    CmdResult got;
+
+    if (store == NULL) {
+        return;
+    }
+    store_close(store);
+    brain_elem(pool, sizeof(pool), "remember.search.candidate_pool", "400",
+               "2026-10-24T09:12:00.000Z", k_dev_b,
+               "{\"01a0d90a-e71c-7a0a-bb2c-3b377482fa51\":1,"
+               "\"01a0d90a-e71c-7a0a-bb2c-3b377482fa52\":3}",
+               NULL);
+    brain_elem(tomb, sizeof(tomb), "remember.search.max_results", "9", "2026-10-24T09:13:00.000Z",
+               k_dev_a, "{\"01a0d90a-e71c-7a0a-bb2c-3b377482fa51\":2}", "2026-10-24T09:13:00.000Z");
+    {
+        const char *rows[] = {pool, tomb};
+
+        write_doc(file, sizeof(file), tmpl, "brain.json", rows, 2U);
+    }
+    got = import_at(brain, userdb, imp, 3U);
+    ASSERT_EQ_INT(got.exit_code, 0);
+    cmd_result_free(&got);
+    got = import_at(brain, userdb, budget, 4U);
+    cmd_result_free(&got);
+    got = import_at(brain, userdb, user_pool, 8U);
+    cmd_result_free(&got);
+    first = import_at(brain, userdb, exp, 2U);
+    ASSERT_EQ_INT(first.exit_code, 0);
+    write_text(file, first.out);
+    other = open_pair(tmpl2, brain2, sizeof(brain2), userdb2, sizeof(userdb2));
+    if (other == NULL) {
+        cmd_result_free(&first);
+        harness_remove_tree(tmpl);
+        return;
+    }
+    store_close(other);
+    got = import_at(brain2, userdb2, imp, 3U);
+    ASSERT_EQ_INT(got.exit_code, 0);
+    ASSERT_STREQ(got.err, "");
+    ASSERT_TRUE(snprintf(want, sizeof(want),
+                         "Imported \"%s\": 4 settings written, 0 unchanged, 0 skipped.\n",
+                         file) > 0);
+    ASSERT_STREQ(got.out, want);
+    cmd_result_free(&got);
+    got = import_at(brain2, userdb2, exp, 2U);
+    ASSERT_STREQ(got.out, first.out);
+    cmd_result_free(&got);
+    /* ST-8.7: no {import, null}. decision:plan20-import-history-at: the file stamp. */
+    assert_query(userdb2,
+                 "SELECT updated_by || '|' || at || '|' || new_value FROM settings_history "
+                 "WHERE key = 'remember.search.candidate_pool'",
+                 "{\"kind\":\"agent\",\"id\":\"bot1\"}|2026-01-01T00:00:00.000Z|500");
+    assert_query(brain2,
+                 "SELECT updated_by || '|' || at || '|' || ifnull(new_value, 'null') FROM "
+                 "settings_history WHERE key = 'remember.search.max_results'",
+                 "{\"kind\":\"agent\",\"id\":\"peer\"}|2026-10-24T09:13:00.000Z|null");
+    /* The same file again changes nothing. */
+    got = import_at(brain2, userdb2, imp, 3U);
+    ASSERT_TRUE(snprintf(want, sizeof(want),
+                         "Imported \"%s\": 0 settings written, 4 unchanged, 0 skipped.\n",
+                         file) > 0);
+    ASSERT_STREQ(got.out, want);
+    cmd_result_free(&got);
+    assert_query(brain2, "SELECT COUNT(*) FROM settings_history", "2");
+    cmd_result_free(&first);
+    harness_remove_tree(tmpl2);
+    harness_remove_tree(tmpl);
+}
+
+/* 007-12, 007-38, 007 test 41: a bad value and an unknown key skip only their rows. */
+TEST(import_skips_a_bad_value_and_an_unknown_key)
+{
+    char tmpl[] = "/tmp/remember-import-skip-XXXXXX";
+    char brain[REMEMBER_PATH_MAX];
+    char userdb[REMEMBER_PATH_MAX];
+    char two[REMEMBER_PATH_MAX];
+    char one[REMEMBER_PATH_MAX];
+    const char *two_rows[] = {k_imp_bad_pool, k_imp_max_user, k_imp_unknown};
+    const char *one_row[] = {k_imp_bad_pool};
+    const char *imp_two[] = {"settings", "import", two};
+    const char *imp_one[] = {"settings", "import", one};
+    const char *json_two[] = {"--json", "settings", "import", two};
+    Store *store = open_pair(tmpl, brain, sizeof(brain), userdb, sizeof(userdb));
+    CmdResult got;
+
+    if (store == NULL) {
+        return;
+    }
+    store_close(store);
+    write_doc(two, sizeof(two), tmpl, "two.json", two_rows, 3U);
+    write_doc(one, sizeof(one), tmpl, "one.json", one_row, 1U);
+    got = import_at(brain, userdb, imp_one, 3U);
+    ASSERT_EQ_INT(got.exit_code, 0);
+    ASSERT_STREQ(got.err, "remember: warning: skipped \"remember.search.candidate_pool\": \"abc\" "
+                          "isn't a valid value. This brain wasn't changed.\n");
+    ASSERT_TRUE(access(userdb, F_OK) != 0);
+    cmd_result_free(&got);
+    got = import_at(brain, userdb, imp_two, 3U);
+    ASSERT_EQ_INT(got.exit_code, 0);
+    ASSERT_STREQ(got.err,
+                 "remember: warning: skipped \"remember.search.candidate_pool\": \"abc\" isn't a "
+                 "valid value.\n"
+                 "remember: warning: skipped \"plugin.hybrid.weight\": remember has no setting by "
+                 "that name.\n");
+    ASSERT_STR_CONTAINS(got.out, "1 settings written, 0 unchanged, 2 skipped.");
+    cmd_result_free(&got);
+    assert_query(userdb, "SELECT key || '=' || value FROM settings",
+                 "remember.search.max_results=30");
+    got = import_at(brain, userdb, json_two, 4U);
+    ASSERT_EQ_INT(got.exit_code, 0);
+    ASSERT_STREQ(got.err, "");
+    ASSERT_STR_CONTAINS(
+        got.out,
+        "\"data\":{\"count\":3,\"written\":0,\"unchanged\":1,\"skipped\":2,\"rows\":["
+        "{\"key\":\"remember.search.candidate_pool\",\"scope\":\"user\",\"result\":\"skipped\","
+        "\"action\":\"none\",\"reason\":\"invalid_value\"},"
+        "{\"key\":\"remember.search.max_results\",\"scope\":\"user\",\"result\":\"unchanged\","
+        "\"action\":\"none\"},"
+        "{\"key\":\"plugin.hybrid.weight\",\"scope\":\"brain\",\"result\":\"skipped\","
+        "\"action\":\"none\",\"reason\":\"unknown_key\"}]}");
+    ASSERT_STR_CONTAINS(got.out,
+                        "{\"code\":\"setting_invalid\",\"message\":\"skipped "
+                        "\\\"remember.search.candidate_pool\\\": \\\"abc\\\" isn't a valid "
+                        "value.\",\"detail\":{\"key\":\"remember.search.candidate_pool\","
+                        "\"value\":\"abc\",\"reason\":\"invalid_value\"}}");
+    ASSERT_STR_CONTAINS(got.out, "{\"code\":\"setting_import_skipped\",\"message\":\"skipped "
+                                 "\\\"plugin.hybrid.weight\\\": remember has no setting by that "
+                                 "name.\",\"detail\":{\"key\":\"plugin.hybrid.weight\","
+                                 "\"scope\":\"brain\",\"reason\":\"unknown_key\"}}");
+    cmd_result_free(&got);
+    assert_query(brain, "SELECT COUNT(*) FROM settings", "0");
+    harness_remove_tree(tmpl);
+}
+
+/* C-14a and decision:plan20-import-bad-field: the first bad member, in ST-8.2 order. */
+TEST(import_skips_bad_shapes_and_bad_fields)
+{
+    static const char *const rows[] = {
+        "7",
+        "{\"scope\":\"user\",\"value\":5}",
+        "{\"key\":\"remember.search.max_results\",\"value\":5}",
+        "{\"key\":\"remember.search.max_results\",\"scope\":\"global\",\"value\":5}",
+        "{\"key\":\"remember.search.max_results\",\"scope\":\"user\",\"value\":5,"
+        "\"updated_by\":{\"id\":null,\"kind\":\"human\"}}",
+        "{\"key\":\"remember.search.max_results\",\"scope\":\"user\",\"value\":5,"
+        "\"updated_by\":{\"kind\":\"human\",\"id\":null},\"updated_at\":\"2026-10-16\"}",
+        "{\"key\":\"remember.search.max_results\",\"scope\":\"user\",\"value\":5,"
+        "\"updated_by\":{\"kind\":\"human\",\"id\":null},\"updated_at\":"
+        "\"2026-10-16T07:58:00.000Z\",\"deleted_at\":\"2026-10-16T07:58:00.000Z\"}",
+        "{\"key\":\"remember.search.max_results\",\"scope\":\"brain\",\"value\":5,"
+        "\"updated_by\":{\"kind\":\"human\",\"id\":null},\"updated_at\":"
+        "\"2026-10-16T07:58:00.000Z\",\"device_id\":\"dev-a\"}",
+        "{\"key\":\"remember.search.max_results\",\"scope\":\"brain\",\"value\":5,"
+        "\"updated_by\":{\"kind\":\"human\",\"id\":null},\"updated_at\":"
+        "\"2026-10-16T07:58:00.000Z\",\"device_id\":\"01a0d90a-e71c-7a0a-bb2c-3b377482fa51\","
+        "\"version_vector\":{\"x\":1}}",
+        "{\"key\":\"remember.search.max_results\",\"scope\":\"brain\",\"value\":5,"
+        "\"updated_by\":{\"kind\":\"human\",\"id\":null},\"updated_at\":"
+        "\"2026-10-16T07:58:00.000Z\",\"device_id\":\"01a0d90a-e71c-7a0a-bb2c-3b377482fa51\","
+        "\"version_vector\":{},\"deleted_at\":5}",
+        "{\"key\":\"remember.search.max_results\",\"scope\":\"user\",\"value\":5,"
+        "\"updated_by\":{\"kind\":\"human\",\"id\":null},\"updated_at\":"
+        "\"2026-10-16T07:58:00.000Z\",\"device_id\":\"not checked\",\"version_vector\":7}",
+        "{\"key\":\"remember.search.max_results\\u0000x\",\"scope\":\"user\",\"value\":5}",
+        "{\"key\":\"remember.plugins.chain_budget\",\"scope\":\"user\",\"value\":"
+        "\"2s\\u0000\"}",
+        "{\"key\":\"remember.buckets.prefixes\",\"scope\":\"brain\",\"value\":[\"a:\",5]}"};
+    char tmpl[] = "/tmp/remember-import-shape-XXXXXX";
+    char brain[REMEMBER_PATH_MAX];
+    char userdb[REMEMBER_PATH_MAX];
+    char file[REMEMBER_PATH_MAX];
+    const char *imp[] = {"settings", "import", file};
+    const char *json[] = {"--json", "settings", "import", file};
+    Store *store = open_pair(tmpl, brain, sizeof(brain), userdb, sizeof(userdb));
+    CmdResult got;
+
+    if (store == NULL) {
+        return;
+    }
+    store_close(store);
+    write_doc(file, sizeof(file), tmpl, "shape.json", rows, sizeof(rows) / sizeof(rows[0]));
+    got = import_at(brain, userdb, imp, 3U);
+    ASSERT_EQ_INT(got.exit_code, 0);
+    ASSERT_STREQ(got.err,
+                 "remember: warning: skipped row 1 in the settings file because it isn't a "
+                 "setting (each row needs a \"key\").\n"
+                 "remember: warning: skipped row 2 in the settings file because it isn't a "
+                 "setting (each row needs a \"key\").\n"
+                 "remember: warning: skipped \"remember.search.max_results\": its \"scope\" "
+                 "isn't valid.\n"
+                 "remember: warning: skipped \"remember.search.max_results\": its \"scope\" "
+                 "isn't valid.\n"
+                 "remember: warning: skipped \"remember.search.max_results\": its \"updated_by\" "
+                 "isn't valid.\n"
+                 "remember: warning: skipped \"remember.search.max_results\": its \"updated_at\" "
+                 "isn't valid.\n"
+                 "remember: warning: skipped \"remember.search.max_results\": its \"deleted_at\" "
+                 "isn't valid.\n"
+                 "remember: warning: skipped \"remember.search.max_results\": its \"device_id\" "
+                 "isn't valid.\n"
+                 "remember: warning: skipped \"remember.search.max_results\": its "
+                 "\"version_vector\" isn't valid.\n"
+                 "remember: warning: skipped \"remember.search.max_results\": its \"deleted_at\" "
+                 "isn't valid.\n"
+                 "remember: warning: skipped row 12 in the settings file because it isn't a "
+                 "setting (each row needs a \"key\").\n"
+                 "remember: warning: skipped \"remember.plugins.chain_budget\": \"null\" isn't a "
+                 "valid value.\n"
+                 "remember: warning: skipped \"remember.buckets.prefixes\": \"[\"a:\",5]\" isn't "
+                 "a valid value.\n");
+    ASSERT_STR_CONTAINS(got.out, "1 settings written, 0 unchanged, 13 skipped.");
+    cmd_result_free(&got);
+    got = import_at(brain, userdb, json, 4U);
+    ASSERT_STR_CONTAINS(got.out, "{\"key\":null,\"scope\":null,\"result\":\"skipped\","
+                                 "\"action\":\"none\",\"reason\":\"bad_shape\"},"
+                                 "{\"key\":null,\"scope\":\"user\",\"result\":\"skipped\","
+                                 "\"action\":\"none\",\"reason\":\"bad_shape\"},"
+                                 "{\"key\":\"remember.search.max_results\",\"scope\":null,");
+    ASSERT_STR_CONTAINS(got.out, "\"detail\":{\"key\":null,\"value\":null,\"reason\":"
+                                 "\"bad_shape\"}");
+    ASSERT_STR_CONTAINS(got.out, "\"detail\":{\"key\":null,\"value\":\"5\",\"reason\":"
+                                 "\"bad_shape\"}");
+    ASSERT_STR_CONTAINS(got.out, "\"detail\":{\"key\":\"remember.search.max_results\","
+                                 "\"field\":\"version_vector\",\"reason\":\"bad_field\"}");
+    cmd_result_free(&got);
+    harness_remove_tree(tmpl);
+}
+
+/* ST-8.5 with the C-12 lines. */
+static const char k_imp_prefixes_user[] =
+    "{\"key\":\"remember.buckets.prefixes\",\"scope\":\"user\",\"value\":[\"a:\"],"
+    "\"updated_by\":{\"kind\":\"human\",\"id\":null},\"updated_at\":"
+    "\"2026-10-16T07:58:00.000Z\",\"device_id\":\"\",\"version_vector\":{},"
+    "\"deleted_at\":null}";
+
+TEST(import_skips_other_scopes_and_disallowed_layers)
+{
+    char tmpl[] = "/tmp/remember-import-scope-XXXXXX";
+    char brain[REMEMBER_PATH_MAX];
+    char userdb[REMEMBER_PATH_MAX];
+    char file[REMEMBER_PATH_MAX];
+    char brain_pool[512];
+    char brain_idle[512];
+    const char *only_user[] = {"settings", "import", "--scope", "user", file};
+    const char *only_brain[] = {"settings", "import", file, "--scope", "brain", "--no-hooks"};
+    Store *store = open_pair(tmpl, brain, sizeof(brain), userdb, sizeof(userdb));
+    CmdResult got;
+
+    if (store == NULL) {
+        return;
+    }
+    store_close(store);
+    brain_elem(brain_pool, sizeof(brain_pool), "remember.search.candidate_pool", "400",
+               "2026-10-24T09:12:00.000Z", k_dev_a, "{}", NULL);
+    brain_elem(brain_idle, sizeof(brain_idle), "remember.plugins.idle_timeout", "\"5m\"",
+               "2026-10-24T09:12:00.000Z", k_dev_a, "{}", NULL);
+    {
+        const char *rows[] = {brain_pool, k_imp_pool_user, k_imp_prefixes_user, brain_idle};
+
+        write_doc(file, sizeof(file), tmpl, "scope.json", rows, 4U);
+    }
+    got = import_at(brain, userdb, only_user, 5U);
+    ASSERT_EQ_INT(got.exit_code, 0);
+    ASSERT_STREQ(got.err,
+                 "remember: warning: skipped \"remember.search.candidate_pool\": it's a brain "
+                 "setting, and you ran with --scope user.\n"
+                 "remember: warning: skipped \"remember.buckets.prefixes\": it can't be stored for "
+                 "your user.\n"
+                 "remember: warning: skipped \"remember.plugins.idle_timeout\": it's a brain "
+                 "setting, and you ran with --scope user.\n");
+    cmd_result_free(&got);
+    assert_query(userdb, "SELECT value || '|' || updated_by FROM settings",
+                 "300|{\"kind\":\"agent\",\"id\":\"bot2\"}");
+    got = import_at(brain, userdb, only_brain, 6U);
+    ASSERT_EQ_INT(got.exit_code, 0);
+    ASSERT_STREQ(got.err,
+                 "remember: warning: skipped \"remember.search.candidate_pool\": it's a user "
+                 "setting, and you ran with --scope brain.\n"
+                 "remember: warning: skipped \"remember.buckets.prefixes\": it's a user setting, "
+                 "and you ran with --scope brain.\n"
+                 "remember: warning: skipped \"remember.plugins.idle_timeout\": it can't be stored "
+                 "for one brain.\n");
+    cmd_result_free(&got);
+    assert_query(brain, "SELECT key || '=' || value FROM settings",
+                 "remember.search.candidate_pool=400");
+    harness_remove_tree(tmpl);
+}
+
+/* 007-26, 007-31: ST-8.6 on both layers, and the history of the loser. */
+TEST(import_merges_by_vector_then_time_then_device)
+{
+    char tmpl[] = "/tmp/remember-import-merge-XXXXXX";
+    char brain[REMEMBER_PATH_MAX];
+    char userdb[REMEMBER_PATH_MAX];
+    char file[REMEMBER_PATH_MAX];
+    char rows[6][512];
+    char sql[2048];
+    const char *imp[] = {"--json", "settings", "import", file};
+    Store *store = open_pair(tmpl, brain, sizeof(brain), userdb, sizeof(userdb));
+    char err[256];
+    CmdResult got;
+
+    if (store == NULL) {
+        return;
+    }
+    store_close(store);
+    ASSERT_EQ_INT(store_user_db_ensure(userdb, err, sizeof(err)), 0);
+    /* Local user rows: one older, one newer, one at the same stamp. */
+    exec_fixture(userdb, "INSERT INTO settings (key, value, updated_by, updated_at) VALUES "
+                         "('remember.search.candidate_pool','250','{\"kind\":\"human\",\"id\":"
+                         "null}','2026-10-01T00:00:00.000Z'),"
+                         "('remember.search.max_results','40','{\"kind\":\"human\",\"id\":null}',"
+                         "'2026-12-01T00:00:00.000Z'),"
+                         "('remember.plugins.chain_budget','\"3s\"','{\"kind\":\"human\",\"id\":"
+                         "null}','2026-10-16T07:58:00.000Z');");
+    /* Local brain rows, device a. */
+    ASSERT_TRUE(snprintf(sql, sizeof(sql),
+                         "INSERT INTO settings (key, value, updated_by, updated_at, device_id, "
+                         "version_vector, deleted_at, change_seq) VALUES "
+                         "('remember.search.candidate_pool','250','{\"kind\":\"human\",\"id\":"
+                         "null}','2026-10-01T00:00:00.000Z','%s','{\"%s\":2}',NULL,1),"
+                         "('remember.search.max_results','40','{\"kind\":\"human\",\"id\":null}',"
+                         "'2026-10-01T00:00:00.000Z','%s','{\"%s\":5}',NULL,1),"
+                         "('remember.buckets.prefixes','[\"x:\"]','{\"kind\":\"human\",\"id\":"
+                         "null}','2026-10-01T00:00:00.000Z','%s','{\"%s\":1}',NULL,1);"
+                         "UPDATE brain_meta SET change_seq = 10;",
+                         k_dev_a, k_dev_a, k_dev_a, k_dev_a, k_dev_a, k_dev_a) > 0);
+    exec_fixture(brain, sql);
+    /* Brain: the file dominates pool; max is concurrent and later; prefixes is
+       concurrent at the same stamp, and device b is larger. */
+    brain_elem(rows[0], sizeof(rows[0]), "remember.search.candidate_pool", "600",
+               "2026-09-01T00:00:00.000Z", k_dev_b,
+               "{\"01a0d90a-e71c-7a0a-bb2c-3b377482fa51\":2,"
+               "\"01a0d90a-e71c-7a0a-bb2c-3b377482fa52\":1}",
+               NULL);
+    brain_elem(rows[1], sizeof(rows[1]), "remember.search.max_results", "60",
+               "2026-10-02T00:00:00.000Z", k_dev_b, "{\"01a0d90a-e71c-7a0a-bb2c-3b377482fa52\":1}",
+               "2026-10-02T00:00:00.000Z");
+    brain_elem(rows[2], sizeof(rows[2]), "remember.buckets.prefixes", "[\"y:\"]",
+               "2026-10-01T00:00:00.000Z", k_dev_b, "{\"01a0d90a-e71c-7a0a-bb2c-3b377482fa52\":1}",
+               NULL);
+    /* User: newer file row wins, older loses, a tie keeps local. */
+    ASSERT_TRUE(snprintf(rows[3], sizeof(rows[3]), "%s", k_imp_pool_user) > 0);
+    ASSERT_TRUE(snprintf(rows[4], sizeof(rows[4]), "%s", k_imp_max_user) > 0);
+    ASSERT_TRUE(snprintf(rows[5], sizeof(rows[5]),
+                         "{\"key\":\"remember.plugins.chain_budget\",\"scope\":\"user\",\"value\":"
+                         "\"4s\",\"updated_by\":{\"kind\":\"human\",\"id\":null},\"updated_at\":"
+                         "\"2026-10-16T07:58:00.000Z\",\"device_id\":\"\",\"version_vector\":{},"
+                         "\"deleted_at\":null}") > 0);
+    {
+        const char *list[] = {rows[0], rows[1], rows[2], rows[3], rows[4], rows[5]};
+
+        write_doc(file, sizeof(file), tmpl, "merge.json", list, 6U);
+    }
+    got = import_at(brain, userdb, imp, 4U);
+    ASSERT_EQ_INT(got.exit_code, 0);
+    ASSERT_STR_CONTAINS(
+        got.out,
+        "\"data\":{\"count\":6,\"written\":4,\"unchanged\":2,\"skipped\":0,\"rows\":["
+        "{\"key\":\"remember.search.candidate_pool\",\"scope\":\"brain\",\"result\":\"written\","
+        "\"action\":\"set\"},"
+        "{\"key\":\"remember.search.max_results\",\"scope\":\"brain\",\"result\":\"written\","
+        "\"action\":\"tombstone\"},"
+        "{\"key\":\"remember.buckets.prefixes\",\"scope\":\"brain\",\"result\":\"written\","
+        "\"action\":\"set\"},"
+        "{\"key\":\"remember.search.candidate_pool\",\"scope\":\"user\",\"result\":\"written\","
+        "\"action\":\"set\"},"
+        "{\"key\":\"remember.search.max_results\",\"scope\":\"user\",\"result\":\"kept_local\","
+        "\"action\":\"none\"},"
+        "{\"key\":\"remember.plugins.chain_budget\",\"scope\":\"user\",\"result\":"
+        "\"kept_local\",\"action\":\"none\"}]}");
+    cmd_result_free(&got);
+    /* decision:plan20-import-brain-merge: pointwise max, no local bump, change_seq bumped. */
+    ASSERT_TRUE(snprintf(sql, sizeof(sql),
+                         "{\"%s\":2,\"%s\":1}|600|%s|{\"kind\":\"agent\",\"id\":\"peer\"}|11",
+                         k_dev_a, k_dev_b, k_dev_b) > 0);
+    assert_query(brain,
+                 "SELECT version_vector || '|' || value || '|' || device_id || '|' || updated_by "
+                 "|| '|' || change_seq FROM settings WHERE key = 'remember.search.candidate_pool'",
+                 sql);
+    ASSERT_TRUE(snprintf(sql, sizeof(sql), "{\"%s\":5,\"%s\":1}|60|2026-10-02T00:00:00.000Z",
+                         k_dev_a, k_dev_b) > 0);
+    assert_query(brain,
+                 "SELECT version_vector || '|' || value || '|' || deleted_at FROM settings "
+                 "WHERE key = 'remember.search.max_results'",
+                 sql);
+    assert_query(brain, "SELECT value FROM settings WHERE key = 'remember.buckets.prefixes'",
+                 "[\"y:\"]");
+    assert_query(brain, "SELECT change_seq FROM brain_meta", "13");
+    /* The losing value stays in history (g-16). */
+    assert_query(brain,
+                 "SELECT old_value || '>' || ifnull(new_value, 'null') FROM settings_history "
+                 "WHERE key = 'remember.search.max_results'",
+                 "40>null");
+    assert_query(userdb,
+                 "SELECT value || '|' || updated_by FROM settings WHERE key = "
+                 "'remember.search.candidate_pool'",
+                 "300|{\"kind\":\"agent\",\"id\":\"bot2\"}");
+    assert_query(userdb, "SELECT value FROM settings WHERE key = 'remember.search.max_results'",
+                 "40");
+    assert_query(userdb, "SELECT value FROM settings WHERE key = 'remember.plugins.chain_budget'",
+                 "\"3s\"");
+    assert_query(userdb, "SELECT COUNT(*) FROM settings_history", "1");
+    harness_remove_tree(tmpl);
+}
+
+/* A brain row the local vector dominates, or that ties on every rule, stays. */
+TEST(import_keeps_a_brain_row_that_is_newer_or_tied)
+{
+    char tmpl[] = "/tmp/remember-import-keep-XXXXXX";
+    char brain[REMEMBER_PATH_MAX];
+    char userdb[REMEMBER_PATH_MAX];
+    char file[REMEMBER_PATH_MAX];
+    char rows[2][512];
+    char sql[1024];
+    const char *imp[] = {"--json", "settings", "import", "--scope", "brain", file};
+    Store *store = open_pair(tmpl, brain, sizeof(brain), userdb, sizeof(userdb));
+    CmdResult got;
+
+    if (store == NULL) {
+        return;
+    }
+    store_close(store);
+    ASSERT_TRUE(snprintf(sql, sizeof(sql),
+                         "INSERT INTO settings (key, value, updated_by, updated_at, device_id, "
+                         "version_vector, deleted_at, change_seq) VALUES "
+                         "('remember.search.candidate_pool','250','{\"kind\":\"human\",\"id\":"
+                         "null}','2026-10-01T00:00:00.000Z','%s','{\"%s\":3}',NULL,1),"
+                         "('remember.search.max_results','40','{\"kind\":\"human\",\"id\":null}',"
+                         "'2026-10-01T00:00:00.000Z','%s','{\"%s\":1}',NULL,1);",
+                         k_dev_b, k_dev_a, k_dev_b, k_dev_a) > 0);
+    exec_fixture(brain, sql);
+    brain_elem(rows[0], sizeof(rows[0]), "remember.search.candidate_pool", "600",
+               "2026-12-01T00:00:00.000Z", k_dev_b, "{\"01a0d90a-e71c-7a0a-bb2c-3b377482fa51\":2}",
+               NULL);
+    brain_elem(rows[1], sizeof(rows[1]), "remember.search.max_results", "60",
+               "2026-10-01T00:00:00.000Z", k_dev_b, "{\"01a0d90a-e71c-7a0a-bb2c-3b377482fa52\":1}",
+               NULL);
+    {
+        const char *list[] = {rows[0], rows[1]};
+
+        write_doc(file, sizeof(file), tmpl, "keep.json", list, 2U);
+    }
+    got = import_at(brain, userdb, imp, 6U);
+    ASSERT_EQ_INT(got.exit_code, 0);
+    ASSERT_STR_CONTAINS(got.out, "\"written\":0,\"unchanged\":2,");
+    ASSERT_STR_CONTAINS(got.out, "\"result\":\"kept_local\",\"action\":\"none\"},{");
+    cmd_result_free(&got);
+    assert_query(brain, "SELECT group_concat(value, ',') FROM settings", "250,40");
+    assert_query(brain, "SELECT COUNT(*) FROM settings_history", "0");
+    ASSERT_TRUE(access(userdb, F_OK) != 0);
+    harness_remove_tree(tmpl);
+}
+
+/* A local tombstone is not a value: the import's history row has no old value. */
+TEST(import_over_a_local_tombstone_has_no_old_value)
+{
+    char tmpl[] = "/tmp/remember-import-tomb-XXXXXX";
+    char brain[REMEMBER_PATH_MAX];
+    char userdb[REMEMBER_PATH_MAX];
+    char file[REMEMBER_PATH_MAX];
+    char row[512];
+    char sql[1024];
+    const char *imp[] = {"settings", "import", file};
+    Store *store = open_pair(tmpl, brain, sizeof(brain), userdb, sizeof(userdb));
+    CmdResult got;
+
+    if (store == NULL) {
+        return;
+    }
+    store_close(store);
+    ASSERT_TRUE(snprintf(sql, sizeof(sql),
+                         "INSERT INTO settings (key, value, updated_by, updated_at, device_id, "
+                         "version_vector, deleted_at, change_seq) VALUES "
+                         "('remember.search.candidate_pool','250','{\"kind\":\"human\",\"id\":"
+                         "null}','2026-10-01T00:00:00.000Z','%s','{\"%s\":1}',"
+                         "'2026-10-01T00:00:00.000Z',1);",
+                         k_dev_a, k_dev_a) > 0);
+    exec_fixture(brain, sql);
+    brain_elem(row, sizeof(row), "remember.search.candidate_pool", "600",
+               "2026-10-02T00:00:00.000Z", k_dev_a, "{\"01a0d90a-e71c-7a0a-bb2c-3b377482fa51\":2}",
+               NULL);
+    {
+        const char *list[] = {row};
+
+        write_doc(file, sizeof(file), tmpl, "tomb.json", list, 1U);
+    }
+    got = import_at(brain, userdb, imp, 3U);
+    ASSERT_EQ_INT(got.exit_code, 0);
+    cmd_result_free(&got);
+    assert_query(brain,
+                 "SELECT ifnull(old_value, 'null') || '>' || new_value FROM settings_history",
+                 "null>600");
+    assert_query(brain,
+                 "SELECT ifnull(deleted_at, 'live') FROM settings WHERE key = "
+                 "'remember.search.candidate_pool'",
+                 "live");
+    harness_remove_tree(tmpl);
+}
+
+/* 007 test 42 and the C-43 parse drafts: the file is refused, nothing changes. */
+TEST(import_refuses_a_file_that_is_not_a_settings_document)
+{
+    static const char *const bad[] = {
+        "nope",
+        "[1]",
+        "{\"format\":\"remember-export\",\"version\":1,\"settings\":[]}",
+        "{\"format\":7,\"version\":1,\"settings\":[]}",
+        "{\"format\":\"remember-settings-export\",\"version\":\"1\",\"settings\":[]}",
+        "{\"format\":\"remember-settings-export\",\"version\":0,\"settings\":[]}",
+        "{\"format\":\"remember-settings-export\",\"version\":1}",
+        "{\"format\":\"remember-settings-export\",\"version\":1,\"settings\":{}}",
+        "{format:'remember-settings-export',version:1,settings:[]}"};
+    char tmpl[] = "/tmp/remember-import-parse-XXXXXX";
+    char brain[REMEMBER_PATH_MAX];
+    char userdb[REMEMBER_PATH_MAX];
+    char file[REMEMBER_PATH_MAX];
+    char missing[REMEMBER_PATH_MAX];
+    char want[REMEMBER_PATH_MAX + 128];
+    const char *imp[] = {"settings", "import", file};
+    const char *json[] = {"--json", "settings", "import", file};
+    const char *gone[] = {"settings", "import", missing};
+    const char *dir[] = {"settings", "import", tmpl};
+    Store *store = open_pair(tmpl, brain, sizeof(brain), userdb, sizeof(userdb));
+    CmdResult got;
+    size_t i = 0;
+
+    if (store == NULL) {
+        return;
+    }
+    store_close(store);
+    ASSERT_TRUE(snprintf(file, sizeof(file), "%s/bad.json", tmpl) > 0);
+    ASSERT_TRUE(snprintf(want, sizeof(want),
+                         "remember: \"%s\" isn't a remember settings file. Check the import "
+                         "source, then try again.\n",
+                         file) > 0);
+    for (i = 0; i < sizeof(bad) / sizeof(bad[0]); i++) {
+        write_text(file, bad[i]);
+        got = import_at(brain, userdb, imp, 3U);
+        ASSERT_EQ_INT(got.exit_code, 1);
+        ASSERT_STREQ(got.out, "");
+        ASSERT_STREQ(got.err, want);
+        cmd_result_free(&got);
+    }
+    write_text(file, "{\"format\":\"remember-settings-export\",\"version\":2,\"settings\":7}");
+    got = import_at(brain, userdb, imp, 3U);
+    ASSERT_EQ_INT(got.exit_code, 1);
+    ASSERT_TRUE(snprintf(want, sizeof(want),
+                         "remember: \"%s\" is settings file version 2; this remember reads "
+                         "version 1. Update remember, then try again.\n",
+                         file) > 0);
+    ASSERT_STREQ(got.err, want);
+    cmd_result_free(&got);
+    got = import_at(brain, userdb, json, 4U);
+    ASSERT_EQ_INT(got.exit_code, 1);
+    ASSERT_STREQ(got.err, "");
+    ASSERT_STR_CONTAINS(got.out, "\"type\":\"setting.import.result\",\"error\":{\"code\":"
+                                 "\"import_parse\",\"message\":");
+    ASSERT_STR_CONTAINS(got.out, "\"fix\":\"Update remember, then try again.\"");
+    cmd_result_free(&got);
+    ASSERT_TRUE(snprintf(missing, sizeof(missing), "%s/missing.json", tmpl) > 0);
+    got = import_at(brain, userdb, gone, 3U);
+    ASSERT_EQ_INT(got.exit_code, 1);
+    ASSERT_TRUE(snprintf(want, sizeof(want),
+                         "remember: can't read \"%s\": No such file or directory. Check the "
+                         "import source, then try again.\n",
+                         missing) > 0);
+    ASSERT_STREQ(got.err, want);
+    cmd_result_free(&got);
+    got = import_at(brain, userdb, dir, 3U);
+    ASSERT_EQ_INT(got.exit_code, 1);
+    ASSERT_STR_CONTAINS(got.err, "remember: can't read \"");
+    ASSERT_STR_CONTAINS(got.err, "\": Is a directory. Check the import source, then try again.\n");
+    cmd_result_free(&got);
+    assert_query(brain, "SELECT COUNT(*) FROM settings", "0");
+    ASSERT_TRUE(access(userdb, F_OK) != 0);
+    harness_remove_tree(tmpl);
+}
+
+/* decision:plan20-import-quota: a full layer fails the import before anything is written. */
+TEST(import_over_quota_writes_nothing)
+{
+    char tmpl[] = "/tmp/remember-import-quota-XXXXXX";
+    char brain[REMEMBER_PATH_MAX];
+    char userdb[REMEMBER_PATH_MAX];
+    char file[REMEMBER_PATH_MAX];
+    char user_file[REMEMBER_PATH_MAX];
+    char rows[2][512];
+    char err[256];
+    const char *imp[] = {"settings", "import", file};
+    const char *imp_user[] = {"--json", "settings", "import", user_file};
+    const char *user_rows[] = {k_imp_max_user, k_imp_pool_user};
+    Store *store = open_pair(tmpl, brain, sizeof(brain), userdb, sizeof(userdb));
+    CmdResult got;
+
+    if (store == NULL) {
+        return;
+    }
+    store_close(store);
+    insert_dummy_settings(brain, true, SETTING_ROW_QUOTA - 1);
+    ASSERT_EQ_INT(store_user_db_ensure(userdb, err, sizeof(err)), 0);
+    insert_dummy_settings(userdb, false, SETTING_ROW_QUOTA - 1);
+    brain_elem(rows[0], sizeof(rows[0]), "remember.search.candidate_pool", "400",
+               "2026-10-24T09:12:00.000Z", k_dev_a, "{}", NULL);
+    brain_elem(rows[1], sizeof(rows[1]), "remember.search.max_results", "9",
+               "2026-10-24T09:12:00.000Z", k_dev_a, "{}", NULL);
+    {
+        const char *list[] = {rows[0], rows[1]};
+
+        write_doc(file, sizeof(file), tmpl, "quota.json", list, 2U);
+    }
+    write_doc(user_file, sizeof(user_file), tmpl, "quota-user.json", user_rows, 2U);
+    got = import_at(brain, userdb, imp, 3U);
+    ASSERT_EQ_INT(got.exit_code, 1);
+    ASSERT_STREQ(got.err, "remember: this brain has 256 settings, the most it can hold. Reset "
+                          "settings you don't need with 'remember settings reset'.\n");
+    cmd_result_free(&got);
+    assert_query(brain, "SELECT COUNT(*) FROM settings", "255");
+    assert_query(brain, "SELECT COUNT(*) FROM settings_history", "0");
+    got = import_at(brain, userdb, imp_user, 4U);
+    ASSERT_EQ_INT(got.exit_code, 1);
+    ASSERT_STR_CONTAINS(got.out, "\"code\":\"quota_exceeded\",\"message\":\"you have 256 user "
+                                 "settings, the most remember can hold.\"");
+    ASSERT_STR_CONTAINS(got.out, "\"detail\":{\"quota\":\"settings_limit\"}");
+    cmd_result_free(&got);
+    assert_query(userdb, "SELECT COUNT(*) FROM settings", "255");
+    harness_remove_tree(tmpl);
+}
+
+/* decision:plan20-import-dry-run-draft: the same rows and results, no write, no user.db. */
+TEST(import_dry_run_writes_nothing)
+{
+    char tmpl[] = "/tmp/remember-import-dry-XXXXXX";
+    char brain[REMEMBER_PATH_MAX];
+    char userdb[REMEMBER_PATH_MAX];
+    char file[REMEMBER_PATH_MAX];
+    char pool[512];
+    char want[REMEMBER_PATH_MAX + 128];
+    const char *imp[] = {"settings", "import", "--dry-run", file};
+    const char *json[] = {"--json", "settings", "import", file, "--dry-run"};
+    Store *store = open_pair(tmpl, brain, sizeof(brain), userdb, sizeof(userdb));
+    CmdResult got;
+
+    if (store == NULL) {
+        return;
+    }
+    store_close(store);
+    brain_elem(pool, sizeof(pool), "remember.search.candidate_pool", "400",
+               "2026-10-24T09:12:00.000Z", k_dev_a, "{}", NULL);
+    {
+        const char *list[] = {pool, k_imp_pool_user, k_imp_bad_pool};
+
+        write_doc(file, sizeof(file), tmpl, "dry.json", list, 3U);
+    }
+    got = import_at(brain, userdb, imp, 4U);
+    ASSERT_EQ_INT(got.exit_code, 0);
+    ASSERT_STREQ(got.err, "remember: warning: skipped \"remember.search.candidate_pool\": \"abc\" "
+                          "isn't a valid value.\n");
+    ASSERT_TRUE(snprintf(want, sizeof(want),
+                         "Would import \"%s\": 2 settings written, 0 unchanged, 1 skipped. "
+                         "Nothing was changed.\n",
+                         file) > 0);
+    ASSERT_STREQ(got.out, want);
+    cmd_result_free(&got);
+    got = import_at(brain, userdb, json, 5U);
+    ASSERT_EQ_INT(got.exit_code, 0);
+    ASSERT_STR_CONTAINS(got.out, "\"data\":{\"count\":3,\"written\":2,\"unchanged\":0,"
+                                 "\"skipped\":1,\"rows\":[{\"key\":"
+                                 "\"remember.search.candidate_pool\",\"scope\":\"brain\","
+                                 "\"result\":\"written\",\"action\":\"set\"}");
+    cmd_result_free(&got);
+    assert_query(brain, "SELECT COUNT(*) FROM settings", "0");
+    assert_query(brain, "SELECT change_seq FROM brain_meta", "0");
+    ASSERT_TRUE(access(userdb, F_OK) != 0);
+    harness_remove_tree(tmpl);
+}
+
+/* Arm one store fault (alloc, prepare, step, exec), import, disarm all. */
+/* NOLINTBEGIN(bugprone-easily-swappable-parameters) */
+static SettingStatus import_with_fault(int kind, int n, Store *store, const char *userdb,
+                                       const char *doc, SettingImportReport *rep, char *err,
+                                       size_t errlen)
+/* NOLINTEND(bugprone-easily-swappable-parameters) */
+{
+    SettingStatus st = SETTING_OK;
+
+    if (kind == 0) {
+        store_test_fail_alloc_after(n);
+    } else if (kind == 1) {
+        store_test_fail_prepare_after(n);
+    } else if (kind == 2) {
+        store_test_fail_step_after(n);
+    } else {
+        store_test_fail_exec_after(n);
+    }
+    st = store_setting_import(store, userdb, doc, strlen(doc), SETTING_LAYER_AUTO, false, rep, err,
+                              errlen);
+    store_test_fail_alloc_after(-1);
+    store_test_fail_prepare_after(-1);
+    store_test_fail_step_after(-1);
+    store_test_fail_exec_after(-1);
+    return st;
+}
+
+/* Every store fault in the merge: the import fails as a store error, writes
+   nothing, and frees its rows. The first run that gets through writes all four. */
+static void import_fault_sweep(int kind, const char *doc)
+{
+    enum { IMPORT_SWEEP_MAX = 400 };
+    char tmpl[] = "/tmp/remember-import-fault-XXXXXX";
+    char brain[REMEMBER_PATH_MAX];
+    char userdb[REMEMBER_PATH_MAX];
+    char err[256];
+    Store *store = open_pair(tmpl, brain, sizeof(brain), userdb, sizeof(userdb));
+    SettingWriteResult wr;
+    SettingImportReport rep;
+    int n = 0;
+
+    if (store == NULL) {
+        return;
+    }
+    ASSERT_EQ_INT(set_one(store, userdb, "remember.search.candidate_pool", "400",
+                          SETTING_LAYER_BRAIN, NULL, &wr, err, sizeof(err)),
+                  SETTING_OK);
+    ASSERT_EQ_INT(set_one(store, userdb, "remember.search.max_results", "30", SETTING_LAYER_USER,
+                          NULL, &wr, err, sizeof(err)),
+                  SETTING_OK);
+    for (n = 0; n < IMPORT_SWEEP_MAX; n++) {
+        SettingStatus st = import_with_fault(kind, n, store, userdb, doc, &rep, err, sizeof(err));
+
+        if (st == SETTING_OK) {
+            break;
+        }
+        ASSERT_EQ_INT(st, SETTING_ERR_STORE);
+        ASSERT_TRUE(err[0] != '\0');
+        ASSERT_TRUE(rep.rows == NULL);
+    }
+    ASSERT_TRUE(n > 0 && n < IMPORT_SWEEP_MAX);
+    if (kind == 3) {
+        /* Two files do not commit as one: a failed user.db COMMIT leaves the
+           brain's two rows committed, so the next run finds them unchanged. */
+        ASSERT_EQ_INT((int)rep.written, 2);
+        ASSERT_EQ_INT((int)rep.unchanged, 2);
+    } else {
+        ASSERT_EQ_INT((int)rep.written, 4);
+    }
+    ASSERT_EQ_INT((int)rep.skipped, 1);
+    ASSERT_EQ_INT(rep.rows[4].reason, SETTING_SKIP_INVALID_VALUE);
+    store_setting_import_free(&rep);
+    store_close(store);
+    harness_remove_tree(tmpl);
+}
+
+TEST(import_survives_every_store_fault)
+{
+    char doc[4096];
+    char pool[512];
+    char prefixes[512];
+    int kind = 0;
+
+    brain_elem(pool, sizeof(pool), "remember.search.candidate_pool", "600",
+               "2030-01-01T00:00:00.000Z", k_dev_b, "{\"01a0d90a-e71c-7a0a-bb2c-3b377482fa52\":1}",
+               NULL);
+    brain_elem(prefixes, sizeof(prefixes), "remember.buckets.prefixes", "[\"a:\",\"b:\"]",
+               "2030-01-01T00:00:00.000Z", k_dev_b, "{\"01a0d90a-e71c-7a0a-bb2c-3b377482fa52\":2}",
+               NULL);
+    ASSERT_TRUE(snprintf(doc, sizeof(doc),
+                         "%s%s,%s,{\"key\":\"remember.plugins.chain_budget\",\"scope\":\"user\","
+                         "\"value\":\"2s\",\"updated_by\":{\"kind\":\"human\",\"id\":null},"
+                         "\"updated_at\":\"2030-01-01T00:00:00.000Z\"},{\"key\":"
+                         "\"remember.search.max_results\",\"scope\":\"user\",\"value\":40,"
+                         "\"updated_by\":{\"kind\":\"human\",\"id\":null},\"updated_at\":"
+                         "\"2030-01-01T00:00:00.000Z\"},{\"key\":\"remember.buckets.prefixes\","
+                         "\"scope\":\"brain\",\"value\":[\"c:\",\"d\\u0000:\"]}]}",
+                         k_imp_head, pool, prefixes) > 0);
+    for (kind = 0; kind < 4; kind++) {
+        import_fault_sweep(kind, doc);
+    }
+    {
+        SettingImportReport rep;
+        char err[64];
+
+        ASSERT_EQ_INT(store_setting_import(NULL, NULL, doc, strlen(doc), SETTING_LAYER_AUTO, false,
+                                           &rep, err, sizeof(err)),
+                      SETTING_ERR_STORE);
+        ASSERT_STREQ(err, "internal error");
+    }
+}
+
+/* ST-7.10: a hook cannot import. Usage errors stay usage. */
+TEST(import_from_a_hook_and_usage_errors)
+{
+    char tmpl[] = "/tmp/remember-import-hook-XXXXXX";
+    char brain[REMEMBER_PATH_MAX];
+    char userdb[REMEMBER_PATH_MAX];
+    char file[REMEMBER_PATH_MAX];
+    const char *one_row[] = {k_imp_pool_user};
+    const char *imp[] = {"--json", "settings", "import", file};
+    const char *none[] = {"settings", "import"};
+    const char *two[] = {"settings", "import", "a.json", "b.json"};
+    const char *twice[] = {"settings", "import", "--dry-run", "--dry-run", "a.json"};
+    const char *scope[] = {"settings", "import", "--scope", "all", "a.json"};
+    const char *unknown[] = {"settings", "import", "--as", "agent", "a.json"};
+    const char *dashed[] = {"settings", "import", "--", "-x.json"};
+    Store *store = open_pair(tmpl, brain, sizeof(brain), userdb, sizeof(userdb));
+    CmdResult got;
+
+    if (store == NULL) {
+        return;
+    }
+    store_close(store);
+    write_doc(file, sizeof(file), tmpl, "hook.json", one_row, 1U);
+    // NOLINTNEXTLINE(concurrency-mt-unsafe)
+    ASSERT_EQ_INT(setenv("REMEMBER_HOOK_DEPTH", "1", 1), 0);
+    got = import_at(brain, userdb, imp, 4U);
+    // NOLINTNEXTLINE(concurrency-mt-unsafe)
+    ASSERT_EQ_INT(unsetenv("REMEMBER_HOOK_DEPTH"), 0);
+    ASSERT_EQ_INT(got.exit_code, 1);
+    ASSERT_STR_CONTAINS(got.out, "\"code\":\"setting_from_hook\",\"message\":\"a hook or plugin "
+                                 "can't change settings.\"");
+    ASSERT_STR_CONTAINS(got.out, "\"detail\":{\"hook\":\"1\"}");
+    cmd_result_free(&got);
+    ASSERT_TRUE(access(userdb, F_OK) != 0);
+    got = import_at(brain, userdb, none, 2U);
+    ASSERT_STREQ(got.err, "remember: settings import requires a file\n");
+    cmd_result_free(&got);
+    got = import_at(brain, userdb, two, 4U);
+    ASSERT_STREQ(got.err, "remember: settings import takes one file\n");
+    cmd_result_free(&got);
+    got = import_at(brain, userdb, twice, 5U);
+    ASSERT_STREQ(got.err, "remember: duplicate --dry-run\n");
+    cmd_result_free(&got);
+    got = import_at(brain, userdb, scope, 5U);
+    ASSERT_STREQ(got.err, "remember: invalid --scope (use brain or user)\n");
+    cmd_result_free(&got);
+    got = import_at(brain, userdb, unknown, 5U);
+    ASSERT_STREQ(got.err, "remember: unknown option '--as'\n");
+    cmd_result_free(&got);
+    got = import_at(brain, userdb, dashed, 4U);
+    ASSERT_EQ_INT(got.exit_code, 1);
+    ASSERT_STR_CONTAINS(got.err, "can't read \"-x.json\"");
+    cmd_result_free(&got);
+    harness_remove_tree(tmpl);
+}
+
 /* A value that is not JSON cannot be spliced into the document. */
 TEST(export_fails_on_a_hand_edited_value_that_is_not_json)
 {
@@ -6926,6 +8029,98 @@ TEST(list_live_reports_a_failed_read)
     close_pair(store, tmpl);
 }
 
+/* The CLI side: no HOME, a user.db that is a directory, and a short heap
+   in the read and in each warning. */
+TEST(import_reports_home_store_and_memory_failures)
+{
+    char tmpl[] = "/tmp/remember-import-cli-fault-XXXXXX";
+    char brain[REMEMBER_PATH_MAX];
+    char userdb[REMEMBER_PATH_MAX];
+    char file[REMEMBER_PATH_MAX];
+    char dirdb[REMEMBER_PATH_MAX];
+    const char *rows[] = {k_imp_max_user, k_imp_bad_pool, k_imp_unknown};
+    const char *imp[] = {"settings", "import", file};
+    const char *argv[] = {"remember", "--db", brain, "settings", "import", file};
+    Store *store = open_pair(tmpl, brain, sizeof(brain), userdb, sizeof(userdb));
+    EnvHold hold;
+    SweepSaw saw;
+    CmdResult got;
+
+    if (store == NULL) {
+        return;
+    }
+    store_close(store);
+    write_doc(file, sizeof(file), tmpl, "faults.json", rows, 3U);
+    env_hold(&hold);
+    ASSERT_EQ_INT(unsetenv("HOME"), 0);
+    ASSERT_EQ_INT(unsetenv("XDG_DATA_HOME"), 0);
+    ASSERT_EQ_INT(unsetenv("REMEMBER_USER_DB"), 0);
+    got = run_remember(brain, imp, 3U, NULL);
+    env_release(&hold);
+    ASSERT_EQ_INT(got.exit_code, 1);
+    ASSERT_STREQ(got.err, "remember: HOME is not set\n");
+    cmd_result_free(&got);
+    ASSERT_TRUE(snprintf(dirdb, sizeof(dirdb), "%s/userdir", tmpl) > 0);
+    ASSERT_EQ_INT(mkdir(dirdb, 0700), 0);
+    got = import_at(brain, dirdb, imp, 3U);
+    ASSERT_EQ_INT(got.exit_code, 1);
+    ASSERT_TRUE(got.err != NULL && strncmp(got.err, "remember: ", 10) == 0);
+    cmd_result_free(&got);
+    hold_fixture_env(&hold, userdb);
+    saw = sweep_alloc(argv, (int)(sizeof(argv) / sizeof(argv[0])));
+    env_release(&hold);
+    ASSERT_EQ_INT(saw.oom, 1);
+    {
+        /* Over one 4 KiB read chunk: the buffer grows and keeps what it read. */
+        enum { PAD = 6000 };
+        char big[PAD + 1024];
+        int head = snprintf(big, sizeof(big), "%s%s", k_imp_head, k_imp_max_user);
+
+        ASSERT_TRUE(head > 0 && (size_t)head + (size_t)PAD + 3U < sizeof(big));
+        memset(big + head, ' ', (size_t)PAD);
+        memcpy(big + head + PAD, "]}", 3U);
+        write_text(file, big);
+        got = import_at(brain, userdb, imp, 3U);
+        ASSERT_EQ_INT(got.exit_code, 0);
+        ASSERT_STR_CONTAINS(got.out, ": 0 settings written, 1 unchanged, 0 skipped.");
+        cmd_result_free(&got);
+    }
+    harness_remove_tree(tmpl);
+}
+
+/* One process, two runs: the plain export's mark does not reach the --json get. */
+TEST(a_plain_export_does_not_mark_the_next_json_run)
+{
+    char tmpl[] = "/tmp/remember-export-mark-XXXXXX";
+    char brain[REMEMBER_PATH_MAX];
+    char userdb[REMEMBER_PATH_MAX];
+    Store *store = open_pair(tmpl, brain, sizeof(brain), userdb, sizeof(userdb));
+    EnvHold hold;
+    const char *plain[] = {"remember", "--db", brain, "settings", "export"};
+    const char *json[] = {
+        "remember", "--db", brain, "--json", "settings", "get", "remember.search.max_results"};
+    Captured first;
+    Captured got;
+
+    if (store == NULL) {
+        return;
+    }
+    store_close(store);
+    env_hold(&hold);
+    ASSERT_EQ_INT(setenv("REMEMBER_USER_DB", userdb, 1), 0);
+    first = capture_run(plain, 5);
+    ASSERT_EQ_INT(first.rc, 0);
+    free(first.out);
+    free(first.err);
+    got = capture_run(json, 7);
+    env_release(&hold);
+    ASSERT_EQ_INT(got.rc, 0);
+    ASSERT_TRUE(got.out != NULL && strncmp(got.out, "{\"format\":\"remember-message\"", 28) == 0);
+    free(got.out);
+    free(got.err);
+    harness_remove_tree(tmpl);
+}
+
 TEST(set_and_reset_hit_alloc_and_prepare_faults)
 {
     /* 3276 still allocates. One more returns quota before that malloc. */
@@ -7191,6 +8386,22 @@ void register_settings_tests(void)
     RUN_TEST(export_of_nothing_is_an_empty_list);
     RUN_TEST(export_usage_errors_use_the_envelope_under_json);
     RUN_TEST(export_fails_on_a_hand_edited_value_that_is_not_json);
+    RUN_TEST(export_reports_a_failed_read);
+    RUN_TEST(export_without_home_fails_unless_the_scope_is_brain);
+    RUN_TEST(export_reports_a_failed_write);
+    RUN_TEST(import_round_trips_an_export);
+    RUN_TEST(import_skips_a_bad_value_and_an_unknown_key);
+    RUN_TEST(import_skips_bad_shapes_and_bad_fields);
+    RUN_TEST(import_skips_other_scopes_and_disallowed_layers);
+    RUN_TEST(import_merges_by_vector_then_time_then_device);
+    RUN_TEST(import_keeps_a_brain_row_that_is_newer_or_tied);
+    RUN_TEST(import_over_a_local_tombstone_has_no_old_value);
+    RUN_TEST(import_refuses_a_file_that_is_not_a_settings_document);
+    RUN_TEST(import_over_quota_writes_nothing);
+    RUN_TEST(import_dry_run_writes_nothing);
+    RUN_TEST(import_from_a_hook_and_usage_errors);
+    RUN_TEST(import_survives_every_store_fault);
+    RUN_TEST(import_reports_home_store_and_memory_failures);
     RUN_TEST(set_after_a_brain_reset_has_no_old_value);
     RUN_TEST(set_and_reset_take_the_hook_flags);
     RUN_TEST(a_hook_cannot_set_or_reset);
@@ -7211,6 +8422,7 @@ void register_settings_tests(void)
     RUN_TEST(reset_after_dash_dash_unknown_key_and_idle_scope);
     RUN_TEST(json_report_fails_when_another_layer_is_not_json);
     RUN_TEST(list_live_reports_a_failed_read);
+    RUN_TEST(a_plain_export_does_not_mark_the_next_json_run);
     RUN_TEST(set_and_reset_hit_alloc_and_prepare_faults);
 }
 // NOLINTEND(cppcoreguidelines-avoid-magic-numbers,readability-magic-numbers)

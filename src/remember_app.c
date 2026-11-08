@@ -361,6 +361,7 @@ static void print_command_help(CliCommand topic)
         (void)fprintf(out, "  remember settings reset --namespace NS [--scope brain|user] --yes\n");
         (void)fprintf(out, "  remember settings reset --all --scope brain|user --yes\n");
         (void)fprintf(out, "  remember settings export [--scope brain|user|all]\n");
+        (void)fprintf(out, "  remember settings import FILE [--dry-run] [--scope brain|user]\n");
         (void)fprintf(out, "Without --scope, set and reset write the user layer unless the key "
                            "allows only the brain.\n");
         print_hooks_help(out);

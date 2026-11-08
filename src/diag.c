@@ -169,6 +169,7 @@ static const char *const k_warning_codes[DIAG_WARN_COUNT] = {
     [DIAG_WARN_SETTING_INVALID] = "setting_invalid",
     [DIAG_WARN_FLAG_MEANING_CHANGED] = "flag_meaning_changed",
     [DIAG_WARN_UNKNOWN_FIELD] = "unknown_field",
+    [DIAG_WARN_SETTING_IMPORT_SKIPPED] = "setting_import_skipped",
 };
 
 /* Plain line lead per warning. E2.3 gives raw_query_ignored its own words; the
@@ -180,6 +181,7 @@ static const char *const k_warning_plain_prefix[DIAG_WARN_COUNT] = {
     [DIAG_WARN_SETTING_INVALID] = "warning: ",
     [DIAG_WARN_FLAG_MEANING_CHANGED] = "warning: ",
     [DIAG_WARN_UNKNOWN_FIELD] = "warning: ",
+    [DIAG_WARN_SETTING_IMPORT_SKIPPED] = "warning: ",
 };
 
 static const char *catalog_name(const char *const *names, size_t count, size_t index)
@@ -283,7 +285,8 @@ static int write_json_notice_head(FILE *err, const char *code, const char *messa
     return 0;
 }
 
-/* ,"detail":{"<name>":"<value>",...} in the given order; nothing when n is 0. */
+/* ,"detail":{"<name>":"<value>",...} in the given order; nothing when n is 0.
+   A NULL value is null. */
 static int write_json_detail_fields(FILE *err, const DiagDetailField *fields, size_t n)
 {
     size_t i = 0;
@@ -298,8 +301,12 @@ static int write_json_detail_fields(FILE *err, const DiagDetailField *fields, si
         if (i > 0U && fputc(',', err) == EOF) {
             return -1;
         }
-        if (output_json_string(err, fields[i].name) != 0 || fputc(':', err) == EOF ||
-            output_json_string(err, fields[i].value) != 0) {
+        if (output_json_string(err, fields[i].name) != 0 || fputc(':', err) == EOF) {
+            return -1;
+        }
+        /* A NULL value is JSON null (007 ST-8.4: a bad_shape row's absent key). */
+        if (fields[i].value == NULL ? fputs("null", err) < 0
+                                    : output_json_string(err, fields[i].value) != 0) {
             return -1;
         }
     }

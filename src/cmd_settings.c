@@ -2806,7 +2806,8 @@ static int write_export(FILE *out, const char *now, const SettingExportRow *rows
     return fputs("]}\n", out) < 0 ? -1 : 0;
 }
 
-/* ST-8.1: one plain document. Under --json a failure is still the envelope. */
+/* ST-8.1: one plain document. Under --json a failure is still the envelope.
+   --scope brain reads no user.db, so it needs no HOME. */
 static int cmd_settings_export(Store *store, int argc, const char **argv)
 {
     SettingLayer layer = SETTING_LAYER_AUTO;
@@ -2818,25 +2819,421 @@ static int cmd_settings_export(Store *store, int argc, const char **argv)
     int rc = REMEMBER_OK;
 
     err[0] = '\0';
+    userdb[0] = '\0';
     if (parse_export(argc, argv, &layer) != 0) {
         return REMEMBER_ERR;
     }
-    if (util_resolve_user_db_path(userdb, sizeof(userdb), err, sizeof(err)) != 0) {
+    if (utc_now(now, sizeof(now)) != 0) {
+        err_msg(DIAG_INTERNAL, "internal error");
+        return REMEMBER_ERR;
+    }
+    if (layer != SETTING_LAYER_BRAIN &&
+        util_resolve_user_db_path(userdb, sizeof(userdb), err, sizeof(err)) != 0) {
         return fail_store(err);
     }
     if (store_setting_export(store, userdb, layer, &rows, &n, err, sizeof(err)) != SETTING_OK) {
         return fail_store(err);
     }
-    if (utc_now(now, sizeof(now)) != 0) {
-        err_msg(DIAG_INTERNAL, "internal error");
-        rc = REMEMBER_ERR;
-    } else if (write_export(app_out(), now, rows, n) != 0) {
-        err_msg(DIAG_INTERNAL, "failed to write output");
-        rc = REMEMBER_ERR;
-    } else {
-        app_mark_document();
-    }
+    rc = write_export(app_out(), now, rows, n);
     store_setting_export_free(rows, n);
+    if (rc != 0) {
+        err_msg(DIAG_INTERNAL, "failed to write output");
+        return REMEMBER_ERR;
+    }
+    app_mark_document();
+    return REMEMBER_OK;
+}
+
+/* ---- settings import (ST-8.4 to ST-8.7, C-12, C-13, C-14, C-14a) --------- */
+
+typedef struct {
+    const char *path;
+    SettingLayer only; /* AUTO without --scope */
+    bool dry_run;
+    char pad_[3];
+} ImportOpts;
+
+static int take_import_option(int *index, int argc, const char **argv, ImportOpts *opt,
+                              GetOpts *scope)
+{
+    const char *arg = argv[*index];
+
+    if (strcmp(arg, "--scope") == 0) {
+        return take_scope(index, argc, argv, scope);
+    }
+    if (strcmp(arg, "--dry-run") == 0) {
+        if (opt->dry_run) {
+            err_msg(DIAG_USAGE, "duplicate --dry-run");
+            return -1;
+        }
+        opt->dry_run = true;
+        return 0;
+    }
+    if (cmd_is_hooks_flag(arg)) {
+        return 0;
+    }
+    err_fmt(DIAG_USAGE, "unknown option '%s'", arg);
+    return -1;
+}
+
+static int parse_import(int argc, const char **argv, ImportOpts *opt)
+{
+    GetOpts scope;
+    bool end_opts = false;
+    int i = 0;
+
+    memset(opt, 0, sizeof(*opt));
+    memset(&scope, 0, sizeof(scope));
+    for (i = 1; i < argc; i++) {
+        const char *arg = argv[i];
+
+        if (!end_opts && strcmp(arg, "--") == 0) {
+            end_opts = true;
+        } else if (!end_opts && arg[0] == '-' && arg[1] != '\0') {
+            if (take_import_option(&i, argc, argv, opt, &scope) != 0) {
+                return -1;
+            }
+        } else if (opt->path != NULL) {
+            err_msg(DIAG_USAGE, "settings import takes one file");
+            return -1;
+        } else {
+            opt->path = arg;
+        }
+    }
+    if (opt->path == NULL) {
+        err_msg(DIAG_USAGE, "settings import requires a file");
+        return -1;
+    }
+    if (scope.scope_set) {
+        opt->only = scope.scope;
+    }
+    return 0;
+}
+
+/* The whole file, or NULL with errno set. */
+static char *read_import_file(const char *path, size_t *len)
+{
+    enum { READ_CHUNK = 4096 };
+    /* macOS fopen has no 'e' (O_CLOEXEC) mode; CLI is short-lived. */
+    // NOLINTNEXTLINE(android-cloexec-fopen)
+    FILE *f = fopen(path, "rb");
+    char *buf = NULL;
+    size_t n = 0;
+    size_t cap = 0;
+    int saved = 0;
+
+    *len = 0U;
+    if (f == NULL) {
+        return NULL;
+    }
+    for (;;) {
+        size_t got = 0;
+        size_t want = 0;
+
+        if (n == cap) {
+            size_t next = (cap == 0U) ? (size_t)READ_CHUNK : cap * 2U;
+            /* malloc, not realloc, so the test allocator reaches this failure. */
+            char *grown = (char *)malloc(next);
+
+            if (grown == NULL) {
+                free(buf);
+                (void)fclose(f);
+                errno = ENOMEM;
+                return NULL;
+            }
+            if (n > 0U) {
+                memcpy(grown, buf, n);
+            }
+            free(buf);
+            buf = grown;
+            cap = next;
+        }
+        want = cap - n;
+        got = fread(buf + n, 1U, want, f);
+        n += got;
+        if (got < want) {
+            break; /* end of file or an error: never read the stream again */
+        }
+    }
+    saved = errno;
+    if (ferror(f) != 0) {
+        free(buf);
+        (void)fclose(f);
+        errno = (saved != 0) ? saved : EIO;
+        return NULL;
+    }
+    (void)fclose(f);
+    *len = n;
+    return buf;
+}
+
+/* decision:plan20-import-parse-draft (C-43 draft). */
+static int report_unreadable(const char *path)
+{
+    int saved = errno;
+
+    if (saved == ENOMEM) {
+        return report_oom();
+    }
+    /* The CLI is one thread (the same strerror use as store_sqlite.c). */
+    // NOLINTNEXTLINE(concurrency-mt-unsafe)
+    return emit_fix(DIAG_IMPORT_PARSE, fmt_alloc("can't read \"%s\": %s.", path, strerror(saved)),
+                    diag_code_fix(DIAG_IMPORT_PARSE));
+}
+
+/* decision:plan20-import-parse-draft and decision:plan20-import-version-draft. */
+static int report_document(const char *path, const SettingImportReport *rep)
+{
+    if (rep->doc_error == SETTING_DOC_VERSION) {
+        return emit_fix(
+            DIAG_IMPORT_PARSE,
+            fmt_alloc("\"%s\" is settings file version %lld; this remember reads version 1.", path,
+                      rep->version),
+            "Update remember, then try again.");
+    }
+    return emit_fix(DIAG_IMPORT_PARSE, fmt_alloc("\"%s\" isn't a remember settings file.", path),
+                    diag_code_fix(DIAG_IMPORT_PARSE));
+}
+
+static const char *import_result_name(SettingImportResult result)
+{
+    switch (result) {
+    case SETTING_IMPORT_WRITTEN:
+        return "written";
+    case SETTING_IMPORT_UNCHANGED:
+        return "unchanged";
+    case SETTING_IMPORT_KEPT_LOCAL:
+        return "kept_local";
+    case SETTING_IMPORT_SKIPPED:
+    default:
+        return "skipped";
+    }
+}
+
+static const char *skip_reason_name(SettingSkipReason reason)
+{
+    switch (reason) {
+    case SETTING_SKIP_BAD_SHAPE:
+        return "bad_shape";
+    case SETTING_SKIP_UNKNOWN_KEY:
+        return "unknown_key";
+    case SETTING_SKIP_BAD_FIELD:
+        return "bad_field";
+    case SETTING_SKIP_OTHER_SCOPE:
+        return "other_scope";
+    case SETTING_SKIP_LAYER_NOT_ALLOWED:
+        return "layer_not_allowed";
+    case SETTING_SKIP_INVALID_VALUE:
+        return "invalid_value";
+    case SETTING_SKIP_NONE:
+    default:
+        return NULL;
+    }
+}
+
+static const char *row_scope_name(const SettingImportRow *row)
+{
+    if (row->scope == SETTING_LAYER_AUTO) {
+        return NULL;
+    }
+    return scope_name(row->scope);
+}
+
+/* C-12 lines: setting_import_skipped, detail {key, scope, reason}. */
+static int warn_skipped(const SettingImportRow *row, const char *why)
+{
+    char *msg = fmt_alloc("skipped \"%s\": %s.", row->key, why);
+    const DiagDetailField fields[] = {{.name = "key", .value = row->key},
+                                      {.name = "scope", .value = row_scope_name(row)},
+                                      {.name = "reason", .value = skip_reason_name(row->reason)}};
+
+    if (msg == NULL) {
+        return report_oom();
+    }
+    (void)diag_warning_detail(DIAG_WARN_SETTING_IMPORT_SKIPPED, msg, fields,
+                              sizeof(fields) / sizeof(fields[0]));
+    free(msg);
+    return 0;
+}
+
+/* setting_invalid with its detail (C-14, C-14a, decision:plan20-import-bad-field). */
+static int warn_invalid(char *msg, const DiagDetailField *fields, size_t n)
+{
+    if (msg == NULL) {
+        return report_oom();
+    }
+    (void)diag_warning_detail(DIAG_WARN_SETTING_INVALID, msg, fields, n);
+    free(msg);
+    return 0;
+}
+
+static int warn_skip(const SettingImportRow *row, size_t nrows)
+{
+    const char *value = row->value != NULL ? row->value : "null";
+
+    if (row->reason == SETTING_SKIP_BAD_SHAPE) {
+        const DiagDetailField fields[] = {{.name = "key", .value = row->key},
+                                          {.name = "value", .value = row->value},
+                                          {.name = "reason", .value = "bad_shape"}};
+
+        return warn_invalid(fmt_alloc("skipped row %zu in the settings file because it isn't a "
+                                      "setting (each row needs a \"key\").",
+                                      row->position),
+                            fields, sizeof(fields) / sizeof(fields[0]));
+    }
+    if (row->reason == SETTING_SKIP_BAD_FIELD) {
+        const DiagDetailField fields[] = {{.name = "key", .value = row->key},
+                                          {.name = "field", .value = row->field},
+                                          {.name = "reason", .value = "bad_field"}};
+
+        return warn_invalid(
+            fmt_alloc("skipped \"%s\": its \"%s\" isn't valid.", row->key, row->field), fields,
+            sizeof(fields) / sizeof(fields[0]));
+    }
+    if (row->reason == SETTING_SKIP_INVALID_VALUE) {
+        const DiagDetailField fields[] = {{.name = "key", .value = row->key},
+                                          {.name = "value", .value = value},
+                                          {.name = "reason", .value = "invalid_value"}};
+
+        /* D-15: the second sentence only when the batch is this one row. */
+        return warn_invalid(fmt_alloc("skipped \"%s\": \"%s\" isn't a valid value.%s", row->key,
+                                      value, nrows == 1U ? " This brain wasn't changed." : ""),
+                            fields, sizeof(fields) / sizeof(fields[0]));
+    }
+    if (row->reason == SETTING_SKIP_UNKNOWN_KEY) {
+        /* decision:plan20-import-unknown-key-draft (C-43 draft). */
+        return warn_skipped(row, "remember has no setting by that name");
+    }
+    if (row->reason == SETTING_SKIP_OTHER_SCOPE) {
+        return warn_skipped(row, row->scope == SETTING_LAYER_BRAIN
+                                     ? "it's a brain setting, and you ran with --scope user"
+                                     : "it's a user setting, and you ran with --scope brain");
+    }
+    return warn_skipped(row, row->scope == SETTING_LAYER_USER ? "it can't be stored for your user"
+                                                              : "it can't be stored for one brain");
+}
+
+static int write_import_row(FILE *out, const SettingImportRow *row)
+{
+    const char *scope = row_scope_name(row);
+    const char *reason = skip_reason_name(row->reason);
+    const char *action = "none";
+
+    if (row->result == SETTING_IMPORT_WRITTEN) {
+        action = "set";
+        if (row->tombstone) {
+            action = "tombstone";
+        }
+    }
+    if (fputs("{\"key\":", out) < 0 ||
+        (row->key != NULL ? output_json_string(out, row->key) : fputs("null", out)) < 0 ||
+        fputs(",\"scope\":", out) < 0 ||
+        (scope != NULL ? fprintf(out, "\"%s\"", scope) : fputs("null", out)) < 0 ||
+        fprintf(out, ",\"result\":\"%s\",\"action\":\"%s\"", import_result_name(row->result),
+                action) < 0) {
+        return -1;
+    }
+    if (reason != NULL && fprintf(out, ",\"reason\":\"%s\"", reason) < 0) {
+        return -1;
+    }
+    return fputc('}', out) == EOF ? -1 : 0;
+}
+
+/* ST-7.11b setting.import.result data. */
+static int write_import_data(FILE *out, const SettingImportReport *rep)
+{
+    size_t i = 0;
+
+    if (fprintf(out, "{\"count\":%zu,\"written\":%zu,\"unchanged\":%zu,\"skipped\":%zu,\"rows\":[",
+                rep->nrows, rep->written, rep->unchanged, rep->skipped) < 0) {
+        return -1;
+    }
+    for (i = 0; i < rep->nrows; i++) {
+        if ((i > 0U && fputc(',', out) == EOF) || write_import_row(out, &rep->rows[i]) != 0) {
+            return -1;
+        }
+    }
+    return fputs("]}", out) < 0 ? -1 : 0;
+}
+
+/* Skipped lines first (C-12), then the C-13 line or the dry-run draft
+   (decision:plan20-import-dry-run-draft). */
+static int emit_import(bool json, const ImportOpts *opt, const SettingImportReport *rep)
+{
+    size_t i = 0;
+    int wrote = 0;
+
+    for (i = 0; i < rep->nrows; i++) {
+        if (rep->rows[i].result == SETTING_IMPORT_SKIPPED &&
+            warn_skip(&rep->rows[i], rep->nrows) != 0) {
+            return REMEMBER_ERR;
+        }
+    }
+    if (json) {
+        wrote = write_import_data(app_out(), rep);
+    } else if (opt->dry_run) {
+        wrote = fprintf(app_out(),
+                        "Would import \"%s\": %zu settings written, %zu unchanged, %zu skipped. "
+                        "Nothing was changed.\n",
+                        opt->path, rep->written, rep->unchanged, rep->skipped);
+    } else {
+        wrote = fprintf(app_out(),
+                        "Imported \"%s\": %zu settings written, %zu unchanged, %zu "
+                        "skipped.\n",
+                        opt->path, rep->written, rep->unchanged, rep->skipped);
+    }
+    if (wrote < 0) {
+        err_msg(DIAG_INTERNAL, "failed to write output");
+        return REMEMBER_ERR;
+    }
+    return REMEMBER_OK;
+}
+
+static int cmd_settings_import(Store *store, bool json, int argc, const char **argv)
+{
+    ImportOpts opt;
+    WriteOpts guard;
+    SettingImportReport rep;
+    char actor_buf[ACTOR_JSON_CAP];
+    char userdb[REMEMBER_PATH_MAX];
+    char err[PREPARE_ERR_CAP];
+    const char *unused = NULL;
+    char *doc = NULL;
+    size_t len = 0;
+    SettingStatus st = SETTING_OK;
+    int rc = REMEMBER_OK;
+
+    err[0] = '\0';
+    userdb[0] = '\0';
+    if (parse_import(argc, argv, &opt) != 0) {
+        return REMEMBER_ERR;
+    }
+    memset(&guard, 0, sizeof(guard));
+    if (guard_actor(&guard, actor_buf, &unused) != 0) {
+        return REMEMBER_ERR;
+    }
+    if (opt.only != SETTING_LAYER_BRAIN &&
+        util_resolve_user_db_path(userdb, sizeof(userdb), err, sizeof(err)) != 0) {
+        return fail_store(err);
+    }
+    doc = read_import_file(opt.path, &len);
+    if (doc == NULL) {
+        return report_unreadable(opt.path);
+    }
+    st = store_setting_import(store, userdb, doc, len, opt.only, opt.dry_run, &rep, err,
+                              sizeof(err));
+    free(doc);
+    if (st == SETTING_ERR_DOCUMENT) {
+        return report_document(opt.path, &rep);
+    }
+    if (st == SETTING_ERR_QUOTA) {
+        return report_row_quota(rep.quota_layer);
+    }
+    if (st != SETTING_OK) {
+        return fail_store(err);
+    }
+    rc = emit_import(json, &opt, &rep);
+    store_setting_import_free(&rep);
     return rc;
 }
 
@@ -2854,6 +3251,9 @@ static const char *settings_verb(int rest_argc, const char **rest_argv)
         }
         if (strcmp(rest_argv[0], "export") == 0) {
             return "setting.export";
+        }
+        if (strcmp(rest_argv[0], "import") == 0) {
+            return "setting.import";
         }
     }
     return NULL;
@@ -2873,7 +3273,7 @@ const char *cmd_settings_reply(int rest_argc, const char **rest_argv)
 int cmd_settings(Store *store, bool json, int rest_argc, const char **rest_argv)
 {
     if (settings_verb(rest_argc, rest_argv) == NULL) {
-        err_msg(DIAG_USAGE, "settings takes 'get', 'set', 'reset', or 'export'");
+        err_msg(DIAG_USAGE, "settings takes 'get', 'set', 'reset', 'export', or 'import'");
         return REMEMBER_ERR;
     }
     if (strcmp(rest_argv[0], "get") == 0) {
@@ -2884,6 +3284,9 @@ int cmd_settings(Store *store, bool json, int rest_argc, const char **rest_argv)
     }
     if (strcmp(rest_argv[0], "export") == 0) {
         return cmd_settings_export(store, rest_argc, rest_argv);
+    }
+    if (strcmp(rest_argv[0], "import") == 0) {
+        return cmd_settings_import(store, json, rest_argc, rest_argv);
     }
     return cmd_settings_reset(store, json, rest_argc, rest_argv);
 }

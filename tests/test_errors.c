@@ -258,8 +258,8 @@ TEST(error_catalog_rejects_names_outside_e4_3)
 }
 
 static const char *const k_warning_codes[] = {
-    "raw_query_ignored", "deprecated_flag",      "synced_folder",
-    "setting_invalid",   "flag_meaning_changed", "unknown_field",
+    "raw_query_ignored",    "deprecated_flag", "synced_folder",          "setting_invalid",
+    "flag_meaning_changed", "unknown_field",   "setting_import_skipped",
 };
 
 TEST(warning_catalog_round_trips_every_code)

@@ -214,6 +214,69 @@ SettingStatus store_setting_export(Store *brain, const char *user_db, SettingLay
                                    SettingExportRow **out_rows, size_t *out_n, char *err,
                                    size_t errlen);
 
+/* settings import (007 ST-8.4 to ST-8.7). */
+typedef enum {
+    SETTING_IMPORT_WRITTEN = 0,
+    SETTING_IMPORT_UNCHANGED,
+    SETTING_IMPORT_SKIPPED,
+    SETTING_IMPORT_KEPT_LOCAL
+} SettingImportResult;
+
+typedef enum {
+    SETTING_SKIP_NONE = 0,
+    SETTING_SKIP_BAD_SHAPE,         /* setting_invalid, C-14a */
+    SETTING_SKIP_UNKNOWN_KEY,       /* setting_import_skipped */
+    SETTING_SKIP_BAD_FIELD,         /* setting_invalid, decision:plan20-import-bad-field */
+    SETTING_SKIP_OTHER_SCOPE,       /* setting_import_skipped */
+    SETTING_SKIP_LAYER_NOT_ALLOWED, /* setting_import_skipped */
+    SETTING_SKIP_INVALID_VALUE      /* setting_invalid, C-14 */
+} SettingSkipReason;
+
+typedef enum {
+    SETTING_DOC_OK = 0,
+    SETTING_DOC_NOT_SETTINGS, /* not JSON, not an object, wrong format, no settings list */
+    SETTING_DOC_VERSION       /* version above 1 */
+} SettingDocError;
+
+/* One settings element. key is the file's key string and value its value as
+   text (a string unescaped, anything else JSON); either is NULL when the file
+   has none. scope is AUTO when the file's scope is not brain or user. field
+   names the bad member of a bad_field row. position is 1-based. */
+typedef struct {
+    char *key;
+    char *value;
+    const char *field;
+    size_t position;
+    SettingLayer scope;
+    SettingImportResult result;
+    SettingSkipReason reason;
+    bool tombstone; /* a written brain row that is a tombstone */
+    char pad_[3];
+} SettingImportRow;
+
+/* SETTING_ERR_DOCUMENT sets doc_error (and version for a later version).
+   SETTING_ERR_QUOTA sets quota_layer, the layer that is full; err holds the
+   brain sentence. Any failure writes nothing and leaves no rows. */
+typedef struct {
+    SettingImportRow *rows;
+    size_t nrows;
+    size_t written;
+    size_t unchanged; /* kept_local included */
+    size_t skipped;
+    long long version;
+    SettingDocError doc_error;
+    SettingLayer quota_layer;
+} SettingImportReport;
+
+void store_setting_import_free(SettingImportReport *r);
+
+/* Read doc (len bytes) as a remember-settings-export document and merge each
+   row. only is AUTO for both layers. A dry run writes nothing and does not
+   create user.db. */
+SettingStatus store_setting_import(Store *brain, const char *user_db, const char *doc, size_t len,
+                                   SettingLayer only, bool dry_run, SettingImportReport *out,
+                                   char *err, size_t errlen);
+
 /*
  * store_open with options and a structured SQLite failure. opts NULL means
  * defaults (STORE_DEFAULT_BUSY_TIMEOUT_MS, create, keep an invalid sidecar an

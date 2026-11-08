@@ -228,6 +228,8 @@ const char *setting_status_code(SettingStatus st)
         return "setting_scope_mismatch";
     case SETTING_ERR_QUOTA:
         return "quota_exceeded";
+    case SETTING_ERR_DOCUMENT:
+        return "import_parse";
     case SETTING_ERR_STORE:
     default:
         /* STORE has no settings code. An unknown status shares that empty token. */

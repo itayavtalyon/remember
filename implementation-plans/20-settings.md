@@ -442,6 +442,36 @@ Sentences: C-03, C-05 (every row), C-06, C-07, C-09, C-10, C-11, and the ST-7.10
 
 Not in stage 6, on purpose: the C-13 set lines, `list`, `history`, `explain` (stage 9); `export` (stage 7); `import` (stage 8). `setting_invalid_value` has no `detail` beyond the prefix `item` and `other`: C-05 names no other member.
 
+### Stage 7 — settings export (2026-11-08)
+
+`remember settings export [--scope brain|user|all]` prints the ST-8.1 document (`format` `remember-settings-export`, `version` 1, `exported_at`, `settings[]`) on stdout. Rows sort by key in byte order. On one key, the brain row comes before the user row. A brain row carries `device_id`, the `version_vector` with sorted keys, and `deleted_at`, so a tombstone travels. A user row carries `device_id` `""` and `version_vector` `{}`. `--scope brain` does not resolve the user.db path, so it works without `HOME`.
+
+With `--json`, a success is the same plain document (`app_mark_document`), not an envelope. A failure is the envelope with type `setting.export.result` and an `error` member, and stderr is empty (`decision:plan20-export-json-error`). `remember_run` clears the document mark at the start of each run, so one process can run a plain export and then a `--json` command.
+
+A failed read is `fail_store`. A short stdout is `internal error` with `failed to write output`.
+
+### Stage 8 — settings import (2026-11-08)
+
+`remember settings import FILE [--dry-run] [--scope brain|user] [--hooks|--no-hooks]`. `REMEMBER_HOOK_DEPTH` 1 or more fails with `setting_from_hook` after the parse (ST-7.10). The file is read whole. A file that cannot be read is `import_parse` with the C-43 draft `can't read "<path>": <reason>.` (`decision:plan20-import-parse-draft`).
+
+SQLite checks the document and splits the rows (`json_valid`, `json_each`). Not a settings document: `"<path>" isn't a remember settings file.`, with the catalog fix. A later version: `"<path>" is settings file version <n>; this remember reads version 1.` with `Update remember, then try again.` (`decision:plan20-import-version-draft`). Either way, nothing is written.
+
+Each row is checked in ST-8.2 member order (`decision:plan20-import-bad-field`): shape, then key, scope, `--scope`, layer, value, then `updated_by`, `updated_at`, `device_id`, `version_vector`, `deleted_at`. A user row must have a null `deleted_at` and does not check `device_id` or the vector. A skipped row does not stop the import (ST-8.4). The warnings:
+
+- `bad_shape` is C-14a.
+- `invalid_value` is C-14. ` This brain wasn't changed.` is added only when the file has one row.
+- `other_scope` and `layer_not_allowed` are C-12.
+- `unknown_key` is C-12 with the C-43 draft reason `remember has no setting by that name` (`decision:plan20-import-unknown-key-draft`, Itay 2026-11-08). This answer overrides the "unprinted" line in the definition of done.
+- `bad_field` is the C-43 draft `skipped "<key>": its "<field>" isn't valid.` (`setting_invalid`).
+
+A value is checked by `setting_prepare`, the same check `set` uses. A key, value, or list item that holds a NUL is not that string, so it is invalid.
+
+Merge (ST-8.6, ST-2.7): the version vector first (brain only), then the later `updated_at`, then the larger `device_id` (brain only). A tie keeps the local row (`kept_local`, counted as `unchanged`). A row equal to the local row is `unchanged` and writes nothing. A brain write stores the file's fields with the pointwise-max vector, does not bump the local counter, and bumps `change_seq` (`decision:plan20-import-brain-merge`). Every write adds one history row with the file actor and the file `updated_at` (`decision:plan20-import-history-at`). A tombstone writes a null new value. A local tombstone gives a null old value. A new key over the 256-row quota fails the whole import with the C-09 sentence of that layer, and nothing is written (`decision:plan20-import-quota`).
+
+The brain and user.db each run one transaction. The brain commits first. If user.db's `COMMIT` fails after that, the brain rows stay written and the command fails. This is the stage 6 bulk-reset limit: two files do not commit as one. `--dry-run` runs the same merge, rolls both back, and does not create user.db. It prints `Would import "<path>": <n> settings written, <n> unchanged, <n> skipped. Nothing was changed.` (`decision:plan20-import-dry-run-draft`). A real run prints the C-13 `Imported` line. Warnings come first.
+
+JSON `setting.import.result` is ST-7.11b: `{count, written, unchanged, skipped, rows[]}`. Each row is `{key, scope, result, action, reason?}`. `key` and `scope` are null when the file row has none. A warning's `detail` writes a missing value as `null`.
+
 ## Review Notes
 
 **2026-10-27, stage 1 deep review.** In-session, on `be3ad6a` plus this fix. Itay asked for the review, a simplify pass, and the next stage in the same session, so this note closes stage 1. Local Bugbot is not installed.
@@ -567,3 +597,42 @@ Simplification. Declined: sharing `days_in_month` with `commands_common.c` (that
 Gate on this tree, before the mutation pass. Sanitizer build. `CI=true BUILD_DIR=build REMEMBER_SCAN_BUILD=1 REMEMBER_IWYU=0 ./scripts/lint-all.sh` exited 0 (`LINT OK`; IWYU skipped, Linux CI runs it). `./scripts/check-coverage.sh` exited 0: functions 100%, effective lines 100%, zero-hit 2286, defensive-excluded 2286, must-cover 0. Pure-TU branches, 0 missed: `search_terms.c` 176, `unicode.c` 80, `normalize.c` 504, `output.c` 736. `ctest --test-dir build` passed 6 of 6. The settings suite above is the same 79 tests and 1741 asserts.
 
 Stage 5 get is done on this branch. INDEX row 20 stays unticked. The definition of done stays unticked. Stages 6–9 have not started. Stage 10 still rewrites `specs/SETTINGS.md` after them. Plan 21 tip `9dcd717` is not on origin/main.
+
+**2026-11-08, stage 6 deep review.** In-session, on the other coder's uncommitted work in the stage 5 worktree, before `82ba046`. Itay asked to review what was done, deep review it, and finish the plan. `decision:plan21-stage-flow`: no per-stage `.claude/REVIEW_REQUEST`. Local Bugbot is not installed.
+
+| # | Severity | Finding | Outcome |
+|---|---|---|---|
+| 1 | critical | `report_scope` printed a sentence the copy files do not have for `--scope brain` on a user-only key, and `settings.c` still built the SETTINGS-SCHEME §5.1 `idle_timeout` line (`k_idle_scope`). | Grilled. Draft in C-43 (`decision:plan20-user-only-scope-draft`) for every user-only key. `k_idle_scope` and the `err` argument of `setting_layer_of` are gone. |
+| 2 | critical | Two values, or `--clear`, on a key that is not a list printed `remember: ` and nothing else. A test locked that empty line. | Grilled. Drafts in C-43 (`decision:plan20-scalar-shape-draft`). The test asserts the drafts. |
+| 3 | important | A bulk reset that matched no row asked for confirmation of `0 settings`. One key printed `1 settings`. | Grilled (`decision:plan20-reset-count-zero-one`). No row: no confirmation, `count` 0. One key: `this resets 1 setting.` (C-43 draft). |
+| 4 | important | `--namespace --yes` took `--yes` as the namespace. | Fixed. A value that starts with `-` is `missing value for --namespace`. |
+| 5 | important | `set` and `reset` rejected `--hooks` and `--no-hooks`. H-16.11 says every write takes them. | Fixed. Both go through `cmd_take_write_flag`. `set_and_reset_take_the_hook_flags`. |
+| 6 | important | Error `detail` was missing on `setting_from_hook`, `setting_scope_mismatch`, and `setting_out_of_range`. | Grilled (`decision:plan20-error-detail-strings`): string members. `{key?, hook}`, `{key, allowed}`, `{key, value, min, max}`. Listed in C-43. |
+| 7 | nit | No test showed that a `set` after a brain reset has no `old_value` (a tombstone is not a value). | Added `set_after_a_brain_reset_has_no_old_value`. |
+
+Mutants, one clause each, settings suite, tree restored after each: 22 mutants over the new set and reset code. 20 killed. Four did not compile on the first pass; their compiling forms in a second pass were all killed. Equivalent (2): `report_scope`'s `!spec->allow_brain` check (the first branch already took every key that allows the brain), and `copy_live`'s `!live` check (a layer that is not live has an empty text, which the same `if` rejects). Both checks stay, because they state the rule at the line that reads it.
+
+Simplification. Applied: `emit_scope` derives `allowed` from the spec instead of taking it as an argument. Declined: one parser for `set` and `reset` options (they share `take_write_scope` and `take_write_actor`; the rest differs).
+
+Gate on `f0608fb` plus the review fixes, sanitizer build: the CLI suite passed, `lint-all.sh` exited 0, `check-coverage.sh` exited 0 after OOM sweeps were added for the three draft paths and `copy_msg` moved to `snprintf`. The second-parent merge of `origin/main` is recorded in the stage 6 implementation note.
+
+INDEX row 20 stays unticked. Stage 6 is done on this branch.
+
+**2026-11-08, stages 7 and 8 deep review.** In-session, on the uncommitted stage 7 and stage 8 work, before the commit. `decision:plan21-stage-flow`: no per-stage `.claude/REVIEW_REQUEST`.
+
+| # | Severity | Finding | Outcome |
+|---|---|---|---|
+| 1 | important | Under `--json`, the import parse errors had no fix sentence. | Fixed. They pass `diag_code_fix(DIAG_IMPORT_PARSE)`. |
+| 2 | important | `export_without_home_fails_unless_the_scope_is_brain` leaked `REMEMBER_TEST_FIXED_IDS`. Three envelope tests then failed on UNIQUE ids. | Fixed. The test unsets it before `env_release`. |
+| 3 | important | The file reader called `fread` again after a short read, which is EOF or an error (analyzer `unix.Stream`). | Fixed. A short read ends the loop. |
+| 4 | important | The exec fault sweep found a failed user.db `COMMIT` after the brain committed. Two brain rows stay written, and the command fails. | Kept, and recorded in the stage 8 note. This is the stage 6 two-file limit. `import_survives_every_store_fault` asserts it. |
+| 5 | nit | Untested: a NUL in a key, a value, or a list item; a non-string list item; a local brain tombstone under an import; the document mark across two runs in one process. | Added to `import_skips_bad_shapes_and_bad_fields` and `import_survives_every_store_fault`. New tests: `import_over_a_local_tombstone_has_no_old_value`, `a_plain_export_does_not_mark_the_next_json_run`. |
+| 6 | nit | The test allocator hooks only `malloc`, so the reader's `realloc` failure could not be reached. | The reader grows with `malloc` and `memcpy`. `import_reports_home_store_and_memory_failures` sweeps it, and a 6 KiB file covers the copy. |
+
+Mutants, one clause each, settings suite, in a copy of the tree: 33 over export and import. 31 killed. Two did not compile on the first pass (a constant condition, an unused helper); their compiling forms were killed. Covered: the export layer order and vector key order; the document-mark reset; each merge rule (vector, time, device, tie, device on user rows); the one-row sentence; `kept_local` counting; dry-run commit; quota; the tombstone old value; the user `deleted_at` check; `other_scope`; file row order; the tombstone flag on user rows; the `change_seq` bump; `same` (actor, device, deleted, vector); the device and vector validators; dry run creating user.db. No equivalent mutant.
+
+Simplification. Declined: one reader for import and plan 21's `--from-db` (different limits and errors); merging `import_same` into `import_file_wins` (an equal row writes nothing and is `unchanged`, not `kept_local`).
+
+Gate on this tree, sanitizer build: ctest passed 6 of 6, `check-coverage.sh` exited 0 (functions 100%, effective lines 100%, zero-hit 2384, defensive-excluded 2384, must-cover 0, pure-TU branches 0 missed), `lint-all.sh` exited 0 (`LINT OK`; IWYU skipped, Linux CI runs it), `leaks-macos` passed. Settings suite: 137 tests, 5297 asserts, 0 failed.
+
+INDEX row 20 stays unticked. Stages 7 and 8 are done on this branch.
