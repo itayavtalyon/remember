@@ -428,6 +428,20 @@ The human date is the local ST-7.16 form. The separator between the other layers
 
 No new error sentence. COPY-PENDING C-42 is still the unwritten plural suggestion. INDEX row 20 stays unticked.
 
+### Stage 6 — settings set and reset (2026-11-08)
+
+Another coder wrote the stage in the stage 5 worktree and left it uncommitted. This session reviewed it, applied five grill answers, and committed it as `82ba046`. Plan 21 merged as `9495f48` (PR #58) the same day. `f0608fb` merges `origin/main` by taking main's tree and replaying this plan's own delta (`9dcd717..82ba046`), so the plan 21 review fixes are in.
+
+`remember settings set KEY VALUE... [--scope brain|user] [--as KIND] [--actor ID] [--hooks|--no-hooks]` and `set KEY --clear` write one layer. Without `--scope`, the user layer, unless the key allows only the brain (ST-7.2). `reset KEY`, `reset --namespace NS [--scope] --yes`, and `reset --all --scope X --yes` reset. A brain reset writes a tombstone. A user reset deletes the row. A missing row is `action` `none` and writes nothing. Bulk reset uses `store_setting_list_live` and `store_setting_reset_stored`, so a stored key the registry does not know is reset too (ST-5.11). The two databases are not one transaction: a failure leaves the earlier keys reset.
+
+`REMEMBER_HOOK_DEPTH` 1 or more fails `set` and `reset` with `setting_from_hook` after a clean parse and before key lookup and actor JSON. `--hooks` and `--no-hooks` go through `cmd_take_write_flag` (H-16.11) and change nothing until plan 25. `settings get` rejects them.
+
+Plain `set` prints nothing on success. The C-13 set lines are stage 9. Plain `reset` prints C-10 for each key. JSON is ST-7.11b: `setting.set.result` `{setting, scope, old_value, changed}`, `setting.reset.result` `{setting, scope, old_value, changed, action}`, and with `--yes` `{count, settings[]}`. A stored key the registry does not know has `type`, `value` null and `from` `default` in that list.
+
+Sentences: C-03, C-05 (every row), C-06, C-07, C-09, C-10, C-11, and the ST-7.10 hook line, from COPY-PENDING. The C-43 drafts, from the 2026-11-08 grill: `--scope brain` on a user-only key (`decision:plan20-user-only-scope-draft`, replacing the SETTINGS-SCHEME §5.1 `idle_timeout` line that `settings.c` and `cmd_settings.c` still built); two values or `--clear` on a key that is not a list (`decision:plan20-scalar-shape-draft`); a bulk reset that matches no row asks nothing, and one key is `1 setting` (`decision:plan20-reset-count-zero-one`); string `detail` on `setting_from_hook` `{key?, hook}`, `setting_scope_mismatch` `{key, allowed}` and `setting_out_of_range` `{key, value, min, max}` (`decision:plan20-error-detail-strings`); and the catalog fallbacks of the six new codes. `--namespace` followed by a flag is `missing value for --namespace`.
+
+Not in stage 6, on purpose: the C-13 set lines, `list`, `history`, `explain` (stage 9); `export` (stage 7); `import` (stage 8). `setting_invalid_value` has no `detail` beyond the prefix `item` and `other`: C-05 names no other member.
+
 ## Review Notes
 
 **2026-10-27, stage 1 deep review.** In-session, on `be3ad6a` plus this fix. Itay asked for the review, a simplify pass, and the next stage in the same session, so this note closes stage 1. Local Bugbot is not installed.

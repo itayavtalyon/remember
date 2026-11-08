@@ -61,6 +61,21 @@ static char *dup_cstr(const char *s)
     return copy;
 }
 
+static bool g_document;
+
+void app_mark_document(void)
+{
+    g_document = true;
+}
+
+bool app_take_document(void)
+{
+    bool was = g_document;
+
+    g_document = false;
+    return was;
+}
+
 void app_clear_list_page(void)
 {
     free(g_list_page.next_cursor);

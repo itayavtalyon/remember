@@ -189,6 +189,31 @@ SettingStatus store_setting_reset_stored(Store *brain, const char *user_db, cons
                                          SettingLayer layer, const char *updated_by,
                                          SettingWriteResult *out, char *err, size_t errlen);
 
+/* One stored row for settings export (007 ST-8.2). Every text is malloc'd.
+   value, updated_by and version_vector are compact JSON (SQLite json()), and
+   version_vector keys are sorted. A user row has device_id "", version_vector
+   "{}" and deleted_at NULL. deleted_at is NULL for a live brain row. */
+typedef struct {
+    char *key;
+    char *value;
+    char *updated_by;
+    char *updated_at;
+    char *device_id;
+    char *version_vector;
+    char *deleted_at;
+    SettingLayer layer;
+    char pad_[4];
+} SettingExportRow;
+
+void store_setting_export_free(SettingExportRow *rows, size_t n);
+
+/* Every stored row of the chosen layer, tombstones included, sorted by key and
+   then brain before user. SETTING_LAYER_AUTO is both layers. A missing user.db
+   has no rows and is not created. A value that is not JSON fails the read. */
+SettingStatus store_setting_export(Store *brain, const char *user_db, SettingLayer layer,
+                                   SettingExportRow **out_rows, size_t *out_n, char *err,
+                                   size_t errlen);
+
 /*
  * store_open with options and a structured SQLite failure. opts NULL means
  * defaults (STORE_DEFAULT_BUSY_TIMEOUT_MS, create, keep an invalid sidecar an

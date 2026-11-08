@@ -72,6 +72,10 @@ int app_prompt_line(FILE *in, const char *prompt, char *buf, size_t cap);
  * An unset slot omits next_cursor and has_more. The cursor string is copied.
  */
 void app_clear_list_page(void);
+/* A command whose output is a document (settings export), not a message. Under
+   --json the buffered bytes are written as they are on success (JSON-STYLE §1.7b). */
+void app_mark_document(void);
+bool app_take_document(void);
 int app_set_list_page(const char *next_cursor);
 bool app_take_list_page(char **out_cursor);
 

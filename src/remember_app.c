@@ -360,6 +360,7 @@ static void print_command_help(CliCommand topic)
                            "[--as KIND] [--actor ID]\n");
         (void)fprintf(out, "  remember settings reset --namespace NS [--scope brain|user] --yes\n");
         (void)fprintf(out, "  remember settings reset --all --scope brain|user --yes\n");
+        (void)fprintf(out, "  remember settings export [--scope brain|user|all]\n");
         (void)fprintf(out, "Without --scope, set and reset write the user layer unless the key "
                            "allows only the brain.\n");
         print_hooks_help(out);
@@ -732,6 +733,15 @@ static int run_json(const CliArgs *args, AppStreams streams)
     }
     rc = (rc == REMEMBER_OK && diag_json_has_error()) ? REMEMBER_ERR : rc;
     page = app_take_list_page(&cursor);
+    if (app_take_document() && rc == REMEMBER_OK && !diag_json_has_error()) {
+        /* A document is its own format (decision:plan20-export-json-error). */
+        if (fwrite(data, 1U, len, out) != len || fflush(out) != 0 || ferror(out) != 0) {
+            diag_json_end();
+            err_msg(DIAG_INTERNAL, "failed to write output");
+            rc = REMEMBER_ERR;
+        }
+        goto cleanup;
+    }
     if (rc != REMEMBER_OK || diag_json_has_error()) {
         page = false;
         free(cursor);
@@ -763,6 +773,7 @@ int remember_run(int argc, char *const *argv, FILE *out, FILE *err)
 
     diag_warnings_reset();
     app_clear_list_page();
+    (void)app_take_document();
     app_set_streams((AppStreams){.out = out, .err = err});
     cli_parse(argc, argv, &args);
     {

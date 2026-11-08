@@ -10723,6 +10723,158 @@ SettingStatus store_setting_list_live(Store *brain, const char *user_db, Setting
     return st;
 }
 
+void store_setting_export_free(SettingExportRow *rows, size_t n)
+{
+    size_t i = 0;
+
+    if (rows == NULL) {
+        return;
+    }
+    for (i = 0; i < n; i++) {
+        free(rows[i].key);
+        free(rows[i].value);
+        free(rows[i].updated_by);
+        free(rows[i].updated_at);
+        free(rows[i].device_id);
+        free(rows[i].version_vector);
+        free(rows[i].deleted_at);
+    }
+    free(rows);
+}
+
+/* Column 6 (deleted_at) may be NULL. Every other column is NOT NULL, so a NULL
+   there is SQLite out of memory. */
+static int export_row_fill(sqlite3_stmt *stmt, SettingLayer layer, SettingExportRow *row)
+{
+    char **slots[] = {&row->key,       &row->value,          &row->updated_by, &row->updated_at,
+                      &row->device_id, &row->version_vector, &row->deleted_at};
+    size_t i = 0;
+
+    memset(row, 0, sizeof(*row));
+    row->layer = layer;
+    for (i = 0; i < sizeof(slots) / sizeof(slots[0]); i++) {
+        const char *text = (const char *)sqlite3_column_text(stmt, (int)i);
+
+        if (text == NULL && i + 1U == sizeof(slots) / sizeof(slots[0])) {
+            continue;
+        }
+        *slots[i] = dup_str(text);
+        if (*slots[i] == NULL) {
+            return -1;
+        }
+    }
+    return 0;
+}
+
+static SettingStatus export_layer(sqlite3 *db, SettingLayer layer, SettingExportRow **rows,
+                                  size_t *n, size_t *cap, char *err, size_t errlen)
+{
+    /* json() checks and compacts a value; the subquery sorts the vector's keys. */
+    static const char brain_sql[] =
+        "SELECT key, json(value), json(updated_by), updated_at, device_id, "
+        "(SELECT json_group_object(v.key, v.value) FROM (SELECT key, value FROM "
+        "json_each(settings.version_vector) ORDER BY key COLLATE BINARY) AS v), deleted_at "
+        "FROM settings ORDER BY key COLLATE BINARY;";
+    static const char user_sql[] = "SELECT key, json(value), json(updated_by), updated_at, '', "
+                                   "'{}', NULL FROM settings ORDER BY key COLLATE BINARY;";
+    sqlite3_stmt *stmt = NULL;
+    int rc = SQLITE_OK;
+
+    if (sqlite3_prepare_v2(db, layer == SETTING_LAYER_BRAIN ? brain_sql : user_sql, -1, &stmt,
+                           NULL) != SQLITE_OK) {
+        set_errf(err, errlen, "sqlite", sqlite3_errmsg(db));
+        return SETTING_ERR_STORE;
+    }
+    while ((rc = sqlite3_step(stmt)) == SQLITE_ROW) {
+        if (*n == *cap) {
+            size_t next = (*cap == 0U) ? (size_t)GROW_MIN_CAP : (*cap * 2U);
+            SettingExportRow *grown = (SettingExportRow *)realloc(*rows, next * sizeof(*grown));
+
+            if (grown == NULL) {
+                break;
+            }
+            *rows = grown;
+            *cap = next;
+        }
+        if (export_row_fill(stmt, layer, &(*rows)[*n]) != 0) {
+            *n += 1U; /* the caller frees the partial row */
+            break;
+        }
+        *n += 1U;
+    }
+    if (rc == SQLITE_ROW) {
+        set_err(err, errlen, "out of memory");
+        (void)sqlite3_finalize(stmt);
+        return SETTING_ERR_STORE;
+    }
+    if (rc != SQLITE_DONE) {
+        set_errf(err, errlen, "sqlite", sqlite3_errmsg(db));
+        (void)sqlite3_finalize(stmt);
+        return SETTING_ERR_STORE;
+    }
+    (void)sqlite3_finalize(stmt);
+    return SETTING_OK;
+}
+
+/* Key, then brain before user (ST-8.2 sorts by key, then scope). */
+// NOLINTNEXTLINE(bugprone-easily-swappable-parameters) -- qsort passes the two slots
+static int cmp_export_row(const void *left, const void *right)
+{
+    const SettingExportRow *a = (const SettingExportRow *)left;
+    const SettingExportRow *b = (const SettingExportRow *)right;
+    int cmp = strcmp(a->key, b->key);
+
+    if (cmp != 0) {
+        return cmp;
+    }
+    return (int)b->layer - (int)a->layer;
+}
+
+SettingStatus store_setting_export(Store *brain, const char *user_db, SettingLayer layer,
+                                   SettingExportRow **out_rows, size_t *out_n, char *err,
+                                   size_t errlen)
+{
+    SettingExportRow *rows = NULL;
+    size_t n = 0;
+    size_t cap = 0;
+    SettingStatus st = SETTING_OK;
+
+    if (out_rows != NULL) {
+        *out_rows = NULL;
+    }
+    if (out_n != NULL) {
+        *out_n = 0U;
+    }
+    if (brain == NULL || brain->db == NULL || out_rows == NULL || out_n == NULL) {
+        set_err(err, errlen, "internal error");
+        return SETTING_ERR_STORE;
+    }
+    if (layer != SETTING_LAYER_USER) {
+        st = export_layer(brain->db, SETTING_LAYER_BRAIN, &rows, &n, &cap, err, errlen);
+    }
+    if (st == SETTING_OK && layer != SETTING_LAYER_BRAIN) {
+        sqlite3 *udb = NULL;
+        bool absent = false;
+
+        if (open_user_existing(user_db, &udb, &absent, err, errlen) != 0) {
+            st = SETTING_ERR_STORE;
+        } else if (!absent) {
+            st = export_layer(udb, SETTING_LAYER_USER, &rows, &n, &cap, err, errlen);
+            (void)sqlite3_close(udb);
+        }
+    }
+    if (st != SETTING_OK) {
+        store_setting_export_free(rows, n);
+        return st;
+    }
+    if (n > 1U) {
+        qsort(rows, n, sizeof(*rows), cmp_export_row);
+    }
+    *out_rows = rows;
+    *out_n = n;
+    return SETTING_OK;
+}
+
 SettingStatus store_setting_read(Store *brain, const char *user_db, const char *key,
                                  const char *flag_text, SettingRead *out, char *err, size_t errlen)
 {

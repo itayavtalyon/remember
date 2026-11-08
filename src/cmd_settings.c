@@ -1640,11 +1640,16 @@ static int report_range(const SettingSpec *spec, const WriteOpts *opt)
     return REMEMBER_ERR;
 }
 
-/* detail {key, allowed}: the one layer the key allows (decision:plan20-error-detail-strings). */
-static int emit_scope(const SettingSpec *spec, char *msg, const char *fix, const char *allowed)
+/* detail {key, allowed}: a mismatched key allows one layer, and allowed names it
+   (decision:plan20-error-detail-strings). */
+static int emit_scope(const SettingSpec *spec, char *msg, const char *fix)
 {
-    const DiagDetailField fields[] = {{.name = "key", .value = spec->key},
-                                      {.name = "allowed", .value = allowed}};
+    DiagDetailField fields[] = {{.name = "key", .value = spec->key},
+                                {.name = "allowed", .value = "user"}};
+
+    if (spec->allow_brain) {
+        fields[1].value = "brain";
+    }
 
     if (msg == NULL) {
         return report_oom();
@@ -1666,14 +1671,14 @@ static int report_scope(const SettingSpec *spec, const WriteOpts *opt)
         char *msg =
             fmt_alloc("\"%s\" is a brain setting; it can't be set for your user.", spec->key);
 
-        return emit_scope(spec, msg, k_brain_scope_fix, "brain");
+        return emit_scope(spec, msg, k_brain_scope_fix);
     }
     if (requested == SETTING_LAYER_BRAIN && !spec->allow_brain) {
         /* C-42-style draft (decision:plan20-user-only-scope-draft). */
         char *msg =
             fmt_alloc("\"%s\" is a user setting; it can't be set for one brain.", spec->key);
 
-        return emit_scope(spec, msg, k_user_scope_fix, "user");
+        return emit_scope(spec, msg, k_user_scope_fix);
     }
     err_msg(DIAG_INTERNAL, "internal error");
     return REMEMBER_ERR;
@@ -1751,6 +1756,8 @@ static int guard_actor(const WriteOpts *opt, char *actor_buf, const char **updat
         if (opt->key != NULL) {
             fields[n++] = (DiagDetailField){.name = "key", .value = opt->key};
         }
+        /* The CLI is one thread; hook_depth_blocks read the same variable. */
+        // NOLINTNEXTLINE(concurrency-mt-unsafe)
         fields[n++] = (DiagDetailField){.name = "hook", .value = getenv("REMEMBER_HOOK_DEPTH")};
         return emit_detail(DIAG_SETTING_FROM_HOOK, k_hook_msg, k_hook_fix, fields, n);
     }
@@ -2689,6 +2696,150 @@ static int cmd_settings_reset(Store *store, bool json, int argc, const char **ar
     return apply_reset_bulk(store, json, argc, argv, userdb, &opt, updated_by);
 }
 
+/* --scope brain|user|all. AUTO is all (ST-8.2: the default). */
+static int take_export_scope(int *index, int argc, const char **argv, SettingLayer *layer,
+                             bool *scope_set)
+{
+    const char *val = NULL;
+
+    if (*scope_set) {
+        err_msg(DIAG_USAGE, "duplicate --scope");
+        return -1;
+    }
+    if (*index + 1 >= argc) {
+        err_msg(DIAG_USAGE, "missing value for --scope");
+        return -1;
+    }
+    *index += 1;
+    val = argv[*index];
+    if (strcmp(val, "user") == 0) {
+        *layer = SETTING_LAYER_USER;
+    } else if (strcmp(val, "brain") == 0) {
+        *layer = SETTING_LAYER_BRAIN;
+    } else if (strcmp(val, "all") == 0) {
+        *layer = SETTING_LAYER_AUTO;
+    } else {
+        err_msg(DIAG_USAGE, "invalid --scope (use brain, user, or all)");
+        return -1;
+    }
+    *scope_set = true;
+    return 0;
+}
+
+static int parse_export(int argc, const char **argv, SettingLayer *layer)
+{
+    bool scope_set = false;
+    int i = 0;
+
+    for (i = 1; i < argc; i++) {
+        if (strcmp(argv[i], "--scope") == 0) {
+            if (take_export_scope(&i, argc, argv, layer, &scope_set) != 0) {
+                return -1;
+            }
+        } else if (argv[i][0] == '-' && argv[i][1] != '\0') {
+            err_fmt(DIAG_USAGE, "unknown option '%s'", argv[i]);
+            return -1;
+        } else {
+            err_msg(DIAG_USAGE, "settings export takes no arguments");
+            return -1;
+        }
+    }
+    return 0;
+}
+
+/* A registered duration also carries value_ms (ST-8.2). */
+static bool export_ms(const SettingExportRow *row, long long *ms)
+{
+    const SettingSpec *spec = setting_by_key(row->key);
+    char inner[SETTING_VALUE_CAP];
+    char canon[NORM_MEASURE_CANON_CAP];
+
+    if (spec == NULL || spec->type != SETTING_DURATION ||
+        !quoted_plain(row->value, inner, sizeof(inner))) {
+        return false;
+    }
+    return norm_duration_canonical(inner, ms, canon, sizeof(canon));
+}
+
+/* ST-8.2 member order, value_ms after value. */
+static int write_export_row(FILE *out, const SettingExportRow *row)
+{
+    long long ms = 0;
+
+    if (fputs("{\"key\":", out) < 0 || output_json_string(out, row->key) != 0 ||
+        fprintf(out, ",\"scope\":\"%s\",\"value\":%s", scope_name(row->layer), row->value) < 0) {
+        return -1;
+    }
+    if (export_ms(row, &ms) && fprintf(out, ",\"value_ms\":%lld", ms) < 0) {
+        return -1;
+    }
+    if (fprintf(out, ",\"updated_by\":%s,\"updated_at\":", row->updated_by) < 0 ||
+        output_json_string(out, row->updated_at) != 0 || fputs(",\"device_id\":", out) < 0 ||
+        output_json_string(out, row->device_id) != 0 ||
+        fprintf(out, ",\"version_vector\":%s,\"deleted_at\":", row->version_vector) < 0) {
+        return -1;
+    }
+    if (row->deleted_at == NULL) {
+        return fputs("null}", out) < 0 ? -1 : 0;
+    }
+    if (output_json_string(out, row->deleted_at) != 0) {
+        return -1;
+    }
+    return fputc('}', out) == EOF ? -1 : 0;
+}
+
+static int write_export(FILE *out, const char *now, const SettingExportRow *rows, size_t n)
+{
+    size_t i = 0;
+
+    if (fprintf(out,
+                "{\"format\":\"remember-settings-export\",\"version\":1,\"exported_at\":\"%s\","
+                "\"settings\":[",
+                now) < 0) {
+        return -1;
+    }
+    for (i = 0; i < n; i++) {
+        if ((i > 0U && fputc(',', out) == EOF) || write_export_row(out, &rows[i]) != 0) {
+            return -1;
+        }
+    }
+    return fputs("]}\n", out) < 0 ? -1 : 0;
+}
+
+/* ST-8.1: one plain document. Under --json a failure is still the envelope. */
+static int cmd_settings_export(Store *store, int argc, const char **argv)
+{
+    SettingLayer layer = SETTING_LAYER_AUTO;
+    SettingExportRow *rows = NULL;
+    size_t n = 0;
+    char userdb[REMEMBER_PATH_MAX];
+    char err[PREPARE_ERR_CAP];
+    char now[SETTING_AT_CAP];
+    int rc = REMEMBER_OK;
+
+    err[0] = '\0';
+    if (parse_export(argc, argv, &layer) != 0) {
+        return REMEMBER_ERR;
+    }
+    if (util_resolve_user_db_path(userdb, sizeof(userdb), err, sizeof(err)) != 0) {
+        return fail_store(err);
+    }
+    if (store_setting_export(store, userdb, layer, &rows, &n, err, sizeof(err)) != SETTING_OK) {
+        return fail_store(err);
+    }
+    if (utc_now(now, sizeof(now)) != 0) {
+        err_msg(DIAG_INTERNAL, "internal error");
+        rc = REMEMBER_ERR;
+    } else if (write_export(app_out(), now, rows, n) != 0) {
+        err_msg(DIAG_INTERNAL, "failed to write output");
+        rc = REMEMBER_ERR;
+    } else {
+        app_mark_document();
+    }
+    store_setting_export_free(rows, n);
+    return rc;
+}
+
 static const char *settings_verb(int rest_argc, const char **rest_argv)
 {
     if (rest_argc > 0 && rest_argv != NULL && rest_argv[0] != NULL) {
@@ -2700,6 +2851,9 @@ static const char *settings_verb(int rest_argc, const char **rest_argv)
         }
         if (strcmp(rest_argv[0], "reset") == 0) {
             return "setting.reset";
+        }
+        if (strcmp(rest_argv[0], "export") == 0) {
+            return "setting.export";
         }
     }
     return NULL;
@@ -2719,7 +2873,7 @@ const char *cmd_settings_reply(int rest_argc, const char **rest_argv)
 int cmd_settings(Store *store, bool json, int rest_argc, const char **rest_argv)
 {
     if (settings_verb(rest_argc, rest_argv) == NULL) {
-        err_msg(DIAG_USAGE, "settings takes 'get', 'set', or 'reset'");
+        err_msg(DIAG_USAGE, "settings takes 'get', 'set', 'reset', or 'export'");
         return REMEMBER_ERR;
     }
     if (strcmp(rest_argv[0], "get") == 0) {
@@ -2727,6 +2881,9 @@ int cmd_settings(Store *store, bool json, int rest_argc, const char **rest_argv)
     }
     if (strcmp(rest_argv[0], "set") == 0) {
         return cmd_settings_set(store, json, rest_argc, rest_argv);
+    }
+    if (strcmp(rest_argv[0], "export") == 0) {
+        return cmd_settings_export(store, rest_argc, rest_argv);
     }
     return cmd_settings_reset(store, json, rest_argc, rest_argv);
 }

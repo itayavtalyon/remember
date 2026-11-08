@@ -4460,7 +4460,7 @@ TEST(get_usage_rejects_a_bad_invocation)
     store_close(store);
     got = get_at(brain, userdb, bare, sizeof(bare) / sizeof(bare[0]));
     ASSERT_EQ_INT(got.exit_code, 1);
-    ASSERT_STREQ(got.err, "remember: settings takes 'get', 'set', or 'reset'\n");
+    ASSERT_STREQ(got.err, "remember: settings takes 'get', 'set', 'reset', or 'export'\n");
     cmd_result_free(&got);
     got = get_at(brain, userdb, missing, sizeof(missing) / sizeof(missing[0]));
     ASSERT_EQ_INT(got.exit_code, 1);
@@ -5557,6 +5557,265 @@ TEST(set_and_reset_take_the_hook_flags)
     got = get_at(brain, userdb, get_hooks, sizeof(get_hooks) / sizeof(get_hooks[0]));
     ASSERT_EQ_INT(got.exit_code, 1);
     ASSERT_STREQ(got.err, "remember: unknown option '--hooks'\n");
+    cmd_result_free(&got);
+    harness_remove_tree(tmpl);
+}
+
+/* A tombstone is not a value: the set after a brain reset has no old value. */
+TEST(set_after_a_brain_reset_has_no_old_value)
+{
+    char tmpl[] = "/tmp/remember-set-after-reset-XXXXXX";
+    char brain[REMEMBER_PATH_MAX];
+    char userdb[REMEMBER_PATH_MAX];
+    Store *store = open_pair(tmpl, brain, sizeof(brain), userdb, sizeof(userdb));
+    const char *first[] = {"settings", "set", "--scope", "brain", "remember.search.candidate_pool",
+                           "400"};
+    const char *reset[] = {"settings", "reset", "--scope", "brain",
+                           "remember.search.candidate_pool"};
+    const char *again[] = {
+        "--json", "settings", "set", "--scope", "brain", "remember.search.candidate_pool", "500"};
+    CmdResult got;
+
+    if (store == NULL) {
+        return;
+    }
+    store_close(store);
+    got = get_at(brain, userdb, first, sizeof(first) / sizeof(first[0]));
+    ASSERT_EQ_INT(got.exit_code, 0);
+    cmd_result_free(&got);
+    got = get_at(brain, userdb, reset, sizeof(reset) / sizeof(reset[0]));
+    ASSERT_EQ_INT(got.exit_code, 0);
+    cmd_result_free(&got);
+    got = get_at(brain, userdb, again, sizeof(again) / sizeof(again[0]));
+    ASSERT_EQ_INT(got.exit_code, 0);
+    ASSERT_STR_CONTAINS(got.out, "\"scope\":\"brain\",\"old_value\":null,\"changed\":true}");
+    cmd_result_free(&got);
+    harness_remove_tree(tmpl);
+}
+
+/* ST-8.1: a fixed clock makes exported_at and the user stamps exact. */
+static CmdResult export_at(const char *brain, const char *userdb, const char *const *args, size_t n)
+{
+    CmdResult got;
+
+    // NOLINTBEGIN(concurrency-mt-unsafe)
+    ASSERT_EQ_INT(setenv("REMEMBER_TEST_FIXED_IDS", "1", 1), 0);
+    got = get_at(brain, userdb, args, n);
+    ASSERT_EQ_INT(unsetenv("REMEMBER_TEST_FIXED_IDS"), 0);
+    // NOLINTEND(concurrency-mt-unsafe)
+    return got;
+}
+
+static const char k_export_head[] = "{\"format\":\"remember-settings-export\",\"version\":1,"
+                                    "\"exported_at\":\"2026-01-01T00:00:00.000Z\",\"settings\":[";
+static const char k_export_user_budget[] =
+    "{\"key\":\"remember.plugins.chain_budget\",\"scope\":\"user\",\"value\":\"2s\","
+    "\"value_ms\":2000,\"updated_by\":{\"kind\":\"human\",\"id\":null},\"updated_at\":"
+    "\"2026-01-01T00:00:00.000Z\",\"device_id\":\"\",\"version_vector\":{},\"deleted_at\":null}";
+static const char k_export_brain_pool[] =
+    "{\"key\":\"remember.search.candidate_pool\",\"scope\":\"brain\",\"value\":400,\"updated_by\":"
+    "{\"kind\":\"human\",\"id\":null},\"updated_at\":\"2026-10-24T09:12:00.000Z\",\"device_id\":"
+    "\"dev-b\",\"version_vector\":{\"dev-a\":1,\"dev-b\":3},\"deleted_at\":null}";
+static const char k_export_user_pool[] =
+    "{\"key\":\"remember.search.candidate_pool\",\"scope\":\"user\",\"value\":500,\"updated_by\":"
+    "{\"kind\":\"agent\",\"id\":\"bot1\"},\"updated_at\":\"2026-01-01T00:00:00.000Z\","
+    "\"device_id\":\"\",\"version_vector\":{},\"deleted_at\":null}";
+static const char k_export_brain_max[] =
+    "{\"key\":\"remember.search.max_results\",\"scope\":\"brain\",\"value\":9,\"updated_by\":"
+    "{\"kind\":\"agent\",\"id\":\"bot1\"},\"updated_at\":\"2026-10-24T09:13:00.000Z\",\"device_"
+    "id\":"
+    "\"dev-a\",\"version_vector\":{\"dev-a\":2},\"deleted_at\":\"2026-10-24T09:13:00.000Z\"}";
+static const char k_export_brain_custom[] =
+    "{\"key\":\"zz.custom.key\",\"scope\":\"brain\",\"value\":\"x\",\"updated_by\":{\"kind\":"
+    "\"human\",\"id\":null},\"updated_at\":\"2026-10-24T09:14:00.000Z\",\"device_id\":\"dev-a\","
+    "\"version_vector\":{},\"deleted_at\":null}";
+
+/* Brain rows by hand: two devices out of order, a tombstone, and a key the registry
+   does not have. User rows through the CLI. */
+static bool export_fixture(char *tmpl, char *brain, size_t brain_cap, char *userdb, size_t user_cap)
+{
+    const char *pool[] = {"settings", "set",  "remember.search.candidate_pool",
+                          "500",      "--as", "agent",
+                          "--actor",  "bot1"};
+    const char *budget[] = {"settings", "set", "remember.plugins.chain_budget", "2s"};
+    Store *store = open_pair(tmpl, brain, brain_cap, userdb, user_cap);
+    CmdResult got;
+
+    if (store == NULL) {
+        return false;
+    }
+    store_close(store);
+    exec_fixture(brain,
+                 "INSERT INTO settings (key, value, updated_by, updated_at, device_id, "
+                 "version_vector, deleted_at, change_seq) VALUES "
+                 "('remember.search.candidate_pool', '400', '{\"kind\":\"human\",\"id\":null}', "
+                 "'2026-10-24T09:12:00.000Z', 'dev-b', '{\"dev-b\":3, \"dev-a\":1}', NULL, 1), "
+                 "('remember.search.max_results', '9', '{\"kind\":\"agent\",\"id\":\"bot1\"}', "
+                 "'2026-10-24T09:13:00.000Z', 'dev-a', '{\"dev-a\":2}', "
+                 "'2026-10-24T09:13:00.000Z', 2), "
+                 "('zz.custom.key', '\"x\"', '{\"kind\":\"human\",\"id\":null}', "
+                 "'2026-10-24T09:14:00.000Z', 'dev-a', '{}', NULL, 3);");
+    got = export_at(brain, userdb, pool, sizeof(pool) / sizeof(pool[0]));
+    ASSERT_EQ_INT(got.exit_code, 0);
+    cmd_result_free(&got);
+    got = export_at(brain, userdb, budget, sizeof(budget) / sizeof(budget[0]));
+    ASSERT_EQ_INT(got.exit_code, 0);
+    cmd_result_free(&got);
+    return true;
+}
+
+TEST(export_prints_the_settings_document)
+{
+    char tmpl[] = "/tmp/remember-export-doc-XXXXXX";
+    char brain[REMEMBER_PATH_MAX];
+    char userdb[REMEMBER_PATH_MAX];
+    char want[4096];
+    const char *args[] = {"settings", "export"};
+    const char *json_args[] = {"--json", "settings", "export", "--scope", "all"};
+    CmdResult got;
+
+    if (!export_fixture(tmpl, brain, sizeof(brain), userdb, sizeof(userdb))) {
+        return;
+    }
+    ASSERT_TRUE(snprintf(want, sizeof(want), "%s%s,%s,%s,%s,%s]}\n", k_export_head,
+                         k_export_user_budget, k_export_brain_pool, k_export_user_pool,
+                         k_export_brain_max, k_export_brain_custom) > 0);
+    got = export_at(brain, userdb, args, sizeof(args) / sizeof(args[0]));
+    ASSERT_EQ_INT(got.exit_code, 0);
+    ASSERT_STREQ(got.err, "");
+    ASSERT_STREQ(got.out, want);
+    cmd_result_free(&got);
+    /* A document, not a message: --json prints the same bytes. */
+    got = export_at(brain, userdb, json_args, sizeof(json_args) / sizeof(json_args[0]));
+    ASSERT_EQ_INT(got.exit_code, 0);
+    ASSERT_STREQ(got.err, "");
+    ASSERT_STREQ(got.out, want);
+    cmd_result_free(&got);
+    harness_remove_tree(tmpl);
+}
+
+TEST(export_scope_selects_one_layer)
+{
+    char tmpl[] = "/tmp/remember-export-scope-XXXXXX";
+    char brain[REMEMBER_PATH_MAX];
+    char userdb[REMEMBER_PATH_MAX];
+    char want[4096];
+    const char *user_args[] = {"settings", "export", "--scope", "user"};
+    const char *brain_args[] = {"settings", "export", "--scope", "brain"};
+    CmdResult got;
+
+    if (!export_fixture(tmpl, brain, sizeof(brain), userdb, sizeof(userdb))) {
+        return;
+    }
+    ASSERT_TRUE(snprintf(want, sizeof(want), "%s%s,%s]}\n", k_export_head, k_export_user_budget,
+                         k_export_user_pool) > 0);
+    got = export_at(brain, userdb, user_args, sizeof(user_args) / sizeof(user_args[0]));
+    ASSERT_EQ_INT(got.exit_code, 0);
+    ASSERT_STREQ(got.out, want);
+    cmd_result_free(&got);
+    ASSERT_TRUE(snprintf(want, sizeof(want), "%s%s,%s,%s]}\n", k_export_head, k_export_brain_pool,
+                         k_export_brain_max, k_export_brain_custom) > 0);
+    got = export_at(brain, userdb, brain_args, sizeof(brain_args) / sizeof(brain_args[0]));
+    ASSERT_EQ_INT(got.exit_code, 0);
+    ASSERT_STREQ(got.out, want);
+    cmd_result_free(&got);
+    harness_remove_tree(tmpl);
+}
+
+TEST(export_of_nothing_is_an_empty_list)
+{
+    char tmpl[] = "/tmp/remember-export-empty-XXXXXX";
+    char brain[REMEMBER_PATH_MAX];
+    char userdb[REMEMBER_PATH_MAX];
+    char want[256];
+    Store *store = open_pair(tmpl, brain, sizeof(brain), userdb, sizeof(userdb));
+    const char *args[] = {"settings", "export"};
+    CmdResult got;
+
+    if (store == NULL) {
+        return;
+    }
+    store_close(store);
+    ASSERT_TRUE(snprintf(want, sizeof(want), "%s]}\n", k_export_head) > 0);
+    got = export_at(brain, userdb, args, sizeof(args) / sizeof(args[0]));
+    ASSERT_EQ_INT(got.exit_code, 0);
+    ASSERT_STREQ(got.out, want);
+    ASSERT_TRUE(access(userdb, F_OK) != 0);
+    cmd_result_free(&got);
+    harness_remove_tree(tmpl);
+}
+
+/* decision:plan20-export-json-error: a failure is the envelope, type setting.export.result. */
+TEST(export_usage_errors_use_the_envelope_under_json)
+{
+    char tmpl[] = "/tmp/remember-export-usage-XXXXXX";
+    char brain[REMEMBER_PATH_MAX];
+    char userdb[REMEMBER_PATH_MAX];
+    Store *store = open_pair(tmpl, brain, sizeof(brain), userdb, sizeof(userdb));
+    const char *bad_json[] = {"--json", "settings", "export", "--scope", "nope"};
+    const char *bad[] = {"settings", "export", "--scope", "nope"};
+    const char *extra[] = {"settings", "export", "file.json"};
+    const char *twice[] = {"settings", "export", "--scope", "user", "--scope", "brain"};
+    const char *missing[] = {"settings", "export", "--scope"};
+    const char *flag[] = {"settings", "export", "--hooks"};
+    CmdResult got;
+
+    if (store == NULL) {
+        return;
+    }
+    store_close(store);
+    got = get_at(brain, userdb, bad_json, sizeof(bad_json) / sizeof(bad_json[0]));
+    ASSERT_EQ_INT(got.exit_code, 1);
+    ASSERT_STREQ(got.err, "");
+    ASSERT_STR_CONTAINS(got.out, "{\"format\":\"remember-message\",\"version\":1,\"type\":"
+                                 "\"setting.export.result\",\"error\":{\"code\":\"usage\","
+                                 "\"message\":\"invalid --scope (use brain, user, or all)\"");
+    cmd_result_free(&got);
+    got = get_at(brain, userdb, bad, sizeof(bad) / sizeof(bad[0]));
+    ASSERT_EQ_INT(got.exit_code, 1);
+    ASSERT_STREQ(got.out, "");
+    ASSERT_STREQ(got.err, "remember: invalid --scope (use brain, user, or all)\n");
+    cmd_result_free(&got);
+    got = get_at(brain, userdb, extra, sizeof(extra) / sizeof(extra[0]));
+    ASSERT_EQ_INT(got.exit_code, 1);
+    ASSERT_STREQ(got.err, "remember: settings export takes no arguments\n");
+    cmd_result_free(&got);
+    got = get_at(brain, userdb, twice, sizeof(twice) / sizeof(twice[0]));
+    ASSERT_EQ_INT(got.exit_code, 1);
+    ASSERT_STREQ(got.err, "remember: duplicate --scope\n");
+    cmd_result_free(&got);
+    got = get_at(brain, userdb, missing, sizeof(missing) / sizeof(missing[0]));
+    ASSERT_EQ_INT(got.exit_code, 1);
+    ASSERT_STREQ(got.err, "remember: missing value for --scope\n");
+    cmd_result_free(&got);
+    got = get_at(brain, userdb, flag, sizeof(flag) / sizeof(flag[0]));
+    ASSERT_EQ_INT(got.exit_code, 1);
+    ASSERT_STREQ(got.err, "remember: unknown option '--hooks'\n");
+    cmd_result_free(&got);
+    harness_remove_tree(tmpl);
+}
+
+/* A value that is not JSON cannot be spliced into the document. */
+TEST(export_fails_on_a_hand_edited_value_that_is_not_json)
+{
+    char tmpl[] = "/tmp/remember-export-bad-XXXXXX";
+    char brain[REMEMBER_PATH_MAX];
+    char userdb[REMEMBER_PATH_MAX];
+    Store *store = open_pair(tmpl, brain, sizeof(brain), userdb, sizeof(userdb));
+    const char *args[] = {"settings", "export"};
+    CmdResult got;
+
+    if (store == NULL) {
+        return;
+    }
+    store_close(store);
+    exec_fixture(brain, "INSERT INTO settings (key, value, updated_by, updated_at, device_id, "
+                        "version_vector, deleted_at, change_seq) VALUES ('zz.custom.key', 'not "
+                        "json', '{}', '2026-10-24T09:14:00.000Z', 'dev-a', '{}', NULL, 1);");
+    got = export_at(brain, userdb, args, sizeof(args) / sizeof(args[0]));
+    ASSERT_EQ_INT(got.exit_code, 1);
+    ASSERT_STREQ(got.out, "");
+    ASSERT_STR_CONTAINS(got.err, "malformed JSON");
     cmd_result_free(&got);
     harness_remove_tree(tmpl);
 }
@@ -6927,6 +7186,12 @@ void register_settings_tests(void)
     RUN_TEST(set_brain_quota_names_the_brain);
     RUN_TEST(set_unknown_key_offers_one_suggestion);
     RUN_TEST(set_usage_rejects_a_bad_invocation);
+    RUN_TEST(export_prints_the_settings_document);
+    RUN_TEST(export_scope_selects_one_layer);
+    RUN_TEST(export_of_nothing_is_an_empty_list);
+    RUN_TEST(export_usage_errors_use_the_envelope_under_json);
+    RUN_TEST(export_fails_on_a_hand_edited_value_that_is_not_json);
+    RUN_TEST(set_after_a_brain_reset_has_no_old_value);
     RUN_TEST(set_and_reset_take_the_hook_flags);
     RUN_TEST(a_hook_cannot_set_or_reset);
     RUN_TEST(reset_user_layer_prints_the_effective_value);
