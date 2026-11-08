@@ -969,18 +969,20 @@ TEST(list_json_cursor_filters_and_rejects)
         if (json != NULL) {
             int wrote =
                 snprintf(json, 4096U, "{\"v\":1,\"sort\":\"updated\",\"bin\":\"live\",\"tags\":[");
-            size_t used = (size_t)wrote;
+            size_t used = 0U;
 
-            ASSERT_TRUE(wrote > 0);
-            for (i = 0U; i < 51U; i++) {
+            for (i = 0U; i < 51U && wrote > 0 && (size_t)wrote < 4096U - used; i++) {
+                used += (size_t)wrote;
                 wrote =
                     snprintf(json + used, 4096U - used, "%s\"a%02zu\"", (i == 0U) ? "" : ",", i);
-                ASSERT_TRUE(wrote > 0);
-                used += (size_t)wrote;
             }
-            wrote = snprintf(json + used, 4096U - used, "],\"at\":\"t\",\"local_id\":1}");
-            ASSERT_TRUE(wrote > 0);
-            assert_bad_json_cursor(db, json);
+            ASSERT_TRUE(wrote > 0 && (size_t)wrote < 4096U - used);
+            if (wrote > 0 && (size_t)wrote < 4096U - used) {
+                used += (size_t)wrote;
+                wrote = snprintf(json + used, 4096U - used, "],\"at\":\"t\",\"local_id\":1}");
+                ASSERT_TRUE(wrote > 0 && (size_t)wrote < 4096U - used);
+                assert_bad_json_cursor(db, json);
+            }
             free(json);
         }
     }
