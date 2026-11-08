@@ -10356,29 +10356,14 @@ SettingStatus store_setting_set(Store *brain, const char *user_db, const Setting
                           setting_actor(w->updated_by), out, err, errlen);
 }
 
-SettingStatus store_setting_reset(Store *brain, const char *user_db, const char *key,
-                                  SettingLayer layer, const char *updated_by,
-                                  SettingWriteResult *out, char *err, size_t errlen)
+static SettingStatus reset_on_layer(Store *brain, const char *user_db, const char *key,
+                                    SettingLayer chosen, const char *updated_by,
+                                    SettingWriteResult *out, char *err, size_t errlen)
 {
-    const SettingSpec *spec = NULL;
-    SettingLayer chosen = SETTING_LAYER_AUTO;
     SettingStatus st = SETTING_OK;
     sqlite3 *udb = NULL;
     bool absent = false;
 
-    if (out != NULL) {
-        memset(out, 0, sizeof(*out));
-    }
-    if (brain == NULL || brain->db == NULL || out == NULL) {
-        set_err(err, errlen, "internal error");
-        setting_fail(out, SETTING_ERR_STORE);
-        return SETTING_ERR_STORE;
-    }
-    st = setting_choose_layer(key, layer, &spec, &chosen, err, errlen);
-    if (st != SETTING_OK) {
-        setting_fail(out, st);
-        return st;
-    }
     out->layer = chosen;
     if (chosen == SETTING_LAYER_USER) {
         if (open_user_existing(user_db, &udb, &absent, err, errlen) != 0) {
@@ -10395,8 +10380,8 @@ SettingStatus store_setting_reset(Store *brain, const char *user_db, const char 
             setting_fail(out, SETTING_ERR_STORE);
             return SETTING_ERR_STORE;
         }
-        st = mutate_setting(brain, udb, false, true, spec->key, NULL, setting_actor(updated_by),
-                            out, err, errlen);
+        st = mutate_setting(brain, udb, false, true, key, NULL, setting_actor(updated_by), out, err,
+                            errlen);
         (void)sqlite3_close(udb);
         return st;
     }
@@ -10405,8 +10390,172 @@ SettingStatus store_setting_reset(Store *brain, const char *user_db, const char 
         setting_fail(out, st);
         return st;
     }
-    return mutate_setting(brain, brain->db, true, true, spec->key, NULL, setting_actor(updated_by),
-                          out, err, errlen);
+    return mutate_setting(brain, brain->db, true, true, key, NULL, setting_actor(updated_by), out,
+                          err, errlen);
+}
+
+SettingStatus store_setting_reset(Store *brain, const char *user_db, const char *key,
+                                  SettingLayer layer, const char *updated_by,
+                                  SettingWriteResult *out, char *err, size_t errlen)
+{
+    const SettingSpec *spec = NULL;
+    SettingLayer chosen = SETTING_LAYER_AUTO;
+    SettingStatus st = SETTING_OK;
+
+    if (out != NULL) {
+        memset(out, 0, sizeof(*out));
+    }
+    if (brain == NULL || brain->db == NULL || out == NULL) {
+        set_err(err, errlen, "internal error");
+        setting_fail(out, SETTING_ERR_STORE);
+        return SETTING_ERR_STORE;
+    }
+    st = setting_choose_layer(key, layer, &spec, &chosen, err, errlen);
+    if (st != SETTING_OK) {
+        setting_fail(out, st);
+        return st;
+    }
+    return reset_on_layer(brain, user_db, spec->key, chosen, updated_by, out, err, errlen);
+}
+
+SettingStatus store_setting_reset_stored(Store *brain, const char *user_db, const char *key,
+                                         SettingLayer layer, const char *updated_by,
+                                         SettingWriteResult *out, char *err, size_t errlen)
+{
+    if (out != NULL) {
+        memset(out, 0, sizeof(*out));
+    }
+    if (brain == NULL || brain->db == NULL || out == NULL || key == NULL || key[0] == '\0' ||
+        (layer != SETTING_LAYER_USER && layer != SETTING_LAYER_BRAIN)) {
+        set_err(err, errlen, "internal error");
+        setting_fail(out, SETTING_ERR_STORE);
+        return SETTING_ERR_STORE;
+    }
+    return reset_on_layer(brain, user_db, key, layer, updated_by, out, err, errlen);
+}
+
+void store_setting_rows_free(SettingStoredRow *rows, size_t n)
+{
+    size_t i = 0;
+
+    if (rows == NULL) {
+        return;
+    }
+    for (i = 0; i < n; i++) {
+        free(rows[i].key);
+        free(rows[i].value);
+    }
+    free(rows);
+}
+
+static int append_stored_row(SettingStoredRow **rows, size_t *n, size_t *cap, const char *key,
+                             const char *value, char *err, size_t errlen)
+{
+    SettingStoredRow *grown = NULL;
+
+    if (*n == *cap) {
+        size_t next = (*cap == 0U) ? (size_t)GROW_MIN_CAP : (*cap * 2U);
+        grown = (SettingStoredRow *)realloc(*rows, next * sizeof(*grown));
+        if (grown == NULL) {
+            set_err(err, errlen, "out of memory");
+            return -1;
+        }
+        *rows = grown;
+        *cap = next;
+    }
+    (*rows)[*n].key = dup_str(key);
+    (*rows)[*n].value = dup_str(value);
+    if ((*rows)[*n].key == NULL || (*rows)[*n].value == NULL) {
+        free((*rows)[*n].key);
+        free((*rows)[*n].value);
+        set_err(err, errlen, "out of memory");
+        return -1;
+    }
+    *n += 1U;
+    return 0;
+}
+
+static SettingStatus list_live_db(sqlite3 *db, bool brain, SettingStoredRow **out_rows,
+                                  size_t *out_n, char *err, size_t errlen)
+{
+    const char *sql = "SELECT key, value FROM settings ORDER BY key COLLATE BINARY;";
+    sqlite3_stmt *stmt = NULL;
+    SettingStoredRow *rows = NULL;
+    size_t n = 0;
+    size_t cap = 0;
+
+    if (brain) {
+        sql = "SELECT key, value FROM settings WHERE deleted_at IS NULL ORDER BY key COLLATE "
+              "BINARY;";
+    }
+    if (sqlite3_prepare_v2(db, sql, -1, &stmt, NULL) != SQLITE_OK) {
+        set_errf(err, errlen, "sqlite", sqlite3_errmsg(db));
+        return SETTING_ERR_STORE;
+    }
+    for (;;) {
+        const char *key = NULL;
+        const char *value = NULL;
+        int rc = sqlite3_step(stmt);
+        if (rc == SQLITE_DONE) {
+            break;
+        }
+        if (rc != SQLITE_ROW) {
+            set_errf(err, errlen, "sqlite", sqlite3_errmsg(db));
+            (void)sqlite3_finalize(stmt);
+            store_setting_rows_free(rows, n);
+            return SETTING_ERR_STORE;
+        }
+        key = (const char *)sqlite3_column_text(stmt, 0);
+        value = (const char *)sqlite3_column_text(stmt, 1);
+        if (key == NULL || value == NULL) {
+            set_err(err, errlen, "out of memory");
+            (void)sqlite3_finalize(stmt);
+            store_setting_rows_free(rows, n);
+            return SETTING_ERR_STORE;
+        }
+        if (append_stored_row(&rows, &n, &cap, key, value, err, errlen) != 0) {
+            (void)sqlite3_finalize(stmt);
+            store_setting_rows_free(rows, n);
+            return SETTING_ERR_STORE;
+        }
+    }
+    (void)sqlite3_finalize(stmt);
+    *out_rows = rows;
+    *out_n = n;
+    return SETTING_OK;
+}
+
+SettingStatus store_setting_list_live(Store *brain, const char *user_db, SettingLayer layer,
+                                      SettingStoredRow **out_rows, size_t *out_n, char *err,
+                                      size_t errlen)
+{
+    sqlite3 *udb = NULL;
+    bool absent = false;
+    SettingStatus st = SETTING_OK;
+
+    if (out_rows != NULL) {
+        *out_rows = NULL;
+    }
+    if (out_n != NULL) {
+        *out_n = 0U;
+    }
+    if (brain == NULL || brain->db == NULL || out_rows == NULL || out_n == NULL ||
+        (layer != SETTING_LAYER_USER && layer != SETTING_LAYER_BRAIN)) {
+        set_err(err, errlen, "internal error");
+        return SETTING_ERR_STORE;
+    }
+    if (layer == SETTING_LAYER_BRAIN) {
+        return list_live_db(brain->db, true, out_rows, out_n, err, errlen);
+    }
+    if (open_user_existing(user_db, &udb, &absent, err, errlen) != 0) {
+        return SETTING_ERR_STORE;
+    }
+    if (absent) {
+        return SETTING_OK;
+    }
+    st = list_live_db(udb, false, out_rows, out_n, err, errlen);
+    (void)sqlite3_close(udb);
+    return st;
 }
 
 SettingStatus store_setting_read(Store *brain, const char *user_db, const char *key,

@@ -58,7 +58,7 @@ static void print_general_help(void)
         "  conflict    Resolve a merge conflict (accept)\n"
         "  device      Print the device id, or mint one with 'new'\n"
         "  brain       Replace the brain id\n"
-        "  settings    Show one setting\n"
+        "  settings    Show or change a setting\n"
         "  help        Show this help (help <command> for a command)\n"
         "  version     Show version\n"
         "\n"
@@ -334,8 +334,18 @@ static void print_command_help(CliCommand topic)
         (void)fprintf(out, "data is {brain_id, previous_brain_id}.\n");
         (void)fprintf(out, "\n");
     } else if (topic == CLI_CMD_SETTINGS) {
-        (void)fprintf(out, "Show one setting and the layer it comes from.\n");
+        (void)fprintf(out, "Show or change a setting.\n");
         (void)fprintf(out, "  remember settings get KEY [--scope brain|user] [--value]\n");
+        (void)fprintf(out, "  remember settings set KEY VALUE... [--scope brain|user] "
+                           "[--as KIND] [--actor ID]\n");
+        (void)fprintf(out, "  remember settings set KEY --clear [--scope brain|user] "
+                           "[--as KIND] [--actor ID]\n");
+        (void)fprintf(out, "  remember settings reset KEY [--scope brain|user] "
+                           "[--as KIND] [--actor ID]\n");
+        (void)fprintf(out, "  remember settings reset --namespace NS [--scope brain|user] --yes\n");
+        (void)fprintf(out, "  remember settings reset --all --scope brain|user --yes\n");
+        (void)fprintf(out, "Without --scope, set and reset write the user layer unless the key "
+                           "allows only the brain.\n");
         (void)fprintf(out, "--scope shows only that layer. --value prints only the value.\n");
         (void)fprintf(out, "An empty layer prints (unset).\n");
         (void)fprintf(out, "\n");

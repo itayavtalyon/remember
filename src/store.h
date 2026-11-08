@@ -166,6 +166,29 @@ SettingStatus store_setting_reset(Store *brain, const char *user_db, const char 
 SettingStatus store_setting_read(Store *brain, const char *user_db, const char *key,
                                  const char *flag_text, SettingRead *out, char *err, size_t errlen);
 
+/* One live stored row. key and value are malloc'd. The caller frees the array
+   with store_setting_rows_free. */
+typedef struct {
+    char *key;
+    char *value;
+} SettingStoredRow;
+
+void store_setting_rows_free(SettingStoredRow *rows, size_t n);
+
+/* Live keys in one layer, ordered by key COLLATE BINARY. Brain rows are live
+   when deleted_at is null. User rows are live until reset deletes them.
+   SETTING_LAYER_AUTO is a programmer error. A missing user.db yields zero rows. */
+SettingStatus store_setting_list_live(Store *brain, const char *user_db, SettingLayer layer,
+                                      SettingStoredRow **out_rows, size_t *out_n, char *err,
+                                      size_t errlen);
+
+/* Reset one stored key with no registry check (ST-5.11). Brain: tombstone.
+   User: delete. A missing live row is changed false and writes nothing.
+   SETTING_LAYER_AUTO is a programmer error. */
+SettingStatus store_setting_reset_stored(Store *brain, const char *user_db, const char *key,
+                                         SettingLayer layer, const char *updated_by,
+                                         SettingWriteResult *out, char *err, size_t errlen);
+
 /*
  * store_open with options and a structured SQLite failure. opts NULL means
  * defaults (STORE_DEFAULT_BUSY_TIMEOUT_MS, create, keep an invalid sidecar an

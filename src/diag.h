@@ -47,6 +47,13 @@ typedef enum {
     DIAG_SYNC_CREDENTIAL_UNAVAILABLE,
     /* C-03. Appended so the E4.3 order stays put. */
     DIAG_SETTING_UNKNOWN,
+    /* Plan 20 stage 6. Appended so the E4.3 order stays put. */
+    DIAG_SETTING_INVALID_VALUE,
+    DIAG_SETTING_OUT_OF_RANGE,
+    DIAG_SETTING_SCOPE_MISMATCH,
+    DIAG_QUOTA_EXCEEDED,
+    DIAG_CONFIRMATION_REQUIRED,
+    DIAG_SETTING_FROM_HOOK,
     DIAG_CODE_COUNT
 } DiagCode;
 
@@ -101,6 +108,17 @@ int diag_error_split(DiagCode code, DiagSplit split);
    Plain joins message and fix. JSON uses this fix and still writes retryable. */
 int diag_error_fix(DiagCode code, const char *message, const char *fix);
 
+/* One string member of a JSON "detail" object. */
+typedef struct {
+    const char *name;
+    const char *value;
+} DiagDetailField;
+
+/* diag_error_fix plus a JSON "detail" object. Plain joins message and fix.
+   An empty fix is not a second sentence. nfields 0 writes no detail. */
+int diag_error_detail(DiagCode code, const char *message, const char *fix,
+                      const DiagDetailField *fields, size_t nfields);
+
 /*
  * Write one SQLite failure (E4.8 text, E4.9 detail). code is one of the eight
  * SQLite codes (busy, read_only, disk_full, cannot_open, not_a_database,
@@ -128,12 +146,6 @@ int diag_error_sqlite(DiagCode code, const StoreError *detail, const char *path)
  * Returns -1 when code is outside the warning catalog or the write fails.
  */
 int diag_warning(DiagWarning code, const char *message);
-
-/* One string member of a warning's JSON "detail" object. */
-typedef struct {
-    const char *name;
-    const char *value;
-} DiagDetailField;
 
 /*
  * diag_warning plus a JSON "detail" object of string members, in the given

@@ -81,6 +81,12 @@ static const char *const k_error_codes[DIAG_CODE_COUNT] = {
     [DIAG_INVALID_ARGUMENT] = "invalid_argument",
     [DIAG_SYNC_CREDENTIAL_UNAVAILABLE] = "sync_credential_unavailable",
     [DIAG_SETTING_UNKNOWN] = "setting_unknown",
+    [DIAG_SETTING_INVALID_VALUE] = "setting_invalid_value",
+    [DIAG_SETTING_OUT_OF_RANGE] = "setting_out_of_range",
+    [DIAG_SETTING_SCOPE_MISMATCH] = "setting_scope_mismatch",
+    [DIAG_QUOTA_EXCEEDED] = "quota_exceeded",
+    [DIAG_CONFIRMATION_REQUIRED] = "confirmation_required",
+    [DIAG_SETTING_FROM_HOOK] = "setting_from_hook",
 };
 
 /* error.fix per code (decision:plan21-error-fix-drafts-c42). The SQLite codes
@@ -126,6 +132,14 @@ static const char *const k_fix[DIAG_CODE_COUNT] = {
     "REMEMBER_SYNC_TOKEN.",
     /* Locked, C-03. */
     [DIAG_SETTING_UNKNOWN] = "Run 'remember settings list' to see all settings.",
+    /* Catalog fallbacks. Settings commands pass the C-05..C-11 sentence. */
+    [DIAG_SETTING_INVALID_VALUE] =
+        "Write it in plain digits, like 200, with no sign, leading zero, \"_\", or exponent.",
+    [DIAG_SETTING_OUT_OF_RANGE] = "Set a value from the minimum to the maximum.",
+    [DIAG_SETTING_SCOPE_MISMATCH] = "Run the command again with --scope brain, or without --scope.",
+    [DIAG_QUOTA_EXCEEDED] = "Reset settings you don't need with 'remember settings reset'.",
+    [DIAG_CONFIRMATION_REQUIRED] = "Run the command again with --yes to confirm.",
+    [DIAG_SETTING_FROM_HOOK] = "Change them yourself in a terminal or in Settings.",
 };
 
 /* cppcheck-suppress staticFunction ; public API (diag.h); remember_run */
@@ -378,7 +392,7 @@ static int write_notice(Notice notice)
         rc = write_json_notice(notice, message);
     } else if (fprintf(err, "remember: %s", notice.plain_prefix) < 0 ||
                output_text_human(err, message, false) != 0 ||
-               (notice.fix != NULL &&
+               (notice.fix != NULL && notice.fix[0] != '\0' &&
                 (fputc(' ', err) == EOF || output_text_human(err, notice.fix, false) != 0)) ||
                fputc('\n', err) == EOF) {
         /* decision:plan17a-plain-notice-one-line: an echoed token cannot split the
@@ -516,9 +530,15 @@ int diag_error(DiagCode code, const char *message)
 /* cppcheck-suppress staticFunction ; public API (diag.h) */
 int diag_error_fix(DiagCode code, const char *message, const char *fix)
 {
+    return diag_error_detail(code, message, fix, NULL, 0U);
+}
+
+int diag_error_detail(DiagCode code, const char *message, const char *fix,
+                      const DiagDetailField *fields, size_t nfields)
+{
     const char *name = diag_code_name(code);
 
-    if (name == NULL) {
+    if (name == NULL || (fields == NULL && nfields > 0U)) {
         return -1;
     }
     return write_notice((Notice){
@@ -527,6 +547,8 @@ int diag_error_fix(DiagCode code, const char *message, const char *fix)
         .code = name,
         .message = message,
         .fix = fix,
+        .fields = fields,
+        .nfields = nfields,
         .error_code = code,
     });
 }

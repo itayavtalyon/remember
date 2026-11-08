@@ -203,23 +203,13 @@ const SettingSpec *setting_by_key(const char *typed)
 }
 
 static const char k_prefix_default[] = "[\"project:\",\"status:\"]";
-static const char k_idle_scope[] =
-    "remember.plugins.idle_timeout is a user setting; it can't be set for one brain. Run the "
-    "command again with --scope user, or without --scope.";
 
 static void copy_msg(char *err, size_t errlen, const char *msg)
 {
-    size_t n = 0;
-
     if (err == NULL || errlen == 0U || msg == NULL) {
         return;
     }
-    n = strlen(msg);
-    if (n >= errlen) {
-        n = errlen - 1U;
-    }
-    memcpy(err, msg, n);
-    err[n] = '\0';
+    (void)snprintf(err, errlen, "%s", msg);
 }
 
 /* cppcheck-suppress staticFunction ; public API (settings.h); used by tests */
@@ -519,7 +509,7 @@ static SettingStatus setting_canon(const SettingSpec *spec, const char *const *i
 }
 
 static SettingStatus setting_layer_of(const SettingSpec *spec, SettingLayer requested,
-                                      SettingLayer *out, char *err, size_t errlen)
+                                      SettingLayer *out)
 {
     SettingLayer layer = requested;
 
@@ -530,13 +520,8 @@ static SettingStatus setting_layer_of(const SettingSpec *spec, SettingLayer requ
             layer = SETTING_LAYER_BRAIN;
         }
     }
-    if (layer == SETTING_LAYER_USER && !spec->allow_user) {
-        return SETTING_ERR_SCOPE;
-    }
-    if (layer == SETTING_LAYER_BRAIN && !spec->allow_brain) {
-        if (strcmp(spec->key, "remember.plugins.idle_timeout") == 0) {
-            copy_msg(err, errlen, k_idle_scope);
-        }
+    if ((layer == SETTING_LAYER_USER && !spec->allow_user) ||
+        (layer == SETTING_LAYER_BRAIN && !spec->allow_brain)) {
         return SETTING_ERR_SCOPE;
     }
     *out = layer;
@@ -567,7 +552,7 @@ SettingStatus setting_choose_layer(const char *key, SettingLayer requested,
         copy_msg(err, errlen, "internal error");
         return SETTING_ERR_STORE;
     }
-    return setting_layer_of(spec, requested, layer_out, err, errlen);
+    return setting_layer_of(spec, requested, layer_out);
 }
 
 /* cppcheck-suppress staticFunction ; public API (settings.h); used by tests */

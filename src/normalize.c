@@ -799,7 +799,7 @@ bool actor_json_store_to_canonical(const char *stored, char *out, size_t cap)
 }
 
 /* REMEMBER_HOOK_DEPTH of 1 or more. Anything that is not a whole integer does not. */
-static bool hook_depth_blocks(void)
+bool hook_depth_blocks(void)
 {
     // NOLINTNEXTLINE(concurrency-mt-unsafe) — process-global hook depth, read once per write
     const char *v = getenv("REMEMBER_HOOK_DEPTH");
