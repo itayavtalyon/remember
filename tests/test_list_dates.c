@@ -401,7 +401,7 @@ static void assert_sort_rejected(const char *db, const char *token)
 TEST(list_sort_rejects_a_bad_value)
 {
     char *db = make_temp_db_path();
-    const char *json[] = {"--json-errors", "list", "--sort", "bogus"};
+    const char *json[] = {"--json", "list", "--sort", "bogus"};
     const char *huge = "uuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuu";
     CmdResult r;
 
@@ -418,9 +418,12 @@ TEST(list_sort_rejects_a_bad_value)
     assert_sort_rejected(db, huge);
     r = run_remember(db, json, sizeof(json) / sizeof(json[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 1);
-    ASSERT_STREQ(r.out, "");
-    ASSERT_STREQ(r.err, "{\"version\":1,\"error\":{\"code\":\"usage\",\"message\":\"invalid --sort "
-                        "(use updated or created)\"}}\n");
+    ASSERT_STREQ(r.err, "");
+    ASSERT_STREQ(
+        r.out,
+        "{\"format\":\"remember-message\",\"version\":1,\"type\":\"memory.list.result\",\"err"
+        "or\":{\"code\":\"usage\",\"message\":\"invalid --sort (use updated or created)\",\"f"
+        "ix\":\"Run 'remember list --help' to see how to use it.\",\"retryable\":false}}\n");
     cmd_result_free(&r);
     free(db);
 }
@@ -512,8 +515,9 @@ TEST(list_equal_bounds_are_empty)
     r = run_remember(db, args, sizeof(args) / sizeof(args[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 0);
     ASSERT_STREQ(r.err, "");
-    ASSERT_STREQ(r.out, "{\"version\":1,\"offset\":0,\"limit\":20,\"count\":0,\"total\":0,"
-                        "\"entries\":[]}\n");
+    ASSERT_STREQ(r.out, "{\"format\":\"remember-message\",\"version\":1,\"type\":\"memory.list."
+                        "result\",\"data\":{\"count\":0,\"total\":0,\"entries\":[]},"
+                        "\"next_cursor\":null,\"has_more\":false}\n");
     cmd_result_free(&r);
     free(db);
 }
@@ -618,7 +622,7 @@ static void assert_timestamp_rejected(const char *db, const char *flag, const ch
 TEST(list_rejects_a_bad_timestamp)
 {
     char *db = make_temp_db_path();
-    const char *json[] = {"--json-errors", "list", "--since", "now"};
+    const char *json[] = {"--json", "list", "--since", "now"};
     char huge[HUGE_TS_LEN + 1];
     char want[HUGE_ERR_BUF];
     const char *huge_args[] = {"list", "--since", huge};
@@ -651,9 +655,12 @@ TEST(list_rejects_a_bad_timestamp)
     cmd_result_free(&r);
     r = run_remember(db, json, sizeof(json) / sizeof(json[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 1);
-    ASSERT_STREQ(r.out, "");
-    ASSERT_STREQ(r.err, "{\"version\":1,\"error\":{\"code\":\"usage\",\"message\":\"invalid "
-                        "timestamp: now\"}}\n");
+    ASSERT_STREQ(r.err, "");
+    ASSERT_STREQ(
+        r.out,
+        "{\"format\":\"remember-message\",\"version\":1,\"type\":\"memory.list.result\",\"err"
+        "or\":{\"code\":\"usage\",\"message\":\"invalid timestamp: now\",\"fix\":\"Run 'remem"
+        "ber list --help' to see how to use it.\",\"retryable\":false}}\n");
     cmd_result_free(&r);
     free(db);
 }
@@ -662,7 +669,7 @@ TEST(list_rejects_a_bad_timestamp)
 TEST(list_rejects_a_newline_timestamp_as_one_json_line)
 {
     char *db = make_temp_db_path();
-    const char *args[] = {"--json-errors", "list", "--since", "bad\ninjected"};
+    const char *args[] = {"--json", "list", "--since", "bad\ninjected"};
     CmdResult r;
 
     ASSERT_TRUE(db != NULL);
@@ -671,9 +678,12 @@ TEST(list_rejects_a_newline_timestamp_as_one_json_line)
     }
     r = run_remember(db, args, sizeof(args) / sizeof(args[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 1);
-    ASSERT_STREQ(r.out, "");
-    ASSERT_STREQ(r.err, "{\"version\":1,\"error\":{\"code\":\"usage\",\"message\":\"invalid "
-                        "timestamp: bad\\ninjected\"}}\n");
+    ASSERT_STREQ(r.err, "");
+    ASSERT_STREQ(
+        r.out,
+        "{\"format\":\"remember-message\",\"version\":1,\"type\":\"memory.list.result\",\"err"
+        "or\":{\"code\":\"usage\",\"message\":\"invalid timestamp: bad\\ninjected\",\"fix\":"
+        "\"Run 'remember list --help' to see how to use it.\",\"retryable\":false}}\n");
     cmd_result_free(&r);
     free(db);
 }
@@ -736,9 +746,9 @@ TEST(list_bound_flags_reject_duplicates_and_missing_values)
 TEST(list_bounds_compose_with_tag_source_and_key)
 {
     char *db = make_temp_db_path();
-    const char *kept[] = {"add", "--tag", "keep", "--source", "human", "--key", "slot", "kept"};
+    const char *kept[] = {"add", "--tag", "keep", "--as", "human", "--key", "slot", "kept"};
     const char *other[] = {"add", "other"};
-    const char *early[] = {"add", "--tag", "keep", "--source", "human", "--key", "early", "early"};
+    const char *early[] = {"add", "--tag", "keep", "--as", "human", "--key", "early", "early"};
     const char *args[] = {"list",
                           "--since",
                           "2026-03-01T00:00:00.000Z",
@@ -746,7 +756,7 @@ TEST(list_bounds_compose_with_tag_source_and_key)
                           "2026-05-01T00:00:00.000Z",
                           "--tag",
                           "keep",
-                          "--source",
+                          "--created-by",
                           "human",
                           "--key",
                           "slot"};
@@ -888,9 +898,14 @@ TEST(search_crossed_bounds_are_empty)
     r = run_remember(db, args, sizeof(args) / sizeof(args[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 0);
     ASSERT_STREQ(r.err, "");
-    ASSERT_STREQ(r.out, "{\"version\":1,\"offset\":0,\"limit\":20,\"count\":0,\"total\":0,"
-                        "\"keys\":{\"total\":0,\"items\":[]},\"tags\":{\"total\":0,\"items\":[]},"
-                        "\"entries\":[]}\n");
+    ASSERT_STREQ(
+        r.out, "{\"format\":\"remember-message\",\"version\":1,\"type\":\"memory.search."
+               "result\",\"data\":{\"count\":0,\"total\":0,"
+               "\"keys\":{\"total\":0,\"items\":[]},\"tags\":{\"total\":0,\"items\":[]},"
+               "\"entries\":[],\"query\":{\"original\":{\"text\":\"alpha\",\"tags\":[],"
+               "\"bins\":[\"live\"],\"time_range\":{\"field\":\"updated_at\","
+               "\"after\":\"2026-06-16T00:00:00.000Z\",\"before\":\"2026-06-15T00:00:00.000Z\"}}},"
+               "\"ranked_by\":\"bm25\",\"filters\":[]}}\n");
     cmd_result_free(&r);
     free(db);
 }

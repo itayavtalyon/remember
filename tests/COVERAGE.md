@@ -63,7 +63,7 @@ Dev tools for inspect tests: `sqlite3` on PATH (`brew install sqlite` if needed)
 | `test_device.c` | `device` / `device new` human and JSON, version vector stays put until the next edit, `device new` replaces an invalid sidecar, help (plan 15; gate suite `device`) |
 | `test_errors.c` | Plan 16 error catalog, JSON errors, the seven SQLite causes, `--busy-timeout`, `--no-create`, `repair search-index`, and help for those globals (gate suite `errors`) |
 | `test_list_dates.c` | `parse_filter_ts`, `list`/`search` `--sort` `--since` `--until`, and their help (plan 17; gate suite `list_dates`) |
-| `test_facade.c` | `remember_run` byte-matches the CLI, including `--json-errors` on a miss and a busy lock (gate suite `facade`) |
+| `test_facade.c` | `remember_run` byte-matches the CLI, including a `--json` miss and a busy lock (gate suite `facade`) |
 | `test_sync_import.c` | import merge and conflicts; a v4 or v5 source stays read-only and is not migrated (plan 15 stage 5; gate suite `sync_import`) |
 | `test_verification_edges.c` | V21–34 edges (gate suites `verification_gld` and `verification_edges`) |
 | `test_search_terms.c` | `search_terms.c` (pure): E2.2 tokens (NFC, splits, 16 × 64 caps, Hebrew fold), q, segment match and E2.6 tiers, key and D28 tag order (each comparator in both argument orders), D12/P2 labels with graphemes, allocation failures (plan 18 stage 2; ASan unit binary `remember_store_tests`) |

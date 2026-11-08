@@ -289,7 +289,7 @@ TEST(schema_v5_rekey_search_follows_the_new_key)
     memset(&e, 0, sizeof(e));
     ASSERT_EQ_STATUS(store_rekey(s, 1,
                                  (RekeyKeys){.key_or_null = NULL, .new_key_or_null = "pref:vim"},
-                                 STORE_BIN_LIVE, k_now, &e, &conflict),
+                                 STORE_BIN_LIVE, NULL, k_now, &e, &conflict),
                      STORE_OK);
     ASSERT_STREQ(e.key, "pref:vim");
     store_entry_free(&e);
@@ -994,7 +994,7 @@ TEST(store_import_probe_prepare_fail_imports_nothing)
     char err[ERR_BUFSIZE];
     Store *dst = NULL;
     Store *src = NULL;
-    StoreImportCounts counts;
+    StoreImportResult counts;
 
     ASSERT_TRUE(local != NULL && foreign != NULL);
     dst = store_open(local, err, sizeof(err));

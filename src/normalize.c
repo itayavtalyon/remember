@@ -585,6 +585,256 @@ bool source_is_valid(const char *s)
     return false;
 }
 
+/* ---- actors (JE-4.4) ----------------------------------------------------- */
+
+enum { ACTOR_KIND_CAP = 8, ACTOR_BASE_TEN = 10 };
+
+static const char *const k_actor_stored[] = {"human", "agent", "tool", "share", "import"};
+static const char *const k_actor_cli[] = {"human", "agent", "tool", "share"};
+
+static bool actor_kind_listed(const char *kind, const char *const *kinds, size_t n)
+{
+    size_t i = 0;
+
+    if (kind == NULL) {
+        return false;
+    }
+    for (i = 0; i < n; i++) {
+        if (strcmp(kind, kinds[i]) == 0) {
+            return true;
+        }
+    }
+    return false;
+}
+
+bool actor_kind_is_stored(const char *kind)
+{
+    return actor_kind_listed(kind, k_actor_stored,
+                             sizeof k_actor_stored / sizeof k_actor_stored[0]);
+}
+
+static bool actor_kind_is_cli(const char *kind)
+{
+    return actor_kind_listed(kind, k_actor_cli, sizeof k_actor_cli / sizeof k_actor_cli[0]);
+}
+
+static bool actor_id_char_ok(unsigned char c)
+{
+    if (c >= 'A' && c <= 'Z') {
+        return true;
+    }
+    if (c >= 'a' && c <= 'z') {
+        return true;
+    }
+    if (c >= '0' && c <= '9') {
+        return true;
+    }
+    if (c == '_' || c == '.' || c == '/' || c == ':' || c == '-') {
+        return true;
+    }
+    return false;
+}
+
+static bool actor_id_chars_ok(const char *id, size_t n)
+{
+    size_t i = 0;
+
+    for (i = 0; i < n; i++) {
+        if (!actor_id_char_ok((unsigned char)id[i])) {
+            return false;
+        }
+    }
+    return true;
+}
+
+static bool actor_id_ok(const char *id)
+{
+    size_t n = 0;
+
+    if (id == NULL) {
+        return true;
+    }
+    n = strlen(id);
+    if (n < 1U || n > (size_t)ACTOR_ID_MAX) {
+        return false;
+    }
+    return actor_id_chars_ok(id, n);
+}
+
+/* kind is a stored token. id is null or already checked. cap is ACTOR_JSON_CAP. */
+static void actor_write(char *out, const char *kind, const char *id)
+{
+    static const char k_head[] = "{\"kind\":\"";
+    static const char k_null[] = "\",\"id\":null}";
+    static const char k_id[] = "\",\"id\":\"";
+    char *p = out;
+    size_t n = strlen(kind);
+
+    memcpy(p, k_head, sizeof k_head - 1U);
+    p += sizeof k_head - 1U;
+    memcpy(p, kind, n);
+    p += n;
+    if (id == NULL) {
+        memcpy(p, k_null, sizeof k_null - 1U);
+        p += sizeof k_null - 1U;
+    } else {
+        size_t id_len = strlen(id);
+
+        memcpy(p, k_id, sizeof k_id - 1U);
+        p += sizeof k_id - 1U;
+        memcpy(p, id, id_len);
+        p += id_len;
+        *p++ = '"';
+        *p++ = '}';
+    }
+    *p = '\0';
+}
+
+ActorStatus actor_json(Actor actor, char *out, size_t cap)
+{
+    if (out == NULL || cap < (size_t)ACTOR_JSON_CAP) {
+        return ACTOR_BAD_KIND;
+    }
+    out[0] = '\0';
+    if (!actor_kind_is_stored(actor.kind) || !actor_id_ok(actor.id)) {
+        if (actor_kind_is_stored(actor.kind)) {
+            return ACTOR_BAD_ID;
+        }
+        return ACTOR_BAD_KIND;
+    }
+    actor_write(out, actor.kind, actor.id);
+    return ACTOR_OK;
+}
+
+static bool actor_starts(const char *s, const char *prefix)
+{
+    if (s == NULL) {
+        return false;
+    }
+    return strncmp(s, prefix, strlen(prefix)) == 0;
+}
+
+/* Read the kind token after {"kind":" . *end is the closing quote. */
+static bool actor_take_kind(const char *s, char *kind, size_t kind_cap, const char **end)
+{
+    static const char k_prefix[] = "{\"kind\":\"";
+    const char *p = NULL;
+    size_t n = 0;
+
+    if (!actor_starts(s, k_prefix)) {
+        return false;
+    }
+    p = s + (sizeof k_prefix - 1U);
+    while (*p != '\0' && *p != '"') {
+        if (n + 1U >= kind_cap) {
+            return false;
+        }
+        kind[n++] = *p++;
+    }
+    if (*p != '"') {
+        return false;
+    }
+    kind[n] = '\0';
+    *end = p;
+    return actor_kind_is_stored(kind);
+}
+
+bool actor_json_is_canonical(const char *s)
+{
+    char kind[ACTOR_KIND_CAP];
+    const char *p = NULL;
+    const char *id = NULL;
+    size_t n = 0;
+
+    if (!actor_take_kind(s, kind, sizeof kind, &p)) {
+        return false;
+    }
+    p++;
+    if (!actor_starts(p, ",\"id\":")) {
+        return false;
+    }
+    p += strlen(",\"id\":");
+    if (actor_starts(p, "null}")) {
+        return p[sizeof "null}" - 1U] == '\0';
+    }
+    if (*p != '"') {
+        return false;
+    }
+    id = ++p;
+    while (*p != '\0' && *p != '"') {
+        p++;
+        n++;
+    }
+    if (*p != '"' || p[1] != '}' || p[2] != '\0') {
+        return false;
+    }
+    if (n < 1U || n > (size_t)ACTOR_ID_MAX || !actor_id_chars_ok(id, n)) {
+        return false;
+    }
+    return true;
+}
+
+bool actor_json_store_to_canonical(const char *stored, char *out, size_t cap)
+{
+    char kind[ACTOR_KIND_CAP];
+    const char *end = NULL;
+
+    if (out == NULL || cap < (size_t)ACTOR_JSON_CAP) {
+        return false;
+    }
+    if (actor_json_is_canonical(stored)) {
+        memcpy(out, stored, strlen(stored) + 1U);
+        return true;
+    }
+    if (!actor_take_kind(stored, kind, sizeof kind, &end)) {
+        return false;
+    }
+    if (end[1] != '}' || end[2] != '\0') {
+        return false;
+    }
+    /* kind is one of the five stored tokens, so the canonical line fits. */
+    actor_write(out, kind, NULL);
+    return true;
+}
+
+/* REMEMBER_HOOK_DEPTH of 1 or more. Anything that is not a whole integer does not. */
+static bool hook_depth_blocks(void)
+{
+    // NOLINTNEXTLINE(concurrency-mt-unsafe) — process-global hook depth, read once per write
+    const char *v = getenv("REMEMBER_HOOK_DEPTH");
+    unsigned long n = 0U;
+    size_t i = 0U;
+
+    if (v == NULL || v[0] == '\0') {
+        return false;
+    }
+    for (i = 0U; v[i] != '\0'; i++) {
+        unsigned char c = (unsigned char)v[i];
+
+        if (c < '0' || c > '9') {
+            return false;
+        }
+        n = (n * (unsigned long)ACTOR_BASE_TEN) + (unsigned long)(c - '0');
+        if (n > 1U) {
+            return true;
+        }
+    }
+    return n >= 1U;
+}
+
+ActorStatus actor_from_cli(Actor flags, char *out, size_t cap)
+{
+    const char *kind = (flags.kind != NULL) ? flags.kind : "human";
+
+    if (hook_depth_blocks() && (flags.kind != NULL || flags.id != NULL)) {
+        return ACTOR_HOOK;
+    }
+    if (!actor_kind_is_cli(kind)) {
+        return ACTOR_BAD_KIND;
+    }
+    return actor_json((Actor){.kind = kind, .id = flags.id}, out, cap);
+}
+
 /* ---- bucket prefixes (007 ST-5.4) ---------------------------------------- */
 
 static bool bucket_prefix_point_ok(uint32_t cp)

@@ -3,6 +3,7 @@
 #include "test.h"
 #include "test_alloc.h"
 
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -616,6 +617,187 @@ TEST(bucket_prefix_fold_follows_st_5_4)
     ASSERT_EQ_STATUS(bucket_prefix_fold("a:", out, sizeof(out) - 1U), NORM_ERR_INTERNAL);
 }
 
+static void fill_chars(char *buf, size_t n, char c)
+{
+    memset(buf, c, n);
+    buf[n] = '\0';
+}
+
+static int actor_rc(ActorStatus st)
+{
+    return (int)st;
+}
+
+/* JE-4.4: stored actor JSON, including kind import. id is null or 1..64 of the set. */
+TEST(actor_json_writes_each_stored_kind)
+{
+    static const char *const kinds[] = {"human", "agent", "tool", "share", "import"};
+    char out[ACTOR_JSON_CAP];
+    char want[ACTOR_JSON_CAP];
+    char id64[ACTOR_ID_MAX + 1];
+    size_t i = 0;
+
+    fill_chars(id64, (size_t)ACTOR_ID_MAX, 'a');
+    ASSERT_EQ_INT(actor_rc(actor_json((Actor){.kind = NULL}, out, sizeof(out))),
+                  actor_rc(ACTOR_BAD_KIND));
+    ASSERT_EQ_INT(actor_rc(actor_json((Actor){.kind = "human"}, NULL, sizeof(out))),
+                  actor_rc(ACTOR_BAD_KIND));
+    ASSERT_EQ_INT(actor_rc(actor_json((Actor){.kind = "human"}, out, sizeof(out) - 1U)),
+                  actor_rc(ACTOR_BAD_KIND));
+    ASSERT_EQ_INT(actor_rc(actor_json((Actor){.kind = "sync"}, out, sizeof(out))),
+                  actor_rc(ACTOR_BAD_KIND));
+    ASSERT_EQ_INT(actor_rc(actor_json((Actor){.kind = "unknown"}, out, sizeof(out))),
+                  actor_rc(ACTOR_BAD_KIND));
+    ASSERT_EQ_INT(actor_rc(actor_json((Actor){.kind = "human", .id = ""}, out, sizeof(out))),
+                  actor_rc(ACTOR_BAD_ID));
+    ASSERT_EQ_INT(actor_rc(actor_json((Actor){.kind = "human", .id = " "}, out, sizeof(out))),
+                  actor_rc(ACTOR_BAD_ID));
+    ASSERT_EQ_INT(actor_rc(actor_json((Actor){.kind = "human", .id = "!"}, out, sizeof(out))),
+                  actor_rc(ACTOR_BAD_ID));
+    ASSERT_EQ_INT(actor_rc(actor_json((Actor){.kind = "human", .id = "{"}, out, sizeof(out))),
+                  actor_rc(ACTOR_BAD_ID));
+    {
+        char id65[ACTOR_ID_MAX + 2];
+
+        fill_chars(id65, (size_t)ACTOR_ID_MAX + 1U, 'b');
+        ASSERT_EQ_INT(actor_rc(actor_json((Actor){.kind = "human", .id = id65}, out, sizeof(out))),
+                      actor_rc(ACTOR_BAD_ID));
+    }
+    for (i = 0; i < sizeof(kinds) / sizeof(kinds[0]); i++) {
+        ASSERT_EQ_INT(actor_rc(actor_json((Actor){.kind = kinds[i]}, out, sizeof(out))),
+                      actor_rc(ACTOR_OK));
+        (void)snprintf(want, sizeof(want), "{\"kind\":\"%s\",\"id\":null}", kinds[i]);
+        ASSERT_STREQ(out, want);
+        ASSERT_TRUE(actor_kind_is_stored(kinds[i]));
+    }
+    ASSERT_FALSE(actor_kind_is_stored(NULL));
+    ASSERT_FALSE(actor_kind_is_stored("sync"));
+    ASSERT_EQ_INT(actor_rc(actor_json((Actor){.kind = "agent", .id = "A"}, out, sizeof(out))),
+                  actor_rc(ACTOR_OK));
+    ASSERT_STREQ(out, "{\"kind\":\"agent\",\"id\":\"A\"}");
+    ASSERT_EQ_INT(actor_rc(actor_json((Actor){.kind = "tool", .id = "z"}, out, sizeof(out))),
+                  actor_rc(ACTOR_OK));
+    ASSERT_EQ_INT(actor_rc(actor_json((Actor){.kind = "share", .id = "0"}, out, sizeof(out))),
+                  actor_rc(ACTOR_OK));
+    ASSERT_EQ_INT(actor_rc(actor_json((Actor){.kind = "human", .id = "_"}, out, sizeof(out))),
+                  actor_rc(ACTOR_OK));
+    ASSERT_EQ_INT(actor_rc(actor_json((Actor){.kind = "human", .id = "."}, out, sizeof(out))),
+                  actor_rc(ACTOR_OK));
+    ASSERT_EQ_INT(actor_rc(actor_json((Actor){.kind = "human", .id = "/"}, out, sizeof(out))),
+                  actor_rc(ACTOR_OK));
+    ASSERT_EQ_INT(actor_rc(actor_json((Actor){.kind = "human", .id = ":"}, out, sizeof(out))),
+                  actor_rc(ACTOR_OK));
+    ASSERT_EQ_INT(actor_rc(actor_json((Actor){.kind = "human", .id = "-"}, out, sizeof(out))),
+                  actor_rc(ACTOR_OK));
+    ASSERT_EQ_INT(
+        actor_rc(actor_json((Actor){.kind = "tool", .id = "plugin/name/run"}, out, sizeof(out))),
+        actor_rc(ACTOR_OK));
+    ASSERT_STREQ(out, "{\"kind\":\"tool\",\"id\":\"plugin/name/run\"}");
+    ASSERT_EQ_INT(actor_rc(actor_json((Actor){.kind = "agent", .id = id64}, out, sizeof(out))),
+                  actor_rc(ACTOR_OK));
+}
+
+TEST(actor_json_canonical_form_and_the_migration_shape)
+{
+    char out[ACTOR_JSON_CAP];
+    char id65[ACTOR_ID_MAX + 2];
+    char long_kind[ACTOR_JSON_CAP];
+    char long_id[ACTOR_JSON_CAP];
+
+    fill_chars(id65, (size_t)ACTOR_ID_MAX + 1U, 'a');
+    ASSERT_FALSE(actor_json_is_canonical(NULL));
+    ASSERT_FALSE(actor_json_is_canonical("nope"));
+    ASSERT_FALSE(actor_json_is_canonical("{\"kind\":\"human"));
+    ASSERT_FALSE(actor_json_is_canonical("{\"kind\":\"human\""));
+    ASSERT_FALSE(actor_json_is_canonical("{\"kind\":\"sync\"}"));
+    ASSERT_FALSE(actor_json_is_canonical("{\"kind\":\"human\"}"));
+    ASSERT_FALSE(actor_json_is_canonical("{\"kind\":\"human\",\"id\":1}"));
+    ASSERT_FALSE(actor_json_is_canonical("{\"kind\":\"human\",\"id\":null}x"));
+    ASSERT_FALSE(actor_json_is_canonical("{\"kind\":\"human\",\"id\":\"ab"));
+    ASSERT_FALSE(actor_json_is_canonical("{\"kind\":\"human\",\"id\":\"ab\""));
+    ASSERT_FALSE(actor_json_is_canonical("{\"kind\":\"human\",\"id\":\"ab\"x"));
+    ASSERT_FALSE(actor_json_is_canonical("{\"kind\":\"human\",\"id\":\"ab\"}x"));
+    ASSERT_FALSE(actor_json_is_canonical("{\"kind\":\"human\",\"id\":\"\"}"));
+    ASSERT_FALSE(actor_json_is_canonical("{\"kind\":\"human\",\"id\":\"a b\"}"));
+    (void)snprintf(long_id, sizeof(long_id), "{\"kind\":\"human\",\"id\":\"%s\"}", id65);
+    ASSERT_FALSE(actor_json_is_canonical(long_id));
+    ASSERT_TRUE(actor_json_is_canonical("{\"kind\":\"human\",\"id\":null}"));
+    ASSERT_TRUE(actor_json_is_canonical("{\"kind\":\"import\",\"id\":\"plugin/name/run\"}"));
+    (void)snprintf(long_kind, sizeof(long_kind), "{\"kind\":\"%s\"", "tooltool");
+    ASSERT_FALSE(actor_json_is_canonical(long_kind));
+
+    ASSERT_FALSE(
+        actor_json_store_to_canonical("{\"kind\":\"human\",\"id\":null}", NULL, sizeof(out)));
+    ASSERT_FALSE(
+        actor_json_store_to_canonical("{\"kind\":\"human\",\"id\":null}", out, sizeof(out) - 1U));
+    ASSERT_FALSE(actor_json_store_to_canonical(NULL, out, sizeof(out)));
+    ASSERT_FALSE(actor_json_store_to_canonical("nope", out, sizeof(out)));
+    ASSERT_FALSE(actor_json_store_to_canonical("{\"kind\":\"human\"x", out, sizeof(out)));
+    ASSERT_FALSE(actor_json_store_to_canonical("{\"kind\":\"human\"}x", out, sizeof(out)));
+    ASSERT_TRUE(
+        actor_json_store_to_canonical("{\"kind\":\"agent\",\"id\":\"bot\"}", out, sizeof(out)));
+    ASSERT_STREQ(out, "{\"kind\":\"agent\",\"id\":\"bot\"}");
+    ASSERT_TRUE(actor_json_store_to_canonical("{\"kind\":\"import\"}", out, sizeof(out)));
+    ASSERT_STREQ(out, "{\"kind\":\"import\",\"id\":null}");
+    ASSERT_TRUE(actor_json_store_to_canonical("{\"kind\":\"human\"}", out, sizeof(out)));
+    ASSERT_STREQ(out, "{\"kind\":\"human\",\"id\":null}");
+}
+
+static ActorStatus cli_at_depth(const char *depth, Actor flags, char *out)
+{
+    ActorStatus st = ACTOR_OK;
+
+    // NOLINTBEGIN(concurrency-mt-unsafe) — the hook gate reads this process-global
+    if (depth == NULL) {
+        (void)unsetenv("REMEMBER_HOOK_DEPTH");
+    } else {
+        (void)setenv("REMEMBER_HOOK_DEPTH", depth, 1);
+    }
+    st = actor_from_cli(flags, out, (size_t)ACTOR_JSON_CAP);
+    (void)unsetenv("REMEMBER_HOOK_DEPTH");
+    // NOLINTEND(concurrency-mt-unsafe)
+    return st;
+}
+
+/* --as replaces kind. --actor replaces only id. A hook may not pass either flag. */
+TEST(actor_from_cli_stamps_a_person_and_blocks_a_hook)
+{
+    char out[ACTOR_JSON_CAP];
+
+    out[0] = '\0';
+    ASSERT_EQ_INT(actor_rc(cli_at_depth(NULL, (Actor){0}, out)), actor_rc(ACTOR_OK));
+    ASSERT_STREQ(out, "{\"kind\":\"human\",\"id\":null}");
+    ASSERT_EQ_INT(actor_rc(cli_at_depth("", (Actor){.kind = "agent"}, out)), actor_rc(ACTOR_OK));
+    ASSERT_EQ_INT(actor_rc(cli_at_depth("0", (Actor){.kind = "tool", .id = "t"}, out)),
+                  actor_rc(ACTOR_OK));
+    ASSERT_STREQ(out, "{\"kind\":\"tool\",\"id\":\"t\"}");
+    ASSERT_EQ_INT(actor_rc(cli_at_depth("01", (Actor){.kind = "share"}, out)),
+                  actor_rc(ACTOR_HOOK));
+    ASSERT_STREQ(out, "{\"kind\":\"tool\",\"id\":\"t\"}");
+    ASSERT_EQ_INT(actor_rc(cli_at_depth("a", (Actor){.kind = "agent"}, out)), actor_rc(ACTOR_OK));
+    ASSERT_EQ_INT(actor_rc(cli_at_depth("/", (Actor){.kind = "agent"}, out)), actor_rc(ACTOR_OK));
+    ASSERT_EQ_INT(actor_rc(cli_at_depth("2", (Actor){0}, out)), actor_rc(ACTOR_OK));
+    ASSERT_STREQ(out, "{\"kind\":\"human\",\"id\":null}");
+    out[0] = 'x';
+    out[1] = '\0';
+    ASSERT_EQ_INT(actor_rc(cli_at_depth("1", (Actor){.kind = "agent"}, out)), actor_rc(ACTOR_HOOK));
+    ASSERT_STREQ(out, "x");
+    ASSERT_EQ_INT(actor_rc(cli_at_depth("1", (Actor){.id = "bot"}, out)), actor_rc(ACTOR_HOOK));
+    ASSERT_EQ_INT(actor_rc(cli_at_depth("10", (Actor){.kind = "agent", .id = "bot"}, out)),
+                  actor_rc(ACTOR_HOOK));
+    ASSERT_EQ_INT(actor_rc(cli_at_depth(NULL, (Actor){.kind = "import"}, out)),
+                  actor_rc(ACTOR_BAD_KIND));
+    ASSERT_EQ_INT(actor_rc(cli_at_depth(NULL, (Actor){.kind = "sync"}, out)),
+                  actor_rc(ACTOR_BAD_KIND));
+    ASSERT_EQ_INT(actor_rc(cli_at_depth(NULL, (Actor){.kind = "robot"}, out)),
+                  actor_rc(ACTOR_BAD_KIND));
+    ASSERT_EQ_INT(actor_rc(cli_at_depth(NULL, (Actor){.id = ""}, out)), actor_rc(ACTOR_BAD_ID));
+    ASSERT_EQ_INT(
+        actor_rc(cli_at_depth(NULL, (Actor){.kind = "agent", .id = "plugin/name/run"}, out)),
+        actor_rc(ACTOR_OK));
+    ASSERT_STREQ(out, "{\"kind\":\"agent\",\"id\":\"plugin/name/run\"}");
+}
+
 void register_normalize_tests(void)
 {
     RUN_TEST(bucket_prefix_fold_follows_st_5_4);
@@ -658,4 +840,7 @@ void register_normalize_tests(void)
     RUN_TEST(vv_json_rejects_a_counter_that_is_not_a_small_whole_number);
     RUN_TEST(vv_json_rejects_a_repeated_device);
     RUN_TEST(source_accepts_only_the_closed_tokens);
+    RUN_TEST(actor_json_writes_each_stored_kind);
+    RUN_TEST(actor_json_canonical_form_and_the_migration_shape);
+    RUN_TEST(actor_from_cli_stamps_a_person_and_blocks_a_hook);
 }

@@ -24,6 +24,7 @@ void tst_assert_eq_int(long long actual, long long expected, const char *file, i
 void tst_assert_streq(const char *a, const char *b, const char *file, int line);
 void tst_assert_contains(const char *haystack, const char *needle, bool want, const char *file,
                          int line);
+void tst_assert_prefix(const char *s, const char *prefix, const char *file, int line);
 
 #define TEST(name) static void test_##name(void)
 #define RUN_TEST(name) tst_run(#name, test_##name)
@@ -44,5 +45,6 @@ void tst_assert_contains(const char *haystack, const char *needle, bool want, co
     tst_assert_contains((haystack), (needle), true, __FILE__, __LINE__)
 #define ASSERT_STR_NOT_CONTAINS(haystack, needle)                                                  \
     tst_assert_contains((haystack), (needle), false, __FILE__, __LINE__)
+#define ASSERT_STR_PREFIX(s, prefix) tst_assert_prefix((s), (prefix), __FILE__, __LINE__)
 
 #endif /* REMEMBER_TEST_H */

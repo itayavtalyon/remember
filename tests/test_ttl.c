@@ -63,11 +63,12 @@ TEST(add_ttl_1h_is_future_canonical)
     free(db);
 }
 
-TEST(add_expires_past_z_is_trash_only)
+TEST(add_expires_past_z_is_expired_only)
 {
     char *db = make_temp_db_path();
     const char *a[] = {"--json", "add", "--expires", "2020-01-01T00:00:00Z", "old"};
     const char *list[] = {"--json", "list"};
+    const char *expired[] = {"--json", "list", "--expired"};
     const char *trash[] = {"--json", "list", "--trash"};
     CmdResult r;
 
@@ -82,9 +83,17 @@ TEST(add_expires_past_z_is_trash_only)
     ASSERT_STR_CONTAINS(r.out, "\"total\":0");
     cmd_result_free(&r);
 
+    r = run_remember(db, expired, sizeof(expired) / sizeof(expired[0]), NULL);
+    ASSERT_EQ_INT(r.exit_code, 0);
+    ASSERT_STREQ(r.err, "");
+    ASSERT_STR_CONTAINS(r.out, "\"body\":\"old\"");
+    cmd_result_free(&r);
+
     r = run_remember(db, trash, sizeof(trash) / sizeof(trash[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 0);
-    ASSERT_STR_CONTAINS(r.out, "old");
+    ASSERT_STREQ(r.err, "");
+    ASSERT_STR_CONTAINS(r.out, "flag_meaning_changed");
+    ASSERT_STR_NOT_CONTAINS(r.out, "\"body\":\"old\"");
     cmd_result_free(&r);
     free(db);
 }
@@ -103,7 +112,7 @@ TEST(add_expires_bare_second_pads_ms)
     free(db);
 }
 
-TEST(get_trash_of_active_exits_three)
+TEST(get_trash_of_live_exits_not_deleted)
 {
     char *db = make_temp_db_path();
     const char *a[] = {"add", "live"};
@@ -116,18 +125,19 @@ TEST(get_trash_of_active_exits_three)
     cmd_result_free(&r);
     r = run_remember(db, g, sizeof(g) / sizeof(g[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 3);
-    ASSERT_STR_CONTAINS(r.err, "remember: warning: --trash is deprecated; use --expired");
-    ASSERT_STR_CONTAINS(r.err, "remember: not_expired\n");
+    ASSERT_STREQ(r.err, "remember: warning: --trash now means the Trash (deleted memories). "
+                        "For expired memories, use --expired.\n"
+                        "remember: not_deleted\n");
     ASSERT_TRUE(r.out == NULL || r.out[0] == '\0');
     cmd_result_free(&r);
     free(db);
 }
 
-TEST(update_trash_clear_expires_restores_cli)
+TEST(update_expired_clear_expires_restores_cli)
 {
     char *db = make_temp_db_path();
     const char *a[] = {"--json", "add", "--expires", "2020-01-01T00:00:00.000Z", "row"};
-    const char *u[] = {"update", "--trash", "1", "--clear-expires"};
+    const char *u[] = {"update", "--expired", "1", "--clear-expires"};
     const char *g[] = {"get", "1"};
     CmdResult r;
 
@@ -144,11 +154,11 @@ TEST(update_trash_clear_expires_restores_cli)
     free(db);
 }
 
-TEST(update_trash_ttl_leaves_trash)
+TEST(update_expired_ttl_returns_it_to_live)
 {
     char *db = make_temp_db_path();
     const char *a[] = {"add", "--expires", "2020-01-01T00:00:00Z", "row"};
-    const char *u[] = {"--json", "update", "--trash", "1", "--ttl", "7d"};
+    const char *u[] = {"--json", "update", "--expired", "1", "--ttl", "7d"};
     const char *g[] = {"get", "1"};
     CmdResult r;
 
@@ -181,18 +191,18 @@ TEST(keyless_add_revives_expired_cli)
     ASSERT_EQ_INT(r.exit_code, 0);
     ASSERT_STR_CONTAINS(r.out, "\"action\":\"merged\"");
     ASSERT_STR_CONTAINS(r.out, "\"expires_at\":null");
-    ASSERT_STR_CONTAINS(r.out, "\"id\":1");
+    ASSERT_STR_CONTAINS(r.out, "\"local_id\":1");
     cmd_result_free(&r);
     free(db);
 }
 
-TEST(purge_trash_json_and_empty)
+TEST(purge_expired_json_and_empty)
 {
     char *db = make_temp_db_path();
     const char *a[] = {"add", "--expires", "2020-01-01T00:00:00Z", "gone"};
     const char *keep[] = {"add", "stay"};
-    const char *p[] = {"--json", "purge-trash"};
-    const char *p2[] = {"purge-trash"};
+    const char *p[] = {"--json", "purge", "--expired"};
+    const char *p2[] = {"purge", "--expired"};
     CmdResult r;
 
     ASSERT_TRUE(db != NULL);
@@ -309,29 +319,26 @@ TEST(add_expires_frac_pad_and_trunc)
     free(db);
 }
 
-TEST(purge_trash_rejects_args)
+TEST(purge_trash_command_is_unknown)
 {
     char *db = make_temp_db_path();
-    const char *flag[] = {"purge-trash", "--trash"};
-    const char *pos[] = {"purge-trash", "nope"};
+    const char *cmd[] = {"purge-trash"};
     CmdResult r;
 
     ASSERT_TRUE(db != NULL);
-    r = run_remember(db, flag, sizeof(flag) / sizeof(flag[0]), NULL);
+    r = run_remember(db, cmd, sizeof(cmd) / sizeof(cmd[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 1);
-    cmd_result_free(&r);
-    r = run_remember(db, pos, sizeof(pos) / sizeof(pos[0]), NULL);
-    ASSERT_EQ_INT(r.exit_code, 1);
+    ASSERT_STREQ(r.err, "remember: unknown command 'purge-trash'\n");
     cmd_result_free(&r);
     free(db);
 }
 
-TEST(tags_and_search_trash_bin)
+TEST(tags_and_search_expired_bin)
 {
     char *db = make_temp_db_path();
     const char *a[] = {"add", "--expires", "2020-01-01T00:00:00Z", "--tag", "tmp", "gone"};
-    const char *tags[] = {"--json", "tags", "--trash"};
-    const char *search[] = {"--json", "search", "--trash", "gone"};
+    const char *tags[] = {"--json", "tags", "--expired"};
+    const char *search[] = {"--json", "search", "--expired", "gone"};
     CmdResult r;
 
     ASSERT_TRUE(db != NULL);
@@ -413,14 +420,25 @@ TEST(help_mentions_ttl_and_exit_three)
     ASSERT_TRUE(db != NULL);
     r = run_remember(db, h, sizeof(h) / sizeof(h[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 0);
-    ASSERT_STR_CONTAINS(r.out, "purge-trash");
+    ASSERT_STR_NOT_CONTAINS(r.out, "purge-trash");
     ASSERT_STR_CONTAINS(r.out, "  3");
+    ASSERT_STR_CONTAINS(r.out, "  4  a warning under --strict\n");
     cmd_result_free(&r);
     {
         const char *hp[] = {"help", "purge-trash"};
         r = run_remember(db, hp, sizeof(hp) / sizeof(hp[0]), NULL);
+        ASSERT_EQ_INT(r.exit_code, 1);
+        ASSERT_STREQ(r.err, "remember: unknown command 'purge-trash'\n");
+        cmd_result_free(&r);
+    }
+    {
+        const char *help_get[] = {"help", "get"};
+        r = run_remember(db, help_get, sizeof(help_get) / sizeof(help_get[0]), NULL);
         ASSERT_EQ_INT(r.exit_code, 0);
-        ASSERT_STR_CONTAINS(r.out, "Permanently delete");
+        ASSERT_STR_CONTAINS(r.out, "  --trash     Use the Trash: memories you deleted. Restore "
+                                   "them, or purge them for good.\n");
+        ASSERT_STR_CONTAINS(r.out, "  --expired   Use expired memories: ones past their expiry "
+                                   "time. They are not in the Trash.\n");
         cmd_result_free(&r);
     }
     free(db);
@@ -430,20 +448,20 @@ void register_ttl_tests(void)
 {
     RUN_TEST(add_json_expires_at_null);
     RUN_TEST(add_ttl_1h_is_future_canonical);
-    RUN_TEST(add_expires_past_z_is_trash_only);
+    RUN_TEST(add_expires_past_z_is_expired_only);
     RUN_TEST(add_expires_bare_second_pads_ms);
-    RUN_TEST(get_trash_of_active_exits_three);
-    RUN_TEST(update_trash_clear_expires_restores_cli);
-    RUN_TEST(update_trash_ttl_leaves_trash);
+    RUN_TEST(get_trash_of_live_exits_not_deleted);
+    RUN_TEST(update_expired_clear_expires_restores_cli);
+    RUN_TEST(update_expired_ttl_returns_it_to_live);
     RUN_TEST(keyless_add_revives_expired_cli);
-    RUN_TEST(purge_trash_json_and_empty);
+    RUN_TEST(purge_expired_json_and_empty);
     RUN_TEST(ttl_and_expires_mutex);
     RUN_TEST(invalid_ttl_tokens);
     RUN_TEST(human_list_has_related_column);
     RUN_TEST(add_expires_date_only_local_eod);
     RUN_TEST(add_expires_frac_pad_and_trunc);
-    RUN_TEST(purge_trash_rejects_args);
-    RUN_TEST(tags_and_search_trash_bin);
+    RUN_TEST(purge_trash_command_is_unknown);
+    RUN_TEST(tags_and_search_expired_bin);
     RUN_TEST(add_ttl_minutes_and_weeks);
     RUN_TEST(update_expires_on_active);
     RUN_TEST(invalid_expires_tokens);

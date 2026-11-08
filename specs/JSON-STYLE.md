@@ -2,6 +2,7 @@
 
 ## Changelog
 
+- **2026-11-07 (CLI envelope).** [JSON-ENVELOPE.md](JSON-ENVELOPE.md) is the `remember-message` version 1 object this binary writes. This guide stays the value rules. CLI rows below that disagreed with that binary now match it: positional ids are canonical lowercase, reply types include `device`, `related`, `import`, and `repair search-index`, list and search `data` lead with `count` then `total`, search ends with `query{original}`, `ranked_by`, and `filters` (2026-11-07 review), and `links` are on `get`, `add`, `list`, and `search`.
 - **2026-10-25 (rev 2.2, architect; Itay approved D-01, D-03 and the date answer as written).**
   - The settings `data` objects follow log 007 ST-7.11a–7.11b: one setting object, `setting.set|reset.result` `{setting, scope, old_value, changed}` (plus `action` on reset), `settings[]`, `changes[]`, and import `rows[]`. The §2 table shows them.
   - The settings history JSON field is `changed_at`, not `at` (§1.3).
@@ -39,7 +40,7 @@ Covers every JSON surface:
 - stored documents (exports, `plugin.json`, plugin state and index files, `brains.json`);
 - the run log.
 
-The plugin wire details are in `remember/specs/PLUGIN-PROTOCOL.md` (PP). The design decisions are in logs 007 (settings), 008 (envelope), 009 (protocol) and 010 (plugins and hooks).
+The plugin wire details are in [PLUGIN-PROTOCOL.md](PLUGIN-PROTOCOL.md) (PP). The CLI envelope this binary writes is [JSON-ENVELOPE.md](JSON-ENVELOPE.md). The design decisions are in logs 007 (settings), 008 (envelope), 009 (protocol) and 010 (plugins and hooks).
 
 **Compatibility policy (Itay, 2026-10-18):** before 1.0, a breaking change ships as a clean break with a CHANGELOG note. It has no aliases and no compatibility shims (PP R9.25, J9). The typed-input `-`→`_` normalization (M-17, 007 ST-1.3) is an input convenience, not an alias. The one-release `--trash` meaning warning (M-21 B, 010 H-16.9a) is a warning, not an alias.
 
@@ -68,7 +69,7 @@ Each rule states the rule, says why, and gives a correct example (✓) and a wro
 
 ### 1.2 IDs
 
-- Rule: a public id is a UUID string in canonical form: lowercase, hyphenated, 36 characters. On input, upper or lower case is accepted, hyphenated only. Any other form is refused with `invalid_argument` (008 JE-3.2).
+- Rule: a public id is a UUID string in canonical form: lowercase, hyphenated, 36 characters. Input accepts only that form. Any other form is refused with `invalid_argument` (008 JE-3.2). The CLI positional rule is §1.2a.
 - No type prefixes (`req_`, `evt_`, `mem_`). The field name says what the id is.
 - Every id Remember mints is UUID v7: memory `id`, `brain_id`, `device_id`, `event_id`, `batch_id`, `run_id`, `backfill_id` and `request_id`.
 - An object's own id is `id`. A reference is `<noun>_id`: `memory_id`, `event_id`, `backfill_id` (JE-3.6).
@@ -79,8 +80,8 @@ Each rule states the rule, says why, and gives a correct example (✓) and a wro
 
 ### 1.2a CLI locators (S-13, #576)
 
-- A memory is found by the positional or by `--key KEY`. The positional accepts a UUID, matched as `id`, or digits, matched as `local_id`. Any other positional fails with `invalid_argument`: `"abc" isn't a memory id. Use a UUID, a number from 'remember list', or --key.` (JE-3.4).
-- No `--id`, `--local-id` or `--sync-id` flag exists. `REMEMBER_SYNC_ID` and `sync_id` are gone, with no alias (JE-3.8). The hook env is `REMEMBER_ID`, which is `data.memory.id`.
+- A memory is found by the positional or by `--key KEY`. The positional accepts a canonical lowercase UUID v7, matched as `id`, or a digit string, matched as `local_id`. The digit string is the integer, so leading zeros are the number, and a value below 1 fails. Any other positional fails with `invalid_argument`. The message is `"<value>" isn't a memory id.` The fix is `Use a number from 'remember list', a UUID, or --key KEY.` The plain line joins them (JE-3.4, K-1 2026-10-25, [JSON-ENVELOPE.md](JSON-ENVELOPE.md)).
+- No memory-locator `--id`, `--local-id`, or `--sync-id` exists. `conflict accept --id` is the conflict-row id. This binary does not read `REMEMBER_SYNC_ID` or `REMEMBER_ID`, and it writes no `sync_id` field (JE-3.8).
 - HTTP and MCP use `id` (`GET /v1/memories/{id}`, `remember_get {"id":"…"}`).
 
 ### 1.3 Timestamps and dates
@@ -127,12 +128,15 @@ Each rule states the rule, says why, and gives a correct example (✓) and a wro
 | `get` / `GET /v1/memories/{id}` / `remember_get` | `memory.get.result` |
 | `list` / `GET /v1/memories` / `remember_list` | `memory.list.result` |
 | `search` / `GET /v1/memories/search` / `remember_search` | `memory.search.result` |
-| `update`, `delete`, `purge`, `rekey`, `link`, `unlink` | `memory.<verb>.result` |
+| `update`, `delete`, `purge`, `rekey`, `link`, `unlink`, `related`, `import` | `memory.<verb>.result` |
 | `tags`, `conflicts`, `conflict accept` | `tag.list.result`, `conflict.list.result`, `conflict.accept.result` |
 | `settings list\|get\|set\|reset\|explain\|history\|import` | `setting.<verb>.result` |
 | `plugin add\|list\|show\|trust\|enable\|disable\|remove\|reindex\|rerun\|status\|log\|test` | `plugin.<verb>.result` |
 | `hook add` (the only `hook` command, S-01) | `hook.add.result` |
-| `brain list\|prune\|new-id` (M-19 N5) | `brain.list.result`, `brain.prune.result`, `brain.new_id.result` |
+| `device` | `device.get.result` |
+| `device new` | `device.new.result` |
+| `repair search-index` | `repair.search_index.result` |
+| `brain new-id` | `brain.new_id.result` |
 | `dispatch`, `sweep [--all]` | `dispatch.result`, `sweep.result` |
 
 - A multi-word verb uses `_` in the type (`brain.new_id.result`), following §1.1a.
@@ -144,8 +148,7 @@ Each rule states the rule, says why, and gives a correct example (✓) and a wro
 - An `event` also carries one on stdin, where it gets no reply, so the run log can name the delivery. Deduplicate on `data.event_id`, never on `request_id`.
 - Messages that get no reply carry no `request_id`: `ready`, `shutdown`, `backfill.pause` and `backfill.resume`.
 - HTTP sets `request_id` on every response: from the `Request-Id` header when the client sends one, otherwise minted by the server. On MCP, it is the server's id for the tool call, separate from the JSON-RPC `id`.
-- CLI output has no `request_id`, because it is not a reply (JE-2.9).
-- In test builds only, `REMEMBER_TEST_FIXED_IDS=1` fixes the id sequence (JE-7.1).
+- CLI output has no `request_id`, because it is not a reply (JE-2.9). Only the test CLI build reads `REMEMBER_TEST_FIXED_IDS` (JSON-ENVELOPE § Test builds).
 
 ### 1.7b Stored documents (JE-1.5)
 
@@ -192,11 +195,11 @@ Success (CLI):
 {"format":"remember-message","version":1,"type":"memory.add.result",
  "data":{"action":"created","memory":{"id":"01a14513-6501-7928-b9c4-2cc649cb59a9","local_id":1,…}}}
 ```
-Search with a warning (HTTP; no paging fields, S-08):
+Search (CLI; no paging fields, S-08). `keys` and `tags` precede `entries`. After `entries` come `query`, `ranked_by`, and `filters` (JSON-ENVELOPE § Payloads):
 ```json
-{"format":"remember-message","version":1,"type":"memory.search.result","request_id":"01a14530-0000-7000-8000-0000000000aa",
- "data":{"count":3,"total":3,"entries":[…],"query":{"original":"tax","rewritten":"tax"},"ranked_by":"bm25","filters":[…],"keys":{…},"tags":{…}},
- "warnings":[{"code":"plugin_filter_cold_start","message":"hybrid/rerank is still starting, so results are in keyword order."}]}
+{"format":"remember-message","version":1,"type":"memory.search.result",
+ "data":{"count":3,"total":3,"keys":{"total":0,"items":[]},"tags":{"total":0,"items":[]},"entries":[…],
+ "query":{"original":{"text":"boo","tags":[],"bins":["live"],"time_range":{"field":"updated_at","after":null,"before":null}}},"ranked_by":"bm25","filters":[]}}
 ```
 Failure (CLI `--json`, stdout):
 ```json
@@ -246,24 +249,25 @@ Event (hook stdin, plugin socket, webhook):
 
 ### 1.11 Pagination (S-08, JE-2.10–2.12)
 
-- A list command pages **by cursor only**. Request: `limit` and `cursor`. Response: `next_cursor` (an opaque string, `null` on the last page) and `has_more` (boolean), **at the top level of the envelope**, always together. `count`, the list and an optional `total` stay in `data`.
-- **Search does not page.** It returns the top `--limit` results, or `remember.search.max_results`. A search response has no `next_cursor` and no `has_more` (JE-2.11, PP R8.3).
+- A list command pages **by cursor only**. Request: `limit` and `cursor`. Response: `next_cursor` (an opaque string, `null` on the last page) and `has_more` (boolean), **at the top level of the envelope**, always together. CLI `list` data is `count`, `total`, then `entries`. `total` is always present. The cursor document is in [JSON-ENVELOPE.md](JSON-ENVELOPE.md).
+- **Search does not page.** It returns the top `--limit` matches. `count` is how many entries this reply holds. `total` is the unpaged match count. A search response has no `next_cursor` and no `has_more` (JE-2.11, PP R8.3).
 - **No command has `--offset`, and no envelope has `offset`** (JE-2.12). This breaks 0.2.0.
-- Default page sizes: settings `list` 100, settings `history` 50, and both at most 1000 (log 007 ST-7.14). A bad cursor is `invalid_argument`. The names are the same everywhere: CLI `--limit` and `--cursor`, HTTP `?limit=&cursor=`, MCP `limit` and `cursor`.
+- CLI `list` and `search` default `--limit` to 20 and allow at most 1000. Settings `list` defaults to 100, settings `history` to 50, and both allow at most 1000 (log 007 ST-7.14). A bad CLI list cursor is `invalid_argument` with message `invalid --cursor`. The names are the same everywhere: CLI `--limit` and `--cursor`, HTTP `?limit=&cursor=`, MCP `limit` and `cursor`.
 - Why cursors: offsets skip or repeat items while sync and agents write.
-- ✓ `{"format":"remember-message","version":1,"type":"memory.list.result","data":{"count":20,"entries":[…]},"next_cursor":"eyJ1Ijoi…","has_more":true}`
+- ✓ `{"format":"remember-message","version":1,"type":"memory.list.result","data":{"count":20,"total":42,"entries":[…]},"next_cursor":"<standard base64>","has_more":true}`
 - ✗ paging inside `data` · `"next_cursor":null,"has_more":false` on a search or a `get` · `"offset":40` · `{"page":2}`
 
 ### 1.12 Lists
 
 - A list field is a plural noun: `entries`, `tags`, `plugins`, `settings`, `links`, `conflicts`, `filters`, `warnings`. A list of memories is always `entries`. A response with a list has `data.count`.
-- An item has the same shape wherever it appears. A memory in `add` output has the same fields as in `get`, including `links` (JE-4.3). `get`, `add`, `update` and `rekey` return `data.memory` (JE-4.2).
+- `get`, `add`, `update`, and `rekey` return `data.memory` (JE-4.2). `get` and `add` include `links`. `list` and `search` entries include `links`. `update` and `rekey` memory objects have no `links` member. `delete`, `purge`, and `conflict accept` entries have no `links` member. `link` and `unlink` return `links[]` stubs ([JSON-ENVELOPE.md](JSON-ENVELOPE.md)).
 - ✗ `"results":[…]`, `"memories":[…]`
 
 ### 1.13 Unknown fields (J3; PP R2.5, R9.19–R9.21; JE-4.1)
 
 - **Error** in the `run`, `permissions` and action `filter` sections of `plugin.json`: `plugin_manifest_invalid`, which names the field (`detail {path, rule}`). No hooks config file exists (S-01).
-- **Warning everywhere else**: CLI, HTTP and MCP input, settings import, exports, events, plugin messages and the rest of `plugin.json`. The reader ignores the field and warns `unknown_field` (`detail {field, where}`), once per file or stream. A plugin's `unknown_field` goes only to the plugin log and `plugin status`.
+- **Warning everywhere else**: HTTP and MCP input, settings import, exports, events, plugin messages and the rest of `plugin.json`. The reader ignores the field and warns `unknown_field` (`detail {field, where}`), once per file or stream. A plugin's `unknown_field` goes only to the plugin log and `plugin status`.
+- This binary's `unknown_field` writer uses the C-35 file and stdin sentences. No command reads a JSON file or JSON stdin. A list-cursor member this binary does not know is `invalid_argument`, message `invalid --cursor`, not `unknown_field` ([JSON-ENVELOPE.md](JSON-ENVELOPE.md)).
 - Why: in the sections that decide what runs, "ignore" would mean "run something else".
 - ✓ `plugin.json /filters/0/run: unknown field "proces".` fix `Did you mean "process"?`
 
@@ -288,7 +292,7 @@ Event (hook stdin, plugin socket, webhook):
 - Key order has no meaning for readers. Writers still emit the documented order:
   - the envelope order of §1.8;
   - in a memory: `id, local_id (CLI only), key, body, tags, created_by, updated_by, created_at, updated_at, expires_at, deleted_at, bin, version_vector, links` (008 Examples);
-  - in `data`: `count`, the list, `total`.
+  - in CLI `list` and `search` data: `count`, `total`, then the list. Search writes `keys` and `tags` before `entries`.
 
 ### 1.17 JSON Lines for logs and streams
 
@@ -305,21 +309,31 @@ Event (hook stdin, plugin socket, webhook):
 
 ## 2. Top-level shapes per surface
 
-`E(t)` is the envelope `{format:"remember-message", version:1, type:t, …}`, with no envelope `id`. `?` marks an optional field. This table is normative through 008 §6. Where it differs from log 008, the log wins.
+`E(t)` is the envelope `{format:"remember-message", version:1, type:t, …}`, with no envelope `id`. `?` marks an optional field. CLI rows match [JSON-ENVELOPE.md](JSON-ENVELOPE.md). Where a design log and a spec disagree, the spec wins.
 
 | Surface | Document or message | Top-level shape |
 |---|---|---|
-| CLI `--json` write, one memory | `add`, `update`, `rekey` | `E(memory.<verb>.result)` + `data{action, memory{}}`, `warnings?` |
-| CLI `--json` write, many | `delete`, `purge`, `link`, `unlink`, `conflict accept`, `import` | `E(memory.<verb>.result \| conflict.accept.result \| …)` + `data{action, count, entries[]}`, `warnings?` |
-| CLI `--json` read, one | `get` | `E(memory.get.result)` + `data{memory{}}`, `warnings?` |
-| CLI `--json` list | `list` | `E(memory.list.result)` + `data{count, entries[], total?}`, `next_cursor`, `has_more`, `warnings?` |
-| CLI `--json` search | `search` | `E(memory.search.result)` + `data{count, total, entries[], query{original, rewritten}, ranked_by, filters[], keys{}, tags{}}`, `warnings?`. **No `next_cursor` and no `has_more`** (S-08, PP §8). |
+| CLI `--json` write, one memory | `add` | `E(memory.add.result)` + `data{action, memory{}}` with `links`, `warnings?`. `action` is `created`, `merged`, or `updated`. |
+| CLI `--json` write, one memory | `update`, `rekey` | `E(memory.<verb>.result)` + `data{action, memory{}}` with no `links`, `warnings?`. `action` is `updated`. |
+| CLI `--json` write, many | `delete`, `purge` | `E(memory.<verb>.result)` + `data{action, count, entries[]}` with no `links`, `warnings?`. `action` is `deleted`. |
+| CLI `--json` write, many | `link`, `unlink` | `E(memory.<verb>.result)` + `data{action, count, links[]}`, `warnings?`. `link` action is `created` or `merged`. `unlink` action is `deleted`. |
+| CLI `--json` write, many | `conflict accept` | `E(conflict.accept.result)` + `data{action, count, entries[]}` with no `links`, `warnings?`. `action` is `accepted`. |
+| CLI `--json` write, many | `import` | `E(memory.import.result)` + `data{action, inserted, updated, unchanged, conflicts, rejected}`, `warnings?`. `action` is `imported`. The counts are numbers. |
+| CLI `--json` read, one | `get` | `E(memory.get.result)` + `data{memory{}}` with `links`, `warnings?` |
+| CLI `--json` list | `list` | `E(memory.list.result)` + `data{count, total, entries[]}`, `next_cursor`, `has_more`, `warnings?` |
+| CLI `--json` search | `search` | `E(memory.search.result)` + `data{count, total, keys{}, tags{}, entries[], query{original}, ranked_by, filters[]}`, `warnings?`. **No `next_cursor` or `has_more`** (S-08). |
 | CLI `--json` settings | `settings get\|set\|reset\|list\|history\|import` | `E(setting.<verb>.result)` + `data`: get `{setting}`; set `{setting, scope, old_value, changed}`; reset the same plus `action`; list `{count, settings[]}` and history `{count, changes[]}`, each with `next_cursor`, `has_more`; import `{count, written, unchanged, skipped, rows[]}`. `setting` = `{key, type, value, value_ms?\|value_bytes?, from, changed, layers{default, user?, brain?}}`; a history item = `{key, scope, action, old_value, new_value, updated_by, changed_at}`; an import row = `{key, scope, result, action, reason?}` (log 007 ST-7.11a–7.11b). `warnings?` |
-| CLI `--json` other lists | `tags`, `conflicts`, `plugin list`, `brain list` | `E(<noun>.list.result)` + `data{count, <plural>[]}`, `next_cursor` and `has_more` when the command pages, `warnings?` |
-| CLI `--json` single | `settings explain`, `plugin show\|add\|rerun`, `hook add`, `brain new-id`, `sweep`, `dispatch` | `E(<noun>.<verb>.result)` + `data{…}`, `warnings?` (for example `brain.new_id.result` `data{brain_id, previous_brain_id}`) |
+| CLI `--json` other lists | `tags` | `E(tag.list.result)` + `data{count, tags[{name, count}]}`, `warnings?`. No paging fields. |
+| CLI `--json` other lists | `conflicts` | `E(conflict.list.result)` + `data{count, conflicts[{id, memory_id, reason, local, incoming, created_at}]}`, `warnings?`. No paging fields. |
+| CLI `--json` single | `related` | `E(memory.related.result)` + `data{id, local_id, key, count, links[]}`, `warnings?` |
+| CLI `--json` single | `device` | `E(device.get.result)` + `data{device_id}`, `warnings?` |
+| CLI `--json` single | `device new` | `E(device.new.result)` + `data{device_id, previous}`, `warnings?`. `previous` may be `null`. |
+| CLI `--json` single | `repair search-index` | `E(repair.search_index.result)` + `data{action, entries}`, `warnings?`. `action` is `rebuilt`. `entries` is a count. |
+| CLI `--json` single | `brain new-id` | `E(brain.new_id.result)` + `data{brain_id, previous_brain_id}`, `warnings?` |
+| CLI `--json` single | `settings explain`, `plugin show\|add\|rerun`, `hook add`, `sweep`, `dispatch` | `E(<noun>.<verb>.result)` + `data{…}`, `warnings?` |
 | CLI plugin status | `plugin status` | `E(plugin.status.result)` + `data{plugins[]}`; each item follows PP §10 `plugin-status.json`. Each filter item in `entries[]` has `budget` and an optional `cold_start_grace` (M-24 A) |
 | CLI failure | any command with `--json` | `E(<request type>.result)` + `error{code, message, fix, retryable, detail?}`, `warnings?`; `unknown.result` when no command is known; stdout only; stderr empty |
-| CLI memory object | `data.memory`, `data.entries[]` | `{id, local_id, key, body, tags[], created_by{kind,id}, updated_by{kind,id}, created_at, updated_at, expires_at, deleted_at, bin, version_vector{}, links[]}` (no `source`) |
+| CLI memory object | `data.memory`, `data.entries[]` | `{id, local_id, key, body, tags[], created_by{kind,id}, updated_by{kind,id}, created_at, updated_at, expires_at, deleted_at, bin, version_vector{}}` and `links[]` on `get`, `add`, `list`, and `search` (no `source`) |
 | HTTP | every route | `E(<request type>.result)` + `request_id`, `data` \| `error`, `next_cursor?`/`has_more?` (paging list routes only; never search), `warnings?`; memory objects without `local_id`; status from `error.code` |
 | MCP | `remember_add\|search\|list\|get\|update\|delete`, `remember_settings` | input: snake_case tool arguments (`id`, `key`, `tags`, `bin`, `limit`, `cursor`; search takes no `cursor`); output: the HTTP envelope in `structuredContent` |
 | Plugin message | socket, plugin and hook stdin, the `ready` line, Cloud webhooks | `E(<PP §1.2 type>)` + `request_id?` (§1.7a), `data` \| `error`, `warnings?`; never `next_cursor` or `has_more` (PP R1.12). The type list is PP §1.2. |
@@ -359,7 +373,7 @@ Rev 1 listed D1–D31 against the code, the handoff docs and the drafts of 2026-
 9. Every error has `code`, `message`, `fix` and `retryable`.
 10. Documented fields are always present, with `null` for no value and `[]` for an empty list (the envelope's `warnings` excepted).
 11. Enums and codes are lowercase and open for readers. Plugin codes are `plugin_*`.
-12. Unknown fields are an error in plugin `run`, `permissions` and `filter`, and a warning `unknown_field` everywhere else.
+12. Unknown fields are an error in plugin `run`, `permissions` and `filter`, and a warning `unknown_field` on the other readers. This binary's list cursor reports an unknown member as `invalid_argument`.
 13. Actors are `{kind, id}` in `created_by` and `updated_by`. There is no `source`.
 14. UTF-8, no BOM, no comments, stated limits, the documented key order, and JSON Lines for logs and streams.
 

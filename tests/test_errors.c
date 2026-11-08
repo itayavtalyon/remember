@@ -21,8 +21,8 @@
 #include <time.h>
 #include <unistd.h>
 
-/* Longest E4.3 token plus the JSON envelope around "sample text". */
-enum { EXPECTED_JSON_CAP = 160 };
+/* Longest E4.3 token, fix and retryable around "sample text". */
+enum { EXPECTED_JSON_CAP = 320 };
 
 /* Biggest E4.9 JSON error line the CLI facade tests build (detail + path). */
 enum { CLI_JSON_CAP = 1024 };
@@ -73,16 +73,77 @@ static const char *const k_error_codes[] = {
     "corrupt",
     "io_error",
     "schema_too_new",
+    "invalid_argument",
 };
 
-/* Unit tests pick the --json-errors mode per call; the flag is cleared after. */
+/* error.fix and retryable per code, in catalog order (decision:plan21-error-fix-drafts-c42,
+   decision:plan21-retryable-codes). usage is the json_begin command's help. */
+typedef struct {
+    const char *fix;
+    const char *retryable;
+} ExpectedFix;
+static const ExpectedFix k_error_fixes[] = {
+    {"Run 'remember get --help' to see how to use it.", "false"},
+    {"Run 'remember list' to see keys.", "false"},
+    {"Try again. If it keeps happening, report the details from --json.", "false"},
+    {"Close other apps to free memory, then try again.", "true"},
+    {"This is a bug in remember. Report it with the command you ran.", "false"},
+    {"Check the search words, or put the query in double quotes.", "false"},
+    {"Pick another key, or rekey the other memory first.", "false"},
+    {"Change the text, or update the memory that already has it.", "false"},
+    {"Add --expired to use it.", "false"},
+    {"Run the command without --expired.", "false"},
+    {"Add --trash to use it.", "false"},
+    {"Run 'remember delete' on it first.", "false"},
+    {"Delete it instead; it stays in the Trash and syncs as deleted.", "false"},
+    {"Link two different memories.", "false"},
+    {"Remove the link that closes the loop, then try again.", "false"},
+    {"Open the source brain once with this remember, then import it.", "false"},
+    {"Rekey or delete the memory that holds the key or text, then try again.", "false"},
+    {"Read the memory again, then retry the change.", "false"},
+    {"Upgrade remember, then try again.", "false"},
+    {"Open the brain with the remember that made it, and export it.", "false"},
+    {"Check the import source, then try again.", "false"},
+    {"Wait a moment and try again.", "true"},
+    {"Give yourself write permission on the brain file and its folder.", "false"},
+    {"Free some space and try again.", "false"},
+    {"Check that the folder exists and that you can read and write it.", "false"},
+    {"Point --db at a remember brain.", "false"},
+    {"Copy the file somewhere safe, then restore a backup.", "false"},
+    {"Check the disk or drive, then try again.", "true"},
+    {"Upgrade remember to make changes.", "false"},
+    {"Run 'remember list' again without --cursor.", "false"},
+};
+
+/* Unit tests pick the mode per call. JSON mode buffers the notice for the
+   envelope; json_end writes what was buffered (`"error":{...}` and
+   `,"warnings":[...]`) to the error stream so a test reads it there, then
+   returns diag to plain mode. */
+static void json_begin(bool json)
+{
+    if (json) {
+        ASSERT_EQ_INT(diag_json_begin("get"), 0);
+    }
+}
+
+static void json_end(bool json)
+{
+    if (json) {
+        if (diag_json_has_error()) {
+            ASSERT_EQ_INT(diag_json_write_error(app_err()), 0);
+        }
+        ASSERT_EQ_INT(diag_json_write_warnings(app_err()), 0);
+        diag_json_end();
+    }
+}
+
 static int diag_error_as(bool json, DiagCode code, const char *message)
 {
     int rc = 0;
 
-    diag_set_json_errors(json);
+    json_begin(json);
     rc = diag_error(code, message);
-    diag_set_json_errors(false);
+    json_end(json);
     return rc;
 }
 
@@ -90,13 +151,13 @@ static int diag_warning_as(bool json, DiagWarning code, const char *message)
 {
     int rc = 0;
 
-    diag_set_json_errors(json);
+    json_begin(json);
     rc = diag_warning(code, message);
-    diag_set_json_errors(false);
+    json_end(json);
     return rc;
 }
 
-/* Plain (no --json-errors) usage line for message; the caller frees it.
+/* Plain (no --json) usage line for message; the caller frees it.
    NULL when the stream cannot open or the emitter fails. */
 static char *plain_usage_line(const char *message)
 {
@@ -124,9 +185,9 @@ static int diag_sqlite_as(bool json, DiagCode code, const StoreError *detail, co
 {
     int rc = 0;
 
-    diag_set_json_errors(json);
+    json_begin(json);
     rc = diag_error_sqlite(code, detail, path);
-    diag_set_json_errors(false);
+    json_end(json);
     return rc;
 }
 
@@ -152,6 +213,7 @@ TEST(error_catalog_round_trips_every_e4_3_code)
     size_t count = sizeof(k_error_codes) / sizeof(k_error_codes[0]);
 
     ASSERT_EQ_INT((int)DIAG_CODE_COUNT, (int)count);
+    ASSERT_EQ_INT((int)count, (int)(sizeof(k_error_fixes) / sizeof(k_error_fixes[0])));
     for (i = 0; i < count; i++) {
         DiagCode code = (DiagCode)i;
         DiagCode parsed = DIAG_CODE_COUNT;
@@ -177,10 +239,8 @@ TEST(error_catalog_rejects_names_outside_e4_3)
 }
 
 static const char *const k_warning_codes[] = {
-    "raw_query_ignored",
-    "deprecated_flag",
-    "synced_folder",
-    "setting_invalid",
+    "raw_query_ignored", "deprecated_flag",      "synced_folder",
+    "setting_invalid",   "flag_meaning_changed", "unknown_field",
 };
 
 TEST(warning_catalog_round_trips_every_code)
@@ -244,11 +304,54 @@ TEST(json_error_is_one_line_and_not_the_plain_line)
     app_set_streams((AppStreams){.out = NULL, .err = err});
     ASSERT_EQ_INT(diag_error_as(true, DIAG_NOT_FOUND, "not found"), 0);
     ASSERT_EQ_INT(fflush(err), 0);
-    ASSERT_STREQ(buf,
-                 "{\"version\":1,\"error\":{\"code\":\"not_found\",\"message\":\"not found\"}}\n");
+    ASSERT_STREQ(
+        buf, "\"error\":{\"code\":\"not_found\",\"message\":\"not found\",\"fix\":\"Run 'remember "
+             "list' to see keys.\",\"retryable\":false}");
     app_set_streams((AppStreams){.out = NULL, .err = NULL});
     ASSERT_EQ_INT(fclose(err), 0);
     free(buf);
+}
+
+/* The first error of a run is the cause; a later plain or SQLite error is dropped. */
+TEST(json_keeps_only_the_first_error)
+{
+    char *buf = NULL;
+    size_t len = 0U;
+    FILE *err = open_memstream(&buf, &len);
+    StoreError busy =
+        given_sqlite_detail(STORE_ERROR_BUSY, SQLITE_BUSY, SQLITE_BUSY, "SQLITE_BUSY", "locked");
+
+    ASSERT_TRUE(err != NULL);
+    if (err == NULL) {
+        return;
+    }
+    app_set_streams((AppStreams){.out = NULL, .err = err});
+    ASSERT_EQ_INT(diag_json_begin(NULL), 0);
+    ASSERT_FALSE(diag_json_has_error());
+    ASSERT_EQ_INT(diag_error(DIAG_USAGE, "first"), 0);
+    ASSERT_EQ_INT(diag_error(DIAG_INTERNAL, "second"), 0);
+    ASSERT_EQ_INT(diag_error_sqlite(DIAG_BUSY, &busy, NULL), 0);
+    ASSERT_TRUE(diag_json_has_error());
+    ASSERT_EQ_INT(diag_json_write_error(err), 0);
+    ASSERT_EQ_INT(diag_json_write_warnings(err), 0);
+    diag_json_end();
+    ASSERT_FALSE(diag_json_has_error());
+    ASSERT_EQ_INT(fflush(err), 0);
+    ASSERT_STREQ(buf,
+                 "\"error\":{\"code\":\"usage\",\"message\":\"first\","
+                 "\"fix\":\"Run 'remember --help' to see the commands.\",\"retryable\":false}");
+    app_set_streams((AppStreams){.out = NULL, .err = NULL});
+    ASSERT_EQ_INT(fclose(err), 0);
+    free(buf);
+}
+
+TEST(diag_code_fix_is_the_codes_sentence)
+{
+    ASSERT_STREQ(diag_code_fix(DIAG_OUT_OF_MEMORY),
+                 "Close other apps to free memory, then try again.");
+    ASSERT_STREQ(diag_code_fix(DIAG_SCHEMA_TOO_NEW), "Upgrade remember to make changes.");
+    ASSERT_TRUE(diag_code_fix(DIAG_USAGE) == NULL);
+    ASSERT_TRUE(diag_code_fix(DIAG_CODE_COUNT) == NULL);
 }
 
 TEST(error_outside_the_catalog_writes_nothing)
@@ -285,9 +388,9 @@ TEST(json_error_escapes_message_bytes)
     app_set_streams((AppStreams){.out = NULL, .err = err});
     ASSERT_EQ_INT(diag_error_as(true, DIAG_USAGE, message), 0);
     ASSERT_EQ_INT(fflush(err), 0);
-    ASSERT_STREQ(
-        buf,
-        "{\"version\":1,\"error\":{\"code\":\"usage\",\"message\":\"a\\\"b\\\\c\\n\\u0001\"}}\n");
+    ASSERT_STREQ(buf, "\"error\":{\"code\":\"usage\",\"message\":\"a\\\"b\\\\c\\n\\u0001\","
+                      "\"fix\":\"Run 'remember get --help' to see how to use it.\","
+                      "\"retryable\":false}");
     app_set_streams((AppStreams){.out = NULL, .err = NULL});
     ASSERT_EQ_INT(fclose(err), 0);
     free(buf);
@@ -329,10 +432,10 @@ TEST(every_error_code_json_message_matches_the_plain_line)
         ASSERT_EQ_INT(fflush(plain), 0);
         ASSERT_EQ_INT(fflush(json), 0);
         ASSERT_STREQ(plain_buf, "remember: sample text\n");
-        wrote =
-            snprintf(expected_json, sizeof(expected_json),
-                     "{\"version\":1,\"error\":{\"code\":\"%s\",\"message\":\"sample text\"}}\n",
-                     k_error_codes[i]);
+        wrote = snprintf(expected_json, sizeof(expected_json),
+                         "\"error\":{\"code\":\"%s\",\"message\":\"sample text\",\"fix\":\"%s\","
+                         "\"retryable\":%s}",
+                         k_error_codes[i], k_error_fixes[i].fix, k_error_fixes[i].retryable);
         ASSERT_TRUE(wrote > 0 && (size_t)wrote < sizeof(expected_json));
         ASSERT_STREQ(json_buf, expected_json);
         app_set_streams((AppStreams){.out = NULL, .err = NULL});
@@ -377,8 +480,7 @@ TEST(json_warning_is_one_line_without_the_prefix)
     app_set_streams((AppStreams){.out = NULL, .err = err});
     ASSERT_EQ_INT(diag_warning_as(true, DIAG_WARN_DEPRECATED_FLAG, "x"), 0);
     ASSERT_EQ_INT(fflush(err), 0);
-    ASSERT_STREQ(buf,
-                 "{\"version\":1,\"warning\":{\"code\":\"deprecated_flag\",\"message\":\"x\"}}\n");
+    ASSERT_STREQ(buf, ",\"warnings\":[{\"code\":\"deprecated_flag\",\"message\":\"x\"}]");
     app_set_streams((AppStreams){.out = NULL, .err = NULL});
     ASSERT_EQ_INT(fclose(err), 0);
     free(buf);
@@ -428,7 +530,9 @@ TEST(null_message_is_empty_text)
     ASSERT_EQ_INT(diag_warning_as(false, DIAG_WARN_SYNCED_FOLDER, NULL), 0);
     ASSERT_EQ_INT(fflush(err), 0);
     ASSERT_STREQ(buf, "remember: \n"
-                      "{\"version\":1,\"error\":{\"code\":\"internal\",\"message\":\"\"}}\n"
+                      "\"error\":{\"code\":\"internal\",\"message\":\"\","
+                      "\"fix\":\"This is a bug in remember. Report it with the command you ran.\","
+                      "\"retryable\":false}"
                       "remember: warning: \n");
     app_set_streams((AppStreams){.out = NULL, .err = NULL});
     ASSERT_EQ_INT(fclose(err), 0);
@@ -546,10 +650,8 @@ TEST(error_and_warning_leave_stdout_empty)
     ASSERT_EQ_INT(fflush(out), 0);
     ASSERT_EQ_INT(fflush(err), 0);
     ASSERT_STREQ(out_buf, "");
-    ASSERT_STREQ(
-        err_buf,
-        "remember: missing command (try --help)\n"
-        "{\"version\":1,\"warning\":{\"code\":\"raw_query_ignored\",\"message\":\"x\"}}\n");
+    ASSERT_STREQ(err_buf, "remember: missing command (try --help)\n"
+                          ",\"warnings\":[{\"code\":\"raw_query_ignored\",\"message\":\"x\"}]");
     app_set_streams((AppStreams){.out = NULL, .err = NULL});
     ASSERT_EQ_INT(fclose(err), 0);
     ASSERT_EQ_INT(fclose(out), 0);
@@ -591,34 +693,65 @@ TEST(plain_missing_command_is_unchanged)
     free(db);
 }
 
-TEST(json_errors_usage_is_one_stderr_line)
+TEST(json_usage_error_is_one_stdout_envelope)
 {
     char *db = make_temp_db_path();
-    const char *args[] = {"--json-errors"};
+    const char *args[] = {"--json"};
     CmdResult r;
 
     ASSERT_TRUE(db != NULL);
     r = run_remember(db, args, sizeof(args) / sizeof(args[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 1);
-    ASSERT_STREQ(r.out, "");
-    ASSERT_STREQ(r.err, "{\"version\":1,\"error\":{\"code\":\"usage\",\"message\":\"missing "
-                        "command (try --help)\"}}\n");
+    ASSERT_STREQ(r.err, "");
+    ASSERT_STREQ(
+        r.out,
+        "{\"format\":\"remember-message\",\"version\":1,\"type\":\"unknown.result\",\"error\""
+        ":{\"code\":\"usage\",\"message\":\"missing command (try --help)\",\"fix\":\"Run 'rem"
+        "ember --help' to see the commands.\",\"retryable\":false}}\n");
     cmd_result_free(&r);
     free(db);
 }
 
-TEST(json_errors_not_found_is_one_line)
+/* help's command stays help when the topic is unknown, and the error is still
+   an envelope. A guard that skips the envelope for every help command would
+   print the plain line instead. */
+TEST(json_help_with_an_unknown_topic_is_an_envelope)
 {
     char *db = make_temp_db_path();
-    const char *args[] = {"get", "--json-errors", "--key", "nope"};
+    const char *args[] = {"--json", "help", "not-a-command"};
+    CmdResult r;
+
+    ASSERT_TRUE(db != NULL);
+    if (db == NULL) {
+        return;
+    }
+    r = run_remember(db, args, sizeof(args) / sizeof(args[0]), NULL);
+    ASSERT_EQ_INT(r.exit_code, 1);
+    ASSERT_STREQ(r.err, "");
+    ASSERT_STREQ(r.out,
+                 "{\"format\":\"remember-message\",\"version\":1,\"type\":\"unknown.result\","
+                 "\"error\":{\"code\":\"usage\",\"message\":\"unknown command 'not-a-command'\","
+                 "\"fix\":\"Run 'remember help --help' to see how to use it.\","
+                 "\"retryable\":false}}\n");
+    cmd_result_free(&r);
+    free(db);
+}
+
+TEST(json_not_found_is_one_stdout_envelope)
+{
+    char *db = make_temp_db_path();
+    const char *args[] = {"get", "--json", "--key", "nope"};
     CmdResult r;
 
     ASSERT_TRUE(db != NULL);
     r = run_remember(db, args, sizeof(args) / sizeof(args[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 2);
-    ASSERT_STREQ(r.out, "");
-    ASSERT_STREQ(r.err,
-                 "{\"version\":1,\"error\":{\"code\":\"not_found\",\"message\":\"not found\"}}\n");
+    ASSERT_STREQ(r.err, "");
+    ASSERT_STREQ(
+        r.out,
+        "{\"format\":\"remember-message\",\"version\":1,\"type\":\"memory.get.result\",\"erro"
+        "r\":{\"code\":\"not_found\",\"message\":\"not found\",\"fix\":\"Run 'remember list' "
+        "to see keys.\",\"retryable\":false}}\n");
     cmd_result_free(&r);
     free(db);
 }
@@ -647,33 +780,41 @@ TEST(plain_trash_warning_uses_warning_prefix)
     ASSERT_TRUE(db != NULL);
     r = run_remember(db, args, sizeof(args) / sizeof(args[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 0);
-    ASSERT_STREQ(r.err, "remember: warning: --trash is deprecated; use --expired\n");
+    ASSERT_STREQ(r.err, "remember: warning: --trash now means the Trash (deleted memories). "
+                        "For expired memories, use --expired.\n");
     cmd_result_free(&r);
     free(db);
 }
 
-TEST(json_errors_trash_is_deprecated_flag)
+TEST(json_trash_warning_is_in_the_list_envelope)
 {
     char *db = make_temp_db_path();
-    const char *args[] = {"--json-errors", "list", "--trash"};
+    const char *args[] = {"--json", "list", "--trash"};
     CmdResult r;
 
     ASSERT_TRUE(db != NULL);
     r = run_remember(db, args, sizeof(args) / sizeof(args[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 0);
-    ASSERT_STREQ(r.err, "{\"version\":1,\"warning\":{\"code\":\"deprecated_flag\",\"message\":\"--"
-                        "trash is deprecated; use --expired\"}}\n");
+    ASSERT_STREQ(r.err, "");
+    ASSERT_STREQ(r.out,
+                 "{\"format\":\"remember-message\",\"version\":1,\"type\":\"memory.list.result\","
+                 "\"data\":{\"count\":0,\"total\":0,\"entries\":[]},"
+                 "\"next_cursor\":null,\"has_more\":false,"
+                 "\"warnings\":[{\"code\":\"flag_meaning_changed\","
+                 "\"message\":\"--trash now means the Trash (deleted memories). "
+                 "For expired memories, use --expired.\","
+                 "\"detail\":{\"flag\":\"--trash\",\"use\":\"--expired\"}}]}\n");
     cmd_result_free(&r);
     free(db);
 }
 
-TEST(json_errors_synced_folder_is_one_warning)
+TEST(json_synced_folder_warning_is_in_the_list_envelope)
 {
     enum { PATH_CAP = 4096 };
     char tmpl[] = "/tmp/Dropbox-remember-XXXXXX";
     const char *dir = mkdtemp(tmpl);
     char path[PATH_CAP];
-    const char *args[] = {"--json-errors", "list"};
+    const char *args[] = {"--json", "list"};
     CmdResult r;
     int wrote = 0;
 
@@ -685,10 +826,14 @@ TEST(json_errors_synced_folder_is_one_warning)
     ASSERT_TRUE(wrote > 0 && (size_t)wrote < sizeof(path));
     r = run_remember(path, args, sizeof(args) / sizeof(args[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 0);
-    ASSERT_STREQ(r.err,
-                 "{\"version\":1,\"warning\":{\"code\":\"synced_folder\",\"message\":\"database "
-                 "path looks like a synced folder "
-                 "(iCloud/Dropbox/Google Drive); corruption risk - prefer a local disk\"}}\n");
+    ASSERT_STREQ(r.err, "");
+    ASSERT_STREQ(r.out,
+                 "{\"format\":\"remember-message\",\"version\":1,\"type\":\"memory.list.result\","
+                 "\"data\":{\"count\":0,\"total\":0,\"entries\":[]},"
+                 "\"next_cursor\":null,\"has_more\":false,"
+                 "\"warnings\":[{\"code\":\"synced_folder\",\"message\":\"database path looks "
+                 "like a synced folder (iCloud/Dropbox/Google Drive); corruption risk - prefer "
+                 "a local disk\"}]}\n");
     cmd_result_free(&r);
     harness_remove_tree(dir);
 }
@@ -852,6 +997,63 @@ TEST(rejecting_stream_fails_a_write_and_sets_the_error_flag)
     (void)fclose(out);
 }
 
+/* A warning stderr cannot take is a failed write. It does not count for --strict. */
+TEST(plain_warning_that_cannot_be_written_does_not_count)
+{
+    FILE *err = given_out_rejecting_writes();
+
+    if (err == NULL) {
+        return;
+    }
+    diag_warnings_reset();
+    app_set_streams((AppStreams){.out = NULL, .err = err});
+    ASSERT_EQ_INT(diag_warning(DIAG_WARN_FLAG_MEANING_CHANGED,
+                               "--trash now means the Trash (deleted memories). For expired "
+                               "memories, use --expired."),
+                  -1);
+    ASSERT_EQ_INT(diag_warning_count(), 0U);
+    app_set_streams((AppStreams){.out = NULL, .err = NULL});
+    (void)fclose(err);
+}
+
+/* A failed unknown_field write does not count, and the same file still warns later. */
+TEST(unknown_field_that_cannot_be_written_does_not_stick)
+{
+    char *buf = NULL;
+    size_t len = 0U;
+    FILE *bad = given_out_rejecting_writes();
+    FILE *err = NULL;
+
+    if (bad == NULL) {
+        return;
+    }
+    diag_json_end();
+    diag_warnings_reset();
+    app_set_streams((AppStreams){.out = NULL, .err = bad});
+    ASSERT_EQ_INT(diag_unknown_field((DiagUnknownField){.path = "/tmp/note.json", .name = "extra"}),
+                  -1);
+    ASSERT_EQ_INT(diag_warning_count(), 0U);
+    (void)fclose(bad);
+    err = open_memstream(&buf, &len);
+    ASSERT_TRUE(err != NULL);
+    if (err == NULL) {
+        app_set_streams((AppStreams){.out = NULL, .err = NULL});
+        diag_warnings_reset();
+        return;
+    }
+    app_set_streams((AppStreams){.out = NULL, .err = err});
+    ASSERT_EQ_INT(diag_unknown_field((DiagUnknownField){.path = "/tmp/note.json", .name = "extra"}),
+                  0);
+    ASSERT_EQ_INT(diag_warning_count(), 1U);
+    ASSERT_EQ_INT(fflush(err), 0);
+    ASSERT_STREQ(buf, "remember: warning: \"/tmp/note.json\" has a field remember doesn't know, "
+                      "\"extra\". The rest of the file was read.\n");
+    app_set_streams((AppStreams){.out = NULL, .err = NULL});
+    diag_warnings_reset();
+    ASSERT_EQ_INT(fclose(err), 0);
+    free(buf);
+}
+
 /* Output that fails only at the final flush is an error, not exit 0. */
 TEST(run_reports_output_that_fails_at_the_final_flush)
 {
@@ -888,23 +1090,47 @@ TEST(run_reports_a_write_the_command_did_not_check)
     free(err_text);
 }
 
-/* With --json-errors the flush failure is a JSON error line. */
-TEST(run_reports_a_failed_flush_as_json_with_json_errors)
+/* --json: when stdout cannot take the envelope, stderr is the one place left. */
+TEST(run_reports_a_failed_json_flush_on_stderr)
 {
-    const char *const argv[] = {"remember", "--json-errors", "--version"};
+    char *db = make_temp_db_path();
+    const char *const argv[] = {"remember", "--db", db, "--json", "tags"};
     FILE *out = given_out_failing_at_flush();
     char *err_text = NULL;
     int rc = 0;
 
-    if (out == NULL) {
+    if (db == NULL || out == NULL) {
+        if (out != NULL) {
+            (void)fclose(out);
+        }
+        free(db);
         return;
     }
     rc = when_run_with_out(argv, (int)(sizeof(argv) / sizeof(argv[0])), out, &err_text);
     ASSERT_EQ_INT(rc, 1);
-    ASSERT_STREQ(err_text, "{\"version\":1,\"error\":{\"code\":\"internal\",\"message\":"
-                           "\"failed to write output\"}}\n");
+    ASSERT_STREQ(err_text, "remember: failed to write output\n");
     (void)fclose(out);
     free(err_text);
+    free(db);
+}
+
+/* --json help and version stay text: no envelope. */
+TEST(json_help_and_version_print_text)
+{
+    char *db = make_temp_db_path();
+    const char *version[] = {"--json", "--version"};
+    CmdResult r;
+
+    ASSERT_TRUE(db != NULL);
+    if (db == NULL) {
+        return;
+    }
+    r = run_remember(db, version, sizeof(version) / sizeof(version[0]), NULL);
+    ASSERT_EQ_INT(r.exit_code, 0);
+    ASSERT_STR_PREFIX(r.out, "remember ");
+    ASSERT_STREQ(r.err, "");
+    cmd_result_free(&r);
+    free(db);
 }
 
 /* A command whose own write failed reported it; the run adds no second line. */
@@ -1057,7 +1283,6 @@ TEST(err_fmt_keeps_a_long_unknown_option)
         return;
     }
     app_set_streams((AppStreams){.out = NULL, .err = err});
-    diag_set_json_errors(false);
     err_fmt(DIAG_USAGE, "unknown option '%s'", long_opt);
     app_set_streams((AppStreams){.out = NULL, .err = NULL});
     ASSERT_EQ_INT(fflush(err), 0);
@@ -1078,10 +1303,13 @@ typedef struct {
     const char *args[GOLDEN_MAX_ARGS];
     const char *message;
     const char *code;
+    const char *type; /* reply type <noun>.<verb> */
+    const char *fix;
     int exit_code;
     bool with_detail; /* JSON error carries the E4.9 cannot_open detail (import row) */
     /* NOLINTNEXTLINE(readability-magic-numbers,cppcoreguidelines-avoid-magic-numbers) */
-    char pad_[3]; /* explicit tail padding (kept -Wpadded-clean) */
+    char pad_[3];             /* explicit tail padding (kept -Wpadded-clean) */
+    const char *json_message; /* NULL: JSON message is the plain message. C-01 quotes differ. */
 } GoldenError;
 
 /* Count leading non-NULL args (rows are NULL-padded). */
@@ -1114,7 +1342,7 @@ static void given_golden_brain(const char *db)
 }
 
 /* E4.2 golden + D9 table: plain stderr is the 0.2.0 line byte for byte, and
-   --json-errors gives the D9 code with the same message, one line, empty stdout. */
+   --json gives the D9 code with the same message in the stdout envelope, empty stderr. */
 /* cmd_list's own write check: the first entry line fails on a rejecting stdout. */
 TEST(list_reports_a_failed_entry_line)
 {
@@ -1142,47 +1370,142 @@ TEST(list_reports_a_failed_entry_line)
 TEST(golden_error_lines_and_d9_codes)
 {
     static const GoldenError rows[] = {
-        {{"bogus"}, "unknown command 'bogus'", "usage", 1, false, {0}},
-        {{"--bogus", "list"}, "unknown option '--bogus'", "usage", 1, false, {0}},
-        {{"list", "--limit", "0"}, "invalid --limit (must be 1..1000)", "usage", 1, false, {0}},
-        {{"get", "abc"}, "invalid id", "usage", 1, false, {0}},
-        {{"add", "--source", "martian", "x"},
-         "invalid source (use human, agent, tool, share, or unknown)",
+        {{"bogus"},
+         "unknown command 'bogus'",
          "usage",
+         "unknown",
+         "Run 'remember --help' to see the commands.",
          1,
          false,
-         {0}},
-        {{"add", "--key", "", "x"}, "empty key", "usage", 1, false, {0}},
+         {0},
+         NULL},
+        {{"--bogus", "list"},
+         "unknown option '--bogus'",
+         "usage",
+         "unknown",
+         "Run 'remember --help' to see the commands.",
+         1,
+         false,
+         {0},
+         NULL},
+        {{"list", "--limit", "0"},
+         "invalid --limit (must be 1..1000)",
+         "usage",
+         "memory.list",
+         "Run 'remember list --help' to see how to use it.",
+         1,
+         false,
+         {0},
+         NULL},
+        {{"get", "abc"},
+         "\"abc\" isn't a memory id. Use a number from 'remember list', a UUID, or --key KEY.",
+         "invalid_argument",
+         "memory.get",
+         "Use a number from 'remember list', a UUID, or --key KEY.",
+         1,
+         false,
+         {0},
+         "\\\"abc\\\" isn't a memory id."},
+        {{"add", "--as", "martian", "x"},
+         "invalid --as (use human, agent, tool, or share)",
+         "usage",
+         "memory.add",
+         "Run 'remember add --help' to see how to use it.",
+         1,
+         false,
+         {0},
+         NULL},
+        {{"add", "--key", "", "x"},
+         "empty key",
+         "usage",
+         "memory.add",
+         "Run 'remember add --help' to see how to use it.",
+         1,
+         false,
+         {0},
+         NULL},
         {{"conflict", "accept", "--id", "1", "--keep", "sideways"},
          "--keep must be local, incoming, or both",
          "usage",
+         "conflict.accept",
+         "Run 'remember conflict --help' to see how to use it.",
          1,
          false,
-         {0}},
-        {{"device", "extra"}, "device takes 'new' or no arguments", "usage", 1, false, {0}},
-        {{"get", "999"}, "not found", "not_found", 2, false, {0}},
-        {{"get", "--key", "k2"}, "deleted", "deleted", 3, false, {0}},
-        {{"get", "--deleted", "--key", "k1"}, "not_deleted", "not_deleted", 3, false, {0}},
-        {{"link", "1", "1"}, "self-link", "self_link", 1, false, {0}},
+         {0},
+         NULL},
+        {{"device", "extra"},
+         "device takes 'new' or no arguments",
+         "usage",
+         "device.get",
+         "Run 'remember device --help' to see how to use it.",
+         1,
+         false,
+         {0},
+         NULL},
+        {{"get", "999"},
+         "not found",
+         "not_found",
+         "memory.get",
+         "Run 'remember list' to see keys.",
+         2,
+         false,
+         {0},
+         NULL},
+        {{"get", "--key", "k2"},
+         "\"k2\" is in the Trash. Add --trash to use it.",
+         "deleted",
+         "memory.get",
+         "Add --trash to use it.",
+         3,
+         false,
+         {0},
+         "\\\"k2\\\" is in the Trash."},
+        {{"get", "--deleted", "--key", "k1"},
+         "not_deleted",
+         "not_deleted",
+         "memory.get",
+         "Run 'remember delete' on it first.",
+         3,
+         false,
+         {0},
+         NULL},
+        {{"link", "1", "1"},
+         "self-link",
+         "self_link",
+         "memory.link",
+         "Link two different memories.",
+         1,
+         false,
+         {0},
+         NULL},
         {{"rekey", "--key", "k1", "--to-key", "k2"},
          "key conflicts with entry 2",
          "key_conflict",
+         "memory.rekey",
+         "Pick another key, or rekey the other memory first.",
          1,
          false,
-         {0}},
+         {0},
+         NULL},
         {{"update", "4", "--text", "gamma"},
          "body hash conflicts with entry 3",
          "body_conflict",
+         "memory.update",
+         "Change the text, or update the memory that already has it.",
          1,
          false,
-         {0}},
+         {0},
+         NULL},
         {{"import", "--from-db", "/nonexistent/remember-golden.db"},
          "database error: cannot open the import source (SQLITE_CANTOPEN). Check the --from-db "
          "path.",
          "cannot_open",
+         "memory.import",
+         "Check the --from-db path.",
          1,
          true,
-         {0}},
+         {0},
+         NULL},
     };
     char *db = make_temp_db_path();
     size_t i = 0;
@@ -1194,7 +1517,7 @@ TEST(golden_error_lines_and_d9_codes)
     given_golden_brain(db);
     for (i = 0; i < sizeof(rows) / sizeof(rows[0]); i++) {
         const GoldenError *row = &rows[i];
-        const char *json_args[GOLDEN_MAX_ARGS + 1] = {"--json-errors"};
+        const char *json_args[GOLDEN_MAX_ARGS + 1] = {"--json"};
         char want[GOLDEN_LINE_BUF];
         size_t n = args_count(row->args, (size_t)GOLDEN_MAX_ARGS);
         size_t j = 0;
@@ -1213,22 +1536,29 @@ TEST(golden_error_lines_and_d9_codes)
         if (row->with_detail) {
             /* The one SQLite row (the import source is missing): short message, the
                fix in detail, and detail.path names the source, not the brain. */
-            (void)snprintf(want, sizeof(want),
-                           "{\"version\":1,\"error\":{\"code\":\"%s\",\"message\":\"database "
-                           "error: cannot open the import source\",\"detail\":{\"sqlite_code\":14,"
-                           "\"sqlite_extended\":14,\"sqlite_name\":\"SQLITE_CANTOPEN\","
-                           "\"sqlite_message\":\"unable to open database file\",\"fix\":\"Check "
-                           "the --from-db path.\",\"errno\":%d,\"path\":\"%s\",\"reason\":"
-                           "\"missing\"}}}\n",
-                           row->code, ENOENT, row->args[2]);
+            (void)snprintf(
+                want, sizeof(want),
+                "{\"format\":\"remember-message\",\"version\":1,\"type\":\"%s.result\","
+                "\"error\":{\"code\":\"%s\",\"message\":\"database "
+                "error: cannot open the import source\",\"fix\":\"%s\",\"retryable\":false,"
+                "\"detail\":{\"sqlite_code\":14,"
+                "\"sqlite_extended\":14,\"sqlite_name\":\"SQLITE_CANTOPEN\","
+                "\"sqlite_message\":\"unable to open database file\","
+                "\"errno\":%d,\"path\":\"%s\",\"reason\":"
+                "\"missing\"}}}\n",
+                row->type, row->code, row->fix, ENOENT, row->args[2]);
         } else {
+            const char *json_message = row->json_message != NULL ? row->json_message : row->message;
+
             (void)snprintf(want, sizeof(want),
-                           "{\"version\":1,\"error\":{\"code\":\"%s\",\"message\":\"%s\"}}\n",
-                           row->code, row->message);
+                           "{\"format\":\"remember-message\",\"version\":1,\"type\":\"%s.result\","
+                           "\"error\":{\"code\":\"%s\",\"message\":\"%s\",\"fix\":\"%s\","
+                           "\"retryable\":false}}\n",
+                           row->type, row->code, json_message, row->fix);
         }
-        ASSERT_STREQ(r.err, want);
+        ASSERT_STREQ(r.out, want);
         ASSERT_EQ_INT(r.exit_code, row->exit_code);
-        ASSERT_STREQ(r.out, "");
+        ASSERT_STREQ(r.err, "");
         cmd_result_free(&r);
     }
     free(db);
@@ -1932,11 +2262,11 @@ TEST(sqlite_busy_reports_cause_fix_and_detail)
         "remember: database error: the brain is locked by another process (SQLITE_BUSY). "
         "Wait a moment and try again. Another app or a terminal may be using this brain.\n";
     static const char *const k_json =
-        "{\"version\":1,\"error\":{\"code\":\"busy\",\"message\":\"database error: the brain is "
-        "locked by another "
-        "process\",\"detail\":{\"sqlite_code\":5,\"sqlite_extended\":5,\"sqlite_name\":\"SQLITE_"
-        "BUSY\",\"sqlite_message\":\"database is locked\",\"fix\":\"Wait a moment and try again. "
-        "Another app or a terminal may be using this brain.\"}}}\n";
+        "\"error\":{\"code\":\"busy\",\"message\":\"database error: the brain is locked by an"
+        "other process\",\"fix\":\"Wait a moment and try again. Another app or a terminal may"
+        " be using this brain.\",\"retryable\":true,\"detail\":{\"sqlite_code\":5,\"sqlite_ex"
+        "tended\":5,\"sqlite_name\":\"SQLITE_BUSY\",\"sqlite_message\":\"database is locked\""
+        "}}";
     StoreError detail = given_sqlite_detail(STORE_ERROR_BUSY, SQLITE_BUSY, SQLITE_BUSY,
                                             "SQLITE_BUSY", "database is locked");
     char *buf = NULL;
@@ -1981,14 +2311,14 @@ TEST(sqlite_cannot_open_carries_errno_reason_and_absolute_path)
     if (getcwd(cwd, sizeof(cwd)) == NULL) {
         return;
     }
-    (void)snprintf(want, sizeof(want),
-                   "{\"version\":1,\"error\":{\"code\":\"cannot_open\",\"message\":\"database "
-                   "error: cannot open the brain "
-                   "file\",\"detail\":{\"sqlite_code\":14,\"sqlite_extended\":14,\"sqlite_name\":"
-                   "\"SQLITE_CANTOPEN\",\"sqlite_message\":\"unable to open database "
-                   "file\",\"fix\":\"Check that the folder exists and that you can read and write "
-                   "it.\",\"errno\":%d,\"path\":\"%s/some/rel.db\",\"reason\":\"missing\"}}}\n",
-                   ENOENT, cwd);
+    (void)snprintf(
+        want, sizeof(want),
+        "\"error\":{\"code\":\"cannot_open\",\"message\":\"database error: cannot open the br"
+        "ain file\",\"fix\":\"Check that the folder exists and that you can read and write it"
+        ".\",\"retryable\":false,\"detail\":{\"sqlite_code\":14,\"sqlite_extended\":14,\"sqli"
+        "te_name\":\"SQLITE_CANTOPEN\",\"sqlite_message\":\"unable to open database file\",\""
+        "errno\":%d,\"path\":\"%s/some/rel.db\",\"reason\":\"missing\"}}",
+        ENOENT, cwd);
     err = open_memstream(&buf, &len);
     ASSERT_TRUE(err != NULL);
     if (err == NULL) {
@@ -2014,12 +2344,12 @@ TEST(sqlite_database_keeps_its_own_text_without_a_path)
 {
     static const char *const k_plain =
         "remember: database error (SQLITE_SCHEMA). Try again. If it keeps happening, report the "
-        "details from --json-errors.\n";
+        "details from --json.\n";
     static const char *const k_json =
-        "{\"version\":1,\"error\":{\"code\":\"database\",\"message\":\"database "
-        "error\",\"detail\":{\"sqlite_code\":17,\"sqlite_extended\":17,\"sqlite_name\":\"SQLITE_"
-        "SCHEMA\",\"sqlite_message\":\"\",\"fix\":\"Try again. If it keeps happening, report the "
-        "details from --json-errors.\"}}}\n";
+        "\"error\":{\"code\":\"database\",\"message\":\"database error\",\"fix\":\"Try again."
+        " If it keeps happening, report the details from --json.\",\"retryable\":false"
+        ",\"detail\":{\"sqlite_code\":17,\"sqlite_extended\":17,\"sqlite_name\":\"SQLITE_SCHE"
+        "MA\",\"sqlite_message\":\"\"}}";
     StoreError detail = given_sqlite_detail(STORE_ERROR_DATABASE, SQLITE_SCHEMA, SQLITE_SCHEMA,
                                             "SQLITE_SCHEMA", "");
     char *buf = NULL;
@@ -2104,13 +2434,12 @@ TEST(sqlite_corrupt_marks_fts_only_and_keeps_base_text)
     ASSERT_EQ_INT(fflush(err), 0);
     ASSERT_STREQ(
         buf + strlen(k_base_plain),
-        "{\"version\":1,\"error\":{\"code\":\"corrupt\",\"message\":\"database error: the brain "
-        "file is "
-        "damaged\",\"detail\":{\"sqlite_code\":11,\"sqlite_extended\":11,\"sqlite_name\":\"SQLITE_"
-        "CORRUPT\",\"sqlite_message\":\"database disk image is malformed\",\"fix\":\"Copy the file "
-        "somewhere safe before anything else, then restore a backup, "
-        "or recover what can be read with `remember --db NEW.db import --from-db COPY`.\","
-        "\"path\":\"/tmp/b.db\",\"fts_only\":false}}}\n");
+        "\"error\":{\"code\":\"corrupt\",\"message\":\"database error: the brain file is dama"
+        "ged\",\"fix\":\"Copy the file somewhere safe before anything else, then restore a ba"
+        "ckup, or recover what can be read with `remember --db NEW.db import --from-db COPY`."
+        "\",\"retryable\":false,\"detail\":{\"sqlite_code\":11,\"sqlite_extended\":11,\"sqlit"
+        "e_name\":\"SQLITE_CORRUPT\",\"sqlite_message\":\"database disk image is malformed\","
+        "\"path\":\"/tmp/b.db\",\"fts_only\":false}}");
     app_set_streams((AppStreams){.out = NULL, .err = NULL});
     ASSERT_EQ_INT(fclose(err), 0);
     free(buf);
@@ -2128,13 +2457,13 @@ TEST(sqlite_corrupt_marks_fts_only_and_keeps_base_text)
     app_set_streams((AppStreams){.out = NULL, .err = err});
     ASSERT_EQ_INT(diag_sqlite_as(true, DIAG_CORRUPT, &fts, "/tmp/b.db"), 0);
     ASSERT_EQ_INT(fflush(err), 0);
-    ASSERT_STREQ(buf + strlen(k_fts_plain),
-                 "{\"version\":1,\"error\":{\"code\":\"corrupt\",\"message\":\"database error: the "
-                 "search index is "
-                 "damaged\",\"detail\":{\"sqlite_code\":11,\"sqlite_extended\":267,\"sqlite_name\":"
-                 "\"SQLITE_CORRUPT_VTAB\",\"sqlite_message\":\"database disk image is "
-                 "malformed\",\"fix\":\"Run `remember repair search-index`. Your memories are not "
-                 "affected.\",\"path\":\"/tmp/b.db\",\"fts_only\":true}}}\n");
+    ASSERT_STREQ(
+        buf + strlen(k_fts_plain),
+        "\"error\":{\"code\":\"corrupt\",\"message\":\"database error: the search index is da"
+        "maged\",\"fix\":\"Run `remember repair search-index`. Your memories are not affected"
+        ".\",\"retryable\":false,\"detail\":{\"sqlite_code\":11,\"sqlite_extended\":267,\"sql"
+        "ite_name\":\"SQLITE_CORRUPT_VTAB\",\"sqlite_message\":\"database disk image is malfo"
+        "rmed\",\"path\":\"/tmp/b.db\",\"fts_only\":true}}");
     app_set_streams((AppStreams){.out = NULL, .err = NULL});
     ASSERT_EQ_INT(fclose(err), 0);
     free(buf);
@@ -2183,7 +2512,7 @@ TEST(cli_text_file_reports_not_a_database)
     char tmpl[] = "/tmp/remember-cli-notadb-XXXXXX";
     int fd = mkstemp(tmpl);
     const char *get[] = {"get", "1"};
-    const char *json[] = {"--json-errors", "get", "1"};
+    const char *json[] = {"--json", "get", "1"};
     char want[CLI_JSON_CAP];
     CmdResult r;
 
@@ -2201,15 +2530,16 @@ TEST(cli_text_file_reports_not_a_database)
     r = run_remember(tmpl, json, sizeof(json) / sizeof(json[0]), NULL);
     (void)snprintf(
         want, sizeof(want),
-        "{\"version\":1,\"error\":{\"code\":\"not_a_database\",\"message\":\"database error: the "
-        "file is not a remember "
-        "database\",\"detail\":{\"sqlite_code\":26,\"sqlite_extended\":26,\"sqlite_name\":\"SQLITE_"
-        "NOTADB\",\"sqlite_message\":\"file is not a database\",\"fix\":\"Point --db at a remember "
-        "brain, or move this file away.\",\"path\":\"%s\"}}}\n",
+        "{\"format\":\"remember-message\",\"version\":1,\"type\":\"memory.get.result\",\"erro"
+        "r\":{\"code\":\"not_a_database\",\"message\":\"database error: the file is not a rem"
+        "ember database\",\"fix\":\"Point --db at a remember brain, or move this file away.\""
+        ",\"retryable\":false,\"detail\":{\"sqlite_code\":26,\"sqlite_extended\":26,\"sqlite_"
+        "name\":\"SQLITE_NOTADB\",\"sqlite_message\":\"file is not a database\",\"path\":\"%s"
+        "\"}}}\n",
         tmpl);
     ASSERT_EQ_INT(r.exit_code, 1);
-    ASSERT_STREQ(r.out, "");
-    ASSERT_STREQ(r.err, want);
+    ASSERT_STREQ(r.err, "");
+    ASSERT_STREQ(r.out, want);
     cmd_result_free(&r);
     (void)unlink(tmpl);
 }
@@ -2226,7 +2556,7 @@ TEST(cli_import_text_source_names_the_source)
     char *db = make_temp_db_path();
     const char *add[] = {"add", "x"};
     const char *imp[] = {"import", "--from-db", tmpl};
-    const char *json[] = {"--json-errors", "import", "--from-db", tmpl};
+    const char *json[] = {"--json", "import", "--from-db", tmpl};
     char want[CLI_JSON_CAP];
     CmdResult r;
 
@@ -2246,16 +2576,17 @@ TEST(cli_import_text_source_names_the_source)
     ASSERT_STREQ(r.err, k_plain);
     cmd_result_free(&r);
     r = run_remember(db, json, sizeof(json) / sizeof(json[0]), NULL);
-    (void)snprintf(want, sizeof(want),
-                   "{\"version\":1,\"error\":{\"code\":\"not_a_database\",\"message\":\"database "
-                   "error: the import source is not a remember database\",\"detail\":{"
-                   "\"sqlite_code\":26,\"sqlite_extended\":26,\"sqlite_name\":\"SQLITE_NOTADB\","
-                   "\"sqlite_message\":\"file is not a database\",\"fix\":\"Check the --from-db "
-                   "path.\",\"path\":\"%s\"}}}\n",
-                   tmpl);
+    (void)snprintf(
+        want, sizeof(want),
+        "{\"format\":\"remember-message\",\"version\":1,\"type\":\"memory.import.result\",\"e"
+        "rror\":{\"code\":\"not_a_database\",\"message\":\"database error: the import source "
+        "is not a remember database\",\"fix\":\"Check the --from-db path.\",\"retryable\":fal"
+        "se,\"detail\":{\"sqlite_code\":26,\"sqlite_extended\":26,\"sqlite_name\":\"SQLITE_NO"
+        "TADB\",\"sqlite_message\":\"file is not a database\",\"path\":\"%s\"}}}\n",
+        tmpl);
     ASSERT_EQ_INT(r.exit_code, 1);
-    ASSERT_STREQ(r.out, "");
-    ASSERT_STREQ(r.err, want);
+    ASSERT_STREQ(r.err, "");
+    ASSERT_STREQ(r.out, want);
     cmd_result_free(&r);
     (void)unlink(tmpl);
     free(db);
@@ -2268,7 +2599,7 @@ TEST(cli_relative_db_emits_absolute_detail_path)
     char tmpl[] = "remember-d7-cli-XXXXXX";
     const char *dir = mkdtemp(tmpl);
     char want[CLI_JSON_CAP];
-    const char *argv_store[] = {"remember", "--db", tmpl, "--json-errors", "get", "1"};
+    const char *argv_store[] = {"remember", "--db", tmpl, "--json", "get", "1"};
     char *err_buf = NULL;
     char *out_buf = NULL;
     size_t err_len = 0U;
@@ -2301,17 +2632,18 @@ TEST(cli_relative_db_emits_absolute_detail_path)
     ASSERT_EQ_INT(fflush(err), 0);
     ASSERT_EQ_INT(fflush(out), 0);
     ASSERT_EQ_INT(rc, 1);
-    ASSERT_STREQ(out_buf, "");
-    wrote = snprintf(want, sizeof(want),
-                     "{\"version\":1,\"error\":{\"code\":\"cannot_open\",\"message\":\"database "
-                     "error: cannot open the brain "
-                     "file\",\"detail\":{\"sqlite_code\":14,\"sqlite_extended\":14,\"sqlite_name\":"
-                     "\"SQLITE_CANTOPEN\",\"sqlite_message\":\"unable to open database "
-                     "file\",\"fix\":\"Check that the folder exists and that you can read and "
-                     "write it.\",\"errno\":%d,\"path\":\"%s/%s\",\"reason\":\"is_directory\"}}}\n",
-                     EISDIR, cwd, tmpl);
+    ASSERT_STREQ(err_buf, "");
+    wrote = snprintf(
+        want, sizeof(want),
+        "{\"format\":\"remember-message\",\"version\":1,\"type\":\"memory.get.result\",\"error\""
+        ":{\"code\":\"cannot_open\",\"message\":\"database error: cannot open the brain file"
+        "\",\"fix\":\"Check that the folder exists and that you can read and write it.\",\"re"
+        "tryable\":false,\"detail\":{\"sqlite_code\":14,\"sqlite_extended\":14,\"sqlite_name"
+        "\":\"SQLITE_CANTOPEN\",\"sqlite_message\":\"unable to open database file\",\"errno\""
+        ":%d,\"path\":\"%s/%s\",\"reason\":\"is_directory\"}}}\n",
+        EISDIR, cwd, tmpl);
     ASSERT_TRUE(wrote > 0 && (size_t)wrote < sizeof(want));
-    ASSERT_STREQ(err_buf, want);
+    ASSERT_STREQ(out_buf, want);
     ASSERT_EQ_INT(fclose(err), 0);
     ASSERT_EQ_INT(fclose(out), 0);
     free(err_buf);
@@ -2340,7 +2672,7 @@ TEST(cli_read_only_file_reports_read_only_on_write)
     char *db = make_temp_db_path();
     const char *seed[] = {"add", "seed"};
     const char *add[] = {"add", "world"};
-    const char *json[] = {"--json-errors", "add", "world"};
+    const char *json[] = {"--json", "add", "world"};
     char want[CLI_JSON_CAP];
     CmdResult r;
 
@@ -2362,17 +2694,18 @@ TEST(cli_read_only_file_reports_read_only_on_write)
     ASSERT_STREQ(r.err, k_plain);
     cmd_result_free(&r);
     r = run_remember(db, json, sizeof(json) / sizeof(json[0]), NULL);
-    (void)snprintf(want, sizeof(want),
-                   "{\"version\":1,\"error\":{\"code\":\"read_only\",\"message\":\"database error: "
-                   "the brain is "
-                   "read-only\",\"detail\":{\"sqlite_code\":8,\"sqlite_extended\":8,\"sqlite_"
-                   "name\":\"SQLITE_READONLY\",\"sqlite_message\":\"attempt to write a readonly "
-                   "database\",\"fix\":\"Give yourself write permission on the brain file and its "
-                   "folder, or move the brain to a writable folder.\",\"path\":\"%s\"}}}\n",
-                   db);
+    (void)snprintf(
+        want, sizeof(want),
+        "{\"format\":\"remember-message\",\"version\":1,\"type\":\"memory.add.result\",\"erro"
+        "r\":{\"code\":\"read_only\",\"message\":\"database error: the brain is read-only\","
+        "\"fix\":\"Give yourself write permission on the brain file and its folder, or move t"
+        "he brain to a writable folder.\",\"retryable\":false,\"detail\":{\"sqlite_code\":8,"
+        "\"sqlite_extended\":8,\"sqlite_name\":\"SQLITE_READONLY\",\"sqlite_message\":\"attem"
+        "pt to write a readonly database\",\"path\":\"%s\"}}}\n",
+        db);
     ASSERT_EQ_INT(r.exit_code, 1);
-    ASSERT_STREQ(r.out, "");
-    ASSERT_STREQ(r.err, want);
+    ASSERT_STREQ(r.err, "");
+    ASSERT_STREQ(r.out, want);
     cmd_result_free(&r);
     /* Restore, or the temp-dir sweep cannot remove it. */
     ASSERT_EQ_INT(chmod(db, 0600), 0);
@@ -2400,12 +2733,11 @@ TEST(sqlite_out_of_range_reason_falls_back_to_other)
     ASSERT_EQ_INT(diag_sqlite_as(true, DIAG_CANNOT_OPEN, &detail, NULL), 0);
     ASSERT_EQ_INT(fflush(err), 0);
     ASSERT_STREQ(
-        buf,
-        "{\"version\":1,\"error\":{\"code\":\"cannot_open\",\"message\":\"database error: cannot "
-        "open the brain "
-        "file\",\"detail\":{\"sqlite_code\":14,\"sqlite_extended\":14,\"sqlite_name\":\"SQLITE_"
-        "CANTOPEN\",\"sqlite_message\":\"unable to open database file\",\"fix\":\"Check that the "
-        "folder exists and that you can read and write it.\",\"reason\":\"other\"}}}\n");
+        buf, "\"error\":{\"code\":\"cannot_open\",\"message\":\"database error: cannot open the br"
+             "ain file\",\"fix\":\"Check that the folder exists and that you can read and write it"
+             ".\",\"retryable\":false,\"detail\":{\"sqlite_code\":14,\"sqlite_extended\":14,\"sqli"
+             "te_name\":\"SQLITE_CANTOPEN\",\"sqlite_message\":\"unable to open database file\",\""
+             "reason\":\"other\"}}");
     app_set_streams((AppStreams){.out = NULL, .err = NULL});
     ASSERT_EQ_INT(fclose(err), 0);
     free(buf);
@@ -2476,14 +2808,16 @@ TEST(err_store_sqlite_misuse_and_clean_store_fall_back)
 TEST(cli_db_under_a_file_keeps_the_legacy_open_line)
 {
     static const char *const k_plain = "remember: database path component is not a directory\n";
-    static const char *const k_json = "{\"version\":1,\"error\":{\"code\":\"cannot_open\","
-                                      "\"message\":\"database path component is "
-                                      "not a directory\"}}\n";
+    static const char *const k_json =
+        "{\"format\":\"remember-message\",\"version\":1,\"type\":\"memory.get.result\",\"erro"
+        "r\":{\"code\":\"cannot_open\",\"message\":\"database path component is not a directo"
+        "ry\",\"fix\":\"Check that the folder exists and that you can read and write it.\",\""
+        "retryable\":false}}\n";
     char *dir = make_temp_db_path();
     char file[REMEMBER_PATH_MAX];
     char nested[REMEMBER_PATH_MAX];
     const char *get[] = {"get", "1"};
-    const char *json[] = {"--json-errors", "get", "1"};
+    const char *json[] = {"--json", "get", "1"};
     char *slash = NULL;
     int fd = -1;
     CmdResult r;
@@ -2520,8 +2854,8 @@ TEST(cli_db_under_a_file_keeps_the_legacy_open_line)
     cmd_result_free(&r);
     r = run_remember(nested, json, sizeof(json) / sizeof(json[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 1);
-    ASSERT_STREQ(r.out, "");
-    ASSERT_STREQ(r.err, k_json);
+    ASSERT_STREQ(r.err, "");
+    ASSERT_STREQ(r.out, k_json);
     cmd_result_free(&r);
     (void)unlink(file);
     free(dir);
@@ -2539,7 +2873,7 @@ TEST(cli_readonly_directory_reports_read_only)
     char dir[TEST_PATH_CAP];
     const char *seed[] = {"add", "seed"};
     const char *add[] = {"add", "world"};
-    const char *json[] = {"--json-errors", "add", "world"};
+    const char *json[] = {"--json", "add", "world"};
     char want[CLI_JSON_CAP];
     char *slash = NULL;
     CmdResult r;
@@ -2572,18 +2906,18 @@ TEST(cli_readonly_directory_reports_read_only)
     ASSERT_STREQ(r.err, k_plain);
     cmd_result_free(&r);
     r = run_remember(db, json, sizeof(json) / sizeof(json[0]), NULL);
-    (void)snprintf(want, sizeof(want),
-                   "{\"version\":1,\"error\":{\"code\":\"read_only\",\"message\":\"database error: "
-                   "the brain is "
-                   "read-only\",\"detail\":{\"sqlite_code\":8,\"sqlite_extended\":1544,\"sqlite_"
-                   "name\":\"SQLITE_READONLY_DIRECTORY\",\"sqlite_message\":\"attempt to write a "
-                   "readonly database\",\"fix\":\"Give yourself write permission on the brain file "
-                   "and its folder, or move the brain to a writable "
-                   "folder.\",\"path\":\"%s\"}}}\n",
-                   db);
+    (void)snprintf(
+        want, sizeof(want),
+        "{\"format\":\"remember-message\",\"version\":1,\"type\":\"memory.add.result\",\"erro"
+        "r\":{\"code\":\"read_only\",\"message\":\"database error: the brain is read-only\","
+        "\"fix\":\"Give yourself write permission on the brain file and its folder, or move t"
+        "he brain to a writable folder.\",\"retryable\":false,\"detail\":{\"sqlite_code\":8,"
+        "\"sqlite_extended\":1544,\"sqlite_name\":\"SQLITE_READONLY_DIRECTORY\",\"sqlite_mess"
+        "age\":\"attempt to write a readonly database\",\"path\":\"%s\"}}}\n",
+        db);
     ASSERT_EQ_INT(r.exit_code, 1);
-    ASSERT_STREQ(r.out, "");
-    ASSERT_STREQ(r.err, want);
+    ASSERT_STREQ(r.err, "");
+    ASSERT_STREQ(r.out, want);
     cmd_result_free(&r);
     ASSERT_EQ_INT(chmod(dir, 0700), 0);
     ASSERT_EQ_INT(chmod(db, 0600), 0);
@@ -2599,7 +2933,7 @@ TEST(cli_mode_000_reports_cannot_open_permission)
     char *db = make_temp_db_path();
     const char *seed[] = {"add", "seed"};
     const char *get[] = {"get", "1"};
-    const char *json[] = {"--json-errors", "get", "1"};
+    const char *json[] = {"--json", "get", "1"};
     char want[CLI_JSON_CAP];
     CmdResult r;
 
@@ -2623,16 +2957,16 @@ TEST(cli_mode_000_reports_cannot_open_permission)
     r = run_remember(db, json, sizeof(json) / sizeof(json[0]), NULL);
     (void)snprintf(
         want, sizeof(want),
-        "{\"version\":1,\"error\":{\"code\":\"cannot_open\",\"message\":\"database error: cannot "
-        "open the brain "
-        "file\",\"detail\":{\"sqlite_code\":14,\"sqlite_extended\":14,\"sqlite_name\":\"SQLITE_"
-        "CANTOPEN\",\"sqlite_message\":\"unable to open database file\",\"fix\":\"Check that the "
-        "folder exists and that you can read and write it.\",\"errno\":%d,\"path\":\"%s\","
-        "\"reason\":\"permission\"}}}\n",
+        "{\"format\":\"remember-message\",\"version\":1,\"type\":\"memory.get.result\",\"erro"
+        "r\":{\"code\":\"cannot_open\",\"message\":\"database error: cannot open the brain fi"
+        "le\",\"fix\":\"Check that the folder exists and that you can read and write it.\",\""
+        "retryable\":false,\"detail\":{\"sqlite_code\":14,\"sqlite_extended\":14,\"sqlite_nam"
+        "e\":\"SQLITE_CANTOPEN\",\"sqlite_message\":\"unable to open database file\",\"errno"
+        "\":%d,\"path\":\"%s\",\"reason\":\"permission\"}}}\n",
         EACCES, db);
     ASSERT_EQ_INT(r.exit_code, 1);
-    ASSERT_STREQ(r.out, "");
-    ASSERT_STREQ(r.err, want);
+    ASSERT_STREQ(r.err, "");
+    ASSERT_STREQ(r.out, want);
     cmd_result_free(&r);
     ASSERT_EQ_INT(chmod(db, 0600), 0);
     free(db);
@@ -2669,7 +3003,7 @@ TEST(cli_damaged_fts_search_reports_fts_only)
     char *db = make_temp_db_path();
     const char *seed[] = {"add", "alpha seed memory"};
     const char *search[] = {"search", "alpha"};
-    const char *json[] = {"--json-errors", "search", "alpha"};
+    const char *json[] = {"--json", "search", "alpha"};
     char want[CLI_JSON_CAP];
     CmdResult r;
 
@@ -2689,16 +3023,16 @@ TEST(cli_damaged_fts_search_reports_fts_only)
     r = run_remember(db, json, sizeof(json) / sizeof(json[0]), NULL);
     (void)snprintf(
         want, sizeof(want),
-        "{\"version\":1,\"error\":{\"code\":\"corrupt\",\"message\":\"database error: the search "
-        "index is "
-        "damaged\",\"detail\":{\"sqlite_code\":11,\"sqlite_extended\":267,\"sqlite_name\":\"SQLITE_"
-        "CORRUPT_VTAB\",\"sqlite_message\":\"database disk image is "
-        "malformed\",\"fix\":\"Run `remember repair search-index`. Your memories are not "
-        "affected.\",\"path\":\"%s\",\"fts_only\":true}}}\n",
+        "{\"format\":\"remember-message\",\"version\":1,\"type\":\"memory.search.result\",\"e"
+        "rror\":{\"code\":\"corrupt\",\"message\":\"database error: the search index is damag"
+        "ed\",\"fix\":\"Run `remember repair search-index`. Your memories are not affected.\""
+        ",\"retryable\":false,\"detail\":{\"sqlite_code\":11,\"sqlite_extended\":267,\"sqlite"
+        "_name\":\"SQLITE_CORRUPT_VTAB\",\"sqlite_message\":\"database disk image is malforme"
+        "d\",\"path\":\"%s\",\"fts_only\":true}}}\n",
         db);
     ASSERT_EQ_INT(r.exit_code, 1);
-    ASSERT_STREQ(r.out, "");
-    ASSERT_STREQ(r.err, want);
+    ASSERT_STREQ(r.err, "");
+    ASSERT_STREQ(r.out, want);
     cmd_result_free(&r);
     free(db);
 }
@@ -2723,7 +3057,8 @@ TEST(cli_repair_search_index_rebuilds)
     r = run_remember(db, repair, sizeof(repair) / sizeof(repair[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 0);
     ASSERT_STREQ(r.err, "");
-    ASSERT_STREQ(r.out, "{\"version\":1,\"action\":\"rebuilt\",\"entries\":1}\n");
+    ASSERT_STREQ(r.out, "{\"format\":\"remember-message\",\"version\":1,\"type\":\"repair.search_"
+                        "index.result\",\"data\":{\"action\":\"rebuilt\",\"entries\":1}}\n");
     cmd_result_free(&r);
     r = run_remember(db, search, sizeof(search) / sizeof(search[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 0);
@@ -2782,7 +3117,8 @@ TEST(cli_repair_counts_deleted_entries)
     r = run_remember(db, repair, sizeof(repair) / sizeof(repair[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 0);
     ASSERT_STREQ(r.err, "");
-    ASSERT_STREQ(r.out, "{\"version\":1,\"action\":\"rebuilt\",\"entries\":2}\n");
+    ASSERT_STREQ(r.out, "{\"format\":\"remember-message\",\"version\":1,\"type\":\"repair.search_"
+                        "index.result\",\"data\":{\"action\":\"rebuilt\",\"entries\":2}}\n");
     cmd_result_free(&r);
     free(db);
 }
@@ -2856,7 +3192,7 @@ TEST(cli_repair_refuses_damaged_base_table)
     char *db = make_temp_db_path();
     const char *seed[] = {"add", "alpha seed memory"};
     const char *repair[] = {"repair", "search-index"};
-    const char *json[] = {"--json-errors", "repair", "search-index"};
+    const char *json[] = {"--json", "repair", "search-index"};
     char want[CLI_JSON_CAP];
     CmdResult r;
 
@@ -2876,19 +3212,18 @@ TEST(cli_repair_refuses_damaged_base_table)
     r = run_remember(db, json, sizeof(json) / sizeof(json[0]), NULL);
     (void)snprintf(
         want, sizeof(want),
-        "{\"version\":1,\"error\":{\"code\":\"corrupt\",\"message\":\"database error: the brain "
-        "file is "
-        "damaged\",\"detail\":{\"sqlite_code\":11,\"sqlite_extended\":11,\"sqlite_name\":\"SQLITE_"
-        "CORRUPT\",\"sqlite_message\":\"*** in database main ***\\nTree 23 page 23: "
-        "btreeInitPage() "
-        "returns error code 11\",\"fix\":\"Copy the file "
-        "somewhere safe before anything else, then restore a backup, "
-        "or recover what can be read with `remember --db NEW.db import --from-db COPY`.\","
-        "\"path\":\"%s\",\"fts_only\":false}}}\n",
+        "{\"format\":\"remember-message\",\"version\":1,\"type\":\"repair.search_index.result"
+        "\",\"error\":{\"code\":\"corrupt\",\"message\":\"database error: the brain file is d"
+        "amaged\",\"fix\":\"Copy the file somewhere safe before anything else, then restore a"
+        " backup, or recover what can be read with `remember --db NEW.db import --from-db COP"
+        "Y`.\",\"retryable\":false,\"detail\":{\"sqlite_code\":11,\"sqlite_extended\":11,\"sq"
+        "lite_name\":\"SQLITE_CORRUPT\",\"sqlite_message\":\"*** in database main ***\\nTree "
+        "23 page 23: btreeInitPage() returns error code 11\",\"path\":\"%s\",\"fts_only\":fal"
+        "se}}}\n",
         db);
     ASSERT_EQ_INT(r.exit_code, 1);
-    ASSERT_STREQ(r.out, "");
-    ASSERT_STREQ(r.err, want);
+    ASSERT_STREQ(r.err, "");
+    ASSERT_STREQ(r.out, want);
     cmd_result_free(&r);
     free(db);
 }
@@ -2920,7 +3255,8 @@ static void expect_repair_heals(const char *shadow)
     r = run_remember(db, repair, sizeof(repair) / sizeof(repair[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 0);
     ASSERT_STREQ(r.err, "");
-    ASSERT_STREQ(r.out, "{\"version\":1,\"action\":\"rebuilt\",\"entries\":2}\n");
+    ASSERT_STREQ(r.out, "{\"format\":\"remember-message\",\"version\":1,\"type\":\"repair.search_"
+                        "index.result\",\"data\":{\"action\":\"rebuilt\",\"entries\":2}}\n");
     cmd_result_free(&r);
     r = run_remember(db, search, sizeof(search) / sizeof(search[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 0);
@@ -2948,8 +3284,8 @@ TEST(cli_damaged_tags_is_brain_damage_not_fts_only)
 {
     char *db = make_temp_db_path();
     const char *seed[] = {"add", "--tag", "beta", "alpha seed memory"};
-    const char *search[] = {"--json-errors", "search", "alpha"};
-    const char *repair[] = {"--json-errors", "repair", "search-index"};
+    const char *search[] = {"--json", "search", "alpha"};
+    const char *repair[] = {"--json", "repair", "search-index"};
     CmdResult r;
 
     ASSERT_TRUE(db != NULL);
@@ -2962,14 +3298,15 @@ TEST(cli_damaged_tags_is_brain_damage_not_fts_only)
     ASSERT_EQ_INT(smash_root(db, "tags"), 0);
     r = run_remember(db, search, sizeof(search) / sizeof(search[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 1);
-    ASSERT_STR_CONTAINS(r.err, "\"code\":\"corrupt\"");
-    ASSERT_STR_CONTAINS(r.err, "\"fts_only\":false");
+    ASSERT_STREQ(r.err, "");
+    ASSERT_STR_CONTAINS(r.out, "\"code\":\"corrupt\"");
+    ASSERT_STR_CONTAINS(r.out, "\"fts_only\":false");
     cmd_result_free(&r);
     r = run_remember(db, repair, sizeof(repair) / sizeof(repair[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 1);
-    ASSERT_STREQ(r.out, "");
-    ASSERT_STR_CONTAINS(r.err, "the brain file is damaged");
-    ASSERT_STR_CONTAINS(r.err, "\"fts_only\":false");
+    ASSERT_STREQ(r.err, "");
+    ASSERT_STR_CONTAINS(r.out, "the brain file is damaged");
+    ASSERT_STR_CONTAINS(r.out, "\"fts_only\":false");
     cmd_result_free(&r);
     free(db);
 }
@@ -3021,7 +3358,7 @@ TEST(cli_repair_refuses_truncated_brain)
     char *db = make_temp_db_path();
     const char *seed[] = {"add", "seed"};
     const char *repair[] = {"repair", "search-index"};
-    const char *json[] = {"--json-errors", "repair", "search-index"};
+    const char *json[] = {"--json", "repair", "search-index"};
     char want[CLI_JSON_CAP];
     CmdResult r;
     int fd = -1;
@@ -3047,17 +3384,17 @@ TEST(cli_repair_refuses_truncated_brain)
     r = run_remember(db, json, sizeof(json) / sizeof(json[0]), NULL);
     (void)snprintf(
         want, sizeof(want),
-        "{\"version\":1,\"error\":{\"code\":\"corrupt\",\"message\":\"database error: the brain "
-        "file is "
-        "damaged\",\"detail\":{\"sqlite_code\":11,\"sqlite_extended\":11,\"sqlite_name\":\"SQLITE_"
-        "CORRUPT\",\"sqlite_message\":\"database disk image is malformed\",\"fix\":\"Copy the file "
-        "somewhere safe before anything else, then restore a backup, "
-        "or recover what can be read with `remember --db NEW.db import --from-db COPY`.\","
-        "\"path\":\"%s\",\"fts_only\":false}}}\n",
+        "{\"format\":\"remember-message\",\"version\":1,\"type\":\"repair.search_index.result"
+        "\",\"error\":{\"code\":\"corrupt\",\"message\":\"database error: the brain file is d"
+        "amaged\",\"fix\":\"Copy the file somewhere safe before anything else, then restore a"
+        " backup, or recover what can be read with `remember --db NEW.db import --from-db COP"
+        "Y`.\",\"retryable\":false,\"detail\":{\"sqlite_code\":11,\"sqlite_extended\":11,\"sq"
+        "lite_name\":\"SQLITE_CORRUPT\",\"sqlite_message\":\"database disk image is malformed"
+        "\",\"path\":\"%s\",\"fts_only\":false}}}\n",
         db);
     ASSERT_EQ_INT(r.exit_code, 1);
-    ASSERT_STREQ(r.out, "");
-    ASSERT_STREQ(r.err, want);
+    ASSERT_STREQ(r.err, "");
+    ASSERT_STREQ(r.out, want);
     cmd_result_free(&r);
     free(db);
 }
@@ -3072,7 +3409,7 @@ TEST(cli_search_on_damaged_base_is_not_fts_only)
     char *db = make_temp_db_path();
     const char *seed[] = {"add", "alpha seed memory"};
     const char *search[] = {"search", "alpha"};
-    const char *json[] = {"--json-errors", "search", "alpha"};
+    const char *json[] = {"--json", "search", "alpha"};
     char want[CLI_JSON_CAP];
     CmdResult r;
 
@@ -3092,17 +3429,17 @@ TEST(cli_search_on_damaged_base_is_not_fts_only)
     r = run_remember(db, json, sizeof(json) / sizeof(json[0]), NULL);
     (void)snprintf(
         want, sizeof(want),
-        "{\"version\":1,\"error\":{\"code\":\"corrupt\",\"message\":\"database error: the brain "
-        "file is "
-        "damaged\",\"detail\":{\"sqlite_code\":11,\"sqlite_extended\":11,\"sqlite_name\":\"SQLITE_"
-        "CORRUPT\",\"sqlite_message\":\"database disk image is malformed\",\"fix\":\"Copy the file "
-        "somewhere safe before anything else, then restore a backup, "
-        "or recover what can be read with `remember --db NEW.db import --from-db COPY`.\","
-        "\"path\":\"%s\",\"fts_only\":false}}}\n",
+        "{\"format\":\"remember-message\",\"version\":1,\"type\":\"memory.search.result\",\"e"
+        "rror\":{\"code\":\"corrupt\",\"message\":\"database error: the brain file is damaged"
+        "\",\"fix\":\"Copy the file somewhere safe before anything else, then restore a backu"
+        "p, or recover what can be read with `remember --db NEW.db import --from-db COPY`.\","
+        "\"retryable\":false,\"detail\":{\"sqlite_code\":11,\"sqlite_extended\":11,\"sqlite_n"
+        "ame\":\"SQLITE_CORRUPT\",\"sqlite_message\":\"database disk image is malformed\",\"p"
+        "ath\":\"%s\",\"fts_only\":false}}}\n",
         db);
     ASSERT_EQ_INT(r.exit_code, 1);
-    ASSERT_STREQ(r.out, "");
-    ASSERT_STREQ(r.err, want);
+    ASSERT_STREQ(r.err, "");
+    ASSERT_STREQ(r.out, want);
     cmd_result_free(&r);
     free(db);
 }
@@ -3141,7 +3478,7 @@ TEST(cli_repair_missing_brain_creates_nothing)
 {
     char tmpl[] = "/tmp/remember-repair-XXXXXX";
     char path[TEST_PATH_CAP];
-    const char *cmd[] = {"--json-errors", "repair", "search-index"};
+    const char *cmd[] = {"--json", "repair", "search-index"};
     const char *dir = NULL;
     int wrote = 0;
     CmdResult r;
@@ -3157,9 +3494,9 @@ TEST(cli_repair_missing_brain_creates_nothing)
 
     r = run_remember(path, cmd, sizeof(cmd) / sizeof(cmd[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 1);
-    ASSERT_STREQ(r.out, "");
-    ASSERT_STR_CONTAINS(r.err, "\"code\":\"cannot_open\"");
-    ASSERT_STR_CONTAINS(r.err, "\"reason\":\"missing\"");
+    ASSERT_STREQ(r.err, "");
+    ASSERT_STR_CONTAINS(r.out, "\"code\":\"cannot_open\"");
+    ASSERT_STR_CONTAINS(r.out, "\"reason\":\"missing\"");
     ASSERT_TRUE(access(tmpl, F_OK) != 0);
     cmd_result_free(&r);
 }
@@ -3208,8 +3545,8 @@ TEST(cli_repair_help_names_the_command)
     free(db);
 }
 
-/* Stage 7: general help and every command footer name the three globals. */
-TEST(cli_help_names_json_errors_busy_timeout_and_no_create)
+/* General help and every command footer name the globals. */
+TEST(cli_help_names_json_busy_timeout_and_no_create)
 {
     char *db = make_temp_db_path();
     const char *general[] = {"--help"};
@@ -3223,15 +3560,17 @@ TEST(cli_help_names_json_errors_busy_timeout_and_no_create)
     r = run_remember(db, general, sizeof(general) / sizeof(general[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 0);
     ASSERT_STREQ(r.err, "");
-    ASSERT_STR_CONTAINS(r.out, "[--json-errors] [--busy-timeout MS] [--no-create]");
-    ASSERT_STR_CONTAINS(r.out, "--json-errors      JSON errors and warnings on stderr");
+    ASSERT_STR_CONTAINS(r.out, "[--json] [--strict] [--color=auto|always|never] [--quiet] "
+                               "[--busy-timeout MS] [--no-create]");
+    ASSERT_STR_NOT_CONTAINS(r.out, "--json-errors");
     ASSERT_STR_CONTAINS(r.out, "--busy-timeout MS  Lock wait in ms (0..60000, default 5000)");
     ASSERT_STR_CONTAINS(r.out, "--no-create        Do not create a missing brain file");
     cmd_result_free(&r);
     r = run_remember(db, topic, sizeof(topic) / sizeof(topic[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 0);
     ASSERT_STREQ(r.err, "");
-    ASSERT_STR_CONTAINS(r.out, "Global options: --db PATH, --json, --json-errors, "
+    ASSERT_STR_CONTAINS(r.out, "Global options: --db PATH, --json, --strict, "
+                               "--color=auto|always|never, --quiet, "
                                "--busy-timeout MS, --no-create, --help, --version");
     cmd_result_free(&r);
     free(db);
@@ -3247,7 +3586,7 @@ TEST(cli_truncated_brain_reports_corrupt)
     char *db = make_temp_db_path();
     const char *seed[] = {"add", "seed"};
     const char *get[] = {"get", "1"};
-    const char *json[] = {"--json-errors", "get", "1"};
+    const char *json[] = {"--json", "get", "1"};
     char want[CLI_JSON_CAP];
     CmdResult r;
     int fd = -1;
@@ -3273,17 +3612,17 @@ TEST(cli_truncated_brain_reports_corrupt)
     r = run_remember(db, json, sizeof(json) / sizeof(json[0]), NULL);
     (void)snprintf(
         want, sizeof(want),
-        "{\"version\":1,\"error\":{\"code\":\"corrupt\",\"message\":\"database error: the brain "
-        "file is "
-        "damaged\",\"detail\":{\"sqlite_code\":11,\"sqlite_extended\":11,\"sqlite_name\":\"SQLITE_"
-        "CORRUPT\",\"sqlite_message\":\"database disk image is malformed\",\"fix\":\"Copy the file "
-        "somewhere safe before anything else, then restore a backup, "
-        "or recover what can be read with `remember --db NEW.db import --from-db COPY`.\","
-        "\"path\":\"%s\",\"fts_only\":false}}}\n",
+        "{\"format\":\"remember-message\",\"version\":1,\"type\":\"memory.get.result\",\"erro"
+        "r\":{\"code\":\"corrupt\",\"message\":\"database error: the brain file is damaged\","
+        "\"fix\":\"Copy the file somewhere safe before anything else, then restore a backup, "
+        "or recover what can be read with `remember --db NEW.db import --from-db COPY`.\",\"r"
+        "etryable\":false,\"detail\":{\"sqlite_code\":11,\"sqlite_extended\":11,\"sqlite_name"
+        "\":\"SQLITE_CORRUPT\",\"sqlite_message\":\"database disk image is malformed\",\"path"
+        "\":\"%s\",\"fts_only\":false}}}\n",
         db);
     ASSERT_EQ_INT(r.exit_code, 1);
-    ASSERT_STREQ(r.out, "");
-    ASSERT_STREQ(r.err, want);
+    ASSERT_STREQ(r.err, "");
+    ASSERT_STREQ(r.out, want);
     cmd_result_free(&r);
     free(db);
 }
@@ -3301,7 +3640,7 @@ TEST(cli_enospc_shim_reports_disk_full)
         "remember: database error: disk is full (SQLITE_FULL). Free some space and try again.\n";
     char *db = make_temp_db_path();
     const char *add[] = {"add", "full"};
-    const char *json[] = {"--json-errors", "add", "full"};
+    const char *json[] = {"--json", "add", "full"};
     char want[CLI_JSON_CAP];
     CmdResult r;
 
@@ -3320,15 +3659,17 @@ TEST(cli_enospc_shim_reports_disk_full)
     ASSERT_EQ_INT(setenv("REMEMBER_TEST_ENOSPC", "1", 1), 0);
     r = run_remember(db, json, sizeof(json) / sizeof(json[0]), NULL);
     ASSERT_EQ_INT(unsetenv("REMEMBER_TEST_ENOSPC"), 0);
-    (void)snprintf(want, sizeof(want),
-                   "{\"version\":1,\"error\":{\"code\":\"disk_full\",\"message\":\"database error: "
-                   "disk is full\",\"detail\":{\"sqlite_code\":13,\"sqlite_extended\":13,\"sqlite_"
-                   "name\":\"SQLITE_FULL\",\"sqlite_message\":\"database or disk is "
-                   "full\",\"fix\":\"Free some space and try again.\",\"path\":\"%s\"}}}\n",
-                   db);
+    (void)snprintf(
+        want, sizeof(want),
+        "{\"format\":\"remember-message\",\"version\":1,\"type\":\"memory.add.result\",\"erro"
+        "r\":{\"code\":\"disk_full\",\"message\":\"database error: disk is full\",\"fix\":\"F"
+        "ree some space and try again.\",\"retryable\":false,\"detail\":{\"sqlite_code\":13,"
+        "\"sqlite_extended\":13,\"sqlite_name\":\"SQLITE_FULL\",\"sqlite_message\":\"database"
+        " or disk is full\",\"path\":\"%s\"}}}\n",
+        db);
     ASSERT_EQ_INT(r.exit_code, 1);
-    ASSERT_STREQ(r.out, "");
-    ASSERT_STREQ(r.err, want);
+    ASSERT_STREQ(r.err, "");
+    ASSERT_STREQ(r.out, want);
     cmd_result_free(&r);
     free(db);
 }
@@ -3341,7 +3682,7 @@ TEST(cli_fail_write_shim_reports_io_error)
         "(SQLITE_IOERR_WRITE). Check the disk or drive, then try again.\n";
     char *db = make_temp_db_path();
     const char *add[] = {"add", "write"};
-    const char *json[] = {"--json-errors", "add", "write"};
+    const char *json[] = {"--json", "add", "write"};
     char want[CLI_JSON_CAP];
     CmdResult r;
 
@@ -3362,15 +3703,15 @@ TEST(cli_fail_write_shim_reports_io_error)
     ASSERT_EQ_INT(unsetenv("REMEMBER_TEST_FAIL_WRITE"), 0);
     (void)snprintf(
         want, sizeof(want),
-        "{\"version\":1,\"error\":{\"code\":\"io_error\",\"message\":\"database error: the disk "
-        "reported a read or write "
-        "error\",\"detail\":{\"sqlite_code\":10,\"sqlite_extended\":778,\"sqlite_name\":\"SQLITE_"
-        "IOERR_WRITE\",\"sqlite_message\":\"disk I/O error\",\"fix\":\"Check the disk or drive, "
-        "then try again.\",\"errno\":%d,\"path\":\"%s\"}}}\n",
+        "{\"format\":\"remember-message\",\"version\":1,\"type\":\"memory.add.result\",\"erro"
+        "r\":{\"code\":\"io_error\",\"message\":\"database error: the disk reported a read or"
+        " write error\",\"fix\":\"Check the disk or drive, then try again.\",\"retryable\":tr"
+        "ue,\"detail\":{\"sqlite_code\":10,\"sqlite_extended\":778,\"sqlite_name\":\"SQLITE_I"
+        "OERR_WRITE\",\"sqlite_message\":\"disk I/O error\",\"errno\":%d,\"path\":\"%s\"}}}\n",
         ENOENT, db);
     ASSERT_EQ_INT(r.exit_code, 1);
-    ASSERT_STREQ(r.out, "");
-    ASSERT_STREQ(r.err, want);
+    ASSERT_STREQ(r.err, "");
+    ASSERT_STREQ(r.out, want);
     cmd_result_free(&r);
     free(db);
 }
@@ -3404,7 +3745,7 @@ TEST(cli_fail_read_shim_reports_io_error)
     char *db = make_temp_db_path();
     const char *seed[] = {"add", "seed"};
     const char *list[] = {"list"};
-    const char *json[] = {"--json-errors", "list"};
+    const char *json[] = {"--json", "list"};
     char want[CLI_JSON_CAP];
     CmdResult r;
 
@@ -3429,15 +3770,15 @@ TEST(cli_fail_read_shim_reports_io_error)
     ASSERT_EQ_INT(unsetenv("REMEMBER_TEST_FAIL_READ"), 0);
     (void)snprintf(
         want, sizeof(want),
-        "{\"version\":1,\"error\":{\"code\":\"io_error\",\"message\":\"database error: the disk "
-        "reported a read or write "
-        "error\",\"detail\":{\"sqlite_code\":10,\"sqlite_extended\":266,\"sqlite_name\":\"SQLITE_"
-        "IOERR_READ\",\"sqlite_message\":\"disk I/O error\",\"fix\":\"Check the disk or drive, "
-        "then try again.\",\"errno\":%d,\"path\":\"%s\"}}}\n",
+        "{\"format\":\"remember-message\",\"version\":1,\"type\":\"memory.list.result\",\"err"
+        "or\":{\"code\":\"io_error\",\"message\":\"database error: the disk reported a read o"
+        "r write error\",\"fix\":\"Check the disk or drive, then try again.\",\"retryable\":t"
+        "rue,\"detail\":{\"sqlite_code\":10,\"sqlite_extended\":266,\"sqlite_name\":\"SQLITE_"
+        "IOERR_READ\",\"sqlite_message\":\"disk I/O error\",\"errno\":%d,\"path\":\"%s\"}}}\n",
         EEXIST, db);
     ASSERT_EQ_INT(r.exit_code, 1);
-    ASSERT_STREQ(r.out, "");
-    ASSERT_STREQ(r.err, want);
+    ASSERT_STREQ(r.err, "");
+    ASSERT_STREQ(r.out, want);
     cmd_result_free(&r);
     free(db);
 }
@@ -3493,7 +3834,7 @@ TEST(cli_repair_read_fault_during_check_is_corrupt)
     char *db = make_temp_db_path();
     const char *seed[] = {"add", "seed"};
     const char *repair[] = {"repair", "search-index"};
-    const char *json[] = {"--json-errors", "repair", "search-index"};
+    const char *json[] = {"--json", "repair", "search-index"};
     char want[CLI_JSON_CAP];
     CmdResult r;
 
@@ -3518,17 +3859,17 @@ TEST(cli_repair_read_fault_during_check_is_corrupt)
     ASSERT_EQ_INT(unsetenv("REMEMBER_TEST_FAIL_READ"), 0);
     (void)snprintf(
         want, sizeof(want),
-        "{\"version\":1,\"error\":{\"code\":\"corrupt\",\"message\":\"database error: the brain "
-        "file is "
-        "damaged\",\"detail\":{\"sqlite_code\":10,\"sqlite_extended\":266,\"sqlite_name\":\"SQLITE_"
-        "IOERR_READ\",\"sqlite_message\":\"disk I/O error\",\"fix\":\"Copy the file "
-        "somewhere safe before anything else, then restore a backup, "
-        "or recover what can be read with `remember --db NEW.db import --from-db COPY`.\","
-        "\"errno\":%d,\"path\":\"%s\",\"fts_only\":false}}}\n",
+        "{\"format\":\"remember-message\",\"version\":1,\"type\":\"repair.search_index.result"
+        "\",\"error\":{\"code\":\"corrupt\",\"message\":\"database error: the brain file is d"
+        "amaged\",\"fix\":\"Copy the file somewhere safe before anything else, then restore a"
+        " backup, or recover what can be read with `remember --db NEW.db import --from-db COP"
+        "Y`.\",\"retryable\":false,\"detail\":{\"sqlite_code\":10,\"sqlite_extended\":266,\"s"
+        "qlite_name\":\"SQLITE_IOERR_READ\",\"sqlite_message\":\"disk I/O error\",\"errno\":%"
+        "d,\"path\":\"%s\",\"fts_only\":false}}}\n",
         ENOENT, db);
     ASSERT_EQ_INT(r.exit_code, 1);
-    ASSERT_STREQ(r.out, "");
-    ASSERT_STREQ(r.err, want);
+    ASSERT_STREQ(r.err, "");
+    ASSERT_STREQ(r.out, want);
     cmd_result_free(&r);
     free(db);
 }
@@ -3564,10 +3905,10 @@ TEST(cli_nomem_shim_reports_database)
 {
     static const char *const k_plain =
         "remember: database error (SQLITE_NOMEM). Try again. If it keeps happening, report "
-        "the details from --json-errors.\n";
+        "the details from --json.\n";
     char *db = make_temp_db_path();
     const char *add[] = {"add", "nomem"};
-    const char *json[] = {"--json-errors", "add", "nomem"};
+    const char *json[] = {"--json", "add", "nomem"};
     char want[CLI_JSON_CAP];
     CmdResult r;
 
@@ -3586,15 +3927,16 @@ TEST(cli_nomem_shim_reports_database)
     ASSERT_EQ_INT(setenv("REMEMBER_TEST_NOMEM", "1", 1), 0);
     r = run_remember(db, json, sizeof(json) / sizeof(json[0]), NULL);
     ASSERT_EQ_INT(unsetenv("REMEMBER_TEST_NOMEM"), 0);
-    (void)snprintf(want, sizeof(want),
-                   "{\"version\":1,\"error\":{\"code\":\"database\",\"message\":\"database "
-                   "error\",\"detail\":{\"sqlite_code\":7,\"sqlite_extended\":7,\"sqlite_"
-                   "name\":\"SQLITE_NOMEM\",\"sqlite_message\":\"out of "
-                   "memory\",\"fix\":\"Try again. If it keeps happening, report the details from "
-                   "--json-errors.\"}}}\n");
+    (void)snprintf(
+        want, sizeof(want),
+        "{\"format\":\"remember-message\",\"version\":1,\"type\":\"memory.add.result\",\"erro"
+        "r\":{\"code\":\"database\",\"message\":\"database error\",\"fix\":\"Try again. If it"
+        " keeps happening, report the details from --json.\",\"retryable\":false,\"det"
+        "ail\":{\"sqlite_code\":7,\"sqlite_extended\":7,\"sqlite_name\":\"SQLITE_NOMEM\",\"sq"
+        "lite_message\":\"out of memory\"}}}\n");
     ASSERT_EQ_INT(r.exit_code, 1);
-    ASSERT_STREQ(r.out, "");
-    ASSERT_STREQ(r.err, want);
+    ASSERT_STREQ(r.err, "");
+    ASSERT_STREQ(r.out, want);
     cmd_result_free(&r);
     free(db);
 }
@@ -3604,7 +3946,7 @@ TEST(cli_nomem_shim_fails_a_list)
 {
     static const char *const k_plain =
         "remember: database error (SQLITE_NOMEM). Try again. If it keeps happening, report "
-        "the details from --json-errors.\n";
+        "the details from --json.\n";
     char *db = make_temp_db_path();
     const char *seed[] = {"add", "seed"};
     const char *list[] = {"list"};
@@ -3635,14 +3977,15 @@ TEST(cli_busy_timeout_out_of_range_is_usage)
 {
     static const char *const k_plain = "remember: invalid --busy-timeout (must be 0..60000)\n";
     static const char *const k_json =
-        "{\"version\":1,\"error\":{\"code\":\"usage\",\"message\":\"invalid --busy-timeout "
-        "(must be 0..60000)\"}}\n";
+        "{\"format\":\"remember-message\",\"version\":1,\"type\":\"unknown.result\",\"err"
+        "or\":{\"code\":\"usage\",\"message\":\"invalid --busy-timeout (must be 0..60000)\","
+        "\"fix\":\"Run 'remember --help' to see the commands.\",\"retryable\":false}}\n";
     char *db = make_temp_db_path();
     const char *hi[] = {"--busy-timeout", "60001", "list"};
     const char *neg[] = {"--busy-timeout", "-1", "list"};
     const char *word[] = {"--busy-timeout", "abc", "list"};
     const char *spaced[] = {"--busy-timeout", " 9", "list"};
-    const char *json[] = {"--json-errors", "--busy-timeout", "60001", "list"};
+    const char *json[] = {"--json", "--busy-timeout", "60001", "list"};
     CmdResult r;
 
     ASSERT_TRUE(db != NULL);
@@ -3672,8 +4015,8 @@ TEST(cli_busy_timeout_out_of_range_is_usage)
     cmd_result_free(&r);
     r = run_remember(db, json, sizeof(json) / sizeof(json[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 1);
-    ASSERT_STREQ(r.out, "");
-    ASSERT_STREQ(r.err, k_json);
+    ASSERT_STREQ(r.err, "");
+    ASSERT_STREQ(r.out, k_json);
     cmd_result_free(&r);
     free(db);
 }
@@ -3730,18 +4073,17 @@ TEST(cli_busy_timeout_500_reports_busy_within_half_a_second)
 
     {
         static const char *const k_json =
-            "{\"version\":1,\"error\":{\"code\":\"busy\",\"message\":\"database error: the brain "
-            "is locked by another "
-            "process\",\"detail\":{\"sqlite_code\":5,\"sqlite_extended\":5,\"sqlite_name\":"
-            "\"SQLITE_BUSY\",\"sqlite_message\":\"database is "
-            "locked\",\"fix\":\"Wait a moment and try again. Another app or a terminal may be "
-            "using this brain.\"}}}\n";
-        const char *json[] = {"--json-errors", "--busy-timeout", "500", "add", "blocked"};
+            "{\"format\":\"remember-message\",\"version\":1,\"type\":\"memory.add.result\",\"erro"
+            "r\":{\"code\":\"busy\",\"message\":\"database error: the brain is locked by another "
+            "process\",\"fix\":\"Wait a moment and try again. Another app or a terminal may be us"
+            "ing this brain.\",\"retryable\":true,\"detail\":{\"sqlite_code\":5,\"sqlite_extended"
+            "\":5,\"sqlite_name\":\"SQLITE_BUSY\",\"sqlite_message\":\"database is locked\"}}}\n";
+        const char *json[] = {"--json", "--busy-timeout", "500", "add", "blocked"};
 
         r = run_remember(db, json, sizeof(json) / sizeof(json[0]), NULL);
         ASSERT_EQ_INT(r.exit_code, 1);
-        ASSERT_STREQ(r.out, "");
-        ASSERT_STREQ(r.err, k_json);
+        ASSERT_STREQ(r.err, "");
+        ASSERT_STREQ(r.out, k_json);
         cmd_result_free(&r);
     }
     if (lock != NULL) {
@@ -3762,7 +4104,7 @@ TEST(cli_no_create_missing_path_creates_nothing)
     char sidecar[TEST_PATH_CAP];
     char want[CLI_JSON_CAP];
     const char *list[] = {"--no-create", "list"};
-    const char *json[] = {"--json-errors", "--no-create", "list"};
+    const char *json[] = {"--json", "--no-create", "list"};
     const char *dir = NULL;
     int wrote = 0;
     CmdResult r;
@@ -3788,19 +4130,19 @@ TEST(cli_no_create_missing_path_creates_nothing)
     cmd_result_free(&r);
 
     r = run_remember(path, json, sizeof(json) / sizeof(json[0]), NULL);
-    wrote =
-        snprintf(want, sizeof(want),
-                 "{\"version\":1,\"error\":{\"code\":\"cannot_open\",\"message\":\"database "
-                 "error: cannot open the brain "
-                 "file\",\"detail\":{\"sqlite_code\":14,\"sqlite_extended\":14,\"sqlite_name\":"
-                 "\"SQLITE_CANTOPEN\",\"sqlite_message\":\"unable to open database "
-                 "file\",\"fix\":\"Check that the folder exists and that you can read and write "
-                 "it.\",\"errno\":%d,\"path\":\"%s\",\"reason\":\"missing\"}}}\n",
-                 ENOENT, path);
+    wrote = snprintf(
+        want, sizeof(want),
+        "{\"format\":\"remember-message\",\"version\":1,\"type\":\"memory.list.result\",\"err"
+        "or\":{\"code\":\"cannot_open\",\"message\":\"database error: cannot open the brain f"
+        "ile\",\"fix\":\"Check that the folder exists and that you can read and write it.\","
+        "\"retryable\":false,\"detail\":{\"sqlite_code\":14,\"sqlite_extended\":14,\"sqlite_n"
+        "ame\":\"SQLITE_CANTOPEN\",\"sqlite_message\":\"unable to open database file\",\"errn"
+        "o\":%d,\"path\":\"%s\",\"reason\":\"missing\"}}}\n",
+        ENOENT, path);
     ASSERT_TRUE(wrote > 0 && (size_t)wrote < sizeof(want));
     ASSERT_EQ_INT(r.exit_code, 1);
-    ASSERT_STREQ(r.out, "");
-    ASSERT_STREQ(r.err, want);
+    ASSERT_STREQ(r.err, "");
+    ASSERT_STREQ(r.out, want);
     ASSERT_TRUE(access(tmpl, F_OK) != 0);
     ASSERT_TRUE(access(path, F_OK) != 0);
     ASSERT_TRUE(access(sidecar, F_OK) != 0);
@@ -3962,7 +4304,7 @@ TEST(util_parse_nonneg_rejects_every_sign)
 TEST(cli_offset_spaced_negative_is_usage)
 {
     char *db = make_temp_db_path();
-    const char *args[] = {"list", "--offset", " -1"};
+    const char *args[] = {"list", "--limit", " -1"};
     CmdResult r;
 
     ASSERT_TRUE(db != NULL);
@@ -3972,7 +4314,7 @@ TEST(cli_offset_spaced_negative_is_usage)
     r = run_remember(db, args, sizeof(args) / sizeof(args[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 1);
     ASSERT_STREQ(r.out, "");
-    ASSERT_STREQ(r.err, "remember: invalid --offset (must be >= 0)\n");
+    ASSERT_STREQ(r.err, "remember: invalid --limit (must be 1..1000)\n");
     cmd_result_free(&r);
     free(db);
 }
@@ -4001,12 +4343,16 @@ void register_errors_tests(void)
     RUN_TEST(warning_catalog_rejects_names_outside_the_catalog);
     RUN_TEST(plain_error_is_remember_prefix_and_the_message);
     RUN_TEST(json_error_is_one_line_and_not_the_plain_line);
+    RUN_TEST(json_keeps_only_the_first_error);
+    RUN_TEST(diag_code_fix_is_the_codes_sentence);
     RUN_TEST(error_outside_the_catalog_writes_nothing);
     RUN_TEST(json_error_escapes_message_bytes);
     RUN_TEST(every_error_code_json_message_matches_the_plain_line);
     RUN_TEST(plain_warning_is_remember_warning);
     RUN_TEST(json_warning_is_one_line_without_the_prefix);
     RUN_TEST(every_warning_uses_the_warning_prefix);
+    RUN_TEST(plain_warning_that_cannot_be_written_does_not_count);
+    RUN_TEST(unknown_field_that_cannot_be_written_does_not_stick);
     RUN_TEST(null_message_is_empty_text);
     RUN_TEST(plain_error_keeps_quote_and_backslash);
     RUN_TEST(plain_error_turns_a_newline_into_a_question_mark);
@@ -4017,12 +4363,13 @@ void register_errors_tests(void)
     RUN_TEST(error_and_warning_leave_stdout_empty);
     RUN_TEST(warning_outside_the_catalog_writes_nothing);
     RUN_TEST(plain_missing_command_is_unchanged);
-    RUN_TEST(json_errors_usage_is_one_stderr_line);
-    RUN_TEST(json_errors_not_found_is_one_line);
+    RUN_TEST(json_usage_error_is_one_stdout_envelope);
+    RUN_TEST(json_help_with_an_unknown_topic_is_an_envelope);
+    RUN_TEST(json_not_found_is_one_stdout_envelope);
     RUN_TEST(plain_not_found_is_unchanged);
     RUN_TEST(plain_trash_warning_uses_warning_prefix);
-    RUN_TEST(json_errors_trash_is_deprecated_flag);
-    RUN_TEST(json_errors_synced_folder_is_one_warning);
+    RUN_TEST(json_trash_warning_is_in_the_list_envelope);
+    RUN_TEST(json_synced_folder_warning_is_in_the_list_envelope);
     RUN_TEST(store_text_codes_follow_the_locked_split);
     RUN_TEST(err_fmt_keeps_a_long_unknown_option);
     RUN_TEST(internal_parse_stays_a_plain_internal_line);
@@ -4030,7 +4377,8 @@ void register_errors_tests(void)
     RUN_TEST(rejecting_stream_fails_a_write_and_sets_the_error_flag);
     RUN_TEST(run_reports_output_that_fails_at_the_final_flush);
     RUN_TEST(run_reports_a_write_the_command_did_not_check);
-    RUN_TEST(run_reports_a_failed_flush_as_json_with_json_errors);
+    RUN_TEST(run_reports_a_failed_json_flush_on_stderr);
+    RUN_TEST(json_help_and_version_print_text);
     RUN_TEST(run_keeps_one_error_line_when_the_command_failed);
     RUN_TEST(search_reports_a_failed_facet_line);
     RUN_TEST(search_reports_a_failed_entry_line_without_facets);
@@ -4065,7 +4413,7 @@ void register_errors_tests(void)
     RUN_TEST(cli_repair_missing_brain_creates_nothing);
     RUN_TEST(cli_repair_usage_creates_no_brain);
     RUN_TEST(cli_repair_help_names_the_command);
-    RUN_TEST(cli_help_names_json_errors_busy_timeout_and_no_create);
+    RUN_TEST(cli_help_names_json_busy_timeout_and_no_create);
     RUN_TEST(cli_truncated_brain_reports_corrupt);
 #ifdef REMEMBER_TEST_VFS
     RUN_TEST(cli_enospc_shim_reports_disk_full);

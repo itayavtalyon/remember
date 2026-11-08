@@ -57,7 +57,7 @@ static char *facade_sidecar_id(const char *db)
  * paths share output.c and the run() pipeline, so this guards the stream
  * injection (appio) and any future drift.
  *
- * Timestamps, sync_id, and version_vector are the fields that legitimately
+ * Timestamps, the memory id, and version_vector are the fields that legitimately
  * differ between two separate writes, so mutation cases mask those values
  * before comparing; read cases compare exact bytes (stored ids are identical
  * across reads of the same DB).
@@ -146,7 +146,7 @@ static void mask_timestamps(char *s)
     mask_field(s, "\"created_at\":\"");
     mask_field(s, "\"updated_at\":\"");
     mask_field(s, "\"deleted_at\":\"");
-    mask_field(s, "\"sync_id\":\"");
+    mask_field(s, "\"id\":\"");
     mask_version_vector(s);
 }
 
@@ -176,8 +176,8 @@ static void assert_read_parity(const char *db, const char *const *cmd, size_t nc
 
 static void seed_three(const char *db)
 {
-    const char *a1[] = {"add", "--tag", "a", "--source", "human", "alpha first"};
-    const char *a2[] = {"add", "--tag", "b", "--source", "agent", "beta second"};
+    const char *a1[] = {"add", "--tag", "a", "--as", "human", "alpha first"};
+    const char *a2[] = {"add", "--tag", "b", "--as", "agent", "beta second"};
     const char *a3[] = {"add", "--key", "k", "--tag", "a", "gamma third"};
     CmdResult r;
 
@@ -207,7 +207,7 @@ static void seed_three_linked(const char *db)
 typedef void (*SeedFn)(const char *db);
 
 /* Mutations: seed identical pre-state on two DBs, run cmd on each, compare
-   timestamp/sync_id-masked stdout + exit. */
+   timestamp/id-masked stdout + exit. */
 static void assert_mutation_parity(SeedFn seed, const char *const *cmd, size_t ncmd)
 {
     char *db1 = make_temp_db_path();
@@ -278,11 +278,11 @@ TEST(facade_search_bad_query_matches_cli)
     free(db);
 }
 
-/* EN-03: the raw_query_ignored warning under --json-errors matches the CLI byte for byte. */
+/* EN-03: the raw_query_ignored warning under --json matches the CLI byte for byte. */
 TEST(facade_search_json_warning_matches_cli)
 {
     char *db = make_temp_db_path();
-    const char *cmd[] = {"--json", "--json-errors", "search", "\"unterminated"};
+    const char *cmd[] = {"--json", "search", "\"unterminated"};
     ASSERT_TRUE(db != NULL);
     seed_three(db);
     assert_read_parity(db, cmd, sizeof(cmd) / sizeof(cmd[0]));
@@ -429,12 +429,12 @@ TEST(facade_delete_matches_cli)
     free(db2);
 }
 
-TEST(facade_purge_trash_matches_cli)
+TEST(facade_purge_expired_matches_cli)
 {
     char *db1 = make_temp_db_path();
     char *db2 = make_temp_db_path();
     const char *seed[] = {"add", "--expires", "2020-01-01T00:00:00Z", "gone"};
-    const char *cmd[] = {"--json", "purge-trash"};
+    const char *cmd[] = {"--json", "purge", "--expired"};
     CmdResult s1;
     CmdResult s2;
     CmdResult sub;
@@ -448,7 +448,8 @@ TEST(facade_purge_trash_matches_cli)
     s2 = run_remember(db2, seed, sizeof(seed) / sizeof(seed[0]), NULL);
     cmd_result_free(&s2);
     sub = run_remember(db1, cmd, sizeof(cmd) / sizeof(cmd[0]), NULL);
-    frc = facade_run(db2, cmd, 2, (FacadeCapture){.out = &fout, .err = &ferr});
+    frc = facade_run(db2, cmd, sizeof(cmd) / sizeof(cmd[0]),
+                     (FacadeCapture){.out = &fout, .err = &ferr});
     ASSERT_EQ_INT(frc, sub.exit_code);
     mask_timestamps(sub.out);
     mask_timestamps(fout);
@@ -464,12 +465,23 @@ TEST(facade_purge_trash_matches_cli)
 TEST(facade_list_trash_matches_cli)
 {
     char *db = make_temp_db_path();
-    const char *seed[] = {"add", "--expires", "2020-01-01T00:00:00Z", "gone"};
+    const char *seed[] = {"add", "gone"};
+    const char *del[] = {"delete", "1"};
     const char *cmd[] = {"--json", "list", "--trash"};
     CmdResult r;
 
     ASSERT_TRUE(db != NULL);
     r = run_remember(db, seed, sizeof(seed) / sizeof(seed[0]), NULL);
+    ASSERT_EQ_INT(r.exit_code, 0);
+    cmd_result_free(&r);
+    r = run_remember(db, del, sizeof(del) / sizeof(del[0]), NULL);
+    ASSERT_EQ_INT(r.exit_code, 0);
+    cmd_result_free(&r);
+    r = run_remember(db, cmd, sizeof(cmd) / sizeof(cmd[0]), NULL);
+    ASSERT_EQ_INT(r.exit_code, 0);
+    ASSERT_STREQ(r.err, "");
+    ASSERT_STR_CONTAINS(r.out, "gone");
+    ASSERT_STR_CONTAINS(r.out, "flag_meaning_changed");
     cmd_result_free(&r);
     assert_read_parity(db, cmd, sizeof(cmd) / sizeof(cmd[0]));
     free(db);
@@ -596,7 +608,7 @@ TEST(facade_conflicts_matches_cli)
     harness_make_v5_source(foreign);
     r = run_remember(local, imp, sizeof(imp) / sizeof(imp[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 0);
-    ASSERT_STR_CONTAINS(r.out, "\"conflicts\":1");
+    ASSERT_STR_CONTAINS(r.out, "\"conflicts\":{\"count\":1,");
     cmd_result_free(&r);
 
     assert_read_parity(local, cmd, sizeof(cmd) / sizeof(cmd[0]));
@@ -767,11 +779,60 @@ TEST(facade_device_new_matches_cli)
     free(db2);
 }
 
-/* EN-03: --json-errors not_found bytes match the CLI. */
-TEST(facade_json_errors_not_found_matches_cli)
+TEST(facade_brain_new_id_matches_cli)
+{
+    const char *json[] = {"--json", "brain", "new-id"};
+    const char *human[] = {"brain", "new-id"};
+    const char *help[] = {"help", "brain"};
+    char *db1 = make_temp_db_path();
+    char *db2 = make_temp_db_path();
+    CmdResult sub;
+    char *fout = NULL;
+    char *ferr = NULL;
+    int frc = 0;
+
+    ASSERT_TRUE(db1 != NULL && db2 != NULL);
+    if (db1 == NULL || db2 == NULL) {
+        free(db1);
+        free(db2);
+        return;
+    }
+    assert_read_parity(db1, help, sizeof(help) / sizeof(help[0]));
+
+    sub = run_remember(db1, json, sizeof(json) / sizeof(json[0]), NULL);
+    frc = facade_run(db2, json, sizeof(json) / sizeof(json[0]),
+                     (FacadeCapture){.out = &fout, .err = &ferr});
+    ASSERT_EQ_INT(frc, sub.exit_code);
+    mask_field(sub.out, "\"brain_id\":\"");
+    mask_field(sub.out, "\"previous_brain_id\":\"");
+    mask_field(fout, "\"brain_id\":\"");
+    mask_field(fout, "\"previous_brain_id\":\"");
+    ASSERT_STREQ(fout, sub.out);
+    ASSERT_STREQ(ferr, sub.err);
+    free(fout);
+    free(ferr);
+    cmd_result_free(&sub);
+
+    sub = run_remember(db1, human, sizeof(human) / sizeof(human[0]), NULL);
+    frc = facade_run(db2, human, sizeof(human) / sizeof(human[0]),
+                     (FacadeCapture){.out = &fout, .err = &ferr});
+    ASSERT_EQ_INT(frc, sub.exit_code);
+    mask_through_newline(sub.out);
+    mask_through_newline(fout);
+    ASSERT_STREQ(fout, sub.out);
+    ASSERT_STREQ(ferr, sub.err);
+    free(fout);
+    free(ferr);
+    cmd_result_free(&sub);
+    free(db1);
+    free(db2);
+}
+
+/* EN-03: --json not_found bytes match the CLI. */
+TEST(facade_json_not_found_matches_cli)
 {
     char *db = make_temp_db_path();
-    const char *cmd[] = {"--json-errors", "get", "--key", "nope"};
+    const char *cmd[] = {"--json", "get", "--key", "nope"};
     CmdResult sub;
 
     ASSERT_TRUE(db != NULL);
@@ -781,17 +842,17 @@ TEST(facade_json_errors_not_found_matches_cli)
     seed_three(db);
     sub = read_parity(db, cmd, sizeof(cmd) / sizeof(cmd[0]));
     ASSERT_EQ_INT(sub.exit_code, 2);
-    ASSERT_STREQ(sub.out, "");
-    ASSERT_STR_CONTAINS(sub.err, "\"code\":\"not_found\"");
+    ASSERT_STREQ(sub.err, "");
+    ASSERT_STR_CONTAINS(sub.out, "\"code\":\"not_found\"");
     cmd_result_free(&sub);
     free(db);
 }
 
 /* EN-03: a held lock plus --busy-timeout 0 is the same busy line in-process. */
-TEST(facade_busy_json_errors_matches_cli)
+TEST(facade_busy_json_matches_cli)
 {
     char *db = make_temp_db_path();
-    const char *cmd[] = {"--json-errors", "--busy-timeout", "0", "add", "blocked"};
+    const char *cmd[] = {"--json", "--busy-timeout", "0", "add", "blocked"};
     sqlite3 *lock = NULL;
     CmdResult sub;
 
@@ -806,8 +867,8 @@ TEST(facade_busy_json_errors_matches_cli)
     ASSERT_EQ_INT(sqlite3_exec(lock, "ROLLBACK;", NULL, NULL, NULL), SQLITE_OK);
     (void)sqlite3_close(lock);
     ASSERT_EQ_INT(sub.exit_code, 1);
-    ASSERT_STREQ(sub.out, "");
-    ASSERT_STR_CONTAINS(sub.err, "\"code\":\"busy\"");
+    ASSERT_STREQ(sub.err, "");
+    ASSERT_STR_CONTAINS(sub.out, "\"code\":\"busy\"");
     cmd_result_free(&sub);
     free(db);
 }
@@ -815,8 +876,8 @@ TEST(facade_busy_json_errors_matches_cli)
 TEST(facade_update_stale_matches_cli)
 {
     char *db = make_temp_db_path();
-    const char *cmd[] = {"--json-errors",        "update", "1",    "--if-version-vector",
-                         "{\"other-device\":1}", "--text", "newer"};
+    const char *cmd[] = {"--json", "update", "1", "--if-version-vector", "{\"other-device\":1}",
+                         "--text", "newer"};
     CmdResult sub;
 
     ASSERT_TRUE(db != NULL);
@@ -826,15 +887,16 @@ TEST(facade_update_stale_matches_cli)
     seed_three(db);
     sub = read_parity(db, cmd, sizeof(cmd) / sizeof(cmd[0]));
     ASSERT_EQ_INT(sub.exit_code, 1);
-    ASSERT_STREQ(sub.out, "");
+    ASSERT_STREQ(sub.err, "");
+    ASSERT_STR_CONTAINS(sub.out, "\"code\":\"stale\"");
     cmd_result_free(&sub);
     free(db);
 }
 
 void register_facade_tests(void)
 {
-    RUN_TEST(facade_json_errors_not_found_matches_cli);
-    RUN_TEST(facade_busy_json_errors_matches_cli);
+    RUN_TEST(facade_json_not_found_matches_cli);
+    RUN_TEST(facade_busy_json_matches_cli);
     RUN_TEST(facade_list_matches_cli);
     RUN_TEST(facade_list_sort_since_matches_cli);
     RUN_TEST(facade_search_matches_cli);
@@ -849,7 +911,7 @@ void register_facade_tests(void)
     RUN_TEST(facade_update_matches_cli);
     RUN_TEST(facade_update_stale_matches_cli);
     RUN_TEST(facade_delete_matches_cli);
-    RUN_TEST(facade_purge_trash_matches_cli);
+    RUN_TEST(facade_purge_expired_matches_cli);
     RUN_TEST(facade_list_trash_matches_cli);
     RUN_TEST(facade_related_matches_cli);
     RUN_TEST(facade_get_with_links_matches_cli);
@@ -862,4 +924,5 @@ void register_facade_tests(void)
     RUN_TEST(facade_repair_matches_cli);
     RUN_TEST(facade_device_matches_cli);
     RUN_TEST(facade_device_new_matches_cli);
+    RUN_TEST(facade_brain_new_id_matches_cli);
 }

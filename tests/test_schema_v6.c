@@ -484,13 +484,15 @@ TEST(schema_v6_a_new_write_stores_the_source_as_an_actor)
                                "1111111111111111111111111111111111111111111111111111111111111111",
                                NULL, NULL, 0U, "unknown", NULL, k_now, &act, &e),
                      STORE_OK);
-    ASSERT_STREQ(e.source, "human");
+    ASSERT_STREQ(e.created_by, "{\"kind\":\"human\",\"id\":null}");
+    ASSERT_STREQ(e.updated_by, "{\"kind\":\"human\",\"id\":null}");
     store_entry_free(&e);
     ASSERT_EQ_STATUS(store_add(s, "two",
                                "2222222222222222222222222222222222222222222222222222222222222222",
                                NULL, NULL, 0U, "agent", NULL, k_now, &act, &e),
                      STORE_OK);
-    ASSERT_STREQ(e.source, "agent");
+    ASSERT_STREQ(e.created_by, "{\"kind\":\"agent\",\"id\":null}");
+    ASSERT_STREQ(e.updated_by, "{\"kind\":\"agent\",\"id\":null}");
     store_entry_free(&e);
     assert_query_is(db,
                     (QueryExpect){.sql = "SELECT group_concat(created_by || updated_by, ' ') FROM "
@@ -500,20 +502,23 @@ TEST(schema_v6_a_new_write_stores_the_source_as_an_actor)
                                           "{\"kind\":\"agent\",\"id\":null}"
                                           "{\"kind\":\"agent\",\"id\":null}"});
 
-    /* The source filter reads the actor kind. */
+    /* The created_by filter matches the stored kind. unknown is not a kind. */
     memset(&q, 0, sizeof(q));
-    q.source = "agent";
+    q.created_by = "agent";
     q.limit = V6_SEARCH_LIMIT;
     page = store_list(s, &q, k_now);
     ASSERT_EQ_STATUS(page.st, STORE_OK);
     ASSERT_EQ_INT((int)page.total, 1);
     ASSERT_STREQ(page.count > 0U ? page.entries[0].body : "", "two");
     free_page(page);
-    /* unknown is stored as human, and the filter maps it the same way. */
-    q.source = "unknown";
+    q.created_by = "human";
     page = store_list(s, &q, k_now);
     ASSERT_EQ_INT((int)page.total, 1);
     ASSERT_STREQ(page.count > 0U ? page.entries[0].body : "", "one");
+    free_page(page);
+    q.created_by = "unknown";
+    page = store_list(s, &q, k_now);
+    ASSERT_EQ_INT((int)page.total, 0);
     free_page(page);
     store_close(s);
     free(db);
@@ -580,7 +585,7 @@ TEST(schema_v6_each_changed_entry_takes_the_next_counter_value_once)
     store_entry_free(&e);
     assert_seqs(db, "1:3", "3");
 
-    ASSERT_EQ_STATUS(store_soft_delete_by_id(s, 1, k_now, &e), STORE_OK);
+    ASSERT_EQ_STATUS(store_soft_delete_by_id(s, 1, NULL, k_now, &e), STORE_OK);
     store_entry_free(&e);
     assert_seqs(db, "1:4", "4");
     memset(&u, 0, sizeof(u));
@@ -590,7 +595,7 @@ TEST(schema_v6_each_changed_entry_takes_the_next_counter_value_once)
     store_entry_free(&e);
     assert_seqs(db, "1:5", "5");
     ASSERT_EQ_STATUS(store_rekey(s, 1, (RekeyKeys){.key_or_null = NULL, .new_key_or_null = "k"},
-                                 STORE_BIN_LIVE, k_now, &e, NULL),
+                                 STORE_BIN_LIVE, NULL, k_now, &e, NULL),
                      STORE_OK);
     store_entry_free(&e);
     assert_seqs(db, "1:6", "6");
@@ -638,6 +643,8 @@ TEST(schema_v6_a_rolled_back_write_leaves_the_counter)
     assert_seqs(db, "1:1 2:2", "2");
     memset(&u, 0, sizeof(u));
     u.set_tags = true;
+    u.tags = (const char *const[]){"kept"};
+    u.ntags = 1U;
     ASSERT_EQ_STATUS(store_update(s, 1, &u, k_now, &e, NULL), STORE_OK);
     store_entry_free(&e);
     assert_seqs(db, "1:3 2:2", "3");
@@ -645,7 +652,7 @@ TEST(schema_v6_a_rolled_back_write_leaves_the_counter)
     free(db);
 }
 
-/* link: the link row and both ends; unlink: both ends. */
+/* link: the link row and both ends; unlink: the link row, then both ends. */
 TEST(schema_v6_link_and_unlink_take_counter_values)
 {
     char *db = make_temp_db_path();
@@ -660,23 +667,27 @@ TEST(schema_v6_link_and_unlink_take_counter_values)
     (void)given_added(s, "one", k_hash_one, NULL);
     (void)given_added(s, "two", k_hash_two, NULL);
     memset(&stub, 0, sizeof(stub));
-    ASSERT_EQ_STATUS(store_link(s, (StoreEdge){.from_id = 1, .to_id = 2}, STORE_EDGE_CITES, k_now,
-                                &action, &stub),
+    ASSERT_EQ_STATUS(store_link(s, (StoreEdge){.from_id = 1, .to_id = 2}, STORE_EDGE_CITES, NULL,
+                                k_now, &action, &stub),
                      STORE_OK);
     store_neighbor_free(&stub);
     assert_query_is(db, (QueryExpect){.sql = "SELECT change_seq FROM entry_links;", .want = "3"});
     assert_seqs(db, "1:4 2:5", "5");
     /* Linking again touches the edge: three new values. */
-    ASSERT_EQ_STATUS(store_link(s, (StoreEdge){.from_id = 1, .to_id = 2}, STORE_EDGE_CITES, k_now,
-                                &action, &stub),
+    ASSERT_EQ_STATUS(store_link(s, (StoreEdge){.from_id = 1, .to_id = 2}, STORE_EDGE_CITES, NULL,
+                                k_now, &action, &stub),
                      STORE_OK);
     ASSERT_EQ_INT((int)action, (int)STORE_LINK_MERGED);
     store_neighbor_free(&stub);
     assert_query_is(db, (QueryExpect){.sql = "SELECT change_seq FROM entry_links;", .want = "6"});
     assert_seqs(db, "1:7 2:8", "8");
-    ASSERT_EQ_STATUS(store_unlink(s, 1, 2, NULL, k_now, &stubs, &nstubs), STORE_OK);
+    ASSERT_EQ_STATUS(store_unlink(s, 1, 2, NULL, NULL, k_now, &stubs, &nstubs), STORE_OK);
     store_neighbors_free(stubs, nstubs);
-    assert_seqs(db, "1:9 2:10", "10");
+    /* The link row takes the next value, then each end. The row stays deleted. */
+    assert_query_is(db, (QueryExpect){.sql = "SELECT change_seq || ' ' || (deleted_at IS NOT NULL) "
+                                             "FROM entry_links;",
+                                      .want = "9 1"});
+    assert_seqs(db, "1:10 2:11", "11");
     store_close(s);
     free(db);
 }
@@ -697,7 +708,7 @@ TEST(schema_v6_purge_writes_one_tombstone_per_row)
     (void)given_added(s, "one", k_hash_one, NULL);
     (void)given_added(s, "two", k_hash_two, NULL);
     memset(&e, 0, sizeof(e));
-    ASSERT_EQ_STATUS(store_soft_delete_by_id(s, 1, k_now, &e), STORE_OK);
+    ASSERT_EQ_STATUS(store_soft_delete_by_id(s, 1, NULL, k_now, &e), STORE_OK);
     (void)snprintf(id_one, sizeof(id_one), "%s", e.sync_id);
     store_entry_free(&e);
     ASSERT_EQ_STATUS(store_hard_delete_by_id(s, 1, STORE_BIN_DELETED, k_now, &e), STORE_OK);
@@ -708,7 +719,7 @@ TEST(schema_v6_purge_writes_one_tombstone_per_row)
     assert_query_is(db, (QueryExpect){.sql = sql, .want = "1|4|2026-06-15T12:00:00.000Z"});
     assert_seqs(db, "2:2", "4");
 
-    ASSERT_EQ_STATUS(store_soft_delete_by_id(s, 2, k_now, &e), STORE_OK);
+    ASSERT_EQ_STATUS(store_soft_delete_by_id(s, 2, NULL, k_now, &e), STORE_OK);
     store_entry_free(&e);
     ASSERT_EQ_STATUS(store_purge(s, STORE_BIN_DELETED, k_now, &rows, &nrows), STORE_OK);
     ASSERT_EQ_INT((int)nrows, 1);
@@ -745,7 +756,7 @@ TEST(schema_v6_import_stamps_written_rows_only)
     char *db = make_temp_db_path();
     char *peer = make_temp_db_path();
     Store *s = NULL;
-    StoreImportCounts counts;
+    StoreImportResult counts;
     StoreNeighbor stub;
     StoreLinkAction action = STORE_LINK_CREATED;
     char hash_one[REMEMBER_SHA256_HEX_LEN + 1];
@@ -759,8 +770,8 @@ TEST(schema_v6_import_stamps_written_rows_only)
     (void)given_added(s, "one", hash_one, NULL);
     (void)given_added(s, "two", hash_two, NULL);
     memset(&stub, 0, sizeof(stub));
-    ASSERT_EQ_STATUS(store_link(s, (StoreEdge){.from_id = 1, .to_id = 2}, STORE_EDGE_CITES, k_now,
-                                &action, &stub),
+    ASSERT_EQ_STATUS(store_link(s, (StoreEdge){.from_id = 1, .to_id = 2}, STORE_EDGE_CITES, NULL,
+                                k_now, &action, &stub),
                      STORE_OK);
     store_neighbor_free(&stub);
     store_close(s);
@@ -772,8 +783,10 @@ TEST(schema_v6_import_stamps_written_rows_only)
     ASSERT_EQ_INT((int)counts.inserted, 2);
     assert_seqs(db, "1:1 2:2", "3");
     assert_query_is(db, (QueryExpect){.sql = "SELECT change_seq FROM entry_links;", .want = "3"});
+    store_import_result_free(&counts);
     ASSERT_EQ_STATUS(store_import(s, peer, k_now, &counts), STORE_OK);
     ASSERT_EQ_INT((int)counts.unchanged, 2);
+    store_import_result_free(&counts);
     assert_seqs(db, "1:1 2:2", "3");
     store_close(s);
     free(db);
@@ -977,7 +990,7 @@ TEST(schema_v6_a_newer_min_reader_version_makes_the_brain_read_only)
     StoreNeighbor *stubs = NULL;
     size_t nstubs = 0U;
     StoreLinkAction action = STORE_LINK_CREATED;
-    StoreImportCounts counts;
+    StoreImportResult counts;
     size_t entries = 0U;
     ListQuery q;
     PageResult page;
@@ -1007,17 +1020,18 @@ TEST(schema_v6_a_newer_min_reader_version_makes_the_brain_read_only)
     memset(&u, 0, sizeof(u));
     u.set_tags = true;
     ASSERT_EQ_STATUS(store_update(s, 1, &u, k_now, &e, NULL), STORE_ERR_SCHEMA_TOO_NEW);
-    ASSERT_EQ_STATUS(store_soft_delete_by_id(s, 1, k_now, &e), STORE_ERR_SCHEMA_TOO_NEW);
+    ASSERT_EQ_STATUS(store_soft_delete_by_id(s, 1, NULL, k_now, &e), STORE_ERR_SCHEMA_TOO_NEW);
     ASSERT_EQ_STATUS(store_hard_delete_by_id(s, 1, STORE_BIN_DELETED, k_now, &e),
                      STORE_ERR_SCHEMA_TOO_NEW);
     ASSERT_EQ_STATUS(store_purge(s, STORE_BIN_DELETED, k_now, &rows, &nrows),
                      STORE_ERR_SCHEMA_TOO_NEW);
-    ASSERT_EQ_STATUS(store_link(s, (StoreEdge){.from_id = 1, .to_id = 2}, STORE_EDGE_CITES, k_now,
-                                &action, &stub),
+    ASSERT_EQ_STATUS(store_link(s, (StoreEdge){.from_id = 1, .to_id = 2}, STORE_EDGE_CITES, NULL,
+                                k_now, &action, &stub),
                      STORE_ERR_SCHEMA_TOO_NEW);
-    ASSERT_EQ_STATUS(store_unlink(s, 1, 2, NULL, k_now, &stubs, &nstubs), STORE_ERR_SCHEMA_TOO_NEW);
+    ASSERT_EQ_STATUS(store_unlink(s, 1, 2, NULL, NULL, k_now, &stubs, &nstubs),
+                     STORE_ERR_SCHEMA_TOO_NEW);
     ASSERT_EQ_STATUS(store_rekey(s, 1, (RekeyKeys){.key_or_null = NULL, .new_key_or_null = "k"},
-                                 STORE_BIN_LIVE, k_now, &e, NULL),
+                                 STORE_BIN_LIVE, NULL, k_now, &e, NULL),
                      STORE_ERR_SCHEMA_TOO_NEW);
     ASSERT_EQ_STATUS(store_import(s, peer, k_now, &counts), STORE_ERR_SCHEMA_TOO_NEW);
     ASSERT_EQ_STATUS(store_conflict_accept(s, 1, STORE_KEEP_LOCAL, k_now, &rows, &nrows),
@@ -1343,7 +1357,7 @@ TEST(schema_v6_cli_prints_setting_invalid_for_a_left_out_prefix)
     char *db = make_temp_db_path();
     char *db2 = make_temp_db_path();
     const char *list[] = {"list"};
-    const char *list_json[] = {"--json-errors", "list"};
+    const char *list_json[] = {"--json", "list"};
     CmdResult r;
 
     ASSERT_TRUE(db != NULL && db2 != NULL);
@@ -1366,11 +1380,16 @@ TEST(schema_v6_cli_prints_setting_invalid_for_a_left_out_prefix)
                   "('my project:', '2026-01-02T00:00:00.000Z', NULL, 'd');");
     r = run_remember(db2, list_json, sizeof(list_json) / sizeof(list_json[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 0);
-    ASSERT_STREQ(r.err, "{\"version\":1,\"warning\":{\"code\":\"setting_invalid\",\"message\":"
-                        "\"skipped \\\"remember.buckets.prefixes\\\": \\\"my project:\\\" isn't a "
-                        "valid value.\",\"detail\":{\"key\":\"remember.buckets.prefixes\","
-                        "\"value\":\"my project:\",\"reason\":\"bad_prefix_shape\","
-                        "\"item\":\"my project:\"}}}\n");
+    ASSERT_STREQ(r.err, "");
+    ASSERT_STREQ(r.out,
+                 "{\"format\":\"remember-message\",\"version\":1,\"type\":\"memory.list.result\","
+                 "\"data\":{\"count\":0,\"total\":0,\"entries\":[]},"
+                 "\"next_cursor\":null,\"has_more\":false,"
+                 "\"warnings\":[{\"code\":\"setting_invalid\",\"message\":"
+                 "\"skipped \\\"remember.buckets.prefixes\\\": \\\"my project:\\\" isn't a "
+                 "valid value.\",\"detail\":{\"key\":\"remember.buckets.prefixes\","
+                 "\"value\":\"my project:\",\"reason\":\"bad_prefix_shape\","
+                 "\"item\":\"my project:\"}}]}\n");
     cmd_result_free(&r);
     free(db);
     free(db2);
@@ -1438,7 +1457,7 @@ TEST(schema_v6_cli_a_write_to_a_newer_brain_prints_schema_too_new)
     char *db = make_temp_db_path();
     const char *add[] = {"add", "seed"};
     const char *list[] = {"list"};
-    const char *add_json[] = {"--json-errors", "add", "another"};
+    const char *add_json[] = {"--json", "add", "another"};
     CmdResult r;
 
     ASSERT_TRUE(db != NULL);
@@ -1461,7 +1480,7 @@ TEST(schema_v6_cli_a_write_to_a_newer_brain_prints_schema_too_new)
 
     r = run_remember(db, add_json, sizeof(add_json) / sizeof(add_json[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 1);
-    ASSERT_STR_CONTAINS(r.err, "\"code\":\"schema_too_new\"");
+    ASSERT_STR_CONTAINS(r.out, "\"code\":\"schema_too_new\"");
     cmd_result_free(&r);
     assert_query_is(db, (QueryExpect){.sql = "SELECT COUNT(*) FROM entries;", .want = "1"});
     free(db);

@@ -15,27 +15,36 @@ int output_json_string(FILE *out, const char *s);
  * to compute bin. */
 int output_entry_json(FILE *out, const Entry *e, const char *now);
 
-/* Uniform mutation envelope: version/action/count/entries:[one]. */
-int output_action_envelope(FILE *out, const char *action, const Entry *e, const char *now);
+/*
+ * The *_data writers write the data object of a --json success, with no
+ * newline. remember_run wraps it in the one remember-message 1 envelope
+ * (008 JE-2.1) with the reply type, any warnings, and the newline.
+ */
 
-/* purge-trash JSON: action deleted, count N, all snapshots (no cap). */
-int output_deleted_list(FILE *out, const Entry *entries, size_t count, const char *now);
+/* One-memory write (update, rekey): data{action, memory{}}, memory without links. */
+int output_action_data(FILE *out, const char *action, const Entry *e, const char *now);
 
-/* Get envelope: version/count/entries:[one] (no action). links after version_vector. */
-int output_get_envelope(FILE *out, const Entry *e, const StoreNeighbor *links, size_t nlinks,
+/* data{[action,] memory{... links}}. get passes a NULL action; add passes its action. */
+int output_memory_data(FILE *out, const char *action, const Entry *e, const StoreNeighbor *links,
+                       size_t nlinks, const char *now);
+
+/* Many-memory write (delete, purge, conflict accept): data{action, count, entries[]}. */
+int output_entries_data(FILE *out, const char *action, const Entry *entries, size_t count,
                         const char *now);
 
-/* List/search-style paged envelope. Each entry gets subject-relative stubs. */
-int output_list_envelope(FILE *out, size_t offset, size_t limit, size_t count, size_t total,
-                         const Entry *entries, const StoreNeighbor *links, size_t nlinks,
-                         const char *now);
+/* List data: count, total, entries. Paging lives on the envelope, not here. */
+int output_list_data(FILE *out, size_t count, size_t total, const Entry *entries,
+                     const StoreNeighbor *links, size_t nlinks, const char *now);
 
 /*
- * search --json: the list envelope with the keys and tags facets between
- * total and entries (006 E2.6). count, total and entries come from res->page.
+ * search --json: the list data with the keys and tags facets between total and
+ * entries (006 E2.6). count, total and entries come from res->page. After
+ * entries: query.original is q in the common query shape (PLUGIN-PROTOCOL
+ * R8.6, decision:plan21-search-query-original-only), then ranked_by and
+ * filters. No filter runs before plan 25, so they are "bm25" and [].
  */
-int output_search_envelope(FILE *out, const SearchResult *res, size_t offset, size_t limit,
-                           const StoreNeighbor *links, size_t nlinks, const char *now);
+int output_search_data(FILE *out, const SearchQuery *q, const SearchResult *res,
+                       const StoreNeighbor *links, size_t nlinks, const char *now);
 
 /*
  * search human facets (006 E2.7, decision:plan18-human-facet-line): a
@@ -69,37 +78,41 @@ int output_entry_human_line(FILE *out, const Entry *e, const StoreNeighbor *link
                             const char *now);
 
 /* Tags JSON envelope: version/count/tags:[{name,count}]. */
-int output_tags_envelope(FILE *out, const TagCount *tags, size_t count);
+int output_tags_data(FILE *out, const TagCount *tags, size_t count);
 
 /* Human tags: one "name<TAB>count" line per tag (names are control-free tokens). */
 int output_tags_human(FILE *out, const TagCount *tags, size_t count);
 
 /* link/unlink write envelope: action + count + links stubs. now is command utc. */
-int output_links_write_envelope(FILE *out, const char *action, const StoreNeighbor *links,
-                                size_t count, const char *now);
+int output_links_write_data(FILE *out, const char *action, const StoreNeighbor *links, size_t count,
+                            const char *now);
 
-/* remember related --json */
-int output_related_envelope(FILE *out, long long id, const char *key, const StoreNeighbor *links,
-                            size_t count, const char *now);
+/* remember related --json. id is the memory UUID; local_id is the integer. */
+int output_related_data(FILE *out, const Entry *subject, const StoreNeighbor *links, size_t count,
+                        const char *now);
 
 /* Human Related: block (omit entirely when count==0). */
 int output_related_human(FILE *out, const StoreNeighbor *links, size_t count, const char *now);
 
-/* import --json counts envelope (no entry dump). */
-int output_import_envelope(FILE *out, const StoreImportCounts *counts);
+/*
+ * import --json (decision:plan21-import-problem-rows): action and the three
+ * counts, then conflicts {count, items} with the objects conflicts --json
+ * writes, then rejected {count, items} with {source_local_id, field}.
+ */
+int output_import_data(FILE *out, const StoreImportResult *r);
 
-/* device: plain id, or {"version":1,"device_id":"…"}. */
+/* device: plain id, or data{device_id}. */
 int output_device_human(FILE *out, const char *device_id);
-int output_device_envelope(FILE *out, const char *device_id);
+int output_device_data(FILE *out, const char *device_id);
 
 /* device new JSON. previous NULL is JSON null (the file was missing). */
-int output_device_new_envelope(FILE *out, const char *device_id, const char *previous);
+int output_device_new_data(FILE *out, const char *device_id, const char *previous);
+
+/* brain new-id data{brain_id, previous_brain_id}. */
+int output_brain_new_id_data(FILE *out, const StoreBrainId *ids);
 
 /* conflicts --json list. */
-int output_conflicts_envelope(FILE *out, const StoreConflict *rows, size_t count);
-
-/* conflict accept --json: action accepted + entries. */
-int output_accepted_envelope(FILE *out, const Entry *entries, size_t count, const char *now);
+int output_conflicts_data(FILE *out, const StoreConflict *rows, size_t count);
 
 /* repair search-index. JSON is the E4.14 object; human is D8 "rebuilt N". */
 int output_rebuilt(FILE *out, bool json, size_t entries);

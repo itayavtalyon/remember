@@ -8,11 +8,44 @@
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
-/* See diag_set_json_errors. Deliberately mutable; one call at a time. */
+/* --json state for one remember_run, between diag_json_begin and diag_json_end.
+   Deliberately mutable; one call at a time (see diag_json_begin). */
+typedef struct {
+    FILE *warnings; /* comma-joined warning objects */
+    char *warnings_buf;
+    size_t warnings_len;
+    size_t nwarnings;
+    FILE *error; /* the first error object */
+    char *error_buf;
+    size_t error_len;
+    const char *command; /* names the usage fix; NULL before a command is known */
+    bool on;
+    bool has_error;
+    /* NOLINTNEXTLINE(readability-magic-numbers,cppcoreguidelines-avoid-magic-numbers) */
+    char pad_[6]; /* explicit tail padding (kept -Wpadded-clean) */
+} JsonNotices;
+
 // NOLINTNEXTLINE(cppcoreguidelines-avoid-non-const-global-variables)
-static bool g_json_errors = false;
+static JsonNotices g_json;
+
+/* Survives diag_json_end so --strict can see a warning after the envelope is written.
+   Deliberately mutable; one call at a time (reset at remember_run). */
+// NOLINTNEXTLINE(cppcoreguidelines-avoid-non-const-global-variables)
+static size_t g_warning_count;
+
+/* Paths that already warned unknown_field. stdin is the separate flag.
+   Deliberately mutable; one call at a time (reset with the warning count). */
+// NOLINTNEXTLINE(cppcoreguidelines-avoid-non-const-global-variables)
+static char **g_unknown_paths;
+
+// NOLINTNEXTLINE(cppcoreguidelines-avoid-non-const-global-variables)
+static size_t g_unknown_npaths;
+
+// NOLINTNEXTLINE(cppcoreguidelines-avoid-non-const-global-variables)
+static bool g_unknown_stdin;
 
 /* E4.3 order. One token per code; diag_code_name / diag_code_from_name share it. */
 static const char *const k_error_codes[DIAG_CODE_COUNT] = {
@@ -45,13 +78,74 @@ static const char *const k_error_codes[DIAG_CODE_COUNT] = {
     [DIAG_CORRUPT] = "corrupt",
     [DIAG_IO_ERROR] = "io_error",
     [DIAG_SCHEMA_TOO_NEW] = "schema_too_new",
+    [DIAG_INVALID_ARGUMENT] = "invalid_argument",
 };
+
+/* error.fix per code (decision:plan21-error-fix-drafts-c42). The SQLite codes
+   take their E4.8 fix in diag_error_sqlite; their rows here serve a non-SQLite
+   failure under the same code. schema_too_new, not_found, expired, and deleted
+   are locked text (C-01, JSON-STYLE); the rest are C-42 drafts. usage is built
+   from the command in usage_fix. */
+static const char *const k_fix[DIAG_CODE_COUNT] = {
+    [DIAG_NOT_FOUND] = "Run 'remember list' to see keys.",
+    [DIAG_DATABASE] = "Try again. If it keeps happening, report the details from --json.",
+    [DIAG_OUT_OF_MEMORY] = "Close other apps to free memory, then try again.",
+    [DIAG_INTERNAL] = "This is a bug in remember. Report it with the command you ran.",
+    [DIAG_INVALID_QUERY] = "Check the search words, or put the query in double quotes.",
+    [DIAG_KEY_CONFLICT] = "Pick another key, or rekey the other memory first.",
+    [DIAG_BODY_CONFLICT] = "Change the text, or update the memory that already has it.",
+    [DIAG_EXPIRED] = "Add --expired to use it.",
+    [DIAG_NOT_EXPIRED] = "Run the command without --expired.",
+    [DIAG_DELETED] = "Add --trash to use it.",
+    [DIAG_NOT_DELETED] = "Run 'remember delete' on it first.",
+    [DIAG_NOT_SINGLE_DEVICE] = "Delete it instead; it stays in the Trash and syncs as deleted.",
+    [DIAG_SELF_LINK] = "Link two different memories.",
+    [DIAG_CYCLE] = "Remove the link that closes the loop, then try again.",
+    [DIAG_SOURCE_TOO_OLD] = "Open the source brain once with this remember, then import it.",
+    [DIAG_UNIQUE_TAKEN] = "Rekey or delete the memory that holds the key or text, then try again.",
+    [DIAG_STALE] = "Read the memory again, then retry the change.",
+    [DIAG_NEWER_DATABASE] = "Upgrade remember, then try again.",
+    [DIAG_UNSUPPORTED_DATABASE] = "Open the brain with the remember that made it, and export it.",
+    [DIAG_IMPORT_PARSE] = "Check the import source, then try again.",
+    [DIAG_BUSY] = "Wait a moment and try again.",
+    [DIAG_READ_ONLY] = "Give yourself write permission on the brain file and its folder.",
+    [DIAG_DISK_FULL] = "Free some space and try again.",
+    [DIAG_CANNOT_OPEN] = "Check that the folder exists and that you can read and write it.",
+    [DIAG_NOT_A_DATABASE] = "Point --db at a remember brain.",
+    [DIAG_CORRUPT] = "Copy the file somewhere safe, then restore a backup.",
+    [DIAG_IO_ERROR] = "Check the disk or drive, then try again.",
+    [DIAG_SCHEMA_TOO_NEW] = "Upgrade remember to make changes.",
+    /* Draft, not approved copy. Plan 21 stage 2b. */
+    [DIAG_INVALID_ARGUMENT] = "Run 'remember list' again without --cursor.",
+};
+
+/* cppcheck-suppress staticFunction ; public API (diag.h); remember_run */
+const char *diag_code_fix(DiagCode code)
+{
+    size_t index = (size_t)code;
+
+    if (index >= (size_t)DIAG_CODE_COUNT) {
+        return NULL;
+    }
+    return k_fix[index];
+}
+
+/* decision:plan21-retryable-codes */
+static bool code_retryable(DiagCode code)
+{
+    if (code == DIAG_BUSY || code == DIAG_IO_ERROR || code == DIAG_OUT_OF_MEMORY) {
+        return true;
+    }
+    return false;
+}
 
 static const char *const k_warning_codes[DIAG_WARN_COUNT] = {
     [DIAG_WARN_RAW_QUERY_IGNORED] = "raw_query_ignored",
     [DIAG_WARN_DEPRECATED_FLAG] = "deprecated_flag",
     [DIAG_WARN_SYNCED_FOLDER] = "synced_folder",
     [DIAG_WARN_SETTING_INVALID] = "setting_invalid",
+    [DIAG_WARN_FLAG_MEANING_CHANGED] = "flag_meaning_changed",
+    [DIAG_WARN_UNKNOWN_FIELD] = "unknown_field",
 };
 
 /* Plain line lead per warning. E2.3 gives raw_query_ignored its own words; the
@@ -61,6 +155,8 @@ static const char *const k_warning_plain_prefix[DIAG_WARN_COUNT] = {
     [DIAG_WARN_DEPRECATED_FLAG] = "warning: ",
     [DIAG_WARN_SYNCED_FOLDER] = "warning: ",
     [DIAG_WARN_SETTING_INVALID] = "warning: ",
+    [DIAG_WARN_FLAG_MEANING_CHANGED] = "warning: ",
+    [DIAG_WARN_UNKNOWN_FIELD] = "warning: ",
 };
 
 static const char *catalog_name(const char *const *names, size_t count, size_t index)
@@ -138,19 +234,18 @@ typedef struct {
     const char *plain_prefix;
     const char *code;
     const char *message;
+    const char *fix;               /* NULL: catalog or usage fix. Else this sentence. */
     const DiagDetailField *fields; /* JSON detail members; NULL when none */
     size_t nfields;
-    bool json_errors;
-    /* NOLINTNEXTLINE(readability-magic-numbers,cppcoreguidelines-avoid-magic-numbers) */
-    char pad_[7]; /* explicit tail padding (kept -Wpadded-clean) */
+    DiagCode error_code; /* errors only: picks fix and retryable */
+    char pad_[4];        /* explicit tail padding (kept -Wpadded-clean) */
 } Notice;
 
-/* JSON envelope through the message value; the caller closes the object. */
+/* {"code":C,"message":M; the caller adds the rest and closes the object. */
 // NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
-static int write_json_notice_head(FILE *err, const char *kind, const char *code,
-                                  const char *message)
+static int write_json_notice_head(FILE *err, const char *code, const char *message)
 {
-    if (fprintf(err, "{\"version\":1,\"%s\":{\"code\":", kind) < 0) {
+    if (fputs("{\"code\":", err) < 0) {
         return -1;
     }
     if (output_json_string(err, code) != 0) {
@@ -191,35 +286,217 @@ static int write_json_detail_fields(FILE *err, const DiagDetailField *fields, si
     return 0;
 }
 
+/* The usage fix names the command's help when a command is known. */
+enum { USAGE_FIX_BUF = 96 };
+static const char *usage_fix(char *buf, size_t cap)
+{
+    if (g_json.command == NULL) {
+        return "Run 'remember --help' to see the commands.";
+    }
+    (void)snprintf(buf, cap, "Run 'remember %s --help' to see how to use it.", g_json.command);
+    return buf;
+}
+
+/* ,"fix":F,"retryable":B */
+static int write_fix_retryable(FILE *fp, const char *fix, DiagCode code)
+{
+    if (fputs(",\"fix\":", fp) < 0 || output_json_string(fp, fix) != 0) {
+        return -1;
+    }
+    if (code_retryable(code)) {
+        return fputs(",\"retryable\":true", fp) < 0 ? -1 : 0;
+    }
+    return fputs(",\"retryable\":false", fp) < 0 ? -1 : 0;
+}
+
+/* The stream for this notice: the error slot (NULL once taken: the first
+   failure is the cause, later ones are dropped) or the next warnings item. */
+static FILE *json_slot(bool is_error, bool *dropped)
+{
+    *dropped = false;
+    if (is_error) {
+        if (g_json.has_error) {
+            *dropped = true;
+            return NULL;
+        }
+        g_json.has_error = true;
+        return g_json.error;
+    }
+    if (g_json.nwarnings > 0U && fputc(',', g_json.warnings) == EOF) {
+        return NULL;
+    }
+    g_json.nwarnings++;
+    return g_json.warnings;
+}
+
+static int write_json_notice(Notice notice, const char *message)
+{
+    char buf[USAGE_FIX_BUF];
+    bool is_error = strcmp(notice.json_kind, "error") == 0;
+    bool dropped = false;
+    FILE *fp = json_slot(is_error, &dropped);
+
+    if (dropped) {
+        return 0;
+    }
+    if (fp == NULL || write_json_notice_head(fp, notice.code, message) != 0) {
+        return -1;
+    }
+    if (is_error) {
+        const char *fix = notice.fix;
+
+        if (fix == NULL) {
+            fix = notice.error_code == DIAG_USAGE ? usage_fix(buf, sizeof(buf))
+                                                  : k_fix[notice.error_code];
+        }
+        if (write_fix_retryable(fp, fix, notice.error_code) != 0) {
+            return -1;
+        }
+    }
+    if (write_json_detail_fields(fp, notice.fields, notice.nfields) != 0) {
+        return -1;
+    }
+    return fputc('}', fp) == EOF ? -1 : 0;
+}
+
 static int write_notice(Notice notice)
 {
     FILE *err = app_err();
     const char *message = message_or_empty(notice.message);
+    int rc = 0;
 
-    if (notice.json_errors) {
-        if (write_json_notice_head(err, notice.json_kind, notice.code, message) != 0) {
-            return -1;
-        }
-        if (write_json_detail_fields(err, notice.fields, notice.nfields) != 0) {
-            return -1;
-        }
-        if (fputs("}}\n", err) < 0) {
-            return -1;
-        }
-        return 0;
+    if (g_json.on) {
+        rc = write_json_notice(notice, message);
+    } else if (fprintf(err, "remember: %s", notice.plain_prefix) < 0 ||
+               output_text_human(err, message, false) != 0 ||
+               (notice.fix != NULL &&
+                (fputc(' ', err) == EOF || output_text_human(err, notice.fix, false) != 0)) ||
+               fputc('\n', err) == EOF) {
+        /* decision:plan17a-plain-notice-one-line: an echoed token cannot split the
+           line or drive the terminal. JSON escapes the same bytes above. */
+        rc = -1;
     }
-    /* decision:plan17a-plain-notice-one-line: an echoed token cannot split the
-       line or drive the terminal. JSON escapes the same bytes above. */
-    if (fprintf(err, "remember: %s", notice.plain_prefix) < 0) {
+    if (rc == 0 && strcmp(notice.json_kind, "warning") == 0) {
+        g_warning_count++;
+    }
+    return rc;
+}
+
+static const char k_unknown_file[] =
+    "\"%s\" has a field remember doesn't know, \"%s\". The rest of the file was read.";
+static const char k_unknown_stream[] =
+    "stdin has a field remember doesn't know, \"%s\". The rest of the input was read.";
+
+static void unknown_fields_reset(void)
+{
+    size_t i = 0U;
+
+    for (i = 0U; i < g_unknown_npaths; i++) {
+        free(g_unknown_paths[i]);
+    }
+    free((void *)g_unknown_paths);
+    g_unknown_paths = NULL;
+    g_unknown_npaths = 0U;
+    g_unknown_stdin = false;
+}
+
+static bool unknown_field_seen(const char *path)
+{
+    size_t i = 0U;
+
+    if (path == NULL) {
+        return g_unknown_stdin;
+    }
+    for (i = 0U; i < g_unknown_npaths; i++) {
+        if (strcmp(g_unknown_paths[i], path) == 0) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static void unknown_field_mark(const char *path)
+{
+    size_t n = 0U;
+    char *copy = NULL;
+    char **grown = NULL;
+
+    if (path == NULL) {
+        g_unknown_stdin = true;
+        return;
+    }
+    n = strlen(path);
+    copy = (char *)malloc(n + 1U);
+    if (copy == NULL) {
+        return;
+    }
+    memcpy(copy, path, n + 1U);
+    grown = (char **)realloc((void *)g_unknown_paths, (g_unknown_npaths + 1U) * sizeof(*grown));
+    if (grown == NULL) {
+        free(copy);
+        return;
+    }
+    grown[g_unknown_npaths] = copy;
+    g_unknown_paths = grown;
+    g_unknown_npaths++;
+}
+
+/* The C-35 sentence, without the warning prefix. path NULL is the stdin line. */
+static char *unknown_field_message(DiagUnknownField field)
+{
+    int need = 0;
+    char *buf = NULL;
+
+    if (field.path != NULL) {
+        need = snprintf(NULL, 0, k_unknown_file, field.path, field.name);
+    } else {
+        need = snprintf(NULL, 0, k_unknown_stream, field.name);
+    }
+    if (need < 0) {
+        return NULL;
+    }
+    buf = (char *)malloc((size_t)need + 1U);
+    if (buf == NULL) {
+        return NULL;
+    }
+    if (field.path != NULL) {
+        if (snprintf(buf, (size_t)need + 1U, k_unknown_file, field.path, field.name) != need) {
+            free(buf);
+            return NULL;
+        }
+    } else if (snprintf(buf, (size_t)need + 1U, k_unknown_stream, field.name) != need) {
+        free(buf);
+        return NULL;
+    }
+    return buf;
+}
+
+void diag_warnings_reset(void)
+{
+    g_warning_count = 0U;
+    unknown_fields_reset();
+}
+
+size_t diag_warning_count(void)
+{
+    return g_warning_count;
+}
+
+int diag_error_split(DiagCode code, DiagSplit split)
+{
+    const char *name = diag_code_name(code);
+
+    if (name == NULL) {
         return -1;
     }
-    if (output_text_human(err, message, false) != 0) {
-        return -1;
-    }
-    if (fputc('\n', err) == EOF) {
-        return -1;
-    }
-    return 0;
+    return write_notice((Notice){
+        .json_kind = "error",
+        .plain_prefix = "",
+        .code = name,
+        .message = split.message,
+        .fix = split.fix,
+        .error_code = code,
+    });
 }
 
 int diag_error(DiagCode code, const char *message)
@@ -234,14 +511,8 @@ int diag_error(DiagCode code, const char *message)
         .plain_prefix = "",
         .code = name,
         .message = message,
-        .json_errors = g_json_errors,
+        .error_code = code,
     });
-}
-
-/* cppcheck-suppress staticFunction ; public API (diag.h); remember_run */
-void diag_set_json_errors(bool enabled)
-{
-    g_json_errors = enabled;
 }
 
 int diag_warning(DiagWarning code, const char *message)
@@ -264,8 +535,39 @@ int diag_warning_detail(DiagWarning code, const char *message, const DiagDetailF
         .message = message,
         .fields = fields,
         .nfields = nfields,
-        .json_errors = g_json_errors,
     });
+}
+
+/* cppcheck-suppress staticFunction ; public API (diag.h); used by tests and later readers */
+int diag_unknown_field(DiagUnknownField field)
+{
+    const char *where = field.path != NULL ? field.path : "stdin";
+    const DiagDetailField detail[] = {
+        {.name = "field", .value = field.name},
+        {.name = "where", .value = where},
+    };
+    char *message = NULL;
+    int rc = 0;
+
+    if (field.name == NULL) {
+        return -1;
+    }
+    if (unknown_field_seen(field.path)) {
+        return 0;
+    }
+    message = unknown_field_message(field);
+    if (message == NULL) {
+        return -1;
+    }
+    rc = diag_warning_detail(DIAG_WARN_UNKNOWN_FIELD, message, detail,
+                             sizeof detail / sizeof detail[0]);
+    free(message);
+    if (rc != 0) {
+        return rc;
+    }
+    /* A missed mark can warn again. The line was already written, so the read continues. */
+    unknown_field_mark(field.path);
+    return 0;
 }
 
 /* E4.8 cause + fix per SQLite code. corrupt with fts_only uses the repair
@@ -341,7 +643,7 @@ static const SqliteAdvice k_source_advice[DIAG_CODE_COUNT] = {
 
 /* database has no cause; its fix is the E4.8 "Try again" sentence. */
 static const char k_database_fix[] =
-    "Try again. If it keeps happening, report the details from --json-errors.";
+    "Try again. If it keeps happening, report the details from --json.";
 
 /* E4.8 cause/fix for code, or NULL for database. corrupt + fts_only is the repair row. */
 static const SqliteAdvice *sqlite_advice(DiagCode code, const StoreError *detail)
@@ -363,9 +665,9 @@ static const SqliteAdvice *sqlite_advice(DiagCode code, const StoreError *detail
 enum { SQLITE_LINE_BUF = 512 };
 
 /* E4.9 detail members in E4.9 order: sqlite_code, sqlite_extended, sqlite_name,
-   sqlite_message and fix always (fix: Itay 2026-10-15); then the code-gated
-   members. abs_path is NULL when omitted. */
-static int write_sqlite_required(FILE *err, const StoreError *detail, const char *fix)
+   sqlite_message always; then the code-gated members. The fix is error.fix
+   (plan 21), no longer a detail member. abs_path is NULL when omitted. */
+static int write_sqlite_required(FILE *err, const StoreError *detail)
 {
     if (fprintf(err, ",\"detail\":{\"sqlite_code\":%d,\"sqlite_extended\":%d", detail->sqlite_code,
                 detail->sqlite_extended) < 0) {
@@ -380,13 +682,7 @@ static int write_sqlite_required(FILE *err, const StoreError *detail, const char
     if (fputs(",\"sqlite_message\":", err) < 0) {
         return -1;
     }
-    if (output_json_string(err, detail->sqlite_message) != 0) {
-        return -1;
-    }
-    if (fputs(",\"fix\":", err) < 0) {
-        return -1;
-    }
-    return output_json_string(err, fix);
+    return output_json_string(err, detail->sqlite_message);
 }
 
 /* E4.7 reason names; an out-of-range reason can never come from the store and
@@ -458,12 +754,10 @@ static int write_sqlite_optional(FILE *err, DiagCode code, const StoreError *det
     return 0;
 }
 
-/* fix then abs_path: the E4.8 fix sentence, then the optional E4.9 path. */
-// NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
-static int write_sqlite_detail(FILE *err, DiagCode code, const StoreError *detail, const char *fix,
+static int write_sqlite_detail(FILE *err, DiagCode code, const StoreError *detail,
                                const char *abs_path)
 {
-    if (write_sqlite_required(err, detail, fix) != 0) {
+    if (write_sqlite_required(err, detail) != 0) {
         return -1;
     }
     return write_sqlite_optional(err, code, detail, abs_path);
@@ -488,7 +782,7 @@ int diag_error_sqlite(DiagCode code, const StoreError *detail, const char *path)
     if (advice != NULL) {
         fix = advice->fix;
     }
-    if (!g_json_errors) {
+    if (!g_json.on) {
         /* E4.8 plain line: cause, extended name, fix. */
         if (advice == NULL) {
             (void)snprintf(line, sizeof(line), "database error (%s). %s", detail->sqlite_name, fix);
@@ -501,11 +795,11 @@ int diag_error_sqlite(DiagCode code, const StoreError *detail, const char *path)
             .plain_prefix = "",
             .code = name,
             .message = line,
-            .json_errors = false,
+            .error_code = code,
         });
     }
-    /* JSON (Itay 2026-10-15, amends E4.4 for SQLite codes): a short message,
-       the fix in detail.fix. */
+    /* JSON (Itay 2026-10-15, amends E4.4 for SQLite codes): a short message;
+       the E4.8 fix is error.fix (plan 21). */
     if (advice == NULL) {
         (void)snprintf(line, sizeof(line), "database error");
     } else {
@@ -517,15 +811,79 @@ int diag_error_sqlite(DiagCode code, const StoreError *detail, const char *path)
         util_absolute_path(path, absolute, sizeof(absolute)) == 0) {
         abs_path = absolute;
     }
-    err = app_err();
-    if (write_json_notice_head(err, "error", name, line) != 0) {
+    if (g_json.has_error) {
+        return 0; /* the first failure is the cause */
+    }
+    g_json.has_error = true;
+    err = g_json.error;
+    if (write_json_notice_head(err, name, line) != 0 || write_fix_retryable(err, fix, code) != 0 ||
+        write_sqlite_detail(err, code, detail, abs_path) != 0) {
         return -1;
     }
-    if (write_sqlite_detail(err, code, detail, fix, abs_path) != 0) {
+    return fputc('}', err) == EOF ? -1 : 0;
+}
+
+/* cppcheck-suppress staticFunction ; public API (diag.h); remember_run */
+int diag_json_begin(const char *command)
+{
+    diag_json_end();
+    g_json.warnings = open_memstream(&g_json.warnings_buf, &g_json.warnings_len);
+    g_json.error = open_memstream(&g_json.error_buf, &g_json.error_len);
+    if (g_json.warnings == NULL || g_json.error == NULL) {
+        /* still plain mode; the caller's diag_json_end frees what opened */
         return -1;
     }
-    if (fputs("}}\n", err) < 0) {
+    g_json.command = command;
+    g_json.on = true;
+    return 0;
+}
+
+/* cppcheck-suppress staticFunction ; public API (diag.h); remember_run */
+bool diag_json_has_error(void)
+{
+    return g_json.has_error;
+}
+
+/* Flushing a memstream makes its buffer and length current. */
+static int flush_notices(FILE *fp)
+{
+    return fflush(fp) != 0 || ferror(fp) != 0 ? -1 : 0;
+}
+
+/* cppcheck-suppress staticFunction ; public API (diag.h); remember_run */
+int diag_json_write_error(FILE *out)
+{
+    if (flush_notices(g_json.error) != 0 || fputs("\"error\":", out) < 0 ||
+        fwrite(g_json.error_buf, 1U, g_json.error_len, out) != g_json.error_len) {
         return -1;
     }
     return 0;
+}
+
+/* cppcheck-suppress staticFunction ; public API (diag.h); remember_run */
+int diag_json_write_warnings(FILE *out)
+{
+    if (g_json.nwarnings == 0U) {
+        return 0;
+    }
+    if (flush_notices(g_json.warnings) != 0 || fputs(",\"warnings\":[", out) < 0 ||
+        fwrite(g_json.warnings_buf, 1U, g_json.warnings_len, out) != g_json.warnings_len ||
+        fputc(']', out) == EOF) {
+        return -1;
+    }
+    return 0;
+}
+
+/* cppcheck-suppress staticFunction ; public API (diag.h); remember_run */
+void diag_json_end(void)
+{
+    if (g_json.warnings != NULL) {
+        (void)fclose(g_json.warnings);
+    }
+    if (g_json.error != NULL) {
+        (void)fclose(g_json.error);
+    }
+    free(g_json.warnings_buf);
+    free(g_json.error_buf);
+    g_json = (JsonNotices){0};
 }

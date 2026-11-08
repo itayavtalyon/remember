@@ -420,14 +420,10 @@ TEST(store_search_pages_the_deduplicated_set)
     memset(&sq, 0, sizeof(sq));
     sq.query = "book";
     sq.filters.limit = 1U;
-    sq.filters.offset = 1U;
     res = store_search(s, &sq, k_now);
     ASSERT_EQ_STATUS(res.page.st, STORE_OK);
     ASSERT_EQ_INT((int)res.page.total, 2);
     ASSERT_EQ_INT((int)res.page.count, 1);
-    if (res.page.count == 1U) {
-        ASSERT_STREQ(res.page.entries[0].body, "Book the dentist");
-    }
     store_search_result_free(&res);
     store_close(s);
     free(db);
@@ -644,7 +640,7 @@ TEST(store_search_labels_a_key_without_a_title_with_the_key)
     free(db);
 }
 
-/* E2.6: a keys item carries its memory's sync_id, source and updated_at
+/* E2.6: a keys item carries its memory's sync_id and updated_at
    (re-added later, so updated_at is not created_at). */
 TEST(store_search_key_item_carries_its_memory_fields)
 {
@@ -661,7 +657,6 @@ TEST(store_search_key_item_carries_its_memory_fields)
     ASSERT_EQ_INT((int)res.page.count, 1);
     if (res.keys.count == 1U && res.page.count == 1U) {
         ASSERT_STREQ(res.keys.items[0].sync_id, res.page.entries[0].sync_id);
-        ASSERT_STREQ(res.keys.items[0].source, "human");
         ASSERT_STREQ(res.keys.items[0].updated_at, k_now);
     }
     store_search_result_free(&res);
@@ -695,7 +690,7 @@ TEST(store_search_bin_scopes_the_keys)
     Entry gone;
 
     memset(&gone, 0, sizeof(gone));
-    ASSERT_EQ_STATUS(store_soft_delete_by_key(s, "recs:books", k_now, &gone), STORE_OK);
+    ASSERT_EQ_STATUS(store_soft_delete_by_key(s, "recs:books", NULL, k_now, &gone), STORE_OK);
     store_entry_free(&gone);
     assert_keys_for(s, &sq, "");
     sq.filters.bin = STORE_BIN_DELETED;
@@ -963,7 +958,6 @@ TEST(store_search_paging_leaves_the_facets_whole)
     SearchQuery sq = given_facet_query("boo");
 
     sq.filters.limit = 1U;
-    sq.filters.offset = 1U;
     assert_keys_for(s, &sq, "recs:books");
     assert_tags_for(s, &sq, "type:books (1)");
     store_close(s);

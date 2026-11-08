@@ -27,7 +27,8 @@ TEST(tags_empty_db_json)
     ASSERT_TRUE(db != NULL);
     r = run_remember(db, args, sizeof(args) / sizeof(args[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 0);
-    ASSERT_STREQ(r.out, "{\"version\":1,\"count\":0,\"tags\":[]}\n");
+    ASSERT_STREQ(r.out, "{\"format\":\"remember-message\",\"version\":1,\"type\":\"tag.list."
+                        "result\",\"data\":{\"count\":0,\"tags\":[]}}\n");
     cmd_result_free(&r);
     free(db);
 }

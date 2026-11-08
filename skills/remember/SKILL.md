@@ -10,7 +10,7 @@ description: >
   chat-only notes for facts that must survive sessions. On deep review, get
   --key workflow:deep-review and follow it. On project pickup or pause, follow
   workflow:project-status (status:<slug> cards + links). Use with /remember or
-  remember add|search|list|get|update|delete|tags|purge|import|conflicts|device|link|unlink|related|rekey.
+  remember add|search|list|get|update|delete|tags|purge|import|conflicts|device|brain|link|unlink|related|rekey.
 ---
 
 # remember — agent skill
@@ -46,14 +46,15 @@ The device id is the sidecar `<db-path>.device_id` (never copy on import). Run `
 ## Global flags
 
 ```text
-remember [--db PATH] [--json] [--json-errors] [--busy-timeout MS] [--no-create] <command> …
+remember [--db PATH] [--json] [--strict] [--color=auto|always|never] [--quiet] [--busy-timeout MS] [--no-create] <command> [options] [args]
 ```
 
 | Flag | Meaning |
 |------|---------|
 | `--db PATH` | Overrides `REMEMBER_DB` and default `~/.remember/remember.db` |
-| `--json` | Machine-readable JSON on stdout (use this from agents) |
-| `--json-errors` | One JSON object per error or warning on stderr. Read `error.code` |
+| `--json` | One JSON envelope on stdout, also for errors and warnings (use this from agents) |
+| `--color auto\|always\|never` | Use color: auto, always, or never. auto uses color only on a terminal, when NO_COLOR is unset and TERM isn't dumb. |
+| `--quiet` | Turn off progress lines on stderr. |
 | `--busy-timeout MS` | Milliseconds to wait for a lock (0..60000, default 5000) |
 | `--no-create` | A missing brain file fails. Creates nothing |
 
@@ -66,13 +67,14 @@ remember [--db PATH] [--json] [--json-errors] [--busy-timeout MS] [--no-create] 
 | `0` | Success (including empty search/list; import with conflicts still exits 0) |
 | `1` | Usage or error |
 | `2` | Not found (`get` / `delete` / `update` / `rekey`) in either bin; `link`/`unlink`/`related` missing end |
-| `3` | Wrong bin. Tokens: `expired` / `not_expired` / `deleted` / `not_deleted`. Flip `--expired` or `--deleted`. **Not** used by `link`/`unlink`/`related` (those resolve live+expired by default). |
+| `3` | Wrong bin. `not_expired` / `not_deleted` stay those tokens. Trash: `remember: "<key>" is in the Trash. Add --trash to use it.` Expired: `remember: "<key>" has expired. Add --expired to use it.` `<key>` is the key, or the id when the row has no key. **Not** used by `link`/`unlink`/`related` (those resolve live+expired by default). |
+| `4` | A warning under `--strict` or `REMEMBER_STRICT=1`. Exit 4 has no other meaning. |
 
-Never invent ids, keys, or sync_ids. On exit `2`, the entry is missing — do not fabricate one. On exit `3`, the row exists in another bin.
+Never invent ids, keys, or `local_id`s. On exit `2`, the entry is missing — do not fabricate one. On exit `3`, the row exists in another bin.
 
 ## Errors
 
-Pass `--json-errors` when a command can fail. Each stderr line is then one JSON object, and there is no plain line. Warning lines (`warning.code`) can come before the error line, also when the command fails. Parse stderr line by line. Read `error.code`.
+With `--json`, a failure is the same one envelope on stdout: the command's `type`, then `error{code, message, fix, retryable, detail?}` instead of `data`. stderr stays empty. Warnings are `warnings[]` (`{code, message, detail?}`) at the end of the envelope, on success or failure. Read `error.code`; `error.fix` is the next step; `retryable` true (`busy`, `io_error`, `out_of_memory`) means the same command may work later.
 
 `busy` means another process holds the brain. Retry later. The tool does not retry.
 
@@ -80,41 +82,53 @@ Pass `--json-errors` when a command can fail. Each stderr line is then one JSON 
 
 ## Locators and bins
 
-Exactly **one** of: positional `ID` | `--key KEY` | `--sync-id UUID` (canonical lowercase UUID v7).
+Exactly **one** of: a positional UUID or digits (`local_id`) | `--key KEY`.
 
-Prefer **id** or **`--key`** day-to-day. Use **`--sync-id`** after merge / when citing across brains (local numeric ids can change).
+JSON `id` is the memory's lowercase hyphenated UUID. Pass that UUID, a number from `remember list`, or `--key` to address a memory. `--id`, `--local-id`, and `--sync-id` are unknown options. There is no alias.
 
 **Bins** (orthogonal flags; mutex):
 
 | Flag | Meaning |
 |------|---------|
 | (default) | **live** only |
-| `--expired` | expired bin only |
-| `--deleted` | soft-deleted bin only |
-| `--trash` | **deprecated** alias of `--expired` (one stderr deprecation line) |
+| `--expired` | expired memories: ones past their expiry time. They are not in the Trash. |
+| `--deleted` | soft-deleted bin only (the same bin as `--trash`) |
+| `--trash` | the Trash: memories you deleted. Not an alias of `--expired`. One warning this release (below). |
 
-There is no include-all-bins flag. JSON always has `"bin":"live"|"expired"|"deleted"` (never null, never omit). No `"trash"` field — stubs use `"bin"`.
+There is no include-all-bins flag. `--trash` and `--expired` cannot combine (`cannot combine --expired and --trash`). `--expired` and `--deleted` cannot combine. `--trash` and `--deleted` are the same bin.
+
+For one release, a command that uses `--trash` prints one warning. Code `flag_meaning_changed`. Detail `{"flag":"--trash","use":"--expired"}`. Plain: `remember: warning: --trash now means the Trash (deleted memories). For expired memories, use --expired.` With `--json`, that item is in `warnings` and stderr is empty. Under `--strict` or `REMEMBER_STRICT=1`, any warning exits 4.
+
+Help, on get, update, list, search, tags, and rekey:
+
+```text
+--trash     Use the Trash: memories you deleted. Restore them, or purge them for good.
+--expired   Use expired memories: ones past their expiry time. They are not in the Trash.
+```
+
+JSON always has `"bin":"live"|"expired"|"deleted"` (never null, never omit). No `"trash"` field — stubs use `"bin"`.
 
 ## Commands (agent style: always `--json` when parsing)
 
 ### add
 
 ```bash
-remember --json add --source agent --tag TOPIC "body text"
-remember --json add --source agent --key pref:editor "helix"
-remember --json add --source agent --key decision:db --tag project:foo "use SQLite FTS5"
+remember --json add --as agent --tag TOPIC "body text"
+remember --json add --as agent --key pref:editor "helix"
+remember --json add --as agent --key decision:db --tag project:foo "use SQLite FTS5"
 # stdin body:
-printf '%s' "long body" | remember --json add --source agent -
+printf '%s' "long body" | remember --json add --as agent -
 # literal body that is exactly a hyphen (not stdin):
-remember --json add --source agent -- -
+remember --json add --as agent -- -
 ```
 
 - Optional `--ttl 7d` (relative from **write** time; token `Nm`/`Nh`/`Nd`/`Nw`, no leading zeros) or `--expires YYYY-MM-DD` (local end-of-day → UTC) / `YYYY-MM-DDTHH:MM:SS[.frac]Z`. At most one. Past `--expires` is allowed (born expired).
-- Optional `--key KEY` → keyed **upsert** (same key replaces body; tags **union**; same id / sync_id)
-- Keyless → body-hash merge (duplicate body merges tags). Hitting an **expired or soft-deleted** same key/hash **revives** it (same sync_id).
+- Optional `--key KEY` → keyed **upsert** (same key replaces body; tags **union**; same `id`)
+- Keyless → body-hash merge (duplicate body merges tags). Hitting an **expired or soft-deleted** same key/hash **revives** it (same `id`).
 - Body token `-` alone means **stdin**; after `--`, `-` is a one-character body
-- `--source`: `human` | `agent` | `tool` | `share` | `unknown` (default `unknown`). **Agents pass `--source agent` on add only.** `share` is used by the Mac app Share/Service/Intent surfaces — agents should not set it.
-- Human stdout: id only. JSON: `{"version":1,"action":"created"|"merged"|"updated","count":1,"entries":[…]}`
+- `--as KIND`: `human` | `agent` | `tool` | `share` (default `human`); optional `--actor ID` (1 to 64 of `A-Za-z0-9_./:-`). **Agents pass `--as agent` on add.** `share` is used by the Mac app Share/Service/Intent surfaces — agents should not set it. There is no `--source`. Inside a hook (`REMEMBER_HOOK_DEPTH` ≥ 1) `--as` and `--actor` are refused.
+- Every write also takes `--hooks` / `--no-hooks`; until hooks ship they change nothing.
+- Human stdout: id only. JSON: type `memory.add.result`, `data` is `{"action":"created"|"merged"|"updated","memory":{…}}`; the memory includes `links`, like `get`.
 
 ### search / list / tags
 
@@ -122,7 +136,7 @@ remember --json add --source agent -- -
 remember --json search "editor preference"
 remember --json search boo                      # word prefixes: finds "Book"
 remember --json search 'book OR zed'            # FTS5 syntax still works
-remember --json search --tag project:foo --limit 20 --offset 0 --facet-limit 50 "query"
+remember --json search --tag project:foo --limit 20 --facet-limit 50 "query"
 remember --json list --tag pref --limit 20
 remember --json list --sort created --since 2026-10-19
 remember --json list --expired
@@ -131,10 +145,10 @@ remember --json tags
 
 - search: one required QUERY. Word prefixes match in keys, bodies and tags (`boo` finds "Book", `edit` finds `pref:editor`), and the QUERY also runs as FTS5 syntax. A QUERY FTS5 cannot parse still exits 0 with the prefix matches and a warning (FTS notes below). An empty or blank QUERY exits 0 with an empty result. Put `--` before a QUERY that starts with `-` (`search -- -x`); without it, `-x` is an unknown option.
 - Order: exact key, then key prefix, then relevance (bm25), then `updated_at`.
-- Filters: `--tag` (AND, repeatable), `--key`, `--source`, `--limit` (default 20, max 1000), `--offset` (≥ 0), `--expired` / `--deleted` (default **live only**). Number options take ASCII digits only (`+5` or ` 5` is a usage error).
-- JSON envelope (list): `version`, `offset`, `limit`, `count`, `total`, `entries` (full bodies + `links` stubs; empty array if none)
-- JSON envelope (search): `version`, `offset`, `limit`, `count`, `total`, `keys`, `tags`, `entries`. `keys` is `{"total":N,"items":[{"key","sync_id","label","source","updated_at"}]}`, `tags` is `{"total":N,"items":[{"tag","count"}]}`: the keys and tags that match the QUERY among the memories in the active bin and filters (not only the matched rows). `--facet-limit N` (default 50, 1..200) caps each `items`; `total` counts them all; `--limit` / `--offset` page `entries` only. `label` is the memory's `# ` title, else the key.
-- If `total` > rows received, page with `--offset` or raise `--limit` before concluding nothing else exists
+- Filters: `--tag` (AND, repeatable), `--key`, `--created-by KIND`, `--updated-by KIND`, `--limit` (default 20, max 1000), `--expired` / `--deleted` (default **live only**). Number options take ASCII digits only (`+5` or ` 5` is a usage error). `--offset` is an unknown option.
+- JSON (list): type `memory.list.result`; `data` has `count`, `total`, `entries` (full bodies + `links` stubs; empty array if none). The envelope adds `next_cursor` and `has_more` after `data`. The last page has `"next_cursor":null` and `"has_more":false`. Pass `next_cursor` back as `--cursor` **alone** (only `--limit` may change): the cursor carries the whole query. A filter, sort, or bin flag next to `--cursor`, or a bad cursor, is `invalid_argument` `invalid --cursor`.
+- JSON (search): type `memory.search.result`; `data` has `count`, `total`, `keys`, `tags`, `entries`. `keys` is `{"total":N,"items":[{"key","id","label","updated_at"}]}`, `tags` is `{"total":N,"items":[{"tag","count"}]}`: the keys and tags that match the QUERY among the memories in the active bin and filters (not only the matched rows). `id` is that memory's UUID. A key item has no `local_id`. `--facet-limit N` (default 50, 1..200) caps each `items`; `total` counts them all; `--limit` pages `entries` only. Search has no cursor. `label` is the memory's `# ` title, else the key. After `entries`: `query` (`{"original":{"text","tags","bins","time_range"}}`, what was asked), `"ranked_by":"bm25"`, `"filters":[]`.
+- If `total` > rows received, pass list's `next_cursor` as `--cursor`, or raise `--limit`, before concluding nothing else exists
 - list: same filters/paging; no FTS. `--sort updated` (default) orders by `updated_at DESC, id DESC`. `--sort created` orders by `created_at DESC, id DESC`.
 - `--since TS` is inclusive and `--until TS` is exclusive. On `list` they filter the sort field. On `search` they filter `updated_at`. `search --sort` is validated, then ignored.
 - TS is `YYYY-MM-DD` (local start of that day; a year before 1900 is `invalid timestamp`), `YYYY-MM-DDTHH:MM:SSZ`, or `YYYY-MM-DDTHH:MM:SS.mmmZ`. `since` at or after `until` is exit 0 with `count` 0 and `total` 0.
@@ -145,28 +159,25 @@ remember --json tags
 ```bash
 remember --json get 3
 remember --json get --key pref:editor
-remember --json get --sync-id 01234567-89ab-7cde-8f01-23456789abcd
 remember --json get --deleted 3
 remember --json delete 3                          # soft-delete (live or expired)
 remember --json delete --expired 3                # hard wipe one expired row
-remember --json delete --deleted 3                # hard wipe one deleted row
 remember --json update 3 --text "new body"
 remember --json update --key pref:editor --if-version-vector '{"<device>":1}' --text "nvim"
-remember --json update --deleted 3 --undelete     # restore from deleted
+remember --json update --trash 3 --undelete       # restore from the Trash
+remember --json update --deleted 3 --undelete     # same bin as --trash
 remember --json update --expired 3 --clear-expires
 remember --json rekey --key decision:old --to-key decision:new
 remember --json rekey 12 --clear-key
 remember --json purge --expired                   # wipe whole expired bin
-remember --json purge --deleted
-remember --json purge-trash                       # deprecated ≡ purge --expired
+remember --json purge --deleted                   # wipe the Trash (the Deleted bin)
 ```
 
 **Soft vs hard delete:**
 
-- Unflagged `delete` = **soft** (sets `deleted_at`, clears `expires_at`, keeps body/tags/key/sync_id/edges/FTS)
-- `delete --expired` / `delete --deleted` = **one-row hard** CASCADE
-- `purge --expired|--deleted` = whole-bin hard wipe
-- `--trash` ≡ `--expired` + deprecation stderr
+- Unflagged `delete` = **soft** (sets `deleted_at`, clears `expires_at`, keeps body/tags/key/id/edges/FTS)
+- `delete --expired` hard-wipes one row. `delete --deleted` does not exist. `delete --trash` does not wipe.
+- `purge --expired` / `purge --deleted` = whole-bin hard wipe. `purge --trash` selects the Deleted bin and warns. `purge-trash` does not exist.
 
 **Update rules:**
 
@@ -174,11 +185,11 @@ remember --json purge-trash                       # deprecated ≡ purge --expir
 - `--tag` + `--clear-tags` together → usage error
 - Omit tag flags → tags unchanged
 - Body only via `--text` (or `--text -` for stdin; `--text=-` for literal hyphen)
-- `--undelete` needs `--deleted`; mutex with ttl/expires flags
-- Never changes `source` or `key` (use `rekey` for keys)
+- `--undelete` restores a deleted row. Pass `--trash` or `--deleted`. Mutex with ttl/expires flags
+- Never changes `created_by` or `key` (use `rekey` for keys)
 - Read `version_vector` from the entry. Pass that object back with `--if-version-vector` (spacing does not matter). On code `stale` (`memory changed since it was read`), re-read and retry. A malformed vector is `usage` `invalid version vector: <vv>`. A wrong bin is still exit 3; the vector is checked only after the row is in the requested bin.
 - Keyless body-hash collision → exit 1 + conflicting id on stderr
-- JSON: `"action":"updated"` or `"action":"deleted"` with full entry snapshot. **add / update / delete / purge JSON have no `links` field**
+- JSON: `"action":"updated"` or `"action":"deleted"` with full entry snapshot. **update / delete / purge JSON have no `links` field.** add includes `links`, like get.
 
 ### import / conflicts / conflict accept
 
@@ -188,13 +199,13 @@ remember --json conflicts
 remember --json conflict accept --id 1 --keep local|incoming|both
 ```
 
-- Merges by **`sync_id`**. Source opened read-only; must be schema v4 or v5 (older or newer → exit 1).
+- Merges by **`id`** (the memory UUID). Source opened read-only; must be schema v4 or v5 (older or newer → exit 1).
 - Does **not** copy the foreign `.device_id` sidecar.
-- Exit **0** even when conflicts were recorded. **Always run `conflicts` after import.**
+- Exit **0** even when conflicts were recorded. The JSON reply lists them; plain output only counts them, so run `conflicts` after a plain import.
 - Reasons: `concurrent_vv` | `key_clash` | `hash_clash`
-- `--keep both` remints incoming `sync_id` on `concurrent_vv`; on clash keeps incoming sync_id (keyless if the slot is taken)
-- JSON import: `action:imported` + `inserted`/`updated`/`unchanged`/`conflicts`/`rejected` counts
-- `rejected`: rows skipped because a field is not what a local write would store: a key or tag (a control byte, uppercase, too long), a sync_id that is not a UUID v7, a timestamp not shaped `YYYY-MM-DDTHH:MM:SS.mmmZ`, a version vector that is not `{"<uuid v7>":<n>,...}`, a source outside the five tokens, or a body_hash that does not match the body. Nothing of that row is written.
+- `--keep both` remints the incoming memory `id` on `concurrent_vv`; on clash keeps the incoming `id` (keyless if the slot is taken)
+- JSON import: `action:imported`, `inserted`/`updated`/`unchanged` counts, then `conflicts` `{count, items}` (the conflict rows this import opened or refreshed, same objects as `conflicts`) and `rejected` `{count, items}` (each `{source_local_id, field}`, the first bad field)
+- `rejected`: rows skipped because a field is not what a local write would store: a key or tag (a control byte, uppercase, too long), an `id` that is not a UUID v7, a timestamp not shaped `YYYY-MM-DDTHH:MM:SS.mmmZ`, a version vector that is not `{"<uuid v7>":<n>,...}`, a source outside the five tokens, or a body_hash that does not match the body. Nothing of that row is written.
 
 ### device
 
@@ -204,17 +215,28 @@ remember --json device new
 ```
 
 - The device id is the sidecar `<db-path>.device_id` (one lowercase UUID, mode 0600). The database holds no second copy.
-- `device` prints that id. `--json` is `{"version":1,"device_id":"…"}`.
+- `device` prints that id. `--json` is type `device.get.result` with `data` `{"device_id":"…"}`.
 - `device new` mints a new id after a restore or a copied brain. It writes the sidecar and does not change version vectors. Plain output is the new id. `--json` adds `"previous"`.
 - `device new` also repairs an invalid sidecar. No other command does.
 - A missing sidecar is minted on open, so `"previous"` is that id. JSON `null` is only the type.
+
+### brain
+
+```bash
+remember brain new-id
+remember --json brain new-id
+```
+
+- `remember brain new-id` replaces `brain_meta.brain_id` with a new lowercase UUID v7 and prints that id. It does not change `change_seq`, a version vector, or a memory.
+- `--json` type is `brain.new_id.result`. `data` is `{brain_id, previous_brain_id}`.
+- The command name is `remember brain new-id`. There is no `remember brains`.
+- Opening a copied brain file does not change `brain_id`.
 
 ### link / unlink / related
 
 ```bash
 remember --json link --from 12 --to 64
 remember --json link 12 64 --kind cites
-remember --json link --from-sync-id … --to-sync-id …
 remember --json unlink --from 12 --to 64
 remember --json related 12
 remember --json related --deleted --key gonek
@@ -226,7 +248,7 @@ remember --json related --deleted --key gonek
 
 **Stub `type` (output, 5 names):** `related`, `cites`, `cited_by`, `supersedes`, `superseded_by`.
 
-**Locators:** each end is exactly one of id / `--*-key` / `--*-sync-id`. Default resolves **live+expired**; `--deleted` includes deleted ends. No exit 3 on graph commands. Default related/stubs **omit deleted** neighbors; expired neighbors stay visible with `bin=expired`.
+**Locators:** each end is exactly one of a UUID, digits (`local_id`), or `--*-key`. `--from-sync-id` and `--to-sync-id` are unknown options. Default resolves **live+expired**; `--deleted` includes deleted ends. No exit 3 on graph commands. Default related/stubs **omit deleted** neighbors; expired neighbors stay visible with `bin=expired`.
 
 **rekey:** change a key in place (`--to-key` / `--clear-key`). **Never delete + re-add to rename** — that CASCADE-drops edges.
 
@@ -234,12 +256,13 @@ remember --json related --deleted --key gonek
 
 ```json
 {
-  "id": 1,
-  "sync_id": "01234567-89ab-7cde-8f01-23456789abcd",
+  "id": "01234567-89ab-7cde-8f01-23456789abcd",
+  "local_id": 1,
   "key": "pref:editor",
   "body": "helix",
   "tags": ["tools"],
-  "source": "agent",
+  "created_by": {"kind": "agent", "id": null},
+  "updated_by": {"kind": "agent", "id": null},
   "created_at": "2026-07-26T12:00:00.000Z",
   "updated_at": "2026-07-26T12:00:00.000Z",
   "expires_at": null,
@@ -250,7 +273,7 @@ remember --json related --deleted --key gonek
 }
 ```
 
-Field order is fixed. `key` is JSON `null` when keyless. On **list / search / get** only, `"links"` follows `"version_vector"`. Stubs are `{id,sync_id,key,type,bin,preview}` — preview ≤ 40 codepoints. Human list/search sixth column is neighbor **ids** only (`[expired]`/`[deleted]` suffix; never `[trash]`).
+With `--json` the entry is `data.memory` (get, add, update, rekey) or one item of `data.entries` (list, search, delete, purge). Field order is fixed. `key` is JSON `null` when keyless. On **list / search / get / add** only, `"links"` follows `"version_vector"`. Stubs are `{id,local_id,key,type,bin,preview}` — `id` is the UUID, `local_id` the integer, preview ≤ 40 codepoints. Human list/search sixth column is neighbor **integers** only (`[expired]`/`[deleted]` suffix; never `[trash]`).
 
 ## Evolving facts — use `--key`
 
@@ -258,8 +281,8 @@ For anything that changes over time:
 
 1. `add --key pref:editor "value"` (first write or overwrite)
 2. Read/correct: `get --key` / `update --key --text …`
-3. Rename/promote/demote the key: `rekey --to-key` / `--clear-key` (keeps id + edges + sync_id)
-4. Soft-remove: `delete --key` (recover with `update --deleted … --undelete`)
+3. Rename/promote/demote the key: `rekey --to-key` / `--clear-key` (keeps `id`, `local_id`, and edges)
+4. Soft-remove: `delete --key` (recover with `update --trash … --undelete`)
 
 Keyed slots make duplicate rivals impossible. Keyless facts still resolve by recency (`updated_at`).
 
@@ -282,7 +305,7 @@ Agents should always use `--json` when parsing.
 - Word prefixes match first; the QUERY also runs as SQLite FTS5 MATCH syntax (`remember help search`)
 - The key is indexed: `search editor` finds `pref:editor`.
 - Hebrew marks are folded out of the index. The stored body keeps them.
-- A query FTS5 cannot parse is not an error: exit 0, prefix matches, and one stderr line `remember: warning: raw query ignored: <message>` (with `--json-errors`: `{"version":1,"warning":{"code":"raw_query_ignored","message":"<message>"}}`). A warning on stderr is not an error: trust the exit code
+- A query FTS5 cannot parse is not an error: exit 0, prefix matches, and one stderr line `remember: warning: raw query ignored: <message>` (with `--json`: the item `{"code":"raw_query_ignored","message":"<message>"}` in `warnings`). A warning on stderr is not an error: trust the exit code
 - Empty result set → exit 0 with `count:0` (not an error)
 
 ## Project status (handoff)
@@ -341,7 +364,7 @@ remember --json get --key status:treasurehunter
 remember --json related --key status:treasurehunter
 
 # Upsert handoff
-remember --json add --source agent --key status:treasurehunter \
+remember --json add --as agent --key status:treasurehunter \
   --tag status --tag project:treasurehunter "$(cat <<'EOF'
 STATE: blocked
 FOCUS: G5 uniques / post-lint play-test
@@ -359,10 +382,10 @@ remember --json link --from-key status:treasurehunter --to-key project:treasureh
 ## Safety checklist for agents
 
 1. No secrets in bodies or tags
-2. Prefer `--key` for prefs/decisions that will change; `--sync-id` only when citing across merges
+2. Prefer `--key` for prefs/decisions that will change. Pass `local_id` when the memory has no key
 3. Search before add when the subject may already exist
 4. Honor paging (`total` vs `count`)
-5. Cite real ids/keys/sync_ids from tool output only
+5. Cite real `id`s, `local_id`s, and keys from tool output only
 6. Keep the DB on local disk. The device id is the sidecar beside it. Run `device new` after a restore or a copied brain
 7. Link only for intentional pairs; tags for shared facets
 8. Read stub `bin` (`live`/`expired`/`deleted`); wrong-bin get → exit 3

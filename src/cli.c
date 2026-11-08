@@ -63,22 +63,15 @@ static const CommandEntry k_commands[] = {
     {.name = "version", .command = CLI_CMD_VERSION, .summary = "Show version"},
     {.name = "add",
      .command = CLI_CMD_ADD,
-     .summary = "Store a memory (optional --key, --tag, --source)"},
+     .summary = "Store a memory (optional --key, --tag, --as)"},
     {.name = "search", .command = CLI_CMD_SEARCH, .summary = "Full-text search"},
     {.name = "list", .command = CLI_CMD_LIST, .summary = "List memories with filters"},
-    {.name = "get",
-     .command = CLI_CMD_GET,
-     .summary = "Fetch one entry by id, --key, or --sync-id"},
+    {.name = "get", .command = CLI_CMD_GET, .summary = "Fetch one entry by id or --key"},
     {.name = "update",
      .command = CLI_CMD_UPDATE,
-     .summary = "Change body and/or tags by id, --key, or --sync-id"},
-    {.name = "delete",
-     .command = CLI_CMD_DELETE,
-     .summary = "Soft-delete an entry by id, --key, or --sync-id"},
+     .summary = "Change body and/or tags by id or --key"},
+    {.name = "delete", .command = CLI_CMD_DELETE, .summary = "Soft-delete an entry by id or --key"},
     {.name = "tags", .command = CLI_CMD_TAGS, .summary = "List all tags with entry counts"},
-    {.name = "purge-trash",
-     .command = CLI_CMD_PURGE_TRASH,
-     .summary = "Permanently delete every expired memory"},
     {.name = "purge",
      .command = CLI_CMD_PURGE,
      .summary = "Permanently delete every expired or deleted memory"},
@@ -99,6 +92,7 @@ static const CommandEntry k_commands[] = {
      .command = CLI_CMD_DEVICE,
      .summary = "Print the device id, or mint a new one"},
     {.name = "repair", .command = CLI_CMD_REPAIR, .summary = "Rebuild the search index"},
+    {.name = "brain", .command = CLI_CMD_BRAIN, .summary = "Replace the brain id"},
 };
 
 enum { COMMAND_COUNT = (int)(sizeof(k_commands) / sizeof(k_commands[0])) };
@@ -162,6 +156,8 @@ const char *cli_error_message(CliError err)
         return "option requires a value";
     case CLI_ERR_INVALID_BUSY_TIMEOUT:
         return "invalid --busy-timeout (must be 0..60000)";
+    case CLI_ERR_INVALID_COLOR:
+        return "invalid --color (must be auto, always, or never)";
     case CLI_ERR_INTERNAL:
         return "internal argument error";
     default:
@@ -180,10 +176,12 @@ static void cli_args_clear(CliArgs *out)
     out->help_topic = CLI_CMD_NONE;
     out->globals.db_path = NULL;
     out->globals.busy_timeout_ms = 0;
+    out->globals.color = CLI_COLOR_AUTO;
     out->globals.json = false;
-    out->globals.json_errors = false;
     out->globals.no_create = false;
     out->globals.busy_timeout_set = false;
+    out->globals.strict = false;
+    out->globals.quiet = false;
     out->rest_argc = 0;
     out->rest_argv = NULL;
 }
@@ -238,6 +236,74 @@ static int parse_busy_timeout(const char *raw, int *out_ms)
     return 0;
 }
 
+static bool color_from_word(const char *value, CliColor *out)
+{
+    if (strcmp(value, "auto") == 0) {
+        *out = CLI_COLOR_AUTO;
+        return true;
+    }
+    if (strcmp(value, "always") == 0) {
+        *out = CLI_COLOR_ALWAYS;
+        return true;
+    }
+    if (strcmp(value, "never") == 0) {
+        *out = CLI_COLOR_NEVER;
+        return true;
+    }
+    return false;
+}
+
+/* House usage shape, same as --busy-timeout. The words are the C-02 set. */
+static bool take_color_value(const char *value, CliArgs *out)
+{
+    CliColor color = CLI_COLOR_AUTO;
+
+    if (value == NULL || value[0] == '\0') {
+        out->error = CLI_ERR_MISSING_OPTION_VALUE;
+        out->error_option = "--color";
+        return true;
+    }
+    if (!color_from_word(value, &color)) {
+        out->error = CLI_ERR_INVALID_COLOR;
+        return true;
+    }
+    out->globals.color = color;
+    return true;
+}
+
+/* --quiet is a bare flag. --color takes auto, always, or never, as
+   --color=VALUE or as the next token. A token that looks like an option is
+   not a value. Last assignment wins. */
+static bool take_quiet_or_color(ArgCursor *cur, CliArgs *out)
+{
+    static const char prefix[] = "--color=";
+    const size_t prefix_len = sizeof(prefix) - 1U;
+    const char *arg = cursor_peek(cur);
+
+    if (arg == NULL) {
+        return false;
+    }
+    if (strcmp(arg, "--quiet") == 0) {
+        (void)cursor_next(cur);
+        out->globals.quiet = true;
+        return true;
+    }
+    if (strcmp(arg, "--color") == 0) {
+        (void)cursor_next(cur);
+        if (cursor_done(cur) || looks_like_option(cursor_peek(cur))) {
+            out->error = CLI_ERR_MISSING_OPTION_VALUE;
+            out->error_option = "--color";
+            return true;
+        }
+        return take_color_value(cursor_next(cur), out);
+    }
+    if (strncmp(arg, prefix, prefix_len) != 0) {
+        return false;
+    }
+    (void)cursor_next(cur);
+    return take_color_value(arg + prefix_len, out);
+}
+
 /* Consume a global at cursor if present. true = consumed (or failed in out). */
 static bool take_global(ArgCursor *cur, CliArgs *out)
 {
@@ -246,14 +312,17 @@ static bool take_global(ArgCursor *cur, CliArgs *out)
     if (arg == NULL) {
         return false;
     }
+    if (take_quiet_or_color(cur, out)) {
+        return true;
+    }
     if (strcmp(arg, "--json") == 0) {
         (void)cursor_next(cur);
         out->globals.json = true;
         return true;
     }
-    if (strcmp(arg, "--json-errors") == 0) {
+    if (strcmp(arg, "--strict") == 0) {
         (void)cursor_next(cur);
-        out->globals.json_errors = true;
+        out->globals.strict = true;
         return true;
     }
     if (strcmp(arg, "--no-create") == 0) {
@@ -441,8 +510,9 @@ static bool scan_option(ArgCursor *cur, CliArgs *out, const char *arg, int at, S
 }
 
 /*
- * Single pass over argv. Globals (--db/--json/--json-errors/--busy-timeout/--no-create)
- * and meta flags (--help/--version) are recognized wherever they appear and
+ * Single pass over argv. Globals (--db/--json/--strict/--color/--quiet/
+ * --busy-timeout/--no-create) and meta flags (--help/--version) are recognized
+ * wherever they appear and
  * stripped out; the first bare token is the subcommand; every other token
  * becomes a subcommand arg in rest_argv. A "--" ends option processing:
  * subsequent tokens are literal, even if they look like flags or globals.
@@ -469,6 +539,18 @@ static void scan_argv(ArgCursor *cur, CliArgs *out, ScanState *st)
     }
 }
 
+/* REMEMBER_STRICT=1 turns warnings into exit 4. Any other value leaves it off. */
+static void apply_strict_env(CliArgs *out)
+{
+    const char *value = NULL;
+
+    // NOLINTNEXTLINE(concurrency-mt-unsafe) -- single-threaded CLI; no C11 thread-safe getenv
+    value = getenv("REMEMBER_STRICT");
+    if (value != NULL && strcmp(value, "1") == 0) {
+        out->globals.strict = true;
+    }
+}
+
 void cli_parse(int argc, char *const *argv, CliArgs *out)
 {
     ArgCursor cur;
@@ -478,6 +560,7 @@ void cli_parse(int argc, char *const *argv, CliArgs *out)
         return;
     }
     cli_args_clear(out);
+    apply_strict_env(out);
 
     if (argc < 1 || argv == NULL) {
         out->error = CLI_ERR_INTERNAL;

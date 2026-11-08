@@ -35,8 +35,7 @@ TEST(add_basic_prints_id_one)
 TEST(add_with_tags_and_source_human)
 {
     char *db = make_temp_db_path();
-    const char *args[] = {"add",    "--tag",    "pref",  "--tag",
-                          "editor", "--source", "human", "use helix"};
+    const char *args[] = {"add", "--tag", "pref", "--tag", "editor", "--as", "human", "use helix"};
     CmdResult r;
     const char *gargs[] = {"get", "--json", "1"};
     CmdResult g;
@@ -48,7 +47,7 @@ TEST(add_with_tags_and_source_human)
 
     g = run_remember(db, gargs, sizeof(gargs) / sizeof(gargs[0]), NULL);
     ASSERT_EQ_INT(g.exit_code, 0);
-    ASSERT_STR_CONTAINS(g.out, "\"source\":\"human\"");
+    ASSERT_STR_CONTAINS(g.out, "\"created_by\":{\"kind\":\"human\",\"id\":null}");
     ASSERT_STR_CONTAINS(g.out, "pref");
     ASSERT_STR_CONTAINS(g.out, "editor");
     ASSERT_STR_CONTAINS(g.out, "use helix");
@@ -56,7 +55,7 @@ TEST(add_with_tags_and_source_human)
     free(db);
 }
 
-/* source defaults to unknown, which a v6 actor stores as human (008 §8 step 1). */
+/* A person at the CLI is human with a null id. */
 TEST(add_default_source_reads_back_as_human)
 {
     char *db = make_temp_db_path();
@@ -70,7 +69,8 @@ TEST(add_default_source_reads_back_as_human)
     cmd_result_free(&r);
     g = run_remember(db, gargs, sizeof(gargs) / sizeof(gargs[0]), NULL);
     ASSERT_EQ_INT(g.exit_code, 0);
-    ASSERT_STR_CONTAINS(g.out, "\"source\":\"human\"");
+    ASSERT_STR_CONTAINS(g.out, "\"created_by\":{\"kind\":\"human\",\"id\":null}");
+    ASSERT_STR_CONTAINS(g.out, "\"updated_by\":{\"kind\":\"human\",\"id\":null}");
     cmd_result_free(&g);
     free(db);
 }
@@ -80,8 +80,8 @@ TEST(add_source_agent_tool_accepted)
     char *db = make_temp_db_path();
     CmdResult r1;
     CmdResult r2;
-    const char *a1[] = {"add", "--source", "agent", "from agent"};
-    const char *a2[] = {"add", "--source", "tool", "from tool"};
+    const char *a1[] = {"add", "--as", "agent", "from agent"};
+    const char *a2[] = {"add", "--as", "tool", "from tool"};
     ASSERT_TRUE(db != NULL);
     r1 = run_remember(db, a1, sizeof(a1) / sizeof(a1[0]), NULL);
     r2 = run_remember(db, a2, sizeof(a2) / sizeof(a2[0]), NULL);
@@ -98,21 +98,21 @@ TEST(add_source_share_accepted)
     CmdResult add_r;
     CmdResult get_r;
     CmdResult list_r;
-    const char *a_add[] = {"add", "--json", "--source", "share", "from share sheet"};
+    const char *a_add[] = {"add", "--json", "--as", "share", "from share sheet"};
     const char *a_get[] = {"get", "--json", "1"};
-    const char *a_list[] = {"list", "--json", "--source", "share"};
+    const char *a_list[] = {"list", "--json", "--created-by", "share"};
     ASSERT_TRUE(db != NULL);
     add_r = run_remember(db, a_add, sizeof(a_add) / sizeof(a_add[0]), NULL);
     ASSERT_EQ_INT(add_r.exit_code, 0);
-    ASSERT_STR_CONTAINS(add_r.out, "\"source\":\"share\"");
+    ASSERT_STR_CONTAINS(add_r.out, "\"created_by\":{\"kind\":\"share\",\"id\":null}");
     cmd_result_free(&add_r);
     get_r = run_remember(db, a_get, sizeof(a_get) / sizeof(a_get[0]), NULL);
     ASSERT_EQ_INT(get_r.exit_code, 0);
-    ASSERT_STR_CONTAINS(get_r.out, "\"source\":\"share\"");
+    ASSERT_STR_CONTAINS(get_r.out, "\"created_by\":{\"kind\":\"share\",\"id\":null}");
     cmd_result_free(&get_r);
     list_r = run_remember(db, a_list, sizeof(a_list) / sizeof(a_list[0]), NULL);
     ASSERT_EQ_INT(list_r.exit_code, 0);
-    ASSERT_STR_CONTAINS(list_r.out, "\"source\":\"share\"");
+    ASSERT_STR_CONTAINS(list_r.out, "\"created_by\":{\"kind\":\"share\",\"id\":null}");
     cmd_result_free(&list_r);
     free(db);
 }
@@ -120,7 +120,7 @@ TEST(add_source_share_accepted)
 TEST(add_invalid_source_rejected)
 {
     char *db = make_temp_db_path();
-    const char *args[] = {"add", "--source", "robot", "nope"};
+    const char *args[] = {"add", "--as", "robot", "nope"};
     CmdResult r;
     ASSERT_TRUE(db != NULL);
     r = run_remember(db, args, sizeof(args) / sizeof(args[0]), NULL);
@@ -224,8 +224,8 @@ TEST(add_dedupe_keeps_original_source)
     CmdResult r1;
     CmdResult r2;
     CmdResult g;
-    const char *a1[] = {"add", "--source", "human", "stable body"};
-    const char *a2[] = {"add", "--source", "agent", "--tag", "x", "stable body"};
+    const char *a1[] = {"add", "--as", "human", "stable body"};
+    const char *a2[] = {"add", "--as", "agent", "--tag", "x", "stable body"};
     const char *gargs[] = {"get", "--json", "1"};
     ASSERT_TRUE(db != NULL);
     r1 = run_remember(db, a1, sizeof(a1) / sizeof(a1[0]), NULL);
@@ -236,7 +236,8 @@ TEST(add_dedupe_keeps_original_source)
     cmd_result_free(&r2);
     g = run_remember(db, gargs, sizeof(gargs) / sizeof(gargs[0]), NULL);
     ASSERT_EQ_INT(g.exit_code, 0);
-    ASSERT_STR_CONTAINS(g.out, "\"source\":\"human\"");
+    ASSERT_STR_CONTAINS(g.out, "\"created_by\":{\"kind\":\"human\",\"id\":null}");
+    ASSERT_STR_CONTAINS(g.out, "\"updated_by\":{\"kind\":\"agent\",\"id\":null}");
     cmd_result_free(&g);
     free(db);
 }
@@ -249,10 +250,8 @@ TEST(add_json_created_shape)
     ASSERT_TRUE(db != NULL);
     r = run_remember(db, args, sizeof(args) / sizeof(args[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 0);
-    ASSERT_STR_CONTAINS(r.out, "\"version\":1");
-    ASSERT_STR_CONTAINS(r.out, "\"action\":\"created\"");
-    ASSERT_STR_CONTAINS(r.out, "\"count\":1");
-    ASSERT_STR_CONTAINS(r.out, "\"entries\"");
+    ASSERT_STR_PREFIX(r.out, "{\"format\":\"remember-message\",\"version\":1,\"type\":\"memory.add."
+                             "result\",\"data\":{\"action\":\"created\",\"memory\":{");
     ASSERT_STR_CONTAINS(r.out, "json body");
     ASSERT_STR_CONTAINS(r.out, "t");
     cmd_result_free(&r);
@@ -271,8 +270,8 @@ TEST(add_json_merged_shape)
     r2 = run_remember(db, a2, sizeof(a2) / sizeof(a2[0]), NULL);
     ASSERT_EQ_INT(r1.exit_code, 0);
     ASSERT_EQ_INT(r2.exit_code, 0);
-    ASSERT_STR_CONTAINS(r2.out, "\"action\":\"merged\"");
-    ASSERT_STR_CONTAINS(r2.out, "\"entries\"");
+    ASSERT_STR_PREFIX(r2.out, "{\"format\":\"remember-message\",\"version\":1,\"type\":\"memory."
+                              "add.result\",\"data\":{\"action\":\"merged\",\"memory\":{");
     cmd_result_free(&r1);
     cmd_result_free(&r2);
     free(db);
@@ -606,7 +605,7 @@ TEST(get_human_body_preserves_newlines)
     free(db);
 }
 
-/* An id that overflows long long is an invalid id (exit 1), not a lookup miss. */
+/* An id that overflows long long is not a memory id (exit 1), not a lookup miss. */
 TEST(get_overflow_id_rejected)
 {
     char *db = make_temp_db_path();
@@ -616,8 +615,107 @@ TEST(get_overflow_id_rejected)
     ASSERT_TRUE(db != NULL);
     g = run_remember(db, gargs, sizeof(gargs) / sizeof(gargs[0]), NULL);
     ASSERT_EQ_INT(g.exit_code, 1);
-    ASSERT_STR_CONTAINS(g.err, "invalid id");
+    ASSERT_STR_CONTAINS(g.err, "\"99999999999999999999999\" isn't a memory id");
     cmd_result_free(&g);
+    free(db);
+}
+
+/* --as replaces kind and does not clear --actor. A hook may not pass either flag. */
+TEST(add_actor_flags_and_a_hook_rejects_them)
+{
+    char *db = make_temp_db_path();
+    char long_id[TOKEN_OVERLONG_BUFSIZE];
+    CmdResult r;
+    const char *stamped[] = {"add",  "--json", "--actor", "plugin/demo/run",
+                             "--as", "agent",  "stamped"};
+    const char *last[] = {"add",   "--json",  "--as", "tool", "--as",
+                          "agent", "--actor", "bot",  "last"};
+    const char *bad_as[] = {"add", "--as", "import", "nope"};
+    const char *bad_sync[] = {"add", "--as", "sync", "nope"};
+    const char *miss_as[] = {"add", "--as"};
+    const char *miss_id[] = {"add", "--actor"};
+    const char *empty_id[] = {"add", "--actor", "", "nope"};
+    const char *space_id[] = {"add", "--actor", "a b", "nope"};
+    const char *hook_flag[] = {"add", "--as", "agent", "blocked"};
+    const char *hook_json[] = {"--json", "add", "--actor", "bot", "blocked"};
+    const char *hook_plain[] = {"add", "a hook with no actor flag"};
+    const char *depth_zero[] = {"add", "--json", "--as", "tool", "allowed"};
+
+    ASSERT_TRUE(db != NULL);
+    memset(long_id, 'a', (size_t)TOKEN_OVERLONG_LEN);
+    long_id[TOKEN_OVERLONG_LEN] = '\0';
+    r = run_remember(db, stamped, sizeof(stamped) / sizeof(stamped[0]), NULL);
+    ASSERT_EQ_INT(r.exit_code, 0);
+    ASSERT_STR_CONTAINS(r.out, "\"created_by\":{\"kind\":\"agent\",\"id\":\"plugin/demo/run\"}");
+    ASSERT_STR_CONTAINS(r.out, "\"updated_by\":{\"kind\":\"agent\",\"id\":\"plugin/demo/run\"}");
+    cmd_result_free(&r);
+    r = run_remember(db, last, sizeof(last) / sizeof(last[0]), NULL);
+    ASSERT_EQ_INT(r.exit_code, 0);
+    ASSERT_STR_CONTAINS(r.out, "\"created_by\":{\"kind\":\"agent\",\"id\":\"bot\"}");
+    cmd_result_free(&r);
+    r = run_remember(db, bad_as, sizeof(bad_as) / sizeof(bad_as[0]), NULL);
+    ASSERT_EQ_INT(r.exit_code, 1);
+    ASSERT_STR_CONTAINS(r.err, "invalid --as (use human, agent, tool, or share)");
+    cmd_result_free(&r);
+    r = run_remember(db, bad_sync, sizeof(bad_sync) / sizeof(bad_sync[0]), NULL);
+    ASSERT_EQ_INT(r.exit_code, 1);
+    ASSERT_STR_CONTAINS(r.err, "invalid --as (use human, agent, tool, or share)");
+    cmd_result_free(&r);
+    r = run_remember(db, miss_as, sizeof(miss_as) / sizeof(miss_as[0]), NULL);
+    ASSERT_EQ_INT(r.exit_code, 1);
+    ASSERT_STR_CONTAINS(r.err, "missing value for --as");
+    cmd_result_free(&r);
+    r = run_remember(db, miss_id, sizeof(miss_id) / sizeof(miss_id[0]), NULL);
+    ASSERT_EQ_INT(r.exit_code, 1);
+    ASSERT_STR_CONTAINS(r.err, "missing value for --actor");
+    cmd_result_free(&r);
+    r = run_remember(db, empty_id, sizeof(empty_id) / sizeof(empty_id[0]), NULL);
+    ASSERT_EQ_INT(r.exit_code, 1);
+    ASSERT_STR_CONTAINS(r.err, "invalid --actor (1 to 64 of A-Za-z0-9_./:-)");
+    cmd_result_free(&r);
+    r = run_remember(db, space_id, sizeof(space_id) / sizeof(space_id[0]), NULL);
+    ASSERT_EQ_INT(r.exit_code, 1);
+    ASSERT_STR_CONTAINS(r.err, "invalid --actor");
+    cmd_result_free(&r);
+    {
+        const char *long_args[] = {"add", "--actor", long_id, "nope"};
+
+        r = run_remember(db, long_args, sizeof(long_args) / sizeof(long_args[0]), NULL);
+        ASSERT_EQ_INT(r.exit_code, 1);
+        ASSERT_STR_CONTAINS(r.err, "invalid --actor");
+        cmd_result_free(&r);
+    }
+    // NOLINTBEGIN(concurrency-mt-unsafe) — the child inherits this process-global
+    (void)setenv("REMEMBER_HOOK_DEPTH", "1", 1);
+    r = run_remember(db, hook_flag, sizeof(hook_flag) / sizeof(hook_flag[0]), NULL);
+    (void)unsetenv("REMEMBER_HOOK_DEPTH");
+    ASSERT_EQ_INT(r.exit_code, 1);
+    ASSERT_STREQ(r.err, "remember: --as and --actor can't be used inside a hook. Remove --as and "
+                        "--actor. remember stamps hook writes itself.\n");
+    cmd_result_free(&r);
+    (void)setenv("REMEMBER_HOOK_DEPTH", "1", 1);
+    r = run_remember(db, hook_json, sizeof(hook_json) / sizeof(hook_json[0]), NULL);
+    (void)unsetenv("REMEMBER_HOOK_DEPTH");
+    ASSERT_EQ_INT(r.exit_code, 1);
+    ASSERT_STREQ(r.err, "");
+    ASSERT_STR_CONTAINS(r.out, "\"code\":\"invalid_argument\"");
+    ASSERT_STR_CONTAINS(
+        r.out, "\"error\":{\"code\":\"invalid_argument\",\"message\":\"--as and --actor "
+               "can't be used inside a hook.\",\"fix\":\"Remove --as and --actor. remember "
+               "stamps hook writes itself.\",\"retryable\":false}");
+    cmd_result_free(&r);
+    (void)setenv("REMEMBER_HOOK_DEPTH", "1", 1);
+    r = run_remember(db, hook_plain, sizeof(hook_plain) / sizeof(hook_plain[0]), NULL);
+    (void)unsetenv("REMEMBER_HOOK_DEPTH");
+    ASSERT_EQ_INT(r.exit_code, 0);
+    cmd_result_free(&r);
+    (void)setenv("REMEMBER_HOOK_DEPTH", "0", 1);
+    r = run_remember(db, depth_zero, sizeof(depth_zero) / sizeof(depth_zero[0]), NULL);
+    (void)unsetenv("REMEMBER_HOOK_DEPTH");
+    // NOLINTEND(concurrency-mt-unsafe)
+    ASSERT_EQ_INT(r.exit_code, 0);
+    ASSERT_STR_CONTAINS(r.out, "\"created_by\":{\"kind\":\"tool\",\"id\":null}");
+    cmd_result_free(&r);
     free(db);
 }
 
@@ -629,6 +727,7 @@ void register_add_tests(void)
     RUN_TEST(add_source_agent_tool_accepted);
     RUN_TEST(add_source_share_accepted);
     RUN_TEST(add_invalid_source_rejected);
+    RUN_TEST(add_actor_flags_and_a_hook_rejects_them);
     RUN_TEST(add_empty_body_rejected);
     RUN_TEST(add_whitespace_only_body_rejected);
     RUN_TEST(add_body_trimmed_before_store);

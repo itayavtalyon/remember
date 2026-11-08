@@ -64,7 +64,8 @@ typedef struct {
     char *body;
     char **tags; /* ntags heap strings; may be NULL when ntags == 0 */
     size_t ntags;
-    char *source;
+    char *created_by; /* canonical actor JSON; never NULL after a successful load */
+    char *updated_by; /* canonical actor JSON; never NULL after a successful load */
     char *created_at;
     char *updated_at;
     char *expires_at;     /* NULL if none (durable) */
@@ -228,6 +229,20 @@ const char *store_device_id(const Store *s);
 StoreStatus store_device_new(Store *s, char *prev_out, size_t prev_len, bool *had_prev, char *err,
                              size_t errlen);
 
+/* The id `brain new-id` wrote, and the id it replaced. Both are canonical. */
+typedef struct {
+    char id[STORE_DEVICE_ID_LEN + 1];
+    char previous[STORE_DEVICE_ID_LEN + 1];
+} StoreBrainId;
+
+/*
+ * Replace brain_meta.brain_id with a new lowercase UUID v7 (JE-3.9).
+ * Does not change change_seq, a version vector, or a memory.
+ * On STORE_OK, out->id is the new id and out->previous is the one it replaced.
+ * A newer min_reader_version is STORE_ERR_SCHEMA_TOO_NEW and writes nothing.
+ */
+StoreStatus store_brain_new_id(Store *s, StoreBrainId *out);
+
 /* Release heap fields of *e and zero it. Safe with NULL e or zeroed Entry. */
 void store_entry_free(Entry *e);
 
@@ -237,7 +252,9 @@ int utc_now(char *buf, size_t buflen);
 /*
  * Insert or merge/upsert one memory.
  *
- * body / body_hash / source are required (already normalized by the command).
+ * body / body_hash / actor are required (already normalized by the command).
+ * actor is a kind token (human, agent, tool, share, import; unknown means human)
+ * or canonical actor JSON. id is null when actor is a kind token.
  * key_or_null is NULL for keyless, or a normalized key.
  * tags are normalized names (ntags may be 0; tags may be NULL then).
  * expires_at is NULL (durable) or a canonical .mmmZ string.
@@ -250,7 +267,7 @@ int utc_now(char *buf, size_t buflen);
  * On failure, *out_entry is left untouched / zeroed by the caller first.
  */
 StoreStatus store_add(Store *s, const char *body, const char *body_hash, const char *key_or_null,
-                      const char *const *tags, size_t ntags, const char *source,
+                      const char *const *tags, size_t ntags, const char *actor,
                       const char *expires_at, const char *now, StoreAddAction *out_action,
                       Entry *out_entry);
 
@@ -269,20 +286,25 @@ StoreStatus store_get_by_sync_id(Store *s, const char *sync_id, StoreBin bin, co
 /*
  * List filters (AND across tags). All string fields are normalized by the
  * command layer; NULL / ntags==0 means "no filter on that axis".
- * limit and offset are required as given (CLI enforces default/max/min).
+ * limit is required as given (CLI enforces default/max).
+ * after_at NULL is the first page. Otherwise the page starts after that
+ * sort-column value and after_local_id (column DESC, local_id DESC).
  * sort is the list time column (order and since/until). Zero is updated.
  * since is inclusive and until is exclusive; both are canonical .mmmZ or NULL.
- * Search reuses the struct: it ignores sort and applies since/until to updated_at.
+ * Search reuses the struct: it ignores sort and after_at, and applies
+ * since/until to updated_at.
  */
 typedef struct {
     const char *const *tags; /* may be NULL when ntags == 0 */
-    const char *source;      /* NULL = any */
+    const char *created_by;  /* kind, or NULL = any */
+    const char *updated_by;  /* kind, or NULL = any */
     const char *key;         /* NULL = any; exact match */
+    const char *after_at;    /* NULL = first page; not freed by the store */
     size_t ntags;
     size_t limit;
-    size_t offset;
-    StoreBin bin;   /* LIVE (default) / EXPIRED / DELETED */
-    StoreSort sort; /* UPDATED (zero) / CREATED */
+    long long after_local_id; /* read only when after_at != NULL */
+    StoreBin bin;             /* LIVE (default) / EXPIRED / DELETED */
+    StoreSort sort;           /* UPDATED (zero) / CREATED */
     const char *since;
     const char *until;
 } ListQuery;
@@ -292,13 +314,16 @@ typedef struct {
  * entries is a heap array of count Entries (free each with store_entry_free, then
  * free the array) and total is the unpaged count; on error entries is NULL and
  * count/total are 0. count and total travel together so they cannot be transposed.
+ * has_more is true when another row matched past this page. total stays the
+ * unpaged filter count. Search leaves has_more unused.
  */
 typedef struct {
     Entry *entries;
     size_t count;
     size_t total;
     StoreStatus st;
-    char pad_[4]; /* explicit tail padding (kept -Wpadded-clean) */
+    bool has_more;
+    char pad_[3]; /* explicit tail padding (kept -Wpadded-clean) */
 } PageResult;
 
 /*
@@ -312,8 +337,8 @@ PageResult store_list(Store *s, const ListQuery *q, const char *now);
 /*
  * Union search (006 E2.1). query is the user's QUERY, valid UTF-8 (the CLI
  * checks, D27; invalid is STORE_ERR_INTERNAL). filters reuse ListQuery: tag
- * AND, optional source/key, limit/offset, since/until on updated_at; sort is
- * ignored. facet_limit caps keys.items and tags.items as given, like limit
+ * AND, optional created_by/updated_by kind, key, limit, since/until on updated_at; sort and
+ * after_at are ignored. facet_limit caps keys.items and tags.items as given, like limit
  * (the CLI enforces 1..200); zero returns totals and no items.
  */
 typedef struct {
@@ -327,7 +352,6 @@ typedef struct {
     char *key;
     char *sync_id;
     char *label;
-    char *source;
     char *updated_at;
 } SearchKeyItem;
 
@@ -372,11 +396,14 @@ void store_search_result_free(SearchResult *res);
 
 /*
  * Soft-delete one entry (locator: live or expired). Sets deleted_at=now, clears
- * expires_at, keeps body/tags/key/sync_id/edges/FTS, bumps VV + updated_at.
+ * expires_at, keeps body/tags/key/sync_id/edges/FTS, bumps VV + updated_at
+ * and sets updated_by from actor (NULL actor is human, id null).
  * Already deleted → STORE_ERR_DELETED. *out is the post-mutation snapshot.
  */
-StoreStatus store_soft_delete_by_id(Store *s, long long id, const char *now, Entry *out);
-StoreStatus store_soft_delete_by_key(Store *s, const char *key, const char *now, Entry *out);
+StoreStatus store_soft_delete_by_id(Store *s, long long id, const char *actor, const char *now,
+                                    Entry *out);
+StoreStatus store_soft_delete_by_key(Store *s, const char *key, const char *actor, const char *now,
+                                     Entry *out);
 
 /*
  * Hard CASCADE one row. bin must be EXPIRED or DELETED (LIVE → INTERNAL; hard
@@ -401,6 +428,7 @@ typedef struct {
     const char *const *tags; /* may be NULL when ntags == 0 */
     const char *expires_at;  /* with set_expires: NULL clears, ISO writes */
     const char *if_version_vector;
+    const char *actor; /* kind token, canonical JSON, or NULL (human, id null) */
     size_t ntags;
     StoreBin bin;
     bool set_body;
@@ -416,8 +444,9 @@ typedef struct {
  * set_expires + expires_at NULL clears expiry; set_expires + ISO writes it.
  * undelete clears deleted_at (locator is normally STORE_BIN_DELETED).
  * bin + now apply the locator bin (same as get/delete).
- * On success always refreshes updated_at and re-syncs FTS in the same write
- * transaction. Never changes source or key.
+ * A change refreshes updated_at, updated_by, the memory vector, and FTS in the
+ * same write transaction. created_by stays. A write that changes nothing does
+ * not. Never changes the key.
  *
  * Keyless body-hash conflict: if set_body and the entry has no key and another
  * keyless row already owns body_hash → STORE_ERR_CONFLICT and, when
@@ -525,19 +554,23 @@ int store_sync_id_is_canonical(const char *s);
 /*
  * Upsert one edge. related is stored as (min,max,related). Directed is
  * (from,to,kind). Self-link → SELF_LINK; missing id → NOT_FOUND; supersedes
- * cycle → CYCLE. Real write bumps updated_at on both endpoints.
+ * cycle → CYCLE. A real write sets updated_at and updated_by on both
+ * endpoints and does not change either memory vector. The link row's vector
+ * goes up by one. actor NULL is human, id null.
  * *out_stub is subject-relative to from_id (caller frees).
  */
-StoreStatus store_link(Store *s, StoreEdge edge, StoreEdgeKind kind, const char *now,
-                       StoreLinkAction *out_action, StoreNeighbor *out_stub);
+StoreStatus store_link(Store *s, StoreEdge edge, StoreEdgeKind kind, const char *actor,
+                       const char *now, StoreLinkAction *out_action, StoreNeighbor *out_stub);
 
 /*
  * Delete edges. kind NULL = all kinds between the unordered pair. related
  * canonicalizes. Directed deletes the given (from,to,kind) only. Missing is
- * OK (count 0, no bump). Real delete bumps both endpoints.
+ * OK (count 0, no bump). A real unlink keeps the row and sets deleted_at.
+ * Endpoints get updated_at and updated_by and no memory-vector change.
  */
 StoreStatus store_unlink(Store *s, long long from_id, long long to_id, const StoreEdgeKind *kind,
-                         const char *now, StoreNeighbor **out_stubs, size_t *out_count);
+                         const char *actor, const char *now, StoreNeighbor **out_stubs,
+                         size_t *out_count);
 
 /*
  * Neighbors of one subject. kind NULL = all stored kinds. related edges appear
@@ -555,33 +588,11 @@ StoreStatus store_list_neighbors_for(Store *s, const long long *ids, size_t nids
  * Change key in place. Locator like update (id or key_or_null, bin+now).
  * new_key_or_null NULL = clear (demote); non-NULL = set/rename (must be
  * non-empty). Id and edges preserved. NEWKEY taken or demote body-hash
- * collision → CONFLICT + *out_conflict_id. Always bumps updated_at.
+ * collision → CONFLICT + *out_conflict_id. A real change bumps updated_at,
+ * updated_by, and the memory vector. The same key does not.
  */
-StoreStatus store_rekey(Store *s, long long id, RekeyKeys keys, StoreBin bin, const char *now,
-                        Entry *out_entry, long long *out_conflict_id);
-
-/* Counts from store_import (JSON envelope fields). */
-typedef struct {
-    size_t inserted;
-    size_t updated;
-    size_t unchanged;
-    size_t conflicts;
-    size_t rejected; /* key or tag not as a local write would store it; row skipped */
-} StoreImportCounts;
-
-/*
- * Merge another remember DB by sync_id (Round 7 VV / unique rules). Opens
- * src_path read-only inside the adapter (never store_open; never touches the
- * foreign sidecar; never reads devices). user_version < 4 →
- * STORE_ERR_SOURCE_TOO_OLD. user_version > 5 → STORE_ERR_SOURCE_TOO_NEW
- * ("database is newer than this remember"). A missing conflicts.origin column
- * or a missing bucket_prefixes / settings table is absent, not an error; those
- * rows are not copied. A row whose key or a tag is not what normalize_token
- * would store is skipped and counted in rejected. Exit-path JSON: action
- * imported + these counts; STORE_OK even when conflicts or rejected > 0.
- */
-StoreStatus store_import(Store *dst, const char *src_path, const char *now,
-                         StoreImportCounts *out_counts);
+StoreStatus store_rekey(Store *s, long long id, RekeyKeys keys, StoreBin bin, const char *actor,
+                        const char *now, Entry *out_entry, long long *out_conflict_id);
 
 /* Closed conflict reason enum (Round 7). Unknown on disk → store error. */
 typedef enum {
@@ -606,6 +617,45 @@ typedef struct {
 /* List open conflicts (id ASC). Caller frees with store_conflicts_free. */
 StoreStatus store_conflicts_list(Store *s, StoreConflict **out_rows, size_t *out_count);
 void store_conflicts_free(StoreConflict *rows, size_t count);
+
+/* A source row import skipped (decision:plan21-import-problem-rows). */
+typedef struct {
+    long long source_local_id; /* the row's integer id in the source brain */
+    const char *field;         /* static: the first field that failed, in the order
+                                  key, tags, id, created_at, updated_at, expires_at,
+                                  deleted_at, version_vector, source, body_hash */
+} StoreImportReject;
+
+/* What store_import did. Release with store_import_result_free. */
+typedef struct {
+    size_t inserted;
+    size_t updated;
+    size_t unchanged;
+    StoreConflict *conflicts; /* rows this import opened or refreshed, id ASC */
+    size_t nconflicts;
+    long long *conflict_ids; /* working list while importing; empty on return */
+    size_t nconflict_ids;
+    size_t conflict_cap;
+    StoreImportReject *rejected;
+    size_t nrejected;
+    size_t rejected_cap;
+} StoreImportResult;
+
+void store_import_result_free(StoreImportResult *r);
+
+/*
+ * Merge another remember DB by sync_id (Round 7 VV / unique rules). Opens
+ * src_path read-only inside the adapter (never store_open; never touches the
+ * foreign sidecar; never reads devices). user_version < 4 →
+ * STORE_ERR_SOURCE_TOO_OLD. user_version > 5 → STORE_ERR_SOURCE_TOO_NEW
+ * ("database is newer than this remember"). A missing conflicts.origin column
+ * or a missing bucket_prefixes / settings table is absent, not an error; those
+ * rows are not copied. A row whose key or a tag is not what normalize_token
+ * would store, or any other peer field that is not the shape a local write
+ * stores, is skipped and listed in rejected. STORE_OK even when conflicts or
+ * rejected are not empty. On any other status the result is empty.
+ */
+StoreStatus store_import(Store *dst, const char *src_path, const char *now, StoreImportResult *out);
 
 typedef enum { STORE_KEEP_LOCAL = 0, STORE_KEEP_INCOMING, STORE_KEEP_BOTH } StoreConflictKeep;
 

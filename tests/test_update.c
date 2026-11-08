@@ -5,7 +5,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-enum { TS_BUFSIZE = 32, SYNC_ID_CAP = 40, VV_CAP = 128 }; /* stamp, UUID, version vector */
+enum { TS_BUFSIZE = 32, VV_CAP = 128 }; /* stamp, version vector */
 
 /* Copy the value of a `"key":"..."` JSON string field into out (empty if absent). */
 static void extract_json_str(const char *json, const char *key, char *out, size_t outsz)
@@ -64,7 +64,7 @@ static void extract_version_vector(const char *json, char *out, size_t outsz)
 
 static void seed_tagged(const char *db)
 {
-    const char *args[] = {"add", "--tag", "a", "--tag", "b", "--source", "human", "original body"};
+    const char *args[] = {"add", "--tag", "a", "--tag", "b", "--as", "human", "original body"};
     CmdResult r = run_remember(db, args, sizeof(args) / sizeof(args[0]), NULL);
     cmd_result_free(&r);
 }
@@ -155,8 +155,8 @@ TEST(update_same_text_still_succeeds_and_returns_entry)
     seed_tagged(db);
     u = run_remember(db, uargs, sizeof(uargs) / sizeof(uargs[0]), NULL);
     ASSERT_EQ_INT(u.exit_code, 0);
-    ASSERT_STR_CONTAINS(u.out, "\"action\":\"updated\"");
-    ASSERT_STR_CONTAINS(u.out, "\"entries\"");
+    ASSERT_STR_PREFIX(u.out, "{\"format\":\"remember-message\",\"version\":1,\"type\":\"memory."
+                             "update.result\",\"data\":{\"action\":\"updated\",\"memory\":{");
     ASSERT_STR_CONTAINS(u.out, "original body");
     cmd_result_free(&u);
     free(db);
@@ -256,8 +256,52 @@ TEST(update_source_immutable)
     cmd_result_free(&u);
     g = run_remember(db, gargs, sizeof(gargs) / sizeof(gargs[0]), NULL);
     ASSERT_EQ_INT(g.exit_code, 0);
-    ASSERT_STR_CONTAINS(g.out, "\"source\":\"human\"");
+    ASSERT_STR_CONTAINS(g.out, "\"created_by\":{\"kind\":\"human\",\"id\":null}");
     cmd_result_free(&g);
+    free(db);
+}
+
+TEST(update_as_sets_updated_by_and_same_tags_do_not)
+{
+    char *db = make_temp_db_path();
+    CmdResult u;
+    CmdResult g;
+    char updated[TS_BUFSIZE];
+    char again[TS_BUFSIZE];
+    char vector_before[VV_CAP];
+    char vector_after[VV_CAP];
+    const char *uargs[] = {"update", "1", "--as", "agent", "--actor", "bot", "--text", "edited"};
+    const char *same[] = {"update", "1", "--tag", "a", "--tag", "b"};
+    const char *gargs[] = {"get", "--json", "1"};
+    const char *miss[] = {"update", "1", "--as"};
+
+    ASSERT_TRUE(db != NULL);
+    seed_tagged(db);
+    u = run_remember(db, uargs, sizeof(uargs) / sizeof(uargs[0]), NULL);
+    ASSERT_EQ_INT(u.exit_code, 0);
+    cmd_result_free(&u);
+    g = run_remember(db, gargs, sizeof(gargs) / sizeof(gargs[0]), NULL);
+    ASSERT_EQ_INT(g.exit_code, 0);
+    ASSERT_STR_CONTAINS(g.out, "\"created_by\":{\"kind\":\"human\",\"id\":null}");
+    ASSERT_STR_CONTAINS(g.out, "\"updated_by\":{\"kind\":\"agent\",\"id\":\"bot\"}");
+    extract_json_str(g.out, "\"updated_at\":\"", updated, sizeof(updated));
+    extract_version_vector(g.out, vector_before, sizeof(vector_before));
+    cmd_result_free(&g);
+    u = run_remember(db, same, sizeof(same) / sizeof(same[0]), NULL);
+    ASSERT_EQ_INT(u.exit_code, 0);
+    cmd_result_free(&u);
+    g = run_remember(db, gargs, sizeof(gargs) / sizeof(gargs[0]), NULL);
+    ASSERT_EQ_INT(g.exit_code, 0);
+    extract_json_str(g.out, "\"updated_at\":\"", again, sizeof(again));
+    extract_version_vector(g.out, vector_after, sizeof(vector_after));
+    ASSERT_STREQ(again, updated);
+    ASSERT_STREQ(vector_after, vector_before);
+    ASSERT_STR_CONTAINS(g.out, "\"updated_by\":{\"kind\":\"agent\",\"id\":\"bot\"}");
+    cmd_result_free(&g);
+    u = run_remember(db, miss, sizeof(miss) / sizeof(miss[0]), NULL);
+    ASSERT_EQ_INT(u.exit_code, 1);
+    ASSERT_STR_CONTAINS(u.err, "missing value for --as");
+    cmd_result_free(&u);
     free(db);
 }
 
@@ -270,10 +314,8 @@ TEST(update_json_shape)
     seed_tagged(db);
     u = run_remember(db, uargs, sizeof(uargs) / sizeof(uargs[0]), NULL);
     ASSERT_EQ_INT(u.exit_code, 0);
-    ASSERT_STR_CONTAINS(u.out, "\"version\":1");
-    ASSERT_STR_CONTAINS(u.out, "\"action\":\"updated\"");
-    ASSERT_STR_CONTAINS(u.out, "\"count\":1");
-    ASSERT_STR_CONTAINS(u.out, "\"entries\"");
+    ASSERT_STR_PREFIX(u.out, "{\"format\":\"remember-message\",\"version\":1,\"type\":\"memory."
+                             "update.result\",\"data\":{\"action\":\"updated\",\"memory\":{");
     ASSERT_STR_CONTAINS(u.out, "json update");
     cmd_result_free(&u);
     free(db);
@@ -461,8 +503,8 @@ TEST(update_moves_entry_to_top_of_list)
     cmd_result_free(&u);
     l = run_remember(db, largs, sizeof(largs) / sizeof(largs[0]), NULL);
     ASSERT_EQ_INT(l.exit_code, 0);
-    p1 = (l.out != NULL) ? strstr(l.out, "\"id\":1") : NULL;
-    p2 = (l.out != NULL) ? strstr(l.out, "\"id\":2") : NULL;
+    p1 = (l.out != NULL) ? strstr(l.out, "\"local_id\":1") : NULL;
+    p2 = (l.out != NULL) ? strstr(l.out, "\"local_id\":2") : NULL;
     ASSERT_TRUE(p1 != NULL);
     ASSERT_TRUE(p2 != NULL);
     ASSERT_TRUE(p1 < p2); /* updated id 1 precedes untouched id 2 */
@@ -559,8 +601,8 @@ TEST(update_if_version_vector_match_writes)
 TEST(update_if_version_vector_mismatch_is_stale)
 {
     char *db = make_temp_db_path();
-    const char *args[] = {"--json-errors",        "update", "1",       "--if-version-vector",
-                          "{\"other-device\":1}", "--text", "new body"};
+    const char *args[] = {"--json", "update",  "1", "--if-version-vector", "{\"other-device\":1}",
+                          "--text", "new body"};
     CmdResult r;
 
     ASSERT_TRUE(db != NULL);
@@ -570,9 +612,11 @@ TEST(update_if_version_vector_mismatch_is_stale)
     seed_tagged(db);
     r = run_remember(db, args, sizeof(args) / sizeof(args[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 1);
-    ASSERT_STREQ(r.out, "");
-    ASSERT_STREQ(r.err, "{\"version\":1,\"error\":{\"code\":\"stale\",\"message\":\"memory "
-                        "changed since it was read\"}}\n");
+    ASSERT_STREQ(r.err, "");
+    ASSERT_STREQ(
+        r.out, "{\"format\":\"remember-message\",\"version\":1,\"type\":\"memory.update.result\","
+               "\"error\":{\"code\":\"stale\",\"message\":\"memory changed since it was read\","
+               "\"fix\":\"Read the memory again, then retry the change.\",\"retryable\":false}}\n");
     cmd_result_free(&r);
     free(db);
 }
@@ -667,39 +711,6 @@ TEST(update_if_version_vector_match_by_key_writes)
     free(db);
 }
 
-TEST(update_if_version_vector_match_by_sync_id_writes)
-{
-    char *db = make_temp_db_path();
-    char vector[VV_CAP];
-    char sync_id[SYNC_ID_CAP];
-    CmdResult got;
-    const char *add[] = {"add", "--json", "original body"};
-
-    ASSERT_TRUE(db != NULL);
-    if (db == NULL) {
-        return;
-    }
-    got = run_remember(db, add, sizeof(add) / sizeof(add[0]), NULL);
-    ASSERT_EQ_INT(got.exit_code, 0);
-    extract_version_vector(got.out, vector, sizeof(vector));
-    extract_json_str(got.out, "\"sync_id\":\"", sync_id, sizeof(sync_id));
-    cmd_result_free(&got);
-    if (vector[0] == '\0' || sync_id[0] == '\0') {
-        free(db);
-        return;
-    }
-    {
-        const char *args[] = {"update", "--sync-id", sync_id,   "--if-version-vector",
-                              vector,   "--text",    "new body"};
-        CmdResult updated = run_remember(db, args, sizeof(args) / sizeof(args[0]), NULL);
-
-        ASSERT_EQ_INT(updated.exit_code, 0);
-        ASSERT_STREQ(updated.err, "");
-        cmd_result_free(&updated);
-    }
-    free(db);
-}
-
 TEST(update_if_version_vector_undelete_match_restores)
 {
     char *db = make_temp_db_path();
@@ -783,6 +794,7 @@ void register_update_tests(void)
     RUN_TEST(update_body_hash_collision_rejected);
     RUN_TEST(update_empty_text_rejected);
     RUN_TEST(update_source_immutable);
+    RUN_TEST(update_as_sets_updated_by_and_same_tags_do_not);
     RUN_TEST(update_json_shape);
     RUN_TEST(update_text_stdin_dash);
     RUN_TEST(update_text_literal_dash_equals_form);
@@ -800,7 +812,6 @@ void register_update_tests(void)
     RUN_TEST(update_if_version_vector_rejects_a_missing_value);
     RUN_TEST(update_if_version_vector_alone_is_not_a_change);
     RUN_TEST(update_if_version_vector_match_by_key_writes);
-    RUN_TEST(update_if_version_vector_match_by_sync_id_writes);
     RUN_TEST(update_if_version_vector_undelete_match_restores);
     RUN_TEST(update_help_names_the_version_vector_guard);
 }

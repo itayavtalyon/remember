@@ -50,7 +50,7 @@ int cmd_tags(Store *s, bool json, int rest_argc, const char **rest_argv)
     }
 
     if (json) {
-        if (output_tags_envelope(app_out(), tags, count) != 0) {
+        if (output_tags_data(app_out(), tags, count) != 0) {
             err_msg(DIAG_INTERNAL, "failed to write output");
             goto cleanup;
         }

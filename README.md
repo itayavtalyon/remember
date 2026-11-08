@@ -39,7 +39,7 @@ flowchart LR
 - **Connect** — link memories as `related`, `cites`, or `supersedes`.
 - **Expire / delete** — optional TTL (`--expired` bin) and soft-delete (`--deleted`); hard wipe via `purge` / flagged `delete`. Nothing vanishes silently.
 - **Automate** — `--json` on every command; ships an agent skill for Claude / Cursor / others.
-- **Merge** — `import --from-db` merges another brain by `sync_id`; run `conflicts` after.
+- **Merge** — `import --from-db` merges another brain by `id`; run `conflicts` after.
 
 Specs: [`specs/README.md`](specs/README.md) ·
 Plans: [`implementation-plans/INDEX.md`](implementation-plans/INDEX.md).
@@ -71,20 +71,27 @@ Opening an existing database migrates it to `user_version` **5**.
 - Hebrew marks are folded out of the search index. The stored body keeps them.
 - `remember device` prints the device id. `remember device new` mints a new one after a restore or a copied brain, and it repairs an invalid sidecar.
 - The device id is only the sidecar `<db-path>.device_id`. The database holds no copy.
-- Hard wipe (`delete --expired|--deleted`, `purge --expired|--deleted`) no longer needs one registered device.
-- `--json-errors` writes one JSON object per error or warning on stderr. Read `code`.
+- `remember brain new-id` replaces `brain_meta.brain_id` with a new lowercase UUID v7 and prints that id. It does not change `change_seq`, a version vector, or a memory. `--json` type is `brain.new_id.result`. `data` is `{brain_id, previous_brain_id}`.
+- Hard wipe is `delete --expired` (one expired row) or `purge --expired` / `purge --deleted` (one whole bin). `delete --deleted` does not exist. `--trash` selects the Deleted bin. It no longer needs one registered device.
+- With `--json`, every reply is one `remember-message` envelope on stdout, success or failure: `{"format":"remember-message","version":1,"type":"memory.get.result","data":{...}}`. A failure keeps its type and has `error{code,message,fix,retryable,detail?}` instead of `data`. Warnings are a `warnings` array at the end. stderr stays empty. `--json-errors` is gone.
 - A database error names one of seven causes: `busy`, `read_only`, `disk_full`, `cannot_open`, `not_a_database`, `corrupt`, `io_error`. Anything else is `database`.
 - `--busy-timeout MS` sets the lock wait (0..60000, default 5000).
 - `--no-create` fails when the brain file is missing and creates nothing.
+- `--color` and `--quiet` are global, listed with `--db`, `--json`, `--strict`, `--busy-timeout`, and `--no-create`.
+- Color only on a TTY, when `NO_COLOR` is unset and `TERM` is not `dumb`. `--color=auto|always|never` overrides.
+- Status is a word. Do not print checkmarks. Do not encode meaning by color alone.
+- Progress goes to stderr only, when stderr is a TTY, as whole lines, at most once a second, with no spinner. `--quiet` turns it off. Progress is never in stdout and never in `--json`.
+- Prompts echo typed input.
 - `remember repair search-index` rebuilds a damaged search index. `corrupt` with `fts_only` true means that command. It never creates a missing brain.
 - `list --sort updated|created` (default `updated`) orders by that time, newest first, then id.
 - `list` and `search` take `--since` / `--until`. `since` is inclusive and `until` is exclusive. Search filters `updated_at` and ignores `--sort`.
 - `update --if-version-vector` writes only when that memory's `version_vector` still matches. A mismatch is code `stale` and writes nothing.
 - `remember search` now also matches word prefixes and returns matching keys and tags. FTS5 queries work as before; a query that FTS5 cannot parse no longer fails: it returns prefix matches and prints a note on stderr.
-- That note is one line: `remember: warning: raw query ignored: <message>`. With `--json-errors` it is `{"version":1,"warning":{"code":"raw_query_ignored","message":"<message>"}}`.
+- That note is one line: `remember: warning: raw query ignored: <message>`. With `--json` it is `{"code":"raw_query_ignored","message":"<message>"}` in the envelope's `warnings`.
 - Search order: exact key, then key prefix, then relevance (bm25), then `updated_at`.
 - JSON `keys` and `tags` now sit between `total` and `entries` in `search --json`. `--facet-limit N` (default 50, 1..200) caps their `items`; `total` counts every match. Human `search` prints `keys:` and `tags:` lines before the rows.
 - An empty or blank `search` query is an empty result on exit 0. It was a usage error (`empty search query`).
+- A memory's JSON `id` is the lowercase hyphenated UUID. The integer is `local_id`, and only CLI output includes it. `--id`, `--local-id`, and `--sync-id` are gone. There is no alias. Pass that UUID, a number from `remember list`, or `--key` to fetch a memory.
 - `--limit`, `--offset`, `--busy-timeout` and `--facet-limit` take ASCII digits only. A leading space or `+` is now a usage error.
 - A command whose output cannot be written (for example a closed pipe) exits 1 with `failed to write output`. It used to exit 0.
 
@@ -123,11 +130,10 @@ remember --json purge --deleted                   # whole deleted bin; 1 device
 | JSON `"trash": true/false` on entries and stubs | `"bin": "live"\|"expired"\|"deleted"` (always present, never null). Stubs also carry `sync_id`. |
 | Exit 3 token `not_in_trash` | `not_expired`. Soft-delete adds `deleted` / `not_deleted`. |
 | Unflagged `delete` permanently CASCADE-wiped the row | Soft-delete (`deleted_at` set, body and edges kept). |
-| `delete --trash` / `purge-trash` were the only hard paths | Hard wipe is `delete --expired\|--deleted` or `purge --expired\|--deleted` (single-device hatch). |
+| `delete --trash` / `purge-trash` were the only hard paths | Hard wipe is `delete --expired` or `purge --expired` / `purge --deleted`. `delete --deleted` does not exist. `--trash` selects the Deleted bin. |
 | JSON fields ended at `expires_at` then optional `links` | Order is `id, sync_id, key, body, tags, source, created_at, updated_at, expires_at, deleted_at, bin, version_vector` then `links` on list/search/get. |
 
-`--trash` and `purge-trash` still run as aliases of `--expired`, with one
-stderr deprecation line per invocation. They never select the deleted bin.
+`--trash` selects the Deleted bin. `--expired` selects expired memories. `--trash` is not an alias of `--expired`. `purge-trash` does not exist. For one release, a command that uses `--trash` prints `remember: warning: --trash now means the Trash (deleted memories). For expired memories, use --expired.` With `--json`, that item is in `warnings` and stderr is empty. Code `flag_meaning_changed`. Detail `{"flag":"--trash","use":"--expired"}`.
 
 **Upgrade notes**
 
@@ -135,8 +141,7 @@ stderr deprecation line per invocation. They never select the deleted bin.
   copy that is meant to be a different replica.
 - JSON parsers must stop reading `"trash"` and must accept `"bin"` +
   `"sync_id"` (kits should hard-require `sync_id`).
-- Scripts that used `delete` as "forget forever" should switch to
-  `delete --deleted` after a soft-delete, or `purge --deleted`.
+- Scripts that used `delete` as "forget forever" should use `purge --deleted` for the whole Deleted bin. `delete --expired` hard-wipes one expired row. `delete --deleted` does not exist. Restore from the Trash with `update --trash --undelete`.
 - After `import --from-db`, always run `conflicts` (import exits 0 even when
   conflicts were recorded).
 

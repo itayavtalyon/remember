@@ -99,14 +99,23 @@ static int write_json_nullable(FILE *out, const char *name, const char *value)
     return write_json_field_str(out, (JsonField){.name = name, .value = value});
 }
 
-/* Indexed by a store_bin_of result, which is always one of the three bins. */
+/* A --json writer writes only the data object; remember_run wraps it in the
+   remember-message envelope (decision:plan21-envelope-closed-by-app). */
+static int write_data_open(FILE *out)
+{
+    return fputc('{', out) == EOF ? -1 : 0;
+}
+
+static const char DATA_END[] = "}";
+
+/* Indexed by one of the three bins: a store_bin_of result, or a checked query bin. */
 static const char *const BIN_TOKENS[] = {
     [STORE_BIN_LIVE] = "live",
     [STORE_BIN_EXPIRED] = "expired",
     [STORE_BIN_DELETED] = "deleted",
 };
 
-static int write_json_tags(FILE *out, char *const *tags, size_t ntags)
+static int write_json_tags(FILE *out, const char *const *tags, size_t ntags)
 {
     size_t i = 0;
 
@@ -132,20 +141,31 @@ static int write_json_raw_object(FILE *out, JsonField field)
     return fputs(field.value, out) < 0 ? -1 : 0;
 }
 
+/* Actors are written raw. Only the compact form actor_json writes may pass. */
+static int actors_ok(const Entry *e)
+{
+    if (e->created_by == NULL || !actor_json_is_canonical(e->created_by)) {
+        return 0;
+    }
+    if (e->updated_by == NULL || !actor_json_is_canonical(e->updated_by)) {
+        return 0;
+    }
+    return 1;
+}
+
 static int write_entry_core(FILE *out, const Entry *e, const char *now)
 {
     const char *bin = NULL;
 
     /* The vector is written raw, so only the canonical compact form may pass
        (decision:plan18c-validate-peer-fields). */
-    if (now == NULL || e->sync_id == NULL || !vv_json_is_canonical(e->version_vector)) {
+    if (now == NULL || e->sync_id == NULL || !actors_ok(e) ||
+        !vv_json_is_canonical(e->version_vector)) {
         return -1;
     }
     bin = BIN_TOKENS[store_bin_of(e->deleted_at, e->expires_at, now)];
-    if (fprintf(out, "{\"id\":%lld,\"sync_id\":", e->id) < 0) {
-        return -1;
-    }
-    if (output_json_string(out, e->sync_id) != 0) {
+    if (fputs("{\"id\":", out) < 0 || output_json_string(out, e->sync_id) != 0 ||
+        fprintf(out, ",\"local_id\":%lld", e->id) < 0) {
         return -1;
     }
     if (write_json_nullable(out, "key", e->key) != 0) {
@@ -154,12 +174,13 @@ static int write_entry_core(FILE *out, const Entry *e, const char *now)
     if (write_json_field_str(out, (JsonField){.name = "body", .value = e->body}) != 0) {
         return -1;
     }
-    if (write_json_tags(out, e->tags, e->ntags) != 0) {
+    if (write_json_tags(out, (const char *const *)e->tags, e->ntags) != 0) {
         return -1;
     }
-    if (write_json_field_str(
-            out, (JsonField){.name = "source",
-                             .value = e->source != NULL ? e->source : "unknown"}) != 0) {
+    if (write_json_raw_object(out, (JsonField){.name = "created_by", .value = e->created_by}) !=
+            0 ||
+        write_json_raw_object(out, (JsonField){.name = "updated_by", .value = e->updated_by}) !=
+            0) {
         return -1;
     }
     if (write_json_field_str(out, (JsonField){.name = "created_at", .value = e->created_at}) != 0) {
@@ -199,41 +220,68 @@ int output_entry_json(FILE *out, const Entry *e, const char *now)
 static int write_entry_with_links(FILE *out, const Entry *e, const StoreNeighbor *links,
                                   size_t nlinks, const char *now);
 
-int output_action_envelope(FILE *out, const char *action, const Entry *e, const char *now)
+/* data{[action,] memory{}}: links only when with_links (get and add). */
+static int write_memory_data(FILE *out, const char *action, const Entry *e,
+                             const StoreNeighbor *links, size_t nlinks, bool with_links,
+                             const char *now)
+{
+    int rc = 0;
+
+    if (write_data_open(out) != 0) {
+        return -1;
+    }
+    if (action != NULL && (fputs("\"action\":", out) < 0 || output_json_string(out, action) != 0 ||
+                           fputc(',', out) == EOF)) {
+        return -1;
+    }
+    if (fputs("\"memory\":", out) < 0) {
+        return -1;
+    }
+    if (with_links) {
+        rc = write_entry_with_links(out, e, links, nlinks, now);
+    } else {
+        rc = output_entry_json(out, e, now);
+    }
+    if (rc != 0) {
+        return -1;
+    }
+    return fputs(DATA_END, out) < 0 ? -1 : 0;
+}
+
+int output_action_data(FILE *out, const char *action, const Entry *e, const char *now)
 {
     if (out == NULL || action == NULL || e == NULL) {
         return -1;
     }
-    if (fprintf(out, "{\"version\":1,\"action\":") < 0) {
-        return -1;
-    }
-    if (output_json_string(out, action) != 0) {
-        return -1;
-    }
-    if (fputs(",\"count\":1,\"entries\":[", out) < 0) {
-        return -1;
-    }
-    if (output_entry_json(out, e, now) != 0) {
-        return -1;
-    }
-    if (fputs("]}\n", out) < 0) {
-        return -1;
-    }
-    return 0;
+    return write_memory_data(out, action, e, NULL, 0U, false, now);
 }
 
-int output_deleted_list(FILE *out, const Entry *entries, size_t count, const char *now)
+int output_memory_data(FILE *out, const char *action, const Entry *e, const StoreNeighbor *links,
+                       size_t nlinks, const char *now)
+{
+    if (out == NULL || e == NULL || now == NULL) {
+        return -1;
+    }
+    if (nlinks > 0U && links == NULL) {
+        return -1;
+    }
+    return write_memory_data(out, action, e, links, nlinks, true, now);
+}
+
+int output_entries_data(FILE *out, const char *action, const Entry *entries, size_t count,
+                        const char *now)
 {
     size_t i = 0;
 
-    if (out == NULL) {
+    if (out == NULL || action == NULL) {
         return -1;
     }
     if (count > 0U && entries == NULL) {
         return -1;
     }
-    if (fprintf(out, "{\"version\":1,\"action\":\"deleted\",\"count\":%zu,\"entries\":[", count) <
-        0) {
+    if (write_data_open(out) != 0 || fputs("\"action\":", out) < 0 ||
+        output_json_string(out, action) != 0 ||
+        fprintf(out, ",\"count\":%zu,\"entries\":[", count) < 0) {
         return -1;
     }
     for (i = 0; i < count; i++) {
@@ -244,43 +292,22 @@ int output_deleted_list(FILE *out, const Entry *entries, size_t count, const cha
             return -1;
         }
     }
-    if (fputs("]}\n", out) < 0) {
+    if (fputc(']', out) == EOF || fputs(DATA_END, out) < 0) {
         return -1;
     }
     return 0;
 }
 
-int output_get_envelope(FILE *out, const Entry *e, const StoreNeighbor *links, size_t nlinks,
-                        const char *now)
+/* Shared head of list and search data, through "total". */
+static int write_page_head(FILE *out, size_t count, size_t total)
 {
-    if (out == NULL || e == NULL || now == NULL) {
+    if (write_data_open(out) != 0) {
         return -1;
     }
-    if (nlinks > 0U && links == NULL) {
-        return -1;
-    }
-    if (fputs("{\"version\":1,\"count\":1,\"entries\":[", out) < 0) {
-        return -1;
-    }
-    if (write_entry_with_links(out, e, links, nlinks, now) != 0) {
-        return -1;
-    }
-    if (fputs("]}\n", out) < 0) {
-        return -1;
-    }
-    return 0;
+    return fprintf(out, "\"count\":%zu,\"total\":%zu", count, total) < 0 ? -1 : 0;
 }
 
-/* Shared head of the list and search envelopes, through "total". */
-static int write_page_head(FILE *out, size_t offset, size_t limit, size_t count, size_t total)
-{
-    return fprintf(out, "{\"version\":1,\"offset\":%zu,\"limit\":%zu,\"count\":%zu,\"total\":%zu",
-                   offset, limit, count, total) < 0
-               ? -1
-               : 0;
-}
-
-/* Shared tail: the entries array, then the closing brace and newline. */
+/* Shared tail: the entries array. The caller closes the data object. */
 static int write_page_entries(FILE *out, const Entry *entries, size_t count,
                               const StoreNeighbor *links, size_t nlinks, const char *now)
 {
@@ -297,10 +324,16 @@ static int write_page_entries(FILE *out, const Entry *entries, size_t count,
             return -1;
         }
     }
-    if (fputs("]}\n", out) < 0) {
-        return -1;
+    return fputc(']', out) == EOF ? -1 : 0;
+}
+
+/* A JSON string, or null when s is NULL. */
+static int write_string_or_null(FILE *out, const char *s)
+{
+    if (s == NULL) {
+        return fputs("null", out) < 0 ? -1 : 0;
     }
-    return 0;
+    return output_json_string(out, s);
 }
 
 /* The arguments both page envelopes share: a stream, now, and arrays that
@@ -320,17 +353,17 @@ static bool page_args_ok(const FILE *out, const char *now, const Entry *entries,
     return true;
 }
 
-int output_list_envelope(FILE *out, size_t offset, size_t limit, size_t count, size_t total,
-                         const Entry *entries, const StoreNeighbor *links, size_t nlinks,
-                         const char *now)
+int output_list_data(FILE *out, size_t count, size_t total, const Entry *entries,
+                     const StoreNeighbor *links, size_t nlinks, const char *now)
 {
     if (!page_args_ok(out, now, entries, count, links, nlinks)) {
         return -1;
     }
-    if (write_page_head(out, offset, limit, count, total) != 0) {
+    if (write_page_head(out, count, total) != 0 ||
+        write_page_entries(out, entries, count, links, nlinks, now) != 0) {
         return -1;
     }
-    return write_page_entries(out, entries, count, links, nlinks, now);
+    return fputs(DATA_END, out) < 0 ? -1 : 0;
 }
 
 /* Each facet holds the items its count says. */
@@ -348,9 +381,8 @@ static bool facets_ok(const SearchResult *res)
 static int write_key_item(FILE *out, const SearchKeyItem *item)
 {
     const JsonField rest[] = {
-        {.name = "sync_id", .value = item->sync_id},
+        {.name = "id", .value = item->sync_id},
         {.name = "label", .value = item->label},
-        {.name = "source", .value = item->source},
         {.name = "updated_at", .value = item->updated_at},
     };
     size_t i = 0;
@@ -403,25 +435,44 @@ static int write_tag_facet(FILE *out, const SearchTagFacet *tags)
     return fputs("]}", out) < 0 ? -1 : 0;
 }
 
-int output_search_envelope(FILE *out, const SearchResult *res, size_t offset, size_t limit,
-                           const StoreNeighbor *links, size_t nlinks, const char *now)
+/* query.original in the common query shape, then ranked_by and filters. */
+static int write_search_query(FILE *out, const SearchQuery *q)
+{
+    if (fputs(",\"query\":{\"original\":{\"text\":", out) < 0 ||
+        output_json_string(out, q->query) != 0 ||
+        write_json_tags(out, q->filters.tags, q->filters.ntags) != 0 ||
+        fprintf(out, ",\"bins\":[\"%s\"],\"time_range\":{\"field\":\"updated_at\",\"after\":",
+                BIN_TOKENS[q->filters.bin]) < 0 ||
+        write_string_or_null(out, q->filters.since) != 0 || fputs(",\"before\":", out) < 0 ||
+        write_string_or_null(out, q->filters.until) != 0 ||
+        fputs("}}},\"ranked_by\":\"bm25\",\"filters\":[]", out) < 0) {
+        return -1;
+    }
+    return 0;
+}
+
+int output_search_data(FILE *out, const SearchQuery *q, const SearchResult *res,
+                       const StoreNeighbor *links, size_t nlinks, const char *now)
 {
     const PageResult *page = NULL;
 
-    if (res == NULL) {
+    if (q == NULL || q->query == NULL || q->filters.bin > STORE_BIN_DELETED || res == NULL ||
+        (q->filters.ntags > 0U && q->filters.tags == NULL)) {
         return -1;
     }
     page = &res->page;
     if (!page_args_ok(out, now, page->entries, page->count, links, nlinks) || !facets_ok(res)) {
         return -1;
     }
-    if (write_page_head(out, offset, limit, page->count, page->total) != 0) {
+    if (write_page_head(out, page->count, page->total) != 0) {
         return -1;
     }
-    if (write_key_facet(out, &res->keys) != 0 || write_tag_facet(out, &res->tags) != 0) {
+    if (write_key_facet(out, &res->keys) != 0 || write_tag_facet(out, &res->tags) != 0 ||
+        write_page_entries(out, page->entries, page->count, links, nlinks, now) != 0 ||
+        write_search_query(out, q) != 0) {
         return -1;
     }
-    return write_page_entries(out, page->entries, page->count, links, nlinks, now);
+    return fputs(DATA_END, out) < 0 ? -1 : 0;
 }
 
 enum { HUMAN_FACET_CAP = 10U }; /* E2.7 */
@@ -610,7 +661,7 @@ static int write_preview(FILE *out, const char *body)
     return fputs(buf, out) < 0 ? -1 : 0;
 }
 
-int output_tags_envelope(FILE *out, const TagCount *tags, size_t count)
+int output_tags_data(FILE *out, const TagCount *tags, size_t count)
 {
     size_t i = 0;
 
@@ -620,7 +671,7 @@ int output_tags_envelope(FILE *out, const TagCount *tags, size_t count)
     if (count > 0U && tags == NULL) {
         return -1;
     }
-    if (fprintf(out, "{\"version\":1,\"count\":%zu,\"tags\":[", count) < 0) {
+    if (write_data_open(out) != 0 || fprintf(out, "\"count\":%zu,\"tags\":[", count) < 0) {
         return -1;
     }
     for (i = 0; i < count; i++) {
@@ -637,7 +688,7 @@ int output_tags_envelope(FILE *out, const TagCount *tags, size_t count)
             return -1;
         }
     }
-    if (fputs("]}\n", out) < 0) {
+    if (fputc(']', out) == EOF || fputs(DATA_END, out) < 0) {
         return -1;
     }
     return 0;
@@ -787,10 +838,8 @@ static int write_stub_json(FILE *out, const StoreNeighbor *n, const char *now)
     }
     bin = BIN_TOKENS[neighbor_bin(n, now)];
     fill_preview(preview, n->neighbor_body, STUB_PREVIEW_CP);
-    if (fprintf(out, "{\"id\":%lld,\"sync_id\":", n->neighbor_id) < 0) {
-        return -1;
-    }
-    if (output_json_string(out, n->neighbor_sync_id) != 0) {
+    if (fputs("{\"id\":", out) < 0 || output_json_string(out, n->neighbor_sync_id) != 0 ||
+        fprintf(out, ",\"local_id\":%lld", n->neighbor_id) < 0) {
         return -1;
     }
     if (write_json_nullable(out, "key", n->neighbor_key) != 0) {
@@ -900,8 +949,8 @@ static int write_related_ids_cell(FILE *out, long long subject_id, const StoreNe
     return 0;
 }
 
-int output_links_write_envelope(FILE *out, const char *action, const StoreNeighbor *links,
-                                size_t count, const char *now)
+int output_links_write_data(FILE *out, const char *action, const StoreNeighbor *links, size_t count,
+                            const char *now)
 {
     size_t i = 0;
 
@@ -911,7 +960,7 @@ int output_links_write_envelope(FILE *out, const char *action, const StoreNeighb
     if (count > 0U && links == NULL) {
         return -1;
     }
-    if (fprintf(out, "{\"version\":1,\"action\":") < 0) {
+    if (write_data_open(out) != 0 || fputs("\"action\":", out) < 0) {
         return -1;
     }
     if (output_json_string(out, action) != 0) {
@@ -928,34 +977,30 @@ int output_links_write_envelope(FILE *out, const char *action, const StoreNeighb
             return -1;
         }
     }
-    if (fputs("]}\n", out) < 0) {
+    if (fputc(']', out) == EOF || fputs(DATA_END, out) < 0) {
         return -1;
     }
     return 0;
 }
 
-int output_related_envelope(FILE *out, long long id, const char *key, const StoreNeighbor *links,
-                            size_t count, const char *now)
+int output_related_data(FILE *out, const Entry *subject, const StoreNeighbor *links, size_t count,
+                        const char *now)
 {
     size_t i = 0;
 
-    if (out == NULL || now == NULL) {
+    if (out == NULL || now == NULL || subject == NULL || subject->sync_id == NULL) {
         return -1;
     }
     if (count > 0U && links == NULL) {
         return -1;
     }
-    if (fprintf(out, "{\"version\":1,\"id\":%lld,\"key\":", id) < 0) {
+    if (write_data_open(out) != 0 || fputs("\"id\":", out) < 0 ||
+        output_json_string(out, subject->sync_id) != 0 ||
+        fprintf(out, ",\"local_id\":%lld,\"key\":", subject->id) < 0) {
         return -1;
     }
-    if (key == NULL) {
-        if (fputs("null", out) < 0) {
-            return -1;
-        }
-    } else if (output_json_string(out, key) != 0) {
-        return -1;
-    }
-    if (fprintf(out, ",\"count\":%zu,\"links\":[", count) < 0) {
+    if (write_string_or_null(out, subject->key) != 0 ||
+        fprintf(out, ",\"count\":%zu,\"links\":[", count) < 0) {
         return -1;
     }
     for (i = 0; i < count; i++) {
@@ -966,7 +1011,7 @@ int output_related_envelope(FILE *out, long long id, const char *key, const Stor
             return -1;
         }
     }
-    if (fputs("]}\n", out) < 0) {
+    if (fputc(']', out) == EOF || fputs(DATA_END, out) < 0) {
         return -1;
     }
     return 0;
@@ -1020,7 +1065,7 @@ int output_related_human(FILE *out, const StoreNeighbor *links, size_t count, co
 
 static int write_device_id_field(FILE *out, const char *device_id)
 {
-    if (fputs("{\"version\":1,\"device_id\":", out) < 0) {
+    if (fputs("\"device_id\":", out) < 0) {
         return -1;
     }
     return output_json_string(out, device_id);
@@ -1037,15 +1082,15 @@ int output_device_human(FILE *out, const char *device_id)
     return 0;
 }
 
-int output_device_envelope(FILE *out, const char *device_id)
+int output_device_data(FILE *out, const char *device_id)
 {
     if (out == NULL || device_id == NULL) {
         return -1;
     }
-    if (write_device_id_field(out, device_id) != 0) {
+    if (write_data_open(out) != 0 || write_device_id_field(out, device_id) != 0) {
         return -1;
     }
-    if (fputs("}\n", out) < 0) {
+    if (fputs(DATA_END, out) < 0) {
         return -1;
     }
     return 0;
@@ -1053,40 +1098,35 @@ int output_device_envelope(FILE *out, const char *device_id)
 
 /* device_id then previous: the new id, then the id it replaced (NULL is JSON null). */
 // NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
-int output_device_new_envelope(FILE *out, const char *device_id, const char *previous)
+int output_device_new_data(FILE *out, const char *device_id, const char *previous)
 {
     if (out == NULL || device_id == NULL) {
         return -1;
     }
-    if (write_device_id_field(out, device_id) != 0) {
+    if (write_data_open(out) != 0 || write_device_id_field(out, device_id) != 0) {
         return -1;
     }
     if (fputs(",\"previous\":", out) < 0) {
         return -1;
     }
-    if (previous != NULL) {
-        if (output_json_string(out, previous) != 0) {
-            return -1;
-        }
-    } else if (fputs("null", out) < 0) {
+    if (write_string_or_null(out, previous) != 0) {
         return -1;
     }
-    if (fputs("}\n", out) < 0) {
+    if (fputs(DATA_END, out) < 0) {
         return -1;
     }
     return 0;
 }
 
-int output_import_envelope(FILE *out, const StoreImportCounts *counts)
+/* brain_id then previous_brain_id: the new id, then the id it replaced. */
+int output_brain_new_id_data(FILE *out, const StoreBrainId *ids)
 {
-    if (out == NULL || counts == NULL) {
+    if (out == NULL || ids == NULL) {
         return -1;
     }
-    if (fprintf(out,
-                "{\"version\":1,\"action\":\"imported\",\"inserted\":%zu,\"updated\":%zu,"
-                "\"unchanged\":%zu,\"conflicts\":%zu,\"rejected\":%zu}\n",
-                counts->inserted, counts->updated, counts->unchanged, counts->conflicts,
-                counts->rejected) < 0) {
+    if (write_data_open(out) != 0 || fputs("\"brain_id\":", out) < 0 ||
+        output_json_string(out, ids->id) != 0 || fputs(",\"previous_brain_id\":", out) < 0 ||
+        output_json_string(out, ids->previous) != 0 || fputs(DATA_END, out) < 0) {
         return -1;
     }
     return 0;
@@ -1101,10 +1141,8 @@ static int output_one_conflict_json(FILE *out, const StoreConflict *row)
         row->incoming_json == NULL || row->created_at == NULL) {
         return -1;
     }
-    if (fprintf(out, "{\"id\":%lld,\"sync_id\":", row->id) < 0) {
-        return -1;
-    }
-    if (output_json_string(out, row->sync_id) != 0) {
+    if (fprintf(out, "{\"id\":%lld,\"memory_id\":", row->id) < 0 ||
+        output_json_string(out, row->sync_id) != 0) {
         return -1;
     }
     if (fprintf(out, ",\"reason\":") < 0) {
@@ -1123,7 +1161,7 @@ static int output_one_conflict_json(FILE *out, const StoreConflict *row)
     return (fputc('}', out) == EOF) ? -1 : 0;
 }
 
-int output_conflicts_envelope(FILE *out, const StoreConflict *rows, size_t count)
+int output_conflicts_data(FILE *out, const StoreConflict *rows, size_t count)
 {
     size_t i = 0;
 
@@ -1133,7 +1171,7 @@ int output_conflicts_envelope(FILE *out, const StoreConflict *rows, size_t count
     if (count > 0U && rows == NULL) {
         return -1;
     }
-    if (fprintf(out, "{\"version\":1,\"count\":%zu,\"conflicts\":[", count) < 0) {
+    if (write_data_open(out) != 0 || fprintf(out, "\"count\":%zu,\"conflicts\":[", count) < 0) {
         return -1;
     }
     for (i = 0; i < count; i++) {
@@ -1144,38 +1182,54 @@ int output_conflicts_envelope(FILE *out, const StoreConflict *rows, size_t count
             return -1;
         }
     }
-    if (fputs("]}\n", out) < 0) {
+    if (fputc(']', out) == EOF || fputs(DATA_END, out) < 0) {
         return -1;
     }
     return 0;
 }
 
-int output_accepted_envelope(FILE *out, const Entry *entries, size_t count, const char *now)
+static int write_import_rejects(FILE *out, const StoreImportReject *items, size_t count)
 {
     size_t i = 0;
 
-    if (out == NULL || now == NULL) {
-        return -1;
-    }
-    if (count > 0U && entries == NULL) {
-        return -1;
-    }
-    if (fprintf(out, "{\"version\":1,\"action\":\"accepted\",\"count\":%zu,\"entries\":[", count) <
-        0) {
+    if (fprintf(out, ",\"rejected\":{\"count\":%zu,\"items\":[", count) < 0) {
         return -1;
     }
     for (i = 0; i < count; i++) {
-        if (i > 0U && fputc(',', out) == EOF) {
-            return -1;
-        }
-        if (output_entry_json(out, &entries[i], now) != 0) {
+        if (items[i].field == NULL || (i > 0U && fputc(',', out) == EOF) ||
+            fprintf(out, "{\"source_local_id\":%lld,\"field\":", items[i].source_local_id) < 0 ||
+            output_json_string(out, items[i].field) != 0 || fputc('}', out) == EOF) {
             return -1;
         }
     }
-    if (fputs("]}\n", out) < 0) {
+    return fputs("]}", out) < 0 ? -1 : 0;
+}
+
+int output_import_data(FILE *out, const StoreImportResult *r)
+{
+    size_t i = 0;
+
+    if (out == NULL || r == NULL || (r->nconflicts > 0U && r->conflicts == NULL) ||
+        (r->nrejected > 0U && r->rejected == NULL)) {
         return -1;
     }
-    return 0;
+    if (write_data_open(out) != 0 ||
+        fprintf(out,
+                "\"action\":\"imported\",\"inserted\":%zu,\"updated\":%zu,\"unchanged\":%zu,"
+                "\"conflicts\":{\"count\":%zu,\"items\":[",
+                r->inserted, r->updated, r->unchanged, r->nconflicts) < 0) {
+        return -1;
+    }
+    for (i = 0; i < r->nconflicts; i++) {
+        if ((i > 0U && fputc(',', out) == EOF) ||
+            output_one_conflict_json(out, &r->conflicts[i]) != 0) {
+            return -1;
+        }
+    }
+    if (fputs("]}", out) < 0 || write_import_rejects(out, r->rejected, r->nrejected) != 0) {
+        return -1;
+    }
+    return fputs(DATA_END, out) < 0 ? -1 : 0;
 }
 
 int output_rebuilt(FILE *out, bool json, size_t entries)
@@ -1186,7 +1240,7 @@ int output_rebuilt(FILE *out, bool json, size_t entries)
         return -1;
     }
     if (json) {
-        n = fprintf(out, "{\"version\":1,\"action\":\"rebuilt\",\"entries\":%zu}\n", entries);
+        n = fprintf(out, "{\"action\":\"rebuilt\",\"entries\":%zu}", entries);
     } else {
         n = fprintf(out, "rebuilt %zu\n", entries);
     }

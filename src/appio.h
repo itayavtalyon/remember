@@ -1,6 +1,9 @@
 #ifndef REMEMBER_APPIO_H
 #define REMEMBER_APPIO_H
 
+#include "cli.h"
+
+#include <stdbool.h>
 #include <stdio.h>
 
 /*
@@ -31,5 +34,42 @@ typedef struct {
 
 /* Swap the streams. NULL fields restore the stdout/stderr default. */
 void app_set_streams(AppStreams streams);
+
+/* How this process presents progress, prompts, and color. One struct so the
+   two switches cannot be swapped at the call. The next remember_run replaces it. */
+typedef struct {
+    CliColor color;
+    bool quiet;
+    bool json;
+    /* NOLINTNEXTLINE(readability-magic-numbers,cppcoreguidelines-avoid-magic-numbers) */
+    char pad_[2]; /* explicit tail padding (kept -Wpadded-clean) */
+} AppPresentation;
+
+/* Store the mode and restart the progress clock. */
+void app_set_presentation(AppPresentation presentation);
+
+/* never is off. always is on, even when stream is NULL or not a terminal.
+   auto is on only for a terminal, when NO_COLOR is unset and TERM is not "dumb".
+   An empty NO_COLOR is set. */
+bool app_use_color(FILE *stream);
+
+/* One whole progress line on the error stream, plus a newline. Only when that
+   stream is a terminal, at most once per 1000 ms, with no spinner. quiet and
+   --json write nothing. now_ms is the caller's clock. Never touches stdout. */
+void app_progress(const char *line, long long now_ms);
+
+/* Write prompt on the error stream, then read one typed line from in.
+   The terminal echoes the typed characters; this does not hide them or write
+   them again. Returns 0 and drops the trailing newline, or -1. */
+int app_prompt_line(FILE *in, const char *prompt, char *buf, size_t cap);
+
+/*
+ * List paging for the JSON envelope. The command sets the slot; remember_run
+ * takes it. A set slot with a NULL cursor is the last page (JSON null).
+ * An unset slot omits next_cursor and has_more. The cursor string is copied.
+ */
+void app_clear_list_page(void);
+int app_set_list_page(const char *next_cursor);
+bool app_take_list_page(char **out_cursor);
 
 #endif /* REMEMBER_APPIO_H */

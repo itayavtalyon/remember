@@ -95,6 +95,61 @@ int parse_entry_id(const char *raw, long long *out_id)
     return 0;
 }
 
+/* Digits only. A sign or a space is not a local id (JE-3.4). */
+static int all_digits(const char *raw)
+{
+    const unsigned char *p = (const unsigned char *)raw;
+
+    if (raw == NULL || *p == '\0') {
+        return 0;
+    }
+    for (; *p != '\0'; p++) {
+        if (*p < '0' || *p > '9') {
+            return 0;
+        }
+    }
+    return 1;
+}
+
+int classify_memory_positional(const char *raw, long long *out_id)
+{
+    if (store_sync_id_is_canonical(raw) != 0) {
+        return 1;
+    }
+    if (all_digits(raw) && parse_entry_id(raw, out_id) == 0) {
+        return 0;
+    }
+    return -1;
+}
+
+/* COPY-PENDING C-01. The plain line joins these two sentences. */
+static const char k_locator_fix[] = "Use a number from 'remember list', a UUID, or --key KEY.";
+
+void err_not_a_memory_id(const char *value)
+{
+    int wrote = 0;
+    char *buf = NULL;
+
+    wrote = snprintf(NULL, 0, "\"%s\" isn't a memory id.", value);
+    if (wrote < 0) {
+        err_msg(DIAG_INTERNAL, "internal error");
+        return;
+    }
+    buf = (char *)malloc((size_t)wrote + 1U);
+    if (buf == NULL) {
+        err_msg(DIAG_OUT_OF_MEMORY, "out of memory");
+        return;
+    }
+    if (snprintf(buf, (size_t)wrote + 1U, "\"%s\" isn't a memory id.", value) != wrote) {
+        err_msg(DIAG_INTERNAL, "internal error");
+        free(buf);
+        return;
+    }
+    (void)diag_error_split(DIAG_INVALID_ARGUMENT,
+                           (DiagSplit){.message = buf, .fix = k_locator_fix});
+    free(buf);
+}
+
 static const char *norm_body_message(NormStatus st)
 {
     switch (st) {
@@ -471,8 +526,7 @@ int cmd_bin_take_flag(const char *arg, CmdBinOpts *opts)
         return 0;
     }
     if (strcmp(arg, "--trash") == 0) {
-        opts->expired = true;
-        opts->trash_alias = true;
+        opts->trash = true;
         return 1;
     }
     if (strcmp(arg, "--expired") == 0) {
@@ -488,20 +542,46 @@ int cmd_bin_take_flag(const char *arg, CmdBinOpts *opts)
 
 int cmd_bin_resolve(const CmdBinOpts *opts, StoreBin *out)
 {
+    bool want_deleted = false;
+    bool want_expired = false;
+
     if (opts == NULL || out == NULL) {
         err_msg(DIAG_INTERNAL, "internal error");
         return -1;
     }
-    if (opts->trash_alias) {
-        (void)diag_warning(DIAG_WARN_DEPRECATED_FLAG, "--trash is deprecated; use --expired");
-    }
-    if (opts->expired && opts->deleted) {
-        err_msg(DIAG_USAGE, "cannot combine --expired and --deleted");
-        return -1;
+    if (opts->trash) {
+        static const DiagDetailField detail[] = {
+            {.name = "flag", .value = "--trash"},
+            {.name = "use", .value = "--expired"},
+        };
+
+        (void)diag_warning_detail(
+            DIAG_WARN_FLAG_MEANING_CHANGED,
+            "--trash now means the Trash (deleted memories). For expired memories, use --expired.",
+            detail, sizeof detail / sizeof detail[0]);
     }
     if (opts->deleted) {
+        want_deleted = true;
+    }
+    if (opts->trash) {
+        want_deleted = true;
+    }
+    if (opts->expired) {
+        want_expired = true;
+    }
+    if (want_expired && want_deleted) {
+        /* Name --trash when they passed it. --expired with --deleted keeps its sentence. */
+        const char *mix = "cannot combine --expired and --deleted";
+
+        if (opts->trash) {
+            mix = "cannot combine --expired and --trash";
+        }
+        err_msg(DIAG_USAGE, mix);
+        return -1;
+    }
+    if (want_deleted) {
         *out = STORE_BIN_DELETED;
-    } else if (opts->expired) {
+    } else if (want_expired) {
         *out = STORE_BIN_EXPIRED;
     } else {
         *out = STORE_BIN_LIVE;
@@ -548,6 +628,50 @@ int store_status_to_exit(const Store *s, StoreStatus st)
         return REMEMBER_ERR;
     }
     return REMEMBER_OK;
+}
+
+int exit_wrong_list(StoreStatus st, const char *label)
+{
+    DiagCode code = DIAG_EXPIRED;
+    int need = 0;
+    int wrote = 0;
+    char *buf = NULL;
+
+    if (label == NULL || (st != STORE_ERR_DELETED && st != STORE_ERR_EXPIRED)) {
+        err_msg(DIAG_INTERNAL, "internal error");
+        return REMEMBER_ERR;
+    }
+    if (st == STORE_ERR_DELETED) {
+        code = DIAG_DELETED;
+        need = snprintf(NULL, 0, "\"%s\" is in the Trash.", label);
+    } else {
+        need = snprintf(NULL, 0, "\"%s\" has expired.", label);
+    }
+    if (need < 0) {
+        err_msg(DIAG_INTERNAL, "internal error");
+        return REMEMBER_ERR;
+    }
+    buf = (char *)malloc((size_t)need + 1U);
+    if (buf == NULL) {
+        err_msg(DIAG_OUT_OF_MEMORY, "out of memory");
+        return REMEMBER_ERR;
+    }
+    if (st == STORE_ERR_DELETED) {
+        wrote = snprintf(buf, (size_t)need + 1U, "\"%s\" is in the Trash.", label);
+    } else {
+        wrote = snprintf(buf, (size_t)need + 1U, "\"%s\" has expired.", label);
+    }
+    if (wrote != need) {
+        err_msg(DIAG_INTERNAL, "internal error");
+        free(buf);
+        return REMEMBER_ERR;
+    }
+    wrote = diag_error_split(code, (DiagSplit){.message = buf, .fix = diag_code_fix(code)});
+    free(buf);
+    if (wrote != 0) {
+        return REMEMBER_ERR;
+    }
+    return REMEMBER_WRONG_BIN;
 }
 
 int load_body(const char *body_raw, int dash_is_stdin, char **out_body, size_t *out_len,
@@ -1087,4 +1211,74 @@ ExpiryResult resolve_expiry_flags(ExpiryFlags flags, const char *now, char *out,
         return (ExpiryResult){.rc = 0, .expires = out, .err = NULL};
     }
     return (ExpiryResult){.rc = 0, .expires = NULL, .err = NULL};
+}
+
+bool cmd_is_hooks_flag(const char *arg)
+{
+    if (strcmp(arg, "--hooks") == 0 || strcmp(arg, "--no-hooks") == 0) {
+        return true;
+    }
+    return false;
+}
+
+int cmd_take_write_flag(const char *arg, int *i, int rest_argc, const char **rest_argv,
+                        CmdActorFlags *out, const char **err)
+{
+    const char *missing = NULL;
+    const char **slot = NULL;
+    TakeValue taken;
+
+    if (cmd_is_hooks_flag(arg)) {
+        return 1;
+    }
+    if (strcmp(arg, "--as") == 0) {
+        missing = "missing value for --as";
+        slot = &out->kind;
+    } else if (strcmp(arg, "--actor") == 0) {
+        missing = "missing value for --actor";
+        slot = &out->id;
+    } else {
+        return 0;
+    }
+    taken = take_value(i, rest_argc, rest_argv, missing);
+    if (taken.rc != 0) {
+        *err = taken.err;
+        return -1;
+    }
+    *slot = taken.value;
+    return 1;
+}
+
+int cmd_actor_json(const CmdActorFlags *flags, char out[ACTOR_JSON_CAP])
+{
+    ActorStatus st =
+        actor_from_cli((Actor){.kind = flags->kind, .id = flags->id}, out, (size_t)ACTOR_JSON_CAP);
+
+    if (st == ACTOR_OK) {
+        return 0;
+    }
+    if (st == ACTOR_HOOK) {
+        /* C-42-style draft for copy (decision:plan21-hook-actor-draft). */
+        (void)diag_error_split(
+            DIAG_INVALID_ARGUMENT,
+            (DiagSplit){.message = "--as and --actor can't be used inside a hook.",
+                        .fix = "Remove --as and --actor. remember stamps hook writes itself."});
+        return -1;
+    }
+    if (st == ACTOR_BAD_ID) {
+        err_msg(DIAG_USAGE, "invalid --actor (1 to 64 of A-Za-z0-9_./:-)");
+        return -1;
+    }
+    err_msg(DIAG_USAGE, "invalid --as (use human, agent, tool, or share)");
+    return -1;
+}
+
+// NOLINTNEXTLINE(bugprone-easily-swappable-parameters) — flag name, then the kind token
+int cmd_reject_filter_kind(const char *flag, const char *kind)
+{
+    if (kind == NULL || actor_kind_is_stored(kind)) {
+        return 0;
+    }
+    err_fmt(DIAG_USAGE, "invalid %s (use human, agent, tool, share, or import)", flag);
+    return -1;
 }

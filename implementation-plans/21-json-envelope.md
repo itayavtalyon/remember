@@ -178,6 +178,7 @@ Tests: update `tests/test_errors.c` and the search and store tests that still ex
 6. Add `remember brain new-id` with the locked JSON object.
 7. Add `--color` and `--quiet` as globals. Use the C-02 help lines.
 8. Emit `unknown_field` with the C-35 lines. Do not drop unknown fields silently in new parsers.
+9. Spec (`decision:2026-11-01-legacy-plans-spec-step`). Do this stage last, before `.claude/WHOLE_PLAN_REVIEW`. Merge `origin/main` first, so `specs/` exists. Write `specs/JSON-ENVELOPE.md`. Describe only the behavior this branch ships: the `remember-message` version 1 fields and their order, the reply types, errors and warnings in the envelope, locators and `id`, actors, the bins and `--trash`, cursor paging, `brain new-id`, `--color` and `--quiet`, and `unknown_field`. Each section names the `decision:json-*` keys it describes (`remember --json list --tag subject:json-envelope`). When no key exists, name the 008 JE section. `specs/JSON-STYLE.md` stays the value rules. Link the two specs to each other. When `JSON-STYLE.md` disagrees with what ships, change `JSON-STYLE.md`. Move the Message envelope row in `specs/README.md` from "Not written yet" to "Specs". Set `state:implemented` on each `subject:json-envelope` decision this plan built, per `workflow:decision-tags`. This stage has no red test. The whole-plan review checks the spec against the code.
 
 Each stage: one red test, then the change, then the gate, then review.
 
@@ -207,12 +208,13 @@ Quality gate: the plan 19 commands. Coverage 100/100.
 
 ## Definition of done
 
-- [ ] Must-pass rows for this plan are green.
-- [ ] `--json-errors`, `--offset`, `--sync-id`, `--source`, and `purge-trash` are gone from the CLI and from tests.
-- [ ] Plan files 16, 17, 17a, 18, 18b, and 18c are unchanged.
-- [ ] `--json` `fix` values are previously locked splits or the approved C-01 text.
-- [ ] Open still does not implement JE-3.10.
-- [ ] Gate green. Second review clear. INDEX ticked only then.
+- [x] Must-pass rows for this plan are green.
+- [x] `--json-errors`, `--offset`, `--sync-id`, `--source`, and `purge-trash` are gone from the CLI and from tests.
+- [x] Plan files 16, 17, 17a, 18, 18b, and 18c are unchanged.
+- [x] `--json` `fix` values are previously locked splits or the approved C-01 text.
+- [x] Open still does not implement JE-3.10.
+- [x] `specs/JSON-ENVELOPE.md` describes what this branch ships, `specs/JSON-STYLE.md` agrees with it, and `specs/README.md` lists it (stage 9).
+- [x] Gate green. Second review clear. INDEX ticked only then.
 
 ## Second review handover
 
@@ -232,8 +234,701 @@ Do not re-open: one format, no envelope id, no offset, actors replace source, `-
 
 ## Implementation Notes
 
-_(empty)_
+### Stage 1 — the envelope writer (2026-10-30)
+
+Branch `plan/21-json-envelope`, from `origin/main` 132f89c. The approved copy is PR #54 (docs only). Merge `main` into this branch after #54 merges (`decision:plan21-docs-pr-first`).
+
+What changed:
+
+- `src/output.c` has one head, `write_envelope_head(out, type)`, which writes `{"format":"remember-message","version":1,"type":<type>,"data":{`, and one tail, `ENVELOPE_END` (`}}\n`). Every `--json` success writer in `output.c` uses that pair. There is no second writer.
+- `get` writes `data.memory` (the old `count` and `entries` are gone). `add` writes `data{action, memory{... links}}` and loads its links like `get` does: deleted neighbors are left out. `update` and `rekey` write `data{action, memory}` without links. `delete`, `purge`, and `conflict accept` share `output_entries_envelope`: `data{action, count, entries[]}`. `output_deleted_list`, `output_get_envelope`, and `output_accepted_envelope` are deleted.
+- Reply types: JSON-STYLE §1.7a for the commands it names. For the five it does not name, `decision:plan21-derived-reply-types`: `device.get.result`, `device.new.result`, `memory.related.result`, `memory.import.result`, `repair.search_index.result`.
+- `repair search-index --help` names the new JSON type.
+- `tests/test_envelope.c` (suite `envelope`, in `tests/gate-suites`). `tests/test.c` gets `ASSERT_STR_PREFIX`.
+
+Not in stage 1, on purpose:
+
+- Errors and warnings still use the old `diag.c` lines. Stage 2 moves them into the stdout envelope with the `--json-errors` removal.
+- The memory object still has `"id":<int>,"sync_id":…` and `source`. Stage 2 renames identity (`id`, `local_id`). Stage 4 replaces `source` with actors.
+- List and search `data` still carry `offset` and `limit`. Stage 2 deletes `--offset` and adds the cursor.
+- `import` still prints counts only. `decision:plan21-import-problem-rows` (conflicts and rejected groups) needs store work and is open.
+- Search `query` (`decision:plan21-search-query-original-only`) and `filters` are not written yet.
+
+Grill locks this stage: `decision:plan21-derived-reply-types`, `decision:plan21-import-problem-rows`, `decision:plan21-search-query-original-only`, `decision:plan21-add-action-names-kept`, `decision:plan21-docs-pr-first`.
+
+Mutants (one clause each). The runner restores a file with `mv`, which keeps the old mtime, so the first run reused mutated objects. It now touches the file after the restore. Rerun results:
+
+| Mutant | Red tests |
+|---|---|
+| M1 head writes `type` before `version` | `envelope_get_head_is_format_version_type_then_data_memory`, every `output_*_envelope` literal in `test_output.c` |
+| M2 `get` passes an action | `envelope_get_head_…`, `get_existing_json_envelope` |
+| M3 `output_memory_envelope` drops links | `output_memory_envelope_with_action_…`, `…_without_action_…`; by hand also `list_search_get_json_links_empty_after_expires`, `get_list_json_stubs_five_name_preview` (the runner's CLI capture missed those, so it was run by hand) |
+| M4 `ENVELOPE_END` loses a brace | `list_equal_bounds_are_empty`, `search_crossed_bounds_are_empty`, `tags_empty_db_json`, the `test_output.c` literals |
+| M5 `action` written only when NULL | `add_json_created_shape`, `add_json_merged_shape`, `update_json_shape`, `output_action_envelope_writes_the_memory_without_links` |
+| M6 `add` keeps deleted neighbors | `envelope_add_leaves_out_a_neighbor_in_the_trash_like_get` (added after M6 survived) |
+
+Found while updating tests: `tests/test_device.c` built its expected line in a 160-byte buffer, and a longer line was cut silently. The buffer is 256 bytes now, and the test asserts that `snprintf` fit.
+
+Probe, the add-with-a-deleted-neighbor case, by hand:
+
+```
+remember --db D add --key hub hub; remember --db D add other; remember --db D link 1 2
+remember --db D delete 2; remember --db D --json add --key hub hub2   # "links":[]
+```
+
+Gate on the committed tree (after the two clang-tidy fixes: a `NOLINTNEXTLINE(bugprone-easily-swappable-parameters)` on `write_memory_envelope`, whose `type, action` order matches every public writer, and an `if`/`else` in place of a ternary that LLVM 22 read as bool to int): `ctest` 5/5 passed. `check-coverage.sh`: functions 100%, effective lines 100%, `output.c` 708 branch sides with 0 missed. `lint-all.sh`: LINT OK. `leaks-macos`: PASS. `ci-linux.sh`: OK (IWYU PASS, scan-build PASS).
+
+Simplify pass:
+
+1. `output_deleted_list` and `output_accepted_envelope` were the same writer with a different action word. Both became `output_entries_envelope` (about 35 lines saved, and `delete` moves to it too).
+2. `output_get_envelope` and the old one-memory envelope became `write_memory_envelope` behind two public names (about 20 lines saved).
+3. Each writer's open and close is one head and one `ENVELOPE_END`, not a `{"version":1,` and `]}\n` pair per function.
+4. Kept: `output_action_envelope` and `output_memory_envelope` stay two public functions. Merging them needs a `with_links` flag at every call site, and the flag is the difference the plan states (only `add` and `get` carry links).
+
+### Stage 2a: errors and warnings in the envelope, `--json-errors` gone (2026-10-31)
+
+Stage 2 is split into three parts, each with its own deep review: 2a errors and warnings, 2b `--offset` to `--cursor`, and 2c identity flags with the `id`/`local_id` rename.
+
+What changed:
+
+- The `output_*_envelope` writers are renamed `output_*_data`. They write only the data object, with no type and no newline. `remember_run` (`run_json`) writes the envelope (`decision:plan21-envelope-closed-by-app`). With `--json` it points `app_out()` at a memstream and runs the command. It then writes `{"format","version","type"`, then `data` or the run's first error, then `warnings` and `}\n`. A failure drops any data. The reply type has one table, `reply_noun_verb`, keyed by the command; `device new` is `device.new`. A parse error before the command is known gives `unknown.result`. `--help` and `--version` stay text.
+- With `--json`, `diag.c` writes nothing. `diag_json_begin` opens two memstreams, and errors and warnings are buffered there. Only the first error is kept. An error is `{code, message, fix, retryable, detail?}`. A SQLite error's E4.8 fix moves from `detail.fix` to `error.fix`. stderr stays empty, except when stdout itself cannot be written: then the plain `failed to write output` line goes to stderr, the one place left.
+- `retryable` is true for `busy`, `io_error`, and `out_of_memory` (`decision:plan21-retryable-codes`).
+- `--json-errors` is removed (it is now an unknown option), with its help lines. The `database` fix says `--json` instead of `--json-errors`, in the plain line too.
+- If `--json` cannot get memory for its buffers, a fixed out-of-memory envelope is written directly.
+
+C-42, drafts for copy (`decision:plan21-error-fix-drafts-c42`). Copy approves or rewrites these before INDEX is ticked. Rows marked locked are not drafts.
+
+| Code | `fix` |
+|---|---|
+| `usage` | `Run 'remember <command> --help' to see how to use it.` With no command: `Run 'remember --help' to see the commands.` Copy may ask for one fix per usage message. |
+| `not_found` | `Run 'remember list' to see keys.` (JSON-STYLE example, locked) |
+| `database` | `Try again. If it keeps happening, report the details from --json.` (E4.8 sentence; only `--json-errors` changed) |
+| `out_of_memory` | `Close other apps to free memory, then try again.` |
+| `internal` | `This is a bug in remember. Report it with the command you ran.` |
+| `invalid_query` | `Check the search words, or put the query in double quotes.` (no producer today) |
+| `key_conflict` | `Pick another key, or rekey the other memory first.` |
+| `body_conflict` | `Change the text, or update the memory that already has it.` |
+| `expired` | `Add --expired to use it.` (C-01 expired row, locked) |
+| `not_expired` | `Run the command without --expired.` |
+| `deleted` | `Add --deleted to use it.` Stage 5 changes it to the C-01 `Add --trash to use it.` |
+| `not_deleted` | `Run 'remember delete' on it first.` (C-01 `wrong_bin` shape, without `<key>`) |
+| `not_single_device` | `Delete it instead; it stays in the Trash and syncs as deleted.` |
+| `self_link` | `Link two different memories.` |
+| `cycle` | `Remove the link that closes the loop, then try again.` |
+| `source_too_old` | `Open the source brain once with this remember, then import it.` |
+| `unique_taken` | `Rekey or delete the memory that holds the key or text, then try again.` |
+| `stale` | `Read the memory again, then retry the change.` |
+| `newer_database` | `Upgrade remember, then try again.` |
+| `unsupported_database` | `Open the brain with the remember that made it, and export it.` |
+| `import_parse` | `Check the import source, then try again.` |
+| `schema_too_new` | `Upgrade remember to make changes.` (C-01, locked) |
+| SQLite codes | The E4.8 fix (locked). The `k_fix` rows for these codes cover a failure without a SQLite cause. |
+
+Tests:
+
+- The `--json-errors` tests now assert the stdout envelope with an empty stderr. `k_error_fixes` in `test_errors.c` is the literal table above.
+- New: `json_keeps_only_the_first_error`, `diag_code_fix_is_the_codes_sentence`, `run_reports_a_failed_json_flush_on_stderr`, `json_help_and_version_print_text`, `envelope_every_command_names_its_reply_type`, `envelope_failure_keeps_its_type_and_carries_the_warnings_after_the_error`, `envelope_warnings_keep_their_order_with_a_comma_between`.
+
+Tests also lock `remember --json help not-a-command` as one `unknown.result` envelope (`json_help_with_an_unknown_topic_is_an_envelope`). Help's command stays `help` when the topic is unknown, and the error is still an envelope.
+
+Mutation (the 16 mutants in the other agent's `mutants2a.py`, run 2026-10-31). Three needles no longer matched the tree (count 0). The same clause was applied to the current line and run again. That retarget is named below. A mutant that does not build is not a survivor. A segfault that drops piped FAIL lines is not a survivor. One expected survivor: M5.
+
+| Mutant | Result | Red tests |
+|---|---|---|
+| M1 retryable drops `out_of_memory` | Agent needle not applied. Retarget drops ` \|\| code == DIAG_OUT_OF_MEMORY`. Build ok. Killed. | `every_error_code_json_message_matches_the_plain_line` (errors, 1 of 109) |
+| M2 a later error replaces the first | `if (g_json.has_error)` becomes `if (false)`. Build ok. Killed. | `json_keeps_only_the_first_error` |
+| M3 comma before the first warning | `> 0U` becomes `>= 0U`. Build failed (`-Wtautological-unsigned-zero-compare`). Not a survivor. | none (did not build) |
+| M4 usage fix ignores the command | `g_json.command == NULL` becomes `!= NULL`. Build ok. Killed. | `cli_busy_timeout_out_of_range_is_usage`, `every_error_code_json_message_matches_the_plain_line`, `golden_error_lines_and_d9_codes`, `json_error_escapes_message_bytes`, `json_keeps_only_the_first_error`, `json_usage_error_is_one_stdout_envelope` |
+| M5 exit code stays 0 when an error was buffered | Deletes `rc = (rc == REMEMBER_OK && diag_json_has_error()) ? REMEMBER_ERR : rc`. Build ok. Store 0. CLI 343 tests, 0 failed. Expected survivor. | none. The only path with `rc == REMEMBER_OK` and a later buffered error is the data memstream `fflush`/`ferror` treated as out of memory. Tests cannot force that. The line stays. |
+| M6 help with a parse error skips the envelope | Agent needle not applied. Retarget drops `args->error == CLI_ERR_OK &&`, so help and version skip the envelope even on error. First run, before the help-topic test: 343 tests, 0 failed (untested clause). After `json_help_with_an_unknown_topic_is_an_envelope`: errors 110 run, 1 failed. Killed. | `json_help_with_an_unknown_topic_is_an_envelope` |
+| M7 `device new` named `device.get` | Agent ternary needle not applied. Retarget returns `"device.get"` from the mint branch. Build ok. Killed. | `envelope_every_command_names_its_reply_type` (envelope, 1 of 6) |
+| M8 `purge-trash` has no type | Deletes the `CLI_CMD_PURGE_TRASH` case. Build failed (`-Wswitch-enum`). Not a survivor. | none (did not build) |
+| M9 a failure writes `data` | `if (failed)` becomes `if (!failed)`. Build ok. First pass reported no red tests because `remember_tests` segfaulted (exit 139) and the pipe dropped the FAIL lines. Follow-up to a file: 43 red tests, then the same segfault. Not a survivor. | `add_tag_casefold_merges_to_one_tag_name`, `facade_busy_json_matches_cli`, `facade_json_not_found_matches_cli`, `facade_update_stale_matches_cli`, `fts_reflects_tag_update`, `fts_search_empty_after_delete`, `fts_search_reflects_body_update`, `fts_search_reflects_keyed_upsert`, `json_add_error_is_an_error_envelope`, `json_get_missing_is_an_error_envelope`, `keyless_merge_keeps_created_at`, `list_no_matches_json_total_zero`, `search_diacritics_folded`, `search_finds_compound_tag_component`, `union_search_deep_nesting_is_a_warning`, `union_search_example_2_has_facets_and_the_warning`, `union_search_example_4_filter_scopes_the_facets`, `union_search_facet_limit_accepts_both_bounds`, `union_search_facet_limit_defaults_to_50`, `union_search_facet_limit_out_of_range_is_usage`, `union_search_invalid_utf8_is_usage`, `union_search_json_carries_the_facets_before_entries`, `union_search_parsed_raw_part_has_no_warning`, `union_search_unparseable_raw_part_is_a_json_warning`, `update_bumps_updated_at`, `update_by_key_clear_tags`, `update_clear_tags_flag`, `update_if_version_vector_match_by_key_writes`, `update_if_version_vector_match_writes`, `update_if_version_vector_mismatch_is_stale`, `update_json_shape`, `update_moves_entry_to_top_of_list`, `update_positional_body_not_accepted`, `update_preserves_id_key_source_created_at`, `update_replace_tags_keeps_shared_tag_on_other_entry`, `update_replace_tags_multiple`, `update_same_text_still_succeeds_and_returns_entry`, `update_source_immutable`, `update_tags_only_keeps_body`, `update_text_and_tags_together`, `update_text_literal_dash_equals_form`, `update_text_only_keeps_tags`, `update_text_stdin_dash` |
+| M10 an empty warnings array is written | Deletes the `nwarnings == 0` return. Build ok. CLI 343 run, 51 failed. Killed. | `cli_busy_timeout_500_reports_busy_within_half_a_second`, `cli_busy_timeout_out_of_range_is_usage`, `cli_damaged_fts_search_reports_fts_only`, `cli_db_under_a_file_keeps_the_legacy_open_line`, `cli_enospc_shim_reports_disk_full`, `cli_fail_read_shim_reports_io_error`, `cli_fail_write_shim_reports_io_error`, `cli_import_text_source_names_the_source`, `cli_mode_000_reports_cannot_open_permission`, `cli_no_create_missing_path_creates_nothing`, `cli_nomem_shim_reports_database`, `cli_read_only_file_reports_read_only_on_write`, `cli_readonly_directory_reports_read_only`, `cli_relative_db_emits_absolute_detail_path`, `cli_repair_counts_deleted_entries`, `cli_repair_heals_page_damaged_fts_content`, `cli_repair_heals_page_damaged_fts_data`, `cli_repair_read_fault_during_check_is_corrupt`, `cli_repair_refuses_damaged_base_table`, `cli_repair_refuses_truncated_brain`, `cli_repair_search_index_rebuilds`, `cli_search_on_damaged_base_is_not_fts_only`, `cli_text_file_reports_not_a_database`, `cli_truncated_brain_reports_corrupt`, `device_new_keeps_the_old_vector_and_counts_the_next_edit_under_the_new_id`, `device_prints_the_sidecar_id`, `envelope_add_leaves_out_a_neighbor_in_the_trash_like_get`, `error_outside_the_catalog_writes_nothing`, `every_error_code_json_message_matches_the_plain_line`, `golden_error_lines_and_d9_codes`, `json_error_escapes_message_bytes`, `json_error_is_one_line_and_not_the_plain_line`, `json_keeps_only_the_first_error`, `json_not_found_is_one_stdout_envelope`, `json_usage_error_is_one_stdout_envelope`, `list_equal_bounds_are_empty`, `list_rejects_a_bad_timestamp`, `list_rejects_a_newline_timestamp_as_one_json_line`, `list_sort_rejects_a_bad_value`, `null_message_is_empty_text`, `search_crossed_bounds_are_empty`, `sqlite_busy_reports_cause_fix_and_detail`, `sqlite_cannot_open_carries_errno_reason_and_absolute_path`, `sqlite_corrupt_marks_fts_only_and_keeps_base_text`, `sqlite_database_keeps_its_own_text_without_a_path`, `sqlite_emitter_rejects_misuse_quietly`, `sqlite_out_of_range_reason_falls_back_to_other`, `union_search_facet_limit_out_of_range_is_usage`, `union_search_invalid_utf8_is_usage`, `update_if_version_vector_mismatch_is_stale`, `warning_outside_the_catalog_writes_nothing` |
+| M11 a SQLite error replaces the first | Deletes the `has_error` return in `diag_error_sqlite`. Build ok. Killed. | `json_keeps_only_the_first_error` |
+| M12 a SQLite error takes `fix` from `k_fix` | `write_fix_retryable(err, fix, code)` becomes `k_fix[code]`. Build ok. Errors 109 run, 14 failed. Killed. | `cli_busy_timeout_500_reports_busy_within_half_a_second`, `cli_damaged_fts_search_reports_fts_only`, `cli_import_text_source_names_the_source`, `cli_read_only_file_reports_read_only_on_write`, `cli_readonly_directory_reports_read_only`, `cli_repair_read_fault_during_check_is_corrupt`, `cli_repair_refuses_damaged_base_table`, `cli_repair_refuses_truncated_brain`, `cli_search_on_damaged_base_is_not_fts_only`, `cli_text_file_reports_not_a_database`, `cli_truncated_brain_reports_corrupt`, `golden_error_lines_and_d9_codes`, `sqlite_busy_reports_cause_fix_and_detail`, `sqlite_corrupt_marks_fts_only_and_keeps_base_text` |
+| M13 stdout gone stays in JSON mode | Deletes `diag_json_end()` before the failed-to-write `err_msg`. Build ok. Killed. | `run_reports_a_failed_json_flush_on_stderr` |
+| M14 no internal error when a command fails silently | The guard becomes `if (false)`. Build failed (`-Wunreachable-code`). Not a survivor. The compiler guards the clause. | none (did not build) |
+| M15 help and version are wrapped | Drops `CLI_CMD_VERSION` from the text skip. Build ok. Killed. | `json_help_and_version_print_text` |
+| M16 a JSON error drops `detail` | Deletes the `write_json_detail_fields` call. Build failed (`-Wunused-function`). Not a survivor. | none (did not build) |
+
+Gate on this tree, after the help-topic test (Apple clang, Debug, sanitizers on, LSAN off, `REMEMBER_TEST_VFS=ON`, Unix Makefiles; coverage with Homebrew LLVM 22). Started 2026-10-31T21:05:09Z at HEAD `0acd7bd` with stage 2a uncommitted. `EXIT: ctest=0 coverage=0 lint=0` at 2026-11-01T00:33:35Z. ctest 5/5. Coverage: functions 100%, effective lines 100% (must-cover lines missed: 0), branch sides 0 missed on `output.c` (698), `search_terms.c` (176), `unicode.c` (80), `normalize.c` (384). Lint OK. `default.profraw` stays untracked.
+
+### Stage 2b: `--offset` becomes an opaque `--cursor` (2026-11-01)
+
+Itay (2026-11-01): the cursor is standard base64 (with padding) of one canonical JSON object. `--limit` stays a flag. Any other flag that changes the SELECT or the WHERE, including `--sort`, is a different query. The resume key is the last row's sort-column timestamp plus `local_id`. The UUID (`entries.id`) is not in the ORDER BY, so a UUID-only cursor cannot break a timestamp tie, and looking the row up fails if that row was deleted.
+
+What changed:
+
+- Only `remember list` pages. `next_cursor` and `has_more` sit on the envelope, after `data` or `error` and before `warnings`. The last page has `"next_cursor":null` and `"has_more":false`. A failure drops data and omits the paging fields. Search has neither field and no `--offset`. `--offset` on list is `unknown option '--offset'`.
+- List data is `{count, entries, total}`. `total` is the unpaged filter count. The page is `LIMIT limit+1` with the extra row dropped, so `has_more` does not need a second count. The keyset is on the SELECT only: `(e.{updated_at|created_at} < ? OR (same column = ? AND e.local_id < ?))`.
+- The cursor JSON, opaque to clients, is `{"v":1,"sort":"updated"|"created","bin":"live"|"expired"|"deleted", optional tags/source/key/since/until, "at","local_id"}`. Absent optionals are omitted. Tags are sorted with `strcmp`. A different `--limit` is the same query. Default sort and `--sort updated` match. `--trash` and `--expired` match until stage 5. `--source` compares the flag the user passed. The cursor field is `local_id` so stage 2c does not change the bytes. `Entry.id` is still the integer local id until 2c.
+- A bad cursor, or a cursor reused with a different query, is `invalid_argument`. Missing or duplicate `--cursor` stays usage. Search `--cursor` is an unknown option. Plain list still pages and does not print the cursor.
+
+Draft, not approved copy. Same status as C-42. Copy approves or rewrites this before INDEX is ticked.
+
+| Code | message | fix |
+|---|---|---|
+| `invalid_argument` | `invalid --cursor` | `Run 'remember list' again without --cursor.` |
+
+`retryable` stays false. `k_fix` says the sentence is a draft.
+
+Tests: `list_json_cursor_pages`, `list_json_cursor_filters_and_rejects`, `list_cursor_past_end_keeps_total`, `list_offset_is_an_unknown_option`. The reject table covers non-canonical JSON, non-canonical base64 (including non-zero padding bits), tag count and tag text mismatches, and a 51-tag cursor.
+
+Gate (Apple clang, Debug, sanitizers on, LSAN off, `REMEMBER_TEST_VFS=ON`, Unix Makefiles; coverage with Homebrew LLVM 22). Started 2026-11-01T17:03:21Z at HEAD `42f6793` with stage 2b uncommitted. ctest 5/5. Coverage: functions 100%, effective lines 100% (must-cover lines missed: 0), branch sides 0 missed on `output.c` (698), `search_terms.c` (176), `unicode.c` (80), `normalize.c` (384). The first lint failed cppcheck `variableScope` / `unreadVariable` on two locals in the 51-tag fixture. They moved inside the `if`. Lint re-run 2026-11-01T17:12:24Z: `LINT OK`, `EXIT:0`. `default.profraw` stays untracked.
+
+### Stage 2c: JSON `id` is the UUID, and the old locator flags are gone (2026-11-01)
+
+A memory's JSON `id` is the lowercase hyphenated UUID (the old `sync_id`). The integer is `local_id`, and only CLI output includes it. The field `sync_id` is gone. `REMEMBER_SYNC_ID` was never set by C; the name is gone from the docs. No alias (JE-3.8, #485).
+
+What changed:
+
+- Memory JSON and stubs are `{"id":"<uuid>","local_id":<int>,...}`. A search key item uses `id` for the UUID and has no `local_id`. A conflict row keeps its integer `id` and names the memory UUID `memory_id`. Snapshots write that shape. `snapshot_parse` reads `$.id` and does not read `$.sync_id`.
+- `--sync-id`, `--from-sync-id`, and `--to-sync-id` are unknown options. `--id` and `--local-id` were already unknown and stay unknown. `conflict accept --id` stays the conflict row.
+- The cursor's opaque field stays `local_id`. `src/cmd_query.c` was not edited, so the cursor bytes do not change.
+- A positional token that is not digits is still `invalid id`. Stage 3 owns the C-01 sentence and UUID-or-digits lookup. This stage does not print that sentence. `store_get_by_sync_id` stays for import. `store_sync_id_is_canonical` stays for stage 3. `store_sync_id_is_canonical_matches_v7` calls it.
+- The C `Entry` still names the integer `id` and the UUID `sync_id`. SQLite is already v6 (`entries.local_id`, `entries.id`). There is no migration. Human list lines still print the integer.
+
+`locator_bind_write` only copies the integer id or the key. After the UUID branch left, its store, bin, and now parameters were unused, and both `bind_rc != 0` returns could not run.
+
+Tests: `envelope_memory_id_is_the_uuid_and_the_old_flags_are_unknown`. It was red before the writers changed (`"id":1,"sync_id":"…"` and `invalid sync-id`).
+
+Gate (Apple clang, Debug, sanitizers on, LSAN off, `REMEMBER_TEST_VFS=ON`, Unix Makefiles; coverage with Homebrew LLVM 22). `BUILD_DIR` was not exported. ninja is absent. Coverage and lint ran on the final tree at 2026-11-01T19:27:16Z, parent `61c32e6` (the stage 9 plan lines, already committed). ctest 5/5. Coverage: functions 100%, effective lines 100% (must-cover lines missed: 0), branch sides 0 missed on `output.c` (710), `search_terms.c` (176), `unicode.c` (80), `normalize.c` (384). Lint `LINT OK`. `default.profraw` stays untracked. The 16 stage-2a mutants were not re-run. M5 stays.
 
 ## Review Notes
 
-_(empty)_
+Stage flow (`decision:plan21-stage-flow`, Itay 2026-10-31): after each stage, run the in-session deep review, fix, and continue. There is no per-stage `REVIEW_REQUEST`. One whole-plan review runs at the end.
+
+### Stage 1 deep review (2026-10-31, in session)
+
+Probes run: every `--json` success command on one brain (add, get, list, search, update, link, related, unlink, tags, delete, purge, device, device new, conflicts, repair search-index) parses as JSON, starts `format`, `version`, `type`, has `data` and no `error`, exits 0, and leaves stderr empty. `import --from-db` takes v4 and v5 sources only, so its envelope is proved in `test_output.c`, `test_sync_import.c`, and `test_facade.c`, not in this probe.
+
+Findings:
+
+- **Important, fixed (grill):** `add --json` reads the row's links after the write commits. A `REMEMBER_TEST_FAIL_READ` sweep shows N=17 to 20 save the memory and exit 1 with `SQLITE_IOERR_READ`. Itay chose fail loud (`decision:plan21-add-link-read-fails-loud`). Test `envelope_add_link_read_error_after_the_write_exits_1_and_keeps_the_write`. Mutant: skip the neighbor-status check; that test goes red.
+- **Important, fixed:** `docs/engineering-notes.md` (Output, Repair, `tags`) and `skills/remember/SKILL.md` (add, list, search, device, entry placement) still described `{"version":1,...}`. Both are corrected. The notes name the consumer impact: remember-mac and scripts must read `data`.
+- **Nit, kept:** reply types go into the head through `%s` unescaped. Every caller passes a string literal. No stored or user value reaches it.
+
+### Stage 2a deep review (2026-10-31, in session)
+
+`decision:plan21-stage-flow`: in-session deep review, fix, continue. No `.claude/REVIEW_REQUEST`. Local Bugbot is not installed (`command -v bugbot` is empty, and there is no bugbot skill). `quality:linters-max` allows a local `NOLINT`. This repo's engineering notes, and the `AppStreams` comment, pack the two `FILE*` into a struct so the ends cannot be swapped. The struct is what shipped. `standard:coding` says merge `main` at the start of a stage. This session's prompt says merge `origin/main` after the 2a commit and not during the gate. The merge waits until after this commit.
+
+No product or architecture question is open. The help-topic envelope was a specified contract with no test. The test is the fix.
+
+Findings:
+
+- **Important, fixed:** `writes_envelope` skipped the envelope for every help or version command only when `error == CLI_ERR_OK`. `remember --json help not-a-command` keeps command `help` and sets `CLI_ERR_UNKNOWN_COMMAND`, because `cli_parse` returns before `apply_help_request`. M6's first retarget survived 343 tests. `json_help_with_an_unknown_topic_is_an_envelope` locks the probed bytes: type `unknown.result`, code `usage`, message `unknown command 'not-a-command'`, fix `Run 'remember help --help' to see how to use it.`, `retryable` false, stderr empty, exit 1. The same retarget then fails that one test.
+- **Nit, fixed:** `tests/COVERAGE.md` still named `--json-errors`. `docs/engineering-notes.md` still named `output_tags_envelope` and `output_search_envelope`. Those names are now `remember_run`, `output_tags_data`, and `output_search_data`.
+- **Nit, kept:** the first-error gate is in `json_slot` and again in `diag_error_sqlite` (about 4 lines). A SQLite notice is not a `Notice`. Folding them adds a bool and a NULL check and saves nothing. `CliGlobals` keeps `pad_[1]` so `-Wpadded` stays clean. `usage_fix` uses a 96-byte stack buffer. The longest catalog command name (`purge-trash`) makes a sentence of about 56 bytes.
+- **Kept, not a defect:** M5. Deleting the exit-code line would hide an out-of-memory failure of the data buffer. There is no fault hook, and this review does not add one.
+
+DRY / easy to replace / orthogonal / simplify:
+
+- One reply-type table (`reply_noun_verb`). One closer (`run_json`). `diag.c` buffers notices and does not write the envelope. Plan 20's `diag_error_fix` path (fix, no `retryable`) stays a different path. `k_fix` covers a failure with no SQLite cause. The E4.8 sentence stays on the SQLite path.
+- C-42 rows in `k_fix` and `k_error_fixes` are the plan's drafts. The `deleted` fix is still `Add --deleted to use it.` Stage 5 changes it.
+
+### Stage 2b deep review (2026-11-01, in session)
+
+`decision:plan21-stage-flow`: in-session deep review, fix, continue. No `.claude/REVIEW_REQUEST`. Local Bugbot is not installed. No product question is open. The cursor bytes and the resume key are Itay's 2026-11-01 answer. The `invalid_argument` sentence stays a draft, recorded the way C-42 was recorded.
+
+Findings:
+
+- **Nit, fixed:** cppcheck wanted `used` and `wrote` inside the 51-tag `if`. The initializers were unused. They now live in that block. `get_list_delete` stayed 25 tests, 0 failed, 465 asserts. Lint was re-run and is `LINT OK`.
+- **Nit, fixed:** the list SQL comment still said `LIMIT/OFFSET`. It now says keyset + LIMIT.
+- **Nit, kept:** the test file has its own base64 encoder so the reject table can build cursors. The production codec stays `static` in `cmd_query.c`, so CMake does not gain a source. Exporting it would be a second public surface for an opaque token.
+- **Nit, kept:** base64 shifts and alphabet offsets are silenced with `NOLINT`, the same way UUID v7 packing is. Naming every shift does not make the layout easier to read. `json_escape`, `append_decoded`, and `write_cursor_tags` are the splits that keep the three hot functions under the complexity limit of 25. OOM returns stay literal `return -1` so an untested malloc miss stays defensive.
+
+DRY / easy to replace / orthogonal / simplify:
+
+- One closer still writes the envelope. The list command only sets a page slot. A failure clears the slot, so paging fields never ride on an error.
+- The keyset is one predicate on the SELECT. COUNT stays the full filter, so an empty page still reports `total`.
+- `--limit` is not in the cursor. Sort, bin, tags, source, key, since, and until are. Clients do not parse the cursor.
+
+### Stage 2c deep review (2026-11-01, in session)
+
+`decision:plan21-stage-flow`: in-session deep review, fix, continue. No `.claude/REVIEW_REQUEST`. Local Bugbot is not installed. No product question is open. `standard:coding` says merge `main` at the start of a stage. This prompt says stage 9 merges `origin/main`, so `e35558b` was not merged. The handoff template says write `.claude/WHOLE_PLAN_REVIEW` after stage 8. `decision:2026-11-01-legacy-plans-spec-step` says stage 9 is the spec stage and the whole-plan review is after that. This stage does not write the marker.
+
+Probe: `add` then `--json get 1` returns `id` as a lowercase UUID v7, then `local_id` 1. `get <that uuid>` prints `invalid id` and exits 1. `--sync-id`, `--id`, and `--local-id` are unknown options. `help conflict` still says `accept --id`.
+
+Findings:
+
+- **Important, fixed:** `locator_bind_write` always returned 0, so two `bind_rc != 0` returns were uncovered (must-cover) and cppcheck reported `knownConditionTrueFalse`. The function is now `void` and only copies the id or the key. Those returns are gone. Coverage must-cover is 0.
+- **Nit, fixed:** `docs/engineering-notes.md`, `README.md`, and `skills/remember/SKILL.md` still described `sync_id` and `--sync-id`. The skill also still told agents to pass `--offset`. List paging is `--cursor`. JSON `id` is the UUID. Pass `local_id` or `--key` until stage 3.
+- **Nit, kept:** `Entry.id` and `Entry.sync_id` stay the C names. Renaming the struct would touch every store call and the cursor keyset, and it would not change what the CLI prints. JSON and the flags are the contract.
+- **Nit, kept:** `tests/test_envelope.c` and `tests/test_sync_output.c` each have a static `uuid_v7_at`. A harness export would be a second home for a test predicate.
+- **Kept, not a defect:** a conflict snapshot stored by an older build as `"id":<int>,"sync_id":"<uuid>"` does not parse. JE-3.8 says no alias. Snapshots this build writes use `$.id`. Accept of those rows is covered.
+- **Kept:** `docs/JSON-STYLE.md` §1.2a still has the older C-01 sentence. Stage 3 replaces it with the approved 2026-10-25 sentence. This stage does not print either sentence.
+- **Kept, not a defect:** M5. The 16 stage-2a mutants were not re-run.
+
+DRY / easy to replace / orthogonal / simplify:
+
+- `write_entry_core` is the memory object. Stubs share that `id` / `local_id` prefix. The snapshot writer in `store_sqlite.c` repeats it. The existing ponytail note already records the duplicated escape. SQLite stays in that file, so the snapshot writer stays there.
+- A search key item's own id is `id`. A conflict's reference is `memory_id` (JE-3.6). The conflict row's integer `id` is not a memory id.
+- The deleted flags fall through the existing unknown-option path. There is no alias table.
+
+### Stage 3: a positional is a UUID or digits (2026-11-01)
+
+A positional accepts a canonical lowercase hyphenated UUID v7, matched as the memory id, or digits, matched as `local_id`. `get 1` and `get <that memory's uuid>` are the same memory (008-13). The same rule covers get, delete, update, rekey, and graph ends. Anything else, including `mem_…`, is `invalid_argument` (008-8, JE-3.4, `decision:positional-locator`, `decision:s-13`).
+
+The plain line is `remember: "<value>" isn't a memory id. Use a number from 'remember list', a UUID, or --key KEY.` JSON `message` is `"<value>" isn't a memory id.` JSON `fix` is `Use a number from 'remember list', a UUID, or --key KEY.` `<value>` is the token the user typed (K-1, 2026-10-25). This replaces the older plan sentence and the older sentence in `docs/JSON-STYLE.md` §1.2a.
+
+What changed:
+
+- `classify_memory_positional` is the check. A canonical UUID (`store_sync_id_is_canonical`) is the memory id. An all-digits token that `parse_entry_id` accepts is `local_id`. `parse_entry_id` is unchanged, so `conflict accept --id` stays the conflict row. A sign or a space is not digits, so `+1` and ` 1` are not local ids. `0` and an overflow stay `invalid_argument`. An uppercase UUID, braces, and `mem_…` are `invalid_argument`, not `not_found`. A missing canonical UUID is `not_found` (exit 2).
+- `err_not_a_memory_id` builds the message for the token the user typed and passes the approved fix through `diag_error_split`. `k_fix[invalid_argument]` stays the cursor draft (`Run 'remember list' again without --cursor.`). Plain joins the two sentences. JSON keeps them split.
+- get by UUID uses `store_get_by_sync_id` with the requested bin. delete, update, and rekey resolve the UUID with `store_get_row_by_sync_id` (no bin) and then the existing by-id write, so an unflagged delete of an expired row is still a soft delete. `cmd_update` keeps that bind result off `rc`. `rc` starts as `REMEMBER_ERR` and the cleanup path returns it, so a later body-hash conflict must not exit 0.
+- Graph ends use the same classify. A UUID loads through `store_get_any_by_sync_id`, or `store_get_row_by_sync_id` with `--deleted`. Digits use `store_get_any` or `store_get_row`. `--id`, `--local-id`, `--sync-id`, `--offset`, and `--json-errors` stay unknown options.
+
+Tests, red before the production change: `envelope_get_by_digits_and_by_uuid_is_the_same_memory`. Also `envelope_uuid_positional_updates_deletes_and_links`, `envelope_positional_rejects_what_is_not_a_memory_id`, `envelope_delete_expired_by_uuid_is_a_soft_delete`. The golden `get abc` row in `tests/test_errors.c` is the C-01 split. `get_overflow_id_rejected` and `link_invalid_id_is_exit_1` expect the new sentence.
+
+Gate (Apple clang, Debug, sanitizers on, LSAN off, `REMEMBER_TEST_VFS=ON`, Unix Makefiles; coverage with Homebrew LLVM 22). `BUILD_DIR` was not exported. ninja is absent. `origin/main` was not merged (`standard:coding` rule 7 says merge at stage start; this stage's prompt says stage 9 merges `origin/main`). ctest 5/5. Coverage: 888 tests, 0 failed, 10734 asserts; functions 100%; effective lines 100% (zero-hit 2021, all defensive, must-cover 0); branch sides 0 missed on `output.c` (710), `search_terms.c` (176), `unicode.c` (80), `normalize.c` (384). Lint `LINT OK` (LLVM 22 clang-tidy, cppcheck, gcc -fanalyzer, scan-build; include-what-you-use skipped, not installed). `default.profraw` stays untracked. Version stays 0.2.0. The 16 stage-2a mutants were not re-run. M5 stays.
+
+### Stage 3 deep review (2026-11-01, in session)
+
+`decision:plan21-stage-flow`: in-session deep review, fix, continue. No `.claude/REVIEW_REQUEST`. Local Bugbot is not installed (`command -v bugbot` is empty). No product question is open. `standard:coding` says merge `main` at the start of a stage. This prompt says stage 9 merges `origin/main`, so it was not merged. The handoff template says write `.claude/WHOLE_PLAN_REVIEW` after stage 8. `decision:2026-11-01-legacy-plans-spec-step` says stage 9 is the spec stage and the whole-plan review is after that. This stage does not write the marker. `quality:linters-max` allows a local `NOLINT`. None was added.
+
+Probe: `get nope`, `get mem_…`, `get 0`, `get +1`, `get` with a leading space, an uppercase UUID, braces, a newline, ESC, and 300 `a`s. Plain maps the controls. JSON escapes them. A missing UUID is exit 2 on get, delete, update, and link. `link --from-key` of a missing key is exit 2 with and without `--deleted`. Unflagged `delete` of an expired UUID exits 0 and the row is in the deleted bin. `delete`, `update`, `rekey`, `link`, `unlink`, and `related` of `nope` print the full plain C-01 line and exit 1.
+
+Findings:
+
+- **Important, fixed:** `cmd_update` stored `locator_bind_local_id`'s 0 in `rc`. A body-hash conflict then printed the error and exited 0. The bind result is a separate `bound`. `golden_error_lines_and_d9_codes` exits 1 again.
+- **Nit, fixed:** cppcheck `variableScope` and clang-tidy `cppcoreguidelines-init-variables` disagreed about `StoreStatus st`, and a bool ternary is `readability-implicit-bool-conversion`. Each status is now initialized with the store call inside the branch that reads it.
+- **Nit, kept:** `resolve_end` and `related_load_subject` both load a key with `store_get_row_by_key` or `store_get_any_by_key` (about 15 lines twice). A helper saves about 4 lines. They differ: `resolve_end` copies the id and frees the entry; `related` keeps the entry for the neighbor query.
+- **Nit, kept:** `load_positional` and `locator_bind_local_id` both turn a positional into a row. They stay split. get applies the bin to the UUID. Writes resolve with no bin, then the by-id write applies the bin, so an expired UUID still soft-deletes. Graph uses `store_get_any*` or `store_get_row*`. One function with a mode flag would braid those three rules.
+- **Kept:** `err_not_a_memory_id`'s three failure returns are uncovered and defensive. Triggers: `snprintf` returns negative, `malloc` returns NULL, and the second `snprintf` length does not match the first. No fault hook. Same shape as `err_fmt`. `diag_error_split` returns -1 when the code is outside the catalog. The only caller passes `DIAG_INVALID_ARGUMENT`.
+- **Kept, not a defect:** M5. The 16 stage-2a mutants were not re-run.
+
+Mutants, one clause at a time, each rebuilt (a same-second rewrite can skip `make`). No survivor. A drop of `parse_entry_id` did not build (`out_id` unused) and is not a survivor. The valid rewrite is listed.
+
+| Mutant | Change | Red test |
+|---|---|---|
+| M1 | skip the canonical-UUID check | `envelope_get_by_digits_and_by_uuid_is_the_same_memory` |
+| M2 | `all_digits` rejects only bytes above `'9'` | `envelope_positional_rejects_what_is_not_a_memory_id` |
+| M3 | `parse_entry_id(...) == 0` becomes `!= 0` | `envelope_get_by_digits_and_by_uuid_is_the_same_memory` |
+| M4 | swap the C-01 message and fix | `envelope_get_by_digits_and_by_uuid_is_the_same_memory` |
+| M5 | JSON fix always comes from `k_fix` | `envelope_get_by_digits_and_by_uuid_is_the_same_memory` |
+| M6 | plain notice does not append `fix` | `envelope_get_by_digits_and_by_uuid_is_the_same_memory` |
+| M7 | bind a UUID with `store_get_by_sync_id` on the live bin | `envelope_delete_expired_by_uuid_is_a_soft_delete` |
+| M8 | `--deleted` UUID load uses `store_get_any_by_sync_id` | `envelope_uuid_positional_updates_deletes_and_links` |
+| M9 | `cmd_update` stores the bind result in `rc` | `golden_error_lines_and_d9_codes` |
+| M10 | `kind > 0` becomes `kind == 0` in `load_positional` | `envelope_uuid_positional_updates_deletes_and_links` |
+
+DRY / easy to replace / orthogonal / simplify:
+
+- One classifier (`classify_memory_positional`). get, delete, update, rekey, and both graph ends call it. The C-01 sentence has one writer (`err_not_a_memory_id`).
+- The cursor draft and the locator fix are different sentences for one code. `diag_error_split` is the split. `diag_error` is unchanged, so every other `invalid_argument` still uses the draft.
+- Digits are a scan plus the existing id parse. The scan is the new rule. The parse stays the shared `>= 1` check, including `conflict accept --id`.
+
+### Stage 4: actors replace source (2026-11-02)
+
+A memory has `created_by` and `updated_by`. Each is `{kind, id}`. `kind` is `human`, `agent`, `tool`, `share`, or `import`. `id` is a string or null. There is no `source` field. There is no actor kind `sync` (JE-4.4, the Actors paragraph, `decision:g2-02`). `decision:provenance-actors` still lists `sync`; this plan does not store it.
+
+What changed:
+
+- New writes bind canonical actor JSON from `actor_write` in `normalize.c`. `sqlite3` `json_object` omits null, so the text is built in C. A person at the CLI is `human` and id null. `--as` is `human`, `agent`, `tool`, or `share`. Not `sync`. Not `import`. `--actor` replaces only `id` (1 to 64 of `[A-Za-z0-9_./:-]`). `--as` does not clear `--actor`. `--source` is an unknown option, including as a search filter. Search filters are `--created-by` and `--updated-by`. Those accept the five stored kinds, including `import`, and reject `sync`.
+- `REMEMBER_HOOK_DEPTH` of 1 or more rejects `--as` and `--actor` with `invalid_argument`. The depth is a full-string integer, so `01` blocks and `00` does not. A hook write with neither flag stays `human` and id null. Plan 25 stamps `{kind: tool, id: plugin/<name>/run}`. The rejection calls `diag_error(DIAG_INVALID_ARGUMENT, NULL)`. The message is empty. JSON `fix` stays the cursor draft (`Run 'remember list' again without --cursor.`). `k_fix` is unchanged. Plain does not append that draft, so the line is `remember: ` and a newline. The sentence is not written.
+- The write table is the field changes only. Plan 25 inserts the outbox. Body, tags, key, or `expires_at` changes, soft delete, and restore set `updated_at` and `updated_by`, add 1 to the memory vector, and set `change_seq`. `created_by` stays the original author. Link and unlink do that stamp on each end and do not change either memory vector. The link row's own vector moves, and both the end and the link row get `change_seq`. Unlink keeps the row and sets `deleted_at`. A later link of that pair clears `deleted_at` (CREATED). A repeat of a live link is MERGED. A same-key rekey and an identical update change nothing and emit no event. Purge removes the row and writes one tombstone. It does not set `updated_by`. Expiry marking writes `expired_at` only. Hard delete validates `--as` and `--actor` when the parser sees them and does not store an actor.
+- Sync apply (`import --from-db` of v4 or v5) keeps the author's `created_by`, `updated_by`, and `updated_at` (008-18). A v4/v5 `source` token becomes both actors, `unknown` to `human`, id null. User version above 5 is refused. There is no plan 23 file reader. Kind `import` is accepted by the actor helper and by the search filter. A unit test stores it. Settings import is plan 20.
+- The list cursor's optional `source` slot is `created_by` and `updated_by`. No new sentence. An old cursor still fails at the required `at` field with the existing invalid-cursor error.
+
+Not in stage 4, on purpose: `--trash`, the `flag_meaning_changed` warning, the wrong-list lines, `purge-trash`, and the deleted fix. That fix stays `Add --deleted to use it.` Stage 5 changes it. C-42 rows stay drafts. Approved lines stay C-01, C-02, and C-35. `--hooks` and `--no-hooks` are accepted and do not change delivery. The positional locator stays. M5 stays. No one-row CLI purge. 008-16 calls `store_purge` on a deleted row.
+
+Tests: `envelope_a_new_memory_has_created_by_and_updated_by_and_no_source` (008-2, no `source`). Also 008-16, 008-17, 008-18, and 008-20 (`search --created-by agent`).
+
+Gate (Apple clang, Debug, sanitizers on, LSAN off, `REMEMBER_TEST_VFS=ON`, Unix Makefiles; coverage with Homebrew LLVM 22). `BUILD_DIR` was not exported. ninja is absent. `origin/main` was not merged (`standard:coding` rule 7 says merge at stage start; this stage's prompt says stage 9 merges `origin/main`). ctest 5/5. Coverage: store 497 and CLI 896, both 0 failed; functions 100%; effective lines 100% (zero-hit 2072, all defensive, must-cover 0); branch sides 0 missed on `normalize.c` (504), `output.c` (720), `search_terms.c` (176), `unicode.c` (80). Lint `LINT OK` (LLVM 22 clang-tidy, cppcheck, gcc -fanalyzer, scan-build; include-what-you-use skipped, not installed). `default.profraw` stays untracked. Version stays 0.2.0. The 16 stage-2a mutants and the 10 stage-3 mutants were not re-run. M5 stays.
+
+### Stage 4 deep review (2026-11-02, in session)
+
+`decision:plan21-stage-flow`: in-session deep review, fix, continue. No `.claude/REVIEW_REQUEST`. Local Bugbot is not installed. No product question is open. `standard:coding` says merge `main` at the start of a stage. This prompt says stage 9 merges `origin/main`, so it was not merged. `decision:2026-11-01-legacy-plans-spec-step` says stage 9 is the spec stage and the whole-plan review is after that. This stage does not write `.claude/WHOLE_PLAN_REVIEW`. `quality:linters-max` allows a local `NOLINT`. The swappable-parameter, cognitive-complexity, and `getenv` notes are that allowance. No `NOLINT` was added to silence coverage.
+
+The gate above is the production tree. The review then added two assertions and did not change production. `remember_store_tests` 497/0 and `sync_import` 39/0 passed again under ASan. Coverage was not re-run.
+
+Findings:
+
+- **Important, fixed:** `same_tag_set` treated a repeated `--tag` as the same set when the request was only a subset. `a,a` on stored `{a,b}` did not write. `entry_tags` collapses duplicates, so equality is both directions and ignores the request length. `store_update_duplicate_tags_follow_the_stored_set` covers it.
+- **Important, fixed before the gate:** `import_row_from_stmt` called `actor_resolve`, and gcc -fanalyzer reported a leak of the source string because that function is in the same TU. The stamp now calls `actor_json`. A valid v4/v5 token into `ACTOR_JSON_CAP` cannot fail. The `(void)` is that fact. An error return would be an uncovered line.
+- **Nit, fixed:** `store_link_bumps_both_endpoints` passed a null actor, which is the same `human` the add already stored, so a skipped `set_updated_by` still passed. The link now passes `agent` and both ends keep `created_by` human. `store_import_no_sidecar_copy_devices_stay_one` now requires the imported `agent` stamp. An empty stamp becomes `human` through `actor_resolve("")`.
+- **Kept:** the import stamp's `unknown` to `human` writes the same bytes as an empty buffer. `actor_resolve` is the map `store_add` of token `unknown` uses, and those calls expect `STORE_OK`.
+- **Kept:** the hook sentence stays unprinted. Empty `invalid_argument` plus the cursor-draft `k_fix` is the shape.
+- **Kept:** `Entry.id` and `Entry.sync_id` stay the C names. Two static uuid helpers in tests stay. The cursor codec stays in `cmd_query.c`. SQLite stays in `store_sqlite.c`. The flag table stays in `src/cli.c`. No new module.
+- **Kept, not a defect:** M5. The 16 stage-2a mutants and the 10 stage-3 mutants were not re-run. `skills/remember/SKILL.md` still documents `source`. This plan's Files list does not edit it.
+
+Mutants, one clause at a time, each rebuilt. No survivor. Sources were restored after the last one (hash check).
+
+| Mutant | Change | Red test |
+|---|---|---|
+| M1 | `same_tag_set` returns after the request loop | `store_update_duplicate_tags_follow_the_stored_set` |
+| M2 | hook depth never blocks | `actor_from_cli_stamps_a_person_and_blocks_a_hook` |
+| M3 | hook depth blocks with no flags | `actor_from_cli_stamps_a_person_and_blocks_a_hook` |
+| M4 | v5 import skips the actor stamp | `store_import_no_sidecar_copy_devices_stay_one` |
+| M5 | a link end skips `set_updated_by` | `store_link_bumps_both_endpoints` |
+| M6 | a link end also bumps the memory vector | `store_link_bumps_both_endpoints` |
+| M7 | unlink binds `deleted_at` null | `store_unlink_idempotent_and_pair` |
+| M8 | `--as` accepts `import` | `actor_from_cli_stamps_a_person_and_blocks_a_hook` |
+| M9 | `--updated-by` rejects `import` | `search_updated_by_import_is_that_kind_only` |
+| M10 | `set_updated_by` also writes `created_by` | `store_link_bumps_both_endpoints` |
+
+DRY / easy to replace / orthogonal / simplify:
+
+- One actor writer (`actor_write`). The store binds that text. Output writes the stored object. One CLI helper (`cmd_actor_json`) and one filter check (`cmd_reject_filter_kind`).
+- The stamp stays in the command that already writes (`set_updated_by`, `note_link_end`, `update_apply_changes`, soft delete, rekey). Link and unlink share `note_link_end`.
+- `created_by` does not move on a later local write. `updated_by` does. Kind `import` is stored and searchable. `--as` rejects it. Plan 23 does the file write.
+- Actor JSON is `memcpy`. `snprintf` in `normalize.c` leaves llvm-cov branch sides at 0. `same_tag_set` is two loops. A shared `const char *const *` helper discarded qualifiers on `Entry.tags`.
+
+### Stage 5: --trash selects the Deleted bin (2026-11-02)
+
+`--trash` selects Deleted. `--expired` selects expired memories. They are not aliases. This replaces the 0.2 plan-12 behavior (`decision:2026-10-22-M-23`, `decision:2026-10-22-trash-flag` as amended, `decision:g2-03`, `decision:s-09`).
+
+What changed:
+
+- `cmd_bin_resolve` maps `--trash` to `STORE_BIN_DELETED` and prints one warning. Code `flag_meaning_changed`. Detail `{"flag":"--trash","use":"--expired"}` (flag, then use). Plain: `remember: warning: --trash now means the Trash (deleted memories). For expired memories, use --expired.` With `--json`, that item is in `warnings` and stderr is empty. `--strict` or `REMEMBER_STRICT=1` (exactly `1`) makes any warning exit 4, including when the command also failed. `REMEMBER_STRICT` is 4. Exit 4 has no other meaning. The warning stays for this plan.
+- Help on get, update, list, search, tags, and rekey prints the two locked lines. Delete does not. General help names `[--strict]`, the bins line `--trash selects the Deleted bin.`, and `4  a warning under --strict`. The command footer does not list `--strict` (stage 7). The delete summary drops `--deleted`.
+- Wrong list, exit 3. The label is the key, otherwise the id (the UUID). `k_fix[DIAG_DELETED]` is `Add --trash to use it.` `k_fix[DIAG_EXPIRED]` stays `Add --expired to use it.` `not_expired` and `not_deleted` stay the catalog tokens. A row with no key and an empty id has nothing to quote, so the line stays `remember: deleted`.
+- `purge-trash` is an unknown command. `store_purge_trash` and its store tests stay. Do not add empty `--trash`. `delete --deleted` is an unknown option. `delete --trash` prints the locked warning, then the existing `unknown option '--trash'`, and does not wipe. Restore is `update --trash --undelete`. `update --deleted --undelete` still restores (same bin). `--trash` with `--deleted` is that bin, not a conflict. `--trash` with `--expired` is `cannot combine --expired and --trash`.
+- `purge --trash` uses the shared resolver, so it selects Deleted and warns. Graph `--trash` includes deleted ends and still warns. Graph still rejects only `--expired`. A list cursor's bin token follows the resolved bin, so `--trash` is `deleted`.
+
+Not in stage 5, on purpose: `remember brain new-id` (stage 6), `--color` and `--quiet` (stage 7), `unknown_field` (stage 8), the spec (stage 9). No one-row CLI purge (plan 25). `delete --expired` stays a one-row hard wipe. `decision:purge-command` / H-16.8 describes a bulk soft-delete of every due expired row. The stage-5 paragraphs do not name that, so it was not built. Other C-42 fixes stay drafts. Approved lines stay C-01, C-02, and C-35. M5 stays `rc = (rc == REMEMBER_OK && diag_json_has_error()) ? REMEMBER_ERR : rc;`. The strict override is after that line, in `remember_run`. Actors, the positional locator, and `--hooks` / `--no-hooks` stay as stage 4 left them. INDEX row 21 and the definition of done stay unticked. No `state:implemented`.
+
+Tests: `envelope_trash_is_the_deleted_bin` was the red test. The gate also covers strict exit 4, the help lines, `update --trash --undelete`, the keyless UUID line, the mutex, `purge --trash`, and a live row that `delete --trash` does not wipe.
+
+Gate (Apple clang, Debug, sanitizers on, LSAN off, `REMEMBER_TEST_VFS=ON`, Unix Makefiles; coverage with Homebrew LLVM 22). `BUILD_DIR` was not exported. ninja is absent. `origin/main` was not merged (`standard:coding` rule 7 says merge at stage start; this stage's prompt says stage 9 merges `origin/main`). ctest 5/5 (step_gate 60.91s, step05_gate 57.41s, store_asan_gate 12.62s, install_skill 2.34s, no_shim_symbols 0.76s). Coverage: store 497 and CLI 905, both 0 failed; functions 100%; effective lines 100% (zero-hit 2079, all defensive, must-cover 0); branch sides 0 missed on `normalize.c` (504), `output.c` (720), `search_terms.c` (176), `unicode.c` (80). Lint `LINT OK` (LLVM 22 clang-tidy, cppcheck, gcc -fanalyzer, scan-build; include-what-you-use skipped, not installed). `default.profraw` stays untracked. Version stays 0.2.0. The 16 stage-2a mutants, the 10 stage-3 mutants, and the 10 stage-4 mutants were not re-run.
+
+Docs that named the old alias were updated with the locked lines: `docs/engineering-notes.md`, the current claims in `README.md`, and `skills/remember/SKILL.md` in this worktree. Design logs, old plans, INDEX, and `docs/JSON-STYLE.md` were not edited. The v0.1.0 README history was left. The installed grok skill was not edited. The worktree skill still has `--source` in the add examples (stage 4 left that).
+
+### Stage 5 deep review (2026-11-02, in session)
+
+`decision:plan21-stage-flow`: in-session deep review, fix, continue. No `.claude/REVIEW_REQUEST`. Local Bugbot is not installed. No product question is open. `standard:coding` says merge `main` at the start of a stage. This prompt says stage 9 merges `origin/main`, so it was not merged. `decision:2026-11-01-legacy-plans-spec-step` says stage 9 is the spec stage and the whole-plan review is after that. This stage does not write `.claude/WHOLE_PLAN_REVIEW`. `quality:linters-max` allows a local `NOLINT`. `g_warning_count` has the same note as `g_json`. The `getenv` note was already there.
+
+The first coverage run failed on two lines (`src/cmd_locator.c` label fallback, `src/diag.c` plain warning write failure). The first lint run failed on an `int`/`bool` conversion, the new counter, two short test names, and two `variableScope` warnings. Those are fixed in the tree the gate above measured.
+
+Findings:
+
+- **Important, fixed:** `delete --trash` on a live row returned before any wipe, and the test did not read the row afterward. `cli_delete_expired_hard_wipes_one_row` now gets local id 2 and expects the body `stay`.
+- **Important, fixed:** a missing label (no key, empty id) fell through to `store_status_to_exit` and nothing covered that line. `envelope_blank_id_wrong_list_keeps_the_deleted_token` expects `remember: deleted`.
+- **Important, fixed:** a plain warning whose stderr rejects the write set `rc = -1` and nothing covered it. `plain_warning_that_cannot_be_written_does_not_count` expects failure and a warning count of 0, so `--strict` does not see a warning that was not written.
+- **Kept:** `delete --expired` is still one row, hard. H-16.8 is not this stage.
+- **Kept:** `delete --trash` fails with the existing unknown-option sentence after the locked warning. The stage paragraphs do not lock a different failure sentence.
+- **Kept:** `purge --trash` selects Deleted and warns. The shared resolver is why. Empty `--trash` was not added.
+- **Kept:** M5. The prior mutant sets were not re-run. The 14 stage-5 mutants below were killed before the tidy rewrite that split `||` and the ternary into `if`s. Those predicates are unchanged, and the tests that killed M1 and M12 passed again in the gate. The 14 were not re-run after that spelling change.
+- **Kept:** three test names still say the old alias or hard-wipe. The assertions match this stage.
+
+Mutants, one clause at a time, each rebuilt. No survivor. Sources were restored after the last one (hash check).
+
+| Mutant | Change | Red test |
+|---|---|---|
+| M1 | `want_expired` includes trash; `want_deleted` does not | `envelope_trash_is_the_deleted_bin` |
+| M2 | warning only if trash, expired, and deleted | `envelope_trash_is_the_deleted_bin` |
+| M3 | detail field order swapped | `envelope_warnings_keep_their_order_with_a_comma_between` |
+| M4 | strict block ignores `rc` | `envelope_strict_makes_a_trash_warning_exit_4` |
+| M5 | `REMEMBER_STRICT` matches `strcmp == 1` | `envelope_strict_makes_a_trash_warning_exit_4` |
+| M6 | keyed wrong-list label is the local id | `envelope_trash_is_the_deleted_bin` |
+| M7 | keyless label is the local id | `envelope_keyless_wrong_list_uses_the_uuid` |
+| M8 | the two wrong-list sentences are swapped | `envelope_trash_is_the_deleted_bin` |
+| M9 | plain wrong-list omits the fix | `envelope_trash_is_the_deleted_bin` |
+| M10 | command table registers `purge-trash` | `envelope_help_states_trash_and_expired` |
+| M11 | delete accepts `--deleted` | `cli_delete_deleted_hard_wipes_the_row` |
+| M12 | `--trash` and `--expired` are both allowed | `envelope_trash_and_expired_cannot_combine` |
+| M13 | JSON warnings also go to stderr | `envelope_warnings_keep_their_order_with_a_comma_between` |
+| M14 | the warning is emitted twice | `envelope_trash_is_the_deleted_bin` |
+
+DRY / easy to replace / orthogonal / simplify:
+
+- One resolver (`cmd_bin_resolve`) owns the bin and the one warning. Delete rejects `--trash` and `--deleted` after that resolve, so the warning still prints and the row is not wiped.
+- One wrong-list writer (`exit_wrong_list`). get, delete, update, and rekey call `exit_after_store` for `STORE_ERR_EXPIRED` and `STORE_ERR_DELETED` only.
+- The warning counter lives in `diag.c`, survives `diag_json_end`, and resets at `remember_run`. Exit 4 is only that counter under `--strict`.
+
+### Stage 6: remember brain new-id (2026-11-07)
+
+`remember brain new-id` replaces `brain_meta.brain_id` with a new lowercase UUID v7 and prints that id. It does not change `change_seq`, a version vector, or a memory. `--json` type is `brain.new_id.result`. `data` is `{brain_id, previous_brain_id}`. The command name is `remember brain new-id`. Do not add `remember brains`. (`decision:brain-id`. 008-14 write half: `brain new-id` replaces `brain_id` only. Probe 7.)
+
+What changed:
+
+- `src/cmd_brain.c`. `cmd_brain_reject_args` accepts exactly `new-id` and runs before open, so `remember brain` does not create a file. Usage is `remember: brain takes 'new-id'` and `remember: brain new-id takes no arguments`. `cmd_brain` calls `store_brain_new_id` and prints the new id. Plain output reuses `output_device_human`. `--json` uses `output_brain_new_id_data`. Field order is `brain_id`, then `previous_brain_id`.
+- `store_brain_new_id` starts in `begin_write`, so a newer `min_reader_version` is `STORE_ERR_SCHEMA_TOO_NEW` and writes nothing. It reads `brain_meta.brain_id`, refuses a non-canonical id (`STORE_ERR_INTERNAL`, rollback, no write), mints a lowercase UUID v7, and updates only that column. `sqlite3_changes != 1` rolls back. It does not call `stamp_change_seq`. `out` is filled after `COMMIT`.
+- `reply_noun_verb` returns `brain.new_id` for this command, including a usage failure. The command table registers `brain` only.
+- `remember help brain` prints the four locked sentences. General help lists `brain` as `Replace the brain id`.
+- Tests: `envelope_brain_new_id_replaces_only_the_brain_id` was the red test. It covers a missing path, one memory left unchanged (row, vector, `change_seq`, counts of entries, links, and tombstones), a second call whose `previous_brain_id` equals the first `brain_id`, a copied file opened with `--no-create` whose `brain_id` stays, extra-arg usage, unknown `brains`, help, and `min_reader_version` `0.4.0`. Output has the null-argument reject and the failed-write path. `facade_brain_new_id_matches_cli` matches the CLI bytes.
+
+Not in stage 6, on purpose: JE-3.10 (`decision:g2-05`). Until plan 25, open does not read `brains.json`, does not mint a new id for a copy, and does not rewrite a path for a move. Stages 7, 8, and 9. `--color` and `--quiet`. `unknown_field`. The spec. `--trash` stays the Deleted bin and is not an alias of `--expired`. The `flag_meaning_changed` warning stays. Actors, `--as`, `--actor`, `--created-by`, and `--updated-by` stay. The positional locator stays. `--hooks` and `--no-hooks` stay accepted and do not change delivery. Approved lines stay C-01, C-02, and C-35. Other C-42 fix lines stay drafts. M5 stays `rc = (rc == REMEMBER_OK && diag_json_has_error()) ? REMEMBER_ERR : rc;` in `run_json`. The 16 stage-2a mutants, the 10 stage-3 mutants, the 10 stage-4 mutants, and the 14 stage-5 mutants were not re-run. INDEX row 21 and the definition of done stay unticked. No `state:implemented`. Version stays 0.2.0.
+
+Gate (Apple clang, Debug, sanitizers on, LSAN off, `REMEMBER_TEST_VFS=ON`, Unix Makefiles; coverage with Homebrew LLVM 22). `BUILD_DIR` was not exported. ninja is absent. `origin/main` was not merged (`standard:coding` rule 7 says merge at stage start; this stage's prompt says stage 9 merges `origin/main`). ctest 5/5, real 8189.47s (step_gate 3941.56s, step05_gate 3031.00s, store_asan_gate 414.29s, install_skill 789.35s, no_shim_symbols 13.26s). Load average during that run was 50.74 53.52 55.20 on 10 cores. Stage 5 on a quiet machine was 60.91s, 57.41s, 12.62s, 2.34s, 0.76s. Coverage: store 499 and CLI 907, both 0 failed; functions 100%; raw lines 87.51%; effective lines 100% (zero-hit 2103, all defensive, must-cover 0); branch sides 0 missed on `search_terms.c` (176), `unicode.c` (80), `normalize.c` (504), `output.c` (736). Lint `LINT OK` (LLVM 22 clang-tidy, cppcheck, gcc -fanalyzer, scan-build; include-what-you-use skipped, not installed). `default.profraw` stays untracked.
+
+Docs that name the command: `docs/engineering-notes.md` (the `change_seq` bullet, a `cmd_brain.c` bullet, and `brain.new_id` next to `device.new`), one locked sentence in the `README.md` v0.3.0 section, and `skills/remember/SKILL.md` in this worktree (frontmatter token plus a `brain` section). Design logs, old plans, INDEX, `docs/JSON-STYLE.md`, and the installed grok skill were not edited. The worktree skill still has `--source` in the add examples (stage 4 left that).
+
+### Stage 6 deep review (2026-11-07, in session)
+
+`decision:plan21-stage-flow`: in-session deep review, fix, continue. No `.claude/REVIEW_REQUEST`. Local Bugbot is not installed. No product question is open. `standard:coding` says merge `main` at the start of a stage. This prompt says stage 9 merges `origin/main`, so it was not merged. `decision:2026-11-01-legacy-plans-spec-step` says stage 9 is the spec stage and the whole-plan review is after that. This stage does not write `.claude/WHOLE_PLAN_REVIEW`. `quality:linters-max` allows a local `NOLINT`. `take_field_uuid` has that note. The magic sizes became `FIELD_KEY_CAP` and `BRAIN_REPLY_CAP` before the gate. No `NOLINT` was added to silence coverage.
+
+The gate above is the production tree. The review found no product bug. Docs and these notes were written after the gate and do not change C, so coverage and lint were not re-run.
+
+Findings:
+
+- **Kept:** a stored `brain_id` that is not a canonical UUID v7 is `STORE_ERR_INTERNAL`. The transaction rolls back and nothing is written, so `previous_brain_id` is never a non-UUID.
+- **Kept:** `sqlite3_changes != 1` rolls back. `brain_meta` is one row.
+- **Kept:** the two usage sentences match device and repair. The envelope test locks them. Plain usage does not append the JSON fix. The JSON fix is `Run 'remember brain --help' to see how to use it.`
+- **Kept:** the general-help summary `Replace the brain id` is not a locked sentence. The command list needs a summary. Help body is the four locked sentences. "Do not add `remember brains`" and "Do not implement JE-3.10" are implementer constraints, not help text.
+- **Kept:** `output_brain_new_id_data` is its own writer. Field order is `brain_id`, then `previous_brain_id`. Plain output reuses `output_device_human`.
+- **Kept:** M5. The earlier mutant sets were not re-run. This stage did not edit those clauses.
+- **Kept:** `skills/remember/SKILL.md` still shows `--source` on add. Stage 4 left that. The brain section is the stage 6 edit.
+
+Mutants, one clause at a time, each rebuilt. No survivor. The envelope suite killed each one (`envelope_brain_new_id_replaces_only_the_brain_id`). Sources were restored after the last one. `cmake --build build --target remember` then exited 0.
+
+| Mutant | Change | Red test |
+|---|---|---|
+| bump-change-seq | `UPDATE` also sets `change_seq = change_seq + 1` | `envelope_brain_new_id_replaces_only_the_brain_id` |
+| swap-json-fields | JSON writes `previous_brain_id` before `brain_id` | `envelope_brain_new_id_replaces_only_the_brain_id` |
+| previous-is-new | `previous` is copied from the minted id | `envelope_brain_new_id_replaces_only_the_brain_id` |
+| wrong-type | `reply_noun_verb` returns `brain.new` | `envelope_brain_new_id_replaces_only_the_brain_id` |
+| register-brains | the command table also registers `brains` | `envelope_brain_new_id_replaces_only_the_brain_id` |
+| print-previous | plain output prints `previous` | `envelope_brain_new_id_replaces_only_the_brain_id` |
+| skip-begin-write | `BEGIN IMMEDIATE` instead of `begin_write` | `envelope_brain_new_id_replaces_only_the_brain_id` |
+
+DRY / easy to replace / orthogonal / simplify:
+
+- One store write (`store_brain_new_id`). `begin_write` is the write gate. `stamp_change_seq` is what takes a value, and this command does not call it.
+- One data writer (`output_brain_new_id_data`). The device sidecar and `brain_meta.brain_id` stay separate.
+- Argument rejection sits in front of open, the same place repair uses, so a typo does not create a brain file.
+- `decision:g2-05` stays unimplemented. A copied file keeps `brain_id` until this command runs.
+
+### Stage 7: --color and --quiet globals (2026-11-07)
+
+`--color` and `--quiet` are globals. Color is on only for a terminal, when `NO_COLOR` is unset and `TERM` is not the string `dumb`. `--color=auto|always|never` overrides. Status is a word. No checkmarks. No meaning by color alone. Progress goes to stderr only, when stderr is a terminal, as whole lines, at most once a second, with no spinner. `--quiet` turns it off. `--json` turns it off too. Progress is never in stdout and never inside `--json`. Prompts echo typed input. (`decision:2026-10-22-m-18`. H-16.10.)
+
+What changed:
+
+- `src/cli.c`. `--quiet` is a bare flag. `--color` takes `auto`, `always`, or `never`, as `--color=VALUE` or as the next token. A next token that looks like an option is a missing value. Last assignment wins. After `--`, both stay literal. A bad word is `invalid --color (must be auto, always, or never)`. That sentence is the busy-timeout house shape. It is not a COPY-PENDING line. An empty value is `option requires a value`.
+- `src/appio.c`. `app_use_color`, `app_progress`, and `app_prompt_line`. `auto` needs a terminal, an unset `NO_COLOR` (empty counts as set), and `TERM` other than `dumb`. Unset `TERM` is not dumb. `always` is on even when the stream is null, `NO_COLOR` is set, or `TERM` is dumb. `never` is off. Progress writes one masked line and a newline to stderr, then waits 1000 ms. Exactly 1000 ms allows the next line. A clock that goes backwards suppresses the line. A failed write does not move the clock and does not fail the command. The prompt writes through the same mask, flushes, and reads with `fgets`. It does not call `tcsetattr`.
+- `remember_run` stores the mode after `cli_parse`. The next `remember_run` replaces it. No current command prints color, a progress line, or a prompt. Plan 25 is the first caller.
+- General help prints the two C-02 lines. The usage line and every command footer list the globals, including `--strict`, which stage 5 left off the footer. There is no invented `--strict` help sentence.
+- Tests: `envelope_help_prints_the_color_and_quiet_lines` was the red test. Acceptance, the color matrix, progress, and the prompt are separate tests.
+
+Not in stage 7, on purpose: stage 8 (`unknown_field`, C-35) and stage 9 (the spec). `remember brain new-id` stays. Do not add `remember brains`. JE-3.10 stays unimplemented. `--trash` stays the Deleted bin and is not an alias of `--expired`. The `flag_meaning_changed` warning stays. Actors, `--as`, `--actor`, `--created-by`, and `--updated-by` stay. The positional locator stays. Exit 5 and `--yes` stay unimplemented (`decision:2026-11-03-confirmation-required-exit-5`). Approved lines stay C-01, C-02, and C-35. Other C-42 fix lines stay drafts. M5 stays `rc = (rc == REMEMBER_OK && diag_json_has_error()) ? REMEMBER_ERR : rc;` in `run_json`. The 16 stage-2a mutants, the 10 stage-3 mutants, the 10 stage-4 mutants, the 14 stage-5 mutants, and the 7 stage-6 mutants were not re-run. INDEX row 21 and the definition of done stay unticked. No `state:implemented`. Version stays 0.2.0. No `.claude/WHOLE_PLAN_REVIEW`.
+
+`--hooks` and `--no-hooks`: the plan says accept them and do not change delivery until plan 25. The stage-6 binary rejects both as unknown options. Stage 7 left that as it is. It does not lock the rejection.
+
+Gate (Apple clang, Debug, sanitizers on, LSAN off, `REMEMBER_TEST_VFS=ON`, Unix Makefiles; coverage with Homebrew LLVM 22). `BUILD_DIR` was not exported. ninja is absent. `origin/main` was not merged (`standard:coding` rule 7 says merge at stage start; this stage's prompt says stage 9 merges `origin/main`). ctest 5/5, real 155.59s (step_gate 68.87s, step05_gate 68.69s, store_asan_gate 15.36s, install_skill 1.94s, no_shim_symbols 0.72s). Load average during that run was 8.78 8.85 7.15. Coverage: store 499 and CLI 912, both 0 failed; functions 100%; raw lines 87.60%; effective lines 100% (zero-hit 2111, all defensive, must-cover 0); branch sides 0 missed on `search_terms.c` (176), `unicode.c` (80), `normalize.c` (504), `output.c` (736). Lint `LINT OK` (LLVM 22 clang-tidy, cppcheck, gcc -fanalyzer, scan-build; include-what-you-use skipped, not installed). `leaks-macos: PASS`. `default.profraw` stays untracked.
+
+The first lint run failed on two cppcheck notes (`constVariablePointer` on the prompt read, and `knownConditionTrueFalse` where a config with neither `__APPLE__` nor `__GLIBC__` saw `open_dead_stream` return NULL). Those are fixed in the tree the gate above measured. The dead stream is local to the envelope test. `failing_stream.c` stays linked only into `remember_store_tests`, so CMake was not reconfigured.
+
+Docs that name the flags: `docs/engineering-notes.md` (the globals bullet), the current claims in `README.md`, and `skills/remember/SKILL.md` in this worktree (the usage line and the two C-02 rows). Design logs, old plans, INDEX, `docs/JSON-STYLE.md`, and the installed grok skill were not edited. The worktree skill still has `--source` in the add examples (stage 4 left that).
+
+### Stage 7 deep review (2026-11-07, in session)
+
+`decision:plan21-stage-flow`: in-session deep review, fix, continue. No `.claude/REVIEW_REQUEST`. Local Bugbot is not installed. No product question is open. `standard:coding` says merge `main` at the start of a stage. This prompt says stage 9 merges `origin/main`, so it was not merged. `decision:2026-11-01-legacy-plans-spec-step` says stage 9 is the spec stage and the whole-plan review is after that. This stage does not write `.claude/WHOLE_PLAN_REVIEW`. `quality:linters-max` allows a local `NOLINT`. The new notes are the same kind already used for `getenv`, padding, and swappable test parameters.
+
+The gate above is the production tree. The review found no product bug. These notes were written after the gate and do not change C.
+
+Findings:
+
+- **Kept:** no command prints color, progress, or a prompt yet. The rules live in `appio.c` and `remember_run` stores the mode. Plan 25 is the caller.
+- **Kept:** an invalid `--color` uses the busy-timeout sentence shape. COPY-PENDING has no sentence for it.
+- **Kept:** `--hooks` and `--no-hooks` stay unknown options. The plan says accept them. This stage did not change that and did not lock it.
+- **Kept:** exit 5 is not implemented. A prompt does not require a terminal.
+- **Kept:** M5. The earlier mutant sets were not re-run. This stage did not edit those clauses.
+- **Kept:** `skills/remember/SKILL.md` still shows `--source` on add. Stage 4 left that.
+- **Kept:** progress clears output processing only in the test, so a program `\r` is visible. The prompt test leaves the terminal's echo on. The assertion is that the echo contains the typed word and a newline.
+
+Mutants, one clause at a time, each rebuilt (`cmake --build build --target remember remember_tests -j 8`, then `./build/remember_tests ./build/remember --only envelope`). No survivor. Sources were restored after the last one (hash check). A first spelling of the space-form mutant, `strcmp(arg, "--color") == 1`, was not a valid mutant: on this libc `strcmp("--db", "--color")` is 1, so every `--db` run failed. The row below is the rewrite that rejects only the space form.
+
+| Mutant | Change | Red test |
+|---|---|---|
+| never-always-swapped | `never` returns true and `always` returns false | `envelope_color_follows_the_tty_and_the_environment` |
+| auto-ignores-no-color | `NO_COLOR` disables color only for the sentinel `___never___` | `envelope_color_follows_the_tty_and_the_environment` |
+| empty-no-color-unset | an empty `NO_COLOR` allows color | `envelope_color_follows_the_tty_and_the_environment` |
+| term-dumb-ok | `TERM=dumb` does not disable color | `envelope_color_follows_the_tty_and_the_environment` |
+| unset-term-dumb | an unset `TERM` disables color | `envelope_color_follows_the_tty_and_the_environment` |
+| auto-ignores-isatty | the terminal check's result is discarded | `envelope_color_follows_the_tty_and_the_environment` |
+| always-requires-tty | `always` still requires a terminal | `envelope_color_follows_the_tty_and_the_environment` |
+| progress-writes-stdout | the line is written to stdout | `envelope_progress_is_a_stderr_line_and_quiet_json_stop_it` |
+| progress-ignores-quiet | `--quiet` does not stop a real line | `envelope_progress_is_a_stderr_line_and_quiet_json_stop_it` |
+| progress-ignores-json | `--json` does not stop a real line | `envelope_progress_is_a_stderr_line_and_quiet_json_stop_it` |
+| progress-ignores-tty | a non-terminal still gets a line | `envelope_progress_is_a_stderr_line_and_quiet_json_stop_it` |
+| interval-le | the gap test is `<=` 1000 ms | `envelope_progress_is_a_stderr_line_and_quiet_json_stop_it` |
+| progress-adds-cr | a CR is written before the newline | `envelope_progress_is_a_stderr_line_and_quiet_json_stop_it` |
+| color-eq-unknown | the `--color=` prefix is `--colour=` | `envelope_color_and_quiet_are_accepted_as_globals` |
+| space-form-rejected | the space form matches `--color-space` | `envelope_color_and_quiet_are_accepted_as_globals` |
+| flag-after-dd-consumed | `--` does not end option scanning | `envelope_color_and_quiet_are_accepted_as_globals` |
+| footer-omits-strict | the footer drops `--strict` | `envelope_help_prints_the_color_and_quiet_lines` |
+| help-sentence-drifted | the C-02 line says `tty` instead of `terminal` | `envelope_help_prints_the_color_and_quiet_lines` |
+
+DRY / easy to replace / orthogonal / simplify:
+
+- One parser (`take_quiet_or_color`) owns both spellings of `--color` and the bare `--quiet`. `take_global` calls it first.
+- One mode (`AppPresentation`) is stored by `remember_run`. Color, progress, and prompts read that mode. They do not read `argv` again.
+- `remember_run` fills the mode from the parsed globals. An earlier draft set `auto` and then overwrote the three fields. That extra write is gone.
+- Not taken: fold the three progress writes into one condition. Each call can fail, and the clock moves only after all three succeed. About four lines. The separate checks stay.
+- Not taken: inline `take_quiet_or_color` into `take_global`. `take_global` already owns the other globals. The two color spellings are one function.
+- Not taken: link `failing_stream.c` into `remember_tests`. That reconfigures CMake. The envelope test keeps a local dead stream. The Linux branch defines `_GNU_SOURCE` before the includes, the same way `failing_stream.c` does.
+
+### Stage 8: unknown_field (2026-11-07)
+
+An unknown field is a warning `unknown_field`, once per file or stream. The plain lines are C-35. Do not silently ignore the field. (`decision:json-unknown-fields`. 008 JE-4.1. JSON-STYLE §1.13.) `plugin.json` members `run`, `permissions`, and `filter` are `plugin_manifest_invalid`, not this warning (plan 25). A plugin's own `unknown_field` stays in the plugin log and plugin status. Export and import files are plans 22 and 23.
+
+What changed:
+
+- `DIAG_WARN_UNKNOWN_FIELD` is the last warning. The token is `unknown_field`. The plain prefix is `warning: `, so the line is `remember: warning: ` plus the C-35 sentence.
+- `diag_unknown_field` takes a `DiagUnknownField` (`path`, `name`). `path` NULL is stdin. The file sentence quotes the path. The stream sentence says `stdin` with no quotes around that word. JSON `detail` is `field`, then `where` (the raw path, or `stdin`).
+- The same path bytes warn once, even from a different pointer. A second field in that file or stream prints nothing. Stdin and a file do not share a slot. Two paths each warn. `diag_warnings_reset` drops the set. A failed write does not mark the path, so a later write of that path still prints. A NULL name returns -1 and writes nothing. An empty name is a real key.
+- The sentence is allocated to fit the path and the name. Plain output goes through `output_text_human` (newline, ESC, DEL, and a UTF-8 C1 become `?`; tab stays; the line stays one line). JSON escapes the same bytes. The message is not masked before it is stored.
+- No command reads a JSON file or JSON stdin. The list cursor still rejects an unknown member (`invalid_argument`). There is no cursor sentence in C-35.
+
+Not in stage 8, on purpose: stage 9 (the spec). `remember brain new-id` stays. Do not add `remember brains`. JE-3.10 stays unimplemented. `--trash` stays the Deleted bin and is not an alias of `--expired`. The `flag_meaning_changed` warning stays. Actors, `--as`, `--actor`, `--created-by`, and `--updated-by` stay. The positional locator stays. Exit 5 and `--yes` stay unimplemented. Approved lines stay C-01, C-02, and C-35. Other C-42 fix lines stay drafts. M5 stays `rc = (rc == REMEMBER_OK && diag_json_has_error()) ? REMEMBER_ERR : rc;` in `run_json`. The 16 stage-2a mutants, the 10 stage-3 mutants, the 10 stage-4 mutants, the 14 stage-5 mutants, the 7 stage-6 mutants, and the 18 stage-7 mutants were not re-run. INDEX row 21 and the definition of done stay unticked. No `state:implemented`. Version stays 0.2.0. No `.claude/WHOLE_PLAN_REVIEW`.
+
+`--hooks` and `--no-hooks`: the plan says accept them and do not change delivery until plan 25. The binary still rejects both as unknown options. Stage 7 left that. Stage 8 did not implement acceptance and did not lock the rejection.
+
+Gate (Apple clang, Debug, sanitizers on, LSAN off, `REMEMBER_TEST_VFS=ON`, Unix Makefiles; coverage with Homebrew LLVM 22). `BUILD_DIR` was not exported. `build/` was not reconfigured. ninja is absent. `origin/main` was not merged (`standard:coding` rule 7 says merge at stage start; this stage's prompt says stage 9 merges `origin/main`). ctest 5/5, real 162.70s (step_gate 70.71s, step05_gate 69.23s, store_asan_gate 16.54s, install_skill 4.49s, no_shim_symbols 1.71s). The coverage run and the lint run overlapped that ctest. Load after the three finished: 20.52 17.14 13.30. Coverage: store 499 and CLI 922, both 0 failed; functions 100%; raw lines 87.57%; effective lines 100% (zero-hit 2128, all defensive, must-cover 0); branch sides 0 missed on `search_terms.c` (176), `unicode.c` (80), `normalize.c` (504), `output.c` (736). Lint `LINT OK` (LLVM 22 clang-tidy, cppcheck, gcc -fanalyzer, scan-build; include-what-you-use skipped, not installed). `leaks-macos: PASS`. `default.profraw` stays untracked.
+
+`docs/engineering-notes.md` names `unknown_field` and the two C-35 lines. The same sentence now also names `setting_invalid`, which was already a warning token and was missing from that list. Design logs, `docs/JSON-STYLE.md`, INDEX, `README.md`, and both skill copies were not edited. JSON-STYLE already lists `unknown_field` on the exit-4 line. The worktree skill still has `--source` on add (stage 4 left that).
+
+### Stage 8 deep review (2026-11-07, in session)
+
+`decision:plan21-stage-flow`: in-session deep review, fix, continue. No `.claude/REVIEW_REQUEST`. Local Bugbot is not installed. No product question is open. `standard:coding` says merge `main` at the start of a stage. This prompt says stage 9 merges `origin/main`, so it was not merged. `decision:2026-11-01-legacy-plans-spec-step` says stage 9 is the spec stage and the whole-plan review is after that. This stage does not write `.claude/WHOLE_PLAN_REVIEW`. `quality:linters-max` allows the existing `NOLINT` on the new globals. The new notes are the same kind already used for the warning-count global.
+
+The gate above is the production tree. These notes were written after the gate and do not change C. The review found no product bug.
+
+Findings:
+
+- **Kept:** no command calls `diag_unknown_field` yet. Plans 22, 23, and 25 are the readers. The list cursor still returns `invalid_argument` for an unknown member. C-35 has no cursor line, so that rejection stays.
+- **Kept:** `--strict` is the existing count check. `unknown_field` is not special-cased.
+- **Kept:** a missed mark after a written line returns 0. The sentence says the rest of the file was read. A second warning on that OOM is the rare case.
+- **Kept:** the path set is freed on the next `diag_warnings_reset`. One `remember_run` frees the previous run's paths at the start. The strings stay reachable from the global until then.
+- **Kept:** `--hooks` and `--no-hooks` stay unknown options. This stage did not lock that.
+- **Kept:** M5. The earlier mutant sets were not re-run. This stage did not edit those clauses.
+- **Kept:** `skills/remember/SKILL.md` still shows `--source` on add. Stage 4 left that.
+
+Mutants, one clause at a time, each rebuilt, then `remember_tests --only envelope` (the failed-write mutant used `--only errors`). No survivor. `diag.c` was restored after the last one (byte check) and `remember_tests` was rebuilt. Three first spellings were not valid mutants: swapping the two format strings fails `-Wformat` because the file sentence takes two arguments and the stream sentence takes one; deleting the seen check leaves `unknown_field_seen` unused; deleting the `unknown_fields_reset` call leaves that function unused. The rows below are the rewrites that compile.
+
+| Mutant | Change | Red test |
+|---|---|---|
+| sentences-swapped | a file gets the stdin sentence, and stdin gets the file sentence with the word stdin as the path | `envelope_unknown_field_warns_once_for_a_file` |
+| file-says-input | the file sentence says `input` | `envelope_unknown_field_warns_once_for_a_file` |
+| stream-says-file | the stream sentence says `file` | `envelope_unknown_field_warns_once_for_stdin` |
+| path-unquoted | the file sentence does not quote the path | `envelope_unknown_field_warns_once_for_a_file` |
+| stdin-quoted | the stream sentence quotes stdin | `envelope_unknown_field_warns_once_for_stdin` |
+| second-call-warns | the seen check's result is discarded | `envelope_unknown_field_warns_once_for_a_file` |
+| files-share-one-slot | any path is seen after the first file | `envelope_unknown_field_warns_once_per_path` |
+| stdin-consumes-a-file | a warning on stdin swallows a later file | `envelope_unknown_field_warns_once_for_stdin` |
+| detail-swapped | `where` is emitted before `field` | `envelope_unknown_field_json_names_the_field_and_the_file` |
+| detail-omitted | the warning has no `detail` | `envelope_unknown_field_json_names_the_field_and_the_file` |
+| token-unknown-fields | the catalog token is `unknown_fields` | `envelope_unknown_field_json_names_the_field_and_the_file` |
+| message-includes-prefix | the file sentence starts with `remember: warning: ` | `envelope_unknown_field_warns_once_for_a_file` |
+| newline-splits-the-line | `unknown_field` keeps a newline | `envelope_unknown_field_masks_the_plain_line_and_escapes_json` |
+| mark-before-write | the path is recorded before the write | `unknown_field_that_cannot_be_written_does_not_stick` |
+| pointer-compare | the same bytes in a new buffer warn again | `envelope_unknown_field_warns_once_for_a_file` |
+| only-first-path | only `paths[0]` is remembered | `envelope_unknown_field_warns_once_per_path` |
+| reset-leaves-the-set | `unknown_fields_reset` is empty | `envelope_unknown_field_warns_once_for_stdin` |
+| where-quotes-stdin | `detail.where` is `"stdin"` with quotes in the value | `envelope_unknown_field_json_names_stdin` |
+| where-is-null | stdin stores the NULL path as `where` | `envelope_unknown_field_json_names_stdin` |
+
+DRY / easy to replace / orthogonal / simplify:
+
+- One function, `diag_unknown_field`, owns the sentence, the once-set, and the detail order. Callers pass the path and the name.
+- The two sentences are two literals. A change to one does not change the other. The file format takes the path and the name. The stream format takes the name.
+- The once-set is path bytes plus one stdin flag. It is cleared in the same function that clears the warning count.
+- Not taken: a second JSON parser. Nothing on this branch reads a JSON document.
+- Not taken: turn the list cursor's unknown member into this warning. C-35 names a file or stdin. The cursor stays `invalid_argument`.
+- Not taken: free the path set at the end of `remember_run` as well as the start. The next run already frees it, and the count has to stay until the strict check.
+
+### Stage 9: spec (2026-11-07)
+
+`decision:2026-11-01-legacy-plans-spec-step`. No red test. Merged `origin/main` first (`01f01e5`, parents `3efafb5` and `960b55f`) so `specs/` exists. `standard:coding` rule 7 and this stage agree.
+
+`specs/JSON-ENVELOPE.md` describes the CLI `remember-message` version 1 object this branch ships. `specs/JSON-STYLE.md` stays the value rules and links to it. CLI rows that disagreed with this binary were changed. The Message envelope row in `specs/README.md` is under Specs.
+
+`state:implemented` (other tags kept, `--as agent`) on `decision:json-errors-in-envelope`, `decision:json-warnings-stdout`, `decision:json-optional-warnings`, `decision:json-failed-reply-type`, `decision:json-envelope-no-id`, `decision:json-paging-envelope`, `decision:json-id-format`, `decision:json-id-rename`, `decision:json-local-id`, `decision:s-07`, `decision:s-08`, `decision:s-13`, `decision:positional-locator`, `decision:plan21-retryable-codes`, `decision:plan21-error-fix-drafts-c42`, `decision:plan21-envelope-closed-by-app`, `decision:plan21-add-link-read-fails-loud`, `decision:plan21-add-action-names-kept`, `decision:plan21-derived-reply-types`.
+
+Left `state:accepted` on purpose:
+
+- `decision:plan21-cursor-binds-whole-query`. Its stored text says base64url and that `--cursor` alone continues the query. The binary writes standard base64 with padding, and the flags on the call must match the cursor. The spec describes the binary and names the key. The body was not rewritten.
+- `decision:json-data-wrapper`. The payload is in `data`. The stored example `{version, data, warnings}` omits `format` and `type` and always shows `warnings`. Marking it implemented would contradict the envelope. `decision:json-envelope-no-id` is the field list.
+- `decision:json-unknown-fields`. The writer and the C-35 lines ship. No command calls the writer. The stored text still makes an unknown field an error in `hooks.json` and in plugin `run` and `permissions`.
+- `decision:plan21-search-query-original-only`, `decision:plan21-import-problem-rows`, `decision:provenance-actors`, `decision:g-33`, `decision:g2-02`, `decision:g2-10`, `decision:q4-03`, `decision:c-11`, `decision:id-rename-cut`, `decision:json-export-plain`, `decision:json-test-fixed-ids`, `decision:2026-10-22-m-05`, and the socket and shutdown keys. This plan did not build those bodies. Superseded keys stay superseded.
+
+`output_import_data` used to write an extra `}` and a newline inside the data buffer, so a successful `import --json` was two lines and the second line was `}`. The data object is now the counts only. The envelope writer adds the one newline. `cli_import_inserts_preserves_sync_id_remaps_links_no_device_register` asserts a single trailing newline. Putting `}}\n` back fails that assert. This is not one of the stage 2a–8 mutant clauses. Those sets were not re-run. M5 stays.
+
+`cmake --build build` regenerated the cache because the merge changed `CMakeLists.txt` (`spec_drift`). The flags stayed Debug, Apple clang, sanitizers on, LSAN off, `REMEMBER_TEST_VFS=ON`, Unix Makefiles. No new `cmake -S` was passed. ninja is absent. `BUILD_DIR` was not exported.
+
+Not in stage 9, on purpose: plan 25, plan 20 stages 5–9, `remember brains`, JE-3.10, hook acceptance, and a lock on the hook rejection. `--hooks` and `--no-hooks` stay unknown options and are absent from the spec. `--color` and `--quiet` stay. `remember brain new-id` stays. `--trash` stays the Deleted bin. Actors and the positional locator stay. Approved lines stay C-01, C-02, and C-35. Other C-42 fixes stay drafts. INDEX row 21 and the definition of done stay unticked. Version stays 0.2.0.
+
+Gate (Apple clang, Debug, sanitizers on, LSAN off, `REMEMBER_TEST_VFS=ON`, Unix Makefiles; coverage with Homebrew LLVM 22). ctest 6/6, real 190.17s (step_gate 82.72s, step05_gate 84.31s, store_asan_gate 16.34s, install_skill 5.66s, spec_drift 0.18s, no_shim_symbols 0.95s). The coverage run and the lint run overlapped that ctest. Coverage: store 499 and CLI 922, both 0 failed; functions 100%; raw lines 87.57%; effective lines 100% (zero-hit 2128, all defensive, must-cover 0); branch sides 0 missed on `search_terms.c` (176), `unicode.c` (80), `normalize.c` (504), `output.c` (736). Lint `LINT OK` (LLVM 22 clang-tidy, cppcheck, gcc -fanalyzer, scan-build; include-what-you-use skipped, not installed). `leaks-macos: PASS`. `default.profraw` stays untracked.
+
+### Stage 9 deep review (2026-11-07, in session)
+
+`decision:plan21-stage-flow`: in-session deep review, then these notes, then one commit, then `.claude/WHOLE_PLAN_REVIEW`, then stop. No `.claude/REVIEW_REQUEST`. Local Bugbot is not installed. No product question blocks the commit. The cursor-body mismatch and the `json-data-wrapper` example are recorded above for Itay. `quality:linters-max` allows `NOLINT`. None was added.
+
+The gate above includes the import-writer fix. These review notes do not change C.
+
+Findings:
+
+- **Fixed:** `output_import_data` closed the envelope inside the data buffer. Stdout is one JSON object and one newline.
+- **Kept:** list cursor unknown member is `invalid_argument`, message `invalid --cursor`, not `unknown_field`.
+- **Kept:** `--hooks` and `--no-hooks` stay unknown options. This stage did not lock that.
+- **Kept:** M5. The stage 2a–8 mutant sets were not re-run.
+- **Kept:** INDEX row 21 and the definition of done stay unticked. The spec checkbox stays unticked until the whole-plan review.
+- **Kept:** `decision:plan21-cursor-binds-whole-query` stays `state:accepted` because its body disagrees with the binary.
+
+### Whole-plan deep review (2026-11-07, second reviewer)
+
+Scope: `.claude/WHOLE_PLAN_REVIEW` (plan 21, stage 9, ref `9dcd717`), legacy-plan scope of `workflow:whole-plan-deep-review`. Recall: `standard:coding`, the review keys, every `subject:json-envelope` decision, the stage 1 and stage 2 grill answers. Baseline gate on `9dcd717` was green. The review compared the shipped code and `specs/JSON-ENVELOPE.md` against the stored decisions, not against the stage notes.
+
+Grill (2026-11-07, Itay):
+
+- Hook-depth `--as`/`--actor`: **C-42-style draft.** Message `--as and --actor can't be used inside a hook.`, fix `Remove --as and --actor. remember stamps hook writes itself.` Filed as `decision:plan21-hook-actor-draft` (id 1136).
+- List cursor: **the stored decision stands.** Unpadded base64url, `--cursor` alone carries the whole query, `--limit` may still change. Body of `decision:plan21-cursor-binds-whole-query` reconfirmed.
+
+Decision states (`--as agent`): `state:implemented` on `decision:plan21-cursor-binds-whole-query` (its stray `remember` tag replaced by `project:remember`), `decision:plan21-search-query-original-only`, `decision:plan21-import-problem-rows`, `decision:json-test-fixed-ids`, and `decision:plan21-hook-actor-draft`. `decision:json-data-wrapper` got a dated note: the payload-in-`data` rule ships, and the field list supersedes its example shape. It is `state:implemented`. `decision:json-unknown-fields` stays `accepted`, because no command calls the writer. DoD "fix values": every `fix` is a locked split, the C-01 text, or a C-42 draft Itay approved as a draft (`decision:plan21-error-fix-drafts-c42`, `decision:plan21-hook-actor-draft`).
+
+Findings (all fixed on this branch unless marked):
+
+- **Critical, fixed:** `decision:plan21-cursor-binds-whole-query` (base64url, cursor alone) was never built. The binary wrote standard base64 with padding and made the caller repeat every flag. Stage 9 then documented the binary and left the decision `accepted`. Now: `base64url_encode`/`base64url_decode` (rejects length ≡ 1 mod 4, `=`, `+`, `/`, non-zero unused bits); `list_query_from_cursor` decodes, validates every member the way the flags are validated (`actor_kind_is_stored`, canonical `at`, `parse_filter_ts`, `normalize_key`, `normalize_tags`), re-encodes, and accepts only a byte-identical round trip. Any filter, sort, or bin flag next to `--cursor` is `invalid --cursor`; `--trash` still warns first. Test `list_cursor_alone_is_the_query_and_must_be_canonical`.
+- **Critical, fixed:** `decision:plan21-search-query-original-only` (stage 1 grill) was not built, and the spec said search "has no `query`, `ranked_by`, or `filters`". Search data now ends with `query{original{text,tags,bins,time_range}}`, `ranked_by:"bm25"`, `filters:[]`. `output_search_data` takes the `SearchQuery`. Byte tests in `test_output.c`, `test_search.c`, `test_list_dates.c`.
+- **Critical, fixed:** `decision:plan21-import-problem-rows` (stage 1 grill) was not built. Import data is now `conflicts{count,items}` (the rows this import opened or refreshed, same objects as `conflicts --json`) and `rejected{count,items}` with `{source_local_id, field}`, field in the stored order. Store: `StoreImportResult`, `import_row_bad_field`, `import_note_conflict`/`import_note_reject`, `import_load_conflicts` (one `json_each` select before COMMIT), `store_import_result_free`. A key-clash re-import rewrites the open row, so it is listed again ("refreshed"); an identical concurrent re-import is `unchanged`. CLI tests assert full item lists and the first-field order on rows with two bad fields.
+- **Important, fixed:** H-16.11 `--hooks`/`--no-hooks` were deferred through three stages and never built. Every write accepts both and prints the two locked help lines; reads reject them. `cmd_is_hooks_flag`, `cmd_take_write_flag` (renamed from `cmd_take_actor_flag`). Test `envelope_every_write_accepts_the_hook_flags`.
+- **Important, fixed:** the hook-depth actor error printed an empty message with the cursor fix, and a test locked that output. Now the grilled draft via `diag_error_split`; `test_add.c` asserts the plain line and the JSON error object.
+- **Important, fixed:** `decision:json-test-fixed-ids` / must-pass 008-10 was not built; JSON-STYLE said "this binary does not read `REMEMBER_TEST_FIXED_IDS`". CMake defines `REMEMBER_TEST_CLI` on `remember` in the `REMEMBER_TEST_VFS` block (Release forces it off). There, `REMEMBER_TEST_FIXED_IDS=N` (decimal, 1..2^48−1) makes `mint_uuid_v7` count `00000000-0000-7000-8000-<hex>` up from N and `utc_now` return `2026-01-01T00:00:00.000Z`. Tests: a whole `add` reply byte-for-byte, a later start, the 2^48−1 bound, five bad values, and the in-process copy (no define) ignoring the variable.
+- **Important, fixed:** 008-1/008-2 had no checker. `assert_envelope_shape` reads the top-level keys of every reply in `envelope_every_command_names_its_reply_type` (now with a paged list, a `--trash` warning, and an unknown command): `format`, `version`, `type`, `data`|`error`, then only `next_cursor`, `has_more` (data only), `warnings`, in that order; no `"type":"error"`, `sync_id`, `source`, or `offset`. `envelope_top_keys` has its own test.
+- **Minor, fixed:** `skills/remember/SKILL.md` still taught `--source agent`, `--source` as a filter, a `source` field in the entry sample and in key facets, cursor reuse "with the same query", and "always run `conflicts` after import". Facts corrected; C-41 wording is plan 26's.
+- **Minor, fixed:** `docs/engineering-notes.md` described the empty hook message, count-only import, and the old cursor.
+- **Minor, fixed:** `output.c` duplicated the string-or-null writer twice; `write_string_or_null` replaces both. `write_page_entries` no longer closes the object, so list and search close their own.
+- **Plan 26, not fixed here:** C-41 tells users to empty the Trash with `remember purge <locator>` once per memory. `purge` takes no locator; a single Deleted row is wiped by `purge --deleted` (whole bin) only. Plan 26 must change that line or add the command.
+- **Kept:** `decision:json-data-wrapper` example omits `format`/`type`; annotated, left `accepted`. `decision:json-unknown-fields` stays `accepted` (no caller).
+
+Mutants (this review's code, each must fail a test): 38 mutant runs over the new code in two passes (`mutants.py`, `mutants2.py` in the review scratchpad).
+
+- **Pass 1 (27 runs):** 14 killed, 5 compile-killed by `-Werror`, 7 survived, 1 skipped (its target text appeared twice). Killed: the actor-kind check; `--no-hooks` in `cmd_is_hooks_flag`; the purge hook skip; the search echo's since/until swap, tags, and bin guard; the import NULL-array and NULL-field guards; `"tags"`→`"key"` and `"source"`→`"body_hash"` in `import_row_bad_field`; the conflict id off by one; the fixed-id bound, trailing-junk check, and counter increment.
+- **Pass 2 (11 runs, all killed):** the compile-killed mutants in forms that compile (the round-trip compare as `<` and as a prefix compare, `cursor_at_ok`, the flags-next-to-cursor check, skipping `conflicts_select`, the frozen clock); the `-`→62 survivor and the new `_`→63 mutant, both killed by new cursors whose keys force those digits; the leading-digit survivor, killed by the new `01` value; the two import and conflict-accept hook skips that pass 1 skipped.
+- **Removed, not survived (3):** the decoder's length ≡ 1 mod 4 check and its two unused-bit checks survived because the byte-identical re-encode already rejects those inputs. They were deleted. New tests pin the behavior: a stray trailing digit, set unused bits on a real cursor, and an over-long cursor.
+- **Equivalent (2):** ignoring a `normalize_key` or `normalize_tags` failure in `cursor_fill_query` is caught by the round trip. The checks stay because they stop code from reading an output buffer after a failed normalize.
+- **Earlier stage sets:** the stage 2a–8 mutant sets (M5) were not re-run. This pass covers only the code this review wrote.
+
+S pass (simplicity): - Deleted three redundant decoder checks and the `errno` check in `fixed_ids_start`. An overflow returns `ULLONG_MAX`, which the bound rejects.
+- `write_string_or_null` replaced two hand-rolled null writers.
+- `import_all_rows` and `import_write` came out of `store_import` and `cmd_import`. `list_query_from_cursor` now owns the whole cursor branch of `cmd_list`.
+- The cursor accepts exactly what the encoder writes, so the decoder needs no separate canonical rules.
+- **Kept:** `StoreImportResult` carries its working id list (`conflict_ids`, `nconflict_ids`, `conflict_cap`) in the public struct. A temp table would hide it, but it would cost more code. The struct comment marks the list as empty on return.
+- **Kept:** a separate `REMEMBER_TEST_CLI` define instead of reusing `REMEMBER_TEST_VFS`. It costs one CMake word, and the clock code then does not read as VFS code.
+
+A pass (safety and security): - **Cursor (untrusted input):** the length is bounded before `malloc` (decoded size ≤ 65536). The decoder writes at most `(n/4+1)*3` bytes into a buffer of that size plus 1. Every member is validated the way the matching flag is: actor kind, canonical `at`, `parse_filter_ts`, `normalize_key`, `normalize_tags`. Only the canonical bytes are accepted, so no extra member, duplicate member, or alternate spelling reaches the store. Any flag next to `--cursor` fails before decoding.
+- **Import reply:** a reject item echoes only the source row's integer id and a static field name, never peer bytes. Conflict items reuse the `conflicts` writer, which escapes JSON. The result is freed on every path: the store's fail path, and the CLI after the write. LSAN in Linux CI checks it.
+- **Search echo:** the query text goes through `output_json_string`. Tags and bounds are the normalized values.
+- **Fixed ids:** compiled only into the test CLI. Release forces `REMEMBER_TEST_VFS` off, and `install.sh` refuses a binary that carries the test VFS, so no installed `remember` reads the variable. The parse is bounded and needs a leading `1`–`9`.
+- **Hook flags:** parsed and ignored, with no side effect until plan 25.
+
+Gate: Local (Apple clang, Debug, sanitizers on, LSAN off, `REMEMBER_TEST_VFS=ON`; Homebrew LLVM 22 for coverage and lint): ctest 6/6 (CLI 928, store suite 0 failed); coverage functions 100%, effective lines 100% (must-cover 0), branch sides 0 missed on `search_terms.c` (176), `unicode.c` (80), `normalize.c` (504), `output.c` (806); `LINT OK` (IWYU not installed on macOS); `leaks-macos: PASS`. Linux (`scripts/ci-linux.sh`, Docker, LSAN on, IWYU on): `== ci-linux: OK ==`. The first Linux runs failed IWYU only, on stage 4 and stage 7 leftovers: an unused `<stdio.h>` in `normalize.c`, and `<stddef.h>` in `appio.h`. Both are removed. The coder's stage notes said IWYU was skipped locally at every stage, so these were never seen.
+
+Grades:
+
+- **Coding agent: 6/10.** Strong: stage-2a design (`run_json`, `reply_noun_verb`, `writes_envelope`, diag memstreams) matches the intended design; mutants and edge probes per stage; the spec's structure. Weak: three grilled decisions (cursor shape, search query echo, import problem rows) were answered in the stage 1 grill and not built, then the spec documented the opposite and left the decisions `accepted` instead of raising it (`implementation-plans/21-json-envelope.md` stage 9 "Left `state:accepted` on purpose"); H-16.11 hook flags deferred three times; the empty hook-depth message was locked by a test instead of grilled; 008-1 and 008-10 never built (JSON-STYLE line 151 documented the gap as behavior); an "Itay" quote about the cursor at 11-01 was never filed in Remember and Itay later contradicted it; stage 2a–8 mutant sets never re-run after later stages (M5); IWYU skipped locally; `origin/main` merged only at stage 9.
+- **Previous in-session reviewers (stages 1–9): 5/10.** They caught real defects (the import writer's stray `}`, doc drift on `{"version":1,...}`, `--offset` in the skill) but recorded each missing grilled behavior as "Kept" or "not in this plan" instead of blocking (stage 9 deep review "Kept: `decision:plan21-cursor-binds-whole-query` stays `state:accepted` because its body disagrees with the binary"; stages 4–8 "Kept: SKILL.md still shows `--source`"). A review that finds the code contradicting a stored decision must fail the stage or grill, not annotate.
+
+Instructions for the coding agent (paste-ready):
+
+1. Before writing a stage, list every `decision:plan<N>-*` key and every grill answer in this plan's notes; each must map to a test or to a grill that changes it. "Left `accepted`" is not an outcome.
+2. Never lock a placeholder (an empty message, a borrowed fix) with a test. Grill it with a C-42-style draft.
+3. Do not quote Itay unless the quote is filed in Remember with its date.
+4. A must-pass row (008-1, 008-10) is built or explicitly descoped by Itay. Documenting the gap as behavior in a spec is not descoping.
+5. Re-run every earlier stage's mutant set at the end of the plan; record kills.
+6. Install and run IWYU locally (or run `ci-linux.sh`) before calling the gate green.
+7. Merge `origin/main` at the start of each stage, not only at the spec stage.
+8. Docs the plan touches (skill, notes, README) are checked against the binary at every stage; "stage N left that" is not allowed past the stage that caused it.

@@ -38,5 +38,6 @@ void register_settings_tests(void);
 void register_unicode_tests(void);
 void register_search_terms_tests(void);
 void register_output_tests(void);
+void register_envelope_tests(void);
 
 #endif /* REMEMBER_REGISTER_H */

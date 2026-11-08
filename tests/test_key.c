@@ -45,8 +45,8 @@ TEST(add_key_upsert_same_id_replaces_body)
     ASSERT_EQ_INT(r1.exit_code, 0);
     ASSERT_EQ_INT(r2.exit_code, 0);
     ASSERT_STR_CONTAINS(r2.out, "\"action\":\"updated\"");
-    ASSERT_STR_CONTAINS(r1.out, "\"id\":1");
-    ASSERT_STR_CONTAINS(r2.out, "\"id\":1");
+    ASSERT_STR_CONTAINS(r1.out, "\"local_id\":1");
+    ASSERT_STR_CONTAINS(r2.out, "\"local_id\":1");
     cmd_result_free(&r1);
     cmd_result_free(&r2);
     g = run_remember(db, gargs, sizeof(gargs) / sizeof(gargs[0]), NULL);
@@ -71,7 +71,7 @@ TEST(add_key_changed_body_shows_the_bumped_vector)
     ASSERT_EQ_INT(r1.exit_code, 0);
     ASSERT_EQ_INT(r2.exit_code, 0);
     ASSERT_STR_CONTAINS(r1.out, "\":1}");
-    ASSERT_STR_CONTAINS(r2.out, "\"id\":1");
+    ASSERT_STR_CONTAINS(r2.out, "\"local_id\":1");
     ASSERT_STR_CONTAINS(r2.out, "\"action\":\"updated\"");
     ASSERT_STR_CONTAINS(r2.out, "\":2}");
     cmd_result_free(&r1);
@@ -110,8 +110,8 @@ TEST(add_key_keeps_original_source)
     CmdResult r1;
     CmdResult r2;
     CmdResult g;
-    const char *a1[] = {"add", "--key", "k", "--source", "human", "one"};
-    const char *a2[] = {"add", "--key", "k", "--source", "agent", "two"};
+    const char *a1[] = {"add", "--key", "k", "--as", "human", "one"};
+    const char *a2[] = {"add", "--key", "k", "--as", "agent", "two"};
     const char *gargs[] = {"get", "--json", "--key", "k"};
     ASSERT_TRUE(db != NULL);
     r1 = run_remember(db, a1, sizeof(a1) / sizeof(a1[0]), NULL);
@@ -122,7 +122,7 @@ TEST(add_key_keeps_original_source)
     cmd_result_free(&r2);
     g = run_remember(db, gargs, sizeof(gargs) / sizeof(gargs[0]), NULL);
     ASSERT_EQ_INT(g.exit_code, 0);
-    ASSERT_STR_CONTAINS(g.out, "\"source\":\"human\"");
+    ASSERT_STR_CONTAINS(g.out, "\"created_by\":{\"kind\":\"human\",\"id\":null}");
     ASSERT_STR_CONTAINS(g.out, "two");
     cmd_result_free(&g);
     free(db);
@@ -142,8 +142,8 @@ TEST(keyed_entries_may_share_body_text)
     r2 = run_remember(db, a2, sizeof(a2) / sizeof(a2[0]), NULL);
     ASSERT_EQ_INT(r1.exit_code, 0);
     ASSERT_EQ_INT(r2.exit_code, 0);
-    ASSERT_STR_CONTAINS(r1.out, "\"id\":1");
-    ASSERT_STR_CONTAINS(r2.out, "\"id\":2");
+    ASSERT_STR_CONTAINS(r1.out, "\"local_id\":1");
+    ASSERT_STR_CONTAINS(r2.out, "\"local_id\":2");
     cmd_result_free(&r1);
     cmd_result_free(&r2);
     l = run_remember(db, largs, sizeof(largs) / sizeof(largs[0]), NULL);
@@ -243,7 +243,7 @@ TEST(delete_by_key)
     cmd_result_free(&d);
     g = run_remember(db, gargs, sizeof(gargs) / sizeof(gargs[0]), NULL);
     ASSERT_EQ_INT(g.exit_code, 3);
-    ASSERT_STREQ(g.err, "remember: deleted\n");
+    ASSERT_STREQ(g.err, "remember: \"k\" is in the Trash. Add --trash to use it.\n");
     cmd_result_free(&g);
     free(db);
 }

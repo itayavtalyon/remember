@@ -78,7 +78,8 @@ static Entry given_entry(void)
         .sync_id = (char *)"s-7",
         .key = (char *)"k:7",
         .body = (char *)"body",
-        .source = (char *)"agent",
+        .created_by = (char *)"{\"kind\":\"agent\",\"id\":null}",
+        .updated_by = (char *)"{\"kind\":\"agent\",\"id\":null}",
         .created_at = (char *)"c",
         .updated_at = (char *)"u",
         .version_vector = (char *)"{}",
@@ -199,17 +200,23 @@ TEST(output_entry_json_rejects_a_non_canonical_version_vector)
     assert_written(f, "");
 }
 
-TEST(output_entry_json_renders_a_null_source_as_unknown)
+TEST(output_entry_json_rejects_a_bad_actor)
 {
-    Entry e = given_entry();
+    Entry missing = given_entry();
+    Entry bad_created = given_entry();
+    Entry missing_updated = given_entry();
+    Entry bad_updated = given_entry();
     FILE *f = given_stream();
 
-    e.source = NULL;
-    ASSERT_EQ_INT(output_entry_json(f, &e, NOW), 0);
-    assert_written(f, "{\"id\":7,\"sync_id\":\"s-7\",\"key\":\"k:7\",\"body\":\"body\",\"tags\":[],"
-                      "\"source\":\"unknown\",\"created_at\":\"c\",\"updated_at\":\"u\","
-                      "\"expires_at\":null,\"deleted_at\":null,\"bin\":\"live\","
-                      "\"version_vector\":{}}");
+    missing.created_by = NULL;
+    bad_created.created_by = (char *)"human";
+    missing_updated.updated_by = NULL;
+    bad_updated.updated_by = (char *)"{\"kind\":\"human\"}";
+    ASSERT_EQ_INT(output_entry_json(f, &missing, NOW), -1);
+    ASSERT_EQ_INT(output_entry_json(f, &bad_created, NOW), -1);
+    ASSERT_EQ_INT(output_entry_json(f, &missing_updated, NOW), -1);
+    ASSERT_EQ_INT(output_entry_json(f, &bad_updated, NOW), -1);
+    assert_written(f, "");
 }
 
 TEST(output_entry_json_renders_null_text_fields_as_empty_strings)
@@ -221,8 +228,10 @@ TEST(output_entry_json_renders_null_text_fields_as_empty_strings)
     e.created_at = NULL;
     e.updated_at = NULL;
     ASSERT_EQ_INT(output_entry_json(f, &e, NOW), 0);
-    assert_written(f, "{\"id\":7,\"sync_id\":\"s-7\",\"key\":\"k:7\",\"body\":\"\",\"tags\":[],"
-                      "\"source\":\"agent\",\"created_at\":\"\",\"updated_at\":\"\","
+    assert_written(f, "{\"id\":\"s-7\",\"local_id\":7,\"key\":\"k:7\",\"body\":\"\",\"tags\":[],"
+                      "\"created_by\":{\"kind\":\"agent\",\"id\":null},"
+                      "\"updated_by\":{\"kind\":\"agent\",\"id\":null},"
+                      "\"created_at\":\"\",\"updated_at\":\"\","
                       "\"expires_at\":null,\"deleted_at\":null,\"bin\":\"live\","
                       "\"version_vector\":{}}");
 }
@@ -234,65 +243,96 @@ TEST(output_action_envelope_rejects_missing_arguments)
     Entry e = given_entry();
     FILE *f = given_stream();
 
-    ASSERT_EQ_INT(output_action_envelope(NULL, "created", &e, NOW), -1);
-    ASSERT_EQ_INT(output_action_envelope(f, NULL, &e, NOW), -1);
-    ASSERT_EQ_INT(output_action_envelope(f, "created", NULL, NOW), -1);
+    ASSERT_EQ_INT(output_action_data(NULL, "updated", &e, NOW), -1);
+    ASSERT_EQ_INT(output_action_data(f, NULL, &e, NOW), -1);
+    ASSERT_EQ_INT(output_action_data(f, "updated", NULL, NOW), -1);
     assert_written(f, "");
 }
 
-TEST(output_deleted_list_rejects_missing_arguments)
+TEST(output_entries_envelope_rejects_missing_arguments)
 {
     FILE *f = given_stream();
 
-    ASSERT_EQ_INT(output_deleted_list(NULL, NULL, 0, NOW), -1);
-    ASSERT_EQ_INT(output_deleted_list(f, NULL, 1, NOW), -1);
+    ASSERT_EQ_INT(output_entries_data(NULL, "deleted", NULL, 0, NOW), -1);
+    ASSERT_EQ_INT(output_entries_data(f, NULL, NULL, 0, NOW), -1);
+    ASSERT_EQ_INT(output_entries_data(f, "deleted", NULL, 1, NOW), -1);
     assert_written(f, "");
 }
 
-TEST(output_deleted_list_separates_entries_with_a_comma)
+TEST(output_entries_envelope_separates_entries_with_a_comma)
 {
     Entry entries[] = {given_entry(), given_entry()};
     FILE *f = given_stream();
 
     entries[1].id = OTHER_ID;
-    ASSERT_EQ_INT(output_deleted_list(f, entries, 2, NOW), 0);
-    assert_written(f, "{\"version\":1,\"action\":\"deleted\",\"count\":2,\"entries\":["
-                      "{\"id\":7,\"sync_id\":\"s-7\",\"key\":\"k:7\",\"body\":\"body\","
-                      "\"tags\":[],\"source\":\"agent\",\"created_at\":\"c\",\"updated_at\":\"u\","
-                      "\"expires_at\":null,\"deleted_at\":null,\"bin\":\"live\","
-                      "\"version_vector\":{}},"
-                      "{\"id\":8,\"sync_id\":\"s-7\",\"key\":\"k:7\",\"body\":\"body\","
-                      "\"tags\":[],\"source\":\"agent\",\"created_at\":\"c\",\"updated_at\":\"u\","
-                      "\"expires_at\":null,\"deleted_at\":null,\"bin\":\"live\","
-                      "\"version_vector\":{}}]}\n");
+    ASSERT_EQ_INT(output_entries_data(f, "deleted", entries, 2, NOW), 0);
+    assert_written(
+        f, "{\"action\":\"deleted\",\"count\":2,\"entries\":[{\"id\":\"s-7\",\"local_id\":7,\"key"
+           "\":\"k:7\",\"body\":\"body\",\"tags\":[],\"created_by\":{\"kind\":\"agent\",\"id\":"
+           "null},\"updated_by\":{\"kind\":\"agent\",\"id\":null},\"created_at\":\"c\","
+           "\"updated_at\":\"u\",\"expires_at\":null,\"deleted_at\":null,\"bin\":\"live\",\"vers"
+           "ion_vector\":{}},{\"id\":\"s-7\",\"local_id\":8,\"key\":\"k:7\",\"body\":\"body\",\"t"
+           "ags\":[],\"created_by\":{\"kind\":\"agent\",\"id\":null},\"updated_by\":{\"kind\":"
+           "\"agent\",\"id\":null},\"created_at\":\"c\",\"updated_at\":\"u\",\"expires_at"
+           "\":null,\"deleted_at\":null,\"bin\":\"live\",\"version_vector\":{}}]}");
 }
 
-TEST(output_get_envelope_rejects_missing_arguments)
+TEST(output_memory_envelope_rejects_missing_arguments)
 {
     Entry e = given_entry();
     FILE *f = given_stream();
 
-    ASSERT_EQ_INT(output_get_envelope(NULL, &e, NULL, 0, NOW), -1);
-    ASSERT_EQ_INT(output_get_envelope(f, NULL, NULL, 0, NOW), -1);
-    ASSERT_EQ_INT(output_get_envelope(f, &e, NULL, 0, NULL), -1);
-    ASSERT_EQ_INT(output_get_envelope(f, &e, NULL, 1, NOW), -1);
+    ASSERT_EQ_INT(output_memory_data(NULL, NULL, &e, NULL, 0, NOW), -1);
+    ASSERT_EQ_INT(output_memory_data(f, NULL, NULL, NULL, 0, NOW), -1);
+    ASSERT_EQ_INT(output_memory_data(f, NULL, &e, NULL, 0, NULL), -1);
+    ASSERT_EQ_INT(output_memory_data(f, NULL, &e, NULL, 1, NOW), -1);
     assert_written(f, "");
 }
 
-TEST(output_get_envelope_lists_only_the_subjects_links)
+TEST(output_memory_envelope_without_action_lists_only_the_subjects_links)
 {
     Entry e = given_entry();
     StoreNeighbor links[] = {given_link(OTHER_ID, OTHER_ID, STORE_EDGE_RELATED),
                              given_link(SUBJECT_ID, SUBJECT_ID, STORE_EDGE_RELATED)};
     FILE *f = given_stream();
 
-    ASSERT_EQ_INT(output_get_envelope(f, &e, links, 2, NOW), 0);
-    assert_written(f, "{\"version\":1,\"count\":1,\"entries\":[{\"id\":7,\"sync_id\":\"s-7\","
-                      "\"key\":\"k:7\",\"body\":\"body\",\"tags\":[],\"source\":\"agent\","
-                      "\"created_at\":\"c\",\"updated_at\":\"u\",\"expires_at\":null,"
-                      "\"deleted_at\":null,\"bin\":\"live\",\"version_vector\":{},"
-                      "\"links\":[{\"id\":3,\"sync_id\":\"n-3\",\"key\":null,\"type\":\"related\","
-                      "\"bin\":\"live\",\"preview\":\"nb\"}]}]}\n");
+    ASSERT_EQ_INT(output_memory_data(f, NULL, &e, links, 2, NOW), 0);
+    assert_written(
+        f, "{\"memory\":{\"id\":\"s-7\",\"local_id\":7,\"key\":\"k:7\",\"body\":\"body\",\"tags\""
+           ":[],\"created_by\":{\"kind\":\"agent\",\"id\":null},\"updated_by\":{\"kind\":\"agent\","
+           "\"id\":null},\"created_at\":\"c\",\"updated_at\":\"u\",\"expires_at\":nu"
+           "ll,\"deleted_at\":null,\"bin\":\"live\",\"version_vector\":{},\"links\":[{\"id\":\"n-"
+           "3\",\"local_id\":3,"
+           "\"key\":null,\"type\":\"related\",\"bin\":\"live\",\"preview\":"
+           "\"nb\"}]}}");
+}
+
+TEST(output_memory_envelope_with_action_puts_action_before_memory)
+{
+    Entry e = given_entry();
+    FILE *f = given_stream();
+
+    ASSERT_EQ_INT(output_memory_data(f, "created", &e, NULL, 0, NOW), 0);
+    assert_written(
+        f, "{\"action\":\"created\",\"memory\":{\"id\":\"s-7\",\"local_id\":7,\"key\":\"k:7\",\"b"
+           "ody\":\"body\",\"tags\":[],\"created_by\":{\"kind\":\"agent\",\"id\":null},\"updated_"
+           "by\":{\"kind\":\"agent\",\"id\":null},\"created_at\":\"c\",\"updated_at\":"
+           "\"u\",\"expires_at\":null,\"deleted_at\":null,\"bin\":\"live\",\"version_vector\":{}"
+           ",\"links\":[]}}");
+}
+
+TEST(output_action_envelope_writes_the_memory_without_links)
+{
+    Entry e = given_entry();
+    FILE *f = given_stream();
+
+    ASSERT_EQ_INT(output_action_data(f, "updated", &e, NOW), 0);
+    assert_written(
+        f, "{\"action\":\"updated\",\"memory\":{\"id\":\"s-7\",\"local_id\":7,\"key\":\"k:7\",\"b"
+           "ody\":\"body\",\"tags\":[],\"created_by\":{\"kind\":\"agent\",\"id\":null},\"updated_"
+           "by\":{\"kind\":\"agent\",\"id\":null},\"created_at\":\"c\",\"updated_at\":"
+           "\"u\",\"expires_at\":null,\"deleted_at\":null,\"bin\":\"live\",\"version_vector\":{}"
+           "}}");
 }
 
 TEST(output_list_envelope_rejects_missing_arguments)
@@ -300,23 +340,63 @@ TEST(output_list_envelope_rejects_missing_arguments)
     Entry e = given_entry();
     FILE *f = given_stream();
 
-    ASSERT_EQ_INT(output_list_envelope(NULL, 0, 1, 1, 1, &e, NULL, 0, NOW), -1);
-    ASSERT_EQ_INT(output_list_envelope(f, 0, 1, 1, 1, &e, NULL, 0, NULL), -1);
-    ASSERT_EQ_INT(output_list_envelope(f, 0, 1, 1, 1, NULL, NULL, 0, NOW), -1);
-    ASSERT_EQ_INT(output_list_envelope(f, 0, 1, 1, 1, &e, NULL, 1, NOW), -1);
+    ASSERT_EQ_INT(output_list_data(NULL, 1, 1, &e, NULL, 0, NOW), -1);
+    ASSERT_EQ_INT(output_list_data(f, 1, 1, &e, NULL, 0, NULL), -1);
+    ASSERT_EQ_INT(output_list_data(f, 1, 1, NULL, NULL, 0, NOW), -1);
+    ASSERT_EQ_INT(output_list_data(f, 1, 1, &e, NULL, 1, NOW), -1);
     assert_written(f, "");
 }
 
-/* E2.1 (4): an empty search still carries both facets, empty. */
+/* The search "boo" on the live bin with no filter. */
+static SearchQuery given_search_query(void)
+{
+    SearchQuery q;
+
+    memset(&q, 0, sizeof(q));
+    q.query = "boo";
+    q.filters.bin = STORE_BIN_LIVE;
+    return q;
+}
+
+/* E2.1 (4): an empty search still carries both facets, empty. The query
+   follows entries (decision:plan21-search-query-original-only). */
 TEST(output_search_envelope_writes_empty_facets)
 {
     SearchResult res = {.page = {.st = STORE_OK}};
+    SearchQuery q = given_search_query();
     FILE *f = given_stream();
 
-    ASSERT_EQ_INT(output_search_envelope(f, &res, 0, 20, NULL, 0, NOW), 0);
-    assert_written(f, "{\"version\":1,\"offset\":0,\"limit\":20,\"count\":0,\"total\":0,"
-                      "\"keys\":{\"total\":0,\"items\":[]},\"tags\":{\"total\":0,\"items\":[]},"
-                      "\"entries\":[]}\n");
+    ASSERT_EQ_INT(output_search_data(f, &q, &res, NULL, 0, NOW), 0);
+    assert_written(f, "{\"count\":0,\"total\":0,\"keys\":{\"total\":0,\"items\":["
+                      "]},\"tags\":{\"total\":0,\"items\":[]},\"entries\":[]"
+                      ",\"query\":{\"original\":{\"text\":\"boo\",\"tags\":[],\"bins\":[\"live\"],"
+                      "\"time_range\":{\"field\":\"updated_at\",\"after\":null,\"before\":null}}},"
+                      "\"ranked_by\":\"bm25\",\"filters\":[]}");
+}
+
+/* query.original carries the text, the tag filter, the one bin, and the
+   updated_at bounds, each through the JSON escaper. */
+TEST(output_search_envelope_echoes_the_query_filters)
+{
+    static const char *const tags[] = {"a\"b", "c"};
+    SearchResult res = {.page = {.st = STORE_OK}};
+    SearchQuery q = given_search_query();
+    FILE *f = given_stream();
+
+    q.query = "x\ny";
+    q.filters.tags = tags;
+    q.filters.ntags = 2U;
+    q.filters.bin = STORE_BIN_DELETED;
+    q.filters.since = "2026-01-01T00:00:00.000Z";
+    q.filters.until = "2026-02-01T00:00:00.000Z";
+    ASSERT_EQ_INT(output_search_data(f, &q, &res, NULL, 0, NOW), 0);
+    assert_written(
+        f, "{\"count\":0,\"total\":0,\"keys\":{\"total\":0,\"items\":["
+           "]},\"tags\":{\"total\":0,\"items\":[]},\"entries\":[],\"query\":{"
+           "\"original\":{\"text\":\"x\\ny\",\"tags\":[\"a\\\"b\",\"c\"],"
+           "\"bins\":[\"deleted\"],\"time_range\":{\"field\":\"updated_at\","
+           "\"after\":\"2026-01-01T00:00:00.000Z\",\"before\":\"2026-02-01T00:00:00.000Z\"}}},"
+           "\"ranked_by\":\"bm25\",\"filters\":[]}");
 }
 
 /* Two key items and two tag items, so the comma between items shows. */
@@ -327,12 +407,10 @@ static SearchResult given_search_facets(SearchKeyItem keys[2], SearchTagItem tag
     keys[0] = (SearchKeyItem){.key = (char *)"recs:books",
                               .sync_id = (char *)"s-1",
                               .label = (char *)"Book recommendations",
-                              .source = (char *)"agent",
                               .updated_at = (char *)"u-1"};
     keys[1] = (SearchKeyItem){.key = (char *)"recs:bonds",
                               .sync_id = (char *)"s-2",
                               .label = (char *)"recs:bonds",
-                              .source = (char *)"human",
                               .updated_at = (char *)"u-2"};
     tags[0] = (SearchTagItem){.tag = (char *)"type:books", .count = 1};
     tags[1] = (SearchTagItem){.tag = (char *)"recs", .count = TAG_COUNT};
@@ -341,25 +419,27 @@ static SearchResult given_search_facets(SearchKeyItem keys[2], SearchTagItem tag
     return res;
 }
 
-/* E2.6: each key item carries key, sync_id, label, source, updated_at; each
+/* E2.6: each key item carries key, id, label, updated_at; each
    tag item tag and count; total counts every match, not only the items. */
 TEST(output_search_envelope_writes_the_facet_items)
 {
     SearchKeyItem keys[2];
     SearchTagItem tags[2];
     SearchResult res = given_search_facets(keys, tags);
+    SearchQuery q = given_search_query();
     FILE *f = given_stream();
 
-    ASSERT_EQ_INT(output_search_envelope(f, &res, 0, 20, NULL, 0, NOW), 0);
-    assert_written(f,
-                   "{\"version\":1,\"offset\":0,\"limit\":20,\"count\":0,\"total\":0,"
-                   "\"keys\":{\"total\":5,\"items\":["
-                   "{\"key\":\"recs:books\",\"sync_id\":\"s-1\",\"label\":\"Book recommendations\","
-                   "\"source\":\"agent\",\"updated_at\":\"u-1\"},"
-                   "{\"key\":\"recs:bonds\",\"sync_id\":\"s-2\",\"label\":\"recs:bonds\","
-                   "\"source\":\"human\",\"updated_at\":\"u-2\"}]},"
-                   "\"tags\":{\"total\":4,\"items\":[{\"tag\":\"type:books\",\"count\":1},"
-                   "{\"tag\":\"recs\",\"count\":3}]},\"entries\":[]}\n");
+    ASSERT_EQ_INT(output_search_data(f, &q, &res, NULL, 0, NOW), 0);
+    assert_written(
+        f, "{\"count\":0,\"total\":0,\"keys\":{\"total\":5,\"items\":["
+           "{\"key\":\"recs:books\",\"id\":\"s-1\",\"label\":\"Book recommendations\","
+           "\"updated_at\":\"u-1\"},{\"key\":\"recs:bonds\",\"id\":\"s-2\","
+           "\"label\":\"recs:bonds\",\"updated_at\":\"u-2\"}]},\"tags\":{\""
+           "total\":4,\"items\":[{\"tag\":\"type:books\",\"count\":1},{\"tag\":\"recs\",\"count"
+           "\":3}]},\"entries\":[]"
+           ",\"query\":{\"original\":{\"text\":\"boo\",\"tags\":[],\"bins\":[\"live\"],"
+           "\"time_range\":{\"field\":\"updated_at\",\"after\":null,\"before\":null}}},"
+           "\"ranked_by\":\"bm25\",\"filters\":[]}");
 }
 
 /* Stage 4 handover: every facet field goes through the JSON escaper. The
@@ -370,23 +450,24 @@ TEST(output_search_envelope_escapes_every_facet_field)
     SearchKeyItem keys[2];
     SearchTagItem tags[2];
     SearchResult res = given_search_facets(keys, tags);
+    SearchQuery q = given_search_query();
     FILE *f = given_stream();
 
     res.keys.items[0] = (SearchKeyItem){.key = (char *)"k\x1b",
                                         .sync_id = (char *)"s\n",
                                         .label = (char *)"l\"\x1b[31m",
-                                        .source = (char *)"a\\",
                                         .updated_at = (char *)"u\t"};
     res.tags.items[0].tag = (char *)"t\x01";
     res.keys.count = 1;
     res.tags.count = 1;
-    ASSERT_EQ_INT(output_search_envelope(f, &res, 0, 20, NULL, 0, NOW), 0);
-    assert_written(f, "{\"version\":1,\"offset\":0,\"limit\":20,\"count\":0,\"total\":0,"
-                      "\"keys\":{\"total\":5,\"items\":["
-                      "{\"key\":\"k\\u001b\",\"sync_id\":\"s\\n\",\"label\":\"l\\\"\\u001b[31m\","
-                      "\"source\":\"a\\\\\",\"updated_at\":\"u\\t\"}]},"
-                      "\"tags\":{\"total\":4,\"items\":[{\"tag\":\"t\\u0001\",\"count\":1}]},"
-                      "\"entries\":[]}\n");
+    ASSERT_EQ_INT(output_search_data(f, &q, &res, NULL, 0, NOW), 0);
+    assert_written(f, "{\"count\":0,\"total\":0,\"keys\":{\"total\":5,\"items\":["
+                      "{\"key\":\"k\\u001b\",\"id\":\"s\\n\",\"label\":\"l\\\"\\u001b[31m\","
+                      "\"updated_at\":\"u\\t\"}]},\"tags\":{\"total\":4,\"items\":[{\"tag\":\"t"
+                      "\\u0001\",\"count\":1}]},\"entries\":[]"
+                      ",\"query\":{\"original\":{\"text\":\"boo\",\"tags\":[],\"bins\":[\"live\"],"
+                      "\"time_range\":{\"field\":\"updated_at\",\"after\":null,\"before\":null}}},"
+                      "\"ranked_by\":\"bm25\",\"filters\":[]}");
 }
 
 TEST(output_search_envelope_rejects_missing_arguments)
@@ -395,20 +476,33 @@ TEST(output_search_envelope_rejects_missing_arguments)
     SearchTagItem tags[2];
     SearchResult res = given_search_facets(keys, tags);
     StoreNeighbor link = given_link(SUBJECT_ID, SUBJECT_ID, STORE_EDGE_RELATED);
+    SearchQuery q = given_search_query();
     FILE *f = given_stream();
 
-    ASSERT_EQ_INT(output_search_envelope(NULL, &res, 0, 1, NULL, 0, NOW), -1);
-    ASSERT_EQ_INT(output_search_envelope(f, NULL, 0, 1, NULL, 0, NOW), -1);
-    ASSERT_EQ_INT(output_search_envelope(f, &res, 0, 1, NULL, 0, NULL), -1);
-    ASSERT_EQ_INT(output_search_envelope(f, &res, 0, 1, NULL, 1, NOW), -1);
+    ASSERT_EQ_INT(output_search_data(NULL, &q, &res, NULL, 0, NOW), -1);
+    ASSERT_EQ_INT(output_search_data(f, &q, NULL, NULL, 0, NOW), -1);
+    ASSERT_EQ_INT(output_search_data(f, &q, &res, NULL, 0, NULL), -1);
+    ASSERT_EQ_INT(output_search_data(f, &q, &res, NULL, 1, NOW), -1);
     res.page.count = 1;
-    ASSERT_EQ_INT(output_search_envelope(f, &res, 0, 1, &link, 1, NOW), -1);
+    ASSERT_EQ_INT(output_search_data(f, &q, &res, &link, 1, NOW), -1);
     res.page.count = 0;
     res.keys.items = NULL;
-    ASSERT_EQ_INT(output_search_envelope(f, &res, 0, 1, NULL, 0, NOW), -1);
+    ASSERT_EQ_INT(output_search_data(f, &q, &res, NULL, 0, NOW), -1);
     res.keys.count = 0;
     res.tags.items = NULL;
-    ASSERT_EQ_INT(output_search_envelope(f, &res, 0, 1, NULL, 0, NOW), -1);
+    ASSERT_EQ_INT(output_search_data(f, &q, &res, NULL, 0, NOW), -1);
+    res.tags.count = 0;
+    res.tags.items = tags;
+    ASSERT_EQ_INT(output_search_data(f, NULL, &res, NULL, 0, NOW), -1);
+    q.query = NULL;
+    ASSERT_EQ_INT(output_search_data(f, &q, &res, NULL, 0, NOW), -1);
+    q = given_search_query();
+    // NOLINTNEXTLINE(clang-analyzer-optin.core.EnumCastOutOfRange) the guard under test
+    q.filters.bin = (StoreBin)(STORE_BIN_DELETED + 1);
+    ASSERT_EQ_INT(output_search_data(f, &q, &res, NULL, 0, NOW), -1);
+    q = given_search_query();
+    q.filters.ntags = 1U;
+    ASSERT_EQ_INT(output_search_data(f, &q, &res, NULL, 0, NOW), -1);
     assert_written(f, "");
 }
 
@@ -544,8 +638,8 @@ TEST(output_tags_envelope_rejects_missing_arguments)
 {
     FILE *f = given_stream();
 
-    ASSERT_EQ_INT(output_tags_envelope(NULL, NULL, 0), -1);
-    ASSERT_EQ_INT(output_tags_envelope(f, NULL, 1), -1);
+    ASSERT_EQ_INT(output_tags_data(NULL, NULL, 0), -1);
+    ASSERT_EQ_INT(output_tags_data(f, NULL, 1), -1);
     assert_written(f, "");
 }
 
@@ -554,10 +648,10 @@ TEST(output_links_write_envelope_rejects_missing_arguments)
     StoreNeighbor link = given_link(SUBJECT_ID, SUBJECT_ID, STORE_EDGE_RELATED);
     FILE *f = given_stream();
 
-    ASSERT_EQ_INT(output_links_write_envelope(NULL, "created", &link, 1, NOW), -1);
-    ASSERT_EQ_INT(output_links_write_envelope(f, NULL, &link, 1, NOW), -1);
-    ASSERT_EQ_INT(output_links_write_envelope(f, "created", &link, 1, NULL), -1);
-    ASSERT_EQ_INT(output_links_write_envelope(f, "created", NULL, 1, NOW), -1);
+    ASSERT_EQ_INT(output_links_write_data(NULL, "created", &link, 1, NOW), -1);
+    ASSERT_EQ_INT(output_links_write_data(f, NULL, &link, 1, NOW), -1);
+    ASSERT_EQ_INT(output_links_write_data(f, "created", &link, 1, NULL), -1);
+    ASSERT_EQ_INT(output_links_write_data(f, "created", NULL, 1, NOW), -1);
     assert_written(f, "");
 }
 
@@ -567,7 +661,7 @@ TEST(output_links_write_envelope_rejects_a_link_without_a_sync_id)
     FILE *f = given_stream();
 
     link.neighbor_sync_id = NULL;
-    ASSERT_EQ_INT(output_links_write_envelope(f, "created", &link, 1, NOW), -1);
+    ASSERT_EQ_INT(output_links_write_data(f, "created", &link, 1, NOW), -1);
     (void)fclose(f);
 }
 
@@ -577,42 +671,87 @@ TEST(output_links_write_envelope_names_both_supersedes_directions)
                              given_link(SUBJECT_ID, NEIGHBOR_ID, STORE_EDGE_SUPERSEDES)};
     FILE *f = given_stream();
 
-    ASSERT_EQ_INT(output_links_write_envelope(f, "created", links, 2, NOW), 0);
-    assert_written(f, "{\"version\":1,\"action\":\"created\",\"count\":2,\"links\":["
-                      "{\"id\":3,\"sync_id\":\"n-3\",\"key\":null,\"type\":\"supersedes\","
-                      "\"bin\":\"live\",\"preview\":\"nb\"},"
-                      "{\"id\":3,\"sync_id\":\"n-3\",\"key\":null,\"type\":\"superseded_by\","
-                      "\"bin\":\"live\",\"preview\":\"nb\"}]}\n");
+    ASSERT_EQ_INT(output_links_write_data(f, "created", links, 2, NOW), 0);
+    assert_written(
+        f, "{\"action\":\"created\",\"count\":2,\"links\":[{\"id\":\"n-3\",\"local_id\":3,\"key\""
+           ":null,\"type\":\"supersedes\",\"bin\":\"live\",\"preview\":\"nb\"},{\"id\":\"n-3\","
+           "\"local_"
+           "id\":3,\"key\":null,\"type\":\"superseded_by\",\"bin\":\"live\",\"preview\":\""
+           "nb\"}]}");
 }
 
 TEST(output_related_envelope_rejects_missing_arguments)
 {
+    Entry subject = given_entry();
+    Entry no_id = given_entry();
     FILE *f = given_stream();
 
-    ASSERT_EQ_INT(output_related_envelope(NULL, 1, NULL, NULL, 0, NOW), -1);
-    ASSERT_EQ_INT(output_related_envelope(f, 1, NULL, NULL, 0, NULL), -1);
-    ASSERT_EQ_INT(output_related_envelope(f, 1, NULL, NULL, 1, NOW), -1);
+    no_id.sync_id = NULL;
+    ASSERT_EQ_INT(output_related_data(NULL, &subject, NULL, 0, NOW), -1);
+    ASSERT_EQ_INT(output_related_data(f, &subject, NULL, 0, NULL), -1);
+    ASSERT_EQ_INT(output_related_data(f, NULL, NULL, 0, NOW), -1);
+    ASSERT_EQ_INT(output_related_data(f, &no_id, NULL, 0, NOW), -1);
+    ASSERT_EQ_INT(output_related_data(f, &subject, NULL, 1, NOW), -1);
     assert_written(f, "");
 }
 
 TEST(output_import_envelope_rejects_missing_arguments)
 {
-    StoreImportCounts counts = {0};
+    StoreImportResult counts = {0};
     FILE *f = given_stream();
 
-    ASSERT_EQ_INT(output_import_envelope(NULL, &counts), -1);
-    ASSERT_EQ_INT(output_import_envelope(f, NULL), -1);
+    StoreImportResult no_conflicts = {.nconflicts = 1};
+    StoreImportResult no_rejects = {.nrejected = 1};
+
+    ASSERT_EQ_INT(output_import_data(NULL, &counts), -1);
+    ASSERT_EQ_INT(output_import_data(f, NULL), -1);
+    ASSERT_EQ_INT(output_import_data(f, &no_conflicts), -1);
+    ASSERT_EQ_INT(output_import_data(f, &no_rejects), -1);
     assert_written(f, "");
+}
+
+/* A reject with no field name and a broken conflict row both stop the reply. */
+TEST(output_import_envelope_rejects_an_incomplete_item)
+{
+    StoreImportReject no_field = {.source_local_id = 1, .field = NULL};
+    StoreConflict broken = given_conflict();
+    StoreImportResult bad_reject = {.rejected = &no_field, .nrejected = 1};
+    StoreImportResult bad_conflict = {.conflicts = &broken, .nconflicts = 1};
+    FILE *f = given_stream();
+
+    broken.sync_id = NULL;
+    ASSERT_EQ_INT(output_import_data(f, &bad_reject), -1);
+    ASSERT_EQ_INT(output_import_data(f, &bad_conflict), -1);
+    (void)fclose(f);
 }
 
 TEST(output_device_envelopes_reject_missing_arguments)
 {
     FILE *f = given_stream();
 
-    ASSERT_EQ_INT(output_device_envelope(NULL, "d"), -1);
-    ASSERT_EQ_INT(output_device_envelope(f, NULL), -1);
-    ASSERT_EQ_INT(output_device_new_envelope(NULL, "d", NULL), -1);
-    ASSERT_EQ_INT(output_device_new_envelope(f, NULL, NULL), -1);
+    ASSERT_EQ_INT(output_device_data(NULL, "d"), -1);
+    ASSERT_EQ_INT(output_device_data(f, NULL), -1);
+    ASSERT_EQ_INT(output_device_new_data(NULL, "d", NULL), -1);
+    ASSERT_EQ_INT(output_device_new_data(f, NULL, NULL), -1);
+    assert_written(f, "");
+}
+
+static StoreBrainId given_brain_ids(void)
+{
+    StoreBrainId ids = {0};
+
+    (void)snprintf(ids.id, sizeof(ids.id), "11111111-1111-7111-8111-111111111111");
+    (void)snprintf(ids.previous, sizeof(ids.previous), "22222222-2222-7222-8222-222222222222");
+    return ids;
+}
+
+TEST(output_brain_new_id_envelope_rejects_missing_arguments)
+{
+    StoreBrainId ids = given_brain_ids();
+    FILE *f = given_stream();
+
+    ASSERT_EQ_INT(output_brain_new_id_data(NULL, &ids), -1);
+    ASSERT_EQ_INT(output_brain_new_id_data(f, NULL), -1);
     assert_written(f, "");
 }
 
@@ -620,8 +759,8 @@ TEST(output_conflicts_envelope_rejects_missing_arguments)
 {
     FILE *f = given_stream();
 
-    ASSERT_EQ_INT(output_conflicts_envelope(NULL, NULL, 0), -1);
-    ASSERT_EQ_INT(output_conflicts_envelope(f, NULL, 1), -1);
+    ASSERT_EQ_INT(output_conflicts_data(NULL, NULL, 0), -1);
+    ASSERT_EQ_INT(output_conflicts_data(f, NULL, 1), -1);
     assert_written(f, "");
 }
 
@@ -629,8 +768,8 @@ TEST(output_conflicts_envelope_lists_no_conflicts)
 {
     FILE *f = given_stream();
 
-    ASSERT_EQ_INT(output_conflicts_envelope(f, NULL, 0), 0);
-    assert_written(f, "{\"version\":1,\"count\":0,\"conflicts\":[]}\n");
+    ASSERT_EQ_INT(output_conflicts_data(f, NULL, 0), 0);
+    assert_written(f, "{\"count\":0,\"conflicts\":[]}");
 }
 
 TEST(output_conflicts_envelope_separates_conflicts_with_a_comma)
@@ -639,12 +778,11 @@ TEST(output_conflicts_envelope_separates_conflicts_with_a_comma)
     FILE *f = given_stream();
 
     rows[1].id = 2;
-    ASSERT_EQ_INT(output_conflicts_envelope(f, rows, 2), 0);
-    assert_written(f, "{\"version\":1,\"count\":2,\"conflicts\":["
-                      "{\"id\":1,\"sync_id\":\"s-1\",\"reason\":\"key_clash\",\"local\":{},"
-                      "\"incoming\":{},\"created_at\":\"c\"},"
-                      "{\"id\":2,\"sync_id\":\"s-1\",\"reason\":\"key_clash\",\"local\":{},"
-                      "\"incoming\":{},\"created_at\":\"c\"}]}\n");
+    ASSERT_EQ_INT(output_conflicts_data(f, rows, 2), 0);
+    assert_written(
+        f, "{\"count\":2,\"conflicts\":[{\"id\":1,\"memory_id\":\"s-1\",\"reason\":\"key_clash\","
+           "\"local\":{},\"incoming\":{},\"created_at\":\"c\"},{\"id\":2,\"memory_id\":\"s-1\",\"r"
+           "eason\":\"key_clash\",\"local\":{},\"incoming\":{},\"created_at\":\"c\"}]}");
 }
 
 /* Each field the conflict row needs, missing in turn. The envelope header is
@@ -662,30 +800,20 @@ TEST(output_conflicts_envelope_rejects_an_incomplete_conflict)
     rows[2].local_json = NULL;
     rows[3].incoming_json = NULL;
     rows[4].created_at = NULL;
-    ASSERT_EQ_INT(output_conflicts_envelope(f, &rows[0], 1), -1);
-    ASSERT_EQ_INT(output_conflicts_envelope(f, &rows[1], 1), -1);
-    ASSERT_EQ_INT(output_conflicts_envelope(f, &rows[2], 1), -1);
-    ASSERT_EQ_INT(output_conflicts_envelope(f, &rows[3], 1), -1);
-    ASSERT_EQ_INT(output_conflicts_envelope(f, &rows[4], 1), -1);
+    ASSERT_EQ_INT(output_conflicts_data(f, &rows[0], 1), -1);
+    ASSERT_EQ_INT(output_conflicts_data(f, &rows[1], 1), -1);
+    ASSERT_EQ_INT(output_conflicts_data(f, &rows[2], 1), -1);
+    ASSERT_EQ_INT(output_conflicts_data(f, &rows[3], 1), -1);
+    ASSERT_EQ_INT(output_conflicts_data(f, &rows[4], 1), -1);
     (void)fclose(f);
 }
 
-TEST(output_accepted_envelope_rejects_missing_arguments)
+TEST(output_entries_envelope_lists_no_entries)
 {
     FILE *f = given_stream();
 
-    ASSERT_EQ_INT(output_accepted_envelope(NULL, NULL, 0, NOW), -1);
-    ASSERT_EQ_INT(output_accepted_envelope(f, NULL, 0, NULL), -1);
-    ASSERT_EQ_INT(output_accepted_envelope(f, NULL, 1, NOW), -1);
-    assert_written(f, "");
-}
-
-TEST(output_accepted_envelope_lists_no_entries)
-{
-    FILE *f = given_stream();
-
-    ASSERT_EQ_INT(output_accepted_envelope(f, NULL, 0, NOW), 0);
-    assert_written(f, "{\"version\":1,\"action\":\"accepted\",\"count\":0,\"entries\":[]}\n");
+    ASSERT_EQ_INT(output_entries_data(f, "accepted", NULL, 0, NOW), 0);
+    assert_written(f, "{\"action\":\"accepted\",\"count\":0,\"entries\":[]}");
 }
 
 /* ---- human ---------------------------------------------------------------- */
@@ -969,14 +1097,14 @@ static int write_action_envelope(FILE *f)
 {
     Entry e = given_full_entry();
 
-    return output_action_envelope(f, "created", &e, NOW);
+    return output_action_data(f, "updated", &e, NOW);
 }
 
-static int write_deleted_list(FILE *f)
+static int write_entries_envelope(FILE *f)
 {
     Entry entries[] = {given_full_entry(), given_full_entry()};
 
-    return output_deleted_list(f, entries, 2, NOW);
+    return output_entries_data(f, "deleted", entries, 2, NOW);
 }
 
 static int write_get_envelope(FILE *f)
@@ -985,7 +1113,14 @@ static int write_get_envelope(FILE *f)
     StoreNeighbor links[2];
 
     given_two_links(links);
-    return output_get_envelope(f, &e, links, 2, NOW);
+    return output_memory_data(f, NULL, &e, links, 2, NOW);
+}
+
+static int write_add_envelope(FILE *f)
+{
+    Entry e = given_full_entry();
+
+    return output_memory_data(f, "created", &e, NULL, 0, NOW);
 }
 
 static int write_list_envelope(FILE *f)
@@ -994,7 +1129,7 @@ static int write_list_envelope(FILE *f)
     StoreNeighbor links[2];
 
     given_two_links(links);
-    return output_list_envelope(f, 0, 2, 2, 2, entries, links, 2, NOW);
+    return output_list_data(f, 2, 2, entries, links, 2, NOW);
 }
 
 static int write_search_envelope(FILE *f)
@@ -1005,9 +1140,16 @@ static int write_search_envelope(FILE *f)
     SearchTagItem tags[2];
     SearchResult res = given_search_facets(keys, tags);
 
+    static const char *const filter_tags[] = {"a", "b"};
+    SearchQuery q = given_search_query();
+
+    q.filters.tags = filter_tags;
+    q.filters.ntags = 2U;
+    q.filters.since = "2026-01-01T00:00:00.000Z";
+    q.filters.until = "2026-02-01T00:00:00.000Z";
     given_two_links(links);
     res.page = (PageResult){.st = STORE_OK, .entries = entries, .count = 2, .total = 2};
-    return output_search_envelope(f, &res, 0, 2, links, 2, NOW);
+    return output_search_data(f, &q, &res, links, 2, NOW);
 }
 
 static int write_search_facets_human(FILE *f)
@@ -1041,7 +1183,7 @@ static int write_tags_envelope(FILE *f)
 {
     TagCount tags[] = {{.name = (char *)"a", .count = 1}, {.name = (char *)"b", .count = 2}};
 
-    return output_tags_envelope(f, tags, 2);
+    return output_tags_data(f, tags, 2);
 }
 
 static int write_tags_human(FILE *f)
@@ -1056,20 +1198,24 @@ static int write_links_write_envelope(FILE *f)
     StoreNeighbor links[2];
 
     given_two_links(links);
-    return output_links_write_envelope(f, "created", links, 2, NOW);
+    return output_links_write_data(f, "created", links, 2, NOW);
 }
 
 static int write_related_envelope_with_key(FILE *f)
 {
     StoreNeighbor links[2];
+    Entry subject = given_entry();
 
     given_two_links(links);
-    return output_related_envelope(f, SUBJECT_ID, "k:7", links, 2, NOW);
+    return output_related_data(f, &subject, links, 2, NOW);
 }
 
 static int write_related_envelope_without_key(FILE *f)
 {
-    return output_related_envelope(f, SUBJECT_ID, NULL, NULL, 0, NOW);
+    Entry subject = given_entry();
+
+    subject.key = NULL;
+    return output_related_data(f, &subject, NULL, 0, NOW);
 }
 
 static int write_related_human(FILE *f)
@@ -1080,11 +1226,21 @@ static int write_related_human(FILE *f)
     return output_related_human(f, links, 2, NOW);
 }
 
+enum { REJECT_ROW_A = 7, REJECT_ROW_B = 9 };
+
 static int write_import_envelope(FILE *f)
 {
-    StoreImportCounts counts = {.inserted = 1, .updated = 2, .unchanged = 3, .conflicts = 4};
+    StoreConflict conflicts[] = {given_conflict(), given_conflict()};
+    StoreImportReject rejected[] = {{.source_local_id = REJECT_ROW_A, .field = "key"},
+                                    {.source_local_id = REJECT_ROW_B, .field = "body_hash"}};
+    StoreImportResult counts = {.inserted = 1, .updated = 2, .unchanged = 3};
 
-    return output_import_envelope(f, &counts);
+    conflicts[1].id = 2;
+    counts.conflicts = conflicts;
+    counts.nconflicts = 2;
+    counts.rejected = rejected;
+    counts.nrejected = 2;
+    return output_import_data(f, &counts);
 }
 
 static int write_device_human(FILE *f)
@@ -1094,31 +1250,31 @@ static int write_device_human(FILE *f)
 
 static int write_device_envelope(FILE *f)
 {
-    return output_device_envelope(f, "dev");
+    return output_device_data(f, "dev");
 }
 
 static int write_device_new_envelope_with_previous(FILE *f)
 {
-    return output_device_new_envelope(f, "dev", "old");
+    return output_device_new_data(f, "dev", "old");
 }
 
 static int write_device_new_envelope_without_previous(FILE *f)
 {
-    return output_device_new_envelope(f, "dev", NULL);
+    return output_device_new_data(f, "dev", NULL);
+}
+
+static int write_brain_new_id_envelope(FILE *f)
+{
+    StoreBrainId ids = given_brain_ids();
+
+    return output_brain_new_id_data(f, &ids);
 }
 
 static int write_conflicts_envelope(FILE *f)
 {
     StoreConflict rows[] = {given_conflict(), given_conflict()};
 
-    return output_conflicts_envelope(f, rows, 2);
-}
-
-static int write_accepted_envelope(FILE *f)
-{
-    Entry entries[] = {given_full_entry(), given_full_entry()};
-
-    return output_accepted_envelope(f, entries, 2, NOW);
+    return output_conflicts_data(f, rows, 2);
 }
 
 static int write_rebuilt_json(FILE *f)
@@ -1176,12 +1332,12 @@ TEST(output_action_envelope_reports_every_failed_write)
     assert_reports_every_failed_write(write_action_envelope);
 }
 
-TEST(output_deleted_list_reports_every_failed_write)
+TEST(output_entries_envelope_reports_every_failed_write)
 {
-    assert_reports_every_failed_write(write_deleted_list);
+    assert_reports_every_failed_write(write_entries_envelope);
 }
 
-TEST(output_get_envelope_reports_every_failed_write)
+TEST(output_memory_envelope_get_reports_every_failed_write)
 {
     assert_reports_every_failed_write(write_get_envelope);
 }
@@ -1246,6 +1402,23 @@ TEST(output_related_human_reports_every_failed_write)
     assert_reports_every_failed_write(write_related_human);
 }
 
+/* 21 stage 1 grill: the import reply names each row it opened a conflict for or
+   refused, so an agent need not run conflicts after every import. */
+TEST(output_import_envelope_lists_conflicts_and_rejected_rows)
+{
+    FILE *f = given_stream();
+
+    ASSERT_EQ_INT(write_import_envelope(f), 0);
+    assert_written(f,
+                   "{\"action\":\"imported\",\"inserted\":1,\"updated\":2,\"unchanged\":3,"
+                   "\"conflicts\":{\"count\":2,\"items\":[{\"id\":1,\"memory_id\":\"s-1\","
+                   "\"reason\":\"key_clash\",\"local\":{},\"incoming\":{},\"created_at\":\"c\"},"
+                   "{\"id\":2,\"memory_id\":\"s-1\",\"reason\":\"key_clash\",\"local\":{},"
+                   "\"incoming\":{},\"created_at\":\"c\"}]},\"rejected\":{\"count\":2,\"items\":["
+                   "{\"source_local_id\":7,\"field\":\"key\"},{\"source_local_id\":9,"
+                   "\"field\":\"body_hash\"}]}}");
+}
+
 TEST(output_import_envelope_reports_every_failed_write)
 {
     assert_reports_every_failed_write(write_import_envelope);
@@ -1271,14 +1444,19 @@ TEST(output_device_new_envelope_without_previous_reports_every_failed_write)
     assert_reports_every_failed_write(write_device_new_envelope_without_previous);
 }
 
+TEST(output_brain_new_id_envelope_reports_every_failed_write)
+{
+    assert_reports_every_failed_write(write_brain_new_id_envelope);
+}
+
 TEST(output_conflicts_envelope_reports_every_failed_write)
 {
     assert_reports_every_failed_write(write_conflicts_envelope);
 }
 
-TEST(output_accepted_envelope_reports_every_failed_write)
+TEST(output_memory_envelope_add_reports_every_failed_write)
 {
-    assert_reports_every_failed_write(write_accepted_envelope);
+    assert_reports_every_failed_write(write_add_envelope);
 }
 
 TEST(output_rebuilt_json_reports_every_failed_write)
@@ -1320,15 +1498,18 @@ void register_output_tests(void)
     RUN_TEST(output_entry_json_rejects_missing_arguments);
     RUN_TEST(output_entry_json_rejects_an_incomplete_entry);
     RUN_TEST(output_entry_json_rejects_a_non_canonical_version_vector);
-    RUN_TEST(output_entry_json_renders_a_null_source_as_unknown);
+    RUN_TEST(output_entry_json_rejects_a_bad_actor);
     RUN_TEST(output_entry_json_renders_null_text_fields_as_empty_strings);
     RUN_TEST(output_action_envelope_rejects_missing_arguments);
-    RUN_TEST(output_deleted_list_rejects_missing_arguments);
-    RUN_TEST(output_deleted_list_separates_entries_with_a_comma);
-    RUN_TEST(output_get_envelope_rejects_missing_arguments);
-    RUN_TEST(output_get_envelope_lists_only_the_subjects_links);
+    RUN_TEST(output_entries_envelope_rejects_missing_arguments);
+    RUN_TEST(output_entries_envelope_separates_entries_with_a_comma);
+    RUN_TEST(output_memory_envelope_rejects_missing_arguments);
+    RUN_TEST(output_memory_envelope_without_action_lists_only_the_subjects_links);
+    RUN_TEST(output_memory_envelope_with_action_puts_action_before_memory);
+    RUN_TEST(output_action_envelope_writes_the_memory_without_links);
     RUN_TEST(output_list_envelope_rejects_missing_arguments);
     RUN_TEST(output_search_envelope_writes_empty_facets);
+    RUN_TEST(output_search_envelope_echoes_the_query_filters);
     RUN_TEST(output_search_envelope_writes_the_facet_items);
     RUN_TEST(output_search_envelope_escapes_every_facet_field);
     RUN_TEST(output_search_envelope_rejects_missing_arguments);
@@ -1346,13 +1527,15 @@ void register_output_tests(void)
     RUN_TEST(output_links_write_envelope_names_both_supersedes_directions);
     RUN_TEST(output_related_envelope_rejects_missing_arguments);
     RUN_TEST(output_import_envelope_rejects_missing_arguments);
+    RUN_TEST(output_import_envelope_lists_conflicts_and_rejected_rows);
+    RUN_TEST(output_import_envelope_rejects_an_incomplete_item);
     RUN_TEST(output_device_envelopes_reject_missing_arguments);
+    RUN_TEST(output_brain_new_id_envelope_rejects_missing_arguments);
     RUN_TEST(output_conflicts_envelope_rejects_missing_arguments);
     RUN_TEST(output_conflicts_envelope_lists_no_conflicts);
     RUN_TEST(output_conflicts_envelope_separates_conflicts_with_a_comma);
     RUN_TEST(output_conflicts_envelope_rejects_an_incomplete_conflict);
-    RUN_TEST(output_accepted_envelope_rejects_missing_arguments);
-    RUN_TEST(output_accepted_envelope_lists_no_entries);
+    RUN_TEST(output_entries_envelope_lists_no_entries);
     RUN_TEST(output_human_writers_reject_a_missing_stream);
     RUN_TEST(output_device_human_rejects_a_missing_id);
     RUN_TEST(output_tags_human_rejects_missing_arguments);
@@ -1378,8 +1561,8 @@ void register_output_tests(void)
     RUN_TEST(output_json_string_reports_every_failed_write);
     RUN_TEST(output_entry_json_reports_every_failed_write);
     RUN_TEST(output_action_envelope_reports_every_failed_write);
-    RUN_TEST(output_deleted_list_reports_every_failed_write);
-    RUN_TEST(output_get_envelope_reports_every_failed_write);
+    RUN_TEST(output_entries_envelope_reports_every_failed_write);
+    RUN_TEST(output_memory_envelope_get_reports_every_failed_write);
     RUN_TEST(output_list_envelope_reports_every_failed_write);
     RUN_TEST(output_search_envelope_reports_every_failed_write);
     RUN_TEST(output_search_facets_human_reports_every_failed_write);
@@ -1397,8 +1580,9 @@ void register_output_tests(void)
     RUN_TEST(output_device_envelope_reports_every_failed_write);
     RUN_TEST(output_device_new_envelope_with_previous_reports_every_failed_write);
     RUN_TEST(output_device_new_envelope_without_previous_reports_every_failed_write);
+    RUN_TEST(output_brain_new_id_envelope_reports_every_failed_write);
     RUN_TEST(output_conflicts_envelope_reports_every_failed_write);
-    RUN_TEST(output_accepted_envelope_reports_every_failed_write);
+    RUN_TEST(output_memory_envelope_add_reports_every_failed_write);
     RUN_TEST(output_rebuilt_json_reports_every_failed_write);
     RUN_TEST(output_rebuilt_human_reports_every_failed_write);
     RUN_TEST(output_entry_human_line_reports_every_failed_write);

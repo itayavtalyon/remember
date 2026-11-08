@@ -102,8 +102,40 @@ bool utc_stamp_is_canonical(const char *s);
    integer of at most 18 digits, no spaces, and no device twice. */
 bool vv_json_is_canonical(const char *s);
 
-/* One of the closed source tokens: human, agent, tool, share, unknown. */
+/* One of the closed source tokens: human, agent, tool, share, unknown.
+   v4 and v5 import rows still use this. A memory does not. */
 bool source_is_valid(const char *s);
+
+/* Canonical actor JSON: {"kind":"<kind>","id":null} or {"kind":"<kind>","id":"<id>"}.
+   kind is human, agent, tool, share, or import. id is 1 to 64 of [A-Za-z0-9_./:-]. */
+enum { ACTOR_JSON_CAP = 96, ACTOR_ID_MAX = 64 };
+
+typedef enum { ACTOR_OK = 0, ACTOR_BAD_KIND = 1, ACTOR_BAD_ID = 2, ACTOR_HOOK = 3 } ActorStatus;
+
+/* kind NULL is not a kind. id NULL is JSON null. */
+typedef struct {
+    const char *kind;
+    const char *id;
+} Actor;
+
+/* Stored form, including kind import. Rejects sync and unknown. */
+ActorStatus actor_json(Actor actor, char *out, size_t cap);
+
+/* True for the five stored kinds. */
+bool actor_kind_is_stored(const char *kind);
+
+/* True when s is the compact form actor_json writes. */
+bool actor_json_is_canonical(const char *s);
+
+/* Copy a canonical actor, or the migration form {"kind":"<kind>"} (id omitted),
+   into out as canonical JSON. */
+bool actor_json_store_to_canonical(const char *stored, char *out, size_t cap);
+
+/* CLI writer. kind NULL means human. id NULL means JSON null.
+   Allowed kinds: human, agent, tool, share. Not sync. Not import.
+   When REMEMBER_HOOK_DEPTH is an integer of 1 or more and either field was
+   passed (non-NULL), returns ACTOR_HOOK and writes nothing. */
+ActorStatus actor_from_cli(Actor flags, char *out, size_t cap);
 
 /* Bucket prefix (007 ST-5.4): at most 32 code points before the ':'. */
 enum { REMEMBER_BUCKET_PREFIX_MAX_POINTS = 32 };

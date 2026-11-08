@@ -223,7 +223,7 @@ TEST(json_entry_has_required_fields)
     char *db = make_temp_db_path();
     CmdResult r;
     CmdResult g;
-    const char *a[] = {"add", "--tag", "t", "--source", "tool", "fields check"};
+    const char *a[] = {"add", "--tag", "t", "--as", "tool", "fields check"};
     const char *gargs[] = {"get", "--json", "1"};
     ASSERT_TRUE(db != NULL);
     r = run_remember(db, a, sizeof(a) / sizeof(a[0]), NULL);
@@ -235,7 +235,7 @@ TEST(json_entry_has_required_fields)
     ASSERT_STR_CONTAINS(g.out, "\"id\":");
     ASSERT_STR_CONTAINS(g.out, "\"body\":");
     ASSERT_STR_CONTAINS(g.out, "\"tags\":");
-    ASSERT_STR_CONTAINS(g.out, "\"source\":");
+    ASSERT_STR_CONTAINS(g.out, "\"created_by\":");
     ASSERT_STR_CONTAINS(g.out, "\"created_at\":");
     ASSERT_STR_CONTAINS(g.out, "\"updated_at\":");
     /* ISO-8601 UTC ends with Z */

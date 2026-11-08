@@ -114,6 +114,7 @@ set_property(SOURCE
     src/cmd_import.c
     src/cmd_device.c
     src/cmd_repair.c
+    src/cmd_brain.c
     src/output.c
     src/util.c
     src/diag.c
@@ -241,6 +242,7 @@ set(REMEMBER_LIB_SOURCES
     src/cmd_import.c
     src/cmd_device.c
     src/cmd_repair.c
+    src/cmd_brain.c
     src/output.c
     src/util.c
     src/diag.c
@@ -262,7 +264,8 @@ remember_apply_coverage(remember)
 remember_apply_test_hooks(remember)
 if(REMEMBER_TEST_VFS)
     target_sources(remember PRIVATE src/test_vfs.c)
-    target_compile_definitions(remember PRIVATE REMEMBER_TEST_VFS)
+    # REMEMBER_TEST_CLI: the test CLI honours REMEMBER_TEST_FIXED_IDS (008-10).
+    target_compile_definitions(remember PRIVATE REMEMBER_TEST_VFS REMEMBER_TEST_CLI)
 endif()
 
 # Non-sanitized CLI for macOS leaks(1) (leaks cannot inspect ASan heaps).
@@ -324,6 +327,7 @@ set(REMEMBER_TEST_SOURCES
     tests/test_errors.c
     tests/test_list_dates.c
     tests/test_settings.c
+    tests/test_envelope.c
 )
 add_executable(remember_tests
     ${REMEMBER_TEST_SOURCES}

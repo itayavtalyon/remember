@@ -15,7 +15,7 @@
 static int emit_purge_result(bool json, const Entry *entries, size_t count, const char *now)
 {
     if (json) {
-        if (output_deleted_list(app_out(), entries, count, now) != 0) {
+        if (output_entries_data(app_out(), "deleted", entries, count, now) != 0) {
             err_msg(DIAG_INTERNAL, "failed to write output");
             return -1;
         }
@@ -69,7 +69,7 @@ int cmd_purge(Store *s, bool json, int rest_argc, const char **rest_argv)
     for (i = 0; i < rest_argc; i++) {
         const char *arg = rest_argv[i];
 
-        if (cmd_bin_take_flag(arg, &bins) != 0) {
+        if (cmd_bin_take_flag(arg, &bins) != 0 || cmd_is_hooks_flag(arg)) {
             continue;
         }
         if (arg != NULL && arg[0] == '-' && arg[1] != '\0') {
@@ -87,19 +87,4 @@ int cmd_purge(Store *s, bool json, int rest_argc, const char **rest_argv)
         return REMEMBER_ERR;
     }
     return run_purge_bin(s, json, bin);
-}
-
-int cmd_purge_trash(Store *s, bool json, int rest_argc, const char **rest_argv)
-{
-    (void)diag_warning(DIAG_WARN_DEPRECATED_FLAG, "purge-trash is deprecated; use purge --expired");
-    if (rest_argc > 0) {
-        if (rest_argv != NULL && rest_argv[0] != NULL && rest_argv[0][0] == '-' &&
-            rest_argv[0][1] != '\0') {
-            err_fmt(DIAG_USAGE, "unknown option '%s'", rest_argv[0]);
-        } else {
-            err_msg(DIAG_USAGE, "purge-trash takes no arguments");
-        }
-        return REMEMBER_ERR;
-    }
-    return run_purge_bin(s, json, STORE_BIN_EXPIRED);
 }
