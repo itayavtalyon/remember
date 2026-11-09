@@ -560,6 +560,11 @@ int diag_error_detail(DiagCode code, const char *message, const char *fix,
     });
 }
 
+int diag_notice(const char *message)
+{
+    return fprintf(app_err(), "remember: %s\n", message) < 0 ? -1 : 0;
+}
+
 int diag_warning(DiagWarning code, const char *message)
 {
     return diag_warning_detail(code, message, NULL, 0U);

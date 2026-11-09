@@ -160,4 +160,11 @@ ExpiryResult resolve_expiry_flags(ExpiryFlags flags, const char *now, char *out,
  */
 int parse_filter_ts(const char *in, char out[ISO_TS_BUFSIZE]);
 
+/* Unpadded base64url (RFC 4648 section 5). NULL is out of memory. */
+char *base64url_encode(const unsigned char *raw, size_t len);
+
+/* 0 decoded (NUL-terminated, caller frees), -1 out of memory, -2 not
+   base64url or over 64 KiB. Callers re-encode and compare. */
+int base64url_decode(const char *text, unsigned char **out, size_t *out_len);
+
 #endif /* REMEMBER_COMMANDS_COMMON_H */

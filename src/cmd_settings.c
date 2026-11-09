@@ -861,6 +861,11 @@ static int fill_list_display(const char *json, char *out, size_t cap)
     }
     out[0] = '\0';
     if (n == 2U) {
+        /* decision:plan20-empty-list-related (C-43 draft). */
+        if (cap < sizeof("(empty)")) {
+            return -1;
+        }
+        memcpy(out, "(empty)", sizeof("(empty)"));
         return 0;
     }
     while (i + 1U < n) {
@@ -925,7 +930,9 @@ static int fill_display(SettingType type, const char *json, char *out, size_t ca
     return fill_list_display(json, out, cap);
 }
 
-static int write_raw_value(FILE *out, SettingType type, const char *json)
+/* The JSON value, then ,"<twin>":<ms> for a duration. */
+// NOLINTNEXTLINE(bugprone-easily-swappable-parameters) — json is the value, twin the member name
+static int write_raw_named(FILE *out, SettingType type, const char *json, const char *twin)
 {
     char inner[SETTING_VALUE_CAP];
     long long ms = 0;
@@ -947,7 +954,12 @@ static int write_raw_value(FILE *out, SettingType type, const char *json)
             return -1;
         }
     }
-    return fprintf(out, ",\"value_ms\":%lld", ms) < 0 ? -1 : 0;
+    return fprintf(out, ",\"%s\":%lld", twin, ms) < 0 ? -1 : 0;
+}
+
+static int write_raw_value(FILE *out, SettingType type, const char *json)
+{
+    return write_raw_named(out, type, json, "value_ms");
 }
 
 static int write_layer(LayerOut layer)
@@ -1074,12 +1086,13 @@ static int write_layers(FILE *out, const SettingSpec *spec, const SettingRead *r
     return 0;
 }
 
-static int write_setting_core(FILE *out, const SettingSpec *spec, const SettingRead *read,
+/* The ST-7.11a object, left open for the caller's members. */
+static int write_setting_open(FILE *out, const SettingSpec *spec, const SettingRead *read,
                               Shown shown, GetOpts opt)
 {
     const char *changed = "false";
 
-    if (fputs("{\"setting\":{\"key\":", out) < 0 || output_json_string(out, spec->key) != 0) {
+    if (fputs("{\"key\":", out) < 0 || output_json_string(out, spec->key) != 0) {
         return -1;
     }
     if (fprintf(out, ",\"type\":\"%s\",\"value\":", type_token(spec->type)) < 0 ||
@@ -1094,8 +1107,17 @@ static int write_setting_core(FILE *out, const SettingSpec *spec, const SettingR
         write_layers(out, spec, read, opt) != 0) {
         return -1;
     }
-    /* layers, then the setting object. The caller closes the data object. */
-    return fputs("}}", out) < 0 ? -1 : 0;
+    return fputc('}', out) == EOF ? -1 : 0;
+}
+
+/* {"setting":{...}: the caller closes the data object. */
+static int write_setting_core(FILE *out, const SettingSpec *spec, const SettingRead *read,
+                              Shown shown, GetOpts opt)
+{
+    if (fputs("{\"setting\":", out) < 0 || write_setting_open(out, spec, read, shown, opt) != 0) {
+        return -1;
+    }
+    return fputc('}', out) == EOF ? -1 : 0;
 }
 
 static int write_setting_object(FILE *out, const SettingSpec *spec, const SettingRead *read,
@@ -1107,8 +1129,9 @@ static int write_setting_object(FILE *out, const SettingSpec *spec, const Settin
     return fputc('}', out) == EOF ? -1 : 0;
 }
 
+/* "from X, set by Y on DATE" and a newline. */
 /* NOLINTNEXTLINE(bugprone-easily-swappable-parameters) — actor then stamp, same order as the row */
-static int write_from_line(FILE *out, SettingFrom from, const char *actor, const char *stamp)
+static int write_from_tail(FILE *out, SettingFrom from, const char *actor, const char *stamp)
 {
     ActorParts who = actor_parts(actor);
     SettingWhen when;
@@ -1119,7 +1142,7 @@ static int write_from_line(FILE *out, SettingFrom from, const char *actor, const
         setting_format_when(when, date, sizeof(date))) {
         dated = true;
     }
-    if (fprintf(out, "  from %s", from_token(from)) < 0) {
+    if (fprintf(out, "from %s", from_token(from)) < 0) {
         return -1;
     }
     if (who.ok) {
@@ -1134,6 +1157,15 @@ static int write_from_line(FILE *out, SettingFrom from, const char *actor, const
         }
     }
     return fputc('\n', out) == EOF ? -1 : 0;
+}
+
+/* NOLINTNEXTLINE(bugprone-easily-swappable-parameters) — actor then stamp, same order as the row */
+static int write_from_line(FILE *out, SettingFrom from, const char *actor, const char *stamp)
+{
+    if (fputs("  ", out) < 0) {
+        return -1;
+    }
+    return write_from_tail(out, from, actor, stamp);
 }
 
 static int append_other(char *buf, size_t cap, size_t *pos, bool *any, const char *name,
@@ -1774,19 +1806,24 @@ static int guard_actor(const WriteOpts *opt, char *actor_buf, const char **updat
     return 0;
 }
 
-static int take_write_scope(int *index, int argc, const char **argv, WriteOpts *opt)
+static int take_layer(int *index, int argc, const char **argv, SettingLayer *scope, bool *scope_set)
 {
-    GetOpts scope;
+    GetOpts held;
 
-    memset(&scope, 0, sizeof(scope));
-    scope.scope = opt->scope;
-    scope.scope_set = opt->scope_set;
-    if (take_scope(index, argc, argv, &scope) != 0) {
+    memset(&held, 0, sizeof(held));
+    held.scope = *scope;
+    held.scope_set = *scope_set;
+    if (take_scope(index, argc, argv, &held) != 0) {
         return -1;
     }
-    opt->scope = scope.scope;
-    opt->scope_set = scope.scope_set;
+    *scope = held.scope;
+    *scope_set = held.scope_set;
     return 0;
+}
+
+static int take_write_scope(int *index, int argc, const char **argv, WriteOpts *opt)
+{
+    return take_layer(index, argc, argv, &opt->scope, &opt->scope_set);
 }
 
 static int take_write_actor(int *index, int argc, const char **argv, WriteOpts *opt)
@@ -1898,24 +1935,28 @@ static int parse_set(int argc, const char **argv, WriteOpts *opt)
     return reject_set_shape(opt);
 }
 
-static int take_namespace(int *index, int argc, const char **argv, WriteOpts *opt)
+/* The value after argv[*index]. A flag is not a value: `--namespace --yes`
+   would match nothing. */
+static int take_flag_value(int *index, int argc, const char **argv, const char **slot)
 {
-    if (opt->ns != NULL) {
-        err_msg(DIAG_USAGE, "duplicate --namespace");
+    const char *flag = argv[*index];
+
+    if (*slot != NULL) {
+        err_fmt(DIAG_USAGE, "duplicate %s", flag);
         return -1;
     }
-    if (*index + 1 >= argc) {
-        err_msg(DIAG_USAGE, "missing value for --namespace");
-        return -1;
-    }
-    /* A flag is not a namespace: `--namespace --yes` would match nothing. */
-    if (argv[*index + 1][0] == '-') {
-        err_msg(DIAG_USAGE, "missing value for --namespace");
+    if (*index + 1 >= argc || argv[*index + 1][0] == '-') {
+        err_fmt(DIAG_USAGE, "missing value for %s", flag);
         return -1;
     }
     *index += 1;
-    opt->ns = argv[*index];
+    *slot = argv[*index];
     return 0;
+}
+
+static int take_namespace(int *index, int argc, const char **argv, WriteOpts *opt)
+{
+    return take_flag_value(index, argc, argv, &opt->ns);
 }
 
 /* 1: this token was an option. 0: it is positional. -1: usage was already printed. */
@@ -2127,6 +2168,28 @@ static int write_set_result(FILE *out, const SettingSpec *spec, const SettingRea
     return write_tail(out, layer, old, changed, NULL);
 }
 
+/* C-13: "<key>" is now <value> for this brain / your user, or is already. */
+static int write_set_line(FILE *out, const SettingSpec *spec, const SettingRead *read,
+                          SettingLayer layer, bool changed)
+{
+    char display[SETTING_VALUE_CAP];
+    const char *json = live_text(read->user_live, read->user_value);
+    const char *whose = "your user";
+
+    if (layer == SETTING_LAYER_BRAIN) {
+        json = live_text(read->brain_live, read->brain_value);
+        whose = "this brain";
+    }
+    if (fill_display(spec->type, json, display, sizeof(display)) != 0) {
+        return -1;
+    }
+    if (!changed) {
+        return fprintf(out, "\"%s\" is already %s. Nothing changed.\n", spec->key, display) < 0 ? -1
+                                                                                                : 0;
+    }
+    return fprintf(out, "\"%s\" is now %s for %s.\n", spec->key, display, whose) < 0 ? -1 : 0;
+}
+
 static int apply_set(Store *store, bool json, const WriteOpts *opt)
 {
     const SettingSpec *spec = NULL;
@@ -2192,6 +2255,10 @@ static int apply_set(Store *store, bool json, const WriteOpts *opt)
     }
     rc = REMEMBER_OK;
     if (json && write_set_result(app_out(), spec, &read, wrote.layer, old, wrote.changed) != 0) {
+        err_msg(DIAG_INTERNAL, "failed to write output");
+        rc = REMEMBER_ERR;
+    }
+    if (!json && write_set_line(app_out(), spec, &read, wrote.layer, wrote.changed) != 0) {
         err_msg(DIAG_INTERNAL, "failed to write output");
         rc = REMEMBER_ERR;
     }
@@ -3237,6 +3304,1228 @@ static int cmd_settings_import(Store *store, bool json, int argc, const char **a
     return rc;
 }
 
+/* ---- stage 9: list, history, explain (C-13, ST-7.6, ST-7.14) -------------- */
+
+// NOLINTBEGIN(readability-magic-numbers,cppcoreguidelines-avoid-magic-numbers)
+enum {
+    VIEW_LIMIT_MAX = 1000,
+    VIEW_CURSOR_PAD = 7,
+    LIST_PAGE = 100,
+    HISTORY_PAGE = 50,
+    REGISTRY_CAP = 64,
+    CURSOR_DOC_CAP = 512,
+    CURSOR_NAME_CAP = 4,
+    CURSOR_FIELD_CAP = 128,
+    CURSOR_MEMBERS = 8,
+    LIST_CURSOR_MEMBERS = 6,
+    HISTORY_CURSOR_MEMBERS = 7
+};
+// NOLINTEND(readability-magic-numbers,cppcoreguidelines-avoid-magic-numbers)
+
+/* key is the list PREFIX, the history KEY, or the explain KEY. */
+typedef struct {
+    const char *key;
+    const char *ns;
+    const char *cursor;
+    long long limit;
+    SettingLayer scope;
+    bool scope_set;
+    bool changed;
+    bool limit_set;
+    bool all;
+} ViewOpts;
+
+/* One member of a flat cursor object, as written (no unescaping). */
+typedef struct {
+    char name[CURSOR_NAME_CAP];
+    char value[CURSOR_FIELD_CAP];
+    bool quoted;
+} CursorMember;
+
+typedef struct {
+    char *buf;
+    size_t cap;
+    size_t pos;
+    bool bad;
+    char pad_[VIEW_CURSOR_PAD]; /* explicit tail padding (kept -Wpadded-clean) */
+} ViewCursor;
+
+static GetOpts view_get_opts(const ViewOpts *opt)
+{
+    GetOpts g;
+
+    memset(&g, 0, sizeof(g));
+    g.scope = opt->scope;
+    g.scope_set = opt->scope_set;
+    return g;
+}
+
+/* decision:plan20-list-limit-draft (C-43 draft): the C-06 flag form, no key. */
+static int report_limit(const char *value)
+{
+    char *msg = fmt_alloc("--limit can be 1 to 1000; you gave %s.", value);
+    const DiagDetailField fields[] = {{.name = "flag", .value = "--limit"},
+                                      {.name = "value", .value = value},
+                                      {.name = "min", .value = "1"},
+                                      {.name = "max", .value = "1000"}};
+
+    if (msg == NULL) {
+        return report_oom();
+    }
+    (void)emit_detail(DIAG_SETTING_OUT_OF_RANGE, msg, "Use a value from 1 to 1000.", fields,
+                      sizeof(fields) / sizeof(fields[0]));
+    free(msg);
+    return REMEMBER_ERR;
+}
+
+static int take_limit(int *index, int argc, const char **argv, ViewOpts *opt)
+{
+    long long n = 0;
+    const char *val = NULL;
+
+    if (opt->limit_set) {
+        err_msg(DIAG_USAGE, "duplicate --limit");
+        return -1;
+    }
+    if (*index + 1 >= argc) {
+        err_msg(DIAG_USAGE, "missing value for --limit");
+        return -1;
+    }
+    *index += 1;
+    val = argv[*index];
+    if (!setting_integer(val, &n)) {
+        err_msg(DIAG_USAGE, "invalid --limit (must be 1..1000)");
+        return -1;
+    }
+    if (n < 1 || n > (long long)VIEW_LIMIT_MAX) {
+        (void)report_limit(val);
+        return -1;
+    }
+    opt->limit = n;
+    opt->limit_set = true;
+    return 0;
+}
+
+/* 0: this option was taken. -1: usage was already printed. */
+static int take_view_option(int *index, int argc, const char **argv, ViewOpts *opt, bool list)
+{
+    const char *arg = argv[*index];
+
+    if (strcmp(arg, "--scope") == 0) {
+        return take_layer(index, argc, argv, &opt->scope, &opt->scope_set);
+    }
+    if (strcmp(arg, "--limit") == 0) {
+        return take_limit(index, argc, argv, opt);
+    }
+    if (strcmp(arg, "--cursor") == 0) {
+        return take_flag_value(index, argc, argv, &opt->cursor);
+    }
+    if (list && strcmp(arg, "--namespace") == 0) {
+        return take_flag_value(index, argc, argv, &opt->ns);
+    }
+    if (list && strcmp(arg, "--changed") == 0) {
+        if (opt->changed) {
+            err_msg(DIAG_USAGE, "duplicate --changed");
+            return -1;
+        }
+        opt->changed = true;
+        return 0;
+    }
+    err_fmt(DIAG_USAGE, "unknown option '%s'", arg);
+    return -1;
+}
+
+/* list [--scope] [--namespace NS] [--changed] [--limit N] [--cursor C] [PREFIX];
+   history [KEY] [--scope] [--limit N] [--cursor C]. */
+static int parse_view(int argc, const char **argv, ViewOpts *opt, bool list)
+{
+    int i = 0;
+    bool end_opts = false;
+
+    for (i = 1; i < argc; i++) {
+        const char *arg = argv[i];
+
+        if (!end_opts && strcmp(arg, "--") == 0) {
+            end_opts = true;
+            continue;
+        }
+        if (!end_opts && arg[0] == '-' && arg[1] != '\0') {
+            if (take_view_option(&i, argc, argv, opt, list) != 0) {
+                return -1;
+            }
+            continue;
+        }
+        if (opt->key != NULL) {
+            if (list) {
+                err_msg(DIAG_USAGE, "settings list takes one prefix");
+            } else {
+                err_msg(DIAG_USAGE, "settings history takes one key");
+            }
+            return -1;
+        }
+        opt->key = arg;
+    }
+    return 0;
+}
+
+/* Cursor strings are keys, stamps, and scope words. Anything else is not ours. */
+static bool cursor_safe(const char *text)
+{
+    const char *p = text;
+
+    for (; *p != '\0'; p++) {
+        char c = *p;
+
+        if (!((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') ||
+              c == '.' || c == '_' || c == ':' || c == '-')) {
+            return false;
+        }
+    }
+    return true;
+}
+
+static void vc_raw(ViewCursor *c, const char *text)
+{
+    size_t n = strlen(text);
+
+    if (c->bad || n >= c->cap - c->pos) {
+        c->bad = true;
+        return;
+    }
+    memcpy(c->buf + c->pos, text, n + 1U);
+    c->pos += n;
+}
+
+/* ,"name":"text" or ,"name":null. */
+static void vc_text(ViewCursor *c, const char *name, const char *text)
+{
+    vc_raw(c, ",\"");
+    vc_raw(c, name);
+    if (text == NULL) {
+        vc_raw(c, "\":null");
+        return;
+    }
+    if (!cursor_safe(text)) {
+        c->bad = true;
+        return;
+    }
+    vc_raw(c, "\":\"");
+    vc_raw(c, text);
+    vc_raw(c, "\"");
+}
+
+/* ,"name":token for a bool or a number. */
+static void vc_token(ViewCursor *c, const char *name, const char *token)
+{
+    vc_raw(c, ",\"");
+    vc_raw(c, name);
+    vc_raw(c, "\":");
+    vc_raw(c, token);
+}
+
+static const char *bool_text(bool value)
+{
+    if (value) {
+        return "true";
+    }
+    return "false";
+}
+
+static const char *view_scope_text(const ViewOpts *opt)
+{
+    if (!opt->scope_set) {
+        return "all";
+    }
+    return scope_name(opt->scope);
+}
+
+/* decision:plan20-cursor-carries-filters: {v,k,s,c,n,p}. */
+static int list_cursor_doc(const ViewOpts *opt, const char *last, char *buf, size_t cap)
+{
+    ViewCursor c;
+
+    memset(&c, 0, sizeof(c));
+    c.buf = buf;
+    c.cap = cap;
+    vc_raw(&c, "{\"v\":1");
+    vc_text(&c, "k", last);
+    vc_text(&c, "s", view_scope_text(opt));
+    vc_token(&c, "c", bool_text(opt->changed));
+    vc_text(&c, "n", opt->ns);
+    vc_text(&c, "p", opt->key);
+    vc_raw(&c, "}");
+    if (c.bad) {
+        return -1;
+    }
+    return 0;
+}
+
+/* {v,t,s,k,r} of the last row, then the filters f and q. */
+static int history_cursor_doc(const ViewOpts *opt, const SettingHistoryQuery *at, char *buf,
+                              size_t cap)
+{
+    ViewCursor c;
+    char id[CURSOR_FIELD_CAP];
+
+    memset(&c, 0, sizeof(c));
+    c.buf = buf;
+    c.cap = cap;
+    if (snprintf(id, sizeof(id), "%lld", at->after_id) < 0) {
+        return -1;
+    }
+    vc_raw(&c, "{\"v\":1");
+    vc_text(&c, "t", at->after_at);
+    vc_text(&c, "s", scope_name(at->after_scope));
+    vc_text(&c, "k", at->after_key);
+    vc_token(&c, "r", id);
+    vc_text(&c, "f", view_scope_text(opt));
+    vc_text(&c, "q", opt->key);
+    vc_raw(&c, "}");
+    if (c.bad) {
+        return -1;
+    }
+    return 0;
+}
+
+/* NULL is out of memory, or a document that is not ours (a caller bug). */
+static char *encode_cursor(const char *doc)
+{
+    return base64url_encode((const unsigned char *)doc, strlen(doc));
+}
+
+/* decision:plan20-cursor-fix-draft (C-43 draft). */
+static int report_cursor(bool list)
+{
+    const char *fix = "Run 'remember settings history' again without --cursor.";
+
+    if (list) {
+        fix = "Run 'remember settings list' again without --cursor.";
+    }
+    (void)diag_error_fix(DIAG_INVALID_ARGUMENT, "invalid --cursor.", fix);
+    return -1;
+}
+
+/* Step over c at doc[*i]. false when another byte is there. */
+static bool split_take(const char *doc, size_t *i, char c)
+{
+    if (doc[*i] != c) {
+        return false;
+    }
+    (*i)++;
+    return true;
+}
+
+/* A member name up to its closing quote. -1 when it does not fit. */
+static int split_name(const char *doc, size_t *i, CursorMember *m)
+{
+    size_t len = 0;
+
+    while (doc[*i] != '"' && doc[*i] != '\0') {
+        if (len + 1U >= sizeof(m->name)) {
+            return -1;
+        }
+        m->name[len++] = doc[*i];
+        (*i)++;
+    }
+    return 0;
+}
+
+static bool value_ends(char c, bool quoted)
+{
+    if (c == '\0') {
+        return true;
+    }
+    if (quoted) {
+        return c == '"';
+    }
+    if (c == ',') {
+        return true;
+    }
+    return c == '}';
+}
+
+/* A quoted string or a bare token. -1 when it does not fit or is not closed. */
+static int split_value(const char *doc, size_t *i, CursorMember *m)
+{
+    size_t len = 0;
+
+    m->quoted = split_take(doc, i, '"');
+    while (!value_ends(doc[*i], m->quoted)) {
+        if (len + 1U >= sizeof(m->value)) {
+            return -1;
+        }
+        m->value[len++] = doc[*i];
+        (*i)++;
+    }
+    if (m->quoted && !split_take(doc, i, '"')) {
+        return -1;
+    }
+    return 0;
+}
+
+/* Split a flat JSON object into members. -1 when it is not one. The reader
+   rebuilds the cursor from these and compares, so nothing else is checked. */
+static int cursor_split(const char *doc, CursorMember *mem, size_t *count)
+{
+    size_t i = 0;
+    size_t n = 0;
+
+    if (!split_take(doc, &i, '{')) {
+        return -1;
+    }
+    while (n < (size_t)CURSOR_MEMBERS) {
+        CursorMember *m = &mem[n];
+
+        memset(m, 0, sizeof(*m));
+        if (!split_take(doc, &i, '"') || split_name(doc, &i, m) != 0 || !split_take(doc, &i, '"') ||
+            !split_take(doc, &i, ':') || split_value(doc, &i, m) != 0) {
+            return -1;
+        }
+        n++;
+        if (doc[i] == '}' && doc[i + 1U] == '\0') {
+            *count = n;
+            return 0;
+        }
+        if (!split_take(doc, &i, ',')) {
+            return -1;
+        }
+    }
+    return -1;
+}
+
+/* 0 split, -1 out of memory (reported), -2 not a cursor of this shape. */
+// NOLINTNEXTLINE(bugprone-easily-swappable-parameters) — the cursor, then its member names
+static int cursor_members(const char *raw, const char *names, CursorMember *mem)
+{
+    unsigned char *json = NULL;
+    size_t len = 0;
+    size_t n = 0;
+    size_t i = 0;
+    int st = base64url_decode(raw, &json, &len);
+
+    if (st == -1) {
+        (void)report_oom();
+        return -1;
+    }
+    if (st != 0) {
+        return -2;
+    }
+    st = cursor_split((const char *)json, mem, &n);
+    free(json);
+    if (st != 0 || n != strlen(names)) {
+        return -2;
+    }
+    for (i = 0; i < n; i++) {
+        if (mem[i].name[0] != names[i] || mem[i].name[1] != '\0') {
+            return -2;
+        }
+    }
+    return 0;
+}
+
+/* A string member, or NULL for a bare null. -1 for anything else. */
+static int cursor_string(const CursorMember *m, const char **out)
+{
+    *out = NULL;
+    if (m->quoted) {
+        *out = m->value;
+        return 0;
+    }
+    if (strcmp(m->value, "null") == 0) {
+        return 0;
+    }
+    return -1;
+}
+
+static int cursor_scope(const CursorMember *m, bool allow_all, SettingLayer *scope, bool *set)
+{
+    *set = true;
+    if (m->quoted && strcmp(m->value, "brain") == 0) {
+        *scope = SETTING_LAYER_BRAIN;
+        return 0;
+    }
+    if (m->quoted && strcmp(m->value, "user") == 0) {
+        *scope = SETTING_LAYER_USER;
+        return 0;
+    }
+    if (allow_all && m->quoted && strcmp(m->value, "all") == 0) {
+        *set = false;
+        return 0;
+    }
+    return -1;
+}
+
+/* The rebuilt cursor must be the given one, byte for byte. 0 same, -1 OOM
+   (reported), -2 not the same. */
+// NOLINTNEXTLINE(bugprone-easily-swappable-parameters) — rebuilt doc, then given cursor
+static int cursor_same(const char *doc, const char *raw)
+{
+    char *again = encode_cursor(doc);
+    int same = 0;
+
+    if (again == NULL) {
+        (void)report_oom();
+        return -1;
+    }
+    if (strcmp(again, raw) != 0) {
+        same = -2;
+    }
+    free(again);
+    return same;
+}
+
+/* An omitted filter comes from the cursor. A given filter that differs makes a
+   different cursor, so the comparison refuses it (ST-7.14). */
+static int list_cursor_read(ViewOpts *opt, CursorMember *mem, const char **after)
+{
+    char doc[CURSOR_DOC_CAP];
+    SettingLayer scope = SETTING_LAYER_AUTO;
+    bool scope_set = false;
+    const char *ns = NULL;
+    const char *prefix = NULL;
+    int st = cursor_members(opt->cursor, "vkscnp", mem);
+
+    if (st == -1) {
+        return -1;
+    }
+    /* {v,k,s,c,n,p} */
+    /* NOLINTBEGIN(readability-magic-numbers,cppcoreguidelines-avoid-magic-numbers) */
+    if (st != 0 || !mem[1].quoted || cursor_scope(&mem[2], true, &scope, &scope_set) != 0 ||
+        cursor_string(&mem[4], &ns) != 0 || cursor_string(&mem[5], &prefix) != 0) {
+        return report_cursor(true);
+    }
+    /* NOLINTEND(readability-magic-numbers,cppcoreguidelines-avoid-magic-numbers) */
+    if (!opt->scope_set) {
+        opt->scope = scope;
+        opt->scope_set = scope_set;
+    }
+    if (!opt->changed && strcmp(mem[3].value, "true") == 0) {
+        opt->changed = true;
+    }
+    if (opt->ns == NULL) {
+        opt->ns = ns;
+    }
+    if (opt->key == NULL) {
+        opt->key = prefix;
+    }
+    *after = mem[1].value;
+    if (list_cursor_doc(opt, *after, doc, sizeof(doc)) != 0) {
+        return report_cursor(true);
+    }
+    st = cursor_same(doc, opt->cursor);
+    if (st == -2) {
+        return report_cursor(true);
+    }
+    return st;
+}
+
+static int history_cursor_read(ViewOpts *opt, CursorMember *mem, SettingHistoryQuery *q)
+{
+    char doc[CURSOR_DOC_CAP];
+    SettingLayer scope = SETTING_LAYER_AUTO;
+    bool scope_set = false;
+    bool item_set = false;
+    const char *key = NULL;
+    int st = cursor_members(opt->cursor, "vtskrfq", mem);
+
+    if (st == -1) {
+        return -1;
+    }
+    /* {v,t,s,k,r,f,q} */
+    /* NOLINTBEGIN(readability-magic-numbers,cppcoreguidelines-avoid-magic-numbers) */
+    if (st != 0 || !mem[1].quoted || !mem[3].quoted || mem[4].quoted ||
+        cursor_scope(&mem[2], false, &q->after_scope, &item_set) != 0 ||
+        !setting_integer(mem[4].value, &q->after_id) ||
+        cursor_scope(&mem[5], true, &scope, &scope_set) != 0 || cursor_string(&mem[6], &key) != 0) {
+        return report_cursor(false);
+    }
+    /* NOLINTEND(readability-magic-numbers,cppcoreguidelines-avoid-magic-numbers) */
+    if (!opt->scope_set) {
+        opt->scope = scope;
+        opt->scope_set = scope_set;
+    }
+    if (opt->key == NULL) {
+        opt->key = key;
+    }
+    q->after_at = mem[1].value;
+    q->after_key = mem[3].value;
+    if (history_cursor_doc(opt, q, doc, sizeof(doc)) != 0) {
+        return report_cursor(false);
+    }
+    st = cursor_same(doc, opt->cursor);
+    if (st == -2) {
+        return report_cursor(false);
+    }
+    return st;
+}
+
+// NOLINTNEXTLINE(bugprone-easily-swappable-parameters) -- qsort passes the two slots
+static int cmp_spec_key(const void *left, const void *right)
+{
+    const SettingSpec *const *a = (const SettingSpec *const *)left;
+    const SettingSpec *const *b = (const SettingSpec *const *)right;
+
+    return strcmp((*a)->key, (*b)->key);
+}
+
+/* Registry rows in key byte order (ST-7.14). ponytail: REGISTRY_CAP rows; plan
+   25's generated plugin keys raise it or allocate. */
+static size_t sorted_registry(const SettingSpec **out)
+{
+    size_t n = 0;
+    size_t i = 0;
+    const SettingSpec *reg = setting_registry(&n);
+
+    n = n < (size_t)REGISTRY_CAP ? n : (size_t)REGISTRY_CAP;
+    for (; i < n; i++) {
+        out[i] = &reg[i];
+    }
+    qsort((void *)out, n, sizeof(*out), cmp_spec_key);
+    return n;
+}
+
+static bool list_wants(const SettingSpec *spec, const ViewOpts *opt)
+{
+    if (opt->key != NULL && strncmp(spec->key, opt->key, strlen(opt->key)) != 0) {
+        return false;
+    }
+    if (!ns_match(spec->key, opt->ns)) {
+        return false;
+    }
+    if (opt->scope_set && opt->scope == SETTING_LAYER_USER && !spec->allow_user) {
+        return false;
+    }
+    if (opt->scope_set && opt->scope == SETTING_LAYER_BRAIN && !spec->allow_brain) {
+        return false;
+    }
+    return true;
+}
+
+/* The page after `after`: up to limit keys, and whether one more matches. */
+static int list_collect(Store *store, const char *userdb, const ViewOpts *opt, const char *after,
+                        const SettingSpec **hit, size_t *nhit, bool *more)
+{
+    const SettingSpec *all[REGISTRY_CAP] = {NULL};
+    char err[STORE_ERR_CAP];
+    size_t n = sorted_registry(all);
+    size_t i = 0;
+
+    *nhit = 0U;
+    *more = false;
+    for (; i < n; i++) {
+        if ((after != NULL && strcmp(all[i]->key, after) <= 0) || !list_wants(all[i], opt)) {
+            continue;
+        }
+        if (opt->changed) {
+            SettingRead read;
+
+            if (read_spec(store, userdb, all[i], &read, err, sizeof(err)) != 0) {
+                return -1;
+            }
+            if (!shown_of(all[i], &read, view_get_opts(opt)).changed) {
+                continue;
+            }
+        }
+        if (*nhit == (size_t)opt->limit) {
+            *more = true;
+            return 0;
+        }
+        hit[(*nhit)++] = all[i];
+    }
+    return 0;
+}
+
+/* 0 written, -1 a write failed, -2 a stored value is not that key's JSON. */
+static int list_write_one(FILE *out, bool json, bool comma, const SettingSpec *spec,
+                          const SettingRead *read, GetOpts g)
+{
+    char display[SETTING_VALUE_CAP];
+    Shown shown = shown_of(spec, read, g);
+
+    if (!values_ok(spec, read, shown)) {
+        return -2;
+    }
+    if (json) {
+        if (comma && fputc(',', out) == EOF) {
+            return -1;
+        }
+        if (write_setting_open(out, spec, read, shown, g) != 0) {
+            return -1;
+        }
+        return fputc('}', out) == EOF ? -1 : 0;
+    }
+    /* values_ok passed, and the display is never longer than the JSON. */
+    if (fill_display(spec->type, shown.json, display, sizeof(display)) != 0) {
+        return -1;
+    }
+    return fprintf(out, "%s = %s   (%s)\n", spec->key, display, from_token(shown.from)) < 0 ? -1
+                                                                                            : 0;
+}
+
+/* 0 written. Anything else was reported. */
+static int view_done(int rc)
+{
+    if (rc == -2) {
+        err_msg(DIAG_INTERNAL, "internal error");
+        return REMEMBER_ERR;
+    }
+    if (rc != 0) {
+        err_msg(DIAG_INTERNAL, "failed to write output");
+        return REMEMBER_ERR;
+    }
+    return REMEMBER_OK;
+}
+
+/* The page cursor in the envelope, or the more-pages line on stderr (C-13,
+   decision:plan20-history-plain-draft). what is settings or changes. */
+static int publish_page(bool json, const char *cursor, const char *what, const char *verb)
+{
+    if (json) {
+        int rc = app_set_list_page(cursor);
+
+        if (rc != 0) {
+            err_msg(DIAG_OUT_OF_MEMORY, "out of memory");
+        }
+        return rc == 0 ? 0 : -3;
+    }
+    if (cursor == NULL) {
+        return 0;
+    }
+    {
+        char line[CURSOR_DOC_CAP * 2];
+        int n = snprintf(line, sizeof(line),
+                         "more %s. Run 'remember settings %s --cursor %s' to see them.", what, verb,
+                         cursor);
+
+        /* A cursor is base64url of at most CURSOR_DOC_CAP bytes: always fits. */
+        if (n < 0 || (size_t)n >= sizeof(line)) {
+            return -1;
+        }
+        return diag_notice(line);
+    }
+}
+
+static int list_emit(Store *store, const char *userdb, bool json, const ViewOpts *opt,
+                     const SettingSpec *const *hit, size_t nhit, bool more)
+{
+    FILE *out = app_out();
+    char doc[CURSOR_DOC_CAP];
+    char err[STORE_ERR_CAP];
+    char *cursor = NULL;
+    GetOpts g = view_get_opts(opt);
+    size_t i = 0;
+    int rc = 0;
+
+    if (more) {
+        /* Registry keys and filters that matched one: always fits. */
+        if (list_cursor_doc(opt, hit[nhit - 1U]->key, doc, sizeof(doc)) != 0) {
+            err_msg(DIAG_INTERNAL, "internal error");
+            return REMEMBER_ERR;
+        }
+        cursor = encode_cursor(doc);
+        if (cursor == NULL) {
+            return report_oom();
+        }
+    }
+    if (json) {
+        rc = fprintf(out, "{\"count\":%zu,\"settings\":[", nhit) < 0 ? -1 : 0;
+    }
+    for (; rc == 0 && i < nhit; i++) {
+        SettingRead read;
+
+        if (read_spec(store, userdb, hit[i], &read, err, sizeof(err)) != 0) {
+            free(cursor);
+            return REMEMBER_ERR;
+        }
+        rc = list_write_one(out, json, i > 0U, hit[i], &read, g);
+    }
+    if (rc == 0 && json) {
+        rc = fputs("]}", out) < 0 ? -1 : 0;
+    }
+    if (rc == 0) {
+        /* decision:plan20-cursor-carries-filters: the line needs no other flag. */
+        rc = publish_page(json, cursor, "settings", "list");
+    }
+    free(cursor);
+    if (rc == -3) {
+        return REMEMBER_ERR;
+    }
+    return view_done(rc);
+}
+
+static int cmd_settings_list(Store *store, bool json, int argc, const char **argv)
+{
+    ViewOpts opt;
+    CursorMember mem[CURSOR_MEMBERS];
+    const SettingSpec *hit[REGISTRY_CAP];
+    char userdb[REMEMBER_PATH_MAX];
+    char err[STORE_ERR_CAP];
+    const char *after = NULL;
+    size_t nhit = 0;
+    bool more = false;
+
+    memset(&opt, 0, sizeof(opt));
+    if (parse_view(argc, argv, &opt, true) != 0) {
+        return REMEMBER_ERR;
+    }
+    if (!opt.limit_set) {
+        opt.limit = LIST_PAGE;
+    }
+    if (opt.cursor != NULL && list_cursor_read(&opt, mem, &after) != 0) {
+        return REMEMBER_ERR;
+    }
+    if (util_resolve_user_db_path(userdb, sizeof(userdb), err, sizeof(err)) != 0) {
+        return fail_store(err);
+    }
+    if (list_collect(store, userdb, &opt, after, hit, &nhit, &more) != 0) {
+        return REMEMBER_ERR;
+    }
+    return list_emit(store, userdb, json, &opt, hit, nhit, more);
+}
+
+/* The registry's display, or the stored text for a key it does not have. */
+static void history_display(const SettingSpec *spec, const char *json, char *out, size_t cap)
+{
+    if (json == NULL) {
+        (void)snprintf(out, cap, "(unset)");
+        return;
+    }
+    if (spec != NULL && json_text_ok(spec->type, json) &&
+        fill_display(spec->type, json, out, cap) == 0) {
+        return;
+    }
+    (void)snprintf(out, cap, "%s", json);
+}
+
+static void history_when(const char *at, char *out, size_t cap)
+{
+    SettingWhen when;
+
+    if (when_of_stamp(at, &when) && setting_format_when(when, out, cap)) {
+        return;
+    }
+    (void)snprintf(out, cap, "%s", at);
+}
+
+/* decision:plan20-history-plain-draft: two spaces apart, (unset) for no value. */
+static int write_history_line(FILE *out, const SettingHistoryRow *row)
+{
+    const SettingSpec *spec = setting_by_key(row->key);
+    char when[DATE_TEXT_CAP];
+    char before[SETTING_VALUE_CAP];
+    char after[SETTING_VALUE_CAP];
+    char line[(SETTING_VALUE_CAP * 2) + (SETTING_KEY_MAX * 2)];
+    ActorParts who = actor_parts(row->updated_by);
+    int n = 0;
+
+    history_when(row->at, when, sizeof(when));
+    history_display(spec, row->old_value, before, sizeof(before));
+    history_display(spec, row->new_value, after, sizeof(after));
+    n = snprintf(line, sizeof(line), "%s  %s  %s  %s \xE2\x86\x92 %s", when, scope_name(row->scope),
+                 row->key, before, after);
+    if (n < 0) {
+        return -1;
+    }
+    if (output_text_human(out, line, false) != 0) {
+        return -1;
+    }
+    if (who.ok && fprintf(out, "  by %s", who.kind) < 0) {
+        return -1;
+    }
+    if (who.ok && who.has_id && fprintf(out, " \"%s\"", who.id) < 0) {
+        return -1;
+    }
+    return fputc('\n', out) == EOF ? -1 : 0;
+}
+
+/* ,"name":<json|null>, with the _ms twin for a duration. 0, -1 write, -2 not
+   that key's JSON. A key the registry does not have keeps its stored text. */
+static int write_history_value(FILE *out, const char *name, const SettingSpec *spec,
+                               const char *json)
+{
+    char twin[CURSOR_FIELD_CAP];
+
+    if (fprintf(out, ",\"%s\":", name) < 0) {
+        return -1;
+    }
+    if (json == NULL) {
+        return fputs("null", out) < 0 ? -1 : 0;
+    }
+    if (spec == NULL) {
+        return output_json_string(out, json);
+    }
+    if (!json_text_ok(spec->type, json)) {
+        return -2;
+    }
+    if (snprintf(twin, sizeof(twin), "%s_ms", name) < 0) {
+        return -1;
+    }
+    return write_raw_named(out, spec->type, json, twin);
+}
+
+/* ST-7.11b: a null new value is a reset, a tombstone in the brain. */
+static const char *history_action(const SettingHistoryRow *row)
+{
+    if (row->new_value != NULL) {
+        return "set";
+    }
+    if (row->scope == SETTING_LAYER_BRAIN) {
+        return "tombstone";
+    }
+    return "delete";
+}
+
+static int write_history_item(FILE *out, bool comma, const SettingHistoryRow *row)
+{
+    const SettingSpec *spec = setting_by_key(row->key);
+    int rc = 0;
+
+    if (comma && fputc(',', out) == EOF) {
+        return -1;
+    }
+    if (fputs("{\"key\":", out) < 0 || output_json_string(out, row->key) != 0 ||
+        fprintf(out, ",\"scope\":\"%s\"", scope_name(row->scope)) < 0) {
+        return -1;
+    }
+    rc = write_history_value(out, "old_value", spec, row->old_value);
+    if (rc == 0) {
+        rc = write_history_value(out, "new_value", spec, row->new_value);
+    }
+    if (rc != 0) {
+        return rc;
+    }
+    if (!actor_json_is_canonical(row->updated_by)) {
+        return -2;
+    }
+    if (fprintf(out, ",\"updated_by\":%s,\"changed_at\":", row->updated_by) < 0 ||
+        output_json_string(out, row->at) != 0 ||
+        fprintf(out, ",\"action\":\"%s\"}", history_action(row)) < 0) {
+        return -1;
+    }
+    return 0;
+}
+
+static int history_emit(bool json, const ViewOpts *opt, const SettingHistoryRow *rows, size_t n)
+{
+    FILE *out = app_out();
+    char doc[CURSOR_DOC_CAP];
+    char *cursor = NULL;
+    size_t shown = n;
+    size_t i = 0;
+    int rc = 0;
+
+    if (n > (size_t)opt->limit) {
+        SettingHistoryQuery at;
+
+        shown = (size_t)opt->limit;
+        memset(&at, 0, sizeof(at));
+        at.after_at = rows[shown - 1U].at;
+        at.after_key = rows[shown - 1U].key;
+        at.after_id = rows[shown - 1U].id;
+        at.after_scope = rows[shown - 1U].scope;
+        if (history_cursor_doc(opt, &at, doc, sizeof(doc)) != 0) {
+            return view_done(-2);
+        }
+        cursor = encode_cursor(doc);
+        if (cursor == NULL) {
+            return report_oom();
+        }
+    }
+    if (json) {
+        rc = fprintf(out, "{\"count\":%zu,\"changes\":[", shown) < 0 ? -1 : 0;
+    }
+    for (; rc == 0 && i < shown; i++) {
+        if (json) {
+            rc = write_history_item(out, i > 0U, &rows[i]);
+        } else {
+            rc = write_history_line(out, &rows[i]);
+        }
+    }
+    if (rc == 0 && json) {
+        rc = fputs("]}", out) < 0 ? -1 : 0;
+    }
+    if (rc == 0) {
+        rc = publish_page(json, cursor, "changes", "history");
+    }
+    free(cursor);
+    if (rc == -3) {
+        return REMEMBER_ERR;
+    }
+    return view_done(rc);
+}
+
+static int cmd_settings_history(Store *store, bool json, int argc, const char **argv)
+{
+    ViewOpts opt;
+    CursorMember mem[CURSOR_MEMBERS];
+    SettingHistoryQuery q;
+    SettingHistoryRow *rows = NULL;
+    char folded[SETTING_KEY_MAX + 1];
+    char userdb[REMEMBER_PATH_MAX];
+    char err[STORE_ERR_CAP];
+    size_t n = 0;
+    int rc = 0;
+
+    memset(&opt, 0, sizeof(opt));
+    memset(&q, 0, sizeof(q));
+    if (parse_view(argc, argv, &opt, false) != 0) {
+        return REMEMBER_ERR;
+    }
+    if (!opt.limit_set) {
+        opt.limit = HISTORY_PAGE;
+    }
+    /* A removed plugin's rows still have history (ST-5.11): fold, no registry. */
+    if (opt.key != NULL) {
+        if (!setting_key_fold(opt.key, folded, sizeof(folded))) {
+            return report_unknown(opt.key);
+        }
+        opt.key = folded;
+    }
+    if (opt.cursor != NULL && history_cursor_read(&opt, mem, &q) != 0) {
+        return REMEMBER_ERR;
+    }
+    if (util_resolve_user_db_path(userdb, sizeof(userdb), err, sizeof(err)) != 0) {
+        return fail_store(err);
+    }
+    q.key = opt.key;
+    q.only = SETTING_LAYER_AUTO;
+    if (opt.scope_set) {
+        q.only = opt.scope;
+    }
+    q.want = (size_t)opt.limit + 1U;
+    if (store_setting_history(store, userdb, &q, &rows, &n, err, sizeof(err)) != SETTING_OK) {
+        return fail_store(err);
+    }
+    rc = history_emit(json, &opt, rows, n);
+    store_setting_history_free(rows, n);
+    return rc;
+}
+
+static int parse_explain(int argc, const char **argv, ViewOpts *opt)
+{
+    int i = 0;
+    bool end_opts = false;
+
+    for (i = 1; i < argc; i++) {
+        const char *arg = argv[i];
+
+        if (!end_opts && strcmp(arg, "--") == 0) {
+            end_opts = true;
+            continue;
+        }
+        if (!end_opts && strcmp(arg, "--all") == 0) {
+            if (opt->all) {
+                err_msg(DIAG_USAGE, "duplicate --all");
+                return -1;
+            }
+            opt->all = true;
+            continue;
+        }
+        if (!end_opts && arg[0] == '-' && arg[1] != '\0') {
+            err_fmt(DIAG_USAGE, "unknown option '%s'", arg);
+            return -1;
+        }
+        if (opt->key != NULL) {
+            err_msg(DIAG_USAGE, "settings explain takes one key");
+            return -1;
+        }
+        opt->key = arg;
+    }
+    if (opt->all && opt->key != NULL) {
+        err_msg(DIAG_USAGE, "cannot combine --all with a key");
+        return -1;
+    }
+    if (!opt->all && opt->key == NULL) {
+        err_msg(DIAG_USAGE, "settings explain requires a key or --all");
+        return -1;
+    }
+    return 0;
+}
+
+static const char *explain_scopes(const SettingSpec *spec)
+{
+    if (!spec->allow_user) {
+        return "brain";
+    }
+    if (!spec->allow_brain) {
+        return "user";
+    }
+    return "user, brain";
+}
+
+static bool spec_ranged(const SettingSpec *spec)
+{
+    if (spec->min_value != 0) {
+        return true;
+    }
+    return spec->max_value != 0;
+}
+
+/* decision:plan20-explain-human-form: the C-13 block. */
+static int write_explain_block(FILE *out, const SettingSpec *spec, Shown shown)
+{
+    char def[SETTING_VALUE_CAP];
+    char def_text[SETTING_VALUE_CAP];
+    char now[SETTING_VALUE_CAP];
+    const char *def_json = NULL;
+
+    if (setting_default_json(spec, def, sizeof(def))) {
+        def_json = def;
+    }
+    /* As list_write_one: cannot fail after values_ok. */
+    if (fill_display(spec->type, def_json, def_text, sizeof(def_text)) != 0 ||
+        fill_display(spec->type, shown.json, now, sizeof(now)) != 0) {
+        return -1;
+    }
+    if (spec_ranged(spec)) {
+        char lower[BOUND_TEXT_CAP];
+        char upper[BOUND_TEXT_CAP];
+
+        if (format_bound(spec, spec->min_value, lower, sizeof(lower)) != 0 ||
+            format_bound(spec, spec->max_value, upper, sizeof(upper)) != 0 ||
+            fprintf(out, "%s  (%s, %s\xE2\x80\x93%s, default %s)\n", spec->key,
+                    type_token(spec->type), lower, upper, def_text) < 0) {
+            return -1;
+        }
+    } else if (fprintf(out, "%s  (%s, default %s)\n", spec->key, type_token(spec->type), def_text) <
+               0) {
+        return -1;
+    }
+    if (fprintf(out, "  %s\n  Can be set for: %s\n  Now: %s, ", spec->description,
+                explain_scopes(spec), now) < 0 ||
+        write_from_tail(out, shown.from, shown.actor, shown.stamp) != 0) {
+        return -1;
+    }
+    if (spec->related != NULL && fprintf(out, "  Related: %s\n", spec->related) < 0) {
+        return -1;
+    }
+    return 0;
+}
+
+static int write_bound_json(FILE *out, const SettingSpec *spec, const char *name, long long value)
+{
+    char text[BOUND_TEXT_CAP];
+
+    if (spec->type == SETTING_INTEGER) {
+        return fprintf(out, ",\"%s\":%lld", name, value) < 0 ? -1 : 0;
+    }
+    if (format_bound(spec, value, text, sizeof(text)) != 0) {
+        return -1;
+    }
+    return fprintf(out, ",\"%s\":\"%s\",\"%s_ms\":%lld", name, text, name, value) < 0 ? -1 : 0;
+}
+
+/* decision:plan20-explain-json-shape: the setting object plus the registry. */
+static int write_explain_entry(FILE *out, bool comma, const SettingSpec *spec,
+                               const SettingRead *read, Shown shown)
+{
+    char def[SETTING_VALUE_CAP];
+    const char *def_json = NULL;
+    GetOpts g;
+
+    memset(&g, 0, sizeof(g));
+    if (setting_default_json(spec, def, sizeof(def))) {
+        def_json = def;
+    }
+    if (comma && fputc(',', out) == EOF) {
+        return -1;
+    }
+    if (write_setting_open(out, spec, read, shown, g) != 0 || fputs(",\"description\":", out) < 0 ||
+        output_json_string(out, spec->description) != 0 || fputs(",\"scopes\":[", out) < 0) {
+        return -1;
+    }
+    if (spec->allow_user && fputs("\"user\"", out) < 0) {
+        return -1;
+    }
+    if (spec->allow_user && spec->allow_brain && fputc(',', out) == EOF) {
+        return -1;
+    }
+    if (spec->allow_brain && fputs("\"brain\"", out) < 0) {
+        return -1;
+    }
+    if (fputs("],\"default\":", out) < 0 ||
+        write_raw_named(out, spec->type, def_json, "default_ms") != 0) {
+        return -1;
+    }
+    if (spec_ranged(spec) && (write_bound_json(out, spec, "min", spec->min_value) != 0 ||
+                              write_bound_json(out, spec, "max", spec->max_value) != 0)) {
+        return -1;
+    }
+    if (fputs(",\"related\":[", out) < 0) {
+        return -1;
+    }
+    if (spec->related != NULL && output_json_string(out, spec->related) != 0) {
+        return -1;
+    }
+    return fputs("]}", out) < 0 ? -1 : 0;
+}
+
+static int explain_one(Store *store, const char *userdb, bool json, size_t i,
+                       const SettingSpec *spec)
+{
+    FILE *out = app_out();
+    SettingRead read;
+    GetOpts g;
+    Shown shown;
+    char err[STORE_ERR_CAP];
+
+    memset(&g, 0, sizeof(g));
+    if (read_spec(store, userdb, spec, &read, err, sizeof(err)) != 0) {
+        return -3;
+    }
+    shown = shown_of(spec, &read, g);
+    if (!values_ok(spec, &read, shown)) {
+        return -2;
+    }
+    if (json) {
+        return write_explain_entry(out, i > 0U, spec, &read, shown);
+    }
+    if (i > 0U && fputc('\n', out) == EOF) {
+        return -1;
+    }
+    return write_explain_block(out, spec, shown);
+}
+
+static int cmd_settings_explain(Store *store, bool json, int argc, const char **argv)
+{
+    ViewOpts opt;
+    const SettingSpec *specs[REGISTRY_CAP];
+    char userdb[REMEMBER_PATH_MAX];
+    char err[STORE_ERR_CAP];
+    size_t n = 1;
+    size_t i = 0;
+    int rc = 0;
+
+    memset(&opt, 0, sizeof(opt));
+    if (parse_explain(argc, argv, &opt) != 0) {
+        return REMEMBER_ERR;
+    }
+    if (opt.all) {
+        n = sorted_registry(specs);
+    } else {
+        specs[0] = setting_by_key(opt.key);
+        if (specs[0] == NULL) {
+            return report_unknown(opt.key);
+        }
+    }
+    if (util_resolve_user_db_path(userdb, sizeof(userdb), err, sizeof(err)) != 0) {
+        return fail_store(err);
+    }
+    if (json) {
+        rc = fprintf(app_out(), "{\"count\":%zu,\"entries\":[", n) < 0 ? -1 : 0;
+    }
+    for (; rc == 0 && i < n; i++) {
+        rc = explain_one(store, userdb, json, i, specs[i]);
+    }
+    if (rc == 0 && json) {
+        rc = fputs("]}", app_out()) < 0 ? -1 : 0;
+    }
+    if (rc == -3) {
+        return REMEMBER_ERR;
+    }
+    return view_done(rc);
+}
+
 static const char *settings_verb(int rest_argc, const char **rest_argv)
 {
     if (rest_argc > 0 && rest_argv != NULL && rest_argv[0] != NULL) {
@@ -3248,6 +4537,15 @@ static const char *settings_verb(int rest_argc, const char **rest_argv)
         }
         if (strcmp(rest_argv[0], "reset") == 0) {
             return "setting.reset";
+        }
+        if (strcmp(rest_argv[0], "list") == 0) {
+            return "setting.list";
+        }
+        if (strcmp(rest_argv[0], "history") == 0) {
+            return "setting.history";
+        }
+        if (strcmp(rest_argv[0], "explain") == 0) {
+            return "setting.explain";
         }
         if (strcmp(rest_argv[0], "export") == 0) {
             return "setting.export";
@@ -3273,7 +4571,8 @@ const char *cmd_settings_reply(int rest_argc, const char **rest_argv)
 int cmd_settings(Store *store, bool json, int rest_argc, const char **rest_argv)
 {
     if (settings_verb(rest_argc, rest_argv) == NULL) {
-        err_msg(DIAG_USAGE, "settings takes 'get', 'set', 'reset', 'export', or 'import'");
+        err_msg(DIAG_USAGE, "settings takes 'get', 'set', 'reset', 'list', 'history', 'explain', "
+                            "'export', or 'import'");
         return REMEMBER_ERR;
     }
     if (strcmp(rest_argv[0], "get") == 0) {
@@ -3281,6 +4580,15 @@ int cmd_settings(Store *store, bool json, int rest_argc, const char **rest_argv)
     }
     if (strcmp(rest_argv[0], "set") == 0) {
         return cmd_settings_set(store, json, rest_argc, rest_argv);
+    }
+    if (strcmp(rest_argv[0], "list") == 0) {
+        return cmd_settings_list(store, json, rest_argc, rest_argv);
+    }
+    if (strcmp(rest_argv[0], "history") == 0) {
+        return cmd_settings_history(store, json, rest_argc, rest_argv);
+    }
+    if (strcmp(rest_argv[0], "explain") == 0) {
+        return cmd_settings_explain(store, json, rest_argc, rest_argv);
     }
     if (strcmp(rest_argv[0], "export") == 0) {
         return cmd_settings_export(store, rest_argc, rest_argv);

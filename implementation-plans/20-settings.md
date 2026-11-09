@@ -472,6 +472,18 @@ The brain and user.db each run one transaction. The brain commits first. If user
 
 JSON `setting.import.result` is ST-7.11b: `{count, written, unchanged, skipped, rows[]}`. Each row is `{key, scope, result, action, reason?}`. `key` and `scope` are null when the file row has none. A warning's `detail` writes a missing value as `null`.
 
+### Stage 9 — set lines, list, history, explain (2026-11-08)
+
+Plain `set` prints the C-13 lines: `"<key>" is now <v> for this brain.` or `for your user.`, and `"<key>" is already <v>. Nothing changed.` for a no-op. An empty list prints `(empty)` (`decision:plan20-empty-list-related`).
+
+`remember settings list [PREFIX] [--namespace NS] [--scope brain|user] [--changed] [--limit N] [--cursor C]` prints `<key> = <value>   (<layer>)` for each registry key in byte order (ST-7.14). `--scope` shows that layer only and `(unset)` when it has no row. `--changed` keeps keys whose shown value is not the default. JSON `setting.list.result` is `{count, settings[]}`, each the `get` setting object, with the page cursor in the envelope. The default limit is 100. Six keys cannot reach it, so no test pages at the default.
+
+`remember settings history [KEY] [--scope brain|user] [--limit N] [--cursor C]` reads both databases newest first (ST-7.6). On one `changed_at`, brain comes before user, then key in byte order, then the newer row. `store_setting_history` asks each database for `limit + 1` rows from the cursor, merges, and keeps `limit + 1`, so the extra row says there is a next page. The plain line is `<when>  <scope>  <key>  <old> → <new>  by <actor>`. `<when>` is the stage 5 date form, or the raw stamp when it does not parse. JSON `setting.history.result` is `{count, changes[]}`. Each change is `{key, scope, old_value, new_value, updated_by, changed_at, action}` with `_ms` twins for durations (007-32). `action` is `set`, `tombstone` (brain) or `delete` (user). A key the registry does not know shows its stored text as a JSON string. The default limit is 50. The undo command 007-32 mentions is not this plan.
+
+`remember settings explain KEY|--all` prints the block from `decision:plan20-explain-human-form`, with the registry `description` and `related` (`decision:plan20-explain-description-drafts`). JSON `setting.explain.result` is `{count, entries[]}`, each the `get` setting object plus `description`, `scopes`, `default`, `min`, `max` and `related` (`decision:plan20-explain-json-shape`).
+
+`--limit` is 1 to 1000. Out of range is `setting_out_of_range` with detail `{flag, value, min, max}` (`decision:plan20-list-limit-draft`). The cursor is base64url JSON. It holds the last row and every filter (`decision:plan20-cursor-carries-filters`). An omitted filter is taken from the cursor. The cursor is rebuilt from the decoded members and the given filters and compared byte for byte, so a changed filter, a forged member or another verb's cursor is `invalid_argument` (`decision:plan20-cursor-fix-draft`). The plain more-pages line is on stderr, through the new `diag_notice` (the diag boundary keeps `app_err()` in `diag.c`). `base64url_encode` and `base64url_decode` moved from `cmd_query.c` to `commands_common.c`, which now includes `test_alloc.h`, so the sweeps reach the cursor's allocations.
+
 ## Review Notes
 
 **2026-10-27, stage 1 deep review.** In-session, on `be3ad6a` plus this fix. Itay asked for the review, a simplify pass, and the next stage in the same session, so this note closes stage 1. Local Bugbot is not installed.
@@ -636,3 +648,23 @@ Simplification. Declined: one reader for import and plan 21's `--from-db` (diffe
 Gate on this tree, sanitizer build: ctest passed 6 of 6, `check-coverage.sh` exited 0 (functions 100%, effective lines 100%, zero-hit 2384, defensive-excluded 2384, must-cover 0, pure-TU branches 0 missed), `lint-all.sh` exited 0 (`LINT OK`; IWYU skipped, Linux CI runs it), `leaks-macos` passed. Settings suite: 137 tests, 5297 asserts, 0 failed.
 
 INDEX row 20 stays unticked. Stages 7 and 8 are done on this branch.
+
+**2026-11-09, stage 9 deep review.** In-session, on the uncommitted stage 9 work, before the commit. `decision:plan21-stage-flow`.
+
+| # | Severity | Finding | Outcome |
+|---|---|---|---|
+| 1 | important | The cursor's base64url code moved to `commands_common.c`, which the test allocator did not hook, so no test reached its out-of-memory paths. | Fixed. `commands_common.c` includes `test_alloc.h`. The full suite still passes with the hook. `views_survive_memory_store_and_write_faults` sweeps memory, store prepare, step and allocation, and stdout faults over every view. |
+| 2 | important | A history store result could hold one row more than `want` without any test failing (mutant M7): the CLI shows `limit` rows, so the extra row was hidden. | Fixed. `view_cursor_edges_and_home` asks the store for one row from two databases and asserts one. |
+| 3 | nit | Three failure branches cannot happen: the registry clamp at 64 keys, a list cursor that does not fit (keys and filters that matched a key always fit), and `fill_display` after `values_ok`. | Kept as checks in the defensive form, each with a comment. The `--json` writes go to the envelope buffer, which fails only out of memory. They are one-line ternaries. |
+| 4 | nit | Untested: a list cursor that keeps a prefix and `--changed`, a forged cursor with other member names or a stamp that cannot be rebuilt, a history cursor reused with another `--scope`, a stored stamp too long for a cursor, and a missing `HOME` on the three views. | Added to `view_cursor_edges_and_home`. |
+| 5 | nit | `cursor_split` was over the complexity limit and incremented inside conditions. | Split into `split_take`, `split_name`, `value_ends` and `split_value`. Same accepted input. |
+| 6 | important | The plain more-pages line called `fprintf(app_err(), …)` from `cmd_settings.c`, which the lint diag boundary forbids. The gate log showed only the last 25 lint lines, so this and three cppcheck notes were first missed. | Fixed. `diag_notice` in `diag.c` writes the line. cppcheck: a local renamed in `base64url_decode`, the bound buffers moved into their block, and the registry array initialised. The gate now prints every lint verdict. |
+| 7 | question | `decision:s-03` says `remember.buckets.prefixes` holds at most 8 items. The code (stage 3) caps the list at 16384 bytes of JSON and has no item count. | Not changed here. The spec describes the code. Raised for the whole-plan review. |
+
+Mutants, one clause each, settings suite, tree restored after each: 24 over the history store (sort, tie mode, SQL bounds, layer filter, merge truncation) and the views (limit range, `want`, scope filter, page cut, cursor filter adoption, cursor compare, registry sort, explain range, history action, set lines, date fallback, explain scopes). All 24 killed. M7 survived the first pass and was killed by finding 2. Two did not apply on the first pass (one no longer matched after the lint rewrite, one did not compile). Their compiling forms were killed. No equivalent mutant.
+
+Simplification. Applied: `publish_page` reports a failed page copy the way `cmd_query.c` does. Declined: one option parser for `list`, `history` and `explain` (they share `take_layer`, `take_limit` and `take_flag_value`; the rest differs).
+
+Gate on this tree, sanitizer build: ctest passed 6 of 6, `check-coverage.sh` exited 0 (functions 100%, effective lines 100%, zero-hit 2431, defensive-excluded 2431, must-cover 0, pure-TU branches 0 missed), `lint-all.sh` exited 0 (every check `PASS`, `LINT OK`; IWYU skipped, Linux CI runs it), `leaks-macos` passed. Settings suite: 146 tests, 21051 asserts, 0 failed.
+
+INDEX row 20 stays unticked. Stage 9 is done on this branch. C-43 holds the stage 9 drafts.

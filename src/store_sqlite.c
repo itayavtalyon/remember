@@ -11747,6 +11747,231 @@ SettingStatus store_setting_import(Store *brain, const char *user_db, const char
     return SETTING_OK;
 }
 
+/* ---- settings history (stage 9, ST-7.6, ST-7.14) -------------------------- */
+
+static void history_row_free(SettingHistoryRow *row)
+{
+    free(row->key);
+    free(row->old_value);
+    free(row->new_value);
+    free(row->updated_by);
+    free(row->at);
+}
+
+void store_setting_history_free(SettingHistoryRow *rows, size_t n)
+{
+    size_t i = 0;
+
+    if (rows == NULL) {
+        return;
+    }
+    while (i < n) {
+        history_row_free(&rows[i]);
+        i++;
+    }
+    free(rows);
+}
+
+/* ST-7.6: brain sorts before user on the same changed_at. */
+static int history_rank(SettingLayer scope)
+{
+    if (scope == SETTING_LAYER_BRAIN) {
+        return 0;
+    }
+    return 1;
+}
+
+/* Newest at first, then brain before user, then key in byte order, then the
+   newer row of one key and stamp. */
+static int cmp_history_row(const void *left, const void *right)
+{
+    const SettingHistoryRow *a = (const SettingHistoryRow *)left;
+    const SettingHistoryRow *b = (const SettingHistoryRow *)right;
+    int cmp = strcmp(b->at, a->at);
+
+    if (cmp != 0) {
+        return cmp;
+    }
+    cmp = history_rank(a->scope) - history_rank(b->scope);
+    if (cmp != 0) {
+        return cmp;
+    }
+    cmp = strcmp(a->key, b->key);
+    if (cmp != 0) {
+        return cmp;
+    }
+    if (a->id == b->id) {
+        return 0;
+    }
+    if (a->id > b->id) {
+        return -1;
+    }
+    return 1;
+}
+
+/* ?5 is how a row on the cursor's stamp compares: 0 every such row came before
+   the cursor (this database sorts first), 1 every one comes after, 2 compare
+   key and row id. */
+static const char k_history_sql[] =
+    "SELECT rowid, key, old_value, new_value, updated_by, at FROM settings_history "
+    "WHERE (?1 IS NULL OR key = ?1) AND (?2 IS NULL OR at < ?2 OR (at = ?2 AND (?5 = 1 OR "
+    "(?5 = 2 AND (key > ?3 OR (key = ?3 AND rowid < ?4)))))) "
+    "ORDER BY at DESC, key COLLATE BINARY, rowid DESC LIMIT ?6;";
+
+static int history_tie_mode(const SettingHistoryQuery *q, SettingLayer scope)
+{
+    int mine = history_rank(scope);
+    int theirs = history_rank(q->after_scope);
+
+    if (mine < theirs) {
+        return 0;
+    }
+    if (mine > theirs) {
+        return 1;
+    }
+    return 2;
+}
+
+static int history_bind(sqlite3_stmt *stmt, const SettingHistoryQuery *q, SettingLayer scope)
+{
+    if (q->want > (size_t)INT_MAX) {
+        return -1;
+    }
+    /* NOLINTBEGIN(readability-magic-numbers,cppcoreguidelines-avoid-magic-numbers) */
+    if (sqlite3_bind_text(stmt, 1, q->key, -1, SQLITE_STATIC) != SQLITE_OK ||
+        sqlite3_bind_text(stmt, 2, q->after_at, -1, SQLITE_STATIC) != SQLITE_OK ||
+        sqlite3_bind_text(stmt, 3, q->after_key, -1, SQLITE_STATIC) != SQLITE_OK ||
+        sqlite3_bind_int64(stmt, 4, q->after_id) != SQLITE_OK ||
+        sqlite3_bind_int(stmt, 5, history_tie_mode(q, scope)) != SQLITE_OK ||
+        sqlite3_bind_int(stmt, 6, (int)q->want) != SQLITE_OK) {
+        return -1;
+    }
+    /* NOLINTEND(readability-magic-numbers,cppcoreguidelines-avoid-magic-numbers) */
+    return 0;
+}
+
+/* One row into the next slot. key, updated_by and at are NOT NULL columns. */
+static int history_fill(sqlite3_stmt *stmt, SettingLayer scope, SettingHistoryRow *row)
+{
+    bool nul = false;
+
+    memset(row, 0, sizeof(*row));
+    row->scope = scope;
+    row->id = sqlite3_column_int64(stmt, 0);
+    /* NOLINTBEGIN(readability-magic-numbers,cppcoreguidelines-avoid-magic-numbers) */
+    if (import_col(stmt, 1, &row->key, &nul) != 0 || row->key == NULL ||
+        import_col(stmt, 2, &row->old_value, &nul) != 0 ||
+        import_col(stmt, 3, &row->new_value, &nul) != 0 ||
+        import_col(stmt, 4, &row->updated_by, &nul) != 0 || row->updated_by == NULL ||
+        import_col(stmt, 5, &row->at, &nul) != 0 || row->at == NULL) {
+        return -1;
+    }
+    /* NOLINTEND(readability-magic-numbers,cppcoreguidelines-avoid-magic-numbers) */
+    return 0;
+}
+
+typedef struct {
+    SettingHistoryRow *rows;
+    size_t n;
+    size_t cap;
+} HistoryBuf;
+
+static int history_grow(HistoryBuf *buf)
+{
+    size_t next = 0;
+    SettingHistoryRow *grown = NULL;
+
+    if (buf->n < buf->cap) {
+        return 0;
+    }
+    next = (buf->cap == 0U) ? (size_t)GROW_MIN_CAP : (buf->cap * 2U);
+    grown = (SettingHistoryRow *)realloc(buf->rows, next * sizeof(*grown));
+    if (grown == NULL) {
+        return -1;
+    }
+    buf->rows = grown;
+    buf->cap = next;
+    return 0;
+}
+
+static int history_read_db(sqlite3 *db, SettingLayer scope, const SettingHistoryQuery *q,
+                           HistoryBuf *buf, char *err, size_t errlen)
+{
+    sqlite3_stmt *stmt = NULL;
+    int rc = SQLITE_OK;
+
+    if (sqlite3_prepare_v2(db, k_history_sql, -1, &stmt, NULL) != SQLITE_OK) {
+        set_errf(err, errlen, "sqlite", sqlite3_errmsg(db));
+        return -1;
+    }
+    if (history_bind(stmt, q, scope) != 0) {
+        (void)sqlite3_finalize(stmt);
+        set_err(err, errlen, "internal error");
+        return -1;
+    }
+    while ((rc = sqlite3_step(stmt)) == SQLITE_ROW) {
+        if (history_grow(buf) != 0) {
+            break;
+        }
+        buf->n += 1U; /* a partly filled row is freed with the rest */
+        if (history_fill(stmt, scope, &buf->rows[buf->n - 1U]) != 0) {
+            break;
+        }
+    }
+    if (rc == SQLITE_ROW) {
+        set_err(err, errlen, "out of memory");
+    } else if (rc != SQLITE_DONE) {
+        set_errf(err, errlen, "sqlite", sqlite3_errmsg(db));
+    }
+    (void)sqlite3_finalize(stmt);
+    return rc == SQLITE_DONE ? 0 : -1;
+}
+
+SettingStatus store_setting_history(Store *brain, const char *user_db, const SettingHistoryQuery *q,
+                                    SettingHistoryRow **out, size_t *out_n, char *err,
+                                    size_t errlen)
+{
+    HistoryBuf buf;
+    sqlite3 *udb = NULL;
+    bool absent = false;
+    int rc = 0;
+
+    *out = NULL;
+    *out_n = 0U;
+    memset(&buf, 0, sizeof(buf));
+    if (brain == NULL || brain->db == NULL || q == NULL) {
+        set_err(err, errlen, "internal error");
+        return SETTING_ERR_STORE;
+    }
+    if (q->only != SETTING_LAYER_USER) {
+        rc = history_read_db(brain->db, SETTING_LAYER_BRAIN, q, &buf, err, errlen);
+    }
+    if (rc == 0 && q->only != SETTING_LAYER_BRAIN) {
+        rc = open_user_existing(user_db, &udb, &absent, err, errlen);
+        if (rc == 0 && !absent) {
+            rc = history_read_db(udb, SETTING_LAYER_USER, q, &buf, err, errlen);
+        }
+        if (udb != NULL) {
+            (void)sqlite3_close(udb);
+        }
+    }
+    if (rc != 0) {
+        store_setting_history_free(buf.rows, buf.n);
+        return SETTING_ERR_STORE;
+    }
+    if (buf.n > 1U) {
+        qsort(buf.rows, buf.n, sizeof(*buf.rows), cmp_history_row);
+    }
+    /* Each database gave up to want rows. Keep the first want of the merge. */
+    while (buf.n > q->want) {
+        buf.n -= 1U;
+        history_row_free(&buf.rows[buf.n]);
+    }
+    *out = buf.rows;
+    *out_n = buf.n;
+    return SETTING_OK;
+}
+
 SettingStatus store_setting_read(Store *brain, const char *user_db, const char *key,
                                  const char *flag_text, SettingRead *out, char *err, size_t errlen)
 {

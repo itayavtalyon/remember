@@ -277,6 +277,41 @@ SettingStatus store_setting_import(Store *brain, const char *user_db, const char
                                    SettingLayer only, bool dry_run, SettingImportReport *out,
                                    char *err, size_t errlen);
 
+/* One settings_history row (ST-4.1). old_value and new_value are NULL when the
+   row has none. id is the rowid in its own database. */
+typedef struct {
+    char *key;
+    char *old_value;
+    char *new_value;
+    char *updated_by;
+    char *at;
+    long long id;
+    SettingLayer scope;
+    char pad_[4]; /* explicit tail padding (kept -Wpadded-clean) */
+} SettingHistoryRow;
+
+/* key NULL is every key. only AUTO reads both databases. after_at NULL is the
+   first page; otherwise after_scope, after_key and after_id are the last row
+   shown, in the ST-7.6 order. want is the most rows returned. */
+typedef struct {
+    const char *key;
+    const char *after_at;
+    const char *after_key;
+    long long after_id;
+    size_t want;
+    SettingLayer only;
+    SettingLayer after_scope;
+} SettingHistoryQuery;
+
+void store_setting_history_free(SettingHistoryRow *rows, size_t n);
+
+/* Rows of both databases in the ST-7.6 order: newest at first, brain before
+   user, then key in byte order, then the newer row. A missing user.db has no
+   rows. */
+SettingStatus store_setting_history(Store *brain, const char *user_db, const SettingHistoryQuery *q,
+                                    SettingHistoryRow **out, size_t *out_n, char *err,
+                                    size_t errlen);
+
 /*
  * store_open with options and a structured SQLite failure. opts NULL means
  * defaults (STORE_DEFAULT_BUSY_TIMEOUT_MS, create, keep an invalid sidecar an

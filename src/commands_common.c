@@ -14,6 +14,8 @@
 #include <string.h>
 #include <time.h>
 
+#include "test_alloc.h" // IWYU pragma: keep
+
 /* Radix for all decimal integer parsing. */
 enum { DECIMAL_BASE = 10 };
 
@@ -1282,3 +1284,111 @@ int cmd_reject_filter_kind(const char *flag, const char *kind)
     err_fmt(DIAG_USAGE, "invalid %s (use human, agent, tool, share, or import)", flag);
     return -1;
 }
+
+/* Opaque cursors (plan 21 list, plan 20 settings). Alphabet offsets and the
+   6-bit shifts are the base64url layout. */
+enum { B64_DECODE_MAX = 65536 };
+
+// NOLINTBEGIN(hicpp-signed-bitwise,cppcoreguidelines-avoid-magic-numbers,readability-magic-numbers)
+static int b64_digit(unsigned char c)
+{
+    if (c >= 'A' && c <= 'Z') {
+        return (int)(c - 'A');
+    }
+    if (c >= 'a' && c <= 'z') {
+        return (int)(c - 'a') + 26;
+    }
+    if (c >= '0' && c <= '9') {
+        return (int)(c - '0') + 52;
+    }
+    if (c == '-') {
+        return 62;
+    }
+    if (c == '_') {
+        return 63;
+    }
+    return -1;
+}
+
+char *base64url_encode(const unsigned char *raw, size_t len)
+{
+    static const char k_alpha[] =
+        "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+    char *out = (char *)malloc((4U * ((len + 2U) / 3U)) + 1U);
+    size_t i = 0U;
+    size_t j = 0U;
+
+    if (out == NULL) {
+        return NULL;
+    }
+    for (i = 0U; i < len; i += 3U) {
+        size_t left = len - i;
+        unsigned n = (unsigned)raw[i] << 16;
+
+        if (left > 1U) {
+            n |= (unsigned)raw[i + 1U] << 8;
+        }
+        if (left > 2U) {
+            n |= (unsigned)raw[i + 2U];
+        }
+        out[j++] = k_alpha[(n >> 18) & 63U];
+        out[j++] = k_alpha[(n >> 12) & 63U];
+        if (left > 1U) {
+            out[j++] = k_alpha[(n >> 6) & 63U];
+        }
+        if (left > 2U) {
+            out[j++] = k_alpha[n & 63U];
+        }
+    }
+    out[j] = '\0';
+    return out;
+}
+
+/* Rejects any byte outside the alphabet (padding too). A short last group is
+   taken as is: a cursor reader re-encodes and accepts only the same bytes, so
+   a stray length or non-zero unused bits fail there. */
+int base64url_decode(const char *text, unsigned char **out, size_t *out_len)
+{
+    size_t n = strlen(text);
+    size_t i = 0U;
+    size_t j = 0U;
+    unsigned char *buf = NULL;
+
+    if (n == 0U || ((n / 4U) + 1U) * 3U > (size_t)B64_DECODE_MAX) {
+        return -2;
+    }
+    buf = (unsigned char *)malloc((((n / 4U) + 1U) * 3U) + 1U);
+    if (buf == NULL) {
+        return -1;
+    }
+    for (i = 0U; i < n; i += 4U) {
+        size_t chars = (n - i < 4U) ? n - i : 4U;
+        unsigned value = 0U;
+        size_t k = 0U;
+
+        for (k = 0U; k < 4U; k++) {
+            int sextet = 0;
+
+            if (k < chars) {
+                sextet = b64_digit((unsigned char)text[i + k]);
+            }
+            if (sextet < 0) {
+                free(buf);
+                return -2;
+            }
+            value = (value << 6) | (unsigned)sextet;
+        }
+        buf[j++] = (unsigned char)((value >> 16) & 0xFFU);
+        if (chars > 2U) {
+            buf[j++] = (unsigned char)((value >> 8) & 0xFFU);
+        }
+        if (chars > 3U) {
+            buf[j++] = (unsigned char)(value & 0xFFU);
+        }
+    }
+    buf[j] = 0U;
+    *out = buf;
+    *out_len = j;
+    return 0;
+}
+// NOLINTEND(hicpp-signed-bitwise,cppcoreguidelines-avoid-magic-numbers,readability-magic-numbers)

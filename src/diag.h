@@ -172,6 +172,13 @@ typedef struct {
  */
 int diag_unknown_field(DiagUnknownField field);
 
+/*
+ * Plain stderr line "remember: <message>\n" that is neither an error nor a
+ * warning (the settings more-pages line). No code, no JSON, not counted as a
+ * warning. Returns -1 when the write fails.
+ */
+int diag_notice(const char *message);
+
 /* Zero the warning count and the once-per-file set at the start of remember_run. */
 void diag_warnings_reset(void);
 

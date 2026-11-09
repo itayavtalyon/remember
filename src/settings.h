@@ -22,6 +22,10 @@ typedef enum SettingType {
 typedef struct SettingSpec {
     const char *key;
     const char *default_text;
+    /* The explain line (C-13, decision:plan20-explain-description-drafts). */
+    const char *description;
+    /* One related key or NULL (decision:plan20-empty-list-related). */
+    const char *related;
     long long min_value;
     long long max_value;
     SettingType type;
