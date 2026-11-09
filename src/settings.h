@@ -145,12 +145,17 @@ SettingStatus setting_choose_layer(const char *key, SettingLayer requested,
                                    size_t errlen);
 
 /* Fold the key, check the layer, and write the canonical JSON value.
-   A prefix failure writes its locked sentence into err. Other refusals
-   leave err empty when the sentence is still COPY-PENDING. */
+   Refusals leave err empty; only a store failure writes it. */
 SettingStatus setting_prepare(const char *key, const char *const *items, size_t nitems,
                               SettingLayer requested, char *json, size_t json_cap,
                               const SettingSpec **spec_out, SettingLayer *layer_out, char *err,
                               size_t errlen);
+
+/* SETTING_ERR_INVALID when a bucket prefix item is refused: *item is its
+   index, and *other the earlier item it repeats, or SIZE_MAX when the item
+   isn't a prefix at all. The caller words the sentence from its own items. */
+SettingStatus setting_prefix_issue(const char *const *items, size_t nitems, size_t *item,
+                                   size_t *other);
 
 /* Last layer with a value wins. A NULL layer pointer, or a layer the key
    does not allow, is no row. Copies the winning JSON into out. An unset key

@@ -3,6 +3,7 @@
 #include "normalize.h"
 
 #include <limits.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -377,31 +378,6 @@ static SettingStatus canon_helper(const char *src, char *json, size_t json_cap)
     return SETTING_OK;
 }
 
-static void prefix_bad_item(const char *item, char *err, size_t errlen)
-{
-    const char *shown = "";
-
-    if (item != NULL) {
-        shown = item;
-    }
-    if (err != NULL && errlen > 0U) {
-        (void)snprintf(err, errlen, "\"%s\" isn't a bucket prefix.", shown);
-    }
-}
-
-// NOLINTNEXTLINE(bugprone-easily-swappable-parameters) the new item, then the earlier one
-static void prefix_dup_item(const char *item, const char *earlier, char *err, size_t errlen)
-{
-    if (err == NULL || errlen == 0U) {
-        return;
-    }
-    if (strcmp(item, earlier) == 0) {
-        (void)snprintf(err, errlen, "\"%s\" is in the list twice.", item);
-        return;
-    }
-    (void)snprintf(err, errlen, "\"%s\" and \"%s\" are the same prefix.", item, earlier);
-}
-
 static bool prefix_already_folded(const char *block, size_t i, const char *folded, size_t *at)
 {
     size_t j = 0;
@@ -439,54 +415,80 @@ static SettingStatus append_prefix_json(char *json, size_t *pos, size_t json_cap
     return SETTING_OK;
 }
 
-static SettingStatus canon_prefixes(const char *const *items, size_t nitems, char *json,
-                                    size_t json_cap, char *err, size_t errlen)
+/* Fold every item into a block the caller frees. On a refusal *item is the
+   failing index and *other the earlier item it repeats, or SIZE_MAX when the
+   item doesn't fold. */
+// NOLINTBEGIN(bugprone-easily-swappable-parameters) the failing item, then the earlier one
+static SettingStatus prefix_fold_all(const char *const *items, size_t nitems, char **block_out,
+                                     size_t *item, size_t *other)
+// NOLINTEND(bugprone-easily-swappable-parameters)
 {
     enum { PREFIX_JSON_MIN = 5 };
     char *block = NULL;
     size_t i = 0;
-    size_t pos = 0;
 
+    *block_out = NULL;
+    *item = 0;
+    *other = SIZE_MAX;
     if (nitems > (size_t)SETTING_VALUE_MAX / (size_t)PREFIX_JSON_MIN) {
         return SETTING_ERR_QUOTA;
     }
-    if (nitems > 0U) {
-        block = (char *)malloc(nitems * (size_t)REMEMBER_BUCKET_PREFIX_BUF);
-        if (block == NULL) {
-            copy_msg(err, errlen, "out of memory");
-            return SETTING_ERR_STORE;
-        }
+    if (nitems == 0U) {
+        return SETTING_OK;
     }
-    json[pos++] = '[';
+    block = (char *)malloc(nitems * (size_t)REMEMBER_BUCKET_PREFIX_BUF);
+    if (block == NULL) {
+        return SETTING_ERR_STORE;
+    }
+    *block_out = block;
     for (i = 0; i < nitems; i++) {
         char *folded = block + (i * (size_t)REMEMBER_BUCKET_PREFIX_BUF);
-        size_t earlier = 0;
-        SettingStatus st = SETTING_OK;
-        bool comma = false;
 
+        *item = i;
         if (items[i] == NULL ||
-            bucket_prefix_fold(items[i], folded, REMEMBER_BUCKET_PREFIX_BUF) != NORM_OK) {
-            prefix_bad_item(items[i], err, errlen);
-            free(block);
+            bucket_prefix_fold(items[i], folded, REMEMBER_BUCKET_PREFIX_BUF) != NORM_OK ||
+            prefix_already_folded(block, i, folded, other)) {
             return SETTING_ERR_INVALID;
         }
-        if (prefix_already_folded(block, i, folded, &earlier)) {
-            prefix_dup_item(items[i], items[earlier], err, errlen);
-            free(block);
-            return SETTING_ERR_INVALID;
-        }
-        if (i > 0U) {
-            comma = true;
-        }
-        st = append_prefix_json(json, &pos, json_cap, folded, comma);
-        if (st != SETTING_OK) {
-            free(block);
-            return st;
-        }
+    }
+    return SETTING_OK;
+}
+
+SettingStatus setting_prefix_issue(const char *const *items, size_t nitems, size_t *item,
+                                   size_t *other)
+{
+    char *block = NULL;
+    SettingStatus st = prefix_fold_all(items, nitems, &block, item, other);
+
+    free(block);
+    return st;
+}
+
+static SettingStatus canon_prefixes(const char *const *items, size_t nitems, char *json,
+                                    size_t json_cap, char *err, size_t errlen)
+{
+    char *block = NULL;
+    size_t i = 0;
+    size_t pos = 0;
+    size_t bad = 0;
+    size_t earlier = 0;
+    SettingStatus st = prefix_fold_all(items, nitems, &block, &bad, &earlier);
+
+    json[pos++] = '[';
+    for (i = 0; st == SETTING_OK && i < nitems; i++) {
+        st = append_prefix_json(json, &pos, json_cap,
+                                block + (i * (size_t)REMEMBER_BUCKET_PREFIX_BUF), i > 0U);
+    }
+    free(block);
+    if (st == SETTING_ERR_STORE) {
+        copy_msg(err, errlen, "out of memory");
+    }
+    if (st != SETTING_OK) {
+        json[0] = '\0';
+        return st;
     }
     json[pos++] = ']';
     json[pos] = '\0';
-    free(block);
     if (pos > (size_t)SETTING_VALUE_MAX) {
         json[0] = '\0';
         return SETTING_ERR_QUOTA;

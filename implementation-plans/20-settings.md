@@ -192,7 +192,7 @@ Import also skips three kinds of row, names each skipped row, and writes the res
 
 When the target has no row, write the file row and keep the file's `updated_by`. Do not stamp `{kind: import, id: null}` on a settings row. When the target has a row, compare version vector and `updated_at` only (ST-2.7). A user row has no vector, so the later `updated_at` wins. When `updated_at` ties and `device_id` does not pick a winner, the local row stays. The losing value stays in history.
 
-HTTP and MCP are read-only: `GET /v1/settings` and `GET /v1/settings/{key}`, and MCP tool `remember_settings` with `action` `list`, `get`, or `explain`. No HTTP or MCP call writes a setting. `remember_call` accepts `setting.set`, `setting.reset`, and `setting.import`. Route schemas and HTTP status numbers are DESIGN-PENDING D-10. This plan does not add an HTTP server. It accepts those `remember_call` actions in the library.
+HTTP and MCP are read-only: `GET /v1/settings` and `GET /v1/settings/{key}`, and MCP tool `remember_settings` with `action` `list`, `get`, or `explain`. No HTTP or MCP call writes a setting. `remember_call` accepts `setting.set`, `setting.reset`, and `setting.import`. Route schemas and HTTP status numbers are DESIGN-PENDING D-10. This plan does not add an HTTP server. It accepts those `remember_call` actions in the library. [2026-11-09: moved to the plan that adds `remember_call`, which does not exist yet (`decision:plan20-remember-call-deferred`).]
 
 A hook or plugin run cannot write settings. Plugins read settings. Each request carries the plugin's `plugin.<name>.*` values and each `remember.*` key listed in `permissions.needs`. Plan 25 attaches that list. This plan provides the read function the request calls.
 
@@ -222,7 +222,7 @@ Do not implement plan 20's command JSON before plan 21. INDEX order is: plan 19,
 
 ## Scope
 
-In: user.db, compiled-in registry, pure resolution, brain and user writes, history cap, credential callback and the CLI runner, `settings export`, import merge at the store, `remember_call` setting actions.
+In: user.db, compiled-in registry, pure resolution, brain and user writes, history cap, credential callback and the CLI runner, `settings export`, import merge at the store. (`remember_call` setting actions moved out on 2026-11-09, `decision:plan20-remember-call-deferred`.)
 
 Out: plugin-generated keys (plan 25), brain file export (plan 22), HTTP server and MCP schemas (D-10), daemon, Keychain, the settings UI (remember-mac).
 
@@ -468,7 +468,7 @@ A value is checked by `setting_prepare`, the same check `set` uses. A key, value
 
 Merge (ST-8.6, ST-2.7): the version vector first (brain only), then the later `updated_at`, then the larger `device_id` (brain only). A tie keeps the local row (`kept_local`, counted as `unchanged`). A row equal to the local row is `unchanged` and writes nothing. A brain write stores the file's fields with the pointwise-max vector, does not bump the local counter, and bumps `change_seq` (`decision:plan20-import-brain-merge`). Every write adds one history row with the file actor and the file `updated_at` (`decision:plan20-import-history-at`). A tombstone writes a null new value. A local tombstone gives a null old value. A new key over the 256-row quota fails the whole import with the C-09 sentence of that layer, and nothing is written (`decision:plan20-import-quota`).
 
-The brain and user.db each run one transaction. The brain commits first. If user.db's `COMMIT` fails after that, the brain rows stay written and the command fails. This is the stage 6 bulk-reset limit: two files do not commit as one. `--dry-run` runs the same merge, rolls both back, and does not create user.db. It prints `Would import "<path>": <n> settings written, <n> unchanged, <n> skipped. Nothing was changed.` (`decision:plan20-import-dry-run-draft`). A real run prints the C-13 `Imported` line. Warnings come first.
+The brain and user.db each run one transaction. The brain commits first. If user.db's `COMMIT` fails after that, the brain rows stay written and the command fails. This is the stage 6 bulk-reset limit: two files do not commit as one. [2026-11-09: superseded for import. A file with both scopes needs `--scope`, so a run writes one database (`decision:plan20-import-one-file-per-run`).] `--dry-run` runs the same merge, rolls both back, and does not create user.db. It prints `Would import "<path>": <n> settings written, <n> unchanged, <n> skipped. Nothing was changed.` (`decision:plan20-import-dry-run-draft`). A real run prints the C-13 `Imported` line. Warnings come first.
 
 JSON `setting.import.result` is ST-7.11b: `{count, written, unchanged, skipped, rows[]}`. Each row is `{key, scope, result, action, reason?}`. `key` and `scope` are null when the file row has none. A warning's `detail` writes a missing value as `null`.
 
@@ -674,3 +674,74 @@ Simplification. Applied: `publish_page` reports a failed page copy the way `cmd_
 Gate on this tree, sanitizer build: ctest passed 6 of 6, `check-coverage.sh` exited 0 (functions 100%, effective lines 100%, zero-hit 2431, defensive-excluded 2431, must-cover 0, pure-TU branches 0 missed), `lint-all.sh` exited 0 (every check `PASS`, `LINT OK`; IWYU skipped, Linux CI runs it), `leaks-macos` passed. Settings suite: 146 tests, 21051 asserts, 0 failed.
 
 INDEX row 20 stays unticked. Stage 9 is done on this branch. C-43 holds the stage 9 drafts.
+
+**2026-11-09, whole-plan deep review (LEGACY PLAN).** A separate session, on `plan/20-stage5-get` at `1a5ee6b`, base `origin/main` `9495f48`. It followed `workflow:whole-plan-deep-review`, `workflow:deep-review` and the keys they cite, `pref:review-lenses` (each lens as its own pass), `pref:code-review-workflow`, and `workflow:pragmatic-review` for lens 4. Local Bugbot is not installed. Itay answered five grills (D1, A3, D2, D6, and the D6 copy). This note does not tick INDEX row 20 or the definition of done.
+
+Open items from `.claude/WHOLE_PLAN_REVIEW`:
+1. `decision:s-03`: amended in Remember. The prefix list has no item limit; the cap is 16384 bytes of JSON (D-01, Itay 2026-10-25). Tagged `state:implemented`.
+2. `decision:settings-scheme`: amended so import skips bad rows (g-16, ST-8.4) and `set --brain` is `--scope brain`. It cites g-16. It stays `state:accepted` for the plan 25 manifest part.
+3. `decision:g-34`: a status line per item. It stays `state:accepted` until items 13 and 17 ship.
+4. C-42 and C-43 stay open. C-43 gains the two drafts below.
+5. Two-file limit: closed for import by D6. Bulk reset keeps it (stage 6 note).
+6. INDEX row 20 and the definition of done stay unticked.
+
+Security pass (lens A). Each finding has a probe or a test.
+
+| # | Severity | Finding | Outcome |
+|---|---|---|---|
+| A1 | important | `get`, `reset`, `list`, `export`, `history` and `import` opened user.db by path and followed a symlink. Only `set` refused one. A probe reset rows in the link's target. The spec's "opened without following a symlink" was false for six verbs. | Fixed. `open_user_existing` checks the path with `open(O_NOFOLLOW)` first. `SQLITE_OPEN_NOFOLLOW` was not used: it refuses a symlink in any component, which breaks `/tmp` and `/var` on macOS. `user_db_symlink_is_refused_by_every_opener`. A check-then-open window remains, as in `store_user_db_ensure`; the 0700 parent is the guard. |
+| A2 | important | The C-10 reset line printed a stored value or key raw. A hostile synced brain row `300\x1b[2J` cleared the terminal. | Fixed. The line goes through `output_text_human`. `reset_and_set_never_echo_a_stored_value_raw`. |
+| A10 | important | `old_value` in the set and reset envelopes was written raw. A user.db value `1,"injected":true` added a JSON member; `1}]` made the envelope invalid. | Fixed. `write_old_json` writes raw only text `json_text_ok` accepts for the key's type, else a JSON string. An unregistered key's old value is a string, as in history. Same test. |
+| A3 | improvement | `settings import /dev/zero` grew memory until malloc failed. | Fixed per grill: a file over 16 MiB (`REMEMBER_STDIN_MAX`) is `can't read "<path>": File too large.` (`decision:plan20-import-size-cap`). A file of exactly 16 MiB is read. |
+| A4 | improvement | A canonical but wide `version_vector` (over 4095 bytes) failed the whole import with `internal error`, against ST-8.4. | Fixed. It is `bad_field` `version_vector`. `import_skips_a_vector_too_wide_to_merge` uses a vector of exactly 4096 bytes. A merge with a wide local vector that overflows is still a store error; recorded, not reachable from one import file. |
+| A6 | nit | One malformed stored row makes `get`, `list`, `explain` and `history --json` fail with `internal error`. | Recorded. It fails closed. |
+| A7 | nit | The credential runner left the last token byte in a stack local. | Fixed. `byte` is wiped on both exits. No test can see a stack slot. |
+| A8 | nit | The history plain line used a fixed 33 KB stack buffer and cut a long stored value. | Fixed. The line streams. `history_prints_a_long_stored_row_whole`. |
+| A9 | improvement | The prefix error was parsed back out of an 8 KiB sentence. A 9000-byte item gave a cut sentence, the wrong fix and no detail; an item with `"` gave a wrong `item`. | Fixed. `setting_prefix_issue` returns indices; the CLI words the sentence from argv. `quoted_span` is gone. `assert_prefix_items_survive_any_length`. |
+| A5 | nit | A version past int64 is echoed as 9223372036854775807. | Recorded. |
+
+Checked and clean: cursor decode bounds, base64url, bound SQL everywhere, the helper id grammar, the token wipe, NUL handling, an INT64 vector entry, file mode 0600 and parent 0700, importing a directory or `/dev/null`, duplicate JSON members, a far-future stamp. The hook depth `1x` bypass is in shared code and advisory.
+
+Spec and decisions.
+
+| # | Severity | Finding | Outcome |
+|---|---|---|---|
+| D1 | important | `setting_invalid_value` detail lacked `key`, `value` and `type` (SETTINGS-SCHEME §5.1, 007 ST-5.4). Stage 6 read C-05 as "adds item". | Fixed per grill (`decision:plan20-invalid-value-detail`). `value` appears when one value was given. Prefix errors keep `item` and `other`. |
+| D2 | important | `remember_call` setting actions are in scope, but `remember_call` does not exist. | Moved to the plan that adds `remember_call` (`decision:plan20-remember-call-deferred`). Plan text notes it. |
+| D4 | nit | The spec said every verb's `--json` writes an envelope. A successful `export` writes the document. | Fixed in SETTINGS.md. |
+| D6 | important | Open item 5 was never grilled. | Grilled: one file per run (`decision:plan20-import-one-file-per-run`). A file with user and brain rows needs `--scope`, else `invalid_argument` and nothing written. Copy draft A (`decision:plan20-import-mixed-scope-draft`, C-43). Tests now import per scope; the exec fault sweep no longer asserts a half-written import. |
+| D7 | nit | The stage 9 note says `--changed` is "not the default". The code and spec agree with each other; only the note's wording is loose. | Recorded. |
+
+HEALTH: every decision SETTINGS.md cites resolves; none is stale.
+
+Lens passes. Lenses 1, 2, 5, 6, 7, 10 and 12 found nothing beyond the rows above. Lens 8: every fix above has a test, mutants below. Lens 10 (trust claims) found A1 and A2. Lens 11 found A8 and A9 (sentences cut by a fixed buffer) and the A1 check-then-open window.
+
+Lens 4, pragmatic review (`workflow:pragmatic-review`).
+- Summary: one Critical (DRY), fixed; two Improvements recorded; nits.
+- DRY. Critical, fixed: the two-pass `vsnprintf` formatter was written twice (`fmt_alloc` in `cmd_settings.c`, `err_fmt` in `commands_common.c`). Now one `fmt_valloc` in `commands_common.c` behind `fmt_alloc` and `err_fmt`; `err_fmt` reports a format failure as out of memory, as `fmt_alloc` callers already did. Improvement, fixed: `days_in_month` existed twice; `commands_common.c` exports the bounds-checked one. `emit_unavailable` in `sync_credential.c` keeps its own `strlen` sizing with an `intentional:` comment: the library does not include the CLI's `commands_common`. Its stale `TODO(pragmatic:)` is gone. Nit, kept: `import_at` aliases `export_at` in the tests so call sites name the verb.
+- Easy to replace. Improvement, recorded: the credential runner (posix_spawn, poll, signals) lives in `cmd_settings.c`; it would swap more easily in its own file behind `SyncCredentialHost`. Moving it is plan wording, not a fix here. Improvement, recorded: `getenv("REMEMBER_SYNC_TOKEN")` in the library has no env port. It matches G-02.
+- Orthogonal. `cmd_settings.c` (about 4600 lines) mixes the runner, option parsing, output and the cursor codec; `test_settings.c` is about 9.5k lines. Recorded for a split when either next grows.
+- Write gate: the Critical is fixed on this branch; nothing new was written around it.
+
+Simplify (lens S). Applied: the prefix sentence moved to the CLI and `quoted_span`, `k_and_quote`, `prefix_bad_item` and `prefix_dup_item` went away (about 60 lines). Applied: one formatter and one `days_in_month` (about 45 lines). Applied: `canon_prefixes` folds through the shared `prefix_fold_all`. Declined: `apply_set` discards `prepared`; the store returns QUOTA for both caps, so the CLI keeps its own read.
+
+Mutants, one clause each, settings and errors suites, in a copy of the tree: 21 over the review fixes. 19 killed: the `O_NOFOLLOW` flag and the ENOENT-is-absent branch (A1), the old-value type check (A10), the C-10 escape (A2), the bad and duplicate prefix branches, the twice-or-same choice, the fix choice, the duplicate scan, the item cap and the out-of-memory mapping (A9), `>=` on the vector cap (A4), `>` on the file cap (A3), the mixed-scope rule, `--scope` and the check itself (D6), `value` and `type` in the detail (D1), and the leap and range rules of `days_in_month`. The A9 out-of-memory mutant survived the first pass; the sweep now asserts no `internal error`. A crash counts as killed: the harness first counted a SIGSEGV as a survivor. One mutant is equivalent: the history line's `output_text_human` on a valid display, which never holds a control byte. The mutant with no file cap was not run to the end: it reads `/dev/zero` until memory runs out, the exploit A3 closes. A7's wipe has no observable effect for a test.
+
+Gate on this tree, sanitizer build: ctest passed 6 of 6; `check-coverage.sh` exited 0 (functions 100%, effective lines 100%, must-cover 0, pure-TU branches 0 missed); `lint-all.sh` exited 0 (every check `PASS`, `LINT OK`; IWYU skipped, Linux CI runs it); `leaks-macos` passed. Settings suite: 151 tests, 21563 asserts, 0 failed. The first gate run caught a format miss, seven clang-tidy items and three uncovered lines (a `sqlite3_open_v2` ENOENT branch the precheck made dead, now removed; the C-10 write failure and the unreadable-import out-of-memory path, now swept). Not pushed; no PR.
+
+Grades.
+
+Coder (plan 20, stages 1–10): 7/10. Strengths: a registry and resolution core that held under every probe; bound SQL and cursor decoding with no hole found; tests that sweep store, memory and write faults over every view; every draft sentence filed in C-43. Misses: the symlink rule applied to one opener of six (A1); stored text echoed raw in two places (A2, A10); two fixed buffers that cut caller text (A8, A9); a spec detail table read as a different rule (D1); a scope item with no target API (D2); a known two-file limit carried forward instead of grilled (D6).
+Pointers:
+- When a path rule (no symlink, mode, owner) protects one opener, grep every opener of the same file and give them one helper.
+- Any text read back from a store or a synced peer goes through the human or JSON escaper, even when the write path validated it.
+- Before writing a detail object, copy the member list from the spec table, not from the copy note.
+- A limit recorded in two stage notes is a grill, not a note.
+
+Stage reviewers (the in-session deep reviews of stages 3–9): 6/10. They caught real defects (the unhooked allocator in stage 9, the M7 history mutant, the lint boundary) and their mutant passes were thorough. They missed the cross-verb symlink gap, both raw echoes, and the D1 detail mismatch, and they recorded the two-file limit twice without a grill. Their locks held: nothing they fixed regressed.
+Pointers:
+- Run the trust-claim lens (10) on every reader, not only the verb under review.
+- Probe each new output path with a hostile stored value (ESC, quote, `}`) in plain and `--json`.
+- Check each `detail` object against the SETTINGS-SCHEME §5.1 row for its code.
+
+INDEX row 20 stays unticked.

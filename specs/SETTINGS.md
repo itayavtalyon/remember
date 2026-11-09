@@ -85,7 +85,7 @@ The CLI host runs `remember-credential-<id> get` from `PATH`, with no shell and 
 
 `decision:settings-scheme`, `decision:settings-scope-flag`. 007 ST-7.
 
-Every verb takes `--json`, which writes one envelope with type `setting.<verb>.result` (JSON-ENVELOPE § Reply types). `--` ends options. `settings` with no known verb is a usage error.
+Every verb takes `--json`, which writes one envelope with type `setting.<verb>.result` (JSON-ENVELOPE § Reply types). The one exception is a successful `export`, which writes the export document (§ export). `--` ends options. `settings` with no known verb is a usage error.
 
 ### The setting object
 
@@ -145,7 +145,7 @@ A file that is not a settings document, or has a later version, is `import_parse
 
 A row merges like sync: the version vector first (brain only), then the later `updated_at`, then the larger `device_id` (brain only). A tie keeps the local row. A row equal to the local one writes nothing. A brain write stores the file's fields with the pointwise-max vector and bumps `change_seq`. Each write adds a history row with the file's actor and `updated_at`. A new key over the quota fails the whole import.
 
-Each database runs one transaction, and the brain commits first. `--dry-run` runs the merge, rolls both back, and does not create user.db. JSON `data` is `{count, written, unchanged, skipped, rows[]}`. A row is `{key, scope, result, action, reason?}`.
+A file with both user and brain rows needs `--scope` (`decision:plan20-import-one-file-per-run`). Without it the import is `invalid_argument` and writes nothing, so a run writes one database in one transaction. A file over 16 MiB is `import_parse` with the read sentence and the system's "File too large" (`decision:plan20-import-size-cap`). `--dry-run` runs the merge, rolls it back, and does not create user.db. JSON `data` is `{count, written, unchanged, skipped, rows[]}`. A row is `{key, scope, result, action, reason?}`.
 
 ## Hooks
 
@@ -153,4 +153,4 @@ Each database runs one transaction, and the brain commits first. `--dry-run` run
 
 ## Errors
 
-Codes: `setting_unknown` (exit 2), `setting_invalid_value`, `setting_out_of_range`, `setting_scope_mismatch`, `setting_from_hook`, `quota_exceeded`, `confirmation_required`, `invalid_argument`, `import_parse`, `sync_credential_unavailable`. Warnings: `setting_import_skipped`, `setting_invalid`. Each `error` object carries the message, the fix and, where the code has one, `detail` with string members (`decision:plan20-error-detail-strings`).
+Codes: `setting_unknown` (exit 2), `setting_invalid_value`, `setting_out_of_range`, `setting_scope_mismatch`, `setting_from_hook`, `quota_exceeded`, `confirmation_required`, `invalid_argument`, `import_parse`, `sync_credential_unavailable`. Warnings: `setting_import_skipped`, `setting_invalid`. Each `error` object carries the message, the fix and, where the code has one, `detail` with string members (`decision:plan20-error-detail-strings`). `setting_invalid_value` detail is `key`, `value` when one value was given, and `type`; a prefix error adds `item`, and `other` when two items fold to the same prefix (`decision:plan20-invalid-value-detail`).

@@ -10354,6 +10354,7 @@ static int open_user_existing(const char *path, sqlite3 **out, bool *absent, cha
                               size_t errlen)
 {
     int rc = 0;
+    int fd = -1;
 
     *out = NULL;
     *absent = false;
@@ -10361,21 +10362,31 @@ static int open_user_existing(const char *path, sqlite3 **out, bool *absent, cha
         *absent = true;
         return 0;
     }
+    /* The same rule as store_user_db_ensure: a symlink is not followed. A read
+       or reset opens by path, so without this check it wrote through one.
+       O_NONBLOCK: a FIFO at the path does not hang the open. */
+    fd = open(path, O_RDONLY | O_NOFOLLOW | O_CLOEXEC | O_NONBLOCK);
+    if (fd < 0) {
+        if (errno == ENOENT) {
+            *absent = true;
+            return 0;
+        }
+        /* Single-threaded CLI; strerror_r's signature is not portable (XSI vs GNU). */
+        // NOLINTNEXTLINE(concurrency-mt-unsafe)
+        set_errf(err, errlen, "cannot open database", strerror(errno));
+        return -1;
+    }
+    (void)close(fd);
     rc = sqlite3_open_v2(path, out, SQLITE_OPEN_READWRITE, NULL);
     if (rc != SQLITE_OK) {
-        int sys = ENOENT;
+        /* The file was there a moment ago; a race that removes it is an error. */
         char message[OPEN_ERR_CAP];
 
         message[0] = '\0';
         if (*out != NULL) {
-            sys = sqlite3_system_errno(*out);
             (void)snprintf(message, sizeof(message), "%s", sqlite3_errmsg(*out));
             (void)sqlite3_close(*out);
             *out = NULL;
-        }
-        if (sys == ENOENT) {
-            *absent = true;
-            return 0;
         }
         set_errf(err, errlen, "cannot open database", message[0] != '\0' ? message : "missing");
         return -1;
@@ -11159,6 +11170,30 @@ static SettingLayer import_scope(const ImportIn *in)
     return SETTING_LAYER_AUTO;
 }
 
+/* One run writes one database, so no import leaves one side written
+   (decision:plan20-import-one-file-per-run). */
+static bool import_mixes_scopes(const ImportIn *ins, size_t n)
+{
+    bool user = false;
+    bool brain = false;
+    size_t i = 0;
+
+    for (i = 0; i < n; i++) {
+        SettingLayer scope = import_scope(&ins[i]);
+
+        if (scope == SETTING_LAYER_USER) {
+            user = true;
+        }
+        if (scope == SETTING_LAYER_BRAIN) {
+            brain = true;
+        }
+    }
+    if (user && brain) {
+        return true;
+    }
+    return false;
+}
+
 static void free_items(char **items, size_t n)
 {
     size_t i = 0;
@@ -11291,7 +11326,9 @@ static const char *import_bad_field(const ImportIn *in, SettingLayer layer)
     if (!member_is(in, IM_DEVICE, "text") || !uuid_v7_is_canonical(in->text[IM_DEVICE])) {
         return "device_id";
     }
-    if (!member_is(in, IM_VECTOR, "object") || !vv_json_is_canonical(in->json[IM_VECTOR])) {
+    /* A vector the merge buffer can't hold is a bad row, not a failed import (A4). */
+    if (!member_is(in, IM_VECTOR, "object") || !vv_json_is_canonical(in->json[IM_VECTOR]) ||
+        strlen(in->json[IM_VECTOR]) >= (size_t)VV_OUT_MAX) {
         return "version_vector";
     }
     if (!member_null(in, IM_DELETED) &&
@@ -11715,6 +11752,11 @@ SettingStatus store_setting_import(Store *brain, const char *user_db, const char
     st = import_read_rows(brain->db, doc, len, &ins, &n, err, errlen);
     if (st != SETTING_OK) {
         return st;
+    }
+    if (only == SETTING_LAYER_AUTO && import_mixes_scopes(ins, n)) {
+        import_in_free(ins, n);
+        out->doc_error = SETTING_DOC_MIXED_SCOPES;
+        return SETTING_ERR_DOCUMENT;
     }
     out->rows = (SettingImportRow *)calloc(n > 0U ? n : 1U, sizeof(*out->rows));
     if (out->rows == NULL) {

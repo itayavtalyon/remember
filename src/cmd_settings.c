@@ -213,10 +213,10 @@ static int read_first_line(int read_fd, char *buf, size_t cap, bool *refused, lo
 {
     size_t n = 0U;
     bool line_done = false;
+    unsigned char byte = 0;
 
     *refused = false;
     while (!line_done) {
-        unsigned char byte = 0;
         ssize_t got = 0;
 
         if (!poll_ready(read_fd, deadline)) {
@@ -240,12 +240,15 @@ static int read_first_line(int read_fd, char *buf, size_t cap, bool *refused, lo
         }
         *refused = true;
     }
+    /* The last byte read can be part of the token, as at EOF with no newline (A7). */
+    sync_credential_wipe(&byte, sizeof(byte));
     /* A refused line is not terminated; the caller wipes it. */
     if (!*refused) {
         trim_line(buf, n, cap);
     }
     return drain_stdout(read_fd, deadline);
 fail:
+    sync_credential_wipe(&byte, sizeof(byte));
     return -2;
 }
 
@@ -384,12 +387,7 @@ enum {
     TM_EPOCH_YEAR = 1900,
     UNSET_CHARS = 8,
     DATE_TEXT_CAP = 64,
-    STORE_ERR_CAP = 256,
-    LEAP_DAY = 29,
-    FEB = 2,
-    LEAP_EVERY = 4,
-    CENTURY = 100,
-    LEAP_CENTURY = 400
+    STORE_ERR_CAP = 256
 };
 // NOLINTEND(readability-magic-numbers,cppcoreguidelines-avoid-magic-numbers)
 
@@ -767,21 +765,6 @@ static ActorParts actor_parts(const char *json)
     part.ok = true;
     return part;
 }
-
-/* February 29 only in a leap year. A shape-valid stamp can still be 31 Feb. */
-// NOLINTBEGIN(readability-magic-numbers,cppcoreguidelines-avoid-magic-numbers)
-static int days_in_month(int year, int month)
-{
-    static const int k_days[] = {0, 31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31};
-    int days = k_days[month];
-
-    if (month == FEB && year % LEAP_EVERY == 0 &&
-        (year % CENTURY != 0 || year % LEAP_CENTURY == 0)) {
-        days = LEAP_DAY;
-    }
-    return days;
-}
-// NOLINTEND(readability-magic-numbers,cppcoreguidelines-avoid-magic-numbers)
 
 static bool stamp_fields(const char *stamp, StampParts *part)
 {
@@ -1376,50 +1359,6 @@ static const char k_brain_quota_fix[] =
     "Reset settings you don't need with 'remember settings reset'.";
 static const char k_hook_msg[] = "a hook or plugin can't change settings.";
 static const char k_hook_fix[] = "Change them yourself in a terminal or in Settings.";
-static const char k_and_quote[] = " and \"";
-
-/* Sized text for a sentence that includes a key or a value. Call sites pass a literal. */
-#ifdef __clang__
-#pragma clang diagnostic push
-#pragma clang diagnostic ignored "-Wallocator-wrappers"
-#endif
-#ifdef __GNUC__
-__attribute__((format(printf, 1, 2)))
-#endif
-static char *fmt_alloc(const char *fmt, ...)
-{
-    /* Same two-pass va_list as err_fmt. The caller frees the text. */
-    /* NOLINTNEXTLINE(cppcoreguidelines-init-variables) */
-    va_list vargs;
-    int wrote = 0;
-    int again = 0;
-    char *buf = NULL;
-
-    va_start(vargs, fmt);
-    /* NOLINTNEXTLINE(clang-analyzer-valist.Uninitialized) -- array va_list mismatch */
-    wrote = vsnprintf(NULL, 0, fmt, vargs);
-    va_end(vargs);
-    if (wrote < 0) {
-        return NULL;
-    }
-    buf = (char *)malloc((size_t)wrote + 1U);
-    if (buf == NULL) {
-        return NULL;
-    }
-    va_start(vargs, fmt);
-    /* NOLINTNEXTLINE(clang-analyzer-valist.Uninitialized) -- array va_list mismatch */
-    again = vsnprintf(buf, (size_t)wrote + 1U, fmt, vargs);
-    /* The length mismatch is libc, so va_end stays on the path that always runs. */
-    va_end(vargs);
-    if (again != wrote) {
-        free(buf);
-        return NULL;
-    }
-    return buf;
-}
-#ifdef __clang__
-#pragma clang diagnostic pop
-#endif
 
 static char *dup_text(const char *src)
 {
@@ -1514,68 +1453,69 @@ static int format_bound(const SettingSpec *spec, long long value, char *buf, siz
     return 0;
 }
 
-static char *quoted_span(const char *text, const char **rest)
+/* D1 (decision:plan20-invalid-value-detail): key, value where one was given,
+   and type, then any members the sentence names. Takes msg. */
+static int emit_invalid(const SettingSpec *spec, const char *value, char *msg, const char *fix,
+                        const DiagDetailField *more, size_t nmore)
 {
-    const char *end = NULL;
+    enum { INVALID_FIELDS_MAX = 5 }; /* key, value, type, item, other */
+    DiagDetailField fields[INVALID_FIELDS_MAX];
     size_t n = 0;
-    char *out = NULL;
+    size_t i = 0;
 
-    if (rest != NULL) {
-        *rest = NULL;
+    if (msg == NULL) {
+        return report_oom();
     }
-    if (text == NULL || text[0] != '"') {
-        return NULL;
+    fields[n].name = "key";
+    fields[n++].value = spec->key;
+    if (value != NULL) {
+        fields[n].name = "value";
+        fields[n++].value = value;
     }
-    end = strchr(text + 1, '"');
-    if (end == NULL) {
-        return NULL;
+    fields[n].name = "type";
+    fields[n++].value = type_token(spec->type);
+    for (i = 0; i < nmore && n < sizeof(fields) / sizeof(fields[0]); i++) {
+        fields[n++] = more[i];
     }
-    n = (size_t)(end - (text + 1));
-    out = (char *)malloc(n + 1U);
-    if (out == NULL) {
-        return NULL;
-    }
-    memcpy(out, text + 1, n);
-    out[n] = '\0';
-    if (rest != NULL) {
-        *rest = end + 1;
-    }
-    return out;
+    (void)emit_detail(DIAG_SETTING_INVALID_VALUE, msg, fix, fields, n);
+    free(msg);
+    return REMEMBER_ERR;
 }
 
-static int report_prefix(const char *err)
+/* C-05: the sentence and detail come from the items as typed (A9). */
+static int report_prefix(const SettingSpec *spec, const WriteOpts *opt)
 {
-    const char *rest = NULL;
-    const char *fix = k_prefix_once;
-    char *item = NULL;
-    char *other = NULL;
+    size_t item = 0;
+    size_t other = SIZE_MAX;
+    const char *shown = NULL;
+    char *msg = NULL;
     DiagDetailField fields[2];
-    size_t nfields = 0;
+    size_t nfields = 1U;
+    SettingStatus st = SETTING_OK;
 
-    if (strstr(err, "isn't a bucket prefix") != NULL) {
-        fix = k_prefix_fix;
+    st = setting_prefix_issue(opt->items, opt->nitems, &item, &other);
+    if (st == SETTING_ERR_STORE) {
+        return report_oom();
     }
-    item = quoted_span(err, &rest);
-    if (item == NULL) {
-        return emit_detail(DIAG_SETTING_INVALID_VALUE, err, fix, NULL, 0U);
+    if (st != SETTING_ERR_INVALID) {
+        err_msg(DIAG_INTERNAL, "internal error");
+        return REMEMBER_ERR;
     }
+    shown = opt->items[item] != NULL ? opt->items[item] : "";
     fields[0].name = "item";
-    fields[0].value = item;
-    nfields = 1U;
-    if (rest != NULL && strncmp(rest, k_and_quote, strlen(k_and_quote)) == 0) {
-        other = quoted_span(rest + (strlen(k_and_quote) - 1U), NULL);
-        if (other == NULL) {
-            free(item);
-            return emit_detail(DIAG_SETTING_INVALID_VALUE, err, fix, NULL, 0U);
-        }
+    fields[0].value = shown;
+    if (other == SIZE_MAX) {
+        msg = fmt_alloc("\"%s\" isn't a bucket prefix.", shown);
+    } else if (strcmp(shown, opt->items[other]) == 0) {
+        msg = fmt_alloc("\"%s\" is in the list twice.", shown);
+    } else {
+        msg = fmt_alloc("\"%s\" and \"%s\" are the same prefix.", shown, opt->items[other]);
         fields[1].name = "other";
-        fields[1].value = other;
+        fields[1].value = opt->items[other];
         nfields = 2U;
     }
-    (void)diag_error_detail(DIAG_SETTING_INVALID_VALUE, err, fix, fields, nfields);
-    free(item);
-    free(other);
-    return REMEMBER_ERR;
+    return emit_invalid(spec, shown, msg, other == SIZE_MAX ? k_prefix_fix : k_prefix_once, fields,
+                        nfields);
 }
 
 static int report_scalar_invalid(const SettingSpec *spec, const char *value)
@@ -1586,28 +1526,28 @@ static int report_scalar_invalid(const SettingSpec *spec, const char *value)
         msg =
             fmt_alloc("\"%s\" can't be \"%s\": a duration must be a whole number of milliseconds.",
                       spec->key, value);
-        return emit_fix(DIAG_SETTING_INVALID_VALUE, msg, k_sub_ms_fix);
+        return emit_invalid(spec, value, msg, k_sub_ms_fix, NULL, 0U);
     }
     if (spec->type == SETTING_DURATION) {
         msg = fmt_alloc("\"%s\" needs a duration with a unit; you gave \"%s\".", spec->key, value);
-        return emit_fix(DIAG_SETTING_INVALID_VALUE, msg, k_duration_fix);
+        return emit_invalid(spec, value, msg, k_duration_fix, NULL, 0U);
     }
     if (spec->type == SETTING_INTEGER) {
         msg = fmt_alloc("\"%s\" needs a whole number; you gave \"%s\".", spec->key, value);
-        return emit_fix(DIAG_SETTING_INVALID_VALUE, msg, k_integer_fix);
+        return emit_invalid(spec, value, msg, k_integer_fix, NULL, 0U);
     }
     if (spec->type == SETTING_STRING) {
         msg = fmt_alloc("\"%s\" isn't a helper id.", value);
-        return emit_fix(DIAG_SETTING_INVALID_VALUE, msg, k_helper_fix);
+        return emit_invalid(spec, value, msg, k_helper_fix, NULL, 0U);
     }
     /* string_list errors carry a sentence and are reported before this. */
     return REMEMBER_ERR;
 }
 
-static int report_invalid(const SettingSpec *spec, const WriteOpts *opt, const char *err)
+static int report_invalid(const SettingSpec *spec, const WriteOpts *opt)
 {
-    if (err != NULL && err[0] != '\0') {
-        return report_prefix(err);
+    if (spec->type == SETTING_STRING_LIST) {
+        return report_prefix(spec, opt);
     }
     /* C-42-style drafts (decision:plan20-scalar-shape-draft). */
     if (opt->clear) {
@@ -1618,14 +1558,14 @@ static int report_invalid(const SettingSpec *spec, const WriteOpts *opt, const c
             free(msg);
             return report_oom();
         }
-        (void)emit_fix(DIAG_SETTING_INVALID_VALUE, msg, fix);
+        (void)emit_invalid(spec, NULL, msg, fix, NULL, 0U);
         free(fix);
         return REMEMBER_ERR;
     }
     if (opt->nitems > 1U) {
         char *msg = fmt_alloc("\"%s\" takes one value; you gave %zu.", spec->key, opt->nitems);
 
-        return emit_fix(DIAG_SETTING_INVALID_VALUE, msg, "Give one value.");
+        return emit_invalid(spec, NULL, msg, "Give one value.", NULL, 0U);
     }
     if (opt->nitems != 1U || opt->items == NULL || opt->items[0] == NULL) {
         err_msg(DIAG_INTERNAL, "internal error");
@@ -1758,7 +1698,7 @@ static int report_prepare(SettingStatus st, const SettingSpec *spec, const Write
         return REMEMBER_ERR;
     }
     if (st == SETTING_ERR_INVALID) {
-        return report_invalid(spec, opt, err);
+        return report_invalid(spec, opt);
     }
     if (st == SETTING_ERR_RANGE) {
         return report_range(spec, opt);
@@ -2085,16 +2025,21 @@ static const char *action_name_of(SettingLayer layer, bool changed)
     return "delete";
 }
 
-static int write_old_json(FILE *out, const char *old)
+/* old is stored text, so hostile (a hand edit, a peer brain). It is that key's
+   JSON or a JSON string, the history rule for a key the registry does not have. */
+static int write_old_json(FILE *out, const SettingSpec *spec, const char *old)
 {
     if (old == NULL || old[0] == '\0') {
         return fputs("null", out) < 0 ? -1 : 0;
     }
+    if (spec == NULL || !json_text_ok(spec->type, old)) {
+        return output_json_string(out, old);
+    }
     return fputs(old, out) < 0 ? -1 : 0;
 }
 
-static int write_tail(FILE *out, SettingLayer layer, const char *old, bool changed,
-                      const char *action)
+static int write_tail(FILE *out, const SettingSpec *spec, SettingLayer layer, const char *old,
+                      bool changed, const char *action)
 {
     const char *flag = "false";
 
@@ -2103,7 +2048,7 @@ static int write_tail(FILE *out, SettingLayer layer, const char *old, bool chang
     }
 
     if (fprintf(out, ",\"scope\":\"%s\",\"old_value\":", scope_name(layer)) < 0 ||
-        write_old_json(out, old) != 0 || fprintf(out, ",\"changed\":%s", flag) < 0) {
+        write_old_json(out, spec, old) != 0 || fprintf(out, ",\"changed\":%s", flag) < 0) {
         return -1;
     }
     if (action != NULL && fprintf(out, ",\"action\":\"%s\"", action) < 0) {
@@ -2165,7 +2110,7 @@ static int write_set_result(FILE *out, const SettingSpec *spec, const SettingRea
     if (write_setting_core(out, spec, read, shown, shown_opt) != 0) {
         return -1;
     }
-    return write_tail(out, layer, old, changed, NULL);
+    return write_tail(out, spec, layer, old, changed, NULL);
 }
 
 /* C-13: "<key>" is now <value> for this brain / your user, or is already. */
@@ -2479,18 +2424,22 @@ static int report_confirm(int argc, const char **argv, size_t count)
     return REMEMBER_ERR;
 }
 
+/* The key and the value can be stored text (an unregistered key, the other
+   layer's row), so the line goes through the human escape. */
 static int write_c10(const char *key, const char *display)
 {
     char *line = NULL;
-    int wrote = 0;
+    bool failed = false;
 
-    line = fmt_alloc("\"%s\" was reset. It's now %s.\n", key, display);
+    line = fmt_alloc("\"%s\" was reset. It's now %s.", key, display);
     if (line == NULL) {
         return report_oom();
     }
-    wrote = fputs(line, app_out());
+    if (output_text_human(app_out(), line, false) != 0 || fputc('\n', app_out()) == EOF) {
+        failed = true;
+    }
     free(line);
-    if (wrote < 0) {
+    if (failed) {
         err_msg(DIAG_INTERNAL, "failed to write output");
         return REMEMBER_ERR;
     }
@@ -2535,7 +2484,7 @@ static int write_unregistered(FILE *out, const ResetItem *item)
         return -1;
     }
     if (fprintf(out, ",\"scope\":\"%s\",\"old_value\":", scope) < 0 ||
-        write_old_json(out, item->old_value) != 0) {
+        write_old_json(out, NULL, item->old_value) != 0) {
         return -1;
     }
     if (fprintf(out, ",\"changed\":%s,\"action\":\"%s\"}", flag, action) < 0) {
@@ -2556,7 +2505,7 @@ static int write_registered_reset(FILE *out, const SettingSpec *spec, const Sett
         write_setting_core(out, spec, read, shown, shown_opt) != 0) {
         return -1;
     }
-    return write_tail(out, layer, old, changed, action_name_of(layer, changed));
+    return write_tail(out, spec, layer, old, changed, action_name_of(layer, changed));
 }
 
 static int emit_reset_item(Store *store, const char *userdb, bool json, bool scope_set,
@@ -2977,7 +2926,8 @@ static int parse_import(int argc, const char **argv, ImportOpts *opt)
     return 0;
 }
 
-/* The whole file, or NULL with errno set. */
+/* The whole file, or NULL with errno set. A file over REMEMBER_STDIN_MAX is
+   EFBIG (decision:plan20-import-size-cap), so /dev/zero can't grow memory. */
 static char *read_import_file(const char *path, size_t *len)
 {
     enum { READ_CHUNK = 4096 };
@@ -2999,8 +2949,14 @@ static char *read_import_file(const char *path, size_t *len)
 
         if (n == cap) {
             size_t next = (cap == 0U) ? (size_t)READ_CHUNK : cap * 2U;
+            char *grown = NULL;
+
+            /* One byte past the cap is enough to tell a file is too big. */
+            if (next > REMEMBER_STDIN_MAX + 1U) {
+                next = REMEMBER_STDIN_MAX + 1U;
+            }
             /* malloc, not realloc, so the test allocator reaches this failure. */
-            char *grown = (char *)malloc(next);
+            grown = (char *)malloc(next);
 
             if (grown == NULL) {
                 free(buf);
@@ -3018,6 +2974,12 @@ static char *read_import_file(const char *path, size_t *len)
         want = cap - n;
         got = fread(buf + n, 1U, want, f);
         n += got;
+        if (n > REMEMBER_STDIN_MAX) {
+            free(buf);
+            (void)fclose(f);
+            errno = EFBIG;
+            return NULL;
+        }
         if (got < want) {
             break; /* end of file or an error: never read the stream again */
         }
@@ -3048,9 +3010,17 @@ static int report_unreadable(const char *path)
                     diag_code_fix(DIAG_IMPORT_PARSE));
 }
 
-/* decision:plan20-import-parse-draft and decision:plan20-import-version-draft. */
+/* decision:plan20-import-parse-draft, decision:plan20-import-version-draft. */
 static int report_document(const char *path, const SettingImportReport *rep)
 {
+    if (rep->doc_error == SETTING_DOC_MIXED_SCOPES) {
+        /* decision:plan20-import-mixed-scope-draft (C-43 draft). */
+        return emit_fix(
+            DIAG_INVALID_ARGUMENT,
+            fmt_alloc("\"%s\" has user and brain settings; remember imports one scope at a time.",
+                      path),
+            "Run the command again with --scope user, then with --scope brain.");
+    }
     if (rep->doc_error == SETTING_DOC_VERSION) {
         return emit_fix(
             DIAG_IMPORT_PARSE,
@@ -4083,50 +4053,45 @@ static int cmd_settings_list(Store *store, bool json, int argc, const char **arg
     return list_emit(store, userdb, json, &opt, hit, nhit, more);
 }
 
-/* The registry's display, or the stored text for a key it does not have. */
-static void history_display(const SettingSpec *spec, const char *json, char *out, size_t cap)
+/* The registry's display, or the stored text for a key it does not have. Stored
+   text is hostile, so it streams through the human escape with no fixed buffer. */
+static int write_history_shown(FILE *out, const SettingSpec *spec, const char *json)
 {
+    char display[SETTING_VALUE_CAP];
+
     if (json == NULL) {
-        (void)snprintf(out, cap, "(unset)");
-        return;
+        return fputs("(unset)", out) < 0 ? -1 : 0;
     }
     if (spec != NULL && json_text_ok(spec->type, json) &&
-        fill_display(spec->type, json, out, cap) == 0) {
-        return;
+        fill_display(spec->type, json, display, sizeof(display)) == 0) {
+        return output_text_human(out, display, false);
     }
-    (void)snprintf(out, cap, "%s", json);
+    return output_text_human(out, json, false);
 }
 
-static void history_when(const char *at, char *out, size_t cap)
+/* The stage 5 date form, or the raw stamp when it does not parse. */
+static int write_history_when(FILE *out, const char *at)
 {
-    SettingWhen when;
+    char when[DATE_TEXT_CAP];
+    SettingWhen parts;
 
-    if (when_of_stamp(at, &when) && setting_format_when(when, out, cap)) {
-        return;
+    if (when_of_stamp(at, &parts) && setting_format_when(parts, when, sizeof(when))) {
+        return output_text_human(out, when, false);
     }
-    (void)snprintf(out, cap, "%s", at);
+    return output_text_human(out, at, false);
 }
 
 /* decision:plan20-history-plain-draft: two spaces apart, (unset) for no value. */
 static int write_history_line(FILE *out, const SettingHistoryRow *row)
 {
     const SettingSpec *spec = setting_by_key(row->key);
-    char when[DATE_TEXT_CAP];
-    char before[SETTING_VALUE_CAP];
-    char after[SETTING_VALUE_CAP];
-    char line[(SETTING_VALUE_CAP * 2) + (SETTING_KEY_MAX * 2)];
     ActorParts who = actor_parts(row->updated_by);
-    int n = 0;
 
-    history_when(row->at, when, sizeof(when));
-    history_display(spec, row->old_value, before, sizeof(before));
-    history_display(spec, row->new_value, after, sizeof(after));
-    n = snprintf(line, sizeof(line), "%s  %s  %s  %s \xE2\x86\x92 %s", when, scope_name(row->scope),
-                 row->key, before, after);
-    if (n < 0) {
-        return -1;
-    }
-    if (output_text_human(out, line, false) != 0) {
+    if (write_history_when(out, row->at) != 0 ||
+        fprintf(out, "  %s  ", scope_name(row->scope)) < 0 ||
+        output_text_human(out, row->key, false) != 0 || fputs("  ", out) < 0 ||
+        write_history_shown(out, spec, row->old_value) != 0 || fputs(" \xE2\x86\x92 ", out) < 0 ||
+        write_history_shown(out, spec, row->new_value) != 0) {
         return -1;
     }
     if (who.ok && fprintf(out, "  by %s", who.kind) < 0) {

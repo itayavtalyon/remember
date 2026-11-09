@@ -22,6 +22,13 @@ void err_msg(DiagCode code, const char *msg);
 __attribute__((format(printf, 2, 3)))
 #endif
 void err_fmt(DiagCode code, const char *fmt, ...);
+/* printf into a new buffer the caller frees. NULL when out of memory. */
+#ifdef __GNUC__
+__attribute__((format(printf, 1, 2)))
+#endif
+char *fmt_alloc(const char *fmt, ...);
+/* Days in a Gregorian month; 0 for a month outside 1..12. */
+int days_in_month(int year, int month);
 
 /* SQLITE failures (E4.7 class → E4.8 text + E4.9 detail); anything else keeps
    the code_for_store_status code with the legacy store_status_message text. */

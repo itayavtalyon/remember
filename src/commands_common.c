@@ -201,37 +201,71 @@ void err_msg(DiagCode code, const char *msg)
     (void)diag_error(code, msg);
 }
 
-void err_fmt(DiagCode code, const char *fmt, ...)
+#ifdef __clang__
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wallocator-wrappers"
+#endif
+/* Measure, then write. The measure pass uses a copy: a va_list can be
+   consumed only once. NULL when vsnprintf or malloc fails. */
+#ifdef __GNUC__
+__attribute__((format(printf, 1, 0)))
+#endif
+static char *fmt_valloc(const char *fmt, va_list vargs)
 {
-    /* va_list has no portable initializer. Measure, then write. Each pass
-       starts its own list: a va_list can be consumed only once. x86_64 clang
-       18 records va_start and vsnprintf on different regions. */
     /* NOLINTNEXTLINE(cppcoreguidelines-init-variables) */
-    va_list vargs;
+    va_list measure;
     int wrote = 0;
     char *buf = NULL;
 
-    va_start(vargs, fmt);
+    va_copy(measure, vargs);
     /* NOLINTNEXTLINE(clang-analyzer-valist.Uninitialized) -- array va_list mismatch */
-    wrote = vsnprintf(NULL, 0, fmt, vargs);
-    va_end(vargs);
+    wrote = vsnprintf(NULL, 0, fmt, measure);
+    va_end(measure);
     if (wrote < 0) {
-        err_msg(DIAG_INTERNAL, "internal error");
-        return;
+        return NULL;
     }
     buf = (char *)malloc((size_t)wrote + 1U);
+    if (buf == NULL) {
+        return NULL;
+    }
+    /* NOLINTNEXTLINE(clang-analyzer-valist.Uninitialized) -- array va_list mismatch */
+    if (vsnprintf(buf, (size_t)wrote + 1U, fmt, vargs) != wrote) {
+        free(buf);
+        return NULL;
+    }
+    return buf;
+}
+
+/* cppcheck-suppress staticFunction ; public API (commands_common.h) */
+char *fmt_alloc(const char *fmt, ...)
+{
+    /* NOLINTNEXTLINE(cppcoreguidelines-init-variables) */
+    va_list vargs;
+    char *buf = NULL;
+
+    va_start(vargs, fmt);
+    buf = fmt_valloc(fmt, vargs);
+    va_end(vargs);
+    return buf;
+}
+#ifdef __clang__
+#pragma clang diagnostic pop
+#endif
+
+void err_fmt(DiagCode code, const char *fmt, ...)
+{
+    /* NOLINTNEXTLINE(cppcoreguidelines-init-variables) */
+    va_list vargs;
+    char *buf = NULL;
+
+    va_start(vargs, fmt);
+    buf = fmt_valloc(fmt, vargs);
+    va_end(vargs);
     if (buf == NULL) {
         err_msg(DIAG_OUT_OF_MEMORY, "out of memory");
         return;
     }
-    va_start(vargs, fmt);
-    /* NOLINTNEXTLINE(clang-analyzer-valist.Uninitialized) -- array va_list mismatch */
-    if (vsnprintf(buf, (size_t)wrote + 1U, fmt, vargs) != wrote) {
-        err_msg(DIAG_INTERNAL, "internal error");
-    } else {
-        err_msg(code, buf);
-    }
-    va_end(vargs);
+    err_msg(code, buf);
     free(buf);
 }
 
@@ -1084,7 +1118,8 @@ static int is_leap_year(int year)
     return (year % YEARS_PER_LEAP == 0) ? 1 : 0;
 }
 
-static int days_in_month(CivilTime date)
+/* cppcheck-suppress staticFunction ; public API (commands_common.h) */
+int days_in_month(int year, int month)
 {
     static const int k_days[MONTH_MAX + 1] = {0,
                                               DAY_MAX_LONG,
@@ -1099,13 +1134,13 @@ static int days_in_month(CivilTime date)
                                               DAY_MAX_LONG,
                                               DAY_MAX_SHORT,
                                               DAY_MAX_LONG};
-    if (date.month < 1 || date.month > MONTH_MAX) {
+    if (month < 1 || month > MONTH_MAX) {
         return 0;
     }
-    if (date.month == MONTH_FEB && is_leap_year(date.year) != 0) {
+    if (month == MONTH_FEB && is_leap_year(year) != 0) {
         return DAY_MAX_LEAP;
     }
-    return k_days[date.month];
+    return k_days[month];
 }
 
 /* 0 when the civil fields are a real clock time. Seconds stop at 59. */
@@ -1114,7 +1149,7 @@ static int civil_fields_ok(CivilTime when)
     if (when.year < 1 || when.year > YEAR_MAX || when.month < 1 || when.month > MONTH_MAX) {
         return -1;
     }
-    if (when.day < 1 || when.day > days_in_month(when)) {
+    if (when.day < 1 || when.day > days_in_month(when.year, when.month)) {
         return -1;
     }
     if (when.hour < 0 || when.hour > HOUR_MAX || when.min < 0 || when.min > MINUTE_MAX ||

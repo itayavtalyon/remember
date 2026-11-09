@@ -17,8 +17,8 @@
 static const char k_unavailable_fmt[] = "the sync credential helper \"%s\" did not return a token.";
 
 /* Key is set and nothing usable came back. Wipes token before the notice. */
-/* TODO(pragmatic:) err_fmt measures and allocates the same way. When stage 9
-   adds more fix sentences, give it a fix argument and call it here. */
+/* intentional: fmt_alloc lives in the CLI's commands_common, which the
+   library does not include. One %s, sized by strlen, needs no second pass. */
 static int emit_unavailable(const char *id, char *token, size_t token_cap)
 {
     const char *shown = id != NULL ? id : "";

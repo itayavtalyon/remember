@@ -337,6 +337,9 @@ Plan 20 stage 8 drafts (`settings import`, Itay grill, 2026-11-08). Same status:
 - `--dry-run` plain line (`decision:plan20-import-dry-run-draft`). `Would import "<path>": <n> settings written, <n> unchanged, <n> skipped. Nothing was changed.`
 - Warning `detail` members. `setting_import_skipped` `{key, scope, reason}`: `scope` is null when the row's scope is not `brain` or `user`. `setting_invalid` `{key, value, reason}` for `invalid_value` and `bad_shape`: `value` is the row's value as text, a string without its quotes; `key` and `value` are null when the row has none (ST-8.4).
 
+- `invalid_argument`, a file with user and brain rows and no `--scope` (`decision:plan20-import-mixed-scope-draft`, whole-plan review grill 2026-11-09). Message `"<path>" has user and brain settings; remember imports one scope at a time.` Fix `Run the command again with --scope user, then with --scope brain.`
+- `import_parse`, a file over 16 MiB (`decision:plan20-import-size-cap`). No new words: the `can't read "<path>": <system error>.` draft with the system's `File too large`.
+
 Plan 20 stage 9 drafts (`settings list`, `history`, `explain`, Itay grill, 2026-11-08). Same status: printed, not approved.
 
 - Key descriptions for `settings explain` (`decision:plan20-explain-description-drafts`). `remember.buckets.prefixes` `The tag prefixes that group memories into buckets.` `remember.sync.credential_helper` `The program that gives sync its access token.` `remember.search.candidate_pool` `How many keyword matches search looks at before filters rank them.` `remember.search.max_results` `How many results search shows after filters rank them.` `remember.plugins.chain_budget` `How long all plugin filters together may run for one command.` `remember.plugins.idle_timeout` `How long a plugin may sit idle before remember stops it.`

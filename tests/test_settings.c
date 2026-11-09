@@ -17,6 +17,7 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <signal.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -1222,6 +1223,32 @@ TEST(quota_counts_settings_rows_not_history)
     close_pair(store, tmpl);
 }
 
+/* A9: the store words nothing; the caller gets the indices. */
+// NOLINTNEXTLINE(bugprone-easily-swappable-parameters) count, then the two indices
+static void assert_prefix_issue(const char *const *items, size_t nitems, size_t want_item,
+                                size_t want_other)
+{
+    size_t item = 99U;
+    size_t other = 99U;
+
+    ASSERT_EQ_INT(setting_prefix_issue(items, nitems, &item, &other), SETTING_ERR_INVALID);
+    ASSERT_EQ_INT((long long)item, (long long)want_item);
+    ASSERT_TRUE(other == want_other);
+}
+
+/* The one calendar both stamp parsers share (commands_common.h). */
+TEST(days_in_month_knows_leap_years_and_refuses_a_bad_month)
+{
+    ASSERT_EQ_INT(days_in_month(2024, 2), 29);
+    ASSERT_EQ_INT(days_in_month(2000, 2), 29);
+    ASSERT_EQ_INT(days_in_month(1900, 2), 28);
+    ASSERT_EQ_INT(days_in_month(2026, 2), 28);
+    ASSERT_EQ_INT(days_in_month(2026, 4), 30);
+    ASSERT_EQ_INT(days_in_month(2026, 12), 31);
+    ASSERT_EQ_INT(days_in_month(2026, 0), 0);
+    ASSERT_EQ_INT(days_in_month(2026, 13), 0);
+}
+
 TEST(prefixes_default_scope_and_sixteen_kib)
 {
     enum { PREFIX_FITS = 2340, PREFIX_OVER = 2341, PREFIX_BEFORE = 2339, PREFIX_JSON_FITS = 16381 };
@@ -1277,15 +1304,18 @@ TEST(prefixes_default_scope_and_sixteen_kib)
     st = set_items(store, NULL, "remember.buckets.prefixes", &bad, 1U, SETTING_LAYER_AUTO, NULL,
                    &wr, err, sizeof(err));
     ASSERT_EQ_INT(st, SETTING_ERR_INVALID);
-    ASSERT_STREQ(err, "\"my project:\" isn't a bucket prefix.");
+    ASSERT_STREQ(err, "");
+    assert_prefix_issue(&bad, 1U, 0U, SIZE_MAX);
     st = set_items(store, NULL, "remember.buckets.prefixes", twice, 2U, SETTING_LAYER_AUTO, NULL,
                    &wr, err, sizeof(err));
     ASSERT_EQ_INT(st, SETTING_ERR_INVALID);
-    ASSERT_STREQ(err, "\"status:\" is in the list twice.");
+    ASSERT_STREQ(err, "");
+    assert_prefix_issue(twice, 2U, 1U, 0U);
     st = set_items(store, NULL, "remember.buckets.prefixes", same, 2U, SETTING_LAYER_AUTO, NULL,
                    &wr, err, sizeof(err));
     ASSERT_EQ_INT(st, SETTING_ERR_INVALID);
-    ASSERT_STREQ(err, "\"status:\" and \"Status:\" are the same prefix.");
+    ASSERT_STREQ(err, "");
+    assert_prefix_issue(same, 2U, 1U, 0U);
     assert_query(brain, "SELECT value FROM settings WHERE key = 'remember.buckets.prefixes';",
                  "[\"project:\",\"area:\"]");
 
@@ -1303,6 +1333,9 @@ TEST(prefixes_default_scope_and_sixteen_kib)
     ASSERT_EQ_INT(st, SETTING_ERR_QUOTA);
     ASSERT_STREQ(setting_status_code(st), "quota_exceeded");
     ASSERT_STREQ(err, "");
+    ASSERT_EQ_INT(setting_prefix_issue(shortest, nshort, &i, &i), SETTING_ERR_QUOTA);
+    ASSERT_EQ_INT(setting_prefix_issue(shortest, 0U, &i, &i), SETTING_OK);
+    ASSERT_EQ_INT(setting_prefix_issue(pair, 2U, &i, &i), SETTING_OK);
     free((void *)shortest);
 
     block = make_prefixes((size_t)PREFIX_OVER, &items);
@@ -1551,6 +1584,68 @@ TEST(rejected_values_do_not_create_user_db)
     close_pair(store, tmpl);
 }
 
+/* Every user.db opener refuses a symlink, not only the one that creates the file.
+   Before the whole-plan review a reset wrote through it into the target. */
+TEST(user_db_symlink_is_refused_by_every_opener)
+{
+    char tmpl[] = "/tmp/remember-udb-link-XXXXXX";
+    char brain[REMEMBER_PATH_MAX];
+    char userdb[REMEMBER_PATH_MAX];
+    char real[REMEMBER_PATH_MAX];
+    char err[256];
+    const char *doc =
+        "{\"format\":\"remember-settings-export\",\"version\":1,\"settings\":[{\"key\":"
+        "\"remember.search.max_results\",\"scope\":\"user\",\"value\":9,\"updated_by\":{"
+        "\"kind\":\"human\",\"id\":null},\"updated_at\":\"2099-01-01T00:00:00.000Z\","
+        "\"device_id\":\"\",\"version_vector\":{},\"deleted_at\":null}]}";
+    SettingWriteResult wr;
+    SettingRead read;
+    SettingStoredRow *rows = NULL;
+    SettingExportRow *exported = NULL;
+    SettingHistoryRow *changes = NULL;
+    SettingImportReport rep;
+    SettingHistoryQuery query;
+    size_t n = 0;
+    Store *store = open_pair(tmpl, brain, sizeof(brain), userdb, sizeof(userdb));
+
+    if (store == NULL) {
+        return;
+    }
+    ASSERT_EQ_INT(set_one(store, userdb, "remember.search.max_results", "7", SETTING_LAYER_USER,
+                          NULL, &wr, err, sizeof(err)),
+                  SETTING_OK);
+    (void)snprintf(real, sizeof(real), "%s/real.db", tmpl);
+    ASSERT_EQ_INT(rename(userdb, real), 0);
+    ASSERT_EQ_INT(symlink(real, userdb), 0);
+
+    ASSERT_EQ_INT(store_setting_read(store, userdb, "remember.search.max_results", NULL, &read, err,
+                                     sizeof(err)),
+                  SETTING_ERR_STORE);
+    ASSERT_TRUE(strncmp(err, "cannot open database", strlen("cannot open database")) == 0);
+    ASSERT_EQ_INT(store_setting_reset(store, userdb, "remember.search.max_results",
+                                      SETTING_LAYER_USER, NULL, &wr, err, sizeof(err)),
+                  SETTING_ERR_STORE);
+    ASSERT_EQ_INT(
+        store_setting_list_live(store, userdb, SETTING_LAYER_USER, &rows, &n, err, sizeof(err)),
+        SETTING_ERR_STORE);
+    ASSERT_EQ_INT(
+        store_setting_export(store, userdb, SETTING_LAYER_USER, &exported, &n, err, sizeof(err)),
+        SETTING_ERR_STORE);
+    memset(&query, 0, sizeof(query));
+    query.want = 5U;
+    query.only = SETTING_LAYER_USER;
+    ASSERT_EQ_INT(store_setting_history(store, userdb, &query, &changes, &n, err, sizeof(err)),
+                  SETTING_ERR_STORE);
+    memset(&rep, 0, sizeof(rep));
+    ASSERT_EQ_INT(store_setting_import(store, userdb, doc, strlen(doc), SETTING_LAYER_AUTO, false,
+                                       &rep, err, sizeof(err)),
+                  SETTING_ERR_STORE);
+
+    assert_query(real, "SELECT value FROM settings;", "7");
+    assert_query(real, "SELECT COUNT(*) FROM settings_history;", "1");
+    close_pair(store, tmpl);
+}
+
 TEST(programmer_errors_and_a_failed_prepare)
 {
     char tmpl[] = "/tmp/remember-set-XXXXXX";
@@ -1616,7 +1711,8 @@ TEST(programmer_errors_and_a_failed_prepare)
     st = set_items(store, NULL, "remember.buckets.prefixes", &blank, 1U, SETTING_LAYER_BRAIN, NULL,
                    &wr, err, sizeof(err));
     ASSERT_EQ_INT(st, SETTING_ERR_INVALID);
-    ASSERT_STREQ(err, "\"\" isn't a bucket prefix.");
+    ASSERT_STREQ(err, "");
+    assert_prefix_issue(&blank, 1U, 0U, SIZE_MAX);
     ASSERT_TRUE(access(userdb, F_OK) != 0);
 
     test_alloc_fail_after(0);
@@ -5122,7 +5218,8 @@ TEST(set_clear_writes_an_empty_prefix_list)
                  "result\",\"error\":{\"code\":\"setting_invalid_value\",\"message\":\"\\\""
                  "remember.search.max_results\\\" isn't a list, so --clear can't empty "
                  "it.\",\"fix\":\"Set a value, or run 'remember settings reset "
-                 "remember.search.max_results'.\",\"retryable\":false}}\n");
+                 "remember.search.max_results'.\",\"retryable\":false,\"detail\":{\"key\":"
+                 "\"remember.search.max_results\",\"type\":\"integer\"}}}\n");
     ASSERT_TRUE(access(userdb, F_OK) != 0);
     cmd_result_free(&got);
     harness_remove_tree(tmpl);
@@ -5145,6 +5242,9 @@ TEST(set_invalid_value_names_the_kind)
     const char *cleared[] = {"settings", "set", "remember.search.candidate_pool", "--clear"};
     const char *cleared_json[] = {"--json", "settings", "set", "remember.search.candidate_pool",
                                   "--clear"};
+    const char *unit_json[] = {"--json", "settings", "set", "remember.plugins.chain_budget", "45"};
+    const char *two_json[] = {"--json", "settings", "set", "remember.search.candidate_pool",
+                              "20",     "21"};
     CmdResult got;
 
     if (store == NULL) {
@@ -5203,7 +5303,19 @@ TEST(set_invalid_value_names_the_kind)
                  "\"error\":{\"code\":\"setting_invalid_value\",\"message\":\"\\\"remember.search."
                  "candidate_pool\\\" isn't a list, so --clear can't empty it.\",\"fix\":\"Set a "
                  "value, or run 'remember settings reset remember.search.candidate_pool'.\","
-                 "\"retryable\":false}}\n");
+                 "\"retryable\":false,\"detail\":{\"key\":\"remember.search.candidate_pool\","
+                 "\"type\":\"integer\"}}}\n");
+    cmd_result_free(&got);
+    /* D1: key, the value as typed, and type (decision:plan20-invalid-value-detail). */
+    got = get_at(brain, userdb, unit_json, sizeof(unit_json) / sizeof(unit_json[0]));
+    ASSERT_EQ_INT(got.exit_code, 1);
+    ASSERT_STR_CONTAINS(got.out, "\"detail\":{\"key\":\"remember.plugins.chain_budget\","
+                                 "\"value\":\"45\",\"type\":\"duration\"}}}\n");
+    cmd_result_free(&got);
+    got = get_at(brain, userdb, two_json, sizeof(two_json) / sizeof(two_json[0]));
+    ASSERT_EQ_INT(got.exit_code, 1);
+    ASSERT_STR_CONTAINS(got.out, "\"detail\":{\"key\":\"remember.search.candidate_pool\","
+                                 "\"type\":\"integer\"}}}\n");
     cmd_result_free(&got);
     got = get_at(brain, userdb, ended, sizeof(ended) / sizeof(ended[0]));
     ASSERT_EQ_INT(got.exit_code, 1);
@@ -5211,6 +5323,52 @@ TEST(set_invalid_value_names_the_kind)
     ASSERT_TRUE(access(userdb, F_OK) != 0);
     cmd_result_free(&got);
     harness_remove_tree(tmpl);
+}
+
+/* A9: the item comes from argv, not parsed back out of a sized sentence. */
+static void assert_prefix_items_survive_any_length(const char *brain, const char *userdb)
+{
+    enum { LONG_ITEM = 9000 };
+    char *item = (char *)malloc(LONG_ITEM + 1U);
+    char *want = NULL;
+    const char *argv[] = {"--json", "settings", "set", "remember.buckets.prefixes", item};
+    const char *quoted[] = {"--json", "settings", "set", "remember.buckets.prefixes", "a\"b:"};
+    const char *plain[] = {"settings", "set", "remember.buckets.prefixes", item};
+    CmdResult got;
+
+    ASSERT_TRUE(item != NULL);
+    if (item == NULL) {
+        return;
+    }
+    memset(item, 'x', LONG_ITEM);
+    item[LONG_ITEM] = '\0';
+    want = (char *)malloc(LONG_ITEM + 64U);
+    ASSERT_TRUE(want != NULL);
+    if (want == NULL) {
+        free(item);
+        return;
+    }
+    (void)snprintf(want, LONG_ITEM + 64U, "\"type\":\"string_list\",\"item\":\"%s\"}", item);
+    got = get_at(brain, userdb, argv, sizeof(argv) / sizeof(argv[0]));
+    ASSERT_EQ_INT(got.exit_code, 1);
+    ASSERT_STR_CONTAINS(got.out, "isn't a bucket prefix.\",\"fix\":\"Use 1 to 32 letters");
+    ASSERT_STR_CONTAINS(got.out, want);
+    cmd_result_free(&got);
+    got = get_at(brain, userdb, plain, sizeof(plain) / sizeof(plain[0]));
+    ASSERT_EQ_INT(got.exit_code, 1);
+    ASSERT_EQ_INT((long long)strlen(got.err),
+                  (long long)(strlen("remember: \"\" isn't a bucket prefix. ") + LONG_ITEM +
+                              strlen("Use 1 to 32 letters, digits, \"-\", \"_\" or \".\", then "
+                                     "one \":\", like \"project:\".") +
+                              1U));
+    cmd_result_free(&got);
+    got = get_at(brain, userdb, quoted, sizeof(quoted) / sizeof(quoted[0]));
+    ASSERT_EQ_INT(got.exit_code, 1);
+    ASSERT_STR_CONTAINS(got.out, "\"value\":\"a\\\"b:\",\"type\":\"string_list\","
+                                 "\"item\":\"a\\\"b:\"}");
+    cmd_result_free(&got);
+    free(want);
+    free(item);
 }
 
 TEST(set_prefix_errors_name_the_item)
@@ -5236,7 +5394,8 @@ TEST(set_prefix_errors_name_the_item)
                  "\"error\":{\"code\":\"setting_invalid_value\",\"message\":\"\\\"nope\\\" isn't a "
                  "bucket prefix.\",\"fix\":\"Use 1 to 32 letters, digits, \\\"-\\\", \\\"_\\\" or "
                  "\\\".\\\", then one \\\":\\\", like \\\"project:\\\".\",\"retryable\":false,"
-                 "\"detail\":{\"item\":\"nope\"}}}\n");
+                 "\"detail\":{\"key\":\"remember.buckets.prefixes\",\"value\":\"nope\","
+                 "\"type\":\"string_list\",\"item\":\"nope\"}}}\n");
     cmd_result_free(&got);
     got = get_at(brain, userdb, twice, sizeof(twice) / sizeof(twice[0]));
     ASSERT_EQ_INT(got.exit_code, 1);
@@ -5248,11 +5407,13 @@ TEST(set_prefix_errors_name_the_item)
                  "{\"format\":\"remember-message\",\"version\":1,\"type\":\"setting.set.result\","
                  "\"error\":{\"code\":\"setting_invalid_value\",\"message\":\"\\\"Project:\\\" "
                  "and \\\"project:\\\" are the same prefix.\",\"fix\":\"List each prefix once.\","
-                 "\"retryable\":false,\"detail\":{\"item\":\"Project:\",\"other\":\"project:\"}}"
-                 "}\n");
+                 "\"retryable\":false,\"detail\":{\"key\":\"remember.buckets.prefixes\","
+                 "\"value\":\"Project:\",\"type\":\"string_list\",\"item\":\"Project:\","
+                 "\"other\":\"project:\"}}}\n");
     ASSERT_TRUE(access(userdb, F_OK) != 0);
     assert_query(brain, "SELECT COUNT(*) FROM settings", "0");
     cmd_result_free(&got);
+    assert_prefix_items_survive_any_length(brain, userdb);
     harness_remove_tree(tmpl);
 }
 
@@ -5956,7 +6117,7 @@ static const char k_imp_bad_pool[] =
     "\"updated_by\":{\"kind\":\"human\",\"id\":null},\"updated_at\":\"2026-10-16T07:58:00.000Z\","
     "\"device_id\":\"\",\"version_vector\":{},\"deleted_at\":null}";
 static const char k_imp_unknown[] =
-    "{\"key\":\"plugin.hybrid.weight\",\"scope\":\"brain\",\"value\":1,\"updated_by\":"
+    "{\"key\":\"plugin.hybrid.weight\",\"scope\":\"user\",\"value\":1,\"updated_by\":"
     "{\"kind\":\"human\",\"id\":null},\"updated_at\":\"2026-10-16T07:58:00.000Z\","
     "\"device_id\":\"01a0d90a-e71c-7a0a-bb2c-3b377482fa51\",\"version_vector\":{},"
     "\"deleted_at\":null}";
@@ -6052,6 +6213,8 @@ TEST(import_round_trips_an_export)
                                "--actor",  "bot1"};
     const char *exp[] = {"settings", "export"};
     const char *imp[] = {"settings", "import", file};
+    const char *imp_user[] = {"settings", "import", file, "--scope", "user"};
+    const char *imp_brain[] = {"settings", "import", file, "--scope", "brain"};
     char want[160];
     Store *store = open_pair(tmpl, brain, sizeof(brain), userdb, sizeof(userdb));
     Store *other = NULL;
@@ -6091,12 +6254,24 @@ TEST(import_round_trips_an_export)
         return;
     }
     store_close(other);
+    /* An export holds both scopes, so it imports in two runs (D6). */
     got = import_at(brain2, userdb2, imp, 3U);
+    ASSERT_EQ_INT(got.exit_code, 1);
+    ASSERT_STR_CONTAINS(got.err, "has user and brain settings; remember imports one scope at a "
+                                 "time. Run the command again with --scope user, then with "
+                                 "--scope brain.\n");
+    cmd_result_free(&got);
+    assert_query(brain2, "SELECT COUNT(*) FROM settings", "0");
+    ASSERT_TRUE(access(userdb2, F_OK) != 0);
+    got = import_at(brain2, userdb2, imp_user, 5U);
     ASSERT_EQ_INT(got.exit_code, 0);
-    ASSERT_STREQ(got.err, "");
     ASSERT_TRUE(snprintf(want, sizeof(want),
-                         "Imported \"%s\": 4 settings written, 0 unchanged, 0 skipped.\n",
+                         "Imported \"%s\": 2 settings written, 0 unchanged, 2 skipped.\n",
                          file) > 0);
+    ASSERT_STREQ(got.out, want);
+    cmd_result_free(&got);
+    got = import_at(brain2, userdb2, imp_brain, 5U);
+    ASSERT_EQ_INT(got.exit_code, 0);
     ASSERT_STREQ(got.out, want);
     cmd_result_free(&got);
     got = import_at(brain2, userdb2, exp, 2U);
@@ -6112,10 +6287,13 @@ TEST(import_round_trips_an_export)
                  "settings_history WHERE key = 'remember.search.max_results'",
                  "{\"kind\":\"agent\",\"id\":\"peer\"}|2026-10-24T09:13:00.000Z|null");
     /* The same file again changes nothing. */
-    got = import_at(brain2, userdb2, imp, 3U);
     ASSERT_TRUE(snprintf(want, sizeof(want),
-                         "Imported \"%s\": 0 settings written, 4 unchanged, 0 skipped.\n",
+                         "Imported \"%s\": 0 settings written, 2 unchanged, 2 skipped.\n",
                          file) > 0);
+    got = import_at(brain2, userdb2, imp_user, 5U);
+    ASSERT_STREQ(got.out, want);
+    cmd_result_free(&got);
+    got = import_at(brain2, userdb2, imp_brain, 5U);
     ASSERT_STREQ(got.out, want);
     cmd_result_free(&got);
     assert_query(brain2, "SELECT COUNT(*) FROM settings_history", "2");
@@ -6173,7 +6351,7 @@ TEST(import_skips_a_bad_value_and_an_unknown_key)
         "\"action\":\"none\",\"reason\":\"invalid_value\"},"
         "{\"key\":\"remember.search.max_results\",\"scope\":\"user\",\"result\":\"unchanged\","
         "\"action\":\"none\"},"
-        "{\"key\":\"plugin.hybrid.weight\",\"scope\":\"brain\",\"result\":\"skipped\","
+        "{\"key\":\"plugin.hybrid.weight\",\"scope\":\"user\",\"result\":\"skipped\","
         "\"action\":\"none\",\"reason\":\"unknown_key\"}]}");
     ASSERT_STR_CONTAINS(got.out,
                         "{\"code\":\"setting_invalid\",\"message\":\"skipped "
@@ -6183,7 +6361,7 @@ TEST(import_skips_a_bad_value_and_an_unknown_key)
     ASSERT_STR_CONTAINS(got.out, "{\"code\":\"setting_import_skipped\",\"message\":\"skipped "
                                  "\\\"plugin.hybrid.weight\\\": remember has no setting by that "
                                  "name.\",\"detail\":{\"key\":\"plugin.hybrid.weight\","
-                                 "\"scope\":\"brain\",\"reason\":\"unknown_key\"}}");
+                                 "\"scope\":\"user\",\"reason\":\"unknown_key\"}}");
     cmd_result_free(&got);
     assert_query(brain, "SELECT COUNT(*) FROM settings", "0");
     harness_remove_tree(tmpl);
@@ -6204,6 +6382,14 @@ TEST(import_skips_bad_shapes_and_bad_fields)
         "{\"key\":\"remember.search.max_results\",\"scope\":\"user\",\"value\":5,"
         "\"updated_by\":{\"kind\":\"human\",\"id\":null},\"updated_at\":"
         "\"2026-10-16T07:58:00.000Z\",\"deleted_at\":\"2026-10-16T07:58:00.000Z\"}",
+        "{\"key\":\"remember.search.max_results\",\"scope\":\"user\",\"value\":5,"
+        "\"updated_by\":{\"kind\":\"human\",\"id\":null},\"updated_at\":"
+        "\"2026-10-16T07:58:00.000Z\",\"device_id\":\"not checked\",\"version_vector\":7}",
+        "{\"key\":\"remember.search.max_results\\u0000x\",\"scope\":\"user\",\"value\":5}",
+        "{\"key\":\"remember.plugins.chain_budget\",\"scope\":\"user\",\"value\":"
+        "\"2s\\u0000\"}"};
+    /* One file per scope (decision:plan20-import-one-file-per-run). */
+    static const char *const brain_rows[] = {
         "{\"key\":\"remember.search.max_results\",\"scope\":\"brain\",\"value\":5,"
         "\"updated_by\":{\"kind\":\"human\",\"id\":null},\"updated_at\":"
         "\"2026-10-16T07:58:00.000Z\",\"device_id\":\"dev-a\"}",
@@ -6215,12 +6401,6 @@ TEST(import_skips_bad_shapes_and_bad_fields)
         "\"updated_by\":{\"kind\":\"human\",\"id\":null},\"updated_at\":"
         "\"2026-10-16T07:58:00.000Z\",\"device_id\":\"01a0d90a-e71c-7a0a-bb2c-3b377482fa51\","
         "\"version_vector\":{},\"deleted_at\":5}",
-        "{\"key\":\"remember.search.max_results\",\"scope\":\"user\",\"value\":5,"
-        "\"updated_by\":{\"kind\":\"human\",\"id\":null},\"updated_at\":"
-        "\"2026-10-16T07:58:00.000Z\",\"device_id\":\"not checked\",\"version_vector\":7}",
-        "{\"key\":\"remember.search.max_results\\u0000x\",\"scope\":\"user\",\"value\":5}",
-        "{\"key\":\"remember.plugins.chain_budget\",\"scope\":\"user\",\"value\":"
-        "\"2s\\u0000\"}",
         "{\"key\":\"remember.buckets.prefixes\",\"scope\":\"brain\",\"value\":[\"a:\",5]}"};
     char tmpl[] = "/tmp/remember-import-shape-XXXXXX";
     char brain[REMEMBER_PATH_MAX];
@@ -6253,19 +6433,11 @@ TEST(import_skips_bad_shapes_and_bad_fields)
                  "isn't valid.\n"
                  "remember: warning: skipped \"remember.search.max_results\": its \"deleted_at\" "
                  "isn't valid.\n"
-                 "remember: warning: skipped \"remember.search.max_results\": its \"device_id\" "
-                 "isn't valid.\n"
-                 "remember: warning: skipped \"remember.search.max_results\": its "
-                 "\"version_vector\" isn't valid.\n"
-                 "remember: warning: skipped \"remember.search.max_results\": its \"deleted_at\" "
-                 "isn't valid.\n"
-                 "remember: warning: skipped row 12 in the settings file because it isn't a "
+                 "remember: warning: skipped row 9 in the settings file because it isn't a "
                  "setting (each row needs a \"key\").\n"
                  "remember: warning: skipped \"remember.plugins.chain_budget\": \"null\" isn't a "
-                 "valid value.\n"
-                 "remember: warning: skipped \"remember.buckets.prefixes\": \"[\"a:\",5]\" isn't "
-                 "a valid value.\n");
-    ASSERT_STR_CONTAINS(got.out, "1 settings written, 0 unchanged, 13 skipped.");
+                 "valid value.\n");
+    ASSERT_STR_CONTAINS(got.out, "1 settings written, 0 unchanged, 9 skipped.");
     cmd_result_free(&got);
     got = import_at(brain, userdb, json, 4U);
     ASSERT_STR_CONTAINS(got.out, "{\"key\":null,\"scope\":null,\"result\":\"skipped\","
@@ -6277,9 +6449,78 @@ TEST(import_skips_bad_shapes_and_bad_fields)
                                  "\"bad_shape\"}");
     ASSERT_STR_CONTAINS(got.out, "\"detail\":{\"key\":null,\"value\":\"5\",\"reason\":"
                                  "\"bad_shape\"}");
+    cmd_result_free(&got);
+    write_doc(file, sizeof(file), tmpl, "shape.json", brain_rows,
+              sizeof(brain_rows) / sizeof(brain_rows[0]));
+    got = import_at(brain, userdb, imp, 3U);
+    ASSERT_EQ_INT(got.exit_code, 0);
+    ASSERT_STREQ(got.err,
+                 "remember: warning: skipped \"remember.search.max_results\": its \"device_id\" "
+                 "isn't valid.\n"
+                 "remember: warning: skipped \"remember.search.max_results\": its "
+                 "\"version_vector\" isn't valid.\n"
+                 "remember: warning: skipped \"remember.search.max_results\": its \"deleted_at\" "
+                 "isn't valid.\n"
+                 "remember: warning: skipped \"remember.buckets.prefixes\": \"[\"a:\",5]\" isn't "
+                 "a valid value.\n");
+    cmd_result_free(&got);
+    got = import_at(brain, userdb, json, 4U);
     ASSERT_STR_CONTAINS(got.out, "\"detail\":{\"key\":\"remember.search.max_results\","
                                  "\"field\":\"version_vector\",\"reason\":\"bad_field\"}");
     cmd_result_free(&got);
+    harness_remove_tree(tmpl);
+}
+
+/* A4: a canonical vector too wide to merge is one bad row, not a failed import. */
+static const char k_imp_wide_neighbour[] =
+    "{\"key\":\"remember.search.candidate_pool\",\"scope\":\"brain\",\"value\":400,"
+    "\"updated_by\":{\"kind\":\"human\",\"id\":null},\"updated_at\":"
+    "\"2026-10-16T07:58:00.000Z\",\"device_id\":\"01a0d90a-e71c-7a0a-bb2c-3b377482fa51\","
+    "\"version_vector\":{},\"deleted_at\":null}";
+
+TEST(import_skips_a_vector_too_wide_to_merge)
+{
+    /* 99 members and 36 two-digit counts make the vector exactly 4096 bytes. */
+    enum { WIDE = 99, TWO_DIGIT = 36, ROW_CAP = 6144 };
+    char tmpl[] = "/tmp/remember-import-wide-XXXXXX";
+    char brain[REMEMBER_PATH_MAX];
+    char userdb[REMEMBER_PATH_MAX];
+    char file[REMEMBER_PATH_MAX];
+    char row[ROW_CAP];
+    const char *rows[] = {row, k_imp_wide_neighbour};
+    const char *json[] = {"--json", "settings", "import", file};
+    Store *store = open_pair(tmpl, brain, sizeof(brain), userdb, sizeof(userdb));
+    CmdResult got;
+    size_t pos = 0;
+    int i = 0;
+
+    if (store == NULL) {
+        return;
+    }
+    store_close(store);
+    pos = (size_t)snprintf(row, sizeof(row),
+                           "{\"key\":\"remember.search.max_results\",\"scope\":\"brain\","
+                           "\"value\":6,\"updated_by\":{\"kind\":\"human\",\"id\":null},"
+                           "\"updated_at\":\"2026-10-16T07:58:00.000Z\",\"device_id\":"
+                           "\"01a0d90a-e71c-7a0a-bb2c-3b3774000000\",\"version_vector\":{");
+    for (i = 0; i < WIDE; i++) {
+        pos += (size_t)snprintf(row + pos, sizeof(row) - pos,
+                                "%s\"01a0d90a-e71c-7a0a-bb2c-3b3774%06d\":%d", i > 0 ? "," : "", i,
+                                i < TWO_DIGIT ? 11 : 1);
+    }
+    (void)snprintf(row + pos, sizeof(row) - pos, "},\"deleted_at\":null}");
+    ASSERT_EQ_INT((long long)(strstr(row, "},\"deleted_at") + 1 -
+                              strstr(row, "\"version_vector\":{") -
+                              (long long)strlen("\"version_vector\":")),
+                  4096);
+    write_doc(file, sizeof(file), tmpl, "wide.json", rows, sizeof(rows) / sizeof(rows[0]));
+    got = import_at(brain, userdb, json, 4U);
+    ASSERT_EQ_INT(got.exit_code, 0);
+    ASSERT_STR_CONTAINS(got.out, "\"detail\":{\"key\":\"remember.search.max_results\","
+                                 "\"field\":\"version_vector\",\"reason\":\"bad_field\"}");
+    cmd_result_free(&got);
+    assert_query(brain, "SELECT key || '=' || value FROM settings;",
+                 "remember.search.candidate_pool=400");
     harness_remove_tree(tmpl);
 }
 
@@ -6405,21 +6646,32 @@ TEST(import_merges_by_vector_then_time_then_device)
                          "\"2026-10-16T07:58:00.000Z\",\"device_id\":\"\",\"version_vector\":{},"
                          "\"deleted_at\":null}") > 0);
     {
-        const char *list[] = {rows[0], rows[1], rows[2], rows[3], rows[4], rows[5]};
+        const char *list[] = {rows[0], rows[1], rows[2]};
 
-        write_doc(file, sizeof(file), tmpl, "merge.json", list, 6U);
+        write_doc(file, sizeof(file), tmpl, "merge.json", list, 3U);
     }
     got = import_at(brain, userdb, imp, 4U);
     ASSERT_EQ_INT(got.exit_code, 0);
     ASSERT_STR_CONTAINS(
         got.out,
-        "\"data\":{\"count\":6,\"written\":4,\"unchanged\":2,\"skipped\":0,\"rows\":["
+        "\"data\":{\"count\":3,\"written\":3,\"unchanged\":0,\"skipped\":0,\"rows\":["
         "{\"key\":\"remember.search.candidate_pool\",\"scope\":\"brain\",\"result\":\"written\","
         "\"action\":\"set\"},"
         "{\"key\":\"remember.search.max_results\",\"scope\":\"brain\",\"result\":\"written\","
         "\"action\":\"tombstone\"},"
         "{\"key\":\"remember.buckets.prefixes\",\"scope\":\"brain\",\"result\":\"written\","
-        "\"action\":\"set\"},"
+        "\"action\":\"set\"}]}");
+    cmd_result_free(&got);
+    {
+        const char *list[] = {rows[3], rows[4], rows[5]};
+
+        write_doc(file, sizeof(file), tmpl, "merge.json", list, 3U);
+    }
+    got = import_at(brain, userdb, imp, 4U);
+    ASSERT_EQ_INT(got.exit_code, 0);
+    ASSERT_STR_CONTAINS(
+        got.out,
+        "\"data\":{\"count\":3,\"written\":1,\"unchanged\":2,\"skipped\":0,\"rows\":["
         "{\"key\":\"remember.search.candidate_pool\",\"scope\":\"user\",\"result\":\"written\","
         "\"action\":\"set\"},"
         "{\"key\":\"remember.search.max_results\",\"scope\":\"user\",\"result\":\"kept_local\","
@@ -6629,6 +6881,21 @@ TEST(import_refuses_a_file_that_is_not_a_settings_document)
     ASSERT_STR_CONTAINS(got.err, "remember: can't read \"");
     ASSERT_STR_CONTAINS(got.err, "\": Is a directory. Check the import source, then try again.\n");
     cmd_result_free(&got);
+    {
+        /* A3: /dev/zero stops at the cap; a file of exactly the cap is read. */
+        const char *zero[] = {"settings", "import", "/dev/zero"};
+
+        got = import_at(brain, userdb, zero, 3U);
+        ASSERT_EQ_INT(got.exit_code, 1);
+        ASSERT_STR_CONTAINS(got.err, "can't read \"/dev/zero\": File too large.");
+        cmd_result_free(&got);
+        write_text(file, "");
+        ASSERT_EQ_INT(truncate(file, (off_t)REMEMBER_STDIN_MAX), 0);
+        got = import_at(brain, userdb, imp, 3U);
+        ASSERT_EQ_INT(got.exit_code, 1);
+        ASSERT_TRUE(got.err != NULL && strstr(got.err, "File too large") == NULL);
+        cmd_result_free(&got);
+    }
     assert_query(brain, "SELECT COUNT(*) FROM settings", "0");
     ASSERT_TRUE(access(userdb, F_OK) != 0);
     harness_remove_tree(tmpl);
@@ -6705,30 +6972,65 @@ TEST(import_dry_run_writes_nothing)
     brain_elem(pool, sizeof(pool), "remember.search.candidate_pool", "400",
                "2026-10-24T09:12:00.000Z", k_dev_a, "{}", NULL);
     {
-        const char *list[] = {pool, k_imp_pool_user, k_imp_bad_pool};
+        const char *list[] = {k_imp_pool_user, k_imp_bad_pool};
 
-        write_doc(file, sizeof(file), tmpl, "dry.json", list, 3U);
+        write_doc(file, sizeof(file), tmpl, "dry.json", list, 2U);
     }
     got = import_at(brain, userdb, imp, 4U);
     ASSERT_EQ_INT(got.exit_code, 0);
     ASSERT_STREQ(got.err, "remember: warning: skipped \"remember.search.candidate_pool\": \"abc\" "
                           "isn't a valid value.\n");
     ASSERT_TRUE(snprintf(want, sizeof(want),
-                         "Would import \"%s\": 2 settings written, 0 unchanged, 1 skipped. "
+                         "Would import \"%s\": 1 settings written, 0 unchanged, 1 skipped. "
                          "Nothing was changed.\n",
                          file) > 0);
     ASSERT_STREQ(got.out, want);
     cmd_result_free(&got);
+    {
+        const char *list[] = {pool};
+
+        write_doc(file, sizeof(file), tmpl, "dry.json", list, 1U);
+    }
     got = import_at(brain, userdb, json, 5U);
     ASSERT_EQ_INT(got.exit_code, 0);
-    ASSERT_STR_CONTAINS(got.out, "\"data\":{\"count\":3,\"written\":2,\"unchanged\":0,"
-                                 "\"skipped\":1,\"rows\":[{\"key\":"
+    ASSERT_STR_CONTAINS(got.out, "\"data\":{\"count\":1,\"written\":1,\"unchanged\":0,"
+                                 "\"skipped\":0,\"rows\":[{\"key\":"
                                  "\"remember.search.candidate_pool\",\"scope\":\"brain\","
                                  "\"result\":\"written\",\"action\":\"set\"}");
     cmd_result_free(&got);
     assert_query(brain, "SELECT COUNT(*) FROM settings", "0");
     assert_query(brain, "SELECT change_seq FROM brain_meta", "0");
     ASSERT_TRUE(access(userdb, F_OK) != 0);
+    harness_remove_tree(tmpl);
+}
+
+/* D6: a mixed file writes nothing without a scope, and imports with one. */
+static void assert_mixed_doc_needs_a_scope(const char *mixed)
+{
+    char tmpl[] = "/tmp/remember-import-mixed-XXXXXX";
+    char brain[REMEMBER_PATH_MAX];
+    char userdb[REMEMBER_PATH_MAX];
+    char err[64];
+    Store *store = open_pair(tmpl, brain, sizeof(brain), userdb, sizeof(userdb));
+    SettingImportReport rep;
+
+    if (store == NULL) {
+        return;
+    }
+    ASSERT_EQ_INT(store_setting_import(store, userdb, mixed, strlen(mixed), SETTING_LAYER_AUTO,
+                                       false, &rep, err, sizeof(err)),
+                  SETTING_ERR_DOCUMENT);
+    ASSERT_EQ_INT(rep.doc_error, SETTING_DOC_MIXED_SCOPES);
+    ASSERT_TRUE(rep.rows == NULL);
+    ASSERT_TRUE(access(userdb, F_OK) != 0);
+    ASSERT_EQ_INT(store_setting_import(store, userdb, mixed, strlen(mixed), SETTING_LAYER_BRAIN,
+                                       false, &rep, err, sizeof(err)),
+                  SETTING_OK);
+    ASSERT_EQ_INT((int)rep.written, 1);
+    ASSERT_EQ_INT((int)rep.skipped, 2);
+    store_setting_import_free(&rep);
+    ASSERT_TRUE(access(userdb, F_OK) != 0);
+    store_close(store);
     harness_remove_tree(tmpl);
 }
 
@@ -6760,8 +7062,9 @@ static SettingStatus import_with_fault(int kind, int n, Store *store, const char
 }
 
 /* Every store fault in the merge: the import fails as a store error, writes
-   nothing, and frees its rows. The first run that gets through writes all four. */
-static void import_fault_sweep(int kind, const char *doc)
+   nothing, and frees its rows. The first run that gets through writes both
+   rows. One run writes one database (decision:plan20-import-one-file-per-run). */
+static void import_fault_sweep(int kind, const char *doc, size_t skipped)
 {
     enum { IMPORT_SWEEP_MAX = 400 };
     char tmpl[] = "/tmp/remember-import-fault-XXXXXX";
@@ -6793,24 +7096,27 @@ static void import_fault_sweep(int kind, const char *doc)
         ASSERT_TRUE(rep.rows == NULL);
     }
     ASSERT_TRUE(n > 0 && n < IMPORT_SWEEP_MAX);
-    if (kind == 3) {
-        /* Two files do not commit as one: a failed user.db COMMIT leaves the
-           brain's two rows committed, so the next run finds them unchanged. */
-        ASSERT_EQ_INT((int)rep.written, 2);
-        ASSERT_EQ_INT((int)rep.unchanged, 2);
-    } else {
-        ASSERT_EQ_INT((int)rep.written, 4);
+    ASSERT_EQ_INT((int)rep.written, 2);
+    ASSERT_EQ_INT((int)rep.skipped, (int)skipped);
+    if (skipped > 0U) {
+        ASSERT_EQ_INT(rep.rows[2].reason, SETTING_SKIP_INVALID_VALUE);
     }
-    ASSERT_EQ_INT((int)rep.skipped, 1);
-    ASSERT_EQ_INT(rep.rows[4].reason, SETTING_SKIP_INVALID_VALUE);
     store_setting_import_free(&rep);
     store_close(store);
     harness_remove_tree(tmpl);
 }
 
+static const char k_fault_user_rows[] =
+    "{\"key\":\"remember.plugins.chain_budget\",\"scope\":\"user\",\"value\":\"2s\","
+    "\"updated_by\":{\"kind\":\"human\",\"id\":null},\"updated_at\":\"2030-01-01T00:00:00.000Z\"},"
+    "{\"key\":\"remember.search.max_results\",\"scope\":\"user\",\"value\":40,\"updated_by\":"
+    "{\"kind\":\"human\",\"id\":null},\"updated_at\":\"2030-01-01T00:00:00.000Z\"}";
+
 TEST(import_survives_every_store_fault)
 {
-    char doc[4096];
+    char brain_doc[4096];
+    char user_doc[4096];
+    char mixed[4096];
     char pool[512];
     char prefixes[512];
     int kind = 0;
@@ -6821,27 +7127,27 @@ TEST(import_survives_every_store_fault)
     brain_elem(prefixes, sizeof(prefixes), "remember.buckets.prefixes", "[\"a:\",\"b:\"]",
                "2030-01-01T00:00:00.000Z", k_dev_b, "{\"01a0d90a-e71c-7a0a-bb2c-3b377482fa52\":2}",
                NULL);
-    ASSERT_TRUE(snprintf(doc, sizeof(doc),
-                         "%s%s,%s,{\"key\":\"remember.plugins.chain_budget\",\"scope\":\"user\","
-                         "\"value\":\"2s\",\"updated_by\":{\"kind\":\"human\",\"id\":null},"
-                         "\"updated_at\":\"2030-01-01T00:00:00.000Z\"},{\"key\":"
-                         "\"remember.search.max_results\",\"scope\":\"user\",\"value\":40,"
-                         "\"updated_by\":{\"kind\":\"human\",\"id\":null},\"updated_at\":"
-                         "\"2030-01-01T00:00:00.000Z\"},{\"key\":\"remember.buckets.prefixes\","
-                         "\"scope\":\"brain\",\"value\":[\"c:\",\"d\\u0000:\"]}]}",
+    ASSERT_TRUE(snprintf(brain_doc, sizeof(brain_doc),
+                         "%s%s,%s,{\"key\":\"remember.buckets.prefixes\",\"scope\":\"brain\","
+                         "\"value\":[\"c:\",\"d\\u0000:\"]}]}",
                          k_imp_head, pool, prefixes) > 0);
+    ASSERT_TRUE(snprintf(user_doc, sizeof(user_doc), "%s%s]}", k_imp_head, k_fault_user_rows) > 0);
+    ASSERT_TRUE(snprintf(mixed, sizeof(mixed), "%s%s,%s]}", k_imp_head, pool, k_fault_user_rows) >
+                0);
     for (kind = 0; kind < 4; kind++) {
-        import_fault_sweep(kind, doc);
+        import_fault_sweep(kind, brain_doc, 1U);
+        import_fault_sweep(kind, user_doc, 0U);
     }
     {
         SettingImportReport rep;
         char err[64];
 
-        ASSERT_EQ_INT(store_setting_import(NULL, NULL, doc, strlen(doc), SETTING_LAYER_AUTO, false,
-                                           &rep, err, sizeof(err)),
+        ASSERT_EQ_INT(store_setting_import(NULL, NULL, brain_doc, strlen(brain_doc),
+                                           SETTING_LAYER_AUTO, false, &rep, err, sizeof(err)),
                       SETTING_ERR_STORE);
         ASSERT_STREQ(err, "internal error");
     }
+    assert_mixed_doc_needs_a_scope(mixed);
 }
 
 /* ST-7.10: a hook cannot import. Usage errors stay usage. */
@@ -7496,12 +7802,73 @@ TEST(reset_unregistered_key_has_a_null_type)
                          "'2020-01-02T03:04:00.000Z');");
     got = get_at(brain, userdb, json_args, sizeof(json_args) / sizeof(json_args[0]));
     ASSERT_EQ_INT(got.exit_code, 0);
-    ASSERT_STREQ(got.out,
-                 "{\"format\":\"remember-message\",\"version\":1,\"type\":\"setting.reset."
-                 "result\",\"data\":{\"count\":1,\"settings\":[{\"setting\":{\"key\":\"plugin."
-                 "gone\",\"type\":null,\"value\":null,\"from\":\"default\",\"changed\":false,"
-                 "\"layers\":{\"user\":null}},\"scope\":\"user\",\"old_value\":1,\"changed\":true,"
-                 "\"action\":\"delete\"}]}}\n");
+    ASSERT_STREQ(
+        got.out,
+        "{\"format\":\"remember-message\",\"version\":1,\"type\":\"setting.reset."
+        "result\",\"data\":{\"count\":1,\"settings\":[{\"setting\":{\"key\":\"plugin."
+        "gone\",\"type\":null,\"value\":null,\"from\":\"default\",\"changed\":false,"
+        "\"layers\":{\"user\":null}},\"scope\":\"user\",\"old_value\":\"1\",\"changed\":true,"
+        "\"action\":\"delete\"}]}}\n");
+    cmd_result_free(&got);
+    harness_remove_tree(tmpl);
+}
+
+/* A stored value is hostile input (a hand edit, a peer brain). The C-10 line maps
+   control bytes, and old_value is that key's JSON or a JSON string, never raw text. */
+TEST(reset_and_set_never_echo_a_stored_value_raw)
+{
+    char tmpl[] = "/tmp/remember-reset-raw-XXXXXX";
+    char brain[REMEMBER_PATH_MAX];
+    char userdb[REMEMBER_PATH_MAX];
+    Store *store = open_pair(tmpl, brain, sizeof(brain), userdb, sizeof(userdb));
+    const char *set[] = {"settings", "set", "remember.search.candidate_pool", "400"};
+    const char *reset[] = {"settings", "reset", "remember.search.candidate_pool"};
+    const char *json_reset[] = {"--json", "settings", "reset", "remember.search.candidate_pool"};
+    const char *json_set[] = {"--json", "settings", "set", "remember.search.candidate_pool", "500"};
+    const char *bulk[] = {"settings", "reset", "--all", "--scope", "brain", "--yes"};
+    CmdResult got;
+
+    if (store == NULL) {
+        return;
+    }
+    store_close(store);
+    exec_fixture(brain, "INSERT INTO settings (key, value, updated_by, updated_at, device_id, "
+                        "version_vector, deleted_at, change_seq) VALUES ("
+                        "'remember.search.candidate_pool','300' || char(27) || '[2J',"
+                        "'{\"kind\":\"human\",\"id\":null}','2020-01-02T03:04:00.000Z','d','{}',"
+                        "NULL,1);");
+    got = get_at(brain, userdb, set, sizeof(set) / sizeof(set[0]));
+    ASSERT_EQ_INT(got.exit_code, 0);
+    cmd_result_free(&got);
+    got = get_at(brain, userdb, reset, sizeof(reset) / sizeof(reset[0]));
+    ASSERT_EQ_INT(got.exit_code, 0);
+    ASSERT_STREQ(got.out, "\"remember.search.candidate_pool\" was reset. It's now 300?[2J.\n");
+    cmd_result_free(&got);
+    exec_fixture(brain, "DELETE FROM settings;");
+
+    got = get_at(brain, userdb, set, sizeof(set) / sizeof(set[0]));
+    ASSERT_EQ_INT(got.exit_code, 0);
+    cmd_result_free(&got);
+    exec_fixture(userdb, "UPDATE settings SET value = '1,\"injected\":true';");
+    got = get_at(brain, userdb, json_reset, sizeof(json_reset) / sizeof(json_reset[0]));
+    ASSERT_TRUE(strstr(got.out, "\"old_value\":\"1,\\\"injected\\\":true\",") != NULL);
+    cmd_result_free(&got);
+
+    got = get_at(brain, userdb, set, sizeof(set) / sizeof(set[0]));
+    ASSERT_EQ_INT(got.exit_code, 0);
+    cmd_result_free(&got);
+    exec_fixture(userdb, "UPDATE settings SET value = '1}]';");
+    got = get_at(brain, userdb, json_set, sizeof(json_set) / sizeof(json_set[0]));
+    ASSERT_TRUE(strstr(got.out, "\"old_value\":\"1}]\",") != NULL);
+    cmd_result_free(&got);
+
+    exec_fixture(brain, "INSERT INTO settings (key, value, updated_by, updated_at, device_id, "
+                        "version_vector, deleted_at, change_seq) VALUES ('zz' || char(27) || "
+                        "'[2J.k','1','{}','2020-01-02T03:04:00.000Z','d','{}',NULL,1);");
+    got = get_at(brain, userdb, bulk, sizeof(bulk) / sizeof(bulk[0]));
+    ASSERT_EQ_INT(got.exit_code, 0);
+    ASSERT_TRUE(strstr(got.out, "\"zz?[2J.k\" was reset. It's now (unset).\n") != NULL);
+    ASSERT_TRUE(strchr(got.out, 0x1b) == NULL);
     cmd_result_free(&got);
     harness_remove_tree(tmpl);
 }
@@ -7773,8 +8140,8 @@ typedef struct {
 
 typedef struct {
     int oom;
-    int bare_detail;
     int failed;
+    int internal; /* a run printed "internal error" */
 } SweepSaw;
 
 /* remember_run, in this process, so the alloc and prepare hooks apply. */
@@ -7825,10 +8192,9 @@ static SweepSaw sweep_alloc(const char *const *argv, int argc)
                             (got.out != NULL && strstr(got.out, "out of memory") != NULL))) {
             saw.oom = 1;
         }
-        /* A quoted-span malloc failure still prints the prefix sentence and skips detail. */
-        if (got.out != NULL && strstr(got.out, "are the same prefix") != NULL &&
-            strstr(got.out, "\"item\"") == NULL) {
-            saw.bare_detail = 1;
+        if ((got.err != NULL && strstr(got.err, "internal error") != NULL) ||
+            (got.out != NULL && strstr(got.out, "internal error") != NULL)) {
+            saw.internal = 1;
         }
         free(got.out);
         free(got.err);
@@ -8142,6 +8508,8 @@ TEST(set_and_reset_hit_alloc_and_prepare_faults)
         "remember", "--db", brain, "settings", "set", "remember.search.candidate_pool", "19"};
     const char *bad_prefix[] = {
         "remember", "--db", brain, "settings", "set", "remember.buckets.prefixes", "nope"};
+    const char *unreadable[] = {"remember", "--db",   brain,
+                                "settings", "import", "/nonexistent-remember-dir/x.json"};
     const char *folded[] = {
         "remember", "--db",    brain, "--json", "settings", "set", "remember.buckets.prefixes",
         "Project:", "project:"};
@@ -8203,8 +8571,11 @@ TEST(set_and_reset_hit_alloc_and_prepare_faults)
     ASSERT_EQ_INT(saw.oom, 1);
     saw = sweep_alloc(bad_prefix, (int)(sizeof(bad_prefix) / sizeof(bad_prefix[0])));
     ASSERT_EQ_INT(saw.oom, 1);
+    saw = sweep_alloc(unreadable, (int)(sizeof(unreadable) / sizeof(unreadable[0])));
+    ASSERT_EQ_INT(saw.oom, 1);
     saw = sweep_alloc(folded, (int)(sizeof(folded) / sizeof(folded[0])));
-    ASSERT_EQ_INT(saw.bare_detail, 1);
+    ASSERT_EQ_INT(saw.oom, 1);
+    ASSERT_EQ_INT(saw.internal, 0); /* the prefix scan's malloc is out of memory too */
     got = capture_run(folded, (int)(sizeof(folded) / sizeof(folded[0])));
     ASSERT_EQ_INT(got.rc, 1);
     ASSERT_STR_CONTAINS(got.out, "\"item\":\"project:\"");
@@ -8740,6 +9111,57 @@ TEST(history_breaks_ties_by_scope_key_and_row)
 
 /* 007-37 and 007-32: human dates, (unset), actors, and the JSON change items
    with scope and action. */
+/* A stored row is hostile: a value past 16 KiB and a 100-byte stamp print whole,
+   with control bytes mapped. The plain line has no fixed buffer. */
+TEST(history_prints_a_long_stored_row_whole)
+{
+    char tmpl[] = "/tmp/remember-history-long-XXXXXX";
+    char brain[REMEMBER_PATH_MAX];
+    char userdb[REMEMBER_PATH_MAX];
+    const char *plain[] = {"settings", "history"};
+    char *sql = NULL;
+    char *want = NULL;
+    char stamp[101];
+    size_t big = 20000U;
+    Store *store = open_pair(tmpl, brain, sizeof(brain), userdb, sizeof(userdb));
+    CmdResult got;
+
+    if (store == NULL) {
+        return;
+    }
+    store_close(store);
+    memset(stamp, '9', sizeof(stamp) - 1U);
+    stamp[sizeof(stamp) - 1U] = '\0';
+    sql = (char *)malloc(big + 512U);
+    want = (char *)malloc(big + 512U);
+    ASSERT_TRUE(sql != NULL && want != NULL);
+    if (sql == NULL || want == NULL) {
+        free(sql);
+        free(want);
+        harness_remove_tree(tmpl);
+        return;
+    }
+    (void)snprintf(sql, big + 512U,
+                   "INSERT INTO settings_history (key, old_value, new_value, updated_by, at) "
+                   "VALUES ('zz.k', NULL, 'x' || char(27) || replace(hex(zeroblob(%zu)), '00', "
+                   "'a'), 'not json', '%s');",
+                   big - 2U, stamp);
+    exec_fixture(brain, sql);
+    got = get_at(brain, userdb, plain, 2U);
+    ASSERT_EQ_INT(got.exit_code, 0);
+    memset(want, 'a', big);
+    want[big] = '\0';
+    want[0] = 'x';
+    want[1] = '?';
+    ASSERT_TRUE(strstr(got.out, want) != NULL);
+    ASSERT_TRUE(strncmp(got.out, stamp, strlen(stamp)) == 0);
+    ASSERT_TRUE(strchr(got.out, 0x1b) == NULL);
+    cmd_result_free(&got);
+    free(sql);
+    free(want);
+    harness_remove_tree(tmpl);
+}
+
 TEST(history_prints_dates_actions_and_scopes)
 {
     char tmpl[] = "/tmp/remember-history-lines-XXXXXX";
@@ -9215,6 +9637,13 @@ TEST(views_survive_memory_store_and_write_faults)
     take_cursor(hgot.err, "--cursor ", history_cursor, sizeof(history_cursor));
     free(hgot.out);
     free(hgot.err);
+    {
+        /* C-10 prints even when nothing was set, so every write fault reaches it. */
+        const char *reset[] = {"remember", "--db",  brain,
+                               "settings", "reset", "remember.search.max_results"};
+
+        write_sweep(reset, 6, false);
+    }
     for (r = 0; r < (size_t)RUNS; r++) {
         /* explain and set allocate only in the store: sweep_store reaches those. */
         SweepSaw saw = sweep_alloc(runs[r], argcs[r]);
@@ -9249,8 +9678,10 @@ void register_settings_tests(void)
     RUN_TEST(resolution_user_then_brain_then_tombstone_and_change_seq);
     RUN_TEST(user_history_keeps_the_newest_fifty_by_rowid);
     RUN_TEST(quota_counts_settings_rows_not_history);
+    RUN_TEST(days_in_month_knows_leap_years_and_refuses_a_bad_month);
     RUN_TEST(prefixes_default_scope_and_sixteen_kib);
     RUN_TEST(rejected_values_do_not_create_user_db);
+    RUN_TEST(user_db_symlink_is_refused_by_every_opener);
     RUN_TEST(programmer_errors_and_a_failed_prepare);
     RUN_TEST(no_row_reads_remember_sync_token);
     RUN_TEST(no_row_without_remember_sync_token_returns_no_token);
@@ -9340,6 +9771,7 @@ void register_settings_tests(void)
     RUN_TEST(import_round_trips_an_export);
     RUN_TEST(import_skips_a_bad_value_and_an_unknown_key);
     RUN_TEST(import_skips_bad_shapes_and_bad_fields);
+    RUN_TEST(import_skips_a_vector_too_wide_to_merge);
     RUN_TEST(import_skips_other_scopes_and_disallowed_layers);
     RUN_TEST(import_merges_by_vector_then_time_then_device);
     RUN_TEST(import_keeps_a_brain_row_that_is_newer_or_tied);
@@ -9362,6 +9794,7 @@ void register_settings_tests(void)
     RUN_TEST(reset_same_key_on_both_layers_confirms_once);
     RUN_TEST(reset_namespace_matches_the_typed_prefix);
     RUN_TEST(reset_unregistered_key_has_a_null_type);
+    RUN_TEST(reset_and_set_never_echo_a_stored_value_raw);
     RUN_TEST(reset_all_yes_on_an_empty_layer_prints_nothing);
     RUN_TEST(reset_stored_hyphen_uses_the_registry_name);
     RUN_TEST(reset_usage_rejects_a_bad_invocation);
@@ -9377,6 +9810,7 @@ void register_settings_tests(void)
     RUN_TEST(list_pages_with_a_cursor_that_keeps_its_filters);
     RUN_TEST(history_pages_fifty_newest_first);
     RUN_TEST(history_breaks_ties_by_scope_key_and_row);
+    RUN_TEST(history_prints_a_long_stored_row_whole);
     RUN_TEST(history_prints_dates_actions_and_scopes);
     RUN_TEST(explain_prints_the_block_and_the_entry);
     RUN_TEST(view_cursor_edges_and_home);

@@ -235,7 +235,9 @@ typedef enum {
 typedef enum {
     SETTING_DOC_OK = 0,
     SETTING_DOC_NOT_SETTINGS, /* not JSON, not an object, wrong format, no settings list */
-    SETTING_DOC_VERSION       /* version above 1 */
+    SETTING_DOC_VERSION,      /* version above 1 */
+    SETTING_DOC_MIXED_SCOPES  /* user and brain rows with no --scope
+                                 (decision:plan20-import-one-file-per-run) */
 } SettingDocError;
 
 /* One settings element. key is the file's key string and value its value as
