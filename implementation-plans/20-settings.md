@@ -745,3 +745,5 @@ Pointers:
 - Check each `detail` object against the SETTINGS-SCHEME §5.1 row for its code.
 
 INDEX row 20 stays unticked.
+
+**2026-11-09, exit 5 (after the whole-plan review).** A check of the remaining plans against Remember found `decision:2026-11-03-confirmation-required-exit-5` (R30-6) owned by no plan. Plan 21 left exit 5 out. Itay chose to land it in this PR. `confirmation_required` from `settings reset --all` and `--namespace` now exits 5 (`REMEMBER_CONFIRM` in `exit_codes.h`). Exit 4 still wins under `--strict` with a warning. The four refusal tests assert 5; they failed on exit 1 first. JSON-ENVELOPE, JSON-STYLE, SETTINGS.md, the skill and the engineering notes name exit 5. No sentence changed.

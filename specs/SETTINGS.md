@@ -107,7 +107,7 @@ A list takes one item per argument. A key that is not a list takes one value. Pl
 
 `remember settings reset KEY [--scope]`, `reset --namespace NS [--scope] --yes`, `reset --all --scope brain|user --yes`. `decision:plan20-reset-count-zero-one`. 007 ST-7.8, ST-7.11b.
 
-A missing row changes nothing. A bulk reset without `--yes` is `confirmation_required` (C-11) and changes nothing. A bulk reset also resets stored keys the registry does not know. The two databases are not one transaction. Plain output is C-10 for each key. JSON `data` is `{setting, scope, old_value, changed, action}`, with `action` `tombstone`, `delete` or `none`. A bulk reset is `{count, settings[]}`.
+A missing row changes nothing. A bulk reset without `--yes` is `confirmation_required` (C-11), exit 5 (`decision:2026-11-03-confirmation-required-exit-5`), and changes nothing. A bulk reset also resets stored keys the registry does not know. The two databases are not one transaction. Plain output is C-10 for each key. JSON `data` is `{setting, scope, old_value, changed, action}`, with `action` `tombstone`, `delete` or `none`. A bulk reset is `{count, settings[]}`.
 
 ### list
 
@@ -153,4 +153,4 @@ A file with both user and brain rows needs `--scope` (`decision:plan20-import-on
 
 ## Errors
 
-Codes: `setting_unknown` (exit 2), `setting_invalid_value`, `setting_out_of_range`, `setting_scope_mismatch`, `setting_from_hook`, `quota_exceeded`, `confirmation_required`, `invalid_argument`, `import_parse`, `sync_credential_unavailable`. Warnings: `setting_import_skipped`, `setting_invalid`. Each `error` object carries the message, the fix and, where the code has one, `detail` with string members (`decision:plan20-error-detail-strings`). `setting_invalid_value` detail is `key`, `value` when one value was given, and `type`; a prefix error adds `item`, and `other` when two items fold to the same prefix (`decision:plan20-invalid-value-detail`).
+Codes: `setting_unknown` (exit 2), `setting_invalid_value`, `setting_out_of_range`, `setting_scope_mismatch`, `setting_from_hook`, `quota_exceeded`, `confirmation_required` (exit 5), `invalid_argument`, `import_parse`, `sync_credential_unavailable`. Warnings: `setting_import_skipped`, `setting_invalid`. Each `error` object carries the message, the fix and, where the code has one, `detail` with string members (`decision:plan20-error-detail-strings`). `setting_invalid_value` detail is `key`, `value` when one value was given, and `type`; a prefix error adds `item`, and `other` when two items fold to the same prefix (`decision:plan20-invalid-value-detail`).

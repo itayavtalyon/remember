@@ -2420,7 +2420,7 @@ static int report_confirm(int argc, const char **argv, size_t count)
     (void)diag_error_fix(DIAG_CONFIRMATION_REQUIRED, msg, fix);
     free(msg);
     free(fix);
-    return REMEMBER_ERR;
+    return REMEMBER_CONFIRM;
 }
 
 /* The key and the value can be stored text (an unregistered key, the other

@@ -7629,7 +7629,7 @@ TEST(reset_without_yes_counts_unique_keys)
     ASSERT_EQ_INT(got.exit_code, 0);
     cmd_result_free(&got);
     got = get_at(brain, userdb, none, sizeof(none) / sizeof(none[0]));
-    ASSERT_EQ_INT(got.exit_code, 1);
+    ASSERT_EQ_INT(got.exit_code, 5);
     ASSERT_STREQ(got.err, "remember: this resets 1 setting. Run 'remember settings reset --all "
                           "--scope user --yes' to confirm.\n");
     assert_query(userdb, "SELECT value FROM settings WHERE key = 'remember.search.max_results'",
@@ -7639,7 +7639,7 @@ TEST(reset_without_yes_counts_unique_keys)
     ASSERT_EQ_INT(got.exit_code, 0);
     cmd_result_free(&got);
     got = get_at(brain, userdb, none, sizeof(none) / sizeof(none[0]));
-    ASSERT_EQ_INT(got.exit_code, 1);
+    ASSERT_EQ_INT(got.exit_code, 5);
     ASSERT_STREQ(got.err, "remember: this resets 2 settings. Run 'remember settings reset --all "
                           "--scope user --yes' to confirm.\n");
     assert_query(userdb, "SELECT COUNT(*) FROM settings", "2");
@@ -7679,7 +7679,7 @@ TEST(reset_same_key_on_both_layers_confirms_once)
     ASSERT_EQ_INT(got.exit_code, 0);
     cmd_result_free(&got);
     got = get_at(brain, userdb, ask, sizeof(ask) / sizeof(ask[0]));
-    ASSERT_EQ_INT(got.exit_code, 1);
+    ASSERT_EQ_INT(got.exit_code, 5);
     ASSERT_STREQ(got.err, "remember: this resets 1 setting. Run 'remember settings reset "
                           "--namespace remember.search.candidate_pool --yes' to confirm.\n");
     assert_query(brain, "SELECT value FROM settings WHERE key = 'remember.search.candidate_pool'",
@@ -8599,7 +8599,7 @@ TEST(set_and_reset_hit_alloc_and_prepare_faults)
     saw = sweep_alloc(confirm, (int)(sizeof(confirm) / sizeof(confirm[0])));
     ASSERT_EQ_INT(saw.oom, 1);
     got = capture_run(confirm, (int)(sizeof(confirm) / sizeof(confirm[0])));
-    ASSERT_EQ_INT(got.rc, 1);
+    ASSERT_EQ_INT(got.rc, 5);
     ASSERT_STREQ(got.err, "remember: this resets 1 setting. Run 'remember settings reset --all "
                           "--scope user --yes' to confirm.\n");
     free(got.out);
