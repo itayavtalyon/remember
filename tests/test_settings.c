@@ -6491,24 +6491,26 @@ TEST(import_skips_a_vector_too_wide_to_merge)
     const char *json[] = {"--json", "settings", "import", file};
     Store *store = open_pair(tmpl, brain, sizeof(brain), userdb, sizeof(userdb));
     CmdResult got;
-    size_t pos = 0;
     int i = 0;
 
     if (store == NULL) {
         return;
     }
     store_close(store);
-    pos = (size_t)snprintf(row, sizeof(row),
-                           "{\"key\":\"remember.search.max_results\",\"scope\":\"brain\","
-                           "\"value\":6,\"updated_by\":{\"kind\":\"human\",\"id\":null},"
-                           "\"updated_at\":\"2026-10-16T07:58:00.000Z\",\"device_id\":"
-                           "\"01a0d90a-e71c-7a0a-bb2c-3b3774000000\",\"version_vector\":{");
+    (void)snprintf(row, sizeof(row),
+                   "{\"key\":\"remember.search.max_results\",\"scope\":\"brain\","
+                   "\"value\":6,\"updated_by\":{\"kind\":\"human\",\"id\":null},"
+                   "\"updated_at\":\"2026-10-16T07:58:00.000Z\",\"device_id\":"
+                   "\"01a0d90a-e71c-7a0a-bb2c-3b3774000000\",\"version_vector\":{");
     for (i = 0; i < WIDE; i++) {
-        pos += (size_t)snprintf(row + pos, sizeof(row) - pos,
-                                "%s\"01a0d90a-e71c-7a0a-bb2c-3b3774%06d\":%d", i > 0 ? "," : "", i,
-                                i < TWO_DIGIT ? 11 : 1);
+        char member[64];
+
+        (void)snprintf(member, sizeof(member), "%s\"01a0d90a-e71c-7a0a-bb2c-3b3774%06d\":%d",
+                       i > 0 ? "," : "", i, i < TWO_DIGIT ? 11 : 1);
+        ASSERT_TRUE(strlen(row) + strlen(member) < sizeof(row));
+        (void)strncat(row, member, sizeof(row) - strlen(row) - 1U);
     }
-    (void)snprintf(row + pos, sizeof(row) - pos, "},\"deleted_at\":null}");
+    (void)strncat(row, "},\"deleted_at\":null}", sizeof(row) - strlen(row) - 1U);
     ASSERT_EQ_INT((long long)(strstr(row, "},\"deleted_at") + 1 -
                               strstr(row, "\"version_vector\":{") -
                               (long long)strlen("\"version_vector\":")),
