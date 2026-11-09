@@ -484,6 +484,12 @@ Plain `set` prints the C-13 lines: `"<key>" is now <v> for this brain.` or `for 
 
 `--limit` is 1 to 1000. Out of range is `setting_out_of_range` with detail `{flag, value, min, max}` (`decision:plan20-list-limit-draft`). The cursor is base64url JSON. It holds the last row and every filter (`decision:plan20-cursor-carries-filters`). An omitted filter is taken from the cursor. The cursor is rebuilt from the decoded members and the given filters and compared byte for byte, so a changed filter, a forged member or another verb's cursor is `invalid_argument` (`decision:plan20-cursor-fix-draft`). The plain more-pages line is on stderr, through the new `diag_notice` (the diag boundary keeps `app_err()` in `diag.c`). `base64url_encode` and `base64url_decode` moved from `cmd_query.c` to `commands_common.c`, which now includes `test_alloc.h`, so the sweeps reach the cursor's allocations.
 
+### Stage 10 — spec (2026-11-09)
+
+`origin/main` (`9495f48`) was already in the branch through `f0608fb`. The fetch on 2026-11-09 found nothing newer, so no merge was needed. `specs/SETTINGS.md` describes what this branch ships: the registry, key and value grammar, layers and resolution, the brain table and user.db, history and tombstones, the sync token and the CLI helper, every `settings` verb with its flags and JSON `data`, paging, export, import, hooks and the error codes. Each section names its `decision:*` keys or the 007 ST section. No C-42 or C-43 sentence is quoted. The Settings row moved to the Specs table in `specs/README.md`.
+
+`state:implemented` is set on 36 `subject:settings` decisions: the 21 `plan20-*` keys, `settings-scope`, `settings-scope-flag`, `settings-set-default-layer`, `s-02`, `s-04`, `s-12`, `g-02`, `g-14`, `g-16`, `g-25`, `g2-12`, `q4-01`, `q4-02`, `q4-04` and `r3-00a`. Left `state:accepted` on purpose: `settings-scheme` (plugin manifest settings are plan 25, and its all-or-nothing import is changed by `g-16`), `settings-export-scope` (the brain export is not this plan), `g2-13` (confirm and dispatch are plan 25), `g-34` (17 mechanics this note does not list one by one), and `s-03` (it says at most 8 prefixes; the code has no item count, see the stage 9 review). The plugin, agent, MCP and HTTP decisions are other plans.
+
 ## Review Notes
 
 **2026-10-27, stage 1 deep review.** In-session, on `be3ad6a` plus this fix. Itay asked for the review, a simplify pass, and the next stage in the same session, so this note closes stage 1. Local Bugbot is not installed.
