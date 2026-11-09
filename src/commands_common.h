@@ -17,16 +17,17 @@
    ("YYYY-MM-DDTHH:MM:SS.mmmZ", 24 bytes + NUL). Must be >= 25. */
 enum { ISO_TS_BUFSIZE = 32 };
 
+/* After the parameter list, so clang-format 18 keeps a pointer return on one line. */
+#ifdef __GNUC__
+#define REMEMBER_PRINTF(fmt_at, args_at) __attribute__((format(printf, fmt_at, args_at)))
+#else
+#define REMEMBER_PRINTF(fmt_at, args_at)
+#endif
+
 void err_msg(DiagCode code, const char *msg);
-#ifdef __GNUC__
-__attribute__((format(printf, 2, 3)))
-#endif
-void err_fmt(DiagCode code, const char *fmt, ...);
+void err_fmt(DiagCode code, const char *fmt, ...) REMEMBER_PRINTF(2, 3);
 /* printf into a new buffer the caller frees. NULL when out of memory. */
-#ifdef __GNUC__
-__attribute__((format(printf, 1, 2)))
-#endif
-char *fmt_alloc(const char *fmt, ...);
+char *fmt_alloc(const char *fmt, ...) REMEMBER_PRINTF(1, 2);
 /* Days in a Gregorian month; 0 for a month outside 1..12. */
 int days_in_month(int year, int month);
 

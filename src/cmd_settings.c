@@ -17,7 +17,6 @@
 #include <poll.h>
 #include <signal.h>
 #include <spawn.h>
-#include <stdarg.h>
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -917,7 +916,6 @@ static int fill_display(SettingType type, const char *json, char *out, size_t ca
 // NOLINTNEXTLINE(bugprone-easily-swappable-parameters) — json is the value, twin the member name
 static int write_raw_named(FILE *out, SettingType type, const char *json, const char *twin)
 {
-    char inner[SETTING_VALUE_CAP];
     long long ms = 0;
 
     if (json == NULL || json[0] == '\0') {
@@ -930,6 +928,7 @@ static int write_raw_named(FILE *out, SettingType type, const char *json, const 
         return 0;
     }
     {
+        char inner[SETTING_VALUE_CAP];
         char canon[NORM_MEASURE_CANON_CAP];
 
         if (!quoted_plain(json, inner, sizeof(inner)) ||
@@ -2387,8 +2386,8 @@ static char *settings_command(int argc, const char **argv)
     if (buf == NULL) {
         return NULL;
     }
-    memcpy(buf, head, strlen(head));
     pos = strlen(head);
+    memcpy(buf, head, pos + 1U); /* the NUL is overwritten by the next write */
     for (i = 0; i < argc; i++) {
         size_t len = strlen(argv[i]);
 
@@ -3850,6 +3849,7 @@ static size_t sorted_registry(const SettingSpec **out)
     for (; i < n; i++) {
         out[i] = &reg[i];
     }
+    // NOLINTNEXTLINE(bugprone-sizeof-expression) out holds pointers; each element is one
     qsort((void *)out, n, sizeof(*out), cmp_spec_key);
     return n;
 }

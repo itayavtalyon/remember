@@ -207,9 +207,7 @@ void err_msg(DiagCode code, const char *msg)
 #endif
 /* Measure, then write. The measure pass uses a copy: a va_list can be
    consumed only once. NULL when vsnprintf or malloc fails. */
-#ifdef __GNUC__
-__attribute__((format(printf, 1, 0)))
-#endif
+static char *fmt_valloc(const char *fmt, va_list vargs) REMEMBER_PRINTF(1, 0);
 static char *fmt_valloc(const char *fmt, va_list vargs)
 {
     /* NOLINTNEXTLINE(cppcoreguidelines-init-variables) */
