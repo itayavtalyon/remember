@@ -17,6 +17,11 @@
    ("YYYY-MM-DDTHH:MM:SS.mmmZ", 24 bytes + NUL). Must be >= 25. */
 enum { ISO_TS_BUFSIZE = 32 };
 
+/* CMake sets the version; a bare compile (lint, analyzers) gets this one. */
+#ifndef REMEMBER_VERSION
+#define REMEMBER_VERSION "0.2.0"
+#endif
+
 void err_msg(DiagCode code, const char *msg);
 #ifdef __GNUC__
 __attribute__((format(printf, 2, 3)))

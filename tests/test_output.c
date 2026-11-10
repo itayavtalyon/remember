@@ -1093,6 +1093,27 @@ static int write_entry_json(FILE *f)
     return output_entry_json(f, &e, NOW);
 }
 
+static int write_export_entry_json(FILE *f)
+{
+    Entry e = given_full_entry();
+
+    return output_export_entry_json(f, &e, NOW);
+}
+
+static int write_string_array(FILE *f)
+{
+    static const char *const items[] = {"a", "b\"c"};
+
+    return output_json_string_array(f, items, 2);
+}
+
+static int write_export_data(FILE *f)
+{
+    OutputExport result = {.format = "json", .path = "/p", .count = 2, .links = 1};
+
+    return output_export_data(f, &result);
+}
+
 static int write_action_envelope(FILE *f)
 {
     Entry e = given_full_entry();
@@ -1493,6 +1514,58 @@ TEST(output_entry_human_line_reports_every_failed_write)
     assert_reports_every_failed_write(write_entry_human_line);
 }
 
+/* ---- export (plan 22) ----------------------------------------------------- */
+
+TEST(output_export_entry_json_has_no_local_id)
+{
+    Entry e = given_entry();
+    FILE *f = given_stream();
+
+    ASSERT_EQ_INT(output_export_entry_json(f, &e, NOW), 0);
+    assert_written(f, "{\"id\":\"s-7\",\"key\":\"k:7\",\"body\":\"body\",\"tags\":[],"
+                      "\"created_by\":{\"kind\":\"agent\",\"id\":null},"
+                      "\"updated_by\":{\"kind\":\"agent\",\"id\":null},"
+                      "\"created_at\":\"c\",\"updated_at\":\"u\","
+                      "\"expires_at\":null,\"deleted_at\":null,\"bin\":\"live\","
+                      "\"version_vector\":{}}");
+}
+
+TEST(output_export_entry_json_rejects_missing_arguments)
+{
+    Entry e = given_entry();
+    FILE *f = given_stream();
+
+    ASSERT_EQ_INT(output_export_entry_json(NULL, &e, NOW), -1);
+    ASSERT_EQ_INT(output_export_entry_json(f, NULL, NOW), -1);
+    assert_written(f, "");
+}
+
+TEST(output_json_string_array_writes_items_and_empty)
+{
+    static const char *const items[] = {"a", "b\"c"};
+    FILE *f = given_stream();
+
+    ASSERT_EQ_INT(output_json_string_array(f, items, 2), 0);
+    ASSERT_EQ_INT(output_json_string_array(f, NULL, 0), 0);
+    assert_written(f, "[\"a\",\"b\\\"c\"][]");
+}
+
+TEST(output_export_data_writes_the_result)
+{
+    FILE *f = given_stream();
+
+    ASSERT_EQ_INT(write_export_data(f), 0);
+    assert_written(f, "{\"action\":\"exported\",\"format\":\"json\",\"path\":\"/p\","
+                      "\"count\":2,\"links\":1}");
+}
+
+TEST(output_export_writers_report_every_failed_write)
+{
+    assert_reports_every_failed_write(write_export_entry_json);
+    assert_reports_every_failed_write(write_string_array);
+    assert_reports_every_failed_write(write_export_data);
+}
+
 void register_output_tests(void)
 {
     RUN_TEST(output_entry_json_rejects_missing_arguments);
@@ -1586,4 +1659,9 @@ void register_output_tests(void)
     RUN_TEST(output_rebuilt_json_reports_every_failed_write);
     RUN_TEST(output_rebuilt_human_reports_every_failed_write);
     RUN_TEST(output_entry_human_line_reports_every_failed_write);
+    RUN_TEST(output_export_entry_json_has_no_local_id);
+    RUN_TEST(output_export_entry_json_rejects_missing_arguments);
+    RUN_TEST(output_json_string_array_writes_items_and_empty);
+    RUN_TEST(output_export_data_writes_the_result);
+    RUN_TEST(output_export_writers_report_every_failed_write);
 }

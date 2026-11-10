@@ -109,6 +109,23 @@ int diag_error_split(DiagCode code, DiagSplit split);
  */
 int diag_error_sqlite(DiagCode code, const StoreError *detail, const char *path);
 
+/* A failed write of an export file (plan 22). reason is NULL except for
+   cannot_open. */
+typedef struct {
+    const char *path; /* absolute (D7) */
+    const char *reason;
+    int sys_errno;
+    char pad_[4]; /* explicit tail padding (kept -Wpadded-clean) */
+} DiagFileDetail;
+
+/*
+ * Write one file error (decision:plan22-export-file-error-copy). Plain:
+ * "remember: <message> <fix>". JSON: message, fix, retryable, and detail
+ * {errno, path, reason} in the E4.9 order, reason only when not NULL.
+ * Returns 0, or -1 when code is outside the catalog or the write fails.
+ */
+int diag_error_file(DiagCode code, DiagSplit split, DiagFileDetail detail);
+
 /*
  * Write one warning. Plain: "remember: warning: <message>\n" (Itay
  * 2026-10-15; amends E4.6 "note:" and D5), except raw_query_ignored, which is

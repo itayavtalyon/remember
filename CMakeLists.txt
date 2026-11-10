@@ -115,6 +115,9 @@ set_property(SOURCE
     src/cmd_device.c
     src/cmd_repair.c
     src/cmd_brain.c
+    src/cmd_export.c
+    src/export_format.c
+    src/fileio.c
     src/output.c
     src/util.c
     src/diag.c
@@ -243,6 +246,9 @@ set(REMEMBER_LIB_SOURCES
     src/cmd_device.c
     src/cmd_repair.c
     src/cmd_brain.c
+    src/cmd_export.c
+    src/export_format.c
+    src/fileio.c
     src/output.c
     src/util.c
     src/diag.c
@@ -328,6 +334,8 @@ set(REMEMBER_TEST_SOURCES
     tests/test_list_dates.c
     tests/test_settings.c
     tests/test_envelope.c
+    tests/test_export.c
+    tests/fixture_roundtrip.c
 )
 add_executable(remember_tests
     ${REMEMBER_TEST_SOURCES}

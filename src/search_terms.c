@@ -370,6 +370,15 @@ int search_tag_order(const void *a, const void *b)
 }
 
 /* D12 plain text: each run of White_Space or Cc becomes one space; trimmed. */
+/* D12 plain text separates words with runs of White_Space or Cc code points. */
+static bool is_gap(uint32_t cp)
+{
+    if (unicode_is_whitespace(cp)) {
+        return true;
+    }
+    return unicode_category(cp) == UNICODE_CAT_CC;
+}
+
 static SearchStatus plain_text(const char *body, size_t len, char *dst, size_t *dst_len)
 {
     size_t i = 0;
@@ -384,7 +393,7 @@ static SearchStatus plain_text(const char *body, size_t len, char *dst, size_t *
         if (st != SEARCH_OK) {
             return st;
         }
-        if (unicode_is_whitespace(cp) || unicode_category(cp) == UNICODE_CAT_CC) {
+        if (is_gap(cp)) {
             gap = (w > 0);
         } else {
             if (gap) {
@@ -447,21 +456,62 @@ cleanup:
     return st;
 }
 
+bool search_title_span(const char *body, size_t *start, size_t *end)
+{
+    const char *newline = NULL;
+
+    if (strncmp(body, TITLE_MARK, sizeof TITLE_MARK - 1U) != 0) {
+        return false;
+    }
+    newline = strchr(body, '\n');
+    *start = sizeof TITLE_MARK - 1U;
+    *end = (newline != NULL) ? (size_t)(newline - body) : strlen(body);
+    ascii_ws_trim(body, start, end);
+    return *start < *end;
+}
+
+SearchStatus search_words_end(const char *body, size_t nwords, size_t *end)
+{
+    size_t len = strlen(body);
+    size_t i = 0;
+    size_t words = 0;
+    bool in_word = false;
+
+    while (i < len) {
+        uint32_t cp = 0;
+        size_t n = 0;
+        SearchStatus st = decode_at(body, len, i, &cp, &n);
+
+        if (st != SEARCH_OK) {
+            return st;
+        }
+        if (!is_gap(cp)) {
+            in_word = true;
+        } else if (in_word) {
+            in_word = false;
+            words++;
+            if (words == nwords) {
+                break;
+            }
+        }
+        i += n;
+    }
+    *end = i;
+    return SEARCH_OK;
+}
+
+// NOLINTNEXTLINE(bugprone-easily-swappable-parameters) body, then the fallback key
 SearchStatus search_label(const char *body, const char *key, char **out)
 {
+    size_t start = 0;
+    size_t end = 0;
+
     if (body == NULL || out == NULL) {
         return SEARCH_ERR_INTERNAL;
     }
     *out = NULL;
-    if (strncmp(body, TITLE_MARK, sizeof TITLE_MARK - 1U) == 0) {
-        const char *newline = strchr(body, '\n');
-        size_t start = sizeof TITLE_MARK - 1U;
-        size_t end = (newline != NULL) ? (size_t)(newline - body) : strlen(body);
-
-        ascii_ws_trim(body, &start, &end);
-        if (start < end) {
-            return dup_bytes(body + start, end - start, out);
-        }
+    if (search_title_span(body, &start, &end)) {
+        return dup_bytes(body + start, end - start, out);
     }
     if (key != NULL) {
         return dup_bytes(key, strlen(key), out);

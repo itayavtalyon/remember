@@ -105,6 +105,10 @@ int harness_copy_file(const char *from, const char *to);
 /* First line of path without its newline (heap), or NULL when there is none. */
 char *harness_read_line(const char *path);
 
+/* The whole file at path (heap, NUL-terminated; *len excludes the NUL), or
+   NULL when it cannot be read. */
+char *harness_read_file(const char *path, size_t *len);
+
 /* Directory containing path (heap; caller frees). */
 char *dir_of_path(const char *file_path);
 

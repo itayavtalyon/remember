@@ -185,8 +185,68 @@ Do not re-open: no zip, atomic rename, RFC 4180, slug rules, no user rows.
 
 ## Implementation Notes
 
-_(empty)_
+Stages 1 to 5 are built (2026-11-09 to 2026-11-10). Stage 6 (settings) waits for plan 20's brain settings rows (PR #59, open on 2026-11-10). Until it lands, JSON has no `settings` member and the tests say so in their names; Markdown and CSV write no settings file.
+
+Grill decisions (Itay, 2026-11-09; each filed in Remember):
+
+- `decision:plan22-export-bin-flags`: the V1-09 flags replace `--bins`. Live by default, `--include-expired`, `--include-trash`, and `--exclude-archived` (parsed, duplicate-checked, no effect until the archive bin exists). This supersedes the `--bins` line in the usage block above.
+- `decision:plan22-export-bins-header`: every format names its bins. JSON has `bins` after `schema`, a count per exported bin in live, expired, deleted order. `README.txt` has a second line `Bins: live N, expired N, deleted N.` with the exported bins only. CSV writes `<CSV basename>.manifest.json` (the header members `format` to `bins`, then a newline) with the same temp, rename and `--force` rules as the CSV file.
+- `decision:plan22-export-file-error-copy`, `decision:plan22-export-out-is-folder`, `decision:plan22-export-reply-type` (`memory.export.result`, amends JSON-STYLE §1.7a), `decision:plan22-export-human-count-agrees`, `decision:plan22-export-file-mode` (0600 files, 0700 folders), `decision:plan22-export-no-create`.
+- New sentences are C-44 drafts in `COPY-PENDING.md`, including the `help export` block.
+
+Code:
+
+- `store_export_snapshot` reads brain id, `user_version`, entries and live links in one transaction. The bin is `store_bin_of` at `exported_at`. A link is exported when both ends are.
+- `export_format.c` is pure: the JSON document, Markdown name, file and README, CSV rows, the manifest. `output_export_entry_json` is `output_entry_json` without `local_id`. Version-vector keys are sorted at export. The Markdown name needs no allocation: `search_words_end` (search_terms.c) finds the end of the first 6 words with the D12 gap rule that plain text uses.
+- `fileio.c` holds every file call: temp siblings `<path>.tmp-<16 hex>`, `O_EXCL|O_NOFOLLOW` 0600 writes with fsync, rename, the D17 folder swap with `<path>.old-<16 hex>`, and tree removal.
+- Test CLI seams: `REMEMBER_TEST_EXPORT_FAIL=<site>[:errno]` (sites random, alloc, join, fdopen, write, close, rename, swap) and `REMEMBER_TEST_EXPORT_CRASH=1` (exit between the D17 renames; `exit`, not `_exit`, so the coverage build keeps its profile).
+
+Known limits (ponytail, recorded):
+
+- Without `--force` the existence check runs before the write, so a file created at `--out` in between is replaced by the rename. Closing that needs `renamex_np`/`renameat2` with no-replace, which differ by platform.
+- The parent folder is not fsynced after the rename.
+- A CSV export renames the CSV, then the manifest. If the second rename fails, the new CSV stands beside the old manifest. Renames inside one folder do not fail in practice.
+- Two memories with the same slug and the same last 12 hex of their ids would collide (EEXIST, `io_error`). The ids are UUID v7 with 48 random bits at the end.
+
+Commands: `cmake --build build -j8`, `./build/remember_tests ./build/remember --only export`, `./build/remember_store_tests`, then the gate (`ctest --test-dir build`, `./scripts/check-coverage.sh`, `CI=true BUILD_DIR=build REMEMBER_SCAN_BUILD=1 REMEMBER_IWYU=0 ./scripts/lint-all.sh`, `cmake --build build --target leaks-macos`).
 
 ## Review Notes
 
-_(empty)_
+Stage flow: in-session deep review after each stage, as plan 21. Local Bugbot is not installed. Stages 1 to 5 went into one commit: the stages share `cmd_export.c`, `export_format.c` and `tests/test_export.c`, and splitting them afterwards would make commits that do not build alone.
+
+### Stages 1 and 2 deep review (2026-11-09, in session)
+
+- **Important, fixed (grill):** the plan's `--bins` was stale against V1-09. Itay chose the `--include-*` flags (`decision:plan22-export-bin-flags`).
+- **Important, fixed (grill):** usage tests on a missing brain created it. Export now forces no-create, and `cmd_export_reject_args` runs before the open, as repair does.
+- **Nit, fixed:** a 300-byte single path component hit `ENAMETOOLONG` (`io_error`) in the error test; it now uses two 150-byte folders.
+
+### Stage 3 deep review (2026-11-10, in session)
+
+- **Important, fixed:** the crash test's last `--force` ran after the path was gone, so it never swapped a real folder. Coverage showed `fileio_replace_dir` at 25%. The test now swaps once cleanly (no sibling left) before the crash.
+- **Important, fixed:** `export_md_name` could fail on allocation and its callers set `ENOMEM` by hand. It now writes into a fixed buffer and cannot fail. Invalid UTF-8 (never stored) slugs the whole body, and the slug test locks that.
+- **Nit, fixed:** the test leaked `harness_side_path` results (`write_side` frees them).
+
+### Stage 4 deep review (2026-11-10, in session)
+
+- **Important, fixed:** every file failure path had no test. `export_every_file_fault_keeps_the_old_output` runs each fault site for json, csv and md with `--force` over an earlier export: exit 1, the D19 code, the earlier file byte-identical, no sibling left. `export_store_failure_writes_nothing` sweeps `REMEMBER_TEST_FAIL_READ` until the export succeeds.
+- **Nit, fixed:** `write_files` tracked the failing file with a comma increment; it is a plain index now.
+
+### Stage 5 deep review (2026-11-10, in session)
+
+- Facade parity (`facade_export_matches_cli`): CLI and `remember_run` write the same json, csv and manifest bytes with `exported_at` masked, and the same stdout. `help export` matches too.
+- Specs: JSON-ENVELOPE gains the `export` reply row and payload; JSON-STYLE §1.7a/§1.7b and the brain export row carry the reply type, `bins`, and the manifest.
+- **Important, fixed:** coverage found the Markdown `mkdir` failure untested. `export_md_missing_folder` locks `cannot_open`, reason `missing`, with no sibling left. The memstream close in the CSV JSON cell now shares one defensive tail.
+- **Nit, fixed (lint):** gcc `-fanalyzer` builds with strict POSIX headers, where macOS hides `O_NOFOLLOW`. The flag is gone: `O_CREAT | O_EXCL` already refuses any existing path, a symlink included. The same pass could not see `REMEMBER_VERSION`; its fallback moved from `remember_app.c` to `commands_common.h`, so both users share it.
+- **Nit, fixed (lint):** clang-tidy and cppcheck findings in the new code and tests (named buffer sizes, no one-letter names, no `bool` from `&&`, a possible NULL from `strdup`). clang-format did not settle on the long CSV literal, so the expected CSV is one macro per row.
+- **Nit, fixed (lint):** cppcheck saw every fault site as a constant condition in the release configuration. A release build now gets `#define FAULT(site) false`, and only the test CLI compiles `fault()`, the way `REMEMBER_TEST_FIXED_IDS` is fenced. `export_vv_sorted` had no outside caller and is now static.
+
+Mutation pass (2026-11-10, run on a copy of the tree, export suite; 16 mutants, all killed):
+
+- `!a->force` inverted → `export_force_existing_path`. Folder check skipped → `export_out_is_a_folder`.
+- Entry bin filter inverted, or the link filter `||` → `&&` → `export_json_default_is_live_only` (alpha links to an expired and a deleted memory).
+- `SLUG_MAX` 47 and the trailing-dash trim removed → `export_md_slug_rules`. `SLUG_WORDS` 5, and `search_words_end` stopping one word late → `export_md_folder_every_bin`.
+- `write_own_links` walk-back removed → `export_md_folder_every_bin`, `export_csv_every_bin` (bsearch lands on alpha's third link).
+- Version-vector sort reversed → `export_json_every_bin_without_settings_member`.
+- CSV quote doubling removed, NULL written as `""` → `export_csv_every_bin`. Manifest `dot > base` → `>=` → `export_csv_manifest_names` (`.csv`).
+- The D17 restore rename removed, the temp removal removed → `export_every_file_fault_keeps_the_old_output`.
+- Not mutated, justified: dropping `O_EXCL` on the temp. Only a 64-bit random name collision reaches it.

@@ -823,6 +823,42 @@ int diag_error_sqlite(DiagCode code, const StoreError *detail, const char *path)
     return fputc('}', err) == EOF ? -1 : 0;
 }
 
+static int write_file_detail(FILE *err, DiagFileDetail detail)
+{
+    if (fprintf(err, ",\"detail\":{\"errno\":%d,\"path\":", detail.sys_errno) < 0 ||
+        output_json_string(err, detail.path) != 0) {
+        return -1;
+    }
+    if (detail.reason != NULL &&
+        (fputs(",\"reason\":", err) < 0 || output_json_string(err, detail.reason) != 0)) {
+        return -1;
+    }
+    return fputc('}', err) == EOF ? -1 : 0;
+}
+
+int diag_error_file(DiagCode code, DiagSplit split, DiagFileDetail detail)
+{
+    const char *name = diag_code_name(code);
+    FILE *err = NULL;
+
+    if (name == NULL) {
+        return -1;
+    }
+    if (!g_json.on) {
+        return diag_error_split(code, split);
+    }
+    if (g_json.has_error) {
+        return 0; /* the first failure is the cause */
+    }
+    g_json.has_error = true;
+    err = g_json.error;
+    if (write_json_notice_head(err, name, split.message) != 0 ||
+        write_fix_retryable(err, split.fix, code) != 0 || write_file_detail(err, detail) != 0) {
+        return -1;
+    }
+    return fputc('}', err) == EOF ? -1 : 0;
+}
+
 /* cppcheck-suppress staticFunction ; public API (diag.h); remember_run */
 int diag_json_begin(const char *command)
 {

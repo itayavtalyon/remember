@@ -11,9 +11,15 @@
  */
 int output_json_string(FILE *out, const char *s);
 
+/* A JSON array of the n strings in items, each escaped as output_json_string. */
+int output_json_string_array(FILE *out, const char *const *items, size_t n);
+
 /* Print a single Entry as a JSON object (no trailing newline). now is required
  * to compute bin. */
 int output_entry_json(FILE *out, const Entry *e, const char *now);
+
+/* An export file's entry (plan 22): output_entry_json without local_id (JE-3.5). */
+int output_export_entry_json(FILE *out, const Entry *e, const char *now);
 
 /*
  * The *_data writers write the data object of a --json success, with no
@@ -113,6 +119,15 @@ int output_brain_new_id_data(FILE *out, const StoreBrainId *ids);
 
 /* conflicts --json list. */
 int output_conflicts_data(FILE *out, const StoreConflict *rows, size_t count);
+
+/* export: data{action exported, format, path, count, links} (plan 22). */
+typedef struct {
+    const char *format;
+    const char *path; /* absolute (D7) */
+    size_t count;
+    size_t links;
+} OutputExport;
+int output_export_data(FILE *out, const OutputExport *result);
 
 /* repair search-index. JSON is the E4.14 object; human is D8 "rebuilt N". */
 int output_rebuilt(FILE *out, bool json, size_t entries);

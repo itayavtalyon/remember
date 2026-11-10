@@ -314,3 +314,17 @@ Plan 26, stage 4, after plans 19 through 25 have merged. Each feature plan still
 ## plugin_chain_capped
 
 `remember: warning: <name> didn't run because the search reached its time limit, "remember.plugins.chain_budget". These results keep the order they had before it.` Status stays `skipped` with reason `chain_capped`. A clipped budget still gets no warning. Plan 25.
+
+## Still open (plan 22)
+
+**C-44.** Plan 22 export drafts (Itay grill, 2026-11-09). The CLI prints these drafts. They are not approved copy. Copy approves or rewrites them before INDEX row 22 is ticked. C-42 and C-43 are plan 20's rows.
+
+- Human line at a count of 1 (`decision:plan22-export-human-count-agrees`, amends D19): `exported 1 memory, 1 link to <path>`. 0 and 2 or more keep D19: `exported 0 memories, 2 links to <path>`.
+- `read_only` on an export file (`decision:plan22-export-file-error-copy`). Message `cannot write "<path>".` Fix `Give yourself write permission on that folder, or export to another folder.`
+- `cannot_open`, reason `missing`, on an export file's folder (same decision). Message `the folder for "<path>" doesn't exist.` Fix `Create the folder, or export to another path.`
+- `cannot_open`, reason `is_directory`, when `--out` (or a sibling file) is a folder (`decision:plan22-export-out-is-folder`). Message `"<path>" is a folder.` Fix `Pick a file path for --out.`
+- `disk_full` and `io_error` on an export file keep the plan 16 text with a closing period: `disk is full.` / `Free some space and try again.` and `the disk reported a read or write error.` / `Check the disk or drive, then try again.`
+- Command summary in `remember --help`: `export      Write the brain to a JSON, Markdown, or CSV file`.
+- Markdown `README.txt` second line (`decision:plan22-export-bins-header`): `Bins: live 12, expired 0, deleted 3.` It lists only the exported bins.
+- `export takes no positional arguments` follows the `import` and `purge` pattern.
+- `remember help export` block (drafted 2026-11-10, after the repair block): the usage line; options `--format FMT  json, md, or csv`, `--out PATH  The file to write (a folder for md)`, `--include-expired  Also export expired memories`, `--include-trash  Also export memories in the Trash`, `--exclude-archived  Accepted; no effect until archiving exists`, `--force  Replace PATH when it exists`; then `Live memories by default. A link is exported when both ends are.`, `csv also writes <name>.manifest.json beside the file.`, `A missing brain fails with cannot_open. Export creates nothing.`, and the human/JSON reply lines.

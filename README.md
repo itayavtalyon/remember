@@ -83,6 +83,7 @@ Opening an existing database migrates it to `user_version` **5**.
 - Progress goes to stderr only, when stderr is a TTY, as whole lines, at most once a second, with no spinner. `--quiet` turns it off. Progress is never in stdout and never in `--json`.
 - Prompts echo typed input.
 - `remember repair search-index` rebuilds a damaged search index. `corrupt` with `fts_only` true means that command. It never creates a missing brain.
+- `remember export --format json|md|csv --out PATH` writes the brain to a file (a folder for `md`). Live memories by default; add `--include-expired` or `--include-trash`. `--force` replaces an existing export. It never creates a missing brain.
 - `list --sort updated|created` (default `updated`) orders by that time, newest first, then id.
 - `list` and `search` take `--since` / `--until`. `since` is inclusive and `until` is exclusive. Search filters `updated_at` and ignores `--sort`.
 - `update --if-version-vector` writes only when that memory's `version_vector` still matches. A mismatch is code `stale` and writes nothing.
