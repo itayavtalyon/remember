@@ -125,6 +125,7 @@ Exit codes:
 | 2 | Not found. |
 | 3 | Wrong bin (`expired`, `not_expired`, `deleted`, `not_deleted`). |
 | 4 | A warning under `--strict`, or under `REMEMBER_STRICT=1` exactly. Any other value of that variable leaves strict off. |
+| 5 | `confirmation_required`: the command needs `--yes` and did not get it. |
 
 Exit 4 applies to every warning code, including when the command also failed. The JSON object is the same. Only the exit changes.
 

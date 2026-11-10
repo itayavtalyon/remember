@@ -500,7 +500,7 @@ static void free_entry_page(Entry *entries, size_t count)
 
 /* OOM is literal -1 so an untested malloc miss stays a defensive return. */
 enum { CURSOR_OK = 0, CURSOR_OOM = -1, CURSOR_BAD = -2 };
-enum { CURSOR_JSON_MAX = 65536, CURSOR_TAG_MAX = 50 };
+enum { CURSOR_TAG_MAX = 50 };
 enum { CURSOR_BUF_INIT = 16, HEX_LETTER_BASE = 10, JSON_MAX_UNIT = 0x7F, DECIMAL_BASE = 10 };
 
 typedef struct {
@@ -537,111 +537,6 @@ static void cursor_doc_free(CursorDoc *doc)
     }
     memset(doc, 0, sizeof(*doc));
 }
-
-/* Alphabet offsets and the 6-bit shifts are the base64url layout. */
-// NOLINTBEGIN(hicpp-signed-bitwise,cppcoreguidelines-avoid-magic-numbers,readability-magic-numbers)
-static int b64_digit(unsigned char c)
-{
-    if (c >= 'A' && c <= 'Z') {
-        return (int)(c - 'A');
-    }
-    if (c >= 'a' && c <= 'z') {
-        return (int)(c - 'a') + 26;
-    }
-    if (c >= '0' && c <= '9') {
-        return (int)(c - '0') + 52;
-    }
-    if (c == '-') {
-        return 62;
-    }
-    if (c == '_') {
-        return 63;
-    }
-    return -1;
-}
-
-static char *base64url_encode(const unsigned char *raw, size_t len)
-{
-    static const char k_alpha[] =
-        "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
-    char *out = (char *)malloc((4U * ((len + 2U) / 3U)) + 1U);
-    size_t i = 0U;
-    size_t j = 0U;
-
-    if (out == NULL) {
-        return NULL;
-    }
-    for (i = 0U; i < len; i += 3U) {
-        size_t left = len - i;
-        unsigned n = (unsigned)raw[i] << 16;
-
-        if (left > 1U) {
-            n |= (unsigned)raw[i + 1U] << 8;
-        }
-        if (left > 2U) {
-            n |= (unsigned)raw[i + 2U];
-        }
-        out[j++] = k_alpha[(n >> 18) & 63U];
-        out[j++] = k_alpha[(n >> 12) & 63U];
-        if (left > 1U) {
-            out[j++] = k_alpha[(n >> 6) & 63U];
-        }
-        if (left > 2U) {
-            out[j++] = k_alpha[n & 63U];
-        }
-    }
-    out[j] = '\0';
-    return out;
-}
-
-/* Rejects any byte outside the alphabet (padding too). A short last group is
-   taken as is: list_query_from_cursor re-encodes and accepts only the same
-   bytes, so a stray length or non-zero unused bits fail there. */
-static int base64url_decode(const char *text, unsigned char **out, size_t *out_len)
-{
-    size_t n = strlen(text);
-    size_t i = 0U;
-    size_t j = 0U;
-    unsigned char *buf = NULL;
-
-    if (n == 0U || ((n / 4U) + 1U) * 3U > (size_t)CURSOR_JSON_MAX) {
-        return CURSOR_BAD;
-    }
-    buf = (unsigned char *)malloc((((n / 4U) + 1U) * 3U) + 1U);
-    if (buf == NULL) {
-        return -1;
-    }
-    for (i = 0U; i < n; i += 4U) {
-        size_t chars = (n - i < 4U) ? n - i : 4U;
-        unsigned value = 0U;
-        size_t k = 0U;
-
-        for (k = 0U; k < 4U; k++) {
-            int digit = 0;
-
-            if (k < chars) {
-                digit = b64_digit((unsigned char)text[i + k]);
-            }
-            if (digit < 0) {
-                free(buf);
-                return CURSOR_BAD;
-            }
-            value = (value << 6) | (unsigned)digit;
-        }
-        buf[j++] = (unsigned char)((value >> 16) & 0xFFU);
-        if (chars > 2U) {
-            buf[j++] = (unsigned char)((value >> 8) & 0xFFU);
-        }
-        if (chars > 3U) {
-            buf[j++] = (unsigned char)(value & 0xFFU);
-        }
-    }
-    buf[j] = 0U;
-    *out = buf;
-    *out_len = j;
-    return CURSOR_OK;
-}
-// NOLINTEND(hicpp-signed-bitwise,cppcoreguidelines-avoid-magic-numbers,readability-magic-numbers)
 
 static int buf_add(char **buf, size_t *n, size_t *cap, char c)
 {

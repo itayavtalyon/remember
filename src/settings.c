@@ -3,6 +3,7 @@
 #include "normalize.h"
 
 #include <limits.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -12,6 +13,17 @@
 #ifdef REMEMBER_TEST_HOOKS
 #include "test_alloc.h" // IWYU pragma: keep
 #endif
+
+/* Two anonymous enums. The casts keep -Wanon-enum-enum-conversion quiet. */
+// NOLINTNEXTLINE(readability-redundant-casting)
+_Static_assert((int)SETTING_ACTOR_CAP == (int)ACTOR_JSON_CAP,
+               "actor stamp holds one canonical actor");
+// NOLINTNEXTLINE(readability-magic-numbers,cppcoreguidelines-avoid-magic-numbers)
+enum { UTC_FORM_CAP = 25, MONTH_MAX = 12, DAY_MAX = 31, HOUR_MAX = 23, MINUTE_MAX = 59 };
+/* Two anonymous enums. The cast keeps -Wanon-enum-enum-conversion quiet. */
+// NOLINTNEXTLINE(readability-redundant-casting)
+_Static_assert((int)SETTING_AT_CAP >= (int)UTC_FORM_CAP,
+               "updated_at stamp holds the 24-character UTC form");
 
 enum {
     SETTING_SEGMENT_MAX = 40,
@@ -73,11 +85,19 @@ static bool key_segments_ok(const char *folded, size_t n)
 }
 
 static const SettingSpec k_registry[] = {
-    {.key = "remember.buckets.prefixes", .type = SETTING_STRING_LIST, .allow_brain = true},
-    {.key = "remember.sync.credential_helper", .type = SETTING_STRING, .allow_user = true},
+    {.key = "remember.buckets.prefixes",
+     .description = "The tag prefixes that group memories into buckets.",
+     .type = SETTING_STRING_LIST,
+     .allow_brain = true},
+    {.key = "remember.sync.credential_helper",
+     .description = "The program that gives sync its access token.",
+     .type = SETTING_STRING,
+     .allow_user = true},
     {.key = "remember.search.candidate_pool",
      .type = SETTING_INTEGER,
      .default_text = "200",
+     .description = "How many keyword matches search looks at before filters rank them.",
+     .related = "remember.search.max_results",
      .min_value = 20,
      .max_value = 2000,
      .allow_brain = true,
@@ -85,6 +105,8 @@ static const SettingSpec k_registry[] = {
     {.key = "remember.search.max_results",
      .type = SETTING_INTEGER,
      .default_text = "20",
+     .description = "How many results search shows after filters rank them.",
+     .related = "remember.search.candidate_pool",
      .min_value = 1,
      .max_value = 1000,
      .allow_brain = true,
@@ -92,12 +114,14 @@ static const SettingSpec k_registry[] = {
     {.key = "remember.plugins.chain_budget",
      .type = SETTING_DURATION,
      .default_text = "1.5s",
+     .description = "How long all plugin filters together may run for one command.",
      .min_value = 100,
      .max_value = 30000,
      .allow_user = true},
     {.key = "remember.plugins.idle_timeout",
      .type = SETTING_DURATION,
      .default_text = "10m",
+     .description = "How long a plugin may sit idle before remember stops it.",
      .min_value = 60000,
      .max_value = 86400000,
      .allow_user = true},
@@ -192,23 +216,13 @@ const SettingSpec *setting_by_key(const char *typed)
 }
 
 static const char k_prefix_default[] = "[\"project:\",\"status:\"]";
-static const char k_idle_scope[] =
-    "remember.plugins.idle_timeout is a user setting; it can't be set for one brain. Run the "
-    "command again with --scope user, or without --scope.";
 
 static void copy_msg(char *err, size_t errlen, const char *msg)
 {
-    size_t n = 0;
-
     if (err == NULL || errlen == 0U || msg == NULL) {
         return;
     }
-    n = strlen(msg);
-    if (n >= errlen) {
-        n = errlen - 1U;
-    }
-    memcpy(err, msg, n);
-    err[n] = '\0';
+    (void)snprintf(err, errlen, "%s", msg);
 }
 
 /* cppcheck-suppress staticFunction ; public API (settings.h); used by tests */
@@ -227,6 +241,8 @@ const char *setting_status_code(SettingStatus st)
         return "setting_scope_mismatch";
     case SETTING_ERR_QUOTA:
         return "quota_exceeded";
+    case SETTING_ERR_DOCUMENT:
+        return "import_parse";
     case SETTING_ERR_STORE:
     default:
         /* STORE has no settings code. An unknown status shares that empty token. */
@@ -252,7 +268,8 @@ static bool json_quote(const char *src, char *out, size_t cap)
     return true;
 }
 
-static bool helper_id_ok(const char *src)
+/* cppcheck-suppress staticFunction ; public API (settings.h); credential lookup */
+bool helper_id_ok(const char *src)
 {
     size_t i = 0;
     size_t n = 0;
@@ -309,6 +326,15 @@ static void default_json(const SettingSpec *spec, char *out, size_t cap, bool *h
     *has = true;
 }
 
+/* cppcheck-suppress staticFunction ; public API (settings.h); used by tests */
+bool setting_default_json(const SettingSpec *spec, char *out, size_t cap)
+{
+    bool has = false;
+
+    default_json(spec, out, cap, &has);
+    return has;
+}
+
 static SettingStatus canon_integer(const SettingSpec *spec, const char *src, char *json,
                                    size_t json_cap)
 {
@@ -352,31 +378,6 @@ static SettingStatus canon_helper(const char *src, char *json, size_t json_cap)
     return SETTING_OK;
 }
 
-static void prefix_bad_item(const char *item, char *err, size_t errlen)
-{
-    const char *shown = "";
-
-    if (item != NULL) {
-        shown = item;
-    }
-    if (err != NULL && errlen > 0U) {
-        (void)snprintf(err, errlen, "\"%s\" isn't a bucket prefix.", shown);
-    }
-}
-
-// NOLINTNEXTLINE(bugprone-easily-swappable-parameters) the new item, then the earlier one
-static void prefix_dup_item(const char *item, const char *earlier, char *err, size_t errlen)
-{
-    if (err == NULL || errlen == 0U) {
-        return;
-    }
-    if (strcmp(item, earlier) == 0) {
-        (void)snprintf(err, errlen, "\"%s\" is in the list twice.", item);
-        return;
-    }
-    (void)snprintf(err, errlen, "\"%s\" and \"%s\" are the same prefix.", item, earlier);
-}
-
 static bool prefix_already_folded(const char *block, size_t i, const char *folded, size_t *at)
 {
     size_t j = 0;
@@ -414,54 +415,80 @@ static SettingStatus append_prefix_json(char *json, size_t *pos, size_t json_cap
     return SETTING_OK;
 }
 
-static SettingStatus canon_prefixes(const char *const *items, size_t nitems, char *json,
-                                    size_t json_cap, char *err, size_t errlen)
+/* Fold every item into a block the caller frees. On a refusal *item is the
+   failing index and *other the earlier item it repeats, or SIZE_MAX when the
+   item doesn't fold. */
+// NOLINTBEGIN(bugprone-easily-swappable-parameters) the failing item, then the earlier one
+static SettingStatus prefix_fold_all(const char *const *items, size_t nitems, char **block_out,
+                                     size_t *item, size_t *other)
+// NOLINTEND(bugprone-easily-swappable-parameters)
 {
     enum { PREFIX_JSON_MIN = 5 };
     char *block = NULL;
     size_t i = 0;
-    size_t pos = 0;
 
+    *block_out = NULL;
+    *item = 0;
+    *other = SIZE_MAX;
     if (nitems > (size_t)SETTING_VALUE_MAX / (size_t)PREFIX_JSON_MIN) {
         return SETTING_ERR_QUOTA;
     }
-    if (nitems > 0U) {
-        block = (char *)malloc(nitems * (size_t)REMEMBER_BUCKET_PREFIX_BUF);
-        if (block == NULL) {
-            copy_msg(err, errlen, "out of memory");
-            return SETTING_ERR_STORE;
-        }
+    if (nitems == 0U) {
+        return SETTING_OK;
     }
-    json[pos++] = '[';
+    block = (char *)malloc(nitems * (size_t)REMEMBER_BUCKET_PREFIX_BUF);
+    if (block == NULL) {
+        return SETTING_ERR_STORE;
+    }
+    *block_out = block;
     for (i = 0; i < nitems; i++) {
         char *folded = block + (i * (size_t)REMEMBER_BUCKET_PREFIX_BUF);
-        size_t earlier = 0;
-        SettingStatus st = SETTING_OK;
-        bool comma = false;
 
+        *item = i;
         if (items[i] == NULL ||
-            bucket_prefix_fold(items[i], folded, REMEMBER_BUCKET_PREFIX_BUF) != NORM_OK) {
-            prefix_bad_item(items[i], err, errlen);
-            free(block);
+            bucket_prefix_fold(items[i], folded, REMEMBER_BUCKET_PREFIX_BUF) != NORM_OK ||
+            prefix_already_folded(block, i, folded, other)) {
             return SETTING_ERR_INVALID;
         }
-        if (prefix_already_folded(block, i, folded, &earlier)) {
-            prefix_dup_item(items[i], items[earlier], err, errlen);
-            free(block);
-            return SETTING_ERR_INVALID;
-        }
-        if (i > 0U) {
-            comma = true;
-        }
-        st = append_prefix_json(json, &pos, json_cap, folded, comma);
-        if (st != SETTING_OK) {
-            free(block);
-            return st;
-        }
+    }
+    return SETTING_OK;
+}
+
+SettingStatus setting_prefix_issue(const char *const *items, size_t nitems, size_t *item,
+                                   size_t *other)
+{
+    char *block = NULL;
+    SettingStatus st = prefix_fold_all(items, nitems, &block, item, other);
+
+    free(block);
+    return st;
+}
+
+static SettingStatus canon_prefixes(const char *const *items, size_t nitems, char *json,
+                                    size_t json_cap, char *err, size_t errlen)
+{
+    char *block = NULL;
+    size_t i = 0;
+    size_t pos = 0;
+    size_t bad = 0;
+    size_t earlier = 0;
+    SettingStatus st = prefix_fold_all(items, nitems, &block, &bad, &earlier);
+
+    json[pos++] = '[';
+    for (i = 0; st == SETTING_OK && i < nitems; i++) {
+        st = append_prefix_json(json, &pos, json_cap,
+                                block + (i * (size_t)REMEMBER_BUCKET_PREFIX_BUF), i > 0U);
+    }
+    free(block);
+    if (st == SETTING_ERR_STORE) {
+        copy_msg(err, errlen, "out of memory");
+    }
+    if (st != SETTING_OK) {
+        json[0] = '\0';
+        return st;
     }
     json[pos++] = ']';
     json[pos] = '\0';
-    free(block);
     if (pos > (size_t)SETTING_VALUE_MAX) {
         json[0] = '\0';
         return SETTING_ERR_QUOTA;
@@ -498,7 +525,7 @@ static SettingStatus setting_canon(const SettingSpec *spec, const char *const *i
 }
 
 static SettingStatus setting_layer_of(const SettingSpec *spec, SettingLayer requested,
-                                      SettingLayer *out, char *err, size_t errlen)
+                                      SettingLayer *out)
 {
     SettingLayer layer = requested;
 
@@ -509,13 +536,8 @@ static SettingStatus setting_layer_of(const SettingSpec *spec, SettingLayer requ
             layer = SETTING_LAYER_BRAIN;
         }
     }
-    if (layer == SETTING_LAYER_USER && !spec->allow_user) {
-        return SETTING_ERR_SCOPE;
-    }
-    if (layer == SETTING_LAYER_BRAIN && !spec->allow_brain) {
-        if (strcmp(spec->key, "remember.plugins.idle_timeout") == 0) {
-            copy_msg(err, errlen, k_idle_scope);
-        }
+    if ((layer == SETTING_LAYER_USER && !spec->allow_user) ||
+        (layer == SETTING_LAYER_BRAIN && !spec->allow_brain)) {
         return SETTING_ERR_SCOPE;
     }
     *out = layer;
@@ -546,7 +568,7 @@ SettingStatus setting_choose_layer(const char *key, SettingLayer requested,
         copy_msg(err, errlen, "internal error");
         return SETTING_ERR_STORE;
     }
-    return setting_layer_of(spec, requested, layer_out, err, errlen);
+    return setting_layer_of(spec, requested, layer_out);
 }
 
 /* cppcheck-suppress staticFunction ; public API (settings.h); used by tests */
@@ -599,11 +621,13 @@ SettingFrom setting_pick(const SettingSpec *spec, const char *user_json, const c
         (void)copy_cap(flag_json, out, out_cap);
         return SETTING_FROM_FLAG;
     }
-    if (brain_json != NULL) {
+    /* A row in a layer the key does not allow (a synced or hand-edited brain)
+       is no value. */
+    if (brain_json != NULL && spec->allow_brain) {
         (void)copy_cap(brain_json, out, out_cap);
         return SETTING_FROM_BRAIN;
     }
-    if (user_json != NULL) {
+    if (user_json != NULL && spec->allow_user) {
         (void)copy_cap(user_json, out, out_cap);
         return SETTING_FROM_USER;
     }
@@ -612,4 +636,125 @@ SettingFrom setting_pick(const SettingSpec *spec, const char *user_json, const c
         (void)copy_cap(fallback, out, out_cap);
     }
     return SETTING_FROM_DEFAULT;
+}
+
+/* cppcheck-suppress staticFunction ; public API (settings.h); used by tests */
+bool setting_format_when(SettingWhen when, char *buf, size_t cap)
+{
+    static const char *const k_months[] = {"Jan", "Feb", "Mar", "Apr", "May", "Jun",
+                                           "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"};
+    int n = 0;
+
+    if (buf == NULL || cap == 0U) {
+        return false;
+    }
+    buf[0] = '\0';
+    if (when.month < 1 || when.month > MONTH_MAX || when.day < 1 || when.day > DAY_MAX ||
+        when.hour < 0 || when.hour > HOUR_MAX || when.minute < 0 || when.minute > MINUTE_MAX) {
+        return false;
+    }
+    if (when.year != when.year_now) {
+        n = snprintf(buf, cap, "%d %s %d at %02d:%02d", when.day, k_months[when.month - 1],
+                     when.year, when.hour, when.minute);
+    } else {
+        n = snprintf(buf, cap, "%d %s at %02d:%02d", when.day, k_months[when.month - 1], when.hour,
+                     when.minute);
+    }
+    if (n < 0 || (size_t)n >= cap) {
+        return false;
+    }
+    if (when.utc_suffix) {
+        int extra = snprintf(buf + n, cap - (size_t)n, " UTC");
+
+        if (extra < 0 || (size_t)n + (size_t)extra >= cap) {
+            return false;
+        }
+    }
+    return true;
+}
+
+/* Length diff above 2 cannot be within distance 2. Inputs longer than a key
+   plus 2 cannot either. Both skip with continue so the distance itself stays
+   the value the caller compares. */
+static int edit_distance(const char *a, const char *b)
+{
+    size_t len_a = strlen(a);
+    size_t len_b = strlen(b);
+    unsigned int prev[SETTING_KEY_MAX + 3];
+    unsigned int cur[SETTING_KEY_MAX + 3];
+    size_t i = 0;
+    size_t j = 0;
+
+    for (j = 0; j <= len_b; j++) {
+        prev[j] = (unsigned int)j;
+    }
+    for (i = 1; i <= len_a; i++) {
+        cur[0] = (unsigned int)i;
+        for (j = 1; j <= len_b; j++) {
+            unsigned int cost = (a[i - 1U] == b[j - 1U]) ? 0U : 1U;
+            unsigned int del = prev[j] + 1U;
+            unsigned int ins = cur[j - 1U] + 1U;
+            unsigned int sub = prev[j - 1U] + cost;
+            unsigned int best = del;
+
+            if (ins < best) {
+                best = ins;
+            }
+            if (sub < best) {
+                best = sub;
+            }
+            cur[j] = best;
+        }
+        memcpy(prev, cur, (len_b + 1U) * sizeof(prev[0]));
+    }
+    return (int)prev[len_b];
+}
+
+/* cppcheck-suppress staticFunction ; public API (settings.h); used by tests */
+const char *setting_suggestion(const char *typed)
+{
+    size_t nregs = 0;
+    const SettingSpec *specs = setting_registry(&nregs);
+    const char *hit = NULL;
+    size_t hits = 0;
+    size_t i = 0;
+    size_t n = 0;
+    bool comparable = false;
+
+    if (typed == NULL || typed[0] == '\0') {
+        return NULL;
+    }
+    for (i = 0; i < nregs; i++) {
+        const char *dot = strrchr(specs[i].key, '.');
+
+        if (dot != NULL && strcmp(dot + 1, typed) == 0) {
+            hits++;
+            hit = specs[i].key;
+        }
+    }
+    if (hits == 1U) {
+        return hit;
+    }
+    /* ST-1.5 measures the typed bytes. A colon is not a dot. */
+    n = strlen(typed);
+    comparable = n <= (size_t)SETTING_KEY_MAX + 2U;
+    hits = 0U;
+    hit = NULL;
+    for (i = 0; i < nregs; i++) {
+        size_t nb = strlen(specs[i].key);
+        int dist = 0;
+
+        if (!comparable || n > nb + 2U || nb > n + 2U) {
+            continue;
+        }
+        dist = edit_distance(typed, specs[i].key);
+        if (dist <= 2) {
+            hits++;
+            hit = specs[i].key;
+        }
+    }
+    if (hits == 1U) {
+        return hit;
+    }
+    return NULL;
 }

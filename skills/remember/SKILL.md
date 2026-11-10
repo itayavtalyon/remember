@@ -69,6 +69,7 @@ remember [--db PATH] [--json] [--strict] [--color=auto|always|never] [--quiet] [
 | `2` | Not found (`get` / `delete` / `update` / `rekey`) in either bin; `link`/`unlink`/`related` missing end |
 | `3` | Wrong bin. `not_expired` / `not_deleted` stay those tokens. Trash: `remember: "<key>" is in the Trash. Add --trash to use it.` Expired: `remember: "<key>" has expired. Add --expired to use it.` `<key>` is the key, or the id when the row has no key. **Not** used by `link`/`unlink`/`related` (those resolve live+expired by default). |
 | `4` | A warning under `--strict` or `REMEMBER_STRICT=1`. Exit 4 has no other meaning. |
+| `5` | `confirmation_required`: run the command again with `--yes` (`settings reset --all` / `--namespace`). |
 
 Never invent ids, keys, or `local_id`s. On exit `2`, the entry is missing — do not fabricate one. On exit `3`, the row exists in another bin.
 

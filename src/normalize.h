@@ -78,6 +78,10 @@ bool is_hebrew_mark(unsigned int cp);
  */
 void ascii_ws_trim(const char *s, size_t *start, size_t *end);
 
+/* A C0 control (below 0x20, tab included) or DEL: the one byte class the
+   token rules and the credential lookup refuse. */
+bool is_ascii_control(unsigned char c);
+
 /*
  * Lowercase hex SHA-256 of data[0..len) into out_hex
  * (must provide REMEMBER_SHA256_HEX_LEN + 1 bytes).
@@ -131,10 +135,14 @@ bool actor_json_is_canonical(const char *s);
    into out as canonical JSON. */
 bool actor_json_store_to_canonical(const char *stored, char *out, size_t cap);
 
+/* REMEMBER_HOOK_DEPTH is a whole integer of 1 or more. Anything else is false.
+   One definition: actor_from_cli and the settings writer both call this. */
+bool hook_depth_blocks(void);
+
 /* CLI writer. kind NULL means human. id NULL means JSON null.
    Allowed kinds: human, agent, tool, share. Not sync. Not import.
-   When REMEMBER_HOOK_DEPTH is an integer of 1 or more and either field was
-   passed (non-NULL), returns ACTOR_HOOK and writes nothing. */
+   When hook_depth_blocks and either field was passed (non-NULL), returns
+   ACTOR_HOOK and writes nothing. */
 ActorStatus actor_from_cli(Actor flags, char *out, size_t cap);
 
 /* Bucket prefix (007 ST-5.4): at most 32 code points before the ':'. */

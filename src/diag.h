@@ -43,6 +43,17 @@ typedef enum {
     DIAG_IO_ERROR,
     DIAG_SCHEMA_TOO_NEW,
     DIAG_INVALID_ARGUMENT,
+    /* ST-3.6. Appended so the E4.3 order stays put. */
+    DIAG_SYNC_CREDENTIAL_UNAVAILABLE,
+    /* C-03. Appended so the E4.3 order stays put. */
+    DIAG_SETTING_UNKNOWN,
+    /* Plan 20 stage 6. Appended so the E4.3 order stays put. */
+    DIAG_SETTING_INVALID_VALUE,
+    DIAG_SETTING_OUT_OF_RANGE,
+    DIAG_SETTING_SCOPE_MISMATCH,
+    DIAG_QUOTA_EXCEEDED,
+    DIAG_CONFIRMATION_REQUIRED,
+    DIAG_SETTING_FROM_HOOK,
     DIAG_CODE_COUNT
 } DiagCode;
 
@@ -62,8 +73,9 @@ typedef enum {
     DIAG_WARN_DEPRECATED_FLAG,
     DIAG_WARN_SYNCED_FOLDER,
     DIAG_WARN_SETTING_INVALID,
-    DIAG_WARN_FLAG_MEANING_CHANGED, /* --trash, one release (M-23) */
-    DIAG_WARN_UNKNOWN_FIELD,        /* C-35, once per file or stdin */
+    DIAG_WARN_FLAG_MEANING_CHANGED,   /* --trash, one release (M-23) */
+    DIAG_WARN_UNKNOWN_FIELD,          /* C-35, once per file or stdin */
+    DIAG_WARN_SETTING_IMPORT_SKIPPED, /* C-12 */
     DIAG_WARN_COUNT
 } DiagWarning;
 
@@ -92,6 +104,21 @@ typedef struct {
 } DiagSplit;
 
 int diag_error_split(DiagCode code, DiagSplit split);
+
+/* diag_error with an explicit fix. NULL fix uses the catalog sentence.
+   Plain joins message and fix. JSON uses this fix and still writes retryable. */
+int diag_error_fix(DiagCode code, const char *message, const char *fix);
+
+/* One string member of a JSON "detail" object. */
+typedef struct {
+    const char *name;
+    const char *value;
+} DiagDetailField;
+
+/* diag_error_fix plus a JSON "detail" object. Plain joins message and fix.
+   An empty fix is not a second sentence. nfields 0 writes no detail. */
+int diag_error_detail(DiagCode code, const char *message, const char *fix,
+                      const DiagDetailField *fields, size_t nfields);
 
 /*
  * Write one SQLite failure (E4.8 text, E4.9 detail). code is one of the eight
@@ -138,12 +165,6 @@ int diag_error_file(DiagCode code, DiagSplit split, DiagFileDetail detail);
  */
 int diag_warning(DiagWarning code, const char *message);
 
-/* One string member of a warning's JSON "detail" object. */
-typedef struct {
-    const char *name;
-    const char *value;
-} DiagDetailField;
-
 /*
  * diag_warning plus a JSON "detail" object of string members, in the given
  * order, after "message". The plain line is the same as diag_warning's.
@@ -167,6 +188,13 @@ typedef struct {
  * stream returns 0 and prints nothing.
  */
 int diag_unknown_field(DiagUnknownField field);
+
+/*
+ * Plain stderr line "remember: <message>\n" that is neither an error nor a
+ * warning (the settings more-pages line). No code, no JSON, not counted as a
+ * warning. Returns -1 when the write fails.
+ */
+int diag_notice(const char *message);
 
 /* Zero the warning count and the once-per-file set at the start of remember_run. */
 void diag_warnings_reset(void);

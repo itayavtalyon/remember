@@ -96,6 +96,7 @@ static const CommandEntry k_commands[] = {
     {.name = "export",
      .command = CLI_CMD_EXPORT,
      .summary = "Write the brain to a JSON, Markdown, or CSV file"},
+    {.name = "settings", .command = CLI_CMD_SETTINGS, .summary = "Show or change a setting"},
 };
 
 enum { COMMAND_COUNT = (int)(sizeof(k_commands) / sizeof(k_commands[0])) };

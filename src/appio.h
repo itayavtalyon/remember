@@ -25,6 +25,9 @@ FILE *app_out(void);
 /* Current error stream (never NULL — falls back to stderr). */
 FILE *app_err(void);
 
+/* File descriptor of the error stream, or -1. For a child to inherit. */
+int app_err_fileno(void);
+
 /* Output/error stream pair. Passed by value so callers name each end and cannot
    transpose the two FILE* arguments. */
 typedef struct {
@@ -69,6 +72,10 @@ int app_prompt_line(FILE *in, const char *prompt, char *buf, size_t cap);
  * An unset slot omits next_cursor and has_more. The cursor string is copied.
  */
 void app_clear_list_page(void);
+/* A command whose output is a document (settings export), not a message. Under
+   --json the buffered bytes are written as they are on success (JSON-STYLE §1.7b). */
+void app_mark_document(void);
+bool app_take_document(void);
 int app_set_list_page(const char *next_cursor);
 bool app_take_list_page(char **out_cursor);
 

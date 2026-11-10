@@ -79,6 +79,14 @@ static const char *const k_error_codes[DIAG_CODE_COUNT] = {
     [DIAG_IO_ERROR] = "io_error",
     [DIAG_SCHEMA_TOO_NEW] = "schema_too_new",
     [DIAG_INVALID_ARGUMENT] = "invalid_argument",
+    [DIAG_SYNC_CREDENTIAL_UNAVAILABLE] = "sync_credential_unavailable",
+    [DIAG_SETTING_UNKNOWN] = "setting_unknown",
+    [DIAG_SETTING_INVALID_VALUE] = "setting_invalid_value",
+    [DIAG_SETTING_OUT_OF_RANGE] = "setting_out_of_range",
+    [DIAG_SETTING_SCOPE_MISMATCH] = "setting_scope_mismatch",
+    [DIAG_QUOTA_EXCEEDED] = "quota_exceeded",
+    [DIAG_CONFIRMATION_REQUIRED] = "confirmation_required",
+    [DIAG_SETTING_FROM_HOOK] = "setting_from_hook",
 };
 
 /* error.fix per code (decision:plan21-error-fix-drafts-c42). The SQLite codes
@@ -117,6 +125,21 @@ static const char *const k_fix[DIAG_CODE_COUNT] = {
     [DIAG_SCHEMA_TOO_NEW] = "Upgrade remember to make changes.",
     /* Draft, not approved copy. Plan 21 stage 2b. */
     [DIAG_INVALID_ARGUMENT] = "Run 'remember list' again without --cursor.",
+    /* Locked, 007 ST-3.6. One sentence wrapped at the column limit. */
+    [DIAG_SYNC_CREDENTIAL_UNAVAILABLE] =
+        // NOLINTNEXTLINE(bugprone-suspicious-missing-comma)
+    "Check the helper, or set remember.sync.credential_helper to env and export "
+    "REMEMBER_SYNC_TOKEN.",
+    /* Locked, C-03. */
+    [DIAG_SETTING_UNKNOWN] = "Run 'remember settings list' to see all settings.",
+    /* Catalog fallbacks. Settings commands pass the C-05..C-11 sentence. */
+    [DIAG_SETTING_INVALID_VALUE] =
+        "Write it in plain digits, like 200, with no sign, leading zero, \"_\", or exponent.",
+    [DIAG_SETTING_OUT_OF_RANGE] = "Set a value from the minimum to the maximum.",
+    [DIAG_SETTING_SCOPE_MISMATCH] = "Run the command again with --scope brain, or without --scope.",
+    [DIAG_QUOTA_EXCEEDED] = "Reset settings you don't need with 'remember settings reset'.",
+    [DIAG_CONFIRMATION_REQUIRED] = "Run the command again with --yes to confirm.",
+    [DIAG_SETTING_FROM_HOOK] = "Change them yourself in a terminal or in Settings.",
 };
 
 /* cppcheck-suppress staticFunction ; public API (diag.h); remember_run */
@@ -146,6 +169,7 @@ static const char *const k_warning_codes[DIAG_WARN_COUNT] = {
     [DIAG_WARN_SETTING_INVALID] = "setting_invalid",
     [DIAG_WARN_FLAG_MEANING_CHANGED] = "flag_meaning_changed",
     [DIAG_WARN_UNKNOWN_FIELD] = "unknown_field",
+    [DIAG_WARN_SETTING_IMPORT_SKIPPED] = "setting_import_skipped",
 };
 
 /* Plain line lead per warning. E2.3 gives raw_query_ignored its own words; the
@@ -157,6 +181,7 @@ static const char *const k_warning_plain_prefix[DIAG_WARN_COUNT] = {
     [DIAG_WARN_SETTING_INVALID] = "warning: ",
     [DIAG_WARN_FLAG_MEANING_CHANGED] = "warning: ",
     [DIAG_WARN_UNKNOWN_FIELD] = "warning: ",
+    [DIAG_WARN_SETTING_IMPORT_SKIPPED] = "warning: ",
 };
 
 static const char *catalog_name(const char *const *names, size_t count, size_t index)
@@ -260,7 +285,8 @@ static int write_json_notice_head(FILE *err, const char *code, const char *messa
     return 0;
 }
 
-/* ,"detail":{"<name>":"<value>",...} in the given order; nothing when n is 0. */
+/* ,"detail":{"<name>":"<value>",...} in the given order; nothing when n is 0.
+   A NULL value is null. */
 static int write_json_detail_fields(FILE *err, const DiagDetailField *fields, size_t n)
 {
     size_t i = 0;
@@ -275,8 +301,12 @@ static int write_json_detail_fields(FILE *err, const DiagDetailField *fields, si
         if (i > 0U && fputc(',', err) == EOF) {
             return -1;
         }
-        if (output_json_string(err, fields[i].name) != 0 || fputc(':', err) == EOF ||
-            output_json_string(err, fields[i].value) != 0) {
+        if (output_json_string(err, fields[i].name) != 0 || fputc(':', err) == EOF) {
+            return -1;
+        }
+        /* A NULL value is JSON null (007 ST-8.4: a bad_shape row's absent key). */
+        if (fields[i].value == NULL ? fputs("null", err) < 0
+                                    : output_json_string(err, fields[i].value) != 0) {
             return -1;
         }
     }
@@ -369,7 +399,7 @@ static int write_notice(Notice notice)
         rc = write_json_notice(notice, message);
     } else if (fprintf(err, "remember: %s", notice.plain_prefix) < 0 ||
                output_text_human(err, message, false) != 0 ||
-               (notice.fix != NULL &&
+               (notice.fix != NULL && notice.fix[0] != '\0' &&
                 (fputc(' ', err) == EOF || output_text_human(err, notice.fix, false) != 0)) ||
                fputc('\n', err) == EOF) {
         /* decision:plan17a-plain-notice-one-line: an echoed token cannot split the
@@ -501,9 +531,21 @@ int diag_error_split(DiagCode code, DiagSplit split)
 
 int diag_error(DiagCode code, const char *message)
 {
+    return diag_error_fix(code, message, NULL);
+}
+
+/* cppcheck-suppress staticFunction ; public API (diag.h) */
+int diag_error_fix(DiagCode code, const char *message, const char *fix)
+{
+    return diag_error_detail(code, message, fix, NULL, 0U);
+}
+
+int diag_error_detail(DiagCode code, const char *message, const char *fix,
+                      const DiagDetailField *fields, size_t nfields)
+{
     const char *name = diag_code_name(code);
 
-    if (name == NULL) {
+    if (name == NULL || (fields == NULL && nfields > 0U)) {
         return -1;
     }
     return write_notice((Notice){
@@ -511,8 +553,16 @@ int diag_error(DiagCode code, const char *message)
         .plain_prefix = "",
         .code = name,
         .message = message,
+        .fix = fix,
+        .fields = fields,
+        .nfields = nfields,
         .error_code = code,
     });
+}
+
+int diag_notice(const char *message)
+{
+    return fprintf(app_err(), "remember: %s\n", message) < 0 ? -1 : 0;
 }
 
 int diag_warning(DiagWarning code, const char *message)
