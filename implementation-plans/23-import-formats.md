@@ -221,8 +221,23 @@ Do not re-open: no old-name reader, memory actor stamp, settings actor stamp, li
 
 ## Implementation Notes
 
-_(empty)_
+### Stage 1 — jsonread
+
+- `src/jsonread.c` / `src/jsonread.h`: pure RFC 8259 reader. `JSONREAD_NESTING_MAX` is 64 (P11). No document size cap. Numbers stay raw text. Duplicate object members are kept (P8 is a later bad-record rule).
+- Unit tests live in `remember_store_tests` (`tests/test_jsonread.c`), wired in CMake with `-Wcast-qual` and `REMEMBER_LIB_SOURCES`.
+- Mutants recorded: nesting `>`→`>=` → `jsonread_accepts_nesting_at_the_named_limit` red (status 3); trailing-garbage skip would hit `jsonread_rejects_trailing_garbage`; lone `\uD800` would hit `jsonread_rejects_invalid_utf8_and_lone_surrogates`.
 
 ## Review Notes
 
-_(empty)_
+### Stage 1 deep review (2026-11-10, in session)
+
+Gate for this stage: `remember_store_tests` 521/0 including the 11 `jsonread_*` tests; `remember` links clean with sanitizers.
+
+Lenses: C safety (alloc checks, UTF-8/surrogate rejects, no ignored parse status), architecture (pure TU, no I/O, SQLite untouched), simplify (kept separate array/object growers; one recursive `parse_value`).
+
+Findings fixed before commit: `-Wpadded` on `Parser` (explicit `pad_[4]`); test bodies return after a failed parse so UBSan does not chase a NULL root.
+
+No product or architecture grill. C-35 is unused until stage 7; printed at session start. No old-name alias. No add-wins.
+
+Ready for stage 2.
+

@@ -119,6 +119,7 @@ set_property(SOURCE
     src/cmd_export.c
     src/export_format.c
     src/fileio.c
+    src/jsonread.c
     src/cmd_settings.c
     src/output.c
     src/util.c
@@ -252,6 +253,7 @@ set(REMEMBER_LIB_SOURCES
     src/cmd_export.c
     src/export_format.c
     src/fileio.c
+    src/jsonread.c
     src/cmd_settings.c
     src/output.c
     src/util.c
@@ -398,10 +400,12 @@ add_executable(remember_store_tests
     src/unicode.c
     src/search_terms.c
     src/output.c
+    src/jsonread.c
     src/test_alloc.c
     tests/test_unicode.c
     tests/test_search_terms.c
     tests/test_output.c
+    tests/test_jsonread.c
     tests/failing_stream.c
     third_party/sha256/sha256.c
     third_party/utf8proc/utf8proc.c
