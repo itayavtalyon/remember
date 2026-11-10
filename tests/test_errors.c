@@ -4249,8 +4249,11 @@ TEST(cli_no_create_existing_brain_opens)
     free(db);
 }
 
-/* E4.13 inclusive lower bound: 0 is a real timeout, not "use the 5000 default". */
-enum { BUSY_ZERO_WAIT_MAX_MS = 250 };
+/* E4.13 inclusive lower bound: 0 is a real timeout, not "use the 5000 default".
+   The locked run is timed against the unlocked seed run (spawn + schema + add),
+   not a fixed bound: a slow sanitizer container stretches both. Half the default
+   leaves room for spawn jitter while a mutant that waits the default still fails. */
+enum { BUSY_ZERO_EXTRA_MAX_MS = STORE_DEFAULT_BUSY_TIMEOUT_MS / 2 };
 
 TEST(cli_busy_timeout_zero_is_busy_immediately)
 {
@@ -4260,6 +4263,7 @@ TEST(cli_busy_timeout_zero_is_busy_immediately)
     sqlite3 *lock = NULL;
     struct timespec start;
     struct timespec end;
+    long baseline = 0;
     long waited = 0;
     CmdResult r;
 
@@ -4267,7 +4271,10 @@ TEST(cli_busy_timeout_zero_is_busy_immediately)
     if (db == NULL) {
         return;
     }
+    ASSERT_EQ_INT(clock_gettime(CLOCK_MONOTONIC, &start), 0);
     r = run_remember(db, seed, sizeof(seed) / sizeof(seed[0]), NULL);
+    ASSERT_EQ_INT(clock_gettime(CLOCK_MONOTONIC, &end), 0);
+    baseline = elapsed_ms(&start, &end);
     ASSERT_EQ_INT(r.exit_code, 0);
     cmd_result_free(&r);
     ASSERT_EQ_INT(sqlite3_open_v2(db, &lock, SQLITE_OPEN_READWRITE, NULL), SQLITE_OK);
@@ -4279,7 +4286,7 @@ TEST(cli_busy_timeout_zero_is_busy_immediately)
     ASSERT_EQ_INT(r.exit_code, 1);
     ASSERT_STREQ(r.out, "");
     ASSERT_STR_CONTAINS(r.err, "(SQLITE_BUSY)");
-    ASSERT_TRUE(waited < BUSY_ZERO_WAIT_MAX_MS);
+    ASSERT_TRUE(waited - baseline < BUSY_ZERO_EXTRA_MAX_MS);
     cmd_result_free(&r);
     if (lock != NULL) {
         (void)sqlite3_exec(lock, "ROLLBACK;", NULL, NULL, NULL);
