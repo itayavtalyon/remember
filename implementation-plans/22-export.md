@@ -185,7 +185,7 @@ Do not re-open: no zip, atomic rename, RFC 4180, slug rules, no user rows.
 
 ## Implementation Notes
 
-Stages 1 to 5 are built (2026-11-09 to 2026-11-10). Stage 6 (settings) waits for plan 20's brain settings rows (PR #59, open on 2026-11-10). Until it lands, JSON has no `settings` member and the tests say so in their names; Markdown and CSV write no settings file.
+Stages 1 to 5 are built (2026-11-09 to 2026-11-10). Plan 20's brain settings rows are on main (PR #59, merged 2026-11-10 as 7244fa4). Stage 6 is not started: JSON has no `settings` member yet and the tests say so in their names; Markdown and CSV write no settings file. The hand-over below lists what is left.
 
 Grill decisions (Itay, 2026-11-09; each filed in Remember):
 
@@ -198,7 +198,7 @@ Code:
 
 - `store_export_snapshot` reads brain id, `user_version`, entries and live links in one transaction. The bin is `store_bin_of` at `exported_at`. A link is exported when both ends are.
 - `export_format.c` is pure: the JSON document, Markdown name, file and README, CSV rows, the manifest. `output_export_entry_json` is `output_entry_json` without `local_id`. Version-vector keys are sorted at export. The Markdown name needs no allocation: `search_words_end` (search_terms.c) finds the end of the first 6 words with the D12 gap rule that plain text uses.
-- `fileio.c` holds every file call: temp siblings `<path>.tmp-<16 hex>`, `O_EXCL|O_NOFOLLOW` 0600 writes with fsync, rename, the D17 folder swap with `<path>.old-<16 hex>`, and tree removal.
+- `fileio.c` holds every file call: temp siblings `<path>.tmp-<16 hex>`, `O_EXCL` 0600 writes (`O_NOFOLLOW` was dropped: strict-POSIX gcc `-fanalyzer` does not declare it, and `O_EXCL` already refuses a symlink) with fsync, rename, the D17 folder swap with `<path>.old-<16 hex>`, and tree removal.
 - Test CLI seams: `REMEMBER_TEST_EXPORT_FAIL=<site>[:errno]` (sites random, alloc, join, fdopen, write, close, rename, swap) and `REMEMBER_TEST_EXPORT_CRASH=1` (exit between the D17 renames; `exit`, not `_exit`, so the coverage build keeps its profile).
 
 Known limits (ponytail, recorded):
@@ -209,6 +209,37 @@ Known limits (ponytail, recorded):
 - Two memories with the same slug and the same last 12 hex of their ids would collide (EEXIST, `io_error`). The ids are UUID v7 with 48 random bits at the end.
 
 Commands: `cmake --build build -j8`, `./build/remember_tests ./build/remember --only export`, `./build/remember_store_tests`, then the gate (`ctest --test-dir build`, `./scripts/check-coverage.sh`, `CI=true BUILD_DIR=build REMEMBER_SCAN_BUILD=1 REMEMBER_IWYU=0 ./scripts/lint-all.sh`, `cmake --build build --target leaks-macos`).
+
+### Hand-over (2026-11-10)
+
+State: branch `plan/22-export`, commit 6f0fadb (stages 1 to 5, one commit), base 9495f48. Not pushed, no PR. The macOS gate was green on 6f0fadb. The Linux pre-push run (Docker, about 20 minutes) has not happened. Never push, merge or open a PR without asking Itay.
+
+Do these in order.
+
+1. **Bring in main (7244fa4).** `git merge-tree --write-tree origin/main HEAD` shows 7 conflicts: `CMakeLists.txt`, `implementation-plans/COPY-PENDING.md`, `src/cli.c`, `src/cli.h`, `src/commands.h`, `src/commands_common.h`, `src/remember_app.c`. Each is two sides adding to the same list: the `export` and `settings` commands, their help blocks, test sources, and the C-44 drafts next to plan 20's drafts. Keep both sides. In `commands_common.h`, keep this branch's `REMEMBER_VERSION` fallback (gcc `-fanalyzer` needs it). `store.h`, `store_sqlite.c`, `diag.c/.h`, the specs and the engineering notes merge cleanly. Rerun the full gate before going further.
+
+2. **Stage 6: settings (007 ST-8.3, the example bytes are at `design-logs/007-settings.md` line 367).**
+   - Read: `store_setting_export(brain, NULL, SETTING_LAYER_BRAIN, &rows, &n, err, errlen)` (main, `store_sqlite.c`). Brain layer only, tombstones included, sorted by key, version-vector keys sorted in SQL, and it never opens `user.db`. It runs outside the `store_export_snapshot` transaction. Put the brain settings read inside that transaction: `export_layer` is static in the same file, so add `rows`/`nrows` to `StoreExportSnapshot` and free them in `store_export_snapshot_free`. If you choose not to, record the gap under known limits.
+   - Format: the plan says no settings-specific module; the document goes in `export_format.c`. Move `export_ms`, `write_export_row` and `write_export` out of `src/cmd_settings.c` (all static there) into `export_format.c`. Make `cmd_settings_export` call the moved writer, so the ST-8.2 bytes have one owner. `write_export` ends in `"]}\n"`. Split it so the nested JSON member gets no newline, and the file writers (`settings export`, Markdown `settings.json`, CSV settings file) add one. `export_ms` needs `setting_by_key`, `quoted_plain` (static in cmd_settings.c) and `norm_duration_canonical`. Move `quoted_plain` with it or expose it; keep `export_format.c` free of I/O. `value_bytes` is not needed: main has no size setting type yet.
+   - JSON: `"settings":<document>` always, last member after `links`. No rows writes `{"format":"remember-settings-export","version":1,"exported_at":"<export exported_at>","settings":[]}`. The inner `exported_at` is the export's `exported_at`.
+   - Markdown: `settings.json` (document, then a newline) at the folder root only when rows exist. It is one more file inside the temp folder before the D17 swap, so no new rename rules are needed.
+   - CSV: `<CSV basename>.settings.json` beside the CSV (`brain.csv` gives `brain.settings.json`; the same basename rule as `manifest_path`, so share the helper). Write it only when rows exist. Add it to the `OutFile` list so `refuse_existing` and `write_files` treat it like the manifest. When it exists without `--force`, write nothing and fail with `usage`, `output already exists: <path>` (the existing copy). With no rows, leave an existing settings file alone and do not delete it.
+   - Never write a CSV `#settings` row or the 006 E12.9 object.
+   - Tests (`tests/test_export.c`): rename `export_json_every_bin_without_settings_member` and any other `*without_settings*` name. Add the one-tombstone fixture to `tests/fixture_roundtrip.c` (plan 23 reuses it). Assert the ST-8.3 example bytes with a fixed `exported_at` in all three formats. Cover the empty case (`"settings":[]`, no Markdown or CSV settings file, an existing CSV settings file untouched), "settings force" (an existing `brain.settings.json` without `--force` writes neither file), and that no user row appears even with a `user.db` holding rows. Extend the `REMEMBER_TEST_EXPORT_FAIL` sweep so it reaches the new file, and run the mutation pass again on the new branches.
+   - Specs: the JSON-STYLE brain export row and the JSON-ENVELOPE export payload gain `settings`; check `specs/SETTINGS.md` (new on main) still matches. Add a Stage 6 entry to the Review Notes.
+
+3. **Copy round.** The C-44 drafts in `COPY-PENDING.md` (the file error lines and the `help export` block) are not approved. Any new sentence is a grill with Itay. Play `afplay /System/Library/Sounds/Funk.aiff` first, then record it in `COPY-PENDING.md`.
+
+4. **Whole-plan deep review** (Remember `workflow:whole-plan-deep-review`). Record it in the Review Notes. Then move the `decision:plan22-export-*` cards from `state:accepted` to `state:implemented`.
+
+5. **Close.** Tick the Definition of done boxes. Tick INDEX row 22 only after stage 6 and the review. Ask Itay before pushing (the hook runs the Linux CI) or opening the PR.
+
+Notes for the next coder:
+
+- Every commit ends with `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>` and every stage has a dated review note.
+- Set `export PATH="$(brew --prefix llvm)/bin:$PATH"` before the lint.
+- Use `REMEMBER_TEST_FIXED_IDS=N` for frozen ids and the clock (2026-01-01T00:00:00.000Z) and `REMEMBER_TEST_FAIL_READ=N` for SQLite read faults. The ST-8.3 example has its own `exported_at` (2026-10-25T18:00:00.000Z), so the bytes test compares the settings document written by the pure formatter with an explicit `exported_at`, or swaps that timestamp before comparing.
+- clang-format would not settle on long CSV literals. That is why the tests build CSV rows with macros.
 
 ## Review Notes
 
