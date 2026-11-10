@@ -28,6 +28,11 @@ FILE *app_err(void)
     return g_err != NULL ? g_err : stderr;
 }
 
+int app_err_fileno(void)
+{
+    return fileno(app_err());
+}
+
 void app_set_streams(AppStreams streams)
 {
     g_out = streams.out;
@@ -54,6 +59,22 @@ static char *dup_cstr(const char *s)
     }
     memcpy(copy, s, n + 1U);
     return copy;
+}
+
+/* NOLINTNEXTLINE(cppcoreguidelines-avoid-non-const-global-variables) */
+static bool g_document;
+
+void app_mark_document(void)
+{
+    g_document = true;
+}
+
+bool app_take_document(void)
+{
+    bool was = g_document;
+
+    g_document = false;
+    return was;
 }
 
 void app_clear_list_page(void)

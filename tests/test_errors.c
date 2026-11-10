@@ -74,6 +74,14 @@ static const char *const k_error_codes[] = {
     "io_error",
     "schema_too_new",
     "invalid_argument",
+    "sync_credential_unavailable",
+    "setting_unknown",
+    "setting_invalid_value",
+    "setting_out_of_range",
+    "setting_scope_mismatch",
+    "quota_exceeded",
+    "confirmation_required",
+    "setting_from_hook",
 };
 
 /* error.fix and retryable per code, in catalog order (decision:plan21-error-fix-drafts-c42,
@@ -113,6 +121,17 @@ static const ExpectedFix k_error_fixes[] = {
     {"Check the disk or drive, then try again.", "true"},
     {"Upgrade remember to make changes.", "false"},
     {"Run 'remember list' again without --cursor.", "false"},
+    {"Check the helper, or set remember.sync.credential_helper to env and export "
+     "REMEMBER_SYNC_TOKEN.",
+     "false"},
+    {"Run 'remember settings list' to see all settings.", "false"},
+    {"Write it in plain digits, like 200, with no sign, leading zero, \"_\", or exponent.",
+     "false"},
+    {"Set a value from the minimum to the maximum.", "false"},
+    {"Run the command again with --scope brain, or without --scope.", "false"},
+    {"Reset settings you don't need with 'remember settings reset'.", "false"},
+    {"Run the command again with --yes to confirm.", "false"},
+    {"Change them yourself in a terminal or in Settings.", "false"},
 };
 
 /* Unit tests pick the mode per call. JSON mode buffers the notice for the
@@ -239,8 +258,8 @@ TEST(error_catalog_rejects_names_outside_e4_3)
 }
 
 static const char *const k_warning_codes[] = {
-    "raw_query_ignored", "deprecated_flag",      "synced_folder",
-    "setting_invalid",   "flag_meaning_changed", "unknown_field",
+    "raw_query_ignored",    "deprecated_flag", "synced_folder",          "setting_invalid",
+    "flag_meaning_changed", "unknown_field",   "setting_import_skipped",
 };
 
 TEST(warning_catalog_round_trips_every_code)
@@ -396,6 +415,35 @@ TEST(json_error_escapes_message_bytes)
     free(buf);
 }
 
+/* Catalog fixes are spliced into JSON. Match the writer's quote and slash escapes. */
+static int escape_json_text(const char *src, char *dst, size_t cap)
+{
+    size_t n = 0U;
+    size_t i = 0U;
+
+    if (cap == 0U) {
+        return -1;
+    }
+    for (i = 0U; src[i] != '\0'; i++) {
+        char byte = src[i];
+        size_t need = 1U;
+
+        if (byte == '"' || byte == '\\') {
+            need = 2U;
+        }
+        if (n + need >= cap) {
+            dst[0] = '\0';
+            return -1;
+        }
+        if (need == 2U) {
+            dst[n++] = '\\';
+        }
+        dst[n++] = byte;
+    }
+    dst[n] = '\0';
+    return (int)n;
+}
+
 TEST(every_error_code_json_message_matches_the_plain_line)
 {
     size_t i = 0;
@@ -409,6 +457,7 @@ TEST(every_error_code_json_message_matches_the_plain_line)
         FILE *plain = open_memstream(&plain_buf, &plain_len);
         FILE *json = open_memstream(&json_buf, &json_len);
         char expected_json[EXPECTED_JSON_CAP];
+        char escaped_fix[EXPECTED_JSON_CAP];
         DiagCode code = (DiagCode)i;
         int wrote = 0;
 
@@ -431,11 +480,13 @@ TEST(every_error_code_json_message_matches_the_plain_line)
         ASSERT_EQ_INT(diag_error_as(true, code, sample), 0);
         ASSERT_EQ_INT(fflush(plain), 0);
         ASSERT_EQ_INT(fflush(json), 0);
+        escaped_fix[0] = '\0';
         ASSERT_STREQ(plain_buf, "remember: sample text\n");
+        ASSERT_TRUE(escape_json_text(k_error_fixes[i].fix, escaped_fix, sizeof(escaped_fix)) >= 0);
         wrote = snprintf(expected_json, sizeof(expected_json),
                          "\"error\":{\"code\":\"%s\",\"message\":\"sample text\",\"fix\":\"%s\","
                          "\"retryable\":%s}",
-                         k_error_codes[i], k_error_fixes[i].fix, k_error_fixes[i].retryable);
+                         k_error_codes[i], escaped_fix, k_error_fixes[i].retryable);
         ASSERT_TRUE(wrote > 0 && (size_t)wrote < sizeof(expected_json));
         ASSERT_STREQ(json_buf, expected_json);
         app_set_streams((AppStreams){.out = NULL, .err = NULL});

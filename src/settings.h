@@ -22,6 +22,10 @@ typedef enum SettingType {
 typedef struct SettingSpec {
     const char *key;
     const char *default_text;
+    /* The explain line (C-13, decision:plan20-explain-description-drafts). */
+    const char *description;
+    /* One related key or NULL (decision:plan20-empty-list-related). */
+    const char *related;
     long long min_value;
     long long max_value;
     SettingType type;
@@ -49,7 +53,10 @@ enum {
     SETTING_VALUE_MAX = 16384,
     SETTING_VALUE_CAP = 16388,
     SETTING_ROW_QUOTA = 256,
-    SETTING_HISTORY_KEEP = 50
+    SETTING_HISTORY_KEEP = 50,
+    /* One canonical actor (ACTOR_JSON_CAP) and one 24-character UTC stamp. */
+    SETTING_ACTOR_CAP = 96,
+    SETTING_AT_CAP = 32
 };
 
 typedef enum SettingStatus {
@@ -59,7 +66,8 @@ typedef enum SettingStatus {
     SETTING_ERR_RANGE,   /* setting_out_of_range */
     SETTING_ERR_SCOPE,   /* setting_scope_mismatch */
     SETTING_ERR_QUOTA,   /* quota_exceeded */
-    SETTING_ERR_STORE    /* brain or user.db failure; err holds that sentence */
+    SETTING_ERR_STORE,   /* brain or user.db failure; err holds that sentence */
+    SETTING_ERR_DOCUMENT /* import_parse: the file is not a settings document */
 } SettingStatus;
 
 typedef enum SettingLayer {
@@ -93,12 +101,18 @@ typedef struct {
     char pad_[3];
 } SettingWriteResult;
 
-/* value is the effective JSON. A layer the key does not allow is empty and
-   its live flag is false. A tombstone is not live. */
+/* value is the effective JSON. user_live and brain_live mean a stored row's
+   value fit. A tombstone is not live. A live row in a layer the key does not
+   allow still has its value here; setting_pick ignores that layer. Stamps are
+   empty unless that layer is live. */
 typedef struct {
     char value[SETTING_VALUE_CAP];
     char user_value[SETTING_VALUE_CAP];
     char brain_value[SETTING_VALUE_CAP];
+    char user_by[SETTING_ACTOR_CAP];
+    char brain_by[SETTING_ACTOR_CAP];
+    char user_at[SETTING_AT_CAP];
+    char brain_at[SETTING_AT_CAP];
     SettingStatus status;
     SettingFrom from;
     bool user_live;
@@ -106,8 +120,24 @@ typedef struct {
     char pad_[2];
 } SettingRead;
 
+/* Local calendar fields for "21 Oct at 10:04". month is 1..12. utc_suffix
+   appends " UTC" when the zone could not be read (ST-7.16). */
+typedef struct {
+    int year;
+    int month;
+    int day;
+    int hour;
+    int minute;
+    int year_now;
+    bool utc_suffix;
+    char pad_[3];
+} SettingWhen;
+
 /* Locked error code, or "" when the status has no settings code. */
 const char *setting_status_code(SettingStatus st);
+
+/* [a-z][a-z0-9_-]{0,39}. The credential helper id grammar (G2-01). */
+bool helper_id_ok(const char *src);
 
 /* Fold the key and choose the layer a set or reset writes. */
 SettingStatus setting_choose_layer(const char *key, SettingLayer requested,
@@ -115,16 +145,33 @@ SettingStatus setting_choose_layer(const char *key, SettingLayer requested,
                                    size_t errlen);
 
 /* Fold the key, check the layer, and write the canonical JSON value.
-   A prefix failure writes its locked sentence into err. Other refusals
-   leave err empty when the sentence is still COPY-PENDING. */
+   Refusals leave err empty; only a store failure writes it. */
 SettingStatus setting_prepare(const char *key, const char *const *items, size_t nitems,
                               SettingLayer requested, char *json, size_t json_cap,
                               const SettingSpec **spec_out, SettingLayer *layer_out, char *err,
                               size_t errlen);
 
-/* Last layer with a value wins. A NULL layer pointer is no row. Copies the
-   winning JSON into out. An unset key with no default leaves out empty. */
+/* SETTING_ERR_INVALID when a bucket prefix item is refused: *item is its
+   index, and *other the earlier item it repeats, or SIZE_MAX when the item
+   isn't a prefix at all. The caller words the sentence from its own items. */
+SettingStatus setting_prefix_issue(const char *const *items, size_t nitems, size_t *item,
+                                   size_t *other);
+
+/* Last layer with a value wins. A NULL layer pointer, or a layer the key
+   does not allow, is no row. Copies the winning JSON into out. An unset key
+   with no default leaves out empty. */
 SettingFrom setting_pick(const SettingSpec *spec, const char *user_json, const char *brain_json,
                          const char *flag_json, char *out, size_t out_cap);
+
+/* Canonical JSON of the compiled default. False leaves out empty. */
+bool setting_default_json(const SettingSpec *spec, char *out, size_t cap);
+
+/* "21 Oct at 10:04", with the year when it is not year_now, and " UTC" when
+   utc_suffix is set. False when the fields are not a date or buf is short. */
+bool setting_format_when(SettingWhen when, char *buf, size_t cap);
+
+/* The one full key ST-1.5 would name, or NULL when there is not exactly one.
+   Two or three candidates have no approved sentence. */
+const char *setting_suggestion(const char *typed);
 
 #endif /* REMEMBER_SETTINGS_H */

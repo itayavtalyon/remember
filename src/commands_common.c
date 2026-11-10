@@ -14,6 +14,8 @@
 #include <string.h>
 #include <time.h>
 
+#include "test_alloc.h" // IWYU pragma: keep
+
 /* Radix for all decimal integer parsing. */
 enum { DECIMAL_BASE = 10 };
 
@@ -199,37 +201,69 @@ void err_msg(DiagCode code, const char *msg)
     (void)diag_error(code, msg);
 }
 
-void err_fmt(DiagCode code, const char *fmt, ...)
+#ifdef __clang__
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wallocator-wrappers"
+#endif
+/* Measure, then write. The measure pass uses a copy: a va_list can be
+   consumed only once. NULL when vsnprintf or malloc fails. */
+static char *fmt_valloc(const char *fmt, va_list vargs) REMEMBER_PRINTF(1, 0);
+static char *fmt_valloc(const char *fmt, va_list vargs)
 {
-    /* va_list has no portable initializer. Measure, then write. Each pass
-       starts its own list: a va_list can be consumed only once. x86_64 clang
-       18 records va_start and vsnprintf on different regions. */
     /* NOLINTNEXTLINE(cppcoreguidelines-init-variables) */
-    va_list vargs;
+    va_list measure;
     int wrote = 0;
     char *buf = NULL;
 
-    va_start(vargs, fmt);
+    va_copy(measure, vargs);
     /* NOLINTNEXTLINE(clang-analyzer-valist.Uninitialized) -- array va_list mismatch */
-    wrote = vsnprintf(NULL, 0, fmt, vargs);
-    va_end(vargs);
+    wrote = vsnprintf(NULL, 0, fmt, measure);
+    va_end(measure);
     if (wrote < 0) {
-        err_msg(DIAG_INTERNAL, "internal error");
-        return;
+        return NULL;
     }
     buf = (char *)malloc((size_t)wrote + 1U);
+    if (buf == NULL) {
+        return NULL;
+    }
+    /* NOLINTNEXTLINE(clang-analyzer-valist.Uninitialized) -- array va_list mismatch */
+    if (vsnprintf(buf, (size_t)wrote + 1U, fmt, vargs) != wrote) {
+        free(buf);
+        return NULL;
+    }
+    return buf;
+}
+
+/* cppcheck-suppress staticFunction ; public API (commands_common.h) */
+char *fmt_alloc(const char *fmt, ...)
+{
+    /* NOLINTNEXTLINE(cppcoreguidelines-init-variables) */
+    va_list vargs;
+    char *buf = NULL;
+
+    va_start(vargs, fmt);
+    buf = fmt_valloc(fmt, vargs);
+    va_end(vargs);
+    return buf;
+}
+#ifdef __clang__
+#pragma clang diagnostic pop
+#endif
+
+void err_fmt(DiagCode code, const char *fmt, ...)
+{
+    /* NOLINTNEXTLINE(cppcoreguidelines-init-variables) */
+    va_list vargs;
+    char *buf = NULL;
+
+    va_start(vargs, fmt);
+    buf = fmt_valloc(fmt, vargs);
+    va_end(vargs);
     if (buf == NULL) {
         err_msg(DIAG_OUT_OF_MEMORY, "out of memory");
         return;
     }
-    va_start(vargs, fmt);
-    /* NOLINTNEXTLINE(clang-analyzer-valist.Uninitialized) -- array va_list mismatch */
-    if (vsnprintf(buf, (size_t)wrote + 1U, fmt, vargs) != wrote) {
-        err_msg(DIAG_INTERNAL, "internal error");
-    } else {
-        err_msg(code, buf);
-    }
-    va_end(vargs);
+    err_msg(code, buf);
     free(buf);
 }
 
@@ -1082,7 +1116,8 @@ static int is_leap_year(int year)
     return (year % YEARS_PER_LEAP == 0) ? 1 : 0;
 }
 
-static int days_in_month(CivilTime date)
+/* cppcheck-suppress staticFunction ; public API (commands_common.h) */
+int days_in_month(int year, int month)
 {
     static const int k_days[MONTH_MAX + 1] = {0,
                                               DAY_MAX_LONG,
@@ -1097,13 +1132,13 @@ static int days_in_month(CivilTime date)
                                               DAY_MAX_LONG,
                                               DAY_MAX_SHORT,
                                               DAY_MAX_LONG};
-    if (date.month < 1 || date.month > MONTH_MAX) {
+    if (month < 1 || month > MONTH_MAX) {
         return 0;
     }
-    if (date.month == MONTH_FEB && is_leap_year(date.year) != 0) {
+    if (month == MONTH_FEB && is_leap_year(year) != 0) {
         return DAY_MAX_LEAP;
     }
-    return k_days[date.month];
+    return k_days[month];
 }
 
 /* 0 when the civil fields are a real clock time. Seconds stop at 59. */
@@ -1112,7 +1147,7 @@ static int civil_fields_ok(CivilTime when)
     if (when.year < 1 || when.year > YEAR_MAX || when.month < 1 || when.month > MONTH_MAX) {
         return -1;
     }
-    if (when.day < 1 || when.day > days_in_month(when)) {
+    if (when.day < 1 || when.day > days_in_month(when.year, when.month)) {
         return -1;
     }
     if (when.hour < 0 || when.hour > HOUR_MAX || when.min < 0 || when.min > MINUTE_MAX ||
@@ -1282,3 +1317,111 @@ int cmd_reject_filter_kind(const char *flag, const char *kind)
     err_fmt(DIAG_USAGE, "invalid %s (use human, agent, tool, share, or import)", flag);
     return -1;
 }
+
+/* Opaque cursors (plan 21 list, plan 20 settings). Alphabet offsets and the
+   6-bit shifts are the base64url layout. */
+enum { B64_DECODE_MAX = 65536 };
+
+// NOLINTBEGIN(hicpp-signed-bitwise,cppcoreguidelines-avoid-magic-numbers,readability-magic-numbers)
+static int b64_digit(unsigned char c)
+{
+    if (c >= 'A' && c <= 'Z') {
+        return (int)(c - 'A');
+    }
+    if (c >= 'a' && c <= 'z') {
+        return (int)(c - 'a') + 26;
+    }
+    if (c >= '0' && c <= '9') {
+        return (int)(c - '0') + 52;
+    }
+    if (c == '-') {
+        return 62;
+    }
+    if (c == '_') {
+        return 63;
+    }
+    return -1;
+}
+
+char *base64url_encode(const unsigned char *raw, size_t len)
+{
+    static const char k_alpha[] =
+        "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+    char *out = (char *)malloc((4U * ((len + 2U) / 3U)) + 1U);
+    size_t i = 0U;
+    size_t j = 0U;
+
+    if (out == NULL) {
+        return NULL;
+    }
+    for (i = 0U; i < len; i += 3U) {
+        size_t left = len - i;
+        unsigned n = (unsigned)raw[i] << 16;
+
+        if (left > 1U) {
+            n |= (unsigned)raw[i + 1U] << 8;
+        }
+        if (left > 2U) {
+            n |= (unsigned)raw[i + 2U];
+        }
+        out[j++] = k_alpha[(n >> 18) & 63U];
+        out[j++] = k_alpha[(n >> 12) & 63U];
+        if (left > 1U) {
+            out[j++] = k_alpha[(n >> 6) & 63U];
+        }
+        if (left > 2U) {
+            out[j++] = k_alpha[n & 63U];
+        }
+    }
+    out[j] = '\0';
+    return out;
+}
+
+/* Rejects any byte outside the alphabet (padding too). A short last group is
+   taken as is: a cursor reader re-encodes and accepts only the same bytes, so
+   a stray length or non-zero unused bits fail there. */
+int base64url_decode(const char *text, unsigned char **out, size_t *out_len)
+{
+    size_t n = strlen(text);
+    size_t i = 0U;
+    size_t j = 0U;
+    unsigned char *buf = NULL;
+
+    if (n == 0U || ((n / 4U) + 1U) * 3U > (size_t)B64_DECODE_MAX) {
+        return -2;
+    }
+    buf = (unsigned char *)malloc((((n / 4U) + 1U) * 3U) + 1U);
+    if (buf == NULL) {
+        return -1;
+    }
+    for (i = 0U; i < n; i += 4U) {
+        size_t chars = (n - i < 4U) ? n - i : 4U;
+        unsigned value = 0U;
+        size_t k = 0U;
+
+        for (k = 0U; k < 4U; k++) {
+            int sextet = 0;
+
+            if (k < chars) {
+                sextet = b64_digit((unsigned char)text[i + k]);
+            }
+            if (sextet < 0) {
+                free(buf);
+                return -2;
+            }
+            value = (value << 6) | (unsigned)sextet;
+        }
+        buf[j++] = (unsigned char)((value >> 16) & 0xFFU);
+        if (chars > 2U) {
+            buf[j++] = (unsigned char)((value >> 8) & 0xFFU);
+        }
+        if (chars > 3U) {
+            buf[j++] = (unsigned char)(value & 0xFFU);
+        }
+    }
+    buf[j] = 0U;
+    *out = buf;
+    *out_len = j;
+    return 0;
+}
+// NOLINTEND(hicpp-signed-bitwise,cppcoreguidelines-avoid-magic-numbers,readability-magic-numbers)

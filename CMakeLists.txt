@@ -102,6 +102,7 @@ set_property(SOURCE
     src/store_sqlite.c
     src/normalize.c
     src/settings.c
+    src/sync_credential.c
     src/unicode.c
     src/search_terms.c
     src/commands_common.c
@@ -115,6 +116,7 @@ set_property(SOURCE
     src/cmd_device.c
     src/cmd_repair.c
     src/cmd_brain.c
+    src/cmd_settings.c
     src/output.c
     src/util.c
     src/diag.c
@@ -230,6 +232,7 @@ set(REMEMBER_LIB_SOURCES
     src/store_sqlite.c
     src/normalize.c
     src/settings.c
+    src/sync_credential.c
     src/unicode.c
     src/search_terms.c
     src/commands_common.c
@@ -243,6 +246,7 @@ set(REMEMBER_LIB_SOURCES
     src/cmd_device.c
     src/cmd_repair.c
     src/cmd_brain.c
+    src/cmd_settings.c
     src/output.c
     src/util.c
     src/diag.c
@@ -333,6 +337,7 @@ add_executable(remember_tests
     ${REMEMBER_TEST_SOURCES}
     ${REMEMBER_LIB_SOURCES}
     src/test_alloc.c
+    tests/failing_stream.c
 )
 target_include_directories(remember_tests PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/tests
@@ -355,6 +360,13 @@ endif()
 # -Wcast-qual property above). Keep it off for the test targets only.
 target_compile_options(remember_tests PRIVATE -Wno-cast-qual)
 add_dependencies(remember_tests remember)
+
+# User-helper stand-in. Not a project library: no sanitizers, so it is what a
+# real remember-credential-<id> binary looks like on PATH.
+add_executable(remember_credential_helper tests/credential_helper.c)
+set_target_properties(remember_credential_helper PROPERTIES OUTPUT_NAME remember-credential-pass)
+remember_apply_posix_feature_macros(remember_credential_helper)
+add_dependencies(remember_tests remember_credential_helper)
 
 # --- in-process unit tests under ASan/UBSan (no fork/exec) — leak/corruption
 # AND undefined-behavior gate. The digest is compiled *into* this target (not the

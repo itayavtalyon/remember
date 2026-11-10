@@ -161,9 +161,158 @@ SettingStatus store_setting_reset(Store *brain, const char *user_db, const char 
                                   SettingLayer layer, const char *updated_by,
                                   SettingWriteResult *out, char *err, size_t errlen);
 /* flag_text NULL is no flag. A flag outside the key's range is
-   setting_out_of_range and writes nothing. */
+   setting_out_of_range and writes nothing. A live layer also fills that
+   layer's updated_by and updated_at. A stamp that does not fit fails the read. */
 SettingStatus store_setting_read(Store *brain, const char *user_db, const char *key,
                                  const char *flag_text, SettingRead *out, char *err, size_t errlen);
+
+/* One live stored row. key and value are malloc'd. The caller frees the array
+   with store_setting_rows_free. */
+typedef struct {
+    char *key;
+    char *value;
+} SettingStoredRow;
+
+void store_setting_rows_free(SettingStoredRow *rows, size_t n);
+
+/* Live keys in one layer, ordered by key COLLATE BINARY. Brain rows are live
+   when deleted_at is null. User rows are live until reset deletes them.
+   SETTING_LAYER_AUTO is a programmer error. A missing user.db yields zero rows. */
+SettingStatus store_setting_list_live(Store *brain, const char *user_db, SettingLayer layer,
+                                      SettingStoredRow **out_rows, size_t *out_n, char *err,
+                                      size_t errlen);
+
+/* Reset one stored key with no registry check (ST-5.11). Brain: tombstone.
+   User: delete. A missing live row is changed false and writes nothing.
+   SETTING_LAYER_AUTO is a programmer error. */
+SettingStatus store_setting_reset_stored(Store *brain, const char *user_db, const char *key,
+                                         SettingLayer layer, const char *updated_by,
+                                         SettingWriteResult *out, char *err, size_t errlen);
+
+/* One stored row for settings export (007 ST-8.2). Every text is malloc'd.
+   value, updated_by and version_vector are compact JSON (SQLite json()), and
+   version_vector keys are sorted. A user row has device_id "", version_vector
+   "{}" and deleted_at NULL. deleted_at is NULL for a live brain row. */
+typedef struct {
+    char *key;
+    char *value;
+    char *updated_by;
+    char *updated_at;
+    char *device_id;
+    char *version_vector;
+    char *deleted_at;
+    SettingLayer layer;
+    char pad_[4];
+} SettingExportRow;
+
+void store_setting_export_free(SettingExportRow *rows, size_t n);
+
+/* Every stored row of the chosen layer, tombstones included, sorted by key and
+   then brain before user. SETTING_LAYER_AUTO is both layers. A missing user.db
+   has no rows and is not created. A value that is not JSON fails the read. */
+SettingStatus store_setting_export(Store *brain, const char *user_db, SettingLayer layer,
+                                   SettingExportRow **out_rows, size_t *out_n, char *err,
+                                   size_t errlen);
+
+/* settings import (007 ST-8.4 to ST-8.7). */
+typedef enum {
+    SETTING_IMPORT_WRITTEN = 0,
+    SETTING_IMPORT_UNCHANGED,
+    SETTING_IMPORT_SKIPPED,
+    SETTING_IMPORT_KEPT_LOCAL
+} SettingImportResult;
+
+typedef enum {
+    SETTING_SKIP_NONE = 0,
+    SETTING_SKIP_BAD_SHAPE,         /* setting_invalid, C-14a */
+    SETTING_SKIP_UNKNOWN_KEY,       /* setting_import_skipped */
+    SETTING_SKIP_BAD_FIELD,         /* setting_invalid, decision:plan20-import-bad-field */
+    SETTING_SKIP_OTHER_SCOPE,       /* setting_import_skipped */
+    SETTING_SKIP_LAYER_NOT_ALLOWED, /* setting_import_skipped */
+    SETTING_SKIP_INVALID_VALUE      /* setting_invalid, C-14 */
+} SettingSkipReason;
+
+typedef enum {
+    SETTING_DOC_OK = 0,
+    SETTING_DOC_NOT_SETTINGS, /* not JSON, not an object, wrong format, no settings list */
+    SETTING_DOC_VERSION,      /* version above 1 */
+    SETTING_DOC_MIXED_SCOPES  /* user and brain rows with no --scope
+                                 (decision:plan20-import-one-file-per-run) */
+} SettingDocError;
+
+/* One settings element. key is the file's key string and value its value as
+   text (a string unescaped, anything else JSON); either is NULL when the file
+   has none. scope is AUTO when the file's scope is not brain or user. field
+   names the bad member of a bad_field row. position is 1-based. */
+typedef struct {
+    char *key;
+    char *value;
+    const char *field;
+    size_t position;
+    SettingLayer scope;
+    SettingImportResult result;
+    SettingSkipReason reason;
+    bool tombstone; /* a written brain row that is a tombstone */
+    char pad_[3];
+} SettingImportRow;
+
+/* SETTING_ERR_DOCUMENT sets doc_error (and version for a later version).
+   SETTING_ERR_QUOTA sets quota_layer, the layer that is full; err holds the
+   brain sentence. Any failure writes nothing and leaves no rows. */
+typedef struct {
+    SettingImportRow *rows;
+    size_t nrows;
+    size_t written;
+    size_t unchanged; /* kept_local included */
+    size_t skipped;
+    long long version;
+    SettingDocError doc_error;
+    SettingLayer quota_layer;
+} SettingImportReport;
+
+void store_setting_import_free(SettingImportReport *r);
+
+/* Read doc (len bytes) as a remember-settings-export document and merge each
+   row. only is AUTO for both layers. A dry run writes nothing and does not
+   create user.db. */
+SettingStatus store_setting_import(Store *brain, const char *user_db, const char *doc, size_t len,
+                                   SettingLayer only, bool dry_run, SettingImportReport *out,
+                                   char *err, size_t errlen);
+
+/* One settings_history row (ST-4.1). old_value and new_value are NULL when the
+   row has none. id is the rowid in its own database. */
+typedef struct {
+    char *key;
+    char *old_value;
+    char *new_value;
+    char *updated_by;
+    char *at;
+    long long id;
+    SettingLayer scope;
+    char pad_[4]; /* explicit tail padding (kept -Wpadded-clean) */
+} SettingHistoryRow;
+
+/* key NULL is every key. only AUTO reads both databases. after_at NULL is the
+   first page; otherwise after_scope, after_key and after_id are the last row
+   shown, in the ST-7.6 order. want is the most rows returned. */
+typedef struct {
+    const char *key;
+    const char *after_at;
+    const char *after_key;
+    long long after_id;
+    size_t want;
+    SettingLayer only;
+    SettingLayer after_scope;
+} SettingHistoryQuery;
+
+void store_setting_history_free(SettingHistoryRow *rows, size_t n);
+
+/* Rows of both databases in the ST-7.6 order: newest at first, brain before
+   user, then key in byte order, then the newer row. A missing user.db has no
+   rows. */
+SettingStatus store_setting_history(Store *brain, const char *user_db, const SettingHistoryQuery *q,
+                                    SettingHistoryRow **out, size_t *out_n, char *err,
+                                    size_t errlen);
 
 /*
  * store_open with options and a structured SQLite failure. opts NULL means
