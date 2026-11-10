@@ -47,6 +47,10 @@ const SettingSpec *setting_registry(size_t *count);
 /* Fold, then the registry row. NULL when the text is not one of those keys. */
 const SettingSpec *setting_by_key(const char *typed);
 
+/* Inner bytes of a JSON string with no escapes and no controls.
+   False when text is not that shape or does not fit inner_cap. */
+bool setting_quoted_plain(const char *text, char *inner, size_t inner_cap);
+
 /* Stored JSON is at most 16 KiB (007 ST-4.4). CAP is that plus a NUL and
    enough bytes for the buffer to stay 4-byte aligned. */
 enum {

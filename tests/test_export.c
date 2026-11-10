@@ -90,8 +90,13 @@ static CmdResult export_run(const char *db, const char *const *args, size_t narg
     "{\"from\":\"" FIXTURE_ID(from) "\",\"to\":\"" FIXTURE_ID(to) "\",\"kind\":\"" kind            \
                                                                   "\"," TIMES "}"
 
+/* A brain with no settings rows still writes the nested document (ST-8.3). */
+#define SETTINGS_EMPTY                                                                             \
+    ",\"settings\":{\"format\":\"remember-settings-export\",\"version\":1,\"exported_at\":"        \
+    "\"" FIXTURE_AT "\",\"settings\":[]}"
+
 /* Every bin: the five memories, the four live links, never the tombstoned one. */
-TEST(export_json_every_bin_without_settings_member)
+TEST(export_json_every_bin_empty_settings)
 {
     char *db = make_temp_db_path();
     char *out = NULL;
@@ -117,7 +122,8 @@ TEST(export_json_every_bin_without_settings_member)
                      "000000000003", "000000000030",
                      "related") "," LINK("000000000003", "000000000040",
                                          "supersedes") "," LINK("000000000010", "000000000020",
-                                                                "related") "]}\n");
+                                                                "related") "]" SETTINGS_EMPTY
+                                                                           "}\n");
     free(doc);
     cmd_result_free(&r);
     free(out);
@@ -145,7 +151,7 @@ TEST(export_json_default_is_live_only)
     ASSERT_STREQ(doc, DOC_HEAD
                  "\"bins\":{\"live\":3},\"entries\":[" ENTRY_ALPHA "," ENTRY_WEEKLY "," ENTRY_WORDS
                  "],\"links\":[" LINK("000000000003", "000000000010", "cites") "," LINK(
-                     "000000000010", "000000000020", "related") "]}\n");
+                     "000000000010", "000000000020", "related") "]" SETTINGS_EMPTY "}\n");
     ASSERT_STR_PREFIX(r.out, "{\"format\":\"remember-message\",\"version\":1,\"type\":\"memory."
                              "export.result\",\"data\":{\"action\":\"exported\",\"format\":"
                              "\"json\",\"path\":");
@@ -223,6 +229,14 @@ static Given given_fixture(const char *out_name)
     g.out = (char *)malloc(n);
     ASSERT_TRUE(g.out != NULL);
     (void)snprintf(g.out, n, "%s/%s", g.dir, out_name);
+    return g;
+}
+
+static Given given_tombstone(const char *out_name)
+{
+    Given g = given_fixture(out_name);
+
+    fixture_roundtrip_add_tombstone(g.db);
     return g;
 }
 
@@ -1164,9 +1178,289 @@ TEST(export_md_missing_folder)
     given_free(&g);
 }
 
+#define EXAMPLE_AT "2026-10-25T18:00:00.000Z"
+_Static_assert(sizeof EXAMPLE_AT == sizeof FIXTURE_AT, "clock swap stays the same width");
+#define SETTINGS_TOMBSTONE                                                                         \
+    "{\"format\":\"remember-settings-export\",\"version\":1,\"exported_at\":\"" EXAMPLE_AT         \
+    "\",\"settings\":[{\"key\":\"remember.search.candidate_pool\",\"scope\":\"brain\",\"value\":"  \
+    "400,\"updated_by\":{\"kind\":\"human\",\"id\":null},\"updated_at\":\"2026-10-24T09:12:00."    \
+    "000Z\",\"device_id\":\"01a0d90a-e71c-7a0a-bb2c-3b377482fa51\",\"version_vector\":{"           \
+    "\"01a0d90a-e71c-7a0a-bb2c-3b377482fa51\":3},\"deleted_at\":\"2026-10-24T09:12:00.000Z\"}]}"
+
+/* The settings document uses the export clock. The example uses EXAMPLE_AT. */
+static void use_example_time(char *doc)
+{
+    char *hit = strstr(doc, FIXTURE_AT);
+
+    ASSERT_TRUE(hit != NULL);
+    if (hit != NULL) {
+        memcpy(hit, EXAMPLE_AT, strlen(EXAMPLE_AT));
+    }
+    ASSERT_TRUE(strstr(doc, FIXTURE_AT) == NULL);
+}
+
+/* The nested settings object in a remember-export document. */
+static char *nested_settings(const char *doc)
+{
+    const char *marker = "\"settings\":";
+    const char *start = strstr(doc, marker);
+    size_t n = 0;
+    char *out = NULL;
+
+    if (start == NULL) {
+        return NULL;
+    }
+    start += strlen(marker);
+    n = strlen(start);
+    if (n < 2U || start[n - 1U] != '\n' || start[n - 2U] != '}') {
+        return NULL;
+    }
+    n -= 2U;
+    out = (char *)malloc(n + 1U);
+    if (out == NULL) {
+        return NULL;
+    }
+    memcpy(out, start, n);
+    out[n] = '\0';
+    return out;
+}
+
+/* ST-8.3: one tombstone is the example document in all three formats. */
+TEST(export_settings_tombstone_matches_example)
+{
+    Given g = given_tombstone("brain.csv");
+    char *json_path = harness_side_path(g.dir, "/brain.json");
+    char *md_path = harness_side_path(g.dir, "/brain-md");
+    char *doc = NULL;
+    char *settings = NULL;
+    char *csv = NULL;
+    char tree[TREE_BUF];
+    CmdResult r;
+
+    ASSERT_TRUE(json_path != NULL && md_path != NULL);
+    {
+        const char *args[] = {"export",  "--format",          "json",           "--out",
+                              json_path, "--include-expired", "--include-trash"};
+        r = export_run(g.db, args, sizeof args / sizeof args[0]);
+    }
+    ASSERT_EQ_INT(r.exit_code, 0);
+    cmd_result_free(&r);
+    doc = read_in(g.dir, "brain.json");
+    ASSERT_TRUE(doc != NULL);
+    ASSERT_STR_NOT_CONTAINS(doc, "sync_id");
+    ASSERT_STR_NOT_CONTAINS(doc, "local_id");
+    ASSERT_STR_NOT_CONTAINS(doc, "\"source\"");
+    ASSERT_STR_NOT_CONTAINS(doc, "\"merge\"");
+    settings = nested_settings(doc);
+    ASSERT_TRUE(settings != NULL);
+    use_example_time(settings);
+    ASSERT_STREQ(settings, SETTINGS_TOMBSTONE);
+    free(settings);
+    free(doc);
+    {
+        const char *args[] = {
+            "export", "--format", "md", "--out", md_path, "--include-expired", "--include-trash"};
+        r = export_run(g.db, args, sizeof args / sizeof args[0]);
+    }
+    ASSERT_EQ_INT(r.exit_code, 0);
+    cmd_result_free(&r);
+    list_tree(md_path, tree, sizeof tree);
+    ASSERT_STR_CONTAINS(tree, "settings.json\n");
+    settings = read_in(md_path, "settings.json");
+    ASSERT_TRUE(settings != NULL);
+    use_example_time(settings);
+    ASSERT_STREQ(settings, SETTINGS_TOMBSTONE "\n");
+    free(settings);
+    {
+        const char *args[] = {
+            "export", "--format", "csv", "--out", g.out, "--include-expired", "--include-trash"};
+        r = export_run(g.db, args, sizeof args / sizeof args[0]);
+    }
+    ASSERT_EQ_INT(r.exit_code, 0);
+    cmd_result_free(&r);
+    csv = read_in(g.dir, "brain.csv");
+    ASSERT_TRUE(csv != NULL);
+    ASSERT_STR_NOT_CONTAINS(csv, "#settings");
+    ASSERT_STREQ(
+        csv, CSV_HEADER CSV_ROW_ALPHA CSV_ROW_WEEKLY CSV_ROW_WORDS CSV_ROW_EXPIRED CSV_ROW_GONE);
+    free(csv);
+    settings = read_in(g.dir, "brain.settings.json");
+    ASSERT_TRUE(settings != NULL);
+    use_example_time(settings);
+    ASSERT_STREQ(settings, SETTINGS_TOMBSTONE "\n");
+    free(settings);
+    free(json_path);
+    free(md_path);
+    given_free(&g);
+}
+
+/* No rows: JSON has an empty list, and Markdown and CSV write no settings file. */
+TEST(export_settings_empty_omits_the_files)
+{
+    Given g = given_fixture("brain.csv");
+    char *md_dir = harness_side_path(g.dir, "/md");
+    char *old = NULL;
+    char tree[TREE_BUF];
+    CmdResult r;
+
+    write_side(g.dir, "/brain.settings.json", "OLD\n");
+    {
+        const char *args[] = {"export", "--format", "csv", "--out", g.out};
+        r = export_run(g.db, args, sizeof args / sizeof args[0]);
+    }
+    ASSERT_EQ_INT(r.exit_code, 0);
+    cmd_result_free(&r);
+    old = read_in(g.dir, "brain.settings.json");
+    ASSERT_STREQ(old, "OLD\n");
+    free(old);
+    {
+        const char *args[] = {"export", "--format", "md", "--out", md_dir};
+        r = export_run(g.db, args, sizeof args / sizeof args[0]);
+    }
+    ASSERT_EQ_INT(r.exit_code, 0);
+    cmd_result_free(&r);
+    list_tree(md_dir, tree, sizeof tree);
+    ASSERT_STR_NOT_CONTAINS(tree, "settings.json");
+    free(md_dir);
+    given_free(&g);
+}
+
+/* An existing CSV settings file without --force writes neither file. */
+TEST(export_settings_existing_file_without_force)
+{
+    Given g = given_tombstone("brain.csv");
+    char *csv = NULL;
+    CmdResult r;
+
+    write_side(g.dir, "/brain.settings.json", "OLD\n");
+    {
+        const char *args[] = {"export", "--format", "csv", "--out", g.out};
+        r = export_run(g.db, args, sizeof args / sizeof args[0]);
+    }
+    ASSERT_EQ_INT(r.exit_code, 1);
+    ASSERT_STR_CONTAINS(r.err, "output already exists: ");
+    ASSERT_STR_CONTAINS(r.err, "brain.settings.json");
+    cmd_result_free(&r);
+    csv = read_in(g.dir, "brain.csv");
+    ASSERT_TRUE(csv == NULL);
+    free(csv);
+    csv = read_in(g.dir, "brain.settings.json");
+    ASSERT_STREQ(csv, "OLD\n");
+    free(csv);
+    given_free(&g);
+}
+
+/* A user.db row is not a brain row, so it is not in the export. */
+TEST(export_settings_skips_user_rows)
+{
+    Given g = given_fixture("brain.json");
+    char *user = harness_side_path(g.db, ".user.db");
+    char *saved = NULL;
+    // NOLINTNEXTLINE(concurrency-mt-unsafe) the child inherits this process-global
+    const char *env = getenv("REMEMBER_USER_DB");
+    char *doc = NULL;
+    CmdResult r;
+
+    ASSERT_TRUE(user != NULL);
+    if (env != NULL) {
+        saved = strdup(env);
+        ASSERT_TRUE(saved != NULL);
+    }
+    // NOLINTNEXTLINE(concurrency-mt-unsafe) the child inherits this process-global
+    ASSERT_EQ_INT(setenv("REMEMBER_USER_DB", user, 1), 0);
+    {
+        const char *args[] = {"settings", "set", "--scope", "user", "remember.plugins.chain_budget",
+                              "2s"};
+        r = run_remember(g.db, args, sizeof args / sizeof args[0], NULL);
+    }
+    ASSERT_EQ_INT(r.exit_code, 0);
+    cmd_result_free(&r);
+    {
+        const char *args[] = {"export", "--format", "json", "--out", g.out};
+        r = export_run(g.db, args, sizeof args / sizeof args[0]);
+    }
+    ASSERT_EQ_INT(r.exit_code, 0);
+    cmd_result_free(&r);
+    doc = read_in(g.dir, "brain.json");
+    ASSERT_STR_CONTAINS(doc, SETTINGS_EMPTY);
+    ASSERT_STR_NOT_CONTAINS(doc, "chain_budget");
+    free(doc);
+    if (saved != NULL) {
+        // NOLINTNEXTLINE(concurrency-mt-unsafe) the child inherits this process-global
+        ASSERT_EQ_INT(setenv("REMEMBER_USER_DB", saved, 1), 0);
+    } else {
+        // NOLINTNEXTLINE(concurrency-mt-unsafe) the child inherits this process-global
+        ASSERT_EQ_INT(unsetenv("REMEMBER_USER_DB"), 0);
+    }
+    free(saved);
+    free(user);
+    given_free(&g);
+}
+
+/* A fault on the settings file itself leaves the earlier export in place. */
+TEST(export_settings_file_fault_keeps_the_old_output)
+{
+    Given g = given_tombstone("brain.csv");
+    char *md_dir = harness_side_path(g.dir, "/md");
+    char *before = NULL;
+    char *now = NULL;
+    CmdResult r;
+
+    {
+        const char *args[] = {"export", "--format", "csv", "--out", g.out};
+        r = export_run(g.db, args, sizeof args / sizeof args[0]);
+    }
+    ASSERT_EQ_INT(r.exit_code, 0);
+    cmd_result_free(&r);
+    before = read_in(g.dir, "brain.settings.json");
+    ASSERT_TRUE(before != NULL);
+    // NOLINTBEGIN(concurrency-mt-unsafe) the child inherits this process-global
+    (void)setenv("REMEMBER_TEST_EXPORT_FAIL", "write#3", 1);
+    {
+        const char *args[] = {"--json", "export", "--format", "csv", "--out", g.out, "--force"};
+        r = export_run(g.db, args, sizeof args / sizeof args[0]);
+    }
+    (void)unsetenv("REMEMBER_TEST_EXPORT_FAIL");
+    // NOLINTEND(concurrency-mt-unsafe)
+    ASSERT_EQ_INT(r.exit_code, 1);
+    ASSERT_STR_CONTAINS(r.out, "\"code\":\"io_error\"");
+    ASSERT_STR_CONTAINS(r.out, "brain.settings.json");
+    cmd_result_free(&r);
+    now = read_in(g.dir, "brain.settings.json");
+    ASSERT_STREQ(now, before);
+    ASSERT_EQ_INT(count_strays(g.dir), 0);
+    free(now);
+    {
+        const char *args[] = {"export", "--format", "md", "--out", md_dir};
+        r = export_run(g.db, args, sizeof args / sizeof args[0]);
+    }
+    ASSERT_EQ_INT(r.exit_code, 0);
+    cmd_result_free(&r);
+    free(before);
+    before = read_in(md_dir, "settings.json");
+    // NOLINTBEGIN(concurrency-mt-unsafe) the child inherits this process-global
+    (void)setenv("REMEMBER_TEST_EXPORT_FAIL", "write#2", 1);
+    {
+        const char *args[] = {"--json", "export", "--format", "md", "--out", md_dir, "--force"};
+        r = export_run(g.db, args, sizeof args / sizeof args[0]);
+    }
+    (void)unsetenv("REMEMBER_TEST_EXPORT_FAIL");
+    // NOLINTEND(concurrency-mt-unsafe)
+    ASSERT_EQ_INT(r.exit_code, 1);
+    ASSERT_STR_CONTAINS(r.out, "\"code\":\"io_error\"");
+    cmd_result_free(&r);
+    now = read_in(md_dir, "settings.json");
+    ASSERT_STREQ(now, before);
+    ASSERT_EQ_INT(count_strays(g.dir), 0);
+    free(now);
+    free(before);
+    free(md_dir);
+    given_free(&g);
+}
+
 void register_export_tests(void)
 {
-    RUN_TEST(export_json_every_bin_without_settings_member);
+    RUN_TEST(export_json_every_bin_empty_settings);
     RUN_TEST(export_json_default_is_live_only);
     RUN_TEST(export_force_existing_path);
     RUN_TEST(export_usage_sentences);
@@ -1187,4 +1481,9 @@ void register_export_tests(void)
     RUN_TEST(export_help);
     RUN_TEST(export_md_missing_folder);
     RUN_TEST(export_store_failure_writes_nothing);
+    RUN_TEST(export_settings_tombstone_matches_example);
+    RUN_TEST(export_settings_empty_omits_the_files);
+    RUN_TEST(export_settings_existing_file_without_force);
+    RUN_TEST(export_settings_skips_user_rows);
+    RUN_TEST(export_settings_file_fault_keeps_the_old_output);
 }

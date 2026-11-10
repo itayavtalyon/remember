@@ -3,6 +3,7 @@
 #include "normalize.h"
 #include "output.h"
 #include "search_terms.h"
+#include "settings.h"
 #include "store.h"
 
 #include <stdio.h>
@@ -151,6 +152,79 @@ static int write_link(FILE *out, const StoreExportLink *l, bool with_from)
     return fputc('}', out) == EOF ? -1 : 0;
 }
 
+static const char *settings_scope(SettingLayer layer)
+{
+    if (layer == SETTING_LAYER_BRAIN) {
+        return "brain";
+    }
+    return "user";
+}
+
+/* A registered duration also carries value_ms (ST-8.2). */
+static bool settings_value_ms(const SettingExportRow *row, long long *ms)
+{
+    const SettingSpec *spec = setting_by_key(row->key);
+    char inner[SETTING_VALUE_CAP];
+    char canon[NORM_MEASURE_CANON_CAP];
+
+    if (spec == NULL || spec->type != SETTING_DURATION ||
+        !setting_quoted_plain(row->value, inner, sizeof(inner))) {
+        return false;
+    }
+    return norm_duration_canonical(inner, ms, canon, sizeof(canon));
+}
+
+/* ST-8.2 member order, value_ms after value. */
+static int write_settings_row(FILE *out, const SettingExportRow *row)
+{
+    long long ms = 0;
+
+    if (fputs("{\"key\":", out) < 0 || output_json_string(out, row->key) != 0 ||
+        fprintf(out, ",\"scope\":\"%s\",\"value\":%s", settings_scope(row->layer), row->value) <
+            0) {
+        return -1;
+    }
+    if (settings_value_ms(row, &ms) && fprintf(out, ",\"value_ms\":%lld", ms) < 0) {
+        return -1;
+    }
+    if (fprintf(out, ",\"updated_by\":%s,\"updated_at\":", row->updated_by) < 0 ||
+        output_json_string(out, row->updated_at) != 0 || fputs(",\"device_id\":", out) < 0 ||
+        output_json_string(out, row->device_id) != 0 ||
+        fprintf(out, ",\"version_vector\":%s,\"deleted_at\":", row->version_vector) < 0) {
+        return -1;
+    }
+    if (row->deleted_at == NULL) {
+        return fputs("null}", out) < 0 ? -1 : 0;
+    }
+    if (output_json_string(out, row->deleted_at) != 0) {
+        return -1;
+    }
+    return fputc('}', out) == EOF ? -1 : 0;
+}
+
+int export_settings_write(FILE *out, const char *exported_at, const SettingExportRow *rows,
+                          size_t n, bool trailing_newline)
+{
+    size_t i = 0;
+    const char *tail = "]}";
+
+    if (fprintf(out,
+                "{\"format\":\"remember-settings-export\",\"version\":1,\"exported_at\":\"%s\","
+                "\"settings\":[",
+                exported_at) < 0) {
+        return -1;
+    }
+    for (i = 0; i < n; i++) {
+        if ((i > 0U && fputc(',', out) == EOF) || write_settings_row(out, &rows[i]) != 0) {
+            return -1;
+        }
+    }
+    if (trailing_newline) {
+        tail = "]}\n";
+    }
+    return fputs(tail, out) < 0 ? -1 : 0;
+}
+
 int export_json_write(FILE *out, const ExportDoc *doc)
 {
     const StoreExportSnapshot *snap = doc->snap;
@@ -173,7 +247,11 @@ int export_json_write(FILE *out, const ExportDoc *doc)
             return -1;
         }
     }
-    return fputs("]}\n", out) < 0 ? -1 : 0;
+    if (fputs("],\"settings\":", out) < 0 ||
+        export_settings_write(out, doc->exported_at, snap->settings, snap->nsettings, false) != 0) {
+        return -1;
+    }
+    return fputs("}\n", out) < 0 ? -1 : 0;
 }
 
 /* E6.b2: ASCII-lowercase, each run outside [a-z0-9] one '-', no '-' at

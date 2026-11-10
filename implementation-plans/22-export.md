@@ -164,11 +164,11 @@ Quality gate: plan 19's commands. Coverage 100/100.
 
 ## Definition of done
 
-- [ ] Memory export tests are green.
-- [ ] Settings bytes match 007 ST-8.3.
-- [ ] No E12.9 object anywhere in the output.
-- [ ] Gate green. Second review clear.
-- [ ] INDEX row 22 is ticked only when the settings stage is done and the review is closed.
+- [x] Memory export tests are green.
+- [x] Settings bytes match 007 ST-8.3.
+- [x] No E12.9 object anywhere in the output.
+- [x] Gate green. Second review clear.
+- [ ] INDEX row 22 stays unticked until C-44 is approved. Stage 6 and the review below are done.
 
 ## Second review handover
 
@@ -185,7 +185,7 @@ Do not re-open: no zip, atomic rename, RFC 4180, slug rules, no user rows.
 
 ## Implementation Notes
 
-Stages 1 to 5 are built (2026-11-09 to 2026-11-10). Plan 20's brain settings rows are on main (PR #59, merged 2026-11-10 as 7244fa4). Stage 6 is not started: JSON has no `settings` member yet and the tests say so in their names; Markdown and CSV write no settings file. The hand-over below lists what is left.
+Stages 1 to 6 are built (2026-11-09 to 2026-11-10). Plan 20's brain settings rows are on main (PR #59, merged 2026-11-10 as 7244fa4, plus 30341ac). Stage 6 nests the brain settings document. The hand-over below is the order that built it.
 
 Grill decisions (Itay, 2026-11-09; each filed in Remember):
 
@@ -196,16 +196,16 @@ Grill decisions (Itay, 2026-11-09; each filed in Remember):
 
 Code:
 
-- `store_export_snapshot` reads brain id, `user_version`, entries and live links in one transaction. The bin is `store_bin_of` at `exported_at`. A link is exported when both ends are.
+- `store_export_snapshot` reads brain id, `user_version`, entries, live links, and brain settings rows in one transaction. The bin is `store_bin_of` at `exported_at`. A link is exported when both ends are. Settings rows, tombstones included, are freed with the snapshot.
 - `export_format.c` is pure: the JSON document, Markdown name, file and README, CSV rows, the manifest. `output_export_entry_json` is `output_entry_json` without `local_id`. Version-vector keys are sorted at export. The Markdown name needs no allocation: `search_words_end` (search_terms.c) finds the end of the first 6 words with the D12 gap rule that plain text uses.
 - `fileio.c` holds every file call: temp siblings `<path>.tmp-<16 hex>`, `O_EXCL` 0600 writes (`O_NOFOLLOW` was dropped: strict-POSIX gcc `-fanalyzer` does not declare it, and `O_EXCL` already refuses a symlink) with fsync, rename, the D17 folder swap with `<path>.old-<16 hex>`, and tree removal.
-- Test CLI seams: `REMEMBER_TEST_EXPORT_FAIL=<site>[:errno]` (sites random, alloc, join, fdopen, write, close, rename, swap) and `REMEMBER_TEST_EXPORT_CRASH=1` (exit between the D17 renames; `exit`, not `_exit`, so the coverage build keeps its profile).
+- Test CLI seams: `REMEMBER_TEST_EXPORT_FAIL=<site>[#N][:errno]` (sites random, alloc, join, fdopen, write, close, rename, swap; N defaults to 1) and `REMEMBER_TEST_EXPORT_CRASH=1` (exit between the D17 renames; `exit`, not `_exit`, so the coverage build keeps its profile).
 
 Known limits (ponytail, recorded):
 
 - Without `--force` the existence check runs before the write, so a file created at `--out` in between is replaced by the rename. Closing that needs `renamex_np`/`renameat2` with no-replace, which differ by platform.
 - The parent folder is not fsynced after the rename.
-- A CSV export renames the CSV, then the manifest. If the second rename fails, the new CSV stands beside the old manifest. Renames inside one folder do not fail in practice.
+- A CSV export renames the CSV, then the manifest, then `<basename>.settings.json` when the brain has rows. If a later rename fails, the earlier new file stands beside the old later file. Renames inside one folder do not fail in practice. With no rows the settings sibling is not opened and an existing one is left in place.
 - Two memories with the same slug and the same last 12 hex of their ids would collide (EEXIST, `io_error`). The ids are UUID v7 with 48 random bits at the end.
 
 Commands: `cmake --build build -j8`, `./build/remember_tests ./build/remember --only export`, `./build/remember_store_tests`, then the gate (`ctest --test-dir build`, `./scripts/check-coverage.sh`, `CI=true BUILD_DIR=build REMEMBER_SCAN_BUILD=1 REMEMBER_IWYU=0 ./scripts/lint-all.sh`, `cmake --build build --target leaks-macos`).
@@ -277,7 +277,39 @@ Mutation pass (2026-11-10, run on a copy of the tree, export suite; 16 mutants, 
 - Entry bin filter inverted, or the link filter `||` → `&&` → `export_json_default_is_live_only` (alpha links to an expired and a deleted memory).
 - `SLUG_MAX` 47 and the trailing-dash trim removed → `export_md_slug_rules`. `SLUG_WORDS` 5, and `search_words_end` stopping one word late → `export_md_folder_every_bin`.
 - `write_own_links` walk-back removed → `export_md_folder_every_bin`, `export_csv_every_bin` (bsearch lands on alpha's third link).
-- Version-vector sort reversed → `export_json_every_bin_without_settings_member`.
+- Version-vector sort reversed → `export_json_every_bin_empty_settings`.
 - CSV quote doubling removed, NULL written as `""` → `export_csv_every_bin`. Manifest `dot > base` → `>=` → `export_csv_manifest_names` (`.csv`).
 - The D17 restore rename removed, the temp removal removed → `export_every_file_fault_keeps_the_old_output`.
 - Not mutated, justified: dropping `O_EXCL` on the temp. Only a 64-bit random name collision reaches it.
+
+### Stage 6 deep review (2026-11-10, in session)
+
+The brain settings read runs inside the snapshot transaction (`export_layer` on the brain layer). `export_settings_write` is the one ST-8.2 writer: `settings export` and the two files pass a trailing newline, and the nested JSON member does not. Markdown writes `settings.json` in the temp tree only when rows exist. CSV adds `<basename>.settings.json` to the `OutFile` list after the snapshot, and only then, so a brain with no rows leaves an existing sibling alone.
+
+Tests that lock it: `export_settings_tombstone_matches_example` (the 007 example bytes in all three formats, no `sync_id`, `source`, `local_id`, `merge`, or a CSV `#settings` row), `export_settings_empty_omits_the_files`, `export_settings_existing_file_without_force`, `export_settings_skips_user_rows`, `export_settings_file_fault_keeps_the_old_output`. The CSV fault asserts the error path is `brain.settings.json`, so a fault on an earlier file cannot pass as the settings fault.
+
+- **Nit, fixed (lint):** the move of `quoted_plain` dropped `ASCII_UNIT` and `ASCII_DEL`. The trailer used a bool as a ternary condition. The settings error buffer was a bare `32`. Two tests named a path `md`. `getenv` and `setenv` in the user-row test had no `NOLINT`.
+- No new user-facing sentence. C-44 stays unapproved, so INDEX row 22 stays unticked.
+
+Simplify, considered and not taken. `settings_scope` repeats `scope_name` (about six lines); a shared public name would be a new API for one word. `export_brain_settings` is the error map into `STORE_ERR_OOM` or `STORE_ERR_SQLITE`, and inlining it lengthens `store_export_snapshot`. `settings_writer` exists because `FileWriteFn` has no clock. `trailing_newline` is the split the hand-over required.
+
+Stage 6 mutation pass (2026-11-10, export suite unless a settings test is named; 12 mutants, all killed):
+
+- CSV `nsettings > 0` inverted → `export_settings_tombstone_matches_example`. Markdown `nsettings > 0` inverted → `export_md_folder_every_bin` and the tombstone test.
+- Scope forced to `"user"` → the tombstone bytes. File newline dropped → the same test. Nested newline forced → `export_json_every_bin_empty_settings`.
+- The settings read removed → the unused static fails `-Werror`. The settings-file `refuse_existing` removed → `export_settings_existing_file_without_force`.
+- `hit != want` inverted → `export_every_file_fault_keeps_the_old_output`. The `#N` parser ignored → `export_settings_file_fault_keeps_the_old_output`.
+- The duration check inverted → `export_prints_the_settings_document` and `export_scope_selects_one_layer` (no `value_ms`). `deleted_at` branches swapped → the tombstone bytes (`null` instead of the stamp).
+- The out-of-memory `strcmp` inverted → `export_store_failure_writes_nothing` (the line becomes `out of memory`, and the test wants `database error:`).
+
+### Whole-plan deep review (2026-11-10, in session)
+
+This is the hand-over's whole-plan pass. Local Bugbot is not installed. The passes were the review lenses, then simplicity, then an adversarial pass. SQLite stays in the adapter, file calls stay in `fileio.c`, and the settings document has one writer. The new rows are freed with the snapshot. `beside()` results are freed on every exit, including the manifest allocation that returns before the snapshot. JSON strings go through `output_json_string`. `value`, `updated_by`, and `version_vector` are embedded raw because `export_layer` already ran them through `json()`; a value that is not JSON fails that read, which `export_fails_on_a_hand_edited_value_that_is_not_json` already locks for `settings export`.
+
+The second-review probes are the suite. Header order, the missing sync fields, `README.txt`, and the CSV header and BOM are the stage 1 to 5 tests. Probe 5 is `export_settings_empty_omits_the_files`. Probe 6 is `export_md_force_survives_a_crash`. User rows, tombstones, an existing settings file, and a fault on the new file are the stage 6 tests.
+
+No grill. The known limits are unchanged in kind. The CSV rename window is now three files when the brain has rows.
+
+Grades. The implementer, 8/10: the locked decisions and the example bytes match, and the stage 6 lint misses were the standing bar (named constants, no bool ternary, `NOLINT` on `getenv`). The previous in-session reviews of stages 1 to 5, 8/10: those locks held, and they did not see stage 6. This pass found no hole in the file, slug, or bin rules.
+
+Pointer, for the bar: when a fault token grows `#N`, the test has to name the file that failed. An earlier fault leaves the same old bytes.

@@ -56,3 +56,21 @@ void fixture_roundtrip_build(const char *db)
             "'{\"00000000-0000-7000-8000-0000000000ff\":2,"
             "\"00000000-0000-7000-8000-000000000001\":5}' WHERE key = 'project:alpha';");
 }
+
+void fixture_roundtrip_add_tombstone(const char *db)
+{
+    char *got = NULL;
+
+    sql(db, "INSERT INTO settings (key, value, updated_by, updated_at, device_id, "
+            "version_vector, deleted_at, change_seq) VALUES ("
+            "'remember.search.candidate_pool', '400', "
+            "'{\"kind\":\"human\",\"id\":null}', "
+            "'2026-10-24T09:12:00.000Z', "
+            "'01a0d90a-e71c-7a0a-bb2c-3b377482fa51', "
+            "'{\"01a0d90a-e71c-7a0a-bb2c-3b377482fa51\":3}', "
+            "'2026-10-24T09:12:00.000Z', 1);");
+    got = harness_sqlite_query_line(
+        db, "SELECT deleted_at FROM settings WHERE key = 'remember.search.candidate_pool';");
+    ASSERT_STREQ(got, "2026-10-24T09:12:00.000Z");
+    free(got);
+}

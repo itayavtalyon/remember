@@ -5452,6 +5452,7 @@ void store_export_snapshot_free(StoreExportSnapshot *snap)
         free(snap->links[i].updated_at);
     }
     free(snap->links);
+    store_setting_export_free(snap->settings, snap->nsettings);
     memset(snap, 0, sizeof(*snap));
 }
 
@@ -5494,6 +5495,31 @@ static StoreStatus export_entries(sqlite3 *db, StoreExportBins bins, const char 
     }
     (void)sqlite3_finalize(sel);
     return st;
+}
+
+static SettingStatus export_layer(sqlite3 *db, SettingLayer layer, SettingExportRow **rows,
+                                  size_t *n, size_t *cap, char *err, size_t errlen);
+
+/* Brain settings rows, in the same read transaction as the memories. */
+static StoreStatus export_brain_settings(sqlite3 *db, StoreExportSnapshot *out, StoreError *serr)
+{
+    /* "out of memory" plus a short sqlite prefix. The caller only matches the first. */
+    enum { EXPORT_ERR_CAP = 32 };
+    size_t cap = 0U;
+    char err[EXPORT_ERR_CAP];
+    SettingStatus st = SETTING_OK;
+
+    err[0] = '\0';
+    st = export_layer(db, SETTING_LAYER_BRAIN, &out->settings, &out->nsettings, &cap, err,
+                      sizeof err);
+    if (st == SETTING_OK) {
+        return STORE_OK;
+    }
+    if (strcmp(err, "out of memory") == 0) {
+        return STORE_ERR_OOM;
+    }
+    capture_sqlite_error(db, serr);
+    return STORE_ERR_SQLITE;
 }
 
 static StoreStatus export_link_row(sqlite3_stmt *sel, StoreExportLink *l)
@@ -5594,6 +5620,9 @@ StoreStatus store_export_snapshot(Store *s, StoreExportBins bins, const char *no
     st = export_entries(s->db, bins, now, out, &s->last);
     if (st == STORE_OK) {
         st = export_links(s->db, bins, now, out, &s->last);
+    }
+    if (st == STORE_OK) {
+        st = export_brain_settings(s->db, out, &s->last);
     }
     if (st != STORE_OK) {
         goto fail;

@@ -210,6 +210,14 @@ static int manifest_writer(FILE *out, const void *ctx)
     return export_manifest_write(out, (const ExportDoc *)ctx);
 }
 
+static int settings_writer(FILE *out, const void *ctx)
+{
+    const ExportDoc *doc = (const ExportDoc *)ctx;
+
+    return export_settings_write(out, doc->exported_at, doc->snap->settings, doc->snap->nsettings,
+                                 true);
+}
+
 /* One output file: its path, its writer, and its temp sibling while writing. */
 typedef struct {
     const char *path;
@@ -287,6 +295,10 @@ static int write_md_tree(const char *dir, const ExportDoc *doc, int *sys_errno)
         write_in(dir, "README.txt", readme_writer, doc, sys_errno) != 0) {
         return -1;
     }
+    if (doc->snap->nsettings > 0U &&
+        write_in(dir, "settings.json", settings_writer, doc, sys_errno) != 0) {
+        return -1;
+    }
     for (b = 0; b <= (size_t)STORE_BIN_DELETED; b++) {
         char *sub = fileio_join(dir, export_md_folder((StoreBin)b), sys_errno);
         int rc = (sub == NULL) ? -1 : fileio_mkdir(sub, sys_errno);
@@ -357,19 +369,19 @@ static int refuse_existing(const OutFile *f, size_t n, const ExportArgs *a)
     return 0;
 }
 
-/* <dir>/<CSV basename>.manifest.json; the basename drops the last extension
-   (decision:plan22-export-bins-header). Heap. */
-static char *manifest_path(const char *path)
+/* <dir>/<CSV basename><tail>. The basename drops the last extension.
+   ".manifest.json" and ".settings.json" share this (ST-8.3). Heap. */
+static char *beside(const char *path, const char *tail)
 {
-    static const char tail[] = ".manifest.json";
     const char *slash = strrchr(path, '/');
     const char *base = (slash != NULL) ? slash + 1 : path;
     const char *dot = strrchr(base, '.');
     size_t keep = (dot != NULL && dot > base) ? (size_t)(dot - path) : strlen(path);
-    char *out = (char *)malloc(keep + sizeof tail);
+    size_t n = keep + strlen(tail) + 1U;
+    char *out = (char *)malloc(n);
 
     if (out != NULL) {
-        (void)snprintf(out, keep + sizeof tail, "%.*s%s", (int)keep, path, tail);
+        (void)snprintf(out, n, "%.*s%s", (int)keep, path, tail);
     }
     return out;
 }
@@ -407,7 +419,8 @@ int cmd_export(Store *s, bool json, int rest_argc, const char **rest_argv)
     char now[ISO_TS_BUFSIZE];
     char path[REMEMBER_PATH_MAX];
     char *manifest = NULL;
-    OutFile files[2];
+    char *settings = NULL;
+    OutFile files[3];
     size_t nfiles = 1;
     StoreExportSnapshot snap;
     StoreStatus st = STORE_OK;
@@ -424,7 +437,7 @@ int cmd_export(Store *s, bool json, int rest_argc, const char **rest_argv)
     }
     files[0] = (OutFile){.path = path, .fn = (a.fmt == EXPORT_CSV) ? csv_writer : json_writer};
     if (a.fmt == EXPORT_CSV) {
-        manifest = manifest_path(path);
+        manifest = beside(path, ".manifest.json");
         if (manifest == NULL) {
             err_msg(DIAG_OUT_OF_MEMORY, "out of memory");
             return REMEMBER_ERR;
@@ -438,6 +451,17 @@ int cmd_export(Store *s, bool json, int rest_argc, const char **rest_argv)
     if (st != STORE_OK) {
         rc = store_status_to_exit(s, st);
         goto cleanup;
+    }
+    if (a.fmt == EXPORT_CSV && snap.nsettings > 0U) {
+        settings = beside(path, ".settings.json");
+        if (settings == NULL) {
+            err_msg(DIAG_OUT_OF_MEMORY, "out of memory");
+            goto cleanup;
+        }
+        files[nfiles++] = (OutFile){.path = settings, .fn = settings_writer};
+        if (refuse_existing(files + (nfiles - 1U), 1U, &a) != 0) {
+            goto cleanup;
+        }
     }
     {
         const ExportDoc doc = {
@@ -457,5 +481,6 @@ int cmd_export(Store *s, bool json, int rest_argc, const char **rest_argv)
 cleanup:
     store_export_snapshot_free(&snap);
     free(manifest);
+    free(settings);
     return rc;
 }

@@ -5,6 +5,7 @@
 #include "commands_common.h"
 #include "diag.h"
 #include "exit_codes.h"
+#include "export_format.h"
 #include "normalize.h"
 #include "output.h"
 #include "settings.h"
@@ -587,30 +588,6 @@ static int parse_get(int argc, const char **argv, GetOpts *opt)
     return 0;
 }
 
-static bool quoted_plain(const char *text, char *inner, size_t inner_cap)
-{
-    size_t n = strlen(text);
-    size_t i = 0;
-
-    if (n < 2U || text[0] != '"' || text[n - 1U] != '"') {
-        return false;
-    }
-    if (n - 2U >= inner_cap) {
-        return false;
-    }
-    for (i = 1; i + 1U < n; i++) {
-        unsigned char c = (unsigned char)text[i];
-
-        if (c < (unsigned char)ASCII_UNIT || c == (unsigned char)ASCII_DEL || c == '"' ||
-            c == '\\') {
-            return false;
-        }
-    }
-    memcpy(inner, text + 1, n - 2U);
-    inner[n - 2U] = '\0';
-    return true;
-}
-
 static bool array_plain(const char *text)
 {
     size_t n = strlen(text);
@@ -663,12 +640,12 @@ static bool json_text_ok(SettingType type, const char *text)
         return setting_integer(text, &n);
     }
     if (type == SETTING_STRING) {
-        return quoted_plain(text, inner, sizeof(inner));
+        return setting_quoted_plain(text, inner, sizeof(inner));
     }
     if (type == SETTING_DURATION) {
         char canon[NORM_MEASURE_CANON_CAP];
 
-        if (!quoted_plain(text, inner, sizeof(inner))) {
+        if (!setting_quoted_plain(text, inner, sizeof(inner))) {
             return false;
         }
         return norm_duration_canonical(inner, &ms, canon, sizeof(canon));
@@ -896,7 +873,7 @@ static int fill_display(SettingType type, const char *json, char *out, size_t ca
     if (type == SETTING_STRING || type == SETTING_DURATION) {
         char inner[SETTING_VALUE_CAP];
 
-        if (!quoted_plain(json, inner, sizeof(inner))) {
+        if (!setting_quoted_plain(json, inner, sizeof(inner))) {
             return -1;
         }
         {
@@ -931,7 +908,7 @@ static int write_raw_named(FILE *out, SettingType type, const char *json, const 
         char inner[SETTING_VALUE_CAP];
         char canon[NORM_MEASURE_CANON_CAP];
 
-        if (!quoted_plain(json, inner, sizeof(inner)) ||
+        if (!setting_quoted_plain(json, inner, sizeof(inner)) ||
             !norm_duration_canonical(inner, &ms, canon, sizeof(canon))) {
             return -1;
         }
@@ -2762,65 +2739,6 @@ static int parse_export(int argc, const char **argv, SettingLayer *layer)
     return 0;
 }
 
-/* A registered duration also carries value_ms (ST-8.2). */
-static bool export_ms(const SettingExportRow *row, long long *ms)
-{
-    const SettingSpec *spec = setting_by_key(row->key);
-    char inner[SETTING_VALUE_CAP];
-    char canon[NORM_MEASURE_CANON_CAP];
-
-    if (spec == NULL || spec->type != SETTING_DURATION ||
-        !quoted_plain(row->value, inner, sizeof(inner))) {
-        return false;
-    }
-    return norm_duration_canonical(inner, ms, canon, sizeof(canon));
-}
-
-/* ST-8.2 member order, value_ms after value. */
-static int write_export_row(FILE *out, const SettingExportRow *row)
-{
-    long long ms = 0;
-
-    if (fputs("{\"key\":", out) < 0 || output_json_string(out, row->key) != 0 ||
-        fprintf(out, ",\"scope\":\"%s\",\"value\":%s", scope_name(row->layer), row->value) < 0) {
-        return -1;
-    }
-    if (export_ms(row, &ms) && fprintf(out, ",\"value_ms\":%lld", ms) < 0) {
-        return -1;
-    }
-    if (fprintf(out, ",\"updated_by\":%s,\"updated_at\":", row->updated_by) < 0 ||
-        output_json_string(out, row->updated_at) != 0 || fputs(",\"device_id\":", out) < 0 ||
-        output_json_string(out, row->device_id) != 0 ||
-        fprintf(out, ",\"version_vector\":%s,\"deleted_at\":", row->version_vector) < 0) {
-        return -1;
-    }
-    if (row->deleted_at == NULL) {
-        return fputs("null}", out) < 0 ? -1 : 0;
-    }
-    if (output_json_string(out, row->deleted_at) != 0) {
-        return -1;
-    }
-    return fputc('}', out) == EOF ? -1 : 0;
-}
-
-static int write_export(FILE *out, const char *now, const SettingExportRow *rows, size_t n)
-{
-    size_t i = 0;
-
-    if (fprintf(out,
-                "{\"format\":\"remember-settings-export\",\"version\":1,\"exported_at\":\"%s\","
-                "\"settings\":[",
-                now) < 0) {
-        return -1;
-    }
-    for (i = 0; i < n; i++) {
-        if ((i > 0U && fputc(',', out) == EOF) || write_export_row(out, &rows[i]) != 0) {
-            return -1;
-        }
-    }
-    return fputs("]}\n", out) < 0 ? -1 : 0;
-}
-
 /* ST-8.1: one plain document. Under --json a failure is still the envelope.
    --scope brain reads no user.db, so it needs no HOME. */
 static int cmd_settings_export(Store *store, int argc, const char **argv)
@@ -2849,7 +2767,7 @@ static int cmd_settings_export(Store *store, int argc, const char **argv)
     if (store_setting_export(store, userdb, layer, &rows, &n, err, sizeof(err)) != SETTING_OK) {
         return fail_store(err);
     }
-    rc = write_export(app_out(), now, rows, n);
+    rc = export_settings_write(app_out(), now, rows, n, true);
     store_setting_export_free(rows, n);
     if (rc != 0) {
         err_msg(DIAG_INTERNAL, "failed to write output");

@@ -24,10 +24,16 @@ typedef struct {
 /*
  * The remember-export JSON document as one compact line, then a newline:
  * format, version, brain_id, exported_at, engine, schema, bins
- * (decision:plan22-export-bins-header), entries, links. An entry has no
- * local_id; its version_vector keys are sorted (D18).
+ * (decision:plan22-export-bins-header), entries, links, settings. settings is
+ * the brain settings document (007 ST-8.3). An entry has no local_id; its
+ * version_vector keys are sorted (D18).
  */
 int export_json_write(FILE *out, const ExportDoc *doc);
+
+/* The remember-settings-export document (ST-8.1), one compact line.
+   trailing_newline is the file form; the nested JSON member passes false. */
+int export_settings_write(FILE *out, const char *exported_at, const SettingExportRow *rows,
+                          size_t n, bool trailing_newline);
 
 /* The bin's folder in a Markdown export: memories, expired, deleted (D29). */
 const char *export_md_folder(StoreBin bin);

@@ -848,6 +848,8 @@ typedef struct {
     size_t counts[STORE_BIN_DELETED + 1]; /* exported memories per bin */
     StoreExportLink *links; /* live links with both ends exported, by from, to, kind */
     size_t nlinks;
+    SettingExportRow *settings; /* brain rows, tombstones included, by key */
+    size_t nsettings;
 } StoreExportSnapshot;
 
 /*

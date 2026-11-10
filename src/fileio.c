@@ -22,20 +22,36 @@ enum {
 };
 
 #ifdef REMEMBER_TEST_CLI
-/* Test CLI only: REMEMBER_TEST_EXPORT_FAIL=<site>[:<errno>] makes the call at
-   that site fail with errno (default EIO), so each cleanup path runs. Sites:
+/* Test CLI only: REMEMBER_TEST_EXPORT_FAIL=<site>[#N][:<errno>] fails the Nth
+   call at that site (N defaults to 1) with errno (default EIO). Sites:
    random, alloc, join, fdopen, write (after the document is written), close,
    rename, swap (the second D17 rename). */
 static bool fault(const char *site)
 {
+    static unsigned hit;
     // NOLINTNEXTLINE(concurrency-mt-unsafe) single-threaded CLI
     const char *v = getenv("REMEMBER_TEST_EXPORT_FAIL");
     size_t n = strlen(site);
+    unsigned want = 1U;
+    const char *rest = NULL;
+    char *end = NULL;
 
-    if (v == NULL || strncmp(v, site, n) != 0 || (v[n] != '\0' && v[n] != ':')) {
+    if (v == NULL || strncmp(v, site, n) != 0) {
         return false;
     }
-    errno = (v[n] == ':') ? (int)strtol(v + n + 1, NULL, DECIMAL_BASE) : EIO;
+    rest = v + n;
+    if (rest[0] == '#') {
+        want = (unsigned)strtoul(rest + 1, &end, DECIMAL_BASE);
+        rest = end;
+    }
+    if (rest[0] != '\0' && rest[0] != ':') {
+        return false;
+    }
+    hit++;
+    if (hit != want) {
+        return false;
+    }
+    errno = (rest[0] == ':') ? (int)strtol(rest + 1, NULL, DECIMAL_BASE) : EIO;
     return true;
 }
 #define FAULT(site) fault(site)

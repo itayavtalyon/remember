@@ -19,6 +19,9 @@
  */
 void fixture_roundtrip_build(const char *db);
 
+/* One brain tombstone, the 007 ST-8.3 example row, on top of the round-trip brain. */
+void fixture_roundtrip_add_tombstone(const char *db);
+
 /* "00000000-0000-7000-8000-" + 12 hex: the fixed id prefix. */
 #define FIXTURE_ID(hex12) "00000000-0000-7000-8000-" hex12
 #define FIXTURE_AT "2026-01-01T00:00:00.000Z"
