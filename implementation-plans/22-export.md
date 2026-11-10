@@ -314,4 +314,4 @@ Grades. The implementer, 8/10: the locked decisions and the example bytes match,
 
 Pointer, for the bar: when a fault token grows `#N`, the test has to name the file that failed. An earlier fault leaves the same old bytes.
 
-Linux CI (the pre-push hook) failed the first push: `list_tree` used `DT_REG`, which `_POSIX_C_SOURCE=200809L` does not declare. It now uses `stat` and `S_ISREG`.
+Linux CI (the pre-push hook) failed the first push: `list_tree` used `DT_REG`, which `_POSIX_C_SOURCE=200809L` does not declare. It now uses `stat` and `S_ISREG`. The Linux tidy and include checker also wanted a null check before `strstr`, a `NOLINT` on the in-place timestamp copy, `<stdbool.h>` in `export_format.h`, and no `<sys/types.h>` in `fileio.c`.

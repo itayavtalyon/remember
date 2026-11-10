@@ -3,6 +3,7 @@
 
 #include "store.h"
 
+#include <stdbool.h>
 #include <stdio.h>
 
 /*

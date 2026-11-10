@@ -1195,12 +1195,19 @@ _Static_assert(sizeof EXAMPLE_AT == sizeof FIXTURE_AT, "clock swap stays the sam
 /* The settings document uses the export clock. The example uses EXAMPLE_AT. */
 static void use_example_time(char *doc)
 {
-    char *hit = strstr(doc, FIXTURE_AT);
+    char *hit = NULL;
 
-    ASSERT_TRUE(hit != NULL);
-    if (hit != NULL) {
-        memcpy(hit, EXAMPLE_AT, strlen(EXAMPLE_AT));
+    if (doc == NULL) {
+        return;
     }
+    hit = strstr(doc, FIXTURE_AT);
+    ASSERT_TRUE(hit != NULL);
+    if (hit == NULL) {
+        return;
+    }
+    /* Same width as FIXTURE_AT. The buffer's own terminator stays. */
+    // NOLINTNEXTLINE(bugprone-not-null-terminated-result)
+    memcpy(hit, EXAMPLE_AT, strlen(EXAMPLE_AT));
     ASSERT_TRUE(strstr(doc, FIXTURE_AT) == NULL);
 }
 
@@ -1208,10 +1215,14 @@ static void use_example_time(char *doc)
 static char *nested_settings(const char *doc)
 {
     const char *marker = "\"settings\":";
-    const char *start = strstr(doc, marker);
+    const char *start = NULL;
     size_t n = 0;
     char *out = NULL;
 
+    if (doc == NULL) {
+        return NULL;
+    }
+    start = strstr(doc, marker);
     if (start == NULL) {
         return NULL;
     }
