@@ -313,3 +313,5 @@ No grill. The known limits are unchanged in kind. The CSV rename window is now t
 Grades. The implementer, 8/10: the locked decisions and the example bytes match, and the stage 6 lint misses were the standing bar (named constants, no bool ternary, `NOLINT` on `getenv`). The previous in-session reviews of stages 1 to 5, 8/10: those locks held, and they did not see stage 6. This pass found no hole in the file, slug, or bin rules.
 
 Pointer, for the bar: when a fault token grows `#N`, the test has to name the file that failed. An earlier fault leaves the same old bytes.
+
+Linux CI (the pre-push hook) failed the first push: `list_tree` used `DT_REG`, which `_POSIX_C_SOURCE=200809L` does not declare. It now uses `stat` and `S_ISREG`.

@@ -617,7 +617,12 @@ static void list_tree(const char *dir, char *buf, size_t cap)
         }
         // NOLINTNEXTLINE(concurrency-mt-unsafe) single-threaded test
         while ((ent = readdir(d)) != NULL && n < (size_t)TREE_FILES) {
-            if (ent->d_type == DT_REG) {
+            char file[PATH_BUF];
+            struct stat st;
+
+            /* d_type is not in the POSIX dirent this tree builds with. */
+            (void)snprintf(file, sizeof file, "%s/%s", path, ent->d_name);
+            if (stat(file, &st) == 0 && S_ISREG(st.st_mode)) {
                 (void)snprintf(names[n++], sizeof names[0], "%s/%s", subs[i], ent->d_name);
             }
         }
