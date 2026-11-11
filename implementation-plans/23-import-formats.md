@@ -330,3 +330,16 @@ No product grill. `--from-md`/`--from-csv` settings still deferred with those re
 
 Gate: same as stage 6 plus the C-35 test green. Printed C-35 at session start; no invented sentence. Mutant clearing `unknown_field` after the root scan turns `import_json_unknown_field_warns_once_and_still_imports` red. No grill. Ready for full gate and whole-plan review.
 
+### Whole-plan deep review (2026-11-11, in session — ready for second opinion)
+
+Scope: LEGACY PLAN 23 tip `d05a8f0` on `plan/23-import` (base `plan/22-export`).
+
+Gate: `import_formats` 19/0; `sync_import` 40/0; `settings` 151/0; store ASan 521/0; black-box gate suites including `import_formats` green except three envelope PTY tests (`openpty` → EPERM in this agent host; unrelated to plan 23). `tests/gate-suites` now lists `import_formats`.
+
+Simplicity (S): `setting_import_run` with `own_txn` is the right split; extract gated on root object. Byte `extract_top_object` remains a pragmatic choice for nested settings bytes; md/csv readers still deferred.
+
+Safety (A): nested apply never COMMIT/ROLLBACK the outer brain txn; dry-run validates settings before memory writes; bad settings document → `import_parse`, brain unchanged; unknown fields warn once and do not fail the import; no old-name/`sync_id` mapping in JSON; settings keep file actors (ST-8.7); memories still stamp `{import,null}`.
+
+Not done here (by plan): INDEX 23 / D-04 / C-35 stay open until review closes; `--from-md`/`--from-csv` bodies; ask before push/PR (base `plan/22-export`).
+
+`.claude/WHOLE_PLAN_REVIEW` written for the whole-plan second opinion.
