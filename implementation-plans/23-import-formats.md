@@ -273,3 +273,19 @@ Ready for stage 3.
 
 Gate: `import_formats` 13/0. Lenses: JE-5.1 ends vs link VV, cycle skip not hard-fail, missing endpoints → skipped. No grill. C-35 unused.
 
+### Stage 4 — `--from-db` v4/v5/v6
+
+- `IMPORT_MAX_USER_VERSION` is 6. v6 rows read `id` / `local_id` / JSON actors; tags still join on `local_id`.
+- Link remap: v6 UUID lookup; tombstoned links skipped; `related` canonicalized; supersedes cycles skipped.
+- E12 effective list → one `remember.buckets.prefixes` with `{human,null}` when the dest has no row (no add-wins). Invalid shapes stay out.
+- v6 prefixes row → ST-8.6 (VV, then `updated_at`, then `device_id`; tie keeps local) with history (ST-8.7).
+- `outbox` is never opened. Conflicts.origin still not copied (stage 5).
+- Tests: refuse user_version 7; v5 prefixes land as `["work:"]`; v6 copies id + prefixes and leaves outbox alone (does not call `run_import`, which downgrades to v5).
+- Mutants: `IMPORT_MAX` 6→5 → v6 import red; E12 `existing > 0` skip removed → would overwrite dest prefixes; deleted_at link continue removed → would revive tombstones.
+
+### Stage 4 deep review (2026-11-11, in session)
+
+Gate: `sync_import` 40/0; `import_formats` 13/0. Lenses: read-only source, no sidecar touch, no E12.6/add-wins, outbox ignored, human vs import actor for E12 vs memory.
+
+Auto-fix: v6 test must not use `run_import` (harness_make_v5_source); prefixes need trailing `:`. No product grill. C-35 unused. Ready for stage 5.
+

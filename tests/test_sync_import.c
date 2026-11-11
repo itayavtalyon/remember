@@ -306,7 +306,7 @@ static void given_v4_import_source(const char *db)
                     "PRAGMA user_version=4;");
 }
 
-TEST(cli_import_refuses_source_newer_than_v5)
+TEST(cli_import_refuses_source_newer_than_v6)
 {
     char *local = make_temp_db_path();
     char *foreign = make_temp_db_path();
@@ -323,12 +323,11 @@ TEST(cli_import_refuses_source_newer_than_v5)
     r = run_remember(foreign, add, sizeof(add) / sizeof(add[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 0);
     cmd_result_free(&r);
-    free(harness_sqlite_query_line(foreign, "PRAGMA user_version=6;"));
+    free(harness_sqlite_query_line(foreign, "PRAGMA user_version=7;"));
     ver = harness_sqlite_query_line(foreign, "PRAGMA user_version;");
-    ASSERT_STREQ(ver, "6");
+    ASSERT_STREQ(ver, "7");
     free(ver);
 
-    /* A v6 source is refused until plan 23 reads it. */
     imp[3] = foreign;
     r = run_remember(local, imp, sizeof(imp) / sizeof(imp[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 1);
@@ -336,7 +335,7 @@ TEST(cli_import_refuses_source_newer_than_v5)
     cmd_result_free(&r);
 
     ver = harness_sqlite_query_line(foreign, "PRAGMA user_version;");
-    ASSERT_STREQ(ver, "6");
+    ASSERT_STREQ(ver, "7");
     free(ver);
     r = run_remember(local, list, sizeof(list) / sizeof(list[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 0);
@@ -442,7 +441,7 @@ TEST(cli_import_v5_source_is_read_only_and_optional_rows_stay_there)
     sqlite_exec(foreign, "INSERT INTO settings(name, value, updated_at) VALUES "
                          "('ui.theme', 'dark', '2026-01-01T00:00:00.000Z');"
                          "INSERT INTO bucket_prefixes(prefix, added_at, device_id) VALUES "
-                         "('work', '2026-01-01T00:00:00.000Z', "
+                         "('work:', '2026-01-01T00:00:00.000Z', "
                          "'018f6b2e-7c3a-7b2e-8f3a-7c3a7b2e8f3a');"
                          "INSERT INTO conflicts(sync_id, reason, local_json, incoming_json, "
                          "created_at, origin) VALUES "
@@ -484,13 +483,99 @@ TEST(cli_import_v5_source_is_read_only_and_optional_rows_stay_there)
     free(line);
     line = harness_sqlite_query_line(
         local, "SELECT COUNT(*) FROM settings WHERE key='remember.buckets.prefixes';");
-    ASSERT_STREQ(line, "0");
+    ASSERT_STREQ(line, "1");
+    free(line);
+    line = harness_sqlite_query_line(
+        local, "SELECT value FROM settings WHERE key='remember.buckets.prefixes';");
+    ASSERT_STREQ(line, "[\"work:\"]");
+    free(line);
+    line = harness_sqlite_query_line(
+        local, "SELECT updated_by FROM settings WHERE key='remember.buckets.prefixes';");
+    ASSERT_STREQ(line, "{\"kind\":\"human\",\"id\":null}");
     free(line);
     line = harness_sqlite_query_line(local, "SELECT COUNT(*) FROM conflicts;");
     ASSERT_STREQ(line, "0");
     free(line);
     free(side_before);
     free(side);
+    free(before);
+    free(local);
+    free(foreign);
+}
+
+TEST(cli_import_v6_source_copies_id_and_prefix_ignores_outbox)
+{
+    char *local = make_temp_db_path();
+    char *foreign = make_temp_db_path();
+    char *side = NULL;
+    char *local_dev = NULL;
+    char *local_dev_after = NULL;
+    unsigned char *before = NULL;
+    size_t before_n = 0U;
+    CmdResult r;
+    const char *add[] = {"--json", "add", "--key", "ka", "alpha"};
+    const char *list[] = {"--json", "list"};
+    const char *set_pref[] = {"--json", "settings", "set", "--scope", "brain",
+                              "remember.buckets.prefixes", "lab:"};
+    const char *imp[] = {"--json", "import", "--from-db", NULL};
+    char *line = NULL;
+    char *outbox_before = NULL;
+
+    ASSERT_TRUE(local != NULL && foreign != NULL);
+    r = run_remember(local, list, sizeof(list) / sizeof(list[0]), NULL);
+    ASSERT_EQ_INT(r.exit_code, 0);
+    cmd_result_free(&r);
+    side = harness_sidecar_path(local);
+    local_dev = harness_read_line(side);
+    ASSERT_TRUE(local_dev != NULL && local_dev[0] != '\0');
+    free(side);
+
+    r = run_remember(foreign, add, sizeof(add) / sizeof(add[0]), NULL);
+    ASSERT_EQ_INT(r.exit_code, 0);
+    cmd_result_free(&r);
+    r = run_remember(foreign, set_pref, sizeof(set_pref) / sizeof(set_pref[0]), NULL);
+    ASSERT_EQ_INT(r.exit_code, 0);
+    cmd_result_free(&r);
+    sqlite_exec(foreign,
+                "INSERT INTO outbox(event_id, type, payload, recipients, created_at) VALUES "
+                "('018f6b2e-7c3a-7c00-8000-0000000000ff', 'memory.upsert', '{\"skip\":true}', "
+                "'[]', '2026-01-01T00:00:00.000Z');");
+    outbox_before = harness_sqlite_query_line(foreign, "SELECT COUNT(*) FROM outbox;");
+    ASSERT_STREQ(outbox_before, "1");
+    free(outbox_before);
+    before = read_file(foreign, &before_n);
+    ASSERT_TRUE(before != NULL);
+
+    imp[3] = foreign;
+    /* Keep the source at v6: run_import() downgrades via harness_make_v5_source. */
+    r = run_remember(local, imp, sizeof(imp) / sizeof(imp[0]), NULL);
+    ASSERT_EQ_INT(r.exit_code, 0);
+    ASSERT_STR_CONTAINS(r.out, "\"inserted\":1");
+    cmd_result_free(&r);
+
+    ASSERT_TRUE(file_matches(foreign, before, before_n));
+    line = harness_sqlite_query_line(foreign, "PRAGMA user_version;");
+    ASSERT_STREQ(line, "6");
+    free(line);
+    line = harness_sqlite_query_line(foreign, "SELECT COUNT(*) FROM outbox;");
+    ASSERT_STREQ(line, "1");
+    free(line);
+    line = harness_sqlite_query_line(local, "SELECT COUNT(*) FROM outbox;");
+    ASSERT_STREQ(line, "0");
+    free(line);
+    line = harness_sqlite_query_line(
+        local, "SELECT value FROM settings WHERE key='remember.buckets.prefixes';");
+    ASSERT_STREQ(line, "[\"lab:\"]");
+    free(line);
+    line = harness_sqlite_query_line(local, "SELECT key FROM entries WHERE deleted_at IS NULL;");
+    ASSERT_STREQ(line, "ka");
+    free(line);
+    side = harness_sidecar_path(local);
+    local_dev_after = harness_read_line(side);
+    ASSERT_STREQ(local_dev_after, local_dev);
+    free(side);
+    free(local_dev_after);
+    free(local_dev);
     free(before);
     free(local);
     free(foreign);
@@ -2410,9 +2495,10 @@ void register_sync_import_tests(void)
 {
     RUN_TEST(cli_import_inserts_preserves_sync_id_remaps_links_no_device_register);
     RUN_TEST(cli_import_refuses_v3_source);
-    RUN_TEST(cli_import_refuses_source_newer_than_v5);
+    RUN_TEST(cli_import_refuses_source_newer_than_v6);
     RUN_TEST(cli_import_v4_source_is_read_only_and_optional_objects_are_absent);
     RUN_TEST(cli_import_v5_source_is_read_only_and_optional_rows_stay_there);
+    RUN_TEST(cli_import_v6_source_copies_id_and_prefix_ignores_outbox);
     RUN_TEST(cli_import_identical_automerge_concurrent_conflict);
     RUN_TEST(cli_import_key_clash_and_hash_clash_exit_0);
     RUN_TEST(cli_import_key_clash_reimport_idempotent);

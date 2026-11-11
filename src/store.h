@@ -795,16 +795,17 @@ typedef struct {
 void store_import_result_free(StoreImportResult *r);
 
 /*
- * Merge another remember DB by sync_id (Round 7 VV / unique rules). Opens
+ * Merge another remember DB by sync_id / id (Round 7 VV / unique rules). Opens
  * src_path read-only inside the adapter (never store_open; never touches the
- * foreign sidecar; never reads devices). user_version < 4 →
- * STORE_ERR_SOURCE_TOO_OLD. user_version > 5 → STORE_ERR_SOURCE_TOO_NEW
+ * foreign sidecar; never reads devices or outbox). user_version < 4 →
+ * STORE_ERR_SOURCE_TOO_OLD. user_version > 6 → STORE_ERR_SOURCE_TOO_NEW
  * ("database is newer than this remember"). A missing conflicts.origin column
- * or a missing bucket_prefixes / settings table is absent, not an error; those
- * rows are not copied. A row whose key or a tag is not what normalize_token
- * would store, or any other peer field that is not the shape a local write
- * stores, is skipped and listed in rejected. STORE_OK even when conflicts or
- * rejected are not empty. On any other status the result is empty.
+ * is absent, not an error (origin rows are not copied). An E12
+ * bucket_prefixes list becomes one remember.buckets.prefixes row; a v6
+ * prefixes settings row follows ST-8.6. A row whose key or a tag is not what
+ * normalize_token would store, or any other peer field that is not the shape a
+ * local write stores, is skipped and listed in rejected. STORE_OK even when
+ * conflicts or rejected are not empty. On any other status the result is empty.
  */
 StoreStatus store_import(Store *dst, const char *src_path, const char *now, StoreImportResult *out);
 
