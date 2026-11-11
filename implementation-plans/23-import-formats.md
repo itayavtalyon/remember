@@ -289,3 +289,15 @@ Gate: `sync_import` 40/0; `import_formats` 13/0. Lenses: read-only source, no si
 
 Auto-fix: v6 test must not use `run_import` (harness_make_v5_source); prefixes need trailing `:`. No product grill. C-35 unused. Ready for stage 5.
 
+### Stage 5 — origin + errors envelope
+
+- `--origin LABEL` (max 64 bytes) or basename of the `--from-*` path; longer → usage.
+- `conflicts.origin` written on insert/refresh; `conflicts --json` prints `origin` after `created_at` (null when unset).
+- Import envelope gains `skipped` and `errors[{file,line,message}]` with `skipped == len(errors)`.
+- Bad memories/links push an error instead of a bare skipped bump.
+- Mutants: origin length `>`→`>=` → 64-byte label refused; skipped≠nerrors guard in `output_import_data`.
+
+### Stage 5 deep review (2026-11-11, in session)
+
+Gate: `import_formats` 14/0; `sync_import` 40/0; store tests 521/0. No grill. Settings counts still stage 6. C-35 unused. Ready for stage 6.
+

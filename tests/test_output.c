@@ -781,8 +781,9 @@ TEST(output_conflicts_envelope_separates_conflicts_with_a_comma)
     ASSERT_EQ_INT(output_conflicts_data(f, rows, 2), 0);
     assert_written(
         f, "{\"count\":2,\"conflicts\":[{\"id\":1,\"memory_id\":\"s-1\",\"reason\":\"key_clash\","
-           "\"local\":{},\"incoming\":{},\"created_at\":\"c\"},{\"id\":2,\"memory_id\":\"s-1\",\"r"
-           "eason\":\"key_clash\",\"local\":{},\"incoming\":{},\"created_at\":\"c\"}]}");
+           "\"local\":{},\"incoming\":{},\"created_at\":\"c\",\"origin\":null},{\"id\":2,\"memory_"
+           "id\":\"s-1\",\"reason\":\"key_clash\",\"local\":{},\"incoming\":{},\"created_at\":"
+           "\"c\",\"origin\":null}]}");
 }
 
 /* Each field the conflict row needs, missing in turn. The envelope header is
@@ -1433,11 +1434,13 @@ TEST(output_import_envelope_lists_conflicts_and_rejected_rows)
     assert_written(f,
                    "{\"action\":\"imported\",\"inserted\":1,\"updated\":2,\"unchanged\":3,"
                    "\"conflicts\":{\"count\":2,\"items\":[{\"id\":1,\"memory_id\":\"s-1\","
-                   "\"reason\":\"key_clash\",\"local\":{},\"incoming\":{},\"created_at\":\"c\"},"
+                   "\"reason\":\"key_clash\",\"local\":{},\"incoming\":{},\"created_at\":\"c\","
+                   "\"origin\":null},"
                    "{\"id\":2,\"memory_id\":\"s-1\",\"reason\":\"key_clash\",\"local\":{},"
-                   "\"incoming\":{},\"created_at\":\"c\"}]},\"rejected\":{\"count\":2,\"items\":["
+                   "\"incoming\":{},\"created_at\":\"c\",\"origin\":null}]},"
+                   "\"rejected\":{\"count\":2,\"items\":["
                    "{\"source_local_id\":7,\"field\":\"key\"},{\"source_local_id\":9,"
-                   "\"field\":\"body_hash\"}]}}");
+                   "\"field\":\"body_hash\"}]},\"skipped\":0,\"errors\":[]}");
 }
 
 TEST(output_import_envelope_reports_every_failed_write)

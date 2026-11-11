@@ -760,6 +760,7 @@ typedef struct {
     char *local_json;
     char *incoming_json;
     char *created_at;
+    char *origin; /* basename / --origin; NULL when unset */
     StoreConflictReason reason;
     char pad_[4];
 } StoreConflict;
@@ -776,12 +777,20 @@ typedef struct {
                                   deleted_at, version_vector, source, body_hash */
 } StoreImportReject;
 
+/* One bad record in the import envelope (006 E7.6 / plan 23). */
+typedef struct {
+    char *file;              /* heap basename or relative path */
+    const char *message;     /* static bad-record line */
+    int line;                /* 1-based; source entry_links rowid for --from-db links */
+    char pad_[4];
+} StoreImportError;
+
 /* What store_import / store_import_doc did. Release with store_import_result_free. */
 typedef struct {
     size_t inserted;
     size_t updated;
     size_t unchanged;
-    size_t skipped;           /* bad records (plan 23); equals len(errors) when listed */
+    size_t skipped;           /* bad records (plan 23); equals nerrors */
     StoreConflict *conflicts; /* rows this import opened or refreshed, id ASC */
     size_t nconflicts;
     long long *conflict_ids; /* working list while importing; empty on return */
@@ -790,6 +799,9 @@ typedef struct {
     StoreImportReject *rejected;
     size_t nrejected;
     size_t rejected_cap;
+    StoreImportError *errors;
+    size_t nerrors;
+    size_t errors_cap;
 } StoreImportResult;
 
 void store_import_result_free(StoreImportResult *r);
@@ -807,15 +819,16 @@ void store_import_result_free(StoreImportResult *r);
  * local write stores, is skipped and listed in rejected. STORE_OK even when
  * conflicts or rejected are not empty. On any other status the result is empty.
  */
-StoreStatus store_import(Store *dst, const char *src_path, const char *now, StoreImportResult *out);
+StoreStatus store_import(Store *dst, const char *src_path, const char *now, const char *origin,
+                         StoreImportResult *out);
 
 /*
  * Merge an ImportDoc's memories (plan 23). One write transaction. Bad entries
- * are skipped. An empty brain takes doc->brain_id when set. Every written row
- * keeps the file created_by and sets updated_by to {import,null}. Links and
- * settings are ignored here (later stages).
+ * are skipped and listed in errors. An empty brain takes doc->brain_id when set.
+ * Every written row keeps the file created_by and sets updated_by to
+ * {import,null}. origin is stored on any conflict this import opens.
  */
-StoreStatus store_import_doc(Store *dst, const ImportDoc *doc, const char *now,
+StoreStatus store_import_doc(Store *dst, const ImportDoc *doc, const char *now, const char *origin,
                              StoreImportResult *out);
 
 typedef enum { STORE_KEEP_LOCAL = 0, STORE_KEEP_INCOMING, STORE_KEEP_BOTH } StoreConflictKeep;

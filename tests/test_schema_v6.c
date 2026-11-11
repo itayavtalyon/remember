@@ -779,12 +779,12 @@ TEST(schema_v6_import_stamps_written_rows_only)
 
     s = given_open(db);
     memset(&counts, 0, sizeof(counts));
-    ASSERT_EQ_STATUS(store_import(s, peer, k_now, &counts), STORE_OK);
+    ASSERT_EQ_STATUS(store_import(s, peer, k_now, NULL, &counts), STORE_OK);
     ASSERT_EQ_INT((int)counts.inserted, 2);
     assert_seqs(db, "1:1 2:2", "3");
     assert_query_is(db, (QueryExpect){.sql = "SELECT change_seq FROM entry_links;", .want = "3"});
     store_import_result_free(&counts);
-    ASSERT_EQ_STATUS(store_import(s, peer, k_now, &counts), STORE_OK);
+    ASSERT_EQ_STATUS(store_import(s, peer, k_now, NULL, &counts), STORE_OK);
     ASSERT_EQ_INT((int)counts.unchanged, 2);
     store_import_result_free(&counts);
     assert_seqs(db, "1:1 2:2", "3");
@@ -1033,7 +1033,7 @@ TEST(schema_v6_a_newer_min_reader_version_makes_the_brain_read_only)
     ASSERT_EQ_STATUS(store_rekey(s, 1, (RekeyKeys){.key_or_null = NULL, .new_key_or_null = "k"},
                                  STORE_BIN_LIVE, NULL, k_now, &e, NULL),
                      STORE_ERR_SCHEMA_TOO_NEW);
-    ASSERT_EQ_STATUS(store_import(s, peer, k_now, &counts), STORE_ERR_SCHEMA_TOO_NEW);
+    ASSERT_EQ_STATUS(store_import(s, peer, k_now, NULL, &counts), STORE_ERR_SCHEMA_TOO_NEW);
     ASSERT_EQ_STATUS(store_conflict_accept(s, 1, STORE_KEEP_LOCAL, k_now, &rows, &nrows),
                      STORE_ERR_SCHEMA_TOO_NEW);
     ASSERT_EQ_STATUS(store_repair_search_index(s, &entries), STORE_ERR_SCHEMA_TOO_NEW);

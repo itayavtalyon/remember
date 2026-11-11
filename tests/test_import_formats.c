@@ -171,12 +171,57 @@ TEST(import_json_key_clash_does_not_upsert)
     ASSERT_EQ_INT(r.exit_code, 0);
     ASSERT_STR_CONTAINS(r.out, "\"conflicts\":{\"count\":1");
     ASSERT_STR_CONTAINS(r.out, "\"reason\":\"key_clash\"");
+    ASSERT_STR_CONTAINS(r.out, "\"origin\":");
+    ASSERT_STR_CONTAINS(r.out, "-in.json");
     got = harness_sqlite_query_line(dst, "SELECT body FROM entries WHERE key = 'project:alpha';");
     ASSERT_STREQ(got, "local body");
     free(got);
     got = harness_sqlite_query_line(dst, "SELECT COUNT(*) FROM entries;");
     ASSERT_STREQ(got, "1");
     free(got);
+    got = harness_sqlite_query_line(dst, "SELECT origin FROM conflicts;");
+    ASSERT_TRUE(got != NULL && strstr(got, "-in.json") != NULL);
+    free(got);
+    cmd_result_free(&r);
+    free(src);
+    free(dst);
+}
+
+TEST(import_json_origin_flag_overrides_basename_and_rejects_long_labels)
+{
+    char *dst = open_empty_brain();
+    char *src = NULL;
+    char *got = NULL;
+    CmdResult r;
+    CmdResult add;
+    char long_label[80];
+
+    {
+        const char *args[] = {"add", "local body", "--key", "project:alpha"};
+        add = run_remember(dst, args, 4, NULL);
+    }
+    ASSERT_EQ_INT(add.exit_code, 0);
+    cmd_result_free(&add);
+    src = harness_side_path(dst, "-in.json");
+    ASSERT_EQ_INT(write_one_memory_json(src), 0);
+    {
+        const char *args[] = {"--json", "import", "--from-json", src, "--origin", "peer-label"};
+        r = fixed_import(dst, args, sizeof args / sizeof args[0]);
+    }
+    ASSERT_EQ_INT(r.exit_code, 0);
+    ASSERT_STR_CONTAINS(r.out, "\"origin\":\"peer-label\"");
+    got = harness_sqlite_query_line(dst, "SELECT origin FROM conflicts;");
+    ASSERT_STREQ(got, "peer-label");
+    free(got);
+    cmd_result_free(&r);
+    memset(long_label, 'x', sizeof(long_label) - 1U);
+    long_label[sizeof(long_label) - 1U] = '\0';
+    {
+        const char *args[] = {"--json", "import", "--from-json", src, "--origin", long_label};
+        r = fixed_import(dst, args, sizeof args / sizeof args[0]);
+    }
+    ASSERT_EQ_INT(r.exit_code, 1);
+    ASSERT_STR_CONTAINS(r.out, "origin is too long (max 64 bytes)");
     cmd_result_free(&r);
     free(src);
     free(dst);
@@ -367,6 +412,9 @@ TEST(import_json_bad_record_commits_the_good_ones)
     }
     ASSERT_EQ_INT(r.exit_code, 0);
     ASSERT_STR_CONTAINS(r.out, "\"inserted\":1");
+    ASSERT_STR_CONTAINS(r.out, "\"skipped\":1");
+    ASSERT_STR_CONTAINS(r.out, "\"errors\":[{\"file\":");
+    ASSERT_STR_CONTAINS(r.out, "\"message\":\"body is empty\"}");
     got = harness_sqlite_query_line(dst, "SELECT COUNT(*) FROM entries;");
     ASSERT_STREQ(got, "1");
     free(got);
@@ -655,6 +703,7 @@ void register_import_formats_tests(void)
     RUN_TEST(import_json_inserts_a_keyed_memory_into_an_empty_brain);
     RUN_TEST(import_json_keeps_brain_id_when_the_target_is_not_empty);
     RUN_TEST(import_json_key_clash_does_not_upsert);
+    RUN_TEST(import_json_origin_flag_overrides_basename_and_rejects_long_labels);
     RUN_TEST(import_json_keyed_without_id_inserts_and_does_not_union);
     RUN_TEST(import_json_keyless_without_id_unions_tags);
     RUN_TEST(import_json_keyless_identical_tags_count_unchanged);

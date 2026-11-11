@@ -14,14 +14,30 @@
 #include <stdlib.h>
 #include <string.h>
 
+enum { ORIGIN_MAX = 64 };
+
+/* Basename for conflicts.origin: last path component after the final '/'. */
+static const char *import_basename(const char *path)
+{
+    const char *slash = NULL;
+
+    if (path == NULL || path[0] == '\0') {
+        return "";
+    }
+    slash = strrchr(path, '/');
+    return (slash != NULL) ? slash + 1 : path;
+}
+
 /* The import reply: the JSON data object, or one plain line of counts. */
 static int import_write(bool json, const StoreImportResult *r)
 {
     if (json) {
         return output_import_data(app_out(), r);
     }
-    if (fprintf(app_out(), "inserted %zu updated %zu unchanged %zu conflicts %zu rejected %zu\n",
-                r->inserted, r->updated, r->unchanged, r->nconflicts, r->nrejected) < 0) {
+    if (fprintf(app_out(),
+                "inserted %zu updated %zu unchanged %zu conflicts %zu rejected %zu skipped %zu\n",
+                r->inserted, r->updated, r->unchanged, r->nconflicts, r->nrejected, r->skipped) <
+        0) {
         return -1;
     }
     return 0;
@@ -57,7 +73,7 @@ static int import_report_io(const char *path, int sys_errno)
     return REMEMBER_ERR;
 }
 
-static int import_from_json(Store *s, bool json, const char *path)
+static int import_from_json(Store *s, bool json, const char *path, const char *origin)
 {
     ImportDoc doc;
     StoreImportResult result;
@@ -81,7 +97,7 @@ static int import_from_json(Store *s, bool json, const char *path)
         err_msg(DIAG_INTERNAL, "internal error");
         return REMEMBER_ERR;
     }
-    st = store_import_doc(s, &doc, now, &result);
+    st = store_import_doc(s, &doc, now, origin, &result);
     import_doc_free(&doc);
     if (st != STORE_OK) {
         return store_status_to_exit(s, st);
@@ -101,6 +117,8 @@ int cmd_import(Store *s, bool json, int rest_argc, const char **rest_argv)
     const char *from_json = NULL;
     const char *from_md = NULL;
     const char *from_csv = NULL;
+    const char *origin_flag = NULL;
+    const char *origin = NULL;
     int n_sources = 0;
     char now[ISO_TS_BUFSIZE];
     StoreImportResult result;
@@ -112,6 +130,23 @@ int cmd_import(Store *s, bool json, int rest_argc, const char **rest_argv)
     for (i = 0; i < rest_argc; i++) {
         const char *arg = rest_argv[i];
 
+        if (arg != NULL && strcmp(arg, "--origin") == 0) {
+            TakeValue taken = take_value(&i, rest_argc, rest_argv, "--origin requires a label");
+            if (taken.rc != 0) {
+                err_msg(DIAG_USAGE, taken.err);
+                return REMEMBER_ERR;
+            }
+            if (origin_flag != NULL) {
+                err_msg(DIAG_USAGE, "duplicate --origin");
+                return REMEMBER_ERR;
+            }
+            if (strlen(taken.value) > (size_t)ORIGIN_MAX) {
+                err_msg(DIAG_USAGE, "origin is too long (max 64 bytes)");
+                return REMEMBER_ERR;
+            }
+            origin_flag = taken.value;
+            continue;
+        }
         if (arg != NULL && strcmp(arg, "--from-db") == 0) {
             TakeValue taken = take_value(&i, rest_argc, rest_argv, "--from-db requires a path");
             if (taken.rc != 0) {
@@ -182,7 +217,8 @@ int cmd_import(Store *s, bool json, int rest_argc, const char **rest_argv)
         return REMEMBER_ERR;
     }
     if (from_json != NULL) {
-        return import_from_json(s, json, from_json);
+        origin = (origin_flag != NULL) ? origin_flag : import_basename(from_json);
+        return import_from_json(s, json, from_json, origin);
     }
     if (from_md != NULL || from_csv != NULL) {
         /* Stage 2 wires JSON only; Markdown and CSV land in later stages. */
@@ -194,7 +230,8 @@ int cmd_import(Store *s, bool json, int rest_argc, const char **rest_argv)
         err_msg(DIAG_INTERNAL, "internal error");
         return REMEMBER_ERR;
     }
-    st = store_import(s, from_db, now, &result);
+    origin = (origin_flag != NULL) ? origin_flag : import_basename(from_db);
+    st = store_import(s, from_db, now, origin, &result);
     if (st == STORE_ERR_SQLITE && store_last_error(s)->import_source) {
         /* The source failed, not the brain: name the --from-db file. */
         err_store_sqlite(store_last_error(s), from_db);

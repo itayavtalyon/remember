@@ -987,7 +987,7 @@ TEST(store_import_no_sidecar_copy_devices_stay_one)
     harness_make_v5_source(foreign);
     dst = store_open(local, err, sizeof(err));
     ASSERT_TRUE(dst != NULL);
-    ASSERT_EQ_STATUS(store_import(dst, foreign, k_now, &counts), STORE_OK);
+    ASSERT_EQ_STATUS(store_import(dst, foreign, k_now, NULL, &counts), STORE_OK);
     ASSERT_TRUE(counts.inserted == 1U);
     ASSERT_TRUE(counts.nconflicts == 0U);
     store_import_result_free(&counts);
@@ -1828,7 +1828,7 @@ TEST(cli_import_bad_vv_row_is_rejected)
     ASSERT_STR_CONTAINS(r.out,
                         "\"inserted\":0,\"updated\":0,\"unchanged\":0,\"conflicts\":{\"count\":0,"
                         "\"items\":[]},\"rejected\":{\"count\":1,\"items\":[{\"source_local_id\":1,"
-                        "\"field\":\"version_vector\"}]}}");
+                        "\"field\":\"version_vector\"}]},\"skipped\":0,\"errors\":[]}");
     cmd_result_free(&r);
 
     harness_remove_tree(dir);
@@ -2274,7 +2274,7 @@ TEST(cli_import_skips_noncanonical_key_and_tag_rows)
                         "{\"source_local_id\":4,\"field\":\"key\"},"
                         "{\"source_local_id\":5,\"field\":\"key\"},"
                         "{\"source_local_id\":6,\"field\":\"key\"},"
-                        "{\"source_local_id\":7,\"field\":\"key\"}]}}");
+                        "{\"source_local_id\":7,\"field\":\"key\"}]},\"skipped\":0,\"errors\":[]}");
     cmd_result_free(&r);
     keys = harness_sqlite_query_line(local, "SELECT group_concat(key) FROM entries;");
     tags = harness_sqlite_query_line(local, "SELECT group_concat(name) FROM tags;");
@@ -2309,7 +2309,7 @@ TEST(cli_import_skips_noncanonical_row_already_present)
     imp[2] = foreign;
     r = run_import(local, foreign, imp, sizeof(imp) / sizeof(imp[0]));
     ASSERT_EQ_INT(r.exit_code, 0);
-    ASSERT_STREQ(r.out, "inserted 0 updated 0 unchanged 0 conflicts 0 rejected 1\n");
+    ASSERT_STREQ(r.out, "inserted 0 updated 0 unchanged 0 conflicts 0 rejected 1 skipped 0\n");
     cmd_result_free(&r);
     key = harness_sqlite_query_line(local, "SELECT key FROM entries WHERE local_id=1;");
     ASSERT_TRUE(key != NULL);
@@ -2405,7 +2405,8 @@ TEST(cli_import_skips_rows_with_a_non_canonical_peer_field)
                         "{\"source_local_id\":9,\"field\":\"version_vector\"},"
                         "{\"source_local_id\":10,\"field\":\"version_vector\"},"
                         "{\"source_local_id\":11,\"field\":\"source\"},"
-                        "{\"source_local_id\":12,\"field\":\"body_hash\"}]}}");
+                        "{\"source_local_id\":12,\"field\":\"body_hash\"}]},"
+                        "\"skipped\":0,\"errors\":[]}");
     cmd_result_free(&r);
     keys = harness_sqlite_query_line(local, "SELECT group_concat(key) FROM entries;");
     ASSERT_TRUE(keys != NULL);

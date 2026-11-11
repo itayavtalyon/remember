@@ -1005,7 +1005,7 @@ TEST(store_import_probe_prepare_fail_imports_nothing)
     /* user_version prepare succeeds; the next prepare is the origin probe. */
     store_test_fail_prepare_after(1);
     memset(&counts, 0, sizeof(counts));
-    ASSERT_EQ_STATUS(store_import(dst, foreign, k_now, &counts), STORE_ERR_SQLITE);
+    ASSERT_EQ_STATUS(store_import(dst, foreign, k_now, NULL, &counts), STORE_ERR_SQLITE);
     store_test_fail_prepare_after(-1);
     store_close(dst);
     assert_query_is(foreign, (QueryExpect){.sql = "PRAGMA user_version;", .want = "5"});
