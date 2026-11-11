@@ -92,6 +92,40 @@ static int import_from_json(Store *s, bool json, const char *path, const char *o
         import_doc_free(&doc);
         return rc;
     }
+    if (doc.unknown_field != NULL) {
+        (void)diag_unknown_field((DiagUnknownField){.path = path, .name = doc.unknown_field});
+    }
+    if (doc.settings_doc != NULL) {
+        SettingImportReport rep;
+        char err[STORE_SQLITE_MSG_LEN];
+        SettingStatus sst = SETTING_OK;
+
+        memset(&rep, 0, sizeof(rep));
+        err[0] = '\0';
+        /* Dry-run validates the nested document before any memory write (ST-8.3a). */
+        sst = store_setting_import(s, NULL, doc.settings_doc, doc.settings_len, SETTING_LAYER_BRAIN,
+                                   true, &rep, err, sizeof(err));
+        if (sst == SETTING_ERR_DOCUMENT) {
+            store_setting_import_free(&rep);
+            import_doc_free(&doc);
+            (void)diag_error_fix(DIAG_IMPORT_PARSE, "\"settings\" isn't a settings document.",
+                                    "Fix the settings object, then try again.");
+            return REMEMBER_ERR;
+        }
+        if (sst != SETTING_OK) {
+            store_setting_import_free(&rep);
+            import_doc_free(&doc);
+            err_msg(DIAG_INTERNAL, err[0] != '\0' ? err : "internal error");
+            return REMEMBER_ERR;
+        }
+        /* ST-8.3a: same skip warnings as settings import (ST-8.4 / ST-8.5). */
+        if (settings_import_warn_skips(&rep, false) != 0) {
+            store_setting_import_free(&rep);
+            import_doc_free(&doc);
+            return REMEMBER_ERR;
+        }
+        store_setting_import_free(&rep);
+    }
     if (utc_now(now, sizeof(now)) != 0) {
         import_doc_free(&doc);
         err_msg(DIAG_INTERNAL, "internal error");

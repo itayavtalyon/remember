@@ -698,6 +698,223 @@ TEST(import_json_leaves_the_destination_device_id_unchanged)
     free(dst);
 }
 
+/* ST-8.3a: nested brain settings document, including a tombstone (plan 22 example). */
+TEST(import_json_settings_tombstone_lands_in_an_empty_brain)
+{
+    char *dst = open_empty_brain();
+    char *src = NULL;
+    char *got = NULL;
+    char buf[4096];
+    CmdResult r;
+    int n = 0;
+
+    src = harness_side_path(dst, "-settings.json");
+    n = snprintf(
+        buf, sizeof(buf),
+        "{\"format\":\"remember-export\",\"version\":1,\"brain_id\":\"%s\","
+        "\"exported_at\":\"%s\",\"engine\":\"0.2.0\",\"schema\":6,"
+        "\"bins\":{\"live\":0},\"entries\":[],\"links\":[],"
+        "\"settings\":{\"format\":\"remember-settings-export\",\"version\":1,"
+        "\"exported_at\":\"%s\",\"settings\":[{"
+        "\"key\":\"remember.search.candidate_pool\",\"scope\":\"brain\",\"value\":400,"
+        "\"updated_by\":{\"kind\":\"human\",\"id\":null},\"updated_at\":\"%s\","
+        "\"device_id\":\"%s\",\"version_vector\":{\"%s\":3},"
+        "\"deleted_at\":\"%s\"}]}}\n",
+        FIXTURE_ID("000000000002"), FIXTURE_AT, FIXTURE_AT, FIXTURE_AT,
+        FIXTURE_ID("000000000001"), FIXTURE_ID("000000000001"), FIXTURE_AT);
+    ASSERT_TRUE(n > 0 && (size_t)n < sizeof(buf));
+    ASSERT_EQ_INT(write_text(src, buf), 0);
+    {
+        const char *args[] = {"--json", "import", "--from-json", src};
+        r = fixed_import(dst, args, sizeof args / sizeof args[0]);
+    }
+    ASSERT_EQ_INT(r.exit_code, 0);
+    ASSERT_STR_CONTAINS(r.out, "\"settings\":{\"written\":1,\"unchanged\":0,\"skipped\":0}");
+    cmd_result_free(&r);
+    got = harness_sqlite_query_line(
+        dst, "SELECT value || '|' || deleted_at || '|' || updated_by FROM settings WHERE key = "
+             "'remember.search.candidate_pool';");
+    ASSERT_STREQ(got, "400|" FIXTURE_AT "|{\"kind\":\"human\",\"id\":null}");
+    free(got);
+    free(src);
+    free(dst);
+}
+
+/* Absent settings member writes no settings row and reports zero counts. */
+TEST(import_json_without_settings_writes_no_settings_row)
+{
+    char *dst = open_empty_brain();
+    char *src = NULL;
+    char *got = NULL;
+    CmdResult r;
+
+    src = harness_side_path(dst, "-noset.json");
+    ASSERT_EQ_INT(write_one_memory_json(src), 0);
+    {
+        const char *args[] = {"--json", "import", "--from-json", src};
+        r = fixed_import(dst, args, sizeof args / sizeof args[0]);
+    }
+    ASSERT_EQ_INT(r.exit_code, 0);
+    ASSERT_STR_CONTAINS(r.out, "\"settings\":{\"written\":0,\"unchanged\":0,\"skipped\":0}");
+    cmd_result_free(&r);
+    got = harness_sqlite_query_line(dst, "SELECT COUNT(*) FROM settings;");
+    ASSERT_STREQ(got, "0");
+    free(got);
+    free(src);
+    free(dst);
+}
+
+/* A present settings member that is not a settings document fails the whole import. */
+TEST(import_json_bad_settings_document_leaves_the_brain_unchanged)
+{
+    char *dst = open_empty_brain();
+    char *src = NULL;
+    char *got = NULL;
+    char buf[TEXT_BUF];
+    CmdResult r;
+    int n = 0;
+
+    src = harness_side_path(dst, "-badset.json");
+    n = snprintf(buf, sizeof(buf),
+                 "{\"format\":\"remember-export\",\"version\":1,\"brain_id\":\"%s\","
+                 "\"exported_at\":\"%s\",\"engine\":\"0.2.0\",\"schema\":6,"
+                 "\"bins\":{\"live\":1},\"entries\":[{"
+                 "\"id\":\"%s\",\"key\":\"project:alpha\",\"body\":\"Alpha body\","
+                 "\"tags\":[],\"created_by\":{\"kind\":\"human\",\"id\":null},"
+                 "\"updated_by\":{\"kind\":\"human\",\"id\":null},"
+                 "\"created_at\":\"%s\",\"updated_at\":\"%s\","
+                 "\"expires_at\":null,\"deleted_at\":null,\"bin\":\"live\","
+                 "\"version_vector\":{\"%s\":1}}],\"links\":[],\"settings\":{}}\n",
+                 FIXTURE_ID("000000000002"), FIXTURE_AT, FIXTURE_ID("000000000003"), FIXTURE_AT,
+                 FIXTURE_AT, FIXTURE_ID("000000000001"));
+    ASSERT_TRUE(n > 0 && (size_t)n < sizeof(buf));
+    ASSERT_EQ_INT(write_text(src, buf), 0);
+    {
+        const char *args[] = {"--json", "import", "--from-json", src};
+        r = fixed_import(dst, args, sizeof args / sizeof args[0]);
+    }
+    ASSERT_EQ_INT(r.exit_code, 1);
+    ASSERT_STR_CONTAINS(r.out, "\"code\":\"import_parse\"");
+    ASSERT_STR_CONTAINS(r.out, "\\\"settings\\\" isn't a settings document.");
+    cmd_result_free(&r);
+    got = harness_sqlite_query_line(dst, "SELECT COUNT(*) FROM entries;");
+    ASSERT_STREQ(got, "0");
+    free(got);
+    got = harness_sqlite_query_line(dst, "SELECT COUNT(*) FROM settings;");
+    ASSERT_STREQ(got, "0");
+    free(got);
+    free(src);
+    free(dst);
+}
+
+/* A bad settings value is skipped; a good row and the memories still write. */
+TEST(import_json_bad_setting_value_is_skipped_and_others_write)
+{
+    char *dst = open_empty_brain();
+    char *src = NULL;
+    char *got = NULL;
+    char buf[4096];
+    CmdResult r;
+    int n = 0;
+
+    src = harness_side_path(dst, "-skipset.json");
+    n = snprintf(
+        buf, sizeof(buf),
+        "{\"format\":\"remember-export\",\"version\":1,\"brain_id\":\"%s\","
+        "\"exported_at\":\"%s\",\"engine\":\"0.2.0\",\"schema\":6,"
+        "\"bins\":{\"live\":1},\"entries\":[{"
+        "\"id\":\"%s\",\"key\":\"project:alpha\",\"body\":\"Alpha body\","
+        "\"tags\":[],\"created_by\":{\"kind\":\"human\",\"id\":null},"
+        "\"updated_by\":{\"kind\":\"human\",\"id\":null},"
+        "\"created_at\":\"%s\",\"updated_at\":\"%s\","
+        "\"expires_at\":null,\"deleted_at\":null,\"bin\":\"live\","
+        "\"version_vector\":{\"%s\":1}}],\"links\":[],"
+        "\"settings\":{\"format\":\"remember-settings-export\",\"version\":1,"
+        "\"exported_at\":\"%s\",\"settings\":["
+        "{\"key\":\"remember.search.candidate_pool\",\"scope\":\"brain\",\"value\":\"nope\","
+        "\"updated_by\":{\"kind\":\"human\",\"id\":null},\"updated_at\":\"%s\","
+        "\"device_id\":\"%s\",\"version_vector\":{\"%s\":1},\"deleted_at\":null},"
+        "{\"key\":\"remember.search.max_results\",\"scope\":\"brain\",\"value\":9,"
+        "\"updated_by\":{\"kind\":\"agent\",\"id\":\"bot\"},\"updated_at\":\"%s\","
+        "\"device_id\":\"%s\",\"version_vector\":{\"%s\":1},\"deleted_at\":null}]}}\n",
+        FIXTURE_ID("000000000002"), FIXTURE_AT, FIXTURE_ID("000000000003"), FIXTURE_AT, FIXTURE_AT,
+        FIXTURE_ID("000000000001"), FIXTURE_AT, FIXTURE_AT, FIXTURE_ID("000000000001"),
+        FIXTURE_ID("000000000001"), FIXTURE_AT, FIXTURE_ID("000000000001"),
+        FIXTURE_ID("000000000001"));
+    ASSERT_TRUE(n > 0 && (size_t)n < sizeof(buf));
+    ASSERT_EQ_INT(write_text(src, buf), 0);
+    {
+        const char *args[] = {"--json", "import", "--from-json", src};
+        r = fixed_import(dst, args, sizeof args / sizeof args[0]);
+    }
+    ASSERT_EQ_INT(r.exit_code, 0);
+    ASSERT_STR_CONTAINS(r.out, "\"settings\":{\"written\":1,\"unchanged\":0,\"skipped\":1}");
+    ASSERT_STR_CONTAINS(r.out, "\"code\":\"setting_invalid\"");
+    ASSERT_STR_CONTAINS(r.out, "isn't a valid value.");
+    cmd_result_free(&r);
+    got = harness_sqlite_query_line(dst, "SELECT COUNT(*) FROM entries;");
+    ASSERT_STREQ(got, "1");
+    free(got);
+    got = harness_sqlite_query_line(
+        dst, "SELECT value || '|' || updated_by FROM settings WHERE key = "
+             "'remember.search.max_results';");
+    ASSERT_STREQ(got, "9|{\"kind\":\"agent\",\"id\":\"bot\"}");
+    free(got);
+    got = harness_sqlite_query_line(
+        dst, "SELECT COUNT(*) FROM settings WHERE key = 'remember.search.candidate_pool';");
+    ASSERT_STREQ(got, "0");
+    free(got);
+    free(src);
+    free(dst);
+}
+
+/* C-35: first unknown member warns once; the rest of the file still imports. */
+TEST(import_json_unknown_field_warns_once_and_still_imports)
+{
+    char *dst = open_empty_brain();
+    char *src = NULL;
+    char *got = NULL;
+    char buf[TEXT_BUF];
+    char want[PATH_BUF + 160];
+    CmdResult r;
+    int n = 0;
+
+    src = harness_side_path(dst, "-extra.json");
+    n = snprintf(buf, sizeof(buf),
+                 "{\"format\":\"remember-export\",\"version\":1,\"brain_id\":\"%s\","
+                 "\"exported_at\":\"%s\",\"engine\":\"0.2.0\",\"schema\":6,"
+                 "\"bins\":{\"live\":1},\"sync_id\":\"ignored\","
+                 "\"entries\":[{"
+                 "\"id\":\"%s\",\"key\":\"project:alpha\",\"body\":\"Alpha body\","
+                 "\"tags\":[],\"created_by\":{\"kind\":\"human\",\"id\":null},"
+                 "\"updated_by\":{\"kind\":\"human\",\"id\":null},"
+                 "\"created_at\":\"%s\",\"updated_at\":\"%s\","
+                 "\"expires_at\":null,\"deleted_at\":null,\"bin\":\"live\","
+                 "\"version_vector\":{\"%s\":1},\"source\":\"old\"}],\"links\":[]}\n",
+                 FIXTURE_ID("000000000002"), FIXTURE_AT, FIXTURE_ID("000000000003"), FIXTURE_AT,
+                 FIXTURE_AT, FIXTURE_ID("000000000001"));
+    ASSERT_TRUE(n > 0 && (size_t)n < sizeof(buf));
+    ASSERT_EQ_INT(write_text(src, buf), 0);
+    {
+        const char *args[] = {"import", "--from-json", src};
+        r = fixed_import(dst, args, sizeof args / sizeof args[0]);
+    }
+    ASSERT_EQ_INT(r.exit_code, 0);
+    n = snprintf(want, sizeof(want),
+                 "remember: warning: \"%s\" has a field remember doesn't know, \"sync_id\". "
+                 "The rest of the file was read.\n",
+                 src);
+    ASSERT_TRUE(n > 0 && (size_t)n < sizeof(want));
+    ASSERT_STREQ(r.err, want);
+    ASSERT_STR_CONTAINS(r.out, "inserted 1");
+    cmd_result_free(&r);
+    got = harness_sqlite_query_line(dst, "SELECT key FROM entries;");
+    ASSERT_STREQ(got, "project:alpha");
+    free(got);
+    free(src);
+    free(dst);
+}
+
 void register_import_formats_tests(void)
 {
     RUN_TEST(import_json_inserts_a_keyed_memory_into_an_empty_brain);
@@ -714,4 +931,9 @@ void register_import_formats_tests(void)
     RUN_TEST(import_json_skips_a_supersedes_cycle);
     RUN_TEST(import_json_canonicalizes_related_to_min_max);
     RUN_TEST(import_json_leaves_the_destination_device_id_unchanged);
+    RUN_TEST(import_json_settings_tombstone_lands_in_an_empty_brain);
+    RUN_TEST(import_json_without_settings_writes_no_settings_row);
+    RUN_TEST(import_json_bad_settings_document_leaves_the_brain_unchanged);
+    RUN_TEST(import_json_bad_setting_value_is_skipped_and_others_write);
+    RUN_TEST(import_json_unknown_field_warns_once_and_still_imports);
 }

@@ -10049,6 +10049,29 @@ StoreStatus store_import_doc(Store *dst, const ImportDoc *doc, const char *now, 
             goto fail;
         }
     }
+    if (doc->settings_doc != NULL && doc->settings_len > 0U) {
+        SettingImportReport rep;
+        char serr[STORE_SQLITE_MSG_LEN];
+        SettingStatus sst = SETTING_OK;
+
+        memset(&rep, 0, sizeof(rep));
+        serr[0] = '\0';
+        sst = store_setting_import_apply(dst, doc->settings_doc, doc->settings_len,
+                                         SETTING_LAYER_BRAIN, &rep, serr, sizeof(serr));
+        if (sst != SETTING_OK) {
+            store_setting_import_free(&rep);
+            st = (strcmp(serr, "out of memory") == 0) ? STORE_ERR_OOM : STORE_ERR_INTERNAL;
+            if (serr[0] != '\0') {
+                (void)snprintf(dst->last.sqlite_message, sizeof(dst->last.sqlite_message), "%s",
+                               serr);
+            }
+            goto fail;
+        }
+        out->settings_written = rep.written;
+        out->settings_unchanged = rep.unchanged;
+        out->settings_skipped = rep.skipped;
+        store_setting_import_free(&rep);
+    }
     st = import_load_conflicts(dst->db, out, &dst->last);
     if (st != STORE_OK) {
         goto fail;
@@ -13029,9 +13052,9 @@ static void import_count(SettingImportReport *out)
     }
 }
 
-SettingStatus store_setting_import(Store *brain, const char *user_db, const char *doc, size_t len,
-                                   SettingLayer only, bool dry_run, SettingImportReport *out,
-                                   char *err, size_t errlen)
+static SettingStatus setting_import_run(Store *brain, const char *user_db, const char *doc,
+                                        size_t len, SettingLayer only, bool dry_run, bool own_txn,
+                                        SettingImportReport *out, char *err, size_t errlen)
 {
     ImportCtx ctx;
     ImportIn *ins = NULL;
@@ -13065,7 +13088,14 @@ SettingStatus store_setting_import(Store *brain, const char *user_db, const char
         set_err(err, errlen, "out of memory");
         return SETTING_ERR_STORE;
     }
-    st = begin_brain_tx(brain, err, errlen);
+    if (own_txn) {
+        st = begin_brain_tx(brain, err, errlen);
+        if (st != SETTING_OK) {
+            import_in_free(ins, n);
+            store_setting_import_free(out);
+            return st;
+        }
+    }
     memset(&ctx, 0, sizeof(ctx));
     ctx.brain = brain;
     ctx.user_db = user_db;
@@ -13080,7 +13110,13 @@ SettingStatus store_setting_import(Store *brain, const char *user_db, const char
             out->quota_layer = out->rows[i].scope;
         }
     }
-    st = import_finish(&ctx, st);
+    if (own_txn) {
+        st = import_finish(&ctx, st);
+    } else if (ctx.udb != NULL) {
+        rollback_quiet(ctx.udb);
+        (void)sqlite3_close(ctx.udb);
+        ctx.udb = NULL;
+    }
     import_in_free(ins, n);
     if (st != SETTING_OK) {
         store_setting_import_free(out);
@@ -13088,6 +13124,20 @@ SettingStatus store_setting_import(Store *brain, const char *user_db, const char
     }
     import_count(out);
     return SETTING_OK;
+}
+
+SettingStatus store_setting_import(Store *brain, const char *user_db, const char *doc, size_t len,
+                                   SettingLayer only, bool dry_run, SettingImportReport *out,
+                                   char *err, size_t errlen)
+{
+    return setting_import_run(brain, user_db, doc, len, only, dry_run, true, out, err, errlen);
+}
+
+SettingStatus store_setting_import_apply(Store *brain, const char *doc, size_t len,
+                                         SettingLayer only, SettingImportReport *out, char *err,
+                                         size_t errlen)
+{
+    return setting_import_run(brain, NULL, doc, len, only, false, false, out, err, errlen);
 }
 
 /* ---- settings history (stage 9, ST-7.6, ST-7.14) -------------------------- */

@@ -3021,7 +3021,7 @@ static int warn_invalid(char *msg, const DiagDetailField *fields, size_t n)
     return 0;
 }
 
-static int warn_skip(const SettingImportRow *row, size_t nrows)
+static int warn_skip(const SettingImportRow *row, bool settings_alone)
 {
     const char *value = row->value != NULL ? row->value : "null";
 
@@ -3049,9 +3049,9 @@ static int warn_skip(const SettingImportRow *row, size_t nrows)
                                           {.name = "value", .value = value},
                                           {.name = "reason", .value = "invalid_value"}};
 
-        /* D-15: the second sentence only when the batch is this one row. */
+        /* D-15: the second sentence only for a lone settings-file row. */
         return warn_invalid(fmt_alloc("skipped \"%s\": \"%s\" isn't a valid value.%s", row->key,
-                                      value, nrows == 1U ? " This brain wasn't changed." : ""),
+                                      value, settings_alone ? " This brain wasn't changed." : ""),
                             fields, sizeof(fields) / sizeof(fields[0]));
     }
     if (row->reason == SETTING_SKIP_UNKNOWN_KEY) {
@@ -3110,18 +3110,30 @@ static int write_import_data(FILE *out, const SettingImportReport *rep)
     return fputs("]}", out) < 0 ? -1 : 0;
 }
 
+int settings_import_warn_skips(const SettingImportReport *rep, bool settings_alone)
+{
+    size_t i = 0;
+
+    if (rep == NULL) {
+        return 0;
+    }
+    for (i = 0; i < rep->nrows; i++) {
+        if (rep->rows[i].result == SETTING_IMPORT_SKIPPED &&
+            warn_skip(&rep->rows[i], settings_alone && rep->nrows == 1U) != 0) {
+            return REMEMBER_ERR;
+        }
+    }
+    return 0;
+}
+
 /* Skipped lines first (C-12), then the C-13 line or the dry-run draft
    (decision:plan20-import-dry-run-draft). */
 static int emit_import(bool json, const ImportOpts *opt, const SettingImportReport *rep)
 {
-    size_t i = 0;
     int wrote = 0;
 
-    for (i = 0; i < rep->nrows; i++) {
-        if (rep->rows[i].result == SETTING_IMPORT_SKIPPED &&
-            warn_skip(&rep->rows[i], rep->nrows) != 0) {
-            return REMEMBER_ERR;
-        }
+    if (settings_import_warn_skips(rep, true) != 0) {
+        return REMEMBER_ERR;
     }
     if (json) {
         wrote = write_import_data(app_out(), rep);

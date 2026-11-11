@@ -48,6 +48,125 @@ static const char *basename_of(const char *path)
     return (slash != NULL) ? (slash + 1) : path;
 }
 
+/* Copy the JSON object that is the value of "key" near the start of src. */
+static char *extract_top_object(const char *src, size_t len, const char *key, size_t *out_len)
+{
+    char needle[64];
+    const char *hit = NULL;
+    const char *p = NULL;
+    const char *end = NULL;
+    int depth = 0;
+    bool in_str = false;
+    bool esc = false;
+    bool found = false;
+    size_t n = 0;
+    size_t need = 0;
+    int printed = 0;
+
+    *out_len = 0U;
+    printed = snprintf(needle, sizeof(needle), "\"%s\"", key);
+    if (printed < 0 || (size_t)printed >= sizeof(needle) || src == NULL) {
+        return NULL;
+    }
+    need = (size_t)printed;
+    end = src + len;
+    for (hit = src; hit + need <= end; hit++) {
+        if (memcmp(hit, needle, need) != 0) {
+            continue;
+        }
+        p = hit + need;
+        while (p < end && (*p == ' ' || *p == '\t' || *p == '\n' || *p == '\r')) {
+            p++;
+        }
+        if (p >= end || *p != ':') {
+            continue;
+        }
+        p++;
+        while (p < end && (*p == ' ' || *p == '\t' || *p == '\n' || *p == '\r')) {
+            p++;
+        }
+        if (p < end && *p == '{') {
+            found = true;
+            break;
+        }
+    }
+    if (!found || p >= end || *p != '{') {
+        return NULL;
+    }
+    for (n = 0; p + n < end; n++) {
+        char c = p[n];
+
+        if (in_str) {
+            if (esc) {
+                esc = false;
+            } else if (c == '\\') {
+                esc = true;
+            } else if (c == '"') {
+                in_str = false;
+            }
+            continue;
+        }
+        if (c == '"') {
+            in_str = true;
+            continue;
+        }
+        if (c == '{') {
+            depth++;
+        } else if (c == '}') {
+            depth--;
+            if (depth == 0) {
+                n++;
+                *out_len = n;
+                return dup_bytes(p, n);
+            }
+        }
+    }
+    return NULL;
+}
+
+static bool known_export_root(const char *key)
+{
+    return strcmp(key, "format") == 0 || strcmp(key, "version") == 0 ||
+           strcmp(key, "brain_id") == 0 || strcmp(key, "exported_at") == 0 ||
+           strcmp(key, "engine") == 0 || strcmp(key, "schema") == 0 || strcmp(key, "bins") == 0 ||
+           strcmp(key, "entries") == 0 || strcmp(key, "links") == 0 || strcmp(key, "settings") == 0;
+}
+
+static bool known_entry_field(const char *key)
+{
+    return strcmp(key, "id") == 0 || strcmp(key, "key") == 0 || strcmp(key, "body") == 0 ||
+           strcmp(key, "tags") == 0 || strcmp(key, "created_by") == 0 ||
+           strcmp(key, "updated_by") == 0 || strcmp(key, "created_at") == 0 ||
+           strcmp(key, "updated_at") == 0 || strcmp(key, "expires_at") == 0 ||
+           strcmp(key, "deleted_at") == 0 || strcmp(key, "bin") == 0 ||
+           strcmp(key, "version_vector") == 0;
+}
+
+static bool known_link_field(const char *key)
+{
+    return strcmp(key, "from") == 0 || strcmp(key, "to") == 0 || strcmp(key, "kind") == 0 ||
+           strcmp(key, "created_at") == 0 || strcmp(key, "updated_at") == 0 ||
+           strcmp(key, "deleted_at") == 0 || strcmp(key, "id") == 0 ||
+           strcmp(key, "version_vector") == 0;
+}
+
+static char *first_unknown_in_object(const JsonValue *obj, bool (*known)(const char *))
+{
+    size_t i = 0;
+
+    if (obj == NULL || obj->type != JSON_OBJECT || known == NULL) {
+        return NULL;
+    }
+    for (i = 0; i < obj->u.object.n; i++) {
+        const char *key = obj->u.object.members[i].key;
+
+        if (key != NULL && !known(key)) {
+            return dup_cstr(key);
+        }
+    }
+    return NULL;
+}
+
 static void memory_free(ImportMemory *m)
 {
     size_t i = 0;
@@ -103,6 +222,8 @@ void import_doc_free(ImportDoc *doc)
         link_free(&doc->links[i]);
     }
     free(doc->links);
+    free(doc->settings_doc);
+    free(doc->unknown_field);
     free(doc->parse_message);
     free(doc->parse_fix);
     memset(doc, 0, sizeof(*doc));
@@ -586,12 +707,13 @@ int import_read_json(const char *path, ImportDoc *doc, int *sys_errno)
     }
     base = basename_of(path);
     jst = jsonread_parse(bytes, len, &root);
-    free(bytes);
     if (jst != JSONREAD_OK) {
+        free(bytes);
         set_parse(doc, msg_not_export(base), NULL);
         return 0;
     }
     if (root->type != JSON_OBJECT) {
+        free(bytes);
         jsonread_free(root);
         set_parse(doc, msg_not_export(base), NULL);
         return 0;
@@ -599,12 +721,14 @@ int import_read_json(const char *path, ImportDoc *doc, int *sys_errno)
     v = object_get(root, "format");
     if (v == NULL || v->type != JSON_STRING || v->u.string.bytes == NULL ||
         strcmp(v->u.string.bytes, "remember-export") != 0) {
+        free(bytes);
         jsonread_free(root);
         set_parse(doc, msg_not_export(base), NULL);
         return 0;
     }
     v = object_get(root, "version");
     if (v == NULL || v->type != JSON_NUMBER || v->u.number.bytes == NULL) {
+        free(bytes);
         jsonread_free(root);
         set_parse(doc, msg_not_export(base), NULL);
         return 0;
@@ -614,6 +738,7 @@ int import_read_json(const char *path, ImportDoc *doc, int *sys_errno)
         long long ver = strtoll(v->u.number.bytes, &end, 10);
 
         if (end == v->u.number.bytes || *end != '\0') {
+            free(bytes);
             jsonread_free(root);
             set_parse(doc, msg_not_export(base), NULL);
             return 0;
@@ -623,15 +748,37 @@ int import_read_json(const char *path, ImportDoc *doc, int *sys_errno)
             doc->version_too_new = true;
             set_parse(doc, msg_version_too_new(base, ver),
                       dup_cstr("Update remember, then try again."));
+            free(bytes);
             jsonread_free(root);
             return 0;
         }
         if (ver != 1) {
+            free(bytes);
             jsonread_free(root);
             set_parse(doc, msg_not_export(base), NULL);
             return 0;
         }
     }
+    v = object_get(root, "settings");
+    if (v != NULL && v->type != JSON_OBJECT) {
+        free(bytes);
+        jsonread_free(root);
+        /* A present settings member that is not a settings document (ST-8.3a). */
+        set_parse(doc, dup_cstr("\"settings\" isn't a settings document."),
+                  dup_cstr("Fix the settings object, then try again."));
+        return 0;
+    }
+    if (v != NULL && v->type == JSON_OBJECT) {
+        doc->settings_doc = extract_top_object(bytes, len, "settings", &doc->settings_len);
+        if (doc->settings_doc == NULL) {
+            free(bytes);
+            jsonread_free(root);
+            set_parse(doc, dup_cstr("\"settings\" isn't a settings document."),
+                      dup_cstr("Fix the settings object, then try again."));
+            return 0;
+        }
+    }
+    free(bytes);
     v = object_get(root, "brain_id");
     if (v != NULL && v->type == JSON_STRING) {
         char id_buf[37];
@@ -679,6 +826,26 @@ int import_read_json(const char *path, ImportDoc *doc, int *sys_errno)
                 import_doc_free(doc);
                 *sys_errno = ENOMEM;
                 return -1;
+            }
+        }
+    }
+    /* First unknown member wins (JE-4.1 / C-35); sync_id and source are unknown. */
+    doc->unknown_field = first_unknown_in_object(root, known_export_root);
+    if (doc->unknown_field == NULL) {
+        v = object_get(root, "entries");
+        if (v != NULL && v->type == JSON_ARRAY) {
+            for (i = 0; i < v->u.array.n && doc->unknown_field == NULL; i++) {
+                doc->unknown_field =
+                    first_unknown_in_object(v->u.array.items[i], known_entry_field);
+            }
+        }
+    }
+    if (doc->unknown_field == NULL) {
+        v = object_get(root, "links");
+        if (v != NULL && v->type == JSON_ARRAY) {
+            for (i = 0; i < v->u.array.n && doc->unknown_field == NULL; i++) {
+                doc->unknown_field =
+                    first_unknown_in_object(v->u.array.items[i], known_link_field);
             }
         }
     }

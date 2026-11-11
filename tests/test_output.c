@@ -1440,7 +1440,8 @@ TEST(output_import_envelope_lists_conflicts_and_rejected_rows)
                    "\"incoming\":{},\"created_at\":\"c\",\"origin\":null}]},"
                    "\"rejected\":{\"count\":2,\"items\":["
                    "{\"source_local_id\":7,\"field\":\"key\"},{\"source_local_id\":9,"
-                   "\"field\":\"body_hash\"}]},\"skipped\":0,\"errors\":[]}");
+                   "\"field\":\"body_hash\"}]},\"skipped\":0,\"errors\":[],"
+                   "\"settings\":{\"written\":0,\"unchanged\":0,\"skipped\":0}}");
 }
 
 TEST(output_import_envelope_reports_every_failed_write)

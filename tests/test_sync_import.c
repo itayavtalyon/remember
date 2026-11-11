@@ -1828,7 +1828,7 @@ TEST(cli_import_bad_vv_row_is_rejected)
     ASSERT_STR_CONTAINS(r.out,
                         "\"inserted\":0,\"updated\":0,\"unchanged\":0,\"conflicts\":{\"count\":0,"
                         "\"items\":[]},\"rejected\":{\"count\":1,\"items\":[{\"source_local_id\":1,"
-                        "\"field\":\"version_vector\"}]},\"skipped\":0,\"errors\":[]}");
+                        "\"field\":\"version_vector\"}]},\"skipped\":0,\"errors\":[],\"settings\":{\"written\":0,\"unchanged\":0,\"skipped\":0}}");
     cmd_result_free(&r);
 
     harness_remove_tree(dir);
@@ -2274,7 +2274,7 @@ TEST(cli_import_skips_noncanonical_key_and_tag_rows)
                         "{\"source_local_id\":4,\"field\":\"key\"},"
                         "{\"source_local_id\":5,\"field\":\"key\"},"
                         "{\"source_local_id\":6,\"field\":\"key\"},"
-                        "{\"source_local_id\":7,\"field\":\"key\"}]},\"skipped\":0,\"errors\":[]}");
+                        "{\"source_local_id\":7,\"field\":\"key\"}]},\"skipped\":0,\"errors\":[],\"settings\":{\"written\":0,\"unchanged\":0,\"skipped\":0}}");
     cmd_result_free(&r);
     keys = harness_sqlite_query_line(local, "SELECT group_concat(key) FROM entries;");
     tags = harness_sqlite_query_line(local, "SELECT group_concat(name) FROM tags;");
@@ -2406,7 +2406,7 @@ TEST(cli_import_skips_rows_with_a_non_canonical_peer_field)
                         "{\"source_local_id\":10,\"field\":\"version_vector\"},"
                         "{\"source_local_id\":11,\"field\":\"source\"},"
                         "{\"source_local_id\":12,\"field\":\"body_hash\"}]},"
-                        "\"skipped\":0,\"errors\":[]}");
+                        "\"skipped\":0,\"errors\":[],\"settings\":{\"written\":0,\"unchanged\":0,\"skipped\":0}}");
     cmd_result_free(&r);
     keys = harness_sqlite_query_line(local, "SELECT group_concat(key) FROM entries;");
     ASSERT_TRUE(keys != NULL);

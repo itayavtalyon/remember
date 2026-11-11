@@ -1279,6 +1279,10 @@ int output_import_data(FILE *out, const StoreImportResult *r)
         write_import_errors(out, r->errors, r->nerrors) != 0) {
         return -1;
     }
+    if (fprintf(out, ",\"settings\":{\"written\":%zu,\"unchanged\":%zu,\"skipped\":%zu}",
+                r->settings_written, r->settings_unchanged, r->settings_skipped) < 0) {
+        return -1;
+    }
     return fputs(DATA_END, out) < 0 ? -1 : 0;
 }
 

@@ -49,6 +49,9 @@ typedef struct {
     size_t nentries;
     ImportLink *links;
     size_t nlinks;
+    char *settings_doc; /* nested remember-settings-export JSON, or NULL */
+    size_t settings_len;
+    char *unknown_field; /* first unknown member name (heap), or NULL */
     /* Whole-file failure (import_parse). parse_message is heap when set. */
     char *parse_message;
     char *parse_fix; /* optional heap fix; NULL → catalog */

@@ -301,3 +301,32 @@ Auto-fix: v6 test must not use `run_import` (harness_make_v5_source); prefixes n
 
 Gate: `import_formats` 14/0; `sync_import` 40/0; store tests 521/0. No grill. Settings counts still stage 6. C-35 unused. Ready for stage 6.
 
+### Stage 6 — settings import ST-8.3a
+
+- Nested `settings` object extracted only when the root member is a JSON object; bytes fed to `store_setting_import_apply` inside the memory/link write txn (`own_txn=false`, no nested BEGIN/COMMIT/ROLLBACK).
+- CLI dry-runs `store_setting_import` before any write: `SETTING_ERR_DOCUMENT` → `import_parse` with `"settings" isn't a settings document.`; skip warnings via `settings_import_warn_skips(rep, false)` so D-15 never claims the brain was unchanged when memories write.
+- Import envelope `settings.{written,unchanged,skipped}` (zeros when absent). File `updated_by` kept (ST-8.7). Actor for memories remains `{import,null}`.
+- Tests: tombstone lands; absent settings → zeros/no rows; `{}` → import_parse/unchanged brain; bad value skipped + good row + memory written + `setting_invalid`.
+- Mutants: `settings_len > 0` → absurd threshold → tombstone test red; extract gated on root object (Bugbot).
+
+### Stage 6 deep review (2026-11-11, in session)
+
+Gate: `import_formats` 19/0; `sync_import` 40/0; `settings` 151/0; store 521/0.
+
+Lenses: txn nesting (apply must not `import_finish` the outer txn), dry-run before writes, ST-8.4/8.5 warnings shared with `settings import`, envelope counts, simplify (one `setting_import_run`).
+
+Auto-fix: extract only when root `settings` is an object; OOM mapped via `serr` text (no fake `SETTING_ERR_OOM`); Bugbot findings on missing apply path addressed in this stage.
+
+No product grill. `--from-md`/`--from-csv` settings still deferred with those readers. Ready for stage 7.
+
+### Stage 7 — unknown_field C-35
+
+- Scan root, then entries, then links; first unknown member name wins (`sync_id` / `source` are unknown).
+- `diag_unknown_field` once per path with the C-35 file line. Import continues.
+- Test: root `sync_id` + entry `source` → one warning naming `sync_id`; memory still inserts.
+- Mutant: clear `unknown_field` after scan → unknown-field test red.
+
+### Stage 7 deep review (2026-11-11, in session)
+
+Gate: same as stage 6 plus the C-35 test green. No invented sentence. No grill. Ready for full gate and whole-plan review.
+
