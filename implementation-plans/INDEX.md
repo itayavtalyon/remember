@@ -48,21 +48,50 @@ main → cli_parse → commands.h (cmd_add | cmd_locator | cmd_query) → store_
 | 22 | [Export](22-export.md) | JSON, Markdown, CSV memory export. READY. D-04 is answered (2026-10-25). |
 | 23 | [Import formats](23-import-formats.md) | JSON, Markdown, CSV, and `--from-db` v4–v6. Copy approved 2026-10-25. D-04 is answered (2026-10-25). No old-name reader. No add-wins. |
 | 24 | [Plugin protocol](24-plugin-protocol.md) | Docs CI, schema extraction, fixtures. READY. Spec revision 6 is already in the repo. ✅ |
-| 25 | [Plugins and hooks](25-plugins-and-hooks.md) | CLI and host only. Copy approved 2026-10-25. D-14 is answered (2026-10-25). Do not change the human `add` line (D-05). No daemon, no URL plugin, no hybrid ranker. |
-| 26 | [Brain path + skills + 0.3.0](26-release-0.3.0.md) | `default-db`, Codex skill, version 0.3.0 last. Copy approved 2026-10-25 (C-40, C-41). Stage 4 after plans 19–25 merge. Do not tag. Do not bump the version in stages 1–2. |
+| 25 | [Plugin manifest](25-plugin-manifest.md) | `plugin.json` parses to the protocol schema. One module, one pull request. Parallel with 26, 27, and 27a. |
+| 26 | [Brain list](26-brain-list.md) | `brains.json`, copy versus move, `brain list` and `brain prune`. Parallel with 25, 27, and 27a. |
+| 27 | [Default brain path](27-default-db.md) | `~/.remember/default-db` in `util_resolve_db_path`. Parallel with 25, 26, and 27a. |
+| 27a | [Outbox delivery](27a-outbox-delivery.md) | Recipient state machine only. No spawn and no SQL. Parallel with 25, 26, and 27. |
+| 28 | [Release 0.3.0](28-release-0.3.0.md) | Version `0.3.0`, C-40, C-41, and the Codex skill at `~/.codex/skills/remember/SKILL.md`. Last. No tag. |
 
 **Design 006 plans 15–18:** do them in order. Plan 18 is not done. Plans 18b
 and 18c land with the plan 18 merge. Do not tick plan 18.
 
-**Design 007–010 plans 19–26:** do them in the order in the table, with two
-exceptions that the plans state. Plan 20 stages 1–4 run after plan 19 and
-before plan 21. Plan 20's JSON command stages run after plan 21. Plan 26
-stage 4 runs after plans 19–25. A row marked PENDING is not ready. The
-implementer does the stages that the plan marks as specified and stops at a
-DESIGN gate. Approved sentences are in
-[`COPY-PENDING.md`](COPY-PENDING.md). Nothing in that file is pending. A
-sentence it marks as unwritten stays unprinted. Missing decisions are in
-[`DESIGN-PENDING.md`](DESIGN-PENDING.md). Do not invent either.
+**Plans 19–24** keep the staged files they already have. Plan 20 stages 1–4 run
+after plan 19 and before plan 21. Plan 20's JSON command stages run after plan
+21. Approved sentences are in [`COPY-PENDING.md`](COPY-PENDING.md). Nothing in
+that file is pending. A sentence it marks as unwritten stays unprinted. Missing
+decisions are in [`DESIGN-PENDING.md`](DESIGN-PENDING.md). Do not invent either.
+
+## Plans 25 and later
+
+Each plan is one module or one area, and one pull request. A plan has no stages. A plan depends only on a lower number. Plans 25, 26, 27, and 27a do not depend on each other. They can run at the same time. Plan 28 starts after 25, 26, 27, and 27a have merged, and after every lower open plan in the table has merged.
+
+`27-v1-roadmap-round3.md` is a roadmap stub. It is not row 27. Plan 28 does not wait for it.
+
+The coder implements the plan by test-driven development, one red test at a time. The coder then reviews the change in session against `standard:coding`, `standard:c`, and the plan. An independent reviewer reviews the code against the plan and those standards, and opens the pull request. Itay merges.
+
+Standards on every one of these plans:
+
+- **Coding bar.** `standard:coding` and `standard:c`.
+- **Decisions are law.** The plan quotes them. A choice that no decision makes stops the coder. The coder does not choose a product rule or a technical rule.
+- **Specs.** The plan writes its spec in `specs/` in the same pull request. Each section names its decision keys. Each decision the plan built moves to `state:implemented`.
+- **Gate.** The plan 19 gate: configure and build with sanitizers, `ctest`, `scripts/lint-all.sh`, `scripts/check-coverage.sh`, `scripts/ci-linux.sh`, and the `leaks-macos` target. Coverage stays 100% functions and 100% effective lines.
+- **Proof.** Every new clause has a test that a one-clause mutant turns red. Expected values are literals.
+- **Copy.** The plan quotes every sentence. The coder prints that sentence and no other.
+- **Prerequisite.** The decisions the plan lists are accepted in Remember before the coder starts.
+
+These are not plans. A coder would have to choose, and the decision is not closed:
+
+- The trust-file fields. `decision:g2-09` says plain SHA-256 and no HMAC. It does not name the fields.
+- The search-chain tie-break when two filters share a priority.
+
+Decided on 2026-11-11 and not yet a plan:
+
+- A degraded filter exits 0, or 4 with `--strict` (`decision:2026-11-11-filter-degraded-exit`).
+- `plugin.<name>.enabled` stores JSON `true` or `false`, and the registry gains a boolean type (`decision:2026-11-11-plugin-enabled-bool`).
+
+The deleted files `25-plugins-and-hooks.md` and `26-release-0.3.0.md` are not plans. Do not implement them.
 
 Locked decisions from the 2026-10-12 plan grill remain law for behavior that
 007–010 did not replace:
