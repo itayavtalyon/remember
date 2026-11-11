@@ -72,6 +72,21 @@ static void memory_free(ImportMemory *m)
     memset(m, 0, sizeof(*m));
 }
 
+static void link_free(ImportLink *l)
+{
+    if (l == NULL) {
+        return;
+    }
+    free(l->from);
+    free(l->to);
+    free(l->kind);
+    free(l->created_at);
+    free(l->updated_at);
+    free(l->deleted_at);
+    free(l->file);
+    memset(l, 0, sizeof(*l));
+}
+
 void import_doc_free(ImportDoc *doc)
 {
     size_t i = 0;
@@ -84,6 +99,10 @@ void import_doc_free(ImportDoc *doc)
         memory_free(&doc->entries[i]);
     }
     free(doc->entries);
+    for (i = 0; i < doc->nlinks; i++) {
+        link_free(&doc->links[i]);
+    }
+    free(doc->links);
     free(doc->parse_message);
     free(doc->parse_fix);
     memset(doc, 0, sizeof(*doc));
@@ -463,6 +482,88 @@ static bool memory_from_object(const JsonValue *obj, const char *file, ImportMem
     return true;
 }
 
+static bool stamp_from_value(const JsonValue *v, char **out, bool *invalid)
+{
+    *out = NULL;
+    *invalid = false;
+    if (v == NULL || v->type == JSON_NULL) {
+        return true;
+    }
+    if (v->type != JSON_STRING) {
+        *invalid = true;
+        return false;
+    }
+    *out = json_string_dup(v);
+    if (*out == NULL) {
+        return false;
+    }
+    return true;
+}
+
+static bool link_from_object(const JsonValue *obj, const char *file, ImportLink *out)
+{
+    const JsonValue *v = NULL;
+    bool invalid = false;
+
+    memset(out, 0, sizeof(*out));
+    if (obj == NULL || obj->type != JSON_OBJECT) {
+        out->bad = true;
+        out->bad_message = "invalid link";
+        out->line = (obj != NULL) ? obj->line : 1;
+        out->file = dup_cstr(file);
+        return out->file != NULL;
+    }
+    out->line = obj->line;
+    out->file = dup_cstr(file);
+    if (out->file == NULL) {
+        return false;
+    }
+    v = object_get(obj, "from");
+    if (v != NULL && v->type == JSON_STRING) {
+        out->from = json_string_dup(v);
+        if (out->from == NULL) {
+            return false;
+        }
+    } else if (v != NULL && v->type != JSON_NULL) {
+        out->bad = true;
+        out->bad_message = "invalid link";
+        return true;
+    }
+    v = object_get(obj, "to");
+    if (v != NULL && v->type == JSON_STRING) {
+        out->to = json_string_dup(v);
+        if (out->to == NULL) {
+            return false;
+        }
+    } else if (v != NULL && v->type != JSON_NULL) {
+        out->bad = true;
+        out->bad_message = "invalid link";
+        return true;
+    }
+    v = object_get(obj, "kind");
+    if (v != NULL && v->type == JSON_STRING) {
+        out->kind = json_string_dup(v);
+        if (out->kind == NULL) {
+            return false;
+        }
+    } else if (v != NULL && v->type != JSON_NULL) {
+        out->bad = true;
+        out->bad_message = "invalid link";
+        return true;
+    }
+    if (!stamp_from_value(object_get(obj, "created_at"), &out->created_at, &invalid) ||
+        !stamp_from_value(object_get(obj, "updated_at"), &out->updated_at, &invalid) ||
+        !stamp_from_value(object_get(obj, "deleted_at"), &out->deleted_at, &invalid)) {
+        if (invalid) {
+            out->bad = true;
+            out->bad_message = "invalid timestamp";
+            return true;
+        }
+        return false;
+    }
+    return true;
+}
+
 int import_read_json(const char *path, ImportDoc *doc, int *sys_errno)
 {
     char *bytes = NULL;
@@ -562,7 +663,27 @@ int import_read_json(const char *path, ImportDoc *doc, int *sys_errno)
             }
         }
     }
+    v = object_get(root, "links");
+    if (v != NULL && v->type == JSON_ARRAY && v->u.array.n > 0U) {
+        doc->links = (ImportLink *)calloc(v->u.array.n, sizeof(ImportLink));
+        if (doc->links == NULL) {
+            jsonread_free(root);
+            import_doc_free(doc);
+            *sys_errno = ENOMEM;
+            return -1;
+        }
+        doc->nlinks = v->u.array.n;
+        for (i = 0; i < v->u.array.n; i++) {
+            if (!link_from_object(v->u.array.items[i], base, &doc->links[i])) {
+                jsonread_free(root);
+                import_doc_free(doc);
+                *sys_errno = ENOMEM;
+                return -1;
+            }
+        }
+    }
     jsonread_free(root);
     import_validate_memories(doc->entries, doc->nentries);
+    import_validate_links(doc->links, doc->nlinks);
     return 0;
 }

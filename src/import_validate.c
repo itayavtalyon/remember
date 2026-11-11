@@ -183,3 +183,73 @@ void import_validate_memories(ImportMemory *entries, size_t n)
         }
     }
 }
+
+static const char *validate_link(ImportLink *l)
+{
+    char id_buf[37];
+
+    if (l == NULL) {
+        return "invalid link";
+    }
+    if (l->from == NULL || l->to == NULL || l->kind == NULL) {
+        return "invalid link";
+    }
+    if (!import_uuid_normalize(l->from, id_buf)) {
+        return "invalid link";
+    }
+    if (strcmp(l->from, id_buf) != 0) {
+        char *copy = (char *)malloc(sizeof(id_buf));
+
+        if (copy == NULL) {
+            return "invalid link";
+        }
+        memcpy(copy, id_buf, sizeof(id_buf));
+        free(l->from);
+        l->from = copy;
+    }
+    if (!import_uuid_normalize(l->to, id_buf)) {
+        return "invalid link";
+    }
+    if (strcmp(l->to, id_buf) != 0) {
+        char *copy = (char *)malloc(sizeof(id_buf));
+
+        if (copy == NULL) {
+            return "invalid link";
+        }
+        memcpy(copy, id_buf, sizeof(id_buf));
+        free(l->to);
+        l->to = copy;
+    }
+    if (strcmp(l->kind, "related") != 0 && strcmp(l->kind, "cites") != 0 &&
+        strcmp(l->kind, "supersedes") != 0) {
+        return "invalid link";
+    }
+    if (l->created_at != NULL && !utc_stamp_is_canonical(l->created_at)) {
+        return "invalid timestamp";
+    }
+    if (l->updated_at != NULL && !utc_stamp_is_canonical(l->updated_at)) {
+        return "invalid timestamp";
+    }
+    if (l->deleted_at != NULL && !utc_stamp_is_canonical(l->deleted_at)) {
+        return "invalid timestamp";
+    }
+    return NULL;
+}
+
+void import_validate_links(ImportLink *links, size_t n)
+{
+    size_t i = 0;
+
+    for (i = 0; i < n; i++) {
+        const char *msg = NULL;
+
+        if (links[i].bad) {
+            continue;
+        }
+        msg = validate_link(&links[i]);
+        if (msg != NULL) {
+            links[i].bad = true;
+            links[i].bad_message = msg;
+        }
+    }
+}

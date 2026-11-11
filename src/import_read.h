@@ -6,8 +6,8 @@
 
 /*
  * In-memory import document (plan 23). Readers fill this; validate marks bad
- * memories; the store merge writes the good ones. Links and settings land in
- * later stages.
+ * memories and links; the store merge writes the good ones. Settings land in
+ * a later stage.
  */
 
 typedef struct {
@@ -30,9 +30,25 @@ typedef struct {
 } ImportMemory;
 
 typedef struct {
+    char *from;           /* lowercase UUID; required for top-level JSON links */
+    char *to;             /* lowercase UUID */
+    char *kind;           /* related | cites | supersedes */
+    char *created_at;     /* or NULL → now */
+    char *updated_at;     /* or NULL → now */
+    char *deleted_at;     /* or NULL (live); set → tombstone */
+    char *file;
+    const char *bad_message;
+    int line;
+    bool bad;
+    char pad_[3];
+} ImportLink;
+
+typedef struct {
     char *brain_id; /* lowercase, or NULL when absent */
     ImportMemory *entries;
     size_t nentries;
+    ImportLink *links;
+    size_t nlinks;
     /* Whole-file failure (import_parse). parse_message is heap when set. */
     char *parse_message;
     char *parse_fix; /* optional heap fix; NULL → catalog */
@@ -46,7 +62,7 @@ void import_doc_free(ImportDoc *doc);
 /*
  * Read a remember-export JSON file through fileio + jsonread. On a whole-file
  * failure, returns 0 with doc->parse_message set. On I/O failure returns -1
- * and sets *sys_errno. Settings and links are ignored in stage 2.
+ * and sets *sys_errno. Settings are ignored until stage 6.
  */
 int import_read_json(const char *path, ImportDoc *doc, int *sys_errno);
 

@@ -261,5 +261,15 @@ Bugbot (branch uncommitted): keyed-without-id wrongly took the keyless union pat
 
 No product grill. C-35 still unused. No old-name alias. No add-wins. `--from-md`/`--from-csv` bodies deferred to later stages by design.
 
-Ready for stage 3 after second opinion.
+Ready for stage 3.
+
+### Stage 3 — links + JE-5.1
+
+- `ImportLink` in the reader; top-level JSON `links` parsed and validated.
+- `store_import_doc` writes links after memories: related → (min,max); existing live triple ignored; new row keeps file stamps; ends get `{import,null}` + `change_seq` without memory VV bump; supersedes cycle skipped.
+- Tests: cites write + re-import, cycle skip, related canonicalize. Mutant: disable cycle guard → two live supersedes (build-checked via `if (0 && …)` unused-var path; functional red on skip-count query when guard removed cleanly).
+
+### Stage 3 deep review (2026-11-11, in session)
+
+Gate: `import_formats` 13/0. Lenses: JE-5.1 ends vs link VV, cycle skip not hard-fail, missing endpoints → skipped. No grill. C-35 unused.
 

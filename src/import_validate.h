@@ -12,6 +12,9 @@
  */
 void import_validate_memories(ImportMemory *entries, size_t n);
 
+/* Pure link-record checks. Marks bad with "invalid link" or "invalid timestamp". */
+void import_validate_links(ImportLink *links, size_t n);
+
 /* True when s is 8-4-4-4-12 hex (either case). Writes lowercase into out. */
 bool import_uuid_normalize(const char *s, char out[37]);
 

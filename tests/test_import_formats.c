@@ -445,6 +445,178 @@ TEST(import_json_refuses_version_above_1)
     free(dst);
 }
 
+TEST(import_json_writes_a_link_and_bumps_ends_without_memory_vectors)
+{
+    char *dst = open_empty_brain();
+    char *src = NULL;
+    char *got = NULL;
+    char *vv_before = NULL;
+    char buf[TEXT_BUF * 2];
+    CmdResult r;
+    int n = 0;
+
+    n = snprintf(
+        buf, sizeof(buf),
+        "{\"format\":\"remember-export\",\"version\":1,\"brain_id\":\"%s\","
+        "\"exported_at\":\"%s\",\"engine\":\"0.2.0\",\"schema\":6,"
+        "\"bins\":{\"live\":2},\"entries\":["
+        "{\"id\":\"%s\",\"key\":\"a\",\"body\":\"A\","
+        "\"tags\":[],\"created_by\":{\"kind\":\"human\",\"id\":null},"
+        "\"created_at\":\"%s\",\"updated_at\":\"%s\","
+        "\"expires_at\":null,\"deleted_at\":null,\"bin\":\"live\","
+        "\"version_vector\":{\"%s\":1}},"
+        "{\"id\":\"%s\",\"key\":\"b\",\"body\":\"B\","
+        "\"tags\":[],\"created_by\":{\"kind\":\"human\",\"id\":null},"
+        "\"created_at\":\"%s\",\"updated_at\":\"%s\","
+        "\"expires_at\":null,\"deleted_at\":null,\"bin\":\"live\","
+        "\"version_vector\":{\"%s\":1}}"
+        "],\"links\":[{\"from\":\"%s\",\"to\":\"%s\",\"kind\":\"cites\","
+        "\"created_at\":\"%s\",\"updated_at\":\"%s\"}]}\n",
+        FIXTURE_ID("000000000002"), FIXTURE_AT, FIXTURE_ID("000000000003"), FIXTURE_AT,
+        FIXTURE_AT, FIXTURE_ID("000000000001"), FIXTURE_ID("000000000004"), FIXTURE_AT,
+        FIXTURE_AT, FIXTURE_ID("000000000001"), FIXTURE_ID("000000000003"),
+        FIXTURE_ID("000000000004"), FIXTURE_AT, FIXTURE_AT);
+    ASSERT_TRUE(n > 0 && (size_t)n < sizeof(buf));
+    src = harness_side_path(dst, "-links.json");
+    ASSERT_EQ_INT(write_text(src, buf), 0);
+    {
+        const char *args[] = {"--json", "import", "--from-json", src};
+        r = fixed_import(dst, args, sizeof args / sizeof args[0]);
+    }
+    ASSERT_EQ_INT(r.exit_code, 0);
+    cmd_result_free(&r);
+    got = harness_sqlite_query_line(
+        dst, "SELECT kind FROM entry_links WHERE deleted_at IS NULL;");
+    ASSERT_STREQ(got, "cites");
+    free(got);
+    got = harness_sqlite_query_line(
+        dst, "SELECT updated_by FROM entries WHERE id = '" FIXTURE_ID("000000000003") "';");
+    ASSERT_STREQ(got, "{\"kind\":\"import\",\"id\":null}");
+    free(got);
+    vv_before = harness_sqlite_query_line(
+        dst, "SELECT version_vector FROM entries WHERE id = '" FIXTURE_ID("000000000003") "';");
+    ASSERT_STR_CONTAINS(vv_before, FIXTURE_ID("000000000001"));
+    free(vv_before);
+    got = harness_sqlite_query_line(dst, "SELECT COUNT(*) FROM entry_links;");
+    ASSERT_STREQ(got, "1");
+    free(got);
+    /* Re-import: live triple unchanged. */
+    {
+        const char *args[] = {"--json", "import", "--from-json", src};
+        r = fixed_import(dst, args, sizeof args / sizeof args[0]);
+    }
+    ASSERT_EQ_INT(r.exit_code, 0);
+    cmd_result_free(&r);
+    got = harness_sqlite_query_line(dst, "SELECT COUNT(*) FROM entry_links;");
+    ASSERT_STREQ(got, "1");
+    free(got);
+    free(src);
+    free(dst);
+}
+
+TEST(import_json_skips_a_supersedes_cycle)
+{
+    char *dst = open_empty_brain();
+    char *src = NULL;
+    char *got = NULL;
+    char buf[TEXT_BUF * 2];
+    CmdResult r;
+    int n = 0;
+
+    n = snprintf(
+        buf, sizeof(buf),
+        "{\"format\":\"remember-export\",\"version\":1,\"brain_id\":\"%s\","
+        "\"exported_at\":\"%s\",\"engine\":\"0.2.0\",\"schema\":6,"
+        "\"bins\":{\"live\":2},\"entries\":["
+        "{\"id\":\"%s\",\"key\":\"a\",\"body\":\"A\","
+        "\"tags\":[],\"created_by\":{\"kind\":\"human\",\"id\":null},"
+        "\"created_at\":\"%s\",\"updated_at\":\"%s\","
+        "\"expires_at\":null,\"deleted_at\":null,\"bin\":\"live\","
+        "\"version_vector\":{}},"
+        "{\"id\":\"%s\",\"key\":\"b\",\"body\":\"B\","
+        "\"tags\":[],\"created_by\":{\"kind\":\"human\",\"id\":null},"
+        "\"created_at\":\"%s\",\"updated_at\":\"%s\","
+        "\"expires_at\":null,\"deleted_at\":null,\"bin\":\"live\","
+        "\"version_vector\":{}}"
+        "],\"links\":["
+        "{\"from\":\"%s\",\"to\":\"%s\",\"kind\":\"supersedes\","
+        "\"created_at\":\"%s\",\"updated_at\":\"%s\"},"
+        "{\"from\":\"%s\",\"to\":\"%s\",\"kind\":\"supersedes\","
+        "\"created_at\":\"%s\",\"updated_at\":\"%s\"}"
+        "]}\n",
+        FIXTURE_ID("000000000002"), FIXTURE_AT, FIXTURE_ID("000000000003"), FIXTURE_AT,
+        FIXTURE_AT, FIXTURE_ID("000000000004"), FIXTURE_AT, FIXTURE_AT,
+        FIXTURE_ID("000000000003"), FIXTURE_ID("000000000004"), FIXTURE_AT, FIXTURE_AT,
+        FIXTURE_ID("000000000004"), FIXTURE_ID("000000000003"), FIXTURE_AT, FIXTURE_AT);
+    ASSERT_TRUE(n > 0 && (size_t)n < sizeof(buf));
+    src = harness_side_path(dst, "-cycle.json");
+    ASSERT_EQ_INT(write_text(src, buf), 0);
+    {
+        const char *args[] = {"--json", "import", "--from-json", src};
+        r = fixed_import(dst, args, sizeof args / sizeof args[0]);
+    }
+    ASSERT_EQ_INT(r.exit_code, 0);
+    cmd_result_free(&r);
+    got = harness_sqlite_query_line(dst, "SELECT COUNT(*) FROM entries;");
+    ASSERT_STREQ(got, "2");
+    free(got);
+    got = harness_sqlite_query_line(
+        dst, "SELECT COUNT(*) FROM entry_links WHERE deleted_at IS NULL;");
+    ASSERT_STREQ(got, "1");
+    free(got);
+    free(src);
+    free(dst);
+}
+
+TEST(import_json_canonicalizes_related_to_min_max)
+{
+    char *dst = open_empty_brain();
+    char *src = NULL;
+    char *got = NULL;
+    char buf[TEXT_BUF * 2];
+    CmdResult r;
+    int n = 0;
+
+    /* from > to as local insertion order: ids 004 then 003 → store (003,004). */
+    n = snprintf(
+        buf, sizeof(buf),
+        "{\"format\":\"remember-export\",\"version\":1,\"brain_id\":\"%s\","
+        "\"exported_at\":\"%s\",\"engine\":\"0.2.0\",\"schema\":6,"
+        "\"bins\":{\"live\":2},\"entries\":["
+        "{\"id\":\"%s\",\"key\":\"lo\",\"body\":\"L\","
+        "\"tags\":[],\"created_by\":{\"kind\":\"human\",\"id\":null},"
+        "\"created_at\":\"%s\",\"updated_at\":\"%s\","
+        "\"expires_at\":null,\"deleted_at\":null,\"bin\":\"live\","
+        "\"version_vector\":{}},"
+        "{\"id\":\"%s\",\"key\":\"hi\",\"body\":\"H\","
+        "\"tags\":[],\"created_by\":{\"kind\":\"human\",\"id\":null},"
+        "\"created_at\":\"%s\",\"updated_at\":\"%s\","
+        "\"expires_at\":null,\"deleted_at\":null,\"bin\":\"live\","
+        "\"version_vector\":{}}"
+        "],\"links\":[{\"from\":\"%s\",\"to\":\"%s\",\"kind\":\"related\","
+        "\"created_at\":\"%s\",\"updated_at\":\"%s\"}]}\n",
+        FIXTURE_ID("000000000002"), FIXTURE_AT, FIXTURE_ID("000000000003"), FIXTURE_AT,
+        FIXTURE_AT, FIXTURE_ID("000000000004"), FIXTURE_AT, FIXTURE_AT,
+        FIXTURE_ID("000000000004"), FIXTURE_ID("000000000003"), FIXTURE_AT, FIXTURE_AT);
+    ASSERT_TRUE(n > 0 && (size_t)n < sizeof(buf));
+    src = harness_side_path(dst, "-related.json");
+    ASSERT_EQ_INT(write_text(src, buf), 0);
+    {
+        const char *args[] = {"--json", "import", "--from-json", src};
+        r = fixed_import(dst, args, sizeof args / sizeof args[0]);
+    }
+    ASSERT_EQ_INT(r.exit_code, 0);
+    cmd_result_free(&r);
+    got = harness_sqlite_query_line(
+        dst,
+        "SELECT (SELECT id FROM entries WHERE local_id = from_id) || '>' || "
+        "(SELECT id FROM entries WHERE local_id = to_id) FROM entry_links;");
+    ASSERT_STREQ(got, FIXTURE_ID("000000000003") ">" FIXTURE_ID("000000000004"));
+    free(got);
+    free(src);
+    free(dst);
+}
+
 TEST(import_json_leaves_the_destination_device_id_unchanged)
 {
     char *dst = open_empty_brain();
@@ -489,5 +661,8 @@ void register_import_formats_tests(void)
     RUN_TEST(import_json_bad_record_commits_the_good_ones);
     RUN_TEST(import_json_same_id_with_unsorted_tags_is_unchanged);
     RUN_TEST(import_json_refuses_version_above_1);
+    RUN_TEST(import_json_writes_a_link_and_bumps_ends_without_memory_vectors);
+    RUN_TEST(import_json_skips_a_supersedes_cycle);
+    RUN_TEST(import_json_canonicalizes_related_to_min_max);
     RUN_TEST(import_json_leaves_the_destination_device_id_unchanged);
 }

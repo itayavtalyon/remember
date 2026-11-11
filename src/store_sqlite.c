@@ -9651,6 +9651,161 @@ static StoreStatus import_doc_one(Store *dst, const ImportMemory *m, const char 
     return st;
 }
 
+/* Insert a link with file timestamps (JE-5.1). Ends get import actor + change_seq. */
+static StoreStatus import_doc_insert_link(Store *dst, long long from_id, long long to_id,
+                                          StoreEdgeKind kind, const char *created_at,
+                                          const char *updated_at, const char *deleted_at,
+                                          StoreError *serr)
+{
+    sqlite3_stmt *stmt = NULL;
+    int rc = 0;
+    const char *tok = edge_kind_token(kind);
+    char link_id[UUID_STR_LEN + 1];
+    char link_vv[VV_JSON_BUFLEN];
+    StoreStatus st = STORE_OK;
+    StoreEdge edge = {.from_id = from_id, .to_id = to_id};
+
+    if (tok == NULL || dst->device_id == NULL || mint_uuid_v7(link_id) != 0) {
+        return STORE_ERR_INTERNAL;
+    }
+    (void)snprintf(link_vv, sizeof link_vv, "{\"%s\":1}", dst->device_id);
+    rc = sqlite3_prepare_v2(dst->db,
+                            "INSERT INTO entry_links(id, from_id, to_id, kind, created_at, "
+                            "updated_at, version_vector, deleted_at, change_seq) "
+                            "VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 0);",
+                            -1, &stmt, NULL);
+    if (rc != SQLITE_OK) {
+        capture_sqlite_error(dst->db, serr);
+        return STORE_ERR_SQLITE;
+    }
+    (void)sqlite3_bind_text(stmt, 1, link_id, -1, SQLITE_TRANSIENT);
+    (void)sqlite3_bind_int64(stmt, 2, from_id);
+    (void)sqlite3_bind_int64(stmt, 3, to_id);
+    (void)sqlite3_bind_text(stmt, 4, tok, -1, SQLITE_STATIC);
+    (void)sqlite3_bind_text(stmt, 5, created_at, -1, SQLITE_STATIC);
+    (void)sqlite3_bind_text(stmt, 6, updated_at, -1, SQLITE_STATIC);
+    (void)sqlite3_bind_text(stmt, 7, link_vv, -1, SQLITE_TRANSIENT);
+    if (deleted_at == NULL) {
+        (void)sqlite3_bind_null(stmt, 8);
+    } else {
+        (void)sqlite3_bind_text(stmt, 8, deleted_at, -1, SQLITE_STATIC);
+    }
+    if (sqlite3_step(stmt) != SQLITE_DONE) {
+        capture_sqlite_error(dst->db, serr);
+        (void)sqlite3_finalize(stmt);
+        return STORE_ERR_SQLITE;
+    }
+    (void)sqlite3_finalize(stmt);
+    st = stamp_change_seq(dst->db, (ChangeSeqRow){.id = from_id, .to_id = to_id, .kind = tok},
+                          serr);
+    if (st != STORE_OK) {
+        return st;
+    }
+    return note_link_ends(dst, edge.from_id, edge.to_id, k_import_actor, updated_at);
+}
+
+static StoreStatus import_doc_one_link(Store *dst, const ImportLink *link, const char *now,
+                                       StoreImportResult *counts)
+{
+    Entry from_e;
+    Entry to_e;
+    StoreStatus st = STORE_OK;
+    StoreEdgeKind kind = STORE_EDGE_RELATED;
+    long long stored_from = 0;
+    long long stored_to = 0;
+    EdgePresence presence = EDGE_ABSENT;
+    bool cycle = false;
+    const char *created_at = NULL;
+    const char *updated_at = NULL;
+
+    if (link->bad) {
+        counts->skipped++;
+        return STORE_OK;
+    }
+    if (parse_edge_kind(link->kind, &kind) != 0) {
+        counts->skipped++;
+        return STORE_OK;
+    }
+    memset(&from_e, 0, sizeof(from_e));
+    memset(&to_e, 0, sizeof(to_e));
+    st = load_entry_by_sync_id(dst->db, link->from, &from_e, &dst->last);
+    if (st == STORE_OK) {
+        st = load_entry_by_sync_id(dst->db, link->to, &to_e, &dst->last);
+    }
+    if (st == STORE_ERR_NOT_FOUND) {
+        store_entry_free(&from_e);
+        store_entry_free(&to_e);
+        counts->skipped++;
+        return STORE_OK;
+    }
+    if (st != STORE_OK) {
+        store_entry_free(&from_e);
+        store_entry_free(&to_e);
+        return st;
+    }
+    if (from_e.id == to_e.id) {
+        store_entry_free(&from_e);
+        store_entry_free(&to_e);
+        counts->skipped++;
+        return STORE_OK;
+    }
+    stored_from = from_e.id;
+    stored_to = to_e.id;
+    if (kind == STORE_EDGE_RELATED) {
+        if (stored_from > stored_to) {
+            long long tmp = stored_from;
+
+            stored_from = stored_to;
+            stored_to = tmp;
+        }
+    }
+    created_at = (link->created_at != NULL) ? link->created_at : now;
+    updated_at = (link->updated_at != NULL) ? link->updated_at : now;
+    st = find_edge(dst->db, (StoreEdge){.from_id = stored_from, .to_id = stored_to}, kind,
+                   &presence, &dst->last);
+    if (st != STORE_OK) {
+        store_entry_free(&from_e);
+        store_entry_free(&to_e);
+        return st;
+    }
+    if (kind == STORE_EDGE_SUPERSEDES && presence != EDGE_LIVE && link->deleted_at == NULL) {
+        st = supersedes_reaches(dst->db, to_e.id, from_e.id, &cycle, &dst->last);
+        if (st != STORE_OK) {
+            store_entry_free(&from_e);
+            store_entry_free(&to_e);
+            return st;
+        }
+        if (cycle) {
+            store_entry_free(&from_e);
+            store_entry_free(&to_e);
+            counts->skipped++;
+            return STORE_OK;
+        }
+    }
+    if (presence == EDGE_LIVE && link->deleted_at == NULL) {
+        /* Existing live triple unchanged: INSERT OR IGNORE. */
+        store_entry_free(&from_e);
+        store_entry_free(&to_e);
+        return STORE_OK;
+    }
+    if (presence == EDGE_ABSENT) {
+        st = import_doc_insert_link(dst, stored_from, stored_to, kind, created_at, updated_at,
+                                    link->deleted_at, &dst->last);
+        store_entry_free(&from_e);
+        store_entry_free(&to_e);
+        return st;
+    }
+    /* Revive a tombstone, or apply an incoming tombstone on a live/deleted row. */
+    st = touch_edge(dst->db, (StoreEdge){.from_id = stored_from, .to_id = stored_to}, kind,
+                    updated_at, dst->device_id, link->deleted_at, &dst->last);
+    if (st == STORE_OK) {
+        st = note_link_ends(dst, from_e.id, to_e.id, k_import_actor, updated_at);
+    }
+    store_entry_free(&from_e);
+    store_entry_free(&to_e);
+    return st;
+}
+
 StoreStatus store_import_doc(Store *dst, const ImportDoc *doc, const char *now,
                              StoreImportResult *out)
 {
@@ -9682,6 +9837,12 @@ StoreStatus store_import_doc(Store *dst, const ImportDoc *doc, const char *now,
     }
     for (i = 0; i < doc->nentries; i++) {
         st = import_doc_one(dst, &doc->entries[i], now, out);
+        if (st != STORE_OK) {
+            goto fail;
+        }
+    }
+    for (i = 0; i < doc->nlinks; i++) {
+        st = import_doc_one_link(dst, &doc->links[i], now, out);
         if (st != STORE_OK) {
             goto fail;
         }
