@@ -55,4 +55,10 @@ int fileio_replace_dir(const char *tmp, const char *path, bool force, int *sys_e
 /* Delete path and everything under it; symlinks are removed, not followed. */
 void fileio_remove_tree(const char *path);
 
+/*
+ * Read the whole file at path into a heap buffer (*out_bytes, *out_len).
+ * No size cap (plan 23). On failure *out_bytes is NULL and *sys_errno is set.
+ */
+int fileio_read_all(const char *path, char **out_bytes, size_t *out_len, int *sys_errno);
+
 #endif /* REMEMBER_FILEIO_H */

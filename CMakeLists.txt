@@ -120,6 +120,8 @@ set_property(SOURCE
     src/export_format.c
     src/fileio.c
     src/jsonread.c
+    src/import_read.c
+    src/import_validate.c
     src/cmd_settings.c
     src/output.c
     src/util.c
@@ -254,6 +256,8 @@ set(REMEMBER_LIB_SOURCES
     src/export_format.c
     src/fileio.c
     src/jsonread.c
+    src/import_read.c
+    src/import_validate.c
     src/cmd_settings.c
     src/output.c
     src/util.c
@@ -341,6 +345,7 @@ set(REMEMBER_TEST_SOURCES
     tests/test_settings.c
     tests/test_envelope.c
     tests/test_export.c
+    tests/test_import_formats.c
     tests/fixture_roundtrip.c
 )
 add_executable(remember_tests

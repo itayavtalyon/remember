@@ -1348,7 +1348,8 @@ TEST(cli_import_and_conflict_human_and_help)
 
     r = run_remember(local, help_import, sizeof(help_import) / sizeof(help_import[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 0);
-    ASSERT_STR_CONTAINS(r.out, "schema v4 or v5");
+    ASSERT_STR_CONTAINS(r.out, "schema v4");
+    ASSERT_STR_CONTAINS(r.out, "--from-json");
     ASSERT_STR_CONTAINS(r.out, "Does not copy the foreign device_id sidecar");
     ASSERT_TRUE(strstr(r.out, "register devices") == NULL);
     cmd_result_free(&r);

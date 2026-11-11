@@ -1,6 +1,7 @@
 #ifndef REMEMBER_STORE_H
 #define REMEMBER_STORE_H
 
+#include "import_read.h"
 #include "settings.h"
 
 #include <stdbool.h>
@@ -775,11 +776,12 @@ typedef struct {
                                   deleted_at, version_vector, source, body_hash */
 } StoreImportReject;
 
-/* What store_import did. Release with store_import_result_free. */
+/* What store_import / store_import_doc did. Release with store_import_result_free. */
 typedef struct {
     size_t inserted;
     size_t updated;
     size_t unchanged;
+    size_t skipped;           /* bad records (plan 23); equals len(errors) when listed */
     StoreConflict *conflicts; /* rows this import opened or refreshed, id ASC */
     size_t nconflicts;
     long long *conflict_ids; /* working list while importing; empty on return */
@@ -805,6 +807,15 @@ void store_import_result_free(StoreImportResult *r);
  * rejected are not empty. On any other status the result is empty.
  */
 StoreStatus store_import(Store *dst, const char *src_path, const char *now, StoreImportResult *out);
+
+/*
+ * Merge an ImportDoc's memories (plan 23). One write transaction. Bad entries
+ * are skipped. An empty brain takes doc->brain_id when set. Every written row
+ * keeps the file created_by and sets updated_by to {import,null}. Links and
+ * settings are ignored here (later stages).
+ */
+StoreStatus store_import_doc(Store *dst, const ImportDoc *doc, const char *now,
+                             StoreImportResult *out);
 
 typedef enum { STORE_KEEP_LOCAL = 0, STORE_KEEP_INCOMING, STORE_KEEP_BOTH } StoreConflictKeep;
 

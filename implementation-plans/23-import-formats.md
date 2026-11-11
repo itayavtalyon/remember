@@ -227,6 +227,16 @@ Do not re-open: no old-name reader, memory actor stamp, settings actor stamp, li
 - Unit tests live in `remember_store_tests` (`tests/test_jsonread.c`), wired in CMake with `-Wcast-qual` and `REMEMBER_LIB_SOURCES`.
 - Mutants recorded: nesting `>`→`>=` → `jsonread_accepts_nesting_at_the_named_limit` red (status 3); trailing-garbage skip would hit `jsonread_rejects_trailing_garbage`; lone `\uD800` would hit `jsonread_rejects_invalid_utf8_and_lone_surrogates`.
 
+### Stage 2 — validate + shared merge + `--from-json`
+
+- `src/import_read.c` / `import_validate.c`: JSON export → `ImportDoc`; validate marks bad memories; tags sorted for E7.2 set equality.
+- `fileio_read_all`: whole-file read, no size cap.
+- `store_import_doc`: one write txn; empty brain takes `brain_id`; `updated_by` is `{import,null}`; keyless id-less unions tags (amended D22); keyed id-less inserts (does not union); key clash does not upsert.
+- CLI: exactly one of `--from-json|--from-md|--from-csv|--from-db`; stage 2 implements JSON (+ existing `--from-db`); md/csv accepted for the exactly-one check then refuse with usage until later stages.
+- Version > 1 → `import_parse`, exit 1, nothing written (`decision:plan23-export-version-above-1`, parallel to settings C-43).
+- Suite `import_formats`: 10 tests. Prove insert / brain_id / key_clash / keyed-without-id / keyless union / unchanged / bad body / unsorted tags / version>1 / sidecar.
+- Mutants: `ntags > 1` → `> 99` → `import_json_same_id_with_unsorted_tags_is_unchanged` red (concurrent_vv); `ver > 1` → `>= 1` → insert test red (`import_parse` on version 1).
+
 ## Review Notes
 
 ### Stage 1 deep review (2026-11-10, in session)
@@ -240,4 +250,16 @@ Findings fixed before commit: `-Wpadded` on `Parser` (explicit `pad_[4]`); test 
 No product or architecture grill. C-35 is unused until stage 7; printed at session start. No old-name alias. No add-wins.
 
 Ready for stage 2.
+
+### Stage 2 deep review (2026-11-11, in session)
+
+Gate for this stage: `import_formats` 10/0; `sync_import` 39/0; `envelope` 40/0; `remember_store_tests` 521/0; `remember` links with sanitizers.
+
+Lenses: C safety (pad_ on ImportMemory/ImportDoc, no cast-qual aliases without `import_alias`, OOM on read), architecture (readers pure of SQL; merge in store_sqlite; CLI stays one command), E7.2 tag sets, simplify (dedicated version/not-export message helpers).
+
+Bugbot (branch uncommitted): keyed-without-id wrongly took the keyless union path — fixed + test; `content_identical` ignored `expires_at` on equal VV — file merge now uses `e72_identical`. Low: non-array `entries` ignored (deferred with envelope work); `--from-json --from-md` path confusion matches existing `take_value` pattern.
+
+No product grill. C-35 still unused. No old-name alias. No add-wins. `--from-md`/`--from-csv` bodies deferred to later stages by design.
+
+Ready for stage 3 after second opinion.
 

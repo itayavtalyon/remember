@@ -81,7 +81,7 @@ static const CommandEntry k_commands[] = {
     {.name = "rekey",
      .command = CLI_CMD_REKEY,
      .summary = "Rename, set, or clear an entry key in place"},
-    {.name = "import", .command = CLI_CMD_IMPORT, .summary = "Merge another remember database"},
+    {.name = "import", .command = CLI_CMD_IMPORT, .summary = "Merge a remember export or database"},
     {.name = "conflicts",
      .command = CLI_CMD_CONFLICTS,
      .summary = "List unresolved merge conflicts"},

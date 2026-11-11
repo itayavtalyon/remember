@@ -4,9 +4,11 @@
 
 #include "appio.h"
 #include "exit_codes.h"
+#include "import_read.h"
 #include "output.h"
 #include "store.h"
 
+#include <errno.h>
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -25,9 +27,81 @@ static int import_write(bool json, const StoreImportResult *r)
     return 0;
 }
 
+static int import_report_parse(const ImportDoc *doc)
+{
+    const char *msg = (doc->parse_message != NULL) ? doc->parse_message : "isn't a remember export.";
+    const char *fix =
+        (doc->parse_fix != NULL) ? doc->parse_fix : diag_code_fix(DIAG_IMPORT_PARSE);
+
+    (void)diag_error_fix(DIAG_IMPORT_PARSE, msg, fix);
+    return REMEMBER_ERR;
+}
+
+static int import_report_io(const char *path, int sys_errno)
+{
+    char *msg = NULL;
+
+    if (sys_errno == ENOMEM) {
+        err_msg(DIAG_OUT_OF_MEMORY, "out of memory");
+        return REMEMBER_ERR;
+    }
+    errno = sys_errno;
+    // NOLINTNEXTLINE(concurrency-mt-unsafe)
+    msg = fmt_alloc("can't read \"%s\": %s.", path, strerror(sys_errno));
+    if (msg == NULL) {
+        err_msg(DIAG_OUT_OF_MEMORY, "out of memory");
+        return REMEMBER_ERR;
+    }
+    (void)diag_error_fix(DIAG_IMPORT_PARSE, msg, diag_code_fix(DIAG_IMPORT_PARSE));
+    free(msg);
+    return REMEMBER_ERR;
+}
+
+static int import_from_json(Store *s, bool json, const char *path)
+{
+    ImportDoc doc;
+    StoreImportResult result;
+    char now[ISO_TS_BUFSIZE];
+    int sys_errno = 0;
+    StoreStatus st = STORE_OK;
+    int rc = 0;
+
+    memset(&doc, 0, sizeof(doc));
+    memset(&result, 0, sizeof(result));
+    if (import_read_json(path, &doc, &sys_errno) != 0) {
+        return import_report_io(path, sys_errno);
+    }
+    if (doc.parse_message != NULL) {
+        rc = import_report_parse(&doc);
+        import_doc_free(&doc);
+        return rc;
+    }
+    if (utc_now(now, sizeof(now)) != 0) {
+        import_doc_free(&doc);
+        err_msg(DIAG_INTERNAL, "internal error");
+        return REMEMBER_ERR;
+    }
+    st = store_import_doc(s, &doc, now, &result);
+    import_doc_free(&doc);
+    if (st != STORE_OK) {
+        return store_status_to_exit(s, st);
+    }
+    rc = import_write(json, &result);
+    store_import_result_free(&result);
+    if (rc != 0) {
+        err_msg(DIAG_INTERNAL, "failed to write output");
+        return REMEMBER_ERR;
+    }
+    return REMEMBER_OK;
+}
+
 int cmd_import(Store *s, bool json, int rest_argc, const char **rest_argv)
 {
     const char *from_db = NULL;
+    const char *from_json = NULL;
+    const char *from_md = NULL;
+    const char *from_csv = NULL;
+    int n_sources = 0;
     char now[ISO_TS_BUFSIZE];
     StoreImportResult result;
     int rc = 0;
@@ -51,6 +125,45 @@ int cmd_import(Store *s, bool json, int rest_argc, const char **rest_argv)
             from_db = taken.value;
             continue;
         }
+        if (arg != NULL && strcmp(arg, "--from-json") == 0) {
+            TakeValue taken = take_value(&i, rest_argc, rest_argv, "--from-json requires a path");
+            if (taken.rc != 0) {
+                err_msg(DIAG_USAGE, taken.err);
+                return REMEMBER_ERR;
+            }
+            if (from_json != NULL) {
+                err_msg(DIAG_USAGE, "duplicate --from-json");
+                return REMEMBER_ERR;
+            }
+            from_json = taken.value;
+            continue;
+        }
+        if (arg != NULL && strcmp(arg, "--from-md") == 0) {
+            TakeValue taken = take_value(&i, rest_argc, rest_argv, "--from-md requires a path");
+            if (taken.rc != 0) {
+                err_msg(DIAG_USAGE, taken.err);
+                return REMEMBER_ERR;
+            }
+            if (from_md != NULL) {
+                err_msg(DIAG_USAGE, "duplicate --from-md");
+                return REMEMBER_ERR;
+            }
+            from_md = taken.value;
+            continue;
+        }
+        if (arg != NULL && strcmp(arg, "--from-csv") == 0) {
+            TakeValue taken = take_value(&i, rest_argc, rest_argv, "--from-csv requires a path");
+            if (taken.rc != 0) {
+                err_msg(DIAG_USAGE, taken.err);
+                return REMEMBER_ERR;
+            }
+            if (from_csv != NULL) {
+                err_msg(DIAG_USAGE, "duplicate --from-csv");
+                return REMEMBER_ERR;
+            }
+            from_csv = taken.value;
+            continue;
+        }
         if (arg != NULL && cmd_is_hooks_flag(arg)) {
             continue;
         }
@@ -61,8 +174,20 @@ int cmd_import(Store *s, bool json, int rest_argc, const char **rest_argv)
         err_msg(DIAG_USAGE, "import takes no positional arguments");
         return REMEMBER_ERR;
     }
-    if (from_db == NULL) {
-        err_msg(DIAG_USAGE, "import requires --from-db PATH");
+    n_sources = (from_db != NULL ? 1 : 0) + (from_json != NULL ? 1 : 0) + (from_md != NULL ? 1 : 0) +
+                (from_csv != NULL ? 1 : 0);
+    if (n_sources != 1) {
+        err_msg(DIAG_USAGE,
+                "import requires exactly one of --from-json, --from-md, --from-csv, --from-db");
+        return REMEMBER_ERR;
+    }
+    if (from_json != NULL) {
+        return import_from_json(s, json, from_json);
+    }
+    if (from_md != NULL || from_csv != NULL) {
+        /* Stage 2 wires JSON only; Markdown and CSV land in later stages. */
+        err_msg(DIAG_USAGE, from_md != NULL ? "--from-md is not implemented yet"
+                                             : "--from-csv is not implemented yet");
         return REMEMBER_ERR;
     }
     if (utc_now(now, sizeof(now)) != 0) {

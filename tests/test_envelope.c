@@ -1676,7 +1676,8 @@ TEST(envelope_every_write_accepts_the_hook_flags)
     /* import and conflict accept fail later, on their own required options. */
     r = run_remember(db, import, sizeof(import) / sizeof(import[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 1);
-    ASSERT_STREQ(r.err, "remember: import requires --from-db PATH\n");
+    ASSERT_STREQ(r.err, "remember: import requires exactly one of --from-json, "
+                        "--from-md, --from-csv, --from-db\n");
     cmd_result_free(&r);
     r = run_remember(db, accept, sizeof(accept) / sizeof(accept[0]), NULL);
     ASSERT_STR_NOT_CONTAINS(r.err, "unknown option");

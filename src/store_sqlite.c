@@ -9296,6 +9296,412 @@ fail:
     return st;
 }
 
+/* Plan 23: every memory write stamps updated_by as import. */
+static const char k_import_actor[] = "{\"kind\":\"import\",\"id\":null}";
+static const char k_human_actor[] = "{\"kind\":\"human\",\"id\":null}";
+static const char k_empty_vv[] = "{}";
+
+static StoreStatus brain_entry_count(sqlite3 *db, long long *out, StoreError *serr)
+{
+    if (select_i64(db, "SELECT COUNT(*) FROM entries;", NULL, out, NULL, 0U, serr) != 0) {
+        return STORE_ERR_SQLITE;
+    }
+    return STORE_OK;
+}
+
+/* Alias a const string into an Entry view for conflict snapshots (not freed). */
+static char *import_alias(const char *s)
+{
+    char *out = NULL;
+
+#ifdef __clang__
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wcast-qual"
+#endif
+    out = (char *)s;
+#ifdef __clang__
+#pragma clang diagnostic pop
+#endif
+    return out;
+}
+
+static StoreStatus set_brain_id(sqlite3 *db, const char *brain_id, StoreError *serr)
+{
+    const char *binds[1];
+
+    binds[0] = brain_id;
+    if (exec_bound(db, "UPDATE brain_meta SET brain_id = ?1;", binds, 1, NULL, 0U, serr) != 0) {
+        return STORE_ERR_SQLITE;
+    }
+    return STORE_OK;
+}
+
+static bool expires_equal(const char *a, const char *b)
+{
+    if (a == NULL && b == NULL) {
+        return true;
+    }
+    if (a == NULL || b == NULL) {
+        return false;
+    }
+    return strcmp(a, b) == 0;
+}
+
+/* E7.2 fields: key, body, tags as a set, expires_at, deleted_at. */
+static bool e72_identical(const Entry *local, const ImportMemory *m)
+{
+    if (local == NULL || m == NULL || local->body == NULL || m->body == NULL) {
+        return false;
+    }
+    if (strcmp(local->body, m->body) != 0) {
+        return false;
+    }
+    if (!keys_equal(local->key, m->key)) {
+        return false;
+    }
+    if (!delete_state_equal(local->deleted_at, m->deleted_at)) {
+        return false;
+    }
+    if (!expires_equal(local->expires_at, m->expires_at)) {
+        return false;
+    }
+    return tags_equal(local->tags, local->ntags, m->tags, m->ntags) != 0;
+}
+
+static StoreStatus import_doc_insert(sqlite3 *db, const ImportMemory *m, const char *created_by,
+                                     const char *now, StoreImportResult *counts, StoreError *serr)
+{
+    char hash[REMEMBER_SHA256_HEX_LEN + 1];
+    const char *created_at = (m->created_at != NULL) ? m->created_at : now;
+    const char *updated_at = (m->updated_at != NULL) ? m->updated_at : now;
+    const char *vv = (m->version_vector != NULL) ? m->version_vector : k_empty_vv;
+    char *id = m->id;
+    char minted[UUID_STR_LEN + 1];
+    long long new_id = 0;
+    StoreStatus st = STORE_OK;
+    int taken = 0;
+    long long occ = 0;
+    Entry view;
+
+    body_hash_hex(m->body, strlen(m->body), hash);
+    if (id == NULL) {
+        if (mint_uuid_v7(minted) != 0) {
+            return STORE_ERR_INTERNAL;
+        }
+        id = minted;
+    }
+    if (m->key != NULL) {
+        st = key_taken_by_other(db, m->key, NULL, &occ, &taken, serr);
+        if (st != STORE_OK) {
+            return st;
+        }
+        if (taken) {
+            long long conflict_id = 0;
+
+            memset(&view, 0, sizeof(view));
+            view.sync_id = id;
+            view.key = m->key;
+            view.body = m->body;
+            view.tags = m->tags;
+            view.ntags = m->ntags;
+            view.created_by = import_alias(created_by);
+            view.updated_by = import_alias(k_import_actor);
+            view.created_at = import_alias(created_at);
+            view.updated_at = import_alias(updated_at);
+            view.expires_at = m->expires_at;
+            view.deleted_at = m->deleted_at;
+            view.version_vector = import_alias(vv);
+            st = record_clash(db, occ, &view, now, STORE_CONFLICT_KEY_CLASH, id, &conflict_id,
+                              serr);
+            return import_note_conflict(counts, st, conflict_id);
+        }
+    }
+    st = insert_entry_imported(db, m->key, m->body, hash, created_by, k_import_actor, created_at,
+                               updated_at, m->expires_at, id, m->deleted_at, vv, &new_id, serr);
+    if (st != STORE_OK) {
+        return st;
+    }
+    st = union_tags(db, new_id, (const char *const *)m->tags, m->ntags, serr);
+    if (st != STORE_OK) {
+        return st;
+    }
+    st = fts_resync(db, new_id, serr);
+    if (st != STORE_OK) {
+        return st;
+    }
+    counts->inserted++;
+    return STORE_OK;
+}
+
+static StoreStatus stamp_import_actor(sqlite3 *db, long long local_id, const char *now,
+                                      StoreError *serr)
+{
+    sqlite3_stmt *stmt = NULL;
+    int rc = sqlite3_prepare_v2(
+        db, "UPDATE entries SET updated_by = ?1, updated_at = ?2 WHERE local_id = ?3;", -1, &stmt,
+        NULL);
+
+    if (rc != SQLITE_OK) {
+        capture_sqlite_error(db, serr);
+        return STORE_ERR_SQLITE;
+    }
+    (void)sqlite3_bind_text(stmt, 1, k_import_actor, -1, SQLITE_STATIC);
+    (void)sqlite3_bind_text(stmt, 2, now, -1, SQLITE_STATIC);
+    (void)sqlite3_bind_int64(stmt, 3, local_id);
+    if (sqlite3_step(stmt) != SQLITE_DONE) {
+        capture_sqlite_error(db, serr);
+        (void)sqlite3_finalize(stmt);
+        return STORE_ERR_SQLITE;
+    }
+    (void)sqlite3_finalize(stmt);
+    return STORE_OK;
+}
+
+static StoreStatus import_doc_keyless_union(sqlite3 *db, const ImportMemory *m, const char *now,
+                                            StoreImportResult *counts, StoreError *serr)
+{
+    char hash[REMEMBER_SHA256_HEX_LEN + 1];
+    int taken = 0;
+    long long occ = 0;
+    Entry local;
+    StoreStatus st = STORE_OK;
+    size_t before = 0;
+    size_t after = 0;
+    const char *created_by = (m->created_by != NULL) ? m->created_by : k_human_actor;
+
+    body_hash_hex(m->body, strlen(m->body), hash);
+    st = hash_taken_by_other(db, hash, NULL, &occ, &taken, serr);
+    if (st != STORE_OK) {
+        return st;
+    }
+    if (!taken) {
+        return import_doc_insert(db, m, created_by, now, counts, serr);
+    }
+    memset(&local, 0, sizeof(local));
+    st = load_entry_by_id(db, occ, &local, serr);
+    if (st != STORE_OK) {
+        return st;
+    }
+    if (local.key != NULL) {
+        store_entry_free(&local);
+        return import_doc_insert(db, m, created_by, now, counts, serr);
+    }
+    before = local.ntags;
+    st = union_tags(db, local.id, (const char *const *)m->tags, m->ntags, serr);
+    if (st != STORE_OK) {
+        store_entry_free(&local);
+        return st;
+    }
+    store_entry_free(&local);
+    memset(&local, 0, sizeof(local));
+    st = load_entry_by_id(db, occ, &local, serr);
+    if (st != STORE_OK) {
+        return st;
+    }
+    after = local.ntags;
+    if (after != before) {
+        st = stamp_import_actor(db, local.id, now, serr);
+        if (st == STORE_OK) {
+            st = fts_resync(db, local.id, serr);
+        }
+        if (st == STORE_OK) {
+            counts->updated++;
+        }
+    } else {
+        counts->unchanged++;
+    }
+    store_entry_free(&local);
+    return st;
+}
+
+/* File-import present merge: keep file created_by, stamp updated_by import. */
+static StoreStatus import_doc_merge_present(sqlite3 *dst, const char *device_id,
+                                            const ImportMemory *m, const char *created_by,
+                                            const char *hash, const Entry *local, const char *now,
+                                            StoreImportResult *counts, StoreError *serr)
+{
+    int cmp = 0;
+    StoreStatus st = STORE_OK;
+    int taken = 0;
+    long long occ = 0;
+    Entry view;
+    const char *updated_at = (m->updated_at != NULL) ? m->updated_at : now;
+    const char *vv = (m->version_vector != NULL) ? m->version_vector : k_empty_vv;
+
+    st = vv_compare(dst, local->version_vector, vv, &cmp, serr);
+    if (st != STORE_OK) {
+        return st;
+    }
+    if (cmp > 0) {
+        if (m->key != NULL) {
+            st = key_taken_by_other(dst, m->key, m->id, &occ, &taken, serr);
+        } else {
+            st = hash_taken_by_other(dst, hash, m->id, &occ, &taken, serr);
+        }
+        if (st != STORE_OK) {
+            return st;
+        }
+        if (taken) {
+            long long conflict_id = 0;
+
+            memset(&view, 0, sizeof(view));
+            view.sync_id = m->id;
+            view.key = m->key;
+            view.body = m->body;
+            view.tags = m->tags;
+            view.ntags = m->ntags;
+            view.created_by = import_alias(created_by);
+            view.updated_by = import_alias(k_import_actor);
+            view.created_at = import_alias((m->created_at != NULL) ? m->created_at : now);
+            view.updated_at = import_alias(updated_at);
+            view.expires_at = m->expires_at;
+            view.deleted_at = m->deleted_at;
+            view.version_vector = import_alias(vv);
+            st = record_clash(dst, occ, &view, now,
+                              m->key != NULL ? STORE_CONFLICT_KEY_CLASH : STORE_CONFLICT_HASH_CLASH,
+                              m->id, &conflict_id, serr);
+            return import_note_conflict(counts, st, conflict_id);
+        }
+        st = apply_incoming_fields(dst, local->id, m->key, m->body, hash, created_by,
+                                   k_import_actor, m->expires_at, m->deleted_at, updated_at,
+                                   m->tags, m->ntags, serr);
+        if (st != STORE_OK) {
+            return st;
+        }
+        st = vv_union_bump(dst, local->id, local->version_vector, vv, device_id, NULL, serr);
+        if (st != STORE_OK) {
+            return st;
+        }
+        counts->updated++;
+        return STORE_OK;
+    }
+    /* Local dominates, or equal/concurrent with identical E7.2 fields. */
+    if (cmp < 0 || e72_identical(local, m)) {
+        char maxed[VV_OUT_MAX];
+
+        st = vv_pairwise_max(dst, local->version_vector, vv, maxed, sizeof(maxed), serr);
+        if (st != STORE_OK) {
+            return st;
+        }
+        st = write_version_vector(dst, local->id, maxed, serr);
+        if (st != STORE_OK) {
+            return st;
+        }
+        counts->unchanged++;
+        return STORE_OK;
+    }
+    {
+        long long conflict_id = 0;
+
+        memset(&view, 0, sizeof(view));
+        view.sync_id = m->id;
+        view.key = m->key;
+        view.body = m->body;
+        view.tags = m->tags;
+        view.ntags = m->ntags;
+        view.created_by = import_alias(created_by);
+        view.updated_by = import_alias(k_import_actor);
+        view.created_at = import_alias((m->created_at != NULL) ? m->created_at : now);
+        view.updated_at = import_alias(updated_at);
+        view.expires_at = m->expires_at;
+        view.deleted_at = m->deleted_at;
+        view.version_vector = import_alias(vv);
+        st = record_concurrent_vv(dst, local, &view, vv, now, &conflict_id, serr);
+        return import_note_conflict(counts, st, conflict_id);
+    }
+}
+
+static StoreStatus import_doc_one(Store *dst, const ImportMemory *m, const char *now,
+                                  StoreImportResult *counts)
+{
+    Entry local;
+    StoreStatus st = STORE_OK;
+    const char *created_by = (m->created_by != NULL) ? m->created_by : k_human_actor;
+    char hash[REMEMBER_SHA256_HEX_LEN + 1];
+
+    if (m->bad) {
+        counts->skipped++;
+        return STORE_OK;
+    }
+    /* Amended D22: body-hash tag union is only for id-less keyless records. */
+    if (m->id == NULL && m->key == NULL) {
+        return import_doc_keyless_union(dst->db, m, now, counts, &dst->last);
+    }
+    if (m->id == NULL) {
+        /* Keyed without id: mint on insert, or key_clash if the key is taken. */
+        return import_doc_insert(dst->db, m, created_by, now, counts, &dst->last);
+    }
+    memset(&local, 0, sizeof(local));
+    st = load_entry_by_sync_id(dst->db, m->id, &local, &dst->last);
+    if (st == STORE_ERR_NOT_FOUND) {
+        return import_doc_insert(dst->db, m, created_by, now, counts, &dst->last);
+    }
+    if (st != STORE_OK) {
+        return st;
+    }
+    if (e72_identical(&local, m)) {
+        counts->unchanged++;
+        store_entry_free(&local);
+        return STORE_OK;
+    }
+    body_hash_hex(m->body, strlen(m->body), hash);
+    st = import_doc_merge_present(dst->db, dst->device_id, m, created_by, hash, &local, now,
+                                  counts, &dst->last);
+    store_entry_free(&local);
+    return st;
+}
+
+StoreStatus store_import_doc(Store *dst, const ImportDoc *doc, const char *now,
+                             StoreImportResult *out)
+{
+    StoreStatus st = STORE_OK;
+    long long nentries = 0;
+    size_t i = 0;
+    char err_unused[1];
+
+    if (out != NULL) {
+        memset(out, 0, sizeof(*out));
+    }
+    if (dst == NULL || dst->db == NULL || doc == NULL || now == NULL || out == NULL) {
+        return STORE_ERR_INTERNAL;
+    }
+    memset(&dst->last, 0, sizeof(dst->last));
+    st = begin_write(dst);
+    if (st != STORE_OK) {
+        return st;
+    }
+    st = brain_entry_count(dst->db, &nentries, &dst->last);
+    if (st != STORE_OK) {
+        goto fail;
+    }
+    if (nentries == 0 && doc->brain_id != NULL) {
+        st = set_brain_id(dst->db, doc->brain_id, &dst->last);
+        if (st != STORE_OK) {
+            goto fail;
+        }
+    }
+    for (i = 0; i < doc->nentries; i++) {
+        st = import_doc_one(dst, &doc->entries[i], now, out);
+        if (st != STORE_OK) {
+            goto fail;
+        }
+    }
+    st = import_load_conflicts(dst->db, out, &dst->last);
+    if (st != STORE_OK) {
+        goto fail;
+    }
+    if (exec_sql(dst->db, "COMMIT;", err_unused, 0U, &dst->last) != 0) {
+        st = STORE_ERR_SQLITE;
+        goto fail;
+    }
+    return STORE_OK;
+
+fail:
+    rollback_quiet(dst->db);
+    store_import_result_free(out);
+    return st;
+}
+
 void store_conflicts_free(StoreConflict *rows, size_t count)
 {
     size_t i = 0;
