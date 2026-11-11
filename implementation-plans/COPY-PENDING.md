@@ -1,5 +1,7 @@
 # Approved copy — 2026-10-25
 
+Plans 25 and 26 were split on 2026-11-11. The sentences stay in this file. The new plans quote the lines they print. A row that still says "Plan 25" or "Plan 26" means the sentence, not the deleted file.
+
 Nothing in this file is pending. Itay approved `ANSWERS-FINAL.md` (25 Oct 2026, 20:50 UTC+2), including the Story Weaver wording (K-1). An implementer prints these lines and does not invent another.
 
 A plain line includes the printer prefix. JSON `message` is the text after that prefix, up to the fix. `fix` is the last next-action sentence. A warning has no `fix`. Keys and values go in double quotes. Commands go in single quotes.
