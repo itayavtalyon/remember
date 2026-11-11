@@ -328,5 +328,5 @@ No product grill. `--from-md`/`--from-csv` settings still deferred with those re
 
 ### Stage 7 deep review (2026-11-11, in session)
 
-Gate: same as stage 6 plus the C-35 test green. No invented sentence. No grill. Ready for full gate and whole-plan review.
+Gate: same as stage 6 plus the C-35 test green. Printed C-35 at session start; no invented sentence. Mutant clearing `unknown_field` after the root scan turns `import_json_unknown_field_warns_once_and_still_imports` red. No grill. Ready for full gate and whole-plan review.
 
