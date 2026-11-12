@@ -1124,6 +1124,227 @@ TEST(import_json_tombstone_link_does_not_unlink_a_live_link)
     free(dst);
 }
 
+/* ---- Bad-record contract (plan 23 message list), one message per test. ---- */
+
+#define ID3 FIXTURE_ID("000000000003")
+#define ID4 FIXTURE_ID("000000000004")
+
+/* Import entries_json as the whole entries array; expect exactly one bad record. */
+static void then_one_bad_record(const char *entries_json, const char *message)
+{
+    char *dst = open_empty_brain();
+    char doc[TEXT_BUF * 2];
+    char want[TEXT_BUF];
+    CmdResult r;
+
+    (void)snprintf(doc, sizeof doc, EXPORT_HEAD "\"entries\":[%s]}", entries_json);
+    r = import_text(dst, "-bad.json", doc);
+    ASSERT_EQ_INT(r.exit_code, 0);
+    ASSERT_STR_CONTAINS(r.out, "\"skipped\":1,\"errors\":[{\"file\":");
+    (void)snprintf(want, sizeof want, "\"message\":\"%s\"}]", message);
+    ASSERT_STR_CONTAINS(r.out, want);
+    cmd_result_free(&r);
+    free(dst);
+}
+
+TEST(import_json_bad_record_body_missing)
+{
+    then_one_bad_record("{\"id\":\"" ID3 "\"}", "body is missing");
+}
+
+TEST(import_json_bad_record_body_null_is_missing)
+{
+    then_one_bad_record("{\"id\":\"" ID3 "\",\"body\":null}", "body is missing");
+}
+
+TEST(import_json_bad_record_body_too_long)
+{
+    char *dst = open_empty_brain();
+    size_t n = 65537U;
+    char *doc = (char *)malloc(n + (size_t)TEXT_BUF);
+    size_t at = 0;
+    CmdResult r;
+
+    ASSERT_TRUE(doc != NULL);
+    at = (size_t)snprintf(doc, (size_t)TEXT_BUF, EXPORT_HEAD "\"entries\":[{\"body\":\"");
+    memset(doc + at, 'x', n);
+    (void)snprintf(doc + at + n, (size_t)TEXT_BUF - at, "\"}]}");
+    r = import_text(dst, "-long.json", doc);
+    ASSERT_EQ_INT(r.exit_code, 0);
+    ASSERT_STR_CONTAINS(r.out, "\"message\":\"body is too long\"");
+    cmd_result_free(&r);
+    free(doc);
+    free(dst);
+}
+
+TEST(import_json_bad_record_body_at_the_limit_inserts)
+{
+    char *dst = open_empty_brain();
+    size_t n = 65536U;
+    char *doc = (char *)malloc(n + (size_t)TEXT_BUF);
+    size_t at = 0;
+    CmdResult r;
+
+    ASSERT_TRUE(doc != NULL);
+    at = (size_t)snprintf(doc, (size_t)TEXT_BUF, EXPORT_HEAD "\"entries\":[{\"body\":\"");
+    memset(doc + at, 'x', n);
+    (void)snprintf(doc + at + n, (size_t)TEXT_BUF - at, "\"}]}");
+    r = import_text(dst, "-limit.json", doc);
+    ASSERT_EQ_INT(r.exit_code, 0);
+    ASSERT_STR_CONTAINS(r.out, "\"inserted\":1");
+    cmd_result_free(&r);
+    free(doc);
+    free(dst);
+}
+
+TEST(import_json_bad_record_id_not_a_uuid)
+{
+    then_one_bad_record("{\"id\":\"nope\",\"body\":\"b\"}", "id is not a UUID");
+}
+
+TEST(import_json_bad_record_id_a_number_is_not_a_uuid)
+{
+    then_one_bad_record("{\"id\":7,\"body\":\"b\"}", "id is not a UUID");
+}
+
+TEST(import_json_bad_record_invalid_timestamp)
+{
+    then_one_bad_record("{\"body\":\"b\",\"created_at\":\"2026-01-01\"}", "invalid timestamp");
+}
+
+TEST(import_json_bad_record_invalid_actor_kind)
+{
+    then_one_bad_record("{\"body\":\"b\",\"created_by\":{\"kind\":\"robot\",\"id\":null}}",
+                        "invalid actor");
+}
+
+TEST(import_json_bad_record_actor_not_an_object)
+{
+    then_one_bad_record("{\"body\":\"b\",\"created_by\":\"human\"}", "invalid actor");
+}
+
+TEST(import_json_bad_record_invalid_key)
+{
+    then_one_bad_record("{\"body\":\"b\",\"key\":\"a\\u0001b\"}", "invalid key or tag");
+}
+
+TEST(import_json_bad_record_invalid_tag)
+{
+    then_one_bad_record("{\"body\":\"b\",\"tags\":[\"ok\",\"   \"]}", "invalid key or tag");
+}
+
+TEST(import_json_bad_record_entry_not_an_object)
+{
+    then_one_bad_record("7", "entry is not an object");
+}
+
+TEST(import_json_bad_record_duplicate_id)
+{
+    then_one_bad_record("{\"id\":\"" ID3 "\",\"body\":\"a\"},{\"id\":\"" ID3 "\",\"body\":\"b\"}",
+                        "duplicate id");
+}
+
+/* D35: a valid UUID is lowercased before duplicate detection. */
+TEST(import_json_bad_record_uppercase_copy_is_a_duplicate_id)
+{
+    then_one_bad_record("{\"id\":\"" ID3 "\",\"body\":\"a\"},"
+                        "{\"id\":\"00000000-0000-7000-8000-00000000000A\",\"body\":\"x\"},"
+                        "{\"id\":\"00000000-0000-7000-8000-00000000000a\",\"body\":\"b\"}",
+                        "duplicate id");
+}
+
+TEST(import_json_uppercase_id_is_stored_lowercase)
+{
+    char *dst = open_empty_brain();
+    char *got = NULL;
+    CmdResult r = import_text(dst, "-upper.json",
+                              EXPORT_HEAD "\"entries\":[{\"id\":\"00000000-0000-7000-8000-"
+                                          "00000000000A\",\"body\":\"b\"}]}");
+
+    ASSERT_EQ_INT(r.exit_code, 0);
+    cmd_result_free(&r);
+    got = harness_sqlite_query_line(dst, "SELECT id FROM entries;");
+    ASSERT_STREQ(got, "00000000-0000-7000-8000-00000000000a");
+    free(got);
+    free(dst);
+}
+
+/* D20: the error line is the line of the entry's '{'. */
+TEST(import_json_bad_record_names_the_line_of_its_brace)
+{
+    char *dst = open_empty_brain();
+    CmdResult r = import_text(dst, "-lines.json",
+                              EXPORT_HEAD "\"entries\":[\n{\"body\":\"ok\"},\n\n  {\"body\":\"\"}]}");
+
+    ASSERT_EQ_INT(r.exit_code, 0);
+    ASSERT_STR_CONTAINS(r.out, "-lines.json\",\"line\":4,\"message\":\"body is empty\"");
+    cmd_result_free(&r);
+    free(dst);
+}
+
+/* Import entries plus one link; expect that link to be the one bad record. */
+static void then_one_bad_link(const char *link_json)
+{
+    char *dst = open_empty_brain();
+    char doc[TEXT_BUF * 2];
+    CmdResult r;
+
+    (void)snprintf(doc, sizeof doc,
+                   EXPORT_HEAD "\"entries\":[" ONE_ENTRY(ID3, "A", "{}") "," ONE_ENTRY(
+                       ID4, "B", "{}") "],\"links\":[%s]}",
+                   link_json);
+    r = import_text(dst, "-link.json", doc);
+    ASSERT_EQ_INT(r.exit_code, 0);
+    ASSERT_STR_CONTAINS(r.out, "\"inserted\":2");
+    ASSERT_STR_CONTAINS(r.out, "\"skipped\":1");
+    ASSERT_STR_CONTAINS(r.out, "\"message\":\"invalid link\"");
+    cmd_result_free(&r);
+    free(dst);
+}
+
+TEST(import_json_bad_link_without_from)
+{
+    then_one_bad_link("{\"to\":\"" ID4 "\",\"kind\":\"cites\"}");
+}
+
+TEST(import_json_bad_link_without_kind)
+{
+    then_one_bad_link("{\"from\":\"" ID3 "\",\"to\":\"" ID4 "\"}");
+}
+
+TEST(import_json_bad_link_unknown_kind)
+{
+    then_one_bad_link("{\"from\":\"" ID3 "\",\"to\":\"" ID4 "\",\"kind\":\"owns\"}");
+}
+
+TEST(import_json_bad_link_missing_target)
+{
+    then_one_bad_link("{\"from\":\"" ID3 "\",\"to\":\"" FIXTURE_ID(
+        "000000000009") "\",\"kind\":\"cites\"}");
+}
+
+TEST(import_json_bad_link_to_itself)
+{
+    then_one_bad_link("{\"from\":\"" ID3 "\",\"to\":\"" ID3 "\",\"kind\":\"cites\"}");
+}
+
+TEST(import_json_bad_link_invalid_timestamp)
+{
+    char *dst = open_empty_brain();
+    char doc[TEXT_BUF * 2];
+    CmdResult r;
+
+    (void)snprintf(doc, sizeof doc,
+                   EXPORT_HEAD "\"entries\":[" ONE_ENTRY(ID3, "A", "{}") "," ONE_ENTRY(
+                       ID4, "B", "{}") "],\"links\":[{\"from\":\"" ID3 "\",\"to\":\"" ID4
+                               "\",\"kind\":\"cites\",\"created_at\":\"yesterday\"}]}");
+    r = import_text(dst, "-linkts.json", doc);
+    ASSERT_EQ_INT(r.exit_code, 0);
+    ASSERT_STR_CONTAINS(r.out, "\"message\":\"invalid timestamp\"");
+    cmd_result_free(&r);
+    free(dst);
+}
+
 void register_import_formats_tests(void)
 {
     RUN_TEST(import_json_inserts_a_keyed_memory_into_an_empty_brain);
@@ -1152,4 +1373,26 @@ void register_import_formats_tests(void)
     RUN_TEST(import_json_vector_counter_zero_is_invalid);
     RUN_TEST(import_json_vector_wider_than_the_merge_buffer_is_a_bad_record);
     RUN_TEST(import_json_tombstone_link_does_not_unlink_a_live_link);
+    RUN_TEST(import_json_bad_record_body_missing);
+    RUN_TEST(import_json_bad_record_body_null_is_missing);
+    RUN_TEST(import_json_bad_record_body_too_long);
+    RUN_TEST(import_json_bad_record_body_at_the_limit_inserts);
+    RUN_TEST(import_json_bad_record_id_not_a_uuid);
+    RUN_TEST(import_json_bad_record_id_a_number_is_not_a_uuid);
+    RUN_TEST(import_json_bad_record_invalid_timestamp);
+    RUN_TEST(import_json_bad_record_invalid_actor_kind);
+    RUN_TEST(import_json_bad_record_actor_not_an_object);
+    RUN_TEST(import_json_bad_record_invalid_key);
+    RUN_TEST(import_json_bad_record_invalid_tag);
+    RUN_TEST(import_json_bad_record_entry_not_an_object);
+    RUN_TEST(import_json_bad_record_duplicate_id);
+    RUN_TEST(import_json_bad_record_uppercase_copy_is_a_duplicate_id);
+    RUN_TEST(import_json_uppercase_id_is_stored_lowercase);
+    RUN_TEST(import_json_bad_record_names_the_line_of_its_brace);
+    RUN_TEST(import_json_bad_link_without_from);
+    RUN_TEST(import_json_bad_link_without_kind);
+    RUN_TEST(import_json_bad_link_unknown_kind);
+    RUN_TEST(import_json_bad_link_missing_target);
+    RUN_TEST(import_json_bad_link_to_itself);
+    RUN_TEST(import_json_bad_link_invalid_timestamp);
 }

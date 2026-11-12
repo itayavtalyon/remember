@@ -10,7 +10,7 @@
  * Lowercases a valid id in place. Duplicate ids in the file: the second and
  * later copies are bad ("duplicate id").
  */
-void import_validate_memories(ImportMemory *entries, size_t n);
+int import_validate_memories(ImportMemory *entries, size_t n); /* -1 out of memory */
 
 /* Pure link-record checks. Marks bad with "invalid link" or "invalid timestamp". */
 void import_validate_links(ImportLink *links, size_t n);

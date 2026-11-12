@@ -782,7 +782,11 @@ int import_read_json(const char *path, ImportDoc *doc, int *sys_errno)
         }
     }
     jsonread_free(root);
-    import_validate_memories(doc->entries, doc->nentries);
+    if (import_validate_memories(doc->entries, doc->nentries) != 0) {
+        import_doc_free(doc);
+        *sys_errno = ENOMEM;
+        return -1;
+    }
     import_validate_links(doc->links, doc->nlinks);
     return 0;
 }

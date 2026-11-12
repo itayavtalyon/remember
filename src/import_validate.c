@@ -153,35 +153,53 @@ static const char *validate_one(ImportMemory *m)
     return NULL;
 }
 
-void import_validate_memories(ImportMemory *entries, size_t n)
+/* Same id, then file order: the first copy of an id sorts first. */
+// NOLINTNEXTLINE(bugprone-easily-swappable-parameters) qsort's signature
+static int cmp_id_then_position(const void *a, const void *b)
 {
+    const ImportMemory *const *left = (const ImportMemory *const *)a;
+    const ImportMemory *const *right = (const ImportMemory *const *)b;
+    int c = strcmp((*left)->id, (*right)->id);
+
+    if (c != 0) {
+        return c;
+    }
+    return (*left < *right) ? -1 : (*left > *right) ? 1 : 0;
+}
+
+int import_validate_memories(ImportMemory *entries, size_t n)
+{
+    ImportMemory **with_id = NULL;
+    size_t nid = 0;
     size_t i = 0;
-    size_t j = 0;
 
     for (i = 0; i < n; i++) {
-        const char *msg = NULL;
+        const char *msg = entries[i].bad ? NULL : validate_one(&entries[i]);
 
-        if (entries[i].bad) {
-            continue;
-        }
-        msg = validate_one(&entries[i]);
         if (msg != NULL) {
             entries[i].bad = true;
             entries[i].bad_message = msg;
-            continue;
-        }
-        if (entries[i].id == NULL) {
-            continue;
-        }
-        for (j = 0; j < i; j++) {
-            if (!entries[j].bad && entries[j].id != NULL &&
-                strcmp(entries[j].id, entries[i].id) == 0) {
-                entries[i].bad = true;
-                entries[i].bad_message = "duplicate id";
-                break;
-            }
         }
     }
+    with_id = (ImportMemory **)calloc(n > 0U ? n : 1U, sizeof(*with_id));
+    if (with_id == NULL) {
+        return -1;
+    }
+    for (i = 0; i < n; i++) {
+        if (!entries[i].bad && entries[i].id != NULL) {
+            with_id[nid++] = &entries[i];
+        }
+    }
+    /* O(n log n): a file of a million entries must not take hours (review A). */
+    qsort(with_id, nid, sizeof(*with_id), cmp_id_then_position);
+    for (i = 1; i < nid; i++) {
+        if (strcmp(with_id[i - 1U]->id, with_id[i]->id) == 0) {
+            with_id[i]->bad = true;
+            with_id[i]->bad_message = "duplicate id";
+        }
+    }
+    free(with_id);
+    return 0;
 }
 
 static const char *validate_link(ImportLink *l)
