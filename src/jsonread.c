@@ -408,6 +408,12 @@ static bool parse_string_into(Parser *p, char **out_bytes, size_t *out_len)
                     set_err(p, JSONREAD_ERR_UTF8);
                     free(buf);
                     return false;
+                } else if (cp == 0U) {
+                    /* A NUL would cut every C string short
+                       (decision:plan23-review-g3-nul-is-import-parse). */
+                    set_err(p, JSONREAD_ERR_SYNTAX);
+                    free(buf);
+                    return false;
                 }
                 if (!append_utf8(&buf, &n, &cap, cp, p)) {
                     free(buf);

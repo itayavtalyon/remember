@@ -79,17 +79,52 @@ static bool uuid_lowercase_in_place(char *s)
     return true;
 }
 
-static bool token_ok(const char *token)
+/* validate_one's out-of-memory result; import_validate_memories turns it into -1. */
+static const char k_oom[] = "out of memory";
+
+/* Replace *slot with its normalized text, the text add stores
+   (decision:plan23-review-g6-normalize-keys-tags). 1 ok, 0 invalid, -1 out of memory. */
+static int token_normalize(char **slot)
 {
     char buf[REMEMBER_TOKEN_MAX + 1];
+    size_t len = 0;
+    char *copy = NULL;
 
-    if (token == NULL) {
-        return false;
+    if (*slot == NULL || normalize_token(*slot, buf, sizeof(buf)) != NORM_OK) {
+        return 0;
     }
-    if (normalize_token(token, buf, sizeof(buf)) != NORM_OK) {
-        return false;
+    if (strcmp(buf, *slot) == 0) {
+        return 1;
     }
-    return true;
+    len = strlen(buf);
+    copy = (char *)malloc(len + 1U);
+    if (copy == NULL) {
+        return -1;
+    }
+    memcpy(copy, buf, len + 1U);
+    free(*slot);
+    *slot = copy;
+    return 1;
+}
+
+/* Sorted tags with repeats dropped: "Pad" and "pad" are one tag once normalized. */
+static void tags_sort_unique(ImportMemory *m)
+{
+    size_t keep = 1;
+    size_t i = 0;
+
+    if (m->ntags < 2U) {
+        return;
+    }
+    qsort(m->tags, m->ntags, sizeof(*m->tags), cmp_tag);
+    for (i = 1; i < m->ntags; i++) {
+        if (strcmp(m->tags[keep - 1U], m->tags[i]) == 0) {
+            free(m->tags[i]);
+        } else {
+            m->tags[keep++] = m->tags[i];
+        }
+    }
+    m->ntags = keep;
 }
 
 static const char *validate_one(ImportMemory *m)
@@ -120,17 +155,21 @@ static const char *validate_one(ImportMemory *m)
     }
     free(m->body);
     m->body = trimmed;
-    if (m->key != NULL && !token_ok(m->key)) {
-        return "invalid key or tag";
-    }
-    for (i = 0; i < m->ntags; i++) {
-        if (!token_ok(m->tags[i])) {
-            return "invalid key or tag";
+    if (m->key != NULL) {
+        int k = token_normalize(&m->key);
+
+        if (k <= 0) {
+            return k < 0 ? k_oom : "invalid key or tag";
         }
     }
-    if (m->ntags > 1U) {
-        qsort(m->tags, m->ntags, sizeof(*m->tags), cmp_tag);
+    for (i = 0; i < m->ntags; i++) {
+        int k = token_normalize(&m->tags[i]);
+
+        if (k <= 0) {
+            return k < 0 ? k_oom : "invalid key or tag";
+        }
     }
+    tags_sort_unique(m);
     if (m->created_at != NULL && !utc_stamp_is_canonical(m->created_at)) {
         return "invalid timestamp";
     }
@@ -175,6 +214,9 @@ int import_validate_memories(ImportMemory *entries, size_t n)
     for (i = 0; i < n; i++) {
         const char *msg = entries[i].bad ? NULL : validate_one(&entries[i]);
 
+        if (msg == k_oom) {
+            return -1;
+        }
         if (msg != NULL) {
             entries[i].bad = true;
             entries[i].bad_message = msg;

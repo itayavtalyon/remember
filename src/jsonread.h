@@ -7,7 +7,8 @@
 /*
  * Strict RFC 8259 JSON reader (plan 23 stage 1, D3, P11). Pure: no I/O.
  * One named nesting constant. No document size cap. Rejects trailing garbage,
- * NaN, Infinity, invalid UTF-8, and lone surrogates. Each value carries the
+ * NaN, Infinity, invalid UTF-8, lone surrogates, and \u0000 (a NUL would cut
+ * every C string short). Each value carries the
  * 1-based line where its first byte starts.
  */
 

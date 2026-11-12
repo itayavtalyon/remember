@@ -948,7 +948,7 @@ TEST(cli_import_incoming_dominates_updates)
     ASSERT_EQ_INT(r.exit_code, 0);
     ASSERT_STR_CONTAINS(r.out, "\"body\":\"new\"");
     ASSERT_STR_CONTAINS(r.out, "\"created_by\":{\"kind\":\"agent\",\"id\":null}");
-    ASSERT_STR_CONTAINS(r.out, "\"updated_by\":{\"kind\":\"agent\",\"id\":null}");
+    ASSERT_STR_CONTAINS(r.out, "\"updated_by\":{\"kind\":\"import\",\"id\":null}"); /* G-33 */
     ASSERT_STR_CONTAINS(r.out, "\"updated_at\":\"2020-01-02T00:00:00.000Z\"");
     cmd_result_free(&r);
 
@@ -997,7 +997,7 @@ TEST(store_import_no_sidecar_copy_devices_stay_one)
         memset(&got, 0, sizeof(got));
         ASSERT_EQ_STATUS(store_get_any(dst, 1, &got), STORE_OK);
         ASSERT_STREQ(got.created_by, "{\"kind\":\"agent\",\"id\":null}");
-        ASSERT_STREQ(got.updated_by, "{\"kind\":\"agent\",\"id\":null}");
+        ASSERT_STREQ(got.updated_by, "{\"kind\":\"import\",\"id\":null}"); /* G-33 */
         store_entry_free(&got);
     }
     store_close(dst);
@@ -2631,6 +2631,49 @@ TEST(cli_import_v6_source_prefixes_row_with_a_bad_actor_is_skipped)
     free(foreign);
 }
 
+/* G2 (decision:plan23-review-g2-from-db-actors): --from-db memories are updated by import. */
+TEST(cli_import_v6_source_memories_are_updated_by_import)
+{
+    char *local = make_temp_db_path();
+    char *foreign = given_v6_source_a_b();
+    char *got = NULL;
+    CmdResult r;
+
+    sqlite_exec(foreign, "UPDATE entries SET updated_by = '{\"kind\":\"agent\",\"id\":\"bot\"}';");
+    r = import_from_db(local, foreign);
+    ASSERT_EQ_INT(r.exit_code, 0);
+    cmd_result_free(&r);
+    got = harness_sqlite_query_line(
+        local, "SELECT COUNT(*) || ' ' || group_concat(DISTINCT updated_by) FROM entries;");
+    ASSERT_STREQ(got, "2 {\"kind\":\"import\",\"id\":null}");
+    free(got);
+    free(local);
+    free(foreign);
+}
+
+/* G2: a v6 created_by that is not an actor is a rejected row, never a human one. */
+TEST(cli_import_v6_source_bad_created_by_is_rejected)
+{
+    char *local = make_temp_db_path();
+    char *foreign = given_v6_source_a_b();
+    char *got = NULL;
+    CmdResult r;
+
+    sqlite_exec(foreign, "PRAGMA ignore_check_constraints = ON;"
+                         "UPDATE entries SET created_by = 'garbage' WHERE key = 'a';");
+    r = import_from_db(local, foreign);
+    ASSERT_EQ_INT(r.exit_code, 0);
+    ASSERT_STR_CONTAINS(r.out,
+                        "\"rejected\":{\"count\":1,\"items\":[{\"source_local_id\":1,\"field\":"
+                        "\"created_by\"}]}");
+    cmd_result_free(&r);
+    got = harness_sqlite_query_line(local, "SELECT group_concat(key) FROM entries;");
+    ASSERT_STREQ(got, "b");
+    free(got);
+    free(local);
+    free(foreign);
+}
+
 void register_sync_import_tests(void)
 {
     RUN_TEST(cli_import_v6_source_cycle_lists_an_invalid_link_by_rowid);
@@ -2677,6 +2720,8 @@ void register_sync_import_tests(void)
     RUN_TEST(cli_import_skips_rows_with_a_non_canonical_peer_field);
     RUN_TEST(cli_conflicts_refuses_a_snapshot_that_is_not_an_object);
     RUN_TEST(cli_import_refuses_to_snapshot_a_non_canonical_local_vector);
+    RUN_TEST(cli_import_v6_source_memories_are_updated_by_import);
+    RUN_TEST(cli_import_v6_source_bad_created_by_is_rejected);
 }
 
 // NOLINTEND(readability-identifier-length,cppcoreguidelines-avoid-magic-numbers,readability-magic-numbers,android-cloexec-fopen,bugprone-unchecked-string-to-number-conversion,cert-err34-c)

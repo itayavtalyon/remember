@@ -114,6 +114,14 @@ TEST(jsonread_rejects_nan_and_infinity)
     parse_fails(JSONREAD_ERR_SYNTAX, "+1", 2);
 }
 
+/* decision:plan23-review-g3-nul-is-import-parse: a NUL escape in a string or a key. */
+TEST(jsonread_rejects_a_nul_escape)
+{
+    parse_fails(JSONREAD_ERR_SYNTAX, "\"a\\u0000b\"", 10);
+    parse_fails(JSONREAD_ERR_SYNTAX, "{\"\\u0000\":1}", 12);
+    jsonread_free(parse_ok("\"\\u0001\""));
+}
+
 TEST(jsonread_rejects_invalid_utf8_and_lone_surrogates)
 {
     char bad1[] = {'"', (char)UTF8_INVALID, '"'};
@@ -219,6 +227,7 @@ void register_jsonread_tests(void)
     RUN_TEST(jsonread_rejects_nesting_past_the_named_limit);
     RUN_TEST(jsonread_rejects_trailing_garbage);
     RUN_TEST(jsonread_rejects_nan_and_infinity);
+    RUN_TEST(jsonread_rejects_a_nul_escape);
     RUN_TEST(jsonread_rejects_invalid_utf8_and_lone_surrogates);
     RUN_TEST(jsonread_tracks_the_one_based_line_of_each_value);
     RUN_TEST(jsonread_keeps_duplicate_object_members);

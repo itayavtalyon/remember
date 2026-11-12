@@ -14,6 +14,8 @@ Copy approved 2026-10-25. DESIGN-PENDING D-04 is answered (2026-10-25, 007 ST-8.
 
 The memory merge, the JSON reader, and `--from-db` for v4, v5, and v6 are specified. Start those stages.
 
+Markdown and CSV moved to [plan 23a](23a-import-md-csv.md) on 2026-11-12 (`decision:plan23-review-g1-md-csv-to-23a`). This plan ships `--from-json` and `--from-db`. `--from-md` and `--from-csv` stay a `usage` error until 23a. The Markdown and CSV rules below stay here as 23a's source of truth.
+
 `unknown_field` is C-35 in [`COPY-PENDING.md`](COPY-PENDING.md). Print it. Do not silently ignore an unknown member in an export file.
 
 ## Source of truth
@@ -65,6 +67,8 @@ Whole-file failures roll back. Exit 1 `import_parse`. The brain is unchanged.
 
 - JSON root `format` is not `remember-export`.
 - JSON root `version` is not 1.
+- JSON root `entries` or `links` is present, not null, and not an array, or `brain_id` is present, not null, and not a canonical UUID (`decision:plan23-review-g4-shape-is-import-parse`).
+- Any JSON string or member name holds `\u0000` (`decision:plan23-review-g3-nul-is-import-parse`).
 - CSV header is not the JE-8.3 header.
 - The JSON `settings` member, Markdown `settings.json`, or the matching `<CSV basename>.settings.json` is present and is not a settings document (007 ST-8.4). A missing `settings.json` is not an error.
 
@@ -99,7 +103,7 @@ Bad-record messages, with `id` in place of `sync_id` and actors in place of `sou
 - `invalid front matter`
 - `duplicate field`
 
-A record is bad when: the body is missing, empty after trim, or longer than 65536 bytes; `id` is present and is not a canonical UUID (`8-4-4-4-12` hex, either case); a present timestamp is not `YYYY-MM-DDTHH:MM:SS.mmmZ`; a present actor is not `{kind, id}` with a legal kind; a present key or tag fails the log 001 checks; `version_vector` is present and is not a JSON object of canonical-UUID device id to a JSON integer greater than 0; a link object lacks `to` or `kind`; `kind` is not `related`, `cites`, or `supersedes`; an `id` repeats in the file; a CSV row's column count differs from the header; a JSON entry is not an object.
+A record is bad when: the body is missing, empty after trim, or longer than 65536 bytes; `id` is present and is not a canonical UUID (`8-4-4-4-12` hex, either case); a present timestamp is not `YYYY-MM-DDTHH:MM:SS.mmmZ`; a present actor is not `{kind, id}` with a legal kind; a present key or tag fails the log 001 checks (a key or tag that passes is stored normalized, as `add` stores it: `decision:plan23-review-g6-normalize-keys-tags`); `version_vector` is present and is not a JSON object of canonical-UUID device id to a JSON integer greater than 0; a link object lacks `to` or `kind`; `kind` is not `related`, `cites`, or `supersedes`; an `id` repeats in the file; a CSV row's column count differs from the header; a JSON entry is not an object.
 
 Null or an empty CSV cell means absent for `key`, `expires_at`, `deleted_at`, `version_vector`, `created_at`, `updated_at`, actors, `tags`, `links`, and `id` (D31). A null body is `body is missing`.
 

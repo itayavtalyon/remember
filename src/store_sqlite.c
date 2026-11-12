@@ -8539,13 +8539,20 @@ static StoreStatus record_clash(sqlite3 *db, long long local_id, const Entry *in
     return st;
 }
 
+/* Plan 23: every memory write stamps updated_by as import. */
+static const char k_import_actor[] = "{\"kind\":\"import\",\"id\":null}";
+static const char k_human_actor[] = "{\"kind\":\"human\",\"id\":null}";
+static const char k_empty_vv[] = "{}";
+
+static char *import_alias(const char *s);
+
 typedef struct {
     long long foreign_id;
     char *key;
     char *body;
     char *body_hash;
     char *source;                    /* v4/v5 token. Not stored. */
-    char actor_json[ACTOR_JSON_CAP]; /* canonical; both columns on a v5 row */
+    char actor_json[ACTOR_JSON_CAP]; /* canonical created_by; empty when invalid */
     char *created_at;
     char *updated_at;
     char *expires_at;
@@ -8688,9 +8695,11 @@ static StoreStatus import_row_from_stmt_v6(sqlite3 *src, sqlite3_stmt *stmt, Imp
     u = sqlite3_column_text(stmt, COL_CREATED_BY);
     if (u == NULL || !actor_json_store_to_canonical((const char *)u, out->actor_json,
                                                    sizeof out->actor_json)) {
-        (void)actor_json((Actor){.kind = "human"}, out->actor_json, sizeof out->actor_json);
+        /* Empty: import_row_bad_field rejects the row as created_by
+           (decision:plan23-review-g2-from-db-actors), never a human row. */
+        out->actor_json[0] = '\0';
     }
-    /* ImportRow carries one actor; created_by is the insert/merge stamp. */
+    /* ImportRow carries one actor, created_by. updated_by is always import (G-33). */
     u = sqlite3_column_text(stmt, COL_CREATED_AT);
     out->created_at = dup_str(u != NULL ? (const char *)u : "");
     u = sqlite3_column_text(stmt, COL_UPDATED_AT);
@@ -8737,7 +8746,7 @@ static void import_row_as_entry(ImportRow *r, Entry *e)
     e->tags = r->tags;
     e->ntags = r->ntags;
     e->created_by = r->actor_json; /* aliases the row; do not free the view */
-    e->updated_by = r->actor_json;
+    e->updated_by = import_alias(k_import_actor);
     e->created_at = r->created_at;
     e->updated_at = r->updated_at;
     e->expires_at = r->expires_at;
@@ -8912,7 +8921,7 @@ static StoreStatus import_insert_new(sqlite3 *dst, ImportRow *row, const char *n
         }
     }
     st = insert_entry_imported(dst, row->key, row->body, row->body_hash, row->actor_json,
-                               row->actor_json, row->created_at, row->updated_at, row->expires_at,
+                               k_import_actor, row->created_at, row->updated_at, row->expires_at,
                                row->sync_id, row->deleted_at, row->version_vector, &new_id, serr);
     if (st != STORE_OK) {
         return st;
@@ -8965,7 +8974,7 @@ static StoreStatus import_merge_present(sqlite3 *dst, const char *device_id, Imp
             return import_note_conflict(counts, st, conflict_id);
         }
         st = apply_incoming_fields(dst, local->id, row->key, row->body, row->body_hash,
-                                   row->actor_json, row->actor_json, row->expires_at,
+                                   row->actor_json, k_import_actor, row->expires_at,
                                    row->deleted_at, row->updated_at, row->tags, row->ntags, serr);
         if (st != STORE_OK) {
             return st;
@@ -9064,6 +9073,9 @@ static const char *import_row_bad_field(const ImportRow *row)
     if (!source_is_valid(row->source)) {
         return "source";
     }
+    if (row->actor_json[0] == '\0') {
+        return "created_by";
+    }
     body_hash_hex(row->body, strlen(row->body), hash);
     if (strcmp(hash, row->body_hash) != 0) {
         return "body_hash";
@@ -9097,7 +9109,6 @@ static StoreStatus import_one_entry(sqlite3 *dst, const char *device_id, ImportR
 static StoreStatus import_doc_one_link(Store *dst, const ImportLink *link, const char *now,
                                        StoreImportResult *counts);
 
-static char *import_alias(const char *s);
 
 static char *column_dup(sqlite3_stmt *stmt, int col)
 {
@@ -9358,10 +9369,6 @@ fail:
     return st;
 }
 
-/* Plan 23: every memory write stamps updated_by as import. */
-static const char k_import_actor[] = "{\"kind\":\"import\",\"id\":null}";
-static const char k_human_actor[] = "{\"kind\":\"human\",\"id\":null}";
-static const char k_empty_vv[] = "{}";
 
 static StoreStatus brain_entry_count(sqlite3 *db, long long *out, StoreError *serr)
 {

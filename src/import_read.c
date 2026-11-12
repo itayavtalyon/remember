@@ -423,6 +423,59 @@ static bool stamp_from_value(const JsonValue *v, char **out, bool *invalid)
     return true;
 }
 
+static bool array_or_absent(const JsonValue *v)
+{
+    return v == NULL || v->type == JSON_NULL || v->type == JSON_ARRAY;
+}
+
+// NOLINTNEXTLINE(bugprone-easily-swappable-parameters) qsort's signature
+static int cmp_member_name(const void *a, const void *b)
+{
+    return strcmp(*(const char *const *)a, *(const char *const *)b);
+}
+
+/* P8: a member name twice in one entry or link. Sorted, so a hostile object
+   with many members costs O(n log n). -1 out of memory. */
+static int has_duplicate_member(const JsonValue *obj)
+{
+    size_t n = obj->u.object.n;
+    const char **names = NULL;
+    size_t i = 0;
+    int dup = 0;
+
+    if (n < 2U) {
+        return 0;
+    }
+    names = (const char **)calloc(n, sizeof(*names));
+    if (names == NULL) {
+        return -1;
+    }
+    for (i = 0; i < n; i++) {
+        names[i] = obj->u.object.members[i].key;
+    }
+    qsort((void *)names, n, sizeof(*names), cmp_member_name);
+    for (i = 1; i < n && dup == 0; i++) {
+        dup = strcmp(names[i - 1U], names[i]) == 0;
+    }
+    free((void *)names);
+    return dup;
+}
+
+/* Set out bad with "duplicate field" when obj repeats a member. false out of memory. */
+static bool check_duplicate_member(const JsonValue *obj, bool *bad, const char **bad_message)
+{
+    int dup = has_duplicate_member(obj);
+
+    if (dup < 0) {
+        return false;
+    }
+    if (dup > 0) {
+        *bad = true;
+        *bad_message = "duplicate field";
+    }
+    return true;
+}
+
 static bool memory_from_object(const JsonValue *obj, const char *file, ImportMemory *out)
 {
     bool invalid = false;
@@ -438,8 +491,11 @@ static bool memory_from_object(const JsonValue *obj, const char *file, ImportMem
     }
     out->line = obj->line;
     out->file = dup_cstr(file);
-    if (out->file == NULL) {
+    if (out->file == NULL || !check_duplicate_member(obj, &out->bad, &out->bad_message)) {
         return false;
+    }
+    if (out->bad) {
+        return true;
     }
     v = object_get(obj, "id");
     if (v != NULL && v->type != JSON_NULL) {
@@ -530,8 +586,11 @@ static bool link_from_object(const JsonValue *obj, const char *file, ImportLink 
     }
     out->line = obj->line;
     out->file = dup_cstr(file);
-    if (out->file == NULL) {
+    if (out->file == NULL || !check_duplicate_member(obj, &out->bad, &out->bad_message)) {
         return false;
+    }
+    if (out->bad) {
+        return true;
     }
     v = object_get(obj, "from");
     if (v != NULL && v->type == JSON_STRING) {
@@ -674,17 +733,28 @@ int import_read_json(const char *path, ImportDoc *doc, int *sys_errno)
         doc->settings_len = v->src_len;
     }
     free(bytes);
+    /* A wrong root shape is not a remember export
+       (decision:plan23-review-g4-shape-is-import-parse). Null means absent (D31). */
+    if (!array_or_absent(object_get(root, "entries")) ||
+        !array_or_absent(object_get(root, "links"))) {
+        jsonread_free(root);
+        set_parse(doc, msg_not_export(base), NULL);
+        return 0;
+    }
     v = object_get(root, "brain_id");
-    if (v != NULL && v->type == JSON_STRING) {
+    if (v != NULL && v->type != JSON_NULL) {
         char id_buf[37];
 
-        if (import_uuid_normalize(v->u.string.bytes, id_buf)) {
-            doc->brain_id = dup_cstr(id_buf);
-            if (doc->brain_id == NULL) {
-                jsonread_free(root);
-                *sys_errno = ENOMEM;
-                return -1;
-            }
+        if (v->type != JSON_STRING || !import_uuid_normalize(v->u.string.bytes, id_buf)) {
+            jsonread_free(root);
+            set_parse(doc, msg_not_export(base), NULL);
+            return 0;
+        }
+        doc->brain_id = dup_cstr(id_buf);
+        if (doc->brain_id == NULL) {
+            jsonread_free(root);
+            *sys_errno = ENOMEM;
+            return -1;
         }
     }
     v = object_get(root, "entries");

@@ -1481,6 +1481,265 @@ TEST(import_rejects_a_repeated_origin)
     then_usage(args, 7, "remember: duplicate --origin\n");
 }
 
+/* ---- Mutation-pass tests (whole-plan review): each kills a surviving mutant. ---- */
+
+#define D1 FIXTURE_ID("000000000001")
+#define D2 FIXTURE_ID("0000000000ff")
+#define HUMAN "{\"kind\":\"human\",\"id\":null}"
+#define ENTRY_BY(id, body, vv) "{\"id\":\"" id "\",\"body\":\"" body "\",\"created_by\":" HUMAN ",\"version_vector\":" vv "}"
+
+static char *query(const char *db, const char *sql)
+{
+    return harness_sqlite_query_line(db, sql);
+}
+
+static void then_query(const char *db, const char *sql, const char *want)
+{
+    char *got = query(db, sql);
+
+    ASSERT_STREQ(got, want);
+    free(got);
+}
+
+static void import_ok(const char *dst, const char *suffix, const char *text)
+{
+    CmdResult r = import_text(dst, suffix, text);
+
+    ASSERT_EQ_INT(r.exit_code, 0);
+    cmd_result_free(&r);
+}
+
+/* M4: of two copies of one id, the first in the file is the one kept. */
+TEST(import_json_duplicate_id_keeps_the_first_copy)
+{
+    char *dst = open_empty_brain();
+
+    import_ok(dst, "-dup.json",
+              EXPORT_HEAD "\"entries\":[" ONE_ENTRY(ID3, "first", "{}") "," ONE_ENTRY(
+                  ID3, "second", "{}") "]}");
+    then_query(dst, "SELECT body FROM entries;", "first");
+    free(dst);
+}
+
+/* M10: a file tombstone over a local tombstone leaves the link dead. */
+TEST(import_json_tombstone_link_over_a_tombstone_stays_dead)
+{
+    char *dst = open_empty_brain();
+    const char *doc =
+        EXPORT_HEAD "\"entries\":[" ONE_ENTRY(ID3, "A", "{}") "," ONE_ENTRY(ID4, "B", "{}") "],"
+                    "\"links\":[{\"from\":\"" ID3 "\",\"to\":\"" ID4 "\",\"kind\":\"cites\","
+                    "\"deleted_at\":\"" FIXTURE_AT "\"}]}";
+
+    import_ok(dst, "-t1.json", doc);
+    import_ok(dst, "-t2.json", doc);
+    then_query(dst, "SELECT COUNT(*) || '/' || COUNT(deleted_at) FROM entry_links;", "1/1");
+    free(dst);
+}
+
+/* M14: a new link between existing memories bumps both ends' change_seq, not their vectors. */
+TEST(import_json_new_link_bumps_existing_ends)
+{
+    char *dst = open_empty_brain();
+    static const char *const seq[] = {"SELECT change_seq FROM entries WHERE id = '" ID3 "';",
+                                      "SELECT change_seq FROM entries WHERE id = '" ID4 "';"};
+    const char *vvs = "SELECT group_concat(version_vector, ';') FROM (SELECT * FROM entries "
+                      "ORDER BY id);";
+    char *before[2] = {NULL, NULL};
+    char *vv_before = NULL;
+    size_t i = 0;
+
+    import_ok(dst, "-ends.json",
+              EXPORT_HEAD "\"entries\":[" ONE_ENTRY(ID3, "A", "{}") "," ONE_ENTRY(ID4, "B",
+                                                                                  "{}") "]}");
+    for (i = 0; i < 2U; i++) {
+        before[i] = query(dst, seq[i]);
+    }
+    vv_before = query(dst, vvs);
+    import_ok(dst, "-link.json",
+              EXPORT_HEAD "\"entries\":[],\"links\":[{\"from\":\"" ID3 "\",\"to\":\"" ID4
+                          "\",\"kind\":\"cites\"}]}");
+    for (i = 0; i < 2U; i++) {
+        char *after = query(dst, seq[i]);
+
+        ASSERT_TRUE(before[i] != NULL && after != NULL && strtoll(after, NULL, 10) > strtoll(before[i], NULL, 10));
+        free(after);
+        free(before[i]);
+    }
+    then_query(dst, vvs, vv_before);
+    free(vv_before);
+    free(dst);
+}
+
+/* M16: a newer id'd record whose body another keyless row holds is a hash clash. */
+TEST(import_json_update_onto_a_held_body_is_hash_clash)
+{
+    char *dst = open_empty_brain();
+    CmdResult r;
+
+    import_ok(dst, "-v1.json", EXPORT_HEAD "\"entries\":[" ONE_ENTRY(ID3, "one", "{\"" D1 "\":1}") "]}");
+    given_keyless_memory(dst, "two");
+    r = import_text(dst, "-v2.json",
+                    EXPORT_HEAD "\"entries\":[" ONE_ENTRY(ID3, "two", "{\"" D1 "\":2}") "]}");
+    ASSERT_EQ_INT(r.exit_code, 0);
+    ASSERT_STR_CONTAINS(r.out, "\"reason\":\"hash_clash\"");
+    cmd_result_free(&r);
+    then_query(dst, "SELECT body FROM entries WHERE id = '" ID3 "';", "one");
+    free(dst);
+}
+
+/* M17: an update from the file stamps updated_by import, not the file's actor (G-33). */
+TEST(import_json_update_stamps_the_import_actor)
+{
+    char *dst = open_empty_brain();
+
+    import_ok(dst, "-u1.json", EXPORT_HEAD "\"entries\":[" ENTRY_BY(ID3, "one", "{\"" D1 "\":1}") "]}");
+    import_ok(dst, "-u2.json", EXPORT_HEAD "\"entries\":[" ENTRY_BY(ID3, "two", "{\"" D1 "\":2}") "]}");
+    then_query(dst, "SELECT body || ' ' || updated_by FROM entries;",
+               "two {\"kind\":\"import\",\"id\":null}");
+    free(dst);
+}
+
+/* M18, M19: concurrent vectors with different bodies open a conflict, and its incoming
+   side carries the import actor. */
+TEST(import_json_concurrent_change_is_a_conflict_with_the_import_actor)
+{
+    char *dst = open_empty_brain();
+    CmdResult r;
+
+    import_ok(dst, "-c1.json", EXPORT_HEAD "\"entries\":[" ENTRY_BY(ID3, "one", "{\"" D1 "\":1}") "]}");
+    r = import_text(dst, "-c2.json",
+                    EXPORT_HEAD "\"entries\":[" ENTRY_BY(ID3, "two", "{\"" D2 "\":1}") "]}");
+    ASSERT_EQ_INT(r.exit_code, 0);
+    ASSERT_STR_CONTAINS(r.out, "\"conflicts\":{\"count\":1,");
+    cmd_result_free(&r);
+    then_query(dst, "SELECT json_extract(incoming_json, '$.updated_by.kind') FROM conflicts;",
+               "import");
+    then_query(dst, "SELECT body FROM entries;", "one");
+    free(dst);
+}
+
+/* M20: the origin limit is exactly 64 bytes. */
+TEST(import_origin_of_64_bytes_passes_and_65_is_too_long)
+{
+    char *dst = open_empty_brain();
+    char *src = harness_side_path(dst, "-o.json");
+    char label[66];
+    CmdResult r;
+
+    ASSERT_EQ_INT(write_text(src, EXPORT_HEAD "\"entries\":[]}"), 0);
+    memset(label, 'x', 65U);
+    label[64] = '\0';
+    {
+        const char *args[] = {"import", "--from-json", src, "--origin", label};
+        r = run_remember(dst, args, 5, NULL);
+    }
+    ASSERT_EQ_INT(r.exit_code, 0);
+    cmd_result_free(&r);
+    label[64] = 'x';
+    label[65] = '\0';
+    {
+        const char *args[] = {"import", "--from-json", src, "--origin", label};
+        r = run_remember(dst, args, 5, NULL);
+    }
+    ASSERT_EQ_INT(r.exit_code, 1);
+    ASSERT_STREQ(r.err, "remember: origin is too long (max 64 bytes)\n");
+    cmd_result_free(&r);
+    free(src);
+    free(dst);
+}
+
+/* ---- Grill answers (2026-11-12): G3, G4, G6 and the P8 rule. ---- */
+
+/* The whole file is import_parse and the brain stays empty. */
+static void then_import_parse(const char *doc)
+{
+    char *dst = open_empty_brain();
+    CmdResult r = import_text(dst, "-parse.json", doc);
+
+    ASSERT_EQ_INT(r.exit_code, 1);
+    ASSERT_STR_CONTAINS(r.out, "\"import_parse\"");
+    cmd_result_free(&r);
+    then_query(dst, "SELECT COUNT(*) FROM entries;", "0");
+    free(dst);
+}
+
+/* G3: a NUL would cut the string short; the file is refused instead. */
+TEST(import_json_nul_in_a_body_is_import_parse)
+{
+    then_import_parse(EXPORT_HEAD "\"entries\":[{\"body\":\"visible\\u0000hidden\"}]}");
+}
+
+TEST(import_json_nul_in_the_format_is_import_parse)
+{
+    then_import_parse("{\"format\":\"remember-export\\u0000x\",\"version\":1,"
+                      "\"entries\":[{\"body\":\"a\"}]}");
+}
+
+/* G4: wrong root shapes are not a remember export. */
+TEST(import_json_entries_object_is_import_parse)
+{
+    then_import_parse(EXPORT_HEAD "\"entries\":{\"body\":\"a\"}}");
+}
+
+TEST(import_json_links_string_is_import_parse)
+{
+    then_import_parse(EXPORT_HEAD "\"entries\":[{\"body\":\"a\"}],\"links\":\"none\"}");
+}
+
+TEST(import_json_bad_brain_id_is_import_parse)
+{
+    then_import_parse(EXPORT_HEAD "\"brain_id\":\"nope\",\"entries\":[{\"body\":\"a\"}]}");
+}
+
+TEST(import_json_null_brain_id_entries_and_links_mean_absent)
+{
+    char *dst = open_empty_brain();
+
+    import_ok(dst, "-nulls.json",
+              EXPORT_HEAD "\"brain_id\":null,\"entries\":null,\"links\":null}");
+    then_query(dst, "SELECT COUNT(*) FROM entries;", "0");
+    free(dst);
+}
+
+/* P8: a member name twice in one entry or link is duplicate field. */
+TEST(import_json_bad_record_duplicate_member)
+{
+    then_one_bad_record("{\"body\":\"first\",\"body\":\"second\"}", "duplicate field");
+}
+
+TEST(import_json_bad_link_duplicate_member)
+{
+    char *dst = open_empty_brain();
+    CmdResult r = import_text(
+        dst, "-duplink.json",
+        EXPORT_HEAD "\"entries\":[" ONE_ENTRY(ID3, "A", "{}") "," ONE_ENTRY(
+            ID4, "B", "{}") "],\"links\":[{\"from\":\"" ID3 "\",\"to\":\"" ID4
+                            "\",\"kind\":\"cites\",\"kind\":\"supersedes\"}]}");
+
+    ASSERT_EQ_INT(r.exit_code, 0);
+    ASSERT_STR_CONTAINS(r.out, "\"skipped\":1");
+    ASSERT_STR_CONTAINS(r.out, "\"message\":\"duplicate field\"");
+    cmd_result_free(&r);
+    then_query(dst, "SELECT COUNT(*) FROM entry_links;", "0");
+    free(dst);
+}
+
+/* G6: key and tags are stored the way add stores them. */
+TEST(import_json_normalizes_key_and_tags_like_add)
+{
+    char *dst = open_empty_brain();
+
+    import_ok(dst, "-norm.json",
+              EXPORT_HEAD "\"entries\":[{\"body\":\"n\",\"key\":\"  Project:Alpha \","
+                          "\"tags\":[\"  Pad  \",\"pad\",\"B\"]}]}");
+    then_query(dst, "SELECT key FROM entries;", "project:alpha");
+    then_query(dst,
+               "SELECT group_concat(name, ',') FROM (SELECT t.name FROM entry_tags AS j JOIN tags "
+               "AS t ON t.id = j.tag_id ORDER BY t.name);",
+               "b,pad");
+    free(dst);
+}
+
 void register_import_formats_tests(void)
 {
     RUN_TEST(import_json_inserts_a_keyed_memory_into_an_empty_brain);
@@ -1537,4 +1796,20 @@ void register_import_formats_tests(void)
     RUN_TEST(import_rejects_a_repeated_origin);
     RUN_TEST(import_json_round_trip_keeps_memories_and_links);
     RUN_TEST(import_json_sync_id_member_is_not_an_id);
+    RUN_TEST(import_json_duplicate_id_keeps_the_first_copy);
+    RUN_TEST(import_json_tombstone_link_over_a_tombstone_stays_dead);
+    RUN_TEST(import_json_new_link_bumps_existing_ends);
+    RUN_TEST(import_json_update_onto_a_held_body_is_hash_clash);
+    RUN_TEST(import_json_update_stamps_the_import_actor);
+    RUN_TEST(import_json_concurrent_change_is_a_conflict_with_the_import_actor);
+    RUN_TEST(import_origin_of_64_bytes_passes_and_65_is_too_long);
+    RUN_TEST(import_json_nul_in_a_body_is_import_parse);
+    RUN_TEST(import_json_nul_in_the_format_is_import_parse);
+    RUN_TEST(import_json_entries_object_is_import_parse);
+    RUN_TEST(import_json_links_string_is_import_parse);
+    RUN_TEST(import_json_bad_brain_id_is_import_parse);
+    RUN_TEST(import_json_null_brain_id_entries_and_links_mean_absent);
+    RUN_TEST(import_json_bad_record_duplicate_member);
+    RUN_TEST(import_json_bad_link_duplicate_member);
+    RUN_TEST(import_json_normalizes_key_and_tags_like_add);
 }
