@@ -1345,6 +1345,63 @@ TEST(import_json_bad_link_invalid_timestamp)
     free(dst);
 }
 
+/* ---- P7 / P9 usage lines, every sibling flag. ---- */
+
+static void then_usage(const char *const *args, size_t nargs, const char *want_err)
+{
+    char *dst = open_empty_brain();
+    CmdResult r = run_remember(dst, args, nargs, NULL);
+
+    ASSERT_EQ_INT(r.exit_code, 1);
+    ASSERT_STREQ(r.err, want_err);
+    cmd_result_free(&r);
+    free(dst);
+}
+
+TEST(import_rejects_each_repeated_source_flag)
+{
+    static const char *const flags[] = {"--from-json", "--from-md", "--from-csv", "--from-db"};
+    char want[128];
+    size_t i = 0;
+
+    for (i = 0; i < sizeof flags / sizeof flags[0]; i++) {
+        const char *args[] = {"import", flags[i], "a", flags[i], "b"};
+
+        (void)snprintf(want, sizeof want, "remember: duplicate %s\n", flags[i]);
+        then_usage(args, 5, want);
+    }
+}
+
+TEST(import_rejects_each_source_flag_without_a_path)
+{
+    static const char *const flags[] = {"--from-json", "--from-md", "--from-csv", "--from-db"};
+    char want[128];
+    size_t i = 0;
+
+    for (i = 0; i < sizeof flags / sizeof flags[0]; i++) {
+        const char *args[] = {"import", flags[i]};
+
+        (void)snprintf(want, sizeof want, "remember: %s requires a path\n", flags[i]);
+        then_usage(args, 2, want);
+    }
+}
+
+TEST(import_rejects_two_different_source_flags)
+{
+    const char *args[] = {"import", "--from-json", "a", "--from-db", "b"};
+
+    then_usage(args, 5,
+               "remember: import requires exactly one of --from-json, --from-md, --from-csv, "
+               "--from-db\n");
+}
+
+TEST(import_rejects_a_repeated_origin)
+{
+    const char *args[] = {"import", "--origin", "a", "--origin", "b", "--from-json", "x"};
+
+    then_usage(args, 7, "remember: duplicate --origin\n");
+}
+
 void register_import_formats_tests(void)
 {
     RUN_TEST(import_json_inserts_a_keyed_memory_into_an_empty_brain);
@@ -1395,4 +1452,8 @@ void register_import_formats_tests(void)
     RUN_TEST(import_json_bad_link_missing_target);
     RUN_TEST(import_json_bad_link_to_itself);
     RUN_TEST(import_json_bad_link_invalid_timestamp);
+    RUN_TEST(import_rejects_each_repeated_source_flag);
+    RUN_TEST(import_rejects_each_source_flag_without_a_path);
+    RUN_TEST(import_rejects_two_different_source_flags);
+    RUN_TEST(import_rejects_a_repeated_origin);
 }

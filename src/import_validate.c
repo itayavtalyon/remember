@@ -67,6 +67,18 @@ bool import_uuid_normalize(const char *s, char out[37])
     return true;
 }
 
+/* D35: a canonical UUID of either case becomes lowercase. Same length, so in place. */
+static bool uuid_lowercase_in_place(char *s)
+{
+    char out[UUID_TEXT_LEN + 1];
+
+    if (!import_uuid_normalize(s, out)) {
+        return false;
+    }
+    memcpy(s, out, sizeof(out));
+    return true;
+}
+
 static bool token_ok(const char *token)
 {
     char buf[REMEMBER_TOKEN_MAX + 1];
@@ -82,7 +94,6 @@ static bool token_ok(const char *token)
 
 static const char *validate_one(ImportMemory *m)
 {
-    char id_buf[37];
     size_t i = 0;
     NormStatus bst = NORM_OK;
     char *trimmed = NULL;
@@ -91,20 +102,8 @@ static const char *validate_one(ImportMemory *m)
     if (m == NULL) {
         return "entry is not an object";
     }
-    if (m->id != NULL) {
-        if (!import_uuid_normalize(m->id, id_buf)) {
-            return "id is not a UUID";
-        }
-        if (strcmp(m->id, id_buf) != 0) {
-            char *copy = (char *)malloc(sizeof(id_buf));
-
-            if (copy == NULL) {
-                return "id is not a UUID"; /* OOM surfaced as bad; store sees OOM elsewhere */
-            }
-            memcpy(copy, id_buf, sizeof(id_buf));
-            free(m->id);
-            m->id = copy;
-        }
+    if (m->id != NULL && !uuid_lowercase_in_place(m->id)) {
+        return "id is not a UUID";
     }
     if (m->body == NULL) {
         return "body is missing";
@@ -204,7 +203,6 @@ int import_validate_memories(ImportMemory *entries, size_t n)
 
 static const char *validate_link(ImportLink *l)
 {
-    char id_buf[37];
 
     if (l == NULL) {
         return "invalid link";
@@ -212,31 +210,8 @@ static const char *validate_link(ImportLink *l)
     if (l->from == NULL || l->to == NULL || l->kind == NULL) {
         return "invalid link";
     }
-    if (!import_uuid_normalize(l->from, id_buf)) {
+    if (!uuid_lowercase_in_place(l->from) || !uuid_lowercase_in_place(l->to)) {
         return "invalid link";
-    }
-    if (strcmp(l->from, id_buf) != 0) {
-        char *copy = (char *)malloc(sizeof(id_buf));
-
-        if (copy == NULL) {
-            return "invalid link";
-        }
-        memcpy(copy, id_buf, sizeof(id_buf));
-        free(l->from);
-        l->from = copy;
-    }
-    if (!import_uuid_normalize(l->to, id_buf)) {
-        return "invalid link";
-    }
-    if (strcmp(l->to, id_buf) != 0) {
-        char *copy = (char *)malloc(sizeof(id_buf));
-
-        if (copy == NULL) {
-            return "invalid link";
-        }
-        memcpy(copy, id_buf, sizeof(id_buf));
-        free(l->to);
-        l->to = copy;
     }
     if (strcmp(l->kind, "related") != 0 && strcmp(l->kind, "cites") != 0 &&
         strcmp(l->kind, "supersedes") != 0) {

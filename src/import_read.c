@@ -405,6 +405,24 @@ static bool tags_from_value(const JsonValue *v, char ***out_tags, size_t *out_n,
     return true;
 }
 
+static bool stamp_from_value(const JsonValue *v, char **out, bool *invalid)
+{
+    *out = NULL;
+    *invalid = false;
+    if (v == NULL || v->type == JSON_NULL) {
+        return true;
+    }
+    if (v->type != JSON_STRING) {
+        *invalid = true;
+        return false;
+    }
+    *out = json_string_dup(v);
+    if (*out == NULL) {
+        return false;
+    }
+    return true;
+}
+
 static bool memory_from_object(const JsonValue *obj, const char *file, ImportMemory *out)
 {
     bool invalid = false;
@@ -476,53 +494,16 @@ static bool memory_from_object(const JsonValue *obj, const char *file, ImportMem
         out->bad_message = "invalid actor";
         return true;
     }
-    v = object_get(obj, "created_at");
-    if (v != NULL && v->type != JSON_NULL) {
-        out->created_at = json_string_dup(v);
-        if (out->created_at == NULL && v->type == JSON_STRING) {
-            return false;
-        }
-        if (v->type != JSON_STRING) {
+    if (!stamp_from_value(object_get(obj, "created_at"), &out->created_at, &invalid) ||
+        !stamp_from_value(object_get(obj, "updated_at"), &out->updated_at, &invalid) ||
+        !stamp_from_value(object_get(obj, "expires_at"), &out->expires_at, &invalid) ||
+        !stamp_from_value(object_get(obj, "deleted_at"), &out->deleted_at, &invalid)) {
+        if (invalid) {
             out->bad = true;
             out->bad_message = "invalid timestamp";
             return true;
         }
-    }
-    v = object_get(obj, "updated_at");
-    if (v != NULL && v->type != JSON_NULL) {
-        out->updated_at = json_string_dup(v);
-        if (out->updated_at == NULL && v->type == JSON_STRING) {
-            return false;
-        }
-        if (v->type != JSON_STRING) {
-            out->bad = true;
-            out->bad_message = "invalid timestamp";
-            return true;
-        }
-    }
-    v = object_get(obj, "expires_at");
-    if (v != NULL && v->type != JSON_NULL) {
-        out->expires_at = json_string_dup(v);
-        if (out->expires_at == NULL && v->type == JSON_STRING) {
-            return false;
-        }
-        if (v->type != JSON_STRING) {
-            out->bad = true;
-            out->bad_message = "invalid timestamp";
-            return true;
-        }
-    }
-    v = object_get(obj, "deleted_at");
-    if (v != NULL && v->type != JSON_NULL) {
-        out->deleted_at = json_string_dup(v);
-        if (out->deleted_at == NULL && v->type == JSON_STRING) {
-            return false;
-        }
-        if (v->type != JSON_STRING) {
-            out->bad = true;
-            out->bad_message = "invalid timestamp";
-            return true;
-        }
+        return false;
     }
     v = object_get(obj, "version_vector");
     out->version_vector = vv_from_value(v, &invalid);
@@ -530,24 +511,6 @@ static bool memory_from_object(const JsonValue *obj, const char *file, ImportMem
         out->bad = true;
         out->bad_message = "invalid version_vector";
         return true;
-    }
-    return true;
-}
-
-static bool stamp_from_value(const JsonValue *v, char **out, bool *invalid)
-{
-    *out = NULL;
-    *invalid = false;
-    if (v == NULL || v->type == JSON_NULL) {
-        return true;
-    }
-    if (v->type != JSON_STRING) {
-        *invalid = true;
-        return false;
-    }
-    *out = json_string_dup(v);
-    if (*out == NULL) {
-        return false;
     }
     return true;
 }

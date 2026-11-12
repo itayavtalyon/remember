@@ -49,7 +49,6 @@ struct Store {
     MigrationWarning *warnings; /* this open's v6 step; nwarnings items */
     size_t nwarnings;
     ChangeSeqTx change_tx;
-    const char *import_origin;    /* borrowed; set only during store_import* */
     bool schema_too_new;          /* min_reader_version is newer than this engine: read only */
     bool replace_invalid_sidecar; /* device new only: invalid counts as missing */
     /* NOLINTNEXTLINE(readability-magic-numbers,cppcoreguidelines-avoid-magic-numbers) */
@@ -9266,7 +9265,6 @@ StoreStatus store_import(Store *dst, const char *src_path, const char *now, cons
     }
     memset(&dst->last, 0, sizeof(dst->last));
     g_import_origin = origin;
-    dst->import_origin = origin;
     rc = sqlite3_open_v2(src_path, &src, SQLITE_OPEN_READONLY, NULL);
     if (rc != SQLITE_OK) {
         capture_source_error(src, &dst->last);
@@ -9274,14 +9272,12 @@ StoreStatus store_import(Store *dst, const char *src_path, const char *now, cons
             (void)sqlite3_close(src);
         }
         g_import_origin = NULL;
-        dst->import_origin = NULL;
         return STORE_ERR_SQLITE;
     }
     if (read_user_version(src, &version, err_unused, 0U, &dst->last) != 0) {
         dst->last.import_source = true;
         (void)sqlite3_close(src);
         g_import_origin = NULL;
-        dst->import_origin = NULL;
         return STORE_ERR_SQLITE;
     }
     st = import_source_gate(src, version, &dst->last);
@@ -9290,7 +9286,6 @@ StoreStatus store_import(Store *dst, const char *src_path, const char *now, cons
         dst->last.import_source = true;
         (void)sqlite3_close(src);
         g_import_origin = NULL;
-        dst->import_origin = NULL;
         return st;
     }
 
@@ -9299,7 +9294,6 @@ StoreStatus store_import(Store *dst, const char *src_path, const char *now, cons
     if (st != STORE_OK) {
         (void)sqlite3_close(src);
         g_import_origin = NULL;
-        dst->import_origin = NULL;
         return st;
     }
 
@@ -9351,7 +9345,6 @@ StoreStatus store_import(Store *dst, const char *src_path, const char *now, cons
     }
     (void)sqlite3_close(src);
     g_import_origin = NULL;
-    dst->import_origin = NULL;
     return STORE_OK;
 
 fail:
@@ -9362,7 +9355,6 @@ fail:
     (void)sqlite3_close(src);
     store_import_result_free(out_counts);
     g_import_origin = NULL;
-    dst->import_origin = NULL;
     return st;
 }
 
@@ -9849,7 +9841,7 @@ static StoreStatus import_doc_one_link(Store *dst, const ImportLink *link, const
     }
     /* A live file link over a local tombstone: revive it (add wins). */
     st = touch_edge(dst->db, (StoreEdge){.from_id = stored_from, .to_id = stored_to}, kind,
-                    updated_at, dst->device_id, link->deleted_at, &dst->last);
+                    updated_at, dst->device_id, NULL, &dst->last);
     if (st == STORE_OK) {
         st = note_link_ends(dst, from_e.id, to_e.id, k_import_actor, updated_at);
     }
@@ -9892,11 +9884,9 @@ StoreStatus store_import_doc(Store *dst, const ImportDoc *doc, const char *now, 
     }
     memset(&dst->last, 0, sizeof(dst->last));
     g_import_origin = origin;
-    dst->import_origin = origin;
     st = begin_write(dst);
     if (st != STORE_OK) {
         g_import_origin = NULL;
-        dst->import_origin = NULL;
         return st;
     }
     st = brain_entry_count(dst->db, &nentries, &dst->last);
@@ -9936,14 +9926,12 @@ StoreStatus store_import_doc(Store *dst, const ImportDoc *doc, const char *now, 
         goto fail;
     }
     g_import_origin = NULL;
-    dst->import_origin = NULL;
     return STORE_OK;
 
 fail:
     rollback_quiet(dst->db);
     store_import_result_free(out);
     g_import_origin = NULL;
-    dst->import_origin = NULL;
     return st;
 }
 
@@ -11845,46 +11833,6 @@ static StoreStatus e12_effective_json(sqlite3 *src, char **out, StoreError *serr
     return STORE_OK;
 }
 
-/* One brain prefixes write for --from-db (E12 human stamp or a v6 ST-8.6 win). */
-static StoreStatus write_imported_prefix_row(Store *dst, const char *json, const char *actor,
-                                             const char *at, const char *device_id,
-                                             const char *vector, const char *deleted_at,
-                                             const char *old_value)
-{
-    enum { BINDS = 7 };
-    static const char sql[] =
-        "INSERT INTO settings (key, value, updated_by, updated_at, device_id, version_vector, "
-        "deleted_at, change_seq) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, (SELECT change_seq FROM "
-        "brain_meta)) ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_by = "
-        "excluded.updated_by, updated_at = excluded.updated_at, device_id = excluded.device_id, "
-        "version_vector = excluded.version_vector, deleted_at = excluded.deleted_at, change_seq = "
-        "excluded.change_seq;";
-    const char *binds[BINDS];
-    char err_unused[1];
-    const char *new_value = deleted_at != NULL ? NULL : json;
-
-    if (exec_sql(dst->db, "UPDATE brain_meta SET change_seq = change_seq + 1;", err_unused, 0U,
-                 &dst->last) != 0) {
-        return STORE_ERR_SQLITE;
-    }
-    binds[0] = k_prefixes_key;
-    binds[1] = json != NULL ? json : "[]";
-    binds[2] = actor;
-    binds[3] = at;
-    binds[4] = device_id;
-    binds[5] = vector;
-    binds[6] = deleted_at;
-    if (exec_bound(dst->db, sql, binds, BINDS, err_unused, 0U, &dst->last) != 0) {
-        return STORE_ERR_SQLITE;
-    }
-    if (insert_setting_history(dst->db, k_prefixes_key, old_value, new_value, actor, at, err_unused,
-                               0U, &dst->last) != 0 ||
-        trim_setting_history(dst->db, k_prefixes_key, err_unused, 0U, &dst->last) != 0) {
-        return STORE_ERR_SQLITE;
-    }
-    return STORE_OK;
-}
-
 static StoreStatus import_e12_prefixes(Store *dst, sqlite3 *src, const char *now)
 {
     char *json = NULL;
@@ -11907,8 +11855,25 @@ static StoreStatus import_e12_prefixes(Store *dst, sqlite3 *src, const char *now
         free(json);
         return STORE_OK;
     }
+    /* The plan 19 migration actor; the row is new, so its history has no old value. */
     (void)snprintf(vv, sizeof(vv), "{\"%s\":1}", dst->device_id);
-    st = write_imported_prefix_row(dst, json, k_human_actor, now, dst->device_id, vv, NULL, NULL);
+    {
+        const char *binds[] = {k_prefixes_key, json, k_human_actor, now, dst->device_id, vv};
+        char err_unused[1];
+
+        if (exec_sql(dst->db, "UPDATE brain_meta SET change_seq = change_seq + 1;", err_unused,
+                     0U, &dst->last) != 0 ||
+            exec_bound(dst->db,
+                       "INSERT INTO settings (key, value, updated_by, updated_at, device_id, "
+                       "version_vector, deleted_at, change_seq) VALUES (?1, ?2, ?3, ?4, ?5, ?6, "
+                       "NULL, (SELECT change_seq FROM brain_meta));",
+                       binds, 6, err_unused, 0U, &dst->last) != 0 ||
+            insert_setting_history(dst->db, k_prefixes_key, NULL, json, k_human_actor, now,
+                                   err_unused, 0U, &dst->last) != 0 ||
+            trim_setting_history(dst->db, k_prefixes_key, err_unused, 0U, &dst->last) != 0) {
+            st = STORE_ERR_SQLITE;
+        }
+    }
     free(json);
     return st;
 }

@@ -47,6 +47,50 @@ static int import_write(bool json, const StoreImportResult *r)
     return 0;
 }
 
+typedef struct {
+    const char *flag;
+    const char **slot;
+} ImportSource;
+
+/* When arg is one of the --from-* flags, take its path into that slot and
+   return true; *rc is REMEMBER_ERR after a usage error (P7: a repeat is one). */
+static bool import_take_source(const char *arg, int *i, int argc, const char **argv,
+                               const ImportSource *sources, size_t n, int *rc)
+{
+    size_t k = 0;
+
+    for (k = 0; k < n; k++) {
+        if (strcmp(arg, sources[k].flag) == 0) {
+            TakeValue taken = take_value(i, argc, argv, NULL);
+
+            *rc = REMEMBER_ERR;
+            if (taken.rc != 0) {
+                err_fmt(DIAG_USAGE, "%s requires a path", arg);
+            } else if (*sources[k].slot != NULL) {
+                err_fmt(DIAG_USAGE, "duplicate %s", arg);
+            } else {
+                *sources[k].slot = taken.value;
+                *rc = 0;
+            }
+            return true;
+        }
+    }
+    return false;
+}
+
+/* The settings skip warnings, then the reply; frees the result. */
+static int import_reply(bool json, StoreImportResult *result)
+{
+    int rc = import_write(json, result);
+
+    store_import_result_free(result);
+    if (rc != 0) {
+        err_msg(DIAG_INTERNAL, "failed to write output");
+        return REMEMBER_ERR;
+    }
+    return REMEMBER_OK;
+}
+
 static int import_report_parse(const ImportDoc *doc)
 {
     const char *msg = (doc->parse_message != NULL) ? doc->parse_message : "isn't a remember export.";
@@ -134,13 +178,7 @@ static int import_from_json(Store *s, bool json, const char *path, const char *o
     if (st != STORE_OK) {
         return store_status_to_exit(s, st);
     }
-    rc = import_write(json, &result);
-    store_import_result_free(&result);
-    if (rc != 0) {
-        err_msg(DIAG_INTERNAL, "failed to write output");
-        return REMEMBER_ERR;
-    }
-    return REMEMBER_OK;
+    return import_reply(json, &result);
 }
 
 int cmd_import(Store *s, bool json, int rest_argc, const char **rest_argv)
@@ -151,10 +189,14 @@ int cmd_import(Store *s, bool json, int rest_argc, const char **rest_argv)
     const char *from_csv = NULL;
     const char *origin_flag = NULL;
     const char *origin = NULL;
+    ImportSource sources[] = {{"--from-db", &from_db},
+                              {"--from-json", &from_json},
+                              {"--from-md", &from_md},
+                              {"--from-csv", &from_csv}};
+    int taken_rc = 0;
     int n_sources = 0;
     char now[ISO_TS_BUFSIZE];
     StoreImportResult result;
-    int rc = 0;
     StoreStatus st = STORE_OK;
     int i = 0;
 
@@ -179,56 +221,11 @@ int cmd_import(Store *s, bool json, int rest_argc, const char **rest_argv)
             origin_flag = taken.value;
             continue;
         }
-        if (arg != NULL && strcmp(arg, "--from-db") == 0) {
-            TakeValue taken = take_value(&i, rest_argc, rest_argv, "--from-db requires a path");
-            if (taken.rc != 0) {
-                err_msg(DIAG_USAGE, taken.err);
+        if (arg != NULL && import_take_source(arg, &i, rest_argc, rest_argv, sources,
+                                              sizeof sources / sizeof sources[0], &taken_rc)) {
+            if (taken_rc != 0) {
                 return REMEMBER_ERR;
             }
-            if (from_db != NULL) {
-                err_msg(DIAG_USAGE, "duplicate --from-db");
-                return REMEMBER_ERR;
-            }
-            from_db = taken.value;
-            continue;
-        }
-        if (arg != NULL && strcmp(arg, "--from-json") == 0) {
-            TakeValue taken = take_value(&i, rest_argc, rest_argv, "--from-json requires a path");
-            if (taken.rc != 0) {
-                err_msg(DIAG_USAGE, taken.err);
-                return REMEMBER_ERR;
-            }
-            if (from_json != NULL) {
-                err_msg(DIAG_USAGE, "duplicate --from-json");
-                return REMEMBER_ERR;
-            }
-            from_json = taken.value;
-            continue;
-        }
-        if (arg != NULL && strcmp(arg, "--from-md") == 0) {
-            TakeValue taken = take_value(&i, rest_argc, rest_argv, "--from-md requires a path");
-            if (taken.rc != 0) {
-                err_msg(DIAG_USAGE, taken.err);
-                return REMEMBER_ERR;
-            }
-            if (from_md != NULL) {
-                err_msg(DIAG_USAGE, "duplicate --from-md");
-                return REMEMBER_ERR;
-            }
-            from_md = taken.value;
-            continue;
-        }
-        if (arg != NULL && strcmp(arg, "--from-csv") == 0) {
-            TakeValue taken = take_value(&i, rest_argc, rest_argv, "--from-csv requires a path");
-            if (taken.rc != 0) {
-                err_msg(DIAG_USAGE, taken.err);
-                return REMEMBER_ERR;
-            }
-            if (from_csv != NULL) {
-                err_msg(DIAG_USAGE, "duplicate --from-csv");
-                return REMEMBER_ERR;
-            }
-            from_csv = taken.value;
             continue;
         }
         if (arg != NULL && cmd_is_hooks_flag(arg)) {
@@ -241,8 +238,9 @@ int cmd_import(Store *s, bool json, int rest_argc, const char **rest_argv)
         err_msg(DIAG_USAGE, "import takes no positional arguments");
         return REMEMBER_ERR;
     }
-    n_sources = (from_db != NULL ? 1 : 0) + (from_json != NULL ? 1 : 0) + (from_md != NULL ? 1 : 0) +
-                (from_csv != NULL ? 1 : 0);
+    for (i = 0; i < (int)(sizeof sources / sizeof sources[0]); i++) {
+        n_sources += (*sources[i].slot != NULL) ? 1 : 0;
+    }
     if (n_sources != 1) {
         err_msg(DIAG_USAGE,
                 "import requires exactly one of --from-json, --from-md, --from-csv, --from-db");
@@ -272,13 +270,7 @@ int cmd_import(Store *s, bool json, int rest_argc, const char **rest_argv)
     if (st != STORE_OK) {
         return store_status_to_exit(s, st);
     }
-    rc = import_write(json, &result);
-    store_import_result_free(&result);
-    if (rc != 0) {
-        err_msg(DIAG_INTERNAL, "failed to write output");
-        return REMEMBER_ERR;
-    }
-    return REMEMBER_OK;
+    return import_reply(json, &result);
 }
 
 int cmd_conflicts(Store *s, bool json, int rest_argc, const char **rest_argv)
