@@ -991,7 +991,6 @@ TEST(export_out_is_never_the_brain)
     char *before = NULL;
     char *after = NULL;
     size_t len = 0U;
-    size_t i = 0;
 
     (void)snprintf(wal, sizeof wal, "%s-wal", g.db);
     (void)snprintf(hard, sizeof hard, "%s/hard.db", g.dir);
@@ -1006,6 +1005,7 @@ TEST(export_out_is_never_the_brain)
             {"json", g.db, g.db}, {"csv", wal, wal},      {"md", g.db, g.db},
             {"json", hard, hard}, {"csv", csv, manifest},
         };
+        size_t i = 0;
 
         for (i = 0; i < sizeof cases / sizeof cases[0]; i++) {
             const char *args[] = {"export", "--format",   cases[i].format,
