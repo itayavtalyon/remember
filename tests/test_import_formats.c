@@ -1369,6 +1369,30 @@ TEST(import_json_bad_link_without_from)
     then_one_bad_link("{\"to\":\"" ID4 "\",\"kind\":\"cites\"}");
 }
 
+/* A link that is not an object, or a member of the wrong JSON type. */
+TEST(import_json_bad_link_of_the_wrong_type)
+{
+    then_one_bad_link("5");
+    then_one_bad_link("{\"from\":3,\"to\":\"" ID4 "\",\"kind\":\"cites\"}");
+    then_one_bad_link("{\"from\":\"" ID3 "\",\"to\":\"" ID4 "\",\"kind\":true}");
+}
+
+/* A timestamp of the wrong JSON type is a bad link, not a link stamped now. */
+TEST(import_json_bad_link_timestamp_of_the_wrong_type)
+{
+    char *dst = open_empty_brain();
+    CmdResult r = import_text(dst, "-link.json",
+                              EXPORT_HEAD "\"entries\":[" ONE_ENTRY(ID3, "A", "{}") "," ONE_ENTRY(
+                                  ID4, "B", "{}") "],\"links\":[{\"from\":\"" ID3 "\",\"to\":\"" ID4
+                                                  "\",\"kind\":\"cites\",\"created_at\":5}]}");
+
+    ASSERT_EQ_INT(r.exit_code, 0);
+    ASSERT_STR_CONTAINS(r.out, "\"skipped\":1");
+    ASSERT_STR_CONTAINS(r.out, "\"message\":\"invalid timestamp\"");
+    cmd_result_free(&r);
+    free(dst);
+}
+
 TEST(import_json_bad_link_without_kind)
 {
     then_one_bad_link("{\"from\":\"" ID3 "\",\"to\":\"" ID4 "\"}");
@@ -1913,6 +1937,8 @@ void register_import_formats_tests(void)
     RUN_TEST(import_json_uppercase_id_is_stored_lowercase);
     RUN_TEST(import_json_bad_record_names_the_line_of_its_brace);
     RUN_TEST(import_json_bad_link_without_from);
+    RUN_TEST(import_json_bad_link_of_the_wrong_type);
+    RUN_TEST(import_json_bad_link_timestamp_of_the_wrong_type);
     RUN_TEST(import_json_bad_link_without_kind);
     RUN_TEST(import_json_bad_link_unknown_kind);
     RUN_TEST(import_json_bad_link_missing_target);
