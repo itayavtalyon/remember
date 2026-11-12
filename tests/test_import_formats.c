@@ -1786,6 +1786,28 @@ TEST(import_json_normalizes_key_and_tags_like_add)
     free(dst);
 }
 
+/* A source that cannot be read names the path and the OS reason (import_parse). */
+TEST(import_json_missing_file_names_the_path)
+{
+    char *dst = open_empty_brain();
+    char *src = harness_side_path(dst, "-missing.json");
+    char want[PATH_BUF + 128];
+    CmdResult r;
+    const char *args[] = {"import", "--from-json", src};
+
+    r = run_remember(dst, args, 3, NULL);
+    (void)snprintf(want, sizeof want,
+                   "remember: can't read \"%s\": No such file or directory. Check the import "
+                   "source, then try again.\n",
+                   src);
+    ASSERT_EQ_INT(r.exit_code, 1);
+    ASSERT_STREQ(r.err, want);
+    cmd_result_free(&r);
+    then_query(dst, "SELECT COUNT(*) FROM entries;", "0");
+    free(src);
+    free(dst);
+}
+
 void register_import_formats_tests(void)
 {
     RUN_TEST(import_json_inserts_a_keyed_memory_into_an_empty_brain);
@@ -1840,6 +1862,7 @@ void register_import_formats_tests(void)
     RUN_TEST(import_rejects_each_source_flag_without_a_path);
     RUN_TEST(import_rejects_two_different_source_flags);
     RUN_TEST(import_rejects_a_repeated_origin);
+    RUN_TEST(import_json_missing_file_names_the_path);
     RUN_TEST(import_json_round_trip_keeps_memories_and_links);
     RUN_TEST(import_json_sync_id_member_is_not_an_id);
     RUN_TEST(import_json_duplicate_id_keeps_the_first_copy);
