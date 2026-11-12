@@ -20,7 +20,7 @@ How we keep C code safe: compile hard, analyze statically, run sanitizers, detec
 | clang-tidy at the CI pin (LLVM 22) | **required** (an older one fails lint) | clang-tidy 18 | LLVM 22 |
 | no `system()`/`popen()` outside `tests/harness.c`; `mkdtemp` callers include `<unistd.h>` | `scripts/lint-all.sh` | required | required |
 | macOS `leaks(1)` on **`remember_plain`** | `cmake --build build --target leaks-macos` | n/a | **required** |
-| **CodeQL** (Code Scanning) | `scripts/codeql-local.sh` (same suite, fails at the ruleset thresholds) | `.github/workflows/codeql.yml` | n/a |
+| **CodeQL** (Code Scanning) | `scripts/codeql-local.sh` in the pre-push hook (`security-extended`, any alert fails) | `.github/workflows/codeql.yml` | n/a |
 | Valgrind | **not used** | **not used** | **not used** |
 
 **Vendor includes for IWYU/cppcheck:** tools that scan `src/*.c` must be told about every `third_party/<lib>` header directory that project code includes (not only via CMake `PUBLIC` link lines). When vendoring a new library, update `IWYU_VENDOR_INCLUDES` / cppcheck `-I` in `scripts/lint-all.sh` in the same change as the CMake target. Full checklist: `docs/engineering-notes.md` → *Vendoring third-party C*.
@@ -45,9 +45,14 @@ How we keep C code safe: compile hard, analyze statically, run sanitizers, detec
 
 The sanitizers only see paths the tests run, and clang-tidy and scan-build lack
 CodeQL's pattern rules (a `strlen`-sized allocation, an `snprintf` return used as
-an offset), so CodeQL can block a PR the rest of the gate passed. Run
-`scripts/codeql-local.sh` before pushing a C change. It fails on what the `main`
-ruleset blocks: any error-level alert, or a security severity of high or above.
+an offset), so CodeQL can block a PR the rest of the gate passed. The pre-push
+hook runs `scripts/codeql-local.sh` on every push that touches code
+(`SKIP_CODEQL=1` skips it once). It is stricter than CI: the `security-extended`
+suite instead of the default one, and ANY alert fails, at every severity, unless
+`scripts/codeql-allow.tsv` lets it through. An allow entry names a rule, a path
+prefix and the input source, and gives a reason; add one only for a reviewed
+alert, and fix everything else. `third_party/` is built before tracing starts, so
+vendored code is not scanned.
 
 If merge is blocked with *“Waiting for Code Scanning results”*:
 
@@ -112,7 +117,7 @@ GATE=$(./scripts/read-gate-suites.sh)
 REMEMBER_SCAN_BUILD=0 ./scripts/lint-all.sh   # quick pass without the analyzer build
 cmake --build build --target analyze          # same idea via CMake
 cmake --build build --target leaks-macos      # macOS only
-./scripts/codeql-local.sh                     # CodeQL, as CI runs it; run last (heavy)
+./scripts/codeql-local.sh                     # CodeQL, stricter than CI; run last (heavy)
 ```
 
 ## Line coverage (src/*.c)

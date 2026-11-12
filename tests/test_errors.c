@@ -2949,7 +2949,7 @@ TEST(cli_readonly_directory_reports_read_only)
     }
     wrote = snprintf(dir, sizeof(dir), "%.*s", (int)(slash - db), db);
     ASSERT_TRUE(wrote > 0 && (size_t)wrote < sizeof(dir));
-    ASSERT_EQ_INT(chmod(db, 0666), 0);
+    ASSERT_EQ_INT(chmod(db, 0600), 0);
     ASSERT_EQ_INT(chmod(dir, 0555), 0);
     r = run_remember(db, add, sizeof(add) / sizeof(add[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 1);
