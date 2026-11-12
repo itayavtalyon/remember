@@ -1,7 +1,8 @@
 # 28 — Release 0.3.0
 
 **Area:** the version constant, `README.md`, `skills/remember/SKILL.md`, and `scripts/remember-install-skill`.
-**Requires:** plans 25, 26, 27, and 27a merged, and every lower-numbered plan in the INDEX table that is still open merged. This plan is last. `27-v1-roadmap-round3.md` is a roadmap stub. It is not plan 27, and this plan does not wait for it.
+**Needs:** plans 22, 23, 25, 26, 27, 27a and 27b merged. No other plan. (The text "every lower-numbered plan … still open" is gone: Itay's rule of 2026-11-11 21:38.)
+**Blocked on:** nothing.
 
 ## Goal
 
@@ -9,14 +10,16 @@ The tree says `0.3.0`, and the skill and What's New use the approved sentences. 
 
 ## Source
 
-- `decision:main-version-label` (one version constant; the `-dev` suffix is dropped at release).
+- `decision:main-version-label` (one version constant), implemented by this plan with no `-dev` step (`decision:2026-11-11-no-dev-label`, P9 A).
+- `decision:2026-11-11-skill-settings-bullet` (P8 A).
+- `decision:2026-11-11-plugin-host-0-4-0` (P1 A): 0.3.0 has no plugin host; What's New names none of it.
 - `decision:release-0-3-0-scope`
 - `decision:2026-11-07-bg-rem-06-releases` (0.3.0 stops at this release train; wiki-links stay out).
 - `decision:2026-11-11-codex-skill-path`
 - `decision:min-reader-version` and `decision:g-20` (`min_reader_version` is already in the brain).
 - Sentences: [`COPY-PENDING.md`](COPY-PENDING.md) C-40 and C-41. Itay approved that file on 2026-10-25.
 - [`docs/RELEASING.md`](../docs/RELEASING.md). Itay tags. This plan does not.
-- Spec: `specs/release-0.3.0.md` (new).
+- Spec: `specs/RELEASE-0.3.0.md` (new; kept per P25 B, uppercase per P24 A). It lists what 0.3.0 contains, one line per plan 22, 23, 25, 26, 27, 27a and 27b, each with its spec file name.
 
 ## Out of scope
 
@@ -58,7 +61,7 @@ Do not add a second constant.
 - Writes record actors, not `source`. There is no `--source`.
 - `--trash` is the Trash (deleted memories). `--expired` is expired memories.
 - To empty the Trash, run `remember purge <locator>` once for each memory in it. There is no `purge-trash`.
-- Settings commands: see C-13. For scripts and agents, use `--json`, because human dates are local.
+- For scripts and agents, use `--json`, because human dates are local.
 
 - `scripts/remember-install-skill` adds `~/.codex/skills` when `~/.codex` is a directory. The installed file is `~/.codex/skills/remember/SKILL.md`.
 - The script uses the symlink mode and the copy mode it already uses for `~/.grok`, `~/.claude`, and `~/.cursor`. A missing `~/.codex` adds no Codex path.
@@ -80,7 +83,8 @@ Do not add a second constant.
 - [ ] `a fake home with only ~/.codex installs ~/.codex/skills/remember/SKILL.md` (`tests/test_install_skill.sh`).
 - [ ] `a fake home with no product directory prints the error line that names ~/.codex`.
 - [ ] `git tag --points-at HEAD` shows no tag created by this plan.
-- [ ] `specs/release-0.3.0.md` is written, and the decisions this plan built are `state:implemented`.
+- [ ] `the skill does not contain "see C-13"`.
+- [ ] `specs/RELEASE-0.3.0.md` is written, and the decisions this plan built are `state:implemented`.
 - [ ] The gate passes on the committed tree.
 
 ## Implementation Notes

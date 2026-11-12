@@ -1,7 +1,8 @@
 # 27 — Default brain path
 
 **Module:** `util_resolve_db_path` in `src/util.c`. The declaration stays in `src/util.h`.
-**Requires:** nothing above plan 19. Plans 25 and 26 do not require this plan.
+**Needs:** plan 19 (merged). No other plan.
+**Blocked on:** nothing.
 
 ## Goal
 
@@ -9,12 +10,13 @@ The engine reads `~/.remember/default-db` when `--db` and `REMEMBER_DB` do not c
 
 ## Source
 
-- `decision:ui-overhaul-grill-2026-10-12`, item 3 (the path order and the file rules).
-- Spec: `specs/default-db.md` (new).
+- `decision:ui-overhaul-grill-2026-10-12`, item 3 (the path order and the file rules). Its app half is amended by `decision:2026-11-11-mac-brain-path-no-agent` (no grant, no bookmark, no LaunchAgent); the engine half below is unchanged.
+- `decision:2026-11-11-default-db-home` (P4 A, G2 A): `default-db` and `remember.db` stay in `~/.remember` also when `XDG_DATA_HOME` is set. This plan reads `HOME` through the existing helper; plan 29 moves that read into the CLI's RememberEnv.
+- Spec: `specs/DEFAULT-DB.md` (new).
 
 ## Out of scope
 
-The app that writes the file, the LaunchAgent, and the Codex skill. The engine does not create `default-db`. A file that is not one UTF-8 line ending in a newline is not given a new rule here: the coder does not add a case the decision does not name.
+The app that writes the file (Mac plan M53) and the Codex skill (plan 28). There is no LaunchAgent. The engine does not create `default-db`. A file that is not one UTF-8 line ending in a newline is not given a new rule here: the coder does not add a case the decision does not name.
 
 ## Standards
 
@@ -50,7 +52,8 @@ A path taken from the file goes through the existing `copy_regular_db_path`. Do 
 - [ ] `an empty line uses ~/.remember/remember.db and the engine does not create default-db`.
 - [ ] `a relative line uses ~/.remember/remember.db and the engine does not create default-db`.
 - [ ] `a default-db value of :memory: fails the way --db :memory: fails`.
-- [ ] `specs/default-db.md` is written, and `decision:ui-overhaul-grill-2026-10-12` item 3 is cited from that spec. The decision stays `state:accepted` because this plan builds one item of it.
+- [ ] `a set XDG_DATA_HOME does not move default-db: the engine still reads ~/.remember/default-db`.
+- [ ] `specs/DEFAULT-DB.md` is written, and `decision:ui-overhaul-grill-2026-10-12` item 3 is cited from that spec. The decision stays `state:accepted` because this plan builds one item of it.
 - [ ] The gate passes on the committed tree, and the notes record the mutants and their red tests.
 
 ## Implementation Notes
