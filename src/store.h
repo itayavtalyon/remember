@@ -825,6 +825,42 @@ StoreStatus store_conflict_accept(Store *s, long long conflict_id, StoreConflict
  */
 StoreStatus store_repair_search_index(Store *s, size_t *out_entries);
 
+/* The bins one export writes, indexed by StoreBin (decision:plan22-export-bin-flags). */
+typedef struct {
+    bool in[STORE_BIN_DELETED + 1];
+} StoreExportBins;
+
+/* One live link of an export (006 E6.3): the stored ends, as memory ids. */
+typedef struct {
+    char *from;
+    char *to;
+    char *kind; /* related | supersedes | cites (the schema CHECK) */
+    char *created_at;
+    char *updated_at;
+} StoreExportLink;
+
+typedef struct {
+    char *brain_id;
+    int schema; /* PRAGMA user_version */
+    char pad_[4];
+    Entry *entries; /* the exported bins, by created_at then id */
+    size_t nentries;
+    size_t counts[STORE_BIN_DELETED + 1]; /* exported memories per bin */
+    StoreExportLink *links; /* live links with both ends exported, by from, to, kind */
+    size_t nlinks;
+    SettingExportRow *settings; /* brain rows, tombstones included, by key */
+    size_t nsettings;
+} StoreExportSnapshot;
+
+/*
+ * Everything one export writes, read in one transaction (plan 22). A memory's
+ * bin is store_bin_of at now. A link is exported when it is not tombstoned and
+ * both ends are exported. Release with store_export_snapshot_free.
+ */
+StoreStatus store_export_snapshot(Store *s, StoreExportBins bins, const char *now,
+                                  StoreExportSnapshot *out);
+void store_export_snapshot_free(StoreExportSnapshot *snap);
+
 /*
  * Test-only fault injection (compiled when REMEMBER_TEST_HOOKS is defined).
  * fail_after: number of successful allocs/prepares before the next fails;

@@ -137,6 +137,8 @@ Plain output is one block per key: the header with type, range and default, the 
 
 Prints the document `{format: "remember-settings-export", version: 1, exported_at, settings[]}` on stdout. Rows sort by key, brain before user on one key. A brain row carries `device_id`, the sorted `version_vector` and `deleted_at`, so a tombstone travels. A user row carries `device_id` `""` and `version_vector` `{}`. With `--json`, a success is the same document, not an envelope. A failure is the envelope. `--scope brain` works without `HOME`.
 
+`remember export` nests that document for the brain layer only, including tombstones. JSON always has the member. Markdown `settings.json` and the CSV file `<basename>.settings.json` are written only when the brain has rows (007 ST-8.3).
+
 ### import
 
 `remember settings import FILE [--dry-run] [--scope brain|user] [--hooks|--no-hooks]`. `decision:g-16`, `decision:plan20-import-brain-merge`, `decision:plan20-import-history-at`, `decision:plan20-import-quota`, `decision:plan20-import-bad-field`, `decision:plan20-import-unknown-key-draft`, `decision:plan20-import-parse-draft`, `decision:plan20-import-version-draft`, `decision:plan20-import-dry-run-draft`. 007 ST-8.2 to ST-8.7.

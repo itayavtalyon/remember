@@ -14,10 +14,6 @@
 #include <stdio.h>
 #include <stdlib.h>
 
-#ifndef REMEMBER_VERSION
-#define REMEMBER_VERSION "0.2.0"
-#endif
-
 /* The envelope when --json cannot get the memory to build one: type, then fix. */
 static const char k_out_of_memory_reply[] =
     "{\"format\":\"remember-message\",\"version\":1,\"type\":\"%s.result\",\"error\":{"
@@ -58,6 +54,7 @@ static void print_general_help(void)
         "  conflict    Resolve a merge conflict (accept)\n"
         "  device      Print the device id, or mint one with 'new'\n"
         "  brain       Replace the brain id\n"
+        "  export      Write the brain to a JSON, Markdown, or CSV file\n"
         "  settings    Show or change a setting\n"
         "  help        Show this help (help <command> for a command)\n"
         "  version     Show version\n"
@@ -331,6 +328,24 @@ static void print_command_help(CliCommand topic)
                            "{\"action\":\"rebuilt\",\"entries\":N}\n");
         (void)fprintf(out, "N is the number of rows in entries, in every bin.\n");
         (void)fprintf(out, "\n");
+    } else if (topic == CLI_CMD_EXPORT) {
+        (void)fprintf(out, "  remember export --format json|md|csv --out PATH [--force]\n");
+        (void)fprintf(out, "Options:\n");
+        (void)fprintf(out, "  --format FMT        json, md, or csv\n");
+        (void)fprintf(out, "  --out PATH          The file to write (a folder for md)\n");
+        (void)fprintf(out, "  --include-expired   Also export expired memories\n");
+        (void)fprintf(out, "  --include-trash     Also export memories in the Trash\n");
+        (void)fprintf(out, "  --exclude-archived  Accepted; no effect until archiving exists\n");
+        (void)fprintf(out,
+                      "  --force             Replace PATH when it exists (md: an export only)\n");
+        (void)fprintf(out, "\n");
+        (void)fprintf(out, "Live memories by default. A link is exported when both ends are.\n");
+        (void)fprintf(out, "csv also writes <name>.manifest.json beside the file.\n");
+        (void)fprintf(out, "A missing brain fails with cannot_open. Export creates nothing.\n");
+        (void)fprintf(out, "Human stdout: exported N memories, M links to PATH\n");
+        (void)fprintf(out, "JSON: type memory.export.result, data {\"action\":\"exported\","
+                           "\"format\":F,\"path\":P,\"count\":N,\"links\":M}\n");
+        (void)fprintf(out, "\n");
     } else if (topic == CLI_CMD_DEVICE) {
         (void)fprintf(out, "Prints the sidecar device id.\n");
         (void)fprintf(out, "  remember device\n");
@@ -479,8 +494,9 @@ static Store *open_store(const CliArgs *args, int *out_rc)
         opts.busy_timeout_ms = args->globals.busy_timeout_ms;
     }
     opts.no_create = args->globals.no_create;
-    /* Repair never creates a brain (decision:plan16-repair-no-create). */
-    if (args->command == CLI_CMD_REPAIR) {
+    /* Repair and export never create a brain (decision:plan16-repair-no-create,
+       decision:plan22-export-no-create). */
+    if (args->command == CLI_CMD_REPAIR || args->command == CLI_CMD_EXPORT) {
         opts.no_create = true;
     }
     if (args->command == CLI_CMD_DEVICE && cmd_device_mints(args->rest_argc, args->rest_argv)) {
@@ -565,6 +581,11 @@ static int run(const CliArgs *args)
         return run_with_store(args, cmd_rekey);
     case CLI_CMD_IMPORT:
         return run_with_store(args, cmd_import);
+    case CLI_CMD_EXPORT:
+        if (cmd_export_reject_args(args->rest_argc, args->rest_argv) != 0) {
+            return REMEMBER_ERR;
+        }
+        return run_with_store(args, cmd_export);
     case CLI_CMD_CONFLICTS:
         return run_with_store(args, cmd_conflicts);
     case CLI_CMD_CONFLICT:
@@ -629,6 +650,8 @@ static const char *reply_noun_verb(const CliArgs *args)
         return "memory.rekey";
     case CLI_CMD_IMPORT:
         return "memory.import";
+    case CLI_CMD_EXPORT:
+        return "memory.export";
     case CLI_CMD_CONFLICTS:
         return "conflict.list";
     case CLI_CMD_CONFLICT:

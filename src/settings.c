@@ -30,7 +30,9 @@ enum {
     HELPER_ID_MAX = 40,
     DECIMAL_BASE = 10,
     KEY_MIN_SEGMENTS = 2,
-    KEY_MAX_SEGMENTS = 4
+    KEY_MAX_SEGMENTS = 4,
+    ASCII_UNIT = 0x20,
+    ASCII_DEL = 0x7F
 };
 
 static bool key_body_char(char c)
@@ -194,6 +196,31 @@ const SettingSpec *setting_registry(size_t *count)
         *count = sizeof(k_registry) / sizeof(k_registry[0]);
     }
     return k_registry;
+}
+
+/* cppcheck-suppress staticFunction ; public API (settings.h); used by tests */
+bool setting_quoted_plain(const char *text, char *inner, size_t inner_cap)
+{
+    size_t n = strlen(text);
+    size_t i = 0;
+
+    if (n < 2U || text[0] != '"' || text[n - 1U] != '"') {
+        return false;
+    }
+    if (n - 2U >= inner_cap) {
+        return false;
+    }
+    for (i = 1; i + 1U < n; i++) {
+        unsigned char c = (unsigned char)text[i];
+
+        if (c < (unsigned char)ASCII_UNIT || c == (unsigned char)ASCII_DEL || c == '"' ||
+            c == '\\') {
+            return false;
+        }
+    }
+    memcpy(inner, text + 1, n - 2U);
+    inner[n - 2U] = '\0';
+    return true;
 }
 
 /* cppcheck-suppress staticFunction ; public API (settings.h); used by tests */

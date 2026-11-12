@@ -17,6 +17,11 @@
    ("YYYY-MM-DDTHH:MM:SS.mmmZ", 24 bytes + NUL). Must be >= 25. */
 enum { ISO_TS_BUFSIZE = 32 };
 
+/* CMake sets the version; a bare compile (lint, analyzers) gets this one. */
+#ifndef REMEMBER_VERSION
+#define REMEMBER_VERSION "0.2.0"
+#endif
+
 /* After the parameter list, so clang-format 18 keeps a pointer return on one line. */
 #ifdef __GNUC__
 #define REMEMBER_PRINTF(fmt_at, args_at) __attribute__((format(printf, fmt_at, args_at)))

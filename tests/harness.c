@@ -730,6 +730,45 @@ char *harness_read_line(const char *path)
     return strdup(buf);
 }
 
+char *harness_read_file(const char *path, size_t *len)
+{
+    FILE *f = NULL;
+    char *buf = NULL;
+    size_t cap = 0U;
+    size_t n = 0U;
+
+    *len = 0U;
+    /* NOLINTNEXTLINE(android-cloexec-fopen) */
+    f = fopen(path, "rb");
+    if (f == NULL) {
+        return NULL;
+    }
+    for (;;) {
+        size_t got = 0U;
+
+        if (n + LINE_BUFSIZE + 1U > cap) {
+            char *grown = (char *)realloc(buf, (cap * 2U) + LINE_BUFSIZE + 1U);
+
+            if (grown == NULL) {
+                free(buf);
+                (void)fclose(f);
+                return NULL;
+            }
+            buf = grown;
+            cap = (cap * 2U) + LINE_BUFSIZE + 1U;
+        }
+        got = fread(buf + n, 1U, LINE_BUFSIZE, f);
+        n += got;
+        if (got < LINE_BUFSIZE) {
+            break;
+        }
+    }
+    (void)fclose(f);
+    buf[n] = '\0';
+    *len = n;
+    return buf;
+}
+
 char *dir_of_path(const char *file_path)
 {
     char *copy = NULL;

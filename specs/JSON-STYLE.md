@@ -128,7 +128,7 @@ Each rule states the rule, says why, and gives a correct example (✓) and a wro
 | `get` / `GET /v1/memories/{id}` / `remember_get` | `memory.get.result` |
 | `list` / `GET /v1/memories` / `remember_list` | `memory.list.result` |
 | `search` / `GET /v1/memories/search` / `remember_search` | `memory.search.result` |
-| `update`, `delete`, `purge`, `rekey`, `link`, `unlink`, `related`, `import` | `memory.<verb>.result` |
+| `update`, `delete`, `purge`, `rekey`, `link`, `unlink`, `related`, `import`, `export` | `memory.<verb>.result` |
 | `tags`, `conflicts`, `conflict accept` | `tag.list.result`, `conflict.list.result`, `conflict.accept.result` |
 | `settings list\|get\|set\|reset\|explain\|history\|import` | `setting.<verb>.result` |
 | `plugin add\|list\|show\|trust\|enable\|disable\|remove\|reindex\|rerun\|status\|log\|test` | `plugin.<verb>.result` |
@@ -140,7 +140,7 @@ Each rule states the rule, says why, and gives a correct example (✓) and a wro
 | `dispatch`, `sweep [--all]` | `dispatch.result`, `sweep.result` |
 
 - A multi-word verb uses `_` in the type (`brain.new_id.result`), following §1.1a.
-- `export` and `settings export` print a document, not a message (§1.7b), so they have no reply type.
+- `export` writes its document to `--out` (§1.7b) and replies `memory.export.result` with what it wrote (`decision:plan22-export-reply-type`, 2026-11-09). `settings export` prints a document, not a message, so it has no reply type.
 
 `request_id`:
 - The envelope has no `id` (JE-2.2). Domain ids live in `data` (`data.memory.id`, `data.entries[].id`, `data.event_id`, `data.backfill_id`).
@@ -156,7 +156,7 @@ A stored file is a plain document `{format, version, …content}`. It has no `ty
 
 | `format` | File |
 |---|---|
-| `remember-export` | `remember export` output (007 ST-8.3) |
+| `remember-export` | `remember export` output (007 ST-8.3), and the `<CSV basename>.manifest.json` beside a CSV export: the header members `format` to `bins`, no entries (`decision:plan22-export-bins-header`) |
 | `remember-settings-export` | `remember settings export` output (007 ST-8.1) |
 | `remember-plugin` | `plugin.json` (PP §2) |
 | `remember-plugin-trust` | `<data dir>/plugins/trust.json` (010 H-9.2) |
@@ -340,7 +340,7 @@ Event (hook stdin, plugin socket, webhook):
 | Plugin message | socket, plugin and hook stdin, the `ready` line, Cloud webhooks | `E(<PP §1.2 type>)` + `request_id?` (§1.7a), `data` \| `error`, `warnings?`; never `next_cursor` or `has_more` (PP R1.12). The type list is PP §1.2. |
 | Event message | `type: "event"` (hooks, plugin actions, webhooks) | `E(event)` + `data{event_id, event_type, occurred_at, detected_at, batch_id, cause{command, origin, hook, run_id, depth, chain[]}, brain{}, memory{}, changes, truncated, truncated_fields[], limits{}, plugin{}, entry, data_dir, settings[]}` (PP §3). The actor is `memory.updated_by` (R3.5a). Six event types; a link change is `memory.updated` with `changes.link` (S-10). `data` is at most 256 KiB. |
 | Settings export | `remember settings export` (document) | `{format:"remember-settings-export", version, exported_at, settings:[{key, scope, value, value_ms?\|value_bytes?, updated_by, updated_at, device_id, version_vector, deleted_at}]}` (007 ST-8.1–8.2) |
-| Brain export | `remember export` (document) | `{format:"remember-export", version, …}`: entries (no `local_id`), brain settings rows in the ST-8.2 shape, and tombstones (007 ST-8.3) |
+| Brain export | `remember export` (document) | `{format:"remember-export", version, brain_id, exported_at, engine, schema, bins{live?, expired?, deleted?}, entries[], links[], settings}`: entries (no `local_id`) in the exported bins and links with both ends exported. `settings` is a nested `remember-settings-export` document: brain rows and tombstones only, or an empty list when the brain has no rows (007 ST-8.3). Markdown `settings.json` and CSV `<basename>.settings.json` are written only when rows exist. `bins` holds a count per exported bin (`decision:plan22-export-bins-header`). A CSV cell that starts with `=`, `+`, `-`, `@`, TAB, CR or `'` gets one leading `'`, and import strips one leading `'` from a cell, so the round trip is exact (`decision:plan22-export-csv-formula-escape`, `decision:plan23-import-csv-formula-unescape`). No `--out` may be the brain or its `-wal`, `-shm` or `-journal` file (`decision:plan22-export-out-not-brain`). Markdown `--force` replaces only an earlier export folder (`decision:plan22-export-md-force-only-export`). |
 | Plugin manifest | `plugin.json` (document) | `{format:"remember-plugin", version, name, plugin_version, protocol, description?, data_version?, idle_timeout?, backfill?{enabled, max_batch_entries?, max_batch_size?}, actions[]{name, events[], filter?{tags, created_by, updated_by, bins, not_caused_by, origins}, run, permissions}, filters[]{name, point, priority?, budget?, cold_start_grace?, run, permissions}, settings[]{key, description, type, default, range?, scope}}`. Names follow §1.1a. `budget` (default `800ms`), `cold_start_grace` (default `10s`) and `priority` (default 500) come **from the manifest only**: no user setting overrides them, and a budget or grace above 30 s is invalid. `cold_start_grace` must be at least 1 ms, so `0ms` is invalid (M-24 A). A budget larger than the time left in the chain cap is clipped silently, with no warning (M-22 A) (S-06, PP R2.11, R2.13, R9.1–R9.3). The only generated setting is `plugin.<name>.enabled`, and a declared setting key `enabled` is invalid. An unknown field in `run`, `permissions` or `filter` is an error (§1.13). |
 | Brain list | `brains.json` (document) | `remember-brains` (010 H-2.1) |
 | Run log | `<brain>.d/hooks.log` line (file record) | `{version, run_id, hook, event_id, request_id, event_type, memory_id, started_at, ended_at, duration_ms, result, exit_code, signal, depth, test, truncated_payload, output, message}` (010 H-15.3); the `--follow --json` stream wraps each record as `E(plugin.run)` |

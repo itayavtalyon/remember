@@ -724,6 +724,73 @@ TEST(facade_repair_matches_cli)
     free(db);
 }
 
+/* Export each file through the CLI, then through remember_run, to the same
+   paths: stdout matches exactly, and each file matches with exported_at masked
+   (plan 22). files[0] is --out. */
+// NOLINTNEXTLINE(bugprone-easily-swappable-parameters) db, then the format
+static void assert_export_parity(const char *db, const char *format, const char *const *files,
+                                 size_t nfiles)
+{
+    const char *cmd[] = {"export", "--format", format, "--out", files[0], "--include-trash"};
+    char *cli[2] = {NULL, NULL};
+    CmdResult sub = run_remember(db, cmd, sizeof(cmd) / sizeof(cmd[0]), NULL);
+    char *fout = NULL;
+    char *ferr = NULL;
+    size_t len = 0U;
+    size_t i = 0;
+    int frc = 0;
+
+    ASSERT_EQ_INT(sub.exit_code, 0);
+    for (i = 0; i < nfiles; i++) {
+        cli[i] = harness_read_file(files[i], &len);
+        ASSERT_TRUE(cli[i] != NULL);
+        (void)remove(files[i]);
+    }
+    frc = facade_run(db, cmd, sizeof(cmd) / sizeof(cmd[0]),
+                     (FacadeCapture){.out = &fout, .err = &ferr});
+    ASSERT_EQ_INT(frc, sub.exit_code);
+    ASSERT_STREQ(fout, sub.out);
+    ASSERT_STREQ(ferr, sub.err);
+    for (i = 0; i < nfiles; i++) {
+        char *in_process = harness_read_file(files[i], &len);
+
+        mask_field(cli[i], "\"exported_at\":\"");
+        mask_field(in_process, "\"exported_at\":\"");
+        ASSERT_STREQ(in_process, cli[i]);
+        free(in_process);
+        free(cli[i]);
+        (void)remove(files[i]);
+    }
+    free(fout);
+    free(ferr);
+    cmd_result_free(&sub);
+}
+
+TEST(facade_export_matches_cli)
+{
+    char *db = make_temp_db_path();
+    char *json = harness_side_path(db, ".export.json");
+    char *csv = harness_side_path(db, ".export.csv");
+    char *manifest = harness_side_path(db, ".export.manifest.json");
+    const char *help[] = {"help", "export"};
+
+    ASSERT_TRUE(db != NULL);
+    seed_three_linked(db);
+    {
+        const char *files[] = {json};
+        assert_export_parity(db, "json", files, 1);
+    }
+    {
+        const char *files[] = {csv, manifest};
+        assert_export_parity(db, "csv", files, 2);
+    }
+    assert_read_parity(db, help, sizeof(help) / sizeof(help[0]));
+    free(json);
+    free(csv);
+    free(manifest);
+    free(db);
+}
+
 TEST(facade_device_matches_cli)
 {
     char *db = make_temp_db_path();
@@ -922,6 +989,7 @@ void register_facade_tests(void)
     RUN_TEST(facade_conflicts_matches_cli);
     RUN_TEST(facade_conflict_accept_matches_cli);
     RUN_TEST(facade_repair_matches_cli);
+    RUN_TEST(facade_export_matches_cli);
     RUN_TEST(facade_device_matches_cli);
     RUN_TEST(facade_device_new_matches_cli);
     RUN_TEST(facade_brain_new_id_matches_cli);

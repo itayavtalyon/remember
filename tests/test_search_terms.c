@@ -841,6 +841,64 @@ TEST(search_label_reports_a_failed_grapheme_step)
     ASSERT_TRUE(out == NULL);
 }
 
+/* ---- title span and plain text (plan 22 slug) ---------------------------- */
+
+TEST(search_title_span_finds_the_trimmed_first_line)
+{
+    size_t start = 0;
+    size_t end = 0;
+
+    ASSERT_TRUE(search_title_span("#  Hi there \nnext", &start, &end));
+    ASSERT_EQ_INT((int)start, 3);
+    ASSERT_EQ_INT((int)end, 11);
+    ASSERT_TRUE(search_title_span("# Whole", &start, &end));
+    ASSERT_EQ_INT((int)end, 7);
+    ASSERT_FALSE(search_title_span("#   \nx", &start, &end));
+    ASSERT_FALSE(search_title_span("#No space", &start, &end));
+}
+
+/* A value search_words_end never writes on these inputs. */
+enum { UNSET_END = 99 };
+
+typedef struct {
+    const char *body;
+    size_t nwords;
+    size_t end;
+} WordsCase;
+
+/* Words split on White_Space or Cc runs; leading gaps are skipped. */
+TEST(search_words_end_stops_after_n_words)
+{
+    static const WordsCase cases[] = {
+        {"one two three", 2, 7},
+        {"  a\t\x01"
+         "b c",
+         2, 6},
+        {"a\xc2\xa0"
+         "b c",
+         2, 4}, /* U+00A0 is White_Space */
+        {"one two", 6, 7},
+        {"", 6, 0},
+        {"   ", 1, 3},
+    };
+    size_t i = 0;
+
+    for (i = 0; i < sizeof cases / sizeof cases[0]; i++) {
+        size_t end = UNSET_END;
+
+        ASSERT_EQ_INT(search_words_end(cases[i].body, cases[i].nwords, &end), SEARCH_OK);
+        ASSERT_EQ_INT((int)end, (int)cases[i].end);
+    }
+}
+
+TEST(search_words_end_rejects_invalid_utf8)
+{
+    size_t end = UNSET_END;
+
+    ASSERT_EQ_INT(search_words_end("ok \xff", 6, &end), SEARCH_ERR_INVALID_UTF8);
+    ASSERT_EQ_INT((int)end, UNSET_END);
+}
+
 void register_search_terms_tests(void)
 {
     RUN_TEST(search_tokens_split_on_ascii_punctuation_and_space);
@@ -928,4 +986,7 @@ void register_search_terms_tests(void)
     RUN_TEST(search_tier_reports_a_failed_decode_in_the_in_order_search);
     RUN_TEST(search_label_reports_a_failed_grapheme_open);
     RUN_TEST(search_label_reports_a_failed_grapheme_step);
+    RUN_TEST(search_title_span_finds_the_trimmed_first_line);
+    RUN_TEST(search_words_end_stops_after_n_words);
+    RUN_TEST(search_words_end_rejects_invalid_utf8);
 }

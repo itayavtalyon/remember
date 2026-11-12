@@ -115,22 +115,30 @@ static const char *const BIN_TOKENS[] = {
     [STORE_BIN_DELETED] = "deleted",
 };
 
-static int write_json_tags(FILE *out, const char *const *tags, size_t ntags)
+int output_json_string_array(FILE *out, const char *const *items, size_t n)
 {
     size_t i = 0;
 
-    if (fputs(",\"tags\":[", out) < 0) {
+    if (fputc('[', out) == EOF) {
         return -1;
     }
-    for (i = 0; i < ntags; i++) {
+    for (i = 0; i < n; i++) {
         if (i > 0U && fputc(',', out) == EOF) {
             return -1;
         }
-        if (output_json_string(out, tags[i]) != 0) {
+        if (output_json_string(out, items[i]) != 0) {
             return -1;
         }
     }
-    return fputs("]", out) < 0 ? -1 : 0;
+    return fputc(']', out) == EOF ? -1 : 0;
+}
+
+static int write_json_tags(FILE *out, const char *const *tags, size_t ntags)
+{
+    if (fputs(",\"tags\":", out) < 0) {
+        return -1;
+    }
+    return output_json_string_array(out, tags, ntags);
 }
 
 static int write_json_raw_object(FILE *out, JsonField field)
@@ -153,7 +161,8 @@ static int actors_ok(const Entry *e)
     return 1;
 }
 
-static int write_entry_core(FILE *out, const Entry *e, const char *now)
+/* with_local_id is false for export files: they never carry it (JE-3.5). */
+static int write_entry_core(FILE *out, const Entry *e, const char *now, bool with_local_id)
 {
     const char *bin = NULL;
 
@@ -164,8 +173,10 @@ static int write_entry_core(FILE *out, const Entry *e, const char *now)
         return -1;
     }
     bin = BIN_TOKENS[store_bin_of(e->deleted_at, e->expires_at, now)];
-    if (fputs("{\"id\":", out) < 0 || output_json_string(out, e->sync_id) != 0 ||
-        fprintf(out, ",\"local_id\":%lld", e->id) < 0) {
+    if (fputs("{\"id\":", out) < 0 || output_json_string(out, e->sync_id) != 0) {
+        return -1;
+    }
+    if (with_local_id && fprintf(out, ",\"local_id\":%lld", e->id) < 0) {
         return -1;
     }
     if (write_json_nullable(out, "key", e->key) != 0) {
@@ -208,13 +219,21 @@ int output_entry_json(FILE *out, const Entry *e, const char *now)
     if (out == NULL || e == NULL) {
         return -1;
     }
-    if (write_entry_core(out, e, now) != 0) {
+    if (write_entry_core(out, e, now, true) != 0) {
         return -1;
     }
     if (fputc('}', out) == EOF) {
         return -1;
     }
     return 0;
+}
+
+int output_export_entry_json(FILE *out, const Entry *e, const char *now)
+{
+    if (out == NULL || e == NULL || write_entry_core(out, e, now, false) != 0) {
+        return -1;
+    }
+    return fputc('}', out) == EOF ? -1 : 0;
 }
 
 static int write_entry_with_links(FILE *out, const Entry *e, const StoreNeighbor *links,
@@ -893,7 +912,7 @@ static int write_links_json_field(FILE *out, long long subject_id, const StoreNe
 static int write_entry_with_links(FILE *out, const Entry *e, const StoreNeighbor *links,
                                   size_t nlinks, const char *now)
 {
-    if (write_entry_core(out, e, now) != 0) {
+    if (write_entry_core(out, e, now, true) != 0) {
         return -1;
     }
     if (write_links_json_field(out, e->id, links, nlinks, now) != 0) {
@@ -1230,6 +1249,17 @@ int output_import_data(FILE *out, const StoreImportResult *r)
         return -1;
     }
     return fputs(DATA_END, out) < 0 ? -1 : 0;
+}
+
+int output_export_data(FILE *out, const OutputExport *result)
+{
+    if (fputs("{\"action\":\"exported\",\"format\":", out) < 0 ||
+        output_json_string(out, result->format) != 0 || fputs(",\"path\":", out) < 0 ||
+        output_json_string(out, result->path) != 0 ||
+        fprintf(out, ",\"count\":%zu,\"links\":%zu}", result->count, result->links) < 0) {
+        return -1;
+    }
+    return 0;
 }
 
 int output_rebuilt(FILE *out, bool json, size_t entries)

@@ -5433,6 +5433,212 @@ static int replace_damaged_fts(sqlite3 *db, StoreError *serr)
     return exec_sql(db, k_fts_integrity_sql, err_unused, 0U, serr);
 }
 
+/* ---- export (plan 22) ---------------------------------------------------- */
+
+void store_export_snapshot_free(StoreExportSnapshot *snap)
+{
+    size_t i = 0;
+
+    if (snap == NULL) {
+        return;
+    }
+    free(snap->brain_id);
+    free_entry_rows(snap->entries, snap->nentries);
+    for (i = 0; i < snap->nlinks; i++) {
+        free(snap->links[i].from);
+        free(snap->links[i].to);
+        free(snap->links[i].kind);
+        free(snap->links[i].created_at);
+        free(snap->links[i].updated_at);
+    }
+    free(snap->links);
+    store_setting_export_free(snap->settings, snap->nsettings);
+    memset(snap, 0, sizeof(*snap));
+}
+
+/* The exported bins only. The bin is store_bin_of, the one definition. */
+static StoreStatus export_entries(sqlite3 *db, StoreExportBins bins, const char *now,
+                                  StoreExportSnapshot *out, StoreError *serr)
+{
+    sqlite3_stmt *sel = NULL;
+    size_t cap = 0U;
+    StoreStatus st = STORE_OK;
+    int rc = sqlite3_prepare_v2(db,
+                                "SELECT " K_ENTRY_COLS " FROM entries e "
+                                "ORDER BY e.created_at, e.id;",
+                                -1, &sel, NULL);
+
+    if (rc != SQLITE_OK) {
+        capture_sqlite_error(db, serr);
+        return STORE_ERR_SQLITE;
+    }
+    while ((rc = sqlite3_step(sel)) == SQLITE_ROW) {
+        const Entry *e = NULL;
+        StoreBin bin = STORE_BIN_LIVE;
+
+        st = list_append_row(db, sel, &out->entries, &out->nentries, &cap, serr);
+        if (st != STORE_OK) {
+            break;
+        }
+        e = &out->entries[out->nentries - 1U];
+        bin = store_bin_of(e->deleted_at, e->expires_at, now);
+        if (!bins.in[bin]) {
+            out->nentries--;
+            store_entry_free(&out->entries[out->nentries]);
+            continue;
+        }
+        out->counts[bin]++;
+    }
+    if (st == STORE_OK && rc != SQLITE_DONE) {
+        capture_sqlite_error(db, serr);
+        st = STORE_ERR_SQLITE;
+    }
+    (void)sqlite3_finalize(sel);
+    return st;
+}
+
+static SettingStatus export_layer(sqlite3 *db, SettingLayer layer, SettingExportRow **rows,
+                                  size_t *n, size_t *cap, char *err, size_t errlen);
+
+/* Brain settings rows, in the same read transaction as the memories. */
+static StoreStatus export_brain_settings(sqlite3 *db, StoreExportSnapshot *out, StoreError *serr)
+{
+    /* "out of memory" plus a short sqlite prefix. The caller only matches the first. */
+    enum { EXPORT_ERR_CAP = 32 };
+    size_t cap = 0U;
+    char err[EXPORT_ERR_CAP];
+    SettingStatus st = SETTING_OK;
+
+    err[0] = '\0';
+    st = export_layer(db, SETTING_LAYER_BRAIN, &out->settings, &out->nsettings, &cap, err,
+                      sizeof err);
+    if (st == SETTING_OK) {
+        return STORE_OK;
+    }
+    if (strcmp(err, "out of memory") == 0) {
+        return STORE_ERR_OOM;
+    }
+    capture_sqlite_error(db, serr);
+    return STORE_ERR_SQLITE;
+}
+
+static StoreStatus export_link_row(sqlite3_stmt *sel, StoreExportLink *l)
+{
+    enum { COL_FROM = 0, COL_TO, COL_KIND, COL_CREATED, COL_UPDATED };
+
+    l->from = dup_str((const char *)sqlite3_column_text(sel, COL_FROM));
+    l->to = dup_str((const char *)sqlite3_column_text(sel, COL_TO));
+    l->kind = dup_str((const char *)sqlite3_column_text(sel, COL_KIND));
+    l->created_at = dup_str((const char *)sqlite3_column_text(sel, COL_CREATED));
+    l->updated_at = dup_str((const char *)sqlite3_column_text(sel, COL_UPDATED));
+    if (l->from == NULL || l->to == NULL || l->kind == NULL || l->created_at == NULL ||
+        l->updated_at == NULL) {
+        return STORE_ERR_OOM;
+    }
+    return STORE_OK;
+}
+
+/* Live links whose two ends are in an exported bin. */
+static StoreStatus export_links(sqlite3 *db, StoreExportBins bins, const char *now,
+                                StoreExportSnapshot *out, StoreError *serr)
+{
+    enum { COL_FROM_DELETED = 5, COL_FROM_EXPIRES, COL_TO_DELETED, COL_TO_EXPIRES };
+    sqlite3_stmt *sel = NULL;
+    size_t cap = 0U;
+    StoreStatus st = STORE_OK;
+    int rc = sqlite3_prepare_v2(
+        db,
+        "SELECT f.id, t.id, l.kind, l.created_at, l.updated_at, f.deleted_at, f.expires_at, "
+        "t.deleted_at, t.expires_at FROM entry_links l "
+        "JOIN entries f ON f.local_id = l.from_id JOIN entries t ON t.local_id = l.to_id "
+        "WHERE l.deleted_at IS NULL ORDER BY f.id, t.id, l.kind;",
+        -1, &sel, NULL);
+
+    if (rc != SQLITE_OK) {
+        capture_sqlite_error(db, serr);
+        return STORE_ERR_SQLITE;
+    }
+    while ((rc = sqlite3_step(sel)) == SQLITE_ROW) {
+        StoreBin from_bin =
+            store_bin_of((const char *)sqlite3_column_text(sel, COL_FROM_DELETED),
+                         (const char *)sqlite3_column_text(sel, COL_FROM_EXPIRES), now);
+        StoreBin to_bin = store_bin_of((const char *)sqlite3_column_text(sel, COL_TO_DELETED),
+                                       (const char *)sqlite3_column_text(sel, COL_TO_EXPIRES), now);
+
+        if (!bins.in[from_bin] || !bins.in[to_bin]) {
+            continue;
+        }
+        if (out->nlinks == cap) {
+            size_t ncap = (cap == 0U) ? (size_t)GROW_MIN_CAP : (cap * 2U);
+            StoreExportLink *grown =
+                (StoreExportLink *)realloc((void *)out->links, ncap * sizeof(*grown));
+
+            if (grown == NULL) {
+                st = STORE_ERR_OOM;
+                break;
+            }
+            out->links = grown;
+            cap = ncap;
+        }
+        memset(&out->links[out->nlinks], 0, sizeof(out->links[0]));
+        out->nlinks++;
+        st = export_link_row(sel, &out->links[out->nlinks - 1U]);
+        if (st != STORE_OK) {
+            break;
+        }
+    }
+    if (st == STORE_OK && rc != SQLITE_DONE) {
+        capture_sqlite_error(db, serr);
+        st = STORE_ERR_SQLITE;
+    }
+    (void)sqlite3_finalize(sel);
+    return st;
+}
+
+StoreStatus store_export_snapshot(Store *s, StoreExportBins bins, const char *now,
+                                  StoreExportSnapshot *out)
+{
+    char err_unused[1];
+    StoreStatus st = STORE_ERR_SQLITE;
+
+    if (s == NULL || s->db == NULL || now == NULL || out == NULL) {
+        return STORE_ERR_INTERNAL;
+    }
+    memset(out, 0, sizeof(*out));
+    memset(&s->last, 0, sizeof(s->last));
+    /* One read transaction: the links match the memories they join. */
+    if (exec_sql(s->db, "BEGIN;", err_unused, 0U, &s->last) != 0) {
+        return STORE_ERR_SQLITE;
+    }
+    if (select_text(s->db, "SELECT brain_id FROM brain_meta;", &out->brain_id, err_unused, 0U,
+                    &s->last) != 0 ||
+        out->brain_id == NULL ||
+        select_int(s->db, "PRAGMA user_version;", NULL, &out->schema, err_unused, 0U, &s->last) !=
+            0) {
+        goto fail;
+    }
+    st = export_entries(s->db, bins, now, out, &s->last);
+    if (st == STORE_OK) {
+        st = export_links(s->db, bins, now, out, &s->last);
+    }
+    if (st == STORE_OK) {
+        st = export_brain_settings(s->db, out, &s->last);
+    }
+    if (st != STORE_OK) {
+        goto fail;
+    }
+    if (exec_sql(s->db, "COMMIT;", err_unused, 0U, &s->last) != 0) {
+        st = STORE_ERR_SQLITE;
+        goto fail;
+    }
+    return STORE_OK;
+
+fail:
+    rollback_quiet(s->db);
+    store_export_snapshot_free(out);
+    return st;
+}
+
 /* E4.14: base tables first (refuse on base damage), then the 'rebuild' fast
    path, then the schema-surgery rebuild for page-level index damage. */
 StoreStatus store_repair_search_index(Store *s, size_t *out_entries)

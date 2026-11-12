@@ -31,6 +31,10 @@ bool cmd_device_mints(int rest_argc, const char **rest_argv);
    the open, which never creates a brain (decision:plan16-repair-no-create). */
 int cmd_repair_reject_args(int rest_argc, const char **rest_argv);
 int cmd_brain(Store *s, bool json, int rest_argc, const char **rest_argv);
+int cmd_export(Store *s, bool json, int rest_argc, const char **rest_argv);
+/* 0 when the export flags parse; else prints the usage error and returns -1.
+   Runs before the open, which never creates a brain for export. */
+int cmd_export_reject_args(int rest_argc, const char **rest_argv);
 int cmd_settings(Store *s, bool json, int rest_argc, const char **rest_argv);
 /* "setting.get" when rest starts with get, otherwise "unknown". */
 const char *cmd_settings_reply(int rest_argc, const char **rest_argv);

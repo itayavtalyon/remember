@@ -79,6 +79,21 @@ int search_key_order(const void *a, const void *b);
 int search_tag_order(const void *a, const void *b);
 
 /*
+ * The "# " title of body (E2.6 label, D12): when the first line starts with
+ * "# ", [*start, *end) is the rest of that line, ASCII-trimmed. True when that
+ * span is not empty. The export slug reuses it (plan 22).
+ */
+bool search_title_span(const char *body, size_t *start, size_t *end);
+
+/*
+ * *end is the byte length of body's first nwords words, as D12 plain text
+ * splits them (runs of White_Space or Cc code points); the whole body when it
+ * has fewer. Invalid UTF-8 is SEARCH_ERR_INVALID_UTF8. The export slug uses it
+ * (plan 22).
+ */
+SearchStatus search_words_end(const char *body, size_t nwords, size_t *end);
+
+/*
  * E2.6 label (D12, P2). The title when body's first line starts with "# "
  * (the rest of that line, ASCII-trimmed, if not empty); else key when not
  * NULL; else the first 60 grapheme clusters of the plain text (body with every
