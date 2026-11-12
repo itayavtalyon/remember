@@ -58,6 +58,9 @@ void export_md_name(const Entry *e, char out[EXPORT_MD_NAME_MAX]);
  */
 int export_md_write(FILE *out, const ExportDoc *doc, const Entry *e);
 
+/* The D30 sentence and its newline: README.txt's first line. */
+const char *export_readme_d30(void);
+
 /* README.txt: the D30 sentence, a newline, then the bins line and a newline
    (decision:plan22-export-bins-header). */
 int export_readme_write(FILE *out, const ExportDoc *doc);
@@ -65,8 +68,9 @@ int export_readme_write(FILE *out, const ExportDoc *doc);
 /*
  * The CSV file (JE-8.3): UTF-8 BOM, the exact header, then one row per entry,
  * CRLF after each line. Every cell is quoted with '"' doubled; NULL is an
- * empty cell. Actor, tags, version_vector and links cells hold JSON; links has
- * the Markdown shape (D25). Never a #settings row.
+ * empty cell. A cell that starts with = + - @ TAB CR or ' gets one leading '
+ * (decision:plan22-export-csv-formula-escape). Actor, tags, version_vector and links cells hold
+ * JSON; links has the Markdown shape (D25). Never a #settings row.
  */
 int export_csv_write(FILE *out, const ExportDoc *doc);
 

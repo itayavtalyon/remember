@@ -336,7 +336,8 @@ static void print_command_help(CliCommand topic)
         (void)fprintf(out, "  --include-expired   Also export expired memories\n");
         (void)fprintf(out, "  --include-trash     Also export memories in the Trash\n");
         (void)fprintf(out, "  --exclude-archived  Accepted; no effect until archiving exists\n");
-        (void)fprintf(out, "  --force             Replace PATH when it exists\n");
+        (void)fprintf(out,
+                      "  --force             Replace PATH when it exists (md: an export only)\n");
         (void)fprintf(out, "\n");
         (void)fprintf(out, "Live memories by default. A link is exported when both ends are.\n");
         (void)fprintf(out, "csv also writes <name>.manifest.json beside the file.\n");

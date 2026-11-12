@@ -24,7 +24,7 @@ enum {
 /* Test CLI only: REMEMBER_TEST_EXPORT_FAIL=<site>[#N][:<errno>] fails the Nth
    call at that site (N defaults to 1) with errno (default EIO). Sites:
    random, alloc, join, fdopen, write (after the document is written), close,
-   rename, swap (the second D17 rename). */
+   rename (rename#2 is the second D17 rename). */
 static bool fault(const char *site)
 {
     static unsigned hit;
@@ -124,6 +124,40 @@ bool fileio_exists(const char *path)
     return lstat(path, &st) == 0;
 }
 
+bool fileio_same_file(const char *a, const char *b)
+{
+    struct stat first;
+    struct stat second;
+
+    if (stat(a, &first) != 0 || stat(b, &second) != 0 || first.st_dev != second.st_dev) {
+        return false;
+    }
+    return first.st_ino == second.st_ino;
+}
+
+// NOLINTNEXTLINE(bugprone-easily-swappable-parameters) the file, then the bytes it starts with
+bool fileio_starts_with(const char *path, const char *prefix)
+{
+    /* macOS fopen has no 'e' (O_CLOEXEC) mode; CLI is short-lived. */
+    // NOLINTNEXTLINE(android-cloexec-fopen)
+    FILE *f = fopen(path, "rb");
+    const char *p = prefix;
+
+    if (f == NULL) {
+        return false;
+    }
+    while (*p != '\0') {
+        int ch = fgetc(f);
+
+        if (ch == EOF || ch != (unsigned char)*p) {
+            break;
+        }
+        p++;
+    }
+    (void)fclose(f);
+    return *p == '\0';
+}
+
 bool fileio_is_dir(const char *path)
 {
     struct stat st;
@@ -203,11 +237,47 @@ int fileio_mkdir(const char *path, int *sys_errno)
     return 0;
 }
 
-int fileio_replace_dir(const char *tmp, const char *path, int *sys_errno)
+#ifdef REMEMBER_TEST_CLI
+static int race_text(FILE *out, const void *ctx)
+{
+    (void)ctx;
+    return fputs("keep\n", out) < 0 ? -1 : 0;
+}
+
+/* Test CLI only: REMEMBER_TEST_EXPORT_RACE=1 puts a folder holding race.txt
+   at path just before the Markdown folder goes there, as another process
+   could after the existence check. */
+static void test_race_before_swap(const char *path)
+{
+    int unused = 0;
+    char *file = NULL;
+
+    // NOLINTNEXTLINE(concurrency-mt-unsafe) single-threaded CLI
+    if (getenv("REMEMBER_TEST_EXPORT_RACE") == NULL) {
+        return;
+    }
+    (void)mkdir(path, EXPORT_DIR_MODE);
+    file = fileio_join(path, "race.txt", &unused);
+    if (file != NULL) {
+        (void)fileio_write_new(file, race_text, NULL, &unused);
+    }
+    free(file);
+}
+#else
+static void test_race_before_swap(const char *path)
+{
+    (void)path;
+}
+#endif
+
+int fileio_replace_dir(const char *tmp, const char *path, bool force, int *sys_errno)
 {
     char *old = NULL;
 
-    if (!fileio_exists(path)) {
+    test_race_before_swap(path);
+    /* Without force nothing at path moves: a folder that appeared since the
+       existence check makes the rename fail. */
+    if (!force || !fileio_exists(path)) {
         return fileio_rename(tmp, path, sys_errno);
     }
     old = fileio_sibling_name(path, "old", sys_errno);
@@ -216,8 +286,7 @@ int fileio_replace_dir(const char *tmp, const char *path, int *sys_errno)
         return -1;
     }
     test_crash_between_renames();
-    if (FAULT("swap") || fileio_rename(tmp, path, sys_errno) != 0) {
-        *sys_errno = errno;
+    if (fileio_rename(tmp, path, sys_errno) != 0) {
         (void)rename(old, path);
         free(old);
         return -1;

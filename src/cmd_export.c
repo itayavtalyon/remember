@@ -126,7 +126,7 @@ static int parse_args(int argc, const char **argv, ExportArgs *a)
         err_msg(DIAG_USAGE, "invalid --format (use json, md, or csv)");
         return -1;
     }
-    if (a->out == NULL) {
+    if (a->out == NULL || a->out[0] == '\0') {
         err_msg(DIAG_USAGE, k_out_missing);
         return -1;
     }
@@ -326,7 +326,7 @@ static int write_md_tree(const char *dir, const ExportDoc *doc, int *sys_errno)
 }
 
 /* Build the folder beside path, then swap it in (D17). Nothing stays on failure. */
-static int write_md(const char *path, const ExportDoc *doc)
+static int write_md(const char *path, bool force, const ExportDoc *doc)
 {
     int sys_errno = 0;
     char *tmp = fileio_sibling_name(path, "tmp", &sys_errno);
@@ -335,7 +335,7 @@ static int write_md(const char *path, const ExportDoc *doc)
     if (tmp != NULL) {
         rc = write_md_tree(tmp, doc, &sys_errno);
         if (rc == 0) {
-            rc = fileio_replace_dir(tmp, path, &sys_errno);
+            rc = fileio_replace_dir(tmp, path, force, &sys_errno);
         }
         if (rc != 0) {
             fileio_remove_tree(tmp);
@@ -348,12 +348,57 @@ static int write_md(const char *path, const ExportDoc *doc)
     return rc;
 }
 
+/* The brain, or a SQLite file beside it (decision:plan22-export-out-not-brain).
+   The side files may not exist yet, so the name without its suffix is compared. */
+static bool is_brain_file(const char *path, const char *brain)
+{
+    static const char *const k_sides[] = {"-wal", "-shm", "-journal"};
+    char stem[REMEMBER_PATH_MAX];
+    size_t n = strlen(path);
+    size_t i = 0;
+
+    if (fileio_same_file(path, brain)) {
+        return true;
+    }
+    for (i = 0; i < sizeof k_sides / sizeof k_sides[0]; i++) {
+        size_t k = strlen(k_sides[i]);
+
+        if (n > k && n - k < sizeof stem && strcmp(path + n - k, k_sides[i]) == 0) {
+            memcpy(stem, path, n - k);
+            stem[n - k] = '\0';
+            if (fileio_same_file(stem, brain)) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+/* A folder that a Markdown export wrote: README.txt starts with the D30 line.
+   path is an absolute --out, so it fits; no allocation can fail here. */
+static bool is_export_folder(const char *path)
+{
+    char readme[REMEMBER_PATH_MAX + sizeof "/README.txt"];
+
+    (void)snprintf(readme, sizeof readme, "%s/README.txt", path);
+    return fileio_starts_with(readme, export_readme_d30());
+}
+
 /* E6.6: without --force an existing path is a usage error, and nothing is written.
-   A folder where a file goes fails even with --force (decision:plan22-export-out-is-folder). */
-static int refuse_existing(const OutFile *f, size_t n, const ExportArgs *a)
+   No path may be the brain (decision:plan22-export-out-not-brain). A folder where
+   a file goes fails even with --force (decision:plan22-export-out-is-folder).
+   Markdown --force replaces only an export folder
+   (decision:plan22-export-md-force-only-export). */
+static int refuse_existing(const OutFile *f, size_t n, const ExportArgs *a, const char *brain)
 {
     size_t i = 0;
 
+    for (i = 0; i < n; i++) {
+        if (is_brain_file(f[i].path, brain)) {
+            err_fmt(DIAG_USAGE, "--out is the brain file: %s", f[i].path);
+            return -1;
+        }
+    }
     for (i = 0; i < n; i++) {
         if (a->fmt != EXPORT_MD && fileio_is_dir(f[i].path)) {
             file_error(f[i].path, EISDIR);
@@ -363,6 +408,10 @@ static int refuse_existing(const OutFile *f, size_t n, const ExportArgs *a)
     for (i = 0; i < n; i++) {
         if (!a->force && fileio_exists(f[i].path)) {
             err_fmt(DIAG_USAGE, "output already exists: %s", f[i].path);
+            return -1;
+        }
+        if (a->fmt == EXPORT_MD && fileio_exists(f[i].path) && !is_export_folder(f[i].path)) {
+            err_fmt(DIAG_USAGE, "--force replaces only a remember export folder: %s", f[i].path);
             return -1;
         }
     }
@@ -406,6 +455,23 @@ static int export_reply(bool json, const ExportArgs *a, const char *path,
     return 0;
 }
 
+/* The absolute --out (D7) into path, and the export clock into now. */
+// NOLINTNEXTLINE(bugprone-easily-swappable-parameters) in the order the names say
+static int resolve_out(const char *out, char path[REMEMBER_PATH_MAX], char now[ISO_TS_BUFSIZE])
+{
+    if (util_absolute_path(out, path, REMEMBER_PATH_MAX) != 0) {
+        /* parse_args refused an empty --out, so the joined path did not fit.
+           ponytail: a deleted working folder lands here too, as io_error. */
+        file_error(out, ENAMETOOLONG);
+        return -1;
+    }
+    if (utc_now(now, ISO_TS_BUFSIZE) != 0) {
+        err_msg(DIAG_INTERNAL, "internal error");
+        return -1;
+    }
+    return 0;
+}
+
 int cmd_export_reject_args(int rest_argc, const char **rest_argv)
 {
     ExportArgs a;
@@ -431,8 +497,7 @@ int cmd_export(Store *s, bool json, int rest_argc, const char **rest_argv)
     if (parse_args(rest_argc, rest_argv, &a) != 0) {
         return REMEMBER_ERR;
     }
-    if (util_absolute_path(a.out, path, sizeof path) != 0 || utc_now(now, sizeof now) != 0) {
-        err_msg(DIAG_INTERNAL, "internal error");
+    if (resolve_out(a.out, path, now) != 0) {
         return REMEMBER_ERR;
     }
     files[0] = (OutFile){.path = path, .fn = (a.fmt == EXPORT_CSV) ? csv_writer : json_writer};
@@ -444,7 +509,7 @@ int cmd_export(Store *s, bool json, int rest_argc, const char **rest_argv)
         }
         files[nfiles++] = (OutFile){.path = manifest, .fn = manifest_writer};
     }
-    if (refuse_existing(files, nfiles, &a) != 0) {
+    if (refuse_existing(files, nfiles, &a, store_path(s)) != 0) {
         goto cleanup;
     }
     st = store_export_snapshot(s, a.bins, now, &snap);
@@ -459,14 +524,15 @@ int cmd_export(Store *s, bool json, int rest_argc, const char **rest_argv)
             goto cleanup;
         }
         files[nfiles++] = (OutFile){.path = settings, .fn = settings_writer};
-        if (refuse_existing(files + (nfiles - 1U), 1U, &a) != 0) {
+        if (refuse_existing(files + (nfiles - 1U), 1U, &a, store_path(s)) != 0) {
             goto cleanup;
         }
     }
     {
         const ExportDoc doc = {
             .snap = &snap, .exported_at = now, .engine = REMEMBER_VERSION, .bins = a.bins};
-        int wrote = (a.fmt == EXPORT_MD) ? write_md(path, &doc) : write_files(files, nfiles, &doc);
+        int wrote =
+            (a.fmt == EXPORT_MD) ? write_md(path, a.force, &doc) : write_files(files, nfiles, &doc);
 
         if (wrote != 0) {
             goto cleanup;

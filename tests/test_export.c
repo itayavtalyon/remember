@@ -7,6 +7,7 @@
 #include "test.h"
 
 #include <dirent.h>
+#include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -303,6 +304,7 @@ TEST(export_usage_sentences)
         {{"export", "--format", "", "--out", "x"}, 5, "invalid --format (use json, md, or csv)"},
         {{"export", "--format", "json"}, 3, "export requires --out PATH"},
         {{"export", "--format", "json", "--out"}, 4, "export requires --out PATH"},
+        {{"export", "--format", "json", "--out", ""}, 5, "export requires --out PATH"},
         {{"export", "--format", "json", "--format", "json", "--out", "x"}, 7, "duplicate --format"},
         {{"export", "--format", "json", "--out", "x", "--out", "y"}, 7, "duplicate --out"},
         {{"export", "--include-expired", "--include-expired"}, 3, "duplicate --include-expired"},
@@ -460,6 +462,35 @@ TEST(export_human_line)
     given_free(&g);
 }
 
+/* An --out that cannot be made absolute is a file error, never "internal error". */
+TEST(export_out_too_long_is_a_file_error)
+{
+    enum { LONG_OUT = 5000 };
+    char *db = make_temp_db_path();
+    char *out = (char *)malloc(LONG_OUT + 1);
+    const char *args[] = {"--json", "export", "--format", "json", "--out", out};
+    char want[SMALL_BUF];
+    CmdResult r;
+
+    ASSERT_TRUE(db != NULL && out != NULL);
+    if (db == NULL || out == NULL) {
+        free(db);
+        free(out);
+        return;
+    }
+    add_plain(db, "one");
+    memset(out, 'a', LONG_OUT);
+    out[LONG_OUT] = '\0';
+    r = run_remember(db, args, sizeof args / sizeof args[0], NULL);
+    (void)snprintf(want, sizeof want, "\"detail\":{\"errno\":%d,", ENAMETOOLONG);
+    ASSERT_EQ_INT(r.exit_code, 1);
+    ASSERT_STR_CONTAINS(r.out, "\"code\":\"io_error\"");
+    ASSERT_STR_CONTAINS(r.out, want);
+    cmd_result_free(&r);
+    free(out);
+    free(db);
+}
+
 /* A folder where the file goes fails before anything is written, even with
    --force (decision:plan22-export-out-is-folder). */
 TEST(export_out_is_a_folder)
@@ -595,6 +626,19 @@ static int cmp_name(const void *a, const void *b)
     return strcmp((const char *)a, (const char *)b);
 }
 
+/* line and a newline at buf + *w. *w grows only by what was written, so a
+   listing that does not fit fails the test and never runs past cap. */
+// NOLINTNEXTLINE(bugprone-easily-swappable-parameters) in the order the names say
+static void append_line(char *buf, size_t cap, size_t *w, const char *line)
+{
+    int k = snprintf(buf + *w, cap - *w, "%s\n", line);
+
+    ASSERT_TRUE(k >= 0 && (size_t)k < cap - *w);
+    if (k > 0 && (size_t)k < cap - *w) {
+        *w += (size_t)k;
+    }
+}
+
 /* Every regular file under dir, as "<sub>/<name>" lines sorted, or "" when none. */
 static void list_tree(const char *dir, char *buf, size_t cap)
 {
@@ -631,7 +675,7 @@ static void list_tree(const char *dir, char *buf, size_t cap)
     qsort(names, n, sizeof names[0], cmp_name);
     buf[0] = '\0';
     for (i = 0; i < n; i++) {
-        w += (size_t)snprintf(buf + w, cap - w, "%s\n", names[i]);
+        append_line(buf, cap, &w, names[i]);
     }
 }
 
@@ -837,6 +881,164 @@ TEST(export_md_force_survives_a_crash)
     given_free(&g);
 }
 
+/* A hand-edited id names no path: the file name keeps [0-9a-z] of the id's
+   tail, and the front matter carries the id as stored. */
+TEST(export_md_hostile_id_stays_in_its_folder)
+{
+    Given g = given_fixture("brain-md");
+    const char *args[] = {"export", "--format", "md", "--out", g.out};
+    char *text = NULL;
+    CmdResult r;
+
+    free(harness_sqlite_query_line(
+        g.db, "UPDATE entries SET id = 'zz/.:~A-09afxz' WHERE key = 'project:alpha';"));
+    r = export_run(g.db, args, sizeof args / sizeof args[0]);
+    ASSERT_EQ_INT(r.exit_code, 0);
+    cmd_result_free(&r);
+    text = read_in(g.out, "memories/project-alpha--------09afxz.md");
+    ASSERT_TRUE(text != NULL);
+    if (text != NULL) {
+        ASSERT_STR_CONTAINS(text, "\nid: \"zz/.:~A-09afxz\"\n");
+    }
+    free(text);
+    given_free(&g);
+}
+
+/* Without --force, a folder that appears at PATH after the existence check is
+   never swapped out: the export fails and the folder keeps its file. */
+TEST(export_md_without_force_never_swaps)
+{
+    Given g = given_fixture("brain-md");
+    const char *args[] = {"export", "--format", "md", "--out", g.out};
+    char *text = NULL;
+    CmdResult r;
+
+    // NOLINTBEGIN(concurrency-mt-unsafe) the child inherits this process-global
+    (void)setenv("REMEMBER_TEST_EXPORT_RACE", "1", 1);
+    r = export_run(g.db, args, sizeof args / sizeof args[0]);
+    (void)unsetenv("REMEMBER_TEST_EXPORT_RACE");
+    // NOLINTEND(concurrency-mt-unsafe)
+    ASSERT_EQ_INT(r.exit_code, 1);
+    cmd_result_free(&r);
+    text = read_in(g.out, "race.txt");
+    ASSERT_TRUE(text != NULL && strcmp(text, "keep\n") == 0);
+    ASSERT_EQ_INT(count_strays(g.dir), 0);
+    free(text);
+    given_free(&g);
+}
+
+/* --force replaces only a remember export folder
+   (decision:plan22-export-md-force-only-export): a folder of other files, a
+   folder whose README.txt is not the D30 sentence, and a file stay as they were. */
+TEST(export_md_force_replaces_only_an_export)
+{
+    Given g = given_fixture("precious");
+    char file[PATH_BUF];
+    const char *paths[] = {g.out, g.out, file};
+    size_t i = 0;
+
+    (void)snprintf(file, sizeof file, "%s/notes.md", g.dir);
+    ASSERT_EQ_INT(mkdir(g.out, DIR_MODE), 0);
+    write_side(g.out, "/keep.txt", "keep\n");
+    write_text(file, "mine\n");
+    for (i = 0; i < sizeof paths / sizeof paths[0]; i++) {
+        const char *args[] = {"export", "--format", "md", "--out", paths[i], "--force"};
+        char want[TEXT_BUF];
+        CmdResult r;
+
+        if (i == 1U) {
+            /* The D30 sentence with one byte changed before its newline. */
+            write_side(g.out, "/README.txt",
+                       "This folder is a Fortkeeps export. Import it with: remember import "
+                       "--from-md <folder>.\n");
+        }
+        r = export_run(g.db, args, sizeof args / sizeof args[0]);
+        (void)snprintf(want, sizeof want,
+                       "remember: --force replaces only a remember export folder: %s\n", paths[i]);
+        ASSERT_EQ_INT(r.exit_code, 1);
+        ASSERT_STREQ(r.err, want);
+        cmd_result_free(&r);
+    }
+    {
+        char *kept = read_in(g.out, "keep.txt");
+        char *mine = read_in(g.dir, "notes.md");
+
+        ASSERT_STREQ(kept, "keep\n");
+        ASSERT_STREQ(mine, "mine\n");
+        free(kept);
+        free(mine);
+    }
+    ASSERT_EQ_INT(count_strays(g.dir), 0);
+    given_free(&g);
+}
+
+typedef struct {
+    const char *format;
+    const char *out;   /* the --out path */
+    const char *named; /* the path the sentence names */
+} BrainCase;
+
+/* No export lands on the brain or a SQLite file beside it, even with --force
+   (decision:plan22-export-out-not-brain): by name, by hard link, and through
+   the CSV manifest. */
+TEST(export_out_is_never_the_brain)
+{
+    Given g = given_fixture("x");
+    char wal[PATH_BUF];
+    char hard[PATH_BUF];
+    char csv[PATH_BUF];
+    char manifest[PATH_BUF];
+    char *before = NULL;
+    char *after = NULL;
+    size_t len = 0U;
+    size_t i = 0;
+
+    (void)snprintf(wal, sizeof wal, "%s-wal", g.db);
+    (void)snprintf(hard, sizeof hard, "%s/hard.db", g.dir);
+    (void)snprintf(csv, sizeof csv, "%s/side.csv", g.dir);
+    (void)snprintf(manifest, sizeof manifest, "%s/side.manifest.json", g.dir);
+    ASSERT_EQ_INT(link(g.db, hard), 0);
+    ASSERT_EQ_INT(link(g.db, manifest), 0);
+    before = harness_read_file(g.db, &len);
+    ASSERT_TRUE(before != NULL);
+    {
+        const BrainCase cases[] = {
+            {"json", g.db, g.db}, {"csv", wal, wal},      {"md", g.db, g.db},
+            {"json", hard, hard}, {"csv", csv, manifest},
+        };
+
+        for (i = 0; i < sizeof cases / sizeof cases[0]; i++) {
+            const char *args[] = {"export", "--format",   cases[i].format,
+                                  "--out",  cases[i].out, "--force"};
+            char want[TEXT_BUF];
+            CmdResult r = export_run(g.db, args, sizeof args / sizeof args[0]);
+
+            (void)snprintf(want, sizeof want, "remember: --out is the brain file: %s\n",
+                           cases[i].named);
+            ASSERT_EQ_INT(r.exit_code, 1);
+            ASSERT_STREQ(r.err, want);
+            cmd_result_free(&r);
+        }
+    }
+    {
+        /* A neighbour that only shares the brain's name is not the brain. */
+        char bak[PATH_BUF];
+        const char *args[] = {"export", "--format", "json", "--out", bak};
+        CmdResult r;
+
+        (void)snprintf(bak, sizeof bak, "%s.bak", g.db);
+        r = export_run(g.db, args, sizeof args / sizeof args[0]);
+        ASSERT_EQ_INT(r.exit_code, 0);
+        cmd_result_free(&r);
+    }
+    after = harness_read_file(g.db, &len);
+    ASSERT_TRUE(after != NULL && before != NULL && memcmp(after, before, len) == 0);
+    ASSERT_EQ_INT(count_strays(g.dir), 0);
+    free(before);
+    free(after);
+    given_free(&g);
+}
+
 typedef struct {
     const char *key;
     const char *body;
@@ -899,7 +1101,7 @@ TEST(export_every_file_fault_keeps_the_old_output)
         {"random", "io_error", false, {0}},   {"alloc", "out_of_memory", false, {0}},
         {"join", "out_of_memory", true, {0}}, {"fdopen", "io_error", false, {0}},
         {"write", "io_error", false, {0}},    {"close", "io_error", false, {0}},
-        {"rename", "io_error", false, {0}},   {"swap", "io_error", true, {0}},
+        {"rename", "io_error", false, {0}},   {"rename#2", "io_error", true, {0}},
     };
     static const char *const formats[] = {"json", "csv", "md"};
     size_t f = 0;
@@ -1069,6 +1271,48 @@ typedef struct {
     const char *manifest;
 } ManifestName;
 
+/* decision:plan22-export-csv-formula-escape: a cell that starts with = + - @
+   TAB CR or ' gets one leading '; any other cell is as stored. */
+TEST(export_csv_escapes_formula_cells)
+{
+    Given g = given_fixture("brain.csv");
+    static const char *const bodies[] = {"=SUM(1)", "+1",   "- item", "@a",    "'q",
+                                         "''=x",    "tabx", "crx",    "emptyx"};
+    static const char *const cells[] = {
+        ",\"'=SUM(1)\",", ",\"'+1\",",    ",\"'- item\",", ",\"'@a\",",           ",\"''q\",",
+        ",\"'''=x\",",    ",\"'\ttab\",", ",\"'\rcr\",",   ",\"project:alpha\",", ",\"\",",
+    };
+    const char *args[] = {"export", "--format", "csv", "--out", g.out};
+    char *text = NULL;
+    size_t i = 0;
+    CmdResult r;
+
+    for (i = 0; i < sizeof bodies / sizeof bodies[0]; i++) {
+        const char *add[] = {"add", "--", bodies[i]};
+
+        r = run_remember(g.db, add, sizeof add / sizeof add[0], NULL);
+        ASSERT_EQ_INT(r.exit_code, 0);
+        cmd_result_free(&r);
+    }
+    /* A peer or a hand edit can store a leading TAB or CR, or an empty body;
+       add trims or refuses them. An empty cell gets no prefix. */
+    free(harness_sqlite_query_line(
+        g.db, "UPDATE entries SET body = char(9) || 'tab' WHERE body = 'tabx';"));
+    free(harness_sqlite_query_line(
+        g.db, "UPDATE entries SET body = char(13) || 'cr' WHERE body = 'crx';"));
+    free(harness_sqlite_query_line(g.db, "UPDATE entries SET body = '' WHERE body = 'emptyx';"));
+    r = export_run(g.db, args, sizeof args / sizeof args[0]);
+    ASSERT_EQ_INT(r.exit_code, 0);
+    cmd_result_free(&r);
+    text = read_in(g.dir, "brain.csv");
+    ASSERT_TRUE(text != NULL);
+    for (i = 0; text != NULL && i < sizeof cells / sizeof cells[0]; i++) {
+        ASSERT_STR_CONTAINS(text, cells[i]);
+    }
+    free(text);
+    given_free(&g);
+}
+
 /* The basename drops its last extension only; a leading dot is no extension. */
 TEST(export_csv_manifest_names)
 {
@@ -1142,8 +1386,13 @@ TEST(export_help)
     const char *general[] = {"--help"};
     const char *topic[] = {"help", "export"};
     static const char *const flags[] = {
-        "--format FMT",       "--out PATH", "--include-expired",   "--include-trash",
-        "--exclude-archived", "--force",    "memory.export.result"};
+        "--format FMT",
+        "--out PATH",
+        "--include-expired",
+        "--include-trash",
+        "--exclude-archived",
+        "--force             Replace PATH when it exists (md: an export only)",
+        "memory.export.result"};
     size_t i = 0;
     CmdResult r = run_remember(db, general, sizeof general / sizeof general[0], NULL);
 
@@ -1482,6 +1731,7 @@ void register_export_tests(void)
     RUN_TEST(export_usage_sentences);
     RUN_TEST(export_file_errors_map_codes);
     RUN_TEST(export_human_line);
+    RUN_TEST(export_out_too_long_is_a_file_error);
     RUN_TEST(export_out_is_a_folder);
     RUN_TEST(export_missing_brain_is_not_created);
     RUN_TEST(export_exclude_archived_has_no_effect_yet);
@@ -1489,9 +1739,14 @@ void register_export_tests(void)
     RUN_TEST(export_md_folder_every_bin);
     RUN_TEST(export_md_live_only_keeps_three_folders);
     RUN_TEST(export_md_force_survives_a_crash);
+    RUN_TEST(export_md_hostile_id_stays_in_its_folder);
+    RUN_TEST(export_md_without_force_never_swaps);
+    RUN_TEST(export_md_force_replaces_only_an_export);
+    RUN_TEST(export_out_is_never_the_brain);
     RUN_TEST(export_md_slug_rules);
     RUN_TEST(export_every_file_fault_keeps_the_old_output);
     RUN_TEST(export_csv_every_bin);
+    RUN_TEST(export_csv_escapes_formula_cells);
     RUN_TEST(export_csv_manifest_names);
     RUN_TEST(export_csv_existing_manifest);
     RUN_TEST(export_help);

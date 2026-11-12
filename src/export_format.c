@@ -53,15 +53,14 @@ static char *export_vv_sorted(const char *vector)
         return NULL;
     }
     len = strlen(vector);
-    inner = (char *)malloc(len);
+    inner = strdup(vector);
     items = (char **)calloc(len, sizeof(*items));
     out = (char *)malloc(len + 1U);
     if (inner == NULL || items == NULL || out == NULL) {
         goto fail;
     }
-    memcpy(inner, vector + 1, len - 2U);
-    inner[len - 2U] = '\0';
-    for (w = inner; *w != '\0'; n++) {
+    inner[len - 1U] = '\0'; /* drop the closing brace; the walk skips the opening one */
+    for (w = inner + 1; *w != '\0'; n++) {
         items[n] = w;
         w += strcspn(w, ",");
         if (*w == ',') {
@@ -254,6 +253,17 @@ int export_json_write(FILE *out, const ExportDoc *doc)
     return fputs("}\n", out) < 0 ? -1 : 0;
 }
 
+static bool slug_char(char c)
+{
+    if (c >= 'a' && c <= 'z') {
+        return true;
+    }
+    if (c >= '0' && c <= '9') {
+        return true;
+    }
+    return false;
+}
+
 /* E6.b2: ASCII-lowercase, each run outside [a-z0-9] one '-', no '-' at
    either end, at most 48 characters, "memory" when empty. */
 static void slugify(const char *src, size_t n, char out[SLUG_MAX + 1])
@@ -268,7 +278,7 @@ static void slugify(const char *src, size_t n, char out[SLUG_MAX + 1])
         if (c >= 'A' && c <= 'Z') {
             c = (char)(c - 'A' + 'a');
         }
-        if ((c < 'a' || c > 'z') && (c < '0' || c > '9')) {
+        if (!slug_char(c)) {
             gap = true;
             continue;
         }
@@ -293,9 +303,12 @@ static void slugify(const char *src, size_t n, char out[SLUG_MAX + 1])
 void export_md_name(const Entry *e, char out[EXPORT_MD_NAME_MAX])
 {
     char slug[SLUG_MAX + 1];
+    char tail[ID_TAIL + 1];
     size_t start = 0;
     size_t end = 0;
     size_t idlen = strlen(e->sync_id);
+    const char *id_tail = e->sync_id + (idlen > (size_t)ID_TAIL ? idlen - ID_TAIL : 0U);
+    size_t i = 0;
 
     if (e->key != NULL) {
         slugify(e->key, strlen(e->key), slug);
@@ -308,8 +321,15 @@ void export_md_name(const Entry *e, char out[EXPORT_MD_NAME_MAX])
         }
         slugify(e->body, end, slug);
     }
-    (void)snprintf(out, EXPORT_MD_NAME_MAX, "%s--%s.md", slug,
-                   e->sync_id + (idlen > (size_t)ID_TAIL ? idlen - ID_TAIL : 0U));
+    /* A hand-edited id names no path: only [a-z0-9] of its tail reaches the name. */
+    for (i = 0; id_tail[i] != '\0'; i++) {
+        tail[i] = '-';
+        if (slug_char(id_tail[i])) {
+            tail[i] = id_tail[i];
+        }
+    }
+    tail[i] = '\0';
+    (void)snprintf(out, EXPORT_MD_NAME_MAX, "%s--%s.md", slug, tail);
 }
 
 static int cmp_link_from(const void *key, const void *elem)
@@ -390,14 +410,20 @@ done:
     return rc;
 }
 
+static const char k_readme_d30[] =
+    "This folder is a Fortkeeps export. Import it with: remember import --from-md <folder>\n";
+
+const char *export_readme_d30(void)
+{
+    return k_readme_d30;
+}
+
 int export_readme_write(FILE *out, const ExportDoc *doc)
 {
     size_t b = 0;
     const char *sep = "Bins: ";
 
-    if (fputs("This folder is a Fortkeeps export. Import it with: remember import --from-md "
-              "<folder>\n",
-              out) < 0) {
+    if (fputs(k_readme_d30, out) < 0) {
         return -1;
     }
     for (b = 0; b <= (size_t)STORE_BIN_DELETED; b++) {
@@ -417,13 +443,16 @@ int export_manifest_write(FILE *out, const ExportDoc *doc)
     return (write_header(out, doc) != 0 || fputs("}\n", out) < 0) ? -1 : 0;
 }
 
-/* One RFC 4180 cell: quoted, each '"' doubled. NULL is an empty cell. */
+/* One RFC 4180 cell: quoted, each '"' doubled. NULL is an empty cell. A cell
+   that a spreadsheet would run as a formula, or that starts with ', gets one
+   leading ', which import strips (decision:plan22-export-csv-formula-escape). */
 static int csv_text(FILE *out, const char *s)
 {
     if (s == NULL) {
         return 0;
     }
-    if (fputc('"', out) == EOF) {
+    if (fputc('"', out) == EOF ||
+        (s[0] != '\0' && strchr("=+-@\t\r'", s[0]) != NULL && fputc('\'', out) == EOF)) {
         return -1;
     }
     for (; *s != '\0'; s++) {

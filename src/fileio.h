@@ -22,6 +22,13 @@ int fileio_write_new(const char *path, FileWriteFn fn, const void *ctx, int *sys
 /* True when something is at path (lstat: a dangling symlink counts). */
 bool fileio_exists(const char *path);
 
+/* True when a and b are one file: the same device and inode (stat follows a
+   symlink). False when either is missing. */
+bool fileio_same_file(const char *a, const char *b);
+
+/* True when the file at path begins with the bytes of prefix. */
+bool fileio_starts_with(const char *path, const char *prefix);
+
 /* True when path is a folder (stat follows a symlink). */
 bool fileio_is_dir(const char *path);
 
@@ -35,13 +42,15 @@ char *fileio_join(const char *dir, const char *name, int *sys_errno);
 int fileio_mkdir(const char *path, int *sys_errno);
 
 /*
- * Put the folder tmp at path (D17). When path exists, rename it to
- * "<path>.old-<16 hex>", rename tmp onto path, then delete the old folder.
+ * Put the folder tmp at path (D17). Without force, rename tmp onto path, which
+ * fails when a folder that is not empty is there. With force, when path
+ * exists, rename it to "<path>.old-<16 hex>", rename tmp onto path, then
+ * delete the old folder.
  * A crash between the renames leaves the old or the new folder intact plus a
  * stray sibling, never a half-written path. When the second rename fails,
  * the old folder goes back to path.
  */
-int fileio_replace_dir(const char *tmp, const char *path, int *sys_errno);
+int fileio_replace_dir(const char *tmp, const char *path, bool force, int *sys_errno);
 
 /* Delete path and everything under it; symlinks are removed, not followed. */
 void fileio_remove_tree(const char *path);
