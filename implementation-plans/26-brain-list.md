@@ -1,7 +1,8 @@
 # 26 — Brain list
 
 **Module:** `src/brain_list.c` and `src/brain_list.h`. The commands call this module. Command parse stays in the existing CLI parser.
-**Requires:** plan 19 merged (`brain_id` in the brain). Plans 25 and 27 do not require this plan.
+**Needs:** plan 19 (merged), plan 25 (this plan's code is cut from the `plan/25-plugins` branch after plan 25 merges, G1 A).
+**Blocked on:** nothing.
 
 ## Goal
 
@@ -14,15 +15,18 @@ Remember records every brain it opens read-write, tells a copy from a move, and 
 - `decision:g2-05` (copy mints a new `brain_id` and warns `brain_id_cloned`; otherwise the path is updated).
 - `decision:brain-id` (`brain_id` is a UUID v7 minted at create).
 - `decision:2026-10-22-m-19` (the command tokens `remember brain list` and `remember brain prune`).
-- The JSON document below is not named by a decision. This plan locks it so the coder does not invent a document.
+- `decision:2026-11-11-brains-json-format` (P7 A): the JSON document below.
+- `decision:2026-11-11-brains-json-data-dir` (G2 A): `brains.json` follows the data dir; `default-db` stays in `~/.remember`.
 - Sentences: [`COPY-PENDING.md`](COPY-PENDING.md) C-38 and the C-01 `brain_missing` line. Itay approved that file on 2026-10-25.
-- Spec: `specs/brain-list.md` (new).
+- Spec: `specs/BRAIN-LIST.md` (new).
 
-`decision:g2-08` names the jobs as `remember brains` and `remember brains prune`. This plan uses the tokens in `decision:2026-10-22-m-19`. The coder does not implement the older tokens.
+`decision:2026-11-11-brain-command-names` supersedes the token names in `decision:g2-08`. The commands are `remember brain list` and `remember brain prune`. The coder does not implement `remember brains`.
+
+Starting code: the `plan/25-plugins` branch holds `src/brains.c`, `src/brains.h`, `src/brain_note.c`, `src/brain_note.h` and `src/cmd_brain.c` changes. Rename `src/brains.c` to `src/brain_list.c` and `src/brains.h` to `src/brain_list.h` with `git mv`, rename every `brains_` function prefix to `brain_list_`, and keep `brain_note.c` as is. Then make every box below green.
 
 ## Out of scope
 
-`remember brain new-id`. `decision:brain-id` says the command forks a copy into a new brain. It does not name the output path, which file keeps which id, or the output line. The coder does not invent that command. The daemon, sweep, and plugins are other plans.
+Changes to `remember brain new-id`. That command already exists on main (`src/cmd_brain.c`, "Replace the brain id"). This plan does not change it. The `brain` subcommand parser gains `list` and `prune` next to it. The daemon, sweep, and plugins are other plans.
 
 ## Standards
 
@@ -54,7 +58,7 @@ Tests live in `tests/test_brain_list.c`, suite `brain_list`, and that suite is a
 - The reviewer checks the command tokens against `decision:2026-10-22-m-19`.
 - The reviewer checks that a copy mints a new id and a move keeps the id.
 - The reviewer checks that a failed write does not change the open's exit and does not print a new sentence.
-- The reviewer checks that `remember brain new-id` is not implemented.
+- The reviewer checks that `remember brain new-id` behaves exactly as on main (its existing tests still pass unchanged).
 
 ## Definition of Done
 
@@ -65,7 +69,7 @@ Tests live in `tests/test_brain_list.c`, suite `brain_list`, and that suite is a
 - [ ] `remember brain list prints a missing path with the C-01 brain_missing line and keeps the row`.
 - [ ] `remember brain prune drops a missing path and leaves a path that still has the brain`.
 - [ ] `a failed replace leaves the previous file and does not change the open's exit`.
-- [ ] `specs/brain-list.md` is written, and the decisions this plan built are `state:implemented`.
+- [ ] `specs/BRAIN-LIST.md` is written, and the decisions this plan built are `state:implemented`.
 - [ ] The gate passes on the committed tree, and the notes record the mutants and their red tests.
 
 ## Implementation Notes
