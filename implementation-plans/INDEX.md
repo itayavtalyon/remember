@@ -50,7 +50,7 @@ main → cli_parse → commands.h (cmd_add | cmd_locator | cmd_query) → store_
 - 27a. Plan: [Outbox delivery](27a-outbox-delivery.md). Done when: Recipient state machine, backoff retry (X3 A), and a pre-flight failure that is `failed` at once (E1 A). Needs 24.
 - 27b. Plan: [Older CLI read-only](27b-older-cli-read-only.md). Done when: `schema_too_new` read-only with a warning, writes exit 75. Needs 19, 21. Copy: R27b-1 (no command in the upgrade line, SW1 A).
 - 28. Plan: [Release 0.3.0](28-release-0.3.0.md). Done when: Version, What's New, Codex skill. Needs 22, 23, 25, 26, 27, 27a, 27b.
-- 29. Plan: [Handle API](29-handle-api.md). Done when: `remember_open`/`remember_call`/`remember_close`, RememberEnv, no HOME in the engine. Needs 20, 21. X1 answered (`decision:2026-11-12-x1-remember-call-requests`); two details wait for Itay (see the plan).
+- 29. Plan: [Handle API](29-handle-api.md). Done when: `remember_open`/`remember_call`/`remember_close`, RememberEnv, no HOME in the engine. Needs 20, 21. X1 and its gaps are answered; the shape record `decision:2026-11-11-handle-api-shape` waits for Itay's approval.
 - 30. Plan: [Plugin settings keys](30-plugin-settings-keys.md). Done when: Boolean type, generated `plugin.<name>.*` keys. Needs 25.
 - 31. Plan: [Events and outbox insert](31-events-and-outbox-insert.md). Done when: Five write events, the write-time filter, the outbox row. Needs 25, 27a, 30.
 - 32. Plan: [Expiry sweep](32-expiry-sweep.md). Done when: `expired_at`, `sweep`, `purge`, `delete --expired`. Needs 26, 31.
@@ -64,6 +64,9 @@ main → cli_parse → commands.h (cmd_add | cmd_locator | cmd_query) → store_
 - 40. Plan: [Daemon install](40-daemon-install.md). Done when: `remember daemon install`, `--plugin-dir`. Needs 34, 39.
 - 41. Plan: [Daemon takeover](41-daemon-takeover.md). Done when: `remember daemon takeover [--yes]`. Needs 39, 40. Copy: R30-4; `confirmation_required` exits 5 (E2 A).
 - 42. Plan: [Owner-missing check](42-daemon-owner-missing.md). Done when: `state.json`, the one-time prompt, the warning. Needs 39, 41. Copy: R30-4; the hint prints after No only and `y` prints a done confirmation (E4 A).
+- 43. Plan: [Schema v7](43-schema-v7.md). Done when: link `origin`, `device`, `peers`, `pending_links`, tombstone vectors, the rebuilt `conflicts`, `device.set`. Needs 19, 27b, 29. Stop and ask list in the plan.
+- 44. Plan: [Sync pages](44-sync-pages.md). Done when: `sync.pull`, `sync.peers`, cursors, snapshots, retention. Needs 29, 43. Waits for approval of `decision:2026-11-12-sync-api-interface-message`.
+- 45. Plan: [Sync apply](45-sync-apply.md). Done when: page apply, merge, conflicts, pending links, delivery state. Needs 29, 31, 43, 44. Waits for the same approval.
 
 **Design 006 plans 15–18:** do them in order. Plan 18 is not done. Plans 18b
 and 18c land with the plan 18 merge. Do not tick plan 18.
