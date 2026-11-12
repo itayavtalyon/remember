@@ -1245,7 +1245,7 @@ static int write_import_errors(FILE *out, const StoreImportError *items, size_t 
         if (items[i].message == NULL || items[i].file == NULL ||
             (i > 0U && fputc(',', out) == EOF) || fputs("{\"file\":", out) < 0 ||
             output_json_string(out, items[i].file) != 0 ||
-            fprintf(out, ",\"line\":%d,\"message\":", items[i].line) < 0 ||
+            fprintf(out, ",\"line\":%lld,\"message\":", items[i].line) < 0 ||
             output_json_string(out, items[i].message) != 0 || fputc('}', out) == EOF) {
             return -1;
         }
@@ -1280,7 +1280,7 @@ int output_import_data(FILE *out, const StoreImportResult *r)
         return -1;
     }
     if (fprintf(out, ",\"settings\":{\"written\":%zu,\"unchanged\":%zu,\"skipped\":%zu}",
-                r->settings_written, r->settings_unchanged, r->settings_skipped) < 0) {
+                r->settings.written, r->settings.unchanged, r->settings.skipped) < 0) {
         return -1;
     }
     return fputs(DATA_END, out) < 0 ? -1 : 0;

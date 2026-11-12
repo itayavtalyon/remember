@@ -41,7 +41,9 @@ typedef struct {
 
 struct JsonValue {
     JsonType type;
-    int line; /* 1-based line of this value's first non-ws byte */
+    int line;      /* 1-based line of this value's first non-ws byte */
+    size_t src_at; /* this value's bytes are src[src_at .. src_at + src_len) */
+    size_t src_len;
     union {
         bool boolean;
         struct {

@@ -1,5 +1,6 @@
 #include "store.h"
 
+#include "import_validate.h"
 #include "normalize.h"
 #include "search_terms.h"
 #include "settings.h"
@@ -512,7 +513,7 @@ enum {
     SIDECAR_PATH_PAD = 16,
     SIDECAR_TMP_EXTRA = 7, /* ".XXXXXX" */
     VV_JSON_BUFLEN = 80,
-    VV_OUT_MAX = 4096,   /* import may merge many foreign device keys */
+    VV_OUT_MAX = REMEMBER_VV_TEXT_MAX, /* import may merge many foreign device keys */
     VV_JSON_MIN_OUT = 8, /* shortest compact object we emit: {"d":1} */
     VV_INT_BASE = 10,
     VV_NEEDLE_LEN = UUID_STR_LEN + 4 /* "\"<uuid>\":" */
@@ -8837,7 +8838,7 @@ static StoreStatus import_note_reject(StoreImportResult *r, long long source_loc
     return STORE_OK;
 }
 
-static StoreStatus import_note_error(StoreImportResult *r, const char *file, int line,
+static StoreStatus import_note_error(StoreImportResult *r, const char *file, long long line,
                                      const char *message)
 {
     StoreStatus st =
@@ -8871,6 +8872,7 @@ void store_import_result_free(StoreImportResult *r)
         free(r->errors[i].file);
     }
     free(r->errors);
+    store_setting_import_free(&r->settings);
     memset(r, 0, sizeof(*r));
 }
 
@@ -9093,212 +9095,70 @@ static StoreStatus import_one_entry(sqlite3 *dst, const char *device_id, ImportR
     return st;
 }
 
-/* One imported link through ins: a new UUID v7 and the source's times. OR
-   IGNORE keeps an edge the brain already has, and that changes nothing, so
-   only an inserted row takes a change_seq value. */
-// NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
-static StoreStatus insert_imported_link(sqlite3 *dst, sqlite3_stmt *ins, StoreEdge edge,
-                                        const char *kind, const char *created, const char *updated,
-                                        StoreError *serr)
-{
-    enum {
-        BIND_FROM = 1,
-        BIND_TO = 2,
-        BIND_KIND = 3,
-        BIND_CREATED = 4,
-        BIND_UPDATED = 5,
-        BIND_LINK_ID = 6
-    };
-    char link_id[UUID_STR_LEN + 1];
+static StoreStatus import_doc_one_link(Store *dst, const ImportLink *link, const char *now,
+                                       StoreImportResult *counts);
 
-    if (mint_uuid_v7(link_id) != 0) {
-        return STORE_ERR_INTERNAL;
-    }
-    (void)sqlite3_reset(ins);
-    (void)sqlite3_clear_bindings(ins);
-    (void)sqlite3_bind_text(ins, BIND_LINK_ID, link_id, -1, SQLITE_TRANSIENT);
-    (void)sqlite3_bind_int64(ins, BIND_FROM, edge.from_id);
-    (void)sqlite3_bind_int64(ins, BIND_TO, edge.to_id);
-    (void)sqlite3_bind_text(ins, BIND_KIND, kind, -1, SQLITE_TRANSIENT);
-    (void)sqlite3_bind_text(ins, BIND_CREATED, created, -1, SQLITE_TRANSIENT);
-    (void)sqlite3_bind_text(ins, BIND_UPDATED, updated, -1, SQLITE_TRANSIENT);
-    if (sqlite3_step(ins) != SQLITE_DONE) {
-        capture_sqlite_error(dst, serr);
-        return STORE_ERR_SQLITE;
-    }
-    if (sqlite3_changes(dst) == 0) {
-        return STORE_OK;
-    }
-    return stamp_change_seq(
-        dst, (ChangeSeqRow){.id = edge.from_id, .to_id = edge.to_id, .kind = kind}, serr);
+static char *import_alias(const char *s);
+
+static char *column_dup(sqlite3_stmt *stmt, int col)
+{
+    const unsigned char *text = sqlite3_column_text(stmt, col);
+
+    return text != NULL ? dup_str((const char *)text) : NULL;
 }
 
-// NOLINTNEXTLINE(readability-function-cognitive-complexity)
-static StoreStatus import_remap_links(sqlite3 *dst, sqlite3 *src, int version, StoreError *serr)
+/* Every source link goes through the file-import link path: one write path for
+   JE-5.1, the kind, timestamp, endpoint and cycle checks. A skipped link's
+   error names the source file and its entry_links rowid (plan 23). A missing
+   endpoint joins to NULL, which validate reports as an invalid link. */
+static StoreStatus import_remap_links(Store *dst, sqlite3 *src, int version, const char *file,
+                                      const char *now, StoreImportResult *counts)
 {
+    static const char v6_sql[] =
+        "SELECT l.rowid, f.id, t.id, l.kind, l.created_at, l.updated_at, l.deleted_at "
+        "FROM entry_links AS l LEFT JOIN entries AS f ON f.local_id = l.from_id "
+        "LEFT JOIN entries AS t ON t.local_id = l.to_id ORDER BY l.rowid;";
+    static const char v5_sql[] =
+        "SELECT l.rowid, f.sync_id, t.sync_id, l.kind, l.created_at, l.updated_at, NULL "
+        "FROM entry_links AS l LEFT JOIN entries AS f ON f.id = l.from_id "
+        "LEFT JOIN entries AS t ON t.id = l.to_id ORDER BY l.rowid;";
     sqlite3_stmt *sel = NULL;
-    sqlite3_stmt *ins = NULL;
-    sqlite3_stmt *sync_of = NULL;
-    int rc = 0;
-    /* v4/v5: integer id + sync_id. v6: local_id + id. */
-    const char *id_sql = (version >= 6) ? "SELECT id FROM entries WHERE local_id = ?1;"
-                                        : "SELECT sync_id FROM entries WHERE id = ?1;";
+    StoreStatus st = STORE_OK;
+    int rc = SQLITE_DONE;
 
-    rc = sqlite3_prepare_v2(src,
-                            "SELECT from_id, to_id, kind, created_at, updated_at, deleted_at "
-                            "FROM entry_links;",
-                            -1, &sel, NULL);
-    if (rc != SQLITE_OK) {
-        /* v4/v5 have no deleted_at: fall back. */
-        rc = sqlite3_prepare_v2(
-            src, "SELECT from_id, to_id, kind, created_at, updated_at FROM entry_links;", -1, &sel,
-            NULL);
-    }
-    if (rc != SQLITE_OK) {
-        capture_source_error(src, serr);
+    if (sqlite3_prepare_v2(src, version >= 6 ? v6_sql : v5_sql, -1, &sel, NULL) != SQLITE_OK) {
+        capture_source_error(src, &dst->last);
         return STORE_ERR_SQLITE;
     }
-    rc = sqlite3_prepare_v2(src, id_sql, -1, &sync_of, NULL);
-    if (rc != SQLITE_OK) {
-        capture_source_error(src, serr);
-        (void)sqlite3_finalize(sel);
-        return STORE_ERR_SQLITE;
-    }
-    rc = sqlite3_prepare_v2(
-        dst,
-        "INSERT OR IGNORE INTO entry_links(id, from_id, to_id, kind, created_at, "
-        "updated_at, version_vector, change_seq) "
-        "VALUES (?6, ?1, ?2, ?3, ?4, ?5, '{}', 0);",
-        -1, &ins, NULL);
-    if (rc != SQLITE_OK) {
-        capture_sqlite_error(dst, serr);
-        (void)sqlite3_finalize(sel);
-        (void)sqlite3_finalize(sync_of);
-        return STORE_ERR_SQLITE;
-    }
+    while (st == STORE_OK && (rc = sqlite3_step(sel)) == SQLITE_ROW) {
+        ImportLink link;
+        char **owned[] = {&link.from, &link.to, &link.kind, &link.created_at, &link.updated_at,
+                          &link.deleted_at};
+        size_t i = 0;
 
-    while ((rc = sqlite3_step(sel)) == SQLITE_ROW) {
-        long long f_id = sqlite3_column_int64(sel, 0);
-        long long t_id = sqlite3_column_int64(sel, 1);
-        const char *kind = (const char *)sqlite3_column_text(sel, 2);
-        const char *created = (const char *)sqlite3_column_text(sel, 3);
-        const char *updated = (const char *)sqlite3_column_text(sel, 4);
-        const char *f_sync = NULL;
-        const char *t_sync = NULL;
-        Entry from_entry;
-        Entry to_entry;
-        StoreStatus st = STORE_OK;
-
-        /* v6 tombstones stay in the source; do not revive them. */
-        if (sqlite3_column_count(sel) > 5 && sqlite3_column_type(sel, 5) != SQLITE_NULL) {
-            continue;
+        memset(&link, 0, sizeof(link));
+        link.line = sqlite3_column_int64(sel, 0);
+        link.file = import_alias(file);
+        for (i = 0; i < sizeof(owned) / sizeof(owned[0]); i++) {
+            *owned[i] = column_dup(sel, (int)i + 1);
+            if (*owned[i] == NULL && sqlite3_column_type(sel, (int)i + 1) != SQLITE_NULL) {
+                st = STORE_ERR_OOM;
+            }
         }
-
-        (void)sqlite3_reset(sync_of);
-        (void)sqlite3_clear_bindings(sync_of);
-        (void)sqlite3_bind_int64(sync_of, 1, f_id);
-        if (sqlite3_step(sync_of) != SQLITE_ROW) {
-            continue;
+        if (st == STORE_OK) {
+            import_validate_links(&link, 1U);
+            st = import_doc_one_link(dst, &link, now, counts);
         }
-        f_sync = (const char *)sqlite3_column_text(sync_of, 0);
-        if (f_sync == NULL) {
-            continue;
-        }
-        {
-            char *from_sync = dup_str(f_sync);
-            char *ts = NULL;
-
-            (void)sqlite3_reset(sync_of);
-            (void)sqlite3_clear_bindings(sync_of);
-            (void)sqlite3_bind_int64(sync_of, 1, t_id);
-            if (sqlite3_step(sync_of) != SQLITE_ROW) {
-                free(from_sync);
-                continue;
-            }
-            t_sync = (const char *)sqlite3_column_text(sync_of, 0);
-            if (t_sync == NULL) {
-                free(from_sync);
-                continue;
-            }
-            ts = dup_str(t_sync);
-            if (from_sync == NULL || ts == NULL) {
-                free(from_sync);
-                free(ts);
-                (void)sqlite3_finalize(sel);
-                (void)sqlite3_finalize(sync_of);
-                (void)sqlite3_finalize(ins);
-                return STORE_ERR_OOM;
-            }
-            memset(&from_entry, 0, sizeof(from_entry));
-            memset(&to_entry, 0, sizeof(to_entry));
-            st = load_entry_by_sync_id(dst, from_sync, &from_entry, serr);
-            if (st == STORE_OK) {
-                st = load_entry_by_sync_id(dst, ts, &to_entry, serr);
-            }
-            free(from_sync);
-            free(ts);
-            if (st == STORE_ERR_NOT_FOUND) {
-                store_entry_free(&from_entry);
-                store_entry_free(&to_entry);
-                continue;
-            }
-            if (st != STORE_OK) {
-                store_entry_free(&from_entry);
-                store_entry_free(&to_entry);
-                (void)sqlite3_finalize(sel);
-                (void)sqlite3_finalize(sync_of);
-                (void)sqlite3_finalize(ins);
-                return st;
-            }
-            {
-                long long sf = from_entry.id;
-                long long st_id = to_entry.id;
-                const char *ktok = (kind != NULL) ? kind : "related";
-                bool cycle = false;
-
-                if (strcmp(ktok, "related") == 0 && sf > st_id) {
-                    long long tmp = sf;
-
-                    sf = st_id;
-                    st_id = tmp;
-                }
-                if (strcmp(ktok, "supersedes") == 0) {
-                    st = supersedes_reaches(dst, to_entry.id, from_entry.id, &cycle, serr);
-                    if (st != STORE_OK) {
-                        store_entry_free(&from_entry);
-                        store_entry_free(&to_entry);
-                        (void)sqlite3_finalize(sel);
-                        (void)sqlite3_finalize(sync_of);
-                        (void)sqlite3_finalize(ins);
-                        return st;
-                    }
-                    if (cycle) {
-                        store_entry_free(&from_entry);
-                        store_entry_free(&to_entry);
-                        continue; /* invalid link: skip, keep memories */
-                    }
-                }
-                st = insert_imported_link(dst, ins, (StoreEdge){.from_id = sf, .to_id = st_id},
-                                          ktok, created != NULL ? created : "",
-                                          updated != NULL ? updated : "", serr);
-            }
-            store_entry_free(&from_entry);
-            store_entry_free(&to_entry);
-            if (st != STORE_OK) {
-                (void)sqlite3_finalize(sel);
-                (void)sqlite3_finalize(sync_of);
-                (void)sqlite3_finalize(ins);
-                return st;
-            }
+        for (i = 0; i < sizeof(owned) / sizeof(owned[0]); i++) {
+            free(*owned[i]);
         }
     }
-    if (rc != SQLITE_DONE) {
-        capture_source_error(src, serr);
+    if (st == STORE_OK && rc != SQLITE_DONE) {
+        capture_source_error(src, &dst->last);
+        st = STORE_ERR_SQLITE;
     }
     (void)sqlite3_finalize(sel);
-    (void)sqlite3_finalize(sync_of);
-    (void)sqlite3_finalize(ins);
-    return (rc == SQLITE_DONE) ? STORE_OK : STORE_ERR_SQLITE;
+    return st;
 }
 
 /* One existence count. 0 is absent. A sqlite error is -1. devices is never queried. */
@@ -9339,7 +9199,10 @@ static int probe_import_source(sqlite3 *src, StoreError *serr)
 }
 
 /* Prefixes from E12 (v4/v5) or the v6 settings row; defined after settings helpers. */
-static StoreStatus import_db_prefixes(Store *dst, sqlite3 *src, int version, const char *now);
+static StoreStatus import_db_prefixes(Store *dst, sqlite3 *src, int version, const char *now,
+                                      StoreImportResult *out);
+static StoreStatus import_settings_doc(Store *dst, const char *doc, size_t len,
+                                       StoreImportResult *out);
 
 /* Accept 4, 5, and 6. Older keeps the source-too-old text. Newer uses the open
    text. Probe only after the version is one this build understands. */
@@ -9464,11 +9327,16 @@ StoreStatus store_import(Store *dst, const char *src_path, const char *now, cons
     (void)sqlite3_finalize(sel);
     sel = NULL;
 
-    st = import_remap_links(dst->db, src, version, &dst->last);
+    {
+        const char *slash = strrchr(src_path, '/');
+
+        st = import_remap_links(dst, src, version, slash != NULL ? slash + 1 : src_path, now,
+                                out_counts);
+    }
     if (st != STORE_OK) {
         goto fail;
     }
-    st = import_db_prefixes(dst, src, version, now);
+    st = import_db_prefixes(dst, src, version, now, out_counts);
     if (st != STORE_OK) {
         goto fail;
     }
@@ -9570,6 +9438,27 @@ static bool e72_identical(const Entry *local, const ImportMemory *m)
     return tags_equal(local->tags, local->ntags, m->tags, m->ntags) != 0;
 }
 
+/* The incoming record as an Entry view for a conflict snapshot. Borrows m's
+   strings; nothing in the view is freed. */
+static void import_doc_view(const ImportMemory *m, const char *id, const char *created_by,
+                            const char *now, Entry *view)
+{
+    memset(view, 0, sizeof(*view));
+    view->sync_id = import_alias(id);
+    view->key = m->key;
+    view->body = m->body;
+    view->tags = m->tags;
+    view->ntags = m->ntags;
+    view->created_by = import_alias(created_by);
+    view->updated_by = import_alias(k_import_actor);
+    view->created_at = import_alias(m->created_at != NULL ? m->created_at : now);
+    view->updated_at = import_alias(m->updated_at != NULL ? m->updated_at : now);
+    view->expires_at = m->expires_at;
+    view->deleted_at = m->deleted_at;
+    view->version_vector =
+        import_alias(m->version_vector != NULL ? m->version_vector : k_empty_vv);
+}
+
 static StoreStatus import_doc_insert(sqlite3 *db, const ImportMemory *m, const char *created_by,
                                      const char *now, StoreImportResult *counts, StoreError *serr)
 {
@@ -9592,31 +9481,23 @@ static StoreStatus import_doc_insert(sqlite3 *db, const ImportMemory *m, const c
         }
         id = minted;
     }
+    /* Same clash rules as --from-db (import_insert_new): key, else keyless body. */
     if (m->key != NULL) {
         st = key_taken_by_other(db, m->key, NULL, &occ, &taken, serr);
-        if (st != STORE_OK) {
-            return st;
-        }
-        if (taken) {
-            long long conflict_id = 0;
+    } else {
+        st = hash_taken_by_other(db, hash, NULL, &occ, &taken, serr);
+    }
+    if (st != STORE_OK) {
+        return st;
+    }
+    if (taken) {
+        long long conflict_id = 0;
 
-            memset(&view, 0, sizeof(view));
-            view.sync_id = id;
-            view.key = m->key;
-            view.body = m->body;
-            view.tags = m->tags;
-            view.ntags = m->ntags;
-            view.created_by = import_alias(created_by);
-            view.updated_by = import_alias(k_import_actor);
-            view.created_at = import_alias(created_at);
-            view.updated_at = import_alias(updated_at);
-            view.expires_at = m->expires_at;
-            view.deleted_at = m->deleted_at;
-            view.version_vector = import_alias(vv);
-            st = record_clash(db, occ, &view, now, STORE_CONFLICT_KEY_CLASH, id, g_import_origin,
-                              &conflict_id, serr);
-            return import_note_conflict(counts, st, conflict_id);
-        }
+        import_doc_view(m, id, created_by, now, &view);
+        st = record_clash(db, occ, &view, now,
+                          m->key != NULL ? STORE_CONFLICT_KEY_CLASH : STORE_CONFLICT_HASH_CLASH, id,
+                          g_import_origin, &conflict_id, serr);
+        return import_note_conflict(counts, st, conflict_id);
     }
     st = insert_entry_imported(db, m->key, m->body, hash, created_by, k_import_actor, created_at,
                                updated_at, m->expires_at, id, m->deleted_at, vv, &new_id, serr);
@@ -9684,10 +9565,6 @@ static StoreStatus import_doc_keyless_union(sqlite3 *db, const ImportMemory *m, 
     if (st != STORE_OK) {
         return st;
     }
-    if (local.key != NULL) {
-        store_entry_free(&local);
-        return import_doc_insert(db, m, created_by, now, counts, serr);
-    }
     before = local.ntags;
     st = union_tags(db, local.id, (const char *const *)m->tags, m->ntags, serr);
     if (st != STORE_OK) {
@@ -9746,19 +9623,7 @@ static StoreStatus import_doc_merge_present(sqlite3 *dst, const char *device_id,
         if (taken) {
             long long conflict_id = 0;
 
-            memset(&view, 0, sizeof(view));
-            view.sync_id = m->id;
-            view.key = m->key;
-            view.body = m->body;
-            view.tags = m->tags;
-            view.ntags = m->ntags;
-            view.created_by = import_alias(created_by);
-            view.updated_by = import_alias(k_import_actor);
-            view.created_at = import_alias((m->created_at != NULL) ? m->created_at : now);
-            view.updated_at = import_alias(updated_at);
-            view.expires_at = m->expires_at;
-            view.deleted_at = m->deleted_at;
-            view.version_vector = import_alias(vv);
+            import_doc_view(m, m->id, created_by, now, &view);
             st = record_clash(dst, occ, &view, now,
                               m->key != NULL ? STORE_CONFLICT_KEY_CLASH : STORE_CONFLICT_HASH_CLASH,
                               m->id, g_import_origin, &conflict_id, serr);
@@ -9795,19 +9660,7 @@ static StoreStatus import_doc_merge_present(sqlite3 *dst, const char *device_id,
     {
         long long conflict_id = 0;
 
-        memset(&view, 0, sizeof(view));
-        view.sync_id = m->id;
-        view.key = m->key;
-        view.body = m->body;
-        view.tags = m->tags;
-        view.ntags = m->ntags;
-        view.created_by = import_alias(created_by);
-        view.updated_by = import_alias(k_import_actor);
-        view.created_at = import_alias((m->created_at != NULL) ? m->created_at : now);
-        view.updated_at = import_alias(updated_at);
-        view.expires_at = m->expires_at;
-        view.deleted_at = m->deleted_at;
-        view.version_vector = import_alias(vv);
+        import_doc_view(m, m->id, created_by, now, &view);
         st = record_concurrent_vv(dst, local, &view, vv, now, g_import_origin, &conflict_id, serr);
         return import_note_conflict(counts, st, conflict_id);
     }
@@ -9980,8 +9833,9 @@ static StoreStatus import_doc_one_link(Store *dst, const ImportLink *link, const
             return import_note_error(counts, link->file, link->line, "invalid link");
         }
     }
-    if (presence == EDGE_LIVE && link->deleted_at == NULL) {
-        /* Existing live triple unchanged: INSERT OR IGNORE. */
+    if (presence == EDGE_LIVE || (presence == EDGE_DELETED && link->deleted_at != NULL)) {
+        /* INSERT OR IGNORE. Unlink is not an import operation, and an add wins
+           over a remove (SY-M3): a file tombstone never kills a live link. */
         store_entry_free(&from_e);
         store_entry_free(&to_e);
         return STORE_OK;
@@ -9993,7 +9847,7 @@ static StoreStatus import_doc_one_link(Store *dst, const ImportLink *link, const
         store_entry_free(&to_e);
         return st;
     }
-    /* Revive a tombstone, or apply an incoming tombstone on a live/deleted row. */
+    /* A live file link over a local tombstone: revive it (add wins). */
     st = touch_edge(dst->db, (StoreEdge){.from_id = stored_from, .to_id = stored_to}, kind,
                     updated_at, dst->device_id, link->deleted_at, &dst->last);
     if (st == STORE_OK) {
@@ -10002,6 +9856,24 @@ static StoreStatus import_doc_one_link(Store *dst, const ImportLink *link, const
     store_entry_free(&from_e);
     store_entry_free(&to_e);
     return st;
+}
+
+/* Apply a remember-settings-export document inside the open import transaction
+   (ST-8.3a, ST-8.4 to ST-8.7). The report stays in out for the CLI warnings. */
+static StoreStatus import_settings_doc(Store *dst, const char *doc, size_t len,
+                                       StoreImportResult *out)
+{
+    char serr[STORE_SQLITE_MSG_LEN];
+    SettingStatus sst = SETTING_OK;
+
+    serr[0] = '\0';
+    sst = store_setting_import_apply(dst, doc, len, SETTING_LAYER_BRAIN, &out->settings, serr,
+                                     sizeof(serr));
+    if (sst == SETTING_OK) {
+        return STORE_OK;
+    }
+    (void)snprintf(dst->last.sqlite_message, sizeof(dst->last.sqlite_message), "%s", serr);
+    return (strcmp(serr, "out of memory") == 0) ? STORE_ERR_OOM : STORE_ERR_INTERNAL;
 }
 
 StoreStatus store_import_doc(Store *dst, const ImportDoc *doc, const char *now, const char *origin,
@@ -10049,28 +9921,11 @@ StoreStatus store_import_doc(Store *dst, const ImportDoc *doc, const char *now, 
             goto fail;
         }
     }
-    if (doc->settings_doc != NULL && doc->settings_len > 0U) {
-        SettingImportReport rep;
-        char serr[STORE_SQLITE_MSG_LEN];
-        SettingStatus sst = SETTING_OK;
-
-        memset(&rep, 0, sizeof(rep));
-        serr[0] = '\0';
-        sst = store_setting_import_apply(dst, doc->settings_doc, doc->settings_len,
-                                         SETTING_LAYER_BRAIN, &rep, serr, sizeof(serr));
-        if (sst != SETTING_OK) {
-            store_setting_import_free(&rep);
-            st = (strcmp(serr, "out of memory") == 0) ? STORE_ERR_OOM : STORE_ERR_INTERNAL;
-            if (serr[0] != '\0') {
-                (void)snprintf(dst->last.sqlite_message, sizeof(dst->last.sqlite_message), "%s",
-                               serr);
-            }
+    if (doc->settings_doc != NULL) {
+        st = import_settings_doc(dst, doc->settings_doc, doc->settings_len, out);
+        if (st != STORE_OK) {
             goto fail;
         }
-        out->settings_written = rep.written;
-        out->settings_unchanged = rep.unchanged;
-        out->settings_skipped = rep.skipped;
-        store_setting_import_free(&rep);
     }
     st = import_load_conflicts(dst->db, out, &dst->last);
     if (st != STORE_OK) {
@@ -12058,154 +11913,48 @@ static StoreStatus import_e12_prefixes(Store *dst, sqlite3 *src, const char *now
     return st;
 }
 
-/* ST-8.6 for the single v6 remember.buckets.prefixes row. */
-static StoreStatus import_v6_prefixes(Store *dst, sqlite3 *src, const char *now)
+/* The v6 remember.buckets.prefixes row as a one-row settings document, so it
+   takes the settings import path: ST-8.4 checks every field of a hostile source
+   row, ST-8.6 merges, ST-8.7 keeps the source actor. A member that is not JSON
+   stays a JSON string, which that check refuses. */
+static StoreStatus import_v6_prefixes(Store *dst, sqlite3 *src, StoreImportResult *out)
 {
+    static const char sql[] =
+        "SELECT json_object('format', 'remember-settings-export', 'version', 1, 'settings', "
+        "json_array(json_object('key', key, 'scope', 'brain', "
+        "'value', CASE WHEN json_valid(value) THEN json(value) ELSE value END, "
+        "'updated_by', CASE WHEN json_valid(updated_by) THEN json(updated_by) ELSE updated_by END, "
+        "'updated_at', updated_at, 'device_id', device_id, "
+        "'version_vector', CASE WHEN json_valid(version_vector) THEN json(version_vector) "
+        "ELSE version_vector END, 'deleted_at', deleted_at))) "
+        "FROM settings WHERE key = ?1;";
     sqlite3_stmt *sel = NULL;
-    char *src_value = NULL;
-    char *src_by = NULL;
-    char *src_at = NULL;
-    char *src_device = NULL;
-    char *src_vector = NULL;
-    char *src_deleted = NULL;
-    char *loc_value = NULL;
-    char *loc_by = NULL;
-    char *loc_at = NULL;
-    char *loc_device = NULL;
-    char *loc_vector = NULL;
-    char *loc_deleted = NULL;
-    char merged[VV_OUT_MAX];
-    int order = 0;
-    int cmp = 0;
-    int rc = 0;
-    bool found_loc = false;
-    bool wins = true;
+    char *doc = NULL;
     StoreStatus st = STORE_OK;
+    int rc = 0;
 
-    (void)now;
-    rc = sqlite3_prepare_v2(src,
-                            "SELECT value, updated_by, updated_at, device_id, version_vector, "
-                            "deleted_at FROM settings WHERE key = ?1;",
-                            -1, &sel, NULL);
-    if (rc != SQLITE_OK) {
-        /* A v6 file without a settings table is absent, not an error. */
-        return STORE_OK;
-    }
-    (void)sqlite3_bind_text(sel, 1, k_prefixes_key, -1, SQLITE_STATIC);
-    rc = sqlite3_step(sel);
-    if (rc == SQLITE_DONE) {
-        (void)sqlite3_finalize(sel);
-        return STORE_OK;
-    }
-    if (rc != SQLITE_ROW) {
-        capture_source_error(src, &dst->last);
-        (void)sqlite3_finalize(sel);
-        return STORE_ERR_SQLITE;
-    }
-    src_value = dup_str((const char *)sqlite3_column_text(sel, 0));
-    src_by = dup_str((const char *)sqlite3_column_text(sel, 1));
-    src_at = dup_str((const char *)sqlite3_column_text(sel, 2));
-    src_device = dup_str((const char *)sqlite3_column_text(sel, 3));
-    src_vector = dup_str((const char *)sqlite3_column_text(sel, 4));
-    if (sqlite3_column_type(sel, 5) != SQLITE_NULL) {
-        src_deleted = dup_str((const char *)sqlite3_column_text(sel, 5));
-    }
-    (void)sqlite3_finalize(sel);
-    sel = NULL;
-    if (src_value == NULL || src_by == NULL || src_at == NULL || src_device == NULL ||
-        src_vector == NULL) {
-        free(src_value);
-        free(src_by);
-        free(src_at);
-        free(src_device);
-        free(src_vector);
-        free(src_deleted);
-        return STORE_ERR_OOM;
-    }
-
-    rc = sqlite3_prepare_v2(dst->db,
-                            "SELECT value, updated_by, updated_at, device_id, version_vector, "
-                            "deleted_at FROM settings WHERE key = ?1;",
-                            -1, &sel, NULL);
-    if (rc != SQLITE_OK) {
-        capture_sqlite_error(dst->db, &dst->last);
-        st = STORE_ERR_SQLITE;
-        goto done;
+    if (sqlite3_prepare_v2(src, sql, -1, &sel, NULL) != SQLITE_OK) {
+        return STORE_OK; /* a v6 file without a settings table is absent, not an error */
     }
     (void)sqlite3_bind_text(sel, 1, k_prefixes_key, -1, SQLITE_STATIC);
     rc = sqlite3_step(sel);
     if (rc == SQLITE_ROW) {
-        found_loc = true;
-        loc_value = dup_str((const char *)sqlite3_column_text(sel, 0));
-        loc_by = dup_str((const char *)sqlite3_column_text(sel, 1));
-        loc_at = dup_str((const char *)sqlite3_column_text(sel, 2));
-        loc_device = dup_str((const char *)sqlite3_column_text(sel, 3));
-        loc_vector = dup_str((const char *)sqlite3_column_text(sel, 4));
-        if (sqlite3_column_type(sel, 5) != SQLITE_NULL) {
-            loc_deleted = dup_str((const char *)sqlite3_column_text(sel, 5));
-        }
-        if (loc_value == NULL || loc_by == NULL || loc_at == NULL || loc_device == NULL ||
-            loc_vector == NULL) {
-            (void)sqlite3_finalize(sel);
-            st = STORE_ERR_OOM;
-            goto done;
-        }
+        doc = column_dup(sel, 0);
+        st = (doc != NULL) ? import_settings_doc(dst, doc, strlen(doc), out) : STORE_ERR_OOM;
+        free(doc);
     } else if (rc != SQLITE_DONE) {
-        capture_sqlite_error(dst->db, &dst->last);
-        (void)sqlite3_finalize(sel);
+        capture_source_error(src, &dst->last);
         st = STORE_ERR_SQLITE;
-        goto done;
     }
     (void)sqlite3_finalize(sel);
-    sel = NULL;
-
-    if (found_loc) {
-        st = vv_compare(dst->db, loc_vector, src_vector, &order, &dst->last);
-        if (st != STORE_OK) {
-            goto done;
-        }
-        if (order != 0) {
-            wins = order > 0;
-        } else {
-            cmp = strcmp(src_at, loc_at);
-            if (cmp == 0) {
-                cmp = strcmp(src_device, loc_device);
-            }
-            wins = cmp > 0; /* tie keeps local (ST-8.6) */
-        }
-        if (!wins) {
-            goto done;
-        }
-    }
-
-    st = vv_pairwise_max(dst->db, found_loc ? loc_vector : "{}", src_vector, merged, sizeof(merged),
-                         &dst->last);
-    if (st != STORE_OK) {
-        goto done;
-    }
-    st = write_imported_prefix_row(dst, src_value, src_by, src_at, src_device, merged, src_deleted,
-                                   found_loc && loc_deleted == NULL ? loc_value : NULL);
-
-done:
-    free(src_value);
-    free(src_by);
-    free(src_at);
-    free(src_device);
-    free(src_vector);
-    free(src_deleted);
-    free(loc_value);
-    free(loc_by);
-    free(loc_at);
-    free(loc_device);
-    free(loc_vector);
-    free(loc_deleted);
     return st;
 }
 
-static StoreStatus import_db_prefixes(Store *dst, sqlite3 *src, int version, const char *now)
+static StoreStatus import_db_prefixes(Store *dst, sqlite3 *src, int version, const char *now,
+                                      StoreImportResult *out)
 {
     if (version >= 6) {
-        return import_v6_prefixes(dst, src, now);
+        return import_v6_prefixes(dst, src, out);
     }
     return import_e12_prefixes(dst, src, now);
 }

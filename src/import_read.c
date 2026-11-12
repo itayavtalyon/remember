@@ -48,82 +48,6 @@ static const char *basename_of(const char *path)
     return (slash != NULL) ? (slash + 1) : path;
 }
 
-/* Copy the JSON object that is the value of "key" near the start of src. */
-static char *extract_top_object(const char *src, size_t len, const char *key, size_t *out_len)
-{
-    char needle[64];
-    const char *hit = NULL;
-    const char *p = NULL;
-    const char *end = NULL;
-    int depth = 0;
-    bool in_str = false;
-    bool esc = false;
-    bool found = false;
-    size_t n = 0;
-    size_t need = 0;
-    int printed = 0;
-
-    *out_len = 0U;
-    printed = snprintf(needle, sizeof(needle), "\"%s\"", key);
-    if (printed < 0 || (size_t)printed >= sizeof(needle) || src == NULL) {
-        return NULL;
-    }
-    need = (size_t)printed;
-    end = src + len;
-    for (hit = src; hit + need <= end; hit++) {
-        if (memcmp(hit, needle, need) != 0) {
-            continue;
-        }
-        p = hit + need;
-        while (p < end && (*p == ' ' || *p == '\t' || *p == '\n' || *p == '\r')) {
-            p++;
-        }
-        if (p >= end || *p != ':') {
-            continue;
-        }
-        p++;
-        while (p < end && (*p == ' ' || *p == '\t' || *p == '\n' || *p == '\r')) {
-            p++;
-        }
-        if (p < end && *p == '{') {
-            found = true;
-            break;
-        }
-    }
-    if (!found || p >= end || *p != '{') {
-        return NULL;
-    }
-    for (n = 0; p + n < end; n++) {
-        char c = p[n];
-
-        if (in_str) {
-            if (esc) {
-                esc = false;
-            } else if (c == '\\') {
-                esc = true;
-            } else if (c == '"') {
-                in_str = false;
-            }
-            continue;
-        }
-        if (c == '"') {
-            in_str = true;
-            continue;
-        }
-        if (c == '{') {
-            depth++;
-        } else if (c == '}') {
-            depth--;
-            if (depth == 0) {
-                n++;
-                *out_len = n;
-                return dup_bytes(p, n);
-            }
-        }
-    }
-    return NULL;
-}
-
 static bool known_export_root(const char *key)
 {
     return strcmp(key, "format") == 0 || strcmp(key, "version") == 0 ||
@@ -380,8 +304,10 @@ static char *vv_from_value(const JsonValue *v, bool *invalid)
         const char *num = NULL;
         size_t need = 0;
 
+        /* A counter is a JSON integer greater than 0 (plan 23); the canonical
+           check in validate rejects fractions, exponents and signs. */
         if (m->key == NULL || !import_uuid_normalize(m->key, id_buf) || m->value == NULL ||
-            m->value->type != JSON_NUMBER || m->value->u.number.bytes == NULL) {
+            m->value->type != JSON_NUMBER || strcmp(m->value->u.number.bytes, "0") == 0) {
             free(buf);
             *invalid = true;
             return NULL;
@@ -418,6 +344,11 @@ static char *vv_from_value(const JsonValue *v, bool *invalid)
     }
     buf[n++] = '}';
     buf[n] = '\0';
+    if (n >= (size_t)REMEMBER_VV_TEXT_MAX) {
+        free(buf); /* wider than any merge can hold: a bad record (settings A4 rule) */
+        *invalid = true;
+        return NULL;
+    }
     return buf;
 }
 
@@ -768,15 +699,16 @@ int import_read_json(const char *path, ImportDoc *doc, int *sys_errno)
                   dup_cstr("Fix the settings object, then try again."));
         return 0;
     }
-    if (v != NULL && v->type == JSON_OBJECT) {
-        doc->settings_doc = extract_top_object(bytes, len, "settings", &doc->settings_len);
+    if (v != NULL) {
+        /* The root member's own bytes, never a same-named member deeper in the file. */
+        doc->settings_doc = dup_bytes(bytes + v->src_at, v->src_len);
         if (doc->settings_doc == NULL) {
             free(bytes);
             jsonread_free(root);
-            set_parse(doc, dup_cstr("\"settings\" isn't a settings document."),
-                      dup_cstr("Fix the settings object, then try again."));
-            return 0;
+            *sys_errno = ENOMEM;
+            return -1;
         }
+        doc->settings_len = v->src_len;
     }
     free(bytes);
     v = object_get(root, "brain_id");

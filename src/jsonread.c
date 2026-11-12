@@ -713,10 +713,13 @@ static JsonValue *parse_object(Parser *p, int line)
     return v;
 }
 
+static JsonValue *parse_value_at(Parser *p, int line);
+
+/* One value plus its source byte span (callers such as the nested settings
+   document re-read those exact bytes). */
 static JsonValue *parse_value(Parser *p)
 {
-    int line = 0;
-    unsigned char c = 0;
+    size_t start = 0;
     JsonValue *v = NULL;
 
     skip_ws(p);
@@ -724,7 +727,20 @@ static JsonValue *parse_value(Parser *p)
         set_err(p, JSONREAD_ERR_SYNTAX);
         return NULL;
     }
-    line = p->line;
+    start = p->at;
+    v = parse_value_at(p, p->line);
+    if (v != NULL) {
+        v->src_at = start;
+        v->src_len = p->at - start;
+    }
+    return v;
+}
+
+static JsonValue *parse_value_at(Parser *p, int line)
+{
+    unsigned char c = 0;
+    JsonValue *v = NULL;
+
     c = peek(p);
     if (c == 'n') {
         if (!expect_lit(p, "null")) {

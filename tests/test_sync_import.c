@@ -2492,8 +2492,151 @@ TEST(cli_import_refuses_to_snapshot_a_non_canonical_local_vector)
     free(foreign);
 }
 
+/* ---- Whole-plan review exploits (2026-11-12): hostile v6 sources. ---- */
+
+/* A v6 source brain holding memories a and b (local ids 1 and 2). */
+static char *given_v6_source_a_b(void)
+{
+    char *foreign = make_temp_db_path();
+    const char *add_a[] = {"add", "--key", "a", "alpha"};
+    const char *add_b[] = {"add", "--key", "b", "beta"};
+
+    ASSERT_TRUE(foreign != NULL);
+    given_added(foreign, add_a, 4);
+    given_added(foreign, add_b, 4);
+    return foreign;
+}
+
+static CmdResult import_from_db(const char *local, const char *foreign)
+{
+    const char *imp[] = {"--json", "import", "--from-db", foreign};
+
+    return run_remember(local, imp, 4, NULL);
+}
+
+static char *basename_dup(const char *path)
+{
+    const char *slash = strrchr(path, '/');
+
+    return strdup(slash != NULL ? slash + 1 : path);
+}
+
+/* A supersedes cycle in the source is one invalid link, named by its rowid. */
+TEST(cli_import_v6_source_cycle_lists_an_invalid_link_by_rowid)
+{
+    char *local = make_temp_db_path();
+    char *foreign = given_v6_source_a_b();
+    char *base = basename_dup(foreign);
+    char want[512];
+    CmdResult r;
+
+    sqlite_exec(foreign,
+                "INSERT INTO entry_links(rowid, id, from_id, to_id, kind, created_at, updated_at, "
+                "version_vector, change_seq) VALUES "
+                "(7, '018f6b2e-7c3a-7c00-8000-000000000001', 1, 2, 'supersedes', "
+                "'2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z', '{}', 0),"
+                "(9, '018f6b2e-7c3a-7c00-8000-000000000002', 2, 1, 'supersedes', "
+                "'2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z', '{}', 0);");
+    r = import_from_db(local, foreign);
+    ASSERT_EQ_INT(r.exit_code, 0);
+    (void)snprintf(want, sizeof want,
+                   "\"skipped\":1,\"errors\":[{\"file\":\"%s\",\"line\":9,\"message\":\"invalid "
+                   "link\"}]",
+                   base);
+    ASSERT_STR_CONTAINS(r.out, want);
+    cmd_result_free(&r);
+    free(base);
+    free(local);
+    free(foreign);
+}
+
+/* A source link whose kind the schema forbids is an invalid link, not an aborted import. */
+TEST(cli_import_v6_source_unknown_link_kind_is_an_invalid_link)
+{
+    char *local = make_temp_db_path();
+    char *foreign = given_v6_source_a_b();
+    char *line = NULL;
+    CmdResult r;
+
+    sqlite_exec(foreign,
+                "PRAGMA ignore_check_constraints = ON;"
+                "INSERT INTO entry_links(rowid, id, from_id, to_id, kind, created_at, updated_at, "
+                "version_vector, change_seq) VALUES "
+                "(3, '018f6b2e-7c3a-7c00-8000-000000000001', 1, 2, 'owns', "
+                "'2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z', '{}', 0);");
+    r = import_from_db(local, foreign);
+    ASSERT_EQ_INT(r.exit_code, 0);
+    ASSERT_STR_CONTAINS(r.out, "\"inserted\":2");
+    ASSERT_STR_CONTAINS(r.out, "\"line\":3,\"message\":\"invalid link\"");
+    cmd_result_free(&r);
+    line = harness_sqlite_query_line(local, "SELECT COUNT(*) FROM entry_links;");
+    ASSERT_STREQ(line, "0");
+    free(line);
+    free(local);
+    free(foreign);
+}
+
+/* A v6 prefixes row is a settings row: a value the registry refuses is skipped, never stored. */
+TEST(cli_import_v6_source_invalid_prefixes_value_is_skipped)
+{
+    char *local = make_temp_db_path();
+    char *foreign = given_v6_source_a_b();
+    char *line = NULL;
+    const char *get[] = {"--json", "settings", "get", "remember.buckets.prefixes"};
+    CmdResult r;
+
+    sqlite_exec(foreign,
+                "INSERT INTO settings(key, value, updated_by, updated_at, device_id, "
+                "version_vector, deleted_at, change_seq) VALUES "
+                "('remember.buckets.prefixes', 'not json', '{\"kind\":\"human\",\"id\":null}', "
+                "'2026-01-01T00:00:00.000Z', '018f6b2e-7c3a-7c00-8000-0000000000aa', "
+                "'{\"018f6b2e-7c3a-7c00-8000-0000000000aa\":9}', NULL, 1);");
+    r = import_from_db(local, foreign);
+    ASSERT_EQ_INT(r.exit_code, 0);
+    ASSERT_STR_CONTAINS(r.out, "\"settings\":{\"written\":0,\"unchanged\":0,\"skipped\":1}");
+    ASSERT_STR_CONTAINS(r.out, "\"code\":\"setting_invalid\"");
+    cmd_result_free(&r);
+    line = harness_sqlite_query_line(local, "SELECT COUNT(*) FROM settings;");
+    ASSERT_STREQ(line, "0");
+    free(line);
+    r = run_remember(local, get, 4, NULL);
+    ASSERT_EQ_INT(r.exit_code, 0);
+    cmd_result_free(&r);
+    free(local);
+    free(foreign);
+}
+
+/* A v6 prefixes row with a forged actor is skipped (ST-8.4 bad field), never stored. */
+TEST(cli_import_v6_source_prefixes_row_with_a_bad_actor_is_skipped)
+{
+    char *local = make_temp_db_path();
+    char *foreign = given_v6_source_a_b();
+    char *line = NULL;
+    CmdResult r;
+
+    sqlite_exec(foreign,
+                "INSERT INTO settings(key, value, updated_by, updated_at, device_id, "
+                "version_vector, deleted_at, change_seq) VALUES "
+                "('remember.buckets.prefixes', '[\"ok:\"]', 'evil', "
+                "'2026-01-01T00:00:00.000Z', '018f6b2e-7c3a-7c00-8000-0000000000aa', "
+                "'{\"018f6b2e-7c3a-7c00-8000-0000000000aa\":9}', NULL, 1);");
+    r = import_from_db(local, foreign);
+    ASSERT_EQ_INT(r.exit_code, 0);
+    ASSERT_STR_CONTAINS(r.out, "\"settings\":{\"written\":0,\"unchanged\":0,\"skipped\":1}");
+    cmd_result_free(&r);
+    line = harness_sqlite_query_line(local, "SELECT COUNT(*) FROM settings;");
+    ASSERT_STREQ(line, "0");
+    free(line);
+    free(local);
+    free(foreign);
+}
+
 void register_sync_import_tests(void)
 {
+    RUN_TEST(cli_import_v6_source_cycle_lists_an_invalid_link_by_rowid);
+    RUN_TEST(cli_import_v6_source_unknown_link_kind_is_an_invalid_link);
+    RUN_TEST(cli_import_v6_source_invalid_prefixes_value_is_skipped);
+    RUN_TEST(cli_import_v6_source_prefixes_row_with_a_bad_actor_is_skipped);
     RUN_TEST(cli_import_inserts_preserves_sync_id_remaps_links_no_device_register);
     RUN_TEST(cli_import_refuses_v3_source);
     RUN_TEST(cli_import_refuses_source_newer_than_v6);

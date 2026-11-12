@@ -28,9 +28,13 @@ static const char *import_basename(const char *path)
     return (slash != NULL) ? slash + 1 : path;
 }
 
-/* The import reply: the JSON data object, or one plain line of counts. */
+/* The import reply: the settings skip warnings (ST-8.3a, the same lines as
+   settings import), then the JSON data object or one plain line of counts. */
 static int import_write(bool json, const StoreImportResult *r)
 {
+    if (settings_import_warn_skips(&r->settings, false) != 0) {
+        return -1;
+    }
     if (json) {
         return output_import_data(app_out(), r);
     }
@@ -116,12 +120,6 @@ static int import_from_json(Store *s, bool json, const char *path, const char *o
             store_setting_import_free(&rep);
             import_doc_free(&doc);
             err_msg(DIAG_INTERNAL, err[0] != '\0' ? err : "internal error");
-            return REMEMBER_ERR;
-        }
-        /* ST-8.3a: same skip warnings as settings import (ST-8.4 / ST-8.5). */
-        if (settings_import_warn_skips(&rep, false) != 0) {
-            store_setting_import_free(&rep);
-            import_doc_free(&doc);
             return REMEMBER_ERR;
         }
         store_setting_import_free(&rep);

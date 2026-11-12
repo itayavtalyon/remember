@@ -406,6 +406,7 @@ add_executable(remember_store_tests
     src/search_terms.c
     src/output.c
     src/jsonread.c
+    src/import_validate.c
     src/test_alloc.c
     tests/test_unicode.c
     tests/test_search_terms.c

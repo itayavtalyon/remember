@@ -788,8 +788,7 @@ typedef struct {
 typedef struct {
     char *file;              /* heap basename or relative path */
     const char *message;     /* static bad-record line */
-    int line;                /* 1-based; source entry_links rowid for --from-db links */
-    char pad_[4];
+    long long line;          /* 1-based; source entry_links rowid for --from-db links */
 } StoreImportError;
 
 /* What store_import / store_import_doc did. Release with store_import_result_free. */
@@ -809,9 +808,7 @@ typedef struct {
     StoreImportError *errors;
     size_t nerrors;
     size_t errors_cap;
-    size_t settings_written;
-    size_t settings_unchanged; /* includes kept_local */
-    size_t settings_skipped;
+    SettingImportReport settings; /* the export's or v6 source's settings rows (ST-8.3a) */
 } StoreImportResult;
 
 void store_import_result_free(StoreImportResult *r);

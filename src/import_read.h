@@ -38,9 +38,9 @@ typedef struct {
     char *deleted_at;     /* or NULL (live); set → tombstone */
     char *file;
     const char *bad_message;
-    int line;
+    long long line; /* JSON line, or the source entry_links rowid for --from-db */
     bool bad;
-    char pad_[3];
+    char pad_[7];
 } ImportLink;
 
 typedef struct {

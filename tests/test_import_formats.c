@@ -915,6 +915,215 @@ TEST(import_json_unknown_field_warns_once_and_still_imports)
     free(dst);
 }
 
+/* ---- Whole-plan review exploits (2026-11-12): each test failed before its fix. ---- */
+
+#define EXPORT_HEAD "{\"format\":\"remember-export\",\"version\":1,"
+#define ONE_ENTRY(id, body, vv)                                                                    \
+    "{\"id\":\"" id "\",\"body\":\"" body "\",\"version_vector\":" vv "}"
+
+/* Write text beside dst and import it with --json. */
+static CmdResult import_text(const char *dst, const char *suffix, const char *text)
+{
+    char *src = harness_side_path(dst, suffix);
+    CmdResult r;
+    const char *args[] = {"--json", "import", "--from-json", src};
+
+    ASSERT_EQ_INT(write_text(src, text), 0);
+    r = fixed_import(dst, args, sizeof args / sizeof args[0]);
+    free(src);
+    return r;
+}
+
+static void given_keyless_memory(const char *dst, const char *body)
+{
+    const char *args[] = {"add", body};
+    CmdResult add = run_remember(dst, args, 2, NULL);
+
+    ASSERT_EQ_INT(add.exit_code, 0);
+    cmd_result_free(&add);
+}
+
+/* A settings member inside an entry is an unknown field, never the root settings. */
+TEST(import_json_reads_settings_from_the_root_member_only)
+{
+    char *dst = open_empty_brain();
+    char *got = NULL;
+    CmdResult r = import_text(
+        dst, "-nested.json",
+        EXPORT_HEAD "\"entries\":[{\"id\":\"" FIXTURE_ID("000000000003") "\",\"body\":\"b\","
+                    "\"settings\":{\"format\":\"remember-settings-export\",\"version\":1,"
+                    "\"settings\":[{\"key\":\"remember.buckets.prefixes\",\"scope\":\"brain\","
+                    "\"value\":[\"evil:\"],\"updated_by\":{\"kind\":\"human\",\"id\":null},"
+                    "\"updated_at\":\"" FIXTURE_AT "\",\"device_id\":\"" FIXTURE_ID(
+                        "000000000001") "\",\"version_vector\":{\"" FIXTURE_ID("000000000001") "\":"
+                                        "1},\"deleted_at\":null}]}}],"
+                    "\"settings\":{\"format\":\"remember-settings-export\",\"version\":1,"
+                    "\"settings\":[]}}");
+
+    ASSERT_EQ_INT(r.exit_code, 0);
+    ASSERT_STR_CONTAINS(r.out, "\"settings\":{\"written\":0,\"unchanged\":0,\"skipped\":0}");
+    cmd_result_free(&r);
+    got = harness_sqlite_query_line(dst, "SELECT COUNT(*) FROM settings;");
+    ASSERT_STREQ(got, "0");
+    free(got);
+    free(dst);
+}
+
+/* The root member name may be written with an escape; it is still the settings member. */
+TEST(import_json_reads_an_escaped_settings_member_name)
+{
+    char *dst = open_empty_brain();
+    CmdResult r = import_text(dst, "-escaped.json",
+                              EXPORT_HEAD "\"entries\":[],\"\\u0073ettings\":{\"format\":"
+                                          "\"remember-settings-export\",\"version\":1,"
+                                          "\"settings\":[]}}");
+
+    ASSERT_EQ_INT(r.exit_code, 0);
+    ASSERT_STR_CONTAINS(r.out, "\"settings\":{\"written\":0,\"unchanged\":0,\"skipped\":0}");
+    cmd_result_free(&r);
+    free(dst);
+}
+
+/* A keyless record whose body another keyless id holds is hash_clash, not a failed import. */
+TEST(import_json_keyless_body_held_by_another_id_is_hash_clash)
+{
+    char *dst = open_empty_brain();
+    char *got = NULL;
+    CmdResult r;
+
+    given_keyless_memory(dst, "same body");
+    r = import_text(dst, "-clash.json",
+                    EXPORT_HEAD "\"entries\":[" ONE_ENTRY(FIXTURE_ID("000000000003"), "same body",
+                                                          "{}") "]}");
+    ASSERT_EQ_INT(r.exit_code, 0);
+    ASSERT_STR_CONTAINS(r.out, "\"reason\":\"hash_clash\"");
+    cmd_result_free(&r);
+    got = harness_sqlite_query_line(dst, "SELECT COUNT(*) FROM entries;");
+    ASSERT_STREQ(got, "1");
+    free(got);
+    free(dst);
+}
+
+/* Two keyed-by-id keyless records with one body in one file: the first lands, the second clashes. */
+TEST(import_json_two_ids_with_one_keyless_body_commit_the_first)
+{
+    char *dst = open_empty_brain();
+    char *got = NULL;
+    CmdResult r = import_text(
+        dst, "-twin.json",
+        EXPORT_HEAD "\"entries\":[" ONE_ENTRY(FIXTURE_ID("000000000003"), "twin", "{}") "," ONE_ENTRY(
+            FIXTURE_ID("000000000004"), "twin", "{}") "]}");
+
+    ASSERT_EQ_INT(r.exit_code, 0);
+    ASSERT_STR_CONTAINS(r.out, "\"inserted\":1");
+    ASSERT_STR_CONTAINS(r.out, "\"reason\":\"hash_clash\"");
+    cmd_result_free(&r);
+    got = harness_sqlite_query_line(dst, "SELECT id FROM entries;");
+    ASSERT_STREQ(got, FIXTURE_ID("000000000003"));
+    free(got);
+    free(dst);
+}
+
+/* A version_vector counter must be greater than 0 (plan 23 bad-record rule). */
+TEST(import_json_vector_counter_zero_is_invalid)
+{
+    char *dst = open_empty_brain();
+    char *got = NULL;
+    CmdResult r = import_text(dst, "-vv0.json",
+                              EXPORT_HEAD "\"entries\":[" ONE_ENTRY(
+                                  FIXTURE_ID("000000000003"), "b",
+                                  "{\"" FIXTURE_ID("000000000001") "\":0}") "]}");
+
+    ASSERT_EQ_INT(r.exit_code, 0);
+    ASSERT_STR_CONTAINS(r.out, "\"skipped\":1");
+    ASSERT_STR_CONTAINS(r.out, "\"message\":\"invalid version_vector\"");
+    cmd_result_free(&r);
+    got = harness_sqlite_query_line(dst, "SELECT COUNT(*) FROM entries;");
+    ASSERT_STREQ(got, "0");
+    free(got);
+    free(dst);
+}
+
+/* ndev distinct v7 device ids, each at counter 1, as one JSON object. */
+static char *given_wide_vector(size_t ndev)
+{
+    size_t cap = ndev * 48U + 8U;
+    char *out = (char *)malloc(cap);
+    size_t n = 0;
+    size_t i = 0;
+
+    ASSERT_TRUE(out != NULL);
+    out[n++] = '{';
+    for (i = 0; i < ndev; i++) {
+        n += (size_t)snprintf(out + n, cap - n, "%s\"01a1d000-0000-7000-8000-%012zx\":1",
+                              i > 0U ? "," : "", i);
+    }
+    out[n++] = '}';
+    out[n] = '\0';
+    return out;
+}
+
+/* A vector wider than the merge buffer is one bad record, not an internal error. */
+TEST(import_json_vector_wider_than_the_merge_buffer_is_a_bad_record)
+{
+    char *dst = open_empty_brain();
+    char *vv = given_wide_vector(200U);
+    char *doc = NULL;
+    char *got = NULL;
+    CmdResult r;
+
+    r = import_text(dst, "-first.json",
+                    EXPORT_HEAD "\"entries\":[" ONE_ENTRY(FIXTURE_ID("000000000003"), "first",
+                                                          "{}") "]}");
+    ASSERT_EQ_INT(r.exit_code, 0);
+    cmd_result_free(&r);
+    doc = (char *)malloc(strlen(vv) + (size_t)TEXT_BUF);
+    ASSERT_TRUE(doc != NULL);
+    (void)snprintf(doc, strlen(vv) + (size_t)TEXT_BUF,
+                   EXPORT_HEAD "\"entries\":[{\"id\":\"%s\",\"body\":\"second\","
+                               "\"version_vector\":%s}]}",
+                   FIXTURE_ID("000000000003"), vv);
+    r = import_text(dst, "-wide.json", doc);
+    ASSERT_EQ_INT(r.exit_code, 0);
+    ASSERT_STR_CONTAINS(r.out, "\"message\":\"invalid version_vector\"");
+    cmd_result_free(&r);
+    got = harness_sqlite_query_line(dst, "SELECT body FROM entries;");
+    ASSERT_STREQ(got, "first");
+    free(got);
+    free(doc);
+    free(vv);
+    free(dst);
+}
+
+/* Unlink is not an import operation: a file tombstone leaves a live local link live. */
+TEST(import_json_tombstone_link_does_not_unlink_a_live_link)
+{
+    char *dst = open_empty_brain();
+    char *got = NULL;
+    CmdResult r;
+
+#define TWO_ENTRIES                                                                                \
+    "\"entries\":[" ONE_ENTRY(FIXTURE_ID("000000000003"), "A", "{}") "," ONE_ENTRY(               \
+        FIXTURE_ID("000000000004"), "B", "{}") "]"
+#define CITES_LINK(extra)                                                                          \
+    "\"links\":[{\"from\":\"" FIXTURE_ID("000000000003") "\",\"to\":\"" FIXTURE_ID(               \
+        "000000000004") "\",\"kind\":\"cites\"" extra "}]"
+    r = import_text(dst, "-live.json", EXPORT_HEAD TWO_ENTRIES "," CITES_LINK("") "}");
+    ASSERT_EQ_INT(r.exit_code, 0);
+    cmd_result_free(&r);
+    r = import_text(dst, "-tomb.json",
+                    EXPORT_HEAD TWO_ENTRIES "," CITES_LINK(",\"deleted_at\":\"" FIXTURE_AT "\"") "}");
+#undef CITES_LINK
+#undef TWO_ENTRIES
+    ASSERT_EQ_INT(r.exit_code, 0);
+    cmd_result_free(&r);
+    got = harness_sqlite_query_line(dst,
+                                    "SELECT COUNT(*) FROM entry_links WHERE deleted_at IS NULL;");
+    ASSERT_STREQ(got, "1");
+    free(got);
+    free(dst);
+}
+
 void register_import_formats_tests(void)
 {
     RUN_TEST(import_json_inserts_a_keyed_memory_into_an_empty_brain);
@@ -936,4 +1145,11 @@ void register_import_formats_tests(void)
     RUN_TEST(import_json_bad_settings_document_leaves_the_brain_unchanged);
     RUN_TEST(import_json_bad_setting_value_is_skipped_and_others_write);
     RUN_TEST(import_json_unknown_field_warns_once_and_still_imports);
+    RUN_TEST(import_json_reads_settings_from_the_root_member_only);
+    RUN_TEST(import_json_reads_an_escaped_settings_member_name);
+    RUN_TEST(import_json_keyless_body_held_by_another_id_is_hash_clash);
+    RUN_TEST(import_json_two_ids_with_one_keyless_body_commit_the_first);
+    RUN_TEST(import_json_vector_counter_zero_is_invalid);
+    RUN_TEST(import_json_vector_wider_than_the_merge_buffer_is_a_bad_record);
+    RUN_TEST(import_json_tombstone_link_does_not_unlink_a_live_link);
 }

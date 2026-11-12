@@ -106,6 +106,10 @@ bool utc_stamp_is_canonical(const char *s);
    integer of at most 18 digits, no spaces, and no device twice. */
 bool vv_json_is_canonical(const char *s);
 
+/* Longest version_vector text a merge can hold (store's VV_OUT_MAX). A wider
+   vector from a file or a peer is a bad record, not a failed import. */
+enum { REMEMBER_VV_TEXT_MAX = 4096 };
+
 /* One of the closed source tokens: human, agent, tool, share, unknown.
    v4 and v5 import rows still use this. A memory does not. */
 bool source_is_valid(const char *s);
