@@ -353,7 +353,25 @@ Declined, counted: the four `*_writer` adapters (16 lines) stay, because a typed
 - The coder's table, re-run as a sample: C1 `!a->force` inverted, C2 own-links walk-back removed, C3 CSV quote doubling removed, C4 link filter `||` → `&&`, C5 the D17 restore removed, C6 Markdown `settings.json` written for every row count. All killed; the coder's claims reproduced.
 - Not mutated, justified: the `st_dev` compare in `fileio_same_file` is equivalent on one test volume.
 
-LOCAL_CI_BLOCK
+**Local CI** (2026-11-12, GitHub Actions not run). Tree 55ad485, fresh `build`, `build-cov`, `build-linux-ci`. One job at a time, each under a memory guard that kills the process group when available memory (free + inactive + speculative) drops below 4 GB, with `ASAN_OPTIONS` plus `max_allocation_size_mb=2048:malloc_limit_mb=4096`. Env: llvm@22 and Homebrew sqlite on `PATH`, `ASAN_OPTIONS=detect_leaks=0:halt_on_error=1:abort_on_error=1:allocator_may_return_null=1`. No job was killed.
+
+| Step | Command | Result | Peak RSS |
+|---|---|---|---|
+| configure | `cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug -DCMAKE_C_COMPILER=clang -DREMEMBER_ENABLE_SANITIZERS=ON -DREMEMBER_ENABLE_LSAN=OFF -DREMEMBER_TEST_VFS=ON` | exit 0 | 18 MB |
+| build | `cmake --build build` | exit 0 | 14 MB |
+| ctest | `ctest --test-dir build --output-on-failure` | 6/6 passed, 567 s | 592 MB |
+| gate | `./build/remember_tests ./build/remember --only "$(./scripts/read-gate-suites.sh)"` | 33966 asserts, 0 fail | 54 MB |
+| store | `./build/remember_store_tests` | 22811 asserts, 0 fail | 579 MB |
+| lint | `CI=true REMEMBER_SCAN_BUILD=1 REMEMBER_IWYU=0 ./scripts/lint-all.sh` | LINT OK (clang-tidy 22, cppcheck, gcc -fanalyzer, scan-build) | 726 MB |
+| leaks | `cmake --build build --target leaks-macos` | PASS | 54 MB |
+| coverage | `./scripts/check-coverage.sh` | functions 100%, effective lines 100%, pure-TU branches 100% | 39 MB |
+| linux | `./scripts/ci-linux.sh` (Docker) | `== ci-linux: OK ==` (build, tests, lint incl. iwyu; its clang-tidy is LLVM 18, the macOS run covers the 22 pin), 741 s | 28 MB host side |
+| plugin spec | `venv/bin/python scripts/validate_plugin_spec.py specs/PLUGIN-PROTOCOL.md` | 13 schemas, 29 examples, 81 negative tests, 0 failures | n/a |
+| spec drift | `git diff --name-only origin/main HEAD \| scripts/spec-drift.sh` | exit 0 | n/a |
+
+The first guarded run (cceff5a) stopped at lint: cppcheck `variableScope` on the loop index in `export_out_is_never_the_brain`. That was this review's own test; fixed in 55ad485 and rerun from fresh build dirs.
+
+Peak RSS per gate suite (`--only <suite>`, same guard): export 35, cli_global 13, store 9, normalize 0, add 13, get_list_delete 13, search 13, union_search 13, update 15, json_db_config 2, key_gld 13, verification_gld 31, verification_search 13, schema_config 5, coverage_edges 13, facade 38, tags 21, ttl 17, link 23, sync_output 15, sync_delete 300, sync_locators 20, sync_import 30, schema_v5 6, schema_v6 9, schema_v6_cli 149, device 13, errors 26, list_dates 21, key 13, verification_edges 34, settings 29, envelope 30 (MB). No remember suite is a memory hog. The three machine crashes during this review came from another project's Swift test runs (`swiftpm-testing-helper`, up to 6 GB each) running next to a parallel CI.
 
 **Grades.**
 - Implementer, 6/10. The locked decisions, the example bytes, the fault sweep and the mutation tables are careful work. Misses: the D17 swap shipped as "delete whatever is at PATH" with no question about what PATH may be; nothing stopped `--out` from naming the brain; user input reached `internal error`; a stored id reached a file name unfiltered; CSV formulas were not considered.
