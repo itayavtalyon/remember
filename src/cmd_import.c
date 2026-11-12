@@ -138,7 +138,7 @@ static const char *import_origin(const ImportArgs *a, const char *path)
 }
 
 /* The store's status as the exit code, else the reply; frees the result. */
-static int import_finish(Store *s, bool json, StoreStatus st, StoreImportResult *result)
+static int import_finish(const Store *s, bool json, StoreStatus st, StoreImportResult *result)
 {
     if (st != STORE_OK) {
         return store_status_to_exit(s, st);

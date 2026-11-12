@@ -9926,7 +9926,6 @@ StoreStatus store_import_doc(Store *dst, const ImportDoc *doc, const char *now, 
                              StoreImportResult *out)
 {
     StoreStatus st = STORE_OK;
-    char err_unused[1];
 
     if (out != NULL) {
         memset(out, 0, sizeof(*out));
@@ -9938,6 +9937,8 @@ StoreStatus store_import_doc(Store *dst, const ImportDoc *doc, const char *now, 
     g_import_origin = origin;
     st = begin_write(dst);
     if (st == STORE_OK) {
+        char err_unused[1];
+
         st = import_doc_writes(dst, doc, now, out);
         if (st == STORE_OK && exec_sql(dst->db, "COMMIT;", err_unused, 0U, &dst->last) != 0) {
             st = STORE_ERR_SQLITE;
