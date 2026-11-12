@@ -11,6 +11,7 @@ Trust belongs to the code hash. Remember records trust only after the host confi
 ## Source
 
 - `decision:2026-11-12-trust-file` (X2 A): the file is G4's location and format (`<data dir>/trust.json`, format `remember-trust`) plus H-9.2's hashing of the arguments and the interpreter, not only the executable. This supersedes the location and format in log 010 H-9.1, H-9.2 and `decision:g-29` (`<data dir>/plugins/trust.json`, format `remember-plugin-trust`) and amends the single-executable hash in `decision:2026-11-11-trust-file` (G4 A).
+- `decision:2026-11-12-plugin-approval-required-exit-5`: no TTY and no callback exits 5, like `confirmation_required` (`decision:2026-11-12-e2-confirmation-required-exits-5-everywhere`); `plugin_approval_denied` stays exit 1.
 - Log 010 H-9.1 to H-9.7, H-Q19 (hashing, confirm and mismatch rules; the file path and format field follow X2 A, not H-9.1); `decision:s-05`, `decision:g-29` (hashing only), `decision:g2-09` (no HMAC), `decision:g2-11`, `decision:plugin-permission-prompt`, `decision:g2-13` (NULL confirm is never yes).
 - Old plan 25 "Trust and install", paragraphs 1 to 5.
 - 007 test 23: untrusted `settings set plugin.<name>.enabled true` fails with `plugin_untrusted` and prints C-17.
@@ -31,7 +32,7 @@ File. `<data dir>/trust.json`, where data dir is `RememberEnv.data_dir` (the sam
 
 Hash. Do not hash only the executable. Hash the plugin folder and the manifest. Also hash `command[0]` and every later argv item that names an existing regular file, at most 8 files, in argv order. When `command[0]` is `sh`, `bash`, `zsh`, `python`, `python3`, `node`, `ruby`, `perl`, `deno`, `bun`, or `/usr/bin/env` followed by one of those, also store the interpreter realpath and SHA-256. For `sh -c "<inline>"`, the inline text is part of the manifest hash. A built-in has no record and is trusted. A mismatch of any stored hash means untrusted: the run is skipped with `plugin_untrusted` and nothing is deleted.
 
-Confirm. `plugin_trust_confirm(const RememberEnv *env, const char *name, const char *body)` calls `env->confirm(ctx, "plugin", name, body)`. NULL confirm: exit 1 `plugin_approval_required`, record nothing, print C-15. False: exit 1 `plugin_approval_denied`, record nothing, print C-16. The CLI's confirm (on a TTY) prints the body, then `Type "<name>" to allow it, or press Enter to cancel:` and returns true only when the typed text equals the name. No TTY means the CLI passes no callback. No `--confirm` flag. Folder body: `Allow "<name>" to read your memories? It can send them off this Mac.` followed by the needs, permissions and settings, one per line. Hook body: `Allow hook "<name>" to run <path>?` An update shows only the changed needs.
+Confirm. `plugin_trust_confirm(const RememberEnv *env, const char *name, const char *body)` calls `env->confirm(ctx, "plugin", name, body)`. NULL confirm: exit 5 `plugin_approval_required` (the E2 rule, `decision:2026-11-12-plugin-approval-required-exit-5`; log 010 said exit 1), record nothing, print C-15. False: exit 1 `plugin_approval_denied`, record nothing, print C-16. The CLI's confirm (on a TTY) prints the body, then `Type "<name>" to allow it, or press Enter to cancel:` and returns true only when the typed text equals the name. No TTY means the CLI passes no callback. No `--confirm` flag. Folder body: `Allow "<name>" to read your memories? It can send them off this Mac.` followed by the needs, permissions and settings, one per line. Hook body: `Allow hook "<name>" to run <path>?` An update shows only the changed needs.
 
 Check. `plugin_trust_check(name)` compares the record to the files. A mismatch returns `untrusted`; the caller (plan 35, 36) does not run, sets `disabled_reason` `untrusted` in that brain's `index.json`, and warns `plugin_untrusted` with C-17. `plugin trust` re-hashes, shows the changed needs, and asks again. True stores the new hash and sets `disabled_reason` to null. `enabled` stays.
 
@@ -49,7 +50,7 @@ Settings. `settings set plugin.<name>.enabled true` for an installed plugin with
 - [ ] `record_is_data_dir_trust_json` (path `<data dir>/trust.json`, format `remember-trust`, mode 0600, `entries` with `kind` `plugin` or `hook`; no file under `plugins/trust.json`).
 - [ ] `record_fields_h_9_2` (folder, manifest, files and interpreter hash fields).
 - [ ] `hash_argv_files_max_8` and `interpreter_hashed` and `sh_c_inline_in_manifest_hash`.
-- [ ] `null_confirm_c15_records_nothing` and `false_confirm_c16_records_nothing` (010 test 13, first half).
+- [ ] `null_confirm_exits_5_c15_records_nothing` (exit 5, code `plugin_approval_required`) and `false_confirm_exits_1_c16_records_nothing` (exit 1, code `plugin_approval_denied`) (010 test 13, first half).
 - [ ] `typed_name_must_match` (old probe 1).
 - [ ] `mismatch_sets_untrusted_keeps_enabled` and `trust_clears_reason` (010 test 13).
 - [ ] `untrusted_enable_setting_fails_c17` (007 test 23).
