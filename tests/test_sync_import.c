@@ -503,6 +503,31 @@ TEST(cli_import_v5_source_is_read_only_and_optional_rows_stay_there)
     free(foreign);
 }
 
+/* settings commands also open the user layer: keep it beside the brain, never under
+   HOME (the Linux CI container's HOME is not writable by the test user). */
+static CmdResult run_settings(const char *db, const char *const *args, size_t nargs)
+{
+    char *user = harness_side_path(db, "-user.db");
+    // NOLINTNEXTLINE(concurrency-mt-unsafe) the child inherits this process-global
+    const char *was = getenv("REMEMBER_USER_DB");
+    char *saved = (was != NULL) ? strdup(was) : NULL;
+    CmdResult r;
+
+    // NOLINTNEXTLINE(concurrency-mt-unsafe) the child inherits this process-global
+    ASSERT_EQ_INT(setenv("REMEMBER_USER_DB", user, 1), 0);
+    r = run_remember(db, args, nargs, NULL);
+    if (saved != NULL) {
+        // NOLINTNEXTLINE(concurrency-mt-unsafe) the child inherits this process-global
+        ASSERT_EQ_INT(setenv("REMEMBER_USER_DB", saved, 1), 0);
+    } else {
+        // NOLINTNEXTLINE(concurrency-mt-unsafe) the child inherits this process-global
+        ASSERT_EQ_INT(unsetenv("REMEMBER_USER_DB"), 0);
+    }
+    free(saved);
+    free(user);
+    return r;
+}
+
 TEST(cli_import_v6_source_copies_id_and_prefix_ignores_outbox)
 {
     char *local = make_temp_db_path();
@@ -533,7 +558,7 @@ TEST(cli_import_v6_source_copies_id_and_prefix_ignores_outbox)
     r = run_remember(foreign, add, sizeof(add) / sizeof(add[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 0);
     cmd_result_free(&r);
-    r = run_remember(foreign, set_pref, sizeof(set_pref) / sizeof(set_pref[0]), NULL);
+    r = run_settings(foreign, set_pref, sizeof(set_pref) / sizeof(set_pref[0]));
     ASSERT_EQ_INT(r.exit_code, 0);
     cmd_result_free(&r);
     sqlite_exec(foreign,
@@ -2603,7 +2628,7 @@ TEST(cli_import_v6_source_invalid_prefixes_value_is_skipped)
     line = harness_sqlite_query_line(local, "SELECT COUNT(*) FROM settings;");
     ASSERT_STREQ(line, "0");
     free(line);
-    r = run_remember(local, get, 4, NULL);
+    r = run_settings(local, get, 4);
     ASSERT_EQ_INT(r.exit_code, 0);
     cmd_result_free(&r);
     free(local);
