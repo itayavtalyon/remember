@@ -1431,17 +1431,16 @@ TEST(output_import_envelope_lists_conflicts_and_rejected_rows)
     FILE *f = given_stream();
 
     ASSERT_EQ_INT(write_import_envelope(f), 0);
-    assert_written(f,
-                   "{\"action\":\"imported\",\"inserted\":1,\"updated\":2,\"unchanged\":3,"
-                   "\"conflicts\":{\"count\":2,\"items\":[{\"id\":1,\"memory_id\":\"s-1\","
-                   "\"reason\":\"key_clash\",\"local\":{},\"incoming\":{},\"created_at\":\"c\","
-                   "\"origin\":null},"
-                   "{\"id\":2,\"memory_id\":\"s-1\",\"reason\":\"key_clash\",\"local\":{},"
-                   "\"incoming\":{},\"created_at\":\"c\",\"origin\":null}]},"
-                   "\"rejected\":{\"count\":2,\"items\":["
-                   "{\"source_local_id\":7,\"field\":\"key\"},{\"source_local_id\":9,"
-                   "\"field\":\"body_hash\"}]},\"skipped\":0,\"errors\":[],"
-                   "\"settings\":{\"written\":0,\"unchanged\":0,\"skipped\":0}}");
+    assert_written(f, "{\"action\":\"imported\",\"inserted\":1,\"updated\":2,\"unchanged\":3,"
+                      "\"conflicts\":{\"count\":2,\"items\":[{\"id\":1,\"memory_id\":\"s-1\","
+                      "\"reason\":\"key_clash\",\"local\":{},\"incoming\":{},\"created_at\":\"c\","
+                      "\"origin\":null},"
+                      "{\"id\":2,\"memory_id\":\"s-1\",\"reason\":\"key_clash\",\"local\":{},"
+                      "\"incoming\":{},\"created_at\":\"c\",\"origin\":null}]},"
+                      "\"rejected\":{\"count\":2,\"items\":["
+                      "{\"source_local_id\":7,\"field\":\"key\"},{\"source_local_id\":9,"
+                      "\"field\":\"body_hash\"}]},\"skipped\":0,\"errors\":[],"
+                      "\"settings\":{\"written\":0,\"unchanged\":0,\"skipped\":0}}");
 }
 
 TEST(output_import_envelope_reports_every_failed_write)

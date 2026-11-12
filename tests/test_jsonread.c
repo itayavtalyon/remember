@@ -3,7 +3,6 @@
 #include "test.h"
 #include "test_alloc.h"
 
-#include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -13,11 +12,13 @@
 
 enum {
     NEST_BUF = (JSONREAD_NESTING_MAX * 2) + 16,
-    UTF8_INVALID = 0xFF
+    UTF8_INVALID = 0xFF,
+    UTF8_LEAD3 = 0xE0,
+    UTF8_CONT = 0x80
 };
 
 /* Build "[" * depth + "0" + "]" * depth into buf. Returns byte length. */
-static size_t nest_array(char *buf, size_t cap, int depth)
+static size_t nest_array(int depth, char *buf, size_t cap)
 {
     size_t at = 0;
     int i = 0;
@@ -54,7 +55,8 @@ static JsonValue *parse_ok(const char *src)
 
 static void parse_fails(JsonReadStatus want, const char *src, size_t len)
 {
-    JsonValue *root = (JsonValue *)(uintptr_t)1;
+    JsonValue not_null = {.type = JSON_NULL}; /* the parser must clear root */
+    JsonValue *root = &not_null;
     JsonReadStatus st = jsonread_parse(src, len, &root);
 
     ASSERT_EQ_INT(st, want);
@@ -64,7 +66,7 @@ static void parse_fails(JsonReadStatus want, const char *src, size_t len)
 TEST(jsonread_accepts_nesting_at_the_named_limit)
 {
     char buf[NEST_BUF];
-    size_t n = nest_array(buf, sizeof(buf), JSONREAD_NESTING_MAX);
+    size_t n = nest_array(JSONREAD_NESTING_MAX, buf, sizeof(buf));
     JsonValue *root = NULL;
     JsonReadStatus st = JSONREAD_ERR_INTERNAL;
     int depth = 0;
@@ -92,7 +94,7 @@ TEST(jsonread_accepts_nesting_at_the_named_limit)
 TEST(jsonread_rejects_nesting_past_the_named_limit)
 {
     char buf[NEST_BUF + 4];
-    size_t n = nest_array(buf, sizeof(buf), JSONREAD_NESTING_MAX + 1);
+    size_t n = nest_array(JSONREAD_NESTING_MAX + 1, buf, sizeof(buf));
 
     ASSERT_TRUE(n > 0U);
     parse_fails(JSONREAD_ERR_NESTING, buf, n);
@@ -100,32 +102,32 @@ TEST(jsonread_rejects_nesting_past_the_named_limit)
 
 TEST(jsonread_rejects_trailing_garbage)
 {
-    parse_fails(JSONREAD_ERR_SYNTAX, "0 1", 3);
-    parse_fails(JSONREAD_ERR_SYNTAX, "truefalse", 9);
-    parse_fails(JSONREAD_ERR_SYNTAX, "[]{}", 4);
-    parse_fails(JSONREAD_ERR_SYNTAX, "\"a\"x", 4);
+    parse_fails(JSONREAD_ERR_SYNTAX, "0 1", strlen("0 1"));
+    parse_fails(JSONREAD_ERR_SYNTAX, "truefalse", strlen("truefalse"));
+    parse_fails(JSONREAD_ERR_SYNTAX, "[]{}", strlen("[]{}"));
+    parse_fails(JSONREAD_ERR_SYNTAX, "\"a\"x", strlen("\"a\"x"));
 }
 
 TEST(jsonread_rejects_nan_and_infinity)
 {
-    parse_fails(JSONREAD_ERR_SYNTAX, "NaN", 3);
-    parse_fails(JSONREAD_ERR_SYNTAX, "Infinity", 8);
-    parse_fails(JSONREAD_ERR_SYNTAX, "-Infinity", 9);
-    parse_fails(JSONREAD_ERR_SYNTAX, "+1", 2);
+    parse_fails(JSONREAD_ERR_SYNTAX, "NaN", strlen("NaN"));
+    parse_fails(JSONREAD_ERR_SYNTAX, "Infinity", strlen("Infinity"));
+    parse_fails(JSONREAD_ERR_SYNTAX, "-Infinity", strlen("-Infinity"));
+    parse_fails(JSONREAD_ERR_SYNTAX, "+1", strlen("+1"));
 }
 
 /* decision:plan23-review-g3-nul-is-import-parse: a NUL escape in a string or a key. */
 TEST(jsonread_rejects_a_nul_escape)
 {
-    parse_fails(JSONREAD_ERR_SYNTAX, "\"a\\u0000b\"", 10);
-    parse_fails(JSONREAD_ERR_SYNTAX, "{\"\\u0000\":1}", 12);
+    parse_fails(JSONREAD_ERR_SYNTAX, "\"a\\u0000b\"", strlen("\"a\\u0000b\""));
+    parse_fails(JSONREAD_ERR_SYNTAX, "{\"\\u0000\":1}", strlen("{\"\\u0000\":1}"));
     jsonread_free(parse_ok("\"\\u0001\""));
 }
 
 TEST(jsonread_rejects_invalid_utf8_and_lone_surrogates)
 {
     char bad1[] = {'"', (char)UTF8_INVALID, '"'};
-    char bad2[] = {'"', (char)0xE0, (char)0x80, (char)0x80, '"'}; /* overlong */
+    char bad2[] = {'"', (char)UTF8_LEAD3, (char)UTF8_CONT, (char)UTF8_CONT, '"'}; /* overlong */
     const char *lone_high = "\"\\uD800\"";
     const char *lone_low = "\"\\uDC00\"";
     const char *bad_pair = "\"\\uD800\\uD800\"";
@@ -149,7 +151,7 @@ TEST(jsonread_rejects_invalid_utf8_and_lone_surrogates)
 TEST(jsonread_tracks_the_one_based_line_of_each_value)
 {
     JsonValue *root = parse_ok("{\n  \"a\": [\n    true,\n    null\n  ]\n}");
-    JsonValue *arr = NULL;
+    const JsonValue *arr = NULL;
 
     if (root == NULL) {
         return;
@@ -201,7 +203,8 @@ TEST(jsonread_null_out_is_internal)
 
 TEST(jsonread_reports_oom_on_the_first_allocation)
 {
-    JsonValue *root = (JsonValue *)(uintptr_t)1;
+    JsonValue not_null = {.type = JSON_NULL}; /* the parser must clear root */
+    JsonValue *root = &not_null;
     JsonReadStatus st = JSONREAD_OK;
 
     test_alloc_fail_after(0);

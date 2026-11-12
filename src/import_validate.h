@@ -15,7 +15,9 @@ int import_validate_memories(ImportMemory *entries, size_t n); /* -1 out of memo
 /* Pure link-record checks. Marks bad with "invalid link" or "invalid timestamp". */
 void import_validate_links(ImportLink *links, size_t n);
 
+enum { IMPORT_UUID_LEN = 36, IMPORT_UUID_BUF = IMPORT_UUID_LEN + 1 };
+
 /* True when s is 8-4-4-4-12 hex (either case). Writes lowercase into out. */
-bool import_uuid_normalize(const char *s, char out[37]);
+bool import_uuid_normalize(const char *s, char out[IMPORT_UUID_BUF]);
 
 #endif /* REMEMBER_IMPORT_VALIDATE_H */

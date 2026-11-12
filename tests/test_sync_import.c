@@ -515,8 +515,8 @@ TEST(cli_import_v6_source_copies_id_and_prefix_ignores_outbox)
     CmdResult r;
     const char *add[] = {"--json", "add", "--key", "ka", "alpha"};
     const char *list[] = {"--json", "list"};
-    const char *set_pref[] = {"--json", "settings", "set", "--scope", "brain",
-                              "remember.buckets.prefixes", "lab:"};
+    const char *set_pref[] = {
+        "--json", "settings", "set", "--scope", "brain", "remember.buckets.prefixes", "lab:"};
     const char *imp[] = {"--json", "import", "--from-db", NULL};
     char *line = NULL;
     char *outbox_before = NULL;
@@ -1828,7 +1828,8 @@ TEST(cli_import_bad_vv_row_is_rejected)
     ASSERT_STR_CONTAINS(r.out,
                         "\"inserted\":0,\"updated\":0,\"unchanged\":0,\"conflicts\":{\"count\":0,"
                         "\"items\":[]},\"rejected\":{\"count\":1,\"items\":[{\"source_local_id\":1,"
-                        "\"field\":\"version_vector\"}]},\"skipped\":0,\"errors\":[],\"settings\":{\"written\":0,\"unchanged\":0,\"skipped\":0}}");
+                        "\"field\":\"version_vector\"}]},\"skipped\":0,\"errors\":[],\"settings\":{"
+                        "\"written\":0,\"unchanged\":0,\"skipped\":0}}");
     cmd_result_free(&r);
 
     harness_remove_tree(dir);
@@ -2274,7 +2275,8 @@ TEST(cli_import_skips_noncanonical_key_and_tag_rows)
                         "{\"source_local_id\":4,\"field\":\"key\"},"
                         "{\"source_local_id\":5,\"field\":\"key\"},"
                         "{\"source_local_id\":6,\"field\":\"key\"},"
-                        "{\"source_local_id\":7,\"field\":\"key\"}]},\"skipped\":0,\"errors\":[],\"settings\":{\"written\":0,\"unchanged\":0,\"skipped\":0}}");
+                        "{\"source_local_id\":7,\"field\":\"key\"}]},\"skipped\":0,\"errors\":[],"
+                        "\"settings\":{\"written\":0,\"unchanged\":0,\"skipped\":0}}");
     cmd_result_free(&r);
     keys = harness_sqlite_query_line(local, "SELECT group_concat(key) FROM entries;");
     tags = harness_sqlite_query_line(local, "SELECT group_concat(name) FROM tags;");
@@ -2392,21 +2394,22 @@ TEST(cli_import_skips_rows_with_a_non_canonical_peer_field)
     imp[3] = foreign;
     r = run_import(local, foreign, imp, sizeof(imp) / sizeof(imp[0]));
     ASSERT_EQ_INT(r.exit_code, 0);
-    ASSERT_STR_CONTAINS(r.out,
-                        "\"inserted\":1,\"updated\":0,\"unchanged\":0,\"conflicts\":{\"count\":0,"
-                        "\"items\":[]},\"rejected\":{\"count\":11,\"items\":["
-                        "{\"source_local_id\":2,\"field\":\"id\"},"
-                        "{\"source_local_id\":3,\"field\":\"created_at\"},"
-                        "{\"source_local_id\":4,\"field\":\"updated_at\"},"
-                        "{\"source_local_id\":5,\"field\":\"expires_at\"},"
-                        "{\"source_local_id\":6,\"field\":\"deleted_at\"},"
-                        "{\"source_local_id\":7,\"field\":\"version_vector\"},"
-                        "{\"source_local_id\":8,\"field\":\"version_vector\"},"
-                        "{\"source_local_id\":9,\"field\":\"version_vector\"},"
-                        "{\"source_local_id\":10,\"field\":\"version_vector\"},"
-                        "{\"source_local_id\":11,\"field\":\"source\"},"
-                        "{\"source_local_id\":12,\"field\":\"body_hash\"}]},"
-                        "\"skipped\":0,\"errors\":[],\"settings\":{\"written\":0,\"unchanged\":0,\"skipped\":0}}");
+    ASSERT_STR_CONTAINS(
+        r.out,
+        "\"inserted\":1,\"updated\":0,\"unchanged\":0,\"conflicts\":{\"count\":0,"
+        "\"items\":[]},\"rejected\":{\"count\":11,\"items\":["
+        "{\"source_local_id\":2,\"field\":\"id\"},"
+        "{\"source_local_id\":3,\"field\":\"created_at\"},"
+        "{\"source_local_id\":4,\"field\":\"updated_at\"},"
+        "{\"source_local_id\":5,\"field\":\"expires_at\"},"
+        "{\"source_local_id\":6,\"field\":\"deleted_at\"},"
+        "{\"source_local_id\":7,\"field\":\"version_vector\"},"
+        "{\"source_local_id\":8,\"field\":\"version_vector\"},"
+        "{\"source_local_id\":9,\"field\":\"version_vector\"},"
+        "{\"source_local_id\":10,\"field\":\"version_vector\"},"
+        "{\"source_local_id\":11,\"field\":\"source\"},"
+        "{\"source_local_id\":12,\"field\":\"body_hash\"}]},"
+        "\"skipped\":0,\"errors\":[],\"settings\":{\"written\":0,\"unchanged\":0,\"skipped\":0}}");
     cmd_result_free(&r);
     keys = harness_sqlite_query_line(local, "SELECT group_concat(key) FROM entries;");
     ASSERT_TRUE(keys != NULL);
@@ -2507,6 +2510,7 @@ static char *given_v6_source_a_b(void)
     return foreign;
 }
 
+// NOLINTNEXTLINE(bugprone-easily-swappable-parameters) the local brain, then the source
 static CmdResult import_from_db(const char *local, const char *foreign)
 {
     const char *imp[] = {"--json", "import", "--from-db", foreign};
@@ -2614,12 +2618,11 @@ TEST(cli_import_v6_source_prefixes_row_with_a_bad_actor_is_skipped)
     char *line = NULL;
     CmdResult r;
 
-    sqlite_exec(foreign,
-                "INSERT INTO settings(key, value, updated_by, updated_at, device_id, "
-                "version_vector, deleted_at, change_seq) VALUES "
-                "('remember.buckets.prefixes', '[\"ok:\"]', 'evil', "
-                "'2026-01-01T00:00:00.000Z', '018f6b2e-7c3a-7c00-8000-0000000000aa', "
-                "'{\"018f6b2e-7c3a-7c00-8000-0000000000aa\":9}', NULL, 1);");
+    sqlite_exec(foreign, "INSERT INTO settings(key, value, updated_by, updated_at, device_id, "
+                         "version_vector, deleted_at, change_seq) VALUES "
+                         "('remember.buckets.prefixes', '[\"ok:\"]', 'evil', "
+                         "'2026-01-01T00:00:00.000Z', '018f6b2e-7c3a-7c00-8000-0000000000aa', "
+                         "'{\"018f6b2e-7c3a-7c00-8000-0000000000aa\":9}', NULL, 1);");
     r = import_from_db(local, foreign);
     ASSERT_EQ_INT(r.exit_code, 0);
     ASSERT_STR_CONTAINS(r.out, "\"settings\":{\"written\":0,\"unchanged\":0,\"skipped\":1}");

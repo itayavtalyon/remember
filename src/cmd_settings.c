@@ -3050,9 +3050,14 @@ static int warn_skip(const SettingImportRow *row, bool settings_alone)
                                           {.name = "reason", .value = "invalid_value"}};
 
         /* D-15: the second sentence only for a lone settings-file row. */
-        return warn_invalid(fmt_alloc("skipped \"%s\": \"%s\" isn't a valid value.%s", row->key,
-                                      value, settings_alone ? " This brain wasn't changed." : ""),
-                            fields, sizeof(fields) / sizeof(fields[0]));
+        const char *tail = "";
+
+        if (settings_alone) {
+            tail = " This brain wasn't changed.";
+        }
+        return warn_invalid(
+            fmt_alloc("skipped \"%s\": \"%s\" isn't a valid value.%s", row->key, value, tail),
+            fields, sizeof(fields) / sizeof(fields[0]));
     }
     if (row->reason == SETTING_SKIP_UNKNOWN_KEY) {
         /* decision:plan20-import-unknown-key-draft (C-43 draft). */
@@ -3117,9 +3122,12 @@ int settings_import_warn_skips(const SettingImportReport *rep, bool settings_alo
     if (rep == NULL) {
         return 0;
     }
+    if (rep->nrows != 1U) {
+        settings_alone = false; /* D-15 names a lone row only */
+    }
     for (i = 0; i < rep->nrows; i++) {
         if (rep->rows[i].result == SETTING_IMPORT_SKIPPED &&
-            warn_skip(&rep->rows[i], settings_alone && rep->nrows == 1U) != 0) {
+            warn_skip(&rep->rows[i], settings_alone) != 0) {
             return REMEMBER_ERR;
         }
     }

@@ -12,6 +12,8 @@
 
 #include "test_alloc.h" /* IWYU pragma: keep */
 
+enum { DECIMAL_BASE = 10 };
+
 static char *dup_bytes(const char *s, size_t n)
 {
     char *out = (char *)malloc(n + 1U);
@@ -48,30 +50,39 @@ static const char *basename_of(const char *path)
     return (slash != NULL) ? (slash + 1) : path;
 }
 
+static bool name_in(const char *key, const char *const *names)
+{
+    for (; *names != NULL; names++) {
+        if (strcmp(key, *names) == 0) {
+            return true;
+        }
+    }
+    return false;
+}
+
 static bool known_export_root(const char *key)
 {
-    return strcmp(key, "format") == 0 || strcmp(key, "version") == 0 ||
-           strcmp(key, "brain_id") == 0 || strcmp(key, "exported_at") == 0 ||
-           strcmp(key, "engine") == 0 || strcmp(key, "schema") == 0 || strcmp(key, "bins") == 0 ||
-           strcmp(key, "entries") == 0 || strcmp(key, "links") == 0 || strcmp(key, "settings") == 0;
+    static const char *const names[] = {"format", "version",  "brain_id", "exported_at",
+                                        "engine", "schema",   "bins",     "entries",
+                                        "links",  "settings", NULL};
+    return name_in(key, names);
 }
 
 static bool known_entry_field(const char *key)
 {
-    return strcmp(key, "id") == 0 || strcmp(key, "key") == 0 || strcmp(key, "body") == 0 ||
-           strcmp(key, "tags") == 0 || strcmp(key, "created_by") == 0 ||
-           strcmp(key, "updated_by") == 0 || strcmp(key, "created_at") == 0 ||
-           strcmp(key, "updated_at") == 0 || strcmp(key, "expires_at") == 0 ||
-           strcmp(key, "deleted_at") == 0 || strcmp(key, "bin") == 0 ||
-           strcmp(key, "version_vector") == 0;
+    static const char *const names[] = {"id",         "key",        "body",       "tags",
+                                        "created_by", "updated_by", "created_at", "updated_at",
+                                        "expires_at", "deleted_at", "bin",        "version_vector",
+                                        NULL};
+    return name_in(key, names);
 }
 
 static bool known_link_field(const char *key)
 {
-    return strcmp(key, "from") == 0 || strcmp(key, "to") == 0 || strcmp(key, "kind") == 0 ||
-           strcmp(key, "created_at") == 0 || strcmp(key, "updated_at") == 0 ||
-           strcmp(key, "deleted_at") == 0 || strcmp(key, "id") == 0 ||
-           strcmp(key, "version_vector") == 0;
+    static const char *const names[] = {"from",       "to",         "kind", "created_at",
+                                        "updated_at", "deleted_at", "id",   "version_vector",
+                                        NULL};
+    return name_in(key, names);
 }
 
 static char *first_unknown_in_object(const JsonValue *obj, bool (*known)(const char *))
@@ -91,20 +102,25 @@ static char *first_unknown_in_object(const JsonValue *obj, bool (*known)(const c
     return NULL;
 }
 
-static void memory_free(ImportMemory *m)
+static void free_tags(char **tags, size_t n)
 {
     size_t i = 0;
 
+    for (i = 0; i < n; i++) {
+        free(tags[i]);
+    }
+    free((void *)tags);
+}
+
+static void memory_free(ImportMemory *m)
+{
     if (m == NULL) {
         return;
     }
     free(m->id);
     free(m->key);
     free(m->body);
-    for (i = 0; i < m->ntags; i++) {
-        free(m->tags[i]);
-    }
-    free(m->tags);
+    free_tags(m->tags, m->ntags);
     free(m->created_by);
     free(m->created_at);
     free(m->updated_at);
@@ -172,9 +188,9 @@ static char *msg_not_export(const char *base)
 static char *msg_version_too_new(const char *base, long long ver)
 {
     char *out = NULL;
-    int need = snprintf(NULL, 0,
-                        "\"%s\" is remember-export version %lld; this remember reads version 1.",
-                        base, ver);
+    int need =
+        snprintf(NULL, 0, "\"%s\" is remember-export version %lld; this remember reads version 1.",
+                 base, ver);
 
     if (need < 0) {
         return NULL;
@@ -189,6 +205,7 @@ static char *msg_version_too_new(const char *base, long long ver)
     return out;
 }
 
+// NOLINTNEXTLINE(bugprone-easily-swappable-parameters) the message, then its fix
 static void set_parse(ImportDoc *doc, char *message, char *fix)
 {
     free(doc->parse_message);
@@ -278,78 +295,48 @@ static char *actor_from_value(const JsonValue *v, bool *invalid)
 /* Compact VV object text; NULL if absent. Sets *invalid on bad shape. */
 static char *vv_from_value(const JsonValue *v, bool *invalid)
 {
+    char buf[REMEMBER_VV_TEXT_MAX];
+    size_t n = 1;
     size_t i = 0;
-    size_t cap = 64;
-    size_t n = 0;
-    char *buf = NULL;
-    bool first = true;
 
-    *invalid = false;
+    *invalid = true;
     if (v == NULL || v->type == JSON_NULL) {
+        *invalid = false;
         return NULL;
     }
     if (v->type != JSON_OBJECT) {
-        *invalid = true;
         return NULL;
     }
-    buf = (char *)malloc(cap);
-    if (buf == NULL) {
-        *invalid = true;
-        return NULL;
-    }
-    buf[n++] = '{';
+    buf[0] = '{';
     for (i = 0; i < v->u.object.n; i++) {
         const JsonMember *m = &v->u.object.members[i];
-        char id_buf[37];
-        const char *num = NULL;
-        size_t need = 0;
+        char id_buf[IMPORT_UUID_BUF];
+        int wrote = 0;
 
         /* A counter is a JSON integer greater than 0 (plan 23); the canonical
            check in validate rejects fractions, exponents and signs. */
         if (m->key == NULL || !import_uuid_normalize(m->key, id_buf) || m->value == NULL ||
             m->value->type != JSON_NUMBER || strcmp(m->value->u.number.bytes, "0") == 0) {
-            free(buf);
-            *invalid = true;
             return NULL;
         }
-        num = m->value->u.number.bytes;
-        need = n + strlen(id_buf) + strlen(num) + 8U;
-        if (need >= cap) {
-            size_t next = cap * 2U;
-            char *grown = NULL;
-
-            while (next <= need) {
-                next *= 2U;
-            }
-            grown = (char *)realloc(buf, next);
-            if (grown == NULL) {
-                free(buf);
-                *invalid = true;
-                return NULL;
-            }
-            buf = grown;
-            cap = next;
+        wrote = snprintf(buf + n, sizeof(buf) - n, "%s\"%s\":%s", (i > 0U) ? "," : "", id_buf,
+                         m->value->u.number.bytes);
+        if (wrote < 0 || (size_t)wrote >= sizeof(buf) - n) {
+            return NULL; /* wider than any merge can hold: a bad record (settings A4 rule) */
         }
-        if (!first) {
-            buf[n++] = ',';
-        }
-        first = false;
-        buf[n++] = '"';
-        memcpy(buf + n, id_buf, 36U);
-        n += 36U;
-        buf[n++] = '"';
-        buf[n++] = ':';
-        memcpy(buf + n, num, strlen(num));
-        n += strlen(num);
+        n += (size_t)wrote;
+    }
+    if (n + 1U >= sizeof(buf)) {
+        return NULL;
     }
     buf[n++] = '}';
     buf[n] = '\0';
-    if (n >= (size_t)REMEMBER_VV_TEXT_MAX) {
-        free(buf); /* wider than any merge can hold: a bad record (settings A4 rule) */
-        *invalid = true;
-        return NULL;
+    {
+        char *out = dup_bytes(buf, n);
+
+        *invalid = (out == NULL); /* out of memory: a bad record, as before */
+        return out;
     }
-    return buf;
 }
 
 static bool tags_from_value(const JsonValue *v, char ***out_tags, size_t *out_n, bool *invalid)
@@ -378,24 +365,9 @@ static bool tags_from_value(const JsonValue *v, char ***out_tags, size_t *out_n,
     for (i = 0; i < v->u.array.n; i++) {
         const JsonValue *item = v->u.array.items[i];
 
-        if (item == NULL || item->type != JSON_STRING) {
-            size_t j = 0;
-
-            for (j = 0; j < i; j++) {
-                free(tags[j]);
-            }
-            free(tags);
-            *invalid = true;
-            return false;
-        }
-        tags[i] = json_string_dup(item);
+        tags[i] = (item != NULL) ? json_string_dup(item) : NULL;
         if (tags[i] == NULL) {
-            size_t j = 0;
-
-            for (j = 0; j < i; j++) {
-                free(tags[j]);
-            }
-            free(tags);
+            free_tags(tags, i);
             *invalid = true;
             return false;
         }
@@ -405,27 +377,28 @@ static bool tags_from_value(const JsonValue *v, char ***out_tags, size_t *out_n,
     return true;
 }
 
-static bool stamp_from_value(const JsonValue *v, char **out, bool *invalid)
+typedef enum { FIELD_OK, FIELD_BAD, FIELD_OOM } FieldStatus;
+
+/* An optional string member: absent or null leaves *out NULL. */
+static FieldStatus optional_string(const JsonValue *v, char **out)
 {
     *out = NULL;
-    *invalid = false;
     if (v == NULL || v->type == JSON_NULL) {
-        return true;
+        return FIELD_OK;
     }
     if (v->type != JSON_STRING) {
-        *invalid = true;
-        return false;
+        return FIELD_BAD;
     }
     *out = json_string_dup(v);
-    if (*out == NULL) {
-        return false;
-    }
-    return true;
+    return (*out == NULL) ? FIELD_OOM : FIELD_OK;
 }
 
 static bool array_or_absent(const JsonValue *v)
 {
-    return v == NULL || v->type == JSON_NULL || v->type == JSON_ARRAY;
+    if (v == NULL || v->type == JSON_NULL || v->type == JSON_ARRAY) {
+        return true;
+    }
+    return false;
 }
 
 // NOLINTNEXTLINE(bugprone-easily-swappable-parameters) qsort's signature
@@ -476,166 +449,294 @@ static bool check_duplicate_member(const JsonValue *obj, bool *bad, const char *
     return true;
 }
 
-static bool memory_from_object(const JsonValue *obj, const char *file, ImportMemory *out)
+/* Mark a memory bad; true so callers can return it. */
+static bool memory_bad(ImportMemory *out, const char *message)
+{
+    out->bad = true;
+    out->bad_message = message;
+    return true;
+}
+
+/* id, key and body. false out of memory; a wrong type marks out bad. */
+static bool memory_strings(const JsonValue *obj, ImportMemory *out)
+{
+    FieldStatus st = optional_string(object_get(obj, "id"), &out->id);
+
+    if (st == FIELD_BAD) {
+        return memory_bad(out, "id is not a UUID");
+    }
+    if (st == FIELD_OK) {
+        st = optional_string(object_get(obj, "key"), &out->key);
+        if (st == FIELD_BAD) {
+            return memory_bad(out, "invalid key or tag");
+        }
+    }
+    if (st == FIELD_OK) {
+        st = optional_string(object_get(obj, "body"), &out->body);
+        if (st == FIELD_BAD) {
+            return memory_bad(out, "body is missing");
+        }
+    }
+    return st == FIELD_OK;
+}
+
+/* tags, created_by, the timestamps and the version vector. */
+static bool memory_rest(const JsonValue *obj, ImportMemory *out)
 {
     bool invalid = false;
-    const JsonValue *v = NULL;
+    FieldStatus st = FIELD_OK;
 
-    memset(out, 0, sizeof(*out));
-    if (obj == NULL || obj->type != JSON_OBJECT) {
-        out->bad = true;
-        out->bad_message = "entry is not an object";
-        out->line = (obj != NULL) ? obj->line : 1;
-        out->file = dup_cstr(file);
-        return out->file != NULL;
+    if (!tags_from_value(object_get(obj, "tags"), &out->tags, &out->ntags, &invalid)) {
+        if (invalid) {
+            return memory_bad(out, "invalid key or tag");
+        }
+        return false;
     }
-    out->line = obj->line;
+    out->created_by = actor_from_value(object_get(obj, "created_by"), &invalid);
+    if (invalid) {
+        return memory_bad(out, "invalid actor");
+    }
+    st = optional_string(object_get(obj, "created_at"), &out->created_at);
+    if (st == FIELD_OK) {
+        st = optional_string(object_get(obj, "updated_at"), &out->updated_at);
+    }
+    if (st == FIELD_OK) {
+        st = optional_string(object_get(obj, "expires_at"), &out->expires_at);
+    }
+    if (st == FIELD_OK) {
+        st = optional_string(object_get(obj, "deleted_at"), &out->deleted_at);
+    }
+    if (st == FIELD_BAD) {
+        return memory_bad(out, "invalid timestamp");
+    }
+    if (st == FIELD_OOM) {
+        return false;
+    }
+    out->version_vector = vv_from_value(object_get(obj, "version_vector"), &invalid);
+    if (invalid) {
+        return memory_bad(out, "invalid version_vector");
+    }
+    return true;
+}
+
+static bool memory_from_object(const JsonValue *obj, const char *file, ImportMemory *out)
+{
+    memset(out, 0, sizeof(*out));
+    out->line = (obj != NULL) ? obj->line : 1;
     out->file = dup_cstr(file);
-    if (out->file == NULL || !check_duplicate_member(obj, &out->bad, &out->bad_message)) {
+    if (out->file == NULL) {
+        return false;
+    }
+    if (obj == NULL || obj->type != JSON_OBJECT) {
+        return memory_bad(out, "entry is not an object");
+    }
+    if (!check_duplicate_member(obj, &out->bad, &out->bad_message)) {
         return false;
     }
     if (out->bad) {
         return true;
     }
-    v = object_get(obj, "id");
-    if (v != NULL && v->type != JSON_NULL) {
-        out->id = json_string_dup(v);
-        if (out->id == NULL && v->type == JSON_STRING) {
-            return false;
-        }
-        if (v->type != JSON_STRING) {
-            out->bad = true;
-            out->bad_message = "id is not a UUID";
-            return true;
-        }
-    }
-    v = object_get(obj, "key");
-    if (v != NULL && v->type != JSON_NULL) {
-        out->key = json_string_dup(v);
-        if (out->key == NULL && v->type == JSON_STRING) {
-            return false;
-        }
-        if (v->type != JSON_STRING) {
-            out->bad = true;
-            out->bad_message = "invalid key or tag";
-            return true;
-        }
-    }
-    v = object_get(obj, "body");
-    if (v == NULL || v->type == JSON_NULL) {
-        out->body = NULL;
-    } else if (v->type == JSON_STRING) {
-        out->body = json_string_dup(v);
-        if (out->body == NULL) {
-            return false;
-        }
-    } else {
-        out->bad = true;
-        out->bad_message = "body is missing";
-        return true;
-    }
-    v = object_get(obj, "tags");
-    if (!tags_from_value(v, &out->tags, &out->ntags, &invalid)) {
-        if (invalid) {
-            out->bad = true;
-            out->bad_message = "invalid key or tag";
-            return true;
-        }
+    if (!memory_strings(obj, out)) {
         return false;
     }
-    v = object_get(obj, "created_by");
-    out->created_by = actor_from_value(v, &invalid);
-    if (invalid) {
-        out->bad = true;
-        out->bad_message = "invalid actor";
+    if (out->bad) {
         return true;
     }
-    if (!stamp_from_value(object_get(obj, "created_at"), &out->created_at, &invalid) ||
-        !stamp_from_value(object_get(obj, "updated_at"), &out->updated_at, &invalid) ||
-        !stamp_from_value(object_get(obj, "expires_at"), &out->expires_at, &invalid) ||
-        !stamp_from_value(object_get(obj, "deleted_at"), &out->deleted_at, &invalid)) {
-        if (invalid) {
-            out->bad = true;
-            out->bad_message = "invalid timestamp";
-            return true;
-        }
-        return false;
-    }
-    v = object_get(obj, "version_vector");
-    out->version_vector = vv_from_value(v, &invalid);
-    if (invalid) {
-        out->bad = true;
-        out->bad_message = "invalid version_vector";
-        return true;
-    }
+    return memory_rest(obj, out);
+}
+
+static bool link_bad(ImportLink *out, const char *message)
+{
+    out->bad = true;
+    out->bad_message = message;
     return true;
 }
 
 static bool link_from_object(const JsonValue *obj, const char *file, ImportLink *out)
 {
-    const JsonValue *v = NULL;
-    bool invalid = false;
+    FieldStatus st = FIELD_OK;
 
     memset(out, 0, sizeof(*out));
-    if (obj == NULL || obj->type != JSON_OBJECT) {
-        out->bad = true;
-        out->bad_message = "invalid link";
-        out->line = (obj != NULL) ? obj->line : 1;
-        out->file = dup_cstr(file);
-        return out->file != NULL;
-    }
-    out->line = obj->line;
+    out->line = (obj != NULL) ? obj->line : 1;
     out->file = dup_cstr(file);
-    if (out->file == NULL || !check_duplicate_member(obj, &out->bad, &out->bad_message)) {
+    if (out->file == NULL) {
+        return false;
+    }
+    if (obj == NULL || obj->type != JSON_OBJECT) {
+        return link_bad(out, "invalid link");
+    }
+    if (!check_duplicate_member(obj, &out->bad, &out->bad_message)) {
         return false;
     }
     if (out->bad) {
         return true;
     }
-    v = object_get(obj, "from");
-    if (v != NULL && v->type == JSON_STRING) {
-        out->from = json_string_dup(v);
-        if (out->from == NULL) {
-            return false;
-        }
-    } else if (v != NULL && v->type != JSON_NULL) {
-        out->bad = true;
-        out->bad_message = "invalid link";
-        return true;
+    st = optional_string(object_get(obj, "from"), &out->from);
+    if (st == FIELD_OK) {
+        st = optional_string(object_get(obj, "to"), &out->to);
     }
-    v = object_get(obj, "to");
-    if (v != NULL && v->type == JSON_STRING) {
-        out->to = json_string_dup(v);
-        if (out->to == NULL) {
-            return false;
-        }
-    } else if (v != NULL && v->type != JSON_NULL) {
-        out->bad = true;
-        out->bad_message = "invalid link";
-        return true;
+    if (st == FIELD_OK) {
+        st = optional_string(object_get(obj, "kind"), &out->kind);
     }
-    v = object_get(obj, "kind");
-    if (v != NULL && v->type == JSON_STRING) {
-        out->kind = json_string_dup(v);
-        if (out->kind == NULL) {
-            return false;
-        }
-    } else if (v != NULL && v->type != JSON_NULL) {
-        out->bad = true;
-        out->bad_message = "invalid link";
-        return true;
+    if (st == FIELD_BAD) {
+        return link_bad(out, "invalid link");
     }
-    if (!stamp_from_value(object_get(obj, "created_at"), &out->created_at, &invalid) ||
-        !stamp_from_value(object_get(obj, "updated_at"), &out->updated_at, &invalid) ||
-        !stamp_from_value(object_get(obj, "deleted_at"), &out->deleted_at, &invalid)) {
-        if (invalid) {
-            out->bad = true;
-            out->bad_message = "invalid timestamp";
-            return true;
-        }
-        return false;
+    if (st == FIELD_OK) {
+        st = optional_string(object_get(obj, "created_at"), &out->created_at);
     }
-    return true;
+    if (st == FIELD_OK) {
+        st = optional_string(object_get(obj, "updated_at"), &out->updated_at);
+    }
+    if (st == FIELD_OK) {
+        st = optional_string(object_get(obj, "deleted_at"), &out->deleted_at);
+    }
+    if (st == FIELD_BAD) {
+        return link_bad(out, "invalid timestamp");
+    }
+    return st == FIELD_OK;
+}
+
+/* Results of the read steps below: 1 go on, 0 doc->parse_message is set,
+   -1 out of memory. */
+enum { STEP_OOM = -1, STEP_PARSE = 0, STEP_OK = 1 };
+
+static int not_export(ImportDoc *doc, const char *base)
+{
+    set_parse(doc, msg_not_export(base), NULL);
+    return STEP_PARSE;
+}
+
+/* "format" and "version" (JE-4.1). */
+static int read_version(const JsonValue *root, ImportDoc *doc, const char *base)
+{
+    const JsonValue *v = object_get(root, "format");
+    char *end = NULL;
+    long long ver = 0;
+
+    if (v == NULL || v->type != JSON_STRING || strcmp(v->u.string.bytes, "remember-export") != 0) {
+        return not_export(doc, base);
+    }
+    v = object_get(root, "version");
+    if (v == NULL || v->type != JSON_NUMBER) {
+        return not_export(doc, base);
+    }
+    ver = strtoll(v->u.number.bytes, &end, DECIMAL_BASE);
+    if (end == v->u.number.bytes || *end != '\0') {
+        return not_export(doc, base);
+    }
+    doc->version = ver;
+    if (ver > 1) {
+        doc->version_too_new = true;
+        set_parse(doc, msg_version_too_new(base, ver),
+                  dup_cstr("Update remember, then try again."));
+        return STEP_PARSE;
+    }
+    if (ver != 1) {
+        return not_export(doc, base);
+    }
+    return STEP_OK;
+}
+
+/* Root checks: shape, version, settings bytes, entries and links shape, brain_id. */
+static int read_root(const JsonValue *root, const char *bytes, ImportDoc *doc, const char *base)
+{
+    const JsonValue *v = NULL;
+    char id_buf[IMPORT_UUID_BUF];
+    int rc = (root->type == JSON_OBJECT) ? read_version(root, doc, base) : not_export(doc, base);
+
+    if (rc != STEP_OK) {
+        return rc;
+    }
+    v = object_get(root, "settings");
+    if (v != NULL && v->type != JSON_OBJECT) {
+        /* A present settings member that is not a settings document (ST-8.3a). */
+        set_parse(doc, dup_cstr("\"settings\" isn't a settings document."),
+                  dup_cstr("Fix the settings object, then try again."));
+        return STEP_PARSE;
+    }
+    if (v != NULL) {
+        /* The root member's own bytes, never a same-named member deeper in the file. */
+        doc->settings_doc = dup_bytes(bytes + v->src_at, v->src_len);
+        if (doc->settings_doc == NULL) {
+            return STEP_OOM;
+        }
+        doc->settings_len = v->src_len;
+    }
+    /* A wrong root shape is not a remember export
+       (decision:plan23-review-g4-shape-is-import-parse). Null means absent (D31). */
+    if (!array_or_absent(object_get(root, "entries")) ||
+        !array_or_absent(object_get(root, "links"))) {
+        return not_export(doc, base);
+    }
+    v = object_get(root, "brain_id");
+    if (v == NULL || v->type == JSON_NULL) {
+        return STEP_OK;
+    }
+    if (v->type != JSON_STRING || !import_uuid_normalize(v->u.string.bytes, id_buf)) {
+        return not_export(doc, base);
+    }
+    doc->brain_id = dup_cstr(id_buf);
+    return (doc->brain_id != NULL) ? STEP_OK : STEP_OOM;
+}
+
+/* The entries and links arrays into doc. */
+static int read_records(const JsonValue *root, ImportDoc *doc, const char *base)
+{
+    const JsonValue *v = object_get(root, "entries");
+
+    if (v != NULL && v->type == JSON_ARRAY && v->u.array.n > 0U) {
+        doc->entries = (ImportMemory *)calloc(v->u.array.n, sizeof(ImportMemory));
+        if (doc->entries == NULL) {
+            return STEP_OOM;
+        }
+        doc->nentries = v->u.array.n;
+        for (size_t i = 0; i < v->u.array.n; i++) {
+            if (!memory_from_object(v->u.array.items[i], base, &doc->entries[i])) {
+                return STEP_OOM;
+            }
+        }
+    }
+    v = object_get(root, "links");
+    if (v != NULL && v->type == JSON_ARRAY && v->u.array.n > 0U) {
+        doc->links = (ImportLink *)calloc(v->u.array.n, sizeof(ImportLink));
+        if (doc->links == NULL) {
+            return STEP_OOM;
+        }
+        doc->nlinks = v->u.array.n;
+        for (size_t i = 0; i < v->u.array.n; i++) {
+            if (!link_from_object(v->u.array.items[i], base, &doc->links[i])) {
+                return STEP_OOM;
+            }
+        }
+    }
+    return STEP_OK;
+}
+
+/* The first unknown member in an array of objects, or NULL. */
+static char *first_unknown_in_array(const JsonValue *arr, bool (*known)(const char *))
+{
+    size_t i = 0;
+    char *name = NULL;
+
+    if (arr == NULL || arr->type != JSON_ARRAY) {
+        return NULL;
+    }
+    for (i = 0; i < arr->u.array.n && name == NULL; i++) {
+        name = first_unknown_in_object(arr->u.array.items[i], known);
+    }
+    return name;
+}
+
+/* First unknown member wins (JE-4.1 / C-35); sync_id and source are unknown. */
+static void find_unknown_field(const JsonValue *root, ImportDoc *doc)
+{
+    doc->unknown_field = first_unknown_in_object(root, known_export_root);
+    if (doc->unknown_field == NULL) {
+        doc->unknown_field = first_unknown_in_array(object_get(root, "entries"), known_entry_field);
+    }
+    if (doc->unknown_field == NULL) {
+        doc->unknown_field = first_unknown_in_array(object_get(root, "links"), known_link_field);
+    }
 }
 
 int import_read_json(const char *path, ImportDoc *doc, int *sys_errno)
@@ -643,10 +744,8 @@ int import_read_json(const char *path, ImportDoc *doc, int *sys_errno)
     char *bytes = NULL;
     size_t len = 0;
     JsonValue *root = NULL;
-    JsonReadStatus jst = JSONREAD_OK;
-    const JsonValue *v = NULL;
     const char *base = NULL;
-    size_t i = 0;
+    int rc = STEP_OK;
 
     if (doc == NULL || path == NULL || sys_errno == NULL) {
         if (sys_errno != NULL) {
@@ -659,167 +758,30 @@ int import_read_json(const char *path, ImportDoc *doc, int *sys_errno)
         return -1;
     }
     base = basename_of(path);
-    jst = jsonread_parse(bytes, len, &root);
-    if (jst != JSONREAD_OK) {
+    if (jsonread_parse(bytes, len, &root) != JSONREAD_OK) {
         free(bytes);
-        set_parse(doc, msg_not_export(base), NULL);
+        (void)not_export(doc, base);
         return 0;
     }
-    if (root->type != JSON_OBJECT) {
-        free(bytes);
-        jsonread_free(root);
-        set_parse(doc, msg_not_export(base), NULL);
-        return 0;
-    }
-    v = object_get(root, "format");
-    if (v == NULL || v->type != JSON_STRING || v->u.string.bytes == NULL ||
-        strcmp(v->u.string.bytes, "remember-export") != 0) {
-        free(bytes);
-        jsonread_free(root);
-        set_parse(doc, msg_not_export(base), NULL);
-        return 0;
-    }
-    v = object_get(root, "version");
-    if (v == NULL || v->type != JSON_NUMBER || v->u.number.bytes == NULL) {
-        free(bytes);
-        jsonread_free(root);
-        set_parse(doc, msg_not_export(base), NULL);
-        return 0;
-    }
-    {
-        char *end = NULL;
-        long long ver = strtoll(v->u.number.bytes, &end, 10);
-
-        if (end == v->u.number.bytes || *end != '\0') {
-            free(bytes);
-            jsonread_free(root);
-            set_parse(doc, msg_not_export(base), NULL);
-            return 0;
-        }
-        doc->version = ver;
-        if (ver > 1) {
-            doc->version_too_new = true;
-            set_parse(doc, msg_version_too_new(base, ver),
-                      dup_cstr("Update remember, then try again."));
-            free(bytes);
-            jsonread_free(root);
-            return 0;
-        }
-        if (ver != 1) {
-            free(bytes);
-            jsonread_free(root);
-            set_parse(doc, msg_not_export(base), NULL);
-            return 0;
-        }
-    }
-    v = object_get(root, "settings");
-    if (v != NULL && v->type != JSON_OBJECT) {
-        free(bytes);
-        jsonread_free(root);
-        /* A present settings member that is not a settings document (ST-8.3a). */
-        set_parse(doc, dup_cstr("\"settings\" isn't a settings document."),
-                  dup_cstr("Fix the settings object, then try again."));
-        return 0;
-    }
-    if (v != NULL) {
-        /* The root member's own bytes, never a same-named member deeper in the file. */
-        doc->settings_doc = dup_bytes(bytes + v->src_at, v->src_len);
-        if (doc->settings_doc == NULL) {
-            free(bytes);
-            jsonread_free(root);
-            *sys_errno = ENOMEM;
-            return -1;
-        }
-        doc->settings_len = v->src_len;
-    }
+    rc = read_root(root, bytes, doc, base);
     free(bytes);
-    /* A wrong root shape is not a remember export
-       (decision:plan23-review-g4-shape-is-import-parse). Null means absent (D31). */
-    if (!array_or_absent(object_get(root, "entries")) ||
-        !array_or_absent(object_get(root, "links"))) {
-        jsonread_free(root);
-        set_parse(doc, msg_not_export(base), NULL);
-        return 0;
+    if (rc == STEP_OK) {
+        rc = read_records(root, doc, base);
     }
-    v = object_get(root, "brain_id");
-    if (v != NULL && v->type != JSON_NULL) {
-        char id_buf[37];
-
-        if (v->type != JSON_STRING || !import_uuid_normalize(v->u.string.bytes, id_buf)) {
-            jsonread_free(root);
-            set_parse(doc, msg_not_export(base), NULL);
-            return 0;
-        }
-        doc->brain_id = dup_cstr(id_buf);
-        if (doc->brain_id == NULL) {
-            jsonread_free(root);
-            *sys_errno = ENOMEM;
-            return -1;
-        }
-    }
-    v = object_get(root, "entries");
-    if (v != NULL && v->type == JSON_ARRAY && v->u.array.n > 0U) {
-        doc->entries = (ImportMemory *)calloc(v->u.array.n, sizeof(ImportMemory));
-        if (doc->entries == NULL) {
-            jsonread_free(root);
-            *sys_errno = ENOMEM;
-            return -1;
-        }
-        doc->nentries = v->u.array.n;
-        for (i = 0; i < v->u.array.n; i++) {
-            if (!memory_from_object(v->u.array.items[i], base, &doc->entries[i])) {
-                jsonread_free(root);
-                import_doc_free(doc);
-                *sys_errno = ENOMEM;
-                return -1;
-            }
-        }
-    }
-    v = object_get(root, "links");
-    if (v != NULL && v->type == JSON_ARRAY && v->u.array.n > 0U) {
-        doc->links = (ImportLink *)calloc(v->u.array.n, sizeof(ImportLink));
-        if (doc->links == NULL) {
-            jsonread_free(root);
-            import_doc_free(doc);
-            *sys_errno = ENOMEM;
-            return -1;
-        }
-        doc->nlinks = v->u.array.n;
-        for (i = 0; i < v->u.array.n; i++) {
-            if (!link_from_object(v->u.array.items[i], base, &doc->links[i])) {
-                jsonread_free(root);
-                import_doc_free(doc);
-                *sys_errno = ENOMEM;
-                return -1;
-            }
-        }
-    }
-    /* First unknown member wins (JE-4.1 / C-35); sync_id and source are unknown. */
-    doc->unknown_field = first_unknown_in_object(root, known_export_root);
-    if (doc->unknown_field == NULL) {
-        v = object_get(root, "entries");
-        if (v != NULL && v->type == JSON_ARRAY) {
-            for (i = 0; i < v->u.array.n && doc->unknown_field == NULL; i++) {
-                doc->unknown_field =
-                    first_unknown_in_object(v->u.array.items[i], known_entry_field);
-            }
-        }
-    }
-    if (doc->unknown_field == NULL) {
-        v = object_get(root, "links");
-        if (v != NULL && v->type == JSON_ARRAY) {
-            for (i = 0; i < v->u.array.n && doc->unknown_field == NULL; i++) {
-                doc->unknown_field =
-                    first_unknown_in_object(v->u.array.items[i], known_link_field);
-            }
-        }
+    if (rc == STEP_OK) {
+        find_unknown_field(root, doc);
     }
     jsonread_free(root);
-    if (import_validate_memories(doc->entries, doc->nentries) != 0) {
+    if (rc == STEP_OK && import_validate_memories(doc->entries, doc->nentries) != 0) {
+        rc = STEP_OOM;
+    }
+    if (rc == STEP_OOM) {
         import_doc_free(doc);
         *sys_errno = ENOMEM;
         return -1;
     }
-    import_validate_links(doc->links, doc->nlinks);
+    if (rc == STEP_OK) {
+        import_validate_links(doc->links, doc->nlinks);
+    }
     return 0;
 }

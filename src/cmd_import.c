@@ -6,6 +6,7 @@
 #include "exit_codes.h"
 #include "import_read.h"
 #include "output.h"
+#include "settings.h"
 #include "store.h"
 
 #include <errno.h>
@@ -40,8 +41,8 @@ static int import_write(bool json, const StoreImportResult *r)
     }
     if (fprintf(app_out(),
                 "inserted %zu updated %zu unchanged %zu conflicts %zu rejected %zu skipped %zu\n",
-                r->inserted, r->updated, r->unchanged, r->nconflicts, r->nrejected, r->skipped) <
-        0) {
+                r->inserted, r->updated, r->unchanged, r->nconflicts, r->nrejected,
+                r->skipped) < 0) {
         return -1;
     }
     return 0;
@@ -93,9 +94,9 @@ static int import_reply(bool json, StoreImportResult *result)
 
 static int import_report_parse(const ImportDoc *doc)
 {
-    const char *msg = (doc->parse_message != NULL) ? doc->parse_message : "isn't a remember export.";
-    const char *fix =
-        (doc->parse_fix != NULL) ? doc->parse_fix : diag_code_fix(DIAG_IMPORT_PARSE);
+    const char *msg =
+        (doc->parse_message != NULL) ? doc->parse_message : "isn't a remember export.";
+    const char *fix = (doc->parse_fix != NULL) ? doc->parse_fix : diag_code_fix(DIAG_IMPORT_PARSE);
 
     (void)diag_error_fix(DIAG_IMPORT_PARSE, msg, fix);
     return REMEMBER_ERR;
@@ -121,14 +122,29 @@ static int import_report_io(const char *path, int sys_errno)
     return REMEMBER_ERR;
 }
 
-static int import_from_json(Store *s, bool json, const char *path, const char *origin)
+/* The parsed import flags: one --from-* path, and the --origin label or NULL. */
+typedef struct {
+    const char *from_db;
+    const char *from_json;
+    const char *from_md;
+    const char *from_csv;
+    const char *origin;
+} ImportArgs;
+
+/* --origin LABEL, else the source's basename (conflicts.origin). */
+static const char *import_origin(const ImportArgs *a, const char *path)
 {
+    return (a->origin != NULL) ? a->origin : import_basename(path);
+}
+
+static int import_from_json(Store *s, bool json, const ImportArgs *a)
+{
+    const char *path = a->from_json;
     ImportDoc doc;
     StoreImportResult result;
     char now[ISO_TS_BUFSIZE];
     int sys_errno = 0;
     StoreStatus st = STORE_OK;
-    int rc = 0;
 
     memset(&doc, 0, sizeof(doc));
     memset(&result, 0, sizeof(result));
@@ -136,7 +152,8 @@ static int import_from_json(Store *s, bool json, const char *path, const char *o
         return import_report_io(path, sys_errno);
     }
     if (doc.parse_message != NULL) {
-        rc = import_report_parse(&doc);
+        int rc = import_report_parse(&doc);
+
         import_doc_free(&doc);
         return rc;
     }
@@ -157,7 +174,7 @@ static int import_from_json(Store *s, bool json, const char *path, const char *o
             store_setting_import_free(&rep);
             import_doc_free(&doc);
             (void)diag_error_fix(DIAG_IMPORT_PARSE, "\"settings\" isn't a settings document.",
-                                    "Fix the settings object, then try again.");
+                                 "Fix the settings object, then try again.");
             return REMEMBER_ERR;
         }
         if (sst != SETTING_OK) {
@@ -173,7 +190,7 @@ static int import_from_json(Store *s, bool json, const char *path, const char *o
         err_msg(DIAG_INTERNAL, "internal error");
         return REMEMBER_ERR;
     }
-    st = store_import_doc(s, &doc, now, origin, &result);
+    st = store_import_doc(s, &doc, now, import_origin(a, path), &result);
     import_doc_free(&doc);
     if (st != STORE_OK) {
         return store_status_to_exit(s, st);
@@ -181,90 +198,103 @@ static int import_from_json(Store *s, bool json, const char *path, const char *o
     return import_reply(json, &result);
 }
 
-int cmd_import(Store *s, bool json, int rest_argc, const char **rest_argv)
+/* One --origin LABEL at argv[*i]. 0, or REMEMBER_ERR after a usage error. */
+static int import_take_origin(int *i, int argc, const char **argv, ImportArgs *a)
 {
-    const char *from_db = NULL;
-    const char *from_json = NULL;
-    const char *from_md = NULL;
-    const char *from_csv = NULL;
-    const char *origin_flag = NULL;
-    const char *origin = NULL;
-    ImportSource sources[] = {{"--from-db", &from_db},
-                              {"--from-json", &from_json},
-                              {"--from-md", &from_md},
-                              {"--from-csv", &from_csv}};
-    int taken_rc = 0;
-    int n_sources = 0;
-    char now[ISO_TS_BUFSIZE];
-    StoreImportResult result;
-    StoreStatus st = STORE_OK;
-    int i = 0;
+    TakeValue taken = take_value(i, argc, argv, "--origin requires a label");
 
-    memset(&result, 0, sizeof(result));
-    for (i = 0; i < rest_argc; i++) {
-        const char *arg = rest_argv[i];
-
-        if (arg != NULL && strcmp(arg, "--origin") == 0) {
-            TakeValue taken = take_value(&i, rest_argc, rest_argv, "--origin requires a label");
-            if (taken.rc != 0) {
-                err_msg(DIAG_USAGE, taken.err);
-                return REMEMBER_ERR;
-            }
-            if (origin_flag != NULL) {
-                err_msg(DIAG_USAGE, "duplicate --origin");
-                return REMEMBER_ERR;
-            }
-            if (strlen(taken.value) > (size_t)ORIGIN_MAX) {
-                err_msg(DIAG_USAGE, "origin is too long (max 64 bytes)");
-                return REMEMBER_ERR;
-            }
-            origin_flag = taken.value;
-            continue;
-        }
-        if (arg != NULL && import_take_source(arg, &i, rest_argc, rest_argv, sources,
-                                              sizeof sources / sizeof sources[0], &taken_rc)) {
-            if (taken_rc != 0) {
-                return REMEMBER_ERR;
-            }
-            continue;
-        }
-        if (arg != NULL && cmd_is_hooks_flag(arg)) {
-            continue;
-        }
-        if (arg != NULL && arg[0] == '-' && arg[1] != '\0') {
-            err_fmt(DIAG_USAGE, "unknown option '%s'", arg);
-            return REMEMBER_ERR;
-        }
-        err_msg(DIAG_USAGE, "import takes no positional arguments");
+    if (taken.rc != 0) {
+        err_msg(DIAG_USAGE, taken.err);
         return REMEMBER_ERR;
     }
-    for (i = 0; i < (int)(sizeof sources / sizeof sources[0]); i++) {
-        n_sources += (*sources[i].slot != NULL) ? 1 : 0;
+    if (a->origin != NULL) {
+        err_msg(DIAG_USAGE, "duplicate --origin");
+        return REMEMBER_ERR;
     }
-    if (n_sources != 1) {
+    if (strlen(taken.value) > (size_t)ORIGIN_MAX) {
+        err_msg(DIAG_USAGE, "origin is too long (max 64 bytes)");
+        return REMEMBER_ERR;
+    }
+    a->origin = taken.value;
+    return 0;
+}
+
+/* The import flags into a. 0, or REMEMBER_ERR after a usage error. */
+static int import_parse_args(int argc, const char **argv, ImportArgs *a)
+{
+    ImportSource sources[] = {{"--from-db", &a->from_db},
+                              {"--from-json", &a->from_json},
+                              {"--from-md", &a->from_md},
+                              {"--from-csv", &a->from_csv}};
+    size_t nsources = sizeof sources / sizeof sources[0];
+    size_t given = 0;
+    size_t k = 0;
+    int i = 0;
+
+    for (i = 0; i < argc; i++) {
+        const char *arg = (argv[i] != NULL) ? argv[i] : "";
+        int taken_rc = 0;
+
+        if (strcmp(arg, "--origin") == 0) {
+            taken_rc = import_take_origin(&i, argc, argv, a);
+        } else if (import_take_source(arg, &i, argc, argv, sources, nsources, &taken_rc) ||
+                   cmd_is_hooks_flag(arg)) {
+            /* taken (taken_rc says how) or a hooks flag */
+        } else if (arg[0] == '-' && arg[1] != '\0') {
+            err_fmt(DIAG_USAGE, "unknown option '%s'", arg);
+            return REMEMBER_ERR;
+        } else {
+            err_msg(DIAG_USAGE, "import takes no positional arguments");
+            return REMEMBER_ERR;
+        }
+        if (taken_rc != 0) {
+            return REMEMBER_ERR;
+        }
+    }
+    for (k = 0; k < nsources; k++) {
+        if (*sources[k].slot != NULL) {
+            given++;
+        }
+    }
+    if (given != 1U) {
         err_msg(DIAG_USAGE,
                 "import requires exactly one of --from-json, --from-md, --from-csv, --from-db");
         return REMEMBER_ERR;
     }
-    if (from_json != NULL) {
-        origin = (origin_flag != NULL) ? origin_flag : import_basename(from_json);
-        return import_from_json(s, json, from_json, origin);
+    return 0;
+}
+
+int cmd_import(Store *s, bool json, int rest_argc, const char **rest_argv)
+{
+    ImportArgs a = {NULL, NULL, NULL, NULL, NULL};
+    char now[ISO_TS_BUFSIZE];
+    StoreImportResult result;
+    StoreStatus st = STORE_OK;
+
+    if (import_parse_args(rest_argc, rest_argv, &a) != 0) {
+        return REMEMBER_ERR;
     }
-    if (from_md != NULL || from_csv != NULL) {
-        /* Stage 2 wires JSON only; Markdown and CSV land in later stages. */
-        err_msg(DIAG_USAGE, from_md != NULL ? "--from-md is not implemented yet"
-                                             : "--from-csv is not implemented yet");
+    if (a.from_json != NULL) {
+        return import_from_json(s, json, &a);
+    }
+    if (a.from_md != NULL) {
+        /* Markdown and CSV land in plan 23a (decision:plan23-review-g1-md-csv-to-23a). */
+        err_msg(DIAG_USAGE, "--from-md is not implemented yet");
+        return REMEMBER_ERR;
+    }
+    if (a.from_csv != NULL) {
+        err_msg(DIAG_USAGE, "--from-csv is not implemented yet");
         return REMEMBER_ERR;
     }
     if (utc_now(now, sizeof(now)) != 0) {
         err_msg(DIAG_INTERNAL, "internal error");
         return REMEMBER_ERR;
     }
-    origin = (origin_flag != NULL) ? origin_flag : import_basename(from_db);
-    st = store_import(s, from_db, now, origin, &result);
+    memset(&result, 0, sizeof(result));
+    st = store_import(s, a.from_db, now, import_origin(&a, a.from_db), &result);
     if (st == STORE_ERR_SQLITE && store_last_error(s)->import_source) {
         /* The source failed, not the brain: name the --from-db file. */
-        err_store_sqlite(store_last_error(s), from_db);
+        err_store_sqlite(store_last_error(s), a.from_db);
         return REMEMBER_ERR;
     }
     if (st != STORE_OK) {

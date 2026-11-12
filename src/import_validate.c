@@ -19,8 +19,6 @@ static int cmp_tag(const void *a, const void *b)
     return strcmp(*left, *right);
 }
 
-enum { UUID_TEXT_LEN = 36 };
-
 static bool is_hex(unsigned char c)
 {
     if (c >= '0' && c <= '9') {
@@ -35,7 +33,7 @@ static bool is_hex(unsigned char c)
     return false;
 }
 
-bool import_uuid_normalize(const char *s, char out[37])
+bool import_uuid_normalize(const char *s, char out[IMPORT_UUID_BUF])
 {
     static const int dashes[] = {8, 13, 18, 23};
     size_t i = 0;
@@ -44,7 +42,7 @@ bool import_uuid_normalize(const char *s, char out[37])
     if (s == NULL || out == NULL) {
         return false;
     }
-    for (i = 0; i < (size_t)UUID_TEXT_LEN; i++) {
+    for (i = 0; i < (size_t)IMPORT_UUID_LEN; i++) {
         unsigned char c = (unsigned char)s[i];
 
         if (d < 4U && (int)i == dashes[d]) {
@@ -60,17 +58,17 @@ bool import_uuid_normalize(const char *s, char out[37])
         }
         out[i] = (char)tolower(c);
     }
-    if (s[UUID_TEXT_LEN] != '\0') {
+    if (s[IMPORT_UUID_LEN] != '\0') {
         return false;
     }
-    out[UUID_TEXT_LEN] = '\0';
+    out[IMPORT_UUID_LEN] = '\0';
     return true;
 }
 
 /* D35: a canonical UUID of either case becomes lowercase. Same length, so in place. */
 static bool uuid_lowercase_in_place(char *s)
 {
-    char out[UUID_TEXT_LEN + 1];
+    char out[IMPORT_UUID_BUF];
 
     if (!import_uuid_normalize(s, out)) {
         return false;
@@ -116,7 +114,7 @@ static void tags_sort_unique(ImportMemory *m)
     if (m->ntags < 2U) {
         return;
     }
-    qsort(m->tags, m->ntags, sizeof(*m->tags), cmp_tag);
+    qsort((void *)m->tags, m->ntags, sizeof(*m->tags), cmp_tag);
     for (i = 1; i < m->ntags; i++) {
         if (strcmp(m->tags[keep - 1U], m->tags[i]) == 0) {
             free(m->tags[i]);
@@ -127,19 +125,13 @@ static void tags_sort_unique(ImportMemory *m)
     m->ntags = keep;
 }
 
-static const char *validate_one(ImportMemory *m)
+/* Trim the body in place. NULL when it is fine. */
+static const char *validate_body(ImportMemory *m)
 {
-    size_t i = 0;
-    NormStatus bst = NORM_OK;
     char *trimmed = NULL;
     size_t tlen = 0;
+    NormStatus bst = NORM_OK;
 
-    if (m == NULL) {
-        return "entry is not an object";
-    }
-    if (m->id != NULL && !uuid_lowercase_in_place(m->id)) {
-        return "id is not a UUID";
-    }
     if (m->body == NULL) {
         return "body is missing";
     }
@@ -155,31 +147,58 @@ static const char *validate_one(ImportMemory *m)
     }
     free(m->body);
     m->body = trimmed;
+    return NULL;
+}
+
+/* Normalize the key and tags in place (decision:plan23-review-g6-normalize-keys-tags). */
+static const char *validate_tokens(ImportMemory *m)
+{
+    size_t i = 0;
+    int k = 1;
+
     if (m->key != NULL) {
-        int k = token_normalize(&m->key);
-
-        if (k <= 0) {
-            return k < 0 ? k_oom : "invalid key or tag";
-        }
+        k = token_normalize(&m->key);
     }
-    for (i = 0; i < m->ntags; i++) {
-        int k = token_normalize(&m->tags[i]);
-
-        if (k <= 0) {
-            return k < 0 ? k_oom : "invalid key or tag";
-        }
+    for (i = 0; i < m->ntags && k > 0; i++) {
+        k = token_normalize(&m->tags[i]);
+    }
+    if (k < 0) {
+        return k_oom;
+    }
+    if (k == 0) {
+        return "invalid key or tag";
     }
     tags_sort_unique(m);
-    if (m->created_at != NULL && !utc_stamp_is_canonical(m->created_at)) {
-        return "invalid timestamp";
+    return NULL;
+}
+
+static bool stamp_ok(const char *stamp)
+{
+    if (stamp == NULL || utc_stamp_is_canonical(stamp)) {
+        return true;
     }
-    if (m->updated_at != NULL && !utc_stamp_is_canonical(m->updated_at)) {
-        return "invalid timestamp";
+    return false;
+}
+
+static const char *validate_one(ImportMemory *m)
+{
+    const char *msg = NULL;
+
+    if (m == NULL) {
+        return "entry is not an object";
     }
-    if (m->expires_at != NULL && !utc_stamp_is_canonical(m->expires_at)) {
-        return "invalid timestamp";
+    if (m->id != NULL && !uuid_lowercase_in_place(m->id)) {
+        return "id is not a UUID";
     }
-    if (m->deleted_at != NULL && !utc_stamp_is_canonical(m->deleted_at)) {
+    msg = validate_body(m);
+    if (msg == NULL) {
+        msg = validate_tokens(m);
+    }
+    if (msg != NULL) {
+        return msg;
+    }
+    if (!stamp_ok(m->created_at) || !stamp_ok(m->updated_at) || !stamp_ok(m->expires_at) ||
+        !stamp_ok(m->deleted_at)) {
         return "invalid timestamp";
     }
     if (m->created_by != NULL && !actor_json_is_canonical(m->created_by)) {
@@ -202,7 +221,10 @@ static int cmp_id_then_position(const void *a, const void *b)
     if (c != 0) {
         return c;
     }
-    return (*left < *right) ? -1 : (*left > *right) ? 1 : 0;
+    if (*left < *right) {
+        return -1;
+    }
+    return (*left > *right) ? 1 : 0;
 }
 
 int import_validate_memories(ImportMemory *entries, size_t n)
@@ -212,8 +234,12 @@ int import_validate_memories(ImportMemory *entries, size_t n)
     size_t i = 0;
 
     for (i = 0; i < n; i++) {
-        const char *msg = entries[i].bad ? NULL : validate_one(&entries[i]);
+        const char *msg = NULL;
 
+        if (entries[i].bad) {
+            continue;
+        }
+        msg = validate_one(&entries[i]);
         if (msg == k_oom) {
             return -1;
         }
@@ -232,14 +258,14 @@ int import_validate_memories(ImportMemory *entries, size_t n)
         }
     }
     /* O(n log n): a file of a million entries must not take hours (review A). */
-    qsort(with_id, nid, sizeof(*with_id), cmp_id_then_position);
+    qsort((void *)with_id, nid, sizeof(*with_id), cmp_id_then_position);
     for (i = 1; i < nid; i++) {
         if (strcmp(with_id[i - 1U]->id, with_id[i]->id) == 0) {
             with_id[i]->bad = true;
             with_id[i]->bad_message = "duplicate id";
         }
     }
-    free(with_id);
+    free((void *)with_id);
     return 0;
 }
 

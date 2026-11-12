@@ -280,13 +280,6 @@ SettingStatus store_setting_import(Store *brain, const char *user_db, const char
                                    SettingLayer only, bool dry_run, SettingImportReport *out,
                                    char *err, size_t errlen);
 
-/* Apply a remember-settings-export document inside the caller's open write
-   transaction (plan 23 ST-8.3a). only should be SETTING_LAYER_BRAIN. Does not
-   commit or roll back. */
-SettingStatus store_setting_import_apply(Store *brain, const char *doc, size_t len,
-                                         SettingLayer only, SettingImportReport *out, char *err,
-                                         size_t errlen);
-
 /* One settings_history row (ST-4.1). old_value and new_value are NULL when the
    row has none. id is the rowid in its own database. */
 typedef struct {
@@ -786,9 +779,9 @@ typedef struct {
 
 /* One bad record in the import envelope (006 E7.6 / plan 23). */
 typedef struct {
-    char *file;              /* heap basename or relative path */
-    const char *message;     /* static bad-record line */
-    long long line;          /* 1-based; source entry_links rowid for --from-db links */
+    char *file;          /* heap basename or relative path */
+    const char *message; /* static bad-record line */
+    long long line;      /* 1-based; source entry_links rowid for --from-db links */
 } StoreImportError;
 
 /* What store_import / store_import_doc did. Release with store_import_result_free. */

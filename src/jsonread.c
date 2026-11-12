@@ -5,6 +5,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "normalize.h"
 #include "test_alloc.h" /* IWYU pragma: keep — REMEMBER_TEST_HOOKS malloc seam */
 
 /*
@@ -58,7 +59,10 @@ static unsigned char next(Parser *p)
 
 static bool is_ws(unsigned char c)
 {
-    return c == ' ' || c == '\t' || c == '\n' || c == '\r';
+    if (c == ' ' || c == '\t' || c == '\n' || c == '\r') {
+        return true;
+    }
+    return false;
 }
 
 static void skip_ws(Parser *p)
@@ -68,7 +72,8 @@ static void skip_ws(Parser *p)
     }
 }
 
-static JsonValue *alloc_value(Parser *p, JsonType type, int line)
+/* type before p so the enum and the int line are never adjacent. */
+static JsonValue *alloc_value(JsonType type, Parser *p, int line)
 {
     JsonValue *v = (JsonValue *)calloc(1, sizeof(JsonValue));
 
@@ -83,6 +88,18 @@ static JsonValue *alloc_value(Parser *p, JsonType type, int line)
 
 static void free_value(JsonValue *v);
 
+/* NOLINTNEXTLINE(misc-no-recursion) — depth is capped at JSONREAD_NESTING_MAX */
+static void free_items(JsonValue **items, size_t n)
+{
+    size_t i = 0;
+
+    for (i = 0; i < n; i++) {
+        free_value(items[i]);
+    }
+    free((void *)items);
+}
+
+/* NOLINTNEXTLINE(misc-no-recursion) — depth is capped at JSONREAD_NESTING_MAX */
 static void free_members(JsonMember *members, size_t n)
 {
     size_t i = 0;
@@ -94,10 +111,9 @@ static void free_members(JsonMember *members, size_t n)
     free(members);
 }
 
+/* NOLINTNEXTLINE(misc-no-recursion) — depth is capped at JSONREAD_NESTING_MAX */
 static void free_value(JsonValue *v)
 {
-    size_t i = 0;
-
     if (v == NULL) {
         return;
     }
@@ -112,10 +128,7 @@ static void free_value(JsonValue *v)
         free(v->u.string.bytes);
         break;
     case JSON_ARRAY:
-        for (i = 0; i < v->u.array.n; i++) {
-            free_value(v->u.array.items[i]);
-        }
-        free(v->u.array.items);
+        free_items(v->u.array.items, v->u.array.n);
         break;
     case JSON_OBJECT:
         free_members(v->u.object.members, v->u.object.n);
@@ -126,6 +139,36 @@ static void free_value(JsonValue *v)
     free(v);
 }
 
+/* ---- strings ------------------------------------------------------------- */
+
+/* Unsigned so the shifts and masks stay unsigned (hicpp-signed-bitwise). */
+static const unsigned HEX_LETTER_BASE = 10U;
+static const unsigned HEX_SHIFT = 4U;
+static const unsigned FIRST_PRINTABLE = 0x20U;
+static const unsigned CP_1BYTE_MAX = 0x7FU;
+static const unsigned CP_2BYTE_MAX = 0x7FFU;
+static const unsigned CP_3BYTE_MAX = 0xFFFFU;
+static const unsigned CP_HIGH_MIN = 0xD800U;
+static const unsigned CP_HIGH_MAX = 0xDBFFU;
+static const unsigned CP_LOW_MIN = 0xDC00U;
+static const unsigned CP_LOW_MAX = 0xDFFFU;
+static const unsigned CP_PAIR_BASE = 0x10000U;
+static const unsigned CP_PAIR_SHIFT = 10U;
+static const unsigned UTF8_LEAD2_TAG = 0xC0U;
+static const unsigned UTF8_LEAD3_TAG = 0xE0U;
+static const unsigned UTF8_LEAD4_TAG = 0xF0U;
+static const unsigned UTF8_CONT_TAG = 0x80U;
+static const unsigned UTF8_CONT_PAYLOAD = 0x3FU;
+static const unsigned UTF8_CONT_SHIFT = 6U;
+static const size_t STRBUF_FIRST_CAP = 16U;
+static const size_t ITEMS_FIRST_CAP = 4U;
+
+typedef struct {
+    char *bytes;
+    size_t n;
+    size_t cap;
+} StrBuf;
+
 static bool hex_nibble(unsigned char c, unsigned int *out)
 {
     if (c >= '0' && c <= '9') {
@@ -133,11 +176,11 @@ static bool hex_nibble(unsigned char c, unsigned int *out)
         return true;
     }
     if (c >= 'a' && c <= 'f') {
-        *out = (unsigned int)(c - 'a' + 10);
+        *out = (unsigned int)(c - 'a') + HEX_LETTER_BASE;
         return true;
     }
     if (c >= 'A' && c <= 'F') {
-        *out = (unsigned int)(c - 'A' + 10);
+        *out = (unsigned int)(c - 'A') + HEX_LETTER_BASE;
         return true;
     }
     return false;
@@ -150,305 +193,184 @@ static bool read_u4(Parser *p, unsigned int *out)
 
     for (i = 0; i < 4; i++) {
         unsigned int nib = 0;
-        unsigned char c = 0;
 
-        if (at_end(p)) {
+        if (at_end(p) || !hex_nibble(next(p), &nib)) {
             set_err(p, JSONREAD_ERR_SYNTAX);
             return false;
         }
-        c = next(p);
-        if (!hex_nibble(c, &nib)) {
-            set_err(p, JSONREAD_ERR_SYNTAX);
-            return false;
-        }
-        v = (v << 4) | nib;
+        v = (v << HEX_SHIFT) | nib;
     }
     *out = v;
     return true;
 }
 
-static bool is_surrogate(unsigned int cp)
+static bool append_byte(StrBuf *b, unsigned char c, Parser *p)
 {
-    return cp >= 0xD800U && cp <= 0xDFFFU;
-}
-
-static bool append_byte(char **buf, size_t *n, size_t *cap, unsigned char b, Parser *p)
-{
-    if (*n + 1U >= *cap) {
-        size_t next_cap = (*cap == 0U) ? 16U : (*cap * 2U);
-        char *grown = (char *)realloc(*buf, next_cap);
+    if (b->n + 1U >= b->cap) {
+        size_t next_cap = (b->cap == 0U) ? STRBUF_FIRST_CAP : (b->cap * 2U);
+        char *grown = (char *)realloc(b->bytes, next_cap);
 
         if (grown == NULL) {
             set_err(p, JSONREAD_ERR_OOM);
             return false;
         }
-        *buf = grown;
-        *cap = next_cap;
+        b->bytes = grown;
+        b->cap = next_cap;
     }
-    (*buf)[(*n)++] = (char)b;
+    b->bytes[b->n++] = (char)c;
     return true;
 }
 
-static bool append_utf8(char **buf, size_t *n, size_t *cap, unsigned int cp, Parser *p)
+/* Encode a scalar from a \u escape. The caller has already refused
+   surrogates and NUL, and a pair is at most U+10FFFF. */
+static bool append_utf8(StrBuf *b, unsigned int cp, Parser *p)
 {
-    if (cp <= 0x7FU) {
-        return append_byte(buf, n, cap, (unsigned char)cp, p);
+    unsigned char out[4];
+    size_t len = 0;
+    size_t i = 0;
+    unsigned lead = 0;
+
+    if (cp <= CP_1BYTE_MAX) {
+        return append_byte(b, (unsigned char)cp, p);
     }
-    if (cp <= 0x7FFU) {
-        return append_byte(buf, n, cap, (unsigned char)(0xC0U | (cp >> 6)), p) &&
-               append_byte(buf, n, cap, (unsigned char)(0x80U | (cp & 0x3FU)), p);
+    if (cp <= CP_2BYTE_MAX) {
+        len = 2;
+        lead = UTF8_LEAD2_TAG;
+    } else if (cp <= CP_3BYTE_MAX) {
+        len = 3;
+        lead = UTF8_LEAD3_TAG;
+    } else {
+        len = 4;
+        lead = UTF8_LEAD4_TAG;
     }
-    if (cp <= 0xFFFFU) {
-        if (is_surrogate(cp)) {
+    for (i = len - 1U; i > 0U; i--) {
+        out[i] = (unsigned char)(UTF8_CONT_TAG | (cp & UTF8_CONT_PAYLOAD));
+        cp >>= UTF8_CONT_SHIFT;
+    }
+    out[0] = (unsigned char)(lead | cp);
+    for (i = 0; i < len; i++) {
+        if (!append_byte(b, out[i], p)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+/* The byte a one-letter escape stands for, or false for an unknown letter. */
+static bool simple_escape(unsigned char esc, unsigned char *out)
+{
+    static const char from[] = "\"\\/bfnrt";
+    static const char to[] = "\"\\/\b\f\n\r\t";
+    const char *hit = (esc != 0U) ? strchr(from, (int)esc) : NULL;
+
+    if (hit == NULL) {
+        return false;
+    }
+    *out = (unsigned char)to[hit - from];
+    return true;
+}
+
+/* The scalar after "\u": one escape, or a high and low surrogate pair. */
+static bool take_u_escape(Parser *p, unsigned int *cp_out)
+{
+    unsigned int cp = 0;
+    unsigned int low = 0;
+
+    if (!read_u4(p, &cp)) {
+        return false;
+    }
+    if (cp >= CP_HIGH_MIN && cp <= CP_HIGH_MAX) {
+        if (peek(p) != '\\') {
             set_err(p, JSONREAD_ERR_UTF8);
             return false;
         }
-        return append_byte(buf, n, cap, (unsigned char)(0xE0U | (cp >> 12)), p) &&
-               append_byte(buf, n, cap, (unsigned char)(0x80U | ((cp >> 6) & 0x3FU)), p) &&
-               append_byte(buf, n, cap, (unsigned char)(0x80U | (cp & 0x3FU)), p);
+        (void)next(p);
+        if (next(p) != 'u') {
+            set_err(p, JSONREAD_ERR_UTF8);
+            return false;
+        }
+        if (!read_u4(p, &low)) {
+            return false;
+        }
+        if (low < CP_LOW_MIN || low > CP_LOW_MAX) {
+            set_err(p, JSONREAD_ERR_UTF8);
+            return false;
+        }
+        cp = CP_PAIR_BASE + (((cp - CP_HIGH_MIN) << CP_PAIR_SHIFT) | (low - CP_LOW_MIN));
+    } else if (cp >= CP_HIGH_MIN && cp <= CP_LOW_MAX) {
+        set_err(p, JSONREAD_ERR_UTF8); /* a lone low surrogate */
+        return false;
+    } else if (cp == 0U) {
+        /* A NUL would cut every C string short
+           (decision:plan23-review-g3-nul-is-import-parse). */
+        set_err(p, JSONREAD_ERR_SYNTAX);
+        return false;
     }
-    if (cp <= 0x10FFFFU) {
-        return append_byte(buf, n, cap, (unsigned char)(0xF0U | (cp >> 18)), p) &&
-               append_byte(buf, n, cap, (unsigned char)(0x80U | ((cp >> 12) & 0x3FU)), p) &&
-               append_byte(buf, n, cap, (unsigned char)(0x80U | ((cp >> 6) & 0x3FU)), p) &&
-               append_byte(buf, n, cap, (unsigned char)(0x80U | (cp & 0x3FU)), p);
-    }
-    set_err(p, JSONREAD_ERR_UTF8);
-    return false;
+    *cp_out = cp;
+    return true;
 }
 
-/* Decode one well-formed UTF-8 scalar from p->src at p->at. Advances p. */
-static bool take_utf8_scalar(Parser *p, unsigned int *cp_out)
+/* One escape after the backslash, appended to b. */
+static bool take_escape(Parser *p, StrBuf *b)
 {
-    unsigned char b0 = 0;
-    unsigned char b1 = 0;
-    unsigned char b2 = 0;
-    unsigned char b3 = 0;
+    unsigned char esc = 0;
+    unsigned char plain = 0;
     unsigned int cp = 0;
 
     if (at_end(p)) {
-        set_err(p, JSONREAD_ERR_UTF8);
+        set_err(p, JSONREAD_ERR_SYNTAX);
         return false;
     }
-    b0 = next(p);
-    if (b0 < 0x80U) {
-        *cp_out = b0;
-        return true;
+    esc = next(p);
+    if (esc == 'u') {
+        if (!take_u_escape(p, &cp)) {
+            return false;
+        }
+        return append_utf8(b, cp, p);
     }
-    if ((b0 & 0xE0U) == 0xC0U) {
-        if (at_end(p) || b0 < 0xC2U) {
-            set_err(p, JSONREAD_ERR_UTF8);
-            return false;
-        }
-        b1 = next(p);
-        if ((b1 & 0xC0U) != 0x80U) {
-            set_err(p, JSONREAD_ERR_UTF8);
-            return false;
-        }
-        cp = ((unsigned int)(b0 & 0x1FU) << 6) | (unsigned int)(b1 & 0x3FU);
-        *cp_out = cp;
-        return true;
+    if (!simple_escape(esc, &plain)) {
+        set_err(p, JSONREAD_ERR_SYNTAX);
+        return false;
     }
-    if ((b0 & 0xF0U) == 0xE0U) {
-        if (p->at + 1U >= p->len) {
-            set_err(p, JSONREAD_ERR_UTF8);
-            return false;
-        }
-        b1 = next(p);
-        b2 = next(p);
-        if ((b1 & 0xC0U) != 0x80U || (b2 & 0xC0U) != 0x80U) {
-            set_err(p, JSONREAD_ERR_UTF8);
-            return false;
-        }
-        if (b0 == 0xE0U && b1 < 0xA0U) {
-            set_err(p, JSONREAD_ERR_UTF8);
-            return false;
-        }
-        if (b0 == 0xEDU && b1 >= 0xA0U) {
-            set_err(p, JSONREAD_ERR_UTF8); /* UTF-8 encoded surrogate */
-            return false;
-        }
-        cp = ((unsigned int)(b0 & 0x0FU) << 12) | ((unsigned int)(b1 & 0x3FU) << 6) |
-             (unsigned int)(b2 & 0x3FU);
-        *cp_out = cp;
-        return true;
-    }
-    if ((b0 & 0xF8U) == 0xF0U) {
-        if (p->at + 2U >= p->len || b0 > 0xF4U) {
-            set_err(p, JSONREAD_ERR_UTF8);
-            return false;
-        }
-        b1 = next(p);
-        b2 = next(p);
-        b3 = next(p);
-        if ((b1 & 0xC0U) != 0x80U || (b2 & 0xC0U) != 0x80U || (b3 & 0xC0U) != 0x80U) {
-            set_err(p, JSONREAD_ERR_UTF8);
-            return false;
-        }
-        if (b0 == 0xF0U && b1 < 0x90U) {
-            set_err(p, JSONREAD_ERR_UTF8);
-            return false;
-        }
-        if (b0 == 0xF4U && b1 >= 0x90U) {
-            set_err(p, JSONREAD_ERR_UTF8);
-            return false;
-        }
-        cp = ((unsigned int)(b0 & 0x07U) << 18) | ((unsigned int)(b1 & 0x3FU) << 12) |
-             ((unsigned int)(b2 & 0x3FU) << 6) | (unsigned int)(b3 & 0x3FU);
-        *cp_out = cp;
-        return true;
-    }
-    set_err(p, JSONREAD_ERR_UTF8);
-    return false;
+    return append_byte(b, plain, p);
 }
 
+/* The whole input is valid UTF-8 (jsonread_parse checks it first), so a
+   byte at or above 0x80 is copied as it is. */
 static bool parse_string_into(Parser *p, char **out_bytes, size_t *out_len)
 {
-    char *buf = NULL;
-    size_t n = 0;
-    size_t cap = 0;
+    StrBuf b = {NULL, 0, 0};
 
     if (next(p) != '"') {
         set_err(p, JSONREAD_ERR_SYNTAX);
         return false;
     }
     while (!at_end(p)) {
-        unsigned char c = peek(p);
+        unsigned char c = next(p);
+        bool done = false;
 
         if (c == '"') {
-            (void)next(p);
-            if (!append_byte(&buf, &n, &cap, '\0', p)) {
-                free(buf);
-                return false;
+            if (!append_byte(&b, '\0', p)) {
+                break;
             }
-            *out_bytes = buf;
-            *out_len = n - 1U; /* exclude the NUL */
+            *out_bytes = b.bytes;
+            *out_len = b.n - 1U; /* exclude the NUL */
             return true;
         }
         if (c == '\\') {
-            unsigned char esc = 0;
-            unsigned int cp = 0;
-
-            (void)next(p);
-            if (at_end(p)) {
-                set_err(p, JSONREAD_ERR_SYNTAX);
-                free(buf);
-                return false;
-            }
-            esc = next(p);
-            switch (esc) {
-            case '"':
-            case '\\':
-            case '/':
-                if (!append_byte(&buf, &n, &cap, esc, p)) {
-                    free(buf);
-                    return false;
-                }
-                break;
-            case 'b':
-                if (!append_byte(&buf, &n, &cap, '\b', p)) {
-                    free(buf);
-                    return false;
-                }
-                break;
-            case 'f':
-                if (!append_byte(&buf, &n, &cap, '\f', p)) {
-                    free(buf);
-                    return false;
-                }
-                break;
-            case 'n':
-                if (!append_byte(&buf, &n, &cap, '\n', p)) {
-                    free(buf);
-                    return false;
-                }
-                break;
-            case 'r':
-                if (!append_byte(&buf, &n, &cap, '\r', p)) {
-                    free(buf);
-                    return false;
-                }
-                break;
-            case 't':
-                if (!append_byte(&buf, &n, &cap, '\t', p)) {
-                    free(buf);
-                    return false;
-                }
-                break;
-            case 'u':
-                if (!read_u4(p, &cp)) {
-                    free(buf);
-                    return false;
-                }
-                if (cp >= 0xD800U && cp <= 0xDBFFU) {
-                    unsigned int low = 0;
-
-                    if (peek(p) != '\\') {
-                        set_err(p, JSONREAD_ERR_UTF8);
-                        free(buf);
-                        return false;
-                    }
-                    (void)next(p);
-                    if (next(p) != 'u') {
-                        set_err(p, JSONREAD_ERR_UTF8);
-                        free(buf);
-                        return false;
-                    }
-                    if (!read_u4(p, &low)) {
-                        free(buf);
-                        return false;
-                    }
-                    if (low < 0xDC00U || low > 0xDFFFU) {
-                        set_err(p, JSONREAD_ERR_UTF8);
-                        free(buf);
-                        return false;
-                    }
-                    cp = 0x10000U + (((cp - 0xD800U) << 10) | (low - 0xDC00U));
-                } else if (is_surrogate(cp)) {
-                    set_err(p, JSONREAD_ERR_UTF8);
-                    free(buf);
-                    return false;
-                } else if (cp == 0U) {
-                    /* A NUL would cut every C string short
-                       (decision:plan23-review-g3-nul-is-import-parse). */
-                    set_err(p, JSONREAD_ERR_SYNTAX);
-                    free(buf);
-                    return false;
-                }
-                if (!append_utf8(&buf, &n, &cap, cp, p)) {
-                    free(buf);
-                    return false;
-                }
-                break;
-            default:
-                set_err(p, JSONREAD_ERR_SYNTAX);
-                free(buf);
-                return false;
-            }
-            continue;
-        }
-        if (c < 0x20U) {
+            done = take_escape(p, &b);
+        } else if (c < FIRST_PRINTABLE) {
             set_err(p, JSONREAD_ERR_SYNTAX);
-            free(buf);
-            return false;
-        }
-        if (c < 0x80U) {
-            (void)next(p);
-            if (!append_byte(&buf, &n, &cap, c, p)) {
-                free(buf);
-                return false;
-            }
         } else {
-            unsigned int cp = 0;
-
-            if (!take_utf8_scalar(p, &cp) || !append_utf8(&buf, &n, &cap, cp, p)) {
-                free(buf);
-                return false;
-            }
+            done = append_byte(&b, c, p);
+        }
+        if (!done) {
+            free(b.bytes);
+            return false;
         }
     }
     set_err(p, JSONREAD_ERR_SYNTAX);
-    free(buf);
+    free(b.bytes);
     return false;
 }
 
@@ -467,6 +389,18 @@ static bool expect_lit(Parser *p, const char *lit)
     return true;
 }
 
+/* Skip a run of ASCII digits; the count it skipped. */
+static size_t skip_digits(Parser *p)
+{
+    size_t n = 0;
+
+    while (peek(p) >= '0' && peek(p) <= '9') {
+        (void)next(p);
+        n++;
+    }
+    return n;
+}
+
 static JsonValue *parse_number(Parser *p, int line)
 {
     size_t start = p->at;
@@ -478,29 +412,18 @@ static JsonValue *parse_number(Parser *p, int line)
     if (peek(p) == '-') {
         (void)next(p);
     }
-    c = peek(p);
-    if (c == '0') {
+    if (peek(p) == '0') {
         (void)next(p);
-    } else if (c >= '1' && c <= '9') {
-        do {
-            (void)next(p);
-            c = peek(p);
-        } while (c >= '0' && c <= '9');
-    } else {
+    } else if (skip_digits(p) == 0U) {
         set_err(p, JSONREAD_ERR_SYNTAX);
         return NULL;
     }
     if (peek(p) == '.') {
         (void)next(p);
-        c = peek(p);
-        if (c < '0' || c > '9') {
+        if (skip_digits(p) == 0U) {
             set_err(p, JSONREAD_ERR_SYNTAX);
             return NULL;
         }
-        do {
-            (void)next(p);
-            c = peek(p);
-        } while (c >= '0' && c <= '9');
     }
     c = peek(p);
     if (c == 'e' || c == 'E') {
@@ -508,16 +431,11 @@ static JsonValue *parse_number(Parser *p, int line)
         c = peek(p);
         if (c == '+' || c == '-') {
             (void)next(p);
-            c = peek(p);
         }
-        if (c < '0' || c > '9') {
+        if (skip_digits(p) == 0U) {
             set_err(p, JSONREAD_ERR_SYNTAX);
             return NULL;
         }
-        do {
-            (void)next(p);
-            c = peek(p);
-        } while (c >= '0' && c <= '9');
     }
     /* NaN / Infinity never match the grammar above; a leading letter fails. */
     end = p->at;
@@ -528,7 +446,7 @@ static JsonValue *parse_number(Parser *p, int line)
     }
     memcpy(copy, p->src + start, end - start);
     copy[end - start] = '\0';
-    v = alloc_value(p, JSON_NUMBER, line);
+    v = alloc_value(JSON_NUMBER, p, line);
     if (v == NULL) {
         free(copy);
         return NULL;
@@ -538,11 +456,11 @@ static JsonValue *parse_number(Parser *p, int line)
     return v;
 }
 
-static bool grow_ptr_array(void ***items, size_t *n, size_t *cap, void *item, Parser *p)
+static bool grow_items(JsonValue ***items, size_t *n, size_t *cap, JsonValue *item, Parser *p)
 {
     if (*n + 1U > *cap) {
-        size_t next_cap = (*cap == 0U) ? 4U : (*cap * 2U);
-        void **grown = (void **)realloc(*items, next_cap * sizeof(void *));
+        size_t next_cap = (*cap == 0U) ? ITEMS_FIRST_CAP : (*cap * 2U);
+        JsonValue **grown = (JsonValue **)realloc((void *)*items, next_cap * sizeof(JsonValue *));
 
         if (grown == NULL) {
             set_err(p, JSONREAD_ERR_OOM);
@@ -558,7 +476,7 @@ static bool grow_ptr_array(void ***items, size_t *n, size_t *cap, void *item, Pa
 static bool grow_members(JsonMember **members, size_t *n, size_t *cap, JsonMember m, Parser *p)
 {
     if (*n + 1U > *cap) {
-        size_t next_cap = (*cap == 0U) ? 4U : (*cap * 2U);
+        size_t next_cap = (*cap == 0U) ? ITEMS_FIRST_CAP : (*cap * 2U);
         JsonMember *grown = (JsonMember *)realloc(*members, next_cap * sizeof(JsonMember));
 
         if (grown == NULL) {
@@ -572,6 +490,7 @@ static bool grow_members(JsonMember **members, size_t *n, size_t *cap, JsonMembe
     return true;
 }
 
+/* NOLINTNEXTLINE(misc-no-recursion) — depth is capped at JSONREAD_NESTING_MAX */
 static JsonValue *parse_array(Parser *p, int line)
 {
     JsonValue *v = NULL;
@@ -587,7 +506,7 @@ static JsonValue *parse_array(Parser *p, int line)
     skip_ws(p);
     if (peek(p) == ']') {
         (void)next(p);
-        v = alloc_value(p, JSON_ARRAY, line);
+        v = alloc_value(JSON_ARRAY, p, line);
         if (v == NULL) {
             return NULL;
         }
@@ -599,18 +518,12 @@ static JsonValue *parse_array(Parser *p, int line)
         skip_ws(p);
         item = parse_value(p);
         if (item == NULL) {
-            for (size_t i = 0; i < n; i++) {
-                free_value(items[i]);
-            }
-            free(items);
+            free_items(items, n);
             return NULL;
         }
-        if (!grow_ptr_array((void ***)&items, &n, &cap, item, p)) {
+        if (!grow_items(&items, &n, &cap, item, p)) {
             free_value(item);
-            for (size_t i = 0; i < n; i++) {
-                free_value(items[i]);
-            }
-            free(items);
+            free_items(items, n);
             return NULL;
         }
         skip_ws(p);
@@ -623,18 +536,12 @@ static JsonValue *parse_array(Parser *p, int line)
             break;
         }
         set_err(p, JSONREAD_ERR_SYNTAX);
-        for (size_t i = 0; i < n; i++) {
-            free_value(items[i]);
-        }
-        free(items);
+        free_items(items, n);
         return NULL;
     }
-    v = alloc_value(p, JSON_ARRAY, line);
+    v = alloc_value(JSON_ARRAY, p, line);
     if (v == NULL) {
-        for (size_t i = 0; i < n; i++) {
-            free_value(items[i]);
-        }
-        free(items);
+        free_items(items, n);
         return NULL;
     }
     v->u.array.items = items;
@@ -642,6 +549,7 @@ static JsonValue *parse_array(Parser *p, int line)
     return v;
 }
 
+/* NOLINTNEXTLINE(misc-no-recursion) — depth is capped at JSONREAD_NESTING_MAX */
 static JsonValue *parse_object(Parser *p, int line)
 {
     JsonValue *v = NULL;
@@ -657,7 +565,7 @@ static JsonValue *parse_object(Parser *p, int line)
     skip_ws(p);
     if (peek(p) == '}') {
         (void)next(p);
-        return alloc_value(p, JSON_OBJECT, line);
+        return alloc_value(JSON_OBJECT, p, line);
     }
     for (;;) {
         JsonMember m = {NULL, 0, NULL};
@@ -709,7 +617,7 @@ static JsonValue *parse_object(Parser *p, int line)
         free_members(members, n);
         return NULL;
     }
-    v = alloc_value(p, JSON_OBJECT, line);
+    v = alloc_value(JSON_OBJECT, p, line);
     if (v == NULL) {
         free_members(members, n);
         return NULL;
@@ -723,6 +631,7 @@ static JsonValue *parse_value_at(Parser *p, int line);
 
 /* One value plus its source byte span (callers such as the nested settings
    document re-read those exact bytes). */
+/* NOLINTNEXTLINE(misc-no-recursion) — depth is capped at JSONREAD_NESTING_MAX */
 static JsonValue *parse_value(Parser *p)
 {
     size_t start = 0;
@@ -742,6 +651,7 @@ static JsonValue *parse_value(Parser *p)
     return v;
 }
 
+/* NOLINTNEXTLINE(misc-no-recursion) — depth is capped at JSONREAD_NESTING_MAX */
 static JsonValue *parse_value_at(Parser *p, int line)
 {
     unsigned char c = 0;
@@ -752,13 +662,13 @@ static JsonValue *parse_value_at(Parser *p, int line)
         if (!expect_lit(p, "null")) {
             return NULL;
         }
-        return alloc_value(p, JSON_NULL, line);
+        return alloc_value(JSON_NULL, p, line);
     }
     if (c == 't') {
         if (!expect_lit(p, "true")) {
             return NULL;
         }
-        v = alloc_value(p, JSON_BOOL, line);
+        v = alloc_value(JSON_BOOL, p, line);
         if (v != NULL) {
             v->u.boolean = true;
         }
@@ -768,7 +678,7 @@ static JsonValue *parse_value_at(Parser *p, int line)
         if (!expect_lit(p, "false")) {
             return NULL;
         }
-        v = alloc_value(p, JSON_BOOL, line);
+        v = alloc_value(JSON_BOOL, p, line);
         if (v != NULL) {
             v->u.boolean = false;
         }
@@ -781,7 +691,7 @@ static JsonValue *parse_value_at(Parser *p, int line)
         if (!parse_string_into(p, &bytes, &len)) {
             return NULL;
         }
-        v = alloc_value(p, JSON_STRING, line);
+        v = alloc_value(JSON_STRING, p, line);
         if (v == NULL) {
             free(bytes);
             return NULL;
@@ -822,6 +732,9 @@ JsonReadStatus jsonread_parse(const char *src, size_t len, JsonValue **out)
     if (src == NULL && len != 0U) {
         return JSONREAD_ERR_INTERNAL;
     }
+    if (!utf8_is_valid(src, len)) {
+        return JSONREAD_ERR_UTF8;
+    }
     memset(&p, 0, sizeof(p));
     p.src = (src != NULL) ? src : "";
     p.len = len;
@@ -859,7 +772,6 @@ const char *jsonread_status_string(JsonReadStatus st)
     case JSONREAD_ERR_OOM:
         return "oom";
     case JSONREAD_ERR_INTERNAL:
-        return "internal";
     default:
         return "internal";
     }
