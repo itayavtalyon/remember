@@ -56,7 +56,9 @@ bool import_uuid_normalize(const char *s, char out[IMPORT_UUID_BUF])
         if (!is_hex(c)) {
             return false;
         }
-        out[i] = (char)tolower(c);
+        /* (tolower) calls the function: glibc's recursive macro trips -Weverything. */
+        // NOLINTNEXTLINE(readability-redundant-parentheses)
+        out[i] = (char)(tolower)(c);
     }
     if (s[IMPORT_UUID_LEN] != '\0') {
         return false;

@@ -1093,8 +1093,15 @@ static char *given_wide_vector(size_t ndev)
     }
     out[n++] = '{';
     for (i = 0; i < ndev; i++) {
-        n += (size_t)snprintf(out + n, cap - n, "%s\"01a1d000-0000-7000-8000-%012zx\":1",
-                              i > 0U ? "," : "", i);
+        int wrote = snprintf(out + n, cap - n, "%s\"01a1d000-0000-7000-8000-%012zx\":1",
+                             i > 0U ? "," : "", i);
+
+        ASSERT_TRUE(wrote > 0 && (size_t)wrote < cap - n);
+        if (wrote <= 0 || (size_t)wrote >= cap - n) {
+            free(out);
+            return NULL;
+        }
+        n += (size_t)wrote;
     }
     out[n++] = '}';
     out[n] = '\0';
