@@ -63,6 +63,7 @@ The coder stops and asks Itay, through the architect, at each of these. The plan
 9. When an existing brain gets incremental auto-vacuum (`decision:2026-11-11-sync-space-reclaim`). `VACUUM` cannot run inside the migration transaction. A new brain gets it when created.
 10. Whether `import --from-db` accepts a v7 source. Plan 23 lists v4 to v6.
 11. The wiki-link plan does not exist, and F-06 ships v7 together with wiki-links. Itay says which plan parses `[[key]]` and `[[uuid]]` and whether v7 releases without it.
+12. Where `device_name` and `device_kind` sit in RememberEnv, and how the `struct_size` check treats a host built with the older header (plan 29 fixes the minimum size at `callback_ctx`).
 
 ## Review points
 
