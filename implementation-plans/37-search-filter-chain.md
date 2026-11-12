@@ -41,6 +41,8 @@ A filter past its budget: status `timeout`, code `plugin_filter_timeout`, input 
 
 `plugin.hybrid.enabled` true does not change order (no filter entry).
 
+- **Warnings carry a `fix` (E3 B, `decision:2026-11-12-e3-warnings-have-fix-field`).** Every warning this plan prints has a `message` and a non-empty `fix`: `plugin_filter_cold_start`, `plugin_filter_timeout`, `plugin_filter_failed`, `plugin_additions_capped`, `plugin_note_truncated`, `plugin_request_trimmed` and `plugin_chain_capped`. The wording is copy item E3B-1, entries 3, 18 to 20, 23 to 25 and 28, in `decision:2026-11-12-copy-batch-e3b-warning-splits`: the approved sentence stays word for word and only its next step moves into `fix`; the plain line is `remember: warning: <message> <fix>`. `code`, `detail`, exit codes and `--strict` do not change. Itay approved E3B-1 as a whole on 2026-11-12, including every `fix` that is Story Weaver wording (`decision:2026-11-12-copy-batch-e3b-warning-splits`).
+
 ## Review points
 
 - With no enabled filter the code path does not call the chain (identical BM25 bytes).

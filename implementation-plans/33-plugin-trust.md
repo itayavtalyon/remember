@@ -37,6 +37,8 @@ Check. `plugin_trust_check(name)` compares the record to the files. A mismatch r
 
 Settings. `settings set plugin.<name>.enabled true` for an installed plugin with no matching record fails with `plugin_untrusted` and prints C-17 (007 test 23).
 
+- **Warnings carry a `fix` (E3 B, `decision:2026-11-12-e3-warnings-have-fix-field`).** Every warning this plan prints has a `message` and a non-empty `fix`: `plugin_untrusted`. The wording is copy item E3B-1, entry 11, in `decision:2026-11-12-copy-batch-e3b-warning-splits`: the approved sentence stays word for word and only its next step moves into `fix`; the plain line is `remember: warning: <message> <fix>`. `code`, `detail`, exit codes and `--strict` do not change. Itay approved E3B-1 as a whole on 2026-11-12, including every `fix` that is Story Weaver wording (`decision:2026-11-12-copy-batch-e3b-warning-splits`).
+
 ## Review points
 
 - No code path records trust without a true confirm return.

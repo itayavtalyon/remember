@@ -39,7 +39,7 @@ main → cli_parse → commands.h (cmd_add | cmd_locator | cmd_query) → store_
 - 18b. Plan: [Branch-coverage gate](18b-branch-coverage-gate.md). Done when: `check-coverage.sh` fails on any untaken branch side in `search_terms.c`, `unicode.c`, `normalize.c`, `output.c`; no excuses. Runs on `plan18-union-search` between plan 18 stages 2 and 3 ✅.
 - 18c. Plan: [Import control bytes](18c-import-control-bytes.md). Done when: `import --from-db` skips and counts (`rejected`) rows whose key or tag is not canonical; human output masks C0/DEL in every stored string it prints. On `fix/import-control-bytes` (off plan 18b) ✅.
 - 19. Plan: [Schema v6](19-schema-v6.md). Done when: One v5→v6 migration for 007 §10, 008 §8, and 010 §17. Copy approved 2026-10-25 (C-01 `schema_too_new`). ✅.
-- 20. Plan: [Settings](20-settings.md). Done when: Registry, user.db, resolution, commands, credential helper, settings export/import. Copy approved 2026-10-25. After plan 19. Command JSON after plan 21. The `unknown_key` reason words are still unwritten.
+- 20. Plan: [Settings](20-settings.md). Done when: Registry, user.db, resolution, commands, credential helper, settings export/import. Copy approved 2026-10-25. After plan 19. Command JSON after plan 21. The `unknown_key` and `bad_field` import-skip lines are written (copy item C-43), and every warning has a `fix` (E3 B).
 - 21. Plan: [JSON envelope](21-json-envelope.md). Done when: `remember-message` 1, locators, actors, `--trash` means Trash. Copy approved 2026-10-25. After plan 19. Does not implement `brains.json`. The hook-depth `--as`/`--actor` line is a C-42-style draft. ✅.
 - 22. Plan: [Export](22-export.md). Done when: JSON, Markdown, CSV memory export. READY. D-04 is answered (2026-10-25).
 - 23. Plan: [Import formats](23-import-formats.md). Done when: JSON, Markdown, CSV, and `--from-db` v4–v6. Copy approved 2026-10-25. D-04 is answered (2026-10-25). No old-name reader. No add-wins.
@@ -47,23 +47,23 @@ main → cli_parse → commands.h (cmd_add | cmd_locator | cmd_query) → store_
 - 25. Plan: [Plugin manifest](25-plugin-manifest.md). Done when: `plugin.json` parses to the protocol schema. Needs 24.
 - 26. Plan: [Brain list](26-brain-list.md). Done when: `brains.json`, `brain list`, `brain prune`. Needs 19, 25 (cut from the same branch).
 - 27. Plan: [Default brain path](27-default-db.md). Done when: `~/.remember/default-db`. Needs 19.
-- 27a. Plan: [Outbox delivery](27a-outbox-delivery.md). Done when: Recipient state machine. Needs 24.
-- 27b. Plan: [Older CLI read-only](27b-older-cli-read-only.md). Done when: `schema_too_new` read-only with a warning, writes exit 75. Needs 19, 21. Blocked on R29-4.
+- 27a. Plan: [Outbox delivery](27a-outbox-delivery.md). Done when: Recipient state machine, backoff retry (X3 A), and a pre-flight failure that is `failed` at once (E1 A). Needs 24.
+- 27b. Plan: [Older CLI read-only](27b-older-cli-read-only.md). Done when: `schema_too_new` read-only with a warning, writes exit 75. Needs 19, 21. Copy: R27b-1 (no command in the upgrade line, SW1 A).
 - 28. Plan: [Release 0.3.0](28-release-0.3.0.md). Done when: Version, What's New, Codex skill. Needs 22, 23, 25, 26, 27, 27a, 27b.
-- 29. Plan: [Handle API](29-handle-api.md). Done when: `remember_open`/`remember_call`/`remember_close`, RememberEnv, no HOME in the engine. Needs 20, 21. Blocked on X1, R29-1.
+- 29. Plan: [Handle API](29-handle-api.md). Done when: `remember_open`/`remember_call`/`remember_close`, RememberEnv, no HOME in the engine. Needs 20, 21. Blocked on X1.
 - 30. Plan: [Plugin settings keys](30-plugin-settings-keys.md). Done when: Boolean type, generated `plugin.<name>.*` keys. Needs 25.
 - 31. Plan: [Events and outbox insert](31-events-and-outbox-insert.md). Done when: Five write events, the write-time filter, the outbox row. Needs 25, 27a, 30.
 - 32. Plan: [Expiry sweep](32-expiry-sweep.md). Done when: `expired_at`, `sweep`, `purge`, `delete --expired`. Needs 26, 31.
 - 33. Plan: [Plugin trust](33-plugin-trust.md). Done when: `trust.json`, confirm, hash check. Needs 25.
 - 34. Plan: [Plugin commands](34-plugin-commands.md). Done when: `hook add`, `plugin add/list/show/enable/disable/trust/remove/log/status`. Needs 30, 33.
 - 35. Plan: [Dispatcher](35-dispatcher.md). Done when: Pre-flight, detached dispatch, once-runs, allow list, kill switch, rerun. Needs 27a, 29, 31, 32, 33.
-- 36. Plan: [Persistent processes](36-persistent-processes.md). Done when: Sockets, ping, strikes, crash loop, `index.json`, backfill. Needs 35. Blocked on R36-1, X1.
+- 36. Plan: [Persistent processes](36-persistent-processes.md). Done when: Sockets, ping, strikes, crash loop, `index.json`, backfill. Needs 35. Blocked on X1.
 - 37. Plan: [Search filter chain](37-search-filter-chain.md). Done when: Three stages, budget, cold start. Needs 36. Blocked on X5.
 - 38. Plan: [Plugin test](38-plugin-test.md). Done when: `plugin test NAME|DIR`. Needs 35, 36.
-- 39. Plan: [Daemon process](39-daemon-lock.md). Done when: `daemon.lock`, `daemon.json`, drain. Needs 21, 35. Blocked on R28-2.
+- 39. Plan: [Daemon process](39-daemon-lock.md). Done when: `daemon.lock`, `daemon.json`, drain. Needs 21, 35.
 - 40. Plan: [Daemon install](40-daemon-install.md). Done when: `remember daemon install`, `--plugin-dir`. Needs 34, 39.
-- 41. Plan: [Daemon takeover](41-daemon-takeover.md). Done when: `remember daemon takeover [--yes]`. Needs 39, 40. Blocked on R30-4.
-- 42. Plan: [Owner-missing check](42-daemon-owner-missing.md). Done when: `state.json`, the one-time prompt, the warning. Needs 39, 41. Blocked on R30-4.
+- 41. Plan: [Daemon takeover](41-daemon-takeover.md). Done when: `remember daemon takeover [--yes]`. Needs 39, 40. Copy: R30-4; `confirmation_required` exits 5 (E2 A).
+- 42. Plan: [Owner-missing check](42-daemon-owner-missing.md). Done when: `state.json`, the one-time prompt, the warning. Needs 39, 41. Copy: R30-4; the hint prints after No only and `y` prints a done confirmation (E4 A).
 
 **Design 006 plans 15–18:** do them in order. Plan 18 is not done. Plans 18b
 and 18c land with the plan 18 merge. Do not tick plan 18.
@@ -89,7 +89,8 @@ Standards on every one of these plans:
 - **Specs.** The plan writes its spec in `specs/` in the same pull request. Each section names its decision keys. Each decision the plan built moves to `state:implemented`.
 - **Gate.** The plan 19 gate: configure and build with sanitizers, `ctest`, `scripts/lint-all.sh`, `scripts/check-coverage.sh`, `scripts/ci-linux.sh`, and the `leaks-macos` target. Coverage stays 100% functions and 100% effective lines.
 - **Proof.** Every new clause has a test that a one-clause mutant turns red. Expected values are literals.
-- **Copy.** The plan quotes every sentence. The coder prints that sentence and no other.
+- **Copy.** The plan quotes every sentence. The coder prints that sentence and no other. The approved copy batch is `decision:2026-11-12-copy-batch-final`, and the message and fix of every warning are in `decision:2026-11-12-copy-batch-e3b-warning-splits` (E3 B: a warning has a `message` and a non-empty `fix`, as an error does). `confirmation_required` exits 5 everywhere (E2 A).
+- **Hook failures.** A run that started and failed is retried with backoff from 1 second, doubling to a 1 hour cap, then `failed` (X3 A). A pre-flight failure is `failed` at once and is never retried (E1 A).
 - **Prerequisite.** The decisions the plan lists are accepted in Remember before the coder starts.
 
 Decided on 2026-11-11 and now built by a plan: `decision:2026-11-11-filter-degraded-exit` (plan 37), `decision:2026-11-11-plugin-enabled-bool` (plan 30).

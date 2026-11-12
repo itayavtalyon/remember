@@ -2,7 +2,7 @@
 
 **Area:** the runtime dir, sockets, state files, ping, idle shutdown, strikes, crash loop, `index.json`, the backfill and `plugin reindex` (`src/plugin_proc.c` new, `src/plugin_proc.h` new, `src/plugin_index.c` new, `src/backfill.c` new).
 **Needs:** plan 35. No other plan.
-**Blocked on:** copy item R36-1 (Story Weaver copy request, 2026-11-11, not yet approved) for `runtime_dir_unsafe`; the host warm-up request type `plugin.warm` joins the open question `decision:open-2026-11-12-remember-call-requests` (X1) (request types of `remember_call`).
+**Blocked on:** the host warm-up request type `plugin.warm` joins the open question `decision:open-2026-11-12-remember-call-requests` (X1) (request types of `remember_call`).
 
 ## Goal
 
@@ -26,7 +26,7 @@ The standards for plans 25 and later in [INDEX](INDEX.md). Tests in `tests/test_
 
 ## What must be true
 
-Runtime dir: `RememberEnv.runtime_dir` when set, else `$XDG_RUNTIME_DIR/remember/` when that variable is set (read by `src/cli_env.c`), else `/tmp/remember-<uid>/`. Created at mode 0700. Refused (error `runtime_dir_unsafe`, copy key R36-1) when another user owns it.
+Runtime dir: `RememberEnv.runtime_dir` when set, else `$XDG_RUNTIME_DIR/remember/` when that variable is set (read by `src/cli_env.c`), else `/tmp/remember-<uid>/`. Created at mode 0700. Refused (error `runtime_dir_unsafe`, copy item R36-1 in `decision:2026-11-12-copy-batch-final`) when another user owns it. Exit 1, `retryable` false. `message`: `the plugin runtime folder "<path>" belongs to another user, so remember won't use it.` `fix`: `Remove "<path>", or set XDG_RUNTIME_DIR to a folder you own.` Plain line: `remember: the plugin runtime folder "<path>" belongs to another user, so remember won't use it. Remove "<path>", or set XDG_RUNTIME_DIR to a folder you own.`
 
 Actions default to `once`. Filters are `persistent`. Socket `<runtime>/s/<16 hex>.sock`, where the hex is the first 16 hex characters of SHA-256 of `<brain_id>/<plugin name>`. State file `<runtime>/plugins/<name>/<brain-id>.state`, format `remember-plugin-state` version 1, fields `pid`, `started_at`, `strikes`, `crashes` (instants from the last 10 minutes).
 
@@ -43,6 +43,8 @@ Runs only when `enabled` resolves true, the trust record matches or it is built-
 `index.json`: `<brain>.d/plugins/<name>/index.json` beside `data/` and `stderr.log`, format `remember-plugin-index` version 1, fields `index_version` (string or null) and `disabled_reason` (null, `crash_loop`, `protocol_mismatch`, `untrusted`). The folder is never synced, exported, or backed up.
 
 Backfill: index states `ready`, `building`, `stale`, `missing`, `failed`, `disabled`. After a completed full backfill, store `index_version`. A different `index_version` later marks `stale`. A search or a write only marks a backfill pending. It runs on `plugin enable`, on `remember plugin reindex NAME [--full]`, and when the host asks at launch. The runner holds a per-plugin, per-brain lock and resumes from the last answered batch. A catch-up sends changes and purge tombstones with `change_seq` above `applied_through_seq`. A missing batch reply stops the stream: exit 1 `plugin_backfill_incomplete` (C-24). A second run resumes. Search does not block while an index builds.
+
+- **Warnings carry a `fix` (E3 B, `decision:2026-11-12-e3-warnings-have-fix-field`).** Every warning this plan prints has a `message` and a non-empty `fix`: `plugin_disabled_crash_loop`. The wording is copy item E3B-1, entry 17, in `decision:2026-11-12-copy-batch-e3b-warning-splits`: the approved sentence stays word for word and only its next step moves into `fix`; the plain line is `remember: warning: <message> <fix>`. `code`, `detail`, exit codes and `--strict` do not change. Itay approved E3B-1 as a whole on 2026-11-12, including every `fix` that is Story Weaver wording (`decision:2026-11-12-copy-batch-e3b-warning-splits`).
 
 ## Review points
 

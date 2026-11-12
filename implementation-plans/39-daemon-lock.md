@@ -3,7 +3,7 @@
 **Module:** remember engine (C): the daemon process (`src/run_dir.c`, `src/daemon*.c`, the `remember daemon` foreground command).
 **Roadmap line:** R 013 Daemon, local MCP, bots — subject:daemon. Itay has not ordered R 013 against the other v1 features (roadmap:remember ORDER). Itay orders R 013 before work starts.
 **Needs:** plans 21 (merged) and 35 (the dispatcher whose runs the drain cancels). No other plan (G7 A).
-**Blocked on:** copy item R28-2 (Story Weaver copy request, 2026-11-11, not yet approved).
+**Blocked on:** nothing. The copy is item R28-2 in `decision:2026-11-12-copy-batch-final`.
 
 ## Goal
 
@@ -62,9 +62,12 @@ Workflow adoption (this is the first plan in this repo after 2026-10-31, per wor
 - **Gate.** `just check` (or the repo gate) passes on the exact committed tree with no warnings. `scripts/check-coverage.sh` stays at 100% effective. Linux CI (`scripts/ci-linux.sh`) runs every test that is not macOS-only.
 - **Proof.** TDD: the Definition of Done boxes are the must-pass tests, in TDD order. Each test is red before its production change. Every rule has a test that a one-clause mutant turns red. Expected values are literals or an independent computation.
 - **OS integrations.** Share, Spotlight, login items, Shortcuts, and other OS integrations are Fortkeeps-only. They never go in the open-source engine or daemon (decision:2026-11-03-os-integrations-fortkeeps-only).
-- **Copy.** The `message`, `fix`, and `retryable` of each new error code equal the R28-2 decision text. JE-2.6 requires a non-empty `fix`.
+- **Copy.** The `message`, `fix`, and `retryable` of each new error code equal copy item R28-2 in `decision:2026-11-12-copy-batch-final`. JE-2.6 requires a non-empty `fix`.
+  - `daemon_already_running`: the losing daemon exits 0, `retryable` false, stdout empty. `message`: `a remember daemon is already running for your user, so this one exited. Nothing is wrong.` `fix`: `Leave the running daemon as it is.` The one stderr line it prints: `remember: a remember daemon is already running for your user, so this one exited. Nothing is wrong. Leave the running daemon as it is.`
+  - `daemon_busy`: exit 1, `retryable` true. `message`: `the remember daemon is still finishing work and didn't stop within 5 seconds. It is still running.` `fix`: `Try again in a moment.` Plain line: `remember: the remember daemon is still finishing work and didn't stop within 5 seconds. It is still running. Try again in a moment.`
+  - `daemon_unresponsive`: exit 1, `retryable` false. `message`: `the remember daemon (pid <pid>) didn't answer within 2 seconds.` `fix`: `Quit it with 'kill <pid>', then try again.` Plain line: `remember: the remember daemon (pid <pid>) didn't answer within 2 seconds. Quit it with 'kill <pid>', then try again.` `<pid>` comes from `daemon.json`.
 - **Prerequisites.** Work starts only when each item below holds. When one does not hold, the work stops and Itay is told:
-  - The copy item **R28-2 (Story Weaver)** is a decision: The `message`, `fix`, and `retryable` of `daemon_already_running`, `daemon_busy`, and `daemon_unresponsive`, and the human line that a losing daemon prints. JE-2.6 requires a non-empty `fix`.
+  - Copy item R28-2 is approved (2026-11-12). Its one [ASSUMPTION] (the losing daemon prints a stderr line, not a reply envelope, because no request is in flight) is a wording check, not a rule.
 
 ## What must be true
 

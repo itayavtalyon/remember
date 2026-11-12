@@ -68,6 +68,8 @@ Do not add a second constant.
 - When no product directory exists, the error is `error: no agent skill roots found (~/.grok, ~/.claude, ~/.cursor, ~/.codex);`
 - The git history of this plan contains no tag.
 
+- **Warnings carry a `fix` (E3 B, `decision:2026-11-12-e3-warnings-have-fix-field`).** Every warning this plan prints has a `message` and a non-empty `fix`: `flag_meaning_changed` (the README line of C-41 quotes the same plain line). The wording is copy item E3B-1, entry 1, in `decision:2026-11-12-copy-batch-e3b-warning-splits`: the approved sentence stays word for word and only its next step moves into `fix`; the plain line is `remember: warning: <message> <fix>`. `code`, `detail`, exit codes and `--strict` do not change. Itay approved E3B-1 as a whole on 2026-11-12, including every `fix` that is Story Weaver wording (`decision:2026-11-12-copy-batch-e3b-warning-splits`).
+
 ## Review points
 
 - The reviewer checks that `CMakeLists.txt` and `src/remember_app.c` contain the same version text.

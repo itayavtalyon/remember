@@ -2,7 +2,7 @@
 
 **Area:** `remember daemon takeover [--yes]` in `src/cmd_daemon.c`, `src/launchd.c`, `src/systemd_user.c` (enable/disable), `src/exit_codes.h`.
 **Needs:** plans 39 and 40. No other plan.
-**Blocked on:** copy item R30-4 (Story Weaver copy request, 2026-11-11, not yet approved).
+**Blocked on:** nothing. The copy is item R30-4 in `decision:2026-11-12-copy-batch-final`.
 
 ## Goal
 
@@ -15,7 +15,7 @@
 Decisions built:
 
 - decision:2026-11-03-takeover-order
-- decision:2026-11-03-confirmation-required-exit-5
+- decision:2026-11-03-confirmation-required-exit-5 (amended by decision:2026-11-12-e2-confirmation-required-exits-5-everywhere: `confirmation_required` exits 5 everywhere)
 - decision:2026-11-03-naming-defaults (`daemon.takeover.result` `{changed, previous_owner}`)
 
 - decision:2026-10-31-cli-takeover-offer
@@ -54,9 +54,11 @@ Spec sections this plan changes: `specs/DAEMON.md` §9 Owner missing, §10 `reme
 - **Gate.** `just check` (or the repo gate) passes on the exact committed tree with no warnings. `scripts/check-coverage.sh` stays at 100% effective. Linux CI (`scripts/ci-linux.sh`) runs every test that is not macOS-only. The real `launchctl` and `systemctl` never run in a test, and no test writes to the real `~/Library/LaunchAgents`.
 - **Proof.** TDD: the Definition of Done boxes are the must-pass tests, in TDD order. Each test is red before its production change. Every rule has a test that a one-clause mutant turns red. Expected values are literals or an independent computation.
 - **OS integrations.** Share, Spotlight, login items, Shortcuts, and other OS integrations are Fortkeeps-only. They never go in the open-source engine or daemon (decision:2026-11-03-os-integrations-fortkeeps-only).
-- **Copy.** The y/N confirmation of `remember daemon takeover` and the `message` and `fix` of `confirmation_required` equal copy item R30-4.
+- **Copy.** The y/N confirmation of `remember daemon takeover` and the `message` and `fix` of `confirmation_required` equal copy item R30-4 in `decision:2026-11-12-copy-batch-final`.
+  - y/N confirmation (TTY, stderr, default No): `Take over Remember's background service? Your memories and settings stay where they are. [y/N]`
+  - `confirmation_required`: exit 5, `retryable` false, nothing changes. `message`: `taking over Remember's background service needs your confirmation.` `fix`: `Run 'remember daemon takeover --yes' to confirm.` Plain line: `remember: taking over Remember's background service needs your confirmation. Run 'remember daemon takeover --yes' to confirm.`
 - **Prerequisites.** Work starts only when each item below holds. When one does not hold, the work stops and Itay is told:
-  - The copy item **R30-4 (Story Weaver)** is a decision: The hint line, the `daemon_owner_missing` `message` and `fix`, the y/N confirmation of `remember daemon takeover` on a TTY, and the `confirmation_required` `message` and `fix`.
+  - Copy item R30-4 is approved (2026-11-12). The `fix` reuses the approved C-11 form with the command written out.
 
 
 ## What must be true
@@ -97,7 +99,7 @@ The rules below hold. Each quote is decision text.
 - [ ] `takeover_changed_true`: `remember daemon takeover --yes` boots out `app.fortkeeps.daemon`, runs `launchctl disable gui/<uid>/app.fortkeeps.daemon`, runs `launchctl enable gui/<uid>/io.github.itayavtalyon.remember`, then calls the install of this plan (which writes the plist when needed and runs the only `launchctl bootstrap`), and replies `daemon.takeover.result` with `data` `{changed: true, previous_owner: "fortkeeps"}`. Assert the order of the fake runner calls, and assert exactly one `bootstrap` call.
 - [ ] `takeover_changed_false`: when Homebrew already runs the daemon, the command returns ok with `changed` false.
 - [ ] `takeover_no_brew_plist`: when `~/Library/LaunchAgents/io.github.itayavtalyon.remember.plist` does not exist, the command runs the install of this plan first, then the takeover.
-- [ ] `takeover_without_yes`: on a TTY, `remember daemon takeover` asks the y/N confirmation (copy: R30-4). Without a TTY and without `--yes`, it fails with error `confirmation_required`, exits 5 (`REMEMBER_CONFIRMATION_REQUIRED`), and changes nothing. Assert the value 5.
+- [ ] `takeover_without_yes`: on a TTY, `remember daemon takeover` asks the y/N confirmation (copy: R30-4). Without a TTY and without `--yes`, it fails with error `confirmation_required`, exits 5 (`REMEMBER_CONFIRMATION_REQUIRED`), and changes nothing. Assert the value 5 and the R30-4 `message` and `fix`. The exit is 5 on every path that returns `confirmation_required` (E2 A, `decision:2026-11-12-e2-confirmation-required-exits-5-everywhere`).
 - [ ] `exit_code_unique`: no other error or warning path exits 5, and the spec exit code table lists 5 = `confirmation_required`.
 - [ ] `takeover_hung_daemon_2s`: no `daemon.hello.result` in 2 s → error `daemon_unresponsive` with the pid from `daemon.json`. Use an injectable clock.
 - [ ] `takeover_old_daemon_fallback`: the daemon does not know `daemon.shutdown` → `launchctl bootout`, then SIGTERM to the pid.

@@ -2,7 +2,7 @@
 
 **Area:** the pre-command owner check in `src/remember_app.c`, `src/state_file.c` (`state.json`), and the prompt and warning.
 **Needs:** plans 39 and 41 (a `y` answer runs the takeover). No other plan.
-**Blocked on:** copy item R30-4 (Story Weaver copy request, 2026-11-11, not yet approved) for the hint line and the `daemon_owner_missing` `message` and `fix`. The prompt line itself is locked (below).
+**Blocked on:** nothing. The copy is item R30-4 in `decision:2026-11-12-copy-batch-final` (hint line, done confirmation, `daemon_owner_missing` `message` and `fix`). The prompt line itself is locked (below).
 
 ## Goal
 
@@ -54,9 +54,12 @@ Spec sections this plan changes: `specs/DAEMON.md` §9 Owner missing, §10 `reme
 - **Gate.** `just check` (or the repo gate) passes on the exact committed tree with no warnings. `scripts/check-coverage.sh` stays at 100% effective. Linux CI (`scripts/ci-linux.sh`) runs every test that is not macOS-only. The real `launchctl` and `systemctl` never run in a test, and no test writes to the real `~/Library/LaunchAgents`.
 - **Proof.** TDD: the Definition of Done boxes are the must-pass tests, in TDD order. Each test is red before its production change. Every rule has a test that a one-clause mutant turns red. Expected values are literals or an independent computation.
 - **OS integrations.** Share, Spotlight, login items, Shortcuts, and other OS integrations are Fortkeeps-only. They never go in the open-source engine or daemon (decision:2026-11-03-os-integrations-fortkeeps-only).
-- **Copy.** The hint line, the y/N confirmation, and the `message` and `fix` of `daemon_owner_missing` and `confirmation_required` equal the R30-4 decision text.
+- **Copy.** The hint line, the done confirmation, the y/N confirmation, and the `message` and `fix` of `daemon_owner_missing` and `confirmation_required` equal copy item R30-4 in `decision:2026-11-12-copy-batch-final`.
+  - Hint (stderr, after the answer No, Enter or end of input, and only then): `remember: Remember's background service still belongs to Fortkeeps. To take it over, run 'remember daemon takeover'.`
+  - Done confirmation (stderr, after the answer y, with no hint): `remember: took over Remember's background service. It now runs without Fortkeeps.`
+  - `daemon_owner_missing` is a warning with a `fix` (E3 B). `message`: `Fortkeeps was removed but still owns Remember's background service.` `fix`: `To take it over, run 'remember daemon takeover'.` Plain line: `remember: warning: Fortkeeps was removed but still owns Remember's background service. To take it over, run 'remember daemon takeover'.` It has no `detail.hint`. It prints with `--json`, with no TTY, or in CI, until it is resolved. The exit follows the command.
 - **Prerequisites.** Work starts only when each item below holds. When one does not hold, the work stops and Itay is told:
-  - The copy item **R30-4 (Story Weaver)** is a decision: The hint line, the `daemon_owner_missing` `message` and `fix`, the y/N confirmation of `remember daemon takeover` on a TTY, and the `confirmation_required` `message` and `fix`.
+  - Copy item R30-4 is approved (2026-11-12).
 
 
 ## What must be true
@@ -70,6 +73,7 @@ The rules below hold. Each quote is decision text.
 - Prompt rule: "on a TTY, one prompt on stderr before the command, default No; y takes over then runs the command; the answer is recorded so it never asks again; both paths print the remember daemon takeover hint."
 - Prompt copy (stderr, TTY only, default No), locked: `Fortkeeps was removed but still owns Remember's background service. Take it over? [y/N]`
 - Non-TTY rule: "With --json, non-TTY or CI: never prompt; add warning {code: daemon_owner_missing, hint: remember daemon takeover} until resolved; exit code follows the command."
+- Amended 2026-11-12 (`decision:2026-11-12-e3-warnings-have-fix-field`, `decision:2026-11-12-e4-takeover-done-confirmation`): the warning is `{code: daemon_owner_missing, message, fix}` with the R30-4 text and no `hint`. The hint line prints after No only. After `y` the CLI prints the done confirmation, with no hint, and then runs the command. The prompt rule above ("both paths print the hint") is replaced by this.
 - CI: "There is no separate CI check: without a TTY the CLI never prompts."
 - State keys: "never_ask.fortkeeps_takeover for the sheet answer and daemons.<label>.program for recorded daemon program paths."
 - State file location: "device-local in ~/Library/Application Support/Remember/state.json (parent of the run dir), not in the brain."
@@ -96,9 +100,10 @@ The rules below hold. Each quote is decision text.
 - [ ] `owner_check_every_command_cached`: every command runs the check. Inside one process, the check reads `state.json` and probes the lock once.
 - [ ] `prompt_tty_shown_once`: on a TTY, the locked prompt appears on stderr before the command. After any answer, `state.json` records `never_ask.daemon_takeover`, and a second command does not prompt.
 - [ ] `prompt_default_no`: an empty line and EOF mean No. The command runs. The hint prints.
+- [ ] `prompt_yes_prints_done_confirmation_no_hint`: `y` prints the R30-4 done confirmation on stderr, prints no hint, and then runs the command (E4 A).
 - [ ] `prompt_yes_takes_over_then_runs`: `y` runs the takeover, then the command.
-- [ ] `prompt_hint_both_paths`: both answers print the `remember daemon takeover` hint with the copy that R30-4 sets.
-- [ ] `json_never_prompts`: with `--json`, stdout `warnings[]` has `{code: daemon_owner_missing, hint: remember daemon takeover}`. The exit code follows the command.
+- [ ] `prompt_hint_after_no_only`: the answers No, Enter and end of input print the R30-4 hint and the answer `y` does not (E4 A).
+- [ ] `json_never_prompts`: with `--json`, stdout `warnings[]` has `{code: daemon_owner_missing, message, fix}` with the R30-4 `message` and `fix` and no `detail.hint` (E3 B). The exit code follows the command.
 - [ ] `non_tty_never_prompts`: stdin not a TTY → the warning on stderr, no prompt. The test sets `CI=true` too and asserts the same result.
 - [ ] `warning_until_resolved`: the warning repeats on each command until the owner is no longer missing, also after a No answer.
 - [ ] `specs/DAEMON.md` §9 and §14 name the decision keys, and the owner-missing decisions in Source are `state:implemented`.
