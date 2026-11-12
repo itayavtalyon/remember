@@ -1,5 +1,7 @@
 # Approved copy — 2026-10-25
 
+Plans 25 and 26 were split on 2026-11-11. The sentences stay in this file. The new plans quote the lines they print. A row that still says "Plan 25" or "Plan 26" means the sentence, not the deleted file.
+
 Nothing in this file is pending. Itay approved `ANSWERS-FINAL.md` (25 Oct 2026, 20:50 UTC+2), including the Story Weaver wording (K-1). An implementer prints these lines and does not invent another.
 
 A plain line includes the printer prefix. JSON `message` is the text after that prefix, up to the fix. `fix` is the last next-action sentence. A warning has no `fix`. Keys and values go in double quotes. Commands go in single quotes.
@@ -109,7 +111,7 @@ JSON `setting.reset.result` `data` is `{setting, scope, old_value, changed, acti
 
 ## C-11
 
-Code `confirmation_required`, exit 1, nothing written. Plain: `remember: this resets <count> settings. Run '<command> --yes' to confirm.` Message: `this resets <count> settings.` Fix: `Run '<command> --yes' to confirm.` `<count>` is the number of keys. `<command>` is the command as typed.
+Code `confirmation_required`, exit 1, nothing written. [Amended 2026-11-12 (E2 A, `decision:2026-11-12-e2-confirmation-required-exits-5-everywhere`): exit 5.] Plain: `remember: this resets <count> settings. Run '<command> --yes' to confirm.` Message: `this resets <count> settings.` Fix: `Run '<command> --yes' to confirm.` `<count>` is the number of keys. `<command>` is the command as typed.
 
 With `--yes`, JSON is `setting.reset.result` and `data` is `{count, settings[]}`. Each item is `{setting, scope, old_value, changed, action}`. Plan 20.
 
