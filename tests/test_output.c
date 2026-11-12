@@ -702,11 +702,15 @@ TEST(output_import_envelope_rejects_missing_arguments)
 
     StoreImportResult no_conflicts = {.nconflicts = 1};
     StoreImportResult no_rejects = {.nrejected = 1};
+    StoreImportResult no_errors = {.nerrors = 1, .skipped = 1};
+    StoreImportResult skipped_not_errors = {.skipped = 1};
 
     ASSERT_EQ_INT(output_import_data(NULL, &counts), -1);
     ASSERT_EQ_INT(output_import_data(f, NULL), -1);
     ASSERT_EQ_INT(output_import_data(f, &no_conflicts), -1);
     ASSERT_EQ_INT(output_import_data(f, &no_rejects), -1);
+    ASSERT_EQ_INT(output_import_data(f, &no_errors), -1);
+    ASSERT_EQ_INT(output_import_data(f, &skipped_not_errors), -1);
     assert_written(f, "");
 }
 
@@ -719,9 +723,16 @@ TEST(output_import_envelope_rejects_an_incomplete_item)
     StoreImportResult bad_conflict = {.conflicts = &broken, .nconflicts = 1};
     FILE *f = given_stream();
 
+    StoreImportError no_message = {.file = (char *)"a.json", .message = NULL, .line = 1};
+    StoreImportError no_file = {.file = NULL, .message = "m", .line = 1};
+    StoreImportResult bad_message = {.errors = &no_message, .nerrors = 1, .skipped = 1};
+    StoreImportResult bad_file = {.errors = &no_file, .nerrors = 1, .skipped = 1};
+
     broken.sync_id = NULL;
     ASSERT_EQ_INT(output_import_data(f, &bad_reject), -1);
     ASSERT_EQ_INT(output_import_data(f, &bad_conflict), -1);
+    ASSERT_EQ_INT(output_import_data(f, &bad_message), -1);
+    ASSERT_EQ_INT(output_import_data(f, &bad_file), -1);
     (void)fclose(f);
 }
 
@@ -1087,6 +1098,19 @@ static int write_json_string(FILE *f)
     return output_json_string(f, "q\"b\\\b\f\n\r\t\x01z");
 }
 
+/* An import reply with a conflict that has an origin and two bad-record errors. */
+static int write_import_with_errors(FILE *f)
+{
+    StoreConflict c = given_conflict();
+    StoreImportError errs[] = {{.file = (char *)"a.json", .message = "m", .line = 1},
+                               {.file = (char *)"a.json", .message = "n", .line = 2}};
+    StoreImportResult r = {
+        .conflicts = &c, .nconflicts = 1, .errors = errs, .nerrors = 2, .skipped = 2};
+
+    c.origin = (char *)"o";
+    return output_import_data(f, &r);
+}
+
 static int write_entry_json(FILE *f)
 {
     Entry e = given_full_entry();
@@ -1342,6 +1366,11 @@ TEST(failing_stream_fails_past_the_limit_and_stays_failed)
 TEST(output_json_string_reports_every_failed_write)
 {
     assert_reports_every_failed_write(write_json_string);
+}
+
+TEST(output_import_with_errors_reports_every_failed_write)
+{
+    assert_reports_every_failed_write(write_import_with_errors);
 }
 
 TEST(output_entry_json_reports_every_failed_write)
@@ -1605,6 +1634,7 @@ void register_output_tests(void)
     RUN_TEST(output_import_envelope_rejects_missing_arguments);
     RUN_TEST(output_import_envelope_lists_conflicts_and_rejected_rows);
     RUN_TEST(output_import_envelope_rejects_an_incomplete_item);
+    RUN_TEST(output_import_with_errors_reports_every_failed_write);
     RUN_TEST(output_device_envelopes_reject_missing_arguments);
     RUN_TEST(output_brain_new_id_envelope_rejects_missing_arguments);
     RUN_TEST(output_conflicts_envelope_rejects_missing_arguments);
