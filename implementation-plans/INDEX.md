@@ -50,15 +50,15 @@ main → cli_parse → commands.h (cmd_add | cmd_locator | cmd_query) → store_
 - 27a. Plan: [Outbox delivery](27a-outbox-delivery.md). Done when: Recipient state machine, backoff retry (X3 A), and a pre-flight failure that is `failed` at once (E1 A). Needs 24.
 - 27b. Plan: [Older CLI read-only](27b-older-cli-read-only.md). Done when: `schema_too_new` read-only with a warning, writes exit 75. Needs 19, 21. Copy: R27b-1 (no command in the upgrade line, SW1 A).
 - 28. Plan: [Release 0.3.0](28-release-0.3.0.md). Done when: Version, What's New, Codex skill. Needs 22, 23, 25, 26, 27, 27a, 27b.
-- 29. Plan: [Handle API](29-handle-api.md). Done when: `remember_open`/`remember_call`/`remember_close`, RememberEnv, no HOME in the engine. Needs 20, 21. Blocked on X1.
+- 29. Plan: [Handle API](29-handle-api.md). Done when: `remember_open`/`remember_call`/`remember_close`, RememberEnv, no HOME in the engine. Needs 20, 21. X1 answered (`decision:2026-11-12-x1-remember-call-requests`); two details wait for Itay (see the plan).
 - 30. Plan: [Plugin settings keys](30-plugin-settings-keys.md). Done when: Boolean type, generated `plugin.<name>.*` keys. Needs 25.
 - 31. Plan: [Events and outbox insert](31-events-and-outbox-insert.md). Done when: Five write events, the write-time filter, the outbox row. Needs 25, 27a, 30.
 - 32. Plan: [Expiry sweep](32-expiry-sweep.md). Done when: `expired_at`, `sweep`, `purge`, `delete --expired`. Needs 26, 31.
 - 33. Plan: [Plugin trust](33-plugin-trust.md). Done when: `trust.json`, confirm, hash check. Needs 25.
 - 34. Plan: [Plugin commands](34-plugin-commands.md). Done when: `hook add`, `plugin add/list/show/enable/disable/trust/remove/log/status`. Needs 30, 33.
 - 35. Plan: [Dispatcher](35-dispatcher.md). Done when: Pre-flight, detached dispatch, once-runs, allow list, kill switch, rerun. Needs 27a, 29, 31, 32, 33.
-- 36. Plan: [Persistent processes](36-persistent-processes.md). Done when: Sockets, ping, strikes, crash loop, `index.json`, backfill. Needs 35. Blocked on X1.
-- 37. Plan: [Search filter chain](37-search-filter-chain.md). Done when: Three stages, budget, cold start. Needs 36. Blocked on X5.
+- 36. Plan: [Persistent processes](36-persistent-processes.md). Done when: Sockets, ping, strikes, crash loop, `index.json`, backfill. Needs 35. Not blocked: X1 answered.
+- 37. Plan: [Search filter chain](37-search-filter-chain.md). Done when: Three stages, budget, cold start. Needs 36. Not blocked: X5 answered.
 - 38. Plan: [Plugin test](38-plugin-test.md). Done when: `plugin test NAME|DIR`. Needs 35, 36.
 - 39. Plan: [Daemon process](39-daemon-lock.md). Done when: `daemon.lock`, `daemon.json`, drain. Needs 21, 35.
 - 40. Plan: [Daemon install](40-daemon-install.md). Done when: `remember daemon install`, `--plugin-dir`. Needs 34, 39.

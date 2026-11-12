@@ -2,7 +2,7 @@
 
 **Area:** `remember search` stages 1 to 3, the chain budget, cold start, `data.filters[]`, `--no-filters` and `--explain` (`src/search_chain.c` new, `src/search_chain.h` new, `src/cmd_query.c`).
 **Needs:** plan 36. No other plan.
-**Blocked on:** open question `decision:open-2026-11-12-ranked-by-filter-chain` (X5): which entry `ranked_by` names when filters applied. Log 010 and old plan 25 give only the `--explain` line `ranked by <plugin>/<entry>`; no decision says which entry that is when several `search.results` filters applied.
+**Blocked on:** nothing. `ranked_by` is settled in `decision:2026-11-12-x5-ranked-by-filter-chain` (X5-1 C, X5-2 A, Itay 2026-11-12).
 
 ## Goal
 
@@ -11,9 +11,10 @@ Search runs BM25, then each enabled filter in priority order inside a budget, th
 ## Source
 
 - Log 010 H-12.4 to H-12.9; `decision:plugins-budget-defaults`; `decision:2026-11-11-filter-degraded-exit` (degraded filter: exit 0, or 4 with `--strict`); `decision:2026-11-11-filter-tie-break` (G5 A: same priority runs in plugin name byte order, then entry name).
+- `decision:2026-11-12-x5-ranked-by-filter-chain`: `ranked_by` lists every applied `search.results` filter in chain order, each `<plugin>/<entry>`, joined with ` > `, or `bm25`. It amends PLUGIN-PROTOCOL R8.11 (the last applied filter) and `decision:plugin-provenance-human`.
 - Old plan 25 "Search".
 - Copy: C-27, C-28, C-29, C-32, C-33, C-34, the C-01 cold-start line, the `plugin_chain_capped` line in `COPY-PENDING.md`.
-- Spec: `specs/SEARCH-CHAIN.md` (new); `specs/JSON-ENVELOPE.md` search row: `filters` and `ranked_by` filled.
+- Spec: `specs/SEARCH-CHAIN.md` (new); `specs/JSON-ENVELOPE.md` search row: `filters` and `ranked_by` filled; `specs/PLUGIN-PROTOCOL.md` R8.11 and its changelog `specs/PLUGIN-PROTOCOL-CHANGES.md` carry the X5-1 C wording.
 
 ## Out of scope
 
@@ -37,7 +38,7 @@ Cold start: `cold_start_grace` from the manifest (plan 25). A cold filter that d
 
 A filter past its budget: status `timeout`, code `plugin_filter_timeout`, input passes on (C-27). Another failure is `plugin_filter_failed` (C-28). Every degraded filter exits 0, or 4 with `--strict`.
 
-`data.filters[]`: name, version, status (`applied`, `skipped`, `failed`, `timeout`), time, optional note. Warnings a plugin sends go only to the plugin log and `plugin status`. Warnings Remember raises enter output: `plugin_additions_capped` (C-32), `plugin_note_truncated` (C-33), `plugin_request_trimmed` (C-34). `ranked_by` is `bm25` when no filter applied. When a filter applied, it is `<plugin>/<entry>` of the entry X5 names. Human search prints no extra line when every filter applied. `--explain` prints the filter table and `ranked by <plugin>/<entry>`. `REMEMBER_PROCESSES=0`: built-in C-ABI filters still run.
+`data.filters[]`: name, version, status (`applied`, `skipped`, `failed`, `timeout`), time, optional note. Warnings a plugin sends go only to the plugin log and `plugin status`. Warnings Remember raises enter output: `plugin_additions_capped` (C-32), `plugin_note_truncated` (C-33), `plugin_request_trimmed` (C-34). `ranked_by` is `bm25` when no filter applied. When one or more filters applied, it lists each applied `search.results` filter in chain order as `<plugin>/<entry>`, joined with ` > ` (for example `a/x > b/y`); `search.query` filters never appear in it. A filter is `applied` when it ran and answered; one that passes its input through on purpose reports status `skipped` with reason `pass_through` itself, and Remember never compares orders (X5-2 A). Human search prints no extra line when every filter applied. `--explain` prints the filter table and `ranked by` followed by the same `ranked_by` string. `REMEMBER_PROCESSES=0`: built-in C-ABI filters still run.
 
 `plugin.hybrid.enabled` true does not change order (no filter entry).
 
@@ -55,9 +56,13 @@ A filter past its budget: status `timeout`, code `plugin_filter_timeout`, input 
 - [ ] `chain_capped_skipped_no_time_budget_capped`.
 - [ ] `same_priority_plugin_then_entry_byte_order`.
 - [ ] `hybrid_enabled_same_order`.
+- [ ] `ranked_by_lists_every_applied_filter_joined_with_gt` (two applied filters give `a/x > b/y`; one gives `a/x`; none gives `bm25`).
+- [ ] `ranked_by_omits_search_query_filters_and_skipped_filters`.
+- [ ] `pass_through_filter_is_skipped_not_applied`.
+- [ ] `explain_ranked_by_line_matches_data_ranked_by`.
 - [ ] `processes_off_builtin_filter_runs` (010 test 17, filter half, with a test-only built-in double not shipped).
 - [ ] `c32_c33_c34_printed`.
-- [ ] `specs/SEARCH-CHAIN.md` written; `decision:2026-11-11-filter-degraded-exit` and `decision:2026-11-11-filter-tie-break` are `state:implemented`.
+- [ ] `specs/SEARCH-CHAIN.md` written; R8.11 of `specs/PLUGIN-PROTOCOL.md` and its changelog amended; `decision:2026-11-11-filter-degraded-exit` and `decision:2026-11-11-filter-tie-break` are `state:implemented`.
 - [ ] The gate passes on the committed tree.
 
 ## Implementation Notes

@@ -2,7 +2,7 @@
 
 **Area:** the runtime dir, sockets, state files, ping, idle shutdown, strikes, crash loop, `index.json`, the backfill and `plugin reindex` (`src/plugin_proc.c` new, `src/plugin_proc.h` new, `src/plugin_index.c` new, `src/backfill.c` new).
 **Needs:** plan 35. No other plan.
-**Blocked on:** the host warm-up request type `plugin.warm` joins the open question `decision:open-2026-11-12-remember-call-requests` (X1) (request types of `remember_call`).
+**Blocked on:** nothing. The host warm-up request `plugin.warm` is settled in `decision:2026-11-12-x1-remember-call-requests` (X1-10 B): optional `plugin` and optional `wait_ms`, reply `{started[], running[], skipped[]}`. Plan 29 builds the request row.
 
 ## Goal
 
@@ -30,7 +30,7 @@ Runtime dir: `RememberEnv.runtime_dir` when set, else `$XDG_RUNTIME_DIR/remember
 
 Actions default to `once`. Filters are `persistent`. Socket `<runtime>/s/<16 hex>.sock`, where the hex is the first 16 hex characters of SHA-256 of `<brain_id>/<plugin name>`. State file `<runtime>/plugins/<name>/<brain-id>.state`, format `remember-plugin-state` version 1, fields `pid`, `started_at`, `strikes`, `crashes` (instants from the last 10 minutes).
 
-Alive only when `ping` answers within 200 ms. An OS advisory lock is held while checking and starting. Persistent filters start in the background at `plugin enable`, after a backfill, at host launch (`remember_call` type `plugin.warm`, part of X1's list), and on a write or search when no live process exists. A search never waits for that start.
+Alive only when `ping` answers within 200 ms. An OS advisory lock is held while checking and starting. Persistent filters start in the background at `plugin enable`, after a backfill, at host launch (`remember_call` type `plugin.warm`, `decision:2026-11-12-x1-remember-call-requests`), and on a write or search when no live process exists. A search never waits for that start. `plugin.warm` takes an optional `plugin` (one plugin, else every enabled persistent plugin) and an optional `wait_ms`: it replies at once with `started`, `running` and `skipped`, or, with `wait_ms`, when the plugins it started answer `ping` or the time ends, whichever is first; a plugin still not ready at the end stays in `started`. No other request waits for a start.
 
 Every CLI run sends `shutdown` reason `idle` to every process past its idle timeout: `remember.plugins.idle_timeout` (default 10 minutes) unless the manifest sets `idle_timeout`. `plugin add` of an installed name sends `shutdown` reason `upgrade`; `plugin remove` sends `removed`.
 
@@ -60,6 +60,7 @@ Backfill: index states `ready`, `building`, `stale`, `missing`, `failed`, `disab
 - [ ] `update_sends_shutdown_upgrade` (010 test 32, shutdown half).
 - [ ] `ping_200ms_alive_rule`, `idle_shutdown_default_10_min`, `three_strikes_stop`, `error_reply_not_strike`, `protocol_mismatch_reason`.
 - [ ] `runtime_dir_other_owner_refused`.
+- [ ] `plugin_warm_replies_at_once_and_wait_ms_waits_until_ready_or_timeout`.
 - [ ] `specs/PLUGIN-PROCESSES.md` written.
 - [ ] The gate passes on the committed tree.
 
