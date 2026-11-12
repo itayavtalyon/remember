@@ -1,5 +1,6 @@
 #include "store.h"
 
+#include "import_read.h"
 #include "import_validate.h"
 #include "normalize.h"
 #include "search_terms.h"
@@ -9171,6 +9172,7 @@ static StoreStatus import_remap_links(Store *dst, sqlite3 *src, int version, con
             st = import_doc_one_link(dst, &link, now, counts);
         }
         for (i = 0; i < sizeof(owned) / sizeof(owned[0]); i++) {
+            /* cppcheck-suppress shadowVariable ; cppcheck 2.13 false positive: one owned */
             free(*owned[i]);
         }
     }

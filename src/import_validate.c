@@ -244,6 +244,7 @@ int import_validate_memories(ImportMemory *entries, size_t n)
             entries[i].bad_message = msg;
         }
     }
+    // NOLINTNEXTLINE(bugprone-sizeof-expression) an array of pointers: each element is one
     with_id = (ImportMemory **)calloc(n > 0U ? n : 1U, sizeof(*with_id));
     if (with_id == NULL) {
         return -1;
@@ -254,6 +255,7 @@ int import_validate_memories(ImportMemory *entries, size_t n)
         }
     }
     /* O(n log n): a file of a million entries must not take hours (review A). */
+    // NOLINTNEXTLINE(bugprone-sizeof-expression) an array of pointers: each element is one
     qsort((void *)with_id, nid, sizeof(*with_id), cmp_id_then_position);
     for (i = 1; i < nid; i++) {
         if (strcmp(with_id[i - 1U]->id, with_id[i]->id) == 0) {

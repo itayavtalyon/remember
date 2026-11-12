@@ -3,6 +3,7 @@
 
 #include "import_read.h"
 
+#include <stdbool.h>
 #include <stddef.h>
 
 /*
