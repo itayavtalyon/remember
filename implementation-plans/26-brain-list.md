@@ -53,6 +53,8 @@ Tests live in `tests/test_brain_list.c`, suite `brain_list`, and that suite is a
 - `remember brain list` prints each row. A row whose path has no brain stays in the file and prints the C-01 line: `remember: warning: brain "<path>" is in the list but isn't on disk. If you moved it, open it once from its new place. Otherwise run 'remember brain prune' to remove it from the list.`
 - `remember brain prune` removes each row whose path has no brain. It prints no extra sentence.
 
+- **Warnings carry a `fix` (E3 B, `decision:2026-11-12-e3-warnings-have-fix-field`).** Every warning this plan prints has a `message` and a non-empty `fix`: `brain_missing` and `brain_id_cloned`. The wording is copy item E3B-1, entries 4 and 27, in `decision:2026-11-12-copy-batch-e3b-warning-splits`: the approved sentence stays word for word and only its next step moves into `fix`; the plain line is `remember: warning: <message> <fix>`. `code`, `detail`, exit codes and `--strict` do not change. Itay approved E3B-1 as a whole on 2026-11-12, including every `fix` that is Story Weaver wording (`decision:2026-11-12-copy-batch-e3b-warning-splits`).
+
 ## Review points
 
 - The reviewer checks the command tokens against `decision:2026-10-22-m-19`.

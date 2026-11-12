@@ -59,6 +59,8 @@ Exit codes: 0 ok (including a degraded command with a warning), 1 usage or error
 
 `REMEMBER_PROCESSES=0`: `hook add` and folder `plugin add` return `plugin_unsupported` (C-23).
 
+- **Warnings carry a `fix` (E3 B, `decision:2026-11-12-e3-warnings-have-fix-field`).** Every warning this plan prints has a `message` and a non-empty `fix`: `plugin_missing`, `plugin_loop_halted`, `plugin_unsupported`, `plugin_dev_mode`, `plugin_action_timeout`, `plugin_action_failed` and `unknown_field`. The wording is copy item E3B-1, entries 2, 12, 15, 16, 21, 22 and 26, in `decision:2026-11-12-copy-batch-e3b-warning-splits`: the approved sentence stays word for word and only its next step moves into `fix`; the plain line is `remember: warning: <message> <fix>`. `code`, `detail`, exit codes and `--strict` do not change. Itay approved E3B-1 as a whole on 2026-11-12, including every `fix` that is Story Weaver wording (`decision:2026-11-12-copy-batch-e3b-warning-splits`).
+
 ## Review points
 
 - `plugin enable` never prompts.

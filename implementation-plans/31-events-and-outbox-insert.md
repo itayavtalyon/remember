@@ -42,6 +42,8 @@ Event message (H-3): `type` `event`. `data` always has `event_id`, `event_type`,
 
 No synced, imported, or exported data creates a plugin.
 
+- **Warnings carry a `fix` (E3 B, `decision:2026-11-12-e3-warnings-have-fix-field`).** Every warning this plan prints has a `message` and a non-empty `fix`: `plugin_unsupported` (dispatch in a build that cannot start programs). The wording is copy item E3B-1, entry 15, in `decision:2026-11-12-copy-batch-e3b-warning-splits`: the approved sentence stays word for word and only its next step moves into `fix`; the plain line is `remember: warning: <message> <fix>`. `code`, `detail`, exit codes and `--strict` do not change. Itay approved E3B-1 as a whole on 2026-11-12, including every `fix` that is Story Weaver wording (`decision:2026-11-12-copy-batch-e3b-warning-splits`).
+
 ## Review points
 
 - Outbox and memory commit or roll back together.

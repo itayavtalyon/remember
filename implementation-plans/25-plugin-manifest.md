@@ -2,7 +2,7 @@
 
 **Module:** `src/plugin_manifest.c` and `src/plugin_manifest.h`.
 **Needs:** plan 24 (merged). No other plan.
-**Blocked on:** copy item R25-1 (Story Weaver copy request, 2026-11-11, not yet approved) for the `plugin_protocol_unsupported` sentence.
+**Blocked on:** nothing. The copy is item R25-1 in `decision:2026-11-12-copy-batch-final`.
 
 ## Goal
 
@@ -26,7 +26,7 @@
 
 ## Out of scope
 
-Install, trust, hook add, settings rows, processes, search, and the outbox. A hyphen in a typed command normalizes in a later plan. This plan does not rewrite a hyphen inside `plugin.json`. The human `add` line stays as it is. The plain sentence for `plugin_protocol_unsupported` is copy item R25-1. This plan prints exactly the approved R25-1 text: the plain line, the JSON `message`, and the JSON `fix`.
+Install, trust, hook add, settings rows, processes, search, and the outbox. A hyphen in a typed command normalizes in a later plan. This plan does not rewrite a hyphen inside `plugin.json`. The human `add` line stays as it is. The plain sentence for `plugin_protocol_unsupported` is copy item R25-1 in `decision:2026-11-12-copy-batch-final`. This plan prints exactly that text: the plain line, the JSON `message`, and the JSON `fix`. Exit 1, `retryable` false. `<name>` is the plugin name, `<n>` the protocol number in the manifest, `<range>` what this remember reads (`1`, or `1 to 2` once a second protocol exists). `message`: `plugin.json /protocol: "<name>" was written for plugin protocol <n>, and this remember reads protocol <range>.` `fix`: `Update remember, or install an older version of "<name>".` Plain line: `remember: plugin.json /protocol: "<name>" was written for plugin protocol <n>, and this remember reads protocol <range>. Update remember, or install an older version of "<name>".` (The `plugin.json /protocol:` prefix follows PLUGIN-MANIFEST R2.4; R25-1's [ASSUMPTION] is whether the prefix also stays in `message` when `detail.path` carries it.)
 
 ## Standards
 

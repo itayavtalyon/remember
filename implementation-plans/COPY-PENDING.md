@@ -111,7 +111,7 @@ JSON `setting.reset.result` `data` is `{setting, scope, old_value, changed, acti
 
 ## C-11
 
-Code `confirmation_required`, exit 1, nothing written. Plain: `remember: this resets <count> settings. Run '<command> --yes' to confirm.` Message: `this resets <count> settings.` Fix: `Run '<command> --yes' to confirm.` `<count>` is the number of keys. `<command>` is the command as typed.
+Code `confirmation_required`, exit 1, nothing written. [Amended 2026-11-12 (E2 A, `decision:2026-11-12-e2-confirmation-required-exits-5-everywhere`): exit 5.] Plain: `remember: this resets <count> settings. Run '<command> --yes' to confirm.` Message: `this resets <count> settings.` Fix: `Run '<command> --yes' to confirm.` `<count>` is the number of keys. `<command>` is the command as typed.
 
 With `--yes`, JSON is `setting.reset.result` and `data` is `{count, settings[]}`. Each item is `{setting, scope, old_value, changed, action}`. Plan 20.
 
