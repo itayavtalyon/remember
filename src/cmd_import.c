@@ -137,12 +137,20 @@ static const char *import_origin(const ImportArgs *a, const char *path)
     return (a->origin != NULL) ? a->origin : import_basename(path);
 }
 
-static int import_from_json(Store *s, bool json, const ImportArgs *a)
+/* The store's status as the exit code, else the reply; frees the result. */
+static int import_finish(Store *s, bool json, StoreStatus st, StoreImportResult *result)
+{
+    if (st != STORE_OK) {
+        return store_status_to_exit(s, st);
+    }
+    return import_reply(json, result);
+}
+
+static int import_from_json(Store *s, bool json, const ImportArgs *a, const char *now)
 {
     const char *path = a->from_json;
     ImportDoc doc;
     StoreImportResult result;
-    char now[ISO_TS_BUFSIZE];
     int sys_errno = 0;
     StoreStatus st = STORE_OK;
 
@@ -185,17 +193,9 @@ static int import_from_json(Store *s, bool json, const ImportArgs *a)
         }
         store_setting_import_free(&rep);
     }
-    if (utc_now(now, sizeof(now)) != 0) {
-        import_doc_free(&doc);
-        err_msg(DIAG_INTERNAL, "internal error");
-        return REMEMBER_ERR;
-    }
     st = store_import_doc(s, &doc, now, import_origin(a, path), &result);
     import_doc_free(&doc);
-    if (st != STORE_OK) {
-        return store_status_to_exit(s, st);
-    }
-    return import_reply(json, &result);
+    return import_finish(s, json, st, &result);
 }
 
 /* One --origin LABEL at argv[*i]. 0, or REMEMBER_ERR after a usage error. */
@@ -274,9 +274,6 @@ int cmd_import(Store *s, bool json, int rest_argc, const char **rest_argv)
     if (import_parse_args(rest_argc, rest_argv, &a) != 0) {
         return REMEMBER_ERR;
     }
-    if (a.from_json != NULL) {
-        return import_from_json(s, json, &a);
-    }
     if (a.from_md != NULL) {
         /* Markdown and CSV land in plan 23a (decision:plan23-review-g1-md-csv-to-23a). */
         err_msg(DIAG_USAGE, "--from-md is not implemented yet");
@@ -290,6 +287,9 @@ int cmd_import(Store *s, bool json, int rest_argc, const char **rest_argv)
         err_msg(DIAG_INTERNAL, "internal error");
         return REMEMBER_ERR;
     }
+    if (a.from_json != NULL) {
+        return import_from_json(s, json, &a, now);
+    }
     memset(&result, 0, sizeof(result));
     st = store_import(s, a.from_db, now, import_origin(&a, a.from_db), &result);
     if (st == STORE_ERR_SQLITE && store_last_error(s)->import_source) {
@@ -297,10 +297,7 @@ int cmd_import(Store *s, bool json, int rest_argc, const char **rest_argv)
         err_store_sqlite(store_last_error(s), a.from_db);
         return REMEMBER_ERR;
     }
-    if (st != STORE_OK) {
-        return store_status_to_exit(s, st);
-    }
-    return import_reply(json, &result);
+    return import_finish(s, json, st, &result);
 }
 
 int cmd_conflicts(Store *s, bool json, int rest_argc, const char **rest_argv)

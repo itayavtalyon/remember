@@ -322,21 +322,19 @@ int fileio_read_all(const char *path, char **out_bytes, size_t *out_len, int *sy
     char *buf = NULL;
     size_t cap = 0;
     size_t n = 0;
+    int closed = 0;
 
     if (out_bytes == NULL || out_len == NULL || sys_errno == NULL) {
-        if (sys_errno != NULL) {
-            *sys_errno = EINVAL;
-        }
         return -1;
     }
     *out_bytes = NULL;
     *out_len = 0;
+    errno = 0;
     /* macOS fopen has no 'e' (O_CLOEXEC) mode; CLI is short-lived. */
     // NOLINTNEXTLINE(android-cloexec-fopen)
     f = fopen(path, "rb");
     if (f == NULL) {
-        *sys_errno = errno;
-        return -1;
+        goto fail;
     }
     for (;;) {
         size_t want = 0;
@@ -347,10 +345,7 @@ int fileio_read_all(const char *path, char **out_bytes, size_t *out_len, int *sy
             char *grown = (char *)realloc(buf, next);
 
             if (grown == NULL) {
-                *sys_errno = ENOMEM;
-                free(buf);
-                (void)fclose(f);
-                return -1;
+                goto fail; /* realloc sets ENOMEM */
             }
             buf = grown;
             cap = next;
@@ -363,18 +358,25 @@ int fileio_read_all(const char *path, char **out_bytes, size_t *out_len, int *sy
         }
     }
     if (ferror(f) != 0) {
-        *sys_errno = (errno != 0) ? errno : EIO;
-        free(buf);
-        (void)fclose(f);
-        return -1;
+        goto fail;
     }
-    if (fclose(f) != 0) {
-        *sys_errno = errno;
-        free(buf);
-        return -1;
+    closed = fclose(f);
+    f = NULL;
+    if (closed != 0) {
+        goto fail;
     }
     buf[n] = '\0';
     *out_bytes = buf;
     *out_len = n;
     return 0;
+
+fail:
+    /* errno was 0 before fopen; a failure that leaves it 0 (a stream error) is EIO. */
+    // NOLINTNEXTLINE(clang-analyzer-unix.Errno)
+    *sys_errno = (errno != 0) ? errno : EIO;
+    if (f != NULL) {
+        (void)fclose(f);
+    }
+    free(buf);
+    return -1;
 }

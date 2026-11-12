@@ -2677,6 +2677,35 @@ TEST(cli_import_v6_source_bad_created_by_is_rejected)
     free(foreign);
 }
 
+/* A v6 source keeps its tombstones and expiry times. */
+TEST(cli_import_v6_source_keeps_deleted_at_and_expires_at)
+{
+    char *local = make_temp_db_path();
+    char *foreign = make_temp_db_path();
+    const char *add_del[] = {"add", "--key", "del", "gone"};
+    const char *del[] = {"delete", "--key", "del"};
+    const char *add_exp[] = {"add", "--key", "exp", "--expires", "2020-01-01T00:00:00.000Z", "old"};
+    char *got = NULL;
+    CmdResult r;
+
+    ASSERT_TRUE(local != NULL && foreign != NULL);
+    given_added(foreign, add_del, sizeof add_del / sizeof add_del[0]);
+    given_added(foreign, del, sizeof del / sizeof del[0]);
+    given_added(foreign, add_exp, sizeof add_exp / sizeof add_exp[0]);
+    r = import_from_db(local, foreign);
+    ASSERT_EQ_INT(r.exit_code, 0);
+    ASSERT_STR_CONTAINS(r.out, "\"inserted\":2");
+    cmd_result_free(&r);
+    got = harness_sqlite_query_line(local, "SELECT group_concat(key || ':' || "
+                                           "(deleted_at IS NOT NULL) || ':' || "
+                                           "coalesce(expires_at, '-'), ';') FROM "
+                                           "(SELECT * FROM entries ORDER BY key);");
+    ASSERT_STREQ(got, "del:1:-;exp:0:2020-01-01T00:00:00.000Z");
+    free(got);
+    free(local);
+    free(foreign);
+}
+
 void register_sync_import_tests(void)
 {
     RUN_TEST(cli_import_v6_source_cycle_lists_an_invalid_link_by_rowid);
@@ -2725,6 +2754,7 @@ void register_sync_import_tests(void)
     RUN_TEST(cli_import_refuses_to_snapshot_a_non_canonical_local_vector);
     RUN_TEST(cli_import_v6_source_memories_are_updated_by_import);
     RUN_TEST(cli_import_v6_source_bad_created_by_is_rejected);
+    RUN_TEST(cli_import_v6_source_keeps_deleted_at_and_expires_at);
 }
 
 // NOLINTEND(readability-identifier-length,cppcoreguidelines-avoid-magic-numbers,readability-magic-numbers,android-cloexec-fopen,bugprone-unchecked-string-to-number-conversion,cert-err34-c)

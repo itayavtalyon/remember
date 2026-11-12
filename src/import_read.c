@@ -238,58 +238,46 @@ static char *json_string_dup(const JsonValue *v)
     return dup_bytes(v->u.string.bytes, v->u.string.len);
 }
 
-/* Compact actor JSON from a {kind,id} object. NULL if absent or not an object. */
+typedef enum { FIELD_OK, FIELD_BAD, FIELD_OOM } FieldStatus;
+
+/* An optional string member: absent or null leaves *out NULL. */
+static FieldStatus optional_string(const JsonValue *v, char **out)
+{
+    *out = NULL;
+    if (v == NULL || v->type == JSON_NULL) {
+        return FIELD_OK;
+    }
+    if (v->type != JSON_STRING) {
+        return FIELD_BAD;
+    }
+    *out = json_string_dup(v);
+    return (*out == NULL) ? FIELD_OOM : FIELD_OK;
+}
+
+/* Compact actor JSON from a {kind,id} object. NULL if absent; *invalid when
+   the shape is wrong (or out of memory: a bad record either way). */
 static char *actor_from_value(const JsonValue *v, bool *invalid)
 {
-    const JsonValue *kind_v = NULL;
-    const JsonValue *id_v = NULL;
-    Actor actor = {.kind = NULL, .id = NULL};
     char buf[ACTOR_JSON_CAP];
     char *kind = NULL;
     char *id = NULL;
+    char *out = NULL;
 
     *invalid = false;
     if (v == NULL || v->type == JSON_NULL) {
         return NULL;
     }
-    if (v->type != JSON_OBJECT) {
-        *invalid = true;
-        return NULL;
-    }
-    kind_v = object_get(v, "kind");
-    id_v = object_get(v, "id");
-    if (kind_v == NULL || kind_v->type != JSON_STRING) {
-        *invalid = true;
-        return NULL;
-    }
-    kind = json_string_dup(kind_v);
-    if (kind == NULL) {
-        *invalid = true;
-        return NULL;
-    }
-    if (id_v != NULL && id_v->type == JSON_STRING) {
-        id = json_string_dup(id_v);
-        if (id == NULL) {
-            free(kind);
-            *invalid = true;
-            return NULL;
-        }
-    } else if (id_v != NULL && id_v->type != JSON_NULL) {
-        free(kind);
-        *invalid = true;
-        return NULL;
-    }
-    actor.kind = kind;
-    actor.id = id;
-    if (actor_json(actor, buf, sizeof(buf)) != ACTOR_OK) {
-        free(kind);
-        free(id);
-        *invalid = true;
-        return NULL;
+    if (v->type == JSON_OBJECT && optional_string(object_get(v, "kind"), &kind) == FIELD_OK &&
+        kind != NULL && optional_string(object_get(v, "id"), &id) == FIELD_OK &&
+        actor_json((Actor){.kind = kind, .id = id}, buf, sizeof(buf)) == ACTOR_OK) {
+        out = dup_cstr(buf);
     }
     free(kind);
     free(id);
-    return dup_cstr(buf);
+    if (out == NULL) {
+        *invalid = true;
+    }
+    return out;
 }
 
 /* Compact VV object text; NULL if absent. Sets *invalid on bad shape. */
@@ -339,58 +327,39 @@ static char *vv_from_value(const JsonValue *v, bool *invalid)
     }
 }
 
+/* Tags as an array of strings. false with *invalid on a wrong shape (or out of
+   memory: a bad record either way). */
 static bool tags_from_value(const JsonValue *v, char ***out_tags, size_t *out_n, bool *invalid)
 {
-    size_t i = 0;
+    size_t n = 0;
     char **tags = NULL;
 
     *out_tags = NULL;
     *out_n = 0;
-    *invalid = false;
+    *invalid = true;
     if (v == NULL || v->type == JSON_NULL) {
+        *invalid = false;
         return true;
     }
     if (v->type != JSON_ARRAY) {
-        *invalid = true;
         return false;
     }
-    if (v->u.array.n == 0U) {
-        return true;
-    }
-    tags = (char **)calloc(v->u.array.n, sizeof(char *));
+    n = v->u.array.n;
+    tags = (char **)calloc((n > 0U) ? n : 1U, sizeof(char *));
     if (tags == NULL) {
-        *invalid = true;
         return false;
     }
-    for (i = 0; i < v->u.array.n; i++) {
-        const JsonValue *item = v->u.array.items[i];
-
-        tags[i] = (item != NULL) ? json_string_dup(item) : NULL;
+    for (size_t i = 0; i < n; i++) {
+        tags[i] = json_string_dup(v->u.array.items[i]);
         if (tags[i] == NULL) {
             free_tags(tags, i);
-            *invalid = true;
             return false;
         }
     }
     *out_tags = tags;
-    *out_n = v->u.array.n;
+    *out_n = n;
+    *invalid = false;
     return true;
-}
-
-typedef enum { FIELD_OK, FIELD_BAD, FIELD_OOM } FieldStatus;
-
-/* An optional string member: absent or null leaves *out NULL. */
-static FieldStatus optional_string(const JsonValue *v, char **out)
-{
-    *out = NULL;
-    if (v == NULL || v->type == JSON_NULL) {
-        return FIELD_OK;
-    }
-    if (v->type != JSON_STRING) {
-        return FIELD_BAD;
-    }
-    *out = json_string_dup(v);
-    return (*out == NULL) ? FIELD_OOM : FIELD_OK;
 }
 
 static bool array_or_absent(const JsonValue *v)
@@ -596,14 +565,13 @@ static bool link_from_object(const JsonValue *obj, const char *file, ImportLink 
     return st == FIELD_OK;
 }
 
-/* Results of the read steps below: 1 go on, 0 doc->parse_message is set,
-   -1 out of memory. */
-enum { STEP_OOM = -1, STEP_PARSE = 0, STEP_OK = 1 };
+/* The read steps below return 1 to go on, 0 when doc->parse_message is set,
+   and -1 out of memory. */
 
 static int not_export(ImportDoc *doc, const char *base)
 {
     set_parse(doc, msg_not_export(base), NULL);
-    return STEP_PARSE;
+    return 0;
 }
 
 /* "format" and "version" (JE-4.1). */
@@ -629,12 +597,12 @@ static int read_version(const JsonValue *root, ImportDoc *doc, const char *base)
         doc->version_too_new = true;
         set_parse(doc, msg_version_too_new(base, ver),
                   dup_cstr("Update remember, then try again."));
-        return STEP_PARSE;
+        return 0;
     }
     if (ver != 1) {
         return not_export(doc, base);
     }
-    return STEP_OK;
+    return 1;
 }
 
 /* Root checks: shape, version, settings bytes, entries and links shape, brain_id. */
@@ -644,7 +612,7 @@ static int read_root(const JsonValue *root, const char *bytes, ImportDoc *doc, c
     char id_buf[IMPORT_UUID_BUF];
     int rc = (root->type == JSON_OBJECT) ? read_version(root, doc, base) : not_export(doc, base);
 
-    if (rc != STEP_OK) {
+    if (rc != 1) {
         return rc;
     }
     v = object_get(root, "settings");
@@ -652,13 +620,13 @@ static int read_root(const JsonValue *root, const char *bytes, ImportDoc *doc, c
         /* A present settings member that is not a settings document (ST-8.3a). */
         set_parse(doc, dup_cstr("\"settings\" isn't a settings document."),
                   dup_cstr("Fix the settings object, then try again."));
-        return STEP_PARSE;
+        return 0;
     }
     if (v != NULL) {
         /* The root member's own bytes, never a same-named member deeper in the file. */
         doc->settings_doc = dup_bytes(bytes + v->src_at, v->src_len);
         if (doc->settings_doc == NULL) {
-            return STEP_OOM;
+            return -1;
         }
         doc->settings_len = v->src_len;
     }
@@ -670,13 +638,13 @@ static int read_root(const JsonValue *root, const char *bytes, ImportDoc *doc, c
     }
     v = object_get(root, "brain_id");
     if (v == NULL || v->type == JSON_NULL) {
-        return STEP_OK;
+        return 1;
     }
     if (v->type != JSON_STRING || !import_uuid_normalize(v->u.string.bytes, id_buf)) {
         return not_export(doc, base);
     }
     doc->brain_id = dup_cstr(id_buf);
-    return (doc->brain_id != NULL) ? STEP_OK : STEP_OOM;
+    return (doc->brain_id != NULL) ? 1 : -1;
 }
 
 /* The entries and links arrays into doc. */
@@ -687,12 +655,12 @@ static int read_records(const JsonValue *root, ImportDoc *doc, const char *base)
     if (v != NULL && v->type == JSON_ARRAY && v->u.array.n > 0U) {
         doc->entries = (ImportMemory *)calloc(v->u.array.n, sizeof(ImportMemory));
         if (doc->entries == NULL) {
-            return STEP_OOM;
+            return -1;
         }
         doc->nentries = v->u.array.n;
         for (size_t i = 0; i < v->u.array.n; i++) {
             if (!memory_from_object(v->u.array.items[i], base, &doc->entries[i])) {
-                return STEP_OOM;
+                return -1;
             }
         }
     }
@@ -700,16 +668,16 @@ static int read_records(const JsonValue *root, ImportDoc *doc, const char *base)
     if (v != NULL && v->type == JSON_ARRAY && v->u.array.n > 0U) {
         doc->links = (ImportLink *)calloc(v->u.array.n, sizeof(ImportLink));
         if (doc->links == NULL) {
-            return STEP_OOM;
+            return -1;
         }
         doc->nlinks = v->u.array.n;
         for (size_t i = 0; i < v->u.array.n; i++) {
             if (!link_from_object(v->u.array.items[i], base, &doc->links[i])) {
-                return STEP_OOM;
+                return -1;
             }
         }
     }
-    return STEP_OK;
+    return 1;
 }
 
 /* The first unknown member in an array of objects, or NULL. */
@@ -745,42 +713,42 @@ int import_read_json(const char *path, ImportDoc *doc, int *sys_errno)
     size_t len = 0;
     JsonValue *root = NULL;
     const char *base = NULL;
-    int rc = STEP_OK;
+    JsonReadStatus jst = JSONREAD_OK;
+    int rc = 1;
 
     if (doc == NULL || path == NULL || sys_errno == NULL) {
-        if (sys_errno != NULL) {
-            *sys_errno = EINVAL;
-        }
         return -1;
     }
     memset(doc, 0, sizeof(*doc));
     if (fileio_read_all(path, &bytes, &len, sys_errno) != 0) {
         return -1;
     }
+    *sys_errno = ENOMEM; /* every later -1 is out of memory */
     base = basename_of(path);
-    if (jsonread_parse(bytes, len, &root) != JSONREAD_OK) {
+    jst = jsonread_parse(bytes, len, &root);
+    if (jst != JSONREAD_OK) {
         free(bytes);
+        if (jst == JSONREAD_ERR_OOM) {
+            return -1;
+        }
         (void)not_export(doc, base);
         return 0;
     }
     rc = read_root(root, bytes, doc, base);
     free(bytes);
-    if (rc == STEP_OK) {
+    if (rc == 1) {
         rc = read_records(root, doc, base);
     }
-    if (rc == STEP_OK) {
+    if (rc == 1) {
         find_unknown_field(root, doc);
+        rc = (import_validate_memories(doc->entries, doc->nentries) == 0) ? 1 : -1;
     }
     jsonread_free(root);
-    if (rc == STEP_OK && import_validate_memories(doc->entries, doc->nentries) != 0) {
-        rc = STEP_OOM;
-    }
-    if (rc == STEP_OOM) {
+    if (rc < 0) {
         import_doc_free(doc);
-        *sys_errno = ENOMEM;
         return -1;
     }
-    if (rc == STEP_OK) {
+    if (rc == 1) {
         import_validate_links(doc->links, doc->nlinks);
     }
     return 0;

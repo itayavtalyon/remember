@@ -9655,8 +9655,9 @@ static StoreStatus import_doc_merge_present(sqlite3 *dst, const char *device_id,
         counts->updated++;
         return STORE_OK;
     }
-    /* Local dominates, or equal/concurrent with identical E7.2 fields. */
-    if (cmp < 0 || e72_identical(local, m)) {
+    /* Local dominates. (Identical E7.2 fields never get here: import_doc_one counts them
+       unchanged first.) */
+    if (cmp < 0) {
         char maxed[VV_OUT_MAX];
 
         st = vv_pairwise_max(dst, local->version_vector, incoming_vv, maxed, sizeof(maxed), serr);
@@ -9788,12 +9789,10 @@ static StoreStatus import_doc_one_link(Store *dst, const ImportLink *link, const
     const char *created_at = NULL;
     const char *updated_at = NULL;
 
-    if (link->bad) {
+    /* validate checked the kind; parse_edge_kind failing here is a defensive bad link */
+    if (link->bad || parse_edge_kind(link->kind, &kind) != 0) {
         return import_note_error(counts, link->file, link->line,
                                  link->bad_message != NULL ? link->bad_message : "invalid link");
-    }
-    if (parse_edge_kind(link->kind, &kind) != 0) {
-        return import_note_error(counts, link->file, link->line, "invalid link");
     }
     memset(&from_e, 0, sizeof(from_e));
     memset(&to_e, 0, sizeof(to_e));
@@ -9880,15 +9879,19 @@ static StoreStatus import_settings_doc(Store *dst, const char *doc, size_t len,
 {
     char serr[STORE_SQLITE_MSG_LEN];
     SettingStatus sst = SETTING_OK;
+    StoreStatus st = STORE_OK;
 
     serr[0] = '\0';
     sst = store_setting_import_apply(dst, doc, len, SETTING_LAYER_BRAIN, &out->settings, serr,
                                      sizeof(serr));
-    if (sst == SETTING_OK) {
-        return STORE_OK;
-    }
+    /* The dry run in cmd_import already validated the document, so a failure here is
+       out of memory or internal. serr is empty on success. */
+    st = (strcmp(serr, "out of memory") == 0) ? STORE_ERR_OOM : STORE_ERR_INTERNAL;
     (void)snprintf(dst->last.sqlite_message, sizeof(dst->last.sqlite_message), "%s", serr);
-    return (strcmp(serr, "out of memory") == 0) ? STORE_ERR_OOM : STORE_ERR_INTERNAL;
+    if (sst != SETTING_OK) {
+        return st;
+    }
+    return STORE_OK;
 }
 
 /* The writes of one document import, inside the caller's transaction. */
@@ -9934,17 +9937,15 @@ StoreStatus store_import_doc(Store *dst, const ImportDoc *doc, const char *now, 
     memset(&dst->last, 0, sizeof(dst->last));
     g_import_origin = origin;
     st = begin_write(dst);
-    if (st != STORE_OK) {
-        g_import_origin = NULL;
-        return st;
-    }
-    st = import_doc_writes(dst, doc, now, out);
-    if (st == STORE_OK && exec_sql(dst->db, "COMMIT;", err_unused, 0U, &dst->last) != 0) {
-        st = STORE_ERR_SQLITE;
-    }
-    if (st != STORE_OK) {
-        rollback_quiet(dst->db);
-        store_import_result_free(out);
+    if (st == STORE_OK) {
+        st = import_doc_writes(dst, doc, now, out);
+        if (st == STORE_OK && exec_sql(dst->db, "COMMIT;", err_unused, 0U, &dst->last) != 0) {
+            st = STORE_ERR_SQLITE;
+        }
+        if (st != STORE_OK) {
+            rollback_quiet(dst->db);
+            store_import_result_free(out);
+        }
     }
     g_import_origin = NULL;
     return st;
@@ -11838,10 +11839,11 @@ static StoreStatus e12_effective_json(sqlite3 *src, char **out, StoreError *serr
         return st;
     }
     fp = open_memstream(&json, &len);
-    if (fp == NULL || fputc('[', fp) == EOF) {
-        if (fp != NULL) {
-            (void)fclose(fp);
-        }
+    if (fp == NULL) {
+        return STORE_ERR_OOM;
+    }
+    if (fputc('[', fp) == EOF) {
+        (void)fclose(fp);
         free(json);
         return STORE_ERR_OOM;
     }
@@ -11944,7 +11946,8 @@ static StoreStatus import_v6_prefixes(Store *dst, sqlite3 *src, StoreImportResul
     int rc = 0;
 
     if (sqlite3_prepare_v2(src, sql, -1, &sel, NULL) != SQLITE_OK) {
-        return STORE_OK; /* a v6 file without a settings table is absent, not an error */
+        /* a v6 file without a settings table is absent, not an error */
+        return STORE_OK;
     }
     (void)sqlite3_bind_text(sel, 1, k_prefixes_key, -1, SQLITE_STATIC);
     rc = sqlite3_step(sel);
@@ -12875,7 +12878,6 @@ static SettingStatus setting_import_run(Store *brain, const char *user_db, const
     } else if (ctx.udb != NULL) {
         rollback_quiet(ctx.udb);
         (void)sqlite3_close(ctx.udb);
-        ctx.udb = NULL;
     }
     import_in_free(ins, n);
     if (st != SETTING_OK) {

@@ -175,6 +175,9 @@ DEFENSIVE = re.compile(
     |^\s*store_conflicts_free\s*\(
     |^\s*vv_pairs_free\s*\(
     |^\s*import_row_free\s*\(
+    |^\s*(free_items|free_members|free_value|free_tags)\s*\(   # plan 23: error-tail cleanup
+    |^\s*(conflict_row_free|import_doc_free|store_import_result_free)\s*\(
+    |^\s*store_setting_import_free\s*\(
     |^\s*snapshot_fields_free\s*\(
     |^\s*free_tag_list\s*\(
     |^\s*add_parse_free\s*\(

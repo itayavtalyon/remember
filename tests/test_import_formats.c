@@ -1892,6 +1892,112 @@ TEST(import_json_missing_file_names_the_path)
     free(dst);
 }
 
+/* ---- Members of the wrong JSON type are bad records, not a failed import. ---- */
+
+TEST(import_json_bad_record_members_of_the_wrong_type)
+{
+    then_one_bad_record("{\"body\":\"b\",\"key\":5}", "invalid key or tag");
+    then_one_bad_record("{\"body\":5}", "body is missing");
+    then_one_bad_record("{\"body\":\"b\",\"tags\":\"x\"}", "invalid key or tag");
+    then_one_bad_record("{\"body\":\"b\",\"tags\":[5]}", "invalid key or tag");
+    then_one_bad_record("{\"body\":\"b\",\"created_at\":5}", "invalid timestamp");
+    then_one_bad_record("{\"body\":\"b\",\"created_by\":5}", "invalid actor");
+    then_one_bad_record("{\"body\":\"b\",\"created_by\":{\"kind\":5}}", "invalid actor");
+    then_one_bad_record("{\"body\":\"b\",\"created_by\":{\"kind\":\"agent\",\"id\":5}}",
+                        "invalid actor");
+}
+
+TEST(import_json_actor_with_an_id_is_kept)
+{
+    char *dst = open_empty_brain();
+
+    import_ok(dst, "-actor.json",
+              EXPORT_HEAD "\"entries\":[{\"body\":\"b\",\"created_by\":{\"kind\":\"agent\","
+                          "\"id\":\"bot-1\"}}]}");
+    then_query(dst, "SELECT created_by FROM entries;", "{\"kind\":\"agent\",\"id\":\"bot-1\"}");
+    free(dst);
+}
+
+/* JE-4.1: a missing or wrong format or version is not a remember export. */
+TEST(import_json_wrong_format_or_version_is_import_parse)
+{
+    then_import_parse("{\"version\":1,\"entries\":[]}");
+    then_import_parse("{\"format\":5,\"version\":1,\"entries\":[]}");
+    then_import_parse("{\"format\":\"remember-export\",\"entries\":[]}");
+    then_import_parse("{\"format\":\"remember-export\",\"version\":\"1\",\"entries\":[]}");
+    then_import_parse("{\"format\":\"remember-export\",\"version\":1.5,\"entries\":[]}");
+    then_import_parse("{\"format\":\"remember-export\",\"version\":0,\"entries\":[]}");
+}
+
+/* ST-8.3a: a settings member that is not an object refuses the whole file. */
+TEST(import_json_settings_not_an_object_is_import_parse)
+{
+    char *dst = open_empty_brain();
+    CmdResult r = import_text(dst, "-settings.json", EXPORT_HEAD "\"settings\":5,\"entries\":[]}");
+
+    ASSERT_EQ_INT(r.exit_code, 1);
+    ASSERT_STR_CONTAINS(r.out, "\"import_parse\"");
+    ASSERT_STR_CONTAINS(r.out, "isn't a settings document.");
+    cmd_result_free(&r);
+    free(dst);
+}
+
+/* An older export of a memory the brain has since changed leaves it unchanged. */
+TEST(import_json_older_export_leaves_the_memory_unchanged)
+{
+    char *dst = open_empty_brain();
+    CmdResult r;
+
+    import_ok(dst, "-new.json",
+              EXPORT_HEAD "\"entries\":[" ONE_ENTRY(ID3, "one", "{\"" D1 "\":2}") "]}");
+    r = import_text(dst, "-old.json",
+                    EXPORT_HEAD "\"entries\":[" ONE_ENTRY(ID3, "old", "{\"" D1 "\":1}") "]}");
+    ASSERT_EQ_INT(r.exit_code, 0);
+    ASSERT_STR_CONTAINS(r.out, "\"unchanged\":1");
+    cmd_result_free(&r);
+    then_query(dst, "SELECT body FROM entries;", "one");
+    free(dst);
+}
+
+/* Concurrent vectors with identical E7.2 fields (expires_at too) are unchanged, not a
+   conflict, and the local vector stays. */
+TEST(import_json_concurrent_identical_memory_is_unchanged)
+{
+    char *dst = open_empty_brain();
+    CmdResult r;
+
+#define SAME(vv)                                                                                   \
+    "{\"id\":\"" ID3 "\",\"body\":\"same\",\"expires_at\":\"2030-01-01T00:00:00.000Z\","           \
+    "\"version_vector\":" vv "}"
+    import_ok(dst, "-s1.json", EXPORT_HEAD "\"entries\":[" SAME("{\"" D1 "\":1}") "]}");
+    r = import_text(dst, "-s2.json", EXPORT_HEAD "\"entries\":[" SAME("{\"" D2 "\":1}") "]}");
+#undef SAME
+    ASSERT_EQ_INT(r.exit_code, 0);
+    ASSERT_STR_CONTAINS(r.out, "\"unchanged\":1");
+    ASSERT_STR_CONTAINS(r.out, "\"conflicts\":{\"count\":0");
+    cmd_result_free(&r);
+    then_query(dst, "SELECT version_vector FROM entries;", "{\"" D1 "\":1}");
+    free(dst);
+}
+
+/* A newer export of a keyed memory updates it in place. */
+TEST(import_json_newer_keyed_export_updates)
+{
+    char *dst = open_empty_brain();
+    CmdResult r;
+
+#define KEYED(body, n)                                                                             \
+    "{\"id\":\"" ID3 "\",\"key\":\"k\",\"body\":\"" body "\",\"version_vector\":{\"" D1 "\":" n "}}"
+    import_ok(dst, "-k1.json", EXPORT_HEAD "\"entries\":[" KEYED("one", "1") "]}");
+    r = import_text(dst, "-k2.json", EXPORT_HEAD "\"entries\":[" KEYED("two", "2") "]}");
+#undef KEYED
+    ASSERT_EQ_INT(r.exit_code, 0);
+    ASSERT_STR_CONTAINS(r.out, "\"updated\":1");
+    cmd_result_free(&r);
+    then_query(dst, "SELECT key || ' ' || body FROM entries;", "k two");
+    free(dst);
+}
+
 void register_import_formats_tests(void)
 {
     RUN_TEST(import_json_inserts_a_keyed_memory_into_an_empty_brain);
@@ -1949,6 +2055,13 @@ void register_import_formats_tests(void)
     RUN_TEST(import_rejects_two_different_source_flags);
     RUN_TEST(import_rejects_a_repeated_origin);
     RUN_TEST(import_json_missing_file_names_the_path);
+    RUN_TEST(import_json_bad_record_members_of_the_wrong_type);
+    RUN_TEST(import_json_actor_with_an_id_is_kept);
+    RUN_TEST(import_json_wrong_format_or_version_is_import_parse);
+    RUN_TEST(import_json_settings_not_an_object_is_import_parse);
+    RUN_TEST(import_json_older_export_leaves_the_memory_unchanged);
+    RUN_TEST(import_json_concurrent_identical_memory_is_unchanged);
+    RUN_TEST(import_json_newer_keyed_export_updates);
     RUN_TEST(import_json_round_trip_keeps_memories_and_links);
     RUN_TEST(import_json_sync_id_member_is_not_an_id);
     RUN_TEST(import_json_duplicate_id_keeps_the_first_copy);

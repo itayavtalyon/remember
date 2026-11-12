@@ -224,6 +224,45 @@ TEST(jsonread_status_string_is_stable)
     ASSERT_STREQ(jsonread_status_string(JSONREAD_ERR_INTERNAL), "internal");
 }
 
+TEST(jsonread_parses_false)
+{
+    JsonValue *root = parse_ok("false");
+
+    if (root == NULL) {
+        return;
+    }
+    ASSERT_EQ_INT(root->type, JSON_BOOL);
+    ASSERT_TRUE(!root->u.boolean);
+    jsonread_free(root);
+}
+
+/* \u escapes encode as two- and three-byte UTF-8; hex digits may be lowercase. */
+TEST(jsonread_encodes_u_escapes_as_utf8)
+{
+    JsonValue *root = parse_ok("\"\\u00e9\\u20AC\"");
+
+    if (root == NULL) {
+        return;
+    }
+    ASSERT_EQ_INT(root->type, JSON_STRING);
+    ASSERT_EQ_INT((int)root->u.string.len, 5);
+    ASSERT_TRUE(memcmp(root->u.string.bytes, "\xC3\xA9\xE2\x82\xAC", 5) == 0);
+    jsonread_free(root);
+}
+
+TEST(jsonread_null_source_with_a_length_is_internal)
+{
+    parse_fails(JSONREAD_ERR_INTERNAL, NULL, 1);
+}
+
+TEST(jsonread_rejects_a_missing_separator_after_an_item)
+{
+    parse_fails(JSONREAD_ERR_SYNTAX, "[1 2]", strlen("[1 2]"));
+    parse_fails(JSONREAD_ERR_SYNTAX, "{\"a\":1,5}", strlen("{\"a\":1,5}"));
+    parse_fails(JSONREAD_ERR_SYNTAX, "{\"a\":1,\"b\" 2}", strlen("{\"a\":1,\"b\" 2}"));
+    parse_fails(JSONREAD_ERR_SYNTAX, "{\"a\":1 \"b\":2}", strlen("{\"a\":1 \"b\":2}"));
+}
+
 void register_jsonread_tests(void)
 {
     RUN_TEST(jsonread_accepts_nesting_at_the_named_limit);
@@ -238,4 +277,8 @@ void register_jsonread_tests(void)
     RUN_TEST(jsonread_null_out_is_internal);
     RUN_TEST(jsonread_reports_oom_on_the_first_allocation);
     RUN_TEST(jsonread_status_string_is_stable);
+    RUN_TEST(jsonread_parses_false);
+    RUN_TEST(jsonread_encodes_u_escapes_as_utf8);
+    RUN_TEST(jsonread_null_source_with_a_length_is_internal);
+    RUN_TEST(jsonread_rejects_a_missing_separator_after_an_item);
 }

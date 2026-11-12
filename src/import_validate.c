@@ -162,11 +162,8 @@ static const char *validate_tokens(ImportMemory *m)
     for (i = 0; i < m->ntags && k > 0; i++) {
         k = token_normalize(&m->tags[i]);
     }
-    if (k < 0) {
-        return k_oom;
-    }
-    if (k == 0) {
-        return "invalid key or tag";
+    if (k <= 0) {
+        return (k < 0) ? k_oom : "invalid key or tag";
     }
     tags_sort_unique(m);
     return NULL;
@@ -221,10 +218,7 @@ static int cmp_id_then_position(const void *a, const void *b)
     if (c != 0) {
         return c;
     }
-    if (*left < *right) {
-        return -1;
-    }
-    return (*left > *right) ? 1 : 0;
+    return (*left < *right) ? -1 : (*left > *right);
 }
 
 int import_validate_memories(ImportMemory *entries, size_t n)
