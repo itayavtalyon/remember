@@ -69,6 +69,7 @@ Do not add a second constant.
 - The git history of this plan contains no tag.
 
 - **Warnings carry a `fix` (E3 B, `decision:2026-11-12-e3-warnings-have-fix-field`).** Every warning this plan prints has a `message` and a non-empty `fix`: `flag_meaning_changed` (the README line of C-41 quotes the same plain line). The wording is copy item E3B-1, entry 1, in `decision:2026-11-12-copy-batch-e3b-warning-splits`: the approved sentence stays word for word and only its next step moves into `fix`; the plain line is `remember: warning: <message> <fix>`. `code`, `detail`, exit codes and `--strict` do not change. Itay approved E3B-1 as a whole on 2026-11-12, including every `fix` that is Story Weaver wording (`decision:2026-11-12-copy-batch-e3b-warning-splits`).
+- **The `synced_folder` warning takes E3B-2 (approved by Itay 2026-11-12, option A, `decision:2026-11-12-copy-batch-e3b-warning-splits`).** The existing warning (plan 16 D5, printed from `src/remember_app.c` when the database path looks synced) has `message` `this brain looks like it is in a synced folder (iCloud Drive, Dropbox or Google Drive), and syncing can damage it.` and `fix` `Move the brain to a folder on a local disk.` The plain line is `remember: warning: <message> <fix>`. It replaces the old sentence `database path looks like a synced folder (iCloud/Dropbox/Google Drive); corruption risk - prefer a local disk`. `code`, `detail`, exit codes and `--strict` do not change.
 
 ## Review points
 
@@ -86,6 +87,7 @@ Do not add a second constant.
 - [ ] `a fake home with no product directory prints the error line that names ~/.codex`.
 - [ ] `git tag --points-at HEAD` shows no tag created by this plan.
 - [ ] `the skill does not contain "see C-13"`.
+- [ ] `synced_folder_warning_has_message_and_fix`: a database under a `Dropbox` path prints the E3B-2 plain line, the JSON warning carries `code`, `message` and `fix`, and the old sentence is gone.
 - [ ] `specs/RELEASE-0.3.0.md` is written, and the decisions this plan built are `state:implemented`.
 - [ ] The gate passes on the committed tree.
 
