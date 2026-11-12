@@ -1209,7 +1209,15 @@ TEST(import_json_bad_record_id_a_number_is_not_a_uuid)
 
 TEST(import_json_bad_record_invalid_timestamp)
 {
-    then_one_bad_record("{\"body\":\"b\",\"created_at\":\"2026-01-01\"}", "invalid timestamp");
+    static const char *const fields[] = {"created_at", "updated_at", "expires_at", "deleted_at"};
+    char entry[128];
+    size_t i = 0;
+
+    /* Each field on its own: the reader checks only the type, validate the shape. */
+    for (i = 0; i < sizeof fields / sizeof fields[0]; i++) {
+        (void)snprintf(entry, sizeof entry, "{\"body\":\"b\",\"%s\":\"2026-01-01\"}", fields[i]);
+        then_one_bad_record(entry, "invalid timestamp");
+    }
 }
 
 TEST(import_json_bad_record_invalid_actor_kind)
@@ -1570,6 +1578,37 @@ TEST(import_json_new_link_bumps_existing_ends)
     free(dst);
 }
 
+/* M15: a live file link over a local tombstone revives it and bumps both ends. */
+TEST(import_json_reviving_a_link_bumps_its_ends)
+{
+    char *dst = open_empty_brain();
+    static const char *const seq[] = {"SELECT change_seq FROM entries WHERE id = '" ID3 "';",
+                                      "SELECT change_seq FROM entries WHERE id = '" ID4 "';"};
+    char *before[2] = {NULL, NULL};
+    size_t i = 0;
+
+#define AB "\"entries\":[" ONE_ENTRY(ID3, "A", "{}") "," ONE_ENTRY(ID4, "B", "{}") "],"
+#define AB_LINK(extra)                                                                             \
+    "\"links\":[{\"from\":\"" ID3 "\",\"to\":\"" ID4 "\",\"kind\":\"cites\"" extra "}]}"
+    import_ok(dst, "-dead.json", EXPORT_HEAD AB AB_LINK(",\"deleted_at\":\"" FIXTURE_AT "\""));
+    for (i = 0; i < 2U; i++) {
+        before[i] = query(dst, seq[i]);
+    }
+    import_ok(dst, "-live.json", EXPORT_HEAD AB AB_LINK(""));
+#undef AB_LINK
+#undef AB
+    then_query(dst, "SELECT COUNT(*) FROM entry_links WHERE deleted_at IS NULL;", "1");
+    for (i = 0; i < 2U; i++) {
+        char *after = query(dst, seq[i]);
+
+        ASSERT_TRUE(before[i] != NULL && after != NULL &&
+                    strtoll(after, NULL, 10) > strtoll(before[i], NULL, 10));
+        free(after);
+        free(before[i]);
+    }
+    free(dst);
+}
+
 /* M16: a newer id'd record whose body another keyless row holds is a hash clash. */
 TEST(import_json_update_onto_a_held_body_is_hash_clash)
 {
@@ -1725,18 +1764,25 @@ TEST(import_json_bad_link_duplicate_member)
 }
 
 /* G6: key and tags are stored the way add stores them. */
+#define NORM_DOC                                                                                   \
+    EXPORT_HEAD "\"entries\":[{\"id\":\"" ID3 "\",\"body\":\"n\",\"key\":\"  Project:Alpha \","       \
+                "\"tags\":[\"  Pad  \",\"pad\",\"B\"]}]}"
 TEST(import_json_normalizes_key_and_tags_like_add)
 {
     char *dst = open_empty_brain();
+    CmdResult r;
 
-    import_ok(dst, "-norm.json",
-              EXPORT_HEAD "\"entries\":[{\"body\":\"n\",\"key\":\"  Project:Alpha \","
-                          "\"tags\":[\"  Pad  \",\"pad\",\"B\"]}]}");
+    import_ok(dst, "-norm.json", NORM_DOC);
     then_query(dst, "SELECT key FROM entries;", "project:alpha");
     then_query(dst,
                "SELECT group_concat(name, ',') FROM (SELECT t.name FROM entry_tags AS j JOIN tags "
                "AS t ON t.id = j.tag_id ORDER BY t.name);",
                "b,pad");
+    /* The same record again: "Pad" and "pad" are one tag, so nothing changed. */
+    r = import_text(dst, "-norm2.json", NORM_DOC);
+    ASSERT_EQ_INT(r.exit_code, 0);
+    ASSERT_STR_CONTAINS(r.out, "\"inserted\":0,\"updated\":0,\"unchanged\":1,");
+    cmd_result_free(&r);
     free(dst);
 }
 
@@ -1799,6 +1845,7 @@ void register_import_formats_tests(void)
     RUN_TEST(import_json_duplicate_id_keeps_the_first_copy);
     RUN_TEST(import_json_tombstone_link_over_a_tombstone_stays_dead);
     RUN_TEST(import_json_new_link_bumps_existing_ends);
+    RUN_TEST(import_json_reviving_a_link_bumps_its_ends);
     RUN_TEST(import_json_update_onto_a_held_body_is_hash_clash);
     RUN_TEST(import_json_update_stamps_the_import_actor);
     RUN_TEST(import_json_concurrent_change_is_a_conflict_with_the_import_actor);
