@@ -1345,6 +1345,85 @@ TEST(import_json_bad_link_invalid_timestamp)
     free(dst);
 }
 
+/* ---- Must-pass: round trip and no old names. ---- */
+
+/* Every memory row that must survive export then import, as one line. */
+#define RT_MEMORIES                                                                                \
+    "SELECT group_concat(id || '|' || coalesce(key, '') || '|' || body || '|' || "               \
+    "created_by || '|' || coalesce(expires_at, '') || '|' || coalesce(deleted_at, ''), ';') "    \
+    "FROM (SELECT * FROM entries ORDER BY id);"
+#define RT_TAGS                                                                                    \
+    "SELECT group_concat(x, ';') FROM (SELECT e.id || ':' || t.name AS x FROM entry_tags AS j "  \
+    "JOIN entries AS e ON e.local_id = j.entry_id JOIN tags AS t ON t.id = j.tag_id ORDER BY x);"
+#define RT_LINKS                                                                                   \
+    "SELECT group_concat(x, ';') FROM (SELECT f.id || '>' || t.id || ':' || l.kind AS x FROM "   \
+    "entry_links AS l JOIN entries AS f ON f.local_id = l.from_id JOIN entries AS t ON "         \
+    "t.local_id = l.to_id WHERE l.deleted_at IS NULL ORDER BY x);"
+
+static void then_same(const char *src, const char *dst, const char *query)
+{
+    char *want = harness_sqlite_query_line(src, query);
+    char *got = harness_sqlite_query_line(dst, query);
+
+    ASSERT_TRUE(want != NULL);
+    ASSERT_STREQ(got, want);
+    free(want);
+    free(got);
+}
+
+TEST(import_json_round_trip_keeps_memories_and_links)
+{
+    char *src = make_temp_db_path();
+    char *dst = open_empty_brain();
+    char *out = NULL;
+    char *got = NULL;
+    CmdResult r;
+
+    ASSERT_TRUE(src != NULL);
+    fixture_roundtrip_build(src);
+    out = harness_side_path(src, "-rt.json");
+    {
+        const char *args[] = {"export",          "--format",        "json", "--out",
+                              out,               "--include-expired", "--include-trash"};
+        r = run_remember(src, args, sizeof args / sizeof args[0], NULL);
+    }
+    ASSERT_EQ_INT(r.exit_code, 0);
+    cmd_result_free(&r);
+    {
+        const char *args[] = {"import", "--from-json", out};
+        r = run_remember(dst, args, sizeof args / sizeof args[0], NULL);
+    }
+    ASSERT_EQ_INT(r.exit_code, 0);
+    ASSERT_STR_CONTAINS(r.out, "inserted 5 ");
+    cmd_result_free(&r);
+    then_same(src, dst, RT_MEMORIES);
+    then_same(src, dst, RT_TAGS);
+    then_same(src, dst, RT_LINKS);
+    got = harness_sqlite_query_line(dst, "SELECT group_concat(DISTINCT updated_by) FROM entries;");
+    ASSERT_STREQ(got, "{\"kind\":\"import\",\"id\":null}");
+    free(got);
+    free(out);
+    free(src);
+    free(dst);
+}
+
+TEST(import_json_sync_id_member_is_not_an_id)
+{
+    char *dst = open_empty_brain();
+    char *got = NULL;
+    CmdResult r;
+
+    r = import_text(dst, "-old.json",
+                    EXPORT_HEAD "\"entries\":[{\"sync_id\":\"" ID3 "\",\"body\":\"old\"}]}");
+    ASSERT_EQ_INT(r.exit_code, 0);
+    ASSERT_STR_CONTAINS(r.out, "\"inserted\":1,");
+    cmd_result_free(&r);
+    got = harness_sqlite_query_line(dst, "SELECT COUNT(*) FROM entries WHERE id = '" ID3 "';");
+    ASSERT_STREQ(got, "0");
+    free(got);
+    free(dst);
+}
+
 /* ---- P7 / P9 usage lines, every sibling flag. ---- */
 
 static void then_usage(const char *const *args, size_t nargs, const char *want_err)
@@ -1456,4 +1535,6 @@ void register_import_formats_tests(void)
     RUN_TEST(import_rejects_each_source_flag_without_a_path);
     RUN_TEST(import_rejects_two_different_source_flags);
     RUN_TEST(import_rejects_a_repeated_origin);
+    RUN_TEST(import_json_round_trip_keeps_memories_and_links);
+    RUN_TEST(import_json_sync_id_member_is_not_an_id);
 }

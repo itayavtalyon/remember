@@ -308,7 +308,7 @@ static void print_command_help(CliCommand topic)
         (void)fprintf(out, "\n");
         (void)fprintf(out, "Exactly one of --from-json, --from-md, --from-csv, --from-db.\n");
         (void)fprintf(out, "Merges by id. Conflicts are recorded; exit 0 even if any.\n");
-        (void)fprintf(out, "Run 'conflicts' after import. --from-db reads schema v4–v6.\n");
+        (void)fprintf(out, "Run 'conflicts' after import. --from-db reads schema v4 to v6.\n");
         (void)fprintf(out, "Does not copy the foreign device_id sidecar.\n");
         (void)fprintf(out, "\n");
     } else if (topic == CLI_CMD_CONFLICTS) {
