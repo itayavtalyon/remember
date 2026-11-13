@@ -50,9 +50,12 @@ static OutboxStep step_reported(const OutboxInput *in)
 
 static bool input_ok(const OutboxInput *in)
 {
-    return (unsigned)in->state <= (unsigned)OUTBOX_HALTED &&
-           (unsigned)in->result <= (unsigned)OUTBOX_RESULT_PREFLIGHT && in->chain_len >= 0 &&
-           in->age_days >= 0 && in->waited_s >= 0;
+    if ((unsigned)in->state > (unsigned)OUTBOX_HALTED ||
+        (unsigned)in->result > (unsigned)OUTBOX_RESULT_PREFLIGHT || in->chain_len < 0 ||
+        in->age_days < 0 || in->waited_s < 0) {
+        return false;
+    }
+    return true;
 }
 
 bool outbox_step(const OutboxInput *in, OutboxStep *out)
