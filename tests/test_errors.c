@@ -904,6 +904,7 @@ TEST(store_text_codes_follow_the_locked_split)
     expect_diag(code_for_store_text("cannot create database directory: denied"), DIAG_CANNOT_OPEN);
     expect_diag(code_for_store_text("database path component is not a directory"),
                 DIAG_CANNOT_OPEN);
+    expect_diag(code_for_store_text("cannot read default-db"), DIAG_CANNOT_OPEN);
     expect_diag(code_for_store_text("invalid database path"), DIAG_USAGE);
     expect_diag(code_for_store_text("database path is too long"), DIAG_USAGE);
     expect_diag(code_for_store_text("empty database path"), DIAG_USAGE);

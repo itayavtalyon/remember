@@ -390,6 +390,81 @@ TEST(util_resolve_default_db_line_too_long_fails)
     given_home_release(&h);
 }
 
+/* Itay 2026-11-13 (decision:2026-11-13-default-db-unreadable): a default-db
+   that exists but cannot be read fails at once, with no fallback to
+   remember.db. A directory fails on the read, a mode 000 file on the open. */
+TEST(util_resolve_default_db_directory_fails_with_no_fallback)
+{
+    GivenHome h;
+    char buf[REMEMBER_PATH_MAX];
+    char err[128];
+    char file[96];
+    given_home(&h, NULL);
+    (void)snprintf(file, sizeof(file), "%s/.remember/default-db", h.dir);
+    ASSERT_EQ_INT(mkdir(file, 0700), 0);
+    ASSERT_EQ_INT(util_resolve_db_path(NULL, buf, sizeof(buf), err, sizeof(err)), -1);
+    ASSERT_STREQ(err, "cannot read default-db");
+    given_home_release(&h);
+}
+
+/* A symlink that loops fails the open for every user, root included. */
+TEST(util_resolve_default_db_symlink_loop_fails_with_no_fallback)
+{
+    GivenHome h;
+    char buf[REMEMBER_PATH_MAX];
+    char err[128];
+    char file[96];
+    given_home(&h, NULL);
+    (void)snprintf(file, sizeof(file), "%s/.remember/default-db", h.dir);
+    ASSERT_EQ_INT(symlink("default-db", file), 0);
+    ASSERT_EQ_INT(util_resolve_db_path(NULL, buf, sizeof(buf), err, sizeof(err)), -1);
+    ASSERT_STREQ(err, "cannot read default-db");
+    given_home_release(&h);
+}
+
+TEST(util_resolve_default_db_without_permission_fails_with_no_fallback)
+{
+    GivenHome h;
+    char buf[REMEMBER_PATH_MAX];
+    char err[128];
+    char file[96];
+    if (geteuid() == 0) {
+        (void)printf("SKIP %s (running as root; file mode bits are ignored)\n",
+                     "util_resolve_default_db_without_permission_fails_with_no_fallback");
+        return;
+    }
+    given_home(&h, "/tmp/from-file.db\n");
+    (void)snprintf(file, sizeof(file), "%s/.remember/default-db", h.dir);
+    ASSERT_EQ_INT(chmod(file, 0000), 0);
+    ASSERT_EQ_INT(util_resolve_db_path(NULL, buf, sizeof(buf), err, sizeof(err)), -1);
+    ASSERT_STREQ(err, "cannot read default-db");
+    given_home_release(&h);
+}
+
+/* A name that points nowhere, or a ~/.remember that is not a folder, is no
+   file: the file does not exist, so nothing is unreadable. */
+TEST(util_resolve_default_db_that_does_not_exist_uses_builtin)
+{
+    GivenHome h;
+    char buf[REMEMBER_PATH_MAX];
+    char err[128];
+    char want[REMEMBER_PATH_MAX];
+    char file[96];
+    given_home(&h, NULL);
+    given_builtin_path(&h, want, sizeof(want));
+    (void)snprintf(file, sizeof(file), "%s/.remember/default-db", h.dir);
+    ASSERT_EQ_INT(symlink("/nonexistent/remember-target", file), 0);
+    ASSERT_EQ_INT(util_resolve_db_path(NULL, buf, sizeof(buf), err, sizeof(err)), 0);
+    ASSERT_STREQ(buf, want);
+    ASSERT_EQ_INT(unlink(file), 0);
+    (void)snprintf(file, sizeof(file), "%s/.remember", h.dir);
+    ASSERT_EQ_INT(rmdir(file), 0);
+    write_text_file(file, "not a folder");
+    ASSERT_EQ_INT(util_resolve_db_path(NULL, buf, sizeof(buf), err, sizeof(err)), 0);
+    ASSERT_STREQ(buf, want);
+    given_home_release(&h);
+}
+
 TEST(util_set_err_truncates)
 {
     /* Path too long with tiny err buffer exercises set_err truncation. */
@@ -1166,6 +1241,10 @@ void register_coverage_edges_tests(void)
     RUN_TEST(util_resolve_default_db_ephemeral_fails_like_cli_db);
     RUN_TEST(util_resolve_default_db_xdg_data_home_does_not_move_it);
     RUN_TEST(util_resolve_default_db_line_too_long_fails);
+    RUN_TEST(util_resolve_default_db_directory_fails_with_no_fallback);
+    RUN_TEST(util_resolve_default_db_symlink_loop_fails_with_no_fallback);
+    RUN_TEST(util_resolve_default_db_without_permission_fails_with_no_fallback);
+    RUN_TEST(util_resolve_default_db_that_does_not_exist_uses_builtin);
     RUN_TEST(util_set_err_truncates);
     RUN_TEST(util_read_stdin_null_out);
     RUN_TEST(output_json_string_null_out_fails);

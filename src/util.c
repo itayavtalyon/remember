@@ -137,14 +137,16 @@ static const char *home_dir(char *err, size_t errlen, const char *missing)
 }
 
 /* Reads ~/.remember/default-db into content (DEFAULT_DB_READ_MAX + 1 bytes).
-   Returns 1 when a file was read, 0 when there is none, -1 on error.
-   An unreadable file has no rule yet (plan 27 waits on Itay's answer). */
+   Returns 1 when a file was read, 0 when there is none (ENOENT, ENOTDIR), -1 on
+   error. A file that exists but cannot be opened or read is "cannot read
+   default-db", with no fallback (decision:2026-11-13-default-db-unreadable). */
 // NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
 static int read_default_db(const char *home, char *content, char *err, size_t errlen)
 {
     char file[PATH_MAX];
     FILE *f = NULL;
     size_t n = 0;
+    int failed = 0;
 
     if (format_db_path(file, sizeof(file), err, errlen, home, "/.remember/default-db") != 0) {
         return -1;
@@ -153,10 +155,19 @@ static int read_default_db(const char *home, char *content, char *err, size_t er
     // NOLINTNEXTLINE(android-cloexec-fopen)
     f = fopen(file, "r");
     if (f == NULL) {
-        return 0;
+        if (errno == ENOENT || errno == ENOTDIR) {
+            return 0;
+        }
+        set_err(err, errlen, "cannot read default-db");
+        return -1;
     }
     n = fread(content, 1U, DEFAULT_DB_READ_MAX, f);
+    failed = ferror(f);
     (void)fclose(f);
+    if (failed != 0) {
+        set_err(err, errlen, "cannot read default-db");
+        return -1;
+    }
     if (n == (size_t)DEFAULT_DB_READ_MAX) {
         set_err(err, errlen, "database path is too long");
         return -1;

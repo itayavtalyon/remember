@@ -46,14 +46,15 @@ A path taken from the file goes through the existing `copy_regular_db_path`. Do 
 
 ## Definition of Done
 
-- [ ] `a set REMEMBER_DB hides default-db` (`tests/test_coverage_edges.c`).
-- [ ] `an absolute line is the brain path`.
-- [ ] `a missing file uses ~/.remember/remember.db and the engine does not create default-db`.
-- [ ] `an empty line uses ~/.remember/remember.db and the engine does not create default-db`.
-- [ ] `a relative line uses ~/.remember/remember.db and the engine does not create default-db`.
-- [ ] `a default-db value of :memory: fails the way --db :memory: fails`.
-- [ ] `a set XDG_DATA_HOME does not move default-db: the engine still reads ~/.remember/default-db`.
-- [ ] `specs/DEFAULT-DB.md` is written, and `decision:ui-overhaul-grill-2026-10-12` item 3 is cited from that spec. The decision stays `state:accepted` because this plan builds one item of it.
+- [x] `a set REMEMBER_DB hides default-db` (`tests/test_coverage_edges.c`).
+- [x] `an absolute line is the brain path` (`util_resolve_default_db_absolute_line_is_the_brain`).
+- [x] `a missing file uses ~/.remember/remember.db and the engine does not create default-db` (`util_resolve_default_db_missing_file_uses_builtin_and_creates_nothing`).
+- [x] `an empty line uses ~/.remember/remember.db and the engine does not create default-db` (`util_resolve_default_db_empty_line_uses_builtin_and_creates_nothing`).
+- [x] `a relative line uses ~/.remember/remember.db and the engine does not create default-db` (`util_resolve_default_db_relative_line_uses_builtin_and_creates_nothing`).
+- [x] `a default-db value of :memory: fails the way --db :memory: fails` (`util_resolve_default_db_ephemeral_fails_like_cli_db`).
+- [x] `a set XDG_DATA_HOME does not move default-db: the engine still reads ~/.remember/default-db` (`util_resolve_default_db_xdg_data_home_does_not_move_it`).
+- [x] `specs/DEFAULT-DB.md` is written, and `decision:ui-overhaul-grill-2026-10-12` item 3 is cited from that spec. The decision stays `state:accepted` because this plan builds one item of it.
+- [x] `a default-db that exists but cannot be read fails with cannot read default-db and no fallback` (`util_resolve_default_db_directory_fails_with_no_fallback`, `..._symlink_loop_fails_with_no_fallback`, `..._without_permission_fails_with_no_fallback`; `decision:2026-11-13-default-db-unreadable`).
 - [ ] The gate passes on the committed tree, and the notes record the mutants and their red tests.
 
 ## Implementation Notes
@@ -90,6 +91,21 @@ Simplify candidates: the empty-line check (deleted, 3 lines); the blank-line tes
 
 Hostile-line probes run on the binary (HOME set to a temp dir): ESC and newline in the path, a 300-byte component, `:memory:`, `file:`, a relative line, NUL. No error sentence echoes the path from the file; the open errors print the system message only.
 
-Pending: a `default-db` that exists but cannot be read (permission denied, a directory, an I/O error). No decision or plan line rules on it; it is with Itay. The code treats an open failure as "no file" and has no test for it until he answers.
+Unreadable file (`decision:2026-11-13-default-db-unreadable`, Itay chose A): a `default-db` that exists but cannot be opened or read fails with `cannot read default-db`, code `cannot_open` (mapped in `code_for_store_text`), and no fallback. ENOENT and ENOTDIR on the open mean the file does not exist and count as no file. The fix text and the JSON and plain-line forms are the existing `cannot_open` ones; no new copy but the message. Tests, red first: `util_resolve_default_db_directory_fails_with_no_fallback` (read error), `util_resolve_default_db_without_permission_fails_with_no_fallback` (mode 000, skipped as root), `util_resolve_default_db_symlink_loop_fails_with_no_fallback` (open error, also as root), and the `cannot read default-db` line in `store_text_codes_follow_the_locked_split`. `util_resolve_default_db_that_does_not_exist_uses_builtin` (dangling link, `~/.remember` not a folder) passed before the change and guards the exemption.
+
+Mutants for the unreadable branch (each built, then the suite run):
+
+| Mutant | Red tests |
+|---|---|
+| exemption replaced by `errno == EEXIST` | `..._missing_file_uses_builtin_and_creates_nothing`, `..._xdg_data_home_does_not_move_it`, `..._that_does_not_exist_uses_builtin`, `util_resolve_empty_env_falls_through_to_home`, `util_resolve_default_path_buffer_too_small` |
+| `ENOTDIR` not exempt | `..._that_does_not_exist_uses_builtin` |
+| `ENOENT` not exempt | `..._missing_file_uses_builtin_and_creates_nothing`, `..._xdg_data_home_does_not_move_it`, `..._that_does_not_exist_uses_builtin`, `util_resolve_empty_env_falls_through_to_home`, `util_resolve_default_path_buffer_too_small` |
+| open failure falls back (returns 0) | `..._symlink_loop_fails_with_no_fallback`, `..._without_permission_fails_with_no_fallback` |
+| read error ignored (`failed = 0`) | `..._directory_fails_with_no_fallback` |
+| read error falls back | `..._directory_fails_with_no_fallback` |
+| message `invalid database path` | `..._directory_fails_with_no_fallback` |
+| mapping removed from `code_for_store_text` | `store_text_codes_follow_the_locked_split` |
+
+(`if (0)` for the exemption did not build under `-Werror`; redone as `EEXIST`.)
 
 ## Review Notes
