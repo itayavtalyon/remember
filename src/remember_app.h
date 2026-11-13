@@ -1,6 +1,8 @@
 #ifndef REMEMBER_APP_H
 #define REMEMBER_APP_H
 
+#include "cli.h"
+
 #include <stdio.h>
 
 /*
@@ -19,6 +21,22 @@
  * an `out` whose error flag is clear.
  */
 int remember_run(int argc, char *const *argv, FILE *out, FILE *err);
+
+/*
+ * How a command meets a brain from a newer remember (plan 27b). The one table of
+ * the read-or-write class of every command: a read works and warns, a write is
+ * refused with schema_too_new. UNLISTED is a command the table forgot; a test
+ * fails on it. NO_STORE never opens a brain. rest is the command's own arguments
+ * (settings reads its verb).
+ */
+typedef enum {
+    APP_CMD_UNLISTED = 0,
+    APP_CMD_NO_STORE,
+    APP_CMD_READ,
+    APP_CMD_WRITE
+} AppCommandClass;
+
+AppCommandClass app_command_class(CliCommand command, int rest_argc, const char *const *rest_argv);
 
 /* CLI entrypoint convenience: remember_run against stdout/stderr. */
 int remember_main(int argc, char *const *argv);

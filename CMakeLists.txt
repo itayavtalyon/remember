@@ -346,6 +346,7 @@ set(REMEMBER_TEST_SOURCES
     tests/test_envelope.c
     tests/test_export.c
     tests/test_import_formats.c
+    tests/test_old_cli.c
     tests/fixture_roundtrip.c
 )
 add_executable(remember_tests

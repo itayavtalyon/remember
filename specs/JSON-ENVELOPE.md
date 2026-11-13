@@ -112,7 +112,7 @@ An error object, in order: `code`, `message`, `fix`, `retryable`, then `detail` 
 
 The first error is the one in the envelope. A later error in the same run is dropped.
 
-A warning object, in order: `code`, `message`, then `detail` when present. Warnings have no `fix`. `warnings` is omitted when empty.
+A warning object, in order: `code`, `message`, then `fix` when the warning has one (`decision:2026-11-12-e3-warnings-have-fix-field`; `schema_too_new_read_only` carries one, [OLDER-CLI.md](OLDER-CLI.md) § 8.3), then `detail` when present. `warnings` is omitted when empty.
 
 With `--json`, the envelope on stdout holds the error and the warnings, and stderr is empty. The CLI has no `--json-errors` flag.
 
@@ -126,6 +126,7 @@ Exit codes:
 | 3 | Wrong bin (`expired`, `not_expired`, `deleted`, `not_deleted`). |
 | 4 | A warning under `--strict`, or under `REMEMBER_STRICT=1` exactly. Any other value of that variable leaves strict off. |
 | 5 | `confirmation_required`: the command needs `--yes` and did not get it. |
+| 75 | `schema_too_new`: a write to a brain made by a newer remember ([OLDER-CLI.md](OLDER-CLI.md) § 8.4). |
 
 Exit 4 applies to every warning code, including when the command also failed. The JSON object is the same. Only the exit changes.
 

@@ -581,7 +581,8 @@ static const char k_idle_scope[] =
     "remember: \"remember.plugins.idle_timeout\" is a user setting; it can't be set for one "
     "brain. Run the command again with --scope user, or without --scope.\n";
 static const char k_newer_brain[] =
-    "this brain was written by a newer remember. You can read it. Upgrade to write to it.";
+    "this brain was made by a newer version of remember, so it is read-only here. You can still "
+    "read and export it.";
 
 // NOLINTBEGIN(bugprone-easily-swappable-parameters) paths, then the SQL or the key
 static Store *open_pair(char *tmpl, char *brain, size_t brain_cap, char *userdb, size_t user_cap)

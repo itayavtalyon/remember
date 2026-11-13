@@ -50,10 +50,11 @@ struct Store {
     MigrationWarning *warnings; /* this open's v6 step; nwarnings items */
     size_t nwarnings;
     ChangeSeqTx change_tx;
-    bool schema_too_new;          /* min_reader_version is newer than this engine: read only */
+    int brain_schema;             /* the brain's user_version, read at open */
+    bool schema_too_new;          /* newer schema or min_reader_version: read only */
     bool replace_invalid_sidecar; /* device new only: invalid counts as missing */
     /* NOLINTNEXTLINE(readability-magic-numbers,cppcoreguidelines-avoid-magic-numbers) */
-    char pad_[6]; /* explicit tail padding (kept -Wpadded-clean) */
+    char pad_[2]; /* explicit tail padding (kept -Wpadded-clean) */
 };
 
 /* Directory mode for the DB parent (rwx for owner only). */
@@ -2535,8 +2536,9 @@ static int bind_v6_identity(Store *s, char *err, size_t errlen)
     return 0;
 }
 
-/* 007 ST-10.2: an engine older than min_reader_version opens the brain read
-   only: every brain write then fails with schema_too_new (begin_write). */
+/* An engine older than min_reader_version opens the brain read only: every
+   brain write then fails with schema_too_new (begin_write). A newer
+   schema_version is the same, set in ensure_schema (plan 27b). */
 static int check_reader_version(Store *s, char *err, size_t errlen)
 {
     char *need = NULL;
@@ -2640,10 +2642,16 @@ static int ensure_schema(Store *s, char *err, size_t errlen)
     if (read_user_version(db, &version, err, errlen, serr) != 0) {
         return -1;
     }
+    s->brain_schema = version;
     if (version == SCHEMA_VERSION) {
         goto bind_identity; /* already current; foreign_keys stays ON */
     }
-    if (version < 0 || version > SCHEMA_VERSION - 1) {
+    if (version > SCHEMA_VERSION) {
+        /* A newer brain: read only, whatever its min_reader_version says. */
+        s->schema_too_new = true;
+        return bind_v6_identity(s, err, errlen);
+    }
+    if (version < 0) {
         return check_version(version, err, errlen);
     }
     /* 007 §10 step 1: before BEGIN. */
@@ -2772,6 +2780,18 @@ const StoreError *store_last_error(const Store *s)
     return &s->last;
 }
 
+bool store_newer_brain(const Store *s, StoreSchemaGap *out)
+{
+    if (s == NULL || !s->schema_too_new) {
+        return false;
+    }
+    if (out != NULL) {
+        out->brain_schema = s->brain_schema;
+        out->cli_schema = SCHEMA_VERSION;
+    }
+    return true;
+}
+
 const char *store_path(const Store *s)
 {
     if (s == NULL) {
@@ -2856,9 +2876,10 @@ const char *store_status_message(StoreStatus st)
     case STORE_ERR_BAD_VV:
         return "invalid version vector";
     case STORE_ERR_SCHEMA_TOO_NEW:
-        /* 007 ST-10.2, locked. The JSON fix waits on COPY-PENDING C-01. */
-        return "this brain was written by a newer remember. You can read it. Upgrade to write to "
-               "it.";
+        /* R27b-1 without the schema sentence: the engine knows no CLI numbers. The CLI
+           prints the full line with them (diag_schema_too_new_error). */
+        return "this brain was made by a newer version of remember, so it is read-only here. You "
+               "can still read and export it.";
     default:
         return "store error";
     }
