@@ -14,6 +14,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
+#include <unistd.h>
 
 /*
  * Extra edges for production line coverage: util/output/cli unit paths and
@@ -21,6 +23,91 @@
  */
 
 /* ---- util ---------------------------------------------------------------- */
+
+static char *dup_home_or_null(void)
+{
+    const char *h = getenv("HOME");
+    char *saved;
+    size_t n;
+    if (h == NULL) {
+        return NULL;
+    }
+    n = strlen(h);
+    saved = (char *)malloc(n + 1U);
+    if (saved == NULL) {
+        return NULL;
+    }
+    memcpy(saved, h, n + 1U);
+    return saved;
+}
+
+/* A temp HOME. content NULL leaves ~/.remember/default-db missing. The old
+   HOME comes back in given_home_release. REMEMBER_DB and XDG_DATA_HOME start
+   unset so the dev machine's own environment cannot reach a test. */
+typedef struct {
+    char dir[64];
+    char *saved_home;
+} GivenHome;
+
+static void given_home(GivenHome *h, const char *content)
+{
+    char file[96];
+    FILE *f;
+    (void)snprintf(h->dir, sizeof(h->dir), "/tmp/remember-defdb-XXXXXX");
+    ASSERT_TRUE(mkdtemp(h->dir) != NULL);
+    h->saved_home = dup_home_or_null();
+    ASSERT_EQ_INT(setenv("HOME", h->dir, 1), 0);
+    unsetenv("REMEMBER_DB");
+    unsetenv("XDG_DATA_HOME");
+    (void)snprintf(file, sizeof(file), "%s/.remember", h->dir);
+    ASSERT_EQ_INT(mkdir(file, 0700), 0);
+    if (content == NULL) {
+        return;
+    }
+    (void)snprintf(file, sizeof(file), "%s/.remember/default-db", h->dir);
+    f = fopen(file, "wb");
+    ASSERT_TRUE(f != NULL);
+    ASSERT_EQ_INT(fwrite(content, 1, strlen(content), f), strlen(content));
+    ASSERT_EQ_INT(fclose(f), 0);
+}
+
+static void given_home_release(GivenHome *h)
+{
+    unsetenv("REMEMBER_DB");
+    unsetenv("XDG_DATA_HOME");
+    if (h->saved_home != NULL) {
+        (void)setenv("HOME", h->saved_home, 1);
+        free(h->saved_home);
+    }
+    harness_remove_tree(h->dir);
+}
+
+/* The brain path under the temp HOME when no default-db line is used. */
+static void given_builtin_path(const GivenHome *h, char *out, size_t outlen)
+{
+    (void)snprintf(out, outlen, "%s/.remember/remember.db", h->dir);
+}
+
+static int default_db_exists(const GivenHome *h)
+{
+    char file[96];
+    struct stat st;
+    (void)snprintf(file, sizeof(file), "%s/.remember/default-db", h->dir);
+    return stat(file, &st) == 0;
+}
+
+static int default_db_is(const GivenHome *h, const char *want)
+{
+    char file[96];
+    char *got;
+    size_t len = 0;
+    int same;
+    (void)snprintf(file, sizeof(file), "%s/.remember/default-db", h->dir);
+    got = harness_read_file(file, &len);
+    same = got != NULL && strcmp(got, want) == 0;
+    free(got);
+    return same;
+}
 
 TEST(util_resolve_null_buffer_fails)
 {
@@ -39,14 +126,14 @@ TEST(util_resolve_zero_buflen_fails)
 
 TEST(util_resolve_empty_env_falls_through_to_home)
 {
+    GivenHome h;
     char buf[REMEMBER_PATH_MAX];
     char err[64];
-    const char *home = getenv("HOME");
-    ASSERT_TRUE(home != NULL && home[0] != '\0');
+    given_home(&h, NULL);
     ASSERT_EQ_INT(setenv("REMEMBER_DB", "", 1), 0);
     ASSERT_EQ_INT(util_resolve_db_path(NULL, buf, sizeof(buf), err, sizeof(err)), 0);
     ASSERT_STR_CONTAINS(buf, "/.remember/remember.db");
-    unsetenv("REMEMBER_DB");
+    given_home_release(&h);
 }
 
 TEST(util_resolve_path_too_long)
@@ -61,23 +148,6 @@ TEST(util_resolve_path_too_long)
     longp[sizeof(longp) - 1U] = '\0';
     ASSERT_EQ_INT(util_resolve_db_path(longp, buf, sizeof(buf), err, sizeof(err)), -1);
     ASSERT_STR_CONTAINS(err, "too long");
-}
-
-static char *dup_home_or_null(void)
-{
-    const char *h = getenv("HOME");
-    char *saved;
-    size_t n;
-    if (h == NULL) {
-        return NULL;
-    }
-    n = strlen(h);
-    saved = (char *)malloc(n + 1U);
-    if (saved == NULL) {
-        return NULL;
-    }
-    memcpy(saved, h, n + 1U);
-    return saved;
 }
 
 TEST(util_resolve_home_missing)
@@ -127,6 +197,198 @@ TEST(util_resolve_default_path_buffer_too_small)
     ASSERT_STR_CONTAINS(err, "too long");
     (void)setenv("HOME", saved, 1);
     free(saved);
+}
+
+/* ---- util: default-db (plan 27) ------------------------------------------ */
+
+TEST(util_resolve_env_hides_default_db)
+{
+    GivenHome h;
+    char buf[REMEMBER_PATH_MAX];
+    char err[128];
+    given_home(&h, "/tmp/from-file.db\n");
+    ASSERT_EQ_INT(setenv("REMEMBER_DB", "/tmp/from-env.db", 1), 0);
+    ASSERT_EQ_INT(util_resolve_db_path(NULL, buf, sizeof(buf), err, sizeof(err)), 0);
+    ASSERT_STREQ(buf, "/tmp/from-env.db");
+    given_home_release(&h);
+}
+
+TEST(util_resolve_cli_db_hides_default_db)
+{
+    GivenHome h;
+    char buf[REMEMBER_PATH_MAX];
+    char err[128];
+    given_home(&h, "/tmp/from-file.db\n");
+    ASSERT_EQ_INT(util_resolve_db_path("/tmp/from-cli.db", buf, sizeof(buf), err, sizeof(err)), 0);
+    ASSERT_STREQ(buf, "/tmp/from-cli.db");
+    given_home_release(&h);
+}
+
+TEST(util_resolve_default_db_absolute_line_is_the_brain)
+{
+    GivenHome h;
+    char buf[REMEMBER_PATH_MAX];
+    char err[128];
+    given_home(&h, "/tmp/from-file.db\n");
+    ASSERT_EQ_INT(util_resolve_db_path(NULL, buf, sizeof(buf), err, sizeof(err)), 0);
+    ASSERT_STREQ(buf, "/tmp/from-file.db");
+    given_home_release(&h);
+}
+
+TEST(util_resolve_default_db_missing_file_uses_builtin_and_creates_nothing)
+{
+    GivenHome h;
+    char buf[REMEMBER_PATH_MAX];
+    char err[128];
+    char want[128];
+    given_home(&h, NULL);
+    ASSERT_EQ_INT(util_resolve_db_path(NULL, buf, sizeof(buf), err, sizeof(err)), 0);
+    given_builtin_path(&h, want, sizeof(want));
+    ASSERT_STREQ(buf, want);
+    ASSERT_FALSE(default_db_exists(&h));
+    given_home_release(&h);
+}
+
+TEST(util_resolve_default_db_empty_line_uses_builtin_and_creates_nothing)
+{
+    GivenHome h;
+    char buf[REMEMBER_PATH_MAX];
+    char err[128];
+    char want[128];
+    given_home(&h, "\n");
+    ASSERT_EQ_INT(util_resolve_db_path(NULL, buf, sizeof(buf), err, sizeof(err)), 0);
+    given_builtin_path(&h, want, sizeof(want));
+    ASSERT_STREQ(buf, want);
+    ASSERT_TRUE(default_db_is(&h, "\n"));
+    given_home_release(&h);
+}
+
+TEST(util_resolve_default_db_blank_line_uses_builtin)
+{
+    GivenHome h;
+    char buf[REMEMBER_PATH_MAX];
+    char err[128];
+    char want[128];
+    given_home(&h, " \t\r\n");
+    ASSERT_EQ_INT(util_resolve_db_path(NULL, buf, sizeof(buf), err, sizeof(err)), 0);
+    given_builtin_path(&h, want, sizeof(want));
+    ASSERT_STREQ(buf, want);
+    given_home_release(&h);
+}
+
+TEST(util_resolve_default_db_relative_line_uses_builtin_and_creates_nothing)
+{
+    GivenHome h;
+    char buf[REMEMBER_PATH_MAX];
+    char err[128];
+    char want[128];
+    given_home(&h, "rel/brain.db\n");
+    ASSERT_EQ_INT(util_resolve_db_path(NULL, buf, sizeof(buf), err, sizeof(err)), 0);
+    given_builtin_path(&h, want, sizeof(want));
+    ASSERT_STREQ(buf, want);
+    ASSERT_TRUE(default_db_is(&h, "rel/brain.db\n"));
+    given_home_release(&h);
+}
+
+TEST(util_resolve_default_db_trims_ascii_whitespace_and_needs_no_newline)
+{
+    GivenHome h;
+    char buf[REMEMBER_PATH_MAX];
+    char err[128];
+    given_home(&h, " \t/tmp/trimmed.db \r\n");
+    ASSERT_EQ_INT(util_resolve_db_path(NULL, buf, sizeof(buf), err, sizeof(err)), 0);
+    ASSERT_STREQ(buf, "/tmp/trimmed.db");
+    given_home_release(&h);
+    given_home(&h, "/tmp/no-newline.db");
+    ASSERT_EQ_INT(util_resolve_db_path(NULL, buf, sizeof(buf), err, sizeof(err)), 0);
+    ASSERT_STREQ(buf, "/tmp/no-newline.db");
+    given_home_release(&h);
+}
+
+TEST(util_resolve_empty_remember_db_does_not_hide_default_db)
+{
+    GivenHome h;
+    char buf[REMEMBER_PATH_MAX];
+    char err[128];
+    given_home(&h, "/tmp/from-file.db\n");
+    ASSERT_EQ_INT(setenv("REMEMBER_DB", "", 1), 0);
+    ASSERT_EQ_INT(util_resolve_db_path(NULL, buf, sizeof(buf), err, sizeof(err)), 0);
+    ASSERT_STREQ(buf, "/tmp/from-file.db");
+    given_home_release(&h);
+}
+
+/* Both spellings fail with the sentence --db gives, and the file survives. */
+TEST(util_resolve_default_db_ephemeral_fails_like_cli_db)
+{
+    static const char *const lines[] = {":memory:\n", "file:/tmp/x.db\n"};
+    size_t i;
+    for (i = 0; i < 2U; i++) {
+        GivenHome h;
+        char buf[REMEMBER_PATH_MAX];
+        char err[128];
+        char want[128];
+        char line[32];
+        given_home(&h, lines[i]);
+        (void)snprintf(line, sizeof(line), "%s", lines[i]);
+        line[strlen(line) - 1U] = '\0';
+        ASSERT_EQ_INT(util_resolve_db_path(line, buf, sizeof(buf), want, sizeof(want)), -1);
+        ASSERT_STR_CONTAINS(want, "must be a regular file");
+        ASSERT_EQ_INT(util_resolve_db_path(NULL, buf, sizeof(buf), err, sizeof(err)), -1);
+        ASSERT_STREQ(err, want);
+        ASSERT_TRUE(default_db_is(&h, lines[i]));
+        given_home_release(&h);
+    }
+}
+
+TEST(util_resolve_default_db_xdg_data_home_does_not_move_it)
+{
+    GivenHome h;
+    char buf[REMEMBER_PATH_MAX];
+    char err[128];
+    char want[128];
+    char xdg[128];
+    char dir[160];
+    FILE *f;
+    given_home(&h, "/tmp/from-home.db\n");
+    (void)snprintf(xdg, sizeof(xdg), "%s/xdg", h.dir);
+    ASSERT_EQ_INT(mkdir(xdg, 0700), 0);
+    (void)snprintf(dir, sizeof(dir), "%s/.remember", xdg);
+    ASSERT_EQ_INT(mkdir(dir, 0700), 0);
+    (void)snprintf(dir, sizeof(dir), "%s/.remember/default-db", xdg);
+    f = fopen(dir, "wb");
+    ASSERT_TRUE(f != NULL);
+    ASSERT_TRUE(fputs("/tmp/from-xdg.db\n", f) >= 0);
+    ASSERT_EQ_INT(fclose(f), 0);
+    ASSERT_EQ_INT(setenv("XDG_DATA_HOME", xdg, 1), 0);
+    ASSERT_EQ_INT(util_resolve_db_path(NULL, buf, sizeof(buf), err, sizeof(err)), 0);
+    ASSERT_STREQ(buf, "/tmp/from-home.db");
+    ASSERT_EQ_INT(unlink(strcat(strcpy(dir, h.dir), "/.remember/default-db")), 0);
+    ASSERT_EQ_INT(util_resolve_db_path(NULL, buf, sizeof(buf), err, sizeof(err)), 0);
+    given_builtin_path(&h, want, sizeof(want));
+    ASSERT_STREQ(buf, want);
+    given_home_release(&h);
+}
+
+TEST(util_resolve_default_db_line_too_long_fails)
+{
+    GivenHome h;
+    char buf[16];
+    char err[128];
+    char big[REMEMBER_PATH_MAX + 64];
+    given_home(&h, "/a/path/longer/than/sixteen.db\n");
+    ASSERT_EQ_INT(util_resolve_db_path(NULL, buf, sizeof(buf), err, sizeof(err)), -1);
+    ASSERT_STR_CONTAINS(err, "too long");
+    given_home_release(&h);
+    memset(big, 'a', sizeof(big) - 1U);
+    big[0] = '/';
+    big[sizeof(big) - 1U] = '\0';
+    given_home(&h, big);
+    {
+        char wide[REMEMBER_PATH_MAX * 2];
+        ASSERT_EQ_INT(util_resolve_db_path(NULL, wide, sizeof(wide), err, sizeof(err)), -1);
+        ASSERT_STR_CONTAINS(err, "too long");
+    }
+    given_home_release(&h);
 }
 
 TEST(util_set_err_truncates)
@@ -894,6 +1156,18 @@ void register_coverage_edges_tests(void)
     RUN_TEST(util_resolve_home_missing);
     RUN_TEST(util_resolve_home_empty);
     RUN_TEST(util_resolve_default_path_buffer_too_small);
+    RUN_TEST(util_resolve_env_hides_default_db);
+    RUN_TEST(util_resolve_cli_db_hides_default_db);
+    RUN_TEST(util_resolve_default_db_absolute_line_is_the_brain);
+    RUN_TEST(util_resolve_default_db_missing_file_uses_builtin_and_creates_nothing);
+    RUN_TEST(util_resolve_default_db_empty_line_uses_builtin_and_creates_nothing);
+    RUN_TEST(util_resolve_default_db_blank_line_uses_builtin);
+    RUN_TEST(util_resolve_default_db_relative_line_uses_builtin_and_creates_nothing);
+    RUN_TEST(util_resolve_default_db_trims_ascii_whitespace_and_needs_no_newline);
+    RUN_TEST(util_resolve_empty_remember_db_does_not_hide_default_db);
+    RUN_TEST(util_resolve_default_db_ephemeral_fails_like_cli_db);
+    RUN_TEST(util_resolve_default_db_xdg_data_home_does_not_move_it);
+    RUN_TEST(util_resolve_default_db_line_too_long_fails);
     RUN_TEST(util_set_err_truncates);
     RUN_TEST(util_read_stdin_null_out);
     RUN_TEST(output_json_string_null_out_fails);

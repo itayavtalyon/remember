@@ -16,6 +16,7 @@ A spec describes what `remember` does today. It is normative.
 | [JSON-STYLE.md](JSON-STYLE.md) | `subject:json-envelope` | JSON value rules for every surface |
 | [JSON-ENVELOPE.md](JSON-ENVELOPE.md) | `subject:json-envelope` | Message envelope for CLI `--json` |
 | [OUTBOX-DELIVERY.md](OUTBOX-DELIVERY.md) | `subject:plugins-and-hooks` | Recipient state machine: backoff retry, pre-flight failure, 100-hop halt, 7-day drop, lanes |
+| [DEFAULT-DB.md](DEFAULT-DB.md) | `subject:data`, `subject:ui-overhaul` | Brain path order and the `~/.remember/default-db` file |
 | [SETTINGS.md](SETTINGS.md) | `subject:settings` | Settings registry, layers, user.db, history, sync token, `remember settings` commands, export and import |
 
 ## Not written yet
