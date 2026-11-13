@@ -18,6 +18,8 @@ The brain's `schema_version` is its `PRAGMA user_version`. The highest schema th
 
 ### 8.2 Read or write
 
+`decision:2026-11-13-plan27b-review-grill` (G1, G3).
+
 Every command has one class in one table (`app_command_class`): read, write, or no store.
 
 | Class | Commands |
@@ -26,7 +28,7 @@ Every command has one class in one table (`app_command_class`): read, write, or 
 | Write | `add`, `update`, `delete`, `link`, `unlink`, `rekey`, `purge`, `import`, `conflict`, `repair`, `brain`, and `settings` with `set`, `reset`, `import` |
 | No store | `help`, `version` |
 
-`device new` is a read: it writes the device id file beside the brain and writes nothing to the brain (007 ST-10.2). A command missing from the table fails a test.
+`device new` is a read: it writes the device id file beside the brain and writes nothing to the brain. A command that writes no brain bytes is a read (G1). The class is one per verb: `settings set`, `reset` and `import` are writes also with `--scope user` and with `--dry-run` (G3). A command missing from the table fails a test.
 
 A write is refused before the command runs, so a refused write leaves the brain file byte-identical.
 
@@ -55,7 +57,7 @@ Every write command on a newer brain fails with `schema_too_new`, exit 75 (`EX_T
 
 ### 8.5 What the messages show
 
-`decision:2026-11-01-cli-outdated-version-shown`, `decision:2026-10-31-coexistence-copy`, `decision:2026-10-31-coexistence-copy-2`.
+`decision:2026-11-01-cli-outdated-version-shown`, `decision:2026-10-31-coexistence-copy`, `decision:2026-10-31-coexistence-copy-2`, `decision:2026-11-13-plan27b-review-grill` (G2).
 
 The numbers are schema numbers, never app versions. Both numbers are integers this binary reads or knows, and no text from the brain is echoed. The words `cli_outdated`, `brew upgrade remember` and an app version never appear in these lines. A brain whose `min_reader_version` is newer and whose `schema_version` is equal shows the same number twice.
 

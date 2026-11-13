@@ -175,3 +175,29 @@ Brain at `user_version=7`, ASan binary, `HOME` in a temp dir:
 - decision:2026-10-31-cli-outdated-exit-code changes the "exit 1" of decision:2026-10-31-old-cli-reads-warn-writes-fail, and decision:2026-11-01-newer-brain-error-name drops its `cli_outdated` code. Neither older entry carries an "[Amended by …]" line. Add the lines in Remember before work starts (this pass did not edit Remember).
 - decision:2026-10-31-coexistence-copy and -copy-2 carry an "[Amended 2026-11-12 …]" line in Remember (read-only and write-failure lines replaced by R27b-1). The two older entries named above still lack theirs.
 - Reshaped 2026-11-03 to the no-steps plan shape (decision:2026-11-03-plan-no-steps). The Files list is a review point, the Context rules are What must be true, the must-pass tests are the Definition of Done, and the open items are Prerequisites.
+
+### Second opinion (Opus, 2026-11-13)
+
+Every Review point and Definition of Done box was checked against the code and the decisions in Source. Copy: the four R27b-1 lines match `decision:2026-11-12-copy-batch-final` byte for byte (the test literals were compared with the decision text). `cli_outdated` and `brew upgrade` appear nowhere in `src/`. The diff stays inside the listed files plus the required build and test files that deviation 8 lists. The class table covers every `CliCommand`. A forgotten entry is `APP_CMD_UNLISTED`, which `old_cli_every_command_has_a_class` refuses.
+
+Fixed in review:
+
+- **R1 (exploit, Improvement): a newer remember that upgrades the brain while this open waits for the write lock made the open fail.** `ensure_schema` read `user_version` 5, then `migrate_to_current` re-read 7 under `BEGIN IMMEDIATE` and returned "database is newer than this remember". Its comment still said "same refusal as the outer gate", but the outer gate no longer refuses a newer brain. Test `old_cli_a_brain_upgraded_during_the_open_opens_read_only`: a child opens the brain while the parent holds the lock and commits `user_version = 7`. It was red before the fix (child exit 1). Fix: `migrate_to_current` hands any version at or above 6 back to the caller (rc 1, `brain_schema` set). `ensure_schema` sends current and newer brains through `bind_identity`, which now sets `schema_too_new` for a newer schema. `check_version` is gone, because both of its callers now see only a negative version (-9 lines).
+- **R2 (Nit): `docs/engineering-notes.md` `store_open` line still said `>6→error`.** It now points to Read-only brains.
+- **R3 (Remember):** the coder's two "[Amended 2026-11-13 …]" lines are accurate. `cli-outdated-warning-frequency` and `cli-outdated-exit-code` still named `cli_outdated…` with no amend line; each now has one. The `--kind cites` links that `workflow:decision-tags` asks for were added from `schema-read-only` and `copy-batch-final` to the amended entries.
+
+Probes that held (built binary, brain at `user_version` 7): a brain with no `<brain>.d/device_id` mints the sidecar under an empty write transaction and leaves the brain bytes identical (now `old_cli_a_read_without_a_sidecar_leaves_the_brain_unchanged`). `settings --json set` is a usage error, not a read (the verb must be `rest_argv[0]`). The fixed 256-byte message holds `INT_MAX`.
+
+Review mutants (build exit checked, `old_cli` run; all killed): DEVICE to write (`old_cli_device_new_is_a_read_that_warns`, `old_cli_every_read_command_warns_every_time`); settings `import` dropped from the write verbs (`old_cli_every_write_command_is_refused`, the `--dry-run` row); `migrate_to_current` without `s->brain_schema = version`, and with `==` for `>=` (`old_cli_a_brain_upgraded_during_the_open_opens_read_only`); the newer check at `bind_identity` off (six `old_cli` tests).
+
+Simplify pass (S):
+- R1 removes `check_version` and the duplicated newer-brain branch (-9 lines).
+- Declined: a shared `write_fix` for the error and warning `"fix"` members. It came to +3 lines.
+- Declined: moving `settings_verb_writes` beside `settings_verb` in `cmd_settings.c`. It would be one less place naming the verbs, but no lines are saved and it is an API change outside the file list. Left as a Nit.
+- Test overlap: `old_cli_no_brew_command_in_output` re-asserts the exact lines that the read and write tests already pin. It is kept as the named DoD test.
+
+Security pass (A): the numbers come from `PRAGMA user_version` and the build, and no `brain_meta` text is echoed. Writes are refused twice, by the class table and by `begin_write` plus the repair check. A refused write never opens a transaction. Known limits, not opened here:
+- An `APP_CMD_UNLISTED` command would run as a read. Only the test, not the runtime, stops that, and the store refusal still holds.
+- A newer brain in WAL mode with frames left by a crashed newer writer is checkpointed by this CLI's last close. The logical content is unchanged, the bytes are not.
+
+Grills answered by Itay (`decision:2026-11-13-plan27b-review-grill`, G1 A, G2 A, G3 A, G4 yes): `device new` stays a read (`old_cli_device_new_is_a_read_that_warns`); the same-schema line ships as is; `settings set|reset --scope user` and `settings import --dry-run` exit 75 (rows in `old_cli_every_write_command_is_refused`); the four accepted decisions stay accepted. The G2 variant and the `--help` exit-code rows (5, 75) are copy requests with Story Weaver, follow-ups outside 27b.

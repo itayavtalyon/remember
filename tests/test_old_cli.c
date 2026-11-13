@@ -7,9 +7,13 @@
 #include "test.h"
 
 #include <limits.h>
+#include <sqlite3.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/types.h>
+#include <sys/wait.h>
+#include <time.h>
 #include <unistd.h>
 
 /*
@@ -19,7 +23,13 @@
  * this build wrote, with user_version raised past the schema this build knows.
  */
 
-enum { OLD_CLI_SCHEMA = 6, OLD_CLI_NEWER = 7, OLD_CLI_SQL_BUF = 64, OLD_CLI_MAX_ARGS = 8 };
+enum {
+    OLD_CLI_SCHEMA = 6,
+    OLD_CLI_NEWER = 7,
+    OLD_CLI_SQL_BUF = 64,
+    OLD_CLI_MAX_ARGS = 8,
+    OLD_CLI_BUSY_MS = 5000
+};
 
 /* R27b-1, schema 7 brain and schema 6 build. Literal, never built from the code. */
 #define K_NEWER_MESSAGE                                                                            \
@@ -94,6 +104,64 @@ TEST(old_cli_the_store_refuses_a_write_on_a_newer_schema)
                      STORE_ERR_SCHEMA_TOO_NEW);
     ASSERT_EQ_STATUS(store_brain_new_id(s, &id), STORE_ERR_SCHEMA_TOO_NEW);
     store_close(s);
+    free(db);
+}
+
+/* Review 2026-11-13: a newer remember upgrades the brain after this open read
+   user_version 5 and before it takes the write lock. The open re-reads the
+   version under the lock and must open read only, as the outer gate does, not
+   fail with "database is newer". The child waits on a pipe until the parent
+   holds the lock (no SQLite handle crosses the fork). */
+TEST(old_cli_a_brain_upgraded_during_the_open_opens_read_only)
+{
+    static const struct timespec k_window = {0, 300000000L}; /* child reaches BEGIN */
+    char *db = given_brain_at_schema(OLD_CLI_SCHEMA - 1);
+    sqlite3 *raw = NULL;
+    char *version = NULL;
+    int ready[2] = {-1, -1};
+    int status = 0;
+    pid_t pid = 0;
+    char token = 'g';
+
+    // NOLINTNEXTLINE(android-cloexec-pipe) macOS has no pipe2; the child execs nothing
+    ASSERT_EQ_INT(pipe(ready), 0);
+    (void)fflush(stdout);
+    (void)fflush(stderr);
+    pid = fork();
+    ASSERT_TRUE(pid >= 0);
+    if (pid == 0) {
+        char err[ERR_BUFSIZE];
+        StoreSchemaGap gap = {0, 0};
+        Store *s = NULL;
+        int code = 1;
+
+        (void)close(ready[1]);
+        if (read(ready[0], &token, 1) != 1) {
+            _exit(2);
+        }
+        s = store_open(db, err, sizeof(err));
+        if (s != NULL && store_newer_brain(s, &gap) && gap.brain_schema == OLD_CLI_NEWER) {
+            code = 0;
+        }
+        store_close(s);
+        _exit(code);
+    }
+    (void)close(ready[0]);
+    ASSERT_EQ_INT(sqlite3_open(db, &raw), SQLITE_OK);
+    ASSERT_EQ_INT(sqlite3_busy_timeout(raw, OLD_CLI_BUSY_MS), SQLITE_OK);
+    ASSERT_EQ_INT(sqlite3_exec(raw, "BEGIN IMMEDIATE;", NULL, NULL, NULL), SQLITE_OK);
+    ASSERT_EQ_INT((int)write(ready[1], &token, 1), 1);
+    (void)close(ready[1]);
+    (void)nanosleep(&k_window, NULL);
+    ASSERT_EQ_INT(sqlite3_exec(raw, "PRAGMA user_version = 7; COMMIT;", NULL, NULL, NULL),
+                  SQLITE_OK);
+    (void)sqlite3_close(raw);
+    ASSERT_EQ_INT((int)waitpid(pid, &status, 0), (int)pid);
+    ASSERT_TRUE(WIFEXITED(status) != 0);
+    ASSERT_EQ_INT(WEXITSTATUS(status), 0);
+    version = harness_sqlite_query_line(db, "PRAGMA user_version;");
+    ASSERT_STREQ(version, "7");
+    free(version);
     free(db);
 }
 
@@ -284,6 +352,11 @@ static const Invocation k_writes[] = {
     {{"settings", "set", "remember.search.max_results", "50", NULL}},
     {{"settings", "reset", "remember.search.max_results", NULL}},
     {{"settings", "import", "/nonexistent/settings.json", NULL}},
+    /* decision:2026-11-13-plan27b-review-grill G3: one class per verb, whatever the
+       scope or --dry-run. */
+    {{"settings", "set", "remember.search.max_results", "50", "--scope", "user", NULL}},
+    {{"settings", "reset", "remember.search.max_results", "--scope", "user", NULL}},
+    {{"settings", "import", "--dry-run", "/nonexistent/settings.json", NULL}},
     {{"brain", "new-id", NULL}},
 };
 
@@ -384,6 +457,58 @@ TEST(old_cli_export_warns_every_time)
     }
     assert_unchanged(db, &before);
     snapshot_free(&before);
+    free(db);
+}
+
+/* decision:2026-11-13-plan27b-review-grill G1: device new writes no brain bytes,
+   so it is a read. It mints a new sidecar id, warns, and exits 0. */
+TEST(old_cli_device_new_is_a_read_that_warns)
+{
+    char *db = given_brain_at_schema(OLD_CLI_NEWER);
+    char *sidecar = harness_side_path(db, ".d/device_id");
+    char *before_id = harness_read_line(sidecar);
+    Snapshot before = given_snapshot(db);
+    CmdResult r = RUN_ARGS(db, "device", "new");
+    char *after_id = harness_read_line(sidecar);
+
+    ASSERT_EQ_INT(r.exit_code, 0);
+    ASSERT_STREQ(r.err, K_READ_LINE);
+    ASSERT_TRUE(before_id != NULL && after_id != NULL);
+    ASSERT_TRUE(before_id != NULL && after_id != NULL && strcmp(before_id, after_id) != 0);
+    assert_unchanged(db, &before);
+    cmd_result_free(&r);
+    snapshot_free(&before);
+    free(after_id);
+    free(before_id);
+    free(sidecar);
+    free(db);
+}
+
+/* A newer brain copied without its <brain>.d folder: the read mints the sidecar
+   under an empty write transaction and leaves the brain bytes as they were. */
+TEST(old_cli_a_read_without_a_sidecar_leaves_the_brain_unchanged)
+{
+    char *db = given_brain_at_schema(OLD_CLI_NEWER);
+    char *dir = harness_side_path(db, ".d");
+    char *sidecar = harness_side_path(db, ".d/device_id");
+    Snapshot before;
+    CmdResult r;
+    char *id = NULL;
+
+    harness_remove_tree(dir);
+    ASSERT_TRUE(access(sidecar, F_OK) != 0);
+    before = given_snapshot(db);
+    r = RUN_ARGS(db, "list");
+    ASSERT_EQ_INT(r.exit_code, 0);
+    ASSERT_STREQ(r.err, K_READ_LINE);
+    assert_unchanged(db, &before);
+    id = harness_read_line(sidecar);
+    ASSERT_TRUE(id != NULL);
+    cmd_result_free(&r);
+    snapshot_free(&before);
+    free(id);
+    free(sidecar);
+    free(dir);
     free(db);
 }
 
@@ -558,6 +683,7 @@ void register_old_cli_tests(void)
 {
     RUN_TEST(old_cli_detect_by_schema_version);
     RUN_TEST(old_cli_the_store_refuses_a_write_on_a_newer_schema);
+    RUN_TEST(old_cli_a_brain_upgraded_during_the_open_opens_read_only);
     RUN_TEST(old_cli_newer_brain_read_human);
     RUN_TEST(old_cli_newer_brain_read_json);
     RUN_TEST(old_cli_newer_brain_write_human);
@@ -567,6 +693,8 @@ void register_old_cli_tests(void)
     RUN_TEST(old_cli_every_write_command_is_refused);
     RUN_TEST(old_cli_every_read_command_warns_every_time);
     RUN_TEST(old_cli_export_warns_every_time);
+    RUN_TEST(old_cli_device_new_is_a_read_that_warns);
+    RUN_TEST(old_cli_a_read_without_a_sidecar_leaves_the_brain_unchanged);
     RUN_TEST(old_cli_every_command_has_a_class);
     RUN_TEST(old_cli_the_class_table_splits_reads_from_writes);
     RUN_TEST(old_cli_a_command_leaves_no_journal_and_no_new_bytes);
