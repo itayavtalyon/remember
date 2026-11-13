@@ -49,10 +49,24 @@ typedef struct {
     char *saved_home;
 } GivenHome;
 
+static void write_text_file(const char *path, const char *content)
+{
+    FILE *f = fopen(path, "wb");
+    int wrote = 0;
+    int closed = 0;
+    if (f == NULL) {
+        ASSERT_TRUE(f != NULL);
+        return;
+    }
+    wrote = fputs(content, f);
+    closed = fclose(f);
+    ASSERT_TRUE(wrote >= 0);
+    ASSERT_EQ_INT(closed, 0);
+}
+
 static void given_home(GivenHome *h, const char *content)
 {
     char file[96];
-    FILE *f;
     (void)snprintf(h->dir, sizeof(h->dir), "/tmp/remember-defdb-XXXXXX");
     ASSERT_TRUE(mkdtemp(h->dir) != NULL);
     h->saved_home = dup_home_or_null();
@@ -65,10 +79,7 @@ static void given_home(GivenHome *h, const char *content)
         return;
     }
     (void)snprintf(file, sizeof(file), "%s/.remember/default-db", h->dir);
-    f = fopen(file, "wb");
-    ASSERT_TRUE(f != NULL);
-    ASSERT_EQ_INT(fwrite(content, 1, strlen(content), f), strlen(content));
-    ASSERT_EQ_INT(fclose(f), 0);
+    write_text_file(file, content);
 }
 
 static void given_home_release(GivenHome *h)
@@ -261,14 +272,6 @@ TEST(util_resolve_default_db_empty_line_uses_builtin_and_creates_nothing)
     ASSERT_STREQ(buf, want);
     ASSERT_TRUE(default_db_is(&h, "\n"));
     given_home_release(&h);
-}
-
-TEST(util_resolve_default_db_blank_line_uses_builtin)
-{
-    GivenHome h;
-    char buf[REMEMBER_PATH_MAX];
-    char err[128];
-    char want[128];
     given_home(&h, " \t\r\n");
     ASSERT_EQ_INT(util_resolve_db_path(NULL, buf, sizeof(buf), err, sizeof(err)), 0);
     given_builtin_path(&h, want, sizeof(want));
@@ -348,17 +351,13 @@ TEST(util_resolve_default_db_xdg_data_home_does_not_move_it)
     char want[128];
     char xdg[128];
     char dir[160];
-    FILE *f;
     given_home(&h, "/tmp/from-home.db\n");
     (void)snprintf(xdg, sizeof(xdg), "%s/xdg", h.dir);
     ASSERT_EQ_INT(mkdir(xdg, 0700), 0);
     (void)snprintf(dir, sizeof(dir), "%s/.remember", xdg);
     ASSERT_EQ_INT(mkdir(dir, 0700), 0);
     (void)snprintf(dir, sizeof(dir), "%s/.remember/default-db", xdg);
-    f = fopen(dir, "wb");
-    ASSERT_TRUE(f != NULL);
-    ASSERT_TRUE(fputs("/tmp/from-xdg.db\n", f) >= 0);
-    ASSERT_EQ_INT(fclose(f), 0);
+    write_text_file(dir, "/tmp/from-xdg.db\n");
     ASSERT_EQ_INT(setenv("XDG_DATA_HOME", xdg, 1), 0);
     ASSERT_EQ_INT(util_resolve_db_path(NULL, buf, sizeof(buf), err, sizeof(err)), 0);
     ASSERT_STREQ(buf, "/tmp/from-home.db");
@@ -1161,7 +1160,6 @@ void register_coverage_edges_tests(void)
     RUN_TEST(util_resolve_default_db_absolute_line_is_the_brain);
     RUN_TEST(util_resolve_default_db_missing_file_uses_builtin_and_creates_nothing);
     RUN_TEST(util_resolve_default_db_empty_line_uses_builtin_and_creates_nothing);
-    RUN_TEST(util_resolve_default_db_blank_line_uses_builtin);
     RUN_TEST(util_resolve_default_db_relative_line_uses_builtin_and_creates_nothing);
     RUN_TEST(util_resolve_default_db_trims_ascii_whitespace_and_needs_no_newline);
     RUN_TEST(util_resolve_empty_remember_db_does_not_hide_default_db);

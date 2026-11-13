@@ -58,4 +58,38 @@ A path taken from the file goes through the existing `copy_regular_db_path`. Do 
 
 ## Implementation Notes
 
+Code: `read_default_db`, `use_default_db` and `trim_ascii_space` in `src/util.c`. `util_resolve_db_path` calls `use_default_db` after `--db` and `REMEMBER_DB`. Tests: `tests/test_coverage_edges.c` (suite `coverage_edges`, already in `tests/gate-suites`). Spec: `specs/DEFAULT-DB.md`.
+
+Two points the plan implies:
+- A line goes through `copy_regular_db_path` before the absolute check. `:memory:` is not absolute, so an absolute check first would make it "no file" and break the Definition of Done item that says it fails like `--db`. A relative line that is also longer than the caller's buffer fails with `database path is too long`, not "no file".
+- The code has no rule for a second line or for invalid UTF-8. The file is read (at most `PATH_MAX + 1` bytes) as one string. A second line stays in the string. A NUL byte ends the C string, so `/tmp/a<NUL>/b` selects `/tmp/a` (run: it created a brain at `/tmp/a`). A file of `PATH_MAX + 1` bytes or more fails with `database path is too long`; a symlink to `/dev/zero` therefore fails that way. A FIFO at `default-db` blocks `fopen`, as a FIFO given to `--db` does.
+
+Test order and red runs (`remember_tests --only coverage_edges`, before the production change): `an absolute line is the brain path`, the trim test, `util_resolve_empty_remember_db_does_not_hide_default_db`, the `:memory:`/`file:` test, the XDG test and the too-long test were red. The tests for `a set REMEMBER_DB hides default-db`, `--db` hiding the file, a missing file, an empty line, a blank line and a relative line passed before the change, because the old code already did that. They guard the mutants below.
+
+Mutants (each built, then the suite run; all red unless noted):
+
+| Mutant | Red tests |
+|---|---|
+| relative line accepted (`buf[0] != '\0'`) | `..._relative_line_uses_builtin_and_creates_nothing` |
+| absolute check before `copy_regular_db_path` | `..._ephemeral_fails_like_cli_db` |
+| no leading trim | `..._trims_ascii_whitespace_and_needs_no_newline` |
+| no trailing trim (`strchr("", c)`) | absolute-line, trim, empty-`REMEMBER_DB`, ephemeral, XDG tests |
+| too-long guard `==` to `>` | `..._line_too_long_fails` |
+| error from `use_default_db` swallowed | ephemeral and too-long tests |
+| file name `default-dbx` | absolute-line, trim, empty-`REMEMBER_DB`, ephemeral, XDG, too-long tests |
+| `fopen "a+"` (creates the file) | `..._missing_file_uses_builtin_and_creates_nothing` and the tests that read the file |
+| file read before `--db`/`REMEMBER_DB` | `util_resolve_env_hides_default_db`, `util_resolve_cli_db_hides_default_db` |
+| empty `REMEMBER_DB` hides the file | `util_resolve_empty_remember_db_does_not_hide_default_db`, `util_resolve_empty_env_falls_through_to_home` |
+| `XDG_DATA_HOME` moves the file | `..._xdg_data_home_does_not_move_it` |
+| `--db` loses to the file | `util_resolve_cli_db_hides_default_db` |
+| `REMEMBER_DB` read before `--db` | survived: old precedence, not a clause of this plan, no test names it |
+
+Equivalent mutant removed instead of tested: the check `line[0] == '\0'` before `copy_regular_db_path`. An empty line copies as an empty string and then fails the absolute check, so the result is the same. The line was deleted (simplify pass).
+
+Simplify candidates: the empty-line check (deleted, 3 lines); the blank-line test (merged into the empty-line test, about 10 lines); the two `fopen` sites in the tests (one `write_text_file` helper, 8 lines, and cppcheck's leak finding); `given_home` and `given_builtin_path` are used by every new test and by the changed empty-env test (kept).
+
+Hostile-line probes run on the binary (HOME set to a temp dir): ESC and newline in the path, a 300-byte component, `:memory:`, `file:`, a relative line, NUL. No error sentence echoes the path from the file; the open errors print the system message only.
+
+Pending: a `default-db` that exists but cannot be read (permission denied, a directory, an I/O error). No decision or plan line rules on it; it is with Itay. The code treats an open failure as "no file" and has no test for it until he answers.
+
 ## Review Notes

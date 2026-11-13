@@ -94,7 +94,8 @@ static int copy_regular_db_path(const char *chosen, char *buf, size_t buflen, ch
     return 0;
 }
 
-enum { DEFAULT_DB_READ_MAX = PATH_MAX + 1 }; /* bytes of default-db read; a longer file is too long */
+/* Bytes of default-db read; a longer file is too long. */
+enum { DEFAULT_DB_READ_MAX = PATH_MAX + 1 };
 
 /* Strips ASCII whitespace from both ends in place; returns the first kept byte. */
 static char *trim_ascii_space(char *s)
@@ -138,6 +139,7 @@ static const char *home_dir(char *err, size_t errlen, const char *missing)
 /* Reads ~/.remember/default-db into content (DEFAULT_DB_READ_MAX + 1 bytes).
    Returns 1 when a file was read, 0 when there is none, -1 on error.
    An unreadable file has no rule yet (plan 27 waits on Itay's answer). */
+// NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
 static int read_default_db(const char *home, char *content, char *err, size_t errlen)
 {
     char file[PATH_MAX];
@@ -147,6 +149,8 @@ static int read_default_db(const char *home, char *content, char *err, size_t er
     if (format_db_path(file, sizeof(file), err, errlen, home, "/.remember/default-db") != 0) {
         return -1;
     }
+    /* macOS fopen has no 'e' (O_CLOEXEC) mode; CLI is short-lived. */
+    // NOLINTNEXTLINE(android-cloexec-fopen)
     f = fopen(file, "r");
     if (f == NULL) {
         return 0;
