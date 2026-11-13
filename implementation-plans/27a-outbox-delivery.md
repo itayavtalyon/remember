@@ -167,3 +167,15 @@ Simplify candidates declined, with the reason: `input_ok` as one positive `retur
 **Choices the coder left open.** Items 3 to 9 follow the plan or decision text and stand. Items 1 and 2 are grills for Itay (listed in the PR); neither changes this module's code under any answer the caller cannot express (a caller that wants a failed rerun to end `failed` passes `waited_s` 3600).
 
 **Grades.** Coder 8/10: test-per-rule, 64 mutants with red tests, honest open-choice list and gate table; missed the protocol seam (R1, R2), the R3.14 contradiction behind its own `state:implemented` (R4), and one halt input (R3). In-session reviewer 7/10: its security pass stayed inside the module's arithmetic and its mutant list did not vary `waited_s` against the chain rule.
+
+**Gate** (on `1a97999`, a clean tree; the next commit changes only this file). Each command ran inside the shared heavy-job lock.
+
+| Check | Result |
+|---|---|
+| ASan/UBSan build and ctest (`-DREMEMBER_ENABLE_SANITIZERS=ON -DREMEMBER_ENABLE_LSAN=OFF -DREMEMBER_TEST_VFS=ON`) | 6 of 6 passed |
+| `cmake --build build --target leaks-macos` | PASS |
+| `scripts/lint-all.sh` | LINT OK (the first run, on `560910d`, failed on the one-`return` `input_ok`; reverted in `1a97999`) |
+| `validate_plugin_spec.py specs/PLUGIN-PROTOCOL.md` | 0 failures |
+| `scripts/check-coverage.sh` | OK; `outbox.c` 8 of 8 functions, 64 of 64 lines, 46 of 46 branch sides |
+| `scripts/ci-linux.sh` | OK |
+| `scripts/codeql-local.sh` | OK, 43 allowed alerts, none new |
