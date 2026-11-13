@@ -203,11 +203,11 @@ Quality gate: plan 19's commands. Coverage 100/100.
 
 ## Definition of done
 
-- [ ] Memory import and `--from-db` tests are green.
-- [ ] Settings import matches 007 ST-8.3a and ST-8.4 to ST-8.7.
-- [ ] No E12.6 code.
-- [ ] No reader maps `sync_id` inside a JSON, Markdown, or CSV export.
-- [ ] Gate green. Second review clear.
+- [x] Memory import and `--from-db` tests are green.
+- [x] Settings import matches 007 ST-8.3a and ST-8.4 to ST-8.7.
+- [x] No E12.6 code.
+- [x] No reader maps `sync_id` inside a JSON, Markdown, or CSV export.
+- [x] Gate green. Second review clear.
 - [ ] INDEX row 23 is ticked only when the review is closed. D-04 and C-35 are closed.
 
 ## Second review handover
@@ -352,16 +352,24 @@ Not done here (by plan): INDEX 23 / D-04 / C-35 stay open until review closes; `
 
 Scope: plan 23 commits `6363119..f72a8ce` on `plan/23-import` and the production code they touch. Fixes are on `claude/magical-curie-4aa42e`:
 
-- `f74286e`: eleven exploits, each with its test.
-- `eabbd9c`: a test for every bad-record message, and the sorted duplicate-id check.
-- `a03b65a`: simplifications, and the usage lines pinned.
-- `52fe0f9`: round-trip and no-old-names tests, and the spec.
-- `b9c7a43`: grill answers and mutant killers.
-- `e4330d2`: plan 23a.
-- `36388c4`: the last mutant killers.
-- `f7b8c53`: a test for an unreadable import source. The coverage gate found that `import_report_io` never ran.
+Hashes are after the rebase onto `origin/main` `e4443dd` (plan 22).
 
-Production code: +517 / −776 lines. `import_formats` went from 19 to 72 tests.
+- `a073274`: eleven exploits, each with its test.
+- `3e21121`: a test for every bad-record message, and the sorted duplicate-id check.
+- `bf62961`: simplifications, and the usage lines pinned.
+- `c42e750`: round-trip and no-old-names tests, and the spec.
+- `165924a`: grill answers and mutant killers.
+- `48069da`: plan 23a.
+- `5544808`: the last mutant killers.
+- `1797f5c`: a test for an unreadable import source. The coverage gate found that `import_report_io` never ran.
+- `1a76918`: `scripts/codeql-local.sh`, bundled into this PR (see Gate).
+- `125030c`: format, cppcheck and 236 clang-tidy findings on the import code.
+- `9acf874`: links with members of the wrong JSON type.
+- `0f9b56c`: the coverage line gate (85 must-cover lines).
+- `cda69eb`: the `output.c` branch gate on the import reply.
+- `06416e9`, `d6c9c34`, `9a5df87`, `1b10087`: what the full local CI found after that (see Gate).
+
+Production code: +1399 / −1708 lines from `0be00ad`. `import_formats` went from 19 to 81 tests, `sync_import` from 40 to 47, `jsonread` from 11 to 16.
 
 #### Spec against code
 
@@ -422,7 +430,7 @@ Left open:
 | S6 | `import_reply`: one shared reply tail for JSON and db imports | 15 |
 | S7 | An `ImportSource` table and `import_take_source` replace four copied flag blocks | 30 |
 
-All are applied. Net production change for the review: −259 lines, with the fixes included.
+All are applied. Net production change for the review: −309 lines, with the fixes and the lint and coverage work included.
 
 #### Mutation pass
 
@@ -458,6 +466,7 @@ The first round (22 mutants, before the new tests) left 8 survivors: M4, M10, M1
 | M26 | Duplicate member missed | `…duplicate_member` (entry and link) |
 | M27, M29 | `--from-db` insert or update keeps the source `updated_by` | `cli_import_v6_source_memories_are_updated_by_import`, `cli_import_incoming_dominates_updates` |
 | M28 | A bad v6 actor accepted | `cli_import_v6_source_bad_created_by_is_rejected` |
+| M30 | `link_bad` never marks the link (found by the coverage gate: no test reached it) | `import_json_bad_link_timestamp_of_the_wrong_type` (new) |
 
 M22 (`brain_id` not validated) is now covered by `import_json_bad_brain_id_is_import_parse`.
 
@@ -475,9 +484,29 @@ M22 (`brain_id` not validated) is now covered by `import_json_bad_brain_id_is_im
 
 #### Gate
 
-Pending. Phase 2 runs the full local CI on the rebased tree. The Phase 1 gate was dropped after two machine crashes caused by load.
+Full local CI on `1b10087`, one job at a time under a 4 GB free-memory guard (2026-11-13). All green:
 
-The first Phase 1 coverage run, at `36388c4`, failed one function: `cmd_import.c:import_report_io` (99.92%). `f7b8c53` adds its test. Coverage has not been rerun since.
+| Job | Result |
+|---|---|
+| macOS: configure, build, ctest | 6/6 |
+| macOS: gate suites | 1185 run, 0 failed |
+| macOS: `remember_store_tests` | 527 run, 0 failed |
+| macOS: `lint-all.sh` (`REMEMBER_SCAN_BUILD=1`, `REMEMBER_IWYU=0`) | every stage PASS; iwyu SKIP (it runs in ci-linux) |
+| macOS: `leaks-macos` | PASS |
+| `check-coverage.sh` | functions 100%; must-cover lines 0 (2864 zero-hit lines, all defensive); branch sides 0 missed in the pure TUs |
+| `ci-linux.sh` (Docker, Ubuntu 24.04) | ctest 6/6, gate 1185/0, store 527/0, LINT OK (iwyu PASS; clang-tidy 18 PASS with the older-than-pin WARN) |
+| `validate_plugin_spec.py specs/PLUGIN-PROTOCOL.md` | 0 failures |
+| `spec-drift.sh` | 0 |
+| `codeql-local.sh` (`CODEQL_RAM=4096`) | OK, 0 blocking |
+
+What the gate found on the way, all fixed in this PR:
+
+- Lint at `a160e28`: format, cppcheck and 236 clang-tidy findings, all in plan 23 files (`125030c`).
+- Coverage: one function never ran (`import_report_io`, `1797f5c`), then 85 must-cover lines (`9acf874`, `0f9b56c`), then 13 untaken branch sides in the import reply (`cda69eb`). The tests behind them found two real bugs: a JSON parse that ran out of memory was reported as "isn't a remember export", and `import_doc_merge_present` carried a dead `e72_identical` branch (identical records never reach it). The plan 23 cleanup calls joined the gate's defensive list in `scripts/check-coverage.sh`.
+- ci-linux: the build broke on glibc's recursive `tolower` macro; two v6 `--from-db` tests wrote the user settings layer under `HOME`, which the container's test user cannot write; the older Linux iwyu, clang-tidy and cppcheck found three include fixes, a `sizeof` on an array of pointers and a false shadow warning.
+- CodeQL: one blocking `cpp/overflowing-snprintf` in a test helper.
+
+`scripts/codeql-local.sh` is bundled here at Itay's choice, so the gate's last step runs the same CodeQL scan as CI.
 
 #### Grades
 
@@ -498,6 +527,7 @@ What lost points:
 - P8 was not built.
 - The spec envelope was not updated.
 - An untested read-error path left function coverage below 100%.
+- Plan 23 never passed the repo's own gates. Lint was red (format, cppcheck, 236 clang-tidy findings), 85 lines and 13 branch sides were never run by any test, and the Linux build did not compile.
 - The tests were too weak to catch any of this. 8 of 22 first-round mutants survived, including the JE-5.1 end bump.
 
 Pointers to paste:
@@ -513,10 +543,12 @@ Pointers to paste:
 - No review ran an exploit pass on hostile files or brains.
 - Each review ran only one mutant per stage, and each passed a link test that cannot see a missing end bump.
 - No review flagged that Markdown and CSV had no stage.
+- No review ran lint, coverage or the Linux job, so none saw the red gates above.
 
 Pointer to paste:
 
 - "A review claim needs a test or a probe behind it. 'Safe' without a hostile input tried is not a finding."
+- "A stage is not reviewed until lint, coverage and ci-linux are green on it."
 
 #### Not done here
 
