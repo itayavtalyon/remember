@@ -25,7 +25,7 @@ Delivery is at least once. A recipient is acknowledged only after the handler su
 | `state` | The state stored on the recipient. |
 | `chain_len` | The `cause.chain` length of the event. At least 0. |
 | `result` | What the caller reports for this call (below). |
-| `exit_code` | The once-process exit code. Read only for `OUTBOX_RESULT_ONCE_EXIT`. |
+| `exit_code` | The once-process exit code. Read only for `OUTBOX_RESULT_ONCE_EXIT`. A process that a signal ended passes a code other than 0. `WEXITSTATUS` of a signaled status reads 0, so the caller checks `WIFEXITED` first. |
 | `event_done` | This `event_id` is already `done`. |
 | `age_days` | Whole days since the row was created. At least 0. |
 | `waited_s` | The delay in seconds that was waited before the attempt reported now. 0 on a first attempt. At least 0. For a call that reports nothing, the `backoff_s` stored on the row. |
@@ -36,8 +36,8 @@ Delivery is at least once. A recipient is acknowledged only after the handler su
 |---|---|
 | `OUTBOX_RESULT_NONE` | Nothing is reported. The recipient has not run yet, or the run crashed before a result was recorded. |
 | `OUTBOX_RESULT_ONCE_EXIT` | A once-process ended. Only `exit_code` counts. |
-| `OUTBOX_RESULT_PERSISTENT_ACK` | A persistent run sent an `event.result` whose `event_id` matches. |
-| `OUTBOX_RESULT_PERSISTENT_NONE` | A persistent run ended with no such `event.result`. |
+| `OUTBOX_RESULT_PERSISTENT_ACK` | A persistent run sent a success `event.result`: its `data.event_id` is this event. |
+| `OUTBOX_RESULT_PERSISTENT_FAILED` | A persistent run sent no success `event.result`: no reply before the timeout, or a failed reply (`error`, PLUGIN-PROTOCOL R3.18, PP-08), whatever its `retryable` says. |
 | `OUTBOX_RESULT_PREFLIGHT` | The pre-flight check failed: the command is missing, not executable, or untrusted. The run did not start. |
 
 `decision:protocol-oq-12-15`: a persistent action acknowledges with `event.result`, and a once-process counts its exit code only.
@@ -69,7 +69,7 @@ Rules apply in this order.
 3. A call that reports nothing and a `failed` or `halted` recipient gives the same state, with `run_now` false.
 4. Exit 0 of a once-process, and a matching `event.result`, give `done`.
 5. A pre-flight failure gives `failed`. It is not a backoff step. `backoff_s` is 0 and there is no automatic run. It is the same on a first attempt and after a backoff step.
-6. A once-process exit other than 0, and a persistent run with no `event.result`, are a failed attempt. Exit 75 is a failed attempt like any other non-zero exit.
+6. A once-process exit other than 0, and a persistent run with no success `event.result`, are a failed attempt. Exit 75 is a failed attempt like any other non-zero exit.
    - When `waited_s` is below 3600, the answer is `pending` with `run_now` false, `retry_at` `AFTER_BACKOFF`, and `backoff_s` of 1 when `waited_s` is 0, else twice `waited_s`, at most 3600.
    - When `waited_s` is 3600 or more, the answer is `failed`.
 

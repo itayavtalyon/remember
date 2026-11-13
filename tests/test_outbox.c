@@ -116,7 +116,7 @@ TEST(outbox_first_failed_attempt_stays_pending_delay_1s)
 
 TEST(outbox_a_persistent_run_with_no_event_result_is_a_failed_attempt)
 {
-    OutboxStep out = when_step(given_attempt(OUTBOX_RESULT_PERSISTENT_NONE, 0));
+    OutboxStep out = when_step(given_attempt(OUTBOX_RESULT_PERSISTENT_FAILED, 0));
 
     ASSERT_EQ_INT(out.state, OUTBOX_PENDING);
     ASSERT_EQ_INT(out.backoff_s, 1);
@@ -269,6 +269,19 @@ TEST(outbox_a_huge_chain_length_sets_halted)
     out = when_step(in);
 
     ASSERT_EQ_INT(out.state, OUTBOX_HALTED);
+}
+
+TEST(outbox_chain_length_100_halts_a_recipient_waiting_on_a_backoff_step)
+{
+    OutboxInput in = given_pending();
+    OutboxStep out;
+
+    in.chain_len = 100;
+    in.waited_s = 4;
+    out = when_step(in);
+
+    ASSERT_EQ_INT(out.state, OUTBOX_HALTED);
+    ASSERT_FALSE(out.run_now);
 }
 
 TEST(outbox_a_run_that_ended_is_judged_by_its_result_not_the_chain_length)
@@ -435,7 +448,7 @@ TEST(outbox_an_exit_code_of_any_non_zero_value_is_a_failed_attempt)
 
 TEST(outbox_the_exit_code_is_ignored_for_every_other_result)
 {
-    OutboxInput in = given_attempt(OUTBOX_RESULT_PERSISTENT_NONE, 0);
+    OutboxInput in = given_attempt(OUTBOX_RESULT_PERSISTENT_FAILED, 0);
 
     in.exit_code = 0;
     ASSERT_EQ_INT(when_step(in).state, OUTBOX_PENDING);
@@ -531,6 +544,7 @@ void register_outbox_tests(void)
     RUN_TEST(outbox_chain_length_100_sets_halted_and_does_not_run);
     RUN_TEST(outbox_chain_length_99_still_runs);
     RUN_TEST(outbox_a_huge_chain_length_sets_halted);
+    RUN_TEST(outbox_chain_length_100_halts_a_recipient_waiting_on_a_backoff_step);
     RUN_TEST(outbox_a_run_that_ended_is_judged_by_its_result_not_the_chain_length);
     RUN_TEST(outbox_a_failed_row_at_6_days_stays);
     RUN_TEST(outbox_a_failed_row_at_7_days_is_deleted);

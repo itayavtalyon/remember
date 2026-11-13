@@ -20,11 +20,9 @@ static OutboxStep step_failed_attempt(int64_t waited_s)
     /* waited_s is below the cap here, so the doubling cannot overflow however
        large a hand-edited row's backoff_s is. */
     next = (waited_s == 0) ? OUTBOX_BACKOFF_FIRST_S : waited_s * 2;
-    if (next > OUTBOX_BACKOFF_CAP_S) {
-        next = OUTBOX_BACKOFF_CAP_S;
-    }
-    return (OutboxStep){
-        .state = OUTBOX_PENDING, .backoff_s = next, .retry_at = OUTBOX_RETRY_AFTER_BACKOFF};
+    return (OutboxStep){.state = OUTBOX_PENDING,
+                        .backoff_s = (next > OUTBOX_BACKOFF_CAP_S) ? OUTBOX_BACKOFF_CAP_S : next,
+                        .retry_at = OUTBOX_RETRY_AFTER_BACKOFF};
 }
 
 static OutboxStep step_not_reported(const OutboxInput *in)
@@ -52,12 +50,9 @@ static OutboxStep step_reported(const OutboxInput *in)
 
 static bool input_ok(const OutboxInput *in)
 {
-    if ((unsigned)in->state > (unsigned)OUTBOX_HALTED ||
-        (unsigned)in->result > (unsigned)OUTBOX_RESULT_PREFLIGHT || in->chain_len < 0 ||
-        in->age_days < 0 || in->waited_s < 0) {
-        return false;
-    }
-    return true;
+    return (unsigned)in->state <= (unsigned)OUTBOX_HALTED &&
+           (unsigned)in->result <= (unsigned)OUTBOX_RESULT_PREFLIGHT && in->chain_len >= 0 &&
+           in->age_days >= 0 && in->waited_s >= 0;
 }
 
 bool outbox_step(const OutboxInput *in, OutboxStep *out)

@@ -24,11 +24,12 @@ enum {
 typedef enum { OUTBOX_PENDING = 0, OUTBOX_DONE, OUTBOX_FAILED, OUTBOX_HALTED } OutboxState;
 
 typedef enum {
-    OUTBOX_RESULT_NONE = 0,        /* nothing reported: not run yet, or the process crashed */
-    OUTBOX_RESULT_ONCE_EXIT,       /* a once-process ended; the exit code counts */
-    OUTBOX_RESULT_PERSISTENT_ACK,  /* a persistent run sent an event.result with this event_id */
-    OUTBOX_RESULT_PERSISTENT_NONE, /* a persistent run ended with no such event.result */
-    OUTBOX_RESULT_PREFLIGHT        /* pre-flight failed: missing, not executable, untrusted */
+    OUTBOX_RESULT_NONE = 0,          /* nothing reported: not run yet, or the process crashed */
+    OUTBOX_RESULT_ONCE_EXIT,         /* a once-process ended; the exit code counts */
+    OUTBOX_RESULT_PERSISTENT_ACK,    /* a success event.result: data.event_id is this event */
+    OUTBOX_RESULT_PERSISTENT_FAILED, /* no success event.result: none in time, or a failed one
+                                        (error, PP-08), retryable or not */
+    OUTBOX_RESULT_PREFLIGHT          /* pre-flight failed: missing, not executable, untrusted */
 } OutboxResult;
 
 /* What next_retry_at must become on the row. */
@@ -44,7 +45,8 @@ typedef struct {
     int64_t waited_s;  /* delay waited before the attempt reported; 0 on a first attempt; >= 0 */
     OutboxState state;
     OutboxResult result;
-    int exit_code;   /* read for OUTBOX_RESULT_ONCE_EXIT only */
+    int exit_code;   /* read for OUTBOX_RESULT_ONCE_EXIT only; a process a signal ended passes a
+                        non-zero code (WEXITSTATUS of a signaled status reads 0) */
     bool event_done; /* this event_id is already done */
     char pad_[3];    /* explicit tail padding (kept -Wpadded-clean) */
 } OutboxInput;
