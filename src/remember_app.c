@@ -49,7 +49,7 @@ static void print_general_help(void)
         "  unlink      Remove entry links\n"
         "  related     List neighbors of an entry\n"
         "  rekey       Rename, set, or clear an entry key in place\n"
-        "  import      Merge another remember database (--from-db)\n"
+        "  import      Merge a remember export or database\n"
         "  conflicts   List unresolved merge conflicts\n"
         "  conflict    Resolve a merge conflict (accept)\n"
         "  device      Print the device id, or mint one with 'new'\n"
@@ -300,11 +300,15 @@ static void print_command_help(CliCommand topic)
         (void)fprintf(out, "\n");
     } else if (topic == CLI_CMD_IMPORT) {
         (void)fprintf(out, "Options:\n");
-        (void)fprintf(out, "  --from-db PATH  Source remember database (read-only)\n");
+        (void)fprintf(out, "  --from-json PATH  remember-export JSON file\n");
+        (void)fprintf(out, "  --from-md PATH    Markdown export folder\n");
+        (void)fprintf(out, "  --from-csv PATH   CSV export file\n");
+        (void)fprintf(out, "  --from-db PATH    Source remember database (read-only)\n");
         print_hooks_help(out);
         (void)fprintf(out, "\n");
+        (void)fprintf(out, "Exactly one of --from-json, --from-md, --from-csv, --from-db.\n");
         (void)fprintf(out, "Merges by id. Conflicts are recorded; exit 0 even if any.\n");
-        (void)fprintf(out, "Run 'conflicts' after import. Source must be schema v4 or v5.\n");
+        (void)fprintf(out, "Run 'conflicts' after import. --from-db reads schema v4 to v6.\n");
         (void)fprintf(out, "Does not copy the foreign device_id sidecar.\n");
         (void)fprintf(out, "\n");
     } else if (topic == CLI_CMD_CONFLICTS) {

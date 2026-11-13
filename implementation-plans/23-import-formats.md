@@ -14,6 +14,8 @@ Copy approved 2026-10-25. DESIGN-PENDING D-04 is answered (2026-10-25, 007 ST-8.
 
 The memory merge, the JSON reader, and `--from-db` for v4, v5, and v6 are specified. Start those stages.
 
+Markdown and CSV moved to [plan 23a](23a-import-md-csv.md) on 2026-11-12 (`decision:plan23-review-g1-md-csv-to-23a`). This plan ships `--from-json` and `--from-db`. `--from-md` and `--from-csv` stay a `usage` error until 23a. The Markdown and CSV rules below stay here as 23a's source of truth.
+
 `unknown_field` is C-35 in [`COPY-PENDING.md`](COPY-PENDING.md). Print it. Do not silently ignore an unknown member in an export file.
 
 ## Source of truth
@@ -65,6 +67,8 @@ Whole-file failures roll back. Exit 1 `import_parse`. The brain is unchanged.
 
 - JSON root `format` is not `remember-export`.
 - JSON root `version` is not 1.
+- JSON root `entries` or `links` is present, not null, and not an array, or `brain_id` is present, not null, and not a canonical UUID (`decision:plan23-review-g4-shape-is-import-parse`).
+- Any JSON string or member name holds `\u0000` (`decision:plan23-review-g3-nul-is-import-parse`).
 - CSV header is not the JE-8.3 header.
 - The JSON `settings` member, Markdown `settings.json`, or the matching `<CSV basename>.settings.json` is present and is not a settings document (007 ST-8.4). A missing `settings.json` is not an error.
 
@@ -99,7 +103,7 @@ Bad-record messages, with `id` in place of `sync_id` and actors in place of `sou
 - `invalid front matter`
 - `duplicate field`
 
-A record is bad when: the body is missing, empty after trim, or longer than 65536 bytes; `id` is present and is not a canonical UUID (`8-4-4-4-12` hex, either case); a present timestamp is not `YYYY-MM-DDTHH:MM:SS.mmmZ`; a present actor is not `{kind, id}` with a legal kind; a present key or tag fails the log 001 checks; `version_vector` is present and is not a JSON object of canonical-UUID device id to a JSON integer greater than 0; a link object lacks `to` or `kind`; `kind` is not `related`, `cites`, or `supersedes`; an `id` repeats in the file; a CSV row's column count differs from the header; a JSON entry is not an object.
+A record is bad when: the body is missing, empty after trim, or longer than 65536 bytes; `id` is present and is not a canonical UUID (`8-4-4-4-12` hex, either case); a present timestamp is not `YYYY-MM-DDTHH:MM:SS.mmmZ`; a present actor is not `{kind, id}` with a legal kind; a present key or tag fails the log 001 checks (a key or tag that passes is stored normalized, as `add` stores it: `decision:plan23-review-g6-normalize-keys-tags`); `version_vector` is present and is not a JSON object of canonical-UUID device id to a JSON integer greater than 0; a link object lacks `to` or `kind`; `kind` is not `related`, `cites`, or `supersedes`; an `id` repeats in the file; a CSV row's column count differs from the header; a JSON entry is not an object.
 
 Null or an empty CSV cell means absent for `key`, `expires_at`, `deleted_at`, `version_vector`, `created_at`, `updated_at`, actors, `tags`, `links`, and `id` (D31). A null body is `body is missing`.
 
@@ -199,11 +203,11 @@ Quality gate: plan 19's commands. Coverage 100/100.
 
 ## Definition of done
 
-- [ ] Memory import and `--from-db` tests are green.
-- [ ] Settings import matches 007 ST-8.3a and ST-8.4 to ST-8.7.
-- [ ] No E12.6 code.
-- [ ] No reader maps `sync_id` inside a JSON, Markdown, or CSV export.
-- [ ] Gate green. Second review clear.
+- [x] Memory import and `--from-db` tests are green.
+- [x] Settings import matches 007 ST-8.3a and ST-8.4 to ST-8.7.
+- [x] No E12.6 code.
+- [x] No reader maps `sync_id` inside a JSON, Markdown, or CSV export.
+- [x] Gate green. Second review clear.
 - [ ] INDEX row 23 is ticked only when the review is closed. D-04 and C-35 are closed.
 
 ## Second review handover
@@ -221,8 +225,333 @@ Do not re-open: no old-name reader, memory actor stamp, settings actor stamp, li
 
 ## Implementation Notes
 
-_(empty)_
+### Stage 1 — jsonread
+
+- `src/jsonread.c` / `src/jsonread.h`: pure RFC 8259 reader. `JSONREAD_NESTING_MAX` is 64 (P11). No document size cap. Numbers stay raw text. Duplicate object members are kept (P8 is a later bad-record rule).
+- Unit tests live in `remember_store_tests` (`tests/test_jsonread.c`), wired in CMake with `-Wcast-qual` and `REMEMBER_LIB_SOURCES`.
+- Mutants recorded: nesting `>`→`>=` → `jsonread_accepts_nesting_at_the_named_limit` red (status 3); trailing-garbage skip would hit `jsonread_rejects_trailing_garbage`; lone `\uD800` would hit `jsonread_rejects_invalid_utf8_and_lone_surrogates`.
+
+### Stage 2 — validate + shared merge + `--from-json`
+
+- `src/import_read.c` / `import_validate.c`: JSON export → `ImportDoc`; validate marks bad memories; tags sorted for E7.2 set equality.
+- `fileio_read_all`: whole-file read, no size cap.
+- `store_import_doc`: one write txn; empty brain takes `brain_id`; `updated_by` is `{import,null}`; keyless id-less unions tags (amended D22); keyed id-less inserts (does not union); key clash does not upsert.
+- CLI: exactly one of `--from-json|--from-md|--from-csv|--from-db`; stage 2 implements JSON (+ existing `--from-db`); md/csv accepted for the exactly-one check then refuse with usage until later stages.
+- Version > 1 → `import_parse`, exit 1, nothing written (`decision:plan23-export-version-above-1`, parallel to settings C-43).
+- Suite `import_formats`: 10 tests. Prove insert / brain_id / key_clash / keyed-without-id / keyless union / unchanged / bad body / unsorted tags / version>1 / sidecar.
+- Mutants: `ntags > 1` → `> 99` → `import_json_same_id_with_unsorted_tags_is_unchanged` red (concurrent_vv); `ver > 1` → `>= 1` → insert test red (`import_parse` on version 1).
 
 ## Review Notes
 
-_(empty)_
+### Stage 1 deep review (2026-11-10, in session)
+
+Gate for this stage: `remember_store_tests` 521/0 including the 11 `jsonread_*` tests; `remember` links clean with sanitizers.
+
+Lenses: C safety (alloc checks, UTF-8/surrogate rejects, no ignored parse status), architecture (pure TU, no I/O, SQLite untouched), simplify (kept separate array/object growers; one recursive `parse_value`).
+
+Findings fixed before commit: `-Wpadded` on `Parser` (explicit `pad_[4]`); test bodies return after a failed parse so UBSan does not chase a NULL root.
+
+No product or architecture grill. C-35 is unused until stage 7; printed at session start. No old-name alias. No add-wins.
+
+Ready for stage 2.
+
+### Stage 2 deep review (2026-11-11, in session)
+
+Gate for this stage: `import_formats` 10/0; `sync_import` 39/0; `envelope` 40/0; `remember_store_tests` 521/0; `remember` links with sanitizers.
+
+Lenses: C safety (pad_ on ImportMemory/ImportDoc, no cast-qual aliases without `import_alias`, OOM on read), architecture (readers pure of SQL; merge in store_sqlite; CLI stays one command), E7.2 tag sets, simplify (dedicated version/not-export message helpers).
+
+Bugbot (branch uncommitted): keyed-without-id wrongly took the keyless union path — fixed + test; `content_identical` ignored `expires_at` on equal VV — file merge now uses `e72_identical`. Low: non-array `entries` ignored (deferred with envelope work); `--from-json --from-md` path confusion matches existing `take_value` pattern.
+
+No product grill. C-35 still unused. No old-name alias. No add-wins. `--from-md`/`--from-csv` bodies deferred to later stages by design.
+
+Ready for stage 3.
+
+### Stage 3 — links + JE-5.1
+
+- `ImportLink` in the reader; top-level JSON `links` parsed and validated.
+- `store_import_doc` writes links after memories: related → (min,max); existing live triple ignored; new row keeps file stamps; ends get `{import,null}` + `change_seq` without memory VV bump; supersedes cycle skipped.
+- Tests: cites write + re-import, cycle skip, related canonicalize. Mutant: disable cycle guard → two live supersedes (build-checked via `if (0 && …)` unused-var path; functional red on skip-count query when guard removed cleanly).
+
+### Stage 3 deep review (2026-11-11, in session)
+
+Gate: `import_formats` 13/0. Lenses: JE-5.1 ends vs link VV, cycle skip not hard-fail, missing endpoints → skipped. No grill. C-35 unused.
+
+### Stage 4 — `--from-db` v4/v5/v6
+
+- `IMPORT_MAX_USER_VERSION` is 6. v6 rows read `id` / `local_id` / JSON actors; tags still join on `local_id`.
+- Link remap: v6 UUID lookup; tombstoned links skipped; `related` canonicalized; supersedes cycles skipped.
+- E12 effective list → one `remember.buckets.prefixes` with `{human,null}` when the dest has no row (no add-wins). Invalid shapes stay out.
+- v6 prefixes row → ST-8.6 (VV, then `updated_at`, then `device_id`; tie keeps local) with history (ST-8.7).
+- `outbox` is never opened. Conflicts.origin still not copied (stage 5).
+- Tests: refuse user_version 7; v5 prefixes land as `["work:"]`; v6 copies id + prefixes and leaves outbox alone (does not call `run_import`, which downgrades to v5).
+- Mutants: `IMPORT_MAX` 6→5 → v6 import red; E12 `existing > 0` skip removed → would overwrite dest prefixes; deleted_at link continue removed → would revive tombstones.
+
+### Stage 4 deep review (2026-11-11, in session)
+
+Gate: `sync_import` 40/0; `import_formats` 13/0. Lenses: read-only source, no sidecar touch, no E12.6/add-wins, outbox ignored, human vs import actor for E12 vs memory.
+
+Auto-fix: v6 test must not use `run_import` (harness_make_v5_source); prefixes need trailing `:`. No product grill. C-35 unused. Ready for stage 5.
+
+### Stage 5 — origin + errors envelope
+
+- `--origin LABEL` (max 64 bytes) or basename of the `--from-*` path; longer → usage.
+- `conflicts.origin` written on insert/refresh; `conflicts --json` prints `origin` after `created_at` (null when unset).
+- Import envelope gains `skipped` and `errors[{file,line,message}]` with `skipped == len(errors)`.
+- Bad memories/links push an error instead of a bare skipped bump.
+- Mutants: origin length `>`→`>=` → 64-byte label refused; skipped≠nerrors guard in `output_import_data`.
+
+### Stage 5 deep review (2026-11-11, in session)
+
+Gate: `import_formats` 14/0; `sync_import` 40/0; store tests 521/0. No grill. Settings counts still stage 6. C-35 unused. Ready for stage 6.
+
+### Stage 6 — settings import ST-8.3a
+
+- Nested `settings` object extracted only when the root member is a JSON object; bytes fed to `store_setting_import_apply` inside the memory/link write txn (`own_txn=false`, no nested BEGIN/COMMIT/ROLLBACK).
+- CLI dry-runs `store_setting_import` before any write: `SETTING_ERR_DOCUMENT` → `import_parse` with `"settings" isn't a settings document.`; skip warnings via `settings_import_warn_skips(rep, false)` so D-15 never claims the brain was unchanged when memories write.
+- Import envelope `settings.{written,unchanged,skipped}` (zeros when absent). File `updated_by` kept (ST-8.7). Actor for memories remains `{import,null}`.
+- Tests: tombstone lands; absent settings → zeros/no rows; `{}` → import_parse/unchanged brain; bad value skipped + good row + memory written + `setting_invalid`.
+- Mutants: `settings_len > 0` → absurd threshold → tombstone test red; extract gated on root object (Bugbot).
+
+### Stage 6 deep review (2026-11-11, in session)
+
+Gate: `import_formats` 19/0; `sync_import` 40/0; `settings` 151/0; store 521/0.
+
+Lenses: txn nesting (apply must not `import_finish` the outer txn), dry-run before writes, ST-8.4/8.5 warnings shared with `settings import`, envelope counts, simplify (one `setting_import_run`).
+
+Auto-fix: extract only when root `settings` is an object; OOM mapped via `serr` text (no fake `SETTING_ERR_OOM`); Bugbot findings on missing apply path addressed in this stage.
+
+No product grill. `--from-md`/`--from-csv` settings still deferred with those readers. Ready for stage 7.
+
+### Stage 7 — unknown_field C-35
+
+- Scan root, then entries, then links; first unknown member name wins (`sync_id` / `source` are unknown).
+- `diag_unknown_field` once per path with the C-35 file line. Import continues.
+- Test: root `sync_id` + entry `source` → one warning naming `sync_id`; memory still inserts.
+- Mutant: clear `unknown_field` after scan → unknown-field test red.
+
+### Stage 7 deep review (2026-11-11, in session)
+
+Gate: same as stage 6 plus the C-35 test green. Printed C-35 at session start; no invented sentence. Mutant clearing `unknown_field` after the root scan turns `import_json_unknown_field_warns_once_and_still_imports` red. No grill. Ready for full gate and whole-plan review.
+
+### Whole-plan deep review (2026-11-11, in session — ready for second opinion)
+
+Scope: LEGACY PLAN 23 tip `d05a8f0` on `plan/23-import` (base `plan/22-export`).
+
+Gate: `import_formats` 19/0; `sync_import` 40/0; `settings` 151/0; store ASan 521/0; black-box gate suites including `import_formats` green except three envelope PTY tests (`openpty` → EPERM in this agent host; unrelated to plan 23). `tests/gate-suites` now lists `import_formats`.
+
+Simplicity (S): `setting_import_run` with `own_txn` is the right split; extract gated on root object. Byte `extract_top_object` remains a pragmatic choice for nested settings bytes; md/csv readers still deferred.
+
+Safety (A): nested apply never COMMIT/ROLLBACK the outer brain txn; dry-run validates settings before memory writes; bad settings document → `import_parse`, brain unchanged; unknown fields warn once and do not fail the import; no old-name/`sync_id` mapping in JSON; settings keep file actors (ST-8.7); memories still stamp `{import,null}`.
+
+Not done here (by plan): INDEX 23 / D-04 / C-35 stay open until review closes; `--from-md`/`--from-csv` bodies; ask before push/PR (base `plan/22-export`).
+
+`.claude/WHOLE_PLAN_REVIEW` written for the whole-plan second opinion.
+
+### Whole-plan second deep review (2026-11-12, separate session)
+
+Scope: plan 23 commits `6363119..f72a8ce` on `plan/23-import` and the production code they touch. Fixes are on `claude/magical-curie-4aa42e`:
+
+Hashes are after the rebase onto `origin/main` `e4443dd` (plan 22).
+
+- `a073274`: eleven exploits, each with its test.
+- `3e21121`: a test for every bad-record message, and the sorted duplicate-id check.
+- `bf62961`: simplifications, and the usage lines pinned.
+- `c42e750`: round-trip and no-old-names tests, and the spec.
+- `165924a`: grill answers and mutant killers.
+- `48069da`: plan 23a.
+- `5544808`: the last mutant killers.
+- `1797f5c`: a test for an unreadable import source. The coverage gate found that `import_report_io` never ran.
+- `1a76918`: `scripts/codeql-local.sh`, bundled into this PR (see Gate).
+- `125030c`: format, cppcheck and 236 clang-tidy findings on the import code.
+- `9acf874`: links with members of the wrong JSON type.
+- `0f9b56c`: the coverage line gate (85 must-cover lines).
+- `cda69eb`: the `output.c` branch gate on the import reply.
+- `06416e9`, `d6c9c34`, `9a5df87`, `1b10087`: what the full local CI found after that (see Gate).
+
+Production code: +1399 / −1708 lines from `0be00ad`. `import_formats` went from 19 to 81 tests, `sync_import` from 40 to 47, `jsonread` from 11 to 16.
+
+#### Spec against code
+
+- **Critical.** `--from-md` and `--from-csv` were not built. Both flags still print `not implemented yet`, and no stage had them scheduled. Itay moved them to [plan 23a](23a-import-md-csv.md) (G1).
+- `--from-db` memories kept the source `updated_by`, which breaks G-33 and JE-4.4. A hostile v6 `created_by` became `human` with no error. Fixed (G2).
+- `--from-db` links had no kind or timestamp check, no `errors` entry when skipped, and no JE-5.1 end bumps. They now go through the file link path (`import_remap_links`), and `errors[].line` is the source rowid.
+- P8 `duplicate field` was not built. JSON entries and links now report it.
+- Missing must-pass tests: the round trip (export, then import into an empty brain, with links and all bins) and no old names. Both added. The `sidecar` and `settings` rows for Markdown and CSV go with 23a.
+- Spec drift in `specs/JSON-ENVELOPE.md`. The import row now lists `skipped`, `errors` and `settings`, and the plain line ends with `skipped N`. A `conflicts` row now carries `origin`. The `rejected` field order now includes `created_by`.
+- The help text had a non-ASCII en dash. It now reads "v4 to v6" (`style:user-strings-ascii`).
+- Nothing tested a `--from-json` source that cannot be read. Added.
+
+#### Security audit (A): hostile JSON files and hostile `--from-db` v4, v5 and v6 brains
+
+Each hole got a failing test before its fix. Every test below is red on `f72a8ce` and green after its fix.
+
+| # | Attack | Effect before | Fix | Test |
+|---|---|---|---|---|
+| E1 | `\u0000` inside a body, id, `format` or `brain_id` | The string was cut short at the NUL, with no error | jsonread refuses the file: `import_parse` (G3) | `import_json_nul_in_a_body_is_import_parse`, `…_format_…`, `jsonread_rejects_a_nul_escape` |
+| E2 | The same member twice in an entry or link | The first value won, with no error | `duplicate field` (P8) | `import_json_bad_record_duplicate_member`, `import_json_bad_link_duplicate_member` |
+| E3 | A `settings` member inside an entry, or a root `"settings"` | Settings were read from the wrong object; an escaped root name gave a false `import_parse` | The root member's own bytes (`JsonValue.src_at`) | `import_json_reads_settings_from_the_root_member_only`, `…_escaped_settings_member_name` |
+| E4 | `entries` as an object, `links` as a string, `brain_id` set to `"nope"` | Ignored: exit 0 with `inserted 0` | `import_parse` (G4) | `import_json_entries_object_is_import_parse`, `…links_string…`, `…bad_brain_id…` |
+| E5 | A version counter of `0` | Accepted | `invalid version_vector` | `import_json_vector_counter_zero_is_invalid` |
+| E6 | A keyless id'd body that another row already holds | `SQLITE_CONSTRAINT` aborted the whole import | `hash_clash` conflict | `import_json_keyless_body_held_by_another_id_is_hash_clash`, `…two_ids_with_one_keyless_body…` |
+| E9 | A tombstone link in the file against a live local link | The live link was deleted. Import must never unlink (SY-M3). | Add wins: tombstones are inserted only when absent | `import_json_tombstone_link_does_not_unlink_a_live_link` |
+| E10 | A v6 `remember.buckets.prefixes` row with a garbage value or actor | Stored raw, then `settings get` failed with an internal error | Goes through settings import (ST-8.4, ST-8.6) | `cli_import_v6_source_invalid_prefixes_value_is_skipped`, `…bad_actor_is_skipped` |
+| E11 | 40,000 entries | O(n²) duplicate-id check: 19 s | Sorted check: 2.5 s | `import_json_bad_record_duplicate_id` (behavior) |
+| E12 | A version vector with 30,000 devices | An internal error killed the import; the check was O(n²) (22 s) | A vector wider than the merge buffer is a bad record (settings A4 rule) | `import_json_vector_wider_than_the_merge_buffer_is_a_bad_record` |
+| E13 | Key `Project:Alpha`, tag `"  pad  "` | Stored raw, so one brain could hold both `Project:Alpha` and `project:alpha` | Normalized the way `add` stores them (G6) | `import_json_normalizes_key_and_tags_like_add` |
+| E14 | A v6 source with a supersedes cycle, or a link `kind` the schema forbids | Skipped with no error; a forbidden kind aborted the import | `invalid link`, with line = source rowid | `cli_import_v6_source_cycle_lists_an_invalid_link_by_rowid`, `…unknown_link_kind…` |
+| E15 | A v6 `created_by` of `garbage` | Imported as `human` | `rejected` with field `created_by` (G2) | `cli_import_v6_source_bad_created_by_is_rejected` |
+
+Checked and found safe, each with a probe run on 2026-11-12:
+
+- Nesting past 64 is `import_parse`, and a depth of 100,000 does not overflow the stack.
+- A key or actor id with ESC is refused: `invalid key or tag`, `invalid actor`.
+- E7: an unknown member name holding ESC and a newline prints as `"x?[2J?line"` in plain output, and as escaped JSON under `--json`.
+- `--origin` is capped at 64 bytes.
+- The source brain is opened read-only, and the destination sidecar is untouched.
+
+Left open:
+
+- E8: `utc_stamp_is_canonical` accepts `2026-02-30`. It is a shared helper from before plan 23, so the fix is its own change.
+- A duplicate member at the JSON root (for example two `settings`) still takes the first value. P8 names entries and links only.
+
+#### Simplification (S)
+
+| # | Change | Lines saved |
+|---|---|---|
+| S0 | Settings read from `JsonValue` source spans, replacing `extract_top_object` | ~75 |
+| S0b | v6 prefixes built as one settings document in SQL `json_object` and sent through settings import, replacing the hand-written merge | ~95 |
+| S0c | One `import_doc_view` for the three copy-pasted conflict view builders | ~40 |
+| S0d | `--from-db` links go through `import_doc_one_link`, removing `insert_imported_link` and the remap copy | ~60 |
+| S1 | Removed the dead `Store.import_origin` field and its 16 writes | 18 |
+| S2 | Inlined `write_imported_prefix_row` (one caller) | 22 |
+| S3 | Four timestamp blocks became one guard | 12 |
+| S4 | `uuid_lowercase_in_place` replaces two malloc copies (out of memory was reported as a bad id) | 14 |
+| S6 | `import_reply`: one shared reply tail for JSON and db imports | 15 |
+| S7 | An `ImportSource` table and `import_take_source` replace four copied flag blocks | 30 |
+
+All are applied. Net production change for the review: −309 lines, with the fixes and the lint and coverage work included.
+
+#### Mutation pass
+
+I mutated the code plan 23 added and this review changed: one mutant per guard or boundary. Each mutant was rebuilt and run against `import_formats` and `sync_import`. A mutant that did not build was rewritten with a runtime-false guard and run again; none was counted as a survivor.
+
+The first round (22 mutants, before the new tests) left 8 survivors: M4, M10, M14, M16 to M20 and M22. Each got a test. The final round (28 mutants) leaves 27 killed and 1 equivalent.
+
+| Mutant | Change | Killed by |
+|---|---|---|
+| M1 | A counter of 0 accepted | `import_json_vector_counter_zero_is_invalid` |
+| M2 | Vector width cap loosened | `…vector_wider_than_the_merge_buffer…` |
+| M3 | Duplicate id not marked | `…bad_record_duplicate_id` |
+| M4 | The later copy kept | `…duplicate_id_keeps_the_first_copy` (new) |
+| M5 | id not validated | `…bad_record_id_not_a_uuid` |
+| M6 | A long body accepted | `…bad_record_body_too_long` |
+| M7 | `validate_one` actor check off | Equivalent: `actor_from_value` rejects the actor first. The check stays, because 23a's readers fill the same struct |
+| M8 | `expires_at` not validated | `…bad_record_invalid_timestamp` (now covers all four fields) |
+| M9 | Key and tags stored raw | `…normalizes_key_and_tags_like_add` |
+| M9b | Repeated tags kept | the same test's re-import, which must be unchanged |
+| M10 | A file tombstone revives a dead link | `…tombstone_link_over_a_tombstone_stays_dead` (new) |
+| M11 | Link to itself | `…bad_link_to_itself` |
+| M12 | `related` not canonical | `…canonicalizes_related_to_min_max` |
+| M13 | No cycle check | `…skips_a_supersedes_cycle`, `cli_import_v6_source_cycle…` |
+| M14 | No end bump on a new link | `…new_link_bumps_existing_ends` (new) |
+| M15 | No end bump on a revived link | `…reviving_a_link_bumps_its_ends` (new) |
+| M16 | The update path skips the hash clash | `…update_onto_a_held_body_is_hash_clash` (new) |
+| M17 | An update keeps the file's `updated_by` | `…update_stamps_the_import_actor` (new) |
+| M18, M19 | Concurrent treated as unchanged; conflict view actor | `…concurrent_change_is_a_conflict_with_the_import_actor` (new) |
+| M20 | Origin limit off by one | `import_origin_of_64_bytes_passes_and_65_is_too_long` (new) |
+| M21 | A repeated `--origin` allowed | `import_rejects_a_repeated_origin` (new) |
+| M23 | NUL escape accepted | `…nul_in_a_body…`, `…nul_in_the_format…` |
+| M24 | Non-array `links` accepted | `…links_string_is_import_parse` |
+| M26 | Duplicate member missed | `…duplicate_member` (entry and link) |
+| M27, M29 | `--from-db` insert or update keeps the source `updated_by` | `cli_import_v6_source_memories_are_updated_by_import`, `cli_import_incoming_dominates_updates` |
+| M28 | A bad v6 actor accepted | `cli_import_v6_source_bad_created_by_is_rejected` |
+| M30 | `link_bad` never marks the link (found by the coverage gate: no test reached it) | `import_json_bad_link_timestamp_of_the_wrong_type` (new) |
+
+M22 (`brain_id` not validated) is now covered by `import_json_bad_brain_id_is_import_parse`.
+
+#### Grill (Itay, 2026-11-12)
+
+| Q | Answer | Decision |
+|---|---|---|
+| G1 Markdown and CSV readers | B: split to plan 23a | `decision:plan23-review-g1-md-csv-to-23a` |
+| G2 `--from-db` actors | A: fix both now, unify in 23a | `decision:plan23-review-g2-from-db-actors` |
+| G3 NUL in strings | A: whole file `import_parse` | `decision:plan23-review-g3-nul-is-import-parse` |
+| G4 Wrong root shapes | A: `import_parse` | `decision:plan23-review-g4-shape-is-import-parse` |
+| G6 Key and tag case | A: normalize like `add` | `decision:plan23-review-g6-normalize-keys-tags` |
+
+`decision:plan23-import-csv-formula-unescape` is amended: it is built in 23a. Three bullets of `standard:coding` are sharpened (PROOF test setup, TRUST hostile parsed members, DONE in-scope features left unbuilt). The old body is in `history:standard:coding:2026-11-12`.
+
+#### Gate
+
+Full local CI on `1b10087`, one job at a time under a 4 GB free-memory guard (2026-11-13). All green:
+
+| Job | Result |
+|---|---|
+| macOS: configure, build, ctest | 6/6 |
+| macOS: gate suites | 1185 run, 0 failed |
+| macOS: `remember_store_tests` | 527 run, 0 failed |
+| macOS: `lint-all.sh` (`REMEMBER_SCAN_BUILD=1`, `REMEMBER_IWYU=0`) | every stage PASS; iwyu SKIP (it runs in ci-linux) |
+| macOS: `leaks-macos` | PASS |
+| `check-coverage.sh` | functions 100%; must-cover lines 0 (2864 zero-hit lines, all defensive); branch sides 0 missed in the pure TUs |
+| `ci-linux.sh` (Docker, Ubuntu 24.04) | ctest 6/6, gate 1185/0, store 527/0, LINT OK (iwyu PASS; clang-tidy 18 PASS with the older-than-pin WARN) |
+| `validate_plugin_spec.py specs/PLUGIN-PROTOCOL.md` | 0 failures |
+| `spec-drift.sh` | 0 |
+| `codeql-local.sh` (`CODEQL_RAM=4096`) | OK, 0 blocking |
+
+What the gate found on the way, all fixed in this PR:
+
+- Lint at `a160e28`: format, cppcheck and 236 clang-tidy findings, all in plan 23 files (`125030c`).
+- Coverage: one function never ran (`import_report_io`, `1797f5c`), then 85 must-cover lines (`9acf874`, `0f9b56c`), then 13 untaken branch sides in the import reply (`cda69eb`). The tests behind them found two real bugs: a JSON parse that ran out of memory was reported as "isn't a remember export", and `import_doc_merge_present` carried a dead `e72_identical` branch (identical records never reach it). The plan 23 cleanup calls joined the gate's defensive list in `scripts/check-coverage.sh`.
+- ci-linux: the build broke on glibc's recursive `tolower` macro; two v6 `--from-db` tests wrote the user settings layer under `HOME`, which the container's test user cannot write; the older Linux iwyu, clang-tidy and cppcheck found three include fixes, a `sizeof` on an array of pointers and a false shadow warning.
+- CodeQL: one blocking `cpp/overflowing-snprintf` in a test helper.
+
+`scripts/codeql-local.sh` is bundled here at Itay's choice, so the gate's last step runs the same CodeQL scan as CI.
+
+#### Grades
+
+**Coder: 5/10.**
+
+What was good:
+
+- jsonread is small, pure and strict, with the nesting cap.
+- The merge is split along the plan's rules.
+- Each stage had a gate and one mutant.
+- The `errors[]` envelope and the C-35 line match the copy.
+
+What lost points:
+
+- A Critical scope miss. Markdown and CSV were deferred with no stage scheduled for them, and nothing said so in Status.
+- Eleven exploitable holes, two of them data-destroying: E6 aborted the whole import, and E9 deleted a live link.
+- `--from-db` broke G-33, the plan's own memory rule, and its links bypassed JE-5.1 and validation.
+- P8 was not built.
+- The spec envelope was not updated.
+- An untested read-error path left function coverage below 100%.
+- Plan 23 never passed the repo's own gates. Lint was red (format, cppcheck, 236 clang-tidy findings), 85 lines and 13 branch sides were never run by any test, and the Linux build did not compile.
+- The tests were too weak to catch any of this. 8 of 22 first-round mutants survived, including the JE-5.1 end bump.
+
+Pointers to paste:
+
+- "Before you call a rule done, test it on every write path that can break it: here, file import and `--from-db`."
+- "Never defer a scoped feature in a code comment. Put it in Status and grill it."
+- "For every member a reader takes from hostile input, test the wrong type, null, a duplicate, and NUL."
+
+**Stage reviews: 3/10.**
+
+- All seven stage reviews and the whole-plan review ran in the coder's own session, and none got a second opinion.
+- The whole-plan review said "memories still stamp `{import,null}`" while `--from-db` did not.
+- No review ran an exploit pass on hostile files or brains.
+- Each review ran only one mutant per stage, and each passed a link test that cannot see a missing end bump.
+- No review flagged that Markdown and CSV had no stage.
+- No review ran lint, coverage or the Linux job, so none saw the red gates above.
+
+Pointer to paste:
+
+- "A review claim needs a test or a probe behind it. 'Safe' without a hostile input tried is not a finding."
+- "A stage is not reviewed until lint, coverage and ci-linux are green on it."
+
+#### Not done here
+
+- Plan 23a: the Markdown and CSV readers, and `--from-db` memories through the file merge.
+- E8 (Feb 30): a separate fix to the shared helper.
+- Decisions `g2-16` and `r3-00b` stay `state:accepted` until 23a. The grill decisions G2, G3, G4 and G6 move to `state:implemented` when this plan merges.

@@ -306,7 +306,7 @@ static void given_v4_import_source(const char *db)
                     "PRAGMA user_version=4;");
 }
 
-TEST(cli_import_refuses_source_newer_than_v5)
+TEST(cli_import_refuses_source_newer_than_v6)
 {
     char *local = make_temp_db_path();
     char *foreign = make_temp_db_path();
@@ -323,12 +323,11 @@ TEST(cli_import_refuses_source_newer_than_v5)
     r = run_remember(foreign, add, sizeof(add) / sizeof(add[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 0);
     cmd_result_free(&r);
-    free(harness_sqlite_query_line(foreign, "PRAGMA user_version=6;"));
+    free(harness_sqlite_query_line(foreign, "PRAGMA user_version=7;"));
     ver = harness_sqlite_query_line(foreign, "PRAGMA user_version;");
-    ASSERT_STREQ(ver, "6");
+    ASSERT_STREQ(ver, "7");
     free(ver);
 
-    /* A v6 source is refused until plan 23 reads it. */
     imp[3] = foreign;
     r = run_remember(local, imp, sizeof(imp) / sizeof(imp[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 1);
@@ -336,7 +335,7 @@ TEST(cli_import_refuses_source_newer_than_v5)
     cmd_result_free(&r);
 
     ver = harness_sqlite_query_line(foreign, "PRAGMA user_version;");
-    ASSERT_STREQ(ver, "6");
+    ASSERT_STREQ(ver, "7");
     free(ver);
     r = run_remember(local, list, sizeof(list) / sizeof(list[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 0);
@@ -442,7 +441,7 @@ TEST(cli_import_v5_source_is_read_only_and_optional_rows_stay_there)
     sqlite_exec(foreign, "INSERT INTO settings(name, value, updated_at) VALUES "
                          "('ui.theme', 'dark', '2026-01-01T00:00:00.000Z');"
                          "INSERT INTO bucket_prefixes(prefix, added_at, device_id) VALUES "
-                         "('work', '2026-01-01T00:00:00.000Z', "
+                         "('work:', '2026-01-01T00:00:00.000Z', "
                          "'018f6b2e-7c3a-7b2e-8f3a-7c3a7b2e8f3a');"
                          "INSERT INTO conflicts(sync_id, reason, local_json, incoming_json, "
                          "created_at, origin) VALUES "
@@ -484,13 +483,124 @@ TEST(cli_import_v5_source_is_read_only_and_optional_rows_stay_there)
     free(line);
     line = harness_sqlite_query_line(
         local, "SELECT COUNT(*) FROM settings WHERE key='remember.buckets.prefixes';");
-    ASSERT_STREQ(line, "0");
+    ASSERT_STREQ(line, "1");
+    free(line);
+    line = harness_sqlite_query_line(
+        local, "SELECT value FROM settings WHERE key='remember.buckets.prefixes';");
+    ASSERT_STREQ(line, "[\"work:\"]");
+    free(line);
+    line = harness_sqlite_query_line(
+        local, "SELECT updated_by FROM settings WHERE key='remember.buckets.prefixes';");
+    ASSERT_STREQ(line, "{\"kind\":\"human\",\"id\":null}");
     free(line);
     line = harness_sqlite_query_line(local, "SELECT COUNT(*) FROM conflicts;");
     ASSERT_STREQ(line, "0");
     free(line);
     free(side_before);
     free(side);
+    free(before);
+    free(local);
+    free(foreign);
+}
+
+/* settings commands also open the user layer: keep it beside the brain, never under
+   HOME (the Linux CI container's HOME is not writable by the test user). */
+static CmdResult run_settings(const char *db, const char *const *args, size_t nargs)
+{
+    char *user = harness_side_path(db, "-user.db");
+    // NOLINTNEXTLINE(concurrency-mt-unsafe) the child inherits this process-global
+    const char *was = getenv("REMEMBER_USER_DB");
+    char *saved = (was != NULL) ? strdup(was) : NULL;
+    CmdResult r;
+
+    // NOLINTNEXTLINE(concurrency-mt-unsafe) the child inherits this process-global
+    ASSERT_EQ_INT(setenv("REMEMBER_USER_DB", user, 1), 0);
+    r = run_remember(db, args, nargs, NULL);
+    if (saved != NULL) {
+        // NOLINTNEXTLINE(concurrency-mt-unsafe) the child inherits this process-global
+        ASSERT_EQ_INT(setenv("REMEMBER_USER_DB", saved, 1), 0);
+    } else {
+        // NOLINTNEXTLINE(concurrency-mt-unsafe) the child inherits this process-global
+        ASSERT_EQ_INT(unsetenv("REMEMBER_USER_DB"), 0);
+    }
+    free(saved);
+    free(user);
+    return r;
+}
+
+TEST(cli_import_v6_source_copies_id_and_prefix_ignores_outbox)
+{
+    char *local = make_temp_db_path();
+    char *foreign = make_temp_db_path();
+    char *side = NULL;
+    char *local_dev = NULL;
+    char *local_dev_after = NULL;
+    unsigned char *before = NULL;
+    size_t before_n = 0U;
+    CmdResult r;
+    const char *add[] = {"--json", "add", "--key", "ka", "alpha"};
+    const char *list[] = {"--json", "list"};
+    const char *set_pref[] = {
+        "--json", "settings", "set", "--scope", "brain", "remember.buckets.prefixes", "lab:"};
+    const char *imp[] = {"--json", "import", "--from-db", NULL};
+    char *line = NULL;
+    char *outbox_before = NULL;
+
+    ASSERT_TRUE(local != NULL && foreign != NULL);
+    r = run_remember(local, list, sizeof(list) / sizeof(list[0]), NULL);
+    ASSERT_EQ_INT(r.exit_code, 0);
+    cmd_result_free(&r);
+    side = harness_sidecar_path(local);
+    local_dev = harness_read_line(side);
+    ASSERT_TRUE(local_dev != NULL && local_dev[0] != '\0');
+    free(side);
+
+    r = run_remember(foreign, add, sizeof(add) / sizeof(add[0]), NULL);
+    ASSERT_EQ_INT(r.exit_code, 0);
+    cmd_result_free(&r);
+    r = run_settings(foreign, set_pref, sizeof(set_pref) / sizeof(set_pref[0]));
+    ASSERT_EQ_INT(r.exit_code, 0);
+    cmd_result_free(&r);
+    sqlite_exec(foreign,
+                "INSERT INTO outbox(event_id, type, payload, recipients, created_at) VALUES "
+                "('018f6b2e-7c3a-7c00-8000-0000000000ff', 'memory.upsert', '{\"skip\":true}', "
+                "'[]', '2026-01-01T00:00:00.000Z');");
+    outbox_before = harness_sqlite_query_line(foreign, "SELECT COUNT(*) FROM outbox;");
+    ASSERT_STREQ(outbox_before, "1");
+    free(outbox_before);
+    before = read_file(foreign, &before_n);
+    ASSERT_TRUE(before != NULL);
+
+    imp[3] = foreign;
+    /* Keep the source at v6: run_import() downgrades via harness_make_v5_source. */
+    r = run_remember(local, imp, sizeof(imp) / sizeof(imp[0]), NULL);
+    ASSERT_EQ_INT(r.exit_code, 0);
+    ASSERT_STR_CONTAINS(r.out, "\"inserted\":1");
+    cmd_result_free(&r);
+
+    ASSERT_TRUE(file_matches(foreign, before, before_n));
+    line = harness_sqlite_query_line(foreign, "PRAGMA user_version;");
+    ASSERT_STREQ(line, "6");
+    free(line);
+    line = harness_sqlite_query_line(foreign, "SELECT COUNT(*) FROM outbox;");
+    ASSERT_STREQ(line, "1");
+    free(line);
+    line = harness_sqlite_query_line(local, "SELECT COUNT(*) FROM outbox;");
+    ASSERT_STREQ(line, "0");
+    free(line);
+    line = harness_sqlite_query_line(
+        local, "SELECT value FROM settings WHERE key='remember.buckets.prefixes';");
+    ASSERT_STREQ(line, "[\"lab:\"]");
+    free(line);
+    line = harness_sqlite_query_line(local, "SELECT key FROM entries WHERE deleted_at IS NULL;");
+    ASSERT_STREQ(line, "ka");
+    free(line);
+    side = harness_sidecar_path(local);
+    local_dev_after = harness_read_line(side);
+    ASSERT_STREQ(local_dev_after, local_dev);
+    free(side);
+    free(local_dev_after);
+    free(local_dev);
     free(before);
     free(local);
     free(foreign);
@@ -863,7 +973,7 @@ TEST(cli_import_incoming_dominates_updates)
     ASSERT_EQ_INT(r.exit_code, 0);
     ASSERT_STR_CONTAINS(r.out, "\"body\":\"new\"");
     ASSERT_STR_CONTAINS(r.out, "\"created_by\":{\"kind\":\"agent\",\"id\":null}");
-    ASSERT_STR_CONTAINS(r.out, "\"updated_by\":{\"kind\":\"agent\",\"id\":null}");
+    ASSERT_STR_CONTAINS(r.out, "\"updated_by\":{\"kind\":\"import\",\"id\":null}"); /* G-33 */
     ASSERT_STR_CONTAINS(r.out, "\"updated_at\":\"2020-01-02T00:00:00.000Z\"");
     cmd_result_free(&r);
 
@@ -902,7 +1012,7 @@ TEST(store_import_no_sidecar_copy_devices_stay_one)
     harness_make_v5_source(foreign);
     dst = store_open(local, err, sizeof(err));
     ASSERT_TRUE(dst != NULL);
-    ASSERT_EQ_STATUS(store_import(dst, foreign, k_now, &counts), STORE_OK);
+    ASSERT_EQ_STATUS(store_import(dst, foreign, k_now, NULL, &counts), STORE_OK);
     ASSERT_TRUE(counts.inserted == 1U);
     ASSERT_TRUE(counts.nconflicts == 0U);
     store_import_result_free(&counts);
@@ -912,7 +1022,7 @@ TEST(store_import_no_sidecar_copy_devices_stay_one)
         memset(&got, 0, sizeof(got));
         ASSERT_EQ_STATUS(store_get_any(dst, 1, &got), STORE_OK);
         ASSERT_STREQ(got.created_by, "{\"kind\":\"agent\",\"id\":null}");
-        ASSERT_STREQ(got.updated_by, "{\"kind\":\"agent\",\"id\":null}");
+        ASSERT_STREQ(got.updated_by, "{\"kind\":\"import\",\"id\":null}"); /* G-33 */
         store_entry_free(&got);
     }
     store_close(dst);
@@ -1348,7 +1458,8 @@ TEST(cli_import_and_conflict_human_and_help)
 
     r = run_remember(local, help_import, sizeof(help_import) / sizeof(help_import[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 0);
-    ASSERT_STR_CONTAINS(r.out, "schema v4 or v5");
+    ASSERT_STR_CONTAINS(r.out, "schema v4");
+    ASSERT_STR_CONTAINS(r.out, "--from-json");
     ASSERT_STR_CONTAINS(r.out, "Does not copy the foreign device_id sidecar");
     ASSERT_TRUE(strstr(r.out, "register devices") == NULL);
     cmd_result_free(&r);
@@ -1742,7 +1853,8 @@ TEST(cli_import_bad_vv_row_is_rejected)
     ASSERT_STR_CONTAINS(r.out,
                         "\"inserted\":0,\"updated\":0,\"unchanged\":0,\"conflicts\":{\"count\":0,"
                         "\"items\":[]},\"rejected\":{\"count\":1,\"items\":[{\"source_local_id\":1,"
-                        "\"field\":\"version_vector\"}]}}");
+                        "\"field\":\"version_vector\"}]},\"skipped\":0,\"errors\":[],\"settings\":{"
+                        "\"written\":0,\"unchanged\":0,\"skipped\":0}}");
     cmd_result_free(&r);
 
     harness_remove_tree(dir);
@@ -2188,7 +2300,8 @@ TEST(cli_import_skips_noncanonical_key_and_tag_rows)
                         "{\"source_local_id\":4,\"field\":\"key\"},"
                         "{\"source_local_id\":5,\"field\":\"key\"},"
                         "{\"source_local_id\":6,\"field\":\"key\"},"
-                        "{\"source_local_id\":7,\"field\":\"key\"}]}}");
+                        "{\"source_local_id\":7,\"field\":\"key\"}]},\"skipped\":0,\"errors\":[],"
+                        "\"settings\":{\"written\":0,\"unchanged\":0,\"skipped\":0}}");
     cmd_result_free(&r);
     keys = harness_sqlite_query_line(local, "SELECT group_concat(key) FROM entries;");
     tags = harness_sqlite_query_line(local, "SELECT group_concat(name) FROM tags;");
@@ -2223,7 +2336,7 @@ TEST(cli_import_skips_noncanonical_row_already_present)
     imp[2] = foreign;
     r = run_import(local, foreign, imp, sizeof(imp) / sizeof(imp[0]));
     ASSERT_EQ_INT(r.exit_code, 0);
-    ASSERT_STREQ(r.out, "inserted 0 updated 0 unchanged 0 conflicts 0 rejected 1\n");
+    ASSERT_STREQ(r.out, "inserted 0 updated 0 unchanged 0 conflicts 0 rejected 1 skipped 0\n");
     cmd_result_free(&r);
     key = harness_sqlite_query_line(local, "SELECT key FROM entries WHERE local_id=1;");
     ASSERT_TRUE(key != NULL);
@@ -2306,20 +2419,22 @@ TEST(cli_import_skips_rows_with_a_non_canonical_peer_field)
     imp[3] = foreign;
     r = run_import(local, foreign, imp, sizeof(imp) / sizeof(imp[0]));
     ASSERT_EQ_INT(r.exit_code, 0);
-    ASSERT_STR_CONTAINS(r.out,
-                        "\"inserted\":1,\"updated\":0,\"unchanged\":0,\"conflicts\":{\"count\":0,"
-                        "\"items\":[]},\"rejected\":{\"count\":11,\"items\":["
-                        "{\"source_local_id\":2,\"field\":\"id\"},"
-                        "{\"source_local_id\":3,\"field\":\"created_at\"},"
-                        "{\"source_local_id\":4,\"field\":\"updated_at\"},"
-                        "{\"source_local_id\":5,\"field\":\"expires_at\"},"
-                        "{\"source_local_id\":6,\"field\":\"deleted_at\"},"
-                        "{\"source_local_id\":7,\"field\":\"version_vector\"},"
-                        "{\"source_local_id\":8,\"field\":\"version_vector\"},"
-                        "{\"source_local_id\":9,\"field\":\"version_vector\"},"
-                        "{\"source_local_id\":10,\"field\":\"version_vector\"},"
-                        "{\"source_local_id\":11,\"field\":\"source\"},"
-                        "{\"source_local_id\":12,\"field\":\"body_hash\"}]}}");
+    ASSERT_STR_CONTAINS(
+        r.out,
+        "\"inserted\":1,\"updated\":0,\"unchanged\":0,\"conflicts\":{\"count\":0,"
+        "\"items\":[]},\"rejected\":{\"count\":11,\"items\":["
+        "{\"source_local_id\":2,\"field\":\"id\"},"
+        "{\"source_local_id\":3,\"field\":\"created_at\"},"
+        "{\"source_local_id\":4,\"field\":\"updated_at\"},"
+        "{\"source_local_id\":5,\"field\":\"expires_at\"},"
+        "{\"source_local_id\":6,\"field\":\"deleted_at\"},"
+        "{\"source_local_id\":7,\"field\":\"version_vector\"},"
+        "{\"source_local_id\":8,\"field\":\"version_vector\"},"
+        "{\"source_local_id\":9,\"field\":\"version_vector\"},"
+        "{\"source_local_id\":10,\"field\":\"version_vector\"},"
+        "{\"source_local_id\":11,\"field\":\"source\"},"
+        "{\"source_local_id\":12,\"field\":\"body_hash\"}]},"
+        "\"skipped\":0,\"errors\":[],\"settings\":{\"written\":0,\"unchanged\":0,\"skipped\":0}}");
     cmd_result_free(&r);
     keys = harness_sqlite_query_line(local, "SELECT group_concat(key) FROM entries;");
     ASSERT_TRUE(keys != NULL);
@@ -2405,13 +2520,229 @@ TEST(cli_import_refuses_to_snapshot_a_non_canonical_local_vector)
     free(foreign);
 }
 
+/* ---- Whole-plan review exploits (2026-11-12): hostile v6 sources. ---- */
+
+/* A v6 source brain holding memories a and b (local ids 1 and 2). */
+static char *given_v6_source_a_b(void)
+{
+    char *foreign = make_temp_db_path();
+    const char *add_a[] = {"add", "--key", "a", "alpha"};
+    const char *add_b[] = {"add", "--key", "b", "beta"};
+
+    ASSERT_TRUE(foreign != NULL);
+    given_added(foreign, add_a, 4);
+    given_added(foreign, add_b, 4);
+    return foreign;
+}
+
+// NOLINTNEXTLINE(bugprone-easily-swappable-parameters) the local brain, then the source
+static CmdResult import_from_db(const char *local, const char *foreign)
+{
+    const char *imp[] = {"--json", "import", "--from-db", foreign};
+
+    return run_remember(local, imp, 4, NULL);
+}
+
+static char *basename_dup(const char *path)
+{
+    const char *slash = strrchr(path, '/');
+
+    return strdup(slash != NULL ? slash + 1 : path);
+}
+
+/* A supersedes cycle in the source is one invalid link, named by its rowid. */
+TEST(cli_import_v6_source_cycle_lists_an_invalid_link_by_rowid)
+{
+    char *local = make_temp_db_path();
+    char *foreign = given_v6_source_a_b();
+    char *base = basename_dup(foreign);
+    char want[512];
+    CmdResult r;
+
+    sqlite_exec(foreign,
+                "INSERT INTO entry_links(rowid, id, from_id, to_id, kind, created_at, updated_at, "
+                "version_vector, change_seq) VALUES "
+                "(7, '018f6b2e-7c3a-7c00-8000-000000000001', 1, 2, 'supersedes', "
+                "'2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z', '{}', 0),"
+                "(9, '018f6b2e-7c3a-7c00-8000-000000000002', 2, 1, 'supersedes', "
+                "'2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z', '{}', 0);");
+    r = import_from_db(local, foreign);
+    ASSERT_EQ_INT(r.exit_code, 0);
+    (void)snprintf(want, sizeof want,
+                   "\"skipped\":1,\"errors\":[{\"file\":\"%s\",\"line\":9,\"message\":\"invalid "
+                   "link\"}]",
+                   base);
+    ASSERT_STR_CONTAINS(r.out, want);
+    cmd_result_free(&r);
+    free(base);
+    free(local);
+    free(foreign);
+}
+
+/* A source link whose kind the schema forbids is an invalid link, not an aborted import. */
+TEST(cli_import_v6_source_unknown_link_kind_is_an_invalid_link)
+{
+    char *local = make_temp_db_path();
+    char *foreign = given_v6_source_a_b();
+    char *line = NULL;
+    CmdResult r;
+
+    sqlite_exec(foreign,
+                "PRAGMA ignore_check_constraints = ON;"
+                "INSERT INTO entry_links(rowid, id, from_id, to_id, kind, created_at, updated_at, "
+                "version_vector, change_seq) VALUES "
+                "(3, '018f6b2e-7c3a-7c00-8000-000000000001', 1, 2, 'owns', "
+                "'2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z', '{}', 0);");
+    r = import_from_db(local, foreign);
+    ASSERT_EQ_INT(r.exit_code, 0);
+    ASSERT_STR_CONTAINS(r.out, "\"inserted\":2");
+    ASSERT_STR_CONTAINS(r.out, "\"line\":3,\"message\":\"invalid link\"");
+    cmd_result_free(&r);
+    line = harness_sqlite_query_line(local, "SELECT COUNT(*) FROM entry_links;");
+    ASSERT_STREQ(line, "0");
+    free(line);
+    free(local);
+    free(foreign);
+}
+
+/* A v6 prefixes row is a settings row: a value the registry refuses is skipped, never stored. */
+TEST(cli_import_v6_source_invalid_prefixes_value_is_skipped)
+{
+    char *local = make_temp_db_path();
+    char *foreign = given_v6_source_a_b();
+    char *line = NULL;
+    const char *get[] = {"--json", "settings", "get", "remember.buckets.prefixes"};
+    CmdResult r;
+
+    sqlite_exec(foreign,
+                "INSERT INTO settings(key, value, updated_by, updated_at, device_id, "
+                "version_vector, deleted_at, change_seq) VALUES "
+                "('remember.buckets.prefixes', 'not json', '{\"kind\":\"human\",\"id\":null}', "
+                "'2026-01-01T00:00:00.000Z', '018f6b2e-7c3a-7c00-8000-0000000000aa', "
+                "'{\"018f6b2e-7c3a-7c00-8000-0000000000aa\":9}', NULL, 1);");
+    r = import_from_db(local, foreign);
+    ASSERT_EQ_INT(r.exit_code, 0);
+    ASSERT_STR_CONTAINS(r.out, "\"settings\":{\"written\":0,\"unchanged\":0,\"skipped\":1}");
+    ASSERT_STR_CONTAINS(r.out, "\"code\":\"setting_invalid\"");
+    cmd_result_free(&r);
+    line = harness_sqlite_query_line(local, "SELECT COUNT(*) FROM settings;");
+    ASSERT_STREQ(line, "0");
+    free(line);
+    r = run_settings(local, get, 4);
+    ASSERT_EQ_INT(r.exit_code, 0);
+    cmd_result_free(&r);
+    free(local);
+    free(foreign);
+}
+
+/* A v6 prefixes row with a forged actor is skipped (ST-8.4 bad field), never stored. */
+TEST(cli_import_v6_source_prefixes_row_with_a_bad_actor_is_skipped)
+{
+    char *local = make_temp_db_path();
+    char *foreign = given_v6_source_a_b();
+    char *line = NULL;
+    CmdResult r;
+
+    sqlite_exec(foreign, "INSERT INTO settings(key, value, updated_by, updated_at, device_id, "
+                         "version_vector, deleted_at, change_seq) VALUES "
+                         "('remember.buckets.prefixes', '[\"ok:\"]', 'evil', "
+                         "'2026-01-01T00:00:00.000Z', '018f6b2e-7c3a-7c00-8000-0000000000aa', "
+                         "'{\"018f6b2e-7c3a-7c00-8000-0000000000aa\":9}', NULL, 1);");
+    r = import_from_db(local, foreign);
+    ASSERT_EQ_INT(r.exit_code, 0);
+    ASSERT_STR_CONTAINS(r.out, "\"settings\":{\"written\":0,\"unchanged\":0,\"skipped\":1}");
+    cmd_result_free(&r);
+    line = harness_sqlite_query_line(local, "SELECT COUNT(*) FROM settings;");
+    ASSERT_STREQ(line, "0");
+    free(line);
+    free(local);
+    free(foreign);
+}
+
+/* G2 (decision:plan23-review-g2-from-db-actors): --from-db memories are updated by import. */
+TEST(cli_import_v6_source_memories_are_updated_by_import)
+{
+    char *local = make_temp_db_path();
+    char *foreign = given_v6_source_a_b();
+    char *got = NULL;
+    CmdResult r;
+
+    sqlite_exec(foreign, "UPDATE entries SET updated_by = '{\"kind\":\"agent\",\"id\":\"bot\"}';");
+    r = import_from_db(local, foreign);
+    ASSERT_EQ_INT(r.exit_code, 0);
+    cmd_result_free(&r);
+    got = harness_sqlite_query_line(
+        local, "SELECT COUNT(*) || ' ' || group_concat(DISTINCT updated_by) FROM entries;");
+    ASSERT_STREQ(got, "2 {\"kind\":\"import\",\"id\":null}");
+    free(got);
+    free(local);
+    free(foreign);
+}
+
+/* G2: a v6 created_by that is not an actor is a rejected row, never a human one. */
+TEST(cli_import_v6_source_bad_created_by_is_rejected)
+{
+    char *local = make_temp_db_path();
+    char *foreign = given_v6_source_a_b();
+    char *got = NULL;
+    CmdResult r;
+
+    sqlite_exec(foreign, "PRAGMA ignore_check_constraints = ON;"
+                         "UPDATE entries SET created_by = 'garbage' WHERE key = 'a';");
+    r = import_from_db(local, foreign);
+    ASSERT_EQ_INT(r.exit_code, 0);
+    ASSERT_STR_CONTAINS(r.out,
+                        "\"rejected\":{\"count\":1,\"items\":[{\"source_local_id\":1,\"field\":"
+                        "\"created_by\"}]}");
+    cmd_result_free(&r);
+    got = harness_sqlite_query_line(local, "SELECT group_concat(key) FROM entries;");
+    ASSERT_STREQ(got, "b");
+    free(got);
+    free(local);
+    free(foreign);
+}
+
+/* A v6 source keeps its tombstones and expiry times. */
+TEST(cli_import_v6_source_keeps_deleted_at_and_expires_at)
+{
+    char *local = make_temp_db_path();
+    char *foreign = make_temp_db_path();
+    const char *add_del[] = {"add", "--key", "del", "gone"};
+    const char *del[] = {"delete", "--key", "del"};
+    const char *add_exp[] = {"add", "--key", "exp", "--expires", "2020-01-01T00:00:00.000Z", "old"};
+    char *got = NULL;
+    CmdResult r;
+
+    ASSERT_TRUE(local != NULL && foreign != NULL);
+    given_added(foreign, add_del, sizeof add_del / sizeof add_del[0]);
+    given_added(foreign, del, sizeof del / sizeof del[0]);
+    given_added(foreign, add_exp, sizeof add_exp / sizeof add_exp[0]);
+    r = import_from_db(local, foreign);
+    ASSERT_EQ_INT(r.exit_code, 0);
+    ASSERT_STR_CONTAINS(r.out, "\"inserted\":2");
+    cmd_result_free(&r);
+    got = harness_sqlite_query_line(local, "SELECT group_concat(key || ':' || "
+                                           "(deleted_at IS NOT NULL) || ':' || "
+                                           "coalesce(expires_at, '-'), ';') FROM "
+                                           "(SELECT * FROM entries ORDER BY key);");
+    ASSERT_STREQ(got, "del:1:-;exp:0:2020-01-01T00:00:00.000Z");
+    free(got);
+    free(local);
+    free(foreign);
+}
+
 void register_sync_import_tests(void)
 {
+    RUN_TEST(cli_import_v6_source_cycle_lists_an_invalid_link_by_rowid);
+    RUN_TEST(cli_import_v6_source_unknown_link_kind_is_an_invalid_link);
+    RUN_TEST(cli_import_v6_source_invalid_prefixes_value_is_skipped);
+    RUN_TEST(cli_import_v6_source_prefixes_row_with_a_bad_actor_is_skipped);
     RUN_TEST(cli_import_inserts_preserves_sync_id_remaps_links_no_device_register);
     RUN_TEST(cli_import_refuses_v3_source);
-    RUN_TEST(cli_import_refuses_source_newer_than_v5);
+    RUN_TEST(cli_import_refuses_source_newer_than_v6);
     RUN_TEST(cli_import_v4_source_is_read_only_and_optional_objects_are_absent);
     RUN_TEST(cli_import_v5_source_is_read_only_and_optional_rows_stay_there);
+    RUN_TEST(cli_import_v6_source_copies_id_and_prefix_ignores_outbox);
     RUN_TEST(cli_import_identical_automerge_concurrent_conflict);
     RUN_TEST(cli_import_key_clash_and_hash_clash_exit_0);
     RUN_TEST(cli_import_key_clash_reimport_idempotent);
@@ -2446,6 +2777,9 @@ void register_sync_import_tests(void)
     RUN_TEST(cli_import_skips_rows_with_a_non_canonical_peer_field);
     RUN_TEST(cli_conflicts_refuses_a_snapshot_that_is_not_an_object);
     RUN_TEST(cli_import_refuses_to_snapshot_a_non_canonical_local_vector);
+    RUN_TEST(cli_import_v6_source_memories_are_updated_by_import);
+    RUN_TEST(cli_import_v6_source_bad_created_by_is_rejected);
+    RUN_TEST(cli_import_v6_source_keeps_deleted_at_and_expires_at);
 }
 
 // NOLINTEND(readability-identifier-length,cppcoreguidelines-avoid-magic-numbers,readability-magic-numbers,android-cloexec-fopen,bugprone-unchecked-string-to-number-conversion,cert-err34-c)

@@ -119,6 +119,9 @@ set_property(SOURCE
     src/cmd_export.c
     src/export_format.c
     src/fileio.c
+    src/jsonread.c
+    src/import_read.c
+    src/import_validate.c
     src/cmd_settings.c
     src/output.c
     src/util.c
@@ -252,6 +255,9 @@ set(REMEMBER_LIB_SOURCES
     src/cmd_export.c
     src/export_format.c
     src/fileio.c
+    src/jsonread.c
+    src/import_read.c
+    src/import_validate.c
     src/cmd_settings.c
     src/output.c
     src/util.c
@@ -339,6 +345,7 @@ set(REMEMBER_TEST_SOURCES
     tests/test_settings.c
     tests/test_envelope.c
     tests/test_export.c
+    tests/test_import_formats.c
     tests/fixture_roundtrip.c
 )
 add_executable(remember_tests
@@ -398,10 +405,13 @@ add_executable(remember_store_tests
     src/unicode.c
     src/search_terms.c
     src/output.c
+    src/jsonread.c
+    src/import_validate.c
     src/test_alloc.c
     tests/test_unicode.c
     tests/test_search_terms.c
     tests/test_output.c
+    tests/test_jsonread.c
     tests/failing_stream.c
     third_party/sha256/sha256.c
     third_party/utf8proc/utf8proc.c

@@ -17,7 +17,8 @@ enum {
     HEX_LEN = 2 * RANDOM_BYTES,
     DECIMAL_BASE = 10,
     EXPORT_FILE_MODE = 0600,
-    EXPORT_DIR_MODE = 0700
+    EXPORT_DIR_MODE = 0700,
+    READ_FIRST_CAP = 8192
 };
 
 #ifdef REMEMBER_TEST_CLI
@@ -313,4 +314,69 @@ void fileio_remove_tree(const char *path)
        the same state a crash leaves (D17). */
     // NOLINTNEXTLINE(concurrency-mt-unsafe) single-threaded CLI
     (void)nftw(path, remove_one, FTW_FDS, FTW_DEPTH | FTW_PHYS);
+}
+
+int fileio_read_all(const char *path, char **out_bytes, size_t *out_len, int *sys_errno)
+{
+    FILE *f = NULL;
+    char *buf = NULL;
+    size_t cap = 0;
+    size_t n = 0;
+    int closed = 0;
+
+    if (out_bytes == NULL || out_len == NULL || sys_errno == NULL) {
+        return -1;
+    }
+    *out_bytes = NULL;
+    *out_len = 0;
+    errno = 0;
+    /* macOS fopen has no 'e' (O_CLOEXEC) mode; CLI is short-lived. */
+    // NOLINTNEXTLINE(android-cloexec-fopen)
+    f = fopen(path, "rb");
+    if (f == NULL) {
+        goto fail;
+    }
+    for (;;) {
+        size_t want = 0;
+        size_t got = 0;
+
+        if (n + 1U >= cap) {
+            size_t next = (cap == 0U) ? (size_t)READ_FIRST_CAP : (cap * 2U);
+            char *grown = (char *)realloc(buf, next);
+
+            if (grown == NULL) {
+                goto fail; /* realloc sets ENOMEM */
+            }
+            buf = grown;
+            cap = next;
+        }
+        want = cap - n - 1U; /* keep one byte for the NUL */
+        got = fread(buf + n, 1U, want, f);
+        n += got;
+        if (got < want) {
+            break; /* end of file or an error: never read the stream again */
+        }
+    }
+    if (ferror(f) != 0) {
+        goto fail;
+    }
+    closed = fclose(f);
+    f = NULL;
+    if (closed != 0) {
+        goto fail;
+    }
+    buf[n] = '\0';
+    *out_bytes = buf;
+    *out_len = n;
+    return 0;
+
+fail:
+    /* errno was 0 before fopen; a failure that leaves it 0 (a stream error) is EIO. */
+    // NOLINTNEXTLINE(clang-analyzer-unix.Errno)
+    *sys_errno = (errno != 0) ? errno : EIO;
+    if (f != NULL) {
+        (void)fclose(f);
+    }
+    free(buf);
+    return -1;
 }

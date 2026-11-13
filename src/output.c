@@ -1177,6 +1177,16 @@ static int output_one_conflict_json(FILE *out, const StoreConflict *row)
     if (output_json_string(out, row->created_at) != 0) {
         return -1;
     }
+    if (fputs(",\"origin\":", out) < 0) {
+        return -1;
+    }
+    if (row->origin == NULL) {
+        if (fputs("null", out) < 0) {
+            return -1;
+        }
+    } else if (output_json_string(out, row->origin) != 0) {
+        return -1;
+    }
     return (fputc('}', out) == EOF) ? -1 : 0;
 }
 
@@ -1224,12 +1234,32 @@ static int write_import_rejects(FILE *out, const StoreImportReject *items, size_
     return fputs("]}", out) < 0 ? -1 : 0;
 }
 
+static int write_import_errors(FILE *out, const StoreImportError *items, size_t count)
+{
+    size_t i = 0;
+
+    if (fprintf(out, ",\"skipped\":%zu,\"errors\":[", count) < 0) {
+        return -1;
+    }
+    for (i = 0; i < count; i++) {
+        if (items[i].message == NULL || items[i].file == NULL ||
+            (i > 0U && fputc(',', out) == EOF) || fputs("{\"file\":", out) < 0 ||
+            output_json_string(out, items[i].file) != 0 ||
+            fprintf(out, ",\"line\":%lld,\"message\":", items[i].line) < 0 ||
+            output_json_string(out, items[i].message) != 0 || fputc('}', out) == EOF) {
+            return -1;
+        }
+    }
+    return fputc(']', out) == EOF ? -1 : 0;
+}
+
 int output_import_data(FILE *out, const StoreImportResult *r)
 {
     size_t i = 0;
 
     if (out == NULL || r == NULL || (r->nconflicts > 0U && r->conflicts == NULL) ||
-        (r->nrejected > 0U && r->rejected == NULL)) {
+        (r->nrejected > 0U && r->rejected == NULL) || (r->nerrors > 0U && r->errors == NULL) ||
+        r->skipped != r->nerrors) {
         return -1;
     }
     if (write_data_open(out) != 0 ||
@@ -1245,7 +1275,12 @@ int output_import_data(FILE *out, const StoreImportResult *r)
             return -1;
         }
     }
-    if (fputs("]}", out) < 0 || write_import_rejects(out, r->rejected, r->nrejected) != 0) {
+    if (fputs("]}", out) < 0 || write_import_rejects(out, r->rejected, r->nrejected) != 0 ||
+        write_import_errors(out, r->errors, r->nerrors) != 0) {
+        return -1;
+    }
+    if (fprintf(out, ",\"settings\":{\"written\":%zu,\"unchanged\":%zu,\"skipped\":%zu}",
+                r->settings.written, r->settings.unchanged, r->settings.skipped) < 0) {
         return -1;
     }
     return fputs(DATA_END, out) < 0 ? -1 : 0;

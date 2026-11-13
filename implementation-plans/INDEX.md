@@ -42,7 +42,8 @@ main → cli_parse → commands.h (cmd_add | cmd_locator | cmd_query) → store_
 - 20. Plan: [Settings](20-settings.md). Done when: Registry, user.db, resolution, commands, credential helper, settings export/import. Copy approved 2026-10-25. After plan 19. Command JSON after plan 21. The `unknown_key` and `bad_field` import-skip lines are written (copy item C-43), and every warning has a `fix` (E3 B).
 - 21. Plan: [JSON envelope](21-json-envelope.md). Done when: `remember-message` 1, locators, actors, `--trash` means Trash. Copy approved 2026-10-25. After plan 19. Does not implement `brains.json`. The hook-depth `--as`/`--actor` line is a C-42-style draft. ✅.
 - 22. Plan: [Export](22-export.md). Done when: JSON, Markdown, CSV memory export. READY. D-04 is answered (2026-10-25).
-- 23. Plan: [Import formats](23-import-formats.md). Done when: JSON, Markdown, CSV, and `--from-db` v4–v6. Copy approved 2026-10-25. D-04 is answered (2026-10-25). No old-name reader. No add-wins.
+- 23. Plan: [Import formats](23-import-formats.md). Done when: JSON and `--from-db` v4–v6. Markdown and CSV moved to 23a (2026-11-12). Copy approved 2026-10-25. D-04 is answered (2026-10-25). No old-name reader. No add-wins.
+- 23a. Plan: [Import Markdown and CSV](23a-import-md-csv.md). Done when: `--from-md`, `--from-csv`, and `--from-db` memories through the file merge. Split from 23 (2026-11-12).
 - 24. Plan: [Plugin protocol](24-plugin-protocol.md). Done when: Docs CI, schema extraction, fixtures. READY. Spec revision 6 is already in the repo. ✅.
 - 25. Plan: [Plugin manifest](25-plugin-manifest.md). Done when: `plugin.json` parses to the protocol schema. Needs 24.
 - 26. Plan: [Brain list](26-brain-list.md). Done when: `brains.json`, `brain list`, `brain prune`. Needs 19, 25 (cut from the same branch).
