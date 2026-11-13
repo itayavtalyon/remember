@@ -73,7 +73,7 @@ The user command's exit does not change because of a result this function return
 - [x] `a failed row at 6 days stays and at 7 days is deleted` (`outbox_a_failed_row_at_6_days_stays`, `outbox_a_failed_row_at_7_days_is_deleted`, `outbox_a_halted_row_at_6_days_stays_and_at_7_days_is_deleted`).
 - [x] `outbox_lane_count is 4 and a 5th lane is refused` (`outbox_lane_count_is_4_and_a_5th_lane_is_refused`).
 - [x] `specs/OUTBOX-DELIVERY.md` is written, and `decision:2026-11-12-hook-delivery-retry` is `state:implemented`.
-- [ ] The gate passes on the committed tree, and the notes record the mutants and their red tests.
+- [x] The gate passes on the committed tree, and the notes record the mutants and their red tests (Implementation Notes: Mutants, Gate).
 
 ## Implementation Notes
 
@@ -129,6 +129,17 @@ Two mutants survive and are equivalent: the clamp `next >= cap` (it sets 3600 to
 
 **Security and exploit pass.** The inputs come from an outbox row, so a hand-edited or synced row is hostile: negative or undefined values are refused; `waited_s` and `chain_len` up to `INT64_MAX` give `failed` and `halted` with no multiply or add that can overflow (the only multiply runs after the `>= 3600` check); `age_days` up to `INT64_MAX` compares, never adds. The module never reads a clock and never adds to a time. The caller adds `backoff_s` (at most 3600 when `retry_at` is `AFTER_BACKOFF`) to its own `now`. Residual risk, not in this module: a hand-edited `next_retry_at` far in the future holds a `pending` recipient for as long, because only `failed` and `halted` rows are dropped by age (the plan's rule); a `pending` row's `backoff_s` is passed back unchanged on a crash, so an edited huge value survives a crash but never reaches a time sum (`retry_at` is `KEEP`).
 
-**Proof of the gate.** See Review Notes.
+**Gate** (run on commit `28c1438`, a clean tree; the next commit changes only this plan file). Each command ran inside the shared heavy-job lock.
+
+| Check | Command | Result |
+|---|---|---|
+| ASan/UBSan build and ctest | `cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug -DREMEMBER_ENABLE_SANITIZERS=ON -DREMEMBER_ENABLE_LSAN=OFF -DREMEMBER_TEST_VFS=ON && cmake --build build && ctest --test-dir build --output-on-failure` | 6 of 6 passed, no build warning in the new files (the allocator-wrapper warnings in `store_sqlite.c` and `import_read.c` are older) |
+| Lint | `scripts/lint-all.sh` | format, boundaries, cppcheck, gcc -fanalyzer, clang-tidy (LLVM 22), scan-build pass; IWYU skipped on macOS |
+| Coverage | `scripts/check-coverage.sh` | functions 100%, effective lines 100%, pure-TU branches 100%. `outbox.c` alone: 8 of 8 functions, 66 of 66 lines, 46 of 46 branch sides (read from `build-cov/coverage-report.txt` and `coverage-branches.json`). `outbox.c` is not in the branch-gated list; I did not widen that list. |
+| Linux CI | `scripts/ci-linux.sh` | OK (clang-tidy 18, IWYU, scan-build) |
+| macOS leaks | `cmake --build build --target leaks-macos` | PASS |
+| CodeQL | `scripts/codeql-local.sh` | OK, 43 allowed alerts, none new |
+
+Two earlier lint runs failed and were fixed: the test file's magic numbers, easily-swapped parameters, int-to-bool and enum-cast findings, the missing `<stddef.h>`/`<stdint.h>` includes in `src/outbox.c`, and an unnamed `pad_[6]`. The first ctest run used a build without `-DREMEMBER_TEST_VFS=ON`; 20 older tests failed there for that reason and pass with the CI flags.
 
 ## Review Notes
