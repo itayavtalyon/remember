@@ -1,0 +1,9 @@
+# Reviewed CodeQL alerts that scripts/codeql-local.sh lets through.
+# rule<TAB>path prefix<TAB>text in the alert message<TAB>why it is safe
+# An alert passes only when all three match. Keep entries narrow, and give each
+# one a reason a reviewer can check. Everything else fails the gate.
+cpp/path-injection	src/	an environment variable	The CLI runs as the user; HOME and REMEMBER_* name the user's own files.
+cpp/path-injection	src/cmd_export.c	buffer read by read	The "input" is random_hex's /dev/urandom bytes, hex-encoded into a temp-file suffix (fileio.c).
+cpp/uncontrolled-process-operation	tests/	a command-line argument	The harness runs the binary under test, named on its own command line.
+cpp/uncontrolled-process-operation	tests/harness.c	read by	The sqlite3 fixture runs test SQL on a test path, both shell-quoted by shell_quote_append.
+cpp/world-writable-file-creation	tests/	with mode 0666	Test files live under make_temp_db_path()'s mkdtemp directory (0700).

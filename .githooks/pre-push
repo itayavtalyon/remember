@@ -1,21 +1,18 @@
 #!/usr/bin/env bash
-# pre-push: run Linux CI in Docker (same as GitHub Actions linux job).
+# pre-push: run Linux CI in Docker (same as GitHub Actions linux job), then
+# local CodeQL (scripts/codeql-local.sh, stricter than CI's CodeQL).
 #
 # Enable once per clone:
 #   ./scripts/install-hooks.sh
 #   # or: git config core.hooksPath .githooks
 #
-# Skip for one push (use sparingly):
-#   SKIP_LINUX_CI=1 git push
-#   git push --no-verify
+# Skip one check for one push (use sparingly):
+#   SKIP_LINUX_CI=1 git push      # ci-linux.sh already passed on this commit
+#   SKIP_CODEQL=1 git push        # codeql-local.sh already passed on this commit
+#   git push --no-verify          # both
 set -euo pipefail
 
-# Only block actual pushes of commits (not when stdin is empty with no refs).
-# Still run when any ref is being updated.
-if [[ "${SKIP_LINUX_CI:-}" == "1" || "${SKIP_LINUX_CI:-}" == "true" ]]; then
-  echo "pre-push: SKIP_LINUX_CI set — skipping ./scripts/ci-linux.sh" >&2
-  exit 0
-fi
+skip() { [[ "${1:-}" == "1" || "${1:-}" == "true" ]]; }
 
 ROOT="$(git rev-parse --show-toplevel 2>/dev/null || true)"
 if [[ -z "$ROOT" ]]; then
@@ -24,7 +21,7 @@ if [[ -z "$ROOT" ]]; then
 fi
 cd "$ROOT"
 
-# Docs-only pushes skip CI, like the GitHub linux/macos jobs. Files come from
+# Docs-only pushes skip both, like the GitHub linux/macos jobs. Files come from
 # commits not yet on any remote; -m lists merge commits against each parent.
 # stdin: <local ref> <local sha> <remote ref> <remote sha>, one line per ref.
 code=0
@@ -35,28 +32,31 @@ while read -r _ local_sha _ _; do
   fi
 done
 if [[ "$code" == 0 ]]; then
-  echo "pre-push: docs-only push — skipping ./scripts/ci-linux.sh" >&2
+  echo "pre-push: docs-only push — skipping Linux CI and CodeQL" >&2
   exit 0
 fi
 
-if [[ ! -x ./scripts/ci-linux.sh ]]; then
-  echo "pre-push: missing executable ./scripts/ci-linux.sh" >&2
-  exit 1
+if skip "${SKIP_LINUX_CI:-}"; then
+  echo "pre-push: SKIP_LINUX_CI set — skipping ./scripts/ci-linux.sh" >&2
+else
+  if ! command -v docker >/dev/null 2>&1; then
+    echo "pre-push: docker not found on PATH." >&2
+    echo "  Install Docker, or skip with: SKIP_LINUX_CI=1 git push" >&2
+    exit 1
+  fi
+  if ! docker info >/dev/null 2>&1; then
+    echo "pre-push: Docker daemon is not running." >&2
+    echo "  Start Docker Desktop, or skip with: SKIP_LINUX_CI=1 git push" >&2
+    exit 1
+  fi
+  echo "pre-push: running Linux CI (./scripts/ci-linux.sh)…"
+  ./scripts/ci-linux.sh
+  echo "pre-push: Linux CI OK"
 fi
 
-if ! command -v docker >/dev/null 2>&1; then
-  echo "pre-push: docker not found on PATH." >&2
-  echo "  Install Docker, or skip with: SKIP_LINUX_CI=1 git push" >&2
-  exit 1
+if skip "${SKIP_CODEQL:-}"; then
+  echo "pre-push: SKIP_CODEQL set — skipping ./scripts/codeql-local.sh" >&2
+else
+  echo "pre-push: running CodeQL (./scripts/codeql-local.sh, about 3 minutes)…"
+  ./scripts/codeql-local.sh
 fi
-
-if ! docker info >/dev/null 2>&1; then
-  echo "pre-push: Docker daemon is not running." >&2
-  echo "  Start Docker Desktop, or skip with: SKIP_LINUX_CI=1 git push" >&2
-  exit 1
-fi
-
-echo "pre-push: running Linux CI (./scripts/ci-linux.sh)…"
-echo "  (skip: SKIP_LINUX_CI=1 git push  |  git push --no-verify)"
-./scripts/ci-linux.sh
-echo "pre-push: Linux CI OK"
