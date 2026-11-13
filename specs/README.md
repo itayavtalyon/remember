@@ -15,6 +15,7 @@ A spec describes what `remember` does today. It is normative.
 | [PLUGIN-PROTOCOL-CHANGES.md](PLUGIN-PROTOCOL-CHANGES.md) | `subject:plugin-protocol` | Changelog of the plugin protocol |
 | [JSON-STYLE.md](JSON-STYLE.md) | `subject:json-envelope` | JSON value rules for every surface |
 | [JSON-ENVELOPE.md](JSON-ENVELOPE.md) | `subject:json-envelope` | Message envelope for CLI `--json` |
+| [OUTBOX-DELIVERY.md](OUTBOX-DELIVERY.md) | `subject:plugins-and-hooks` | Recipient state machine: backoff retry, pre-flight failure, 100-hop halt, 7-day drop, lanes |
 | [SETTINGS.md](SETTINGS.md) | `subject:settings` | Settings registry, layers, user.db, history, sync token, `remember settings` commands, export and import |
 
 ## Not written yet
