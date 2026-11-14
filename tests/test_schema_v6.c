@@ -1038,8 +1038,8 @@ TEST(schema_v6_a_newer_min_reader_version_makes_the_brain_read_only)
                      STORE_ERR_SCHEMA_TOO_NEW);
     ASSERT_EQ_STATUS(store_repair_search_index(s, &entries), STORE_ERR_SCHEMA_TOO_NEW);
     ASSERT_STREQ(store_status_message(STORE_ERR_SCHEMA_TOO_NEW),
-                 "this brain was written by a newer remember. You can read it. Upgrade to write "
-                 "to it.");
+                 "this brain was made by a newer version of remember, so it is read-only here. "
+                 "You can still read and export it.");
     store_close(s);
     assert_seqs(db, "1:1 2:2", "2");
     free(db);
@@ -1448,12 +1448,18 @@ TEST(schema_v6_cli_a_newline_in_a_prefix_warning_stays_one_line)
     free(db);
 }
 
-/* 007 ST-10.2 plain line. The JSON fix waits on COPY-PENDING C-01, so the JSON
-   check reads only the code. */
+/* A newer min_reader_version on a schema 6 brain (plan 27b: exit 75, R27b-1). The
+   full copy is in test_old_cli.c; this keeps the plan 19 trigger. */
 TEST(schema_v6_cli_a_write_to_a_newer_brain_prints_schema_too_new)
 {
-    static const char k_plain[] = "remember: this brain was written by a newer remember. You can "
-                                  "read it. Upgrade to write to it.\n";
+    static const char k_plain[] =
+        "remember: this brain was made by a newer version of remember, so it is read-only here. "
+        "You can still read and export it. This brain uses schema 6; this remember reads up to "
+        "schema 6. Upgrade remember to make changes.\n";
+    static const char k_warning[] = "remember: warning: this brain was made by a newer version of "
+                                    "remember, so it is read-only here. You can still read and "
+                                    "export it. This brain uses schema 6; this remember reads up "
+                                    "to schema 6. Upgrade remember to make changes.\n";
     char *db = make_temp_db_path();
     const char *add[] = {"add", "seed"};
     const char *list[] = {"list"};
@@ -1469,17 +1475,17 @@ TEST(schema_v6_cli_a_write_to_a_newer_brain_prints_schema_too_new)
     r = run_remember(db, list, sizeof(list) / sizeof(list[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 0);
     ASSERT_STR_CONTAINS(r.out, "seed");
-    ASSERT_STREQ(r.err, "");
+    ASSERT_STREQ(r.err, k_warning);
     cmd_result_free(&r);
 
     r = run_remember(db, add, sizeof(add) / sizeof(add[0]), NULL);
-    ASSERT_EQ_INT(r.exit_code, 1);
+    ASSERT_EQ_INT(r.exit_code, 75);
     ASSERT_STREQ(r.out, "");
     ASSERT_STREQ(r.err, k_plain);
     cmd_result_free(&r);
 
     r = run_remember(db, add_json, sizeof(add_json) / sizeof(add_json[0]), NULL);
-    ASSERT_EQ_INT(r.exit_code, 1);
+    ASSERT_EQ_INT(r.exit_code, 75);
     ASSERT_STR_CONTAINS(r.out, "\"code\":\"schema_too_new\"");
     cmd_result_free(&r);
     assert_query_is(db, (QueryExpect){.sql = "SELECT COUNT(*) FROM entries;", .want = "1"});

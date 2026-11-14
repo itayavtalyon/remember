@@ -43,5 +43,6 @@ void register_export_tests(void);
 void register_import_formats_tests(void);
 void register_jsonread_tests(void);
 void register_outbox_tests(void);
+void register_old_cli_tests(void);
 
 #endif /* REMEMBER_REGISTER_H */

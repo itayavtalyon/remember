@@ -259,7 +259,7 @@ TEST(error_catalog_rejects_names_outside_e4_3)
 
 static const char *const k_warning_codes[] = {
     "raw_query_ignored",    "deprecated_flag", "synced_folder",          "setting_invalid",
-    "flag_meaning_changed", "unknown_field",   "setting_import_skipped",
+    "flag_meaning_changed", "unknown_field",   "setting_import_skipped", "schema_too_new_read_only",
 };
 
 TEST(warning_catalog_round_trips_every_code)
@@ -948,6 +948,7 @@ TEST(store_text_codes_follow_the_locked_split)
     expect_diag(code_for_store_status(STORE_ERR_CYCLE), DIAG_CYCLE);
     expect_diag(code_for_store_status(STORE_ERR_SOURCE_TOO_OLD), DIAG_SOURCE_TOO_OLD);
     expect_diag(code_for_store_status(STORE_ERR_SOURCE_TOO_NEW), DIAG_NEWER_DATABASE);
+    expect_diag(code_for_store_status(STORE_ERR_SCHEMA_TOO_NEW), DIAG_SCHEMA_TOO_NEW);
     expect_diag(code_for_store_status(STORE_ERR_UNIQUE_TAKEN), DIAG_UNIQUE_TAKEN);
     expect_diag(code_for_store_status(STORE_ERR_STALE), DIAG_STALE);
     expect_diag(code_for_store_status(STORE_ERR_BAD_VV), DIAG_USAGE);
