@@ -27,6 +27,7 @@ enum {
     OLD_CLI_SCHEMA = 6,
     OLD_CLI_NEWER = 7,
     OLD_CLI_SQL_BUF = 64,
+    OLD_CLI_UPDATE_BUF = 512,
     OLD_CLI_MAX_ARGS = 8,
     OLD_CLI_BUSY_MS = 5000
 };
@@ -64,7 +65,7 @@ TEST(old_cli_detect_by_schema_version)
     char *newer = given_brain_at_schema(OLD_CLI_NEWER);
     char *equal = given_brain_at_schema(OLD_CLI_SCHEMA);
     char err[ERR_BUFSIZE];
-    StoreSchemaGap gap = {0, 0};
+    StoreSchemaGap gap = {.brain_schema = 0};
     Store *s = NULL;
 
     err[0] = '\0';
@@ -131,7 +132,7 @@ TEST(old_cli_a_brain_upgraded_during_the_open_opens_read_only)
     ASSERT_TRUE(pid >= 0);
     if (pid == 0) {
         char err[ERR_BUFSIZE];
-        StoreSchemaGap gap = {0, 0};
+        StoreSchemaGap gap = {.brain_schema = 0};
         Store *s = NULL;
         int code = 1;
 
@@ -565,42 +566,248 @@ TEST(old_cli_a_command_leaves_no_journal_and_no_new_bytes)
 
 /* ---- hostile values -------------------------------------------------------- */
 
-/* K_NEWER_MESSAGE with both numbers 6: a min_reader_version trigger. */
-#define K_SAME_SCHEMA_MESSAGE                                                                      \
+/* R27b-2 (decision:2026-11-14-copy-r27b-2-r27b-3-approved). A brain newer only
+   by min_reader_version (its schema_version equals this build's). Literals, never
+   built from the code under test. */
+#define K_C01_MESSAGE                                                                              \
     "this brain was made by a newer version of remember, so it is read-only here. You can still "  \
-    "read and export it. This brain uses schema 6; this remember reads up to schema 6."
+    "read and export it."
 
-TEST(old_cli_hostile_min_reader_version_is_never_echoed)
+/* What `remember --version` prints after "remember ": the <version> of the
+   line (decision:2026-11-14-r27b-2-3-stop-and-ask, answer 1). */
+static void given_cli_version(const char *db, char *out, size_t cap)
+{
+    static const char k_prefix[] = "remember ";
+    const size_t prefix = sizeof(k_prefix) - 1U;
+    CmdResult r = RUN_ARGS(db, "version");
+    size_t len = strlen(r.out);
+
+    ASSERT_EQ_INT(r.exit_code, 0);
+    ASSERT_TRUE(strncmp(r.out, k_prefix, prefix) == 0);
+    ASSERT_TRUE(len > prefix + 1U && r.out[len - 1U] == '\n' && len - prefix <= cap);
+    memcpy(out, r.out + prefix, len - prefix - 1U);
+    out[len - prefix - 1U] = '\0';
+    cmd_result_free(&r);
+}
+
+enum { OLD_CLI_LINE_BUF = 1024 };
+
+/* A schema 6 brain whose min_reader_version is `value` (SQL text). */
+static char *given_brain_with_min_reader(const char *value_sql)
+{
+    char *db = given_brain_at_schema(OLD_CLI_SCHEMA);
+    char sql[OLD_CLI_UPDATE_BUF];
+
+    (void)snprintf(sql, sizeof(sql), "UPDATE brain_meta SET min_reader_version = %s;", value_sql);
+    exec_sql(db, sql);
+    return db;
+}
+
+/* The four outputs of one brain: read and write, plain and JSON. */
+typedef struct {
+    CmdResult read_human;
+    CmdResult read_json;
+    CmdResult write_human;
+    CmdResult write_json;
+} FourRuns;
+
+static FourRuns given_four_runs(const char *db)
+{
+    FourRuns f = {RUN_ARGS(db, "get", "1"), RUN_ARGS(db, "--json", "get", "1"),
+                  RUN_ARGS(db, "add", "x"), RUN_ARGS(db, "--json", "add", "x")};
+
+    return f;
+}
+
+static void four_runs_free(FourRuns *f)
+{
+    cmd_result_free(&f->read_human);
+    cmd_result_free(&f->read_json);
+    cmd_result_free(&f->write_human);
+    cmd_result_free(&f->write_json);
+}
+
+/* The detail object of both JSON runs must be exactly `detail_json`, and the
+   message in both exactly `message`. */
+static void assert_json_notices(const FourRuns *f, const char *message, const char *detail_json)
+{
+    char want[OLD_CLI_LINE_BUF];
+
+    (void)snprintf(want, sizeof(want),
+                   ",\"warnings\":[{\"code\":\"schema_too_new_read_only\",\"message\":\"%s\","
+                   "\"fix\":\"" K_NEWER_FIX "\",\"detail\":%s}]}\n",
+                   message, detail_json);
+    ASSERT_STR_CONTAINS(f->read_json.out, want);
+    ASSERT_STREQ(f->read_json.err, "");
+    (void)snprintf(want, sizeof(want),
+                   "\"error\":{\"code\":\"schema_too_new\",\"message\":\"%s\",\"fix\":\"" K_NEWER_FIX
+                   "\",\"retryable\":false,\"detail\":%s}}\n",
+                   message, detail_json);
+    ASSERT_STR_CONTAINS(f->write_json.out, want);
+    ASSERT_STREQ(f->write_json.err, "");
+}
+
+static void assert_plain_lines(const FourRuns *f, const char *message)
+{
+    char want[OLD_CLI_LINE_BUF];
+
+    ASSERT_EQ_INT(f->read_human.exit_code, 0);
+    (void)snprintf(want, sizeof(want), "remember: warning: %s " K_NEWER_FIX "\n", message);
+    ASSERT_STREQ(f->read_human.err, want);
+    ASSERT_EQ_INT(f->write_human.exit_code, 75);
+    (void)snprintf(want, sizeof(want), "remember: %s " K_NEWER_FIX "\n", message);
+    ASSERT_STREQ(f->write_human.err, want);
+    ASSERT_EQ_INT(f->write_json.exit_code, 75);
+}
+
+TEST(old_cli_min_reader_variant_1_read_and_write_lines)
+{
+    char *db = given_brain_with_min_reader("'0.4.0'");
+    char version[OLD_CLI_SQL_BUF];
+    FourRuns f = given_four_runs(db);
+    char message[OLD_CLI_LINE_BUF];
+
+    given_cli_version(db, version, sizeof(version));
+    (void)snprintf(message, sizeof(message),
+                   K_C01_MESSAGE " This brain needs remember 0.4.0 or later; this is remember %s.",
+                   version);
+    assert_plain_lines(&f, message);
+    ASSERT_STR_CONTAINS(f.read_json.out, message);
+    ASSERT_STR_CONTAINS(f.write_json.out, message);
+    ASSERT_STR_NOT_CONTAINS(f.read_human.err, "schema 6");
+    four_runs_free(&f);
+    free(db);
+}
+
+/* Variant 2: the value is bytes of unknown form, so no number is printed. */
+TEST(old_cli_min_reader_variant_2_for_unparseable_value)
+{
+    char *db = given_brain_with_min_reader("'not-a-version'");
+    FourRuns f = given_four_runs(db);
+
+    assert_plain_lines(&f, K_C01_MESSAGE);
+    ASSERT_STR_NOT_CONTAINS(f.read_human.err, "needs remember");
+    ASSERT_STR_NOT_CONTAINS(f.write_human.err, "schema");
+    ASSERT_STR_NOT_CONTAINS(f.read_human.err, "not-a-version");
+    four_runs_free(&f);
+    free(db);
+}
+
+/* detail: four members, in both variants and for both codes. Variant 2 masks
+   the stored value (answer 2): the member stays and holds "". */
+TEST(old_cli_min_reader_detail_has_four_members_both_variants_both_codes)
+{
+    char *db = given_brain_with_min_reader("'0.4.0'");
+    char *bad = given_brain_with_min_reader("'4'");
+    char version[OLD_CLI_SQL_BUF];
+    char detail[OLD_CLI_LINE_BUF];
+    FourRuns f = given_four_runs(db);
+
+    given_cli_version(db, version, sizeof(version));
+    (void)snprintf(detail, sizeof(detail),
+                   "{\"brain_schema_version\":\"6\",\"cli_schema_version\":\"6\","
+                   "\"min_reader_version\":\"0.4.0\",\"cli_version\":\"%s\"}",
+                   version);
+    ASSERT_STR_CONTAINS(f.read_json.out, detail);
+    ASSERT_STR_CONTAINS(f.write_json.out, detail);
+    four_runs_free(&f);
+
+    f = given_four_runs(bad);
+    (void)snprintf(detail, sizeof(detail),
+                   "{\"brain_schema_version\":\"6\",\"cli_schema_version\":\"6\","
+                   "\"min_reader_version\":\"\",\"cli_version\":\"%s\"}",
+                   version);
+    assert_json_notices(&f, K_C01_MESSAGE, detail);
+    four_runs_free(&f);
+    free(bad);
+    free(db);
+}
+
+/* A hostile value is masked in the JSON detail and never printed in the human
+   line: Variant 2 for each (decision:2026-11-14-r27b-2-3-stop-and-ask, answer 2). */
+TEST(old_cli_hostile_min_reader_version_is_masked)
 {
     static const char *const k_hostile[] = {
-        "UPDATE brain_meta SET min_reader_version = 'not-a-version';",
-        "UPDATE brain_meta SET min_reader_version = printf('%.300c', 'x');",
-        "UPDATE brain_meta SET min_reader_version = char(27) || '[31m' || char(10) || 'evil';",
-        "UPDATE brain_meta SET min_reader_version = '99999999999999999999.0.0';",
+        "'not-a-version'",
+        "printf('%.300c', 'x')",
+        "char(27) || '[31m' || char(10) || 'evil'",
+        "'99999999999999999999.0.0'",
+        "printf('%.300c', '0') || '4.0.0'", /* parses, but is over-long */
+        "'0.4.0 '",
+        "''",
     };
+    char *db = given_brain_at_schema(OLD_CLI_SCHEMA);
+    char version[OLD_CLI_SQL_BUF];
+    char detail[OLD_CLI_LINE_BUF];
     size_t i = 0;
 
+    given_cli_version(db, version, sizeof(version));
+    free(db);
+    (void)snprintf(detail, sizeof(detail),
+                   "{\"brain_schema_version\":\"6\",\"cli_schema_version\":\"6\","
+                   "\"min_reader_version\":\"\",\"cli_version\":\"%s\"}",
+                   version);
     for (i = 0; i < sizeof(k_hostile) / sizeof(k_hostile[0]); i++) {
-        char *db = given_brain_at_schema(OLD_CLI_SCHEMA);
-        CmdResult human;
-        CmdResult json;
-        CmdResult write;
+        FourRuns f;
 
-        exec_sql(db, k_hostile[i]);
-        human = RUN_ARGS(db, "get", "1");
-        json = RUN_ARGS(db, "--json", "get", "1");
-        write = RUN_ARGS(db, "add", "x");
-        ASSERT_EQ_INT(human.exit_code, 0);
-        ASSERT_STREQ(human.err, "remember: warning: " K_SAME_SCHEMA_MESSAGE " " K_NEWER_FIX "\n");
-        ASSERT_STR_CONTAINS(
-            json.out,
-            "\"message\":\"" K_SAME_SCHEMA_MESSAGE "\",\"fix\":\"" K_NEWER_FIX
-            "\",\"detail\":{\"brain_schema_version\":\"6\",\"cli_schema_version\":\"6\"}}]}\n");
-        ASSERT_EQ_INT(write.exit_code, 75);
-        ASSERT_STREQ(write.err, "remember: " K_SAME_SCHEMA_MESSAGE " " K_NEWER_FIX "\n");
-        cmd_result_free(&human);
-        cmd_result_free(&json);
-        cmd_result_free(&write);
+        db = given_brain_with_min_reader(k_hostile[i]);
+        f = given_four_runs(db);
+        assert_plain_lines(&f, K_C01_MESSAGE);
+        assert_json_notices(&f, K_C01_MESSAGE, detail);
+        ASSERT_STR_NOT_CONTAINS(f.read_human.err, "evil");
+        ASSERT_STR_NOT_CONTAINS(f.write_json.out, "evil");
+        four_runs_free(&f);
+        free(db);
+    }
+}
+
+/* The longest version that prints is 32 bytes; one more is masked. */
+TEST(old_cli_min_reader_version_prints_up_to_32_bytes)
+{
+    static const char k_max[] = "0.4.0000000000000000000000000000"; /* 32 bytes */
+    static const char k_over[] = "0.4.00000000000000000000000000000"; /* 33 bytes */
+    char sql[OLD_CLI_SQL_BUF];
+    char *db = NULL;
+    char *over = NULL;
+    CmdResult at;
+    CmdResult past;
+
+    ASSERT_EQ_INT((int)strlen(k_max), 32);
+    ASSERT_EQ_INT((int)strlen(k_over), 33);
+    (void)snprintf(sql, sizeof(sql), "'%s'", k_max);
+    db = given_brain_with_min_reader(sql);
+    (void)snprintf(sql, sizeof(sql), "'%s'", k_over);
+    over = given_brain_with_min_reader(sql);
+    at = RUN_ARGS(db, "get", "1");
+    past = RUN_ARGS(over, "get", "1");
+    ASSERT_STR_CONTAINS(at.err, "This brain needs remember 0.4.0000000000000000000000000000 or later;");
+    ASSERT_STR_NOT_CONTAINS(past.err, "needs remember");
+    ASSERT_STR_NOT_CONTAINS(past.err, "0.4.0");
+    cmd_result_free(&at);
+    cmd_result_free(&past);
+    free(db);
+    free(over);
+}
+
+/* The store ranks the schema first: a greater schema_version prints R27b-1,
+   whatever min_reader_version says, and keeps the two-member detail. */
+TEST(old_cli_greater_schema_prints_r27b_1_whatever_min_reader_says)
+{
+    static const char *const k_values[] = {"'0.4.0'", "'not-a-version'"};
+    size_t i = 0;
+
+    for (i = 0; i < sizeof(k_values) / sizeof(k_values[0]); i++) {
+        char *db = given_brain_with_min_reader(k_values[i]);
+        FourRuns f;
+
+        exec_sql(db, "PRAGMA user_version=7;");
+        f = given_four_runs(db);
+        assert_plain_lines(&f, K_NEWER_MESSAGE);
+        ASSERT_STR_CONTAINS(f.read_json.out, "\"detail\":{\"brain_schema_version\":\"7\","
+                                             "\"cli_schema_version\":\"6\"}}]}\n");
+        ASSERT_STR_NOT_CONTAINS(f.write_json.out, "min_reader_version");
+        ASSERT_STR_NOT_CONTAINS(f.read_human.err, "needs remember");
+        four_runs_free(&f);
         free(db);
     }
 }
@@ -633,17 +840,14 @@ TEST(old_cli_same_version_no_warning)
 
 TEST(old_cli_min_reader_version_path)
 {
-    char *db = given_brain_at_schema(OLD_CLI_SCHEMA);
-    CmdResult read;
-    CmdResult write;
+    char *db = given_brain_with_min_reader("'0.4.0'");
+    CmdResult read = RUN_ARGS(db, "get", "1");
+    CmdResult write = RUN_ARGS(db, "add", "x");
 
-    exec_sql(db, "UPDATE brain_meta SET min_reader_version = '0.4.0';");
-    read = RUN_ARGS(db, "get", "1");
-    write = RUN_ARGS(db, "add", "x");
     ASSERT_EQ_INT(read.exit_code, 0);
-    ASSERT_STREQ(read.err, "remember: warning: " K_SAME_SCHEMA_MESSAGE " " K_NEWER_FIX "\n");
+    ASSERT_STR_CONTAINS(read.err, "remember: warning: " K_C01_MESSAGE " This brain needs remember");
     ASSERT_EQ_INT(write.exit_code, 75);
-    ASSERT_STREQ(write.err, "remember: " K_SAME_SCHEMA_MESSAGE " " K_NEWER_FIX "\n");
+    ASSERT_STR_CONTAINS(write.err, "remember: " K_C01_MESSAGE " This brain needs remember");
     cmd_result_free(&read);
     cmd_result_free(&write);
     free(db);
@@ -679,6 +883,36 @@ TEST(old_cli_help_and_version_do_not_open_a_brain)
     free(db);
 }
 
+/* R27b-3 with answer 4 of decision:2026-11-14-r27b-2-3-stop-and-ask: the 5 line
+   fits every exit 5 (plugin and hook approvals never take --yes). */
+TEST(old_cli_help_exit_codes_list_5_and_75)
+{
+    static const char k_block[] =
+        "Exit codes:\n"
+        "  0  success (including empty search/list)\n"
+        "  1  usage or error\n"
+        "  2  not found (get/delete/update)\n"
+        "  3  wrong bin (expired / not_expired / deleted / not_deleted)\n"
+        "  4  a warning under --strict\n"
+        "  5  confirmation or approval required\n"
+        "  75 brain is read-only (made by a newer version of remember)\n";
+    char *db = make_temp_db_path();
+    const char *const flag_forms[][1] = {{"--help"}, {"-h"}, {"help"}};
+    size_t i = 0;
+
+    ASSERT_TRUE(db != NULL);
+    for (i = 0; i < sizeof(flag_forms) / sizeof(flag_forms[0]); i++) {
+        CmdResult r = run_remember(db, flag_forms[i], 1U, NULL);
+        const char *at = strstr(r.out, "Exit codes:\n");
+
+        ASSERT_EQ_INT(r.exit_code, 0);
+        ASSERT_TRUE(at != NULL);
+        ASSERT_STREQ(at, k_block);
+        cmd_result_free(&r);
+    }
+    free(db);
+}
+
 void register_old_cli_tests(void)
 {
     RUN_TEST(old_cli_detect_by_schema_version);
@@ -698,10 +932,16 @@ void register_old_cli_tests(void)
     RUN_TEST(old_cli_every_command_has_a_class);
     RUN_TEST(old_cli_the_class_table_splits_reads_from_writes);
     RUN_TEST(old_cli_a_command_leaves_no_journal_and_no_new_bytes);
-    RUN_TEST(old_cli_hostile_min_reader_version_is_never_echoed);
+    RUN_TEST(old_cli_min_reader_variant_1_read_and_write_lines);
+    RUN_TEST(old_cli_min_reader_variant_2_for_unparseable_value);
+    RUN_TEST(old_cli_min_reader_detail_has_four_members_both_variants_both_codes);
+    RUN_TEST(old_cli_hostile_min_reader_version_is_masked);
+    RUN_TEST(old_cli_min_reader_version_prints_up_to_32_bytes);
+    RUN_TEST(old_cli_greater_schema_prints_r27b_1_whatever_min_reader_says);
     RUN_TEST(old_cli_the_largest_schema_prints_as_digits);
     RUN_TEST(old_cli_same_version_no_warning);
     RUN_TEST(old_cli_min_reader_version_path);
     RUN_TEST(old_cli_strict_turns_a_read_warning_into_exit_4_and_keeps_exit_75);
     RUN_TEST(old_cli_help_and_version_do_not_open_a_brain);
+    RUN_TEST(old_cli_help_exit_codes_list_5_and_75);
 }

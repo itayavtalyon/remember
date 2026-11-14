@@ -1372,8 +1372,8 @@ TEST(envelope_brain_new_id_replaces_only_the_brain_id)
                                    "tombstones);";
     static const char k_newer[] =
         "remember: this brain was made by a newer version of remember, so it is read-only here. "
-        "You can still read and export it. This brain uses schema 6; this remember reads up to "
-        "schema 6. Upgrade remember to make changes.\n";
+        "You can still read and export it. This brain needs remember 0.4.0 or later; this is "
+        "remember ";
     char *db = make_temp_db_path();
     char *bare = make_temp_db_path();
     char *born = make_temp_db_path();
@@ -1521,7 +1521,7 @@ TEST(envelope_brain_new_id_replaces_only_the_brain_id)
     r = run_remember(db, plain, sizeof plain / sizeof plain[0], NULL);
     ASSERT_EQ_INT(r.exit_code, 75);
     ASSERT_STREQ(r.out, "");
-    ASSERT_STREQ(r.err, k_newer);
+    ASSERT_TRUE(strncmp(r.err, k_newer, strlen(k_newer)) == 0);
     cmd_result_free(&r);
     source_id = harness_sqlite_query_line(db, "SELECT brain_id FROM brain_meta;");
     ASSERT_STREQ(source_id, second_id);

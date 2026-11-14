@@ -594,37 +594,65 @@ int diag_warning_detail(DiagWarning code, const char *message, const DiagDetailF
     });
 }
 
-/* R27b-1. The same two sentences open the warning and the error. Only the
-   numbers vary, and they are ints, so the line has a fixed size. */
-static const char k_schema_too_new_message[] =
-    "this brain was made by a newer version of remember, so it is read-only here. You can still "
-    "read and export it. This brain uses schema %d; this remember reads up to schema %d.";
-enum { SCHEMA_MESSAGE_BUF = 256, SCHEMA_NUMBER_BUF = 16 };
+/* R27b-1 and R27b-2. The same two sentences open the warning and the error,
+   then one of three endings. Every number is an int or a version of at most
+   STORE_VERSION_TEXT_MAX bytes, and cli_version is the build's own string (the
+   caller keeps it short), so the message has a fixed size. */
+#define NEWER_BRAIN_OPENING                                                                        \
+    "this brain was made by a newer version of remember, so it is read-only here. You can still "  \
+    "read and export it."
+enum {
+    SCHEMA_MESSAGE_BUF = 384,
+    SCHEMA_NUMBER_BUF = 16,
+    SCHEMA_VERSION_BUF = 40, /* STORE_VERSION_TEXT_MAX and its NUL, rounded up (-Wpadded) */
+    SCHEMA_FIELDS = 4,
+    SCHEMA_FIELDS_BY_SCHEMA = 2
+};
 
-/* The text and the two detail members of one notice. fields points into this
+/* The text and the detail members of one notice. fields points into this
    struct, so build it in place and do not copy it. */
 typedef struct {
     char message[SCHEMA_MESSAGE_BUF];
     char brain[SCHEMA_NUMBER_BUF];
     char cli[SCHEMA_NUMBER_BUF];
-    DiagDetailField fields[2];
+    char min_reader[SCHEMA_VERSION_BUF];
+    DiagDetailField fields[SCHEMA_FIELDS];
+    size_t nfields;
 } SchemaTooNewText;
 
-static void schema_too_new_text(StoreSchemaGap gap, SchemaTooNewText *out)
+static void schema_too_new_text(StoreSchemaGap gap, const char *cli_version, SchemaTooNewText *out)
 {
-    (void)snprintf(out->message, sizeof(out->message), k_schema_too_new_message, gap.brain_schema,
-                   gap.cli_schema);
     (void)snprintf(out->brain, sizeof(out->brain), "%d", gap.brain_schema);
     (void)snprintf(out->cli, sizeof(out->cli), "%d", gap.cli_schema);
+    (void)snprintf(out->min_reader, sizeof(out->min_reader), "%s", gap.min_reader);
     out->fields[0] = (DiagDetailField){"brain_schema_version", out->brain};
     out->fields[1] = (DiagDetailField){"cli_schema_version", out->cli};
+    out->fields[2] = (DiagDetailField){"min_reader_version", out->min_reader};
+    out->fields[3] = (DiagDetailField){"cli_version", cli_version};
+    out->nfields = SCHEMA_FIELDS_BY_SCHEMA;
+    if (gap.by_min_reader) {
+        out->nfields = SCHEMA_FIELDS;
+    }
+    if (!gap.by_min_reader) {
+        (void)snprintf(out->message, sizeof(out->message),
+                       NEWER_BRAIN_OPENING
+                       " This brain uses schema %d; this remember reads up to schema %d.",
+                       gap.brain_schema, gap.cli_schema);
+    } else if (gap.min_reader[0] != '\0') {
+        (void)snprintf(out->message, sizeof(out->message),
+                       NEWER_BRAIN_OPENING " This brain needs remember %s or later; this is "
+                                           "remember %s.",
+                       gap.min_reader, cli_version);
+    } else {
+        (void)snprintf(out->message, sizeof(out->message), "%s", NEWER_BRAIN_OPENING);
+    }
 }
 
-int diag_schema_too_new_warning(StoreSchemaGap gap)
+int diag_schema_too_new_warning(StoreSchemaGap gap, const char *cli_version)
 {
     SchemaTooNewText text;
 
-    schema_too_new_text(gap, &text);
+    schema_too_new_text(gap, cli_version, &text);
     return write_notice((Notice){
         .json_kind = "warning",
         .plain_prefix = k_warning_plain_prefix[DIAG_WARN_SCHEMA_TOO_NEW_READ_ONLY],
@@ -632,17 +660,17 @@ int diag_schema_too_new_warning(StoreSchemaGap gap)
         .message = text.message,
         .fix = k_fix[DIAG_SCHEMA_TOO_NEW],
         .fields = text.fields,
-        .nfields = sizeof(text.fields) / sizeof(text.fields[0]),
+        .nfields = text.nfields,
     });
 }
 
-int diag_schema_too_new_error(StoreSchemaGap gap)
+int diag_schema_too_new_error(StoreSchemaGap gap, const char *cli_version)
 {
     SchemaTooNewText text;
 
-    schema_too_new_text(gap, &text);
+    schema_too_new_text(gap, cli_version, &text);
     return diag_error_detail(DIAG_SCHEMA_TOO_NEW, text.message, k_fix[DIAG_SCHEMA_TOO_NEW],
-                             text.fields, sizeof(text.fields) / sizeof(text.fields[0]));
+                             text.fields, text.nfields);
 }
 
 /* cppcheck-suppress staticFunction ; public API (diag.h); used by tests and later readers */

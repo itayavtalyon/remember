@@ -394,17 +394,28 @@ typedef struct {
  */
 StoreStatus store_brain_new_id(Store *s, StoreBrainId *out);
 
-/* The schema numbers behind a read-only open (decision:2026-11-03-schema-read-only). */
+/* The longest min_reader_version that is ever printed: three parts of ten digits
+   and two dots (R27b-2). A longer value is hostile and is masked. */
+enum { STORE_VERSION_TEXT_MAX = 32 };
+
+/* What is behind a read-only open (decision:2026-11-03-schema-read-only). */
 typedef struct {
-    int brain_schema; /* the brain's schema_version (PRAGMA user_version) */
-    int cli_schema;   /* the highest schema this build knows */
+    int brain_schema;   /* the brain's schema_version (PRAGMA user_version) */
+    int cli_schema;     /* the highest schema this build knows */
+    bool by_min_reader; /* newer only by min_reader_version: brain_schema is not above cli_schema */
+    /* The stored min_reader_version when by_min_reader and it is MAJOR.MINOR.PATCH of at most
+       STORE_VERSION_TEXT_MAX bytes. "" for any other value: it is masked, never copied. */
+    char min_reader[STORE_VERSION_TEXT_MAX + 1];
+    /* NOLINTNEXTLINE(readability-magic-numbers,cppcoreguidelines-avoid-magic-numbers) */
+    char pad_[2]; /* explicit tail padding (kept -Wpadded-clean) */
 } StoreSchemaGap;
 
 /*
  * True when the brain is newer than this build: its schema_version is higher,
  * or its brain_meta.min_reader_version is (007 ST-10.2). Then every read works,
- * every write is STORE_ERR_SCHEMA_TOO_NEW, and *out holds the two schemas. A
- * NULL s is false. out may be NULL.
+ * every write is STORE_ERR_SCHEMA_TOO_NEW, and *out holds the two schemas and,
+ * for a brain newer only by min_reader_version, its printable value. A NULL s
+ * is false. out may be NULL.
  */
 bool store_newer_brain(const Store *s, StoreSchemaGap *out);
 
