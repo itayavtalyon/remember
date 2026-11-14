@@ -17,6 +17,7 @@ A spec describes what `remember` does today. It is normative.
 | [JSON-ENVELOPE.md](JSON-ENVELOPE.md) | `subject:json-envelope` | Message envelope for CLI `--json` |
 | [OUTBOX-DELIVERY.md](OUTBOX-DELIVERY.md) | `subject:plugins-and-hooks` | Recipient state machine: backoff retry, pre-flight failure, 100-hop halt, 7-day drop, lanes |
 | [OLDER-CLI.md](OLDER-CLI.md) | `subject:daemon` | An older CLI on a newer brain: read-only open, the read warning, `schema_too_new` and exit 75 |
+| [DEFAULT-DB.md](DEFAULT-DB.md) | `subject:data`, `subject:ui-overhaul` | Brain path order and the `~/.remember/default-db` file |
 | [SETTINGS.md](SETTINGS.md) | `subject:settings` | Settings registry, layers, user.db, history, sync token, `remember settings` commands, export and import |
 
 ## Not written yet

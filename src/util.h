@@ -9,7 +9,8 @@
  */
 #define REMEMBER_STDIN_MAX ((size_t)16U * 1024U * 1024U)
 
-/* Precedence: --db > REMEMBER_DB > ~/.remember/remember.db.
+/* Precedence: --db > REMEMBER_DB > the absolute path in ~/.remember/default-db
+ * > ~/.remember/remember.db (specs/DEFAULT-DB.md). Never creates default-db.
  * Rejects :memory: and file: URIs (silent data-loss via sqlite open flags).
  */
 int util_resolve_db_path(const char *cli_db, char *buf, size_t buflen, char *err, size_t errlen);

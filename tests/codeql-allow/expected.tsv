@@ -1,0 +1,13 @@
+allowed	src/store_sqlite.c:1
+BLOCK	src/store_sqlite.c:2
+BLOCK	src/store_sqlite.c:3
+BLOCK	src/store_sqlite.c:4
+BLOCK	src/util.c:5
+BLOCK	src/store_sqlite.c:6
+allowed	src/cmd_export.c:7
+BLOCK	src/cmd_export.c:8
+allowed	src/cmd_export.c:9
+allowed	src/cmd_settings.c:10
+allowed	src/util.c:11
+BLOCK	src/util.c:12
+BLOCK	tests/test_x.c:13

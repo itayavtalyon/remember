@@ -2,10 +2,12 @@
 
 #include <ctype.h>
 #include <errno.h>
+#include <fcntl.h>
 #include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
 #include <unistd.h>
 
 #ifndef PATH_MAX
@@ -94,6 +96,23 @@ static int copy_regular_db_path(const char *chosen, char *buf, size_t buflen, ch
     return 0;
 }
 
+/* Bytes of default-db read; a longer file is too long. */
+enum { DEFAULT_DB_READ_MAX = PATH_MAX + 1 };
+
+/* Strips ASCII whitespace from both ends in place; returns the first kept byte. */
+static char *trim_ascii_space(char *s)
+{
+    static const char space[] = " \t\n\v\f\r";
+    size_t n = strlen(s);
+    size_t lead = strspn(s, space);
+
+    while (n > lead && strchr(space, s[n - 1U]) != NULL) {
+        n--;
+    }
+    s[n] = '\0';
+    return s + lead;
+}
+
 /* root and suffix are different roles (directory, then the fixed tail). */
 // NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
 static int format_db_path(char *buf, size_t buflen, char *err, size_t errlen, const char *root,
@@ -119,10 +138,76 @@ static const char *home_dir(char *err, size_t errlen, const char *missing)
     return home;
 }
 
+/* Reads ~/.remember/default-db into content (DEFAULT_DB_READ_MAX + 1 bytes).
+   Returns 1 when a file was read, 0 when there is none (ENOENT, ENOTDIR), -1 on
+   error. A file that exists but cannot be opened or read, is not a regular
+   file, or holds a NUL byte is "cannot read default-db", with no fallback
+   (decision:2026-11-13-default-db-unreadable, decision:2026-11-14-plan27-review-grill).
+   O_NONBLOCK keeps a FIFO from blocking the open. */
+// NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
+static int read_default_db(const char *home, char *content, char *err, size_t errlen)
+{
+    char file[PATH_MAX];
+    struct stat st;
+    FILE *f = NULL;
+    size_t n = 0;
+    int fd = -1;
+    int failed = 1;
+
+    if (format_db_path(file, sizeof(file), err, errlen, home, "/.remember/default-db") != 0) {
+        return -1;
+    }
+    fd = open(file, O_RDONLY | O_NONBLOCK | O_CLOEXEC);
+    if (fd < 0 && (errno == ENOENT || errno == ENOTDIR)) {
+        return 0;
+    }
+    if (fd >= 0 && fstat(fd, &st) == 0 && S_ISREG(st.st_mode)) {
+        f = fdopen(fd, "r");
+    }
+    if (f != NULL) {
+        n = fread(content, 1U, DEFAULT_DB_READ_MAX, f);
+        failed = ferror(f) != 0 || memchr(content, '\0', n) != NULL;
+        (void)fclose(f);
+    } else if (fd >= 0) {
+        (void)close(fd);
+    }
+    if (failed != 0) {
+        set_err(err, errlen, "cannot read default-db");
+        return -1;
+    }
+    if (n == (size_t)DEFAULT_DB_READ_MAX) {
+        set_err(err, errlen, "database path is too long");
+        return -1;
+    }
+    content[n] = '\0';
+    return 1;
+}
+
+/* Puts the absolute path of ~/.remember/default-db into buf. Returns 1 when it
+   did, 0 when the file gives none (missing, empty, relative), -1 on error. The
+   line goes through copy_regular_db_path before the absolute check, so :memory:
+   and a file: URI fail as they do for --db. */
+static int use_default_db(const char *home, char *buf, size_t buflen, char *err, size_t errlen)
+{
+    char content[DEFAULT_DB_READ_MAX + 1];
+    const char *line = NULL;
+    int found = read_default_db(home, content, err, errlen);
+
+    if (found <= 0) {
+        return found;
+    }
+    line = trim_ascii_space(content);
+    if (copy_regular_db_path(line, buf, buflen, err, errlen) != 0) {
+        return -1;
+    }
+    return buf[0] == '/' ? 1 : 0;
+}
+
 int util_resolve_db_path(const char *cli_db, char *buf, size_t buflen, char *err, size_t errlen)
 {
     const char *chosen = NULL;
     const char *home = NULL;
+    int found = 0;
 
     if (buf == NULL || buflen == 0U) {
         set_err(err, errlen, "internal error: path buffer missing");
@@ -140,6 +225,10 @@ int util_resolve_db_path(const char *cli_db, char *buf, size_t buflen, char *err
     home = home_dir(err, errlen, "HOME is not set; pass --db PATH");
     if (home == NULL) {
         return -1;
+    }
+    found = use_default_db(home, buf, buflen, err, errlen);
+    if (found != 0) {
+        return found < 0 ? -1 : 0;
     }
     return format_db_path(buf, buflen, err, errlen, home, "/.remember/remember.db");
 }
