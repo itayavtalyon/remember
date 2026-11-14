@@ -11,6 +11,7 @@
 #include "util.h"
 
 #include <errno.h>
+#include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -46,6 +47,7 @@ static char *dup_home_or_null(void)
    unset so the dev machine's own environment cannot reach a test. */
 typedef struct {
     char dir[64];
+    char file[96]; /* ~/.remember/default-db */
     char *saved_home;
 } GivenHome;
 
@@ -66,20 +68,18 @@ static void write_text_file(const char *path, const char *content)
 
 static void given_home(GivenHome *h, const char *content)
 {
-    char file[96];
     (void)snprintf(h->dir, sizeof(h->dir), "/tmp/remember-defdb-XXXXXX");
     ASSERT_TRUE(mkdtemp(h->dir) != NULL);
     h->saved_home = dup_home_or_null();
     ASSERT_EQ_INT(setenv("HOME", h->dir, 1), 0);
     unsetenv("REMEMBER_DB");
     unsetenv("XDG_DATA_HOME");
-    (void)snprintf(file, sizeof(file), "%s/.remember", h->dir);
-    ASSERT_EQ_INT(mkdir(file, 0700), 0);
-    if (content == NULL) {
-        return;
+    (void)snprintf(h->file, sizeof(h->file), "%s/.remember", h->dir);
+    ASSERT_EQ_INT(mkdir(h->file, 0700), 0);
+    (void)snprintf(h->file, sizeof(h->file), "%s/.remember/default-db", h->dir);
+    if (content != NULL) {
+        write_text_file(h->file, content);
     }
-    (void)snprintf(file, sizeof(file), "%s/.remember/default-db", h->dir);
-    write_text_file(file, content);
 }
 
 static void given_home_release(GivenHome *h)
@@ -101,20 +101,16 @@ static void given_builtin_path(const GivenHome *h, char *out, size_t outlen)
 
 static int default_db_exists(const GivenHome *h)
 {
-    char file[96];
     struct stat st;
-    (void)snprintf(file, sizeof(file), "%s/.remember/default-db", h->dir);
-    return stat(file, &st) == 0;
+    return stat(h->file, &st) == 0;
 }
 
 static int default_db_is(const GivenHome *h, const char *want)
 {
-    char file[96];
     char *got;
     size_t len = 0;
     int same;
-    (void)snprintf(file, sizeof(file), "%s/.remember/default-db", h->dir);
-    got = harness_read_file(file, &len);
+    got = harness_read_file(h->file, &len);
     same = got != NULL && strcmp(got, want) == 0;
     free(got);
     return same;
@@ -361,7 +357,7 @@ TEST(util_resolve_default_db_xdg_data_home_does_not_move_it)
     ASSERT_EQ_INT(setenv("XDG_DATA_HOME", xdg, 1), 0);
     ASSERT_EQ_INT(util_resolve_db_path(NULL, buf, sizeof(buf), err, sizeof(err)), 0);
     ASSERT_STREQ(buf, "/tmp/from-home.db");
-    ASSERT_EQ_INT(unlink(strcat(strcpy(dir, h.dir), "/.remember/default-db")), 0);
+    ASSERT_EQ_INT(unlink(h.file), 0);
     ASSERT_EQ_INT(util_resolve_db_path(NULL, buf, sizeof(buf), err, sizeof(err)), 0);
     given_builtin_path(&h, want, sizeof(want));
     ASSERT_STREQ(buf, want);
@@ -390,6 +386,36 @@ TEST(util_resolve_default_db_line_too_long_fails)
     given_home_release(&h);
 }
 
+#ifndef PATH_MAX
+#define PATH_MAX 4096
+#endif
+
+/* default-db is read up to PATH_MAX + 1 bytes: the longest path PATH_MAX
+   holds, with its newline (PATH_MAX bytes), is read whole; one byte more is
+   too long. */
+TEST(util_resolve_default_db_read_limit_is_path_max_bytes)
+{
+    GivenHome h;
+    char line[PATH_MAX + 2];
+    char wide[REMEMBER_PATH_MAX * 2];
+    char err[128];
+    memset(line, 'a', sizeof(line));
+    line[0] = '/';
+    line[PATH_MAX - 1] = '\n';
+    line[PATH_MAX] = '\0';
+    given_home(&h, line);
+    ASSERT_EQ_INT(util_resolve_db_path(NULL, wide, sizeof(wide), err, sizeof(err)), 0);
+    ASSERT_EQ_INT((int)strlen(wide), PATH_MAX - 1);
+    given_home_release(&h);
+    line[PATH_MAX - 1] = 'a';
+    line[PATH_MAX] = '\n';
+    line[PATH_MAX + 1] = '\0';
+    given_home(&h, line);
+    ASSERT_EQ_INT(util_resolve_db_path(NULL, wide, sizeof(wide), err, sizeof(err)), -1);
+    ASSERT_STREQ(err, "database path is too long");
+    given_home_release(&h);
+}
+
 /* Itay 2026-11-13 (decision:2026-11-13-default-db-unreadable): a default-db
    that exists but cannot be read fails at once, with no fallback to
    remember.db. A directory fails on the read, a mode 000 file on the open. */
@@ -398,10 +424,8 @@ TEST(util_resolve_default_db_directory_fails_with_no_fallback)
     GivenHome h;
     char buf[REMEMBER_PATH_MAX];
     char err[128];
-    char file[96];
     given_home(&h, NULL);
-    (void)snprintf(file, sizeof(file), "%s/.remember/default-db", h.dir);
-    ASSERT_EQ_INT(mkdir(file, 0700), 0);
+    ASSERT_EQ_INT(mkdir(h.file, 0700), 0);
     ASSERT_EQ_INT(util_resolve_db_path(NULL, buf, sizeof(buf), err, sizeof(err)), -1);
     ASSERT_STREQ(err, "cannot read default-db");
     given_home_release(&h);
@@ -413,10 +437,8 @@ TEST(util_resolve_default_db_symlink_loop_fails_with_no_fallback)
     GivenHome h;
     char buf[REMEMBER_PATH_MAX];
     char err[128];
-    char file[96];
     given_home(&h, NULL);
-    (void)snprintf(file, sizeof(file), "%s/.remember/default-db", h.dir);
-    ASSERT_EQ_INT(symlink("default-db", file), 0);
+    ASSERT_EQ_INT(symlink("default-db", h.file), 0);
     ASSERT_EQ_INT(util_resolve_db_path(NULL, buf, sizeof(buf), err, sizeof(err)), -1);
     ASSERT_STREQ(err, "cannot read default-db");
     given_home_release(&h);
@@ -427,15 +449,13 @@ TEST(util_resolve_default_db_without_permission_fails_with_no_fallback)
     GivenHome h;
     char buf[REMEMBER_PATH_MAX];
     char err[128];
-    char file[96];
     if (geteuid() == 0) {
         (void)printf("SKIP %s (running as root; file mode bits are ignored)\n",
                      "util_resolve_default_db_without_permission_fails_with_no_fallback");
         return;
     }
     given_home(&h, "/tmp/from-file.db\n");
-    (void)snprintf(file, sizeof(file), "%s/.remember/default-db", h.dir);
-    ASSERT_EQ_INT(chmod(file, 0000), 0);
+    ASSERT_EQ_INT(chmod(h.file, 0000), 0);
     ASSERT_EQ_INT(util_resolve_db_path(NULL, buf, sizeof(buf), err, sizeof(err)), -1);
     ASSERT_STREQ(err, "cannot read default-db");
     given_home_release(&h);
@@ -449,17 +469,16 @@ TEST(util_resolve_default_db_that_does_not_exist_uses_builtin)
     char buf[REMEMBER_PATH_MAX];
     char err[128];
     char want[REMEMBER_PATH_MAX];
-    char file[96];
+    char dir[96];
     given_home(&h, NULL);
     given_builtin_path(&h, want, sizeof(want));
-    (void)snprintf(file, sizeof(file), "%s/.remember/default-db", h.dir);
-    ASSERT_EQ_INT(symlink("/nonexistent/remember-target", file), 0);
+    ASSERT_EQ_INT(symlink("/nonexistent/remember-target", h.file), 0);
     ASSERT_EQ_INT(util_resolve_db_path(NULL, buf, sizeof(buf), err, sizeof(err)), 0);
     ASSERT_STREQ(buf, want);
-    ASSERT_EQ_INT(unlink(file), 0);
-    (void)snprintf(file, sizeof(file), "%s/.remember", h.dir);
-    ASSERT_EQ_INT(rmdir(file), 0);
-    write_text_file(file, "not a folder");
+    ASSERT_EQ_INT(unlink(h.file), 0);
+    (void)snprintf(dir, sizeof(dir), "%s/.remember", h.dir);
+    ASSERT_EQ_INT(rmdir(dir), 0);
+    write_text_file(dir, "not a folder");
     ASSERT_EQ_INT(util_resolve_db_path(NULL, buf, sizeof(buf), err, sizeof(err)), 0);
     ASSERT_STREQ(buf, want);
     given_home_release(&h);
@@ -1241,6 +1260,7 @@ void register_coverage_edges_tests(void)
     RUN_TEST(util_resolve_default_db_ephemeral_fails_like_cli_db);
     RUN_TEST(util_resolve_default_db_xdg_data_home_does_not_move_it);
     RUN_TEST(util_resolve_default_db_line_too_long_fails);
+    RUN_TEST(util_resolve_default_db_read_limit_is_path_max_bytes);
     RUN_TEST(util_resolve_default_db_directory_fails_with_no_fallback);
     RUN_TEST(util_resolve_default_db_symlink_loop_fails_with_no_fallback);
     RUN_TEST(util_resolve_default_db_without_permission_fails_with_no_fallback);
