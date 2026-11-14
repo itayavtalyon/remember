@@ -222,6 +222,7 @@ Event (hook stdin, plugin socket, webhook):
 - 3: wrong bin.
 - 4: a warning under `--strict` or `REMEMBER_STRICT=1`, **whatever its code**. Exit 4 has no other meaning. No warning is exempt (G2-03). That includes the CLI codes `deprecated_flag`, `unknown_field` and `flag_meaning_changed`.
 - 5: `confirmation_required` (R30-6, `decision:2026-11-03-confirmation-required-exit-5`). Exit 4 still wins when `--strict` saw a warning.
+- 75: `schema_too_new`, a write to a brain made by a newer remember (`decision:2026-10-31-cli-outdated-exit-code`, [OLDER-CLI.md](OLDER-CLI.md) § 8.4). The read warning `schema_too_new_read_only` exits 0, or 4 under `--strict`.
 - `flag_meaning_changed` (M-23 A, 010 H-16.9a) is one release only, and is removed after 0.3.0. Its `detail` is `{"flag":"--trash","use":"--expired"}`. With `--json` it is an item in `warnings[]` and stderr stays empty. Without `--json` it is the line `remember: warning: --trash now means the Trash (deleted memories). For expired memories, use --expired.`
 - The JSON output is the same under `--strict`. Only the exit code changes.
 - Hook and action failures after the handler starts never change a write's exit code (PP R8.16). Warnings from plugin replies never reach command `warnings` (§1.8).

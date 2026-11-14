@@ -45,11 +45,11 @@ main → cli_parse → commands.h (cmd_add | cmd_locator | cmd_query) → store_
 - 23. Plan: [Import formats](23-import-formats.md). Done when: JSON and `--from-db` v4–v6. Markdown and CSV moved to 23a (2026-11-12). Copy approved 2026-10-25. D-04 is answered (2026-10-25). No old-name reader. No add-wins.
 - 23a. Plan: [Import Markdown and CSV](23a-import-md-csv.md). Done when: `--from-md`, `--from-csv`, and `--from-db` memories through the file merge. Split from 23 (2026-11-12).
 - 24. Plan: [Plugin protocol](24-plugin-protocol.md). Done when: Docs CI, schema extraction, fixtures. READY. Spec revision 6 is already in the repo. ✅.
-- 25. Plan: [Plugin manifest](25-plugin-manifest.md). Done when: `plugin.json` parses to the protocol schema. Needs 24.
+- 25. Plan: [Plugin manifest](25-plugin-manifest.md). Done when: `plugin.json` parses to the protocol schema. Needs 24. Copy: R25-1 and R25-2 (approved 2026-11-14, `decision:2026-11-14-copy-r25-2-manifest-approved`).
 - 26. Plan: [Brain list](26-brain-list.md). Done when: `brains.json`, `brain list`, `brain prune`. Needs 19, 25 (cut from the same branch).
 - 27. Plan: [Default brain path](27-default-db.md). Done when: `~/.remember/default-db`. Needs 19.
 - 27a. Plan: [Outbox delivery](27a-outbox-delivery.md). Done when: Recipient state machine, backoff retry (X3 A), and a pre-flight failure that is `failed` at once (E1 A). Needs 24.
-- 27b. Plan: [Older CLI read-only](27b-older-cli-read-only.md). Done when: `schema_too_new` read-only with a warning, writes exit 75. Needs 19, 21. Copy: R27b-1 (no command in the upgrade line, SW1 A).
+- 27b. Plan: [Older CLI read-only](27b-older-cli-read-only.md). Done when: `schema_too_new` read-only with a warning, writes exit 75. Needs 19, 21. Copy: R27b-1 (no command in the upgrade line, SW1 A), R27b-2 and R27b-3 (approved 2026-11-14, `decision:2026-11-14-copy-r27b-2-r27b-3-approved`).
 - 28. Plan: [Release 0.3.0](28-release-0.3.0.md). Done when: Version, What's New, Codex skill. Needs 22, 23, 25, 26, 27, 27a, 27b.
 - 29. Plan: [Handle API](29-handle-api.md). Done when: `remember_open`/`remember_call`/`remember_close`, RememberEnv, no HOME in the engine. Needs 20, 21. X1 and its gaps are answered; the shape record `decision:2026-11-11-handle-api-shape` waits for Itay's approval.
 - 30. Plan: [Plugin settings keys](30-plugin-settings-keys.md). Done when: Boolean type, generated `plugin.<name>.*` keys. Needs 25.
@@ -75,7 +75,7 @@ and 18c land with the plan 18 merge. Do not tick plan 18.
 **Plans 19–24** keep the staged files they already have. Plan 20 stages 1–4 run
 after plan 19 and before plan 21. Plan 20's JSON command stages run after plan
 21. Approved sentences are in [`COPY-PENDING.md`](COPY-PENDING.md). Nothing in
-that file is pending. A sentence it marks as unwritten stays unprinted. Missing
+that file is pending. The sentences of R25-2, R27b-2 and R27b-3 (approved 2026-11-14) are in [`COPY-APPROVED-2026-11-14.md`](COPY-APPROVED-2026-11-14.md). A sentence it marks as unwritten stays unprinted. Missing
 decisions are in [`DESIGN-PENDING.md`](DESIGN-PENDING.md). Do not invent either.
 
 ## Plans 25 and later

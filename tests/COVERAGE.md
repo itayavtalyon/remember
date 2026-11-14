@@ -24,7 +24,7 @@ Dev tools for inspect tests: `sqlite3` on PATH (`brew install sqlite` if needed)
 | 11 | Concurrent | `store_open_concurrent_create_all_succeed` (create race); write-path stress still manual |
 | 12 | Skill | plan 10 |
 | 13 | Lint | plan 08 |
-| 14 | user_version>1 | `schema_user_version_too_new_refused` |
+| 14 | user_version>1 | `schema_user_version_too_new_reads_read_only` |
 | 15 | JSON envelope | add/get/delete/update json shapes |
 | 16 | Sync path warn | `sync_path_warning_on_clouddocs_marker` |
 | 17–20 | `--key` | `test_key.c` |

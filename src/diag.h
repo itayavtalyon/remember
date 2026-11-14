@@ -73,9 +73,10 @@ typedef enum {
     DIAG_WARN_DEPRECATED_FLAG,
     DIAG_WARN_SYNCED_FOLDER,
     DIAG_WARN_SETTING_INVALID,
-    DIAG_WARN_FLAG_MEANING_CHANGED,   /* --trash, one release (M-23) */
-    DIAG_WARN_UNKNOWN_FIELD,          /* C-35, once per file or stdin */
-    DIAG_WARN_SETTING_IMPORT_SKIPPED, /* C-12 */
+    DIAG_WARN_FLAG_MEANING_CHANGED,     /* --trash, one release (M-23) */
+    DIAG_WARN_UNKNOWN_FIELD,            /* C-35, once per file or stdin */
+    DIAG_WARN_SETTING_IMPORT_SKIPPED,   /* C-12 */
+    DIAG_WARN_SCHEMA_TOO_NEW_READ_ONLY, /* R27b-1: a newer brain opened read only */
     DIAG_WARN_COUNT
 } DiagWarning;
 
@@ -173,6 +174,17 @@ int diag_warning(DiagWarning code, const char *message);
  */
 int diag_warning_detail(DiagWarning code, const char *message, const DiagDetailField *fields,
                         size_t nfields);
+
+/*
+ * R27b-1 (decision:2026-11-12-copy-batch-final): a brain from a newer remember.
+ * Both lines carry the two schema numbers and never an app version or a command.
+ * The warning is schema_too_new_read_only (message, fix, detail with
+ * brain_schema_version and cli_schema_version) for a read command. The error is
+ * schema_too_new with the same message, fix and detail, for a write.
+ * Each returns -1 when the notice cannot be written.
+ */
+int diag_schema_too_new_warning(StoreSchemaGap gap);
+int diag_schema_too_new_error(StoreSchemaGap gap);
 
 /* path NULL is stdin. name is the unknown field. */
 typedef struct {

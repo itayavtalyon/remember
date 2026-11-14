@@ -170,6 +170,7 @@ static const char *const k_warning_codes[DIAG_WARN_COUNT] = {
     [DIAG_WARN_FLAG_MEANING_CHANGED] = "flag_meaning_changed",
     [DIAG_WARN_UNKNOWN_FIELD] = "unknown_field",
     [DIAG_WARN_SETTING_IMPORT_SKIPPED] = "setting_import_skipped",
+    [DIAG_WARN_SCHEMA_TOO_NEW_READ_ONLY] = "schema_too_new_read_only",
 };
 
 /* Plain line lead per warning. E2.3 gives raw_query_ignored its own words; the
@@ -182,6 +183,7 @@ static const char *const k_warning_plain_prefix[DIAG_WARN_COUNT] = {
     [DIAG_WARN_FLAG_MEANING_CHANGED] = "warning: ",
     [DIAG_WARN_UNKNOWN_FIELD] = "warning: ",
     [DIAG_WARN_SETTING_IMPORT_SKIPPED] = "warning: ",
+    [DIAG_WARN_SCHEMA_TOO_NEW_READ_ONLY] = "warning: ",
 };
 
 static const char *catalog_name(const char *const *names, size_t count, size_t index)
@@ -382,6 +384,10 @@ static int write_json_notice(Notice notice, const char *message)
         if (write_fix_retryable(fp, fix, notice.error_code) != 0) {
             return -1;
         }
+    } else if (notice.fix != NULL &&
+               (fputs(",\"fix\":", fp) < 0 || output_json_string(fp, notice.fix) != 0)) {
+        /* E3 B: a warning may carry a fix beside its message. */
+        return -1;
     }
     if (write_json_detail_fields(fp, notice.fields, notice.nfields) != 0) {
         return -1;
@@ -586,6 +592,57 @@ int diag_warning_detail(DiagWarning code, const char *message, const DiagDetailF
         .fields = fields,
         .nfields = nfields,
     });
+}
+
+/* R27b-1. The same two sentences open the warning and the error. Only the
+   numbers vary, and they are ints, so the line has a fixed size. */
+static const char k_schema_too_new_message[] =
+    "this brain was made by a newer version of remember, so it is read-only here. You can still "
+    "read and export it. This brain uses schema %d; this remember reads up to schema %d.";
+enum { SCHEMA_MESSAGE_BUF = 256, SCHEMA_NUMBER_BUF = 16 };
+
+/* The text and the two detail members of one notice. fields points into this
+   struct, so build it in place and do not copy it. */
+typedef struct {
+    char message[SCHEMA_MESSAGE_BUF];
+    char brain[SCHEMA_NUMBER_BUF];
+    char cli[SCHEMA_NUMBER_BUF];
+    DiagDetailField fields[2];
+} SchemaTooNewText;
+
+static void schema_too_new_text(StoreSchemaGap gap, SchemaTooNewText *out)
+{
+    (void)snprintf(out->message, sizeof(out->message), k_schema_too_new_message, gap.brain_schema,
+                   gap.cli_schema);
+    (void)snprintf(out->brain, sizeof(out->brain), "%d", gap.brain_schema);
+    (void)snprintf(out->cli, sizeof(out->cli), "%d", gap.cli_schema);
+    out->fields[0] = (DiagDetailField){"brain_schema_version", out->brain};
+    out->fields[1] = (DiagDetailField){"cli_schema_version", out->cli};
+}
+
+int diag_schema_too_new_warning(StoreSchemaGap gap)
+{
+    SchemaTooNewText text;
+
+    schema_too_new_text(gap, &text);
+    return write_notice((Notice){
+        .json_kind = "warning",
+        .plain_prefix = k_warning_plain_prefix[DIAG_WARN_SCHEMA_TOO_NEW_READ_ONLY],
+        .code = k_warning_codes[DIAG_WARN_SCHEMA_TOO_NEW_READ_ONLY],
+        .message = text.message,
+        .fix = k_fix[DIAG_SCHEMA_TOO_NEW],
+        .fields = text.fields,
+        .nfields = sizeof(text.fields) / sizeof(text.fields[0]),
+    });
+}
+
+int diag_schema_too_new_error(StoreSchemaGap gap)
+{
+    SchemaTooNewText text;
+
+    schema_too_new_text(gap, &text);
+    return diag_error_detail(DIAG_SCHEMA_TOO_NEW, text.message, k_fix[DIAG_SCHEMA_TOO_NEW],
+                             text.fields, sizeof(text.fields) / sizeof(text.fields[0]));
 }
 
 /* cppcheck-suppress staticFunction ; public API (diag.h); used by tests and later readers */

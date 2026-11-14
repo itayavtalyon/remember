@@ -13,6 +13,7 @@
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 
 /* The envelope when --json cannot get the memory to build one: type, then fix. */
 static const char k_out_of_memory_reply[] =
@@ -527,6 +528,71 @@ static Store *open_store(const CliArgs *args, int *out_rc)
 
 typedef int (*CmdFn)(Store *s, bool json, int rest_argc, const char **rest_argv);
 
+/* The class of every command (plan 27b). A command added to CliCommand and not
+   here is APP_CMD_UNLISTED, which a test refuses. device new mints a sidecar
+   file and writes nothing to the brain (007 ST-10.2), so it is a read. */
+static const AppCommandClass k_command_class[] = {
+    [CLI_CMD_NONE] = APP_CMD_NO_STORE,    [CLI_CMD_HELP] = APP_CMD_NO_STORE,
+    [CLI_CMD_VERSION] = APP_CMD_NO_STORE, [CLI_CMD_UNKNOWN] = APP_CMD_NO_STORE,
+    [CLI_CMD_ADD] = APP_CMD_WRITE,        [CLI_CMD_SEARCH] = APP_CMD_READ,
+    [CLI_CMD_LIST] = APP_CMD_READ,        [CLI_CMD_GET] = APP_CMD_READ,
+    [CLI_CMD_UPDATE] = APP_CMD_WRITE,     [CLI_CMD_DELETE] = APP_CMD_WRITE,
+    [CLI_CMD_TAGS] = APP_CMD_READ,        [CLI_CMD_PURGE] = APP_CMD_WRITE,
+    [CLI_CMD_LINK] = APP_CMD_WRITE,       [CLI_CMD_UNLINK] = APP_CMD_WRITE,
+    [CLI_CMD_RELATED] = APP_CMD_READ,     [CLI_CMD_REKEY] = APP_CMD_WRITE,
+    [CLI_CMD_IMPORT] = APP_CMD_WRITE,     [CLI_CMD_CONFLICTS] = APP_CMD_READ,
+    [CLI_CMD_CONFLICT] = APP_CMD_WRITE,   [CLI_CMD_DEVICE] = APP_CMD_READ,
+    [CLI_CMD_REPAIR] = APP_CMD_WRITE,     [CLI_CMD_BRAIN] = APP_CMD_WRITE,
+    [CLI_CMD_EXPORT] = APP_CMD_READ,      [CLI_CMD_SETTINGS] = APP_CMD_READ,
+};
+
+/* settings: set, reset and import change settings; every other verb reads. */
+static bool settings_verb_writes(int rest_argc, const char *const *rest_argv)
+{
+    static const char *const k_writes[] = {"set", "reset", "import"};
+    size_t i = 0;
+
+    if (rest_argc < 1 || rest_argv == NULL || rest_argv[0] == NULL) {
+        return false;
+    }
+    for (i = 0; i < sizeof(k_writes) / sizeof(k_writes[0]); i++) {
+        if (strcmp(rest_argv[0], k_writes[i]) == 0) {
+            return true;
+        }
+    }
+    return false;
+}
+
+/* cppcheck-suppress staticFunction ; public API (remember_app.h); used by tests */
+AppCommandClass app_command_class(CliCommand command, int rest_argc, const char *const *rest_argv)
+{
+    if ((size_t)command >= sizeof(k_command_class) / sizeof(k_command_class[0])) {
+        return APP_CMD_UNLISTED;
+    }
+    if (command == CLI_CMD_SETTINGS && settings_verb_writes(rest_argc, rest_argv)) {
+        return APP_CMD_WRITE;
+    }
+    return k_command_class[command];
+}
+
+/* A brain from a newer remember (plan 27b): a write is refused before the
+   command runs, so it cannot touch the file; a read runs and warns, every time.
+   The result is 0 to go on, else the exit code. */
+static int meet_newer_brain(const Store *s, const CliArgs *args)
+{
+    StoreSchemaGap gap = {0, 0};
+
+    if (!store_newer_brain(s, &gap)) {
+        return 0;
+    }
+    if (app_command_class(args->command, args->rest_argc, args->rest_argv) == APP_CMD_WRITE) {
+        (void)diag_schema_too_new_error(gap);
+        return REMEMBER_TEMPFAIL;
+    }
+    (void)diag_schema_too_new_warning(gap);
+    return 0;
+}
+
 static int run_with_store(const CliArgs *args, CmdFn fn)
 {
     Store *s = NULL;
@@ -536,7 +602,10 @@ static int run_with_store(const CliArgs *args, CmdFn fn)
     if (s == NULL) {
         return rc;
     }
-    rc = fn(s, args->globals.json, args->rest_argc, args->rest_argv);
+    rc = meet_newer_brain(s, args);
+    if (rc == 0) {
+        rc = fn(s, args->globals.json, args->rest_argc, args->rest_argv);
+    }
     store_close(s);
     return rc;
 }

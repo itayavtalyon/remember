@@ -46,6 +46,7 @@ static const TestGroup k_groups[] = {
     {"export", register_export_tests},
     {"import_formats", register_import_formats_tests},
     {"outbox", register_outbox_tests},
+    {"old_cli", register_old_cli_tests},
 };
 
 /* Exact comma-token match: "key" must not select "key_gld" (or vice versa),
