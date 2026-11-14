@@ -38,8 +38,9 @@ typedef enum {
     STORE_ERR_UNIQUE_TAKEN,      /* accept cannot free key/hash without inventing a key */
     STORE_ERR_STALE,  /* if_version_vector is not the row's version vector; nothing was written */
     STORE_ERR_BAD_VV, /* if_version_vector is not an object of non-negative integers */
-    STORE_ERR_SCHEMA_TOO_NEW /* brain_meta.min_reader_version is newer than this engine
-                                (007 ST-10.2): the store reads, every write refuses */
+    STORE_ERR_SCHEMA_TOO_NEW /* the brain is newer than this engine: a higher schema_version or
+                                min_reader_version (plan 27b): the store reads, every write
+                                refuses */
 } StoreStatus;
 
 /* Locator / list / search / tags bin. LIVE is the zero value (zero-init queries). */
@@ -389,9 +390,23 @@ typedef struct {
  * Replace brain_meta.brain_id with a new lowercase UUID v7 (JE-3.9).
  * Does not change change_seq, a version vector, or a memory.
  * On STORE_OK, out->id is the new id and out->previous is the one it replaced.
- * A newer min_reader_version is STORE_ERR_SCHEMA_TOO_NEW and writes nothing.
+ * A newer brain (store_newer_brain) is STORE_ERR_SCHEMA_TOO_NEW and writes nothing.
  */
 StoreStatus store_brain_new_id(Store *s, StoreBrainId *out);
+
+/* The schema numbers behind a read-only open (decision:2026-11-03-schema-read-only). */
+typedef struct {
+    int brain_schema; /* the brain's schema_version (PRAGMA user_version) */
+    int cli_schema;   /* the highest schema this build knows */
+} StoreSchemaGap;
+
+/*
+ * True when the brain is newer than this build: its schema_version is higher,
+ * or its brain_meta.min_reader_version is (007 ST-10.2). Then every read works,
+ * every write is STORE_ERR_SCHEMA_TOO_NEW, and *out holds the two schemas. A
+ * NULL s is false. out may be NULL.
+ */
+bool store_newer_brain(const Store *s, StoreSchemaGap *out);
 
 /* Release heap fields of *e and zero it. Safe with NULL e or zeroed Entry. */
 void store_entry_free(Entry *e);

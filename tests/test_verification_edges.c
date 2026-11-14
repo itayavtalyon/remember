@@ -571,7 +571,7 @@ TEST(db_parent_dir_mode_0700)
 
 /* ---- V14 user_version too new -------------------------------------------- */
 
-TEST(schema_user_version_too_new_refused)
+TEST(schema_user_version_too_new_reads_read_only)
 {
     char *db = make_temp_db_path();
     CmdResult r;
@@ -590,8 +590,8 @@ TEST(schema_user_version_too_new_refused)
     ASSERT_STREQ(ver, "99");
     free(ver);
     l = run_remember(db, largs, sizeof(largs) / sizeof(largs[0]), NULL);
-    ASSERT_EQ_INT(l.exit_code, 1);
-    ASSERT_TRUE(!str_is_blank(l.err));
+    ASSERT_EQ_INT(l.exit_code, 0);
+    ASSERT_STR_CONTAINS(l.err, "This brain uses schema 99; this remember reads up to schema 6.");
     cmd_result_free(&l);
     free(db);
 }
@@ -651,7 +651,7 @@ void register_verification_gld_tests(void)
     RUN_TEST(update_rejects_source_flag);
     RUN_TEST(update_preserves_id_key_source_created_at);
     RUN_TEST(update_invalid_utf8_text_rejected);
-    RUN_TEST(schema_user_version_too_new_refused);
+    RUN_TEST(schema_user_version_too_new_reads_read_only);
     RUN_TEST(json_get_missing_is_an_error_envelope);
     RUN_TEST(human_list_preview_first_line_only);
     RUN_TEST(human_list_preview_truncates_long_line);

@@ -1370,8 +1370,10 @@ TEST(envelope_brain_new_id_replaces_only_the_brain_id)
     static const char k_counts[] = "SELECT (SELECT COUNT(*) FROM entries) || '|' || (SELECT "
                                    "COUNT(*) FROM entry_links) || '|' || (SELECT COUNT(*) FROM "
                                    "tombstones);";
-    static const char k_newer[] = "remember: this brain was written by a newer remember. You can "
-                                  "read it. Upgrade to write to it.\n";
+    static const char k_newer[] =
+        "remember: this brain was made by a newer version of remember, so it is read-only here. "
+        "You can still read and export it. This brain uses schema 6; this remember reads up to "
+        "schema 6. Upgrade remember to make changes.\n";
     char *db = make_temp_db_path();
     char *bare = make_temp_db_path();
     char *born = make_temp_db_path();
@@ -1517,7 +1519,7 @@ TEST(envelope_brain_new_id_replaces_only_the_brain_id)
 
     free(harness_sqlite_query_line(db, "UPDATE brain_meta SET min_reader_version = '0.4.0';"));
     r = run_remember(db, plain, sizeof plain / sizeof plain[0], NULL);
-    ASSERT_EQ_INT(r.exit_code, 1);
+    ASSERT_EQ_INT(r.exit_code, 75);
     ASSERT_STREQ(r.out, "");
     ASSERT_STREQ(r.err, k_newer);
     cmd_result_free(&r);

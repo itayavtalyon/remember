@@ -50,10 +50,11 @@ struct Store {
     MigrationWarning *warnings; /* this open's v6 step; nwarnings items */
     size_t nwarnings;
     ChangeSeqTx change_tx;
-    bool schema_too_new;          /* min_reader_version is newer than this engine: read only */
+    int brain_schema;             /* the brain's user_version, read at open */
+    bool schema_too_new;          /* newer schema or min_reader_version: read only */
     bool replace_invalid_sidecar; /* device new only: invalid counts as missing */
     /* NOLINTNEXTLINE(readability-magic-numbers,cppcoreguidelines-avoid-magic-numbers) */
-    char pad_[6]; /* explicit tail padding (kept -Wpadded-clean) */
+    char pad_[2]; /* explicit tail padding (kept -Wpadded-clean) */
 };
 
 /* Directory mode for the DB parent (rwx for owner only). */
@@ -1710,20 +1711,6 @@ static int backfill_sync_ids(sqlite3 *db, const char *device_id, char *err, size
     return 0;
 }
 
-/* Gate an already-created database: 6 is current, anything else is refused. */
-static int check_version(int version, char *err, size_t errlen)
-{
-    if (version == SCHEMA_VERSION) {
-        return 0;
-    }
-    if (version > SCHEMA_VERSION) {
-        set_err(err, errlen, k_newer_database);
-    } else {
-        set_err(err, errlen, k_unsupported_version);
-    }
-    return -1;
-}
-
 static int migrate_v3_to_v4_columns(sqlite3 *db, char *err, size_t errlen, StoreError *serr)
 {
     if (exec_sql(db, "ALTER TABLE entries ADD COLUMN sync_id TEXT;", err, errlen, serr) != 0) {
@@ -2374,7 +2361,8 @@ static int migrate_legacy(Store *s, int version, char *err, size_t errlen)
  * shape, then the one v6 step, then user_version = 6 (007 §10 step 2). Assumes
  * foreign_keys is OFF (ensure_schema toggles it) so the rebuilds' DROPs do not
  * cascade. Returns 0 = created/migrated + committed (identity bound), 1 = a
- * concurrent remember already migrated (caller binds identity), -1 = failure.
+ * concurrent remember already migrated, to this schema or a newer one (caller
+ * binds identity and reads brain_schema), -1 = failure.
  * Device id comes from the sidecar, never from a devices row.
  */
 static int migrate_to_current(Store *s, char *err, size_t errlen)
@@ -2389,15 +2377,17 @@ static int migrate_to_current(Store *s, char *err, size_t errlen)
     if (read_user_version(db, &version, err, errlen, serr) != 0) {
         goto cleanup_fail;
     }
-    if (version == SCHEMA_VERSION) {
+    if (version >= SCHEMA_VERSION) {
         rollback_quiet(db);
+        s->brain_schema = version;
         return 1;
     }
     /* Another writer committed an illegal version before BEGIN IMMEDIATE.
        Same refusal as the outer gate. */
-    if (version < 0 || version > SCHEMA_VERSION) {
+    if (version < 0) {
         rollback_quiet(db);
-        return check_version(version, err, errlen);
+        set_err(err, errlen, k_unsupported_version);
+        return -1;
     }
     if (version <= 3) {
         if (migrate_legacy(s, version, err, errlen) != 0) {
@@ -2535,8 +2525,9 @@ static int bind_v6_identity(Store *s, char *err, size_t errlen)
     return 0;
 }
 
-/* 007 ST-10.2: an engine older than min_reader_version opens the brain read
-   only: every brain write then fails with schema_too_new (begin_write). */
+/* An engine older than min_reader_version opens the brain read only: every
+   brain write then fails with schema_too_new (begin_write). A newer
+   schema_version is the same, set in ensure_schema (plan 27b). */
 static int check_reader_version(Store *s, char *err, size_t errlen)
 {
     char *need = NULL;
@@ -2640,11 +2631,13 @@ static int ensure_schema(Store *s, char *err, size_t errlen)
     if (read_user_version(db, &version, err, errlen, serr) != 0) {
         return -1;
     }
-    if (version == SCHEMA_VERSION) {
-        goto bind_identity; /* already current; foreign_keys stays ON */
+    s->brain_schema = version;
+    if (version >= SCHEMA_VERSION) {
+        goto bind_identity; /* current, or newer and read only; foreign_keys stays ON */
     }
-    if (version < 0 || version > SCHEMA_VERSION - 1) {
-        return check_version(version, err, errlen);
+    if (version < 0) {
+        set_err(err, errlen, k_unsupported_version);
+        return -1;
     }
     /* 007 §10 step 1: before BEGIN. */
     if (copy_legacy_sidecar(s, err, errlen) != 0) {
@@ -2666,6 +2659,12 @@ static int ensure_schema(Store *s, char *err, size_t errlen)
 bind_identity:
     if (bind_v6_identity(s, err, errlen) != 0) {
         return -1;
+    }
+    if (s->brain_schema > SCHEMA_VERSION) {
+        /* A newer brain, also one a newer remember migrated while this open
+           waited for the lock: read only, whatever its min_reader_version says. */
+        s->schema_too_new = true;
+        return 0;
     }
     /* Only a brain this open did not just migrate can ask for a newer reader:
        the v6 step writes k_min_reader_version, which this engine reads. So
@@ -2772,6 +2771,18 @@ const StoreError *store_last_error(const Store *s)
     return &s->last;
 }
 
+bool store_newer_brain(const Store *s, StoreSchemaGap *out)
+{
+    if (s == NULL || !s->schema_too_new) {
+        return false;
+    }
+    if (out != NULL) {
+        out->brain_schema = s->brain_schema;
+        out->cli_schema = SCHEMA_VERSION;
+    }
+    return true;
+}
+
 const char *store_path(const Store *s)
 {
     if (s == NULL) {
@@ -2856,9 +2867,10 @@ const char *store_status_message(StoreStatus st)
     case STORE_ERR_BAD_VV:
         return "invalid version vector";
     case STORE_ERR_SCHEMA_TOO_NEW:
-        /* 007 ST-10.2, locked. The JSON fix waits on COPY-PENDING C-01. */
-        return "this brain was written by a newer remember. You can read it. Upgrade to write to "
-               "it.";
+        /* R27b-1 without the schema sentence: the engine knows no CLI numbers. The CLI
+           prints the full line with them (diag_schema_too_new_error). */
+        return "this brain was made by a newer version of remember, so it is read-only here. You "
+               "can still read and export it.";
     default:
         return "store error";
     }

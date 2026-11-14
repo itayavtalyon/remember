@@ -154,10 +154,12 @@ TEST(store_open_reopens_existing)
     free(db);
 }
 
-TEST(store_open_refuses_user_version_too_new)
+/* Plan 27b: a newer schema opens read only instead of failing the open. */
+TEST(store_open_reads_a_newer_user_version_read_only)
 {
     char *db = make_temp_db_path();
     char err[ERR_BUFSIZE];
+    StoreSchemaGap gap = {0, 0};
     Store *s = NULL;
 
     ASSERT_TRUE(db != NULL);
@@ -169,8 +171,11 @@ TEST(store_open_refuses_user_version_too_new)
 
     err[0] = '\0';
     s = store_open(db, err, sizeof(err));
-    ASSERT_TRUE(s == NULL);
-    ASSERT_STR_CONTAINS(err, "newer");
+    ASSERT_TRUE(s != NULL);
+    ASSERT_TRUE(store_newer_brain(s, &gap));
+    ASSERT_EQ_INT(gap.brain_schema, 99);
+    store_close(s);
+    assert_query_is(db, (QueryExpect){.sql = "PRAGMA user_version;", .want = "99"});
     free(db);
 }
 
@@ -3533,7 +3538,7 @@ void register_store_tests(void)
     RUN_TEST(store_open_creates_user_version_6);
     RUN_TEST(store_open_migrates_v1_to_v6);
     RUN_TEST(store_open_reopens_existing);
-    RUN_TEST(store_open_refuses_user_version_too_new);
+    RUN_TEST(store_open_reads_a_newer_user_version_read_only);
     RUN_TEST(store_open_refuses_negative_user_version);
     RUN_TEST(store_open_creates_parent_dir_0700);
     RUN_TEST(store_open_db_file_mode_0600);
