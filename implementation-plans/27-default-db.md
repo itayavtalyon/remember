@@ -112,7 +112,7 @@ Deviation (outside the plan's file list, approved by Itay 2026-11-13): commit `8
 
 ## In-session deep review (coder)
 
-Gate on `a59abac`: sanitizer build and ctest 6/6, `lint-all.sh` OK (IWYU skipped locally; `ci-linux.sh` ran it, OK), `check-coverage.sh` 100% functions and effective lines, `ci-linux.sh` OK. `codeql-local.sh` failed with the 8 alerts above until `8ee5408`; its run on `8ee5408` is the parent session's.
+Gate on `a59abac`: sanitizer build and ctest 6/6, `lint-all.sh` OK (IWYU skipped locally; `ci-linux.sh` ran it, OK), `check-coverage.sh` 100% functions and effective lines, `ci-linux.sh` OK. `codeql-local.sh` failed with the 8 alerts above until `8ee5408`; its run on `8ee5408` (same `src/` as `a59abac`) printed `codeql-local: OK (45 allowed by scripts/codeql-allow.tsv)` with nothing blocked, run by the parent session. The count is 45, not 43 + 8, because CodeQL merged some existing env-only alerts in `store_sqlite.c` into the new two-source ones. `git diff --name-only 6c35803 | scripts/spec-drift.sh` exits 0 on the final tree, and `tests/test_spec_drift.sh` passes.
 
 (S) Simplicity. `read_default_db`, `use_default_db` and `trim_ascii_space` are 3 small statics with one caller each; no flag, no option, no second path check. The two `set_err(..., "cannot read default-db")` lines repeat one literal; a helper would add more than it removes, so they stay. The empty-line check was deleted earlier (equivalent). `util_resolve_user_db_path` is untouched.
 
