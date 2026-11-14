@@ -14,6 +14,10 @@ Document revision of protocol 1 (log 009 P-Q4). No wire change. Applies Itay's c
 
 Validator: unchanged, and it still passes (no example changed).
 
+## Repository note (2026-11-13)
+
+No wire change, protocol 1. R3.14 and the S-15 row now follow `decision:2026-11-12-hook-delivery-retry`, which superseded S-15: a failed run retries with backoff (1 s, doubling, cap 1 hour), then `failed`. A pre-flight failure fails at once (`decision:2026-11-12-e1-preflight-hook-failures-fail-at-once`). The state rule is `specs/OUTBOX-DELIVERY.md` (plan 27a).
+
 ## Repository note (2026-10-25)
 
 No wire change, protocol 1. The schema and example extraction landed on revision 6: plan 24 extracts each schema block to `schema/plugin/v1/<$id file name>` and each example, including the §2.4 `hello` and `log_ids` plugins, to `tests/fixtures/plugin/`. `scripts/validate_plugin_spec.py` fails when a file differs from its spec block, and `--write` regenerates the files. The docs CI job runs it. Revision 7 (above) followed with the 2026-10-25 settings decisions; it changes no schema block or example, so the extracted files are unchanged.

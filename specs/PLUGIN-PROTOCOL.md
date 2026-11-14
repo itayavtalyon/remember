@@ -170,7 +170,7 @@ Revision 6 applies the amendment table of log 009 (Design) and is still protocol
 | S-10 | `[decision:s-10]` | Six event types. A link change is a `memory.updated` on each end (R3.3, R3.16). |
 | S-01 | `[decision:s-01]` | Every hook is a plugin. Every event carries real `plugin`, `entry`, `data_dir` and `settings` (R3.6). |
 | G-28 | `[decision:g-28]` | `data_dir` is `<brain>.d/plugins/<name>/data/` (R3.9, R6.15). |
-| S-15 | `[decision:s-15]` | No exit-75 retry. `remember plugin rerun` reruns a failed run (R3.14). |
+| S-15 | `[decision:s-15]`, superseded by `[decision:2026-11-12-hook-delivery-retry]` | No exit-75 path. A failed run retries with backoff, then `failed`. `remember plugin rerun` reruns a failed run (R3.14). |
 | G2-06 | `[decision:g2-06]` | A persistent process passes the cause on each write (R6.1, R3.23). |
 | daemon | `[decision:2026-10-22-daemon-v1]` (738) | The daemon branches stay; S-11 is reversed (R6.9, R7.3, R7.5a, R9.6a). |
 | settings read | `[decision:2026-10-22-plugin-settings-read]` (740) | Settings are read-only for plugins (R2.16a, R3.10). |
@@ -755,7 +755,7 @@ sys.exit(0)
 - R3.11. The `data` of an event must not exceed 256 KiB. Over the limit, Remember drops `changes.before.body`, then `memory.links`, then cuts `memory.body` to 16,384 bytes, and lists the cut paths in `truncated_fields` (HK §2.2) **(OQ-6)**.
 - R3.12. The plugin must not change a memory to react to an event. The plugin may write a **new** memory, for example a linked memory tagged `source:url` `[decision:url-expansion-linked-memory]`, `[principle:plugins-never-change-writes]`.
 - R3.13. Remember never waits for a handler. A handler result never changes the exit code or the output of the write `[decision:hooks-never-wait]` **(NQ-3)**.
-- R3.14. A once-process ends with an exit code. `0` means handled. Any other code means failed, and Remember does not retry. No exit code is retried. `remember plugin rerun` reruns a failed run `[decision:s-15]`. It runs in the foreground and waits for the run (R3.21, revision 7, D-17).
+- R3.14. A once-process ends with an exit code. `0` means handled. Any other code is a failed attempt. Remember retries it after 1, 2, 4 ... 2048, then 3600 seconds, and a failure after the 3600-second wait sets `failed`. No exit code has its own path. A pre-flight failure sets `failed` at once (`specs/OUTBOX-DELIVERY.md`) `[decision:2026-11-12-hook-delivery-retry]`, `[decision:2026-11-12-e1-preflight-hook-failures-fail-at-once]`. `remember plugin rerun` reruns a `failed` run. It runs in the foreground and waits for the run (R3.21, revision 7, D-17).
 - R3.15. Remember ignores the stdout of a once-process and of a hook. Only the exit code counts. Remember writes stderr to the per-run output file that the hooks log in `<brain>.d/` names (HK §6.3) **(OQ-13)**.
 - R3.16. For a link change (a `memory.updated` on each end, `[decision:s-10]`), `changes` holds `{"link": {kind, direction, other{id, key}}}` (HK §1.2).
 
