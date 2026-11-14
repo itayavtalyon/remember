@@ -15,6 +15,12 @@ if ! command -v codeql >/dev/null 2>&1; then
 fi
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+# The allow filter checks itself first: known alerts against the real allowlist.
+if ! jq -r --rawfile allow "$ROOT/scripts/codeql-allow.tsv" -f "$ROOT/scripts/codeql-allow.jq" \
+  "$ROOT/tests/codeql-allow/alerts.sarif" | cut -f1,3 | diff -u "$ROOT/tests/codeql-allow/expected.tsv" - >&2; then
+  echo "codeql-local: FAIL (scripts/codeql-allow.jq or .tsv no longer gives tests/codeql-allow/expected.tsv)" >&2
+  exit 1
+fi
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/remember-codeql.XXXXXX")"
 trap 'rm -rf "$WORK"' EXIT
 RAM="${CODEQL_RAM:-4096}"
@@ -33,22 +39,8 @@ codeql database analyze "$WORK/db" \
   codeql/cpp-queries:codeql-suites/cpp-security-extended.qls \
   -q --download --ram="$RAM" --format=sarif-latest --output="$WORK/out.sarif" >/dev/null
 
-# One line per alert: "BLOCK|allowed<TAB>rule<TAB>path:line<TAB>message". The
-# entries that apply to an alert are those with its rule and a prefix of its
-# path. It passes when EVERY input source the message names contains the text
-# of one of those entries (or, when it names none, the message contains one).
-# So each source of a multi-source alert needs its own reviewed entry.
-jq -r --rawfile allow "$ROOT/scripts/codeql-allow.tsv" '
-  ($allow | split("\n") | map(select(length > 0 and (startswith("#") | not)) | split("\t"))) as $rows
-  | .runs[].results[]
-  | (.locations[0].physicalLocation | "\(.artifactLocation.uri):\(.region.startLine)") as $loc
-  | .ruleId as $rule | .message.text as $msg
-  | ([$msg | scan("\\[([^\\]]*)\\]") | .[0]]) as $srcs
-  | [$rows[] | select(. as $r | $r[0] == $rule and ($loc | startswith($r[1])))] as $m
-  | (if ($srcs | length) == 0 then any($m[]; . as $r | $msg | contains($r[2]))
-     else all($srcs[];. as $s | any($m[]; . as $r | $s | contains($r[2]))) end) as $ok
-  | [(if $ok then "allowed" else "BLOCK" end), $rule, $loc, ($msg | gsub("\n"; " "))]
-  | @tsv' "$WORK/out.sarif" | sort >"$WORK/alerts.tsv"
+jq -r --rawfile allow "$ROOT/scripts/codeql-allow.tsv" -f "$ROOT/scripts/codeql-allow.jq" \
+  "$WORK/out.sarif" | sort >"$WORK/alerts.tsv"
 
 grep '^BLOCK' "$WORK/alerts.tsv" || true
 blocked=$(grep -c '^BLOCK' "$WORK/alerts.tsv" || true)
