@@ -7,3 +7,4 @@ cpp/path-injection	src/cmd_export.c	buffer read by read	The "input" is random_he
 cpp/uncontrolled-process-operation	tests/	a command-line argument	The harness runs the binary under test, named on its own command line.
 cpp/uncontrolled-process-operation	tests/harness.c	read by	The sqlite3 fixture runs test SQL on a test path, both shell-quoted by shell_quote_append.
 cpp/world-writable-file-creation	tests/	with mode 0666	Test files live under make_temp_db_path()'s mkdtemp directory (0700).
+cpp/path-injection	src/store_sqlite.c	string read by fread	The line is the user's own ~/.remember/default-db (plan 27), checked by copy_regular_db_path and opened with the user's rights, like --db.
