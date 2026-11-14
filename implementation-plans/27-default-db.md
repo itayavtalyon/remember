@@ -55,7 +55,7 @@ A path taken from the file goes through the existing `copy_regular_db_path`. Do 
 - [x] `a set XDG_DATA_HOME does not move default-db: the engine still reads ~/.remember/default-db` (`util_resolve_default_db_xdg_data_home_does_not_move_it`).
 - [x] `specs/DEFAULT-DB.md` is written, and `decision:ui-overhaul-grill-2026-10-12` item 3 is cited from that spec. The decision stays `state:accepted` because this plan builds one item of it.
 - [x] `a default-db that exists but cannot be read fails with cannot read default-db and no fallback` (`util_resolve_default_db_directory_fails_with_no_fallback`, `..._symlink_loop_fails_with_no_fallback`, `..._without_permission_fails_with_no_fallback`; `decision:2026-11-13-default-db-unreadable`).
-- [ ] The gate passes on the committed tree, and the notes record the mutants and their red tests.
+- [x] The gate passes on the committed tree, and the notes record the mutants and their red tests.
 
 ## Implementation Notes
 
@@ -107,5 +107,24 @@ Mutants for the unreadable branch (each built, then the suite run):
 | mapping removed from `code_for_store_text` | `store_text_codes_follow_the_locked_split` |
 
 (`if (0)` for the exemption did not build under `-Werror`; redone as `EEXIST`.)
+
+Deviation (outside the plan's file list, approved by Itay 2026-11-13): commit `8ee5408` changes `scripts/codeql-local.sh` and `scripts/codeql-allow.tsv`. The content of `default-db` is a second CodeQL taint source ("string read by fread") next to the environment variable. It raised 8 `cpp/path-injection` alerts in `src/store_sqlite.c` (lines 1438, 1545, 1570, 1626, 2445, 2448, 2466, 2527) where the brain path is opened. The old rule needed one allow row to match every source of an alert, so no row could allow an alert with two sources. Now an alert passes when each source contains the text of some row for its rule and path, so every taint source needs its own reviewed row. The one new row covers `fread` only, only in `src/store_sqlite.c`. The Opus reviewer checks this change.
+
+## In-session deep review (coder)
+
+Gate on `a59abac`: sanitizer build and ctest 6/6, `lint-all.sh` OK (IWYU skipped locally; `ci-linux.sh` ran it, OK), `check-coverage.sh` 100% functions and effective lines, `ci-linux.sh` OK. `codeql-local.sh` failed with the 8 alerts above until `8ee5408`; its run on `8ee5408` is the parent session's.
+
+(S) Simplicity. `read_default_db`, `use_default_db` and `trim_ascii_space` are 3 small statics with one caller each; no flag, no option, no second path check. The two `set_err(..., "cannot read default-db")` lines repeat one literal; a helper would add more than it removes, so they stay. The empty-line check was deleted earlier (equivalent). `util_resolve_user_db_path` is untouched.
+
+(A) Adversarial, a path read from a file is a trust boundary:
+- Whoever can write `~/.remember/default-db` already owns the account. The path opens a SQLite brain with the user's rights, as `--db` does, after `copy_regular_db_path` (no `:memory:`, no `file:` URI). No error sentence echoes the path.
+- Size: at most `PATH_MAX + 1` bytes are read; a longer file is `database path is too long`. A symlink to `/dev/zero` therefore ends in that error, not a hang.
+- A NUL byte in the file ends the C string, so `/tmp/a<NUL>/b` selects `/tmp/a` (run, the brain was created there). Open item: no rule for it; the decision says nothing.
+- A FIFO at `default-db` blocks `fopen` for every command (the same happens for `--db`). Open item: a non-regular-file rule is not in any decision; not built.
+- A second line stays in the string and is part of the path; invalid UTF-8 is not checked. The plan says to add no rule for either.
+- No TOCTOU worth a rule: the file is opened once and read once; the open error is read from `errno` right after `fopen`.
+- Decision states: `decision:2026-11-13-default-db-unreadable` and `decision:2026-11-11-default-db-home` are `state:implemented`; `decision:ui-overhaul-grill-2026-10-12` stays accepted (one item built).
+
+No finding needed a fix. Mutants for the whole resolver are in the tables above; the survivor (`REMEMBER_DB` read before `--db`) is old behavior.
 
 ## Review Notes
