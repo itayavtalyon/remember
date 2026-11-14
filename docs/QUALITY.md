@@ -51,8 +51,10 @@ hook runs `scripts/codeql-local.sh` on every push that touches code
 suite instead of the default one, and ANY alert fails, at every severity, unless
 `scripts/codeql-allow.tsv` lets it through. An allow entry names a rule, a path
 prefix and the input source, and gives a reason; add one only for a reviewed
-alert, and fix everything else. Every source of an alert needs its own entry,
-and a source text that starts with a file (`src/util.c: user input (...)`)
+alert, and fix everything else. Every source of an alert needs its own entry:
+an entry means "this source is trusted at this path", so an alert whose sources
+all have entries passes, with no entry per combination of sources
+(`decision:2026-11-14-plan27-review-grill` G4). A source text that starts with a file (`src/util.c: user input (...)`)
 allows that source only from that file (`scripts/codeql-allow.jq`). Before it
 builds, the script runs that filter on `tests/codeql-allow/alerts.sarif` and
 fails unless it gives `tests/codeql-allow/expected.tsv`. `third_party/` is built

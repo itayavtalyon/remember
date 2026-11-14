@@ -2,10 +2,12 @@
 
 #include <ctype.h>
 #include <errno.h>
+#include <fcntl.h>
 #include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
 #include <unistd.h>
 
 #ifndef PATH_MAX
@@ -138,32 +140,37 @@ static const char *home_dir(char *err, size_t errlen, const char *missing)
 
 /* Reads ~/.remember/default-db into content (DEFAULT_DB_READ_MAX + 1 bytes).
    Returns 1 when a file was read, 0 when there is none (ENOENT, ENOTDIR), -1 on
-   error. A file that exists but cannot be opened or read is "cannot read
-   default-db", with no fallback (decision:2026-11-13-default-db-unreadable). */
+   error. A file that exists but cannot be opened or read, is not a regular
+   file, or holds a NUL byte is "cannot read default-db", with no fallback
+   (decision:2026-11-13-default-db-unreadable, decision:2026-11-14-plan27-review-grill).
+   O_NONBLOCK keeps a FIFO from blocking the open. */
 // NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
 static int read_default_db(const char *home, char *content, char *err, size_t errlen)
 {
     char file[PATH_MAX];
+    struct stat st;
     FILE *f = NULL;
     size_t n = 0;
-    int failed = 0;
+    int fd = -1;
+    int failed = 1;
 
     if (format_db_path(file, sizeof(file), err, errlen, home, "/.remember/default-db") != 0) {
         return -1;
     }
-    /* macOS fopen has no 'e' (O_CLOEXEC) mode; CLI is short-lived. */
-    // NOLINTNEXTLINE(android-cloexec-fopen)
-    f = fopen(file, "r");
-    if (f == NULL) {
-        if (errno == ENOENT || errno == ENOTDIR) {
-            return 0;
-        }
-        set_err(err, errlen, "cannot read default-db");
-        return -1;
+    fd = open(file, O_RDONLY | O_NONBLOCK | O_CLOEXEC);
+    if (fd < 0 && (errno == ENOENT || errno == ENOTDIR)) {
+        return 0;
     }
-    n = fread(content, 1U, DEFAULT_DB_READ_MAX, f);
-    failed = ferror(f);
-    (void)fclose(f);
+    if (fd >= 0 && fstat(fd, &st) == 0 && S_ISREG(st.st_mode)) {
+        f = fdopen(fd, "r");
+    }
+    if (f != NULL) {
+        n = fread(content, 1U, DEFAULT_DB_READ_MAX, f);
+        failed = ferror(f) != 0 || memchr(content, '\0', n) != NULL;
+        (void)fclose(f);
+    } else if (fd >= 0) {
+        (void)close(fd);
+    }
     if (failed != 0) {
         set_err(err, errlen, "cannot read default-db");
         return -1;

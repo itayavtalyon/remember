@@ -51,19 +51,24 @@ typedef struct {
     char *saved_home;
 } GivenHome;
 
-static void write_text_file(const char *path, const char *content)
+static void write_bytes_file(const char *path, const char *bytes, size_t len)
 {
     FILE *f = fopen(path, "wb");
-    int wrote = 0;
+    size_t wrote = 0;
     int closed = 0;
     if (f == NULL) {
         ASSERT_TRUE(f != NULL);
         return;
     }
-    wrote = fputs(content, f);
+    wrote = fwrite(bytes, 1U, len, f);
     closed = fclose(f);
-    ASSERT_TRUE(wrote >= 0);
+    ASSERT_TRUE(wrote == len);
     ASSERT_EQ_INT(closed, 0);
+}
+
+static void write_text_file(const char *path, const char *content)
+{
+    write_bytes_file(path, content, strlen(content));
 }
 
 static void given_home(GivenHome *h, const char *content)
@@ -456,6 +461,45 @@ TEST(util_resolve_default_db_without_permission_fails_with_no_fallback)
     }
     given_home(&h, "/tmp/from-file.db\n");
     ASSERT_EQ_INT(chmod(h.file, 0000), 0);
+    ASSERT_EQ_INT(util_resolve_db_path(NULL, buf, sizeof(buf), err, sizeof(err)), -1);
+    ASSERT_STREQ(err, "cannot read default-db");
+    given_home_release(&h);
+}
+
+/* decision:2026-11-14-plan27-review-grill G1: a default-db that is not a
+   regular file fails at once. A FIFO must fail, not block the open. */
+TEST(util_resolve_default_db_not_a_regular_file_fails)
+{
+    GivenHome h;
+    char buf[REMEMBER_PATH_MAX];
+    char err[128];
+    int next_fd = -1;
+    int probe_fd = -1;
+    given_home(&h, NULL);
+    ASSERT_EQ_INT(symlink("/dev/null", h.file), 0);
+    ASSERT_EQ_INT(util_resolve_db_path(NULL, buf, sizeof(buf), err, sizeof(err)), -1);
+    ASSERT_STREQ(err, "cannot read default-db");
+    ASSERT_EQ_INT(unlink(h.file), 0);
+    ASSERT_EQ_INT(mkfifo(h.file, 0600), 0);
+    next_fd = dup(0);
+    ASSERT_EQ_INT(close(next_fd), 0);
+    ASSERT_EQ_INT(util_resolve_db_path(NULL, buf, sizeof(buf), err, sizeof(err)), -1);
+    ASSERT_STREQ(err, "cannot read default-db");
+    probe_fd = dup(0); /* the lowest free descriptor: the resolver closed its own */
+    ASSERT_EQ_INT(probe_fd, next_fd);
+    ASSERT_EQ_INT(close(probe_fd), 0);
+    given_home_release(&h);
+}
+
+/* G2 of the same decision: a NUL byte would cut the path short, so it fails. */
+TEST(util_resolve_default_db_nul_byte_fails)
+{
+    static const char line[] = "/tmp/a\0/b\n";
+    GivenHome h;
+    char buf[REMEMBER_PATH_MAX];
+    char err[128];
+    given_home(&h, NULL);
+    write_bytes_file(h.file, line, sizeof(line) - 1U);
     ASSERT_EQ_INT(util_resolve_db_path(NULL, buf, sizeof(buf), err, sizeof(err)), -1);
     ASSERT_STREQ(err, "cannot read default-db");
     given_home_release(&h);
@@ -1264,6 +1308,8 @@ void register_coverage_edges_tests(void)
     RUN_TEST(util_resolve_default_db_directory_fails_with_no_fallback);
     RUN_TEST(util_resolve_default_db_symlink_loop_fails_with_no_fallback);
     RUN_TEST(util_resolve_default_db_without_permission_fails_with_no_fallback);
+    RUN_TEST(util_resolve_default_db_not_a_regular_file_fails);
+    RUN_TEST(util_resolve_default_db_nul_byte_fails);
     RUN_TEST(util_resolve_default_db_that_does_not_exist_uses_builtin);
     RUN_TEST(util_set_err_truncates);
     RUN_TEST(util_read_stdin_null_out);

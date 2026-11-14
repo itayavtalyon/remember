@@ -15,7 +15,11 @@ if ! command -v codeql >/dev/null 2>&1; then
 fi
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-# The allow filter checks itself first: known alerts against the real allowlist.
+# scripts/codeql-allow.jq matches each taint source of an alert against its own
+# allow entry for the alert's rule and path. An entry means "this source is
+# trusted at this path", so an alert whose sources all have entries passes; there
+# is no entry per combination of sources (decision:2026-11-14-plan27-review-grill
+# G4). The filter checks itself first: known alerts against the real allowlist.
 if ! jq -r --rawfile allow "$ROOT/scripts/codeql-allow.tsv" -f "$ROOT/scripts/codeql-allow.jq" \
   "$ROOT/tests/codeql-allow/alerts.sarif" | cut -f1,3 | diff -u "$ROOT/tests/codeql-allow/expected.tsv" - >&2; then
   echo "codeql-local: FAIL (scripts/codeql-allow.jq or .tsv no longer gives tests/codeql-allow/expected.tsv)" >&2

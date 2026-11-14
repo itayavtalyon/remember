@@ -31,11 +31,13 @@ A line that is `:memory:` or starts with `file:` is a failure, not a missing fil
 
 The binary does not create the file, not on a missing file, an empty line, or a relative line. The binary does not change an existing file.
 
+`decision:2026-11-14-plan27-review-grill` G3: a program that writes the file replaces it atomically. It writes a temp file in `~/.remember`, then renames it over `default-db`, so a reader never sees a torn write (a cut path would name the wrong brain). The Mac app builds this writer (plan M53).
+
 ## An unreadable file
 
-`decision:2026-11-13-default-db-unreadable`, linked to `decision:ui-overhaul-grill-2026-10-12`.
+`decision:2026-11-13-default-db-unreadable`, linked to `decision:ui-overhaul-grill-2026-10-12`, and `decision:2026-11-14-plan27-review-grill` G1 and G2.
 
-When `~/.remember/default-db` exists but cannot be read (permission denied, a folder, an I/O error, a symlink loop), the command fails at once. There is no fallback to `~/.remember/remember.db`. The error code is `cannot_open`, the message is `cannot read default-db`, and the fix text and the JSON and plain-line forms are those of the existing `cannot_open` row for a path that is not a folder (`Check that the folder exists and that you can read and write it.`).
+When `~/.remember/default-db` exists but cannot be read (permission denied, a folder, an I/O error, a symlink loop), is not a regular file (a FIFO, a socket, a device, or a symlink to one), or holds a NUL byte, the command fails at once. The binary opens the file without blocking, so a FIFO fails instead of hanging. There is no fallback to `~/.remember/remember.db`. The error code is `cannot_open`, the message is `cannot read default-db`, and the fix text and the JSON and plain-line forms are those of the existing `cannot_open` row for a path that is not a folder (`Check that the folder exists and that you can read and write it.`).
 
 A file that does not exist is not unreadable: a missing file, a symlink that points nowhere, and a `~/.remember` that is not a folder all count as no file.
 
@@ -47,4 +49,4 @@ A file that does not exist is not unreadable: a missing file, a symlink that poi
 
 ## Not ruled
 
-The decision does not rule on a second line or on invalid UTF-8. The binary adds no rule for either: it reads the file as one string, so a second line stays in the string and is part of the path.
+The decisions do not rule on a second line or on invalid UTF-8. The binary adds no rule for either: it reads the file as one string, so a second line stays in the string and is part of the path.
