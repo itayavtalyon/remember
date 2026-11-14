@@ -20,6 +20,7 @@ int main(void)
     register_search_terms_tests();
     register_output_tests();
     register_jsonread_tests();
+    register_outbox_tests();
 
     (void)printf("\n== unit (sanitized) summary ==\n");
     (void)printf("tests run:     %d\n", g_tests_run);

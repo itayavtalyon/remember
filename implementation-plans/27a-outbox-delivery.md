@@ -59,22 +59,123 @@ The user command's exit does not change because of a result this function return
 
 ## Definition of Done
 
-- [ ] `a crash before a result stays pending and asks for the same event_id again` (`tests/test_outbox.c`).
-- [ ] `an event_id already done is not run`.
-- [ ] `once-process exit 0 sets done`.
-- [ ] `a matching event.result sets done`.
-- [ ] `first_failed_attempt_stays_pending_delay_1s`: a first non-zero once-process exit or a missing `event.result` leaves the recipient `pending` with `backoff_s` 1 and `next_retry_at` equal to now plus 1 second, and the next dispatch must not run it yet.
-- [ ] `backoff_doubles_then_caps_at_3600s`: successive failed attempts produce delays 1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048, then 3600, and never more than 3600.
-- [ ] `failure_after_3600s_delay_sets_failed`: a failed attempt whose waited delay was 3600 seconds sets `failed` and asks for no further automatic run.
-- [ ] `preflight_failure_sets_failed_at_once`: a result flagged as a pre-flight failure sets `failed` with `backoff_s` 0 and `next_retry_at` cleared, asks for no further automatic run, and does so from `pending` on a first attempt and after a backoff step alike.
-- [ ] `preflight_failure_is_not_a_backoff_step`: a flagged result never produces a delay from the 1, 2, 4 … 3600 sequence, and the same non-zero exit unflagged still does.
-- [ ] `crash_does_not_consume_backoff`: a crash before a result leaves `pending` with the same `backoff_s` and an immediate retry of the same `event_id`.
-- [ ] `chain length 100 sets halted and does not run`.
-- [ ] `a failed row at 6 days stays and at 7 days is deleted`.
-- [ ] `outbox_lane_count is 4 and a 5th lane is refused`.
-- [ ] `specs/OUTBOX-DELIVERY.md` is written, and `decision:2026-11-12-hook-delivery-retry` is `state:implemented`.
-- [ ] The gate passes on the committed tree, and the notes record the mutants and their red tests.
+- [x] `a crash before a result stays pending and asks for the same event_id again` (`tests/test_outbox.c`: `outbox_crash_before_a_result_stays_pending_and_runs_again`).
+- [x] `an event_id already done is not run` (`outbox_an_event_id_already_done_is_not_run`, `outbox_a_done_recipient_stays_done_and_is_not_run`, `outbox_done_is_never_undone_by_a_late_failure_or_halt`).
+- [x] `once-process exit 0 sets done` (`outbox_once_process_exit_0_sets_done`).
+- [x] `a matching event.result sets done` (`outbox_a_matching_event_result_sets_done`).
+- [x] `first_failed_attempt_stays_pending_delay_1s`: a first non-zero once-process exit or a missing `event.result` leaves the recipient `pending` with `backoff_s` 1 and `next_retry_at` equal to now plus 1 second, and the next dispatch must not run it yet (`outbox_first_failed_attempt_stays_pending_delay_1s`, `outbox_a_persistent_run_with_no_event_result_is_a_failed_attempt`).
+- [x] `backoff_doubles_then_caps_at_3600s`: successive failed attempts produce delays 1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048, then 3600, and never more than 3600 (`outbox_backoff_doubles_then_caps_at_3600s`, `outbox_a_delay_between_2048_and_3600_is_capped_not_doubled`, `outbox_a_delay_off_the_sequence_still_doubles_and_caps`, `outbox_exit_75_is_a_failed_attempt_like_any_other_non_zero_exit`).
+- [x] `failure_after_3600s_delay_sets_failed`: a failed attempt whose waited delay was 3600 seconds sets `failed` and asks for no further automatic run (`outbox_failure_after_a_3600s_delay_sets_failed`, `outbox_a_delay_past_the_cap_sets_failed_without_overflow`).
+- [x] `preflight_failure_sets_failed_at_once`: a result flagged as a pre-flight failure sets `failed` with `backoff_s` 0 and `next_retry_at` cleared, asks for no further automatic run, and does so from `pending` on a first attempt and after a backoff step alike (`outbox_preflight_failure_sets_failed_at_once_on_a_first_attempt`, `outbox_preflight_failure_sets_failed_at_once_after_a_backoff_step`).
+- [x] `preflight_failure_is_not_a_backoff_step`: a flagged result never produces a delay from the 1, 2, 4 ... 3600 sequence, and the same non-zero exit unflagged still does (`outbox_preflight_failure_is_not_a_backoff_step`).
+- [x] `crash_does_not_consume_backoff`: a crash before a result leaves `pending` with the same `backoff_s` and an immediate retry of the same `event_id` (`outbox_crash_does_not_consume_backoff`).
+- [x] `chain length 100 sets halted and does not run` (`outbox_chain_length_100_sets_halted_and_does_not_run`, with `outbox_chain_length_99_still_runs` and `outbox_a_huge_chain_length_sets_halted`).
+- [x] `a failed row at 6 days stays and at 7 days is deleted` (`outbox_a_failed_row_at_6_days_stays`, `outbox_a_failed_row_at_7_days_is_deleted`, `outbox_a_halted_row_at_6_days_stays_and_at_7_days_is_deleted`).
+- [x] `outbox_lane_count is 4 and a 5th lane is refused` (`outbox_lane_count_is_4_and_a_5th_lane_is_refused`).
+- [x] `specs/OUTBOX-DELIVERY.md` is written, and `decision:2026-11-12-hook-delivery-retry` is `state:implemented`.
+- [x] The gate passes on the committed tree, and the notes record the mutants and their red tests (Implementation Notes: Mutants, Gate).
 
 ## Implementation Notes
 
+**Shape.** `outbox_step(const OutboxInput *, OutboxStep *)` returns false (and leaves the output alone) for NULL, an undefined `state` or `result`, or a negative `chain_len`, `age_days` or `waited_s`. The plan's "run result", "once-process exit code", "whether a result is being reported" and "whether it is a pre-flight failure" are one enum, `OutboxResult` (`NONE`, `ONCE_EXIT`, `PERSISTENT_ACK`, `PERSISTENT_FAILED`, `PREFLIGHT`), plus `exit_code`. That removes the impossible pairs (a flagged pre-flight with an exit code, a non-reported result with a pre-flight flag). The module also returns `retry_at` (`KEEP`, `CLEAR`, `AFTER_BACKOFF`) so the caller does not re-derive when `next_retry_at` is unset or set. The module is linked into the CLI and the test binaries (`REMEMBER_LIB_SOURCES`, also the `-Wcast-qual` list) and into `remember_store_tests` (ASan/UBSan). It includes no `sqlite3.h` and calls no `fork`, `exec` or `system` (`grep -nE '(fork|exec[a-z]*|system|popen)\(|sqlite3|#include <(unistd|spawn)' src/outbox.c src/outbox.h` finds nothing).
+
+**Choices the plan and the decisions leave open.** Each reads the plan's text one way and is not a product rule from Itay. Each needs Itay's confirmation or a change before plans 31 and 35 call this function.
+
+1. A chain length of 100 or more halts only a call that reports nothing (`OUTBOX_RESULT_NONE`, the plan's "when the run has not started" with "whether a run result is being reported now"). A reported pre-flight failure at chain 100 or more is `failed`, not `halted`. Halt (H-5.6) and E1 A both describe a run that did not start.
+2. A reported result is judged the same whatever the stored state is (`failed`, `halted`, `pending`), except `done`, which is final. So a `plugin rerun` that fails with `waited_s` 0 gives `pending` with a 1 second delay, and automatic retries start again. The plan says nothing about the result of a rerun.
+3. `backoff_s` is 0 in `done`, `failed` and `halted`. The plan fixes it only for a pre-flight failure and a fresh `pending`.
+4. A `waited_s` above 3600 counts as 3600 ("already 1 hour"). A hand-edited `backoff_s` of 10 gives 20 (twice the delay just waited).
+5. Only `failed` and `halted` rows are dropped at 7 days. A `pending` or `done` row never is, as the plan says.
+6. What counts as a "matching" `event.result` is the caller's. A `PERSISTENT_FAILED` result means "no matching success result", which includes a failed `event.result` (review: renamed from `PERSISTENT_NONE`).
+7. The 7-day age is judged on the next state, so a row that fails for good at age 7 or more is deleted in the same call.
+8. `decision:2026-11-12-e1-preflight-hook-failures-fail-at-once` stays `state:accepted`: this plan builds only the state rule; plan 35 builds the pre-flight check itself. The same holds for `decision:2026-11-11-hooks-at-least-once-contract` (the acknowledge step is in the dispatcher).
+9. `outbox_lane_allows(lane)` reads `lane` as a 0-based index: 0 to 3 run and 4 does not ("a 5th lane"). A caller that numbers lanes from 1 must pass `number - 1`.
+
+**Lint.** The test file carries one `NOLINTBEGIN/END(magic-numbers)` region (expected values are literals by rule), two `NOLINTNEXTLINE(bugprone-easily-swappable-parameters)` on `given_attempt` and `given_row`, and four `NOLINTNEXTLINE(clang-analyzer-optin.core.EnumCastOutOfRange)` on the casts that feed the guard under test (the same form as `tests/test_output.c`). `src/outbox.c` has no suppression. Itay: these are the per-line disables to look at.
+
+**TDD.** One red test at a time, with a throwaway ASan/UBSan loop (`clang -std=c11 -Wall -Wextra -Wconversion -Werror -fsanitize=address,undefined -Isrc -Itests main.c tests/test.c tests/test_outbox.c src/outbox.c`). Red, then green, in this order: crash stays pending; done is final; exit 0 and matching result; failed attempt and the delay sequence; pre-flight; chain 100; age; refused input; lanes. Two tests were green when first written (`outbox_a_delay_between_2048_and_3600_is_capped_not_doubled` and `outbox_crash_does_not_consume_backoff`); they pin boundaries and were checked by mutants (below). One test failed for a test bug (it forgot `exit_code = 1`), not for production code.
+
+**Mutants** (one change each, by a throwaway script that rewrites `src/outbox.c`, builds the unit loop with `-Werror`, and runs it; a build error is not a survivor). 64 mutants, 62 killed, 2 equivalent. The red test is the first of those that failed.
+
+| Mutant | Red test |
+|---|---|
+| `step_to` clears `next_retry_at` -> keeps it | `a_failed_row_stays_failed_and_is_not_run_when_nothing_is_reported` (+6) |
+| first delay 1 -> 2, or `waited == 0` test moved or dropped | `a_persistent_run_with_no_event_result_is_a_failed_attempt` (+3) |
+| doubling x2 -> x3, +1, or add 1 | `a_delay_off_the_sequence_still_doubles_and_caps` (+2) |
+| cap clamp removed, reversed, or 3598 | `a_delay_between_2048_and_3600_is_capped_not_doubled` |
+| cap clamp `> cap+2` | `a_delay_off_the_sequence_still_doubles_and_caps` |
+| fail when `waited > cap` (not `>=`) | `failure_after_a_3600s_delay_sets_failed` |
+| fail when `waited >= cap-1` | `a_delay_between_2048_and_3600_is_capped_not_doubled` |
+| failed attempt never fails (and the overflow of `waited * 2` under UBSan) | `a_delay_past_the_cap_sets_failed_without_overflow` |
+| failed attempt returns `failed`, or `retry_at` `KEEP` | `a_persistent_run_with_no_event_result_is_a_failed_attempt` (+7) |
+| not-reported branch on `state == pending` inverted, or terminal state turned `failed` | `a_failed_row_at_6_days_stays` (+10), `a_halted_row_stays_halted_and_is_not_run_when_nothing_is_reported` |
+| halt at `> 100`, at `>= 99`, or to `failed` | `chain_length_100_sets_halted_and_does_not_run`, `chain_length_99_still_runs`, `a_huge_chain_length_sets_halted` |
+| crash `run_now` false, `backoff_s` 0 or +1 | `chain_length_99_still_runs`, `crash_does_not_consume_backoff`, `crash_before_a_result_stays_pending_and_runs_again` |
+| matching result removed | `a_matching_event_result_sets_done` |
+| exit 0 test inverted, `&&` -> `||`, exit check dropped | `a_delay_between_2048_and_3600_is_capped_not_doubled` (+8 to +13) |
+| pre-flight branch removed, sent to the backoff path, or to `halted` | `preflight_failure_sets_failed_at_once_on_a_first_attempt`, `a_row_that_fails_for_good_at_7_days_is_deleted` |
+| `state` or `result` upper bound `>=`, or the check removed | `a_halted_row_at_6_days_stays_and_at_7_days_is_deleted`, `step_refuses_input_it_cannot_judge_and_leaves_out_untouched` |
+| `chain_len`, `age_days`, `waited_s` check removed, `<= 0`, or `< -1`; every refusal returning true | `step_refuses_input_it_cannot_judge_and_leaves_out_untouched`, `step_refuses_bad_input_even_when_the_event_is_already_done` |
+| NULL `in` or `out` check removed | `the_exit_code_is_ignored_for_every_other_result` (UBSan null access) |
+| `state == done` or `event_done` removed, `||` -> `&&` | `done_is_never_undone_by_a_late_failure_or_halt`, `an_event_id_already_done_is_not_run` |
+| drop at `> 7`, at `>= 6`, `failed` only, `halted` only, any state, `&&` -> `||`, never, judged on the input state | `a_failed_row_at_7_days_is_deleted`, `a_failed_row_at_6_days_stays`, `a_halted_row_at_6_days_stays_and_at_7_days_is_deleted`, `a_pending_or_done_row_is_never_deleted_by_age`, `a_row_that_fails_for_good_at_7_days_is_deleted` |
+| lane `<=`, `< 3`, count 5 | `lane_count_is_4_and_a_5th_lane_is_refused` |
+
+Two mutants survive and are equivalent: the clamp `next >= cap` (it sets 3600 to 3600) and the clamp `next > cap + 1` (`next` is `waited * 2`, always even, or 1, so 3601 never occurs).
+
+**Probes past the plan.** `waited_s` of `INT64_MAX`, `3601`, `3599`, `1799`, `1800`, `1801` and `5` (off the sequence); `chain_len` of `INT64_MAX`; `age_days` of `INT64_MAX`; `-1` and `INT64_MIN` for each numeric field; `state` 4 and -1 and `result` 5 and -1 (cast, so the check holds whether the compiler's enum is signed or not); exit codes -1, 0, 256 and 75; a late failure or a halt reported for a `done` recipient; a flagged pre-flight with a chain of 100; `event_done` with a bad number. `outbox_lane_allows(SIZE_MAX)` is false.
+
+**Simplify pass.** (1) `next_backoff` folded into `step_failed_attempt`: 6 lines fewer, and the overflow guard sits next to the multiply it protects. (2) The plan's pre-flight flag and the result kind became one enum: one input field fewer, and the impossible input pairs gone. (3) `retry_at` stays: without it each caller re-derives the unset rule, and the plan's "cleared" clauses would have no test. (4) `step_reported` and `step_not_reported` stay separate: each has a single three-way decision, and one function would nest them. (5) The tests stay one behaviour each: `crash_*` and `preflight_*` pairs look alike but one pins the backoff left alone and the other pins the run, as the plan lists them. No contract is tested in two layers: `outbox_step` has no caller yet.
+
+**Security and exploit pass.** The inputs come from an outbox row, so a hand-edited or synced row is hostile: negative or undefined values are refused; `waited_s` and `chain_len` up to `INT64_MAX` give `failed` and `halted` with no multiply or add that can overflow (the only multiply runs after the `>= 3600` check); `age_days` up to `INT64_MAX` compares, never adds. The module never reads a clock and never adds to a time. The caller adds `backoff_s` (at most 3600 when `retry_at` is `AFTER_BACKOFF`) to its own `now`. Residual risk, not in this module: a hand-edited `next_retry_at` far in the future holds a `pending` recipient for as long, because only `failed` and `halted` rows are dropped by age (the plan's rule); a `pending` row's `backoff_s` is passed back unchanged on a crash, so an edited huge value survives a crash but never reaches a time sum (`retry_at` is `KEEP`).
+
+**Gate** (run on commit `28c1438`, a clean tree; the next commit changes only this plan file). Each command ran inside the shared heavy-job lock.
+
+| Check | Command | Result |
+|---|---|---|
+| ASan/UBSan build and ctest | `cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug -DREMEMBER_ENABLE_SANITIZERS=ON -DREMEMBER_ENABLE_LSAN=OFF -DREMEMBER_TEST_VFS=ON && cmake --build build && ctest --test-dir build --output-on-failure` | 6 of 6 passed, no build warning in the new files (the allocator-wrapper warnings in `store_sqlite.c` and `import_read.c` are older) |
+| Lint | `scripts/lint-all.sh` | format, boundaries, cppcheck, gcc -fanalyzer, clang-tidy (LLVM 22), scan-build pass; IWYU skipped on macOS |
+| Coverage | `scripts/check-coverage.sh` | functions 100%, effective lines 100%, pure-TU branches 100%. `outbox.c` alone: 8 of 8 functions, 66 of 66 lines, 46 of 46 branch sides (read from `build-cov/coverage-report.txt` and `coverage-branches.json`). `outbox.c` is not in the branch-gated list; I did not widen that list. |
+| Linux CI | `scripts/ci-linux.sh` | OK (clang-tidy 18, IWYU, scan-build) |
+| macOS leaks | `cmake --build build --target leaks-macos` | PASS |
+| CodeQL | `scripts/codeql-local.sh` | OK, 43 allowed alerts, none new |
+
+Two earlier lint runs failed and were fixed: the test file's magic numbers, easily-swapped parameters, int-to-bool and enum-cast findings, the missing `<stddef.h>`/`<stdint.h>` includes in `src/outbox.c`, and an unnamed `pad_[6]`. The first ctest run used a build without `-DREMEMBER_TEST_VFS=ON`; 20 older tests failed there for that reason and pass with the CI flags.
+
 ## Review Notes
+
+Second opinion (Claude Opus, 2026-11-13) on `c5ca591`, per `workflow:deep-review` and the PLAN scope of `workflow:whole-plan-deep-review`. Read the plan, the module, the spec, the tests, `.claude/REVIEW_REQUEST`, the cited decisions (X3 A, E1 A, Q7 A, g-27, g2-06, s-15, protocol-oq-12-15, hooks-never-wait) and PLUGIN-PROTOCOL R3.14, R3.18 to R3.22, R9.10.
+
+**Review points and Definition of Done.** Each box was checked against its named test and against a mutant (below). Crash stays `pending` with `backoff_s` and `next_retry_at` kept; `done` is final; only exit 0 and an ACK set `done`; 1, 2, 4 ... 2048, 3600, then `failed`; pre-flight is `failed` with `backoff_s` 0 and `retry_at` `CLEAR` on a first and a later attempt; age 6 stays, age 7 deletes; `grep -nE '(fork|exec[a-z]*|system|popen)\(|sqlite3|#include <(unistd|spawn)' src/outbox.c src/outbox.h` finds nothing. All hold.
+
+**Findings and fixes.**
+
+| # | Sev | Finding | Fix |
+|---|---|---|---|
+| R1 | Critical (seam) | A failed `event.result` (`error`, PLUGIN-PROTOCOL R3.18, PP-08) had no named result. `PERSISTENT_ACK` read "an `event.result` with this `event_id`", `PERSISTENT_NONE` read "no `event.result`". A plan 35/36 caller that maps "got a reply" to ACK marks a failed handler `done`, which breaks Q7 A (acknowledge only after the handler succeeds). | Renamed `OUTBOX_RESULT_PERSISTENT_NONE` to `OUTBOX_RESULT_PERSISTENT_FAILED` (no caller yet) and wrote in `outbox.h` and the spec: ACK is a success reply whose `data.event_id` is this event; a timeout or a failed reply is `PERSISTENT_FAILED`. |
+| R2 | Critical (seam) | A once-process a signal killed: `WEXITSTATUS` of that status reads 0 (probe: fork, SIGKILL, waitpid on macOS gives `WIFSIGNALED=1 WEXITSTATUS=0`). A caller that passes it as `exit_code` marks a killed hook `done`. | `outbox.h` and the spec say a signaled process passes a code other than 0 and the caller checks `WIFEXITED` first. |
+| R3 | Improvement | Mutant `chain_len >= 100 && waited_s == 0` survived: no test halted a chain-100 recipient that had already taken a backoff step (a failed `plugin rerun` with the chain reset, then the next automatic dispatch with the real chain). | `outbox_chain_length_100_halts_a_recipient_waiting_on_a_backoff_step` (red on that mutant, green on the code). |
+| R4 | Improvement | `decision:2026-11-12-hook-delivery-retry` was set `state:implemented` while PLUGIN-PROTOCOL R3.14 still said "Remember does not retry. No exit code is retried" and the S-15 row cited the superseded `decision:s-15` (a HEALTH stale cite; `workflow:decision-tags` requires the spec to say so). | R3.14 and the S-15 row follow X3 A and E1 A, with a 2026-11-13 repository note in `PLUGIN-PROTOCOL-CHANGES.md` (no wire change). |
+| S1 | Simplify | `step_failed_attempt` clamped through a reassigned `next`. | The clamp moved into the returned initializer: 2 lines fewer. |
+
+Simplify candidates declined, with the reason: `input_ok` as one positive `return a && b && ...` (3 lines fewer) fails clang-tidy `readability-implicit-bool-conversion`, because a C `&&` is `int` (lint run on `560910d`), so the `if ... return false` form stays; `retry_at` is derivable from `state` and `run_now` (`CLEAR` when not `pending`, `KEEP` when `run_now`, else `AFTER_BACKOFF`), but it is the output the plan's "cleared" clauses test and dropping it changes the API (grill, not worth one); `outbox_lane_count` and `outbox_lane_allows` are both named by the plan; `OUTBOX_STEP_PAD` exists only to keep a magic number out of `src/` (the literal `3` in `OutboxInput` is in clang-tidy's ignored set, `6` is not).
+
+**Adversarial pass.** Inputs are a hostile row (hand-edited or a corrupt store). Probed: every numeric field at -1, `INT64_MIN` and `INT64_MAX`; `state` and `result` at -1 and one past the last value; exit codes -1, 0, 75, 256; a late failure or halt on a `done` recipient; `waited_s` 3599, 3600, 3601, 1799 to 1801, 5; `outbox_lane_allows(SIZE_MAX)`. No overflow (the only multiply runs below 3600), no read of a clock, and no output that a caller adds to a time except a `backoff_s` of at most 3600. No exploit lives inside the module; R1 and R2 are exploits of the seam the next caller crosses, closed by contract text because the module cannot see a reply or a wait status. Residual risks for plan 35 (in the grills below): a clock moved back gives a negative `age_days`, which the spec calls a corrupt row, so a valid recipient stops running until the clock catches up; a crash loop (a hook that kills the dispatcher) stays `pending` and runs again at once forever, by X3 A's crash rule, and `pending` rows are never dropped by age.
+
+**Mutants (this pass).** 40 mutants written independently of the coder's script (8 of them on the simplified forms), each built with `-Werror` under ASan/UBSan and run against `tests/test_outbox.c`: 38 killed, 1 survivor (R3, now killed), 1 that does not build (`&&` to `||` in `input_ok`, `-Wparentheses`).
+
+**Choices the coder left open.** Items 3 to 9 follow the plan or decision text and stand. Items 1 and 2 are grills for Itay (listed in the PR); neither changes this module's code under any answer the caller cannot express (a caller that wants a failed rerun to end `failed` passes `waited_s` 3600).
+
+**Grades.** Coder 8/10: test-per-rule, 64 mutants with red tests, honest open-choice list and gate table; missed the protocol seam (R1, R2), the R3.14 contradiction behind its own `state:implemented` (R4), and one halt input (R3). In-session reviewer 7/10: its security pass stayed inside the module's arithmetic and its mutant list did not vary `waited_s` against the chain rule.
+
+**Gate** (on `1a97999`, a clean tree; the next commit changes only this file). Each command ran inside the shared heavy-job lock.
+
+| Check | Result |
+|---|---|
+| ASan/UBSan build and ctest (`-DREMEMBER_ENABLE_SANITIZERS=ON -DREMEMBER_ENABLE_LSAN=OFF -DREMEMBER_TEST_VFS=ON`) | 6 of 6 passed |
+| `cmake --build build --target leaks-macos` | PASS |
+| `scripts/lint-all.sh` | LINT OK (the first run, on `560910d`, failed on the one-`return` `input_ok`; reverted in `1a97999`) |
+| `validate_plugin_spec.py specs/PLUGIN-PROTOCOL.md` | 0 failures |
+| `scripts/check-coverage.sh` | OK; `outbox.c` 8 of 8 functions, 64 of 64 lines, 46 of 46 branch sides |
+| `scripts/ci-linux.sh` | OK |
+| `scripts/codeql-local.sh` | OK, 43 allowed alerts, none new |
