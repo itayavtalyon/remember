@@ -211,9 +211,14 @@ static char *vfmt_alloc(const char *fmt, va_list args)
     char *out = NULL;
 
     va_copy(again, args);
+    /* clang-analyzer-valist.Uninitialized is a false positive on both calls below: only LLVM 18
+       on x86_64 (array va_list) reports it. The caller's va_start and the va_copy above run
+       first; LLVM 22 and aarch64 report nothing. */
+    /* NOLINTNEXTLINE(clang-analyzer-valist.Uninitialized) */
     n = vsnprintf(NULL, 0, fmt, args);
     out = (char *)malloc((size_t)n + 1U);
     if (out != NULL) {
+        /* NOLINTNEXTLINE(clang-analyzer-valist.Uninitialized) */
         (void)vsnprintf(out, (size_t)n + 1U, fmt, again);
     }
     va_end(again);

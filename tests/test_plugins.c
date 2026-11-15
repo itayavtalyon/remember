@@ -113,6 +113,9 @@ static void appendf(char *dst, size_t cap, const char *fmt, ...)
 
     ASSERT_TRUE(used < cap);
     va_start(args, fmt);
+    /* A clang-analyzer-valist.Uninitialized false positive: only LLVM 18 on x86_64 (array
+       va_list) reports it. va_start runs first; LLVM 22 and aarch64 report nothing. */
+    /* NOLINTNEXTLINE(clang-analyzer-valist.Uninitialized) */
     (void)vsnprintf(dst + used, cap - used, fmt, args);
     va_end(args);
 }

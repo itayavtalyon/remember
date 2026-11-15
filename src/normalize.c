@@ -1173,7 +1173,10 @@ static char short_escape(unsigned char byte)
     static const char letter[] = "\"\\nrtbf";
     const char *hit = strchr(raw, (int)byte);
 
-    return hit == NULL ? '\0' : letter[hit - raw];
+    if (hit == NULL) {
+        return '\0';
+    }
+    return letter[hit - raw];
 }
 
 /* The second byte of a C1 control (U+0080 to U+009F is C2 80 to C2 9F), or 0. */
