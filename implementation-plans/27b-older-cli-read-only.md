@@ -292,4 +292,6 @@ Open, for Itay (no decision makes these choices; both are written into What must
 - G1: the masked `detail.min_reader_version` is `""`. JSON-STYLE § 1.9 says `null` means "no value", and `DiagDetailField` takes strings only.
 - G2: 32 bytes is the most a printable `min_reader_version` may have.
 
+Gate on fc97b3d (macOS, `REMEMBER_TEST_VFS=ON`, ASan): ctest 6/6, `step_gate` 1269 tests 0 failed, `remember_store_tests` 0 failed, `lint-all.sh` OK (clang-tidy 22, cppcheck, gcc -fanalyzer, scan-build), `check-coverage.sh` functions, effective lines and pure-TU branches 100%. `ci-linux.sh` and `codeql-local.sh` run in the pre-push hook.
+
 Follow-up (older than this plan): `brain_meta` has no single-row constraint, so a hand-edited brain with two rows is read-only or not depending on which row SQLite returns first.
