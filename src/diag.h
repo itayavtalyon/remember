@@ -77,6 +77,8 @@ typedef enum {
     DIAG_WARN_UNKNOWN_FIELD,            /* C-35, once per file or stdin */
     DIAG_WARN_SETTING_IMPORT_SKIPPED,   /* C-12 */
     DIAG_WARN_SCHEMA_TOO_NEW_READ_ONLY, /* R27b-1: a newer brain opened read only */
+    DIAG_WARN_BRAIN_ID_CLONED,          /* C-38: a copy of a listed brain got its own id */
+    DIAG_WARN_BRAIN_MISSING,            /* C-01: a listed path has no brain */
     DIAG_WARN_COUNT
 } DiagWarning;
 
@@ -194,6 +196,16 @@ enum { DIAG_CLI_VERSION_MAX = 64 };
  */
 int diag_schema_too_new_warning(StoreSchemaGap gap, const char *cli_version);
 int diag_schema_too_new_error(StoreSchemaGap gap, const char *cli_version);
+
+/*
+ * C-38 and C-01 (decision:2026-11-12-copy-batch-e3b-warning-splits, entries 27 and
+ * 4): brain_id_cloned names the copy's real path and its new id; brain_missing
+ * names a listed path that has no brain. Each has a message and a fix. The path
+ * is any length and may hold control bytes: the plain line masks them, JSON
+ * escapes them. Each returns -1 when the warning cannot be written.
+ */
+int diag_brain_id_cloned(const char *path, const char *new_id);
+int diag_brain_missing(const char *path);
 
 /* path NULL is stdin. name is the unknown field. */
 typedef struct {

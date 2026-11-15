@@ -1,5 +1,6 @@
 #include "store.h"
 
+#include "fileio.h" // IWYU pragma: keep (O_NOFOLLOW on Darwin)
 #include "import_read.h"
 #include "import_validate.h"
 #include "normalize.h"
@@ -8,7 +9,6 @@
 #include "sqlite3.h"
 
 #include <errno.h>
-#include <fcntl.h>
 #include <limits.h>
 #include <stdbool.h>
 #include <stdint.h>
@@ -18,12 +18,6 @@
 #include <sys/stat.h>
 #include <time.h>
 #include <unistd.h>
-
-/* Darwin hides O_NOFOLLOW when _POSIX_C_SOURCE is set, which is how
-   gcc -fanalyzer compiles this file. The value is the one in <sys/fcntl.h>. */
-#if defined(__APPLE__) && !defined(O_NOFOLLOW)
-#define O_NOFOLLOW 0x00000100
-#endif
 
 /* change_seq state of the open write transaction (stamp_change_seq). It sits on
    the connection under k_change_seq_tx (sqlite3_set_clientdata) so helpers that
@@ -257,6 +251,16 @@ static int store_exec(sqlite3 *db, const char *sql, int (*cb)(void *, int, char 
 }
 #define sqlite3_exec(db, sql, cb, arg, errmsg) store_exec((db), (sql), (cb), (arg), (errmsg))
 #endif /* REMEMBER_TEST_HOOKS */
+
+/* The reads the open note makes (store_brain_id, store_path_has_brain_id) ignore their failure.
+   They take the real calls, so a fault sweep of a command is not spent on a read nobody reports. */
+#ifdef REMEMBER_TEST_HOOKS
+#define note_prepare real_prepare
+#define note_step real_step
+#else
+#define note_prepare sqlite3_prepare_v2
+#define note_step sqlite3_step
+#endif
 
 /* The v5 shape. Every brain climbs to it and then takes the one v6 step, a
    fresh one included, so a migrated brain is byte-identical to a fresh one.
@@ -2582,8 +2586,8 @@ static StoreStatus begin_write(Store *s)
 }
 
 /* JE-3.9: a new brain_id only. change_seq, version vectors, and memories stay.
-   begin_write refuses a newer min_reader_version before the UPDATE. */
-StoreStatus store_brain_new_id(Store *s, StoreBrainId *out)
+   begin_write refuses a newer brain before the UPDATE. id NULL mints one. */
+static StoreStatus replace_brain_id(Store *s, const char *id, StoreBrainId *out)
 {
     char previous[STORE_DEVICE_ID_LEN + 1];
     char minted[STORE_DEVICE_ID_LEN + 1];
@@ -2592,9 +2596,6 @@ StoreStatus store_brain_new_id(Store *s, StoreBrainId *out)
     char err_unused[1];
     StoreStatus st = STORE_OK;
 
-    if (s == NULL || out == NULL) {
-        return STORE_ERR_INTERNAL;
-    }
     st = begin_write(s);
     if (st != STORE_OK) {
         return st;
@@ -2611,7 +2612,9 @@ StoreStatus store_brain_new_id(Store *s, StoreBrainId *out)
     }
     memcpy(previous, stored, sizeof(previous));
     free(stored);
-    if (mint_uuid_v7(minted) != 0) {
+    if (id != NULL) {
+        memcpy(minted, id, sizeof(minted)); /* canonical: 36 bytes and the NUL */
+    } else if (mint_uuid_v7(minted) != 0) {
         rollback_quiet(s->db);
         return STORE_ERR_INTERNAL;
     }
@@ -2632,6 +2635,97 @@ StoreStatus store_brain_new_id(Store *s, StoreBrainId *out)
     memcpy(out->id, minted, sizeof(out->id));
     memcpy(out->previous, previous, sizeof(out->previous));
     return STORE_OK;
+}
+
+StoreStatus store_brain_new_id(Store *s, StoreBrainId *out)
+{
+    if (s == NULL || out == NULL) {
+        return STORE_ERR_INTERNAL;
+    }
+    return replace_brain_id(s, NULL, out);
+}
+
+/* The id of a copy that brains.json named (plan 26): the same write as new-id. */
+StoreStatus store_brain_set_id(Store *s, const char *brain_id)
+{
+    StoreBrainId unused;
+
+    if (s == NULL || !uuid_v7_is_canonical(brain_id)) {
+        return STORE_ERR_INTERNAL;
+    }
+    return replace_brain_id(s, brain_id, &unused);
+}
+
+StoreStatus store_brain_id(const Store *s, char *out, size_t out_cap)
+{
+    sqlite3_stmt *stmt = NULL;
+    StoreStatus st = STORE_ERR_SQLITE;
+
+    if (s == NULL || out == NULL || out_cap < (size_t)UUID_STR_LEN + 1U) {
+        return STORE_ERR_INTERNAL;
+    }
+    out[0] = '\0';
+    if (note_prepare(s->db, "SELECT brain_id FROM brain_meta;", -1, &stmt, NULL) == SQLITE_OK &&
+        note_step(stmt) == SQLITE_ROW) {
+        const unsigned char *text = sqlite3_column_text(stmt, 0);
+
+        if (text != NULL && strlen((const char *)text) < out_cap) {
+            memcpy(out, text, strlen((const char *)text) + 1U);
+            st = STORE_OK;
+        }
+    }
+    (void)sqlite3_finalize(stmt);
+    return st;
+}
+
+int store_mint_uuid(char *out, size_t out_cap)
+{
+    char minted[UUID_STR_LEN + 1];
+
+    if (out == NULL || out_cap < (size_t)UUID_STR_LEN + 1U || mint_uuid_v7(minted) != 0) {
+        return -1;
+    }
+    memcpy(out, minted, (size_t)UUID_STR_LEN + 1U);
+    return 0;
+}
+
+bool store_path_has_brain_id(const char *path, const char *brain_id)
+{
+    struct stat st;
+    sqlite3 *db = NULL;
+    sqlite3_stmt *stmt = NULL;
+    bool same = false;
+
+    if (path == NULL || brain_id == NULL) {
+        return false;
+    }
+    /* The path comes from brains.json. A FIFO or a device there would block
+       the open of every brain, so only a regular file is a brain. */
+    if (stat(path, &st) != 0 || !S_ISREG(st.st_mode)) {
+        return false;
+    }
+    if (sqlite3_open_v2(path, &db, SQLITE_OPEN_READONLY, NULL) == SQLITE_OK &&
+        note_prepare(db, "SELECT brain_id FROM brain_meta;", -1, &stmt, NULL) == SQLITE_OK &&
+        note_step(stmt) == SQLITE_ROW) {
+        const unsigned char *found = sqlite3_column_text(stmt, 0);
+
+        if (found != NULL && strcmp((const char *)found, brain_id) == 0) {
+            same = true;
+        }
+    }
+    (void)sqlite3_finalize(stmt);
+    (void)sqlite3_close(db);
+    return same;
+}
+
+/* A brain from a newer remember (plan 27b) is open read-only in effect, so it is
+   not recorded and its id is not changed. */
+bool store_is_writable(const Store *s)
+{
+    if (s == NULL || s->db == NULL || s->schema_too_new) {
+        return false;
+    }
+    return sqlite3_db_readonly(s->db, "main") == 0;
 }
 
 /*

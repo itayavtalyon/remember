@@ -394,6 +394,26 @@ typedef struct {
  */
 StoreStatus store_brain_new_id(Store *s, StoreBrainId *out);
 
+/* Copy brain_meta.brain_id into out. out_cap includes the NUL. */
+StoreStatus store_brain_id(const Store *s, char *out, size_t out_cap);
+
+/* Replace brain_meta.brain_id with brain_id, a canonical UUID v7, the way new-id
+   does. A newer brain is STORE_ERR_SCHEMA_TOO_NEW and nothing changes. */
+StoreStatus store_brain_set_id(Store *s, const char *brain_id);
+
+/* Write a new UUID v7 into out (out_cap includes the NUL). Does not touch the
+   database. 0, or -1. */
+int store_mint_uuid(char *out, size_t out_cap);
+
+/* True when path is a regular file that is a brain with brain_meta.brain_id
+   equal to brain_id. A missing file, a FIFO or other special file (never
+   opened), a file that will not open, or a different id is false. */
+bool store_path_has_brain_id(const char *path, const char *brain_id);
+
+/* True when this open can write the brain: not a read-only file, and not a
+   brain from a newer remember (plan 27b). */
+bool store_is_writable(const Store *s);
+
 /* The longest min_reader_version that is ever printed: three parts of ten digits
    and two dots (R27b-2). A longer value is hostile and is masked. */
 enum { STORE_VERSION_TEXT_MAX = 32 };

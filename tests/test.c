@@ -23,10 +23,22 @@ static const char *or_null(const char *s)
     return (s != NULL) ? s : "(null)";
 }
 
+/* Set once at startup, before the first test. */
+// NOLINTNEXTLINE(cppcoreguidelines-avoid-non-const-global-variables)
+static void (*g_setup)(void);
+
+void tst_set_setup(void (*fn)(void))
+{
+    g_setup = fn;
+}
+
 void tst_run(const char *name, void (*fn)(void))
 {
     int fails_before = g_asserts_failed;
 
+    if (g_setup != NULL) {
+        g_setup();
+    }
     g_current_test = name;
     g_tests_run++;
     (void)printf("RUN  %s\n", name);

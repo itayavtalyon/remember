@@ -1,6 +1,7 @@
 #ifndef REMEMBER_OUTPUT_H
 #define REMEMBER_OUTPUT_H
 
+#include "brain_list.h"
 #include "store.h"
 
 #include <stdbool.h>
@@ -116,6 +117,13 @@ int output_device_new_data(FILE *out, const char *device_id, const char *previou
 
 /* brain new-id data{brain_id, previous_brain_id}. */
 int output_brain_new_id_data(FILE *out, const StoreBrainId *ids);
+
+/* brain list data{count, brains[{path, brain_id, added_at}]}. */
+int output_brain_list_data(FILE *out, const BrainList *list);
+
+/* brain prune data{action:"pruned", count, brains[{path, brain_id, added_at}]}: the
+   rows that were dropped. */
+int output_brain_prune_data(FILE *out, const BrainList *removed);
 
 /* conflicts --json list. */
 int output_conflicts_data(FILE *out, const StoreConflict *rows, size_t count);

@@ -18,6 +18,8 @@ extern int g_asserts_failed;
 extern const char *g_current_test;
 // NOLINTEND(cppcoreguidelines-avoid-non-const-global-variables)
 
+/* A function that runs before every test (isolation of shared state), or NULL. */
+void tst_set_setup(void (*fn)(void));
 void tst_run(const char *name, void (*fn)(void));
 void tst_assert_true(bool cond, const char *expr, const char *file, int line);
 void tst_assert_eq_int(long long actual, long long expected, const char *file, int line);

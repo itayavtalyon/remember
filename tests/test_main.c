@@ -3,6 +3,7 @@
 #include "test.h"
 
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 typedef struct {
@@ -48,6 +49,7 @@ static const TestGroup k_groups[] = {
     {"outbox", register_outbox_tests},
     {"old_cli", register_old_cli_tests},
     {"plugins", register_plugins_tests},
+    {"brain_list", register_brain_list_tests},
 };
 
 /* Exact comma-token match: "key" must not select "key_gld" (or vice versa),
@@ -78,6 +80,25 @@ static int group_selected(GroupSel sel)
     return 0;
 }
 
+/* Every read-write open writes <data dir>/brains.json (plan 26), so no test may reach the
+   real data dir, and one test's brains must not be listed in the next test's (every brain
+   made under REMEMBER_TEST_FIXED_IDS has the same id, which reads as a copy). Each test
+   starts with XDG_DATA_HOME in its own temp folder. A test that needs another value sets
+   it and puts this one back. */
+static void isolate_data_dir(void)
+{
+    char *db = make_temp_db_path();
+    char *dir = db != NULL ? dir_of_path(db) : NULL;
+
+    // NOLINTNEXTLINE(concurrency-mt-unsafe) single-threaded test process
+    if (dir == NULL || setenv("XDG_DATA_HOME", dir, 1) != 0) {
+        (void)fprintf(stderr, "cannot isolate the data dir\n");
+        exit(2); // NOLINT(concurrency-mt-unsafe) single-threaded test process
+    }
+    free(dir);
+    free(db);
+}
+
 /*
  * usage: remember_tests <remember-binary> [--only GROUP[,GROUP...]]
  * --only runs a subset (the implemented gate); without it, the whole suite runs
@@ -94,6 +115,7 @@ int main(int argc, char **argv)
         return 2;
     }
     g_remember_bin = argv[1];
+    tst_set_setup(isolate_data_dir);
 
     for (arg = 2; arg < argc; arg++) {
         if (strcmp(argv[arg], "--only") == 0 && arg + 1 < argc) {

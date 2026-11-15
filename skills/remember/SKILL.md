@@ -226,12 +226,16 @@ remember --json device new
 ```bash
 remember brain new-id
 remember --json brain new-id
+remember brain list
+remember brain prune
 ```
 
 - `remember brain new-id` replaces `brain_meta.brain_id` with a new lowercase UUID v7 and prints that id. It does not change `change_seq`, a version vector, or a memory.
 - `--json` type is `brain.new_id.result`. `data` is `{brain_id, previous_brain_id}`.
 - The command name is `remember brain new-id`. There is no `remember brains`.
-- Opening a copied brain file does not change `brain_id`.
+- Every read-write open records the brain in `<data dir>/brains.json`. Opening a copied brain file gives the copy a new `brain_id` and warns `brain_id_cloned`; opening a moved one keeps its id and updates its path.
+- `remember brain list` prints each listed brain path, and warns `brain_missing` for a path that has no brain. `--json` type is `brain.list.result`, `data` is `{count, brains[{path, brain_id, added_at}]}`.
+- `remember brain prune` removes every listed path that has no brain. `--json` type is `brain.prune.result`.
 
 ### link / unlink / related
 

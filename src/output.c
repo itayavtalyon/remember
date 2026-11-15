@@ -1151,6 +1151,51 @@ int output_brain_new_id_data(FILE *out, const StoreBrainId *ids)
     return 0;
 }
 
+static int write_brain_rows(FILE *out, const BrainList *list)
+{
+    size_t i = 0;
+
+    if (fputs("\"brains\":[", out) < 0) {
+        return -1;
+    }
+    for (i = 0; i < list->count; i++) {
+        const BrainRow *row = &list->rows[i];
+
+        if ((i > 0U && fputc(',', out) == EOF) || fputs("{\"path\":", out) < 0 ||
+            output_json_string(out, row->path) != 0 || fputs(",\"brain_id\":", out) < 0 ||
+            output_json_string(out, row->brain_id) != 0 || fputs(",\"added_at\":", out) < 0 ||
+            output_json_string(out, row->added_at) != 0 || fputc('}', out) == EOF) {
+            return -1;
+        }
+    }
+    return fputc(']', out) == EOF ? -1 : 0;
+}
+
+int output_brain_list_data(FILE *out, const BrainList *list)
+{
+    if (out == NULL || list == NULL || (list->count > 0U && list->rows == NULL)) {
+        return -1;
+    }
+    if (write_data_open(out) != 0 || fprintf(out, "\"count\":%zu,", list->count) < 0 ||
+        write_brain_rows(out, list) != 0 || fputs(DATA_END, out) < 0) {
+        return -1;
+    }
+    return 0;
+}
+
+int output_brain_prune_data(FILE *out, const BrainList *removed)
+{
+    if (out == NULL || removed == NULL || (removed->count > 0U && removed->rows == NULL)) {
+        return -1;
+    }
+    if (write_data_open(out) != 0 ||
+        fprintf(out, "\"action\":\"pruned\",\"count\":%zu,", removed->count) < 0 ||
+        write_brain_rows(out, removed) != 0 || fputs(DATA_END, out) < 0) {
+        return -1;
+    }
+    return 0;
+}
+
 static int output_one_conflict_json(FILE *out, const StoreConflict *row)
 {
     const char *reason = NULL;

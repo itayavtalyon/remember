@@ -8233,6 +8233,9 @@ static void hold_fixture_env(EnvHold *hold, const char *userdb)
     env_hold(hold);
     ASSERT_EQ_INT(setenv("REMEMBER_USER_DB", userdb, 1), 0);
     ASSERT_EQ_INT(setenv("TZ", "UTC", 1), 0);
+    /* A data dir that cannot be made: the open does not read or write brains.json, so a
+       fault sweep counts the same allocations, prepares and steps as before plan 26. */
+    ASSERT_EQ_INT(setenv("XDG_DATA_HOME", "/dev/null/remember", 1), 0);
 }
 
 TEST(set_and_reset_report_home_when_it_is_unset)

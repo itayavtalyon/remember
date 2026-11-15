@@ -1,6 +1,7 @@
 #include "remember_app.h"
 
 #include "appio.h"
+#include "brain_note.h"
 #include "cli.h"
 #include "commands.h"
 #include "commands_common.h"
@@ -370,6 +371,11 @@ static void print_command_help(CliCommand topic)
         (void)fprintf(out, "It does not change change_seq, a version vector, or a memory.\n");
         (void)fprintf(out, "--json type is brain.new_id.result.\n");
         (void)fprintf(out, "data is {brain_id, previous_brain_id}.\n");
+        (void)fprintf(out, "remember brain list prints each brain path in the list.\n");
+        (void)fprintf(out, "--json type is brain.list.result. data is {count, brains[]}.\n");
+        (void)fprintf(out, "remember brain prune removes each path that has no brain file.\n");
+        (void)fprintf(out,
+                      "--json type is brain.prune.result. data is {action, count, brains[]}.\n");
         (void)fprintf(out, "\n");
     } else if (topic == CLI_CMD_SETTINGS) {
         (void)fprintf(out, "Show or change a setting.\n");
@@ -482,6 +488,7 @@ static Store *open_store(const CliArgs *args, int *out_rc)
     /* Omitted --busy-timeout keeps the store default. Zero is a real value. */
     StoreOpenOpts opts = {.busy_timeout_ms = STORE_DEFAULT_BUSY_TIMEOUT_MS};
     Store *s = NULL;
+    StoreStatus note_status = STORE_OK;
 
     err[0] = '\0';
     if (util_resolve_db_path(args->globals.db_path, path, sizeof(path), err, sizeof(err)) != 0) {
@@ -525,6 +532,13 @@ static Store *open_store(const CliArgs *args, int *out_rc)
         return NULL;
     }
     warn_open_settings(s);
+    note_status = brain_note_open(s);
+    if (note_status != STORE_OK) {
+        err_store(s, note_status);
+        store_close(s);
+        *out_rc = REMEMBER_ERR;
+        return NULL;
+    }
     return s;
 }
 
@@ -679,6 +693,9 @@ static int run(const CliArgs *args)
         if (cmd_brain_reject_args(args->rest_argc, args->rest_argv) != 0) {
             return REMEMBER_ERR;
         }
+        if (!cmd_brain_uses_store(args->rest_argc, args->rest_argv)) {
+            return cmd_brain_file(args->globals.json, args->rest_argc, args->rest_argv);
+        }
         return run_with_store(args, cmd_brain);
     case CLI_CMD_SETTINGS:
         return run_with_store(args, cmd_settings);
@@ -742,7 +759,7 @@ static const char *reply_noun_verb(const CliArgs *args)
     case CLI_CMD_REPAIR:
         return "repair.search_index";
     case CLI_CMD_BRAIN:
-        return "brain.new_id";
+        return cmd_brain_reply(args->rest_argc, args->rest_argv);
     case CLI_CMD_SETTINGS:
         return cmd_settings_reply(args->rest_argc, args->rest_argv);
     case CLI_CMD_NONE:
