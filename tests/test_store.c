@@ -159,7 +159,7 @@ TEST(store_open_reads_a_newer_user_version_read_only)
 {
     char *db = make_temp_db_path();
     char err[ERR_BUFSIZE];
-    StoreSchemaGap gap = {0, 0};
+    StoreSchemaGap gap = {.brain_schema = 0};
     Store *s = NULL;
 
     ASSERT_TRUE(db != NULL);

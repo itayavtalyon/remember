@@ -1452,14 +1452,17 @@ TEST(schema_v6_cli_a_newline_in_a_prefix_warning_stays_one_line)
    full copy is in test_old_cli.c; this keeps the plan 19 trigger. */
 TEST(schema_v6_cli_a_write_to_a_newer_brain_prints_schema_too_new)
 {
+    /* Variant 1 of R27b-2: min_reader_version 0.4.0 names both app versions. The
+       full copy, with the exact version, is in test_old_cli.c. */
     static const char k_plain[] =
         "remember: this brain was made by a newer version of remember, so it is read-only here. "
-        "You can still read and export it. This brain uses schema 6; this remember reads up to "
-        "schema 6. Upgrade remember to make changes.\n";
-    static const char k_warning[] = "remember: warning: this brain was made by a newer version of "
-                                    "remember, so it is read-only here. You can still read and "
-                                    "export it. This brain uses schema 6; this remember reads up "
-                                    "to schema 6. Upgrade remember to make changes.\n";
+        "You can still read and export it. This brain needs remember 0.4.0 or later; this is "
+        "remember ";
+    static const char k_warning[] =
+        "remember: warning: this brain was made by a newer version of remember, so it is "
+        "read-only here. You can still read and export it. This brain needs remember 0.4.0 or "
+        "later; this is remember ";
+    static const char k_fix[] = ". Upgrade remember to make changes.\n";
     char *db = make_temp_db_path();
     const char *add[] = {"add", "seed"};
     const char *list[] = {"list"};
@@ -1475,13 +1478,15 @@ TEST(schema_v6_cli_a_write_to_a_newer_brain_prints_schema_too_new)
     r = run_remember(db, list, sizeof(list) / sizeof(list[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 0);
     ASSERT_STR_CONTAINS(r.out, "seed");
-    ASSERT_STREQ(r.err, k_warning);
+    ASSERT_TRUE(strncmp(r.err, k_warning, strlen(k_warning)) == 0);
+    ASSERT_STR_CONTAINS(r.err, k_fix);
     cmd_result_free(&r);
 
     r = run_remember(db, add, sizeof(add) / sizeof(add[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 75);
     ASSERT_STREQ(r.out, "");
-    ASSERT_STREQ(r.err, k_plain);
+    ASSERT_TRUE(strncmp(r.err, k_plain, strlen(k_plain)) == 0);
+    ASSERT_STR_CONTAINS(r.err, k_fix);
     cmd_result_free(&r);
 
     r = run_remember(db, add_json, sizeof(add_json) / sizeof(add_json[0]), NULL);

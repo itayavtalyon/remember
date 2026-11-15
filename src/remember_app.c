@@ -80,7 +80,9 @@ static void print_general_help(void)
         "  1  usage or error\n"
         "  2  not found (get/delete/update)\n"
         "  3  wrong bin (expired / not_expired / deleted / not_deleted)\n"
-        "  4  a warning under --strict\n";
+        "  4  a warning under --strict\n"
+        "  5  confirmation or approval required\n"
+        "  75 brain is read-only (made by a newer version of remember)\n";
 
     (void)fputs(help, app_out());
 }
@@ -575,21 +577,24 @@ AppCommandClass app_command_class(CliCommand command, int rest_argc, const char 
     return k_command_class[command];
 }
 
+_Static_assert(sizeof(REMEMBER_VERSION) <= DIAG_CLI_VERSION_MAX + 1U,
+               "REMEMBER_VERSION is too long for the newer-brain notice");
+
 /* A brain from a newer remember (plan 27b): a write is refused before the
    command runs, so it cannot touch the file; a read runs and warns, every time.
    The result is 0 to go on, else the exit code. */
 static int meet_newer_brain(const Store *s, const CliArgs *args)
 {
-    StoreSchemaGap gap = {0, 0};
+    StoreSchemaGap gap = {.brain_schema = 0};
 
     if (!store_newer_brain(s, &gap)) {
         return 0;
     }
     if (app_command_class(args->command, args->rest_argc, args->rest_argv) == APP_CMD_WRITE) {
-        (void)diag_schema_too_new_error(gap);
+        (void)diag_schema_too_new_error(gap, REMEMBER_VERSION);
         return REMEMBER_TEMPFAIL;
     }
-    (void)diag_schema_too_new_warning(gap);
+    (void)diag_schema_too_new_warning(gap, REMEMBER_VERSION);
     return 0;
 }
 

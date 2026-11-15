@@ -175,16 +175,25 @@ int diag_warning(DiagWarning code, const char *message);
 int diag_warning_detail(DiagWarning code, const char *message, const DiagDetailField *fields,
                         size_t nfields);
 
+/* The longest cli_version the newer-brain notice holds (remember_app.c checks
+   REMEMBER_VERSION against it). */
+enum { DIAG_CLI_VERSION_MAX = 64 };
+
 /*
- * R27b-1 (decision:2026-11-12-copy-batch-final): a brain from a newer remember.
- * Both lines carry the two schema numbers and never an app version or a command.
- * The warning is schema_too_new_read_only (message, fix, detail with
- * brain_schema_version and cli_schema_version) for a read command. The error is
- * schema_too_new with the same message, fix and detail, for a write.
- * Each returns -1 when the notice cannot be written.
+ * R27b-1 (decision:2026-11-12-copy-batch-final) and R27b-2
+ * (decision:2026-11-14-copy-r27b-2-r27b-3-approved): a brain from a newer remember.
+ * Neither line has a command. brain_schema_version and cli_schema_version are
+ * schema numbers. min_reader_version and cli_version are app versions, and only
+ * a brain newer by min_reader_version (gap.by_min_reader) carries them: its line
+ * names the two versions, or none when gap.min_reader is "" (masked).
+ * The warning is schema_too_new_read_only (message, fix, detail) for a read
+ * command. The error is schema_too_new with the same message, fix and detail,
+ * for a write. cli_version is the string `remember --version` prints, at most
+ * DIAG_CLI_VERSION_MAX bytes (the message buffer is sized for it). Each returns
+ * -1 when the notice cannot be written.
  */
-int diag_schema_too_new_warning(StoreSchemaGap gap);
-int diag_schema_too_new_error(StoreSchemaGap gap);
+int diag_schema_too_new_warning(StoreSchemaGap gap, const char *cli_version);
+int diag_schema_too_new_error(StoreSchemaGap gap, const char *cli_version);
 
 /* path NULL is stdin. name is the unknown field. */
 typedef struct {

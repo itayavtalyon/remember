@@ -2,11 +2,11 @@
 
 Status: what this binary does when it opens a brain made by a newer remember.
 
-Decisions are `decision:…` entries tagged `subject:daemon`. The frozen log 007 ST-10.2 (`schema_too_new`, `min_reader_version`) is history: this spec replaces its text. JSON value rules are [JSON-STYLE.md](JSON-STYLE.md). The envelope is [JSON-ENVELOPE.md](JSON-ENVELOPE.md). The printed sentences are copy item R27b-1 of `decision:2026-11-12-copy-batch-final`.
+Decisions are `decision:…` entries tagged `subject:daemon`. The frozen log 007 ST-10.2 (`schema_too_new`, `min_reader_version`) is history: this spec replaces its text. JSON value rules are [JSON-STYLE.md](JSON-STYLE.md). The envelope is [JSON-ENVELOPE.md](JSON-ENVELOPE.md). The printed sentences are copy item R27b-1 of `decision:2026-11-12-copy-batch-final`, and for a brain newer only by `min_reader_version`, copy item R27b-2 of `decision:2026-11-14-copy-r27b-2-r27b-3-approved` (§ 8.7). The `--help` lines are R27b-3 of the same decision (§ 8.8).
 
 ## 8. Older CLI, newer brain
 
-`decision:2026-10-31-old-cli-read-only`, `decision:2026-10-31-old-cli-reads-warn-writes-fail`, `decision:2026-11-01-newer-brain-error-name`, `decision:2026-11-01-cli-outdated-merge`. 007 ST-10.2 is history.
+`decision:2026-10-31-old-cli-read-only`, `decision:2026-10-31-old-cli-reads-warn-writes-fail`, `decision:2026-11-01-newer-brain-error-name`, `decision:2026-11-01-cli-outdated-merge`, `decision:2026-11-14-copy-r27b-2-r27b-3-approved`, `decision:2026-11-14-r27b-2-3-stop-and-ask`. 007 ST-10.2 is history.
 
 A brain is newer than this binary when its `schema_version` is higher than the highest schema this binary knows, or when its `brain_meta.min_reader_version` is newer than the version this binary reads (or is not `MAJOR.MINOR.PATCH`). This binary then opens the brain read-only. Every read command works. Every write command fails.
 
@@ -59,10 +59,30 @@ Every write command on a newer brain fails with `schema_too_new`, exit 75 (`EX_T
 
 `decision:2026-11-01-cli-outdated-version-shown`, `decision:2026-10-31-coexistence-copy`, `decision:2026-10-31-coexistence-copy-2`, `decision:2026-11-13-plan27b-review-grill` (G2).
 
-The numbers are schema numbers, never app versions. Both numbers are integers this binary reads or knows, and no text from the brain is echoed. The words `cli_outdated`, `brew upgrade remember` and an app version never appear in these lines. A brain whose `min_reader_version` is newer and whose `schema_version` is equal shows the same number twice.
+The numbers of §§ 8.3 and 8.4 are schema numbers, never app versions. Both numbers are integers this binary reads or knows. The words `cli_outdated` and `brew upgrade remember` never appear in these lines. `decision:2026-11-01-cli-outdated-version-shown` is amended (2026-11-14) for one case: a brain that is newer only by `min_reader_version` names the two app versions instead of the schema numbers (§ 8.7). Every other case shows schema numbers only.
 
 ### 8.6 Sweep
 
 `decision:2026-10-31-no-sweep-agent`.
 
 A command on a newer brain does not write to it, and no later step of the command may. The post-command sweep must skip a newer brain and must not change the exit code. The engine has no sweep yet (plan 32); its first sweep must call `store_newer_brain` and skip.
+
+### 8.7 Newer only by `min_reader_version`
+
+`decision:2026-11-14-copy-r27b-2-r27b-3-approved` (R27b-2, Q1 A), `decision:2026-11-14-r27b-2-3-stop-and-ask` (answers 1 to 3), `decision:2026-11-15-r27b-2-3-review-grill` (the `""` mask, the 32-byte cap), `decision:2026-11-13-plan27b-review-grill` (G2), `decision:2026-11-01-cli-outdated-version-shown` (amended).
+
+This applies when this binary opens the brain read-only because of `min_reader_version` and the brain's `schema_version` is not greater than the highest schema it knows. When the `schema_version` is greater, §§ 8.3 and 8.4 print, whatever `min_reader_version` says. The codes, the exits, `retryable` and the `fix` do not change.
+
+`<min>` is the stored `min_reader_version`. `<version>` is the string `remember --version` prints after `remember `.
+
+- Variant 1, when `<min>` is `MAJOR.MINOR.PATCH` and at most 32 bytes. `message` (both codes): `this brain was made by a newer version of remember, so it is read-only here. You can still read and export it. This brain needs remember <min> or later; this is remember <version>.` The plain lines are those of §§ 8.3 and 8.4 with this message. Example: `remember: this brain was made by a newer version of remember, so it is read-only here. You can still read and export it. This brain needs remember 0.4.0 or later; this is remember 0.3.2. Upgrade remember to make changes.`
+- Variant 2, for every other value (not `MAJOR.MINOR.PATCH`, a part that does not fit in a `long`, a control byte, a NUL byte, more than 32 bytes, empty). The line prints no number. `message`: `this brain was made by a newer version of remember, so it is read-only here. You can still read and export it.`
+- `detail`, in both variants and for both codes: `{"brain_schema_version":"<brain>","cli_schema_version":"<cli>","min_reader_version":"<min>","cli_version":"<version>"}`. The two schema members are equal here. In Variant 2 `min_reader_version` is `""`: the stored value is masked, as a hostile `brain_meta` value is everywhere else, and is never echoed.
+- `schema_version` members are schema numbers. `min_reader_version` and `cli_version` are app versions.
+- A brain's `user.db` `user_meta.min_reader_version` is not printed by this plan. It needs its own copy item when a plan prints it.
+
+### 8.8 `--help` exit codes
+
+`decision:2026-11-14-copy-r27b-2-r27b-3-approved` (R27b-3), `decision:2026-11-14-r27b-2-3-stop-and-ask` (answer 4).
+
+The "Exit codes" block of `remember --help` ends with two lines after the `4` line: `  5  confirmation or approval required` and `  75 brain is read-only (made by a newer version of remember)`. The `5` line fits every exit 5, including `plugin_approval_required` and `hook_approval_required`, which never take `--yes`. The `75` line has one space after the number.

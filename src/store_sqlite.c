@@ -50,11 +50,13 @@ struct Store {
     MigrationWarning *warnings; /* this open's v6 step; nwarnings items */
     size_t nwarnings;
     ChangeSeqTx change_tx;
-    int brain_schema;             /* the brain's user_version, read at open */
-    bool schema_too_new;          /* newer schema or min_reader_version: read only */
+    int brain_schema;    /* the brain's user_version, read at open */
+    bool schema_too_new; /* newer schema or min_reader_version: read only */
+    /* min_reader_version when it made the brain read only and is printable, else "" */
+    char min_reader[STORE_VERSION_TEXT_MAX + 1];
     bool replace_invalid_sidecar; /* device new only: invalid counts as missing */
     /* NOLINTNEXTLINE(readability-magic-numbers,cppcoreguidelines-avoid-magic-numbers) */
-    char pad_[2]; /* explicit tail padding (kept -Wpadded-clean) */
+    char pad_[9]; /* explicit tail padding (kept -Wpadded-clean) */
 };
 
 /* Directory mode for the DB parent (rwx for owner only). */
@@ -2481,6 +2483,18 @@ static int parse_version(const char *s, long parts[VERSION_PARTS])
     return 0;
 }
 
+/* A min_reader_version that may be printed: MAJOR.MINOR.PATCH of at most
+   STORE_VERSION_TEXT_MAX bytes. Anything else is brain bytes of unknown form. */
+static bool version_is_printable(const char *v)
+{
+    long parts[VERSION_PARTS] = {0, 0, 0};
+
+    if (v == NULL || strlen(v) > (size_t)STORE_VERSION_TEXT_MAX) {
+        return false;
+    }
+    return parse_version(v, parts) == 0;
+}
+
 /* True when the brain asks for a newer reader than this engine. A value this
    engine cannot parse counts as newer: it cannot promise to understand it. */
 static bool reader_too_old(const char *min_reader_version)
@@ -2532,11 +2546,18 @@ static int check_reader_version(Store *s, char *err, size_t errlen)
 {
     char *need = NULL;
 
-    if (select_text(s->db, "SELECT min_reader_version FROM brain_meta;", &need, err, errlen,
-                    &s->last) != 0) {
+    /* select_text stops at a NUL byte, so a value with one reads as NULL (newer)
+       rather than as its prefix: "0.2.0" NUL "x" is not a version. */
+    if (select_text(s->db,
+                    "SELECT CASE WHEN instr(CAST(min_reader_version AS BLOB), X'00') = 0 "
+                    "THEN min_reader_version END FROM brain_meta;",
+                    &need, err, errlen, &s->last) != 0) {
         return -1;
     }
     s->schema_too_new = reader_too_old(need);
+    if (s->schema_too_new && version_is_printable(need)) {
+        (void)snprintf(s->min_reader, sizeof(s->min_reader), "%s", need);
+    }
     free(need);
     return 0;
 }
@@ -2779,6 +2800,8 @@ bool store_newer_brain(const Store *s, StoreSchemaGap *out)
     if (out != NULL) {
         out->brain_schema = s->brain_schema;
         out->cli_schema = SCHEMA_VERSION;
+        out->by_min_reader = s->brain_schema <= SCHEMA_VERSION;
+        (void)snprintf(out->min_reader, sizeof(out->min_reader), "%s", s->min_reader);
     }
     return true;
 }
