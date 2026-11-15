@@ -38,15 +38,6 @@ enum {
     SEMVER_DOTS = 2,
     UTF8_CONT_MASK = 0xC0,
     UTF8_CONT = 0x80,
-    UTF8_C1_LEAD = 0xC2,
-    UTF8_C1_FIRST = 0x80,
-    UTF8_C1_LAST = 0x9F,
-    UTF8_SPACE = 0x20,
-    UTF8_DEL = 0x7F,
-    HEX_MASK = 0xF,
-    HEX_SHIFT = 4,
-    U_ESCAPE_LEN = 6, /* backslash, u, 0, 0 and two hex digits */
-    U_ESCAPE_PREFIX = 4,
     DECIMAL = 10,
     WHOLE_SCAN_PAD = 5
 };
@@ -310,8 +301,6 @@ static void add_invalid(PluginManifest *man, const char *rule, const char *path,
     add_error(man, (Report){.code = k_invalid, .rule = rule, .path = path}, message, fix);
 }
 
-static char *json_escaped(const char *text);
-
 // NOLINTNEXTLINE(bugprone-easily-swappable-parameters): a path, then a printf format
 static char *where_message(const char *path, const char *fmt, ...)
     __attribute__((format(printf, 2, 3)));
@@ -324,7 +313,7 @@ static char *where_message(const char *path, const char *fmt, ...)
     /* NOLINTNEXTLINE(cppcoreguidelines-init-variables) */
     va_list args;
     char *body = NULL;
-    char *escaped = json_escaped(path);
+    char *escaped = text_json_escaped(path);
     char *out = NULL;
 
     va_start(args, fmt);
@@ -352,89 +341,6 @@ static void err_missing(PluginManifest *man, const char *rule, const char *path,
                 fmt_alloc("Add \"%s\".", field));
 }
 
-/* The letter of the short escape of a byte (the one after the backslash), or NUL. */
-static char short_escape(unsigned code)
-{
-    static const char raw[] = "\"\\\n\r\t\b\f";
-    static const char letter[] = "\"\\nrtbf";
-    const char *hit = code == 0U ? NULL : strchr(raw, (int)code);
-
-    if (hit == NULL) {
-        return '\0';
-    }
-    return letter[hit - raw];
-}
-
-/* The second byte of a C1 control (U+0080 to U+009F in UTF-8), or 0. */
-static unsigned c1_code(const unsigned char *p)
-{
-    if (p[0] != (unsigned)UTF8_C1_LEAD || p[1] < (unsigned)UTF8_C1_FIRST ||
-        p[1] > (unsigned)UTF8_C1_LAST) {
-        return 0U;
-    }
-    return p[1];
-}
-
-/* Q2 (decision:2026-11-14-copy-r25-2-manifest-approved): plugin-controlled text prints with JSON
-   string escaping, so a line stays one line and no escape sequence reaches a terminal. The bytes
-   that change are ", \\, the C0 controls, DEL, and the C1 controls (U+0080 to U+009F). Text in a
-   pointer stays as RFC 6901 wrote it: the JSON writer escapes it. Writes into out when it is
-   not NULL, and returns the length either way. */
-static size_t escape_text(const char *text, char *out)
-{
-    static const char hex[] = "0123456789abcdef";
-    const unsigned char *p = (const unsigned char *)text;
-    size_t n = 0;
-
-    for (; *p != 0U; p++) {
-        unsigned code = c1_code(p);
-        char letter = short_escape(*p);
-
-        if (letter != '\0') {
-            if (out != NULL) {
-                out[n] = '\\';
-                out[n + 1U] = letter;
-            }
-            n += 2U;
-            continue;
-        }
-        if (code == 0U) {
-            code = *p;
-            if (code >= (unsigned)UTF8_SPACE && code != (unsigned)UTF8_DEL) {
-                if (out != NULL) {
-                    out[n] = (char)code;
-                }
-                n += 1U;
-                continue;
-            }
-        } else {
-            p++; /* the C1 lead byte is done; code is its second byte */
-        }
-        if (out != NULL) {
-            (void)memcpy(out + n, "\\u00", (size_t)U_ESCAPE_PREFIX);
-            out[n + (size_t)U_ESCAPE_PREFIX] =
-                hex[(code >> (unsigned)HEX_SHIFT) & (unsigned)HEX_MASK];
-            out[n + (size_t)U_ESCAPE_PREFIX + 1U] = hex[code & (unsigned)HEX_MASK];
-        }
-        n += (size_t)U_ESCAPE_LEN;
-    }
-    if (out != NULL) {
-        out[n] = '\0';
-    }
-    return n;
-}
-
-/* A heap copy of text, escaped. NULL on out of memory. */
-static char *json_escaped(const char *text)
-{
-    char *out = (char *)malloc(escape_text(text, NULL) + 1U);
-
-    if (out != NULL) {
-        (void)escape_text(text, out);
-    }
-    return out;
-}
-
 /* R25-2 sentence 8. detail_path is the pointer of the repeated thing. A repeated member or item is
    kept once. A repeated entry name or setting key is renamed. */
 // NOLINTBEGIN(bugprone-easily-swappable-parameters): the list, then the repeated pointer, then text
@@ -442,7 +348,7 @@ static void err_twice(PluginManifest *man, const char *rule, const char *where_p
                       const char *detail_path, const char *what, bool rename, size_t place)
 // NOLINTEND(bugprone-easily-swappable-parameters)
 {
-    char *escaped = json_escaped(what);
+    char *escaped = text_json_escaped(what);
     char *fix = NULL;
 
     if (escaped == NULL) {
@@ -608,7 +514,7 @@ static void err_unknown(PluginManifest *man, const char *rule, const char *path,
                         Names known, size_t place)
 {
     char *child = pointer_join(path, field);
-    char *escaped = json_escaped(field);
+    char *escaped = text_json_escaped(field);
     char *fix = NULL;
     const char *near = NULL;
     size_t i = 0;
@@ -1124,13 +1030,14 @@ static bool read_list(PluginManifest *man, const char *rule, const JsonValue *va
 
 /* Names ---------------------------------------------------------------- */
 
-/* C-36 hyphen, or R25-2 sentence 6. fold is the name with each "-" as "_". */
+/* C-36 hyphen when the name with each "-" as "_" (fold) is valid, so the fix names a usable name;
+   R25-2 sentence 6 otherwise (decision:2026-11-15-plan25-review-grill, G5 A). */
 // NOLINTBEGIN(bugprone-easily-swappable-parameters): the pointer of the name, then the name
 static void err_name(PluginManifest *man, const char *path, const char *bad)
 // NOLINTEND(bugprone-easily-swappable-parameters)
 {
     char *fold = dup_text(bad);
-    char *escaped = json_escaped(bad);
+    char *escaped = text_json_escaped(bad);
     char *escaped_fold = NULL;
     char *p = fold;
 
@@ -1143,10 +1050,10 @@ static void err_name(PluginManifest *man, const char *path, const char *bad)
     while ((p = strchr(p, '-')) != NULL) {
         *p = '_';
     }
-    escaped_fold = json_escaped(fold);
+    escaped_fold = text_json_escaped(fold);
     if (escaped_fold == NULL) {
         man->oom = true;
-    } else if (strchr(bad, '-') != NULL) {
+    } else if (strchr(bad, '-') != NULL && name_ok(fold)) { /* G5 A: the fix must be valid */
         add_invalid(man, "R2.22", path,
                     fmt_alloc("\"%s\" in plugin.json can't contain \"-\".", escaped),
                     fmt_alloc("Use \"%s\".", escaped_fold));
@@ -1729,7 +1636,7 @@ static void parse_setting(PluginManifest *man, const JsonValue *value, const cha
     }
     item = member_of(man, obj, path, "key", "R2.11", true);
     if (item != NULL && item->type == JSON_STRING && strcmp(item->u.string.bytes, "enabled") == 0) {
-        char *escaped = plugin_name == NULL ? NULL : json_escaped(plugin_name);
+        char *escaped = plugin_name == NULL ? NULL : text_json_escaped(plugin_name);
 
         child_path(child, path, "key");
         add_invalid(
@@ -1983,7 +1890,7 @@ static void check_supported(PluginManifest *man, const JsonValue *root, const ch
     }
     /* ponytail: one protocol and one format exist, so the range is that number. The "<a> to <b>"
        form of R25-1 needs a second protocol to test it; add it with that protocol. */
-    escaped = name == NULL ? NULL : json_escaped(name);
+    escaped = name == NULL ? NULL : text_json_escaped(name);
     if (name == NULL) {
         subject = dup_text("this plugin");
         fix = dup_text("Update remember, or install an older version of the plugin.");

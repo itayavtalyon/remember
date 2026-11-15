@@ -760,6 +760,21 @@ static ActorStatus cli_at_depth(const char *depth, Actor flags, char *out)
 }
 
 /* --as replaces kind. --actor replaces only id. A hook may not pass either flag. */
+/* R25-2 Q2 escaping (G1 A): every branch side, including bytes jsonread never passes on. */
+TEST(text_json_escape_changes_quotes_controls_del_and_c1_only)
+{
+    static const char in[] = "a\"\\\n\r\t\b\f\001\177\302\205\302\240\302A\302";
+    static const char want[] = "a\\\"\\\\\\n\\r\\t\\b\\f\\u0001\\u007f\\u0085\302\240\302A\302";
+    char *out = text_json_escaped(in);
+
+    ASSERT_EQ_INT(text_json_escape(in, NULL), strlen(want));
+    ASSERT_STREQ(out, want);
+    free(out);
+    out = text_json_escaped("");
+    ASSERT_STREQ(out, "");
+    free(out);
+}
+
 TEST(actor_from_cli_stamps_a_person_and_blocks_a_hook)
 {
     char out[ACTOR_JSON_CAP];
@@ -843,4 +858,5 @@ void register_normalize_tests(void)
     RUN_TEST(actor_json_writes_each_stored_kind);
     RUN_TEST(actor_json_canonical_form_and_the_migration_shape);
     RUN_TEST(actor_from_cli_stamps_a_person_and_blocks_a_hook);
+    RUN_TEST(text_json_escape_changes_quotes_controls_del_and_c1_only);
 }

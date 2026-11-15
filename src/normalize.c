@@ -1165,3 +1165,84 @@ const char *norm_status_string(NormStatus st)
         return "unknown normalize error";
     }
 }
+
+/* The letter after the backslash of a short JSON escape, or NUL. byte is never NUL here. */
+static char short_escape(unsigned char byte)
+{
+    static const char raw[] = "\"\\\n\r\t\b\f";
+    static const char letter[] = "\"\\nrtbf";
+    const char *hit = strchr(raw, (int)byte);
+
+    return hit == NULL ? '\0' : letter[hit - raw];
+}
+
+/* The second byte of a C1 control (U+0080 to U+009F is C2 80 to C2 9F), or 0. */
+static unsigned c1_code(const unsigned char *p)
+{
+    static const unsigned char C1_LEAD = 0xC2U;
+    static const unsigned char C1_FIRST = 0x80U;
+    static const unsigned char C1_LAST = 0x9FU;
+
+    if (p[0] != C1_LEAD || p[1] < C1_FIRST || p[1] > C1_LAST) {
+        return 0U;
+    }
+    return p[1];
+}
+
+size_t text_json_escape(const char *text, char *out)
+{
+    static const char hex[] = "0123456789abcdef";
+    static const unsigned SPACE = 0x20U;
+    static const unsigned DEL = 0x7FU;
+    static const size_t U_PREFIX = 4U; /* backslash, u, 0, 0 */
+    static const unsigned HEX_SHIFT = 4U;
+    static const unsigned HEX_MASK = 0xFU;
+    const unsigned char *p = (const unsigned char *)text;
+    size_t n = 0;
+
+    for (; *p != 0U; p++) {
+        unsigned code = c1_code(p);
+        char letter = short_escape(*p);
+
+        if (letter != '\0') {
+            if (out != NULL) {
+                out[n] = '\\';
+                out[n + 1U] = letter;
+            }
+            n += 2U;
+            continue;
+        }
+        if (code == 0U) {
+            code = *p;
+            if (code >= SPACE && code != DEL) {
+                if (out != NULL) {
+                    out[n] = (char)code;
+                }
+                n += 1U;
+                continue;
+            }
+        } else {
+            p++; /* the C1 lead byte is done; code is its second byte */
+        }
+        if (out != NULL) {
+            (void)memcpy(out + n, "\\u00", U_PREFIX);
+            out[n + U_PREFIX] = hex[(code >> HEX_SHIFT) & HEX_MASK];
+            out[n + U_PREFIX + 1U] = hex[code & HEX_MASK];
+        }
+        n += U_PREFIX + 2U;
+    }
+    if (out != NULL) {
+        out[n] = '\0';
+    }
+    return n;
+}
+
+char *text_json_escaped(const char *text)
+{
+    char *out = (char *)malloc(text_json_escape(text, NULL) + 1U);
+
+    if (out != NULL) {
+        (void)text_json_escape(text, out);
+    }
+    return out;
+}

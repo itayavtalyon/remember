@@ -2656,6 +2656,36 @@ TEST(envelope_unknown_field_warns_once_for_a_file)
     free(buf);
 }
 
+/* G2 A (decision:2026-11-15-plan25-review-grill): the C-35 line JSON-escapes the field, so a quote,
+   a backslash, a terminal escape, DEL and a C1 control keep the line one line. */
+TEST(envelope_unknown_field_escapes_a_hostile_name_in_the_line)
+{
+    char *buf = NULL;
+    size_t len = 0U;
+    FILE *err = open_memstream(&buf, &len);
+
+    ASSERT_TRUE(err != NULL);
+    if (err == NULL) {
+        return;
+    }
+    diag_json_end();
+    diag_warnings_reset();
+    app_set_streams((AppStreams){.out = NULL, .err = err});
+    ASSERT_EQ_INT(diag_unknown_field((DiagUnknownField){.path = "/tmp/note.json",
+                                                        .name = "a\"b\\\033[2J\177\302\233"}),
+                  0);
+    ASSERT_EQ_INT(diag_unknown_field((DiagUnknownField){.path = NULL, .name = "x\ny"}), 0);
+    ASSERT_EQ_INT(fflush(err), 0);
+    ASSERT_STREQ(buf, "remember: warning: \"/tmp/note.json\" has a field remember doesn't know, "
+                      "\"a\\\"b\\\\\\u001b[2J\\u007f\\u009b\". The rest of the file was read.\n"
+                      "remember: warning: stdin has a field remember doesn't know, \"x\\ny\". The "
+                      "rest of the input was read.\n");
+    app_set_streams((AppStreams){.out = NULL, .err = NULL});
+    diag_warnings_reset();
+    ASSERT_EQ_INT(fclose(err), 0);
+    free(buf);
+}
+
 /* C-35 stdin line. A file in the same stretch still warns. */
 TEST(envelope_unknown_field_warns_once_for_stdin)
 {
@@ -3062,6 +3092,7 @@ void register_envelope_tests(void)
     RUN_TEST(envelope_unknown_field_masks_the_plain_line_and_escapes_json);
     RUN_TEST(envelope_unknown_field_rejects_a_null_name);
     RUN_TEST(envelope_unknown_field_quotes_an_empty_name);
+    RUN_TEST(envelope_unknown_field_escapes_a_hostile_name_in_the_line);
 #ifdef REMEMBER_TEST_VFS
     RUN_TEST(envelope_add_link_read_error_after_the_write_exits_1_and_keeps_the_write);
 #else

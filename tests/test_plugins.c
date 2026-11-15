@@ -295,9 +295,9 @@ TEST(a_hyphen_in_an_entry_name_folds_every_hyphen_in_the_fix)
                  "Use \"a_b_c\".");
 }
 
-TEST(a_hyphen_fix_is_the_whole_name_even_past_forty_bytes)
+TEST(a_hyphen_name_of_40_characters_gets_the_hyphen_line_and_41_does_not)
 {
-    char *name = given_run_of('a', 50);
+    char *name = given_run_of('a', 40);
     char doc[512];
     char fix[128];
     PluginManifest *man = NULL;
@@ -313,13 +313,30 @@ TEST(a_hyphen_fix_is_the_whole_name_even_past_forty_bytes)
     ASSERT_STR_CONTAINS(error_at(man, 0)->message, "can't contain");
     ASSERT_STREQ(error_at(man, 0)->fix, fix);
     plugin_manifest_free(man);
+    name = given_run_of('a', 41);
+    name[10] = '-';
+    (void)snprintf(doc, sizeof(doc),
+                   "{\"format\":\"remember-plugin\",\"version\":1,\"name\":\"%s\","
+                   "\"plugin_version\":\"1.0.0\",\"protocol\":1," ACTIONS "}",
+                   name);
+    man = given_parse(doc, PLUGIN_PARSE_INVALID);
+    ASSERT_STR_CONTAINS(error_at(man, 0)->message, "isn't a valid name.");
+    plugin_manifest_free(man);
 }
 
-TEST(a_hyphen_error_is_the_hyphen_error_even_when_the_name_has_other_faults)
+/* G5 A (decision:2026-11-15-plan25-review-grill): the hyphen line only when its fix is a valid
+   name; otherwise sentence 6, so no fix suggests a name that is refused. */
+TEST(g5_a_hyphen_name_whose_underscore_form_is_invalid_gets_sentence_6)
 {
     expect_error(
         HEAD "\"actions\":[{\"name\":\"A-b\",\"events\":[\"memory.created\"]," ACTION_RUN "}]}",
-        "/actions/0/name", "R2.22", "\"A-b\" in plugin.json can't contain \"-\".", "Use \"A_b\".");
+        "/actions/0/name", "R2.22", "plugin.json /actions/0/name: \"A-b\" isn't a valid name.",
+        "Use a lowercase letter, then lowercase letters, digits, or \"_\", up to 40 characters.");
+    expect_error(
+        "{\"format\":\"remember-plugin\",\"version\":1,\"name\":\"-a\","
+        "\"plugin_version\":\"1.0.0\",\"protocol\":1," ACTIONS "}",
+        "/name", "R2.22", "plugin.json /name: \"-a\" isn't a valid name.",
+        "Use a lowercase letter, then lowercase letters, digits, or \"_\", up to 40 characters.");
 }
 
 TEST(a_forty_one_character_name_is_not_a_valid_name)
@@ -925,6 +942,36 @@ TEST(an_unknown_root_field_prints_the_c35_file_line_and_the_rest_parses)
     ASSERT_EQ_INT(fflush(err), 0);
     ASSERT_STREQ(buf, "remember: warning: \"/tmp/wake/plugin.json\" has a field remember doesn't "
                       "know, \"homepage\". The rest of the file was read.\n");
+    app_set_streams((AppStreams){.out = NULL, .err = NULL});
+    diag_warnings_reset();
+    ASSERT_EQ_INT(fclose(err), 0);
+    free(buf);
+    ASSERT_EQ_INT(man->nentries, 1);
+    plugin_manifest_free(man);
+}
+
+/* DoD: the R25-1, C-35 and C-36 lines escape a hostile name the same way (G2 A). */
+TEST(the_c35_line_escapes_a_hostile_unknown_root_field)
+{
+    PluginManifest *man = given_parse(HEAD ACTIONS ",\"home\\u001b\\\"\":\"x\"}", PLUGIN_PARSE_OK);
+    char *buf = NULL;
+    size_t len = 0U;
+    FILE *err = open_memstream(&buf, &len);
+    char file[] = "/tmp/wake/plugin.json";
+
+    ASSERT_TRUE(err != NULL);
+    if (err == NULL) {
+        plugin_manifest_free(man);
+        return;
+    }
+    diag_json_end();
+    diag_warnings_reset();
+    app_set_streams((AppStreams){.out = NULL, .err = err});
+    ASSERT_EQ_INT(
+        diag_unknown_field((DiagUnknownField){.path = file, .name = warning_at(man, 0)->field}), 0);
+    ASSERT_EQ_INT(fflush(err), 0);
+    ASSERT_STREQ(buf, "remember: warning: \"/tmp/wake/plugin.json\" has a field remember doesn't "
+                      "know, \"home\\u001b\\\"\". The rest of the file was read.\n");
     app_set_streams((AppStreams){.out = NULL, .err = NULL});
     diag_warnings_reset();
     ASSERT_EQ_INT(fclose(err), 0);
@@ -2632,10 +2679,11 @@ TEST(q2_an_invalid_name_and_a_hyphen_name_print_escaped)
                  "/name", "R2.22", "plugin.json /name: \"A\\u0007\\\"\" isn't a valid name.",
                  "Use a lowercase letter, then lowercase letters, digits, or \"_\", up to 40 "
                  "characters.");
-    expect_error("{\"format\":\"remember-plugin\",\"version\":1,\"name\":\"a-\\u001b\\n\","
-                 "\"plugin_version\":\"1.0.0\",\"protocol\":1," ACTIONS "}",
-                 "/name", "R2.22", "\"a-\\u001b\\n\" in plugin.json can't contain \"-\".",
-                 "Use \"a_\\u001b\\n\".");
+    expect_error(
+        "{\"format\":\"remember-plugin\",\"version\":1,\"name\":\"a-\\u001b\\n\","
+        "\"plugin_version\":\"1.0.0\",\"protocol\":1," ACTIONS "}",
+        "/name", "R2.22", "plugin.json /name: \"a-\\u001b\\n\" isn't a valid name.",
+        "Use a lowercase letter, then lowercase letters, digits, or \"_\", up to 40 characters.");
 }
 
 TEST(q2_the_plugin_name_in_a_protocol_error_prints_escaped)
@@ -3076,8 +3124,8 @@ void register_plugins_tests(void)
     RUN_TEST(an_empty_origins_list_stays_empty);
     RUN_TEST(a_hyphen_in_a_manifest_name_prints_the_c36_hyphen_lines);
     RUN_TEST(a_hyphen_in_an_entry_name_folds_every_hyphen_in_the_fix);
-    RUN_TEST(a_hyphen_fix_is_the_whole_name_even_past_forty_bytes);
-    RUN_TEST(a_hyphen_error_is_the_hyphen_error_even_when_the_name_has_other_faults);
+    RUN_TEST(a_hyphen_name_of_40_characters_gets_the_hyphen_line_and_41_does_not);
+    RUN_TEST(g5_a_hyphen_name_whose_underscore_form_is_invalid_gets_sentence_6);
     RUN_TEST(a_forty_one_character_name_is_not_a_valid_name);
     RUN_TEST(a_forty_character_name_is_valid);
     RUN_TEST(a_name_must_start_with_a_lowercase_letter);
@@ -3126,6 +3174,7 @@ void register_plugins_tests(void)
     RUN_TEST(an_unknown_root_field_is_a_warning_and_the_rest_parses);
 #ifdef REMEMBER_PLUGINS_DIAG_TEST
     RUN_TEST(an_unknown_root_field_prints_the_c35_file_line_and_the_rest_parses);
+    RUN_TEST(the_c35_line_escapes_a_hostile_unknown_root_field);
 #endif
     RUN_TEST(working_directory_is_an_unknown_action_field);
     RUN_TEST(an_unknown_field_in_open_tags_is_a_warning);

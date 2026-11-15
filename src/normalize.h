@@ -184,4 +184,17 @@ bool norm_duration_canonical(const char *src, long long *whole_ms, char *out, si
    bytes. 0 uses B. */
 bool norm_size_canonical(const char *src, long long *whole_bytes, char *out, size_t out_cap);
 
+/*
+ * JSON string escaping for plugin-controlled text inside one printed line
+ * (R25-2 Q2; decision:2026-11-15-plan25-review-grill G1 A, G2 A). ", \, the
+ * C0 controls, DEL and the C1 controls (U+0080 to U+009F) change, so a line
+ * stays one line and no escape sequence reaches a terminal. Every other byte
+ * is kept. Writes into out when it is not NULL, and returns the escaped
+ * length either way (the NUL not counted).
+ */
+size_t text_json_escape(const char *text, char *out);
+
+/* A heap copy of text, escaped as above. NULL on OOM. */
+char *text_json_escaped(const char *text);
+
 #endif /* REMEMBER_NORMALIZE_H */
