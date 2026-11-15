@@ -1,6 +1,7 @@
 #include "diag.h"
 
 #include "appio.h"
+#include "normalize.h"
 #include "output.h"
 #include "store.h"
 #include "util.h"
@@ -477,33 +478,34 @@ static void unknown_field_mark(const char *path)
     g_unknown_npaths++;
 }
 
-/* The C-35 sentence, without the warning prefix. path NULL is the stdin line. */
+/* The C-35 sentence, without the warning prefix. path NULL is the stdin line. The field name is
+   JSON-escaped in the line, for every caller (decision:2026-11-15-plan25-review-grill, G2 A);
+   detail.field stays raw, and the JSON writer escapes it. */
 static char *unknown_field_message(DiagUnknownField field)
 {
+    char *name = text_json_escaped(field.name);
     int need = 0;
     char *buf = NULL;
 
+    if (name == NULL) {
+        return NULL;
+    }
     if (field.path != NULL) {
-        need = snprintf(NULL, 0, k_unknown_file, field.path, field.name);
+        need = snprintf(NULL, 0, k_unknown_file, field.path, name);
     } else {
-        need = snprintf(NULL, 0, k_unknown_stream, field.name);
+        need = snprintf(NULL, 0, k_unknown_stream, name);
     }
-    if (need < 0) {
-        return NULL;
+    if (need >= 0) {
+        buf = (char *)malloc((size_t)need + 1U);
     }
-    buf = (char *)malloc((size_t)need + 1U);
-    if (buf == NULL) {
-        return NULL;
-    }
-    if (field.path != NULL) {
-        if (snprintf(buf, (size_t)need + 1U, k_unknown_file, field.path, field.name) != need) {
-            free(buf);
-            return NULL;
-        }
-    } else if (snprintf(buf, (size_t)need + 1U, k_unknown_stream, field.name) != need) {
+    if (buf != NULL &&
+        (field.path != NULL ? snprintf(buf, (size_t)need + 1U, k_unknown_file, field.path, name)
+                            : snprintf(buf, (size_t)need + 1U, k_unknown_stream, name)) != need) {
         free(buf);
+        free(name);
         return NULL;
     }
+    free(name);
     return buf;
 }
 

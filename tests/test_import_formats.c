@@ -922,6 +922,55 @@ TEST(import_json_unknown_field_warns_once_and_still_imports)
     free(dst);
 }
 
+/* G2 A (decision:2026-11-15-plan25-review-grill): the import caller's C-35 line escapes the field.
+ */
+TEST(import_json_unknown_field_prints_a_hostile_name_escaped)
+{
+    char *dst = open_empty_brain();
+    char *src = NULL;
+    char *got = NULL;
+    char buf[TEXT_BUF];
+    char want[TEXT_BUF];
+    CmdResult r;
+    int n = 0;
+
+    src = harness_side_path(dst, "-extra.json");
+    n = snprintf(buf, sizeof(buf),
+                 "{\"format\":\"remember-export\",\"version\":1,\"brain_id\":\"%s\","
+                 "\"exported_at\":\"%s\",\"engine\":\"0.2.0\",\"schema\":6,"
+                 "\"bins\":{\"live\":1},\"x\\u001b[2J\\\"\":\"ignored\","
+                 "\"entries\":[{"
+                 "\"id\":\"%s\",\"key\":\"project:alpha\",\"body\":\"Alpha body\","
+                 "\"tags\":[],\"created_by\":{\"kind\":\"human\",\"id\":null},"
+                 "\"updated_by\":{\"kind\":\"human\",\"id\":null},"
+                 "\"created_at\":\"%s\",\"updated_at\":\"%s\","
+                 "\"expires_at\":null,\"deleted_at\":null,\"bin\":\"live\","
+                 "\"version_vector\":{\"%s\":1},\"source\":\"old\"}],\"links\":[]}\n",
+                 FIXTURE_ID("000000000002"), FIXTURE_AT, FIXTURE_ID("000000000003"), FIXTURE_AT,
+                 FIXTURE_AT, FIXTURE_ID("000000000001"));
+    ASSERT_TRUE(n > 0 && (size_t)n < sizeof(buf));
+    ASSERT_EQ_INT(write_text(src, buf), 0);
+    {
+        const char *args[] = {"import", "--from-json", src};
+        r = fixed_import(dst, args, sizeof args / sizeof args[0]);
+    }
+    ASSERT_EQ_INT(r.exit_code, 0);
+    n = snprintf(
+        want, sizeof(want),
+        "remember: warning: \"%s\" has a field remember doesn't know, \"x\\u001b[2J\\\"\". "
+        "The rest of the file was read.\n",
+        src);
+    ASSERT_TRUE(n > 0 && (size_t)n < sizeof(want));
+    ASSERT_STREQ(r.err, want);
+    ASSERT_STR_CONTAINS(r.out, "inserted 1");
+    cmd_result_free(&r);
+    got = harness_sqlite_query_line(dst, "SELECT key FROM entries;");
+    ASSERT_STREQ(got, "project:alpha");
+    free(got);
+    free(src);
+    free(dst);
+}
+
 /* ---- Whole-plan review exploits (2026-11-12): each test failed before its fix. ---- */
 
 #define EXPORT_HEAD "{\"format\":\"remember-export\",\"version\":1,"
@@ -2026,6 +2075,7 @@ void register_import_formats_tests(void)
     RUN_TEST(import_json_bad_settings_document_leaves_the_brain_unchanged);
     RUN_TEST(import_json_bad_setting_value_is_skipped_and_others_write);
     RUN_TEST(import_json_unknown_field_warns_once_and_still_imports);
+    RUN_TEST(import_json_unknown_field_prints_a_hostile_name_escaped);
     RUN_TEST(import_json_reads_settings_from_the_root_member_only);
     RUN_TEST(import_json_reads_an_escaped_settings_member_name);
     RUN_TEST(import_json_keyless_body_held_by_another_id_is_hash_clash);

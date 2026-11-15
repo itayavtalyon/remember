@@ -2656,6 +2656,36 @@ TEST(envelope_unknown_field_warns_once_for_a_file)
     free(buf);
 }
 
+/* G2 A (decision:2026-11-15-plan25-review-grill): the C-35 line JSON-escapes the field, so a quote,
+   a backslash, a terminal escape, DEL and a C1 control keep the line one line. */
+TEST(envelope_unknown_field_escapes_a_hostile_name_in_the_line)
+{
+    char *buf = NULL;
+    size_t len = 0U;
+    FILE *err = open_memstream(&buf, &len);
+
+    ASSERT_TRUE(err != NULL);
+    if (err == NULL) {
+        return;
+    }
+    diag_json_end();
+    diag_warnings_reset();
+    app_set_streams((AppStreams){.out = NULL, .err = err});
+    ASSERT_EQ_INT(diag_unknown_field((DiagUnknownField){.path = "/tmp/note.json",
+                                                        .name = "a\"b\\\033[2J\177\302\233"}),
+                  0);
+    ASSERT_EQ_INT(diag_unknown_field((DiagUnknownField){.path = NULL, .name = "x\ny"}), 0);
+    ASSERT_EQ_INT(fflush(err), 0);
+    ASSERT_STREQ(buf, "remember: warning: \"/tmp/note.json\" has a field remember doesn't know, "
+                      "\"a\\\"b\\\\\\u001b[2J\\u007f\\u009b\". The rest of the file was read.\n"
+                      "remember: warning: stdin has a field remember doesn't know, \"x\\ny\". The "
+                      "rest of the input was read.\n");
+    app_set_streams((AppStreams){.out = NULL, .err = NULL});
+    diag_warnings_reset();
+    ASSERT_EQ_INT(fclose(err), 0);
+    free(buf);
+}
+
 /* C-35 stdin line. A file in the same stretch still warns. */
 TEST(envelope_unknown_field_warns_once_for_stdin)
 {
@@ -2852,21 +2882,27 @@ TEST(envelope_unknown_field_json_names_stdin)
 /* Hostile bytes stay one plain line. JSON keeps the real escapes, not '?'. */
 enum { HOSTILE_PAD = 300 };
 
-TEST(envelope_unknown_field_masks_the_plain_line_and_escapes_json)
+TEST(envelope_unknown_field_masks_the_path_and_escapes_the_name)
 {
     const char raw_head[] = "\n\"\x1b\x7f\t\xc2\x9b";
     const char plain_head[] = "?\"??\t?";
     const char json_head[] = "\\n\\\"\\u001b\x7f\\t\xc2\x9b";
     char probe[sizeof raw_head + HOSTILE_PAD];
     char masked[sizeof plain_head + HOSTILE_PAD];
+    /* G2 A (decision:2026-11-15-plan25-review-grill): the name is JSON-escaped in the sentence, so
+       the plain line and the JSON message hold the same text. The path is still masked. */
+    const char esc_head[] = "\\n\\\"\\u001b\\u007f\\t\\u009b";
+    const char jesc_head[] = "\\\\n\\\\\\\"\\\\u001b\\\\u007f\\\\t\\\\u009b";
     char jprobe[sizeof json_head + HOSTILE_PAD];
+    char escaped[sizeof esc_head + HOSTILE_PAD];
+    char jescaped[sizeof jesc_head + HOSTILE_PAD];
     const char *plain_parts[] = {"remember: warning: \"", masked,
-                                 "\" has a field remember doesn't know, \"", masked,
+                                 "\" has a field remember doesn't know, \"", escaped,
                                  "\". The rest of the file was read.\n"};
     const char *json_parts[] = {",\"warnings\":[{\"code\":\"unknown_field\",\"message\":\"\\\"",
                                 jprobe,
                                 "\\\" has a field remember doesn't know, \\\"",
-                                jprobe,
+                                jescaped,
                                 "\\\". The rest of the file was read.\",\"detail\":{\"field\":\"",
                                 jprobe,
                                 "\",\"where\":\"",
@@ -2891,6 +2927,12 @@ TEST(envelope_unknown_field_masks_the_plain_line_and_escapes_json)
     memcpy(jprobe, json_head, sizeof json_head - 1U);
     memset(jprobe + (sizeof json_head - 1U), 'a', HOSTILE_PAD);
     jprobe[sizeof json_head - 1U + HOSTILE_PAD] = '\0';
+    memcpy(escaped, esc_head, sizeof esc_head - 1U);
+    memset(escaped + (sizeof esc_head - 1U), 'a', HOSTILE_PAD);
+    escaped[sizeof esc_head - 1U + HOSTILE_PAD] = '\0';
+    memcpy(jescaped, jesc_head, sizeof jesc_head - 1U);
+    memset(jescaped + (sizeof jesc_head - 1U), 'a', HOSTILE_PAD);
+    jescaped[sizeof jesc_head - 1U + HOSTILE_PAD] = '\0';
     plain_expect = join_parts(plain_parts, sizeof plain_parts / sizeof plain_parts[0]);
     json_expect = join_parts(json_parts, sizeof json_parts / sizeof json_parts[0]);
     err = open_memstream(&err_buf, &err_len);
@@ -3059,9 +3101,10 @@ void register_envelope_tests(void)
     RUN_TEST(envelope_unknown_field_warns_again_after_a_reset);
     RUN_TEST(envelope_unknown_field_json_names_the_field_and_the_file);
     RUN_TEST(envelope_unknown_field_json_names_stdin);
-    RUN_TEST(envelope_unknown_field_masks_the_plain_line_and_escapes_json);
+    RUN_TEST(envelope_unknown_field_masks_the_path_and_escapes_the_name);
     RUN_TEST(envelope_unknown_field_rejects_a_null_name);
     RUN_TEST(envelope_unknown_field_quotes_an_empty_name);
+    RUN_TEST(envelope_unknown_field_escapes_a_hostile_name_in_the_line);
 #ifdef REMEMBER_TEST_VFS
     RUN_TEST(envelope_add_link_read_error_after_the_write_exits_1_and_keeps_the_write);
 #else
