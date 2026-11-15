@@ -6,6 +6,7 @@
 
 #include <limits.h>
 #include <stdarg.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -574,6 +575,7 @@ static void check_members(PluginManifest *man, const JsonValue *obj, const char 
 /* R25-2 sentence 8 for a repeated key, in every object of the file: a parser that kept the other
    value would read another manifest. Each repeat is placed at its own member. jsonread caps the
    depth at 64, so the recursion is bounded. */
+/* NOLINTNEXTLINE(misc-no-recursion) — depth is capped at JSONREAD_NESTING_MAX */
 static void check_repeats(PluginManifest *man, const JsonValue *value, const char *path)
 {
     size_t n = value->type == JSON_OBJECT ? value->u.object.n : value->u.array.n;
@@ -1168,7 +1170,7 @@ static void parse_command(PluginManifest *man, const JsonValue *value, const cha
 {
     char what[WHAT_CAP];
     size_t i = 0;
-    bool ok = true;
+    bool valid = true;
 
     (void)snprintf(what, sizeof(what), "a list of 1 to %d strings", PLUGIN_ARGS_MAX);
     if (value->type != JSON_ARRAY || value->u.array.n == 0U ||
@@ -1184,15 +1186,15 @@ static void parse_command(PluginManifest *man, const JsonValue *value, const cha
         if (!string_into(value->u.array.items[i], run->argv[i], PLUGIN_ARG_CAP) ||
             run->argv[i][0] == '\0') {
             err_must_be(man, "R2.8", child, what);
-            ok = false;
+            valid = false;
         } else if (i == 0U && run->argv[0][0] != '/' && has_dotdot(run->argv[0])) {
             add_invalid(man, "R2.8", child,
                         where_message(child, "a relative command can't contain \"..\"."),
                         dup_text("Use a path inside the plugin folder, or an absolute path."));
-            ok = false;
+            valid = false;
         }
     }
-    if (ok) {
+    if (valid) {
         run->argc = value->u.array.n;
     }
 }
@@ -1637,18 +1639,17 @@ static void parse_setting(PluginManifest *man, const JsonValue *value, const cha
     item = member_of(man, obj, path, "key", "R2.11", true);
     if (item != NULL && item->type == JSON_STRING && strcmp(item->u.string.bytes, "enabled") == 0) {
         char *escaped = plugin_name == NULL ? NULL : text_json_escaped(plugin_name);
+        char *message = NULL;
 
+        if (plugin_name == NULL) {
+            message = dup_text("this plugin declares a setting named \"enabled\", and that name is "
+                               "reserved.");
+        } else if (escaped != NULL) {
+            message = fmt_alloc(
+                "\"%s\" declares a setting named \"enabled\", and that name is reserved.", escaped);
+        }
         child_path(child, path, "key");
-        add_invalid(
-            man, "R2.11", child,
-            plugin_name == NULL
-                ? dup_text("this plugin declares a setting named \"enabled\", and that name is "
-                           "reserved.")
-                : (escaped == NULL ? NULL
-                                   : fmt_alloc("\"%s\" declares a setting named \"enabled\", and "
-                                               "that name is reserved.",
-                                               escaped)),
-            dup_text("Rename that setting in plugin.json."));
+        add_invalid(man, "R2.11", child, message, dup_text("Rename that setting in plugin.json."));
         free(escaped);
     } else {
         (void)read_name(man, obj, path, "key", "R2.11", false, decl->key);
@@ -2050,11 +2051,10 @@ static size_t doc_at(const JsonValue *root, const char *pointer)
         const char *token = ++p;
         const JsonValue *next = NULL;
         size_t n = strcspn(token, "/");
-        size_t i = 0;
 
         p += n;
         if (at->type == JSON_OBJECT) {
-            for (i = 0; next == NULL && i < at->u.object.n; i++) {
+            for (size_t i = 0; next == NULL && i < at->u.object.n; i++) {
                 if (token_is(token, n, at->u.object.members[i].key)) {
                     next = at->u.object.members[i].value;
                 }

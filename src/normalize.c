@@ -1189,6 +1189,7 @@ static unsigned c1_code(const unsigned char *p)
     return p[1];
 }
 
+/* cppcheck-suppress staticFunction ; public API (normalize.h), used by diag.c and the tests */
 size_t text_json_escape(const char *text, char *out)
 {
     static const char hex[] = "0123456789abcdef";
