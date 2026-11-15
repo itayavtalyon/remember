@@ -69,7 +69,7 @@ A command on a newer brain does not write to it, and no later step of the comman
 
 ### 8.7 Newer only by `min_reader_version`
 
-`decision:2026-11-14-copy-r27b-2-r27b-3-approved` (R27b-2, Q1 A), `decision:2026-11-14-r27b-2-3-stop-and-ask` (answers 1 to 3), `decision:2026-11-13-plan27b-review-grill` (G2), `decision:2026-11-01-cli-outdated-version-shown` (amended).
+`decision:2026-11-14-copy-r27b-2-r27b-3-approved` (R27b-2, Q1 A), `decision:2026-11-14-r27b-2-3-stop-and-ask` (answers 1 to 3), `decision:2026-11-15-r27b-2-3-review-grill` (the `""` mask, the 32-byte cap), `decision:2026-11-13-plan27b-review-grill` (G2), `decision:2026-11-01-cli-outdated-version-shown` (amended).
 
 This applies when this binary opens the brain read-only because of `min_reader_version` and the brain's `schema_version` is not greater than the highest schema it knows. When the `schema_version` is greater, §§ 8.3 and 8.4 print, whatever `min_reader_version` says. The codes, the exits, `retryable` and the `fix` do not change.
 

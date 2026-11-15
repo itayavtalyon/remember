@@ -288,9 +288,7 @@ Security pass (A), probes on the built binary: `' 1.0.0'`, `'+1.0.0'`, `'1.0.0.'
 
 Review mutants (build exit checked, `old_cli` run, all killed): NUL check dropped and `= 0` to `>= 0` (`old_cli_hostile_min_reader_version_is_masked`); cap `>` to `>=` (`old_cli_min_reader_version_prints_up_to_32_bytes`); `by_min_reader` `<=` to `<` (six tests); variant test inverted (six tests); `nfields` always 4 (`old_cli_greater_schema_prints_r27b_1_whatever_min_reader_says`, `old_cli_newer_brain_read_json`, `old_cli_newer_brain_write_json`); help `75` with two spaces (`old_cli_help_exit_codes_list_5_and_75`); `min_reader_version` member given `cli_version` (two tests).
 
-Open, for Itay (no decision makes these choices; both are written into What must be true and `specs/OLDER-CLI.md` § 8.7 as the coder's picks):
-- G1: the masked `detail.min_reader_version` is `""`. JSON-STYLE § 1.9 says `null` means "no value", and `DiagDetailField` takes strings only.
-- G2: 32 bytes is the most a printable `min_reader_version` may have.
+Grill answered by Itay (`decision:2026-11-15-r27b-2-3-review-grill`, G1 A, G2 A): the masked `detail.min_reader_version` stays `""` (`null` and leaving the member out were rejected), and a printable `min_reader_version` is capped at 32 bytes. Deviations 1 and 2 above are now decided; the code and tests already match.
 
 Gate on fc97b3d (macOS, `REMEMBER_TEST_VFS=ON`, ASan): ctest 6/6, `step_gate` 1269 tests 0 failed, `remember_store_tests` 0 failed, `lint-all.sh` OK (clang-tidy 22, cppcheck, gcc -fanalyzer, scan-build), `check-coverage.sh` functions, effective lines and pure-TU branches 100%. `ci-linux.sh` and `codeql-local.sh` run in the pre-push hook.
 
