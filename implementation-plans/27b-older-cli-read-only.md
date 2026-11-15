@@ -268,3 +268,28 @@ Security pass (A): the numbers come from `PRAGMA user_version` and the build, an
 - A newer brain in WAL mode with frames left by a crashed newer writer is checkpointed by this CLI's last close. The logical content is unchanged, the bytes are not.
 
 Grills answered by Itay (`decision:2026-11-13-plan27b-review-grill`, G1 A, G2 A, G3 A, G4 yes): `device new` stays a read (`old_cli_device_new_is_a_read_that_warns`); the same-schema line ships as is; `settings set|reset --scope user` and `settings import --dry-run` exit 75 (rows in `old_cli_every_write_command_is_refused`); the four accepted decisions stay accepted. The G2 variant and the `--help` exit-code rows (5, 75) are copy requests with Story Weaver, follow-ups outside 27b.
+
+### Second opinion on R27b-2 and R27b-3 (Opus, 2026-11-15)
+
+Rebased on main 44e9799 (plan 27) with no conflict. Loaded both 2026-11-14 decisions, `decision:2026-11-01-cli-outdated-version-shown` (its Amended line is there), `standard:coding` and `standard:c`. Copy: Variant 1, Variant 2, the four-member `detail` and both `--help` lines match `COPY-APPROVED-2026-11-14.md` and answers 1 to 4 byte for byte, and no line has a command.
+
+Fixed in review:
+- **R1 (exploit, Improvement): a NUL byte in `min_reader_version` left the brain writable.** `select_text` cuts at the NUL, so `0.2.0` NUL `\xff` read as `0.2.0` (older), and `add` exited 0 on a brain that asks for a newer reader. `9.9.9` NUL `x` printed `9.9.9` in Variant 1 for bytes that are not a version. Now `check_reader_version` reads a value with a NUL as NULL, which counts as newer (Variant 2, `""`). The two rows added to `old_cli_hostile_min_reader_version_is_masked` were red before the fix (10 asserts) and are green after. This closes deviation 3 above.
+- **R2 (Improvement, DRY): the 64-byte `cli_version` cap was written twice** (prose in `diag.h`, a local enum in `remember_app.c`), and nothing tied it to the 384-byte buffer. Now `DIAG_CLI_VERSION_MAX` is in `diag.h`, `remember_app.c` asserts `REMEMBER_VERSION` against it, and `diag.c` asserts that the longest Variant 1 message fits `SCHEMA_MESSAGE_BUF`.
+- **R3 (Nit): the `_Static_assert` sat between `meet_newer_brain`'s doc comment and the function.** It now sits above the comment.
+
+Simplify pass (S):
+- `schema_too_new_text` takes the gap by pointer and points `detail.min_reader_version` at `gap->min_reader`. The copy buffer, `SCHEMA_VERSION_BUF` and one `snprintf` are gone. `nfields` is set inside the variant chain, not by a second `if` on `by_min_reader`. Saves 6 lines; R2's size assert adds 5 back (`git diff --numstat src/diag.c`: +22 -23).
+- The R27b-2 ending is one macro (`NEWER_BRAIN_BY_VERSION`) that the message and the size assert share.
+- Declined: dropping `s->schema_too_new &&` in `check_reader_version`. It is an equivalent mutant (`min_reader` is read only through `store_newer_brain`, which needs the flag), but it states "only when it made the brain read-only" at the write site.
+- Declined: one `min_reader` in `Store` instead of a copy in `StoreSchemaGap`. The gap is the port's value type, and `diag.c` must not see `Store`.
+
+Security pass (A), probes on the built binary: `' 1.0.0'`, `'+1.0.0'`, `'1.0.0.'`, `'1..0'`, `'1.2.3'` with a newline, integer `9`, 20-digit overflow: all Variant 2, `""`. `'01.0.0'` and `'9223372036854775807.0.0'` print as stored (digits and dots only, 32 bytes or less). A BLOB `9.9.9` prints `9.9.9`. `cli_version` is the build string. No `brain_meta` byte reaches stderr or JSON unless it passes `version_is_printable`.
+
+Review mutants (build exit checked, `old_cli` run, all killed): NUL check dropped and `= 0` to `>= 0` (`old_cli_hostile_min_reader_version_is_masked`); cap `>` to `>=` (`old_cli_min_reader_version_prints_up_to_32_bytes`); `by_min_reader` `<=` to `<` (six tests); variant test inverted (six tests); `nfields` always 4 (`old_cli_greater_schema_prints_r27b_1_whatever_min_reader_says`, `old_cli_newer_brain_read_json`, `old_cli_newer_brain_write_json`); help `75` with two spaces (`old_cli_help_exit_codes_list_5_and_75`); `min_reader_version` member given `cli_version` (two tests).
+
+Open, for Itay (no decision makes these choices; both are written into What must be true and `specs/OLDER-CLI.md` § 8.7 as the coder's picks):
+- G1: the masked `detail.min_reader_version` is `""`. JSON-STYLE § 1.9 says `null` means "no value", and `DiagDetailField` takes strings only.
+- G2: 32 bytes is the most a printable `min_reader_version` may have.
+
+Follow-up (older than this plan): `brain_meta` has no single-row constraint, so a hand-edited brain with two rows is read-only or not depending on which row SQLite returns first.

@@ -577,14 +577,12 @@ AppCommandClass app_command_class(CliCommand command, int rest_argc, const char 
     return k_command_class[command];
 }
 
+_Static_assert(sizeof(REMEMBER_VERSION) <= DIAG_CLI_VERSION_MAX + 1U,
+               "REMEMBER_VERSION is too long for the newer-brain notice");
+
 /* A brain from a newer remember (plan 27b): a write is refused before the
    command runs, so it cannot touch the file; a read runs and warns, every time.
    The result is 0 to go on, else the exit code. */
-/* diag.h: the message buffer holds a version of at most 64 bytes. */
-enum { NOTICE_VERSION_MAX = 64 };
-_Static_assert(sizeof(REMEMBER_VERSION) <= NOTICE_VERSION_MAX + 1U,
-               "REMEMBER_VERSION is too long for the notice");
-
 static int meet_newer_brain(const Store *s, const CliArgs *args)
 {
     StoreSchemaGap gap = {.brain_schema = 0};

@@ -735,6 +735,10 @@ TEST(old_cli_hostile_min_reader_version_is_masked)
         "printf('%.300c', '0') || '4.0.0'", /* parses, but is over-long */
         "'0.4.0 '",
         "''",
+        /* A NUL byte is not part of a version: neither its prefix (an older
+           0.2.0 that would leave the brain writable) nor a newer 9.9.9 is read. */
+        "CAST(X'302E322E3000FF' AS TEXT)",
+        "CAST(X'392E392E390078' AS TEXT)",
     };
     char *db = given_brain_at_schema(OLD_CLI_SCHEMA);
     char version[OLD_CLI_SQL_BUF];

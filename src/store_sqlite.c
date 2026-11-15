@@ -2546,8 +2546,12 @@ static int check_reader_version(Store *s, char *err, size_t errlen)
 {
     char *need = NULL;
 
-    if (select_text(s->db, "SELECT min_reader_version FROM brain_meta;", &need, err, errlen,
-                    &s->last) != 0) {
+    /* select_text stops at a NUL byte, so a value with one reads as NULL (newer)
+       rather than as its prefix: "0.2.0" NUL "x" is not a version. */
+    if (select_text(s->db,
+                    "SELECT CASE WHEN instr(CAST(min_reader_version AS BLOB), X'00') = 0 "
+                    "THEN min_reader_version END FROM brain_meta;",
+                    &need, err, errlen, &s->last) != 0) {
         return -1;
     }
     s->schema_too_new = reader_too_old(need);
