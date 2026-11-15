@@ -1253,9 +1253,10 @@ static void filter_list(PluginManifest *man, const JsonValue *obj, const char *p
 // NOLINTEND(bugprone-easily-swappable-parameters)
 {
     const JsonValue *item = member_value(obj, key);
-    char child[PLUGIN_PATH_CAP];
 
     if (item != NULL) {
+        char child[PLUGIN_PATH_CAP];
+
         child_path(child, path, key);
         (void)read_list(man, "R2.21", item, child, rows, row_cap, max_rows, count, allowed, false);
     }
