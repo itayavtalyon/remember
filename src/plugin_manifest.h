@@ -58,9 +58,12 @@ typedef enum PluginParseStatus {
 } PluginParseStatus;
 
 /* Heap strings sized to what they hold: a hostile key or value is echoed
-   whole, never cut (standard:c). The printer masks C0, DEL and C1 before it
-   writes message, fix or path to a terminal. code and rule point at literals.
-   supported is NULL, or the numbers this remember reads (detail.supported). */
+   whole, never cut (standard:c). message and fix hold no control byte: every
+   piece of plugin-controlled text in them is JSON-escaped, DEL and C1 included
+   (R25-2 Q2). path is the raw RFC 6901 pointer and can hold any byte but NUL:
+   the JSON writer escapes it, and a plain printer that shows it must mask it.
+   code and rule point at literals. supported is NULL, or the numbers this
+   remember reads (detail.supported). */
 typedef struct PluginError {
     const char *code;
     const char *rule;
@@ -69,10 +72,12 @@ typedef struct PluginError {
     char *message;
     char *fix;
     size_t nsupported;
+    size_t at; /* byte offset in plugin.json of what the error names; errors come in this order */
 } PluginError;
 
 /* An unknown field on an open object (R2.6). The caller reports each through
-   diag_unknown_field (C-35). path is the JSON Pointer of the object that holds it. */
+   diag_unknown_field (C-35). path is the JSON Pointer of the object that holds it.
+   path and field are raw bytes from the file. */
 typedef struct PluginUnknown {
     char *path;
     char *field;
@@ -165,13 +170,12 @@ typedef struct PluginManifest {
     size_t warnings_cap;
     long long idle_timeout_ms;
     long long max_batch_bytes;
-    int data_version;
+    long long data_version;
     int max_batch_entries;
     bool has_idle_timeout;
     bool backfill;
     bool has_description;
     bool oom;
-    char pad_[4];
     char name[PLUGIN_NAME_CAP + 1];
     char plugin_version[PLUGIN_VER_CAP];
     char description[PLUGIN_TEXT_CAP];

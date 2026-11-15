@@ -61,7 +61,33 @@ static PluginManifest *given_parse(const char *doc, PluginParseStatus want)
     return man;
 }
 
-/* One error, and no other: the whole document is wrong in exactly one place. */
+/* errors[i] when it exists. Otherwise the assert fails and a blank error comes back, so the test
+   goes on red instead of crashing the suite on a NULL list (a mutant that parses too much). */
+static const PluginError *error_at(const PluginManifest *man, size_t i)
+{
+    static const int k_none[1] = {0};
+    static char k_blank[1] = "";
+    static const PluginError k_missing = {.code = "",
+                                          .rule = "",
+                                          .supported = k_none,
+                                          .path = k_blank,
+                                          .message = k_blank,
+                                          .fix = k_blank};
+
+    ASSERT_TRUE(i < man->nerrors);
+    return i < man->nerrors ? &man->errors[i] : &k_missing;
+}
+
+/* warnings[i], or a blank warning after a failed assert (see error_at). */
+static const PluginUnknown *warning_at(const PluginManifest *man, size_t i)
+{
+    static char k_blank[1] = "";
+    static const PluginUnknown k_missing = {.path = k_blank, .field = k_blank};
+
+    ASSERT_TRUE(i < man->nwarnings);
+    return i < man->nwarnings ? &man->warnings[i] : &k_missing;
+}
+
 /* Appends text to the string in dst, which holds cap bytes. */
 static void append(char *dst, size_t cap, const char *text)
 {
@@ -91,6 +117,7 @@ static void appendf(char *dst, size_t cap, const char *fmt, ...)
     va_end(args);
 }
 
+/* One error, and no other: the whole document is wrong in exactly one place. */
 // NOLINTNEXTLINE(bugprone-easily-swappable-parameters): a path, a rule, a message, then a fix
 static void expect_error(const char *doc, const char *path, const char *rule, const char *message,
                          const char *fix)
@@ -102,11 +129,11 @@ static void expect_error(const char *doc, const char *path, const char *rule, co
         plugin_manifest_free(man);
         return;
     }
-    ASSERT_STREQ(man->errors[0].code, "plugin_manifest_invalid");
-    ASSERT_STREQ(man->errors[0].path, path);
-    ASSERT_STREQ(man->errors[0].rule, rule);
-    ASSERT_STREQ(man->errors[0].message, message);
-    ASSERT_STREQ(man->errors[0].fix, fix);
+    ASSERT_STREQ(error_at(man, 0)->code, "plugin_manifest_invalid");
+    ASSERT_STREQ(error_at(man, 0)->path, path);
+    ASSERT_STREQ(error_at(man, 0)->rule, rule);
+    ASSERT_STREQ(error_at(man, 0)->message, message);
+    ASSERT_STREQ(error_at(man, 0)->fix, fix);
     plugin_manifest_free(man);
 }
 
@@ -283,8 +310,8 @@ TEST(a_hyphen_fix_is_the_whole_name_even_past_forty_bytes)
     man = given_parse(doc, PLUGIN_PARSE_INVALID);
     name[10] = '_';
     (void)snprintf(fix, sizeof(fix), "Use \"%s\".", name);
-    ASSERT_STR_CONTAINS(man->errors[0].message, "can't contain");
-    ASSERT_STREQ(man->errors[0].fix, fix);
+    ASSERT_STR_CONTAINS(error_at(man, 0)->message, "can't contain");
+    ASSERT_STREQ(error_at(man, 0)->fix, fix);
     plugin_manifest_free(man);
 }
 
@@ -306,7 +333,7 @@ TEST(a_forty_one_character_name_is_not_a_valid_name)
                    "\"plugin_version\":\"1.0.0\",\"protocol\":1," ACTIONS "}",
                    name);
     man = given_parse(doc, PLUGIN_PARSE_INVALID);
-    ASSERT_STR_CONTAINS(man->errors[0].message, "isn't a valid name.");
+    ASSERT_STR_CONTAINS(error_at(man, 0)->message, "isn't a valid name.");
     plugin_manifest_free(man);
 }
 
@@ -345,7 +372,7 @@ TEST(a_name_with_a_nul_escape_is_not_json_so_nothing_is_cut_short)
 {
     PluginManifest *man = given_parse("{\"name\":\"wake\\u0000-evil\"}", PLUGIN_PARSE_SYNTAX);
 
-    ASSERT_STREQ(man->errors[0].message, "plugin.json isn't valid JSON.");
+    ASSERT_STREQ(error_at(man, 0)->message, "plugin.json isn't valid JSON.");
     plugin_manifest_free(man);
 }
 
@@ -366,11 +393,11 @@ TEST(a_setting_key_enabled_prints_the_c36_reserved_key_lines)
                     PLUGIN_PARSE_INVALID);
 
     ASSERT_EQ_INT(man->nerrors, 1);
-    ASSERT_STREQ(man->errors[0].path, "/settings/0");
-    ASSERT_STREQ(man->errors[0].rule, "R2.11");
-    ASSERT_STREQ(man->errors[0].message,
+    ASSERT_STREQ(error_at(man, 0)->path, "/settings/0/key");
+    ASSERT_STREQ(error_at(man, 0)->rule, "R2.11");
+    ASSERT_STREQ(error_at(man, 0)->message,
                  "\"wake\" declares a setting named \"enabled\", and that name is reserved.");
-    ASSERT_STREQ(man->errors[0].fix, "Rename that setting in plugin.json.");
+    ASSERT_STREQ(error_at(man, 0)->fix, "Rename that setting in plugin.json.");
     plugin_manifest_free(man);
 }
 
@@ -383,8 +410,42 @@ TEST(a_reserved_setting_key_in_a_manifest_with_no_name_says_this_plugin)
         PLUGIN_PARSE_INVALID);
 
     ASSERT_EQ_INT(man->nerrors, 2);
-    ASSERT_STREQ(man->errors[1].message,
+    ASSERT_STREQ(error_at(man, 1)->path, "/settings/0/key");
+    ASSERT_STREQ(error_at(man, 1)->message,
                  "this plugin declares a setting named \"enabled\", and that name is reserved.");
+    plugin_manifest_free(man);
+}
+
+/* R25-2 sentence 16 is for a name that is missing or not a string. Any string name is usable, as
+   in sentences 9 and 10, and prints JSON-escaped (Q2). */
+TEST(a_reserved_setting_key_names_a_string_name_even_when_the_name_is_invalid)
+{
+    PluginManifest *man =
+        given_parse("{\"format\":\"remember-plugin\",\"version\":1,\"name\":\"Wake\","
+                    "\"plugin_version\":\"1.0.0\",\"protocol\":1," ACTIONS
+                    ",\"settings\":[{\"key\":\"enabled\",\"description\":\"x\","
+                    "\"type\":\"boolean\",\"default\":true}]}",
+                    PLUGIN_PARSE_INVALID);
+
+    ASSERT_EQ_INT(man->nerrors, 2);
+    ASSERT_STREQ(error_at(man, 1)->message,
+                 "\"Wake\" declares a setting named \"enabled\", and that name is reserved.");
+    plugin_manifest_free(man);
+}
+
+TEST(the_c36_reserved_key_line_escapes_a_hostile_plugin_name)
+{
+    PluginManifest *man =
+        given_parse("{\"format\":\"remember-plugin\",\"version\":1,\"name\":\"a\\\"\\u001b\","
+                    "\"plugin_version\":\"1.0.0\",\"protocol\":1," ACTIONS
+                    ",\"settings\":[{\"key\":\"enabled\",\"description\":\"x\","
+                    "\"type\":\"boolean\",\"default\":true}]}",
+                    PLUGIN_PARSE_INVALID);
+
+    ASSERT_EQ_INT(man->nerrors, 2);
+    ASSERT_STREQ(
+        error_at(man, 1)->message,
+        "\"a\\\"\\u001b\" declares a setting named \"enabled\", and that name is reserved.");
     plugin_manifest_free(man);
 }
 
@@ -406,15 +467,16 @@ TEST(protocol_2_returns_plugin_protocol_unsupported_with_the_r25_1_message_and_f
                     PLUGIN_PARSE_UNSUPPORTED);
 
     ASSERT_EQ_INT(man->nerrors, 1);
-    ASSERT_STREQ(man->errors[0].code, "plugin_protocol_unsupported");
-    ASSERT_STREQ(man->errors[0].path, "/protocol");
-    ASSERT_STREQ(man->errors[0].rule, "R2.4");
-    ASSERT_STREQ(man->errors[0].message,
+    ASSERT_STREQ(error_at(man, 0)->code, "plugin_protocol_unsupported");
+    ASSERT_STREQ(error_at(man, 0)->path, "/protocol");
+    ASSERT_STREQ(error_at(man, 0)->rule, "R2.4");
+    ASSERT_STREQ(error_at(man, 0)->message,
                  "plugin.json /protocol: \"router\" was written for plugin protocol 2, and this "
                  "remember reads protocol 1.");
-    ASSERT_STREQ(man->errors[0].fix, "Update remember, or install an older version of \"router\".");
-    ASSERT_EQ_INT(man->errors[0].nsupported, 1);
-    ASSERT_EQ_INT(man->errors[0].supported[0], 1);
+    ASSERT_STREQ(error_at(man, 0)->fix,
+                 "Update remember, or install an older version of \"router\".");
+    ASSERT_EQ_INT(error_at(man, 0)->nsupported, 1);
+    ASSERT_EQ_INT(error_at(man, 0)->supported[0], 1);
     plugin_manifest_free(man);
 }
 
@@ -452,21 +514,21 @@ TEST(q1_a_protocol_prints_its_value_and_not_its_source_text)
     PluginManifest *man = given_parse(PROTOCOL_DOC("2.0"), PLUGIN_PARSE_UNSUPPORTED);
 
     ASSERT_STREQ(
-        man->errors[0].message,
+        error_at(man, 0)->message,
         "plugin.json /protocol: \"a\" was written for plugin protocol 2, and this remember "
         "reads protocol 1.");
     plugin_manifest_free(man);
     man = given_parse(PROTOCOL_DOC("2e0"), PLUGIN_PARSE_UNSUPPORTED);
-    ASSERT_STR_CONTAINS(man->errors[0].message, "plugin protocol 2, and");
+    ASSERT_STR_CONTAINS(error_at(man, 0)->message, "plugin protocol 2, and");
     plugin_manifest_free(man);
     man = given_parse(PROTOCOL_DOC("-0"), PLUGIN_PARSE_UNSUPPORTED);
-    ASSERT_STR_CONTAINS(man->errors[0].message, "plugin protocol 0, and");
+    ASSERT_STR_CONTAINS(error_at(man, 0)->message, "plugin protocol 0, and");
     plugin_manifest_free(man);
     man = given_parse(PROTOCOL_DOC("-3"), PLUGIN_PARSE_UNSUPPORTED);
-    ASSERT_STR_CONTAINS(man->errors[0].message, "plugin protocol -3, and");
+    ASSERT_STR_CONTAINS(error_at(man, 0)->message, "plugin protocol -3, and");
     plugin_manifest_free(man);
     man = given_parse(PROTOCOL_DOC("20E-1"), PLUGIN_PARSE_UNSUPPORTED);
-    ASSERT_STR_CONTAINS(man->errors[0].message, "plugin protocol 2, and");
+    ASSERT_STR_CONTAINS(error_at(man, 0)->message, "plugin protocol 2, and");
     plugin_manifest_free(man);
 }
 
@@ -475,14 +537,15 @@ TEST(q1_a_huge_protocol_prints_its_digits)
     PluginManifest *man =
         given_parse(PROTOCOL_DOC("99999999999999999999999999"), PLUGIN_PARSE_UNSUPPORTED);
 
-    ASSERT_STR_CONTAINS(man->errors[0].message, "plugin protocol 99999999999999999999999999, and");
+    ASSERT_STR_CONTAINS(error_at(man, 0)->message,
+                        "plugin protocol 99999999999999999999999999, and");
     plugin_manifest_free(man);
     man = given_parse(PROTOCOL_DOC("1e30"), PLUGIN_PARSE_UNSUPPORTED);
-    ASSERT_STR_CONTAINS(man->errors[0].message,
+    ASSERT_STR_CONTAINS(error_at(man, 0)->message,
                         "plugin protocol 1000000000000000000000000000000, and");
     plugin_manifest_free(man);
     man = given_parse(PROTOCOL_DOC("-1e20"), PLUGIN_PARSE_UNSUPPORTED);
-    ASSERT_STR_CONTAINS(man->errors[0].message, "plugin protocol -100000000000000000000, and");
+    ASSERT_STR_CONTAINS(error_at(man, 0)->message, "plugin protocol -100000000000000000000, and");
     plugin_manifest_free(man);
 }
 
@@ -490,14 +553,14 @@ TEST(q1_a_protocol_with_a_fraction_is_not_a_whole_number)
 {
     PluginManifest *man = given_parse(PROTOCOL_DOC("1.5"), PLUGIN_PARSE_INVALID);
 
-    ASSERT_STREQ(man->errors[0].code, "plugin_manifest_invalid");
-    ASSERT_STREQ(man->errors[0].message, R25_2_MUST_BE("/protocol", "a whole number"));
+    ASSERT_STREQ(error_at(man, 0)->code, "plugin_manifest_invalid");
+    ASSERT_STREQ(error_at(man, 0)->message, R25_2_MUST_BE("/protocol", "a whole number"));
     plugin_manifest_free(man);
     man = given_parse(PROTOCOL_DOC("1.0001"), PLUGIN_PARSE_INVALID);
-    ASSERT_STREQ(man->errors[0].message, R25_2_MUST_BE("/protocol", "a whole number"));
+    ASSERT_STREQ(error_at(man, 0)->message, R25_2_MUST_BE("/protocol", "a whole number"));
     plugin_manifest_free(man);
     man = given_parse(PROTOCOL_DOC("1e-1"), PLUGIN_PARSE_INVALID);
-    ASSERT_STREQ(man->errors[0].message, R25_2_MUST_BE("/protocol", "a whole number"));
+    ASSERT_STREQ(error_at(man, 0)->message, R25_2_MUST_BE("/protocol", "a whole number"));
     plugin_manifest_free(man);
 }
 
@@ -505,10 +568,10 @@ TEST(q1_an_absurd_exponent_is_not_a_whole_number_and_costs_nothing)
 {
     PluginManifest *man = given_parse(PROTOCOL_DOC("1e999999999"), PLUGIN_PARSE_INVALID);
 
-    ASSERT_STREQ(man->errors[0].message, R25_2_MUST_BE("/protocol", "a whole number"));
+    ASSERT_STREQ(error_at(man, 0)->message, R25_2_MUST_BE("/protocol", "a whole number"));
     plugin_manifest_free(man);
     man = given_parse(PROTOCOL_DOC("0e999999999"), PLUGIN_PARSE_UNSUPPORTED);
-    ASSERT_STR_CONTAINS(man->errors[0].message, "plugin protocol 0, and");
+    ASSERT_STR_CONTAINS(error_at(man, 0)->message, "plugin protocol 0, and");
     plugin_manifest_free(man);
 }
 
@@ -549,7 +612,7 @@ TEST(q1_an_integer_setting_default_written_as_1e2_is_stored_as_100)
     ASSERT_EQ_INT(man->settings[0].min_value, 10);
     plugin_manifest_free(man);
     man = given_parse(SETTING_DOC("\"type\":\"integer\",\"default\":2.5"), PLUGIN_PARSE_INVALID);
-    ASSERT_STREQ(man->errors[0].message, R25_2_MUST_BE("/settings/0/default", "a whole number"));
+    ASSERT_STREQ(error_at(man, 0)->message, R25_2_MUST_BE("/settings/0/default", "a whole number"));
     plugin_manifest_free(man);
 }
 
@@ -569,10 +632,12 @@ TEST(protocol_with_no_usable_name_uses_the_plugin_wording)
     PluginManifest *man =
         given_parse(MINIMAL("\"version\":1,\"name\":7,\"protocol\":2"), PLUGIN_PARSE_UNSUPPORTED);
 
-    ASSERT_STREQ(man->errors[0].message,
+    /* Document order: the /name error comes first. */
+    ASSERT_STREQ(error_at(man, 1)->message,
                  "plugin.json /protocol: this plugin was written for plugin protocol 2, and this "
                  "remember reads protocol 1.");
-    ASSERT_STREQ(man->errors[0].fix, "Update remember, or install an older version of the plugin.");
+    ASSERT_STREQ(error_at(man, 1)->fix,
+                 "Update remember, or install an older version of the plugin.");
     plugin_manifest_free(man);
 }
 
@@ -581,7 +646,7 @@ TEST(protocol_names_the_plugin_as_the_file_wrote_it_even_when_the_name_is_invali
     PluginManifest *man = given_parse(MINIMAL("\"version\":1,\"name\":\"Bad-Name\",\"protocol\":2"),
                                       PLUGIN_PARSE_UNSUPPORTED);
 
-    ASSERT_STR_CONTAINS(man->errors[0].message, "\"Bad-Name\" was written");
+    ASSERT_STR_CONTAINS(error_at(man, 1)->message, "\"Bad-Name\" was written");
     plugin_manifest_free(man);
 }
 
@@ -590,8 +655,8 @@ TEST(a_protocol_that_is_not_a_number_must_be_a_whole_number)
     PluginManifest *man = given_parse(MINIMAL("\"version\":1,\"name\":\"a\",\"protocol\":\"1\""),
                                       PLUGIN_PARSE_INVALID);
 
-    ASSERT_STREQ(man->errors[0].code, "plugin_manifest_invalid");
-    ASSERT_STREQ(man->errors[0].message, R25_2_MUST_BE("/protocol", "a whole number"));
+    ASSERT_STREQ(error_at(man, 0)->code, "plugin_manifest_invalid");
+    ASSERT_STREQ(error_at(man, 0)->message, R25_2_MUST_BE("/protocol", "a whole number"));
     plugin_manifest_free(man);
 }
 
@@ -603,13 +668,14 @@ TEST(manifest_version_2_returns_plugin_protocol_unsupported_in_the_r25_1_shape)
                     PLUGIN_PARSE_UNSUPPORTED);
 
     ASSERT_EQ_INT(man->nerrors, 1);
-    ASSERT_STREQ(man->errors[0].code, "plugin_protocol_unsupported");
-    ASSERT_STREQ(man->errors[0].path, "/version");
-    ASSERT_STREQ(man->errors[0].message,
+    ASSERT_STREQ(error_at(man, 0)->code, "plugin_protocol_unsupported");
+    ASSERT_STREQ(error_at(man, 0)->path, "/version");
+    ASSERT_STREQ(error_at(man, 0)->message,
                  "plugin.json /version: \"router\" uses plugin.json format 2, and this remember "
                  "reads format 1.");
-    ASSERT_STREQ(man->errors[0].fix, "Update remember, or install an older version of \"router\".");
-    ASSERT_EQ_INT(man->errors[0].supported[0], 1);
+    ASSERT_STREQ(error_at(man, 0)->fix,
+                 "Update remember, or install an older version of \"router\".");
+    ASSERT_EQ_INT(error_at(man, 0)->supported[0], 1);
     plugin_manifest_free(man);
 }
 
@@ -618,7 +684,8 @@ TEST(manifest_version_with_no_usable_name_uses_the_plugin_wording)
     PluginManifest *man =
         given_parse(MINIMAL("\"version\":3,\"protocol\":1"), PLUGIN_PARSE_UNSUPPORTED);
 
-    ASSERT_STREQ(man->errors[0].message,
+    /* The missing "name" names the top level, which comes first. */
+    ASSERT_STREQ(error_at(man, 1)->message,
                  "plugin.json /version: this plugin uses plugin.json format 3, and this remember "
                  "reads format 1.");
     plugin_manifest_free(man);
@@ -629,8 +696,8 @@ TEST(both_a_bad_version_and_a_bad_protocol_come_back)
     PluginManifest *man = given_parse(MINIMAL("\"version\":2,\"name\":\"a\",\"protocol\":3"),
                                       PLUGIN_PARSE_UNSUPPORTED);
 
-    ASSERT_STREQ(man->errors[0].path, "/version");
-    ASSERT_STREQ(man->errors[1].path, "/protocol");
+    ASSERT_STREQ(error_at(man, 0)->path, "/version");
+    ASSERT_STREQ(error_at(man, 1)->path, "/protocol");
     plugin_manifest_free(man);
 }
 
@@ -638,8 +705,8 @@ TEST(a_missing_version_and_protocol_are_missing_members)
 {
     PluginManifest *man = given_parse("{\"name\":\"a\"}", PLUGIN_PARSE_INVALID);
 
-    ASSERT_STREQ(man->errors[1].message, R25_2_MISSING("", "version"));
-    ASSERT_STREQ(man->errors[2].message, R25_2_MISSING("", "protocol"));
+    ASSERT_STREQ(error_at(man, 1)->message, R25_2_MISSING("", "version"));
+    ASSERT_STREQ(error_at(man, 2)->message, R25_2_MISSING("", "protocol"));
     plugin_manifest_free(man);
 }
 
@@ -648,7 +715,7 @@ TEST(a_version_that_is_not_a_number_must_be_a_whole_number)
     PluginManifest *man = given_parse(MINIMAL("\"version\":\"1\",\"name\":\"a\",\"protocol\":1"),
                                       PLUGIN_PARSE_INVALID);
 
-    ASSERT_STREQ(man->errors[0].message, R25_2_MUST_BE("/version", "a whole number"));
+    ASSERT_STREQ(error_at(man, 0)->message, R25_2_MUST_BE("/version", "a whole number"));
     plugin_manifest_free(man);
 }
 
@@ -659,11 +726,11 @@ TEST(text_that_is_not_json_is_a_syntax_error_with_one_line)
     PluginManifest *man = given_parse("{\"name\":", PLUGIN_PARSE_SYNTAX);
 
     ASSERT_EQ_INT(man->nerrors, 1);
-    ASSERT_STREQ(man->errors[0].code, "plugin_manifest_invalid");
-    ASSERT_STREQ(man->errors[0].path, "");
-    ASSERT_STREQ(man->errors[0].rule, "R2.2");
-    ASSERT_STREQ(man->errors[0].message, "plugin.json isn't valid JSON.");
-    ASSERT_STREQ(man->errors[0].fix, "Fix the JSON syntax in plugin.json.");
+    ASSERT_STREQ(error_at(man, 0)->code, "plugin_manifest_invalid");
+    ASSERT_STREQ(error_at(man, 0)->path, "");
+    ASSERT_STREQ(error_at(man, 0)->rule, "R2.2");
+    ASSERT_STREQ(error_at(man, 0)->message, "plugin.json isn't valid JSON.");
+    ASSERT_STREQ(error_at(man, 0)->fix, "Fix the JSON syntax in plugin.json.");
     plugin_manifest_free(man);
 }
 
@@ -671,8 +738,8 @@ TEST(a_json_array_at_the_top_is_not_an_object)
 {
     PluginManifest *man = given_parse("[1]", PLUGIN_PARSE_SYNTAX);
 
-    ASSERT_STREQ(man->errors[0].message, "plugin.json must hold one JSON object.");
-    ASSERT_STREQ(man->errors[0].fix, "Make the top level of plugin.json an object.");
+    ASSERT_STREQ(error_at(man, 0)->message, "plugin.json must hold one JSON object.");
+    ASSERT_STREQ(error_at(man, 0)->fix, "Make the top level of plugin.json an object.");
     plugin_manifest_free(man);
 }
 
@@ -692,10 +759,10 @@ TEST(a_manifest_with_neither_actions_nor_filters_is_refused)
     PluginManifest *man = given_parse(HEAD "\"x\":1}", PLUGIN_PARSE_INVALID);
 
     ASSERT_EQ_INT(man->nerrors, 1);
-    ASSERT_STREQ(man->errors[0].path, "");
-    ASSERT_STREQ(man->errors[0].message,
+    ASSERT_STREQ(error_at(man, 0)->path, "");
+    ASSERT_STREQ(error_at(man, 0)->message,
                  "plugin.json: \"actions\" and \"filters\" are both missing.");
-    ASSERT_STREQ(man->errors[0].fix, "Add \"actions\" or \"filters\".");
+    ASSERT_STREQ(error_at(man, 0)->fix, "Add \"actions\" or \"filters\".");
     plugin_manifest_free(man);
 }
 
@@ -751,11 +818,11 @@ TEST(the_did_you_mean_fix_covers_a_substitution_and_an_extra_letter)
         PLUGIN_PARSE_INVALID);
 
     ASSERT_EQ_INT(man->nerrors, 5);
-    ASSERT_STREQ(man->errors[0].fix, "Did you mean \"command\"?");
-    ASSERT_STREQ(man->errors[1].fix, "Did you mean \"command\"?");
-    ASSERT_STREQ(man->errors[2].fix, "Did you mean \"command\"?");
-    ASSERT_STREQ(man->errors[3].fix, "Did you mean \"command\"?");
-    ASSERT_STREQ(man->errors[4].fix, R25_2_REMOVE("cmdd"));
+    ASSERT_STREQ(error_at(man, 0)->fix, "Did you mean \"command\"?");
+    ASSERT_STREQ(error_at(man, 1)->fix, "Did you mean \"command\"?");
+    ASSERT_STREQ(error_at(man, 2)->fix, "Did you mean \"command\"?");
+    ASSERT_STREQ(error_at(man, 3)->fix, "Did you mean \"command\"?");
+    ASSERT_STREQ(error_at(man, 4)->fix, R25_2_REMOVE("cmdd"));
     plugin_manifest_free(man);
 }
 
@@ -808,18 +875,19 @@ TEST(top_level_run_permissions_and_filter_are_errors_not_warnings)
 
     ASSERT_EQ_INT(man->nerrors, 3);
     ASSERT_EQ_INT(man->nwarnings, 0);
-    ASSERT_STREQ(man->errors[0].path, "/run");
-    ASSERT_STREQ(man->errors[0].rule, "R2.5");
-    ASSERT_STREQ(man->errors[0].message, "plugin.json: \"run\" can't be at the top level.");
-    ASSERT_STREQ(man->errors[0].fix, "Move \"run\" into an action or a filter.");
-    ASSERT_STREQ(man->errors[1].path, "/permissions");
-    ASSERT_STREQ(man->errors[1].rule, "R2.5");
-    ASSERT_STREQ(man->errors[1].message, "plugin.json: \"permissions\" can't be at the top level.");
-    ASSERT_STREQ(man->errors[1].fix, "Move \"permissions\" into an action or a filter.");
-    ASSERT_STREQ(man->errors[2].path, "/filter");
-    ASSERT_STREQ(man->errors[2].rule, "R2.21");
-    ASSERT_STREQ(man->errors[2].message, "plugin.json: \"filter\" can't be at the top level.");
-    ASSERT_STREQ(man->errors[2].fix, "Move \"filter\" into an action.");
+    ASSERT_STREQ(error_at(man, 0)->path, "/run");
+    ASSERT_STREQ(error_at(man, 0)->rule, "R2.5");
+    ASSERT_STREQ(error_at(man, 0)->message, "plugin.json: \"run\" can't be at the top level.");
+    ASSERT_STREQ(error_at(man, 0)->fix, "Move \"run\" into an action or a filter.");
+    ASSERT_STREQ(error_at(man, 1)->path, "/permissions");
+    ASSERT_STREQ(error_at(man, 1)->rule, "R2.5");
+    ASSERT_STREQ(error_at(man, 1)->message,
+                 "plugin.json: \"permissions\" can't be at the top level.");
+    ASSERT_STREQ(error_at(man, 1)->fix, "Move \"permissions\" into an action or a filter.");
+    ASSERT_STREQ(error_at(man, 2)->path, "/filter");
+    ASSERT_STREQ(error_at(man, 2)->rule, "R2.21");
+    ASSERT_STREQ(error_at(man, 2)->message, "plugin.json: \"filter\" can't be at the top level.");
+    ASSERT_STREQ(error_at(man, 2)->fix, "Move \"filter\" into an action.");
     plugin_manifest_free(man);
 }
 
@@ -829,8 +897,8 @@ TEST(an_unknown_root_field_is_a_warning_and_the_rest_parses)
 
     ASSERT_EQ_INT(man->nerrors, 0);
     ASSERT_EQ_INT(man->nwarnings, 1);
-    ASSERT_STREQ(man->warnings[0].path, "");
-    ASSERT_STREQ(man->warnings[0].field, "homepage");
+    ASSERT_STREQ(warning_at(man, 0)->path, "");
+    ASSERT_STREQ(warning_at(man, 0)->field, "homepage");
     ASSERT_EQ_INT(man->nentries, 1);
     plugin_manifest_free(man);
 }
@@ -853,7 +921,7 @@ TEST(an_unknown_root_field_prints_the_c35_file_line_and_the_rest_parses)
     diag_warnings_reset();
     app_set_streams((AppStreams){.out = NULL, .err = err});
     ASSERT_EQ_INT(
-        diag_unknown_field((DiagUnknownField){.path = file, .name = man->warnings[0].field}), 0);
+        diag_unknown_field((DiagUnknownField){.path = file, .name = warning_at(man, 0)->field}), 0);
     ASSERT_EQ_INT(fflush(err), 0);
     ASSERT_STREQ(buf, "remember: warning: \"/tmp/wake/plugin.json\" has a field remember doesn't "
                       "know, \"homepage\". The rest of the file was read.\n");
@@ -872,8 +940,8 @@ TEST(working_directory_is_an_unknown_action_field)
         HEAD "\"actions\":[" ACTION_BODY ",\"working_directory\":\"../../..\"}]}", PLUGIN_PARSE_OK);
 
     ASSERT_EQ_INT(man->nwarnings, 1);
-    ASSERT_STREQ(man->warnings[0].path, "/actions/0");
-    ASSERT_STREQ(man->warnings[0].field, "working_directory");
+    ASSERT_STREQ(warning_at(man, 0)->path, "/actions/0");
+    ASSERT_STREQ(warning_at(man, 0)->field, "working_directory");
     plugin_manifest_free(man);
 }
 
@@ -884,8 +952,8 @@ TEST(an_unknown_field_in_open_tags_is_a_warning)
                                       PLUGIN_PARSE_OK);
 
     ASSERT_EQ_INT(man->nwarnings, 1);
-    ASSERT_STREQ(man->warnings[0].path, "/actions/0/filter/tags");
-    ASSERT_STREQ(man->warnings[0].field, "extra");
+    ASSERT_STREQ(warning_at(man, 0)->path, "/actions/0/filter/tags");
+    ASSERT_STREQ(warning_at(man, 0)->field, "extra");
     plugin_manifest_free(man);
 }
 
@@ -897,7 +965,7 @@ TEST(an_unknown_field_in_a_setting_range_is_a_warning)
         PLUGIN_PARSE_OK);
 
     ASSERT_EQ_INT(man->nwarnings, 1);
-    ASSERT_STREQ(man->warnings[0].path, "/settings/0/range");
+    ASSERT_STREQ(warning_at(man, 0)->path, "/settings/0/range");
     plugin_manifest_free(man);
 }
 
@@ -908,7 +976,7 @@ TEST(unknown_field_pointer_escapes_slash_and_tilde)
                          "\"run\":{\"process\":\"persistent\",\"command\":[\"x\"],\"a/b~c\":1}}]}",
                     PLUGIN_PARSE_INVALID);
 
-    ASSERT_STREQ(man->errors[0].path, "/filters/0/run/a~1b~0c");
+    ASSERT_STREQ(error_at(man, 0)->path, "/filters/0/run/a~1b~0c");
     plugin_manifest_free(man);
 }
 
@@ -925,10 +993,10 @@ TEST(a_long_unknown_field_keeps_its_whole_name_and_pointer)
                    key);
     man = given_parse(doc, PLUGIN_PARSE_INVALID);
     (void)snprintf(path, 400U, "/filters/0/run/%s", key);
-    ASSERT_STREQ(man->errors[0].path, path);
-    ASSERT_EQ_INT(strlen(man->errors[0].message),
+    ASSERT_STREQ(error_at(man, 0)->path, path);
+    ASSERT_EQ_INT(strlen(error_at(man, 0)->message),
                   strlen("plugin.json /filters/0/run: unknown field \"\".") + 300U);
-    ASSERT_EQ_INT(strlen(man->errors[0].fix), strlen("Remove \"\".") + 300U);
+    ASSERT_EQ_INT(strlen(error_at(man, 0)->fix), strlen("Remove \"\".") + 300U);
     plugin_manifest_free(man);
 }
 
@@ -940,7 +1008,7 @@ TEST(a_long_unknown_open_field_is_kept_whole_in_the_warning)
 
     (void)snprintf(doc, 900U, HEAD ACTIONS ",\"%s\":1}", key);
     man = given_parse(doc, PLUGIN_PARSE_OK);
-    ASSERT_STREQ(man->warnings[0].field, key);
+    ASSERT_STREQ(warning_at(man, 0)->field, key);
     plugin_manifest_free(man);
 }
 
@@ -952,10 +1020,10 @@ TEST(a_repeated_protocol_is_refused)
                                       PLUGIN_PARSE_INVALID);
 
     ASSERT_EQ_INT(man->nerrors, 1);
-    ASSERT_STREQ(man->errors[0].path, "/protocol");
-    ASSERT_STREQ(man->errors[0].rule, "R2.2");
-    ASSERT_STREQ(man->errors[0].message, R25_2_TWICE("", "protocol"));
-    ASSERT_STREQ(man->errors[0].fix, R25_2_KEEP("protocol"));
+    ASSERT_STREQ(error_at(man, 0)->path, "/protocol");
+    ASSERT_STREQ(error_at(man, 0)->rule, "R2.2");
+    ASSERT_STREQ(error_at(man, 0)->message, R25_2_TWICE("", "protocol"));
+    ASSERT_STREQ(error_at(man, 0)->fix, R25_2_KEEP("protocol"));
     plugin_manifest_free(man);
 }
 
@@ -967,8 +1035,8 @@ TEST(repeated_permissions_are_refused)
                     PLUGIN_PARSE_INVALID);
 
     ASSERT_EQ_INT(man->nerrors, 1);
-    ASSERT_STREQ(man->errors[0].path, "/actions/0/permissions");
-    ASSERT_STREQ(man->errors[0].message, R25_2_TWICE(" /actions/0", "permissions"));
+    ASSERT_STREQ(error_at(man, 0)->path, "/actions/0/permissions");
+    ASSERT_STREQ(error_at(man, 0)->message, R25_2_TWICE(" /actions/0", "permissions"));
     plugin_manifest_free(man);
 }
 
@@ -985,7 +1053,7 @@ TEST(a_repeated_key_with_a_slash_has_an_escaped_pointer)
 {
     PluginManifest *man = given_parse(HEAD ACTIONS ",\"a/b\":1,\"a/b\":2}", PLUGIN_PARSE_INVALID);
 
-    ASSERT_STREQ(man->errors[0].path, "/a~1b");
+    ASSERT_STREQ(error_at(man, 0)->path, "/a~1b");
     plugin_manifest_free(man);
 }
 
@@ -1027,8 +1095,8 @@ TEST(two_errors_in_one_file_both_come_back_from_one_parse)
         PLUGIN_PARSE_INVALID);
 
     ASSERT_EQ_INT(man->nerrors, 2);
-    ASSERT_STREQ(man->errors[0].path, "/name");
-    ASSERT_STREQ(man->errors[1].path, "/filters/0/run/proces");
+    ASSERT_STREQ(error_at(man, 0)->path, "/name");
+    ASSERT_STREQ(error_at(man, 1)->path, "/filters/0/run/proces");
     plugin_manifest_free(man);
 }
 
@@ -1040,11 +1108,11 @@ TEST(a_missing_name_does_not_hide_the_errors_after_it)
         PLUGIN_PARSE_INVALID);
 
     ASSERT_EQ_INT(man->nerrors, 5);
-    ASSERT_STREQ(man->errors[0].message, R25_2_MISSING("", "name"));
-    ASSERT_STREQ(man->errors[1].path, "/plugin_version");
-    ASSERT_STREQ(man->errors[2].path, "/description");
-    ASSERT_STREQ(man->errors[3].path, "/data_version");
-    ASSERT_STREQ(man->errors[4].path, "/idle_timeout");
+    ASSERT_STREQ(error_at(man, 0)->message, R25_2_MISSING("", "name"));
+    ASSERT_STREQ(error_at(man, 1)->path, "/plugin_version");
+    ASSERT_STREQ(error_at(man, 2)->path, "/description");
+    ASSERT_STREQ(error_at(man, 3)->path, "/data_version");
+    ASSERT_STREQ(error_at(man, 4)->path, "/idle_timeout");
     plugin_manifest_free(man);
 }
 
@@ -1255,7 +1323,7 @@ TEST(a_command_argument_of_255_bytes_fits_and_256_does_not)
     plugin_manifest_free(man);
     (void)snprintf(doc, sizeof(doc), fmt, over);
     man = given_parse(doc, PLUGIN_PARSE_INVALID);
-    ASSERT_STREQ(man->errors[0].path, "/actions/0/run/command/0");
+    ASSERT_STREQ(error_at(man, 0)->path, "/actions/0/run/command/0");
     plugin_manifest_free(man);
 }
 
@@ -1372,14 +1440,14 @@ TEST(an_action_filter_block_keeps_every_list)
 
 TEST(a_filter_block_that_is_not_an_object_must_be_an_object)
 {
-    expect_error(HEAD "\"actions\":[" ACTION_BODY ",\"filter\":[]}]}", "/actions/0/filter", "R2.5",
+    expect_error(HEAD "\"actions\":[" ACTION_BODY ",\"filter\":[]}]}", "/actions/0/filter", "R2.21",
                  R25_2_MUST_BE("/actions/0/filter", "an object"), R25_2_USE("an object"));
 }
 
 TEST(tags_that_are_not_an_object_must_be_an_object)
 {
     expect_error(HEAD "\"actions\":[" ACTION_BODY ",\"filter\":{\"tags\":3}}]}",
-                 "/actions/0/filter/tags", "R2.5",
+                 "/actions/0/filter/tags", "R2.21",
                  R25_2_MUST_BE("/actions/0/filter/tags", "an object"), R25_2_USE("an object"));
 }
 
@@ -1642,7 +1710,7 @@ TEST(backfill_enabled_is_required_and_a_boolean)
                  R25_2_MISSING(" /backfill", "enabled"), R25_2_ADD("enabled"));
     expect_error(HEAD FILTERS ",\"backfill\":{\"enabled\":\"yes\"}}", "/backfill/enabled", "R2.17",
                  R25_2_MUST_BE("/backfill/enabled", "true or false"), R25_2_USE("true or false"));
-    expect_error(HEAD FILTERS ",\"backfill\":3}", "/backfill", "R2.5",
+    expect_error(HEAD FILTERS ",\"backfill\":3}", "/backfill", "R2.17",
                  R25_2_MUST_BE("/backfill", "an object"), R25_2_USE("an object"));
 }
 
@@ -1738,7 +1806,7 @@ TEST(a_description_of_200_characters_fits_and_201_does_not)
     expect_ok(doc);
     (void)snprintf(doc, sizeof(doc), HEAD ACTIONS ",\"description\":\"%s\"}", over);
     man = given_parse(doc, PLUGIN_PARSE_INVALID);
-    ASSERT_STREQ(man->errors[0].message,
+    ASSERT_STREQ(error_at(man, 0)->message,
                  R25_2_MUST_BE("/description", "a string of at most 200 characters"));
     ASSERT_FALSE(man->has_description);
     plugin_manifest_free(man);
@@ -1752,7 +1820,7 @@ TEST(a_description_of_800_bytes_in_one_hundred_characters_beyond_the_buffer_is_r
 
     (void)snprintf(doc, sizeof(doc), HEAD ACTIONS ",\"description\":\"%s\"}", big);
     man = given_parse(doc, PLUGIN_PARSE_INVALID);
-    ASSERT_STREQ(man->errors[0].path, "/description");
+    ASSERT_STREQ(error_at(man, 0)->path, "/description");
     plugin_manifest_free(man);
 }
 
@@ -1802,9 +1870,6 @@ TEST(data_version_and_idle_timeout_defaults_and_limits)
     ASSERT_EQ_INT(man->data_version, 2147483647);
     ASSERT_FALSE(man->has_idle_timeout);
     plugin_manifest_free(man);
-    expect_error(HEAD ACTIONS ",\"data_version\":2147483648}", "/data_version", "R2.14",
-                 R25_2_MUST_BE("/data_version", "a whole number of 1 or more"),
-                 R25_2_USE("a whole number of 1 or more"));
     expect_error(HEAD ACTIONS ",\"data_version\":1.5}", "/data_version", "R2.14",
                  R25_2_MUST_BE("/data_version", "a whole number of 1 or more"),
                  R25_2_USE("a whole number of 1 or more"));
@@ -1925,7 +1990,7 @@ TEST(a_string_default_of_511_bytes_fits_and_512_does_not)
     plugin_manifest_free(man);
     (void)snprintf(doc, sizeof(doc), SETTING_DOC("\"type\":\"string\",\"default\":\"%s\""), over);
     man = given_parse(doc, PLUGIN_PARSE_INVALID);
-    ASSERT_STREQ(man->errors[0].message,
+    ASSERT_STREQ(error_at(man, 0)->message,
                  R25_2_MUST_BE("/settings/0/default", "a string of at most 511 bytes"));
     plugin_manifest_free(man);
 }
@@ -1972,10 +2037,10 @@ TEST(a_setting_needs_key_description_type_and_default)
     PluginManifest *man = given_parse(HEAD ACTIONS ",\"settings\":[{}]}", PLUGIN_PARSE_INVALID);
 
     ASSERT_EQ_INT(man->nerrors, 4);
-    ASSERT_STREQ(man->errors[0].message, R25_2_MISSING(" /settings/0", "key"));
-    ASSERT_STREQ(man->errors[1].message, R25_2_MISSING(" /settings/0", "description"));
-    ASSERT_STREQ(man->errors[2].message, R25_2_MISSING(" /settings/0", "type"));
-    ASSERT_STREQ(man->errors[3].message, R25_2_MISSING(" /settings/0", "default"));
+    ASSERT_STREQ(error_at(man, 0)->message, R25_2_MISSING(" /settings/0", "key"));
+    ASSERT_STREQ(error_at(man, 1)->message, R25_2_MISSING(" /settings/0", "description"));
+    ASSERT_STREQ(error_at(man, 2)->message, R25_2_MISSING(" /settings/0", "type"));
+    ASSERT_STREQ(error_at(man, 3)->message, R25_2_MISSING(" /settings/0", "default"));
     plugin_manifest_free(man);
 }
 
@@ -1997,7 +2062,7 @@ TEST(a_setting_type_outside_the_seven_is_refused)
 
 TEST(a_setting_that_is_not_an_object_and_a_settings_that_is_not_a_list_are_refused)
 {
-    expect_error(HEAD ACTIONS ",\"settings\":[1]}", "/settings/0", "R2.5",
+    expect_error(HEAD ACTIONS ",\"settings\":[1]}", "/settings/0", "R2.11",
                  R25_2_MUST_BE("/settings/0", "an object"), R25_2_USE("an object"));
     expect_error(HEAD ACTIONS ",\"settings\":{}}", "/settings", "R2.11",
                  R25_2_MUST_BE("/settings", "a list of at most 16 settings"),
@@ -2086,12 +2151,17 @@ TEST(an_enum_needs_a_range_with_values_and_a_default_in_them)
                  R25_2_USE("one of the \"values\" in \"range\""));
 }
 
-TEST(enum_values_are_one_to_eight_strings_of_63_bytes)
+/* The schema and the approved phrase ("a list of at most 8 strings") allow an empty list. */
+TEST(an_empty_enum_values_list_is_a_list_and_the_default_is_not_in_it)
 {
     expect_error(SETTING_DOC("\"type\":\"enum\",\"default\":\"a\",\"range\":{\"values\":[]}"),
-                 "/settings/0/range/values", "R2.11",
-                 R25_2_MUST_BE("/settings/0/range/values", "a list of at most 8 strings"),
-                 R25_2_USE("a list of at most 8 strings"));
+                 "/settings/0/default", "R2.11",
+                 R25_2_MUST_BE("/settings/0/default", "one of the \"values\" in \"range\""),
+                 R25_2_USE("one of the \"values\" in \"range\""));
+}
+
+TEST(enum_values_are_at_most_eight_strings_of_63_bytes)
+{
     expect_error(
         SETTING_DOC("\"type\":\"enum\",\"default\":\"a\",\"range\":{\"values\":[\"a\",3]}"),
         "/settings/0/range/values/1", "R2.11",
@@ -2102,7 +2172,7 @@ TEST(enum_values_are_one_to_eight_strings_of_63_bytes)
 TEST(a_range_that_is_not_an_object_is_refused)
 {
     expect_error(SETTING_DOC("\"type\":\"integer\",\"default\":1,\"range\":5"), "/settings/0/range",
-                 "R2.5", R25_2_MUST_BE("/settings/0/range", "an object"), R25_2_USE("an object"));
+                 "R2.11", R25_2_MUST_BE("/settings/0/range", "an object"), R25_2_USE("an object"));
 }
 
 TEST(an_integer_range_checks_its_default_and_its_order)
@@ -2246,11 +2316,11 @@ TEST(nesting_past_64_levels_has_its_own_sentence)
     append(doc, sizeof(doc), "}");
     man = given_parse(doc, PLUGIN_PARSE_SYNTAX);
     ASSERT_EQ_INT(man->nerrors, 1);
-    ASSERT_STREQ(man->errors[0].code, "plugin_manifest_invalid");
-    ASSERT_STREQ(man->errors[0].path, "");
-    ASSERT_STREQ(man->errors[0].rule, "R2.2");
-    ASSERT_STREQ(man->errors[0].message, "plugin.json is nested more than 64 levels deep.");
-    ASSERT_STREQ(man->errors[0].fix, "Reduce the nesting in plugin.json to 64 levels or fewer.");
+    ASSERT_STREQ(error_at(man, 0)->code, "plugin_manifest_invalid");
+    ASSERT_STREQ(error_at(man, 0)->path, "");
+    ASSERT_STREQ(error_at(man, 0)->rule, "R2.2");
+    ASSERT_STREQ(error_at(man, 0)->message, "plugin.json is nested more than 64 levels deep.");
+    ASSERT_STREQ(error_at(man, 0)->fix, "Reduce the nesting in plugin.json to 64 levels or fewer.");
     plugin_manifest_free(man);
 }
 
@@ -2293,7 +2363,7 @@ TEST(a_control_byte_in_an_unknown_field_name_is_kept_for_the_printer_to_mask)
 {
     PluginManifest *man = given_parse(HEAD ACTIONS ",\"a\\u001b[2J\\nb\":1}", PLUGIN_PARSE_OK);
 
-    ASSERT_STREQ(man->warnings[0].field, "a\x1b[2J\nb");
+    ASSERT_STREQ(warning_at(man, 0)->field, "a\x1b[2J\nb");
     plugin_manifest_free(man);
 }
 
@@ -2523,10 +2593,10 @@ TEST(q2_an_unknown_field_name_prints_escaped_in_the_message_and_the_fix)
              "\"run\":{\"process\":\"persistent\",\"command\":[\"x\"],\"a\\\"b\\\\c\\nd\":1}}]}",
         PLUGIN_PARSE_INVALID);
 
-    ASSERT_STREQ(man->errors[0].message,
+    ASSERT_STREQ(error_at(man, 0)->message,
                  "plugin.json /filters/0/run: unknown field \"a\\\"b\\\\c\\nd\".");
-    ASSERT_STREQ(man->errors[0].fix, "Remove \"a\\\"b\\\\c\\nd\".");
-    ASSERT_STREQ(man->errors[0].path, "/filters/0/run/a\"b\\c\nd");
+    ASSERT_STREQ(error_at(man, 0)->fix, "Remove \"a\\\"b\\\\c\\nd\".");
+    ASSERT_STREQ(error_at(man, 0)->path, "/filters/0/run/a\"b\\c\nd");
     plugin_manifest_free(man);
 }
 
@@ -2538,8 +2608,8 @@ TEST(q2_an_escape_a_delete_and_a_c1_control_print_as_u_escapes)
                          "\"\\u001b[2J\\u007f\\u0085\\t\\r\\b\\f\":1}}]}",
                     PLUGIN_PARSE_INVALID);
 
-    ASSERT_STREQ(man->errors[0].message, "plugin.json /filters/0/run: unknown field "
-                                         "\"\\u001b[2J\\u007f\\u0085\\t\\r\\b\\f\".");
+    ASSERT_STREQ(error_at(man, 0)->message, "plugin.json /filters/0/run: unknown field "
+                                            "\"\\u001b[2J\\u007f\\u0085\\t\\r\\b\\f\".");
     plugin_manifest_free(man);
 }
 
@@ -2550,7 +2620,7 @@ TEST(q2_text_that_is_not_a_control_prints_as_written)
              "\"run\":{\"process\":\"persistent\",\"command\":[\"x\"],\"\xd7\x90\xc2\xa0z\":1}}]}",
         PLUGIN_PARSE_INVALID);
 
-    ASSERT_STREQ(man->errors[0].message,
+    ASSERT_STREQ(error_at(man, 0)->message,
                  "plugin.json /filters/0/run: unknown field \"\xd7\x90\xc2\xa0z\".");
     plugin_manifest_free(man);
 }
@@ -2575,10 +2645,10 @@ TEST(q2_the_plugin_name_in_a_protocol_error_prints_escaped)
                     "\"plugin_version\":\"1.0.0\",\"protocol\":2," ACTIONS "}",
                     PLUGIN_PARSE_UNSUPPORTED);
 
-    ASSERT_STREQ(man->errors[0].message,
+    ASSERT_STREQ(error_at(man, 1)->message,
                  "plugin.json /protocol: \"x\\ny\\\"\" was written for plugin protocol 2, and this "
                  "remember reads protocol 1.");
-    ASSERT_STREQ(man->errors[0].fix,
+    ASSERT_STREQ(error_at(man, 1)->fix,
                  "Update remember, or install an older version of \"x\\ny\\\"\".");
     plugin_manifest_free(man);
 }
@@ -2588,9 +2658,9 @@ TEST(q2_a_repeated_key_prints_escaped)
     PluginManifest *man =
         given_parse(HEAD ACTIONS ",\"a\\u001b\":1,\"a\\u001b\":2}", PLUGIN_PARSE_INVALID);
 
-    ASSERT_STREQ(man->errors[0].message, "plugin.json: \"a\\u001b\" appears more than once.");
-    ASSERT_STREQ(man->errors[0].fix, "Keep one \"a\\u001b\".");
-    ASSERT_STREQ(man->errors[0].path, "/a\x1b");
+    ASSERT_STREQ(error_at(man, 0)->message, "plugin.json: \"a\\u001b\" appears more than once.");
+    ASSERT_STREQ(error_at(man, 0)->fix, "Keep one \"a\\u001b\".");
+    ASSERT_STREQ(error_at(man, 0)->path, "/a\x1b");
     plugin_manifest_free(man);
 }
 
@@ -2645,7 +2715,7 @@ TEST(a_third_use_of_a_name_is_reported_again)
                     PLUGIN_PARSE_INVALID);
 
     ASSERT_EQ_INT(man->nerrors, 2);
-    ASSERT_STREQ(man->errors[1].path, "/actions/2/name");
+    ASSERT_STREQ(error_at(man, 1)->path, "/actions/2/name");
     plugin_manifest_free(man);
 }
 
@@ -2657,8 +2727,8 @@ TEST(an_invalid_name_is_not_also_reported_as_a_repeat)
                                       PLUGIN_PARSE_INVALID);
 
     ASSERT_EQ_INT(man->nerrors, 2);
-    ASSERT_STR_CONTAINS(man->errors[0].message, "isn't a valid name");
-    ASSERT_STR_CONTAINS(man->errors[1].message, "isn't a valid name");
+    ASSERT_STR_CONTAINS(error_at(man, 0)->message, "isn't a valid name");
+    ASSERT_STR_CONTAINS(error_at(man, 1)->message, "isn't a valid name");
     plugin_manifest_free(man);
 }
 
@@ -2676,9 +2746,9 @@ TEST(each_persistent_entry_that_differs_gets_its_own_error)
                     PLUGIN_PARSE_INVALID);
 
     ASSERT_EQ_INT(man->nerrors, 2);
-    ASSERT_STREQ(man->errors[0].path, "/actions/1/run/command");
-    ASSERT_STREQ(man->errors[1].path, "/actions/3/run/command");
-    ASSERT_STR_CONTAINS(man->errors[1].message, "different command than /actions/0.");
+    ASSERT_STREQ(error_at(man, 0)->path, "/actions/1/run/command");
+    ASSERT_STREQ(error_at(man, 1)->path, "/actions/3/run/command");
+    ASSERT_STR_CONTAINS(error_at(man, 1)->message, "different command than /actions/0.");
     plugin_manifest_free(man);
 }
 
@@ -2696,10 +2766,10 @@ TEST(q1_a_nineteen_digit_protocol_prints_its_digits_and_not_a_saturated_value)
     PluginManifest *man =
         given_parse(PROTOCOL_DOC("9999999999999999999"), PLUGIN_PARSE_UNSUPPORTED);
 
-    ASSERT_STR_CONTAINS(man->errors[0].message, "plugin protocol 9999999999999999999, and");
+    ASSERT_STR_CONTAINS(error_at(man, 0)->message, "plugin protocol 9999999999999999999, and");
     plugin_manifest_free(man);
     man = given_parse(PROTOCOL_DOC("-123456789012345678"), PLUGIN_PARSE_UNSUPPORTED);
-    ASSERT_STR_CONTAINS(man->errors[0].message, "plugin protocol -123456789012345678, and");
+    ASSERT_STR_CONTAINS(error_at(man, 0)->message, "plugin protocol -123456789012345678, and");
     plugin_manifest_free(man);
 }
 
@@ -2708,14 +2778,14 @@ TEST(q1_a_whole_number_of_64_digits_is_printed_and_one_of_65_is_not_whole)
     PluginManifest *man = given_parse(PROTOCOL_DOC("1e63"), PLUGIN_PARSE_UNSUPPORTED);
 
     ASSERT_STR_CONTAINS(
-        man->errors[0].message,
+        error_at(man, 0)->message,
         "plugin protocol 1000000000000000000000000000000000000000000000000000000000000000, and");
     plugin_manifest_free(man);
     man = given_parse(PROTOCOL_DOC("1e64"), PLUGIN_PARSE_INVALID);
-    ASSERT_STREQ(man->errors[0].message, R25_2_MUST_BE("/protocol", "a whole number"));
+    ASSERT_STREQ(error_at(man, 0)->message, R25_2_MUST_BE("/protocol", "a whole number"));
     plugin_manifest_free(man);
     man = given_parse(PROTOCOL_DOC("5e-2"), PLUGIN_PARSE_INVALID);
-    ASSERT_STREQ(man->errors[0].message, R25_2_MUST_BE("/protocol", "a whole number"));
+    ASSERT_STREQ(error_at(man, 0)->message, R25_2_MUST_BE("/protocol", "a whole number"));
     plugin_manifest_free(man);
 }
 
@@ -2726,7 +2796,7 @@ TEST(q2_a_unit_separator_escapes_and_a_space_does_not)
              "\"run\":{\"process\":\"persistent\",\"command\":[\"x\"],\"a\\u001f \\u0085\":1}}]}",
         PLUGIN_PARSE_INVALID);
 
-    ASSERT_STREQ(man->errors[0].message,
+    ASSERT_STREQ(error_at(man, 0)->message,
                  "plugin.json /filters/0/run: unknown field \"a\\u001f \\u0085\".");
     plugin_manifest_free(man);
 }
@@ -2748,9 +2818,9 @@ TEST(a_repeated_key_is_the_later_one_and_errors_come_in_document_order)
         PLUGIN_PARSE_INVALID);
 
     ASSERT_EQ_INT(man->nerrors, 3);
-    ASSERT_STREQ(man->errors[0].message, R25_2_UNKNOWN(" /filters/0/run", "zz"));
-    ASSERT_STREQ(man->errors[1].message, R25_2_UNKNOWN(" /filters/0/run", "yy"));
-    ASSERT_STREQ(man->errors[2].message, R25_2_TWICE(" /filters/0/run", "zz"));
+    ASSERT_STREQ(error_at(man, 0)->message, R25_2_UNKNOWN(" /filters/0/run", "zz"));
+    ASSERT_STREQ(error_at(man, 1)->message, R25_2_UNKNOWN(" /filters/0/run", "yy"));
+    ASSERT_STREQ(error_at(man, 2)->message, R25_2_TWICE(" /filters/0/run", "zz"));
     plugin_manifest_free(man);
 }
 
@@ -2761,15 +2831,231 @@ TEST(q1_a_65_digit_integer_is_not_a_whole_number_and_a_64_digit_one_is_printed)
 
     (void)snprintf(token, sizeof(token), "1%s", given_run_of('0', 64));
     man = given_parse(PROTOCOL_DOC_OF(token), PLUGIN_PARSE_INVALID);
-    ASSERT_STREQ(man->errors[0].message, R25_2_MUST_BE("/protocol", "a whole number"));
+    ASSERT_STREQ(error_at(man, 0)->message, R25_2_MUST_BE("/protocol", "a whole number"));
     plugin_manifest_free(man);
     (void)snprintf(token, sizeof(token), "1%s", given_run_of('0', 63));
     man = given_parse(PROTOCOL_DOC_OF(token), PLUGIN_PARSE_UNSUPPORTED);
-    ASSERT_EQ_INT(strlen(man->errors[0].message),
+    ASSERT_EQ_INT(strlen(error_at(man, 0)->message),
                   strlen("plugin.json /protocol: \"a\" was written for plugin protocol , and this "
                          "remember reads protocol 1.") +
                       64U);
     plugin_manifest_free(man);
+}
+
+/* The schema gives data_version a minimum and no maximum, so a value past 32 bits parses. */
+TEST(a_data_version_past_32_bits_parses)
+{
+    PluginManifest *man =
+        given_parse(HEAD ACTIONS ",\"data_version\":2147483648}", PLUGIN_PARSE_OK);
+
+    ASSERT_EQ_INT(man->data_version, 2147483648LL);
+    plugin_manifest_free(man);
+}
+
+/* Q1 reads by value: zeros after the point add no digit, so 70 of them still read 1. */
+/* R25-2 sentence 13: every filter is persistent, so a filter with a broken "process" is enough. */
+TEST(backfill_with_a_filter_whose_process_is_missing_names_only_the_process)
+{
+    PluginManifest *man =
+        given_parse(HEAD "\"backfill\":{\"enabled\":true},\"filters\":[{\"name\":\"f\",\"point\":"
+                         "\"search.query\",\"run\":{\"command\":[\"x\"]}}]}",
+                    PLUGIN_PARSE_INVALID);
+
+    ASSERT_EQ_INT(man->nerrors, 1);
+    ASSERT_STREQ(error_at(man, 0)->message, "plugin.json /filters/0/run: \"process\" is missing.");
+    plugin_manifest_free(man);
+}
+
+/* "One parse returns every error in the file": every bad command item, not the first. */
+TEST(every_bad_command_item_gets_its_own_error)
+{
+    PluginManifest *man =
+        given_parse(HEAD "\"actions\":[{\"name\":\"go\",\"events\":[\"memory.created\"],"
+                         "\"run\":{\"command\":[\"x\",\"\",\"\"]}}]}",
+                    PLUGIN_PARSE_INVALID);
+
+    ASSERT_EQ_INT(man->nerrors, 2);
+    ASSERT_STREQ(error_at(man, 0)->path, "/actions/0/run/command/1");
+    ASSERT_STREQ(error_at(man, 1)->path, "/actions/0/run/command/2");
+    plugin_manifest_free(man);
+}
+
+/* Q1: a 19-digit whole number that fits a long long is read; one past it is not. */
+TEST(q1_a_19_digit_whole_number_that_fits_is_read)
+{
+    PluginManifest *man = given_parse(
+        SETTING_DOC("\"type\":\"integer\",\"default\":9223372036854775807"), PLUGIN_PARSE_OK);
+
+    plugin_manifest_free(man);
+    man = given_parse(SETTING_DOC("\"type\":\"integer\",\"default\":1e18"), PLUGIN_PARSE_OK);
+    plugin_manifest_free(man);
+    expect_error(SETTING_DOC("\"type\":\"integer\",\"default\":9223372036854775808"),
+                 "/settings/0/default", "R2.11",
+                 R25_2_MUST_BE("/settings/0/default", "a whole number"),
+                 R25_2_USE("a whole number"));
+}
+
+TEST(an_enum_default_that_is_not_a_string_uses_the_enum_phrase)
+{
+    expect_error(SETTING_DOC("\"type\":\"enum\",\"default\":5,\"range\":{\"values\":[\"a\"]}"),
+                 "/settings/0/default", "R2.11",
+                 R25_2_MUST_BE("/settings/0/default", "one of the \"values\" in \"range\""),
+                 R25_2_USE("one of the \"values\" in \"range\""));
+}
+
+/* Sentence 7b once, at the first "run"; sentence 8 at the second. */
+TEST(a_repeated_top_level_run_is_misplaced_once_and_repeated_once)
+{
+    PluginManifest *man =
+        given_parse(HEAD "\"run\":1,\"run\":2," ACTIONS "}", PLUGIN_PARSE_INVALID);
+
+    ASSERT_EQ_INT(man->nerrors, 2);
+    ASSERT_STREQ(error_at(man, 0)->message, "plugin.json: \"run\" can't be at the top level.");
+    ASSERT_STREQ(error_at(man, 1)->message, R25_2_TWICE("", "run"));
+    plugin_manifest_free(man);
+}
+
+/* R25-2: "The order is document order", across the whole file, not per check. */
+TEST(errors_come_in_document_order_across_the_file)
+{
+    PluginManifest *man = given_parse(
+        "{\"actions\":[{\"name\":\"Bad\",\"events\":[\"memory.created\"]," ACTION_RUN "}],"
+        "\"format\":\"nope\",\"version\":1,\"protocol\":1,\"name\":\"wake\","
+        "\"plugin_version\":\"1.0.0\"}",
+        PLUGIN_PARSE_INVALID);
+
+    ASSERT_EQ_INT(man->nerrors, 2);
+    ASSERT_STREQ(error_at(man, 0)->path, "/actions/0/name");
+    ASSERT_STREQ(error_at(man, 1)->path, "/format");
+    plugin_manifest_free(man);
+}
+
+/* "A repeated key in any object is an error": inside values the schema leaves open too. */
+TEST(a_repeated_key_inside_an_unknown_member_is_an_error)
+{
+    PluginManifest *man = given_parse(
+        HEAD "\"x_custom\":{\"k\":1,\"k\":2},\"x_list\":[{\"j\":1,\"j\":2}]," ACTIONS "}",
+        PLUGIN_PARSE_INVALID);
+
+    ASSERT_EQ_INT(man->nerrors, 2);
+    ASSERT_STREQ(error_at(man, 0)->path, "/x_custom/k");
+    ASSERT_STREQ(error_at(man, 0)->message, R25_2_TWICE(" /x_custom", "k"));
+    ASSERT_STREQ(error_at(man, 1)->path, "/x_list/0/j");
+    ASSERT_EQ_INT(man->nwarnings, 2);
+    plugin_manifest_free(man);
+}
+
+/* Events may repeat (the schema has no uniqueItems there), and "memory.*" twice lists no other. */
+/* Q2 reaches the pointer in <where>: a repeat under a hostile unknown key prints it escaped. */
+TEST(q2_a_pointer_in_a_message_prints_escaped)
+{
+    PluginManifest *man = given_parse(HEAD "\"x\\u001b[2J\\\"\":{\"k\":1,\"k\":2}," ACTIONS "}",
+                                      PLUGIN_PARSE_INVALID);
+
+    ASSERT_EQ_INT(man->nerrors, 1);
+    ASSERT_STREQ(error_at(man, 0)->message, R25_2_TWICE(" /x\\u001b[2J\\\"", "k"));
+    ASSERT_STREQ(error_at(man, 0)->path, "/x\033[2J\"/k");
+    plugin_manifest_free(man);
+}
+
+/* DoD: 1.0, 1e0 and -0 by value in every whole-number field (where 0 is out of range, -0 is the
+   range error, as 0 is). */
+TEST(q1_every_whole_field_reads_1_0_1e0_and_minus_0_by_value)
+{
+    static const char *const ones[] = {"1.0", "1e0"};
+    size_t i = 0;
+
+    for (i = 0; i < 2U; i++) {
+        char doc[1024];
+        PluginManifest *man = NULL;
+
+        (void)snprintf(doc, sizeof(doc),
+                       "{\"format\":\"remember-plugin\",\"version\":%s,\"name\":\"wake\","
+                       "\"plugin_version\":\"1.0.0\",\"protocol\":%s,\"data_version\":%s,"
+                       "\"backfill\":{\"enabled\":true,\"max_batch_entries\":%s},"
+                       "\"filters\":[{\"name\":\"rank\",\"point\":\"search.results\","
+                       "\"priority\":%s," FILTER_RUN "}],"
+                       "\"settings\":[{\"key\":\"n\",\"description\":\"d\",\"type\":\"integer\","
+                       "\"default\":%s}]}",
+                       ones[i], ones[i], ones[i], ones[i], ones[i], ones[i]);
+        man = given_parse(doc, PLUGIN_PARSE_OK);
+        ASSERT_EQ_INT(man->data_version, 1);
+        ASSERT_EQ_INT(man->max_batch_entries, 1);
+        ASSERT_EQ_INT(man->entries[0].priority, 1);
+        ASSERT_STREQ(man->settings[0].default_text, "1");
+        plugin_manifest_free(man);
+    }
+    expect_error(HEAD FILTERS ",\"data_version\":-0}", "/data_version", "R2.14",
+                 R25_2_MUST_BE("/data_version", "a whole number of 1 or more"),
+                 R25_2_USE("a whole number of 1 or more"));
+    expect_ok(SETTING_DOC("\"type\":\"integer\",\"default\":-0"));
+}
+
+TEST(q1_protocol_2_0_prints_2_in_the_no_name_sentence_too)
+{
+    PluginManifest *man =
+        given_parse(MINIMAL("\"version\":1,\"protocol\":2.0"), PLUGIN_PARSE_UNSUPPORTED);
+
+    ASSERT_STREQ(error_at(man, 1)->message,
+                 "plugin.json /protocol: this plugin was written for plugin protocol 2, and this "
+                 "remember reads protocol 1.");
+    plugin_manifest_free(man);
+}
+
+/* DoD: 24 bytes is the ordinary phrase, with no 23-byte wording; 23 bytes is read by value. */
+TEST(q3_24_bytes_is_the_ordinary_phrase_and_23_bytes_is_read)
+{
+    PluginManifest *man = NULL;
+
+    expect_error(HEAD ACTIONS ",\"idle_timeout\":\"0000000000000000000001ms\"}", "/idle_timeout",
+                 "R2.20", R25_2_MUST_BE("/idle_timeout", "a duration like \"10m\""),
+                 R25_2_USE("a duration like \"10m\""));
+    expect_error(SETTING_DOC("\"type\":\"size\",\"default\":\"00000000000000000000001B\""),
+                 "/settings/0/default", "R2.11",
+                 R25_2_MUST_BE("/settings/0/default", "a size like \"4MiB\""),
+                 R25_2_USE("a size like \"4MiB\""));
+    man =
+        given_parse(HEAD ACTIONS ",\"idle_timeout\":\"000000000000000000001ms\"}", PLUGIN_PARSE_OK);
+    ASSERT_EQ_INT(man->idle_timeout_ms, 1);
+    plugin_manifest_free(man);
+    expect_ok(SETTING_DOC("\"type\":\"size\",\"default\":\"0000000000000000000001B\""));
+}
+
+TEST(memory_star_listed_twice_is_still_alone)
+{
+    PluginManifest *man = given_parse(
+        HEAD "\"actions\":[{\"name\":\"go\",\"events\":[\"memory.*\",\"memory.*\"]," ACTION_RUN
+             "}]}",
+        PLUGIN_PARSE_OK);
+
+    plugin_manifest_free(man);
+}
+
+TEST(q1_zeros_after_the_point_are_not_digits)
+{
+    expect_ok(
+        PROTOCOL_DOC("1.0000000000000000000000000000000000000000000000000000000000000000000000"));
+}
+
+/* The broken command already has its error. Comparing it with the first command says nothing. */
+TEST(a_persistent_entry_with_a_broken_command_gets_only_its_command_error)
+{
+    expect_error(HEAD "\"filters\":[" FILTER_BODY "},{\"name\":\"two\",\"point\":\"search.query\","
+                      "\"run\":{\"process\":\"persistent\",\"command\":[\"\"]}}]}",
+                 "/filters/1/run/command/0", "R2.8",
+                 R25_2_MUST_BE("/filters/1/run/command/0", "a string of 1 to 255 bytes"),
+                 R25_2_USE("a string of 1 to 255 bytes"));
+}
+
+/* The entry is persistent, so backfill has its persistent entry: only the command is wrong. */
+TEST(backfill_with_a_persistent_entry_whose_command_is_broken_names_only_the_command)
+{
+    expect_error(HEAD "\"actions\":[{\"name\":\"go\",\"events\":[\"memory.created\"],"
+                      "\"run\":{\"process\":\"persistent\",\"command\":[\"\"]}}],"
+                      "\"backfill\":{\"enabled\":true}}",
+                 "/actions/0/run/command/0", "R2.8",
+                 R25_2_MUST_BE("/actions/0/run/command/0", "a string of 1 to 255 bytes"),
+                 R25_2_USE("a string of 1 to 255 bytes"));
 }
 
 void register_plugins_tests(void)
@@ -2791,6 +3077,8 @@ void register_plugins_tests(void)
     RUN_TEST(a_key_with_a_nul_escape_is_not_json_so_it_cannot_alias_a_field);
     RUN_TEST(a_setting_key_enabled_prints_the_c36_reserved_key_lines);
     RUN_TEST(a_reserved_setting_key_in_a_manifest_with_no_name_says_this_plugin);
+    RUN_TEST(a_reserved_setting_key_names_a_string_name_even_when_the_name_is_invalid);
+    RUN_TEST(the_c36_reserved_key_line_escapes_a_hostile_plugin_name);
     RUN_TEST(a_setting_key_with_a_hyphen_prints_the_c36_hyphen_lines);
     RUN_TEST(protocol_2_returns_plugin_protocol_unsupported_with_the_r25_1_message_and_fix);
     RUN_TEST(q1_protocol_written_as_1_0_or_1e0_is_protocol_1);
@@ -2907,7 +3195,8 @@ void register_plugins_tests(void)
     RUN_TEST(a_setting_scope_defaults_to_user_and_reads_user_brain_and_both);
     RUN_TEST(a_setting_scope_outside_the_three_is_refused);
     RUN_TEST(an_enum_needs_a_range_with_values_and_a_default_in_them);
-    RUN_TEST(enum_values_are_one_to_eight_strings_of_63_bytes);
+    RUN_TEST(an_empty_enum_values_list_is_a_list_and_the_default_is_not_in_it);
+    RUN_TEST(enum_values_are_at_most_eight_strings_of_63_bytes);
     RUN_TEST(a_range_that_is_not_an_object_is_refused);
     RUN_TEST(an_integer_range_checks_its_default_and_its_order);
     RUN_TEST(a_range_with_only_min_or_only_max_parses);
@@ -2960,6 +3249,22 @@ void register_plugins_tests(void)
     RUN_TEST(a_min_one_above_max_is_refused);
     RUN_TEST(a_repeated_key_is_the_later_one_and_errors_come_in_document_order);
     RUN_TEST(q1_a_65_digit_integer_is_not_a_whole_number_and_a_64_digit_one_is_printed);
+    RUN_TEST(a_data_version_past_32_bits_parses);
+    RUN_TEST(q1_zeros_after_the_point_are_not_digits);
+    RUN_TEST(backfill_with_a_filter_whose_process_is_missing_names_only_the_process);
+    RUN_TEST(every_bad_command_item_gets_its_own_error);
+    RUN_TEST(q1_a_19_digit_whole_number_that_fits_is_read);
+    RUN_TEST(an_enum_default_that_is_not_a_string_uses_the_enum_phrase);
+    RUN_TEST(a_repeated_top_level_run_is_misplaced_once_and_repeated_once);
+    RUN_TEST(errors_come_in_document_order_across_the_file);
+    RUN_TEST(a_repeated_key_inside_an_unknown_member_is_an_error);
+    RUN_TEST(memory_star_listed_twice_is_still_alone);
+    RUN_TEST(q2_a_pointer_in_a_message_prints_escaped);
+    RUN_TEST(q1_every_whole_field_reads_1_0_1e0_and_minus_0_by_value);
+    RUN_TEST(q1_protocol_2_0_prints_2_in_the_no_name_sentence_too);
+    RUN_TEST(q3_24_bytes_is_the_ordinary_phrase_and_23_bytes_is_read);
+    RUN_TEST(a_persistent_entry_with_a_broken_command_gets_only_its_command_error);
+    RUN_TEST(backfill_with_a_persistent_entry_whose_command_is_broken_names_only_the_command);
 }
 
 // NOLINTEND(cppcoreguidelines-avoid-magic-numbers,readability-magic-numbers)

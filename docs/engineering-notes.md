@@ -222,8 +222,9 @@ Rules:
 
 ## Plugin manifest (plan 25)
 
-- `plugin_manifest_parse` is pure: bytes in, a manifest out. The caller prints. It reports each unknown field of an open object through `diag_unknown_field` (once per file), and prints every `PluginError` as `remember: <message> <fix>`. It masks C0, DEL and C1 bytes first, because a name from the file is echoed whole (`output_text_human`).
-- Duplicate keys and a `\u0000` escape never reach the parser: `jsonread` refuses the NUL, and `check_members` refuses a repeated key in every object. A new object kind in the manifest goes through `check_members` too.
+- `plugin_manifest_parse` is pure: bytes in, a manifest out. The caller prints. It reports each unknown field of an open object through `diag_unknown_field` (once per file), and prints every `PluginError` as `remember: <message> <fix>`. `message` and `fix` need no mask: the parser JSON-escapes every piece of plugin-controlled text in them, the pointer in `<where>` too, and DEL and C1 as well (R25-2 Q2). `path` and an unknown field's name are raw bytes; the JSON writer escapes them, and a plain printer must mask them.
+- Duplicate keys and a `\u0000` escape never reach the parser: `jsonread` refuses the NUL, and `check_repeats` walks the whole tree once, so a repeated key is an error in every object, inside unknown members too. A new object kind in the manifest goes through `check_members` for its unknown fields.
+- Errors come in document order (R25-2): `sort_errors` sorts them by the source offset of what each names. An error that can be raised once per member (a repeat, an unknown field) carries its offset when it is raised. Any other error is found from its pointer at the end, which is linear in each object's members, so only a bounded number of errors may go without an offset.
 - A limit that the schema does not state is a decision (`decision:2026-11-13-plugin-manifest-limits`). Adding a field with a fixed array needs a new limit entry there.
 - Run a mutation harness with a process-group kill and a `timeout` on every command. A mutant can loop forever, and an orphaned test process runs for days.
 

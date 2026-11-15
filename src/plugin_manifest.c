@@ -29,7 +29,7 @@ enum {
     WHAT_CAP = 64,
     WHOLE_TEXT_CAP = 72,
     WHOLE_DIGITS_MAX = 64,
-    WHOLE_FITS_DIGITS = 18,
+    WHOLE_FITS_DIGITS = 19, /* LLONG_MAX has 19 digits */
     EXPONENT_MAX = 100000,
     LIST_WHAT_CAP = ENUM_PHRASE_CAP + WHAT_CAP,
     NEED_WHAT_CAP = ENUM_PHRASE_CAP + 96,
@@ -65,6 +65,7 @@ static const char *const k_root_known[] = {
     "description", "data_version", "idle_timeout", "backfill",       "actions",
     "filters",     "settings",     "run",          "permissions",    "filter"};
 static const char *const k_root_misplaced[] = {"run", "permissions", "filter"};
+static const char k_llong_max[] = "9223372036854775807";
 static const char *const k_action_known[] = {"name", "events", "filter", "run", "permissions"};
 static const char *const k_filter_known[] = {
     "name", "point", "priority", "budget", "cold_start_grace", "run", "permissions"};
@@ -207,8 +208,9 @@ static char *dup_text(const char *text)
 static char *vfmt_alloc(const char *fmt, va_list args) __attribute__((format(printf, 1, 0)));
 
 /* A heap string exactly as long as the sentence (standard:c). NULL on OOM.
-   ponytail: same as commands_common.c fmt_valloc, which is CLI-layer and static;
-   share it from a text module when a third copy appears. */
+   ponytail: the second vfmt helper (commands_common.c fmt_valloc is static and CLI-layer), and
+   cmd_settings, commands_common, diag and import_read measure with snprintf(NULL, 0) inline. One
+   shared text helper would replace them all; that is its own change. */
 static char *vfmt_alloc(const char *fmt, va_list args)
 {
     /* NOLINTNEXTLINE(cppcoreguidelines-init-variables) */
@@ -270,6 +272,7 @@ typedef struct Report {
     const char *path;
     const int *supported;
     size_t nsupported;
+    size_t place; /* source offset + 1 of what the error names; 0: sort_errors finds it from path */
 } Report;
 
 /* Takes message and fix (heap). Any OOM marks the manifest; parse then returns OOM. */
@@ -296,7 +299,8 @@ static void add_error(PluginManifest *man, Report report, char *message, char *f
                                          .path = path_copy,
                                          .message = message,
                                          .fix = fix,
-                                         .nsupported = report.nsupported};
+                                         .nsupported = report.nsupported,
+                                         .at = report.place == 0U ? SIZE_MAX : report.place - 1U};
     man->nerrors += 1U;
 }
 
@@ -306,26 +310,31 @@ static void add_invalid(PluginManifest *man, const char *rule, const char *path,
     add_error(man, (Report){.code = k_invalid, .rule = rule, .path = path}, message, fix);
 }
 
+static char *json_escaped(const char *text);
+
 // NOLINTNEXTLINE(bugprone-easily-swappable-parameters): a path, then a printf format
 static char *where_message(const char *path, const char *fmt, ...)
     __attribute__((format(printf, 2, 3)));
 
-/* "plugin.json <path>: <sentence>" (R25-2). An empty path is the top level. */
+/* "plugin.json <path>: <sentence>" (R25-2). An empty path is the top level. The pointer is
+   escaped like any plugin-controlled text (Q2): a key under an open object can be anything. */
 // NOLINTNEXTLINE(bugprone-easily-swappable-parameters): a path, then a printf format
 static char *where_message(const char *path, const char *fmt, ...)
 {
     /* NOLINTNEXTLINE(cppcoreguidelines-init-variables) */
     va_list args;
     char *body = NULL;
+    char *escaped = json_escaped(path);
     char *out = NULL;
 
     va_start(args, fmt);
     body = vfmt_alloc(fmt, args);
     va_end(args);
-    if (body != NULL) {
-        out = fmt_alloc("plugin.json%s%s: %s", path[0] == '\0' ? "" : " ", path, body);
+    if (body != NULL && escaped != NULL) {
+        out = fmt_alloc("plugin.json%s%s: %s", path[0] == '\0' ? "" : " ", escaped, body);
     }
     free(body);
+    free(escaped);
     return out;
 }
 
@@ -430,7 +439,7 @@ static char *json_escaped(const char *text)
    kept once. A repeated entry name or setting key is renamed. */
 // NOLINTBEGIN(bugprone-easily-swappable-parameters): the list, then the repeated pointer, then text
 static void err_twice(PluginManifest *man, const char *rule, const char *where_path,
-                      const char *detail_path, const char *what, bool rename)
+                      const char *detail_path, const char *what, bool rename, size_t place)
 // NOLINTEND(bugprone-easily-swappable-parameters)
 {
     char *escaped = json_escaped(what);
@@ -445,8 +454,8 @@ static void err_twice(PluginManifest *man, const char *rule, const char *where_p
     } else {
         fix = fmt_alloc("Keep one \"%s\".", escaped);
     }
-    add_invalid(man, rule, detail_path,
-                where_message(where_path, "\"%s\" appears more than once.", escaped), fix);
+    add_error(man, (Report){.code = k_invalid, .rule = rule, .path = detail_path, .place = place},
+              where_message(where_path, "\"%s\" appears more than once.", escaped), fix);
     free(escaped);
 }
 
@@ -596,7 +605,7 @@ static bool *repeated_members(const JsonValue *obj)
 /* R25-2 sentence 7: unknown field on a closed object. The fix names the one known field of that
    object that is one edit away, when exactly one is (decision:plugin-manifest-errors). */
 static void err_unknown(PluginManifest *man, const char *rule, const char *path, const char *field,
-                        Names known)
+                        Names known, size_t place)
 {
     char *child = pointer_join(path, field);
     char *escaped = json_escaped(field);
@@ -620,16 +629,16 @@ static void err_unknown(PluginManifest *man, const char *rule, const char *path,
         free(fix);
         man->oom = true;
     } else {
-        add_invalid(man, rule, child, where_message(path, "unknown field \"%s\".", escaped), fix);
+        add_error(man, (Report){.code = k_invalid, .rule = rule, .path = child, .place = place},
+                  where_message(path, "unknown field \"%s\".", escaped), fix);
     }
     free(child);
     free(escaped);
 }
 
-/* Every object goes through here once: a repeated key is an error (a parser
-   that keeps the last value would read another manifest), and an unknown key
-   is an error on a closed object (unknown_rule is its rule) or a C-35 warning on an open one
-   (unknown_rule is NULL, R2.6). */
+/* Every object the schema names goes through here once: an unknown key is an error on a closed
+   object (unknown_rule is its rule) or a C-35 warning on an open one (unknown_rule is NULL, R2.6).
+   A repeated key is check_repeats' error, so it is skipped here. */
 static void check_members(PluginManifest *man, const JsonValue *obj, const char *path, Names known,
                           const char *unknown_rule)
 {
@@ -643,19 +652,12 @@ static void check_members(PluginManifest *man, const JsonValue *obj, const char 
     for (i = 0; i < obj->u.object.n; i++) {
         const char *key = obj->u.object.members[i].key;
 
-        if (repeated[i]) {
-            char *child = pointer_join(path, key);
-
-            if (child == NULL) {
-                man->oom = true;
-            } else {
-                err_twice(man, "R2.2", path, child, key, false);
-            }
-            free(child);
-        } else if (names_have(known, key)) {
+        if (repeated[i] || names_have(known, key)) {
             continue;
-        } else if (unknown_rule != NULL) {
-            err_unknown(man, unknown_rule, path, key, known);
+        }
+        if (unknown_rule != NULL) {
+            err_unknown(man, unknown_rule, path, key, known,
+                        obj->u.object.members[i].value->src_at + 1U);
         } else {
             add_unknown(man, path, key);
         }
@@ -663,12 +665,54 @@ static void check_members(PluginManifest *man, const JsonValue *obj, const char 
     free(repeated);
 }
 
+/* R25-2 sentence 8 for a repeated key, in every object of the file: a parser that kept the other
+   value would read another manifest. Each repeat is placed at its own member. jsonread caps the
+   depth at 64, so the recursion is bounded. */
+static void check_repeats(PluginManifest *man, const JsonValue *value, const char *path)
+{
+    size_t n = value->type == JSON_OBJECT ? value->u.object.n : value->u.array.n;
+    bool *repeated = NULL;
+    size_t i = 0;
+
+    if (value->type == JSON_OBJECT) {
+        repeated = repeated_members(value);
+        if (repeated == NULL) {
+            man->oom = true;
+            return;
+        }
+    }
+    for (i = 0; i < n; i++) {
+        const JsonMember *member = value->type == JSON_OBJECT ? &value->u.object.members[i] : NULL;
+        const JsonValue *child = member != NULL ? member->value : value->u.array.items[i];
+        char *child_path_ = NULL;
+
+        if (member != NULL && !repeated[i] && child->type != JSON_OBJECT &&
+            child->type != JSON_ARRAY) {
+            continue;
+        }
+        child_path_ =
+            member != NULL ? pointer_join(path, member->key) : fmt_alloc("%s/%zu", path, i);
+        if (child_path_ == NULL) {
+            man->oom = true;
+        } else {
+            if (member != NULL && repeated[i]) {
+                err_twice(man, "R2.2", path, child_path_, member->key, false, child->src_at + 1U);
+            }
+            if (child->type == JSON_OBJECT || child->type == JSON_ARRAY) {
+                check_repeats(man, child, child_path_);
+            }
+        }
+        free(child_path_);
+    }
+    free(repeated);
+}
+
 /* A JSON object whose members are checked, or NULL after an error. */
 static const JsonValue *object_at(PluginManifest *man, const JsonValue *value, const char *path,
-                                  Names known, const char *unknown_rule)
+                                  const char *rule, Names known, const char *unknown_rule)
 {
     if (value->type != JSON_OBJECT) {
-        err_must_be(man, "R2.5", path, "an object");
+        err_must_be(man, rule, path, "an object");
         return NULL;
     }
     check_members(man, value, path, known, unknown_rule);
@@ -736,6 +780,7 @@ static bool whole_scan(const char *token, WholeScan *scan)
 {
     const char *p = token;
     bool dotted = false;
+    size_t zeros = 0; /* zeros after the point, kept only when a digit follows them */
 
     scan->negative = *p == '-';
     if (scan->negative) {
@@ -752,11 +797,19 @@ static bool whole_scan(const char *token, WholeScan *scan)
         if (scan->count == 0U && *p == '0') {
             continue;
         }
-        if (scan->count == (size_t)WHOLE_DIGITS_MAX) {
+        if (dotted && *p == '0') {
+            zeros++;
+            continue;
+        }
+        if (scan->count + zeros >= (size_t)WHOLE_DIGITS_MAX) {
             return false;
         }
+        memset(scan->digits + scan->count, '0', zeros);
+        scan->count += zeros;
+        zeros = 0;
         scan->digits[scan->count++] = *p;
     }
+    scan->frac -= zeros; /* 1.000 is 1: trailing zeros after the point change nothing */
     if (*p != '\0') {
         scan->exponent = scan_exponent(p + 1, &scan->exponent_negative);
     }
@@ -818,7 +871,8 @@ static WholeKind whole_of(const char *token, long long *value, char *text)
     if (scan.negative) {
         sign = "-";
     }
-    if (scan.count > (size_t)WHOLE_FITS_DIGITS) {
+    if (scan.count > (size_t)WHOLE_FITS_DIGITS ||
+        (scan.count == (size_t)WHOLE_FITS_DIGITS && strcmp(scan.digits, k_llong_max) > 0)) {
         (void)snprintf(text, (size_t)WHOLE_TEXT_CAP, "%s%s", sign, scan.digits);
         return WHOLE_BIG;
     }
@@ -1024,9 +1078,10 @@ static void enum_phrase(char *buf, Names names)
 }
 
 /* One text item of a list of at most max strings, or of an enum list.
-   An empty list is valid (the schema has no minItems there). */
+   An empty list is valid (the schema has no minItems there). False when the list itself is
+   refused (not a list, or over its limit), so no item was read. */
 // NOLINTBEGIN(bugprone-easily-swappable-parameters): same-typed pointers and sizes, by their order
-static void read_list(PluginManifest *man, const char *rule, const JsonValue *value,
+static bool read_list(PluginManifest *man, const char *rule, const JsonValue *value,
                       const char *path, char *rows, size_t row_cap, size_t max_rows, size_t *count,
                       const Names *allowed, bool at_least_one)
 // NOLINTEND(bugprone-easily-swappable-parameters)
@@ -1050,7 +1105,7 @@ static void read_list(PluginManifest *man, const char *rule, const JsonValue *va
     if (value->type != JSON_ARRAY || (at_least_one && value->u.array.n == 0U) ||
         value->u.array.n > max_rows) {
         err_must_be(man, rule, path, what);
-        return;
+        return false;
     }
     for (i = 0; i < value->u.array.n; i++) {
         char child[PLUGIN_PATH_CAP];
@@ -1064,6 +1119,7 @@ static void read_list(PluginManifest *man, const char *rule, const JsonValue *va
             *count += 1U;
         }
     }
+    return true;
 }
 
 /* Names ---------------------------------------------------------------- */
@@ -1157,7 +1213,7 @@ static void parse_needs(PluginManifest *man, const JsonValue *value, const char 
         }
         for (j = 0; j < entry->nneeds; j++) {
             if (strcmp(entry->needs[j], dst) == 0) {
-                err_twice(man, "R2.16", path, child, dst, false);
+                err_twice(man, "R2.16", path, child, dst, false, 0);
                 break;
             }
         }
@@ -1170,7 +1226,7 @@ static void parse_needs(PluginManifest *man, const JsonValue *value, const char 
 static void parse_permissions(PluginManifest *man, const JsonValue *value, const char *path,
                               PluginEntry *entry)
 {
-    const JsonValue *obj = object_at(man, value, path, NAMES(k_perm_known), "R2.5");
+    const JsonValue *obj = object_at(man, value, path, "R2.5", NAMES(k_perm_known), "R2.5");
     const JsonValue *needs = obj == NULL ? NULL : member_value(obj, "needs");
 
     if (needs != NULL) {
@@ -1205,6 +1261,7 @@ static void parse_command(PluginManifest *man, const JsonValue *value, const cha
 {
     char what[WHAT_CAP];
     size_t i = 0;
+    bool ok = true;
 
     (void)snprintf(what, sizeof(what), "a list of 1 to %d strings", PLUGIN_ARGS_MAX);
     if (value->type != JSON_ARRAY || value->u.array.n == 0U ||
@@ -1220,16 +1277,17 @@ static void parse_command(PluginManifest *man, const JsonValue *value, const cha
         if (!string_into(value->u.array.items[i], run->argv[i], PLUGIN_ARG_CAP) ||
             run->argv[i][0] == '\0') {
             err_must_be(man, "R2.8", child, what);
-            return;
-        }
-        if (i == 0U && run->argv[0][0] != '/' && has_dotdot(run->argv[0])) {
+            ok = false;
+        } else if (i == 0U && run->argv[0][0] != '/' && has_dotdot(run->argv[0])) {
             add_invalid(man, "R2.8", child,
                         where_message(child, "a relative command can't contain \"..\"."),
                         dup_text("Use a path inside the plugin folder, or an absolute path."));
-            return;
+            ok = false;
         }
     }
-    run->argc = value->u.array.n;
+    if (ok) {
+        run->argc = value->u.array.n;
+    }
 }
 
 static void parse_run(PluginManifest *man, const JsonValue *value, const char *path, PluginRun *run,
@@ -1246,7 +1304,7 @@ static void parse_run(PluginManifest *man, const JsonValue *value, const char *p
         known = NAMES(k_filter_run_known);
         kinds = NAMES(k_filter_process);
     }
-    obj = object_at(man, value, path, known, "R2.5");
+    obj = object_at(man, value, path, "R2.5", known, "R2.5");
     if (obj == NULL) {
         return;
     }
@@ -1278,12 +1336,28 @@ static void parse_run(PluginManifest *man, const JsonValue *value, const char *p
 
 /* The filter block of an action (R2.21) ------------------------------- */
 
+/* One optional R2.21 list of obj: absent is fine, present is read by read_list. */
+// NOLINTBEGIN(bugprone-easily-swappable-parameters): read_list's own order
+static void filter_list(PluginManifest *man, const JsonValue *obj, const char *path,
+                        const char *key, char *rows, size_t row_cap, size_t max_rows, size_t *count,
+                        const Names *allowed)
+// NOLINTEND(bugprone-easily-swappable-parameters)
+{
+    const JsonValue *item = member_value(obj, key);
+    char child[PLUGIN_PATH_CAP];
+
+    if (item != NULL) {
+        child_path(child, path, key);
+        (void)read_list(man, "R2.21", item, child, rows, row_cap, max_rows, count, allowed, false);
+    }
+}
+
 static void parse_filter_block(PluginManifest *man, const JsonValue *value, const char *path,
                                PluginEntry *entry)
 {
-    const JsonValue *obj = object_at(man, value, path, NAMES(k_filter_block_known), "R2.21");
+    const JsonValue *obj =
+        object_at(man, value, path, "R2.21", NAMES(k_filter_block_known), "R2.21");
     const JsonValue *tags = NULL;
-    const JsonValue *item = NULL;
     char child[PLUGIN_PATH_CAP];
     const Names actors = NAMES(k_actors);
     const Names bins = NAMES(k_bins);
@@ -1293,59 +1367,28 @@ static void parse_filter_block(PluginManifest *man, const JsonValue *value, cons
         return;
     }
     tags = member_value(obj, "tags");
+    child_path(child, path, "tags");
     if (tags != NULL) {
-        child_path(child, path, "tags");
-        tags = object_at(man, tags, child, NAMES(k_tags_known), NULL);
+        tags = object_at(man, tags, child, "R2.21", NAMES(k_tags_known), NULL);
     }
     if (tags != NULL) {
-        char tags_path[PLUGIN_PATH_CAP];
-
-        (void)snprintf(tags_path, sizeof(tags_path), "%s", child);
-        item = member_value(tags, "any");
-        if (item != NULL) {
-            child_path(child, tags_path, "any");
-            read_list(man, "R2.21", item, child, &entry->tags_any[0][0], PLUGIN_TAG_CAP,
-                      PLUGIN_TAGS_MAX, &entry->n_tags_any, NULL, false);
-        }
-        item = member_value(tags, "all");
-        if (item != NULL) {
-            child_path(child, tags_path, "all");
-            read_list(man, "R2.21", item, child, &entry->tags_all[0][0], PLUGIN_TAG_CAP,
-                      PLUGIN_TAGS_MAX, &entry->n_tags_all, NULL, false);
-        }
+        filter_list(man, tags, child, "any", &entry->tags_any[0][0], PLUGIN_TAG_CAP,
+                    PLUGIN_TAGS_MAX, &entry->n_tags_any, NULL);
+        filter_list(man, tags, child, "all", &entry->tags_all[0][0], PLUGIN_TAG_CAP,
+                    PLUGIN_TAGS_MAX, &entry->n_tags_all, NULL);
         entry->has_match_before =
-            read_bool(man, tags, tags_path, "match_before", "R2.21", false, &entry->match_before);
+            read_bool(man, tags, child, "match_before", "R2.21", false, &entry->match_before);
     }
-    item = member_value(obj, "created_by");
-    if (item != NULL) {
-        child_path(child, path, "created_by");
-        read_list(man, "R2.21", item, child, &entry->created_by[0][0], PLUGIN_ACTOR_CAP,
-                  PLUGIN_ACTORS_MAX, &entry->n_created_by, &actors, false);
-    }
-    item = member_value(obj, "updated_by");
-    if (item != NULL) {
-        child_path(child, path, "updated_by");
-        read_list(man, "R2.21", item, child, &entry->updated_by[0][0], PLUGIN_ACTOR_CAP,
-                  PLUGIN_ACTORS_MAX, &entry->n_updated_by, &actors, false);
-    }
-    item = member_value(obj, "bins");
-    if (item != NULL) {
-        child_path(child, path, "bins");
-        read_list(man, "R2.21", item, child, &entry->bins[0][0], PLUGIN_BIN_CAP, PLUGIN_BINS_MAX,
-                  &entry->n_bins, &bins, false);
-    }
-    item = member_value(obj, "not_caused_by");
-    if (item != NULL) {
-        child_path(child, path, "not_caused_by");
-        read_list(man, "R2.21", item, child, &entry->not_caused_by[0][0], PLUGIN_CAUSE_CAP,
-                  PLUGIN_CAUSE_MAX, &entry->n_not_caused_by, NULL, false);
-    }
-    item = member_value(obj, "origins");
-    if (item != NULL) {
-        child_path(child, path, "origins");
-        read_list(man, "R2.21", item, child, &entry->origins[0][0], PLUGIN_ORIGIN_CAP,
-                  PLUGIN_ORIGINS_MAX, &entry->n_origins, &origins, false);
-    }
+    filter_list(man, obj, path, "created_by", &entry->created_by[0][0], PLUGIN_ACTOR_CAP,
+                PLUGIN_ACTORS_MAX, &entry->n_created_by, &actors);
+    filter_list(man, obj, path, "updated_by", &entry->updated_by[0][0], PLUGIN_ACTOR_CAP,
+                PLUGIN_ACTORS_MAX, &entry->n_updated_by, &actors);
+    filter_list(man, obj, path, "bins", &entry->bins[0][0], PLUGIN_BIN_CAP, PLUGIN_BINS_MAX,
+                &entry->n_bins, &bins);
+    filter_list(man, obj, path, "not_caused_by", &entry->not_caused_by[0][0], PLUGIN_CAUSE_CAP,
+                PLUGIN_CAUSE_MAX, &entry->n_not_caused_by, NULL);
+    filter_list(man, obj, path, "origins", &entry->origins[0][0], PLUGIN_ORIGIN_CAP,
+                PLUGIN_ORIGINS_MAX, &entry->n_origins, &origins);
 }
 
 static void parse_events(PluginManifest *man, const JsonValue *value, const char *path,
@@ -1353,15 +1396,19 @@ static void parse_events(PluginManifest *man, const JsonValue *value, const char
 {
     const Names events = NAMES(k_events);
     size_t i = 0;
+    bool others = false;
 
-    read_list(man, "R2.21", value, path, &entry->events[0][0], PLUGIN_EVENT_CAP, PLUGIN_EVENTS_MAX,
-              &entry->nevents, &events, true);
+    (void)read_list(man, "R2.21", value, path, &entry->events[0][0], PLUGIN_EVENT_CAP,
+                    PLUGIN_EVENTS_MAX, &entry->nevents, &events, true);
+
     for (i = 0; i < entry->nevents; i++) {
         if (strcmp(entry->events[i], "memory.*") == 0) {
             entry->all_events = true;
+        } else {
+            others = true;
         }
     }
-    if (entry->all_events && entry->nevents != 1U) {
+    if (entry->all_events && others) {
         add_invalid(man, "R2.21", path,
                     where_message(path, "\"memory.*\" can't be listed with other events."),
                     dup_text("List \"memory.*\" alone."));
@@ -1371,7 +1418,7 @@ static void parse_events(PluginManifest *man, const JsonValue *value, const char
 static void parse_action(PluginManifest *man, const JsonValue *value, const char *path,
                          PluginEntry *entry)
 {
-    const JsonValue *obj = object_at(man, value, path, NAMES(k_action_known), NULL);
+    const JsonValue *obj = object_at(man, value, path, "R2.5", NAMES(k_action_known), NULL);
     const JsonValue *item = NULL;
     char child[PLUGIN_PATH_CAP];
 
@@ -1408,7 +1455,7 @@ static void parse_action(PluginManifest *man, const JsonValue *value, const char
 static void parse_filter(PluginManifest *man, const JsonValue *value, const char *path,
                          PluginEntry *entry)
 {
-    const JsonValue *obj = object_at(man, value, path, NAMES(k_filter_known), NULL);
+    const JsonValue *obj = object_at(man, value, path, "R2.5", NAMES(k_filter_known), NULL);
     const JsonValue *item = NULL;
     const Names points = NAMES(k_points);
     char child[PLUGIN_PATH_CAP];
@@ -1458,7 +1505,7 @@ static void parse_filter(PluginManifest *man, const JsonValue *value, const char
 /* What a default of each type must be (PluginSettingType order). */
 static const char *const k_default_what[] = {"true or false",
                                              "a whole number",
-                                             "a string of at most 511 bytes",
+                                             "one of the \"values\" in \"range\"",
                                              "a duration like \"10m\"",
                                              "a size like \"4MiB\"",
                                              "a string of at most 511 bytes",
@@ -1596,16 +1643,17 @@ static void parse_enum_range(PluginManifest *man, const JsonValue *range, const 
     const JsonValue *values = member_of(man, range, range_path, "values", "R2.11", true);
     char child[PLUGIN_PATH_CAP];
     size_t i = 0;
+    bool listed = false;
 
     if (values != NULL) {
         child_path(child, range_path, "values");
-        read_list(man, "R2.11", values, child, &decl->values[0][0], PLUGIN_VALUE_CAP,
-                  PLUGIN_VALUES_MAX, &decl->nvalues, NULL, true);
+        listed = read_list(man, "R2.11", values, child, &decl->values[0][0], PLUGIN_VALUE_CAP,
+                           PLUGIN_VALUES_MAX, &decl->nvalues, NULL, false);
     }
     while (i < decl->nvalues && strcmp(decl->values[i], decl->default_text) != 0) {
         i++;
     }
-    if (decl->nvalues > 0U && decl->has_default && i == decl->nvalues) {
+    if (listed && decl->has_default && i == decl->nvalues) {
         child_path(child, setting_path, "default");
         err_must_be(man, "R2.11", child, "one of the \"values\" in \"range\"");
     }
@@ -1624,7 +1672,7 @@ static void parse_range(PluginManifest *man, const JsonValue *value, const char 
         }
         return;
     }
-    range = object_at(man, value, child, NAMES(k_range_known), NULL);
+    range = object_at(man, value, child, "R2.11", NAMES(k_range_known), NULL);
     if (range == NULL) {
         return;
     }
@@ -1666,10 +1714,10 @@ static void parse_scope(PluginManifest *man, const JsonValue *value, const char 
 
 // NOLINTBEGIN(bugprone-easily-swappable-parameters): same-typed pointers and sizes, by their order
 static void parse_setting(PluginManifest *man, const JsonValue *value, const char *path,
-                          const char *text, PluginSettingDecl *decl)
+                          const char *text, const char *plugin_name, PluginSettingDecl *decl)
 // NOLINTEND(bugprone-easily-swappable-parameters)
 {
-    const JsonValue *obj = object_at(man, value, path, NAMES(k_setting_known), NULL);
+    const JsonValue *obj = object_at(man, value, path, "R2.11", NAMES(k_setting_known), NULL);
     const JsonValue *item = NULL;
     const Names types = NAMES(k_setting_types);
     char child[PLUGIN_PATH_CAP];
@@ -1681,15 +1729,20 @@ static void parse_setting(PluginManifest *man, const JsonValue *value, const cha
     }
     item = member_of(man, obj, path, "key", "R2.11", true);
     if (item != NULL && item->type == JSON_STRING && strcmp(item->u.string.bytes, "enabled") == 0) {
+        char *escaped = plugin_name == NULL ? NULL : json_escaped(plugin_name);
+
+        child_path(child, path, "key");
         add_invalid(
-            man, "R2.11", path,
-            man->name[0] == '\0'
+            man, "R2.11", child,
+            plugin_name == NULL
                 ? dup_text("this plugin declares a setting named \"enabled\", and that name is "
                            "reserved.")
-                : fmt_alloc(
-                      "\"%s\" declares a setting named \"enabled\", and that name is reserved.",
-                      man->name),
+                : (escaped == NULL ? NULL
+                                   : fmt_alloc("\"%s\" declares a setting named \"enabled\", and "
+                                               "that name is reserved.",
+                                               escaped)),
             dup_text("Rename that setting in plugin.json."));
+        free(escaped);
     } else {
         (void)read_name(man, obj, path, "key", "R2.11", false, decl->key);
     }
@@ -1781,7 +1834,7 @@ static void check_repeated_entry_names(PluginManifest *man, const char *list, si
                 char path[PLUGIN_PATH_CAP];
 
                 (void)snprintf(path, sizeof(path), "%s/%zu/name", list, i);
-                err_twice(man, "R2.22", list, path, name, true);
+                err_twice(man, "R2.22", list, path, name, true, 0);
                 break;
             }
         }
@@ -1798,7 +1851,7 @@ static void check_repeated_setting_keys(PluginManifest *man)
                 char path[PLUGIN_PATH_CAP];
 
                 (void)snprintf(path, sizeof(path), "/settings/%zu/key", i);
-                err_twice(man, "R2.22", "/settings", path, key, true);
+                err_twice(man, "R2.22", "/settings", path, key, true, 0);
                 break;
             }
         }
@@ -1820,11 +1873,16 @@ static void check_persistent(PluginManifest *man, size_t nactions)
 {
     const PluginRun *first = NULL;
     char first_path[PLUGIN_PATH_CAP];
+    bool any_persistent = false;
     size_t i = 0;
 
     for (i = 0; i < man->nentries; i++) {
         if (!man->entries[i].run.persistent) {
             continue;
+        }
+        any_persistent = true;
+        if (man->entries[i].run.argc == 0U) {
+            continue; /* its command has its own error, so a comparison says nothing */
         }
         if (first == NULL) {
             first = &man->entries[i].run;
@@ -1843,7 +1901,7 @@ static void check_persistent(PluginManifest *man, size_t nactions)
                         dup_text("Give every persistent entry the same command."));
         }
     }
-    if (man->backfill && first == NULL) {
+    if (man->backfill && !any_persistent && man->nentries == nactions) {
         add_invalid(
             man, "R2.17", "/backfill/enabled",
             where_message("/backfill/enabled", "backfill is on, and no entry is persistent."),
@@ -1862,7 +1920,7 @@ static void parse_backfill(PluginManifest *man, const JsonValue *value)
     if (value == NULL) {
         return;
     }
-    obj = object_at(man, value, "/backfill", NAMES(k_backfill_known), NULL);
+    obj = object_at(man, value, "/backfill", "R2.17", NAMES(k_backfill_known), NULL);
     if (obj == NULL) {
         return;
     }
@@ -1875,6 +1933,15 @@ static void parse_backfill(PluginManifest *man, const JsonValue *value)
     if (value != NULL && !size_in(value, BATCH_BYTES_MAX, &man->max_batch_bytes)) {
         err_must_be(man, "R2.18", "/backfill/max_batch_size", "a size of at most 4MiB");
     }
+}
+
+/* The plugin name for R25-1, C-36 and sentences 9, 10 and 16: any string, as the file wrote it,
+   valid or not. NULL when name is missing or not a string. */
+static const char *usable_name(const JsonValue *root)
+{
+    const JsonValue *name = member_value(root, "name");
+
+    return name != NULL && name->type == JSON_STRING ? name->u.string.bytes : NULL;
 }
 
 /* R25-1 for protocol, G2 for version. name is NULL when the file has no usable name. */
@@ -1990,10 +2057,8 @@ static void parse_plugin_version(PluginManifest *man, const JsonValue *root)
 
 static void parse_identity(PluginManifest *man, const JsonValue *root)
 {
-    const JsonValue *name = member_value(root, "name");
-    const char *name_text = name != NULL && name->type == JSON_STRING ? name->u.string.bytes : NULL;
+    const char *name_text = usable_name(root);
     char text[PLUGIN_VER_CAP];
-    long long number = 0;
 
     if (read_text(man, root, "", "format", "R2.2", true, text, sizeof(text),
                   "\"remember-plugin\"") &&
@@ -2006,10 +2071,8 @@ static void parse_identity(PluginManifest *man, const JsonValue *root)
     parse_plugin_version(man, root);
     man->has_description = read_description(man, root, "", false, man->description);
     man->data_version = 1;
-    if (read_whole(man, root, "", "data_version", "R2.14", (WholeRange){1, INT_MAX},
-                   "a whole number of 1 or more", &number)) {
-        man->data_version = (int)number;
-    }
+    (void)read_whole(man, root, "", "data_version", "R2.14", (WholeRange){1, LLONG_MAX},
+                     "a whole number of 1 or more", &man->data_version);
     man->has_idle_timeout =
         read_duration(man, root, "", "idle_timeout", "R2.20", "a duration like \"10m\"", 0,
                       LLONG_MAX, &man->idle_timeout_ms);
@@ -2018,16 +2081,22 @@ static void parse_identity(PluginManifest *man, const JsonValue *root)
 /* R25-2 sentence 7b: run, permissions and filter are known fields in the wrong place. */
 static void reject_misplaced(PluginManifest *man, const JsonValue *root)
 {
+    bool seen[COUNT(k_root_misplaced)] = {false};
     size_t i = 0;
 
     for (i = 0; i < root->u.object.n; i++) {
         const char *key = root->u.object.members[i].key;
         char *child = NULL;
         char *fix = NULL;
+        size_t j = 0;
 
-        if (!names_have(NAMES(k_root_misplaced), key)) {
-            continue;
+        while (j < COUNT(k_root_misplaced) && strcmp(k_root_misplaced[j], key) != 0) {
+            j++;
         }
+        if (j == COUNT(k_root_misplaced) || seen[j]) {
+            continue; /* not misplaced, or a repeat, which check_repeats reports */
+        }
+        seen[j] = true;
         child = pointer_join("", key);
         if (strcmp(key, "filter") == 0) {
             fix = dup_text("Move \"filter\" into an action.");
@@ -2045,6 +2114,113 @@ static void reject_misplaced(PluginManifest *man, const JsonValue *root)
     }
 }
 
+/* One reference token of a pointer (n bytes, "~0" and "~1" undone) equals key. */
+static bool token_is(const char *token, size_t n, const char *key)
+{
+    size_t i = 0;
+
+    for (i = 0; i < n; i++, key++) {
+        char c = token[i];
+
+        if (c == '~' && i + 1U < n) {
+            c = token[++i] == '1' ? '/' : '~';
+        }
+        if (*key != c) {
+            return false;
+        }
+    }
+    return *key == '\0';
+}
+
+/* The source offset of the deepest value pointer reaches. A repeated key is its first member, the
+   one member_value reads. */
+static size_t doc_at(const JsonValue *root, const char *pointer)
+{
+    const JsonValue *at = root;
+    const char *p = pointer;
+
+    while (*p == '/') {
+        const char *token = ++p;
+        const JsonValue *next = NULL;
+        size_t n = strcspn(token, "/");
+        size_t i = 0;
+
+        p += n;
+        if (at->type == JSON_OBJECT) {
+            for (i = 0; next == NULL && i < at->u.object.n; i++) {
+                if (token_is(token, n, at->u.object.members[i].key)) {
+                    next = at->u.object.members[i].value;
+                }
+            }
+        } else if (at->type == JSON_ARRAY && n > 0U && strspn(token, "0123456789") == n) {
+            unsigned long long index = strtoull(token, NULL, DECIMAL);
+
+            next = index < at->u.array.n ? at->u.array.items[index] : NULL;
+        }
+        if (next == NULL) {
+            break;
+        }
+        at = next;
+    }
+    return at->src_at;
+}
+
+typedef struct Placed {
+    size_t at;
+    size_t index;
+} Placed;
+
+// NOLINTNEXTLINE(bugprone-easily-swappable-parameters): the qsort comparator signature
+static int placed_order(const void *left, const void *right)
+{
+    const Placed *a = (const Placed *)left;
+    const Placed *b = (const Placed *)right;
+
+    if (a->at != b->at) {
+        return a->at < b->at ? -1 : 1;
+    }
+    return a->index < b->index ? -1 : 1;
+}
+
+/* R25-2: "The order is document order." Each error sits at the offset of what it names; errors at
+   one offset keep the order they were found in.
+   ponytail: an error without a place walks its pointer, linear in each object's members. Only a
+   bounded number of errors (one per schema field, entry or list item) lack a place; the unbounded
+   ones (repeats, unknown fields) are placed when found. */
+static void sort_errors(PluginManifest *man, const JsonValue *root)
+{
+    size_t n = man->nerrors;
+    Placed *order = NULL;
+    PluginError *sorted = NULL;
+    size_t i = 0;
+
+    if (n < 2U) {
+        return;
+    }
+    order = (Placed *)malloc(n * sizeof(*order));
+    sorted = (PluginError *)malloc(n * sizeof(*sorted));
+    if (order == NULL || sorted == NULL) {
+        free(order);
+        free(sorted);
+        man->oom = true;
+        return;
+    }
+    for (i = 0; i < n; i++) {
+        if (man->errors[i].at == SIZE_MAX) {
+            man->errors[i].at = doc_at(root, man->errors[i].path);
+        }
+        order[i] = (Placed){.at = man->errors[i].at, .index = i};
+    }
+    qsort(order, n, sizeof(*order), placed_order);
+    for (i = 0; i < n; i++) {
+        sorted[i] = man->errors[order[i].index];
+    }
+    free(order);
+    free(man->errors);
+    man->errors = sorted;
+    man->errors_cap = n;
+}
+
 static PluginParseStatus status_of(const PluginManifest *man)
 {
     size_t i = 0;
@@ -2057,7 +2233,8 @@ static PluginParseStatus status_of(const PluginManifest *man)
     return man->nerrors > 0U ? PLUGIN_PARSE_INVALID : PLUGIN_PARSE_OK;
 }
 
-static void parse_settings(PluginManifest *man, const JsonValue *value, const char *text)
+static void parse_settings(PluginManifest *man, const JsonValue *value, const char *text,
+                           const char *plugin_name)
 {
     size_t i = 0;
 
@@ -2075,7 +2252,8 @@ static void parse_settings(PluginManifest *man, const JsonValue *value, const ch
         char child[PLUGIN_PATH_CAP];
 
         index_path(child, "/settings", i);
-        parse_setting(man, value->u.array.items[i], child, text, &man->settings[man->nsettings]);
+        parse_setting(man, value->u.array.items[i], child, text, plugin_name,
+                      &man->settings[man->nsettings]);
         man->nsettings += 1U;
     }
 }
@@ -2088,6 +2266,7 @@ static PluginParseStatus parse_document(PluginManifest *man, JsonValue *root, co
     const JsonValue *filters = member_value(root, "filters");
     size_t nactions = 0;
 
+    check_repeats(man, root, "");
     check_members(man, root, "", NAMES(k_root_known), NULL);
     reject_misplaced(man, root);
     parse_identity(man, root);
@@ -2100,11 +2279,12 @@ static PluginParseStatus parse_document(PluginManifest *man, JsonValue *root, co
     parse_entry_list(man, actions, "/actions", false);
     nactions = man->nentries;
     parse_entry_list(man, filters, "/filters", true);
-    parse_settings(man, member_value(root, "settings"), text);
+    parse_settings(man, member_value(root, "settings"), text, usable_name(root));
     check_repeated_entry_names(man, "/actions", 0, nactions);
     check_repeated_entry_names(man, "/filters", nactions, man->nentries - nactions);
     check_repeated_setting_keys(man);
     check_persistent(man, nactions);
+    sort_errors(man, root);
     jsonread_free(root);
     if (man->oom) {
         plugin_manifest_free(man);
