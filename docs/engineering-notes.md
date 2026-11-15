@@ -220,6 +220,13 @@ Rules:
 - **stdin vs argv body limits must share one enforcer.** Raw stdin caps are memory guards only (`REMEMBER_STDIN_MAX`); `body_trim_copy` owns the post-trim 64 KiB rule for both paths.
 - **Literal body `"-"` vs stdin:** `load_body(body, dash_is_stdin, …)` — when `dash_is_stdin` is true, `"-"` reads stdin (CLI convention); when false, `"-"` is a one-character body. Callers: `add` sets literal after `--` (and top-level `cli_parse` **forwards** `--` into rest_argv once a subcommand is chosen, so `add -- -` reaches the command); `update` uses `--text=-` for a literal hyphen and `--text -` for stdin.
 
+## Plugin manifest (plan 25)
+
+- `plugin_manifest_parse` is pure: bytes in, a manifest out. The caller prints. It reports each unknown field of an open object through `diag_unknown_field` (once per file), and prints every `PluginError` as `remember: <message> <fix>`. It masks C0, DEL and C1 bytes first, because a name from the file is echoed whole (`output_text_human`).
+- Duplicate keys and a `\u0000` escape never reach the parser: `jsonread` refuses the NUL, and `check_members` refuses a repeated key in every object. A new object kind in the manifest goes through `check_members` too.
+- A limit that the schema does not state is a decision (`decision:2026-11-13-plugin-manifest-limits`). Adding a field with a fixed array needs a new limit entry there.
+- Run a mutation harness with a process-group kill and a `timeout` on every command. A mutant can loop forever, and an orphaned test process runs for days.
+
 ## Process
 
 - After **each implementation plan step**: run a strict review (see skill `remember-step-review` / project checklist).

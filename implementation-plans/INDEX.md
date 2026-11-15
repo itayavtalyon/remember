@@ -45,7 +45,7 @@ main → cli_parse → commands.h (cmd_add | cmd_locator | cmd_query) → store_
 - 23. Plan: [Import formats](23-import-formats.md). Done when: JSON and `--from-db` v4–v6. Markdown and CSV moved to 23a (2026-11-12). Copy approved 2026-10-25. D-04 is answered (2026-10-25). No old-name reader. No add-wins.
 - 23a. Plan: [Import Markdown and CSV](23a-import-md-csv.md). Done when: `--from-md`, `--from-csv`, and `--from-db` memories through the file merge. Split from 23 (2026-11-12).
 - 24. Plan: [Plugin protocol](24-plugin-protocol.md). Done when: Docs CI, schema extraction, fixtures. READY. Spec revision 6 is already in the repo. ✅.
-- 25. Plan: [Plugin manifest](25-plugin-manifest.md). Done when: `plugin.json` parses to the protocol schema. Needs 24. Copy: R25-1 and R25-2 (approved 2026-11-14, `decision:2026-11-14-copy-r25-2-manifest-approved`).
+- 25. Plan: [Plugin manifest](25-plugin-manifest.md). Done when: `plugin.json` parses to the protocol schema. Needs 23, 24. Copy: R25-1 and R25-2 (approved 2026-11-14, `decision:2026-11-14-copy-r25-2-manifest-approved`).
 - 26. Plan: [Brain list](26-brain-list.md). Done when: `brains.json`, `brain list`, `brain prune`. Needs 19, 25 (cut from the same branch).
 - 27. Plan: [Default brain path](27-default-db.md). Done when: `~/.remember/default-db`. Needs 19.
 - 27a. Plan: [Outbox delivery](27a-outbox-delivery.md). Done when: Recipient state machine, backoff retry (X3 A), and a pre-flight failure that is `failed` at once (E1 A). Needs 24.

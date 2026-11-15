@@ -121,6 +121,7 @@ set_property(SOURCE
     src/fileio.c
     src/jsonread.c
     src/outbox.c
+    src/plugin_manifest.c
     src/import_read.c
     src/import_validate.c
     src/cmd_settings.c
@@ -258,6 +259,7 @@ set(REMEMBER_LIB_SOURCES
     src/fileio.c
     src/jsonread.c
     src/outbox.c
+    src/plugin_manifest.c
     src/import_read.c
     src/import_validate.c
     src/cmd_settings.c
@@ -350,6 +352,7 @@ set(REMEMBER_TEST_SOURCES
     tests/test_import_formats.c
     tests/test_outbox.c
     tests/test_old_cli.c
+    tests/test_plugins.c
     tests/fixture_roundtrip.c
 )
 add_executable(remember_tests
@@ -366,6 +369,7 @@ target_link_libraries(remember_tests PRIVATE sqlite3 sha256 utf8proc)
 target_compile_definitions(remember_tests PRIVATE
     REMEMBER_VERSION="${PROJECT_VERSION}"
     REMEMBER_TEST_HOOKS
+    REMEMBER_PLUGINS_DIAG_TEST # the C-35 line test needs diag.c, which the store binary lacks
 )
 remember_apply_posix_feature_macros(remember_tests)
 remember_apply_coverage(remember_tests)
@@ -411,6 +415,7 @@ add_executable(remember_store_tests
     src/output.c
     src/jsonread.c
     src/outbox.c
+    src/plugin_manifest.c
     src/import_validate.c
     src/test_alloc.c
     tests/test_unicode.c
@@ -418,6 +423,7 @@ add_executable(remember_store_tests
     tests/test_output.c
     tests/test_jsonread.c
     tests/test_outbox.c
+    tests/test_plugins.c
     tests/failing_stream.c
     third_party/sha256/sha256.c
     third_party/utf8proc/utf8proc.c

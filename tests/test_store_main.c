@@ -21,6 +21,7 @@ int main(void)
     register_output_tests();
     register_jsonread_tests();
     register_outbox_tests();
+    register_plugins_tests();
 
     (void)printf("\n== unit (sanitized) summary ==\n");
     (void)printf("tests run:     %d\n", g_tests_run);
