@@ -235,6 +235,8 @@ How it is built. The store keeps `min_reader` (`Store.min_reader`) only when `mi
 5. Files outside plan 27b's list that changed, all required: `tests/test_store.c` (the struct), `tests/test_schema_v6.c` and `tests/test_envelope.c` (the copy), `docs/engineering-notes.md`, `specs/OLDER-CLI.md` (listed), `src/store.h` and `src/diag.h` (listed).
 6. The `StoreSchemaGap` and `Store` structs have explicit `pad_` members, as the repo does for `-Wpadded`.
 
+**Gate (R27b-2/3 follow-up).** Run on the committed code tree (the commit after this one differs only in this plan file; a machine reboot mid-run forced a restart of the whole sequence): `scripts/lint-all.sh` LINT OK (clang-tidy 22, cppcheck, gcc -fanalyzer, scan-build; the three `real_malloc/calloc/realloc` allocator-wrapper warnings are older and not in this diff); `scripts/check-coverage.sh` functions 100%, effective lines 100%, pure-TU branches 100%; `ctest` 6 of 6 (step_gate with the `old_cli` suite, store_asan_gate, spec_drift, no_shim_symbols); `scripts/ci-linux.sh` OK (clang-format 18, clang-tidy 18, IWYU); `scripts/codeql-local.sh` OK. Two gate findings fixed on the way: clang-tidy 22 (`readability-implicit-bool-conversion`, a magic `65U`, and an analyzer ArrayBound in the test helper `given_cli_version`) and clang-format 18 (formatted with the Ubuntu 24.04 clang-format in Docker).
+
 ## Review Notes
 
 - decision:2026-10-31-cli-outdated-exit-code changes the "exit 1" of decision:2026-10-31-old-cli-reads-warn-writes-fail, and decision:2026-11-01-newer-brain-error-name drops its `cli_outdated` code. Neither older entry carries an "[Amended by …]" line. Add the lines in Remember before work starts (this pass did not edit Remember).
