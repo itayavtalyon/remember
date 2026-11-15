@@ -2022,26 +2022,10 @@ static void reject_misplaced(PluginManifest *man, const JsonValue *root)
     }
 }
 
-/* One reference token of a pointer (n bytes, "~0" and "~1" undone) equals key. */
-static bool token_is(const char *token, size_t n, const char *key)
-{
-    size_t i = 0;
-
-    for (i = 0; i < n; i++, key++) {
-        char c = token[i];
-
-        if (c == '~' && i + 1U < n) {
-            c = token[++i] == '1' ? '/' : '~';
-        }
-        if (*key != c) {
-            return false;
-        }
-    }
-    return *key == '\0';
-}
-
 /* The source offset of the deepest value pointer reaches. A repeated key is its first member, the
-   one member_value reads. */
+   one member_value reads. Only errors without a place come here, and their pointers are built from
+   schema keys and indices, never from a key in the file, so no token holds "~0" or "~1". A token
+   that matches nothing stops at its parent, which keeps the error near its place. */
 static size_t doc_at(const JsonValue *root, const char *pointer)
 {
     const JsonValue *at = root;
@@ -2055,7 +2039,9 @@ static size_t doc_at(const JsonValue *root, const char *pointer)
         p += n;
         if (at->type == JSON_OBJECT) {
             for (size_t i = 0; next == NULL && i < at->u.object.n; i++) {
-                if (token_is(token, n, at->u.object.members[i].key)) {
+                const char *key = at->u.object.members[i].key;
+
+                if (strncmp(key, token, n) == 0 && key[n] == '\0') {
                     next = at->u.object.members[i].value;
                 }
             }

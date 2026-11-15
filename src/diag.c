@@ -502,7 +502,8 @@ static char *unknown_field_message(DiagUnknownField field)
         (field.path != NULL ? snprintf(buf, (size_t)need + 1U, k_unknown_file, field.path, name)
                             : snprintf(buf, (size_t)need + 1U, k_unknown_stream, name)) != need) {
         free(buf);
-        buf = NULL;
+        free(name);
+        return NULL;
     }
     free(name);
     return buf;
