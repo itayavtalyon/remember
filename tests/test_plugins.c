@@ -3021,6 +3021,15 @@ TEST(q3_24_bytes_is_the_ordinary_phrase_and_23_bytes_is_read)
     expect_ok(SETTING_DOC("\"type\":\"size\",\"default\":\"0000000000000000000001B\""));
 }
 
+/* The exponent clamp: an exponent of 30 digits would overflow a long long without it. */
+TEST(q1_an_exponent_past_a_long_long_is_not_a_whole_number)
+{
+    expect_error(PROTOCOL_DOC("1e999999999999999999999999999999"), "/protocol", "R2.4",
+                 R25_2_MUST_BE("/protocol", "a whole number"), R25_2_USE("a whole number"));
+    expect_error(PROTOCOL_DOC("1e-999999999999999999999999999999"), "/protocol", "R2.4",
+                 R25_2_MUST_BE("/protocol", "a whole number"), R25_2_USE("a whole number"));
+}
+
 TEST(memory_star_listed_twice_is_still_alone)
 {
     PluginManifest *man = given_parse(
@@ -3259,6 +3268,7 @@ void register_plugins_tests(void)
     RUN_TEST(errors_come_in_document_order_across_the_file);
     RUN_TEST(a_repeated_key_inside_an_unknown_member_is_an_error);
     RUN_TEST(memory_star_listed_twice_is_still_alone);
+    RUN_TEST(q1_an_exponent_past_a_long_long_is_not_a_whole_number);
     RUN_TEST(q2_a_pointer_in_a_message_prints_escaped);
     RUN_TEST(q1_every_whole_field_reads_1_0_1e0_and_minus_0_by_value);
     RUN_TEST(q1_protocol_2_0_prints_2_in_the_no_name_sentence_too);

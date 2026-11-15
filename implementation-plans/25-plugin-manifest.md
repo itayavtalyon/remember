@@ -295,3 +295,9 @@ The mutation pass ran on the sources of `bbd9ca3`. The commit after it (`0c62431
 Plan DoD, last box: ticked below.
 
 ## Review Notes
+
+## Second-opinion review (2026-11-15)
+
+**Mutant sample, re-run by the reviewer.** The coder's harness had two bugs (stale object files, orphaned children), so I rebuilt 20 of the coder's mutants from its table and ran each against a `git archive` snapshot of the coder's head. Each mutant got a fresh compile into its own binary, ran in its own process group under ASan and UBSan, and its group was killed at 60 s. 18 were killed. The survivors were Q1i and S7a, the same two the coder reports, for the reasons it gives. So the kill evidence holds. I wrote 10 more mutants on guards the table does not name (R1 to R10). R3 (no exponent clamp) survived: no test had an exponent past a long long. `q1_an_exponent_past_a_long_long_is_not_a_whole_number` now kills it (UBSan: signed overflow).
+
+**Findings fixed**, each with a test that fails on the coder's code: see the commit `Plan 25 review: plug manifest exploits, document order, rule fixes`, and `specs/PLUGIN-MANIFEST.md`. Open choices G1 to G5 went to Itay.
