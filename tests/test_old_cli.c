@@ -585,8 +585,7 @@ static void given_cli_version(const char *db, char *out, size_t cap)
     ASSERT_EQ_INT(r.exit_code, 0);
     ASSERT_TRUE(strncmp(r.out, k_prefix, prefix) == 0);
     ASSERT_TRUE(len > prefix + 1U && r.out[len - 1U] == '\n' && len - prefix <= cap);
-    memcpy(out, r.out + prefix, len - prefix - 1U);
-    out[len - prefix - 1U] = '\0';
+    (void)snprintf(out, cap, "%.*s", (int)(len - prefix - 1U), r.out + prefix);
     cmd_result_free(&r);
 }
 
@@ -639,10 +638,11 @@ static void assert_json_notices(const FourRuns *f, const char *message, const ch
                    message, detail_json);
     ASSERT_STR_CONTAINS(f->read_json.out, want);
     ASSERT_STREQ(f->read_json.err, "");
-    (void)snprintf(want, sizeof(want),
-                   "\"error\":{\"code\":\"schema_too_new\",\"message\":\"%s\",\"fix\":\"" K_NEWER_FIX
-                   "\",\"retryable\":false,\"detail\":%s}}\n",
-                   message, detail_json);
+    (void)snprintf(
+        want, sizeof(want),
+        "\"error\":{\"code\":\"schema_too_new\",\"message\":\"%s\",\"fix\":\"" K_NEWER_FIX
+        "\",\"retryable\":false,\"detail\":%s}}\n",
+        message, detail_json);
     ASSERT_STR_CONTAINS(f->write_json.out, want);
     ASSERT_STREQ(f->write_json.err, "");
 }
@@ -764,7 +764,7 @@ TEST(old_cli_hostile_min_reader_version_is_masked)
 /* The longest version that prints is 32 bytes; one more is masked. */
 TEST(old_cli_min_reader_version_prints_up_to_32_bytes)
 {
-    static const char k_max[] = "0.4.0000000000000000000000000000"; /* 32 bytes */
+    static const char k_max[] = "0.4.0000000000000000000000000000";   /* 32 bytes */
     static const char k_over[] = "0.4.00000000000000000000000000000"; /* 33 bytes */
     char sql[OLD_CLI_SQL_BUF];
     char *db = NULL;
@@ -780,7 +780,8 @@ TEST(old_cli_min_reader_version_prints_up_to_32_bytes)
     over = given_brain_with_min_reader(sql);
     at = RUN_ARGS(db, "get", "1");
     past = RUN_ARGS(over, "get", "1");
-    ASSERT_STR_CONTAINS(at.err, "This brain needs remember 0.4.0000000000000000000000000000 or later;");
+    ASSERT_STR_CONTAINS(at.err,
+                        "This brain needs remember 0.4.0000000000000000000000000000 or later;");
     ASSERT_STR_NOT_CONTAINS(past.err, "needs remember");
     ASSERT_STR_NOT_CONTAINS(past.err, "0.4.0");
     cmd_result_free(&at);
@@ -887,15 +888,14 @@ TEST(old_cli_help_and_version_do_not_open_a_brain)
    fits every exit 5 (plugin and hook approvals never take --yes). */
 TEST(old_cli_help_exit_codes_list_5_and_75)
 {
-    static const char k_block[] =
-        "Exit codes:\n"
-        "  0  success (including empty search/list)\n"
-        "  1  usage or error\n"
-        "  2  not found (get/delete/update)\n"
-        "  3  wrong bin (expired / not_expired / deleted / not_deleted)\n"
-        "  4  a warning under --strict\n"
-        "  5  confirmation or approval required\n"
-        "  75 brain is read-only (made by a newer version of remember)\n";
+    static const char k_block[] = "Exit codes:\n"
+                                  "  0  success (including empty search/list)\n"
+                                  "  1  usage or error\n"
+                                  "  2  not found (get/delete/update)\n"
+                                  "  3  wrong bin (expired / not_expired / deleted / not_deleted)\n"
+                                  "  4  a warning under --strict\n"
+                                  "  5  confirmation or approval required\n"
+                                  "  75 brain is read-only (made by a newer version of remember)\n";
     char *db = make_temp_db_path();
     const char *const flag_forms[][1] = {{"--help"}, {"-h"}, {"help"}};
     size_t i = 0;

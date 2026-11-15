@@ -50,8 +50,8 @@ struct Store {
     MigrationWarning *warnings; /* this open's v6 step; nwarnings items */
     size_t nwarnings;
     ChangeSeqTx change_tx;
-    int brain_schema;             /* the brain's user_version, read at open */
-    bool schema_too_new;          /* newer schema or min_reader_version: read only */
+    int brain_schema;    /* the brain's user_version, read at open */
+    bool schema_too_new; /* newer schema or min_reader_version: read only */
     /* min_reader_version when it made the brain read only and is printable, else "" */
     char min_reader[STORE_VERSION_TEXT_MAX + 1];
     bool replace_invalid_sidecar; /* device new only: invalid counts as missing */
