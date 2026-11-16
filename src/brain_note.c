@@ -70,7 +70,7 @@ int brain_note_open(Store *store)
     char json[REMEMBER_PATH_MAX];
     char real[REMEMBER_PATH_MAX];
     char id[STORE_DEVICE_ID_LEN + 1];
-    char minted[STORE_DEVICE_ID_LEN + 1];
+    char minted[STORE_DEVICE_ID_LEN + 1] = {0};
     char now[STORE_DEVICE_ID_LEN];
     char *unknown = NULL;
     BrainListCode code = BRAIN_LIST_IO;
