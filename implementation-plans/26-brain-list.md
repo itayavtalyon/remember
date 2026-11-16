@@ -261,6 +261,14 @@ Justified survivor: `stat_eio_dropped` (`stat` failing with `EIO` classed `canno
 
 - ci-linux: the lock tests called `usleep`, which glibc does not declare under `_POSIX_C_SOURCE=200809L` (POSIX 2008 dropped it). macOS declares it anyway. They use `nanosleep` now (`pause_ms`).
 - CodeQL `cpp/overflowing-snprintf` in the coder's `brain_list_has_no_row_cap`: it summed `snprintf` returns as offsets without a check. Each row is now formatted into a fixed buffer with a checked return and copied in by `append_text`, which bounds every copy.
+- GitHub's first run of PR #77 failed to build `tests/test_envelope.c` (`-Wdisabled-macro-expansion` on `strstr`). Plan 26 did not cause it.
+  - `ubuntu-latest` moved from 24.04 (PR #76, 2026-11-15) to 26.04 (glibc 2.43, clang 21) on 2026-11-16.
+  - With glibc 2.43, `_GNU_SOURCE` turns on C23's `strstr` macro, a recursive `_Generic` that `-Weverything` rejects.
+  - The local gate missed it because `scripts/ci-linux.sh` builds in `ubuntu:24.04`.
+  - Fixes:
+    - `test_envelope.c` drops `_GNU_SOURCE`. Its hand-made dead stream (`funopen`/`fopencookie`, one copy per platform) is now `failing_stream_open(&dead, 0U)` from `failing_stream.c`.
+    - The three compiling jobs (linux, linux coverage, CodeQL) are pinned to `ubuntu-24.04`, as the `ci.yml` toolchain comment and `docs/QUALITY.md` already say.
+  - A full build of every target on `ubuntu:26.04` with clang 21.1.8 has no errors, so a later move to 26.04 needs only its lint run.
 - The diff was read for implicit int-to-char narrowing (local ci-linux is aarch64 and GitHub is amd64, where `char` signedness differs). None: every added `char` is a pointer, an array or a literal.
 
 ### Gate (this tree, local)
