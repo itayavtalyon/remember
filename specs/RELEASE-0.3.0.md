@@ -13,7 +13,7 @@ What `remember` 0.3.0 contains. Release notes for users are the What's New secti
 - Plan 27b, older CLI read-only: a CLI that finds a newer brain opens it read-only, prints the read warning, and exits 75 on a write. Spec: [OLDER-CLI.md](OLDER-CLI.md).
 - R27b-2 and R27b-3 (pull request #75): the `min_reader_version` line of that warning and error, and the exit codes 5 and 75 in `--help`. Spec: [OLDER-CLI.md](OLDER-CLI.md).
 
-Plans 19 to 21 and 24 merged before plan 22 and ship in 0.3.0 too. The spec table is [README.md](README.md).
+Every plan merged after the `v0.2.0` tag ships in 0.3.0 too: plans 15 to 18 (with 17a, and 18b and 18c, which landed with 18), 19 to 21, and 24. The spec table is [README.md](README.md).
 
 ## What 0.3.0 does not contain
 
