@@ -208,6 +208,59 @@ for mode in --symlink --copy; do
   assert "a dangling SKILL.md link creates no target ($mode)" test ! -e "$TMP/dangling$mode"
 done
 
+# 1l. --copy over a link that symlink mode left to the same source: install would copy the
+#     file onto itself ("same file", exit 64) and stop before the next product.
+HOME="$TMP/linkthencopy"
+mkdir -p "$HOME/.claude" "$HOME/.codex"
+HOME="$HOME" "$TOOL" >/dev/null 2>&1
+set +e
+out="$(HOME="$HOME" "$TOOL" --copy 2>&1)"
+rc=$?
+set -e
+assert_eq "--copy over a symlink-mode install exits 0" "$rc" "0"
+for p in .claude .codex; do
+  assert "--copy over a symlink-mode install leaves a regular file ($p)" \
+    test -f "$HOME/$p/skills/remember/SKILL.md" -a ! -L "$HOME/$p/skills/remember/SKILL.md"
+done
+assert "--copy over a symlink-mode install keeps the source" cmp -s "$HOME/.codex/skills/remember/SKILL.md" "$SRC"
+
+# 1m. A relative REMEMBER_SKILL_SRC: the link must resolve from the skill dir, not dangle.
+HOME="$TMP/relsrc"
+mkdir -p "$HOME/.codex" "$TMP/relsrc-repo/skills/remember"
+echo "relative source" >"$TMP/relsrc-repo/skills/remember/SKILL.md"
+set +e
+(cd "$TMP/relsrc-repo" && HOME="$HOME" REMEMBER_SKILL_SRC=skills/remember/SKILL.md "$TOOL" >/dev/null 2>&1)
+rc=$?
+set -e
+assert_eq "a relative REMEMBER_SKILL_SRC exits 0" "$rc" "0"
+assert_eq "a relative REMEMBER_SKILL_SRC link resolves to the source" \
+  "$(cat "$HOME/.codex/skills/remember/SKILL.md" 2>&1)" "relative source"
+
+# 1n. A HOME with a newline is one path: nothing lands under its first line or in the cwd.
+HOME="$TMP/nl"$'\n'"home"
+mkdir -p "$HOME/.codex" "$TMP/nl-cwd"
+set +e
+(cd "$TMP/nl-cwd" && HOME="$HOME" "$TOOL" >/dev/null 2>&1)
+rc=$?
+set -e
+assert_eq "a HOME with a newline exits 0" "$rc" "0"
+assert "a HOME with a newline installs under that HOME" test -L "$HOME/.codex/skills/remember/SKILL.md"
+assert "a HOME with a newline writes nothing under its first line" test ! -e "$TMP/nl/remember"
+assert "a HOME with a newline writes nothing in the cwd" test -z "$(ls -A "$TMP/nl-cwd")"
+
+# 1o. REMEMBER_SKILL_DIRS: a dir with a newline is one dir, not its first line.
+HOME="$TMP/nldirs-home"
+mkdir -p "$HOME"
+nldir="$TMP/nldir"$'\n'"two"
+set +e
+HOME="$HOME" REMEMBER_SKILL_DIRS="$nldir:$TMP/nldir-other" "$TOOL" >/dev/null 2>&1
+rc=$?
+set -e
+assert_eq "REMEMBER_SKILL_DIRS with a newline exits 0" "$rc" "0"
+assert "REMEMBER_SKILL_DIRS keeps a dir with a newline whole" test -L "$nldir/remember/SKILL.md"
+assert "REMEMBER_SKILL_DIRS reads the dir after it" test -L "$TMP/nldir-other/remember/SKILL.md"
+assert "REMEMBER_SKILL_DIRS writes nothing under a newline dir's first line" test ! -e "$TMP/nldir"
+
 # 2. Existing ~/.claude → symlink into skills/remember/SKILL.md.
 HOME="$TMP/claude"
 mkdir -p "$HOME/.claude"
