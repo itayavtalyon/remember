@@ -585,6 +585,15 @@ int diag_warning(DiagWarning code, const char *message)
 int diag_warning_detail(DiagWarning code, const char *message, const DiagDetailField *fields,
                         size_t nfields)
 {
+    return diag_warning_split_detail(code, (DiagSplit){.message = message, .fix = NULL}, fields,
+                                     nfields);
+}
+
+/* The one writer of a warning. Plain: "remember: warning: <message> <fix>". JSON:
+   {"code","message","fix","detail"}. */
+int diag_warning_split_detail(DiagWarning code, DiagSplit split, const DiagDetailField *fields,
+                              size_t nfields)
+{
     const char *name = diag_warning_name(code);
 
     if (name == NULL || (fields == NULL && nfields > 0U)) {
@@ -594,23 +603,16 @@ int diag_warning_detail(DiagWarning code, const char *message, const DiagDetailF
         .json_kind = "warning",
         .plain_prefix = k_warning_plain_prefix[code],
         .code = name,
-        .message = message,
+        .message = split.message,
+        .fix = split.fix,
         .fields = fields,
         .nfields = nfields,
     });
 }
 
-/* A warning with its next step (E3 B). Plain: "remember: warning: <message> <fix>". JSON:
-   {"code","message","fix"}. */
 static int diag_warning_split(DiagWarning code, DiagSplit split)
 {
-    return write_notice((Notice){
-        .json_kind = "warning",
-        .plain_prefix = k_warning_plain_prefix[code],
-        .code = k_warning_codes[code],
-        .message = split.message,
-        .fix = split.fix,
-    });
+    return diag_warning_split_detail(code, split, NULL, 0U);
 }
 
 /* The message of a warning that holds a caller's path: measured, then printed. */

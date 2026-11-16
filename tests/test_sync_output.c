@@ -230,8 +230,8 @@ TEST(trash_lists_deleted_and_expired_lists_expired)
     ASSERT_EQ_INT(r.exit_code, 0);
     ASSERT_STREQ(r.err, "");
     ASSERT_STR_CONTAINS(r.out, "\"code\":\"flag_meaning_changed\"");
-    ASSERT_STR_CONTAINS(r.out, "\"message\":\"--trash now means the Trash (deleted memories). "
-                               "For expired memories, use --expired.\"");
+    ASSERT_STR_CONTAINS(r.out, "\"message\":\"--trash now means the Trash (deleted memories).\","
+                               "\"fix\":\"For expired memories, use --expired.\",");
     ASSERT_STR_CONTAINS(r.out, "\"detail\":{\"flag\":\"--trash\",\"use\":\"--expired\"}");
     ASSERT_STR_CONTAINS(r.out, "fresh");
     ASSERT_STR_NOT_CONTAINS(r.out, "old");

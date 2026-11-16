@@ -38,7 +38,7 @@ fi
 TMP="$(mktemp -d "${TMPDIR:-/tmp}/remember-skill-test.XXXXXX")"
 trap 'rm -rf "$TMP"' EXIT
 
-# 1. No agent product dirs → exit 1, mention the three roots.
+# 1. No agent product dirs → exit 1, mention the four roots.
 HOME="$TMP/empty"
 mkdir -p "$HOME"
 set +e
@@ -49,6 +49,120 @@ assert_eq "no agent dirs exits 1" "$rc" "1"
 assert "stderr mentions grok" grep -q '\.grok' <<<"$out"
 assert "stderr mentions claude" grep -q '\.claude' <<<"$out"
 assert "stderr mentions cursor" grep -q '\.cursor' <<<"$out"
+assert "a fake home with no product directory prints the error line that names ~/.codex" \
+  grep -qxF 'error: no agent skill roots found (~/.grok, ~/.claude, ~/.cursor, ~/.codex);' <<<"$out"
+
+# 1b. Only ~/.codex → ~/.codex/skills/remember/SKILL.md, nothing else (plan 28).
+HOME="$TMP/codex"
+mkdir -p "$HOME/.codex"
+set +e
+out="$(HOME="$HOME" "$TOOL" 2>&1)"
+rc=$?
+set -e
+assert_eq "codex-only exits 0" "$rc" "0"
+cdx="$HOME/.codex/skills/remember/SKILL.md"
+assert "a fake home with only ~/.codex installs ~/.codex/skills/remember/SKILL.md" test -L "$cdx"
+assert "codex skill target is the repo SKILL.md" test "$(readlink "$cdx")" = "$SRC"
+assert_eq "codex-only prints the codex path" "$out" "skill: $cdx"
+assert "codex-only does not invent ~/.grok" test ! -e "$HOME/.grok"
+assert "codex-only does not invent ~/.claude" test ! -e "$HOME/.claude"
+assert "codex-only does not invent ~/.cursor" test ! -e "$HOME/.cursor"
+
+# 1c. Without ~/.codex no Codex path appears, with the other products present.
+HOME="$TMP/nocodex"
+mkdir -p "$HOME/.claude"
+set +e
+out="$(HOME="$HOME" "$TOOL" 2>&1)"
+set -e
+assert "a missing ~/.codex adds no Codex path" test ! -e "$HOME/.codex"
+assert "a missing ~/.codex prints no codex line" test "$(grep -c '\.codex' <<<"$out")" = 0
+
+# 1d. --copy writes a regular file under ~/.codex, the same bytes as the source.
+HOME="$TMP/codexcopy"
+mkdir -p "$HOME/.codex"
+set +e
+HOME="$HOME" "$TOOL" --copy >/dev/null 2>&1
+rc=$?
+set -e
+assert_eq "codex --copy exits 0" "$rc" "0"
+assert "codex --copy is a regular file" test -f "$HOME/.codex/skills/remember/SKILL.md"
+assert "codex --copy is not a symlink" test ! -L "$HOME/.codex/skills/remember/SKILL.md"
+assert "codex --copy bytes match source" cmp -s "$HOME/.codex/skills/remember/SKILL.md" "$SRC"
+
+# 1e. A ~/.codex that is a file is not a product directory (no mkdir under a file).
+HOME="$TMP/codexfile"
+mkdir -p "$HOME"
+: >"$HOME/.codex"
+set +e
+out="$(HOME="$HOME" "$TOOL" 2>&1)"
+rc=$?
+set -e
+assert_eq "a ~/.codex file exits 1 as no root" "$rc" "1"
+assert "a ~/.codex file stays a file" test -f "$HOME/.codex"
+assert "a ~/.codex file is no root, not a failed mkdir" \
+  grep -qF 'error: no agent skill roots found' <<<"$out"
+assert "a ~/.codex file prints no cannot-create warning" test "$(grep -c '^warn: ' <<<"$out")" = 0
+
+# 1f. A ~/.codex symlink to a directory is a directory: the skill lands in the target.
+HOME="$TMP/codexlink"
+mkdir -p "$HOME" "$TMP/codexlink-target"
+ln -s "$TMP/codexlink-target" "$HOME/.codex"
+set +e
+HOME="$HOME" "$TOOL" >/dev/null 2>&1
+rc=$?
+set -e
+assert_eq "a ~/.codex symlink to a directory exits 0" "$rc" "0"
+assert "a ~/.codex symlink installs into its target" \
+  test -L "$TMP/codexlink-target/skills/remember/SKILL.md"
+
+# 1g. A dangling ~/.codex symlink is not a directory.
+HOME="$TMP/codexdangling"
+mkdir -p "$HOME"
+ln -s "$TMP/does-not-exist" "$HOME/.codex"
+set +e
+HOME="$HOME" "$TOOL" >/dev/null 2>&1
+rc=$?
+set -e
+assert_eq "a dangling ~/.codex symlink exits 1 as no root" "$rc" "1"
+assert "a dangling ~/.codex symlink creates no target" test ! -e "$TMP/does-not-exist"
+
+# 1h. A HOME with spaces keeps one path per root.
+HOME="$TMP/home with spaces"
+mkdir -p "$HOME/.codex" "$HOME/.claude"
+set +e
+out="$(HOME="$HOME" "$TOOL" 2>&1)"
+rc=$?
+set -e
+assert_eq "a HOME with spaces exits 0" "$rc" "0"
+assert "a HOME with spaces installs codex" test -L "$HOME/.codex/skills/remember/SKILL.md"
+assert "a HOME with spaces installs claude" test -L "$HOME/.claude/skills/remember/SKILL.md"
+assert_eq "a HOME with spaces prints two skill lines" "$(grep -c '^skill: ' <<<"$out")" "2"
+
+# 1i. A skill root that cannot take the file fails loudly: ~/.codex/skills is a file, or
+#     SKILL.md is a real directory (ln and install would nest the link inside it and
+#     report success).
+HOME="$TMP/codexskillsfile"
+mkdir -p "$HOME/.codex"
+: >"$HOME/.codex/skills"
+set +e
+out="$(HOME="$HOME" "$TOOL" 2>&1)"
+rc=$?
+set -e
+assert_eq "a ~/.codex/skills file exits 1" "$rc" "1"
+assert "a ~/.codex/skills file prints no skill line" test "$(grep -c '^skill: ' <<<"$out")" = 0
+HOME="$TMP/codexskilldir"
+mkdir -p "$HOME/.codex/skills/remember/SKILL.md"
+for flag in --symlink --copy; do
+  set +e
+  out="$(HOME="$HOME" "$TOOL" "$flag" 2>&1)"
+  rc=$?
+  set -e
+  assert_eq "a SKILL.md directory exits 1 ($flag)" "$rc" "1"
+  assert "a SKILL.md directory prints no skill line ($flag)" \
+    test "$(grep -c '^skill: ' <<<"$out")" = 0
+  assert "a SKILL.md directory stays empty ($flag)" \
+    test -z "$(ls -A "$HOME/.codex/skills/remember/SKILL.md")"
+done
 
 # 2. Existing ~/.claude → symlink into skills/remember/SKILL.md.
 HOME="$TMP/claude"

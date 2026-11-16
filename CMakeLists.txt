@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(remember VERSION 0.2.0 LANGUAGES C)
+project(remember VERSION 0.3.0 LANGUAGES C)
 
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)
@@ -502,6 +502,9 @@ add_test(NAME install_skill
 )
 add_test(NAME spec_drift
     COMMAND bash "${CMAKE_SOURCE_DIR}/tests/test_spec_drift.sh"
+)
+add_test(NAME release_text
+    COMMAND bash "${CMAKE_SOURCE_DIR}/tests/test_release.sh" $<TARGET_FILE:remember>
 )
 if(REMEMBER_TEST_VFS)
     add_test(NAME no_shim_symbols

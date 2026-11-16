@@ -42,7 +42,7 @@ Environment:
   REMEMBER_RELEASE_DIR    Release build dir (default: build-release)
   REMEMBER_SKILL_DIRS     Colon-separated skill parent dirs (each gets
                           remember/SKILL.md). Default: product skill roots
-                          under ~/.grok, ~/.claude, ~/.cursor when present.
+                          under ~/.grok, ~/.claude, ~/.cursor, ~/.codex when present.
 
 Examples:
   ./scripts/install.sh

@@ -6,7 +6,7 @@
 
 ```bash
 brew install itayavtalyon/remember/remember
-remember-install-skill   # links the agent skill into ~/.claude, ~/.cursor, ~/.grok (if present)
+remember-install-skill   # links the agent skill into ~/.claude, ~/.cursor, ~/.grok, ~/.codex (if present)
 ```
 
 No Homebrew? Build from source: see [README › Build from source](../README.md#build-from-source)

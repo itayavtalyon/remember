@@ -19,7 +19,7 @@ enum { ISO_TS_BUFSIZE = 32 };
 
 /* CMake sets the version; a bare compile (lint, analyzers) gets this one. */
 #ifndef REMEMBER_VERSION
-#define REMEMBER_VERSION "0.2.0"
+#define REMEMBER_VERSION "0.3.0"
 #endif
 
 /* After the parameter list, so clang-format 18 keeps a pointer return on one line. */

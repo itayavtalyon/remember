@@ -32,7 +32,7 @@ The standards for plans 25 and later in [INDEX](INDEX.md).
 The version text is `0.3.0` in both of these, and the two texts match:
 
 - `project(remember VERSION ...)` in `CMakeLists.txt`
-- the `REMEMBER_VERSION` fallback in `src/remember_app.c`
+- the `REMEMBER_VERSION` fallback in `src/commands_common.h` (the plan said `src/remember_app.c`; that file only prints the value, found by `grep -rn REMEMBER_VERSION src`)
 
 Do not add a second constant.
 

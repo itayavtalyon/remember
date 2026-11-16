@@ -853,8 +853,8 @@ TEST(json_trash_warning_is_in_the_list_envelope)
                  "\"data\":{\"count\":0,\"total\":0,\"entries\":[]},"
                  "\"next_cursor\":null,\"has_more\":false,"
                  "\"warnings\":[{\"code\":\"flag_meaning_changed\","
-                 "\"message\":\"--trash now means the Trash (deleted memories). "
-                 "For expired memories, use --expired.\","
+                 "\"message\":\"--trash now means the Trash (deleted memories).\","
+                 "\"fix\":\"For expired memories, use --expired.\","
                  "\"detail\":{\"flag\":\"--trash\",\"use\":\"--expired\"}}]}\n");
     cmd_result_free(&r);
     free(db);
@@ -883,10 +883,49 @@ TEST(json_synced_folder_warning_is_in_the_list_envelope)
                  "{\"format\":\"remember-message\",\"version\":1,\"type\":\"memory.list.result\","
                  "\"data\":{\"count\":0,\"total\":0,\"entries\":[]},"
                  "\"next_cursor\":null,\"has_more\":false,"
-                 "\"warnings\":[{\"code\":\"synced_folder\",\"message\":\"database path looks "
-                 "like a synced folder (iCloud/Dropbox/Google Drive); corruption risk - prefer "
-                 "a local disk\"}]}\n");
+                 "\"warnings\":[{\"code\":\"synced_folder\",\"message\":\"this brain looks "
+                 "like it is in a synced folder (iCloud Drive, Dropbox or Google Drive), and "
+                 "syncing can damage it.\",\"fix\":\"Move the brain to a folder on a local "
+                 "disk.\"}]}\n");
     cmd_result_free(&r);
+    harness_remove_tree(dir);
+}
+
+/* E3B-2 (decision:2026-11-12-copy-batch-e3b-warning-splits): the plain line is
+   "<message> <fix>", JSON keeps them split, and the 0.2.0 sentence is gone. */
+TEST(synced_folder_warning_has_message_and_fix)
+{
+    enum { PATH_CAP = 4096 };
+    static const char k_old[] = "database path looks like";
+    char tmpl[] = "/tmp/Dropbox-remember-XXXXXX";
+    const char *dir = mkdtemp(tmpl);
+    char path[PATH_CAP];
+    const char *plain_args[] = {"list"};
+    const char *json_args[] = {"--json", "list"};
+    CmdResult plain;
+    CmdResult json;
+    int wrote = 0;
+
+    ASSERT_TRUE(dir != NULL);
+    if (dir == NULL) {
+        return;
+    }
+    wrote = snprintf(path, sizeof(path), "%s/test.db", dir);
+    ASSERT_TRUE(wrote > 0 && (size_t)wrote < sizeof(path));
+    plain = run_remember(path, plain_args, 1U, NULL);
+    json = run_remember(path, json_args, 2U, NULL);
+    ASSERT_STREQ(plain.err,
+                 "remember: warning: this brain looks like it is in a synced folder (iCloud "
+                 "Drive, Dropbox or Google Drive), and syncing can damage it. Move the brain "
+                 "to a folder on a local disk.\n");
+    ASSERT_STR_NOT_CONTAINS(plain.err, k_old);
+    ASSERT_STR_CONTAINS(json.out, "{\"code\":\"synced_folder\",\"message\":\"this brain looks like "
+                                  "it is in a synced folder (iCloud Drive, Dropbox or Google "
+                                  "Drive), and syncing can damage it.\",\"fix\":\"Move the brain to "
+                                  "a folder on a local disk.\"}");
+    ASSERT_STR_NOT_CONTAINS(json.out, k_old);
+    cmd_result_free(&plain);
+    cmd_result_free(&json);
     harness_remove_tree(dir);
 }
 
@@ -4431,6 +4470,7 @@ void register_errors_tests(void)
     RUN_TEST(plain_trash_warning_uses_warning_prefix);
     RUN_TEST(json_trash_warning_is_in_the_list_envelope);
     RUN_TEST(json_synced_folder_warning_is_in_the_list_envelope);
+    RUN_TEST(synced_folder_warning_has_message_and_fix);
     RUN_TEST(store_text_codes_follow_the_locked_split);
     RUN_TEST(err_fmt_keeps_a_long_unknown_option);
     RUN_TEST(internal_parse_stays_a_plain_internal_line);

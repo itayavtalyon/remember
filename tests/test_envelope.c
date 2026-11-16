@@ -299,9 +299,9 @@ TEST(envelope_failure_keeps_its_type_and_carries_the_warnings_after_the_error)
         r.out, "{\"format\":\"remember-message\",\"version\":1,\"type\":\"memory.list.result\","
                "\"error\":{\"code\":\"usage\",\"message\":\"invalid --limit (must be 1..1000)\","
                "\"fix\":\"Run 'remember list --help' to see how to use it.\",\"retryable\":false},"
-               "\"warnings\":[{\"code\":\"synced_folder\",\"message\":\"database path looks "
-               "like a synced folder (iCloud/Dropbox/Google Drive); corruption risk - prefer "
-               "a local disk\"}]}\n");
+               "\"warnings\":[{\"code\":\"synced_folder\",\"message\":\"this brain looks like "
+               "it is in a synced folder (iCloud Drive, Dropbox or Google Drive), and syncing "
+               "can damage it.\",\"fix\":\"Move the brain to a folder on a local disk.\"}]}\n");
     cmd_result_free(&r);
     free(db);
     harness_remove_tree(dir);
@@ -323,10 +323,10 @@ TEST(envelope_warnings_keep_their_order_with_a_comma_between)
     ASSERT_STREQ(r.err, "");
     ASSERT_STR_CONTAINS(r.out, "\"entries\":[]},\"next_cursor\":null,\"has_more\":false,"
                                "\"warnings\":[{\"code\":\"synced_folder\",");
-    ASSERT_STR_CONTAINS(r.out, "local disk\"},{\"code\":\"flag_meaning_changed\",\"message\":"
-                               "\"--trash now means the Trash (deleted memories). For expired "
-                               "memories, use --expired.\",\"detail\":{\"flag\":\"--trash\","
-                               "\"use\":\"--expired\"}}]}\n");
+    ASSERT_STR_CONTAINS(r.out, "local disk.\"},{\"code\":\"flag_meaning_changed\",\"message\":"
+                               "\"--trash now means the Trash (deleted memories).\",\"fix\":"
+                               "\"For expired memories, use --expired.\",\"detail\":{\"flag\":"
+                               "\"--trash\",\"use\":\"--expired\"}}]}\n");
     cmd_result_free(&r);
     free(db);
     harness_remove_tree(dir);
@@ -2050,7 +2050,7 @@ static void progress_line(int master_fd, const char *line, long long now_ms, con
    caller's words. "applied" is not a product sentence. */
 TEST(envelope_color_and_quiet_are_accepted_as_globals)
 {
-    static const char version_line[] = "remember 0.2.0\n";
+    static const char version_line[] = "remember 0.3.0\n";
     static const char invalid[] = "remember: invalid --color (must be auto, always, or never)\n";
     static const char missing[] = "remember: --color: option requires a value\n";
     static const char json_invalid[] =
@@ -2231,7 +2231,7 @@ TEST(envelope_color_follows_the_tty_and_the_environment)
     rc = run_captured(db, always_args, sizeof always_args / sizeof always_args[0], &out_text,
                       &err_text);
     ASSERT_EQ_INT(rc, 0);
-    ASSERT_STREQ(out_text, "remember 0.2.0\n");
+    ASSERT_STREQ(out_text, "remember 0.3.0\n");
     ASSERT_STREQ(err_text, "");
     ASSERT_TRUE(app_use_color(plain));
     free(out_text);
@@ -2376,7 +2376,7 @@ TEST(envelope_progress_is_a_stderr_line_and_quiet_json_stop_it)
     rc = run_captured(db, quiet_args, sizeof quiet_args / sizeof quiet_args[0], &out_text,
                       &err_text);
     ASSERT_EQ_INT(rc, 0);
-    ASSERT_STREQ(out_text, "remember 0.2.0\n");
+    ASSERT_STREQ(out_text, "remember 0.3.0\n");
     ASSERT_STREQ(err_text, "");
     free(out_text);
     free(err_text);
@@ -2393,7 +2393,7 @@ TEST(envelope_progress_is_a_stderr_line_and_quiet_json_stop_it)
 
     rc = run_captured(db, json_args, sizeof json_args / sizeof json_args[0], &out_text, &err_text);
     ASSERT_EQ_INT(rc, 0);
-    ASSERT_STREQ(out_text, "remember 0.2.0\n");
+    ASSERT_STREQ(out_text, "remember 0.3.0\n");
     ASSERT_STREQ(err_text, "");
     free(out_text);
     free(err_text);

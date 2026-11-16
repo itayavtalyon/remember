@@ -60,6 +60,16 @@ remember [--db PATH] [--json] [--strict] [--color=auto|always|never] [--quiet] [
 
 **DB location:** must be a **local disk**. Paths under iCloud (`com~apple~CloudDocs`), Dropbox, or Google Drive get a stderr warning and risk corruption. Prefer default `~/.remember`.
 
+## Changes in 0.3.0
+
+- Use `--json` to get one `remember-message` version 1 envelope on stdout, for success and failure alike. There is no `--json-errors`.
+- To page a list, pass back its `next_cursor`. Search returns its top results and doesn't page. There is no `--offset`.
+- Refer to a memory by `id`, a lowercase hyphenated UUID. The number `local_id` is for this device's CLI only. There is no `--sync-id`.
+- Writes record actors, not `source`. There is no `--source`.
+- `--trash` is the Trash (deleted memories). `--expired` is expired memories.
+- To empty the Trash, run `remember purge <locator>` once for each memory in it. There is no `purge-trash`.
+- For scripts and agents, use `--json`, because human dates are local.
+
 ## Exit codes
 
 | Code | Meaning |
@@ -85,7 +95,7 @@ With `--json`, a failure is the same one envelope on stdout: the command's `type
 
 Exactly **one** of: a positional UUID or digits (`local_id`) | `--key KEY`.
 
-JSON `id` is the memory's lowercase hyphenated UUID. Pass that UUID, a number from `remember list`, or `--key` to address a memory. `--id`, `--local-id`, and `--sync-id` are unknown options. There is no alias.
+JSON `id` is the memory's lowercase hyphenated UUID. Pass that UUID, a number from `remember list`, or `--key` to address a memory. `--id` and `--local-id` are unknown options. There is no alias.
 
 **Bins** (orthogonal flags; mutex):
 
@@ -127,7 +137,7 @@ remember --json add --as agent -- -
 - Optional `--key KEY` → keyed **upsert** (same key replaces body; tags **union**; same `id`)
 - Keyless → body-hash merge (duplicate body merges tags). Hitting an **expired or soft-deleted** same key/hash **revives** it (same `id`).
 - Body token `-` alone means **stdin**; after `--`, `-` is a one-character body
-- `--as KIND`: `human` | `agent` | `tool` | `share` (default `human`); optional `--actor ID` (1 to 64 of `A-Za-z0-9_./:-`). **Agents pass `--as agent` on add.** `share` is used by the Mac app Share/Service/Intent surfaces — agents should not set it. There is no `--source`. Inside a hook (`REMEMBER_HOOK_DEPTH` ≥ 1) `--as` and `--actor` are refused.
+- `--as KIND`: `human` | `agent` | `tool` | `share` (default `human`); optional `--actor ID` (1 to 64 of `A-Za-z0-9_./:-`). **Agents pass `--as agent` on add.** `share` is used by the Mac app Share/Service/Intent surfaces — agents should not set it. Inside a hook (`REMEMBER_HOOK_DEPTH` ≥ 1) `--as` and `--actor` are refused.
 - Every write also takes `--hooks` / `--no-hooks`; until hooks ship they change nothing.
 - Human stdout: id only. JSON: type `memory.add.result`, `data` is `{"action":"created"|"merged"|"updated","memory":{…}}`; the memory includes `links`, like `get`.
 
@@ -146,7 +156,7 @@ remember --json tags
 
 - search: one required QUERY. Word prefixes match in keys, bodies and tags (`boo` finds "Book", `edit` finds `pref:editor`), and the QUERY also runs as FTS5 syntax. A QUERY FTS5 cannot parse still exits 0 with the prefix matches and a warning (FTS notes below). An empty or blank QUERY exits 0 with an empty result. Put `--` before a QUERY that starts with `-` (`search -- -x`); without it, `-x` is an unknown option.
 - Order: exact key, then key prefix, then relevance (bm25), then `updated_at`.
-- Filters: `--tag` (AND, repeatable), `--key`, `--created-by KIND`, `--updated-by KIND`, `--limit` (default 20, max 1000), `--expired` / `--deleted` (default **live only**). Number options take ASCII digits only (`+5` or ` 5` is a usage error). `--offset` is an unknown option.
+- Filters: `--tag` (AND, repeatable), `--key`, `--created-by KIND`, `--updated-by KIND`, `--limit` (default 20, max 1000), `--expired` / `--deleted` (default **live only**). Number options take ASCII digits only (`+5` or ` 5` is a usage error).
 - JSON (list): type `memory.list.result`; `data` has `count`, `total`, `entries` (full bodies + `links` stubs; empty array if none). The envelope adds `next_cursor` and `has_more` after `data`. The last page has `"next_cursor":null` and `"has_more":false`. Pass `next_cursor` back as `--cursor` **alone** (only `--limit` may change): the cursor carries the whole query. A filter, sort, or bin flag next to `--cursor`, or a bad cursor, is `invalid_argument` `invalid --cursor`.
 - JSON (search): type `memory.search.result`; `data` has `count`, `total`, `keys`, `tags`, `entries`. `keys` is `{"total":N,"items":[{"key","id","label","updated_at"}]}`, `tags` is `{"total":N,"items":[{"tag","count"}]}`: the keys and tags that match the QUERY among the memories in the active bin and filters (not only the matched rows). `id` is that memory's UUID. A key item has no `local_id`. `--facet-limit N` (default 50, 1..200) caps each `items`; `total` counts them all; `--limit` pages `entries` only. Search has no cursor. `label` is the memory's `# ` title, else the key. After `entries`: `query` (`{"original":{"text","tags","bins","time_range"}}`, what was asked), `"ranked_by":"bm25"`, `"filters":[]`.
 - If `total` > rows received, pass list's `next_cursor` as `--cursor`, or raise `--limit`, before concluding nothing else exists
@@ -178,7 +188,7 @@ remember --json purge --deleted                   # wipe the Trash (the Deleted 
 
 - Unflagged `delete` = **soft** (sets `deleted_at`, clears `expires_at`, keeps body/tags/key/id/edges/FTS)
 - `delete --expired` hard-wipes one row. `delete --deleted` does not exist. `delete --trash` does not wipe.
-- `purge --expired` / `purge --deleted` = whole-bin hard wipe. `purge --trash` selects the Deleted bin and warns. `purge-trash` does not exist.
+- `purge --expired` / `purge --deleted` = whole-bin hard wipe. `purge --trash` selects the Deleted bin and warns.
 
 **Update rules:**
 
@@ -292,6 +302,8 @@ For anything that changes over time:
 Keyed slots make duplicate rivals impossible. Keyless facts still resolve by recency (`updated_at`).
 
 ## Tag / key normalization
+
+Tags that start with a bucket prefix group memories into buckets, for example `project:fortkeeps`. Bucket prefixes are the brain setting `remember.buckets.prefixes`, which is `project:` and `status:` by default; run `remember settings get remember.buckets.prefixes` to see the list in use.
 
 - ASCII casefold; trim edges; internal spaces OK; no tabs/newlines/controls inside tokens
 - Use stable names: `pref:editor`, `decision:db-engine`, `project:remember`

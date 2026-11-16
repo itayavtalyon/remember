@@ -509,9 +509,12 @@ static Store *open_store(const CliArgs *args, int *out_rc)
     }
     /* Warn only: synced volumes can corrupt any journal mode; still open. */
     if (util_path_looks_synced(path)) {
-        (void)diag_warning(DIAG_WARN_SYNCED_FOLDER,
-                           "database path looks like a synced folder "
-                           "(iCloud/Dropbox/Google Drive); corruption risk - prefer a local disk");
+        (void)diag_warning_split_detail(
+            DIAG_WARN_SYNCED_FOLDER,
+            (DiagSplit){.message = "this brain looks like it is in a synced folder (iCloud Drive, "
+                                   "Dropbox or Google Drive), and syncing can damage it.",
+                        .fix = "Move the brain to a folder on a local disk."},
+            NULL, 0U);
     }
     opts.no_create = args->globals.no_create;
     /* Repair and export never create a brain (decision:plan16-repair-no-create,
