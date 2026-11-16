@@ -1,11 +1,10 @@
-#ifdef __linux__
-#define _GNU_SOURCE // NOLINT(bugprone-reserved-identifier,cert-dcl37-c,cert-dcl51-cpp) glibc
-                    // feature macro
-#endif
-
+/* No _GNU_SOURCE: a dead stream comes from failing_stream.c, so every call here is POSIX 2008 or
+   XSI. With glibc 2.43, _GNU_SOURCE also makes strstr a recursive C23 _Generic macro, which
+   -Weverything rejects (-Wdisabled-macro-expansion). */
 #include "appio.h"
 #include "cli.h"
 #include "diag.h"
+#include "failing_stream.h"
 #include "harness.h"
 #include "normalize.h"
 #include "register.h"
@@ -13,7 +12,6 @@
 #include "store.h"
 #include "test.h"
 
-#include <errno.h>
 #include <fcntl.h>
 #include <poll.h>
 #include <stdio.h>
@@ -1787,56 +1785,6 @@ typedef struct {
     int *echo_on;
 } PromptOut;
 
-/* A stream whose fileno is -1 and whose writes fail. Covers the not-a-terminal
-   side and a prompt that must stop before it reads. */
-#ifdef __APPLE__
-static int dead_write(void *cookie, const char *data, int length)
-{
-    (void)cookie;
-    (void)data;
-    (void)length;
-    errno = EIO;
-    return -1;
-}
-
-static FILE *open_dead_stream(void)
-{
-    FILE *stream = funopen(NULL, NULL, dead_write, NULL, NULL);
-
-    if (stream != NULL) {
-        (void)setvbuf(stream, NULL, _IONBF, 0);
-    }
-    return stream;
-}
-#elif defined(__GLIBC__)
-static ssize_t dead_write(void *cookie, const char *data, size_t length)
-{
-    (void)cookie;
-    (void)data;
-    (void)length;
-    errno = EIO;
-    return 0;
-}
-
-static FILE *open_dead_stream(void)
-{
-    cookie_io_functions_t funcs = {.read = NULL, .write = dead_write, .seek = NULL, .close = NULL};
-    FILE *stream = fopencookie(NULL, "w", funcs);
-
-    if (stream != NULL) {
-        (void)setvbuf(stream, NULL, _IONBF, 0);
-    }
-    return stream;
-}
-#else
-/* No cookie stream here. tmpfile is not a dead stream; macOS and glibc do not
-   use this branch. It exists so a config with neither symbol still typechecks. */
-static FILE *open_dead_stream(void)
-{
-    return tmpfile();
-}
-#endif
-
 static int save_env(const char *name, SavedEnv *slot)
 {
     const char *old = getenv(name);
@@ -2213,6 +2161,7 @@ TEST(envelope_color_follows_the_tty_and_the_environment)
     FILE *tty = NULL;
     FILE *plain = NULL;
     FILE *broken_fp = NULL;
+    FailingStream dead; /* fileno -1 and every write fails: the not-a-terminal side */
     char *db = NULL;
     AppPresentation mode;
     const char *always_args[] = {"--color=always", "version"};
@@ -2228,7 +2177,7 @@ TEST(envelope_color_follows_the_tty_and_the_environment)
     }
     tty = open_pty_slave(&master_fd, "r");
     plain = tmpfile();
-    broken_fp = open_dead_stream();
+    broken_fp = failing_stream_open(&dead, 0U);
     if (tty == NULL || plain == NULL || broken_fp == NULL) {
         ASSERT_TRUE(tty != NULL);
         ASSERT_TRUE(plain != NULL);
@@ -2488,6 +2437,7 @@ TEST(envelope_prompt_echoes_the_typed_line)
     int ends[2] = {-1, -1};
     FILE *input = NULL;
     FILE *sink_fp = NULL;
+    FailingStream dead; /* every write fails: the prompt must stop before it reads */
     char buf[PROMPT_SLOT];
     char left[PROMPT_SLOT];
     size_t got = 0U;
@@ -2569,7 +2519,7 @@ TEST(envelope_prompt_echoes_the_typed_line)
     if (input != NULL) {
         ends[0] = -1;
     }
-    sink_fp = open_dead_stream();
+    sink_fp = failing_stream_open(&dead, 0U);
     if (input == NULL || sink_fp == NULL) {
         ASSERT_TRUE(input != NULL);
         ASSERT_TRUE(sink_fp != NULL);

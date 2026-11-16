@@ -102,6 +102,8 @@ set_property(SOURCE
     src/store_sqlite.c
     src/normalize.c
     src/settings.c
+    src/brain_list.c
+    src/brain_note.c
     src/sync_credential.c
     src/unicode.c
     src/search_terms.c
@@ -240,6 +242,8 @@ set(REMEMBER_LIB_SOURCES
     src/store_sqlite.c
     src/normalize.c
     src/settings.c
+    src/brain_list.c
+    src/brain_note.c
     src/sync_credential.c
     src/unicode.c
     src/search_terms.c
@@ -353,6 +357,7 @@ set(REMEMBER_TEST_SOURCES
     tests/test_outbox.c
     tests/test_old_cli.c
     tests/test_plugins.c
+    tests/test_brain_list.c
     tests/fixture_roundtrip.c
 )
 add_executable(remember_tests

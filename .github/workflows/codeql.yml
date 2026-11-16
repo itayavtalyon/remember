@@ -19,7 +19,10 @@ concurrency:
 jobs:
   analyze:
     name: CodeQL analyze (C)
-    runs-on: ubuntu-latest
+    # Pinned, not ubuntu-latest: the image pins glibc and clang, and scripts/ci-linux.sh runs
+    # the same ubuntu:24.04. ubuntu-latest moved to 26.04 (glibc 2.43, clang 21) on 2026-11-16
+    # and broke the build on untouched code. Raising it is a deliberate change.
+    runs-on: ubuntu-24.04
     # Needed to upload results to the Security / Code Scanning UI.
     permissions:
       security-events: write

@@ -982,6 +982,15 @@ TEST(output_text_human_masks_c1_controls)
     assert_written(f, "a?b?c?d");
 }
 
+/* A body keeps its TABs; only the brain list row masks them (G1 A). */
+TEST(output_text_human_keeps_a_tab)
+{
+    FILE *f = given_stream();
+
+    ASSERT_EQ_INT(output_text_human(f, "a\tb\x1b", false), 0);
+    assert_written(f, "a\tb?");
+}
+
 /* Only C2 80..C2 9F: the next code point, another lead byte, or a stray C2 stay. */
 TEST(output_text_human_keeps_other_two_byte_text)
 {
@@ -1507,6 +1516,138 @@ TEST(output_conflicts_envelope_reports_every_failed_write)
     assert_reports_every_failed_write(write_conflicts_envelope);
 }
 
+/* ---- brain list and prune data (plan 26) ------------------------------------ */
+
+static BrainList given_two_brains(void)
+{
+    static BrainRow rows[2] = {
+        {.path = (char *)"/tmp/a\"b.db",
+         .brain_id = (char *)"01a0d90a-e71c-7000-8000-000000000001",
+         .added_at = (char *)"2026-11-11T12:00:00.000Z"},
+        {.path = (char *)"/tmp/c.db",
+         .brain_id = (char *)"01a0d90a-e71c-7000-8000-000000000002",
+         .added_at = (char *)"2026-11-11T13:00:00.000Z"},
+    };
+    BrainList list = {.rows = rows, .count = 2U};
+
+    return list;
+}
+
+TEST(output_brain_list_data_writes_the_count_and_each_row)
+{
+    BrainList list = given_two_brains();
+    BrainList none = {0};
+    FILE *f = given_stream();
+
+    ASSERT_EQ_INT(output_brain_list_data(f, &list), 0);
+    assert_written(f, "{\"count\":2,\"brains\":[{\"path\":\"/tmp/a\\\"b.db\","
+                      "\"brain_id\":\"01a0d90a-e71c-7000-8000-000000000001\","
+                      "\"added_at\":\"2026-11-11T12:00:00.000Z\"},{\"path\":\"/tmp/c.db\","
+                      "\"brain_id\":\"01a0d90a-e71c-7000-8000-000000000002\","
+                      "\"added_at\":\"2026-11-11T13:00:00.000Z\"}]}");
+    f = given_stream();
+    ASSERT_EQ_INT(output_brain_list_data(f, &none), 0);
+    assert_written(f, "{\"count\":0,\"brains\":[]}");
+}
+
+TEST(output_brain_prune_data_writes_the_action_the_count_and_each_row)
+{
+    BrainList list = given_two_brains();
+    BrainList none = {0};
+    FILE *f = given_stream();
+
+    ASSERT_EQ_INT(output_brain_prune_data(f, &list), 0);
+    assert_written(f, "{\"action\":\"pruned\",\"count\":2,\"brains\":[{\"path\":"
+                      "\"/tmp/a\\\"b.db\",\"brain_id\":\"01a0d90a-e71c-7000-8000-000000000001\","
+                      "\"added_at\":\"2026-11-11T12:00:00.000Z\"},{\"path\":\"/tmp/c.db\","
+                      "\"brain_id\":\"01a0d90a-e71c-7000-8000-000000000002\","
+                      "\"added_at\":\"2026-11-11T13:00:00.000Z\"}]}");
+    f = given_stream();
+    ASSERT_EQ_INT(output_brain_prune_data(f, &none), 0);
+    assert_written(f, "{\"action\":\"pruned\",\"count\":0,\"brains\":[]}");
+}
+
+TEST(output_brain_list_and_prune_data_reject_missing_arguments)
+{
+    BrainList list = given_two_brains();
+    BrainList no_rows = {.rows = NULL, .count = 1U};
+    FILE *f = given_stream();
+
+    ASSERT_EQ_INT(output_brain_list_data(NULL, &list), -1);
+    ASSERT_EQ_INT(output_brain_list_data(f, NULL), -1);
+    ASSERT_EQ_INT(output_brain_list_data(f, &no_rows), -1);
+    ASSERT_EQ_INT(output_brain_prune_data(NULL, &list), -1);
+    ASSERT_EQ_INT(output_brain_prune_data(f, NULL), -1);
+    ASSERT_EQ_INT(output_brain_prune_data(f, &no_rows), -1);
+    assert_written(f, "");
+}
+
+static int write_brain_list_envelope(FILE *f)
+{
+    BrainList list = given_two_brains();
+
+    return output_brain_list_data(f, &list);
+}
+
+static int write_brain_prune_envelope(FILE *f)
+{
+    BrainList list = given_two_brains();
+
+    return output_brain_prune_data(f, &list);
+}
+
+TEST(output_brain_row_human_writes_path_id_and_added_at_tab_separated)
+{
+    BrainList list = given_two_brains();
+    FILE *f = given_stream();
+
+    ASSERT_EQ_INT(output_brain_row_human(f, &list.rows[1]), 0);
+    assert_written(f,
+                   "/tmp/c.db\t01a0d90a-e71c-7000-8000-000000000002\t2026-11-11T13:00:00.000Z\n");
+}
+
+TEST(output_brain_row_human_masks_control_bytes_and_tabs_in_each_field)
+{
+    BrainRow row = {
+        .path = (char *)"/a\x1b[2J\tb", .brain_id = (char *)"i\n", .added_at = (char *)"t\x7f\t"};
+    FILE *f = given_stream();
+
+    ASSERT_EQ_INT(output_brain_row_human(f, &row), 0);
+    assert_written(f, "/a?[2J?b\ti?\tt??\n");
+}
+
+TEST(output_brain_row_human_rejects_missing_arguments)
+{
+    BrainList list = given_two_brains();
+    FILE *f = given_stream();
+
+    ASSERT_EQ_INT(output_brain_row_human(NULL, &list.rows[0]), -1);
+    ASSERT_EQ_INT(output_brain_row_human(f, NULL), -1);
+    assert_written(f, "");
+}
+
+static int write_brain_row_human(FILE *f)
+{
+    BrainList list = given_two_brains();
+
+    return output_brain_row_human(f, &list.rows[1]);
+}
+
+TEST(output_brain_row_human_reports_every_failed_write)
+{
+    assert_reports_every_failed_write(write_brain_row_human);
+}
+
+TEST(output_brain_list_data_reports_every_failed_write)
+{
+    assert_reports_every_failed_write(write_brain_list_envelope);
+}
+
+TEST(output_brain_prune_data_reports_every_failed_write)
+{
+    assert_reports_every_failed_write(write_brain_prune_envelope);
+}
+
 TEST(output_memory_envelope_add_reports_every_failed_write)
 {
     assert_reports_every_failed_write(write_add_envelope);
@@ -1638,6 +1779,15 @@ void register_output_tests(void)
     RUN_TEST(output_device_envelopes_reject_missing_arguments);
     RUN_TEST(output_brain_new_id_envelope_rejects_missing_arguments);
     RUN_TEST(output_conflicts_envelope_rejects_missing_arguments);
+    RUN_TEST(output_brain_list_data_writes_the_count_and_each_row);
+    RUN_TEST(output_brain_prune_data_writes_the_action_the_count_and_each_row);
+    RUN_TEST(output_brain_list_and_prune_data_reject_missing_arguments);
+    RUN_TEST(output_brain_row_human_writes_path_id_and_added_at_tab_separated);
+    RUN_TEST(output_brain_row_human_masks_control_bytes_and_tabs_in_each_field);
+    RUN_TEST(output_brain_row_human_rejects_missing_arguments);
+    RUN_TEST(output_brain_row_human_reports_every_failed_write);
+    RUN_TEST(output_brain_list_data_reports_every_failed_write);
+    RUN_TEST(output_brain_prune_data_reports_every_failed_write);
     RUN_TEST(output_conflicts_envelope_lists_no_conflicts);
     RUN_TEST(output_conflicts_envelope_separates_conflicts_with_a_comma);
     RUN_TEST(output_conflicts_envelope_rejects_an_incomplete_conflict);
@@ -1657,6 +1807,7 @@ void register_output_tests(void)
     RUN_TEST(output_preview_masks_a_c1_control);
     RUN_TEST(output_text_human_masks_c1_controls);
     RUN_TEST(output_text_human_keeps_other_two_byte_text);
+    RUN_TEST(output_text_human_keeps_a_tab);
     RUN_TEST(output_preview_cuts_by_bytes_before_the_scalar_cap);
     RUN_TEST(output_entry_human_line_masks_control_bytes_in_key_tags_and_updated_at);
     RUN_TEST(output_tags_human_masks_control_bytes);

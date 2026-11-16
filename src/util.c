@@ -233,8 +233,11 @@ int util_resolve_db_path(const char *cli_db, char *buf, size_t buflen, char *err
     return format_db_path(buf, buflen, err, errlen, home, "/.remember/remember.db");
 }
 
-/* cppcheck-suppress staticFunction ; public API (util.h); used by tests */
-int util_resolve_user_db_path(char *buf, size_t buflen, char *err, size_t errlen)
+/* The data dir (decision:g-01), or user.db in it: $XDG_DATA_HOME/remember when
+   XDG_DATA_HOME is set and non-empty, else $HOME/.remember. xdg_leaf and home_leaf are
+   what follows the base: the folder, or the folder and user.db. */
+static int resolve_data_path(const char *xdg_leaf, const char *home_leaf, char *buf, size_t buflen,
+                             char *err, size_t errlen)
 {
     const char *chosen = NULL;
     const char *home = NULL;
@@ -243,20 +246,31 @@ int util_resolve_user_db_path(char *buf, size_t buflen, char *err, size_t errlen
         set_err(err, errlen, "internal error: path buffer missing");
         return -1;
     }
-
-    chosen = env_nonempty("REMEMBER_USER_DB");
-    if (chosen != NULL) {
-        return copy_regular_db_path(chosen, buf, buflen, err, errlen);
-    }
     chosen = env_nonempty("XDG_DATA_HOME");
     if (chosen != NULL) {
-        return format_db_path(buf, buflen, err, errlen, chosen, "/remember/user.db");
+        return format_db_path(buf, buflen, err, errlen, chosen, xdg_leaf);
     }
     home = home_dir(err, errlen, "HOME is not set");
     if (home == NULL) {
         return -1;
     }
-    return format_db_path(buf, buflen, err, errlen, home, "/.remember/user.db");
+    return format_db_path(buf, buflen, err, errlen, home, home_leaf);
+}
+
+/* cppcheck-suppress staticFunction ; public API (util.h); used by tests */
+int util_resolve_user_db_path(char *buf, size_t buflen, char *err, size_t errlen)
+{
+    const char *chosen = env_nonempty("REMEMBER_USER_DB");
+
+    if (buf != NULL && buflen > 0U && chosen != NULL) {
+        return copy_regular_db_path(chosen, buf, buflen, err, errlen);
+    }
+    return resolve_data_path("/remember/user.db", "/.remember/user.db", buf, buflen, err, errlen);
+}
+
+int util_resolve_data_dir(char *buf, size_t buflen, char *err, size_t errlen)
+{
+    return resolve_data_path("/remember", "/.remember", buf, buflen, err, errlen);
 }
 
 int util_read_stdin(char **out, size_t *out_len, size_t max_len)

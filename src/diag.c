@@ -172,6 +172,8 @@ static const char *const k_warning_codes[DIAG_WARN_COUNT] = {
     [DIAG_WARN_UNKNOWN_FIELD] = "unknown_field",
     [DIAG_WARN_SETTING_IMPORT_SKIPPED] = "setting_import_skipped",
     [DIAG_WARN_SCHEMA_TOO_NEW_READ_ONLY] = "schema_too_new_read_only",
+    [DIAG_WARN_BRAIN_ID_CLONED] = "brain_id_cloned",
+    [DIAG_WARN_BRAIN_MISSING] = "brain_missing",
 };
 
 /* Plain line lead per warning. E2.3 gives raw_query_ignored its own words; the
@@ -185,6 +187,8 @@ static const char *const k_warning_plain_prefix[DIAG_WARN_COUNT] = {
     [DIAG_WARN_UNKNOWN_FIELD] = "warning: ",
     [DIAG_WARN_SETTING_IMPORT_SKIPPED] = "warning: ",
     [DIAG_WARN_SCHEMA_TOO_NEW_READ_ONLY] = "warning: ",
+    [DIAG_WARN_BRAIN_ID_CLONED] = "warning: ",
+    [DIAG_WARN_BRAIN_MISSING] = "warning: ",
 };
 
 static const char *catalog_name(const char *const *names, size_t count, size_t index)
@@ -594,6 +598,56 @@ int diag_warning_detail(DiagWarning code, const char *message, const DiagDetailF
         .fields = fields,
         .nfields = nfields,
     });
+}
+
+/* A warning with its next step (E3 B). Plain: "remember: warning: <message> <fix>". JSON:
+   {"code","message","fix"}. */
+static int diag_warning_split(DiagWarning code, DiagSplit split)
+{
+    return write_notice((Notice){
+        .json_kind = "warning",
+        .plain_prefix = k_warning_plain_prefix[code],
+        .code = k_warning_codes[code],
+        .message = split.message,
+        .fix = split.fix,
+    });
+}
+
+/* The message of a warning that holds a caller's path: measured, then printed. */
+int diag_brain_id_cloned(const char *path, const char *new_id)
+{
+    static const char k_message[] =
+        "brain \"%s\" looks like a copy of another brain, so it got its own new id, %s. The "
+        "original keeps the old id. Both now sync and run hooks as separate brains.";
+    int need = snprintf(NULL, 0, k_message, path, new_id);
+    char *message = need >= 0 ? (char *)malloc((size_t)need + 1U) : NULL;
+    int rc = -1;
+
+    if (message != NULL && snprintf(message, (size_t)need + 1U, k_message, path, new_id) == need) {
+        rc = diag_warning_split(
+            DIAG_WARN_BRAIN_ID_CLONED,
+            (DiagSplit){.message = message, .fix = "Run 'remember brain list' to see both."});
+    }
+    free(message);
+    return rc;
+}
+
+int diag_brain_missing(const char *path)
+{
+    static const char k_message[] = "brain \"%s\" is in the list but isn't on disk.";
+    int need = snprintf(NULL, 0, k_message, path);
+    char *message = need >= 0 ? (char *)malloc((size_t)need + 1U) : NULL;
+    int rc = -1;
+
+    if (message != NULL && snprintf(message, (size_t)need + 1U, k_message, path) == need) {
+        rc = diag_warning_split(
+            DIAG_WARN_BRAIN_MISSING,
+            (DiagSplit){.message = message,
+                        .fix = "If you moved it, open it once from its new place. Otherwise run "
+                               "'remember brain prune' to remove it from the list."});
+    }
+    free(message);
+    return rc;
 }
 
 /* R27b-1 and R27b-2. The same two sentences open the warning and the error,

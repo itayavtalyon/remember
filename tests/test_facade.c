@@ -681,8 +681,21 @@ TEST(facade_conflict_accept_matches_cli)
     }
 
     r = run_remember(local1, accept, sizeof(accept) / sizeof(accept[0]), NULL);
-    frc = facade_run(local2, accept, sizeof(accept) / sizeof(accept[0]),
-                     (FacadeCapture){.out = &fout, .err = &ferr});
+    {
+        /* b.db is a copy of a.db, and a.db is listed in this test's data dir: opened there it
+           would take a new id. A data dir of its own keeps the two runs byte-equal. */
+        char *twin_dir = harness_side_path(dir, "/twin-data");
+        const char *saved = getenv("XDG_DATA_HOME");
+        char *keep = saved != NULL ? strdup(saved) : NULL;
+
+        ASSERT_EQ_INT(setenv("XDG_DATA_HOME", twin_dir, 1), 0);
+        frc = facade_run(local2, accept, sizeof(accept) / sizeof(accept[0]),
+                         (FacadeCapture){.out = &fout, .err = &ferr});
+        ASSERT_EQ_INT(keep != NULL ? setenv("XDG_DATA_HOME", keep, 1) : unsetenv("XDG_DATA_HOME"),
+                      0);
+        free(keep);
+        free(twin_dir);
+    }
     ASSERT_EQ_INT(frc, r.exit_code);
     mask_timestamps(r.out);
     mask_timestamps(fout);

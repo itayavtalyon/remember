@@ -380,3 +380,86 @@ fail:
     free(buf);
     return -1;
 }
+
+int fileio_read_regular(const char *path, size_t max_bytes, char **out_bytes, size_t *out_len,
+                        int *sys_errno)
+{
+    struct stat st;
+    char *buf = NULL;
+    size_t cap = 0;
+    size_t n = 0;
+    int fd = open(path, O_RDONLY | O_NONBLOCK | O_CLOEXEC);
+
+    *out_bytes = NULL;
+    *out_len = 0;
+    if (fd < 0) {
+        goto fail;
+    }
+    if (fstat(fd, &st) != 0 || !S_ISREG(st.st_mode)) {
+        errno = EINVAL;
+        goto fail;
+    }
+    for (;;) {
+        ssize_t got = 0;
+
+        if (n + 1U >= cap) {
+            size_t next = (cap == 0U) ? (size_t)READ_FIRST_CAP : (cap * 2U);
+            char *grown = (char *)realloc(buf, next);
+
+            if (grown == NULL) {
+                goto fail; /* realloc sets ENOMEM */
+            }
+            buf = grown;
+            cap = next;
+        }
+        got = read(fd, buf + n, cap - n - 1U);
+        if (got < 0) {
+            goto fail;
+        }
+        if (got == 0) {
+            break;
+        }
+        n += (size_t)got;
+        if (n > max_bytes) {
+            errno = EFBIG;
+            goto fail;
+        }
+    }
+    (void)close(fd);
+    buf[n] = '\0';
+    *out_bytes = buf;
+    *out_len = n;
+    return 0;
+
+fail:
+    /* errno holds the failure; the analyzer cannot see that every goto set it. */
+    // NOLINTNEXTLINE(clang-analyzer-unix.Errno)
+    *sys_errno = (errno != 0) ? errno : EIO;
+    if (fd >= 0) {
+        (void)close(fd);
+    }
+    free(buf);
+    return -1;
+}
+
+int fileio_mkdir_parents(char *file_path, int *sys_errno)
+{
+    size_t i = 0;
+
+    for (i = 1; file_path[i] != '\0'; i++) {
+        int failed = 0;
+
+        if (file_path[i] != '/') {
+            continue;
+        }
+        file_path[i] = '\0';
+        /* A component that exists and is not a folder fails at the next step, or at the open. */
+        failed = mkdir(file_path, EXPORT_DIR_MODE) != 0 && errno != EEXIST;
+        file_path[i] = '/';
+        if (failed) {
+            *sys_errno = errno;
+            return -1;
+        }
+    }
+    return 0;
+}

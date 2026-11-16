@@ -22,6 +22,11 @@ int util_resolve_db_path(const char *cli_db, char *buf, size_t buflen, char *err
    Rejects :memory: and file: URIs. */
 int util_resolve_user_db_path(char *buf, size_t buflen, char *err, size_t errlen);
 
+/* The data dir (decision:g-01): $XDG_DATA_HOME/remember when XDG_DATA_HOME is set
+   and non-empty, else $HOME/.remember. user.db, brains.json and plugins/ live in it.
+   REMEMBER_USER_DB moves user.db only. Does not create the folder. */
+int util_resolve_data_dir(char *buf, size_t buflen, char *err, size_t errlen);
+
 /* Substring markers only (not a real FS-type probe). Callers warn on stderr. */
 int util_path_looks_synced(const char *path);
 

@@ -1,6 +1,7 @@
 #include "remember_app.h"
 
 #include "appio.h"
+#include "brain_note.h"
 #include "cli.h"
 #include "commands.h"
 #include "commands_common.h"
@@ -370,6 +371,12 @@ static void print_command_help(CliCommand topic)
         (void)fprintf(out, "It does not change change_seq, a version vector, or a memory.\n");
         (void)fprintf(out, "--json type is brain.new_id.result.\n");
         (void)fprintf(out, "data is {brain_id, previous_brain_id}.\n");
+        (void)fprintf(
+            out, "remember brain list prints each brain in the list: path, brain_id, added_at.\n");
+        (void)fprintf(out, "--json type is brain.list.result. data is {count, brains[]}.\n");
+        (void)fprintf(out, "remember brain prune removes each path that has no brain file.\n");
+        (void)fprintf(out,
+                      "--json type is brain.prune.result. data is {action, count, brains[]}.\n");
         (void)fprintf(out, "\n");
     } else if (topic == CLI_CMD_SETTINGS) {
         (void)fprintf(out, "Show or change a setting.\n");
@@ -472,6 +479,16 @@ static void warn_open_settings(const Store *s)
     }
 }
 
+/* --busy-timeout, or the store default. Zero is a real value. It bounds the open and the
+   brains.json lock wait (decision:2026-11-16-plan26-review-grill G5). */
+static int busy_timeout_ms_of(const CliArgs *args)
+{
+    if (args->globals.busy_timeout_set) {
+        return args->globals.busy_timeout_ms;
+    }
+    return STORE_DEFAULT_BUSY_TIMEOUT_MS;
+}
+
 /* Resolve path, optional sync-path warning, then open. Store stays path-pure. */
 static Store *open_store(const CliArgs *args, int *out_rc)
 {
@@ -479,8 +496,7 @@ static Store *open_store(const CliArgs *args, int *out_rc)
     char path[REMEMBER_PATH_MAX];
     char err[ERR_BUFSIZE];
     StoreError detail;
-    /* Omitted --busy-timeout keeps the store default. Zero is a real value. */
-    StoreOpenOpts opts = {.busy_timeout_ms = STORE_DEFAULT_BUSY_TIMEOUT_MS};
+    StoreOpenOpts opts = {.busy_timeout_ms = busy_timeout_ms_of(args)};
     Store *s = NULL;
 
     err[0] = '\0';
@@ -496,9 +512,6 @@ static Store *open_store(const CliArgs *args, int *out_rc)
         (void)diag_warning(DIAG_WARN_SYNCED_FOLDER,
                            "database path looks like a synced folder "
                            "(iCloud/Dropbox/Google Drive); corruption risk - prefer a local disk");
-    }
-    if (args->globals.busy_timeout_set) {
-        opts.busy_timeout_ms = args->globals.busy_timeout_ms;
     }
     opts.no_create = args->globals.no_create;
     /* Repair and export never create a brain (decision:plan16-repair-no-create,
@@ -525,6 +538,11 @@ static Store *open_store(const CliArgs *args, int *out_rc)
         return NULL;
     }
     warn_open_settings(s);
+    if (brain_note_open(s) != 0) {
+        store_close(s);
+        *out_rc = REMEMBER_ERR;
+        return NULL;
+    }
     return s;
 }
 
@@ -679,6 +697,10 @@ static int run(const CliArgs *args)
         if (cmd_brain_reject_args(args->rest_argc, args->rest_argv) != 0) {
             return REMEMBER_ERR;
         }
+        if (!cmd_brain_uses_store(args->rest_argc, args->rest_argv)) {
+            return cmd_brain_file(args->globals.json, busy_timeout_ms_of(args), args->rest_argc,
+                                  args->rest_argv);
+        }
         return run_with_store(args, cmd_brain);
     case CLI_CMD_SETTINGS:
         return run_with_store(args, cmd_settings);
@@ -742,7 +764,7 @@ static const char *reply_noun_verb(const CliArgs *args)
     case CLI_CMD_REPAIR:
         return "repair.search_index";
     case CLI_CMD_BRAIN:
-        return "brain.new_id";
+        return cmd_brain_reply(args->rest_argc, args->rest_argv);
     case CLI_CMD_SETTINGS:
         return cmd_settings_reply(args->rest_argc, args->rest_argv);
     case CLI_CMD_NONE:

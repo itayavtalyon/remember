@@ -52,7 +52,10 @@ jobs:
     name: linux (ASan+UBSan+LSan, lint, scan-build)
     needs: changes
     if: needs.changes.outputs.code == 'true'
-    runs-on: ubuntu-latest
+    # Pinned, not ubuntu-latest: the image pins glibc and clang, and scripts/ci-linux.sh runs
+    # the same ubuntu:24.04. ubuntu-latest moved to 26.04 (glibc 2.43, clang 21) on 2026-11-16
+    # and broke the build on untouched code. Raising it is a deliberate change.
+    runs-on: ubuntu-24.04
     steps:
       # Checkout is a GitHub-maintained JS action (runs on Node in the runner).
       # Our project is pure C — we do not use Node ourselves.
@@ -133,7 +136,10 @@ jobs:
     name: linux (line coverage on src/)
     needs: changes
     if: needs.changes.outputs.code == 'true'
-    runs-on: ubuntu-latest
+    # Pinned, not ubuntu-latest: the image pins glibc and clang, and scripts/ci-linux.sh runs
+    # the same ubuntu:24.04. ubuntu-latest moved to 26.04 (glibc 2.43, clang 21) on 2026-11-16
+    # and broke the build on untouched code. Raising it is a deliberate change.
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v5
 

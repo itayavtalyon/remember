@@ -394,6 +394,34 @@ typedef struct {
  */
 StoreStatus store_brain_new_id(Store *s, StoreBrainId *out);
 
+/* Copy brain_meta.brain_id into out. out_cap includes the NUL. */
+StoreStatus store_brain_id(const Store *s, char *out, size_t out_cap);
+
+/* Replace brain_meta.brain_id with brain_id, a canonical UUID v7, the way new-id
+   does. A newer brain is STORE_ERR_SCHEMA_TOO_NEW and nothing changes. */
+StoreStatus store_brain_set_id(Store *s, const char *brain_id);
+
+/* Write a new UUID v7 into out (out_cap includes the NUL). Does not touch the
+   database. 0, or -1. */
+int store_mint_uuid(char *out, size_t out_cap);
+
+/* Whether path holds the brain brain_id (decision:g2-05). 1: a regular file whose
+   brain_meta.brain_id is brain_id. 0: proven not: nothing there (fileio_errno_means_absent), not
+   a regular file (never opened, so a FIFO cannot block), not a database, no brain_meta, or
+   another id. -1: cannot tell: stat or the open failed otherwise (EACCES, EIO), or the read
+   stayed busy past busy_timeout_ms (decision:2026-11-16-plan26-review-grill G2). On -1 for a
+   path, why (may be NULL) gets the cause classed as for any SQLite failure: busy, cannot_open,
+   io_error, corrupt. A stat failure sets only error_class: io_error for EIO, else cannot_open. */
+int store_path_has_brain_id(const char *path, const char *brain_id, int busy_timeout_ms,
+                            StoreError *why);
+
+/* The open's busy timeout (PRAGMA busy_timeout), or 0. */
+int store_busy_timeout_ms(const Store *s);
+
+/* True when this open can write the brain: not a read-only file, and not a
+   brain from a newer remember (plan 27b). */
+bool store_is_writable(const Store *s);
+
 /* The longest min_reader_version that is ever printed: three parts of ten digits
    and two dots (R27b-2). A longer value is hostile and is masked. */
 enum { STORE_VERSION_TEXT_MAX = 32 };

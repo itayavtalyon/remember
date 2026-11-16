@@ -1,8 +1,16 @@
 #ifndef REMEMBER_FILEIO_H
 #define REMEMBER_FILEIO_H
 
+#include <errno.h>
+#include <fcntl.h> // IWYU pragma: export (O_NOFOLLOW below)
 #include <stdbool.h>
 #include <stdio.h>
+
+/* Darwin hides O_NOFOLLOW when _POSIX_C_SOURCE is set, which is how
+   gcc -fanalyzer compiles this tree. The value is the one in <sys/fcntl.h>. */
+#if defined(__APPLE__) && !defined(O_NOFOLLOW)
+#define O_NOFOLLOW 0x00000100
+#endif
 
 /*
  * Export file I/O (plan 22): temp names, writes, renames. A failing call
@@ -60,5 +68,28 @@ void fileio_remove_tree(const char *path);
  * No size cap (plan 23). On failure *out_bytes is NULL and *sys_errno is set.
  */
 int fileio_read_all(const char *path, char **out_bytes, size_t *out_len, int *sys_errno);
+
+/*
+ * Read the file at path for a file that another program may have replaced
+ * (standard:c): opened with O_NONBLOCK, so a FIFO cannot hang the read; only a
+ * regular file; at most max_bytes. A symlink to a regular file is followed. On
+ * failure *out_bytes is NULL and *sys_errno is ENOENT (nothing there), EINVAL
+ * (not a regular file), EFBIG (more than max_bytes), or the errno that failed.
+ * The buffer holds one more byte, a NUL, after *out_len.
+ */
+int fileio_read_regular(const char *path, size_t max_bytes, char **out_bytes, size_t *out_len,
+                        int *sys_errno);
+
+/* True when a failed stat's errno proves nothing is at the path (ENOENT, ENOTDIR, ELOOP,
+   ENAMETOOLONG). Any other errno (EACCES, EIO) says nothing about what is there. Inline, so
+   the store test binary, which does not link fileio.c, has the one definition too. */
+static inline bool fileio_errno_means_absent(int err)
+{
+    return (err == ENOENT || err == ENOTDIR || err == ELOOP || err == ENAMETOOLONG) != 0;
+}
+
+/* mkdir -p for every folder above the last component of file_path, mode 0700.
+   file_path is changed while it runs and is the same when it returns. */
+int fileio_mkdir_parents(char *file_path, int *sys_errno);
 
 #endif /* REMEMBER_FILEIO_H */
