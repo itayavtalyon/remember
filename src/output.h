@@ -118,6 +118,14 @@ int output_device_new_data(FILE *out, const char *device_id, const char *previou
 /* brain new-id data{brain_id, previous_brain_id}. */
 int output_brain_new_id_data(FILE *out, const StoreBrainId *ids);
 
+/* One plain brain list row: path, brain_id and added_at, tab-separated, each masked (a TAB
+   inside a field included). */
+int output_brain_row_human(FILE *out, const BrainRow *row);
+
+/* "brains":[{path, brain_id, added_at}...]: the member that brains.json and the brain list
+   and prune data share, so the row has one writer. */
+int output_brain_rows_json(FILE *out, const BrainList *list);
+
 /* brain list data{count, brains[{path, brain_id, added_at}]}. */
 int output_brain_list_data(FILE *out, const BrainList *list);
 

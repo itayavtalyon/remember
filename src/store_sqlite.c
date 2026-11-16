@@ -252,8 +252,8 @@ static int store_exec(sqlite3 *db, const char *sql, int (*cb)(void *, int, char 
 #define sqlite3_exec(db, sql, cb, arg, errmsg) store_exec((db), (sql), (cb), (arg), (errmsg))
 #endif /* REMEMBER_TEST_HOOKS */
 
-/* The reads the open note makes (store_brain_id, store_path_has_brain_id) ignore their failure.
-   They take the real calls, so a fault sweep of a command is not spent on a read nobody reports. */
+/* The reads the open note makes (store_brain_id, store_path_has_brain_id) take the real calls,
+   so a fault sweep of a command is not spent on a read of another file. */
 #ifdef REMEMBER_TEST_HOOKS
 #define note_prepare real_prepare
 #define note_step real_step
@@ -2689,33 +2689,83 @@ int store_mint_uuid(char *out, size_t out_cap)
     return 0;
 }
 
-bool store_path_has_brain_id(const char *path, const char *brain_id)
+/* A prepare or step failure that proves the file is not a brain: not a database, or a database
+   with no brain_meta table. Busy, I/O, corruption and the rest cannot tell. */
+static bool proves_no_brain(int rc)
+{
+    // NOLINTNEXTLINE(hicpp-signed-bitwise) sqlite's primary code is the low byte
+    int primary = rc & SQLITE_PRIMARY_CODE_MASK;
+
+    return (primary == SQLITE_NOTADB || primary == SQLITE_ERROR) != 0;
+}
+
+/* A stat failure that does not prove the path absent, classed for the caller's error. */
+static int stat_cannot_tell(int sys_errno, StoreError *why)
+{
+    if (why != NULL) {
+        why->error_class = sys_errno == EIO ? STORE_ERROR_IO_ERROR : STORE_ERROR_CANNOT_OPEN;
+    }
+    return -1;
+}
+
+int store_path_has_brain_id(const char *path, const char *brain_id, int busy_timeout_ms,
+                            StoreError *why)
 {
     struct stat st;
     sqlite3 *db = NULL;
     sqlite3_stmt *stmt = NULL;
-    bool same = false;
+    int has = -1;
+    int rc = SQLITE_OK;
 
     if (path == NULL || brain_id == NULL) {
-        return false;
+        return -1;
     }
     /* The path comes from brains.json. A FIFO or a device there would block
        the open of every brain, so only a regular file is a brain. */
-    if (stat(path, &st) != 0 || !S_ISREG(st.st_mode)) {
-        return false;
+    if (stat(path, &st) != 0) {
+        if (fileio_errno_means_absent(errno)) {
+            return 0;
+        }
+        return stat_cannot_tell(errno, why);
     }
-    if (sqlite3_open_v2(path, &db, SQLITE_OPEN_READONLY, NULL) == SQLITE_OK &&
-        note_prepare(db, "SELECT brain_id FROM brain_meta;", -1, &stmt, NULL) == SQLITE_OK &&
-        note_step(stmt) == SQLITE_ROW) {
+    if (!S_ISREG(st.st_mode)) {
+        return 0;
+    }
+    if (sqlite3_open_v2(path, &db, SQLITE_OPEN_READONLY, NULL) != SQLITE_OK) {
+        snapshot_sqlite_error(db, why);
+        (void)sqlite3_close(db);
+        return -1;
+    }
+    (void)sqlite3_busy_timeout(db, busy_timeout_ms);
+    rc = note_prepare(db, "SELECT brain_id FROM brain_meta;", -1, &stmt, NULL);
+    if (rc == SQLITE_OK) {
+        rc = note_step(stmt);
+    }
+    if (rc == SQLITE_ROW) {
         const unsigned char *found = sqlite3_column_text(stmt, 0);
 
-        if (found != NULL && strcmp((const char *)found, brain_id) == 0) {
-            same = true;
-        }
+        has = found != NULL && strcmp((const char *)found, brain_id) == 0 ? 1 : 0;
+    } else if (rc == SQLITE_DONE || proves_no_brain(rc)) {
+        has = 0;
+    } else {
+        snapshot_sqlite_error(db, why);
     }
     (void)sqlite3_finalize(stmt);
     (void)sqlite3_close(db);
-    return same;
+    return has;
+}
+
+int store_busy_timeout_ms(const Store *s)
+{
+    sqlite3_stmt *stmt = NULL;
+    int ms = 0;
+
+    if (s != NULL && note_prepare(s->db, "PRAGMA busy_timeout;", -1, &stmt, NULL) == SQLITE_OK &&
+        note_step(stmt) == SQLITE_ROW) {
+        ms = sqlite3_column_int(stmt, 0);
+    }
+    (void)sqlite3_finalize(stmt);
+    return ms;
 }
 
 /* A brain from a newer remember (plan 27b) is open read-only in effect, so it is

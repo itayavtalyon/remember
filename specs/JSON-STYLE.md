@@ -268,8 +268,8 @@ Event (hook stdin, plugin socket, webhook):
 ### 1.13 Unknown fields (J3; PP R2.5, R9.19–R9.21; JE-4.1)
 
 - **Error** in the `run`, `permissions` and action `filter` sections of `plugin.json`: `plugin_manifest_invalid`, which names the field (`detail {path, rule}`). No hooks config file exists (S-01).
-- **Warning everywhere else**: HTTP and MCP input, settings import, exports, events, plugin messages and the rest of `plugin.json`. The reader ignores the field and warns `unknown_field` (`detail {field, where}`), once per file or stream. A plugin's `unknown_field` goes only to the plugin log and `plugin status`.
-- This binary's `unknown_field` writer uses the C-35 file and stdin sentences. No command reads a JSON file or JSON stdin. A list-cursor member this binary does not know is `invalid_argument`, message `invalid --cursor`, not `unknown_field` ([JSON-ENVELOPE.md](JSON-ENVELOPE.md)).
+- **Warning everywhere else**: HTTP and MCP input, settings import, exports, `brains.json` (`decision:2026-11-16-plan26-review-grill` G6 B), events, plugin messages and the rest of `plugin.json`. The reader ignores the field and warns `unknown_field` (`detail {field, where}`), once per file or stream. A plugin's `unknown_field` goes only to the plugin log and `plugin status`.
+- This binary's `unknown_field` writer uses the C-35 file and stdin sentences. Its readers of JSON files are `remember import` and `brains.json` (every read-write open, `brain list` and `brain prune`). A list-cursor member this binary does not know is `invalid_argument`, message `invalid --cursor`, not `unknown_field` ([JSON-ENVELOPE.md](JSON-ENVELOPE.md)).
 - Why: in the sections that decide what runs, "ignore" would mean "run something else".
 - ✓ `plugin.json /filters/0/run: unknown field "proces".` fix `Did you mean "process"?`
 

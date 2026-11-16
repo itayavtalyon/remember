@@ -1,6 +1,7 @@
 #ifndef REMEMBER_FILEIO_H
 #define REMEMBER_FILEIO_H
 
+#include <errno.h>
 #include <fcntl.h> // IWYU pragma: export (O_NOFOLLOW below)
 #include <stdbool.h>
 #include <stdio.h>
@@ -78,6 +79,14 @@ int fileio_read_all(const char *path, char **out_bytes, size_t *out_len, int *sy
  */
 int fileio_read_regular(const char *path, size_t max_bytes, char **out_bytes, size_t *out_len,
                         int *sys_errno);
+
+/* True when a failed stat's errno proves nothing is at the path (ENOENT, ENOTDIR, ELOOP,
+   ENAMETOOLONG). Any other errno (EACCES, EIO) says nothing about what is there. Inline, so
+   the store test binary, which does not link fileio.c, has the one definition too. */
+static inline bool fileio_errno_means_absent(int err)
+{
+    return (err == ENOENT || err == ENOTDIR || err == ELOOP || err == ENAMETOOLONG) != 0;
+}
 
 /* mkdir -p for every folder above the last component of file_path, mode 0700.
    file_path is changed while it runs and is the same when it returns. */

@@ -982,6 +982,15 @@ TEST(output_text_human_masks_c1_controls)
     assert_written(f, "a?b?c?d");
 }
 
+/* A body keeps its TABs; only the brain list row masks them (G1 A). */
+TEST(output_text_human_keeps_a_tab)
+{
+    FILE *f = given_stream();
+
+    ASSERT_EQ_INT(output_text_human(f, "a\tb\x1b", false), 0);
+    assert_written(f, "a\tb?");
+}
+
 /* Only C2 80..C2 9F: the next code point, another lead byte, or a stray C2 stay. */
 TEST(output_text_human_keeps_other_two_byte_text)
 {
@@ -1587,6 +1596,48 @@ static int write_brain_prune_envelope(FILE *f)
     return output_brain_prune_data(f, &list);
 }
 
+TEST(output_brain_row_human_writes_path_id_and_added_at_tab_separated)
+{
+    BrainList list = given_two_brains();
+    FILE *f = given_stream();
+
+    ASSERT_EQ_INT(output_brain_row_human(f, &list.rows[1]), 0);
+    assert_written(f,
+                   "/tmp/c.db\t01a0d90a-e71c-7000-8000-000000000002\t2026-11-11T13:00:00.000Z\n");
+}
+
+TEST(output_brain_row_human_masks_control_bytes_and_tabs_in_each_field)
+{
+    BrainRow row = {
+        .path = (char *)"/a\x1b[2J\tb", .brain_id = (char *)"i\n", .added_at = (char *)"t\x7f\t"};
+    FILE *f = given_stream();
+
+    ASSERT_EQ_INT(output_brain_row_human(f, &row), 0);
+    assert_written(f, "/a?[2J?b\ti?\tt??\n");
+}
+
+TEST(output_brain_row_human_rejects_missing_arguments)
+{
+    BrainList list = given_two_brains();
+    FILE *f = given_stream();
+
+    ASSERT_EQ_INT(output_brain_row_human(NULL, &list.rows[0]), -1);
+    ASSERT_EQ_INT(output_brain_row_human(f, NULL), -1);
+    assert_written(f, "");
+}
+
+static int write_brain_row_human(FILE *f)
+{
+    BrainList list = given_two_brains();
+
+    return output_brain_row_human(f, &list.rows[1]);
+}
+
+TEST(output_brain_row_human_reports_every_failed_write)
+{
+    assert_reports_every_failed_write(write_brain_row_human);
+}
+
 TEST(output_brain_list_data_reports_every_failed_write)
 {
     assert_reports_every_failed_write(write_brain_list_envelope);
@@ -1731,6 +1782,10 @@ void register_output_tests(void)
     RUN_TEST(output_brain_list_data_writes_the_count_and_each_row);
     RUN_TEST(output_brain_prune_data_writes_the_action_the_count_and_each_row);
     RUN_TEST(output_brain_list_and_prune_data_reject_missing_arguments);
+    RUN_TEST(output_brain_row_human_writes_path_id_and_added_at_tab_separated);
+    RUN_TEST(output_brain_row_human_masks_control_bytes_and_tabs_in_each_field);
+    RUN_TEST(output_brain_row_human_rejects_missing_arguments);
+    RUN_TEST(output_brain_row_human_reports_every_failed_write);
     RUN_TEST(output_brain_list_data_reports_every_failed_write);
     RUN_TEST(output_brain_prune_data_reports_every_failed_write);
     RUN_TEST(output_conflicts_envelope_lists_no_conflicts);
@@ -1752,6 +1807,7 @@ void register_output_tests(void)
     RUN_TEST(output_preview_masks_a_c1_control);
     RUN_TEST(output_text_human_masks_c1_controls);
     RUN_TEST(output_text_human_keeps_other_two_byte_text);
+    RUN_TEST(output_text_human_keeps_a_tab);
     RUN_TEST(output_preview_cuts_by_bytes_before_the_scalar_cap);
     RUN_TEST(output_entry_human_line_masks_control_bytes_in_key_tags_and_updated_at);
     RUN_TEST(output_tags_human_masks_control_bytes);

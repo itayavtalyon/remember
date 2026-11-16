@@ -68,7 +68,7 @@ Tests live in `tests/test_brain_list.c`, suite `brain_list`, and that suite is a
 - [x] `the write is a temp file renamed over brains.json under the lock`: `brain_list_write_is_a_temp_file_renamed_over_brains_json`, `brain_list_record_holds_the_advisory_lock_while_it_decides`, `brain_list_stale_temp_symlink_is_replaced_not_followed`.
 - [x] `a copy of a brain file mints a new brain_id and prints the C-38 line`: `a_copied_brain_gets_a_new_id_and_prints_the_c38_line_with_its_fix`.
 - [x] `a moved brain file keeps the id and updates the path, with no warning`: `a_moved_brain_keeps_its_id_updates_the_path_and_warns_nothing`.
-- [x] `remember brain list prints a missing path with the C-01 brain_missing line and keeps the row`: `brain_list_prints_each_listed_path_and_a_path_with_no_brain_prints_the_c01_line`.
+- [x] `remember brain list prints a missing path with the C-01 brain_missing line and keeps the row`: `brain_list_prints_path_id_and_added_at_per_row_and_a_path_with_no_brain_prints_the_c01_line`.
 - [x] `remember brain prune drops a missing path and leaves a path that still has the brain`: `brain_prune_drops_a_path_with_no_brain_and_keeps_one_that_has_it`.
 - [x] `a failed replace leaves the previous file and does not change the open's exit`: `a_failed_replace_leaves_the_previous_file_and_the_open_exits_as_before`, `brain_list_a_folder_that_cannot_take_the_temp_file_returns_io_and_keeps_the_file`.
 - [x] `specs/BRAIN-LIST.md` is written, and the decisions this plan built are `state:implemented` (list in the notes).
@@ -96,7 +96,7 @@ Built 2026-11-15 on `main` 42e7d0a. Code taken from the plan 25 base review comm
 - X9 NUL in a path: `brain_list_a_nul_inside_a_path_is_unreadable`, `..._brain_id_...`, `..._a_raw_nul_byte_in_the_file_...`. `jsonread` refuses NUL and `\u0000`, so the old extra `memchr` was dead code and is gone; the three tests prove the contract.
 - X10 symlinked lock: `brain_list_a_symlink_at_the_lock_is_not_followed` (mutant `lock_follows_symlink`).
 - X11 FIFO at a listed path: `a_fifo_at_a_listed_brain_path_does_not_block_a_later_open` (mutant `has_id_follows_fifo`, killed by timeout), and `brain_list_and_prune_take_a_listed_fifo_or_folder_for_a_path_with_no_brain` (mutant `path_missing_not_regular`).
-- X12 control bytes in `brain list`: `brain_list_masks_control_bytes_in_a_listed_path` (mutant `list_not_masked`).
+- X12 control bytes in `brain list`: `brain_list_masks_control_bytes_in_every_field_of_a_row` (mutant `list_not_masked`).
 - S8: `brain_missing_message` is gone; `diag_brain_missing` is wired into `brain list`.
 - E3B `fix` fields: the two warnings carry `message` and `fix` in plain and JSON (`a_copied_brain_gets_a_new_id_and_prints_the_c38_line_with_its_fix`, `brain_list_json_gives_the_rows_and_a_brain_missing_warning_with_its_fix`; mutants `clone_fix_text`, `missing_fix_text`).
 - G5 A, done: the 128-row cap is dropped (`brain_list_has_no_row_cap`), the read has a size cap (`BRAIN_LIST_FILE_MAX`; `..._exactly_the_cap_is_read`, `..._one_byte_over_the_cap_is_unreadable_and_left_alone`), a file that cannot be used is never written over (`brain_list_an_unreadable_file_is_never_written_over`, `an_unreadable_brains_json_does_not_change_the_open_and_is_left_alone`). **Not done:** the warning itself. See Open items.
@@ -183,3 +183,104 @@ A first mutation run reused stale objects (make compares mtimes at one second); 
 7. A copy is recorded before its new id is stored in the brain. If that store fails, the open fails and the list names an id the brain lacks; the next open sees the same file again as a copy and mints again (self-healing).
 
 ## Review Notes
+
+Second-opinion review, 2026-11-15/16 (Opus, worktree `eager-maxwell-42ff49`). Workflow: `workflow:deep-review` plus the PLAN scope of `workflow:whole-plan-deep-review`, against `standard:coding`, `standard:c`, `pref:review-lenses` and the decisions in the REVIEW_REQUEST, plus `decision:2026-11-15-plan26-coder-grill`. Coder commit 816c680 on main 42e7d0a; no rebase was needed. Grill answers: `decision:2026-11-16-plan26-review-grill` (notes: `plan-26-review-grills.md` in the session notes folder).
+
+### Review points and Definition of Done
+
+- Command tokens `brain list` and `brain prune` match `decision:2026-10-22-m-19` and `decision:2026-11-11-brain-command-names`. Its "dispatch under Maintenance" item is a help grouping no plan has built yet, so m-19 correctly stays `state:accepted`.
+- Copy mints a new id and move keeps it: held, and hardened (X17).
+- A failed write keeps the open's exit and prints nothing: held (`a_failed_replace_...`).
+- `brain new-id` is unchanged: no `brain new-id` test was edited. The coder's edits to old tests are isolation only (a data dir per test, a twin dir in `facade_conflict_accept_matches_cli`, and an unwritable data dir for the settings fault sweeps).
+- Every DoD box names a passing test. Two test names changed in this review; the boxes above name the new ones.
+- Plan 25 base review X9-X12 are still plugged, each with its test: `brain_list_a_nul_inside_a_path_is_unreadable`, `brain_list_a_symlink_at_the_lock_is_not_followed`, `a_fifo_at_a_listed_brain_path_does_not_block_a_later_open`, `brain_list_masks_control_bytes_in_every_field_of_a_row`.
+
+### Security audit (lens A): holes found and plugged
+
+Each hole has a test that was red on the coder's tree and a mutant of the fix that turns it red again.
+
+| # | Attack | Impact before | Fix | Test |
+|---|---|---|---|---|
+| X16 | Make a listed brain's folder unreadable (`chmod 000`), then run `brain prune` | `brain list` warned that the brain "isn't on disk", and prune **deleted the row of a brain that exists** | Only `ENOENT`, `ENOTDIR`, `ELOOP` and `ENAMETOOLONG` prove a path absent (`fileio_errno_means_absent`, one definition); any other `stat` failure keeps the row | `brain_list_and_prune_keep_a_brain_whose_folder_cannot_be_searched`, `..._take_each_kind_of_absent_path_...` |
+| X17 | Copy `o.db` to `c.db`, hold `BEGIN EXCLUSIVE` on `o.db` (or make its folder unreadable), then open `c.db` | The probe could not read `o.db`, which counted as **a move**: both brains kept one `brain_id` and `o.db`'s row was gone (the sync hazard g2-05 guards) | The probe is three-way (yes, no, cannot tell) and waits the open's busy timeout. Cannot tell fails the command with the cause's own code and changes nothing (G2) | `a_copy_opened_while_the_original_is_locked_past_the_busy_timeout_fails_busy_and_changes_nothing`, `a_copy_whose_original_s_folder_cannot_be_searched_fails_cannot_open_and_changes_nothing`, `a_copy_that_could_not_be_told_is_a_copy_on_the_next_open`, `a_copy_whose_original_is_locked_for_less_than_the_busy_timeout_is_a_copy`, `store_path_has_brain_id_cannot_tell_*` |
+| X18 | `{"path":"/nope/a","path":"/etc/hosts",...}`, or `"brains"` given twice | Parser differential: remember read the first member and Python the last | A member the reader takes, given twice, makes the file unreadable | `brain_list_a_row_field_given_twice_is_unreadable`, `brain_list_a_document_member_given_twice_is_unreadable` |
+| X19 | A TAB in a path, or ESC in a `brain_id` | With the decided three-column row: a fake column, and raw ESC on the terminal from `brain_id` and `added_at` | Every field is masked, TAB included (G1 A) | `brain_list_masks_control_bytes_in_every_field_of_a_row`, `output_brain_row_human_masks_control_bytes_and_tabs_in_each_field` |
+| X20 | An unknown member in brains.json | Ignored silently on read, and dropped on the next rewrite | `unknown_field` with the C-35 file line on every read (G6 B). A rewrite still drops it (G7 C) | `brain_list_warns_*_c35_*`, `brain_prune_warns_*`, `a_read_write_open_warns_*`, `brain_list_json_carries_unknown_field_*` |
+| X21 | Hold `brains.json.lock` (any process of the user, or one stuck on a hung mount while it probes) | `F_SETLKW` had no bound: **every** `remember` open, read commands included, and `brain prune` hung until the holder let go | The wait tries `F_SETLK` every 10 ms up to the busy timeout, then fails `busy` with exit 1 and changes nothing (G5) | `an_open_that_waits_past_the_busy_timeout_for_the_brains_json_lock_fails_busy`, `brain_prune_that_waits_past_the_busy_timeout_for_the_lock_fails_busy_and_keeps_the_rows`, `an_open_whose_brains_json_lock_is_let_go_inside_the_busy_timeout_records_the_brain` |
+
+Probed and not a hole: `brains.json` as a symlink (reads follow it, and a write replaces the link with a file, mode 0600); `version` `1.0` (unreadable); the 0700 data dir and the 0600 file and lock; a FIFO or folder at a listed path; a file of exactly the cap.
+
+Residual: `stat` then `sqlite3_open_v2` on a listed path is check-then-use (as the base review recorded). The lock wait counts its 10 ms sleeps, so it can run a little past the timeout (marked `ponytail:` in `wait_for_lock`). A hostile brain at a listed path can make the read-only probe slow: that is the same trust as opening the brain itself.
+
+### Simplicity (lens S)
+
+| # | Candidate | Lines saved | Status |
+|---|---|---|---|
+| S1 | The row JSON writer existed twice, in `brain_list.c` `write_doc` and `output.c` `write_brain_rows` (two copies of one schema) | about 12 | Done: `output_brain_rows_json`, one writer |
+| S2 | `brain_list_read` copied into a local and back; `load_file` already leaves `out` empty on every failure | 8 | Done |
+| S3 | Three-way `if` for "brain X takes no arguments" | 6 | Done: `err_fmt` with the matched verb |
+| S4 | `brain_path_is_missing` `if (S_ISREG) return false; return true;` | 3 | Done (`return !S_ISREG(...)`) |
+| S5 | The absent-errno rule would have been written twice (prune and the probe) | about 4 | Done: one inline `fileio_errno_means_absent` |
+| — | `still_has_brain` and `mint_id` wrappers | 0 | Kept: the callback signature needs them |
+
+### Grill (answered 2026-11-16, `decision:2026-11-16-plan26-review-grill`)
+
+- G1 A: mask TAB in the row.
+- G2: busy wait, then cannot tell fails the command and changes nothing. Each cause takes its existing code: `busy`, `cannot_open` (`EACCES`, any other `stat` or open failure), `io_error` (`EIO`), `corrupt` or `not_a_database`. They are classed as for any SQLite failure (`classify_extended`); `stat` sets only `io_error` for `EIO`, else `cannot_open`.
+- G3 A: the placeholder lines join Story Weaver's open item.
+- G4 A: a copy whose new id cannot be stored fails the open.
+- G5: the lock wait is bounded by the busy timeout (`--busy-timeout`, default 5000 ms). A timeout fails with `busy`.
+- G6 B: an unknown field warns C-35.
+- G7 C: a rewrite drops an unknown field.
+
+The coder's open items 3, 5 and 7 are now settled (coder grill, G5, G4). The two G5 and G2 message lines are OPEN placeholders in `decision:open-2026-11-15-brains-json-unreadable-copy`.
+
+### Mutants (this review's guards; each in its own process group, rebuilt with the source mtime set ahead)
+
+Pass 1 (`mut.py`, 10 mutants, all killed): `dup_first_wins`; `missing_no_enoent`, `missing_no_enotdir`, `missing_no_eloop`, `missing_no_enametoolong`, `missing_any_errno`; `row_no_tab1`, `row_id_unmasked`, `row_at_unmasked`, `row_no_added_at` (also killed in `remember_store_tests` by the `output_brain_row_human_*` tests).
+
+Pass 2 (`mut2.py`, 24 mutants): 17 killed, `tab_everywhere` survived (no test held that a body keeps its TAB: `output_text_human_keeps_a_tab` added), 6 did not build (an unused function, parameter or variable under `-Werror`; not survivors, rerun as compiling rewrites in passes 3 and 4).
+
+Pass 3 (`mut3.py`, 22 mutants, the G5 and G2 guards plus the reruns): 15 killed. `open_busy_ok` and `undecided_ok` (print the error, return 0) survived: under `--json` the command's own envelope then fails to write, which exits 1 anyway. The G5 open and the G2 `cannot_open` tests now also run in plain mode, where only the open's failure can exit 1. 4 did not build and were rewritten.
+
+Pass 4 (`mut4.py`, 6 mutants): all killed: `open_busy_ok`, `undecided_ok`, `unknown_root_skipped`, `lock_no_wait`, `lock_busy_maps_io`, `undecided_code_busy`.
+
+Killed in passes 2 and 3, with their red test: `notadb_unknown`, `error_unknown`, `done_unknown`, `any_failure_is_no`, `no_busy_wait`, `stat_fail_is_no`, `stat_fail_is_unknown`, `open_fail_is_no`, `timeout_const`, `undecided_is_move`, `undecided_is_copy`, `undecided_writes`, `unknown_last_wins`, `unknown_rows_skipped`, `unknown_term1`, `unknown_term3`, `record_no_unknown`, `prune_no_unknown`, `open_no_warn`, `list_no_warn`, `prune_no_warn`, `row_keeps_tab`, `tab_everywhere`, `lock_busy_is_io`, `record_timeout_0`, `prune_timeout_long`, `prune_busy_unreported`, `prune_flag_ignored`, `open_lock_default`, `stat_class_dropped`, `open_snapshot_dropped`, `step_snapshot_dropped`.
+
+Justified survivor: `stat_eio_dropped` (`stat` failing with `EIO` classed `cannot_open` instead of `io_error`). No test can make `stat` return `EIO`: the test VFS fails SQLite reads, not `stat`. The SQLite `EIO` path is classed by `classify_extended`, which `test_errors` covers.
+
+### Gate fixes this review made
+
+- clang-tidy (19 findings, all in this review's code): bool returns use `(...) != 0`; the busy-timeout default is one helper, `busy_timeout_ms_of`, for the open and `brain prune`; magic numbers are named; NOLINT with a reason for swappable parameters and for the test pipes.
+- cppcheck `knownConditionTrueFalse` on `unknown != NULL` in `brain_note_open`: cppcheck does not see `brain_list_record` write through the compound-literal out struct (a named struct does not help either). It is suppressed inline with that reason.
+- Coverage (7 must-cover lines):
+  - `brain_list_read_of_a_file_with_an_unknown_member_survives_each_allocation_failure` covers the copy of the unknown member's name.
+  - `brain_list_and_prune_that_cannot_write_the_unknown_field_warning_exit_1` covers a failed C-35 write.
+  - `wait_for_lock` no longer has a separate `LOCK_IO` exit for an `F_SETLK` errno other than `EAGAIN`/`EACCES` (no test can produce one). Any failure is retried until the timeout and then fails `busy`, which is still a visible failure.
+  - The `--json` data writes go to the envelope's buffer, so only out-of-memory fails them. They set `rc` in one statement and never overwrite an earlier failure (a mutant that drops that guard survives for the same reason).
+
+- ci-linux: the lock tests called `usleep`, which glibc does not declare under `_POSIX_C_SOURCE=200809L` (POSIX 2008 dropped it). macOS declares it anyway. They use `nanosleep` now (`pause_ms`).
+- CodeQL `cpp/overflowing-snprintf` in the coder's `brain_list_has_no_row_cap`: it summed `snprintf` returns as offsets without a check. Each row is now formatted into a fixed buffer with a checked return and copied in by `append_text`, which bounds every copy.
+- The diff was read for implicit int-to-char narrowing (local ci-linux is aarch64 and GitHub is amd64, where `char` signedness differs). None: every added `char` is a pointer, an array or a literal.
+
+### Gate (this tree, local)
+
+- `ctest --test-dir build`: 6/6 passed.
+- `scripts/check-coverage.sh`: 100% of functions, 100% of effective lines, and every branch side in the pure TUs.
+- `CI=true scripts/lint-all.sh`: LINT OK (format, boundaries, cppcheck, gcc -fanalyzer, clang-tidy, scan-build).
+- `scripts/ci-linux.sh` (ubuntu 24.04, aarch64): `ci-linux: OK`, including IWYU.
+- `scripts/codeql-local.sh`: 0 alerts (after the `cpp/overflowing-snprintf` fix above).
+
+### Grades
+
+- Coder: 8/10. The plan was carried out with care: hostile-file reads, fault sweeps, an advisory lock and a concurrent-writer test. It missed the third outcome of the copy probe (X17) and of prune's `stat` (X16). Both cases deleted or merged data.
+- In-session reviewer: 7/10. It caught the FIFO and NUL holes (X9-X12), but passed X16, X17 and the unbounded lock wait.
+
+### Folds into standards
+
+- `standard:coding` §4: "A check of another file (is it there, does it hold this id) has a third outcome, could not tell (EACCES, EIO, a busy lock), and that outcome never takes the branch that deletes a row, merges two records or gives two of them one identity."
+- `standard:coding` §1: a failed command exits non-zero for more than one reason; under `--json` a second envelope fails its own write, so a failure path's exit code is also asserted in plain mode.
+- `standard:c`: read every compiler warning in each target the gate builds, also one that is not `-Werror`; a new one is a finding.
+- Dropped as already covered: "test a member given twice" (§4 hostile-file line) and "reuse the row serializer" (the one-definition rule).
+
+Follow-up (not plan 26): `store_sqlite.c` `real_malloc`/`real_calloc`/`real_realloc` and `import_read.c` `msg_version_too_new` raise `-Wallocator-wrappers` on main. That warning is not `-Werror`; silence it with the pragma `test_alloc.c` uses.

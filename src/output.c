@@ -597,7 +597,9 @@ static bool is_c1_control_at(const unsigned char *p)
     return false;
 }
 
-int output_text_human(FILE *out, const char *text, bool keep_newline)
+/* output_text_human, and with keep_tab false a TAB is '?' too: a field of a tab-separated row
+   (decision:2026-11-16-plan26-review-grill G1 A). */
+static int write_masked(FILE *out, const char *text, bool keep_newline, bool keep_tab)
 {
     const unsigned char *p = NULL;
 
@@ -610,7 +612,7 @@ int output_text_human(FILE *out, const char *text, bool keep_newline)
         if (is_c1_control_at(p)) {
             ch = '?';
             p++; /* both bytes of the control become one '?' */
-        } else if (is_terminal_ctrl(*p, keep_newline)) {
+        } else if ((!keep_tab && *p == (unsigned char)'\t') || is_terminal_ctrl(*p, keep_newline)) {
             ch = '?';
         }
         if (fputc(ch, out) == EOF) {
@@ -618,6 +620,11 @@ int output_text_human(FILE *out, const char *text, bool keep_newline)
         }
     }
     return 0;
+}
+
+int output_text_human(FILE *out, const char *text, bool keep_newline)
+{
+    return write_masked(out, text, keep_newline, true);
 }
 
 int output_body_human(FILE *out, const char *body)
@@ -1151,7 +1158,7 @@ int output_brain_new_id_data(FILE *out, const StoreBrainId *ids)
     return 0;
 }
 
-static int write_brain_rows(FILE *out, const BrainList *list)
+int output_brain_rows_json(FILE *out, const BrainList *list)
 {
     size_t i = 0;
 
@@ -1171,13 +1178,29 @@ static int write_brain_rows(FILE *out, const BrainList *list)
     return fputc(']', out) == EOF ? -1 : 0;
 }
 
+/* path, brain_id and added_at, tab-separated (decision:2026-11-15-plan26-coder-grill). Each
+   field comes from brains.json, a file another program may have written, so each is masked,
+   a TAB included, so a row always has three columns (G1 A). */
+int output_brain_row_human(FILE *out, const BrainRow *row)
+{
+    if (out == NULL || row == NULL) {
+        return -1;
+    }
+    if (write_masked(out, row->path, false, false) != 0 || fputc('\t', out) == EOF ||
+        write_masked(out, row->brain_id, false, false) != 0 || fputc('\t', out) == EOF ||
+        write_masked(out, row->added_at, false, false) != 0 || fputc('\n', out) == EOF) {
+        return -1;
+    }
+    return 0;
+}
+
 int output_brain_list_data(FILE *out, const BrainList *list)
 {
     if (out == NULL || list == NULL || (list->count > 0U && list->rows == NULL)) {
         return -1;
     }
     if (write_data_open(out) != 0 || fprintf(out, "\"count\":%zu,", list->count) < 0 ||
-        write_brain_rows(out, list) != 0 || fputs(DATA_END, out) < 0) {
+        output_brain_rows_json(out, list) != 0 || fputs(DATA_END, out) < 0) {
         return -1;
     }
     return 0;
@@ -1190,7 +1213,7 @@ int output_brain_prune_data(FILE *out, const BrainList *removed)
     }
     if (write_data_open(out) != 0 ||
         fprintf(out, "\"action\":\"pruned\",\"count\":%zu,", removed->count) < 0 ||
-        write_brain_rows(out, removed) != 0 || fputs(DATA_END, out) < 0) {
+        output_brain_rows_json(out, removed) != 0 || fputs(DATA_END, out) < 0) {
         return -1;
     }
     return 0;

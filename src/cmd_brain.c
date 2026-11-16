@@ -11,6 +11,7 @@
 
 #include <stdbool.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 enum BrainVerb { BRAIN_VERB_NONE, BRAIN_VERB_NEW_ID, BRAIN_VERB_LIST, BRAIN_VERB_PRUNE };
@@ -58,17 +59,20 @@ int cmd_brain_reject_args(int rest_argc, const char **rest_argv)
         return -1;
     }
     if (rest_argc > 1) {
-        const char *message = "brain prune takes no arguments";
-
-        if (verb == BRAIN_VERB_NEW_ID) {
-            message = "brain new-id takes no arguments";
-        } else if (verb == BRAIN_VERB_LIST) {
-            message = "brain list takes no arguments";
-        }
-        err_msg(DIAG_USAGE, message);
+        /* rest_argv[0] is one of the three verbs brain_verb matched. */
+        err_fmt(DIAG_USAGE, "brain %s takes no arguments", rest_argv[0]);
         return -1;
     }
     return 0;
+}
+
+/* C-35 for a member brains.json holds that the reader does not take (G6 B). */
+static int warn_unknown(const char *file, const char *name)
+{
+    if (name == NULL) {
+        return 0;
+    }
+    return diag_unknown_field((DiagUnknownField){.path = file, .name = name});
 }
 
 /* brains.json cannot be read: the file is left alone (G5 A). */
@@ -92,15 +96,17 @@ static int brain_list_run(bool json)
     if (brain_list_read(file, &list) != BRAIN_LIST_UNCHANGED) {
         return report_unreadable();
     }
-    if (json) {
+    if (warn_unknown(file, list.unknown_field) != 0) {
+        rc = REMEMBER_ERR;
+    }
+    /* The data goes to the envelope's buffer; a failed warning above is not overwritten. */
+    if (json && rc == REMEMBER_OK) {
         rc = output_brain_list_data(app_out(), &list) == 0 ? REMEMBER_OK : REMEMBER_ERR;
     }
     for (i = 0; i < list.count && rc == REMEMBER_OK; i++) {
         const char *path = list.rows[i].path;
 
-        /* The path is masked: brains.json is a file another program may have written. */
-        if (!json &&
-            (output_text_human(app_out(), path, false) != 0 || fputc('\n', app_out()) == EOF)) {
+        if (!json && output_brain_row_human(app_out(), &list.rows[i]) != 0) {
             rc = REMEMBER_ERR;
         }
         if (brain_path_is_missing(NULL, path) && diag_brain_missing(path) != 0) {
@@ -114,26 +120,37 @@ static int brain_list_run(bool json)
     return rc;
 }
 
-static int brain_prune_run(bool json)
+static int brain_prune_run(bool json, int busy_timeout_ms)
 {
     char file[REMEMBER_PATH_MAX];
     BrainList removed = {0};
     BrainListCode code = BRAIN_LIST_IO;
+    char *unknown = NULL;
     int rc = REMEMBER_OK;
 
     if (brain_json_path(file, sizeof(file)) != 0) {
         err_msg(DIAG_CANNOT_OPEN, "cannot find the data folder");
         return REMEMBER_ERR;
     }
-    code = brain_list_prune(file, brain_path_is_missing, NULL, &removed);
+    code = brain_list_prune(file, brain_path_is_missing, NULL, busy_timeout_ms, &removed, &unknown);
+    if (warn_unknown(file, unknown) != 0) {
+        rc = REMEMBER_ERR;
+    }
+    free(unknown);
     if (code == BRAIN_LIST_UNREADABLE) {
         return report_unreadable();
+    }
+    if (code == BRAIN_LIST_BUSY) {
+        brain_note_busy_error();
+        return REMEMBER_ERR;
     }
     if (code != BRAIN_LIST_UNCHANGED && code != BRAIN_LIST_PRUNED) {
         err_msg(DIAG_IO_ERROR, "cannot update brains.json");
         return REMEMBER_ERR;
     }
-    rc = json && output_brain_prune_data(app_out(), &removed) != 0 ? REMEMBER_ERR : REMEMBER_OK;
+    if (json && rc == REMEMBER_OK) {
+        rc = output_brain_prune_data(app_out(), &removed) == 0 ? REMEMBER_OK : REMEMBER_ERR;
+    }
     brain_list_free(&removed);
     if (rc != REMEMBER_OK) {
         err_msg(DIAG_INTERNAL, "failed to write output");
@@ -141,10 +158,12 @@ static int brain_prune_run(bool json)
     return rc;
 }
 
-int cmd_brain_file(bool json, int rest_argc, const char **rest_argv)
+/* busy_timeout_ms bounds prune's wait for the brains.json lock (G5); list takes no lock. */
+int cmd_brain_file(bool json, int busy_timeout_ms, int rest_argc, const char **rest_argv)
 {
-    return brain_verb(rest_argc, rest_argv) == BRAIN_VERB_LIST ? brain_list_run(json)
-                                                               : brain_prune_run(json);
+    return brain_verb(rest_argc, rest_argv) == BRAIN_VERB_LIST
+               ? brain_list_run(json)
+               : brain_prune_run(json, busy_timeout_ms);
 }
 
 int cmd_brain(Store *s, bool json, int rest_argc, const char **rest_argv)

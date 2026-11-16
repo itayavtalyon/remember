@@ -10,6 +10,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <time.h>
 #include <unistd.h>
 
 #ifdef REMEMBER_TEST_HOOKS
@@ -26,6 +27,11 @@ void brain_list_test_fail_alloc_after(int n)
     g_fail_alloc_after = n;
 }
 
+/* An allocator wrapper on purpose; see test_alloc.c for the two pragmas. */
+#ifdef __clang__
+#pragma clang diagnostic ignored "-Wunknown-warning-option"
+#pragma clang diagnostic ignored "-Wallocator-wrappers"
+#endif
 static void *list_malloc(size_t n)
 {
     if (test_countdown_fires(&g_fail_alloc_after)) {
@@ -37,7 +43,10 @@ static void *list_malloc(size_t n)
 #define list_malloc malloc
 #endif
 
-enum { LOCK_MODE = 0600 };
+enum { LOCK_MODE = 0600, LOCK_POLL_MS = 10, NS_PER_MS = 1000000 };
+
+/* lock_file's failures. */
+enum { LOCK_IO = -1, LOCK_BUSY = -2 };
 
 static const char k_lock_suffix[] = ".lock";
 static const char k_tmp_suffix[] = ".tmp";
@@ -60,6 +69,7 @@ static void doc_clear(BrainList *doc)
         row_clear(&doc->rows[i]);
     }
     free(doc->rows);
+    free(doc->unknown_field);
     memset(doc, 0, sizeof(*doc));
 }
 
@@ -92,16 +102,22 @@ static char *dup_text(const char *text)
     return out;
 }
 
+/* The one member named key. A key given twice is NULL, like a missing one: first-wins here and
+   last-wins in most other readers would read two different files (plan 25 X3). */
 static const JsonValue *member(const JsonValue *obj, const char *key)
 {
+    const JsonValue *found = NULL;
     size_t i = 0;
 
     for (i = 0; i < obj->u.object.n; i++) {
         if (strcmp(obj->u.object.members[i].key, key) == 0) {
-            return obj->u.object.members[i].value;
+            if (found != NULL) {
+                return NULL;
+            }
+            found = obj->u.object.members[i].value;
         }
     }
-    return NULL;
+    return found;
 }
 
 /* jsonread refuses a NUL byte and \u0000, so a string here holds no NUL and C sees all of it.
@@ -159,8 +175,43 @@ static bool is_the_document(const JsonValue *root)
     return true;
 }
 
+enum { KNOWN_KEYS = 3 };
+static const char *const k_doc_keys[KNOWN_KEYS] = {"format", "version", "brains"};
+static const char *const k_row_keys[KNOWN_KEYS] = {"path", "brain_id", "added_at"};
+
+/* The first member of obj that is not one of known, or NULL. */
+static const char *first_unknown(const JsonValue *obj, const char *const *known)
+{
+    size_t i = 0;
+
+    for (i = 0; i < obj->u.object.n; i++) {
+        const char *key = obj->u.object.members[i].key;
+
+        if (strcmp(key, known[0]) != 0 && strcmp(key, known[1]) != 0 &&
+            strcmp(key, known[2]) != 0) {
+            return key;
+        }
+    }
+    return NULL;
+}
+
+/* The first member, root then rows in file order, that the reader does not take
+   (decision:2026-11-16-plan26-review-grill G6 B: it is warned, never ignored silently). */
+// NOLINTNEXTLINE(bugprone-easily-swappable-parameters) the document, then its brains array
+static const char *unknown_in_doc(const JsonValue *root, const JsonValue *brains)
+{
+    const char *key = first_unknown(root, k_doc_keys);
+    size_t i = 0;
+
+    for (i = 0; key == NULL && i < brains->u.array.n; i++) {
+        key = first_unknown(brains->u.array.items[i], k_row_keys);
+    }
+    return key;
+}
+
 static BrainListCode parse_doc(const char *text, size_t len, BrainList *doc)
 {
+    const char *unknown = NULL;
     JsonValue *root = NULL;
     const JsonValue *brains = NULL;
     JsonReadStatus read = JSONREAD_OK;
@@ -192,29 +243,25 @@ static BrainListCode parse_doc(const char *text, size_t len, BrainList *doc)
         }
         doc->count += 1U;
     }
+    unknown = unknown_in_doc(root, brains);
+    if (unknown != NULL) {
+        doc->unknown_field = dup_text(unknown);
+    }
     jsonread_free(root);
+    if (unknown != NULL && doc->unknown_field == NULL) {
+        doc_clear(doc);
+        return BRAIN_LIST_IO;
+    }
     return BRAIN_LIST_UNCHANGED;
 }
 
 static int write_doc(FILE *out, const void *ctx)
 {
-    const BrainList *doc = (const BrainList *)ctx;
-    size_t i = 0;
-
-    if (fputs("{\"format\":\"remember-brains\",\"version\":1,\"brains\":[", out) < 0) {
+    if (fputs("{\"format\":\"remember-brains\",\"version\":1,", out) < 0 ||
+        output_brain_rows_json(out, (const BrainList *)ctx) != 0) {
         return -1;
     }
-    for (i = 0; i < doc->count; i++) {
-        const BrainRow *row = &doc->rows[i];
-
-        if ((i > 0U && fputc(',', out) == EOF) || fputs("{\"path\":", out) < 0 ||
-            output_json_string(out, row->path) != 0 || fputs(",\"brain_id\":", out) < 0 ||
-            output_json_string(out, row->brain_id) != 0 || fputs(",\"added_at\":", out) < 0 ||
-            output_json_string(out, row->added_at) != 0 || fputc('}', out) == EOF) {
-            return -1;
-        }
-    }
-    return fputs("]}\n", out) < 0 ? -1 : 0;
+    return fputs("}\n", out) < 0 ? -1 : 0;
 }
 
 /* An absent file is an empty list. Anything else that cannot be used is
@@ -267,21 +314,42 @@ static BrainListCode store_file(const char *json_path, const BrainList *doc)
     return code;
 }
 
+/* Take the lock, trying every LOCK_POLL_MS until timeout_ms has gone by (G5: never an unbounded
+   wait). Any F_SETLK failure is retried: a lock that never comes is busy, and the command fails
+   visibly. ponytail: the wait counts its sleeps, so it can run a little past timeout_ms; a
+   clock_gettime deadline if that ever matters. */
+// NOLINTNEXTLINE(bugprone-easily-swappable-parameters) the descriptor, then the wait in ms
+static int wait_for_lock(int fd, int timeout_ms)
+{
+    struct flock whole = {.l_type = F_WRLCK, .l_whence = SEEK_SET};
+    const struct timespec pause = {.tv_nsec = (long)LOCK_POLL_MS * NS_PER_MS};
+    int waited = 0;
+
+    while (fcntl(fd, F_SETLK, &whole) != 0) {
+        if (waited >= timeout_ms) {
+            return LOCK_BUSY;
+        }
+        (void)nanosleep(&pause, NULL);
+        waited += LOCK_POLL_MS;
+    }
+    return 0;
+}
+
 /* POSIX record lock on brains.json.lock: advisory, and the OS drops it when the
    holder dies. The lock file is opened without following a symlink and must be
    a regular file. The data folder is made first, because the first brain a
-   machine opens may be one outside it. */
-static int lock_file(const char *json_path)
+   machine opens may be one outside it. The fd, or LOCK_IO or LOCK_BUSY. */
+static int lock_file(const char *json_path, int timeout_ms)
 {
     size_t n = strlen(json_path);
     char *lock_path = (char *)list_malloc(n + sizeof(k_lock_suffix));
-    struct flock whole = {.l_type = F_WRLCK, .l_whence = SEEK_SET};
     struct stat st;
     int sys_errno = 0;
     int fd = -1;
+    int rc = LOCK_IO;
 
     if (lock_path == NULL) {
-        return -1;
+        return LOCK_IO;
     }
     memcpy(lock_path, json_path, n);
     memcpy(lock_path + n, k_lock_suffix, sizeof(k_lock_suffix));
@@ -289,13 +357,21 @@ static int lock_file(const char *json_path)
         fd = open(lock_path, O_RDWR | O_CREAT | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC, LOCK_MODE);
     }
     free(lock_path);
-    if (fd >= 0 && fstat(fd, &st) == 0 && S_ISREG(st.st_mode) && fcntl(fd, F_SETLKW, &whole) == 0) {
-        return fd;
+    if (fd >= 0 && fstat(fd, &st) == 0 && S_ISREG(st.st_mode)) {
+        rc = wait_for_lock(fd, timeout_ms);
+        if (rc == 0) {
+            return fd;
+        }
     }
     if (fd >= 0) {
         (void)close(fd);
     }
-    return -1;
+    return rc;
+}
+
+static BrainListCode lock_failure(int rc)
+{
+    return rc == LOCK_BUSY ? BRAIN_LIST_BUSY : BRAIN_LIST_IO;
 }
 
 static bool push_row(BrainList *doc, BrainRecordIn in, const char *brain_id)
@@ -363,7 +439,12 @@ static BrainListCode apply_record(BrainList *doc, BrainRecordIn in, const BrainP
         }
     }
     if (id_at < doc->count) {
-        if (probe->still(probe->ctx, doc->rows[id_at].path, in.brain_id)) {
+        int still = probe->still(probe->ctx, doc->rows[id_at].path, in.brain_id);
+
+        if (still < 0) {
+            return BRAIN_LIST_UNDECIDED;
+        }
+        if (still > 0) {
             return apply_clone(doc, in, path_at, probe, minted, minted_cap);
         }
         if (!set_text(&doc->rows[id_at].path, in.real_path)) {
@@ -389,48 +470,58 @@ static BrainListCode apply_record(BrainList *doc, BrainRecordIn in, const BrainP
     return BRAIN_LIST_ADDED;
 }
 
+/* load_file leaves out empty on every failure. */
 BrainListCode brain_list_read(const char *json_path, BrainList *out)
 {
-    BrainList doc;
-    BrainListCode code = BRAIN_LIST_UNCHANGED;
-
     if (out == NULL || json_path == NULL) {
         return BRAIN_LIST_IO;
     }
-    code = load_file(json_path, &doc);
-    if (code != BRAIN_LIST_UNCHANGED) {
-        *out = (BrainList){0};
-        return code;
+    return load_file(json_path, out);
+}
+
+/* Hand the first unknown member's name to the caller, who warns it (may be NULL). */
+static void pass_unknown(BrainList *doc, char **unknown_field)
+{
+    if (unknown_field != NULL) {
+        *unknown_field = doc->unknown_field;
+        doc->unknown_field = NULL;
     }
-    *out = doc;
-    return BRAIN_LIST_UNCHANGED;
+}
+
+static bool changes_the_file(BrainListCode code)
+{
+    return (code == BRAIN_LIST_ADDED || code == BRAIN_LIST_MOVED || code == BRAIN_LIST_CLONED ||
+            code == BRAIN_LIST_UPDATED) != 0;
 }
 
 BrainListCode brain_list_record(const char *json_path, BrainRecordIn in, const BrainProbe *probe,
-                                char *minted, size_t minted_cap)
+                                BrainRecordOut out)
 {
     BrainList doc;
     BrainListCode code = BRAIN_LIST_IO;
     int lock_fd = -1;
 
+    if (out.unknown_field != NULL) {
+        *out.unknown_field = NULL;
+    }
     if (json_path == NULL || in.real_path == NULL || in.brain_id == NULL || in.now == NULL ||
-        probe == NULL || probe->still == NULL || probe->mint == NULL || minted == NULL ||
-        minted_cap == 0U) {
+        probe == NULL || probe->still == NULL || probe->mint == NULL || out.minted == NULL ||
+        out.minted_cap == 0U) {
         return BRAIN_LIST_IO;
     }
     /* A path that is not UTF-8 would make the whole file unreadable for every brain. */
     if (!utf8_is_valid(in.real_path, strlen(in.real_path))) {
         return BRAIN_LIST_IO;
     }
-    lock_fd = lock_file(json_path);
+    lock_fd = lock_file(json_path, in.lock_timeout_ms);
     if (lock_fd < 0) {
-        return BRAIN_LIST_IO;
+        return lock_failure(lock_fd);
     }
     code = load_file(json_path, &doc);
     if (code == BRAIN_LIST_UNCHANGED) {
-        code = apply_record(&doc, in, probe, minted, minted_cap);
-        if (code != BRAIN_LIST_UNCHANGED && code != BRAIN_LIST_IO &&
-            store_file(json_path, &doc) != BRAIN_LIST_UNCHANGED) {
+        pass_unknown(&doc, out.unknown_field);
+        code = apply_record(&doc, in, probe, out.minted, out.minted_cap);
+        if (changes_the_file(code) && store_file(json_path, &doc) != BRAIN_LIST_UNCHANGED) {
             code = BRAIN_LIST_IO;
         }
     }
@@ -464,7 +555,7 @@ static BrainListCode split_missing(BrainList *doc, BrainMissingFn missing, void 
 }
 
 BrainListCode brain_list_prune(const char *json_path, BrainMissingFn missing, void *ctx,
-                               BrainList *removed)
+                               int lock_timeout_ms, BrainList *removed, char **unknown_field)
 {
     BrainList doc;
     BrainList gone = {0};
@@ -474,15 +565,19 @@ BrainListCode brain_list_prune(const char *json_path, BrainMissingFn missing, vo
     if (removed != NULL) {
         *removed = (BrainList){0};
     }
+    if (unknown_field != NULL) {
+        *unknown_field = NULL;
+    }
     if (json_path == NULL || missing == NULL) {
         return BRAIN_LIST_IO;
     }
-    lock_fd = lock_file(json_path);
+    lock_fd = lock_file(json_path, lock_timeout_ms);
     if (lock_fd < 0) {
-        return BRAIN_LIST_IO;
+        return lock_failure(lock_fd);
     }
     code = load_file(json_path, &doc);
     if (code == BRAIN_LIST_UNCHANGED) {
+        pass_unknown(&doc, unknown_field);
         code = split_missing(&doc, missing, ctx, &gone);
     }
     if (code == BRAIN_LIST_UNCHANGED && gone.count > 0U) {

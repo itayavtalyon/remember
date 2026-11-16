@@ -10,12 +10,14 @@
 #include "test_alloc.h"
 
 #include <fcntl.h>
+#include <sqlite3.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <sys/wait.h>
+#include <time.h>
 #include <unistd.h>
 
 enum {
@@ -27,8 +29,23 @@ enum {
     MANY_ROWS = 300,
     MANY_CAP = 64 * 1024,
     FAULTS_PER_KIND = 60,
-    ENV_PAD = 7
+    ENV_PAD = 7,
+    LONG_NAME = 300,
+    LOCK_HOLD_MS = 300,
+    LIST_LOCK_HOLD_MS = 900,
+    NS_PER_MS = 1000000,
+    LIST_WAIT_MS = 5000,
+    ODD_BUSY_MS = 1234,
+    SMALL_ROW = 96
 };
+
+/* usleep is not in POSIX 2008, which the build asks for (_POSIX_C_SOURCE=200809L). ms < 1000. */
+static void pause_ms(long ms)
+{
+    const struct timespec pause = {.tv_nsec = ms * NS_PER_MS};
+
+    (void)nanosleep(&pause, NULL);
+}
 
 #define ID_A "01a0d90a-e71c-7000-8000-000000000001"
 #define ID_B "01a0d90a-e71c-7000-8000-000000000002"
@@ -41,12 +58,11 @@ typedef struct {
     int stills;
     int mints;
     int mint_fails;
-    bool still;
-    char pad_[3]; /* explicit tail padding (kept -Wpadded-clean) */
+    int still; /* 1, 0 or -1, as BrainProbe.still answers */
 } Probe;
 
 // NOLINTNEXTLINE(bugprone-easily-swappable-parameters) the BrainProbe callback signature
-static bool probe_still(void *ctx, const char *path, const char *brain_id)
+static int probe_still(void *ctx, const char *path, const char *brain_id)
 {
     Probe *p = (Probe *)ctx;
 
@@ -140,7 +156,7 @@ static void given_text(const char *path, const char *text)
 static void given_rows(const char *json_path, const char *const *paths, const char *const *ids,
                        size_t n)
 {
-    Probe never = {.still = false};
+    Probe never = {.still = 0};
     BrainProbe probe = given_probe(&never);
     char minted[ID_CAP];
     size_t i = 0;
@@ -148,7 +164,7 @@ static void given_rows(const char *json_path, const char *const *paths, const ch
     for (i = 0; i < n; i++) {
         BrainListCode code = brain_list_record(
             json_path, (BrainRecordIn){.real_path = paths[i], .brain_id = ids[i], .now = NOW},
-            &probe, minted, sizeof(minted));
+            &probe, (BrainRecordOut){.minted = minted, .minted_cap = sizeof(minted)});
 
         ASSERT_EQ_STATUS(code, BRAIN_LIST_ADDED);
     }
@@ -162,9 +178,11 @@ static void given_one_row(const char *json_path, const char *path, const char *i
 static BrainListCode record_at(const char *json_path, const char *path, const char *id,
                                const BrainProbe *probe, char *minted)
 {
-    return brain_list_record(json_path,
-                             (BrainRecordIn){.real_path = path, .brain_id = id, .now = LATER},
-                             probe, minted, ID_CAP);
+    return brain_list_record(
+        json_path,
+        (BrainRecordIn){
+            .real_path = path, .brain_id = id, .now = LATER, .lock_timeout_ms = LIST_WAIT_MS},
+        probe, (BrainRecordOut){.minted = minted, .minted_cap = ID_CAP});
 }
 
 __attribute__((returns_nonnull)) static char *file_text(const char *path)
@@ -186,18 +204,22 @@ TEST(brain_list_first_record_adds_one_row_and_a_second_adds_none)
 {
     char *dir = given_dir();
     char *file = given_path(dir, "brains.json");
-    Probe never = {.still = false};
+    Probe never = {.still = 0};
     BrainProbe probe = given_probe(&never);
     char minted[ID_CAP];
     BrainList list = {0};
     char *text = NULL;
 
-    ASSERT_EQ_STATUS(brain_list_record(file, (BrainRecordIn){"/tmp/a.db", ID_A, NOW}, &probe,
-                                       minted, sizeof(minted)),
-                     BRAIN_LIST_ADDED);
-    ASSERT_EQ_STATUS(brain_list_record(file, (BrainRecordIn){"/tmp/a.db", ID_A, LATER}, &probe,
-                                       minted, sizeof(minted)),
-                     BRAIN_LIST_UNCHANGED);
+    ASSERT_EQ_STATUS(
+        brain_list_record(file,
+                          (BrainRecordIn){.real_path = "/tmp/a.db", .brain_id = ID_A, .now = NOW},
+                          &probe, (BrainRecordOut){.minted = minted, .minted_cap = sizeof(minted)}),
+        BRAIN_LIST_ADDED);
+    ASSERT_EQ_STATUS(
+        brain_list_record(file,
+                          (BrainRecordIn){.real_path = "/tmp/a.db", .brain_id = ID_A, .now = LATER},
+                          &probe, (BrainRecordOut){.minted = minted, .minted_cap = sizeof(minted)}),
+        BRAIN_LIST_UNCHANGED);
     ASSERT_EQ_STATUS(brain_list_read(file, &list), BRAIN_LIST_UNCHANGED);
     ASSERT_EQ_INT((long long)list.count, 1);
     ASSERT_STREQ(row_at(&list, 0)->path, "/tmp/a.db");
@@ -291,7 +313,7 @@ typedef struct {
 } LockProbe;
 
 // NOLINTNEXTLINE(bugprone-easily-swappable-parameters) the BrainProbe callback signature
-static bool probe_lock_held(void *ctx, const char *path, const char *brain_id)
+static int probe_lock_held(void *ctx, const char *path, const char *brain_id)
 {
     LockProbe *p = (LockProbe *)ctx;
     pid_t child = 0;
@@ -312,7 +334,7 @@ static bool probe_lock_held(void *ctx, const char *path, const char *brain_id)
     ASSERT_TRUE(child > 0);
     ASSERT_EQ_INT(waitpid(child, &status, 0), (long long)child);
     p->holder_seen = (WIFEXITED(status) && WEXITSTATUS(status) == 0) ? 1 : 0;
-    return false;
+    return 0;
 }
 
 TEST(brain_list_record_holds_the_advisory_lock_while_it_decides)
@@ -336,7 +358,7 @@ TEST(brain_list_a_copy_takes_the_minted_id_and_keeps_the_original_row)
 {
     char *dir = given_dir();
     char *file = given_path(dir, "brains.json");
-    Probe still = {.still = true};
+    Probe still = {.still = 1};
     BrainProbe probe = given_probe(&still);
     char minted[ID_CAP];
     BrainList list = {0};
@@ -361,7 +383,7 @@ TEST(brain_list_a_copy_whose_path_is_listed_gets_the_minted_id_in_that_row)
 {
     char *dir = given_dir();
     char *file = given_path(dir, "brains.json");
-    Probe still = {.still = true};
+    Probe still = {.still = 1};
     BrainProbe probe = given_probe(&still);
     char minted[ID_CAP];
     BrainList list = {0};
@@ -383,7 +405,7 @@ TEST(brain_list_a_copy_whose_mint_fails_changes_nothing)
 {
     char *dir = given_dir();
     char *file = given_path(dir, "brains.json");
-    Probe still = {.still = true, .mint_fails = 1};
+    Probe still = {.still = 1, .mint_fails = 1};
     BrainProbe probe = given_probe(&still);
     char minted[ID_CAP];
     char *text = NULL;
@@ -401,7 +423,7 @@ TEST(brain_list_a_plain_open_mints_nothing)
 {
     char *dir = given_dir();
     char *file = given_path(dir, "brains.json");
-    Probe never = {.still = false};
+    Probe never = {.still = 0};
     BrainProbe probe = given_probe(&never);
     char minted[ID_CAP];
 
@@ -417,7 +439,7 @@ TEST(brain_list_a_move_keeps_the_id_and_changes_the_path)
 {
     char *dir = given_dir();
     char *file = given_path(dir, "brains.json");
-    Probe never = {.still = false};
+    Probe never = {.still = 0};
     BrainProbe probe = given_probe(&never);
     char minted[ID_CAP];
     BrainList list = {0};
@@ -438,7 +460,7 @@ TEST(brain_list_a_move_onto_a_listed_path_drops_the_stale_row_of_that_path)
 {
     char *dir = given_dir();
     char *file = given_path(dir, "brains.json");
-    Probe never = {.still = false};
+    Probe never = {.still = 0};
     BrainProbe probe = given_probe(&never);
     char minted[ID_CAP];
     BrainList list = {0};
@@ -460,7 +482,7 @@ TEST(brain_list_a_listed_path_with_a_new_id_takes_that_id)
 {
     char *dir = given_dir();
     char *file = given_path(dir, "brains.json");
-    Probe never = {.still = false};
+    Probe never = {.still = 0};
     BrainProbe probe = given_probe(&never);
     char minted[ID_CAP];
     BrainList list = {0};
@@ -472,6 +494,27 @@ TEST(brain_list_a_listed_path_with_a_new_id_takes_that_id)
     ASSERT_STREQ(row_at(&list, 0)->brain_id, ID_B);
     ASSERT_STREQ(row_at(&list, 0)->added_at, NOW);
     brain_list_free(&list);
+    free(file);
+    free(dir);
+}
+
+/* G2 A: the other path could not be checked, so nothing is minted and nothing is written. */
+TEST(brain_list_a_probe_that_cannot_tell_writes_nothing_and_mints_nothing)
+{
+    char *dir = given_dir();
+    char *file = given_path(dir, "brains.json");
+    struct stat before;
+    struct stat after;
+    Probe unsure = {.still = -1};
+    BrainProbe probe = given_probe(&unsure);
+    char minted[ID_CAP];
+
+    given_one_row(file, "/tmp/a.db", ID_A);
+    ASSERT_EQ_INT(stat(file, &before), 0);
+    ASSERT_EQ_STATUS(record_at(file, "/tmp/b.db", ID_A, &probe, minted), BRAIN_LIST_UNDECIDED);
+    ASSERT_EQ_INT(stat(file, &after), 0);
+    ASSERT_TRUE(after.st_ino == before.st_ino);
+    ASSERT_EQ_INT(unsure.mints, 0);
     free(file);
     free(dir);
 }
@@ -502,7 +545,7 @@ TEST(brain_list_a_record_that_changes_nothing_leaves_the_file_as_it_is)
     char *file = given_path(dir, "brains.json");
     struct stat before;
     struct stat after;
-    Probe never = {.still = false};
+    Probe never = {.still = 0};
     BrainProbe probe = given_probe(&never);
     char minted[ID_CAP];
 
@@ -519,7 +562,7 @@ TEST(brain_list_a_folder_that_cannot_take_the_temp_file_returns_io_and_keeps_the
 {
     char *dir = given_dir();
     char *file = given_path(dir, "brains.json");
-    Probe never = {.still = false};
+    Probe never = {.still = 0};
     BrainProbe probe = given_probe(&never);
     char minted[ID_CAP];
     char *text = NULL;
@@ -527,7 +570,8 @@ TEST(brain_list_a_folder_that_cannot_take_the_temp_file_returns_io_and_keeps_the
     given_one_row(file, "/tmp/a.db", ID_A);
     ASSERT_EQ_INT(chmod(dir, 0500), 0);
     ASSERT_EQ_STATUS(record_at(file, "/tmp/b.db", ID_B, &probe, minted), BRAIN_LIST_IO);
-    ASSERT_EQ_STATUS(brain_list_prune(file, missing_gone, NULL, NULL), BRAIN_LIST_UNCHANGED);
+    ASSERT_EQ_STATUS(brain_list_prune(file, missing_gone, NULL, 0, NULL, NULL),
+                     BRAIN_LIST_UNCHANGED);
     ASSERT_EQ_INT(chmod(dir, 0700), 0);
     text = file_text(file);
     ASSERT_STREQ(text, k_doc_one);
@@ -546,7 +590,8 @@ TEST(brain_list_prune_drops_a_missing_path_and_returns_its_row)
     BrainList removed = {0};
 
     given_rows(file, paths, ids, 2U);
-    ASSERT_EQ_STATUS(brain_list_prune(file, missing_gone, NULL, &removed), BRAIN_LIST_PRUNED);
+    ASSERT_EQ_STATUS(brain_list_prune(file, missing_gone, NULL, 0, &removed, NULL),
+                     BRAIN_LIST_PRUNED);
     ASSERT_EQ_INT((long long)removed.count, 1);
     ASSERT_STREQ(row_at(&removed, 0)->path, "/tmp/gone.db");
     ASSERT_STREQ(row_at(&removed, 0)->brain_id, ID_A);
@@ -569,7 +614,8 @@ TEST(brain_list_prune_with_nothing_missing_does_not_rewrite_the_file)
 
     given_one_row(file, "/tmp/keep.db", ID_B);
     ASSERT_EQ_INT(stat(file, &before), 0);
-    ASSERT_EQ_STATUS(brain_list_prune(file, missing_gone, NULL, &removed), BRAIN_LIST_UNCHANGED);
+    ASSERT_EQ_STATUS(brain_list_prune(file, missing_gone, NULL, 0, &removed, NULL),
+                     BRAIN_LIST_UNCHANGED);
     ASSERT_EQ_INT((long long)removed.count, 0);
     ASSERT_EQ_INT(stat(file, &after), 0);
     ASSERT_TRUE(after.st_ino == before.st_ino);
@@ -583,7 +629,8 @@ TEST(brain_list_prune_of_a_missing_file_creates_nothing)
     char *dir = given_dir();
     char *file = given_path(dir, "brains.json");
 
-    ASSERT_EQ_STATUS(brain_list_prune(file, missing_gone, NULL, NULL), BRAIN_LIST_UNCHANGED);
+    ASSERT_EQ_STATUS(brain_list_prune(file, missing_gone, NULL, 0, NULL, NULL),
+                     BRAIN_LIST_UNCHANGED);
     ASSERT_TRUE(access(file, F_OK) != 0);
     free(file);
     free(dir);
@@ -592,20 +639,24 @@ TEST(brain_list_prune_of_a_missing_file_creates_nothing)
 TEST(brain_list_calls_without_a_path_or_a_probe_fail_without_writing)
 {
     char minted[ID_CAP];
-    Probe never = {.still = false};
+    Probe never = {.still = 0};
     BrainProbe probe = given_probe(&never);
     BrainList list = {0};
 
-    ASSERT_EQ_STATUS(brain_list_record(NULL, (BrainRecordIn){"/tmp/a.db", ID_A, NOW}, &probe,
-                                       minted, sizeof(minted)),
-                     BRAIN_LIST_IO);
-    ASSERT_EQ_STATUS(brain_list_record("/tmp/x/brains.json",
-                                       (BrainRecordIn){"/tmp/a.db", ID_A, NOW}, NULL, minted,
-                                       sizeof(minted)),
-                     BRAIN_LIST_IO);
+    ASSERT_EQ_STATUS(
+        brain_list_record(NULL,
+                          (BrainRecordIn){.real_path = "/tmp/a.db", .brain_id = ID_A, .now = NOW},
+                          &probe, (BrainRecordOut){.minted = minted, .minted_cap = sizeof(minted)}),
+        BRAIN_LIST_IO);
+    ASSERT_EQ_STATUS(
+        brain_list_record("/tmp/x/brains.json",
+                          (BrainRecordIn){.real_path = "/tmp/a.db", .brain_id = ID_A, .now = NOW},
+                          NULL, (BrainRecordOut){.minted = minted, .minted_cap = sizeof(minted)}),
+        BRAIN_LIST_IO);
     ASSERT_EQ_STATUS(brain_list_read(NULL, &list), BRAIN_LIST_IO);
-    ASSERT_EQ_STATUS(brain_list_prune(NULL, missing_gone, NULL, NULL), BRAIN_LIST_IO);
-    ASSERT_EQ_STATUS(brain_list_prune("/tmp/x/brains.json", NULL, NULL, NULL), BRAIN_LIST_IO);
+    ASSERT_EQ_STATUS(brain_list_prune(NULL, missing_gone, NULL, 0, NULL, NULL), BRAIN_LIST_IO);
+    ASSERT_EQ_STATUS(brain_list_prune("/tmp/x/brains.json", NULL, NULL, 0, NULL, NULL),
+                     BRAIN_LIST_IO);
 }
 
 /* ---- brains.json is hand-editable and another program's input -------------- */
@@ -700,6 +751,144 @@ TEST(brain_list_a_document_of_another_shape_is_unreadable)
     free(dir);
 }
 
+/* A member given twice is read first-wins here and last-wins by most other readers, so the
+   path remember checks would not be the path a reviewer of the file sees (plan 25 X3). */
+TEST(brain_list_a_row_field_given_twice_is_unreadable)
+{
+    char *dir = given_dir();
+    char *file = given_path(dir, "brains.json");
+    BrainList list = {0};
+
+    given_json(file, "[{\"path\":\"/nope/a\",\"path\":\"/etc/hosts\",\"brain_id\":\"x\","
+                     "\"added_at\":\"y\"}]");
+    ASSERT_EQ_STATUS(brain_list_read(file, &list), BRAIN_LIST_UNREADABLE);
+    given_json(file,
+               "[{\"path\":\"/a\",\"brain_id\":\"x\",\"brain_id\":\"z\",\"added_at\":\"y\"}]");
+    ASSERT_EQ_STATUS(brain_list_read(file, &list), BRAIN_LIST_UNREADABLE);
+    given_json(file,
+               "[{\"path\":\"/a\",\"brain_id\":\"x\",\"added_at\":\"y\",\"added_at\":\"z\"}]");
+    ASSERT_EQ_STATUS(brain_list_read(file, &list), BRAIN_LIST_UNREADABLE);
+    free(file);
+    free(dir);
+}
+
+TEST(brain_list_a_document_member_given_twice_is_unreadable)
+{
+    char *dir = given_dir();
+    char *file = given_path(dir, "brains.json");
+    BrainList list = {0};
+
+    given_text(file, "{\"format\":\"remember-brains\",\"version\":1,\"brains\":[],"
+                     "\"brains\":[{\"path\":\"/a\",\"brain_id\":\"x\",\"added_at\":\"y\"}]}");
+    ASSERT_EQ_STATUS(brain_list_read(file, &list), BRAIN_LIST_UNREADABLE);
+    given_text(file, "{\"format\":\"remember-brains\",\"format\":\"other\",\"version\":1,"
+                     "\"brains\":[]}");
+    ASSERT_EQ_STATUS(brain_list_read(file, &list), BRAIN_LIST_UNREADABLE);
+    given_text(file, "{\"format\":\"remember-brains\",\"version\":1,\"version\":2,\"brains\":[]}");
+    ASSERT_EQ_STATUS(brain_list_read(file, &list), BRAIN_LIST_UNREADABLE);
+    free(file);
+    free(dir);
+}
+
+/* A member the reader does not take may repeat: it is ignored either way. */
+TEST(brain_list_an_unknown_member_given_twice_is_read)
+{
+    char *dir = given_dir();
+    char *file = given_path(dir, "brains.json");
+    BrainList list = {0};
+
+    given_json(file, "[{\"path\":\"/a\",\"brain_id\":\"x\",\"added_at\":\"y\",\"n\":1,\"n\":2}]");
+    ASSERT_EQ_STATUS(brain_list_read(file, &list), BRAIN_LIST_UNCHANGED);
+    ASSERT_EQ_INT((long long)list.count, 1);
+    brain_list_free(&list);
+    free(file);
+    free(dir);
+}
+
+TEST(brain_list_read_names_the_first_unknown_member_root_first)
+{
+    char *dir = given_dir();
+    char *file = given_path(dir, "brains.json");
+    BrainList list = {0};
+
+    given_text(file, "{\"format\":\"remember-brains\",\"version\":1,\"z\":0,\"brains\":"
+                     "[{\"path\":\"/a\",\"brain_id\":\"x\",\"added_at\":\"y\",\"r\":1}]}");
+    ASSERT_EQ_STATUS(brain_list_read(file, &list), BRAIN_LIST_UNCHANGED);
+    ASSERT_STREQ(list.unknown_field != NULL ? list.unknown_field : "(none)", "z");
+    brain_list_free(&list);
+    free(file);
+    free(dir);
+}
+
+TEST(brain_list_read_names_an_unknown_member_of_a_later_row)
+{
+    char *dir = given_dir();
+    char *file = given_path(dir, "brains.json");
+    BrainList list = {0};
+
+    given_json(file, "[{\"path\":\"/a\",\"brain_id\":\"x\",\"added_at\":\"y\"},"
+                     "{\"path\":\"/b\",\"brain_id\":\"w\",\"added_at\":\"y\",\"r2\":1}]");
+    ASSERT_EQ_STATUS(brain_list_read(file, &list), BRAIN_LIST_UNCHANGED);
+    ASSERT_STREQ(list.unknown_field != NULL ? list.unknown_field : "(none)", "r2");
+    brain_list_free(&list);
+    free(file);
+    free(dir);
+}
+
+TEST(brain_list_read_of_a_file_with_only_known_members_names_none)
+{
+    char *dir = given_dir();
+    char *file = given_path(dir, "brains.json");
+    BrainList list = {0};
+
+    given_one_row(file, "/tmp/a.db", ID_A);
+    ASSERT_EQ_STATUS(brain_list_read(file, &list), BRAIN_LIST_UNCHANGED);
+    ASSERT_TRUE(list.unknown_field == NULL);
+    brain_list_free(&list);
+    free(file);
+    free(dir);
+}
+
+TEST(brain_list_record_and_prune_hand_the_unknown_member_to_the_caller)
+{
+    char *dir = given_dir();
+    char *file = given_path(dir, "brains.json");
+    Probe never = {.still = 0};
+    BrainProbe probe = given_probe(&never);
+    char minted[ID_CAP];
+    char *unknown = NULL;
+
+    given_json(file, "[{\"path\":\"/a\",\"brain_id\":\"x\",\"added_at\":\"y\",\"r\":1}]");
+    ASSERT_EQ_STATUS(
+        brain_list_record(
+            file, (BrainRecordIn){.real_path = "/a", .brain_id = "x", .now = NOW}, &probe,
+            (BrainRecordOut){
+                .minted = minted, .minted_cap = sizeof(minted), .unknown_field = &unknown}),
+        BRAIN_LIST_UNCHANGED);
+    ASSERT_STREQ(unknown != NULL ? unknown : "(none)", "r");
+    free(unknown);
+    unknown = NULL;
+    ASSERT_EQ_STATUS(brain_list_prune(file, missing_gone, NULL, 0, NULL, &unknown),
+                     BRAIN_LIST_UNCHANGED);
+    ASSERT_STREQ(unknown != NULL ? unknown : "(none)", "r");
+    free(unknown);
+    free(file);
+    free(dir);
+}
+
+/* Copy piece and its NUL to text + *used inside MANY_CAP, or fail the fixture. The next piece
+   starts on that NUL. */
+static void append_text(char *text, size_t *used, const char *piece)
+{
+    size_t n = strlen(piece);
+
+    if (n >= (size_t)MANY_CAP - *used) {
+        fixture_failed("text too long");
+    }
+    memcpy(text + *used, piece, n + 1U);
+    *used += n;
+}
+
 TEST(brain_list_has_no_row_cap)
 {
     char *dir = given_dir();
@@ -712,14 +901,20 @@ TEST(brain_list_has_no_row_cap)
     if (text == NULL) {
         fixture_failed("rows text");
     }
-    used += (size_t)snprintf(text + used, (size_t)MANY_CAP - used, "%s[", k_head);
+    append_text(text, &used, k_head);
+    append_text(text, &used, "[");
     for (row = 0; row < MANY_ROWS; row++) {
-        used +=
-            (size_t)snprintf(text + used, (size_t)MANY_CAP - used,
-                             "%s{\"path\":\"/tmp/b%d.db\",\"brain_id\":\"i%d\",\"added_at\":\"t\"}",
-                             row > 0 ? "," : "", row, row);
+        char one[SMALL_ROW];
+        int n = snprintf(one, sizeof(one),
+                         "%s{\"path\":\"/tmp/b%d.db\",\"brain_id\":\"i%d\",\"added_at\":\"t\"}",
+                         row > 0 ? "," : "", row, row);
+
+        if (n < 0 || (size_t)n >= sizeof(one)) {
+            fixture_failed("row text");
+        }
+        append_text(text, &used, one);
     }
-    used += (size_t)snprintf(text + used, (size_t)MANY_CAP - used, "]}");
+    append_text(text, &used, "]}");
     given_bytes(file, text, used);
     ASSERT_EQ_STATUS(brain_list_read(file, &list), BRAIN_LIST_UNCHANGED);
     ASSERT_EQ_INT((long long)list.count, MANY_ROWS);
@@ -762,7 +957,7 @@ TEST(brain_list_a_file_one_byte_over_the_cap_is_unreadable_and_left_alone)
     char *dir = given_dir();
     char *file = given_path(dir, "brains.json");
     BrainList list = {0};
-    Probe never = {.still = false};
+    Probe never = {.still = 0};
     BrainProbe probe = given_probe(&never);
     char minted[ID_CAP];
     struct stat st;
@@ -770,7 +965,8 @@ TEST(brain_list_a_file_one_byte_over_the_cap_is_unreadable_and_left_alone)
     given_padded_doc(file, (size_t)BRAIN_LIST_FILE_MAX + 1U);
     ASSERT_EQ_STATUS(brain_list_read(file, &list), BRAIN_LIST_UNREADABLE);
     ASSERT_EQ_STATUS(record_at(file, "/tmp/a.db", ID_A, &probe, minted), BRAIN_LIST_UNREADABLE);
-    ASSERT_EQ_STATUS(brain_list_prune(file, missing_gone, NULL, NULL), BRAIN_LIST_UNREADABLE);
+    ASSERT_EQ_STATUS(brain_list_prune(file, missing_gone, NULL, 0, NULL, NULL),
+                     BRAIN_LIST_UNREADABLE);
     ASSERT_EQ_INT(stat(file, &st), 0);
     ASSERT_EQ_INT((long long)st.st_size, (long long)BRAIN_LIST_FILE_MAX + 1);
     free(file);
@@ -781,14 +977,15 @@ TEST(brain_list_an_unreadable_file_is_never_written_over)
 {
     char *dir = given_dir();
     char *file = given_path(dir, "brains.json");
-    Probe never = {.still = false};
+    Probe never = {.still = 0};
     BrainProbe probe = given_probe(&never);
     char minted[ID_CAP];
     char *text = NULL;
 
     given_text(file, "not json at all");
     ASSERT_EQ_STATUS(record_at(file, "/tmp/a.db", ID_A, &probe, minted), BRAIN_LIST_UNREADABLE);
-    ASSERT_EQ_STATUS(brain_list_prune(file, missing_gone, NULL, NULL), BRAIN_LIST_UNREADABLE);
+    ASSERT_EQ_STATUS(brain_list_prune(file, missing_gone, NULL, 0, NULL, NULL),
+                     BRAIN_LIST_UNREADABLE);
     text = file_text(file);
     ASSERT_STREQ(text, "not json at all");
     free(text);
@@ -843,7 +1040,7 @@ TEST(brain_list_a_symlink_at_the_lock_is_not_followed)
     char *file = given_path(dir, "brains.json");
     char *lock = given_path(dir, "brains.json.lock");
     char *victim = given_path(dir, "victim");
-    Probe never = {.still = false};
+    Probe never = {.still = 0};
     BrainProbe probe = given_probe(&never);
     char minted[ID_CAP];
 
@@ -851,7 +1048,7 @@ TEST(brain_list_a_symlink_at_the_lock_is_not_followed)
     ASSERT_EQ_STATUS(record_at(file, "/tmp/a.db", ID_A, &probe, minted), BRAIN_LIST_IO);
     ASSERT_TRUE(access(victim, F_OK) != 0);
     ASSERT_TRUE(access(file, F_OK) != 0);
-    ASSERT_EQ_STATUS(brain_list_prune(file, missing_gone, NULL, NULL), BRAIN_LIST_IO);
+    ASSERT_EQ_STATUS(brain_list_prune(file, missing_gone, NULL, 0, NULL, NULL), BRAIN_LIST_IO);
     free(victim);
     free(lock);
     free(file);
@@ -863,7 +1060,7 @@ TEST(brain_list_a_lock_that_cannot_be_made_leaves_the_previous_file)
     char *dir = given_dir();
     char *file = given_path(dir, "brains.json");
     char *lock = given_path(dir, "brains.json.lock");
-    Probe never = {.still = false};
+    Probe never = {.still = 0};
     BrainProbe probe = given_probe(&never);
     char minted[ID_CAP];
     char *text = NULL;
@@ -894,8 +1091,8 @@ typedef enum {
 
 static BrainListCode run_case(Case which, const char *file)
 {
-    Probe still = {.still = true};
-    Probe never = {.still = false};
+    Probe still = {.still = 1};
+    Probe never = {.still = 0};
     BrainProbe copy_probe = given_probe(&still);
     BrainProbe move_probe = given_probe(&never);
     char minted[ID_CAP];
@@ -914,7 +1111,7 @@ static BrainListCode run_case(Case which, const char *file)
     case CASE_UPDATE:
         return record_at(file, "/tmp/a.db", ID_MINTED, &move_probe, minted);
     case CASE_PRUNE:
-        return brain_list_prune(file, missing_gone, NULL, NULL);
+        return brain_list_prune(file, missing_gone, NULL, 0, NULL, NULL);
     case CASE_READ:
     default:
         break;
@@ -1036,7 +1233,7 @@ TEST(brain_list_eight_concurrent_records_all_keep_their_row)
     for (i = 0; i < CHILDREN; i++) {
         kids[i] = fork();
         if (kids[i] == 0) {
-            Probe never = {.still = false};
+            Probe never = {.still = 0};
             BrainProbe probe = given_probe(&never);
             char minted[ID_CAP];
             char path[ID_CAP];
@@ -1372,7 +1569,7 @@ TEST(brain_new_id_is_recorded_on_the_next_open_without_a_second_row)
     scene_release(&scn);
 }
 
-TEST(brain_list_prints_each_listed_path_and_a_path_with_no_brain_prints_the_c01_line)
+TEST(brain_list_prints_path_id_and_added_at_per_row_and_a_path_with_no_brain_prints_the_c01_line)
 {
     Scene scn = given_scene();
     char *real_one = NULL;
@@ -1386,10 +1583,14 @@ TEST(brain_list_prints_each_listed_path_and_a_path_with_no_brain_prints_the_c01_
     given_brain_opened(scn.other);
     real_one = real_path_of(scn.brain);
     real_two = real_path_of(scn.other);
+    ASSERT_EQ_STATUS(brain_list_read(scn.list, &list), BRAIN_LIST_UNCHANGED);
+    ASSERT_TRUE(snprintf(want_out, sizeof(want_out), "%s\t%s\t%s\n%s\t%s\t%s\n", real_one,
+                         row_at(&list, 0)->brain_id, row_at(&list, 0)->added_at, real_two,
+                         row_at(&list, 1)->brain_id,
+                         row_at(&list, 1)->added_at) < (int)sizeof(want_out));
+    brain_list_free(&list);
     ASSERT_EQ_INT(unlink(scn.other), 0);
     r = run_args(scn.brain, "brain", "list", NULL);
-    ASSERT_TRUE(snprintf(want_out, sizeof(want_out), "%s\n%s\n", real_one, real_two) <
-                (int)sizeof(want_out));
     ASSERT_TRUE(snprintf(want_err, sizeof(want_err),
                          "remember: warning: brain \"%s\" is in the list but isn't on disk. If you "
                          "moved it, open it once from its new place. Otherwise run 'remember brain "
@@ -1554,7 +1755,7 @@ TEST(a_fifo_at_a_listed_brain_path_does_not_block_a_later_open)
     scene_release(&scn);
 }
 
-TEST(brain_list_masks_control_bytes_in_a_listed_path)
+TEST(brain_list_masks_control_bytes_in_every_field_of_a_row)
 {
     Scene scn = given_scene();
     char *real = NULL;
@@ -1562,12 +1763,11 @@ TEST(brain_list_masks_control_bytes_in_a_listed_path)
 
     given_brain_opened(scn.brain);
     real = real_path_of(scn.brain);
-    given_json(scn.list,
-               "[{\"path\":\"/tmp/x\\u001b[2J\\ny\",\"brain_id\":\"i\",\"added_at\":\"t\"}]");
+    given_json(scn.list, "[{\"path\":\"/tmp/x\\u001b[2J\\ny\\tz\",\"brain_id\":\"i\\u001b[31m\\t\","
+                         "\"added_at\":\"t\\u009b\\u007f\\t\"}]");
     r = run_args(scn.brain, "brain", "list", NULL);
     ASSERT_EQ_INT(r.exit_code, 0);
-    ASSERT_TRUE(strchr(r.out, '\x1b') == NULL);
-    ASSERT_STR_PREFIX(r.out, "/tmp/x?[2J?y\n");
+    ASSERT_STREQ(r.out, "/tmp/x?[2J?y?z\ti?[31m?\tt???\n");
     cmd_result_free(&r);
     free(real);
     scene_release(&scn);
@@ -1594,7 +1794,7 @@ TEST(brain_list_a_path_that_is_not_utf8_is_not_recorded_and_the_file_stays_reada
 {
     char *dir = given_dir();
     char *file = given_path(dir, "brains.json");
-    Probe never = {.still = false};
+    Probe never = {.still = 0};
     BrainProbe probe = given_probe(&never);
     char minted[ID_CAP];
     BrainList list = {0};
@@ -1613,7 +1813,7 @@ TEST(brain_list_a_fifo_at_the_lock_is_not_a_lock_and_does_not_block)
     char *dir = given_dir();
     char *file = given_path(dir, "brains.json");
     char *lock = given_path(dir, "brains.json.lock");
-    Probe never = {.still = false};
+    Probe never = {.still = 0};
     BrainProbe probe = given_probe(&never);
     char minted[ID_CAP];
 
@@ -1630,7 +1830,7 @@ TEST(brain_list_a_file_where_the_data_folder_should_be_stops_the_record)
     char *dir = given_dir();
     char *blocker = given_path(dir, "data");
     char *file = given_path(dir, "data/remember/brains.json");
-    Probe never = {.still = false};
+    Probe never = {.still = 0};
     BrainProbe probe = given_probe(&never);
     char minted[ID_CAP];
 
@@ -1647,7 +1847,7 @@ TEST(brain_list_a_hostile_path_in_the_list_does_not_reach_the_probe_as_a_brain)
        module, decides what is a brain. A probe that says no makes it a move. */
     char *dir = given_dir();
     char *file = given_path(dir, "brains.json");
-    Probe never = {.still = false};
+    Probe never = {.still = 0};
     BrainProbe probe = given_probe(&never);
     char minted[ID_CAP];
     BrainList list = {0};
@@ -1851,6 +2051,74 @@ TEST(brain_list_and_prune_take_a_listed_fifo_or_folder_for_a_path_with_no_brain)
     scene_release(&scn);
 }
 
+/* Each way stat proves nothing is there: ENOENT, ENOTDIR (under a file), ELOOP (a symlink
+   loop) and ENAMETOOLONG (a component past NAME_MAX). */
+TEST(brain_list_and_prune_take_each_kind_of_absent_path_for_a_path_with_no_brain)
+{
+    Scene scn = given_scene();
+    char *loop = given_path(scn.dir, "loop.db");
+    char long_name[LONG_NAME];
+    char doc[TEXT_CAP];
+    BrainList list = {0};
+    CmdResult r;
+
+    given_brain_opened(scn.brain);
+    ASSERT_EQ_INT(symlink(loop, loop), 0);
+    memset(long_name, 'n', sizeof(long_name) - 1U);
+    long_name[sizeof(long_name) - 1U] = '\0';
+    ASSERT_TRUE(snprintf(doc, sizeof(doc),
+                         "[{\"path\":\"%s/gone.db\",\"brain_id\":\"i\",\"added_at\":\"t\"},"
+                         "{\"path\":\"%s/under.db\",\"brain_id\":\"j\",\"added_at\":\"t\"},"
+                         "{\"path\":\"%s\",\"brain_id\":\"k\",\"added_at\":\"t\"},"
+                         "{\"path\":\"%s/%s\",\"brain_id\":\"l\",\"added_at\":\"t\"}]",
+                         scn.dir, scn.brain, loop, scn.dir, long_name) < (int)sizeof(doc));
+    given_json(scn.list, doc);
+    r = run_args(scn.brain, "brain", "prune", NULL);
+    ASSERT_EQ_INT(r.exit_code, 0);
+    cmd_result_free(&r);
+    ASSERT_EQ_STATUS(brain_list_read(scn.list, &list), BRAIN_LIST_UNCHANGED);
+    ASSERT_EQ_INT((long long)list.count, 0);
+    free(loop);
+    scene_release(&scn);
+}
+
+/* stat failing with EACCES says nothing about the brain. The row stays, and no warning says the
+   brain is not on disk. */
+TEST(brain_list_and_prune_keep_a_brain_whose_folder_cannot_be_searched)
+{
+    Scene scn = given_scene();
+    char *locked = given_path(scn.dir, "locked");
+    char *brain = given_path(scn.dir, "locked/one.db");
+    BrainList list = {0};
+    CmdResult r;
+
+    if (geteuid() == 0) {
+        (void)printf("SKIP %s (running as root; folder mode bits are ignored)\n",
+                     "brain_list_and_prune_keep_a_brain_whose_folder_cannot_be_searched");
+        scene_release(&scn);
+        free(brain);
+        free(locked);
+        return;
+    }
+    ASSERT_EQ_INT(mkdir(locked, 0700), 0);
+    given_brain_opened(brain);
+    ASSERT_EQ_INT(chmod(locked, 0), 0);
+    r = run_args(scn.other, "brain", "list", NULL);
+    ASSERT_EQ_INT(r.exit_code, 0);
+    ASSERT_STREQ(r.err, "");
+    cmd_result_free(&r);
+    r = run_args(scn.other, "brain", "prune", NULL);
+    ASSERT_EQ_INT(chmod(locked, 0700), 0);
+    ASSERT_EQ_INT(r.exit_code, 0);
+    cmd_result_free(&r);
+    ASSERT_EQ_STATUS(brain_list_read(scn.list, &list), BRAIN_LIST_UNCHANGED);
+    ASSERT_EQ_INT((long long)list.count, 1);
+    brain_list_free(&list);
+    free(brain);
+    free(locked);
+    scene_release(&scn);
+}
+
 /* The brain_id the list holds for path (heap); "" when the path is not listed. */
 // NOLINTNEXTLINE(bugprone-easily-swappable-parameters) two names of one kind, read in order
 static char *listed_id_of(const char *list_file, const char *path)
@@ -1953,7 +2221,559 @@ static Store *given_open_store(const char *db)
     return s;
 }
 
-TEST(store_path_has_brain_id_is_true_for_the_id_a_brain_holds_and_false_for_another)
+/* A connection that holds an exclusive lock on db: no other connection can read it. */
+static sqlite3 *given_locked(const char *db)
+{
+    sqlite3 *lock = NULL;
+
+    ASSERT_EQ_INT(sqlite3_open_v2(db, &lock, SQLITE_OPEN_READWRITE, NULL), SQLITE_OK);
+    ASSERT_EQ_INT(sqlite3_exec(lock, "BEGIN EXCLUSIVE;", NULL, NULL, NULL), SQLITE_OK);
+    return lock;
+}
+
+static void lock_release(sqlite3 *lock)
+{
+    ASSERT_EQ_INT(sqlite3_exec(lock, "ROLLBACK;", NULL, NULL, NULL), SQLITE_OK);
+    ASSERT_EQ_INT(sqlite3_close(lock), SQLITE_OK);
+}
+
+/* decision:2026-11-16-plan26-review-grill G2. The original is listed with the copy's id and
+   stays locked past the busy timeout: the open cannot tell a copy from a move, so it fails busy
+   and changes nothing. Before the review it counted as a move, and two brains kept one id. */
+TEST(
+    a_copy_opened_while_the_original_is_locked_past_the_busy_timeout_fails_busy_and_changes_nothing)
+{
+    Scene scn = given_scene();
+    const char *args[] = {"--json", "--busy-timeout", "50", "tags"};
+    char *real = NULL;
+    char *old_id = NULL;
+    char *copy_id = NULL;
+    sqlite3 *lock = NULL;
+    BrainList list = {0};
+    CmdResult r;
+
+    given_brain_opened(scn.brain);
+    old_id = brain_id_in(scn.brain);
+    real = real_path_of(scn.brain);
+    copy_file_to(scn.brain, scn.other);
+    lock = given_locked(scn.brain);
+    r = run_remember(scn.other, args, 4U, NULL);
+    lock_release(lock);
+    ASSERT_EQ_INT(r.exit_code, 1);
+    ASSERT_STR_CONTAINS(r.out, "\"code\":\"busy\"");
+    cmd_result_free(&r);
+    copy_id = brain_id_in(scn.other);
+    ASSERT_STREQ(copy_id, old_id);
+    ASSERT_EQ_STATUS(brain_list_read(scn.list, &list), BRAIN_LIST_UNCHANGED);
+    ASSERT_EQ_INT((long long)list.count, 1);
+    ASSERT_STREQ(row_at(&list, 0)->path, real);
+    ASSERT_STREQ(row_at(&list, 0)->brain_id, old_id);
+    brain_list_free(&list);
+    free(copy_id);
+    free(old_id);
+    free(real);
+    scene_release(&scn);
+}
+
+/* G2: an original whose folder cannot be searched (EACCES) fails the open with cannot_open, the
+   existing code of that cause, and changes nothing. */
+TEST(a_copy_whose_original_s_folder_cannot_be_searched_fails_cannot_open_and_changes_nothing)
+{
+    Scene scn = given_scene();
+    char *locked = given_path(scn.dir, "locked");
+    char *inside = given_path(scn.dir, "locked/one.db");
+    const char *args[] = {"--json", "tags"};
+    char *real = NULL;
+    char *old_id = NULL;
+    char *copy_id = NULL;
+    BrainList list = {0};
+    CmdResult r;
+    CmdResult plain;
+
+    if (geteuid() == 0) {
+        (void)printf("SKIP %s (running as root; mode bits are ignored)\n",
+                     "a_copy_whose_original_s_folder_cannot_be_searched_fails_cannot_open_and_"
+                     "changes_nothing");
+        free(inside);
+        free(locked);
+        scene_release(&scn);
+        return;
+    }
+    ASSERT_EQ_INT(mkdir(locked, 0700), 0);
+    given_brain_opened(inside);
+    old_id = brain_id_in(inside);
+    real = real_path_of(inside);
+    copy_file_to(inside, scn.other);
+    ASSERT_EQ_INT(chmod(locked, 0), 0);
+    r = run_remember(scn.other, args, 2U, NULL);
+    plain = run_remember(scn.other, args + 1, 1U, NULL);
+    ASSERT_EQ_INT(chmod(locked, 0700), 0);
+    ASSERT_EQ_INT(r.exit_code, 1);
+    ASSERT_STR_CONTAINS(r.out, "\"code\":\"cannot_open\"");
+    /* Plain output has no envelope to collide with: only the open's failure can exit 1. */
+    ASSERT_EQ_INT(plain.exit_code, 1);
+    ASSERT_STREQ(plain.out, "");
+    cmd_result_free(&plain);
+    cmd_result_free(&r);
+    copy_id = brain_id_in(scn.other);
+    ASSERT_STREQ(copy_id, old_id);
+    ASSERT_EQ_STATUS(brain_list_read(scn.list, &list), BRAIN_LIST_UNCHANGED);
+    ASSERT_EQ_INT((long long)list.count, 1);
+    ASSERT_STREQ(row_at(&list, 0)->path, real);
+    brain_list_free(&list);
+    free(copy_id);
+    free(old_id);
+    free(real);
+    free(inside);
+    free(locked);
+    scene_release(&scn);
+}
+
+/* Another process holds the brains.json lock for hold_ms, then lets it go. Returns once it
+   holds the lock. */
+static pid_t given_list_lock_held_for(const char *lock, long hold_ms)
+{
+    int ready[2] = {-1, -1};
+    char byte = 0;
+    pid_t holder = 0;
+
+    // NOLINTNEXTLINE(android-cloexec-pipe) the child writes one end; both are closed after
+    ASSERT_EQ_INT(pipe(ready), 0);
+    holder = fork();
+    if (holder == 0) {
+        struct flock whole = {.l_type = F_WRLCK, .l_whence = SEEK_SET};
+        int fd = open(lock, O_RDWR | O_CLOEXEC);
+        int missed = (fd < 0 || fcntl(fd, F_SETLK, &whole) != 0);
+
+        (void)write(ready[1], missed != 0 ? "n" : "y", 1U);
+        pause_ms(hold_ms);
+        _exit(missed);
+    }
+    ASSERT_TRUE(holder > 0);
+    ASSERT_EQ_INT(read(ready[0], &byte, 1U), 1);
+    ASSERT_EQ_INT(byte, 'y');
+    (void)close(ready[0]);
+    (void)close(ready[1]);
+    return holder;
+}
+
+static void list_lock_holder_done(pid_t holder)
+{
+    int status = 0;
+
+    ASSERT_EQ_INT(waitpid(holder, &status, 0), (long long)holder);
+    ASSERT_TRUE(WIFEXITED(status) && WEXITSTATUS(status) == 0);
+}
+
+/* G5: the brains.json lock wait is bounded by the open's busy timeout. Past it the open fails
+   busy and the list is left as it was. Before the review the wait had no bound. */
+TEST(an_open_that_waits_past_the_busy_timeout_for_the_brains_json_lock_fails_busy)
+{
+    Scene scn = given_scene();
+    char *lock = given_path(scn.dir, "xdg/remember/brains.json.lock");
+    const char *args[] = {"--json", "--busy-timeout", "50", "tags"};
+    char *before = NULL;
+    char *after = NULL;
+    pid_t holder = 0;
+    CmdResult r;
+
+    given_brain_opened(scn.brain);
+    before = file_text(scn.list);
+    holder = given_list_lock_held_for(lock, LIST_LOCK_HOLD_MS);
+    r = run_remember(scn.other, args, 4U, NULL);
+    list_lock_holder_done(holder);
+    ASSERT_EQ_INT(r.exit_code, 1);
+    ASSERT_STR_CONTAINS(r.out, "\"code\":\"busy\"");
+    cmd_result_free(&r);
+    /* Plain output has no envelope to collide with: only the open's failure can exit 1. */
+    holder = given_list_lock_held_for(lock, LIST_LOCK_HOLD_MS);
+    r = run_remember(scn.other, args + 1, 3U, NULL);
+    list_lock_holder_done(holder);
+    ASSERT_EQ_INT(r.exit_code, 1);
+    ASSERT_STREQ(r.out, "");
+    cmd_result_free(&r);
+    after = file_text(scn.list);
+    ASSERT_STREQ(after, before);
+    free(after);
+    free(before);
+    free(lock);
+    scene_release(&scn);
+}
+
+TEST(an_open_whose_brains_json_lock_is_let_go_inside_the_busy_timeout_records_the_brain)
+{
+    Scene scn = given_scene();
+    char *lock = given_path(scn.dir, "xdg/remember/brains.json.lock");
+    const char *args[] = {"--busy-timeout", "5000", "tags"};
+    BrainList list = {0};
+    pid_t holder = 0;
+    CmdResult r;
+
+    given_brain_opened(scn.brain);
+    holder = given_list_lock_held_for(lock, LOCK_HOLD_MS);
+    r = run_remember(scn.other, args, 3U, NULL);
+    list_lock_holder_done(holder);
+    ASSERT_EQ_INT(r.exit_code, 0);
+    cmd_result_free(&r);
+    ASSERT_EQ_STATUS(brain_list_read(scn.list, &list), BRAIN_LIST_UNCHANGED);
+    ASSERT_EQ_INT((long long)list.count, 2);
+    brain_list_free(&list);
+    free(lock);
+    scene_release(&scn);
+}
+
+TEST(brain_prune_that_waits_past_the_busy_timeout_for_the_lock_fails_busy_and_keeps_the_rows)
+{
+    Scene scn = given_scene();
+    char *lock = given_path(scn.dir, "xdg/remember/brains.json.lock");
+    const char *args[] = {"--json", "--busy-timeout", "50", "brain", "prune"};
+    char *before = NULL;
+    char *after = NULL;
+    pid_t holder = 0;
+    CmdResult r;
+
+    given_brain_opened(scn.brain);
+    ASSERT_EQ_INT(unlink(scn.brain), 0);
+    before = file_text(scn.list);
+    holder = given_list_lock_held_for(lock, LIST_LOCK_HOLD_MS);
+    r = run_remember(scn.brain, args, sizeof(args) / sizeof(args[0]), NULL);
+    list_lock_holder_done(holder);
+    ASSERT_EQ_INT(r.exit_code, 1);
+    ASSERT_STR_CONTAINS(r.out, "\"code\":\"busy\"");
+    cmd_result_free(&r);
+    after = file_text(scn.list);
+    ASSERT_STREQ(after, before);
+    free(after);
+    free(before);
+    free(lock);
+    scene_release(&scn);
+}
+
+TEST(a_copy_that_could_not_be_told_is_a_copy_on_the_next_open)
+{
+    Scene scn = given_scene();
+    const char *args[] = {"--busy-timeout", "50", "tags"};
+    sqlite3 *lock = NULL;
+    CmdResult r;
+
+    given_brain_opened(scn.brain);
+    copy_file_to(scn.brain, scn.other);
+    lock = given_locked(scn.brain);
+    r = run_remember(scn.other, args, 3U, NULL);
+    lock_release(lock);
+    cmd_result_free(&r);
+    r = run_args(scn.other, "tags", NULL, NULL);
+    ASSERT_EQ_INT(r.exit_code, 0);
+    ASSERT_STR_CONTAINS(r.err, "looks like a copy of another brain");
+    cmd_result_free(&r);
+    scene_release(&scn);
+}
+
+/* The probe waits the open's busy timeout: a lock let go inside it does not stop the check. */
+TEST(a_copy_whose_original_is_locked_for_less_than_the_busy_timeout_is_a_copy)
+{
+    Scene scn = given_scene();
+    const char *args[] = {"--busy-timeout", "5000", "tags"};
+    int ready[2] = {-1, -1};
+    char byte = 0;
+    int status = 0;
+    pid_t holder = 0;
+    CmdResult r;
+
+    given_brain_opened(scn.brain);
+    copy_file_to(scn.brain, scn.other);
+    // NOLINTNEXTLINE(android-cloexec-pipe) the child writes one end; both are closed after
+    ASSERT_EQ_INT(pipe(ready), 0);
+    holder = fork();
+    if (holder == 0) {
+        sqlite3 *lock = NULL;
+        int missed = (sqlite3_open_v2(scn.brain, &lock, SQLITE_OPEN_READWRITE, NULL) != SQLITE_OK ||
+                      sqlite3_exec(lock, "BEGIN EXCLUSIVE;", NULL, NULL, NULL) != SQLITE_OK);
+
+        (void)write(ready[1], missed != 0 ? "n" : "y", 1U);
+        pause_ms(LOCK_HOLD_MS);
+        (void)sqlite3_exec(lock, "ROLLBACK;", NULL, NULL, NULL);
+        (void)sqlite3_close(lock);
+        _exit(missed);
+    }
+    ASSERT_TRUE(holder > 0);
+    ASSERT_EQ_INT(read(ready[0], &byte, 1U), 1);
+    ASSERT_EQ_INT(byte, 'y');
+    r = run_remember(scn.other, args, 3U, NULL);
+    ASSERT_EQ_INT(waitpid(holder, &status, 0), (long long)holder);
+    ASSERT_TRUE(WIFEXITED(status) && WEXITSTATUS(status) == 0);
+    ASSERT_EQ_INT(r.exit_code, 0);
+    ASSERT_STR_CONTAINS(r.err, "looks like a copy of another brain");
+    cmd_result_free(&r);
+    (void)close(ready[0]);
+    (void)close(ready[1]);
+    scene_release(&scn);
+}
+
+/* decision:2026-11-16-plan26-review-grill G6 B: a field the reader does not take is warned with
+   the C-35 file line, once per command. */
+static const char k_unknown_doc[] =
+    "[{\"path\":\"/nope/a.db\",\"brain_id\":\"i\",\"added_at\":\"t\",\"note\":1},"
+    "{\"path\":\"/nope/b.db\",\"brain_id\":\"j\",\"added_at\":\"t\",\"tag\":2}]";
+
+// NOLINTNEXTLINE(bugprone-easily-swappable-parameters) the output, then the file it names
+static void assert_one_c35_line(const char *err, const char *list_file, const char *field)
+{
+    char want[PATH_CAP * 2];
+    const char *at = NULL;
+
+    ASSERT_TRUE(snprintf(want, sizeof(want),
+                         "remember: warning: \"%s\" has a field remember doesn't know, \"%s\". "
+                         "The rest of the file was read.",
+                         list_file, field) < (int)sizeof(want));
+    at = strstr(err, want);
+    ASSERT_TRUE(at != NULL);
+    if (at != NULL) {
+        ASSERT_TRUE(strstr(at + strlen(want), "has a field remember doesn't know") == NULL);
+    }
+}
+
+TEST(brain_list_warns_the_first_unknown_field_with_the_c35_file_line)
+{
+    Scene scn = given_scene();
+    CmdResult r;
+
+    given_brain_opened(scn.brain);
+    given_json(scn.list, k_unknown_doc);
+    r = run_args(scn.brain, "brain", "list", NULL);
+    ASSERT_EQ_INT(r.exit_code, 0);
+    assert_one_c35_line(r.err, scn.list, "note");
+    cmd_result_free(&r);
+    scene_release(&scn);
+}
+
+TEST(brain_list_warns_an_unknown_root_field_with_the_c35_file_line)
+{
+    Scene scn = given_scene();
+    CmdResult r;
+
+    given_brain_opened(scn.brain);
+    given_text(scn.list, "{\"format\":\"remember-brains\",\"version\":1,\"brains\":[],\"x\":0}");
+    r = run_args(scn.brain, "brain", "list", NULL);
+    ASSERT_EQ_INT(r.exit_code, 0);
+    assert_one_c35_line(r.err, scn.list, "x");
+    cmd_result_free(&r);
+    scene_release(&scn);
+}
+
+TEST(brain_prune_warns_an_unknown_field_with_the_c35_file_line)
+{
+    Scene scn = given_scene();
+    CmdResult r;
+
+    given_brain_opened(scn.brain);
+    given_json(scn.list, k_unknown_doc);
+    r = run_args(scn.brain, "brain", "prune", NULL);
+    ASSERT_EQ_INT(r.exit_code, 0);
+    assert_one_c35_line(r.err, scn.list, "note");
+    cmd_result_free(&r);
+    scene_release(&scn);
+}
+
+TEST(a_read_write_open_warns_an_unknown_field_in_brains_json)
+{
+    Scene scn = given_scene();
+    CmdResult r;
+
+    given_brain_opened(scn.brain);
+    given_json(scn.list, k_unknown_doc);
+    r = run_args(scn.brain, "tags", NULL, NULL);
+    ASSERT_EQ_INT(r.exit_code, 0);
+    assert_one_c35_line(r.err, scn.list, "note");
+    cmd_result_free(&r);
+    scene_release(&scn);
+}
+
+TEST(brain_list_json_carries_unknown_field_with_field_and_where)
+{
+    Scene scn = given_scene();
+    const char *json[] = {"--json", "brain", "list"};
+    char want[PATH_CAP * 2];
+    CmdResult r;
+
+    given_brain_opened(scn.brain);
+    given_json(scn.list, k_unknown_doc);
+    r = run_remember(scn.brain, json, 3U, NULL);
+    ASSERT_EQ_INT(r.exit_code, 0);
+    ASSERT_TRUE(snprintf(want, sizeof(want),
+                         "\"code\":\"unknown_field\",\"message\":\"\\\"%s\\\" has a field remember "
+                         "doesn't know, \\\"note\\\". The rest of the file was read.\"",
+                         scn.list) < (int)sizeof(want));
+    ASSERT_STR_CONTAINS(r.out, want);
+    ASSERT_STR_CONTAINS(r.out, "\"detail\":{\"field\":\"note\"");
+    cmd_result_free(&r);
+    scene_release(&scn);
+}
+
+/* The unknown member's name is copied out of the parsed document: an allocation that fails there
+   is BRAIN_LIST_IO with nothing handed back, never a list without its warning. */
+TEST(brain_list_read_of_a_file_with_an_unknown_member_survives_each_allocation_failure)
+{
+    enum { SWEEP = 30 };
+    char *dir = given_dir();
+    char *file = given_path(dir, "brains.json");
+    int failed = 0;
+    int n = 0;
+
+    given_json(file, k_unknown_doc);
+    for (n = 0; n < SWEEP; n++) {
+        BrainList list = {0};
+        BrainListCode code = BRAIN_LIST_IO;
+
+        brain_list_test_fail_alloc_after(n);
+        code = brain_list_read(file, &list);
+        brain_list_test_fail_alloc_after(-1);
+        if (code == BRAIN_LIST_UNCHANGED) {
+            ASSERT_STREQ(list.unknown_field, "note");
+            ASSERT_EQ_INT((long long)list.count, 2);
+        } else {
+            ASSERT_EQ_STATUS(code, BRAIN_LIST_IO);
+            ASSERT_TRUE(list.rows == NULL && list.unknown_field == NULL);
+            failed = 1;
+        }
+        brain_list_free(&list);
+    }
+    ASSERT_EQ_INT(failed, 1);
+    free(file);
+    free(dir);
+}
+
+/* argv runs in process with stdout failing after out_cap bytes and stderr after err_cap. */
+// NOLINTNEXTLINE(bugprone-easily-swappable-parameters) stdout's cap, then stderr's, as in argv
+static int run_with_failing_streams(const char *const *argv, int argc, size_t out_cap,
+                                    size_t err_cap)
+{
+    FailingStream out_stream;
+    FailingStream err_stream;
+    FILE *out = failing_stream_open(&out_stream, out_cap);
+    FILE *err = failing_stream_open(&err_stream, err_cap);
+    int rc = 0;
+
+    if (out == NULL || err == NULL) {
+        fixture_failed("failing stream");
+    }
+    rc = run_in_process(argv, argc, out, err);
+    (void)fclose(out);
+    (void)fclose(err);
+    return rc;
+}
+
+TEST(brain_list_and_prune_that_cannot_write_the_unknown_field_warning_exit_1)
+{
+    Scene scn = given_scene();
+    const char *list_argv[] = {"remember", "brain", "list"};
+    const char *prune_argv[] = {"remember", "brain", "prune"};
+
+    given_brain_opened(scn.brain);
+    given_json(scn.list, k_unknown_doc);
+    ASSERT_EQ_INT(run_with_failing_streams(list_argv, 3, FAILING_STREAM_CAP, 0U), 1);
+    ASSERT_EQ_INT(run_with_failing_streams(prune_argv, 3, FAILING_STREAM_CAP, 0U), 1);
+    scene_release(&scn);
+}
+
+TEST(brain_list_and_prune_json_that_cannot_write_the_data_exit_1)
+{
+    Scene scn = given_scene();
+    const char *list_argv[] = {"remember", "--json", "brain", "list"};
+    const char *prune_argv[] = {"remember", "--json", "brain", "prune"};
+
+    given_brain_opened(scn.brain);
+    ASSERT_EQ_INT(run_with_failing_streams(list_argv, 4, 0U, FAILING_STREAM_CAP), 1);
+    ASSERT_EQ_INT(unlink(scn.brain), 0);
+    ASSERT_EQ_INT(run_with_failing_streams(prune_argv, 4, 0U, FAILING_STREAM_CAP), 1);
+    scene_release(&scn);
+}
+
+TEST(store_path_has_brain_id_cannot_tell_for_a_brain_under_an_exclusive_lock)
+{
+    Scene scn = given_scene();
+    StoreError why = {.error_class = STORE_ERROR_NONE};
+    char *id = NULL;
+    sqlite3 *lock = NULL;
+
+    given_brain_opened(scn.brain);
+    id = brain_id_in(scn.brain);
+    lock = given_locked(scn.brain);
+    ASSERT_EQ_INT(store_path_has_brain_id(scn.brain, id, 0, &why), -1);
+    lock_release(lock);
+    ASSERT_EQ_INT(why.error_class, STORE_ERROR_BUSY);
+    free(id);
+    scene_release(&scn);
+}
+
+TEST(store_path_has_brain_id_cannot_tell_for_a_path_it_may_not_see_or_open)
+{
+    Scene scn = given_scene();
+    StoreError why = {.error_class = STORE_ERROR_NONE};
+    char *locked = given_path(scn.dir, "locked");
+    char *inside = given_path(scn.dir, "locked/one.db");
+    char *id = NULL;
+
+    if (geteuid() == 0) {
+        (void)printf("SKIP %s (running as root; mode bits are ignored)\n",
+                     "store_path_has_brain_id_cannot_tell_for_a_path_it_may_not_see_or_open");
+        free(inside);
+        free(locked);
+        scene_release(&scn);
+        return;
+    }
+    given_brain_opened(scn.brain);
+    id = brain_id_in(scn.brain);
+    ASSERT_EQ_INT(chmod(scn.brain, 0), 0);
+    ASSERT_EQ_INT(store_path_has_brain_id(scn.brain, id, 0, &why), -1);
+    ASSERT_EQ_INT(chmod(scn.brain, DB_FILE_PERMS), 0);
+    ASSERT_EQ_INT(why.error_class, STORE_ERROR_CANNOT_OPEN);
+    ASSERT_EQ_INT(mkdir(locked, 0700), 0);
+    given_brain_opened(inside);
+    ASSERT_EQ_INT(chmod(locked, 0), 0);
+    ASSERT_EQ_INT(store_path_has_brain_id(inside, id, 0, &why), -1);
+    ASSERT_EQ_INT(chmod(locked, 0700), 0);
+    ASSERT_EQ_INT(why.error_class, STORE_ERROR_CANNOT_OPEN);
+    free(id);
+    free(inside);
+    free(locked);
+    scene_release(&scn);
+}
+
+TEST(store_path_has_brain_id_is_0_for_an_empty_file_and_a_brain_meta_with_no_row)
+{
+    Scene scn = given_scene();
+    sqlite3 *db = NULL;
+
+    given_text(scn.other, "");
+    ASSERT_EQ_INT(store_path_has_brain_id(scn.other, ID_A, 0, NULL), 0);
+    ASSERT_EQ_INT(sqlite3_open_v2(scn.brain, &db, SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE, NULL),
+                  SQLITE_OK);
+    ASSERT_EQ_INT(sqlite3_exec(db, "CREATE TABLE brain_meta(brain_id TEXT);", NULL, NULL, NULL),
+                  SQLITE_OK);
+    ASSERT_EQ_INT(sqlite3_close(db), SQLITE_OK);
+    ASSERT_EQ_INT(store_path_has_brain_id(scn.brain, ID_A, 0, NULL), 0);
+    scene_release(&scn);
+}
+
+TEST(store_busy_timeout_ms_reads_the_open_s_timeout)
+{
+    Scene scn = given_scene();
+    StoreOpenOpts opts = {.busy_timeout_ms = ODD_BUSY_MS};
+    char err[ERR_BUFSIZE];
+    StoreError detail;
+    Store *s = NULL;
+
+    given_brain_opened(scn.brain);
+    s = store_open_opts(scn.brain, &opts, err, sizeof(err), &detail);
+    ASSERT_TRUE(s != NULL);
+    ASSERT_EQ_INT(store_busy_timeout_ms(s), 1234);
+    ASSERT_EQ_INT(store_busy_timeout_ms(NULL), 0);
+    store_close(s);
+    scene_release(&scn);
+}
+
+TEST(store_path_has_brain_id_is_1_for_the_id_a_brain_holds_0_for_another_and_minus_1_without_input)
 {
     Scene scn = given_scene();
     char *id = NULL;
@@ -1961,30 +2781,30 @@ TEST(store_path_has_brain_id_is_true_for_the_id_a_brain_holds_and_false_for_anot
 
     given_brain_opened(scn.brain);
     id = brain_id_in(scn.brain);
-    ASSERT_TRUE(store_path_has_brain_id(scn.brain, id));
-    ASSERT_FALSE(store_path_has_brain_id(scn.brain, ID_A));
+    ASSERT_EQ_INT(store_path_has_brain_id(scn.brain, id, 0, NULL), 1);
+    ASSERT_EQ_INT(store_path_has_brain_id(scn.brain, ID_A, 0, NULL), 0);
     ASSERT_EQ_INT(symlink(scn.brain, link), 0);
-    ASSERT_TRUE(store_path_has_brain_id(link, id));
-    ASSERT_FALSE(store_path_has_brain_id(scn.other, id));
-    ASSERT_FALSE(store_path_has_brain_id(NULL, id));
-    ASSERT_FALSE(store_path_has_brain_id(scn.brain, NULL));
+    ASSERT_EQ_INT(store_path_has_brain_id(link, id, 0, NULL), 1);
+    ASSERT_EQ_INT(store_path_has_brain_id(scn.other, id, 0, NULL), 0);
+    ASSERT_EQ_INT(store_path_has_brain_id(NULL, id, 0, NULL), -1);
+    ASSERT_EQ_INT(store_path_has_brain_id(scn.brain, NULL, 0, NULL), -1);
     free(link);
     free(id);
     scene_release(&scn);
 }
 
-TEST(store_path_has_brain_id_is_false_for_a_file_that_is_not_a_brain_or_not_a_file)
+TEST(store_path_has_brain_id_is_0_for_a_file_that_is_not_a_brain_or_not_a_file)
 {
     Scene scn = given_scene();
     char *fifo = given_path(scn.dir, "fifo.db");
     char *folder = given_path(scn.dir, "folder.db");
 
     given_text(scn.other, "this is not a database file at all, only text\n");
-    ASSERT_FALSE(store_path_has_brain_id(scn.other, ID_A));
+    ASSERT_EQ_INT(store_path_has_brain_id(scn.other, ID_A, 0, NULL), 0);
     ASSERT_EQ_INT(mkfifo(fifo, DB_FILE_PERMS), 0);
-    ASSERT_FALSE(store_path_has_brain_id(fifo, ID_A));
+    ASSERT_EQ_INT(store_path_has_brain_id(fifo, ID_A, 0, NULL), 0);
     ASSERT_EQ_INT(mkdir(folder, 0700), 0);
-    ASSERT_FALSE(store_path_has_brain_id(folder, ID_A));
+    ASSERT_EQ_INT(store_path_has_brain_id(folder, ID_A, 0, NULL), 0);
     free(folder);
     free(fifo);
     scene_release(&scn);
@@ -2198,6 +3018,11 @@ void register_brain_list_tests(void)
     RUN_TEST(brain_list_a_move_keeps_the_id_and_changes_the_path);
     RUN_TEST(brain_list_a_move_onto_a_listed_path_drops_the_stale_row_of_that_path);
     RUN_TEST(brain_list_a_listed_path_with_a_new_id_takes_that_id);
+    RUN_TEST(brain_list_a_probe_that_cannot_tell_writes_nothing_and_mints_nothing);
+    RUN_TEST(brain_list_read_names_the_first_unknown_member_root_first);
+    RUN_TEST(brain_list_read_names_an_unknown_member_of_a_later_row);
+    RUN_TEST(brain_list_read_of_a_file_with_only_known_members_names_none);
+    RUN_TEST(brain_list_record_and_prune_hand_the_unknown_member_to_the_caller);
     RUN_TEST(brain_list_read_of_a_missing_file_is_an_empty_list);
     RUN_TEST(brain_list_a_record_that_changes_nothing_leaves_the_file_as_it_is);
     RUN_TEST(brain_list_a_folder_that_cannot_take_the_temp_file_returns_io_and_keeps_the_file);
@@ -2210,6 +3035,9 @@ void register_brain_list_tests(void)
     RUN_TEST(brain_list_a_raw_nul_byte_in_the_file_is_unreadable);
     RUN_TEST(brain_list_a_row_with_a_wrong_type_or_a_missing_field_is_unreadable);
     RUN_TEST(brain_list_a_document_of_another_shape_is_unreadable);
+    RUN_TEST(brain_list_a_row_field_given_twice_is_unreadable);
+    RUN_TEST(brain_list_a_document_member_given_twice_is_unreadable);
+    RUN_TEST(brain_list_an_unknown_member_given_twice_is_read);
     RUN_TEST(brain_list_has_no_row_cap);
     RUN_TEST(brain_list_a_file_of_exactly_the_cap_is_read);
     RUN_TEST(brain_list_a_file_one_byte_over_the_cap_is_unreadable_and_left_alone);
@@ -2245,7 +3073,8 @@ void register_brain_list_tests(void)
     RUN_TEST(a_copied_brain_warns_once_and_json_carries_message_and_fix);
     RUN_TEST(a_moved_brain_keeps_its_id_updates_the_path_and_warns_nothing);
     RUN_TEST(brain_new_id_is_recorded_on_the_next_open_without_a_second_row);
-    RUN_TEST(brain_list_prints_each_listed_path_and_a_path_with_no_brain_prints_the_c01_line);
+    RUN_TEST(
+        brain_list_prints_path_id_and_added_at_per_row_and_a_path_with_no_brain_prints_the_c01_line);
     RUN_TEST(brain_list_json_gives_the_rows_and_a_brain_missing_warning_with_its_fix);
     RUN_TEST(brain_list_with_no_file_prints_nothing_and_creates_no_brain);
     RUN_TEST(brain_prune_drops_a_path_with_no_brain_and_keeps_one_that_has_it);
@@ -2254,7 +3083,7 @@ void register_brain_list_tests(void)
     RUN_TEST(a_failed_replace_leaves_the_previous_file_and_the_open_exits_as_before);
 #endif
     RUN_TEST(a_fifo_at_a_listed_brain_path_does_not_block_a_later_open);
-    RUN_TEST(brain_list_masks_control_bytes_in_a_listed_path);
+    RUN_TEST(brain_list_masks_control_bytes_in_every_field_of_a_row);
     RUN_TEST(brain_list_and_prune_take_no_arguments);
     RUN_TEST(brain_list_on_an_unreadable_file_fails_and_leaves_it_alone);
     RUN_TEST(brain_prune_on_an_unreadable_file_fails_and_leaves_it_alone);
@@ -2266,10 +3095,35 @@ void register_brain_list_tests(void)
     RUN_TEST(brain_list_that_cannot_write_a_row_exits_1);
     RUN_TEST(brain_list_that_cannot_write_the_missing_warning_exits_1);
     RUN_TEST(brain_list_and_prune_take_a_listed_fifo_or_folder_for_a_path_with_no_brain);
+    RUN_TEST(brain_list_and_prune_take_each_kind_of_absent_path_for_a_path_with_no_brain);
+    RUN_TEST(brain_list_and_prune_keep_a_brain_whose_folder_cannot_be_searched);
     RUN_TEST(
         a_copy_whose_new_id_cannot_be_stored_fails_the_open_and_leaves_brain_and_list_agreeing);
-    RUN_TEST(store_path_has_brain_id_is_true_for_the_id_a_brain_holds_and_false_for_another);
-    RUN_TEST(store_path_has_brain_id_is_false_for_a_file_that_is_not_a_brain_or_not_a_file);
+    RUN_TEST(
+        a_copy_opened_while_the_original_is_locked_past_the_busy_timeout_fails_busy_and_changes_nothing);
+    RUN_TEST(
+        a_copy_whose_original_s_folder_cannot_be_searched_fails_cannot_open_and_changes_nothing);
+    RUN_TEST(an_open_that_waits_past_the_busy_timeout_for_the_brains_json_lock_fails_busy);
+    RUN_TEST(an_open_whose_brains_json_lock_is_let_go_inside_the_busy_timeout_records_the_brain);
+    RUN_TEST(
+        brain_prune_that_waits_past_the_busy_timeout_for_the_lock_fails_busy_and_keeps_the_rows);
+    RUN_TEST(a_copy_that_could_not_be_told_is_a_copy_on_the_next_open);
+    RUN_TEST(a_copy_whose_original_is_locked_for_less_than_the_busy_timeout_is_a_copy);
+    RUN_TEST(brain_list_warns_the_first_unknown_field_with_the_c35_file_line);
+    RUN_TEST(brain_list_warns_an_unknown_root_field_with_the_c35_file_line);
+    RUN_TEST(brain_prune_warns_an_unknown_field_with_the_c35_file_line);
+    RUN_TEST(a_read_write_open_warns_an_unknown_field_in_brains_json);
+    RUN_TEST(brain_list_json_carries_unknown_field_with_field_and_where);
+    RUN_TEST(brain_list_read_of_a_file_with_an_unknown_member_survives_each_allocation_failure);
+    RUN_TEST(brain_list_and_prune_that_cannot_write_the_unknown_field_warning_exit_1);
+    RUN_TEST(brain_list_and_prune_json_that_cannot_write_the_data_exit_1);
+    RUN_TEST(
+        store_path_has_brain_id_is_1_for_the_id_a_brain_holds_0_for_another_and_minus_1_without_input);
+    RUN_TEST(store_path_has_brain_id_is_0_for_a_file_that_is_not_a_brain_or_not_a_file);
+    RUN_TEST(store_path_has_brain_id_cannot_tell_for_a_brain_under_an_exclusive_lock);
+    RUN_TEST(store_path_has_brain_id_cannot_tell_for_a_path_it_may_not_see_or_open);
+    RUN_TEST(store_path_has_brain_id_is_0_for_an_empty_file_and_a_brain_meta_with_no_row);
+    RUN_TEST(store_busy_timeout_ms_reads_the_open_s_timeout);
     RUN_TEST(store_brain_set_id_replaces_the_id_and_store_brain_id_reads_it);
     RUN_TEST(store_mint_uuid_writes_a_canonical_v7_id_and_refuses_a_short_buffer);
     RUN_TEST(store_is_writable_is_true_for_a_plain_open_and_false_for_no_store);

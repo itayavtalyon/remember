@@ -15,13 +15,19 @@ int brain_json_path(char *out, size_t cap);
  * brain in brains.json. A brain that is a copy of a listed one (same id, the
  * other path still has it) takes a new id, and the C-38 warning is written. A
  * read-only open does nothing. A file that cannot be written leaves the previous
- * one, prints nothing, and does not change the open. STORE_OK, or the failure
- * of replacing a copy's id in the brain.
+ * one, prints nothing, and does not change the open. 0, or -1 with the error
+ * written: the lock stayed held past the open's busy timeout (G5), a copy could not
+ * be told from a move (G2), or a copy's new id could not be stored (G4)
+ * (decision:2026-11-16-plan26-review-grill). Each changes nothing.
  */
-StoreStatus brain_note_open(Store *store);
+int brain_note_open(Store *store);
 
-/* BrainMissingFn: true when path is not a regular file (stat follows a symlink and
-   never opens the path, so a FIFO cannot block). */
+/* The error of a brains.json lock held past the busy timeout (G5): busy. */
+void brain_note_busy_error(void);
+
+/* BrainMissingFn: true when stat proves nothing is there (ENOENT, ENOTDIR, ELOOP,
+   ENAMETOOLONG) or the path is not a regular file. Any other stat failure (EACCES, EIO) is
+   false. stat follows a symlink and never opens the path, so a FIFO cannot block. */
 bool brain_path_is_missing(void *ctx, const char *path);
 
 #endif /* REMEMBER_BRAIN_NOTE_H */

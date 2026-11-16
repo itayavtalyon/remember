@@ -34,7 +34,7 @@ int cmd_brain(Store *s, bool json, int rest_argc, const char **rest_argv);
 /* True for `new-id`, which opens the brain. `list` and `prune` do not. */
 bool cmd_brain_uses_store(int rest_argc, const char **rest_argv);
 /* `brain list` and `brain prune`: brains.json only, no brain is opened. */
-int cmd_brain_file(bool json, int rest_argc, const char **rest_argv);
+int cmd_brain_file(bool json, int busy_timeout_ms, int rest_argc, const char **rest_argv);
 /* The envelope type noun.verb of a brain subcommand. */
 const char *cmd_brain_reply(int rest_argc, const char **rest_argv);
 /* 0 for `new-id`, `list` or `prune` with no argument; else prints usage and
