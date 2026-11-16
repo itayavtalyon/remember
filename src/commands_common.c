@@ -589,9 +589,10 @@ int cmd_bin_resolve(const CmdBinOpts *opts, StoreBin *out)
             {.name = "use", .value = "--expired"},
         };
 
-        (void)diag_warning_detail(
+        (void)diag_warning_split_detail(
             DIAG_WARN_FLAG_MEANING_CHANGED,
-            "--trash now means the Trash (deleted memories). For expired memories, use --expired.",
+            (DiagSplit){.message = "--trash now means the Trash (deleted memories).",
+                        .fix = "For expired memories, use --expired."},
             detail, sizeof detail / sizeof detail[0]);
     }
     if (opts->deleted) {

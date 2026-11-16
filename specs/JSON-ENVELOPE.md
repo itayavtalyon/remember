@@ -112,7 +112,7 @@ An error object, in order: `code`, `message`, `fix`, `retryable`, then `detail` 
 
 The first error is the one in the envelope. A later error in the same run is dropped.
 
-A warning object, in order: `code`, `message`, then `fix` when the warning has one (`decision:2026-11-12-e3-warnings-have-fix-field`; `schema_too_new_read_only` carries one, [OLDER-CLI.md](OLDER-CLI.md) § 8.3), then `detail` when present. `warnings` is omitted when empty.
+A warning object, in order: `code`, `message`, then `fix` when the warning has one (`decision:2026-11-12-e3-warnings-have-fix-field`; `schema_too_new_read_only` carries one, [OLDER-CLI.md](OLDER-CLI.md) § 8.3; the split of every warning is `decision:2026-11-12-copy-batch-e3b-warning-splits`), then `detail` when present. `warnings` is omitted when empty.
 
 With `--json`, the envelope on stdout holds the error and the warnings, and stderr is empty. The CLI has no `--json-errors` flag.
 
@@ -139,9 +139,10 @@ Locked lines this binary prints (C-01, and the Trash warning):
 | positional locator (`invalid_argument`) | `"<value>" isn't a memory id.` | `Use a number from 'remember list', a UUID, or --key KEY.` |
 | Trash, wrong list (`deleted`) | `"<key>" is in the Trash.` | `Add --trash to use it.` |
 | expired, wrong list (`expired`) | `"<key>" has expired.` | `Add --expired to use it.` |
-| `--trash` (`flag_meaning_changed`) | `--trash now means the Trash (deleted memories). For expired memories, use --expired.` | warning, no `fix`. `detail` is `{"flag":"--trash","use":"--expired"}`. |
+| `--trash` (`flag_meaning_changed`) | `--trash now means the Trash (deleted memories).` | warning. `fix` is `For expired memories, use --expired.` `detail` is `{"flag":"--trash","use":"--expired"}`. |
+| a brain path that looks synced (`synced_folder`) | `this brain looks like it is in a synced folder (iCloud Drive, Dropbox or Google Drive), and syncing can damage it.` | warning. `fix` is `Move the brain to a folder on a local disk.` No `detail`. |
 
-`<key>` is the memory key, or the UUID when the row has no key. The plain line is `remember: ` plus the message, a space, and the fix. A warning plain line is `remember: warning: ` plus the message.
+`<key>` is the memory key, or the UUID when the row has no key. The plain line is `remember: ` plus the message, a space, and the fix. A warning plain line is `remember: warning: ` plus the message, and a space and the fix when the warning has one.
 
 `not_found` fix is `Run 'remember list' to see keys.` `schema_too_new` fix is `Upgrade remember to make changes.` `not_expired` fix is `Run the command without --expired.` `not_deleted` fix is `Run 'remember delete' on it first.`
 

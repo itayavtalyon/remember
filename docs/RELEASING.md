@@ -44,7 +44,7 @@ Update **both** places to the new version (they must agree):
 
 - [`CMakeLists.txt`](../CMakeLists.txt) line 2 — `project(remember VERSION X.Y.Z ...)`
   (authoritative; compiled in as `REMEMBER_VERSION`).
-- [`src/remember_app.c`](../src/remember_app.c) — the `#define REMEMBER_VERSION "X.Y.Z"`
+- [`src/commands_common.h`](../src/commands_common.h) — the `#define REMEMBER_VERSION "X.Y.Z"`
   fallback (used only when the build doesn't define it; keep it in sync anyway).
 
 Optionally add a section to the README's **What's New** describing the release.

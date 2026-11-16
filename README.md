@@ -57,7 +57,7 @@ remember-install-skill   # required: agent skill (Homebrew cannot write ~/.claud
 
 You also need to run `remember-install-skill` after `brew install`. The formula
 ships the binary and the skill file; Homebrew cannot write into `~/.claude` /
-`~/.grok` / `~/.cursor`, so that second command symlinks the skill into agent
+`~/.grok` / `~/.cursor` / `~/.codex`, so that second command symlinks the skill into agent
 trees that already exist. Re-run after installing a new agent. Upgrade or
 uninstall the usual way (`brew upgrade remember` / `brew uninstall remember`).
 
@@ -65,8 +65,14 @@ uninstall the usual way (`brew upgrade remember` / `brew uninstall remember`).
 
 ### v0.3.0 — searchable keys and a sidecar device id
 
-Opening an existing database migrates it to `user_version` **5**.
+Opening an existing database migrates it to `user_version` **6**.
 
+- `--json` now puts success and failure in one `remember-message` version 1 envelope on stdout, and stderr stays empty. `--json-errors` is gone.
+- Lists page with a cursor. Search doesn't page. `--offset` is gone.
+- A memory's id in output is `id`, a lowercase hyphenated UUID. `--sync-id` is gone. The integer `local_id` appears only in CLI output.
+- Actors replace `source`. `--source` is gone completely.
+- `--trash` now means the Trash: memories you deleted. For expired memories, use `--expired`. For this release, `--trash` prints: `remember: warning: --trash now means the Trash (deleted memories). For expired memories, use --expired.`
+- `purge-trash` is gone. To delete memories in the Trash for good, run `remember purge <locator>` for each one.
 - A key is searchable: `search editor` finds `pref:editor`.
 - Hebrew marks are folded out of the search index. The stored body keeps them.
 - `remember device` prints the device id. `remember device new` mints a new one after a restore or a copied brain, and it repairs an invalid sidecar.
@@ -74,7 +80,7 @@ Opening an existing database migrates it to `user_version` **5**.
 - `remember brain new-id` replaces `brain_meta.brain_id` with a new lowercase UUID v7 and prints that id. It does not change `change_seq`, a version vector, or a memory. `--json` type is `brain.new_id.result`. `data` is `{brain_id, previous_brain_id}`.
 - Every read-write open records the brain in `<data dir>/brains.json` (`$XDG_DATA_HOME/remember`, else `~/.remember`). A copied brain file takes a new `brain_id` and warns `brain_id_cloned`; a moved one keeps its id. `remember brain list` prints the listed paths (`--json` type `brain.list.result`), and warns `brain_missing` for a path with no brain. `remember brain prune` removes those paths. See `specs/BRAIN-LIST.md`.
 - Hard wipe is `delete --expired` (one expired row) or `purge --expired` / `purge --deleted` (one whole bin). `delete --deleted` does not exist. `--trash` selects the Deleted bin. It no longer needs one registered device.
-- With `--json`, every reply is one `remember-message` envelope on stdout, success or failure: `{"format":"remember-message","version":1,"type":"memory.get.result","data":{...}}`. A failure keeps its type and has `error{code,message,fix,retryable,detail?}` instead of `data`. Warnings are a `warnings` array at the end. stderr stays empty. `--json-errors` is gone.
+- The envelope is `{"format":"remember-message","version":1,"type":"memory.get.result","data":{...}}`. A failure keeps its type and has `error{code,message,fix,retryable,detail?}` instead of `data`. Warnings are a `warnings` array at the end.
 - A database error names one of seven causes: `busy`, `read_only`, `disk_full`, `cannot_open`, `not_a_database`, `corrupt`, `io_error`. Anything else is `database`.
 - `--busy-timeout MS` sets the lock wait (0..60000, default 5000).
 - `--no-create` fails when the brain file is missing and creates nothing.
@@ -93,8 +99,8 @@ Opening an existing database migrates it to `user_version` **5**.
 - Search order: exact key, then key prefix, then relevance (bm25), then `updated_at`.
 - JSON `keys` and `tags` now sit between `total` and `entries` in `search --json`. `--facet-limit N` (default 50, 1..200) caps their `items`; `total` counts every match. Human `search` prints `keys:` and `tags:` lines before the rows.
 - An empty or blank `search` query is an empty result on exit 0. It was a usage error (`empty search query`).
-- A memory's JSON `id` is the lowercase hyphenated UUID. The integer is `local_id`, and only CLI output includes it. `--id`, `--local-id`, and `--sync-id` are gone. There is no alias. Pass that UUID, a number from `remember list`, or `--key` to fetch a memory.
-- `--limit`, `--offset`, `--busy-timeout` and `--facet-limit` take ASCII digits only. A leading space or `+` is now a usage error.
+- `--id` and `--local-id` are gone. There is no alias. Pass a UUID, a number from `remember list`, or `--key` to fetch a memory.
+- `--limit`, `--busy-timeout` and `--facet-limit` take ASCII digits only. A leading space or `+` is now a usage error.
 - A command whose output cannot be written (for example a closed pipe) exits 1 with `failed to write output`. It used to exit 0.
 
 ### v0.2.0 — local sync foundations
@@ -206,7 +212,7 @@ the agent skill into product skill roots that already exist:
 | Release build tree | `build-release/` (override with `REMEMBER_RELEASE_DIR`) |
 | Skill (source) | [`skills/remember/SKILL.md`](skills/remember/SKILL.md) |
 | Skill (prefix) | `$PREFIX/share/remember/SKILL.md` (cmake / Homebrew) |
-| Skill (installed) | `remember/SKILL.md` under whichever of `~/.grok/skills`, `~/.claude/skills`, `~/.cursor/skills` already exist (`remember-install-skill`) |
+| Skill (installed) | `remember/SKILL.md` under whichever of `~/.grok/skills`, `~/.claude/skills`, `~/.cursor/skills`, `~/.codex/skills` already exist (`remember-install-skill`) |
 
 Override skill destinations: `REMEMBER_SKILL_DIRS=/path/a:/path/b ./scripts/install.sh --skill-only`.
 

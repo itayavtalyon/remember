@@ -19,6 +19,7 @@ Install skills/remember/SKILL.md into agent skill trees that already exist:
   ~/.grok/skills/remember/SKILL.md
   ~/.claude/skills/remember/SKILL.md
   ~/.cursor/skills/remember/SKILL.md
+  ~/.codex/skills/remember/SKILL.md
 
 Only product dirs that already exist are touched. Default is a symlink so
 brew upgrade keeps the skill current. --copy writes a snapshot instead.
@@ -73,39 +74,29 @@ find_skill_src() {
   exit 1
 }
 
-default_skill_dirs() {
-  local dirs=()
-  if [[ -d "${HOME}/.grok" ]]; then
-    dirs+=("${HOME}/.grok/skills")
-  fi
-  if [[ -d "${HOME}/.claude" ]]; then
-    dirs+=("${HOME}/.claude/skills")
-  fi
-  if [[ -d "${HOME}/.cursor" ]]; then
-    dirs+=("${HOME}/.cursor/skills")
-  fi
-  if [[ ${#dirs[@]} -gt 0 ]]; then
-    printf '%s\n' "${dirs[@]}"
-  fi
-}
-
 SKILL_SRC="$(find_skill_src)"
 if [[ ! -f "$SKILL_SRC" ]]; then
   echo "error: missing skill source: $SKILL_SRC" >&2
   exit 1
 fi
 
+# ln -s stores its target as given: a relative one dangles from the skill dir.
+[[ "$SKILL_SRC" == /* ]] || SKILL_SRC="$PWD/$SKILL_SRC"
+
+# Arrays, not lines: a path may hold a newline (in HOME or in REMEMBER_SKILL_DIRS).
 dirs=()
 if [[ -n "${REMEMBER_SKILL_DIRS:-}" ]]; then
-  IFS=':' read -r -a dirs <<< "$REMEMBER_SKILL_DIRS"
+  IFS=':' read -r -d '' -a dirs < <(printf '%s' "$REMEMBER_SKILL_DIRS") || true
 else
-  while IFS= read -r d; do
-    [[ -n "$d" ]] && dirs+=("$d")
-  done < <(default_skill_dirs)
+  for product in .grok .claude .cursor .codex; do
+    if [[ -d "${HOME}/${product}" ]]; then
+      dirs+=("${HOME}/${product}/skills")
+    fi
+  done
 fi
 
 if [[ ${#dirs[@]} -eq 0 ]]; then
-  echo "error: no agent skill roots found (~/.grok, ~/.claude, ~/.cursor);" >&2
+  echo "error: no agent skill roots found (~/.grok, ~/.claude, ~/.cursor, ~/.codex);" >&2
   echo "       install an agent first, or set REMEMBER_SKILL_DIRS=/path/to/skills" >&2
   exit 1
 fi
@@ -118,9 +109,22 @@ for d in "${dirs[@]}"; do
     echo "warn: cannot create $dest" >&2
     continue
   fi
+  # A symlinked skill dir that is the source's own dir: ln would turn the
+  # source into a link to itself.
+  if [[ "$dest" -ef "$(dirname "$SKILL_SRC")" ]]; then
+    echo "warn: $dest is the source directory" >&2
+    continue
+  fi
+  # ln and install put the file inside a directory and report success.
+  if [[ -d "$dest/SKILL.md" ]]; then
+    echo "warn: $dest/SKILL.md is a directory" >&2
+    continue
+  fi
   if [[ "$MODE" == "symlink" ]]; then
     ln -sfn "$SKILL_SRC" "$dest/SKILL.md"
   else
+    # A link symlink mode left would make install copy the source onto itself.
+    rm -f -- "$dest/SKILL.md"
     install -m 644 "$SKILL_SRC" "$dest/SKILL.md"
   fi
   echo "skill: $dest/SKILL.md"

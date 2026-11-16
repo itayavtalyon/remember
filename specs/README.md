@@ -20,6 +20,7 @@ A spec describes what `remember` does today. It is normative.
 | [OLDER-CLI.md](OLDER-CLI.md) | `subject:daemon` | An older CLI on a newer brain: read-only open, the read warning, `schema_too_new` and exit 75 |
 | [DEFAULT-DB.md](DEFAULT-DB.md) | `subject:data`, `subject:ui-overhaul` | Brain path order and the `~/.remember/default-db` file |
 | [BRAIN-LIST.md](BRAIN-LIST.md) | `subject:library`, `subject:data` | `brains.json`: what a read-write open records, copy and move, `brain list`, `brain prune` |
+| [RELEASE-0.3.0.md](RELEASE-0.3.0.md) | `subject:release` | What 0.3.0 contains: one line per plan, its spec, and what ships later |
 | [SETTINGS.md](SETTINGS.md) | `subject:settings` | Settings registry, layers, user.db, history, sync token, `remember settings` commands, export and import |
 
 ## Not written yet

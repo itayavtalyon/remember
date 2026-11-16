@@ -487,9 +487,9 @@ static const char k_e12_effective_sql[] =
 enum { SCHEMA_VERSION = 6, UUID_BYTES = 16, UUID_STR_LEN = STORE_DEVICE_ID_LEN };
 /* The v6 step stores this in brain_meta (007 ST-10.2, G-20). */
 static const char k_min_reader_version[] = "0.3.0";
-/* The newest schema this engine reads and writes, 0.3.0, as MAJOR.MINOR.PATCH.
-   It is not REMEMBER_VERSION: the release number moves to 0.3.0 only in plan
-   26 (Itay 2026-10-25). */
+/* The newest schema this engine reads and writes, as MAJOR.MINOR.PATCH. It is
+   a separate constant from REMEMBER_VERSION: the release number says which
+   build this is, this one says which brain format it reads. */
 enum { VERSION_PARTS = 3 };
 static const long k_reader_version[VERSION_PARTS] = {0, 3, 0};
 /* import --from-db accepts 4, 5, and 6 (plan 23). Above that, the open message. */
