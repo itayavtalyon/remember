@@ -89,7 +89,7 @@ Do not add a second constant.
 - [x] `the skill does not contain "see C-13"` (`release_text: the skill does not contain 'see C-13'`).
 - [x] `synced_folder_warning_has_message_and_fix`: a database under a `Dropbox` path prints the E3B-2 plain line, the JSON warning carries `code`, `message` and `fix`, and the old sentence is gone.
 - [x] `specs/RELEASE-0.3.0.md` is written (`release_text`: `RELEASE-0.3.0 has one line for plan N`, `plan N names specs/F, which exists`, `lists R27b-2 and R27b-3 with PR #75`), and the decisions this plan built are `state:implemented` (note 9).
-- [ ] The gate passes on the committed tree.
+- [x] The gate passes on the committed tree (note 13).
 
 ## Implementation Notes
 
@@ -107,6 +107,8 @@ Branch `claude/plan-28-release-0-3-0-0066c5`, from main `d2b4977` (plan 26 merge
 10. **Simplify pass (3 candidates).** Inlined the static `diag_warning_split` wrapper (two callers; 5 lines gone). Kept `json_synced_folder_warning_is_in_the_list_envelope` beside the named test: the first pins the whole envelope and the warning's place in it, the second pins the plain line and that the old sentence is gone, so neither proves the other. Kept the C-41 lines as literals in `tests/test_release.sh`: they are the oracle, and copying from the README would make the test pass on any text.
 11. **Compiler warnings.** `-Wallocator-wrappers` on `store_sqlite.c:136,140,144` and `import_read.c:188` are in main already (not in a line this plan touches).
 12. **Probes run.** `remember --version` is `remember 0.3.0`. `remember settings get remember.buckets.prefixes` prints `project: status:` (the C-40 command works). `git tag --points-at HEAD` prints nothing. Uncovered lines near the touched `src` lines: none (`build-cov/coverage.lcov`, lines 587 to 651 of `diag.c`, `commands_common.c` 590 to 600, `remember_app.c` 509 to 520).
+
+13. **Gate, on commit 6fe688b** (the only later commit changes this plan file): `scripts/lint-all.sh` LINT OK (format, cppcheck, clang-tidy LLVM 22, scan-build; IWYU skipped on the Mac as the script says, run in `ci-linux.sh`); fresh `build` configured `-DCMAKE_BUILD_TYPE=Debug -DREMEMBER_ENABLE_SANITIZERS=ON -DREMEMBER_TEST_VFS=ON`, `ctest` 7 of 7 passed (`step_gate`, `step05_gate`, `store_asan_gate`, `install_skill`, `spec_drift`, `release_text`, `no_shim_symbols`); `scripts/check-coverage.sh` functions 100%, effective lines 100%, pure-TU branches 100%; `scripts/ci-linux.sh` OK (aarch64 here, amd64 on GitHub; I added no implicit int to char narrowing); `scripts/codeql-local.sh` OK (49 allowed entries, none added). `shellcheck -x` clean on `scripts/remember-install-skill`, `tests/test_release.sh`, `tests/test_install_skill.sh`. `git tag --points-at HEAD` prints nothing.
 
 **Open for Itay (grills).**
 
