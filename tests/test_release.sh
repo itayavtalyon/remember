@@ -61,6 +61,7 @@ cc -std=c11 -I"$ROOT/src" -I"$ROOT/third_party/sqlite" -o "$TMP/fallback" "$TMP/
 assert_eq "--version text from the fallback build is 0.3.0" "$("$TMP/fallback")" "0.3.0"
 
 # ---- C-40: the skill's one bucket sentence ----
+# shellcheck disable=SC2016 # the backticks are literal Markdown
 C40='Tags that start with a bucket prefix group memories into buckets, for example `project:fortkeeps`. Bucket prefixes are the brain setting `remember.buckets.prefixes`, which is `project:` and `status:` by default; run `remember settings get remember.buckets.prefixes` to see the list in use.'
 assert "the skill bucket sentence is the C-40 paragraph" grep -qxF -- "$C40" "$SKILL"
 assert_eq "the skill has no other bucket sentence" "$(grep -ci bucket "$SKILL")" "1"
@@ -121,8 +122,8 @@ assert "the skill does not contain 'see C-13'" test "$(grep -cF 'see C-13' "$SKI
 assert "specs/RELEASE-0.3.0.md exists" test -f "$SPEC"
 if [[ -f "$SPEC" ]]; then
   for p in 22 23 25 26 27 27a 27b; do
-    line="$(grep -E "^- Plan $p[ ,:]" "$SPEC" || true)"
-    assert_eq "RELEASE-0.3.0 has one line for plan $p" "$(grep -cE "^- Plan $p[ ,:]" "$SPEC")" "1"
+    line="$(grep -E "^- Plan ${p}[ ,:]" "$SPEC" || true)"
+    assert_eq "RELEASE-0.3.0 has one line for plan $p" "$(grep -cE "^- Plan ${p}[ ,:]" "$SPEC")" "1"
     files="$(grep -oE '[A-Z][A-Z0-9-]*\.md' <<<"$line" || true)"
     assert "RELEASE-0.3.0 plan $p line names a spec file" test -n "$files"
     for f in $files; do

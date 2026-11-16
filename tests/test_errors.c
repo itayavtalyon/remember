@@ -955,10 +955,11 @@ TEST(synced_folder_warning_has_message_and_fix)
                  "Drive, Dropbox or Google Drive), and syncing can damage it. Move the brain "
                  "to a folder on a local disk.\n");
     ASSERT_STR_NOT_CONTAINS(plain.err, k_old);
-    ASSERT_STR_CONTAINS(json.out, "{\"code\":\"synced_folder\",\"message\":\"this brain looks like "
-                                  "it is in a synced folder (iCloud Drive, Dropbox or Google "
-                                  "Drive), and syncing can damage it.\",\"fix\":\"Move the brain to "
-                                  "a folder on a local disk.\"}");
+    ASSERT_STR_CONTAINS(json.out,
+                        "{\"code\":\"synced_folder\",\"message\":\"this brain looks like "
+                        "it is in a synced folder (iCloud Drive, Dropbox or Google "
+                        "Drive), and syncing can damage it.\",\"fix\":\"Move the brain to "
+                        "a folder on a local disk.\"}");
     ASSERT_STR_NOT_CONTAINS(json.out, k_old);
     cmd_result_free(&plain);
     cmd_result_free(&json);
