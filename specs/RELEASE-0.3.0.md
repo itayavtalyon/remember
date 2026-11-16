@@ -27,7 +27,7 @@ The installer writes the skill into `~/.grok`, `~/.claude`, `~/.cursor`, and `~/
 
 ## Tag and publish
 
-A person tags and publishes ([`docs/RELEASING.md`](../docs/RELEASING.md)). No plan creates a tag, a GitHub release, or the Homebrew formula (`decision:release-0-3-0-scope`).
+A person tags and publishes ([`docs/RELEASING.md`](../docs/RELEASING.md)). The `v0.3.0` tag waits until plan 32 (`remember purge <locator>`) merges, because the C-41 lines name that command (`decision:2026-11-16-plan28-review-grill`). No plan creates a tag, a GitHub release, or the Homebrew formula (`decision:release-0-3-0-scope`).
 
 ## Decisions
 

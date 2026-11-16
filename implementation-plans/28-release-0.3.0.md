@@ -125,7 +125,7 @@ Second opinion (Opus, 2026-11-16), branch `claude/nervous-jang-1a25c9`, rebased 
 - (A) A `HOME` or a `REMEMBER_SKILL_DIRS` entry with a newline in it was split into two paths. The skill landed under the path's first line and in the current folder. The list is now built as an array: one loop over `.grok .claude .cursor .codex`, and `read -d ''` for the variable.
 - (A) A relative `REMEMBER_SKILL_SRC` made a dangling link, and the script still exited 0. The source is now made absolute against `$PWD`, which keeps the Homebrew `share/` path unresolved.
 - (A) `--copy` over a link that symlink mode left to the same source failed with `same file` (exit 64) and stopped before the next product. Copy mode now removes the old `SKILL.md` first. That removal sits after the source-directory guard, so it can never delete the source.
-- Docs. `RELEASE-0.3.0.md` said only plans 19 to 21 and 24 shipped beyond its list, but `v0.2.0` was tagged before plan 15, so plans 15 to 18 (with 17a, 18b and 18c) ship too. The README said the device id sidecar is `<db-path>.device_id`; it is `<db-path>.d/device_id`.
+- Docs. `RELEASE-0.3.0.md` said only plans 19 to 21 and 24 shipped beyond its list, but `v0.2.0` was tagged before plan 15, so plans 15 to 18 (with 17a, 18b and 18c) ship too. The README says the device id sidecar is `<db-path>.device_id`; it is `<db-path>.d/device_id`. That is What's New copy, so it goes to Story Weaver with the other false claims, not this PR.
 - Mutants on the installer: 9, all killed. They were: `|| true` dropped, `rm` dropped, the absolute step dropped, a here-string read, `.codex` dropped, `-e` for `-d`, a `skills` typo, the source-directory guard removed, and the `SKILL.md`-directory guard removed.
 
 **(S) Simplify.**
@@ -146,14 +146,16 @@ Overwriting a hand-written `SKILL.md` follows `decision:2026-11-11-codex-skill-p
 
 **Gate** on `897715f` (the tree before these notes): `lint-all.sh` LINT OK, fresh sanitizer build `ctest` 7 of 7, `check-coverage.sh` 100% (functions, effective lines, pure-TU branches), `ci-linux.sh` OK on Ubuntu 24.04 and 26.04, `codeql-local.sh` OK. The diff adds no C (no int to char narrowing to check).
 
-**Open for Itay.**
-- G1: C-41 sentence 6 tells people to run `remember purge <locator>`, which is plan 32. 0.3.0 rejects it with exit 1, and the skill contradicts itself. The approved words are kept until Itay answers.
-- G2: four warning codes print no `fix` (the coder's grill).
+**Itay's answers** (`decision:2026-11-16-plan28-review-grill`).
+- G1 (C-41 sentence 6 names `remember purge <locator>`, which is plan 32 and which 0.3.0 rejects with exit 1): C. The approved words stay, and the `v0.3.0` tag waits until plan 32 merges. `specs/RELEASE-0.3.0.md` says so.
+- G2 (four warning codes print no `fix`): A, a follow-up plan before the tag.
+- The plan 26 `brain new-id` bug: fixed before the tag, in its own PR.
+- What's New gaps and false claims: Story Weaver drafts them for Itay before the tag. This PR changes no copy.
 
 **Follow-ups.**
 - A plan 26 bug: `brain new-id` does not update `brains.json`, so a brain copied after `new-id` makes the next open give the original a new id instead.
 - What's New has no lines for plans 20, 23, 27 or 27b.
-- What's New claims `--strict` is listed under Global options (it is not), and claims color, progress and prompts that no code produces.
+- What's New claims `--strict` is listed under Global options (it is not), claims color, progress and prompts that no code produces, and names the device id file as `<db-path>.device_id` (it is `<db-path>.d/device_id`).
 - `import --help` lists `--from-md` and `--from-csv`, which plan 23a has not built.
 - The full write-up is in the sessions' shared notes, `plan-28-review-grills.md`.
 
