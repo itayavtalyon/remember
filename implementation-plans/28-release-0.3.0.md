@@ -116,3 +116,51 @@ Branch `claude/plan-28-release-0-3-0-0066c5`, from main `d2b4977` (plan 26 merge
 - **G2. Four warning codes print no `fix`** (note 5). `decision:2026-11-12-e3-warnings-have-fix-field` says warnings carry one, and INDEX row 20 says plan 20 did it. Options: (A) a follow-up plan that splits E3B-1 entries 5 to 10, 26 and 29; (B) split them in this PR. I recommend A, as a task of its own before the tag.
 
 ## Review Notes
+
+Second opinion (Opus, 2026-11-16), branch `claude/nervous-jang-1a25c9`, rebased onto main `37badf7` (Ubuntu 24.04 and 26.04 CI) with no conflict.
+
+**Checked and holding.** The version text is `0.3.0` in `CMakeLists.txt` and in the `commands_common.h` fallback (the plan's `remember_app.c` was wrong; the coder's correction holds), and `--version` prints it. The C-40 paragraph and the C-41 bullets match `COPY-PENDING.md` word for word, with the `see C-13` clause dropped per `decision:2026-11-11-skill-settings-bullet`. The E3B-1 entry 1 and E3B-2 splits match the decision word for word in plain and JSON output. A home with only `~/.codex` gets only `~/.codex/skills/remember/SKILL.md`. `git tag --points-at HEAD` is empty. What's New names no wiki-links and no plugin host. The six decisions the plan built are `state:implemented`. Every plan line of `specs/RELEASE-0.3.0.md` names code that exists and a spec that describes it.
+
+**Fixed here, each with a test that failed first (`tests/test_install_skill.sh` 1l to 1o).**
+- (A) A `HOME` or a `REMEMBER_SKILL_DIRS` entry with a newline in it was split into two paths. The skill landed under the path's first line and in the current folder. The list is now built as an array: one loop over `.grok .claude .cursor .codex`, and `read -d ''` for the variable.
+- (A) A relative `REMEMBER_SKILL_SRC` made a dangling link, and the script still exited 0. The source is now made absolute against `$PWD`, which keeps the Homebrew `share/` path unresolved.
+- (A) `--copy` over a link that symlink mode left to the same source failed with `same file` (exit 64) and stopped before the next product. Copy mode now removes the old `SKILL.md` first. That removal sits after the source-directory guard, so it can never delete the source.
+- Docs. `RELEASE-0.3.0.md` said only plans 19 to 21 and 24 shipped beyond its list, but `v0.2.0` was tagged before plan 15, so plans 15 to 18 (with 17a, 18b and 18c) ship too. The README said the device id sidecar is `<db-path>.device_id`; it is `<db-path>.d/device_id`.
+- Mutants on the installer: 9, all killed. They were: `|| true` dropped, `rm` dropped, the absolute step dropped, a here-string read, `.codex` dropped, `-e` for `-d`, a `skills` typo, the source-directory guard removed, and the `SKILL.md`-directory guard removed.
+
+**(S) Simplify.**
+1. `default_skill_dirs` plus the line read became one 4-line loop, 12 lines saved. Done.
+2. `diag_warning` now has one caller (`cmd_query.c`), and `diag_warning_detail` is a one-line wrapper. Calling the split writer directly would save about 6 lines, but that churns a header this plan does not own, so it is left alone.
+3. `diag_brain_id_cloned` and `diag_brain_missing` repeat the measure, malloc and snprintf steps. A shared helper would save about 8 lines, but that is plan 26 code.
+4. `test_release.sh` compiles a stub to read the fallback. That stub is the DoD's second build, so it stays.
+
+**(A) Cleared.**
+- `~/.codex` that is a file, a dangling link, or a link to a directory.
+- `~/.codex/skills` that is a file.
+- A `SKILL.md` directory, and a skill dir that is the source's own directory.
+- Old links to another file, or to nothing, in both modes.
+- A home with spaces, and with a newline.
+- A dir that starts with `-` fails loudly (`cannot create`), with no write. A source that starts with `-` is now made absolute, so it installs.
+
+Overwriting a hand-written `SKILL.md` follows `decision:2026-11-11-codex-skill-path`, which says to use the same modes as the other products, and those always replaced it.
+
+**Gate** on `897715f` (the tree before these notes): `lint-all.sh` LINT OK, fresh sanitizer build `ctest` 7 of 7, `check-coverage.sh` 100% (functions, effective lines, pure-TU branches), `ci-linux.sh` OK on Ubuntu 24.04 and 26.04, `codeql-local.sh` OK. The diff adds no C (no int to char narrowing to check).
+
+**Open for Itay.**
+- G1: C-41 sentence 6 tells people to run `remember purge <locator>`, which is plan 32. 0.3.0 rejects it with exit 1, and the skill contradicts itself. The approved words are kept until Itay answers.
+- G2: four warning codes print no `fix` (the coder's grill).
+
+**Follow-ups.**
+- A plan 26 bug: `brain new-id` does not update `brains.json`, so a brain copied after `new-id` makes the next open give the original a new id instead.
+- What's New has no lines for plans 20, 23, 27 or 27b.
+- What's New claims `--strict` is listed under Global options (it is not), and claims color, progress and prompts that no code produces.
+- `import --help` lists `--from-md` and `--from-csv`, which plan 23a has not built.
+- The full write-up is in the sessions' shared notes, `plan-28-review-grills.md`.
+
+**Grades.**
+- Coder: 8/10. Strengths: thorough mutants (44), red-first tests, two installer exploits caught, plan facts corrected (the fallback's file, `user_version` 6), and G1 and G2 raised rather than decided. Misses: newline paths, a relative source, and running one mode over the other mode's output. Also, the release spec's "Plans 19 to 21 and 24" was never checked against `git log v0.2.0..`.
+- The coder's in-session review: 7/10. Its two locks (the self-link and the `SKILL.md` directory) held. It missed the three installer holes above and the false device-id sentence.
+
+**Folded into `standard:coding`** (history copy `history:standard:coding:2026-11-16c`).
+- PROBES rule 1 is sharpened: "a newline inside it" and "relative where the code keeps it for later", and a shell script keeps a list of paths in an array.
+- PROBES sibling rule, one sentence added: run each mode of a command over what its other modes left.
