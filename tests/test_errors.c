@@ -538,8 +538,9 @@ TEST(json_warning_is_one_line_without_the_prefix)
     free(buf);
 }
 
-/* deprecated_flag and synced_folder keep their 0.2.0 text after "warning: "
-   (Itay 2026-10-15). An unknown warning code writes nothing. */
+/* Any warning code takes the "warning: " prefix and a plain message. (synced_folder's real
+   text is E3B-2: synced_folder_warning_has_message_and_fix.) An unknown warning code writes
+   nothing. */
 TEST(every_warning_uses_the_warning_prefix)
 {
     char *buf = NULL;
@@ -561,6 +562,41 @@ TEST(every_warning_uses_the_warning_prefix)
     ASSERT_EQ_INT(fflush(err), 0);
     ASSERT_STREQ(buf, "remember: warning: --trash is deprecated; use --expired\n"
                       "remember: warning: database path looks like a synced folder\n");
+    app_set_streams((AppStreams){.out = NULL, .err = NULL});
+    ASSERT_EQ_INT(fclose(err), 0);
+    free(buf);
+}
+
+/* E3 B: the plain line is "<message> <fix>"; an empty fix adds no space; a bad code or a
+   NULL field list with a count writes nothing. */
+TEST(split_warning_joins_message_and_fix_and_rejects_bad_input)
+{
+    static const DiagDetailField fields[] = {{.name = "k", .value = "v"}};
+    char *buf = NULL;
+    size_t len = 0U;
+    FILE *err = open_memstream(&buf, &len);
+
+    ASSERT_TRUE(err != NULL);
+    if (err == NULL) {
+        return;
+    }
+    diag_warnings_reset();
+    app_set_streams((AppStreams){.out = NULL, .err = err});
+    ASSERT_EQ_INT(diag_warning_split_detail(DIAG_WARN_SYNCED_FOLDER,
+                                            (DiagSplit){.message = "m.", .fix = "f."}, fields, 1U),
+                  0);
+    ASSERT_EQ_INT(diag_warning_split_detail(DIAG_WARN_SYNCED_FOLDER,
+                                            (DiagSplit){.message = "m.", .fix = ""}, NULL, 0U),
+                  0);
+    ASSERT_EQ_INT(diag_warning_split_detail(DIAG_WARN_COUNT,
+                                            (DiagSplit){.message = "m.", .fix = "f."}, NULL, 0U),
+                  -1);
+    ASSERT_EQ_INT(diag_warning_split_detail(DIAG_WARN_SYNCED_FOLDER,
+                                            (DiagSplit){.message = "m.", .fix = "f."}, NULL, 1U),
+                  -1);
+    ASSERT_EQ_INT(fflush(err), 0);
+    ASSERT_STREQ(buf, "remember: warning: m. f.\nremember: warning: m.\n");
+    ASSERT_EQ_INT((int)diag_warning_count(), 2);
     app_set_streams((AppStreams){.out = NULL, .err = NULL});
     ASSERT_EQ_INT(fclose(err), 0);
     free(buf);
@@ -1100,9 +1136,11 @@ TEST(plain_warning_that_cannot_be_written_does_not_count)
     }
     diag_warnings_reset();
     app_set_streams((AppStreams){.out = NULL, .err = err});
-    ASSERT_EQ_INT(diag_warning(DIAG_WARN_FLAG_MEANING_CHANGED,
-                               "--trash now means the Trash (deleted memories). For expired "
-                               "memories, use --expired."),
+    ASSERT_EQ_INT(diag_warning_split_detail(
+                      DIAG_WARN_FLAG_MEANING_CHANGED,
+                      (DiagSplit){.message = "--trash now means the Trash (deleted memories).",
+                                  .fix = "For expired memories, use --expired."},
+                      NULL, 0U),
                   -1);
     ASSERT_EQ_INT(diag_warning_count(), 0U);
     app_set_streams((AppStreams){.out = NULL, .err = NULL});
@@ -4453,6 +4491,7 @@ void register_errors_tests(void)
     RUN_TEST(every_warning_uses_the_warning_prefix);
     RUN_TEST(plain_warning_that_cannot_be_written_does_not_count);
     RUN_TEST(unknown_field_that_cannot_be_written_does_not_stick);
+    RUN_TEST(split_warning_joins_message_and_fix_and_rejects_bad_input);
     RUN_TEST(null_message_is_empty_text);
     RUN_TEST(plain_error_keeps_quote_and_backslash);
     RUN_TEST(plain_error_turns_a_newline_into_a_question_mark);

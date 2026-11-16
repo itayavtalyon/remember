@@ -180,7 +180,7 @@ int diag_warning_detail(DiagWarning code, const char *message, const DiagDetailF
 /*
  * A warning with its next step (E3 B, decision:2026-11-12-e3-warnings-have-fix-field).
  * Plain: "remember: warning: <message> <fix>\n". JSON: {"code","message","fix"}, then
- * "detail" when nfields is not 0. NULL or empty fix prints no second sentence. Returns -1
+ * "detail" when nfields is not 0. A NULL or empty fix prints no second sentence. Returns -1
  * like diag_warning_detail.
  */
 int diag_warning_split_detail(DiagWarning code, DiagSplit split, const DiagDetailField *fields,

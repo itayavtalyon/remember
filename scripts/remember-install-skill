@@ -122,6 +122,12 @@ for d in "${dirs[@]}"; do
     echo "warn: cannot create $dest" >&2
     continue
   fi
+  # A symlinked skill dir that is the source's own dir: ln would turn the
+  # source into a link to itself.
+  if [[ "$dest" -ef "$(dirname "$SKILL_SRC")" ]]; then
+    echo "warn: $dest is the source directory" >&2
+    continue
+  fi
   # ln and install put the file inside a directory and report success.
   if [[ -d "$dest/SKILL.md" ]]; then
     echo "warn: $dest/SKILL.md is a directory" >&2

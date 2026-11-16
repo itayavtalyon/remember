@@ -610,11 +610,6 @@ int diag_warning_split_detail(DiagWarning code, DiagSplit split, const DiagDetai
     });
 }
 
-static int diag_warning_split(DiagWarning code, DiagSplit split)
-{
-    return diag_warning_split_detail(code, split, NULL, 0U);
-}
-
 /* The message of a warning that holds a caller's path: measured, then printed. */
 int diag_brain_id_cloned(const char *path, const char *new_id)
 {
@@ -626,9 +621,10 @@ int diag_brain_id_cloned(const char *path, const char *new_id)
     int rc = -1;
 
     if (message != NULL && snprintf(message, (size_t)need + 1U, k_message, path, new_id) == need) {
-        rc = diag_warning_split(
+        rc = diag_warning_split_detail(
             DIAG_WARN_BRAIN_ID_CLONED,
-            (DiagSplit){.message = message, .fix = "Run 'remember brain list' to see both."});
+            (DiagSplit){.message = message, .fix = "Run 'remember brain list' to see both."}, NULL,
+            0U);
     }
     free(message);
     return rc;
@@ -642,11 +638,12 @@ int diag_brain_missing(const char *path)
     int rc = -1;
 
     if (message != NULL && snprintf(message, (size_t)need + 1U, k_message, path) == need) {
-        rc = diag_warning_split(
+        rc = diag_warning_split_detail(
             DIAG_WARN_BRAIN_MISSING,
             (DiagSplit){.message = message,
                         .fix = "If you moved it, open it once from its new place. Otherwise run "
-                               "'remember brain prune' to remove it from the list."});
+                               "'remember brain prune' to remove it from the list."},
+            NULL, 0U);
     }
     free(message);
     return rc;

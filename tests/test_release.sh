@@ -107,6 +107,9 @@ names_outside() { # names_outside <lines file> <file>
 assert "README What's New has the C-41 bullets" has_all_lines "$TMP/readme-bullets" "$TMP/whats-new"
 assert_eq "README What's New names a removed flag only in a C-41 bullet" \
   "$(names_outside "$TMP/readme-bullets" "$TMP/whats-new")" "0"
+schema="$(sed -n 's/^enum { SCHEMA_VERSION = \([0-9]*\),.*/\1/p' "$ROOT/src/store_sqlite.c")"
+assert "README What's New names the schema that a migrated brain gets" \
+  grep -qF "migrates it to \`user_version\` **$schema**." "$TMP/whats-new"
 assert "README What's New does not list wiki-links" \
   test "$(grep -ci 'wiki' "$TMP/whats-new")" = 0
 assert "the skill has the C-41 bullets" has_all_lines "$TMP/skill-bullets" "$SKILL"

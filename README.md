@@ -65,7 +65,7 @@ uninstall the usual way (`brew upgrade remember` / `brew uninstall remember`).
 
 ### v0.3.0 — searchable keys and a sidecar device id
 
-Opening an existing database migrates it to `user_version` **5**.
+Opening an existing database migrates it to `user_version` **6**.
 
 - `--json` now puts success and failure in one `remember-message` version 1 envelope on stdout, and stderr stays empty. `--json-errors` is gone.
 - Lists page with a cursor. Search doesn't page. `--offset` is gone.

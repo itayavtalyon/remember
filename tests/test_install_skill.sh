@@ -164,6 +164,50 @@ for flag in --symlink --copy; do
     test -z "$(ls -A "$HOME/.codex/skills/remember/SKILL.md")"
 done
 
+# 1j. A skill dir that is a symlink to the source's own directory must not turn the
+#     source into a link to itself (ln -sfn would, and the skill file is gone).
+HOME="$TMP/codexself"
+mkdir -p "$TMP/selfrepo/skills/remember" "$HOME/.codex/skills"
+echo "precious skill" >"$TMP/selfrepo/skills/remember/SKILL.md"
+ln -s "$TMP/selfrepo/skills/remember" "$HOME/.codex/skills/remember"
+for flag in --symlink --copy; do
+  set +e
+  out="$(HOME="$HOME" REMEMBER_SKILL_SRC="$TMP/selfrepo/skills/remember/SKILL.md" "$TOOL" "$flag" 2>&1)"
+  rc=$?
+  set -e
+  assert_eq "a skill dir that is the source dir exits 1 ($flag)" "$rc" "1"
+  assert "the source skill file stays a regular file ($flag)" \
+    test -f "$TMP/selfrepo/skills/remember/SKILL.md" -a ! -L "$TMP/selfrepo/skills/remember/SKILL.md"
+  assert_eq "the source skill file keeps its bytes ($flag)" \
+    "$(cat "$TMP/selfrepo/skills/remember/SKILL.md")" "precious skill"
+  assert "the self-install names the source directory ($flag)" \
+    grep -qF 'is the source directory' <<<"$out"
+done
+
+# 1k. An old SKILL.md link (to a file the user owns elsewhere, or dangling) is replaced,
+#     never written through, in both modes.
+for mode in --symlink --copy; do
+  HOME="$TMP/oldlink$mode"
+  mkdir -p "$HOME/.codex/skills/remember"
+  echo "someone else's file" >"$TMP/elsewhere$mode"
+  ln -s "$TMP/elsewhere$mode" "$HOME/.codex/skills/remember/SKILL.md"
+  set +e
+  HOME="$HOME" "$TOOL" "$mode" >/dev/null 2>&1
+  rc=$?
+  set -e
+  assert_eq "an old SKILL.md link is replaced ($mode)" "$rc" "0"
+  assert_eq "the file an old link pointed at is untouched ($mode)" \
+    "$(cat "$TMP/elsewhere$mode")" "someone else's file"
+  rm -f "$HOME/.codex/skills/remember/SKILL.md" "$TMP/elsewhere$mode"
+  ln -s "$TMP/dangling$mode" "$HOME/.codex/skills/remember/SKILL.md"
+  set +e
+  HOME="$HOME" "$TOOL" "$mode" >/dev/null 2>&1
+  rc=$?
+  set -e
+  assert_eq "a dangling SKILL.md link is replaced ($mode)" "$rc" "0"
+  assert "a dangling SKILL.md link creates no target ($mode)" test ! -e "$TMP/dangling$mode"
+done
+
 # 2. Existing ~/.claude → symlink into skills/remember/SKILL.md.
 HOME="$TMP/claude"
 mkdir -p "$HOME/.claude"
