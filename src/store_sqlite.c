@@ -16,6 +16,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <sys/types.h> // IWYU pragma: keep (ssize_t; IWYU 0.23 wants it, 0.21 calls it unused)
 #include <time.h>
 #include <unistd.h>
 

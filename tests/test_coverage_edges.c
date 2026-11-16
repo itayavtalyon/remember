@@ -1075,9 +1075,10 @@ TEST(util_read_stdin_over_cap)
     size_t len = 0U;
     int i;
     ASSERT_TRUE(in != NULL);
+    if (in == NULL) {
+        return;
+    }
     for (i = 0; i < 20; i++) {
-        // cppcheck-suppress nullPointerOutOfResources ; test-only: tmpfile()/malloc exhaustion is
-        // asserted above, not defended
         ASSERT_TRUE(fputc('x', in) != EOF);
     }
     rewind(in);

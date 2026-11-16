@@ -287,18 +287,24 @@ if [[ -n "$CLANG_TIDY" ]] && [[ -f "$BUILD_DIR/compile_commands.json" ]]; then
   : >"$REPORT_DIR/clang-tidy.txt"
   tidy_fail=0
   TIDY_MAJOR="$(tidy_major "$CLANG_TIDY")"
-  # The distro clang-tidy (Linux CI's) when the pinned one runs on Linux. The
-  # pinned build's include-cleaner has no glibc symbol map (it wants EINTR from
-  # an asm/ header), so on Linux that one check runs on the distro build instead.
+  # On Linux, misc-include-cleaner runs only on LLVM 18 (Ubuntu 24.04's
+  # clang-tidy). Later builds have no glibc symbol map for the errno constants:
+  # Ubuntu 26.04's 21 and the pinned 22 want EINTR from <asm-generic/errno-base.h>,
+  # a kernel header, where POSIX puts it in <errno.h>, and then call <errno.h>
+  # unused. Without an LLVM 18 the check is off; the 24.04 run and macOS still
+  # run it on every file, and IWYU checks src/ on every Linux image.
   CLEANER_TIDY=""
-  if [[ "$(uname -s)" == "Linux" && "$TIDY_MAJOR" == "$LLVM_PIN" ]]; then
+  if [[ "$(uname -s)" == "Linux" && "$TIDY_MAJOR" != 18 ]]; then
     for cand in /usr/bin/clang-tidy /usr/bin/clang-tidy-[0-9]*; do
-      if [[ -x "$cand" && "$(tidy_major "$cand")" != "$LLVM_PIN" ]]; then
+      if [[ -x "$cand" && "$(tidy_major "$cand")" == 18 ]]; then
         CLEANER_TIDY="$cand"
         break
       fi
     done
     EXTRA_ARGS+=(--checks=-misc-include-cleaner)
+    if [[ -z "$CLEANER_TIDY" ]]; then
+      echo "clang-tidy: misc-include-cleaner off (no LLVM 18 clang-tidy; see lint-all.sh)"
+    fi
   fi
   echo "clang-tidy: $CLANG_TIDY (LLVM ${TIDY_MAJOR:-?}; CI pin $LLVM_PIN)"
   if [[ -z "$TIDY_MAJOR" || "$TIDY_MAJOR" -lt "$LLVM_PIN" ]]; then
