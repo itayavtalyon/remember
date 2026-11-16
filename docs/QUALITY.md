@@ -4,7 +4,7 @@ How we keep C code safe: compile hard, analyze statically, run sanitizers, detec
 
 ## What runs where
 
-| Gate | Local (macOS) | GitHub Actions Linux | GitHub Actions macOS |
+| Gate | Local (macOS) | GitHub Actions Linux (Ubuntu 24.04 and 26.04) | GitHub Actions macOS |
 |------|---------------|----------------------|----------------------|
 | Layer A warnings (`-Werror`, …) | always | always | always |
 | ASan + UBSan on `remember` | Debug | yes | yes |
@@ -14,10 +14,10 @@ How we keep C code safe: compile hard, analyze statically, run sanitizers, detec
 | Line coverage `src/*.c` (functions 100% + effective lines 100%) | `check-coverage.sh` | GHA job | optional |
 | Branch coverage of the pure TUs (every side, no exclusion) | `check-coverage.sh` | GHA job | optional |
 | clang-format / clang-tidy / cppcheck | `scripts/lint-all.sh` | required | required |
-| misc-include-cleaner (IWYU-style) | via clang-tidy | via clang-tidy | via clang-tidy |
+| misc-include-cleaner (IWYU-style) | via clang-tidy | via clang-tidy 18 (24.04 only; 21 has no glibc errno map) | via clang-tidy |
 | include-what-you-use | on Linux, required (`REMEMBER_IWYU=0` skips) | **required** | not installed |
 | scan-build | on (`REMEMBER_SCAN_BUILD=0` skips) or `cmake --build --target analyze` | **required** | **required** |
-| clang-tidy at the CI pin (LLVM 22) | **required** (an older one fails lint) | clang-tidy 18 | LLVM 22 |
+| clang-tidy at the CI pin (LLVM 22) | **required** (an older one fails lint) | clang-tidy 18 (24.04), 21 (26.04) | LLVM 22 |
 | no `system()`/`popen()` outside `tests/harness.c`; `mkdtemp` callers include `<unistd.h>` | `scripts/lint-all.sh` | required | required |
 | macOS `leaks(1)` on **`remember_plain`** | `cmake --build build --target leaks-macos` | n/a | **required** |
 | **CodeQL** (Code Scanning) | `scripts/codeql-local.sh` in the pre-push hook (`security-extended`, any alert fails) | `.github/workflows/codeql.yml` | n/a |
@@ -73,13 +73,14 @@ Also ensure **Settings → Code security → Code scanning** is not disabled for
 |---------------|------|
 | **`tests/gate-suites`** | Single source of truth: `--only` suites for the implemented green surface |
 | **`ctest` `step_gate`** | Runs that list (alias `step05_gate` kept for docs) |
-| **`scripts/ci-linux.sh`** | Linux CI one-liner (Docker) — same install/build/ctest/lint as GHA |
-| **`.github/workflows/ci.yml`** | Calls `ci-linux.sh --inner --install` (no stale hard-coded suite list) |
+| **`scripts/ci-linux.sh`** | Linux CI one-liner (Docker) — same install/build/ctest/lint as GHA, in `ubuntu:24.04` then `ubuntu:26.04` |
+| **`.github/workflows/ci.yml`** | Calls `ci-linux.sh --inner --install` on `ubuntu-24.04` and on `ubuntu-26.04` (no stale hard-coded suite list) |
 
 When a step lands more green suites, **edit `tests/gate-suites` only** — CMake and CI pick it up.
 
 ```bash
-# Linux CI locally (Docker method A — one-liner; start Docker Desktop first)
+# Linux CI locally (Docker method A — one-liner; start Docker Desktop first).
+# Runs ubuntu:24.04, then ubuntu:26.04; --ubuntu=24.04 or --ubuntu=26.04 runs one.
 ./scripts/ci-linux.sh
 
 # Run the same check automatically before every git push (once per clone):
@@ -87,16 +88,21 @@ When a step lands more green suites, **edit `tests/gate-suites` only** — CMake
 # Skip one push: SKIP_LINUX_CI=1 git push   or   git push --no-verify
 ```
 
-> **Toolchain skew — CI runs two clang-tidy versions, and each rejects code the
-> other passes.** Linux CI uses Ubuntu 24.04's tools (clang / clang-tidy /
-> clang-format 18, cppcheck 2.13, IWYU); macOS CI pins Homebrew `llvm@22`
+> **Toolchain skew — CI runs three clang-tidy versions, and each rejects code the
+> others pass.** Linux CI uses each Ubuntu's own tools: 24.04 has clang /
+> clang-tidy / clang-format 18 and cppcheck 2.13, 26.04 has LLVM 21, cppcheck
+> 2.19 and glibc 2.43 (both with IWYU). No Linux job runs on `ubuntu-latest`: when GitHub moved
+> it to 26.04, CI broke on code the local gate (then 24.04 only) had passed
+> (`decision:2026-11-16-ci-both-ubuntu-versions`). macOS CI pins Homebrew `llvm@22`
 > (`LLVM_PIN` in `lint-all.sh`, cppcheck 2.21). 18 flags things 22 tolerates
 > (a magic number, a `-Wno-<name>` for a warning only a newer clang has); 22 adds
 > analyzer and readability checks 18 lacks (`unix.Stream` on a read after EOF,
 > an `&&` result stored in a `bool`). `lint-all.sh` therefore runs clang-tidy at
-> the pin and fails when only an older one is found. On Linux it also runs the
-> distro clang-tidy for `misc-include-cleaner` (the pinned build has no glibc
-> symbol map, so its own include-cleaner is off there). On a Linux box without
+> the pin and fails when only an older one is found. On Linux it runs
+> `misc-include-cleaner` only on LLVM 18 (Ubuntu 24.04's clang-tidy): 21 and the
+> pinned 22 have no glibc symbol map for the errno constants, so the check is
+> off on 26.04, and the pinned build hands it to a distro LLVM 18 when one is
+> installed. On a Linux box without
 > the pin: `python3 -m pip install --user 'clang-tidy==22.*'`.
 > **Before pushing a change to the C sources or the lint config, run
 > `./scripts/ci-linux.sh`** too (or install the pre-push hook above); it

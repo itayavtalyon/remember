@@ -15,6 +15,10 @@ concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+# No job writes to the repository; artifact uploads use the runner's own token.
+permissions:
+  contents: read
+
 env:
   # Fail fast on sanitizer issues. LSan is meaningful on Linux.
   UBSAN_OPTIONS: halt_on_error=1:print_stacktrace=1
@@ -27,7 +31,7 @@ jobs:
   # What counts as docs lives in scripts/touches-code.sh.
   changes:
     name: changes (code vs docs-only)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     outputs:
       code: ${{ steps.diff.outputs.code }}
     steps:
@@ -48,15 +52,18 @@ jobs:
             echo code=false >> "$GITHUB_OUTPUT"
           fi
 
+  # Linux runs on Ubuntu 24.04 and 26.04, never ubuntu-latest: a moving image
+  # turns a toolchain bump into red CI on untouched code, and the local gate
+  # (scripts/ci-linux.sh) builds in the same two images
+  # (decision:2026-11-16-ci-both-ubuntu-versions). The 24.04 jobs keep the names
+  # the main ruleset requires; each 26.04 job reuses its 24.04 job's steps
+  # through a YAML anchor under its own name.
   linux:
     name: linux (ASan+UBSan+LSan, lint, scan-build)
     needs: changes
     if: needs.changes.outputs.code == 'true'
-    # Pinned, not ubuntu-latest: the image pins glibc and clang, and scripts/ci-linux.sh runs
-    # the same ubuntu:24.04. ubuntu-latest moved to 26.04 (glibc 2.43, clang 21) on 2026-11-16
-    # and broke the build on untouched code. Raising it is a deliberate change.
     runs-on: ubuntu-24.04
-    steps:
+    steps: &linux-steps
       # Checkout is a GitHub-maintained JS action (runs on Node in the runner).
       # Our project is pure C — we do not use Node ourselves.
       - uses: actions/checkout@v5
@@ -66,6 +73,13 @@ jobs:
           chmod +x scripts/ci-linux.sh scripts/read-gate-suites.sh scripts/check-coverage.sh
           ./scripts/ci-linux.sh --inner --install
 
+  linux-26:
+    name: linux 26.04 (ASan+UBSan+LSan, lint, scan-build)
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
+    runs-on: ubuntu-26.04
+    steps: *linux-steps
+
   # Plugin protocol spec (plan 24): every schema and example in
   # specs/PLUGIN-PROTOCOL.md must validate, its plugin scripts must compile, and
   # schema/plugin/v1/ and tests/fixtures/plugin/ must hold the same bytes as
@@ -73,7 +87,7 @@ jobs:
   # the repo, so it can be a required check.
   docs:
     name: docs (plugin protocol spec)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v5
 
@@ -92,7 +106,7 @@ jobs:
   # blocks the docs check.
   docs-pages:
     name: docs (schema $id on GitHub Pages)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v5
@@ -136,11 +150,8 @@ jobs:
     name: linux (line coverage on src/)
     needs: changes
     if: needs.changes.outputs.code == 'true'
-    # Pinned, not ubuntu-latest: the image pins glibc and clang, and scripts/ci-linux.sh runs
-    # the same ubuntu:24.04. ubuntu-latest moved to 26.04 (glibc 2.43, clang 21) on 2026-11-16
-    # and broke the build on untouched code. Raising it is a deliberate change.
     runs-on: ubuntu-24.04
-    steps:
+    steps: &coverage-steps
       - uses: actions/checkout@v5
 
       - name: Install toolchain
@@ -158,9 +169,17 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: coverage-report
+          # One name per job: two uploads of one name in a run fail.
+          name: coverage-report-${{ github.job }}
           path: build-cov/coverage-report.txt
           if-no-files-found: ignore
+
+  linux-coverage-26:
+    name: linux 26.04 (line coverage on src/)
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
+    runs-on: ubuntu-26.04
+    steps: *coverage-steps
 
   macos:
     name: macos (ASan+UBSan, lint, leaks)

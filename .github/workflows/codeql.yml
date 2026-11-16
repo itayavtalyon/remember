@@ -19,9 +19,9 @@ concurrency:
 jobs:
   analyze:
     name: CodeQL analyze (C)
-    # Pinned, not ubuntu-latest: the image pins glibc and clang, and scripts/ci-linux.sh runs
-    # the same ubuntu:24.04. ubuntu-latest moved to 26.04 (glibc 2.43, clang 21) on 2026-11-16
-    # and broke the build on untouched code. Raising it is a deliberate change.
+    # Pinned, not ubuntu-latest: a moving image turns a toolchain bump into a red
+    # build on untouched code. One image is enough for the scan; ci.yml also
+    # builds on 26.04 (decision:2026-11-16-ci-both-ubuntu-versions).
     runs-on: ubuntu-24.04
     # Needed to upload results to the Security / Code Scanning UI.
     permissions:

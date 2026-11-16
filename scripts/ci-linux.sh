@@ -4,7 +4,9 @@
 # One-liner from the host (Docker method A):
 #   ./scripts/ci-linux.sh
 #
-# Re-runs itself inside ubuntu:24.04 with the tree mounted at /src.
+# Re-runs itself inside ubuntu:24.04, then ubuntu:26.04, with the tree mounted
+# at /src (decision:2026-11-16-ci-both-ubuntu-versions). One image only:
+#   ./scripts/ci-linux.sh --ubuntu=26.04
 # On GitHub Actions / already-Linux hosts (packages preinstalled):
 #   ./scripts/ci-linux.sh --inner
 # With apt install inside the script (fresh container without Dockerfile):
@@ -19,34 +21,41 @@ cd "$ROOT"
 
 INNER=0
 DO_INSTALL=0
+UBUNTU=(24.04 26.04)
 for arg in "$@"; do
   case "$arg" in
     --inner) INNER=1 ;;
     --install) DO_INSTALL=1 ;;
+    --ubuntu=24.04 | --ubuntu=26.04) UBUNTU=("${arg#--ubuntu=}") ;;
     -h | --help)
-      sed -n '2,20p' "$0" | sed 's/^# \{0,1\}//'
+      sed -n '2,/^[^#]/s/^# \{0,1\}//p' "$0"
       exit 0
       ;;
     *)
-      echo "usage: $0 [--inner] [--install]" >&2
+      echo "usage: $0 [--ubuntu=24.04|--ubuntu=26.04] [--inner] [--install]" >&2
       exit 2
       ;;
   esac
 done
 
-# Host entry: re-exec in Docker (method A).
+# Host entry: run the inner gate in Docker (method A), one image after the other
+# (parallel builds share this machine with other heavy jobs). The first failure stops.
 if [[ "$INNER" -eq 0 ]]; then
   if ! command -v docker >/dev/null 2>&1; then
     echo "error: docker not found; install Docker or run: $0 --inner --install" >&2
     exit 1
   fi
-  echo "== ci-linux: launching ubuntu:24.04 =="
-  exec docker run --rm \
-    -v "$ROOT":/src:rw \
-    -w /src \
-    -e REMEMBER_CI_LINUX_INNER=1 \
-    ubuntu:24.04 \
-    bash /src/scripts/ci-linux.sh --inner --install
+  for v in "${UBUNTU[@]}"; do
+    echo "== ci-linux: launching ubuntu:$v =="
+    docker run --rm \
+      -v "$ROOT":/src:rw \
+      -w /src \
+      -e REMEMBER_CI_LINUX_INNER=1 \
+      "ubuntu:$v" \
+      bash /src/scripts/ci-linux.sh --inner --install
+  done
+  echo "== ci-linux: OK on ubuntu ${UBUNTU[*]} =="
+  exit 0
 fi
 
 # --- inside Linux (container or CI runner) -----------------------------------
