@@ -25,11 +25,18 @@ cd "$ROOT"
 # commits not yet on any remote; -m lists merge commits against each parent.
 # stdin: <local ref> <local sha> <remote ref> <remote sha>, one line per ref.
 code=0
+# A check already stamped as passed on every pushed tree (scripts/gate-stamp.sh)
+# is not run again: same tree, same result.
+linux_done=1
+codeql_done=1
 while read -r _ local_sha _ _; do
   [[ "$local_sha" =~ ^0+$ ]] && continue # ref deletion
   if git log --format= --name-only -m "$local_sha" --not --remotes | ./scripts/touches-code.sh; then
     code=1
   fi
+  tree="$(git rev-parse "$local_sha^{tree}")"
+  ./scripts/gate-stamp.sh has ci-linux "$tree" || linux_done=0
+  ./scripts/gate-stamp.sh has codeql "$tree" || codeql_done=0
 done
 if [[ "$code" == 0 ]]; then
   echo "pre-push: docs-only push — skipping Linux CI and CodeQL" >&2
@@ -38,6 +45,8 @@ fi
 
 if skip "${SKIP_LINUX_CI:-}"; then
   echo "pre-push: SKIP_LINUX_CI set — skipping ./scripts/ci-linux.sh" >&2
+elif [[ "$linux_done" == 1 ]]; then
+  echo "pre-push: ci-linux.sh already passed on this tree — skipping" >&2
 else
   if ! command -v docker >/dev/null 2>&1; then
     echo "pre-push: docker not found on PATH." >&2
@@ -56,6 +65,8 @@ fi
 
 if skip "${SKIP_CODEQL:-}"; then
   echo "pre-push: SKIP_CODEQL set — skipping ./scripts/codeql-local.sh" >&2
+elif [[ "$codeql_done" == 1 ]]; then
+  echo "pre-push: codeql-local.sh already passed on this tree — skipping" >&2
 else
   echo "pre-push: running CodeQL (./scripts/codeql-local.sh, about 3 minutes)…"
   ./scripts/codeql-local.sh
