@@ -51,7 +51,7 @@ Starting code: the branch's uncommitted changes to `src/settings.c`, `src/settin
 - [x] `uninstalled_plugin_key_is_unknown_with_the_not_installed_hint` (was `uninstalled_plugin_row_follows_st_9_6`).
 - [x] `hybrid_has_only_enabled_key`.
 - [x] `specs/SETTINGS.md` "Plugin keys" written; `decision:2026-11-11-plugin-enabled-bool` is `state:implemented`.
-- [ ] The gate passes on the committed tree.
+- [x] The gate passes on the committed tree (see Gate above).
 
 ## Implementation Notes
 
@@ -77,6 +77,6 @@ Coder: Sonnet 5.5 session, 2026-11-16. Branch `claude/amazing-jang-fc3ed8`, one 
 
 **Reviewer's list, item by item.** "The generated keys come from the parsed manifest only; no other file is read": `read_manifest` opens `<plugins_dir>/<folder>/plugin.json` and nothing else. Tests: `the_keys_come_from_the_manifest_name_not_the_folder_name`, `a_folder_with_no_plugin_json_and_a_stray_file_register_nothing`. "No key is generated for the reserved name `hybrid` other than `plugin.hybrid.enabled`": `hybrid_has_only_enabled_key`, `an_installed_manifest_named_hybrid_adds_no_key`, `a_manifest_named_hybrid_is_refused_by_register_and_leaves_the_registry_alone`, `registering_hybrid_twice_is_refused_and_keeps_one_key`. The two guards (in `plugin_settings_register` and in `load_folder`) cover two paths: a direct call, and the rename of a duplicate (without the second, a manifest named `hybrid` would register as `hybrid_<folder>`).
 
-**Gate.** GATE_PLACEHOLDER
+**Gate.** Run on commit 90b45fd (the code tree; the notes were added after, in a commit that changes only this file), 2026-11-17, one step after another under the heavy-job lock: build and `ctest` (step_gate, store_asan_gate, install_skill, spec_drift) 0 failed; `scripts/lint-all.sh` with LLVM 22 (format, cppcheck src and tests, gcc -fanalyzer, clang-tidy, scan-build) clean; `scripts/check-coverage.sh` 100% functions, 100% effective lines, pure-TU branches 100%; `cmake --build build --target leaks-macos`; `scripts/ci-linux.sh` OK on ubuntu 24.04 and 26.04 (tidy 18 and 21, IWYU, LSan unit run); `scripts/codeql-local.sh` OK (52 allowed, one new entry: `cpp/path-injection` in `tests/test_settings.c`, the XDG_DATA_HOME fixtures). Earlier runs found and fixed: cppcheck variable scope and a static-linkage hint, a tidy `implicit conversion`, a coverage hole in the OOM path of the list default and in four `report_*` OOM lines, Linux tidy 18 `sizeof` on pointer arrays and an IWYU include, two codeql `snprintf` size alerts. Logs: `/private/tmp/claude-501/p30-gate/*.log`.
 
 ## Review Notes
