@@ -95,7 +95,7 @@ Opening an existing database migrates it to `user_version` **6**.
 - `list` and `search` take `--since` / `--until`. `since` is inclusive and `until` is exclusive. Search filters `updated_at` and ignores `--sort`.
 - `update --if-version-vector` writes only when that memory's `version_vector` still matches. A mismatch is code `stale` and writes nothing.
 - `remember search` now also matches word prefixes and returns matching keys and tags. FTS5 queries work as before; a query that FTS5 cannot parse no longer fails: it returns prefix matches and prints a note on stderr.
-- That note is one line: `remember: warning: raw query ignored: <message>`. With `--json` it is `{"code":"raw_query_ignored","message":"<message>"}` in the envelope's `warnings`.
+- That note is one line: `remember: warning: raw query ignored: <message> Check the quotes and operators in your query, or search with plain words.` With `--json` it is `{"code":"raw_query_ignored","message":"<message>","fix":"Check the quotes and operators in your query, or search with plain words."}` in the envelope's `warnings`.
 - Search order: exact key, then key prefix, then relevance (bm25), then `updated_at`.
 - JSON `keys` and `tags` now sit between `total` and `entries` in `search --json`. `--facet-limit N` (default 50, 1..200) caps their `items`; `total` counts every match. Human `search` prints `keys:` and `tags:` lines before the rows.
 - An empty or blank `search` query is an empty result on exit 0. It was a usage error (`empty search query`).

@@ -2524,7 +2524,8 @@ static void assert_one_c35_line(const char *err, const char *list_file, const ch
 
     ASSERT_TRUE(snprintf(want, sizeof(want),
                          "remember: warning: \"%s\" has a field remember doesn't know, \"%s\". "
-                         "The rest of the file was read.",
+                         "The rest of the file was read. Remove that field, or update remember if "
+                         "the file came from a newer version.",
                          list_file, field) < (int)sizeof(want));
     at = strstr(err, want);
     ASSERT_TRUE(at != NULL);
@@ -2600,10 +2601,12 @@ TEST(brain_list_json_carries_unknown_field_with_field_and_where)
     given_json(scn.list, k_unknown_doc);
     r = run_remember(scn.brain, json, 3U, NULL);
     ASSERT_EQ_INT(r.exit_code, 0);
-    ASSERT_TRUE(snprintf(want, sizeof(want),
-                         "\"code\":\"unknown_field\",\"message\":\"\\\"%s\\\" has a field remember "
-                         "doesn't know, \\\"note\\\". The rest of the file was read.\"",
-                         scn.list) < (int)sizeof(want));
+    ASSERT_TRUE(
+        snprintf(want, sizeof(want),
+                 "\"code\":\"unknown_field\",\"message\":\"\\\"%s\\\" has a field remember "
+                 "doesn't know, \\\"note\\\". The rest of the file was read.\",\"fix\":\"Remove "
+                 "that field, or update remember if the file came from a newer version.\"",
+                 scn.list) < (int)sizeof(want));
     ASSERT_STR_CONTAINS(r.out, want);
     ASSERT_STR_CONTAINS(r.out, "\"detail\":{\"field\":\"note\"");
     cmd_result_free(&r);

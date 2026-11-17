@@ -112,7 +112,7 @@ An error object, in order: `code`, `message`, `fix`, `retryable`, then `detail` 
 
 The first error is the one in the envelope. A later error in the same run is dropped.
 
-A warning object, in order: `code`, `message`, then `fix` when the warning has one (`decision:2026-11-12-e3-warnings-have-fix-field`; `schema_too_new_read_only` carries one, [OLDER-CLI.md](OLDER-CLI.md) § 8.3; the split of every warning is `decision:2026-11-12-copy-batch-e3b-warning-splits`), then `detail` when present. `warnings` is omitted when empty.
+A warning object, in order: `code`, `message`, then `fix` when the warning has one (`decision:2026-11-12-e3-warnings-have-fix-field`; `schema_too_new_read_only` carries one, [OLDER-CLI.md](OLDER-CLI.md) § 8.3; the split of every warning is `decision:2026-11-12-copy-batch-e3b-warning-splits`; the settings reasons with no approved fix yet are listed in [SETTINGS.md](SETTINGS.md) § import), then `detail` when present. `warnings` is omitted when empty.
 
 With `--json`, the envelope on stdout holds the error and the warnings, and stderr is empty. The CLI has no `--json-errors` flag.
 
@@ -268,11 +268,16 @@ Both are global options, before or after the command. `--color` takes `auto`, `a
 
 `decision:json-unknown-fields`. 008 JE-4.1.
 
-The warning code is `unknown_field`. The writer records it once per file path, or once for stdin. JSON `detail` is `field`, then `where`. `where` is the path bytes, or `stdin`.
+The warning code is `unknown_field`. The writer records it once per file path, or once for stdin. JSON is `message`, `fix`, then `detail`. `detail` is `field`, then `where`. `where` is the path bytes, or `stdin`.
 
 C-35, without the `remember: warning: ` prefix:
 
 - File: `"<path>" has a field remember doesn't know, "<name>". The rest of the file was read.`
 - Stdin: `stdin has a field remember doesn't know, "<name>". The rest of the input was read.`
+
+The fix (E3B-1 entry 26, `decision:2026-11-12-copy-batch-e3b-warning-splits`), joined to the plain line with a space:
+
+- File: `Remove that field, or update remember if the file came from a newer version.`
+- Stdin: `Remove that field, or update remember if the input came from a newer version.`
 
 No command in this binary reads a JSON file or JSON stdin, so no command calls this writer. A list-cursor member this binary does not know stays `invalid --cursor` (§ Cursor paging).

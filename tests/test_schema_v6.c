@@ -1367,8 +1367,10 @@ TEST(schema_v6_cli_prints_setting_invalid_for_a_left_out_prefix)
                  "('my project:', '2026-01-02T00:00:00.000Z', NULL, 'd');");
     r = run_remember(db, list, sizeof(list) / sizeof(list[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 0);
-    ASSERT_STREQ(r.err, "remember: warning: skipped \"remember.buckets.prefixes\": \"my "
-                        "project:\" isn't a valid value.\n");
+    ASSERT_STREQ(r.err, "remember: warning: dropped \"my project:\" from "
+                        "\"remember.buckets.prefixes\": it isn't a bucket prefix. "
+                        "To keep it, add it again with 1 to 32 letters, digits, \"-\", \"_\" or "
+                        "\".\", then one \":\", like \"project:\".\n");
     cmd_result_free(&r);
     /* Once: the next open finds a v6 brain. */
     r = run_remember(db, list, sizeof(list) / sizeof(list[0]), NULL);
@@ -1381,15 +1383,17 @@ TEST(schema_v6_cli_prints_setting_invalid_for_a_left_out_prefix)
     r = run_remember(db2, list_json, sizeof(list_json) / sizeof(list_json[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 0);
     ASSERT_STREQ(r.err, "");
-    ASSERT_STREQ(r.out,
-                 "{\"format\":\"remember-message\",\"version\":1,\"type\":\"memory.list.result\","
-                 "\"data\":{\"count\":0,\"total\":0,\"entries\":[]},"
-                 "\"next_cursor\":null,\"has_more\":false,"
-                 "\"warnings\":[{\"code\":\"setting_invalid\",\"message\":"
-                 "\"skipped \\\"remember.buckets.prefixes\\\": \\\"my project:\\\" isn't a "
-                 "valid value.\",\"detail\":{\"key\":\"remember.buckets.prefixes\","
-                 "\"value\":\"my project:\",\"reason\":\"bad_prefix_shape\","
-                 "\"item\":\"my project:\"}}]}\n");
+    ASSERT_STREQ(
+        r.out, "{\"format\":\"remember-message\",\"version\":1,\"type\":\"memory.list.result\","
+               "\"data\":{\"count\":0,\"total\":0,\"entries\":[]},"
+               "\"next_cursor\":null,\"has_more\":false,"
+               "\"warnings\":[{\"code\":\"setting_invalid\",\"message\":"
+               "\"dropped \\\"my project:\\\" from \\\"remember.buckets.prefixes\\\": it "
+               "isn't a bucket prefix.\",\"fix\":\"To keep it, add it again with 1 to 32 letters, "
+               "digits, \\\"-\\\", \\\"_\\\" or \\\".\\\", then one \\\":\\\", like "
+               "\\\"project:\\\".\",\"detail\":{\"key\":\"remember.buckets.prefixes\","
+               "\"value\":\"my project:\",\"reason\":\"bad_prefix_shape\","
+               "\"item\":\"my project:\"}}]}\n");
     cmd_result_free(&r);
     free(db);
     free(db2);
@@ -1398,7 +1402,7 @@ TEST(schema_v6_cli_prints_setting_invalid_for_a_left_out_prefix)
 /* The plain line is the whole value (ST-7.15). A fixed buffer used to cut it. */
 TEST(schema_v6_cli_a_long_prefix_warning_is_the_whole_line)
 {
-    enum { LONG_PREFIX = 600, SQL_PAD = 160, WANT_PAD = 160 };
+    enum { LONG_PREFIX = 600, SQL_PAD = 160, WANT_PAD = 320 };
     char *db = make_temp_db_path();
     char prefix[LONG_PREFIX + 1];
     char sql[LONG_PREFIX + SQL_PAD];
@@ -1418,8 +1422,9 @@ TEST(schema_v6_cli_a_long_prefix_warning_is_the_whole_line)
     ASSERT_TRUE(n > 0 && (size_t)n < sizeof(sql));
     exec_sql(db, sql);
     n = snprintf(want, sizeof(want),
-                 "remember: warning: skipped \"remember.buckets.prefixes\": \"%s\" isn't a "
-                 "valid value.\n",
+                 "remember: warning: dropped \"%s\" from \"remember.buckets.prefixes\": it isn't "
+                 "a bucket prefix. To keep it, add it again with 1 to 32 letters, digits, \"-\", "
+                 "\"_\" or \".\", then one \":\", like \"project:\".\n",
                  prefix);
     ASSERT_TRUE(n > 0 && (size_t)n < sizeof(want));
     r = run_remember(db, list, sizeof(list) / sizeof(list[0]), NULL);
@@ -1442,7 +1447,31 @@ TEST(schema_v6_cli_a_newline_in_a_prefix_warning_stays_one_line)
                  "('bad' || char(10) || 'value', '2026-01-01T00:00:00.000Z', NULL, 'd');");
     r = run_remember(db, list, sizeof(list) / sizeof(list[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 0);
-    ASSERT_STREQ(r.err, "remember: warning: skipped \"remember.buckets.prefixes\": \"bad?value\" "
+    ASSERT_STREQ(r.err, "remember: warning: dropped \"bad?value\" from "
+                        "\"remember.buckets.prefixes\": it isn't a bucket prefix. "
+                        "To keep it, add it again with 1 to 32 letters, digits, \"-\", \"_\" or "
+                        "\".\", then one \":\", like \"project:\".\n");
+    cmd_result_free(&r);
+    free(db);
+}
+
+/* duplicate_prefix has no approved fix yet
+   (decision:open-2026-11-16-warning-fix-setting-invalid-leftovers), so it keeps the old line and
+   prints none. */
+TEST(schema_v6_cli_a_duplicate_prefix_warning_has_no_fix_yet)
+{
+    char *db = make_temp_db_path();
+    const char *list[] = {"list"};
+    CmdResult r;
+
+    ASSERT_TRUE(db != NULL);
+    given_empty_v5_brain(db);
+    exec_sql(db, "INSERT INTO bucket_prefixes(prefix, added_at, removed_at, device_id) VALUES "
+                 "('project:', '2026-01-01T00:00:00.000Z', NULL, 'd'),"
+                 "('Project:', '2026-01-02T00:00:00.000Z', NULL, 'd');");
+    r = run_remember(db, list, sizeof(list) / sizeof(list[0]), NULL);
+    ASSERT_EQ_INT(r.exit_code, 0);
+    ASSERT_STREQ(r.err, "remember: warning: skipped \"remember.buckets.prefixes\": \"Project:\" "
                         "isn't a valid value.\n");
     cmd_result_free(&r);
     free(db);
@@ -1613,6 +1642,7 @@ void register_schema_v6_cli_tests(void)
     RUN_TEST(schema_v6_cli_prints_setting_invalid_for_a_left_out_prefix);
     RUN_TEST(schema_v6_cli_a_long_prefix_warning_is_the_whole_line);
     RUN_TEST(schema_v6_cli_a_newline_in_a_prefix_warning_stays_one_line);
+    RUN_TEST(schema_v6_cli_a_duplicate_prefix_warning_has_no_fix_yet);
     RUN_TEST(schema_v6_cli_a_write_to_a_newer_brain_prints_schema_too_new);
     RUN_TEST(schema_v6_cli_parallel_first_opens_of_a_v5_brain_all_succeed);
 #ifdef REMEMBER_TEST_VFS

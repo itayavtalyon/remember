@@ -423,7 +423,8 @@ TEST(search_unbalanced_quote_warns)
     cmd_result_free(&r);
     s = run_remember(db, sargs, sizeof(sargs) / sizeof(sargs[0]), NULL);
     ASSERT_EQ_INT(s.exit_code, 0);
-    ASSERT_STREQ(s.err, "remember: warning: raw query ignored: unterminated string\n");
+    ASSERT_STREQ(s.err, "remember: warning: raw query ignored: unterminated string Check the "
+                        "quotes and operators in your query, or search with plain words.\n");
     cmd_result_free(&s);
     free(db);
 }

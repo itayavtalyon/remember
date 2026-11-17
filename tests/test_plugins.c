@@ -943,8 +943,10 @@ TEST(an_unknown_root_field_prints_the_c35_file_line_and_the_rest_parses)
     ASSERT_EQ_INT(
         diag_unknown_field((DiagUnknownField){.path = file, .name = warning_at(man, 0)->field}), 0);
     ASSERT_EQ_INT(fflush(err), 0);
-    ASSERT_STREQ(buf, "remember: warning: \"/tmp/wake/plugin.json\" has a field remember doesn't "
-                      "know, \"homepage\". The rest of the file was read.\n");
+    ASSERT_STREQ(buf,
+                 "remember: warning: \"/tmp/wake/plugin.json\" has a field remember doesn't "
+                 "know, \"homepage\". The rest of the file was read. "
+                 "Remove that field, or update remember if the file came from a newer version.\n");
     app_set_streams((AppStreams){.out = NULL, .err = NULL});
     diag_warnings_reset();
     ASSERT_EQ_INT(fclose(err), 0);
@@ -973,8 +975,10 @@ TEST(the_c35_line_escapes_a_hostile_unknown_root_field)
     ASSERT_EQ_INT(
         diag_unknown_field((DiagUnknownField){.path = file, .name = warning_at(man, 0)->field}), 0);
     ASSERT_EQ_INT(fflush(err), 0);
-    ASSERT_STREQ(buf, "remember: warning: \"/tmp/wake/plugin.json\" has a field remember doesn't "
-                      "know, \"home\\u001b\\\"\". The rest of the file was read.\n");
+    ASSERT_STREQ(buf,
+                 "remember: warning: \"/tmp/wake/plugin.json\" has a field remember doesn't "
+                 "know, \"home\\u001b\\\"\". The rest of the file was read. "
+                 "Remove that field, or update remember if the file came from a newer version.\n");
     app_set_streams((AppStreams){.out = NULL, .err = NULL});
     diag_warnings_reset();
     ASSERT_EQ_INT(fclose(err), 0);

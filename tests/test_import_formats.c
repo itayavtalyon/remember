@@ -857,7 +857,8 @@ TEST(import_json_bad_setting_value_is_skipped_and_others_write)
     ASSERT_EQ_INT(r.exit_code, 0);
     ASSERT_STR_CONTAINS(r.out, "\"settings\":{\"written\":1,\"unchanged\":0,\"skipped\":1}");
     ASSERT_STR_CONTAINS(r.out, "\"code\":\"setting_invalid\"");
-    ASSERT_STR_CONTAINS(r.out, "isn't a valid value.");
+    ASSERT_STR_CONTAINS(r.out, "isn't a valid value.\",\"fix\":\"Set a valid value with 'remember "
+                               "settings set remember.search.candidate_pool <value>'.\"");
     cmd_result_free(&r);
     got = harness_sqlite_query_line(dst, "SELECT COUNT(*) FROM entries;");
     ASSERT_STREQ(got, "1");
@@ -909,7 +910,8 @@ TEST(import_json_unknown_field_warns_once_and_still_imports)
     ASSERT_EQ_INT(r.exit_code, 0);
     n = snprintf(want, sizeof(want),
                  "remember: warning: \"%s\" has a field remember doesn't know, \"sync_id\". "
-                 "The rest of the file was read.\n",
+                 "The rest of the file was read. Remove that field, or update remember if the file "
+                 "came from a newer version.\n",
                  src);
     ASSERT_TRUE(n > 0 && (size_t)n < sizeof(want));
     ASSERT_STREQ(r.err, want);
@@ -958,7 +960,8 @@ TEST(import_json_unknown_field_prints_a_hostile_name_escaped)
     n = snprintf(
         want, sizeof(want),
         "remember: warning: \"%s\" has a field remember doesn't know, \"x\\u001b[2J\\\"\". "
-        "The rest of the file was read.\n",
+        "The rest of the file was read. Remove that field, or update remember if the file came "
+        "from a newer version.\n",
         src);
     ASSERT_TRUE(n > 0 && (size_t)n < sizeof(want));
     ASSERT_STREQ(r.err, want);

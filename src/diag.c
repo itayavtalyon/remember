@@ -427,6 +427,10 @@ static const char k_unknown_file[] =
     "\"%s\" has a field remember doesn't know, \"%s\". The rest of the file was read.";
 static const char k_unknown_stream[] =
     "stdin has a field remember doesn't know, \"%s\". The rest of the input was read.";
+static const char k_unknown_file_fix[] =
+    "Remove that field, or update remember if the file came from a newer version.";
+static const char k_unknown_stream_fix[] =
+    "Remove that field, or update remember if the input came from a newer version.";
 
 static void unknown_fields_reset(void)
 {
@@ -579,14 +583,7 @@ int diag_notice(const char *message)
 
 int diag_warning(DiagWarning code, const char *message)
 {
-    return diag_warning_detail(code, message, NULL, 0U);
-}
-
-int diag_warning_detail(DiagWarning code, const char *message, const DiagDetailField *fields,
-                        size_t nfields)
-{
-    return diag_warning_split_detail(code, (DiagSplit){.message = message, .fix = NULL}, fields,
-                                     nfields);
+    return diag_warning_split_detail(code, (DiagSplit){.message = message, .fix = NULL}, NULL, 0U);
 }
 
 /* The one writer of a warning. Plain: "remember: warning: <message> <fix>". JSON:
@@ -748,8 +745,11 @@ int diag_unknown_field(DiagUnknownField field)
     if (message == NULL) {
         return -1;
     }
-    rc = diag_warning_detail(DIAG_WARN_UNKNOWN_FIELD, message, detail,
-                             sizeof detail / sizeof detail[0]);
+    rc = diag_warning_split_detail(
+        DIAG_WARN_UNKNOWN_FIELD,
+        (DiagSplit){.message = message,
+                    .fix = field.path != NULL ? k_unknown_file_fix : k_unknown_stream_fix},
+        detail, sizeof detail / sizeof detail[0]);
     free(message);
     if (rc != 0) {
         return rc;

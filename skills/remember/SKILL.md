@@ -85,7 +85,7 @@ Never invent ids, keys, or `local_id`s. On exit `2`, the entry is missing — do
 
 ## Errors
 
-With `--json`, a failure is the same one envelope on stdout: the command's `type`, then `error{code, message, fix, retryable, detail?}` instead of `data`. stderr stays empty. Warnings are `warnings[]` (`{code, message, detail?}`) at the end of the envelope, on success or failure. Read `error.code`; `error.fix` is the next step; `retryable` true (`busy`, `io_error`, `out_of_memory`) means the same command may work later.
+With `--json`, a failure is the same one envelope on stdout: the command's `type`, then `error{code, message, fix, retryable, detail?}` instead of `data`. stderr stays empty. Warnings are `warnings[]` (`{code, message, fix?, detail?}`) at the end of the envelope, on success or failure. Read `error.code`; `error.fix` is the next step; `retryable` true (`busy`, `io_error`, `out_of_memory`) means the same command may work later.
 
 `busy` means another process holds the brain. Retry later. The tool does not retry.
 
@@ -322,7 +322,7 @@ Agents should always use `--json` when parsing.
 - Word prefixes match first; the QUERY also runs as SQLite FTS5 MATCH syntax (`remember help search`)
 - The key is indexed: `search editor` finds `pref:editor`.
 - Hebrew marks are folded out of the index. The stored body keeps them.
-- A query FTS5 cannot parse is not an error: exit 0, prefix matches, and one stderr line `remember: warning: raw query ignored: <message>` (with `--json`: the item `{"code":"raw_query_ignored","message":"<message>"}` in `warnings`). A warning on stderr is not an error: trust the exit code
+- A query FTS5 cannot parse is not an error: exit 0, prefix matches, and one stderr line `remember: warning: raw query ignored: <message> Check the quotes and operators in your query, or search with plain words.` (with `--json`: the item `{"code":"raw_query_ignored","message":"<message>","fix":"..."}` in `warnings`). A warning on stderr is not an error: trust the exit code
 - Empty result set → exit 0 with `count:0` (not an error)
 
 ## Project status (handoff)

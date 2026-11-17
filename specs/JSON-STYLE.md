@@ -180,7 +180,7 @@ A stored file is a plain document `{format, version, …content}`. It has no `ty
 | `request_id` | optional | §1.7a. Never on CLI output. |
 | `data` | optional | The payload. Present on success and on every request and notification (`{}` when empty). |
 | `error` | optional | On failure only, never together with `data`. Shape `{code, message, fix, retryable, detail?, docs?}`. `fix` is a non-empty string (JE-2.6). |
-| `warnings` | optional | Only when non-empty. Items are `{code, message, detail?}` (JE-2.7). |
+| `warnings` | optional | Only when non-empty. Items are `{code, message, fix?, detail?}` (JE-2.7, `decision:2026-11-12-e3-warnings-have-fix-field`). |
 | `next_cursor`, `has_more` | optional | Only on list responses that page, always together (§1.11). Never on search (S-08), single-item or write responses, or plugin messages. |
 
 - The key order is `format, version, type, request_id, data | error, next_cursor, has_more, warnings` (JE-2.1). Absent optional fields are omitted, not null. The one exception is `next_cursor`, which is `null` on the last page.
