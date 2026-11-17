@@ -368,23 +368,25 @@ static PluginSettingsStatus list_folders(const char *dir, char ***names, size_t 
     return PLUGIN_SETTINGS_OK;
 }
 
-/* The bytes of <dir>/<folder>/plugin.json, or NULL when there are none to use. */
-static char *read_manifest(const char *dir, const char *folder, size_t *len)
+/* *bytes gets <dir>/<folder>/plugin.json, or NULL when there is none to use. Running out of
+   memory is OOM, never "no plugin.json": the plugin would vanish quietly. */
+static PluginSettingsStatus read_manifest(const char *dir, const char *folder, char **bytes,
+                                          size_t *len)
 {
     int err = 0;
     char *folder_path = fileio_join(dir, folder, &err);
     char *file_path = folder_path != NULL ? fileio_join(folder_path, "plugin.json", &err) : NULL;
-    char *bytes = NULL;
 
+    *bytes = NULL;
     free(folder_path);
     if (file_path == NULL) {
-        return NULL;
+        return PLUGIN_SETTINGS_OOM; /* fileio_join fails only with ENOMEM */
     }
-    if (fileio_read_regular(file_path, (size_t)PLUGIN_JSON_MAX, &bytes, len, &err) != 0) {
-        bytes = NULL;
+    if (fileio_read_regular(file_path, (size_t)PLUGIN_JSON_MAX, bytes, len, &err) != 0) {
+        *bytes = NULL;
     }
     free(file_path);
-    return bytes;
+    return err == ENOMEM ? PLUGIN_SETTINGS_OOM : PLUGIN_SETTINGS_OK;
 }
 
 /* name for a manifest whose own name an earlier folder holds: <name>_<folder>, with a hyphen of
@@ -392,11 +394,9 @@ static char *read_manifest(const char *dir, const char *folder, size_t *len)
 static bool second_name(char *out, size_t cap, const char *name, const char *folder)
 {
     size_t i = 0;
-    int n = snprintf(out, cap, "%s_%s", name, folder);
 
-    if (n <= 0 || (size_t)n >= cap) {
-        return false;
-    }
+    /* A longer join is cut here; only the first 40 characters are kept below. */
+    (void)snprintf(out, cap, "%s_%s", name, folder);
     for (i = 0; out[i] != '\0'; i++) {
         if (out[i] == '-') {
             out[i] = '_';
@@ -423,12 +423,12 @@ static PluginSettingsStatus load_folder(const char *dir, const char *folder, Set
 {
     PluginManifest *man = NULL;
     size_t len = 0;
-    char *bytes = read_manifest(dir, folder, &len);
+    char *bytes = NULL;
     PluginParseStatus parsed = PLUGIN_PARSE_SYNTAX;
-    PluginSettingsStatus st = PLUGIN_SETTINGS_OK;
+    PluginSettingsStatus st = read_manifest(dir, folder, &bytes, &len);
 
     if (bytes == NULL) {
-        return PLUGIN_SETTINGS_OK;
+        return st;
     }
     parsed = plugin_manifest_parse(bytes, len, &man);
     free(bytes);

@@ -622,6 +622,22 @@ static int write_masked(FILE *out, const char *text, bool keep_newline, bool kee
     return 0;
 }
 
+void output_mask_in_place(char *text)
+{
+    unsigned char *p = (unsigned char *)text;
+    unsigned char *w = p;
+
+    for (; *p != '\0'; p++) {
+        if (is_c1_control_at(p)) {
+            *w++ = (unsigned char)'?';
+            p++; /* both bytes of the control become one '?' */
+        } else {
+            *w++ = is_terminal_ctrl(*p, false) ? (unsigned char)'?' : *p;
+        }
+    }
+    *w = '\0';
+}
+
 int output_text_human(FILE *out, const char *text, bool keep_newline)
 {
     return write_masked(out, text, keep_newline, true);

@@ -1293,6 +1293,24 @@ TEST(a_second_name_past_40_characters_is_cut_to_40)
     free(plugins);
 }
 
+/* Review: a folder name longer than the join buffer (NAME_MAX is 255) was refused, not cut. */
+TEST(a_second_name_from_a_100_character_folder_is_cut_to_40)
+{
+    char *plugins = given_plugins_dir();
+    SettingsRegistry *reg = NULL;
+    char folder[101];
+
+    memset(folder, 'f', 100U);
+    folder[100] = '\0';
+    given_named_plugin(plugins, "a", "p", NULL);
+    given_named_plugin(plugins, folder, "p", NULL);
+    reg = given_loaded(plugins);
+    ASSERT_TRUE(setting_by_key(reg, "plugin.p_ffffffffffffffffffffffffffffffffffffff.enabled") !=
+                NULL);
+    settings_registry_free(reg);
+    free(plugins);
+}
+
 TEST(a_second_name_that_is_not_a_name_registers_nothing)
 {
     char *plugins = given_plugins_dir();
@@ -1560,6 +1578,7 @@ void register_plugin_settings_tests(void)
         the_first_folder_in_byte_order_keeps_the_name_and_a_later_one_gets_name_underscore_folder);
     RUN_TEST(a_folder_name_with_a_hyphen_reads_as_an_underscore_in_the_second_name);
     RUN_TEST(a_second_name_past_40_characters_is_cut_to_40);
+    RUN_TEST(a_second_name_from_a_100_character_folder_is_cut_to_40);
     RUN_TEST(a_second_name_that_is_not_a_name_registers_nothing);
     RUN_TEST(two_second_names_that_cut_to_one_segment_register_only_the_first);
     RUN_TEST(a_real_name_that_an_earlier_second_name_took_is_renamed_too);

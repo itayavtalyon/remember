@@ -26,7 +26,8 @@ enum {
 /* Test CLI only: REMEMBER_TEST_EXPORT_FAIL=<site>[#N][:<errno>] fails the Nth
    call at that site (N defaults to 1) with errno (default EIO). Sites:
    random, alloc, join, fdopen, write (after the document is written), close,
-   rename (rename#2 is the second D17 rename). */
+   rename (rename#2 is the second D17 rename), read (a buffer of
+   fileio_read_regular). */
 static bool fault(const char *site)
 {
     static unsigned hit;
@@ -405,7 +406,7 @@ int fileio_read_regular(const char *path, size_t max_bytes, char **out_bytes, si
 
         if (n + 1U >= cap) {
             size_t next = (cap == 0U) ? (size_t)READ_FIRST_CAP : (cap * 2U);
-            char *grown = (char *)realloc(buf, next);
+            char *grown = FAULT("read") ? NULL : (char *)realloc(buf, next);
 
             if (grown == NULL) {
                 goto fail; /* realloc sets ENOMEM */

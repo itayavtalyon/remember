@@ -897,6 +897,9 @@ static int copy_display(const char *text, char *out, size_t cap)
         return -1;
     }
     memcpy(out, text, n + 1U);
+    /* A plugin text passed setting_text_ok, which lets a C1 control through
+       (decision:plan18c-mask-c1). */
+    output_mask_in_place(out);
     return 0;
 }
 
@@ -4617,8 +4620,9 @@ static int write_explain_block(FILE *out, const SettingSpec *spec, Shown shown)
                0) {
         return -1;
     }
-    if (fprintf(out, "  %s\n  Can be set for: %s\n  Now: %s, ", spec->description,
-                explain_scopes(spec), now) < 0 ||
+    /* A plugin's description is plugin.json text: masked, like every untrusted string. */
+    if (fputs("  ", out) < 0 || output_text_human(out, spec->description, false) != 0 ||
+        fprintf(out, "\n  Can be set for: %s\n  Now: %s, ", explain_scopes(spec), now) < 0 ||
         write_from_tail(out, shown.from, shown.actor, shown.stamp) != 0) {
         return -1;
     }

@@ -10033,6 +10033,62 @@ TEST(explain_names_the_source_plugin_and_both_scopes)
     cmd_result_free(&got);
 }
 
+/* Review exploit: a plugin.json description is untrusted text. Raw, an ESC sequence and a
+   newline reached the terminal and forged a line. */
+TEST(explain_masks_control_bytes_in_a_manifest_description)
+{
+    const char *explain[] = {"settings", "explain", "plugin.p.mode"};
+    CmdResult got;
+
+    given_installed_plugin("p", "{\"key\":\"mode\",\"description\":\"a\\u001b[31mb\\nc\\u0007"
+                                "\\u0085d\",\"type\":\"string\",\"default\":\"x\"}");
+    got = run_plugin_cmd(explain, 3U);
+    ASSERT_EQ_INT(got.exit_code, 0);
+    ASSERT_STR_CONTAINS(got.out, "\n  a?[31mb?c??d\n  Can be set for: user\n");
+    cmd_result_free(&got);
+}
+
+/* Review exploit: setting_text_ok lets C1 controls through (U+009B is CSI), and the plain value
+   reached the terminal raw. JSON keeps the stored text. */
+TEST(plain_output_masks_a_c1_control_in_a_plugin_text_value)
+{
+    const char *list[] = {"settings", "list", "plugin.p.label"};
+    const char *json[] = {"--json", "settings", "get", "plugin.p.label"};
+    CmdResult got;
+
+    given_installed_plugin("p", "{\"key\":\"label\",\"description\":\"L.\",\"type\":\"string\","
+                                "\"default\":\"a\\u009b31mX\"}");
+    got = run_plugin_cmd(list, 3U);
+    ASSERT_EQ_INT(got.exit_code, 0);
+    ASSERT_STREQ(got.out, "plugin.p.label = a?31mX   (default)\n");
+    cmd_result_free(&got);
+    got = run_plugin_cmd(json, 4U);
+    ASSERT_STR_CONTAINS(got.out, "\"value\":\"a\xC2\x9B"
+                                 "31mX\"");
+    cmd_result_free(&got);
+}
+
+/* Review: a failed allocation in the plugin.json reader read as "no plugin.json", so the
+   plugin quietly vanished. Each of the reader's two path joins and its read buffer now fail the
+   command. read#1 is the open's brains.json (plan 26); read#2 is plugin.json. */
+TEST(out_of_memory_in_the_plugin_reader_fails_the_command)
+{
+    const char *get[] = {"settings", "get", "plugin.p.enabled"};
+    const char *sites[] = {"join#1:12", "join#2:12", "read#2:12"};
+    size_t i = 0;
+    CmdResult got;
+
+    given_installed_plugin("p", NULL);
+    for (i = 0; i < 3U; i++) {
+        (void)setenv("REMEMBER_TEST_EXPORT_FAIL", sites[i], 1); // NOLINT(concurrency-mt-unsafe)
+        got = run_plugin_cmd(get, 3U);
+        (void)unsetenv("REMEMBER_TEST_EXPORT_FAIL"); // NOLINT(concurrency-mt-unsafe)
+        ASSERT_EQ_INT(got.exit_code, 1);
+        ASSERT_STREQ(got.err, "remember: out of memory\n");
+        cmd_result_free(&got);
+    }
+}
+
 TEST(list_shows_plugin_keys_in_byte_order_before_the_remember_keys)
 {
     const char *list[] = {"settings", "list", "plugin."};
@@ -10624,6 +10680,9 @@ void register_settings_tests(void)
     RUN_TEST(an_unknown_key_of_an_installed_plugin_is_the_plain_unknown_line);
     RUN_TEST(a_stored_row_of_a_plugin_that_is_gone_is_unknown_not_listed_and_still_has_history);
     RUN_TEST(explain_names_the_source_plugin_and_both_scopes);
+    RUN_TEST(explain_masks_control_bytes_in_a_manifest_description);
+    RUN_TEST(plain_output_masks_a_c1_control_in_a_plugin_text_value);
+    RUN_TEST(out_of_memory_in_the_plugin_reader_fails_the_command);
     RUN_TEST(list_shows_plugin_keys_in_byte_order_before_the_remember_keys);
     RUN_TEST(list_pages_through_more_plugin_keys_than_the_old_fixed_cap);
     RUN_TEST(explain_all_lists_the_plugin_keys_too);
