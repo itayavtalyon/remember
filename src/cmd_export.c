@@ -214,8 +214,8 @@ static int settings_writer(FILE *out, const void *ctx)
 {
     const ExportDoc *doc = (const ExportDoc *)ctx;
 
-    return export_settings_write(out, doc->exported_at, doc->snap->settings, doc->snap->nsettings,
-                                 true);
+    return export_settings_write(doc->registry, out, doc->exported_at, doc->snap->settings,
+                                 doc->snap->nsettings, true);
 }
 
 /* One output file: its path, its writer, and its temp sibling while writing. */
@@ -529,8 +529,11 @@ int cmd_export(Store *s, bool json, int rest_argc, const char **rest_argv)
         }
     }
     {
-        const ExportDoc doc = {
-            .snap = &snap, .exported_at = now, .engine = REMEMBER_VERSION, .bins = a.bins};
+        const ExportDoc doc = {.snap = &snap,
+                               .registry = store_settings_registry(s),
+                               .exported_at = now,
+                               .engine = REMEMBER_VERSION,
+                               .bins = a.bins};
         int wrote =
             (a.fmt == EXPORT_MD) ? write_md(path, a.force, &doc) : write_files(files, nfiles, &doc);
 

@@ -7,6 +7,7 @@
 # else fails the gate.
 cpp/path-injection	src/	an environment variable	The CLI runs as the user; HOME and REMEMBER_* name the user's own files.
 cpp/path-injection	src/cmd_export.c	src/fileio.c: user input (buffer read by read)	The "input" is random_hex's /dev/urandom bytes, hex-encoded into a temp-file suffix (fileio.c).
+cpp/path-injection	tests/test_settings.c	an environment variable	The plugin fixtures go under XDG_DATA_HOME, which test_main.c sets to a mkdtemp directory before each test.
 cpp/uncontrolled-process-operation	tests/	a command-line argument	The harness runs the binary under test, named on its own command line.
 cpp/uncontrolled-process-operation	tests/harness.c	read by	The sqlite3 fixture runs test SQL on a test path, both shell-quoted by shell_quote_append.
 cpp/world-writable-file-creation	tests/	with mode 0666	Test files live under make_temp_db_path()'s mkdtemp directory (0700).

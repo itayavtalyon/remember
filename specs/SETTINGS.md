@@ -8,7 +8,7 @@ Decisions are `decision:…` entries tagged `subject:settings`. A section with n
 
 `decision:settings-scheme`, `decision:s-02`, `decision:s-03`, `decision:g-25`, `decision:settings-scope`. 007 ST-1.
 
-The database is the only source of settings. There is no settings file and no environment override, except `REMEMBER_SYNC_TOKEN` for the `env` credential helper (§ Sync token). The registry is compiled in. It has six keys:
+The database is the only source of settings. There is no settings file and no environment override, except `REMEMBER_SYNC_TOKEN` for the `env` credential helper (§ Sync token). The registry is a `SettingsRegistry`: six compiled-in keys, and the keys of the installed plugins (§ Plugin keys). The compiled-in keys are:
 
 | Key | Type | Default | Range | Layers |
 |---|---|---|---|---|
@@ -22,6 +22,38 @@ The database is the only source of settings. There is no settings file and no en
 Each key also has a one-line description and its related keys, shown by `settings explain`. `candidate_pool` and `max_results` are related to each other. A setting has no sync attribute: every brain row syncs and exports, and no user row syncs.
 
 The prefix default is not stored. Nothing is written until a `set`.
+
+## Plugin keys
+
+`decision:2026-11-11-plugin-enabled-bool`, `decision:2026-11-16-plan30-registry-explicit`, `decision:2026-11-16-plan30-duplicate-plugin-name`, `decision:2026-11-16-plan30-plugin-json-reader-cap`, `decision:2026-11-16-plan30-enabled-description`, `decision:2026-11-16-plan30-plugin-string-values`, `decision:2026-11-16-plan30-value-error-copy-drafts`. 007 ST-5.7 to ST-5.10, ST-9.6.
+
+Each installed plugin has `plugin.<name>.enabled` and one key `plugin.<name>.<key>` for each item of the manifest's `settings` list. The built-in plugin `hybrid` has `plugin.hybrid.enabled` and no other key, and no manifest.
+
+**The registry.** `SettingsRegistry` holds the compiled-in rows and the generated rows. Every function that looks a key up takes one, and a `Store` holds the registry its opener built (`store_set_settings_registry`). There is no process-wide registry. On every open of a brain the CLI builds a registry, registers `plugin.hybrid.enabled`, and lists `<data dir>/plugins/<folder>/plugin.json` (`plugin_settings_load`). A missing plugins folder is no plugin. A plugins folder that exists and cannot be read fails the command with `cannot read the plugins folder` (an unapproved line, `COPY-PENDING.md`). With no data dir (HOME and `XDG_DATA_HOME` unset) no plugin is installed.
+
+**The reader.** Folders are read in byte order of their names. A folder with no `plugin.json`, a `plugin.json` that is not a regular file (a symlink to one is followed) or is over 64 KiB (`PLUGIN_JSON_MAX`), an unreadable file, and a file the parser refuses (any error, an unsupported protocol or version) register nothing, and none is an error. The keys come from the parsed manifest only; no other file is read. A manifest named `hybrid` registers nothing. A manifest whose settings the registry cannot hold registers none of its keys: a default or an enum value that holds a control byte or DEL, or a default the type refuses.
+
+**Names.** The key uses the manifest's `name`, whatever the folder is called. When an earlier folder already holds a name, the later folder's keys use `<name>_<folder>`, with each `-` of the folder read as `_`, cut to 40 characters. When that is not `[a-z][a-z0-9_]{0,39}`, or is taken as well, the later folder registers nothing. A plugin receives only `plugin.<its manifest name>.*` (ST-9.6), so a renamed duplicate's keys show in `settings` and never reach that plugin.
+
+**The enabled key.** Type `boolean`, layers user and brain, default `false`. Its explain description is `Whether "<name>" is turned on.` (a draft, `COPY-PENDING.md`). Stored values are the JSON literals `true` and `false`. A set of anything else is `setting_invalid_value` with the C-05 boolean line.
+
+**A manifest setting.** The key is `plugin.<name>.<key>`. The type is the manifest's, the layers come from `scope` (`user` by default, `brain`, or `both`), and the description is the manifest's `description`. The default is stored as the registry would store it: `1000ms` is `"1s"`, `2048KiB` is `"2MiB"`. A missing bound of a `range` is the type's own limit (0 below, 9223372036854775807 above) and an error line prints it. *Open (Itay has not decided the wording for a one-sided range).*
+
+| `type` | Stored JSON | A set takes |
+|---|---|---|
+| `boolean` | `true` or `false` | `true` or `false` |
+| `integer` | a number | `^(0\|[1-9][0-9]*)$`, inside `range` |
+| `duration` | `"1.5s"` | a duration, inside `range` |
+| `size` | `"4MiB"` | a size (`B`, `KiB`, `MiB`), inside `range` |
+| `enum` | `"fast"` | one of `range.values`, exactly |
+| `string` | `"text"` | text (below) |
+| `string_list` | `["a","b"]` | one item per argument, at most `range.max_items` items, each text |
+
+Text is valid UTF-8 with no control byte and no DEL, at most 511 bytes. A quote and a backslash are allowed and stored escaped. A bad text is `setting_invalid_value` and the line does not echo it. A list over `max_items` is `setting_out_of_range`. JSON output adds `_bytes` twins for a size, as it adds `_ms` for a duration: `value_bytes`, `default_bytes`, `min_bytes`, `max_bytes`, and the settings export row's `value_bytes`.
+
+**A key of a plugin that is not installed** is `setting_unknown` with C-03's `unknown setting "<key>": plugin <name> isn't installed.` (ST-5.10; the plan cited ST-9.6, which says nothing of a missing plugin). A plugin that is installed and a key it does not have is the plain unknown line. A stored row of a plugin that is gone is not listed and not read; `settings history <key>` still shows it (ST-5.11). A settings import skips the row with `skipped "<key>": plugin <name> isn't installed.`, detail and row reason `plugin_not_installed`.
+
+**Errors.** Boolean, size and sub-byte size lines are the C-05 rows. The lines for an enum, a bad text and a list over `max_items`, and `cannot read the plugins folder`, are drafts (`COPY-PENDING.md`). *Open (no decision yet): the list line for `max_items` 1 reads `can hold 1 to 1 items` and `Give 1 items or fewer`, and a one-sided range prints the type's own limit as the missing bound.*
 
 ## Keys and values
 

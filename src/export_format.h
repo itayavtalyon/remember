@@ -1,6 +1,7 @@
 #ifndef REMEMBER_EXPORT_FORMAT_H
 #define REMEMBER_EXPORT_FORMAT_H
 
+#include "settings.h"
 #include "store.h"
 
 #include <stdbool.h>
@@ -16,8 +17,9 @@ enum { EXPORT_DOC_PAD = 5 };
 /* One export's facts: the snapshot, the bins it holds, and the header values. */
 typedef struct {
     const StoreExportSnapshot *snap;
-    const char *exported_at; /* also the now that set each memory's bin */
-    const char *engine;      /* REMEMBER_VERSION */
+    const SettingsRegistry *registry; /* the keys the settings rows are written against */
+    const char *exported_at;          /* also the now that set each memory's bin */
+    const char *engine;               /* REMEMBER_VERSION */
     StoreExportBins bins;
     char pad_[EXPORT_DOC_PAD]; /* explicit tail padding (kept -Wpadded-clean) */
 } ExportDoc;
@@ -33,8 +35,8 @@ int export_json_write(FILE *out, const ExportDoc *doc);
 
 /* The remember-settings-export document (ST-8.1), one compact line.
    trailing_newline is the file form; the nested JSON member passes false. */
-int export_settings_write(FILE *out, const char *exported_at, const SettingExportRow *rows,
-                          size_t n, bool trailing_newline);
+int export_settings_write(const SettingsRegistry *reg, FILE *out, const char *exported_at,
+                          const SettingExportRow *rows, size_t n, bool trailing_newline);
 
 /* The bin's folder in a Markdown export: memories, expired, deleted (D29). */
 const char *export_md_folder(StoreBin bin);

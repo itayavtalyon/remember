@@ -1,6 +1,7 @@
 #include "settings.h"
 
 #include "normalize.h"
+#include "unicode.h"
 
 #include <limits.h>
 #include <stdint.h>
@@ -32,7 +33,8 @@ enum {
     KEY_MIN_SEGMENTS = 2,
     KEY_MAX_SEGMENTS = 4,
     ASCII_UNIT = 0x20,
-    ASCII_DEL = 0x7F
+    ASCII_DEL = 0x7F,
+    PLUGIN_DOT_LEN = 7 /* "plugin." */
 };
 
 static bool key_body_char(char c)
@@ -189,13 +191,208 @@ bool setting_integer(const char *src, long long *out)
     return true;
 }
 
+enum { SETTING_STATIC_COUNT = sizeof(k_registry) / sizeof(k_registry[0]), REGISTRY_GROW = 8 };
+
+/* The generated rows. Each row is one allocation (the spec, the enum value pointers, then the
+   strings), so a pointer to one row stays good while other rows come and go. */
+struct SettingsRegistry {
+    struct GenRow **rows;
+    size_t n;
+    size_t cap;
+};
+
+typedef struct GenRow {
+    SettingSpec spec;
+    const char *values[SETTING_ENUM_VALUES_MAX];
+    char text[]; /* the strings that spec and values point at */
+} GenRow;
+
+static const SettingsRegistry k_builtin_registry = {.rows = NULL, .n = 0U, .cap = 0U};
+
 /* cppcheck-suppress staticFunction ; public API (settings.h); used by tests */
-const SettingSpec *setting_registry(size_t *count)
+const SettingsRegistry *settings_registry_builtin(void)
 {
-    if (count != NULL) {
-        *count = sizeof(k_registry) / sizeof(k_registry[0]);
+    return &k_builtin_registry;
+}
+
+/* cppcheck-suppress staticFunction ; public API (settings.h); used by tests */
+SettingsRegistry *settings_registry_new(void)
+{
+    SettingsRegistry *reg = (SettingsRegistry *)malloc(sizeof(*reg));
+
+    if (reg != NULL) {
+        memset(reg, 0, sizeof(*reg));
     }
-    return k_registry;
+    return reg;
+}
+
+/* cppcheck-suppress staticFunction ; public API (settings.h); used by tests */
+void settings_registry_free(SettingsRegistry *reg)
+{
+    size_t i = 0;
+
+    if (reg == NULL) {
+        return;
+    }
+    for (i = 0; i < reg->n; i++) {
+        free(reg->rows[i]);
+    }
+    free((void *)reg->rows);
+    free(reg);
+}
+
+/* cppcheck-suppress staticFunction ; public API (settings.h); used by tests */
+size_t settings_registry_count(const SettingsRegistry *reg)
+{
+    return reg == NULL ? 0U : (size_t)SETTING_STATIC_COUNT + reg->n;
+}
+
+/* cppcheck-suppress staticFunction ; public API (settings.h); used by tests */
+const SettingSpec *settings_registry_at(const SettingsRegistry *reg, size_t i)
+{
+    if (i >= settings_registry_count(reg)) {
+        return NULL;
+    }
+    if (i < (size_t)SETTING_STATIC_COUNT) {
+        return &k_registry[i];
+    }
+    return &reg->rows[i - (size_t)SETTING_STATIC_COUNT]->spec;
+}
+
+static const SettingSpec *registry_find(const SettingsRegistry *reg, const char *folded)
+{
+    size_t n = settings_registry_count(reg);
+    size_t i = 0;
+
+    for (i = 0; i < n; i++) {
+        const SettingSpec *spec = settings_registry_at(reg, i);
+
+        if (strcmp(spec->key, folded) == 0) {
+            return spec;
+        }
+    }
+    return NULL;
+}
+
+static size_t text_bytes(const char *text)
+{
+    return text == NULL ? 0U : strlen(text) + 1U;
+}
+
+/* Copy text into *at and move *at past it. NULL stays NULL. */
+static const char *take_text(char **at, const char *text)
+{
+    const char *out = NULL;
+    size_t n = 0;
+
+    if (text == NULL) {
+        return NULL;
+    }
+    n = strlen(text) + 1U;
+    memcpy(*at, text, n);
+    out = *at;
+    *at += n;
+    return out;
+}
+
+static GenRow *row_copy(const SettingSpec *row)
+{
+    size_t chars = text_bytes(row->key) + text_bytes(row->default_text) +
+                   text_bytes(row->description) + text_bytes(row->related);
+    size_t nvalues = row->values != NULL ? row->nvalues : 0U;
+    size_t i = 0;
+    GenRow *gen = NULL;
+    char *at = NULL;
+
+    if (nvalues > (size_t)SETTING_ENUM_VALUES_MAX) {
+        return NULL;
+    }
+    for (i = 0; i < nvalues; i++) {
+        chars += text_bytes(row->values[i]);
+    }
+    gen = (GenRow *)malloc(sizeof(*gen) + chars);
+    if (gen == NULL) {
+        return NULL;
+    }
+    for (i = 0; i < (size_t)SETTING_ENUM_VALUES_MAX; i++) {
+        gen->values[i] = NULL;
+    }
+    gen->spec = *row;
+    at = gen->text;
+    gen->spec.key = take_text(&at, row->key);
+    gen->spec.default_text = take_text(&at, row->default_text);
+    gen->spec.description = take_text(&at, row->description);
+    gen->spec.related = take_text(&at, row->related);
+    gen->spec.values = nvalues > 0U ? gen->values : NULL;
+    gen->spec.nvalues = nvalues;
+    for (i = 0; i < nvalues; i++) {
+        gen->values[i] = take_text(&at, row->values[i]);
+    }
+    return gen;
+}
+
+static bool registry_grow(SettingsRegistry *reg)
+{
+    size_t ncap = 0;
+    GenRow **rows = NULL;
+
+    if (reg->n < reg->cap) {
+        return true;
+    }
+    ncap = reg->cap + (size_t)REGISTRY_GROW;
+    // NOLINTNEXTLINE(bugprone-sizeof-expression) rows holds pointers; each element is one
+    rows = (GenRow **)malloc(ncap * sizeof(*rows));
+    if (rows == NULL) {
+        return false;
+    }
+    if (reg->n > 0U) {
+        // NOLINTNEXTLINE(bugprone-sizeof-expression) rows holds pointers; each element is one
+        memcpy((void *)rows, (const void *)reg->rows, reg->n * sizeof(*rows));
+    }
+    free((void *)reg->rows);
+    reg->rows = rows;
+    reg->cap = ncap;
+    return true;
+}
+
+/* cppcheck-suppress staticFunction ; public API (settings.h); used by tests */
+bool settings_registry_add(SettingsRegistry *reg, const SettingSpec *row)
+{
+    GenRow *gen = NULL;
+
+    if (reg == NULL || row == NULL || row->key == NULL || registry_find(reg, row->key) != NULL ||
+        !registry_grow(reg)) {
+        return false;
+    }
+    gen = row_copy(row);
+    if (gen == NULL) {
+        return false;
+    }
+    reg->rows[reg->n++] = gen;
+    return true;
+}
+
+/* cppcheck-suppress staticFunction ; public API (settings.h); used by tests */
+size_t settings_registry_remove_prefix(SettingsRegistry *reg, const char *prefix)
+{
+    size_t keep = 0;
+    size_t i = 0;
+    size_t gone = 0;
+    size_t len = strlen(prefix);
+
+    if (reg == NULL) {
+        return 0U;
+    }
+    for (i = 0; i < reg->n; i++) {
+        if (strncmp(reg->rows[i]->spec.key, prefix, len) == 0) {
+            free(reg->rows[i]);
+            gone++;
+        } else {
+            reg->rows[keep++] = reg->rows[i];
+        }
+    }
+    reg->n = keep;
+    return gone;
 }
 
 /* cppcheck-suppress staticFunction ; public API (settings.h); used by tests */
@@ -224,22 +421,50 @@ bool setting_quoted_plain(const char *text, char *inner, size_t inner_cap)
 }
 
 /* cppcheck-suppress staticFunction ; public API (settings.h); used by tests */
-const SettingSpec *setting_by_key(const char *typed)
+const SettingSpec *setting_by_key(const SettingsRegistry *reg, const char *typed)
 {
     char folded[SETTING_KEY_MAX + 1];
-    size_t n = 0;
-    size_t i = 0;
-    const SettingSpec *specs = setting_registry(&n);
 
     if (!setting_key_fold(typed, folded, sizeof(folded))) {
         return NULL;
     }
-    for (i = 0; i < n; i++) {
-        if (strcmp(specs[i].key, folded) == 0) {
-            return &specs[i];
-        }
+    return registry_find(reg, folded);
+}
+
+/* cppcheck-suppress staticFunction ; public API (settings.h); used by the settings commands */
+bool setting_plugin_name(const char *typed, char *name, size_t cap)
+{
+    char folded[SETTING_KEY_MAX + 1];
+    const char *dot = NULL;
+    size_t n = 0;
+
+    if (!setting_key_fold(typed, folded, sizeof(folded)) ||
+        strncmp(folded, "plugin.", (size_t)PLUGIN_DOT_LEN) != 0) {
+        return false;
     }
-    return NULL;
+    dot = strchr(folded + PLUGIN_DOT_LEN, '.');
+    if (dot == NULL) {
+        return false;
+    }
+    n = (size_t)(dot - (folded + PLUGIN_DOT_LEN));
+    if (n == 0U || n >= cap) {
+        return false;
+    }
+    memcpy(name, folded + PLUGIN_DOT_LEN, n);
+    name[n] = '\0';
+    return true;
+}
+
+/* cppcheck-suppress staticFunction ; public API (settings.h); used by the settings commands */
+bool setting_plugin_missing(const SettingsRegistry *reg, const char *typed, char *name, size_t cap)
+{
+    char enabled[SETTING_KEY_MAX + 1];
+
+    if (!setting_plugin_name(typed, name, cap)) {
+        return false;
+    }
+    (void)snprintf(enabled, sizeof(enabled), "plugin.%s.enabled", name);
+    return registry_find(reg, enabled) == NULL;
 }
 
 static const char k_prefix_default[] = "[\"project:\",\"status:\"]";
@@ -277,21 +502,31 @@ const char *setting_status_code(SettingStatus st)
     }
 }
 
+/* A JSON string of src. Only a quote and a backslash need an escape: every caller passes text
+   with no control byte (a canonical duration or size, a helper id, a setting_text_ok text). */
 static bool json_quote(const char *src, char *out, size_t cap)
 {
-    size_t n = 0;
+    size_t at = 0;
+    size_t i = 0;
 
-    if (src == NULL || out == NULL) {
+    if (src == NULL || out == NULL || cap == 0U) {
         return false;
     }
-    n = strlen(src);
-    if (cap < n + 3U) {
-        return false;
+    out[at++] = '"';
+    for (i = 0; src[i] != '\0'; i++) {
+        size_t need = (src[i] == '"' || src[i] == '\\') ? 2U : 1U;
+
+        if (at + need + 2U > cap) {
+            out[0] = '\0';
+            return false;
+        }
+        if (need == 2U) {
+            out[at++] = '\\';
+        }
+        out[at++] = src[i];
     }
-    out[0] = '"';
-    memcpy(out + 1, src, n);
-    out[n + 1U] = '"';
-    out[n + 2U] = '\0';
+    out[at++] = '"';
+    out[at] = '\0';
     return true;
 }
 
@@ -339,13 +574,15 @@ static void default_json(const SettingSpec *spec, char *out, size_t cap, bool *h
     if (spec->default_text == NULL) {
         return;
     }
-    if (spec->type == SETTING_DURATION) {
+    if (spec->type == SETTING_DURATION || spec->type == SETTING_SIZE ||
+        spec->type == SETTING_ENUM || spec->type == SETTING_TEXT || spec->type == SETTING_STRING) {
         if (!json_quote(spec->default_text, out, cap)) {
             return;
         }
         *has = true;
         return;
     }
+    /* An integer, a boolean, and the compact array of a text list are stored as they read. */
     if (cap <= strlen(spec->default_text)) {
         return;
     }
@@ -362,6 +599,19 @@ bool setting_default_json(const SettingSpec *spec, char *out, size_t cap)
     return has;
 }
 
+/* A row with no range has both bounds 0 and has_range false. A range of exactly 0 to 0 is a
+   range, and has_range says so. */
+static bool in_range(const SettingSpec *spec, long long value)
+{
+    if (!spec->has_range && spec->min_value == 0 && spec->max_value == 0) {
+        return true;
+    }
+    if (value < spec->min_value || value > spec->max_value) {
+        return false;
+    }
+    return true;
+}
+
 static SettingStatus canon_integer(const SettingSpec *spec, const char *src, char *json,
                                    size_t json_cap)
 {
@@ -370,7 +620,7 @@ static SettingStatus canon_integer(const SettingSpec *spec, const char *src, cha
     if (!setting_integer(src, &v)) {
         return SETTING_ERR_INVALID;
     }
-    if (v < spec->min_value || v > spec->max_value) {
+    if (!in_range(spec, v)) {
         return SETTING_ERR_RANGE;
     }
     /* The caller passes SETTING_VALUE_CAP. A decimal long long fits in it. */
@@ -387,7 +637,7 @@ static SettingStatus canon_duration(const SettingSpec *spec, const char *src, ch
     if (!norm_duration_canonical(src, &ms, canon, sizeof(canon))) {
         return SETTING_ERR_INVALID;
     }
-    if (ms < spec->min_value || ms > spec->max_value) {
+    if (!in_range(spec, ms)) {
         return SETTING_ERR_RANGE;
     }
     /* Canonical durations fit in SETTING_VALUE_CAP, which the caller passes. */
@@ -402,6 +652,226 @@ static SettingStatus canon_helper(const char *src, char *json, size_t json_cap)
     }
     /* A helper id is at most 40 characters. SETTING_VALUE_CAP holds the quotes. */
     (void)json_quote(src, json, json_cap);
+    return SETTING_OK;
+}
+
+/* ---- plugin setting types (decision:2026-11-16-plan30-plugin-string-values) ---- */
+
+/* cppcheck-suppress staticFunction ; public API (settings.h); used by tests */
+bool setting_text_ok(const char *text)
+{
+    size_t len = 0;
+    size_t at = 0;
+
+    if (text == NULL) {
+        return false;
+    }
+    len = strlen(text);
+    if (len > (size_t)SETTING_TEXT_MAX) {
+        return false;
+    }
+    while (at < len) {
+        uint32_t cp = 0;
+        size_t used = 0;
+
+        if (unicode_decode(text + at, len - at, &cp, &used) != UNICODE_OK ||
+            cp < (uint32_t)ASCII_UNIT || cp == (uint32_t)ASCII_DEL) {
+            return false;
+        }
+        at += used;
+    }
+    return true;
+}
+
+/* One quoted string of a stored value, from s[*pos]. Only \" and \\ are escapes. *pos ends past
+   the closing quote. dst holds the decoded text, which must pass setting_text_ok. */
+static bool take_string(const char *s, size_t *pos, char *dst, size_t dst_cap)
+{
+    size_t at = *pos;
+    size_t used = 0;
+
+    if (s[at] != '"') {
+        return false;
+    }
+    at++;
+    while (s[at] != '"') {
+        char c = s[at];
+
+        if (c == '\0') {
+            return false;
+        }
+        if (c == '\\') {
+            at++;
+            c = s[at];
+            if (c != '"' && c != '\\') {
+                return false;
+            }
+        }
+        if (used + 1U >= dst_cap) {
+            return false;
+        }
+        dst[used++] = c;
+        at++;
+    }
+    dst[used] = '\0';
+    *pos = at + 1U;
+    return setting_text_ok(dst);
+}
+
+/* cppcheck-suppress staticFunction ; public API (settings.h); used by tests */
+bool setting_text_unquote(const char *json, char *out, size_t out_cap)
+{
+    size_t pos = 0;
+
+    if (out != NULL && out_cap > 0U) {
+        out[0] = '\0';
+    }
+    if (json == NULL || out == NULL || out_cap == 0U || !take_string(json, &pos, out, out_cap) ||
+        json[pos] != '\0') {
+        if (out != NULL && out_cap > 0U) {
+            out[0] = '\0';
+        }
+        return false;
+    }
+    return true;
+}
+
+/* cppcheck-suppress staticFunction ; public API (settings.h); used by tests */
+bool setting_text_list_join(const char *json, char *out, size_t out_cap)
+{
+    char item[SETTING_TEXT_MAX + 1];
+    size_t pos = 1;
+    size_t used = 0;
+    bool first = true;
+
+    if (out == NULL || out_cap == 0U) {
+        return false;
+    }
+    out[0] = '\0';
+    if (json == NULL || json[0] != '[') {
+        return false;
+    }
+    while (json[pos] != ']') {
+        size_t n = 0;
+        size_t gap = 0;
+
+        if (!first) {
+            if (json[pos] != ',') {
+                out[0] = '\0';
+                return false;
+            }
+            pos++;
+            gap = 1U;
+        }
+        if (!take_string(json, &pos, item, sizeof(item))) {
+            out[0] = '\0';
+            return false;
+        }
+        n = strlen(item);
+        if (used + n + gap >= out_cap) {
+            out[0] = '\0';
+            return false;
+        }
+        if (!first) {
+            out[used++] = ' ';
+        }
+        memcpy(out + used, item, n + 1U);
+        used += n;
+        first = false;
+    }
+    if (json[pos + 1U] != '\0') {
+        out[0] = '\0';
+        return false;
+    }
+    return true;
+}
+
+static SettingStatus canon_boolean(const char *src, char *json, size_t json_cap)
+{
+    if (strcmp(src, "true") != 0 && strcmp(src, "false") != 0) {
+        return SETTING_ERR_INVALID;
+    }
+    (void)snprintf(json, json_cap, "%s", src);
+    return SETTING_OK;
+}
+
+static SettingStatus canon_enum(const SettingSpec *spec, const char *src, char *json,
+                                size_t json_cap)
+{
+    size_t i = 0;
+
+    for (i = 0; spec->values != NULL && i < spec->nvalues; i++) {
+        if (strcmp(spec->values[i], src) == 0) {
+            if (!json_quote(src, json, json_cap)) {
+                return SETTING_ERR_QUOTA;
+            }
+            return SETTING_OK;
+        }
+    }
+    return SETTING_ERR_INVALID;
+}
+
+static SettingStatus canon_size(const SettingSpec *spec, const char *src, char *json,
+                                size_t json_cap)
+{
+    char canon[NORM_MEASURE_CANON_CAP];
+    long long bytes = 0;
+
+    if (!norm_size_canonical(src, &bytes, canon, sizeof(canon))) {
+        return SETTING_ERR_INVALID;
+    }
+    if (!in_range(spec, bytes)) {
+        return SETTING_ERR_RANGE;
+    }
+    (void)json_quote(canon, json, json_cap);
+    return SETTING_OK;
+}
+
+static SettingStatus canon_text(const char *src, char *json, size_t json_cap)
+{
+    if (!setting_text_ok(src)) {
+        return SETTING_ERR_INVALID;
+    }
+    /* A text of at most SETTING_TEXT_MAX bytes quotes to under SETTING_VALUE_CAP. */
+    (void)json_quote(src, json, json_cap);
+    return SETTING_OK;
+}
+
+static SettingStatus canon_text_list(const SettingSpec *spec, const char *const *items,
+                                     size_t nitems, char *json, size_t json_cap)
+{
+    char one[(2U * (size_t)SETTING_TEXT_MAX) + 3U];
+    size_t pos = 0;
+    size_t i = 0;
+
+    if (spec->max_items > 0 && nitems > (size_t)spec->max_items) {
+        return SETTING_ERR_RANGE;
+    }
+    if (nitems > 0U && items == NULL) {
+        return SETTING_ERR_INVALID;
+    }
+    json[pos++] = '[';
+    for (i = 0; i < nitems; i++) {
+        size_t n = 0;
+
+        if (items[i] == NULL || !setting_text_ok(items[i])) {
+            json[0] = '\0';
+            return SETTING_ERR_INVALID;
+        }
+        (void)json_quote(items[i], one, sizeof(one));
+        n = strlen(one);
+        if (pos + n + 2U > (size_t)SETTING_VALUE_MAX || pos + n + 2U >= json_cap) {
+            json[0] = '\0';
+            return SETTING_ERR_QUOTA;
+        }
+        if (i > 0U) {
+            json[pos++] = ',';
+        }
+        memcpy(json + pos, one, n);
+        pos += n;
+    }
+    json[pos++] = ']';
+    json[pos] = '\0';
     return SETTING_OK;
 }
 
@@ -523,8 +993,9 @@ static SettingStatus canon_prefixes(const char *const *items, size_t nitems, cha
     return SETTING_OK;
 }
 
-static SettingStatus setting_canon(const SettingSpec *spec, const char *const *items, size_t nitems,
-                                   char *json, size_t json_cap, char *err, size_t errlen)
+/* cppcheck-suppress staticFunction ; public API (settings.h); used by tests */
+SettingStatus setting_canon_value(const SettingSpec *spec, const char *const *items, size_t nitems,
+                                  char *json, size_t json_cap, char *err, size_t errlen)
 {
     if (json != NULL && json_cap > 0U) {
         json[0] = '\0';
@@ -539,16 +1010,31 @@ static SettingStatus setting_canon(const SettingSpec *spec, const char *const *i
         }
         return canon_prefixes(items, nitems, json, json_cap, err, errlen);
     }
+    if (spec->type == SETTING_TEXT_LIST) {
+        return canon_text_list(spec, items, nitems, json, json_cap);
+    }
     if (items == NULL || nitems != 1U || items[0] == NULL) {
         return SETTING_ERR_INVALID;
     }
-    if (spec->type == SETTING_INTEGER) {
+    switch (spec->type) {
+    case SETTING_INTEGER:
         return canon_integer(spec, items[0], json, json_cap);
-    }
-    if (spec->type == SETTING_DURATION) {
+    case SETTING_DURATION:
         return canon_duration(spec, items[0], json, json_cap);
+    case SETTING_BOOLEAN:
+        return canon_boolean(items[0], json, json_cap);
+    case SETTING_ENUM:
+        return canon_enum(spec, items[0], json, json_cap);
+    case SETTING_SIZE:
+        return canon_size(spec, items[0], json, json_cap);
+    case SETTING_TEXT:
+        return canon_text(items[0], json, json_cap);
+    case SETTING_STRING:
+    case SETTING_STRING_LIST:
+    case SETTING_TEXT_LIST:
+    default:
+        return canon_helper(items[0], json, json_cap);
     }
-    return canon_helper(items[0], json, json_cap);
 }
 
 static SettingStatus setting_layer_of(const SettingSpec *spec, SettingLayer requested,
@@ -572,9 +1058,9 @@ static SettingStatus setting_layer_of(const SettingSpec *spec, SettingLayer requ
 }
 
 /* cppcheck-suppress staticFunction ; public API (settings.h); used by tests */
-SettingStatus setting_choose_layer(const char *key, SettingLayer requested,
-                                   const SettingSpec **spec_out, SettingLayer *layer_out, char *err,
-                                   size_t errlen)
+SettingStatus setting_choose_layer(const SettingsRegistry *reg, const char *key,
+                                   SettingLayer requested, const SettingSpec **spec_out,
+                                   SettingLayer *layer_out, char *err, size_t errlen)
 {
     const SettingSpec *spec = NULL;
 
@@ -584,7 +1070,7 @@ SettingStatus setting_choose_layer(const char *key, SettingLayer requested,
     if (spec_out != NULL) {
         *spec_out = NULL;
     }
-    spec = setting_by_key(key);
+    spec = setting_by_key(reg, key);
     if (spec == NULL) {
         return SETTING_ERR_UNKNOWN;
     }
@@ -600,23 +1086,24 @@ SettingStatus setting_choose_layer(const char *key, SettingLayer requested,
 
 /* cppcheck-suppress staticFunction ; public API (settings.h); used by tests */
 /* nitems (size_t) sits beside SettingLayer. That order is the public signature. */
-// NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
-SettingStatus setting_prepare(const char *key, const char *const *items, size_t nitems,
-                              SettingLayer requested, char *json, size_t json_cap,
-                              const SettingSpec **spec_out, SettingLayer *layer_out, char *err,
-                              size_t errlen)
+// NOLINTBEGIN(bugprone-easily-swappable-parameters)
+SettingStatus setting_prepare(const SettingsRegistry *reg, const char *key,
+                              const char *const *items, size_t nitems, SettingLayer requested,
+                              char *json, size_t json_cap, const SettingSpec **spec_out,
+                              SettingLayer *layer_out, char *err, size_t errlen)
+// NOLINTEND(bugprone-easily-swappable-parameters)
 {
     const SettingSpec *spec = NULL;
     SettingStatus st = SETTING_OK;
 
-    st = setting_choose_layer(key, requested, &spec, layer_out, err, errlen);
+    st = setting_choose_layer(reg, key, requested, &spec, layer_out, err, errlen);
     if (st != SETTING_OK) {
         return st;
     }
     if (spec_out != NULL) {
         *spec_out = spec;
     }
-    return setting_canon(spec, items, nitems, json, json_cap, err, errlen);
+    return setting_canon_value(spec, items, nitems, json, json_cap, err, errlen);
 }
 
 static bool copy_cap(const char *src, char *out, size_t cap)
@@ -738,10 +1225,9 @@ static int edit_distance(const char *a, const char *b)
 }
 
 /* cppcheck-suppress staticFunction ; public API (settings.h); used by tests */
-const char *setting_suggestion(const char *typed)
+const char *setting_suggestion(const SettingsRegistry *reg, const char *typed)
 {
-    size_t nregs = 0;
-    const SettingSpec *specs = setting_registry(&nregs);
+    size_t nregs = settings_registry_count(reg);
     const char *hit = NULL;
     size_t hits = 0;
     size_t i = 0;
@@ -752,11 +1238,11 @@ const char *setting_suggestion(const char *typed)
         return NULL;
     }
     for (i = 0; i < nregs; i++) {
-        const char *dot = strrchr(specs[i].key, '.');
+        const char *dot = strrchr(settings_registry_at(reg, i)->key, '.');
 
         if (dot != NULL && strcmp(dot + 1, typed) == 0) {
             hits++;
-            hit = specs[i].key;
+            hit = settings_registry_at(reg, i)->key;
         }
     }
     if (hits == 1U) {
@@ -768,16 +1254,16 @@ const char *setting_suggestion(const char *typed)
     hits = 0U;
     hit = NULL;
     for (i = 0; i < nregs; i++) {
-        size_t nb = strlen(specs[i].key);
+        size_t nb = strlen(settings_registry_at(reg, i)->key);
         int dist = 0;
 
         if (!comparable || n > nb + 2U || nb > n + 2U) {
             continue;
         }
-        dist = edit_distance(typed, specs[i].key);
+        dist = edit_distance(typed, settings_registry_at(reg, i)->key);
         if (dist <= 2) {
             hits++;
-            hit = specs[i].key;
+            hit = settings_registry_at(reg, i)->key;
         }
     }
     if (hits == 1U) {

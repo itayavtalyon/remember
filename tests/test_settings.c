@@ -249,8 +249,7 @@ TEST(key_grammar_folds_hyphens_and_requires_a_full_key)
 
 TEST(registry_lists_the_six_keys)
 {
-    size_t n = 0;
-    const SettingSpec *all = setting_registry(&n);
+    const SettingsRegistry *reg = settings_registry_builtin();
     const SettingSpec *pool = NULL;
     const SettingSpec *prefixes = NULL;
     const SettingSpec *budget = NULL;
@@ -258,9 +257,8 @@ TEST(registry_lists_the_six_keys)
     const SettingSpec *idle = NULL;
     const SettingSpec *helper = NULL;
 
-    ASSERT_EQ_INT((long long)n, 6);
-    ASSERT_TRUE(setting_registry(NULL) == all);
-    pool = setting_by_key("remember.search.candidate-pool");
+    ASSERT_EQ_INT((long long)settings_registry_count(reg), 6);
+    pool = setting_by_key(settings_registry_builtin(), "remember.search.candidate-pool");
     ASSERT_TRUE(pool != NULL);
     if (pool == NULL) {
         return;
@@ -271,7 +269,7 @@ TEST(registry_lists_the_six_keys)
     ASSERT_EQ_INT(pool->max_value, 2000);
     ASSERT_TRUE(pool->allow_brain);
     ASSERT_TRUE(pool->allow_user);
-    prefixes = setting_by_key("remember.buckets.prefixes");
+    prefixes = setting_by_key(settings_registry_builtin(), "remember.buckets.prefixes");
     ASSERT_TRUE(prefixes != NULL);
     if (prefixes == NULL) {
         return;
@@ -280,7 +278,7 @@ TEST(registry_lists_the_six_keys)
     ASSERT_TRUE(prefixes->default_text == NULL);
     ASSERT_TRUE(prefixes->allow_brain);
     ASSERT_FALSE(prefixes->allow_user);
-    budget = setting_by_key("remember.plugins.chain_budget");
+    budget = setting_by_key(settings_registry_builtin(), "remember.plugins.chain_budget");
     ASSERT_TRUE(budget != NULL);
     if (budget == NULL) {
         return;
@@ -291,7 +289,7 @@ TEST(registry_lists_the_six_keys)
     ASSERT_EQ_INT(budget->max_value, 30000);
     ASSERT_FALSE(budget->allow_brain);
     ASSERT_TRUE(budget->allow_user);
-    max_results = setting_by_key("remember.search.max_results");
+    max_results = setting_by_key(settings_registry_builtin(), "remember.search.max_results");
     ASSERT_TRUE(max_results != NULL);
     if (max_results == NULL) {
         return;
@@ -302,7 +300,7 @@ TEST(registry_lists_the_six_keys)
     ASSERT_EQ_INT(max_results->max_value, 1000);
     ASSERT_TRUE(max_results->allow_brain);
     ASSERT_TRUE(max_results->allow_user);
-    idle = setting_by_key("remember.plugins.idle_timeout");
+    idle = setting_by_key(settings_registry_builtin(), "remember.plugins.idle_timeout");
     ASSERT_TRUE(idle != NULL);
     if (idle == NULL) {
         return;
@@ -313,7 +311,7 @@ TEST(registry_lists_the_six_keys)
     ASSERT_EQ_INT(idle->max_value, 86400000);
     ASSERT_FALSE(idle->allow_brain);
     ASSERT_TRUE(idle->allow_user);
-    helper = setting_by_key("remember.sync.credential_helper");
+    helper = setting_by_key(settings_registry_builtin(), "remember.sync.credential_helper");
     ASSERT_TRUE(helper != NULL);
     if (helper == NULL) {
         return;
@@ -324,8 +322,8 @@ TEST(registry_lists_the_six_keys)
     ASSERT_EQ_INT(helper->max_value, 0);
     ASSERT_FALSE(helper->allow_brain);
     ASSERT_TRUE(helper->allow_user);
-    ASSERT_TRUE(setting_by_key("remember.search.other") == NULL);
-    ASSERT_TRUE(setting_by_key("candidate_pool") == NULL);
+    ASSERT_TRUE(setting_by_key(settings_registry_builtin(), "remember.search.other") == NULL);
+    ASSERT_TRUE(setting_by_key(settings_registry_builtin(), "candidate_pool") == NULL);
 }
 
 /* Single-threaded tests. getenv and setenv have no portable reentrant form. */
@@ -838,8 +836,10 @@ static void assert_notes(const char *path)
 /* A row in a layer the key does not allow is no value, on each side. */
 TEST(pick_ignores_a_layer_the_key_does_not_allow)
 {
-    const SettingSpec *budget = setting_by_key("remember.plugins.chain_budget");
-    const SettingSpec *prefixes = setting_by_key("remember.buckets.prefixes");
+    const SettingSpec *budget =
+        setting_by_key(settings_registry_builtin(), "remember.plugins.chain_budget");
+    const SettingSpec *prefixes =
+        setting_by_key(settings_registry_builtin(), "remember.buckets.prefixes");
     char out[SETTING_VALUE_CAP];
 
     ASSERT_TRUE(budget != NULL && prefixes != NULL);
@@ -1680,17 +1680,17 @@ TEST(programmer_errors_and_a_failed_prepare)
         store_setting_read(NULL, NULL, "remember.search.max_results", NULL, &got, err, sizeof(err));
     ASSERT_EQ_INT(st, SETTING_ERR_STORE);
     ASSERT_STREQ(err, "internal error");
-    st = setting_choose_layer("remember.search.max_results", SETTING_LAYER_USER, NULL, NULL, err,
-                              sizeof(err));
+    st = setting_choose_layer(settings_registry_builtin(), "remember.search.max_results",
+                              SETTING_LAYER_USER, NULL, NULL, err, sizeof(err));
     ASSERT_EQ_INT(st, SETTING_ERR_STORE);
     ASSERT_STREQ(err, "internal error");
-    st = setting_prepare("remember.search.max_results", &three, 1U, SETTING_LAYER_USER, tiny,
-                         sizeof(tiny), NULL, &layer, err, sizeof(err));
+    st = setting_prepare(settings_registry_builtin(), "remember.search.max_results", &three, 1U,
+                         SETTING_LAYER_USER, tiny, sizeof(tiny), NULL, &layer, err, sizeof(err));
     ASSERT_EQ_INT(st, SETTING_ERR_STORE);
     ASSERT_STREQ(err, "internal error");
     one_byte[0] = 'x';
-    st = setting_choose_layer("remember.plugins.idle_timeout", SETTING_LAYER_BRAIN, NULL, &layer,
-                              one_byte, sizeof(one_byte));
+    st = setting_choose_layer(settings_registry_builtin(), "remember.plugins.idle_timeout",
+                              SETTING_LAYER_BRAIN, NULL, &layer, one_byte, sizeof(one_byte));
     ASSERT_EQ_INT(st, SETTING_ERR_SCOPE);
     ASSERT_EQ_INT(one_byte[0], '\0');
 
@@ -3996,17 +3996,20 @@ TEST(suggestion_names_one_key_or_nothing)
 
     memset(long_key, 'a', sizeof(long_key) - 1U);
     long_key[sizeof(long_key) - 1U] = '\0';
-    ASSERT_TRUE(setting_suggestion(NULL) == NULL);
-    ASSERT_TRUE(setting_suggestion("") == NULL);
-    ASSERT_STREQ(setting_suggestion("candidate_pool"), "remember.search.candidate_pool");
-    ASSERT_STREQ(setting_suggestion("remember:search/candidate_pool"),
+    ASSERT_TRUE(setting_suggestion(settings_registry_builtin(), NULL) == NULL);
+    ASSERT_TRUE(setting_suggestion(settings_registry_builtin(), "") == NULL);
+    ASSERT_STREQ(setting_suggestion(settings_registry_builtin(), "candidate_pool"),
                  "remember.search.candidate_pool");
-    ASSERT_TRUE(setting_suggestion("remember:search:candidate_poo") == NULL);
-    ASSERT_STREQ(setting_suggestion("remember.search.candidate_poo"),
+    ASSERT_STREQ(setting_suggestion(settings_registry_builtin(), "remember:search/candidate_pool"),
                  "remember.search.candidate_pool");
-    ASSERT_TRUE(setting_suggestion("remember.search.hybrid") == NULL);
-    ASSERT_TRUE(setting_suggestion("remember.search.max_resXXXX") == NULL);
-    ASSERT_TRUE(setting_suggestion(long_key) == NULL);
+    ASSERT_TRUE(setting_suggestion(settings_registry_builtin(), "remember:search:candidate_poo") ==
+                NULL);
+    ASSERT_STREQ(setting_suggestion(settings_registry_builtin(), "remember.search.candidate_poo"),
+                 "remember.search.candidate_pool");
+    ASSERT_TRUE(setting_suggestion(settings_registry_builtin(), "remember.search.hybrid") == NULL);
+    ASSERT_TRUE(setting_suggestion(settings_registry_builtin(), "remember.search.max_resXXXX") ==
+                NULL);
+    ASSERT_TRUE(setting_suggestion(settings_registry_builtin(), long_key) == NULL);
 }
 
 TEST(get_default_only_names_every_allowed_layer)
@@ -8934,7 +8937,8 @@ TEST(list_prints_c13_lines_and_filters)
     got = get_at(brain, userdb, all, 2U);
     ASSERT_EQ_INT(got.exit_code, 0);
     ASSERT_STREQ(got.err, "");
-    ASSERT_STREQ(got.out, "remember.buckets.prefixes = project: status:   (default)\n"
+    ASSERT_STREQ(got.out, "plugin.hybrid.enabled = false   (default)\n"
+                          "remember.buckets.prefixes = project: status:   (default)\n"
                           "remember.plugins.chain_budget = 2s   (user)\n"
                           "remember.plugins.idle_timeout = 10m   (default)\n"
                           "remember.search.candidate_pool = 400   (brain)\n"
@@ -8954,7 +8958,8 @@ TEST(list_prints_c13_lines_and_filters)
                           "remember.search.candidate_pool = 400   (brain)\n");
     cmd_result_free(&got);
     got = get_at(brain, userdb, user, 4U);
-    ASSERT_STREQ(got.out, "remember.plugins.chain_budget = 2s   (user)\n"
+    ASSERT_STREQ(got.out, "plugin.hybrid.enabled = (unset)   (user)\n"
+                          "remember.plugins.chain_budget = 2s   (user)\n"
                           "remember.plugins.idle_timeout = (unset)   (user)\n"
                           "remember.search.candidate_pool = (unset)   (user)\n"
                           "remember.search.max_results = (unset)   (user)\n"
@@ -9046,16 +9051,16 @@ TEST(list_pages_with_a_cursor_that_keeps_its_filters)
     store_close(store);
     got = get_at(brain, userdb, first, 4U);
     ASSERT_EQ_INT(got.exit_code, 0);
-    ASSERT_STREQ(got.out, "remember.buckets.prefixes = project: status:   (default)\n"
-                          "remember.plugins.chain_budget = 1.5s   (default)\n");
+    ASSERT_STREQ(got.out, "plugin.hybrid.enabled = false   (default)\n"
+                          "remember.buckets.prefixes = project: status:   (default)\n");
     ASSERT_TRUE(strncmp(got.err, "remember: more settings. Run 'remember settings list --cursor ",
                         62) == 0);
     ASSERT_STR_CONTAINS(got.err, "' to see them.\n");
     take_cursor(got.err, "--cursor ", cursor, sizeof(cursor));
     cmd_result_free(&got);
     got = get_at(brain, userdb, next, 6U);
-    ASSERT_STREQ(got.out, "remember.plugins.idle_timeout = 10m   (default)\n"
-                          "remember.search.candidate_pool = 200   (default)\n");
+    ASSERT_STREQ(got.out, "remember.plugins.chain_budget = 1.5s   (default)\n"
+                          "remember.plugins.idle_timeout = 10m   (default)\n");
     ASSERT_STR_CONTAINS(got.err, "remember: more settings.");
     cmd_result_free(&got);
     got = get_at(brain, userdb, other, 6U);
@@ -9077,11 +9082,11 @@ TEST(list_pages_with_a_cursor_that_keeps_its_filters)
         cmd_result_free(&got);
     }
     got = get_at(brain, userdb, user_first, 6U);
-    ASSERT_STREQ(got.out, "remember.plugins.chain_budget = (unset)   (user)\n");
+    ASSERT_STREQ(got.out, "plugin.hybrid.enabled = (unset)   (user)\n");
     take_cursor(got.err, "--cursor ", scoped, sizeof(scoped));
     cmd_result_free(&got);
     got = get_at(brain, userdb, user_next, 6U);
-    ASSERT_STREQ(got.out, "remember.plugins.idle_timeout = (unset)   (user)\n");
+    ASSERT_STREQ(got.out, "remember.plugins.chain_budget = (unset)   (user)\n");
     cmd_result_free(&got);
     got = get_at(brain, userdb, zero, 4U);
     ASSERT_EQ_INT(got.exit_code, 1);
@@ -9424,6 +9429,11 @@ TEST(explain_prints_the_block_and_the_entry)
     cmd_result_free(&got);
     got = get_at(brain, userdb, all, 3U);
     ASSERT_TRUE(snprintf(want, sizeof(want), "%s",
+                         "plugin.hybrid.enabled  (boolean, default false)\n"
+                         "  Whether \"hybrid\" is turned on.\n"
+                         "  Can be set for: user, brain\n"
+                         "  Now: false, from default\n"
+                         "\n"
                          "remember.buckets.prefixes  (string_list, default project: status:)\n"
                          "  The tag prefixes that group memories into buckets.\n"
                          "  Can be set for: brain\n"
@@ -9777,9 +9787,9 @@ TEST(views_survive_memory_store_and_write_faults)
         write_sweep(reset, 6, false);
     }
     for (r = 0; r < (size_t)RUNS; r++) {
-        /* explain and set allocate only in the store: sweep_store reaches those. */
+        /* Every run builds the registry (plan 30), so every run allocates. */
         SweepSaw saw = sweep_alloc(runs[r], argcs[r]);
-        ASSERT_EQ_INT(saw.oom, (r <= 5U || r == 8U) ? 1 : 0);
+        ASSERT_EQ_INT(saw.oom, 1);
         if (r == 8U) {
             continue; /* --limit 0 never reaches the store */
         }
@@ -9789,6 +9799,664 @@ TEST(views_survive_memory_store_and_write_faults)
         write_sweep(runs[r], argcs[r], strcmp(runs[r][3], "--json") == 0);
     }
     env_release(&hold);
+    harness_remove_tree(tmpl);
+}
+
+/* ---- plugin keys (plan 30) ------------------------------------------------------------- */
+
+#define P30_ACTIONS                                                                                \
+    "\"actions\":[{\"name\":\"go\",\"events\":[\"memory.created\"],\"run\":{\"command\":[\"/bin/"  \
+    "echo\"]}}]"
+
+/* Installs plugin name in <data dir>/plugins/<name> with the given "settings" array text, or none.
+ */
+static void given_installed_plugin(const char *name, const char *settings)
+{
+    char path[REMEMBER_PATH_MAX];
+    char doc[4096];
+    const char *xdg = getenv("XDG_DATA_HOME"); // NOLINT(concurrency-mt-unsafe)
+
+    ASSERT_TRUE(xdg != NULL);
+    ASSERT_TRUE(snprintf(path, sizeof(path), "%s/remember/plugins/%s/plugin.json", xdg, name) > 0);
+    ASSERT_TRUE(snprintf(doc, sizeof(doc),
+                         "{\"format\":\"remember-plugin\",\"version\":1,\"name\":\"%s\","
+                         "\"plugin_version\":\"1.0.0\",\"protocol\":1," P30_ACTIONS "%s%s%s}",
+                         name, settings != NULL ? ",\"settings\":[" : "",
+                         settings != NULL ? settings : "", settings != NULL ? "]" : "") > 0);
+    harness_write_file(path, doc);
+}
+
+static void given_uninstalled_plugin(const char *name)
+{
+    char path[REMEMBER_PATH_MAX];
+    const char *xdg = getenv("XDG_DATA_HOME"); // NOLINT(concurrency-mt-unsafe)
+
+    ASSERT_TRUE(xdg != NULL);
+    ASSERT_TRUE(snprintf(path, sizeof(path), "%s/remember/plugins/%s", xdg, name) > 0);
+    harness_remove_tree(path);
+}
+
+/* One brain and user.db, then the command. The caller frees the result. */
+static CmdResult run_plugin_cmd(const char *const *args, size_t n)
+{
+    static char tmpl[] = "/tmp/remember-p30-XXXXXX";
+    char brain[REMEMBER_PATH_MAX];
+    char userdb[REMEMBER_PATH_MAX];
+    Store *store = NULL;
+    CmdResult got = {.out = NULL, .err = NULL, .exit_code = -1};
+
+    (void)snprintf(tmpl, sizeof(tmpl), "%s", "/tmp/remember-p30-XXXXXX");
+    store = open_pair(tmpl, brain, sizeof(brain), userdb, sizeof(userdb));
+    if (store == NULL) {
+        return got;
+    }
+    store_close(store);
+    got = get_at(brain, userdb, args, n);
+    harness_remove_tree(tmpl);
+    return got;
+}
+
+static const char k_p30_all_types[] =
+    "{\"key\":\"cap\",\"description\":\"A cap.\",\"type\":\"size\",\"default\":\"1MiB\","
+    "\"range\":{\"min\":\"1KiB\",\"max\":\"4MiB\"}},"
+    "{\"key\":\"mode\",\"description\":\"A mode.\",\"type\":\"enum\",\"default\":\"fast\","
+    "\"range\":{\"values\":[\"fast\",\"slow\",\"auto\"]}},"
+    "{\"key\":\"label\",\"description\":\"A label.\",\"type\":\"string\",\"default\":\"hi\"},"
+    "{\"key\":\"words\",\"description\":\"Words.\",\"type\":\"string_list\",\"default\":[\"a\"],"
+    "\"range\":{\"max_items\":2},\"scope\":\"both\"}";
+
+TEST(an_installed_plugin_enabled_key_reads_false_and_a_set_reads_back_true)
+{
+    const char *get[] = {"settings", "get", "plugin.p.enabled", "--value"};
+    const char *set[] = {"settings", "set", "plugin.p.enabled", "true"};
+    CmdResult got;
+
+    given_installed_plugin("p", NULL);
+    got = run_plugin_cmd(get, 4U);
+    ASSERT_EQ_INT(got.exit_code, 0);
+    ASSERT_STREQ(got.out, "false\n");
+    cmd_result_free(&got);
+    got = run_plugin_cmd(set, 4U);
+    ASSERT_EQ_INT(got.exit_code, 0);
+    cmd_result_free(&got);
+}
+
+TEST(set_then_get_json_prints_the_boolean_as_a_json_literal)
+{
+    static char tmpl[] = "/tmp/remember-p30b-XXXXXX";
+    char brain[REMEMBER_PATH_MAX];
+    char userdb[REMEMBER_PATH_MAX];
+    const char *set[] = {"settings", "set", "plugin.p.enabled", "true"};
+    const char *get[] = {"--json", "settings", "get", "plugin.p.enabled"};
+    Store *store = NULL;
+    CmdResult got;
+
+    given_installed_plugin("p", NULL);
+    (void)snprintf(tmpl, sizeof(tmpl), "%s", "/tmp/remember-p30b-XXXXXX");
+    store = open_pair(tmpl, brain, sizeof(brain), userdb, sizeof(userdb));
+    if (store == NULL) {
+        return;
+    }
+    store_close(store);
+    got = get_at(brain, userdb, set, 4U);
+    ASSERT_EQ_INT(got.exit_code, 0);
+    cmd_result_free(&got);
+    got = get_at(brain, userdb, get, 4U);
+    ASSERT_EQ_INT(got.exit_code, 0);
+    ASSERT_STR_CONTAINS(got.out, "\"key\":\"plugin.p.enabled\",\"type\":\"boolean\","
+                                 "\"value\":true,\"from\":\"user\",\"changed\":true");
+    cmd_result_free(&got);
+    harness_remove_tree(tmpl);
+}
+
+TEST(a_bad_boolean_is_setting_invalid_value_with_the_c05_boolean_line)
+{
+    const char *set[] = {"settings", "set", "plugin.p.enabled", "yes"};
+    const char *json[] = {"--json", "settings", "set", "plugin.p.enabled", "yes"};
+    CmdResult got;
+
+    given_installed_plugin("p", NULL);
+    got = run_plugin_cmd(set, 4U);
+    ASSERT_EQ_INT(got.exit_code, 1);
+    ASSERT_STREQ(got.err, "remember: \"plugin.p.enabled\" must be true or false; you gave "
+                          "\"yes\". Use true or false.\n");
+    cmd_result_free(&got);
+    got = run_plugin_cmd(json, 5U);
+    ASSERT_EQ_INT(got.exit_code, 1);
+    ASSERT_STR_CONTAINS(got.out, "\"code\":\"setting_invalid_value\"");
+    ASSERT_STR_CONTAINS(got.out, "\"detail\":{\"key\":\"plugin.p.enabled\",\"value\":\"yes\","
+                                 "\"type\":\"boolean\"}");
+    cmd_result_free(&got);
+}
+
+TEST(uninstalled_plugin_key_is_unknown_with_the_not_installed_hint)
+{
+    const char *get[] = {"settings", "get", "plugin.gone.enabled"};
+    const char *set[] = {"settings", "set", "plugin.gone.enabled", "true"};
+    const char *hyphen[] = {"settings", "get", "plugin.go-ne.enabled"};
+    const char *explain[] = {"settings", "explain", "plugin.gone.enabled"};
+    const char *json[] = {"--json", "settings", "get", "plugin.gone.enabled"};
+    CmdResult got;
+
+    got = run_plugin_cmd(get, 3U);
+    ASSERT_EQ_INT(got.exit_code, 2);
+    ASSERT_STREQ(got.err, "remember: unknown setting \"plugin.gone.enabled\": plugin gone isn't "
+                          "installed. Run 'remember settings list' to see all settings.\n");
+    cmd_result_free(&got);
+    got = run_plugin_cmd(set, 4U);
+    ASSERT_EQ_INT(got.exit_code, 2);
+    ASSERT_STR_CONTAINS(got.err, "plugin gone isn't installed.");
+    cmd_result_free(&got);
+    got = run_plugin_cmd(hyphen, 3U);
+    ASSERT_STR_CONTAINS(got.err, "unknown setting \"plugin.go-ne.enabled\": plugin go_ne isn't "
+                                 "installed.");
+    cmd_result_free(&got);
+    got = run_plugin_cmd(explain, 3U);
+    ASSERT_EQ_INT(got.exit_code, 2);
+    ASSERT_STR_CONTAINS(got.err, "plugin gone isn't installed.");
+    cmd_result_free(&got);
+    got = run_plugin_cmd(json, 4U);
+    ASSERT_STR_CONTAINS(got.out, "\"code\":\"setting_unknown\"");
+    ASSERT_STR_CONTAINS(got.out, "\"message\":\"unknown setting \\\"plugin.gone.enabled\\\": "
+                                 "plugin gone isn't installed.\"");
+    cmd_result_free(&got);
+}
+
+TEST(an_unknown_key_of_an_installed_plugin_is_the_plain_unknown_line)
+{
+    const char *get[] = {"settings", "get", "plugin.p.nothing"};
+    CmdResult got;
+
+    given_installed_plugin("p", NULL);
+    got = run_plugin_cmd(get, 3U);
+    ASSERT_EQ_INT(got.exit_code, 2);
+    ASSERT_STR_NOT_CONTAINS(got.err, "isn't installed");
+    ASSERT_STR_CONTAINS(got.err, "unknown setting \"plugin.p.nothing\".");
+    cmd_result_free(&got);
+}
+
+TEST(a_stored_row_of_a_plugin_that_is_gone_is_unknown_not_listed_and_still_has_history)
+{
+    static char tmpl[] = "/tmp/remember-p30c-XXXXXX";
+    char brain[REMEMBER_PATH_MAX];
+    char userdb[REMEMBER_PATH_MAX];
+    const char *set[] = {"settings", "set", "plugin.p.enabled", "true"};
+    const char *get[] = {"settings", "get", "plugin.p.enabled"};
+    const char *list[] = {"settings", "list"};
+    const char *history[] = {"settings", "history", "plugin.p.enabled"};
+    Store *store = NULL;
+    CmdResult got;
+
+    given_installed_plugin("p", NULL);
+    (void)snprintf(tmpl, sizeof(tmpl), "%s", "/tmp/remember-p30c-XXXXXX");
+    store = open_pair(tmpl, brain, sizeof(brain), userdb, sizeof(userdb));
+    if (store == NULL) {
+        return;
+    }
+    store_close(store);
+    got = get_at(brain, userdb, set, 4U);
+    ASSERT_EQ_INT(got.exit_code, 0);
+    cmd_result_free(&got);
+    given_uninstalled_plugin("p");
+    got = get_at(brain, userdb, get, 3U);
+    ASSERT_EQ_INT(got.exit_code, 2);
+    ASSERT_STR_CONTAINS(got.err, "plugin p isn't installed.");
+    cmd_result_free(&got);
+    got = get_at(brain, userdb, list, 2U);
+    ASSERT_STR_NOT_CONTAINS(got.out, "plugin.p.");
+    cmd_result_free(&got);
+    got = get_at(brain, userdb, history, 3U);
+    ASSERT_EQ_INT(got.exit_code, 0);
+    ASSERT_STR_CONTAINS(got.out, "plugin.p.enabled");
+    cmd_result_free(&got);
+    harness_remove_tree(tmpl);
+}
+
+TEST(explain_names_the_source_plugin_and_both_scopes)
+{
+    const char *explain[] = {"settings", "explain", "plugin.p.enabled"};
+    const char *json[] = {"--json", "settings", "explain", "plugin.p.enabled"};
+    CmdResult got;
+
+    given_installed_plugin("p", NULL);
+    got = run_plugin_cmd(explain, 3U);
+    ASSERT_EQ_INT(got.exit_code, 0);
+    ASSERT_STREQ(got.out, "plugin.p.enabled  (boolean, default false)\n"
+                          "  Whether \"p\" is turned on.\n"
+                          "  Can be set for: user, brain\n"
+                          "  Now: false, from default\n");
+    cmd_result_free(&got);
+    got = run_plugin_cmd(json, 4U);
+    ASSERT_STR_CONTAINS(got.out, "\"default\":false");
+    ASSERT_STR_CONTAINS(got.out, "\"description\":\"Whether \\\"p\\\" is turned on.\","
+                                 "\"scopes\":[\"user\",\"brain\"]");
+    cmd_result_free(&got);
+}
+
+TEST(list_shows_plugin_keys_in_byte_order_before_the_remember_keys)
+{
+    const char *list[] = {"settings", "list", "plugin."};
+    CmdResult got;
+
+    given_installed_plugin("zed", NULL);
+    given_installed_plugin("alpha", NULL);
+    got = run_plugin_cmd(list, 3U);
+    ASSERT_EQ_INT(got.exit_code, 0);
+    ASSERT_STREQ(got.out, "plugin.alpha.enabled = false   (default)\n"
+                          "plugin.hybrid.enabled = false   (default)\n"
+                          "plugin.zed.enabled = false   (default)\n");
+    cmd_result_free(&got);
+}
+
+TEST(list_pages_through_more_plugin_keys_than_the_old_fixed_cap)
+{
+    const char *list[] = {"--json", "settings", "list", "--limit", "1000"};
+    char name[16];
+    CmdResult got;
+    int i = 0;
+
+    for (i = 0; i < 80; i++) {
+        (void)snprintf(name, sizeof(name), "p%02d", i);
+        given_installed_plugin(name, NULL);
+    }
+    got = run_plugin_cmd(list, 5U);
+    ASSERT_EQ_INT(got.exit_code, 0);
+    ASSERT_STR_CONTAINS(got.out, "\"count\":87,");
+    ASSERT_STR_CONTAINS(got.out, "\"key\":\"plugin.p79.enabled\"");
+    cmd_result_free(&got);
+}
+
+TEST(explain_all_lists_the_plugin_keys_too)
+{
+    const char *explain[] = {"--json", "settings", "explain", "--all"};
+    CmdResult got;
+
+    given_installed_plugin("p", k_p30_all_types);
+    got = run_plugin_cmd(explain, 4U);
+    ASSERT_EQ_INT(got.exit_code, 0);
+    ASSERT_STR_CONTAINS(got.out, "\"count\":12,");
+    ASSERT_STR_CONTAINS(got.out, "\"key\":\"plugin.p.cap\"");
+    cmd_result_free(&got);
+}
+
+TEST(a_size_setting_prints_its_value_with_a_bytes_twin_and_explains_its_range)
+{
+    const char *get[] = {"--json", "settings", "get", "plugin.p.cap"};
+    const char *explain[] = {"--json", "settings", "explain", "plugin.p.cap"};
+    const char *plain[] = {"settings", "explain", "plugin.p.cap"};
+    CmdResult got;
+
+    given_installed_plugin("p", k_p30_all_types);
+    got = run_plugin_cmd(get, 4U);
+    ASSERT_EQ_INT(got.exit_code, 0);
+    ASSERT_STR_CONTAINS(got.out, "\"type\":\"size\",\"value\":\"1MiB\",\"value_bytes\":1048576,");
+    cmd_result_free(&got);
+    got = run_plugin_cmd(explain, 4U);
+    ASSERT_STR_CONTAINS(got.out, "\"default\":\"1MiB\",\"default_bytes\":1048576,"
+                                 "\"min\":\"1KiB\",\"min_bytes\":1024,\"max\":\"4MiB\","
+                                 "\"max_bytes\":4194304,");
+    cmd_result_free(&got);
+    got = run_plugin_cmd(plain, 3U);
+    ASSERT_STR_CONTAINS(got.out, "plugin.p.cap  (size, 1KiB\xE2\x80\x93"
+                                 "4MiB, default 1MiB)\n");
+    cmd_result_free(&got);
+}
+
+TEST(size_errors_use_the_c05_lines_and_a_range_line_in_the_largest_exact_unit)
+{
+    const char *no_unit[] = {"settings", "set", "plugin.p.cap", "4MB"};
+    const char *sub_byte[] = {"settings", "set", "plugin.p.cap", "1.5B"};
+    const char *high[] = {"settings", "set", "plugin.p.cap", "5MiB"};
+    CmdResult got;
+
+    given_installed_plugin("p", k_p30_all_types);
+    got = run_plugin_cmd(no_unit, 4U);
+    ASSERT_EQ_INT(got.exit_code, 1);
+    ASSERT_STREQ(got.err, "remember: \"plugin.p.cap\" needs a size with a unit; you gave \"4MB\". "
+                          "Use a number with B, KiB, or MiB, like 512KiB or 2MiB.\n");
+    cmd_result_free(&got);
+    got = run_plugin_cmd(sub_byte, 4U);
+    ASSERT_STREQ(got.err, "remember: \"plugin.p.cap\" can't be \"1.5B\": a size must be a whole "
+                          "number of bytes. Use a whole number of bytes, like 512B or 2KiB.\n");
+    cmd_result_free(&got);
+    got = run_plugin_cmd(high, 4U);
+    ASSERT_EQ_INT(got.exit_code, 1);
+    ASSERT_STREQ(got.err, "remember: \"plugin.p.cap\" can be 1KiB to 4MiB; you gave 5MiB. Set a "
+                          "value from 1KiB to 4MiB.\n");
+    cmd_result_free(&got);
+}
+
+TEST(a_size_range_with_only_a_max_starts_at_zero_bytes_and_a_whole_kib_prints_in_kib)
+{
+    const char *high[] = {"settings", "set", "plugin.p.small", "2KiB"};
+    CmdResult got;
+
+    given_installed_plugin("p", "{\"key\":\"small\",\"description\":\"S.\",\"type\":\"size\","
+                                "\"default\":\"1B\",\"range\":{\"max\":\"1536B\"}}");
+    got = run_plugin_cmd(high, 4U);
+    ASSERT_EQ_INT(got.exit_code, 1);
+    ASSERT_STREQ(got.err, "remember: \"plugin.p.small\" can be 0B to 1536B; you gave 2KiB. Set a "
+                          "value from 0B to 1536B.\n");
+    cmd_result_free(&got);
+}
+
+TEST(an_enum_setting_error_lists_the_values)
+{
+    const char *bad[] = {"settings", "set", "plugin.p.mode", "turbo"};
+    CmdResult got;
+
+    given_installed_plugin("p", k_p30_all_types);
+    got = run_plugin_cmd(bad, 4U);
+    ASSERT_EQ_INT(got.exit_code, 1);
+    ASSERT_STREQ(got.err, "remember: \"plugin.p.mode\" must be one of fast, slow, or auto; you "
+                          "gave \"turbo\". Use fast, slow, or auto.\n");
+    cmd_result_free(&got);
+}
+
+TEST(an_enum_of_one_or_two_values_reads_without_a_list_comma)
+{
+    const char *bad[] = {"settings", "set", "plugin.p.one", "x"};
+    const char *bad2[] = {"settings", "set", "plugin.p.two", "x"};
+    CmdResult got;
+
+    given_installed_plugin(
+        "p", "{\"key\":\"one\",\"description\":\"O.\",\"type\":\"enum\",\"default\":\"a\","
+             "\"range\":{\"values\":[\"a\"]}},"
+             "{\"key\":\"two\",\"description\":\"T.\",\"type\":\"enum\",\"default\":\"a\","
+             "\"range\":{\"values\":[\"a\",\"b\"]}}");
+    got = run_plugin_cmd(bad, 4U);
+    ASSERT_STREQ(got.err, "remember: \"plugin.p.one\" must be a; you gave \"x\". Use a.\n");
+    cmd_result_free(&got);
+    got = run_plugin_cmd(bad2, 4U);
+    ASSERT_STREQ(got.err, "remember: \"plugin.p.two\" must be one of a or b; you gave \"x\". "
+                          "Use a or b.\n");
+    cmd_result_free(&got);
+}
+
+TEST(a_text_setting_error_does_not_echo_the_value)
+{
+    const char *bad[] = {"settings", "set", "plugin.p.label", "bad\x1b[31mtext"};
+    CmdResult got;
+
+    given_installed_plugin("p", k_p30_all_types);
+    got = run_plugin_cmd(bad, 4U);
+    ASSERT_EQ_INT(got.exit_code, 1);
+    ASSERT_STREQ(got.err, "remember: \"plugin.p.label\" needs text with no control characters, "
+                          "up to 511 bytes. Use plain text of 511 bytes or fewer.\n");
+    cmd_result_free(&got);
+}
+
+TEST(a_string_with_a_quote_and_a_backslash_round_trips_through_set_and_get)
+{
+    static char tmpl[] = "/tmp/remember-p30d-XXXXXX";
+    char brain[REMEMBER_PATH_MAX];
+    char userdb[REMEMBER_PATH_MAX];
+    const char *set[] = {"settings", "set", "plugin.p.label", "say \"x\" a\\b"};
+    const char *get[] = {"settings", "get", "plugin.p.label", "--value"};
+    const char *json[] = {"--json", "settings", "get", "plugin.p.label"};
+    Store *store = NULL;
+    CmdResult got;
+
+    given_installed_plugin("p", k_p30_all_types);
+    (void)snprintf(tmpl, sizeof(tmpl), "%s", "/tmp/remember-p30d-XXXXXX");
+    store = open_pair(tmpl, brain, sizeof(brain), userdb, sizeof(userdb));
+    if (store == NULL) {
+        return;
+    }
+    store_close(store);
+    got = get_at(brain, userdb, set, 4U);
+    ASSERT_EQ_INT(got.exit_code, 0);
+    cmd_result_free(&got);
+    got = get_at(brain, userdb, get, 4U);
+    ASSERT_EQ_INT(got.exit_code, 0);
+    ASSERT_STREQ(got.out, "say \"x\" a\\b\n");
+    cmd_result_free(&got);
+    got = get_at(brain, userdb, json, 4U);
+    ASSERT_STR_CONTAINS(got.out, "\"value\":\"say \\\"x\\\" a\\\\b\"");
+    cmd_result_free(&got);
+    harness_remove_tree(tmpl);
+}
+
+TEST(a_string_list_setting_sets_prints_and_refuses_too_many_items)
+{
+    static char tmpl[] = "/tmp/remember-p30e-XXXXXX";
+    char brain[REMEMBER_PATH_MAX];
+    char userdb[REMEMBER_PATH_MAX];
+    const char *set[] = {"settings", "set", "plugin.p.words", "one", "two"};
+    const char *three[] = {"settings", "set", "plugin.p.words", "1", "2", "3"};
+    const char *get[] = {"settings", "get", "plugin.p.words", "--value"};
+    const char *clear[] = {"settings", "set", "plugin.p.words", "--clear"};
+    const char *empty[] = {"settings", "get", "plugin.p.words", "--value"};
+    Store *store = NULL;
+    CmdResult got;
+
+    given_installed_plugin("p", k_p30_all_types);
+    (void)snprintf(tmpl, sizeof(tmpl), "%s", "/tmp/remember-p30e-XXXXXX");
+    store = open_pair(tmpl, brain, sizeof(brain), userdb, sizeof(userdb));
+    if (store == NULL) {
+        return;
+    }
+    store_close(store);
+    got = get_at(brain, userdb, set, 5U);
+    ASSERT_EQ_INT(got.exit_code, 0);
+    cmd_result_free(&got);
+    got = get_at(brain, userdb, get, 4U);
+    ASSERT_STREQ(got.out, "one two\n");
+    cmd_result_free(&got);
+    got = get_at(brain, userdb, three, 6U);
+    ASSERT_EQ_INT(got.exit_code, 1);
+    ASSERT_STREQ(got.err, "remember: \"plugin.p.words\" can hold 1 to 2 items; you gave 3. Give 2 "
+                          "items or fewer.\n");
+    cmd_result_free(&got);
+    got = get_at(brain, userdb, clear, 4U);
+    ASSERT_EQ_INT(got.exit_code, 0);
+    cmd_result_free(&got);
+    got = get_at(brain, userdb, empty, 4U);
+    ASSERT_STREQ(got.out, "(empty)\n");
+    cmd_result_free(&got);
+    harness_remove_tree(tmpl);
+}
+
+TEST(a_string_list_item_that_is_not_text_is_the_text_line)
+{
+    const char *bad[] = {"settings", "set", "plugin.p.words", "ok", "bad\nitem"};
+    CmdResult got;
+
+    given_installed_plugin("p", k_p30_all_types);
+    got = run_plugin_cmd(bad, 5U);
+    ASSERT_EQ_INT(got.exit_code, 1);
+    ASSERT_STREQ(got.err, "remember: \"plugin.p.words\" needs text with no control characters, "
+                          "up to 511 bytes. Use plain text of 511 bytes or fewer.\n");
+    cmd_result_free(&got);
+}
+
+/* The error lines build their text with fmt_alloc: each one under every allocation fault. */
+TEST(plugin_value_errors_and_the_import_skip_survive_memory_faults)
+{
+    char tmpl[] = "/tmp/remember-p30m-XXXXXX";
+    char brain[REMEMBER_PATH_MAX];
+    char userdb[REMEMBER_PATH_MAX];
+    char file[REMEMBER_PATH_MAX];
+    const char *runs[5][9] = {
+        {"remember", "--db", brain, "settings", "set", "plugin.p.mode", "turbo"},
+        {"remember", "--db", brain, "settings", "set", "plugin.p.label", "bad\nline"},
+        {"remember", "--db", brain, "settings", "set", "plugin.p.words", "1", "2", "3"},
+        {"remember", "--db", brain, "settings", "set", "plugin.p.words", "ok", "bad\nitem"},
+        {"remember", "--db", brain, "settings", "import", file, "--scope", "user"},
+    };
+    const int argcs[5] = {7, 7, 9, 8, 8};
+    Store *store = NULL;
+    EnvHold hold;
+    size_t r = 0;
+
+    given_installed_plugin("p", k_p30_all_types);
+    store = open_pair(tmpl, brain, sizeof(brain), userdb, sizeof(userdb));
+    if (store == NULL) {
+        return;
+    }
+    store_close(store);
+    ASSERT_TRUE(snprintf(file, sizeof(file), "%s/in.json", tmpl) > 0);
+    harness_write_file(
+        file, "{\"format\":\"remember-settings-export\",\"version\":1,\"exported_at\":"
+              "\"2026-01-01T00:00:00.000Z\",\"settings\":["
+              "{\"key\":\"plugin.gone.enabled\",\"scope\":\"user\",\"value\":true,\"updated_by\":"
+              "{\"kind\":\"human\",\"id\":null},\"updated_at\":\"2026-01-01T00:00:00.000Z\","
+              "\"device_id\":\"\",\"version_vector\":{},\"deleted_at\":null}]}");
+    env_hold(&hold);
+    ASSERT_EQ_INT(setenv("REMEMBER_USER_DB", userdb, 1), 0);
+    for (r = 0; r < 5U; r++) {
+        enum { FAULTS = 300 };
+        int saw_oom = 0;
+        int n = 0;
+
+        for (n = 0; n < FAULTS; n++) {
+            Captured got;
+
+            test_alloc_fail_after(n);
+            got = capture_run(runs[r], argcs[r]);
+            test_alloc_fail_after(-1);
+            if (got.err != NULL && strstr(got.err, "out of memory") != NULL) {
+                saw_oom = 1;
+            }
+            ASSERT_TRUE(got.err == NULL || strstr(got.err, "internal error") == NULL);
+            free(got.out);
+            free(got.err);
+        }
+        ASSERT_EQ_INT(saw_oom, 1);
+    }
+    env_release(&hold);
+    harness_remove_tree(tmpl);
+}
+
+TEST(a_plugins_folder_that_cannot_be_read_fails_every_command_with_one_line)
+{
+    char path[REMEMBER_PATH_MAX];
+    const char *xdg = getenv("XDG_DATA_HOME"); // NOLINT(concurrency-mt-unsafe)
+    CmdResult got;
+
+    given_installed_plugin("p", NULL);
+    ASSERT_TRUE(snprintf(path, sizeof(path), "%s/remember/plugins", xdg) > 0);
+    ASSERT_EQ_INT(chmod(path, 0), 0);
+    if (access(path, R_OK) != 0) {
+        const char *get[] = {"settings", "get", "remember.search.max_results"};
+
+        got = run_plugin_cmd(get, 3U);
+        ASSERT_EQ_INT(got.exit_code, 1);
+        ASSERT_STREQ(got.err, "remember: cannot read the plugins folder\n");
+        cmd_result_free(&got);
+    }
+    (void)chmod(path, 0700);
+}
+
+TEST(export_writes_a_plugin_boolean_as_json_true_and_a_size_with_value_bytes)
+{
+    static char tmpl[] = "/tmp/remember-p30f-XXXXXX";
+    char brain[REMEMBER_PATH_MAX];
+    char userdb[REMEMBER_PATH_MAX];
+    const char *set1[] = {"settings", "set", "plugin.p.enabled", "true"};
+    const char *set2[] = {"settings", "set", "plugin.p.cap", "2MiB"};
+    const char *dump[] = {"settings", "export"};
+    Store *store = NULL;
+    CmdResult got;
+
+    given_installed_plugin("p", k_p30_all_types);
+    (void)snprintf(tmpl, sizeof(tmpl), "%s", "/tmp/remember-p30f-XXXXXX");
+    store = open_pair(tmpl, brain, sizeof(brain), userdb, sizeof(userdb));
+    if (store == NULL) {
+        return;
+    }
+    store_close(store);
+    got = get_at(brain, userdb, set1, 4U);
+    cmd_result_free(&got);
+    got = get_at(brain, userdb, set2, 4U);
+    cmd_result_free(&got);
+    got = get_at(brain, userdb, dump, 2U);
+    ASSERT_EQ_INT(got.exit_code, 0);
+    ASSERT_STR_CONTAINS(got.out, "{\"key\":\"plugin.p.cap\",\"scope\":\"user\",\"value\":\"2MiB\","
+                                 "\"value_bytes\":2097152,");
+    ASSERT_STR_CONTAINS(got.out, "{\"key\":\"plugin.p.enabled\",\"scope\":\"user\","
+                                 "\"value\":true,");
+    cmd_result_free(&got);
+    harness_remove_tree(tmpl);
+}
+
+TEST(import_reads_a_plugin_boolean_row_and_skips_a_plugin_that_is_not_installed)
+{
+    static char tmpl[] = "/tmp/remember-p30g-XXXXXX";
+    char brain[REMEMBER_PATH_MAX];
+    char userdb[REMEMBER_PATH_MAX];
+    char file[REMEMBER_PATH_MAX];
+    const char *imp[] = {"settings", "import", file, "--scope", "user"};
+    const char *get[] = {"settings", "get", "plugin.p.enabled", "--value"};
+    Store *store = NULL;
+    CmdResult got;
+
+    given_installed_plugin("p", NULL);
+    (void)snprintf(tmpl, sizeof(tmpl), "%s", "/tmp/remember-p30g-XXXXXX");
+    store = open_pair(tmpl, brain, sizeof(brain), userdb, sizeof(userdb));
+    if (store == NULL) {
+        return;
+    }
+    store_close(store);
+    ASSERT_TRUE(snprintf(file, sizeof(file), "%s/in.json", tmpl) > 0);
+    harness_write_file(
+        file, "{\"format\":\"remember-settings-export\",\"version\":1,\"exported_at\":"
+              "\"2026-01-01T00:00:00.000Z\",\"settings\":["
+              "{\"key\":\"plugin.p.enabled\",\"scope\":\"user\",\"value\":true,\"updated_by\":"
+              "{\"kind\":\"human\",\"id\":null},\"updated_at\":\"2026-01-01T00:00:00.000Z\","
+              "\"device_id\":\"\",\"version_vector\":{},\"deleted_at\":null},"
+              "{\"key\":\"plugin.gone.enabled\",\"scope\":\"user\",\"value\":true,\"updated_by\":"
+              "{\"kind\":\"human\",\"id\":null},\"updated_at\":\"2026-01-01T00:00:00.000Z\","
+              "\"device_id\":\"\",\"version_vector\":{},\"deleted_at\":null},"
+              "{\"key\":\"plugin.p.enabled\",\"scope\":\"brain\",\"value\":\"yes\",\"updated_by\":"
+              "{\"kind\":\"human\",\"id\":null},\"updated_at\":\"2026-01-01T00:00:00.000Z\","
+              "\"device_id\":\"\",\"version_vector\":{},\"deleted_at\":null}]}");
+    got = get_at(brain, userdb, imp, 5U);
+    ASSERT_EQ_INT(got.exit_code, 0);
+    ASSERT_STR_CONTAINS(got.err, "remember: warning: skipped \"plugin.gone.enabled\": plugin gone "
+                                 "isn't installed.\n");
+    cmd_result_free(&got);
+    got = get_at(brain, userdb, get, 4U);
+    ASSERT_STREQ(got.out, "true\n");
+    cmd_result_free(&got);
+    harness_remove_tree(tmpl);
+}
+
+TEST(import_json_rows_name_the_reason_plugin_not_installed)
+{
+    static char tmpl[] = "/tmp/remember-p30h-XXXXXX";
+    char brain[REMEMBER_PATH_MAX];
+    char userdb[REMEMBER_PATH_MAX];
+    char file[REMEMBER_PATH_MAX];
+    const char *imp[] = {"--json", "settings", "import", file, "--scope", "user"};
+    Store *store = NULL;
+    CmdResult got;
+
+    (void)snprintf(tmpl, sizeof(tmpl), "%s", "/tmp/remember-p30h-XXXXXX");
+    store = open_pair(tmpl, brain, sizeof(brain), userdb, sizeof(userdb));
+    if (store == NULL) {
+        return;
+    }
+    store_close(store);
+    ASSERT_TRUE(snprintf(file, sizeof(file), "%s/in.json", tmpl) > 0);
+    harness_write_file(
+        file, "{\"format\":\"remember-settings-export\",\"version\":1,\"exported_at\":"
+              "\"2026-01-01T00:00:00.000Z\",\"settings\":["
+              "{\"key\":\"plugin.gone.enabled\",\"scope\":\"user\",\"value\":true,\"updated_by\":"
+              "{\"kind\":\"human\",\"id\":null},\"updated_at\":\"2026-01-01T00:00:00.000Z\","
+              "\"device_id\":\"\",\"version_vector\":{},\"deleted_at\":null},"
+              "{\"key\":\"zz.other.key\",\"scope\":\"user\",\"value\":1,\"updated_by\":"
+              "{\"kind\":\"human\",\"id\":null},\"updated_at\":\"2026-01-01T00:00:00.000Z\","
+              "\"device_id\":\"\",\"version_vector\":{},\"deleted_at\":null}]}");
+    got = get_at(brain, userdb, imp, 6U);
+    ASSERT_EQ_INT(got.exit_code, 0);
+    ASSERT_STR_CONTAINS(got.out, "\"key\":\"plugin.gone.enabled\",\"scope\":\"user\","
+                                 "\"result\":\"skipped\",\"action\":\"none\","
+                                 "\"reason\":\"plugin_not_installed\"");
+    ASSERT_STR_CONTAINS(got.out, "\"key\":\"zz.other.key\",\"scope\":\"user\","
+                                 "\"result\":\"skipped\",\"action\":\"none\","
+                                 "\"reason\":\"unknown_key\"");
+    cmd_result_free(&got);
     harness_remove_tree(tmpl);
 }
 
@@ -9949,5 +10617,29 @@ void register_settings_tests(void)
     RUN_TEST(explain_prints_the_block_and_the_entry);
     RUN_TEST(view_cursor_edges_and_home);
     RUN_TEST(views_survive_memory_store_and_write_faults);
+    RUN_TEST(an_installed_plugin_enabled_key_reads_false_and_a_set_reads_back_true);
+    RUN_TEST(set_then_get_json_prints_the_boolean_as_a_json_literal);
+    RUN_TEST(a_bad_boolean_is_setting_invalid_value_with_the_c05_boolean_line);
+    RUN_TEST(uninstalled_plugin_key_is_unknown_with_the_not_installed_hint);
+    RUN_TEST(an_unknown_key_of_an_installed_plugin_is_the_plain_unknown_line);
+    RUN_TEST(a_stored_row_of_a_plugin_that_is_gone_is_unknown_not_listed_and_still_has_history);
+    RUN_TEST(explain_names_the_source_plugin_and_both_scopes);
+    RUN_TEST(list_shows_plugin_keys_in_byte_order_before_the_remember_keys);
+    RUN_TEST(list_pages_through_more_plugin_keys_than_the_old_fixed_cap);
+    RUN_TEST(explain_all_lists_the_plugin_keys_too);
+    RUN_TEST(a_size_setting_prints_its_value_with_a_bytes_twin_and_explains_its_range);
+    RUN_TEST(size_errors_use_the_c05_lines_and_a_range_line_in_the_largest_exact_unit);
+    RUN_TEST(a_size_range_with_only_a_max_starts_at_zero_bytes_and_a_whole_kib_prints_in_kib);
+    RUN_TEST(an_enum_setting_error_lists_the_values);
+    RUN_TEST(an_enum_of_one_or_two_values_reads_without_a_list_comma);
+    RUN_TEST(a_text_setting_error_does_not_echo_the_value);
+    RUN_TEST(a_string_with_a_quote_and_a_backslash_round_trips_through_set_and_get);
+    RUN_TEST(a_string_list_setting_sets_prints_and_refuses_too_many_items);
+    RUN_TEST(a_string_list_item_that_is_not_text_is_the_text_line);
+    RUN_TEST(plugin_value_errors_and_the_import_skip_survive_memory_faults);
+    RUN_TEST(a_plugins_folder_that_cannot_be_read_fails_every_command_with_one_line);
+    RUN_TEST(export_writes_a_plugin_boolean_as_json_true_and_a_size_with_value_bytes);
+    RUN_TEST(import_reads_a_plugin_boolean_row_and_skips_a_plugin_that_is_not_installed);
+    RUN_TEST(import_json_rows_name_the_reason_plugin_not_installed);
 }
 // NOLINTEND(cppcoreguidelines-avoid-magic-numbers,readability-magic-numbers)

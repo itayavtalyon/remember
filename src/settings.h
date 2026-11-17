@@ -4,21 +4,31 @@
 #include <stdbool.h>
 #include <stddef.h>
 
-/* A full key is at most 96 characters (007). */
-enum { SETTING_KEY_MAX = 96 };
+/* A full key is at most 96 characters (007). A row holds at most 8 enum values: the manifest's
+   own limit (decision:2026-11-13-plugin-manifest-limits L10). */
+enum { SETTING_KEY_MAX = 96, SETTING_ENUM_VALUES_MAX = 8 };
 
+/* STRING and STRING_LIST are the two compiled-in types with their own grammar (a helper id, a
+   bucket prefix). The last five are the types of a plugin manifest's settings
+   (decision:2026-11-11-plugin-enabled-bool, specs/SETTINGS.md "Plugin keys"). */
 typedef enum SettingType {
     SETTING_INTEGER = 0,
     SETTING_DURATION,
     SETTING_STRING,
-    SETTING_STRING_LIST
+    SETTING_STRING_LIST,
+    SETTING_BOOLEAN,  /* stored as the JSON literal true or false */
+    SETTING_ENUM,     /* one of values, stored as a JSON string */
+    SETTING_SIZE,     /* stored as a JSON string, "4MiB" */
+    SETTING_TEXT,     /* a plugin string, stored as a JSON string */
+    SETTING_TEXT_LIST /* a plugin string_list, stored as a JSON array of strings */
 } SettingType;
 
-/* One compiled-in registry row. min/max are milliseconds for a duration
-   and the integer itself for an integer. Both 0 means the type has no
-   numeric range. default_text is NULL when the row has no single stored
-   default. Prefixes still resolve to project: and status: with no row
-   written until set. */
+/* One registry row. min/max are milliseconds for a duration, bytes for a size and the integer
+   itself for an integer. Both 0 and has_range false means the type has no numeric range. For a
+   SETTING_ENUM, values holds the nvalues allowed strings. max_items 0 means a list has no item
+   cap. default_text is NULL when the row has no single stored default, the plain text of the
+   default for a scalar, and the compact JSON array for a SETTING_TEXT_LIST. Prefixes still
+   resolve to project: and status: with no row written until set. */
 typedef struct SettingSpec {
     const char *key;
     const char *default_text;
@@ -26,13 +36,44 @@ typedef struct SettingSpec {
     const char *description;
     /* One related key or NULL (decision:plan20-empty-list-related). */
     const char *related;
+    const char *const *values;
     long long min_value;
     long long max_value;
+    size_t nvalues;
+    int max_items;
     SettingType type;
+    bool has_range;
     bool allow_brain;
     bool allow_user;
-    char pad_[2]; /* explicit tail padding (kept -Wpadded-clean) */
+    /* NOLINTNEXTLINE(readability-magic-numbers,cppcoreguidelines-avoid-magic-numbers) */
+    char pad_[5]; /* explicit tail padding (kept -Wpadded-clean) */
 } SettingSpec;
+
+/* The compiled-in rows plus the rows generated for installed plugins. Every function that
+   looks a key up takes one (decision:2026-11-16-plan30-registry-explicit); there is no
+   process-wide registry. A SettingSpec pointer from a registry is good until that registry
+   is changed or freed. */
+typedef struct SettingsRegistry SettingsRegistry;
+
+/* The compiled-in rows only. Never changed, never freed. */
+const SettingsRegistry *settings_registry_builtin(void);
+
+/* A registry that starts as the compiled-in rows. The caller frees it. NULL when memory runs
+   out. */
+SettingsRegistry *settings_registry_new(void);
+void settings_registry_free(SettingsRegistry *reg);
+
+/* Compiled rows first, then generated rows in the order they were added. */
+size_t settings_registry_count(const SettingsRegistry *reg);
+const SettingSpec *settings_registry_at(const SettingsRegistry *reg, size_t i);
+
+/* Copy row (every string in it too) onto the end. False when memory runs out, when a row with
+   that key is already there, or when it has more than SETTING_ENUM_VALUES_MAX values. */
+bool settings_registry_add(SettingsRegistry *reg, const SettingSpec *row);
+
+/* Remove every generated row whose key starts with prefix. A compiled row stays. Returns how
+   many went. */
+size_t settings_registry_remove_prefix(SettingsRegistry *reg, const char *prefix);
 
 /* Rewrite '-' to '_' and require namespace '.' segment { '.' segment }
    with 1 to 3 segments after the namespace. Each segment is
@@ -42,10 +83,21 @@ bool setting_key_fold(const char *src, char *out, size_t out_cap);
 /* ^(0|[1-9][0-9]*)$ and the value fits in long long. */
 bool setting_integer(const char *src, long long *out);
 
-const SettingSpec *setting_registry(size_t *count);
-
 /* Fold, then the registry row. NULL when the text is not one of those keys. */
-const SettingSpec *setting_by_key(const char *typed);
+const SettingSpec *setting_by_key(const SettingsRegistry *reg, const char *typed);
+
+/* Plugin text (SETTING_TEXT, each SETTING_TEXT_LIST item, an enum value): valid UTF-8, no
+   control byte or DEL, at most SETTING_TEXT_MAX bytes
+   (decision:2026-11-16-plan30-plugin-string-values). */
+bool setting_text_ok(const char *text);
+
+/* The text of a stored JSON string written by this program: only the escapes \" and \\ and
+   the setting_text_ok rule on the result. False clears out when out_cap > 0. */
+bool setting_text_unquote(const char *json, char *out, size_t out_cap);
+
+/* A stored JSON array of those strings, [] or ["a","b"], as its items joined by one space.
+   False when the text is anything else; out is then empty. An empty array gives "". */
+bool setting_text_list_join(const char *json, char *out, size_t out_cap);
 
 /* Inner bytes of a JSON string with no escapes and no controls.
    False when text is not that shape or does not fit inner_cap. */
@@ -54,6 +106,7 @@ bool setting_quoted_plain(const char *text, char *inner, size_t inner_cap);
 /* Stored JSON is at most 16 KiB (007 ST-4.4). CAP is that plus a NUL and
    enough bytes for the buffer to stay 4-byte aligned. */
 enum {
+    SETTING_TEXT_MAX = 511,
     SETTING_VALUE_MAX = 16384,
     SETTING_VALUE_CAP = 16388,
     SETTING_ROW_QUOTA = 256,
@@ -137,6 +190,14 @@ typedef struct {
     char pad_[3];
 } SettingWhen;
 
+/* The plugin segment of a key that names one: typed folds to plugin.<name>.<...>. False when it
+   does not, or the name does not fit cap. */
+bool setting_plugin_name(const char *typed, char *name, size_t cap);
+
+/* A key of a plugin that is not installed (ST-5.10): the key folds to plugin.<name>.<...>, and the
+   registry has no plugin.<name>.enabled. name gets <name> (cap at least SETTING_KEY_MAX + 1). */
+bool setting_plugin_missing(const SettingsRegistry *reg, const char *typed, char *name, size_t cap);
+
 /* Locked error code, or "" when the status has no settings code. */
 const char *setting_status_code(SettingStatus st);
 
@@ -144,16 +205,16 @@ const char *setting_status_code(SettingStatus st);
 bool helper_id_ok(const char *src);
 
 /* Fold the key and choose the layer a set or reset writes. */
-SettingStatus setting_choose_layer(const char *key, SettingLayer requested,
-                                   const SettingSpec **spec_out, SettingLayer *layer_out, char *err,
-                                   size_t errlen);
+SettingStatus setting_choose_layer(const SettingsRegistry *reg, const char *key,
+                                   SettingLayer requested, const SettingSpec **spec_out,
+                                   SettingLayer *layer_out, char *err, size_t errlen);
 
 /* Fold the key, check the layer, and write the canonical JSON value.
    Refusals leave err empty; only a store failure writes it. */
-SettingStatus setting_prepare(const char *key, const char *const *items, size_t nitems,
-                              SettingLayer requested, char *json, size_t json_cap,
-                              const SettingSpec **spec_out, SettingLayer *layer_out, char *err,
-                              size_t errlen);
+SettingStatus setting_prepare(const SettingsRegistry *reg, const char *key,
+                              const char *const *items, size_t nitems, SettingLayer requested,
+                              char *json, size_t json_cap, const SettingSpec **spec_out,
+                              SettingLayer *layer_out, char *err, size_t errlen);
 
 /* SETTING_ERR_INVALID when a bucket prefix item is refused: *item is its
    index, and *other the earlier item it repeats, or SIZE_MAX when the item
@@ -176,6 +237,11 @@ bool setting_format_when(SettingWhen when, char *buf, size_t cap);
 
 /* The one full key ST-1.5 would name, or NULL when there is not exactly one.
    Two or three candidates have no approved sentence. */
-const char *setting_suggestion(const char *typed);
+const char *setting_suggestion(const SettingsRegistry *reg, const char *typed);
+
+/* The canonical JSON of items for spec, as setting_prepare writes it, with no key or layer to
+   look up. json_cap must be SETTING_VALUE_CAP. The status is setting_prepare's. */
+SettingStatus setting_canon_value(const SettingSpec *spec, const char *const *items, size_t nitems,
+                                  char *json, size_t json_cap, char *err, size_t errlen);
 
 #endif /* REMEMBER_SETTINGS_H */

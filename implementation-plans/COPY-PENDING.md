@@ -367,3 +367,12 @@ Plan 20 stage 9 drafts (`settings list`, `history`, `explain`, Itay grill, 2026-
 - The more-pages line on stderr (`decision:plan20-history-plain-draft`). `remember: more settings. Run 'remember settings list --cursor <c>' to see them.` and `remember: more changes. Run 'remember settings history --cursor <c>' to see them.`
 - History lines (same decision). `<when>  <scope>  <key>  <old> → <new>  by <kind>[ "<id>"]`. A missing side prints `(unset)`. A row whose actor is not valid JSON prints no `by` part.
 - An empty list value prints `(empty)` in `list`, `get` and `explain` (`decision:plan20-empty-list-related`).
+
+Plan 30 drafts (plugin keys, Itay grill 2026-11-16). Same status: printed, not approved. Boolean, size, sub-byte size, the unknown-plugin line and the plugin-not-installed import line are approved rows above (C-05, C-03, C-12) and are not drafts.
+
+- `setting_invalid_value`, an enum (`decision:2026-11-16-plan30-value-error-copy-drafts`). Message `"<key>" must be one of low, medium, or high; you gave "<value>".` Two values: `must be one of low or high`. One value: `must be low`. Fix `Use low, medium, or high.` (`Use low or high.`, `Use low.`). Detail `{key, value, type}`.
+- `setting_invalid_value`, a plugin string or a string-list item that is not text (a control byte, DEL, bad UTF-8, over 511 bytes; same decision). Message `"<key>" needs text with no control characters, up to 511 bytes.` Fix `Use plain text of 511 bytes or fewer.` The value is not echoed. Detail `{key, type}`.
+- `setting_out_of_range`, a plugin string list with more items than `range.max_items` (same decision). Message `"<key>" can hold 1 to <N> items; you gave <M>.` Fix `Give <N> items or fewer.` Detail `{key, value, max}`.
+- A size bound in the C-05 range line prints the largest exact unit among `B`, `KiB`, `MiB`: `can be 1KiB to 4MiB; you gave 5MiB.`
+- The description of `plugin.<name>.enabled` in `settings explain` (`decision:2026-11-16-plan30-enabled-description`). `Whether "<name>" is turned on.` A manifest setting prints its own manifest `description`.
+- `cannot_open`, a plugins folder that exists and cannot be read. `remember: cannot read the plugins folder` (no fix; the same shape as `cannot read default-db`). Nobody approved this line, and Itay was not asked: it is the one error path plan 30 adds that no decision words (`remember-miss:plan30-plugins-folder-unreadable-copy`).
