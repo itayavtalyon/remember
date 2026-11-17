@@ -166,3 +166,41 @@ Overwriting a hand-written `SKILL.md` follows `decision:2026-11-11-codex-skill-p
 **Folded into `standard:coding`** (history copy `history:standard:coding:2026-11-16c`).
 - PROBES rule 1 is sharpened: "a newline inside it" and "relative where the code keeps it for later", and a shell script keeps a list of paths in an array.
 - PROBES sibling rule, one sentence added: run each mode of a command over what its other modes left.
+
+## Review Notes (G2 follow-up: the warning `fix` field)
+
+Second opinion on the G2 follow-up (`decision:2026-11-16-plan28-review-grill` G2 A). The coder's branch `claude/peaceful-greider-d13bc7` (2c4cdba, 4bef777, a926ce0 on 37badf7) is squashed onto main bbb3b9c. It built E3B-1 entries 5, 6, 7, 9, 10, 26 and 29 and invented no copy. Three reasons with no approved copy still print no `fix` (`bad_field`, `duplicate_prefix`, `unknown_key`), and entry 8 has no code path. Those are the coder's open items (`decision:open-2026-11-16-warning-fix-setting-invalid-leftovers`, `decision:open-2026-11-16-fix-import-skipped-unknown-key`, `decision:open-2026-11-16-raw-query-ignored-plain-line-join`).
+
+**Rebase.** Plan 28 merged `diag_warning_split_detail` at 21:50, after the coder's first commit (21:09). The coder's commits at 21:54 and 22:16 never merged main back in, so the branch added a second way to pass a fix (a `fix` parameter on `diag_warning_detail`). The squash keeps main's function and routes the four warnings through it. `diag_warning_detail` was left with one caller (`diag_warning`), so the review removed it. Every warning now goes through `diag_warning_split_detail`.
+
+**(S) Simplicity.**
+- Removed the second fix parameter and the one-caller `diag_warning_detail` (-12 lines).
+- Kept: `warn_invalid_value`. Its only caller is in `warn_skip`, but it holds the one allocated fix and its free, so inlining it would put two cleanup paths into `warn_skip`.
+- Kept: the `"bad_prefix_shape"` literal that `remember_app.c` compares with `store_sqlite.c`'s reason (Nit). It is also the JSON `detail.reason` on the wire, and `schema_v6_cli_a_duplicate_prefix_warning_has_no_fix_yet` turns red if the two disagree.
+
+**(A) Safety.** The probes:
+- The entry 6 fix echoes the row's key. `setting_by_key` takes only `[a-z][a-z0-9_-]*` segments, so no quote or shell text can reach the printed command.
+- A hyphenated key (`candidate-pool`) is echoed as written, and that command works (`settings set` folds it).
+- A newline, ESC or 600-byte value in the prefix line stays on one line, which the existing `schema_v6_cli` tests cover.
+- The fixes are constants, or `%s` through `fmt_alloc`.
+- The OOM paths free both strings.
+
+**W1 (grilled, answered C).** Entry 6's fix `remember settings set <key> <value>` writes the user layer of a key that allows it. Run live, following the fix for a skipped brain row of `remember.search.candidate_pool` printed "now 500 for your user", and the brain's 300 stayed in force. Itay chose C (`decision:2026-11-17-w1-brain-row-fix-scope`): a brain row of `candidate_pool` or `max_results` ends the command with ` --scope brain`. The red-first test is `import_bad_brain_value_fix_names_scope_brain` (plain and `--json`). `import_json_bad_setting_value_is_skipped_and_others_write` now expects the brain form, because its row is a brain row.
+
+**Docs that still stated the old lines** are fixed: `specs/BRAIN-LIST.md` (the C-35 line), `docs/engineering-notes.md` (the search line, the warning object shape, the plan 28 line that said these four print no fix), and the `warn_open_settings` comment.
+
+**Mutants** (each one turns at least one named test red):
+- The coder's sample, re-run: swap the two `unknown_field` fixes; drop the `raw_query_ignored` fix; swap the two other-scope fixes; drop the layer fix; drop the bad-shape fix.
+- Three that only compile as valid-but-wrong rewrites: cut the bad-prefix fix, send duplicates down the bad-shape branch, and cut the key in the entry 6 fix.
+- W1: drop the scope term, drop `allow_user`, and test the user layer instead of the brain.
+
+**Gate** on fe4dd284bc67d9a65b3c4ba30e1ddfdf170c1664 (the tree before these notes): lint, sanitizer build with ctest (7/7), coverage (100% functions, effective lines and pure-TU branches), `scripts/ci-linux.sh` on Ubuntu 24.04 and 26.04, and `scripts/codeql-local.sh` (49 allowed) all passed. The first run failed on macOS clang-tidy (`readability-implicit-bool-conversion`: a `&&` result assigned to a `bool` in `warn_invalid_value`), which the Linux lint passed; the condition is now an `if`, with no change in behavior.
+
+**Grades.**
+- Coder: 7/10. Strengths: invented no copy, filed three precise open items, red tests for every built entry, and the mutants M1 to M11 reproduced. Misses: did not merge main before the marker (rule 7), which duplicated plan 28's API; two docs still quoted the fix-less lines; and W1, a fix that is accepted but writes another layer.
+- The coder's in-session review: 6/10. Its locks held (no copy invented, duplicates kept apart from bad shapes), but it missed W1 and the stale `BRAIN-LIST.md` line.
+
+**Folded into `standard:coding`.**
+- CLAIMS rule 1 sharpened: grep the old sentence's own words too, because a spec of another subject can quote the line.
+- PROBES rule 2 sharpened: a suggested fix that is accepted but lands somewhere else (another layer) is a false sentence; run the printed command and read the effective state.
+- The stale base is covered by GATE AND DONE rule 1, so nothing was added.
