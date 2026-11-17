@@ -179,6 +179,10 @@ int cmd_brain(Store *s, bool json, int rest_argc, const char **rest_argv)
         err_store(s, st);
         return REMEMBER_ERR;
     }
+    /* The open recorded the old id; record the new one, under the same lock and wait. */
+    if (brain_note_open(s) != 0) {
+        return REMEMBER_ERR;
+    }
     if (json) {
         rc = output_brain_new_id_data(app_out(), &ids);
     } else {

@@ -10,6 +10,7 @@
 #include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include <sys/stat.h>
 
 enum { DATA_DIR_ERR_CAP = 64 };
@@ -116,4 +117,33 @@ int brain_note_open(Store *store)
     }
     (void)diag_brain_id_cloned(real, minted);
     return 0;
+}
+
+/* OPEN: the message line is a placeholder until Story Weaver approves it. */
+int brain_note_id_is_taken(const Store *store, const char *brain_id)
+{
+    char json[REMEMBER_PATH_MAX];
+    BrainList list = {0};
+    StoreError why = {.error_class = STORE_ERROR_NONE};
+    int taken = 0;
+    size_t i = 0;
+
+    /* A list that cannot be read lists nothing, as it does for the open. */
+    if (brain_json_path(json, sizeof(json)) != 0 ||
+        brain_list_read(json, &list) != BRAIN_LIST_UNCHANGED) {
+        brain_list_free(&list);
+        return 0;
+    }
+    for (i = 0; taken == 0 && i < list.count; i++) {
+        if (strcmp(list.rows[i].brain_id, brain_id) == 0) {
+            taken = store_path_has_brain_id(list.rows[i].path, brain_id,
+                                            store_busy_timeout_ms(store), &why);
+        }
+    }
+    brain_list_free(&list);
+    if (taken < 0) {
+        err_msg(code_for_store_class(why.error_class),
+                "cannot tell whether the brain this file came from is still in brains.json");
+    }
+    return taken;
 }

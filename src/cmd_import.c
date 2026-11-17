@@ -3,6 +3,7 @@
 #include "diag.h"
 
 #include "appio.h"
+#include "brain_note.h"
 #include "exit_codes.h"
 #include "import_read.h"
 #include "output.h"
@@ -146,6 +147,24 @@ static int import_finish(const Store *s, bool json, StoreStatus st, StoreImportR
     return import_reply(json, result);
 }
 
+/* An empty brain takes the file's brain_id, unless a listed brain still has it (plan 23):
+   then the file came from that brain, and taking its id would make this one a copy. 0, or -1
+   with the error written. */
+static int import_drop_taken_brain_id(const Store *s, ImportDoc *doc)
+{
+    int taken = 0;
+
+    if (doc->brain_id == NULL) {
+        return 0;
+    }
+    taken = brain_note_id_is_taken(s, doc->brain_id);
+    if (taken > 0) {
+        free(doc->brain_id);
+        doc->brain_id = NULL;
+    }
+    return taken < 0 ? -1 : 0;
+}
+
 static int import_from_json(Store *s, bool json, const ImportArgs *a, const char *now)
 {
     const char *path = a->from_json;
@@ -192,6 +211,10 @@ static int import_from_json(Store *s, bool json, const ImportArgs *a, const char
             return REMEMBER_ERR;
         }
         store_setting_import_free(&rep);
+    }
+    if (import_drop_taken_brain_id(s, &doc) != 0) {
+        import_doc_free(&doc);
+        return REMEMBER_ERR;
     }
     st = store_import_doc(s, &doc, now, import_origin(a, path), &result);
     import_doc_free(&doc);
