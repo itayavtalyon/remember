@@ -3445,8 +3445,10 @@ void register_brain_list_tests(void)
         an_import_of_the_export_of_a_listed_brain_keeps_the_new_brain_s_own_id_and_warns_nothing);
     RUN_TEST(
         an_import_of_the_export_of_a_listed_brain_that_is_gone_takes_its_id_and_the_list_follows);
-    RUN_TEST(an_import_whose_id_is_listed_twice_with_the_first_brain_live_keeps_the_new_brain_s_own_id);
-    RUN_TEST(an_import_that_takes_the_file_s_id_records_it_so_a_copy_opened_first_is_the_one_flagged);
+    RUN_TEST(
+        an_import_whose_id_is_listed_twice_with_the_first_brain_live_keeps_the_new_brain_s_own_id);
+    RUN_TEST(
+        an_import_that_takes_the_file_s_id_records_it_so_a_copy_opened_first_is_the_one_flagged);
     RUN_TEST(
         an_import_whose_listed_source_brain_is_locked_past_the_busy_timeout_fails_busy_and_imports_nothing);
     RUN_TEST(an_import_with_an_unreadable_brains_json_takes_the_file_s_id);
