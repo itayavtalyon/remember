@@ -259,6 +259,9 @@ const SettingSpec *settings_registry_at(const SettingsRegistry *reg, size_t i)
     return &reg->rows[i - (size_t)SETTING_STATIC_COUNT]->spec;
 }
 
+/* ponytail: a linear scan, so building a registry is quadratic in its rows. 1000 plugins of 17
+   keys each cost about 0.5 s per command (plan 30 review); sort the generated rows and search
+   them by halves if anyone installs that many. */
 static const SettingSpec *registry_find(const SettingsRegistry *reg, const char *folded)
 {
     size_t n = settings_registry_count(reg);

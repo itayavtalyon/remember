@@ -65,14 +65,6 @@ static bool key_of(char *out, size_t cap, const char *name, const char *tail)
     return (size_t)n < cap;
 }
 
-static PluginSettingsStatus add_row(SettingsRegistry *reg, const SettingSpec *row)
-{
-    if (!settings_registry_add(reg, row)) {
-        return PLUGIN_SETTINGS_OOM;
-    }
-    return PLUGIN_SETTINGS_OK;
-}
-
 static PluginSettingsStatus add_enabled(SettingsRegistry *reg, const char *name)
 {
     char key[SETTING_KEY_MAX + 1];
@@ -90,7 +82,8 @@ static PluginSettingsStatus add_enabled(SettingsRegistry *reg, const char *name)
     row.type = SETTING_BOOLEAN;
     row.allow_user = true;
     row.allow_brain = true;
-    return add_row(reg, &row);
+    /* The key was free just above, so a refusal is memory. */
+    return settings_registry_add(reg, &row) ? PLUGIN_SETTINGS_OK : PLUGIN_SETTINGS_OOM;
 }
 
 typedef struct {
@@ -246,7 +239,8 @@ static PluginSettingsStatus add_setting(SettingsRegistry *reg, const char *name,
     if (!plain_default(json, built->default_text, sizeof(built->default_text))) {
         goto done;
     }
-    st = add_row(reg, &built->row);
+    /* The parser refuses two settings with one key, so a refusal is memory. */
+    st = settings_registry_add(reg, &built->row) ? PLUGIN_SETTINGS_OK : PLUGIN_SETTINGS_OOM;
 done:
     free(json);
     free(built);
