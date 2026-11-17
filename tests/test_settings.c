@@ -10436,6 +10436,40 @@ TEST(export_writes_a_plugin_boolean_as_json_true_and_a_size_with_value_bytes)
     harness_remove_tree(tmpl);
 }
 
+/* Plan 30 review, after main's #80: a bad brain row of a plugin key that also allows the user
+   layer gets the --scope brain fix. The warning looks the key up in the brain's registry; the
+   compiled-in rows alone do not know plugin.p.enabled and dropped the flag. */
+TEST(import_fix_for_a_bad_plugin_brain_row_names_scope_brain)
+{
+    static char tmpl[] = "/tmp/remember-p30r-XXXXXX";
+    char brain[REMEMBER_PATH_MAX];
+    char userdb[REMEMBER_PATH_MAX];
+    char file[REMEMBER_PATH_MAX];
+    const char *imp[] = {"settings", "import", file, "--scope", "brain"};
+    Store *store = NULL;
+    CmdResult got;
+
+    given_installed_plugin("p", NULL);
+    (void)snprintf(tmpl, sizeof(tmpl), "%s", "/tmp/remember-p30r-XXXXXX");
+    store = open_pair(tmpl, brain, sizeof(brain), userdb, sizeof(userdb));
+    if (store == NULL) {
+        return;
+    }
+    store_close(store);
+    ASSERT_TRUE(snprintf(file, sizeof(file), "%s/in.json", tmpl) > 0);
+    harness_write_file(
+        file, "{\"format\":\"remember-settings-export\",\"version\":1,\"exported_at\":"
+              "\"2026-01-01T00:00:00.000Z\",\"settings\":["
+              "{\"key\":\"plugin.p.enabled\",\"scope\":\"brain\",\"value\":\"yes\",\"updated_by\":"
+              "{\"kind\":\"human\",\"id\":null},\"updated_at\":\"2026-01-01T00:00:00.000Z\","
+              "\"device_id\":\"\",\"version_vector\":{},\"deleted_at\":null}]}");
+    got = get_at(brain, userdb, imp, 5U);
+    ASSERT_EQ_INT(got.exit_code, 0);
+    ASSERT_STR_CONTAINS(got.err, "'remember settings set plugin.p.enabled <value> --scope brain'");
+    cmd_result_free(&got);
+    harness_remove_tree(tmpl);
+}
+
 TEST(import_reads_a_plugin_boolean_row_and_skips_a_plugin_that_is_not_installed)
 {
     static char tmpl[] = "/tmp/remember-p30g-XXXXXX";
@@ -10469,8 +10503,10 @@ TEST(import_reads_a_plugin_boolean_row_and_skips_a_plugin_that_is_not_installed)
               "\"device_id\":\"\",\"version_vector\":{},\"deleted_at\":null}]}");
     got = get_at(brain, userdb, imp, 5U);
     ASSERT_EQ_INT(got.exit_code, 0);
+    /* E3B-1 entry 8's fix (plan 30 review, after main's #80 gave warnings a fix). */
     ASSERT_STR_CONTAINS(got.err, "remember: warning: skipped \"plugin.gone.enabled\": plugin gone "
-                                 "isn't installed.\n");
+                                 "isn't installed. Install plugin gone, then import the file "
+                                 "again.\n");
     cmd_result_free(&got);
     got = get_at(brain, userdb, get, 4U);
     ASSERT_STREQ(got.out, "true\n");
@@ -10699,6 +10735,7 @@ void register_settings_tests(void)
     RUN_TEST(a_plugins_folder_that_cannot_be_read_fails_every_command_with_one_line);
     RUN_TEST(export_writes_a_plugin_boolean_as_json_true_and_a_size_with_value_bytes);
     RUN_TEST(import_reads_a_plugin_boolean_row_and_skips_a_plugin_that_is_not_installed);
+    RUN_TEST(import_fix_for_a_bad_plugin_brain_row_names_scope_brain);
     RUN_TEST(import_json_rows_name_the_reason_plugin_not_installed);
 }
 // NOLINTEND(cppcoreguidelines-avoid-magic-numbers,readability-magic-numbers)

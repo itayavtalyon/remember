@@ -3284,10 +3284,10 @@ static int warn_invalid(char *msg, const char *fix, const DiagDetailField *field
    fix. The key is a registry key (the row would be unknown_key otherwise). A bare `settings set`
    of a key that allows the user layer writes that layer, so a brain row of such a key names
    --scope brain (decision:2026-11-17-w1-brain-row-fix-scope). */
-static int warn_invalid_value(char *msg, const SettingImportRow *row, const DiagDetailField *fields,
-                              size_t n)
+static int warn_invalid_value(const SettingsRegistry *reg, char *msg, const SettingImportRow *row,
+                              const DiagDetailField *fields, size_t n)
 {
-    const SettingSpec *spec = setting_by_key(row->key);
+    const SettingSpec *spec = setting_by_key(reg, row->key);
     const char *scope_flag = "";
     char *fix = NULL;
     int rc = 0;
@@ -3306,7 +3306,7 @@ static int warn_invalid_value(char *msg, const SettingImportRow *row, const Diag
     return rc;
 }
 
-static int warn_skip(const SettingImportRow *row, bool settings_alone)
+static int warn_skip(const SettingsRegistry *reg, const SettingImportRow *row, bool settings_alone)
 {
     const char *value = row->value != NULL ? row->value : "null";
 
@@ -3343,8 +3343,8 @@ static int warn_skip(const SettingImportRow *row, bool settings_alone)
             tail = " This brain wasn't changed.";
         }
         return warn_invalid_value(
-            fmt_alloc("skipped \"%s\": \"%s\" isn't a valid value.%s", row->key, value, tail), row,
-            fields, sizeof(fields) / sizeof(fields[0]));
+            reg, fmt_alloc("skipped \"%s\": \"%s\" isn't a valid value.%s", row->key, value, tail),
+            row, fields, sizeof(fields) / sizeof(fields[0]));
     }
     if (row->reason == SETTING_SKIP_UNKNOWN_KEY) {
         /* decision:plan20-import-unknown-key-draft (C-43 draft). */
@@ -3355,18 +3355,19 @@ static int warn_skip(const SettingImportRow *row, bool settings_alone)
         /* C-12: the plugin's name, as the key folds it. */
         char plugin[PLUGIN_NAME_BUF];
         char *why = NULL;
+        char *fix = NULL;
         int rc = 0;
 
         if (!setting_plugin_name(row->key, plugin, sizeof(plugin))) {
             err_msg(DIAG_INTERNAL, "internal error");
             return REMEMBER_ERR;
         }
+        /* E3B-1 entry 8 (decision:2026-11-12-copy-batch-e3b-warning-splits). */
         why = fmt_alloc("plugin %s isn't installed", plugin);
-        if (why == NULL) {
-            return report_oom();
-        }
-        rc = warn_skipped(row, why);
+        fix = fmt_alloc("Install plugin %s, then import the file again.", plugin);
+        rc = why != NULL && fix != NULL ? warn_skipped(row, why, fix) : report_oom();
         free(why);
+        free(fix);
         return rc;
     }
     if (row->reason == SETTING_SKIP_OTHER_SCOPE) {
@@ -3425,7 +3426,8 @@ static int write_import_data(FILE *out, const SettingImportReport *rep)
     return fputs("]}", out) < 0 ? -1 : 0;
 }
 
-int settings_import_warn_skips(const SettingImportReport *rep, bool settings_alone)
+int settings_import_warn_skips(const SettingsRegistry *reg, const SettingImportReport *rep,
+                               bool settings_alone)
 {
     size_t i = 0;
 
@@ -3437,7 +3439,7 @@ int settings_import_warn_skips(const SettingImportReport *rep, bool settings_alo
     }
     for (i = 0; i < rep->nrows; i++) {
         if (rep->rows[i].result == SETTING_IMPORT_SKIPPED &&
-            warn_skip(&rep->rows[i], settings_alone) != 0) {
+            warn_skip(reg, &rep->rows[i], settings_alone) != 0) {
             return REMEMBER_ERR;
         }
     }
@@ -3446,11 +3448,12 @@ int settings_import_warn_skips(const SettingImportReport *rep, bool settings_alo
 
 /* Skipped lines first (C-12), then the C-13 line or the dry-run draft
    (decision:plan20-import-dry-run-draft). */
-static int emit_import(bool json, const ImportOpts *opt, const SettingImportReport *rep)
+static int emit_import(const SettingsRegistry *reg, bool json, const ImportOpts *opt,
+                       const SettingImportReport *rep)
 {
     int wrote = 0;
 
-    if (settings_import_warn_skips(rep, true) != 0) {
+    if (settings_import_warn_skips(reg, rep, true) != 0) {
         return REMEMBER_ERR;
     }
     if (json) {
@@ -3516,7 +3519,7 @@ static int cmd_settings_import(Store *store, bool json, int argc, const char **a
     if (st != SETTING_OK) {
         return fail_store(err);
     }
-    rc = emit_import(json, &opt, &rep);
+    rc = emit_import(store_settings_registry(store), json, &opt, &rep);
     store_setting_import_free(&rep);
     return rc;
 }
