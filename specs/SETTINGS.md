@@ -149,7 +149,7 @@ Each skip warning carries a `fix` (`decision:2026-11-12-e3-warnings-have-fix-fie
 
 | Warning, reason | `fix` | E3B-1 entry |
 |---|---|---|
-| `setting_invalid`, `invalid_value` | `Set a valid value with 'remember settings set <key> <value>'.` `<key>` is the row's key. `<value>` is written as it stands, because the skipped value is the one that failed. | 6 |
+| `setting_invalid`, `invalid_value` | `Set a valid value with 'remember settings set <key> <value>'.` `<key>` is the row's key. `<value>` is written as it stands, because the skipped value is the one that failed. A brain row of a key that also allows the user layer (`remember.search.candidate_pool`, `remember.search.max_results`) ends the command with ` --scope brain`, because a bare `settings set` writes the user layer (`decision:2026-11-17-w1-brain-row-fix-scope`). | 6 |
 | `setting_invalid`, `bad_shape` | `Add a "key" to that row, then import the file again.` | 7 |
 | `setting_import_skipped`, `other_scope` | `Run the command again with --scope brain.` for a brain row, `Run the command again with --scope user.` for a user row. | 9 |
 | `setting_import_skipped`, `layer_not_allowed` | `Take that row out of the file, then import it again.` | 10 |

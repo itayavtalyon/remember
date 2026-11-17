@@ -858,7 +858,8 @@ TEST(import_json_bad_setting_value_is_skipped_and_others_write)
     ASSERT_STR_CONTAINS(r.out, "\"settings\":{\"written\":1,\"unchanged\":0,\"skipped\":1}");
     ASSERT_STR_CONTAINS(r.out, "\"code\":\"setting_invalid\"");
     ASSERT_STR_CONTAINS(r.out, "isn't a valid value.\",\"fix\":\"Set a valid value with 'remember "
-                               "settings set remember.search.candidate_pool <value>'.\"");
+                               "settings set remember.search.candidate_pool <value> --scope "
+                               "brain'.\"");
     cmd_result_free(&r);
     got = harness_sqlite_query_line(dst, "SELECT COUNT(*) FROM entries;");
     ASSERT_STREQ(got, "1");

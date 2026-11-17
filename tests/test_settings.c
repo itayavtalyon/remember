@@ -6662,6 +6662,56 @@ TEST(import_json_other_scope_and_layer_warnings_carry_their_fix)
     harness_remove_tree(tmpl);
 }
 
+/* decision:2026-11-17-w1-brain-row-fix-scope: a bare `settings set` of a key that also allows the
+   user layer writes the user layer, so a skipped brain row's fix names --scope brain. */
+TEST(import_bad_brain_value_fix_names_scope_brain)
+{
+    char tmpl[] = "/tmp/remember-import-brainfix-XXXXXX";
+    char brain[REMEMBER_PATH_MAX];
+    char userdb[REMEMBER_PATH_MAX];
+    char file[REMEMBER_PATH_MAX];
+    char bad_pool[512];
+    char bad_max[512];
+    const char *plain[] = {"settings", "import", file, "--scope", "brain", "--no-hooks"};
+    const char *json[] = {"--json", "settings", "import", file, "--scope", "brain", "--no-hooks"};
+    Store *store = open_pair(tmpl, brain, sizeof(brain), userdb, sizeof(userdb));
+    CmdResult got;
+
+    if (store == NULL) {
+        return;
+    }
+    store_close(store);
+    brain_elem(bad_pool, sizeof(bad_pool), "remember.search.candidate_pool", "\"abc\"",
+               "2026-10-24T09:12:00.000Z", k_dev_a, "{}", NULL);
+    brain_elem(bad_max, sizeof(bad_max), "remember.search.max_results", "\"x\"",
+               "2026-10-24T09:12:00.000Z", k_dev_a, "{}", NULL);
+    {
+        const char *rows[] = {bad_pool, bad_max};
+
+        write_doc(file, sizeof(file), tmpl, "brainfix.json", rows, 2U);
+    }
+    got = import_at(brain, userdb, plain, 6U);
+    ASSERT_EQ_INT(got.exit_code, 0);
+    ASSERT_STREQ(got.err,
+                 "remember: warning: skipped \"remember.search.candidate_pool\": \"abc\" isn't a "
+                 "valid value. Set a valid value with 'remember settings set "
+                 "remember.search.candidate_pool <value> --scope brain'.\n"
+                 "remember: warning: skipped \"remember.search.max_results\": \"x\" isn't a valid "
+                 "value. Set a valid value with 'remember settings set remember.search.max_results "
+                 "<value> --scope brain'.\n");
+    cmd_result_free(&got);
+    got = import_at(brain, userdb, json, 7U);
+    ASSERT_EQ_INT(got.exit_code, 0);
+    ASSERT_STR_CONTAINS(got.out, "\"fix\":\"Set a valid value with 'remember settings set "
+                                 "remember.search.candidate_pool <value> --scope brain'.\","
+                                 "\"detail\":{\"key\":\"remember.search.candidate_pool\"");
+    ASSERT_STR_CONTAINS(got.out, "\"fix\":\"Set a valid value with 'remember settings set "
+                                 "remember.search.max_results <value> --scope brain'.\","
+                                 "\"detail\":{\"key\":\"remember.search.max_results\"");
+    cmd_result_free(&got);
+    harness_remove_tree(tmpl);
+}
+
 /* 007-26, 007-31: ST-8.6 on both layers, and the history of the loser. */
 TEST(import_merges_by_vector_then_time_then_device)
 {
@@ -9856,6 +9906,7 @@ void register_settings_tests(void)
     RUN_TEST(import_skips_a_vector_too_wide_to_merge);
     RUN_TEST(import_skips_other_scopes_and_disallowed_layers);
     RUN_TEST(import_json_other_scope_and_layer_warnings_carry_their_fix);
+    RUN_TEST(import_bad_brain_value_fix_names_scope_brain);
     RUN_TEST(import_merges_by_vector_then_time_then_device);
     RUN_TEST(import_keeps_a_brain_row_that_is_newer_or_tied);
     RUN_TEST(import_over_a_local_tombstone_has_no_old_value);

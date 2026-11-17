@@ -3028,13 +3028,22 @@ static int warn_invalid(char *msg, const char *fix, const DiagDetailField *field
 }
 
 /* E3B-1 entry 6: the key is filled in; <value> stays as written, because the bad value is not a
-   fix. The key is a registry key (the row would be unknown_key otherwise). */
+   fix. The key is a registry key (the row would be unknown_key otherwise). A bare `settings set`
+   of a key that allows the user layer writes that layer, so a brain row of such a key names
+   --scope brain (decision:2026-11-17-w1-brain-row-fix-scope). */
 static int warn_invalid_value(char *msg, const SettingImportRow *row, const DiagDetailField *fields,
                               size_t n)
 {
-    char *fix = fmt_alloc("Set a valid value with 'remember settings set %s <value>'.", row->key);
+    const SettingSpec *spec = setting_by_key(row->key);
+    const char *scope_flag = "";
+    char *fix = NULL;
     int rc = 0;
 
+    if (row->scope == SETTING_LAYER_BRAIN && spec != NULL && spec->allow_user) {
+        scope_flag = " --scope brain";
+    }
+    fix = fmt_alloc("Set a valid value with 'remember settings set %s <value>%s'.", row->key,
+                    scope_flag);
     if (fix == NULL) {
         free(msg);
         return report_oom();
