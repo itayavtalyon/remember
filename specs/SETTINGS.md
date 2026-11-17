@@ -145,6 +145,18 @@ Prints the document `{format: "remember-settings-export", version: 1, exported_a
 
 A file that is not a settings document, or has a later version, is `import_parse` and writes nothing. Each row is checked in ST-8.2 member order. A bad row is skipped with a warning, and the other rows are written (ST-8.4): `setting_import_skipped` for an unknown key, another scope, or a layer the key does not allow; `setting_invalid` for a bad value, shape or field.
 
+Each skip warning carries a `fix` (`decision:2026-11-12-e3-warnings-have-fix-field`, copy in `decision:2026-11-12-copy-batch-e3b-warning-splits`). The plain line is `remember: warning: <message> <fix>`; JSON is `code`, `message`, `fix`, then `detail`.
+
+| Warning, reason | `fix` | E3B-1 entry |
+|---|---|---|
+| `setting_invalid`, `invalid_value` | `Set a valid value with 'remember settings set <key> <value>'.` `<key>` is the row's key. `<value>` is written as it stands, because the skipped value is the one that failed. A brain row of a key that also allows the user layer (`remember.search.candidate_pool`, `remember.search.max_results`) ends the command with ` --scope brain`, because a bare `settings set` writes the user layer (`decision:2026-11-17-w1-brain-row-fix-scope`). | 6 |
+| `setting_invalid`, `bad_shape` | `Add a "key" to that row, then import the file again.` | 7 |
+| `setting_import_skipped`, `other_scope` | `Run the command again with --scope brain.` for a brain row, `Run the command again with --scope user.` for a user row. | 9 |
+| `setting_import_skipped`, `layer_not_allowed` | `Take that row out of the file, then import it again.` | 10 |
+| `setting_invalid`, `bad_field`; `setting_import_skipped`, `unknown_key` | none yet (`decision:open-2026-11-16-warning-fix-setting-invalid-leftovers`, `decision:open-2026-11-16-fix-import-skipped-unknown-key`) | none |
+
+The v5 to v6 step has its own `setting_invalid` warning for a bucket prefix it leaves out (E3B-1 entry 5). A prefix with a bad shape prints `dropped "<item>" from "remember.buckets.prefixes": it isn't a bucket prefix.` and the fix `To keep it, add it again with 1 to 32 letters, digits, "-", "_" or ".", then one ":", like "project:".` A prefix that folds to one already kept (`duplicate_prefix`) keeps its old line and has no fix yet.
+
 A row merges like sync: the version vector first (brain only), then the later `updated_at`, then the larger `device_id` (brain only). A tie keeps the local row. A row equal to the local one writes nothing. A brain write stores the file's fields with the pointwise-max vector and bumps `change_seq`. Each write adds a history row with the file's actor and `updated_at`. A new key over the quota fails the whole import.
 
 A file with both user and brain rows needs `--scope` (`decision:plan20-import-one-file-per-run`). Without it the import is `invalid_argument` and writes nothing, so a run writes one database in one transaction. A file over 16 MiB is `import_parse` with the read sentence and the system's "File too large" (`decision:plan20-import-size-cap`). `--dry-run` runs the merge, rolls it back, and does not create user.db. JSON `data` is `{count, written, unchanged, skipped, rows[]}`. A row is `{key, scope, result, action, reason?}`.

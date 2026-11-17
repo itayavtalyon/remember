@@ -2994,8 +2994,10 @@ static const char *row_scope_name(const SettingImportRow *row)
     return scope_name(row->scope);
 }
 
-/* C-12 lines: setting_import_skipped, detail {key, scope, reason}. */
-static int warn_skipped(const SettingImportRow *row, const char *why)
+/* C-12 lines: setting_import_skipped, detail {key, scope, reason}. fix is E3B-1's sentence, or
+   NULL for a reason that has none approved yet. */
+// NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
+static int warn_skipped(const SettingImportRow *row, const char *why, const char *fix)
 {
     char *msg = fmt_alloc("skipped \"%s\": %s.", row->key, why);
     const DiagDetailField fields[] = {{.name = "key", .value = row->key},
@@ -3005,21 +3007,50 @@ static int warn_skipped(const SettingImportRow *row, const char *why)
     if (msg == NULL) {
         return report_oom();
     }
-    (void)diag_warning_detail(DIAG_WARN_SETTING_IMPORT_SKIPPED, msg, fields,
-                              sizeof(fields) / sizeof(fields[0]));
+    (void)diag_warning_split_detail(DIAG_WARN_SETTING_IMPORT_SKIPPED,
+                                    (DiagSplit){.message = msg, .fix = fix}, fields,
+                                    sizeof(fields) / sizeof(fields[0]));
     free(msg);
     return 0;
 }
 
-/* setting_invalid with its detail (C-14, C-14a, decision:plan20-import-bad-field). */
-static int warn_invalid(char *msg, const DiagDetailField *fields, size_t n)
+/* setting_invalid with its detail (C-14, C-14a, decision:plan20-import-bad-field). fix is NULL for
+   a reason that has no approved fix yet. */
+static int warn_invalid(char *msg, const char *fix, const DiagDetailField *fields, size_t n)
 {
     if (msg == NULL) {
         return report_oom();
     }
-    (void)diag_warning_detail(DIAG_WARN_SETTING_INVALID, msg, fields, n);
+    (void)diag_warning_split_detail(DIAG_WARN_SETTING_INVALID,
+                                    (DiagSplit){.message = msg, .fix = fix}, fields, n);
     free(msg);
     return 0;
+}
+
+/* E3B-1 entry 6: the key is filled in; <value> stays as written, because the bad value is not a
+   fix. The key is a registry key (the row would be unknown_key otherwise). A bare `settings set`
+   of a key that allows the user layer writes that layer, so a brain row of such a key names
+   --scope brain (decision:2026-11-17-w1-brain-row-fix-scope). */
+static int warn_invalid_value(char *msg, const SettingImportRow *row, const DiagDetailField *fields,
+                              size_t n)
+{
+    const SettingSpec *spec = setting_by_key(row->key);
+    const char *scope_flag = "";
+    char *fix = NULL;
+    int rc = 0;
+
+    if (row->scope == SETTING_LAYER_BRAIN && spec != NULL && spec->allow_user) {
+        scope_flag = " --scope brain";
+    }
+    fix = fmt_alloc("Set a valid value with 'remember settings set %s <value>%s'.", row->key,
+                    scope_flag);
+    if (fix == NULL) {
+        free(msg);
+        return report_oom();
+    }
+    rc = warn_invalid(msg, fix, fields, n);
+    free(fix);
+    return rc;
 }
 
 static int warn_skip(const SettingImportRow *row, bool settings_alone)
@@ -3034,16 +3065,18 @@ static int warn_skip(const SettingImportRow *row, bool settings_alone)
         return warn_invalid(fmt_alloc("skipped row %zu in the settings file because it isn't a "
                                       "setting (each row needs a \"key\").",
                                       row->position),
-                            fields, sizeof(fields) / sizeof(fields[0]));
+                            "Add a \"key\" to that row, then import the file again.", fields,
+                            sizeof(fields) / sizeof(fields[0]));
     }
     if (row->reason == SETTING_SKIP_BAD_FIELD) {
         const DiagDetailField fields[] = {{.name = "key", .value = row->key},
                                           {.name = "field", .value = row->field},
                                           {.name = "reason", .value = "bad_field"}};
 
+        /* No approved fix yet: decision:open-2026-11-16-warning-fix-setting-invalid-leftovers. */
         return warn_invalid(
-            fmt_alloc("skipped \"%s\": its \"%s\" isn't valid.", row->key, row->field), fields,
-            sizeof(fields) / sizeof(fields[0]));
+            fmt_alloc("skipped \"%s\": its \"%s\" isn't valid.", row->key, row->field), NULL,
+            fields, sizeof(fields) / sizeof(fields[0]));
     }
     if (row->reason == SETTING_SKIP_INVALID_VALUE) {
         const DiagDetailField fields[] = {{.name = "key", .value = row->key},
@@ -3056,21 +3089,26 @@ static int warn_skip(const SettingImportRow *row, bool settings_alone)
         if (settings_alone) {
             tail = " This brain wasn't changed.";
         }
-        return warn_invalid(
-            fmt_alloc("skipped \"%s\": \"%s\" isn't a valid value.%s", row->key, value, tail),
+        return warn_invalid_value(
+            fmt_alloc("skipped \"%s\": \"%s\" isn't a valid value.%s", row->key, value, tail), row,
             fields, sizeof(fields) / sizeof(fields[0]));
     }
     if (row->reason == SETTING_SKIP_UNKNOWN_KEY) {
         /* decision:plan20-import-unknown-key-draft (C-43 draft). */
-        return warn_skipped(row, "remember has no setting by that name");
+        /* No approved fix yet: decision:open-2026-11-16-fix-import-skipped-unknown-key. */
+        return warn_skipped(row, "remember has no setting by that name", NULL);
     }
     if (row->reason == SETTING_SKIP_OTHER_SCOPE) {
-        return warn_skipped(row, row->scope == SETTING_LAYER_BRAIN
-                                     ? "it's a brain setting, and you ran with --scope user"
-                                     : "it's a user setting, and you ran with --scope brain");
+        return row->scope == SETTING_LAYER_BRAIN
+                   ? warn_skipped(row, "it's a brain setting, and you ran with --scope user",
+                                  "Run the command again with --scope brain.")
+                   : warn_skipped(row, "it's a user setting, and you ran with --scope brain",
+                                  "Run the command again with --scope user.");
     }
-    return warn_skipped(row, row->scope == SETTING_LAYER_USER ? "it can't be stored for your user"
-                                                              : "it can't be stored for one brain");
+    return warn_skipped(row,
+                        row->scope == SETTING_LAYER_USER ? "it can't be stored for your user"
+                                                         : "it can't be stored for one brain",
+                        "Take that row out of the file, then import it again.");
 }
 
 static int write_import_row(FILE *out, const SettingImportRow *row)

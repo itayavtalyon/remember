@@ -169,19 +169,11 @@ int diag_error_file(DiagCode code, DiagSplit split, DiagFileDetail detail);
 int diag_warning(DiagWarning code, const char *message);
 
 /*
- * diag_warning plus a JSON "detail" object of string members, in the given
- * order, after "message". The plain line is the same as diag_warning's.
- * nfields 0 writes no detail. Returns -1 like diag_warning, or when fields is
- * NULL and nfields is not 0.
- */
-int diag_warning_detail(DiagWarning code, const char *message, const DiagDetailField *fields,
-                        size_t nfields);
-
-/*
  * A warning with its next step (E3 B, decision:2026-11-12-e3-warnings-have-fix-field).
  * Plain: "remember: warning: <message> <fix>\n". JSON: {"code","message","fix"}, then
- * "detail" when nfields is not 0. A NULL or empty fix prints no second sentence. Returns -1
- * like diag_warning_detail.
+ * "detail", string members in the given order, when nfields is not 0. A NULL or empty fix
+ * prints no second sentence. Returns -1 like diag_warning, or when fields is NULL and
+ * nfields is not 0.
  */
 int diag_warning_split_detail(DiagWarning code, DiagSplit split, const DiagDetailField *fields,
                               size_t nfields);

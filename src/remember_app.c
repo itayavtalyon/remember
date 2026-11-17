@@ -457,23 +457,34 @@ static void print_parse_error(const CliArgs *args)
 }
 
 /* 007 ST-7.15: one setting_invalid warning per prefix the v6 step left out.
-   The same step rewrote every memory, so the line has no second sentence. */
+   The same step rewrote every memory, so no line says the brain wasn't changed. A prefix with a bad
+   shape has its C-05 line and E3B-1 entry 5 fix. A folded duplicate has no approved fix yet
+   (decision:open-2026-11-16-warning-fix-setting-invalid-leftovers). */
 static void warn_open_settings(const Store *s)
 {
-    static const char k_skipped[] = "skipped \"%s\": \"%s\" isn't a valid value.";
+    static const char k_bad_prefix_fix[] =
+        "To keep it, add it again with 1 to 32 letters, digits, \"-\", \"_\" or \".\", then one "
+        "\":\", like \"project:\".";
     size_t i = 0;
 
     for (i = 0; i < store_open_warning_count(s); i++) {
         StoreSettingWarning w = store_open_warning(s, i);
-        int need = snprintf(NULL, 0, k_skipped, w.key, w.value);
-        char *line = (need >= 0) ? (char *)malloc((size_t)need + 1U) : NULL;
-
-        if (line != NULL && snprintf(line, (size_t)need + 1U, k_skipped, w.key, w.value) == need) {
+        const char *fix = NULL;
+        char *line = NULL;
+        if (strcmp(w.reason, "bad_prefix_shape") == 0) {
+            line =
+                fmt_alloc("dropped \"%s\" from \"%s\": it isn't a bucket prefix.", w.value, w.key);
+            fix = k_bad_prefix_fix;
+        } else {
+            line = fmt_alloc("skipped \"%s\": \"%s\" isn't a valid value.", w.key, w.value);
+        }
+        if (line != NULL) {
             DiagDetailField fields[] = {
                 {"key", w.key}, {"value", w.value}, {"reason", w.reason}, {"item", w.value}};
 
-            (void)diag_warning_detail(DIAG_WARN_SETTING_INVALID, line, fields,
-                                      sizeof(fields) / sizeof(fields[0]));
+            (void)diag_warning_split_detail(DIAG_WARN_SETTING_INVALID,
+                                            (DiagSplit){.message = line, .fix = fix}, fields,
+                                            sizeof(fields) / sizeof(fields[0]));
         }
         free(line);
     }

@@ -51,7 +51,9 @@ TEST(union_search_unparseable_raw_part_is_a_json_warning)
     ASSERT_EQ_INT(r.exit_code, 0);
     ASSERT_STREQ(r.err, "");
     ASSERT_STR_CONTAINS(r.out, "]},\"warnings\":[{\"code\":\"raw_query_ignored\",\"message\":"
-                               "\"fts5: syntax error near \\\"\\\"\"}]}\n");
+                               "\"fts5: syntax error near \\\"\\\"\","
+                               "\"fix\":\"Check the quotes and operators in your query, or "
+                               "search with plain words.\"}]}\n");
     cmd_result_free(&r);
     free(db);
 }
@@ -129,7 +131,8 @@ TEST(union_search_deep_nesting_is_a_warning)
     ASSERT_EQ_INT(r.exit_code, 0);
     ASSERT_STREQ(r.err, "");
     ASSERT_STR_CONTAINS(r.out, "]},\"warnings\":[{\"code\":\"raw_query_ignored\",\"message\":"
-                               "\"fts5: parser stack overflow\"}]}\n");
+                               "\"fts5: parser stack overflow\",\"fix\":\"Check the quotes and "
+                               "operators in your query, or search with plain words.\"}]}\n");
     cmd_result_free(&r);
     free(db);
 }
@@ -304,8 +307,10 @@ TEST(union_search_example_2_has_facets_and_the_warning)
                                "\"key\":\"recs:books\",");
     ASSERT_STR_CONTAINS(r.out, "\"tags\":{\"total\":0,\"items\":[]},\"entries\":[{");
     ASSERT_STREQ(r.err, "");
-    ASSERT_STR_CONTAINS(r.out, "]},\"warnings\":[{\"code\":\"raw_query_ignored\","
-                               "\"message\":\"no such column: recs\"}]}\n");
+    ASSERT_STR_CONTAINS(r.out,
+                        "]},\"warnings\":[{\"code\":\"raw_query_ignored\","
+                        "\"message\":\"no such column: recs\",\"fix\":\"Check the quotes and "
+                        "operators in your query, or search with plain words.\"}]}\n");
     cmd_result_free(&r);
     free(db);
 }

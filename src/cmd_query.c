@@ -1295,7 +1295,12 @@ int cmd_search(Store *s, bool json, int rest_argc, const char **rest_argv)
         goto cleanup;
     }
     if (res.warning != NULL) {
-        (void)diag_warning(DIAG_WARN_RAW_QUERY_IGNORED, res.warning);
+        (void)diag_warning_split_detail(
+            DIAG_WARN_RAW_QUERY_IGNORED,
+            (DiagSplit){
+                .message = res.warning,
+                .fix = "Check the quotes and operators in your query, or search with plain words."},
+            NULL, 0U);
     }
     rc = REMEMBER_OK;
 

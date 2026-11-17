@@ -2598,8 +2598,10 @@ TEST(envelope_unknown_field_warns_once_for_a_file)
     ASSERT_EQ_INT(diag_unknown_field((DiagUnknownField){.path = path_b, .name = "other"}), 0);
     ASSERT_EQ_INT(diag_warning_count(), 1U);
     ASSERT_EQ_INT(fflush(err), 0);
-    ASSERT_STREQ(buf, "remember: warning: \"/tmp/note.json\" has a field remember doesn't know, "
-                      "\"extra\". The rest of the file was read.\n");
+    ASSERT_STREQ(buf,
+                 "remember: warning: \"/tmp/note.json\" has a field remember doesn't know, "
+                 "\"extra\". The rest of the file was read. "
+                 "Remove that field, or update remember if the file came from a newer version.\n");
     app_set_streams((AppStreams){.out = NULL, .err = NULL});
     diag_warnings_reset();
     ASSERT_EQ_INT(fclose(err), 0);
@@ -2626,10 +2628,13 @@ TEST(envelope_unknown_field_escapes_a_hostile_name_in_the_line)
                   0);
     ASSERT_EQ_INT(diag_unknown_field((DiagUnknownField){.path = NULL, .name = "x\ny"}), 0);
     ASSERT_EQ_INT(fflush(err), 0);
-    ASSERT_STREQ(buf, "remember: warning: \"/tmp/note.json\" has a field remember doesn't know, "
-                      "\"a\\\"b\\\\\\u001b[2J\\u007f\\u009b\". The rest of the file was read.\n"
-                      "remember: warning: stdin has a field remember doesn't know, \"x\\ny\". The "
-                      "rest of the input was read.\n");
+    ASSERT_STREQ(buf,
+                 "remember: warning: \"/tmp/note.json\" has a field remember doesn't know, "
+                 "\"a\\\"b\\\\\\u001b[2J\\u007f\\u009b\". The rest of the file was read. "
+                 "Remove that field, or update remember if the file came from a newer version.\n"
+                 "remember: warning: stdin has a field remember doesn't know, \"x\\ny\". The "
+                 "rest of the input was read. "
+                 "Remove that field, or update remember if the input came from a newer version.\n");
     app_set_streams((AppStreams){.out = NULL, .err = NULL});
     diag_warnings_reset();
     ASSERT_EQ_INT(fclose(err), 0);
@@ -2656,10 +2661,13 @@ TEST(envelope_unknown_field_warns_once_for_stdin)
         diag_unknown_field((DiagUnknownField){.path = "/tmp/note.json", .name = "filefield"}), 0);
     ASSERT_EQ_INT(diag_warning_count(), 2U);
     ASSERT_EQ_INT(fflush(err), 0);
-    ASSERT_STREQ(buf, "remember: warning: stdin has a field remember doesn't know, \"extra\". "
-                      "The rest of the input was read.\n"
-                      "remember: warning: \"/tmp/note.json\" has a field remember doesn't know, "
-                      "\"filefield\". The rest of the file was read.\n");
+    ASSERT_STREQ(buf,
+                 "remember: warning: stdin has a field remember doesn't know, \"extra\". "
+                 "The rest of the input was read. "
+                 "Remove that field, or update remember if the input came from a newer version.\n"
+                 "remember: warning: \"/tmp/note.json\" has a field remember doesn't know, "
+                 "\"filefield\". The rest of the file was read. "
+                 "Remove that field, or update remember if the file came from a newer version.\n");
     app_set_streams((AppStreams){.out = NULL, .err = NULL});
     diag_warnings_reset();
     ASSERT_EQ_INT(fclose(err), 0);
@@ -2692,12 +2700,16 @@ TEST(envelope_unknown_field_warns_once_per_path)
     ASSERT_EQ_INT(diag_unknown_field((DiagUnknownField){.path = third, .name = "extra"}), 0);
     ASSERT_EQ_INT(diag_warning_count(), 3U);
     ASSERT_EQ_INT(fflush(err), 0);
-    ASSERT_STREQ(buf, "remember: warning: \"/tmp/a.json\" has a field remember doesn't know, "
-                      "\"extra\". The rest of the file was read.\n"
-                      "remember: warning: \"/tmp/b.json\" has a field remember doesn't know, "
-                      "\"extra\". The rest of the file was read.\n"
-                      "remember: warning: \"/tmp/c.json\" has a field remember doesn't know, "
-                      "\"extra\". The rest of the file was read.\n");
+    ASSERT_STREQ(buf,
+                 "remember: warning: \"/tmp/a.json\" has a field remember doesn't know, "
+                 "\"extra\". The rest of the file was read. "
+                 "Remove that field, or update remember if the file came from a newer version.\n"
+                 "remember: warning: \"/tmp/b.json\" has a field remember doesn't know, "
+                 "\"extra\". The rest of the file was read. "
+                 "Remove that field, or update remember if the file came from a newer version.\n"
+                 "remember: warning: \"/tmp/c.json\" has a field remember doesn't know, "
+                 "\"extra\". The rest of the file was read. "
+                 "Remove that field, or update remember if the file came from a newer version.\n");
     app_set_streams((AppStreams){.out = NULL, .err = NULL});
     diag_warnings_reset();
     ASSERT_EQ_INT(fclose(err), 0);
@@ -2725,10 +2737,13 @@ TEST(envelope_unknown_field_warns_again_after_a_reset)
                   0);
     ASSERT_EQ_INT(diag_warning_count(), 1U);
     ASSERT_EQ_INT(fflush(err), 0);
-    ASSERT_STREQ(buf, "remember: warning: \"/tmp/note.json\" has a field remember doesn't know, "
-                      "\"extra\". The rest of the file was read.\n"
-                      "remember: warning: \"/tmp/note.json\" has a field remember doesn't know, "
-                      "\"extra\". The rest of the file was read.\n");
+    ASSERT_STREQ(buf,
+                 "remember: warning: \"/tmp/note.json\" has a field remember doesn't know, "
+                 "\"extra\". The rest of the file was read. "
+                 "Remove that field, or update remember if the file came from a newer version.\n"
+                 "remember: warning: \"/tmp/note.json\" has a field remember doesn't know, "
+                 "\"extra\". The rest of the file was read. "
+                 "Remove that field, or update remember if the file came from a newer version.\n");
     app_set_streams((AppStreams){.out = NULL, .err = NULL});
     diag_warnings_reset();
     ASSERT_EQ_INT(fclose(err), 0);
@@ -2772,10 +2787,12 @@ TEST(envelope_unknown_field_json_names_the_field_and_the_file)
     ASSERT_EQ_INT(fflush(err), 0);
     ASSERT_EQ_INT(fflush(out), 0);
     ASSERT_STREQ(err_buf, "");
-    ASSERT_STREQ(out_buf,
-                 ",\"warnings\":[{\"code\":\"unknown_field\",\"message\":\"\\\"/tmp/note.json\\\" "
-                 "has a field remember doesn't know, \\\"extra\\\". The rest of the file was "
-                 "read.\",\"detail\":{\"field\":\"extra\",\"where\":\"/tmp/note.json\"}}]");
+    ASSERT_STREQ(
+        out_buf,
+        ",\"warnings\":[{\"code\":\"unknown_field\",\"message\":\"\\\"/tmp/note.json\\\" "
+        "has a field remember doesn't know, \\\"extra\\\". The rest of the file was "
+        "read.\",\"fix\":\"Remove that field, or update remember if the file came from a newer "
+        "version.\",\"detail\":{\"field\":\"extra\",\"where\":\"/tmp/note.json\"}}]");
     app_set_streams((AppStreams){.out = NULL, .err = NULL});
     diag_warnings_reset();
     ASSERT_EQ_INT(fclose(err), 0);
@@ -2818,9 +2835,11 @@ TEST(envelope_unknown_field_json_names_stdin)
     ASSERT_EQ_INT(fflush(err), 0);
     ASSERT_EQ_INT(fflush(out), 0);
     ASSERT_STREQ(err_buf, "");
-    ASSERT_STREQ(out_buf, ",\"warnings\":[{\"code\":\"unknown_field\",\"message\":\"stdin has a "
-                          "field remember doesn't know, \\\"extra\\\". The rest of the input was "
-                          "read.\",\"detail\":{\"field\":\"extra\",\"where\":\"stdin\"}}]");
+    ASSERT_STREQ(out_buf,
+                 ",\"warnings\":[{\"code\":\"unknown_field\",\"message\":\"stdin has a "
+                 "field remember doesn't know, \\\"extra\\\". The rest of the input was "
+                 "read.\",\"fix\":\"Remove that field, or update remember if the input came from a "
+                 "newer version.\",\"detail\":{\"field\":\"extra\",\"where\":\"stdin\"}}]");
     app_set_streams((AppStreams){.out = NULL, .err = NULL});
     diag_warnings_reset();
     ASSERT_EQ_INT(fclose(err), 0);
@@ -2846,18 +2865,25 @@ TEST(envelope_unknown_field_masks_the_path_and_escapes_the_name)
     char jprobe[sizeof json_head + HOSTILE_PAD];
     char escaped[sizeof esc_head + HOSTILE_PAD];
     char jescaped[sizeof jesc_head + HOSTILE_PAD];
-    const char *plain_parts[] = {"remember: warning: \"", masked,
-                                 "\" has a field remember doesn't know, \"", escaped,
-                                 "\". The rest of the file was read.\n"};
-    const char *json_parts[] = {",\"warnings\":[{\"code\":\"unknown_field\",\"message\":\"\\\"",
-                                jprobe,
-                                "\\\" has a field remember doesn't know, \\\"",
-                                jescaped,
-                                "\\\". The rest of the file was read.\",\"detail\":{\"field\":\"",
-                                jprobe,
-                                "\",\"where\":\"",
-                                jprobe,
-                                "\"}}]"};
+    const char *plain_parts[] = {
+        "remember: warning: \"",
+        masked,
+        "\" has a field remember doesn't know, \"",
+        escaped,
+        "\". The rest of the file was read. ",
+        "Remove that field, or update remember if the file came from a newer version.\n"};
+    const char *json_parts[] = {
+        ",\"warnings\":[{\"code\":\"unknown_field\",\"message\":\"\\\"",
+        jprobe,
+        "\\\" has a field remember doesn't know, \\\"",
+        jescaped,
+        "\\\". The rest of the file was read.\",\"fix\":\"",
+        "Remove that field, or update remember if the file came from a newer version.",
+        "\",\"detail\":{\"field\":\"",
+        jprobe,
+        "\",\"where\":\"",
+        jprobe,
+        "\"}}]"};
     char *plain_expect = NULL;
     char *json_expect = NULL;
     char *err_buf = NULL;
@@ -3005,8 +3031,10 @@ TEST(envelope_unknown_field_quotes_an_empty_name)
     ASSERT_EQ_INT(diag_unknown_field((DiagUnknownField){.path = "/tmp/empty.json", .name = ""}), 0);
     ASSERT_EQ_INT(diag_warning_count(), 1U);
     ASSERT_EQ_INT(fflush(err), 0);
-    ASSERT_STREQ(buf, "remember: warning: \"/tmp/empty.json\" has a field remember doesn't know, "
-                      "\"\". The rest of the file was read.\n");
+    ASSERT_STREQ(buf,
+                 "remember: warning: \"/tmp/empty.json\" has a field remember doesn't know, "
+                 "\"\". The rest of the file was read. "
+                 "Remove that field, or update remember if the file came from a newer version.\n");
     app_set_streams((AppStreams){.out = NULL, .err = NULL});
     diag_warnings_reset();
     ASSERT_EQ_INT(fclose(err), 0);

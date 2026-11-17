@@ -6327,15 +6327,19 @@ TEST(import_skips_a_bad_value_and_an_unknown_key)
     write_doc(one, sizeof(one), tmpl, "one.json", one_row, 1U);
     got = import_at(brain, userdb, imp_one, 3U);
     ASSERT_EQ_INT(got.exit_code, 0);
-    ASSERT_STREQ(got.err, "remember: warning: skipped \"remember.search.candidate_pool\": \"abc\" "
-                          "isn't a valid value. This brain wasn't changed.\n");
+    ASSERT_STREQ(
+        got.err,
+        "remember: warning: skipped \"remember.search.candidate_pool\": \"abc\" "
+        "isn't a valid value. This brain wasn't changed. "
+        "Set a valid value with 'remember settings set remember.search.candidate_pool <value>'.\n");
     ASSERT_TRUE(access(userdb, F_OK) != 0);
     cmd_result_free(&got);
     got = import_at(brain, userdb, imp_two, 3U);
     ASSERT_EQ_INT(got.exit_code, 0);
     ASSERT_STREQ(got.err,
                  "remember: warning: skipped \"remember.search.candidate_pool\": \"abc\" isn't a "
-                 "valid value.\n"
+                 "valid value. Set a valid value with 'remember settings set "
+                 "remember.search.candidate_pool <value>'.\n"
                  "remember: warning: skipped \"plugin.hybrid.weight\": remember has no setting by "
                  "that name.\n");
     ASSERT_STR_CONTAINS(got.out, "1 settings written, 0 unchanged, 2 skipped.");
@@ -6357,7 +6361,9 @@ TEST(import_skips_a_bad_value_and_an_unknown_key)
     ASSERT_STR_CONTAINS(got.out,
                         "{\"code\":\"setting_invalid\",\"message\":\"skipped "
                         "\\\"remember.search.candidate_pool\\\": \\\"abc\\\" isn't a valid "
-                        "value.\",\"detail\":{\"key\":\"remember.search.candidate_pool\","
+                        "value.\",\"fix\":\"Set a valid value with 'remember settings set "
+                        "remember.search.candidate_pool <value>'.\","
+                        "\"detail\":{\"key\":\"remember.search.candidate_pool\","
                         "\"value\":\"abc\",\"reason\":\"invalid_value\"}}");
     ASSERT_STR_CONTAINS(got.out, "{\"code\":\"setting_import_skipped\",\"message\":\"skipped "
                                  "\\\"plugin.hybrid.weight\\\": remember has no setting by that "
@@ -6421,9 +6427,11 @@ TEST(import_skips_bad_shapes_and_bad_fields)
     ASSERT_EQ_INT(got.exit_code, 0);
     ASSERT_STREQ(got.err,
                  "remember: warning: skipped row 1 in the settings file because it isn't a "
-                 "setting (each row needs a \"key\").\n"
+                 "setting (each row needs a \"key\"). Add a \"key\" to that row, then import the "
+                 "file again.\n"
                  "remember: warning: skipped row 2 in the settings file because it isn't a "
-                 "setting (each row needs a \"key\").\n"
+                 "setting (each row needs a \"key\"). Add a \"key\" to that row, then import the "
+                 "file again.\n"
                  "remember: warning: skipped \"remember.search.max_results\": its \"scope\" "
                  "isn't valid.\n"
                  "remember: warning: skipped \"remember.search.max_results\": its \"scope\" "
@@ -6435,9 +6443,11 @@ TEST(import_skips_bad_shapes_and_bad_fields)
                  "remember: warning: skipped \"remember.search.max_results\": its \"deleted_at\" "
                  "isn't valid.\n"
                  "remember: warning: skipped row 9 in the settings file because it isn't a "
-                 "setting (each row needs a \"key\").\n"
+                 "setting (each row needs a \"key\"). Add a \"key\" to that row, then import the "
+                 "file again.\n"
                  "remember: warning: skipped \"remember.plugins.chain_budget\": \"null\" isn't a "
-                 "valid value.\n");
+                 "valid value. Set a valid value with 'remember settings set "
+                 "remember.plugins.chain_budget <value>'.\n");
     ASSERT_STR_CONTAINS(got.out, "1 settings written, 0 unchanged, 9 skipped.");
     cmd_result_free(&got);
     got = import_at(brain, userdb, json, 4U);
@@ -6446,10 +6456,12 @@ TEST(import_skips_bad_shapes_and_bad_fields)
                                  "{\"key\":null,\"scope\":\"user\",\"result\":\"skipped\","
                                  "\"action\":\"none\",\"reason\":\"bad_shape\"},"
                                  "{\"key\":\"remember.search.max_results\",\"scope\":null,");
-    ASSERT_STR_CONTAINS(got.out, "\"detail\":{\"key\":null,\"value\":null,\"reason\":"
-                                 "\"bad_shape\"}");
-    ASSERT_STR_CONTAINS(got.out, "\"detail\":{\"key\":null,\"value\":\"5\",\"reason\":"
-                                 "\"bad_shape\"}");
+    ASSERT_STR_CONTAINS(got.out, "\"fix\":\"Add a \\\"key\\\" to that row, then import the file "
+                                 "again.\",\"detail\":{\"key\":null,\"value\":null,"
+                                 "\"reason\":\"bad_shape\"}");
+    ASSERT_STR_CONTAINS(got.out, "\"fix\":\"Add a \\\"key\\\" to that row, then import the file "
+                                 "again.\",\"detail\":{\"key\":null,\"value\":\"5\","
+                                 "\"reason\":\"bad_shape\"}");
     cmd_result_free(&got);
     write_doc(file, sizeof(file), tmpl, "shape.json", brain_rows,
               sizeof(brain_rows) / sizeof(brain_rows[0]));
@@ -6463,7 +6475,8 @@ TEST(import_skips_bad_shapes_and_bad_fields)
                  "remember: warning: skipped \"remember.search.max_results\": its \"deleted_at\" "
                  "isn't valid.\n"
                  "remember: warning: skipped \"remember.buckets.prefixes\": \"[\"a:\",5]\" isn't "
-                 "a valid value.\n");
+                 "a valid value. Set a valid value with 'remember settings set "
+                 "remember.buckets.prefixes <value>'.\n");
     cmd_result_free(&got);
     got = import_at(brain, userdb, json, 4U);
     ASSERT_STR_CONTAINS(got.out, "\"detail\":{\"key\":\"remember.search.max_results\","
@@ -6564,11 +6577,13 @@ TEST(import_skips_other_scopes_and_disallowed_layers)
     ASSERT_EQ_INT(got.exit_code, 0);
     ASSERT_STREQ(got.err,
                  "remember: warning: skipped \"remember.search.candidate_pool\": it's a brain "
-                 "setting, and you ran with --scope user.\n"
+                 "setting, and you ran with --scope user. Run the command again with --scope "
+                 "brain.\n"
                  "remember: warning: skipped \"remember.buckets.prefixes\": it can't be stored for "
-                 "your user.\n"
+                 "your user. Take that row out of the file, then import it again.\n"
                  "remember: warning: skipped \"remember.plugins.idle_timeout\": it's a brain "
-                 "setting, and you ran with --scope user.\n");
+                 "setting, and you ran with --scope user. Run the command again with --scope "
+                 "brain.\n");
     cmd_result_free(&got);
     assert_query(userdb, "SELECT value || '|' || updated_by FROM settings",
                  "300|{\"kind\":\"agent\",\"id\":\"bot2\"}");
@@ -6576,14 +6591,124 @@ TEST(import_skips_other_scopes_and_disallowed_layers)
     ASSERT_EQ_INT(got.exit_code, 0);
     ASSERT_STREQ(got.err,
                  "remember: warning: skipped \"remember.search.candidate_pool\": it's a user "
-                 "setting, and you ran with --scope brain.\n"
+                 "setting, and you ran with --scope brain. Run the command again with --scope "
+                 "user.\n"
                  "remember: warning: skipped \"remember.buckets.prefixes\": it's a user setting, "
-                 "and you ran with --scope brain.\n"
+                 "and you ran with --scope brain. Run the command again with --scope user.\n"
                  "remember: warning: skipped \"remember.plugins.idle_timeout\": it can't be stored "
-                 "for one brain.\n");
+                 "for one brain. Take that row out of the file, then import it again.\n");
     cmd_result_free(&got);
     assert_query(brain, "SELECT key || '=' || value FROM settings",
                  "remember.search.candidate_pool=400");
+    harness_remove_tree(tmpl);
+}
+
+/* E3B-1 entries 9 and 10 under --json: the fix sits between the message and the detail. */
+TEST(import_json_other_scope_and_layer_warnings_carry_their_fix)
+{
+    char tmpl[] = "/tmp/remember-import-scopefix-XXXXXX";
+    char brain[REMEMBER_PATH_MAX];
+    char userdb[REMEMBER_PATH_MAX];
+    char file[REMEMBER_PATH_MAX];
+    char brain_pool[512];
+    char brain_idle[512];
+    const char *only_user[] = {"--json", "settings", "import", "--scope", "user", file};
+    const char *only_brain[] = {"--json",  "settings", "import",    file,
+                                "--scope", "brain",    "--no-hooks"};
+    Store *store = open_pair(tmpl, brain, sizeof(brain), userdb, sizeof(userdb));
+    CmdResult got;
+
+    if (store == NULL) {
+        return;
+    }
+    store_close(store);
+    brain_elem(brain_pool, sizeof(brain_pool), "remember.search.candidate_pool", "400",
+               "2026-10-24T09:12:00.000Z", k_dev_a, "{}", NULL);
+    brain_elem(brain_idle, sizeof(brain_idle), "remember.plugins.idle_timeout", "\"5m\"",
+               "2026-10-24T09:12:00.000Z", k_dev_a, "{}", NULL);
+    {
+        const char *rows[] = {brain_pool, k_imp_pool_user, k_imp_prefixes_user, brain_idle};
+
+        write_doc(file, sizeof(file), tmpl, "scopefix.json", rows, 4U);
+    }
+    got = import_at(brain, userdb, only_user, 6U);
+    ASSERT_STR_CONTAINS(got.out,
+                        "{\"code\":\"setting_import_skipped\",\"message\":\"skipped "
+                        "\\\"remember.search.candidate_pool\\\": it's a brain setting, and you ran "
+                        "with --scope user.\",\"fix\":\"Run the command again with --scope "
+                        "brain.\",\"detail\":{\"key\":\"remember.search.candidate_pool\","
+                        "\"scope\":\"brain\",\"reason\":\"other_scope\"}}");
+    ASSERT_STR_CONTAINS(got.out,
+                        "{\"code\":\"setting_import_skipped\",\"message\":\"skipped "
+                        "\\\"remember.buckets.prefixes\\\": it can't be stored for your user.\","
+                        "\"fix\":\"Take that row out of the file, then import it again.\","
+                        "\"detail\":{\"key\":\"remember.buckets.prefixes\",\"scope\":\"user\","
+                        "\"reason\":\"layer_not_allowed\"}}");
+    cmd_result_free(&got);
+    got = import_at(brain, userdb, only_brain, 7U);
+    ASSERT_STR_CONTAINS(got.out,
+                        "{\"code\":\"setting_import_skipped\",\"message\":\"skipped "
+                        "\\\"remember.search.candidate_pool\\\": it's a user setting, and you ran "
+                        "with --scope brain.\",\"fix\":\"Run the command again with --scope "
+                        "user.\",\"detail\":{\"key\":\"remember.search.candidate_pool\","
+                        "\"scope\":\"user\",\"reason\":\"other_scope\"}}");
+    ASSERT_STR_CONTAINS(got.out,
+                        "{\"code\":\"setting_import_skipped\",\"message\":\"skipped "
+                        "\\\"remember.plugins.idle_timeout\\\": it can't be stored for one "
+                        "brain.\",\"fix\":\"Take that row out of the file, then import it "
+                        "again.\",\"detail\":{\"key\":\"remember.plugins.idle_timeout\","
+                        "\"scope\":\"brain\",\"reason\":\"layer_not_allowed\"}}");
+    cmd_result_free(&got);
+    harness_remove_tree(tmpl);
+}
+
+/* decision:2026-11-17-w1-brain-row-fix-scope: a bare `settings set` of a key that also allows the
+   user layer writes the user layer, so a skipped brain row's fix names --scope brain. */
+TEST(import_bad_brain_value_fix_names_scope_brain)
+{
+    char tmpl[] = "/tmp/remember-import-brainfix-XXXXXX";
+    char brain[REMEMBER_PATH_MAX];
+    char userdb[REMEMBER_PATH_MAX];
+    char file[REMEMBER_PATH_MAX];
+    char bad_pool[512];
+    char bad_max[512];
+    const char *plain[] = {"settings", "import", file, "--scope", "brain", "--no-hooks"};
+    const char *json[] = {"--json", "settings", "import", file, "--scope", "brain", "--no-hooks"};
+    Store *store = open_pair(tmpl, brain, sizeof(brain), userdb, sizeof(userdb));
+    CmdResult got;
+
+    if (store == NULL) {
+        return;
+    }
+    store_close(store);
+    brain_elem(bad_pool, sizeof(bad_pool), "remember.search.candidate_pool", "\"abc\"",
+               "2026-10-24T09:12:00.000Z", k_dev_a, "{}", NULL);
+    brain_elem(bad_max, sizeof(bad_max), "remember.search.max_results", "\"x\"",
+               "2026-10-24T09:12:00.000Z", k_dev_a, "{}", NULL);
+    {
+        const char *rows[] = {bad_pool, bad_max};
+
+        write_doc(file, sizeof(file), tmpl, "brainfix.json", rows, 2U);
+    }
+    got = import_at(brain, userdb, plain, 6U);
+    ASSERT_EQ_INT(got.exit_code, 0);
+    ASSERT_STREQ(got.err,
+                 "remember: warning: skipped \"remember.search.candidate_pool\": \"abc\" isn't a "
+                 "valid value. Set a valid value with 'remember settings set "
+                 "remember.search.candidate_pool <value> --scope brain'.\n"
+                 "remember: warning: skipped \"remember.search.max_results\": \"x\" isn't a valid "
+                 "value. Set a valid value with 'remember settings set remember.search.max_results "
+                 "<value> --scope brain'.\n");
+    cmd_result_free(&got);
+    got = import_at(brain, userdb, json, 7U);
+    ASSERT_EQ_INT(got.exit_code, 0);
+    ASSERT_STR_CONTAINS(got.out, "\"fix\":\"Set a valid value with 'remember settings set "
+                                 "remember.search.candidate_pool <value> --scope brain'.\","
+                                 "\"detail\":{\"key\":\"remember.search.candidate_pool\"");
+    ASSERT_STR_CONTAINS(got.out, "\"fix\":\"Set a valid value with 'remember settings set "
+                                 "remember.search.max_results <value> --scope brain'.\","
+                                 "\"detail\":{\"key\":\"remember.search.max_results\"");
+    cmd_result_free(&got);
     harness_remove_tree(tmpl);
 }
 
@@ -6982,7 +7107,8 @@ TEST(import_dry_run_writes_nothing)
     got = import_at(brain, userdb, imp, 4U);
     ASSERT_EQ_INT(got.exit_code, 0);
     ASSERT_STREQ(got.err, "remember: warning: skipped \"remember.search.candidate_pool\": \"abc\" "
-                          "isn't a valid value.\n");
+                          "isn't a valid value. Set a valid value with 'remember settings set "
+                          "remember.search.candidate_pool <value>'.\n");
     ASSERT_TRUE(snprintf(want, sizeof(want),
                          "Would import \"%s\": 1 settings written, 0 unchanged, 1 skipped. "
                          "Nothing was changed.\n",
@@ -9779,6 +9905,8 @@ void register_settings_tests(void)
     RUN_TEST(import_skips_bad_shapes_and_bad_fields);
     RUN_TEST(import_skips_a_vector_too_wide_to_merge);
     RUN_TEST(import_skips_other_scopes_and_disallowed_layers);
+    RUN_TEST(import_json_other_scope_and_layer_warnings_carry_their_fix);
+    RUN_TEST(import_bad_brain_value_fix_names_scope_brain);
     RUN_TEST(import_merges_by_vector_then_time_then_device);
     RUN_TEST(import_keeps_a_brain_row_that_is_newer_or_tied);
     RUN_TEST(import_over_a_local_tombstone_has_no_old_value);

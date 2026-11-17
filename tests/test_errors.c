@@ -1178,8 +1178,10 @@ TEST(unknown_field_that_cannot_be_written_does_not_stick)
                   0);
     ASSERT_EQ_INT(diag_warning_count(), 1U);
     ASSERT_EQ_INT(fflush(err), 0);
-    ASSERT_STREQ(buf, "remember: warning: \"/tmp/note.json\" has a field remember doesn't know, "
-                      "\"extra\". The rest of the file was read.\n");
+    ASSERT_STREQ(buf,
+                 "remember: warning: \"/tmp/note.json\" has a field remember doesn't know, "
+                 "\"extra\". The rest of the file was read. "
+                 "Remove that field, or update remember if the file came from a newer version.\n");
     app_set_streams((AppStreams){.out = NULL, .err = NULL});
     diag_warnings_reset();
     ASSERT_EQ_INT(fclose(err), 0);
