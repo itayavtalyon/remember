@@ -170,6 +170,8 @@ static int import_from_json(Store *s, bool json, const ImportArgs *a, const char
     const char *path = a->from_json;
     ImportDoc doc;
     StoreImportResult result;
+    char before[STORE_DEVICE_ID_LEN + 1] = {0};
+    char after[STORE_DEVICE_ID_LEN + 1] = {0};
     int sys_errno = 0;
     StoreStatus st = STORE_OK;
 
@@ -216,8 +218,19 @@ static int import_from_json(Store *s, bool json, const ImportArgs *a, const char
         import_doc_free(&doc);
         return REMEMBER_ERR;
     }
+    /* A failed read leaves "", which can only cost one more record below. */
+    (void)store_brain_id(s, before, sizeof(before));
     st = store_import_doc(s, &doc, now, import_origin(a, path), &result);
     import_doc_free(&doc);
+    if (st == STORE_OK) {
+        (void)store_brain_id(s, after, sizeof(after));
+    }
+    /* An empty brain took the file's id: record it, as new-id does, so a copy made before the
+       next open is the one flagged. */
+    if (st == STORE_OK && strcmp(before, after) != 0 && brain_note_open(s) != 0) {
+        store_import_result_free(&result);
+        return REMEMBER_ERR;
+    }
     return import_finish(s, json, st, &result);
 }
 

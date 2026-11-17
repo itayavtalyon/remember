@@ -75,9 +75,9 @@ A lock that cannot be made (not the timeout), or a failure to write, sync or ren
 - Plain output is empty: no extra sentence.
 - `--json` type is `brain.prune.result`. `data` is `{action:"pruned", count, brains[]}`, the rows it dropped (`decision:2026-11-15-plan26-coder-grill` 4).
 
-`brain list` and `brain prune` take no argument. `remember brain new-id` stores the new id as before, then records it in this path's row with the same lock and busy timeout as an open. If that fails (busy, unreadable file), the command exits 1 and the next open writes the id to the row.
+`brain list` and `brain prune` take no argument. `remember brain new-id` stores the new id as before, then records it in this path's row with the same lock and busy timeout as an open. A lock held past that timeout exits 1 (`busy`) with the new id already stored, and the next open writes it to the row. A file that cannot be read or written is left as it is, as on an open, and the command exits 0.
 
-`remember import --from-json` into an empty brain takes the file's `brain_id` (plan 23), unless this list has a brain with that id that still has it. Then the brain keeps its own id, because the file came from that brain and taking its id would make this one a copy. If that brain cannot be checked (busy, EACCES, EIO), the import exits 1 with the same codes as an open and writes nothing. A list that cannot be read lists nothing.
+`remember import --from-json` into an empty brain takes the file's `brain_id` (plan 23), unless this list has a brain with that id that still has it. Then the brain keeps its own id, because the file came from that brain and taking its id would make this one a copy. If that brain cannot be checked (busy, EACCES, EIO), the import exits 1 with the same codes as an open and writes nothing. A list that cannot be read lists nothing. An import that took the file's id records it in this path's row the way `brain new-id` does, with the same busy rule.
 
 ## brains.json is another program's input
 

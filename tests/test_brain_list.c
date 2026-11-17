@@ -2627,17 +2627,88 @@ TEST(an_import_of_the_export_of_a_listed_brain_that_is_gone_takes_its_id_and_the
     scene_release(&scn);
 }
 
+/* A hand-edited list can name one id twice. The first row that still has it decides; a later
+   row whose brain is gone does not undo that. */
+TEST(an_import_whose_id_is_listed_twice_with_the_first_brain_live_keeps_the_new_brain_s_own_id)
+{
+    Scene scn = given_scene();
+    char *file = given_path(scn.dir, "e.json");
+    char *gone = given_path(scn.dir, "gone.db");
+    char doc[PATH_CAP * 3];
+    char *real = NULL;
+    char *src_id = NULL;
+    char *dst_id = NULL;
+    CmdResult r;
+
+    given_brain_opened(scn.brain);
+    real = real_path_of(scn.brain);
+    src_id = brain_id_in(scn.brain);
+    given_export_of(scn.brain, file);
+    ASSERT_TRUE(snprintf(doc, sizeof(doc),
+                         "[{\"path\":\"%s\",\"brain_id\":\"%s\",\"added_at\":\"t\"},"
+                         "{\"path\":\"%s\",\"brain_id\":\"%s\",\"added_at\":\"t\"}]",
+                         real, src_id, gone, src_id) < (int)sizeof(doc));
+    given_json(scn.list, doc);
+    r = import_json_into(scn.other, file, "5000");
+    ASSERT_EQ_INT(r.exit_code, 0);
+    cmd_result_free(&r);
+    dst_id = brain_id_in(scn.other);
+    ASSERT_TRUE(strcmp(dst_id, src_id) != 0);
+    free(dst_id);
+    free(src_id);
+    free(real);
+    free(gone);
+    free(file);
+    scene_release(&scn);
+}
+
+/* The restore took the id, so the import records it as new-id does: a copy made before the
+   restored brain is opened again is the one flagged, not the restored brain. */
+TEST(an_import_that_takes_the_file_s_id_records_it_so_a_copy_opened_first_is_the_one_flagged)
+{
+    Scene scn = given_scene();
+    char *file = given_path(scn.dir, "e.json");
+    char *copy = given_path(scn.dir, "three.db");
+    char *src_id = NULL;
+    char *id = NULL;
+    CmdResult r;
+
+    given_brain_opened(scn.brain);
+    src_id = brain_id_in(scn.brain);
+    given_export_of(scn.brain, file);
+    ASSERT_EQ_INT(unlink(scn.brain), 0);
+    r = import_json_into(scn.other, file, "5000");
+    ASSERT_EQ_INT(r.exit_code, 0);
+    cmd_result_free(&r);
+    copy_file_to(scn.other, copy);
+    r = run_args(copy, "tags", NULL, NULL);
+    ASSERT_STR_CONTAINS(r.err, "looks like a copy of another brain");
+    cmd_result_free(&r);
+    r = run_args(scn.other, "tags", NULL, NULL);
+    ASSERT_STREQ(r.err, "");
+    cmd_result_free(&r);
+    id = brain_id_in(scn.other);
+    ASSERT_STREQ(id, src_id);
+    free(id);
+    free(src_id);
+    free(copy);
+    free(file);
+    scene_release(&scn);
+}
+
 /* The listed brain cannot be checked: the import fails visibly and the new brain stays empty. */
 TEST(
     an_import_whose_listed_source_brain_is_locked_past_the_busy_timeout_fails_busy_and_imports_nothing)
 {
     Scene scn = given_scene();
     char *file = given_path(scn.dir, "e.json");
+    char *src_id = NULL;
     char *dst_id = NULL;
     sqlite3 *lock = NULL;
     CmdResult r;
 
     given_brain_opened(scn.brain);
+    src_id = brain_id_in(scn.brain);
     given_export_of(scn.brain, file);
     lock = given_locked(scn.brain);
     r = import_json_into(scn.other, file, "50");
@@ -2646,10 +2717,12 @@ TEST(
     ASSERT_STR_CONTAINS(r.err, "cannot tell whether");
     cmd_result_free(&r);
     dst_id = brain_id_in(scn.other);
+    ASSERT_TRUE(strcmp(dst_id, src_id) != 0);
     r = run_args(scn.other, "list", NULL, NULL);
     ASSERT_STREQ(r.out, "");
     cmd_result_free(&r);
     free(dst_id);
+    free(src_id);
     free(file);
     scene_release(&scn);
 }
@@ -3372,6 +3445,8 @@ void register_brain_list_tests(void)
         an_import_of_the_export_of_a_listed_brain_keeps_the_new_brain_s_own_id_and_warns_nothing);
     RUN_TEST(
         an_import_of_the_export_of_a_listed_brain_that_is_gone_takes_its_id_and_the_list_follows);
+    RUN_TEST(an_import_whose_id_is_listed_twice_with_the_first_brain_live_keeps_the_new_brain_s_own_id);
+    RUN_TEST(an_import_that_takes_the_file_s_id_records_it_so_a_copy_opened_first_is_the_one_flagged);
     RUN_TEST(
         an_import_whose_listed_source_brain_is_locked_past_the_busy_timeout_fails_busy_and_imports_nothing);
     RUN_TEST(an_import_with_an_unreadable_brains_json_takes_the_file_s_id);
