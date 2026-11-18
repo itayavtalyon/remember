@@ -8,7 +8,6 @@
 #include "store.h"
 
 #include <errno.h>
-#include <fcntl.h>
 #include <limits.h>
 #include <stdbool.h>
 #include <stddef.h>
