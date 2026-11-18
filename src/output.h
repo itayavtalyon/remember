@@ -31,8 +31,8 @@ typedef struct {
 /* An event's memory (plan 31; PLUGIN-PROTOCOL R3.7, R3.8): the object `remember --json get`
  * writes without local_id and version_vector, plus change_seq, and links whose stubs have no
  * local_id either. Only the rows of links whose subject_id is e->id are written. No newline. */
-int output_event_memory_json(FILE *out, const Entry *e, long long change_seq,
-                             EventLinks links, const char *now);
+int output_event_memory_json(FILE *out, const Entry *e, long long change_seq, EventLinks links,
+                             const char *now);
 
 /*
  * The *_data writers write the data object of a --json success, with no

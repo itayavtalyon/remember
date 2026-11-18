@@ -111,6 +111,7 @@ int cmd_bin_take_flag(const char *arg, CmdBinOpts *opts);
 typedef struct {
     bool on;
     bool off;
+    /* NOLINTNEXTLINE(readability-magic-numbers,cppcoreguidelines-avoid-magic-numbers) */
     char pad_[6]; /* explicit tail padding (kept -Wpadded-clean) */
 } CmdHooks;
 

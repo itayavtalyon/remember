@@ -28,6 +28,7 @@
 #endif
 
 enum {
+    HOOK_PREFIX_LEN = 7, /* "plugin/" */
     RULES_GROW = 8,
     LINE_CAP = 512,
     HOP_CAP = 320, /* one chain item as text, with room to spare */
@@ -35,13 +36,15 @@ enum {
     LOG_MODE = 0600,
     SEGMENT_MAX = 40,
     DECIMAL = 10,
-    UTF8_CONT_MASK = 0xC0,
-    UTF8_CONT = 0x80,
     TS_CAP = 32,
     SETTING_ERR_TEXT = 256
 };
 
 /* ---- names ------------------------------------------------------------------------------ */
+
+/* The two bits that mark a UTF-8 continuation byte, and their value in one. */
+static const unsigned k_utf8_cont_mask = 0xC0U;
+static const unsigned k_utf8_cont = 0x80U;
 
 static const char *const k_type_names[EVENT_TYPE_COUNT] = {
     [EVENT_CREATED] = "memory.created", [EVENT_UPDATED] = "memory.updated",
@@ -81,6 +84,7 @@ static const char *const k_bin_names[] = {
 
 /* ponytail: process-wide like the appio streams; one engine per process until plan 29's handle
    carries the capability bits. */
+// NOLINTNEXTLINE(cppcoreguidelines-avoid-non-const-global-variables)
 static bool g_processes = REMEMBER_PROCESSES != 0;
 
 bool events_processes(void)
@@ -88,9 +92,9 @@ bool events_processes(void)
     return g_processes;
 }
 
-void events_set_processes(bool on)
+void events_set_processes(bool enabled)
 {
-    g_processes = on;
+    g_processes = enabled;
 }
 
 /* ---- cause -------------------------------------------------------------------------------- */
@@ -100,7 +104,13 @@ static bool segment_char(char c, bool first)
     if (c >= 'a' && c <= 'z') {
         return true;
     }
-    return !first && ((c >= '0' && c <= '9') || c == '_');
+    if (first) {
+        return false;
+    }
+    if (c >= '0' && c <= '9') {
+        return true;
+    }
+    return c == '_';
 }
 
 /* One name segment [a-z][a-z0-9_]{0,39} from s up to end. */
@@ -124,27 +134,33 @@ static bool hook_name_ok(const char *s)
 {
     const char *slash = NULL;
 
-    if (s == NULL || strncmp(s, "plugin/", 7) != 0) {
+    if (s == NULL || strncmp(s, "plugin/", (size_t)HOOK_PREFIX_LEN) != 0) {
         return false;
     }
-    s += 7;
+    s += HOOK_PREFIX_LEN;
     slash = strchr(s, '/');
     if (slash == NULL) {
         return segment_ok(s, s + strlen(s));
     }
-    return segment_ok(s, slash) && segment_ok(slash + 1, slash + 1 + strlen(slash + 1));
+    if (!segment_ok(s, slash)) {
+        return false;
+    }
+    return segment_ok(slash + 1, slash + 1 + strlen(slash + 1));
 }
 
 static bool uuid_ok(const char *s)
 {
-    return s != NULL && store_sync_id_is_canonical(s) != 0;
+    if (s == NULL) {
+        return false;
+    }
+    return store_sync_id_is_canonical(s) != 0;
 }
 
 /* A whole integer of 1 to DEPTH_MAX: the REMEMBER_HOOK_DEPTH rule of hook_depth_blocks, with the
    value. 0 is "not in a run". */
 static long long depth_from_env(void)
 {
-    const char *text = getenv("REMEMBER_HOOK_DEPTH");
+    const char *text = getenv("REMEMBER_HOOK_DEPTH"); // NOLINT(concurrency-mt-unsafe)
     char *end = NULL;
     long long value = 0;
 
@@ -221,64 +237,71 @@ static int hop_append(char *text, size_t cap, size_t *len, const Hop *hop)
     return 0;
 }
 
+enum { CHAIN_TEXT_CAP = (EVENT_CHAIN_MAX + 1) * HOP_CAP };
+
+/* The items of a chain array and then this run's hop: appended to text, their hooks kept in
+   out->chain_hooks. 0, or -1 when an item is not valid. */
+static int chain_fill(const JsonValue *array, const Hop *hop, EventCause *out, char *text)
+{
+    size_t len = 1U;
+    size_t i = 0;
+
+    text[0] = '[';
+    text[1] = '\0';
+    for (i = 0; i < array->u.array.n && i < (size_t)EVENT_CHAIN_MAX - 1U; i++) {
+        Hop item;
+
+        if (!hop_from_json(array->u.array.items[i], &item) ||
+            hop_append(text, CHAIN_TEXT_CAP, &len, &item) != 0) {
+            return -1;
+        }
+        (void)snprintf(out->chain_hooks[i], EVENT_HOOK_CAP, "%s", item.hook);
+    }
+    if (i != array->u.array.n || i >= (size_t)EVENT_CHAIN_MAX ||
+        hop_append(text, CHAIN_TEXT_CAP, &len, hop) != 0) {
+        return -1;
+    }
+    text[len++] = ']';
+    text[len] = '\0';
+    (void)snprintf(out->chain_hooks[i], EVENT_HOOK_CAP, "%s", hop->hook);
+    out->nchain = i + 1U;
+    return 0;
+}
+
 /* The chain of a write made in a run: REMEMBER_HOOK_CHAIN plus this run's hop. False when
    either is missing or not valid; the cause then keeps chain []. */
 static bool chain_from_env(EventCause *out, const char *hook, long long depth)
 {
+    // NOLINTBEGIN(concurrency-mt-unsafe) single-threaded CLI
     const char *chain_env = getenv("REMEMBER_HOOK_CHAIN");
     const char *event_id = getenv("REMEMBER_CAUSE_EVENT_ID");
     const char *memory_id = getenv("REMEMBER_ID");
+    // NOLINTEND(concurrency-mt-unsafe)
     JsonValue *tree = NULL;
     Hop hop = {.hook = hook, .event_id = event_id, .memory_id = memory_id, .depth = depth};
-    size_t i = 0;
-    size_t len = 1U;
     char *text = NULL;
-    bool ok = false;
+    bool valid = false;
 
     if (chain_env == NULL || !uuid_ok(event_id) || !uuid_ok(memory_id) || hook[0] == '\0' ||
         jsonread_parse(chain_env, strlen(chain_env), &tree) != JSONREAD_OK) {
         return false;
     }
-    if (tree->type != JSON_ARRAY || tree->u.array.n >= (size_t)EVENT_CHAIN_MAX) {
-        jsonread_free(tree);
-        return false;
-    }
-    text = (char *)malloc(((size_t)EVENT_CHAIN_MAX + 1U) * HOP_CAP);
-    if (text == NULL) {
-        jsonread_free(tree);
-        return false;
-    }
-    text[0] = '[';
-    text[1] = '\0';
-    ok = true;
-    for (i = 0; ok && i < tree->u.array.n; i++) {
-        Hop item;
-
-        ok = hop_from_json(tree->u.array.items[i], &item) &&
-             hop_append(text, ((size_t)EVENT_CHAIN_MAX + 1U) * HOP_CAP, &len, &item) == 0;
-        if (ok) {
-            (void)snprintf(out->chain_hooks[i], EVENT_HOOK_CAP, "%s", item.hook);
-        }
-    }
-    ok = ok && hop_append(text, ((size_t)EVENT_CHAIN_MAX + 1U) * HOP_CAP, &len, &hop) == 0;
-    jsonread_free(tree);
-    if (!ok) {
+    text = (char *)malloc(CHAIN_TEXT_CAP);
+    if (text != NULL && tree->type == JSON_ARRAY && chain_fill(tree, &hop, out, text) == 0) {
+        free(out->chain_json);
+        out->chain_json = text;
+        valid = true;
+    } else {
         free(text);
-        return false;
     }
-    text[len++] = ']';
-    text[len] = '\0';
-    (void)snprintf(out->chain_hooks[i], EVENT_HOOK_CAP, "%s", hook);
-    out->nchain = i + 1U;
-    free(out->chain_json);
-    out->chain_json = text;
-    return true;
+    jsonread_free(tree);
+    return valid;
 }
 
 int events_cause_read(EventCause *out)
 {
-    const char *hook = getenv("REMEMBER_HOOK_NAME");
-    const char *run_id = getenv("REMEMBER_HOOK_RUN_ID");
+    const char *hook = getenv("REMEMBER_HOOK_NAME");     // NOLINT(concurrency-mt-unsafe)
+    const char *run_id = getenv("REMEMBER_HOOK_RUN_ID"); // NOLINT(concurrency-mt-unsafe)
     long long depth = depth_from_env();
 
     memset(out, 0, sizeof(*out));
@@ -333,8 +356,8 @@ int events_rules_add(EventRules *rules, const PluginManifest *manifest)
         }
         if (rules->count == rules->cap) {
             size_t cap = rules->cap + (size_t)RULES_GROW;
-            EventAction *grown = (EventAction *)realloc((void *)rules->actions,
-                                                        cap * sizeof(*grown));
+            EventAction *grown =
+                (EventAction *)realloc((void *)rules->actions, cap * sizeof(*grown));
 
             if (grown == NULL) {
                 return -1;
@@ -437,19 +460,28 @@ static bool tags_pass(const PluginEntry *e, const EventFacts *f)
     if (tag_set_passes(e, f->tags, f->ntags)) {
         return true;
     }
-    return e->has_match_before && e->match_before && f->has_before &&
-           tag_set_passes(e, f->tags_before, f->ntags_before);
+    if (e->has_match_before && e->match_before && f->has_before) {
+        return tag_set_passes(e, f->tags_before, f->ntags_before);
+    }
+    return false;
 }
 
-static bool name_listed(const char *list, size_t cap, size_t n, const char *name)
+/* The names of one filter list: n entries of cap bytes each. An empty list is no test. */
+typedef struct {
+    const char *items;
+    size_t cap;
+    size_t count;
+} NameList;
+
+static bool name_listed(NameList list, const char *name)
 {
     size_t i = 0;
 
-    if (n == 0U) {
+    if (list.count == 0U) {
         return true;
     }
-    for (i = 0; i < n; i++) {
-        if (strcmp(list + (i * cap), name) == 0) {
+    for (i = 0; i < list.count; i++) {
+        if (strcmp(list.items + (i * list.cap), name) == 0) {
             return true;
         }
     }
@@ -466,8 +498,14 @@ static bool hook_is_named(const char *pattern, const char *hook)
         return strcmp(pattern, hook) == 0;
     }
     n = strlen(pattern);
-    return strncmp(hook, "plugin/", 7) == 0 && strncmp(hook + 7, pattern, n) == 0 &&
-           (hook[7 + n] == '\0' || hook[7 + n] == '/');
+    if (strncmp(hook, "plugin/", (size_t)HOOK_PREFIX_LEN) != 0 ||
+        strncmp(hook + HOOK_PREFIX_LEN, pattern, n) != 0) {
+        return false;
+    }
+    if (hook[HOOK_PREFIX_LEN + n] == '\0') {
+        return true;
+    }
+    return hook[HOOK_PREFIX_LEN + n] == '/';
 }
 
 static bool caused_by(const PluginEntry *e, const EventCause *cause)
@@ -494,15 +532,19 @@ EventMatch events_match(const EventAction *action, const EventFacts *f)
     bool origin_ok = false;
     size_t i = 0;
 
+    const NameList created = {&e->created_by[0][0], PLUGIN_ACTOR_CAP, e->n_created_by};
+    const NameList updated = {&e->updated_by[0][0], PLUGIN_ACTOR_CAP, e->n_updated_by};
+    const NameList bins = {&e->bins[0][0], PLUGIN_BIN_CAP, e->n_bins};
+
     if (!event_listed(e, f->type) || !tags_pass(e, f) ||
-        !name_listed(&e->created_by[0][0], PLUGIN_ACTOR_CAP, e->n_created_by, f->created_by_kind) ||
-        !name_listed(&e->updated_by[0][0], PLUGIN_ACTOR_CAP, e->n_updated_by, f->updated_by_kind) ||
-        !name_listed(&e->bins[0][0], PLUGIN_BIN_CAP, e->n_bins, k_bin_names[f->bin]) ||
-        caused_by(e, f->cause)) {
+        !name_listed(created, f->created_by_kind) || !name_listed(updated, f->updated_by_kind) ||
+        !name_listed(bins, k_bin_names[f->bin]) || caused_by(e, f->cause)) {
         return EVENT_SKIP_FILTER;
     }
     for (i = 0; i < e->n_origins; i++) {
-        origin_ok = origin_ok || strcmp(e->origins[i], k_origin_names[f->origin]) == 0;
+        if (strcmp(e->origins[i], k_origin_names[f->origin]) == 0) {
+            origin_ok = true;
+        }
     }
     if (!origin_ok && f->hooks != STORE_HOOKS_ON) {
         return EVENT_SKIP_ORIGIN;
@@ -519,7 +561,8 @@ void events_count_skip(EventAction *action, EventMatch match, EventType type)
     }
 }
 
-/* ---- planning --------------------------------------------------------------------------------- */
+/* ---- planning ---------------------------------------------------------------------------------
+ */
 
 static bool same_text(const char *a, const char *b)
 {
@@ -546,8 +589,10 @@ static bool same_tags(const Entry *a, const Entry *b)
 
 static bool same_link(const EventLink *a, const EventLink *b)
 {
-    return strcmp(a->kind, b->kind) == 0 && strcmp(a->direction, b->direction) == 0 &&
-           strcmp(a->other_id, b->other_id) == 0;
+    if (strcmp(a->kind, b->kind) != 0 || strcmp(a->direction, b->direction) != 0) {
+        return false;
+    }
+    return strcmp(a->other_id, b->other_id) == 0;
 }
 
 static bool link_in(const EventLink *list, size_t n, const EventLink *link)
@@ -646,9 +691,15 @@ bool events_plan(const EventRow *row, EventDraft **out, size_t *n)
         return true;
     }
     d.body_changed = strcmp(row->before->body, row->after->body) != 0;
-    d.key_changed = !same_text(row->before->key, row->after->key);
-    d.tags_changed = !same_tags(row->before, row->after);
-    d.expires_changed = !same_text(row->before->expires_at, row->after->expires_at);
+    if (!same_text(row->before->key, row->after->key)) {
+        d.key_changed = true;
+    }
+    if (!same_tags(row->before, row->after)) {
+        d.tags_changed = true;
+    }
+    if (!same_text(row->before->expires_at, row->after->expires_at)) {
+        d.expires_changed = true;
+    }
     if ((d.body_changed || d.key_changed || d.tags_changed || d.expires_changed) &&
         !draft_push(&list, n, &cap, &d)) {
         return false;
@@ -662,7 +713,8 @@ bool events_plan(const EventRow *row, EventDraft **out, size_t *n)
     return true;
 }
 
-/* ---- the payload ------------------------------------------------------------------------------ */
+/* ---- the payload ------------------------------------------------------------------------------
+ */
 
 /* Which cuts of H-3.4 were made, in order. */
 typedef struct {
@@ -675,9 +727,7 @@ typedef struct {
     const EventStamp *stamp;
     const EventDraft *draft;
     const EventRow *row;
-    const Entry *memory;
-    EventLinks links;
-    long long change_seq;
+    const EventMemory *memory;
 } PayloadIn;
 
 static int write_string_list(FILE *f, const char *const *items, size_t n)
@@ -691,6 +741,18 @@ static int write_nullable_string(FILE *f, const char *s)
         return fputs("null", f) < 0 ? -1 : 0;
     }
     return output_json_string(f, s);
+}
+
+/* The comma that goes before every item of a list or object but the first. */
+static int write_sep(FILE *f, bool *first)
+{
+    int rc = 0;
+
+    if (!*first && fputc(',', f) == EOF) {
+        rc = -1;
+    }
+    *first = false;
+    return rc;
 }
 
 /* tags that are in a and not in b, both sorted by byte order. */
@@ -712,21 +774,20 @@ static int write_tag_difference(FILE *f, const Entry *a, const Entry *b)
         if (found) {
             continue;
         }
-        if ((!first && fputc(',', f) == EOF) || output_json_string(f, a->tags[i]) != 0) {
+        if (write_sep(f, &first) != 0 || output_json_string(f, a->tags[i]) != 0) {
             return -1;
         }
-        first = false;
     }
     return fputc(']', f) == EOF ? -1 : 0;
 }
 
-/* One name in the "fields" list, with the comma that goes before it. */
+/* One name in the "fields" list. */
 static int write_field_name(FILE *f, bool *first, const char *name)
 {
-    int rc = fprintf(f, "%s\"%s\"", *first ? "" : ",", name);
-
-    *first = false;
-    return rc < 0 ? -1 : 0;
+    if (write_sep(f, first) != 0) {
+        return -1;
+    }
+    return fprintf(f, "\"%s\"", name) < 0 ? -1 : 0;
 }
 
 static int write_fields_list(FILE *f, const EventDraft *d)
@@ -745,6 +806,15 @@ static int write_fields_list(FILE *f, const EventDraft *d)
     return fputc(']', f) == EOF ? -1 : 0;
 }
 
+/* The start of one member of the "before" object: its comma and its name. */
+static int write_member(FILE *f, bool *first, const char *name)
+{
+    if (write_sep(f, first) != 0) {
+        return -1;
+    }
+    return fprintf(f, "\"%s\":", name) < 0 ? -1 : 0;
+}
+
 /* The old value of each changed field, as one object member each. */
 static int write_before(FILE *f, const PayloadIn *in, Cuts cuts)
 {
@@ -756,25 +826,20 @@ static int write_before(FILE *f, const PayloadIn *in, Cuts cuts)
         return -1;
     }
     if (d->key_changed &&
-        (fputs("\"key\":", f) < 0 || write_nullable_string(f, old->key) != 0)) {
+        (write_member(f, &first, "key") != 0 || write_nullable_string(f, old->key) != 0)) {
         return -1;
     }
-    first = !d->key_changed;
     if (d->body_changed && !cuts.before_body &&
-        (fputs(first ? "\"body\":" : ",\"body\":", f) < 0 ||
-         output_json_string(f, old->body) != 0)) {
+        (write_member(f, &first, "body") != 0 || output_json_string(f, old->body) != 0)) {
         return -1;
     }
-    first = first && (!d->body_changed || cuts.before_body);
     if (d->tags_changed &&
-        (fputs(first ? "\"tags\":" : ",\"tags\":", f) < 0 ||
+        (write_member(f, &first, "tags") != 0 ||
          write_string_list(f, (const char *const *)old->tags, old->ntags) != 0)) {
         return -1;
     }
-    first = first && !d->tags_changed;
-    if (d->expires_changed &&
-        (fputs(first ? "\"expires_at\":" : ",\"expires_at\":", f) < 0 ||
-         write_nullable_string(f, old->expires_at) != 0)) {
+    if (d->expires_changed && (write_member(f, &first, "expires_at") != 0 ||
+                               write_nullable_string(f, old->expires_at) != 0)) {
         return -1;
     }
     return fputc('}', f) == EOF ? -1 : 0;
@@ -848,27 +913,31 @@ static int write_truncation(FILE *f, Cuts cuts)
 static int write_data(FILE *f, const PayloadIn *in, Cuts cuts, const Entry *memory)
 {
     const EventStamp *st = in->stamp;
-    EventLinks links = cuts.links ? (EventLinks){.rows = NULL, .count = 0U} : in->links;
+    EventLinks links = {.rows = in->memory->links, .count = in->memory->nlinks};
 
+    if (cuts.links) {
+        links = (EventLinks){.rows = NULL, .count = 0U};
+    }
     if (fputs("{\"event_id\":", f) < 0 || output_json_string(f, st->event_id) != 0 ||
         fprintf(f, ",\"event_type\":\"%s\",\"occurred_at\":\"%s\",\"detected_at\":\"%s\"",
                 event_type_name(in->draft->type), st->at, st->at) < 0 ||
         fputs(",\"batch_id\":", f) < 0 || output_json_string(f, st->batch_id) != 0 ||
-        fputs(",\"cause\":", f) < 0 || write_cause(f, st) != 0 || fputs(",\"brain\":{\"path\":", f) < 0 ||
-        output_json_string(f, st->brain_path) != 0 || fputs(",\"device_id\":", f) < 0 ||
-        output_json_string(f, st->device_id) != 0 || fputs("},\"memory\":", f) < 0 ||
-        output_event_memory_json(f, memory, in->change_seq, links, st->at) != 0 ||
+        fputs(",\"cause\":", f) < 0 || write_cause(f, st) != 0 ||
+        fputs(",\"brain\":{\"path\":", f) < 0 || output_json_string(f, st->brain_path) != 0 ||
+        fputs(",\"device_id\":", f) < 0 || output_json_string(f, st->device_id) != 0 ||
+        fputs("},\"memory\":", f) < 0 ||
+        output_event_memory_json(f, memory, in->memory->change_seq, links, st->at) != 0 ||
         fputs(",\"changes\":", f) < 0 || write_changes(f, in, cuts) != 0 ||
         write_truncation(f, cuts) != 0) {
         return -1;
     }
-    return fprintf(f, ",\"limits\":{\"max_bytes\":%d}}", (int)EVENT_PAYLOAD_MAX) < 0 ? -1 : 0;
+    return fprintf(f, ",\"limits\":{\"max_bytes\":%d}}", EVENT_PAYLOAD_MAX) < 0 ? -1 : 0;
 }
 
 /* The data text for these cuts, heap. NULL when the text cannot be made. */
 static char *render(const PayloadIn *in, Cuts cuts)
 {
-    Entry cut = *in->memory;
+    Entry cut = *in->memory->entry;
     char *piece = NULL;
     char *buf = NULL;
     size_t len = 0;
@@ -876,17 +945,18 @@ static char *render(const PayloadIn *in, Cuts cuts)
     int rc = 0;
 
     if (cuts.body) {
-        size_t keep = strlen(in->memory->body);
+        size_t keep = strlen(in->memory->entry->body);
 
         keep = keep > (size_t)EVENT_BODY_CUT ? (size_t)EVENT_BODY_CUT : keep;
-        while (keep > 0U && (((unsigned char)in->memory->body[keep]) & UTF8_CONT_MASK) == UTF8_CONT) {
+        while (keep > 0U && ((unsigned)(unsigned char)in->memory->entry->body[keep] &
+                             k_utf8_cont_mask) == k_utf8_cont) {
             keep--;
         }
         piece = (char *)malloc(keep + 1U);
         if (piece == NULL) {
             return NULL;
         }
-        memcpy(piece, in->memory->body, keep);
+        memcpy(piece, in->memory->entry->body, keep);
         piece[keep] = '\0';
         cut.body = piece;
     }
@@ -905,19 +975,18 @@ static char *render(const PayloadIn *in, Cuts cuts)
 }
 
 char *events_payload(const EventStamp *stamp, const EventDraft *draft, const EventRow *row,
-                     const Entry *memory, EventLinks links, long long change_seq)
+                     const EventMemory *memory)
 {
-    PayloadIn in = {.stamp = stamp,
-                    .draft = draft,
-                    .row = row,
-                    .memory = memory,
-                    .links = links,
-                    .change_seq = change_seq};
+    PayloadIn in = {.stamp = stamp, .draft = draft, .row = row, .memory = memory};
     Cuts cuts = {.before_body = false, .links = false, .body = false};
     char *text = render(&in, cuts);
-    bool can_before = draft->type == EVENT_UPDATED && !draft->has_link && draft->body_changed;
-    bool can_links = links.count > 0U;
-    bool can_body = strlen(memory->body) > (size_t)EVENT_BODY_CUT;
+    bool can_before = false;
+    bool can_links = memory->nlinks > 0U;
+    bool can_body = strlen(memory->entry->body) > (size_t)EVENT_BODY_CUT;
+
+    if (draft->type == EVENT_UPDATED && !draft->has_link && draft->body_changed) {
+        can_before = true;
+    }
 
     if (text != NULL && strlen(text) > (size_t)EVENT_PAYLOAD_MAX && can_before) {
         free(text);
@@ -963,12 +1032,12 @@ char *events_recipients_json(const char *const *entries, size_t count)
     return buf;
 }
 
-/* ---- hooks.log -------------------------------------------------------------------------------- */
+/* ---- hooks.log --------------------------------------------------------------------------------
+ */
 
 /* One H-7.2 line, members in the order the log fixes. Every string is a name this program holds:
    a command word, an event type, a plugin or entry name. */
-static int skipped_line(char *out, size_t cap, const char *entry_fields,
-                        const char *const *words)
+static int skipped_line(char *out, size_t cap, const char *entry_fields, const char *const *words)
 {
     char at[TS_CAP];
 
@@ -1002,6 +1071,25 @@ static bool any_skipped_source(const EventRules *rules)
     return false;
 }
 
+/* One H-7.2 line for this action and type, appended to the open log. */
+static bool log_one(int fd, const EventAction *a, int type, const char *const *words)
+{
+    char fields[LINE_CAP];
+    char line[LINE_CAP * 2];
+    int n = snprintf(fields, sizeof(fields), "\"plugin\":\"%s\",\"action\":\"%s\",\"count\":%zu",
+                     a->plugin, a->entry.name, a->skipped_source[type]);
+
+    if (n < 0 || (size_t)n >= sizeof(fields)) {
+        return false;
+    }
+    n = skipped_line(line, sizeof(line), fields, words);
+    if (n < 0) {
+        return false;
+    }
+    return log_append(fd, line, (size_t)n);
+}
+
+// NOLINTNEXTLINE(bugprone-easily-swappable-parameters) the brain path, then the command word
 size_t events_log_skipped(EventRules *rules, const char *brain_path, const char *command,
                           StoreOrigin origin)
 {
@@ -1022,24 +1110,13 @@ size_t events_log_skipped(EventRules *rules, const char *brain_path, const char 
         EventAction *a = &rules->actions[i];
         int type = 0;
 
-        for (type = 0; type < (int)EVENT_TYPE_COUNT; type++) {
-            char fields[LINE_CAP];
-            char line[LINE_CAP * 2];
+        for (type = 0; type < EVENT_TYPE_COUNT; type++) {
             const char *words[] = {k_type_names[type], command, k_origin_names[origin]};
-            int n = 0;
 
-            if (a->skipped_source[type] == 0U) {
-                continue;
+            if (a->skipped_source[type] != 0U && log_one(fd, a, type, words)) {
+                a->skipped_source[type] = 0;
+                written++;
             }
-            n = snprintf(fields, sizeof(fields), "\"plugin\":\"%s\",\"action\":\"%s\",\"count\":%zu",
-                         a->plugin, a->entry.name, a->skipped_source[type]);
-            if (n < 0 || (size_t)n >= sizeof(fields) ||
-                (n = skipped_line(line, sizeof(line), fields, words)) < 0 ||
-                !log_append(fd, line, (size_t)n)) {
-                continue;
-            }
-            a->skipped_source[type] = 0;
-            written++;
         }
     }
     (void)close(fd);

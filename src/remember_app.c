@@ -674,9 +674,9 @@ static int load_registry(SettingsRegistry **out, PluginManifestList *mans)
 static const char *event_command_name(CliCommand command)
 {
     static const char *const k_names[] = {
-        [CLI_CMD_ADD] = "add",         [CLI_CMD_UPDATE] = "update", [CLI_CMD_CONFLICT] = "update",
-        [CLI_CMD_DELETE] = "delete",   [CLI_CMD_PURGE] = "purge",   [CLI_CMD_REKEY] = "rekey",
-        [CLI_CMD_LINK] = "link",       [CLI_CMD_UNLINK] = "unlink", [CLI_CMD_IMPORT] = "import",
+        [CLI_CMD_ADD] = "add",       [CLI_CMD_UPDATE] = "update", [CLI_CMD_CONFLICT] = "update",
+        [CLI_CMD_DELETE] = "delete", [CLI_CMD_PURGE] = "purge",   [CLI_CMD_REKEY] = "rekey",
+        [CLI_CMD_LINK] = "link",     [CLI_CMD_UNLINK] = "unlink", [CLI_CMD_IMPORT] = "import",
     };
 
     if ((size_t)command >= sizeof(k_names) / sizeof(k_names[0])) {
@@ -716,7 +716,7 @@ static void brain_label(const char *path, char *out, size_t cap)
 /* Turn on events for a command that changes memories, when an enabled plugin has an action.
    0, or the exit code. */
 static int arm_events(Store *s, const CliArgs *args, const PluginManifestList *mans,
-                      CommandEvents *ev)
+                      CommandEvents *cev)
 {
     char userdb[REMEMBER_PATH_MAX];
     char err[ERR_TEXT_CAP];
@@ -724,46 +724,47 @@ static int arm_events(Store *s, const CliArgs *args, const PluginManifestList *m
     StoreEvents cfg;
     StoreStatus st = STORE_OK;
 
-    ev->command = event_command_name(args->command);
-    if (ev->command == NULL || mans->count == 0U || !store_is_writable(s)) {
+    cev->command = event_command_name(args->command);
+    if (cev->command == NULL || mans->count == 0U || !store_is_writable(s)) {
         return 0;
     }
     if (util_resolve_user_db_path(userdb, sizeof(userdb), err, sizeof(err)) == 0) {
         user_db = userdb;
     }
-    if (events_rules_load(s, user_db, mans, &ev->rules) != 0 || events_cause_read(&ev->cause) != 0) {
+    if (events_rules_load(s, user_db, mans, &cev->rules) != 0 ||
+        events_cause_read(&cev->cause) != 0) {
         err_msg(DIAG_OUT_OF_MEMORY, "out of memory");
         return REMEMBER_ERR;
     }
-    ev->origin = args->command == CLI_CMD_IMPORT ? STORE_ORIGIN_IMPORT : STORE_ORIGIN_LOCAL;
-    brain_label(store_path(s), ev->brain_label, sizeof(ev->brain_label));
+    cev->origin = args->command == CLI_CMD_IMPORT ? STORE_ORIGIN_IMPORT : STORE_ORIGIN_LOCAL;
+    brain_label(store_path(s), cev->brain_label, sizeof(cev->brain_label));
     memset(&cfg, 0, sizeof(cfg));
-    cfg.rules = &ev->rules;
-    cfg.cause = &ev->cause;
-    cfg.command = ev->command;
-    cfg.brain_path = ev->brain_label;
-    cfg.origin = ev->origin;
+    cfg.rules = &cev->rules;
+    cfg.cause = &cev->cause;
+    cfg.command = cev->command;
+    cfg.brain_path = cev->brain_label;
+    cfg.origin = cev->origin;
     cfg.hooks = STORE_HOOKS_DEFAULT;
     st = store_set_events(s, &cfg);
     if (st != STORE_OK) {
         err_store(s, st);
         return REMEMBER_ERR;
     }
-    ev->armed = true;
+    cev->armed = true;
     return 0;
 }
 
 /* After the command: the warning for a write that needed a program this build cannot start,
    and the skipped_source lines for a sync or import. */
-static void finish_events(const Store *s, CommandEvents *ev)
+static void finish_events(const Store *s, CommandEvents *cev)
 {
-    if (!ev->armed) {
+    if (!cev->armed) {
         return;
     }
     if (store_events_unsupported(s) > 0U) {
         (void)diag_plugin_unsupported();
     }
-    (void)events_log_skipped(&ev->rules, store_path(s), ev->command, ev->origin);
+    (void)events_log_skipped(&cev->rules, store_path(s), cev->command, cev->origin);
 }
 
 static int run_with_store(const CliArgs *args, CmdFn fn)
@@ -771,10 +772,10 @@ static int run_with_store(const CliArgs *args, CmdFn fn)
     Store *s = NULL;
     SettingsRegistry *reg = NULL;
     PluginManifestList mans = {.items = NULL, .count = 0U};
-    CommandEvents ev;
+    CommandEvents cev;
     int rc = 0;
 
-    memset(&ev, 0, sizeof(ev));
+    memset(&cev, 0, sizeof(cev));
     s = open_store(args, &rc);
     if (s == NULL) {
         return rc;
@@ -785,16 +786,16 @@ static int run_with_store(const CliArgs *args, CmdFn fn)
         rc = meet_newer_brain(s, args);
     }
     if (rc == 0) {
-        rc = arm_events(s, args, &mans, &ev);
+        rc = arm_events(s, args, &mans, &cev);
     }
     if (rc == 0) {
         rc = fn(s, args->globals.json, args->rest_argc, args->rest_argv);
-        finish_events(s, &ev);
+        finish_events(s, &cev);
     }
     store_close(s);
-    events_rules_free(&ev.rules);
-    if (ev.cause.chain_json != NULL) {
-        events_cause_free(&ev.cause);
+    events_rules_free(&cev.rules);
+    if (cev.cause.chain_json != NULL) {
+        events_cause_free(&cev.cause);
     }
     plugin_manifest_list_free(&mans);
     settings_registry_free(reg);

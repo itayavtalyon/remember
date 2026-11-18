@@ -36,8 +36,11 @@ static const char k_actor_human[] = "{\"kind\":\"human\",\"id\":null}";
 static const char k_actor_agent[] = "{\"kind\":\"agent\",\"id\":null}";
 static const char k_vv[] = "{\"01a0d90a-e71c-7a0a-bb2c-3b377482fa51\":1}";
 
+/* Entry.tags is char **: these tables are never written. */
+// NOLINTBEGIN(cppcoreguidelines-avoid-non-const-global-variables)
 static char *g_tags_ab[] = {(char *)"alpha", (char *)"beta"};
 static char *g_tags_abc[] = {(char *)"alpha", (char *)"beta", (char *)"gamma"};
+// NOLINTEND(cppcoreguidelines-avoid-non-const-global-variables)
 
 static Entry given_memory(void)
 {
@@ -64,14 +67,10 @@ static EventCause given_direct_cause(void)
     return c;
 }
 
-static const EventLink k_link_related = {.kind = "related",
-                                         .direction = "both",
-                                         .other_id = k_other_id,
-                                         .other_key = "other:key"};
-static const EventLink k_link_out = {.kind = "cites",
-                                     .direction = "outgoing",
-                                     .other_id = k_other_id,
-                                     .other_key = NULL};
+static const EventLink k_link_related = {
+    .kind = "related", .direction = "both", .other_id = k_other_id, .other_key = "other:key"};
+static const EventLink k_link_out = {
+    .kind = "cites", .direction = "outgoing", .other_id = k_other_id, .other_key = NULL};
 
 /* ---- names ---------------------------------------------------------------------------------- */
 
@@ -87,6 +86,7 @@ TEST(event_type_and_origin_names)
     ASSERT_STREQ(event_origin_name(STORE_ORIGIN_LOCAL), "local");
     ASSERT_STREQ(event_origin_name(STORE_ORIGIN_SYNC), "sync");
     ASSERT_STREQ(event_origin_name(STORE_ORIGIN_IMPORT), "import");
+    // NOLINTNEXTLINE(clang-analyzer-optin.core.EnumCastOutOfRange) the point: a value past the enum
     ASSERT_TRUE(event_origin_name((StoreOrigin)3) == NULL);
 }
 
@@ -251,11 +251,11 @@ TEST(plan_a_link_that_came_and_one_that_went_are_one_updated_each)
                             .other_id = "01a14521-09ff-7d20-8c00-00000000aa04",
                             .other_key = NULL};
     const EventLink was[] = {kept, gone};
-    const EventLink is[] = {kept, k_link_out};
+    const EventLink now_has[] = {kept, k_link_out};
     Plan p = given_plan(&(EventRow){.before = &before,
                                     .after = &after,
                                     .links_before = was,
-                                    .links_after = is,
+                                    .links_after = now_has,
                                     .nlinks_before = 2U,
                                     .nlinks_after = 2U});
 
@@ -306,10 +306,8 @@ TEST(plan_fields_and_a_link_are_separate_events_fields_first)
     Plan p;
 
     after.body = (char *)"changed";
-    p = given_plan(&(EventRow){.before = &before,
-                               .after = &after,
-                               .links_after = &k_link_related,
-                               .nlinks_after = 1U});
+    p = given_plan(&(EventRow){
+        .before = &before, .after = &after, .links_after = &k_link_related, .nlinks_after = 1U});
     ASSERT_EQ_INT(p.n, 2);
     ASSERT_FALSE(p.drafts[0].has_link);
     ASSERT_TRUE(p.drafts[0].body_changed);
@@ -321,21 +319,16 @@ TEST(plan_fields_and_a_link_are_separate_events_fields_first)
 TEST(plan_a_link_of_a_new_or_removed_row_adds_no_event)
 {
     Entry row = given_memory();
-    Plan p = given_plan(&(EventRow){.before = NULL,
-                                    .after = &row,
-                                    .links_after = &k_link_related,
-                                    .nlinks_after = 1U});
+    Plan p = given_plan(&(EventRow){
+        .before = NULL, .after = &row, .links_after = &k_link_related, .nlinks_after = 1U});
 
     ASSERT_EQ_INT(p.n, 1);
     free(p.drafts);
-    p = given_plan(&(EventRow){.before = &row,
-                               .after = NULL,
-                               .links_before = &k_link_related,
-                               .nlinks_before = 1U});
+    p = given_plan(&(EventRow){
+        .before = &row, .after = NULL, .links_before = &k_link_related, .nlinks_before = 1U});
     ASSERT_EQ_INT(p.n, 1);
     free(p.drafts);
 }
-
 
 /* ---- the filter ------------------------------------------------------------------------------ */
 
@@ -399,11 +392,13 @@ TEST(rules_hold_the_actions_and_not_the_filters_of_a_plugin)
     PluginManifest *man = NULL;
     const char *doc =
         "{\"format\":\"remember-plugin\",\"version\":1,\"name\":\"hooker\","
-        "\"plugin_version\":\"1.0.0\",\"protocol\":1,\"actions\":["
-        ACTION(CREATED_ONLY, "") "," "{\"name\":\"two\",\"events\":[\"memory.deleted\"],"
-        "\"run\":{\"command\":[\"/bin/echo\"]}}],\"filters\":[{\"name\":\"rank\","
-        "\"point\":\"search.results\",\"run\":{\"process\":\"persistent\","
-        "\"command\":[\"hello.py\"]}}]}";
+        "\"plugin_version\":\"1.0.0\",\"protocol\":1,\"actions\":[" ACTION(
+            CREATED_ONLY,
+            "") ","
+                "{\"name\":\"two\",\"events\":[\"memory.deleted\"],"
+                "\"run\":{\"command\":[\"/bin/echo\"]}}],\"filters\":[{\"name\":\"rank\","
+                "\"point\":\"search.results\",\"run\":{\"process\":\"persistent\","
+                "\"command\":[\"hello.py\"]}}]}";
 
     ASSERT_EQ_INT(plugin_manifest_parse(doc, strlen(doc), &man), PLUGIN_PARSE_OK);
     memset(&rules, 0, sizeof(rules));
@@ -438,12 +433,13 @@ TEST(memory_star_lists_every_type_and_a_list_each_listed_one)
     EventFacts f = given_facts(&cause);
     int type = 0;
 
-    for (type = 0; type < (int)EVENT_TYPE_COUNT; type++) {
+    for (type = 0; type < EVENT_TYPE_COUNT; type++) {
         f.type = (EventType)type;
         ASSERT_EQ_INT(match_of(ACTION(ALL_TYPES, ""), f), EVENT_MATCH);
         ASSERT_EQ_INT(match_of(ACTION("[\"memory.deleted\",\"memory.purged\"]", ""), f),
-                      (type == (int)EVENT_DELETED || type == (int)EVENT_PURGED) ? EVENT_MATCH
-                                                                                : EVENT_SKIP_FILTER);
+                      (type == (int)EVENT_DELETED || type == (int)EVENT_PURGED)
+                          ? EVENT_MATCH
+                          : EVENT_SKIP_FILTER);
     }
     events_cause_free(&cause);
 }
@@ -481,14 +477,12 @@ TEST(any_and_all_must_both_pass_and_an_empty_list_is_no_test)
     EventCause cause = given_direct_cause();
     EventFacts f = given_facts(&cause);
 
-    ASSERT_EQ_INT(match_of(ACTION(ALL_TYPES,
-                                  FILTER("\"tags\":{\"any\":[\"alpha\"],\"all\":[\"nope\"]}")),
-                           f),
-                  EVENT_SKIP_FILTER);
-    ASSERT_EQ_INT(match_of(ACTION(ALL_TYPES,
-                                  FILTER("\"tags\":{\"any\":[\"nope\"],\"all\":[\"alpha\"]}")),
-                           f),
-                  EVENT_SKIP_FILTER);
+    ASSERT_EQ_INT(
+        match_of(ACTION(ALL_TYPES, FILTER("\"tags\":{\"any\":[\"alpha\"],\"all\":[\"nope\"]}")), f),
+        EVENT_SKIP_FILTER);
+    ASSERT_EQ_INT(
+        match_of(ACTION(ALL_TYPES, FILTER("\"tags\":{\"any\":[\"nope\"],\"all\":[\"alpha\"]}")), f),
+        EVENT_SKIP_FILTER);
     ASSERT_EQ_INT(match_of(ACTION(ALL_TYPES, FILTER("\"tags\":{\"any\":[],\"all\":[]}")), f),
                   EVENT_MATCH);
     f.ntags = 0U;
@@ -513,7 +507,8 @@ TEST(a_tag_pattern_ending_in_star_is_a_prefix)
     ASSERT_EQ_INT(match_of(ACTION(ALL_TYPES, FILTER("\"tags\":{\"all\":[\"to*\",\"x*\"]}")), f),
                   EVENT_SKIP_FILTER);
     /* a lone star matches every tag, but a memory with no tag has none to match */
-    ASSERT_EQ_INT(match_of(ACTION(ALL_TYPES, FILTER("\"tags\":{\"any\":[\"*\"]}")), f), EVENT_MATCH);
+    ASSERT_EQ_INT(match_of(ACTION(ALL_TYPES, FILTER("\"tags\":{\"any\":[\"*\"]}")), f),
+                  EVENT_MATCH);
     /* a star inside is a plain character */
     ASSERT_EQ_INT(match_of(ACTION(ALL_TYPES, FILTER("\"tags\":{\"any\":[\"p*one\"]}")), f),
                   EVENT_SKIP_FILTER);
@@ -708,7 +703,8 @@ TEST(a_miss_is_counted_on_the_action_by_its_kind)
     events_rules_free(&rules);
 }
 
-/* ---- the payload ------------------------------------------------------------------------------- */
+/* ---- the payload -------------------------------------------------------------------------------
+ */
 
 static EventStamp given_stamp(const EventCause *cause)
 {
@@ -729,10 +725,14 @@ typedef struct {
     EventLinks links;
 } PayloadCase;
 
-static char *given_payload(const EventCause *cause, PayloadCase pc)
+static char *given_payload(const EventCause *cause, PayloadCase pcase)
 {
     EventStamp st = given_stamp(cause);
-    char *text = events_payload(&st, &pc.draft, &pc.row, pc.memory, pc.links, 118);
+    EventMemory memory = {.entry = pcase.memory,
+                          .links = pcase.links.rows,
+                          .nlinks = pcase.links.count,
+                          .change_seq = 118};
+    char *text = events_payload(&st, &pcase.draft, &pcase.row, &memory);
 
     ASSERT_TRUE(text != NULL);
     return text != NULL ? text : (char *)calloc(1U, 1U);
@@ -747,9 +747,10 @@ static const char k_memory_json[] =
 
 #define PAYLOAD_HEAD(type)                                                                         \
     "{\"event_id\":\"01a14521-0a00-7c11-9a00-0000000000e1\",\"event_type\":\"" type                \
-    "\",\"occurred_at\":\"2026-11-18T10:00:00.000Z\",\"detected_at\":\"2026-11-18T10:00:00.000Z\"," \
-    "\"batch_id\":\"01a14521-0b00-7c11-9a00-0000000000b1\","                                      \
-    "\"cause\":{\"command\":\"add\",\"origin\":\"local\",\"hook\":null,\"run_id\":null,"          \
+    "\",\"occurred_at\":\"2026-11-18T10:00:00.000Z\",\"detected_at\":\"2026-11-18T10:00:00."       \
+    "000Z\","                                                                                      \
+    "\"batch_id\":\"01a14521-0b00-7c11-9a00-0000000000b1\","                                       \
+    "\"cause\":{\"command\":\"add\",\"origin\":\"local\",\"hook\":null,\"run_id\":null,"           \
     "\"depth\":0,\"chain\":[]},\"brain\":{\"path\":\"~/b.db\",\"device_id\":"                      \
     "\"01a0d90a-e71c-7a0a-bb2c-3b377482fa51\"},\"memory\":"
 #define PAYLOAD_TAIL                                                                               \
@@ -764,7 +765,8 @@ TEST(a_created_payload_is_the_frozen_h3_data_without_the_recipient_fields)
                                                      .memory = &after});
     char want[2048];
 
-    (void)snprintf(want, sizeof(want), PAYLOAD_HEAD("memory.created") "%s,\"changes\":null" PAYLOAD_TAIL,
+    (void)snprintf(want, sizeof(want),
+                   PAYLOAD_HEAD("memory.created") "%s,\"changes\":null" PAYLOAD_TAIL,
                    k_memory_json);
     ASSERT_STREQ(text, want);
     ASSERT_STR_NOT_CONTAINS(text, "\"plugin\":");
@@ -783,7 +785,7 @@ TEST(deleted_restored_and_purged_payloads_carry_null_changes)
     Entry memory = given_memory();
     int type = 0;
 
-    for (type = (int)EVENT_DELETED; type <= (int)EVENT_PURGED; type++) {
+    for (type = EVENT_DELETED; type <= EVENT_PURGED; type++) {
         char *text = given_payload(&cause, (PayloadCase){.draft = {.type = (EventType)type},
                                                          .row = {.before = &memory},
                                                          .memory = &memory});
@@ -834,19 +836,20 @@ TEST(an_updated_payload_for_one_field_lists_only_that_field)
 
     after.tags = added;
     after.ntags = 3U;
-    text = given_payload(&cause, (PayloadCase){.draft = {.type = EVENT_UPDATED, .tags_changed = true},
-                                               .row = {.before = &before, .after = &after},
-                                               .memory = &after});
-    ASSERT_STR_CONTAINS(text,
-                        ",\"changes\":{\"fields\":[\"tags\"],\"before\":{\"tags\":[\"alpha\","
-                        "\"beta\"]},\"tags_added\":[\"delta\"],\"tags_removed\":[]},");
+    text =
+        given_payload(&cause, (PayloadCase){.draft = {.type = EVENT_UPDATED, .tags_changed = true},
+                                            .row = {.before = &before, .after = &after},
+                                            .memory = &after});
+    ASSERT_STR_CONTAINS(text, ",\"changes\":{\"fields\":[\"tags\"],\"before\":{\"tags\":[\"alpha\","
+                              "\"beta\"]},\"tags_added\":[\"delta\"],\"tags_removed\":[]},");
     free(text);
     after = given_memory();
     after.key = (char *)"k:2";
     before.key = (char *)"k:1";
-    text = given_payload(&cause, (PayloadCase){.draft = {.type = EVENT_UPDATED, .key_changed = true},
-                                               .row = {.before = &before, .after = &after},
-                                               .memory = &after});
+    text =
+        given_payload(&cause, (PayloadCase){.draft = {.type = EVENT_UPDATED, .key_changed = true},
+                                            .row = {.before = &before, .after = &after},
+                                            .memory = &after});
     ASSERT_STR_CONTAINS(text, ",\"changes\":{\"fields\":[\"key\"],\"before\":{\"key\":\"k:1\"},"
                               "\"tags_added\":[],\"tags_removed\":[]},");
     free(text);
@@ -869,12 +872,12 @@ TEST(a_link_payload_carries_changes_link_and_the_link_stubs_have_no_local_id)
     stub.neighbor_body = (char *)"other body";
     stub.neighbor_sync_id = (char *)k_other_id;
     stub.kind = STORE_EDGE_CITES;
-    text = given_payload(&cause, (PayloadCase){.draft = {.type = EVENT_UPDATED,
-                                                         .has_link = true,
-                                                         .link = k_link_related},
-                                               .row = {.before = &after, .after = &after},
-                                               .memory = &after,
-                                               .links = {.rows = &stub, .count = 1U}});
+    text = given_payload(
+        &cause,
+        (PayloadCase){.draft = {.type = EVENT_UPDATED, .has_link = true, .link = k_link_related},
+                      .row = {.before = &after, .after = &after},
+                      .memory = &after,
+                      .links = {.rows = &stub, .count = 1U}});
     ASSERT_STR_CONTAINS(text, ",\"changes\":{\"link\":{\"kind\":\"related\",\"direction\":\"both\","
                               "\"other\":{\"id\":\"01a14521-09ff-7d20-8c00-00000000aa02\","
                               "\"key\":\"other:key\"}}},\"truncated\":false");
@@ -882,11 +885,11 @@ TEST(a_link_payload_carries_changes_link_and_the_link_stubs_have_no_local_id)
                               "\"key\":\"other:key\",\"type\":\"cites\",\"bin\":\"live\","
                               "\"preview\":\"other body\"}]}");
     free(text);
-    text = given_payload(&cause, (PayloadCase){.draft = {.type = EVENT_UPDATED,
-                                                         .has_link = true,
-                                                         .link = k_link_out},
-                                               .row = {.before = &after, .after = &after},
-                                               .memory = &after});
+    text = given_payload(
+        &cause,
+        (PayloadCase){.draft = {.type = EVENT_UPDATED, .has_link = true, .link = k_link_out},
+                      .row = {.before = &after, .after = &after},
+                      .memory = &after});
     ASSERT_STR_CONTAINS(text, "\"direction\":\"outgoing\",\"other\":{\"id\":\"01a14521-09ff-7d20-"
                               "8c00-00000000aa02\",\"key\":null}}}");
     free(text);
@@ -899,17 +902,17 @@ TEST(a_payload_written_in_a_run_names_the_hook_run_depth_and_chain)
     Entry after = given_memory();
     char *text = NULL;
 
-    (void)snprintf(cause.run_id, sizeof(cause.run_id), "%s", "01a14521-0bf0-7000-8000-0000000000c1");
+    (void)snprintf(cause.run_id, sizeof(cause.run_id), "%s",
+                   "01a14521-0bf0-7000-8000-0000000000c1");
     free(cause.chain_json);
     cause.chain_json = (char *)malloc(8U);
     (void)snprintf(cause.chain_json, 8U, "%s", "[1,2,3]");
     text = given_payload(&cause, (PayloadCase){.draft = {.type = EVENT_CREATED},
                                                .row = {.after = &after},
                                                .memory = &after});
-    ASSERT_STR_CONTAINS(text,
-                        "\"cause\":{\"command\":\"add\",\"origin\":\"local\",\"hook\":"
-                        "\"plugin/url_expand/fetch\",\"run_id\":\"01a14521-0bf0-7000-8000-"
-                        "0000000000c1\",\"depth\":2,\"chain\":[1,2,3]}");
+    ASSERT_STR_CONTAINS(text, "\"cause\":{\"command\":\"add\",\"origin\":\"local\",\"hook\":"
+                              "\"plugin/url_expand/fetch\",\"run_id\":\"01a14521-0bf0-7000-8000-"
+                              "0000000000c1\",\"depth\":2,\"chain\":[1,2,3]}");
     free(text);
     events_cause_free(&cause);
 }
@@ -925,11 +928,21 @@ TEST(the_origin_and_command_of_the_stamp_are_written)
 
     st.origin = STORE_ORIGIN_IMPORT;
     st.command = "import";
-    text = events_payload(&st, &draft, &row, &after, (EventLinks){.rows = NULL, .count = 0U}, 1);
+    text = events_payload(
+        &st, &draft, &row,
+        &(EventMemory){.entry = &after, .links = NULL, .nlinks = 0U, .change_seq = 1});
     ASSERT_TRUE(text != NULL);
     ASSERT_STR_CONTAINS(text, "\"cause\":{\"command\":\"import\",\"origin\":\"import\"");
     free(text);
     events_cause_free(&cause);
+}
+
+/* How many bytes of chars follow the first marker in text; 0 when the marker is absent. */
+static size_t run_after(const char *text, const char *marker, const char *chars)
+{
+    const char *at = strstr(text, marker);
+
+    return at != NULL ? strspn(at + strlen(marker), chars) : 0U;
 }
 
 /* A body of n bytes of one character. */
@@ -975,9 +988,10 @@ TEST(a_payload_under_the_limit_is_not_cut)
     after.body = given_body(100000U, 'a');
     before.body = given_body(100000U, 'b');
     before.key = (char *)"k:1";
-    text = given_payload(&cause, (PayloadCase){.draft = {.type = EVENT_UPDATED, .body_changed = true},
-                                               .row = {.before = &before, .after = &after},
-                                               .memory = &after});
+    text =
+        given_payload(&cause, (PayloadCase){.draft = {.type = EVENT_UPDATED, .body_changed = true},
+                                            .row = {.before = &before, .after = &after},
+                                            .memory = &after});
     ASSERT_TRUE(strlen(text) < (size_t)EVENT_PAYLOAD_MAX);
     ASSERT_STR_CONTAINS(text, ",\"truncated\":false,\"truncated_fields\":[],");
     ASSERT_STR_CONTAINS(text, "\"before\":{\"body\":\"bbbb");
@@ -997,13 +1011,15 @@ TEST(over_the_limit_the_old_body_goes_first_and_nothing_else_when_that_is_enough
 
     after.body = given_body(150000U, 'a');
     before.body = given_body(150000U, 'b');
-    text = given_payload(&cause, (PayloadCase){.draft = {.type = EVENT_UPDATED, .body_changed = true},
-                                               .row = {.before = &before, .after = &after},
-                                               .memory = &after,
-                                               .links = {.rows = stubs, .count = 3U}});
+    text =
+        given_payload(&cause, (PayloadCase){.draft = {.type = EVENT_UPDATED, .body_changed = true},
+                                            .row = {.before = &before, .after = &after},
+                                            .memory = &after,
+                                            .links = {.rows = stubs, .count = 3U}});
     ASSERT_TRUE(strlen(text) <= (size_t)EVENT_PAYLOAD_MAX);
     ASSERT_STR_CONTAINS(text, "{\"fields\":[\"body\"],\"before\":{},");
-    ASSERT_STR_CONTAINS(text, ",\"truncated\":true,\"truncated_fields\":[\"changes.before.body\"],");
+    ASSERT_STR_CONTAINS(text,
+                        ",\"truncated\":true,\"truncated_fields\":[\"changes.before.body\"],");
     ASSERT_STR_CONTAINS(text, "\"key\":\"other:key\"");
     ASSERT_TRUE(strstr(text, "\"body\":\"aaaaaaaa") != NULL);
     free(text);
@@ -1023,11 +1039,11 @@ TEST(the_old_body_stays_in_a_changes_that_has_other_fields_and_loses_only_the_bo
     after.body = given_body(150000U, 'a');
     before.body = given_body(150000U, 'b');
     before.key = (char *)"k:1";
-    text = given_payload(&cause, (PayloadCase){.draft = {.type = EVENT_UPDATED,
-                                                         .body_changed = true,
-                                                         .key_changed = true},
-                                               .row = {.before = &before, .after = &after},
-                                               .memory = &after});
+    text = given_payload(
+        &cause,
+        (PayloadCase){.draft = {.type = EVENT_UPDATED, .body_changed = true, .key_changed = true},
+                      .row = {.before = &before, .after = &after},
+                      .memory = &after});
     ASSERT_STR_CONTAINS(text, "{\"fields\":[\"key\",\"body\"],\"before\":{\"key\":\"k:1\"},");
     ASSERT_STR_CONTAINS(text, "\"truncated_fields\":[\"changes.before.body\"]");
     free(text);
@@ -1066,22 +1082,20 @@ TEST(truncation_order_256k)
     Entry before = given_memory();
     StoreNeighbor *stubs = given_stubs(3000U);
     char *text = NULL;
-    char *body_at = NULL;
 
     after.body = given_body(300000U, 'a');
     before.body = given_body(300000U, 'b');
-    text = given_payload(&cause, (PayloadCase){.draft = {.type = EVENT_UPDATED, .body_changed = true},
-                                               .row = {.before = &before, .after = &after},
-                                               .memory = &after,
-                                               .links = {.rows = stubs, .count = 3000U}});
+    text =
+        given_payload(&cause, (PayloadCase){.draft = {.type = EVENT_UPDATED, .body_changed = true},
+                                            .row = {.before = &before, .after = &after},
+                                            .memory = &after,
+                                            .links = {.rows = stubs, .count = 3000U}});
     ASSERT_TRUE(strlen(text) <= (size_t)EVENT_PAYLOAD_MAX);
     ASSERT_STR_CONTAINS(text, ",\"truncated\":true,\"truncated_fields\":[\"changes.before.body\","
                               "\"memory.links\",\"memory.body\"],");
     ASSERT_STR_CONTAINS(text, ",\"links\":[]}");
     ASSERT_STR_CONTAINS(text, ",\"before\":{},");
-    body_at = strstr(text, "\"body\":\"");
-    ASSERT_TRUE(body_at != NULL);
-    ASSERT_EQ_INT(strspn(body_at + 8, "a"), EVENT_BODY_CUT);
+    ASSERT_EQ_INT(run_after(text, "\"body\":\"", "a"), EVENT_BODY_CUT);
     free(text);
     free(after.body);
     free(before.body);
@@ -1094,12 +1108,14 @@ TEST(the_body_is_cut_on_a_utf8_boundary)
     EventCause cause = given_direct_cause();
     Entry after = given_memory();
     char *text = NULL;
-    char *body_at = NULL;
     size_t i = 0;
     const size_t chars = 100000U;
 
     after.body = (char *)malloc((chars * 3U) + 1U);
     ASSERT_TRUE(after.body != NULL);
+    if (after.body == NULL) {
+        return;
+    }
     for (i = 0; i < chars; i++) {
         memcpy(after.body + (i * 3U), "\xE2\x82\xAC", 3U); /* the euro sign, 3 bytes */
     }
@@ -1109,11 +1125,8 @@ TEST(the_body_is_cut_on_a_utf8_boundary)
                                                .memory = &after});
     ASSERT_TRUE(strlen(text) > 0U);
     ASSERT_STR_CONTAINS(text, "\"truncated_fields\":[\"memory.body\"]");
-    body_at = strstr(text, "\"body\":\"");
-    ASSERT_TRUE(body_at != NULL);
     /* 16384 = 5461 * 3 + 1: the cut lands inside the 5462nd sign, so 5461 stay */
-    ASSERT_EQ_INT(strspn(body_at + 8, "\xE2\x82\xAC"), 5461U * 3U);
-    ASSERT_EQ_INT(body_at[8 + (5461U * 3U)], '"');
+    ASSERT_EQ_INT(run_after(text, "\"body\":\"", "\xE2\x82\xAC"), 5461U * 3U);
     free(text);
     free(after.body);
     events_cause_free(&cause);
@@ -1165,12 +1178,13 @@ TEST(the_processes_switch_defaults_on_and_follows_the_setter)
     ASSERT_TRUE(events_processes());
 }
 
-/* ---- the cause from the environment ----------------------------------------------------------- */
+/* ---- the cause from the environment -----------------------------------------------------------
+ */
 
 static const char *const k_cause_env[] = {
-    "REMEMBER_HOOK_DEPTH",     "REMEMBER_HOOK_NAME",       "REMEMBER_HOOK_RUN_ID",
-    "REMEMBER_HOOK_CHAIN",     "REMEMBER_CAUSE_EVENT_ID",  "REMEMBER_ID",
-    "REMEMBER_CAUSE_HOOK",     "REMEMBER_CAUSE_RUN_ID",
+    "REMEMBER_HOOK_DEPTH", "REMEMBER_HOOK_NAME",      "REMEMBER_HOOK_RUN_ID",
+    "REMEMBER_HOOK_CHAIN", "REMEMBER_CAUSE_EVENT_ID", "REMEMBER_ID",
+    "REMEMBER_CAUSE_HOOK", "REMEMBER_CAUSE_RUN_ID",
 };
 
 /* Single-threaded tests. setenv and unsetenv have no portable reentrant form. */
@@ -1255,13 +1269,12 @@ TEST(a_valid_chain_gets_this_runs_hop_appended)
     (void)snprintf(chain, sizeof(chain), "[%s]", k_hop1);
     given_run_env(chain);
     ASSERT_EQ_INT(events_cause_read(&c), 0);
-    ASSERT_STREQ(c.chain_json,
-                 "[{\"hook\":\"plugin/router/run\",\"event_id\":"
-                 "\"01a14521-0a00-7c11-9a00-0000000000e1\",\"memory_id\":"
-                 "\"01a14521-09ff-7d20-8c00-00000000aa01\",\"depth\":1},"
-                 "{\"hook\":\"plugin/url_expand/fetch\",\"event_id\":"
-                 "\"01a14521-0a00-7c11-9a00-0000000000e2\",\"memory_id\":"
-                 "\"01a14521-09ff-7d20-8c00-00000000aa01\",\"depth\":2}]");
+    ASSERT_STREQ(c.chain_json, "[{\"hook\":\"plugin/router/run\",\"event_id\":"
+                               "\"01a14521-0a00-7c11-9a00-0000000000e1\",\"memory_id\":"
+                               "\"01a14521-09ff-7d20-8c00-00000000aa01\",\"depth\":1},"
+                               "{\"hook\":\"plugin/url_expand/fetch\",\"event_id\":"
+                               "\"01a14521-0a00-7c11-9a00-0000000000e2\",\"memory_id\":"
+                               "\"01a14521-09ff-7d20-8c00-00000000aa01\",\"depth\":2}]");
     ASSERT_EQ_INT(c.nchain, 2);
     ASSERT_STREQ(c.chain_hooks[0], "plugin/router/run");
     ASSERT_STREQ(c.chain_hooks[1], "plugin/url_expand/fetch");
@@ -1334,7 +1347,7 @@ TEST(a_chain_that_is_not_valid_is_dropped_and_the_write_counts_as_depth_one_of_i
                          "\"01a14521-09ff-7d20-8c00-00000000aa01\",\"depth\":1000001}]");
     /* 100 items already: no room for this run's hop */
     many[0] = '[';
-    for (i = 0; i < (int)EVENT_CHAIN_MAX; i++) {
+    for (i = 0; i < EVENT_CHAIN_MAX; i++) {
         len += (size_t)snprintf(many + len, sizeof(many) - len, "%s%s", i > 0 ? "," : "", k_hop1);
     }
     many[len++] = ']';
@@ -1350,7 +1363,7 @@ TEST(ninety_nine_hops_and_this_one_fill_the_chain)
     int i = 0;
 
     many[0] = '[';
-    for (i = 0; i < (int)EVENT_CHAIN_MAX - 1; i++) {
+    for (i = 0; i < EVENT_CHAIN_MAX - 1; i++) {
         len += (size_t)snprintf(many + len, sizeof(many) - len, "%s%s", i > 0 ? "," : "", k_hop1);
     }
     many[len++] = ']';
@@ -1397,9 +1410,9 @@ TEST(a_missing_or_bad_hop_variable_drops_the_chain)
 TEST(a_bad_hook_name_or_run_id_reads_as_none_and_the_depth_stays)
 {
     EventCause c;
-    static const char *const bad_names[] = {"plugin/",           "plugin//run",   "plugin/Upper/run",
-                                            "plugin/a/b/c",      "plugin/a/",     "other/a/b",
-                                            "plugin/1a/run",     "plugin/a-b/run", ""};
+    static const char *const bad_names[] = {"plugin/",       "plugin//run",    "plugin/Upper/run",
+                                            "plugin/a/b/c",  "plugin/a/",      "other/a/b",
+                                            "plugin/1a/run", "plugin/a-b/run", ""};
     size_t i = 0;
 
     for (i = 0; i < sizeof(bad_names) / sizeof(bad_names[0]); i++) {
@@ -1427,8 +1440,8 @@ TEST(a_bad_hook_name_or_run_id_reads_as_none_and_the_depth_stays)
 
 TEST(a_depth_that_is_not_a_whole_number_of_one_to_a_million_is_not_a_run)
 {
-    static const char *const bad[] = {"0",  "-1", "abc", "1x", "",      " 1",
-                                      "+1", "1.5", "1000001", "99999999999999999999"};
+    static const char *const bad[] = {"0",  "-1", "abc", "1x",      "",
+                                      " 1", "+1", "1.5", "1000001", "99999999999999999999"};
     EventCause c;
     size_t i = 0;
 
@@ -1463,7 +1476,8 @@ TEST(reading_the_cause_fails_when_memory_runs_out)
     test_alloc_fail_after(-1);
 }
 
-/* ---- hooks.log --------------------------------------------------------------------------------- */
+/* ---- hooks.log ---------------------------------------------------------------------------------
+ */
 
 typedef struct {
     char *db;
@@ -1493,6 +1507,7 @@ static char *read_log(const char *path)
     return harness_read_file(path, &len);
 }
 
+// NOLINTNEXTLINE(bugprone-easily-swappable-parameters) the type, then how often
 static void count_origin_skips(EventAction *action, EventType type, int times)
 {
     int i = 0;
@@ -1509,7 +1524,8 @@ TEST(skipped_source_lines_are_one_per_action_and_type_with_the_count)
     char *text = NULL;
     char *line = NULL;
 
-    given_rules(&rules, ACTION(ALL_TYPES, "") "," "{\"name\":\"two\",\"events\":[\"memory.*\"],"
+    given_rules(&rules, ACTION(ALL_TYPES, "") ","
+                                              "{\"name\":\"two\",\"events\":[\"memory.*\"],"
                                               "\"run\":{\"command\":[\"/bin/echo\"]}}");
     count_origin_skips(&rules.actions[0], EVENT_CREATED, 12);
     count_origin_skips(&rules.actions[0], EVENT_UPDATED, 1);
@@ -1520,10 +1536,9 @@ TEST(skipped_source_lines_are_one_per_action_and_type_with_the_count)
     ASSERT_STR_PREFIX(text, "{\"version\":1,\"at\":\"20");
     line = strstr(text, "\",\"event\":\"skipped_source\"");
     ASSERT_TRUE(line != NULL);
-    ASSERT_STR_CONTAINS(text,
-                        "\",\"event\":\"skipped_source\",\"event_type\":\"memory.created\","
-                        "\"command\":\"import\",\"origin\":\"import\",\"plugin\":\"hooker\","
-                        "\"action\":\"go\",\"count\":12}\n{\"version\":1,\"at\":\"");
+    ASSERT_STR_CONTAINS(text, "\",\"event\":\"skipped_source\",\"event_type\":\"memory.created\","
+                              "\"command\":\"import\",\"origin\":\"import\",\"plugin\":\"hooker\","
+                              "\"action\":\"go\",\"count\":12}\n{\"version\":1,\"at\":\"");
     ASSERT_STR_CONTAINS(text, "\"event_type\":\"memory.updated\",\"command\":\"import\","
                               "\"origin\":\"import\",\"plugin\":\"hooker\",\"action\":\"go\","
                               "\"count\":1}\n");
@@ -1596,8 +1611,8 @@ TEST(the_log_is_mode_0600_and_a_log_that_cannot_be_written_is_not_an_error)
     ASSERT_EQ_INT(events_log_skipped(&rules, lc.db, "import", STORE_ORIGIN_IMPORT), 0);
     ASSERT_EQ_INT(rules.actions[0].skipped_source[EVENT_UPDATED], 4);
     /* no folder at all */
-    ASSERT_EQ_INT(events_log_skipped(&rules, "/nonexistent-dir/x.db", "import", STORE_ORIGIN_IMPORT),
-                  0);
+    ASSERT_EQ_INT(
+        events_log_skipped(&rules, "/nonexistent-dir/x.db", "import", STORE_ORIGIN_IMPORT), 0);
     ASSERT_EQ_INT(rules.actions[0].skipped_source[EVENT_UPDATED], 4);
     free(elsewhere);
     events_rules_free(&rules);
@@ -1610,8 +1625,7 @@ TEST(the_log_is_mode_0600_and_a_log_that_cannot_be_written_is_not_an_error)
 static const char k_now[] = "2026-11-18T12:00:00.000Z";
 
 #define NAMED(name, events, filter)                                                                \
-    "{\"name\":\"" name "\",\"events\":" events                                                  \
-    ",\"run\":{\"command\":[\"/bin/echo\"]}" filter "}"
+    "{\"name\":\"" name "\",\"events\":" events ",\"run\":{\"command\":[\"/bin/echo\"]}" filter "}"
 
 typedef struct {
     Store *store;
@@ -1673,6 +1687,7 @@ static void rig_close(Rig *rig)
 }
 
 /* One line of a query on the brain file, compared with want. */
+// NOLINTNEXTLINE(bugprone-easily-swappable-parameters) the query, then its answer
 static void assert_db(const Rig *rig, const char *sql, const char *want)
 {
     char *got = harness_sqlite_query_line(rig->db, sql);
@@ -1706,8 +1721,8 @@ static long long add_memory(Rig *rig, const char *body, const char *key)
     memset(&e, 0, sizeof(e));
     counter++;
     (void)snprintf(hash, sizeof(hash), "%064x", (unsigned)counter);
-    ASSERT_EQ_STATUS(store_add(rig->store, body, hash, key, NULL, 0U, "human", NULL, k_now, &act, &e),
-                     STORE_OK);
+    ASSERT_EQ_STATUS(
+        store_add(rig->store, body, hash, key, NULL, 0U, "human", NULL, k_now, &act, &e), STORE_OK);
     id = e.id;
     store_entry_free(&e);
     return id;
@@ -1717,7 +1732,7 @@ static StoreStatus update_memory(Rig *rig, long long id, StoreUpdate u)
 {
     Entry e;
     long long conflict = 0;
-    StoreStatus st;
+    StoreStatus st = STORE_OK;
 
     memset(&e, 0, sizeof(e));
     u.actor = u.actor != NULL ? u.actor : "human";
@@ -1733,10 +1748,11 @@ static void update_body(Rig *rig, long long id, const char *body)
 
     counter++;
     (void)snprintf(hash, sizeof(hash), "%064x", (unsigned)counter);
-    ASSERT_EQ_STATUS(update_memory(rig, id, (StoreUpdate){.body = body,
-                                                          .body_hash = hash,
-                                                          .set_body = true,
-                                                          .bin = STORE_BIN_LIVE}),
+    ASSERT_EQ_STATUS(update_memory(rig, id,
+                                   (StoreUpdate){.body = body,
+                                                 .body_hash = hash,
+                                                 .set_body = true,
+                                                 .bin = STORE_BIN_LIVE}),
                      STORE_OK);
 }
 
@@ -1751,8 +1767,9 @@ static void delete_memory(Rig *rig, long long id)
 
 static void restore_memory(Rig *rig, long long id)
 {
-    ASSERT_EQ_STATUS(update_memory(rig, id, (StoreUpdate){.undelete = true, .bin = STORE_BIN_DELETED}),
-                     STORE_OK);
+    ASSERT_EQ_STATUS(
+        update_memory(rig, id, (StoreUpdate){.undelete = true, .bin = STORE_BIN_DELETED}),
+        STORE_OK);
 }
 
 static void purge_memory(Rig *rig, long long id)
@@ -1782,7 +1799,8 @@ static void unlink_memories(Rig *rig, long long from, long long to)
     StoreNeighbor *stubs = NULL;
     size_t n = 0;
 
-    ASSERT_EQ_STATUS(store_unlink(rig->store, from, to, NULL, "human", k_now, &stubs, &n), STORE_OK);
+    ASSERT_EQ_STATUS(store_unlink(rig->store, from, to, NULL, "human", k_now, &stubs, &n),
+                     STORE_OK);
     store_neighbors_free(stubs, n);
 }
 
@@ -1822,29 +1840,39 @@ TEST(a_link_writes_two_updated_events_with_one_batch_and_no_vector_change)
               "json_extract(payload, '$.changes.link.other.key'), ',') FROM "
               "(SELECT payload FROM outbox ORDER BY rowid);",
               "k:a:outgoing:k:b,k:b:incoming:k:a");
-    assert_db(&rig, "SELECT group_concat(DISTINCT json_extract(payload, '$.changes.link.kind')) "
-                    "FROM outbox;", "cites");
-    assert_db(&rig, "SELECT group_concat(json_array_length(json_extract(payload, '$.memory.links')))"
-                    " FROM outbox;", "1,1");
+    assert_db(&rig,
+              "SELECT group_concat(DISTINCT json_extract(payload, '$.changes.link.kind')) "
+              "FROM outbox;",
+              "cites");
+    assert_db(&rig,
+              "SELECT group_concat(json_array_length(json_extract(payload, '$.memory.links')))"
+              " FROM outbox;",
+              "1,1");
     vv_after = harness_sqlite_query_line(rig.db, "SELECT group_concat(version_vector, '|') "
                                                  "FROM (SELECT version_vector FROM entries "
                                                  "ORDER BY local_id);");
     ASSERT_TRUE(vv_before != NULL && vv_after != NULL);
     ASSERT_STREQ(vv_before != NULL ? vv_before : "", vv_after != NULL ? vv_after : "x");
-    assert_db(&rig, "SELECT count(*) FROM outbox o JOIN entries e ON e.id = "
-                    "json_extract(o.payload, '$.memory.id') WHERE "
-                    "json_extract(o.payload, '$.memory.change_seq') = e.change_seq;", "2");
+    assert_db(&rig,
+              "SELECT count(*) FROM outbox o JOIN entries e ON e.id = "
+              "json_extract(o.payload, '$.memory.id') WHERE "
+              "json_extract(o.payload, '$.memory.change_seq') = e.change_seq;",
+              "2");
     free(vv_before);
     free(vv_after);
     clear_outbox(&rig);
     unlink_memories(&rig, a, b);
     assert_outbox_types(&rig, "memory.updated,memory.updated");
-    assert_db(&rig, "SELECT group_concat(json_array_length(json_extract(payload, '$.memory.links')))"
-                    " FROM outbox;", "0,0");
+    assert_db(&rig,
+              "SELECT group_concat(json_array_length(json_extract(payload, '$.memory.links')))"
+              " FROM outbox;",
+              "0,0");
     clear_outbox(&rig);
     link_memories(&rig, a, b, STORE_EDGE_RELATED);
-    assert_db(&rig, "SELECT group_concat(json_extract(payload, '$.changes.link.direction')) "
-                    "FROM outbox;", "both,both");
+    assert_db(&rig,
+              "SELECT group_concat(json_extract(payload, '$.changes.link.direction')) "
+              "FROM outbox;",
+              "both,both");
     rig_close(&rig);
 }
 
@@ -1886,7 +1914,8 @@ TEST(no_enabled_action_no_row)
 
 TEST(an_event_with_no_matching_action_is_not_even_built)
 {
-    Rig rig = given_rig((RigSpec){.actions = ACTION(CREATED_ONLY, FILTER("\"tags\":{\"any\":[\"x\"]}"))});
+    Rig rig =
+        given_rig((RigSpec){.actions = ACTION(CREATED_ONLY, FILTER("\"tags\":{\"any\":[\"x\"]}"))});
     long long id = add_memory(&rig, "body", "k:1");
 
     assert_outbox_types(&rig, "none");
@@ -1895,6 +1924,7 @@ TEST(an_event_with_no_matching_action_is_not_even_built)
     rig_close(&rig);
 }
 
+// NOLINTNEXTLINE(bugprone-easily-swappable-parameters) the body, then the tag
 static void add_tagged(Rig *rig, const char *body, const char *tag)
 {
     static int counter = 500000;
@@ -1906,15 +1936,16 @@ static void add_tagged(Rig *rig, const char *body, const char *tag)
     memset(&e, 0, sizeof(e));
     counter++;
     (void)snprintf(hash, sizeof(hash), "%064x", (unsigned)counter);
-    ASSERT_EQ_STATUS(store_add(rig->store, body, hash, NULL, tags, 1U, "agent", NULL, k_now, &act,
-                               &e),
-                     STORE_OK);
+    ASSERT_EQ_STATUS(
+        store_add(rig->store, body, hash, NULL, tags, 1U, "agent", NULL, k_now, &act, &e),
+        STORE_OK);
     store_entry_free(&e);
 }
 
 TEST(filter_miss_inserts_nothing_counts_skipped)
 {
-    Rig rig = given_rig((RigSpec){.actions = ACTION(ALL_TYPES, FILTER("\"tags\":{\"any\":[\"want\"]}"))});
+    Rig rig =
+        given_rig((RigSpec){.actions = ACTION(ALL_TYPES, FILTER("\"tags\":{\"any\":[\"want\"]}"))});
 
     add_tagged(&rig, "one", "other");
     add_tagged(&rig, "two", "other");
@@ -1930,10 +1961,10 @@ TEST(filter_miss_inserts_nothing_counts_skipped)
 
 TEST(each_action_gets_the_row_it_matches_and_the_recipients_list_only_those)
 {
-    Rig rig = given_rig(
-        (RigSpec){.actions = NAMED("go", ALL_TYPES, FILTER("\"tags\":{\"any\":[\"want\"]}")) ","
-                             NAMED("two", ALL_TYPES, "") ","
-                             NAMED("three", ALL_TYPES, FILTER("\"created_by\":[\"human\"]"))});
+    Rig rig = given_rig((RigSpec){
+        .actions = NAMED("go", ALL_TYPES, FILTER("\"tags\":{\"any\":[\"want\"]}")) "," NAMED(
+            "two", ALL_TYPES, "") "," NAMED("three", ALL_TYPES,
+                                            FILTER("\"created_by\":[\"human\"]"))});
 
     add_tagged(&rig, "one", "other"); /* actor agent: only "two" matches */
     assert_db(&rig, "SELECT recipients FROM outbox;",
@@ -1967,8 +1998,9 @@ TEST(default_origins_skip_sync_and_import_and_count_skipped_source)
 
 TEST(an_action_that_lists_the_origin_gets_the_event_with_that_origin)
 {
-    Rig rig = given_rig((RigSpec){.actions = ACTION(ALL_TYPES, FILTER("\"origins\":[\"local\",\"sync\"]")),
-                                  .origin = STORE_ORIGIN_SYNC});
+    Rig rig = given_rig(
+        (RigSpec){.actions = ACTION(ALL_TYPES, FILTER("\"origins\":[\"local\",\"sync\"]")),
+                  .origin = STORE_ORIGIN_SYNC});
 
     add_memory(&rig, "body", "k:1");
     assert_outbox_types(&rig, "memory.created");
@@ -2011,8 +2043,9 @@ TEST(no_hooks_inserts_nothing)
 
 TEST(hooks_on_does_not_ignore_a_filter_other_than_origins)
 {
-    Rig rig = given_rig((RigSpec){.actions = ACTION(ALL_TYPES, FILTER("\"tags\":{\"any\":[\"want\"]}")),
-                                  .hooks = STORE_HOOKS_ON});
+    Rig rig =
+        given_rig((RigSpec){.actions = ACTION(ALL_TYPES, FILTER("\"tags\":{\"any\":[\"want\"]}")),
+                            .hooks = STORE_HOOKS_ON});
 
     add_tagged(&rig, "one", "other");
     assert_outbox_types(&rig, "none");
@@ -2046,8 +2079,9 @@ TEST(an_unchanged_write_makes_no_event)
     memset(&e, 0, sizeof(e));
     (void)snprintf(hash, sizeof(hash), "%064x", (unsigned)1);
     /* the same key with the same body: merges into the slot and changes nothing */
-    ASSERT_EQ_STATUS(store_add(rig.store, "body", hash, "k:1", NULL, 0U, "agent", NULL, k_now, &act, &e),
-                     STORE_OK);
+    ASSERT_EQ_STATUS(
+        store_add(rig.store, "body", hash, "k:1", NULL, 0U, "agent", NULL, k_now, &act, &e),
+        STORE_OK);
     ASSERT_EQ_INT(e.id, id);
     store_entry_free(&e);
     assert_outbox_types(&rig, "none");
@@ -2061,11 +2095,11 @@ TEST(a_tag_change_alone_is_one_updated_event_with_the_tags_difference)
     const char *tags[] = {"fresh"};
 
     clear_outbox(&rig);
-    ASSERT_EQ_STATUS(update_memory(&rig, id, (StoreUpdate){.tags = tags,
-                                                          .ntags = 1U,
-                                                          .set_tags = true,
-                                                          .bin = STORE_BIN_LIVE}),
-                     STORE_OK);
+    ASSERT_EQ_STATUS(
+        update_memory(
+            &rig, id,
+            (StoreUpdate){.tags = tags, .ntags = 1U, .set_tags = true, .bin = STORE_BIN_LIVE}),
+        STORE_OK);
     assert_outbox_types(&rig, "memory.updated");
     assert_db(&rig, "SELECT json_extract(payload, '$.changes') FROM outbox;",
               "{\"fields\":[\"tags\"],\"before\":{\"tags\":[]},\"tags_added\":[\"fresh\"],"
@@ -2084,11 +2118,12 @@ TEST(a_failed_write_leaves_no_trace_in_the_next_one)
     clear_outbox(&rig);
     (void)snprintf(hash, sizeof(hash), "%064x", (unsigned)777);
     /* a stale version vector: the write rolls back after it has looked at the row */
-    ASSERT_EQ_STATUS(update_memory(&rig, a, (StoreUpdate){.body = "never",
-                                                         .body_hash = hash,
-                                                         .set_body = true,
-                                                         .if_version_vector = "{}",
-                                                         .bin = STORE_BIN_LIVE}),
+    ASSERT_EQ_STATUS(update_memory(&rig, a,
+                                   (StoreUpdate){.body = "never",
+                                                 .body_hash = hash,
+                                                 .set_body = true,
+                                                 .if_version_vector = "{}",
+                                                 .bin = STORE_BIN_LIVE}),
                      STORE_ERR_STALE);
     assert_outbox_types(&rig, "none");
     update_body(&rig, b, "good");
@@ -2131,26 +2166,41 @@ TEST(the_row_and_its_payload_have_the_shape_plan_35_reads)
     char sql[512];
 
     add_memory(&rig, "body", "k:1");
-    assert_db(&rig, "SELECT length(event_id) || ':' || type || ':' || length(created_at) FROM outbox;",
+    assert_db(&rig,
+              "SELECT length(event_id) || ':' || type || ':' || length(created_at) FROM outbox;",
               "36:memory.created:24");
     assert_db(&rig, "SELECT json_extract(payload, '$.event_id') = event_id FROM outbox;", "1");
     assert_db(&rig, "SELECT json_extract(payload, '$.event_type') FROM outbox;", "memory.created");
-    assert_db(&rig, "SELECT json_extract(payload, '$.occurred_at') = created_at AND "
-                    "json_extract(payload, '$.detected_at') = created_at FROM outbox;", "1");
-    assert_db(&rig, "SELECT json_extract(payload, '$.cause.command') || ':' || "
-                    "json_extract(payload, '$.cause.depth') FROM outbox;", "add:0");
+    assert_db(&rig,
+              "SELECT json_extract(payload, '$.occurred_at') = created_at AND "
+              "json_extract(payload, '$.detected_at') = created_at FROM outbox;",
+              "1");
+    assert_db(&rig,
+              "SELECT json_extract(payload, '$.cause.command') || ':' || "
+              "json_extract(payload, '$.cause.depth') FROM outbox;",
+              "add:0");
     assert_db(&rig, "SELECT json_extract(payload, '$.brain.path') FROM outbox;", "~/t.db");
-    assert_db(&rig, "SELECT json_extract(payload, '$.memory.change_seq') = (SELECT change_seq "
-                    "FROM entries) FROM outbox;", "1");
-    assert_db(&rig, "SELECT json_extract(payload, '$.memory.id') = (SELECT id FROM entries) "
-                    "FROM outbox;", "1");
-    assert_db(&rig, "SELECT json_type(payload, '$.memory.local_id') IS NULL AND "
-                    "json_type(payload, '$.memory.version_vector') IS NULL FROM outbox;", "1");
-    assert_db(&rig, "SELECT json_type(payload, '$.plugin') IS NULL AND json_type(payload, '$.entry') "
-                    "IS NULL AND json_type(payload, '$.data_dir') IS NULL AND "
-                    "json_type(payload, '$.settings') IS NULL FROM outbox;", "1");
-    assert_db(&rig, "SELECT json_extract(payload, '$.limits.max_bytes') || ':' || "
-                    "json_extract(payload, '$.truncated') FROM outbox;", "262144:0");
+    assert_db(&rig,
+              "SELECT json_extract(payload, '$.memory.change_seq') = (SELECT change_seq "
+              "FROM entries) FROM outbox;",
+              "1");
+    assert_db(&rig,
+              "SELECT json_extract(payload, '$.memory.id') = (SELECT id FROM entries) "
+              "FROM outbox;",
+              "1");
+    assert_db(&rig,
+              "SELECT json_type(payload, '$.memory.local_id') IS NULL AND "
+              "json_type(payload, '$.memory.version_vector') IS NULL FROM outbox;",
+              "1");
+    assert_db(&rig,
+              "SELECT json_type(payload, '$.plugin') IS NULL AND json_type(payload, '$.entry') "
+              "IS NULL AND json_type(payload, '$.data_dir') IS NULL AND "
+              "json_type(payload, '$.settings') IS NULL FROM outbox;",
+              "1");
+    assert_db(&rig,
+              "SELECT json_extract(payload, '$.limits.max_bytes') || ':' || "
+              "json_extract(payload, '$.truncated') FROM outbox;",
+              "262144:0");
     device = harness_sqlite_query_line(rig.db, "SELECT json_extract(payload, '$.brain.device_id') "
                                                "FROM outbox;");
     ASSERT_TRUE(device != NULL);
@@ -2168,7 +2218,8 @@ TEST(one_command_shares_one_batch_id_and_a_new_command_has_its_own)
     add_memory(&rig, "one", "k:1");
     add_memory(&rig, "two", "k:2");
     assert_db(&rig, "SELECT count(DISTINCT json_extract(payload, '$.batch_id')) FROM outbox;", "1");
-    assert_db(&rig, "SELECT length(json_extract(payload, '$.batch_id')) FROM outbox LIMIT 1;", "36");
+    assert_db(&rig, "SELECT length(json_extract(payload, '$.batch_id')) FROM outbox LIMIT 1;",
+              "36");
     rig_arm(&rig, (RigSpec){.actions = NULL});
     add_memory(&rig, "three", "k:3");
     assert_db(&rig, "SELECT count(DISTINCT json_extract(payload, '$.batch_id')) FROM outbox;", "2");
@@ -2177,9 +2228,9 @@ TEST(one_command_shares_one_batch_id_and_a_new_command_has_its_own)
 
 TEST(a_write_inside_a_run_carries_the_hook_cause_and_not_caused_by_skips_it)
 {
-    Rig rig = given_rig(
-        (RigSpec){.actions = NAMED("go", ALL_TYPES, FILTER("\"not_caused_by\":[\"url_expand\"]")) ","
-                             NAMED("two", ALL_TYPES, "")});
+    Rig rig = given_rig((RigSpec){
+        .actions = NAMED("go", ALL_TYPES, FILTER("\"not_caused_by\":[\"url_expand\"]")) "," NAMED(
+            "two", ALL_TYPES, "")});
 
     /* given_rig made a direct cause; a write in a run reads the run's variables instead */
     events_cause_free(&rig.cause);
@@ -2188,9 +2239,10 @@ TEST(a_write_inside_a_run_carries_the_hook_cause_and_not_caused_by_skips_it)
     add_memory(&rig, "body", "k:1");
     assert_db(&rig, "SELECT recipients FROM outbox;",
               "[{\"entry\":\"plugin/hooker/two\",\"state\":\"pending\"}]");
-    assert_db(&rig, "SELECT json_extract(payload, '$.cause.hook') || ':' || "
-                    "json_extract(payload, '$.cause.depth') || ':' || "
-                    "json_array_length(json_extract(payload, '$.cause.chain')) FROM outbox;",
+    assert_db(&rig,
+              "SELECT json_extract(payload, '$.cause.hook') || ':' || "
+              "json_extract(payload, '$.cause.depth') || ':' || "
+              "json_array_length(json_extract(payload, '$.cause.chain')) FROM outbox;",
               "plugin/url_expand/fetch:2:1");
     clear_cause_env();
     rig_close(&rig);
@@ -2198,12 +2250,13 @@ TEST(a_write_inside_a_run_carries_the_hook_cause_and_not_caused_by_skips_it)
 
 TEST(bins_and_match_before_read_the_state_before_the_write)
 {
-    Rig deleted_only = given_rig((RigSpec){.actions = ACTION(ALL_TYPES, FILTER("\"bins\":[\"deleted\"]"))});
-    Rig tags_before = given_rig(
-        (RigSpec){.actions = ACTION("[\"memory.updated\"]",
-                                    FILTER("\"tags\":{\"any\":[\"todo\"],\"match_before\":true}"))});
-    Rig tags_after = given_rig((RigSpec){.actions = ACTION("[\"memory.updated\"]",
-                                                           FILTER("\"tags\":{\"any\":[\"todo\"]}"))});
+    Rig deleted_only =
+        given_rig((RigSpec){.actions = ACTION(ALL_TYPES, FILTER("\"bins\":[\"deleted\"]"))});
+    Rig tags_before = given_rig((RigSpec){
+        .actions = ACTION("[\"memory.updated\"]",
+                          FILTER("\"tags\":{\"any\":[\"todo\"],\"match_before\":true}"))});
+    Rig tags_after = given_rig((RigSpec){
+        .actions = ACTION("[\"memory.updated\"]", FILTER("\"tags\":{\"any\":[\"todo\"]}"))});
     long long id = add_memory(&deleted_only, "body", "k:1");
     const char *todo[] = {"todo"};
     StoreAddAction act = STORE_ADD_CREATED;
@@ -2215,23 +2268,23 @@ TEST(bins_and_match_before_read_the_state_before_the_write)
     assert_outbox_types(&deleted_only, "memory.restored");
     memset(&e, 0, sizeof(e));
     (void)snprintf(hash, sizeof(hash), "%064x", (unsigned)999);
-    ASSERT_EQ_STATUS(store_add(tags_before.store, "body", hash, "k:1", todo, 1U, "human", NULL,
-                               k_now, &act, &e),
-                     STORE_OK);
+    ASSERT_EQ_STATUS(
+        store_add(tags_before.store, "body", hash, "k:1", todo, 1U, "human", NULL, k_now, &act, &e),
+        STORE_OK);
     id = e.id;
     store_entry_free(&e);
     memset(&e, 0, sizeof(e));
-    ASSERT_EQ_STATUS(store_add(tags_after.store, "body", hash, "k:1", todo, 1U, "human", NULL,
-                               k_now, &act, &e),
-                     STORE_OK);
+    ASSERT_EQ_STATUS(
+        store_add(tags_after.store, "body", hash, "k:1", todo, 1U, "human", NULL, k_now, &act, &e),
+        STORE_OK);
     store_entry_free(&e);
     /* drop the tag: the tags before had it */
-    ASSERT_EQ_STATUS(update_memory(&tags_before, id, (StoreUpdate){.set_tags = true,
-                                                                  .bin = STORE_BIN_LIVE}),
-                     STORE_OK);
-    ASSERT_EQ_STATUS(update_memory(&tags_after, id, (StoreUpdate){.set_tags = true,
-                                                                 .bin = STORE_BIN_LIVE}),
-                     STORE_OK);
+    ASSERT_EQ_STATUS(
+        update_memory(&tags_before, id, (StoreUpdate){.set_tags = true, .bin = STORE_BIN_LIVE}),
+        STORE_OK);
+    ASSERT_EQ_STATUS(
+        update_memory(&tags_after, id, (StoreUpdate){.set_tags = true, .bin = STORE_BIN_LIVE}),
+        STORE_OK);
     assert_outbox_types(&tags_before, "memory.updated");
     assert_outbox_types(&tags_after, "none");
     rig_close(&deleted_only);
@@ -2240,6 +2293,7 @@ TEST(bins_and_match_before_read_the_state_before_the_write)
 }
 
 /* Counts of memories and outbox rows: they must always be equal after one add. */
+// NOLINTNEXTLINE(bugprone-easily-swappable-parameters) failure seen, then success seen
 static void assert_memory_and_row_agree(const Rig *rig, bool *saw_failure, bool *saw_success)
 {
     char *got = harness_sqlite_query_line(
@@ -2278,7 +2332,8 @@ TEST(outbox_commits_with_memory)
             memset(&e, 0, sizeof(e));
             (void)snprintf(hash, sizeof(hash), "%064x", (unsigned)4242);
             k_fail[which](at);
-            (void)store_add(rig.store, "body", hash, "k:1", NULL, 0U, "human", NULL, k_now, &act, &e);
+            (void)store_add(rig.store, "body", hash, "k:1", NULL, 0U, "human", NULL, k_now, &act,
+                            &e);
             k_fail[which](-1);
             store_entry_free(&e);
             assert_memory_and_row_agree(&rig, &saw_failure, &saw_success);
@@ -2292,7 +2347,8 @@ TEST(outbox_commits_with_memory)
 /* The tests below drive the CLI and remember_run; the store test binary has neither. */
 #ifdef REMEMBER_PLUGINS_DIAG_TEST
 
-/* ---- the command line: plugins on disk, enabled in the brain, written through the CLI ---------- */
+/* ---- the command line: plugins on disk, enabled in the brain, written through the CLI ----------
+ */
 
 #define RUN(db, ...)                                                                               \
     run_args((db), (const char *const[]){__VA_ARGS__},                                             \
@@ -2307,10 +2363,13 @@ static CmdResult run_args(const char *db, const char *const *args, size_t count)
 static char *given_plugins_folder(void)
 {
     const char *xdg = getenv("XDG_DATA_HOME"); // NOLINT(concurrency-mt-unsafe)
-    size_t cap = strlen(xdg) + sizeof("/remember/plugins/hooker/plugin.json");
+    size_t cap = (xdg != NULL ? strlen(xdg) : 0U) + sizeof("/remember/plugins/hooker/plugin.json");
     char *path = (char *)malloc(cap);
 
-    ASSERT_TRUE(path != NULL);
+    ASSERT_TRUE(xdg != NULL && path != NULL);
+    if (xdg == NULL || path == NULL) {
+        return (char *)calloc(1U, 1U);
+    }
     (void)snprintf(path, cap, "%s/remember/plugins/hooker/plugin.json", xdg);
     return path;
 }
@@ -2347,17 +2406,19 @@ static char *given_brain_with_enabled_plugin(const char *actions)
     return db;
 }
 
+// NOLINTNEXTLINE(bugprone-easily-swappable-parameters) the brain, then the row types
 static void assert_rows(const char *db, const char *want)
 {
-    char *got = harness_sqlite_query_line(
-        db, "SELECT COALESCE(group_concat(type, ','), 'none') FROM "
-            "(SELECT type FROM outbox ORDER BY rowid);");
+    char *got =
+        harness_sqlite_query_line(db, "SELECT COALESCE(group_concat(type, ','), 'none') FROM "
+                                      "(SELECT type FROM outbox ORDER BY rowid);");
 
     ASSERT_TRUE(got != NULL);
     ASSERT_STREQ(got != NULL ? got : "", want);
     free(got);
 }
 
+// NOLINTNEXTLINE(bugprone-easily-swappable-parameters) the brain, the query, then its answer
 static void assert_query(const char *db, const char *sql, const char *want)
 {
     char *got = harness_sqlite_query_line(db, sql);
@@ -2481,7 +2542,10 @@ TEST(both_hooks_flags_are_a_usage_error_on_every_write_command_and_write_nothing
         ASSERT_STREQ(r.err, "remember: --hooks and --no-hooks can't be used together\n");
         cmd_result_free(&r);
     }
-    assert_query(db, "SELECT count(*) FROM entries WHERE deleted_at IS NULL AND body IN ('one','two','three');", "3");
+    assert_query(
+        db,
+        "SELECT count(*) FROM entries WHERE deleted_at IS NULL AND body IN ('one','two','three');",
+        "3");
     assert_rows(db, "memory.created,memory.created,memory.created");
     assert_query(db, "SELECT count(*) FROM entry_links;", "0");
     free(export_path);
@@ -2514,13 +2578,14 @@ TEST(each_write_command_makes_its_event_with_its_own_command_word)
     assert_ok(RUN(db, "unlink", "1", "2"));
     assert_ok(RUN(db, "delete", "1"));
     assert_ok(RUN(db, "purge", "--deleted"));
-    assert_query(db,
-                 "SELECT group_concat(json_extract(payload, '$.cause.command') || ':' || type, ' ') "
-                 "FROM (SELECT payload, type FROM outbox ORDER BY rowid);",
-                 "add:memory.created add:memory.created update:memory.updated "
-                 "rekey:memory.updated link:memory.updated link:memory.updated "
-                 "unlink:memory.updated unlink:memory.updated delete:memory.deleted "
-                 "purge:memory.purged");
+    assert_query(
+        db,
+        "SELECT group_concat(json_extract(payload, '$.cause.command') || ':' || type, ' ') "
+        "FROM (SELECT payload, type FROM outbox ORDER BY rowid);",
+        "add:memory.created add:memory.created update:memory.updated "
+        "rekey:memory.updated link:memory.updated link:memory.updated "
+        "unlink:memory.updated unlink:memory.updated delete:memory.deleted "
+        "purge:memory.purged");
     free(db);
 }
 
@@ -2576,7 +2641,7 @@ TEST(default_origins_skip_sync_and_import_and_log_skipped_source)
     ASSERT_STR_CONTAINS(text, "\"event\":\"skipped_source\",\"event_type\":\"memory.created\","
                               "\"command\":\"import\",\"origin\":\"import\",\"plugin\":\"hooker\","
                               "\"action\":\"go\",\"count\":2}\n");
-    ASSERT_EQ_INT(strchr(text, '\n') - text + 1, len);
+    ASSERT_TRUE(text != NULL && len > 0U && strchr(text, '\n') == text + len - 1U);
     free(text);
     free(log);
     free(db);
@@ -2586,14 +2651,18 @@ TEST(default_origins_skip_sync_and_import_and_log_skipped_source)
 TEST(an_action_that_lists_import_gets_one_event_per_memory_with_one_batch)
 {
     char *file = given_export_of_two();
-    char *db = given_brain_with_enabled_plugin(ACTION(ALL_TYPES, FILTER("\"origins\":[\"import\"]")));
+    char *db =
+        given_brain_with_enabled_plugin(ACTION(ALL_TYPES, FILTER("\"origins\":[\"import\"]")));
     char *log = harness_side_path(db, ".d/hooks.log");
 
     assert_ok(RUN(db, "import", "--from-json", file));
     assert_rows(db, "memory.created,memory.created");
-    assert_query(db, "SELECT count(DISTINCT json_extract(payload, '$.batch_id')) FROM outbox;", "1");
-    assert_query(db, "SELECT group_concat(DISTINCT json_extract(payload, '$.cause.origin') || ':' || "
-                     "json_extract(payload, '$.cause.command')) FROM outbox;", "import:import");
+    assert_query(db, "SELECT count(DISTINCT json_extract(payload, '$.batch_id')) FROM outbox;",
+                 "1");
+    assert_query(db,
+                 "SELECT group_concat(DISTINCT json_extract(payload, '$.cause.origin') || ':' || "
+                 "json_extract(payload, '$.cause.command')) FROM outbox;",
+                 "import:import");
     ASSERT_FALSE(access(log, F_OK) == 0);
     free(log);
     free(db);
@@ -2617,7 +2686,8 @@ TEST(import_with_hooks_runs_the_default_origins_action_for_that_one_import)
 TEST(import_from_a_database_makes_events_too)
 {
     char *src = make_temp_db_path();
-    char *db = given_brain_with_enabled_plugin(ACTION(ALL_TYPES, FILTER("\"origins\":[\"import\"]")));
+    char *db =
+        given_brain_with_enabled_plugin(ACTION(ALL_TYPES, FILTER("\"origins\":[\"import\"]")));
 
     assert_ok(RUN(src, "add", "from the other brain"));
     assert_ok(RUN(db, "import", "--from-db", src));
@@ -2705,11 +2775,12 @@ TEST(a_write_in_a_run_gets_its_cause_from_the_environment)
     assert_ok(RUN(db, "add", "from a hook"));
     clear_cause_env();
     assert_rows(db, "memory.created");
-    assert_query(db, "SELECT json_extract(payload, '$.cause.hook') || ':' || "
-                     "json_extract(payload, '$.cause.run_id') || ':' || "
-                     "json_extract(payload, '$.cause.depth') || ':' || "
-                     "json_extract(payload, '$.cause.chain[0].hook') || ':' || "
-                     "json_extract(payload, '$.cause.chain[0].memory_id') FROM outbox;",
+    assert_query(db,
+                 "SELECT json_extract(payload, '$.cause.hook') || ':' || "
+                 "json_extract(payload, '$.cause.run_id') || ':' || "
+                 "json_extract(payload, '$.cause.depth') || ':' || "
+                 "json_extract(payload, '$.cause.chain[0].hook') || ':' || "
+                 "json_extract(payload, '$.cause.chain[0].memory_id') FROM outbox;",
                  "plugin/url_expand/fetch:01a14521-0bf0-7000-8000-0000000000c1:2:"
                  "plugin/url_expand/fetch:01a14521-09ff-7d20-8c00-00000000aa01");
     free(db);
@@ -2755,7 +2826,8 @@ TEST(a_failed_write_commits_neither_the_memory_nor_its_outbox_row)
         }
         db = given_brain_with_enabled_plugin(ACTION(ALL_TYPES, ""));
         (void)snprintf(count, sizeof(count), "%d", at);
-        ASSERT_EQ_INT(setenv("REMEMBER_TEST_FAIL_WRITE", count, 1), 0); // NOLINT(concurrency-mt-unsafe)
+        ASSERT_EQ_INT(setenv("REMEMBER_TEST_FAIL_WRITE", count, 1),
+                      0); // NOLINT(concurrency-mt-unsafe)
         r = RUN(db, "add", "body");
         ASSERT_EQ_INT(unsetenv("REMEMBER_TEST_FAIL_WRITE"), 0); // NOLINT(concurrency-mt-unsafe)
         got = harness_sqlite_query_line(db, "SELECT (SELECT count(*) FROM entries) || '/' || "

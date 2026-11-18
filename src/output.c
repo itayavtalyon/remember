@@ -165,6 +165,7 @@ static int actors_ok(const Entry *e)
    file drops local_id (JE-3.5); an event drops both and adds change_seq (R3.7, R3.8). */
 typedef enum { SHAPE_CLI = 0, SHAPE_EXPORT, SHAPE_EVENT } EntryShape;
 
+// NOLINTNEXTLINE(bugprone-easily-swappable-parameters) the shape, then the event's change_seq
 static int write_entry_core(FILE *out, const Entry *e, const char *now, EntryShape shape,
                             long long change_seq)
 {
@@ -955,8 +956,8 @@ static int write_entry_with_links(FILE *out, const Entry *e, const StoreNeighbor
     return 0;
 }
 
-int output_event_memory_json(FILE *out, const Entry *e, long long change_seq,
-                             EventLinks links, const char *now)
+int output_event_memory_json(FILE *out, const Entry *e, long long change_seq, EventLinks links,
+                             const char *now)
 {
     if (out == NULL || e == NULL || now == NULL || (links.count > 0U && links.rows == NULL)) {
         return -1;

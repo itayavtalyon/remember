@@ -47,10 +47,10 @@ struct Store {
     const SettingsRegistry *registry; /* not owned; NULL is the compiled-in rows */
     size_t nwarnings;
     ChangeSeqTx change_tx;
-    StoreEvents ev;      /* plan 31: what the write events need; pointers are not owned */
+    StoreEvents ev; /* plan 31: what the write events need; pointers are not owned */
     size_t ev_unsupported;
     char ev_batch_id[STORE_DEVICE_ID_LEN + 1]; /* minted with the first event this command writes */
-    bool ev_armed;                      /* the temp tables and triggers exist */
+    bool ev_armed;                             /* the temp tables and triggers exist */
     char ev_pad_[2];
     int brain_schema;    /* the brain's user_version, read at open */
     bool schema_too_new; /* newer schema or min_reader_version: read only */
@@ -2586,18 +2586,18 @@ static int check_reader_version(Store *s, char *err, size_t errlen)
  * a connection that has at least one enabled action (store_set_events), and they roll back with
  * the write. begin_write empties them. */
 #define EV_TOUCH(X)                                                                                \
-    "INSERT INTO temp.ev_btags(local_id, name) SELECT " X ", t.name FROM main.entry_tags et "       \
+    "INSERT INTO temp.ev_btags(local_id, name) SELECT " X ", t.name FROM main.entry_tags et "      \
     "JOIN main.tags t ON t.id = et.tag_id WHERE et.entry_id = " X                                  \
-    " AND NOT EXISTS (SELECT 1 FROM temp.ev_touch WHERE local_id = " X ");"                         \
+    " AND NOT EXISTS (SELECT 1 FROM temp.ev_touch WHERE local_id = " X ");"                        \
     "INSERT INTO temp.ev_blinks(local_id, kind, dir, other) SELECT " X ", l.kind, "                \
     "CASE WHEN l.kind = 'related' THEN 'both' WHEN l.from_id = " X                                 \
     " THEN 'outgoing' ELSE 'incoming' END, CASE WHEN l.from_id = " X                               \
-    " THEN l.to_id ELSE l.from_id END FROM main.entry_links l WHERE (l.from_id = " X                \
+    " THEN l.to_id ELSE l.from_id END FROM main.entry_links l WHERE (l.from_id = " X               \
     " OR l.to_id = " X ") AND l.deleted_at IS NULL "                                               \
-    "AND NOT EXISTS (SELECT 1 FROM temp.ev_touch WHERE local_id = " X ");"                          \
-    "INSERT OR IGNORE INTO temp.ev_touch(local_id, had_before, id, key, body, created_by, "         \
-    "updated_by, created_at, updated_at, expires_at, deleted_at, version_vector, change_seq) "      \
-    "SELECT local_id, 1, id, key, body, created_by, updated_by, created_at, updated_at, "           \
+    "AND NOT EXISTS (SELECT 1 FROM temp.ev_touch WHERE local_id = " X ");"                         \
+    "INSERT OR IGNORE INTO temp.ev_touch(local_id, had_before, id, key, body, created_by, "        \
+    "updated_by, created_at, updated_at, expires_at, deleted_at, version_vector, change_seq) "     \
+    "SELECT local_id, 1, id, key, body, created_by, updated_by, created_at, updated_at, "          \
     "expires_at, deleted_at, version_vector, change_seq FROM main.entries WHERE local_id = " X ";"
 
 /* One statement each: a string literal past 4095 bytes is not portable C. */
@@ -2611,20 +2611,20 @@ static const char *const k_ev_arm_sql[] = {
     "dir TEXT NOT NULL, other INTEGER NOT NULL);",
     "CREATE TEMP TRIGGER IF NOT EXISTS ev_e_ins AFTER INSERT ON main.entries BEGIN "
     "INSERT OR IGNORE INTO temp.ev_touch(local_id, had_before) VALUES (NEW.local_id, 0); END;",
-    "CREATE TEMP TRIGGER IF NOT EXISTS ev_e_upd BEFORE UPDATE ON main.entries BEGIN "
-    EV_TOUCH("OLD.local_id") "END;",
-    "CREATE TEMP TRIGGER IF NOT EXISTS ev_e_del BEFORE DELETE ON main.entries BEGIN "
-    EV_TOUCH("OLD.local_id") "END;",
-    "CREATE TEMP TRIGGER IF NOT EXISTS ev_t_ins BEFORE INSERT ON main.entry_tags BEGIN "
-    EV_TOUCH("NEW.entry_id") "END;",
-    "CREATE TEMP TRIGGER IF NOT EXISTS ev_t_del BEFORE DELETE ON main.entry_tags BEGIN "
-    EV_TOUCH("OLD.entry_id") "END;",
-    "CREATE TEMP TRIGGER IF NOT EXISTS ev_l_ins BEFORE INSERT ON main.entry_links BEGIN "
-    EV_TOUCH("NEW.from_id") EV_TOUCH("NEW.to_id") "END;",
-    "CREATE TEMP TRIGGER IF NOT EXISTS ev_l_upd BEFORE UPDATE ON main.entry_links BEGIN "
-    EV_TOUCH("OLD.from_id") EV_TOUCH("OLD.to_id") "END;",
-    "CREATE TEMP TRIGGER IF NOT EXISTS ev_l_del BEFORE DELETE ON main.entry_links BEGIN "
-    EV_TOUCH("OLD.from_id") EV_TOUCH("OLD.to_id") "END;",
+    "CREATE TEMP TRIGGER IF NOT EXISTS ev_e_upd BEFORE UPDATE ON main.entries BEGIN " EV_TOUCH(
+        "OLD.local_id") "END;",
+    "CREATE TEMP TRIGGER IF NOT EXISTS ev_e_del BEFORE DELETE ON main.entries BEGIN " EV_TOUCH(
+        "OLD.local_id") "END;",
+    "CREATE TEMP TRIGGER IF NOT EXISTS ev_t_ins BEFORE INSERT ON main.entry_tags BEGIN " EV_TOUCH(
+        "NEW.entry_id") "END;",
+    "CREATE TEMP TRIGGER IF NOT EXISTS ev_t_del BEFORE DELETE ON main.entry_tags BEGIN " EV_TOUCH(
+        "OLD.entry_id") "END;",
+    "CREATE TEMP TRIGGER IF NOT EXISTS ev_l_ins BEFORE INSERT ON main.entry_links BEGIN " EV_TOUCH(
+        "NEW.from_id") EV_TOUCH("NEW.to_id") "END;",
+    "CREATE TEMP TRIGGER IF NOT EXISTS ev_l_upd BEFORE UPDATE ON main.entry_links BEGIN " EV_TOUCH(
+        "OLD.from_id") EV_TOUCH("OLD.to_id") "END;",
+    "CREATE TEMP TRIGGER IF NOT EXISTS ev_l_del BEFORE DELETE ON main.entry_links BEGIN " EV_TOUCH(
+        "OLD.from_id") EV_TOUCH("OLD.to_id") "END;",
 };
 
 static const char k_ev_reset_sql[] =
@@ -4463,7 +4463,8 @@ static StoreStatus add_keyless(sqlite3 *db, const char *body, const char *body_h
 
 /* ---- memory events: what a write changed, and the outbox rows (plan 31; events.h) --------- */
 
-/* The live links of a memory as the triggers kept them: heap strings, and the view the diff reads. */
+/* The live links of a memory as the triggers kept them: heap strings, and the view the diff reads.
+ */
 typedef struct {
     char *kind;
     char *dir;
@@ -4485,8 +4486,25 @@ typedef struct {
     long long change_seq;
     bool has_before;
     bool has_after;
-    char pad_[6];
+    /* NOLINTNEXTLINE(readability-magic-numbers,cppcoreguidelines-avoid-magic-numbers) */
+    char pad_[6]; /* explicit tail padding (kept -Wpadded-clean) */
 } EvRow;
+
+/* The columns of the ev_touch row ev_before_entry reads. */
+enum {
+    EVB_ID = 0,
+    EVB_KEY,
+    EVB_BODY,
+    EVB_CREATED_BY,
+    EVB_UPDATED_BY,
+    EVB_CREATED_AT,
+    EVB_UPDATED_AT,
+    EVB_EXPIRES_AT,
+    EVB_DELETED_AT,
+    EVB_VERSION_VECTOR,
+    EVB_CHANGE_SEQ,
+    EV_OUTBOX_BINDS = 5
+};
 
 static void ev_row_free(EvRow *r)
 {
@@ -4538,8 +4556,10 @@ static int ev_before_tags(Store *s, long long id, Entry *out)
     bool oom = false;
     int step = 0;
 
-    if (ev_prepare(s, "SELECT name FROM temp.ev_btags WHERE local_id = ?1 "
-                      "ORDER BY name COLLATE BINARY;", id, &stmt) != 0) {
+    if (ev_prepare(s,
+                   "SELECT name FROM temp.ev_btags WHERE local_id = ?1 "
+                   "ORDER BY name COLLATE BINARY;",
+                   id, &stmt) != 0) {
         return -1;
     }
     while ((step = sqlite3_step(stmt)) == SQLITE_ROW && !oom) {
@@ -4568,25 +4588,27 @@ static int ev_before_entry(Store *s, long long id, EvRow *r)
     bool oom = false;
     int step = 0;
 
-    if (ev_prepare(s, "SELECT id, key, body, created_by, updated_by, created_at, updated_at, "
-                      "expires_at, deleted_at, version_vector, change_seq FROM temp.ev_touch "
-                      "WHERE local_id = ?1;", id, &stmt) != 0) {
+    if (ev_prepare(s,
+                   "SELECT id, key, body, created_by, updated_by, created_at, updated_at, "
+                   "expires_at, deleted_at, version_vector, change_seq FROM temp.ev_touch "
+                   "WHERE local_id = ?1;",
+                   id, &stmt) != 0) {
         return -1;
     }
     step = sqlite3_step(stmt);
     if (step == SQLITE_ROW) {
         e->id = id;
-        e->sync_id = ev_col(stmt, 0, &oom);
-        e->key = ev_col(stmt, 1, &oom);
-        e->body = ev_col(stmt, 2, &oom);
-        e->created_by = ev_col(stmt, 3, &oom);
-        e->updated_by = ev_col(stmt, 4, &oom);
-        e->created_at = ev_col(stmt, 5, &oom);
-        e->updated_at = ev_col(stmt, 6, &oom);
-        e->expires_at = ev_col(stmt, 7, &oom);
-        e->deleted_at = ev_col(stmt, 8, &oom);
-        e->version_vector = ev_col(stmt, 9, &oom);
-        r->change_seq = sqlite3_column_int64(stmt, 10);
+        e->sync_id = ev_col(stmt, EVB_ID, &oom);
+        e->key = ev_col(stmt, EVB_KEY, &oom);
+        e->body = ev_col(stmt, EVB_BODY, &oom);
+        e->created_by = ev_col(stmt, EVB_CREATED_BY, &oom);
+        e->updated_by = ev_col(stmt, EVB_UPDATED_BY, &oom);
+        e->created_at = ev_col(stmt, EVB_CREATED_AT, &oom);
+        e->updated_at = ev_col(stmt, EVB_UPDATED_AT, &oom);
+        e->expires_at = ev_col(stmt, EVB_EXPIRES_AT, &oom);
+        e->deleted_at = ev_col(stmt, EVB_DELETED_AT, &oom);
+        e->version_vector = ev_col(stmt, EVB_VERSION_VECTOR, &oom);
+        r->change_seq = sqlite3_column_int64(stmt, EVB_CHANGE_SEQ);
     } else {
         capture_sqlite_error(s->db, &s->last);
     }
@@ -4613,12 +4635,13 @@ static int ev_before_links(Store *s, long long id, EvRow *r)
                    "CASE WHEN t.had_before = 1 THEN t.key ELSE e.key END "
                    "FROM temp.ev_blinks b LEFT JOIN temp.ev_touch t ON t.local_id = b.other "
                    "LEFT JOIN main.entries e ON e.local_id = b.other "
-                   "WHERE b.local_id = ?1 ORDER BY b.kind, b.dir, 3;", id, &stmt) != 0) {
+                   "WHERE b.local_id = ?1 ORDER BY b.kind, b.dir, 3;",
+                   id, &stmt) != 0) {
         return -1;
     }
     while ((step = sqlite3_step(stmt)) == SQLITE_ROW && !oom) {
-        BeforeLink *grown = (BeforeLink *)realloc((void *)r->blinks,
-                                                  (r->nlb + 1U) * sizeof(*grown));
+        BeforeLink *grown =
+            (BeforeLink *)realloc((void *)r->blinks, (r->nlb + 1U) * sizeof(*grown));
 
         if (grown == NULL) {
             oom = true;
@@ -4731,7 +4754,7 @@ static int ev_insert_row(Store *s, EvInsert in, const char *const *matched, size
     char err_unused[1];
     char *payload = NULL;
     char *recipients = NULL;
-    const char *binds[5];
+    const char *binds[EV_OUTBOX_BINDS];
     EventStamp stamp;
     int rc = -1;
 
@@ -4756,9 +4779,10 @@ static int ev_insert_row(Store *s, EvInsert in, const char *const *matched, size
                                          .links_after = in.row->la,
                                          .nlinks_before = in.row->nlb,
                                          .nlinks_after = in.row->nla},
-                             in.memory,
-                             (EventLinks){.rows = in.row->neighbors, .count = in.row->nneighbors},
-                             in.row->change_seq);
+                             &(EventMemory){.entry = in.memory,
+                                            .links = in.row->neighbors,
+                                            .nlinks = in.row->nneighbors,
+                                            .change_seq = in.row->change_seq});
     recipients = events_recipients_json(matched, nmatched);
     binds[0] = event_id;
     binds[1] = event_type_name(in.draft->type);
@@ -4769,7 +4793,7 @@ static int ev_insert_row(Store *s, EvInsert in, const char *const *matched, size
         exec_bound(s->db,
                    "INSERT INTO outbox(event_id, type, payload, recipients, created_at) "
                    "VALUES (?1, ?2, ?3, ?4, ?5);",
-                   binds, 5, err_unused, 0U, &s->last) == 0) {
+                   binds, EV_OUTBOX_BINDS, err_unused, 0U, &s->last) == 0) {
         rc = 0;
     }
     free(payload);
@@ -4884,7 +4908,8 @@ static int ev_flush_one(Store *s, long long id, const char *now)
     bool had = false;
 
     memset(&row, 0, sizeof(row));
-    if (ev_prepare(s, "SELECT had_before FROM temp.ev_touch WHERE local_id = ?1;", id, &probe) != 0) {
+    if (ev_prepare(s, "SELECT had_before FROM temp.ev_touch WHERE local_id = ?1;", id, &probe) !=
+        0) {
         return -1;
     }
     had = sqlite3_step(probe) == SQLITE_ROW && sqlite3_column_int(probe, 0) != 0;
@@ -4980,7 +5005,6 @@ size_t store_events_unsupported(const Store *s)
 {
     return s->ev_unsupported;
 }
-
 
 StoreStatus store_add(Store *s, const char *body, const char *body_hash, const char *key_or_null,
                       const char *const *tags, size_t ntags, const char *actor,

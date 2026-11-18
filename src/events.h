@@ -48,8 +48,9 @@ const char *event_type_name(EventType type);
 /* "local", "sync" or "import". NULL for a value outside the enum. */
 const char *event_origin_name(StoreOrigin origin);
 
-/* What caused a write (data.cause, R3.2; decision:2026-11-18-plan31-grill-chain-env-conflict-accept).
-   hook and run_id are "" when none. chain_json is the array text, "[]" for none. */
+/* What caused a write (data.cause, R3.2;
+   decision:2026-11-18-plan31-grill-chain-env-conflict-accept). hook and run_id are "" when none.
+   chain_json is the array text, "[]" for none. */
 struct EventCause {
     char hook[EVENT_HOOK_CAP];
     char run_id[EVENT_UUID_LEN + 1];
@@ -78,7 +79,8 @@ typedef struct {
     PluginEntry entry;
     char plugin[PLUGIN_NAME_CAP + 1];
     char recipient[EVENT_HOOK_CAP]; /* plugin/<name>/<entry> */
-    char pad_[6];
+    /* NOLINTNEXTLINE(readability-magic-numbers,cppcoreguidelines-avoid-magic-numbers) */
+    char pad_[6]; /* explicit tail padding (kept -Wpadded-clean) */
     size_t skipped_filter;
     size_t skipped_source[EVENT_TYPE_COUNT]; /* by event type, origins only */
 } EventAction;
@@ -120,7 +122,8 @@ typedef struct {
     StoreBin bin;
     StoreHooks hooks; /* ON skips the origins test (H-4.3) */
     bool has_before;  /* false: the memory is new */
-    char pad_[7];
+    /* NOLINTNEXTLINE(readability-magic-numbers,cppcoreguidelines-avoid-magic-numbers) */
+    char pad_[7]; /* explicit tail padding (kept -Wpadded-clean) */
 } EventFacts;
 
 /* The whole filter of one action (H-4.1; decision:2026-11-18-plan31-grill-filter-semantics):
@@ -161,7 +164,8 @@ typedef struct {
     bool key_changed;
     bool tags_changed;
     bool expires_changed;
-    char pad_[7];
+    /* NOLINTNEXTLINE(readability-magic-numbers,cppcoreguidelines-avoid-magic-numbers) */
+    char pad_[7]; /* explicit tail padding (kept -Wpadded-clean) */
 } EventDraft;
 
 /* The events of one touched memory (H-1, H-1.3): created for a new row, purged for a removed one,
@@ -180,15 +184,24 @@ typedef struct {
     const char *command;
     const EventCause *cause;
     StoreOrigin origin;
-    char pad_[4];
+    /* NOLINTNEXTLINE(readability-magic-numbers,cppcoreguidelines-avoid-magic-numbers) */
+    char pad_[4]; /* explicit tail padding (kept -Wpadded-clean) */
 } EventStamp;
 
+/* The memory an event carries: the row after the write (the last one for a purge), the stubs of
+   its links (rows whose subject_id is entry->id) and its change_seq. */
+typedef struct {
+    const Entry *entry;
+    const StoreNeighbor *links;
+    size_t nlinks;
+    long long change_seq;
+} EventMemory;
+
 /* The frozen data of one event: H-3.2 without plugin, entry, data_dir and settings (plan 35
-   adds those for each recipient). memory is the memory after the write (the last one for a
-   purge). Past EVENT_PAYLOAD_MAX bytes the cuts of H-3.4 apply in order, each only when it
-   removes something. Heap text, NULL on out of memory. */
+   adds those for each recipient). Past EVENT_PAYLOAD_MAX bytes the cuts of H-3.4 apply in order,
+   each only when it removes something. Heap text, NULL on out of memory. */
 char *events_payload(const EventStamp *stamp, const EventDraft *draft, const EventRow *row,
-                     const Entry *memory, EventLinks links, long long change_seq);
+                     const EventMemory *memory);
 
 /* [{"entry":"plugin/<name>/<entry>","state":"pending"},...] for the matched actions. Heap
    text, NULL on out of memory. */
@@ -205,6 +218,6 @@ size_t events_log_skipped(EventRules *rules, const char *brain_path, const char 
    compile-time REMEMBER_PROCESSES (1 unless the build sets 0); the setter is for the host and
    the tests (plan 29 feeds it from REMEMBER_CAP_PROCESSES). */
 bool events_processes(void);
-void events_set_processes(bool on);
+void events_set_processes(bool enabled);
 
 #endif /* REMEMBER_EVENTS_H */

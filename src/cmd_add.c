@@ -27,6 +27,15 @@ typedef struct {
     char pad_[7]; /* explicit tail padding (kept -Wpadded-clean) */
 } AddParse;
 
+/* The actor JSON, and the hooks mode the flags chose. 0, or -1 after a usage error. */
+static int prepare_write(Store *s, const AddParse *parsed, char *actor_buf)
+{
+    if (cmd_actor_json(&parsed->actor, actor_buf) != 0) {
+        return -1;
+    }
+    return cmd_apply_hooks(s, &parsed->actor.hooks);
+}
+
 static void add_parse_free(AddParse *p)
 {
     free((void *)p->tag_raw);
@@ -207,7 +216,7 @@ int cmd_add(Store *s, bool json, int rest_argc, const char **rest_argv)
         return REMEMBER_ERR;
     }
 
-    if (cmd_actor_json(&parsed.actor, actor_buf) != 0 || cmd_apply_hooks(s, &parsed.actor.hooks) != 0) {
+    if (prepare_write(s, &parsed, actor_buf) != 0) {
         goto cleanup;
     }
     if (parsed.body_raw == NULL) {
