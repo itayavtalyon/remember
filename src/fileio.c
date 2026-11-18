@@ -383,6 +383,13 @@ fail:
     return -1;
 }
 
+/* realloc, or NULL at the test fault site "read" (its errno is the seam's). Out of
+   fileio_read_regular to keep it under the complexity limit. */
+static char *grow_read_buffer(char *buf, size_t next)
+{
+    return FAULT("read") ? NULL : (char *)realloc(buf, next);
+}
+
 int fileio_read_regular(const char *path, size_t max_bytes, char **out_bytes, size_t *out_len,
                         int *sys_errno)
 {
@@ -406,7 +413,7 @@ int fileio_read_regular(const char *path, size_t max_bytes, char **out_bytes, si
 
         if (n + 1U >= cap) {
             size_t next = (cap == 0U) ? (size_t)READ_FIRST_CAP : (cap * 2U);
-            char *grown = FAULT("read") ? NULL : (char *)realloc(buf, next);
+            char *grown = grow_read_buffer(buf, next);
 
             if (grown == NULL) {
                 goto fail; /* realloc sets ENOMEM */
