@@ -498,6 +498,7 @@ add_test(NAME spec_drift
 add_test(NAME gate_stamp
     COMMAND bash "${CMAKE_SOURCE_DIR}/tests/test_gate_stamp.sh"
 )
+set_tests_properties(gate_stamp PROPERTIES SKIP_RETURN_CODE 77)
 add_test(NAME release_text
     COMMAND bash "${CMAKE_SOURCE_DIR}/tests/test_release.sh" $<TARGET_FILE:remember>
 )

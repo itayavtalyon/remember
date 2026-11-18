@@ -2,6 +2,8 @@
 # scripts/gate-stamp.sh: a stamp marks one check as passed on one clean tree, and
 # nothing else (a dirty tree, a changed tree, or another check does not match).
 set -uo pipefail
+# The ci-linux container has no git; the stamps are only used on hosts that do.
+command -v git >/dev/null || { echo "gate_stamp: git not installed, skipped"; exit 77; }
 stamp="$(cd "$(dirname "$0")/.." && pwd)/scripts/gate-stamp.sh"
 repo="$(mktemp -d "${TMPDIR:-/tmp}/remember-gate-stamp.XXXXXX")"
 trap 'rm -rf "$repo"' EXIT
