@@ -10242,7 +10242,6 @@ TEST(explain_of_a_refused_stored_value_reports_out_of_memory_at_each_allocation)
     const char *set[] = {"settings", "set", "plugin.q.label", "hello"};
     P30Pair pair;
     EnvHold hold;
-    int n = 0;
     bool fired = true;
     int failed = 0;
 
@@ -10255,6 +10254,7 @@ TEST(explain_of_a_refused_stored_value_reports_out_of_memory_at_each_allocation)
     {
         const char *argv[] = {"remember", "--db",    pair.brain,
                               "settings", "explain", "plugin.q.label"};
+        int n = 0;
 
         env_hold(&hold);
         ASSERT_EQ_INT(setenv("REMEMBER_USER_DB", pair.userdb, 1), 0);
