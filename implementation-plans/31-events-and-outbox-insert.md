@@ -51,17 +51,51 @@ No synced, imported, or exported data creates a plugin.
 
 ## Definition of Done
 
-- [ ] `six_event_types_created` (010 test 1, without `memory.expired`; the link half: two `memory.updated`, one `batch_id`, no version-vector change on the ends).
-- [ ] `no_enabled_action_no_row` (010 test 2).
-- [ ] `outbox_commits_with_memory` (010 test 3).
-- [ ] `filter_miss_inserts_nothing_counts_skipped` (010 test 6).
-- [ ] `truncation_order_256k` (010 test 10).
-- [ ] `default_origins_skip_sync_and_import_and_log_skipped_source` and `hooks_flag_ignores_origins` (010 test 15).
-- [ ] `no_hooks_inserts_nothing`.
-- [ ] `processes_off_warns_plugin_unsupported_c23` (010 test 17, write half).
-- [ ] `specs/EVENTS.md` written; the decisions above are `state:implemented`.
+- [x] `six_event_types_created` (010 test 1, without `memory.expired`; the link half: two `memory.updated`, one `batch_id`, no version-vector change on the ends).
+- [x] `no_enabled_action_no_row` (010 test 2).
+- [x] `outbox_commits_with_memory` (010 test 3).
+- [x] `filter_miss_inserts_nothing_counts_skipped` (010 test 6).
+- [x] `truncation_order_256k` (010 test 10).
+- [x] `default_origins_skip_sync_and_import_and_log_skipped_source` and `hooks_flag_ignores_origins` (010 test 15).
+- [x] `no_hooks_inserts_nothing`.
+- [x] `processes_off_warns_plugin_unsupported_c23` (010 test 17, write half).
+- [x] `specs/EVENTS.md` written; the decisions above are `state:implemented`.
 - [ ] The gate passes on the committed tree.
 
 ## Implementation Notes
+
+Coder: Sonnet 5.5 session, 2026-11-17 and 2026-11-18. Branch `claude/festive-northcutt-a64f0a`, stacked on plan 30 (STACK_BASE in `.claude/REVIEW_REQUEST`). The spec is `specs/EVENTS.md`. Tests are in `tests/test_events.c` (suite `plugins`; the store and pure parts also run in the ASan `remember_store_tests`).
+
+**Built.**
+- `src/events.c`, `src/events.h`: rules (one `EventAction` per enabled plugin action, with its manifest entry), the whole filter (`events_match`), planning (`events_plan`: what a touched memory's before and after give), the payload with the H-3.4 cuts, the recipients JSON, the cause from the environment, the `hooks.log` writer, and the `REMEMBER_PROCESSES` switch.
+- `src/store_sqlite.c`: the store finds what a write changed with temp tables and triggers (the first image of each touched memory, its tags and its live links), and `commit_write` inserts the outbox rows just before `COMMIT` at the eleven places that write memories. Nothing is armed unless an enabled plugin has an action (`store_set_events`).
+- `src/remember_app.c`: loads the enabled plugins (plan 30's loader now keeps the manifests), arms the store for a command that changes memories, then raises `plugin_unsupported` and writes `skipped_source` lines after a command that succeeded. `src/commands_common.c` and the write commands pass `--hooks`/`--no-hooks`; both together is a usage error.
+- `src/output.c`: `output_event_memory_json` (the `get` memory without `local_id` and `version_vector`, plus `change_seq`); link stubs without `local_id`.
+- `src/diag.c`: the warning `plugin_unsupported` (E3B-1 entry 15, message and fix as approved).
+
+**Grills answered by Itay** (all filed): `decision:2026-11-17-plan31-grill-purged-processes-cause`, `decision:2026-11-18-plan31-grill-filter-semantics`, `decision:2026-11-18-plan31-grill-link-direction-batch-id`, `decision:2026-11-18-plan31-grill-chain-env-conflict-accept`, `decision:2026-11-18-plan31-grill-hooks-flags-together`. Open items filed: `decision:open-2026-11-18-plan31-conflict-accept-command` (Itay), `decision:open-2026-11-18-plan31-payload-over-limit` (Itay), `decision:open-2026-11-18-plan31-hooks-flags-together-copy` (Story Weaver; the sentence printed is a draft).
+
+**Plan corrections and design calls.**
+- The plan says "Every write that changes a memory creates its events". Instead of a hook at each write function, the store compares each touched memory before and after (temp triggers). A no-op `add --key` and a `link` (which only touches `updated_at`) make no event for the memory itself, with no per-command rule. `import`, `conflict accept` and the old whole-bin `purge` are covered with no extra code.
+- `memory.purged` is emitted by the store (`store_purge`, `store_hard_delete_*`), so the existing `purge --expired|--deleted` writes one per row. Plan 32 reuses it.
+- A purge that cascades over links makes a `memory.updated` for each neighbour: its link went (H-1.3 read as written).
+- `changes.link` does not say whether a link came or went (R3.16 as written); a reader compares `memory.links`. The link stub is `get`'s (`type`, not the schema's `kind`) without `local_id`. Neither is changed here.
+- `cause.command` for `conflict accept` is `update` (open item). `cause.command` reuses `cli_command_name`.
+- `events_rules_load` reads `plugin.<name>.enabled` through `store_setting_read`, so the user layer (`user.db`) counts when it exists.
+- Known limit, filed: after the three H-3.4 cuts `data` can still pass 262144 bytes (thousands of tags).
+
+**Evidence.**
+- `ctest`/gate suites (`scripts/read-gate-suites.sh`): 1816 tests, 0 failed on the stack; `remember_store_tests` (ASan): 0 failed. Plugins suite: 382 tests.
+- DoD tests, by name: `six_event_types_created`, `a_link_writes_two_updated_events_with_one_batch_and_no_vector_change` (the link half), `no_enabled_action_no_row`, `outbox_commits_with_memory` (in-process, failing the exec, step, prepare and both allocators at each point: the counts are always 0/0 or 1/1) and `a_failed_write_commits_neither_the_memory_nor_its_outbox_row` (the CLI under the failing VFS), `filter_miss_inserts_nothing_counts_skipped`, `truncation_order_256k`, `default_origins_skip_sync_and_import_and_count_skipped_source` and `default_origins_skip_sync_and_import_and_log_skipped_source`, `hooks_flag_ignores_origins`, `no_hooks_inserts_nothing`, `processes_off_warns_plugin_unsupported_c23`.
+- Review point "no body or tag text in argv or env": `no_body_or_tag_text_is_in_a_column_a_dispatcher_puts_in_argv_or_env` (only `payload` holds text).
+- Lint: macOS `scripts/lint-all.sh` (LLVM 22) clean. The Linux half of the gate (tidy 18 and 21, cppcheck, IWYU) found cppcheck, tidy and IWYU findings in three rounds, all fixed; logs in `.claude/gates/plan31/`.
+
+**Mutants.** `.claude/gates/p31/mutants.py` (about 55 one-clause mutants: each filter test, the planning rules, each cut and its order, the UTF-8 boundary, each trigger, the order of flush and COMMIT, batch id, the hooks flags, the app wiring). First run on an earlier tree: 36 killed by a named test, 8 more died in a crash, 8 did not build (rewritten), two survivors that are not mutants: `depth-zero-is-run` (the value 0 means "not in a run" anyway) and `app-writable-only-ignored` (the store already refuses to arm a read-only brain; the check in the app was removed), and `chain-allows-100-items`, which showed the loop bound and the final guard were the same test (one bound now). The crashes were tests indexing a missing draft; they are guarded now. The second run on the final tree is `.claude/gates/p31/mut-results.txt`.
+
+**Reviewer's list.** Review point "outbox and memory commit or roll back together": `outbox_commits_with_memory`, `a_failed_write_commits_neither_the_memory_nor_its_outbox_row`, `a_failed_write_leaves_no_trace_in_the_next_one`. "No body or tag text in argv or env": see above.
+
+**Simplify (considered).** (1) `BeforeLink` and `EventLink` hold the same four strings: `EventLink` could own them, about 40 lines, but the diff then borrows from two sources (the store rows and the neighbour rows). (2) `events_rules_add` and `events_rules_load` could be one function; kept apart so the filter tests need no store. (3) The test helpers `assert_db`, `assert_query` and `assert_rows` differ only in what they open. (4) `recipients` and the payload both use `open_memstream`; a shared writer saves about 10 lines.
+
+**Not verified here.** The expiry sweep and `memory.expired` (plan 32); a real dispatcher reading the row (plan 35); `sync` origin (plan 45); the Linux LSan unit run on the final tree (the gate's).
 
 ## Review Notes
