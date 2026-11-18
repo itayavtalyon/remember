@@ -789,6 +789,52 @@ bool setting_text_list_join(const char *json, char *out, size_t out_cap)
     return true;
 }
 
+/* A stored list: ["a","b"] with only the \" and \\ escapes, each item text, at most
+   spec->max_items items when the row caps them. */
+static bool stored_list_ok(const SettingSpec *spec, const char *json)
+{
+    char item[SETTING_TEXT_MAX + 1];
+    size_t pos = 1;
+    size_t n = 0;
+
+    if (json[0] != '[' || strlen(json) > (size_t)SETTING_VALUE_MAX) {
+        return false;
+    }
+    while (json[pos] != ']') {
+        if (n > 0U && json[pos++] != ',') {
+            return false;
+        }
+        if (!take_string(json, &pos, item, sizeof(item))) {
+            return false;
+        }
+        n++;
+    }
+    if (json[pos + 1U] != '\0') {
+        return false;
+    }
+    return spec->max_items <= 0 || n <= (size_t)spec->max_items;
+}
+
+/* cppcheck-suppress staticFunction ; public API (settings.h); the store's read calls it */
+bool setting_stored_ok(const SettingSpec *spec, const char *json)
+{
+    char item[SETTING_TEXT_MAX + 1];
+    char canon[SETTING_VALUE_CAP];
+    const char *one = json;
+
+    if (spec->type == SETTING_STRING_LIST || spec->type == SETTING_TEXT_LIST) {
+        return stored_list_ok(spec, json);
+    }
+    if (json[0] == '"') {
+        if (!setting_text_unquote(json, item, sizeof(item))) {
+            return false;
+        }
+        one = item;
+    }
+    return setting_canon_value(spec, &one, 1U, canon, sizeof(canon), NULL, 0U) == SETTING_OK &&
+           strcmp(canon, json) == 0;
+}
+
 static SettingStatus canon_boolean(const char *src, char *json, size_t json_cap)
 {
     if (strcmp(src, "true") != 0 && strcmp(src, "false") != 0) {

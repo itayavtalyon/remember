@@ -13357,6 +13357,7 @@ SettingStatus store_setting_read(Store *brain, const char *user_db, const char *
     char *user_value = NULL;
     char *brain_value = NULL;
     char *vector = NULL;
+    char plugin[SETTING_KEY_MAX + 1];
 
     if (out != NULL) {
         memset(out, 0, sizeof(*out));
@@ -13428,6 +13429,17 @@ SettingStatus store_setting_read(Store *brain, const char *user_db, const char *
     }
     fill_layer_json(user_value, out->user_value, sizeof(out->user_value), &out->user_live);
     fill_layer_json(brain_value, out->brain_value, sizeof(out->brain_value), &out->brain_live);
+    /* decision:2026-11-17-plan30-review-grill G1 A: a plugin value the row refuses is not set. A
+       compiled key keeps failing on a bad row: a helper id outside the grammar must stop the
+       token lookup, not fall back to env. */
+    if (setting_plugin_name(spec->key, plugin, sizeof(plugin))) {
+        out->user_refused =
+            spec->allow_user && out->user_live && !setting_stored_ok(spec, out->user_value);
+        out->brain_refused =
+            spec->allow_brain && out->brain_live && !setting_stored_ok(spec, out->brain_value);
+        out->user_live = out->user_live && !out->user_refused;
+        out->brain_live = out->brain_live && !out->brain_refused;
+    }
     {
         const char *user_json = NULL;
         const char *brain_json = NULL;

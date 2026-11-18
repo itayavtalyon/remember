@@ -174,7 +174,11 @@ typedef struct {
     SettingFrom from;
     bool user_live;
     bool brain_live;
-    char pad_[2];
+    /* A stored plugin value of an allowed layer that the row refuses (a plugin update changed the
+       type, dropped an enum value or narrowed a range): that layer is not live, and the read
+       fell to the next (decision:2026-11-17-plan30-review-grill G1 A). Its value stays here. */
+    bool user_refused;
+    bool brain_refused;
 } SettingRead;
 
 /* Local calendar fields for "21 Oct at 10:04". month is 1..12. utc_suffix
@@ -238,6 +242,11 @@ bool setting_format_when(SettingWhen when, char *buf, size_t cap);
 /* The one full key ST-1.5 would name, or NULL when there is not exactly one.
    Two or three candidates have no approved sentence. */
 const char *setting_suggestion(const SettingsRegistry *reg, const char *typed);
+
+/* True when json is what a set of its own value would store for spec: the type, the range, the
+   enum values and the item cap all hold, in canonical form. A bucket prefix list is checked for
+   shape and text only (its items are not folded again). */
+bool setting_stored_ok(const SettingSpec *spec, const char *json);
 
 /* The canonical JSON of items for spec, as setting_prepare writes it, with no key or layer to
    look up. json_cap must be SETTING_VALUE_CAP. The status is setting_prepare's. */

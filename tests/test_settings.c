@@ -10089,6 +10089,133 @@ TEST(out_of_memory_in_the_plugin_reader_fails_the_command)
     }
 }
 
+/* decision:2026-11-17-plan30-review-grill G1 A: a stored value that the plugin's current manifest
+   refuses reads as not set. The read falls to the next layer and get, list and explain warn
+   setting_invalid (C-14 message, E3B-1 entry 6 fix). Before, each failed with internal error. */
+typedef struct {
+    char tmpl[40];
+    char brain[REMEMBER_PATH_MAX];
+    char userdb[REMEMBER_PATH_MAX];
+} P30Pair;
+
+static void given_p30_pair(P30Pair *pair)
+{
+    Store *store = NULL;
+
+    (void)snprintf(pair->tmpl, sizeof(pair->tmpl), "%s", "/tmp/remember-p30u-XXXXXX");
+    store =
+        open_pair(pair->tmpl, pair->brain, sizeof(pair->brain), pair->userdb, sizeof(pair->userdb));
+    ASSERT_TRUE(store != NULL);
+    store_close(store);
+}
+
+static void given_p30_set(const P30Pair *pair, const char *const *args, size_t n)
+{
+    CmdResult got = get_at(pair->brain, pair->userdb, args, n);
+
+    ASSERT_EQ_INT(got.exit_code, 0);
+    cmd_result_free(&got);
+}
+
+TEST(a_stored_value_the_new_manifest_type_refuses_falls_to_the_default_with_a_warning)
+{
+    const char *set[] = {"settings", "set", "plugin.q.label", "hello"};
+    const char *get[] = {"settings", "get", "plugin.q.label", "--value"};
+    P30Pair pair;
+    CmdResult got;
+
+    given_installed_plugin("q", "{\"key\":\"label\",\"description\":\"L.\",\"type\":\"string\","
+                                "\"default\":\"hi\"}");
+    given_p30_pair(&pair);
+    given_p30_set(&pair, set, 4U);
+    given_installed_plugin("q", "{\"key\":\"label\",\"description\":\"L.\",\"type\":\"integer\","
+                                "\"default\":3}");
+    got = get_at(pair.brain, pair.userdb, get, 4U);
+    ASSERT_EQ_INT(got.exit_code, 0);
+    ASSERT_STREQ(got.out, "3\n");
+    ASSERT_STREQ(got.err, "remember: warning: skipped \"plugin.q.label\": \"hello\" isn't a valid "
+                          "value. Set a valid value with 'remember settings set plugin.q.label "
+                          "<value>'.\n");
+    cmd_result_free(&got);
+    harness_remove_tree(pair.tmpl);
+}
+
+TEST(a_stored_enum_value_the_manifest_dropped_falls_to_the_default)
+{
+    const char *set[] = {"settings", "set", "plugin.q.mode", "slow"};
+    const char *get[] = {"--json", "settings", "get", "plugin.q.mode"};
+    P30Pair pair;
+    CmdResult got;
+
+    given_installed_plugin("q", "{\"key\":\"mode\",\"description\":\"M.\",\"type\":\"enum\","
+                                "\"default\":\"fast\",\"range\":{\"values\":[\"fast\",\"slow\"]}}");
+    given_p30_pair(&pair);
+    given_p30_set(&pair, set, 4U);
+    given_installed_plugin("q", "{\"key\":\"mode\",\"description\":\"M.\",\"type\":\"enum\","
+                                "\"default\":\"fast\",\"range\":{\"values\":[\"fast\",\"auto\"]}}");
+    got = get_at(pair.brain, pair.userdb, get, 4U);
+    ASSERT_EQ_INT(got.exit_code, 0);
+    ASSERT_STR_CONTAINS(got.out, "\"value\":\"fast\",\"from\":\"default\"");
+    ASSERT_STR_CONTAINS(got.out, "\"code\":\"setting_invalid\"");
+    cmd_result_free(&got);
+    harness_remove_tree(pair.tmpl);
+}
+
+TEST(a_refused_brain_value_falls_to_the_user_layer_and_names_scope_brain)
+{
+    const char *user[] = {"settings", "set", "plugin.q.n", "4"};
+    const char *brain[] = {"settings", "set", "plugin.q.n", "50", "--scope", "brain"};
+    const char *get[] = {"settings", "get", "plugin.q.n", "--value"};
+    P30Pair pair;
+    CmdResult got;
+
+    given_installed_plugin("q",
+                           "{\"key\":\"n\",\"description\":\"N.\",\"type\":\"integer\","
+                           "\"default\":1,\"scope\":\"both\",\"range\":{\"min\":1,\"max\":99}}");
+    given_p30_pair(&pair);
+    given_p30_set(&pair, user, 4U);
+    given_p30_set(&pair, brain, 6U);
+    given_installed_plugin("q",
+                           "{\"key\":\"n\",\"description\":\"N.\",\"type\":\"integer\","
+                           "\"default\":1,\"scope\":\"both\",\"range\":{\"min\":1,\"max\":9}}");
+    got = get_at(pair.brain, pair.userdb, get, 4U);
+    ASSERT_EQ_INT(got.exit_code, 0);
+    ASSERT_STREQ(got.out, "4\n");
+    ASSERT_STR_CONTAINS(got.err, "\"50\" isn't a valid value. Set a valid value with 'remember "
+                                 "settings set plugin.q.n <value> --scope brain'.\n");
+    cmd_result_free(&got);
+    harness_remove_tree(pair.tmpl);
+}
+
+TEST(list_and_explain_go_on_past_a_refused_stored_value)
+{
+    const char *set[] = {"settings", "set", "plugin.q.label", "hello"};
+    const char *list[] = {"settings", "list", "plugin."};
+    const char *explain[] = {"settings", "explain", "plugin.q.label"};
+    P30Pair pair;
+    CmdResult got;
+
+    given_installed_plugin("q", "{\"key\":\"label\",\"description\":\"L.\",\"type\":\"string\","
+                                "\"default\":\"hi\"}");
+    given_p30_pair(&pair);
+    given_p30_set(&pair, set, 4U);
+    given_installed_plugin("q", "{\"key\":\"label\",\"description\":\"L.\",\"type\":\"integer\","
+                                "\"default\":3}");
+    got = get_at(pair.brain, pair.userdb, list, 3U);
+    ASSERT_EQ_INT(got.exit_code, 0);
+    ASSERT_STREQ(got.out, "plugin.hybrid.enabled = false   (default)\n"
+                          "plugin.q.enabled = false   (default)\n"
+                          "plugin.q.label = 3   (default)\n");
+    ASSERT_STR_CONTAINS(got.err, "skipped \"plugin.q.label\": \"hello\" isn't a valid value.");
+    cmd_result_free(&got);
+    got = get_at(pair.brain, pair.userdb, explain, 3U);
+    ASSERT_EQ_INT(got.exit_code, 0);
+    ASSERT_STR_CONTAINS(got.out, "  Now: 3, from default\n");
+    ASSERT_STR_CONTAINS(got.err, "skipped \"plugin.q.label\": \"hello\" isn't a valid value.");
+    cmd_result_free(&got);
+    harness_remove_tree(pair.tmpl);
+}
+
 TEST(list_shows_plugin_keys_in_byte_order_before_the_remember_keys)
 {
     const char *list[] = {"settings", "list", "plugin."};
@@ -10719,6 +10846,10 @@ void register_settings_tests(void)
     RUN_TEST(explain_masks_control_bytes_in_a_manifest_description);
     RUN_TEST(plain_output_masks_a_c1_control_in_a_plugin_text_value);
     RUN_TEST(out_of_memory_in_the_plugin_reader_fails_the_command);
+    RUN_TEST(a_stored_value_the_new_manifest_type_refuses_falls_to_the_default_with_a_warning);
+    RUN_TEST(a_stored_enum_value_the_manifest_dropped_falls_to_the_default);
+    RUN_TEST(a_refused_brain_value_falls_to_the_user_layer_and_names_scope_brain);
+    RUN_TEST(list_and_explain_go_on_past_a_refused_stored_value);
     RUN_TEST(list_shows_plugin_keys_in_byte_order_before_the_remember_keys);
     RUN_TEST(list_pages_through_more_plugin_keys_than_the_old_fixed_cap);
     RUN_TEST(explain_all_lists_the_plugin_keys_too);

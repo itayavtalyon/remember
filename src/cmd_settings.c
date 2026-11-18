@@ -709,6 +709,9 @@ static bool values_ok(const SettingSpec *spec, const SettingRead *read, Shown sh
     return true;
 }
 
+/* Below, beside the import warnings it shares its line with. */
+static int warn_refused(const Store *store, const SettingSpec *spec, const SettingRead *read);
+
 static Shown shown_of(const SettingSpec *spec, const SettingRead *read, GetOpts opt)
 {
     Shown shown;
@@ -1328,6 +1331,9 @@ static int cmd_settings_get(Store *store, bool json, int argc, const char **argv
     }
     if (st != SETTING_OK) {
         err_msg(DIAG_INTERNAL, "internal error");
+        return REMEMBER_ERR;
+    }
+    if (warn_refused(store, spec, &read) != 0) {
         return REMEMBER_ERR;
     }
     shown = shown_of(spec, &read, opt);
@@ -3284,19 +3290,20 @@ static int warn_invalid(char *msg, const char *fix, const DiagDetailField *field
    fix. The key is a registry key (the row would be unknown_key otherwise). A bare `settings set`
    of a key that allows the user layer writes that layer, so a brain row of such a key names
    --scope brain (decision:2026-11-17-w1-brain-row-fix-scope). */
-static int warn_invalid_value(const SettingsRegistry *reg, char *msg, const SettingImportRow *row,
-                              const DiagDetailField *fields, size_t n)
+// NOLINTNEXTLINE(bugprone-easily-swappable-parameters) the message, then the key it names
+static int warn_invalid_value(const SettingsRegistry *reg, char *msg, const char *key,
+                              SettingLayer scope, const DiagDetailField *fields, size_t n)
 {
-    const SettingSpec *spec = setting_by_key(reg, row->key);
+    const SettingSpec *spec = setting_by_key(reg, key);
     const char *scope_flag = "";
     char *fix = NULL;
     int rc = 0;
 
-    if (row->scope == SETTING_LAYER_BRAIN && spec != NULL && spec->allow_user) {
+    if (scope == SETTING_LAYER_BRAIN && spec != NULL && spec->allow_user) {
         scope_flag = " --scope brain";
     }
-    fix = fmt_alloc("Set a valid value with 'remember settings set %s <value>%s'.", row->key,
-                    scope_flag);
+    fix =
+        fmt_alloc("Set a valid value with 'remember settings set %s <value>%s'.", key, scope_flag);
     if (fix == NULL) {
         free(msg);
         return report_oom();
@@ -3304,6 +3311,38 @@ static int warn_invalid_value(const SettingsRegistry *reg, char *msg, const Sett
     rc = warn_invalid(msg, fix, fields, n);
     free(fix);
     return rc;
+}
+
+/* decision:2026-11-17-plan30-review-grill G1 A: the read skipped a layer whose stored value the
+   row refuses. The C-14 line and the E3B-1 entry 6 fix, as for an import row. A string shows
+   its text, anything else its JSON (as SettingImportRow.value). */
+static int warn_refused_layer(const SettingsRegistry *reg, const SettingSpec *spec,
+                              SettingLayer layer, const char *json)
+{
+    char text[SETTING_TEXT_MAX + 1];
+    const char *value = setting_text_unquote(json, text, sizeof(text)) ? text : json;
+    const DiagDetailField fields[] = {{.name = "key", .value = spec->key},
+                                      {.name = "value", .value = value},
+                                      {.name = "reason", .value = "invalid_value"}};
+
+    return warn_invalid_value(
+        reg, fmt_alloc("skipped \"%s\": \"%s\" isn't a valid value.", spec->key, value), spec->key,
+        layer, fields, sizeof(fields) / sizeof(fields[0]));
+}
+
+static int warn_refused(const Store *store, const SettingSpec *spec, const SettingRead *read)
+{
+    const SettingsRegistry *reg = store_settings_registry(store);
+
+    if (read->user_refused &&
+        warn_refused_layer(reg, spec, SETTING_LAYER_USER, read->user_value) != 0) {
+        return REMEMBER_ERR;
+    }
+    if (read->brain_refused &&
+        warn_refused_layer(reg, spec, SETTING_LAYER_BRAIN, read->brain_value) != 0) {
+        return REMEMBER_ERR;
+    }
+    return 0;
 }
 
 static int warn_skip(const SettingsRegistry *reg, const SettingImportRow *row, bool settings_alone)
@@ -3344,7 +3383,7 @@ static int warn_skip(const SettingsRegistry *reg, const SettingImportRow *row, b
         }
         return warn_invalid_value(
             reg, fmt_alloc("skipped \"%s\": \"%s\" isn't a valid value.%s", row->key, value, tail),
-            row, fields, sizeof(fields) / sizeof(fields[0]));
+            row->key, row->scope, fields, sizeof(fields) / sizeof(fields[0]));
     }
     if (row->reason == SETTING_SKIP_UNKNOWN_KEY) {
         /* decision:plan20-import-unknown-key-draft (C-43 draft). */
@@ -4264,7 +4303,8 @@ static int list_emit(Store *store, const char *userdb, bool json, const ViewOpts
     for (; rc == 0 && i < nhit; i++) {
         SettingRead read;
 
-        if (read_spec(store, userdb, hit[i], &read, err, sizeof(err)) != 0) {
+        if (read_spec(store, userdb, hit[i], &read, err, sizeof(err)) != 0 ||
+            warn_refused(store, hit[i], &read) != 0) {
             free(cursor);
             return REMEMBER_ERR;
         }
@@ -4707,6 +4747,9 @@ static int explain_one(Store *store, const char *userdb, bool json, size_t i,
 
     memset(&g, 0, sizeof(g));
     if (read_spec(store, userdb, spec, &read, err, sizeof(err)) != 0) {
+        return -3;
+    }
+    if (warn_refused(store, spec, &read) != 0) {
         return -3;
     }
     shown = shown_of(spec, &read, g);
