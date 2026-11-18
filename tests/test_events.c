@@ -110,6 +110,10 @@ TEST(plan_a_new_row_is_one_created_event)
     Plan p = given_plan(&(EventRow){.before = NULL, .after = &after});
 
     ASSERT_EQ_INT(p.n, 1);
+    if (p.n != 1) {
+        free(p.drafts);
+        return;
+    }
     ASSERT_EQ_INT(p.drafts[0].type, EVENT_CREATED);
     ASSERT_FALSE(p.drafts[0].has_link);
     free(p.drafts);
@@ -123,6 +127,10 @@ TEST(plan_a_new_deleted_row_is_still_created)
     after.deleted_at = (char *)k_at;
     p = given_plan(&(EventRow){.before = NULL, .after = &after});
     ASSERT_EQ_INT(p.n, 1);
+    if (p.n != 1) {
+        free(p.drafts);
+        return;
+    }
     ASSERT_EQ_INT(p.drafts[0].type, EVENT_CREATED);
     free(p.drafts);
 }
@@ -133,6 +141,10 @@ TEST(plan_a_removed_row_is_one_purged_event)
     Plan p = given_plan(&(EventRow){.before = &before, .after = NULL});
 
     ASSERT_EQ_INT(p.n, 1);
+    if (p.n != 1) {
+        free(p.drafts);
+        return;
+    }
     ASSERT_EQ_INT(p.drafts[0].type, EVENT_PURGED);
     free(p.drafts);
 }
@@ -154,10 +166,18 @@ TEST(plan_deleted_at_set_is_deleted_and_cleared_is_restored)
     gone.deleted_at = (char *)k_at;
     p = given_plan(&(EventRow){.before = &live, .after = &gone});
     ASSERT_EQ_INT(p.n, 1);
+    if (p.n != 1) {
+        free(p.drafts);
+        return;
+    }
     ASSERT_EQ_INT(p.drafts[0].type, EVENT_DELETED);
     free(p.drafts);
     p = given_plan(&(EventRow){.before = &gone, .after = &live});
     ASSERT_EQ_INT(p.n, 1);
+    if (p.n != 1) {
+        free(p.drafts);
+        return;
+    }
     ASSERT_EQ_INT(p.drafts[0].type, EVENT_RESTORED);
     free(p.drafts);
 }
@@ -173,6 +193,10 @@ TEST(plan_a_delete_that_also_changes_fields_is_only_deleted)
     gone.expires_at = (char *)"2030-01-01T00:00:00.000Z";
     p = given_plan(&(EventRow){.before = &live, .after = &gone});
     ASSERT_EQ_INT(p.n, 1);
+    if (p.n != 1) {
+        free(p.drafts);
+        return;
+    }
     ASSERT_EQ_INT(p.drafts[0].type, EVENT_DELETED);
     free(p.drafts);
 }
@@ -183,6 +207,10 @@ static void assert_one_field(const Entry *before, const Entry *after, EventDraft
     Plan p = given_plan(&(EventRow){.before = before, .after = after});
 
     ASSERT_EQ_INT(p.n, 1);
+    if (p.n != 1) {
+        free(p.drafts);
+        return;
+    }
     ASSERT_EQ_INT(p.drafts[0].type, EVENT_UPDATED);
     ASSERT_FALSE(p.drafts[0].has_link);
     ASSERT_EQ_INT(p.drafts[0].body_changed, want.body_changed);
@@ -267,6 +295,10 @@ TEST(plan_a_link_that_came_and_one_that_went_are_one_updated_each)
                                     .nlinks_after = 2U});
 
     ASSERT_EQ_INT(p.n, 2);
+    if (p.n != 2) {
+        free(p.drafts);
+        return;
+    }
     ASSERT_EQ_INT(p.drafts[0].type, EVENT_UPDATED);
     ASSERT_TRUE(p.drafts[0].has_link);
     ASSERT_STREQ(p.drafts[0].link.kind, "cites");
@@ -295,6 +327,10 @@ TEST(plan_the_same_other_memory_under_another_kind_or_direction_is_another_link)
                                     .nlinks_after = 1U});
 
     ASSERT_EQ_INT(p.n, 2);
+    if (p.n != 2) {
+        free(p.drafts);
+        return;
+    }
     free(p.drafts);
     p = given_plan(&(EventRow){.before = &before,
                                .after = &after,
@@ -303,6 +339,10 @@ TEST(plan_the_same_other_memory_under_another_kind_or_direction_is_another_link)
                                .nlinks_before = 1U,
                                .nlinks_after = 1U});
     ASSERT_EQ_INT(p.n, 2);
+    if (p.n != 2) {
+        free(p.drafts);
+        return;
+    }
     free(p.drafts);
 }
 
@@ -316,6 +356,10 @@ TEST(plan_fields_and_a_link_are_separate_events_fields_first)
     p = given_plan(&(EventRow){
         .before = &before, .after = &after, .links_after = &k_link_related, .nlinks_after = 1U});
     ASSERT_EQ_INT(p.n, 2);
+    if (p.n != 2) {
+        free(p.drafts);
+        return;
+    }
     ASSERT_FALSE(p.drafts[0].has_link);
     ASSERT_TRUE(p.drafts[0].body_changed);
     ASSERT_TRUE(p.drafts[1].has_link);
@@ -330,10 +374,18 @@ TEST(plan_a_link_of_a_new_or_removed_row_adds_no_event)
         .before = NULL, .after = &row, .links_after = &k_link_related, .nlinks_after = 1U});
 
     ASSERT_EQ_INT(p.n, 1);
+    if (p.n != 1) {
+        free(p.drafts);
+        return;
+    }
     free(p.drafts);
     p = given_plan(&(EventRow){
         .before = &row, .after = NULL, .links_before = &k_link_related, .nlinks_before = 1U});
     ASSERT_EQ_INT(p.n, 1);
+    if (p.n != 1) {
+        free(p.drafts);
+        return;
+    }
     free(p.drafts);
 }
 

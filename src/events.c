@@ -247,7 +247,7 @@ static int chain_fill(const JsonValue *array, const Hop *hop, EventCause *out, c
 
     text[0] = '[';
     text[1] = '\0';
-    for (i = 0; i < array->u.array.n && i < (size_t)EVENT_CHAIN_MAX - 1U; i++) {
+    for (i = 0; i < array->u.array.n && i < (size_t)EVENT_CHAIN_MAX; i++) {
         Hop item;
 
         if (!hop_from_json(array->u.array.items[i], &item) ||

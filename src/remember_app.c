@@ -725,7 +725,7 @@ static int arm_events(Store *s, const CliArgs *args, const PluginManifestList *m
     StoreStatus st = STORE_OK;
 
     cev->command = event_command_name(args->command);
-    if (cev->command == NULL || mans->count == 0U || !store_is_writable(s)) {
+    if (cev->command == NULL || mans->count == 0U) {
         return 0;
     }
     if (util_resolve_user_db_path(userdb, sizeof(userdb), err, sizeof(err)) == 0) {
