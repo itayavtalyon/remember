@@ -1,5 +1,6 @@
 #include "store.h"
 
+#include "events.h"
 #include "fileio.h" // IWYU pragma: keep (O_NOFOLLOW on Darwin)
 #include "import_read.h"
 #include "import_validate.h"
@@ -46,6 +47,11 @@ struct Store {
     const SettingsRegistry *registry; /* not owned; NULL is the compiled-in rows */
     size_t nwarnings;
     ChangeSeqTx change_tx;
+    StoreEvents ev;      /* plan 31: what the write events need; pointers are not owned */
+    size_t ev_unsupported;
+    char ev_batch_id[STORE_DEVICE_ID_LEN + 1]; /* minted with the first event this command writes */
+    bool ev_armed;                      /* the temp tables and triggers exist */
+    char ev_pad_[2];
     int brain_schema;    /* the brain's user_version, read at open */
     bool schema_too_new; /* newer schema or min_reader_version: read only */
     /* min_reader_version when it made the brain read only and is printable, else "" */
@@ -2572,6 +2578,62 @@ static int check_reader_version(Store *s, char *err, size_t errlen)
    the last error, take the write lock, and start a fresh change_seq base.
    Repair, which checks the base tables before it locks, reads schema_too_new
    itself. */
+/* ---- memory events: the temp tables and triggers (plan 31) ------------------------------
+ * A write that changes memories may need an event for each. The first time a write touches a
+ * memory (its row, its tags or a link of it), a temp trigger keeps the memory as it was: its row
+ * in ev_touch, its tags in ev_btags, its live links in ev_blinks. A row inserted by the write is
+ * in ev_touch with had_before 0. events_flush reads them just before COMMIT. They exist only on
+ * a connection that has at least one enabled action (store_set_events), and they roll back with
+ * the write. begin_write empties them. */
+#define EV_TOUCH(X)                                                                                \
+    "INSERT INTO temp.ev_btags(local_id, name) SELECT " X ", t.name FROM main.entry_tags et "       \
+    "JOIN main.tags t ON t.id = et.tag_id WHERE et.entry_id = " X                                  \
+    " AND NOT EXISTS (SELECT 1 FROM temp.ev_touch WHERE local_id = " X ");"                         \
+    "INSERT INTO temp.ev_blinks(local_id, kind, dir, other) SELECT " X ", l.kind, "                \
+    "CASE WHEN l.kind = 'related' THEN 'both' WHEN l.from_id = " X                                 \
+    " THEN 'outgoing' ELSE 'incoming' END, CASE WHEN l.from_id = " X                               \
+    " THEN l.to_id ELSE l.from_id END FROM main.entry_links l WHERE (l.from_id = " X                \
+    " OR l.to_id = " X ") AND l.deleted_at IS NULL "                                               \
+    "AND NOT EXISTS (SELECT 1 FROM temp.ev_touch WHERE local_id = " X ");"                          \
+    "INSERT OR IGNORE INTO temp.ev_touch(local_id, had_before, id, key, body, created_by, "         \
+    "updated_by, created_at, updated_at, expires_at, deleted_at, version_vector, change_seq) "      \
+    "SELECT local_id, 1, id, key, body, created_by, updated_by, created_at, updated_at, "           \
+    "expires_at, deleted_at, version_vector, change_seq FROM main.entries WHERE local_id = " X ";"
+
+/* One statement each: a string literal past 4095 bytes is not portable C. */
+static const char *const k_ev_arm_sql[] = {
+    "PRAGMA temp_store = MEMORY;",
+    "CREATE TEMP TABLE IF NOT EXISTS ev_touch(local_id INTEGER PRIMARY KEY, had_before INTEGER "
+    "NOT NULL, id TEXT, key TEXT, body TEXT, created_by TEXT, updated_by TEXT, created_at TEXT, "
+    "updated_at TEXT, expires_at TEXT, deleted_at TEXT, version_vector TEXT, change_seq INTEGER);",
+    "CREATE TEMP TABLE IF NOT EXISTS ev_btags(local_id INTEGER NOT NULL, name TEXT NOT NULL);",
+    "CREATE TEMP TABLE IF NOT EXISTS ev_blinks(local_id INTEGER NOT NULL, kind TEXT NOT NULL, "
+    "dir TEXT NOT NULL, other INTEGER NOT NULL);",
+    "CREATE TEMP TRIGGER IF NOT EXISTS ev_e_ins AFTER INSERT ON main.entries BEGIN "
+    "INSERT OR IGNORE INTO temp.ev_touch(local_id, had_before) VALUES (NEW.local_id, 0); END;",
+    "CREATE TEMP TRIGGER IF NOT EXISTS ev_e_upd BEFORE UPDATE ON main.entries BEGIN "
+    EV_TOUCH("OLD.local_id") "END;",
+    "CREATE TEMP TRIGGER IF NOT EXISTS ev_e_del BEFORE DELETE ON main.entries BEGIN "
+    EV_TOUCH("OLD.local_id") "END;",
+    "CREATE TEMP TRIGGER IF NOT EXISTS ev_t_ins BEFORE INSERT ON main.entry_tags BEGIN "
+    EV_TOUCH("NEW.entry_id") "END;",
+    "CREATE TEMP TRIGGER IF NOT EXISTS ev_t_del BEFORE DELETE ON main.entry_tags BEGIN "
+    EV_TOUCH("OLD.entry_id") "END;",
+    "CREATE TEMP TRIGGER IF NOT EXISTS ev_l_ins BEFORE INSERT ON main.entry_links BEGIN "
+    EV_TOUCH("NEW.from_id") EV_TOUCH("NEW.to_id") "END;",
+    "CREATE TEMP TRIGGER IF NOT EXISTS ev_l_upd BEFORE UPDATE ON main.entry_links BEGIN "
+    EV_TOUCH("OLD.from_id") EV_TOUCH("OLD.to_id") "END;",
+    "CREATE TEMP TRIGGER IF NOT EXISTS ev_l_del BEFORE DELETE ON main.entry_links BEGIN "
+    EV_TOUCH("OLD.from_id") EV_TOUCH("OLD.to_id") "END;",
+};
+
+static const char k_ev_reset_sql[] =
+    "DELETE FROM temp.ev_touch; DELETE FROM temp.ev_btags; DELETE FROM temp.ev_blinks;";
+
+/* The one COMMIT of a write that changes memories: the events go in first, in the same
+   transaction. 0, or -1 with s->last set when SQLite failed. */
+static int commit_write(Store *s);
+
 static StoreStatus begin_write(Store *s)
 {
     char err_unused[1];
@@ -2584,6 +2646,10 @@ static StoreStatus begin_write(Store *s)
         return STORE_ERR_SQLITE;
     }
     s->change_tx.active = false;
+    if (s->ev_armed && exec_sql(s->db, k_ev_reset_sql, err_unused, 0U, &s->last) != 0) {
+        rollback_quiet(s->db);
+        return STORE_ERR_SQLITE;
+    }
     return STORE_OK;
 }
 
@@ -4395,6 +4461,527 @@ static StoreStatus add_keyless(sqlite3 *db, const char *body, const char *body_h
     return STORE_OK;
 }
 
+/* ---- memory events: what a write changed, and the outbox rows (plan 31; events.h) --------- */
+
+/* The live links of a memory as the triggers kept them: heap strings, and the view the diff reads. */
+typedef struct {
+    char *kind;
+    char *dir;
+    char *other_id;
+    char *other_key;
+} BeforeLink;
+
+/* One touched memory, loaded. */
+typedef struct {
+    Entry before;
+    Entry after;
+    BeforeLink *blinks;
+    EventLink *lb;
+    EventLink *la;
+    StoreNeighbor *neighbors;
+    size_t nlb;
+    size_t nla;
+    size_t nneighbors;
+    long long change_seq;
+    bool has_before;
+    bool has_after;
+    char pad_[6];
+} EvRow;
+
+static void ev_row_free(EvRow *r)
+{
+    size_t i = 0;
+
+    store_entry_free(&r->before);
+    store_entry_free(&r->after);
+    for (i = 0; i < r->nlb; i++) {
+        free(r->blinks[i].kind);
+        free(r->blinks[i].dir);
+        free(r->blinks[i].other_id);
+        free(r->blinks[i].other_key);
+    }
+    free(r->blinks);
+    free(r->lb);
+    free(r->la);
+    store_neighbors_free(r->neighbors, r->nneighbors);
+    memset(r, 0, sizeof(*r));
+}
+
+/* A text column, or NULL for a SQL NULL; *oom when the copy fails. */
+static char *ev_col(sqlite3_stmt *stmt, int col, bool *oom)
+{
+    const char *text = (const char *)sqlite3_column_text(stmt, col);
+    char *copy = NULL;
+
+    if (text == NULL) {
+        return NULL;
+    }
+    copy = dup_str(text);
+    *oom = *oom || copy == NULL;
+    return copy;
+}
+
+static int ev_prepare(Store *s, const char *sql, long long id, sqlite3_stmt **out)
+{
+    if (sqlite3_prepare_v2(s->db, sql, -1, out, NULL) != SQLITE_OK) {
+        capture_sqlite_error(s->db, &s->last);
+        return -1;
+    }
+    (void)sqlite3_bind_int64(*out, 1, id);
+    return 0;
+}
+
+/* The tags the memory had, in byte order. */
+static int ev_before_tags(Store *s, long long id, Entry *out)
+{
+    sqlite3_stmt *stmt = NULL;
+    bool oom = false;
+    int step = 0;
+
+    if (ev_prepare(s, "SELECT name FROM temp.ev_btags WHERE local_id = ?1 "
+                      "ORDER BY name COLLATE BINARY;", id, &stmt) != 0) {
+        return -1;
+    }
+    while ((step = sqlite3_step(stmt)) == SQLITE_ROW && !oom) {
+        char **grown = (char **)realloc((void *)out->tags, (out->ntags + 1U) * sizeof(*grown));
+
+        if (grown == NULL) {
+            oom = true;
+            break;
+        }
+        out->tags = grown;
+        out->tags[out->ntags] = ev_col(stmt, 0, &oom);
+        out->ntags += oom ? 0U : 1U;
+    }
+    if (step != SQLITE_DONE && !oom) {
+        capture_sqlite_error(s->db, &s->last);
+    }
+    (void)sqlite3_finalize(stmt);
+    return (step == SQLITE_DONE && !oom) ? 0 : -1;
+}
+
+/* The memory as ev_touch kept it. */
+static int ev_before_entry(Store *s, long long id, EvRow *r)
+{
+    sqlite3_stmt *stmt = NULL;
+    Entry *e = &r->before;
+    bool oom = false;
+    int step = 0;
+
+    if (ev_prepare(s, "SELECT id, key, body, created_by, updated_by, created_at, updated_at, "
+                      "expires_at, deleted_at, version_vector, change_seq FROM temp.ev_touch "
+                      "WHERE local_id = ?1;", id, &stmt) != 0) {
+        return -1;
+    }
+    step = sqlite3_step(stmt);
+    if (step == SQLITE_ROW) {
+        e->id = id;
+        e->sync_id = ev_col(stmt, 0, &oom);
+        e->key = ev_col(stmt, 1, &oom);
+        e->body = ev_col(stmt, 2, &oom);
+        e->created_by = ev_col(stmt, 3, &oom);
+        e->updated_by = ev_col(stmt, 4, &oom);
+        e->created_at = ev_col(stmt, 5, &oom);
+        e->updated_at = ev_col(stmt, 6, &oom);
+        e->expires_at = ev_col(stmt, 7, &oom);
+        e->deleted_at = ev_col(stmt, 8, &oom);
+        e->version_vector = ev_col(stmt, 9, &oom);
+        r->change_seq = sqlite3_column_int64(stmt, 10);
+    } else {
+        capture_sqlite_error(s->db, &s->last);
+    }
+    (void)sqlite3_finalize(stmt);
+    /* A row the triggers copied from entries has every column but key and expires_at. */
+    oom = oom || e->sync_id == NULL || e->body == NULL || e->created_by == NULL ||
+          e->updated_by == NULL || e->created_at == NULL || e->updated_at == NULL ||
+          e->version_vector == NULL;
+    return (step == SQLITE_ROW && !oom && ev_before_tags(s, id, e) == 0) ? 0 : -1;
+}
+
+static int ev_before_links(Store *s, long long id, EvRow *r)
+{
+    sqlite3_stmt *stmt = NULL;
+    bool oom = false;
+    int step = 0;
+    size_t i = 0;
+
+    /* The other memory as it was: its first image when this write touched it (a purge has
+       already removed its row), else its row. */
+    if (ev_prepare(s,
+                   "SELECT b.kind, b.dir, "
+                   "CASE WHEN t.had_before = 1 THEN t.id ELSE e.id END, "
+                   "CASE WHEN t.had_before = 1 THEN t.key ELSE e.key END "
+                   "FROM temp.ev_blinks b LEFT JOIN temp.ev_touch t ON t.local_id = b.other "
+                   "LEFT JOIN main.entries e ON e.local_id = b.other "
+                   "WHERE b.local_id = ?1 ORDER BY b.kind, b.dir, 3;", id, &stmt) != 0) {
+        return -1;
+    }
+    while ((step = sqlite3_step(stmt)) == SQLITE_ROW && !oom) {
+        BeforeLink *grown = (BeforeLink *)realloc((void *)r->blinks,
+                                                  (r->nlb + 1U) * sizeof(*grown));
+
+        if (grown == NULL) {
+            oom = true;
+            break;
+        }
+        r->blinks = grown;
+        r->blinks[r->nlb] = (BeforeLink){.kind = ev_col(stmt, 0, &oom),
+                                         .dir = ev_col(stmt, 1, &oom),
+                                         .other_id = ev_col(stmt, 2, &oom),
+                                         .other_key = ev_col(stmt, 3, &oom)};
+        r->nlb++;
+    }
+    if (step != SQLITE_DONE && !oom) {
+        capture_sqlite_error(s->db, &s->last);
+    }
+    (void)sqlite3_finalize(stmt);
+    r->lb = (EventLink *)malloc((r->nlb + 1U) * sizeof(*r->lb));
+    oom = oom || r->lb == NULL;
+    for (i = 0; !oom && i < r->nlb; i++) {
+        BeforeLink *b = &r->blinks[i];
+
+        oom = b->kind == NULL || b->dir == NULL || b->other_id == NULL;
+        r->lb[i] = (EventLink){.kind = b->kind,
+                               .direction = b->dir,
+                               .other_id = b->other_id,
+                               .other_key = b->other_key};
+    }
+    return (step == SQLITE_DONE && !oom) ? 0 : -1;
+}
+
+/* A neighbor as the diff sees the link. */
+static EventLink ev_link_of(const StoreNeighbor *n)
+{
+    static const char *const k_kinds[] = {"related", "supersedes", "cites"};
+    const char *dir = "both";
+
+    if (n->kind != STORE_EDGE_RELATED) {
+        dir = (n->subject_id == n->from_id) ? "outgoing" : "incoming";
+    }
+    return (EventLink){.kind = k_kinds[n->kind],
+                       .direction = dir,
+                       .other_id = n->neighbor_sync_id,
+                       .other_key = n->neighbor_key};
+}
+
+/* The row after the write, and its links (the same stubs get shows). */
+static int ev_after(Store *s, long long id, const char *now, EvRow *r)
+{
+    StoreStatus st = load_entry_by_id(s->db, id, &r->after, &s->last);
+    char idtext[ISO_TS_MIN_BUFLEN];
+    size_t i = 0;
+
+    if (st == STORE_ERR_NOT_FOUND) {
+        return 0;
+    }
+    if (st != STORE_OK) {
+        return -1;
+    }
+    r->has_after = true;
+    (void)snprintf(idtext, sizeof(idtext), "%lld", id);
+    if (select_i64(s->db, "SELECT change_seq FROM entries WHERE local_id = ?1;", idtext,
+                   &r->change_seq, NULL, 0U, &s->last) != 0) {
+        return -1;
+    }
+    if (store_list_neighbors(s, id, NULL, STORE_NEIGHBOR_ALL, now, &r->neighbors, &r->nneighbors) !=
+        STORE_OK) {
+        return -1;
+    }
+    r->la = (EventLink *)malloc((r->nneighbors + 1U) * sizeof(*r->la));
+    if (r->la == NULL) {
+        return -1;
+    }
+    for (i = 0; i < r->nneighbors; i++) {
+        r->la[i] = ev_link_of(&r->neighbors[i]);
+    }
+    r->nla = r->nneighbors;
+    return 0;
+}
+
+/* The kind of a stored actor ({"kind":"human",...}); "" when it is not that shape. */
+static void ev_actor_kind(const char *actor, char *out, size_t cap)
+{
+    static const char k_lead[] = "{\"kind\":\"";
+    const char *end = NULL;
+    size_t n = 0;
+
+    out[0] = '\0';
+    if (actor == NULL || strncmp(actor, k_lead, sizeof(k_lead) - 1U) != 0) {
+        return;
+    }
+    end = strchr(actor + sizeof(k_lead) - 1U, '"');
+    n = end != NULL ? (size_t)(end - (actor + sizeof(k_lead) - 1U)) : 0U;
+    if (n < cap) {
+        memcpy(out, actor + sizeof(k_lead) - 1U, n);
+        out[n] = '\0';
+    }
+}
+
+/* The outbox row of one event that matched: its frozen payload and its recipients. */
+typedef struct {
+    const EvRow *row;
+    const EventDraft *draft;
+    const Entry *memory;
+    const char *now;
+} EvInsert;
+
+static int ev_insert_row(Store *s, EvInsert in, const char *const *matched, size_t nmatched)
+{
+    char event_id[STORE_DEVICE_ID_LEN + 1];
+    char err_unused[1];
+    char *payload = NULL;
+    char *recipients = NULL;
+    const char *binds[5];
+    EventStamp stamp;
+    int rc = -1;
+
+    if (s->ev_batch_id[0] == '\0' && mint_uuid_v7(s->ev_batch_id) != 0) {
+        return -1;
+    }
+    if (mint_uuid_v7(event_id) != 0) {
+        return -1;
+    }
+    stamp = (EventStamp){.event_id = event_id,
+                         .batch_id = s->ev_batch_id,
+                         .at = in.now,
+                         .brain_path = s->ev.brain_path != NULL ? s->ev.brain_path : s->path,
+                         .device_id = s->device_id,
+                         .command = s->ev.command,
+                         .cause = s->ev.cause,
+                         .origin = s->ev.origin};
+    payload = events_payload(&stamp, in.draft,
+                             &(EventRow){.before = in.row->has_before ? &in.row->before : NULL,
+                                         .after = in.row->has_after ? &in.row->after : NULL,
+                                         .links_before = in.row->lb,
+                                         .links_after = in.row->la,
+                                         .nlinks_before = in.row->nlb,
+                                         .nlinks_after = in.row->nla},
+                             in.memory,
+                             (EventLinks){.rows = in.row->neighbors, .count = in.row->nneighbors},
+                             in.row->change_seq);
+    recipients = events_recipients_json(matched, nmatched);
+    binds[0] = event_id;
+    binds[1] = event_type_name(in.draft->type);
+    binds[2] = payload;
+    binds[3] = recipients;
+    binds[4] = in.now;
+    if (payload != NULL && recipients != NULL &&
+        exec_bound(s->db,
+                   "INSERT INTO outbox(event_id, type, payload, recipients, created_at) "
+                   "VALUES (?1, ?2, ?3, ?4, ?5);",
+                   binds, 5, err_unused, 0U, &s->last) == 0) {
+        rc = 0;
+    }
+    free(payload);
+    free(recipients);
+    return rc;
+}
+
+/* One event: match every action, and write one outbox row when any matches. */
+static int ev_emit(Store *s, const EvRow *r, const EventDraft *d, const char *now)
+{
+    enum { KIND_CAP = 24 };
+    EventRules *rules = s->ev.rules;
+    const Entry *memory = r->has_after ? &r->after : &r->before;
+    char created_kind[KIND_CAP];
+    char updated_kind[KIND_CAP];
+    EventFacts facts;
+    const char **matched = (const char **)malloc((rules->count + 1U) * sizeof(*matched));
+    size_t nmatched = 0;
+    size_t i = 0;
+    int rc = -1;
+
+    if (matched == NULL) {
+        return -1;
+    }
+    ev_actor_kind(memory->created_by, created_kind, sizeof(created_kind));
+    ev_actor_kind(memory->updated_by, updated_kind, sizeof(updated_kind));
+    memset(&facts, 0, sizeof(facts));
+    facts.tags = (const char *const *)memory->tags;
+    facts.ntags = memory->ntags;
+    facts.tags_before = (const char *const *)r->before.tags;
+    facts.ntags_before = r->before.ntags;
+    facts.has_before = r->has_before;
+    facts.created_by_kind = created_kind;
+    facts.updated_by_kind = updated_kind;
+    facts.cause = s->ev.cause;
+    facts.type = d->type;
+    facts.origin = s->ev.origin;
+    facts.bin = r->has_before ? store_bin_of(r->before.deleted_at, r->before.expires_at, now)
+                              : store_bin_of(memory->deleted_at, memory->expires_at, now);
+    facts.hooks = s->ev.hooks;
+    for (i = 0; i < rules->count; i++) {
+        EventMatch m = events_match(&rules->actions[i], &facts);
+
+        if (m == EVENT_MATCH) {
+            matched[nmatched++] = rules->actions[i].recipient;
+        } else {
+            events_count_skip(&rules->actions[i], m, d->type);
+        }
+    }
+    if (nmatched == 0U) {
+        rc = 0;
+    } else if (!events_processes()) {
+        s->ev_unsupported++;
+        rc = 0;
+    } else {
+        rc = ev_insert_row(s, (EvInsert){.row = r, .draft = d, .memory = memory, .now = now},
+                           matched, nmatched);
+    }
+    free((void *)matched);
+    return rc;
+}
+
+/* Every memory this write touched, in id order. */
+static int ev_touched_ids(Store *s, long long **ids, size_t *n)
+{
+    sqlite3_stmt *stmt = NULL;
+    size_t cap = 0;
+    int step = 0;
+
+    *ids = NULL;
+    *n = 0;
+    if (ev_prepare(s, "SELECT local_id FROM temp.ev_touch WHERE ?1 = ?1 ORDER BY local_id;", 0,
+                   &stmt) != 0) {
+        return -1;
+    }
+    while ((step = sqlite3_step(stmt)) == SQLITE_ROW) {
+        if (*n == cap) {
+            size_t ncap = cap == 0U ? (size_t)GROW_MIN_CAP : cap * 2U;
+            long long *grown = (long long *)realloc(*ids, ncap * sizeof(**ids));
+
+            if (grown == NULL) {
+                step = SQLITE_NOMEM;
+                break;
+            }
+            *ids = grown;
+            cap = ncap;
+        }
+        (*ids)[(*n)++] = sqlite3_column_int64(stmt, 0);
+    }
+    if (step != SQLITE_DONE) {
+        capture_sqlite_error(s->db, &s->last);
+    }
+    (void)sqlite3_finalize(stmt);
+    if (step != SQLITE_DONE) {
+        free(*ids);
+        *ids = NULL;
+        *n = 0;
+        return -1;
+    }
+    return 0;
+}
+
+/* One touched memory: load it, plan its events, write the rows that match. */
+static int ev_flush_one(Store *s, long long id, const char *now)
+{
+    EvRow row;
+    EventDraft *drafts = NULL;
+    size_t ndrafts = 0;
+    size_t i = 0;
+    int rc = -1;
+    sqlite3_stmt *probe = NULL;
+    bool had = false;
+
+    memset(&row, 0, sizeof(row));
+    if (ev_prepare(s, "SELECT had_before FROM temp.ev_touch WHERE local_id = ?1;", id, &probe) != 0) {
+        return -1;
+    }
+    had = sqlite3_step(probe) == SQLITE_ROW && sqlite3_column_int(probe, 0) != 0;
+    (void)sqlite3_finalize(probe);
+    row.has_before = had;
+    if ((had && (ev_before_entry(s, id, &row) != 0 || ev_before_links(s, id, &row) != 0)) ||
+        ev_after(s, id, now, &row) != 0) {
+        goto done;
+    }
+    if (had && !row.has_after) {
+        /* purged: the row's last change_seq is the one ev_touch kept */
+        row.neighbors = NULL;
+    }
+    if (!events_plan(&(EventRow){.before = row.has_before ? &row.before : NULL,
+                                 .after = row.has_after ? &row.after : NULL,
+                                 .links_before = row.lb,
+                                 .links_after = row.la,
+                                 .nlinks_before = row.nlb,
+                                 .nlinks_after = row.nla},
+                     &drafts, &ndrafts)) {
+        goto done;
+    }
+    rc = 0;
+    for (i = 0; rc == 0 && i < ndrafts; i++) {
+        rc = ev_emit(s, &row, &drafts[i], now);
+    }
+done:
+    free(drafts);
+    ev_row_free(&row);
+    return rc;
+}
+
+/* Before COMMIT: one outbox row per event of this write that an enabled action matches. */
+static int events_flush(Store *s)
+{
+    long long *ids = NULL;
+    size_t n = 0;
+    size_t i = 0;
+    char now[ISO_TS_MIN_BUFLEN + ISO_TS_MIN_BUFLEN];
+    int rc = 0;
+
+    if (!s->ev_armed || s->ev.hooks == STORE_HOOKS_OFF) {
+        return 0;
+    }
+    if (ev_touched_ids(s, &ids, &n) != 0 || utc_now(now, sizeof(now)) != 0) {
+        free(ids);
+        return -1;
+    }
+    for (i = 0; rc == 0 && i < n; i++) {
+        rc = ev_flush_one(s, ids[i], now);
+    }
+    free(ids);
+    return rc;
+}
+
+static int commit_write(Store *s)
+{
+    char err_unused[1];
+
+    if (events_flush(s) != 0) {
+        return -1;
+    }
+    return exec_sql(s->db, "COMMIT;", err_unused, 0U, &s->last);
+}
+
+StoreStatus store_set_events(Store *s, const StoreEvents *cfg)
+{
+    char err_unused[1];
+    size_t i = 0;
+
+    s->ev = *cfg;
+    s->ev_batch_id[0] = '\0';
+    s->ev_unsupported = 0;
+    s->ev_armed = false;
+    if (cfg->rules == NULL || cfg->rules->count == 0U || !store_is_writable(s)) {
+        return STORE_OK;
+    }
+    for (i = 0; i < sizeof(k_ev_arm_sql) / sizeof(k_ev_arm_sql[0]); i++) {
+        if (exec_sql(s->db, k_ev_arm_sql[i], err_unused, 0U, &s->last) != 0) {
+            return STORE_ERR_SQLITE;
+        }
+    }
+    s->ev_armed = true;
+    return STORE_OK;
+}
+
+void store_set_event_hooks(Store *s, StoreHooks hooks)
+{
+    s->ev.hooks = hooks;
+}
+
+size_t store_events_unsupported(const Store *s)
+{
+    return s->ev_unsupported;
+}
+
+
 StoreStatus store_add(Store *s, const char *body, const char *body_hash, const char *key_or_null,
                       const char *const *tags, size_t ntags, const char *actor,
                       const char *expires_at, const char *now, StoreAddAction *out_action,
@@ -4403,7 +4990,6 @@ StoreStatus store_add(Store *s, const char *body, const char *body_hash, const c
     long long id = 0;
     StoreAddAction action = STORE_ADD_CREATED;
     StoreStatus st = STORE_OK;
-    char err_unused[1];
 
     if (s == NULL || s->db == NULL || s->device_id == NULL || body == NULL || body_hash == NULL ||
         actor == NULL || now == NULL || out_action == NULL || out_entry == NULL) {
@@ -4432,7 +5018,7 @@ StoreStatus store_add(Store *s, const char *body, const char *body_hash, const c
     if (st != STORE_OK) {
         goto fail;
     }
-    if (exec_sql(s->db, "COMMIT;", err_unused, 0U, &s->last) != 0) {
+    if (commit_write(s) != 0) {
         st = STORE_ERR_SQLITE;
         goto fail;
     }
@@ -5969,7 +6555,6 @@ static StoreStatus apply_soft_delete(sqlite3 *db, long long id, const char *acto
 static StoreStatus soft_delete_tx(Store *s, long long id_or_zero, const char *key_or_null,
                                   const char *actor, const char *now, Entry *out)
 {
-    char err_unused[1];
     StoreStatus st = STORE_OK;
     long long id = id_or_zero;
     Entry cur;
@@ -5997,7 +6582,7 @@ static StoreStatus soft_delete_tx(Store *s, long long id_or_zero, const char *ke
     if (st != STORE_OK) {
         goto fail;
     }
-    if (exec_sql(s->db, "COMMIT;", err_unused, 0U, &s->last) != 0) {
+    if (commit_write(s) != 0) {
         st = STORE_ERR_SQLITE;
         store_entry_free(out);
         goto fail;
@@ -6012,7 +6597,6 @@ fail:
 static StoreStatus hard_delete_tx(Store *s, long long id_or_zero, const char *key_or_null,
                                   StoreBin bin, const char *now, Entry *out_deleted)
 {
-    char err_unused[1];
     StoreStatus st = STORE_OK;
     sqlite3_stmt *del = NULL;
     long long id = id_or_zero;
@@ -6066,7 +6650,7 @@ static StoreStatus hard_delete_tx(Store *s, long long id_or_zero, const char *ke
         goto fail_free;
     }
 
-    if (exec_sql(s->db, "COMMIT;", err_unused, 0U, &s->last) != 0) {
+    if (commit_write(s) != 0) {
         st = STORE_ERR_SQLITE;
         goto fail_free;
     }
@@ -6333,7 +6917,6 @@ static StoreStatus update_apply_changes(sqlite3 *db, const Entry *cur, bool is_k
 StoreStatus store_update(Store *s, long long id, const StoreUpdate *u, const char *now,
                          Entry *out_entry, long long *out_conflict_id)
 {
-    char err_unused[1];
     StoreStatus st = STORE_OK;
     Entry current;
     long long entry_id = 0;
@@ -6385,7 +6968,7 @@ StoreStatus store_update(Store *s, long long id, const StoreUpdate *u, const cha
         return st;
     }
 
-    if (exec_sql(s->db, "COMMIT;", err_unused, 0U, &s->last) != 0) {
+    if (commit_write(s) != 0) {
         store_entry_free(&current);
         rollback_quiet(s->db);
         return STORE_ERR_SQLITE;
@@ -6401,7 +6984,6 @@ StoreStatus store_purge(Store *s, StoreBin bin, const char *now, Entry **out_ent
 {
     sqlite3_stmt *sel = NULL;
     sqlite3_stmt *del = NULL;
-    char err_unused[1];
     StoreStatus st = STORE_OK;
     Entry *rows = NULL;
     size_t n = 0U;
@@ -6504,7 +7086,7 @@ StoreStatus store_purge(Store *s, StoreBin bin, const char *now, Entry **out_ent
         return st;
     }
 
-    if (exec_sql(s->db, "COMMIT;", err_unused, 0U, &s->last) != 0) {
+    if (commit_write(s) != 0) {
         free_entry_rows(rows, n);
         rollback_quiet(s->db);
         return STORE_ERR_SQLITE;
@@ -6955,7 +7537,6 @@ int store_sync_id_is_canonical(const char *s)
 StoreStatus store_link(Store *s, StoreEdge edge, StoreEdgeKind kind, const char *actor,
                        const char *now, StoreLinkAction *out_action, StoreNeighbor *out_stub)
 {
-    char err_unused[1];
     long long from_id = edge.from_id;
     long long to_id = edge.to_id;
     long long stored_from = from_id;
@@ -7033,7 +7614,7 @@ StoreStatus store_link(Store *s, StoreEdge edge, StoreEdgeKind kind, const char 
         rollback_quiet(s->db);
         return st;
     }
-    if (exec_sql(s->db, "COMMIT;", err_unused, 0U, &s->last) != 0) {
+    if (commit_write(s) != 0) {
         store_neighbor_free(out_stub);
         rollback_quiet(s->db);
         return STORE_ERR_SQLITE;
@@ -7111,7 +7692,6 @@ StoreStatus store_unlink(Store *s, long long from_id, long long to_id, const Sto
                          const char *actor, const char *now, StoreNeighbor **out_stubs,
                          size_t *out_count)
 {
-    char err_unused[1];
     sqlite3_stmt *sel = NULL;
     StoreStatus st = STORE_OK;
     int rc = 0;
@@ -7188,7 +7768,7 @@ StoreStatus store_unlink(Store *s, long long from_id, long long to_id, const Sto
         }
     }
 
-    if (exec_sql(s->db, "COMMIT;", err_unused, 0U, &s->last) != 0) {
+    if (commit_write(s) != 0) {
         store_neighbors_free(*out_stubs, *out_count);
         *out_stubs = NULL;
         *out_count = 0U;
@@ -7562,7 +8142,6 @@ StoreStatus store_rekey(Store *s, long long id, RekeyKeys keys, StoreBin bin, co
 {
     const char *key_or_null = keys.key_or_null;
     const char *new_key_or_null = keys.new_key_or_null;
-    char err_unused[1];
     Entry current;
     StoreStatus st = STORE_OK;
     long long entry_id = 0;
@@ -7620,7 +8199,7 @@ StoreStatus store_rekey(Store *s, long long id, RekeyKeys keys, StoreBin bin, co
         rollback_quiet(s->db);
         return st;
     }
-    if (exec_sql(s->db, "COMMIT;", err_unused, 0U, &s->last) != 0) {
+    if (commit_write(s) != 0) {
         rollback_quiet(s->db);
         return STORE_ERR_SQLITE;
     }
@@ -9561,7 +10140,7 @@ StoreStatus store_import(Store *dst, const char *src_path, const char *now, cons
         goto fail;
     }
 
-    if (exec_sql(dst->db, "COMMIT;", err_unused, 0U, &dst->last) != 0) {
+    if (commit_write(dst) != 0) {
         st = STORE_ERR_SQLITE;
         goto fail;
     }
@@ -10135,10 +10714,9 @@ StoreStatus store_import_doc(Store *dst, const ImportDoc *doc, const char *now, 
     g_import_origin = origin;
     st = begin_write(dst);
     if (st == STORE_OK) {
-        char err_unused[1];
 
         st = import_doc_writes(dst, doc, now, out);
-        if (st == STORE_OK && exec_sql(dst->db, "COMMIT;", err_unused, 0U, &dst->last) != 0) {
+        if (st == STORE_OK && commit_write(dst) != 0) {
             st = STORE_ERR_SQLITE;
         }
         if (st != STORE_OK) {
@@ -10897,7 +11475,6 @@ StoreStatus store_conflict_accept(Store *s, long long conflict_id, StoreConflict
                                   const char *now, Entry **out_entries, size_t *out_count)
 // NOLINTEND(bugprone-easily-swappable-parameters)
 {
-    char err_unused[1];
     char *sync_id = NULL;
     char *local_json = NULL;
     char *incoming_json = NULL;
@@ -10952,7 +11529,7 @@ StoreStatus store_conflict_accept(Store *s, long long conflict_id, StoreConflict
     if (st != STORE_OK) {
         goto fail;
     }
-    if (exec_sql(s->db, "COMMIT;", err_unused, 0U, &s->last) != 0) {
+    if (commit_write(s) != 0) {
         st = STORE_ERR_SQLITE;
         goto fail;
     }

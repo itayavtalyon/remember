@@ -33,6 +33,15 @@ void plugin_settings_unregister(const char *name, SettingsRegistry *reg);
 /* plugin.hybrid.enabled: the built-in plugin has no manifest. */
 PluginSettingsStatus plugin_settings_register_hybrid(SettingsRegistry *reg);
 
+/* The manifests whose keys plugin_settings_load registered, in that order (plan 31 reads their
+   actions). Heap; free with plugin_manifest_list_free. */
+typedef struct {
+    PluginManifest **items;
+    size_t count;
+} PluginManifestList;
+
+void plugin_manifest_list_free(PluginManifestList *list);
+
 /* List <plugins_dir>/<folder>/plugin.json in byte order of the folder name, parse each, and
    register the manifests that parse with no error. A folder with no plugin.json, a file that is
    not a regular file or is over PLUGIN_JSON_MAX, an unreadable file, and a manifest with an
@@ -42,5 +51,10 @@ PluginSettingsStatus plugin_settings_register_hybrid(SettingsRegistry *reg);
    *sys_errno is set when the status is PLUGIN_SETTINGS_DIR. */
 PluginSettingsStatus plugin_settings_load(const char *plugins_dir, SettingsRegistry *reg,
                                           int *sys_errno);
+
+/* plugin_settings_load, and *out holds the manifests it registered (not NULL). On a status other
+   than PLUGIN_SETTINGS_OK *out is empty. */
+PluginSettingsStatus plugin_settings_load_manifests(const char *plugins_dir, SettingsRegistry *reg,
+                                                    PluginManifestList *out, int *sys_errno);
 
 #endif /* REMEMBER_PLUGIN_SETTINGS_H */

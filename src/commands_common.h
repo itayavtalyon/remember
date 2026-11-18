@@ -107,15 +107,29 @@ typedef struct {
 /* 1 if arg is a bin flag and was recorded; 0 if not a bin flag. */
 int cmd_bin_take_flag(const char *arg, CmdBinOpts *opts);
 
+/* --hooks and --no-hooks as typed (H-4.3). Both set is a usage error: cmd_apply_hooks. */
+typedef struct {
+    bool on;
+    bool off;
+    char pad_[6]; /* explicit tail padding (kept -Wpadded-clean) */
+} CmdHooks;
+
 /* --as KIND and --actor ID. NULL means the flag was omitted. */
 typedef struct {
     const char *kind;
     const char *id;
+    CmdHooks hooks;
 } CmdActorFlags;
 
-/* --hooks and --no-hooks (H-16.11): every write accepts them. They do not change
-   delivery until plan 25 adds the outbox writer. */
+/* --hooks and --no-hooks (H-16.11): every write accepts them (src/events.h says what they do). */
 bool cmd_is_hooks_flag(const char *arg);
+
+/* True when arg is --hooks or --no-hooks, which it records in *hooks. */
+bool cmd_take_hooks_flag(const char *arg, CmdHooks *hooks);
+
+/* Give the store the mode the flags chose (H-4.3), before the command writes. 0, or -1 after a
+   usage error: both flags were typed (decision:2026-11-18-plan31-grill-hooks-flags-together). */
+int cmd_apply_hooks(Store *s, const CmdHooks *hooks);
 
 /* 1 if arg was --as, --actor, --hooks, or --no-hooks. 0 if not. -1 on a missing
    value (*err set, not printed). */

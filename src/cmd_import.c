@@ -131,6 +131,7 @@ typedef struct {
     const char *from_md;
     const char *from_csv;
     const char *origin;
+    CmdHooks hooks;
 } ImportArgs;
 
 /* --origin LABEL, else the source's basename (conflicts.origin). */
@@ -275,7 +276,7 @@ static int import_parse_args(int argc, const char **argv, ImportArgs *a)
         if (strcmp(arg, "--origin") == 0) {
             taken_rc = import_take_origin(&i, argc, argv, a);
         } else if (import_take_source(arg, &i, argc, argv, sources, nsources, &taken_rc) ||
-                   cmd_is_hooks_flag(arg)) {
+                   cmd_take_hooks_flag(arg, &a->hooks)) {
             /* taken (taken_rc says how) or a hooks flag */
         } else if (arg[0] == '-' && arg[1] != '\0') {
             err_fmt(DIAG_USAGE, "unknown option '%s'", arg);
@@ -303,12 +304,12 @@ static int import_parse_args(int argc, const char **argv, ImportArgs *a)
 
 int cmd_import(Store *s, bool json, int rest_argc, const char **rest_argv)
 {
-    ImportArgs a = {NULL, NULL, NULL, NULL, NULL};
+    ImportArgs a = {NULL, NULL, NULL, NULL, NULL, {false, false, {0}}};
     char now[ISO_TS_BUFSIZE];
     StoreImportResult result;
     StoreStatus st = STORE_OK;
 
-    if (import_parse_args(rest_argc, rest_argv, &a) != 0) {
+    if (import_parse_args(rest_argc, rest_argv, &a) != 0 || cmd_apply_hooks(s, &a.hooks) != 0) {
         return REMEMBER_ERR;
     }
     if (a.from_md != NULL) {
@@ -443,7 +444,7 @@ static int conflict_accept_take_keep(int *arg_i, int rest_argc, const char **res
 
 /* Parse conflict accept --id / --keep. Returns 0 on success, REMEMBER_ERR on usage. */
 static int conflict_accept_parse(int rest_argc, const char **rest_argv, long long *conflict_id,
-                                 StoreConflictKeep *keep)
+                                 StoreConflictKeep *keep, CmdHooks *hooks)
 {
     bool have_id = false;
     bool have_keep = false;
@@ -466,7 +467,7 @@ static int conflict_accept_parse(int rest_argc, const char **rest_argv, long lon
             }
             continue;
         }
-        if (arg != NULL && cmd_is_hooks_flag(arg)) {
+        if (arg != NULL && cmd_take_hooks_flag(arg, hooks)) {
             continue;
         }
         if (arg != NULL && arg[0] == '-' && arg[1] != '\0') {
@@ -507,6 +508,7 @@ int cmd_conflict(Store *s, bool json, int rest_argc, const char **rest_argv)
 {
     long long conflict_id = 0;
     StoreConflictKeep keep = STORE_KEEP_LOCAL;
+    CmdHooks hooks = {false, false, {0}};
     char now[ISO_TS_BUFSIZE];
     Entry *entries = NULL;
     size_t count = 0U;
@@ -518,7 +520,8 @@ int cmd_conflict(Store *s, bool json, int rest_argc, const char **rest_argv)
         err_msg(DIAG_USAGE, "usage: conflict accept --id N --keep local|incoming|both");
         return REMEMBER_ERR;
     }
-    if (conflict_accept_parse(rest_argc, rest_argv, &conflict_id, &keep) != 0) {
+    if (conflict_accept_parse(rest_argc, rest_argv, &conflict_id, &keep, &hooks) != 0 ||
+        cmd_apply_hooks(s, &hooks) != 0) {
         return REMEMBER_ERR;
     }
     if (utc_now(now, sizeof(now)) != 0) {

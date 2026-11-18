@@ -314,7 +314,7 @@ static int run_pair(Store *s, bool json, int rest_argc, const char **rest_argv, 
         err_msg(DIAG_INTERNAL, "internal error");
         return REMEMBER_ERR;
     }
-    if (cmd_actor_json(&p.actor, actor_buf) != 0) {
+    if (cmd_actor_json(&p.actor, actor_buf) != 0 || cmd_apply_hooks(s, &p.actor.hooks) != 0) {
         return REMEMBER_ERR;
     }
     rc = resolve_end(s, (EndRef){.id_raw = p.from_id_raw, .key_raw = p.from_key_raw},

@@ -62,6 +62,7 @@ cleanup:
 int cmd_purge(Store *s, bool json, int rest_argc, const char **rest_argv)
 {
     CmdBinOpts bins;
+    CmdHooks hooks = {false, false, {0}};
     StoreBin bin = STORE_BIN_LIVE;
     int i = 0;
 
@@ -69,7 +70,7 @@ int cmd_purge(Store *s, bool json, int rest_argc, const char **rest_argv)
     for (i = 0; i < rest_argc; i++) {
         const char *arg = rest_argv[i];
 
-        if (cmd_bin_take_flag(arg, &bins) != 0 || cmd_is_hooks_flag(arg)) {
+        if (cmd_bin_take_flag(arg, &bins) != 0 || cmd_take_hooks_flag(arg, &hooks)) {
             continue;
         }
         if (arg != NULL && arg[0] == '-' && arg[1] != '\0') {
@@ -79,7 +80,7 @@ int cmd_purge(Store *s, bool json, int rest_argc, const char **rest_argv)
         err_msg(DIAG_USAGE, "purge takes no positional arguments");
         return REMEMBER_ERR;
     }
-    if (cmd_bin_resolve(&bins, &bin) != 0) {
+    if (cmd_bin_resolve(&bins, &bin) != 0 || cmd_apply_hooks(s, &hooks) != 0) {
         return REMEMBER_ERR;
     }
     if (bin == STORE_BIN_LIVE) {

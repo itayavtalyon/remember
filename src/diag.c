@@ -174,6 +174,7 @@ static const char *const k_warning_codes[DIAG_WARN_COUNT] = {
     [DIAG_WARN_SCHEMA_TOO_NEW_READ_ONLY] = "schema_too_new_read_only",
     [DIAG_WARN_BRAIN_ID_CLONED] = "brain_id_cloned",
     [DIAG_WARN_BRAIN_MISSING] = "brain_missing",
+    [DIAG_WARN_PLUGIN_UNSUPPORTED] = "plugin_unsupported",
 };
 
 /* Plain line lead per warning. E2.3 gives raw_query_ignored its own words; the
@@ -189,6 +190,7 @@ static const char *const k_warning_plain_prefix[DIAG_WARN_COUNT] = {
     [DIAG_WARN_SCHEMA_TOO_NEW_READ_ONLY] = "warning: ",
     [DIAG_WARN_BRAIN_ID_CLONED] = "warning: ",
     [DIAG_WARN_BRAIN_MISSING] = "warning: ",
+    [DIAG_WARN_PLUGIN_UNSUPPORTED] = "warning: ",
 };
 
 static const char *catalog_name(const char *const *names, size_t count, size_t index)
@@ -644,6 +646,16 @@ int diag_brain_missing(const char *path)
     }
     free(message);
     return rc;
+}
+
+int diag_plugin_unsupported(void)
+{
+    return diag_warning_split_detail(
+        DIAG_WARN_PLUGIN_UNSUPPORTED,
+        (DiagSplit){.message = "the write was saved, but this build of remember can't start "
+                               "programs, so its hooks and plugins didn't run.",
+                    .fix = "Use a build of remember that can start programs."},
+        NULL, 0U);
 }
 
 /* R27b-1 and R27b-2. The same two sentences open the warning and the error,

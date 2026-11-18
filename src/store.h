@@ -159,6 +159,40 @@ int store_user_db_ensure(const char *path, char *err, size_t errlen);
 void store_set_settings_registry(Store *s, const SettingsRegistry *reg);
 const SettingsRegistry *store_settings_registry(const Store *s);
 
+/* Memory events (plan 31; events.h, specs/EVENTS.md). The types are events.h's; the store only
+   holds pointers to them. */
+typedef struct EventRules EventRules;
+typedef struct EventCause EventCause;
+/* How a change arrived (cause.origin). */
+typedef enum { STORE_ORIGIN_LOCAL = 0, STORE_ORIGIN_SYNC, STORE_ORIGIN_IMPORT } StoreOrigin;
+/* --hooks and --no-hooks of one write (H-4.3). */
+typedef enum { STORE_HOOKS_DEFAULT = 0, STORE_HOOKS_ON, STORE_HOOKS_OFF } StoreHooks;
+
+/* The events of this store's writes. The Store keeps the pointers; the opener owns what they point
+   at and frees it after store_close. rules NULL, or with no action, leaves the store with no event
+   work at all. brain_path is the path data.brain.path shows (shortened with ~). */
+typedef struct {
+    EventRules *rules;
+    const EventCause *cause;
+    const char *command; /* cause.command */
+    const char *brain_path;
+    StoreOrigin origin;
+    StoreHooks hooks;
+} StoreEvents;
+
+/* Replace the events config. With at least one action and a brain this open can write, it makes
+   the temp tables and triggers that find what a write changed; with none no write looks for
+   events. STORE_OK, or STORE_ERR_SQLITE when the triggers cannot be made (no write then makes an
+   event, so the opener fails the command). */
+StoreStatus store_set_events(Store *s, const StoreEvents *cfg);
+
+/* --hooks or --no-hooks, once the command has parsed its arguments. */
+void store_set_event_hooks(Store *s, StoreHooks hooks);
+
+/* Events that matched an action but were not inserted because this build cannot start programs
+   (events_processes() false), since store_set_events. */
+size_t store_events_unsupported(const Store *s);
+
 /* Resolution and writes (007 ST-2.2, ST-4.3 through ST-4.6). Test through
    these, not through a settings command. user_db NULL is no user layer.
    A brain write bumps change_seq. A user write does not, and does not create

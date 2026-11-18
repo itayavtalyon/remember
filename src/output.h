@@ -22,6 +22,18 @@ int output_entry_json(FILE *out, const Entry *e, const char *now);
 /* An export file's entry (plan 22): output_entry_json without local_id (JE-3.5). */
 int output_export_entry_json(FILE *out, const Entry *e, const char *now);
 
+/* The links of one memory, as the stubs an event carries. */
+typedef struct {
+    const StoreNeighbor *rows; /* may be NULL when count is 0 */
+    size_t count;
+} EventLinks;
+
+/* An event's memory (plan 31; PLUGIN-PROTOCOL R3.7, R3.8): the object `remember --json get`
+ * writes without local_id and version_vector, plus change_seq, and links whose stubs have no
+ * local_id either. Only the rows of links whose subject_id is e->id are written. No newline. */
+int output_event_memory_json(FILE *out, const Entry *e, long long change_seq,
+                             EventLinks links, const char *now);
+
 /*
  * The *_data writers write the data object of a --json success, with no
  * newline. remember_run wraps it in the one remember-message 1 envelope

@@ -6,6 +6,7 @@
 #include "commands.h"
 #include "commands_common.h"
 #include "diag.h"
+#include "events.h"
 #include "exit_codes.h"
 #include "output.h"
 #include "plugin_settings.h"
@@ -633,8 +634,9 @@ static int meet_newer_brain(const Store *s, const CliArgs *args)
 
 /* The keys the brain's settings calls know: the compiled-in rows, plugin.hybrid.enabled, and
    the keys of each plugin in <data dir>/plugins (plan 30). With no data dir (HOME and
-   XDG_DATA_HOME unset) no plugin is installed, as far as anyone can tell. 0, or the exit code. */
-static int load_registry(SettingsRegistry **out)
+   XDG_DATA_HOME unset) no plugin is installed, as far as anyone can tell. mans gets the
+   manifests behind those keys (plan 31). 0, or the exit code. */
+static int load_registry(SettingsRegistry **out, PluginManifestList *mans)
 {
     char dir[REMEMBER_PATH_MAX];
     char err[ERR_TEXT_CAP];
@@ -652,7 +654,7 @@ static int load_registry(SettingsRegistry **out)
     }
     /* The data dir left room for the folder name. */
     (void)snprintf(dir + strlen(dir), sizeof("/plugins"), "/plugins");
-    st = plugin_settings_load(dir, reg, &sys_errno);
+    st = plugin_settings_load_manifests(dir, reg, mans, &sys_errno);
     if (st == PLUGIN_SETTINGS_OOM) {
         err_msg(DIAG_OUT_OF_MEMORY, "out of memory");
         return REMEMBER_ERR;
@@ -664,25 +666,137 @@ static int load_registry(SettingsRegistry **out)
     return 0;
 }
 
+/* ---- memory events (plan 31) ------------------------------------------------------------ */
+
+/* cause.command (R3.2). conflict accept has no value of its own yet
+   (decision:open-2026-11-18-plan31-conflict-accept-command): it reports update. NULL when the
+   command changes no memory. */
+static const char *event_command_name(CliCommand command)
+{
+    static const char *const k_names[] = {
+        [CLI_CMD_ADD] = "add",         [CLI_CMD_UPDATE] = "update", [CLI_CMD_CONFLICT] = "update",
+        [CLI_CMD_DELETE] = "delete",   [CLI_CMD_PURGE] = "purge",   [CLI_CMD_REKEY] = "rekey",
+        [CLI_CMD_LINK] = "link",       [CLI_CMD_UNLINK] = "unlink", [CLI_CMD_IMPORT] = "import",
+    };
+
+    if ((size_t)command >= sizeof(k_names) / sizeof(k_names[0])) {
+        return NULL;
+    }
+    return k_names[command];
+}
+
+/* What one command's events hold; the store keeps pointers into it until store_close. */
+typedef struct {
+    EventRules rules;
+    EventCause cause;
+    char brain_label[REMEMBER_PATH_MAX];
+    const char *command;
+    StoreOrigin origin;
+    bool armed;
+    char pad_[3];
+} CommandEvents;
+
+/* The brain path as an event shows it: absolute, with the home folder written ~ (OQ-14). */
+static void brain_label(const char *path, char *out, size_t cap)
+{
+    char absolute[REMEMBER_PATH_MAX];
+    const char *home = getenv("HOME"); // NOLINT(concurrency-mt-unsafe) single-threaded CLI
+    size_t n = home != NULL ? strlen(home) : 0U;
+
+    if (util_absolute_path(path, absolute, sizeof(absolute)) != 0) {
+        (void)snprintf(absolute, sizeof(absolute), "%s", path);
+    }
+    if (n > 1U && strncmp(absolute, home, n) == 0 && absolute[n] == '/') {
+        (void)snprintf(out, cap, "~%s", absolute + n);
+    } else {
+        (void)snprintf(out, cap, "%s", absolute);
+    }
+}
+
+/* Turn on events for a command that changes memories, when an enabled plugin has an action.
+   0, or the exit code. */
+static int arm_events(Store *s, const CliArgs *args, const PluginManifestList *mans,
+                      CommandEvents *ev)
+{
+    char userdb[REMEMBER_PATH_MAX];
+    char err[ERR_TEXT_CAP];
+    const char *user_db = NULL;
+    StoreEvents cfg;
+    StoreStatus st = STORE_OK;
+
+    ev->command = event_command_name(args->command);
+    if (ev->command == NULL || mans->count == 0U || !store_is_writable(s)) {
+        return 0;
+    }
+    if (util_resolve_user_db_path(userdb, sizeof(userdb), err, sizeof(err)) == 0) {
+        user_db = userdb;
+    }
+    if (events_rules_load(s, user_db, mans, &ev->rules) != 0 || events_cause_read(&ev->cause) != 0) {
+        err_msg(DIAG_OUT_OF_MEMORY, "out of memory");
+        return REMEMBER_ERR;
+    }
+    ev->origin = args->command == CLI_CMD_IMPORT ? STORE_ORIGIN_IMPORT : STORE_ORIGIN_LOCAL;
+    brain_label(store_path(s), ev->brain_label, sizeof(ev->brain_label));
+    memset(&cfg, 0, sizeof(cfg));
+    cfg.rules = &ev->rules;
+    cfg.cause = &ev->cause;
+    cfg.command = ev->command;
+    cfg.brain_path = ev->brain_label;
+    cfg.origin = ev->origin;
+    cfg.hooks = STORE_HOOKS_DEFAULT;
+    st = store_set_events(s, &cfg);
+    if (st != STORE_OK) {
+        err_store(s, st);
+        return REMEMBER_ERR;
+    }
+    ev->armed = true;
+    return 0;
+}
+
+/* After the command: the warning for a write that needed a program this build cannot start,
+   and the skipped_source lines for a sync or import. */
+static void finish_events(const Store *s, CommandEvents *ev)
+{
+    if (!ev->armed) {
+        return;
+    }
+    if (store_events_unsupported(s) > 0U) {
+        (void)diag_plugin_unsupported();
+    }
+    (void)events_log_skipped(&ev->rules, store_path(s), ev->command, ev->origin);
+}
+
 static int run_with_store(const CliArgs *args, CmdFn fn)
 {
     Store *s = NULL;
     SettingsRegistry *reg = NULL;
+    PluginManifestList mans = {.items = NULL, .count = 0U};
+    CommandEvents ev;
     int rc = 0;
 
+    memset(&ev, 0, sizeof(ev));
     s = open_store(args, &rc);
     if (s == NULL) {
         return rc;
     }
-    rc = load_registry(&reg);
+    rc = load_registry(&reg, &mans);
     if (rc == 0) {
         store_set_settings_registry(s, reg);
         rc = meet_newer_brain(s, args);
     }
     if (rc == 0) {
+        rc = arm_events(s, args, &mans, &ev);
+    }
+    if (rc == 0) {
         rc = fn(s, args->globals.json, args->rest_argc, args->rest_argv);
+        finish_events(s, &ev);
     }
     store_close(s);
+    events_rules_free(&ev.rules);
+    if (ev.cause.chain_json != NULL) {
+        events_cause_free(&ev.cause);
+    }
+    plugin_manifest_list_free(&mans);
     settings_registry_free(reg);
     return rc;
 }

@@ -103,8 +103,7 @@ static int parse_add_args(int rest_argc, const char **rest_argv, AddParse *out, 
     int end_opts = 0;
     size_t tag_cap = 0U;
 
-    out->actor.kind = NULL;
-    out->actor.id = NULL;
+    memset(&out->actor, 0, sizeof(out->actor));
     out->key_raw = NULL;
     out->body_raw = NULL;
     out->tag_raw = NULL;
@@ -208,7 +207,7 @@ int cmd_add(Store *s, bool json, int rest_argc, const char **rest_argv)
         return REMEMBER_ERR;
     }
 
-    if (cmd_actor_json(&parsed.actor, actor_buf) != 0) {
+    if (cmd_actor_json(&parsed.actor, actor_buf) != 0 || cmd_apply_hooks(s, &parsed.actor.hooks) != 0) {
         goto cleanup;
     }
     if (parsed.body_raw == NULL) {
