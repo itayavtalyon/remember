@@ -431,15 +431,13 @@ static bool keep_manifest(KeptManifests *keep, PluginManifest *man)
 {
     if (keep->count == keep->cap) {
         size_t cap = keep->cap + (size_t)NAMES_GROW;
-        // NOLINTNEXTLINE(bugprone-sizeof-expression) an array of manifest pointers
-        PluginManifest **grown = (PluginManifest **)malloc(cap * sizeof(*grown));
+        PluginManifest **grown = (PluginManifest **)malloc(cap * sizeof(void *));
 
         if (grown == NULL) {
             return false;
         }
         if (keep->count > 0U) {
-            // NOLINTNEXTLINE(bugprone-sizeof-expression) an array of manifest pointers
-            memcpy((void *)grown, (const void *)keep->items, keep->count * sizeof(*grown));
+            memcpy((void *)grown, (const void *)keep->items, keep->count * sizeof(void *));
         }
         free((void *)keep->items);
         keep->items = grown;
