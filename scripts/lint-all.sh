@@ -19,7 +19,7 @@ cd "$ROOT"
 BUILD_DIR="${BUILD_DIR:-build}"
 SRC_DIR="src"
 TESTS_DIR="tests"
-REPORT_DIR="lint-reports"
+REPORT_DIR="${REPORT_DIR:-lint-reports}" # ci-linux gives each image its own
 mkdir -p "$REPORT_DIR"
 
 # The LLVM major the macOS CI job installs (brew install llvm@N in ci.yml). Each

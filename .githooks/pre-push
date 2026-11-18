@@ -35,7 +35,7 @@ while read -r _ local_sha _ _; do
     code=1
   fi
   tree="$(git rev-parse "$local_sha^{tree}")"
-  ./scripts/gate-stamp.sh has ci-linux "$tree" || linux_done=0
+  for v in 24.04 26.04; do ./scripts/gate-stamp.sh has "ci-linux-$v" "$tree" || linux_done=0; done
   ./scripts/gate-stamp.sh has codeql "$tree" || codeql_done=0
 done
 if [[ "$code" == 0 ]]; then

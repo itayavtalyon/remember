@@ -38,26 +38,34 @@ for arg in "$@"; do
   esac
 done
 
-# Host entry: run the inner gate in Docker (method A), one image after the other
-# (parallel builds share this machine with other heavy jobs). The first failure stops.
+# Host entry: run the inner gate in Docker (method A), one image after the other.
+# The first failure stops. Each image has its own build and lint-report folders,
+# so two runs (say --ubuntu=24.04 and --ubuntu=26.04, each in a GATE_LANE=linux
+# slot of .claude/gate-queue.sh) can share a worktree. Each container is capped at
+# REMEMBER_CI_LINUX_MEMORY and REMEMBER_CI_LINUX_CPUS, so two fit in the Docker VM and
+# an overrun kills that container (exit 137), not the Mac.
 if [[ "$INNER" -eq 0 ]]; then
   if ! command -v docker >/dev/null 2>&1; then
     echo "error: docker not found; install Docker or run: $0 --inner --install" >&2
     exit 1
   fi
-  # A run on both images of a clean tree is stamped for .githooks/pre-push.
-  TREE=""
-  [[ "${#UBUNTU[@]}" -eq 2 ]] && TREE="$("$ROOT/scripts/gate-stamp.sh" tree)"
+  # Each image that passes on a clean tree is stamped for .githooks/pre-push.
+  TREE="$("$ROOT/scripts/gate-stamp.sh" tree)"
+  CPUS="${REMEMBER_CI_LINUX_CPUS:-4}"
   for v in "${UBUNTU[@]}"; do
     echo "== ci-linux: launching ubuntu:$v [$(date +%T)] =="
     docker run --rm \
+      --memory "${REMEMBER_CI_LINUX_MEMORY:-3g}" \
+      --cpus "$CPUS" \
       -v "$ROOT":/src:rw \
       -w /src \
       -e REMEMBER_CI_LINUX_INNER=1 \
+      -e BUILD_DIR="build-linux-ci-$v" \
+      -e CMAKE_BUILD_PARALLEL_LEVEL="$CPUS" \
       "ubuntu:$v" \
       bash /src/scripts/ci-linux.sh --inner --install
+    "$ROOT/scripts/gate-stamp.sh" mark "ci-linux-$v" "$TREE"
   done
-  "$ROOT/scripts/gate-stamp.sh" mark ci-linux "$TREE"
   echo "== ci-linux: OK on ubuntu ${UBUNTU[*]} [$(date +%T)] =="
   exit 0
 fi
@@ -182,6 +190,7 @@ export CI=true
 export BUILD_DIR
 export REMEMBER_SCAN_BUILD=1
 export REMEMBER_IWYU=1
+export REPORT_DIR="${BUILD_DIR}/lint-reports"
 ./scripts/lint-all.sh
 
 echo "== ci-linux: OK [$(date +%T)] =="
