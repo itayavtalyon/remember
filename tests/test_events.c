@@ -10,6 +10,7 @@
 #include "test.h"
 #include "test_alloc.h"
 
+#include <fcntl.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -1670,6 +1671,45 @@ TEST(the_log_is_mode_0600_and_a_log_that_cannot_be_written_is_not_an_error)
     free(lc.log);
 }
 
+/* The lowest free descriptor now: a leaked one moves it up (standard:c). */
+static int lowest_free_fd(void)
+{
+    int fd = fcntl(0, F_DUPFD_CLOEXEC, 0);
+
+    ASSERT_TRUE(fd >= 0);
+    (void)close(fd);
+    return fd;
+}
+
+TEST(a_fifo_at_hooks_log_neither_hangs_the_command_nor_takes_a_line)
+{
+    EventRules rules;
+    LogCase lc = given_brain_folder();
+    int before = 0;
+    int reader = -1;
+
+    given_rules(&rules, ACTION(ALL_TYPES, ""));
+    ASSERT_EQ_INT(mkfifo(lc.log, 0600), 0);
+    count_origin_skips(&rules.actions[0], EVENT_CREATED, 2);
+    before = lowest_free_fd();
+    /* no reader: a blocking open would wait for one forever */
+    ASSERT_EQ_INT(events_log_skipped(&rules, lc.db, "import", STORE_ORIGIN_IMPORT), 0);
+    ASSERT_EQ_INT(rules.actions[0].skipped_source[EVENT_CREATED], 2);
+    ASSERT_EQ_INT(lowest_free_fd(), before);
+    /* a reader is there, so the open works: the node is still not a log file */
+    reader = open(lc.log, O_RDONLY | O_NONBLOCK);
+    ASSERT_TRUE(reader >= 0);
+    before = lowest_free_fd();
+    ASSERT_EQ_INT(events_log_skipped(&rules, lc.db, "import", STORE_ORIGIN_IMPORT), 0);
+    ASSERT_EQ_INT(rules.actions[0].skipped_source[EVENT_CREATED], 2);
+    ASSERT_EQ_INT(lowest_free_fd(), before);
+    ASSERT_EQ_INT(read(reader, &before, 1U), 0);
+    (void)close(reader);
+    events_rules_free(&rules);
+    free(lc.db);
+    free(lc.log);
+}
+
 /* ---- the store: events found by what a write changed ---------------------------------------- */
 
 static const char k_now[] = "2026-11-18T12:00:00.000Z";
@@ -3046,6 +3086,7 @@ void register_events_tests(void)
     RUN_TEST(a_local_write_logs_no_skipped_source_line_and_keeps_its_counts);
     RUN_TEST(nothing_counted_makes_no_log_file);
     RUN_TEST(the_log_is_mode_0600_and_a_log_that_cannot_be_written_is_not_an_error);
+    RUN_TEST(a_fifo_at_hooks_log_neither_hangs_the_command_nor_takes_a_line);
     RUN_TEST(six_event_types_created);
     RUN_TEST(a_link_writes_two_updated_events_with_one_batch_and_no_vector_change);
     RUN_TEST(a_link_to_a_memory_that_is_purged_updates_the_neighbour_too);

@@ -14,6 +14,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
 #include <unistd.h>
 
 /* Last: under REMEMBER_TEST_HOOKS every malloc below goes through the shared
@@ -1125,6 +1126,7 @@ size_t events_log_skipped(EventRules *rules, const char *brain_path, const char 
                           StoreOrigin origin)
 {
     char path[PATH_MAX];
+    struct stat st;
     size_t written = 0;
     size_t i = 0;
     int fd = -1;
@@ -1133,8 +1135,14 @@ size_t events_log_skipped(EventRules *rules, const char *brain_path, const char 
         snprintf(path, sizeof(path), "%s.d/hooks.log", brain_path) >= (int)sizeof(path)) {
         return 0;
     }
-    fd = open(path, O_WRONLY | O_APPEND | O_CREAT | O_CLOEXEC | O_NOFOLLOW, LOG_MODE);
+    /* O_NONBLOCK: a FIFO at the path fails the open (no reader) or is refused below; it never
+       hangs a write that has already committed. */
+    fd = open(path, O_WRONLY | O_APPEND | O_CREAT | O_CLOEXEC | O_NOFOLLOW | O_NONBLOCK, LOG_MODE);
     if (fd < 0) {
+        return 0;
+    }
+    if (fstat(fd, &st) != 0 || !S_ISREG(st.st_mode)) {
+        (void)close(fd);
         return 0;
     }
     for (i = 0; i < rules->count; i++) {
