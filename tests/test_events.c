@@ -2915,6 +2915,29 @@ TEST(an_unreadable_user_db_refuses_a_write_with_the_sqlite_reason)
     free(db);
 }
 
+/* The temp triggers write rows of their own: a change count that includes them saw a tag
+   added on every repeated add, and bumped the version vector (sync then sees a new version). */
+TEST(an_add_that_merges_nothing_new_leaves_the_memory_as_it_was_while_events_are_on)
+{
+    char *db = given_brain_with_enabled_plugin(ACTION(ALL_TYPES, ""));
+    const char *state = "SELECT change_seq || ' ' || version_vector || ' ' || updated_at "
+                        "FROM entries WHERE key = 'k';";
+    char *first = NULL;
+    char *again = NULL;
+
+    assert_ok(RUN(db, "add", "--key", "k", "--tag", "t", "body"));
+    first = harness_sqlite_query_line(db, state);
+    assert_ok(RUN(db, "add", "--key", "k", "--tag", "t", "body"));
+    assert_ok(RUN(db, "add", "--no-hooks", "--key", "k", "--tag", "t", "body"));
+    again = harness_sqlite_query_line(db, state);
+    ASSERT_TRUE(first != NULL && again != NULL);
+    ASSERT_STREQ(again != NULL ? again : "", first != NULL ? first : "-");
+    assert_rows(db, "memory.created");
+    free(first);
+    free(again);
+    free(db);
+}
+
 TEST(processes_off_warns_plugin_unsupported_c23)
 {
     char *db = given_brain_with_enabled_plugin(ACTION(CREATED_ONLY, ""));
@@ -3178,6 +3201,7 @@ void register_events_tests(void)
     RUN_TEST(conflict_accept_makes_the_events_of_what_the_resolution_changed);
     RUN_TEST(a_command_that_fails_makes_no_row_logs_nothing_and_warns_of_nothing);
     RUN_TEST(an_unreadable_user_db_refuses_a_write_with_the_sqlite_reason);
+    RUN_TEST(an_add_that_merges_nothing_new_leaves_the_memory_as_it_was_while_events_are_on);
     RUN_TEST(processes_off_warns_plugin_unsupported_c23);
     RUN_TEST(a_write_in_a_run_gets_its_cause_from_the_environment);
     RUN_TEST(the_brain_path_in_an_event_is_absolute_and_a_home_prefix_is_a_tilde);

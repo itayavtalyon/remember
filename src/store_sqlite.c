@@ -4334,6 +4334,8 @@ typedef enum { REUSE_KEEP_BODY = 0, REUSE_REPLACE_CHANGED_BODY } ReuseBody;
 
 /* Keyed passes REUSE_REPLACE_CHANGED_BODY so a different body counts. Keyless
    identity is the hash, so it passes REUSE_KEEP_BODY and does not write the body. */
+static const char k_tag_count_sql[] = "SELECT count(*) FROM entry_tags WHERE entry_id = ?1;";
+
 static StoreStatus reuse_existing_row(sqlite3 *db, long long id, const char *body,
                                       const char *body_hash, const char *const *tags, size_t ntags,
                                       const char *actor, const char *now, const char *expires_at,
@@ -4345,7 +4347,9 @@ static StoreStatus reuse_existing_row(sqlite3 *db, long long id, const char *bod
     char vv_before[VV_OUT_MAX];
     StoreStatus st = STORE_OK;
     int vv_n = 0;
-    int changes_before = 0;
+    char idtext[ISO_TS_MIN_BUFLEN];
+    long long tags_before = 0;
+    long long tags_after = 0;
 
     memset(&current, 0, sizeof(current));
     memset(vv_before, 0, sizeof(vv_before));
@@ -4383,12 +4387,20 @@ static StoreStatus reuse_existing_row(sqlite3 *db, long long id, const char *bod
     if (st != STORE_OK) {
         return st;
     }
-    changes_before = sqlite3_total_changes(db);
+    /* A count of the memory's tags, not sqlite3_total_changes: the event triggers write rows of
+       their own (plan 31), and an ignored insert still fires them. */
+    (void)snprintf(idtext, sizeof(idtext), "%lld", id);
+    if (select_i64(db, k_tag_count_sql, idtext, &tags_before, NULL, 0U, serr) != 0) {
+        return STORE_ERR_SQLITE;
+    }
     st = union_tags(db, id, tags, ntags, serr);
     if (st != STORE_OK) {
         return st;
     }
-    change.tags_added = (sqlite3_total_changes(db) != changes_before);
+    if (select_i64(db, k_tag_count_sql, idtext, &tags_after, NULL, 0U, serr) != 0) {
+        return STORE_ERR_SQLITE;
+    }
+    change.tags_added = tags_after != tags_before;
     return stamp_existing_add(db, id, actor, now, device_id, vv_before, change, serr);
 }
 
