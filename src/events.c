@@ -322,10 +322,7 @@ int events_cause_read(EventCause *out)
     if (uuid_ok(run_id)) {
         (void)snprintf(out->run_id, sizeof(out->run_id), "%s", run_id);
     }
-    if (!chain_from_env(out, out->hook, depth)) {
-        out->nchain = 0;
-        memcpy(out->chain_json, "[]", sizeof("[]"));
-    }
+    (void)chain_from_env(out, out->hook, depth); /* not valid: chain [] stays */
     return 0;
 }
 
@@ -711,15 +708,9 @@ bool events_plan(const EventRow *row, EventDraft **out, size_t *n)
         return true;
     }
     d.body_changed = strcmp(row->before->body, row->after->body) != 0;
-    if (!same_text(row->before->key, row->after->key)) {
-        d.key_changed = true;
-    }
-    if (!same_tags(row->before, row->after)) {
-        d.tags_changed = true;
-    }
-    if (!same_text(row->before->expires_at, row->after->expires_at)) {
-        d.expires_changed = true;
-    }
+    d.key_changed = !same_text(row->before->key, row->after->key);
+    d.tags_changed = !same_tags(row->before, row->after);
+    d.expires_changed = !same_text(row->before->expires_at, row->after->expires_at);
     if ((d.body_changed || d.key_changed || d.tags_changed || d.expires_changed) &&
         !draft_push(&list, n, &cap, &d)) {
         return false;
@@ -749,11 +740,6 @@ typedef struct {
     const EventRow *row;
     const EventMemory *memory;
 } PayloadIn;
-
-static int write_string_list(FILE *f, const char *const *items, size_t n)
-{
-    return output_json_string_array(f, items, n);
-}
 
 static int write_nullable_string(FILE *f, const char *s)
 {
@@ -861,7 +847,7 @@ static int write_before(FILE *f, const PayloadIn *in, Cuts cuts)
     }
     if (d->tags_changed &&
         (write_member(f, &first, "tags") != 0 ||
-         write_string_list(f, (const char *const *)old->tags, old->ntags) != 0)) {
+         output_json_string_array(f, (const char *const *)old->tags, old->ntags) != 0)) {
         return -1;
     }
     if (d->expires_changed && (write_member(f, &first, "expires_at") != 0 ||

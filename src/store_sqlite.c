@@ -4732,16 +4732,17 @@ static int ev_before_links(Store *s, long long id, EvRow *r)
     return (step == SQLITE_DONE && !oom) ? 0 : -1;
 }
 
+static const char *edge_kind_token(StoreEdgeKind k);
+
 /* A neighbor as the diff sees the link. */
 static EventLink ev_link_of(const StoreNeighbor *n)
 {
-    static const char *const k_kinds[] = {"related", "supersedes", "cites"};
     const char *dir = "both";
 
     if (n->kind != STORE_EDGE_RELATED) {
         dir = (n->subject_id == n->from_id) ? "outgoing" : "incoming";
     }
-    return (EventLink){.kind = k_kinds[n->kind],
+    return (EventLink){.kind = edge_kind_token(n->kind),
                        .direction = dir,
                        .other_id = n->neighbor_sync_id,
                        .other_key = n->neighbor_key};
@@ -4779,25 +4780,6 @@ static int ev_after(Store *s, long long id, const char *now, EvRow *r)
     }
     r->nla = r->nneighbors;
     return 0;
-}
-
-/* The kind of a stored actor ({"kind":"human",...}); "" when it is not that shape. */
-static void ev_actor_kind(const char *actor, char *out, size_t cap)
-{
-    static const char k_lead[] = "{\"kind\":\"";
-    const char *end = NULL;
-    size_t n = 0;
-
-    out[0] = '\0';
-    if (actor == NULL || strncmp(actor, k_lead, sizeof(k_lead) - 1U) != 0) {
-        return;
-    }
-    end = strchr(actor + sizeof(k_lead) - 1U, '"');
-    n = end != NULL ? (size_t)(end - (actor + sizeof(k_lead) - 1U)) : 0U;
-    if (n < cap) {
-        memcpy(out, actor + sizeof(k_lead) - 1U, n);
-        out[n] = '\0';
-    }
 }
 
 /* The outbox row of one event that matched: its frozen payload and its recipients. */
@@ -4882,8 +4864,8 @@ static int ev_emit(Store *s, const EvRow *r, const EventDraft *d, const char *no
     if (memory == NULL) {
         memory = was; /* a purge: the memory is the last one there was */
     }
-    ev_actor_kind(memory->created_by, created_kind, sizeof(created_kind));
-    ev_actor_kind(memory->updated_by, updated_kind, sizeof(updated_kind));
+    (void)actor_json_kind(memory->created_by, created_kind, sizeof(created_kind));
+    (void)actor_json_kind(memory->updated_by, updated_kind, sizeof(updated_kind));
     memset(&facts, 0, sizeof(facts));
     facts.tags = (const char *const *)memory->tags;
     facts.ntags = memory->ntags;
@@ -4931,7 +4913,7 @@ static int ev_touched_ids(Store *s, long long **ids, size_t *n)
 
     *ids = NULL;
     *n = 0;
-    if (ev_prepare(s, "SELECT local_id FROM temp.ev_touch WHERE ?1 = ?1 ORDER BY local_id;", 0,
+    if (ev_prepare(s, "SELECT local_id FROM temp.ev_touch ORDER BY local_id;", 0,
                    &stmt) != 0) {
         return -1;
     }

@@ -739,6 +739,20 @@ static bool actor_take_kind(const char *s, char *kind, size_t kind_cap, const ch
     return actor_kind_is_stored(kind);
 }
 
+bool actor_json_kind(const char *s, char *kind, size_t cap)
+{
+    const char *end = NULL;
+
+    if (cap == 0U) {
+        return false;
+    }
+    if (!actor_take_kind(s, kind, cap, &end)) {
+        kind[0] = '\0';
+        return false;
+    }
+    return true;
+}
+
 bool actor_json_is_canonical(const char *s)
 {
     char kind[ACTOR_KIND_CAP];

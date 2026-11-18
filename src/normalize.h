@@ -135,6 +135,10 @@ bool actor_kind_is_stored(const char *kind);
 /* True when s is the compact form actor_json writes. */
 bool actor_json_is_canonical(const char *s);
 
+/* The kind of a stored actor ({"kind":"<kind>",...}) into kind (cap bytes). False, with kind "",
+   when s is not that shape or its kind is not a stored kind. */
+bool actor_json_kind(const char *s, char *kind, size_t cap);
+
 /* Copy a canonical actor, or the migration form {"kind":"<kind>"} (id omitted),
    into out as canonical JSON. */
 bool actor_json_store_to_canonical(const char *stored, char *out, size_t cap);
