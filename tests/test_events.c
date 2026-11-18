@@ -633,8 +633,6 @@ TEST(bins_tests_the_bin_the_memory_had_before_the_write)
     ASSERT_EQ_INT(match_of(trash_or_expired, f), EVENT_MATCH);
     f.bin = STORE_BIN_EXPIRED;
     ASSERT_EQ_INT(match_of(trash_or_expired, f), EVENT_MATCH);
-    ASSERT_EQ_INT(match_of(ACTION(ALL_TYPES, FILTER("\"bins\":[\"purged\"]")), f),
-                  EVENT_SKIP_FILTER);
     events_cause_free(&cause);
 }
 
@@ -1080,6 +1078,28 @@ TEST(over_the_limit_the_old_body_goes_first_and_nothing_else_when_that_is_enough
     free(after.body);
     free(before.body);
     free(stubs);
+    events_cause_free(&cause);
+}
+
+/* The old body alone is over the limit and the new one is short: the old body is still cut. */
+TEST(a_big_old_body_is_cut_when_the_new_body_is_short)
+{
+    EventCause cause = given_direct_cause();
+    Entry after = given_memory();
+    Entry before = given_memory();
+    char *text = NULL;
+
+    after.body = given_body(100U, 'a');
+    before.body = given_body(300000U, 'b');
+    text =
+        given_payload(&cause, (PayloadCase){.draft = {.type = EVENT_UPDATED, .body_changed = true},
+                                            .row = {.before = &before, .after = &after},
+                                            .memory = &after});
+    ASSERT_TRUE(strlen(text) <= (size_t)EVENT_PAYLOAD_MAX);
+    ASSERT_STR_CONTAINS(text, "\"truncated_fields\":[\"changes.before.body\"]");
+    free(text);
+    free(after.body);
+    free(before.body);
     events_cause_free(&cause);
 }
 
@@ -2056,6 +2076,28 @@ TEST(filter_miss_inserts_nothing_counts_skipped)
     ASSERT_EQ_INT(rig.rules.actions[0].skipped_filter, 2);
     assert_db(&rig, "SELECT recipients FROM outbox;",
               "[{\"entry\":\"plugin/hooker/go\",\"state\":\"pending\"}]");
+    rig_close(&rig);
+}
+
+/* created_by reads the memory's creator, updated_by its last writer: a human's memory that an
+   agent edits matches both. */
+TEST(created_by_is_the_creator_even_after_another_kind_writes)
+{
+    Rig rig = given_rig((RigSpec){
+        .actions = ACTION("[\"memory.updated\"]",
+                          FILTER("\"created_by\":[\"human\"],\"updated_by\":[\"agent\"]"))});
+    long long id = add_memory(&rig, "mine", NULL);
+    char hash[65];
+
+    (void)snprintf(hash, sizeof(hash), "%064x", 0xc0ffeeU);
+    ASSERT_EQ_STATUS(update_memory(&rig, id,
+                                   (StoreUpdate){.body = "edited",
+                                                 .body_hash = hash,
+                                                 .set_body = true,
+                                                 .bin = STORE_BIN_LIVE,
+                                                 .actor = "agent"}),
+                     STORE_OK);
+    assert_outbox_types(&rig, "memory.updated");
     rig_close(&rig);
 }
 
@@ -3155,6 +3197,7 @@ void register_events_tests(void)
     RUN_TEST(over_the_limit_with_no_old_body_the_links_go_next);
     RUN_TEST(truncation_order_256k);
     RUN_TEST(the_body_is_cut_on_a_utf8_boundary);
+    RUN_TEST(a_big_old_body_is_cut_when_the_new_body_is_short);
     RUN_TEST(a_body_of_exactly_the_cut_length_is_not_cut_even_in_a_big_payload);
     RUN_TEST(recipients_json_lists_each_entry_pending);
     RUN_TEST(the_processes_switch_defaults_on_and_follows_the_setter);
@@ -3180,6 +3223,7 @@ void register_events_tests(void)
     RUN_TEST(the_flush_finds_each_memory_s_old_tags_and_links_by_an_index);
     RUN_TEST(an_event_with_no_matching_action_is_not_even_built);
     RUN_TEST(filter_miss_inserts_nothing_counts_skipped);
+    RUN_TEST(created_by_is_the_creator_even_after_another_kind_writes);
     RUN_TEST(each_action_gets_the_row_it_matches_and_the_recipients_list_only_those);
     RUN_TEST(default_origins_skip_sync_and_import_and_count_skipped_source);
     RUN_TEST(an_action_that_lists_the_origin_gets_the_event_with_that_origin);

@@ -8,7 +8,7 @@ Decisions are `decision:…` entries tagged `subject:plugins-and-hooks`. Log 010
 
 `decision:2026-11-08-sync-record-order-hooks-delivery`, `decision:2026-11-17-plan31-grill-purged-processes-cause`.
 
-A brain has events only while at least one enabled plugin has an action. A plugin is enabled when `plugin.<name>.enabled` is true for the brain (SETTINGS.md "Plugin keys"). While any plugin is installed, a write reads that key for each one; when it cannot be read (an unreadable or corrupt `user.db`), the write is refused with the store's reason, for example `sqlite: file is not a database`, code `database`, exit 1, and nothing is saved. Whether that stays the rule is open (plan 31 review G3). A search filter (`filters` in `plugin.json`) never gets an event. A command that changes no memory (`list`, `get`, `search`, `tags`, `settings`, `device`, `brain`, `repair`, `export`) sets up nothing.
+A brain has events only while at least one enabled plugin has an action. A plugin is enabled when `plugin.<name>.enabled` is true for the brain (SETTINGS.md "Plugin keys"). While any plugin is installed, a write reads that key for each one; when it cannot be read (an unreadable or corrupt `user.db`), the write is refused with the store's reason, for example `sqlite: file is not a database`, code `database`, exit 1, and nothing is saved. Saving the write with no events would drop them silently (`decision:2026-11-18-plan31-review-grill` G3). A search filter (`filters` in `plugin.json`) never gets an event. A command that changes no memory (`list`, `get`, `search`, `tags`, `settings`, `device`, `brain`, `repair`, `export`) sets up nothing.
 
 The store does not look at the command. It finds what a write changed. Before the first change of a memory (its row, its tags or one of its links), a temp trigger keeps the memory as it was. Just before `COMMIT`, each memory the write touched is compared with how it is now, and the comparison gives its events:
 
@@ -35,15 +35,15 @@ An event no action matches writes nothing. A miss that is not the origins test a
 
 ## The filter
 
-`decision:2026-11-18-plan31-grill-filter-semantics`, `decision:2026-11-13-plugin-origins-empty`, `decision:g-11`, `decision:g2-10`.
+`decision:2026-11-18-plan31-grill-filter-semantics`, `decision:2026-11-18-plan31-review-grill`, `decision:2026-11-13-plugin-origins-empty`, `decision:g-11`, `decision:g2-10`.
 
 An action matches an event when every test passes. A test with an empty or omitted list passes.
 
 - `events`: the event type is in the list, or the list is `memory.*`.
-- `tags.any`: at least one tag of the memory matches one pattern. `tags.all`: every pattern matches some tag. A pattern is a tag, or ends in `*` and matches every tag that starts with the text before the `*`. The tags are those after the write (the last ones, for a purge). With `tags.match_before` true, the tags before the write may pass the test instead. A new memory has no tags before.
+- `tags.any`: at least one tag of the memory matches one pattern. `tags.all`: every pattern matches some tag. A pattern is a tag, or ends in `*` and matches every tag that starts with the text before the `*`. `plugin.json` is read with each pattern folded the way `add --tag` folds a tag (trimmed, ASCII lowercase), the text before a `*` too, so `Work` matches the stored `work`. Spaces just before the `*` stay, since a tag may hold a space (`proj *` does not widen to `proj*`). A pattern that no tag could fold to (empty, or holding a tab or another control) makes the manifest invalid. The tags are those after the write (the last ones, for a purge). With `tags.match_before` true, the tags before the write may pass the test instead. A new memory has no tags before.
 - `created_by`, `updated_by`: the actor kind of the memory's creator, and of its last writer, after the write.
-- `bins`: the bin the memory had before the write (`live`, `expired`, `deleted`). A new memory is tested by its own bin. `memory.purged` carries the last real bin; the bin `purged` is never written.
-- `not_caused_by`: the event is skipped when `cause.hook` or any `cause.chain[].hook` is a listed `plugin/<name>/<entry>`, or belongs to a listed bare plugin name. A direct write passes.
+- `bins`: the bin the memory had before the write (`live`, `expired`, `deleted`). A new memory is tested by its own bin. `memory.purged` carries the last real bin, so `purged` is not a bin here and makes the manifest invalid; `events: ["memory.purged"]` says "only purges".
+- `not_caused_by`: the event is skipped when `cause.hook` or any `cause.chain[].hook` is a listed `plugin/<name>/<entry>`, or belongs to a listed bare plugin name. A value of any other shape (`Wake`, `plugin/wake`) makes the manifest invalid. A direct write passes.
 - `origins`: the event's `cause.origin` is listed. An omitted list is `["local"]`. A list that is empty matches nothing.
 
 `--hooks` skips the `origins` test and no other (`decision:s-14`). An action of a plugin that is not enabled is not in the rules at all, so `--hooks` does not reach it. `--no-hooks` makes no row and counts nothing.
