@@ -700,9 +700,15 @@ typedef struct {
 static void brain_label(const char *path, char *out, size_t cap)
 {
     char absolute[REMEMBER_PATH_MAX];
-    const char *home = getenv("HOME"); // NOLINT(concurrency-mt-unsafe) single-threaded CLI
-    size_t n = home != NULL ? strlen(home) : 0U;
+    char home[REMEMBER_PATH_MAX];
+    const char *raw_home = getenv("HOME"); // NOLINT(concurrency-mt-unsafe) single-threaded CLI
+    size_t n = 0U;
 
+    /* HOME is compared in the same normal form as the path ("/Users/x/" is "/Users/x"). */
+    if (raw_home != NULL && raw_home[0] == '/' &&
+        util_absolute_path(raw_home, home, sizeof(home)) == 0) {
+        n = strlen(home);
+    }
     if (util_absolute_path(path, absolute, sizeof(absolute)) != 0) {
         (void)snprintf(absolute, sizeof(absolute), "%s", path);
     }

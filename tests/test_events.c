@@ -3028,16 +3028,19 @@ TEST(a_write_in_a_run_gets_its_cause_from_the_environment)
     free(db);
 }
 
-TEST(the_brain_path_in_an_event_is_absolute_and_a_home_prefix_is_a_tilde)
+/* The brain path an event shows when HOME is home (as typed: a trailing / included). */
+// NOLINTNEXTLINE(bugprone-easily-swappable-parameters) the HOME suffix, then nothing else
+static void assert_tilde_with_home_suffix(const char *suffix)
 {
     char *db = given_brain_with_enabled_plugin(ACTION(CREATED_ONLY, ""));
     char *dir = dir_of_path(db);
+    char *home = harness_side_path(dir, suffix);
     char *saved_home = NULL;
     const char *old = getenv("HOME"); // NOLINT(concurrency-mt-unsafe)
     char want[512];
 
     saved_home = old != NULL ? strdup(old) : NULL;
-    ASSERT_EQ_INT(setenv("HOME", dir, 1), 0); // NOLINT(concurrency-mt-unsafe)
+    ASSERT_EQ_INT(setenv("HOME", home, 1), 0); // NOLINT(concurrency-mt-unsafe)
     assert_ok(RUN(db, "add", "one"));
     if (saved_home != NULL) {
         ASSERT_EQ_INT(setenv("HOME", saved_home, 1), 0); // NOLINT(concurrency-mt-unsafe)
@@ -3045,8 +3048,19 @@ TEST(the_brain_path_in_an_event_is_absolute_and_a_home_prefix_is_a_tilde)
     (void)snprintf(want, sizeof(want), "~%s", db + strlen(dir));
     assert_query(db, "SELECT json_extract(payload, '$.brain.path') FROM outbox;", want);
     free(saved_home);
+    free(home);
     free(dir);
     free(db);
+}
+
+TEST(the_brain_path_in_an_event_is_absolute_and_a_home_prefix_is_a_tilde)
+{
+    assert_tilde_with_home_suffix("");
+}
+
+TEST(a_home_with_a_trailing_slash_still_gives_the_tilde)
+{
+    assert_tilde_with_home_suffix("/");
 }
 
 #ifdef REMEMBER_TEST_VFS
@@ -3205,6 +3219,7 @@ void register_events_tests(void)
     RUN_TEST(processes_off_warns_plugin_unsupported_c23);
     RUN_TEST(a_write_in_a_run_gets_its_cause_from_the_environment);
     RUN_TEST(the_brain_path_in_an_event_is_absolute_and_a_home_prefix_is_a_tilde);
+    RUN_TEST(a_home_with_a_trailing_slash_still_gives_the_tilde);
 #ifdef REMEMBER_TEST_VFS
     RUN_TEST(a_failed_write_commits_neither_the_memory_nor_its_outbox_row);
 #endif
