@@ -8,7 +8,7 @@ Decisions are `decision:…` entries tagged `subject:plugins-and-hooks`. Log 010
 
 `decision:2026-11-08-sync-record-order-hooks-delivery`, `decision:2026-11-17-plan31-grill-purged-processes-cause`.
 
-A brain has events only while at least one enabled plugin has an action. A plugin is enabled when `plugin.<name>.enabled` is true for the brain (SETTINGS.md "Plugin keys"). A search filter (`filters` in `plugin.json`) never gets an event. A command that changes no memory (`list`, `get`, `search`, `tags`, `settings`, `device`, `brain`, `repair`, `export`) sets up nothing.
+A brain has events only while at least one enabled plugin has an action. A plugin is enabled when `plugin.<name>.enabled` is true for the brain (SETTINGS.md "Plugin keys"). While any plugin is installed, a write reads that key for each one; when it cannot be read (an unreadable or corrupt `user.db`), the write is refused with the store's reason, for example `sqlite: file is not a database`, code `database`, exit 1, and nothing is saved. Whether that stays the rule is open (plan 31 review G3). A search filter (`filters` in `plugin.json`) never gets an event. A command that changes no memory (`list`, `get`, `search`, `tags`, `settings`, `device`, `brain`, `repair`, `export`) sets up nothing.
 
 The store does not look at the command. It finds what a write changed. Before the first change of a memory (its row, its tags or one of its links), a temp trigger keeps the memory as it was. Just before `COMMIT`, each memory the write touched is compared with how it is now, and the comparison gives its events:
 
@@ -21,7 +21,7 @@ The store does not look at the command. It finds what a write changed. Before th
 | has a changed `body`, `tags`, `key` or `expires_at` | one `memory.updated` for those fields |
 | has a live link that came or went | one `memory.updated` for each such link, with `changes.link` |
 
-`memory.deleted` and `memory.restored` carry no `memory.updated` for the other fields of the same write. A new row gets no `memory.updated` for its own links. `updated_at`, `updated_by`, `version_vector` and `change_seq` are not fields: a write that changes only them (an `add` that merges nothing new, a `link` that touches the ends) makes no event for the memory itself. A link makes one `memory.updated` per end (H-1.2), and no `memory.linked`. Purging a memory that has links also makes a `memory.updated` for each neighbour, because its link went (the cascade is a change like any other). `memory.expired` is plan 32.
+`memory.deleted` and `memory.restored` carry no `memory.updated` for the other fields of the same write. A new row gets no `memory.updated` for its own links. `updated_at`, `updated_by`, `version_vector` and `change_seq` are not fields: a write that changes only them (a `link` that touches the ends) makes no event for the memory itself. An `add` that merges nothing new changes nothing at all, also while events are on: the triggers' own rows never count as a change of the memory. A link makes one `memory.updated` per end (H-1.2), and no `memory.linked`. Purging a memory that has links also makes a `memory.updated` for each neighbour, because its link went (the cascade is a change like any other). `memory.expired` is plan 32.
 
 Every write path gets this, including ones plan 31 did not name: `add`, `update`, `delete`, `rekey`, `link`, `unlink`, `import` (JSON and `--from-db`), `conflict accept`, `purge` and the later `purge LOCATOR`. The event types follow what a conflict resolution changed (`decision:2026-11-18-plan31-grill-chain-env-conflict-accept`). `purge --expired` and `purge --deleted` write one `memory.purged` per removed row (`decision:2026-11-17-plan31-grill-purged-processes-cause`).
 
@@ -58,7 +58,7 @@ An action matches an event when every test passes. A test with an empty or omitt
 {"version":1,"at":"2026-10-25T18:00:00.000Z","event":"skipped_source","event_type":"memory.created","command":"import","origin":"import","plugin":"wake_coder","action":"run","count":12}
 ```
 
-A local command writes no such line. A log that cannot be written (no folder, or `hooks.log` is a symlink: the file is opened `O_NOFOLLOW`, mode 0600, append) is not an error for the command, and the counts stay. `hooks.log` is created only when there is a line to write.
+A local command writes no such line. A log that cannot be written (no folder, or `hooks.log` is a symlink or not a regular file: the file is opened `O_NOFOLLOW | O_NONBLOCK`, mode 0600, append, so a FIFO there never hangs the command) is not an error for the command, and the counts stay. `hooks.log` is created only when there is a line to write.
 
 ## Flags
 
