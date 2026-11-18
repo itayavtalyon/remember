@@ -4,6 +4,8 @@
 #include "plugin_manifest.h"
 #include "settings.h"
 
+#include <stddef.h>
+
 /* The settings keys of installed plugins (specs/SETTINGS.md "Plugin keys"). A plugin gets
    plugin.<name>.enabled and one plugin.<name>.<key> per manifest setting. Every key comes
    from the parsed plugin.json; no other file is read. */

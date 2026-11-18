@@ -278,6 +278,7 @@ PluginSettingsStatus plugin_settings_register(const PluginManifest *m, SettingsR
     return st;
 }
 
+/* cppcheck-suppress staticFunction ; public API (plugin_settings.h); used by tests */
 void plugin_settings_unregister(const char *name, SettingsRegistry *reg)
 {
     char prefix[PREFIX_CAP];
@@ -430,12 +431,14 @@ static bool keep_manifest(KeptManifests *keep, PluginManifest *man)
 {
     if (keep->count == keep->cap) {
         size_t cap = keep->cap + (size_t)NAMES_GROW;
+        // NOLINTNEXTLINE(bugprone-sizeof-expression) an array of manifest pointers
         PluginManifest **grown = (PluginManifest **)malloc(cap * sizeof(*grown));
 
         if (grown == NULL) {
             return false;
         }
         if (keep->count > 0U) {
+            // NOLINTNEXTLINE(bugprone-sizeof-expression) an array of manifest pointers
             memcpy((void *)grown, (const void *)keep->items, keep->count * sizeof(*grown));
         }
         free((void *)keep->items);

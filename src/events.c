@@ -65,6 +65,7 @@ static const char *const k_origin_names[] = {
     [STORE_ORIGIN_IMPORT] = "import",
 };
 
+/* cppcheck-suppress staticFunction ; public API (events.h); used by tests */
 const char *event_origin_name(StoreOrigin origin)
 {
     if ((unsigned)origin >= sizeof(k_origin_names) / sizeof(k_origin_names[0])) {
@@ -260,8 +261,10 @@ static int chain_fill(const JsonValue *array, const Hop *hop, EventCause *out, c
         hop_append(text, CHAIN_TEXT_CAP, &len, hop) != 0) {
         return -1;
     }
-    text[len++] = ']';
-    text[len] = '\0';
+    if (len + 2U > (size_t)CHAIN_TEXT_CAP) {
+        return -1;
+    }
+    (void)snprintf(text + len, (size_t)CHAIN_TEXT_CAP - len, "]");
     (void)snprintf(out->chain_hooks[i], EVENT_HOOK_CAP, "%s", hop->hook);
     out->nchain = i + 1U;
     return 0;
@@ -342,6 +345,7 @@ void events_rules_free(EventRules *rules)
     rules->cap = 0;
 }
 
+/* cppcheck-suppress staticFunction ; public API (events.h); used by tests */
 int events_rules_add(EventRules *rules, const PluginManifest *manifest)
 {
     size_t i = 0;
@@ -507,19 +511,29 @@ static bool hook_is_named(const char *pattern, const char *hook)
     return hook[HOOK_PREFIX_LEN + n] == '/';
 }
 
+/* Whether a hook of the chain is one pattern names. */
+static bool chain_names(const char *pattern, const EventCause *cause)
+{
+    size_t i = 0;
+
+    for (i = 0; i < cause->nchain; i++) {
+        if (hook_is_named(pattern, cause->chain_hooks[i])) {
+            return true;
+        }
+    }
+    return false;
+}
+
 static bool caused_by(const PluginEntry *e, const EventCause *cause)
 {
     size_t i = 0;
-    size_t j = 0;
 
     for (i = 0; i < e->n_not_caused_by; i++) {
         if (cause->hook[0] != '\0' && hook_is_named(e->not_caused_by[i], cause->hook)) {
             return true;
         }
-        for (j = 0; j < cause->nchain; j++) {
-            if (hook_is_named(e->not_caused_by[i], cause->chain_hooks[j])) {
-                return true;
-            }
+        if (chain_names(e->not_caused_by[i], cause)) {
+            return true;
         }
     }
     return false;
@@ -757,23 +771,29 @@ static int write_sep(FILE *f, bool *first)
     return rc;
 }
 
-/* tags that are in a and not in b, both sorted by byte order. */
+static bool has_tag(const Entry *e, const char *tag)
+{
+    size_t i = 0;
+
+    for (i = 0; i < e->ntags; i++) {
+        if (strcmp(e->tags[i], tag) == 0) {
+            return true;
+        }
+    }
+    return false;
+}
+
+/* tags that are in a and not in b. */
 static int write_tag_difference(FILE *f, const Entry *a, const Entry *b)
 {
     size_t i = 0;
-    size_t j = 0;
     bool first = true;
 
     if (fputc('[', f) == EOF) {
         return -1;
     }
     for (i = 0; i < a->ntags; i++) {
-        bool found = false;
-
-        for (j = 0; j < b->ntags && !found; j++) {
-            found = strcmp(a->tags[i], b->tags[j]) == 0;
-        }
-        if (found) {
+        if (has_tag(b, a->tags[i])) {
             continue;
         }
         if (write_sep(f, &first) != 0 || output_json_string(f, a->tags[i]) != 0) {
@@ -1057,17 +1077,26 @@ static bool log_append(int fd, const char *line, size_t len)
     return write(fd, line, len) == (ssize_t)len;
 }
 
+static bool has_skipped_source(const EventAction *action)
+{
+    size_t type = 0;
+
+    for (type = 0; type < (size_t)EVENT_TYPE_COUNT; type++) {
+        if (action->skipped_source[type] != 0U) {
+            return true;
+        }
+    }
+    return false;
+}
+
 /* Whether any action has an origins-only miss to report. */
 static bool any_skipped_source(const EventRules *rules)
 {
     size_t i = 0;
-    size_t type = 0;
 
     for (i = 0; i < rules->count; i++) {
-        for (type = 0; type < (size_t)EVENT_TYPE_COUNT; type++) {
-            if (rules->actions[i].skipped_source[type] != 0U) {
-                return true;
-            }
+        if (has_skipped_source(&rules->actions[i])) {
+            return true;
         }
     }
     return false;

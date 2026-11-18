@@ -96,6 +96,13 @@ typedef struct {
     size_t n;
 } Plan;
 
+static void plan_free(Plan *plan)
+{
+    free(plan->drafts);
+    plan->drafts = NULL;
+    plan->n = 0U;
+}
+
 static Plan given_plan(const EventRow *row)
 {
     Plan p = {.drafts = NULL, .n = 0U};
@@ -111,12 +118,11 @@ TEST(plan_a_new_row_is_one_created_event)
 
     ASSERT_EQ_INT(p.n, 1);
     if (p.n != 1) {
-        free(p.drafts);
         return;
     }
     ASSERT_EQ_INT(p.drafts[0].type, EVENT_CREATED);
     ASSERT_FALSE(p.drafts[0].has_link);
-    free(p.drafts);
+    plan_free(&p);
 }
 
 TEST(plan_a_new_deleted_row_is_still_created)
@@ -128,11 +134,10 @@ TEST(plan_a_new_deleted_row_is_still_created)
     p = given_plan(&(EventRow){.before = NULL, .after = &after});
     ASSERT_EQ_INT(p.n, 1);
     if (p.n != 1) {
-        free(p.drafts);
         return;
     }
     ASSERT_EQ_INT(p.drafts[0].type, EVENT_CREATED);
-    free(p.drafts);
+    plan_free(&p);
 }
 
 TEST(plan_a_removed_row_is_one_purged_event)
@@ -142,11 +147,10 @@ TEST(plan_a_removed_row_is_one_purged_event)
 
     ASSERT_EQ_INT(p.n, 1);
     if (p.n != 1) {
-        free(p.drafts);
         return;
     }
     ASSERT_EQ_INT(p.drafts[0].type, EVENT_PURGED);
-    free(p.drafts);
+    plan_free(&p);
 }
 
 TEST(plan_a_row_that_came_and_went_in_one_write_is_no_event)
@@ -167,19 +171,17 @@ TEST(plan_deleted_at_set_is_deleted_and_cleared_is_restored)
     p = given_plan(&(EventRow){.before = &live, .after = &gone});
     ASSERT_EQ_INT(p.n, 1);
     if (p.n != 1) {
-        free(p.drafts);
         return;
     }
     ASSERT_EQ_INT(p.drafts[0].type, EVENT_DELETED);
-    free(p.drafts);
+    plan_free(&p);
     p = given_plan(&(EventRow){.before = &gone, .after = &live});
     ASSERT_EQ_INT(p.n, 1);
     if (p.n != 1) {
-        free(p.drafts);
         return;
     }
     ASSERT_EQ_INT(p.drafts[0].type, EVENT_RESTORED);
-    free(p.drafts);
+    plan_free(&p);
 }
 
 TEST(plan_a_delete_that_also_changes_fields_is_only_deleted)
@@ -194,11 +196,10 @@ TEST(plan_a_delete_that_also_changes_fields_is_only_deleted)
     p = given_plan(&(EventRow){.before = &live, .after = &gone});
     ASSERT_EQ_INT(p.n, 1);
     if (p.n != 1) {
-        free(p.drafts);
         return;
     }
     ASSERT_EQ_INT(p.drafts[0].type, EVENT_DELETED);
-    free(p.drafts);
+    plan_free(&p);
 }
 
 /* One row each: only the named flag is set, so each field comparison is read alone. */
@@ -208,7 +209,6 @@ static void assert_one_field(const Entry *before, const Entry *after, EventDraft
 
     ASSERT_EQ_INT(p.n, 1);
     if (p.n != 1) {
-        free(p.drafts);
         return;
     }
     ASSERT_EQ_INT(p.drafts[0].type, EVENT_UPDATED);
@@ -217,7 +217,7 @@ static void assert_one_field(const Entry *before, const Entry *after, EventDraft
     ASSERT_EQ_INT(p.drafts[0].key_changed, want.key_changed);
     ASSERT_EQ_INT(p.drafts[0].tags_changed, want.tags_changed);
     ASSERT_EQ_INT(p.drafts[0].expires_changed, want.expires_changed);
-    free(p.drafts);
+    plan_free(&p);
 }
 
 TEST(plan_each_field_change_is_one_updated_with_only_its_flag)
@@ -296,7 +296,6 @@ TEST(plan_a_link_that_came_and_one_that_went_are_one_updated_each)
 
     ASSERT_EQ_INT(p.n, 2);
     if (p.n != 2) {
-        free(p.drafts);
         return;
     }
     ASSERT_EQ_INT(p.drafts[0].type, EVENT_UPDATED);
@@ -307,7 +306,7 @@ TEST(plan_a_link_that_came_and_one_that_went_are_one_updated_each)
     ASSERT_TRUE(p.drafts[1].has_link);
     ASSERT_STREQ(p.drafts[1].link.kind, "supersedes");
     ASSERT_STREQ(p.drafts[1].link.direction, "incoming");
-    free(p.drafts);
+    plan_free(&p);
 }
 
 TEST(plan_the_same_other_memory_under_another_kind_or_direction_is_another_link)
@@ -328,10 +327,9 @@ TEST(plan_the_same_other_memory_under_another_kind_or_direction_is_another_link)
 
     ASSERT_EQ_INT(p.n, 2);
     if (p.n != 2) {
-        free(p.drafts);
         return;
     }
-    free(p.drafts);
+    plan_free(&p);
     p = given_plan(&(EventRow){.before = &before,
                                .after = &after,
                                .links_before = was,
@@ -340,10 +338,9 @@ TEST(plan_the_same_other_memory_under_another_kind_or_direction_is_another_link)
                                .nlinks_after = 1U});
     ASSERT_EQ_INT(p.n, 2);
     if (p.n != 2) {
-        free(p.drafts);
         return;
     }
-    free(p.drafts);
+    plan_free(&p);
 }
 
 TEST(plan_fields_and_a_link_are_separate_events_fields_first)
@@ -357,14 +354,13 @@ TEST(plan_fields_and_a_link_are_separate_events_fields_first)
         .before = &before, .after = &after, .links_after = &k_link_related, .nlinks_after = 1U});
     ASSERT_EQ_INT(p.n, 2);
     if (p.n != 2) {
-        free(p.drafts);
         return;
     }
     ASSERT_FALSE(p.drafts[0].has_link);
     ASSERT_TRUE(p.drafts[0].body_changed);
     ASSERT_TRUE(p.drafts[1].has_link);
     ASSERT_FALSE(p.drafts[1].body_changed);
-    free(p.drafts);
+    plan_free(&p);
 }
 
 TEST(plan_a_link_of_a_new_or_removed_row_adds_no_event)
@@ -375,18 +371,16 @@ TEST(plan_a_link_of_a_new_or_removed_row_adds_no_event)
 
     ASSERT_EQ_INT(p.n, 1);
     if (p.n != 1) {
-        free(p.drafts);
         return;
     }
-    free(p.drafts);
+    plan_free(&p);
     p = given_plan(&(EventRow){
         .before = &row, .after = NULL, .links_before = &k_link_related, .nlinks_before = 1U});
     ASSERT_EQ_INT(p.n, 1);
     if (p.n != 1) {
-        free(p.drafts);
         return;
     }
-    free(p.drafts);
+    plan_free(&p);
 }
 
 /* ---- the filter ------------------------------------------------------------------------------ */
@@ -1581,7 +1575,6 @@ TEST(skipped_source_lines_are_one_per_action_and_type_with_the_count)
     EventRules rules;
     LogCase lc = given_brain_folder();
     char *text = NULL;
-    char *line = NULL;
 
     given_rules(&rules, ACTION(ALL_TYPES, "") ","
                                               "{\"name\":\"two\",\"events\":[\"memory.*\"],"
@@ -1593,8 +1586,6 @@ TEST(skipped_source_lines_are_one_per_action_and_type_with_the_count)
     text = read_log(lc.log);
     ASSERT_TRUE(text != NULL);
     ASSERT_STR_PREFIX(text, "{\"version\":1,\"at\":\"20");
-    line = strstr(text, "\",\"event\":\"skipped_source\"");
-    ASSERT_TRUE(line != NULL);
     ASSERT_STR_CONTAINS(text, "\",\"event\":\"skipped_source\",\"event_type\":\"memory.created\","
                               "\"command\":\"import\",\"origin\":\"import\",\"plugin\":\"hooker\","
                               "\"action\":\"go\",\"count\":12}\n{\"version\":1,\"at\":\"");
@@ -2395,10 +2386,9 @@ TEST(outbox_commits_with_memory)
     bool saw_failure = false;
     bool saw_success = false;
     size_t which = 0;
-    int at = 0;
 
     for (which = 0; which < sizeof(k_fail) / sizeof(k_fail[0]); which++) {
-        for (at = 0; at < 60; at++) {
+        for (int at = 0; at < 60; at++) {
             Rig rig = given_rig_all();
             char hash[65];
             StoreAddAction act = STORE_ADD_CREATED;
@@ -2952,10 +2942,9 @@ TEST(a_failed_write_commits_neither_the_memory_nor_its_outbox_row)
 {
     bool saw_failure = false;
     bool saw_success = false;
-    int at = 0;
 
     /* The brain's first write needs about 50 file writes: sweep the end of them, and the start. */
-    for (at = 0; at < 70; at++) {
+    for (int at = 0; at < 70; at++) {
         char *db = NULL;
         char count[16];
         CmdResult r;
@@ -2966,8 +2955,8 @@ TEST(a_failed_write_commits_neither_the_memory_nor_its_outbox_row)
         }
         db = given_brain_with_enabled_plugin(ACTION(ALL_TYPES, ""));
         (void)snprintf(count, sizeof(count), "%d", at);
-        ASSERT_EQ_INT(setenv("REMEMBER_TEST_FAIL_WRITE", count, 1),
-                      0); // NOLINT(concurrency-mt-unsafe)
+        // NOLINTNEXTLINE(concurrency-mt-unsafe)
+        ASSERT_EQ_INT(setenv("REMEMBER_TEST_FAIL_WRITE", count, 1), 0);
         r = RUN(db, "add", "body");
         ASSERT_EQ_INT(unsetenv("REMEMBER_TEST_FAIL_WRITE"), 0); // NOLINT(concurrency-mt-unsafe)
         got = harness_sqlite_query_line(db, "SELECT (SELECT count(*) FROM entries) || '/' || "

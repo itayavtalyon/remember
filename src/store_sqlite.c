@@ -4502,9 +4502,9 @@ enum {
     EVB_EXPIRES_AT,
     EVB_DELETED_AT,
     EVB_VERSION_VECTOR,
-    EVB_CHANGE_SEQ,
-    EV_OUTBOX_BINDS = 5
+    EVB_CHANGE_SEQ
 };
+enum { EV_OUTBOX_BINDS = 5 };
 
 static void ev_row_free(EvRow *r)
 {
@@ -4661,7 +4661,7 @@ static int ev_before_links(Store *s, long long id, EvRow *r)
     r->lb = (EventLink *)malloc((r->nlb + 1U) * sizeof(*r->lb));
     oom = oom || r->lb == NULL;
     for (i = 0; !oom && i < r->nlb; i++) {
-        BeforeLink *b = &r->blinks[i];
+        const BeforeLink *b = &r->blinks[i];
 
         oom = b->kind == NULL || b->dir == NULL || b->other_id == NULL;
         r->lb[i] = (EventLink){.kind = b->kind,

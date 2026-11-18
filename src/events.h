@@ -1,7 +1,6 @@
 #ifndef REMEMBER_EVENTS_H
 #define REMEMBER_EVENTS_H
 
-#include "output.h"
 #include "plugin_manifest.h"
 #include "plugin_settings.h"
 #include "store.h"
