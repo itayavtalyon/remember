@@ -2605,6 +2605,9 @@ static const char *const k_ev_arm_sql[] = {
     "CREATE TEMP TABLE IF NOT EXISTS ev_btags(local_id INTEGER NOT NULL, name TEXT NOT NULL);",
     "CREATE TEMP TABLE IF NOT EXISTS ev_blinks(local_id INTEGER NOT NULL, kind TEXT NOT NULL, "
     "dir TEXT NOT NULL, other INTEGER NOT NULL);",
+    /* events_flush reads both by memory: without these a whole-bin purge is quadratic. */
+    "CREATE INDEX IF NOT EXISTS temp.ev_btags_by_memory ON ev_btags(local_id);",
+    "CREATE INDEX IF NOT EXISTS temp.ev_blinks_by_memory ON ev_blinks(local_id);",
     "CREATE TEMP TRIGGER IF NOT EXISTS ev_e_ins AFTER INSERT ON main.entries BEGIN "
     "INSERT OR IGNORE INTO temp.ev_touch(local_id, had_before) VALUES (NEW.local_id, 0); END;",
     "CREATE TEMP TRIGGER IF NOT EXISTS ev_e_upd BEFORE UPDATE ON main.entries BEGIN " EV_TOUCH(
@@ -4568,6 +4571,49 @@ static int ev_prepare(Store *s, const char *sql, long long id, sqlite3_stmt **ou
     return 0;
 }
 
+/* The two reads events_flush makes for each touched memory. Each finds its rows by an index
+   (k_ev_arm_sql): a scan per memory makes a whole-bin purge quadratic. */
+static const char k_ev_btags_select[] =
+    "SELECT name FROM temp.ev_btags WHERE local_id = ?1 ORDER BY name COLLATE BINARY;";
+/* The other memory as it was: its first image when this write touched it (a purge has already
+   removed its row), else its row. */
+static const char k_ev_blinks_select[] =
+    "SELECT b.kind, b.dir, CASE WHEN t.had_before = 1 THEN t.id ELSE e.id END, "
+    "CASE WHEN t.had_before = 1 THEN t.key ELSE e.key END "
+    "FROM temp.ev_blinks b LEFT JOIN temp.ev_touch t ON t.local_id = b.other "
+    "LEFT JOIN main.entries e ON e.local_id = b.other "
+    "WHERE b.local_id = ?1 ORDER BY b.kind, b.dir, 3;";
+
+#ifdef REMEMBER_TEST_HOOKS
+int store_test_event_read_scans(const Store *s)
+{
+    const char *const reads[] = {k_ev_btags_select, k_ev_blinks_select};
+    int scans = 0;
+    size_t i = 0;
+
+    if (s == NULL || s->db == NULL || !s->ev_armed) {
+        return -1;
+    }
+    for (i = 0; i < sizeof(reads) / sizeof(reads[0]); i++) {
+        sqlite3_stmt *plan = NULL;
+        char *sql = sqlite3_mprintf("EXPLAIN QUERY PLAN %s", reads[i]);
+
+        if (sql == NULL || sqlite3_prepare_v2(s->db, sql, -1, &plan, NULL) != SQLITE_OK) {
+            sqlite3_free(sql);
+            return -1;
+        }
+        sqlite3_free(sql);
+        while (sqlite3_step(plan) == SQLITE_ROW) {
+            const char *detail = (const char *)sqlite3_column_text(plan, 3);
+
+            scans += (detail != NULL && strncmp(detail, "SCAN ", 5U) == 0) ? 1 : 0;
+        }
+        (void)sqlite3_finalize(plan);
+    }
+    return scans;
+}
+#endif
+
 /* The tags the memory had, in byte order. */
 static int ev_before_tags(Store *s, long long id, Entry *out)
 {
@@ -4575,10 +4621,7 @@ static int ev_before_tags(Store *s, long long id, Entry *out)
     bool oom = false;
     int step = 0;
 
-    if (ev_prepare(s,
-                   "SELECT name FROM temp.ev_btags WHERE local_id = ?1 "
-                   "ORDER BY name COLLATE BINARY;",
-                   id, &stmt) != 0) {
+    if (ev_prepare(s, k_ev_btags_select, id, &stmt) != 0) {
         return -1;
     }
     while ((step = sqlite3_step(stmt)) == SQLITE_ROW && !oom) {
@@ -4649,16 +4692,7 @@ static int ev_before_links(Store *s, long long id, EvRow *r)
     int step = 0;
     size_t i = 0;
 
-    /* The other memory as it was: its first image when this write touched it (a purge has
-       already removed its row), else its row. */
-    if (ev_prepare(s,
-                   "SELECT b.kind, b.dir, "
-                   "CASE WHEN t.had_before = 1 THEN t.id ELSE e.id END, "
-                   "CASE WHEN t.had_before = 1 THEN t.key ELSE e.key END "
-                   "FROM temp.ev_blinks b LEFT JOIN temp.ev_touch t ON t.local_id = b.other "
-                   "LEFT JOIN main.entries e ON e.local_id = b.other "
-                   "WHERE b.local_id = ?1 ORDER BY b.kind, b.dir, 3;",
-                   id, &stmt) != 0) {
+    if (ev_prepare(s, k_ev_blinks_select, id, &stmt) != 0) {
         return -1;
     }
     while ((step = sqlite3_step(stmt)) == SQLITE_ROW && !oom) {

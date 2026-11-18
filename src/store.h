@@ -1008,6 +1008,9 @@ void store_test_copy_message(StoreError *out, const char *msg);
 void store_test_capture_null(StoreError *out);
 /* SQLITE_DBCONFIG_DEFENSIVE on s's connection: 1 on, 0 off, -1 for NULL. */
 int store_test_defensive(const Store *s);
+/* How many full table scans the per-memory reads of the event flush plan (EXPLAIN QUERY PLAN):
+   0 when both find their rows by an index. -1 when s has no event tables or the plan fails. */
+int store_test_event_read_scans(const Store *s);
 #endif
 
 #endif /* REMEMBER_STORE_H */

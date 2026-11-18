@@ -1985,6 +1985,16 @@ TEST(a_link_to_a_memory_that_is_purged_updates_the_neighbour_too)
     rig_close(&rig);
 }
 
+/* A whole-bin purge flushes thousands of memories; a scan for each one is quadratic (20000
+   tagged memories took 30 s). */
+TEST(the_flush_finds_each_memory_s_old_tags_and_links_by_an_index)
+{
+    Rig rig = given_rig_all();
+
+    ASSERT_EQ_INT(store_test_event_read_scans(rig.store), 0);
+    rig_close(&rig);
+}
+
 TEST(no_enabled_action_no_row)
 {
     Rig none = given_rig((RigSpec){.actions = NULL});
@@ -3130,6 +3140,7 @@ void register_events_tests(void)
     RUN_TEST(a_link_writes_two_updated_events_with_one_batch_and_no_vector_change);
     RUN_TEST(a_link_to_a_memory_that_is_purged_updates_the_neighbour_too);
     RUN_TEST(no_enabled_action_no_row);
+    RUN_TEST(the_flush_finds_each_memory_s_old_tags_and_links_by_an_index);
     RUN_TEST(an_event_with_no_matching_action_is_not_even_built);
     RUN_TEST(filter_miss_inserts_nothing_counts_skipped);
     RUN_TEST(each_action_gets_the_row_it_matches_and_the_recipients_list_only_those);
