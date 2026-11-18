@@ -25,6 +25,7 @@ if ! jq -r --rawfile allow "$ROOT/scripts/codeql-allow.tsv" -f "$ROOT/scripts/co
   echo "codeql-local: FAIL (scripts/codeql-allow.jq or .tsv no longer gives tests/codeql-allow/expected.tsv)" >&2
   exit 1
 fi
+TREE="$(cd "$ROOT" && scripts/gate-stamp.sh tree)" # stamped on success for .githooks/pre-push
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/remember-codeql.XXXXXX")"
 trap 'rm -rf "$WORK"' EXIT
 RAM="${CODEQL_RAM:-4096}"
@@ -53,4 +54,5 @@ if [[ "$blocked" != 0 ]]; then
   echo "codeql-local: FAIL ($blocked alert(s); fix them, or allow a reviewed one in scripts/codeql-allow.tsv)" >&2
   exit 1
 fi
+(cd "$ROOT" && scripts/gate-stamp.sh mark codeql "$TREE")
 echo "codeql-local: OK ($allowed allowed by scripts/codeql-allow.tsv)"

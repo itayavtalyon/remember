@@ -72,7 +72,7 @@ Also ensure **Settings → Code security → Code scanning** is not disabled for
 | File / target | Role |
 |---------------|------|
 | **`tests/gate-suites`** | Single source of truth: `--only` suites for the implemented green surface |
-| **`ctest` `step_gate`** | Runs that list (alias `step05_gate` kept for docs) |
+| **`ctest` `step_gate`** | Runs that list once (with `store_asan_gate` for the store unit) |
 | **`scripts/ci-linux.sh`** | Linux CI one-liner (Docker) — same install/build/ctest/lint as GHA, in `ubuntu:24.04` then `ubuntu:26.04` |
 | **`.github/workflows/ci.yml`** | Calls `ci-linux.sh --inner --install` on `ubuntu-24.04` and on `ubuntu-26.04` (no stale hard-coded suite list) |
 

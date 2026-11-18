@@ -228,12 +228,6 @@ jobs:
       - name: CTest (step_gate + store_asan_gate)
         run: ctest --test-dir build --output-on-failure
 
-      - name: Black-box gate (tests/gate-suites)
-        run: |
-          GATE=$(./scripts/read-gate-suites.sh)
-          ./build/remember_tests ./build/remember --only "$GATE"
-          ./build/remember_store_tests
-
       - name: Lint
         env:
           CI: "true"

@@ -486,14 +486,6 @@ add_test(NAME step_gate
 set_tests_properties(step_gate PROPERTIES
     WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
 )
-# Back-compat alias for docs/scripts that still say step05_gate.
-add_test(NAME step05_gate
-    COMMAND remember_tests $<TARGET_FILE:remember>
-        --only "${REMEMBER_GATE_SUITES}"
-)
-set_tests_properties(step05_gate PROPERTIES
-    WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
-)
 add_test(NAME store_asan_gate
     COMMAND remember_store_tests
 )
@@ -503,6 +495,10 @@ add_test(NAME install_skill
 add_test(NAME spec_drift
     COMMAND bash "${CMAKE_SOURCE_DIR}/tests/test_spec_drift.sh"
 )
+add_test(NAME gate_stamp
+    COMMAND bash "${CMAKE_SOURCE_DIR}/tests/test_gate_stamp.sh"
+)
+set_tests_properties(gate_stamp PROPERTIES SKIP_RETURN_CODE 77)
 add_test(NAME release_text
     COMMAND bash "${CMAKE_SOURCE_DIR}/tests/test_release.sh" $<TARGET_FILE:remember>
 )

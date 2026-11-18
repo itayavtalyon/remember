@@ -45,8 +45,11 @@ if [[ "$INNER" -eq 0 ]]; then
     echo "error: docker not found; install Docker or run: $0 --inner --install" >&2
     exit 1
   fi
+  # A run on both images of a clean tree is stamped for .githooks/pre-push.
+  TREE=""
+  [[ "${#UBUNTU[@]}" -eq 2 ]] && TREE="$("$ROOT/scripts/gate-stamp.sh" tree)"
   for v in "${UBUNTU[@]}"; do
-    echo "== ci-linux: launching ubuntu:$v =="
+    echo "== ci-linux: launching ubuntu:$v [$(date +%T)] =="
     docker run --rm \
       -v "$ROOT":/src:rw \
       -w /src \
@@ -54,7 +57,8 @@ if [[ "$INNER" -eq 0 ]]; then
       "ubuntu:$v" \
       bash /src/scripts/ci-linux.sh --inner --install
   done
-  echo "== ci-linux: OK on ubuntu ${UBUNTU[*]} =="
+  "$ROOT/scripts/gate-stamp.sh" mark ci-linux "$TREE"
+  echo "== ci-linux: OK on ubuntu ${UBUNTU[*]} [$(date +%T)] =="
   exit 0
 fi
 
@@ -65,7 +69,7 @@ export UBSAN_OPTIONS="${UBSAN_OPTIONS:-halt_on_error=1:print_stacktrace=1}"
 export ASAN_OPTIONS="${ASAN_OPTIONS:-detect_leaks=1:halt_on_error=1:abort_on_error=1:allocator_may_return_null=1}"
 
 if [[ "$DO_INSTALL" -eq 1 ]]; then
-  echo "== install toolchain =="
+  echo "== install toolchain [$(date +%T)] =="
   # Root in Docker method A; passwordless sudo on GHA runners.
   if [[ "$(id -u)" -eq 0 ]]; then
     apt-get update
@@ -103,7 +107,7 @@ CMAKE_GEN=(-G "Unix Makefiles")
 if command -v ninja >/dev/null 2>&1; then
   CMAKE_GEN=(-G Ninja)
 fi
-echo "== configure (${BUILD_DIR}) =="
+echo "== configure (${BUILD_DIR}) [$(date +%T)] =="
 # Fresh configure each run inside Docker so generator/paths stay consistent.
 if [[ -f /.dockerenv || "${REMEMBER_CI_LINUX_INNER:-}" == "1" ]]; then
   rm -rf "${BUILD_DIR:?}"
@@ -115,7 +119,7 @@ cmake -S . -B "$BUILD_DIR" "${CMAKE_GEN[@]}" \
   -DREMEMBER_ENABLE_LSAN=ON \
   -DREMEMBER_TEST_VFS=ON
 
-echo "== build =="
+echo "== build [$(date +%T)] =="
 cmake --build "$BUILD_DIR"
 
 # chmod acceptance cases skip when euid is 0. Docker method A is root; drop to
@@ -167,20 +171,17 @@ ci_run() {
     "$@"
 }
 
-echo "== ctest (step_gate + store_asan_gate) =="
+# ctest runs the black-box gate (step_gate, the tests/gate-suites list) and the
+# store unit under ASan/LSan (store_asan_gate) once each, with this script's
+# ASAN_OPTIONS/UBSAN_OPTIONS. Do not run either binary again by hand here.
+echo "== ctest (step_gate + store_asan_gate) [$(date +%T)] =="
 ci_run ctest --test-dir "$BUILD_DIR" --output-on-failure
 
-echo "== black-box gate (same suites as step_gate) =="
-ci_run "./${BUILD_DIR}/remember_tests" "./${BUILD_DIR}/remember" --only "$GATE_SUITES"
-
-echo "== store unit under ASan/LSan =="
-ci_run "./${BUILD_DIR}/remember_store_tests"
-
-echo "== lint (format, tidy, cppcheck, IWYU, scan-build) =="
+echo "== lint (format, tidy, cppcheck, IWYU, scan-build) [$(date +%T)] =="
 export CI=true
 export BUILD_DIR
 export REMEMBER_SCAN_BUILD=1
 export REMEMBER_IWYU=1
 ./scripts/lint-all.sh
 
-echo "== ci-linux: OK =="
+echo "== ci-linux: OK [$(date +%T)] =="
