@@ -138,6 +138,14 @@ TEST(plan_a_removed_row_is_one_purged_event)
     free(p.drafts);
 }
 
+TEST(plan_a_row_that_came_and_went_in_one_write_is_no_event)
+{
+    Plan p = given_plan(&(EventRow){.before = NULL, .after = NULL});
+
+    ASSERT_EQ_INT(p.n, 0);
+    ASSERT_TRUE(p.drafts == NULL);
+}
+
 TEST(plan_deleted_at_set_is_deleted_and_cleared_is_restored)
 {
     Entry live = given_memory();
@@ -2211,6 +2219,22 @@ TEST(the_row_and_its_payload_have_the_shape_plan_35_reads)
     rig_close(&rig);
 }
 
+TEST(no_body_or_tag_text_is_in_a_column_a_dispatcher_puts_in_argv_or_env)
+{
+    Rig rig = given_rig_all();
+
+    add_tagged(&rig, "secret-body-text", "secret-tag-text");
+    assert_db(&rig,
+              "SELECT instr(event_id || type || recipients || created_at, 'secret')"
+              " FROM outbox;",
+              "0");
+    assert_db(&rig,
+              "SELECT instr(payload, 'secret-body-text') > 0 AND "
+              "instr(payload, 'secret-tag-text') > 0 FROM outbox;",
+              "1");
+    rig_close(&rig);
+}
+
 TEST(one_command_shares_one_batch_id_and_a_new_command_has_its_own)
 {
     Rig rig = given_rig_all();
@@ -2745,6 +2769,22 @@ TEST(conflict_accept_makes_the_events_of_what_the_resolution_changed)
     free(keep_incoming);
 }
 
+TEST(a_command_that_fails_makes_no_row_logs_nothing_and_warns_of_nothing)
+{
+    char *db = given_brain_with_enabled_plugin(ACTION(ALL_TYPES, ""));
+    CmdResult r;
+
+    assert_ok(RUN(db, "add", "one"));
+    r = RUN(db, "add", "");
+    ASSERT_EQ_INT(r.exit_code, 1);
+    cmd_result_free(&r);
+    r = RUN(db, "delete", "99");
+    ASSERT_EQ_INT(r.exit_code, 2);
+    cmd_result_free(&r);
+    assert_rows(db, "memory.created");
+    free(db);
+}
+
 TEST(processes_off_warns_plugin_unsupported_c23)
 {
     char *db = given_brain_with_enabled_plugin(ACTION(CREATED_ONLY, ""));
@@ -2910,6 +2950,7 @@ void register_events_tests(void)
     RUN_TEST(plan_a_new_row_is_one_created_event);
     RUN_TEST(plan_a_new_deleted_row_is_still_created);
     RUN_TEST(plan_a_removed_row_is_one_purged_event);
+    RUN_TEST(plan_a_row_that_came_and_went_in_one_write_is_no_event);
     RUN_TEST(plan_deleted_at_set_is_deleted_and_cleared_is_restored);
     RUN_TEST(plan_a_delete_that_also_changes_fields_is_only_deleted);
     RUN_TEST(plan_each_field_change_is_one_updated_with_only_its_flag);
@@ -2983,6 +3024,7 @@ void register_events_tests(void)
     RUN_TEST(a_failed_write_leaves_no_trace_in_the_next_one);
     RUN_TEST(a_whole_bin_purge_writes_one_purged_event_per_row_with_its_last_state);
     RUN_TEST(the_row_and_its_payload_have_the_shape_plan_35_reads);
+    RUN_TEST(no_body_or_tag_text_is_in_a_column_a_dispatcher_puts_in_argv_or_env);
     RUN_TEST(one_command_shares_one_batch_id_and_a_new_command_has_its_own);
     RUN_TEST(a_write_inside_a_run_carries_the_hook_cause_and_not_caused_by_skips_it);
     RUN_TEST(bins_and_match_before_read_the_state_before_the_write);
@@ -3003,6 +3045,7 @@ void register_events_tests(void)
     RUN_TEST(import_with_hooks_runs_the_default_origins_action_for_that_one_import);
     RUN_TEST(import_from_a_database_makes_events_too);
     RUN_TEST(conflict_accept_makes_the_events_of_what_the_resolution_changed);
+    RUN_TEST(a_command_that_fails_makes_no_row_logs_nothing_and_warns_of_nothing);
     RUN_TEST(processes_off_warns_plugin_unsupported_c23);
     RUN_TEST(a_write_in_a_run_gets_its_cause_from_the_environment);
     RUN_TEST(the_brain_path_in_an_event_is_absolute_and_a_home_prefix_is_a_tilde);

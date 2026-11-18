@@ -754,11 +754,12 @@ static int arm_events(Store *s, const CliArgs *args, const PluginManifestList *m
     return 0;
 }
 
-/* After the command: the warning for a write that needed a program this build cannot start,
-   and the skipped_source lines for a sync or import. */
-static void finish_events(const Store *s, CommandEvents *cev)
+/* After a command that succeeded: the warning for a write that needed a program this build cannot
+   start, and the skipped_source lines for a sync or import. A command that failed may have rolled
+   its write back, and then neither is true. */
+static void finish_events(const Store *s, CommandEvents *cev, int rc)
 {
-    if (!cev->armed) {
+    if (!cev->armed || rc != 0) {
         return;
     }
     if (store_events_unsupported(s) > 0U) {
@@ -790,7 +791,7 @@ static int run_with_store(const CliArgs *args, CmdFn fn)
     }
     if (rc == 0) {
         rc = fn(s, args->globals.json, args->rest_argc, args->rest_argv);
-        finish_events(s, &cev);
+        finish_events(s, &cev, rc);
     }
     store_close(s);
     events_rules_free(&cev.rules);

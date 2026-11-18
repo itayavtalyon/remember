@@ -2574,10 +2574,6 @@ static int check_reader_version(Store *s, char *err, size_t errlen)
     return 0;
 }
 
-/* Every brain write starts here: refuse on a newer brain (007 ST-10.2), clear
-   the last error, take the write lock, and start a fresh change_seq base.
-   Repair, which checks the base tables before it locks, reads schema_too_new
-   itself. */
 /* ---- memory events: the temp tables and triggers (plan 31) ------------------------------
  * A write that changes memories may need an event for each. The first time a write touches a
  * memory (its row, its tags or a link of it), a temp trigger keeps the memory as it was: its row
@@ -2634,6 +2630,10 @@ static const char k_ev_reset_sql[] =
    transaction. 0, or -1 with s->last set when SQLite failed. */
 static int commit_write(Store *s);
 
+/* Every brain write starts here: refuse on a newer brain (007 ST-10.2), clear
+   the last error, take the write lock, and start a fresh change_seq base.
+   Repair, which checks the base tables before it locks, reads schema_too_new
+   itself. */
 static StoreStatus begin_write(Store *s)
 {
     char err_unused[1];

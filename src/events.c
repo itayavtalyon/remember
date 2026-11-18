@@ -682,6 +682,9 @@ bool events_plan(const EventRow *row, EventDraft **out, size_t *n)
     memset(&d, 0, sizeof(d));
     *out = NULL;
     *n = 0;
+    if (row->before == NULL && row->after == NULL) {
+        return true; /* a row that came and went in one write: nobody saw it */
+    }
     d.type = type;
     if (type != EVENT_UPDATED) {
         if (!draft_push(&list, n, &cap, &d)) {
