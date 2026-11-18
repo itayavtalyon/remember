@@ -2866,6 +2866,45 @@ TEST(a_command_that_fails_makes_no_row_logs_nothing_and_warns_of_nothing)
     free(db);
 }
 
+/* user.db exists and is not a database. Restored by given_user_db_back. */
+static char *given_unreadable_user_db(void)
+{
+    const char *xdg = getenv("XDG_DATA_HOME"); // NOLINT(concurrency-mt-unsafe)
+    char *path = harness_side_path(xdg != NULL ? xdg : "", "/remember/user.db");
+    char *aside = harness_side_path(path, ".aside");
+
+    ASSERT_TRUE(xdg != NULL);
+    (void)rename(path, aside);
+    harness_write_file(path, "this file is not a sqlite database, and it is long enough that "
+                             "sqlite reads a whole header from it and refuses the header.");
+    free(aside);
+    return path;
+}
+
+static void given_user_db_back(char *path)
+{
+    char *aside = harness_side_path(path, ".aside");
+
+    ASSERT_EQ_INT(unlink(path), 0);
+    (void)rename(aside, path);
+    free(aside);
+    free(path);
+}
+
+TEST(an_unreadable_user_db_refuses_a_write_with_the_sqlite_reason)
+{
+    char *db = given_brain_with_enabled_plugin(ACTION(ALL_TYPES, ""));
+    char *user = given_unreadable_user_db();
+    CmdResult r = RUN(db, "add", "kept out");
+
+    ASSERT_EQ_INT(r.exit_code, 1);
+    ASSERT_STREQ(r.err, "remember: sqlite: file is not a database\n");
+    cmd_result_free(&r);
+    assert_query(db, "SELECT count(*) FROM entries;", "0");
+    given_user_db_back(user);
+    free(db);
+}
+
 TEST(processes_off_warns_plugin_unsupported_c23)
 {
     char *db = given_brain_with_enabled_plugin(ACTION(CREATED_ONLY, ""));
@@ -3127,6 +3166,7 @@ void register_events_tests(void)
     RUN_TEST(import_from_a_database_makes_events_too);
     RUN_TEST(conflict_accept_makes_the_events_of_what_the_resolution_changed);
     RUN_TEST(a_command_that_fails_makes_no_row_logs_nothing_and_warns_of_nothing);
+    RUN_TEST(an_unreadable_user_db_refuses_a_write_with_the_sqlite_reason);
     RUN_TEST(processes_off_warns_plugin_unsupported_c23);
     RUN_TEST(a_write_in_a_run_gets_its_cause_from_the_environment);
     RUN_TEST(the_brain_path_in_an_event_is_absolute_and_a_home_prefix_is_a_tilde);

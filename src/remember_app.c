@@ -731,8 +731,11 @@ static int arm_events(Store *s, const CliArgs *args, const PluginManifestList *m
     if (util_resolve_user_db_path(userdb, sizeof(userdb), err, sizeof(err)) == 0) {
         user_db = userdb;
     }
-    if (events_rules_load(s, user_db, mans, &cev->rules) != 0 ||
-        events_cause_read(&cev->cause) != 0) {
+    if (events_rules_load(s, user_db, mans, &cev->rules, err, sizeof(err)) != 0) {
+        err_msg(code_for_store_text(err), err);
+        return REMEMBER_ERR;
+    }
+    if (events_cause_read(&cev->cause) != 0) {
         err_msg(DIAG_OUT_OF_MEMORY, "out of memory");
         return REMEMBER_ERR;
     }

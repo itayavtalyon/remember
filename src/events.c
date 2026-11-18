@@ -36,8 +36,7 @@ enum {
     LOG_MODE = 0600,
     SEGMENT_MAX = 40,
     DECIMAL = 10,
-    TS_CAP = 32,
-    SETTING_ERR_TEXT = 256
+    TS_CAP = 32
 };
 
 /* ---- names ------------------------------------------------------------------------------ */
@@ -379,21 +378,25 @@ int events_rules_add(EventRules *rules, const PluginManifest *manifest)
     return 0;
 }
 
+// NOLINTNEXTLINE(bugprone-easily-swappable-parameters) the user layer, then the error text
 int events_rules_load(Store *store, const char *user_db, const PluginManifestList *mans,
-                      EventRules *out)
+                      EventRules *out, char *err, size_t errlen)
 {
     size_t i = 0;
 
     for (i = 0; i < mans->count; i++) {
         char key[SETTING_KEY_MAX + 1];
-        char err[SETTING_ERR_TEXT];
         SettingRead got;
 
         (void)snprintf(key, sizeof(key), "plugin.%s.enabled", mans->items[i]->name);
-        if (store_setting_read(store, user_db, key, NULL, &got, err, sizeof(err)) != SETTING_OK) {
+        if (store_setting_read(store, user_db, key, NULL, &got, err, errlen) != SETTING_OK) {
+            if (err[0] == '\0') {
+                (void)snprintf(err, errlen, "internal error");
+            }
             return -1;
         }
         if (strcmp(got.value, "true") == 0 && events_rules_add(out, mans->items[i]) != 0) {
+            (void)snprintf(err, errlen, "out of memory");
             return -1;
         }
     }

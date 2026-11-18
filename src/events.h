@@ -98,9 +98,10 @@ int events_rules_add(EventRules *rules, const PluginManifest *manifest);
 
 /* The rules of the enabled plugins among mans: the actions of each one whose
    plugin.<name>.enabled is true for this brain (the settings of store, with user_db as the user
-   layer, or NULL for none). 0, or -1 when memory runs out or a setting cannot be read. */
+   layer, or NULL for none). 0, or -1 when memory runs out or a setting cannot be read, with the
+   reason in err ("out of memory", or the store's own text, such as an unreadable user.db). */
 int events_rules_load(Store *store, const char *user_db, const PluginManifestList *mans,
-                      EventRules *out);
+                      EventRules *out, char *err, size_t errlen);
 
 /* What the filter says about one event of one memory. */
 typedef enum { EVENT_MATCH = 0, EVENT_SKIP_FILTER, EVENT_SKIP_ORIGIN } EventMatch;
