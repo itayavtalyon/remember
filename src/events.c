@@ -1,5 +1,6 @@
 #include "events.h"
 
+#include "fileio.h" // IWYU pragma: keep (O_NOFOLLOW on Darwin)
 #include "jsonread.h"
 #include "output.h"
 #include "plugin_manifest.h"

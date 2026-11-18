@@ -4490,6 +4490,23 @@ typedef struct {
     char pad_[6]; /* explicit tail padding (kept -Wpadded-clean) */
 } EvRow;
 
+/* The memory before the write (NULL when new), and after it (the last one, when it is gone). */
+static const Entry *ev_before_of(const EvRow *r)
+{
+    if (r->has_before) {
+        return &r->before;
+    }
+    return NULL;
+}
+
+static const Entry *ev_after_of(const EvRow *r)
+{
+    if (r->has_after) {
+        return &r->after;
+    }
+    return NULL;
+}
+
 /* The columns of the ev_touch row ev_before_entry reads. */
 enum {
     EVB_ID = 0,
@@ -4535,7 +4552,9 @@ static char *ev_col(sqlite3_stmt *stmt, int col, bool *oom)
         return NULL;
     }
     copy = dup_str(text);
-    *oom = *oom || copy == NULL;
+    if (copy == NULL) {
+        *oom = true;
+    }
     return copy;
 }
 
@@ -4571,7 +4590,9 @@ static int ev_before_tags(Store *s, long long id, Entry *out)
         }
         out->tags = grown;
         out->tags[out->ntags] = ev_col(stmt, 0, &oom);
-        out->ntags += oom ? 0U : 1U;
+        if (!oom) {
+            out->ntags++;
+        }
     }
     if (step != SQLITE_DONE && !oom) {
         capture_sqlite_error(s->db, &s->last);
@@ -4614,9 +4635,10 @@ static int ev_before_entry(Store *s, long long id, EvRow *r)
     }
     (void)sqlite3_finalize(stmt);
     /* A row the triggers copied from entries has every column but key and expires_at. */
-    oom = oom || e->sync_id == NULL || e->body == NULL || e->created_by == NULL ||
-          e->updated_by == NULL || e->created_at == NULL || e->updated_at == NULL ||
-          e->version_vector == NULL;
+    if (e->sync_id == NULL || e->body == NULL || e->created_by == NULL || e->updated_by == NULL ||
+        e->created_at == NULL || e->updated_at == NULL || e->version_vector == NULL) {
+        oom = true;
+    }
     return (step == SQLITE_ROW && !oom && ev_before_tags(s, id, e) == 0) ? 0 : -1;
 }
 
@@ -4659,11 +4681,15 @@ static int ev_before_links(Store *s, long long id, EvRow *r)
     }
     (void)sqlite3_finalize(stmt);
     r->lb = (EventLink *)malloc((r->nlb + 1U) * sizeof(*r->lb));
-    oom = oom || r->lb == NULL;
+    if (r->lb == NULL) {
+        oom = true;
+    }
     for (i = 0; !oom && i < r->nlb; i++) {
         const BeforeLink *b = &r->blinks[i];
 
-        oom = b->kind == NULL || b->dir == NULL || b->other_id == NULL;
+        if (b->kind == NULL || b->dir == NULL || b->other_id == NULL) {
+            oom = true;
+        }
         r->lb[i] = (EventLink){.kind = b->kind,
                                .direction = b->dir,
                                .other_id = b->other_id,
@@ -4773,8 +4799,8 @@ static int ev_insert_row(Store *s, EvInsert in, const char *const *matched, size
                          .cause = s->ev.cause,
                          .origin = s->ev.origin};
     payload = events_payload(&stamp, in.draft,
-                             &(EventRow){.before = in.row->has_before ? &in.row->before : NULL,
-                                         .after = in.row->has_after ? &in.row->after : NULL,
+                             &(EventRow){.before = ev_before_of(in.row),
+                                         .after = ev_after_of(in.row),
                                          .links_before = in.row->lb,
                                          .links_after = in.row->la,
                                          .nlinks_before = in.row->nlb,
@@ -4806,7 +4832,8 @@ static int ev_emit(Store *s, const EvRow *r, const EventDraft *d, const char *no
 {
     enum { KIND_CAP = 24 };
     EventRules *rules = s->ev.rules;
-    const Entry *memory = r->has_after ? &r->after : &r->before;
+    const Entry *memory = ev_after_of(r);
+    const Entry *was = ev_before_of(r);
     char created_kind[KIND_CAP];
     char updated_kind[KIND_CAP];
     EventFacts facts;
@@ -4817,6 +4844,9 @@ static int ev_emit(Store *s, const EvRow *r, const EventDraft *d, const char *no
 
     if (matched == NULL) {
         return -1;
+    }
+    if (memory == NULL) {
+        memory = was; /* a purge: the memory is the last one there was */
     }
     ev_actor_kind(memory->created_by, created_kind, sizeof(created_kind));
     ev_actor_kind(memory->updated_by, updated_kind, sizeof(updated_kind));
@@ -4831,8 +4861,10 @@ static int ev_emit(Store *s, const EvRow *r, const EventDraft *d, const char *no
     facts.cause = s->ev.cause;
     facts.type = d->type;
     facts.origin = s->ev.origin;
-    facts.bin = r->has_before ? store_bin_of(r->before.deleted_at, r->before.expires_at, now)
-                              : store_bin_of(memory->deleted_at, memory->expires_at, now);
+    if (was == NULL) {
+        was = memory;
+    }
+    facts.bin = store_bin_of(was->deleted_at, was->expires_at, now);
     facts.hooks = s->ev.hooks;
     for (i = 0; i < rules->count; i++) {
         EventMatch m = events_match(&rules->actions[i], &facts);
@@ -4912,15 +4944,17 @@ static int ev_flush_one(Store *s, long long id, const char *now)
         0) {
         return -1;
     }
-    had = sqlite3_step(probe) == SQLITE_ROW && sqlite3_column_int(probe, 0) != 0;
+    if (sqlite3_step(probe) == SQLITE_ROW && sqlite3_column_int(probe, 0) != 0) {
+        had = true;
+    }
     (void)sqlite3_finalize(probe);
     row.has_before = had;
     if ((had && (ev_before_entry(s, id, &row) != 0 || ev_before_links(s, id, &row) != 0)) ||
         ev_after(s, id, now, &row) != 0) {
         goto done;
     }
-    if (!events_plan(&(EventRow){.before = row.has_before ? &row.before : NULL,
-                                 .after = row.has_after ? &row.after : NULL,
+    if (!events_plan(&(EventRow){.before = ev_before_of(&row),
+                                 .after = ev_after_of(&row),
                                  .links_before = row.lb,
                                  .links_after = row.la,
                                  .nlinks_before = row.nlb,
