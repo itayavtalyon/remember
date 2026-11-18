@@ -3,6 +3,7 @@
 #include "diag.h"
 
 #include "appio.h"
+#include "brain_note.h"
 #include "exit_codes.h"
 #include "import_read.h"
 #include "output.h"
@@ -146,11 +147,31 @@ static int import_finish(const Store *s, bool json, StoreStatus st, StoreImportR
     return import_reply(json, result);
 }
 
+/* An empty brain takes the file's brain_id, unless a listed brain still has it (plan 23):
+   then the file came from that brain, and taking its id would make this one a copy. 0, or -1
+   with the error written. */
+static int import_drop_taken_brain_id(const Store *s, ImportDoc *doc)
+{
+    int taken = 0;
+
+    if (doc->brain_id == NULL) {
+        return 0;
+    }
+    taken = brain_note_id_is_taken(s, doc->brain_id);
+    if (taken > 0) {
+        free(doc->brain_id);
+        doc->brain_id = NULL;
+    }
+    return taken < 0 ? -1 : 0;
+}
+
 static int import_from_json(Store *s, bool json, const ImportArgs *a, const char *now)
 {
     const char *path = a->from_json;
     ImportDoc doc;
     StoreImportResult result;
+    char before[STORE_DEVICE_ID_LEN + 1] = {0};
+    char after[STORE_DEVICE_ID_LEN + 1] = {0};
     int sys_errno = 0;
     StoreStatus st = STORE_OK;
 
@@ -193,8 +214,23 @@ static int import_from_json(Store *s, bool json, const ImportArgs *a, const char
         }
         store_setting_import_free(&rep);
     }
+    if (import_drop_taken_brain_id(s, &doc) != 0) {
+        import_doc_free(&doc);
+        return REMEMBER_ERR;
+    }
+    /* A failed read leaves "", which can only cost one more record below. */
+    (void)store_brain_id(s, before, sizeof(before));
     st = store_import_doc(s, &doc, now, import_origin(a, path), &result);
     import_doc_free(&doc);
+    if (st == STORE_OK) {
+        (void)store_brain_id(s, after, sizeof(after));
+    }
+    /* An empty brain took the file's id: record it, as new-id does, so a copy made before the
+       next open is the one flagged. */
+    if (st == STORE_OK && strcmp(before, after) != 0 && brain_note_open(s) != 0) {
+        store_import_result_free(&result);
+        return REMEMBER_ERR;
+    }
     return import_finish(s, json, st, &result);
 }
 

@@ -22,6 +22,13 @@ int brain_json_path(char *out, size_t cap);
  */
 int brain_note_open(Store *store);
 
+/*
+ * Plan 23: 1 when brains.json lists a brain with brain_id that still has it (an import file
+ * from it would make a copy), 0 when none does or the list cannot be read, -1 with the error
+ * written when a listed brain cannot be checked (busy, EACCES, EIO).
+ */
+int brain_note_id_is_taken(const Store *store, const char *brain_id);
+
 /* The error of a brains.json lock held past the busy timeout (G5): busy. */
 void brain_note_busy_error(void);
 

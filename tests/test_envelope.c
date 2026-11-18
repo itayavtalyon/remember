@@ -1480,7 +1480,8 @@ TEST(envelope_brain_new_id_replaces_only_the_brain_id)
     cmd_result_free(&r);
     copy_id = harness_sqlite_query_line(copy_path, "SELECT brain_id FROM brain_meta;");
     source_id = harness_sqlite_query_line(db, "SELECT brain_id FROM brain_meta;");
-    ASSERT_STREQ(copy_id, second_id);
+    /* new-id recorded second_id in brains.json, so it is the copy that is flagged and renamed. */
+    ASSERT_TRUE(strcmp(copy_id, second_id) != 0);
     ASSERT_STREQ(source_id, second_id);
     free(copy_id);
     free(source_id);
