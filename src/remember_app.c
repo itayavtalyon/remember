@@ -673,16 +673,16 @@ static int load_registry(SettingsRegistry **out, PluginManifestList *mans)
    command changes no memory. */
 static const char *event_command_name(CliCommand command)
 {
-    static const char *const k_names[] = {
-        [CLI_CMD_ADD] = "add",       [CLI_CMD_UPDATE] = "update", [CLI_CMD_CONFLICT] = "update",
-        [CLI_CMD_DELETE] = "delete", [CLI_CMD_PURGE] = "purge",   [CLI_CMD_REKEY] = "rekey",
-        [CLI_CMD_LINK] = "link",     [CLI_CMD_UNLINK] = "unlink", [CLI_CMD_IMPORT] = "import",
+    static const bool k_writes[] = {
+        [CLI_CMD_ADD] = true,   [CLI_CMD_UPDATE] = true, [CLI_CMD_DELETE] = true,
+        [CLI_CMD_PURGE] = true, [CLI_CMD_LINK] = true,   [CLI_CMD_UNLINK] = true,
+        [CLI_CMD_REKEY] = true, [CLI_CMD_IMPORT] = true, [CLI_CMD_CONFLICT] = true,
     };
 
-    if ((size_t)command >= sizeof(k_names) / sizeof(k_names[0])) {
+    if ((size_t)command >= sizeof(k_writes) / sizeof(k_writes[0]) || !k_writes[command]) {
         return NULL;
     }
-    return k_names[command];
+    return command == CLI_CMD_CONFLICT ? "update" : cli_command_name(command);
 }
 
 /* What one command's events hold; the store keeps pointers into it until store_close. */
