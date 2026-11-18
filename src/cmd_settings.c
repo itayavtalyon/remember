@@ -3320,10 +3320,15 @@ static int warn_refused_layer(const SettingsRegistry *reg, const SettingSpec *sp
                               SettingLayer layer, const char *json)
 {
     char text[SETTING_TEXT_MAX + 1];
-    const char *value = setting_text_unquote(json, text, sizeof(text)) ? text : json;
-    const DiagDetailField fields[] = {{.name = "key", .value = spec->key},
-                                      {.name = "value", .value = value},
-                                      {.name = "reason", .value = "invalid_value"}};
+    const char *value = json;
+    DiagDetailField fields[] = {{.name = "key", .value = spec->key},
+                                {.name = "value", .value = NULL},
+                                {.name = "reason", .value = "invalid_value"}};
+
+    if (setting_text_unquote(json, text, sizeof(text))) {
+        value = text;
+    }
+    fields[1].value = value;
 
     return warn_invalid_value(
         reg, fmt_alloc("skipped \"%s\": \"%s\" isn't a valid value.", spec->key, value), spec->key,

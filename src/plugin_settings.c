@@ -83,7 +83,10 @@ static PluginSettingsStatus add_enabled(SettingsRegistry *reg, const char *name)
     row.allow_user = true;
     row.allow_brain = true;
     /* The key was free just above, so a refusal is memory. */
-    return settings_registry_add(reg, &row) ? PLUGIN_SETTINGS_OK : PLUGIN_SETTINGS_OOM;
+    if (!settings_registry_add(reg, &row)) {
+        return PLUGIN_SETTINGS_OOM;
+    }
+    return PLUGIN_SETTINGS_OK;
 }
 
 typedef struct {
@@ -240,7 +243,10 @@ static PluginSettingsStatus add_setting(SettingsRegistry *reg, const char *name,
         goto done;
     }
     /* The parser refuses two settings with one key, so a refusal is memory. */
-    st = settings_registry_add(reg, &built->row) ? PLUGIN_SETTINGS_OK : PLUGIN_SETTINGS_OOM;
+    st = PLUGIN_SETTINGS_OOM;
+    if (settings_registry_add(reg, &built->row)) {
+        st = PLUGIN_SETTINGS_OK;
+    }
 done:
     free(json);
     free(built);

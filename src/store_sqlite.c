@@ -13352,12 +13352,14 @@ static void drop_refused_plugin_layers(const SettingSpec *spec, SettingRead *out
     if (!setting_plugin_name(spec->key, plugin, sizeof(plugin))) {
         return;
     }
-    out->user_refused =
-        spec->allow_user && out->user_live && !setting_stored_ok(spec, out->user_value);
-    out->brain_refused =
-        spec->allow_brain && out->brain_live && !setting_stored_ok(spec, out->brain_value);
-    out->user_live = out->user_live && !out->user_refused;
-    out->brain_live = out->brain_live && !out->brain_refused;
+    if (spec->allow_user && out->user_live && !setting_stored_ok(spec, out->user_value)) {
+        out->user_refused = true;
+        out->user_live = false;
+    }
+    if (spec->allow_brain && out->brain_live && !setting_stored_ok(spec, out->brain_value)) {
+        out->brain_refused = true;
+        out->brain_live = false;
+    }
 }
 
 SettingStatus store_setting_read(Store *brain, const char *user_db, const char *key,

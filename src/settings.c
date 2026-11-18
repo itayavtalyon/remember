@@ -812,7 +812,10 @@ static bool stored_list_ok(const SettingSpec *spec, const char *json)
     if (json[pos + 1U] != '\0') {
         return false;
     }
-    return spec->max_items <= 0 || n <= (size_t)spec->max_items;
+    if (spec->max_items > 0 && n > (size_t)spec->max_items) {
+        return false;
+    }
+    return true;
 }
 
 /* cppcheck-suppress staticFunction ; public API (settings.h); the store's read calls it */
@@ -831,8 +834,11 @@ bool setting_stored_ok(const SettingSpec *spec, const char *json)
         }
         one = item;
     }
-    return setting_canon_value(spec, &one, 1U, canon, sizeof(canon), NULL, 0U) == SETTING_OK &&
-           strcmp(canon, json) == 0;
+    if (setting_canon_value(spec, &one, 1U, canon, sizeof(canon), NULL, 0U) != SETTING_OK ||
+        strcmp(canon, json) != 0) {
+        return false;
+    }
+    return true;
 }
 
 static SettingStatus canon_boolean(const char *src, char *json, size_t json_cap)
