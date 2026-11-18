@@ -2696,6 +2696,55 @@ TEST(import_from_a_database_makes_events_too)
     free(db);
 }
 
+/* A brain that holds key k:1 with another body than the export, and the export imported: one
+   open conflict, no event yet (an import that only opens a conflict changes no memory). */
+static char *given_brain_with_a_key_clash(const char *file)
+{
+    char *db =
+        given_brain_with_enabled_plugin(ACTION(ALL_TYPES, FILTER("\"origins\":[\"import\"]")));
+
+    assert_ok(RUN(db, "add", "--key", "k:1", "body from b"));
+    assert_rows(db, "none");
+    assert_ok(RUN(db, "import", "--from-json", file));
+    assert_rows(db, "none");
+    return db;
+}
+
+static char *given_export_of_key(void)
+{
+    char *src = make_temp_db_path();
+    char *file = harness_side_path(src, ".export.json");
+
+    assert_ok(RUN(src, "add", "--key", "k:1", "body from a"));
+    assert_ok(RUN(src, "export", "--format", "json", "--out", file));
+    free(src);
+    return file;
+}
+
+TEST(conflict_accept_makes_the_events_of_what_the_resolution_changed)
+{
+    char *file = given_export_of_key();
+    char *keep_both = given_brain_with_a_key_clash(file);
+    char *keep_incoming = given_brain_with_a_key_clash(file);
+
+    assert_ok(RUN(keep_both, "conflict", "accept", "--id", "1", "--keep", "both", "--hooks"));
+    assert_query(keep_both,
+                 "SELECT group_concat(type || ':' || json_extract(payload, "
+                 "'$.cause.command') || ':' || json_extract(payload, '$.memory.body')) "
+                 "FROM (SELECT * FROM outbox ORDER BY rowid);",
+                 "memory.created:update:body from a");
+    assert_ok(
+        RUN(keep_incoming, "conflict", "accept", "--id", "1", "--keep", "incoming", "--hooks"));
+    assert_query(keep_incoming,
+                 "SELECT group_concat(type || ':' || COALESCE(json_extract(payload, "
+                 "'$.changes.fields[0]'), '-') || ':' || json_extract(payload, '$.memory.body')) "
+                 "FROM (SELECT * FROM outbox ORDER BY rowid);",
+                 "memory.updated:key:body from b,memory.created:-:body from a");
+    free(file);
+    free(keep_both);
+    free(keep_incoming);
+}
+
 TEST(processes_off_warns_plugin_unsupported_c23)
 {
     char *db = given_brain_with_enabled_plugin(ACTION(CREATED_ONLY, ""));
@@ -2953,6 +3002,7 @@ void register_events_tests(void)
     RUN_TEST(an_action_that_lists_import_gets_one_event_per_memory_with_one_batch);
     RUN_TEST(import_with_hooks_runs_the_default_origins_action_for_that_one_import);
     RUN_TEST(import_from_a_database_makes_events_too);
+    RUN_TEST(conflict_accept_makes_the_events_of_what_the_resolution_changed);
     RUN_TEST(processes_off_warns_plugin_unsupported_c23);
     RUN_TEST(a_write_in_a_run_gets_its_cause_from_the_environment);
     RUN_TEST(the_brain_path_in_an_event_is_absolute_and_a_home_prefix_is_a_tilde);
