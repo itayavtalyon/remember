@@ -10216,6 +10216,73 @@ TEST(list_and_explain_go_on_past_a_refused_stored_value)
     harness_remove_tree(pair.tmpl);
 }
 
+/* True when the countdown test_alloc_fail_after(n) set has fired: n + 1 more allocations all
+   pass. Leaves the hook off. */
+static bool alloc_fault_fired(int n)
+{
+    bool fired = true;
+    int i = 0;
+
+    for (i = 0; i <= n && fired; i++) {
+        void *probe = test_alloc_malloc(1U);
+
+        fired = probe != NULL;
+        free(probe);
+    }
+    test_alloc_fail_after(-1);
+    return fired;
+}
+
+/* Every allocation of an explain that warns on a refused value fails in turn, the warning's
+   line included, until one run has no failure left to hit. A run that fails says out of memory
+   and prints no setting; none says internal error. (A brains.json read swallows its failure:
+   that run passes, a plan 26 follow-up.) */
+TEST(explain_of_a_refused_stored_value_reports_out_of_memory_at_each_allocation)
+{
+    const char *set[] = {"settings", "set", "plugin.q.label", "hello"};
+    P30Pair pair;
+    EnvHold hold;
+    int n = 0;
+    bool fired = true;
+    int failed = 0;
+
+    given_installed_plugin("q", "{\"key\":\"label\",\"description\":\"L.\",\"type\":\"string\","
+                                "\"default\":\"hi\"}");
+    given_p30_pair(&pair);
+    given_p30_set(&pair, set, 4U);
+    given_installed_plugin("q", "{\"key\":\"label\",\"description\":\"L.\",\"type\":\"integer\","
+                                "\"default\":3}");
+    {
+        const char *argv[] = {"remember", "--db",    pair.brain,
+                              "settings", "explain", "plugin.q.label"};
+
+        env_hold(&hold);
+        ASSERT_EQ_INT(setenv("REMEMBER_USER_DB", pair.userdb, 1), 0);
+        ASSERT_EQ_INT(setenv("TZ", "UTC", 1), 0);
+        for (n = 0; n < 5000 && fired; n++) {
+            Captured got;
+
+            test_alloc_fail_after(n);
+            got = capture_run(argv, (int)(sizeof(argv) / sizeof(argv[0])));
+            fired = alloc_fault_fired(n);
+            if (got.rc != 0) {
+                failed++;
+                ASSERT_TRUE(got.err != NULL && strstr(got.err, "out of memory") != NULL);
+                ASSERT_TRUE(got.out == NULL || strstr(got.out, "Now:") == NULL);
+            } else {
+                ASSERT_STR_NOT_CONTAINS(got.err, "out of memory");
+            }
+            ASSERT_TRUE(got.err == NULL || strstr(got.err, "internal error") == NULL);
+            free(got.out);
+            free(got.err);
+        }
+        env_release(&hold);
+    }
+    ASSERT_FALSE(fired);
+    ASSERT_TRUE(failed > 0);
+    harness_remove_tree(pair.tmpl);
+}
+
 TEST(list_shows_plugin_keys_in_byte_order_before_the_remember_keys)
 {
     const char *list[] = {"settings", "list", "plugin."};
@@ -10850,6 +10917,7 @@ void register_settings_tests(void)
     RUN_TEST(a_stored_enum_value_the_manifest_dropped_falls_to_the_default);
     RUN_TEST(a_refused_brain_value_falls_to_the_user_layer_and_names_scope_brain);
     RUN_TEST(list_and_explain_go_on_past_a_refused_stored_value);
+    RUN_TEST(explain_of_a_refused_stored_value_reports_out_of_memory_at_each_allocation);
     RUN_TEST(list_shows_plugin_keys_in_byte_order_before_the_remember_keys);
     RUN_TEST(list_pages_through_more_plugin_keys_than_the_old_fixed_cap);
     RUN_TEST(explain_all_lists_the_plugin_keys_too);
