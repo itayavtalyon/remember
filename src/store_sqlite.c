@@ -4919,10 +4919,6 @@ static int ev_flush_one(Store *s, long long id, const char *now)
         ev_after(s, id, now, &row) != 0) {
         goto done;
     }
-    if (had && !row.has_after) {
-        /* purged: the row's last change_seq is the one ev_touch kept */
-        row.neighbors = NULL;
-    }
     if (!events_plan(&(EventRow){.before = row.has_before ? &row.before : NULL,
                                  .after = row.has_after ? &row.after : NULL,
                                  .links_before = row.lb,
