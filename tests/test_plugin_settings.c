@@ -536,6 +536,26 @@ TEST(a_string_list_item_that_is_not_text_refuses_the_whole_list)
     settings_registry_free(reg);
 }
 
+/* G1 A (decision:2026-11-17-plan30-review-grill): a stored row is live only when a set of its
+   own value would store it, so a row an older manifest wrote can be told apart. */
+TEST(a_stored_value_is_ok_only_in_the_form_a_set_would_store)
+{
+    SettingsRegistry *list = given_one_setting(k_list);
+    SettingsRegistry *flag = given_one_setting(k_bool);
+    const SettingSpec *words = spec_of(list, "plugin.p.words");
+    const SettingSpec *loud = spec_of(flag, "plugin.p.loud");
+
+    ASSERT_TRUE(setting_stored_ok(words, "[\"a\",\"b\",\"c\"]"));
+    ASSERT_FALSE(setting_stored_ok(words, "[\"a\",\"b\",\"c\",\"d\"]"));
+    ASSERT_FALSE(setting_stored_ok(words, "\"a\""));
+    ASSERT_FALSE(setting_stored_ok(words, "[\"a\"]x"));
+    ASSERT_TRUE(setting_stored_ok(loud, "true"));
+    ASSERT_FALSE(setting_stored_ok(loud, "\"true\""));
+    ASSERT_FALSE(setting_stored_ok(loud, "1"));
+    settings_registry_free(list);
+    settings_registry_free(flag);
+}
+
 TEST(a_string_list_with_no_max_items_is_held_by_the_stored_value_cap)
 {
     SettingsRegistry *reg = given_one_setting(
@@ -1538,6 +1558,7 @@ void register_plugin_settings_tests(void)
     RUN_TEST(a_string_setting_refuses_a_control_byte_del_bad_utf8_and_more_than_511_bytes);
     RUN_TEST(a_string_list_setting_stores_a_compact_array_and_holds_at_most_max_items);
     RUN_TEST(a_string_list_item_that_is_not_text_refuses_the_whole_list);
+    RUN_TEST(a_stored_value_is_ok_only_in_the_form_a_set_would_store);
     RUN_TEST(a_string_list_with_no_max_items_is_held_by_the_stored_value_cap);
     RUN_TEST(a_string_list_of_exactly_16384_stored_bytes_fits_and_one_more_does_not);
     RUN_TEST(text_unquote_reads_only_what_the_writer_writes);
