@@ -1139,9 +1139,11 @@ static int write_entry_json(FILE *f)
 
 static int write_event_memory_json(FILE *f)
 {
+    const long long change_seq = 42;
     Entry e = given_full_entry();
 
-    return output_event_memory_json(f, &e, 42, (EventLinks){.rows = NULL, .count = 0U}, NOW);
+    return output_event_memory_json(f, &e, change_seq, (EventLinks){.rows = NULL, .count = 0U},
+                                    NOW);
 }
 
 static int write_export_entry_json(FILE *f)

@@ -1598,7 +1598,7 @@ TEST(loading_the_rules_reads_enabled_and_reports_why_it_failed)
     EventRules rules;
     SettingWrite w;
     SettingWriteResult wr;
-    const char *on = "true";
+    const char *enabled = "true";
 
     ASSERT_TRUE(s != NULL && reg != NULL);
     ASSERT_EQ_INT(plugin_manifest_parse(k_doc, strlen(k_doc), &man), PLUGIN_PARSE_OK);
@@ -1612,7 +1612,7 @@ TEST(loading_the_rules_reads_enabled_and_reports_why_it_failed)
     store_set_settings_registry(s, reg);
     memset(&w, 0, sizeof(w));
     w.key = "plugin.hooker.enabled";
-    w.items = &on;
+    w.items = &enabled;
     w.nitems = 1U;
     w.layer = SETTING_LAYER_BRAIN;
     ASSERT_EQ_INT(store_setting_set(s, NULL, &w, &wr, err, sizeof(err)), SETTING_OK);
@@ -2585,61 +2585,73 @@ static void assert_memory_and_row_agree(const Rig *rig, bool *saw_failure, bool 
 
 typedef void (*FailFn)(int);
 
+/* One update of a tagged, linked memory with fail(at) armed: the new body and its outbox row are
+   both there or both not. A failure after COMMIT (reading the entry back) reports an error over a
+   saved write, so a failure may show either state, never one without the other. */
+typedef struct {
+    bool failure;
+    bool success;
+} Seen;
+
+static void update_under_failure(FailFn fail, int at, Seen *seen)
+{
+    static const char *const tags[] = {"t"};
+    Rig rig = given_rig_all();
+    long long a = add_memory(&rig, "body a", "k:a");
+    long long b = add_memory(&rig, "body b", "k:b");
+    char hash[65];
+    char sql[160];
+    char *got = NULL;
+    StoreStatus st = STORE_OK;
+
+    ASSERT_EQ_STATUS(
+        update_memory(
+            &rig, a,
+            (StoreUpdate){.tags = tags, .ntags = 1U, .set_tags = true, .bin = STORE_BIN_LIVE}),
+        STORE_OK);
+    link_memories(&rig, a, b, STORE_EDGE_CITES);
+    clear_outbox(&rig);
+    (void)snprintf(hash, sizeof(hash), "%064x", 0xbeefU);
+    fail(at);
+    st = update_memory(
+        &rig, a,
+        (StoreUpdate){
+            .body = "edited", .body_hash = hash, .set_body = true, .bin = STORE_BIN_LIVE});
+    fail(-1);
+    (void)snprintf(sql, sizeof(sql),
+                   "SELECT (SELECT body FROM entries WHERE local_id = %lld) || '/' || "
+                   "(SELECT count(*) FROM outbox);",
+                   a);
+    got = harness_sqlite_query_line(rig.db, sql);
+    if (st == STORE_OK || (got != NULL && strcmp(got, "edited/1") == 0)) {
+        ASSERT_STREQ(got != NULL ? got : "", "edited/1");
+    } else {
+        ASSERT_STREQ(got != NULL ? got : "", "body a/0");
+    }
+    if (st == STORE_OK) {
+        seen->success = true;
+    } else {
+        seen->failure = true;
+    }
+    free(got);
+    rig_close(&rig);
+}
+
 /* An update reads the memory's old row, tags and links into the flush: whichever allocation or
    step fails, the new body and its outbox row commit together or not at all. */
 TEST(an_update_of_a_tagged_linked_memory_commits_with_its_row_or_not_at_all)
 {
     static const FailFn k_fail[] = {store_test_fail_alloc_after, store_test_fail_step_after};
-    static const char *const tags[] = {"t"};
-    bool saw_failure = false;
-    bool saw_success = false;
+    Seen seen = {.failure = false, .success = false};
     size_t which = 0;
 
     for (which = 0; which < sizeof(k_fail) / sizeof(k_fail[0]); which++) {
         for (int at = 0; at < 80; at++) {
-            Rig rig = given_rig_all();
-            long long a = add_memory(&rig, "body a", "k:a");
-            long long b = add_memory(&rig, "body b", "k:b");
-            char hash[65];
-            char sql[160];
-            char *got = NULL;
-            StoreStatus st = STORE_OK;
-
-            ASSERT_EQ_STATUS(update_memory(&rig, a,
-                                           (StoreUpdate){.tags = tags,
-                                                         .ntags = 1U,
-                                                         .set_tags = true,
-                                                         .bin = STORE_BIN_LIVE}),
-                             STORE_OK);
-            link_memories(&rig, a, b, STORE_EDGE_CITES);
-            clear_outbox(&rig);
-            (void)snprintf(hash, sizeof(hash), "%064x", 0xbeefU);
-            k_fail[which](at);
-            st = update_memory(
-                &rig, a,
-                (StoreUpdate){
-                    .body = "edited", .body_hash = hash, .set_body = true, .bin = STORE_BIN_LIVE});
-            k_fail[which](-1);
-            (void)snprintf(sql, sizeof(sql),
-                           "SELECT (SELECT body FROM entries WHERE local_id = %lld) || '/' || "
-                           "(SELECT count(*) FROM outbox);",
-                           a);
-            got = harness_sqlite_query_line(rig.db, sql);
-            /* A failure after COMMIT (reading the entry back) reports an error over a saved write,
-               so a failure may show either state, never one without the other. */
-            if (st == STORE_OK || (got != NULL && strcmp(got, "edited/1") == 0)) {
-                ASSERT_STREQ(got != NULL ? got : "", "edited/1");
-            } else {
-                ASSERT_STREQ(got != NULL ? got : "", "body a/0");
-            }
-            saw_success = saw_success || st == STORE_OK;
-            saw_failure = saw_failure || st != STORE_OK;
-            free(got);
-            rig_close(&rig);
+            update_under_failure(k_fail[which], at, &seen);
         }
     }
-    ASSERT_TRUE(saw_failure);
-    ASSERT_TRUE(saw_success);
+    ASSERT_TRUE(seen.failure);
+    ASSERT_TRUE(seen.success);
 }
 
 TEST(outbox_commits_with_memory)

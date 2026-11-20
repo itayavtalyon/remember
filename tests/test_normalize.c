@@ -699,7 +699,7 @@ TEST(actor_json_writes_each_stored_kind)
 
 TEST(actor_json_kind_reads_a_stored_kind_and_empties_kind_otherwise)
 {
-    char kind[16] = "x";
+    char kind[ACTOR_JSON_CAP] = "x";
 
     ASSERT_TRUE(actor_json_kind("{\"kind\":\"agent\",\"id\":null}", kind, sizeof(kind)));
     ASSERT_STREQ(kind, "agent");
