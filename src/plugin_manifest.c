@@ -1338,7 +1338,6 @@ static void parse_filter_block(PluginManifest *man, const JsonValue *value, cons
         object_at(man, value, path, "R2.21", NAMES(k_filter_block_known), "R2.21");
     const JsonValue *tags = NULL;
     char child[PLUGIN_PATH_CAP];
-    char list[PLUGIN_PATH_CAP];
     const Names actors = NAMES(k_actors);
     const Names bins = NAMES(k_bins);
     const Names origins = NAMES(k_origins);
@@ -1352,6 +1351,8 @@ static void parse_filter_block(PluginManifest *man, const JsonValue *value, cons
         tags = object_at(man, tags, child, "R2.21", NAMES(k_tags_known), NULL);
     }
     if (tags != NULL) {
+        char list[PLUGIN_PATH_CAP];
+
         filter_list(man, tags, child, "any", &entry->tags_any[0][0], PLUGIN_TAG_CAP,
                     PLUGIN_TAGS_MAX, &entry->n_tags_any, NULL);
         filter_list(man, tags, child, "all", &entry->tags_all[0][0], PLUGIN_TAG_CAP,
