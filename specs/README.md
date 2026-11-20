@@ -17,6 +17,7 @@ A spec describes what `remember` does today. It is normative.
 | [JSON-STYLE.md](JSON-STYLE.md) | `subject:json-envelope` | JSON value rules for every surface |
 | [JSON-ENVELOPE.md](JSON-ENVELOPE.md) | `subject:json-envelope` | Message envelope for CLI `--json` |
 | [OUTBOX-DELIVERY.md](OUTBOX-DELIVERY.md) | `subject:plugins-and-hooks` | Recipient state machine: backoff retry, pre-flight failure, 100-hop halt, 7-day drop, lanes |
+| [EVENTS.md](EVENTS.md) | `subject:plugins-and-hooks` | What a write that changes a memory makes: the five event types, the write-time filter, the origins, the outbox row, the event message and its 256 KiB cut |
 | [OLDER-CLI.md](OLDER-CLI.md) | `subject:daemon` | An older CLI on a newer brain: read-only open, the read warning, `schema_too_new` and exit 75 |
 | [DEFAULT-DB.md](DEFAULT-DB.md) | `subject:data`, `subject:ui-overhaul` | Brain path order and the `~/.remember/default-db` file |
 | [BRAIN-LIST.md](BRAIN-LIST.md) | `subject:library`, `subject:data` | `brains.json`: what a read-write open records, copy and move, `brain list`, `brain prune` |

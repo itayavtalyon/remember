@@ -79,6 +79,7 @@ typedef enum {
     DIAG_WARN_SCHEMA_TOO_NEW_READ_ONLY, /* R27b-1: a newer brain opened read only */
     DIAG_WARN_BRAIN_ID_CLONED,          /* C-38: a copy of a listed brain got its own id */
     DIAG_WARN_BRAIN_MISSING,            /* C-01: a listed path has no brain */
+    DIAG_WARN_PLUGIN_UNSUPPORTED,       /* C-23: a write needed a program this build cannot start */
     DIAG_WARN_COUNT
 } DiagWarning;
 
@@ -207,6 +208,14 @@ int diag_schema_too_new_error(StoreSchemaGap gap, const char *cli_version);
  */
 int diag_brain_id_cloned(const char *path, const char *new_id);
 int diag_brain_missing(const char *path);
+
+/*
+ * C-23 and E3B-1 entry 15 (decision:2026-11-12-copy-batch-e3b-warning-splits): a write was saved,
+ * and a hook or plugin that matched it did not run, because this build cannot start programs
+ * (REMEMBER_PROCESSES off, H-0.7). message and fix are the approved words. -1 when the warning
+ * cannot be written.
+ */
+int diag_plugin_unsupported(void);
 
 /* path NULL is stdin. name is the unknown field. */
 typedef struct {

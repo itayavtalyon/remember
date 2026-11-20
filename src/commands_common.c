@@ -1257,6 +1257,34 @@ bool cmd_is_hooks_flag(const char *arg)
     return false;
 }
 
+bool cmd_take_hooks_flag(const char *arg, CmdHooks *hooks)
+{
+    if (strcmp(arg, "--hooks") == 0) {
+        hooks->on = true;
+        return true;
+    }
+    if (strcmp(arg, "--no-hooks") == 0) {
+        hooks->off = true;
+        return true;
+    }
+    return false;
+}
+
+int cmd_apply_hooks(Store *s, const CmdHooks *hooks)
+{
+    if (hooks->on && hooks->off) {
+        /* A draft for Story Weaver (decision:open-2026-11-18-plan31-hooks-flags-together-copy). */
+        err_msg(DIAG_USAGE, "--hooks and --no-hooks can't be used together");
+        return -1;
+    }
+    if (hooks->on) {
+        store_set_event_hooks(s, STORE_HOOKS_ON);
+    } else if (hooks->off) {
+        store_set_event_hooks(s, STORE_HOOKS_OFF);
+    }
+    return 0;
+}
+
 int cmd_take_write_flag(const char *arg, int *i, int rest_argc, const char **rest_argv,
                         CmdActorFlags *out, const char **err)
 {
@@ -1264,7 +1292,7 @@ int cmd_take_write_flag(const char *arg, int *i, int rest_argc, const char **res
     const char **slot = NULL;
     TakeValue taken;
 
-    if (cmd_is_hooks_flag(arg)) {
+    if (cmd_take_hooks_flag(arg, &out->hooks)) {
         return 1;
     }
     if (strcmp(arg, "--as") == 0) {

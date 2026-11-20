@@ -78,7 +78,9 @@ static const char *const k_events[] = {"memory.created",  "memory.updated", "mem
 static const char *const k_origins[] = {"local", "sync", "import"};
 static const char *const k_points[] = {"search.query", "search.results"};
 static const char *const k_actors[] = {"human", "agent", "tool", "share", "import"};
-static const char *const k_bins[] = {"live", "expired", "deleted", "purged"};
+/* No "purged": the filter tests the bin before the write, so it could never match
+   (decision:2026-11-18-plan31-review-grill G2). */
+static const char *const k_bins[] = {"live", "expired", "deleted"};
 static const char *const k_action_process[] = {"once", "persistent"};
 static const char *const k_filter_process[] = {"persistent"};
 static const char *const k_scopes[] = {"user", "brain", "both"};
@@ -1267,6 +1269,68 @@ static void filter_list(PluginManifest *man, const JsonValue *obj, const char *p
     }
 }
 
+/* Draft words until Story Weaver words them
+ * (decision:open-2026-11-18-plan31-review-filter-values-copy). */
+static const char k_tag_pattern_what[] = "a tag, or the start of a tag followed by *";
+static const char k_cause_what[] = "\"plugin/<name>/<entry>\" or a plugin name";
+
+/* Fold each tag pattern to the stored form (trim, ASCII lowercase): a pattern in another form
+   could never match a stored tag (decision:2026-11-18-plan31-review-grill G1). normalize_tag
+   keeps a trailing * and a space before it, and refuses a tab, so "Proj *" stays "proj *". */
+// NOLINTNEXTLINE(bugprone-easily-swappable-parameters) the list path, then the rows
+static void fold_tag_patterns(PluginManifest *man, const char *path, char *rows, size_t count)
+{
+    size_t i = 0;
+
+    for (i = 0; i < count; i++) {
+        char *pattern = rows + (i * (size_t)PLUGIN_TAG_CAP);
+        char folded[REMEMBER_TOKEN_MAX + 1];
+
+        if (normalize_tag(pattern, folded, sizeof(folded)) != NORM_OK) {
+            char child[PLUGIN_PATH_CAP];
+
+            index_path(child, path, i);
+            err_must_be(man, "R2.21", child, k_tag_pattern_what);
+            continue;
+        }
+        (void)snprintf(pattern, (size_t)PLUGIN_TAG_CAP, "%s", folded);
+    }
+}
+
+/* plugin/<name>/<entry>, or a bare plugin name: the two forms not_caused_by can match. */
+static bool cause_ok(const char *text)
+{
+    static const char k_prefix[] = "plugin/";
+    const char *name = NULL;
+    const char *slash = NULL;
+
+    if (strncmp(text, k_prefix, sizeof(k_prefix) - 1U) != 0) {
+        return name_ok(text);
+    }
+    name = text + sizeof(k_prefix) - 1U;
+    slash = strchr(name, '/');
+    if (slash == NULL || !segment_ok(name, (size_t)(slash - name))) {
+        return false;
+    }
+    return name_ok(slash + 1);
+}
+
+static void check_causes(PluginManifest *man, const char *path, const PluginEntry *entry)
+{
+    size_t i = 0;
+
+    for (i = 0; i < entry->n_not_caused_by; i++) {
+        if (!cause_ok(entry->not_caused_by[i])) {
+            char list[PLUGIN_PATH_CAP];
+            char child[PLUGIN_PATH_CAP];
+
+            child_path(list, path, "not_caused_by");
+            index_path(child, list, i);
+            err_must_be(man, "R2.21", child, k_cause_what);
+        }
+    }
+}
+
 static void parse_filter_block(PluginManifest *man, const JsonValue *value, const char *path,
                                PluginEntry *entry)
 {
@@ -1287,10 +1351,16 @@ static void parse_filter_block(PluginManifest *man, const JsonValue *value, cons
         tags = object_at(man, tags, child, "R2.21", NAMES(k_tags_known), NULL);
     }
     if (tags != NULL) {
+        char list[PLUGIN_PATH_CAP];
+
         filter_list(man, tags, child, "any", &entry->tags_any[0][0], PLUGIN_TAG_CAP,
                     PLUGIN_TAGS_MAX, &entry->n_tags_any, NULL);
         filter_list(man, tags, child, "all", &entry->tags_all[0][0], PLUGIN_TAG_CAP,
                     PLUGIN_TAGS_MAX, &entry->n_tags_all, NULL);
+        child_path(list, child, "any");
+        fold_tag_patterns(man, list, &entry->tags_any[0][0], entry->n_tags_any);
+        child_path(list, child, "all");
+        fold_tag_patterns(man, list, &entry->tags_all[0][0], entry->n_tags_all);
         entry->has_match_before =
             read_bool(man, tags, child, "match_before", "R2.21", false, &entry->match_before);
     }
@@ -1302,6 +1372,7 @@ static void parse_filter_block(PluginManifest *man, const JsonValue *value, cons
                 &entry->n_bins, &bins);
     filter_list(man, obj, path, "not_caused_by", &entry->not_caused_by[0][0], PLUGIN_CAUSE_CAP,
                 PLUGIN_CAUSE_MAX, &entry->n_not_caused_by, NULL);
+    check_causes(man, path, entry);
     filter_list(man, obj, path, "origins", &entry->origins[0][0], PLUGIN_ORIGIN_CAP,
                 PLUGIN_ORIGINS_MAX, &entry->n_origins, &origins);
 }

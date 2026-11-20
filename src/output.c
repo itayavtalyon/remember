@@ -161,8 +161,13 @@ static int actors_ok(const Entry *e)
     return 1;
 }
 
-/* with_local_id is false for export files: they never carry it (JE-3.5). */
-static int write_entry_core(FILE *out, const Entry *e, const char *now, bool with_local_id)
+/* What an entry object carries. The CLI writes local_id and the version vector; an export
+   file drops local_id (JE-3.5); an event drops both and adds change_seq (R3.7, R3.8). */
+typedef enum { SHAPE_CLI = 0, SHAPE_EXPORT, SHAPE_EVENT } EntryShape;
+
+// NOLINTNEXTLINE(bugprone-easily-swappable-parameters) the shape, then the event's change_seq
+static int write_entry_core(FILE *out, const Entry *e, const char *now, EntryShape shape,
+                            long long change_seq)
 {
     const char *bin = NULL;
 
@@ -176,7 +181,7 @@ static int write_entry_core(FILE *out, const Entry *e, const char *now, bool wit
     if (fputs("{\"id\":", out) < 0 || output_json_string(out, e->sync_id) != 0) {
         return -1;
     }
-    if (with_local_id && fprintf(out, ",\"local_id\":%lld", e->id) < 0) {
+    if (shape == SHAPE_CLI && fprintf(out, ",\"local_id\":%lld", e->id) < 0) {
         return -1;
     }
     if (write_json_nullable(out, "key", e->key) != 0) {
@@ -209,6 +214,9 @@ static int write_entry_core(FILE *out, const Entry *e, const char *now, bool wit
     if (write_json_field_str(out, (JsonField){.name = "bin", .value = bin}) != 0) {
         return -1;
     }
+    if (shape == SHAPE_EVENT) {
+        return fprintf(out, ",\"change_seq\":%lld", change_seq) < 0 ? -1 : 0;
+    }
     return write_json_raw_object(out,
                                  (JsonField){.name = "version_vector", .value = e->version_vector});
 }
@@ -219,7 +227,7 @@ int output_entry_json(FILE *out, const Entry *e, const char *now)
     if (out == NULL || e == NULL) {
         return -1;
     }
-    if (write_entry_core(out, e, now, true) != 0) {
+    if (write_entry_core(out, e, now, SHAPE_CLI, 0) != 0) {
         return -1;
     }
     if (fputc('}', out) == EOF) {
@@ -230,7 +238,7 @@ int output_entry_json(FILE *out, const Entry *e, const char *now)
 
 int output_export_entry_json(FILE *out, const Entry *e, const char *now)
 {
-    if (out == NULL || e == NULL || write_entry_core(out, e, now, false) != 0) {
+    if (out == NULL || e == NULL || write_entry_core(out, e, now, SHAPE_EXPORT, 0) != 0) {
         return -1;
     }
     return fputc('}', out) == EOF ? -1 : 0;
@@ -870,7 +878,8 @@ static void fill_preview(char dst[PREVIEW_BUF], const char *body, size_t max_cp)
     dst[o] = '\0';
 }
 
-static int write_stub_json(FILE *out, const StoreNeighbor *n, const char *now)
+/* An event's link stub has no local_id (R3.8): with_local_id is false there. */
+static int write_stub_json(FILE *out, const StoreNeighbor *n, const char *now, bool with_local_id)
 {
     char preview[PREVIEW_BUF];
     const char *bin = NULL;
@@ -881,7 +890,7 @@ static int write_stub_json(FILE *out, const StoreNeighbor *n, const char *now)
     bin = BIN_TOKENS[neighbor_bin(n, now)];
     fill_preview(preview, n->neighbor_body, STUB_PREVIEW_CP);
     if (fputs("{\"id\":", out) < 0 || output_json_string(out, n->neighbor_sync_id) != 0 ||
-        fprintf(out, ",\"local_id\":%lld", n->neighbor_id) < 0) {
+        (with_local_id && fprintf(out, ",\"local_id\":%lld", n->neighbor_id) < 0)) {
         return -1;
     }
     if (write_json_nullable(out, "key", n->neighbor_key) != 0) {
@@ -906,7 +915,7 @@ static int write_stub_json(FILE *out, const StoreNeighbor *n, const char *now)
 }
 
 static int write_links_json_field(FILE *out, long long subject_id, const StoreNeighbor *links,
-                                  size_t nlinks, const char *now)
+                                  size_t nlinks, const char *now, bool with_local_id)
 {
     size_t i = 0;
     int first = 1;
@@ -922,7 +931,7 @@ static int write_links_json_field(FILE *out, long long subject_id, const StoreNe
             return -1;
         }
         first = 0;
-        if (write_stub_json(out, &links[i], now) != 0) {
+        if (write_stub_json(out, &links[i], now, with_local_id) != 0) {
             return -1;
         }
     }
@@ -935,16 +944,29 @@ static int write_links_json_field(FILE *out, long long subject_id, const StoreNe
 static int write_entry_with_links(FILE *out, const Entry *e, const StoreNeighbor *links,
                                   size_t nlinks, const char *now)
 {
-    if (write_entry_core(out, e, now, true) != 0) {
+    if (write_entry_core(out, e, now, SHAPE_CLI, 0) != 0) {
         return -1;
     }
-    if (write_links_json_field(out, e->id, links, nlinks, now) != 0) {
+    if (write_links_json_field(out, e->id, links, nlinks, now, true) != 0) {
         return -1;
     }
     if (fputc('}', out) == EOF) {
         return -1;
     }
     return 0;
+}
+
+int output_event_memory_json(FILE *out, const Entry *e, long long change_seq, EventLinks links,
+                             const char *now)
+{
+    if (out == NULL || e == NULL || now == NULL || (links.count > 0U && links.rows == NULL)) {
+        return -1;
+    }
+    if (write_entry_core(out, e, now, SHAPE_EVENT, change_seq) != 0 ||
+        write_links_json_field(out, e->id, links.rows, links.count, now, false) != 0) {
+        return -1;
+    }
+    return fputc('}', out) == EOF ? -1 : 0;
 }
 
 static int write_related_ids_cell(FILE *out, long long subject_id, const StoreNeighbor *links,
@@ -1015,7 +1037,7 @@ int output_links_write_data(FILE *out, const char *action, const StoreNeighbor *
         if (i > 0U && fputc(',', out) == EOF) {
             return -1;
         }
-        if (write_stub_json(out, &links[i], now) != 0) {
+        if (write_stub_json(out, &links[i], now, true) != 0) {
             return -1;
         }
     }
@@ -1049,7 +1071,7 @@ int output_related_data(FILE *out, const Entry *subject, const StoreNeighbor *li
         if (i > 0U && fputc(',', out) == EOF) {
             return -1;
         }
-        if (write_stub_json(out, &links[i], now) != 0) {
+        if (write_stub_json(out, &links[i], now, true) != 0) {
             return -1;
         }
     }

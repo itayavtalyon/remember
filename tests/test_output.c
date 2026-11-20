@@ -1137,6 +1137,15 @@ static int write_entry_json(FILE *f)
     return output_entry_json(f, &e, NOW);
 }
 
+static int write_event_memory_json(FILE *f)
+{
+    const long long change_seq = 42;
+    Entry e = given_full_entry();
+
+    return output_event_memory_json(f, &e, change_seq, (EventLinks){.rows = NULL, .count = 0U},
+                                    NOW);
+}
+
 static int write_export_entry_json(FILE *f)
 {
     Entry e = given_full_entry();
@@ -1395,6 +1404,25 @@ TEST(output_import_with_errors_reports_every_failed_write)
 TEST(output_entry_json_reports_every_failed_write)
 {
     assert_reports_every_failed_write(write_entry_json);
+}
+
+TEST(output_event_memory_json_reports_every_failed_write)
+{
+    assert_reports_every_failed_write(write_event_memory_json);
+}
+
+TEST(output_event_memory_json_rejects_missing_arguments)
+{
+    Entry e = given_entry();
+    FILE *f = given_stream();
+    const EventLinks none = {.rows = NULL, .count = 0U};
+
+    ASSERT_EQ_INT(output_event_memory_json(NULL, &e, 1, none, NOW), -1);
+    ASSERT_EQ_INT(output_event_memory_json(f, NULL, 1, none, NOW), -1);
+    ASSERT_EQ_INT(output_event_memory_json(f, &e, 1, none, NULL), -1);
+    ASSERT_EQ_INT(output_event_memory_json(f, &e, 1, (EventLinks){.rows = NULL, .count = 1U}, NOW),
+                  -1);
+    assert_written(f, "");
 }
 
 TEST(output_action_envelope_reports_every_failed_write)
@@ -1828,6 +1856,8 @@ void register_output_tests(void)
     RUN_TEST(failing_stream_fails_past_the_limit_and_stays_failed);
     RUN_TEST(output_json_string_reports_every_failed_write);
     RUN_TEST(output_entry_json_reports_every_failed_write);
+    RUN_TEST(output_event_memory_json_reports_every_failed_write);
+    RUN_TEST(output_event_memory_json_rejects_missing_arguments);
     RUN_TEST(output_action_envelope_reports_every_failed_write);
     RUN_TEST(output_entries_envelope_reports_every_failed_write);
     RUN_TEST(output_memory_envelope_get_reports_every_failed_write);

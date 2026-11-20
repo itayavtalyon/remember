@@ -64,8 +64,7 @@ static int parse_locator_args(int rest_argc, const char **rest_argv, LocatorPars
 
     out->key_raw = NULL;
     out->id_raw = NULL;
-    out->actor.kind = NULL;
-    out->actor.id = NULL;
+    memset(&out->actor, 0, sizeof(out->actor));
     memset(&out->bins, 0, sizeof(out->bins));
 
     for (i = 0; i < rest_argc; i++) {
@@ -347,7 +346,8 @@ int cmd_delete(Store *s, bool json, int rest_argc, const char **rest_argv)
     if (parse_locator_args(rest_argc, rest_argv, &parsed, 1) != 0) {
         return REMEMBER_ERR;
     }
-    if (cmd_actor_json(&parsed.actor, actor_buf) != 0) {
+    if (cmd_actor_json(&parsed.actor, actor_buf) != 0 ||
+        cmd_apply_hooks(s, &parsed.actor.hooks) != 0) {
         return REMEMBER_ERR;
     }
     if (locator_validate(&parsed) != 0) {
@@ -561,8 +561,7 @@ static int parse_update_args(int rest_argc, const char **rest_argv, UpdateParse 
     out->if_version_vector_raw = NULL;
     out->clear_expires = false;
     out->undelete = false;
-    out->actor.kind = NULL;
-    out->actor.id = NULL;
+    memset(&out->actor, 0, sizeof(out->actor));
     memset(&out->loc.bins, 0, sizeof(out->loc.bins));
     *err = NULL;
 
@@ -791,7 +790,8 @@ int cmd_update(Store *s, bool json, int rest_argc, const char **rest_argv)
                               &expires_at) != 0) {
         goto cleanup;
     }
-    if (cmd_actor_json(&parsed.actor, actor_buf) != 0) {
+    if (cmd_actor_json(&parsed.actor, actor_buf) != 0 ||
+        cmd_apply_hooks(s, &parsed.actor.hooks) != 0) {
         goto cleanup;
     }
     st = store_update(s, id,
@@ -982,7 +982,8 @@ int cmd_rekey(Store *s, bool json, int rest_argc, const char **rest_argv)
         err_msg(DIAG_INTERNAL, "internal error");
         return REMEMBER_ERR;
     }
-    if (cmd_actor_json(&parsed.actor, actor_buf) != 0) {
+    if (cmd_actor_json(&parsed.actor, actor_buf) != 0 ||
+        cmd_apply_hooks(s, &parsed.actor.hooks) != 0) {
         return REMEMBER_ERR;
     }
     locator_bind_write(&loc, &id, &key);

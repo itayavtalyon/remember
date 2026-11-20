@@ -1550,9 +1550,8 @@ TEST(bins_origins_and_not_caused_by_are_checked)
 {
     expect_error(HEAD "\"actions\":[" ACTION_BODY ",\"filter\":{\"bins\":[\"trash\"]}}]}",
                  "/actions/0/filter/bins/0", "R2.21",
-                 R25_2_MUST_BE("/actions/0/filter/bins/0",
-                               "\"live\", \"expired\", \"deleted\", or \"purged\""),
-                 R25_2_USE("\"live\", \"expired\", \"deleted\", or \"purged\""));
+                 R25_2_MUST_BE("/actions/0/filter/bins/0", "\"live\", \"expired\", or \"deleted\""),
+                 R25_2_USE("\"live\", \"expired\", or \"deleted\""));
     expect_error(HEAD "\"actions\":[" ACTION_BODY ",\"filter\":{\"origins\":[\"cloud\"]}}]}",
                  "/actions/0/filter/origins/0", "R2.21",
                  R25_2_MUST_BE("/actions/0/filter/origins/0", "\"local\", \"sync\", or \"import\""),
@@ -1563,15 +1562,93 @@ TEST(bins_origins_and_not_caused_by_are_checked)
                  R25_2_USE("a string of at most 79 bytes"));
 }
 
-TEST(all_four_bins_fit_in_the_bins_list)
+TEST(all_three_bins_fit_in_the_bins_list)
 {
     PluginManifest *man =
         given_parse(HEAD "\"actions\":[" ACTION_BODY
-                         ",\"filter\":{\"bins\":[\"live\",\"expired\",\"deleted\",\"purged\"]}}]}",
+                         ",\"filter\":{\"bins\":[\"live\",\"expired\",\"deleted\"]}}]}",
                     PLUGIN_PARSE_OK);
 
-    ASSERT_EQ_INT(man->entries[0].n_bins, 4);
+    ASSERT_EQ_INT(man->entries[0].n_bins, 3);
     plugin_manifest_free(man);
+}
+
+/* The filter tests the bin before the write, and a purge's is the last real one, so "purged"
+   could never match (decision:2026-11-18-plan31-review-grill G2). */
+TEST(the_purged_bin_is_refused_in_an_action_filter)
+{
+    expect_error(HEAD "\"actions\":[" ACTION_BODY
+                      ",\"filter\":{\"bins\":[\"deleted\",\"purged\"]}}]}",
+                 "/actions/0/filter/bins/1", "R2.21",
+                 R25_2_MUST_BE("/actions/0/filter/bins/1", "\"live\", \"expired\", or \"deleted\""),
+                 R25_2_USE("\"live\", \"expired\", or \"deleted\""));
+}
+
+/* Stored tags are trimmed and ASCII-lowercased: a pattern is folded the same way, or it could
+   never match (decision:2026-11-18-plan31-review-grill G1). */
+TEST(tag_patterns_are_folded_to_the_stored_form)
+{
+    PluginManifest *man = given_parse(
+        HEAD "\"actions\":[" ACTION_BODY ",\"filter\":{\"tags\":{\"any\":[\"Work\",\" Team \","
+             "\"Proj*\",\"*\",\" Proj *\"],\"all\":[\"To:Reviewer*\"]}}}]}",
+        PLUGIN_PARSE_OK);
+
+    ASSERT_STREQ(man->entries[0].tags_any[0], "work");
+    ASSERT_STREQ(man->entries[0].tags_any[1], "team");
+    ASSERT_STREQ(man->entries[0].tags_any[2], "proj*");
+    ASSERT_STREQ(man->entries[0].tags_any[3], "*");
+    /* A space before the * is part of the prefix (a stored tag may be "proj x"): it is kept, so
+       the pattern does not widen to "proj*". The leading space is trimmed. */
+    ASSERT_STREQ(man->entries[0].tags_any[4], "proj *");
+    ASSERT_STREQ(man->entries[0].tags_all[0], "to:reviewer*");
+    plugin_manifest_free(man);
+}
+
+/* Draft words (decision:open-2026-11-18-plan31-review-filter-values-copy). */
+#define TAG_PATTERN_WHAT "a tag, or the start of a tag followed by *"
+#define CAUSE_WHAT "\"plugin/<name>/<entry>\" or a plugin name"
+
+TEST(a_tag_pattern_that_can_never_be_a_tag_is_refused)
+{
+    expect_error(HEAD "\"actions\":[" ACTION_BODY ",\"filter\":{\"tags\":{\"all\":[\"ok\","
+                      "\"a\\tb*\"]}}}]}",
+                 "/actions/0/filter/tags/all/1", "R2.21",
+                 R25_2_MUST_BE("/actions/0/filter/tags/all/1", TAG_PATTERN_WHAT),
+                 R25_2_USE(TAG_PATTERN_WHAT));
+    /* No stored tag holds a tab, so "proj\t*" matches nothing: it must not fold to "proj*". */
+    expect_error(HEAD "\"actions\":[" ACTION_BODY
+                      ",\"filter\":{\"tags\":{\"any\":[\"proj\\t*\"]}}}]}",
+                 "/actions/0/filter/tags/any/0", "R2.21",
+                 R25_2_MUST_BE("/actions/0/filter/tags/any/0", TAG_PATTERN_WHAT),
+                 R25_2_USE(TAG_PATTERN_WHAT));
+    expect_error(HEAD "\"actions\":[" ACTION_BODY ",\"filter\":{\"tags\":{\"any\":[\"  \"]}}}]}",
+                 "/actions/0/filter/tags/any/0", "R2.21",
+                 R25_2_MUST_BE("/actions/0/filter/tags/any/0", TAG_PATTERN_WHAT),
+                 R25_2_USE(TAG_PATTERN_WHAT));
+}
+
+TEST(not_caused_by_takes_a_hook_or_a_plugin_name)
+{
+    static const char *const bad[] = {"Wake", "plugin/wake", "plugin/Wake/go", "hook/wake/go",
+                                      "plugin/wake/go/x"};
+    size_t i = 0;
+    PluginManifest *man =
+        given_parse(HEAD "\"actions\":[" ACTION_BODY
+                         ",\"filter\":{\"not_caused_by\":[\"wake\",\"plugin/wake/go\"]}}]}",
+                    PLUGIN_PARSE_OK);
+
+    ASSERT_EQ_INT(man->entries[0].n_not_caused_by, 2);
+    plugin_manifest_free(man);
+    for (i = 0; i < sizeof(bad) / sizeof(bad[0]); i++) {
+        char doc[512];
+
+        (void)snprintf(
+            doc, sizeof(doc),
+            HEAD "\"actions\":[" ACTION_BODY ",\"filter\":{\"not_caused_by\":[\"%s\"]}}]}", bad[i]);
+        expect_error(doc, "/actions/0/filter/not_caused_by/0", "R2.21",
+                     R25_2_MUST_BE("/actions/0/filter/not_caused_by/0", CAUSE_WHAT),
+                     R25_2_USE(CAUSE_WHAT));
+    }
 }
 
 TEST(needs_accept_memory_fields_and_remember_setting_keys)
@@ -2566,10 +2643,10 @@ TEST(l7_created_by_and_updated_by_hold_five_kinds)
                  "/actions/0/filter/updated_by", "R2.21", "a list of at most 5 of " ACTORS_WHAT);
 }
 
-TEST(l7_bins_hold_four)
+TEST(l7_bins_hold_three)
 {
-    EXPECT_LIMIT(ACTION_WITH("\"bins\":[%s]"), "\"live\"", 4U, "/actions/0/filter/bins", "R2.21",
-                 "a list of at most 4 of \"live\", \"expired\", \"deleted\", or \"purged\"");
+    EXPECT_LIMIT(ACTION_WITH("\"bins\":[%s]"), "\"live\"", 3U, "/actions/0/filter/bins", "R2.21",
+                 "a list of at most 3 of \"live\", \"expired\", or \"deleted\"");
 }
 
 TEST(l7_origins_hold_three)
@@ -2582,8 +2659,10 @@ TEST(l8_not_caused_by_holds_eight_strings_of_79_bytes)
 {
     EXPECT_LIMIT(ACTION_WITH("\"not_caused_by\":[%s]"), "\"a\"", 8U,
                  "/actions/0/filter/not_caused_by", "R2.21", "a list of at most 8 strings");
-    EXPECT_LENGTH(ACTION_WITH("\"not_caused_by\":[\"%s\"]"), 'c', 79U,
-                  "/actions/0/filter/not_caused_by/0", "R2.21", "a string of at most 79 bytes");
+    /* plugin/ + a 40-byte name + / + 31 bytes is 79 */
+    EXPECT_LENGTH(
+        ACTION_WITH("\"not_caused_by\":[\"plugin/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/%s\"]"),
+        'c', 31U, "/actions/0/filter/not_caused_by/0", "R2.21", "a string of at most 79 bytes");
 }
 
 TEST(l9_a_manifest_has_at_most_sixteen_settings)
@@ -3221,7 +3300,11 @@ void register_plugins_tests(void)
     RUN_TEST(a_tag_list_holds_at_most_eight_strings_of_63_bytes);
     RUN_TEST(actor_kinds_are_the_five_the_schema_lists);
     RUN_TEST(bins_origins_and_not_caused_by_are_checked);
-    RUN_TEST(all_four_bins_fit_in_the_bins_list);
+    RUN_TEST(all_three_bins_fit_in_the_bins_list);
+    RUN_TEST(the_purged_bin_is_refused_in_an_action_filter);
+    RUN_TEST(tag_patterns_are_folded_to_the_stored_form);
+    RUN_TEST(a_tag_pattern_that_can_never_be_a_tag_is_refused);
+    RUN_TEST(not_caused_by_takes_a_hook_or_a_plugin_name);
     RUN_TEST(needs_accept_memory_fields_and_remember_setting_keys);
     RUN_TEST(a_need_that_is_no_field_and_no_global_setting_is_refused);
     RUN_TEST(a_global_setting_key_of_96_characters_fits_and_97_does_not);
@@ -3285,7 +3368,7 @@ void register_plugins_tests(void)
     RUN_TEST(l6_tags_all_holds_eight_strings);
     RUN_TEST(l6_a_tag_holds_63_bytes);
     RUN_TEST(l7_created_by_and_updated_by_hold_five_kinds);
-    RUN_TEST(l7_bins_hold_four);
+    RUN_TEST(l7_bins_hold_three);
     RUN_TEST(l7_origins_hold_three);
     RUN_TEST(l8_not_caused_by_holds_eight_strings_of_79_bytes);
     RUN_TEST(l9_a_manifest_has_at_most_sixteen_settings);
@@ -3332,6 +3415,7 @@ void register_plugins_tests(void)
     RUN_TEST(a_persistent_entry_with_a_broken_command_gets_only_its_command_error);
     RUN_TEST(backfill_with_a_persistent_entry_whose_command_is_broken_names_only_the_command);
     register_plugin_settings_tests();
+    register_events_tests();
 }
 
 // NOLINTEND(cppcoreguidelines-avoid-magic-numbers,readability-magic-numbers)

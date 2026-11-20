@@ -278,6 +278,7 @@ PluginSettingsStatus plugin_settings_register(const PluginManifest *m, SettingsR
     return st;
 }
 
+/* cppcheck-suppress staticFunction ; public API (plugin_settings.h); used by tests */
 void plugin_settings_unregister(const char *name, SettingsRegistry *reg)
 {
     char prefix[PREFIX_CAP];
@@ -418,8 +419,37 @@ static bool name_taken(const SettingsRegistry *reg, const char *name)
     return setting_by_key(reg, key) != NULL;
 }
 
-/* One folder. OOM is the only failure that stops the reader. */
-static PluginSettingsStatus load_folder(const char *dir, const char *folder, SettingsRegistry *reg)
+/* The manifests plugin_settings_load_manifests keeps: those whose keys are registered. */
+typedef struct {
+    PluginManifest **items;
+    size_t count;
+    size_t cap;
+} KeptManifests;
+
+/* Take ownership of man into keep. False when memory runs out; man is then still the caller's. */
+static bool keep_manifest(KeptManifests *keep, PluginManifest *man)
+{
+    if (keep->count == keep->cap) {
+        size_t cap = keep->cap + (size_t)NAMES_GROW;
+        PluginManifest **grown = (PluginManifest **)malloc(cap * sizeof(void *));
+
+        if (grown == NULL) {
+            return false;
+        }
+        if (keep->count > 0U) {
+            memcpy((void *)grown, (const void *)keep->items, keep->count * sizeof(void *));
+        }
+        free((void *)keep->items);
+        keep->items = grown;
+        keep->cap = cap;
+    }
+    keep->items[keep->count++] = man;
+    return true;
+}
+
+/* One folder. OOM is the only failure that stops the reader. keep may be NULL. */
+static PluginSettingsStatus load_folder(const char *dir, const char *folder, SettingsRegistry *reg,
+                                        KeptManifests *keep)
 {
     PluginManifest *man = NULL;
     size_t len = 0;
@@ -451,23 +481,56 @@ static PluginSettingsStatus load_folder(const char *dir, const char *folder, Set
         st = plugin_settings_register(man, reg);
         if (st == PLUGIN_SETTINGS_REFUSED) {
             st = PLUGIN_SETTINGS_OK;
+        } else if (st == PLUGIN_SETTINGS_OK && keep != NULL) {
+            if (!keep_manifest(keep, man)) {
+                plugin_settings_unregister(man->name, reg);
+                st = PLUGIN_SETTINGS_OOM;
+            } else {
+                return st; /* kept: the caller frees it */
+            }
         }
     }
     plugin_manifest_free(man);
     return st;
 }
 
-PluginSettingsStatus plugin_settings_load(const char *plugins_dir, SettingsRegistry *reg,
-                                          int *sys_errno)
+PluginSettingsStatus plugin_settings_load_manifests(const char *plugins_dir, SettingsRegistry *reg,
+                                                    PluginManifestList *out, int *sys_errno)
 {
     char **names = NULL;
     size_t n = 0;
     size_t i = 0;
+    KeptManifests keep = {.items = NULL, .count = 0U, .cap = 0U};
     PluginSettingsStatus st = list_folders(plugins_dir, &names, &n, sys_errno);
 
     for (i = 0; st == PLUGIN_SETTINGS_OK && i < n; i++) {
-        st = load_folder(plugins_dir, names[i], reg);
+        st = load_folder(plugins_dir, names[i], reg, out != NULL ? &keep : NULL);
     }
     names_free(names, n);
+    if (out != NULL) {
+        out->items = keep.items;
+        out->count = keep.count;
+    }
+    if (st != PLUGIN_SETTINGS_OK && out != NULL) {
+        plugin_manifest_list_free(out);
+    }
     return st;
+}
+
+PluginSettingsStatus plugin_settings_load(const char *plugins_dir, SettingsRegistry *reg,
+                                          int *sys_errno)
+{
+    return plugin_settings_load_manifests(plugins_dir, reg, NULL, sys_errno);
+}
+
+void plugin_manifest_list_free(PluginManifestList *list)
+{
+    size_t i = 0;
+
+    for (i = 0; i < list->count; i++) {
+        plugin_manifest_free(list->items[i]);
+    }
+    free((void *)list->items);
+    list->items = NULL;
+    list->count = 0;
 }

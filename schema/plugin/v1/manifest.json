@@ -72,7 +72,7 @@
             "tags": {"type": "object", "properties": {"any": {"type": "array", "items": {"type": "string"}}, "all": {"type": "array", "items": {"type": "string"}}, "match_before": {"type": "boolean"}}},
             "created_by": {"type": "array", "items": {"$ref": "#/$defs/actor_kind"}},
             "updated_by": {"type": "array", "items": {"$ref": "#/$defs/actor_kind"}},
-            "bins": {"type": "array", "items": {"$ref": "common.json#/$defs/bin"}},
+            "bins": {"type": "array", "items": {"enum": ["live", "expired", "deleted"]}, "description": "R2.21: the bin before the write; memory.purged in events says only purges."},
             "not_caused_by": {"type": "array", "items": {"type": "string"}},
             "origins": {"type": "array", "items": {"enum": ["local", "sync", "import"]}, "default": ["local"], "description": "R2.21 (G-11)."}
           }

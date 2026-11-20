@@ -17,6 +17,9 @@ option(REMEMBER_ENABLE_LSAN "Request leak detection with ASan (Linux CI)" OFF)
 # Clang source-based coverage for scripts/check-coverage.sh (mutually exclusive
 # with sanitizers in practice — that script configures a separate build-cov tree).
 option(REMEMBER_ENABLE_COVERAGE "Clang -fprofile-instr-generate/-fcoverage-mapping" OFF)
+# A build that cannot start programs sets this OFF (log 010 H-0.7): writes then insert no
+# outbox row and warn plugin_unsupported. events_set_processes overrides it at run time.
+option(REMEMBER_PROCESSES "Build can start plugin programs" ON)
 # Fault-injection hooks in store_sqlite (malloc/prepare). On for coverage builds
 # and Debug unit tests so OOM/SQLite-error lines are reachable.
 option(REMEMBER_TEST_HOOKS "Enable store_test_fail_* hooks in store_sqlite.c" OFF)
@@ -123,6 +126,7 @@ set_property(SOURCE
     src/fileio.c
     src/jsonread.c
     src/outbox.c
+    src/events.c
     src/plugin_manifest.c
     src/plugin_settings.c
     src/import_read.c
@@ -192,6 +196,14 @@ function(remember_apply_posix_feature_macros target)
         )
     endif()
 endfunction()
+
+if(REMEMBER_PROCESSES)
+    set(REMEMBER_PROCESSES_DEFAULT 1)
+else()
+    set(REMEMBER_PROCESSES_DEFAULT 0)
+endif()
+set_source_files_properties(src/events.c PROPERTIES
+    COMPILE_DEFINITIONS "REMEMBER_PROCESSES=${REMEMBER_PROCESSES_DEFAULT}")
 
 # --- SQLite amalgamation (sole SQLite TU; relaxed warnings) ------------------
 add_library(sqlite3 STATIC third_party/sqlite/sqlite3.c)
@@ -264,6 +276,7 @@ set(REMEMBER_LIB_SOURCES
     src/fileio.c
     src/jsonread.c
     src/outbox.c
+    src/events.c
     src/plugin_manifest.c
     src/plugin_settings.c
     src/import_read.c
@@ -361,6 +374,7 @@ set(REMEMBER_TEST_SOURCES
     tests/test_old_cli.c
     tests/test_plugins.c
     tests/test_plugin_settings.c
+    tests/test_events.c
     tests/test_brain_list.c
     tests/fixture_roundtrip.c
 )
@@ -426,6 +440,7 @@ add_executable(remember_store_tests
     src/fileio.c
     src/jsonread.c
     src/outbox.c
+    src/events.c
     src/plugin_manifest.c
     src/plugin_settings.c
     src/import_validate.c
@@ -437,6 +452,7 @@ add_executable(remember_store_tests
     tests/test_outbox.c
     tests/test_plugins.c
     tests/test_plugin_settings.c
+    tests/test_events.c
     tests/failing_stream.c
     third_party/sha256/sha256.c
     third_party/utf8proc/utf8proc.c

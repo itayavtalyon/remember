@@ -6,6 +6,7 @@
 #include "commands.h"
 #include "commands_common.h"
 #include "diag.h"
+#include "events.h"
 #include "exit_codes.h"
 #include "output.h"
 #include "plugin_settings.h"
@@ -633,8 +634,9 @@ static int meet_newer_brain(const Store *s, const CliArgs *args)
 
 /* The keys the brain's settings calls know: the compiled-in rows, plugin.hybrid.enabled, and
    the keys of each plugin in <data dir>/plugins (plan 30). With no data dir (HOME and
-   XDG_DATA_HOME unset) no plugin is installed, as far as anyone can tell. 0, or the exit code. */
-static int load_registry(SettingsRegistry **out)
+   XDG_DATA_HOME unset) no plugin is installed, as far as anyone can tell. mans gets the
+   manifests behind those keys (plan 31). 0, or the exit code. */
+static int load_registry(SettingsRegistry **out, PluginManifestList *mans)
 {
     char dir[REMEMBER_PATH_MAX];
     char err[ERR_TEXT_CAP];
@@ -652,7 +654,7 @@ static int load_registry(SettingsRegistry **out)
     }
     /* The data dir left room for the folder name. */
     (void)snprintf(dir + strlen(dir), sizeof("/plugins"), "/plugins");
-    st = plugin_settings_load(dir, reg, &sys_errno);
+    st = plugin_settings_load_manifests(dir, reg, mans, &sys_errno);
     if (st == PLUGIN_SETTINGS_OOM) {
         err_msg(DIAG_OUT_OF_MEMORY, "out of memory");
         return REMEMBER_ERR;
@@ -664,25 +666,149 @@ static int load_registry(SettingsRegistry **out)
     return 0;
 }
 
+/* ---- memory events (plan 31) ------------------------------------------------------------ */
+
+/* cause.command (R3.2). conflict accept has no value of its own yet
+   (decision:open-2026-11-18-plan31-conflict-accept-command): it reports update. NULL when the
+   command changes no memory. */
+static const char *event_command_name(CliCommand command)
+{
+    static const bool k_writes[] = {
+        [CLI_CMD_ADD] = true,   [CLI_CMD_UPDATE] = true, [CLI_CMD_DELETE] = true,
+        [CLI_CMD_PURGE] = true, [CLI_CMD_LINK] = true,   [CLI_CMD_UNLINK] = true,
+        [CLI_CMD_REKEY] = true, [CLI_CMD_IMPORT] = true, [CLI_CMD_CONFLICT] = true,
+    };
+
+    if ((size_t)command >= sizeof(k_writes) / sizeof(k_writes[0]) || !k_writes[command]) {
+        return NULL;
+    }
+    return command == CLI_CMD_CONFLICT ? "update" : cli_command_name(command);
+}
+
+/* What one command's events hold; the store keeps pointers into it until store_close. */
+typedef struct {
+    EventRules rules;
+    EventCause cause;
+    char brain_label[REMEMBER_PATH_MAX];
+    const char *command;
+    StoreOrigin origin;
+    bool armed;
+    char pad_[3];
+} CommandEvents;
+
+/* The brain path as an event shows it: absolute, with the home folder written ~ (OQ-14). */
+static void brain_label(const char *path, char *out, size_t cap)
+{
+    char absolute[REMEMBER_PATH_MAX];
+    char home[REMEMBER_PATH_MAX];
+    const char *raw_home = getenv("HOME"); // NOLINT(concurrency-mt-unsafe) single-threaded CLI
+    const char *shown = path; /* when it cannot be made absolute (too long), as given */
+    size_t n = 0U;
+
+    /* HOME is compared in the same normal form as the path ("/Users/x/" is "/Users/x"). */
+    if (raw_home != NULL && raw_home[0] == '/' &&
+        util_absolute_path(raw_home, home, sizeof(home)) == 0) {
+        n = strlen(home);
+    }
+    if (util_absolute_path(path, absolute, sizeof(absolute)) == 0) {
+        shown = absolute;
+    }
+    if (n > 1U && strncmp(shown, home, n) == 0 && shown[n] == '/') {
+        (void)snprintf(out, cap, "~%s", shown + n);
+    } else {
+        (void)snprintf(out, cap, "%s", shown);
+    }
+}
+
+/* Turn on events for a command that changes memories, when an enabled plugin has an action.
+   0, or the exit code. */
+static int arm_events(Store *s, const CliArgs *args, const PluginManifestList *mans,
+                      CommandEvents *cev)
+{
+    char userdb[REMEMBER_PATH_MAX];
+    char err[ERR_TEXT_CAP];
+    const char *user_db = NULL;
+    StoreEvents cfg;
+    StoreStatus st = STORE_OK;
+
+    cev->command = event_command_name(args->command);
+    if (cev->command == NULL || mans->count == 0U) {
+        return 0;
+    }
+    if (util_resolve_user_db_path(userdb, sizeof(userdb), err, sizeof(err)) == 0) {
+        user_db = userdb;
+    }
+    if (events_rules_load(s, user_db, mans, &cev->rules, err, sizeof(err)) != 0) {
+        err_msg(code_for_store_text(err), err);
+        return REMEMBER_ERR;
+    }
+    if (events_cause_read(&cev->cause) != 0) {
+        err_msg(DIAG_OUT_OF_MEMORY, "out of memory");
+        return REMEMBER_ERR;
+    }
+    cev->origin = args->command == CLI_CMD_IMPORT ? STORE_ORIGIN_IMPORT : STORE_ORIGIN_LOCAL;
+    brain_label(store_path(s), cev->brain_label, sizeof(cev->brain_label));
+    memset(&cfg, 0, sizeof(cfg));
+    cfg.rules = &cev->rules;
+    cfg.cause = &cev->cause;
+    cfg.command = cev->command;
+    cfg.brain_path = cev->brain_label;
+    cfg.origin = cev->origin;
+    cfg.hooks = STORE_HOOKS_DEFAULT;
+    st = store_set_events(s, &cfg);
+    if (st != STORE_OK) {
+        err_store(s, st);
+        return REMEMBER_ERR;
+    }
+    cev->armed = true;
+    return 0;
+}
+
+/* After a command that succeeded: the warning for a write that needed a program this build cannot
+   start, and the skipped_source lines for a sync or import. A command that failed may have rolled
+   its write back, and then neither is true. */
+static void finish_events(const Store *s, CommandEvents *cev, int rc)
+{
+    if (!cev->armed || rc != 0) {
+        return;
+    }
+    if (store_events_unsupported(s) > 0U) {
+        (void)diag_plugin_unsupported();
+    }
+    (void)events_log_skipped(&cev->rules, store_path(s), cev->command, cev->origin);
+}
+
 static int run_with_store(const CliArgs *args, CmdFn fn)
 {
     Store *s = NULL;
     SettingsRegistry *reg = NULL;
+    PluginManifestList mans = {.items = NULL, .count = 0U};
+    CommandEvents cev;
     int rc = 0;
 
+    memset(&cev, 0, sizeof(cev));
     s = open_store(args, &rc);
     if (s == NULL) {
         return rc;
     }
-    rc = load_registry(&reg);
+    rc = load_registry(&reg, &mans);
     if (rc == 0) {
         store_set_settings_registry(s, reg);
         rc = meet_newer_brain(s, args);
     }
     if (rc == 0) {
+        rc = arm_events(s, args, &mans, &cev);
+    }
+    if (rc == 0) {
         rc = fn(s, args->globals.json, args->rest_argc, args->rest_argv);
+        finish_events(s, &cev, rc);
     }
     store_close(s);
+    events_rules_free(&cev.rules);
+    if (cev.cause.chain_json != NULL) {
+        events_cause_free(&cev.cause);
+    }
+    plugin_manifest_list_free(&mans);
     settings_registry_free(reg);
     return rc;
 }
