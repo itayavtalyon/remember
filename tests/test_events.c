@@ -1286,6 +1286,30 @@ static const char k_hop1[] =
     "{\"hook\":\"plugin/router/run\",\"event_id\":\"01a14521-0a00-7c11-9a00-0000000000e1\","
     "\"memory_id\":\"01a14521-09ff-7d20-8c00-00000000aa01\",\"depth\":1}";
 
+enum { HOPS_CAP = 16384 };
+
+/* A REMEMBER_HOOK_CHAIN of hops copies of k_hop1, into many. */
+static void given_hops(char many[HOPS_CAP], int hops)
+{
+    const size_t cap = HOPS_CAP;
+    size_t len = 1U;
+    int i = 0;
+
+    many[0] = '[';
+    for (i = 0; i < hops; i++) {
+        int n = snprintf(many + len, cap - len, "%s%s", i > 0 ? "," : "", k_hop1);
+
+        ASSERT_TRUE(n > 0 && (size_t)n < cap - len - 1U);
+        if (n <= 0 || (size_t)n >= cap - len - 1U) {
+            many[0] = '\0';
+            return;
+        }
+        len += (size_t)n;
+    }
+    many[len++] = ']';
+    many[len] = '\0';
+}
+
 /* A run at depth 2 of plugin/url_expand/fetch, handling event e2 of memory aa01. */
 static void given_run_env(const char *chain)
 {
@@ -1387,9 +1411,7 @@ static void assert_chain_dropped(const char *chain)
 
 TEST(a_chain_that_is_not_valid_is_dropped_and_the_write_counts_as_depth_one_of_its_own)
 {
-    char many[16384];
-    size_t len = 1U;
-    int i = 0;
+    char many[HOPS_CAP];
 
     assert_chain_dropped(NULL);
     assert_chain_dropped("");
@@ -1422,28 +1444,16 @@ TEST(a_chain_that_is_not_valid_is_dropped_and_the_write_counts_as_depth_one_of_i
                          "\"01a14521-0a00-7c11-9a00-0000000000e1\",\"memory_id\":"
                          "\"01a14521-09ff-7d20-8c00-00000000aa01\",\"depth\":1000001}]");
     /* 100 items already: no room for this run's hop */
-    many[0] = '[';
-    for (i = 0; i < EVENT_CHAIN_MAX; i++) {
-        len += (size_t)snprintf(many + len, sizeof(many) - len, "%s%s", i > 0 ? "," : "", k_hop1);
-    }
-    many[len++] = ']';
-    many[len] = '\0';
+    given_hops(many, EVENT_CHAIN_MAX);
     assert_chain_dropped(many);
 }
 
 TEST(ninety_nine_hops_and_this_one_fill_the_chain)
 {
     EventCause c;
-    char many[16384];
-    size_t len = 1U;
-    int i = 0;
+    char many[HOPS_CAP];
 
-    many[0] = '[';
-    for (i = 0; i < EVENT_CHAIN_MAX - 1; i++) {
-        len += (size_t)snprintf(many + len, sizeof(many) - len, "%s%s", i > 0 ? "," : "", k_hop1);
-    }
-    many[len++] = ']';
-    many[len] = '\0';
+    given_hops(many, EVENT_CHAIN_MAX - 1);
     given_run_env(many);
     ASSERT_EQ_INT(events_cause_read(&c), 0);
     ASSERT_EQ_INT(c.nchain, EVENT_CHAIN_MAX);
