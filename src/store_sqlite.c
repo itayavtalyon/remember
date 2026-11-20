@@ -4926,8 +4926,7 @@ static int ev_touched_ids(Store *s, long long **ids, size_t *n)
 
     *ids = NULL;
     *n = 0;
-    if (ev_prepare(s, "SELECT local_id FROM temp.ev_touch ORDER BY local_id;", 0,
-                   &stmt) != 0) {
+    if (ev_prepare(s, "SELECT local_id FROM temp.ev_touch ORDER BY local_id;", 0, &stmt) != 0) {
         return -1;
     }
     while ((step = sqlite3_step(stmt)) == SQLITE_ROW) {

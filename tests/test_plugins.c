@@ -1564,9 +1564,10 @@ TEST(bins_origins_and_not_caused_by_are_checked)
 
 TEST(all_three_bins_fit_in_the_bins_list)
 {
-    PluginManifest *man = given_parse(
-        HEAD "\"actions\":[" ACTION_BODY ",\"filter\":{\"bins\":[\"live\",\"expired\",\"deleted\"]}}]}",
-        PLUGIN_PARSE_OK);
+    PluginManifest *man =
+        given_parse(HEAD "\"actions\":[" ACTION_BODY
+                         ",\"filter\":{\"bins\":[\"live\",\"expired\",\"deleted\"]}}]}",
+                    PLUGIN_PARSE_OK);
 
     ASSERT_EQ_INT(man->entries[0].n_bins, 3);
     plugin_manifest_free(man);
@@ -1576,7 +1577,8 @@ TEST(all_three_bins_fit_in_the_bins_list)
    could never match (decision:2026-11-18-plan31-review-grill G2). */
 TEST(the_purged_bin_is_refused_in_an_action_filter)
 {
-    expect_error(HEAD "\"actions\":[" ACTION_BODY ",\"filter\":{\"bins\":[\"deleted\",\"purged\"]}}]}",
+    expect_error(HEAD "\"actions\":[" ACTION_BODY
+                      ",\"filter\":{\"bins\":[\"deleted\",\"purged\"]}}]}",
                  "/actions/0/filter/bins/1", "R2.21",
                  R25_2_MUST_BE("/actions/0/filter/bins/1", "\"live\", \"expired\", or \"deleted\""),
                  R25_2_USE("\"live\", \"expired\", or \"deleted\""));
@@ -1614,7 +1616,8 @@ TEST(a_tag_pattern_that_can_never_be_a_tag_is_refused)
                  R25_2_MUST_BE("/actions/0/filter/tags/all/1", TAG_PATTERN_WHAT),
                  R25_2_USE(TAG_PATTERN_WHAT));
     /* No stored tag holds a tab, so "proj\t*" matches nothing: it must not fold to "proj*". */
-    expect_error(HEAD "\"actions\":[" ACTION_BODY ",\"filter\":{\"tags\":{\"any\":[\"proj\\t*\"]}}}]}",
+    expect_error(HEAD "\"actions\":[" ACTION_BODY
+                      ",\"filter\":{\"tags\":{\"any\":[\"proj\\t*\"]}}}]}",
                  "/actions/0/filter/tags/any/0", "R2.21",
                  R25_2_MUST_BE("/actions/0/filter/tags/any/0", TAG_PATTERN_WHAT),
                  R25_2_USE(TAG_PATTERN_WHAT));
@@ -1629,18 +1632,19 @@ TEST(not_caused_by_takes_a_hook_or_a_plugin_name)
     static const char *const bad[] = {"Wake", "plugin/wake", "plugin/Wake/go", "hook/wake/go",
                                       "plugin/wake/go/x"};
     size_t i = 0;
-    PluginManifest *man = given_parse(HEAD "\"actions\":[" ACTION_BODY
-                                           ",\"filter\":{\"not_caused_by\":[\"wake\",\"plugin/wake/go\"]}}]}",
-                                      PLUGIN_PARSE_OK);
+    PluginManifest *man =
+        given_parse(HEAD "\"actions\":[" ACTION_BODY
+                         ",\"filter\":{\"not_caused_by\":[\"wake\",\"plugin/wake/go\"]}}]}",
+                    PLUGIN_PARSE_OK);
 
     ASSERT_EQ_INT(man->entries[0].n_not_caused_by, 2);
     plugin_manifest_free(man);
     for (i = 0; i < sizeof(bad) / sizeof(bad[0]); i++) {
         char doc[512];
 
-        (void)snprintf(doc, sizeof(doc),
-                       HEAD "\"actions\":[" ACTION_BODY ",\"filter\":{\"not_caused_by\":[\"%s\"]}}]}",
-                       bad[i]);
+        (void)snprintf(
+            doc, sizeof(doc),
+            HEAD "\"actions\":[" ACTION_BODY ",\"filter\":{\"not_caused_by\":[\"%s\"]}}]}", bad[i]);
         expect_error(doc, "/actions/0/filter/not_caused_by/0", "R2.21",
                      R25_2_MUST_BE("/actions/0/filter/not_caused_by/0", CAUSE_WHAT),
                      R25_2_USE(CAUSE_WHAT));
@@ -2656,9 +2660,9 @@ TEST(l8_not_caused_by_holds_eight_strings_of_79_bytes)
     EXPECT_LIMIT(ACTION_WITH("\"not_caused_by\":[%s]"), "\"a\"", 8U,
                  "/actions/0/filter/not_caused_by", "R2.21", "a list of at most 8 strings");
     /* plugin/ + a 40-byte name + / + 31 bytes is 79 */
-    EXPECT_LENGTH(ACTION_WITH("\"not_caused_by\":[\"plugin/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/%s\"]"),
-                  'c', 31U, "/actions/0/filter/not_caused_by/0", "R2.21",
-                  "a string of at most 79 bytes");
+    EXPECT_LENGTH(
+        ACTION_WITH("\"not_caused_by\":[\"plugin/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/%s\"]"),
+        'c', 31U, "/actions/0/filter/not_caused_by/0", "R2.21", "a string of at most 79 bytes");
 }
 
 TEST(l9_a_manifest_has_at_most_sixteen_settings)

@@ -1269,7 +1269,8 @@ static void filter_list(PluginManifest *man, const JsonValue *obj, const char *p
     }
 }
 
-/* Draft words until Story Weaver words them (decision:open-2026-11-18-plan31-review-filter-values-copy). */
+/* Draft words until Story Weaver words them
+ * (decision:open-2026-11-18-plan31-review-filter-values-copy). */
 static const char k_tag_pattern_what[] = "a tag, or the start of a tag followed by *";
 static const char k_cause_what[] = "\"plugin/<name>/<entry>\" or a plugin name";
 
