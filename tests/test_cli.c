@@ -17,9 +17,9 @@
    one). */
 
 enum {
-    VT_CELLS = 7,        /* columns of the Verbs table */
-    VT_CELL_MAX = 512,   /* one cell, unescaped */
-    VT_MAX_WORDS = 4,    /* `remember a b c` */
+    VT_CELLS = 7,         /* columns of the Verbs table */
+    VT_CELL_MAX = 512,    /* one cell, unescaped */
+    VT_MAX_WORDS = 4,     /* `remember a b c` */
     VT_REPORT_MAX = 8192, /* every mismatch line of one check */
     VT_COL_COMMAND = 0,
     VT_COL_RIGHTS = 2,
@@ -293,7 +293,8 @@ TEST(cli_verbs_dispatch_verb_without_row_fails)
 /* A shipped row the dispatch table lacks; a planned row for it passes. */
 TEST(cli_verbs_main_row_without_dispatch_verb_fails)
 {
-    char *main_row = given_spec_edited("| none | read | - | - | 44 |", "| none | read | - | - | main |");
+    char *main_row =
+        given_spec_edited("| none | read | - | - | 44 |", "| none | read | - | - | main |");
 
     assert_mismatch(main_row, 1, "plan main row names a verb the dispatch table lacks: sync\n");
     free(main_row);
@@ -304,10 +305,11 @@ TEST(cli_verbs_main_row_without_dispatch_verb_fails)
 TEST(cli_verbs_rights_must_match_the_engine)
 {
     char *get = given_spec_edited("| LOC, BIN | read |", "| LOC, BIN | read-write |");
-    char *purge = given_spec_edited("HOOKS | read-write | - | - | main | On main before the ladder. "
-                                    "Plan 32",
-                                    "HOOKS | read | - | - | main | On main before the ladder. "
-                                    "Plan 32");
+    char *purge =
+        given_spec_edited("HOOKS | read-write | - | - | main | On main before the ladder. "
+                          "Plan 32",
+                          "HOOKS | read | - | - | main | On main before the ladder. "
+                          "Plan 32");
     char *brain = given_spec_edited("| `remember brain list` | none | none |",
                                     "| `remember brain list` | none | read |");
     char *set = given_spec_edited("`--scope`, AUTHOR | read-write |", "`--scope`, AUTHOR | read |");
@@ -328,8 +330,8 @@ TEST(cli_verbs_rights_must_match_the_engine)
 
 /* A row the parser cannot read fails loudly instead of being skipped: a
    missing cell, a command without its code span, a command not after (or
-   not spelled)    `remember `, two spaces between words, a line that names a verb outside the table form, and a spec
-   with no Verbs section. */
+   not spelled) `remember `, two spaces between words, a line that names a
+   verb outside the table form, and a spec with no Verbs section. */
 TEST(cli_verbs_malformed_rows_fail)
 {
     char *cells = given_spec_edited("| `remember tags` | BIN |", "| `remember tags` |");
