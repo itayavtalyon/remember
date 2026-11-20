@@ -1099,7 +1099,7 @@ TEST(store_purge_by_sync_id_wipes_a_row_out_of_live_and_refuses_the_rest)
 {
     char *db = make_temp_db_path();
     char err[ERR_BUFSIZE];
-    char sync[64];
+    char sync[STORE_DEVICE_ID_LEN + 1]; /* a sync id is a UUID, the same length */
     Store *s = NULL;
     Entry e;
     StoreAddAction act = STORE_ADD_CREATED;

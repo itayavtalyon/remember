@@ -659,9 +659,11 @@ static CmdResult purge_with_race(const char *db, const char *race_sql, const cha
 {
     CmdResult r;
 
+    // NOLINTBEGIN(concurrency-mt-unsafe) the child inherits this process-global
     ASSERT_EQ_INT(setenv("REMEMBER_TEST_PURGE_RACE", race_sql, 1), 0);
     r = RUN(db, "purge", "--key", key);
     ASSERT_EQ_INT(unsetenv("REMEMBER_TEST_PURGE_RACE"), 0);
+    // NOLINTEND(concurrency-mt-unsafe)
     return r;
 }
 
