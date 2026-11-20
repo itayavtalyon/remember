@@ -6803,13 +6803,65 @@ fail:
     return st;
 }
 
+/* The rest of a hard delete, inside the write transaction begin_write opened: out_deleted is the
+   row, already loaded and checked. Removes its FTS row and the row, writes its tombstone, and
+   commits; on failure frees out_deleted and rolls back. */
+static StoreStatus hard_delete_loaded(Store *s, const char *now, Entry *out_deleted)
+{
+    StoreStatus st = STORE_OK;
+    sqlite3_stmt *del = NULL;
+    long long id = out_deleted->id;
+    int rc = 0;
+
+    st = fts_delete(s->db, id, &s->last);
+    if (st == STORE_OK) {
+        st = insert_tombstone(s->db, out_deleted->sync_id, now, &s->last);
+    }
+    if (st != STORE_OK) {
+        goto fail;
+    }
+
+    rc = sqlite3_prepare_v2(s->db, "DELETE FROM entries WHERE local_id = ?1;", -1, &del, NULL);
+    if (rc != SQLITE_OK) {
+        capture_sqlite_error(s->db, &s->last);
+        st = STORE_ERR_SQLITE;
+        goto fail;
+    }
+    (void)sqlite3_bind_int64(del, 1, id);
+    if (sqlite3_step(del) != SQLITE_DONE) {
+        capture_sqlite_error(s->db, &s->last);
+        (void)sqlite3_finalize(del);
+        st = STORE_ERR_SQLITE;
+        goto fail;
+    }
+    (void)sqlite3_finalize(del);
+
+    if (sqlite3_changes(s->db) == 0) {
+        st = STORE_ERR_NOT_FOUND;
+        goto fail;
+    }
+
+    st = gc_orphan_tags(s->db, &s->last);
+    if (st != STORE_OK) {
+        goto fail;
+    }
+
+    if (commit_write(s) != 0) {
+        st = STORE_ERR_SQLITE;
+        goto fail;
+    }
+    return STORE_OK;
+
+fail:
+    store_entry_free(out_deleted);
+    rollback_quiet(s->db);
+    return st;
+}
+
 static StoreStatus hard_delete_tx(Store *s, long long id_or_zero, const char *key_or_null,
                                   StoreBin bin, const char *now, Entry *out_deleted)
 {
     StoreStatus st = STORE_OK;
-    sqlite3_stmt *del = NULL;
-    long long id = id_or_zero;
-    int rc = 0;
 
     memset(out_deleted, 0, sizeof(*out_deleted));
     if (bin == STORE_BIN_LIVE) {
@@ -6819,57 +6871,39 @@ static StoreStatus hard_delete_tx(Store *s, long long id_or_zero, const char *ke
     if (st != STORE_OK) {
         return st;
     }
-
-    st = load_then_check_bin(s->db, id, key_or_null, NULL, bin, now, out_deleted, &s->last);
+    st = load_then_check_bin(s->db, id_or_zero, key_or_null, NULL, bin, now, out_deleted,
+                             &s->last);
     if (st != STORE_OK) {
-        goto fail;
+        rollback_quiet(s->db);
+        return st;
     }
-    id = out_deleted->id;
+    return hard_delete_loaded(s, now, out_deleted);
+}
 
-    st = fts_delete(s->db, id, &s->last);
-    if (st == STORE_OK) {
-        st = insert_tombstone(s->db, out_deleted->sync_id, now, &s->last);
+StoreStatus store_purge_by_sync_id(Store *s, const char *sync_id, const char *now, Entry *out)
+{
+    StoreStatus st = STORE_OK;
+
+    if (s == NULL || s->db == NULL || sync_id == NULL || now == NULL || out == NULL) {
+        return STORE_ERR_INTERNAL;
+    }
+    memset(out, 0, sizeof(*out));
+    st = begin_write(s);
+    if (st != STORE_OK) {
+        return st;
+    }
+    /* The row and its bin are read under the write lock: a local id can name another memory by
+       now, and the row may have left Expired or Deleted since the caller looked. */
+    st = load_entry_by_sync_id(s->db, sync_id, out, &s->last);
+    if (st == STORE_OK && entry_bin(out, now) == STORE_BIN_LIVE) {
+        store_entry_free(out);
+        st = STORE_ERR_NOT_DELETED;
     }
     if (st != STORE_OK) {
-        goto fail_free;
+        rollback_quiet(s->db);
+        return st;
     }
-
-    rc = sqlite3_prepare_v2(s->db, "DELETE FROM entries WHERE local_id = ?1;", -1, &del, NULL);
-    if (rc != SQLITE_OK) {
-        capture_sqlite_error(s->db, &s->last);
-        st = STORE_ERR_SQLITE;
-        goto fail_free;
-    }
-    (void)sqlite3_bind_int64(del, 1, id);
-    if (sqlite3_step(del) != SQLITE_DONE) {
-        capture_sqlite_error(s->db, &s->last);
-        (void)sqlite3_finalize(del);
-        st = STORE_ERR_SQLITE;
-        goto fail_free;
-    }
-    (void)sqlite3_finalize(del);
-
-    if (sqlite3_changes(s->db) == 0) {
-        st = STORE_ERR_NOT_FOUND;
-        goto fail_free;
-    }
-
-    st = gc_orphan_tags(s->db, &s->last);
-    if (st != STORE_OK) {
-        goto fail_free;
-    }
-
-    if (commit_write(s) != 0) {
-        st = STORE_ERR_SQLITE;
-        goto fail_free;
-    }
-    return STORE_OK;
-
-fail_free:
-    store_entry_free(out_deleted);
-fail:
-    rollback_quiet(s->db);
-    return st;
+    return hard_delete_loaded(s, now, out);
 }
 
 StoreStatus store_soft_delete_by_id(Store *s, long long id, const char *actor, const char *now,

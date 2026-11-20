@@ -1095,6 +1095,37 @@ TEST(store_update_and_delete_wrong_bin)
     free(db);
 }
 
+TEST(store_purge_by_sync_id_wipes_a_row_out_of_live_and_refuses_the_rest)
+{
+    char *db = make_temp_db_path();
+    char err[ERR_BUFSIZE];
+    char sync[64];
+    Store *s = NULL;
+    Entry e;
+    StoreAddAction act = STORE_ADD_CREATED;
+
+    ASSERT_TRUE(db != NULL);
+    s = store_open(db, err, sizeof(err));
+    ASSERT_TRUE(s != NULL);
+    memset(&e, 0, sizeof(e));
+    ASSERT_EQ_STATUS(store_add(s, "row", k_hash_a, NULL, NULL, 0U, "human", NULL, k_now, &act, &e),
+                     STORE_OK);
+    (void)snprintf(sync, sizeof(sync), "%s", e.sync_id);
+    store_entry_free(&e);
+    ASSERT_EQ_STATUS(store_purge_by_sync_id(s, NULL, k_now, &e), STORE_ERR_INTERNAL);
+    ASSERT_EQ_STATUS(store_purge_by_sync_id(s, sync, k_now, &e), STORE_ERR_NOT_DELETED);
+    ASSERT_EQ_STATUS(store_purge_by_sync_id(s, "01a1f846-73fc-7e79-b4af-66226bfd7008", k_now, &e),
+                     STORE_ERR_NOT_FOUND);
+    ASSERT_EQ_STATUS(store_soft_delete_by_id(s, 1, NULL, k_now, &e), STORE_OK);
+    store_entry_free(&e);
+    ASSERT_EQ_STATUS(store_purge_by_sync_id(s, sync, k_now, &e), STORE_OK);
+    ASSERT_STREQ(e.sync_id, sync);
+    store_entry_free(&e);
+    ASSERT_EQ_STATUS(store_purge_by_sync_id(s, sync, k_now, &e), STORE_ERR_NOT_FOUND);
+    store_close(s);
+    free(db);
+}
+
 TEST(store_update_trash_clear_expires_restores)
 {
     char *db = make_temp_db_path();
@@ -3562,6 +3593,7 @@ void register_store_tests(void)
     RUN_TEST(store_expires_at_equal_now_is_trash);
     RUN_TEST(store_list_and_search_bins);
     RUN_TEST(store_update_and_delete_wrong_bin);
+    RUN_TEST(store_purge_by_sync_id_wipes_a_row_out_of_live_and_refuses_the_rest);
     RUN_TEST(store_update_trash_clear_expires_restores);
     RUN_TEST(store_update_trash_future_expires_leaves_trash);
     RUN_TEST(store_add_keyless_revives_expired);

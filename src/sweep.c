@@ -28,7 +28,7 @@ int sweep_parse(int rest_argc, const char **rest_argv, bool *all)
             err_fmt(DIAG_USAGE, "unknown option '%s'", arg);
             return -1;
         } else {
-            err_msg(DIAG_USAGE, "sweep takes no arguments but --all");
+            err_msg(DIAG_USAGE, "brain sweep takes no arguments but --all");
             return -1;
         }
     }
@@ -49,7 +49,7 @@ StoreStatus sweep_now(Store *s, size_t *marked)
     return store_sweep(s, now, marked);
 }
 
-/* The data of sweep.result: the total, and for --all each brain's count. */
+/* The data of brain.sweep.result: the total, and for --all each brain's count. */
 static int write_result(bool json, size_t total, const BrainList *list, const size_t *counts)
 {
     if (!json) {
@@ -76,8 +76,8 @@ static int write_result(bool json, size_t total, const BrainList *list, const si
     return fputc('}', app_out()) == EOF ? -1 : 0;
 }
 
-/* The arguments were parsed by sweep_parse before the brain opened (a usage error opens nothing).
- */
+/* `brain sweep`. The arguments were parsed by sweep_parse before the brain opened (a usage error
+   opens nothing). */
 int cmd_sweep(Store *s, bool json, int rest_argc, const char **rest_argv)
 {
     size_t marked = 0U;

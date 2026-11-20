@@ -121,7 +121,7 @@ assert "the skill does not contain 'see C-13'" test "$(grep -cF 'see C-13' "$SKI
 # ---- specs/RELEASE-0.3.0.md ----
 assert "specs/RELEASE-0.3.0.md exists" test -f "$SPEC"
 if [[ -f "$SPEC" ]]; then
-  for p in 22 23 25 26 27 27a 27b; do
+  for p in 22 23 25 26 27 27a 27b 32; do
     line="$(grep -E "^- Plan ${p}[ ,:]" "$SPEC" || true)"
     assert_eq "RELEASE-0.3.0 has one line for plan $p" "$(grep -cE "^- Plan ${p}[ ,:]" "$SPEC")" "1"
     files="$(grep -oE '[A-Z][A-Z0-9-]*\.md' <<<"$line" || true)"

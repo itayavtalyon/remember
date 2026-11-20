@@ -86,7 +86,7 @@ A memory object, in order: `id`, `local_id`, `key`, `body`, `tags`, `created_by`
 | `add` | `{action, memory}`. `action` is `created`, `merged`, or `updated` (`decision:plan21-add-action-names-kept`). `memory` includes `links`. The memory is saved before those links are read. A failure on that read exits 1 and the envelope is an error with no `data` (`decision:plan21-add-link-read-fails-loud`). |
 | `get` | `{memory}` with `links`. |
 | `update`, `rekey` | `{action, memory}`. `action` is `updated`. No `links`. |
-| `delete`, `purge` | `{action, count, entries}`. `action` is `deleted`. |
+| `delete`, `purge` | `{action, count, entries}`. `action` is `deleted` for `delete` and `purged` for `purge` (plan 32). |
 | `link` | `{action, count, links}`. `action` is `created` or `merged`. `links` holds stubs. |
 | `unlink` | `{action, count, links}`. `action` is `deleted`. |
 | `related` | `{id, local_id, key, count, links}`. |
@@ -208,7 +208,7 @@ No `decision:json-*` key. 008 has no JE section for this flag. The rule is 010 H
 
 `delete` rejects `--trash` and `--deleted` after bin resolution. `delete --trash` therefore emits the warning and then usage `unknown option '--trash'`. `delete --deleted` is usage `unknown option '--deleted'` and does not warn.
 
-An unflagged `delete` soft-deletes a live row. `delete --expired` hard-deletes that one expired row. `purge` requires `--expired` or `--deleted`. `purge --trash` selects Deleted, warns, and purges that bin. There is no `purge-trash` command.
+An unflagged `delete` soft-deletes a live or expired row. `delete --expired` takes no locator and moves every expired row to the Trash (plan 32). `purge LOCATOR` takes no bin flag: `purge --expired`, `purge --deleted` and `purge --trash` are unknown options (`decision:2026-11-18-plan32-grill-purge-delete-forms`). There is no `purge-trash` command.
 
 A live command aimed at an expired row exits 3 with the expired wrong-list line. A live command aimed at a deleted row exits 3 with the Trash wrong-list line.
 
@@ -283,6 +283,6 @@ The fix (E3B-1 entry 26, `decision:2026-11-12-copy-batch-e3b-warning-splits`), j
 
 No command in this binary reads a JSON file or JSON stdin, so no command calls this writer. A list-cursor member this binary does not know stays `invalid --cursor` (§ Cursor paging).
 
-## `sweep.result` and the purge and delete results (plan 32)
+## `brain.sweep.result` and the purge and delete results (plan 32)
 
-`sweep` data is `{"expired":N}`: the rows marked. `sweep --all` data is `{"expired":N,"brains":[{"path":"…","expired":n},…]}`, the total and one item for each listed brain, in `brains.json` order. A path with no brain is a `brain_missing` warning, a brain that cannot be swept (or is newer than this remember) is a `sweep_failed` warning, except that a newer brain gives no warning, and each of those has `"expired":0`. Plain `sweep` prints the count (`decision:open-2026-11-18-plan32-sweep-count-copy`). `purge LOCATOR` is `memory.purge.result` with `data{action:"purged",count:1,entries:[…]}` and prints nothing in plain mode. `delete --expired` is `memory.delete.result` with `data{action:"deleted",count,entries}` and prints the count in plain mode.
+`brain sweep` data is `{"expired":N}`: the rows marked. `brain sweep --all` data is `{"expired":N,"brains":[{"path":"…","expired":n},…]}`, the total and one item for each listed brain, in `brains.json` order. A path with no brain is a `brain_missing` warning, a brain that cannot be swept (or is newer than this remember) is a `sweep_failed` warning, except that a newer brain gives no warning, and each of those has `"expired":0`. Plain `brain sweep` prints the count (`decision:open-2026-11-18-plan32-sweep-count-copy`). `purge LOCATOR` is `memory.purge.result` with `data{action:"purged",count:1,entries:[…]}` and prints nothing in plain mode. `delete --expired` is `memory.delete.result` with `data{action:"deleted",count,entries}` and prints the count in plain mode.

@@ -318,7 +318,7 @@ Event (hook stdin, plugin socket, webhook):
 |---|---|---|
 | CLI `--json` write, one memory | `add` | `E(memory.add.result)` + `data{action, memory{}}` with `links`, `warnings?`. `action` is `created`, `merged`, or `updated`. |
 | CLI `--json` write, one memory | `update`, `rekey` | `E(memory.<verb>.result)` + `data{action, memory{}}` with no `links`, `warnings?`. `action` is `updated`. |
-| CLI `--json` write, many | `delete`, `purge` | `E(memory.<verb>.result)` + `data{action, count, entries[]}` with no `links`, `warnings?`. `action` is `deleted`. |
+| CLI `--json` write, many | `delete`, `purge` | `E(memory.<verb>.result)` + `data{action, count, entries[]}` with no `links`, `warnings?`. `action` is `deleted` for `delete` and `purged` for `purge` (plan 32). |
 | CLI `--json` write, many | `link`, `unlink` | `E(memory.<verb>.result)` + `data{action, count, links[]}`, `warnings?`. `link` action is `created` or `merged`. `unlink` action is `deleted`. |
 | CLI `--json` write, many | `conflict accept` | `E(conflict.accept.result)` + `data{action, count, entries[]}` with no `links`, `warnings?`. `action` is `accepted`. |
 | CLI `--json` write, many | `import` | `E(memory.import.result)` + `data{action, inserted, updated, unchanged, conflicts, rejected}`, `warnings?`. `action` is `imported`. The counts are numbers. |

@@ -661,6 +661,13 @@ StoreStatus store_hard_delete_by_key(Store *s, const char *key, StoreBin bin, co
                                      Entry *out);
 
 /*
+ * purge LOCATOR (decision:purge-command): hard delete the row with this sync id when it is in
+ * Expired or Deleted, judged in the write transaction itself. A live row is
+ * STORE_ERR_NOT_DELETED; no row is STORE_ERR_NOT_FOUND. *out is a snapshot of the removed row.
+ */
+StoreStatus store_purge_by_sync_id(Store *s, const char *sync_id, const char *now, Entry *out);
+
+/*
  * Change fields for store_update. Zero / NULL means that axis is left alone,
  * except set_tags with ntags 0, which clears tags. if_version_vector NULL skips
  * the version-vector guard. Named fields so call sites cannot transpose the old

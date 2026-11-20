@@ -101,9 +101,6 @@ static const CommandEntry k_commands[] = {
      .command = CLI_CMD_EXPORT,
      .summary = "Write the brain to a JSON, Markdown, or CSV file"},
     {.name = "settings", .command = CLI_CMD_SETTINGS, .summary = "Show or change a setting"},
-    {.name = "sweep",
-     .command = CLI_CMD_SWEEP,
-     .summary = "Mark memories past their expiry (--all: every listed brain)"},
 };
 
 enum { COMMAND_COUNT = (int)(sizeof(k_commands) / sizeof(k_commands[0])) };
@@ -133,6 +130,11 @@ static CliCommand command_from_name(const char *name)
 const char *cli_command_name(CliCommand cmd)
 {
     int i = 0;
+
+    /* The sweep's top-level token is `brain` (`brain sweep`). */
+    if (cmd == CLI_CMD_SWEEP) {
+        cmd = CLI_CMD_BRAIN;
+    }
     for (i = 0; i < COMMAND_COUNT; i++) {
         if (k_commands[i].command == cmd) {
             return k_commands[i].name;
@@ -666,6 +668,15 @@ void cli_parse(int argc, char *const *argv, CliArgs *out)
     if (out->command == CLI_CMD_HELP) {
         apply_bare_help_command(out);
         return;
+    }
+    /* `brain sweep [--all]` is the sweep command (decision:2026-11-18-sweep-under-brain): its
+       arguments are the ones after "sweep". There is no top-level `sweep`. */
+    if (out->command == CLI_CMD_BRAIN && out->rest_argc > 0 &&
+        strcmp(out->rest_argv[0], "sweep") == 0) {
+        out->command = CLI_CMD_SWEEP;
+        out->rest_argc--;
+        memmove((void *)out->rest_argv, (const void *)(out->rest_argv + 1),
+                sizeof(*out->rest_argv) * (size_t)out->rest_argc);
     }
     out->error = CLI_ERR_OK;
 }

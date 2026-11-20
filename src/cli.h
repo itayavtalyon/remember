@@ -128,7 +128,8 @@ void cli_args_free(CliArgs *out);
 /* User-facing base message for err (no trailing newline). Never NULL. */
 const char *cli_error_message(CliError err);
 
-/* Subcommand name for cmd, or NULL if not a real subcommand. */
+/* Top-level subcommand name for cmd (`brain` for the sweep, which is `brain sweep`), or NULL if
+   not a real subcommand. */
 const char *cli_command_name(CliCommand cmd);
 
 /* One-line description for help, or NULL. */

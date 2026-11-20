@@ -181,8 +181,8 @@ remember --json update --expired 3 --clear-expires
 remember --json rekey --key decision:old --to-key decision:new
 remember --json rekey 12 --clear-key
 remember --json purge 3                           # wipe one expired or deleted memory for good
-remember --json sweep                             # mark memories past their expiry (every command does it after it runs)
-remember --json sweep --all                       # the same for every brain in brains.json
+remember --json brain sweep                       # mark memories past their expiry (every command does it after it runs)
+remember --json brain sweep --all                 # the same for every brain in brains.json
 ```
 
 **Soft delete and purge:**

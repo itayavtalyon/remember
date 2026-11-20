@@ -1001,8 +1001,8 @@ TEST(export_out_is_never_the_brain)
     {
         /* The fixture holds an expired row, and the sweep after any command marks it (plan 32):
            mark it now, so that a later write to the brain can only be an export's. */
-        const char *sweep[] = {"sweep"};
-        CmdResult r = export_run(g.db, sweep, 1U);
+        const char *sweep[] = {"brain", "sweep"};
+        CmdResult r = export_run(g.db, sweep, 2U);
 
         ASSERT_EQ_INT(r.exit_code, 0);
         cmd_result_free(&r);

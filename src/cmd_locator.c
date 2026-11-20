@@ -13,6 +13,32 @@
 #include <stdlib.h>
 #include <string.h>
 
+#ifdef REMEMBER_TEST_CLI
+#include <sqlite3.h>
+
+/* Test CLI only: REMEMBER_TEST_PURGE_RACE=<sql> runs that SQL on a second connection between
+   purge's read of the row and its write, as another process could. */
+static void test_race_before_purge(const Store *s)
+{
+    sqlite3 *db = NULL;
+    // NOLINTNEXTLINE(concurrency-mt-unsafe) single-threaded CLI
+    const char *sql = getenv("REMEMBER_TEST_PURGE_RACE");
+
+    if (sql == NULL) {
+        return;
+    }
+    if (sqlite3_open(store_path(s), &db) == SQLITE_OK) {
+        (void)sqlite3_exec(db, sql, NULL, NULL, NULL);
+    }
+    (void)sqlite3_close(db);
+}
+#else
+static void test_race_before_purge(const Store *s)
+{
+    (void)s;
+}
+#endif
+
 /* Locator (get / delete / purge): exactly one of id | --key. */
 
 /* What a command takes beside the locator: get takes bin flags; delete takes bin flags and the
@@ -428,7 +454,6 @@ int cmd_purge(Store *s, bool json, int rest_argc, const char **rest_argv)
     char key_norm[REMEMBER_TOKEN_MAX + 1];
     char now[ISO_TS_BUFSIZE];
     StoreStatus st = STORE_OK;
-    StoreBin bin = STORE_BIN_LIVE;
     int rc = 0;
 
     memset(&row, 0, sizeof(row));
@@ -443,25 +468,25 @@ int cmd_purge(Store *s, bool json, int rest_argc, const char **rest_argv)
         err_msg(DIAG_INTERNAL, "internal error");
         return REMEMBER_ERR;
     }
-    rc = locator_bind_local_id(s, &loc);
-    if (rc != 0) {
-        return rc;
+    if (loc.kind == LOC_KEY) {
+        st = store_get_row_by_key(s, loc.key, &row);
+    } else if (loc.kind == LOC_UUID) {
+        st = store_get_row_by_sync_id(s, loc.sync_id, &row);
+    } else {
+        st = store_get_row(s, loc.id, &row);
     }
-    st = loc.kind == LOC_KEY ? store_get_row_by_key(s, loc.key, &row)
-                             : store_get_row(s, loc.id, &row);
     if (st != STORE_OK) {
         store_entry_free(&row);
         return store_status_to_exit(s, st);
     }
-    bin = store_bin_of(row.deleted_at, row.expires_at, now);
-    if (bin == STORE_BIN_LIVE) {
-        rc = exit_wrong_list(STORE_ERR_NOT_DELETED, wrong_list_label(&row));
-        store_entry_free(&row);
-        return rc;
-    }
-    st = store_hard_delete_by_id(s, row.id, bin, now, &gone);
+    /* The read gives the memory's sync id and its label. The store reads the row again by that id
+       and judges its bin under the write lock: by then its local id may name another memory, and
+       the row may have left Expired or Deleted. */
+    test_race_before_purge(s);
+    st = store_purge_by_sync_id(s, row.sync_id, now, &gone);
+    rc = st == STORE_ERR_NOT_DELETED ? exit_wrong_list(st, wrong_list_label(&row))
+                                     : store_status_to_exit(s, st);
     store_entry_free(&row);
-    rc = store_status_to_exit(s, st);
     if (rc != REMEMBER_OK) {
         return rc;
     }

@@ -405,7 +405,7 @@ TEST(the_sweep_command_marks_and_prints_how_many_and_a_second_run_prints_zero)
     add_expiring(db, "three");
     backdate(db, 1, k_past);
     backdate(db, 3, k_past);
-    r = RUN(db, "sweep");
+    r = RUN(db, "brain", "sweep");
     ASSERT_EQ_INT(r.exit_code, 0);
     ASSERT_STREQ(r.out, "2\n");
     ASSERT_STREQ(r.err, "");
@@ -413,13 +413,33 @@ TEST(the_sweep_command_marks_and_prints_how_many_and_a_second_run_prints_zero)
     assert_marked(db, 1, true);
     assert_marked(db, 2, false);
     assert_rows(db, "memory.created,memory.created,memory.created,memory.expired,memory.expired");
-    r = RUN(db, "sweep");
+    /* `brain sweep` keeps cause.command "sweep" (decision:2026-11-18-sweep-under-brain). */
+    assert_query(db,
+                 "SELECT group_concat(json_extract(payload, '$.cause.command'), ',') FROM outbox "
+                 "WHERE type = 'memory.expired';",
+                 "sweep,sweep");
+    r = RUN(db, "brain", "sweep");
     ASSERT_STREQ(r.out, "0\n");
     cmd_result_free(&r);
-    r = RUN(db, "--json", "sweep");
+    r = RUN(db, "--json", "brain", "sweep");
     ASSERT_EQ_INT(r.exit_code, 0);
     ASSERT_STREQ(r.err, "");
-    ASSERT_STR_CONTAINS(r.out, "\"type\":\"sweep.result\",\"data\":{\"expired\":0}");
+    ASSERT_STR_CONTAINS(r.out, "\"type\":\"brain.sweep.result\",\"data\":{\"expired\":0}");
+    cmd_result_free(&r);
+    free(db);
+}
+
+TEST(there_is_no_top_level_sweep_command_only_brain_sweep)
+{
+    char *db = given_brain_with_enabled_plugin();
+    CmdResult r = RUN(db, "sweep");
+
+    ASSERT_EQ_INT(r.exit_code, 1);
+    ASSERT_STR_CONTAINS(r.err, "sweep");
+    cmd_result_free(&r);
+    r = RUN(db, "--json", "brain", "sweep");
+    ASSERT_EQ_INT(r.exit_code, 0);
+    ASSERT_STR_CONTAINS(r.out, "\"type\":\"brain.sweep.result\"");
     cmd_result_free(&r);
     free(db);
 }
@@ -427,17 +447,21 @@ TEST(the_sweep_command_marks_and_prints_how_many_and_a_second_run_prints_zero)
 TEST(the_sweep_command_takes_no_argument_and_no_flag_but_all)
 {
     char *db = given_brain_with_enabled_plugin();
-    CmdResult r = RUN(db, "sweep", "now");
+    CmdResult r = RUN(db, "brain", "sweep", "now");
 
     ASSERT_EQ_INT(r.exit_code, 1);
     ASSERT_STR_CONTAINS(r.err, "remember: ");
     cmd_result_free(&r);
-    r = RUN(db, "sweep", "--hooks");
+    r = RUN(db, "brain", "sweep", "--hooks");
     ASSERT_EQ_INT(r.exit_code, 1);
     ASSERT_STR_CONTAINS(r.err, "unknown option '--hooks'");
     cmd_result_free(&r);
-    r = RUN(db, "sweep", "--all", "--all");
+    r = RUN(db, "brain", "sweep", "--all", "--all");
     ASSERT_EQ_INT(r.exit_code, 1);
+    cmd_result_free(&r);
+    r = RUN(db, "--json", "brain", "sweep", "now");
+    ASSERT_EQ_INT(r.exit_code, 1);
+    ASSERT_STR_CONTAINS(r.out, "\"fix\":\"Run 'remember brain --help' to see how to use it.\"");
     cmd_result_free(&r);
     free(db);
 }
@@ -464,7 +488,7 @@ TEST(sweep_all_reads_brains_json_and_warns_missing)
     unlisted = make_temp_db_path();
     exec_sql(unlisted, "CREATE TABLE x(a);");
     ASSERT_EQ_INT(remove(gone), 0);
-    r = RUN(one, "sweep", "--all");
+    r = RUN(one, "brain", "sweep", "--all");
     ASSERT_EQ_INT(r.exit_code, 0);
     ASSERT_STREQ(r.out, "2\n");
     ASSERT_STR_PREFIX(r.err, "remember: warning: brain \"");
@@ -478,9 +502,9 @@ TEST(sweep_all_reads_brains_json_and_warns_missing)
     r = RUN(one, "--json", "brain", "list");
     ASSERT_STR_CONTAINS(r.out, gone); /* the entry stays until prune */
     cmd_result_free(&r);
-    r = RUN(one, "--json", "sweep", "--all");
+    r = RUN(one, "--json", "brain", "sweep", "--all");
     ASSERT_EQ_INT(r.exit_code, 0);
-    ASSERT_STR_CONTAINS(r.out, "\"type\":\"sweep.result\",\"data\":{\"expired\":0,\"brains\":[");
+    ASSERT_STR_CONTAINS(r.out, "\"type\":\"brain.sweep.result\",\"data\":{\"expired\":0,\"brains\":[");
     ASSERT_STR_CONTAINS(r.out, "\"warnings\":[{\"code\":\"brain_missing\"");
     {
         /* the missing brain is listed with 0, in brains.json order */
@@ -491,7 +515,7 @@ TEST(sweep_all_reads_brains_json_and_warns_missing)
         ASSERT_STR_CONTAINS(r.out, want);
     }
     cmd_result_free(&r);
-    r = RUN(one, "--strict", "sweep", "--all");
+    r = RUN(one, "--strict", "brain", "sweep", "--all");
     ASSERT_EQ_INT(r.exit_code, 4);
     cmd_result_free(&r);
     free(unlisted);
@@ -510,7 +534,7 @@ TEST(sweep_all_skips_a_newer_brain_and_a_brain_that_cannot_be_swept_warns)
     exec_sql(newer, "PRAGMA user_version = 99;");
     exec_sql(broken, "CREATE TRIGGER no_expiry BEFORE UPDATE OF expired_at ON entries BEGIN SELECT "
                      "RAISE(ABORT, 'no'); END;");
-    r = RUN(one, "sweep", "--all");
+    r = RUN(one, "brain", "sweep", "--all");
     ASSERT_EQ_INT(r.exit_code, 0);
     ASSERT_STREQ(r.out, "1\n");
     ASSERT_STR_CONTAINS(r.err, "warning: ");
@@ -625,6 +649,75 @@ TEST(purge_names_the_row_by_id_key_or_uuid_and_a_missing_row_is_not_found)
     r = RUN(db, "purge", "--key", "gone:key");
     ASSERT_EQ_INT(r.exit_code, 2);
     cmd_result_free(&r);
+    free(db);
+}
+
+/* Runs purge with REMEMBER_TEST_PURGE_RACE set: the test CLI runs race_sql on a second connection
+   between purge's read of the row and its write, as another process could. */
+// NOLINTNEXTLINE(bugprone-easily-swappable-parameters) the brain, the SQL, then the key
+static CmdResult purge_with_race(const char *db, const char *race_sql, const char *key)
+{
+    CmdResult r;
+
+    ASSERT_EQ_INT(setenv("REMEMBER_TEST_PURGE_RACE", race_sql, 1), 0);
+    r = RUN(db, "purge", "--key", key);
+    ASSERT_EQ_INT(unsetenv("REMEMBER_TEST_PURGE_RACE"), 0);
+    return r;
+}
+
+TEST(purge_never_wipes_another_memory_that_took_the_local_id_of_the_one_it_read)
+{
+    char *db = make_temp_db_path();
+    CmdResult r;
+
+    assert_ok(RUN(db, "add", "keep"));
+    assert_ok(RUN(db, "add", "old", "--key", "k:old"));
+    assert_ok(RUN(db, "add", "victim", "--key", "k:victim"));
+    assert_ok(RUN(db, "delete", "2"));
+    assert_ok(RUN(db, "delete", "3"));
+    /* Another process purges k:old, and the Trash row k:victim now holds its local id 2 (SQLite
+       hands the highest rowid out again once it is free). */
+    r = purge_with_race(db,
+                        "DELETE FROM entries WHERE local_id = 2; "
+                        "UPDATE entries SET local_id = 2 WHERE local_id = 3;",
+                        "k:old");
+    ASSERT_EQ_INT(r.exit_code, 2);
+    cmd_result_free(&r);
+    assert_query(db, "SELECT count(*) FROM entries WHERE key = 'k:victim';", "1");
+    free(db);
+}
+
+TEST(purge_of_a_row_restored_since_it_was_read_is_the_wrong_bin_line_and_keeps_it)
+{
+    char *db = make_temp_db_path();
+    CmdResult r;
+
+    assert_ok(RUN(db, "add", "one", "--key", "k:one"));
+    assert_ok(RUN(db, "delete", "1"));
+    r = purge_with_race(db, "UPDATE entries SET deleted_at = NULL WHERE local_id = 1;", "k:one");
+    ASSERT_EQ_INT(r.exit_code, 3);
+    ASSERT_STREQ(r.err, "remember: \"k:one\" isn't deleted, so it can't be purged. Run 'remember "
+                        "delete k:one' first.\n");
+    cmd_result_free(&r);
+    assert_query(db, "SELECT count(*) FROM entries;", "1");
+    free(db);
+}
+
+TEST(purge_of_a_row_that_moved_from_the_trash_to_expired_since_it_was_read_purges_it)
+{
+    char *db = make_temp_db_path();
+    CmdResult r;
+
+    assert_ok(RUN(db, "add", "one", "--key", "k:one"));
+    assert_ok(RUN(db, "delete", "1"));
+    r = purge_with_race(db,
+                        "UPDATE entries SET deleted_at = NULL, expires_at = "
+                        "'2020-01-01T00:00:00.000Z' WHERE local_id = 1;",
+                        "k:one");
+    ASSERT_EQ_INT(r.exit_code, 0);
+    ASSERT_STREQ(r.err, "");
+    cmd_result_free(&r);
+    assert_query(db, "SELECT count(*) FROM entries;", "0");
     free(db);
 }
 
@@ -862,12 +955,16 @@ void register_sweep_tests(void)
     RUN_TEST(an_add_that_revives_an_expired_memory_clears_the_mark_and_the_next_expiry_emits_again);
     RUN_TEST(restore_of_a_due_row_emits_restored_then_expired);
     RUN_TEST(the_sweep_command_marks_and_prints_how_many_and_a_second_run_prints_zero);
+    RUN_TEST(there_is_no_top_level_sweep_command_only_brain_sweep);
     RUN_TEST(the_sweep_command_takes_no_argument_and_no_flag_but_all);
     RUN_TEST(sweep_all_reads_brains_json_and_warns_missing);
     RUN_TEST(sweep_all_skips_a_newer_brain_and_a_brain_that_cannot_be_swept_warns);
     RUN_TEST(purge_live_exits_3_wrong_bin);
     RUN_TEST(purge_deleted_writes_one_tombstone);
     RUN_TEST(purge_names_the_row_by_id_key_or_uuid_and_a_missing_row_is_not_found);
+    RUN_TEST(purge_never_wipes_another_memory_that_took_the_local_id_of_the_one_it_read);
+    RUN_TEST(purge_of_a_row_restored_since_it_was_read_is_the_wrong_bin_line_and_keeps_it);
+    RUN_TEST(purge_of_a_row_that_moved_from_the_trash_to_expired_since_it_was_read_purges_it);
     RUN_TEST(purge_of_an_expired_row_the_sweep_marked_emits_expired_then_purged);
     RUN_TEST(purge_of_an_unmarked_expired_row_emits_only_purged);
     RUN_TEST(purge_event_is_one_purged_with_the_last_state_of_the_row);

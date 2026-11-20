@@ -62,7 +62,6 @@ static void print_general_help(void)
         "  brain       Replace the brain id\n"
         "  export      Write the brain to a JSON, Markdown, or CSV file\n"
         "  settings    Show or change a setting\n"
-        "  sweep       Mark memories past their expiry (--all: every listed brain)\n"
         "  help        Show this help (help <command> for a command)\n"
         "  version     Show version\n"
         "\n"
@@ -262,15 +261,6 @@ static void print_command_help(CliCommand topic)
         (void)fprintf(out, "Exactly one of ID or --key is required. There is no prompt.\n");
         (void)fprintf(out, "A live memory is refused (exit 3): delete it first.\n");
         (void)fprintf(out, "\n");
-    } else if (topic == CLI_CMD_SWEEP) {
-        (void)fprintf(out, "Mark every memory past its expiry as expired.\n");
-        (void)fprintf(out, "Options:\n");
-        (void)fprintf(out,
-                      "  --all           Sweep every brain in brains.json, not just this one\n");
-        (void)fprintf(out, "\n");
-        (void)fprintf(out, "Every command runs this after it, so you rarely need it.\n");
-        (void)fprintf(out, "Human stdout: the count of memories marked.\n");
-        (void)fprintf(out, "\n");
     } else if (topic == CLI_CMD_LINK || topic == CLI_CMD_UNLINK) {
         (void)fprintf(out, "Options:\n");
         (void)fprintf(out, "  --from ID       Source entry id\n");
@@ -392,6 +382,13 @@ static void print_command_help(CliCommand topic)
         (void)fprintf(out, "remember brain prune removes each path that has no brain file.\n");
         (void)fprintf(out,
                       "--json type is brain.prune.result. data is {action, count, brains[]}.\n");
+        /* Draft until Story Weaver words it (decision:open-2026-11-20-help-text-new-verbs). */
+        (void)fprintf(out, "remember brain sweep marks every memory past its expiry as expired.\n");
+        (void)fprintf(out, "Every command runs this after it, so you rarely need it.\n");
+        (void)fprintf(out, "--all sweeps every brain in brains.json, not just this one.\n");
+        (void)fprintf(out, "Human stdout: the count of memories marked.\n");
+        (void)fprintf(out, "--json type is brain.sweep.result. data is {expired} or "
+                           "{expired, brains[]}.\n");
         (void)fprintf(out, "\n");
     } else if (topic == CLI_CMD_SETTINGS) {
         (void)fprintf(out, "Show or change a setting.\n");
@@ -696,7 +693,12 @@ static const char *event_command_name(CliCommand command)
     if ((size_t)command >= sizeof(k_writes) / sizeof(k_writes[0]) || !k_writes[command]) {
         return NULL;
     }
-    return command == CLI_CMD_CONFLICT ? "update" : cli_command_name(command);
+    if (command == CLI_CMD_CONFLICT) {
+        return "update";
+    }
+    /* `brain sweep` keeps cause.command "sweep": it names the job, and the PP 3 enum is frozen in
+       protocol 1 (decision:2026-11-18-sweep-under-brain). */
+    return command == CLI_CMD_SWEEP ? "sweep" : cli_command_name(command);
 }
 
 /* What one command's events hold; the store keeps pointers into it until store_close. */
@@ -1068,7 +1070,7 @@ static const char *reply_noun_verb(const CliArgs *args)
     case CLI_CMD_PURGE:
         return "memory.purge";
     case CLI_CMD_SWEEP:
-        return "sweep";
+        return "brain.sweep";
     case CLI_CMD_LINK:
         return "memory.link";
     case CLI_CMD_UNLINK:
