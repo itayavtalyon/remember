@@ -16,7 +16,7 @@ Decisions built:
 
 - decision:2026-11-03-takeover-order
 - decision:2026-11-03-confirmation-required-exit-5
-- decision:2026-11-03-naming-defaults (`daemon.takeover.result` `{changed, previous_owner}`)
+- decision:2026-11-03-naming-defaults (amended by decision:open-2026-11-20-daemon-install-reply: the reply is `daemon.install.result` `{changed, path, previous_owner}`)
 
 - decision:2026-10-31-cli-takeover-offer
 - decision:2026-10-31-trashed-app-handback (the CLI half)

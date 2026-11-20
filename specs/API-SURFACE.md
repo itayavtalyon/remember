@@ -76,7 +76,7 @@ When a plan ships a planned row, it changes that row's plan to `main` in the sam
 | `remember plugin reindex` | `NAME`, `--full` | read-write | - | - | 36 | Subcommand of `plugin`. |
 | `remember plugin test` | `NAME\|DIR`, `--entry`, `--event`, `--query`, `--dry-run` | read-write | - | - | 38 | Subcommand of `plugin`. |
 | `remember daemon` | `--plugin-dir PATH` | read-write | - | - | 39 | New noun `daemon`, approved in `decision:2026-11-18-top-level-approvals`. It runs the daemon in the foreground. |
-| `remember daemon install` | `--yes` | none | - | - | 40, 41 | Subcommand of `daemon`. It also does the takeover from Fortkeeps (`decision:2026-11-18-daemon-install-absorbs-takeover`). Its reply shape is open: `decision:open-2026-11-20-daemon-install-reply`. |
+| `remember daemon install` | `--yes` | none | - | - | 40, 41 | Subcommand of `daemon`. It also does the takeover from Fortkeeps (`decision:2026-11-18-daemon-install-absorbs-takeover`). It replies `daemon.install.result` `{changed, path, previous_owner}` (`decision:open-2026-11-20-daemon-install-reply`). |
 | `remember sync peers` | none | read | - | - | 44 | New noun `sync`, approved in `decision:2026-11-18-top-level-approvals`. |
 | `remember sync pull` | not grilled | read-write | - | - | - | Subcommand of `sync`. Needs a transport; no plan builds it yet (plan 44, Out of scope). |
 | `remember archive` | LOC | read-write | `POST /v1/memories/{id}/archive` | `remember_archive` | - | Top-level verb approved by Itay and confirmed by Interface (log 019 V1-06). Reserved row (X1-11 A); no plan builds it yet. |

@@ -2,7 +2,7 @@
 
 **Area:** the takeover path of `remember daemon install [--yes]` in `src/cmd_daemon.c`, `src/launchd.c`, `src/systemd_user.c` (enable/disable), `src/exit_codes.h`.
 **Needs:** plans 39 and 40. No other plan.
-**Blocked on:** `decision:open-2026-11-20-daemon-install-reply` (the reply type) and `decision:open-2026-11-18-daemon-install-copy` (Story Weaver: R30-4 with the new command name). The copy is item R30-4 in `decision:2026-11-12-copy-batch-final`.
+**Blocked on:** `decision:open-2026-11-18-daemon-install-copy` (Story Weaver: R30-4 with the new command name). The copy is item R30-4 in `decision:2026-11-12-copy-batch-final`.
 
 ## Goal
 
@@ -16,7 +16,7 @@ Decisions built:
 
 - decision:2026-11-03-takeover-order
 - decision:2026-11-03-confirmation-required-exit-5 (amended by decision:2026-11-12-e2-confirmation-required-exits-5-everywhere: `confirmation_required` exits 5 everywhere)
-- decision:2026-11-03-naming-defaults (`daemon.takeover.result` `{changed, previous_owner}`; open again under decision:open-2026-11-20-daemon-install-reply)
+- decision:2026-11-03-naming-defaults (amended by decision:open-2026-11-20-daemon-install-reply: `daemon.takeover.result` is gone; the reply is `daemon.install.result` `{changed, path, previous_owner}`)
 - decision:2026-11-18-daemon-install-absorbs-takeover (the command is `daemon install [--yes]`)
 
 - decision:2026-10-31-cli-takeover-offer
@@ -66,7 +66,7 @@ Spec sections this plan changes: `specs/DAEMON.md` §9 Owner missing, §10 the t
 
 The rules below hold. Each quote is decision text.
 
-- **Command name (2026-11-18).** `decision:2026-11-18-daemon-install-absorbs-takeover`: `remember daemon takeover` does not exist. This plan builds the takeover path of `remember daemon install [--yes]` (plan 40 builds the plain install). `daemon install` runs the takeover order below when another owner (Fortkeeps) has the service, and asks the y/N confirmation (or needs `--yes`) only then. In the decision quotes below, "remember daemon takeover" means that path of `daemon install`, and "daemon install first" means the plan 40 install step. The reply type is open: `decision:open-2026-11-20-daemon-install-reply` (Stop and ask; A merges into `daemon.install.result` `{changed, path, previous_owner}`). The copy that names the command is pending Story Weaver: `decision:open-2026-11-18-daemon-install-copy`; until it is approved, the R30-4 lines below are the draft with `remember daemon install` in place of `remember daemon takeover`.
+- **Command name (2026-11-18).** `decision:2026-11-18-daemon-install-absorbs-takeover`: `remember daemon takeover` does not exist. This plan builds the takeover path of `remember daemon install [--yes]` (plan 40 builds the plain install). `daemon install` runs the takeover order below when another owner (Fortkeeps) has the service, and asks the y/N confirmation (or needs `--yes`) only then. In the decision quotes below, "remember daemon takeover" means that path of `daemon install`, and "daemon install first" means the plan 40 install step. The reply is `daemon.install.result` `{changed, path, previous_owner}` on every path; `previous_owner` is `fortkeeps`, `homebrew` or `cli` when a service was there, and null when none was (`decision:open-2026-11-20-daemon-install-reply`, Itay 2026-11-20). The copy that names the command is pending Story Weaver: `decision:open-2026-11-18-daemon-install-copy`; until it is approved, the R30-4 lines below are the draft with `remember daemon install` in place of `remember daemon takeover`.
 - `--yes`: "--yes applies only to remember daemon takeover; without a TTY and without --yes, takeover fails."
 - Missing brew plist: "If the brew plist is missing, remember daemon takeover runs daemon install first."
 - Dormant loser: "remember daemon takeover (trashed app) disables app.fortkeeps.daemon and enables the brew label. Combined with KeepAlive {SuccessfulExit:false}, a losing daemon never retries."
@@ -98,8 +98,8 @@ The rules below hold. Each quote is decision text.
 ## Definition of Done
 
 - [ ] `yes_flag_install_only`: `remember daemon install --yes` takes over from Fortkeeps without a prompt. Any other command with `--yes` fails with the usage error for an unknown option.
-- [ ] `takeover_changed_true`: `remember daemon install --yes`, with Fortkeeps as the owner, boots out `app.fortkeeps.daemon`, runs `launchctl disable gui/<uid>/app.fortkeeps.daemon`, runs `launchctl enable gui/<uid>/io.github.itayavtalyon.remember`, then calls the install of this plan (which writes the plist when needed and runs the only `launchctl bootstrap`), and replies with `changed` true and `previous_owner` `"fortkeeps"` (reply type per `decision:open-2026-11-20-daemon-install-reply`). Assert the order of the fake runner calls, and assert exactly one `bootstrap` call.
-- [ ] `takeover_changed_false`: when Homebrew already runs the daemon, the command returns ok with `changed` false.
+- [ ] `takeover_changed_true`: `remember daemon install --yes`, with Fortkeeps as the owner, boots out `app.fortkeeps.daemon`, runs `launchctl disable gui/<uid>/app.fortkeeps.daemon`, runs `launchctl enable gui/<uid>/io.github.itayavtalyon.remember`, then calls the install of this plan (which writes the plist when needed and runs the only `launchctl bootstrap`), and replies `daemon.install.result` with `data` `{changed: true, path, previous_owner: "fortkeeps"}`. Assert the order of the fake runner calls, and assert exactly one `bootstrap` call.
+- [ ] `takeover_changed_false`: when Homebrew already runs the daemon, the command returns ok with `changed` false and `previous_owner` `"homebrew"`.
 - [ ] `takeover_no_brew_plist`: when `~/Library/LaunchAgents/io.github.itayavtalyon.remember.plist` does not exist, the command runs the install of this plan first, then the takeover.
 - [ ] `takeover_without_yes`: on a TTY, `remember daemon install` with Fortkeeps as the owner asks the y/N confirmation (copy: R30-4). Without a TTY and without `--yes`, it fails with error `confirmation_required`, exits 5 (`REMEMBER_CONFIRMATION_REQUIRED`), and changes nothing. Assert the value 5 and the R30-4 `message` and `fix`. The exit is 5 on every path that returns `confirmation_required` (E2 A, `decision:2026-11-12-e2-confirmation-required-exits-5-everywhere`).
 - [ ] `install_no_owner_asks_nothing`: with no service installed and no TTY, `remember daemon install` without `--yes` installs and does not fail with `confirmation_required`.
