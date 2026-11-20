@@ -4616,9 +4616,10 @@ int store_test_event_read_scans(const Store *s)
         }
         sqlite3_free(sql);
         while (sqlite3_step(plan) == SQLITE_ROW) {
+            static const char k_scan[] = "SCAN ";
             const char *detail = (const char *)sqlite3_column_text(plan, 3);
 
-            scans += (detail != NULL && strncmp(detail, "SCAN ", 5U) == 0) ? 1 : 0;
+            scans += (detail != NULL && strncmp(detail, k_scan, sizeof(k_scan) - 1U) == 0) ? 1 : 0;
         }
         (void)sqlite3_finalize(plan);
     }

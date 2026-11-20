@@ -1717,7 +1717,7 @@ TEST(a_fifo_at_hooks_log_neither_hangs_the_command_nor_takes_a_line)
     ASSERT_EQ_INT(rules.actions[0].skipped_source[EVENT_CREATED], 2);
     ASSERT_EQ_INT(lowest_free_fd(), before);
     /* a reader is there, so the open works: the node is still not a log file */
-    reader = open(lc.log, O_RDONLY | O_NONBLOCK);
+    reader = open(lc.log, O_RDONLY | O_NONBLOCK | O_CLOEXEC);
     ASSERT_TRUE(reader >= 0);
     before = lowest_free_fd();
     ASSERT_EQ_INT(events_log_skipped(&rules, lc.db, "import", STORE_ORIGIN_IMPORT), 0);

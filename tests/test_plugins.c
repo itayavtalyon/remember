@@ -1626,28 +1626,25 @@ TEST(a_tag_pattern_that_can_never_be_a_tag_is_refused)
 
 TEST(not_caused_by_takes_a_hook_or_a_plugin_name)
 {
+    static const char *const bad[] = {"Wake", "plugin/wake", "plugin/Wake/go", "hook/wake/go",
+                                      "plugin/wake/go/x"};
+    size_t i = 0;
     PluginManifest *man = given_parse(HEAD "\"actions\":[" ACTION_BODY
                                            ",\"filter\":{\"not_caused_by\":[\"wake\",\"plugin/wake/go\"]}}]}",
                                       PLUGIN_PARSE_OK);
 
     ASSERT_EQ_INT(man->entries[0].n_not_caused_by, 2);
     plugin_manifest_free(man);
-    expect_error(HEAD "\"actions\":[" ACTION_BODY ",\"filter\":{\"not_caused_by\":[\"Wake\"]}}]}",
-                 "/actions/0/filter/not_caused_by/0", "R2.21",
-                 R25_2_MUST_BE("/actions/0/filter/not_caused_by/0", CAUSE_WHAT),
-                 R25_2_USE(CAUSE_WHAT));
-    expect_error(HEAD "\"actions\":[" ACTION_BODY ",\"filter\":{\"not_caused_by\":[\"plugin/wake\"]}}]}",
-                 "/actions/0/filter/not_caused_by/0", "R2.21",
-                 R25_2_MUST_BE("/actions/0/filter/not_caused_by/0", CAUSE_WHAT),
-                 R25_2_USE(CAUSE_WHAT));
-    expect_error(HEAD "\"actions\":[" ACTION_BODY ",\"filter\":{\"not_caused_by\":[\"hook/wake/go\"]}}]}",
-                 "/actions/0/filter/not_caused_by/0", "R2.21",
-                 R25_2_MUST_BE("/actions/0/filter/not_caused_by/0", CAUSE_WHAT),
-                 R25_2_USE(CAUSE_WHAT));
-    expect_error(HEAD "\"actions\":[" ACTION_BODY ",\"filter\":{\"not_caused_by\":[\"plugin/wake/go/x\"]}}]}",
-                 "/actions/0/filter/not_caused_by/0", "R2.21",
-                 R25_2_MUST_BE("/actions/0/filter/not_caused_by/0", CAUSE_WHAT),
-                 R25_2_USE(CAUSE_WHAT));
+    for (i = 0; i < sizeof(bad) / sizeof(bad[0]); i++) {
+        char doc[512];
+
+        (void)snprintf(doc, sizeof(doc),
+                       HEAD "\"actions\":[" ACTION_BODY ",\"filter\":{\"not_caused_by\":[\"%s\"]}}]}",
+                       bad[i]);
+        expect_error(doc, "/actions/0/filter/not_caused_by/0", "R2.21",
+                     R25_2_MUST_BE("/actions/0/filter/not_caused_by/0", CAUSE_WHAT),
+                     R25_2_USE(CAUSE_WHAT));
+    }
 }
 
 TEST(needs_accept_memory_fields_and_remember_setting_keys)

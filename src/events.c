@@ -709,9 +709,15 @@ bool events_plan(const EventRow *row, EventDraft **out, size_t *n)
         return true;
     }
     d.body_changed = strcmp(row->before->body, row->after->body) != 0;
-    d.key_changed = !same_text(row->before->key, row->after->key);
-    d.tags_changed = !same_tags(row->before, row->after);
-    d.expires_changed = !same_text(row->before->expires_at, row->after->expires_at);
+    if (!same_text(row->before->key, row->after->key)) {
+        d.key_changed = true;
+    }
+    if (!same_tags(row->before, row->after)) {
+        d.tags_changed = true;
+    }
+    if (!same_text(row->before->expires_at, row->after->expires_at)) {
+        d.expires_changed = true;
+    }
     if ((d.body_changed || d.key_changed || d.tags_changed || d.expires_changed) &&
         !draft_push(&list, n, &cap, &d)) {
         return false;

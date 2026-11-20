@@ -1273,9 +1273,9 @@ static void filter_list(PluginManifest *man, const JsonValue *obj, const char *p
 static const char k_tag_pattern_what[] = "a tag, or the start of a tag followed by *";
 static const char k_cause_what[] = "\"plugin/<name>/<entry>\" or a plugin name";
 
-/* Fold each tag pattern to the stored form (trim, ASCII lowercase), the text before a trailing *
-   too: a pattern in another form could never match a stored tag
-   (decision:2026-11-18-plan31-review-grill G1). */
+/* Fold each tag pattern to the stored form (trim, ASCII lowercase): a pattern in another form
+   could never match a stored tag (decision:2026-11-18-plan31-review-grill G1). normalize_tag
+   keeps a trailing * and a space before it, and refuses a tab, so "Proj *" stays "proj *". */
 // NOLINTNEXTLINE(bugprone-easily-swappable-parameters) the list path, then the rows
 static void fold_tag_patterns(PluginManifest *man, const char *path, char *rows, size_t count)
 {
@@ -1283,33 +1283,16 @@ static void fold_tag_patterns(PluginManifest *man, const char *path, char *rows,
 
     for (i = 0; i < count; i++) {
         char *pattern = rows + (i * (size_t)PLUGIN_TAG_CAP);
-        size_t len = strlen(pattern);
-        bool star = len > 0U && pattern[len - 1U] == '*';
-        size_t start = 0;
-        size_t end = 0;
         char folded[REMEMBER_TOKEN_MAX + 1];
-        const char *tail = "";
 
-        if (star && len == 1U) {
-            continue; /* "*": every tag */
-        }
-        if (star) {
-            pattern[--len] = '\0';
-            end = len;
-            ascii_ws_trim(pattern, &start, &end);
-            tail = pattern + end; /* spaces before the * stay: a tag may be "proj x" */
-        }
-        if (strspn(tail, " ") != strlen(tail) ||
-            normalize_tag(pattern, folded, sizeof(folded)) != NORM_OK) {
+        if (normalize_tag(pattern, folded, sizeof(folded)) != NORM_OK) {
             char child[PLUGIN_PATH_CAP];
 
             index_path(child, path, i);
             err_must_be(man, "R2.21", child, k_tag_pattern_what);
             continue;
         }
-        /* tail lives in pattern, so it is written as a width, never read while pattern is. */
-        (void)snprintf(pattern, (size_t)PLUGIN_TAG_CAP, "%s%*s%s", folded, (int)strlen(tail), "",
-                       star ? "*" : "");
+        (void)snprintf(pattern, (size_t)PLUGIN_TAG_CAP, "%s", folded);
     }
 }
 
@@ -1317,14 +1300,18 @@ static void fold_tag_patterns(PluginManifest *man, const char *path, char *rows,
 static bool cause_ok(const char *text)
 {
     static const char k_prefix[] = "plugin/";
-    const char *name = text + sizeof(k_prefix) - 1U;
+    const char *name = NULL;
     const char *slash = NULL;
 
     if (strncmp(text, k_prefix, sizeof(k_prefix) - 1U) != 0) {
         return name_ok(text);
     }
+    name = text + sizeof(k_prefix) - 1U;
     slash = strchr(name, '/');
-    return slash != NULL && segment_ok(name, (size_t)(slash - name)) && name_ok(slash + 1);
+    if (slash == NULL || !segment_ok(name, (size_t)(slash - name))) {
+        return false;
+    }
+    return name_ok(slash + 1);
 }
 
 static void check_causes(PluginManifest *man, const char *path, const PluginEntry *entry)
