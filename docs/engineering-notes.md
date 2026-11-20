@@ -229,6 +229,14 @@ Rules:
 - A limit that the schema does not state is a decision (`decision:2026-11-13-plugin-manifest-limits`). Adding a field with a fixed array needs a new limit entry there.
 - Run a mutation harness with a process-group kill and a `timeout` on every command. A mutant can loop forever, and an orphaned test process runs for days.
 
+## Plugin settings keys (plan 30)
+
+- The settings registry is an object, not a table: `SettingsRegistry` (`settings.h`) holds the six compiled-in rows and the generated rows. Every lookup (`setting_by_key`, `setting_prepare`, `setting_choose_layer`, `setting_suggestion`, `export_settings_write`) takes one. `Store` carries a non-owning pointer (`store_set_settings_registry`), and `run_with_store` builds the registry after the open and frees it after `store_close`. A function that needs the keys and has no `Store` takes the registry as an argument; do not add a global.
+- A generated row is one allocation (`GenRow`: the `SettingSpec`, the enum value pointers, then the strings), so a `SettingSpec *` stays good while other rows come and go. Free a registry only after the last use of a spec from it.
+- A row that adds a type touches one switch in `setting_canon_value` and these sites in `cmd_settings.c`: `type_token`, `json_text_ok`, `fill_display`, `write_raw_named` (the `_ms` and `_bytes` twins), `report_scalar_invalid`, `format_bound`. `store_sqlite.c` `import_value` reads a value by its JSON member type (SQLite reads `true` as the number 1, so a boolean row is read from the member type). Grep for `SETTING_SIZE` to find every site.
+- `plugin_settings_load` reads `plugin.json` through `fileio_read_regular` with the 64 KiB cap, parses with plan 25's parser, and registers only a manifest with no error. It keeps no state. Plan 33 reads the same files for trust and must not re-read them for keys.
+- The registry is built on every store open, so every command allocates before it runs. A test that counts allocation faults per command sees that.
+
 ## Process
 
 - After **each implementation plan step**: run a strict review (see skill `remember-step-review` / project checklist).

@@ -377,6 +377,9 @@ static const char k_layer_sep[] = " \xC2\xB7 ";
 enum {
     KIND_CHARS = 8,
     PLUGIN_DOT_LEN = 7,
+    PLUGIN_NAME_BUF = 41,
+    BYTES_PER_KIB = 1024,
+    BYTES_PER_MIB = 1048576,
     GRACE_SUFFIX_LEN = 17,
     ASCII_UNIT = 0x20,
     ASCII_DEL = 0x7F,
@@ -444,9 +447,17 @@ static const char *type_token(SettingType type)
         return "integer";
     case SETTING_DURATION:
         return "duration";
+    case SETTING_BOOLEAN:
+        return "boolean";
+    case SETTING_ENUM:
+        return "enum";
+    case SETTING_SIZE:
+        return "size";
     case SETTING_STRING:
+    case SETTING_TEXT:
         return "string";
     case SETTING_STRING_LIST:
+    case SETTING_TEXT_LIST:
     default:
         return "string_list";
     }
@@ -485,15 +496,25 @@ static bool plugin_manifest_key(const char *key)
     return false;
 }
 
-static int report_unknown(const char *key)
+static int report_unknown(const SettingsRegistry *reg, const char *key)
 {
-    const char *suggest = setting_suggestion(key);
+    const char *suggest = setting_suggestion(reg, key);
     const char *fix = diag_code_fix(DIAG_SETTING_UNKNOWN);
     char *msg = NULL;
+    char plugin[PLUGIN_NAME_BUF];
     int n = 0;
 
     if (plugin_manifest_key(key)) {
         fix = k_manifest_fix;
+    } else if (setting_plugin_missing(reg, key, plugin, sizeof(plugin))) {
+        msg = fmt_alloc("unknown setting \"%s\": plugin %s isn't installed.", key, plugin);
+        if (msg == NULL) {
+            err_msg(DIAG_OUT_OF_MEMORY, "out of memory");
+            return REMEMBER_ERR;
+        }
+        (void)diag_error_fix(DIAG_SETTING_UNKNOWN, msg, fix);
+        free(msg);
+        return REMEMBER_NOT_FOUND;
     }
     if (suggest != NULL) {
         n = snprintf(NULL, 0, "unknown setting \"%s\". Did you mean \"%s\"?", key, suggest);
@@ -640,14 +661,29 @@ static bool json_text_ok(SettingType type, const char *text)
     if (type == SETTING_INTEGER) {
         return setting_integer(text, &n);
     }
+    if (type == SETTING_BOOLEAN) {
+        if (strcmp(text, "true") == 0) {
+            return true;
+        }
+        return strcmp(text, "false") == 0;
+    }
     if (type == SETTING_STRING) {
         return setting_quoted_plain(text, inner, sizeof(inner));
     }
-    if (type == SETTING_DURATION) {
+    if (type == SETTING_ENUM || type == SETTING_TEXT) {
+        return setting_text_unquote(text, inner, sizeof(inner));
+    }
+    if (type == SETTING_TEXT_LIST) {
+        return setting_text_list_join(text, inner, sizeof(inner));
+    }
+    if (type == SETTING_DURATION || type == SETTING_SIZE) {
         char canon[NORM_MEASURE_CANON_CAP];
 
         if (!setting_quoted_plain(text, inner, sizeof(inner))) {
             return false;
+        }
+        if (type == SETTING_SIZE) {
+            return norm_size_canonical(inner, &ms, canon, sizeof(canon));
         }
         return norm_duration_canonical(inner, &ms, canon, sizeof(canon));
     }
@@ -672,6 +708,9 @@ static bool values_ok(const SettingSpec *spec, const SettingRead *read, Shown sh
     }
     return true;
 }
+
+/* Below, beside the import warnings it shares its line with. */
+static int warn_refused(const Store *store, const SettingSpec *spec, const SettingRead *read);
 
 static Shown shown_of(const SettingSpec *spec, const SettingRead *read, GetOpts opt)
 {
@@ -853,48 +892,76 @@ static int fill_list_display(const char *json, char *out, size_t cap)
     return 0;
 }
 
+static int copy_display(const char *text, char *out, size_t cap)
+{
+    size_t n = strlen(text);
+
+    if (n >= cap) {
+        return -1;
+    }
+    memcpy(out, text, n + 1U);
+    /* A plugin text passed setting_text_ok, which lets a C1 control through
+       (decision:plan18c-mask-c1). */
+    output_mask_in_place(out);
+    return 0;
+}
+
+/* A plugin string list: its items, one space apart, and (empty) for none. */
+static int fill_text_list_display(const char *json, char *out, size_t cap)
+{
+    if (!setting_text_list_join(json, out, cap)) {
+        return -1;
+    }
+    if (out[0] == '\0' && strcmp(json, "[]") == 0) {
+        /* decision:plan20-empty-list-related (C-43 draft), as fill_list_display. */
+        return copy_display("(empty)", out, cap);
+    }
+    return 0;
+}
+
+/* A value stored as one JSON string: the text inside the quotes. */
+static int fill_quoted_display(SettingType type, const char *json, char *out, size_t cap)
+{
+    char inner[SETTING_VALUE_CAP];
+    bool decoded = false;
+
+    if (type == SETTING_ENUM || type == SETTING_TEXT) {
+        decoded = setting_text_unquote(json, inner, sizeof(inner));
+    } else {
+        decoded = setting_quoted_plain(json, inner, sizeof(inner));
+    }
+    if (!decoded) {
+        return -1;
+    }
+    return copy_display(inner, out, cap);
+}
+
 static int fill_display(SettingType type, const char *json, char *out, size_t cap)
 {
     if (json == NULL || json[0] == '\0') {
-        if (cap < (size_t)UNSET_CHARS) {
-            return -1;
-        }
-        memcpy(out, "(unset)", (size_t)UNSET_CHARS);
-        return 0;
+        return copy_display("(unset)", out, cap);
     }
-    if (type == SETTING_INTEGER) {
-        size_t n = strlen(json);
-
-        if (n >= cap) {
-            return -1;
-        }
-        memcpy(out, json, n + 1U);
-        return 0;
+    if (type == SETTING_INTEGER || type == SETTING_BOOLEAN) {
+        return copy_display(json, out, cap);
     }
-    if (type == SETTING_STRING || type == SETTING_DURATION) {
-        char inner[SETTING_VALUE_CAP];
-
-        if (!setting_quoted_plain(json, inner, sizeof(inner))) {
-            return -1;
-        }
-        {
-            size_t n = strlen(inner);
-
-            if (n >= cap) {
-                return -1;
-            }
-            memcpy(out, inner, n + 1U);
-            return 0;
-        }
+    if (type == SETTING_TEXT_LIST) {
+        return fill_text_list_display(json, out, cap);
+    }
+    if (type == SETTING_STRING || type == SETTING_DURATION || type == SETTING_SIZE ||
+        type == SETTING_ENUM || type == SETTING_TEXT) {
+        return fill_quoted_display(type, json, out, cap);
     }
     return fill_list_display(json, out, cap);
 }
 
-/* The JSON value, then ,"<twin>":<ms> for a duration. */
-// NOLINTNEXTLINE(bugprone-easily-swappable-parameters) — json is the value, twin the member name
-static int write_raw_named(FILE *out, SettingType type, const char *json, const char *twin)
+/* The JSON value, then ,"<name>_ms":<ms> for a duration and ,"<name>_bytes":<bytes> for a size. */
+// NOLINTNEXTLINE(bugprone-easily-swappable-parameters) — json is the value, name the member name
+static int write_raw_named(FILE *out, SettingType type, const char *json, const char *name)
 {
-    long long ms = 0;
+    long long number = 0;
+    char inner[SETTING_VALUE_CAP];
+    char canon[NORM_MEASURE_CANON_CAP];
+    bool measured = false;
 
     if (json == NULL || json[0] == '\0') {
         return fputs("null", out) < 0 ? -1 : 0;
@@ -902,24 +969,29 @@ static int write_raw_named(FILE *out, SettingType type, const char *json, const 
     if (fputs(json, out) < 0) {
         return -1;
     }
-    if (type != SETTING_DURATION) {
+    if (type != SETTING_DURATION && type != SETTING_SIZE) {
         return 0;
     }
-    {
-        char inner[SETTING_VALUE_CAP];
-        char canon[NORM_MEASURE_CANON_CAP];
-
-        if (!setting_quoted_plain(json, inner, sizeof(inner)) ||
-            !norm_duration_canonical(inner, &ms, canon, sizeof(canon))) {
-            return -1;
-        }
+    if (!setting_quoted_plain(json, inner, sizeof(inner))) {
+        return -1;
     }
-    return fprintf(out, ",\"%s\":%lld", twin, ms) < 0 ? -1 : 0;
+    if (type == SETTING_DURATION) {
+        measured = norm_duration_canonical(inner, &number, canon, sizeof(canon));
+    } else {
+        measured = norm_size_canonical(inner, &number, canon, sizeof(canon));
+    }
+    if (!measured) {
+        return -1;
+    }
+    return fprintf(out, ",\"%s_%s\":%lld", name, type == SETTING_DURATION ? "ms" : "bytes",
+                   number) < 0
+               ? -1
+               : 0;
 }
 
 static int write_raw_value(FILE *out, SettingType type, const char *json)
 {
-    return write_raw_named(out, type, json, "value_ms");
+    return write_raw_named(out, type, json, "value");
 }
 
 static int write_layer(LayerOut layer)
@@ -1246,9 +1318,9 @@ static int cmd_settings_get(Store *store, bool json, int argc, const char **argv
     if (parse_get(argc, argv, &opt) != 0) {
         return REMEMBER_ERR;
     }
-    spec = setting_by_key(opt.key);
+    spec = setting_by_key(store_settings_registry(store), opt.key);
     if (spec == NULL) {
-        return report_unknown(opt.key);
+        return report_unknown(store_settings_registry(store), opt.key);
     }
     if (util_resolve_user_db_path(userdb, sizeof(userdb), err, sizeof(err)) != 0) {
         return fail_store(err);
@@ -1259,6 +1331,9 @@ static int cmd_settings_get(Store *store, bool json, int argc, const char **argv
     }
     if (st != SETTING_OK) {
         err_msg(DIAG_INTERNAL, "internal error");
+        return REMEMBER_ERR;
+    }
+    if (warn_refused(store, spec, &read) != 0) {
         return REMEMBER_ERR;
     }
     shown = shown_of(spec, &read, opt);
@@ -1403,13 +1478,51 @@ static bool duration_shape(const char *text)
     return false;
 }
 
+/* digits, an optional fraction, and B, KiB or MiB: a size that is not a whole number of bytes. */
+static bool size_shape(const char *text)
+{
+    size_t i = 0;
+
+    if (text == NULL || text[0] < '0' || text[0] > '9') {
+        return false;
+    }
+    while (text[i] >= '0' && text[i] <= '9') {
+        i++;
+    }
+    if (text[i] == '.') {
+        i++;
+        if (text[i] < '0' || text[i] > '9') {
+            return false;
+        }
+        while (text[i] >= '0' && text[i] <= '9') {
+            i++;
+        }
+    }
+    if (strcmp(text + i, "B") == 0 || strcmp(text + i, "KiB") == 0) {
+        return true;
+    }
+    return strcmp(text + i, "MiB") == 0;
+}
+
 static int format_bound(const SettingSpec *spec, long long value, char *buf, size_t cap)
 {
     long long unit = value;
     const char *suffix = "";
     int wrote = 0;
 
-    if (spec->type != SETTING_INTEGER) {
+    if (spec->type == SETTING_SIZE) {
+        /* The largest unit that divides the bound exactly
+         * (decision:2026-11-16-plan30-value-error-copy-drafts). */
+        if (value % BYTES_PER_MIB == 0 && value / BYTES_PER_MIB != 0) {
+            unit = value / BYTES_PER_MIB;
+            suffix = "MiB";
+        } else if (value % BYTES_PER_KIB == 0 && value / BYTES_PER_KIB != 0) {
+            unit = value / BYTES_PER_KIB;
+            suffix = "KiB";
+        } else {
+            suffix = "B";
+        }
+    } else if (spec->type != SETTING_INTEGER) {
         if (value % (long long)MS_PER_HOUR == 0 && value / (long long)MS_PER_HOUR != 0) {
             unit = value / (long long)MS_PER_HOUR;
             suffix = "h";
@@ -1495,9 +1608,116 @@ static int report_prefix(const SettingSpec *spec, const WriteOpts *opt)
                         nfields);
 }
 
+/* The value is not echoed: it can be 511 bytes of text. */
+static int report_text_invalid(const SettingSpec *spec)
+{
+    char *msg = fmt_alloc("\"%s\" needs text with no control characters, up to %d bytes.",
+                          spec->key, SETTING_TEXT_MAX);
+    char *fix = fmt_alloc("Use plain text of %d bytes or fewer.", SETTING_TEXT_MAX);
+    int rc = REMEMBER_ERR;
+
+    if (msg == NULL || fix == NULL) {
+        rc = report_oom();
+    } else {
+        (void)emit_invalid(spec, NULL, msg, fix, NULL, 0U);
+        msg = NULL;
+    }
+    free(msg);
+    free(fix);
+    return rc;
+}
+
+/* "low", "low or high", or "low, medium, or high"; one_of puts "one of " before two or more. */
+static char *enum_phrase(const SettingSpec *spec, bool one_of)
+{
+    size_t i = 0;
+    size_t cap = 1U + sizeof("one of ");
+    char *out = NULL;
+    size_t at = 0;
+
+    for (i = 0; i < spec->nvalues; i++) {
+        cap += strlen(spec->values[i]) + sizeof(", or ");
+    }
+    out = (char *)malloc(cap);
+    if (out == NULL) {
+        return NULL;
+    }
+    out[0] = '\0';
+    if (one_of && spec->nvalues > 1U) {
+        memcpy(out, "one of ", sizeof("one of "));
+        at = sizeof("one of ") - 1U;
+    }
+    for (i = 0; i < spec->nvalues; i++) {
+        const char *sep = "";
+
+        if (i > 0U) {
+            sep = ", ";
+        }
+        if (i > 0U && i + 1U == spec->nvalues) {
+            sep = spec->nvalues > 2U ? ", or " : " or ";
+        }
+        /* cap held every value and the widest separator (cap above). */
+        memcpy(out + at, sep, strlen(sep));
+        at += strlen(sep);
+        memcpy(out + at, spec->values[i], strlen(spec->values[i]) + 1U);
+        at += strlen(spec->values[i]);
+    }
+    return out;
+}
+
+/* Drafts: decision:2026-11-16-plan30-value-error-copy-drafts. */
+static int report_enum_invalid(const SettingSpec *spec, const char *value)
+{
+    char *list = enum_phrase(spec, true);
+    char *plain = enum_phrase(spec, false);
+    char *msg = list != NULL
+                    ? fmt_alloc("\"%s\" must be %s; you gave \"%s\".", spec->key, list, value)
+                    : NULL;
+    char *fix = plain != NULL ? fmt_alloc("Use %s.", plain) : NULL;
+    int rc = REMEMBER_ERR;
+
+    if (msg == NULL || fix == NULL) {
+        rc = report_oom();
+    } else {
+        const DiagDetailField fields[] = {{.name = "key", .value = spec->key},
+                                          {.name = "value", .value = value},
+                                          {.name = "type", .value = type_token(spec->type)}};
+
+        (void)emit_detail(DIAG_SETTING_INVALID_VALUE, msg, fix, fields,
+                          sizeof(fields) / sizeof(fields[0]));
+    }
+    free(list);
+    free(plain);
+    free(msg);
+    free(fix);
+    return rc;
+}
+
 static int report_scalar_invalid(const SettingSpec *spec, const char *value)
 {
     char *msg = NULL;
+
+    if (spec->type == SETTING_BOOLEAN) {
+        msg = fmt_alloc("\"%s\" must be true or false; you gave \"%s\".", spec->key, value);
+        return emit_invalid(spec, value, msg, "Use true or false.", NULL, 0U);
+    }
+    if (spec->type == SETTING_ENUM) {
+        return report_enum_invalid(spec, value);
+    }
+    if (spec->type == SETTING_SIZE && size_shape(value)) {
+        msg = fmt_alloc("\"%s\" can't be \"%s\": a size must be a whole number of bytes.",
+                        spec->key, value);
+        return emit_invalid(spec, value, msg, "Use a whole number of bytes, like 512B or 2KiB.",
+                            NULL, 0U);
+    }
+    if (spec->type == SETTING_SIZE) {
+        msg = fmt_alloc("\"%s\" needs a size with a unit; you gave \"%s\".", spec->key, value);
+        return emit_invalid(spec, value, msg,
+                            "Use a number with B, KiB, or MiB, like 512KiB or 2MiB.", NULL, 0U);
+    }
+    if (spec->type == SETTING_TEXT) {
+        return report_text_invalid(spec);
+    }
 
     if (spec->type == SETTING_DURATION && duration_shape(value)) {
         msg =
@@ -1526,6 +1746,9 @@ static int report_invalid(const SettingSpec *spec, const WriteOpts *opt)
     if (spec->type == SETTING_STRING_LIST) {
         return report_prefix(spec, opt);
     }
+    if (spec->type == SETTING_TEXT_LIST && !opt->clear) {
+        return report_text_invalid(spec);
+    }
     /* C-42-style drafts (decision:plan20-scalar-shape-draft). */
     if (opt->clear) {
         char *fix = fmt_alloc("Set a value, or run 'remember settings reset %s'.", spec->key);
@@ -1551,6 +1774,36 @@ static int report_invalid(const SettingSpec *spec, const WriteOpts *opt)
     return report_scalar_invalid(spec, opt->items[0]);
 }
 
+/* Drafts: decision:2026-11-16-plan30-value-error-copy-drafts. */
+static int report_list_range(const SettingSpec *spec, const WriteOpts *opt)
+{
+    char given[BOUND_TEXT_CAP];
+    char most[BOUND_TEXT_CAP];
+    char *msg = NULL;
+    char *fix = NULL;
+
+    (void)snprintf(given, sizeof(given), "%zu", opt->nitems);
+    (void)snprintf(most, sizeof(most), "%d", spec->max_items);
+    msg = fmt_alloc("\"%s\" can hold 1 to %s items; you gave %s.", spec->key, most, given);
+    fix = fmt_alloc("Give %s items or fewer.", most);
+    if (msg == NULL || fix == NULL) {
+        free(msg);
+        free(fix);
+        return report_oom();
+    }
+    {
+        const DiagDetailField fields[] = {{.name = "key", .value = spec->key},
+                                          {.name = "value", .value = given},
+                                          {.name = "max", .value = most}};
+
+        (void)emit_detail(DIAG_SETTING_OUT_OF_RANGE, msg, fix, fields,
+                          sizeof(fields) / sizeof(fields[0]));
+    }
+    free(msg);
+    free(fix);
+    return REMEMBER_ERR;
+}
+
 static int report_range(const SettingSpec *spec, const WriteOpts *opt)
 {
     char lower[BOUND_TEXT_CAP];
@@ -1558,6 +1811,9 @@ static int report_range(const SettingSpec *spec, const WriteOpts *opt)
     char *msg = NULL;
     char *fix = NULL;
 
+    if (spec->type == SETTING_TEXT_LIST) {
+        return report_list_range(spec, opt);
+    }
     if (opt->nitems != 1U || opt->items == NULL || opt->items[0] == NULL) {
         err_msg(DIAG_INTERNAL, "internal error");
         return REMEMBER_ERR;
@@ -2139,15 +2395,15 @@ static int apply_set(Store *store, bool json, const WriteOpts *opt)
     if (util_resolve_user_db_path(userdb, sizeof(userdb), err, sizeof(err)) != 0) {
         return fail_store(err);
     }
-    spec = setting_by_key(opt->key);
+    spec = setting_by_key(store_settings_registry(store), opt->key);
     if (spec == NULL) {
-        return report_unknown(opt->key);
+        return report_unknown(store_settings_registry(store), opt->key);
     }
     if (opt->scope_set) {
         requested = opt->scope;
     }
-    st = setting_prepare(opt->key, opt->items, opt->nitems, requested, prepared, sizeof(prepared),
-                         &spec, &chosen, err, sizeof(err));
+    st = setting_prepare(store_settings_registry(store), opt->key, opt->items, opt->nitems,
+                         requested, prepared, sizeof(prepared), &spec, &chosen, err, sizeof(err));
     if (st != SETTING_OK) {
         return report_prepare(st, spec, opt, err);
     }
@@ -2488,7 +2744,7 @@ static int write_registered_reset(FILE *out, const SettingSpec *spec, const Sett
 static int emit_reset_item(Store *store, const char *userdb, bool json, bool scope_set,
                            const ResetItem *item, char *err, size_t errlen)
 {
-    const SettingSpec *spec = setting_by_key(item->key);
+    const SettingSpec *spec = setting_by_key(store_settings_registry(store), item->key);
     SettingRead read;
     char display[SETTING_VALUE_CAP];
 
@@ -2563,14 +2819,15 @@ static int apply_reset_one(Store *store, bool json, const char *userdb, const Wr
     memset(&wrote, 0, sizeof(wrote));
     memset(&read, 0, sizeof(read));
     err[0] = '\0';
-    spec = setting_by_key(opt->key);
+    spec = setting_by_key(store_settings_registry(store), opt->key);
     if (spec == NULL) {
-        return report_unknown(opt->key);
+        return report_unknown(store_settings_registry(store), opt->key);
     }
     if (opt->scope_set) {
         requested = opt->scope;
     }
-    st = setting_choose_layer(opt->key, requested, &spec, &chosen, err, sizeof(err));
+    st = setting_choose_layer(store_settings_registry(store), opt->key, requested, &spec, &chosen,
+                              err, sizeof(err));
     if (st != SETTING_OK) {
         return report_prepare(st, spec, opt, err);
     }
@@ -2768,7 +3025,7 @@ static int cmd_settings_export(Store *store, int argc, const char **argv)
     if (store_setting_export(store, userdb, layer, &rows, &n, err, sizeof(err)) != SETTING_OK) {
         return fail_store(err);
     }
-    rc = export_settings_write(app_out(), now, rows, n, true);
+    rc = export_settings_write(store_settings_registry(store), app_out(), now, rows, n, true);
     store_setting_export_free(rows, n);
     if (rc != 0) {
         err_msg(DIAG_INTERNAL, "failed to write output");
@@ -2980,6 +3237,8 @@ static const char *skip_reason_name(SettingSkipReason reason)
         return "layer_not_allowed";
     case SETTING_SKIP_INVALID_VALUE:
         return "invalid_value";
+    case SETTING_SKIP_PLUGIN_NOT_INSTALLED:
+        return "plugin_not_installed";
     case SETTING_SKIP_NONE:
     default:
         return NULL;
@@ -3031,19 +3290,20 @@ static int warn_invalid(char *msg, const char *fix, const DiagDetailField *field
    fix. The key is a registry key (the row would be unknown_key otherwise). A bare `settings set`
    of a key that allows the user layer writes that layer, so a brain row of such a key names
    --scope brain (decision:2026-11-17-w1-brain-row-fix-scope). */
-static int warn_invalid_value(char *msg, const SettingImportRow *row, const DiagDetailField *fields,
-                              size_t n)
+// NOLINTNEXTLINE(bugprone-easily-swappable-parameters) the message, then the key it names
+static int warn_invalid_value(const SettingsRegistry *reg, char *msg, const char *key,
+                              SettingLayer scope, const DiagDetailField *fields, size_t n)
 {
-    const SettingSpec *spec = setting_by_key(row->key);
+    const SettingSpec *spec = setting_by_key(reg, key);
     const char *scope_flag = "";
     char *fix = NULL;
     int rc = 0;
 
-    if (row->scope == SETTING_LAYER_BRAIN && spec != NULL && spec->allow_user) {
+    if (scope == SETTING_LAYER_BRAIN && spec != NULL && spec->allow_user) {
         scope_flag = " --scope brain";
     }
-    fix = fmt_alloc("Set a valid value with 'remember settings set %s <value>%s'.", row->key,
-                    scope_flag);
+    fix =
+        fmt_alloc("Set a valid value with 'remember settings set %s <value>%s'.", key, scope_flag);
     if (fix == NULL) {
         free(msg);
         return report_oom();
@@ -3053,7 +3313,44 @@ static int warn_invalid_value(char *msg, const SettingImportRow *row, const Diag
     return rc;
 }
 
-static int warn_skip(const SettingImportRow *row, bool settings_alone)
+/* decision:2026-11-17-plan30-review-grill G1 A: the read skipped a layer whose stored value the
+   row refuses. The C-14 line and the E3B-1 entry 6 fix, as for an import row. A string shows
+   its text, anything else its JSON (as SettingImportRow.value). */
+static int warn_refused_layer(const SettingsRegistry *reg, const SettingSpec *spec,
+                              SettingLayer layer, const char *json)
+{
+    char text[SETTING_TEXT_MAX + 1];
+    const char *value = json;
+    DiagDetailField fields[] = {{.name = "key", .value = spec->key},
+                                {.name = "value", .value = NULL},
+                                {.name = "reason", .value = "invalid_value"}};
+
+    if (setting_text_unquote(json, text, sizeof(text))) {
+        value = text;
+    }
+    fields[1].value = value;
+
+    return warn_invalid_value(
+        reg, fmt_alloc("skipped \"%s\": \"%s\" isn't a valid value.", spec->key, value), spec->key,
+        layer, fields, sizeof(fields) / sizeof(fields[0]));
+}
+
+static int warn_refused(const Store *store, const SettingSpec *spec, const SettingRead *read)
+{
+    const SettingsRegistry *reg = store_settings_registry(store);
+
+    if (read->user_refused &&
+        warn_refused_layer(reg, spec, SETTING_LAYER_USER, read->user_value) != 0) {
+        return REMEMBER_ERR;
+    }
+    if (read->brain_refused &&
+        warn_refused_layer(reg, spec, SETTING_LAYER_BRAIN, read->brain_value) != 0) {
+        return REMEMBER_ERR;
+    }
+    return 0;
+}
+
+static int warn_skip(const SettingsRegistry *reg, const SettingImportRow *row, bool settings_alone)
 {
     const char *value = row->value != NULL ? row->value : "null";
 
@@ -3090,13 +3387,32 @@ static int warn_skip(const SettingImportRow *row, bool settings_alone)
             tail = " This brain wasn't changed.";
         }
         return warn_invalid_value(
-            fmt_alloc("skipped \"%s\": \"%s\" isn't a valid value.%s", row->key, value, tail), row,
-            fields, sizeof(fields) / sizeof(fields[0]));
+            reg, fmt_alloc("skipped \"%s\": \"%s\" isn't a valid value.%s", row->key, value, tail),
+            row->key, row->scope, fields, sizeof(fields) / sizeof(fields[0]));
     }
     if (row->reason == SETTING_SKIP_UNKNOWN_KEY) {
         /* decision:plan20-import-unknown-key-draft (C-43 draft). */
         /* No approved fix yet: decision:open-2026-11-16-fix-import-skipped-unknown-key. */
         return warn_skipped(row, "remember has no setting by that name", NULL);
+    }
+    if (row->reason == SETTING_SKIP_PLUGIN_NOT_INSTALLED) {
+        /* C-12: the plugin's name, as the key folds it. */
+        char plugin[PLUGIN_NAME_BUF];
+        char *why = NULL;
+        char *fix = NULL;
+        int rc = 0;
+
+        if (!setting_plugin_name(row->key, plugin, sizeof(plugin))) {
+            err_msg(DIAG_INTERNAL, "internal error");
+            return REMEMBER_ERR;
+        }
+        /* E3B-1 entry 8 (decision:2026-11-12-copy-batch-e3b-warning-splits). */
+        why = fmt_alloc("plugin %s isn't installed", plugin);
+        fix = fmt_alloc("Install plugin %s, then import the file again.", plugin);
+        rc = why != NULL && fix != NULL ? warn_skipped(row, why, fix) : report_oom();
+        free(why);
+        free(fix);
+        return rc;
     }
     if (row->reason == SETTING_SKIP_OTHER_SCOPE) {
         return row->scope == SETTING_LAYER_BRAIN
@@ -3154,7 +3470,8 @@ static int write_import_data(FILE *out, const SettingImportReport *rep)
     return fputs("]}", out) < 0 ? -1 : 0;
 }
 
-int settings_import_warn_skips(const SettingImportReport *rep, bool settings_alone)
+int settings_import_warn_skips(const SettingsRegistry *reg, const SettingImportReport *rep,
+                               bool settings_alone)
 {
     size_t i = 0;
 
@@ -3166,7 +3483,7 @@ int settings_import_warn_skips(const SettingImportReport *rep, bool settings_alo
     }
     for (i = 0; i < rep->nrows; i++) {
         if (rep->rows[i].result == SETTING_IMPORT_SKIPPED &&
-            warn_skip(&rep->rows[i], settings_alone) != 0) {
+            warn_skip(reg, &rep->rows[i], settings_alone) != 0) {
             return REMEMBER_ERR;
         }
     }
@@ -3175,11 +3492,12 @@ int settings_import_warn_skips(const SettingImportReport *rep, bool settings_alo
 
 /* Skipped lines first (C-12), then the C-13 line or the dry-run draft
    (decision:plan20-import-dry-run-draft). */
-static int emit_import(bool json, const ImportOpts *opt, const SettingImportReport *rep)
+static int emit_import(const SettingsRegistry *reg, bool json, const ImportOpts *opt,
+                       const SettingImportReport *rep)
 {
     int wrote = 0;
 
-    if (settings_import_warn_skips(rep, true) != 0) {
+    if (settings_import_warn_skips(reg, rep, true) != 0) {
         return REMEMBER_ERR;
     }
     if (json) {
@@ -3245,7 +3563,7 @@ static int cmd_settings_import(Store *store, bool json, int argc, const char **a
     if (st != SETTING_OK) {
         return fail_store(err);
     }
-    rc = emit_import(json, &opt, &rep);
+    rc = emit_import(store_settings_registry(store), json, &opt, &rep);
     store_setting_import_free(&rep);
     return rc;
 }
@@ -3814,21 +4132,25 @@ static int cmp_spec_key(const void *left, const void *right)
     return strcmp((*a)->key, (*b)->key);
 }
 
-/* Registry rows in key byte order (ST-7.14). ponytail: REGISTRY_CAP rows; plan
-   25's generated plugin keys raise it or allocate. */
-static size_t sorted_registry(const SettingSpec **out)
+/* Registry rows in key byte order (ST-7.14), in an array the caller frees. NULL when memory
+   runs out. *n is the row count. */
+static const SettingSpec **sorted_registry(const SettingsRegistry *reg, size_t *n)
 {
-    size_t n = 0;
     size_t i = 0;
-    const SettingSpec *reg = setting_registry(&n);
+    const SettingSpec **out = NULL;
 
-    n = n < (size_t)REGISTRY_CAP ? n : (size_t)REGISTRY_CAP;
-    for (; i < n; i++) {
-        out[i] = &reg[i];
+    *n = settings_registry_count(reg);
+    // NOLINTNEXTLINE(bugprone-sizeof-expression) out holds pointers; each element is one
+    out = (const SettingSpec **)malloc(*n * sizeof(*out));
+    if (out == NULL) {
+        return NULL;
+    }
+    for (; i < *n; i++) {
+        out[i] = settings_registry_at(reg, i);
     }
     // NOLINTNEXTLINE(bugprone-sizeof-expression) out holds pointers; each element is one
-    qsort((void *)out, n, sizeof(*out), cmp_spec_key);
-    return n;
+    qsort((void *)out, *n, sizeof(*out), cmp_spec_key);
+    return out;
 }
 
 static bool list_wants(const SettingSpec *spec, const ViewOpts *opt)
@@ -3848,18 +4170,22 @@ static bool list_wants(const SettingSpec *spec, const ViewOpts *opt)
     return true;
 }
 
-/* The page after `after`: up to limit keys, and whether one more matches. */
+/* The page after `after`: up to limit keys, and whether one more matches. hit holds at least
+   as many slots as the registry has rows. */
 static int list_collect(Store *store, const char *userdb, const ViewOpts *opt, const char *after,
                         const SettingSpec **hit, size_t *nhit, bool *more)
 {
-    const SettingSpec *all[REGISTRY_CAP] = {NULL};
     char err[STORE_ERR_CAP];
-    size_t n = sorted_registry(all);
+    size_t n = 0;
+    const SettingSpec **all = sorted_registry(store_settings_registry(store), &n);
     size_t i = 0;
 
     *nhit = 0U;
     *more = false;
-    for (; i < n; i++) {
+    if (all == NULL) {
+        return report_oom();
+    }
+    for (; !*more && i < n; i++) {
         if ((after != NULL && strcmp(all[i]->key, after) <= 0) || !list_wants(all[i], opt)) {
             continue;
         }
@@ -3867,6 +4193,7 @@ static int list_collect(Store *store, const char *userdb, const ViewOpts *opt, c
             SettingRead read;
 
             if (read_spec(store, userdb, all[i], &read, err, sizeof(err)) != 0) {
+                free((void *)all);
                 return -1;
             }
             if (!shown_of(all[i], &read, view_get_opts(opt)).changed) {
@@ -3875,10 +4202,11 @@ static int list_collect(Store *store, const char *userdb, const ViewOpts *opt, c
         }
         if (*nhit == (size_t)opt->limit) {
             *more = true;
-            return 0;
+        } else {
+            hit[(*nhit)++] = all[i];
         }
-        hit[(*nhit)++] = all[i];
     }
+    free((void *)all);
     return 0;
 }
 
@@ -3980,7 +4308,8 @@ static int list_emit(Store *store, const char *userdb, bool json, const ViewOpts
     for (; rc == 0 && i < nhit; i++) {
         SettingRead read;
 
-        if (read_spec(store, userdb, hit[i], &read, err, sizeof(err)) != 0) {
+        if (read_spec(store, userdb, hit[i], &read, err, sizeof(err)) != 0 ||
+            warn_refused(store, hit[i], &read) != 0) {
             free(cursor);
             return REMEMBER_ERR;
         }
@@ -4004,12 +4333,14 @@ static int cmd_settings_list(Store *store, bool json, int argc, const char **arg
 {
     ViewOpts opt;
     CursorMember mem[CURSOR_MEMBERS];
-    const SettingSpec *hit[REGISTRY_CAP];
+    const SettingSpec **hit = NULL;
+    size_t nrows = 0;
     char userdb[REMEMBER_PATH_MAX];
     char err[STORE_ERR_CAP];
     const char *after = NULL;
     size_t nhit = 0;
     bool more = false;
+    int rc = REMEMBER_ERR;
 
     memset(&opt, 0, sizeof(opt));
     if (parse_view(argc, argv, &opt, true) != 0) {
@@ -4024,10 +4355,17 @@ static int cmd_settings_list(Store *store, bool json, int argc, const char **arg
     if (util_resolve_user_db_path(userdb, sizeof(userdb), err, sizeof(err)) != 0) {
         return fail_store(err);
     }
-    if (list_collect(store, userdb, &opt, after, hit, &nhit, &more) != 0) {
-        return REMEMBER_ERR;
+    nrows = settings_registry_count(store_settings_registry(store));
+    // NOLINTNEXTLINE(bugprone-sizeof-expression) hit holds pointers; each element is one
+    hit = (const SettingSpec **)malloc(nrows * sizeof(*hit));
+    if (hit == NULL) {
+        return report_oom();
     }
-    return list_emit(store, userdb, json, &opt, hit, nhit, more);
+    if (list_collect(store, userdb, &opt, after, hit, &nhit, &more) == 0) {
+        rc = list_emit(store, userdb, json, &opt, hit, nhit, more);
+    }
+    free((void *)hit);
+    return rc;
 }
 
 /* The registry's display, or the stored text for a key it does not have. Stored
@@ -4059,9 +4397,9 @@ static int write_history_when(FILE *out, const char *at)
 }
 
 /* decision:plan20-history-plain-draft: two spaces apart, (unset) for no value. */
-static int write_history_line(FILE *out, const SettingHistoryRow *row)
+static int write_history_line(const SettingsRegistry *reg, FILE *out, const SettingHistoryRow *row)
 {
-    const SettingSpec *spec = setting_by_key(row->key);
+    const SettingSpec *spec = setting_by_key(reg, row->key);
     ActorParts who = actor_parts(row->updated_by);
 
     if (write_history_when(out, row->at) != 0 ||
@@ -4080,13 +4418,11 @@ static int write_history_line(FILE *out, const SettingHistoryRow *row)
     return fputc('\n', out) == EOF ? -1 : 0;
 }
 
-/* ,"name":<json|null>, with the _ms twin for a duration. 0, -1 write, -2 not
-   that key's JSON. A key the registry does not have keeps its stored text. */
+/* ,"name":<json|null>, with the _ms twin for a duration and the _bytes twin for a size. 0, -1
+   write, -2 not that key's JSON. A key the registry does not have keeps its stored text. */
 static int write_history_value(FILE *out, const char *name, const SettingSpec *spec,
                                const char *json)
 {
-    char twin[CURSOR_FIELD_CAP];
-
     if (fprintf(out, ",\"%s\":", name) < 0) {
         return -1;
     }
@@ -4099,10 +4435,7 @@ static int write_history_value(FILE *out, const char *name, const SettingSpec *s
     if (!json_text_ok(spec->type, json)) {
         return -2;
     }
-    if (snprintf(twin, sizeof(twin), "%s_ms", name) < 0) {
-        return -1;
-    }
-    return write_raw_named(out, spec->type, json, twin);
+    return write_raw_named(out, spec->type, json, name);
 }
 
 /* ST-7.11b: a null new value is a reset, a tombstone in the brain. */
@@ -4117,9 +4450,10 @@ static const char *history_action(const SettingHistoryRow *row)
     return "delete";
 }
 
-static int write_history_item(FILE *out, bool comma, const SettingHistoryRow *row)
+static int write_history_item(const SettingsRegistry *reg, FILE *out, bool comma,
+                              const SettingHistoryRow *row)
 {
-    const SettingSpec *spec = setting_by_key(row->key);
+    const SettingSpec *spec = setting_by_key(reg, row->key);
     int rc = 0;
 
     if (comma && fputc(',', out) == EOF) {
@@ -4147,7 +4481,8 @@ static int write_history_item(FILE *out, bool comma, const SettingHistoryRow *ro
     return 0;
 }
 
-static int history_emit(bool json, const ViewOpts *opt, const SettingHistoryRow *rows, size_t n)
+static int history_emit(const SettingsRegistry *reg, bool json, const ViewOpts *opt,
+                        const SettingHistoryRow *rows, size_t n)
 {
     FILE *out = app_out();
     char doc[CURSOR_DOC_CAP];
@@ -4178,9 +4513,9 @@ static int history_emit(bool json, const ViewOpts *opt, const SettingHistoryRow 
     }
     for (; rc == 0 && i < shown; i++) {
         if (json) {
-            rc = write_history_item(out, i > 0U, &rows[i]);
+            rc = write_history_item(reg, out, i > 0U, &rows[i]);
         } else {
-            rc = write_history_line(out, &rows[i]);
+            rc = write_history_line(reg, out, &rows[i]);
         }
     }
     if (rc == 0 && json) {
@@ -4219,7 +4554,7 @@ static int cmd_settings_history(Store *store, bool json, int argc, const char **
     /* A removed plugin's rows still have history (ST-5.11): fold, no registry. */
     if (opt.key != NULL) {
         if (!setting_key_fold(opt.key, folded, sizeof(folded))) {
-            return report_unknown(opt.key);
+            return report_unknown(store_settings_registry(store), opt.key);
         }
         opt.key = folded;
     }
@@ -4238,7 +4573,7 @@ static int cmd_settings_history(Store *store, bool json, int argc, const char **
     if (store_setting_history(store, userdb, &q, &rows, &n, err, sizeof(err)) != SETTING_OK) {
         return fail_store(err);
     }
-    rc = history_emit(json, &opt, rows, n);
+    rc = history_emit(store_settings_registry(store), json, &opt, rows, n);
     store_setting_history_free(rows, n);
     return rc;
 }
@@ -4333,8 +4668,9 @@ static int write_explain_block(FILE *out, const SettingSpec *spec, Shown shown)
                0) {
         return -1;
     }
-    if (fprintf(out, "  %s\n  Can be set for: %s\n  Now: %s, ", spec->description,
-                explain_scopes(spec), now) < 0 ||
+    /* A plugin's description is plugin.json text: masked, like every untrusted string. */
+    if (fputs("  ", out) < 0 || output_text_human(out, spec->description, false) != 0 ||
+        fprintf(out, "\n  Can be set for: %s\n  Now: %s, ", explain_scopes(spec), now) < 0 ||
         write_from_tail(out, shown.from, shown.actor, shown.stamp) != 0) {
         return -1;
     }
@@ -4354,7 +4690,10 @@ static int write_bound_json(FILE *out, const SettingSpec *spec, const char *name
     if (format_bound(spec, value, text, sizeof(text)) != 0) {
         return -1;
     }
-    return fprintf(out, ",\"%s\":\"%s\",\"%s_ms\":%lld", name, text, name, value) < 0 ? -1 : 0;
+    return fprintf(out, ",\"%s\":\"%s\",\"%s_%s\":%lld", name, text, name,
+                   spec->type == SETTING_SIZE ? "bytes" : "ms", value) < 0
+               ? -1
+               : 0;
 }
 
 /* decision:plan20-explain-json-shape: the setting object plus the registry. */
@@ -4386,7 +4725,7 @@ static int write_explain_entry(FILE *out, bool comma, const SettingSpec *spec,
         return -1;
     }
     if (fputs("],\"default\":", out) < 0 ||
-        write_raw_named(out, spec->type, def_json, "default_ms") != 0) {
+        write_raw_named(out, spec->type, def_json, "default") != 0) {
         return -1;
     }
     if (spec_ranged(spec) && (write_bound_json(out, spec, "min", spec->min_value) != 0 ||
@@ -4415,6 +4754,9 @@ static int explain_one(Store *store, const char *userdb, bool json, size_t i,
     if (read_spec(store, userdb, spec, &read, err, sizeof(err)) != 0) {
         return -3;
     }
+    if (warn_refused(store, spec, &read) != 0) {
+        return -3;
+    }
     shown = shown_of(spec, &read, g);
     if (!values_ok(spec, &read, shown)) {
         return -2;
@@ -4431,7 +4773,8 @@ static int explain_one(Store *store, const char *userdb, bool json, size_t i,
 static int cmd_settings_explain(Store *store, bool json, int argc, const char **argv)
 {
     ViewOpts opt;
-    const SettingSpec *specs[REGISTRY_CAP];
+    const SettingSpec *one[1];
+    const SettingSpec **specs = one;
     char userdb[REMEMBER_PATH_MAX];
     char err[STORE_ERR_CAP];
     size_t n = 1;
@@ -4443,14 +4786,20 @@ static int cmd_settings_explain(Store *store, bool json, int argc, const char **
         return REMEMBER_ERR;
     }
     if (opt.all) {
-        n = sorted_registry(specs);
+        specs = sorted_registry(store_settings_registry(store), &n);
+        if (specs == NULL) {
+            return report_oom();
+        }
     } else {
-        specs[0] = setting_by_key(opt.key);
-        if (specs[0] == NULL) {
-            return report_unknown(opt.key);
+        one[0] = setting_by_key(store_settings_registry(store), opt.key);
+        if (one[0] == NULL) {
+            return report_unknown(store_settings_registry(store), opt.key);
         }
     }
     if (util_resolve_user_db_path(userdb, sizeof(userdb), err, sizeof(err)) != 0) {
+        if (opt.all) {
+            free((void *)specs);
+        }
         return fail_store(err);
     }
     if (json) {
@@ -4461,6 +4810,9 @@ static int cmd_settings_explain(Store *store, bool json, int argc, const char **
     }
     if (rc == 0 && json) {
         rc = fputs("]}", app_out()) < 0 ? -1 : 0;
+    }
+    if (opt.all) {
+        free((void *)specs);
     }
     if (rc == -3) {
         return REMEMBER_ERR;

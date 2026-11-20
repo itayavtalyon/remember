@@ -153,6 +153,12 @@ Store *store_open(const char *path, char *err, size_t errlen);
    A user_version below 0 fails with "unsupported database version". */
 int store_user_db_ensure(const char *path, char *err, size_t errlen);
 
+/* The registry the settings calls below look keys up in: the compiled-in rows plus the keys of
+   the installed plugins (plugin_settings_load). The Store does not own it. The opener frees it
+   after store_close. Without one, or with NULL, only the compiled-in rows are keys. */
+void store_set_settings_registry(Store *s, const SettingsRegistry *reg);
+const SettingsRegistry *store_settings_registry(const Store *s);
+
 /* Resolution and writes (007 ST-2.2, ST-4.3 through ST-4.6). Test through
    these, not through a settings command. user_db NULL is no user layer.
    A brain write bumps change_seq. A user write does not, and does not create
@@ -226,12 +232,13 @@ typedef enum {
 
 typedef enum {
     SETTING_SKIP_NONE = 0,
-    SETTING_SKIP_BAD_SHAPE,         /* setting_invalid, C-14a */
-    SETTING_SKIP_UNKNOWN_KEY,       /* setting_import_skipped */
-    SETTING_SKIP_BAD_FIELD,         /* setting_invalid, decision:plan20-import-bad-field */
-    SETTING_SKIP_OTHER_SCOPE,       /* setting_import_skipped */
-    SETTING_SKIP_LAYER_NOT_ALLOWED, /* setting_import_skipped */
-    SETTING_SKIP_INVALID_VALUE      /* setting_invalid, C-14 */
+    SETTING_SKIP_BAD_SHAPE,           /* setting_invalid, C-14a */
+    SETTING_SKIP_UNKNOWN_KEY,         /* setting_import_skipped */
+    SETTING_SKIP_BAD_FIELD,           /* setting_invalid, decision:plan20-import-bad-field */
+    SETTING_SKIP_OTHER_SCOPE,         /* setting_import_skipped */
+    SETTING_SKIP_LAYER_NOT_ALLOWED,   /* setting_import_skipped */
+    SETTING_SKIP_INVALID_VALUE,       /* setting_invalid, C-14 */
+    SETTING_SKIP_PLUGIN_NOT_INSTALLED /* setting_import_skipped, C-12, ST-5.10 */
 } SettingSkipReason;
 
 typedef enum {

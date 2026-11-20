@@ -730,6 +730,39 @@ char *harness_read_line(const char *path)
     return strdup(buf);
 }
 
+// NOLINTNEXTLINE(bugprone-easily-swappable-parameters) path, then the bytes
+void harness_write_bytes_at(const char *path, const char *bytes, size_t len, HarnessSite site)
+{
+    char dir[PATH_BUFSIZE];
+    size_t i = 0;
+    FILE *f = NULL;
+
+    if (strlen(path) >= sizeof(dir)) {
+        harness_fail(site, "fixture path too long");
+        return;
+    }
+    (void)snprintf(dir, sizeof(dir), "%s", path);
+    for (i = 1; dir[i] != '\0'; i++) {
+        if (dir[i] == '/') {
+            dir[i] = '\0';
+            (void)mkdir(dir, DIR_PERMS);
+            dir[i] = '/';
+        }
+    }
+    /* NOLINTNEXTLINE(android-cloexec-fopen) */
+    f = fopen(path, "wb");
+    if (f == NULL) {
+        harness_fail(site, "fixture file cannot be opened");
+        return;
+    }
+    if (fwrite(bytes, 1U, len, f) != len) {
+        harness_fail(site, "fixture file cannot be written");
+    }
+    if (fclose(f) != 0) {
+        harness_fail(site, "fixture file cannot be closed");
+    }
+}
+
 char *harness_read_file(const char *path, size_t *len)
 {
     FILE *f = NULL;

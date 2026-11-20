@@ -982,6 +982,16 @@ TEST(output_text_human_masks_c1_controls)
     assert_written(f, "a?b?c?d");
 }
 
+TEST(output_mask_in_place_masks_c0_del_newline_and_c1_and_keeps_tab_and_utf8)
+{
+    char text[] = "a\x1b[b\nc\x7f"
+                  "d\xc2\x9b"
+                  "e\t\xc3\xa9";
+
+    output_mask_in_place(text);
+    ASSERT_STREQ(text, "a?[b?c?d?e\t\xc3\xa9");
+}
+
 /* A body keeps its TABs; only the brain list row masks them (G1 A). */
 TEST(output_text_human_keeps_a_tab)
 {
@@ -1806,6 +1816,7 @@ void register_output_tests(void)
     RUN_TEST(output_preview_masks_del);
     RUN_TEST(output_preview_masks_a_c1_control);
     RUN_TEST(output_text_human_masks_c1_controls);
+    RUN_TEST(output_mask_in_place_masks_c0_del_newline_and_c1_and_keeps_tab_and_utf8);
     RUN_TEST(output_text_human_keeps_other_two_byte_text);
     RUN_TEST(output_text_human_keeps_a_tab);
     RUN_TEST(output_preview_cuts_by_bytes_before_the_scalar_cap);

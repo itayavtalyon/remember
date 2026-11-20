@@ -3331,6 +3331,7 @@ void register_plugins_tests(void)
     RUN_TEST(q3_24_bytes_is_the_ordinary_phrase_and_23_bytes_is_read);
     RUN_TEST(a_persistent_entry_with_a_broken_command_gets_only_its_command_error);
     RUN_TEST(backfill_with_a_persistent_entry_whose_command_is_broken_names_only_the_command);
+    register_plugin_settings_tests();
 }
 
 // NOLINTEND(cppcoreguidelines-avoid-magic-numbers,readability-magic-numbers)

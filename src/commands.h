@@ -48,7 +48,8 @@ int cmd_export_reject_args(int rest_argc, const char **rest_argv);
 int cmd_settings(Store *s, bool json, int rest_argc, const char **rest_argv);
 /* Emit ST-8.4 / ST-8.5 skip warnings for a settings import report.
    settings_alone keeps the D-15 "This brain wasn't changed." sentence. */
-int settings_import_warn_skips(const SettingImportReport *rep, bool settings_alone);
+int settings_import_warn_skips(const SettingsRegistry *reg, const SettingImportReport *rep,
+                               bool settings_alone);
 /* "setting.get" when rest starts with get, otherwise "unknown". */
 const char *cmd_settings_reply(int rest_argc, const char **rest_argv);
 

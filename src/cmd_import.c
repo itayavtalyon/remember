@@ -32,9 +32,9 @@ static const char *import_basename(const char *path)
 
 /* The import reply: the settings skip warnings (ST-8.3a, the same lines as
    settings import), then the JSON data object or one plain line of counts. */
-static int import_write(bool json, const StoreImportResult *r)
+static int import_write(const Store *s, bool json, const StoreImportResult *r)
 {
-    if (settings_import_warn_skips(&r->settings, false) != 0) {
+    if (settings_import_warn_skips(store_settings_registry(s), &r->settings, false) != 0) {
         return -1;
     }
     if (json) {
@@ -81,9 +81,9 @@ static bool import_take_source(const char *arg, int *i, int argc, const char **a
 }
 
 /* The settings skip warnings, then the reply; frees the result. */
-static int import_reply(bool json, StoreImportResult *result)
+static int import_reply(const Store *s, bool json, StoreImportResult *result)
 {
-    int rc = import_write(json, result);
+    int rc = import_write(s, json, result);
 
     store_import_result_free(result);
     if (rc != 0) {
@@ -144,7 +144,7 @@ static int import_finish(const Store *s, bool json, StoreStatus st, StoreImportR
     if (st != STORE_OK) {
         return store_status_to_exit(s, st);
     }
-    return import_reply(json, result);
+    return import_reply(s, json, result);
 }
 
 /* An empty brain takes the file's brain_id, unless a listed brain still has it (plan 23):
