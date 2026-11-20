@@ -1,18 +1,19 @@
 # 32 — Expiry sweep, purge and delete --expired
 
-**Area:** the post-command sweep, `remember sweep [--all]`, `remember purge LOCATOR`, `remember delete --expired` (`src/sweep.c` new, `src/cmd_purge.c`, `src/store_sqlite.c`).
+**Area:** the post-command sweep, `remember brain sweep [--all]`, `remember purge LOCATOR`, `remember delete --expired` (`src/sweep.c` new, `src/cmd_purge.c`, `src/store_sqlite.c`).
 **Needs:** plans 26 (`brains.json` for `--all`) and 31 (events). No other plan.
 **Blocked on:** nothing.
 
 ## Goal
 
-Due memories get `expired_at` and one `memory.expired` event, after every read-write command and from `remember sweep`. Purge and `delete --expired` follow the old plan 25 rules.
+Due memories get `expired_at` and one `memory.expired` event, after every read-write command and from `remember brain sweep`. Purge and `delete --expired` follow the old plan 25 rules.
 
 ## Source
 
 - Log 010 H-1 (sweep), H-2.1, the event list; log 018 V1-17 and log 020 D-3 (no sweep LaunchAgent).
 - Old plan 25 "Events" third paragraph and "Logs and CLI" (`sweep`, `purge`, `delete --expired`).
-- Spec: `specs/EVENTS.md` gains "Expiry".
+- Spec: `specs/EVENTS.md` gains "Expiry". `specs/API-SURFACE.md`: the `brain sweep` row moves from planned to shipped, and the `delete` and `purge` rows' Arguments name the forms this plan changes. `brain sweep` enters `k_subcommands` in `src/cli.c` (`decision:2026-11-20-subcommand-table`), and `app_command_class` (`src/remember_app.c`) classes it read-write: today every `brain` subcommand except `new-id` is no-store, so the row's rights and the cli suite fail until the class changes.
+- `decision:2026-11-18-sweep-under-brain`: the command is `remember brain sweep [--all]`, not a top-level `sweep`. Request `brain.sweep`, reply `brain.sweep.result`. The event `cause.command` stays `sweep`.
 
 ## Out of scope
 
@@ -27,7 +28,7 @@ The standards for plans 25 and later in [INDEX](INDEX.md). Tests in `tests/test_
 - `expired_at` is device-local. Setting it does not bump `updated_at`, the version vector, or `change_seq`, and it does not sync.
 - The sweep runs after every command that opened the brain read-write, including reads, after that command commits. A read-only open skips it. One transaction. It sets `expired_at = now` on each row with `deleted_at IS NULL AND expires_at <= now AND expired_at IS NULL`, and inserts one `memory.expired` outbox row per changed row (plan 31 rules). `occurred_at` is `expires_at`. `detected_at` is the sweep time. `cause.command` is `sweep`.
 - A later or null `expires_at`, or a restore, sets `expired_at` to null in that same write. Restore of a row that is already due emits `memory.restored`, then the sweep emits `memory.expired`.
-- `remember sweep` sweeps one brain. `remember sweep --all` reads only `brains.json` and sweeps each listed brain; a missing path warns `brain_missing` with the C-01 line and the entry stays.
+- `remember brain sweep` sweeps one brain. `remember brain sweep --all` reads only `brains.json` and sweeps each listed brain; a missing path warns `brain_missing` with the C-01 line and the entry stays.
 - `remember purge LOCATOR` permanently deletes one row that is already expired or deleted, writes one tombstone, and emits `memory.purged`. A live row exits 3 `wrong_bin` with the C-01 `wrong_bin` row. Purge of an unmarked expired row emits only `memory.purged`.
 - `delete --expired` moves every due, not-yet-deleted row to Deleted in one transaction, emits `memory.deleted` only, and has no cap. `delete --deleted` is an unknown option.
 - When no plugin is installed the sweep inserts no outbox row.

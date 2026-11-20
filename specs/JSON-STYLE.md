@@ -20,7 +20,7 @@
   - **Formats (S-07):** one message format, `remember-message` version 1. The three formats `remember-cli-message`, `remember-api-message` and `remember-plugin-message` are gone.
   - **Paging (S-08):** `--offset` and the envelope `offset` field are gone. Search has no `next_cursor` and no `has_more`. Paging fields stay in the envelope for list responses only.
   - **Plugin settings (S-06):** budget, grace and priority come from the manifest only. `plugin.<name>.enabled` is the only generated key. The CF-7 collision text is gone. `cold_start_grace` is listed as a manifest field.
-  - **Hooks (S-01):** hooks are plugins. `<brain>.hooks.json`, `remember-hooks`, `hooks_config_invalid` and the `hook list|show|…|resume` command family are gone. `hook add` and `plugin rerun` remain.
+  - **Hooks (S-01):** hooks are plugins. `<brain>.hooks.json`, `remember-hooks`, `hooks_config_invalid` and the `hook list|show|…|resume` command family are gone. `plugin hook` (was `hook add`, `decision:2026-11-18-hook-under-plugin`) and `plugin rerun` remain.
   - **Warning codes:** the code catalog is PLUGIN-PROTOCOL §8.2 (`plugin_*`, including `plugin_loop_halted`, M-19 N6). No `hook_` code exists.
   - **Strict (G2-03, S-09):** under `--strict`, every warning exits 4. Exit 4 has no other meaning.
   - **Names (M-17):** plugin names, entry names and setting segments all use `^[a-z][a-z0-9_]{0,39}$`. A typed hyphen is normalized to `_`. A hyphen in a manifest is `plugin_manifest_invalid`, with a fix that names the `_` form.
@@ -122,6 +122,8 @@ Each rule states the rule, says why, and gives a correct example (✓) and a wro
 - **A reply's type is the request type plus `.result`.** There are no other reply names: no `pong` and no `event_ack`.
 - **A failed reply keeps its `.result` type and fills `error` instead of `data`.** No `type: "error"` exists. When the CLI cannot tell which command was meant, the type is `unknown.result` (JE-2.3–2.4).
 
+The REST route and MCP tool of every verb are in [API-SURFACE.md](API-SURFACE.md); this table names the reply types.
+
 | CLI command / API route / MCP tool | reply `type` |
 |---|---|
 | `add` / `POST /v1/memories` / `remember_add` | `memory.add.result` |
@@ -131,13 +133,12 @@ Each rule states the rule, says why, and gives a correct example (✓) and a wro
 | `update`, `delete`, `purge`, `rekey`, `link`, `unlink`, `related`, `import`, `export` | `memory.<verb>.result` |
 | `tags`, `conflicts`, `conflict accept` | `tag.list.result`, `conflict.list.result`, `conflict.accept.result` |
 | `settings list\|get\|set\|reset\|explain\|history\|import` | `setting.<verb>.result` |
-| `plugin add\|list\|show\|trust\|enable\|disable\|remove\|reindex\|rerun\|status\|log\|test` | `plugin.<verb>.result` |
-| `hook add` (the only `hook` command, S-01) | `hook.add.result` |
+| `plugin add\|list\|show\|trust\|enable\|disable\|remove\|reindex\|rerun\|status\|log\|test\|hook` | `plugin.<verb>.result` (`plugin hook` was `hook add`, `decision:2026-11-18-hook-under-plugin`) |
 | `device` | `device.get.result` |
 | `device new` | `device.new.result` |
 | `repair search-index` | `repair.search_index.result` |
 | `brain new-id` | `brain.new_id.result` |
-| `dispatch`, `sweep [--all]` | `dispatch.result`, `sweep.result` |
+| `dispatch`, `brain sweep [--all]` | `dispatch.result`, `brain.sweep.result` (`decision:2026-11-18-sweep-under-brain`) |
 
 - A multi-word verb uses `_` in the type (`brain.new_id.result`), following §1.1a.
 - `export` writes its document to `--out` (§1.7b) and replies `memory.export.result` with what it wrote (`decision:plan22-export-reply-type`, 2026-11-09). `settings export` prints a document, not a message, so it has no reply type.
@@ -332,12 +333,12 @@ Event (hook stdin, plugin socket, webhook):
 | CLI `--json` single | `device new` | `E(device.new.result)` + `data{device_id, previous}`, `warnings?`. `previous` may be `null`. |
 | CLI `--json` single | `repair search-index` | `E(repair.search_index.result)` + `data{action, entries}`, `warnings?`. `action` is `rebuilt`. `entries` is a count. |
 | CLI `--json` single | `brain new-id` | `E(brain.new_id.result)` + `data{brain_id, previous_brain_id}`, `warnings?` |
-| CLI `--json` single | `settings explain`, `plugin show\|add\|rerun`, `hook add`, `sweep`, `dispatch` | `E(<noun>.<verb>.result)` + `data{…}`, `warnings?` |
+| CLI `--json` single | `settings explain`, `plugin show\|add\|rerun\|hook`, `brain sweep`, `dispatch` | `E(<noun>.<verb>.result)` + `data{…}`, `warnings?` |
 | CLI plugin status | `plugin status` | `E(plugin.status.result)` + `data{plugins[]}`; each item follows PP §10 `plugin-status.json`. Each filter item in `entries[]` has `budget` and an optional `cold_start_grace` (M-24 A) |
 | CLI failure | any command with `--json` | `E(<request type>.result)` + `error{code, message, fix, retryable, detail?}`, `warnings?`; `unknown.result` when no command is known; stdout only; stderr empty |
 | CLI memory object | `data.memory`, `data.entries[]` | `{id, local_id, key, body, tags[], created_by{kind,id}, updated_by{kind,id}, created_at, updated_at, expires_at, deleted_at, bin, version_vector{}}` and `links[]` on `get`, `add`, `list`, and `search` (no `source`) |
 | HTTP | every route | `E(<request type>.result)` + `request_id`, `data` \| `error`, `next_cursor?`/`has_more?` (paging list routes only; never search), `warnings?`; memory objects without `local_id`; status from `error.code` |
-| MCP | `remember_add\|search\|list\|get\|update\|delete`, `remember_settings` | input: snake_case tool arguments (`id`, `key`, `tags`, `bin`, `limit`, `cursor`; search takes no `cursor`); output: the HTTP envelope in `structuredContent` |
+| MCP | every tool in [API-SURFACE.md](API-SURFACE.md) (`remember_add\|search\|list\|get\|update\|delete`, `remember_settings`, …) | input: snake_case tool arguments (`id`, `key`, `tags`, `bin`, `limit`, `cursor`; search takes no `cursor`); output: the HTTP envelope in `structuredContent` |
 | Plugin message | socket, plugin and hook stdin, the `ready` line, Cloud webhooks | `E(<PP §1.2 type>)` + `request_id?` (§1.7a), `data` \| `error`, `warnings?`; never `next_cursor` or `has_more` (PP R1.12). The type list is PP §1.2. |
 | Event message | `type: "event"` (hooks, plugin actions, webhooks) | `E(event)` + `data{event_id, event_type, occurred_at, detected_at, batch_id, cause{command, origin, hook, run_id, depth, chain[]}, brain{}, memory{}, changes, truncated, truncated_fields[], limits{}, plugin{}, entry, data_dir, settings[]}` (PP §3). The actor is `memory.updated_by` (R3.5a). Six event types; a link change is `memory.updated` with `changes.link` (S-10). `data` is at most 256 KiB. |
 | Settings export | `remember settings export` (document) | `{format:"remember-settings-export", version, exported_at, settings:[{key, scope, value, value_ms?\|value_bytes?, updated_by, updated_at, device_id, version_vector, deleted_at}]}` (007 ST-8.1–8.2) |

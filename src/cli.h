@@ -30,6 +30,37 @@ typedef enum {
     CLI_CMD_UNKNOWN
 } CliCommand;
 
+/* Every subcommand, the one list of their names (k_subcommands in cli.c).
+   specs/API-SURFACE.md has a row for each; the cli test suite compares them.
+   NONE: no argument. UNKNOWN: an argument that is not a subcommand of that
+   command. */
+typedef enum {
+    CLI_SUB_NONE = 0,
+    CLI_SUB_UNKNOWN,
+    CLI_SUB_SETTINGS_GET,
+    CLI_SUB_SETTINGS_SET,
+    CLI_SUB_SETTINGS_RESET,
+    CLI_SUB_SETTINGS_LIST,
+    CLI_SUB_SETTINGS_HISTORY,
+    CLI_SUB_SETTINGS_EXPLAIN,
+    CLI_SUB_SETTINGS_EXPORT,
+    CLI_SUB_SETTINGS_IMPORT,
+    CLI_SUB_BRAIN_NEW_ID,
+    CLI_SUB_BRAIN_LIST,
+    CLI_SUB_BRAIN_PRUNE,
+    CLI_SUB_DEVICE_NEW,
+    CLI_SUB_CONFLICT_ACCEPT,
+    CLI_SUB_REPAIR_SEARCH_INDEX,
+    CLI_SUB_COUNT
+} CliSub;
+
+/* The subcommand that argv[0] names under cmd. */
+CliSub cli_subcommand(CliCommand cmd, int argc, const char *const *argv);
+/* The name and the parent command of sub; NULL and CLI_CMD_UNKNOWN for
+   CLI_SUB_NONE, CLI_SUB_UNKNOWN and values outside the enum. */
+const char *cli_subcommand_name(CliSub sub);
+CliCommand cli_subcommand_parent(CliSub sub);
+
 /* Parse / usage failures. CLI_ERR_OK means a runnable or meta request. */
 typedef enum {
     CLI_ERR_OK = 0,

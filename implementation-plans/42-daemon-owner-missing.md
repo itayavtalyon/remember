@@ -2,7 +2,7 @@
 
 **Area:** the pre-command owner check in `src/remember_app.c`, `src/state_file.c` (`state.json`), and the prompt and warning.
 **Needs:** plans 39 and 41 (a `y` answer runs the takeover). No other plan.
-**Blocked on:** nothing. The copy is item R30-4 in `decision:2026-11-12-copy-batch-final` (hint line, done confirmation, `daemon_owner_missing` `message` and `fix`). The prompt line itself is locked (below).
+**Blocked on:** `decision:open-2026-11-18-daemon-install-copy` (Story Weaver: R30-4 with the new command name). The copy is item R30-4 in `decision:2026-11-12-copy-batch-final` (hint line, done confirmation, `daemon_owner_missing` `message` and `fix`). The prompt line itself is locked (below).
 
 ## Goal
 
@@ -16,7 +16,7 @@ Decisions built:
 
 - decision:2026-11-03-takeover-order
 - decision:2026-11-03-confirmation-required-exit-5
-- decision:2026-11-03-naming-defaults (`daemon.takeover.result` `{changed, previous_owner}`)
+- decision:2026-11-03-naming-defaults (amended by decision:2026-11-20-daemon-install-reply: the reply is `daemon.install.result` `{changed, path, previous_owner}`)
 
 - decision:2026-10-31-cli-takeover-offer
 - decision:2026-10-31-trashed-app-handback (the CLI half)
@@ -36,7 +36,7 @@ Decisions built:
 - decision:2026-10-31-daemon-two-labels
 - decision:2026-10-31-coexistence-copy (CLI prompt copy)
 
-Spec sections this plan changes: `specs/DAEMON.md` §9 Owner missing, §10 `remember daemon takeover`, §11 Unresponsive daemon, §14 state.json.
+Spec sections this plan changes: `specs/DAEMON.md` §9 Owner missing, §10 the takeover path of `remember daemon install`, §11 Unresponsive daemon, §14 state.json.
 
 ## Out of scope
 
@@ -55,11 +55,11 @@ Spec sections this plan changes: `specs/DAEMON.md` §9 Owner missing, §10 `reme
 - **Proof.** TDD: the Definition of Done boxes are the must-pass tests, in TDD order. Each test is red before its production change. Every rule has a test that a one-clause mutant turns red. Expected values are literals or an independent computation.
 - **OS integrations.** Share, Spotlight, login items, Shortcuts, and other OS integrations are Fortkeeps-only. They never go in the open-source engine or daemon (decision:2026-11-03-os-integrations-fortkeeps-only).
 - **Copy.** The hint line, the done confirmation, the y/N confirmation, and the `message` and `fix` of `daemon_owner_missing` and `confirmation_required` equal copy item R30-4 in `decision:2026-11-12-copy-batch-final`.
-  - Hint (stderr, after the answer No, Enter or end of input, and only then): `remember: Remember's background service still belongs to Fortkeeps. To take it over, run 'remember daemon takeover'.`
+  - Hint (stderr, after the answer No, Enter or end of input, and only then): `remember: Remember's background service still belongs to Fortkeeps. To take it over, run 'remember daemon install'.` (draft, pending `decision:open-2026-11-18-daemon-install-copy`; the approved R30-4 line names `remember daemon takeover`, which no longer exists)
   - Done confirmation (stderr, after the answer y, with no hint): `remember: took over Remember's background service. It now runs without Fortkeeps.`
-  - `daemon_owner_missing` is a warning with a `fix` (E3 B). `message`: `Fortkeeps was removed but still owns Remember's background service.` `fix`: `To take it over, run 'remember daemon takeover'.` Plain line: `remember: warning: Fortkeeps was removed but still owns Remember's background service. To take it over, run 'remember daemon takeover'.` It has no `detail.hint`. It prints with `--json`, with no TTY, or in CI, until it is resolved. The exit follows the command.
+  - `daemon_owner_missing` is a warning with a `fix` (E3 B). `message`: `Fortkeeps was removed but still owns Remember's background service.` `fix` (draft, pending `decision:open-2026-11-18-daemon-install-copy`): `To take it over, run 'remember daemon install'.` Plain line: `remember: warning: Fortkeeps was removed but still owns Remember's background service. To take it over, run 'remember daemon install'.` It has no `detail.hint`. It prints with `--json`, with no TTY, or in CI, until it is resolved. The exit follows the command.
 - **Prerequisites.** Work starts only when each item below holds. When one does not hold, the work stops and Itay is told:
-  - Copy item R30-4 is approved (2026-11-12).
+  - `decision:open-2026-11-18-daemon-install-copy` is answered: Story Weaver has approved R30-4 with the command `remember daemon install`. R30-4 as approved on 2026-11-12 names `remember daemon takeover` and does not hold.
 
 
 ## What must be true
@@ -75,6 +75,7 @@ The rules below hold. Each quote is decision text.
 - Non-TTY rule: "With --json, non-TTY or CI: never prompt; add warning {code: daemon_owner_missing, hint: remember daemon takeover} until resolved; exit code follows the command."
 - Amended 2026-11-12 (`decision:2026-11-12-e3-warnings-have-fix-field`, `decision:2026-11-12-e4-takeover-done-confirmation`): the warning is `{code: daemon_owner_missing, message, fix}` with the R30-4 text and no `hint`. The hint line prints after No only. After `y` the CLI prints the done confirmation, with no hint, and then runs the command. The prompt rule above ("both paths print the hint") is replaced by this.
 - CI: "There is no separate CI check: without a TTY the CLI never prompts."
+- Command name (`decision:2026-11-18-daemon-install-absorbs-takeover`): `remember daemon takeover` does not exist. In the quotes above, "remember daemon takeover" means `remember daemon install`, whose takeover path plan 41 builds.
 - State keys: "never_ask.fortkeeps_takeover for the sheet answer and daemons.<label>.program for recorded daemon program paths."
 - State file location: "device-local in ~/Library/Application Support/Remember/state.json (parent of the run dir), not in the brain."
 - State file shape: "state.json is a versioned document {format: remember-state, version: 1, never_ask: {daemon_takeover: true}}, written by temp file and rename; a malformed file reads as empty and is rewritten on the next answer."

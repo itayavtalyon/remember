@@ -1,3 +1,4 @@
+#include "cli.h"
 #include "commands.h"
 #include "commands_common.h"
 #include "diag.h"
@@ -8,11 +9,12 @@
 #include "store.h"
 
 #include <stdbool.h>
-#include <string.h>
+#include <stddef.h>
 
 int cmd_repair_reject_args(int rest_argc, const char **rest_argv)
 {
-    if (rest_argc == 1 && rest_argv != NULL && strcmp(rest_argv[0], "search-index") == 0) {
+    if (rest_argc == 1 &&
+        cli_subcommand(CLI_CMD_REPAIR, rest_argc, rest_argv) == CLI_SUB_REPAIR_SEARCH_INDEX) {
         return 0;
     }
     err_msg(DIAG_USAGE, "usage: repair search-index");

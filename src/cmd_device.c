@@ -1,3 +1,4 @@
+#include "cli.h"
 #include "commands.h"
 #include "commands_common.h"
 #include "diag.h"
@@ -8,7 +9,7 @@
 #include "store.h"
 
 #include <stdbool.h>
-#include <string.h>
+#include <stddef.h>
 
 enum { DEVICE_ERR_BUF = 256 };
 
@@ -28,7 +29,7 @@ static int reject_device_args(int rest_argc, const char **rest_argv, bool *make_
             err_fmt(DIAG_USAGE, "unknown option '%s'", arg);
             return -1;
         }
-        if (i == 0 && strcmp(arg, "new") == 0) {
+        if (i == 0 && cli_subcommand(CLI_CMD_DEVICE, 1, &arg) == CLI_SUB_DEVICE_NEW) {
             *make_new = true;
             continue;
         }
@@ -97,13 +98,8 @@ static int emit_new_device(Store *s, bool json)
 
 bool cmd_device_mints(int rest_argc, const char **rest_argv)
 {
-    if (rest_argc != 1 || rest_argv == NULL) {
-        return false;
-    }
-    if (strcmp(rest_argv[0], "new") != 0) {
-        return false;
-    }
-    return true;
+    return (rest_argc == 1 &&
+            cli_subcommand(CLI_CMD_DEVICE, rest_argc, rest_argv) == CLI_SUB_DEVICE_NEW) != 0;
 }
 
 int cmd_device(Store *s, bool json, int rest_argc, const char **rest_argv)

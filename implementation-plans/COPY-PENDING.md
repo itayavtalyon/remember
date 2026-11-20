@@ -206,7 +206,7 @@ A hash mismatch reuses C-17. It does not use `plugin_preflight_failed`. The reci
 
 ## C-23
 
-`hook add` and folder `plugin add`, error. Message: `this build of remember can't start programs, so it can't run "<command>".` Fix: `Use a build of remember that can start programs.`
+`plugin hook` (was `hook add`, `decision:2026-11-18-hook-under-plugin`) and folder `plugin add`, error. Message: `this build of remember can't start programs, so it can't run "<command>".` Fix: `Use a build of remember that can start programs.`
 
 Dispatch, warning: `remember: warning: the write was saved, but this build of remember can't start programs, so its hooks and plugins didn't run.` Plan 25.
 

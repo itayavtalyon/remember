@@ -324,6 +324,7 @@ set(REMEMBER_TEST_SOURCES
     tests/test.c
     tests/harness.c
     tests/test_cli_global.c
+    tests/test_cli.c
     tests/test_store.c
     tests/test_store_links.c
     tests/test_store_sync.c
@@ -376,6 +377,7 @@ target_include_directories(remember_tests PRIVATE
 target_link_libraries(remember_tests PRIVATE sqlite3 sha256 utf8proc)
 target_compile_definitions(remember_tests PRIVATE
     REMEMBER_VERSION="${PROJECT_VERSION}"
+    REMEMBER_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}" # specs/API-SURFACE.md for the cli suite
     REMEMBER_TEST_HOOKS
     REMEMBER_PLUGINS_DIAG_TEST # the C-35 line test needs diag.c, which the store binary lacks
 )

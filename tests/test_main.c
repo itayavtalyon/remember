@@ -13,6 +13,7 @@ typedef struct {
 
 static const TestGroup k_groups[] = {
     {"cli_global", register_cli_global_tests},
+    {"cli", register_cli_tests},
     {"store", register_store_tests},
     {"normalize", register_normalize_tests},
     {"add", register_add_tests},

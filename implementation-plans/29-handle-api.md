@@ -20,7 +20,7 @@ A host links the Remember library and calls it through a handle, not through arg
 - Log 018 (stable ABI answer): "`remember_run` is internal and not in the public header."
 - Log 008 JE-1.2, JE-2.1 to JE-2.9 (envelope, `request_id` copied into the reply).
 - `decision:2026-11-11-handle-api-scope` (G3 A): the dispatch callback field exists and is never called here; plan 35 calls it.
-- Spec: `specs/LIBRARY-API.md` (new) and `specs/API-SURFACE.md` (new, the living request list, X1-2 A).
+- Spec: `specs/LIBRARY-API.md` (new) and `specs/API-SURFACE.md` (exists since the verb table PR; this plan adds the request columns, X1-2 A).
 
 ## Out of scope
 
@@ -56,7 +56,7 @@ Open. `remember_open` returns 0 and sets `*out` on success. On failure it return
 
 Call. `request_json` is one `remember-message` version 1 object with `type` (a request type, `<noun>.<verb>`), optional `request_id`, and `data`. The reply is the same envelope the CLI prints with `--json` for the same command, with `type` `<request type>.result`, and `request_id` copied when the request had one (JE-2.9). The supported requests and their `data` members are the X1 list below, built from one engine table in `src/api_table.c` (new), which also feeds the CLI verb table. Every verb that has a reply type in JSON-STYLE 1.7a is in it (X1-3 A), plus `plugin.warm`.
 
-Members (X1-1 A). A request's `data` members are the CLI's long option names with `-` turned into `_`; positionals are named (`body`, `query`); a repeatable option is an array (`tags`); a switch is a boolean. `bin` is an array of `live`, `expired` or `deleted`, with default `["live"]` (X1-5 C). `memory.list` and `memory.search` take one or more values. `memory.get`, `memory.update`, `memory.delete`, `memory.rekey` and `memory.purge` act on exactly one memory or one bin, so they take exactly one value; an empty array or two or more values fail with `invalid_argument` (G1 A). Writes take optional `as` and `actor`; the default is human with no id (X1-6 A). `yes` exists only where the CLI has `--yes` (bulk `setting.reset` and daemon takeover); `plugin.add`, `plugin.trust`, `plugin.enable` and `hook.add` never take it and need the confirm callback (X1-8 A). A member the engine does not know is ignored and adds a warning with code `unknown_field`; nothing is rejected for it (X1-7 B).
+Members (X1-1 A). A request's `data` members are the CLI's long option names with `-` turned into `_`; positionals are named (`body`, `query`); a repeatable option is an array (`tags`); a switch is a boolean. `bin` is an array of `live`, `expired` or `deleted`, with default `["live"]` (X1-5 C). `memory.list` and `memory.search` take one or more values. `memory.get`, `memory.update`, `memory.delete`, `memory.rekey` and `memory.purge` act on exactly one memory or one bin, so they take exactly one value; an empty array or two or more values fail with `invalid_argument` (G1 A). Writes take optional `as` and `actor`; the default is human with no id (X1-6 A). `yes` exists only where the CLI has `--yes` (bulk `setting.reset` and `daemon install`, which absorbed daemon takeover in `decision:2026-11-18-daemon-install-absorbs-takeover`); `plugin.add`, `plugin.trust`, `plugin.enable` and `plugin.hook` never take it and need the confirm callback (X1-8 A). A member the engine does not know is ignored and adds a warning with code `unknown_field`; nothing is rejected for it (X1-7 B).
 
 The list (`?` means optional):
 - `memory.add`: `body`, `key?`, `tags[]?`, `ttl?`, `expires?`, `as?`, `actor?`, `hooks?`. Reply `{action, memory}`.
@@ -74,12 +74,12 @@ The list (`?` means optional):
 - `tag.list`: `bin?`. Reply `{tags[{tag, count}]}`.
 - `conflict.list`, `conflict.accept`: `id`, `keep` (`local`, `incoming` or `both`; local is the version this device authored, X1-12 C). `keep: local` fails with `invalid_argument` when no version, or more than one version, came from this device. The failure lists the versions in its detail, so the caller can retry with `incoming` or `both` or pick one (G2 A). Reply the conflict.
 - `setting.list`, `setting.get`, `setting.set`, `setting.reset`, `setting.explain`, `setting.history`, `setting.import`: the long option names of `remember settings`.
-- `plugin.list`, `plugin.show`, `plugin.add`, `plugin.trust`, `plugin.enable`, `plugin.disable`, `plugin.remove`, `plugin.reindex`, `plugin.rerun`, `plugin.status`, `plugin.log`, `plugin.test`, `hook.add`: the options of plan 34. `plugin.add`, `plugin.trust`, `plugin.enable` and `hook.add` fail with exit 5 `plugin_approval_required` or `hook_approval_required` when the confirm callback is NULL (plan 33).
+- `plugin.list`, `plugin.show`, `plugin.add`, `plugin.trust`, `plugin.enable`, `plugin.disable`, `plugin.remove`, `plugin.reindex`, `plugin.rerun`, `plugin.status`, `plugin.log`, `plugin.test`, `plugin.hook`: the options of plan 34 (`plugin.hook` was `hook.add`, `decision:2026-11-18-hook-under-plugin`). `plugin.add`, `plugin.trust` and `plugin.hook` fail with exit 5 `plugin_approval_required` or `hook_approval_required` when the confirm callback is NULL (plan 33). `plugin.enable` asks nothing and takes no confirm callback; an untrusted hash fails with `plugin_untrusted` (`decision:2026-11-20-plugin-enable-asks-nothing`, S-05).
 - `plugin.warm`: `plugin?`, `wait_ms?`. Reply `{started[], running[], skipped[]}`. With `wait_ms` the call returns when the plugins are ready or the time ends. Plan 36 builds the behavior; this plan builds the row.
-- `device.get`, `device.new`, `brain.new_id`, `repair.search_index`, `sweep`: the CLI options only. `dispatch` stays a host callback, not a request.
+- `device.get`, `device.new`, `brain.new_id`, `repair.search_index`, `brain.sweep`: the CLI options only (`brain.sweep` was `sweep`, `decision:2026-11-18-sweep-under-brain`). `dispatch` stays a host callback, not a request; `remember dispatch` is a CLI verb only (`decision:2026-11-18-dispatch-user-facing`).
 - Reserved: `memory.archive`, `memory.unarchive`, `sync.pull`, `sync.peers`. They answer `unknown_request_type` until an engine plan builds them (X1-11 A). `device.set` joins the table with the v7 schema plan, plan 43 (Q10-2 A). Plan 44 builds `sync.pull` and `sync.peers`.
 
-Surfaces (X1-4 A). The table has one column per surface. Reads and memory writes are on remember_call, the CLI, REST and MCP. `memory.purge`, every `setting.*` write and every plugin write are on remember_call and the CLI only (`decision:mcp-tool-catalog`). `specs/API-SURFACE.md` is generated from the table and lists, for each request, its members, reply, surfaces and CLI command. A test fails when a CLI verb or a table row has no counterpart in the other.
+Surfaces (X1-4 A, amended by `decision:2026-11-18-surfaces-catalog-plus-rekey`). The table has one column per surface. REST and MCP carry only the rows that `specs/API-SURFACE.md` gives a route and a tool: add, get, list, search, update, delete, link, unlink, related, tags, conflicts (list and accept), settings list, get and explain, archive, unarchive and rekey. Every other verb has no REST route and no MCP tool. `dispatch`, `help` and `version` are CLI-only and have no request either. `specs/API-SURFACE.md` exists before this plan (the verb table of `decision:2026-11-18-verb-table-is-api-surface`, checked by the test case `cli_verbs_match_api_surface` in suite `cli`, which ctest runs in `step_gate`; it reads the CLI's `k_commands` and `k_subcommands` tables, `decision:2026-11-20-subcommand-table`). This plan adds its request-type and member columns, and from then on generates it from the table. A test fails when a CLI verb or a table row has no counterpart in the other; it extends `cli_verbs_match_api_surface`, it does not add a second list.
 - Unknown `type` → `error.code` `unknown_request_type`, `type` `unknown.result`. Malformed JSON → `invalid_argument`, `type` `unknown.result`.
 - `updated_by` for a write through `remember_call` is `{kind: human, id: null}` (ST-11.2) unless the request carries `as` and `actor`.
 - A reply to a write that has `as` or `actor` records that author on the memory, the link and the event.
@@ -99,6 +99,7 @@ The coder stops and asks Itay, through the architect, at each of these. The plan
 2. The member name of the version list in the `invalid_argument` detail for `keep: local` (G2 A says the reply lists the versions and names no member).
 3. Whether `archived` is an accepted `bin` value before the archive plan exists, and what a request with `archived` returns until then.
 4. Whether human `remember search` prints a line for a non-zero `archived_hidden`. The member exists for hosts (M79); the CLI text needs approved copy.
+5. Whether `daemon install` is a `remember_call` request (`daemon.install`, with `yes`), or CLI-only like `dispatch`; X1 has no `daemon.install` row. And how the table marks a CLI-only verb in the request column.
 
 ## Review points
 
@@ -129,7 +130,8 @@ The coder stops and asks Itay, through the architect, at each of these. The plan
 - [ ] `search_reply_has_archived_hidden_zero_when_there_is_no_archive`.
 - [ ] `write_with_as_and_actor_records_author` and `write_without_them_is_human_no_id`.
 - [ ] `yes_member_only_on_requests_whose_cli_has_yes`.
-- [ ] `plugin_add_trust_enable_hook_add_null_confirm_exit_5`.
+- [ ] `plugin_add_trust_plugin_hook_null_confirm_exit_5`.
+- [ ] `plugin_enable_null_confirm_does_not_ask` (a trusted plugin enables with a NULL confirm callback).
 - [ ] `memory_export_writes_file_and_replies_format_path_count`.
 - [ ] `plugin_warm_takes_plugin_and_wait_ms_replies_three_lists`.
 - [ ] `archive_unarchive_sync_rows_answer_unknown_request_type`.
@@ -150,7 +152,7 @@ The coder stops and asks Itay, through the architect, at each of these. The plan
 - [ ] `engine_reads_no_home` (unset `HOME`, open with an absolute `data_dir`, write and read succeed).
 - [ ] `cli_env_xdg_data_home` and `cli_env_home_default`.
 - [ ] `header_compiles_cxx`.
-- [ ] `specs/LIBRARY-API.md` and `specs/API-SURFACE.md` are written; `decision:library-handle-api`, `decision:remember-env`, `decision:g2-13` (storage half), `decision:g-21`, `decision:plan20-remember-call-deferred` are `state:implemented`.
+- [ ] `specs/LIBRARY-API.md` is written and `specs/API-SURFACE.md` has the request-type and member columns; `decision:library-handle-api`, `decision:remember-env`, `decision:g2-13` (storage half), `decision:g-21`, `decision:plan20-remember-call-deferred` are `state:implemented`.
 - [ ] The gate passes on the committed tree.
 
 ## Implementation Notes

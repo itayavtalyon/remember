@@ -147,6 +147,64 @@ const char *cli_command_summary(CliCommand cmd)
     return NULL;
 }
 
+/* ---- subcommand table ---------------------------------------------------- */
+
+typedef struct {
+    const char *name;
+    CliCommand parent;
+    char pad_[4]; /* explicit tail padding (kept -Wpadded-clean) */
+} SubcommandEntry;
+
+/* Designated initializers bind each name to its enum value. */
+static const SubcommandEntry k_subcommands[CLI_SUB_COUNT] = {
+    [CLI_SUB_SETTINGS_GET] = {.name = "get", .parent = CLI_CMD_SETTINGS},
+    [CLI_SUB_SETTINGS_SET] = {.name = "set", .parent = CLI_CMD_SETTINGS},
+    [CLI_SUB_SETTINGS_RESET] = {.name = "reset", .parent = CLI_CMD_SETTINGS},
+    [CLI_SUB_SETTINGS_LIST] = {.name = "list", .parent = CLI_CMD_SETTINGS},
+    [CLI_SUB_SETTINGS_HISTORY] = {.name = "history", .parent = CLI_CMD_SETTINGS},
+    [CLI_SUB_SETTINGS_EXPLAIN] = {.name = "explain", .parent = CLI_CMD_SETTINGS},
+    [CLI_SUB_SETTINGS_EXPORT] = {.name = "export", .parent = CLI_CMD_SETTINGS},
+    [CLI_SUB_SETTINGS_IMPORT] = {.name = "import", .parent = CLI_CMD_SETTINGS},
+    [CLI_SUB_BRAIN_NEW_ID] = {.name = "new-id", .parent = CLI_CMD_BRAIN},
+    [CLI_SUB_BRAIN_LIST] = {.name = "list", .parent = CLI_CMD_BRAIN},
+    [CLI_SUB_BRAIN_PRUNE] = {.name = "prune", .parent = CLI_CMD_BRAIN},
+    [CLI_SUB_DEVICE_NEW] = {.name = "new", .parent = CLI_CMD_DEVICE},
+    [CLI_SUB_CONFLICT_ACCEPT] = {.name = "accept", .parent = CLI_CMD_CONFLICT},
+    [CLI_SUB_REPAIR_SEARCH_INDEX] = {.name = "search-index", .parent = CLI_CMD_REPAIR},
+};
+
+// NOLINTNEXTLINE(bugprone-easily-swappable-parameters) the noun, then its argv
+CliSub cli_subcommand(CliCommand cmd, int argc, const char *const *argv)
+{
+    int i = 0;
+
+    if (argc < 1 || argv == NULL || argv[0] == NULL) {
+        return CLI_SUB_NONE;
+    }
+    for (i = CLI_SUB_UNKNOWN + 1; i < CLI_SUB_COUNT; i++) {
+        if (k_subcommands[i].parent == cmd && strcmp(k_subcommands[i].name, argv[0]) == 0) {
+            return (CliSub)i;
+        }
+    }
+    return CLI_SUB_UNKNOWN;
+}
+
+const char *cli_subcommand_name(CliSub sub)
+{
+    if (sub <= CLI_SUB_UNKNOWN || sub >= CLI_SUB_COUNT) {
+        return NULL;
+    }
+    return k_subcommands[sub].name;
+}
+
+CliCommand cli_subcommand_parent(CliSub sub)
+{
+    if (sub <= CLI_SUB_UNKNOWN || sub >= CLI_SUB_COUNT) {
+        return CLI_CMD_UNKNOWN;
+    }
+    return k_subcommands[sub].parent;
+}
+
 const char *cli_error_message(CliError err)
 {
     switch (err) {
