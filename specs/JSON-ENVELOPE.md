@@ -123,7 +123,7 @@ Exit codes:
 | 0 | Success, including an empty list or search. |
 | 1 | Usage or error. |
 | 2 | Not found. |
-| 3 | Wrong bin (`expired`, `not_expired`, `deleted`, `not_deleted`). |
+| 3 | Wrong bin (error code `wrong_bin`). |
 | 4 | A warning under `--strict`, or under `REMEMBER_STRICT=1` exactly. Any other value of that variable leaves strict off. |
 | 5 | `confirmation_required`: the command needs `--yes` and did not get it. |
 | 75 | `schema_too_new`: a write to a brain made by a newer remember ([OLDER-CLI.md](OLDER-CLI.md) § 8.4). |
@@ -137,14 +137,15 @@ Locked lines this binary prints (C-01, and the Trash warning):
 | Case | `message` | `fix` or warning |
 |---|---|---|
 | positional locator (`invalid_argument`) | `"<value>" isn't a memory id.` | `Use a number from 'remember list', a UUID, or --key KEY.` |
-| Trash, wrong list (`deleted`) | `"<key>" is in the Trash.` | `Add --trash to use it.` |
-| expired, wrong list (`expired`) | `"<key>" has expired.` | `Add --expired to use it.` |
+| Trash, wrong list (`wrong_bin`) | `"<key>" is in the Trash.` | `Add --trash to use it.` |
+| expired, wrong list (`wrong_bin`) | `"<key>" has expired.` | `Add --expired to use it.` |
+| purge of a live memory (`wrong_bin`) | `"<key>" isn't deleted, so it can't be purged.` | `Run 'remember delete <key>' first.` |
 | `--trash` (`flag_meaning_changed`) | `--trash now means the Trash (deleted memories).` | warning. `fix` is `For expired memories, use --expired.` `detail` is `{"flag":"--trash","use":"--expired"}`. |
 | a brain path that looks synced (`synced_folder`) | `this brain looks like it is in a synced folder (iCloud Drive, Dropbox or Google Drive), and syncing can damage it.` | warning. `fix` is `Move the brain to a folder on a local disk.` No `detail`. |
 
 `<key>` is the memory key, or the UUID when the row has no key. The plain line is `remember: ` plus the message, a space, and the fix. A warning plain line is `remember: warning: ` plus the message, and a space and the fix when the warning has one.
 
-`not_found` fix is `Run 'remember list' to see keys.` `schema_too_new` fix is `Upgrade remember to make changes.` `not_expired` fix is `Run the command without --expired.` `not_deleted` fix is `Run 'remember delete' on it first.`
+`not_found` fix is `Run 'remember list' to see keys.` `schema_too_new` fix is `Upgrade remember to make changes.` `wrong_bin` is one code for every row in the wrong bin (`decision:2026-11-18-plan32-grill-sweep-warning-and-wrong-bin`; it replaced `expired`, `not_expired`, `deleted` and `not_deleted`). Its `fix` is the one of the case: `Add --expired to use it.`, `Add --trash to use it.`, `Run the command without --expired.`, `Run 'remember delete' on it first.`, or the purge line above. The catalog's own fix for the code is a draft (`decision:open-2026-11-18-plan32-wrong-bin-fix-copy`).
 
 A usage error's fix is `Run 'remember <command> --help' to see how to use it.` when a command is known, and `Run 'remember --help' to see the commands.` when it is not.
 
@@ -281,3 +282,7 @@ The fix (E3B-1 entry 26, `decision:2026-11-12-copy-batch-e3b-warning-splits`), j
 - Stdin: `Remove that field, or update remember if the input came from a newer version.`
 
 No command in this binary reads a JSON file or JSON stdin, so no command calls this writer. A list-cursor member this binary does not know stays `invalid --cursor` (§ Cursor paging).
+
+## `sweep.result` and the purge and delete results (plan 32)
+
+`sweep` data is `{"expired":N}`: the rows marked. `sweep --all` data is `{"expired":N,"brains":[{"path":"…","expired":n},…]}`, the total and one item for each listed brain, in `brains.json` order. A path with no brain is a `brain_missing` warning, a brain that cannot be swept (or is newer than this remember) is a `sweep_failed` warning, except that a newer brain gives no warning, and each of those has `"expired":0`. Plain `sweep` prints the count (`decision:open-2026-11-18-plan32-sweep-count-copy`). `purge LOCATOR` is `memory.purge.result` with `data{action:"purged",count:1,entries:[…]}` and prints nothing in plain mode. `delete --expired` is `memory.delete.result` with `data{action:"deleted",count,entries}` and prints the count in plain mode.

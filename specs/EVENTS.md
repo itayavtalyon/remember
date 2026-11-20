@@ -21,9 +21,9 @@ The store does not look at the command. It finds what a write changed. Before th
 | has a changed `body`, `tags`, `key` or `expires_at` | one `memory.updated` for those fields |
 | has a live link that came or went | one `memory.updated` for each such link, with `changes.link` |
 
-`memory.deleted` and `memory.restored` carry no `memory.updated` for the other fields of the same write. A new row gets no `memory.updated` for its own links. `updated_at`, `updated_by`, `version_vector` and `change_seq` are not fields: a write that changes only them (a `link` that touches the ends) makes no event for the memory itself. An `add` that merges nothing new changes nothing at all, also while events are on: the triggers' own rows never count as a change of the memory. A link makes one `memory.updated` per end (H-1.2), and no `memory.linked`. Purging a memory that has links also makes a `memory.updated` for each neighbour, because its link went (the cascade is a change like any other). `memory.expired` is plan 32.
+`memory.deleted` and `memory.restored` carry no `memory.updated` for the other fields of the same write. A new row gets no `memory.updated` for its own links. `updated_at`, `updated_by`, `version_vector` and `change_seq` are not fields: a write that changes only them (a `link` that touches the ends) makes no event for the memory itself. An `add` that merges nothing new changes nothing at all, also while events are on: the triggers' own rows never count as a change of the memory. A link makes one `memory.updated` per end (H-1.2), and no `memory.linked`. Purging a memory that has links also makes a `memory.updated` for each neighbour, because its link went (the cascade is a change like any other). `memory.expired` comes from the sweep, below.
 
-Every write path gets this, including ones plan 31 did not name: `add`, `update`, `delete`, `rekey`, `link`, `unlink`, `import` (JSON and `--from-db`), `conflict accept`, `purge` and the later `purge LOCATOR`. The event types follow what a conflict resolution changed (`decision:2026-11-18-plan31-grill-chain-env-conflict-accept`). `purge --expired` and `purge --deleted` write one `memory.purged` per removed row (`decision:2026-11-17-plan31-grill-purged-processes-cause`).
+Every write path gets this, including ones plan 31 did not name: `add`, `update`, `delete`, `rekey`, `link`, `unlink`, `import` (JSON and `--from-db`), `conflict accept` and `purge LOCATOR`. The event types follow what a conflict resolution changed (`decision:2026-11-18-plan31-grill-chain-env-conflict-accept`). `purge LOCATOR` writes one `memory.purged`; the whole-bin forms are gone (`decision:2026-11-18-plan32-grill-purge-delete-forms`).
 
 ## The outbox row
 
@@ -74,7 +74,7 @@ H-3, [PLUGIN-PROTOCOL.md](PLUGIN-PROTOCOL.md) R3.2 to R3.11.
 
 - `occurred_at` and `detected_at` are the write time.
 - `batch_id` is one UUID for a command, made with its first row, also for a command that changes one memory (`decision:2026-11-18-plan31-grill-link-direction-batch-id`). The schema's null is never written.
-- `cause` is `{command, origin, hook, run_id, depth, chain}`. `command` is `add`, `update`, `delete`, `purge`, `rekey`, `link`, `unlink` or `import`; `conflict accept` writes `update` (`decision:open-2026-11-18-plan31-conflict-accept-command`). The rest comes from the environment of a run (below).
+- `cause` is `{command, origin, hook, run_id, depth, chain}`. `command` is `add`, `update`, `delete`, `purge`, `rekey`, `link`, `unlink`, `import` or `sweep`; `conflict accept` writes `update` (`decision:open-2026-11-18-plan31-conflict-accept-command`). The rest comes from the environment of a run (below).
 - `brain` is `{path, device_id}`: the absolute path of the brain, with the home folder written `~`.
 - `memory` is what `remember --json get` prints without `local_id` and `version_vector`, plus `change_seq`, then `links`. Each link stub is `get`'s stub without `local_id`. For a purge it is the last state of the row, with no links.
 - `changes` is `null` except for `memory.updated`. For fields: `{"fields":[...],"before":{...},"tags_added":[...],"tags_removed":[...]}`; `fields` lists `key`, `body`, `tags`, `expires_at` in that order, only those that changed, and `before` has the old value of each. For a link: `{"link":{"kind","direction","other":{"id","key"}}}`. `kind` is `related`, `supersedes` or `cites`; `direction` is relative to the event's memory: `outgoing` when it is the `from` end, `incoming` when it is the `to` end, `both` for `related`. `changes.link` does not say whether the link came or went; a reader compares `memory.links`.
@@ -100,6 +100,28 @@ The CMake option `REMEMBER_PROCESSES` (default ON) picks the default; `events_se
 
 An event no action lists, a disabled plugin and `--no-hooks` raise no warning.
 
+## Expiry
+
+Log 010 H-1.4 to H-1.7, H-16.7, H-16.8; `decision:expiry-local-marker`, `decision:purge-command`, `decision:2026-11-18-plan32-grill-purge-delete-forms`, `decision:2026-11-18-plan32-grill-sweep-triggers`, `decision:2026-11-18-plan32-grill-sweep-warning-and-wrong-bin`.
+
+A memory is expired when it has no `deleted_at` and `expires_at` is at or before now. That is read from the clock at every command. `entries.expired_at` is a different thing: the time this device's sweep noticed it. It is NULL until then. It is device-local: setting it changes no `updated_at`, no version vector and no `change_seq`, and it does not sync.
+
+**The sweep.** In one write transaction it sets `expired_at = now` on each row with `deleted_at IS NULL AND expires_at <= now AND expired_at IS NULL`, and writes one `memory.expired` outbox row per changed row (the rules of the outbox above: only when an enabled action matches). `occurred_at` is the row's `expires_at`, `detected_at` the sweep time, `cause.command` is `sweep`, `cause.origin` `local`, and `changes` is null. The rows of one sweep share one `batch_id`, apart from the command's own. `--hooks` and `--no-hooks` do not reach a sweep. With no enabled plugin action nothing is written but `expired_at`. With nothing due the sweep reads and takes no write lock.
+
+**When it runs.**
+
+- After every command that opened the brain read-write, reads included, once that command's own work is done, whatever the command's exit (`decision:2026-11-18-plan32-grill-sweep-triggers`). Not after a command that opens no brain (`--version`, `help`, `brain list`, `brain prune`, `sweep --all`) or after `sweep` itself.
+- Not on a brain from a newer remember. The command prints its own warning or error; the sweep adds nothing and the exit code does not change.
+- A sweep that fails warns `sweep_failed` and changes no exit code (4 under `--strict`, like every warning). When the command itself failed, the failure of its sweep is silent: one error is enough. The wording is a draft (`decision:open-2026-11-18-plan32-sweep-failed-copy`).
+- `remember sweep` sweeps this brain and prints the count of rows it marked (JSON `sweep.result`, `data{expired}`). `remember sweep --all` reads only `<data dir>/brains.json` and sweeps each listed brain, in file order, with the plugins of this machine and each brain's own settings. A path with no brain gets the `brain_missing` warning (C-01) and its entry stays until `brain prune`. A newer brain is skipped. `sweep --all` opens no brain for itself and records nothing in `brains.json`. The count line is a draft (`decision:open-2026-11-18-plan32-sweep-count-copy`).
+
+**When `expired_at` is cleared.** One temp trigger of the connection clears it in the same write as any change that starts the row's expiry over: `expires_at` set to a later time, to NULL, or from NULL to a time, and a restore from Deleted. A change to an earlier time keeps it (the row was already due). A restore of a row that is already due writes `memory.restored` in the command's own transaction; the sweep after the command then writes `memory.expired` (H-Q6: two events, two transactions).
+
+**Purge and `delete --expired`.**
+
+- `remember purge LOCATOR` removes one row that is already expired or deleted, writes one `tombstones` row and one `memory.purged` (log 008 JE-5.2). It takes an id, a UUID or `--key`, and `--hooks`/`--no-hooks`; no bin flag, no `--as`, no `--actor`. A live row exits 3 with the C-01 `wrong_bin` line (code `wrong_bin`). An expired row the sweep has not marked yet is purged with only `memory.purged`.
+- `remember delete --expired` moves every row that is not deleted and is due to Deleted, in one transaction, one `memory.deleted` each and one `batch_id`, no cap, no `memory.expired`. It takes no locator. `delete --deleted`, `purge --expired`, `purge --deleted` and `purge --trash` are unknown options.
+
 ## Not here
 
-The expiry sweep and `memory.expired`, `purge LOCATOR` and `delete --expired` (plan 32). Dispatch, the pre-flight checks and runs (plan 35). Trust (plan 33). Sync apply (plan 45) passes the origin `sync`.
+Dispatch after a sweep (plan 35) and the daemon's sweep (plan 39). Dispatch, the pre-flight checks and runs (plan 35). Trust (plan 33). Sync apply (plan 45) passes the origin `sync`.

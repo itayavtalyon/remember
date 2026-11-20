@@ -70,11 +70,13 @@ static const CommandEntry k_commands[] = {
     {.name = "update",
      .command = CLI_CMD_UPDATE,
      .summary = "Change body and/or tags by id or --key"},
-    {.name = "delete", .command = CLI_CMD_DELETE, .summary = "Soft-delete an entry by id or --key"},
+    {.name = "delete",
+     .command = CLI_CMD_DELETE,
+     .summary = "Move an entry to the Trash by id or --key, or every expired one with --expired"},
     {.name = "tags", .command = CLI_CMD_TAGS, .summary = "List all tags with entry counts"},
     {.name = "purge",
      .command = CLI_CMD_PURGE,
-     .summary = "Permanently delete every expired or deleted memory"},
+     .summary = "Permanently delete one expired or deleted memory by id or --key"},
     {.name = "link", .command = CLI_CMD_LINK, .summary = "Create or merge an entry link"},
     {.name = "unlink", .command = CLI_CMD_UNLINK, .summary = "Remove entry links"},
     {.name = "related", .command = CLI_CMD_RELATED, .summary = "List neighbors of an entry"},
@@ -99,6 +101,9 @@ static const CommandEntry k_commands[] = {
      .command = CLI_CMD_EXPORT,
      .summary = "Write the brain to a JSON, Markdown, or CSV file"},
     {.name = "settings", .command = CLI_CMD_SETTINGS, .summary = "Show or change a setting"},
+    {.name = "sweep",
+     .command = CLI_CMD_SWEEP,
+     .summary = "Mark memories past their expiry (--all: every listed brain)"},
 };
 
 enum { COMMAND_COUNT = (int)(sizeof(k_commands) / sizeof(k_commands[0])) };

@@ -196,13 +196,13 @@ TEST(keyless_add_revives_expired_cli)
     free(db);
 }
 
-TEST(purge_expired_json_and_empty)
+TEST(delete_expired_json_and_empty)
 {
     char *db = make_temp_db_path();
     const char *a[] = {"add", "--expires", "2020-01-01T00:00:00Z", "gone"};
     const char *keep[] = {"add", "stay"};
-    const char *p[] = {"--json", "purge", "--expired"};
-    const char *p2[] = {"purge", "--expired"};
+    const char *p[] = {"--json", "delete", "--expired"};
+    const char *p2[] = {"delete", "--expired"};
     CmdResult r;
 
     ASSERT_TRUE(db != NULL);
@@ -454,7 +454,7 @@ void register_ttl_tests(void)
     RUN_TEST(update_expired_clear_expires_restores_cli);
     RUN_TEST(update_expired_ttl_returns_it_to_live);
     RUN_TEST(keyless_add_revives_expired_cli);
-    RUN_TEST(purge_expired_json_and_empty);
+    RUN_TEST(delete_expired_json_and_empty);
     RUN_TEST(ttl_and_expires_mutex);
     RUN_TEST(invalid_ttl_tokens);
     RUN_TEST(human_list_has_related_column);

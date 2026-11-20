@@ -39,15 +39,45 @@ The standards for plans 25 and later in [INDEX](INDEX.md). Tests in `tests/test_
 
 ## Definition of Done
 
-- [ ] `sweep_emits_once_and_revival_clears` (010 test 14).
-- [ ] `sweep_no_plugins_no_row` (010 test 16).
-- [ ] `read_only_open_skips_sweep`.
-- [ ] `sweep_all_reads_brains_json_and_warns_missing`.
-- [ ] `purge_live_exits_3_wrong_bin`, `purge_deleted_writes_one_tombstone`, `delete_deleted_unknown` (010 test 28).
-- [ ] `delete_expired_moves_all_due_emits_deleted_only`.
-- [ ] `specs/EVENTS.md` "Expiry" written.
+- [x] `sweep_emits_once_and_revival_clears` (010 test 14).
+- [x] `sweep_no_plugins_no_row` (010 test 16).
+- [x] `read_only_open_skips_sweep`.
+- [x] `sweep_all_reads_brains_json_and_warns_missing`.
+- [x] `purge_live_exits_3_wrong_bin`, `purge_deleted_writes_one_tombstone`, `delete_deleted_unknown` (010 test 28).
+- [x] `delete_expired_moves_all_due_emits_deleted_only`.
+- [x] `specs/EVENTS.md` "Expiry" written.
 - [ ] The gate passes on the committed tree.
 
 ## Implementation Notes
+
+Coder: Sonnet 5.5 session, 2026-11-18 to 2026-11-20. Stacked on plan 31's tip 8aee4b1 (STACK_BASE in `.claude/REVIEW_REQUEST`); plan 31 is not merged. The spec is `specs/EVENTS.md` "Expiry". Tests are in `tests/test_sweep.c` (CLI, suite `plugins`) and `tests/test_events.c` (store level, also in the ASan `remember_store_tests`).
+
+**Built.**
+- `src/store_sqlite.c`: `store_sweep` (reads first, takes no write lock when nothing is due; one transaction; `expired_at = now`; one `memory.expired` event per row through the plan 31 `ev_emit`), `store_soft_delete_expired`, the temp trigger `ex_clear`, `select_local_ids` (one id reader, now also behind `ev_touched_ids`). `src/events.c`: `occurred_at` of `memory.expired` is the row's `expires_at`.
+- `src/sweep.c`, `src/sweep.h`: `sweep [--all]` (parse, count and `sweep.result`, the `--all` loop over `brains.json`).
+- `src/remember_app.c`: `sweep_after` after every command that opened the brain (not after `sweep`), `run_sweep_all`, `arm_events` takes the command name so the sweep arms again as `"sweep"`.
+- `src/cmd_locator.c`: `cmd_purge` (moved here from `src/cmd_purge.c`, which is deleted: it shares the locator parser), `cmd_delete` with `--expired` bulk. `src/commands_common.c`: `exit_wrong_list` also prints the C-01 purge line; `wrong_bin_fix`. `src/diag.c`: warning `sweep_failed`, error code `wrong_bin`, `diag_error_json_fix`.
+- Docs: `specs/EVENTS.md` (Expiry), `specs/JSON-ENVELOPE.md`, `specs/OLDER-CLI.md` 8.6, `docs/engineering-notes.md`, README and skill lines for purge, delete and the error code.
+
+**Grills answered by Itay** (all filed): `decision:2026-11-18-plan32-grill-purge-delete-forms` (the whole-bin `purge --expired|--deleted|--trash` are unknown options, `purge` takes no bin flag, `delete LOCATOR --expired` is a usage error), `decision:2026-11-18-plan32-grill-sweep-triggers` (the sweep runs after every command whatever its exit; a failed sweep warns), `decision:2026-11-18-plan32-grill-sweep-warning-and-wrong-bin` (the warning only when the command itself succeeded; the four wrong-bin codes become the one code `wrong_bin`, everywhere). Open copy for Story Weaver: `decision:open-2026-11-18-plan32-sweep-failed-copy`, `decision:open-2026-11-18-plan32-sweep-count-copy`, `decision:open-2026-11-18-plan32-wrong-bin-fix-copy`.
+
+**Plan corrections and design calls (for the reviewer).**
+- "exits 3 `wrong_bin`": there was no such code; Itay's answer made it one, replacing `expired`, `not_expired`, `deleted`, `not_deleted` (a breaking change of the JSON error contract; messages, fixes and plain lines are unchanged). The plain line of the store statuses stays the legacy token (`remember: not_deleted`), with the per-case fix only in JSON (`diag_error_json_fix`).
+- `sweep` JSON data and `purge`/`delete --expired` plain output are my reading of Itay's "plain prints a count": `sweep.result` data `{expired}` or `{expired, brains[]}`; `delete --expired` plain prints the count; `purge LOCATOR` prints nothing (like delete). Not asked beyond that; flagged for review.
+- `ex_clear` is a TEMP trigger, not a SQL line at each writer: six sites write `expires_at` or `deleted_at` (update, revive, soft delete, undelete, import merge, a later sync apply) and the trigger is one definition. `PRAGMA temp_store = MEMORY` had to move into the same open-time statement: SQLite deletes every temp object when it changes, and plan 31's arm list did it, which dropped the trigger in the first version (found by `sweep_emits_once_and_revival_clears`).
+- Found and fixed in plan 31's code: `ev_flush_one` read the "had an image before" probe without checking the step, so a failed step made a delete look like a create (`delete_expired_moves_all_its_rows_with_their_events_or_none` saw 2 deleted rows and 1 `memory.deleted`).
+- Existing tests changed to the new contract: whole-bin purge and hard-wipe `delete --expired` tests (`test_sync_delete.c`, `test_ttl.c`, `test_envelope.c`, `test_verification_edges.c`, `test_link.c`, `test_events.c`), the code names in `test_errors.c`, and `export_out_is_never_the_brain` (the fixture holds an expired row, which the sweep after any command now marks; the test sweeps first).
+- `sweep --all` skips a newer brain with no warning (the post-command sweep is also silent there). Not in the plan; follows `specs/OLDER-CLI.md` 8.6.
+- `store_purge` and `store_purge_trash` have no caller outside tests now. Left in place, listed as follow-up.
+- Dispatch after the sweep (`remember sweep` then dispatch, log 010 H-16.4) and `plugin_run_forbidden` for `sweep`, `purge` and `delete --expired` in a run are plan 35's.
+
+**Evidence.**
+- DoD tests by name are in `tests/test_sweep.c`: `sweep_emits_once_and_revival_clears`, `sweep_no_plugins_no_row`, `read_only_open_skips_sweep`, `sweep_all_reads_brains_json_and_warns_missing`, `purge_live_exits_3_wrong_bin`, `purge_deleted_writes_one_tombstone`, `delete_deleted_unknown`, `delete_expired_moves_all_due_emits_deleted_only` (and `delete_expired_has_no_cap`, 1200 rows). Review point (sweep never touches `change_seq` or the vector): `the_sweep_changes_neither_updated_at_nor_the_vector_nor_either_change_seq`. Atomicity: `sweep_commits_its_marks_with_its_events`, `delete_expired_moves_all_its_rows_with_their_events_or_none`.
+- C-41 sentence 6 against this build: `purge_deleted_writes_one_tombstone` runs `remember purge 1` on a Trash row and exits 0; `tests/test_release.sh build/remember` passes.
+- Gate suites (`scripts/read-gate-suites.sh`): 1842 tests, 0 failed; `remember_store_tests` (ASan): 0 failed; plugins suite 421, 0 failed.
+
+**Mutants** (`.claude/gates/p32/mutants.py`, results `mut-results.txt`; one clause each, built before it ran): the sweep's due test without `expired_at IS NULL`, and without `deleted_at IS NULL`; `occurred_at` as the sweep time; each of the three clauses of the `ex_clear` trigger (a row with no expiry that gets one, the restore, and `>` turned to `<`); a sweep that always takes the write lock; the failed-command warning always on; no sweep after a failed command; purge of a live row allowed; `delete --expired` that ignores an id locator, and one that ignores `--key`; `sweep --all` with no missing-path check; `delete --expired` that also takes Deleted rows (a first run let this one survive: `delete_expired_moves_all_due_emits_deleted_only` now puts a due time on a Trash row); a sweep that does not check `store_is_writable`. All 14 killed by a named test. Two clauses are equivalent and have no mutant: the `k_ev_reset_sql` after the marking (only skips work: a diff of an unchanged row plans no event) and a sweep after `sweep` itself (finds nothing).
+
+**Not verified here.** The macOS lint-all, coverage, leaks and CodeQL steps on this tree (the stacked-plan shortcut: the reviewer's gate after the rebase onto main covers them). clang-tidy on the touched files is clean on macOS llvm@22. A real dispatcher reading `memory.expired` rows (plan 35).
 
 ## Review Notes

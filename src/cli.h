@@ -27,6 +27,7 @@ typedef enum {
     CLI_CMD_BRAIN,
     CLI_CMD_EXPORT,
     CLI_CMD_SETTINGS,
+    CLI_CMD_SWEEP,
     CLI_CMD_UNKNOWN
 } CliCommand;
 

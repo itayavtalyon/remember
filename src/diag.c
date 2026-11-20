@@ -58,10 +58,7 @@ static const char *const k_error_codes[DIAG_CODE_COUNT] = {
     [DIAG_INVALID_QUERY] = "invalid_query",
     [DIAG_KEY_CONFLICT] = "key_conflict",
     [DIAG_BODY_CONFLICT] = "body_conflict",
-    [DIAG_EXPIRED] = "expired",
-    [DIAG_NOT_EXPIRED] = "not_expired",
-    [DIAG_DELETED] = "deleted",
-    [DIAG_NOT_DELETED] = "not_deleted",
+    [DIAG_WRONG_BIN] = "wrong_bin",
     [DIAG_NOT_SINGLE_DEVICE] = "not_single_device",
     [DIAG_SELF_LINK] = "self_link",
     [DIAG_CYCLE] = "cycle",
@@ -92,21 +89,20 @@ static const char *const k_error_codes[DIAG_CODE_COUNT] = {
 
 /* error.fix per code (decision:plan21-error-fix-drafts-c42). The SQLite codes
    take their E4.8 fix in diag_error_sqlite; their rows here serve a non-SQLite
-   failure under the same code. schema_too_new, not_found, expired, and deleted
-   are locked text (C-01, JSON-STYLE); the rest are C-42 drafts. usage is built
-   from the command in usage_fix. */
+   failure under the same code. schema_too_new and not_found are locked text (C-01,
+   JSON-STYLE); the rest are C-42 drafts. usage is built from the command in usage_fix. wrong_bin's
+   row is a draft that no command prints (decision:open-2026-11-18-plan32-wrong-bin-fix-copy): each
+   caller passes the fix of its own case (decision:2026-11-18-plan32-grill-sweep-warning-and-wrong-bin;
+   wrong_bin_fix in commands_common.c). */
 static const char *const k_fix[DIAG_CODE_COUNT] = {
     [DIAG_NOT_FOUND] = "Run 'remember list' to see keys.",
+    [DIAG_WRONG_BIN] = "Check which list the memory is in: live, expired, or the Trash.",
     [DIAG_DATABASE] = "Try again. If it keeps happening, report the details from --json.",
     [DIAG_OUT_OF_MEMORY] = "Close other apps to free memory, then try again.",
     [DIAG_INTERNAL] = "This is a bug in remember. Report it with the command you ran.",
     [DIAG_INVALID_QUERY] = "Check the search words, or put the query in double quotes.",
     [DIAG_KEY_CONFLICT] = "Pick another key, or rekey the other memory first.",
     [DIAG_BODY_CONFLICT] = "Change the text, or update the memory that already has it.",
-    [DIAG_EXPIRED] = "Add --expired to use it.",
-    [DIAG_NOT_EXPIRED] = "Run the command without --expired.",
-    [DIAG_DELETED] = "Add --trash to use it.",
-    [DIAG_NOT_DELETED] = "Run 'remember delete' on it first.",
     [DIAG_NOT_SINGLE_DEVICE] = "Delete it instead; it stays in the Trash and syncs as deleted.",
     [DIAG_SELF_LINK] = "Link two different memories.",
     [DIAG_CYCLE] = "Remove the link that closes the loop, then try again.",
@@ -175,6 +171,7 @@ static const char *const k_warning_codes[DIAG_WARN_COUNT] = {
     [DIAG_WARN_BRAIN_ID_CLONED] = "brain_id_cloned",
     [DIAG_WARN_BRAIN_MISSING] = "brain_missing",
     [DIAG_WARN_PLUGIN_UNSUPPORTED] = "plugin_unsupported",
+    [DIAG_WARN_SWEEP_FAILED] = "sweep_failed",
 };
 
 /* Plain line lead per warning. E2.3 gives raw_query_ignored its own words; the
@@ -191,6 +188,7 @@ static const char *const k_warning_plain_prefix[DIAG_WARN_COUNT] = {
     [DIAG_WARN_BRAIN_ID_CLONED] = "warning: ",
     [DIAG_WARN_BRAIN_MISSING] = "warning: ",
     [DIAG_WARN_PLUGIN_UNSUPPORTED] = "warning: ",
+    [DIAG_WARN_SWEEP_FAILED] = "warning: ",
 };
 
 static const char *catalog_name(const char *const *names, size_t count, size_t index)
@@ -272,7 +270,8 @@ typedef struct {
     const DiagDetailField *fields; /* JSON detail members; NULL when none */
     size_t nfields;
     DiagCode error_code; /* errors only: picks fix and retryable */
-    char pad_[4];        /* explicit tail padding (kept -Wpadded-clean) */
+    bool json_fix_only;  /* the plain line is the message alone; the fix is for JSON */
+    char pad_[3];        /* explicit tail padding (kept -Wpadded-clean) */
 } Notice;
 
 /* {"code":C,"message":M; the caller adds the rest and closes the object. */
@@ -412,7 +411,7 @@ static int write_notice(Notice notice)
         rc = write_json_notice(notice, message);
     } else if (fprintf(err, "remember: %s", notice.plain_prefix) < 0 ||
                output_text_human(err, message, false) != 0 ||
-               (notice.fix != NULL && notice.fix[0] != '\0' &&
+               (notice.fix != NULL && notice.fix[0] != '\0' && !notice.json_fix_only &&
                 (fputc(' ', err) == EOF || output_text_human(err, notice.fix, false) != 0)) ||
                fputc('\n', err) == EOF) {
         /* decision:plan17a-plain-notice-one-line: an echoed token cannot split the
@@ -558,6 +557,22 @@ int diag_error_fix(DiagCode code, const char *message, const char *fix)
     return diag_error_detail(code, message, fix, NULL, 0U);
 }
 
+int diag_error_json_fix(DiagCode code, const char *message, const char *fix)
+{
+    const char *name = diag_code_name(code);
+
+    if (name == NULL) {
+        return -1;
+    }
+    return write_notice((Notice){.json_kind = "error",
+                                 .plain_prefix = "",
+                                 .code = name,
+                                 .message = message,
+                                 .fix = fix,
+                                 .error_code = code,
+                                 .json_fix_only = true});
+}
+
 int diag_error_detail(DiagCode code, const char *message, const char *fix,
                       const DiagDetailField *fields, size_t nfields)
 {
@@ -656,6 +671,24 @@ int diag_plugin_unsupported(void)
                                "programs, so its hooks and plugins didn't run.",
                     .fix = "Use a build of remember that can start programs."},
         NULL, 0U);
+}
+
+/* The message of a warning that holds a caller's path: measured, then printed. */
+int diag_sweep_failed(const char *path)
+{
+    static const char k_message[] = "the expiry check of brain \"%s\" failed.";
+    int need = snprintf(NULL, 0, k_message, path);
+    char *message = need >= 0 ? (char *)malloc((size_t)need + 1U) : NULL;
+    int rc = -1;
+
+    if (message != NULL && snprintf(message, (size_t)need + 1U, k_message, path) == need) {
+        rc = diag_warning_split_detail(
+            DIAG_WARN_SWEEP_FAILED,
+            (DiagSplit){.message = message, .fix = "It will run again after your next command."},
+            NULL, 0U);
+    }
+    free(message);
+    return rc;
 }
 
 /* R27b-1 and R27b-2. The same two sentences open the warning and the error,

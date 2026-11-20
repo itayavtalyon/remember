@@ -77,7 +77,7 @@ remember [--db PATH] [--json] [--strict] [--color=auto|always|never] [--quiet] [
 | `0` | Success (including empty search/list; import with conflicts still exits 0) |
 | `1` | Usage or error |
 | `2` | Not found (`get` / `delete` / `update` / `rekey`) in either bin; `link`/`unlink`/`related` missing end |
-| `3` | Wrong bin. `not_expired` / `not_deleted` stay those tokens. Trash: `remember: "<key>" is in the Trash. Add --trash to use it.` Expired: `remember: "<key>" has expired. Add --expired to use it.` `<key>` is the key, or the id when the row has no key. **Not** used by `link`/`unlink`/`related` (those resolve live+expired by default). |
+| `3` | Wrong bin, error code `wrong_bin` (the old `expired`, `not_expired`, `deleted` and `not_deleted` codes are this one code now; each keeps its own message and fix). Trash: `remember: "<key>" is in the Trash. Add --trash to use it.` Expired: `remember: "<key>" has expired. Add --expired to use it.` `<key>` is the key, or the id when the row has no key. **Not** used by `link`/`unlink`/`related` (those resolve live+expired by default). |
 | `4` | A warning under `--strict` or `REMEMBER_STRICT=1`. Exit 4 has no other meaning. |
 | `5` | `confirmation_required`: run the command again with `--yes` (`settings reset --all` / `--namespace`). |
 
@@ -172,7 +172,7 @@ remember --json get 3
 remember --json get --key pref:editor
 remember --json get --deleted 3
 remember --json delete 3                          # soft-delete (live or expired)
-remember --json delete --expired 3                # hard wipe one expired row
+remember --json delete --expired                  # move every expired memory to the Trash
 remember --json update 3 --text "new body"
 remember --json update --key pref:editor --if-version-vector '{"<device>":1}' --text "nvim"
 remember --json update --trash 3 --undelete       # restore from the Trash
@@ -180,15 +180,16 @@ remember --json update --deleted 3 --undelete     # same bin as --trash
 remember --json update --expired 3 --clear-expires
 remember --json rekey --key decision:old --to-key decision:new
 remember --json rekey 12 --clear-key
-remember --json purge --expired                   # wipe whole expired bin
-remember --json purge --deleted                   # wipe the Trash (the Deleted bin)
+remember --json purge 3                           # wipe one expired or deleted memory for good
+remember --json sweep                             # mark memories past their expiry (every command does it after it runs)
+remember --json sweep --all                       # the same for every brain in brains.json
 ```
 
-**Soft vs hard delete:**
+**Soft delete and purge:**
 
 - Unflagged `delete` = **soft** (sets `deleted_at`, clears `expires_at`, keeps body/tags/key/id/edges/FTS)
-- `delete --expired` hard-wipes one row. `delete --deleted` does not exist. `delete --trash` does not wipe.
-- `purge --expired` / `purge --deleted` = whole-bin hard wipe. `purge --trash` selects the Deleted bin and warns.
+- `delete --expired` (no id, no `--key`) soft-deletes every expired memory in one step. `delete --deleted` does not exist. `delete --trash` does not wipe.
+- `purge <id>` or `purge --key KEY` is the only permanent wipe, for one memory that is expired or in the Trash. A live memory exits 3 (`wrong_bin`): delete it first. `purge` takes no bin flag.
 
 **Update rules:**
 

@@ -939,13 +939,15 @@ static int write_data(FILE *f, const PayloadIn *in, Cuts cuts, const Entry *memo
 {
     const EventStamp *st = in->stamp;
     EventLinks links = {.rows = in->memory->links, .count = in->memory->nlinks};
+    /* A sweep finds a memory late: it expired at expires_at and was noticed at st->at (H-1.5). */
+    const char *occurred = in->draft->type == EVENT_EXPIRED ? in->row->after->expires_at : st->at;
 
     if (cuts.links) {
         links = (EventLinks){.rows = NULL, .count = 0U};
     }
     if (fputs("{\"event_id\":", f) < 0 || output_json_string(f, st->event_id) != 0 ||
         fprintf(f, ",\"event_type\":\"%s\",\"occurred_at\":\"%s\",\"detected_at\":\"%s\"",
-                event_type_name(in->draft->type), st->at, st->at) < 0 ||
+                event_type_name(in->draft->type), occurred, st->at) < 0 ||
         fputs(",\"batch_id\":", f) < 0 || output_json_string(f, st->batch_id) != 0 ||
         fputs(",\"cause\":", f) < 0 || write_cause(f, st) != 0 ||
         fputs(",\"brain\":{\"path\":", f) < 0 || output_json_string(f, st->brain_path) != 0 ||

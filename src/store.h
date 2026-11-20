@@ -738,6 +738,25 @@ StoreStatus store_purge(Store *s, StoreBin bin, const char *now, Entry **out_ent
 /* store_purge(EXPIRED). Kept so existing expired-bin call sites stay short. */
 StoreStatus store_purge_trash(Store *s, const char *now, Entry **out_entries, size_t *out_count);
 
+/*
+ * The expiry sweep (plan 32, log 010 H-1.5). One write transaction: sets expired_at = now on each
+ * row with deleted_at NULL, expires_at <= now and expired_at NULL, and writes one memory.expired
+ * event per row (events.h; occurred_at is the row's expires_at) when events are armed. It changes
+ * no updated_at, version vector or change_seq: expired_at is a device-local marker. With nothing
+ * due it takes no write lock. *out_marked is the rows marked. A newer brain is
+ * STORE_ERR_SCHEMA_TOO_NEW and writes nothing.
+ */
+StoreStatus store_sweep(Store *s, const char *now, size_t *out_marked);
+
+/*
+ * delete --expired: move every row that is not deleted and has expires_at <= now to Deleted, in
+ * one transaction, as store_soft_delete_by_id does for one (so one memory.deleted event each,
+ * with one batch id). No cap. On STORE_OK: *out_entries is the snapshots after the write, by
+ * local id (*out_count; NULL/0 when none was due). Caller frees each entry, then the array.
+ */
+StoreStatus store_soft_delete_expired(Store *s, const char *actor, const char *now,
+                                      Entry **out_entries, size_t *out_count);
+
 /* Stored kind only. cited_by / superseded_by are output-only (CLI). */
 typedef enum { STORE_EDGE_RELATED = 0, STORE_EDGE_SUPERSEDES, STORE_EDGE_CITES } StoreEdgeKind;
 

@@ -998,6 +998,15 @@ TEST(export_out_is_never_the_brain)
     (void)snprintf(manifest, sizeof manifest, "%s/side.manifest.json", g.dir);
     ASSERT_EQ_INT(link(g.db, hard), 0);
     ASSERT_EQ_INT(link(g.db, manifest), 0);
+    {
+        /* The fixture holds an expired row, and the sweep after any command marks it (plan 32):
+           mark it now, so that a later write to the brain can only be an export's. */
+        const char *sweep[] = {"sweep"};
+        CmdResult r = export_run(g.db, sweep, 1U);
+
+        ASSERT_EQ_INT(r.exit_code, 0);
+        cmd_result_free(&r);
+    }
     before = harness_read_file(g.db, &len);
     ASSERT_TRUE(before != NULL);
     {

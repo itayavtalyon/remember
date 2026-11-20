@@ -72,19 +72,16 @@ TEST(cli_unflagged_delete_expired_clears_expires)
     free(db);
 }
 
-TEST(cli_delete_expired_hard_wipes_one_row)
+TEST(cli_delete_expired_moves_every_due_row_to_the_trash)
 {
     char *db = make_temp_db_path();
     CmdResult r;
     const char *a[] = {"add", "--expires", "2020-01-01T00:00:00Z", "gone"};
     const char *keep[] = {"add", "stay"};
-    const char *d[] = {"--json", "delete", "--expired", "1"};
+    const char *d[] = {"--json", "delete", "--expired"};
     const char *alias[] = {"delete", "--trash", "2"};
     const char *g[] = {"get", "--expired", "1"};
-    const char *keyed[] = {"add",       "--key", "gonek", "--expires", "2020-01-01T00:00:00Z",
-                           "keyed-gone"};
-    const char *dk[] = {"delete", "--expired", "--key", "gonek"};
-    const char *gk[] = {"get", "--expired", "--key", "gonek"};
+    const char *in_trash[] = {"get", "--trash", "1"};
 
     ASSERT_TRUE(db != NULL);
     r = run_remember(db, a, sizeof(a) / sizeof(a[0]), NULL);
@@ -95,19 +92,14 @@ TEST(cli_delete_expired_hard_wipes_one_row)
     cmd_result_free(&r);
     r = run_remember(db, d, sizeof(d) / sizeof(d[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 0);
+    ASSERT_STR_CONTAINS(r.out, "\"count\":1");
     ASSERT_STR_CONTAINS(r.out, "gone");
     cmd_result_free(&r);
     r = run_remember(db, g, sizeof(g) / sizeof(g[0]), NULL);
-    ASSERT_EQ_INT(r.exit_code, 2);
+    ASSERT_EQ_INT(r.exit_code, 3); /* the row is in the Trash now, not gone */
     cmd_result_free(&r);
-    r = run_remember(db, keyed, sizeof(keyed) / sizeof(keyed[0]), NULL);
+    r = run_remember(db, in_trash, sizeof(in_trash) / sizeof(in_trash[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 0);
-    cmd_result_free(&r);
-    r = run_remember(db, dk, sizeof(dk) / sizeof(dk[0]), NULL);
-    ASSERT_EQ_INT(r.exit_code, 0);
-    cmd_result_free(&r);
-    r = run_remember(db, gk, sizeof(gk) / sizeof(gk[0]), NULL);
-    ASSERT_EQ_INT(r.exit_code, 2);
     cmd_result_free(&r);
     r = run_remember(db, alias, sizeof(alias) / sizeof(alias[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 1);
@@ -232,77 +224,6 @@ TEST(cli_add_revives_deleted)
     free(db);
 }
 
-TEST(cli_purge_requires_one_flag)
-{
-    char *db = make_temp_db_path();
-    CmdResult r;
-    const char *none[] = {"purge"};
-    const char *both[] = {"purge", "--expired", "--deleted"};
-    const char *unk[] = {"purge", "--nope"};
-    const char *pos[] = {"purge", "--expired", "1"};
-
-    ASSERT_TRUE(db != NULL);
-    r = run_remember(db, none, sizeof(none) / sizeof(none[0]), NULL);
-    ASSERT_EQ_INT(r.exit_code, 1);
-    ASSERT_STR_CONTAINS(r.err, "purge requires --expired or --deleted");
-    cmd_result_free(&r);
-    r = run_remember(db, both, sizeof(both) / sizeof(both[0]), NULL);
-    ASSERT_EQ_INT(r.exit_code, 1);
-    ASSERT_STR_CONTAINS(r.err, "cannot combine --expired and --deleted");
-    cmd_result_free(&r);
-    r = run_remember(db, unk, sizeof(unk) / sizeof(unk[0]), NULL);
-    ASSERT_EQ_INT(r.exit_code, 1);
-    ASSERT_STR_CONTAINS(r.err, "unknown option '--nope'");
-    cmd_result_free(&r);
-    r = run_remember(db, pos, sizeof(pos) / sizeof(pos[0]), NULL);
-    ASSERT_EQ_INT(r.exit_code, 1);
-    ASSERT_STR_CONTAINS(r.err, "purge takes no positional arguments");
-    cmd_result_free(&r);
-    free(db);
-}
-
-TEST(cli_purge_deleted_and_purge_trash_alias)
-{
-    char *db = make_temp_db_path();
-    CmdResult r;
-    const char *del[] = {"add", "wipe-me"};
-    const char *exp[] = {"add", "--expires", "2020-01-01T00:00:00Z", "old"};
-    const char *soft[] = {"delete", "1"};
-    const char *pdel[] = {"--json", "purge", "--deleted"};
-    const char *ptrash[] = {"purge", "--expired"};
-    const char *g[] = {"get", "--deleted", "1"};
-    const char *get_expired[] = {"get", "--expired", "2"};
-
-    ASSERT_TRUE(db != NULL);
-    r = run_remember(db, del, sizeof(del) / sizeof(del[0]), NULL);
-    ASSERT_EQ_INT(r.exit_code, 0);
-    cmd_result_free(&r);
-    r = run_remember(db, exp, sizeof(exp) / sizeof(exp[0]), NULL);
-    ASSERT_EQ_INT(r.exit_code, 0);
-    cmd_result_free(&r);
-    r = run_remember(db, soft, sizeof(soft) / sizeof(soft[0]), NULL);
-    ASSERT_EQ_INT(r.exit_code, 0);
-    cmd_result_free(&r);
-    r = run_remember(db, pdel, sizeof(pdel) / sizeof(pdel[0]), NULL);
-    ASSERT_EQ_INT(r.exit_code, 0);
-    ASSERT_STR_CONTAINS(r.out, "\"count\":1");
-    ASSERT_STR_CONTAINS(r.out, "wipe-me");
-    cmd_result_free(&r);
-    r = run_remember(db, g, sizeof(g) / sizeof(g[0]), NULL);
-    ASSERT_EQ_INT(r.exit_code, 2);
-    cmd_result_free(&r);
-    r = run_remember(db, ptrash, sizeof(ptrash) / sizeof(ptrash[0]), NULL);
-    ASSERT_EQ_INT(r.exit_code, 0);
-    ASSERT_STREQ(r.err, "");
-    trim_trailing_newlines(r.out);
-    ASSERT_STREQ(r.out, "1");
-    cmd_result_free(&r);
-    r = run_remember(db, get_expired, sizeof(get_expired) / sizeof(get_expired[0]), NULL);
-    ASSERT_EQ_INT(r.exit_code, 2);
-    cmd_result_free(&r);
-    free(db);
-}
-
 TEST(cli_invalid_sidecar_exits_1_and_keeps_the_file)
 {
     char *db = make_temp_db_path();
@@ -344,12 +265,12 @@ TEST(cli_invalid_sidecar_exits_1_and_keeps_the_file)
     free(db);
 }
 
-TEST(cli_purge_expired_wipes_without_device_hatch)
+TEST(cli_purge_of_an_expired_row_wipes_it_without_device_hatch)
 {
     char *db = make_temp_db_path();
     CmdResult r;
     const char *a[] = {"add", "--expires", "2020-01-01T00:00:00Z", "old"};
-    const char *p[] = {"purge", "--expired"};
+    const char *p[] = {"purge", "1"};
     const char *gone[] = {"get", "--expired", "1"};
 
     ASSERT_TRUE(db != NULL);
@@ -453,14 +374,12 @@ void register_sync_delete_tests(void)
 {
     RUN_TEST(cli_unflagged_delete_is_soft);
     RUN_TEST(cli_unflagged_delete_expired_clears_expires);
-    RUN_TEST(cli_delete_expired_hard_wipes_one_row);
+    RUN_TEST(cli_delete_expired_moves_every_due_row_to_the_trash);
     RUN_TEST(cli_delete_deleted_hard_wipes_the_row);
     RUN_TEST(cli_update_undelete);
     RUN_TEST(cli_add_revives_deleted);
-    RUN_TEST(cli_purge_requires_one_flag);
-    RUN_TEST(cli_purge_deleted_and_purge_trash_alias);
     RUN_TEST(cli_invalid_sidecar_exits_1_and_keeps_the_file);
-    RUN_TEST(cli_purge_expired_wipes_without_device_hatch);
+    RUN_TEST(cli_purge_of_an_expired_row_wipes_it_without_device_hatch);
     RUN_TEST(cli_parallel_opens_mint_one_sidecar_id);
 }
 

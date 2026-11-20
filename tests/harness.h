@@ -117,6 +117,23 @@ char *harness_read_line(const char *path);
    NULL when it cannot be read. */
 char *harness_read_file(const char *path, size_t *len);
 
+/* The plugin folder "hooker" of this run's data dir ($XDG_DATA_HOME/remember/plugins/hooker),
+   and its plugin.json (heap; caller frees). Never NULL. */
+__attribute__((returns_nonnull)) char *harness_hooker_manifest_path(void);
+
+/* One action of a plugin manifest: its events (a JSON array text) and an optional filter
+   (FILTER(...) or ""). */
+#define ACTION(events, filter)                                                                     \
+    "{\"name\":\"go\",\"events\":" events ",\"run\":{\"command\":[\"/bin/echo\"]}" filter "}"
+#define FILTER(body) ",\"filter\":{" body "}"
+#define ALL_TYPES "[\"memory.*\"]"
+
+/* Install plugin "hooker" with these actions (the JSON between the brackets of "actions"). A
+   fixture that cannot be written fails the calling test at the caller's line. */
+void harness_install_hooker_at(const char *actions, HarnessSite site);
+#define harness_install_hooker(actions)                                                            \
+    harness_install_hooker_at((actions), (HarnessSite){__FILE__, __LINE__})
+
 /* Directory containing path (heap; caller frees). */
 char *dir_of_path(const char *file_path);
 

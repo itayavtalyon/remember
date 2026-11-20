@@ -12,6 +12,7 @@
 #include "plugin_settings.h"
 #include "settings.h"
 #include "store.h"
+#include "sweep.h"
 #include "util.h"
 
 #include <stdbool.h>
@@ -47,9 +48,9 @@ static void print_general_help(void)
         "  list      List memories with filters\n"
         "  get       Fetch one entry by id or --key\n"
         "  update    Change body and/or tags by id or --key\n"
-        "  delete    Soft-delete (or hard-wipe with --expired)\n"
+        "  delete    Move to the Trash (--expired: every expired memory)\n"
         "  tags        List all tags with entry counts\n"
-        "  purge       Permanently delete one bin (--expired or --deleted)\n"
+        "  purge       Permanently delete one expired or deleted memory\n"
         "  link        Create or merge an entry link\n"
         "  unlink      Remove entry links\n"
         "  related     List neighbors of an entry\n"
@@ -61,6 +62,7 @@ static void print_general_help(void)
         "  brain       Replace the brain id\n"
         "  export      Write the brain to a JSON, Markdown, or CSV file\n"
         "  settings    Show or change a setting\n"
+        "  sweep       Mark memories past their expiry (--all: every listed brain)\n"
         "  help        Show this help (help <command> for a command)\n"
         "  version     Show version\n"
         "\n"
@@ -153,15 +155,14 @@ static void print_command_help(CliCommand topic)
         (void)fprintf(out, "Options:\n");
         (void)fprintf(out, "  ID              Entry id (positional)\n");
         (void)fprintf(out, "  --key KEY       Locate by key instead of id\n");
-        (void)fprintf(out, "  --expired       Locate in expired bin\n");
+        (void)fprintf(out, "  --expired       Move every expired memory to the Trash (no ID or --key)\n");
         (void)fprintf(out, "  --as KIND       human|agent|tool|share (default human)\n");
         (void)fprintf(out, "  --actor ID      1 to 64 of A-Za-z0-9_./:-\n");
         print_hooks_help(out);
         (void)fprintf(out, "\n");
-        (void)fprintf(out, "Exactly one of ID or --key is required.\n");
-        (void)fprintf(out, "Default locators are live-only.\n");
-        (void)fprintf(out, "Unflagged delete soft-deletes (live or expired).\n");
-        (void)fprintf(out, "delete --expired hard-wipes one row.\n");
+        (void)fprintf(out, "Exactly one of ID or --key is required, except with --expired.\n");
+        (void)fprintf(out, "Delete moves a live or expired memory to the Trash.\n");
+        (void)fprintf(out, "To remove one for good, use purge.\n");
         (void)fprintf(out, "\n");
     } else if (topic == CLI_CMD_UPDATE) {
         (void)fprintf(out, "Options:\n");
@@ -251,13 +252,22 @@ static void print_command_help(CliCommand topic)
         (void)fprintf(out, "Human: one \"name<TAB>count\" line per tag.\n");
         (void)fprintf(out, "\n");
     } else if (topic == CLI_CMD_PURGE) {
-        (void)fprintf(out, "Permanently delete every row in one bin (no prompt).\n");
+        (void)fprintf(out, "Permanently delete one memory that has expired or is in the Trash.\n");
         (void)fprintf(out, "Options:\n");
-        (void)fprintf(out, "  --expired       Wipe expired rows\n");
-        (void)fprintf(out, "  --deleted       Wipe deleted rows\n");
+        (void)fprintf(out, "  ID              Entry id (positional)\n");
+        (void)fprintf(out, "  --key KEY       Locate by key instead of id\n");
         print_hooks_help(out);
-        (void)fprintf(out, "Exactly one of --expired or --deleted is required.\n");
-        (void)fprintf(out, "Human stdout: the count of deleted entries.\n");
+        (void)fprintf(out, "\n");
+        (void)fprintf(out, "Exactly one of ID or --key is required. There is no prompt.\n");
+        (void)fprintf(out, "A live memory is refused (exit 3): delete it first.\n");
+        (void)fprintf(out, "\n");
+    } else if (topic == CLI_CMD_SWEEP) {
+        (void)fprintf(out, "Mark every memory past its expiry as expired.\n");
+        (void)fprintf(out, "Options:\n");
+        (void)fprintf(out, "  --all           Sweep every brain in brains.json, not just this one\n");
+        (void)fprintf(out, "\n");
+        (void)fprintf(out, "Every command runs this after it, so you rarely need it.\n");
+        (void)fprintf(out, "Human stdout: the count of memories marked.\n");
         (void)fprintf(out, "\n");
     } else if (topic == CLI_CMD_LINK || topic == CLI_CMD_UNLINK) {
         (void)fprintf(out, "Options:\n");
@@ -583,6 +593,7 @@ static const AppCommandClass k_command_class[] = {
     [CLI_CMD_CONFLICT] = APP_CMD_WRITE,   [CLI_CMD_DEVICE] = APP_CMD_READ,
     [CLI_CMD_REPAIR] = APP_CMD_WRITE,     [CLI_CMD_BRAIN] = APP_CMD_WRITE,
     [CLI_CMD_EXPORT] = APP_CMD_READ,      [CLI_CMD_SETTINGS] = APP_CMD_READ,
+    [CLI_CMD_SWEEP] = APP_CMD_WRITE,
 };
 
 /* settings: set, reset and import change settings; every other verb reads. */
@@ -677,6 +688,7 @@ static const char *event_command_name(CliCommand command)
         [CLI_CMD_ADD] = true,   [CLI_CMD_UPDATE] = true, [CLI_CMD_DELETE] = true,
         [CLI_CMD_PURGE] = true, [CLI_CMD_LINK] = true,   [CLI_CMD_UNLINK] = true,
         [CLI_CMD_REKEY] = true, [CLI_CMD_IMPORT] = true, [CLI_CMD_CONFLICT] = true,
+        [CLI_CMD_SWEEP] = true,
     };
 
     if ((size_t)command >= sizeof(k_writes) / sizeof(k_writes[0]) || !k_writes[command]) {
@@ -692,8 +704,10 @@ typedef struct {
     char brain_label[REMEMBER_PATH_MAX];
     const char *command;
     StoreOrigin origin;
+    bool loaded; /* rules and cause are read */
     bool armed;
-    char pad_[3];
+    bool warned_unsupported; /* plugin_unsupported is printed once per command */
+    char pad_[1];
 } CommandEvents;
 
 /* The brain path as an event shows it: absolute, with the home folder written ~ (OQ-14). */
@@ -720,34 +734,57 @@ static void brain_label(const char *path, char *out, size_t cap)
     }
 }
 
-/* Turn on events for a command that changes memories, when an enabled plugin has an action.
-   0, or the exit code. */
-static int arm_events(Store *s, const CliArgs *args, const PluginManifestList *mans,
-                      CommandEvents *cev)
+/* Read the rules and the cause the first time a command arms the store. 0, or the exit code. */
+static int load_events(Store *s, const PluginManifestList *mans, CommandEvents *cev, bool report)
 {
     char userdb[REMEMBER_PATH_MAX];
     char err[ERR_TEXT_CAP];
     const char *user_db = NULL;
-    StoreEvents cfg;
-    StoreStatus st = STORE_OK;
 
-    cev->command = event_command_name(args->command);
-    if (cev->command == NULL || mans->count == 0U) {
+    if (cev->loaded) {
         return 0;
     }
     if (util_resolve_user_db_path(userdb, sizeof(userdb), err, sizeof(err)) == 0) {
         user_db = userdb;
     }
     if (events_rules_load(s, user_db, mans, &cev->rules, err, sizeof(err)) != 0) {
-        err_msg(code_for_store_text(err), err);
+        if (report) {
+            err_msg(code_for_store_text(err), err);
+        }
         return REMEMBER_ERR;
     }
     if (events_cause_read(&cev->cause) != 0) {
-        err_msg(DIAG_OUT_OF_MEMORY, "out of memory");
+        if (report) {
+            err_msg(DIAG_OUT_OF_MEMORY, "out of memory");
+        }
         return REMEMBER_ERR;
     }
-    cev->origin = args->command == CLI_CMD_IMPORT ? STORE_ORIGIN_IMPORT : STORE_ORIGIN_LOCAL;
     brain_label(store_path(s), cev->brain_label, sizeof(cev->brain_label));
+    cev->loaded = true;
+    return 0;
+}
+
+/* Turn on events for what the store writes next, as the command named, when an enabled plugin
+   has an action. A command that changes memories arms with its own name; the sweep after a
+   command arms again as "sweep", with the rules it already read. NULL command: nothing changes
+   memories. 0, or the exit code; report says whether the failure is printed (the sweep after a
+   command prints its own warning instead). */
+static int arm_events(Store *s, const char *command, StoreOrigin origin,
+                      const PluginManifestList *mans, CommandEvents *cev, bool report)
+{
+    StoreEvents cfg;
+    StoreStatus st = STORE_OK;
+    int rc = 0;
+
+    cev->command = command;
+    if (command == NULL || mans->count == 0U) {
+        return 0;
+    }
+    rc = load_events(s, mans, cev, report);
+    if (rc != 0) {
+        return rc;
+    }
+    cev->origin = origin;
     memset(&cfg, 0, sizeof(cfg));
     cfg.rules = &cev->rules;
     cfg.cause = &cev->cause;
@@ -757,7 +794,9 @@ static int arm_events(Store *s, const CliArgs *args, const PluginManifestList *m
     cfg.hooks = STORE_HOOKS_DEFAULT;
     st = store_set_events(s, &cfg);
     if (st != STORE_OK) {
-        err_store(s, st);
+        if (report) {
+            err_store(s, st);
+        }
         return REMEMBER_ERR;
     }
     cev->armed = true;
@@ -766,16 +805,52 @@ static int arm_events(Store *s, const CliArgs *args, const PluginManifestList *m
 
 /* After a command that succeeded: the warning for a write that needed a program this build cannot
    start, and the skipped_source lines for a sync or import. A command that failed may have rolled
-   its write back, and then neither is true. */
+   its write back, and then neither is true. The warning prints once per command, however many
+   writes (the command's, then its sweep's) it covers. */
 static void finish_events(const Store *s, CommandEvents *cev, int rc)
 {
     if (!cev->armed || rc != 0) {
         return;
     }
-    if (store_events_unsupported(s) > 0U) {
+    if (store_events_unsupported(s) > 0U && !cev->warned_unsupported) {
+        cev->warned_unsupported = true;
         (void)diag_plugin_unsupported();
     }
     (void)events_log_skipped(&cev->rules, store_path(s), cev->command, cev->origin);
+}
+
+static void command_events_free(CommandEvents *cev)
+{
+    events_rules_free(&cev->rules);
+    if (cev->cause.chain_json != NULL) {
+        events_cause_free(&cev->cause);
+    }
+}
+
+/* The sweep after a command (log 010 H-1.5): every command that opened the brain read-write sweeps
+   once its own work is done, whatever its exit, and a brain this process cannot write (a newer
+   one) is skipped. The sweep is its own write, so its events are cause.command "sweep" in their
+   own batch. A sweep that fails is a warning and changes no exit code, unless the command itself
+   failed: then its own error is the one message
+   (decision:2026-11-18-plan32-grill-sweep-triggers,
+   decision:2026-11-18-plan32-grill-sweep-warning-and-wrong-bin). */
+static void sweep_after(Store *s, const PluginManifestList *mans, CommandEvents *cev,
+                        int command_rc)
+{
+    size_t marked = 0U;
+
+    if (!store_is_writable(s)) {
+        return;
+    }
+    /* A sweep that cannot arm its events must not mark rows: their events would be lost. */
+    if (arm_events(s, "sweep", STORE_ORIGIN_LOCAL, mans, cev, false) != 0 ||
+        sweep_now(s, &marked) != STORE_OK) {
+        if (command_rc == 0) {
+            (void)diag_sweep_failed(store_path(s));
+        }
+        return;
+    }
+    finish_events(s, cev, 0);
 }
 
 static int run_with_store(const CliArgs *args, CmdFn fn)
@@ -797,16 +872,75 @@ static int run_with_store(const CliArgs *args, CmdFn fn)
         rc = meet_newer_brain(s, args);
     }
     if (rc == 0) {
-        rc = arm_events(s, args, &mans, &cev);
+        rc = arm_events(s, event_command_name(args->command),
+                        args->command == CLI_CMD_IMPORT ? STORE_ORIGIN_IMPORT : STORE_ORIGIN_LOCAL,
+                        &mans, &cev, true);
     }
     if (rc == 0) {
-        rc = fn(s, args->globals.json, args->rest_argc, args->rest_argv);
-        finish_events(s, &cev, rc);
+        int fn_rc = fn(s, args->globals.json, args->rest_argc, args->rest_argv);
+
+        finish_events(s, &cev, fn_rc);
+        if (args->command != CLI_CMD_SWEEP) {
+            sweep_after(s, &mans, &cev, fn_rc);
+        }
+        rc = fn_rc;
     }
     store_close(s);
-    events_rules_free(&cev.rules);
-    if (cev.cause.chain_json != NULL) {
-        events_cause_free(&cev.cause);
+    command_events_free(&cev);
+    plugin_manifest_list_free(&mans);
+    settings_registry_free(reg);
+    return rc;
+}
+
+/* What sweep --all shares between the brains it sweeps: the plugins and settings registry are
+   the machine's, read once. */
+typedef struct {
+    const CliArgs *args;
+    SettingsRegistry *reg;
+    const PluginManifestList *mans;
+} SweepAll;
+
+static int sweep_listed_brain(const void *ctx, const char *path, size_t *marked)
+{
+    const SweepAll *all = (const SweepAll *)ctx;
+    StoreOpenOpts opts = {.busy_timeout_ms = busy_timeout_ms_of(all->args), .no_create = true};
+    char err[ERR_TEXT_CAP];
+    CommandEvents cev;
+    Store *s = store_open_opts(path, &opts, err, sizeof(err), NULL);
+    StoreStatus st = STORE_OK;
+
+    memset(&cev, 0, sizeof(cev));
+    if (s == NULL) {
+        (void)diag_sweep_failed(path);
+        return -1;
+    }
+    store_set_settings_registry(s, all->reg);
+    /* A newer brain is not written: store_set_events arms nothing there and sweep_now marks
+       nothing (specs/OLDER-CLI.md). */
+    st = arm_events(s, "sweep", STORE_ORIGIN_LOCAL, all->mans, &cev, false) == 0
+             ? sweep_now(s, marked)
+             : STORE_ERR_INTERNAL;
+    if (st == STORE_OK) {
+        finish_events(s, &cev, 0);
+    } else {
+        (void)diag_sweep_failed(path);
+    }
+    store_close(s);
+    command_events_free(&cev);
+    return st == STORE_OK ? 0 : -1;
+}
+
+/* `sweep --all`: reads brains.json and sweeps each listed brain. It opens no brain for itself. */
+static int run_sweep_all(const CliArgs *args)
+{
+    SettingsRegistry *reg = NULL;
+    PluginManifestList mans = {.items = NULL, .count = 0U};
+    int rc = load_registry(&reg, &mans);
+
+    if (rc == 0) {
+        SweepAll all = {.args = args, .reg = reg, .mans = &mans};
+
+        rc = cmd_sweep_all(args->globals.json, sweep_listed_brain, &all);
     }
     plugin_manifest_list_free(&mans);
     settings_registry_free(reg);
@@ -884,6 +1018,17 @@ static int run(const CliArgs *args)
         return run_with_store(args, cmd_brain);
     case CLI_CMD_SETTINGS:
         return run_with_store(args, cmd_settings);
+    case CLI_CMD_SWEEP: {
+        bool all = false;
+
+        if (sweep_parse(args->rest_argc, args->rest_argv, &all) != 0) {
+            return REMEMBER_ERR;
+        }
+        if (all) {
+            return run_sweep_all(args);
+        }
+        return run_with_store(args, cmd_sweep);
+    }
     case CLI_CMD_NONE:
         /* Defensive: parse should set CLI_ERR_MISSING_COMMAND first. */
         err_msg(DIAG_USAGE, cli_error_message(CLI_ERR_MISSING_COMMAND));
@@ -920,6 +1065,8 @@ static const char *reply_noun_verb(const CliArgs *args)
         return "tag.list";
     case CLI_CMD_PURGE:
         return "memory.purge";
+    case CLI_CMD_SWEEP:
+        return "sweep";
     case CLI_CMD_LINK:
         return "memory.link";
     case CLI_CMD_UNLINK:

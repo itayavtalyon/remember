@@ -2596,9 +2596,10 @@ static int check_reader_version(Store *s, char *err, size_t errlen)
     "SELECT local_id, 1, id, key, body, created_by, updated_by, created_at, updated_at, "          \
     "expires_at, deleted_at, version_vector, change_seq FROM main.entries WHERE local_id = " X ";"
 
-/* One statement each: a string literal past 4095 bytes is not portable C. */
+/* One statement each: a string literal past 4095 bytes is not portable C. temp_store is already
+   MEMORY (store_open_opts sets it with the expiry trigger): changing it would delete every temp
+   object, that trigger too. */
 static const char *const k_ev_arm_sql[] = {
-    "PRAGMA temp_store = MEMORY;",
     "CREATE TEMP TABLE IF NOT EXISTS ev_touch(local_id INTEGER PRIMARY KEY, had_before INTEGER "
     "NOT NULL, id TEXT, key TEXT, body TEXT, created_by TEXT, updated_by TEXT, created_at TEXT, "
     "updated_at TEXT, expires_at TEXT, deleted_at TEXT, version_vector TEXT, change_seq INTEGER);",
@@ -2625,6 +2626,21 @@ static const char *const k_ev_arm_sql[] = {
     "CREATE TEMP TRIGGER IF NOT EXISTS ev_l_del BEFORE DELETE ON main.entry_links BEGIN " EV_TOUCH(
         "OLD.from_id") EV_TOUCH("OLD.to_id") "END;",
 };
+
+/* expired_at marks a row the sweep has seen due. A write that moves expires_at later, clears it
+   or sets one where there was none, or that restores the row from Deleted, starts the row's
+   expiry over, so the marker goes in the same write (log 010 H-1.6). One temp trigger, so every
+   writer of those columns (update, add that revives, restore, import, a later sync apply) gets
+   it and none can forget it. A write that moves expires_at earlier keeps the marker: the row
+   was already due. The update below sets only expired_at, so it does not fire the trigger. The
+   pragma comes first and only here: SQLite deletes every temp object when temp_store changes. */
+static const char k_expiry_clear_sql[] =
+    "PRAGMA temp_store = MEMORY;"
+    "CREATE TEMP TRIGGER IF NOT EXISTS ex_clear AFTER UPDATE OF expires_at, deleted_at ON "
+    "main.entries WHEN OLD.expired_at IS NOT NULL AND ((NEW.expires_at IS NOT OLD.expires_at AND "
+    "(NEW.expires_at IS NULL OR OLD.expires_at IS NULL OR NEW.expires_at > OLD.expires_at)) OR "
+    "(OLD.deleted_at IS NOT NULL AND NEW.deleted_at IS NULL)) BEGIN UPDATE main.entries SET "
+    "expired_at = NULL WHERE local_id = NEW.local_id; END;";
 
 static const char k_ev_reset_sql[] =
     "DELETE FROM temp.ev_touch; DELETE FROM temp.ev_btags; DELETE FROM temp.ev_blinks;";
@@ -2974,6 +2990,9 @@ Store *store_open_opts(const char *path, const StoreOpenOpts *opts, char *err, s
         goto cleanup_fail;
     }
     if (ensure_schema(s, err, errlen) != 0) {
+        goto cleanup_fail;
+    }
+    if (store_is_writable(s) && exec_sql(db, k_expiry_clear_sql, err, errlen, &s->last) != 0) {
         goto cleanup_fail;
     }
 
@@ -4918,8 +4937,10 @@ static int ev_emit(Store *s, const EvRow *r, const EventDraft *d, const char *no
     return rc;
 }
 
-/* Every memory this write touched, in id order. */
-static int ev_touched_ids(Store *s, long long **ids, size_t *n)
+/* The local ids a query selects (column 0), in the query's order. now binds ?1 when the query
+   has one; NULL binds nothing. *ids is heap (free it); *n may be 0. 0, or -1 with s->last set. */
+// NOLINTNEXTLINE(bugprone-easily-swappable-parameters) the query, then the time it binds
+static int select_local_ids(Store *s, const char *sql, const char *now, long long **ids, size_t *n)
 {
     sqlite3_stmt *stmt = NULL;
     size_t cap = 0;
@@ -4927,8 +4948,12 @@ static int ev_touched_ids(Store *s, long long **ids, size_t *n)
 
     *ids = NULL;
     *n = 0;
-    if (ev_prepare(s, "SELECT local_id FROM temp.ev_touch ORDER BY local_id;", 0, &stmt) != 0) {
+    if (sqlite3_prepare_v2(s->db, sql, -1, &stmt, NULL) != SQLITE_OK) {
+        capture_sqlite_error(s->db, &s->last);
         return -1;
+    }
+    if (now != NULL) {
+        (void)sqlite3_bind_text(stmt, 1, now, -1, SQLITE_STATIC);
     }
     while ((step = sqlite3_step(stmt)) == SQLITE_ROW) {
         if (*n == cap) {
@@ -4957,6 +4982,13 @@ static int ev_touched_ids(Store *s, long long **ids, size_t *n)
     return 0;
 }
 
+/* Every memory this write touched, in id order. */
+static int ev_touched_ids(Store *s, long long **ids, size_t *n)
+{
+    return select_local_ids(s, "SELECT local_id FROM temp.ev_touch ORDER BY local_id;", NULL, ids,
+                            n);
+}
+
 /* One touched memory: load it, plan its events, write the rows that match. */
 static int ev_flush_one(Store *s, long long id, const char *now)
 {
@@ -4967,16 +4999,25 @@ static int ev_flush_one(Store *s, long long id, const char *now)
     int rc = -1;
     sqlite3_stmt *probe = NULL;
     bool had = false;
+    int step = 0;
 
     memset(&row, 0, sizeof(row));
     if (ev_prepare(s, "SELECT had_before FROM temp.ev_touch WHERE local_id = ?1;", id, &probe) !=
         0) {
         return -1;
     }
-    if (sqlite3_step(probe) == SQLITE_ROW && sqlite3_column_int(probe, 0) != 0) {
+    step = sqlite3_step(probe);
+    if (step == SQLITE_ROW && sqlite3_column_int(probe, 0) != 0) {
         had = true;
     }
+    if (step != SQLITE_ROW) {
+        /* A failed read is no answer: "no image before" would make a delete look like a create. */
+        capture_sqlite_error(s->db, &s->last);
+    }
     (void)sqlite3_finalize(probe);
+    if (step != SQLITE_ROW) {
+        return -1;
+    }
     row.has_before = had;
     if ((had && (ev_before_entry(s, id, &row) != 0 || ev_before_links(s, id, &row) != 0)) ||
         ev_after(s, id, now, &row) != 0) {
@@ -5063,6 +5104,91 @@ void store_set_event_hooks(Store *s, StoreHooks hooks)
 size_t store_events_unsupported(const Store *s)
 {
     return s->ev_unsupported;
+}
+
+/* ---- the expiry sweep (plan 32; specs/EVENTS.md "Expiry") ------------------------------- */
+
+/* A row the sweep marks (H-1.5): not deleted, due at ?1, and not marked yet. */
+#define K_SWEEP_DUE                                                                                \
+    "deleted_at IS NULL AND expires_at IS NOT NULL AND expires_at <= ?1 AND expired_at IS NULL"
+
+/* One memory.expired event for each row the sweep marked, in id order. */
+static int sweep_emit(Store *s, const long long *ids, size_t n, const char *now)
+{
+    size_t i = 0;
+    int rc = 0;
+
+    for (i = 0; rc == 0 && i < n; i++) {
+        EvRow row;
+
+        memset(&row, 0, sizeof(row));
+        rc = ev_after(s, ids[i], now, &row);
+        if (rc == 0) {
+            rc = ev_emit(s, &row, &(EventDraft){.type = EVENT_EXPIRED}, now);
+        }
+        ev_row_free(&row);
+    }
+    return rc;
+}
+
+/* The marking and its events, inside the write transaction. 0, or -1 with s->last set. */
+static int sweep_mark(Store *s, const char *now, long long **ids, size_t *n)
+{
+    char err_unused[1];
+    const char *binds[1] = {now};
+
+    if (select_local_ids(s, "SELECT local_id FROM entries WHERE " K_SWEEP_DUE " ORDER BY local_id;",
+                         now, ids, n) != 0 ||
+        exec_bound(s->db, "UPDATE entries SET expired_at = ?1 WHERE " K_SWEEP_DUE ";", binds, 1,
+                   err_unused, 0U, &s->last) != 0) {
+        return -1;
+    }
+    if (s->ev_armed && s->ev.hooks != STORE_HOOKS_OFF) {
+        /* The triggers kept every marked row as a touched memory; none changed a field. */
+        if (exec_sql(s->db, k_ev_reset_sql, err_unused, 0U, &s->last) != 0) {
+            return -1;
+        }
+        return sweep_emit(s, *ids, *n, now);
+    }
+    return 0;
+}
+
+StoreStatus store_sweep(Store *s, const char *now, size_t *out_marked)
+{
+    long long *ids = NULL;
+    size_t n = 0;
+    StoreStatus st = STORE_OK;
+
+    if (s == NULL || s->db == NULL || now == NULL || out_marked == NULL) {
+        return STORE_ERR_INTERNAL;
+    }
+    *out_marked = 0U;
+    if (s->schema_too_new) {
+        return STORE_ERR_SCHEMA_TOO_NEW;
+    }
+    /* A read first: most commands find nothing due, and then take no write lock. */
+    if (select_local_ids(s, "SELECT local_id FROM entries WHERE " K_SWEEP_DUE " LIMIT 1;", now,
+                         &ids, &n) != 0) {
+        return STORE_ERR_SQLITE;
+    }
+    free(ids);
+    if (n == 0U) {
+        return STORE_OK;
+    }
+    st = begin_write(s);
+    if (st != STORE_OK) {
+        return st;
+    }
+    ids = NULL;
+    /* Another process may have marked them since the read: the ids are the ones marked now. */
+    if (sweep_mark(s, now, &ids, &n) != 0 || commit_write(s) != 0) {
+        free(ids);
+        rollback_quiet(s->db);
+        return STORE_ERR_SQLITE;
+    }
+    free(ids);
+    *out_marked = n;
+    return STORE_OK;
 }
 
 StoreStatus store_add(Store *s, const char *body, const char *body_hash, const char *key_or_null,
@@ -6762,6 +6888,74 @@ StoreStatus store_soft_delete_by_key(Store *s, const char *key, const char *acto
         return STORE_ERR_INTERNAL;
     }
     return soft_delete_tx(s, 0, key, actor, now, out);
+}
+
+StoreStatus store_soft_delete_expired(Store *s, const char *actor, const char *now,
+                                      Entry **out_entries, size_t *out_count)
+{
+    long long *ids = NULL;
+    size_t n = 0;
+    size_t i = 0;
+    Entry *rows = NULL;
+    StoreStatus st = STORE_OK;
+
+    if (s == NULL || s->db == NULL || s->device_id == NULL || now == NULL || out_entries == NULL ||
+        out_count == NULL) {
+        return STORE_ERR_INTERNAL;
+    }
+    *out_entries = NULL;
+    *out_count = 0U;
+    st = begin_write(s);
+    if (st != STORE_OK) {
+        return st;
+    }
+    if (select_local_ids(s,
+                         "SELECT local_id FROM entries WHERE deleted_at IS NULL AND expires_at IS "
+                         "NOT NULL AND expires_at <= ?1 ORDER BY local_id;",
+                         now, &ids, &n) != 0) {
+        st = STORE_ERR_SQLITE;
+        goto fail;
+    }
+    rows = (Entry *)calloc(n + 1U, sizeof(*rows));
+    if (rows == NULL) {
+        st = STORE_ERR_SQLITE; /* out of memory: the caller maps it like any failed write */
+        goto fail;
+    }
+    for (i = 0; i < n; i++) {
+        Entry cur;
+
+        memset(&cur, 0, sizeof(cur));
+        st = load_entry_by_id(s->db, ids[i], &cur, &s->last);
+        if (st == STORE_OK) {
+            st = apply_soft_delete(s->db, ids[i], actor, now, s->device_id, cur.version_vector,
+                                   &s->last);
+        }
+        store_entry_free(&cur);
+        if (st == STORE_OK) {
+            st = load_entry_by_id(s->db, ids[i], &rows[i], &s->last);
+        }
+        if (st != STORE_OK) {
+            goto fail;
+        }
+    }
+    if (commit_write(s) != 0) {
+        st = STORE_ERR_SQLITE;
+        goto fail;
+    }
+    free(ids);
+    if (n == 0U) {
+        free(rows);
+        rows = NULL;
+    }
+    *out_entries = rows;
+    *out_count = n;
+    return STORE_OK;
+
+fail:
+    free(ids);
+    free_entry_rows(rows, rows != NULL ? n : 0U);
+    rollback_quiet(s->db);
+    return st;
 }
 
 StoreStatus store_hard_delete_by_id(Store *s, long long id, StoreBin bin, const char *now,
