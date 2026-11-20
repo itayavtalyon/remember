@@ -945,6 +945,31 @@ TEST(load_under_memory_failure_returns_oom_or_ok_and_leaks_nothing)
     }
     ASSERT_TRUE(oom_seen > 0);
     ASSERT_EQ_INT(ok_seen, 1);
+    /* The same with the manifests kept (plan 31): a failed keep unregisters that plugin's keys. */
+    oom_seen = 0;
+    ok_seen = 0;
+    for (n = 0; n < 4000 && ok_seen == 0; n++) {
+        SettingsRegistry *reg = given_registry();
+        PluginManifestList mans;
+        int err = 0;
+        PluginSettingsStatus st = PLUGIN_SETTINGS_OK;
+
+        test_alloc_fail_after(n);
+        st = plugin_settings_load_manifests(plugins, reg, &mans, &err);
+        test_alloc_fail_after(-1);
+        if (st == PLUGIN_SETTINGS_OOM) {
+            ASSERT_EQ_INT((long long)mans.count, 0);
+            oom_seen++;
+        } else {
+            ASSERT_EQ_INT(st, PLUGIN_SETTINGS_OK);
+            ASSERT_EQ_INT((long long)mans.count, 21);
+            ok_seen++;
+        }
+        plugin_manifest_list_free(&mans);
+        settings_registry_free(reg);
+    }
+    ASSERT_TRUE(oom_seen > 0);
+    ASSERT_EQ_INT(ok_seen, 1);
     free(plugins);
 }
 

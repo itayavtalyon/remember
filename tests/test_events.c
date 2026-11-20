@@ -5,7 +5,9 @@
 #include "remember_app.h"
 #endif
 #include "plugin_manifest.h"
+#include "plugin_settings.h"
 #include "register.h"
+#include "settings.h"
 #include "store.h"
 #include "test.h"
 #include "test_alloc.h"
@@ -1540,6 +1542,97 @@ TEST(a_depth_that_is_not_a_whole_number_of_one_to_a_million_is_not_a_run)
     clear_cause_env();
 }
 
+/* A link alone (no field changed): the first draft is the link's, and when it cannot be kept the
+   plan is empty. */
+TEST(planning_a_link_fails_cleanly_when_memory_runs_out)
+{
+    Entry before = given_memory();
+    Entry after = given_memory();
+    const EventLink now_has[] = {k_link_related};
+    EventDraft *drafts = NULL;
+    size_t n = 7U;
+
+    test_alloc_fail_after(0);
+    ASSERT_FALSE(events_plan(
+        &(EventRow){.before = &before, .after = &after, .links_after = now_has, .nlinks_after = 1U},
+        &drafts, &n));
+    test_alloc_fail_after(-1);
+    ASSERT_EQ_INT(n, 0);
+    ASSERT_TRUE(drafts == NULL);
+}
+
+/* events_rules_load: a plugin key the store does not know is an internal error, an enabled
+   plugin gives its action, and a failed allocation is out of memory. */
+/* More drafts than the first block holds: the list grows and keeps every draft. */
+TEST(planning_ten_new_links_keeps_ten_drafts)
+{
+    Entry before = given_memory();
+    Entry after = given_memory();
+    EventLink now_has[10];
+    static const char *const kinds[] = {"k0", "k1", "k2", "k3", "k4", "k5", "k6", "k7", "k8", "k9"};
+    size_t i = 0;
+    Plan p;
+
+    for (i = 0; i < 10U; i++) {
+        now_has[i] = k_link_out;
+        now_has[i].kind = kinds[i];
+    }
+    p = given_plan(&(EventRow){
+        .before = &before, .after = &after, .links_after = now_has, .nlinks_after = 10U});
+    ASSERT_EQ_INT(p.n, 10);
+    ASSERT_STREQ(p.n == 10U ? p.drafts[9].link.kind : "", "k9");
+    plan_free(&p);
+}
+
+TEST(loading_the_rules_reads_enabled_and_reports_why_it_failed)
+{
+    static const char k_doc[] =
+        "{\"format\":\"remember-plugin\",\"version\":1,\"name\":\"hooker\","
+        "\"plugin_version\":\"1.0.0\",\"protocol\":1,\"actions\":[" ACTION(ALL_TYPES, "") "]}";
+    char err[ERR_BUFSIZE];
+    char *db = make_temp_db_path();
+    Store *s = store_open(db, err, sizeof(err));
+    SettingsRegistry *reg = settings_registry_new();
+    PluginManifest *man = NULL;
+    PluginManifestList mans;
+    EventRules rules;
+    SettingWrite w;
+    SettingWriteResult wr;
+    const char *on = "true";
+
+    ASSERT_TRUE(s != NULL && reg != NULL);
+    ASSERT_EQ_INT(plugin_manifest_parse(k_doc, strlen(k_doc), &man), PLUGIN_PARSE_OK);
+    mans = (PluginManifestList){.items = &man, .count = 1U};
+    memset(&rules, 0, sizeof(rules));
+    ASSERT_EQ_INT(events_rules_load(s, NULL, &mans, &rules, err, sizeof(err)), -1);
+    ASSERT_STREQ(err, "internal error");
+    events_rules_free(&rules);
+
+    ASSERT_EQ_STATUS(plugin_settings_register(man, reg), PLUGIN_SETTINGS_OK);
+    store_set_settings_registry(s, reg);
+    memset(&w, 0, sizeof(w));
+    w.key = "plugin.hooker.enabled";
+    w.items = &on;
+    w.nitems = 1U;
+    w.layer = SETTING_LAYER_BRAIN;
+    ASSERT_EQ_INT(store_setting_set(s, NULL, &w, &wr, err, sizeof(err)), SETTING_OK);
+    memset(&rules, 0, sizeof(rules));
+    ASSERT_EQ_INT(events_rules_load(s, NULL, &mans, &rules, err, sizeof(err)), 0);
+    ASSERT_EQ_INT(rules.count, 1);
+    events_rules_free(&rules);
+
+    memset(&rules, 0, sizeof(rules));
+    test_alloc_fail_after(0);
+    ASSERT_EQ_INT(events_rules_load(s, NULL, &mans, &rules, err, sizeof(err)), -1);
+    test_alloc_fail_after(-1);
+    ASSERT_STREQ(err, "out of memory");
+    events_rules_free(&rules);
+    store_close(s);
+    settings_registry_free(reg);
+    plugin_manifest_free(man);
+    free(db);
+}
+
 TEST(reading_the_cause_fails_when_memory_runs_out)
 {
     EventCause c;
@@ -2101,6 +2194,28 @@ TEST(created_by_is_the_creator_even_after_another_kind_writes)
     rig_close(&rig);
 }
 
+TEST(ten_actions_of_one_plugin_are_ten_rules)
+{
+    EventRules rules;
+
+    given_rules(
+        &rules,
+        NAMED("a0", ALL_TYPES, "") "," NAMED("a1", ALL_TYPES, "") "," NAMED("a2", ALL_TYPES, "") "," NAMED(
+            "a3", ALL_TYPES,
+            "") "," NAMED("a4", ALL_TYPES,
+                          "") "," NAMED("a5", ALL_TYPES,
+                                        "") "," NAMED("a6", ALL_TYPES,
+                                                      "") "," NAMED("a7", ALL_TYPES,
+                                                                    "") "," NAMED("a8", ALL_TYPES,
+                                                                                  "") "," NAMED("a"
+                                                                                                "9",
+                                                                                                ALL_TYPES,
+                                                                                                ""));
+    ASSERT_EQ_INT(rules.count, 10);
+    ASSERT_STREQ(rules.count == 10U ? rules.actions[9].recipient : "", "plugin/hooker/a9");
+    events_rules_free(&rules);
+}
+
 TEST(each_action_gets_the_row_it_matches_and_the_recipients_list_only_those)
 {
     Rig rig = given_rig((RigSpec){
@@ -2469,6 +2584,63 @@ static void assert_memory_and_row_agree(const Rig *rig, bool *saw_failure, bool 
 }
 
 typedef void (*FailFn)(int);
+
+/* An update reads the memory's old row, tags and links into the flush: whichever allocation or
+   step fails, the new body and its outbox row commit together or not at all. */
+TEST(an_update_of_a_tagged_linked_memory_commits_with_its_row_or_not_at_all)
+{
+    static const FailFn k_fail[] = {store_test_fail_alloc_after, store_test_fail_step_after};
+    static const char *const tags[] = {"t"};
+    bool saw_failure = false;
+    bool saw_success = false;
+    size_t which = 0;
+
+    for (which = 0; which < sizeof(k_fail) / sizeof(k_fail[0]); which++) {
+        for (int at = 0; at < 80; at++) {
+            Rig rig = given_rig_all();
+            long long a = add_memory(&rig, "body a", "k:a");
+            long long b = add_memory(&rig, "body b", "k:b");
+            char hash[65];
+            char sql[160];
+            char *got = NULL;
+            StoreStatus st = STORE_OK;
+
+            ASSERT_EQ_STATUS(update_memory(&rig, a,
+                                           (StoreUpdate){.tags = tags,
+                                                         .ntags = 1U,
+                                                         .set_tags = true,
+                                                         .bin = STORE_BIN_LIVE}),
+                             STORE_OK);
+            link_memories(&rig, a, b, STORE_EDGE_CITES);
+            clear_outbox(&rig);
+            (void)snprintf(hash, sizeof(hash), "%064x", 0xbeefU);
+            k_fail[which](at);
+            st = update_memory(
+                &rig, a,
+                (StoreUpdate){
+                    .body = "edited", .body_hash = hash, .set_body = true, .bin = STORE_BIN_LIVE});
+            k_fail[which](-1);
+            (void)snprintf(sql, sizeof(sql),
+                           "SELECT (SELECT body FROM entries WHERE local_id = %lld) || '/' || "
+                           "(SELECT count(*) FROM outbox);",
+                           a);
+            got = harness_sqlite_query_line(rig.db, sql);
+            /* A failure after COMMIT (reading the entry back) reports an error over a saved write,
+               so a failure may show either state, never one without the other. */
+            if (st == STORE_OK || (got != NULL && strcmp(got, "edited/1") == 0)) {
+                ASSERT_STREQ(got != NULL ? got : "", "edited/1");
+            } else {
+                ASSERT_STREQ(got != NULL ? got : "", "body a/0");
+            }
+            saw_success = saw_success || st == STORE_OK;
+            saw_failure = saw_failure || st != STORE_OK;
+            free(got);
+            rig_close(&rig);
+        }
+    }
+    ASSERT_TRUE(saw_failure);
+    ASSERT_TRUE(saw_success);
+}
 
 TEST(outbox_commits_with_memory)
 {
@@ -3211,6 +3383,10 @@ void register_events_tests(void)
     RUN_TEST(a_bad_hook_name_or_run_id_reads_as_none_and_the_depth_stays);
     RUN_TEST(a_depth_that_is_not_a_whole_number_of_one_to_a_million_is_not_a_run);
     RUN_TEST(reading_the_cause_fails_when_memory_runs_out);
+    RUN_TEST(planning_a_link_fails_cleanly_when_memory_runs_out);
+    RUN_TEST(ten_actions_of_one_plugin_are_ten_rules);
+    RUN_TEST(planning_ten_new_links_keeps_ten_drafts);
+    RUN_TEST(loading_the_rules_reads_enabled_and_reports_why_it_failed);
     RUN_TEST(skipped_source_lines_are_one_per_action_and_type_with_the_count);
     RUN_TEST(a_local_write_logs_no_skipped_source_line_and_keeps_its_counts);
     RUN_TEST(nothing_counted_makes_no_log_file);
@@ -3241,6 +3417,7 @@ void register_events_tests(void)
     RUN_TEST(a_write_inside_a_run_carries_the_hook_cause_and_not_caused_by_skips_it);
     RUN_TEST(bins_and_match_before_read_the_state_before_the_write);
     RUN_TEST(outbox_commits_with_memory);
+    RUN_TEST(an_update_of_a_tagged_linked_memory_commits_with_its_row_or_not_at_all);
 #ifdef REMEMBER_PLUGINS_DIAG_TEST
     RUN_TEST(a_plugin_gets_rows_only_once_it_is_enabled_for_the_brain);
     RUN_TEST(a_plugin_enabled_in_one_brain_does_not_give_rows_in_another);

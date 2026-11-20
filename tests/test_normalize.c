@@ -697,6 +697,17 @@ TEST(actor_json_writes_each_stored_kind)
                   actor_rc(ACTOR_OK));
 }
 
+TEST(actor_json_kind_reads_a_stored_kind_and_empties_kind_otherwise)
+{
+    char kind[16] = "x";
+
+    ASSERT_TRUE(actor_json_kind("{\"kind\":\"agent\",\"id\":null}", kind, sizeof(kind)));
+    ASSERT_STREQ(kind, "agent");
+    ASSERT_FALSE(actor_json_kind("{\"kind\":\"robot\",\"id\":null}", kind, sizeof(kind)));
+    ASSERT_STREQ(kind, "");
+    ASSERT_FALSE(actor_json_kind("{\"kind\":\"agent\"}", kind, 0U));
+}
+
 TEST(actor_json_canonical_form_and_the_migration_shape)
 {
     char out[ACTOR_JSON_CAP];
@@ -857,6 +868,7 @@ void register_normalize_tests(void)
     RUN_TEST(source_accepts_only_the_closed_tokens);
     RUN_TEST(actor_json_writes_each_stored_kind);
     RUN_TEST(actor_json_canonical_form_and_the_migration_shape);
+    RUN_TEST(actor_json_kind_reads_a_stored_kind_and_empties_kind_otherwise);
     RUN_TEST(actor_from_cli_stamps_a_person_and_blocks_a_hook);
     RUN_TEST(text_json_escape_changes_quotes_controls_del_and_c1_only);
 }

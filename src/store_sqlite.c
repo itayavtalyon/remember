@@ -4609,12 +4609,12 @@ int store_test_event_read_scans(const Store *s)
     for (i = 0; i < sizeof(reads) / sizeof(reads[0]); i++) {
         sqlite3_stmt *plan = NULL;
         char *sql = sqlite3_mprintf("EXPLAIN QUERY PLAN %s", reads[i]);
+        int rc = (sql != NULL) ? sqlite3_prepare_v2(s->db, sql, -1, &plan, NULL) : SQLITE_NOMEM;
 
-        if (sql == NULL || sqlite3_prepare_v2(s->db, sql, -1, &plan, NULL) != SQLITE_OK) {
-            sqlite3_free(sql);
+        sqlite3_free(sql);
+        if (rc != SQLITE_OK) {
             return -1;
         }
-        sqlite3_free(sql);
         while (sqlite3_step(plan) == SQLITE_ROW) {
             static const char k_scan[] = "SCAN ";
             const char *detail = (const char *)sqlite3_column_text(plan, 3);
@@ -4734,8 +4734,9 @@ static int ev_before_links(Store *s, long long id, EvRow *r)
     for (i = 0; !oom && i < r->nlb; i++) {
         const BeforeLink *b = &r->blinks[i];
 
+        /* A NULL from the joins: the other memory is in neither table. */
         if (b->kind == NULL || b->dir == NULL || b->other_id == NULL) {
-            oom = true;
+            return -1;
         }
         r->lb[i] = (EventLink){.kind = b->kind,
                                .direction = b->dir,

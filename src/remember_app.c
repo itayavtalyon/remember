@@ -702,6 +702,7 @@ static void brain_label(const char *path, char *out, size_t cap)
     char absolute[REMEMBER_PATH_MAX];
     char home[REMEMBER_PATH_MAX];
     const char *raw_home = getenv("HOME"); // NOLINT(concurrency-mt-unsafe) single-threaded CLI
+    const char *shown = path; /* when it cannot be made absolute (too long), as given */
     size_t n = 0U;
 
     /* HOME is compared in the same normal form as the path ("/Users/x/" is "/Users/x"). */
@@ -709,13 +710,13 @@ static void brain_label(const char *path, char *out, size_t cap)
         util_absolute_path(raw_home, home, sizeof(home)) == 0) {
         n = strlen(home);
     }
-    if (util_absolute_path(path, absolute, sizeof(absolute)) != 0) {
-        (void)snprintf(absolute, sizeof(absolute), "%s", path);
+    if (util_absolute_path(path, absolute, sizeof(absolute)) == 0) {
+        shown = absolute;
     }
-    if (n > 1U && strncmp(absolute, home, n) == 0 && absolute[n] == '/') {
-        (void)snprintf(out, cap, "~%s", absolute + n);
+    if (n > 1U && strncmp(shown, home, n) == 0 && shown[n] == '/') {
+        (void)snprintf(out, cap, "~%s", shown + n);
     } else {
-        (void)snprintf(out, cap, "%s", absolute);
+        (void)snprintf(out, cap, "%s", shown);
     }
 }
 

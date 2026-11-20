@@ -357,12 +357,16 @@ int events_rules_add(EventRules *rules, const PluginManifest *manifest)
         }
         if (rules->count == rules->cap) {
             size_t cap = rules->cap + (size_t)RULES_GROW;
-            EventAction *grown =
-                (EventAction *)realloc((void *)rules->actions, cap * sizeof(*grown));
+            /* malloc and copy, not realloc: the test seam fails malloc only */
+            EventAction *grown = (EventAction *)malloc(cap * sizeof(*grown));
 
             if (grown == NULL) {
                 return -1;
             }
+            if (rules->count > 0U) {
+                memcpy((void *)grown, (const void *)rules->actions, rules->count * sizeof(*grown));
+            }
+            free((void *)rules->actions);
             rules->actions = grown;
             rules->cap = cap;
         }
@@ -626,11 +630,15 @@ static bool draft_push(EventDraft **list, size_t *n, size_t *cap, const EventDra
 {
     if (*n == *cap) {
         size_t ncap = (*cap == 0U) ? (size_t)RULES_GROW : *cap * 2U;
-        EventDraft *grown = (EventDraft *)realloc((void *)*list, ncap * sizeof(*grown));
+        EventDraft *grown = (EventDraft *)malloc(ncap * sizeof(*grown)); /* see events_rules_add */
 
         if (grown == NULL) {
             return false;
         }
+        if (*n > 0U) {
+            memcpy((void *)grown, (const void *)*list, *n * sizeof(*grown));
+        }
+        free((void *)*list);
         *list = grown;
         *cap = ncap;
     }
@@ -759,13 +767,11 @@ static int write_nullable_string(FILE *f, const char *s)
 /* The comma that goes before every item of a list or object but the first. */
 static int write_sep(FILE *f, bool *first)
 {
-    int rc = 0;
-
     if (!*first && fputc(',', f) == EOF) {
-        rc = -1;
+        return -1;
     }
     *first = false;
-    return rc;
+    return 0;
 }
 
 static bool has_tag(const Entry *e, const char *tag)
