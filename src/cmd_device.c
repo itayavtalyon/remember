@@ -9,6 +9,7 @@
 #include "store.h"
 
 #include <stdbool.h>
+#include <stddef.h>
 
 enum { DEVICE_ERR_BUF = 256 };
 
