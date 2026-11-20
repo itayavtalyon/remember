@@ -592,7 +592,6 @@ static const AppCommandClass k_command_class[] = {
     [CLI_CMD_CONFLICT] = APP_CMD_WRITE,   [CLI_CMD_DEVICE] = APP_CMD_READ,
     [CLI_CMD_REPAIR] = APP_CMD_WRITE,     [CLI_CMD_BRAIN] = APP_CMD_WRITE,
     [CLI_CMD_EXPORT] = APP_CMD_READ,      [CLI_CMD_SETTINGS] = APP_CMD_READ,
-    [CLI_CMD_SWEEP] = APP_CMD_WRITE,
 };
 
 /* settings: set, reset and import change settings; every other verb reads. */
@@ -613,10 +612,13 @@ AppCommandClass app_command_class(CliCommand command, int rest_argc, const char 
     if (command == CLI_CMD_SETTINGS && settings_verb_writes(rest_argc, rest_argv)) {
         return APP_CMD_WRITE;
     }
-    /* `brain list` and `brain prune` open no brain (cmd_brain_uses_store). */
-    if (command == CLI_CMD_BRAIN &&
-        cli_subcommand(CLI_CMD_BRAIN, rest_argc, rest_argv) != CLI_SUB_BRAIN_NEW_ID) {
-        return APP_CMD_NO_STORE;
+    /* `brain list` and `brain prune` open no brain (cmd_brain_uses_store); `brain new-id` and
+       `brain sweep` write. */
+    if (command == CLI_CMD_BRAIN) {
+        CliSub sub = cli_subcommand(CLI_CMD_BRAIN, rest_argc, rest_argv);
+
+        return sub == CLI_SUB_BRAIN_NEW_ID || sub == CLI_SUB_BRAIN_SWEEP ? APP_CMD_WRITE
+                                                                         : APP_CMD_NO_STORE;
     }
     return k_command_class[command];
 }
@@ -681,14 +683,27 @@ static int load_registry(SettingsRegistry **out, PluginManifestList *mans)
 /* cause.command (R3.2). conflict accept has no value of its own yet
    (decision:open-2026-11-18-plan31-conflict-accept-command): it reports update. NULL when the
    command changes no memory. */
-static const char *event_command_name(CliCommand command)
+static bool is_brain_sweep(const CliArgs *args)
+{
+    return (args->command == CLI_CMD_BRAIN &&
+            cli_subcommand(CLI_CMD_BRAIN, args->rest_argc, args->rest_argv) ==
+                CLI_SUB_BRAIN_SWEEP) != 0;
+}
+
+static const char *event_command_name(const CliArgs *args)
 {
     static const bool k_writes[] = {
         [CLI_CMD_ADD] = true,   [CLI_CMD_UPDATE] = true, [CLI_CMD_DELETE] = true,
         [CLI_CMD_PURGE] = true, [CLI_CMD_LINK] = true,   [CLI_CMD_UNLINK] = true,
         [CLI_CMD_REKEY] = true, [CLI_CMD_IMPORT] = true, [CLI_CMD_CONFLICT] = true,
-        [CLI_CMD_SWEEP] = true,
     };
+    CliCommand command = args->command;
+
+    /* `brain sweep` keeps cause.command "sweep": it names the job, and the PP 3 enum is frozen in
+       protocol 1 (decision:2026-11-18-sweep-under-brain). */
+    if (is_brain_sweep(args)) {
+        return "sweep";
+    }
 
     if ((size_t)command >= sizeof(k_writes) / sizeof(k_writes[0]) || !k_writes[command]) {
         return NULL;
@@ -696,9 +711,7 @@ static const char *event_command_name(CliCommand command)
     if (command == CLI_CMD_CONFLICT) {
         return "update";
     }
-    /* `brain sweep` keeps cause.command "sweep": it names the job, and the PP 3 enum is frozen in
-       protocol 1 (decision:2026-11-18-sweep-under-brain). */
-    return command == CLI_CMD_SWEEP ? "sweep" : cli_command_name(command);
+    return cli_command_name(command);
 }
 
 /* What one command's events hold; the store keeps pointers into it until store_close. */
@@ -876,7 +889,7 @@ static int run_with_store(const CliArgs *args, CmdFn fn)
         rc = meet_newer_brain(s, args);
     }
     if (rc == 0) {
-        rc = arm_events(s, event_command_name(args->command),
+        rc = arm_events(s, event_command_name(args),
                         args->command == CLI_CMD_IMPORT ? STORE_ORIGIN_IMPORT : STORE_ORIGIN_LOCAL,
                         &mans, &cev, true);
     }
@@ -884,7 +897,7 @@ static int run_with_store(const CliArgs *args, CmdFn fn)
         int fn_rc = fn(s, args->globals.json, args->rest_argc, args->rest_argv);
 
         finish_events(s, &cev, fn_rc);
-        if (args->command != CLI_CMD_SWEEP) {
+        if (!is_brain_sweep(args)) {
             sweep_after(s, &mans, &cev, fn_rc);
         }
         rc = fn_rc;
@@ -1012,6 +1025,17 @@ static int run(const CliArgs *args)
         }
         return run_with_store(args, cmd_repair);
     case CLI_CMD_BRAIN:
+        if (is_brain_sweep(args)) {
+            bool all = false;
+
+            if (sweep_parse(args->rest_argc - 1, args->rest_argv + 1, &all) != 0) {
+                return REMEMBER_ERR;
+            }
+            if (all) {
+                return run_sweep_all(args);
+            }
+            return run_with_store(args, cmd_sweep);
+        }
         if (cmd_brain_reject_args(args->rest_argc, args->rest_argv) != 0) {
             return REMEMBER_ERR;
         }
@@ -1022,17 +1046,6 @@ static int run(const CliArgs *args)
         return run_with_store(args, cmd_brain);
     case CLI_CMD_SETTINGS:
         return run_with_store(args, cmd_settings);
-    case CLI_CMD_SWEEP: {
-        bool all = false;
-
-        if (sweep_parse(args->rest_argc, args->rest_argv, &all) != 0) {
-            return REMEMBER_ERR;
-        }
-        if (all) {
-            return run_sweep_all(args);
-        }
-        return run_with_store(args, cmd_sweep);
-    }
     case CLI_CMD_NONE:
         /* Defensive: parse should set CLI_ERR_MISSING_COMMAND first. */
         err_msg(DIAG_USAGE, cli_error_message(CLI_ERR_MISSING_COMMAND));
@@ -1069,8 +1082,6 @@ static const char *reply_noun_verb(const CliArgs *args)
         return "tag.list";
     case CLI_CMD_PURGE:
         return "memory.purge";
-    case CLI_CMD_SWEEP:
-        return "brain.sweep";
     case CLI_CMD_LINK:
         return "memory.link";
     case CLI_CMD_UNLINK:

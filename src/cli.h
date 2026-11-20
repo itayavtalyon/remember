@@ -27,7 +27,6 @@ typedef enum {
     CLI_CMD_BRAIN,
     CLI_CMD_EXPORT,
     CLI_CMD_SETTINGS,
-    CLI_CMD_SWEEP,
     CLI_CMD_UNKNOWN
 } CliCommand;
 
@@ -49,6 +48,7 @@ typedef enum {
     CLI_SUB_BRAIN_NEW_ID,
     CLI_SUB_BRAIN_LIST,
     CLI_SUB_BRAIN_PRUNE,
+    CLI_SUB_BRAIN_SWEEP,
     CLI_SUB_DEVICE_NEW,
     CLI_SUB_CONFLICT_ACCEPT,
     CLI_SUB_REPAIR_SEARCH_INDEX,
@@ -128,8 +128,7 @@ void cli_args_free(CliArgs *out);
 /* User-facing base message for err (no trailing newline). Never NULL. */
 const char *cli_error_message(CliError err);
 
-/* Top-level subcommand name for cmd (`brain` for the sweep, which is `brain sweep`), or NULL if
-   not a real subcommand. */
+/* Subcommand name for cmd, or NULL if not a real subcommand. */
 const char *cli_command_name(CliCommand cmd);
 
 /* One-line description for help, or NULL. */

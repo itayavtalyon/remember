@@ -376,10 +376,12 @@ TEST(cli_brain_class_follows_the_subcommand)
     const char *list[] = {"list"};
     const char *prune[] = {"prune"};
     const char *new_id[] = {"new-id"};
+    const char *sweep[] = {"sweep", "--all"};
 
     ASSERT_EQ_INT(app_command_class(CLI_CMD_BRAIN, 1, list), APP_CMD_NO_STORE);
     ASSERT_EQ_INT(app_command_class(CLI_CMD_BRAIN, 1, prune), APP_CMD_NO_STORE);
     ASSERT_EQ_INT(app_command_class(CLI_CMD_BRAIN, 1, new_id), APP_CMD_WRITE);
+    ASSERT_EQ_INT(app_command_class(CLI_CMD_BRAIN, 2, sweep), APP_CMD_WRITE);
 }
 
 /* A top-level verb with no row: `tags` renamed to `tagz`. */
@@ -508,17 +510,17 @@ TEST(cli_verbs_rows_outside_the_verbs_section_are_ignored)
     free(spec);
 }
 
-/* A planned subcommand under an existing noun (brain sweep, plan 32) does not
-   count as the noun's main row: with every shipped brain row planned, `brain`
-   has no main row. */
+/* A planned subcommand under an existing noun does not count as the noun's main
+   row: with every brain row planned, `brain` has no main row. */
 TEST(cli_verbs_planned_subcommand_does_not_cover_its_noun)
 {
+    enum { BRAIN_ROWS = 4 }; /* new-id, list, prune, sweep: each a subcommand with no row */
     char *spec = given_row_edit("brain new-id", "| main |", "| 26 |");
 
     spec = row_edit(spec, "brain list", "| main |", "| 26 |");
     spec = row_edit(spec, "brain prune", "| main |", "| 26 |");
-    ASSERT_TRUE(spec != NULL && strstr(spec, "| `remember brain sweep` |") != NULL);
-    assert_mismatch(spec, 4, "dispatch verb has no plan main row: brain\n");
+    spec = row_edit(spec, "brain sweep", "| main |", "| 32 |");
+    assert_mismatch(spec, BRAIN_ROWS + 1, "dispatch verb has no plan main row: brain\n");
     free(spec);
 }
 

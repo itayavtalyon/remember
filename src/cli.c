@@ -131,10 +131,6 @@ const char *cli_command_name(CliCommand cmd)
 {
     int i = 0;
 
-    /* The sweep's top-level token is `brain` (`brain sweep`). */
-    if (cmd == CLI_CMD_SWEEP) {
-        cmd = CLI_CMD_BRAIN;
-    }
     for (i = 0; i < COMMAND_COUNT; i++) {
         if (k_commands[i].command == cmd) {
             return k_commands[i].name;
@@ -175,6 +171,7 @@ static const SubcommandEntry k_subcommands[CLI_SUB_COUNT] = {
     [CLI_SUB_BRAIN_NEW_ID] = {.name = "new-id", .parent = CLI_CMD_BRAIN},
     [CLI_SUB_BRAIN_LIST] = {.name = "list", .parent = CLI_CMD_BRAIN},
     [CLI_SUB_BRAIN_PRUNE] = {.name = "prune", .parent = CLI_CMD_BRAIN},
+    [CLI_SUB_BRAIN_SWEEP] = {.name = "sweep", .parent = CLI_CMD_BRAIN},
     [CLI_SUB_DEVICE_NEW] = {.name = "new", .parent = CLI_CMD_DEVICE},
     [CLI_SUB_CONFLICT_ACCEPT] = {.name = "accept", .parent = CLI_CMD_CONFLICT},
     [CLI_SUB_REPAIR_SEARCH_INDEX] = {.name = "search-index", .parent = CLI_CMD_REPAIR},
@@ -668,15 +665,6 @@ void cli_parse(int argc, char *const *argv, CliArgs *out)
     if (out->command == CLI_CMD_HELP) {
         apply_bare_help_command(out);
         return;
-    }
-    /* `brain sweep [--all]` is the sweep command (decision:2026-11-18-sweep-under-brain): its
-       arguments are the ones after "sweep". There is no top-level `sweep`. */
-    if (out->command == CLI_CMD_BRAIN && out->rest_argc > 0 &&
-        strcmp(out->rest_argv[0], "sweep") == 0) {
-        out->command = CLI_CMD_SWEEP;
-        out->rest_argc--;
-        memmove((void *)out->rest_argv, (const void *)(out->rest_argv + 1),
-                sizeof(*out->rest_argv) * (size_t)out->rest_argc);
     }
     out->error = CLI_ERR_OK;
 }
