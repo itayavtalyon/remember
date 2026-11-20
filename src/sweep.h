@@ -11,7 +11,8 @@
  * (store_sweep) and writes their memory.expired events; this module is the command around it.
  */
 
-/* `brain sweep [--all]` (the arguments after "sweep"): 0 with *all set, or -1 after the usage error is printed. */
+/* `brain sweep [--all]` (the arguments after "sweep"): 0 with *all set, or -1 after the usage error
+ * is printed. */
 int sweep_parse(int rest_argc, const char **rest_argv, bool *all);
 
 /* Sweep this brain now, if this process can write it (a newer brain is skipped, and *marked is
@@ -26,8 +27,8 @@ int cmd_sweep(Store *s, bool json, int rest_argc, const char **rest_argv);
    printed. A brain from a newer remember is 0 with nothing marked. */
 typedef int (*SweepBrainFn)(const void *ctx, const char *path, size_t *marked);
 
-/* `remember brain sweep --all`: each brain of brains.json, in file order. A path with no brain gets the
-   brain_missing warning and its entry stays. 0, or the exit code. */
+/* `remember brain sweep --all`: each brain of brains.json, in file order. A path with no brain gets
+   the brain_missing warning and its entry stays. 0, or the exit code. */
 int cmd_sweep_all(bool json, SweepBrainFn sweep_one, const void *ctx);
 
 #endif /* REMEMBER_SWEEP_H */

@@ -6871,8 +6871,7 @@ static StoreStatus hard_delete_tx(Store *s, long long id_or_zero, const char *ke
     if (st != STORE_OK) {
         return st;
     }
-    st = load_then_check_bin(s->db, id_or_zero, key_or_null, NULL, bin, now, out_deleted,
-                             &s->last);
+    st = load_then_check_bin(s->db, id_or_zero, key_or_null, NULL, bin, now, out_deleted, &s->last);
     if (st != STORE_OK) {
         rollback_quiet(s->db);
         return st;

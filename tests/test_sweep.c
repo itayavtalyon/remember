@@ -504,7 +504,8 @@ TEST(sweep_all_reads_brains_json_and_warns_missing)
     cmd_result_free(&r);
     r = RUN(one, "--json", "brain", "sweep", "--all");
     ASSERT_EQ_INT(r.exit_code, 0);
-    ASSERT_STR_CONTAINS(r.out, "\"type\":\"brain.sweep.result\",\"data\":{\"expired\":0,\"brains\":[");
+    ASSERT_STR_CONTAINS(r.out,
+                        "\"type\":\"brain.sweep.result\",\"data\":{\"expired\":0,\"brains\":[");
     ASSERT_STR_CONTAINS(r.out, "\"warnings\":[{\"code\":\"brain_missing\"");
     {
         /* the missing brain is listed with 0, in brains.json order */
