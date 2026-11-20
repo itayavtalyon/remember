@@ -2756,11 +2756,14 @@ TEST(store_sweep_marks_the_due_rows_once_and_writes_one_expired_event_for_each)
     ASSERT_EQ_STATUS(store_sweep(rig.store, k_now, &marked), STORE_OK);
     ASSERT_EQ_INT(marked, 2);
     assert_outbox_types(&rig, "memory.expired,memory.expired");
-    assert_db(&rig, "SELECT group_concat(local_id) FROM entries WHERE expired_at = '2026-11-18T12:00:00.000Z';",
-              "1,3");
-    assert_db(&rig, "SELECT group_concat(json_extract(payload, '$.occurred_at') || '/' || "
-                    "json_extract(payload, '$.detected_at') || '/' || json_extract(payload, "
-                    "'$.cause.command'), ' ') FROM outbox;",
+    assert_db(
+        &rig,
+        "SELECT group_concat(local_id) FROM entries WHERE expired_at = '2026-11-18T12:00:00.000Z';",
+        "1,3");
+    assert_db(&rig,
+              "SELECT group_concat(json_extract(payload, '$.occurred_at') || '/' || "
+              "json_extract(payload, '$.detected_at') || '/' || json_extract(payload, "
+              "'$.cause.command'), ' ') FROM outbox;",
               "2020-01-01T00:00:00.000Z/2026-11-18T12:00:00.000Z/sweep "
               "2020-01-01T00:00:00.000Z/2026-11-18T12:00:00.000Z/sweep");
     assert_db(&rig, "SELECT count(DISTINCT json_extract(payload, '$.batch_id')) FROM outbox;", "1");
@@ -2906,33 +2909,37 @@ TEST(a_later_expiry_a_cleared_one_or_a_restore_clears_the_mark_and_an_earlier_on
                      STORE_OK);
     assert_db(&rig, "SELECT expired_at IS NOT NULL FROM entries;", "1");
     /* later: cleared */
-    ASSERT_EQ_STATUS(update_memory(&rig, id,
-                                   (StoreUpdate){.set_expires = true,
-                                                 .expires_at = k_future,
-                                                 .bin = STORE_BIN_EXPIRED}),
-                     STORE_OK);
+    ASSERT_EQ_STATUS(
+        update_memory(
+            &rig, id,
+            (StoreUpdate){.set_expires = true, .expires_at = k_future, .bin = STORE_BIN_EXPIRED}),
+        STORE_OK);
     assert_db(&rig, "SELECT expired_at IS NOT NULL FROM entries;", "0");
     /* due again and marked, then no expiry at all: cleared */
-    free(harness_sqlite_query_line(rig.db, "UPDATE entries SET expires_at = '2020-01-01T00:00:00.000Z', "
-                                           "expired_at = '2021-01-01T00:00:00.000Z';"));
-    ASSERT_EQ_STATUS(update_memory(&rig, id,
-                                   (StoreUpdate){.set_expires = true,
-                                                 .expires_at = NULL,
-                                                 .bin = STORE_BIN_EXPIRED}),
-                     STORE_OK);
+    free(harness_sqlite_query_line(rig.db,
+                                   "UPDATE entries SET expires_at = '2020-01-01T00:00:00.000Z', "
+                                   "expired_at = '2021-01-01T00:00:00.000Z';"));
+    ASSERT_EQ_STATUS(
+        update_memory(
+            &rig, id,
+            (StoreUpdate){.set_expires = true, .expires_at = NULL, .bin = STORE_BIN_EXPIRED}),
+        STORE_OK);
     assert_db(&rig, "SELECT expired_at IS NOT NULL FROM entries;", "0");
     /* a marked row that has no expiry and gets one: cleared */
-    free(harness_sqlite_query_line(rig.db, "UPDATE entries SET expired_at = '2021-01-01T00:00:00.000Z';"));
-    ASSERT_EQ_STATUS(update_memory(&rig, id,
-                                   (StoreUpdate){.set_expires = true,
-                                                 .expires_at = k_future,
-                                                 .bin = STORE_BIN_LIVE}),
-                     STORE_OK);
+    free(harness_sqlite_query_line(rig.db,
+                                   "UPDATE entries SET expired_at = '2021-01-01T00:00:00.000Z';"));
+    ASSERT_EQ_STATUS(
+        update_memory(
+            &rig, id,
+            (StoreUpdate){.set_expires = true, .expires_at = k_future, .bin = STORE_BIN_LIVE}),
+        STORE_OK);
     assert_db(&rig, "SELECT expired_at IS NOT NULL FROM entries;", "0");
     /* deleted and restored, marked in between: cleared by the restore */
-    free(harness_sqlite_query_line(rig.db, "UPDATE entries SET expired_at = '2021-01-01T00:00:00.000Z';"));
+    free(harness_sqlite_query_line(rig.db,
+                                   "UPDATE entries SET expired_at = '2021-01-01T00:00:00.000Z';"));
     delete_memory(&rig, id);
-    free(harness_sqlite_query_line(rig.db, "UPDATE entries SET expired_at = '2021-01-01T00:00:00.000Z';"));
+    free(harness_sqlite_query_line(rig.db,
+                                   "UPDATE entries SET expired_at = '2021-01-01T00:00:00.000Z';"));
     restore_memory(&rig, id);
     assert_db(&rig, "SELECT expired_at IS NOT NULL FROM entries;", "0");
     rig_close(&rig);
@@ -3737,7 +3744,8 @@ void register_events_tests(void)
     RUN_TEST(store_sweep_refuses_a_newer_brain_and_writes_nothing);
     RUN_TEST(sweep_commits_its_marks_with_its_events);
     RUN_TEST(a_later_expiry_a_cleared_one_or_a_restore_clears_the_mark_and_an_earlier_one_keeps_it);
-    RUN_TEST(store_soft_delete_expired_moves_the_due_rows_in_one_transaction_with_one_deleted_event_each);
+    RUN_TEST(
+        store_soft_delete_expired_moves_the_due_rows_in_one_transaction_with_one_deleted_event_each);
     RUN_TEST(delete_expired_moves_all_its_rows_with_their_events_or_none);
 #ifdef REMEMBER_PLUGINS_DIAG_TEST
     RUN_TEST(a_plugin_gets_rows_only_once_it_is_enabled_for_the_brain);

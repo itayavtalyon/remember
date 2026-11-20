@@ -52,8 +52,6 @@ StoreStatus sweep_now(Store *s, size_t *marked)
 /* The data of sweep.result: the total, and for --all each brain's count. */
 static int write_result(bool json, size_t total, const BrainList *list, const size_t *counts)
 {
-    size_t i = 0;
-
     if (!json) {
         return fprintf(app_out(), "%zu\n", total) < 0 ? -1 : 0;
     }
@@ -64,9 +62,8 @@ static int write_result(bool json, size_t total, const BrainList *list, const si
         if (fputs(",\"brains\":[", app_out()) < 0) {
             return -1;
         }
-        for (i = 0; i < list->count; i++) {
-            if ((i > 0U && fputc(',', app_out()) == EOF) ||
-                fputs("{\"path\":", app_out()) < 0 ||
+        for (size_t i = 0; i < list->count; i++) {
+            if ((i > 0U && fputc(',', app_out()) == EOF) || fputs("{\"path\":", app_out()) < 0 ||
                 output_json_string(app_out(), list->rows[i].path) != 0 ||
                 fprintf(app_out(), ",\"expired\":%zu}", counts[i]) < 0) {
                 return -1;
@@ -79,7 +76,8 @@ static int write_result(bool json, size_t total, const BrainList *list, const si
     return fputc('}', app_out()) == EOF ? -1 : 0;
 }
 
-/* The arguments were parsed by sweep_parse before the brain opened (a usage error opens nothing). */
+/* The arguments were parsed by sweep_parse before the brain opened (a usage error opens nothing).
+ */
 int cmd_sweep(Store *s, bool json, int rest_argc, const char **rest_argv)
 {
     size_t marked = 0U;

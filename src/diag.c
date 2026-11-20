@@ -92,8 +92,9 @@ static const char *const k_error_codes[DIAG_CODE_COUNT] = {
    failure under the same code. schema_too_new and not_found are locked text (C-01,
    JSON-STYLE); the rest are C-42 drafts. usage is built from the command in usage_fix. wrong_bin's
    row is a draft that no command prints (decision:open-2026-11-18-plan32-wrong-bin-fix-copy): each
-   caller passes the fix of its own case (decision:2026-11-18-plan32-grill-sweep-warning-and-wrong-bin;
-   wrong_bin_fix in commands_common.c). */
+   caller passes the fix of its own case
+   (decision:2026-11-18-plan32-grill-sweep-warning-and-wrong-bin; wrong_bin_fix in
+   commands_common.c). */
 static const char *const k_fix[DIAG_CODE_COUNT] = {
     [DIAG_NOT_FOUND] = "Run 'remember list' to see keys.",
     [DIAG_WRONG_BIN] = "Check which list the memory is in: live, expired, or the Trash.",

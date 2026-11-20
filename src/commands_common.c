@@ -688,8 +688,8 @@ int exit_wrong_list(StoreStatus st, const char *label)
     char *fix = NULL;
     int rc = REMEMBER_WRONG_BIN;
 
-    if (label == NULL || (st != STORE_ERR_DELETED && st != STORE_ERR_EXPIRED &&
-                          st != STORE_ERR_NOT_DELETED)) {
+    if (label == NULL ||
+        (st != STORE_ERR_DELETED && st != STORE_ERR_EXPIRED && st != STORE_ERR_NOT_DELETED)) {
         err_msg(DIAG_INTERNAL, "internal error");
         return REMEMBER_ERR;
     }

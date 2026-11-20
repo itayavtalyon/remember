@@ -7256,6 +7256,8 @@ StoreStatus store_update(Store *s, long long id, const StoreUpdate *u, const cha
     return load_entry_by_id(s->db, entry_id, out_entry, &s->last);
 }
 
+/* cppcheck-suppress staticFunction ; public API (store.h); used by tests, no command since plan 32
+ */
 StoreStatus store_purge(Store *s, StoreBin bin, const char *now, Entry **out_entries,
                         size_t *out_count)
 {

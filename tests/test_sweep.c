@@ -95,8 +95,8 @@ static void assert_marked(const char *db, int id, bool marked)
 {
     char sql[128];
 
-    (void)snprintf(sql, sizeof(sql), "SELECT expired_at IS NOT NULL FROM entries WHERE local_id = %d;",
-                   id);
+    (void)snprintf(sql, sizeof(sql),
+                   "SELECT expired_at IS NOT NULL FROM entries WHERE local_id = %d;", id);
     if (marked) {
         assert_query(db, sql, "1");
     } else {
@@ -116,18 +116,21 @@ TEST(sweep_emits_once_and_revival_clears)
     assert_ok(RUN(db, "list"));
     assert_rows(db, "memory.created,memory.expired");
     assert_marked(db, 1, true);
-    assert_query(db, "SELECT json_extract(payload, '$.occurred_at') FROM outbox WHERE type = "
-                     "'memory.expired';",
+    assert_query(db,
+                 "SELECT json_extract(payload, '$.occurred_at') FROM outbox WHERE type = "
+                 "'memory.expired';",
                  k_past);
     assert_query(db,
                  "SELECT json_extract(payload, '$.detected_at') > json_extract(payload, "
                  "'$.occurred_at') FROM outbox WHERE type = 'memory.expired';",
                  "1");
-    assert_query(db, "SELECT json_extract(payload, '$.cause.command') || ' ' || json_extract(payload, "
-                     "'$.cause.origin') FROM outbox WHERE type = 'memory.expired';",
+    assert_query(db,
+                 "SELECT json_extract(payload, '$.cause.command') || ' ' || json_extract(payload, "
+                 "'$.cause.origin') FROM outbox WHERE type = 'memory.expired';",
                  "sweep local");
-    assert_query(db, "SELECT json_extract(payload, '$.memory.bin') FROM outbox WHERE type = "
-                     "'memory.expired';",
+    assert_query(db,
+                 "SELECT json_extract(payload, '$.memory.bin') FROM outbox WHERE type = "
+                 "'memory.expired';",
                  "expired");
     /* A second command emits nothing for that row. */
     assert_ok(RUN(db, "list"));
@@ -141,8 +144,9 @@ TEST(sweep_emits_once_and_revival_clears)
     backdate(db, 1, k_past_two);
     assert_ok(RUN(db, "list"));
     assert_rows(db, "memory.created,memory.expired,memory.updated,memory.expired");
-    assert_query(db, "SELECT json_extract(payload, '$.occurred_at') FROM outbox ORDER BY rowid DESC "
-                     "LIMIT 1;",
+    assert_query(db,
+                 "SELECT json_extract(payload, '$.occurred_at') FROM outbox ORDER BY rowid DESC "
+                 "LIMIT 1;",
                  k_past_two);
     free(db);
 }
@@ -230,8 +234,8 @@ TEST(one_sweep_is_one_batch_apart_from_the_command_that_ran_before_it)
                  "SELECT count(DISTINCT json_extract(payload, '$.batch_id')) FROM outbox WHERE "
                  "type = 'memory.expired';",
                  "1");
-    assert_query(db,
-                 "SELECT count(DISTINCT json_extract(payload, '$.batch_id')) FROM outbox;", "3");
+    assert_query(db, "SELECT count(DISTINCT json_extract(payload, '$.batch_id')) FROM outbox;",
+                 "3");
     free(db);
 }
 
@@ -243,8 +247,9 @@ TEST(a_memory_added_already_due_is_created_by_the_command_and_expired_by_the_swe
     assert_rows(db, "memory.created,memory.expired");
     assert_query(db, "SELECT json_extract(payload, '$.cause.command') FROM outbox ORDER BY rowid;",
                  "add");
-    assert_query(db, "SELECT json_extract(payload, '$.cause.command') FROM outbox ORDER BY rowid "
-                     "DESC LIMIT 1;",
+    assert_query(db,
+                 "SELECT json_extract(payload, '$.cause.command') FROM outbox ORDER BY rowid "
+                 "DESC LIMIT 1;",
                  "sweep");
     free(db);
 }
@@ -252,9 +257,10 @@ TEST(a_memory_added_already_due_is_created_by_the_command_and_expired_by_the_swe
 TEST(every_command_that_opens_the_brain_read_write_sweeps_after_it_commits)
 {
     static const char *const k_commands[][3] = {
-        {"list", NULL, NULL}, {"tags", NULL, NULL},   {"search", "anything", NULL},
-        {"add", "more", NULL}, {"settings", "list", NULL}, {"device", NULL, NULL},
-        {"conflicts", NULL, NULL}, {"repair", "search-index", NULL},
+        {"list", NULL, NULL},         {"tags", NULL, NULL},
+        {"search", "anything", NULL}, {"add", "more", NULL},
+        {"settings", "list", NULL},   {"device", NULL, NULL},
+        {"conflicts", NULL, NULL},    {"repair", "search-index", NULL},
     };
     char *db = given_brain_with_enabled_plugin();
 
@@ -519,7 +525,8 @@ TEST(sweep_all_skips_a_newer_brain_and_a_brain_that_cannot_be_swept_warns)
     free(one);
 }
 
-/* ---- remember purge LOCATOR ------------------------------------------------------------------- */
+/* ---- remember purge LOCATOR -------------------------------------------------------------------
+ */
 
 TEST(purge_live_exits_3_wrong_bin)
 {
@@ -577,10 +584,11 @@ TEST(purge_deleted_writes_one_tombstone)
     {
         char sql[256];
 
-        (void)snprintf(sql, sizeof(sql),
-                       "SELECT count(*) || ' ' || (id = '%s') || ' ' || (change_seq = %s) || ' ' || "
-                       "(change_seq = (SELECT change_seq FROM brain_meta)) FROM tombstones;",
-                       uuid, seq);
+        (void)snprintf(
+            sql, sizeof(sql),
+            "SELECT count(*) || ' ' || (id = '%s') || ' ' || (change_seq = %s) || ' ' || "
+            "(change_seq = (SELECT change_seq FROM brain_meta)) FROM tombstones;",
+            uuid, seq);
         assert_query(db, sql, "1 1 1 1");
     }
     free(uuid);
@@ -656,8 +664,9 @@ TEST(purge_event_is_one_purged_with_the_last_state_of_the_row)
     exec_sql(db, "DELETE FROM outbox;");
     assert_ok(RUN(db, "purge", "1"));
     assert_rows(db, "memory.purged");
-    assert_query(db, "SELECT json_extract(payload, '$.memory.body') || ' ' || json_extract(payload, "
-                     "'$.cause.command') || ' ' || json_extract(payload, '$.memory.bin') FROM outbox;",
+    assert_query(db,
+                 "SELECT json_extract(payload, '$.memory.body') || ' ' || json_extract(payload, "
+                 "'$.cause.command') || ' ' || json_extract(payload, '$.memory.bin') FROM outbox;",
                  "last words purge deleted");
     free(db);
 }
@@ -711,7 +720,8 @@ TEST(purge_json_reports_one_purged_entry)
     free(db);
 }
 
-/* ---- delete --expired ------------------------------------------------------------------------- */
+/* ---- delete --expired -------------------------------------------------------------------------
+ */
 
 TEST(delete_deleted_unknown)
 {
@@ -755,10 +765,11 @@ TEST(delete_expired_moves_all_due_emits_deleted_only)
     cmd_result_free(&r);
     /* deleted only: no expired for rows that moved to Deleted, none from the sweep after. */
     assert_rows(db, "memory.deleted,memory.deleted");
+    assert_query(db, "SELECT count(DISTINCT json_extract(payload, '$.batch_id')) FROM outbox;",
+                 "1");
     assert_query(db,
-                 "SELECT count(DISTINCT json_extract(payload, '$.batch_id')) FROM outbox;", "1");
-    assert_query(db, "SELECT group_concat(local_id) FROM (SELECT local_id FROM entries WHERE "
-                     "deleted_at IS NOT NULL ORDER BY local_id);",
+                 "SELECT group_concat(local_id) FROM (SELECT local_id FROM entries WHERE "
+                 "deleted_at IS NOT NULL ORDER BY local_id);",
                  "1,2,5");
     assert_query(db, "SELECT count(*) FROM entries WHERE deleted_at IS NULL;", "2");
     assert_query(db, "SELECT count(*) FROM entries;", "5");
@@ -841,7 +852,8 @@ void register_sweep_tests(void)
     RUN_TEST(sweep_no_plugins_no_row);
     RUN_TEST(the_sweep_leaves_live_deleted_and_unexpiring_rows_alone);
     RUN_TEST(one_sweep_is_one_batch_apart_from_the_command_that_ran_before_it);
-    RUN_TEST(a_memory_added_already_due_is_created_by_the_command_and_expired_by_the_sweep_after_it);
+    RUN_TEST(
+        a_memory_added_already_due_is_created_by_the_command_and_expired_by_the_sweep_after_it);
     RUN_TEST(every_command_that_opens_the_brain_read_write_sweeps_after_it_commits);
     RUN_TEST(a_command_that_fails_still_sweeps_after_it);
     RUN_TEST(a_command_that_opens_no_brain_does_not_sweep);

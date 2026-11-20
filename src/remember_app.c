@@ -155,7 +155,8 @@ static void print_command_help(CliCommand topic)
         (void)fprintf(out, "Options:\n");
         (void)fprintf(out, "  ID              Entry id (positional)\n");
         (void)fprintf(out, "  --key KEY       Locate by key instead of id\n");
-        (void)fprintf(out, "  --expired       Move every expired memory to the Trash (no ID or --key)\n");
+        (void)fprintf(
+            out, "  --expired       Move every expired memory to the Trash (no ID or --key)\n");
         (void)fprintf(out, "  --as KIND       human|agent|tool|share (default human)\n");
         (void)fprintf(out, "  --actor ID      1 to 64 of A-Za-z0-9_./:-\n");
         print_hooks_help(out);
@@ -264,7 +265,8 @@ static void print_command_help(CliCommand topic)
     } else if (topic == CLI_CMD_SWEEP) {
         (void)fprintf(out, "Mark every memory past its expiry as expired.\n");
         (void)fprintf(out, "Options:\n");
-        (void)fprintf(out, "  --all           Sweep every brain in brains.json, not just this one\n");
+        (void)fprintf(out,
+                      "  --all           Sweep every brain in brains.json, not just this one\n");
         (void)fprintf(out, "\n");
         (void)fprintf(out, "Every command runs this after it, so you rarely need it.\n");
         (void)fprintf(out, "Human stdout: the count of memories marked.\n");
