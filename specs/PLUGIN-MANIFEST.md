@@ -71,7 +71,7 @@ A `protocol` number other than `1` is `plugin_protocol_unsupported` (exit 1, `re
 
 ## Settings declarations
 
-`decision:settings-scheme`, `decision:2026-10-22-m-17`. Plan 30 turns these into registry rows.
+`decision:settings-scheme`, `decision:2026-10-22-m-17`. Plan 30 turns these into registry rows (SETTINGS.md § Plugin keys). A manifest whose default, or an enum value, is not text the registry accepts (it holds a control byte or DEL) registers none of its keys.
 
 Each item of `settings` has `key`, `description` (at most 200 characters), `type`, `default`, and optional `range` and `scope`. At most 16 items.
 

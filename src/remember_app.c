@@ -8,6 +8,8 @@
 #include "diag.h"
 #include "exit_codes.h"
 #include "output.h"
+#include "plugin_settings.h"
+#include "settings.h"
 #include "store.h"
 #include "util.h"
 
@@ -560,6 +562,8 @@ static Store *open_store(const CliArgs *args, int *out_rc)
     return s;
 }
 
+enum { ERR_TEXT_CAP = 256 };
+
 typedef int (*CmdFn)(Store *s, bool json, int rest_argc, const char **rest_argv);
 
 /* The class of every command (plan 27b). A command added to CliCommand and not
@@ -630,20 +634,59 @@ static int meet_newer_brain(const Store *s, const CliArgs *args)
     return 0;
 }
 
+/* The keys the brain's settings calls know: the compiled-in rows, plugin.hybrid.enabled, and
+   the keys of each plugin in <data dir>/plugins (plan 30). With no data dir (HOME and
+   XDG_DATA_HOME unset) no plugin is installed, as far as anyone can tell. 0, or the exit code. */
+static int load_registry(SettingsRegistry **out)
+{
+    char dir[REMEMBER_PATH_MAX];
+    char err[ERR_TEXT_CAP];
+    int sys_errno = 0;
+    PluginSettingsStatus st = PLUGIN_SETTINGS_OK;
+    SettingsRegistry *reg = settings_registry_new();
+
+    *out = reg;
+    if (reg == NULL || plugin_settings_register_hybrid(reg) != PLUGIN_SETTINGS_OK) {
+        err_msg(DIAG_OUT_OF_MEMORY, "out of memory");
+        return REMEMBER_ERR;
+    }
+    if (util_resolve_data_dir(dir, sizeof(dir) - sizeof("/plugins"), err, sizeof(err)) != 0) {
+        return 0;
+    }
+    /* The data dir left room for the folder name. */
+    (void)snprintf(dir + strlen(dir), sizeof("/plugins"), "/plugins");
+    st = plugin_settings_load(dir, reg, &sys_errno);
+    if (st == PLUGIN_SETTINGS_OOM) {
+        err_msg(DIAG_OUT_OF_MEMORY, "out of memory");
+        return REMEMBER_ERR;
+    }
+    if (st == PLUGIN_SETTINGS_DIR) {
+        err_msg(DIAG_CANNOT_OPEN, "cannot read the plugins folder");
+        return REMEMBER_ERR;
+    }
+    return 0;
+}
+
 static int run_with_store(const CliArgs *args, CmdFn fn)
 {
     Store *s = NULL;
+    SettingsRegistry *reg = NULL;
     int rc = 0;
 
     s = open_store(args, &rc);
     if (s == NULL) {
         return rc;
     }
-    rc = meet_newer_brain(s, args);
+    rc = load_registry(&reg);
+    if (rc == 0) {
+        store_set_settings_registry(s, reg);
+        rc = meet_newer_brain(s, args);
+    }
     if (rc == 0) {
         rc = fn(s, args->globals.json, args->rest_argc, args->rest_argv);
     }
     store_close(s);
+    settings_registry_free(reg);
     return rc;
 }
 

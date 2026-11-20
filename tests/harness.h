@@ -3,6 +3,7 @@
 
 #include <stdbool.h>
 #include <stddef.h>
+#include <string.h>
 
 /* Shared test constants (enum so a header include never warns "unused"). */
 enum {
@@ -86,6 +87,13 @@ char *harness_sqlite_query_line_at(const char *db_path, const char *sql, Harness
 void harness_make_v5_source_at(const char *db_path, HarnessSite site);
 #define harness_make_v5_source(db_path)                                                            \
     harness_make_v5_source_at((db_path), (HarnessSite){__FILE__, __LINE__})
+
+/* Write len bytes to path, making each missing folder above it (mode 0700). A fixture that
+   cannot be written fails the calling test at the caller's line. */
+// NOLINTNEXTLINE(bugprone-easily-swappable-parameters) path, then the bytes
+void harness_write_bytes_at(const char *path, const char *bytes, size_t len, HarnessSite site);
+#define harness_write_file(path, text)                                                             \
+    harness_write_bytes_at((path), (text), strlen(text), (HarnessSite){__FILE__, __LINE__})
 
 /* Remove dir and everything under it (best effort). For mkdtemp folders a test
    made itself, which also hold each brain's <db>.d folder. */

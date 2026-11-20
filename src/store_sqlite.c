@@ -42,7 +42,8 @@ struct Store {
     StoreError last; /* last captured SQLite failure (zero when none) */
     char *path;
     char *device_id;
-    MigrationWarning *warnings; /* this open's v6 step; nwarnings items */
+    MigrationWarning *warnings;       /* this open's v6 step; nwarnings items */
+    const SettingsRegistry *registry; /* not owned; NULL is the compiled-in rows */
     size_t nwarnings;
     ChangeSeqTx change_tx;
     int brain_schema;    /* the brain's user_version, read at open */
@@ -2991,6 +2992,21 @@ StoreSettingWarning store_open_warning(const Store *s, size_t i)
     }
     return (StoreSettingWarning){
         .key = k_prefixes_key, .value = s->warnings[i].value, .reason = s->warnings[i].reason};
+}
+
+void store_set_settings_registry(Store *s, const SettingsRegistry *reg)
+{
+    if (s != NULL) {
+        s->registry = reg;
+    }
+}
+
+const SettingsRegistry *store_settings_registry(const Store *s)
+{
+    if (s == NULL || s->registry == NULL) {
+        return settings_registry_builtin();
+    }
+    return s->registry;
 }
 
 /* ---- status / entry helpers ---------------------------------------------- */
@@ -11570,8 +11586,8 @@ SettingStatus store_setting_set(Store *brain, const char *user_db, const Setting
         setting_fail(out, SETTING_ERR_STORE);
         return SETTING_ERR_STORE;
     }
-    st = setting_prepare(w->key, w->items, w->nitems, w->layer, json, sizeof(json), &spec, &layer,
-                         err, errlen);
+    st = setting_prepare(store_settings_registry(brain), w->key, w->items, w->nitems, w->layer,
+                         json, sizeof(json), &spec, &layer, err, errlen);
     if (st != SETTING_OK) {
         setting_fail(out, st);
         return st;
@@ -11654,7 +11670,8 @@ SettingStatus store_setting_reset(Store *brain, const char *user_db, const char 
         setting_fail(out, SETTING_ERR_STORE);
         return SETTING_ERR_STORE;
     }
-    st = setting_choose_layer(key, layer, &spec, &chosen, err, errlen);
+    st = setting_choose_layer(store_settings_registry(brain), key, layer, &spec, &chosen, err,
+                              errlen);
     if (st != SETTING_OK) {
         setting_fail(out, st);
         return st;
@@ -12543,14 +12560,15 @@ static int import_list_items(sqlite3 *db, const char *array, char ***out, size_t
 
 /* The canonical stored value, as settings set would write it. 0 valid, 1 not
    (invalid_value, including over 16 KiB), -1 a store failure. */
-static int import_value(sqlite3 *db, const SettingSpec *spec, SettingLayer layer,
+static int import_value(const Store *brain, const SettingSpec *spec, SettingLayer layer,
                         const ImportIn *in, char *json, size_t cap, char *err, size_t errlen)
 {
+    const SettingsRegistry *reg = store_settings_registry(brain);
     char perr[IMPORT_PREPARE_ERR];
     SettingLayer chosen = SETTING_LAYER_AUTO;
     SettingStatus st = SETTING_OK;
 
-    if (spec->type == SETTING_STRING_LIST) {
+    if (spec->type == SETTING_STRING_LIST || spec->type == SETTING_TEXT_LIST) {
         char **items = NULL;
         size_t n = 0;
         int rc = 0;
@@ -12558,21 +12576,29 @@ static int import_value(sqlite3 *db, const SettingSpec *spec, SettingLayer layer
         if (!member_is(in, IM_VALUE, "array")) {
             return 1;
         }
-        rc = import_list_items(db, in->json[IM_VALUE], &items, &n, err, errlen);
+        rc = import_list_items(brain->db, in->json[IM_VALUE], &items, &n, err, errlen);
         if (rc != 0) {
             return rc;
         }
-        st = setting_prepare(spec->key, (const char *const *)items, n, layer, json, cap, NULL,
+        st = setting_prepare(reg, spec->key, (const char *const *)items, n, layer, json, cap, NULL,
                              &chosen, perr, sizeof(perr));
         free_items(items, n);
     } else {
         const char *one[1];
 
-        if (!member_is(in, IM_VALUE, spec->type == SETTING_INTEGER ? "integer" : "text")) {
-            return 1;
+        if (spec->type == SETTING_BOOLEAN) {
+            /* SQLite reads a JSON true as the number 1, so the member's JSON type is the value. */
+            if (!member_is(in, IM_VALUE, "true") && !member_is(in, IM_VALUE, "false")) {
+                return 1;
+            }
+            one[0] = in->type[IM_VALUE];
+        } else {
+            if (!member_is(in, IM_VALUE, spec->type == SETTING_INTEGER ? "integer" : "text")) {
+                return 1;
+            }
+            one[0] = in->text[IM_VALUE];
         }
-        one[0] = in->text[IM_VALUE];
-        st = setting_prepare(spec->key, one, 1U, layer, json, cap, NULL, &chosen, perr,
+        st = setting_prepare(reg, spec->key, one, 1U, layer, json, cap, NULL, &chosen, perr,
                              sizeof(perr));
     }
     return st == SETTING_OK ? 0 : 1;
@@ -12618,9 +12644,15 @@ static int import_validate(const ImportCtx *ctx, const ImportIn *in, const Setti
         row->reason = SETTING_SKIP_BAD_SHAPE;
         return 0;
     }
-    *spec = setting_by_key(in->text[IM_KEY]);
+    *spec = setting_by_key(store_settings_registry(ctx->brain), in->text[IM_KEY]);
     if (*spec == NULL) {
+        char plugin[SETTING_KEY_MAX + 1];
+
         row->reason = SETTING_SKIP_UNKNOWN_KEY;
+        if (setting_plugin_missing(store_settings_registry(ctx->brain), in->text[IM_KEY], plugin,
+                                   sizeof(plugin))) {
+            row->reason = SETTING_SKIP_PLUGIN_NOT_INSTALLED;
+        }
         return 0;
     }
     if (row->scope == SETTING_LAYER_AUTO) {
@@ -12637,7 +12669,7 @@ static int import_validate(const ImportCtx *ctx, const ImportIn *in, const Setti
         row->reason = SETTING_SKIP_LAYER_NOT_ALLOWED;
         return 0;
     }
-    rc = import_value(ctx->brain->db, *spec, row->scope, in, json, SETTING_VALUE_CAP, ctx->err,
+    rc = import_value(ctx->brain, *spec, row->scope, in, json, SETTING_VALUE_CAP, ctx->err,
                       ctx->errlen);
     if (rc != 0) {
         row->reason = SETTING_SKIP_INVALID_VALUE;
@@ -13310,6 +13342,26 @@ SettingStatus store_setting_history(Store *brain, const char *user_db, const Set
     return SETTING_OK;
 }
 
+/* decision:2026-11-17-plan30-review-grill G1 A: a plugin value the row refuses is not set. A
+   compiled key keeps failing on a bad row: a helper id outside the grammar must stop the token
+   lookup, not fall back to env. */
+static void drop_refused_plugin_layers(const SettingSpec *spec, SettingRead *out)
+{
+    char plugin[SETTING_KEY_MAX + 1];
+
+    if (!setting_plugin_name(spec->key, plugin, sizeof(plugin))) {
+        return;
+    }
+    if (spec->allow_user && out->user_live && !setting_stored_ok(spec, out->user_value)) {
+        out->user_refused = true;
+        out->user_live = false;
+    }
+    if (spec->allow_brain && out->brain_live && !setting_stored_ok(spec, out->brain_value)) {
+        out->brain_refused = true;
+        out->brain_live = false;
+    }
+}
+
 SettingStatus store_setting_read(Store *brain, const char *user_db, const char *key,
                                  const char *flag_text, SettingRead *out, char *err, size_t errlen)
 {
@@ -13336,7 +13388,7 @@ SettingStatus store_setting_read(Store *brain, const char *user_db, const char *
         set_err(err, errlen, "internal error");
         return SETTING_ERR_STORE;
     }
-    spec = setting_by_key(key);
+    spec = setting_by_key(store_settings_registry(brain), key);
     if (spec == NULL) {
         out->status = SETTING_ERR_UNKNOWN;
         return SETTING_ERR_UNKNOWN;
@@ -13345,8 +13397,8 @@ SettingStatus store_setting_read(Store *brain, const char *user_db, const char *
         SettingStatus st = SETTING_OK;
 
         one = flag_text;
-        st = setting_prepare(key, &one, 1, SETTING_LAYER_AUTO, flag_json, sizeof(flag_json), &spec,
-                             &ignored, err, errlen);
+        st = setting_prepare(store_settings_registry(brain), key, &one, 1, SETTING_LAYER_AUTO,
+                             flag_json, sizeof(flag_json), &spec, &ignored, err, errlen);
         if (st != SETTING_OK) {
             out->status = st;
             return st;
@@ -13396,6 +13448,7 @@ SettingStatus store_setting_read(Store *brain, const char *user_db, const char *
     }
     fill_layer_json(user_value, out->user_value, sizeof(out->user_value), &out->user_live);
     fill_layer_json(brain_value, out->brain_value, sizeof(out->brain_value), &out->brain_live);
+    drop_refused_plugin_layers(spec, out);
     {
         const char *user_json = NULL;
         const char *brain_json = NULL;

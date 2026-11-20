@@ -124,6 +124,7 @@ set_property(SOURCE
     src/jsonread.c
     src/outbox.c
     src/plugin_manifest.c
+    src/plugin_settings.c
     src/import_read.c
     src/import_validate.c
     src/cmd_settings.c
@@ -264,6 +265,7 @@ set(REMEMBER_LIB_SOURCES
     src/jsonread.c
     src/outbox.c
     src/plugin_manifest.c
+    src/plugin_settings.c
     src/import_read.c
     src/import_validate.c
     src/cmd_settings.c
@@ -357,6 +359,7 @@ set(REMEMBER_TEST_SOURCES
     tests/test_outbox.c
     tests/test_old_cli.c
     tests/test_plugins.c
+    tests/test_plugin_settings.c
     tests/test_brain_list.c
     tests/fixture_roundtrip.c
 )
@@ -418,9 +421,11 @@ add_executable(remember_store_tests
     src/unicode.c
     src/search_terms.c
     src/output.c
+    src/fileio.c
     src/jsonread.c
     src/outbox.c
     src/plugin_manifest.c
+    src/plugin_settings.c
     src/import_validate.c
     src/test_alloc.c
     tests/test_unicode.c
@@ -429,6 +434,7 @@ add_executable(remember_store_tests
     tests/test_jsonread.c
     tests/test_outbox.c
     tests/test_plugins.c
+    tests/test_plugin_settings.c
     tests/failing_stream.c
     third_party/sha256/sha256.c
     third_party/utf8proc/utf8proc.c

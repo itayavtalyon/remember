@@ -73,6 +73,10 @@ int output_id_human(FILE *out, long long id);
  */
 int output_text_human(FILE *out, const char *text, bool keep_newline);
 
+/* output_text_human's one-line rule (keep_newline false), in place: each control becomes '?', a
+   C1 control's two bytes one '?'. For text built into a line before it is printed. */
+void output_mask_in_place(char *text);
+
 /*
  * Write a full body for human `get`, then a newline: output_text_human with
  * newlines kept, so multi-line memories render intact. For exact bytes use the

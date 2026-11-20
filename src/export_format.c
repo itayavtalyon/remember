@@ -159,31 +159,39 @@ static const char *settings_scope(SettingLayer layer)
     return "user";
 }
 
-/* A registered duration also carries value_ms (ST-8.2). */
-static bool settings_value_ms(const SettingExportRow *row, long long *ms)
+/* A registered duration also carries value_ms, and a size value_bytes (ST-8.2, JSON-STYLE). The
+   twin's name is the one the type has: *twin is NULL when the row has none. */
+static bool settings_twin(const SettingsRegistry *reg, const SettingExportRow *row,
+                          const char **twin, long long *number)
 {
-    const SettingSpec *spec = setting_by_key(row->key);
+    const SettingSpec *spec = setting_by_key(reg, row->key);
     char inner[SETTING_VALUE_CAP];
     char canon[NORM_MEASURE_CANON_CAP];
 
-    if (spec == NULL || spec->type != SETTING_DURATION ||
+    *twin = NULL;
+    if (spec == NULL || (spec->type != SETTING_DURATION && spec->type != SETTING_SIZE) ||
         !setting_quoted_plain(row->value, inner, sizeof(inner))) {
         return false;
     }
-    return norm_duration_canonical(inner, ms, canon, sizeof(canon));
+    *twin = spec->type == SETTING_DURATION ? "value_ms" : "value_bytes";
+    if (spec->type == SETTING_DURATION) {
+        return norm_duration_canonical(inner, number, canon, sizeof(canon));
+    }
+    return norm_size_canonical(inner, number, canon, sizeof(canon));
 }
 
-/* ST-8.2 member order, value_ms after value. */
-static int write_settings_row(FILE *out, const SettingExportRow *row)
+/* ST-8.2 member order, the twin after value. */
+static int write_settings_row(const SettingsRegistry *reg, FILE *out, const SettingExportRow *row)
 {
-    long long ms = 0;
+    long long number = 0;
+    const char *twin = NULL;
 
     if (fputs("{\"key\":", out) < 0 || output_json_string(out, row->key) != 0 ||
         fprintf(out, ",\"scope\":\"%s\",\"value\":%s", settings_scope(row->layer), row->value) <
             0) {
         return -1;
     }
-    if (settings_value_ms(row, &ms) && fprintf(out, ",\"value_ms\":%lld", ms) < 0) {
+    if (settings_twin(reg, row, &twin, &number) && fprintf(out, ",\"%s\":%lld", twin, number) < 0) {
         return -1;
     }
     if (fprintf(out, ",\"updated_by\":%s,\"updated_at\":", row->updated_by) < 0 ||
@@ -201,8 +209,8 @@ static int write_settings_row(FILE *out, const SettingExportRow *row)
     return fputc('}', out) == EOF ? -1 : 0;
 }
 
-int export_settings_write(FILE *out, const char *exported_at, const SettingExportRow *rows,
-                          size_t n, bool trailing_newline)
+int export_settings_write(const SettingsRegistry *reg, FILE *out, const char *exported_at,
+                          const SettingExportRow *rows, size_t n, bool trailing_newline)
 {
     size_t i = 0;
     const char *tail = "]}";
@@ -214,7 +222,7 @@ int export_settings_write(FILE *out, const char *exported_at, const SettingExpor
         return -1;
     }
     for (i = 0; i < n; i++) {
-        if ((i > 0U && fputc(',', out) == EOF) || write_settings_row(out, &rows[i]) != 0) {
+        if ((i > 0U && fputc(',', out) == EOF) || write_settings_row(reg, out, &rows[i]) != 0) {
             return -1;
         }
     }
@@ -247,7 +255,8 @@ int export_json_write(FILE *out, const ExportDoc *doc)
         }
     }
     if (fputs("],\"settings\":", out) < 0 ||
-        export_settings_write(out, doc->exported_at, snap->settings, snap->nsettings, false) != 0) {
+        export_settings_write(doc->registry, out, doc->exported_at, snap->settings, snap->nsettings,
+                              false) != 0) {
         return -1;
     }
     return fputs("}\n", out) < 0 ? -1 : 0;
