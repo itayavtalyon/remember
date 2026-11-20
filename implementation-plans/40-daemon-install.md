@@ -53,6 +53,7 @@ The rules below hold. Each quote is decision text.
 - Bundled plugins: "Fortkeeps' bundled copy runs while Fortkeeps runs the daemon."
 - Restart policy: "Both daemon plists use KeepAlive {SuccessfulExit:false}; after a migration the migrating process restarts the daemon itself (a losing daemon exits 0 and is not relaunched)."
 - Missing plist: "If the brew plist is missing, remember daemon takeover runs daemon install first." The takeover area calls the install function.
+- One verb (`decision:2026-11-18-daemon-install-absorbs-takeover`): `remember daemon takeover` does not exist. `daemon install [--yes]` takes the takeover path of plan 41 when Fortkeeps owns the service; this plan builds the plain path. `--yes` belongs to `daemon install`. The reply shape of the merged command is open (`decision:open-2026-11-20-daemon-install-reply`); this plan keeps `daemon.install.result` `{changed, path}` until it is answered. `specs/API-SURFACE.md`: the `daemon` and `daemon install` rows move from planned to shipped.
 
 ## Review points
 

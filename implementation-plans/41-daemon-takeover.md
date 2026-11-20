@@ -1,12 +1,12 @@
-# 41 — CLI daemon takeover
+# 41 — Daemon takeover (the takeover path of `daemon install`)
 
-**Area:** `remember daemon takeover [--yes]` in `src/cmd_daemon.c`, `src/launchd.c`, `src/systemd_user.c` (enable/disable), `src/exit_codes.h`.
+**Area:** the takeover path of `remember daemon install [--yes]` in `src/cmd_daemon.c`, `src/launchd.c`, `src/systemd_user.c` (enable/disable), `src/exit_codes.h`.
 **Needs:** plans 39 and 40. No other plan.
-**Blocked on:** nothing. The copy is item R30-4 in `decision:2026-11-12-copy-batch-final`.
+**Blocked on:** `decision:open-2026-11-20-daemon-install-reply` (the reply type) and `decision:open-2026-11-18-daemon-install-copy` (Story Weaver: R30-4 with the new command name). The copy is item R30-4 in `decision:2026-11-12-copy-batch-final`.
 
 ## Goal
 
-`remember daemon takeover [--yes]` installs the brew plist when it is missing, disables `app.fortkeeps.daemon`, enables the brew label, and reports `{changed, previous_owner}`.
+`remember daemon install [--yes]`, when Fortkeeps owns the service, installs the brew plist when it is missing, disables `app.fortkeeps.daemon`, enables the brew label, and reports `{changed, previous_owner}`.
 
 ## Source
 
@@ -16,7 +16,8 @@ Decisions built:
 
 - decision:2026-11-03-takeover-order
 - decision:2026-11-03-confirmation-required-exit-5 (amended by decision:2026-11-12-e2-confirmation-required-exits-5-everywhere: `confirmation_required` exits 5 everywhere)
-- decision:2026-11-03-naming-defaults (`daemon.takeover.result` `{changed, previous_owner}`)
+- decision:2026-11-03-naming-defaults (`daemon.takeover.result` `{changed, previous_owner}`; open again under decision:open-2026-11-20-daemon-install-reply)
+- decision:2026-11-18-daemon-install-absorbs-takeover (the command is `daemon install [--yes]`)
 
 - decision:2026-10-31-cli-takeover-offer
 - decision:2026-10-31-trashed-app-handback (the CLI half)
@@ -36,7 +37,7 @@ Decisions built:
 - decision:2026-10-31-daemon-two-labels
 - decision:2026-10-31-coexistence-copy (CLI prompt copy)
 
-Spec sections this plan changes: `specs/DAEMON.md` §9 Owner missing, §10 `remember daemon takeover`, §11 Unresponsive daemon, §14 state.json.
+Spec sections this plan changes: `specs/DAEMON.md` §9 Owner missing, §10 the takeover path of `remember daemon install`, §11 Unresponsive daemon, §14 state.json.
 
 ## Out of scope
 
@@ -54,9 +55,9 @@ Spec sections this plan changes: `specs/DAEMON.md` §9 Owner missing, §10 `reme
 - **Gate.** `just check` (or the repo gate) passes on the exact committed tree with no warnings. `scripts/check-coverage.sh` stays at 100% effective. Linux CI (`scripts/ci-linux.sh`) runs every test that is not macOS-only. The real `launchctl` and `systemctl` never run in a test, and no test writes to the real `~/Library/LaunchAgents`.
 - **Proof.** TDD: the Definition of Done boxes are the must-pass tests, in TDD order. Each test is red before its production change. Every rule has a test that a one-clause mutant turns red. Expected values are literals or an independent computation.
 - **OS integrations.** Share, Spotlight, login items, Shortcuts, and other OS integrations are Fortkeeps-only. They never go in the open-source engine or daemon (decision:2026-11-03-os-integrations-fortkeeps-only).
-- **Copy.** The y/N confirmation of `remember daemon takeover` and the `message` and `fix` of `confirmation_required` equal copy item R30-4 in `decision:2026-11-12-copy-batch-final`.
+- **Copy.** The y/N confirmation of the takeover path of `remember daemon install` and the `message` and `fix` of `confirmation_required` equal copy item R30-4 in `decision:2026-11-12-copy-batch-final`.
   - y/N confirmation (TTY, stderr, default No): `Take over Remember's background service? Your memories and settings stay where they are. [y/N]`
-  - `confirmation_required`: exit 5, `retryable` false, nothing changes. `message`: `taking over Remember's background service needs your confirmation.` `fix`: `Run 'remember daemon takeover --yes' to confirm.` Plain line: `remember: taking over Remember's background service needs your confirmation. Run 'remember daemon takeover --yes' to confirm.`
+  - `confirmation_required`: exit 5, `retryable` false, nothing changes. `message`: `taking over Remember's background service needs your confirmation.` `fix` (draft, pending `decision:open-2026-11-18-daemon-install-copy`): `Run 'remember daemon install --yes' to confirm.` Plain line: `remember: taking over Remember's background service needs your confirmation. Run 'remember daemon install --yes' to confirm.`
 - **Prerequisites.** Work starts only when each item below holds. When one does not hold, the work stops and Itay is told:
   - Copy item R30-4 is approved (2026-11-12). The `fix` reuses the approved C-11 form with the command written out.
 
@@ -65,6 +66,7 @@ Spec sections this plan changes: `specs/DAEMON.md` §9 Owner missing, §10 `reme
 
 The rules below hold. Each quote is decision text.
 
+- **Command name (2026-11-18).** `decision:2026-11-18-daemon-install-absorbs-takeover`: `remember daemon takeover` does not exist. This plan builds the takeover path of `remember daemon install [--yes]` (plan 40 builds the plain install). `daemon install` runs the takeover order below when another owner (Fortkeeps) has the service, and asks the y/N confirmation (or needs `--yes`) only then. In the decision quotes below, "remember daemon takeover" means that path of `daemon install`, and "daemon install first" means the plan 40 install step. The reply type is open: `decision:open-2026-11-20-daemon-install-reply` (Stop and ask; A merges into `daemon.install.result` `{changed, path, previous_owner}`). The copy that names the command is pending Story Weaver: `decision:open-2026-11-18-daemon-install-copy`; until it is approved, the R30-4 lines below are the draft with `remember daemon install` in place of `remember daemon takeover`.
 - `--yes`: "--yes applies only to remember daemon takeover; without a TTY and without --yes, takeover fails."
 - Missing brew plist: "If the brew plist is missing, remember daemon takeover runs daemon install first."
 - Dormant loser: "remember daemon takeover (trashed app) disables app.fortkeeps.daemon and enables the brew label. Combined with KeepAlive {SuccessfulExit:false}, a losing daemon never retries."
@@ -78,7 +80,7 @@ The rules below hold. Each quote is decision text.
 
 - The takeover order is asserted on the fake runner calls: bootout, disable `app.fortkeeps.daemon`, enable the brew label, then install with one bootstrap.
 - No path sends SIGKILL.
-- `--yes` is accepted by `daemon takeover` only.
+- `--yes` is accepted by `daemon install` only.
 - Exit code 5 belongs to `confirmation_required` only, and exit 4 stays the `--strict` warning code (G2-03).
 - The owner check reads `state.json` and probes the lock once per process.
 - A write of `state.json` keeps every key it does not own.
@@ -95,11 +97,12 @@ The rules below hold. Each quote is decision text.
 
 ## Definition of Done
 
-- [ ] `yes_flag_takeover_only`: `remember daemon takeover --yes` takes over without a prompt. Any other command with `--yes` fails with the usage error for an unknown option.
-- [ ] `takeover_changed_true`: `remember daemon takeover --yes` boots out `app.fortkeeps.daemon`, runs `launchctl disable gui/<uid>/app.fortkeeps.daemon`, runs `launchctl enable gui/<uid>/io.github.itayavtalyon.remember`, then calls the install of this plan (which writes the plist when needed and runs the only `launchctl bootstrap`), and replies `daemon.takeover.result` with `data` `{changed: true, previous_owner: "fortkeeps"}`. Assert the order of the fake runner calls, and assert exactly one `bootstrap` call.
+- [ ] `yes_flag_install_only`: `remember daemon install --yes` takes over from Fortkeeps without a prompt. Any other command with `--yes` fails with the usage error for an unknown option.
+- [ ] `takeover_changed_true`: `remember daemon install --yes`, with Fortkeeps as the owner, boots out `app.fortkeeps.daemon`, runs `launchctl disable gui/<uid>/app.fortkeeps.daemon`, runs `launchctl enable gui/<uid>/io.github.itayavtalyon.remember`, then calls the install of this plan (which writes the plist when needed and runs the only `launchctl bootstrap`), and replies with `changed` true and `previous_owner` `"fortkeeps"` (reply type per `decision:open-2026-11-20-daemon-install-reply`). Assert the order of the fake runner calls, and assert exactly one `bootstrap` call.
 - [ ] `takeover_changed_false`: when Homebrew already runs the daemon, the command returns ok with `changed` false.
 - [ ] `takeover_no_brew_plist`: when `~/Library/LaunchAgents/io.github.itayavtalyon.remember.plist` does not exist, the command runs the install of this plan first, then the takeover.
-- [ ] `takeover_without_yes`: on a TTY, `remember daemon takeover` asks the y/N confirmation (copy: R30-4). Without a TTY and without `--yes`, it fails with error `confirmation_required`, exits 5 (`REMEMBER_CONFIRMATION_REQUIRED`), and changes nothing. Assert the value 5 and the R30-4 `message` and `fix`. The exit is 5 on every path that returns `confirmation_required` (E2 A, `decision:2026-11-12-e2-confirmation-required-exits-5-everywhere`).
+- [ ] `takeover_without_yes`: on a TTY, `remember daemon install` with Fortkeeps as the owner asks the y/N confirmation (copy: R30-4). Without a TTY and without `--yes`, it fails with error `confirmation_required`, exits 5 (`REMEMBER_CONFIRMATION_REQUIRED`), and changes nothing. Assert the value 5 and the R30-4 `message` and `fix`. The exit is 5 on every path that returns `confirmation_required` (E2 A, `decision:2026-11-12-e2-confirmation-required-exits-5-everywhere`).
+- [ ] `install_no_owner_asks_nothing`: with no service installed and no TTY, `remember daemon install` without `--yes` installs and does not fail with `confirmation_required`.
 - [ ] `exit_code_unique`: no other error or warning path exits 5, and the spec exit code table lists 5 = `confirmation_required`.
 - [ ] `takeover_hung_daemon_2s`: no `daemon.hello.result` in 2 s → error `daemon_unresponsive` with the pid from `daemon.json`. Use an injectable clock.
 - [ ] `takeover_old_daemon_fallback`: the daemon does not know `daemon.shutdown` → `launchctl bootout`, then SIGTERM to the pid.

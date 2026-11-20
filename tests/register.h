@@ -2,6 +2,7 @@
 #define REMEMBER_REGISTER_H
 
 void register_cli_global_tests(void);
+void register_cli_tests(void);
 void register_store_tests(void);
 void register_store_link_tests(void);
 void register_store_sync_tests(void);

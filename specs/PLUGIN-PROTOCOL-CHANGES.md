@@ -41,7 +41,7 @@ Breaking changes (clean breaks, no aliases):
 
 Rule changes:
 - Warning codes (§8.2): `hook_preflight_failed` → `plugin_preflight_failed`, `hook_dispatch_failed` → `plugin_dispatch_failed`; added `plugin_loop_halted` (M-19 N6, was `plugin_chain_halted` in log 010), `plugin_untrusted`, `plugin_dev_mode`. `time_budget_capped` is removed (2026-10-22, M-22 A, #763: as S-06 says, a budget above the time left in the chain cap is clipped silently). No `hook_` code remains.
-- Trust per code hash, confirmed at `plugin add`, update, `hook add` and `plugin trust`; `plugin enable` asks nothing (S-05). `disabled_reason` adds `untrusted`.
+- Trust per code hash, confirmed at `plugin add`, update, `plugin hook` and `plugin trust`; `plugin enable` asks nothing (S-05). `disabled_reason` adds `untrusted`.
 - R3.23 / R6.1: `REMEMBER_HOOK_DEPTH`, `REMEMBER_HOOK_NAME`, and cause passing on writes (G2-06). R6.5: socket `<runtime>/s/<16 hex>.sock`. R7.4: catch-up sends purge tombstones (G-09). R9.28: `plugin log --follow --json` lines.
 - §10: the log 010 §16 commands (`show`, `trust`, `rerun`, `remove --delete-data`, `status --ack`, `test NAME|DIR`); `enable|disable` are shortcuts for `settings set` (M-19 N2).
 - The daemon branches stay (738).

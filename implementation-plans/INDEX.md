@@ -54,16 +54,16 @@ main → cli_parse → commands.h (cmd_add | cmd_locator | cmd_query) → store_
 - 29. Plan: [Handle API](29-handle-api.md). Done when: `remember_open`/`remember_call`/`remember_close`, RememberEnv, no HOME in the engine. Needs 20, 21. X1 and its gaps are answered; the shape record `decision:2026-11-11-handle-api-shape` waits for Itay's approval.
 - 30. Plan: [Plugin settings keys](30-plugin-settings-keys.md). Done when: Boolean type, generated `plugin.<name>.*` keys. Needs 25.
 - 31. Plan: [Events and outbox insert](31-events-and-outbox-insert.md). Done when: Five write events, the write-time filter, the outbox row. Needs 25, 27a, 30.
-- 32. Plan: [Expiry sweep](32-expiry-sweep.md). Done when: `expired_at`, `sweep`, `purge`, `delete --expired`. Needs 26, 31.
+- 32. Plan: [Expiry sweep](32-expiry-sweep.md). Done when: `expired_at`, `brain sweep`, `purge`, `delete --expired`. Needs 26, 31.
 - 33. Plan: [Plugin trust](33-plugin-trust.md). Done when: `trust.json`, confirm, hash check. Needs 25.
-- 34. Plan: [Plugin commands](34-plugin-commands.md). Done when: `hook add`, `plugin add/list/show/enable/disable/trust/remove/log/status`. Needs 30, 33.
+- 34. Plan: [Plugin commands](34-plugin-commands.md). Done when: `plugin hook`, `plugin add/list/show/enable/disable/trust/remove/log/status`. Needs 30, 33.
 - 35. Plan: [Dispatcher](35-dispatcher.md). Done when: Pre-flight, detached dispatch, once-runs, allow list, kill switch, rerun. Needs 27a, 29, 31, 32, 33.
 - 36. Plan: [Persistent processes](36-persistent-processes.md). Done when: Sockets, ping, strikes, crash loop, `index.json`, backfill. Needs 35. Not blocked: X1 answered.
 - 37. Plan: [Search filter chain](37-search-filter-chain.md). Done when: Three stages, budget, cold start. Needs 36. Not blocked: X5 answered.
 - 38. Plan: [Plugin test](38-plugin-test.md). Done when: `plugin test NAME|DIR`. Needs 35, 36.
 - 39. Plan: [Daemon process](39-daemon-lock.md). Done when: `daemon.lock`, `daemon.json`, drain. Needs 21, 35.
 - 40. Plan: [Daemon install](40-daemon-install.md). Done when: `remember daemon install`, `--plugin-dir`. Needs 34, 39.
-- 41. Plan: [Daemon takeover](41-daemon-takeover.md). Done when: `remember daemon takeover [--yes]`. Needs 39, 40. Copy: R30-4; `confirmation_required` exits 5 (E2 A).
+- 41. Plan: [Daemon takeover](41-daemon-takeover.md). Done when: the takeover path of `remember daemon install [--yes]` (`decision:2026-11-18-daemon-install-absorbs-takeover`). Needs 39, 40. Copy: R30-4; `confirmation_required` exits 5 (E2 A).
 - 42. Plan: [Owner-missing check](42-daemon-owner-missing.md). Done when: `state.json`, the one-time prompt, the warning. Needs 39, 41. Copy: R30-4; the hint prints after No only and `y` prints a done confirmation (E4 A).
 - 43. Plan: [Schema v7](43-schema-v7.md). Done when: link `origin`, `device`, `peers`, `pending_links`, tombstone vectors, the rebuilt `conflicts`, `device.set`. Needs 19, 27b, 29. Stop and ask list in the plan.
 - 44. Plan: [Sync pages](44-sync-pages.md). Done when: `sync.pull`, `sync.peers`, cursors, snapshots, retention. Needs 29, 43. Waits for approval of `decision:2026-11-12-sync-api-interface-message`.
@@ -96,6 +96,7 @@ Standards on every one of these plans:
 - **Copy.** The plan quotes every sentence. The coder prints that sentence and no other. The approved copy batch is `decision:2026-11-12-copy-batch-final`, and the message and fix of every warning are in `decision:2026-11-12-copy-batch-e3b-warning-splits` (E3 B: a warning has a `message` and a non-empty `fix`, as an error does). `confirmation_required` exits 5 everywhere (E2 A).
 - **Hook failures.** A run that started and failed is retried with backoff from 1 second, doubling to a 1 hour cap, then `failed` (X3 A). A pre-flight failure is `failed` at once and is never retried (E1 A).
 - **Prerequisite.** The decisions the plan lists are accepted in Remember before the coder starts.
+- **Verbs (`decision:2026-11-18-verb-ladder`).** A new top-level verb or a new subcommand enters the engine verb table [`specs/API-SURFACE.md`](../specs/API-SURFACE.md) in the same pull request, and a planned row changes to plan `main` when it ships. A new top-level verb needs Itay's approval in a decision entry, which its row names. Prefer, in this order: a flag on an existing verb, then a subcommand under an existing noun, and only then a new top-level verb. The ctest `cli_verbs_match_api_surface` (suite `cli`) fails when the CLI dispatch table and the spec's table differ.
 
 Decided on 2026-11-11 and now built by a plan: `decision:2026-11-11-filter-degraded-exit` (plan 37), `decision:2026-11-11-plugin-enabled-bool` (plan 30).
 

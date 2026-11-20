@@ -28,7 +28,7 @@ A device that holds a brain answers a peer's pull with a gzipped JSON page of wh
 - The HTTP route, the status codes on the wire and the transport (`decision:sync-engine-host-http`: a host adapter). This plan returns the error codes and leaves the status mapping to the adapter.
 - Authentication and authorization: `unauthorized` and `forbidden` are raised by the host. Sync auth waits on Q48, Q50 and Q51.
 - The receiving side, merge and conflicts (plan 45).
-- The CLI `remember sync pull` (it needs a transport) and the MCP `sync_peers` tool (no MCP plan).
+- The CLI `remember sync pull` (it needs a transport). `sync` has no REST route and no MCP tool (`decision:2026-11-18-surfaces-catalog-plus-rekey`); `sync` is an approved top-level noun (`decision:2026-11-18-top-level-approvals`). `specs/API-SURFACE.md`: the `sync peers` row moves from planned to shipped in this plan.
 - Triggers and timers (`decision:sync-triggers`: daemon work), Settings screens and wording (Story Weaver owns every message), and the Cloud server.
 
 ## Standards
