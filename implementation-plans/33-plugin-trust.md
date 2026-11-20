@@ -20,7 +20,7 @@ Trust belongs to the code hash. Remember records trust only after the host confi
 
 ## Out of scope
 
-The commands that call trust (`plugin add`, `hook add`, `plugin trust`: plan 34). Runs (plan 35).
+The commands that call trust (`plugin add`, `plugin hook`, `plugin trust`: plan 34). Runs (plan 35).
 
 ## Standards
 
