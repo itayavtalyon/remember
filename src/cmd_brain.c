@@ -1,3 +1,4 @@
+#include "cli.h"
 #include "commands.h"
 #include "commands_common.h"
 #include "diag.h"
@@ -12,22 +13,20 @@
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
-#include <string.h>
 
 enum BrainVerb { BRAIN_VERB_NONE, BRAIN_VERB_NEW_ID, BRAIN_VERB_LIST, BRAIN_VERB_PRUNE };
 
 static enum BrainVerb brain_verb(int rest_argc, const char **rest_argv)
 {
-    if (rest_argc < 1 || rest_argv == NULL) {
-        return BRAIN_VERB_NONE;
-    }
-    if (strcmp(rest_argv[0], "new-id") == 0) {
+    CliSub sub = cli_subcommand(CLI_CMD_BRAIN, rest_argc, rest_argv);
+
+    if (sub == CLI_SUB_BRAIN_NEW_ID) {
         return BRAIN_VERB_NEW_ID;
     }
-    if (strcmp(rest_argv[0], "list") == 0) {
+    if (sub == CLI_SUB_BRAIN_LIST) {
         return BRAIN_VERB_LIST;
     }
-    return strcmp(rest_argv[0], "prune") == 0 ? BRAIN_VERB_PRUNE : BRAIN_VERB_NONE;
+    return sub == CLI_SUB_BRAIN_PRUNE ? BRAIN_VERB_PRUNE : BRAIN_VERB_NONE;
 }
 
 /* `list` and `prune` read and write brains.json only. They never open a brain,

@@ -2,7 +2,7 @@
 
 **Area:** `remember daemon install`, `src/launchd_plist.c`, `src/systemd_user.c` (unit writer), and the `--plugin-dir` argument of `remember daemon`.
 **Needs:** plans 39 (daemon process) and 34 (the plugin search path). No other plan.
-**Blocked on:** nothing.
+**Blocked on:** nothing. Ships together with plan 41 (`decision:2026-11-20-plans-40-41-ship-together`): one pull request, or plan 41 merges before any release tag that holds plan 40.
 
 ## Goal
 
@@ -40,7 +40,7 @@ Spec sections this plan changes: `specs/DAEMON.md` §12 `remember daemon install
 - **Gate.** `just check` (or the repo gate) passes on the exact committed tree with no warnings. `scripts/check-coverage.sh` stays at 100% effective. Linux CI (`scripts/ci-linux.sh`) runs every test that is not macOS-only. The real `launchctl` and `systemctl` never run in a test, and no test writes to the real `~/Library/LaunchAgents`.
 - **Proof.** TDD: the Definition of Done boxes are the must-pass tests, in TDD order. Each test is red before its production change. Every rule has a test that a one-clause mutant turns red. Expected values are literals or an independent computation.
 - **OS integrations.** Share, Spotlight, login items, Shortcuts, and other OS integrations are Fortkeeps-only. They never go in the open-source engine or daemon (decision:2026-11-03-os-integrations-fortkeeps-only).
-- **Copy.** This plan prints no new sentence. `daemon.install.result` is JSON only; the human line is `changed: <true|false>  path: <path>  previous_owner: <owner>`, the existing key-value form of `src/output.c` (`previous_owner` added by `decision:open-2026-11-20-daemon-install-reply`).
+- **Copy.** This plan prints no new sentence. `daemon.install.result` is JSON only; the human line is `changed: <true|false>  path: <path>  previous_owner: <owner>`, the existing key-value form of `src/output.c` (`previous_owner` added by `decision:2026-11-20-daemon-install-reply`).
 
 
 ## What must be true
@@ -53,7 +53,7 @@ The rules below hold. Each quote is decision text.
 - Bundled plugins: "Fortkeeps' bundled copy runs while Fortkeeps runs the daemon."
 - Restart policy: "Both daemon plists use KeepAlive {SuccessfulExit:false}; after a migration the migrating process restarts the daemon itself (a losing daemon exits 0 and is not relaunched)."
 - Missing plist: "If the brew plist is missing, remember daemon takeover runs daemon install first." The takeover area calls the install function.
-- One verb (`decision:2026-11-18-daemon-install-absorbs-takeover`): `remember daemon takeover` does not exist. `daemon install [--yes]` takes the takeover path of plan 41 when Fortkeeps owns the service; this plan builds the plain path. `--yes` belongs to `daemon install`. The merged command replies `daemon.install.result` `{changed, path, previous_owner}` on every path; `previous_owner` is null when no service was there (`decision:open-2026-11-20-daemon-install-reply`, Itay 2026-11-20). `specs/API-SURFACE.md`: the `daemon` and `daemon install` rows move from planned to shipped.
+- One verb (`decision:2026-11-18-daemon-install-absorbs-takeover`): `remember daemon takeover` does not exist. `daemon install [--yes]` takes the takeover path of plan 41 when Fortkeeps owns the service; this plan builds the plain path. `--yes` belongs to `daemon install`. The merged command replies `daemon.install.result` `{changed, path, previous_owner}` on every path; `previous_owner` is null when no service was there (`decision:2026-11-20-daemon-install-reply`, Itay 2026-11-20). `specs/API-SURFACE.md`: the `daemon` and `daemon install` rows move from planned to shipped.
 
 ## Review points
 

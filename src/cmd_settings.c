@@ -1,6 +1,7 @@
 #include "cmd_settings.h"
 
 #include "appio.h"
+#include "cli.h"
 #include "commands.h"
 #include "commands_common.h"
 #include "diag.h"
@@ -4820,35 +4821,17 @@ static int cmd_settings_explain(Store *store, bool json, int argc, const char **
     return view_done(rc);
 }
 
+/* The reply type of each subcommand; NULL for every other CliSub. */
+static const char *const k_settings_reply[CLI_SUB_COUNT] = {
+    [CLI_SUB_SETTINGS_GET] = "setting.get",         [CLI_SUB_SETTINGS_SET] = "setting.set",
+    [CLI_SUB_SETTINGS_RESET] = "setting.reset",     [CLI_SUB_SETTINGS_LIST] = "setting.list",
+    [CLI_SUB_SETTINGS_HISTORY] = "setting.history", [CLI_SUB_SETTINGS_EXPLAIN] = "setting.explain",
+    [CLI_SUB_SETTINGS_EXPORT] = "setting.export",   [CLI_SUB_SETTINGS_IMPORT] = "setting.import",
+};
+
 static const char *settings_verb(int rest_argc, const char **rest_argv)
 {
-    if (rest_argc > 0 && rest_argv != NULL && rest_argv[0] != NULL) {
-        if (strcmp(rest_argv[0], "get") == 0) {
-            return "setting.get";
-        }
-        if (strcmp(rest_argv[0], "set") == 0) {
-            return "setting.set";
-        }
-        if (strcmp(rest_argv[0], "reset") == 0) {
-            return "setting.reset";
-        }
-        if (strcmp(rest_argv[0], "list") == 0) {
-            return "setting.list";
-        }
-        if (strcmp(rest_argv[0], "history") == 0) {
-            return "setting.history";
-        }
-        if (strcmp(rest_argv[0], "explain") == 0) {
-            return "setting.explain";
-        }
-        if (strcmp(rest_argv[0], "export") == 0) {
-            return "setting.export";
-        }
-        if (strcmp(rest_argv[0], "import") == 0) {
-            return "setting.import";
-        }
-    }
-    return NULL;
+    return k_settings_reply[cli_subcommand(CLI_CMD_SETTINGS, rest_argc, rest_argv)];
 }
 
 /* cppcheck-suppress staticFunction ; public API (commands.h) */
@@ -4864,30 +4847,32 @@ const char *cmd_settings_reply(int rest_argc, const char **rest_argv)
 
 int cmd_settings(Store *store, bool json, int rest_argc, const char **rest_argv)
 {
-    if (settings_verb(rest_argc, rest_argv) == NULL) {
+    CliSub sub = cli_subcommand(CLI_CMD_SETTINGS, rest_argc, rest_argv);
+
+    if (k_settings_reply[sub] == NULL) {
         err_msg(DIAG_USAGE, "settings takes 'get', 'set', 'reset', 'list', 'history', 'explain', "
                             "'export', or 'import'");
         return REMEMBER_ERR;
     }
-    if (strcmp(rest_argv[0], "get") == 0) {
+    if (sub == CLI_SUB_SETTINGS_GET) {
         return cmd_settings_get(store, json, rest_argc, rest_argv);
     }
-    if (strcmp(rest_argv[0], "set") == 0) {
+    if (sub == CLI_SUB_SETTINGS_SET) {
         return cmd_settings_set(store, json, rest_argc, rest_argv);
     }
-    if (strcmp(rest_argv[0], "list") == 0) {
+    if (sub == CLI_SUB_SETTINGS_LIST) {
         return cmd_settings_list(store, json, rest_argc, rest_argv);
     }
-    if (strcmp(rest_argv[0], "history") == 0) {
+    if (sub == CLI_SUB_SETTINGS_HISTORY) {
         return cmd_settings_history(store, json, rest_argc, rest_argv);
     }
-    if (strcmp(rest_argv[0], "explain") == 0) {
+    if (sub == CLI_SUB_SETTINGS_EXPLAIN) {
         return cmd_settings_explain(store, json, rest_argc, rest_argv);
     }
-    if (strcmp(rest_argv[0], "export") == 0) {
+    if (sub == CLI_SUB_SETTINGS_EXPORT) {
         return cmd_settings_export(store, rest_argc, rest_argv);
     }
-    if (strcmp(rest_argv[0], "import") == 0) {
+    if (sub == CLI_SUB_SETTINGS_IMPORT) {
         return cmd_settings_import(store, json, rest_argc, rest_argv);
     }
     return cmd_settings_reset(store, json, rest_argc, rest_argv);

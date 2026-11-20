@@ -51,7 +51,7 @@ Workflow adoption (this is the first plan in this repo after 2026-10-31, per wor
 - `daemon.subscribe` and `daemon.event` (decision:2026-10-31-daemon-subscribe-protocol). A future plan builds them after Itay grills the event list. That plan is not drafted.
 - Sync, the expiry sweep, warm filters, backfills, the hook queue inside the daemon (decision:daemon-jobs-registry). A later plan adds each job.
 - The plugin dir argument and `remember daemon install` (plan 40).
-- The takeover path of `remember daemon install` (was `remember daemon takeover`, `decision:2026-11-18-daemon-install-absorbs-takeover`), owner-missing detection, launchctl calls, old-CLI read-only (plans 29 and 30).
+- The takeover path of `remember daemon install` (was `remember daemon takeover`, `decision:2026-11-18-daemon-install-absorbs-takeover`), owner-missing detection, launchctl calls, old-CLI read-only (plans 41 and 42).
 - Fortkeeps UI (Mac plans M29 and M30).
 
 ## Standards

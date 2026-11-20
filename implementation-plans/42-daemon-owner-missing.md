@@ -2,7 +2,7 @@
 
 **Area:** the pre-command owner check in `src/remember_app.c`, `src/state_file.c` (`state.json`), and the prompt and warning.
 **Needs:** plans 39 and 41 (a `y` answer runs the takeover). No other plan.
-**Blocked on:** nothing. The copy is item R30-4 in `decision:2026-11-12-copy-batch-final` (hint line, done confirmation, `daemon_owner_missing` `message` and `fix`). The prompt line itself is locked (below).
+**Blocked on:** `decision:open-2026-11-18-daemon-install-copy` (Story Weaver: R30-4 with the new command name). The copy is item R30-4 in `decision:2026-11-12-copy-batch-final` (hint line, done confirmation, `daemon_owner_missing` `message` and `fix`). The prompt line itself is locked (below).
 
 ## Goal
 
@@ -16,7 +16,7 @@ Decisions built:
 
 - decision:2026-11-03-takeover-order
 - decision:2026-11-03-confirmation-required-exit-5
-- decision:2026-11-03-naming-defaults (amended by decision:open-2026-11-20-daemon-install-reply: the reply is `daemon.install.result` `{changed, path, previous_owner}`)
+- decision:2026-11-03-naming-defaults (amended by decision:2026-11-20-daemon-install-reply: the reply is `daemon.install.result` `{changed, path, previous_owner}`)
 
 - decision:2026-10-31-cli-takeover-offer
 - decision:2026-10-31-trashed-app-handback (the CLI half)
@@ -59,7 +59,7 @@ Spec sections this plan changes: `specs/DAEMON.md` §9 Owner missing, §10 the t
   - Done confirmation (stderr, after the answer y, with no hint): `remember: took over Remember's background service. It now runs without Fortkeeps.`
   - `daemon_owner_missing` is a warning with a `fix` (E3 B). `message`: `Fortkeeps was removed but still owns Remember's background service.` `fix` (draft, pending `decision:open-2026-11-18-daemon-install-copy`): `To take it over, run 'remember daemon install'.` Plain line: `remember: warning: Fortkeeps was removed but still owns Remember's background service. To take it over, run 'remember daemon install'.` It has no `detail.hint`. It prints with `--json`, with no TTY, or in CI, until it is resolved. The exit follows the command.
 - **Prerequisites.** Work starts only when each item below holds. When one does not hold, the work stops and Itay is told:
-  - Copy item R30-4 is approved (2026-11-12).
+  - `decision:open-2026-11-18-daemon-install-copy` is answered: Story Weaver has approved R30-4 with the command `remember daemon install`. R30-4 as approved on 2026-11-12 names `remember daemon takeover` and does not hold.
 
 
 ## What must be true

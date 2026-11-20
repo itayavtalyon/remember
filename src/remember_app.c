@@ -587,18 +587,10 @@ static const AppCommandClass k_command_class[] = {
 /* settings: set, reset and import change settings; every other verb reads. */
 static bool settings_verb_writes(int rest_argc, const char *const *rest_argv)
 {
-    static const char *const k_writes[] = {"set", "reset", "import"};
-    size_t i = 0;
+    CliSub sub = cli_subcommand(CLI_CMD_SETTINGS, rest_argc, rest_argv);
 
-    if (rest_argc < 1 || rest_argv == NULL || rest_argv[0] == NULL) {
-        return false;
-    }
-    for (i = 0; i < sizeof(k_writes) / sizeof(k_writes[0]); i++) {
-        if (strcmp(rest_argv[0], k_writes[i]) == 0) {
-            return true;
-        }
-    }
-    return false;
+    return (sub == CLI_SUB_SETTINGS_SET || sub == CLI_SUB_SETTINGS_RESET ||
+            sub == CLI_SUB_SETTINGS_IMPORT) != 0;
 }
 
 /* cppcheck-suppress staticFunction ; public API (remember_app.h); used by tests */
@@ -609,6 +601,11 @@ AppCommandClass app_command_class(CliCommand command, int rest_argc, const char 
     }
     if (command == CLI_CMD_SETTINGS && settings_verb_writes(rest_argc, rest_argv)) {
         return APP_CMD_WRITE;
+    }
+    /* `brain list` and `brain prune` open no brain (cmd_brain_uses_store). */
+    if (command == CLI_CMD_BRAIN &&
+        cli_subcommand(CLI_CMD_BRAIN, rest_argc, rest_argv) != CLI_SUB_BRAIN_NEW_ID) {
+        return APP_CMD_NO_STORE;
     }
     return k_command_class[command];
 }

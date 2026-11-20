@@ -12,7 +12,7 @@ Due memories get `expired_at` and one `memory.expired` event, after every read-w
 
 - Log 010 H-1 (sweep), H-2.1, the event list; log 018 V1-17 and log 020 D-3 (no sweep LaunchAgent).
 - Old plan 25 "Events" third paragraph and "Logs and CLI" (`sweep`, `purge`, `delete --expired`).
-- Spec: `specs/EVENTS.md` gains "Expiry". `specs/API-SURFACE.md`: the `brain sweep` row moves from planned to shipped.
+- Spec: `specs/EVENTS.md` gains "Expiry". `specs/API-SURFACE.md`: the `brain sweep` row moves from planned to shipped, and the `delete` and `purge` rows' Arguments name the forms this plan changes. `brain sweep` enters `k_subcommands` in `src/cli.c` (`decision:2026-11-20-subcommand-table`), and `app_command_class` (`src/remember_app.c`) classes it read-write: today every `brain` subcommand except `new-id` is no-store, so the row's rights and the cli suite fail until the class changes.
 - `decision:2026-11-18-sweep-under-brain`: the command is `remember brain sweep [--all]`, not a top-level `sweep`. Request `brain.sweep`, reply `brain.sweep.result`. The event `cause.command` stays `sweep`.
 
 ## Out of scope

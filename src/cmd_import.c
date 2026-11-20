@@ -1,3 +1,4 @@
+#include "cli.h"
 #include "commands.h"
 #include "commands_common.h"
 #include "diag.h"
@@ -513,7 +514,7 @@ int cmd_conflict(Store *s, bool json, int rest_argc, const char **rest_argv)
     size_t i = 0;
     int rc = REMEMBER_ERR;
 
-    if (rest_argc < 1 || rest_argv[0] == NULL || strcmp(rest_argv[0], "accept") != 0) {
+    if (cli_subcommand(CLI_CMD_CONFLICT, rest_argc, rest_argv) != CLI_SUB_CONFLICT_ACCEPT) {
         err_msg(DIAG_USAGE, "usage: conflict accept --id N --keep local|incoming|both");
         return REMEMBER_ERR;
     }
