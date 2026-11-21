@@ -14,3 +14,4 @@ cpp/world-writable-file-creation	tests/	with mode 0666	Test files live under mak
 cpp/path-injection	src/store_sqlite.c	src/util.c: user input (string read by fread)	The line is the user's own ~/.remember/default-db (plan 27), checked by copy_regular_db_path and opened with the user's rights, like --db.
 cpp/path-injection	src/events.c	src/util.c: user input (string read by fread)	The brain path, from --db or the user's own ~/.remember/default-db (plan 27); events_log_skipped appends to <brain>.d/hooks.log with the user's rights, O_NOFOLLOW | O_NONBLOCK, and only to a regular file.
 cpp/path-injection	tests/test_events.c	an environment variable	The brain files and plugin fixtures go under the mkdtemp directories test_main.c sets (TMPDIR, XDG_DATA_HOME) before each test.
+cpp/path-injection	tests/harness.c	an environment variable	harness_install_hooker_at writes the hooker fixture under XDG_DATA_HOME, which test_main.c sets to a mkdtemp directory before each test.
