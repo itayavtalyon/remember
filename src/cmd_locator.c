@@ -13,32 +13,6 @@
 #include <stdlib.h>
 #include <string.h>
 
-#ifdef REMEMBER_TEST_CLI
-#include <sqlite3.h>
-
-/* Test CLI only: REMEMBER_TEST_PURGE_RACE=<sql> runs that SQL on a second connection between
-   purge's read of the row and its write, as another process could. */
-static void test_race_before_purge(const Store *s)
-{
-    sqlite3 *db = NULL;
-    // NOLINTNEXTLINE(concurrency-mt-unsafe) single-threaded CLI
-    const char *sql = getenv("REMEMBER_TEST_PURGE_RACE");
-
-    if (sql == NULL) {
-        return;
-    }
-    if (sqlite3_open(store_path(s), &db) == SQLITE_OK) {
-        (void)sqlite3_exec(db, sql, NULL, NULL, NULL);
-    }
-    (void)sqlite3_close(db);
-}
-#else
-static void test_race_before_purge(const Store *s)
-{
-    (void)s;
-}
-#endif
-
 /* Locator (get / delete / purge): exactly one of id | --key. */
 
 /* What a command takes beside the locator: get takes bin flags; delete takes bin flags and the
@@ -482,7 +456,6 @@ int cmd_purge(Store *s, bool json, int rest_argc, const char **rest_argv)
     /* The read gives the memory's sync id and its label. The store reads the row again by that id
        and judges its bin under the write lock: by then its local id may name another memory, and
        the row may have left Expired or Deleted. */
-    test_race_before_purge(s);
     st = store_purge_by_sync_id(s, row.sync_id, now, &gone);
     rc = st == STORE_ERR_NOT_DELETED ? exit_wrong_list(st, wrong_list_label(&row))
                                      : store_status_to_exit(s, st);

@@ -6879,6 +6879,30 @@ static StoreStatus hard_delete_tx(Store *s, long long id_or_zero, const char *ke
     return hard_delete_loaded(s, now, out_deleted);
 }
 
+#ifdef REMEMBER_TEST_CLI
+/* Test CLI only: REMEMBER_TEST_PURGE_RACE=<sql> runs that SQL on a second connection before
+   purge takes the write lock, so after the command read the row, as another process could. */
+static void test_race_before_purge(const Store *s)
+{
+    sqlite3 *db = NULL;
+    // NOLINTNEXTLINE(concurrency-mt-unsafe) single-threaded CLI
+    const char *sql = getenv("REMEMBER_TEST_PURGE_RACE");
+
+    if (sql == NULL) {
+        return;
+    }
+    if (sqlite3_open(store_path(s), &db) == SQLITE_OK) {
+        (void)sqlite3_exec(db, sql, NULL, NULL, NULL);
+    }
+    (void)sqlite3_close(db);
+}
+#else
+static void test_race_before_purge(const Store *s)
+{
+    (void)s;
+}
+#endif
+
 StoreStatus store_purge_by_sync_id(Store *s, const char *sync_id, const char *now, Entry *out)
 {
     StoreStatus st = STORE_OK;
@@ -6887,6 +6911,7 @@ StoreStatus store_purge_by_sync_id(Store *s, const char *sync_id, const char *no
         return STORE_ERR_INTERNAL;
     }
     memset(out, 0, sizeof(*out));
+    test_race_before_purge(s);
     st = begin_write(s);
     if (st != STORE_OK) {
         return st;
