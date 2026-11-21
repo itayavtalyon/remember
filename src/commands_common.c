@@ -284,13 +284,10 @@ DiagCode code_for_store_status(StoreStatus st)
     case STORE_ERR_CONFLICT:
         return DIAG_BODY_CONFLICT;
     case STORE_ERR_EXPIRED:
-        return DIAG_EXPIRED;
     case STORE_ERR_NOT_EXPIRED:
-        return DIAG_NOT_EXPIRED;
     case STORE_ERR_DELETED:
-        return DIAG_DELETED;
     case STORE_ERR_NOT_DELETED:
-        return DIAG_NOT_DELETED;
+        return DIAG_WRONG_BIN;
     case STORE_ERR_NOT_SINGLE_DEVICE:
         return DIAG_NOT_SINGLE_DEVICE;
     case STORE_ERR_SELF_LINK:
@@ -349,8 +346,28 @@ void err_store_sqlite(const StoreError *detail, const char *path)
     (void)diag_error_sqlite(code_for_store_class(detail->error_class), detail, path);
 }
 
+/* The approved fix of each wrong-bin status (C-01, C-42): the code is one, wrong_bin, and this says
+   which bin the command wanted. */
+static const char *wrong_bin_fix(StoreStatus st)
+{
+    if (st == STORE_ERR_EXPIRED) {
+        return "Add --expired to use it.";
+    }
+    if (st == STORE_ERR_NOT_EXPIRED) {
+        return "Run the command without --expired.";
+    }
+    if (st == STORE_ERR_DELETED) {
+        return "Add --trash to use it.";
+    }
+    return "Run 'remember delete' on it first.";
+}
+
 void err_store(const Store *s, StoreStatus st)
 {
+    if (code_for_store_status(st) == DIAG_WRONG_BIN) {
+        (void)diag_error_json_fix(DIAG_WRONG_BIN, store_status_message(st), wrong_bin_fix(st));
+        return;
+    }
     if (st == STORE_ERR_SQLITE && s != NULL) {
         const StoreError *detail = store_last_error(s);
 
@@ -667,46 +684,38 @@ int store_status_to_exit(const Store *s, StoreStatus st)
 
 int exit_wrong_list(StoreStatus st, const char *label)
 {
-    DiagCode code = DIAG_EXPIRED;
-    int need = 0;
-    int wrote = 0;
-    char *buf = NULL;
+    char *message = NULL;
+    char *fix = NULL;
+    int rc = REMEMBER_WRONG_BIN;
 
-    if (label == NULL || (st != STORE_ERR_DELETED && st != STORE_ERR_EXPIRED)) {
+    if (label == NULL ||
+        (st != STORE_ERR_DELETED && st != STORE_ERR_EXPIRED && st != STORE_ERR_NOT_DELETED)) {
         err_msg(DIAG_INTERNAL, "internal error");
         return REMEMBER_ERR;
     }
-    if (st == STORE_ERR_DELETED) {
-        code = DIAG_DELETED;
-        need = snprintf(NULL, 0, "\"%s\" is in the Trash.", label);
+    if (st == STORE_ERR_NOT_DELETED) {
+        /* The C-01 wrong_bin row: purge of a row that is neither deleted nor expired. */
+        message = fmt_alloc("\"%s\" isn't deleted, so it can't be purged.", label);
+        fix = fmt_alloc("Run 'remember delete %s' first.", label);
+    } else if (st == STORE_ERR_DELETED) {
+        message = fmt_alloc("\"%s\" is in the Trash.", label);
     } else {
-        need = snprintf(NULL, 0, "\"%s\" has expired.", label);
+        message = fmt_alloc("\"%s\" has expired.", label);
     }
-    if (need < 0) {
-        err_msg(DIAG_INTERNAL, "internal error");
-        return REMEMBER_ERR;
-    }
-    buf = (char *)malloc((size_t)need + 1U);
-    if (buf == NULL) {
+    if (message == NULL || (st == STORE_ERR_NOT_DELETED && fix == NULL)) {
+        free(message);
+        free(fix);
         err_msg(DIAG_OUT_OF_MEMORY, "out of memory");
         return REMEMBER_ERR;
     }
-    if (st == STORE_ERR_DELETED) {
-        wrote = snprintf(buf, (size_t)need + 1U, "\"%s\" is in the Trash.", label);
-    } else {
-        wrote = snprintf(buf, (size_t)need + 1U, "\"%s\" has expired.", label);
+    if (diag_error_split(
+            DIAG_WRONG_BIN,
+            (DiagSplit){.message = message, .fix = fix != NULL ? fix : wrong_bin_fix(st)}) != 0) {
+        rc = REMEMBER_ERR;
     }
-    if (wrote != need) {
-        err_msg(DIAG_INTERNAL, "internal error");
-        free(buf);
-        return REMEMBER_ERR;
-    }
-    wrote = diag_error_split(code, (DiagSplit){.message = buf, .fix = diag_code_fix(code)});
-    free(buf);
-    if (wrote != 0) {
-        return REMEMBER_ERR;
-    }
-    return REMEMBER_WRONG_BIN;
+    free(message);
+    free(fix);
+    return rc;
 }
 
 int load_body(const char *body_raw, int dash_is_stdin, char **out_body, size_t *out_len,

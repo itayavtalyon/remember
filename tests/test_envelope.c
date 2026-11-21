@@ -225,7 +225,7 @@ TEST(envelope_every_command_names_its_reply_type)
         {{"--json", "unlink", "1", "2"}, "memory.unlink"},
         {{"--json", "rekey", "--key", "a", "--to-key", "c"}, "memory.rekey"},
         {{"--json", "delete", "2"}, "memory.delete"},
-        {{"--json", "purge", "--deleted"}, "memory.purge"},
+        {{"--json", "purge", "1"}, "memory.purge"},
         {{"--json", "conflicts"}, "conflict.list"},
         {{"--json", "device"}, "device.get"},
         {{"--json", "device", "new"}, "device.new"},
@@ -476,7 +476,7 @@ TEST(envelope_help_states_trash_and_expired)
 
         r = run_remember(db, del, sizeof del / sizeof del[0], NULL);
         ASSERT_EQ_INT(r.exit_code, 0);
-        ASSERT_STR_CONTAINS(r.out, "delete --expired hard-wipes one row.\n");
+        ASSERT_STR_CONTAINS(r.out, "To remove one for good, use purge.\n");
         ASSERT_STR_NOT_CONTAINS(r.out, "Use the Trash:");
         cmd_result_free(&r);
     }
@@ -556,7 +556,7 @@ TEST(envelope_keyless_wrong_list_uses_the_uuid)
     r = run_remember(db, json, sizeof json / sizeof json[0], NULL);
     ASSERT_EQ_INT(r.exit_code, 3);
     ASSERT_STREQ(r.err, "");
-    ASSERT_STR_CONTAINS(r.out, "\"code\":\"deleted\"");
+    ASSERT_STR_CONTAINS(r.out, "\"code\":\"wrong_bin\"");
     ASSERT_STR_CONTAINS(r.out, frag);
     ASSERT_STR_CONTAINS(r.out, "\"fix\":\"Add --trash to use it.\"");
     cmd_result_free(&r);
@@ -606,34 +606,6 @@ TEST(envelope_trash_and_expired_cannot_combine)
     ASSERT_EQ_INT(r.exit_code, 1);
     ASSERT_STR_CONTAINS(r.err, "cannot combine --expired and --trash");
     ASSERT_STR_NOT_CONTAINS(r.err, "unknown option");
-    cmd_result_free(&r);
-    free(db);
-}
-
-/* purge --trash selects the Deleted bin and warns. It is not an empty flag. */
-TEST(envelope_purge_trash_selects_the_deleted_bin)
-{
-    char *db = make_temp_db_path();
-    const char *add[] = {"add", "gone"};
-    const char *drop[] = {"delete", "1"};
-    const char *purge[] = {"purge", "--trash"};
-    const char *get[] = {"get", "--deleted", "1"};
-    CmdResult r;
-
-    ASSERT_TRUE(db != NULL);
-    r = run_remember(db, add, sizeof add / sizeof add[0], NULL);
-    ASSERT_EQ_INT(r.exit_code, 0);
-    cmd_result_free(&r);
-    r = run_remember(db, drop, sizeof drop / sizeof drop[0], NULL);
-    ASSERT_EQ_INT(r.exit_code, 0);
-    cmd_result_free(&r);
-    r = run_remember(db, purge, sizeof purge / sizeof purge[0], NULL);
-    ASSERT_EQ_INT(r.exit_code, 0);
-    ASSERT_STREQ(r.err, k_trash_warn);
-    ASSERT_STREQ(r.out, "1\n");
-    cmd_result_free(&r);
-    r = run_remember(db, get, sizeof get / sizeof get[0], NULL);
-    ASSERT_EQ_INT(r.exit_code, 2);
     cmd_result_free(&r);
     free(db);
 }
@@ -1002,7 +974,7 @@ TEST(envelope_uuid_positional_updates_deletes_and_links)
 
         r = run_remember(db, args, sizeof args / sizeof args[0], NULL);
         ASSERT_EQ_INT(r.exit_code, 3);
-        ASSERT_STR_CONTAINS(r.out, "\"code\":\"deleted\"");
+        ASSERT_STR_CONTAINS(r.out, "\"code\":\"wrong_bin\"");
         cmd_result_free(&r);
     }
     {
@@ -1235,7 +1207,7 @@ TEST(envelope_delete_expired_by_uuid_is_a_soft_delete)
 
         r = run_remember(db, args, sizeof args / sizeof args[0], NULL);
         ASSERT_EQ_INT(r.exit_code, 3);
-        ASSERT_STR_CONTAINS(r.out, "\"code\":\"expired\"");
+        ASSERT_STR_CONTAINS(r.out, "\"code\":\"wrong_bin\"");
         cmd_result_free(&r);
     }
     {
@@ -1649,7 +1621,7 @@ TEST(envelope_every_write_accepts_the_hook_flags)
     const char *unlink[] = {"unlink", "--no-hooks", "1", "2"};
     const char *rekey[] = {"rekey", "--hooks", "--to-key", "k:one", "1"};
     const char *del[] = {"delete", "--no-hooks", "2"};
-    const char *purge[] = {"purge", "--deleted", "--hooks"};
+    const char *purge[] = {"purge", "2", "--hooks"};
     const char *import[] = {"import", "--no-hooks"};
     const char *accept[] = {"conflict", "accept", "--hooks", "--id", "1", "--keep", "local"};
     const char *get[] = {"get", "--hooks", "1"};
@@ -3063,7 +3035,6 @@ void register_envelope_tests(void)
     RUN_TEST(envelope_keyless_wrong_list_uses_the_uuid);
     RUN_TEST(envelope_blank_id_wrong_list_keeps_the_deleted_token);
     RUN_TEST(envelope_trash_and_expired_cannot_combine);
-    RUN_TEST(envelope_purge_trash_selects_the_deleted_bin);
     RUN_TEST(envelope_brain_new_id_replaces_only_the_brain_id);
     RUN_TEST(envelope_help_prints_the_color_and_quiet_lines);
     RUN_TEST(envelope_fixed_ids_make_replies_predictable);

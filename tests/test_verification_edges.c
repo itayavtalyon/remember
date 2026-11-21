@@ -245,7 +245,7 @@ TEST(orphan_tag_removed_when_last_use_deleted)
     char *count = NULL;
     const char *a[] = {"add", "--tag", "orphanonly", "solo"};
     const char *soft[] = {"delete", "1"};
-    const char *hard[] = {"purge", "--deleted"};
+    const char *hard[] = {"purge", "1"};
     ASSERT_TRUE(db != NULL);
     r = run_remember(db, a, sizeof(a) / sizeof(a[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 0);

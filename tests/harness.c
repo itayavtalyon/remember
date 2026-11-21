@@ -22,6 +22,7 @@ enum {
     PATH_BUFSIZE = 4096,        /* filesystem path buffer */
     CMD_BUFSIZE = 8192,         /* sqlite3 CLI command buffer (fits the v5 rewrite) */
     LINE_BUFSIZE = 512,         /* single output line buffer */
+    HOOKER_DOC_BUFSIZE = 8192,  /* the manifest harness_install_hooker writes */
     REGISTRY_INITIAL_CAP = 16,  /* temp-dir registry initial slots */
     EXIT_SIGNAL_BASE = 128,     /* shell convention: 128 + signal number */
     DECIMAL_BASE = 10           /* strtol radix */
@@ -706,6 +707,33 @@ cleanup:
         (void)fclose(in);
     }
     return rc;
+}
+
+char *harness_hooker_manifest_path(void)
+{
+    const char *xdg = getenv("XDG_DATA_HOME"); // NOLINT(concurrency-mt-unsafe)
+    size_t cap = (xdg != NULL ? strlen(xdg) : 0U) + sizeof("/remember/plugins/hooker/plugin.json");
+    char *path = (char *)malloc(cap);
+
+    if (xdg == NULL || path == NULL) {
+        (void)fprintf(stderr, "harness: no XDG_DATA_HOME or out of memory\n");
+        abort();
+    }
+    (void)snprintf(path, cap, "%s/remember/plugins/hooker/plugin.json", xdg);
+    return path;
+}
+
+void harness_install_hooker_at(const char *actions, HarnessSite site)
+{
+    char doc[HOOKER_DOC_BUFSIZE];
+    char *path = harness_hooker_manifest_path();
+
+    (void)snprintf(doc, sizeof(doc),
+                   "{\"format\":\"remember-plugin\",\"version\":1,\"name\":\"hooker\","
+                   "\"plugin_version\":\"1.0.0\",\"protocol\":1,\"actions\":[%s]}",
+                   actions);
+    harness_write_bytes_at(path, doc, strlen(doc), site);
+    free(path);
 }
 
 char *harness_read_line(const char *path)

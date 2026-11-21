@@ -3416,6 +3416,7 @@ void register_plugins_tests(void)
     RUN_TEST(backfill_with_a_persistent_entry_whose_command_is_broken_names_only_the_command);
     register_plugin_settings_tests();
     register_events_tests();
+    register_sweep_tests();
 }
 
 // NOLINTEND(cppcoreguidelines-avoid-magic-numbers,readability-magic-numbers)

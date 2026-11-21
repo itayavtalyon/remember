@@ -92,7 +92,8 @@ void free_tag_list(char **tags, size_t ntags);
 /* Map store status to process exit; prints the E4.8 line for SQLITE failures. */
 int store_status_to_exit(const Store *s, StoreStatus st);
 
-/* C-01 wrong-list line. label is the key, or the id when the row has no key. */
+/* C-01 wrong-list line, or for STORE_ERR_NOT_DELETED the wrong_bin line of a purge of a row that
+   is neither deleted nor expired. label is the key, or the id when the row has no key. */
 int exit_wrong_list(StoreStatus st, const char *label);
 
 /* Parsed --expired / --deleted / --trash (the Deleted bin). */

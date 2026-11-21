@@ -115,7 +115,7 @@ set_property(SOURCE
     src/cmd_locator.c
     src/cmd_query.c
     src/cmd_tags.c
-    src/cmd_purge.c
+    src/sweep.c
     src/cmd_graph.c
     src/cmd_import.c
     src/cmd_device.c
@@ -265,7 +265,7 @@ set(REMEMBER_LIB_SOURCES
     src/cmd_locator.c
     src/cmd_query.c
     src/cmd_tags.c
-    src/cmd_purge.c
+    src/sweep.c
     src/cmd_graph.c
     src/cmd_import.c
     src/cmd_device.c
@@ -375,6 +375,7 @@ set(REMEMBER_TEST_SOURCES
     tests/test_plugins.c
     tests/test_plugin_settings.c
     tests/test_events.c
+    tests/test_sweep.c
     tests/test_brain_list.c
     tests/fixture_roundtrip.c
 )
@@ -453,6 +454,7 @@ add_executable(remember_store_tests
     tests/test_plugins.c
     tests/test_plugin_settings.c
     tests/test_events.c
+    tests/test_sweep.c
     tests/failing_stream.c
     third_party/sha256/sha256.c
     third_party/utf8proc/utf8proc.c

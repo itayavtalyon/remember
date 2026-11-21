@@ -14,7 +14,13 @@
 #include <stdio.h>
 #include <stdlib.h>
 
-enum BrainVerb { BRAIN_VERB_NONE, BRAIN_VERB_NEW_ID, BRAIN_VERB_LIST, BRAIN_VERB_PRUNE };
+enum BrainVerb {
+    BRAIN_VERB_NONE,
+    BRAIN_VERB_NEW_ID,
+    BRAIN_VERB_LIST,
+    BRAIN_VERB_PRUNE,
+    BRAIN_VERB_SWEEP
+};
 
 static enum BrainVerb brain_verb(int rest_argc, const char **rest_argv)
 {
@@ -25,6 +31,9 @@ static enum BrainVerb brain_verb(int rest_argc, const char **rest_argv)
     }
     if (sub == CLI_SUB_BRAIN_LIST) {
         return BRAIN_VERB_LIST;
+    }
+    if (sub == CLI_SUB_BRAIN_SWEEP) {
+        return BRAIN_VERB_SWEEP;
     }
     return sub == CLI_SUB_BRAIN_PRUNE ? BRAIN_VERB_PRUNE : BRAIN_VERB_NONE;
 }
@@ -43,6 +52,9 @@ const char *cmd_brain_reply(int rest_argc, const char **rest_argv)
 
     if (verb == BRAIN_VERB_LIST) {
         return "brain.list";
+    }
+    if (verb == BRAIN_VERB_SWEEP) {
+        return "brain.sweep";
     }
     return verb == BRAIN_VERB_PRUNE ? "brain.prune" : "brain.new_id";
 }

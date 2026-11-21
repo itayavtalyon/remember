@@ -70,11 +70,13 @@ static const CommandEntry k_commands[] = {
     {.name = "update",
      .command = CLI_CMD_UPDATE,
      .summary = "Change body and/or tags by id or --key"},
-    {.name = "delete", .command = CLI_CMD_DELETE, .summary = "Soft-delete an entry by id or --key"},
+    {.name = "delete",
+     .command = CLI_CMD_DELETE,
+     .summary = "Move an entry to the Trash by id or --key, or every expired one with --expired"},
     {.name = "tags", .command = CLI_CMD_TAGS, .summary = "List all tags with entry counts"},
     {.name = "purge",
      .command = CLI_CMD_PURGE,
-     .summary = "Permanently delete every expired or deleted memory"},
+     .summary = "Permanently delete one expired or deleted memory by id or --key"},
     {.name = "link", .command = CLI_CMD_LINK, .summary = "Create or merge an entry link"},
     {.name = "unlink", .command = CLI_CMD_UNLINK, .summary = "Remove entry links"},
     {.name = "related", .command = CLI_CMD_RELATED, .summary = "List neighbors of an entry"},
@@ -128,6 +130,7 @@ static CliCommand command_from_name(const char *name)
 const char *cli_command_name(CliCommand cmd)
 {
     int i = 0;
+
     for (i = 0; i < COMMAND_COUNT; i++) {
         if (k_commands[i].command == cmd) {
             return k_commands[i].name;
@@ -168,6 +171,7 @@ static const SubcommandEntry k_subcommands[CLI_SUB_COUNT] = {
     [CLI_SUB_BRAIN_NEW_ID] = {.name = "new-id", .parent = CLI_CMD_BRAIN},
     [CLI_SUB_BRAIN_LIST] = {.name = "list", .parent = CLI_CMD_BRAIN},
     [CLI_SUB_BRAIN_PRUNE] = {.name = "prune", .parent = CLI_CMD_BRAIN},
+    [CLI_SUB_BRAIN_SWEEP] = {.name = "sweep", .parent = CLI_CMD_BRAIN},
     [CLI_SUB_DEVICE_NEW] = {.name = "new", .parent = CLI_CMD_DEVICE},
     [CLI_SUB_CONFLICT_ACCEPT] = {.name = "accept", .parent = CLI_CMD_CONFLICT},
     [CLI_SUB_REPAIR_SEARCH_INDEX] = {.name = "search-index", .parent = CLI_CMD_REPAIR},
