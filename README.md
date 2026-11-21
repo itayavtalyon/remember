@@ -37,7 +37,7 @@ flowchart LR
 - **Find** — `remember search "…"` (SQLite FTS5 over the body) or `remember list`.
 - **Organize** — tags as facets; **keys** as stable named slots (upsert by key).
 - **Connect** — link memories as `related`, `cites`, or `supersedes`.
-- **Expire / delete** — optional TTL (`--expired` bin) and soft-delete (`--deleted`); hard wipe via `purge` / flagged `delete`. Nothing vanishes silently.
+- **Expire / delete** — optional TTL (`--expired` bin) and soft-delete (`--deleted`); permanent delete with `purge <locator>`. Nothing vanishes silently.
 - **Automate** — `--json` on every command; ships an agent skill for Claude / Cursor / others.
 - **Merge** — `import --from-db` merges another brain by `id`; run `conflicts` after.
 
@@ -79,7 +79,7 @@ Opening an existing database migrates it to `user_version` **6**.
 - The device id is only the sidecar `<db-path>.device_id`. The database holds no copy.
 - `remember brain new-id` replaces `brain_meta.brain_id` with a new lowercase UUID v7 and prints that id. It does not change `change_seq`, a version vector, or a memory. `--json` type is `brain.new_id.result`. `data` is `{brain_id, previous_brain_id}`.
 - Every read-write open records the brain in `<data dir>/brains.json` (`$XDG_DATA_HOME/remember`, else `~/.remember`). A copied brain file takes a new `brain_id` and warns `brain_id_cloned`; a moved one keeps its id. `remember brain list` prints the listed paths (`--json` type `brain.list.result`), and warns `brain_missing` for a path with no brain. `remember brain prune` removes those paths. See `specs/BRAIN-LIST.md`.
-- Hard wipe is `delete --expired` (one expired row) or `purge --expired` / `purge --deleted` (one whole bin). `delete --deleted` does not exist. `--trash` selects the Deleted bin. It no longer needs one registered device.
+- `purge <locator>` is the only permanent delete, for one memory that is expired or in the Trash; `purge --expired` and `purge --deleted` are gone. `delete --expired` moves every expired memory to the Trash. `delete --deleted` does not exist. `--trash` selects the Deleted bin. Neither needs a registered device. After every command, and with `remember brain sweep [--all]`, memories past their expiry are marked expired. Every wrong-bin refusal is the error code `wrong_bin`, exit 3, in place of `expired`, `not_expired`, `deleted` and `not_deleted`.
 - The envelope is `{"format":"remember-message","version":1,"type":"memory.get.result","data":{...}}`. A failure keeps its type and has `error{code,message,fix,retryable,detail?}` instead of `data`. Warnings are a `warnings` array at the end.
 - A database error names one of seven causes: `busy`, `read_only`, `disk_full`, `cannot_open`, `not_a_database`, `corrupt`, `io_error`. Anything else is `database`.
 - `--busy-timeout MS` sets the lock wait (0..60000, default 5000).

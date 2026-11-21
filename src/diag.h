@@ -21,10 +21,7 @@ typedef enum {
     DIAG_INVALID_QUERY,
     DIAG_KEY_CONFLICT,
     DIAG_BODY_CONFLICT,
-    DIAG_EXPIRED,
-    DIAG_NOT_EXPIRED,
-    DIAG_DELETED,
-    DIAG_NOT_DELETED,
+    DIAG_WRONG_BIN, /* exit 3: the row is in another bin than the command asked for */
     DIAG_NOT_SINGLE_DEVICE,
     DIAG_SELF_LINK,
     DIAG_CYCLE,
@@ -80,6 +77,7 @@ typedef enum {
     DIAG_WARN_BRAIN_ID_CLONED,          /* C-38: a copy of a listed brain got its own id */
     DIAG_WARN_BRAIN_MISSING,            /* C-01: a listed path has no brain */
     DIAG_WARN_PLUGIN_UNSUPPORTED,       /* C-23: a write needed a program this build cannot start */
+    DIAG_WARN_SWEEP_FAILED,             /* plan 32: the expiry sweep after a command failed */
     DIAG_WARN_COUNT
 } DiagWarning;
 
@@ -112,6 +110,10 @@ int diag_error_split(DiagCode code, DiagSplit split);
 /* diag_error with an explicit fix. NULL fix uses the catalog sentence.
    Plain joins message and fix. JSON uses this fix and still writes retryable. */
 int diag_error_fix(DiagCode code, const char *message, const char *fix);
+
+/* diag_error_fix, but the plain line stays the message alone and the fix is only in the JSON
+   envelope: a command whose plain line is a legacy token (wrong_bin from the store statuses). */
+int diag_error_json_fix(DiagCode code, const char *message, const char *fix);
 
 /* One string member of a JSON "detail" object. */
 typedef struct {
@@ -216,6 +218,10 @@ int diag_brain_missing(const char *path);
  * cannot be written.
  */
 int diag_plugin_unsupported(void);
+
+/* The sweep of this brain failed (plan 32). The wording is a draft until Story Weaver words it
+   (decision:open-2026-11-18-plan32-sweep-failed-copy). path is the brain's path. */
+int diag_sweep_failed(const char *path);
 
 /* path NULL is stdin. name is the unknown field. */
 typedef struct {

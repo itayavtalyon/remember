@@ -13,7 +13,13 @@
 #include <stdlib.h>
 #include <string.h>
 
-/* Locator (get / delete): exactly one of id | --key. */
+/* Locator (get / delete / purge): exactly one of id | --key. */
+
+/* What a command takes beside the locator: get takes bin flags; delete takes bin flags and the
+   write flags (--as, --actor, --hooks, --no-hooks); purge takes only --hooks and --no-hooks, and
+   no bin flag, because it finds the row in Expired or Deleted itself
+   (decision:2026-11-18-plan32-grill-purge-delete-forms). */
+typedef enum { LOCATOR_GET = 0, LOCATOR_DELETE, LOCATOR_PURGE } LocatorMode;
 
 typedef struct {
     const char *key_raw;
@@ -22,9 +28,9 @@ typedef struct {
     CmdBinOpts bins;
 } LocatorParse;
 
-/* Shared by get/delete. allow_actor: delete accepts --as and --actor; get does not. */
+/* Shared by get, delete and purge. */
 static int locator_take_option(const char *arg, int *i, int rest_argc, const char **rest_argv,
-                               LocatorParse *out, int allow_actor)
+                               LocatorParse *out, LocatorMode mode)
 {
     if (strcmp(arg, "--key") == 0) {
         if (*i + 1 >= rest_argc) {
@@ -34,10 +40,13 @@ static int locator_take_option(const char *arg, int *i, int rest_argc, const cha
         out->key_raw = rest_argv[++(*i)];
         return 1;
     }
-    if (cmd_bin_take_flag(arg, &out->bins) != 0) {
+    if (mode != LOCATOR_PURGE && cmd_bin_take_flag(arg, &out->bins) != 0) {
         return 1;
     }
-    if (allow_actor) {
+    if (mode == LOCATOR_PURGE && cmd_take_hooks_flag(arg, &out->actor.hooks)) {
+        return 1;
+    }
+    if (mode == LOCATOR_DELETE) {
         const char *err = NULL;
         int took = cmd_take_write_flag(arg, i, rest_argc, rest_argv, &out->actor, &err);
 
@@ -57,7 +66,7 @@ static int locator_take_option(const char *arg, int *i, int rest_argc, const cha
 }
 
 static int parse_locator_args(int rest_argc, const char **rest_argv, LocatorParse *out,
-                              int allow_actor)
+                              LocatorMode mode)
 {
     int i = 0;
     int end_opts = 0;
@@ -75,7 +84,7 @@ static int parse_locator_args(int rest_argc, const char **rest_argv, LocatorPars
             continue;
         }
         if (!end_opts) {
-            int kind = locator_take_option(arg, &i, rest_argc, rest_argv, out, allow_actor);
+            int kind = locator_take_option(arg, &i, rest_argc, rest_argv, out, mode);
             if (kind < 0) {
                 return -1;
             }
@@ -252,7 +261,7 @@ int cmd_get(Store *s, bool json, int rest_argc, const char **rest_argv)
 
     memset(&entry, 0, sizeof(entry));
     memset(&loc, 0, sizeof(loc));
-    if (parse_locator_args(rest_argc, rest_argv, &parsed, 0) != 0) {
+    if (parse_locator_args(rest_argc, rest_argv, &parsed, LOCATOR_GET) != 0) {
         return REMEMBER_ERR;
     }
     if (locator_validate(&parsed) != 0) {
@@ -313,20 +322,34 @@ int cmd_get(Store *s, bool json, int rest_argc, const char **rest_argv)
     return REMEMBER_OK;
 }
 
-/* Soft or hard delete after locator_resolve. */
-static StoreStatus delete_resolved(Store *s, const LocatorResolved *loc, StoreBin bin,
-                                   const char *actor, const char *now, Entry *entry)
+/* delete --expired: every due row moves to Deleted in one transaction. Plain prints the count;
+   JSON the rows, as delete of one does (decision:2026-11-18-plan32-grill-purge-delete-forms). */
+static int delete_expired(Store *s, bool json, const char *actor, const char *now)
 {
-    if (loc->kind == LOC_KEY) {
-        if (bin == STORE_BIN_LIVE) {
-            return store_soft_delete_by_key(s, loc->key, actor, now, entry);
-        }
-        return store_hard_delete_by_key(s, loc->key, bin, now, entry);
+    Entry *rows = NULL;
+    size_t count = 0U;
+    size_t i = 0;
+    StoreStatus st = store_soft_delete_expired(s, actor, now, &rows, &count);
+    int rc = REMEMBER_OK;
+    int wr = 0;
+
+    if (st != STORE_OK) {
+        return store_status_to_exit(s, st);
     }
-    if (bin == STORE_BIN_LIVE) {
-        return store_soft_delete_by_id(s, loc->id, actor, now, entry);
+    if (json) {
+        wr = output_entries_data(app_out(), "deleted", rows, count, now);
+    } else if (fprintf(app_out(), "%zu\n", count) < 0) {
+        wr = -1;
     }
-    return store_hard_delete_by_id(s, loc->id, bin, now, entry);
+    if (wr != 0) {
+        err_msg(DIAG_INTERNAL, "failed to write output");
+        rc = REMEMBER_ERR;
+    }
+    for (i = 0; i < count; i++) {
+        store_entry_free(&rows[i]);
+    }
+    free(rows);
+    return rc;
 }
 
 int cmd_delete(Store *s, bool json, int rest_argc, const char **rest_argv)
@@ -343,21 +366,29 @@ int cmd_delete(Store *s, bool json, int rest_argc, const char **rest_argv)
 
     memset(&entry, 0, sizeof(entry));
     memset(&loc, 0, sizeof(loc));
-    if (parse_locator_args(rest_argc, rest_argv, &parsed, 1) != 0) {
+    if (parse_locator_args(rest_argc, rest_argv, &parsed, LOCATOR_DELETE) != 0) {
         return REMEMBER_ERR;
     }
     if (cmd_actor_json(&parsed.actor, actor_buf) != 0 ||
         cmd_apply_hooks(s, &parsed.actor.hooks) != 0) {
         return REMEMBER_ERR;
     }
-    if (locator_validate(&parsed) != 0) {
+    if (cmd_bin_resolve(&parsed.bins, &bin) != 0 || delete_reject_bin_flags(&parsed.bins) != 0) {
         return REMEMBER_ERR;
     }
-    if (cmd_bin_resolve(&parsed.bins, &bin) != 0) {
+    if (bin == STORE_BIN_EXPIRED && (parsed.key_raw != NULL || parsed.id_raw != NULL)) {
+        err_msg(DIAG_USAGE, "delete --expired takes no id or --key");
         return REMEMBER_ERR;
     }
-    if (delete_reject_bin_flags(&parsed.bins) != 0) {
+    if (bin != STORE_BIN_EXPIRED && locator_validate(&parsed) != 0) {
         return REMEMBER_ERR;
+    }
+    if (utc_now(now, sizeof(now)) != 0) {
+        err_msg(DIAG_INTERNAL, "internal error");
+        return REMEMBER_ERR;
+    }
+    if (bin == STORE_BIN_EXPIRED) {
+        return delete_expired(s, json, actor_buf, now);
     }
     if (locator_resolve(&parsed, key_norm, sizeof(key_norm), &loc) != 0) {
         return REMEMBER_ERR;
@@ -366,12 +397,9 @@ int cmd_delete(Store *s, bool json, int rest_argc, const char **rest_argv)
     if (rc != 0) {
         return rc;
     }
-    if (utc_now(now, sizeof(now)) != 0) {
-        err_msg(DIAG_INTERNAL, "internal error");
-        return REMEMBER_ERR;
-    }
 
-    st = delete_resolved(s, &loc, bin, actor_buf, now, &entry);
+    st = loc.kind == LOC_KEY ? store_soft_delete_by_key(s, loc.key, actor_buf, now, &entry)
+                             : store_soft_delete_by_id(s, loc.id, actor_buf, now, &entry);
     rc = exit_after_store(s, st, &loc);
     if (rc != REMEMBER_OK) {
         return rc;
@@ -387,6 +415,61 @@ int cmd_delete(Store *s, bool json, int rest_argc, const char **rest_argv)
     /* Human delete: silent success (design: no id ack required for delete). */
     store_entry_free(&entry);
     return REMEMBER_OK;
+}
+
+/* purge LOCATOR: the one permanent wipe, for a row that is already expired or deleted
+   (decision:purge-command). A live row is the C-01 wrong_bin line, exit 3. */
+int cmd_purge(Store *s, bool json, int rest_argc, const char **rest_argv)
+{
+    LocatorParse parsed;
+    LocatorResolved loc;
+    Entry row;
+    Entry gone;
+    char key_norm[REMEMBER_TOKEN_MAX + 1];
+    char now[ISO_TS_BUFSIZE];
+    StoreStatus st = STORE_OK;
+    int rc = 0;
+
+    memset(&row, 0, sizeof(row));
+    memset(&gone, 0, sizeof(gone));
+    memset(&loc, 0, sizeof(loc));
+    if (parse_locator_args(rest_argc, rest_argv, &parsed, LOCATOR_PURGE) != 0 ||
+        cmd_apply_hooks(s, &parsed.actor.hooks) != 0 || locator_validate(&parsed) != 0 ||
+        locator_resolve(&parsed, key_norm, sizeof(key_norm), &loc) != 0) {
+        return REMEMBER_ERR;
+    }
+    if (utc_now(now, sizeof(now)) != 0) {
+        err_msg(DIAG_INTERNAL, "internal error");
+        return REMEMBER_ERR;
+    }
+    if (loc.kind == LOC_KEY) {
+        st = store_get_row_by_key(s, loc.key, &row);
+    } else if (loc.kind == LOC_UUID) {
+        st = store_get_row_by_sync_id(s, loc.sync_id, &row);
+    } else {
+        st = store_get_row(s, loc.id, &row);
+    }
+    if (st != STORE_OK) {
+        store_entry_free(&row);
+        return store_status_to_exit(s, st);
+    }
+    /* The read gives the memory's sync id and its label. The store reads the row again by that id
+       and judges its bin under the write lock: by then its local id may name another memory, and
+       the row may have left Expired or Deleted. */
+    st = store_purge_by_sync_id(s, row.sync_id, now, &gone);
+    rc = st == STORE_ERR_NOT_DELETED ? exit_wrong_list(st, wrong_list_label(&row))
+                                     : store_status_to_exit(s, st);
+    store_entry_free(&row);
+    if (rc != REMEMBER_OK) {
+        return rc;
+    }
+    if (json && output_entries_data(app_out(), "purged", &gone, 1U, now) != 0) {
+        store_entry_free(&gone);
+        err_msg(DIAG_INTERNAL, "failed to write output");
+        return REMEMBER_ERR;
+    }
+    store_entry_free(&gone);
+    return rc;
 }
 
 /* ---- update: locator + opt-in --text / --tag / --clear-tags ------------- */

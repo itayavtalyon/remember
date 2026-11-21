@@ -388,10 +388,6 @@ TEST(plan_a_link_of_a_new_or_removed_row_adds_no_event)
 
 /* ---- the filter ------------------------------------------------------------------------------ */
 
-#define ACTION(events, filter)                                                                     \
-    "{\"name\":\"go\",\"events\":" events ",\"run\":{\"command\":[\"/bin/echo\"]}" filter "}"
-#define FILTER(body) ",\"filter\":{" body "}"
-#define ALL_TYPES "[\"memory.*\"]"
 #define CREATED_ONLY "[\"memory.created\"]"
 
 /* One plugin named hooker with the given actions (the text between the brackets). */
@@ -2695,6 +2691,347 @@ TEST(outbox_commits_with_memory)
     ASSERT_TRUE(saw_success);
 }
 
+/* ---- the sweep and delete --expired, at the store (plan 32) --------------------------------- */
+
+static const char k_past[] = "2020-01-01T00:00:00.000Z";
+static const char k_future[] = "2030-01-01T00:00:00.000Z";
+
+/* One line of a query on a brain file, compared with want. */
+// NOLINTNEXTLINE(bugprone-easily-swappable-parameters) the brain, the query, then its answer
+static void assert_brain_query(const char *db, const char *sql, const char *want)
+{
+    char *got = harness_sqlite_query_line(db, sql);
+
+    ASSERT_TRUE(got != NULL);
+    ASSERT_STREQ(got != NULL ? got : "", want);
+    free(got);
+}
+
+/* The brain's events, as the sweep after a command writes them. */
+static void rig_arm_sweep(Rig *rig)
+{
+    StoreEvents cfg;
+
+    memset(&cfg, 0, sizeof(cfg));
+    cfg.rules = &rig->rules;
+    cfg.cause = &rig->cause;
+    cfg.command = "sweep";
+    cfg.brain_path = "~/t.db";
+    cfg.origin = STORE_ORIGIN_LOCAL;
+    cfg.hooks = STORE_HOOKS_DEFAULT;
+    ASSERT_EQ_STATUS(store_set_events(rig->store, &cfg), STORE_OK);
+}
+
+/* A memory that expires at `expires` (a past time is a row the sweep has not seen yet). */
+// NOLINTNEXTLINE(bugprone-easily-swappable-parameters) the body, then its expiry
+static long long add_expiring(Rig *rig, const char *body, const char *expires)
+{
+    static int counter = 200000;
+    char hash[65];
+    StoreAddAction act = STORE_ADD_CREATED;
+    Entry e;
+    long long id = 0;
+
+    memset(&e, 0, sizeof(e));
+    counter++;
+    (void)snprintf(hash, sizeof(hash), "%064x", (unsigned)counter);
+    ASSERT_EQ_STATUS(
+        store_add(rig->store, body, hash, NULL, NULL, 0U, "human", expires, k_now, &act, &e),
+        STORE_OK);
+    id = e.id;
+    store_entry_free(&e);
+    return id;
+}
+
+TEST(store_sweep_marks_the_due_rows_once_and_writes_one_expired_event_for_each)
+{
+    Rig rig = given_rig_all();
+    size_t marked = 99U;
+
+    (void)add_expiring(&rig, "one", k_past);
+    (void)add_expiring(&rig, "two", k_future);
+    (void)add_expiring(&rig, "three", k_past);
+    clear_outbox(&rig);
+    rig_arm_sweep(&rig);
+    ASSERT_EQ_STATUS(store_sweep(rig.store, k_now, &marked), STORE_OK);
+    ASSERT_EQ_INT(marked, 2);
+    assert_outbox_types(&rig, "memory.expired,memory.expired");
+    assert_db(
+        &rig,
+        "SELECT group_concat(local_id) FROM entries WHERE expired_at = '2026-11-18T12:00:00.000Z';",
+        "1,3");
+    assert_db(&rig,
+              "SELECT group_concat(json_extract(payload, '$.occurred_at') || '/' || "
+              "json_extract(payload, '$.detected_at') || '/' || json_extract(payload, "
+              "'$.cause.command'), ' ') FROM outbox;",
+              "2020-01-01T00:00:00.000Z/2026-11-18T12:00:00.000Z/sweep "
+              "2020-01-01T00:00:00.000Z/2026-11-18T12:00:00.000Z/sweep");
+    assert_db(&rig, "SELECT count(DISTINCT json_extract(payload, '$.batch_id')) FROM outbox;", "1");
+    clear_outbox(&rig);
+    ASSERT_EQ_STATUS(store_sweep(rig.store, k_now, &marked), STORE_OK);
+    ASSERT_EQ_INT(marked, 0);
+    assert_outbox_types(&rig, "none");
+    rig_close(&rig);
+}
+
+TEST(store_sweep_with_nothing_due_takes_no_write_lock)
+{
+    Rig rig = given_rig_all();
+    size_t marked = 99U;
+
+    (void)add_expiring(&rig, "later", k_future);
+    store_test_fail_exec_after(0); /* BEGIN IMMEDIATE would be the first statement exec runs */
+    ASSERT_EQ_STATUS(store_sweep(rig.store, k_now, &marked), STORE_OK);
+    store_test_fail_exec_after(-1);
+    ASSERT_EQ_INT(marked, 0);
+    rig_close(&rig);
+}
+
+TEST(store_sweep_without_events_marks_and_writes_no_row)
+{
+    char err[ERR_BUFSIZE];
+    char *db = make_temp_db_path();
+    Store *s = store_open(db, err, sizeof(err));
+    char hash[65];
+    StoreAddAction act = STORE_ADD_CREATED;
+    Entry e;
+    size_t marked = 0U;
+
+    ASSERT_TRUE(s != NULL);
+    memset(&e, 0, sizeof(e));
+    (void)snprintf(hash, sizeof(hash), "%064x", 7U);
+    ASSERT_EQ_STATUS(store_add(s, "old", hash, NULL, NULL, 0U, "human", k_past, k_now, &act, &e),
+                     STORE_OK);
+    store_entry_free(&e);
+    ASSERT_EQ_STATUS(store_sweep(s, k_now, &marked), STORE_OK);
+    ASSERT_EQ_INT(marked, 1);
+    assert_brain_query(db, "SELECT count(*) FROM outbox;", "0");
+    store_close(s);
+    free(db);
+}
+
+TEST(store_sweep_refuses_a_newer_brain_and_writes_nothing)
+{
+    char err[ERR_BUFSIZE];
+    char *db = make_temp_db_path();
+    Store *s = store_open(db, err, sizeof(err));
+    char hash[65];
+    StoreAddAction act = STORE_ADD_CREATED;
+    Entry e;
+    size_t marked = 7U;
+
+    ASSERT_TRUE(s != NULL);
+    memset(&e, 0, sizeof(e));
+    (void)snprintf(hash, sizeof(hash), "%064x", 9U);
+    ASSERT_EQ_STATUS(store_add(s, "old", hash, NULL, NULL, 0U, "human", k_past, k_now, &act, &e),
+                     STORE_OK);
+    store_entry_free(&e);
+    store_close(s);
+    free(harness_sqlite_query_line(db, "PRAGMA user_version = 99;"));
+    s = store_open(db, err, sizeof(err));
+    ASSERT_TRUE(s != NULL);
+    ASSERT_EQ_STATUS(store_sweep(s, k_now, &marked), STORE_ERR_SCHEMA_TOO_NEW);
+    ASSERT_EQ_INT(marked, 0);
+    store_close(s);
+    assert_brain_query(db, "SELECT count(*) FROM entries WHERE expired_at IS NOT NULL;", "0");
+    free(db);
+}
+
+/* Marks and events agree after one sweep: both rows marked with two events, or none. */
+// NOLINTNEXTLINE(bugprone-easily-swappable-parameters) failure seen, then success seen
+static void assert_marks_and_events_agree(const Rig *rig, bool *saw_failure, bool *saw_success)
+{
+    char *got = harness_sqlite_query_line(
+        rig->db, "SELECT (SELECT count(*) FROM entries WHERE expired_at IS NOT NULL) || '/' || "
+                 "(SELECT count(*) FROM outbox WHERE type = 'memory.expired');");
+
+    ASSERT_TRUE(got != NULL);
+    if (got != NULL && strcmp(got, "0/0") == 0) {
+        *saw_failure = true;
+    } else if (got != NULL && strcmp(got, "2/2") == 0) {
+        *saw_success = true;
+    } else {
+        ASSERT_STREQ(got != NULL ? got : "", "0/0 or 2/2");
+    }
+    free(got);
+}
+
+TEST(sweep_commits_its_marks_with_its_events)
+{
+    static const FailFn k_fail[] = {store_test_fail_exec_after, store_test_fail_step_after,
+                                    store_test_fail_prepare_after, store_test_fail_alloc_after,
+                                    test_alloc_fail_after};
+    bool saw_failure = false;
+    bool saw_success = false;
+    size_t which = 0;
+
+    for (which = 0; which < sizeof(k_fail) / sizeof(k_fail[0]); which++) {
+        for (int at = 0; at < 60; at++) {
+            Rig rig = given_rig_all();
+            size_t marked = 0U;
+
+            (void)add_expiring(&rig, "one", k_past);
+            (void)add_expiring(&rig, "two", k_past);
+            clear_outbox(&rig);
+            rig_arm_sweep(&rig);
+            k_fail[which](at);
+            (void)store_sweep(rig.store, k_now, &marked);
+            k_fail[which](-1);
+            assert_marks_and_events_agree(&rig, &saw_failure, &saw_success);
+            rig_close(&rig);
+        }
+    }
+    ASSERT_TRUE(saw_failure);
+    ASSERT_TRUE(saw_success);
+}
+
+TEST(a_later_expiry_a_cleared_one_or_a_restore_clears_the_mark_and_an_earlier_one_keeps_it)
+{
+    Rig rig = given_rig_all();
+    long long id = add_expiring(&rig, "one", k_past);
+    size_t marked = 0U;
+
+    rig_arm_sweep(&rig);
+    ASSERT_EQ_STATUS(store_sweep(rig.store, k_now, &marked), STORE_OK);
+    assert_db(&rig, "SELECT expired_at IS NOT NULL FROM entries;", "1");
+    /* earlier, and still due: kept */
+    ASSERT_EQ_STATUS(update_memory(&rig, id,
+                                   (StoreUpdate){.set_expires = true,
+                                                 .expires_at = "2019-01-01T00:00:00.000Z",
+                                                 .bin = STORE_BIN_EXPIRED}),
+                     STORE_OK);
+    assert_db(&rig, "SELECT expired_at IS NOT NULL FROM entries;", "1");
+    /* the same time again: kept */
+    ASSERT_EQ_STATUS(update_memory(&rig, id,
+                                   (StoreUpdate){.set_expires = true,
+                                                 .expires_at = "2019-01-01T00:00:00.000Z",
+                                                 .bin = STORE_BIN_EXPIRED}),
+                     STORE_OK);
+    assert_db(&rig, "SELECT expired_at IS NOT NULL FROM entries;", "1");
+    /* later: cleared */
+    ASSERT_EQ_STATUS(
+        update_memory(
+            &rig, id,
+            (StoreUpdate){.set_expires = true, .expires_at = k_future, .bin = STORE_BIN_EXPIRED}),
+        STORE_OK);
+    assert_db(&rig, "SELECT expired_at IS NOT NULL FROM entries;", "0");
+    /* due again and marked, then no expiry at all: cleared */
+    free(harness_sqlite_query_line(rig.db,
+                                   "UPDATE entries SET expires_at = '2020-01-01T00:00:00.000Z', "
+                                   "expired_at = '2021-01-01T00:00:00.000Z';"));
+    ASSERT_EQ_STATUS(
+        update_memory(
+            &rig, id,
+            (StoreUpdate){.set_expires = true, .expires_at = NULL, .bin = STORE_BIN_EXPIRED}),
+        STORE_OK);
+    assert_db(&rig, "SELECT expired_at IS NOT NULL FROM entries;", "0");
+    /* a marked row that has no expiry and gets one: cleared */
+    free(harness_sqlite_query_line(rig.db,
+                                   "UPDATE entries SET expired_at = '2021-01-01T00:00:00.000Z';"));
+    ASSERT_EQ_STATUS(
+        update_memory(
+            &rig, id,
+            (StoreUpdate){.set_expires = true, .expires_at = k_future, .bin = STORE_BIN_LIVE}),
+        STORE_OK);
+    assert_db(&rig, "SELECT expired_at IS NOT NULL FROM entries;", "0");
+    /* deleted and restored, marked in between: cleared by the restore */
+    free(harness_sqlite_query_line(rig.db,
+                                   "UPDATE entries SET expired_at = '2021-01-01T00:00:00.000Z';"));
+    delete_memory(&rig, id);
+    free(harness_sqlite_query_line(rig.db,
+                                   "UPDATE entries SET expired_at = '2021-01-01T00:00:00.000Z';"));
+    restore_memory(&rig, id);
+    assert_db(&rig, "SELECT expired_at IS NOT NULL FROM entries;", "0");
+    rig_close(&rig);
+}
+
+TEST(store_soft_delete_expired_moves_the_due_rows_in_one_transaction_with_one_deleted_event_each)
+{
+    Rig rig = given_rig_all();
+    Entry *rows = NULL;
+    size_t n = 99U;
+
+    (void)add_expiring(&rig, "one", k_past);
+    (void)add_expiring(&rig, "two", k_future);
+    (void)add_expiring(&rig, "three", k_past);
+    clear_outbox(&rig);
+    ASSERT_EQ_STATUS(store_soft_delete_expired(rig.store, "human", k_now, &rows, &n), STORE_OK);
+    ASSERT_EQ_INT(n, 2);
+    if (n == 2U) {
+        ASSERT_STREQ(rows[0].body, "one");
+        ASSERT_STREQ(rows[1].body, "three");
+        ASSERT_STREQ(rows[0].deleted_at, k_now);
+        ASSERT_TRUE(rows[0].expires_at == NULL);
+    }
+    for (size_t i = 0; i < n; i++) {
+        store_entry_free(&rows[i]);
+    }
+    free(rows);
+    assert_outbox_types(&rig, "memory.deleted,memory.deleted");
+    assert_db(&rig, "SELECT count(DISTINCT json_extract(payload, '$.batch_id')) FROM outbox;", "1");
+    rows = NULL;
+    n = 99U;
+    clear_outbox(&rig);
+    ASSERT_EQ_STATUS(store_soft_delete_expired(rig.store, "human", k_now, &rows, &n), STORE_OK);
+    ASSERT_EQ_INT(n, 0);
+    ASSERT_TRUE(rows == NULL);
+    assert_outbox_types(&rig, "none");
+    rig_close(&rig);
+}
+
+/* Moved rows and events agree: both due rows deleted with two events, or neither. */
+// NOLINTNEXTLINE(bugprone-easily-swappable-parameters) failure seen, then success seen
+static void assert_moves_and_events_agree(const Rig *rig, bool *saw_failure, bool *saw_success)
+{
+    char *got = harness_sqlite_query_line(
+        rig->db, "SELECT (SELECT count(*) FROM entries WHERE deleted_at IS NOT NULL) || '/' || "
+                 "(SELECT count(*) FROM outbox WHERE type = 'memory.deleted');");
+
+    ASSERT_TRUE(got != NULL);
+    if (got != NULL && strcmp(got, "0/0") == 0) {
+        *saw_failure = true;
+    } else if (got != NULL && strcmp(got, "2/2") == 0) {
+        *saw_success = true;
+    } else {
+        ASSERT_STREQ(got != NULL ? got : "", "0/0 or 2/2");
+    }
+    free(got);
+}
+
+TEST(delete_expired_moves_all_its_rows_with_their_events_or_none)
+{
+    static const FailFn k_fail[] = {store_test_fail_exec_after, store_test_fail_step_after,
+                                    store_test_fail_prepare_after, store_test_fail_alloc_after,
+                                    test_alloc_fail_after};
+    bool saw_failure = false;
+    bool saw_success = false;
+    size_t which = 0;
+
+    for (which = 0; which < sizeof(k_fail) / sizeof(k_fail[0]); which++) {
+        for (int at = 0; at < 80; at++) {
+            Rig rig = given_rig_all();
+            Entry *rows = NULL;
+            size_t n = 0U;
+
+            (void)add_expiring(&rig, "one", k_past);
+            (void)add_expiring(&rig, "two", k_past);
+            clear_outbox(&rig);
+            k_fail[which](at);
+            if (store_soft_delete_expired(rig.store, "human", k_now, &rows, &n) == STORE_OK) {
+                for (size_t i = 0; i < n; i++) {
+                    store_entry_free(&rows[i]);
+                }
+                free(rows);
+            }
+            k_fail[which](-1);
+            assert_moves_and_events_agree(&rig, &saw_failure, &saw_success);
+            rig_close(&rig);
+        }
+    }
+    ASSERT_TRUE(saw_failure);
+    ASSERT_TRUE(saw_success);
+}
+
 /* The tests below drive the CLI and remember_run; the store test binary has neither. */
 #ifdef REMEMBER_PLUGINS_DIAG_TEST
 
@@ -2710,35 +3047,6 @@ static CmdResult run_args(const char *db, const char *const *args, size_t count)
     return run_remember(db, args, count, NULL);
 }
 
-/* The plugins folder this test's data dir holds: $XDG_DATA_HOME/remember/plugins. */
-static char *given_plugins_folder(void)
-{
-    const char *xdg = getenv("XDG_DATA_HOME"); // NOLINT(concurrency-mt-unsafe)
-    size_t cap = (xdg != NULL ? strlen(xdg) : 0U) + sizeof("/remember/plugins/hooker/plugin.json");
-    char *path = (char *)malloc(cap);
-
-    ASSERT_TRUE(xdg != NULL && path != NULL);
-    if (xdg == NULL || path == NULL) {
-        return (char *)calloc(1U, 1U);
-    }
-    (void)snprintf(path, cap, "%s/remember/plugins/hooker/plugin.json", xdg);
-    return path;
-}
-
-/* Install plugin hooker with these actions (the text between the brackets). */
-static void given_installed_plugin(const char *actions)
-{
-    char doc[8192];
-    char *path = given_plugins_folder();
-
-    (void)snprintf(doc, sizeof(doc),
-                   "{\"format\":\"remember-plugin\",\"version\":1,\"name\":\"hooker\","
-                   "\"plugin_version\":\"1.0.0\",\"protocol\":1,\"actions\":[%s]}",
-                   actions);
-    harness_write_file(path, doc);
-    free(path);
-}
-
 static void assert_ok(CmdResult r)
 {
     ASSERT_EQ_INT(r.exit_code, 0);
@@ -2752,7 +3060,7 @@ static char *given_brain_with_enabled_plugin(const char *actions)
     char *db = make_temp_db_path();
 
     ASSERT_TRUE(db != NULL);
-    given_installed_plugin(actions);
+    harness_install_hooker(actions);
     assert_ok(RUN(db, "settings", "set", "plugin.hooker.enabled", "true", "--scope", "brain"));
     return db;
 }
@@ -2783,7 +3091,7 @@ TEST(a_plugin_gets_rows_only_once_it_is_enabled_for_the_brain)
 {
     char *db = make_temp_db_path();
 
-    given_installed_plugin(ACTION(ALL_TYPES, ""));
+    harness_install_hooker(ACTION(ALL_TYPES, ""));
     assert_ok(RUN(db, "add", "before"));
     assert_rows(db, "none");
     assert_ok(RUN(db, "settings", "set", "plugin.hooker.enabled", "true", "--scope", "brain"));
@@ -2811,7 +3119,7 @@ TEST(a_plugin_enabled_in_one_brain_does_not_give_rows_in_another)
 TEST(a_plugin_with_only_search_filters_gets_no_rows)
 {
     char *db = make_temp_db_path();
-    char *path = given_plugins_folder();
+    char *path = harness_hooker_manifest_path();
 
     harness_write_file(
         path, "{\"format\":\"remember-plugin\",\"version\":1,\"name\":\"hooker\","
@@ -2865,7 +3173,7 @@ TEST(both_hooks_flags_are_a_usage_error_on_every_write_command_and_write_nothing
         {"rekey", "1", "--to-key", "k:z", NULL},
         {"link", "1", "2", NULL, NULL},
         {"unlink", "1", "2", NULL, NULL},
-        {"purge", "--deleted", NULL, NULL, NULL},
+        {"purge", "1", NULL, NULL, NULL},
         {"import", "--from-json", "/nonexistent.json", NULL, NULL},
         {"conflict", "accept", "--id", "1", "--keep"},
     };
@@ -2913,7 +3221,7 @@ TEST(one_hooks_flag_on_a_write_command_is_still_accepted_everywhere)
     assert_ok(RUN(db, "unlink", "1", "2", "--no-hooks"));
     assert_ok(RUN(db, "rekey", "1", "--to-key", "k:a", "--hooks"));
     assert_ok(RUN(db, "delete", "1", "--no-hooks"));
-    assert_ok(RUN(db, "purge", "--deleted", "--hooks"));
+    assert_ok(RUN(db, "purge", "1", "--hooks"));
     free(db);
 }
 
@@ -2928,7 +3236,7 @@ TEST(each_write_command_makes_its_event_with_its_own_command_word)
     assert_ok(RUN(db, "link", "1", "2"));
     assert_ok(RUN(db, "unlink", "1", "2"));
     assert_ok(RUN(db, "delete", "1"));
-    assert_ok(RUN(db, "purge", "--deleted"));
+    assert_ok(RUN(db, "purge", "1"));
     assert_query(
         db,
         "SELECT group_concat(json_extract(payload, '$.cause.command') || ':' || type, ' ') "
@@ -2951,16 +3259,6 @@ TEST(a_read_command_and_a_settings_write_make_no_event_and_arm_nothing)
     assert_ok(RUN(db, "tags"));
     assert_ok(RUN(db, "settings", "set", "remember.search.max_results", "5", "--scope", "brain"));
     assert_rows(db, "memory.created");
-    free(db);
-}
-
-TEST(a_delete_with_expired_hard_wipe_writes_purged_events)
-{
-    char *db = given_brain_with_enabled_plugin(ACTION(ALL_TYPES, ""));
-
-    assert_ok(RUN(db, "add", "old", "--expires", "2001-01-01"));
-    assert_ok(RUN(db, "purge", "--expired"));
-    assert_rows(db, "memory.created,memory.purged");
     free(db);
 }
 
@@ -3440,6 +3738,15 @@ void register_events_tests(void)
     RUN_TEST(bins_and_match_before_read_the_state_before_the_write);
     RUN_TEST(outbox_commits_with_memory);
     RUN_TEST(an_update_of_a_tagged_linked_memory_commits_with_its_row_or_not_at_all);
+    RUN_TEST(store_sweep_marks_the_due_rows_once_and_writes_one_expired_event_for_each);
+    RUN_TEST(store_sweep_with_nothing_due_takes_no_write_lock);
+    RUN_TEST(store_sweep_without_events_marks_and_writes_no_row);
+    RUN_TEST(store_sweep_refuses_a_newer_brain_and_writes_nothing);
+    RUN_TEST(sweep_commits_its_marks_with_its_events);
+    RUN_TEST(a_later_expiry_a_cleared_one_or_a_restore_clears_the_mark_and_an_earlier_one_keeps_it);
+    RUN_TEST(
+        store_soft_delete_expired_moves_the_due_rows_in_one_transaction_with_one_deleted_event_each);
+    RUN_TEST(delete_expired_moves_all_its_rows_with_their_events_or_none);
 #ifdef REMEMBER_PLUGINS_DIAG_TEST
     RUN_TEST(a_plugin_gets_rows_only_once_it_is_enabled_for_the_brain);
     RUN_TEST(a_plugin_enabled_in_one_brain_does_not_give_rows_in_another);
@@ -3450,7 +3757,6 @@ void register_events_tests(void)
     RUN_TEST(one_hooks_flag_on_a_write_command_is_still_accepted_everywhere);
     RUN_TEST(each_write_command_makes_its_event_with_its_own_command_word);
     RUN_TEST(a_read_command_and_a_settings_write_make_no_event_and_arm_nothing);
-    RUN_TEST(a_delete_with_expired_hard_wipe_writes_purged_events);
     RUN_TEST(default_origins_skip_sync_and_import_and_log_skipped_source);
     RUN_TEST(an_action_that_lists_import_gets_one_event_per_memory_with_one_batch);
     RUN_TEST(import_with_hooks_runs_the_default_origins_action_for_that_one_import);

@@ -424,7 +424,7 @@ TEST(list_search_get_json_links_empty_after_expires)
     const char *get[] = {"--json", "get", "1"};
     const char *upd[] = {"--json", "update", "1", "--text", "solo2"};
     const char *del[] = {"--json", "delete", "1"};
-    const char *prg[] = {"--json", "purge", "--expired"};
+    const char *prg[] = {"--json", "purge", "1"};
 
     ASSERT_TRUE(db != NULL);
     r = run_remember(db, add, sizeof(add) / sizeof(add[0]), NULL);

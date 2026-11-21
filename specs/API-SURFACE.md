@@ -38,7 +38,7 @@ When a plan ships a planned row, it changes that row's plan to `main` in the sam
 | `remember search` | `QUERY`, `--tag`..., `--created-by`, `--updated-by`, `--key`, `--sort`, `--since`, `--until`, `--limit`, `--facet-limit`, BIN | read | `GET /v1/memories/search` | `remember_search` | main | On main before the ladder. |
 | `remember update` | LOC, BIN, `--text`, `--tag`... or `--clear-tags`, `--ttl`, `--expires` or `--clear-expires`, `--undelete`, `--if-version-vector`, AUTHOR, HOOKS | read-write | `PATCH /v1/memories/{id}` | `remember_update` | main | On main before the ladder. |
 | `remember delete` | LOC, BIN, or `--expired` alone; AUTHOR, HOOKS | read-write | `DELETE /v1/memories/{id}` | `remember_delete` | main | On main before the ladder. |
-| `remember purge` | `--expired` or `--deleted`, HOOKS | read-write | - | - | main | On main before the ladder. Plan 32 adds a `LOCATOR` argument, not a verb, and updates this row. |
+| `remember purge` | LOC, HOOKS | read-write | - | - | main | On main before the ladder. Plan 32 made it one row, already expired or deleted, by `LOC`; the whole-bin forms are gone (`decision:2026-11-18-plan32-grill-purge-delete-forms`). |
 | `remember rekey` | LOC, BIN, `--to-key` or `--clear-key`, AUTHOR, HOOKS | read-write | `POST /v1/memories/{id}/rekey` | `remember_rekey` | main | On main before the ladder. |
 | `remember link` | `ID ID`, or `--from` or `--from-key` and `--to` or `--to-key`; `--kind`, `--deleted`, AUTHOR, HOOKS | read-write | `POST /v1/memories/{id}/links` | `remember_link` | main | On main before the ladder. |
 | `remember unlink` | `ID ID`, or `--from` or `--from-key` and `--to` or `--to-key`; `--kind`, `--deleted`, AUTHOR, HOOKS | read-write | `DELETE /v1/memories/{id}/links/{to}` (`?kind=`) | `remember_unlink` | main | On main before the ladder. |
@@ -62,7 +62,7 @@ When a plan ships a planned row, it changes that row's plan to `main` in the sam
 | `remember settings set` | `KEY VALUE...` or `KEY --clear`, `--scope`, AUTHOR, HOOKS | read-write | - | - | main | Subcommand of `settings`. No settings write on REST or MCP (`decision:mcp-tool-catalog`). |
 | `remember settings reset` | `KEY` or `--namespace NS --yes`, with `--scope`; or `--all --scope S --yes`; AUTHOR, HOOKS | read-write | - | - | main | Subcommand of `settings`. |
 | `remember settings import` | `FILE`, `--dry-run`, `--scope`, HOOKS | read-write | - | - | main | Subcommand of `settings`. |
-| `remember brain sweep` | `--all` | read-write | - | - | 32 | Subcommand of `brain`, which owns `brains.json` (`decision:2026-11-18-sweep-under-brain`). Not a flag: no existing verb sweeps on request. |
+| `remember brain sweep` | `--all` | read-write | - | - | main | Subcommand of `brain`, which owns `brains.json` (`decision:2026-11-18-sweep-under-brain`). Not a flag: no existing verb sweeps on request. |
 | `remember dispatch` | none | read-write | - | - | 35 | New top-level verb, approved in `decision:2026-11-18-dispatch-user-facing`. It drains the outbox of one brain, which no noun owns. |
 | `remember plugin add` | `DIR`, `--dev` | read-write | - | - | 34 | New noun `plugin`, approved in `decision:2026-11-18-top-level-approvals`. |
 | `remember plugin hook` | `NAME --command PATH [ARG...] --event EVENT`..., the filter options, `--timeout`, `--cwd`, `--disabled` | read-write | - | - | 34 | Subcommand of `plugin`: a hook is a one-action plugin (`decision:2026-11-18-hook-under-plugin`). |
@@ -89,4 +89,4 @@ When a plan ships a planned row, it changes that row's plan to `main` in the sam
 - `remember daemon takeover` and `remember hook add`: replaced (`decision:2026-11-18-daemon-install-absorbs-takeover`, `decision:2026-11-18-hook-under-plugin`).
 - `remember sweep`: it is `remember brain sweep` (`decision:2026-11-18-sweep-under-brain`).
 - `remember bot connect` (`decision:mcp-bot-connect`): no plan names it yet. It enters this table, with an approval decision, in the plan that builds it.
-- Flags that plans add to existing verbs are not rows: plan 32 adds `purge LOCATOR` and changes the forms of `delete --expired`; it updates those rows' Arguments.
+- Flags that plans add to existing verbs are not rows: plan 32 added `purge LOC` and changed the forms of `delete --expired`, in those rows' Arguments.

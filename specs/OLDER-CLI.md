@@ -65,7 +65,7 @@ The numbers of §§ 8.3 and 8.4 are schema numbers, never app versions. Both num
 
 `decision:2026-10-31-no-sweep-agent`.
 
-A command on a newer brain does not write to it, and no later step of the command may. The post-command sweep must skip a newer brain and must not change the exit code. The engine has no sweep yet (plan 32); its first sweep must call `store_newer_brain` and skip.
+A command on a newer brain does not write to it, and no later step of the command may. The post-command sweep must skip a newer brain and must not change the exit code. The sweep (plan 32) skips a newer brain: after a command it runs only on a brain this process can write, `remember brain sweep` is a write (exit 75 there), and `brain sweep --all` skips a newer brain with nothing marked and no warning.
 
 ### 8.7 Newer only by `min_reader_version`
 

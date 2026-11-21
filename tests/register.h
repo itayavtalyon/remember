@@ -43,6 +43,7 @@ void register_envelope_tests(void);
 void register_plugins_tests(void);
 void register_plugin_settings_tests(void);
 void register_events_tests(void);
+void register_sweep_tests(void);
 void register_export_tests(void);
 void register_import_formats_tests(void);
 void register_jsonread_tests(void);

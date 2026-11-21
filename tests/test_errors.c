@@ -52,10 +52,7 @@ static const char *const k_error_codes[] = {
     "invalid_query",
     "key_conflict",
     "body_conflict",
-    "expired",
-    "not_expired",
-    "deleted",
-    "not_deleted",
+    "wrong_bin",
     "not_single_device",
     "self_link",
     "cycle",
@@ -99,10 +96,7 @@ static const ExpectedFix k_error_fixes[] = {
     {"Check the search words, or put the query in double quotes.", "false"},
     {"Pick another key, or rekey the other memory first.", "false"},
     {"Change the text, or update the memory that already has it.", "false"},
-    {"Add --expired to use it.", "false"},
-    {"Run the command without --expired.", "false"},
-    {"Add --trash to use it.", "false"},
-    {"Run 'remember delete' on it first.", "false"},
+    {"Check which list the memory is in: live, expired, or the Trash.", "false"},
     {"Delete it instead; it stays in the Trash and syncs as deleted.", "false"},
     {"Link two different memories.", "false"},
     {"Remove the link that closes the loop, then try again.", "false"},
@@ -260,7 +254,7 @@ TEST(error_catalog_rejects_names_outside_e4_3)
 static const char *const k_warning_codes[] = {
     "raw_query_ignored",    "deprecated_flag", "synced_folder",          "setting_invalid",
     "flag_meaning_changed", "unknown_field",   "setting_import_skipped", "schema_too_new_read_only",
-    "brain_id_cloned",      "brain_missing",   "plugin_unsupported",
+    "brain_id_cloned",      "brain_missing",   "plugin_unsupported",     "sweep_failed",
 };
 
 TEST(warning_catalog_round_trips_every_code)
@@ -1017,10 +1011,10 @@ TEST(store_text_codes_follow_the_locked_split)
     expect_diag(code_for_store_status(STORE_ERR_OOM), DIAG_OUT_OF_MEMORY);
     expect_diag(code_for_store_status(STORE_ERR_INTERNAL), DIAG_INTERNAL);
     expect_diag(code_for_store_status(STORE_ERR_CONFLICT), DIAG_BODY_CONFLICT);
-    expect_diag(code_for_store_status(STORE_ERR_EXPIRED), DIAG_EXPIRED);
-    expect_diag(code_for_store_status(STORE_ERR_NOT_EXPIRED), DIAG_NOT_EXPIRED);
-    expect_diag(code_for_store_status(STORE_ERR_DELETED), DIAG_DELETED);
-    expect_diag(code_for_store_status(STORE_ERR_NOT_DELETED), DIAG_NOT_DELETED);
+    expect_diag(code_for_store_status(STORE_ERR_EXPIRED), DIAG_WRONG_BIN);
+    expect_diag(code_for_store_status(STORE_ERR_NOT_EXPIRED), DIAG_WRONG_BIN);
+    expect_diag(code_for_store_status(STORE_ERR_DELETED), DIAG_WRONG_BIN);
+    expect_diag(code_for_store_status(STORE_ERR_NOT_DELETED), DIAG_WRONG_BIN);
     expect_diag(code_for_store_status(STORE_ERR_NOT_SINGLE_DEVICE), DIAG_NOT_SINGLE_DEVICE);
     expect_diag(code_for_store_status(STORE_ERR_SELF_LINK), DIAG_SELF_LINK);
     expect_diag(code_for_store_status(STORE_ERR_CYCLE), DIAG_CYCLE);
@@ -1587,7 +1581,7 @@ TEST(golden_error_lines_and_d9_codes)
          NULL},
         {{"get", "--key", "k2"},
          "\"k2\" is in the Trash. Add --trash to use it.",
-         "deleted",
+         "wrong_bin",
          "memory.get",
          "Add --trash to use it.",
          3,
@@ -1596,7 +1590,7 @@ TEST(golden_error_lines_and_d9_codes)
          "\\\"k2\\\" is in the Trash."},
         {{"get", "--deleted", "--key", "k1"},
          "not_deleted",
-         "not_deleted",
+         "wrong_bin",
          "memory.get",
          "Run 'remember delete' on it first.",
          3,
