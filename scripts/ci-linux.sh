@@ -179,12 +179,8 @@ ci_run() {
     "$@"
 }
 
-# ctest runs the black-box gate (step_gate, the tests/gate-suites list) and the
-# store unit under ASan/LSan (store_asan_gate) once each, with this script's
-# ASAN_OPTIONS/UBSAN_OPTIONS. Do not run either binary again by hand here.
-echo "== ctest (step_gate + store_asan_gate) [$(date +%T)] =="
-ci_run ctest --test-dir "$BUILD_DIR" --output-on-failure
-
+# Lint before ctest: it needs only compile_commands.json, and its Linux-only
+# findings (IWYU, cppcheck, LLVM 18 tidy) then fail fast instead of after the suites.
 echo "== lint (format, tidy, cppcheck, IWYU, scan-build) [$(date +%T)] =="
 export CI=true
 export BUILD_DIR
@@ -192,5 +188,11 @@ export REMEMBER_SCAN_BUILD=1
 export REMEMBER_IWYU=1
 export REPORT_DIR="${BUILD_DIR}/lint-reports"
 ./scripts/lint-all.sh
+
+# ctest runs the black-box gate (step_gate, the tests/gate-suites list) and the
+# store unit under ASan/LSan (store_asan_gate) once each, with this script's
+# ASAN_OPTIONS/UBSAN_OPTIONS. Do not run either binary again by hand here.
+echo "== ctest (step_gate + store_asan_gate) [$(date +%T)] =="
+ci_run ctest --test-dir "$BUILD_DIR" --output-on-failure
 
 echo "== ci-linux: OK [$(date +%T)] =="
