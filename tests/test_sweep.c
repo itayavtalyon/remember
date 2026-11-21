@@ -3,7 +3,9 @@
 /* The tests below drive the CLI; the store test binary has no CLI. */
 #ifdef REMEMBER_PLUGINS_DIAG_TEST
 
+#include "failing_stream.h"
 #include "harness.h"
+#include "remember_app.h"
 #include "test.h"
 
 #include <stdio.h>
@@ -530,8 +532,11 @@ TEST(sweep_all_skips_a_newer_brain_and_a_brain_that_cannot_be_swept_warns)
     char *one = given_listed_brain_with_a_due_row();
     char *newer = given_listed_brain_with_a_due_row();
     char *broken = given_listed_brain_with_a_due_row();
+    char *unopenable = given_listed_brain_with_a_due_row();
     CmdResult r;
 
+    /* on disk, so not missing, but not a database: the open fails */
+    harness_write_file(unopenable, "not a brain\n");
     exec_sql(newer, "PRAGMA user_version = 99;");
     exec_sql(broken, "CREATE TRIGGER no_expiry BEFORE UPDATE OF expired_at ON entries BEGIN SELECT "
                      "RAISE(ABORT, 'no'); END;");
@@ -541,10 +546,12 @@ TEST(sweep_all_skips_a_newer_brain_and_a_brain_that_cannot_be_swept_warns)
     ASSERT_STR_CONTAINS(r.err, "warning: ");
     ASSERT_STR_CONTAINS(r.err, broken);
     ASSERT_STR_NOT_CONTAINS(r.err, newer);
+    ASSERT_STR_CONTAINS(r.err, unopenable);
     cmd_result_free(&r);
     assert_marked(one, 1, true);
     assert_marked(newer, 1, false);
     assert_marked(broken, 1, false);
+    free(unopenable);
     free(broken);
     free(newer);
     free(one);
@@ -937,6 +944,124 @@ TEST(plain_delete_of_an_expired_row_moves_it_to_the_trash_as_before)
 
 // NOLINTEND(cppcoreguidelines-avoid-magic-numbers,readability-magic-numbers)
 
+/* ---- output that fails ------------------------------------------------------------------- */
+
+/* remember in this process with stdout (out_fails) or stderr failing from its first byte; the
+   other stream keeps what it got in *kept. The exit code, or -1 when a stream cannot open. */
+static int run_with_a_failing_stream(const char *const *argv, int argc, bool out_fails,
+                                     FailingStream *kept)
+{
+    FailingStream failing;
+    FILE *bad = failing_stream_open(&failing, 0U);
+    FILE *good = failing_stream_open(kept, FAILING_STREAM_CAP);
+    int rc = -1;
+
+    ASSERT_TRUE(bad != NULL && good != NULL);
+    if (bad != NULL && good != NULL) {
+        FILE *out = good;
+        FILE *err = bad;
+
+        if (out_fails) {
+            out = bad;
+            err = good;
+        }
+
+        rc = remember_run(argc, (char *const *)argv, out, err);
+    }
+    if (bad != NULL) {
+        (void)fclose(bad);
+    }
+    if (good != NULL) {
+        (void)fclose(good);
+    }
+    return rc;
+}
+
+TEST(delete_expired_that_cannot_print_its_count_exits_1)
+{
+    char *db = make_temp_db_path();
+    const char *argv[] = {"remember", "--db", db, "delete", "--expired"};
+    FailingStream err;
+
+    add_expiring(db, "due");
+    backdate(db, 1, k_past);
+    ASSERT_EQ_INT(run_with_a_failing_stream(argv, 5, true, &err), 1);
+    ASSERT_STR_CONTAINS(err.buf, "failed to write output");
+    free(db);
+}
+
+TEST(purge_that_cannot_print_its_json_exits_1)
+{
+    char *db = make_temp_db_path();
+    const char *argv[] = {"remember", "--db", db, "--json", "purge", "1"};
+    FailingStream err;
+
+    assert_ok(RUN(db, "add", "gone"));
+    assert_ok(RUN(db, "delete", "1"));
+    ASSERT_EQ_INT(run_with_a_failing_stream(argv, 6, true, &err), 1);
+    /* the purge itself committed */
+    assert_query(db, "SELECT count(*) FROM entries;", "0");
+    free(db);
+}
+
+TEST(purge_of_a_live_row_that_cannot_print_the_wrong_bin_line_exits_1)
+{
+    char *db = make_temp_db_path();
+    const char *argv[] = {"remember", "--db", db, "purge", "1"};
+    FailingStream out;
+
+    assert_ok(RUN(db, "add", "live"));
+    ASSERT_EQ_INT(run_with_a_failing_stream(argv, 5, false, &out), 1);
+    assert_query(db, "SELECT count(*) FROM entries;", "1");
+    free(db);
+}
+
+TEST(sweep_all_that_cannot_print_exits_1)
+{
+    char *one = given_listed_brain_with_a_due_row();
+    const char *argv[] = {"remember", "--db", one, "brain", "sweep", "--all"};
+    FailingStream err;
+
+    ASSERT_EQ_INT(run_with_a_failing_stream(argv, 6, true, &err), 1);
+    ASSERT_STR_CONTAINS(err.buf, "failed to write output");
+    free(one);
+}
+
+TEST(sweep_all_that_cannot_warn_of_a_missing_brain_exits_1)
+{
+    char *one = given_listed_brain_with_a_due_row();
+    char *gone = given_listed_brain_with_a_due_row();
+    const char *argv[] = {"remember", "--db", one, "brain", "sweep", "--all"};
+    FailingStream out;
+
+    ASSERT_EQ_INT(remove(gone), 0);
+    ASSERT_EQ_INT(run_with_a_failing_stream(argv, 6, false, &out), 1);
+    free(gone);
+    free(one);
+}
+
+#ifdef REMEMBER_TEST_VFS
+/* REMEMBER_TEST_FAIL_WRITE=0: the move to the Trash cannot write, so nothing moves. */
+TEST(delete_expired_that_cannot_write_moves_nothing_and_exits_1)
+{
+    char *db = make_temp_db_path();
+    CmdResult r;
+
+    add_expiring(db, "due");
+    backdate(db, 1, k_past);
+    // NOLINTBEGIN(concurrency-mt-unsafe) single-threaded test; the child reads it
+    ASSERT_EQ_INT(setenv("REMEMBER_TEST_FAIL_WRITE", "0", 1), 0);
+    r = RUN(db, "delete", "--expired");
+    ASSERT_EQ_INT(unsetenv("REMEMBER_TEST_FAIL_WRITE"), 0);
+    // NOLINTEND(concurrency-mt-unsafe)
+    ASSERT_EQ_INT(r.exit_code, 1);
+    ASSERT_STR_CONTAINS(r.err, "SQLITE_IOERR_WRITE");
+    cmd_result_free(&r);
+    assert_query(db, "SELECT count(*) FROM entries WHERE deleted_at IS NULL;", "1");
+    free(db);
+}
+#endif
+
 #endif /* REMEMBER_PLUGINS_DIAG_TEST */
 
 void register_sweep_tests(void)
@@ -978,5 +1103,13 @@ void register_sweep_tests(void)
     RUN_TEST(delete_expired_has_no_cap);
     RUN_TEST(delete_expired_takes_no_locator);
     RUN_TEST(plain_delete_of_an_expired_row_moves_it_to_the_trash_as_before);
+    RUN_TEST(delete_expired_that_cannot_print_its_count_exits_1);
+    RUN_TEST(purge_that_cannot_print_its_json_exits_1);
+    RUN_TEST(purge_of_a_live_row_that_cannot_print_the_wrong_bin_line_exits_1);
+    RUN_TEST(sweep_all_that_cannot_print_exits_1);
+    RUN_TEST(sweep_all_that_cannot_warn_of_a_missing_brain_exits_1);
+#ifdef REMEMBER_TEST_VFS
+    RUN_TEST(delete_expired_that_cannot_write_moves_nothing_and_exits_1);
+#endif
 #endif
 }

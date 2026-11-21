@@ -703,11 +703,14 @@ int exit_wrong_list(StoreStatus st, const char *label)
         message = fmt_alloc("\"%s\" has expired.", label);
     }
     if (message == NULL || (st == STORE_ERR_NOT_DELETED && fix == NULL)) {
+        free(message);
+        free(fix);
         err_msg(DIAG_OUT_OF_MEMORY, "out of memory");
-        rc = REMEMBER_ERR;
-    } else if (diag_error_split(DIAG_WRONG_BIN,
-                                (DiagSplit){.message = message,
-                                            .fix = fix != NULL ? fix : wrong_bin_fix(st)}) != 0) {
+        return REMEMBER_ERR;
+    }
+    if (diag_error_split(
+            DIAG_WRONG_BIN,
+            (DiagSplit){.message = message, .fix = fix != NULL ? fix : wrong_bin_fix(st)}) != 0) {
         rc = REMEMBER_ERR;
     }
     free(message);

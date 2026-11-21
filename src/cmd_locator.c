@@ -464,8 +464,9 @@ int cmd_purge(Store *s, bool json, int rest_argc, const char **rest_argv)
         return rc;
     }
     if (json && output_entries_data(app_out(), "purged", &gone, 1U, now) != 0) {
+        store_entry_free(&gone);
         err_msg(DIAG_INTERNAL, "failed to write output");
-        rc = REMEMBER_ERR;
+        return REMEMBER_ERR;
     }
     store_entry_free(&gone);
     return rc;

@@ -183,6 +183,7 @@ DEFENSIVE = re.compile(
     |^\s*add_parse_free\s*\(
     |^\s*update_parse_free\s*\(
     |^\s*list_parse_free\s*\(
+    |^\s*brain_list_free\s*\(              # plan 32: brain sweep --all error tails
     |^\s*free\s*\(
     |^\s*size_t\s+\w+\s*(=\s*0U?\s*)?;      # decl (init-variables may add = 0)
     |^\s*end_opts\s*=

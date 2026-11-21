@@ -810,10 +810,10 @@ static int arm_events(Store *s, const char *command, StoreOrigin origin,
     cfg.origin = cev->origin;
     cfg.hooks = STORE_HOOKS_DEFAULT;
     st = store_set_events(s, &cfg);
+    if (st != STORE_OK && report) {
+        err_store(s, st);
+    }
     if (st != STORE_OK) {
-        if (report) {
-            err_store(s, st);
-        }
         return REMEMBER_ERR;
     }
     cev->armed = true;
