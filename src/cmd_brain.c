@@ -66,7 +66,9 @@ int cmd_brain_reject_args(int rest_argc, const char **rest_argv)
     enum BrainVerb verb = brain_verb(rest_argc, rest_argv);
 
     if (verb == BRAIN_VERB_NONE) {
-        err_msg(DIAG_USAGE, "brain takes 'new-id'");
+        (void)diag_error_fix(DIAG_USAGE,
+                             "'remember brain' needs a command: list, prune, sweep, or new-id.",
+                             "Run 'remember brain --help' to see what each does.");
         return -1;
     }
     if (rest_argc > 1) {
@@ -87,25 +89,31 @@ static int warn_unknown(const char *file, const char *name)
 }
 
 /* brains.json cannot be read: the file is left alone (G5 A). */
-static int report_unreadable(void)
+static int report_unreadable(const char *file)
 {
-    err_msg(DIAG_CANNOT_OPEN, "cannot read brains.json");
+    brain_note_unreadable_error(file);
+    return REMEMBER_ERR;
+}
+
+static int report_no_data_dir(const char *why)
+{
+    brain_note_no_data_dir(why);
     return REMEMBER_ERR;
 }
 
 static int brain_list_run(bool json)
 {
     char file[REMEMBER_PATH_MAX];
+    char why[BRAIN_WHY_CAP];
     BrainList list = {0};
     size_t i = 0;
     int rc = REMEMBER_OK;
 
-    if (brain_json_path(file, sizeof(file)) != 0) {
-        err_msg(DIAG_CANNOT_OPEN, "cannot find the data folder");
-        return REMEMBER_ERR;
+    if (brain_json_path(file, sizeof(file), why, sizeof(why)) != 0) {
+        return report_no_data_dir(why);
     }
     if (brain_list_read(file, &list) != BRAIN_LIST_UNCHANGED) {
-        return report_unreadable();
+        return report_unreadable(file);
     }
     if (warn_unknown(file, list.unknown_field) != 0) {
         rc = REMEMBER_ERR;
@@ -134,14 +142,14 @@ static int brain_list_run(bool json)
 static int brain_prune_run(bool json, int busy_timeout_ms)
 {
     char file[REMEMBER_PATH_MAX];
+    char why[BRAIN_WHY_CAP];
     BrainList removed = {0};
     BrainListCode code = BRAIN_LIST_IO;
     char *unknown = NULL;
     int rc = REMEMBER_OK;
 
-    if (brain_json_path(file, sizeof(file)) != 0) {
-        err_msg(DIAG_CANNOT_OPEN, "cannot find the data folder");
-        return REMEMBER_ERR;
+    if (brain_json_path(file, sizeof(file), why, sizeof(why)) != 0) {
+        return report_no_data_dir(why);
     }
     code = brain_list_prune(file, brain_path_is_missing, NULL, busy_timeout_ms, &removed, &unknown);
     if (warn_unknown(file, unknown) != 0) {
@@ -149,14 +157,14 @@ static int brain_prune_run(bool json, int busy_timeout_ms)
     }
     free(unknown);
     if (code == BRAIN_LIST_UNREADABLE) {
-        return report_unreadable();
+        return report_unreadable(file);
     }
     if (code == BRAIN_LIST_BUSY) {
         brain_note_busy_error();
         return REMEMBER_ERR;
     }
     if (code != BRAIN_LIST_UNCHANGED && code != BRAIN_LIST_PRUNED) {
-        err_msg(DIAG_IO_ERROR, "cannot update brains.json");
+        brain_note_update_error(file);
         return REMEMBER_ERR;
     }
     if (json && rc == REMEMBER_OK) {
@@ -191,7 +199,7 @@ int cmd_brain(Store *s, bool json, int rest_argc, const char **rest_argv)
         return REMEMBER_ERR;
     }
     /* The open recorded the old id; record the new one, under the same lock and wait. */
-    if (brain_note_open(s) != 0) {
+    if (brain_note_open(s, false) != 0) {
         return REMEMBER_ERR;
     }
     if (json) {

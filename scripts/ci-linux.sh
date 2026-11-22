@@ -171,11 +171,15 @@ ci_run() {
   # ctest writes under the build dir, which this script created as root.
   chown -R "$uid:$gid" "$BUILD_DIR"
   echo "ci-linux: running tests as ${user} (uid ${uid}), not root"
+  # The release shim builds under the build dir here too: the default
+  # <root>/build-shim-release is shared with the host's mac ctest, which refuses
+  # a cache configured at /src.
   runuser -u "$user" -- env \
     ASAN_OPTIONS="${ASAN_OPTIONS:-}" \
     UBSAN_OPTIONS="${UBSAN_OPTIONS:-}" \
     PATH="$PATH" \
     HOME="${HOME:-/tmp}" \
+    REMEMBER_SHIM_RELEASE_DIR="${ROOT}/${BUILD_DIR}/shim-release" \
     "$@"
 }
 

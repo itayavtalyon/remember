@@ -41,10 +41,10 @@ Plans: 19 (`schema_too_new`), 20 (`setting_from_hook`), 21 (locator, Trash, expi
 
 ## C-02
 
-- `--color     Use color: auto, always, or never. auto uses color only on a terminal, when NO_COLOR is unset and TERM isn't dumb.`
-- `--quiet     Turn off progress lines on stderr.`
+- `--color            auto, always, or never. 0.3.0 prints no color yet.`
+- `--quiet            0.3.0 prints no progress lines yet.`
 
-Plan 25 prints these. Plan 21 lists the flags and uses the same lines.
+Replaced 2026-11-22 (`decision:open-2026-11-16-v030-whats-new-color`, `decision:open-2026-11-16-v030-whats-new-progress`): 0.3.0 prints no color and no progress lines. The old lines (`Use color: auto, always, or never. ...` and `Turn off progress lines on stderr.`) promised both. `remember --help`, `skills/remember/SKILL.md` and `specs/JSON-ENVELOPE.md` print or quote the new lines. Their text starts at column 22, like the other options, and `--strict` has its own line, `--strict           Treat warnings as errors (exit 4)`; the exit-3 line is `3  wrong bin (wrong_bin)` (`decision:open-2026-11-22-top-level-help-leftovers`).
 
 ## C-03
 
@@ -149,7 +149,7 @@ remember.search.candidate_pool = 400
 `explain`:
 
 ```text
-remember.search.candidate_pool  (integer, 20–2000, default 200)
+remember.search.candidate_pool  (integer, 20 to 2000, default 200)
   How many keyword matches search looks at before filters rank them.
   Can be set for: user, brain
   Now: 400, from brain, set by human on 21 Oct at 12:04
@@ -348,8 +348,8 @@ Plan 26, stage 4, after plans 19 through 25 have merged. Each feature plan still
 
 Plan 20 stage 8 drafts (`settings import`, Itay grill, 2026-11-08). Same status: printed, not approved.
 
-- `setting_import_skipped`, reason `unknown_key` (`decision:plan20-import-unknown-key-draft`). The C-12 shape with the reason words `remember has no setting by that name`: `remember: warning: skipped "<key>": remember has no setting by that name.` A `plugin.*` key is this reason until plan 25.
-- `setting_invalid`, reason `bad_field` (`decision:plan20-import-bad-field`). `remember: warning: skipped "<key>": its "<field>" isn't valid.` `<field>` is the first bad member in ST-8.2 order: `scope`, `updated_by`, `updated_at`, `device_id`, `version_vector`, `deleted_at`. Detail `{key, field, reason}`.
+- `setting_import_skipped`, reason `unknown_key` (`decision:plan20-import-unknown-key-draft`). The C-12 shape with the reason words `remember has no setting by that name`: `remember: warning: skipped "<key>": remember has no setting by that name.` A `plugin.*` key is this reason until the plugin-not-installed import reason exists. The reason words are a draft. The fix is approved (2026-11-22, `decision:open-2026-11-16-fix-import-skipped-unknown-key`, part 1): `Take that row out of the file or fix its name, then import it again.`
+- `setting_invalid`, reason `bad_field` (`decision:plan20-import-bad-field`). `remember: warning: skipped "<key>": its "<field>" isn't valid.` `<field>` is the first bad member in ST-8.2 order: `scope`, `updated_by`, `updated_at`, `device_id`, `version_vector`, `deleted_at`. Detail `{key, field, reason}`. The message is a draft. The fix is approved (2026-11-22, `decision:open-2026-11-16-warning-fix-setting-invalid-leftovers`), one for every field: `Fix that field in the file, then import it again.`
 - `import_parse`, the file is not a settings document (`decision:plan20-import-parse-draft`). Message `"<path>" isn't a remember settings file.` A file that cannot be read: `can't read "<path>": <system error>.` Both keep the catalog fix `Check the import source, then try again.`
 - `import_parse`, a later version (`decision:plan20-import-version-draft`). Message `"<path>" is settings file version <n>; this remember reads version 1.` Fix `Update remember, then try again.`
 - `--dry-run` plain line (`decision:plan20-import-dry-run-draft`). `Would import "<path>": <n> settings written, <n> unchanged, <n> skipped. Nothing was changed.`
@@ -368,11 +368,18 @@ Plan 20 stage 9 drafts (`settings list`, `history`, `explain`, Itay grill, 2026-
 - History lines (same decision). `<when>  <scope>  <key>  <old> → <new>  by <kind>[ "<id>"]`. A missing side prints `(unset)`. A row whose actor is not valid JSON prints no `by` part.
 - An empty list value prints `(empty)` in `list`, `get` and `explain` (`decision:plan20-empty-list-related`).
 
-Plan 30 drafts (plugin keys, Itay grill 2026-11-16). Same status: printed, not approved. Boolean, size, sub-byte size, the unknown-plugin line and the plugin-not-installed import line are approved rows above (C-05, C-03, C-12) and are not drafts.
+Plan 30 drafts (plugin keys, Itay grill 2026-11-16). Same status: printed, not approved, except the lines listed as approved below. Boolean, size, sub-byte size, the unknown-plugin line and the plugin-not-installed import line are approved rows above (C-05, C-03, C-12) and are not drafts.
 
-- `setting_invalid_value`, an enum (`decision:2026-11-16-plan30-value-error-copy-drafts`). Message `"<key>" must be one of low, medium, or high; you gave "<value>".` Two values: `must be one of low or high`. One value: `must be low`. Fix `Use low, medium, or high.` (`Use low or high.`, `Use low.`). Detail `{key, value, type}`.
-- `setting_invalid_value`, a plugin string or a string-list item that is not text (a control byte, DEL, bad UTF-8, over 511 bytes; same decision). Message `"<key>" needs text with no control characters, up to 511 bytes.` Fix `Use plain text of 511 bytes or fewer.` The value is not echoed. Detail `{key, type}`.
-- `setting_out_of_range`, a plugin string list with more items than `range.max_items` (same decision). Message `"<key>" can hold 1 to <N> items; you gave <M>.` Fix `Give <N> items or fewer.` Detail `{key, value, max}`.
+Plan 30 approved 2026-11-22 (`decision:open-2026-11-17-plan30-plugin-keys-copy`, Story Weaver, then Itay):
+
+- `setting_invalid_value`, an enum. Message `"<key>" must be low, medium or high; you gave "<value>".` Two values: `must be low or high`. One value: `must be low`. Fix `Use low, medium or high.` (`Use low or high.`, `Use low.`). No serial comma, no "one of". Detail `{key, value, type}`.
+- `setting_invalid_value`, a plugin string or a string-list item that is not text (a control byte, DEL, bad UTF-8, over 511 bytes). Message `"<key>" must be plain text of 511 bytes or fewer, with no control characters.` Fix `Remove any control characters and keep it to 511 bytes or fewer.` The value is not echoed. Detail `{key, type}`.
+- `setting_out_of_range`, a plugin string list with more items than `range.max_items`. Message `"<key>" can hold at most <N> item(s); you gave <M>.` Fix `Give at most <N> item(s).` (`item` at 1; an empty list stays allowed, so no lower bound is named). Detail `{key, value, max}`.
+- `setting_out_of_range`, a one-sided manifest range. Message `"<key>" must be at least 5; you gave <v>.` or `must be at most 9`; durations and sizes read `at least 5m`, `at most 2MiB` in the bound's own unit. Fix `Use 5 or more.` or `Use 9 or less.`
+- The description of `plugin.<name>.enabled` in `settings explain`: `Turns the "<name>" plugin on or off.` A manifest setting prints its own manifest `description`.
+- `cannot_open`, a plugins folder that exists and cannot be read. Message `can't read the plugins folder (<path>).` Fix `Check that the folder can be read, or move it aside to run without plugins.`
+- A stored plugin value the row refuses, on `get`, `list` and `explain` (`setting_invalid`). Message `ignored the stored "<key>": "<value>" isn't a valid value, so the next layer's value is used.` Fix `Set a valid value with 'remember settings set <key> <value>[ --scope brain]'.`
+
+Still a draft:
+
 - A size bound in the C-05 range line prints the largest exact unit among `B`, `KiB`, `MiB`: `can be 1KiB to 4MiB; you gave 5MiB.`
-- The description of `plugin.<name>.enabled` in `settings explain` (`decision:2026-11-16-plan30-enabled-description`). `Whether "<name>" is turned on.` A manifest setting prints its own manifest `description`.
-- `cannot_open`, a plugins folder that exists and cannot be read. `remember: cannot read the plugins folder` (no fix; the same shape as `cannot read default-db`). Nobody approved this line, and Itay was not asked: it is the one error path plan 30 adds that no decision words (`remember-miss:plan30-plugins-folder-unreadable-copy`).

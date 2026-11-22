@@ -16,6 +16,7 @@
 
 #include <errno.h>
 #include <fcntl.h>
+#include <limits.h>
 #include <poll.h>
 #include <signal.h>
 #include <spawn.h>
@@ -1612,9 +1613,11 @@ static int report_prefix(const SettingSpec *spec, const WriteOpts *opt)
 /* The value is not echoed: it can be 511 bytes of text. */
 static int report_text_invalid(const SettingSpec *spec)
 {
-    char *msg = fmt_alloc("\"%s\" needs text with no control characters, up to %d bytes.",
-                          spec->key, SETTING_TEXT_MAX);
-    char *fix = fmt_alloc("Use plain text of %d bytes or fewer.", SETTING_TEXT_MAX);
+    char *msg =
+        fmt_alloc("\"%s\" must be plain text of %d bytes or fewer, with no control characters.",
+                  spec->key, SETTING_TEXT_MAX);
+    char *fix = fmt_alloc("Remove any control characters and keep it to %d bytes or fewer.",
+                          SETTING_TEXT_MAX);
     int rc = REMEMBER_ERR;
 
     if (msg == NULL || fix == NULL) {
@@ -1628,26 +1631,22 @@ static int report_text_invalid(const SettingSpec *spec)
     return rc;
 }
 
-/* "low", "low or high", or "low, medium, or high"; one_of puts "one of " before two or more. */
-static char *enum_phrase(const SettingSpec *spec, bool one_of)
+/* "low", "low or high", or "low, medium or high": no serial comma. */
+static char *enum_phrase(const SettingSpec *spec)
 {
     size_t i = 0;
-    size_t cap = 1U + sizeof("one of ");
+    size_t cap = 1U;
     char *out = NULL;
     size_t at = 0;
 
     for (i = 0; i < spec->nvalues; i++) {
-        cap += strlen(spec->values[i]) + sizeof(", or ");
+        cap += strlen(spec->values[i]) + sizeof(" or ");
     }
     out = (char *)malloc(cap);
     if (out == NULL) {
         return NULL;
     }
     out[0] = '\0';
-    if (one_of && spec->nvalues > 1U) {
-        memcpy(out, "one of ", sizeof("one of "));
-        at = sizeof("one of ") - 1U;
-    }
     for (i = 0; i < spec->nvalues; i++) {
         const char *sep = "";
 
@@ -1655,7 +1654,7 @@ static char *enum_phrase(const SettingSpec *spec, bool one_of)
             sep = ", ";
         }
         if (i > 0U && i + 1U == spec->nvalues) {
-            sep = spec->nvalues > 2U ? ", or " : " or ";
+            sep = " or ";
         }
         /* cap held every value and the widest separator (cap above). */
         memcpy(out + at, sep, strlen(sep));
@@ -1666,15 +1665,14 @@ static char *enum_phrase(const SettingSpec *spec, bool one_of)
     return out;
 }
 
-/* Drafts: decision:2026-11-16-plan30-value-error-copy-drafts. */
+/* Approved copy: decision:open-2026-11-17-plan30-plugin-keys-copy (item 1). */
 static int report_enum_invalid(const SettingSpec *spec, const char *value)
 {
-    char *list = enum_phrase(spec, true);
-    char *plain = enum_phrase(spec, false);
+    char *list = enum_phrase(spec);
     char *msg = list != NULL
                     ? fmt_alloc("\"%s\" must be %s; you gave \"%s\".", spec->key, list, value)
                     : NULL;
-    char *fix = plain != NULL ? fmt_alloc("Use %s.", plain) : NULL;
+    char *fix = list != NULL ? fmt_alloc("Use %s.", list) : NULL;
     int rc = REMEMBER_ERR;
 
     if (msg == NULL || fix == NULL) {
@@ -1688,7 +1686,6 @@ static int report_enum_invalid(const SettingSpec *spec, const char *value)
                           sizeof(fields) / sizeof(fields[0]));
     }
     free(list);
-    free(plain);
     free(msg);
     free(fix);
     return rc;
@@ -1775,7 +1772,8 @@ static int report_invalid(const SettingSpec *spec, const WriteOpts *opt)
     return report_scalar_invalid(spec, opt->items[0]);
 }
 
-/* Drafts: decision:2026-11-16-plan30-value-error-copy-drafts. */
+/* Approved copy: decision:open-2026-11-17-plan30-plugin-keys-copy (item 3). An empty list is
+   allowed, so the sentence names no lower bound. */
 static int report_list_range(const SettingSpec *spec, const WriteOpts *opt)
 {
     char given[BOUND_TEXT_CAP];
@@ -1785,8 +1783,9 @@ static int report_list_range(const SettingSpec *spec, const WriteOpts *opt)
 
     (void)snprintf(given, sizeof(given), "%zu", opt->nitems);
     (void)snprintf(most, sizeof(most), "%d", spec->max_items);
-    msg = fmt_alloc("\"%s\" can hold 1 to %s items; you gave %s.", spec->key, most, given);
-    fix = fmt_alloc("Give %s items or fewer.", most);
+    msg = fmt_alloc("\"%s\" can hold at most %s item%s; you gave %s.", spec->key, most,
+                    spec->max_items == 1 ? "" : "s", given);
+    fix = fmt_alloc("Give at most %s item%s.", most, spec->max_items == 1 ? "" : "s");
     if (msg == NULL || fix == NULL) {
         free(msg);
         free(fix);
@@ -1803,6 +1802,19 @@ static int report_list_range(const SettingSpec *spec, const WriteOpts *opt)
     free(msg);
     free(fix);
     return REMEMBER_ERR;
+}
+
+/* Which ends of a range a sentence names (decision:open-2026-11-17-plan30-plugin-keys-copy item 4,
+   decision:open-2026-11-22-one-sided-range-copy). The registry keeps no "has a min" bit: a manifest
+   range with no max has the type limit there, and every type reads 0 or more. */
+typedef enum { RANGE_BOTH, RANGE_AT_LEAST, RANGE_AT_MOST } RangeEnds;
+
+static RangeEnds range_ends(const SettingSpec *spec)
+{
+    if (spec->max_value == LLONG_MAX) {
+        return RANGE_AT_LEAST;
+    }
+    return spec->min_value == 0 ? RANGE_AT_MOST : RANGE_BOTH;
 }
 
 static int report_range(const SettingSpec *spec, const WriteOpts *opt)
@@ -1824,8 +1836,18 @@ static int report_range(const SettingSpec *spec, const WriteOpts *opt)
         err_msg(DIAG_INTERNAL, "internal error");
         return REMEMBER_ERR;
     }
-    msg = fmt_alloc("\"%s\" can be %s to %s; you gave %s.", spec->key, lower, upper, opt->items[0]);
-    fix = fmt_alloc("Set a value from %s to %s.", lower, upper);
+    if (range_ends(spec) == RANGE_AT_LEAST) {
+        msg =
+            fmt_alloc("\"%s\" must be at least %s; you gave %s.", spec->key, lower, opt->items[0]);
+        fix = fmt_alloc("Use %s or more.", lower);
+    } else if (range_ends(spec) == RANGE_AT_MOST) {
+        msg = fmt_alloc("\"%s\" must be at most %s; you gave %s.", spec->key, upper, opt->items[0]);
+        fix = fmt_alloc("Use %s or less.", upper);
+    } else {
+        msg = fmt_alloc("\"%s\" can be %s to %s; you gave %s.", spec->key, lower, upper,
+                        opt->items[0]);
+        fix = fmt_alloc("Set a value from %s to %s.", lower, upper);
+    }
     if (msg == NULL || fix == NULL) {
         free(msg);
         free(fix);
@@ -3274,8 +3296,7 @@ static int warn_skipped(const SettingImportRow *row, const char *why, const char
     return 0;
 }
 
-/* setting_invalid with its detail (C-14, C-14a, decision:plan20-import-bad-field). fix is NULL for
-   a reason that has no approved fix yet. */
+/* setting_invalid with its detail (C-14, C-14a, decision:plan20-import-bad-field). */
 static int warn_invalid(char *msg, const char *fix, const DiagDetailField *fields, size_t n)
 {
     if (msg == NULL) {
@@ -3315,8 +3336,9 @@ static int warn_invalid_value(const SettingsRegistry *reg, char *msg, const char
 }
 
 /* decision:2026-11-17-plan30-review-grill G1 A: the read skipped a layer whose stored value the
-   row refuses. The C-14 line and the E3B-1 entry 6 fix, as for an import row. A string shows
-   its text, anything else its JSON (as SettingImportRow.value). */
+   row refuses. The message is approved copy (decision:open-2026-11-17-plan30-plugin-keys-copy,
+   item 7); the fix is the E3B-1 entry 6 fix, as for an import row. A string shows its text,
+   anything else its JSON (as SettingImportRow.value). */
 static int warn_refused_layer(const SettingsRegistry *reg, const SettingSpec *spec,
                               SettingLayer layer, const char *json)
 {
@@ -3331,9 +3353,11 @@ static int warn_refused_layer(const SettingsRegistry *reg, const SettingSpec *sp
     }
     fields[1].value = value;
 
-    return warn_invalid_value(
-        reg, fmt_alloc("skipped \"%s\": \"%s\" isn't a valid value.", spec->key, value), spec->key,
-        layer, fields, sizeof(fields) / sizeof(fields[0]));
+    return warn_invalid_value(reg,
+                              fmt_alloc("ignored the stored \"%s\": \"%s\" isn't a valid value, so "
+                                        "the next layer's value is used.",
+                                        spec->key, value),
+                              spec->key, layer, fields, sizeof(fields) / sizeof(fields[0]));
 }
 
 static int warn_refused(const Store *store, const SettingSpec *spec, const SettingRead *read)
@@ -3371,10 +3395,12 @@ static int warn_skip(const SettingsRegistry *reg, const SettingImportRow *row, b
                                           {.name = "field", .value = row->field},
                                           {.name = "reason", .value = "bad_field"}};
 
-        /* No approved fix yet: decision:open-2026-11-16-warning-fix-setting-invalid-leftovers. */
+        /* One fix for every field (decision:open-2026-11-16-warning-fix-setting-invalid-leftovers).
+         */
         return warn_invalid(
-            fmt_alloc("skipped \"%s\": its \"%s\" isn't valid.", row->key, row->field), NULL,
-            fields, sizeof(fields) / sizeof(fields[0]));
+            fmt_alloc("skipped \"%s\": its \"%s\" isn't valid.", row->key, row->field),
+            "Fix that field in the file, then import it again.", fields,
+            sizeof(fields) / sizeof(fields[0]));
     }
     if (row->reason == SETTING_SKIP_INVALID_VALUE) {
         const DiagDetailField fields[] = {{.name = "key", .value = row->key},
@@ -3392,9 +3418,10 @@ static int warn_skip(const SettingsRegistry *reg, const SettingImportRow *row, b
             row->key, row->scope, fields, sizeof(fields) / sizeof(fields[0]));
     }
     if (row->reason == SETTING_SKIP_UNKNOWN_KEY) {
-        /* decision:plan20-import-unknown-key-draft (C-43 draft). */
-        /* No approved fix yet: decision:open-2026-11-16-fix-import-skipped-unknown-key. */
-        return warn_skipped(row, "remember has no setting by that name", NULL);
+        /* decision:plan20-import-unknown-key-draft (C-43 draft); the fix is approved
+           (decision:open-2026-11-16-fix-import-skipped-unknown-key, part 1). */
+        return warn_skipped(row, "remember has no setting by that name",
+                            "Take that row out of the file or fix its name, then import it again.");
     }
     if (row->reason == SETTING_SKIP_PLUGIN_NOT_INSTALLED) {
         /* C-12: the plugin's name, as the key folds it. */
@@ -4639,6 +4666,24 @@ static bool spec_ranged(const SettingSpec *spec)
     return spec->max_value != 0;
 }
 
+enum { EXPLAIN_RANGE_CAP = sizeof("at least ") + (2 * (size_t)BOUND_TEXT_CAP) };
+
+/* The words of the range errors, in ASCII (decision:open-2026-11-22-one-sided-range-copy 3). The
+   bounds fit BOUND_TEXT_CAP each, so the range fits out. */
+static void explain_range(const SettingSpec *spec, const char *lower, const char *upper,
+                          char out[EXPLAIN_RANGE_CAP])
+{
+    RangeEnds ends = range_ends(spec);
+
+    if (ends == RANGE_AT_LEAST) {
+        (void)snprintf(out, EXPLAIN_RANGE_CAP, "at least %s", lower);
+    } else if (ends == RANGE_AT_MOST) {
+        (void)snprintf(out, EXPLAIN_RANGE_CAP, "at most %s", upper);
+    } else {
+        (void)snprintf(out, EXPLAIN_RANGE_CAP, "%s to %s", lower, upper);
+    }
+}
+
 /* decision:plan20-explain-human-form: the C-13 block. */
 static int write_explain_block(FILE *out, const SettingSpec *spec, Shown shown)
 {
@@ -4659,10 +4704,15 @@ static int write_explain_block(FILE *out, const SettingSpec *spec, Shown shown)
         char lower[BOUND_TEXT_CAP];
         char upper[BOUND_TEXT_CAP];
 
+        char range[EXPLAIN_RANGE_CAP];
+
         if (format_bound(spec, spec->min_value, lower, sizeof(lower)) != 0 ||
-            format_bound(spec, spec->max_value, upper, sizeof(upper)) != 0 ||
-            fprintf(out, "%s  (%s, %s\xE2\x80\x93%s, default %s)\n", spec->key,
-                    type_token(spec->type), lower, upper, def_text) < 0) {
+            format_bound(spec, spec->max_value, upper, sizeof(upper)) != 0) {
+            return -1;
+        }
+        explain_range(spec, lower, upper, range);
+        if (fprintf(out, "%s  (%s, %s, default %s)\n", spec->key, type_token(spec->type), range,
+                    def_text) < 0) {
             return -1;
         }
     } else if (fprintf(out, "%s  (%s, default %s)\n", spec->key, type_token(spec->type), def_text) <

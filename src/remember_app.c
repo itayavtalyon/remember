@@ -72,9 +72,9 @@ static void print_general_help(void)
         "Global options (allowed before or after the command):\n"
         "  --db PATH          Database file (overrides REMEMBER_DB)\n"
         "  --json             Machine-readable JSON on stdout\n"
-        "  --color     Use color: auto, always, or never. auto uses color only on a terminal, "
-        "when NO_COLOR is unset and TERM isn't dumb.\n"
-        "  --quiet     Turn off progress lines on stderr.\n"
+        "  --strict           Treat warnings as errors (exit 4)\n"
+        "  --color            auto, always, or never. 0.3.0 prints no color yet.\n"
+        "  --quiet            0.3.0 prints no progress lines yet.\n"
         "  --busy-timeout MS  Lock wait in ms (0..60000, default 5000)\n"
         "  --no-create        Do not create a missing brain file\n"
         "  --help, -h         Show help\n"
@@ -84,7 +84,7 @@ static void print_general_help(void)
         "  0  success (including empty search/list)\n"
         "  1  usage or error\n"
         "  2  not found (get/delete/update)\n"
-        "  3  wrong bin (expired / not_expired / deleted / not_deleted)\n"
+        "  3  wrong bin (wrong_bin)\n"
         "  4  a warning under --strict\n"
         "  5  confirmation or approval required\n"
         "  75 brain is read-only (made by a newer version of remember)\n";
@@ -231,7 +231,8 @@ static void print_command_help(CliCommand topic)
         (void)fprintf(out, "Matches word prefixes (boo finds Book) in keys, bodies and tags,\n");
         (void)fprintf(out, "and the query as FTS5 syntax. A query FTS5 cannot parse still\n");
         (void)fprintf(out, "returns the prefix matches, exits 0 and writes\n");
-        (void)fprintf(out, "\"remember: warning: raw query ignored: <message>\" on stderr.\n");
+        (void)fprintf(out,
+                      "\"remember: warning: raw query ignored: <message>. <fix>\" on stderr.\n");
         (void)fprintf(out, "An empty or blank query is an empty result.\n");
         (void)fprintf(out, "Put -- before a query that starts with '-'.\n");
         (void)fprintf(out, "Order: exact key, key prefix, relevance (bm25), then updated_at.\n");
@@ -376,10 +377,9 @@ static void print_command_help(CliCommand topic)
         (void)fprintf(out, "It does not change change_seq, a version vector, or a memory.\n");
         (void)fprintf(out, "--json type is brain.new_id.result.\n");
         (void)fprintf(out, "data is {brain_id, previous_brain_id}.\n");
-        (void)fprintf(
-            out, "remember brain list prints each brain in the list: path, brain_id, added_at.\n");
+        (void)fprintf(out, "remember brain list - List the brains remember knows about\n");
         (void)fprintf(out, "--json type is brain.list.result. data is {count, brains[]}.\n");
-        (void)fprintf(out, "remember brain prune removes each path that has no brain file.\n");
+        (void)fprintf(out, "remember brain prune - Forget brains whose file is gone\n");
         (void)fprintf(out,
                       "--json type is brain.prune.result. data is {action, count, brains[]}.\n");
         /* Draft until Story Weaver words it (decision:open-2026-11-20-help-text-new-verbs). */
@@ -470,7 +470,7 @@ static void print_parse_error(const CliArgs *args)
 
 /* 007 ST-7.15: one setting_invalid warning per prefix the v6 step left out.
    The same step rewrote every memory, so no line says the brain wasn't changed. A prefix with a bad
-   shape has its C-05 line and E3B-1 entry 5 fix. A folded duplicate has no approved fix yet
+   shape has its C-05 line and E3B-1 entry 5 fix. A folded duplicate has its own line and fix
    (decision:open-2026-11-16-warning-fix-setting-invalid-leftovers). */
 static void warn_open_settings(const Store *s)
 {
@@ -483,12 +483,17 @@ static void warn_open_settings(const Store *s)
         StoreSettingWarning w = store_open_warning(s, i);
         const char *fix = NULL;
         char *line = NULL;
+        char *dup_fix = NULL;
         if (strcmp(w.reason, "bad_prefix_shape") == 0) {
             line =
                 fmt_alloc("dropped \"%s\" from \"%s\": it isn't a bucket prefix.", w.value, w.key);
             fix = k_bad_prefix_fix;
         } else {
-            line = fmt_alloc("skipped \"%s\": \"%s\" isn't a valid value.", w.key, w.value);
+            line = fmt_alloc("skipped \"%s\" in \"%s\": it matches \"%s\", which the brain already "
+                             "keeps.",
+                             w.value, w.key, w.kept);
+            dup_fix = fmt_alloc("Use \"%s\" for this prefix.", w.kept);
+            fix = dup_fix;
         }
         if (line != NULL) {
             DiagDetailField fields[] = {
@@ -499,6 +504,7 @@ static void warn_open_settings(const Store *s)
                                             sizeof(fields) / sizeof(fields[0]));
         }
         free(line);
+        free(dup_fix);
     }
 }
 
@@ -564,7 +570,7 @@ static Store *open_store(const CliArgs *args, int *out_rc)
         return NULL;
     }
     warn_open_settings(s);
-    if (brain_note_open(s) != 0) {
+    if (brain_note_open(s, true) != 0) {
         store_close(s);
         *out_rc = REMEMBER_ERR;
         return NULL;
@@ -672,7 +678,16 @@ static int load_registry(SettingsRegistry **out, PluginManifestList *mans)
         return REMEMBER_ERR;
     }
     if (st == PLUGIN_SETTINGS_DIR) {
-        err_msg(DIAG_CANNOT_OPEN, "cannot read the plugins folder");
+        char *msg = fmt_alloc("can't read the plugins folder (%s).", dir);
+
+        if (msg == NULL) {
+            err_msg(DIAG_OUT_OF_MEMORY, "out of memory");
+            return REMEMBER_ERR;
+        }
+        (void)diag_error_fix(DIAG_CANNOT_OPEN, msg,
+                             "Check that the folder can be read, or move it aside to run without "
+                             "plugins.");
+        free(msg);
         return REMEMBER_ERR;
     }
     return 0;

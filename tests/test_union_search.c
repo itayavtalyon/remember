@@ -360,7 +360,7 @@ TEST(union_search_help_describes_prefixes_facets_and_the_warning)
                         "Matches word prefixes (boo finds Book) in keys, bodies and tags,\n"
                         "and the query as FTS5 syntax. A query FTS5 cannot parse still\n"
                         "returns the prefix matches, exits 0 and writes\n"
-                        "\"remember: warning: raw query ignored: <message>\" on stderr.\n"
+                        "\"remember: warning: raw query ignored: <message>. <fix>\" on stderr.\n"
                         "An empty or blank query is an empty result.\n"
                         "Put -- before a query that starts with '-'.\n"
                         "Order: exact key, key prefix, relevance (bm25), then updated_at.\n"

@@ -1490,7 +1490,7 @@ static void parse_filter(PluginManifest *man, const JsonValue *value, const char
 
 /* What a default of each type must be (PluginSettingType order). */
 static const char *const k_default_what[] = {"true or false",
-                                             "a whole number",
+                                             "a whole number of 0 or more",
                                              "one of the \"values\" in \"range\"",
                                              "a duration like \"10m\"",
                                              "a size like \"4MiB\"",
@@ -1564,7 +1564,7 @@ static bool measure_member(PluginManifest *man, const JsonValue *range, const ch
     const JsonValue *value = member_value(range, key);
     char child[PLUGIN_PATH_CAP];
     bool valid = false;
-    const char *what = "a whole number";
+    const char *what = "a whole number of 0 or more";
 
     if (value == NULL) {
         return false;

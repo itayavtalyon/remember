@@ -100,19 +100,20 @@ int cmd_sweep(Store *s, bool json, int rest_argc, const char **rest_argv)
 int cmd_sweep_all(bool json, SweepBrainFn sweep_one, const void *ctx)
 {
     char file[REMEMBER_PATH_MAX];
+    char why[BRAIN_WHY_CAP];
     BrainList list = {0};
     size_t *counts = NULL;
     size_t total = 0U;
     size_t i = 0;
     int rc = REMEMBER_OK;
 
-    if (brain_json_path(file, sizeof(file)) != 0) {
-        err_msg(DIAG_CANNOT_OPEN, "cannot find the data folder");
+    if (brain_json_path(file, sizeof(file), why, sizeof(why)) != 0) {
+        brain_note_no_data_dir(why);
         return REMEMBER_ERR;
     }
     if (brain_list_read(file, &list) != BRAIN_LIST_UNCHANGED) {
         brain_list_free(&list);
-        err_msg(DIAG_CANNOT_OPEN, "cannot read brains.json");
+        brain_note_unreadable_error(file);
         return REMEMBER_ERR;
     }
     counts = (size_t *)calloc(list.count + 1U, sizeof(*counts));

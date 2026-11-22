@@ -379,11 +379,13 @@ const StoreError *store_last_error(const Store *s);
  * One setting_invalid warning (007 ST-7.15) that this open's v5 -> v6 step
  * produced: a bucket prefix it left out of remember.buckets.prefixes (007 §10
  * step 2). key is that setting, value is the prefix as stored, reason is
- * bad_prefix_shape or duplicate_prefix. Strings are borrowed from s.
+ * bad_prefix_shape or duplicate_prefix. kept is the folded prefix the brain already keeps for a
+ * duplicate_prefix, NULL for a bad_prefix_shape. Strings are borrowed from s.
  */
 typedef struct {
     const char *key;
     const char *value;
+    const char *kept;
     const char *reason;
 } StoreSettingWarning;
 

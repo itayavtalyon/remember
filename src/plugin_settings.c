@@ -72,7 +72,7 @@ static PluginSettingsStatus add_enabled(SettingsRegistry *reg, const char *name)
     SettingSpec row;
 
     memset(&row, 0, sizeof(row));
-    (void)snprintf(text, sizeof(text), "Whether \"%s\" is turned on.", name);
+    (void)snprintf(text, sizeof(text), "Turns the \"%s\" plugin on or off.", name);
     if (!key_of(key, sizeof(key), name, "enabled") || setting_by_key(reg, key) != NULL) {
         return PLUGIN_SETTINGS_REFUSED;
     }

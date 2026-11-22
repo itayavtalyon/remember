@@ -252,9 +252,11 @@ TEST(error_catalog_rejects_names_outside_e4_3)
 }
 
 static const char *const k_warning_codes[] = {
-    "raw_query_ignored",    "deprecated_flag", "synced_folder",          "setting_invalid",
-    "flag_meaning_changed", "unknown_field",   "setting_import_skipped", "schema_too_new_read_only",
-    "brain_id_cloned",      "brain_missing",   "plugin_unsupported",     "sweep_failed",
+    "raw_query_ignored",      "deprecated_flag",          "synced_folder",
+    "setting_invalid",        "flag_meaning_changed",     "unknown_field",
+    "setting_import_skipped", "schema_too_new_read_only", "brain_id_cloned",
+    "brain_missing",          "plugin_unsupported",       "sweep_failed",
+    "brains_json_unreadable",
 };
 
 TEST(warning_catalog_round_trips_every_code)
@@ -507,7 +509,45 @@ TEST(plain_warning_is_remember_warning)
     app_set_streams((AppStreams){.out = NULL, .err = err});
     ASSERT_EQ_INT(diag_warning_as(false, DIAG_WARN_RAW_QUERY_IGNORED, "x"), 0);
     ASSERT_EQ_INT(fflush(err), 0);
-    ASSERT_STREQ(buf, "remember: warning: raw query ignored: x\n");
+    ASSERT_STREQ(buf, "remember: warning: raw query ignored: x.\n");
+    app_set_streams((AppStreams){.out = NULL, .err = NULL});
+    ASSERT_EQ_INT(fclose(err), 0);
+    free(buf);
+}
+
+/* decision:open-2026-11-16-raw-query-ignored-plain-line-join B: the plain line ends the message
+   with a full stop before the fix, unless it has one; the JSON message stays bare. */
+TEST(raw_query_ignored_plain_line_joins_message_and_fix_with_one_full_stop)
+{
+    static const char fix[] = "Check the quotes.";
+    char *buf = NULL;
+    size_t len = 0U;
+    FILE *err = open_memstream(&buf, &len);
+
+    ASSERT_TRUE(err != NULL);
+    if (err == NULL) {
+        return;
+    }
+    app_set_streams((AppStreams){.out = NULL, .err = err});
+    ASSERT_EQ_INT(diag_warning_split_detail(DIAG_WARN_RAW_QUERY_IGNORED,
+                                            (DiagSplit){.message = "bad query", .fix = fix}, NULL,
+                                            0U),
+                  0);
+    ASSERT_EQ_INT(diag_warning_split_detail(DIAG_WARN_RAW_QUERY_IGNORED,
+                                            (DiagSplit){.message = "ends in a stop.", .fix = fix},
+                                            NULL, 0U),
+                  0);
+    ASSERT_EQ_INT(diag_warning_split_detail(DIAG_WARN_RAW_QUERY_IGNORED,
+                                            (DiagSplit){.message = "", .fix = fix}, NULL, 0U),
+                  0);
+    ASSERT_EQ_INT(diag_warning_split_detail(DIAG_WARN_SYNCED_FOLDER,
+                                            (DiagSplit){.message = "other", .fix = fix}, NULL, 0U),
+                  0);
+    ASSERT_EQ_INT(fflush(err), 0);
+    ASSERT_STREQ(buf, "remember: warning: raw query ignored: bad query. Check the quotes.\n"
+                      "remember: warning: raw query ignored: ends in a stop. Check the quotes.\n"
+                      "remember: warning: raw query ignored:  Check the quotes.\n"
+                      "remember: warning: other Check the quotes.\n");
     app_set_streams((AppStreams){.out = NULL, .err = NULL});
     ASSERT_EQ_INT(fclose(err), 0);
     free(buf);
@@ -4484,6 +4524,7 @@ void register_errors_tests(void)
     RUN_TEST(json_error_escapes_message_bytes);
     RUN_TEST(every_error_code_json_message_matches_the_plain_line);
     RUN_TEST(plain_warning_is_remember_warning);
+    RUN_TEST(raw_query_ignored_plain_line_joins_message_and_fix_with_one_full_stop);
     RUN_TEST(json_warning_is_one_line_without_the_prefix);
     RUN_TEST(every_warning_uses_the_warning_prefix);
     RUN_TEST(plain_warning_that_cannot_be_written_does_not_count);

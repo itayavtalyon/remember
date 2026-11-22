@@ -53,8 +53,8 @@ remember [--db PATH] [--json] [--strict] [--color=auto|always|never] [--quiet] [
 |------|---------|
 | `--db PATH` | Overrides `REMEMBER_DB` and default `~/.remember/remember.db` |
 | `--json` | One JSON envelope on stdout, also for errors and warnings (use this from agents) |
-| `--color auto\|always\|never` | Use color: auto, always, or never. auto uses color only on a terminal, when NO_COLOR is unset and TERM isn't dumb. |
-| `--quiet` | Turn off progress lines on stderr. |
+| `--color auto\|always\|never` | auto, always, or never. 0.3.0 prints no color yet. |
+| `--quiet` | 0.3.0 prints no progress lines yet. |
 | `--busy-timeout MS` | Milliseconds to wait for a lock (0..60000, default 5000) |
 | `--no-create` | A missing brain file fails. Creates nothing |
 
@@ -323,7 +323,7 @@ Agents should always use `--json` when parsing.
 - Word prefixes match first; the QUERY also runs as SQLite FTS5 MATCH syntax (`remember help search`)
 - The key is indexed: `search editor` finds `pref:editor`.
 - Hebrew marks are folded out of the index. The stored body keeps them.
-- A query FTS5 cannot parse is not an error: exit 0, prefix matches, and one stderr line `remember: warning: raw query ignored: <message> Check the quotes and operators in your query, or search with plain words.` (with `--json`: the item `{"code":"raw_query_ignored","message":"<message>","fix":"..."}` in `warnings`). A warning on stderr is not an error: trust the exit code
+- A query FTS5 cannot parse is not an error: exit 0, prefix matches, and one stderr line `remember: warning: raw query ignored: <message>. Check the quotes and operators in your query, or search with plain words.` (with `--json`: the item `{"code":"raw_query_ignored","message":"<message>","fix":"..."}` in `warnings`). A warning on stderr is not an error: trust the exit code
 - Empty result set → exit 0 with `count:0` (not an error)
 
 ## Project status (handoff)

@@ -229,7 +229,7 @@ static int import_from_json(Store *s, bool json, const ImportArgs *a, const char
     }
     /* An empty brain took the file's id: record it, as new-id does, so a copy made before the
        next open is the one flagged. */
-    if (st == STORE_OK && strcmp(before, after) != 0 && brain_note_open(s) != 0) {
+    if (st == STORE_OK && strcmp(before, after) != 0 && brain_note_open(s, false) != 0) {
         store_import_result_free(&result);
         return REMEMBER_ERR;
     }

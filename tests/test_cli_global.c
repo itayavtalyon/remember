@@ -47,8 +47,8 @@ TEST(help_exits_zero_and_prints_usage)
     ASSERT_STR_CONTAINS(r.out, "update");
     ASSERT_STR_CONTAINS(r.out, "import");
     ASSERT_STR_CONTAINS(r.out, "conflicts");
-    /* Round 7 exit-3 matrix (stage 6). */
-    ASSERT_STR_CONTAINS(r.out, "expired / not_expired / deleted / not_deleted");
+    /* Plan 32: one wrong-bin code (decision:open-2026-11-22-top-level-help-leftovers 1). */
+    ASSERT_STR_CONTAINS(r.out, "  3  wrong bin (wrong_bin)\n");
     cmd_result_free(&r);
     free(db);
 }

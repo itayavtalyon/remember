@@ -632,7 +632,8 @@ TEST(q1_an_integer_setting_default_written_as_1e2_is_stored_as_100)
     ASSERT_EQ_INT(man->settings[0].min_value, 10);
     plugin_manifest_free(man);
     man = given_parse(SETTING_DOC("\"type\":\"integer\",\"default\":2.5"), PLUGIN_PARSE_INVALID);
-    ASSERT_STREQ(error_at(man, 0)->message, R25_2_MUST_BE("/settings/0/default", "a whole number"));
+    ASSERT_STREQ(error_at(man, 0)->message,
+                 R25_2_MUST_BE("/settings/0/default", "a whole number of 0 or more"));
     plugin_manifest_free(man);
 }
 
@@ -2147,11 +2148,11 @@ TEST(a_default_of_the_wrong_type_names_what_the_type_needs)
                  "R2.11", R25_2_MUST_BE("/settings/0/default", "true or false"),
                  R25_2_USE("true or false"));
     expect_error(SETTING_DOC("\"type\":\"integer\",\"default\":\"3\""), "/settings/0/default",
-                 "R2.11", R25_2_MUST_BE("/settings/0/default", "a whole number"),
-                 R25_2_USE("a whole number"));
+                 "R2.11", R25_2_MUST_BE("/settings/0/default", "a whole number of 0 or more"),
+                 R25_2_USE("a whole number of 0 or more"));
     expect_error(SETTING_DOC("\"type\":\"integer\",\"default\":-3"), "/settings/0/default", "R2.11",
-                 R25_2_MUST_BE("/settings/0/default", "a whole number"),
-                 R25_2_USE("a whole number"));
+                 R25_2_MUST_BE("/settings/0/default", "a whole number of 0 or more"),
+                 R25_2_USE("a whole number of 0 or more"));
     expect_error(SETTING_DOC("\"type\":\"duration\",\"default\":5"), "/settings/0/default", "R2.11",
                  R25_2_MUST_BE("/settings/0/default", "a duration like \"10m\""),
                  R25_2_USE("a duration like \"10m\""));
@@ -2378,8 +2379,12 @@ TEST(a_range_bound_of_the_wrong_type_names_what_the_type_needs)
 {
     expect_error(SETTING_DOC("\"type\":\"integer\",\"default\":1,\"range\":{\"min\":\"1\"}"),
                  "/settings/0/range/min", "R2.11",
-                 R25_2_MUST_BE("/settings/0/range/min", "a whole number"),
-                 R25_2_USE("a whole number"));
+                 R25_2_MUST_BE("/settings/0/range/min", "a whole number of 0 or more"),
+                 R25_2_USE("a whole number of 0 or more"));
+    expect_error(SETTING_DOC("\"type\":\"integer\",\"default\":1,\"range\":{\"max\":-5}"),
+                 "/settings/0/range/max", "R2.11",
+                 R25_2_MUST_BE("/settings/0/range/max", "a whole number of 0 or more"),
+                 R25_2_USE("a whole number of 0 or more"));
     expect_error(SETTING_DOC("\"type\":\"duration\",\"default\":\"1s\",\"range\":{\"max\":9}"),
                  "/settings/0/range/max", "R2.11",
                  R25_2_MUST_BE("/settings/0/range/max", "a duration like \"10m\""),
@@ -3025,8 +3030,8 @@ TEST(q1_a_19_digit_whole_number_that_fits_is_read)
     plugin_manifest_free(man);
     expect_error(SETTING_DOC("\"type\":\"integer\",\"default\":9223372036854775808"),
                  "/settings/0/default", "R2.11",
-                 R25_2_MUST_BE("/settings/0/default", "a whole number"),
-                 R25_2_USE("a whole number"));
+                 R25_2_MUST_BE("/settings/0/default", "a whole number of 0 or more"),
+                 R25_2_USE("a whole number of 0 or more"));
 }
 
 TEST(an_enum_default_that_is_not_a_string_uses_the_enum_phrase)

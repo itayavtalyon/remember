@@ -173,6 +173,7 @@ static const char *const k_warning_codes[DIAG_WARN_COUNT] = {
     [DIAG_WARN_BRAIN_MISSING] = "brain_missing",
     [DIAG_WARN_PLUGIN_UNSUPPORTED] = "plugin_unsupported",
     [DIAG_WARN_SWEEP_FAILED] = "sweep_failed",
+    [DIAG_WARN_BRAINS_JSON_UNREADABLE] = "brains_json_unreadable",
 };
 
 /* Plain line lead per warning. E2.3 gives raw_query_ignored its own words; the
@@ -190,6 +191,7 @@ static const char *const k_warning_plain_prefix[DIAG_WARN_COUNT] = {
     [DIAG_WARN_BRAIN_MISSING] = "warning: ",
     [DIAG_WARN_PLUGIN_UNSUPPORTED] = "warning: ",
     [DIAG_WARN_SWEEP_FAILED] = "warning: ",
+    [DIAG_WARN_BRAINS_JSON_UNREADABLE] = "warning: ",
 };
 
 static const char *catalog_name(const char *const *names, size_t count, size_t index)
@@ -272,7 +274,8 @@ typedef struct {
     size_t nfields;
     DiagCode error_code; /* errors only: picks fix and retryable */
     bool json_fix_only;  /* the plain line is the message alone; the fix is for JSON */
-    char pad_[3];        /* explicit tail padding (kept -Wpadded-clean) */
+    bool plain_stop;     /* the plain line ends the message with a full stop when it has none */
+    char pad_[2];        /* explicit tail padding (kept -Wpadded-clean) */
 } Notice;
 
 /* {"code":C,"message":M; the caller adds the rest and closes the object. */
@@ -412,6 +415,8 @@ static int write_notice(Notice notice)
         rc = write_json_notice(notice, message);
     } else if (fprintf(err, "remember: %s", notice.plain_prefix) < 0 ||
                output_text_human(err, message, false) != 0 ||
+               (notice.plain_stop && message[0] != '\0' && message[strlen(message) - 1U] != '.' &&
+                fputc('.', err) == EOF) ||
                (notice.fix != NULL && notice.fix[0] != '\0' && !notice.json_fix_only &&
                 (fputc(' ', err) == EOF || output_text_human(err, notice.fix, false) != 0)) ||
                fputc('\n', err) == EOF) {
@@ -622,6 +627,9 @@ int diag_warning_split_detail(DiagWarning code, DiagSplit split, const DiagDetai
         .fix = split.fix,
         .fields = fields,
         .nfields = nfields,
+        /* decision:open-2026-11-16-raw-query-ignored-plain-line-join B: SQLite's own text has no
+           full stop, so the plain line adds one before the fix. The JSON message stays bare. */
+        .plain_stop = code == DIAG_WARN_RAW_QUERY_IGNORED,
     });
 }
 
@@ -658,6 +666,26 @@ int diag_brain_missing(const char *path)
             (DiagSplit){.message = message,
                         .fix = "If you moved it, open it once from its new place. Otherwise run "
                                "'remember brain prune' to remove it from the list."},
+            NULL, 0U);
+    }
+    free(message);
+    return rc;
+}
+
+int diag_brains_json_unreadable(const char *path)
+{
+    static const char k_message[] = "can't read brains.json (%s), so remember isn't recording this "
+                                    "brain or checking it for copies.";
+    int need = snprintf(NULL, 0, k_message, path);
+    char *message = need >= 0 ? (char *)malloc((size_t)need + 1U) : NULL;
+    int rc = -1;
+
+    if (message != NULL && snprintf(message, (size_t)need + 1U, k_message, path) == need) {
+        rc = diag_warning_split_detail(
+            DIAG_WARN_BRAINS_JSON_UNREADABLE,
+            (DiagSplit){.message = message,
+                        .fix = "Fix the file or delete it; remember starts a new one on the next "
+                               "command."},
             NULL, 0U);
     }
     free(message);
