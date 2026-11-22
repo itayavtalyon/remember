@@ -1378,7 +1378,8 @@ TEST(envelope_brain_new_id_replaces_only_the_brain_id)
 
     r = run_remember(bare, alone, sizeof alone / sizeof alone[0], NULL);
     ASSERT_EQ_INT(r.exit_code, 1);
-    ASSERT_STREQ(r.err, "remember: brain takes 'new-id'\n");
+    ASSERT_STREQ(r.err, "remember: 'remember brain' needs a command: list, prune, sweep, or "
+                        "new-id. Run 'remember brain --help' to see what each does.\n");
     ASSERT_TRUE(access(bare, F_OK) != 0);
     cmd_result_free(&r);
 
@@ -1690,9 +1691,8 @@ TEST(envelope_help_prints_the_color_and_quiet_lines)
     const char *general[] = {"--help"};
     const char *topic[] = {"help", "get"};
     static const char color_line[] =
-        "  --color     Use color: auto, always, or never. auto uses color only on a terminal, "
-        "when NO_COLOR is unset and TERM isn't dumb.\n";
-    static const char quiet_line[] = "  --quiet     Turn off progress lines on stderr.\n";
+        "  --color     auto, always, or never. 0.3.0 prints no color yet.\n";
+    static const char quiet_line[] = "  --quiet     0.3.0 prints no progress lines yet.\n";
     static const char usage_globals[] =
         "[--db PATH] [--json] [--strict] [--color=auto|always|never] [--quiet] "
         "[--busy-timeout MS] [--no-create]";

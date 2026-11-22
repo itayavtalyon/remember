@@ -266,7 +266,8 @@ TEST(the_enabled_description_names_the_plugin)
 {
     SettingsRegistry *reg = given_one_setting(NULL);
 
-    ASSERT_STREQ(spec_of(reg, "plugin.p.enabled")->description, "Whether \"p\" is turned on.");
+    ASSERT_STREQ(spec_of(reg, "plugin.p.enabled")->description,
+                 "Turns the \"p\" plugin on or off.");
     settings_registry_free(reg);
 }
 
@@ -987,7 +988,7 @@ TEST(hybrid_has_only_enabled_key)
     ASSERT_TRUE(spec->allow_user);
     ASSERT_TRUE(spec->allow_brain);
     assert_default(spec, "false");
-    ASSERT_STREQ(spec->description, "Whether \"hybrid\" is turned on.");
+    ASSERT_STREQ(spec->description, "Turns the \"hybrid\" plugin on or off.");
     settings_registry_free(reg);
 }
 
@@ -1300,7 +1301,7 @@ TEST(the_first_folder_in_byte_order_keeps_the_name_and_a_later_one_gets_name_und
     ASSERT_TRUE(setting_by_key(reg, "plugin.foo_b.enabled") != NULL);
     ASSERT_TRUE(setting_by_key(reg, "plugin.foo_b.loud") != NULL);
     ASSERT_STREQ(spec_of(reg, "plugin.foo_b.enabled")->description,
-                 "Whether \"foo_b\" is turned on.");
+                 "Turns the \"foo_b\" plugin on or off.");
     settings_registry_free(reg);
     free(plugins);
 }

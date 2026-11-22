@@ -78,6 +78,7 @@ typedef enum {
     DIAG_WARN_BRAIN_MISSING,            /* C-01: a listed path has no brain */
     DIAG_WARN_PLUGIN_UNSUPPORTED,       /* C-23: a write needed a program this build cannot start */
     DIAG_WARN_SWEEP_FAILED,             /* plan 32: the expiry sweep after a command failed */
+    DIAG_WARN_BRAINS_JSON_UNREADABLE,   /* plan 26: an open could not read brains.json */
     DIAG_WARN_COUNT
 } DiagWarning;
 
@@ -210,6 +211,11 @@ int diag_schema_too_new_error(StoreSchemaGap gap, const char *cli_version);
  */
 int diag_brain_id_cloned(const char *path, const char *new_id);
 int diag_brain_missing(const char *path);
+
+/* decision:open-2026-11-15-brains-json-unreadable-copy: a read-write open found brains.json
+   unreadable, so it records nothing and checks no copies. path is the file; control bytes in it
+   are masked in the plain line and escaped in JSON. -1 when the warning cannot be written. */
+int diag_brains_json_unreadable(const char *path);
 
 /*
  * C-23 and E3B-1 entry 15 (decision:2026-11-12-copy-batch-e3b-warning-splits): a write was saved,

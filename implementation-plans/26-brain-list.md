@@ -174,6 +174,8 @@ A first mutation run reused stale objects (make compares mtimes at one second); 
 
 ### Open items (no decision, no approved copy, no plan text; the code does what `specs/BRAIN-LIST.md` says and marks each)
 
+*2026-11-22: the copy of items 1 (the warning), 2 (the errors) and 4 (the usage line and the `brain list` and `brain prune` help lines) is approved and in the code (`decision:open-2026-11-15-brains-json-unreadable-copy`, `specs/BRAIN-LIST.md`). The one-line summary of `brain` is still the coder's wording.*
+
 1. The warning for an unreadable `brains.json` (code, `message`, `fix`) and the value of `BRAIN_LIST_FILE_MAX` (the code uses 1 MiB). `decision:2026-11-12-brains-json-unreadable-warns` says both come with a plan 26 copy item that does not exist.
 2. What `brain list` and `brain prune` print on an unreadable file: placeholder `cannot_open` with `cannot read brains.json`.
 3. The plain `brain list` row (path only), the `--json` data of `brain list` and `brain prune`, and the meaning of "has no brain" (not a regular file).

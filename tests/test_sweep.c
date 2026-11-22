@@ -527,6 +527,48 @@ TEST(sweep_all_reads_brains_json_and_warns_missing)
     free(one);
 }
 
+/* decision:open-2026-11-15-brains-json-unreadable-copy: sweep --all reads brains.json like
+   `brain list` and fails with the same two lines. */
+TEST(sweep_all_with_an_unreadable_or_unfindable_brains_json_fails_with_the_approved_lines)
+{
+    char *one = given_listed_brain_with_a_due_row();
+    char list[1024];
+    char want[1280];
+    char xdg_keep[1024] = "";
+    char home_keep[1024] = "";
+    const char *xdg = getenv("XDG_DATA_HOME"); // NOLINT(concurrency-mt-unsafe)
+    const char *home = getenv("HOME");         // NOLINT(concurrency-mt-unsafe)
+    CmdResult r;
+
+    ASSERT_TRUE(xdg != NULL);
+    (void)snprintf(xdg_keep, sizeof(xdg_keep), "%s", xdg != NULL ? xdg : "");
+    (void)snprintf(home_keep, sizeof(home_keep), "%s", home != NULL ? home : "");
+    ASSERT_TRUE(snprintf(list, sizeof(list), "%s/remember/brains.json", xdg_keep) > 0);
+    harness_write_file(list, "not json at all");
+    r = RUN(one, "brain", "sweep", "--all");
+    ASSERT_EQ_INT(r.exit_code, 1);
+    ASSERT_TRUE(snprintf(want, sizeof(want),
+                         "remember: can't read brains.json (%s). Check that the file can be read, "
+                         "then run the command again.\n",
+                         list) > 0);
+    ASSERT_STREQ(r.err, want);
+    cmd_result_free(&r);
+    // NOLINTBEGIN(concurrency-mt-unsafe) single-threaded test; the child reads it
+    ASSERT_EQ_INT(unsetenv("XDG_DATA_HOME"), 0);
+    ASSERT_EQ_INT(unsetenv("HOME"), 0);
+    r = RUN(one, "brain", "sweep", "--all");
+    ASSERT_EQ_INT(setenv("XDG_DATA_HOME", xdg_keep, 1), 0);
+    if (home_keep[0] != '\0') {
+        ASSERT_EQ_INT(setenv("HOME", home_keep, 1), 0);
+    }
+    // NOLINTEND(concurrency-mt-unsafe)
+    ASSERT_EQ_INT(r.exit_code, 1);
+    ASSERT_STREQ(r.err, "remember: can't find the data folder: HOME is not set. Fix that, then run "
+                        "the command again.\n");
+    cmd_result_free(&r);
+    free(one);
+}
+
 TEST(sweep_all_skips_a_newer_brain_and_a_brain_that_cannot_be_swept_warns)
 {
     char *one = given_listed_brain_with_a_due_row();
@@ -1086,6 +1128,7 @@ void register_sweep_tests(void)
     RUN_TEST(there_is_no_top_level_sweep_command_only_brain_sweep);
     RUN_TEST(the_sweep_command_takes_no_argument_and_no_flag_but_all);
     RUN_TEST(sweep_all_reads_brains_json_and_warns_missing);
+    RUN_TEST(sweep_all_with_an_unreadable_or_unfindable_brains_json_fails_with_the_approved_lines);
     RUN_TEST(sweep_all_skips_a_newer_brain_and_a_brain_that_cannot_be_swept_warns);
     RUN_TEST(purge_live_exits_3_wrong_bin);
     RUN_TEST(purge_deleted_writes_one_tombstone);

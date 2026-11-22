@@ -6344,7 +6344,8 @@ TEST(import_skips_a_bad_value_and_an_unknown_key)
                  "valid value. Set a valid value with 'remember settings set "
                  "remember.search.candidate_pool <value>'.\n"
                  "remember: warning: skipped \"plugin.hybrid.weight\": remember has no setting by "
-                 "that name.\n");
+                 "that name. Take that row out of the file or fix its name, then import it "
+                 "again.\n");
     ASSERT_STR_CONTAINS(got.out, "1 settings written, 0 unchanged, 2 skipped.");
     cmd_result_free(&got);
     assert_query(userdb, "SELECT key || '=' || value FROM settings",
@@ -6368,10 +6369,13 @@ TEST(import_skips_a_bad_value_and_an_unknown_key)
                         "remember.search.candidate_pool <value>'.\","
                         "\"detail\":{\"key\":\"remember.search.candidate_pool\","
                         "\"value\":\"abc\",\"reason\":\"invalid_value\"}}");
-    ASSERT_STR_CONTAINS(got.out, "{\"code\":\"setting_import_skipped\",\"message\":\"skipped "
-                                 "\\\"plugin.hybrid.weight\\\": remember has no setting by that "
-                                 "name.\",\"detail\":{\"key\":\"plugin.hybrid.weight\","
-                                 "\"scope\":\"user\",\"reason\":\"unknown_key\"}}");
+    ASSERT_STR_CONTAINS(got.out,
+                        "{\"code\":\"setting_import_skipped\",\"message\":\"skipped "
+                        "\\\"plugin.hybrid.weight\\\": remember has no setting by that "
+                        "name.\",\"fix\":\"Take that row out of the file or fix its "
+                        "name, then import it again.\",\"detail\":{\"key\":\"plugin.hybrid."
+                        "weight\","
+                        "\"scope\":\"user\",\"reason\":\"unknown_key\"}}");
     cmd_result_free(&got);
     assert_query(brain, "SELECT COUNT(*) FROM settings", "0");
     harness_remove_tree(tmpl);
@@ -6436,15 +6440,15 @@ TEST(import_skips_bad_shapes_and_bad_fields)
                  "setting (each row needs a \"key\"). Add a \"key\" to that row, then import the "
                  "file again.\n"
                  "remember: warning: skipped \"remember.search.max_results\": its \"scope\" "
-                 "isn't valid.\n"
+                 "isn't valid. Fix that field in the file, then import it again.\n"
                  "remember: warning: skipped \"remember.search.max_results\": its \"scope\" "
-                 "isn't valid.\n"
+                 "isn't valid. Fix that field in the file, then import it again.\n"
                  "remember: warning: skipped \"remember.search.max_results\": its \"updated_by\" "
-                 "isn't valid.\n"
+                 "isn't valid. Fix that field in the file, then import it again.\n"
                  "remember: warning: skipped \"remember.search.max_results\": its \"updated_at\" "
-                 "isn't valid.\n"
+                 "isn't valid. Fix that field in the file, then import it again.\n"
                  "remember: warning: skipped \"remember.search.max_results\": its \"deleted_at\" "
-                 "isn't valid.\n"
+                 "isn't valid. Fix that field in the file, then import it again.\n"
                  "remember: warning: skipped row 9 in the settings file because it isn't a "
                  "setting (each row needs a \"key\"). Add a \"key\" to that row, then import the "
                  "file again.\n"
@@ -6470,16 +6474,17 @@ TEST(import_skips_bad_shapes_and_bad_fields)
               sizeof(brain_rows) / sizeof(brain_rows[0]));
     got = import_at(brain, userdb, imp, 3U);
     ASSERT_EQ_INT(got.exit_code, 0);
-    ASSERT_STREQ(got.err,
-                 "remember: warning: skipped \"remember.search.max_results\": its \"device_id\" "
-                 "isn't valid.\n"
-                 "remember: warning: skipped \"remember.search.max_results\": its "
-                 "\"version_vector\" isn't valid.\n"
-                 "remember: warning: skipped \"remember.search.max_results\": its \"deleted_at\" "
-                 "isn't valid.\n"
-                 "remember: warning: skipped \"remember.buckets.prefixes\": \"[\"a:\",5]\" isn't "
-                 "a valid value. Set a valid value with 'remember settings set "
-                 "remember.buckets.prefixes <value>'.\n");
+    ASSERT_STREQ(
+        got.err,
+        "remember: warning: skipped \"remember.search.max_results\": its \"device_id\" "
+        "isn't valid. Fix that field in the file, then import it again.\n"
+        "remember: warning: skipped \"remember.search.max_results\": its "
+        "\"version_vector\" isn't valid. Fix that field in the file, then import it again.\n"
+        "remember: warning: skipped \"remember.search.max_results\": its \"deleted_at\" "
+        "isn't valid. Fix that field in the file, then import it again.\n"
+        "remember: warning: skipped \"remember.buckets.prefixes\": \"[\"a:\",5]\" isn't "
+        "a valid value. Set a valid value with 'remember settings set "
+        "remember.buckets.prefixes <value>'.\n");
     cmd_result_free(&got);
     got = import_at(brain, userdb, json, 4U);
     ASSERT_STR_CONTAINS(got.out, "\"detail\":{\"key\":\"remember.search.max_results\","
@@ -9430,7 +9435,7 @@ TEST(explain_prints_the_block_and_the_entry)
     got = get_at(brain, userdb, all, 3U);
     ASSERT_TRUE(snprintf(want, sizeof(want), "%s",
                          "plugin.hybrid.enabled  (boolean, default false)\n"
-                         "  Whether \"hybrid\" is turned on.\n"
+                         "  Turns the \"hybrid\" plugin on or off.\n"
                          "  Can be set for: user, brain\n"
                          "  Now: false, from default\n"
                          "\n"
@@ -10022,13 +10027,13 @@ TEST(explain_names_the_source_plugin_and_both_scopes)
     got = run_plugin_cmd(explain, 3U);
     ASSERT_EQ_INT(got.exit_code, 0);
     ASSERT_STREQ(got.out, "plugin.p.enabled  (boolean, default false)\n"
-                          "  Whether \"p\" is turned on.\n"
+                          "  Turns the \"p\" plugin on or off.\n"
                           "  Can be set for: user, brain\n"
                           "  Now: false, from default\n");
     cmd_result_free(&got);
     got = run_plugin_cmd(json, 4U);
     ASSERT_STR_CONTAINS(got.out, "\"default\":false");
-    ASSERT_STR_CONTAINS(got.out, "\"description\":\"Whether \\\"p\\\" is turned on.\","
+    ASSERT_STR_CONTAINS(got.out, "\"description\":\"Turns the \\\"p\\\" plugin on or off.\","
                                  "\"scopes\":[\"user\",\"brain\"]");
     cmd_result_free(&got);
 }
@@ -10133,9 +10138,10 @@ TEST(a_stored_value_the_new_manifest_type_refuses_falls_to_the_default_with_a_wa
     got = get_at(pair.brain, pair.userdb, get, 4U);
     ASSERT_EQ_INT(got.exit_code, 0);
     ASSERT_STREQ(got.out, "3\n");
-    ASSERT_STREQ(got.err, "remember: warning: skipped \"plugin.q.label\": \"hello\" isn't a valid "
-                          "value. Set a valid value with 'remember settings set plugin.q.label "
-                          "<value>'.\n");
+    ASSERT_STREQ(got.err,
+                 "remember: warning: ignored the stored \"plugin.q.label\": \"hello\" isn't "
+                 "a valid value, so the next layer's value is used. Set a valid value "
+                 "with 'remember settings set plugin.q.label <value>'.\n");
     cmd_result_free(&got);
     harness_remove_tree(pair.tmpl);
 }
@@ -10181,8 +10187,10 @@ TEST(a_refused_brain_value_falls_to_the_user_layer_and_names_scope_brain)
     got = get_at(pair.brain, pair.userdb, get, 4U);
     ASSERT_EQ_INT(got.exit_code, 0);
     ASSERT_STREQ(got.out, "4\n");
-    ASSERT_STR_CONTAINS(got.err, "\"50\" isn't a valid value. Set a valid value with 'remember "
-                                 "settings set plugin.q.n <value> --scope brain'.\n");
+    ASSERT_STR_CONTAINS(got.err,
+                        "ignored the stored \"plugin.q.n\": \"50\" isn't a valid value, so "
+                        "the next layer's value is used. Set a valid value with "
+                        "'remember settings set plugin.q.n <value> --scope brain'.\n");
     cmd_result_free(&got);
     harness_remove_tree(pair.tmpl);
 }
@@ -10206,12 +10214,14 @@ TEST(list_and_explain_go_on_past_a_refused_stored_value)
     ASSERT_STREQ(got.out, "plugin.hybrid.enabled = false   (default)\n"
                           "plugin.q.enabled = false   (default)\n"
                           "plugin.q.label = 3   (default)\n");
-    ASSERT_STR_CONTAINS(got.err, "skipped \"plugin.q.label\": \"hello\" isn't a valid value.");
+    ASSERT_STR_CONTAINS(got.err, "ignored the stored \"plugin.q.label\": \"hello\" isn't a valid "
+                                 "value, so the next layer's value is used.");
     cmd_result_free(&got);
     got = get_at(pair.brain, pair.userdb, explain, 3U);
     ASSERT_EQ_INT(got.exit_code, 0);
     ASSERT_STR_CONTAINS(got.out, "  Now: 3, from default\n");
-    ASSERT_STR_CONTAINS(got.err, "skipped \"plugin.q.label\": \"hello\" isn't a valid value.");
+    ASSERT_STR_CONTAINS(got.err, "ignored the stored \"plugin.q.label\": \"hello\" isn't a valid "
+                                 "value, so the next layer's value is used.");
     cmd_result_free(&got);
     harness_remove_tree(pair.tmpl);
 }
@@ -10376,7 +10386,7 @@ TEST(size_errors_use_the_c05_lines_and_a_range_line_in_the_largest_exact_unit)
     cmd_result_free(&got);
 }
 
-TEST(a_size_range_with_only_a_max_starts_at_zero_bytes_and_a_whole_kib_prints_in_kib)
+TEST(a_size_range_with_only_a_max_says_at_most)
 {
     const char *high[] = {"settings", "set", "plugin.p.small", "2KiB"};
     CmdResult got;
@@ -10385,8 +10395,74 @@ TEST(a_size_range_with_only_a_max_starts_at_zero_bytes_and_a_whole_kib_prints_in
                                 "\"default\":\"1B\",\"range\":{\"max\":\"1536B\"}}");
     got = run_plugin_cmd(high, 4U);
     ASSERT_EQ_INT(got.exit_code, 1);
-    ASSERT_STREQ(got.err, "remember: \"plugin.p.small\" can be 0B to 1536B; you gave 2KiB. Set a "
-                          "value from 0B to 1536B.\n");
+    ASSERT_STREQ(got.err, "remember: \"plugin.p.small\" must be at most 1536B; you gave 2KiB. Use "
+                          "1536B or less.\n");
+    cmd_result_free(&got);
+}
+
+/* decision:open-2026-11-17-plan30-plugin-keys-copy item 4: a bound the manifest leaves out is not
+   named. A min of 0 reads as no min: every type reads 0 or more. */
+TEST(a_range_with_only_a_min_says_at_least_and_a_range_with_only_a_max_says_at_most)
+{
+    const char *low_int[] = {"settings", "set", "plugin.p.n", "3"};
+    const char *low_dur[] = {"settings", "set", "plugin.p.d", "1m"};
+    const char *low_size[] = {"settings", "set", "plugin.p.s", "1KiB"};
+    const char *high_int[] = {"settings", "set", "plugin.p.top", "12"};
+    const char *high_zero[] = {"settings", "set", "plugin.p.zero", "12"};
+    const char *both[] = {"settings", "set", "plugin.p.both", "12"};
+    CmdResult got;
+
+    given_installed_plugin(
+        "p", "{\"key\":\"n\",\"description\":\"N.\",\"type\":\"integer\",\"default\":5,"
+             "\"range\":{\"min\":5}},"
+             "{\"key\":\"d\",\"description\":\"D.\",\"type\":\"duration\",\"default\":\"10m\","
+             "\"range\":{\"min\":\"5m\"}},"
+             "{\"key\":\"s\",\"description\":\"S.\",\"type\":\"size\",\"default\":\"4KiB\","
+             "\"range\":{\"min\":\"2KiB\"}},"
+             "{\"key\":\"top\",\"description\":\"T.\",\"type\":\"integer\",\"default\":1,"
+             "\"range\":{\"max\":9}},"
+             "{\"key\":\"zero\",\"description\":\"Z.\",\"type\":\"integer\",\"default\":1,"
+             "\"range\":{\"min\":0,\"max\":9}},"
+             "{\"key\":\"both\",\"description\":\"B.\",\"type\":\"integer\",\"default\":6,"
+             "\"range\":{\"min\":5,\"max\":9}}");
+    got = run_plugin_cmd(low_int, 4U);
+    ASSERT_STREQ(got.err, "remember: \"plugin.p.n\" must be at least 5; you gave 3. Use 5 or "
+                          "more.\n");
+    cmd_result_free(&got);
+    got = run_plugin_cmd(low_dur, 4U);
+    ASSERT_STREQ(got.err, "remember: \"plugin.p.d\" must be at least 5m; you gave 1m. Use 5m or "
+                          "more.\n");
+    cmd_result_free(&got);
+    got = run_plugin_cmd(low_size, 4U);
+    ASSERT_STREQ(got.err, "remember: \"plugin.p.s\" must be at least 2KiB; you gave 1KiB. Use 2KiB "
+                          "or more.\n");
+    cmd_result_free(&got);
+    got = run_plugin_cmd(high_int, 4U);
+    ASSERT_STREQ(got.err, "remember: \"plugin.p.top\" must be at most 9; you gave 12. Use 9 or "
+                          "less.\n");
+    cmd_result_free(&got);
+    got = run_plugin_cmd(high_zero, 4U);
+    ASSERT_STREQ(got.err, "remember: \"plugin.p.zero\" must be at most 9; you gave 12. Use 9 or "
+                          "less.\n");
+    cmd_result_free(&got);
+    got = run_plugin_cmd(both, 4U);
+    ASSERT_STREQ(got.err, "remember: \"plugin.p.both\" can be 5 to 9; you gave 12. Set a value "
+                          "from 5 to 9.\n");
+    cmd_result_free(&got);
+}
+
+TEST(a_list_that_can_hold_one_item_says_item_in_the_singular)
+{
+    const char *two[] = {"settings", "set", "plugin.p.one", "a", "b"};
+    CmdResult got;
+
+    given_installed_plugin(
+        "p", "{\"key\":\"one\",\"description\":\"O.\",\"type\":\"string_list\",\"default\":[],"
+             "\"range\":{\"max_items\":1}}");
+    got = run_plugin_cmd(two, 5U);
+    ASSERT_EQ_INT(got.exit_code, 1);
+    ASSERT_STREQ(got.err, "remember: \"plugin.p.one\" can hold at most 1 item; you gave 2. Give "
+                          "at most 1 item.\n");
     cmd_result_free(&got);
 }
 
@@ -10398,12 +10474,12 @@ TEST(an_enum_setting_error_lists_the_values)
     given_installed_plugin("p", k_p30_all_types);
     got = run_plugin_cmd(bad, 4U);
     ASSERT_EQ_INT(got.exit_code, 1);
-    ASSERT_STREQ(got.err, "remember: \"plugin.p.mode\" must be one of fast, slow, or auto; you "
-                          "gave \"turbo\". Use fast, slow, or auto.\n");
+    ASSERT_STREQ(got.err, "remember: \"plugin.p.mode\" must be fast, slow or auto; you gave "
+                          "\"turbo\". Use fast, slow or auto.\n");
     cmd_result_free(&got);
 }
 
-TEST(an_enum_of_one_or_two_values_reads_without_a_list_comma)
+TEST(an_enum_of_one_or_two_values_reads_without_a_list_word)
 {
     const char *bad[] = {"settings", "set", "plugin.p.one", "x"};
     const char *bad2[] = {"settings", "set", "plugin.p.two", "x"};
@@ -10418,7 +10494,7 @@ TEST(an_enum_of_one_or_two_values_reads_without_a_list_comma)
     ASSERT_STREQ(got.err, "remember: \"plugin.p.one\" must be a; you gave \"x\". Use a.\n");
     cmd_result_free(&got);
     got = run_plugin_cmd(bad2, 4U);
-    ASSERT_STREQ(got.err, "remember: \"plugin.p.two\" must be one of a or b; you gave \"x\". "
+    ASSERT_STREQ(got.err, "remember: \"plugin.p.two\" must be a or b; you gave \"x\". "
                           "Use a or b.\n");
     cmd_result_free(&got);
 }
@@ -10431,8 +10507,9 @@ TEST(a_text_setting_error_does_not_echo_the_value)
     given_installed_plugin("p", k_p30_all_types);
     got = run_plugin_cmd(bad, 4U);
     ASSERT_EQ_INT(got.exit_code, 1);
-    ASSERT_STREQ(got.err, "remember: \"plugin.p.label\" needs text with no control characters, "
-                          "up to 511 bytes. Use plain text of 511 bytes or fewer.\n");
+    ASSERT_STREQ(got.err, "remember: \"plugin.p.label\" must be plain text of 511 bytes or fewer, "
+                          "with no control characters. Remove any control characters and keep it "
+                          "to 511 bytes or fewer.\n");
     cmd_result_free(&got);
 }
 
@@ -10495,8 +10572,8 @@ TEST(a_string_list_setting_sets_prints_and_refuses_too_many_items)
     cmd_result_free(&got);
     got = get_at(brain, userdb, three, 6U);
     ASSERT_EQ_INT(got.exit_code, 1);
-    ASSERT_STREQ(got.err, "remember: \"plugin.p.words\" can hold 1 to 2 items; you gave 3. Give 2 "
-                          "items or fewer.\n");
+    ASSERT_STREQ(got.err, "remember: \"plugin.p.words\" can hold at most 2 items; you gave 3. Give "
+                          "at most 2 items.\n");
     cmd_result_free(&got);
     got = get_at(brain, userdb, clear, 4U);
     ASSERT_EQ_INT(got.exit_code, 0);
@@ -10515,8 +10592,9 @@ TEST(a_string_list_item_that_is_not_text_is_the_text_line)
     given_installed_plugin("p", k_p30_all_types);
     got = run_plugin_cmd(bad, 5U);
     ASSERT_EQ_INT(got.exit_code, 1);
-    ASSERT_STREQ(got.err, "remember: \"plugin.p.words\" needs text with no control characters, "
-                          "up to 511 bytes. Use plain text of 511 bytes or fewer.\n");
+    ASSERT_STREQ(got.err, "remember: \"plugin.p.words\" must be plain text of 511 bytes or fewer, "
+                          "with no control characters. Remove any control characters and keep it "
+                          "to 511 bytes or fewer.\n");
     cmd_result_free(&got);
 }
 
@@ -10589,10 +10667,15 @@ TEST(a_plugins_folder_that_cannot_be_read_fails_every_command_with_one_line)
     ASSERT_EQ_INT(chmod(path, 0), 0);
     if (access(path, R_OK) != 0) {
         const char *get[] = {"settings", "get", "remember.search.max_results"};
+        char want[REMEMBER_PATH_MAX + 128];
 
         got = run_plugin_cmd(get, 3U);
         ASSERT_EQ_INT(got.exit_code, 1);
-        ASSERT_STREQ(got.err, "remember: cannot read the plugins folder\n");
+        ASSERT_TRUE(snprintf(want, sizeof(want),
+                             "remember: can't read the plugins folder (%s). Check that the folder "
+                             "can be read, or move it aside to run without plugins.\n",
+                             path) > 0);
+        ASSERT_STREQ(got.err, want);
         cmd_result_free(&got);
     }
     (void)chmod(path, 0700);
@@ -10923,9 +11006,11 @@ void register_settings_tests(void)
     RUN_TEST(explain_all_lists_the_plugin_keys_too);
     RUN_TEST(a_size_setting_prints_its_value_with_a_bytes_twin_and_explains_its_range);
     RUN_TEST(size_errors_use_the_c05_lines_and_a_range_line_in_the_largest_exact_unit);
-    RUN_TEST(a_size_range_with_only_a_max_starts_at_zero_bytes_and_a_whole_kib_prints_in_kib);
+    RUN_TEST(a_size_range_with_only_a_max_says_at_most);
+    RUN_TEST(a_range_with_only_a_min_says_at_least_and_a_range_with_only_a_max_says_at_most);
+    RUN_TEST(a_list_that_can_hold_one_item_says_item_in_the_singular);
     RUN_TEST(an_enum_setting_error_lists_the_values);
-    RUN_TEST(an_enum_of_one_or_two_values_reads_without_a_list_comma);
+    RUN_TEST(an_enum_of_one_or_two_values_reads_without_a_list_word);
     RUN_TEST(a_text_setting_error_does_not_echo_the_value);
     RUN_TEST(a_string_with_a_quote_and_a_backslash_round_trips_through_set_and_get);
     RUN_TEST(a_string_list_setting_sets_prints_and_refuses_too_many_items);

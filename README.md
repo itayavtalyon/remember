@@ -37,7 +37,7 @@ flowchart LR
 - **Find** — `remember search "…"` (SQLite FTS5 over the body) or `remember list`.
 - **Organize** — tags as facets; **keys** as stable named slots (upsert by key).
 - **Connect** — link memories as `related`, `cites`, or `supersedes`.
-- **Expire / delete** — optional TTL (`--expired` bin) and soft-delete (`--deleted`); permanent delete with `purge <locator>`. Nothing vanishes silently.
+- **Expire and delete** — optional expiry (the `--expired` bin) and soft delete (the Trash, `--trash`); `purge <locator>` deletes one memory for good. Nothing vanishes silently.
 - **Automate** — `--json` on every command; ships an agent skill for Claude / Cursor / others.
 - **Merge** — `import --from-db` merges another brain by `id`; run `conflicts` after.
 
@@ -76,32 +76,35 @@ Opening an existing database migrates it to `user_version` **6**.
 - A key is searchable: `search editor` finds `pref:editor`.
 - Hebrew marks are folded out of the search index. The stored body keeps them.
 - `remember device` prints the device id. `remember device new` mints a new one after a restore or a copied brain, and it repairs an invalid sidecar.
-- The device id is only the sidecar `<db-path>.device_id`. The database holds no copy.
+- The device id is only the sidecar `<db-path>.d/device_id`. The database holds no copy.
 - `remember brain new-id` replaces `brain_meta.brain_id` with a new lowercase UUID v7 and prints that id. It does not change `change_seq`, a version vector, or a memory. `--json` type is `brain.new_id.result`. `data` is `{brain_id, previous_brain_id}`.
 - Every read-write open records the brain in `<data dir>/brains.json` (`$XDG_DATA_HOME/remember`, else `~/.remember`). A copied brain file takes a new `brain_id` and warns `brain_id_cloned`; a moved one keeps its id. `remember brain list` prints the listed paths (`--json` type `brain.list.result`), and warns `brain_missing` for a path with no brain. `remember brain prune` removes those paths. See `specs/BRAIN-LIST.md`.
-- `purge <locator>` is the only permanent delete, for one memory that is expired or in the Trash; `purge --expired` and `purge --deleted` are gone. `delete --expired` moves every expired memory to the Trash. `delete --deleted` does not exist. `--trash` selects the Deleted bin. Neither needs a registered device. After every command, and with `remember brain sweep [--all]`, memories past their expiry are marked expired. Every wrong-bin refusal is the error code `wrong_bin`, exit 3, in place of `expired`, `not_expired`, `deleted` and `not_deleted`.
+- `purge <locator>` is the only permanent delete, for one memory that is expired or in the Trash; `purge --expired` and `purge --deleted` are gone. `delete --expired` moves every expired memory to the Trash. `delete --deleted` does not exist. `--trash` selects the Deleted bin. Neither `delete --expired` nor `purge` needs a registered device. After every command, and with `remember brain sweep [--all]`, memories past their expiry are marked expired. Every wrong-bin refusal is the error code `wrong_bin`, exit 3, in place of `expired`, `not_expired`, `deleted` and `not_deleted`.
 - The envelope is `{"format":"remember-message","version":1,"type":"memory.get.result","data":{...}}`. A failure keeps its type and has `error{code,message,fix,retryable,detail?}` instead of `data`. Warnings are a `warnings` array at the end.
 - A database error names one of seven causes: `busy`, `read_only`, `disk_full`, `cannot_open`, `not_a_database`, `corrupt`, `io_error`. Anything else is `database`.
 - `--busy-timeout MS` sets the lock wait (0..60000, default 5000).
 - `--no-create` fails when the brain file is missing and creates nothing.
-- `--color` and `--quiet` are global, listed with `--db`, `--json`, `--strict`, `--busy-timeout`, and `--no-create`.
-- Color only on a TTY, when `NO_COLOR` is unset and `TERM` is not `dumb`. `--color=auto|always|never` overrides.
+- `~/.remember/default-db` names the default brain: one line with an absolute path. `--db` and `REMEMBER_DB` still come first. With no file, or a line that is not an absolute path, the brain is `~/.remember/remember.db`. remember reads this file and never writes it.
+- A brain made by a newer remember opens read-only. Reads work and print a warning (`schema_too_new_read_only`). A write fails with `schema_too_new`, exit 75, and leaves the brain unchanged. `remember --help` lists exit 75.
+- `--color` and `--quiet` are global options, like `--db`, `--json`, `--strict`, `--busy-timeout`, and `--no-create`.
+- `--color=auto|always|never` is accepted, but 0.3.0 prints no color.
 - Status is a word. Do not print checkmarks. Do not encode meaning by color alone.
-- Progress goes to stderr only, when stderr is a TTY, as whole lines, at most once a second, with no spinner. `--quiet` turns it off. Progress is never in stdout and never in `--json`.
-- Prompts echo typed input.
+- `--quiet` is accepted, but 0.3.0 prints no progress lines.
 - `remember repair search-index` rebuilds a damaged search index. `corrupt` with `fts_only` true means that command. It never creates a missing brain.
 - `remember export --format json|md|csv --out PATH` writes the brain to a file (a folder for `md`). Live memories by default; add `--include-expired` or `--include-trash`. `--force` replaces an existing export. It never creates a missing brain.
+- `remember settings` shows and changes settings: `get`, `set`, `reset`, `list`, `history`, `explain`, `export`, and `import`. A setting is stored for your user or for one brain (`--scope user|brain`). `remember settings explain --all` describes every setting.
+- `remember import --from-json PATH` merges a file from `remember export --format json`, by id. `--from-db PATH` now reads brains of schema 4 to 6. After either, run `remember conflicts`. `import --help` also lists `--from-md` and `--from-csv`; they aren't available in 0.3.0.
 - `list --sort updated|created` (default `updated`) orders by that time, newest first, then id.
 - `list` and `search` take `--since` / `--until`. `since` is inclusive and `until` is exclusive. Search filters `updated_at` and ignores `--sort`.
 - `update --if-version-vector` writes only when that memory's `version_vector` still matches. A mismatch is code `stale` and writes nothing.
 - `remember search` now also matches word prefixes and returns matching keys and tags. FTS5 queries work as before; a query that FTS5 cannot parse no longer fails: it returns prefix matches and prints a note on stderr.
-- That note is one line: `remember: warning: raw query ignored: <message> Check the quotes and operators in your query, or search with plain words.` With `--json` it is `{"code":"raw_query_ignored","message":"<message>","fix":"Check the quotes and operators in your query, or search with plain words."}` in the envelope's `warnings`.
+- That note is one line: `remember: warning: raw query ignored: <message>. Check the quotes and operators in your query, or search with plain words.` With `--json` it is `{"code":"raw_query_ignored","message":"<message>","fix":"Check the quotes and operators in your query, or search with plain words."}` in the envelope's `warnings`.
 - Search order: exact key, then key prefix, then relevance (bm25), then `updated_at`.
 - JSON `keys` and `tags` now sit between `total` and `entries` in `search --json`. `--facet-limit N` (default 50, 1..200) caps their `items`; `total` counts every match. Human `search` prints `keys:` and `tags:` lines before the rows.
 - An empty or blank `search` query is an empty result on exit 0. It was a usage error (`empty search query`).
 - `--id` and `--local-id` are gone. There is no alias. Pass a UUID, a number from `remember list`, or `--key` to fetch a memory.
 - `--limit`, `--busy-timeout` and `--facet-limit` take ASCII digits only. A leading space or `+` is now a usage error.
-- A command whose output cannot be written (for example a closed pipe) exits 1 with `failed to write output`. It used to exit 0.
+- When remember can't write its output, it exits 1 with `failed to write output` (it used to exit 0). A closed pipe usually stops it first with SIGPIPE, as it stops other commands (exit 141 in the shell).
 
 ### v0.2.0 — local sync foundations
 

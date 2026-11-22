@@ -1303,6 +1303,9 @@ static void env_release(EnvHold *hold)
     hold->saved = NULL;
 }
 
+/* The longest expected line a test builds: a path, then the sentence around it. */
+enum { WANT_CAP = REMEMBER_PATH_MAX + 512 };
+
 /* One folder with its own data dir: XDG_DATA_HOME points into it, so no test
    touches the real ~/.remember. */
 typedef struct {
@@ -1908,6 +1911,7 @@ TEST(brain_list_a_hostile_path_in_the_list_does_not_reach_the_probe_as_a_brain)
 TEST(brain_list_on_an_unreadable_file_fails_and_leaves_it_alone)
 {
     Scene scn = given_scene();
+    char want[WANT_CAP];
     char *text = NULL;
     CmdResult r;
 
@@ -1916,7 +1920,11 @@ TEST(brain_list_on_an_unreadable_file_fails_and_leaves_it_alone)
     r = run_args(scn.brain, "brain", "list", NULL);
     ASSERT_EQ_INT(r.exit_code, 1);
     ASSERT_STREQ(r.out, "");
-    ASSERT_STR_PREFIX(r.err, "remember: cannot read brains.json");
+    ASSERT_TRUE(snprintf(want, sizeof(want),
+                         "remember: can't read brains.json (%s). Check that the file can be read, "
+                         "then run the command again.\n",
+                         scn.list) > 0);
+    ASSERT_STREQ(r.err, want);
     cmd_result_free(&r);
     text = file_text(scn.list);
     ASSERT_STREQ(text, "not json at all");
@@ -1937,7 +1945,9 @@ TEST(brain_prune_on_an_unreadable_file_fails_and_leaves_it_alone)
     ASSERT_EQ_INT(r.exit_code, 1);
     ASSERT_STR_PREFIX(r.out, "{\"format\":\"remember-message\",\"version\":1,"
                              "\"type\":\"brain.prune.result\",\"error\":{\"code\":\"cannot_open\","
-                             "\"message\":\"cannot read brains.json\"");
+                             "\"message\":\"can't read brains.json (");
+    ASSERT_STR_CONTAINS(r.out, "\"fix\":\"Check that the file can be read, then run the command "
+                               "again.\",\"retryable\":false");
     cmd_result_free(&r);
     text = file_text(scn.list);
     ASSERT_STREQ(text, "not json at all");
@@ -1948,6 +1958,7 @@ TEST(brain_prune_on_an_unreadable_file_fails_and_leaves_it_alone)
 TEST(an_unreadable_brains_json_does_not_change_the_open_and_is_left_alone)
 {
     Scene scn = given_scene();
+    char want[WANT_CAP];
     char *text = NULL;
     CmdResult r;
 
@@ -1956,9 +1967,47 @@ TEST(an_unreadable_brains_json_does_not_change_the_open_and_is_left_alone)
                "{\"format\":\"remember-brains\",\"version\":1,\"brains\":[{\"path\":1}]}");
     r = run_args(scn.brain, "add", "hello", NULL);
     ASSERT_EQ_INT(r.exit_code, 0);
+    ASSERT_TRUE(snprintf(want, sizeof(want),
+                         "remember: warning: can't read brains.json (%s), so remember isn't "
+                         "recording this brain or checking it for copies. Fix the file or delete "
+                         "it; remember starts a new one on the next command.\n",
+                         scn.list) > 0);
+    ASSERT_STREQ(r.err, want);
     cmd_result_free(&r);
     text = file_text(scn.list);
     ASSERT_STR_CONTAINS(text, "\"path\":1");
+    free(text);
+    scene_release(&scn);
+}
+
+/* The warning is also a JSON warning with its fix, and a command that opens twice (brain new-id
+   records the old id, then the new one) says it once. */
+TEST(the_unreadable_brains_json_warning_is_in_the_envelope_and_new_id_says_it_once)
+{
+    Scene scn = given_scene();
+    const char *json[] = {"--json", "tags"};
+    char *text = NULL;
+    char *at = NULL;
+    CmdResult r;
+
+    given_brain_opened(scn.other);
+    given_text(scn.list, "not json at all");
+    r = run_remember(scn.brain, json, 2U, NULL);
+    ASSERT_EQ_INT(r.exit_code, 0);
+    ASSERT_STR_CONTAINS(r.out, "\"warnings\":[{\"code\":\"brains_json_unreadable\",\"message\":"
+                               "\"can't read brains.json (");
+    ASSERT_STR_CONTAINS(r.out, "so remember isn't recording this brain or checking it for "
+                               "copies.\",\"fix\":\"Fix the file or delete it; remember starts a "
+                               "new one on the next command.\"}");
+    cmd_result_free(&r);
+    r = run_args(scn.brain, "brain", "new-id", NULL);
+    ASSERT_EQ_INT(r.exit_code, 0);
+    at = strstr(r.err, "so remember isn't recording this brain");
+    ASSERT_TRUE(at != NULL);
+    ASSERT_TRUE(at != NULL && strstr(at + 1, "so remember isn't recording this brain") == NULL);
+    cmd_result_free(&r);
+    text = file_text(scn.list);
+    ASSERT_STREQ(text, "not json at all");
     free(text);
     scene_release(&scn);
 }
@@ -1971,11 +2020,13 @@ TEST(brain_list_and_prune_without_a_data_dir_fail_and_name_the_folder)
     CmdResult r = run_args(scn.brain, "brain", "list", NULL);
 
     ASSERT_EQ_INT(r.exit_code, 1);
-    ASSERT_STR_PREFIX(r.err, "remember: cannot find the data folder");
+    ASSERT_STREQ(r.err, "remember: can't find the data folder: HOME is not set. Fix that, then run "
+                        "the command again.\n");
     cmd_result_free(&r);
     r = run_args(scn.brain, "brain", "prune", NULL);
     ASSERT_EQ_INT(r.exit_code, 1);
-    ASSERT_STR_PREFIX(r.err, "remember: cannot find the data folder");
+    ASSERT_STREQ(r.err, "remember: can't find the data folder: HOME is not set. Fix that, then run "
+                        "the command again.\n");
     cmd_result_free(&r);
     env_release(&home);
     env_release(&xdg);
@@ -1986,6 +2037,7 @@ TEST(brain_list_and_prune_without_a_data_dir_fail_and_name_the_folder)
 TEST(brain_prune_that_cannot_replace_the_file_fails_and_keeps_the_rows)
 {
     Scene scn = given_scene();
+    char want[WANT_CAP];
     char *before = NULL;
     char *after = NULL;
     EnvHold fail = {0};
@@ -1999,7 +2051,11 @@ TEST(brain_prune_that_cannot_replace_the_file_fails_and_keeps_the_rows)
     r = run_args(scn.brain, "brain", "prune", NULL);
     env_release(&fail);
     ASSERT_EQ_INT(r.exit_code, 1);
-    ASSERT_STR_PREFIX(r.err, "remember: cannot update brains.json");
+    ASSERT_TRUE(snprintf(want, sizeof(want),
+                         "remember: can't update brains.json (%s). Check that its folder can be "
+                         "written to, then run the command again.\n",
+                         scn.list) > 0);
+    ASSERT_STREQ(r.err, want);
     cmd_result_free(&r);
     after = file_text(scn.list);
     ASSERT_STREQ(after, before);
@@ -2285,6 +2341,7 @@ TEST(
 {
     Scene scn = given_scene();
     const char *args[] = {"--json", "--busy-timeout", "50", "tags"};
+    char want[WANT_CAP];
     char *real = NULL;
     char *old_id = NULL;
     char *copy_id = NULL;
@@ -2301,6 +2358,11 @@ TEST(
     lock_release(lock);
     ASSERT_EQ_INT(r.exit_code, 1);
     ASSERT_STR_CONTAINS(r.out, "\"code\":\"busy\"");
+    ASSERT_TRUE(snprintf(want, sizeof(want),
+                         "\"message\":\"can't tell whether %s is a copy of this brain or the same "
+                         "brain moved.\",\"fix\":\"Run the command again once %s can be read.\"",
+                         real, real) > 0);
+    ASSERT_STR_CONTAINS(r.out, want);
     cmd_result_free(&r);
     copy_id = brain_id_in(scn.other);
     ASSERT_STREQ(copy_id, old_id);
@@ -2423,7 +2485,9 @@ TEST(an_open_that_waits_past_the_busy_timeout_for_the_brains_json_lock_fails_bus
     r = run_remember(scn.other, args, 4U, NULL);
     list_lock_holder_done(holder);
     ASSERT_EQ_INT(r.exit_code, 1);
-    ASSERT_STR_CONTAINS(r.out, "\"code\":\"busy\"");
+    ASSERT_STR_CONTAINS(r.out, "\"code\":\"busy\",\"message\":\"brains.json is busy: another "
+                               "remember command is using it.\",\"fix\":\"Try again in a "
+                               "moment.\",\"retryable\":true");
     cmd_result_free(&r);
     /* Plain output has no envelope to collide with: only the open's failure can exit 1. */
     holder = given_list_lock_held_for(lock, LIST_LOCK_HOLD_MS);
@@ -2514,11 +2578,11 @@ TEST(brain_new_id_that_waits_past_the_busy_timeout_for_the_lock_fails_busy_and_t
     ASSERT_TRUE(s != NULL);
     ASSERT_EQ_STATUS(store_brain_new_id(s, &ids), STORE_OK);
     holder = given_list_lock_held_for(lock, LIST_LOCK_HOLD_MS);
-    ASSERT_EQ_INT(brain_note_open(s), -1);
+    ASSERT_EQ_INT(brain_note_open(s, true), -1);
     list_lock_holder_done(holder);
     after = file_text(scn.list);
     ASSERT_STREQ(after, before);
-    ASSERT_EQ_INT(brain_note_open(s), 0);
+    ASSERT_EQ_INT(brain_note_open(s, true), 0);
     store_close(s);
     id = brain_id_in(scn.brain);
     ASSERT_STREQ(id, ids.id);
@@ -2714,7 +2778,8 @@ TEST(
     r = import_json_into(scn.other, file, "50");
     lock_release(lock);
     ASSERT_EQ_INT(r.exit_code, 1);
-    ASSERT_STR_CONTAINS(r.err, "cannot tell whether");
+    ASSERT_STR_CONTAINS(r.err, "/one.db still holds this file's brain. Try again once ");
+    ASSERT_STR_CONTAINS(r.err, "/one.db is free and can be read.\n");
     cmd_result_free(&r);
     dst_id = brain_id_in(scn.other);
     ASSERT_TRUE(strcmp(dst_id, src_id) != 0);
@@ -3422,6 +3487,7 @@ void register_brain_list_tests(void)
     RUN_TEST(brain_list_on_an_unreadable_file_fails_and_leaves_it_alone);
     RUN_TEST(brain_prune_on_an_unreadable_file_fails_and_leaves_it_alone);
     RUN_TEST(an_unreadable_brains_json_does_not_change_the_open_and_is_left_alone);
+    RUN_TEST(the_unreadable_brains_json_warning_is_in_the_envelope_and_new_id_says_it_once);
     RUN_TEST(brain_list_and_prune_without_a_data_dir_fail_and_name_the_folder);
 #ifdef REMEMBER_TEST_VFS
     RUN_TEST(brain_prune_that_cannot_replace_the_file_fails_and_keeps_the_rows);

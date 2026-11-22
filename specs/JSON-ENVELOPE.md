@@ -112,7 +112,7 @@ An error object, in order: `code`, `message`, `fix`, `retryable`, then `detail` 
 
 The first error is the one in the envelope. A later error in the same run is dropped.
 
-A warning object, in order: `code`, `message`, then `fix` when the warning has one (`decision:2026-11-12-e3-warnings-have-fix-field`; `schema_too_new_read_only` carries one, [OLDER-CLI.md](OLDER-CLI.md) § 8.3; the split of every warning is `decision:2026-11-12-copy-batch-e3b-warning-splits`; the settings reasons with no approved fix yet are listed in [SETTINGS.md](SETTINGS.md) § import), then `detail` when present. `warnings` is omitted when empty.
+A warning object, in order: `code`, `message`, then `fix` when the warning has one (`decision:2026-11-12-e3-warnings-have-fix-field`; `schema_too_new_read_only` carries one, [OLDER-CLI.md](OLDER-CLI.md) § 8.3; the split of every warning is `decision:2026-11-12-copy-batch-e3b-warning-splits`; the fix of each settings import reason is listed in [SETTINGS.md](SETTINGS.md) § import), then `detail` when present. `warnings` is omitted when empty.
 
 With `--json`, the envelope on stdout holds the error and the warnings, and stderr is empty. The CLI has no `--json-errors` flag.
 
@@ -256,8 +256,8 @@ Opening a database leaves `brain_id` unchanged. 008 JE-3.10 (copied-brain detect
 
 No `decision:json-*` key. 008 has no JE section for these flags. The rule is 010 H-16.10. The help lines are C-02:
 
-- `--color     Use color: auto, always, or never. auto uses color only on a terminal, when NO_COLOR is unset and TERM isn't dumb.`
-- `--quiet     Turn off progress lines on stderr.`
+- `--color     auto, always, or never. 0.3.0 prints no color yet.`
+- `--quiet     0.3.0 prints no progress lines yet.`
 
 Both are global options, before or after the command. `--color` takes `auto`, `always`, or `never`.
 

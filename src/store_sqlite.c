@@ -35,6 +35,7 @@ typedef struct {
 /* A prefix the v5 -> v6 step left out (store_open_warning). */
 typedef struct {
     char *value;
+    char *kept; /* a duplicate: the folded prefix the brain already keeps; else NULL */
     const char *reason;
 } MigrationWarning;
 
@@ -2097,29 +2098,36 @@ static void free_open_warnings(Store *s)
 
     for (i = 0; i < s->nwarnings; i++) {
         free(s->warnings[i].value);
+        free(s->warnings[i].kept);
     }
     free(s->warnings);
     s->warnings = NULL;
     s->nwarnings = 0U;
 }
 
-/* Keep the prefix that was left out for store_open_warning (007 ST-7.15). */
+/* Keep the prefix that was left out for store_open_warning (007 ST-7.15). kept is the prefix a
+   duplicate folds to, or NULL. */
 // NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
-static int add_open_warning(Store *s, const char *prefix, const char *reason)
+static int add_open_warning(Store *s, const char *prefix, const char *kept, const char *reason)
 {
     MigrationWarning *grown = NULL;
     char *value = dup_str(prefix);
+    char *kept_copy = kept != NULL ? dup_str(kept) : NULL;
 
-    if (value == NULL) {
+    if (value == NULL || (kept != NULL && kept_copy == NULL)) {
+        free(value);
+        free(kept_copy);
         return -1;
     }
     grown = (MigrationWarning *)realloc(s->warnings, (s->nwarnings + 1U) * sizeof(*grown));
     if (grown == NULL) {
         free(value);
+        free(kept_copy);
         return -1;
     }
     s->warnings = grown;
     s->warnings[s->nwarnings].value = value;
+    s->warnings[s->nwarnings].kept = kept_copy;
     s->warnings[s->nwarnings].reason = reason;
     s->nwarnings++;
     return 0;
@@ -2159,7 +2167,13 @@ static int take_prefix(Store *s, FILE *fp, char **json, const char *prefix, size
     }
     reason = prefix_skip_reason(prefix, *json, quoted);
     if (reason != NULL) {
-        return add_open_warning(s, prefix, reason);
+        /* A duplicate's quoted form is "<folded>": the prefix the brain keeps is inside it. */
+        char kept[QUOTED_PREFIX_BUF] = "";
+
+        if (strcmp(reason, "duplicate_prefix") == 0) {
+            (void)snprintf(kept, sizeof(kept), "%.*s", (int)strlen(quoted) - 2, quoted + 1);
+        }
+        return add_open_warning(s, prefix, kept[0] != '\0' ? kept : NULL, reason);
     }
     if (fprintf(fp, "%s%s", *nvalid > 0U ? "," : "", quoted) < 0) {
         return -1;
@@ -3078,8 +3092,10 @@ StoreSettingWarning store_open_warning(const Store *s, size_t i)
     if (s == NULL || i >= s->nwarnings) {
         return (StoreSettingWarning){0};
     }
-    return (StoreSettingWarning){
-        .key = k_prefixes_key, .value = s->warnings[i].value, .reason = s->warnings[i].reason};
+    return (StoreSettingWarning){.key = k_prefixes_key,
+                                 .value = s->warnings[i].value,
+                                 .kept = s->warnings[i].kept,
+                                 .reason = s->warnings[i].reason};
 }
 
 void store_set_settings_registry(Store *s, const SettingsRegistry *reg)

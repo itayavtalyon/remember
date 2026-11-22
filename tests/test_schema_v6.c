@@ -1455,13 +1455,14 @@ TEST(schema_v6_cli_a_newline_in_a_prefix_warning_stays_one_line)
     free(db);
 }
 
-/* duplicate_prefix has no approved fix yet
-   (decision:open-2026-11-16-warning-fix-setting-invalid-leftovers), so it keeps the old line and
-   prints none. */
-TEST(schema_v6_cli_a_duplicate_prefix_warning_has_no_fix_yet)
+/* duplicate_prefix names the prefix the brain keeps, which differs from the raw one
+   (decision:open-2026-11-16-warning-fix-setting-invalid-leftovers). */
+TEST(schema_v6_cli_a_duplicate_prefix_warning_names_the_kept_prefix_and_has_a_fix)
 {
     char *db = make_temp_db_path();
+    char *json_db = make_temp_db_path();
     const char *list[] = {"list"};
+    const char *json_list[] = {"--json", "list"};
     CmdResult r;
 
     ASSERT_TRUE(db != NULL);
@@ -1471,9 +1472,24 @@ TEST(schema_v6_cli_a_duplicate_prefix_warning_has_no_fix_yet)
                  "('Project:', '2026-01-02T00:00:00.000Z', NULL, 'd');");
     r = run_remember(db, list, sizeof(list) / sizeof(list[0]), NULL);
     ASSERT_EQ_INT(r.exit_code, 0);
-    ASSERT_STREQ(r.err, "remember: warning: skipped \"remember.buckets.prefixes\": \"Project:\" "
-                        "isn't a valid value.\n");
+    ASSERT_STREQ(r.err, "remember: warning: skipped \"Project:\" in \"remember.buckets.prefixes\": "
+                        "it matches \"project:\", which the brain already keeps. Use \"project:\" "
+                        "for this prefix.\n");
     cmd_result_free(&r);
+    ASSERT_TRUE(json_db != NULL);
+    given_empty_v5_brain(json_db);
+    exec_sql(json_db, "INSERT INTO bucket_prefixes(prefix, added_at, removed_at, device_id) VALUES "
+                      "('project:', '2026-01-01T00:00:00.000Z', NULL, 'd'),"
+                      "('Project:', '2026-01-02T00:00:00.000Z', NULL, 'd');");
+    r = run_remember(json_db, json_list, sizeof(json_list) / sizeof(json_list[0]), NULL);
+    ASSERT_EQ_INT(r.exit_code, 0);
+    ASSERT_STR_CONTAINS(r.out,
+                        "\"message\":\"skipped \\\"Project:\\\" in "
+                        "\\\"remember.buckets.prefixes\\\": it matches \\\"project:\\\", which the "
+                        "brain already keeps.\",\"fix\":\"Use \\\"project:\\\" for this "
+                        "prefix.\"");
+    cmd_result_free(&r);
+    free(json_db);
     free(db);
 }
 
@@ -1642,7 +1658,7 @@ void register_schema_v6_cli_tests(void)
     RUN_TEST(schema_v6_cli_prints_setting_invalid_for_a_left_out_prefix);
     RUN_TEST(schema_v6_cli_a_long_prefix_warning_is_the_whole_line);
     RUN_TEST(schema_v6_cli_a_newline_in_a_prefix_warning_stays_one_line);
-    RUN_TEST(schema_v6_cli_a_duplicate_prefix_warning_has_no_fix_yet);
+    RUN_TEST(schema_v6_cli_a_duplicate_prefix_warning_names_the_kept_prefix_and_has_a_fix);
     RUN_TEST(schema_v6_cli_a_write_to_a_newer_brain_prints_schema_too_new);
     RUN_TEST(schema_v6_cli_parallel_first_opens_of_a_v5_brain_all_succeed);
 #ifdef REMEMBER_TEST_VFS
