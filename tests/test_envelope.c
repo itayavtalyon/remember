@@ -1685,14 +1685,25 @@ TEST(envelope_every_write_accepts_the_hook_flags)
 }
 // NOLINTEND(cppcoreguidelines-avoid-magic-numbers,readability-magic-numbers)
 
+/* decision:open-2026-11-22-top-level-help-leftovers 2 and 3: --strict is listed, and every
+   option's text starts at column 22. */
 TEST(envelope_help_prints_the_color_and_quiet_lines)
 {
     char *db = make_temp_db_path();
     const char *general[] = {"--help"};
     const char *topic[] = {"help", "get"};
-    static const char color_line[] =
-        "  --color     auto, always, or never. 0.3.0 prints no color yet.\n";
-    static const char quiet_line[] = "  --quiet     0.3.0 prints no progress lines yet.\n";
+    static const char globals_block[] =
+        "Global options (allowed before or after the command):\n"
+        "  --db PATH          Database file (overrides REMEMBER_DB)\n"
+        "  --json             Machine-readable JSON on stdout\n"
+        "  --strict           Treat warnings as errors (exit 4)\n"
+        "  --color            auto, always, or never. 0.3.0 prints no color yet.\n"
+        "  --quiet            0.3.0 prints no progress lines yet.\n"
+        "  --busy-timeout MS  Lock wait in ms (0..60000, default 5000)\n"
+        "  --no-create        Do not create a missing brain file\n"
+        "  --help, -h         Show help\n"
+        "  --version          Show version\n"
+        "\n";
     static const char usage_globals[] =
         "[--db PATH] [--json] [--strict] [--color=auto|always|never] [--quiet] "
         "[--busy-timeout MS] [--no-create]";
@@ -1708,8 +1719,7 @@ TEST(envelope_help_prints_the_color_and_quiet_lines)
     r = run_remember(db, general, sizeof general / sizeof general[0], NULL);
     ASSERT_EQ_INT(r.exit_code, 0);
     ASSERT_STREQ(r.err, "");
-    ASSERT_STR_CONTAINS(r.out, color_line);
-    ASSERT_STR_CONTAINS(r.out, quiet_line);
+    ASSERT_STR_CONTAINS(r.out, globals_block);
     ASSERT_STR_CONTAINS(r.out, usage_globals);
     cmd_result_free(&r);
     r = run_remember(db, topic, sizeof topic / sizeof topic[0], NULL);

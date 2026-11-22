@@ -1640,7 +1640,7 @@ static char *enum_phrase(const SettingSpec *spec)
     size_t at = 0;
 
     for (i = 0; i < spec->nvalues; i++) {
-        cap += strlen(spec->values[i]) + sizeof(", ");
+        cap += strlen(spec->values[i]) + sizeof(" or ");
     }
     out = (char *)malloc(cap);
     if (out == NULL) {
@@ -1804,6 +1804,19 @@ static int report_list_range(const SettingSpec *spec, const WriteOpts *opt)
     return REMEMBER_ERR;
 }
 
+/* Which ends of a range a sentence names (decision:open-2026-11-17-plan30-plugin-keys-copy item 4,
+   decision:open-2026-11-22-one-sided-range-copy). The registry keeps no "has a min" bit: a manifest
+   range with no max has the type limit there, and every type reads 0 or more. */
+typedef enum { RANGE_BOTH, RANGE_AT_LEAST, RANGE_AT_MOST } RangeEnds;
+
+static RangeEnds range_ends(const SettingSpec *spec)
+{
+    if (spec->max_value == LLONG_MAX) {
+        return RANGE_AT_LEAST;
+    }
+    return spec->min_value == 0 ? RANGE_AT_MOST : RANGE_BOTH;
+}
+
 static int report_range(const SettingSpec *spec, const WriteOpts *opt)
 {
     char lower[BOUND_TEXT_CAP];
@@ -1823,13 +1836,11 @@ static int report_range(const SettingSpec *spec, const WriteOpts *opt)
         err_msg(DIAG_INTERNAL, "internal error");
         return REMEMBER_ERR;
     }
-    if (spec->max_value == LLONG_MAX) {
-        /* A manifest range with no max: the type limit is no bound to name. */
+    if (range_ends(spec) == RANGE_AT_LEAST) {
         msg =
             fmt_alloc("\"%s\" must be at least %s; you gave %s.", spec->key, lower, opt->items[0]);
         fix = fmt_alloc("Use %s or more.", lower);
-    } else if (spec->min_value == 0) {
-        /* A manifest range with no min: every type reads 0 or more. */
+    } else if (range_ends(spec) == RANGE_AT_MOST) {
         msg = fmt_alloc("\"%s\" must be at most %s; you gave %s.", spec->key, upper, opt->items[0]);
         fix = fmt_alloc("Use %s or less.", upper);
     } else {
@@ -3285,8 +3296,7 @@ static int warn_skipped(const SettingImportRow *row, const char *why, const char
     return 0;
 }
 
-/* setting_invalid with its detail (C-14, C-14a, decision:plan20-import-bad-field). fix is NULL for
-   a reason that has no approved fix yet. */
+/* setting_invalid with its detail (C-14, C-14a, decision:plan20-import-bad-field). */
 static int warn_invalid(char *msg, const char *fix, const DiagDetailField *fields, size_t n)
 {
     if (msg == NULL) {
@@ -4676,10 +4686,24 @@ static int write_explain_block(FILE *out, const SettingSpec *spec, Shown shown)
         char lower[BOUND_TEXT_CAP];
         char upper[BOUND_TEXT_CAP];
 
+        char range[sizeof("at least ") + 2U * BOUND_TEXT_CAP];
+        RangeEnds ends = range_ends(spec);
+
+        /* The words of the range errors, in ASCII (decision:open-2026-11-22-one-sided-range-copy
+           3). */
         if (format_bound(spec, spec->min_value, lower, sizeof(lower)) != 0 ||
-            format_bound(spec, spec->max_value, upper, sizeof(upper)) != 0 ||
-            fprintf(out, "%s  (%s, %s\xE2\x80\x93%s, default %s)\n", spec->key,
-                    type_token(spec->type), lower, upper, def_text) < 0) {
+            format_bound(spec, spec->max_value, upper, sizeof(upper)) != 0) {
+            return -1;
+        }
+        if (ends == RANGE_AT_LEAST) {
+            (void)snprintf(range, sizeof(range), "at least %s", lower);
+        } else if (ends == RANGE_AT_MOST) {
+            (void)snprintf(range, sizeof(range), "at most %s", upper);
+        } else {
+            (void)snprintf(range, sizeof(range), "%s to %s", lower, upper);
+        }
+        if (fprintf(out, "%s  (%s, %s, default %s)\n", spec->key, type_token(spec->type), range,
+                    def_text) < 0) {
             return -1;
         }
     } else if (fprintf(out, "%s  (%s, default %s)\n", spec->key, type_token(spec->type), def_text) <

@@ -159,7 +159,7 @@ Rows from both databases, newest `at` first. On one `at`, brain before user, the
 
 `remember settings explain KEY` or `explain --all`. `decision:plan20-explain-human-form`, `decision:plan20-explain-json-shape`, `decision:plan20-explain-description-drafts`. 007 ST-7.9.
 
-Plain output is one block per key: the header with type, range and default, the description, the layers the key allows, the current value and where it comes from, and the related keys. `--all` shows every key in byte order, one blank line apart. JSON `data` is `{count, entries[]}`: each entry is the setting object plus `description`, `scopes`, `default`, `min` and `max` (with `_ms` twins for a duration, absent when the key has no range), and `related`.
+Plain output is one block per key: the header with type, range and default (the range reads `20 to 2000`, or `at least 5` and `at most 9` for a one-sided manifest range, in ASCII; `decision:open-2026-11-22-one-sided-range-copy` 3), the description, the layers the key allows, the current value and where it comes from, and the related keys. `--all` shows every key in byte order, one blank line apart. JSON `data` is `{count, entries[]}`: each entry is the setting object plus `description`, `scopes`, `default`, `min` and `max` (with `_ms` twins for a duration, absent when the key has no range), and `related`.
 
 ### Paging
 

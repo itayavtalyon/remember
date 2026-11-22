@@ -256,8 +256,8 @@ Opening a database leaves `brain_id` unchanged. 008 JE-3.10 (copied-brain detect
 
 No `decision:json-*` key. 008 has no JE section for these flags. The rule is 010 H-16.10. The help lines are C-02:
 
-- `--color     auto, always, or never. 0.3.0 prints no color yet.`
-- `--quiet     0.3.0 prints no progress lines yet.`
+- `--color            auto, always, or never. 0.3.0 prints no color yet.`
+- `--quiet            0.3.0 prints no progress lines yet.`
 
 Both are global options, before or after the command. `--color` takes `auto`, `always`, or `never`.
 

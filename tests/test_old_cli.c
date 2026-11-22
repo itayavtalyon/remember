@@ -889,14 +889,15 @@ TEST(old_cli_help_and_version_do_not_open_a_brain)
 }
 
 /* R27b-3 with answer 4 of decision:2026-11-14-r27b-2-3-stop-and-ask: the 5 line
-   fits every exit 5 (plugin and hook approvals never take --yes). */
+   fits every exit 5 (plugin and hook approvals never take --yes). The 3 line names the one
+   wrong-bin code (decision:open-2026-11-22-top-level-help-leftovers 1). */
 TEST(old_cli_help_exit_codes_list_5_and_75)
 {
     static const char k_block[] = "Exit codes:\n"
                                   "  0  success (including empty search/list)\n"
                                   "  1  usage or error\n"
                                   "  2  not found (get/delete/update)\n"
-                                  "  3  wrong bin (expired / not_expired / deleted / not_deleted)\n"
+                                  "  3  wrong bin (wrong_bin)\n"
                                   "  4  a warning under --strict\n"
                                   "  5  confirmation or approval required\n"
                                   "  75 brain is read-only (made by a newer version of remember)\n";

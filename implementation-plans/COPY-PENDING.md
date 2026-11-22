@@ -41,10 +41,10 @@ Plans: 19 (`schema_too_new`), 20 (`setting_from_hook`), 21 (locator, Trash, expi
 
 ## C-02
 
-- `--color     Use color: auto, always, or never. auto uses color only on a terminal, when NO_COLOR is unset and TERM isn't dumb.`
-- `--quiet     Turn off progress lines on stderr.`
+- `--color            auto, always, or never. 0.3.0 prints no color yet.`
+- `--quiet            0.3.0 prints no progress lines yet.`
 
-Plan 25 prints these. Plan 21 lists the flags and uses the same lines.
+Replaced 2026-11-22 (`decision:open-2026-11-16-v030-whats-new-color`, `decision:open-2026-11-16-v030-whats-new-progress`): 0.3.0 prints no color and no progress lines. The old lines (`Use color: auto, always, or never. ...` and `Turn off progress lines on stderr.`) promised both. `remember --help`, `skills/remember/SKILL.md` and `specs/JSON-ENVELOPE.md` print or quote the new lines. Their text starts at column 22, like the other options, and `--strict` has its own line, `--strict           Treat warnings as errors (exit 4)`; the exit-3 line is `3  wrong bin (wrong_bin)` (`decision:open-2026-11-22-top-level-help-leftovers`).
 
 ## C-03
 
@@ -149,7 +149,7 @@ remember.search.candidate_pool = 400
 `explain`:
 
 ```text
-remember.search.candidate_pool  (integer, 20–2000, default 200)
+remember.search.candidate_pool  (integer, 20 to 2000, default 200)
   How many keyword matches search looks at before filters rank them.
   Can be set for: user, brain
   Now: 400, from brain, set by human on 21 Oct at 12:04

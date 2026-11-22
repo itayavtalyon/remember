@@ -9425,8 +9425,7 @@ TEST(explain_prints_the_block_and_the_entry)
     brain_setting_row(brain, "remember.search.candidate_pool", "400", k_agent, at);
     got = get_at(brain, userdb, pool, 3U);
     ASSERT_EQ_INT(got.exit_code, 0);
-    ASSERT_STREQ(got.out, "remember.search.candidate_pool  (integer, 20\xE2\x80\x93"
-                          "2000, default 200)\n"
+    ASSERT_STREQ(got.out, "remember.search.candidate_pool  (integer, 20 to 2000, default 200)\n"
                           "  How many keyword matches search looks at before filters rank them.\n"
                           "  Can be set for: user, brain\n"
                           "  Now: 400, from brain, set by agent \"bot1\" on 21 Oct at 12:04\n"
@@ -9444,14 +9443,12 @@ TEST(explain_prints_the_block_and_the_entry)
                          "  Can be set for: brain\n"
                          "  Now: project: status:, from default\n"
                          "\n"
-                         "remember.plugins.chain_budget  (duration, 100ms\xE2\x80\x93"
-                         "30s, default 1.5s)\n"
+                         "remember.plugins.chain_budget  (duration, 100ms to 30s, default 1.5s)\n"
                          "  How long all plugin filters together may run for one command.\n"
                          "  Can be set for: user\n"
                          "  Now: 1.5s, from default\n"
                          "\n"
-                         "remember.plugins.idle_timeout  (duration, 1m\xE2\x80\x93"
-                         "24h, default 10m)\n"
+                         "remember.plugins.idle_timeout  (duration, 1m to 24h, default 10m)\n"
                          "  How long a plugin may sit idle before remember stops it.\n"
                          "  Can be set for: user\n"
                          "  Now: 10m, from default\n"
@@ -10357,8 +10354,7 @@ TEST(a_size_setting_prints_its_value_with_a_bytes_twin_and_explains_its_range)
                                  "\"max_bytes\":4194304,");
     cmd_result_free(&got);
     got = run_plugin_cmd(plain, 3U);
-    ASSERT_STR_CONTAINS(got.out, "plugin.p.cap  (size, 1KiB\xE2\x80\x93"
-                                 "4MiB, default 1MiB)\n");
+    ASSERT_STR_CONTAINS(got.out, "plugin.p.cap  (size, 1KiB to 4MiB, default 1MiB)\n");
     cmd_result_free(&got);
 }
 
@@ -10410,6 +10406,10 @@ TEST(a_range_with_only_a_min_says_at_least_and_a_range_with_only_a_max_says_at_m
     const char *high_int[] = {"settings", "set", "plugin.p.top", "12"};
     const char *high_zero[] = {"settings", "set", "plugin.p.zero", "12"};
     const char *both[] = {"settings", "set", "plugin.p.both", "12"};
+    /* decision:open-2026-11-22-one-sided-range-copy 3: explain uses the same words, in ASCII. */
+    const char *explain_n[] = {"settings", "explain", "plugin.p.n"};
+    const char *explain_top[] = {"settings", "explain", "plugin.p.top"};
+    const char *explain_both[] = {"settings", "explain", "plugin.p.both"};
     CmdResult got;
 
     given_installed_plugin(
@@ -10440,6 +10440,15 @@ TEST(a_range_with_only_a_min_says_at_least_and_a_range_with_only_a_max_says_at_m
     got = run_plugin_cmd(high_int, 4U);
     ASSERT_STREQ(got.err, "remember: \"plugin.p.top\" must be at most 9; you gave 12. Use 9 or "
                           "less.\n");
+    cmd_result_free(&got);
+    got = run_plugin_cmd(explain_n, 3U);
+    ASSERT_STR_CONTAINS(got.out, "plugin.p.n  (integer, at least 5, default 5)\n");
+    cmd_result_free(&got);
+    got = run_plugin_cmd(explain_top, 3U);
+    ASSERT_STR_CONTAINS(got.out, "plugin.p.top  (integer, at most 9, default 1)\n");
+    cmd_result_free(&got);
+    got = run_plugin_cmd(explain_both, 3U);
+    ASSERT_STR_CONTAINS(got.out, "plugin.p.both  (integer, 5 to 9, default 6)\n");
     cmd_result_free(&got);
     got = run_plugin_cmd(high_zero, 4U);
     ASSERT_STREQ(got.err, "remember: \"plugin.p.zero\" must be at most 9; you gave 12. Use 9 or "
