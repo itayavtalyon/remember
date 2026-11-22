@@ -4666,6 +4666,24 @@ static bool spec_ranged(const SettingSpec *spec)
     return spec->max_value != 0;
 }
 
+enum { EXPLAIN_RANGE_CAP = sizeof("at least ") + (2 * (size_t)BOUND_TEXT_CAP) };
+
+/* The words of the range errors, in ASCII (decision:open-2026-11-22-one-sided-range-copy 3). The
+   bounds fit BOUND_TEXT_CAP each, so the range fits out. */
+static void explain_range(const SettingSpec *spec, const char *lower, const char *upper,
+                          char out[EXPLAIN_RANGE_CAP])
+{
+    RangeEnds ends = range_ends(spec);
+
+    if (ends == RANGE_AT_LEAST) {
+        (void)snprintf(out, EXPLAIN_RANGE_CAP, "at least %s", lower);
+    } else if (ends == RANGE_AT_MOST) {
+        (void)snprintf(out, EXPLAIN_RANGE_CAP, "at most %s", upper);
+    } else {
+        (void)snprintf(out, EXPLAIN_RANGE_CAP, "%s to %s", lower, upper);
+    }
+}
+
 /* decision:plan20-explain-human-form: the C-13 block. */
 static int write_explain_block(FILE *out, const SettingSpec *spec, Shown shown)
 {
@@ -4686,22 +4704,13 @@ static int write_explain_block(FILE *out, const SettingSpec *spec, Shown shown)
         char lower[BOUND_TEXT_CAP];
         char upper[BOUND_TEXT_CAP];
 
-        char range[sizeof("at least ") + 2U * BOUND_TEXT_CAP];
-        RangeEnds ends = range_ends(spec);
+        char range[EXPLAIN_RANGE_CAP];
 
-        /* The words of the range errors, in ASCII (decision:open-2026-11-22-one-sided-range-copy
-           3). */
         if (format_bound(spec, spec->min_value, lower, sizeof(lower)) != 0 ||
             format_bound(spec, spec->max_value, upper, sizeof(upper)) != 0) {
             return -1;
         }
-        if (ends == RANGE_AT_LEAST) {
-            (void)snprintf(range, sizeof(range), "at least %s", lower);
-        } else if (ends == RANGE_AT_MOST) {
-            (void)snprintf(range, sizeof(range), "at most %s", upper);
-        } else {
-            (void)snprintf(range, sizeof(range), "%s to %s", lower, upper);
-        }
+        explain_range(spec, lower, upper, range);
         if (fprintf(out, "%s  (%s, %s, default %s)\n", spec->key, type_token(spec->type), range,
                     def_text) < 0) {
             return -1;
