@@ -64,24 +64,20 @@ static int mint_id(void *ctx, char *out, size_t cap)
 }
 
 /* The message lines are approved copy (decision:open-2026-11-15-brains-json-unreadable-copy).
-   Each takes msg, which a failed allocation leaves NULL. */
+   Takes msg; a failed allocation leaves msg or fix NULL. */
 static void emit_error(DiagCode code, char *msg, const char *fix)
 {
-    if (msg == NULL) {
+    if (msg == NULL || fix == NULL) {
         err_msg(DIAG_OUT_OF_MEMORY, "out of memory");
-        return;
+    } else {
+        (void)diag_error_fix(code, msg, fix);
     }
-    (void)diag_error_fix(code, msg, fix);
     free(msg);
 }
 
 /* As emit_error, for a fix that names a path. Takes fix too. */
 static void emit_error_path(DiagCode code, char *msg, char *fix)
 {
-    if (fix == NULL) {
-        free(msg);
-        msg = NULL;
-    }
     emit_error(code, msg, fix);
     free(fix);
 }
