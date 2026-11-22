@@ -47,6 +47,11 @@ Update **both** places to the new version (they must agree):
 - [`src/commands_common.h`](../src/commands_common.h) — the `#define REMEMBER_VERSION "X.Y.Z"`
   fallback (used only when the build doesn't define it; keep it in sync anyway).
 
+Update [`skills/remember/SKILL.md`](../skills/remember/SKILL.md) for every flag,
+command, exit code and JSON shape the release adds, renames or removes. The keg
+ships this file as `share/remember/SKILL.md`, and it is what agents read after
+`brew upgrade`.
+
 Optionally add a section to the README's **What's New** describing the release.
 
 Land these on `main` through a normal PR (`just`-equivalent gate: the CI on the
@@ -118,6 +123,23 @@ remember --version                             # should print: remember X.Y.Z
 If `brew` already has an older `remember` installed, `brew upgrade remember`
 exercises the upgrade path.
 
+Then update the agent skill on each machine you upgrade:
+
+```bash
+which -a remember                 # first hit must be $(brew --prefix)/bin/remember
+remember-install-skill            # relinks every agent tree that exists, new ones too
+ls -l ~/.{claude,grok,cursor,codex}/skills/remember/SKILL.md
+```
+
+Each `SKILL.md` must be a symlink into `$(brew --prefix)/share/remember/`. A
+plain file is a snapshot copy (from `scripts/install.sh` or an older install):
+`brew upgrade` never touches it, so agents keep reading the old commands.
+`remember-install-skill` replaces it with the link. Look at a plain file before
+you replace it: keep any personal rules in Remember, not in the installed
+`SKILL.md`. An older `remember` earlier in `PATH` (for example
+`~/.local/bin/remember` from `install.sh`) shadows the upgrade the same way;
+remove it.
+
 ## 5. Announce / wrap up
 
 - Confirm the GitHub release notes read well (edit if needed).
@@ -162,5 +184,5 @@ gh release create vX.Y.Z --title "remember vX.Y.Z" --generate-notes
 brew bump-formula-pr --version X.Y.Z itayavtalyon/remember/remember
 # review+merge the tap PR, then:
 brew update && brew upgrade remember && remember --version
-remember-install-skill   # once per machine / new agent product
+remember-install-skill   # after every upgrade: relinks the skill in every agent tree
 ```
