@@ -2401,6 +2401,7 @@ static int guard_untrusted_enable(const char *key, const char *prepared)
     char enabled[SETTING_KEY_MAX + 1];
     char dir[REMEMBER_PATH_MAX];
     char err[PREPARE_ERR_CAP];
+    const char *search_path = NULL;
     PluginTrustStatus status = PLUGIN_TRUST_OK;
 
     if (strcmp(prepared, "true") != 0 || !setting_plugin_name(key, name, sizeof(name))) {
@@ -2412,9 +2413,10 @@ static int guard_untrusted_enable(const char *key, const char *prepared)
     }
     /* No data dir means no folder to check: untrusted, never a pass. */
     // NOLINTNEXTLINE(concurrency-mt-unsafe) -- single-threaded CLI; no C11 thread-safe getenv
+    search_path = getenv("PATH");
     status = util_resolve_data_dir(dir, sizeof(dir), err, sizeof(err)) != 0
                  ? PLUGIN_TRUST_UNTRUSTED
-                 : plugin_trust_check_installed(dir, name, getenv("PATH"));
+                 : plugin_trust_check_installed(dir, name, search_path);
     if (status == PLUGIN_TRUST_OK) {
         return 0;
     }
