@@ -13,6 +13,7 @@
 #include "test.h"
 #include "test_alloc.h"
 
+#include <dirent.h>
 #include <fcntl.h>
 #include <limits.h>
 #include <stdbool.h>
@@ -374,14 +375,182 @@ TEST(interpreter_after_usr_bin_env_is_found_in_the_search_path)
     given_file(data, "later/python3", "#!/bin/sh\necho py2\n", 0755);
     given_file(data, "plain/python3", "#!/bin/sh\necho py2\n", 0644);
     path_of(bin, sizeof(bin), data, "bin");
-    /* An empty entry and a file that is not executable come first and are passed over. */
-    (void)snprintf(search, sizeof(search), "::%s/plain:%s:%s/later", data, bin, data);
+    /* A file that is not executable comes first and is passed over. */
+    (void)snprintf(search, sizeof(search), "%s/plain:%s:%s/later", data, bin, data);
     ASSERT_EQ_STATUS(allow_command(data, argv, 3U, search), PLUGIN_TRUST_OK);
     (void)snprintf(want, sizeof(want),
                    "\"interpreter\":{\"path\":\"%s/python3\",\"sha256\":\"" FAKE_PY_SHA "\"}", bin);
     text = trust_text(data);
     ASSERT_STR_CONTAINS(text, want);
     free(text);
+    harness_remove_tree(data);
+    free(data);
+}
+
+/* Exploit (plan 33 review): env treats an empty PATH entry as its working directory, and a
+   relative one against it, so a python3 there runs instead of the one the record names. An empty
+   or relative entry before the hit cannot be told: unhashable. One after the hit is never
+   reached. */
+TEST(an_empty_or_relative_search_path_entry_before_the_hit_is_unhashable)
+{
+    char *data = given_data_dir();
+    char bin[PATH_BUF];
+    char search[2 * PATH_BUF];
+    const char *argv[3] = {"/usr/bin/env", "python3", "run.sh"};
+
+    given_wake(data);
+    given_file(data, "bin/python3", "#!/bin/sh\necho py\n", 0755);
+    path_of(bin, sizeof(bin), data, "bin");
+    (void)snprintf(search, sizeof(search), ":%s", bin);
+    ASSERT_EQ_STATUS(allow_command(data, argv, 3U, search), PLUGIN_TRUST_UNHASHABLE);
+    (void)snprintf(search, sizeof(search), "bin:%s", bin);
+    ASSERT_EQ_STATUS(allow_command(data, argv, 3U, search), PLUGIN_TRUST_UNHASHABLE);
+    ASSERT_EQ_STATUS(allow_command(data, argv, 3U, ""), PLUGIN_TRUST_OK); /* finds nothing */
+    (void)snprintf(search, sizeof(search), "%s/tools:", data); /* no hit, then a trailing empty */
+    ASSERT_EQ_STATUS(allow_command(data, argv, 3U, search), PLUGIN_TRUST_UNHASHABLE);
+    (void)snprintf(search, sizeof(search), "%s::bin", bin);
+    ASSERT_EQ_STATUS(allow_command(data, argv, 3U, search), PLUGIN_TRUST_OK);
+    harness_remove_tree(data);
+    free(data);
+}
+
+enum { DEEP_NAME = 250, DEEP_HOPS = 6, DEEP_PER_HOP = 3 };
+
+/* Under dir: a link "n" in each hop, so that n/n/n/n/n/n/tool.sh (short) resolves to a path of
+   about 4500 bytes, past PATH_MAX on macOS (1024) and Linux (4096). open() still follows it. */
+static void given_deep_tool(const char *dir)
+{
+    char comp[DEEP_NAME + 1];
+    char target[(DEEP_NAME + 1) * DEEP_PER_HOP];
+    int fd = open(dir, O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+    int file = -1;
+
+    ASSERT_TRUE(fd >= 0);
+    for (int hop = 0; hop < DEEP_HOPS; hop++) {
+        int start = dup(fd);
+
+        ASSERT_TRUE(start >= 0);
+        target[0] = '\0';
+        for (int k = 0; k < DEEP_PER_HOP; k++) {
+            int next = -1;
+
+            memset(comp, 'a' + k, DEEP_NAME);
+            comp[DEEP_NAME] = '\0';
+            ASSERT_EQ_INT(mkdirat(fd, comp, 0700), 0);
+            next = openat(fd, comp, O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+            ASSERT_TRUE(next >= 0);
+            ASSERT_EQ_INT(close(fd), 0);
+            fd = next;
+            if (k > 0) {
+                (void)strcat(target, "/");
+            }
+            (void)strcat(target, comp);
+        }
+        ASSERT_EQ_INT(symlinkat(target, start, "n"), 0);
+        ASSERT_EQ_INT(close(start), 0);
+    }
+    file = openat(fd, "tool.sh", O_WRONLY | O_CREAT | O_CLOEXEC, 0755);
+    ASSERT_TRUE(file >= 0);
+    ASSERT_EQ_INT((int)write(file, TOOL_SH_TEXT, sizeof(TOOL_SH_TEXT) - 1U),
+                  (int)sizeof(TOOL_SH_TEXT) - 1);
+    ASSERT_EQ_INT(close(file), 0);
+    ASSERT_EQ_INT(close(fd), 0);
+}
+
+/* Remove name under parent by descriptors: a deep tree has paths no path call can take. */
+// NOLINTNEXTLINE(misc-no-recursion) -- depth is the test's own tree
+static void remove_at(int parent, const char *name)
+{
+    struct stat st;
+    int fd = -1;
+    DIR *dir = NULL;
+    const struct dirent *ent = NULL;
+
+    if (fstatat(parent, name, &st, AT_SYMLINK_NOFOLLOW) != 0 || !S_ISDIR(st.st_mode)) {
+        (void)unlinkat(parent, name, 0);
+        return;
+    }
+    fd = openat(parent, name, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
+    dir = fd >= 0 ? fdopendir(fd) : NULL;
+    ASSERT_TRUE(dir != NULL);
+    // NOLINTNEXTLINE(concurrency-mt-unsafe) -- single-threaded test
+    while ((ent = readdir(dir)) != NULL) {
+        if (strcmp(ent->d_name, ".") != 0 && strcmp(ent->d_name, "..") != 0) {
+            remove_at(dirfd(dir), ent->d_name);
+            rewinddir(dir);
+        }
+    }
+    ASSERT_EQ_INT(closedir(dir), 0);
+    ASSERT_EQ_INT(unlinkat(parent, name, AT_REMOVEDIR), 0);
+}
+
+/* Exploit (plan 33 review): realpath fails with ENAMETOOLONG on a short argv path whose real
+   path is long, but open() and an interpreter still follow it. Only "nothing there" (ENOENT,
+   ENOTDIR) is text; any other failure is unhashable, or the file runs unhashed. */
+static PluginTrustStatus allow_wake_unasked(const char *data);
+
+/* Found in the plan 33 review: a folder within the depth cap whose relative paths pass 4096
+   bytes (16 levels of 255-byte names) was reported out of memory. It is a folder like any other:
+   hashed. */
+TEST(a_deep_folder_with_long_names_is_hashed_not_out_of_memory)
+{
+    char *data = given_data_dir();
+    char folder[PATH_BUF];
+    char comp[NAME_MAX + 1];
+    int fd = -1;
+    int file = -1;
+    int top = -1;
+
+    given_wake(data);
+    path_of(folder, sizeof(folder), data, "plugins/wake");
+    fd = open(folder, O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+    ASSERT_TRUE(fd >= 0);
+    memset(comp, 'd', NAME_MAX);
+    comp[NAME_MAX] = '\0';
+    for (int level = 0; level < PLUGIN_TRUST_DEPTH_MAX; level++) {
+        int next = -1;
+
+        ASSERT_EQ_INT(mkdirat(fd, comp, 0700), 0);
+        next = openat(fd, comp, O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+        ASSERT_TRUE(next >= 0);
+        ASSERT_EQ_INT(close(fd), 0);
+        fd = next;
+    }
+    file = openat(fd, "x", O_WRONLY | O_CREAT | O_CLOEXEC, 0644);
+    ASSERT_TRUE(file >= 0);
+    ASSERT_EQ_INT(close(file), 0);
+    ASSERT_EQ_INT(close(fd), 0);
+    ASSERT_EQ_STATUS(allow_wake_unasked(data), PLUGIN_TRUST_OK);
+    top = open(folder, O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+    ASSERT_TRUE(top >= 0);
+    remove_at(top, comp);
+    ASSERT_EQ_INT(close(top), 0);
+    harness_remove_tree(data);
+    free(data);
+}
+
+TEST(an_argv_file_whose_realpath_is_too_long_is_unhashable)
+{
+    char *data = given_data_dir();
+    char deep[PATH_BUF];
+    char first[DEEP_NAME + 1];
+    const char *argv[2] = {"/bin/sh", deep};
+    int fd = -1;
+    int top = -1;
+
+    given_wake(data);
+    given_deep_tool(data);
+    path_of(deep, sizeof(deep), data, "n/n/n/n/n/n/tool.sh");
+    fd = open(deep, O_RDONLY | O_CLOEXEC);
+    ASSERT_TRUE(fd >= 0); /* the file is there to run */
+    ASSERT_EQ_INT(close(fd), 0);
+    ASSERT_EQ_STATUS(allow_command(data, argv, 2U, NULL), PLUGIN_TRUST_UNHASHABLE);
+    top = open(data, O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+    ASSERT_TRUE(top >= 0);
+    memset(first, 'a', DEEP_NAME);
+    first[DEEP_NAME] = '\0';
+    remove_at(top, first);
+    ASSERT_EQ_INT(close(top), 0);
     harness_remove_tree(data);
     free(data);
 }
@@ -610,6 +779,38 @@ TEST(the_host_gets_the_plugin_kind_name_and_folder_body)
     ASSERT_STREQ(log.name, "wake");
     ASSERT_STREQ(log.body, "Allow \"wake\" to read your memories? It can send them off this Mac.\n"
                            "memories:read\nlinks");
+    harness_remove_tree(data);
+    free(data);
+}
+
+/* Exploit (plan 33 review): a command path or a name with a newline or an escape forged lines in
+   the confirm body ("...run /bin/true\n\nNo memories are shared by this hook."). Each value is
+   masked as it goes in, so the only line breaks are the ones between needs. */
+TEST(a_control_byte_in_a_value_cannot_add_a_line_to_the_body)
+{
+    char *data = given_data_dir();
+    PingSubject ping;
+    WakeSubject w;
+    HostLog log;
+    RememberEnv env = given_host(&log, false);
+    const char *forged = "/bin/true\n\nNo memories are shared by this hook.\x1b[2J";
+
+    given_ping(&ping, data);
+    ping.argv[0] = forged;
+    ASSERT_EQ_STATUS(plugin_trust_allow(data, &env, &ping.subject, NOW), PLUGIN_TRUST_DENIED);
+    ASSERT_STREQ(log.body,
+                 "Allow hook \"ping\" to run /bin/true??No memories are shared by this hook.?[2J?");
+    given_wake(data);
+    given_wake_subject(&w, data);
+    w.subject.name = "wa\nke";
+    ASSERT_EQ_STATUS(plugin_trust_allow(data, &env, &w.subject, NOW), PLUGIN_TRUST_DENIED);
+    ASSERT_STREQ(log.body, "Allow \"wa?ke\" to read your memories? It can send them off this Mac.\n"
+                           "memories:read");
+    w.subject.name = "wake";
+    w.needs[0] = "body\nlinks";
+    ASSERT_EQ_STATUS(plugin_trust_allow(data, &env, &w.subject, NOW), PLUGIN_TRUST_DENIED);
+    ASSERT_STREQ(log.body, "Allow \"wake\" to read your memories? It can send them off this Mac.\n"
+                           "body?links");
     harness_remove_tree(data);
     free(data);
 }
@@ -2780,6 +2981,9 @@ void register_plugin_trust_tests(void)
     RUN_TEST(a_later_argv_item_that_is_a_folder_or_missing_is_text);
     RUN_TEST(interpreter_hashed);
     RUN_TEST(interpreter_after_usr_bin_env_is_found_in_the_search_path);
+    RUN_TEST(an_empty_or_relative_search_path_entry_before_the_hit_is_unhashable);
+    RUN_TEST(an_argv_file_whose_realpath_is_too_long_is_unhashable);
+    RUN_TEST(a_deep_folder_with_long_names_is_hashed_not_out_of_memory);
     RUN_TEST(an_env_interpreter_that_the_search_path_does_not_find_is_not_recorded);
     RUN_TEST(env_followed_by_a_name_that_is_not_an_interpreter_records_none);
     RUN_TEST(two_different_interpreters_in_one_plugin_are_unhashable);
@@ -2790,6 +2994,7 @@ void register_plugin_trust_tests(void)
     RUN_TEST(a_denied_confirm_leaves_an_existing_trust_json_as_it_was);
     RUN_TEST(the_host_gets_the_plugin_kind_name_and_folder_body);
     RUN_TEST(the_host_gets_the_hook_kind_name_and_hook_body);
+    RUN_TEST(a_control_byte_in_a_value_cannot_add_a_line_to_the_body);
     RUN_TEST(an_update_shows_only_the_needs_the_old_record_lacks);
     RUN_TEST(no_env_confirm_is_never_a_yes);
     RUN_TEST(check_is_ok_for_the_code_that_was_allowed);

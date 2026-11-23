@@ -23,7 +23,7 @@
 #endif
 
 enum {
-    PATH_CAP = 4096, /* a joined path; a longer one cannot be hashed */
+    PATH_CAP = 4096, /* realpath's buffer; a longer real path cannot be hashed */
     CHUNK = 16384,
     DECIMAL_BASE = 10,
     WALK_GROW = 16,
@@ -60,10 +60,12 @@ typedef struct FileHash {
     char pad_[6]; /* explicit tail padding (kept -Wpadded-clean) */
 } FileHash;
 
-/* H_ABSENT when err says nothing is at the path, H_BAD when it says nothing about it. */
+/* H_ABSENT only when err says nothing is at the path. Any other failure (ELOOP, ENAMETOOLONG from a
+   short path whose real path is long, EACCES) is H_BAD: open() and an interpreter may still reach
+   the file, so it must not pass for text. */
 static HashRc absent_rc(int err)
 {
-    if (fileio_errno_means_absent(err)) {
+    if (err == ENOENT || err == ENOTDIR) {
         return H_ABSENT;
     }
     return H_BAD;
@@ -147,17 +149,14 @@ static char *dup_text(const char *text)
     return copy;
 }
 
-/* "<dir>/<name>", heap, NULL when memory runs out or the result is not a path. */
+/* "<dir>/<name>", heap, NULL only when memory runs out. A path too long for the system fails where
+   it is opened (ENAMETOOLONG: unhashable), not here: a NULL here reads as out of memory. */
 static char *join_path(const char *dir, const char *name)
 {
     size_t dir_len = strlen(dir);
     size_t name_len = strlen(name);
-    char *out = NULL;
+    char *out = (char *)malloc(dir_len + name_len + 2U);
 
-    if (dir_len + name_len + 2U > (size_t)PATH_CAP) {
-        return NULL;
-    }
-    out = (char *)malloc(dir_len + name_len + 2U);
     if (out != NULL) {
         /* NUL-terminated by the copy of name below. */
         // NOLINTNEXTLINE(bugprone-not-null-terminated-result)
@@ -592,8 +591,9 @@ static HashRc add_argv_file(TrustRecord *rec, const Inside *in, const char *fold
     return H_OK;
 }
 
-/* The first executable regular file called name in a ':' separated search path; empty entries
-   are skipped. NULL with *rc H_ABSENT when there is none, or H_OOM. */
+/* The first executable regular file called name in a ':' separated search path. NULL with *rc
+   H_ABSENT when there is none, H_OOM, or H_BAD at an empty or relative entry before a hit: env
+   reads those against its working directory, which a record cannot name. */
 // NOLINTNEXTLINE(bugprone-easily-swappable-parameters) the PATH, then the name
 static char *search_in_path(const char *search_path, const char *name, HashRc *rc)
 {
@@ -601,39 +601,41 @@ static char *search_in_path(const char *search_path, const char *name, HashRc *r
     struct stat st;
 
     *rc = H_ABSENT;
-    while (start != NULL && *start != '\0') {
+    if (start != NULL && *start == '\0') {
+        start = NULL; /* an empty search path finds nothing */
+    }
+    while (start != NULL) {
         const char *end = strchr(start, ':');
         size_t count = end != NULL ? (size_t)(end - start) : strlen(start);
-        char *dir = count > 0U ? (char *)malloc(count + 1U) : NULL;
+        char *dir = NULL;
+        char *joined = NULL;
+        char *real = NULL;
 
-        if (count > 0U && dir == NULL) {
+        if (start[0] != '/') { /* empty (a trailing ':' included), or relative */
+            *rc = H_BAD;
+            return NULL;
+        }
+        dir = (char *)malloc(count + 1U);
+        if (dir == NULL) {
             *rc = H_OOM;
             return NULL;
         }
-        if (dir != NULL) {
-            char *joined = NULL;
-            char *real = NULL;
-
-            memcpy(dir, start, count);
-            dir[count] = '\0';
-            joined = join_path(dir, name);
-            free(dir);
-            if (joined == NULL) {
-                *rc = H_OOM;
-                return NULL;
-            }
-            *rc = real_of(joined, &real);
-            free(joined);
-            if (*rc == H_OOM) {
-                return NULL;
-            }
-            /* env skips a folder, a device and a file it cannot run. */
-            if (real != NULL && stat(real, &st) == 0 && S_ISREG(st.st_mode) &&
-                access(real, X_OK) == 0) {
-                return real;
-            }
-            free(real);
+        memcpy(dir, start, count);
+        dir[count] = '\0';
+        joined = join_path(dir, name);
+        free(dir);
+        *rc = joined != NULL ? real_of(joined, &real) : H_OOM;
+        free(joined);
+        if (*rc != H_OK && *rc != H_ABSENT) {
+            return NULL; /* out of memory, or an entry that cannot be told */
         }
+        /* env skips a folder, a device and a file it cannot run. */
+        if (real != NULL && stat(real, &st) == 0 && S_ISREG(st.st_mode) &&
+            access(real, X_OK) == 0) {
+            return real;
+        }
+        free(real);
+        *rc = H_ABSENT;
         start = end != NULL ? end + 1 : NULL;
     }
     return NULL;
@@ -669,7 +671,7 @@ static HashRc add_interpreter(TrustRecord *rec, const PluginTrustSubject *subjec
     } else {
         real = search_in_path(subject->search_path, cmd->argv[1], &rc);
         if (real == NULL) {
-            return rc == H_OOM ? H_OOM : H_OK;
+            return rc == H_ABSENT ? H_OK : rc;
         }
         rc = H_BAD;
         if (text_is_json_safe(real)) {
@@ -1458,6 +1460,7 @@ static char *build_body(const PluginTrustSubject *subject, const TrustRecord *ol
         if (body != NULL) {
             (void)snprintf(body, (size_t)need + 1U, "Allow hook \"%s\" to run %s?", subject->name,
                            path);
+            output_mask_in_place(body); /* one line: no value can add one */
         }
         return body;
     }
@@ -1472,12 +1475,17 @@ static char *build_body(const PluginTrustSubject *subject, const TrustRecord *ol
     if (body == NULL) {
         return NULL;
     }
-    at = body + snprintf(body, len,
-                         "Allow \"%s\" to read your memories? It can send them off this Mac.",
-                         subject->name);
+    (void)snprintf(body, len, "Allow \"%s\" to read your memories? It can send them off this Mac.",
+                   subject->name);
+    /* Each value is masked as it goes in, so the only line breaks are the ones between needs.
+       Masking only shortens, so the length above still bounds the text. */
+    output_mask_in_place(body);
+    at = body + strlen(body);
     for (i = 0; i < subject->nneeds; i++) {
         if (is_new_need(old, subject->needs[i])) {
-            at += snprintf(at, len - (size_t)(at - body), "\n%s", subject->needs[i]);
+            (void)snprintf(at, len - (size_t)(at - body), "\n%s", subject->needs[i]);
+            output_mask_in_place(at + 1);
+            at += strlen(at);
         }
     }
     return body;
