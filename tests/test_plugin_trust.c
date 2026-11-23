@@ -432,7 +432,6 @@ static void given_deep_tool(const char *dir)
     ASSERT_TRUE(fd >= 0);
     for (int hop = 0; fd >= 0 && hop < DEEP_HOPS; hop++) {
         int start = fcntl(fd, F_DUPFD_CLOEXEC, 0);
-        size_t used = 0;
 
         ASSERT_TRUE(start >= 0);
         for (int k = 0; start >= 0 && fd >= 0 && k < DEEP_PER_HOP; k++) {
@@ -445,8 +444,12 @@ static void given_deep_tool(const char *dir)
             ASSERT_TRUE(next >= 0);
             ASSERT_EQ_INT(close(fd), 0);
             fd = next;
-            used += (size_t)snprintf(target + used, sizeof(target) - used, "%s%s", k > 0 ? "/" : "",
-                                     comp);
+            /* target is comp, "/", comp, "/", comp: each comp with its NUL lands at
+               k * (DEEP_NAME + 1), and the next one's "/" takes that NUL's place. */
+            if (k > 0) {
+                target[((size_t)k * (DEEP_NAME + 1U)) - 1U] = '/';
+            }
+            memcpy(target + ((size_t)k * (DEEP_NAME + 1U)), comp, sizeof(comp));
         }
         if (start < 0) {
             break;

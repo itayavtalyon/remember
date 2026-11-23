@@ -16,3 +16,6 @@ cpp/path-injection	src/events.c	src/util.c: user input (string read by fread)	Th
 cpp/path-injection	tests/test_events.c	an environment variable	The brain files and plugin fixtures go under the mkdtemp directories test_main.c sets (TMPDIR, XDG_DATA_HOME) before each test.
 cpp/path-injection	tests/harness.c	an environment variable	harness_install_hooker_at writes the hooker fixture under XDG_DATA_HOME, which test_main.c sets to a mkdtemp directory before each test.
 cpp/path-injection	tests/test_sweep.c	an environment variable	The sweep --all test writes brains.json under XDG_DATA_HOME, which test_main.c sets to a mkdtemp directory before each test.
+cpp/path-injection	tests/test_plugin_trust.c	an environment variable	The plugin data dirs are under the mkdtemp directories test_main.c sets (TMPDIR, XDG_DATA_HOME) before each test.
+cpp/world-writable-file-creation	tests/test_plugin_trust.c	permissions to 0602	G3 test: trust.json is made others-writable on purpose to prove the reader refuses it; it sits in a mkdtemp directory (0700).
+cpp/cleartext-storage-file	src/output.c	src/plugin_trust.c: this source.	The source is TrustRecord.trusted_at, a UTC timestamp (the name matched the sensitive-data heuristic), written to the user's own 0600 trust.json.
