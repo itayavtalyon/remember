@@ -56,7 +56,7 @@ Settings. `settings set plugin.<name>.enabled true` for an installed plugin with
 - [x] `untrusted_enable_setting_fails_c17` (007 test 23).
 - [x] `builtin_trusted_no_record`.
 - [x] `specs/PLUGIN-TRUST.md` written; the decisions above are `state:implemented`.
-- [ ] The gate passes on the committed tree. (See Implementation Notes for what ran.)
+- [x] The gate passes on the committed tree. (See Implementation Notes for what ran.)
 
 ## Implementation Notes
 
@@ -90,7 +90,7 @@ Commands that prove the claims (all from the worktree):
 - Format: `clang-format --dry-run --Werror` (llvm@22) on every changed C file.
 - Lint: `PATH=/opt/homebrew/opt/llvm@22/bin:$PATH ./scripts/lint-all.sh` (format, boundaries, cppcheck, gcc -fanalyzer, clang-tidy 22, scan-build).
 - Coverage: `PATH=/opt/homebrew/opt/llvm@22/bin:$PATH ./scripts/check-coverage.sh` (functions 100%, effective lines 100%, pure-TU branches 100%).
-- Linux: `./scripts/ci-linux.sh --ubuntu=24.04` (lint with clang-tidy 18 and IWYU found two includes and the `getenv` NOLINT line; fixed).
+- Linux: `./scripts/ci-linux.sh --ubuntu=24.04` (OK on the final tree). Its first runs found what macOS cannot: two includes IWYU and misc-include-cleaner flagged, and a LeakSanitizer leak (`plugin_trust_allow` did not free the record when the trust file path could not be built). Each was fixed; the allocation-failure tests are what exposed the leak.
 - The trust tests alone under ASan/UBSan: link the objects of `remember_store_tests` with a main that calls `register_plugin_trust_tests` (88 tests, 0 failures).
 
 Simplify pass, three cuts made: `is_one_segment` deleted (12 lines: a name that is not one segment cannot equal the name in a parsed manifest); `diag.c`'s own printf helper `sentence()` deleted for the existing `fmt_alloc` (22 lines); the lock code moved out of `brain_list.c` into `fileio_lock_open`, so two files share one copy (35 lines fewer in `brain_list.c`). SHA-256 reuses `normalize.c` (`body_hash_hex` is now built on `hash_stream_*`). Regions that cannot shrink: the folder walk (one recursion, depth-capped), the record reader (one `has_exactly` per object) and the check (one `same_code`).
