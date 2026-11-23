@@ -98,3 +98,32 @@ Simplify pass, three cuts made: `is_one_segment` deleted (12 lines: a name that 
 Ceilings, named: no cap on the total bytes hashed in one check (4096 files of 512 MiB are each allowed); a check always re-hashes (a size and mtime fast path is plan 35's); a write waits at most 2 s for the lock; the readdir of the folder fails the hash on an error but is not driven by a test (no portable fault).
 
 ## Review Notes
+
+**2026-11-23, second opinion (Claude Opus 5.5).** On the coder's `00bfdd9`, fixed on `claude/suspicious-bose-aba6b9`. Loaded `workflow:deep-review`, the PLAN scope of `workflow:whole-plan-deep-review`, `standard:coding`, `standard:c`, and every decision the plan and the notes cite. Local Bugbot is not installed (`remember-miss:plan33-review-local-bugbot`); its stand-in was an independent exploit pass by a fresh agent given the code and not my findings.
+
+Findings fixed without a grill, each with an exploit test that was red first:
+- **Critical (TOCTOU), a plugin.json swapped between the parse and the hash passed.** `plugin_trust_load_installed` parsed the manifest (the argv the caller runs), then the hash read `plugin.json` again. Swap in a manifest that runs another file of the approved folder, parse it, swap the approved bytes back: `plugin_trust_check` said OK for the swapped argv. `a_manifest_swapped_after_the_parse_is_untrusted`. Fix: `PluginTrustSubject.manifest` (required) carries the bytes the subject was parsed from, and `manifest_sha256` hashes them (`295c16a`).
+- **High, an argv path whose real path is past `PATH_MAX` was text.** `realpath` failed with `ENAMETOOLONG`, which `fileio_errno_means_absent` calls absent, so the file was never hashed while `sh` still ran it. `an_argv_file_whose_realpath_is_too_long_is_unhashable`. Fix: only `ENOENT` and `ENOTDIR` are absent here (`9675838`).
+- **High, an empty or relative `PATH` entry before the hit.** env runs `./python3` from its working directory while the record named `/usr/bin/python3`. `an_empty_or_relative_search_path_entry_before_the_hit_is_unhashable`.
+- **Medium, a newline or ESC in a name, command or need forged lines of the confirm body.** `a_control_byte_in_a_value_cannot_add_a_line_to_the_body`. Fix: each value is masked as it goes in.
+- **Low, a deep folder of long names was reported out of memory** (`join_path`'s cap): `a_deep_folder_with_long_names_is_hashed_not_out_of_memory`.
+
+Grilled and answered by Itay (2026-11-23, relayed by the orchestrator), each built red first (`43dd708`):
+- G1 A, `decision:2026-11-23-plan33-argv-cwd`: a relative argv item after `command[0]` is looked up where the command runs (`PluginTrustCommand.cwd`). `a_relative_argv_item_is_looked_up_in_the_commands_working_directory`.
+- G2 A, `decision:2026-11-23-plan33-env-unlisted-unhashable`: env followed by anything but a listed interpreter is unhashable. Widened here to any argv[0] whose base name is `env`, because Linux has `/bin/env` and the exact-path rule let it through. `env_followed_by_anything_but_a_listed_interpreter_is_unhashable`, `a_bare_env_command_with_no_name_after_it_is_unhashable`.
+- G3 A, `decision:2026-11-23-plan33-trust-json-owner-mode`: `fileio_read_private`. `a_trust_json_writable_by_group_or_others_is_unreadable`, `a_file_of_another_owner_is_not_private`.
+- G4 A, `decision:2026-11-23-plan33-total-hash-cap`: 512 MiB read in all for one subject (`PLUGIN_TRUST_HASHED_MAX`). An argv file inside the folder is no longer read a second time. `a_subject_over_512_mebibytes_in_all_is_unhashable_and_one_of_exactly_that_is_hashed`.
+- G5 A, `decision:2026-11-23-plan33-hook-body-whole-command`: the hook body shows the whole command, shell-quoted; the form is `decision:open-2026-11-23-plan33-hook-body-command-form` for Story Weaver. `the_hook_body_shows_the_whole_command_shell_quoted`.
+- Side change: an interpreter path that is a folder or a device is unhashable (it was "no interpreter").
+
+Grilled, waiting on Itay: G6 (the settings registry and trust can name different folders: `plugins/aaa` with `"name":"wake"` takes `plugin.wake.*`, and the guard checks `plugins/wake`) and G7 (an argv folder or FIFO outside the plugin folder is never hashed). My picks: G6 A (a plugin's name is its folder name), G7 A (a FIFO or socket argv outside the folder is unhashable; folders and `--opt=path` stay a named gap).
+
+Simplify: (1) `name_is_taken` deleted for `doc_find` (one lookup, not two). (2) `old_has_need` folded into `is_new_need`. (3) `resolve_file` split into `real_of_item` and `hash_real`, so an item inside the folder is never hashed twice. (4) `hash_path` and the old `hash_real` merged. (5) `fileio_read_regular` and `fileio_read_private` share one body.
+
+Probes that held: `settings set plugin.wake.enabled` with other spellings of true (only the exact `true` reaches the guard); a NULL and a false callback record nothing; the typed-name confirm; a FIFO `trust.json` (no hang); two entries with one name; a stale lock and `.tmp`. Known, left: `trust.json` as a symlink is followed (the data dir is 0700; G3 checks the target's owner and mode); bidi controls are not masked (the repo's mask covers C0 and C1 only).
+
+Mutants on the review fixes before the grills (valid-but-wrong rewrites, each built and run): all 7 killed. Each G1 to G5 change is proven by its test's red run on the unchanged code.
+
+For later plans: plan 35 runs the argv of the subject it checked, never a second parse; plan 34 fills `PluginTrustCommand.cwd` from `working_directory`, and its `plugin remove` needs a trust-record delete; the "TTY" of the confirm callback is plan 34's to name.
+
+Grades. Coder 6/10: 88 trust tests, 49 mutants with every survivor argued, a leak found by Linux, a careful lock and write path. Missed the parse-then-hash TOCTOU on the one security check, the env and `PATH` forms the runtime follows, and the confirm body as a forging surface. In-session review 5/10: its mutants held, but it accepted a second read of the file it hashes and named the total-bytes gap without grilling it. Folded into `standard:coding` (old body in `history:standard:coding:2026-11-23-33review`): rule 3 (probe prompts and dialog bodies, not only error messages) and rule 4 (decide from the bytes the caller acts on; resolve inputs the way the consuming program does; cap the total work of one call).
