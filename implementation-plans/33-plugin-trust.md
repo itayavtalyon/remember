@@ -75,6 +75,26 @@ Plan corrections (the plan text above stands as written):
 
 Also changed: SHA-256 stays in `normalize.c` (`hash_stream_*`, `body_hash_hex` is built on it); the lock moved from `brain_list.c` to `fileio_lock_open`; `app_err_block` in `appio.c` writes the multi-line body; `harness_install_hooker` records trust (and `harness_trust_hooker` for a test that writes the manifest itself), because `settings set plugin.hooker.enabled true` is guarded now.
 
+Mutation check (49 one-clause mutants of `src/plugin_trust.c`, each built with the store-test flags and run against the 88 trust tests under ASan/UBSan; the runner is `register_plugin_trust_tests` alone, so a mutant that survives is one the trust tests cannot see). 45 were killed (assert or ASan abort). Four survive, each with its reason:
+
+- `no_sort` (drop the `qsort` of the folder list): the order of `readdir` on APFS is already the byte order of the names, so `the_folder_hash_does_not_depend_on_the_order_the_files_were_made` cannot turn red here. The Linux run (ext4 and overlayfs return another order) is what proves it.
+- `eof_always` (the digest is taken even when the read loop broke on an error or the cap): the fstat cap stops a file over 512 MiB first, and a failed `read` needs a fault. No test drives it.
+- `errno_check_off` (a `readdir` that stopped on an error is not a failure): no portable fault.
+- `needs_update_all` (the length pass counts every need, old or new): it only over-allocates the body buffer. Equivalent.
+
+The first run of the mutants left 17 survivors. Each got a test: `commands_max` (a subject of 33 valid commands), `dirs_ge` (4096 folders), `entries_cap_commit` and the read cap (1024 and 1025 entries), `env_argc` (a bare `/usr/bin/env`), `files_cap_gt8` and `no_dedupe` (eight files over two commands, a file named twice), `hex_len` (65 digits), `inline_any_shell` (`python3 -c`), `same_file_path`, `same_interp_path`, `same_interp_sha` (the same bytes under another path, an env interpreter that changes, a `PATH` that finds another copy), `same_kind`. `is_one_segment` was deleted: a name that is not one segment cannot equal the name in a parsed manifest, so the guard was dead code.
+
+Commands that prove the claims (all from the worktree):
+
+- Build and the whole gate list: `cmake -S . -B build -DREMEMBER_TEST_VFS=ON && cmake --build build && (cd build && ctest --output-on-failure)` (step_gate and store_asan_gate pass; `plugins` is in `tests/gate-suites`).
+- Format: `clang-format --dry-run --Werror` (llvm@22) on every changed C file.
+- Lint: `PATH=/opt/homebrew/opt/llvm@22/bin:$PATH ./scripts/lint-all.sh` (format, boundaries, cppcheck, gcc -fanalyzer, clang-tidy 22, scan-build).
+- Coverage: `PATH=/opt/homebrew/opt/llvm@22/bin:$PATH ./scripts/check-coverage.sh` (functions 100%, effective lines 100%, pure-TU branches 100%).
+- Linux: `./scripts/ci-linux.sh --ubuntu=24.04` (lint with clang-tidy 18 and IWYU found two includes and the `getenv` NOLINT line; fixed).
+- The trust tests alone under ASan/UBSan: link the objects of `remember_store_tests` with a main that calls `register_plugin_trust_tests` (88 tests, 0 failures).
+
+Simplify pass, three cuts made: `is_one_segment` deleted (12 lines: a name that is not one segment cannot equal the name in a parsed manifest); `diag.c`'s own printf helper `sentence()` deleted for the existing `fmt_alloc` (22 lines); the lock code moved out of `brain_list.c` into `fileio_lock_open`, so two files share one copy (35 lines fewer in `brain_list.c`). SHA-256 reuses `normalize.c` (`body_hash_hex` is now built on `hash_stream_*`). Regions that cannot shrink: the folder walk (one recursion, depth-capped), the record reader (one `has_exactly` per object) and the check (one `same_code`).
+
 Ceilings, named: no cap on the total bytes hashed in one check (4096 files of 512 MiB are each allowed); a check always re-hashes (a size and mtime fast path is plan 35's); a write waits at most 2 s for the lock; the readdir of the folder fails the hash on an error but is not driven by a test (no portable fault).
 
 ## Review Notes

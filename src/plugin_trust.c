@@ -1531,11 +1531,12 @@ PluginTrustStatus plugin_trust_allow(const char *data_dir, const RememberEnv *en
         return PLUGIN_TRUST_OK;
     }
     status = build_record(subject, &rec);
-    file = status == PLUGIN_TRUST_OK ? plugin_trust_file_path(data_dir) : NULL;
-    if (status != PLUGIN_TRUST_OK || file == NULL) {
-        return status != PLUGIN_TRUST_OK ? status : PLUGIN_TRUST_OOM;
+    if (status != PLUGIN_TRUST_OK) {
+        return status;
     }
-    status = load_doc(file, &doc);
+    /* From here rec is ours: every path ends in record_clear. */
+    file = plugin_trust_file_path(data_dir);
+    status = file != NULL ? load_doc(file, &doc) : PLUGIN_TRUST_OOM;
     free(file);
     if (status == PLUGIN_TRUST_OK) {
         size_t at = doc_find(&doc, subject->name);
