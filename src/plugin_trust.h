@@ -69,11 +69,16 @@ typedef struct PluginTrustCommand {
  * entries. folder is the installed plugin folder (it holds plugin.json). A hook is stored under
  * its command path, which is argv[0] of its one command; a plugin under its folder.
  * search_path is the PATH that /usr/bin/env finds an interpreter in (NULL finds none).
+ * manifest is the plugin.json bytes commands and needs were parsed from (required, at most
+ * PLUGIN_JSON_MAX): manifest_sha256 is the hash of these bytes, never of a second read of the file,
+ * so a plugin.json swapped after the parse cannot pass a check for the argv the caller will run.
  */
 typedef struct PluginTrustSubject {
     const char *name;
     const char *folder;
     const char *search_path;
+    const char *manifest;
+    size_t manifest_len;
     const PluginTrustCommand *commands;
     const char *const *needs;
     size_t ncommands;
@@ -116,6 +121,7 @@ typedef struct PluginTrustInstalled {
     const char **argv_pool; /* PLUGIN_ARGS_MAX argv pointers for each command */
     const char **needs;
     char *folder;
+    char *manifest_bytes; /* the plugin.json bytes subject.manifest points at */
 } PluginTrustInstalled;
 
 PluginTrustStatus plugin_trust_load_installed(const char *data_dir, const char *name,

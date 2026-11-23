@@ -133,6 +133,8 @@ static void given_wake_subject(WakeSubject *w, const char *data)
     w->needs[0] = "memories:read";
     w->subject = (PluginTrustSubject){.name = "wake",
                                       .folder = w->folder,
+                                      .manifest = MANIFEST_TEXT,
+                                      .manifest_len = sizeof(MANIFEST_TEXT) - 1U,
                                       .commands = &w->command,
                                       .ncommands = 1U,
                                       .needs = w->needs,
@@ -233,6 +235,8 @@ static void given_commands(TwoCommands *two, const char *data, const char *const
     two->commands[1] = (PluginTrustCommand){.argv = argv_b, .argc = argc_b};
     two->subject = (PluginTrustSubject){.name = "wake",
                                         .folder = two->folder,
+                                        .manifest = MANIFEST_TEXT,
+                                        .manifest_len = sizeof(MANIFEST_TEXT) - 1U,
                                         .commands = two->commands,
                                         .ncommands = argv_b != NULL ? 2U : 1U,
                                         .kind = PLUGIN_TRUST_KIND_PLUGIN};
@@ -505,6 +509,8 @@ static void given_ping(PingSubject *ping, const char *data)
     ping->command = (PluginTrustCommand){.argv = ping->argv, .argc = 2U};
     ping->subject = (PluginTrustSubject){.name = "ping",
                                          .folder = ping->folder,
+                                         .manifest = MANIFEST_TEXT,
+                                         .manifest_len = sizeof(MANIFEST_TEXT) - 1U,
                                          .commands = &ping->command,
                                          .ncommands = 1U,
                                          .kind = PLUGIN_TRUST_KIND_HOOK};
@@ -1355,20 +1361,40 @@ TEST(a_file_over_512_mebibytes_is_unhashable_and_one_of_exactly_that_is_hashed)
     free(data);
 }
 
+/* The manifest bytes are the caller's (the parse), so the cap is on those; a plugin.json the
+   reader refuses never reaches a subject (plugin_trust_load_installed). */
 TEST(a_missing_folder_or_manifest_or_one_over_the_reader_cap_is_unhashable)
 {
     char *data = given_data_dir();
+    WakeSubject w;
+    HostLog log;
+    RememberEnv env = given_host(&log, true);
+    PluginTrustInstalled installed;
     char path[PATH_BUF];
     char big[PLUGIN_JSON_MAX + 2];
 
     given_wake(data);
-    path_of(path, sizeof(path), data, "plugins/wake/plugin.json");
+    given_wake_subject(&w, data);
+    w.subject.manifest_len = (size_t)PLUGIN_JSON_MAX + 1U;
+    ASSERT_EQ_STATUS(plugin_trust_allow(data, &env, &w.subject, NOW), PLUGIN_TRUST_UNHASHABLE);
+    w.subject.manifest_len = (size_t)PLUGIN_JSON_MAX;
+    w.subject.manifest = big;
     memset(big, 'a', sizeof(big) - 1U);
     big[sizeof(big) - 1U] = '\0';
+    ASSERT_EQ_STATUS(plugin_trust_allow(data, &env, &w.subject, NOW), PLUGIN_TRUST_OK);
+    w.subject.manifest = NULL;
+    w.subject.manifest_len = 0U;
+    ASSERT_EQ_STATUS(plugin_trust_allow(data, &env, &w.subject, NOW), PLUGIN_TRUST_UNHASHABLE);
+    path_of(path, sizeof(path), data, "plugins/wake/plugin.json");
     harness_write_file(path, big);
-    ASSERT_EQ_STATUS(allow_wake_unasked(data), PLUGIN_TRUST_UNHASHABLE);
+    memset(&installed, 0, sizeof(installed));
+    ASSERT_EQ_STATUS(
+        plugin_trust_load_installed(data, "wake", PLUGIN_TRUST_KIND_PLUGIN, NULL, &installed),
+        PLUGIN_TRUST_UNHASHABLE);
     ASSERT_EQ_INT(unlink(path), 0);
-    ASSERT_EQ_STATUS(allow_wake_unasked(data), PLUGIN_TRUST_UNHASHABLE);
+    ASSERT_EQ_STATUS(
+        plugin_trust_load_installed(data, "wake", PLUGIN_TRUST_KIND_PLUGIN, NULL, &installed),
+        PLUGIN_TRUST_UNHASHABLE);
     harness_remove_tree(data);
     ASSERT_EQ_STATUS(allow_wake_unasked(data), PLUGIN_TRUST_UNHASHABLE);
     free(data);
@@ -2219,6 +2245,37 @@ TEST(check_installed_reads_a_hook_record_as_a_hook)
     free(data);
 }
 
+/* Exploit (plan 33 review): plugin.json swapped between the parse that gives the argv a caller
+   runs and the read the hash takes. The approved folder also ships evil.sh; the swapped manifest
+   runs it. The check must be about the bytes that were parsed, not the bytes on disk later. */
+TEST(a_manifest_swapped_after_the_parse_is_untrusted)
+{
+    char *data = given_data_dir();
+    HostLog log;
+    PluginTrustInstalled installed;
+
+    given_installed_wake(data);
+    given_file(data, "plugins/wake/evil.sh", "#!/bin/sh\necho evil\n", 0755);
+    ASSERT_EQ_STATUS(allow_installed(data, "wake", PLUGIN_TRUST_KIND_PLUGIN, true, &log),
+                     PLUGIN_TRUST_OK);
+    given_file(
+        data, "plugins/wake/plugin.json",
+        "{\"format\":\"remember-plugin\",\"version\":1,\"name\":\"wake\",\"plugin_version\":"
+        "\"1.0.0\",\"protocol\":1,\"actions\":[{\"name\":\"go\",\"events\":[\"memory.created\"],"
+        "\"run\":{\"command\":[\"evil.sh\"]},\"permissions\":{\"needs\":[\"body\",\"links\"]}}]}",
+        0644);
+    memset(&installed, 0, sizeof(installed));
+    ASSERT_EQ_STATUS(
+        plugin_trust_load_installed(data, "wake", PLUGIN_TRUST_KIND_PLUGIN, NULL, &installed),
+        PLUGIN_TRUST_OK);
+    ASSERT_STREQ(installed.subject.commands[0].argv[0], "evil.sh");
+    given_file(data, "plugins/wake/plugin.json", WAKE_MANIFEST, 0644);
+    ASSERT_EQ_STATUS(plugin_trust_check(data, &installed.subject), PLUGIN_TRUST_UNTRUSTED);
+    plugin_trust_installed_free(&installed);
+    harness_remove_tree(data);
+    free(data);
+}
+
 TEST(an_installed_plugin_that_cannot_be_read_is_not_trusted)
 {
     char *data = given_data_dir();
@@ -2802,6 +2859,7 @@ void register_plugin_trust_tests(void)
     RUN_TEST(an_installed_plugin_loads_its_commands_and_distinct_needs_from_plugin_json);
     RUN_TEST(check_installed_is_ok_after_allow_and_untrusted_after_an_edit);
     RUN_TEST(check_installed_reads_a_hook_record_as_a_hook);
+    RUN_TEST(a_manifest_swapped_after_the_parse_is_untrusted);
     RUN_TEST(an_installed_plugin_that_cannot_be_read_is_not_trusted);
     RUN_TEST(a_hook_whose_manifest_has_two_commands_is_unhashable);
 #ifdef REMEMBER_PLUGINS_DIAG_TEST

@@ -458,35 +458,19 @@ static const char *inline_text(const PluginTrustCommand *cmd)
     return cmd->argv[shell_at + 2U];
 }
 
-/* manifest_sha256: the bytes of <folder>/plugin.json, then for each command that runs
-   "<shell> -c <inline>" a NUL, "sh-c", a NUL, the inline text and a NUL. */
+/* manifest_sha256: the plugin.json bytes the subject was parsed from, then for each command that
+   runs "<shell> -c <inline>" a NUL, "sh-c", a NUL, the inline text and a NUL. */
 static HashRc hash_manifest(const PluginTrustSubject *subject, char out_hex[PLUGIN_TRUST_HEX + 1])
 {
     static const char k_tag[] = "\0sh-c";
-    char *path = join_path(subject->folder, "plugin.json");
-    char *bytes = NULL;
-    size_t len = 0;
-    int sys_errno = 0;
-    void *mem = NULL;
-    HashStream *stream = NULL;
+    void *mem = malloc(hash_stream_size());
+    HashStream *stream = hash_stream_init(mem);
     size_t i = 0;
 
-    if (path == NULL) {
-        return H_OOM;
-    }
-    if (fileio_read_regular(path, (size_t)PLUGIN_JSON_MAX, &bytes, &len, &sys_errno) != 0) {
-        free(path);
-        return sys_errno == ENOMEM ? H_OOM : H_BAD;
-    }
-    free(path);
-    mem = malloc(hash_stream_size());
-    stream = hash_stream_init(mem);
     if (stream == NULL) {
-        free(bytes);
         return H_OOM;
     }
-    hash_stream_update(stream, bytes, len);
-    free(bytes);
+    hash_stream_update(stream, subject->manifest, subject->manifest_len);
     for (i = 0; i < subject->ncommands; i++) {
         const char *text = inline_text(&subject->commands[i]);
 
@@ -665,7 +649,7 @@ static HashRc hash_real(const char *real, FileHash *hash)
 
 /* The interpreter of one command, when it has one and the file is there: its realpath and hash.
    A second interpreter is not the first one: unhashable (decision:2026-11-22-plan33-many-entries).
-   A file the record already holds as an argv file is not hashed again. */
+ */
 static HashRc add_interpreter(TrustRecord *rec, const PluginTrustSubject *subject,
                               const PluginTrustCommand *cmd)
 {
@@ -721,6 +705,7 @@ static PluginTrustStatus status_of(HashRc rc)
 static bool subject_is_usable(const PluginTrustSubject *subject)
 {
     if (subject->name == NULL || subject->name[0] == '\0' || subject->folder == NULL ||
+        subject->manifest == NULL || subject->manifest_len > (size_t)PLUGIN_JSON_MAX ||
         subject->ncommands > (size_t)PLUGIN_TRUST_COMMANDS_MAX ||
         (subject->ncommands > 0U && subject->commands == NULL) ||
         (subject->nneeds > 0U && subject->needs == NULL)) {
@@ -1055,19 +1040,6 @@ static bool take_entry(TrustRecord *rec, const JsonValue *row)
     return take_needs(rec, member(row, "needs"));
 }
 
-/* True when one of the first limit entries has this name. */
-static bool name_is_taken(const TrustDoc *doc, const char *name, size_t limit)
-{
-    size_t i = 0;
-
-    for (i = 0; i < limit; i++) {
-        if (strcmp(doc->entries[i].name, name) == 0) {
-            return true;
-        }
-    }
-    return false;
-}
-
 /* Room for one more entry. */
 static bool doc_reserve(TrustDoc *doc, size_t count)
 {
@@ -1087,6 +1059,18 @@ static bool doc_reserve(TrustDoc *doc, size_t count)
     doc->entries = grown;
     doc->cap = count;
     return true;
+}
+
+static size_t doc_find(const TrustDoc *doc, const char *name)
+{
+    size_t i = 0;
+
+    for (i = 0; i < doc->count; i++) {
+        if (strcmp(doc->entries[i].name, name) == 0) {
+            return i;
+        }
+    }
+    return doc->count;
 }
 
 /* The whole file as the decided document, or UNREADABLE (a name given twice included). */
@@ -1127,7 +1111,7 @@ static PluginTrustStatus parse_doc(const char *bytes, size_t len, TrustDoc *doc)
                 if (rec->oom) {
                     status = PLUGIN_TRUST_OOM;
                 }
-            } else if (name_is_taken(doc, rec->name, doc->count - 1U)) {
+            } else if (doc_find(doc, rec->name) != doc->count - 1U) { /* an earlier entry */
                 status = PLUGIN_TRUST_UNREADABLE;
             }
         }
@@ -1287,18 +1271,6 @@ static PluginTrustStatus store_doc(const char *file, const TrustDoc *doc)
     (void)unlink(tmp); /* what a failed rename left; after a rename there is nothing to remove */
     free(tmp);
     return status;
-}
-
-static size_t doc_find(const TrustDoc *doc, const char *name)
-{
-    size_t i = 0;
-
-    for (i = 0; i < doc->count; i++) {
-        if (strcmp(doc->entries[i].name, name) == 0) {
-            return i;
-        }
-    }
-    return doc->count;
 }
 
 /* The lock on <file>.lock, the folder made first. */
@@ -1463,16 +1435,9 @@ PluginTrustStatus plugin_trust_confirm(const RememberEnv *env, PluginTrustKind k
     return PLUGIN_TRUST_OK;
 }
 
-static bool old_has_need(const TrustRecord *old, const char *need)
+static bool is_new_need(const TrustRecord *old, const char *need)
 {
-    size_t i = 0;
-
-    for (i = 0; old != NULL && i < old->nneeds; i++) {
-        if (strcmp(old->needs[i], need) == 0) {
-            return true;
-        }
-    }
-    return false;
+    return old == NULL || !in_list(need, (const char *const *)old->needs, old->nneeds);
 }
 
 /* The dialog body (H-9.4, H-9.6). A hook: one sentence. A folder: the question, then one need per
@@ -1499,7 +1464,7 @@ static char *build_body(const PluginTrustSubject *subject, const TrustRecord *ol
     len = strlen(subject->name) +
           sizeof("Allow \"\" to read your memories? It can send them off this Mac.");
     for (i = 0; i < subject->nneeds; i++) {
-        if (!old_has_need(old, subject->needs[i])) {
+        if (is_new_need(old, subject->needs[i])) {
             len += strlen(subject->needs[i]) + 1U;
         }
     }
@@ -1511,7 +1476,7 @@ static char *build_body(const PluginTrustSubject *subject, const TrustRecord *ol
                          "Allow \"%s\" to read your memories? It can send them off this Mac.",
                          subject->name);
     for (i = 0; i < subject->nneeds; i++) {
-        if (!old_has_need(old, subject->needs[i])) {
+        if (is_new_need(old, subject->needs[i])) {
             at += snprintf(at, len - (size_t)(at - body), "\n%s", subject->needs[i]);
         }
     }
@@ -1570,20 +1535,9 @@ void plugin_trust_installed_free(PluginTrustInstalled *installed)
     free(installed->commands);
     free((void *)installed->needs);
     free(installed->folder);
+    free(installed->manifest_bytes);
     plugin_manifest_free(installed->manifest);
     memset(installed, 0, sizeof(*installed));
-}
-
-static bool has_need(const char **needs, size_t count, const char *need)
-{
-    size_t i = 0;
-
-    for (i = 0; i < count; i++) {
-        if (needs[i] != NULL && strcmp(needs[i], need) == 0) {
-            return true;
-        }
-    }
-    return false;
 }
 
 /* The manifest's commands and distinct needs into the owned arrays. false: memory ran out. */
@@ -1611,7 +1565,7 @@ static bool fill_subject(PluginTrustInstalled *installed)
         installed->commands[i] = (PluginTrustCommand){.argv = argv, .argc = entry->run.argc};
         installed->subject.ncommands = i + 1U;
         for (size_t j = 0; j < entry->nneeds; j++) {
-            if (!has_need(installed->needs, installed->subject.nneeds, entry->needs[j])) {
+            if (!in_list(entry->needs[j], installed->needs, installed->subject.nneeds)) {
                 installed->needs[installed->subject.nneeds++] = entry->needs[j];
             }
         }
@@ -1647,8 +1601,10 @@ PluginTrustStatus plugin_trust_load_installed(const char *data_dir, const char *
         return sys_errno == ENOMEM ? PLUGIN_TRUST_OOM : PLUGIN_TRUST_UNHASHABLE;
     }
     free(json_path);
+    out->manifest_bytes = bytes;
+    out->subject.manifest = bytes;
+    out->subject.manifest_len = len;
     parsed = plugin_manifest_parse(bytes, len, &out->manifest);
-    free(bytes);
     if (parsed == PLUGIN_PARSE_OOM || out->manifest == NULL || out->manifest->oom) {
         plugin_trust_installed_free(out);
         return PLUGIN_TRUST_OOM;
