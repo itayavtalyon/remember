@@ -417,7 +417,8 @@ TEST(an_empty_or_relative_search_path_entry_before_the_hit_is_unhashable)
 enum { DEEP_NAME = 250, DEEP_HOPS = 6, DEEP_PER_HOP = 3 };
 
 /* Under dir: a link "n" in each hop, so that n/n/n/n/n/n/tool.sh (short) resolves to a path of
-   about 4500 bytes, past PATH_MAX on macOS (1024) and Linux (4096). open() still follows it. */
+   about 4500 bytes, past PATH_MAX on macOS (1024) and Linux (4096). open() still follows it.
+   Each step returns on a failed assert: the descriptors below it would be -1. */
 static void given_deep_tool(const char *dir)
 {
     char comp[DEEP_NAME + 1];
@@ -426,12 +427,12 @@ static void given_deep_tool(const char *dir)
     int file = -1;
 
     ASSERT_TRUE(fd >= 0);
-    for (int hop = 0; hop < DEEP_HOPS; hop++) {
-        int start = dup(fd);
+    for (int hop = 0; fd >= 0 && hop < DEEP_HOPS; hop++) {
+        int start = fcntl(fd, F_DUPFD_CLOEXEC, 0);
+        size_t used = 0;
 
         ASSERT_TRUE(start >= 0);
-        target[0] = '\0';
-        for (int k = 0; k < DEEP_PER_HOP; k++) {
+        for (int k = 0; start >= 0 && fd >= 0 && k < DEEP_PER_HOP; k++) {
             int next = -1;
 
             memset(comp, 'a' + k, DEEP_NAME);
@@ -441,19 +442,25 @@ static void given_deep_tool(const char *dir)
             ASSERT_TRUE(next >= 0);
             ASSERT_EQ_INT(close(fd), 0);
             fd = next;
-            if (k > 0) {
-                (void)strcat(target, "/");
-            }
-            (void)strcat(target, comp);
+            used += (size_t)snprintf(target + used, sizeof(target) - used, "%s%s", k > 0 ? "/" : "",
+                                     comp);
+        }
+        if (start < 0) {
+            break;
         }
         ASSERT_EQ_INT(symlinkat(target, start, "n"), 0);
         ASSERT_EQ_INT(close(start), 0);
     }
+    if (fd < 0) {
+        return;
+    }
     file = openat(fd, "tool.sh", O_WRONLY | O_CREAT | O_CLOEXEC, 0755);
     ASSERT_TRUE(file >= 0);
-    ASSERT_EQ_INT((int)write(file, TOOL_SH_TEXT, sizeof(TOOL_SH_TEXT) - 1U),
-                  (int)sizeof(TOOL_SH_TEXT) - 1);
-    ASSERT_EQ_INT(close(file), 0);
+    if (file >= 0) {
+        ASSERT_EQ_INT((int)write(file, TOOL_SH_TEXT, sizeof(TOOL_SH_TEXT) - 1U),
+                      (int)sizeof(TOOL_SH_TEXT) - 1);
+        ASSERT_EQ_INT(close(file), 0);
+    }
     ASSERT_EQ_INT(close(fd), 0);
 }
 
@@ -466,6 +473,9 @@ static void remove_at(int parent, const char *name)
     DIR *dir = NULL;
     const struct dirent *ent = NULL;
 
+    if (parent < 0) {
+        return;
+    }
     if (fstatat(parent, name, &st, AT_SYMLINK_NOFOLLOW) != 0 || !S_ISDIR(st.st_mode)) {
         (void)unlinkat(parent, name, 0);
         return;
@@ -473,6 +483,9 @@ static void remove_at(int parent, const char *name)
     fd = openat(parent, name, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
     dir = fd >= 0 ? fdopendir(fd) : NULL;
     ASSERT_TRUE(dir != NULL);
+    if (dir == NULL) {
+        return;
+    }
     // NOLINTNEXTLINE(concurrency-mt-unsafe) -- single-threaded test
     while ((ent = readdir(dir)) != NULL) {
         if (strcmp(ent->d_name, ".") != 0 && strcmp(ent->d_name, "..") != 0) {
@@ -498,7 +511,6 @@ TEST(a_deep_folder_with_long_names_is_hashed_not_out_of_memory)
     char folder[PATH_BUF];
     char comp[NAME_MAX + 1];
     int fd = -1;
-    int file = -1;
     int top = -1;
 
     given_wake(data);
@@ -507,7 +519,7 @@ TEST(a_deep_folder_with_long_names_is_hashed_not_out_of_memory)
     ASSERT_TRUE(fd >= 0);
     memset(comp, 'd', NAME_MAX);
     comp[NAME_MAX] = '\0';
-    for (int level = 0; level < PLUGIN_TRUST_DEPTH_MAX; level++) {
+    for (int level = 0; fd >= 0 && level < PLUGIN_TRUST_DEPTH_MAX; level++) {
         int next = -1;
 
         ASSERT_EQ_INT(mkdirat(fd, comp, 0700), 0);
@@ -516,10 +528,13 @@ TEST(a_deep_folder_with_long_names_is_hashed_not_out_of_memory)
         ASSERT_EQ_INT(close(fd), 0);
         fd = next;
     }
-    file = openat(fd, "x", O_WRONLY | O_CREAT | O_CLOEXEC, 0644);
-    ASSERT_TRUE(file >= 0);
-    ASSERT_EQ_INT(close(file), 0);
-    ASSERT_EQ_INT(close(fd), 0);
+    if (fd >= 0) {
+        int file = openat(fd, "x", O_WRONLY | O_CREAT | O_CLOEXEC, 0644);
+
+        ASSERT_TRUE(file >= 0);
+        ASSERT_EQ_INT(file >= 0 ? close(file) : -1, 0);
+        ASSERT_EQ_INT(close(fd), 0);
+    }
     ASSERT_EQ_STATUS(allow_wake_unasked(data), PLUGIN_TRUST_OK);
     top = open(folder, O_RDONLY | O_DIRECTORY | O_CLOEXEC);
     ASSERT_TRUE(top >= 0);

@@ -1439,7 +1439,12 @@ PluginTrustStatus plugin_trust_confirm(const RememberEnv *env, PluginTrustKind k
 
 static bool is_new_need(const TrustRecord *old, const char *need)
 {
-    return old == NULL || !in_list(need, (const char *const *)old->needs, old->nneeds);
+    for (size_t i = 0; old != NULL && i < old->nneeds; i++) {
+        if (strcmp(old->needs[i], need) == 0) {
+            return false;
+        }
+    }
+    return true;
 }
 
 /* The dialog body (H-9.4, H-9.6). A hook: one sentence. A folder: the question, then one need per
@@ -1548,6 +1553,17 @@ void plugin_trust_installed_free(PluginTrustInstalled *installed)
     memset(installed, 0, sizeof(*installed));
 }
 
+/* in_list over a zeroed array the analyzer cannot see is filled up to count. */
+static bool has_need(const char **needs, size_t count, const char *need)
+{
+    for (size_t i = 0; i < count; i++) {
+        if (needs[i] != NULL && strcmp(needs[i], need) == 0) {
+            return true;
+        }
+    }
+    return false;
+}
+
 /* The manifest's commands and distinct needs into the owned arrays. false: memory ran out. */
 static bool fill_subject(PluginTrustInstalled *installed)
 {
@@ -1573,7 +1589,7 @@ static bool fill_subject(PluginTrustInstalled *installed)
         installed->commands[i] = (PluginTrustCommand){.argv = argv, .argc = entry->run.argc};
         installed->subject.ncommands = i + 1U;
         for (size_t j = 0; j < entry->nneeds; j++) {
-            if (!in_list(entry->needs[j], installed->needs, installed->subject.nneeds)) {
+            if (!has_need(installed->needs, installed->subject.nneeds, entry->needs[j])) {
                 installed->needs[installed->subject.nneeds++] = entry->needs[j];
             }
         }
