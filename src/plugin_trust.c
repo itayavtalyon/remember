@@ -77,18 +77,19 @@ static HashRc hash_fd(int fd, FileHash *out)
     struct stat st;
     unsigned char chunk[CHUNK];
     long long total = 0;
-    HashRc rc = H_OK;
+    HashRc rc = H_BAD;
+    bool eof = false;
     void *mem = NULL;
     HashStream *stream = NULL;
 
     if (fstat(fd, &st) != 0) {
-        return H_BAD;
+        return rc;
     }
     if (!S_ISREG(st.st_mode)) {
         return H_NOT_REGULAR;
     }
     if (st.st_size > (off_t)PLUGIN_TRUST_HASHED_FILE_MAX) {
-        return H_BAD;
+        return rc;
     }
     mem = malloc(hash_stream_size());
     stream = hash_stream_init(mem);
@@ -103,16 +104,17 @@ static HashRc hash_fd(int fd, FileHash *out)
         }
         if (got < 0 ||
             (got > 0 && total + (long long)got > (long long)PLUGIN_TRUST_HASHED_FILE_MAX)) {
-            rc = H_BAD;
             break;
         }
         if (got == 0) {
+            eof = true;
             break;
         }
         total += (long long)got;
         hash_stream_update(stream, chunk, (size_t)got);
     }
-    if (rc == H_OK) {
+    if (eof) {
+        rc = H_OK;
         hash_stream_hex(stream, out->hex);
         out->size = total;
         out->mtime = (long long)st.st_mtime;
@@ -126,13 +128,11 @@ static HashRc hash_fd(int fd, FileHash *out)
 static HashRc hash_path(const char *path, FileHash *out)
 {
     int fd = open(path, O_RDONLY | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC);
-    HashRc rc = H_OK;
+    HashRc rc = fd < 0 ? absent_rc(errno) : hash_fd(fd, out);
 
-    if (fd < 0) {
-        return absent_rc(errno);
+    if (fd >= 0) {
+        (void)close(fd);
     }
-    rc = hash_fd(fd, out);
-    (void)close(fd);
     return rc;
 }
 
@@ -277,6 +277,7 @@ static HashRc walk_entry(int dirfd, const char *name, const char *rel, size_t de
 {
     struct stat st;
     char *child = rel[0] == '\0' ? dup_text(name) : join_path(rel, name);
+    HashRc rc = H_BAD;
     int sub = -1;
 
     if (child == NULL) {
@@ -284,7 +285,7 @@ static HashRc walk_entry(int dirfd, const char *name, const char *rel, size_t de
     }
     if (fstatat(dirfd, name, &st, AT_SYMLINK_NOFOLLOW) != 0) {
         free(child);
-        return H_BAD;
+        return rc;
     }
     if (S_ISREG(st.st_mode)) {
         return walk_file(dirfd, name, child, walk);
@@ -292,18 +293,15 @@ static HashRc walk_entry(int dirfd, const char *name, const char *rel, size_t de
     if (!S_ISDIR(st.st_mode) || depth + 1U > (size_t)PLUGIN_TRUST_DEPTH_MAX ||
         ++walk->dirs > (size_t)PLUGIN_TRUST_FOLDER_DIRS_MAX) {
         free(child);
-        return H_BAD;
+        return rc;
     }
     // NOLINTNEXTLINE(clang-analyzer-unix.StdCLibraryFunctions) -- dirfd of an open DIR is not -1
     sub = openat(dirfd, name, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
     if (sub >= 0) {
-        HashRc rc = walk_dir(sub, child, depth + 1U, walk);
-
-        free(child);
-        return rc;
+        rc = walk_dir(sub, child, depth + 1U, walk);
     }
     free(child);
-    return H_BAD;
+    return rc;
 }
 
 /* Every entry under fd (taken over: closed here) is a regular file or a folder; a link, a FIFO, a
@@ -313,12 +311,13 @@ static HashRc walk_dir(int fd, const char *rel, size_t depth, Walk *walk)
 {
     DIR *dir = fdopendir(fd);
     const struct dirent *ent = NULL;
-    HashRc rc = H_OK;
+    HashRc rc = H_BAD;
 
     if (dir == NULL) {
         (void)close(fd);
-        return H_BAD;
+        return rc;
     }
+    rc = H_OK;
     errno = 0;
     // NOLINTNEXTLINE(concurrency-mt-unsafe) -- single-threaded CLI; readdir_r is deprecated
     while (rc == H_OK && (ent = readdir(dir)) != NULL) {
@@ -328,9 +327,7 @@ static HashRc walk_dir(int fd, const char *rel, size_t depth, Walk *walk)
         errno = 0;
     }
     /* A listing that stopped on an error is a partial folder. */
-    if (rc == H_OK && errno != 0) {
-        rc = H_BAD;
-    }
+    rc = (rc == H_OK && errno != 0) ? H_BAD : rc;
     (void)closedir(dir);
     return rc;
 }
@@ -1119,7 +1116,7 @@ static PluginTrustStatus parse_doc(const char *bytes, size_t len, TrustDoc *doc)
         strcmp(version->u.number.bytes, "1") == 0 &&
         entries->u.array.n <= (size_t)PLUGIN_TRUST_ENTRIES_MAX) {
         status = PLUGIN_TRUST_OOM;
-        if (doc_reserve(doc, entries->u.array.n + 1U)) {
+        if (doc_reserve(doc, entries->u.array.n)) {
             status = PLUGIN_TRUST_OK;
         }
         for (size_t i = 0; status == PLUGIN_TRUST_OK && i < entries->u.array.n; i++) {
@@ -1285,13 +1282,11 @@ static PluginTrustStatus store_doc(const char *file, const TrustDoc *doc)
         return PLUGIN_TRUST_OOM;
     }
     (void)unlink(tmp);
-    if (fileio_write_new(tmp, write_doc, doc, &sys_errno) == 0) {
-        if (fileio_rename(tmp, file, &sys_errno) == 0) {
-            status = PLUGIN_TRUST_OK;
-        } else {
-            (void)unlink(tmp);
-        }
+    if (fileio_write_new(tmp, write_doc, doc, &sys_errno) == 0 &&
+        fileio_rename(tmp, file, &sys_errno) == 0) {
+        status = PLUGIN_TRUST_OK;
     }
+    (void)unlink(tmp); /* what a failed rename left; after a rename there is nothing to remove */
     free(tmp);
     return status;
 }

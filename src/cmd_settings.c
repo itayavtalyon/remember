@@ -2410,17 +2410,17 @@ static int guard_untrusted_enable(const char *key, const char *prepared)
     if (strcmp(key, enabled) != 0) {
         return 0;
     }
-    if (util_resolve_data_dir(dir, sizeof(dir), err, sizeof(err)) != 0) {
-        status = PLUGIN_TRUST_UNTRUSTED;
-    } else {
-        // NOLINTNEXTLINE(concurrency-mt-unsafe) -- single-threaded CLI; no C11 thread-safe getenv
-        status = plugin_trust_check_installed(dir, name, getenv("PATH"));
-    }
+    /* No data dir means no folder to check: untrusted, never a pass. */
+    // NOLINTNEXTLINE(concurrency-mt-unsafe) -- single-threaded CLI; no C11 thread-safe getenv
+    status = util_resolve_data_dir(dir, sizeof(dir), err, sizeof(err)) != 0
+                 ? PLUGIN_TRUST_UNTRUSTED
+                 : plugin_trust_check_installed(dir, name, getenv("PATH"));
     if (status == PLUGIN_TRUST_OK) {
         return 0;
     }
     if (status == PLUGIN_TRUST_OOM) {
-        return report_oom();
+        err_msg(DIAG_OUT_OF_MEMORY, "out of memory");
+        return REMEMBER_ERR;
     }
     (void)diag_plugin_untrusted_error(name);
     return REMEMBER_ERR;

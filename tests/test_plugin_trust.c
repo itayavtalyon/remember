@@ -2064,6 +2064,72 @@ TEST(a_full_file_takes_no_new_name_and_replaces_an_old_one)
     free(data);
 }
 
+/* A command whose interpreter file is not there is hashed as text, and records no interpreter. */
+TEST(a_command_named_like_an_interpreter_whose_file_is_missing_records_none)
+{
+    char *data = given_data_dir();
+    const char *argv[2] = {"/nonexistent/bin/python3", "run.sh"};
+    char *text = NULL;
+
+    given_wake(data);
+    ASSERT_EQ_STATUS(allow_command(data, argv, 2U, NULL), PLUGIN_TRUST_OK);
+    text = trust_text(data);
+    ASSERT_STR_CONTAINS(text, "\"interpreter\":null");
+    free(text);
+    harness_remove_tree(data);
+    free(data);
+}
+
+/* A dev plugin (plugin add --dev, H-9.7) keeps its flag in the record and still checks OK. */
+TEST(the_dev_flag_is_stored_and_a_dev_record_reads_back)
+{
+    char *data = given_data_dir();
+    WakeSubject w;
+    HostLog log;
+    RememberEnv env = given_host(&log, true);
+    char *text = NULL;
+
+    given_wake(data);
+    given_wake_subject(&w, data);
+    w.subject.dev = true;
+    ASSERT_EQ_STATUS(plugin_trust_allow(data, &env, &w.subject, NOW), PLUGIN_TRUST_OK);
+    text = trust_text(data);
+    ASSERT_STR_CONTAINS(text, "\"dev\":true}");
+    ASSERT_EQ_STATUS(plugin_trust_check(data, &w.subject), PLUGIN_TRUST_OK);
+    free(text);
+    harness_remove_tree(data);
+    free(data);
+}
+
+/* The sweep again with an env interpreter, so the search of the PATH meets every allocation. */
+TEST(an_allocation_that_fails_in_the_path_search_is_out_of_memory)
+{
+    int n = 0;
+    bool saw_oom = false;
+    PluginTrustStatus status = PLUGIN_TRUST_OOM;
+
+    for (n = 0; n < 400 && status != PLUGIN_TRUST_OK; n++) {
+        char *data = given_data_dir();
+        char bin[PATH_BUF];
+        const char *argv[3] = {"/usr/bin/env", "python3", "run.sh"};
+
+        given_wake(data);
+        given_file(data, "bin/python3", "#!/bin/sh\necho py\n", 0755);
+        path_of(bin, sizeof(bin), data, "bin");
+        test_alloc_fail_after(n);
+        status = allow_command(data, argv, 3U, bin);
+        test_alloc_fail_after(-1);
+        if (status == PLUGIN_TRUST_OOM) {
+            saw_oom = true;
+        } else {
+            ASSERT_EQ_INT(status, PLUGIN_TRUST_OK);
+        }
+        harness_remove_tree(data);
+        free(data);
+    }
+    ASSERT_TRUE(saw_oom);
+}
+
 /* An installed plugin: a real plugin.json (needs body and links) and its run.sh. */
 #define WAKE_MANIFEST                                                                              \
     "{\"format\":\"remember-plugin\",\"version\":1,\"name\":\"wake\",\"plugin_version\":\"1.0."    \
@@ -2715,6 +2781,9 @@ void register_plugin_trust_tests(void)
     RUN_TEST(a_data_dir_that_does_not_exist_yet_is_made);
     RUN_TEST(a_held_lock_makes_the_write_busy_and_leaves_the_file_alone);
     RUN_TEST(the_file_path_is_trust_json_in_the_data_dir);
+    RUN_TEST(a_command_named_like_an_interpreter_whose_file_is_missing_records_none);
+    RUN_TEST(the_dev_flag_is_stored_and_a_dev_record_reads_back);
+    RUN_TEST(an_allocation_that_fails_in_the_path_search_is_out_of_memory);
     RUN_TEST(a_folder_of_4096_folders_is_hashed);
     RUN_TEST(eight_files_over_two_commands_are_hashed_and_nine_are_not);
     RUN_TEST(a_file_both_commands_name_counts_once_toward_the_8);
