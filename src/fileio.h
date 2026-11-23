@@ -80,6 +80,12 @@ int fileio_read_all(const char *path, char **out_bytes, size_t *out_len, int *sy
 int fileio_read_regular(const char *path, size_t max_bytes, char **out_bytes, size_t *out_len,
                         int *sys_errno);
 
+/* fileio_read_regular for a file only its owner may write (decision:2026-11-23-plan33-trust-json-
+   owner-mode): also fails, with EPERM, when the file is not owned by the effective user or group
+   or others may write it. */
+int fileio_read_private(const char *path, size_t max_bytes, char **out_bytes, size_t *out_len,
+                        int *sys_errno);
+
 /* True when a failed stat's errno proves nothing is at the path (ENOENT, ENOTDIR, ELOOP,
    ENAMETOOLONG). Any other errno (EACCES, EIO) says nothing about what is there. Inline, so
    the store test binary, which does not link fileio.c, has the one definition too. */

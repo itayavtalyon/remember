@@ -28,13 +28,14 @@ enum {
     DECIMAL_BASE = 10,
     WALK_GROW = 16,
     NONE_AT = -1,
-    LOCK_OOM = -3 /* lock_trust: beside FILEIO_LOCK_IO and FILEIO_LOCK_BUSY */
+    ENV_OTHER = -2, /* interpreter_at: env followed by no listed interpreter */
+    LOCK_OOM = -3   /* lock_trust: beside FILEIO_LOCK_IO and FILEIO_LOCK_BUSY */
 };
 
 static const char k_file_name[] = "trust.json";
 static const char k_lock_suffix[] = ".lock";
 static const char k_tmp_suffix[] = ".tmp";
-static const char k_hook_cmd[] = "/usr/bin/env";
+static const char k_env[] = "env";
 
 /* H-9.1: the interpreters whose realpath and SHA-256 a record also holds. */
 static const char *const k_interpreters[] = {"sh",   "bash", "zsh",  "python", "python3",
@@ -71,8 +72,9 @@ static HashRc absent_rc(int err)
     return H_BAD;
 }
 
-/* Hash what fd holds. fd stays open; it must be a regular file of at most the cap. */
-static HashRc hash_fd(int fd, FileHash *out)
+/* Hash what fd holds. fd stays open; it must be a regular file of at most *left bytes, the budget
+   of the subject, which shrinks by what was read. */
+static HashRc hash_fd(int fd, FileHash *out, long long *left)
 {
     struct stat st;
     unsigned char chunk[CHUNK];
@@ -88,7 +90,7 @@ static HashRc hash_fd(int fd, FileHash *out)
     if (!S_ISREG(st.st_mode)) {
         return H_NOT_REGULAR;
     }
-    if (st.st_size > (off_t)PLUGIN_TRUST_HASHED_FILE_MAX) {
+    if (st.st_size > (off_t)*left) {
         return rc;
     }
     mem = malloc(hash_stream_size());
@@ -102,8 +104,7 @@ static HashRc hash_fd(int fd, FileHash *out)
         if (got < 0 && errno == EINTR) {
             continue;
         }
-        if (got < 0 ||
-            (got > 0 && total + (long long)got > (long long)PLUGIN_TRUST_HASHED_FILE_MAX)) {
+        if (got < 0 || (got > 0 && total + (long long)got > *left)) {
             break;
         }
         if (got == 0) {
@@ -115,6 +116,7 @@ static HashRc hash_fd(int fd, FileHash *out)
     }
     if (eof) {
         rc = H_OK;
+        *left -= total;
         hash_stream_hex(stream, out->hex);
         out->size = total;
         out->mtime = (long long)st.st_mtime;
@@ -124,16 +126,19 @@ static HashRc hash_fd(int fd, FileHash *out)
     return rc;
 }
 
-/* Hash the regular file at path, never following a symlink at the last name. */
-static HashRc hash_path(const char *path, FileHash *out)
+/* Hash the regular file at real (a realpath, so no link is followed), whose path goes in a record:
+   it must be UTF-8 (jsonread refuses the rest). */
+static HashRc hash_real(const char *real, FileHash *out, long long *left)
 {
-    int fd = open(path, O_RDONLY | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC);
-    HashRc rc = fd < 0 ? absent_rc(errno) : hash_fd(fd, out);
+    int fd = open(real, O_RDONLY | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC);
+    HashRc rc = fd < 0 ? absent_rc(errno) : hash_fd(fd, out, left);
 
     if (fd >= 0) {
         (void)close(fd);
     }
-    return rc;
+    /* Only Linux can make a name that is not UTF-8 (a_path_or_name_that_is_not_utf8_is_unhashable).
+     */
+    return rc == H_OK && !utf8_is_valid(real, strlen(real)) ? H_BAD : rc;
 }
 
 /* ---- small text helpers -------------------------------------------------------------------- */
@@ -203,6 +208,7 @@ typedef struct Walk {
     size_t count;
     size_t cap;
     size_t dirs;
+    long long *left;
 } Walk;
 
 static void walk_free(Walk *walk)
@@ -258,7 +264,7 @@ static HashRc walk_file(int dirfd, const char *name, char *rel, Walk *walk)
         free(rel);
         return H_BAD;
     }
-    rc = hash_fd(fd, &hash);
+    rc = hash_fd(fd, &hash, walk->left);
     (void)close(fd);
     if (rc != H_OK) {
         free(rel);
@@ -337,9 +343,9 @@ static int cmp_lines(const void *left, const void *right)
 /* folder_sha256: one record per regular file in the byte order of its relative path: 'F', the
    executable bit as 'x' or '-', the 64 hex digits of its content hash, the path, and a NUL. A NUL
    cannot be in a name, so no two folders give one list. */
-static HashRc hash_folder(const char *folder, char out_hex[PLUGIN_TRUST_HEX + 1])
+static HashRc hash_folder(const char *folder, char out_hex[PLUGIN_TRUST_HEX + 1], long long *left)
 {
-    Walk walk = {.lines = NULL, .count = 0U, .cap = 0U, .dirs = 0U};
+    Walk walk = {.lines = NULL, .count = 0U, .cap = 0U, .dirs = 0U, .left = left};
     int fd = open(folder, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
     void *mem = NULL;
     HashStream *stream = NULL;
@@ -399,6 +405,7 @@ typedef struct TrustRecord {
     char *interp_path;
     size_t nneeds;
     size_t nfiles;
+    long long left; /* build_record: bytes the subject may still read */
     PluginTrustKind kind;
     bool dev;
     bool oom; /* a reader ran out of memory while taking this entry */
@@ -430,12 +437,14 @@ static void record_clear(TrustRecord *rec)
     memset(rec, 0, sizeof(*rec));
 }
 
-/* The interpreter of a command: the argv item that names it (0 for command[0] itself, 1 for
-   /usr/bin/env followed by one), or NONE_AT. */
+/* The interpreter of a command: the argv item that names it (0 for command[0] itself, 1 for env
+   followed by one), or NONE_AT. env followed by anything else (an option, NAME=VALUE, another
+   program, nothing) runs a program from PATH no record names: ENV_OTHER, unhashable
+   (decision:2026-11-23-plan33-env-unlisted-unhashable). Any env counts (/bin/env too). */
 static int interpreter_at(const PluginTrustCommand *cmd)
 {
-    if (strcmp(cmd->argv[0], k_hook_cmd) == 0) {
-        return (cmd->argc > 1U && IN_LIST(cmd->argv[1], k_interpreters)) ? 1 : NONE_AT;
+    if (strcmp(base_of(cmd->argv[0]), k_env) == 0) {
+        return (cmd->argc > 1U && IN_LIST(cmd->argv[1], k_interpreters)) ? 1 : ENV_OTHER;
     }
     return IN_LIST(base_of(cmd->argv[0]), k_interpreters) ? 0 : NONE_AT;
 }
@@ -447,7 +456,7 @@ static const char *inline_text(const PluginTrustCommand *cmd)
     size_t shell_at = at == 1 ? 1U : 0U;
     const char *shell = NULL;
 
-    if (at == NONE_AT || cmd->argc <= shell_at + 2U) {
+    if (at < 0 || cmd->argc <= shell_at + 2U) {
         return NULL;
     }
     shell = at == 1 ? cmd->argv[1] : base_of(cmd->argv[0]);
@@ -503,36 +512,15 @@ static bool text_is_json_safe(const char *text)
     return utf8_is_valid(text, strlen(text));
 }
 
-/* The realpath of item (a path relative to folder, or absolute) when a regular file is there;
- *rc says why not: H_ABSENT (text, not a file), H_NOT_REGULAR (a folder, a device), H_BAD. */
-static char *resolve_file(const char *folder, const char *item, FileHash *hash, HashRc *rc)
+/* The realpath of item: relative to dir, or absolute. NULL with *rc H_ABSENT when nothing is
+   there (text, not a file), H_BAD, or H_OOM. */
+static char *real_of_item(const char *dir, const char *item, HashRc *rc)
 {
-    char *joined = item[0] == '/' ? dup_text(item) : join_path(folder, item);
+    char *joined = item[0] == '/' ? dup_text(item) : join_path(dir, item);
     char *real = NULL;
-    int fd = -1;
 
-    *rc = H_OOM;
-    if (joined == NULL) {
-        return NULL;
-    }
-    *rc = real_of(joined, &real);
+    *rc = joined != NULL ? real_of(joined, &real) : H_OOM;
     free(joined);
-    if (real == NULL) {
-        return NULL;
-    }
-    fd = open(real, O_RDONLY | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC);
-    if (fd < 0) {
-        *rc = absent_rc(errno);
-        free(real);
-        return NULL;
-    }
-    *rc = hash_fd(fd, hash);
-    (void)close(fd);
-    if (*rc != H_OK || !text_is_json_safe(real)) {
-        *rc = *rc == H_OK ? H_BAD : *rc;
-        free(real);
-        return NULL;
-    }
     return real;
 }
 
@@ -565,25 +553,29 @@ static bool have_path(const TrustRecord *rec, const char *real)
     return false;
 }
 
-/* One argv item: a regular file outside the folder is a record row (G-29, at most 8). Text, a
-   folder, a device and a file inside the folder are not. */
-static HashRc add_argv_file(TrustRecord *rec, const Inside *in, const char *folder,
-                            const char *item)
+/* One argv item, relative to dir: a regular file outside the folder is a record row (G-29, at
+   most 8). Text, a folder, a device and a file inside the folder (the folder hash has it) are not.
+ */
+static HashRc add_argv_file(TrustRecord *rec, const Inside *in, const char *dir, const char *item)
 {
     FileHash hash;
     HashRc rc = H_OK;
-    char *real = item[0] == '\0' ? NULL : resolve_file(folder, item, &hash, &rc);
+    char *real = item[0] == '\0' ? NULL : real_of_item(dir, item, &rc);
 
     if (real == NULL) {
-        return (item[0] == '\0' || rc == H_ABSENT || rc == H_NOT_REGULAR) ? H_OK : rc;
+        return rc == H_ABSENT ? H_OK : rc; /* "" leaves rc H_OK */
     }
     if (is_inside(in, real) || have_path(rec, real)) {
         free(real);
         return H_OK;
     }
-    if (rec->nfiles >= (size_t)PLUGIN_TRUST_FILES_MAX) {
+    rc = hash_real(real, &hash, &rec->left);
+    if (rc != H_OK || rec->nfiles >= (size_t)PLUGIN_TRUST_FILES_MAX) {
         free(real);
-        return H_BAD;
+        if (rc == H_ABSENT || rc == H_NOT_REGULAR) {
+            return H_OK;
+        }
+        return rc == H_OK ? H_BAD : rc;
     }
     rec->files[rec->nfiles] = (FileRec){.path = real, .size = hash.size, .mtime = hash.mtime};
     memcpy(rec->files[rec->nfiles].sha, hash.hex, sizeof(hash.hex));
@@ -641,14 +633,6 @@ static char *search_in_path(const char *search_path, const char *name, HashRc *r
     return NULL;
 }
 
-/* Hash the file at real, a realpath search_in_path found. */
-static HashRc hash_real(const char *real, FileHash *hash)
-{
-    HashRc rc = hash_path(real, hash);
-
-    return rc == H_OK || rc == H_OOM ? rc : H_BAD;
-}
-
 /* The interpreter of one command, when it has one and the file is there: its realpath and hash.
    A second interpreter is not the first one: unhashable (decision:2026-11-22-plan33-many-entries).
  */
@@ -660,27 +644,21 @@ static HashRc add_interpreter(TrustRecord *rec, const PluginTrustSubject *subjec
     FileHash hash;
     HashRc rc = H_OK;
 
+    if (at == ENV_OTHER) {
+        return H_BAD;
+    }
     if (at == NONE_AT) {
         return H_OK;
     }
-    if (at == 0) {
-        real = resolve_file(subject->folder, cmd->argv[0], &hash, &rc);
-        if (real == NULL) {
-            return (rc == H_ABSENT || rc == H_NOT_REGULAR) ? H_OK : rc;
-        }
-    } else {
-        real = search_in_path(subject->search_path, cmd->argv[1], &rc);
-        if (real == NULL) {
-            return rc == H_ABSENT ? H_OK : rc;
-        }
-        rc = H_BAD;
-        if (text_is_json_safe(real)) {
-            rc = hash_real(real, &hash);
-        }
-        if (rc != H_OK) {
-            free(real);
-            return rc;
-        }
+    real = at == 0 ? real_of_item(subject->folder, cmd->argv[0], &rc)
+                   : search_in_path(subject->search_path, cmd->argv[1], &rc);
+    if (real == NULL) {
+        return rc == H_ABSENT ? H_OK : rc;
+    }
+    rc = hash_real(real, &hash, &rec->left);
+    if (rc != H_OK) {
+        free(real); /* an interpreter that is a folder, a device, or gone since: unhashable */
+        return rc == H_OOM ? H_OOM : H_BAD;
     }
     if (rec->interp_path != NULL) {
         bool same = strcmp(rec->interp_path, real) == 0;
@@ -719,7 +697,8 @@ static bool subject_is_usable(const PluginTrustSubject *subject)
     for (size_t i = 0; i < subject->ncommands; i++) {
         const PluginTrustCommand *cmd = &subject->commands[i];
 
-        if (cmd->argc == 0U || cmd->argc > (size_t)PLUGIN_ARGS_MAX || cmd->argv == NULL) {
+        if (cmd->argc == 0U || cmd->argc > (size_t)PLUGIN_ARGS_MAX || cmd->argv == NULL ||
+            (cmd->cwd != NULL && cmd->cwd[0] != '/')) {
             return false;
         }
         for (size_t j = 0; j < cmd->argc; j++) {
@@ -774,6 +753,7 @@ static PluginTrustStatus build_record(const PluginTrustSubject *subject, TrustRe
     }
     rec->kind = subject->kind;
     rec->dev = subject->dev;
+    rec->left = (long long)PLUGIN_TRUST_HASHED_MAX;
     rc = real_of(subject->folder, &real_folder);
     if (real_folder == NULL) {
         return status_of(rc == H_ABSENT ? H_BAD : rc);
@@ -782,7 +762,7 @@ static PluginTrustStatus build_record(const PluginTrustSubject *subject, TrustRe
     inside.len = strlen(real_folder);
     rc = take_strings(rec, subject);
     if (rc == H_OK) {
-        rc = hash_folder(subject->folder, rec->folder_sha);
+        rc = hash_folder(subject->folder, rec->folder_sha, &rec->left);
     }
     if (rc == H_OK) {
         rc = hash_manifest(subject, rec->manifest_sha);
@@ -790,8 +770,12 @@ static PluginTrustStatus build_record(const PluginTrustSubject *subject, TrustRe
     for (size_t i = 0; rc == H_OK && i < subject->ncommands; i++) {
         const PluginTrustCommand *cmd = &subject->commands[i];
 
+        /* command[0] is relative to the folder (R2.8); the rest to where it runs
+           (decision:2026-11-23-plan33-argv-cwd). */
         for (size_t j = 0; rc == H_OK && j < cmd->argc; j++) {
-            rc = add_argv_file(rec, &inside, subject->folder, cmd->argv[j]);
+            const char *dir = j == 0U || cmd->cwd == NULL ? subject->folder : cmd->cwd;
+
+            rc = add_argv_file(rec, &inside, dir, cmd->argv[j]);
         }
         if (rc == H_OK) {
             rc = add_interpreter(rec, subject, cmd);
@@ -1240,7 +1224,7 @@ static PluginTrustStatus load_doc(const char *file, TrustDoc *doc)
     PluginTrustStatus status = PLUGIN_TRUST_OK;
 
     memset(doc, 0, sizeof(*doc));
-    if (fileio_read_regular(file, (size_t)PLUGIN_TRUST_FILE_MAX, &bytes, &len, &sys_errno) != 0) {
+    if (fileio_read_private(file, (size_t)PLUGIN_TRUST_FILE_MAX, &bytes, &len, &sys_errno) != 0) {
         if (sys_errno == ENOENT || sys_errno == ENOTDIR) {
             return PLUGIN_TRUST_OK;
         }
@@ -1447,6 +1431,62 @@ static bool is_new_need(const TrustRecord *old, const char *need)
     return true;
 }
 
+/* True when item is shown bare: not empty, and only [A-Za-z0-9@%+=:,./_-]. */
+static bool is_plain(const char *item)
+{
+    static const char k_marks[] = "@%+=:,./_-";
+
+    for (const char *cur = item; *cur != '\0'; cur++) {
+        if ((*cur >= 'a' && *cur <= 'z') || (*cur >= 'A' && *cur <= 'Z') ||
+            (*cur >= '0' && *cur <= '9')) {
+            continue;
+        }
+        if (strchr(k_marks, *cur) == NULL) {
+            return false;
+        }
+    }
+    return item[0] != '\0';
+}
+
+/* The command as one line: items between spaces, each not plain one in single quotes with ' as
+   '\'' (decision:2026-11-23-plan33-hook-body-whole-command). */
+static char *shell_line(const PluginTrustCommand *cmd)
+{
+    size_t len = 1U;
+    char *line = NULL;
+    char *at = NULL;
+
+    for (size_t i = 0; i < cmd->argc; i++) {
+        len += 3U + (4U * strlen(cmd->argv[i])); /* a space, two quotes, '\'' for each byte */
+    }
+    line = (char *)malloc(len);
+    at = line;
+    for (size_t i = 0; line != NULL && i < cmd->argc; i++) {
+        const char *item = cmd->argv[i];
+
+        if (i > 0U) {
+            *at++ = ' ';
+        }
+        if (is_plain(item)) {
+            at = stpcpy(at, item);
+            continue;
+        }
+        *at++ = '\'';
+        for (const char *cur = item; *cur != '\0'; cur++) {
+            if (*cur == '\'') {
+                at = stpcpy(at, "'\\''");
+            } else {
+                *at++ = *cur;
+            }
+        }
+        *at++ = '\'';
+    }
+    if (line != NULL) {
+        *at = '\0';
+    }
+    return line;
+}
+
 /* The dialog body (H-9.4, H-9.6). A hook: one sentence. A folder: the question, then one need per
    line; for an update only the needs the old record lacks (the wording of the lines is
    decision:open-2026-11-22-plan33-trust-body-lines). */
@@ -1458,15 +1498,18 @@ static char *build_body(const PluginTrustSubject *subject, const TrustRecord *ol
     char *at = NULL;
 
     if (subject->kind == PLUGIN_TRUST_KIND_HOOK) {
-        const char *path = subject->commands[0].argv[0];
-        int need = snprintf(NULL, 0, "Allow hook \"%s\" to run %s?", subject->name, path);
+        char *line = shell_line(&subject->commands[0]);
+        int need = line != NULL
+                       ? snprintf(NULL, 0, "Allow hook \"%s\" to run %s?", subject->name, line)
+                       : -1;
 
-        body = (char *)malloc((size_t)need + 1U);
+        body = need >= 0 ? (char *)malloc((size_t)need + 1U) : NULL;
         if (body != NULL) {
             (void)snprintf(body, (size_t)need + 1U, "Allow hook \"%s\" to run %s?", subject->name,
-                           path);
+                           line);
             output_mask_in_place(body); /* one line: no value can add one */
         }
+        free(line);
         return body;
     }
     len = strlen(subject->name) +

@@ -14,6 +14,7 @@
 #include "test_alloc.h"
 
 #include <dirent.h>
+#include <errno.h>
 #include <fcntl.h>
 #include <limits.h>
 #include <stdbool.h>
@@ -585,20 +586,29 @@ TEST(an_env_interpreter_that_the_search_path_does_not_find_is_not_recorded)
     free(data);
 }
 
-TEST(env_followed_by_a_name_that_is_not_an_interpreter_records_none)
+/* decision:2026-11-23-plan33-env-unlisted-unhashable (G2): env then runs a program from PATH
+   that no record names. */
+TEST(env_followed_by_anything_but_a_listed_interpreter_is_unhashable)
 {
     char *data = given_data_dir();
     char bin[PATH_BUF];
-    const char *argv[3] = {"/usr/bin/env", "make", "run.sh"};
-    char *text = NULL;
+    const char *make[3] = {"/usr/bin/env", "make", "run.sh"};
+    const char *option[4] = {"/usr/bin/env", "-S", "python3", "run.sh"};
+    const char *assign[4] = {"/usr/bin/env", "PYTHONPATH=/tmp", "python3", "run.sh"};
+    const char *listed[3] = {"/usr/bin/env", "python3", "run.sh"};
+    char other_env[PATH_BUF];
+    const char *other[3] = {other_env, "make", "run.sh"};
 
     given_wake(data);
     given_file(data, "bin/make", "x\n", 0755);
+    given_file(data, "bin/python3", "#!/bin/sh\necho py\n", 0755);
     path_of(bin, sizeof(bin), data, "bin");
-    ASSERT_EQ_STATUS(allow_command(data, argv, 3U, bin), PLUGIN_TRUST_OK);
-    text = trust_text(data);
-    ASSERT_STR_CONTAINS(text, "\"interpreter\":null");
-    free(text);
+    ASSERT_EQ_STATUS(allow_command(data, make, 3U, bin), PLUGIN_TRUST_UNHASHABLE);
+    ASSERT_EQ_STATUS(allow_command(data, option, 4U, bin), PLUGIN_TRUST_UNHASHABLE);
+    ASSERT_EQ_STATUS(allow_command(data, assign, 4U, bin), PLUGIN_TRUST_UNHASHABLE);
+    path_of(other_env, sizeof(other_env), data, "bin/env"); /* /bin/env on Linux */
+    ASSERT_EQ_STATUS(allow_command(data, other, 3U, bin), PLUGIN_TRUST_UNHASHABLE);
+    ASSERT_EQ_STATUS(allow_command(data, listed, 3U, bin), PLUGIN_TRUST_OK);
     harness_remove_tree(data);
     free(data);
 }
@@ -801,6 +811,26 @@ TEST(the_host_gets_the_plugin_kind_name_and_folder_body)
 /* Exploit (plan 33 review): a command path or a name with a newline or an escape forged lines in
    the confirm body ("...run /bin/true\n\nNo memories are shared by this hook."). Each value is
    masked as it goes in, so the only line breaks are the ones between needs. */
+/* decision:2026-11-23-plan33-hook-body-whole-command (G5): the hook body names every argv item,
+   single-quoted the POSIX shell way when it holds more than the plain characters
+   (decision:open-2026-11-23-plan33-hook-body-command-form). */
+TEST(the_hook_body_shows_the_whole_command_shell_quoted)
+{
+    char *data = given_data_dir();
+    PingSubject ping;
+    HostLog log;
+    RememberEnv env = given_host(&log, false);
+    const char *argv[5] = {"/usr/bin/python3", "/x/my script.py", "it's", "", "-a=b,c@d%e+f:g"};
+
+    given_ping(&ping, data);
+    ping.command = (PluginTrustCommand){.argv = argv, .argc = 5U};
+    ASSERT_EQ_STATUS(plugin_trust_allow(data, &env, &ping.subject, NOW), PLUGIN_TRUST_DENIED);
+    ASSERT_STREQ(log.body, "Allow hook \"ping\" to run /usr/bin/python3 '/x/my script.py' "
+                           "'it'\\''s' '' -a=b,c@d%e+f:g?");
+    harness_remove_tree(data);
+    free(data);
+}
+
 TEST(a_control_byte_in_a_value_cannot_add_a_line_to_the_body)
 {
     char *data = given_data_dir();
@@ -813,8 +843,8 @@ TEST(a_control_byte_in_a_value_cannot_add_a_line_to_the_body)
     given_ping(&ping, data);
     ping.argv[0] = forged;
     ASSERT_EQ_STATUS(plugin_trust_allow(data, &env, &ping.subject, NOW), PLUGIN_TRUST_DENIED);
-    ASSERT_STREQ(log.body,
-                 "Allow hook \"ping\" to run /bin/true??No memories are shared by this hook.?[2J?");
+    ASSERT_STREQ(log.body, "Allow hook \"ping\" to run '/bin/true??No memories are shared by this "
+                           "hook.?[2J' --on-write?");
     given_wake(data);
     given_wake_subject(&w, data);
     w.subject.name = "wa\nke";
@@ -840,7 +870,8 @@ TEST(the_host_gets_the_hook_kind_name_and_hook_body)
 
     given_ping(&ping, data);
     ASSERT_EQ_STATUS(plugin_trust_allow(data, &env, &ping.subject, NOW), PLUGIN_TRUST_OK);
-    (void)snprintf(want, sizeof(want), "Allow hook \"ping\" to run %s?", ping.command_path);
+    (void)snprintf(want, sizeof(want), "Allow hook \"ping\" to run %s --on-write?",
+                   ping.command_path);
     ASSERT_STREQ(log.kind, "hook");
     ASSERT_STREQ(log.name, "ping");
     ASSERT_STREQ(log.body, want);
@@ -1159,6 +1190,39 @@ TEST(trust_clears_reason)
     free(data);
 }
 
+/* decision:2026-11-23-plan33-argv-cwd (G1): a hook runs in its working directory, so a relative
+   argv item after command[0] is the file there, not one in the plugin folder. command[0] stays
+   relative to the plugin folder (R2.8). A relative working directory cannot be told. */
+TEST(a_relative_argv_item_is_looked_up_in_the_commands_working_directory)
+{
+    char *data = given_data_dir();
+    PingSubject ping;
+    HostLog log;
+    RememberEnv env = given_host(&log, true);
+    char work[PATH_BUF];
+    char want[PATH_BUF];
+    const char *argv[2] = {"/bin/sh", "backup.sh"};
+    char *text = NULL;
+
+    given_ping(&ping, data);
+    given_file(data, "work/backup.sh", TOOL_SH_TEXT, 0644);
+    path_of(work, sizeof(work), data, "work");
+    ping.command = (PluginTrustCommand){.argv = argv, .argc = 2U, .cwd = work};
+    ASSERT_EQ_STATUS(plugin_trust_allow(data, &env, &ping.subject, NOW), PLUGIN_TRUST_OK);
+    text = trust_text(data);
+    (void)snprintf(want, sizeof(want), "{\"path\":\"%s/backup.sh\",\"sha256\":\"" TOOL_SHA "\"",
+                   work);
+    ASSERT_STR_CONTAINS(text, want);
+    free(text);
+    ASSERT_EQ_STATUS(plugin_trust_check(data, &ping.subject), PLUGIN_TRUST_OK);
+    given_file(data, "work/backup.sh", "echo changed\n", 0644);
+    ASSERT_EQ_STATUS(plugin_trust_check(data, &ping.subject), PLUGIN_TRUST_UNTRUSTED);
+    ping.command.cwd = "work";
+    ASSERT_EQ_STATUS(plugin_trust_check(data, &ping.subject), PLUGIN_TRUST_UNHASHABLE);
+    harness_remove_tree(data);
+    free(data);
+}
+
 TEST(a_hook_is_trusted_by_its_command_file_and_untrusted_when_that_changes)
 {
     char *data = given_data_dir();
@@ -1316,6 +1380,49 @@ TEST(a_trust_json_that_is_not_the_document_is_unreadable_and_never_written_over)
         harness_remove_tree(data);
         free(data);
     }
+}
+
+/* decision:2026-11-23-plan33-trust-json-owner-mode (G3): another user may have written a
+   trust.json that group or others can write, so it is unreadable; one others can only read is
+   used. */
+TEST(a_trust_json_writable_by_group_or_others_is_unreadable)
+{
+    char *data = given_data_dir();
+    WakeSubject w;
+    char path[PATH_BUF];
+
+    given_trusted_wake(data, &w);
+    path_of(path, sizeof(path), data, "trust.json");
+    ASSERT_EQ_INT(chmod(path, 0644), 0);
+    ASSERT_EQ_STATUS(plugin_trust_check(data, &w.subject), PLUGIN_TRUST_OK);
+    ASSERT_EQ_INT(chmod(path, 0620), 0);
+    ASSERT_EQ_STATUS(plugin_trust_check(data, &w.subject), PLUGIN_TRUST_UNREADABLE);
+    ASSERT_EQ_INT(chmod(path, 0602), 0);
+    ASSERT_EQ_STATUS(plugin_trust_check(data, &w.subject), PLUGIN_TRUST_UNREADABLE);
+    ASSERT_EQ_INT(chmod(path, 0600), 0);
+    ASSERT_EQ_STATUS(plugin_trust_check(data, &w.subject), PLUGIN_TRUST_OK);
+    harness_remove_tree(data);
+    free(data);
+}
+
+/* The owner half: a file of another user (root's /etc/hosts, when the test is not root) is
+   refused by fileio_read_private and read by fileio_read_regular. */
+TEST(a_file_of_another_owner_is_not_private)
+{
+    struct stat st;
+    char *bytes = NULL;
+    size_t len = 0;
+    int sys_errno = 0;
+
+    if (stat("/etc/hosts", &st) != 0 || st.st_uid == geteuid()) {
+        return; /* no file of another owner to read here (a root container) */
+    }
+    ASSERT_EQ_INT(fileio_read_regular("/etc/hosts", 1048576U, &bytes, &len, &sys_errno), 0);
+    free(bytes);
+    bytes = NULL;
+    ASSERT_EQ_INT(fileio_read_private("/etc/hosts", 1048576U, &bytes, &len, &sys_errno), -1);
+    ASSERT_EQ_INT(sys_errno, EPERM);
+    ASSERT_TRUE(bytes == NULL);
 }
 
 TEST(a_trust_json_over_a_mebibyte_is_unreadable)
@@ -1562,16 +1669,21 @@ TEST(a_folder_of_4097_folders_is_unhashable)
     free(data);
 }
 
-TEST(a_file_over_512_mebibytes_is_unhashable_and_one_of_exactly_that_is_hashed)
+/* decision:2026-11-23-plan33-total-hash-cap (G4): 512 MiB in all for one subject, folder files
+   included (plugin.json and run.sh here), so one file of 512 MiB alone is already over. */
+TEST(a_subject_over_512_mebibytes_in_all_is_unhashable_and_one_of_exactly_that_is_hashed)
 {
     char *data = given_data_dir();
     char path[PATH_BUF];
+    off_t folder = (off_t)(sizeof(MANIFEST_TEXT) - 1U + sizeof(RUN_SH_TEXT) - 1U);
 
     given_wake(data);
     path_of(path, sizeof(path), data, "tools/tool.sh");
-    ASSERT_EQ_INT(truncate(path, (off_t)PLUGIN_TRUST_HASHED_FILE_MAX + 1), 0);
+    ASSERT_EQ_INT(truncate(path, (off_t)PLUGIN_TRUST_HASHED_MAX - folder + 1), 0);
     ASSERT_EQ_STATUS(allow_wake_unasked(data), PLUGIN_TRUST_UNHASHABLE);
-    ASSERT_EQ_INT(truncate(path, (off_t)PLUGIN_TRUST_HASHED_FILE_MAX), 0);
+    ASSERT_EQ_INT(truncate(path, (off_t)PLUGIN_TRUST_HASHED_MAX), 0);
+    ASSERT_EQ_STATUS(allow_wake_unasked(data), PLUGIN_TRUST_UNHASHABLE);
+    ASSERT_EQ_INT(truncate(path, (off_t)PLUGIN_TRUST_HASHED_MAX - folder), 0);
     ASSERT_EQ_STATUS(allow_wake_unasked(data), PLUGIN_TRUST_OK);
     harness_remove_tree(data);
     free(data);
@@ -2127,17 +2239,14 @@ TEST(a_file_both_commands_name_counts_once_toward_the_8)
     free(data);
 }
 
-TEST(a_bare_env_command_with_no_name_after_it_records_no_interpreter)
+/* decision:2026-11-23-plan33-env-unlisted-unhashable: nothing after env is not a listed name. */
+TEST(a_bare_env_command_with_no_name_after_it_is_unhashable)
 {
     char *data = given_data_dir();
     const char *argv[1] = {"/usr/bin/env"};
-    char *text = NULL;
 
     given_wake(data);
-    ASSERT_EQ_STATUS(allow_command(data, argv, 1U, "/usr/bin"), PLUGIN_TRUST_OK);
-    text = trust_text(data);
-    ASSERT_STR_CONTAINS(text, "\"interpreter\":null");
-    free(text);
+    ASSERT_EQ_STATUS(allow_command(data, argv, 1U, "/usr/bin"), PLUGIN_TRUST_UNHASHABLE);
     harness_remove_tree(data);
     free(data);
 }
@@ -3000,7 +3109,7 @@ void register_plugin_trust_tests(void)
     RUN_TEST(an_argv_file_whose_realpath_is_too_long_is_unhashable);
     RUN_TEST(a_deep_folder_with_long_names_is_hashed_not_out_of_memory);
     RUN_TEST(an_env_interpreter_that_the_search_path_does_not_find_is_not_recorded);
-    RUN_TEST(env_followed_by_a_name_that_is_not_an_interpreter_records_none);
+    RUN_TEST(env_followed_by_anything_but_a_listed_interpreter_is_unhashable);
     RUN_TEST(two_different_interpreters_in_one_plugin_are_unhashable);
     RUN_TEST(sh_c_inline_in_manifest_hash);
     RUN_TEST(null_confirm_exits_5_c15_records_nothing);
@@ -3009,6 +3118,7 @@ void register_plugin_trust_tests(void)
     RUN_TEST(a_denied_confirm_leaves_an_existing_trust_json_as_it_was);
     RUN_TEST(the_host_gets_the_plugin_kind_name_and_folder_body);
     RUN_TEST(the_host_gets_the_hook_kind_name_and_hook_body);
+    RUN_TEST(the_hook_body_shows_the_whole_command_shell_quoted);
     RUN_TEST(a_control_byte_in_a_value_cannot_add_a_line_to_the_body);
     RUN_TEST(an_update_shows_only_the_needs_the_old_record_lacks);
     RUN_TEST(no_env_confirm_is_never_a_yes);
@@ -3029,11 +3139,14 @@ void register_plugin_trust_tests(void)
     RUN_TEST(a_file_touched_with_the_same_bytes_is_still_trusted);
     RUN_TEST(mismatch_sets_untrusted_keeps_enabled);
     RUN_TEST(trust_clears_reason);
+    RUN_TEST(a_relative_argv_item_is_looked_up_in_the_commands_working_directory);
     RUN_TEST(a_hook_is_trusted_by_its_command_file_and_untrusted_when_that_changes);
     RUN_TEST(builtin_trusted_no_record);
     RUN_TEST(a_hook_named_hybrid_is_not_the_built_in);
     RUN_TEST(a_hand_written_trust_json_of_the_decided_shape_is_read);
     RUN_TEST(a_trust_json_that_is_not_the_document_is_unreadable_and_never_written_over);
+    RUN_TEST(a_trust_json_writable_by_group_or_others_is_unreadable);
+    RUN_TEST(a_file_of_another_owner_is_not_private);
     RUN_TEST(a_trust_json_over_a_mebibyte_is_unreadable);
     RUN_TEST(a_trust_json_that_is_a_folder_or_a_fifo_is_unreadable_and_does_not_hang);
     RUN_TEST(a_symlink_in_the_folder_makes_it_unhashable);
@@ -3045,7 +3158,7 @@ void register_plugin_trust_tests(void)
     RUN_TEST(a_folder_16_levels_deep_is_hashed_and_17_is_not);
     RUN_TEST(a_folder_of_4096_files_is_hashed_and_4097_is_not);
     RUN_TEST(a_folder_of_4097_folders_is_unhashable);
-    RUN_TEST(a_file_over_512_mebibytes_is_unhashable_and_one_of_exactly_that_is_hashed);
+    RUN_TEST(a_subject_over_512_mebibytes_in_all_is_unhashable_and_one_of_exactly_that_is_hashed);
     RUN_TEST(a_missing_folder_or_manifest_or_one_over_the_reader_cap_is_unhashable);
     RUN_TEST(a_path_or_name_that_is_not_utf8_is_unhashable);
     RUN_TEST(a_subject_the_caller_built_wrong_is_unhashable);
@@ -3063,7 +3176,7 @@ void register_plugin_trust_tests(void)
     RUN_TEST(a_folder_of_4096_folders_is_hashed);
     RUN_TEST(eight_files_over_two_commands_are_hashed_and_nine_are_not);
     RUN_TEST(a_file_both_commands_name_counts_once_toward_the_8);
-    RUN_TEST(a_bare_env_command_with_no_name_after_it_records_no_interpreter);
+    RUN_TEST(a_bare_env_command_with_no_name_after_it_is_unhashable);
     RUN_TEST(inline_text_after_dash_c_of_a_program_that_is_not_a_shell_is_not_in_the_manifest_hash);
     RUN_TEST(the_same_bytes_under_another_argv_path_are_untrusted);
     RUN_TEST(an_env_interpreter_whose_bytes_change_is_untrusted);

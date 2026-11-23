@@ -391,10 +391,25 @@ static char *grow_read_buffer(char *buf, size_t next)
     return FAULT("read") ? NULL : (char *)realloc(buf, next);
 }
 
-int fileio_read_regular(const char *path, size_t max_bytes, char **out_bytes, size_t *out_len,
-                        int *sys_errno)
+/* 0 when the file at fd may be read: a regular file and, when owner_only, owned by the effective
+   user and not writable by group or others. Else the errno to fail with. */
+static int refused_errno(int fd, bool owner_only)
 {
     struct stat st;
+    unsigned others_write = (unsigned)S_IWGRP | (unsigned)S_IWOTH;
+
+    if (fstat(fd, &st) != 0 || !S_ISREG(st.st_mode)) {
+        return EINVAL;
+    }
+    if (owner_only && (st.st_uid != geteuid() || ((unsigned)st.st_mode & others_write) != 0U)) {
+        return EPERM;
+    }
+    return 0;
+}
+
+static int read_regular(const char *path, size_t max_bytes, bool owner_only, char **out_bytes,
+                        size_t *out_len, int *sys_errno)
+{
     char *buf = NULL;
     size_t cap = 0;
     size_t n = 0;
@@ -405,8 +420,8 @@ int fileio_read_regular(const char *path, size_t max_bytes, char **out_bytes, si
     if (fd < 0) {
         goto fail;
     }
-    if (fstat(fd, &st) != 0 || !S_ISREG(st.st_mode)) {
-        errno = EINVAL;
+    errno = refused_errno(fd, owner_only);
+    if (errno != 0) {
         goto fail;
     }
     for (;;) {
@@ -450,6 +465,18 @@ fail:
     }
     free(buf);
     return -1;
+}
+
+int fileio_read_regular(const char *path, size_t max_bytes, char **out_bytes, size_t *out_len,
+                        int *sys_errno)
+{
+    return read_regular(path, max_bytes, false, out_bytes, out_len, sys_errno);
+}
+
+int fileio_read_private(const char *path, size_t max_bytes, char **out_bytes, size_t *out_len,
+                        int *sys_errno)
+{
+    return read_regular(path, max_bytes, true, out_bytes, out_len, sys_errno);
 }
 
 int fileio_mkdir_parents(char *file_path, int *sys_errno)

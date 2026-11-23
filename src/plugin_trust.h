@@ -22,7 +22,8 @@ enum {
     PLUGIN_TRUST_FOLDER_FILES_MAX = 4096,
     PLUGIN_TRUST_FOLDER_DIRS_MAX = 4096,
     PLUGIN_TRUST_DEPTH_MAX = 16,
-    PLUGIN_TRUST_HASHED_FILE_MAX = 536870912, /* 512 MiB, a file in the folder or outside it */
+    PLUGIN_TRUST_HASHED_MAX = 536870912, /* 512 MiB read in all for one subject
+                                            (decision:2026-11-23-plan33-total-hash-cap) */
     PLUGIN_TRUST_LOCK_TIMEOUT_MS = 2000,
     PLUGIN_TRUST_COMMANDS_MAX = 32,
     PLUGIN_TRUST_HEX = 64 /* hex digits of a SHA-256 */
@@ -57,10 +58,12 @@ typedef enum PluginTrustStatus {
     PLUGIN_TRUST_OOM
 } PluginTrustStatus;
 
-/* One run.command: its argv (R2.8: no shell). */
+/* One run.command: its argv (R2.8: no shell) and the absolute folder it runs in, NULL for the
+   plugin folder (decision:2026-11-23-plan33-argv-cwd). */
 typedef struct PluginTrustCommand {
     const char *const *argv;
     size_t argc;
+    const char *cwd;
 } PluginTrustCommand;
 
 /*
