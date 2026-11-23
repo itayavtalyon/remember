@@ -13,7 +13,6 @@
 #include "test.h"
 #include "test_alloc.h"
 
-#include <errno.h>
 #include <fcntl.h>
 #include <limits.h>
 #include <stdbool.h>
