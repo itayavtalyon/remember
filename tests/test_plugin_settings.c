@@ -701,8 +701,8 @@ TEST(invalid_manifest_registers_nothing)
     char doc[4096];
     char *protocol = NULL;
 
-    given_named_plugin(plugins, "hyphen", "bad-name", NULL);
-    given_named_plugin(plugins, "enabledkey", "ek",
+    given_named_plugin(plugins, "bad-name", "bad-name", NULL);
+    given_named_plugin(plugins, "ek", "ek",
                        "{\"key\":\"enabled\",\"description\":\"E.\",\"type\":\"boolean\","
                        "\"default\":true}");
     given_plugin(plugins, "notjson", "this is not json");
@@ -714,7 +714,7 @@ TEST(invalid_manifest_registers_nothing)
         protocol[11] = '2';
     }
     given_plugin(plugins, "proto", doc);
-    given_named_plugin(plugins, "zgood", "good", NULL);
+    given_named_plugin(plugins, "good", "good", NULL);
     reg = given_loaded(plugins);
     ASSERT_EQ_INT((long long)plugin_keys(reg), 1);
     ASSERT_TRUE(setting_by_key(reg, "plugin.good.enabled") != NULL);
@@ -1010,11 +1010,9 @@ TEST(an_installed_manifest_named_hybrid_adds_no_key)
 
     ASSERT_EQ_STATUS(plugin_settings_register_hybrid(reg), PLUGIN_SETTINGS_OK);
     given_named_plugin(plugins, "hybrid", "hybrid", k_bool);
-    given_named_plugin(plugins, "h2", "hybrid", NULL);
     ASSERT_EQ_STATUS(plugin_settings_load(plugins, reg, &err), PLUGIN_SETTINGS_OK);
     ASSERT_EQ_INT((long long)plugin_keys(reg), 1);
     ASSERT_TRUE(setting_by_key(reg, "plugin.hybrid.loud") == NULL);
-    ASSERT_TRUE(setting_by_key(reg, "plugin.hybrid_h2.enabled") == NULL);
     settings_registry_free(reg);
     free(plugins);
 }
@@ -1226,7 +1224,7 @@ TEST(a_plugin_json_symlinked_to_a_regular_file_is_read)
     given_doc(doc, sizeof(doc), "linked", NULL);
     path_in(target, sizeof(target), plugins, "src", "manifest.json");
     harness_write_file(target, doc);
-    path_in(link_path, sizeof(link_path), plugins, "dev", "plugin.json");
+    path_in(link_path, sizeof(link_path), plugins, "linked", "plugin.json");
     harness_write_file(link_path, "x");
     ASSERT_EQ_INT(unlink(link_path), 0);
     ASSERT_EQ_INT(symlink(target, link_path), 0);
@@ -1273,12 +1271,19 @@ TEST(a_plugin_json_with_a_nul_byte_registers_nothing)
     free(plugins);
 }
 
-TEST(the_keys_come_from_the_manifest_name_not_the_folder_name)
+/* decision:2026-11-23-plan33-name-is-folder (G6): a plugin's name is its folder name. Trust
+   reads plugins/<name>, so a folder that claims another name would take that name's keys and be
+   turned on by a trust check of a folder it is not: it registers nothing. */
+TEST(a_folder_registers_only_when_its_manifest_name_is_the_folder_name)
 {
     char *plugins = given_plugins_dir();
     SettingsRegistry *reg = NULL;
 
     given_named_plugin(plugins, "some-folder", "wake", NULL);
+    reg = given_loaded(plugins);
+    ASSERT_EQ_INT((long long)plugin_keys(reg), 0);
+    settings_registry_free(reg);
+    given_named_plugin(plugins, "wake", "wake", NULL);
     reg = given_loaded(plugins);
     ASSERT_TRUE(setting_by_key(reg, "plugin.wake.enabled") != NULL);
     ASSERT_EQ_INT((long long)plugin_keys(reg), 1);
@@ -1286,124 +1291,21 @@ TEST(the_keys_come_from_the_manifest_name_not_the_folder_name)
     free(plugins);
 }
 
-/* ---- two folders with one name --------------------------------------------------------- */
-
-TEST(the_first_folder_in_byte_order_keeps_the_name_and_a_later_one_gets_name_underscore_folder)
+/* The review's exploit: plugins/aaa says "wake" and sorts before plugins/wake. It took
+   plugin.wake.* (with its own settings), and the approved folder became plugin.wake_wake.*. */
+TEST(a_folder_that_claims_another_folders_name_takes_none_of_its_keys)
 {
     char *plugins = given_plugins_dir();
     SettingsRegistry *reg = NULL;
 
-    given_named_plugin(plugins, "b", "foo", k_bool);
-    given_named_plugin(plugins, "a", "foo", NULL);
+    given_named_plugin(plugins, "aaa", "wake", k_bool);
+    given_named_plugin(plugins, "wake", "wake", NULL);
     reg = given_loaded(plugins);
-    ASSERT_TRUE(setting_by_key(reg, "plugin.foo.enabled") != NULL);
-    ASSERT_TRUE(setting_by_key(reg, "plugin.foo.loud") == NULL);
-    ASSERT_TRUE(setting_by_key(reg, "plugin.foo_b.enabled") != NULL);
-    ASSERT_TRUE(setting_by_key(reg, "plugin.foo_b.loud") != NULL);
-    ASSERT_STREQ(spec_of(reg, "plugin.foo_b.enabled")->description,
-                 "Turns the \"foo_b\" plugin on or off.");
-    settings_registry_free(reg);
-    free(plugins);
-}
-
-TEST(a_folder_name_with_a_hyphen_reads_as_an_underscore_in_the_second_name)
-{
-    char *plugins = given_plugins_dir();
-    SettingsRegistry *reg = NULL;
-
-    given_named_plugin(plugins, "a", "foo", NULL);
-    given_named_plugin(plugins, "b-c", "foo", NULL);
-    reg = given_loaded(plugins);
-    ASSERT_TRUE(setting_by_key(reg, "plugin.foo_b_c.enabled") != NULL);
-    settings_registry_free(reg);
-    free(plugins);
-}
-
-TEST(a_second_name_past_40_characters_is_cut_to_40)
-{
-    char *plugins = given_plugins_dir();
-    SettingsRegistry *reg = NULL;
-    char name[41];
-    char want[96];
-
-    memset(name, 'n', 38U);
-    name[38] = '\0';
-    given_named_plugin(plugins, "a", name, NULL);
-    given_named_plugin(plugins, "bcd", name, NULL);
-    reg = given_loaded(plugins);
-    (void)snprintf(want, sizeof(want), "plugin.%s_b.enabled", name);
-    ASSERT_TRUE(setting_by_key(reg, want) != NULL);
-    ASSERT_TRUE(
-        setting_by_key(reg, "plugin.nnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnn_bcd.enabled") == NULL);
-    settings_registry_free(reg);
-    free(plugins);
-}
-
-/* Review: a folder name longer than the join buffer (NAME_MAX is 255) was refused, not cut. */
-TEST(a_second_name_from_a_100_character_folder_is_cut_to_40)
-{
-    char *plugins = given_plugins_dir();
-    SettingsRegistry *reg = NULL;
-    char folder[101];
-
-    memset(folder, 'f', 100U);
-    folder[100] = '\0';
-    given_named_plugin(plugins, "a", "p", NULL);
-    given_named_plugin(plugins, folder, "p", NULL);
-    reg = given_loaded(plugins);
-    ASSERT_TRUE(setting_by_key(reg, "plugin.p_ffffffffffffffffffffffffffffffffffffff.enabled") !=
-                NULL);
-    settings_registry_free(reg);
-    free(plugins);
-}
-
-TEST(a_second_name_that_is_not_a_name_registers_nothing)
-{
-    char *plugins = given_plugins_dir();
-    SettingsRegistry *reg = NULL;
-
-    given_named_plugin(plugins, "a", "foo", NULL);
-    given_named_plugin(plugins, "b.c", "foo", NULL);
-    given_named_plugin(plugins, "bB", "foo", NULL);
-    reg = given_loaded(plugins);
-    ASSERT_TRUE(setting_by_key(reg, "plugin.foo.enabled") != NULL);
+    ASSERT_TRUE(setting_by_key(reg, "plugin.wake.enabled") != NULL);
+    ASSERT_TRUE(setting_by_key(reg, "plugin.wake.loud") == NULL);
+    ASSERT_TRUE(setting_by_key(reg, "plugin.wake_wake.enabled") == NULL);
+    ASSERT_TRUE(setting_by_key(reg, "plugin.wake_aaa.enabled") == NULL);
     ASSERT_EQ_INT((long long)plugin_keys(reg), 1);
-    settings_registry_free(reg);
-    free(plugins);
-}
-
-TEST(two_second_names_that_cut_to_one_segment_register_only_the_first)
-{
-    char *plugins = given_plugins_dir();
-    SettingsRegistry *reg = NULL;
-    char name[41];
-
-    memset(name, 'n', 38U);
-    name[38] = '\0';
-    given_named_plugin(plugins, "a", name, k_bool);
-    given_named_plugin(plugins, "bcd", name, k_bool);
-    given_named_plugin(plugins, "bce", name, NULL);
-    reg = given_loaded(plugins);
-    ASSERT_EQ_INT((long long)plugin_keys(reg), 4);
-    ASSERT_TRUE(setting_by_key(reg, "plugin.nnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnn_b.loud") !=
-                NULL);
-    settings_registry_free(reg);
-    free(plugins);
-}
-
-TEST(a_real_name_that_an_earlier_second_name_took_is_renamed_too)
-{
-    char *plugins = given_plugins_dir();
-    SettingsRegistry *reg = NULL;
-
-    given_named_plugin(plugins, "a", "foo", NULL);
-    given_named_plugin(plugins, "c", "foo", NULL);
-    given_named_plugin(plugins, "c2", "foo_c", NULL);
-    reg = given_loaded(plugins);
-    ASSERT_TRUE(setting_by_key(reg, "plugin.foo.enabled") != NULL);
-    ASSERT_TRUE(setting_by_key(reg, "plugin.foo_c.enabled") != NULL);
-    ASSERT_TRUE(setting_by_key(reg, "plugin.foo_c_c2.enabled") != NULL);
-    ASSERT_EQ_INT((long long)plugin_keys(reg), 3);
     settings_registry_free(reg);
     free(plugins);
 }
@@ -1620,15 +1522,8 @@ void register_plugin_settings_tests(void)
     RUN_TEST(a_plugin_json_symlinked_to_a_regular_file_is_read);
     RUN_TEST(a_plugin_json_that_cannot_be_opened_registers_nothing);
     RUN_TEST(a_plugin_json_with_a_nul_byte_registers_nothing);
-    RUN_TEST(the_keys_come_from_the_manifest_name_not_the_folder_name);
-    RUN_TEST(
-        the_first_folder_in_byte_order_keeps_the_name_and_a_later_one_gets_name_underscore_folder);
-    RUN_TEST(a_folder_name_with_a_hyphen_reads_as_an_underscore_in_the_second_name);
-    RUN_TEST(a_second_name_past_40_characters_is_cut_to_40);
-    RUN_TEST(a_second_name_from_a_100_character_folder_is_cut_to_40);
-    RUN_TEST(a_second_name_that_is_not_a_name_registers_nothing);
-    RUN_TEST(two_second_names_that_cut_to_one_segment_register_only_the_first);
-    RUN_TEST(a_real_name_that_an_earlier_second_name_took_is_renamed_too);
+    RUN_TEST(a_folder_registers_only_when_its_manifest_name_is_the_folder_name);
+    RUN_TEST(a_folder_that_claims_another_folders_name_takes_none_of_its_keys);
     RUN_TEST(the_builtin_registry_is_the_six_compiled_rows);
     RUN_TEST(a_new_registry_starts_as_the_compiled_rows_and_add_refuses_a_repeated_key);
     RUN_TEST(a_row_added_is_a_copy_of_the_callers_strings);

@@ -21,8 +21,10 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/time.h>
+#include <sys/un.h>
 #include <sys/wait.h>
 #include <unistd.h>
 
@@ -1190,6 +1192,45 @@ TEST(trust_clears_reason)
     free(data);
 }
 
+/* decision:2026-11-23-plan33-argv-fifo-unhashable (G7): sh reads a FIFO made where an argv
+   file was, and a check that calls it text never sees what it feeds. A FIFO or a socket outside the
+   plugin folder is unhashable; a device (/dev/null) and a folder stay text (a named gap). */
+TEST(a_fifo_or_socket_argv_item_outside_the_folder_is_unhashable)
+{
+    char *data = given_data_dir();
+    char pipe_path[PATH_BUF];
+    char tools[PATH_BUF];
+    struct sockaddr_un addr;
+    const char *fifo_argv[2] = {"/bin/sh", pipe_path};
+    const char *dev_argv[2] = {"/bin/sh", "/dev/null"};
+    const char *dir_argv[2] = {"/bin/sh", tools};
+    int sock = -1;
+
+    given_wake(data);
+    path_of(pipe_path, sizeof(pipe_path), data, "tools/pipe");
+    path_of(tools, sizeof(tools), data, "tools");
+    ASSERT_EQ_INT(mkfifo(pipe_path, 0600), 0);
+    ASSERT_EQ_STATUS(allow_command(data, fifo_argv, 2U, NULL), PLUGIN_TRUST_UNHASHABLE);
+    memset(&addr, 0, sizeof(addr));
+    addr.sun_family = AF_UNIX;
+    ASSERT_TRUE((size_t)snprintf(addr.sun_path, sizeof(addr.sun_path), "%s/sock", tools) <
+                sizeof(addr.sun_path));
+    // NOLINTNEXTLINE(android-cloexec-socket) -- macOS has no SOCK_CLOEXEC; closed below
+    sock = socket(AF_UNIX, SOCK_STREAM, 0);
+    ASSERT_TRUE(sock >= 0);
+    if (sock >= 0) {
+        const char *sock_argv[2] = {"/bin/sh", addr.sun_path};
+
+        ASSERT_EQ_INT(bind(sock, (const struct sockaddr *)&addr, (socklen_t)sizeof(addr)), 0);
+        ASSERT_EQ_STATUS(allow_command(data, sock_argv, 2U, NULL), PLUGIN_TRUST_UNHASHABLE);
+        ASSERT_EQ_INT(close(sock), 0);
+    }
+    ASSERT_EQ_STATUS(allow_command(data, dev_argv, 2U, NULL), PLUGIN_TRUST_OK);
+    ASSERT_EQ_STATUS(allow_command(data, dir_argv, 2U, NULL), PLUGIN_TRUST_OK);
+    harness_remove_tree(data);
+    free(data);
+}
+
 /* decision:2026-11-23-plan33-argv-cwd (G1): a hook runs in its working directory, so a relative
    argv item after command[0] is the file there, not one in the plugin folder. command[0] stays
    relative to the plugin folder (R2.8). A relative working directory cannot be told. */
@@ -1823,10 +1864,9 @@ TEST(a_hook_needs_exactly_one_command)
     free(data);
 }
 
-TEST(an_argv_fifo_a_folder_and_a_directory_named_as_the_interpreter_are_not_files)
+TEST(an_argv_folder_and_a_directory_named_as_the_interpreter_are_not_files)
 {
     char *data = given_data_dir();
-    char fifo[PATH_BUF];
     char search[2 * PATH_BUF];
     char folder_in_bin1[PATH_BUF];
     char tools[PATH_BUF];
@@ -1835,8 +1875,6 @@ TEST(an_argv_fifo_a_folder_and_a_directory_named_as_the_interpreter_are_not_file
 
     given_wake(data);
     given_file(data, "bin2/python3", "#!/bin/sh\necho py\n", 0755);
-    path_of(fifo, sizeof(fifo), data, "tools/pipe");
-    ASSERT_EQ_INT(mkfifo(fifo, 0600), 0);
     path_of(tools, sizeof(tools), data, "tools");
     path_of(folder_in_bin1, sizeof(folder_in_bin1), data, "bin1/python3");
     given_file(data, "bin1/other", "x\n", 0644);
@@ -1844,11 +1882,11 @@ TEST(an_argv_fifo_a_folder_and_a_directory_named_as_the_interpreter_are_not_file
     (void)snprintf(search, sizeof(search), "%s/bin1:%s/bin2", data, data);
     argv[0] = "/usr/bin/env";
     argv[1] = "python3";
-    argv[2] = fifo;
+    argv[2] = tools; /* a FIFO: a_fifo_or_socket_argv_item_outside_the_folder_is_unhashable */
     ASSERT_EQ_STATUS(allow_command(data, argv, 3U, search), PLUGIN_TRUST_OK);
     text = trust_text(data);
     ASSERT_STR_CONTAINS(text, "bin2/python3\",\"sha256\":\"" FAKE_PY_SHA "\"");
-    ASSERT_STR_NOT_CONTAINS(text, "tools/pipe");
+    ASSERT_STR_NOT_CONTAINS(text, "/tools\"");
     free(text);
     harness_remove_tree(data);
     free(data);
@@ -3139,6 +3177,7 @@ void register_plugin_trust_tests(void)
     RUN_TEST(a_file_touched_with_the_same_bytes_is_still_trusted);
     RUN_TEST(mismatch_sets_untrusted_keeps_enabled);
     RUN_TEST(trust_clears_reason);
+    RUN_TEST(a_fifo_or_socket_argv_item_outside_the_folder_is_unhashable);
     RUN_TEST(a_relative_argv_item_is_looked_up_in_the_commands_working_directory);
     RUN_TEST(a_hook_is_trusted_by_its_command_file_and_untrusted_when_that_changes);
     RUN_TEST(builtin_trusted_no_record);
@@ -3163,7 +3202,7 @@ void register_plugin_trust_tests(void)
     RUN_TEST(a_path_or_name_that_is_not_utf8_is_unhashable);
     RUN_TEST(a_subject_the_caller_built_wrong_is_unhashable);
     RUN_TEST(a_hook_needs_exactly_one_command);
-    RUN_TEST(an_argv_fifo_a_folder_and_a_directory_named_as_the_interpreter_are_not_files);
+    RUN_TEST(an_argv_folder_and_a_directory_named_as_the_interpreter_are_not_files);
     RUN_TEST(two_plugins_share_one_file_and_an_update_replaces_only_its_own_entry);
     RUN_TEST(a_stale_or_symlinked_temp_file_is_not_followed_and_none_is_left);
     RUN_TEST(a_data_dir_that_is_not_a_folder_is_an_io_failure_after_the_host_was_asked_once);

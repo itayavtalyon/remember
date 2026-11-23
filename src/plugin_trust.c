@@ -87,6 +87,10 @@ static HashRc hash_fd(int fd, FileHash *out, long long *left)
     if (fstat(fd, &st) != 0) {
         return rc;
     }
+    if (S_ISFIFO(st.st_mode) || S_ISSOCK(st.st_mode)) {
+        return H_BAD; /* a program reads what it feeds
+                         (decision:2026-11-23-plan33-argv-fifo-unhashable) */
+    }
     if (!S_ISREG(st.st_mode)) {
         return H_NOT_REGULAR;
     }
@@ -286,6 +290,7 @@ static HashRc walk_entry(int dirfd, const char *name, const char *rel, size_t de
     if (child == NULL) {
         return H_OOM;
     }
+    // NOLINTNEXTLINE(clang-analyzer-unix.StdCLibraryFunctions) -- dirfd of an open DIR is not -1
     if (fstatat(dirfd, name, &st, AT_SYMLINK_NOFOLLOW) != 0) {
         free(child);
         return rc;

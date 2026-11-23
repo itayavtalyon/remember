@@ -25,7 +25,7 @@ The prefix default is not stored. Nothing is written until a `set`.
 
 ## Plugin keys
 
-`decision:2026-11-11-plugin-enabled-bool`, `decision:2026-11-16-plan30-registry-explicit`, `decision:2026-11-16-plan30-duplicate-plugin-name`, `decision:2026-11-16-plan30-plugin-json-reader-cap`, `decision:2026-11-16-plan30-enabled-description`, `decision:2026-11-16-plan30-plugin-string-values`, `decision:2026-11-16-plan30-value-error-copy-drafts`. 007 ST-5.7 to ST-5.10, ST-9.6.
+`decision:2026-11-11-plugin-enabled-bool`, `decision:2026-11-16-plan30-registry-explicit`, `decision:2026-11-16-plan30-duplicate-plugin-name` (replaced by `decision:2026-11-23-plan33-name-is-folder`), `decision:2026-11-16-plan30-plugin-json-reader-cap`, `decision:2026-11-16-plan30-enabled-description`, `decision:2026-11-16-plan30-plugin-string-values`, `decision:2026-11-16-plan30-value-error-copy-drafts`. 007 ST-5.7 to ST-5.10, ST-9.6.
 
 Each installed plugin has `plugin.<name>.enabled` and one key `plugin.<name>.<key>` for each item of the manifest's `settings` list. The built-in plugin `hybrid` has `plugin.hybrid.enabled` and no other key, and no manifest.
 
@@ -33,7 +33,7 @@ Each installed plugin has `plugin.<name>.enabled` and one key `plugin.<name>.<ke
 
 **The reader.** Folders are read in byte order of their names. A folder with no `plugin.json`, a `plugin.json` that is not a regular file (a symlink to one is followed) or is over 64 KiB (`PLUGIN_JSON_MAX`), an unreadable file, and a file the parser refuses (any error, an unsupported protocol or version) register nothing, and none is an error. The keys come from the parsed manifest only; no other file is read. A manifest named `hybrid` registers nothing. A manifest whose settings the registry cannot hold registers none of its keys: a default or an enum value that holds a control byte or DEL, or a default the type refuses.
 
-**Names.** The key uses the manifest's `name`, whatever the folder is called. When an earlier folder already holds a name, the later folder's keys use `<name>_<folder>`, with each `-` of the folder read as `_`, cut to 40 characters. When that is not `[a-z][a-z0-9_]{0,39}`, or is taken as well, the later folder registers nothing. A plugin receives only `plugin.<its manifest name>.*` (ST-9.6), so a renamed duplicate's keys show in `settings` and never reach that plugin.
+**Names.** A plugin's name is its folder name (`decision:2026-11-23-plan33-name-is-folder`, which replaces the `<name>_<folder>` rename of `decision:2026-11-16-plan30-duplicate-plugin-name`). A folder registers its keys only when its manifest's `name` equals the folder name; any other folder registers nothing. Folder names are unique, so two folders never share a name. Plan 33's trust check reads `plugins/<name>`, so a folder that claimed another name would take that name's keys and be turned on by the trust of a folder it is not.
 
 **Enabling an untrusted plugin** (`decision:s-05`, `decision:2026-11-22-plan33-enable-guard-error`, `decision:2026-11-22-plan33-import-not-guarded`; [PLUGIN-TRUST.md](PLUGIN-TRUST.md)). `settings set plugin.<name>.enabled true`, at either layer, fails with the error `plugin_untrusted` (exit 1, nothing written) when the plugin's current code has no matching record in `<data dir>/trust.json`. The built-in `hybrid` is trusted. `false` is never refused. `settings import` of `true` is not checked here: the run-time check of the dispatcher refuses an untrusted plugin each time. An edit after trust leaves a stored `true` as it is.
 
