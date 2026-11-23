@@ -43,8 +43,6 @@ static void *list_malloc(size_t n)
 #define list_malloc malloc
 #endif
 
-enum { LOCK_MODE = 0600, LOCK_POLL_MS = 10, NS_PER_MS = 1000000 };
-
 /* lock_file's failures. */
 enum { LOCK_IO = -1, LOCK_BUSY = -2 };
 
@@ -314,39 +312,15 @@ static BrainListCode store_file(const char *json_path, const BrainList *doc)
     return code;
 }
 
-/* Take the lock, trying every LOCK_POLL_MS until timeout_ms has gone by (G5: never an unbounded
-   wait). Any F_SETLK failure is retried: a lock that never comes is busy, and the command fails
-   visibly. ponytail: the wait counts its sleeps, so it can run a little past timeout_ms; a
-   clock_gettime deadline if that ever matters. */
-// NOLINTNEXTLINE(bugprone-easily-swappable-parameters) the descriptor, then the wait in ms
-static int wait_for_lock(int fd, int timeout_ms)
-{
-    struct flock whole = {.l_type = F_WRLCK, .l_whence = SEEK_SET};
-    const struct timespec pause = {.tv_nsec = (long)LOCK_POLL_MS * NS_PER_MS};
-    int waited = 0;
-
-    while (fcntl(fd, F_SETLK, &whole) != 0) {
-        if (waited >= timeout_ms) {
-            return LOCK_BUSY;
-        }
-        (void)nanosleep(&pause, NULL);
-        waited += LOCK_POLL_MS;
-    }
-    return 0;
-}
-
-/* POSIX record lock on brains.json.lock: advisory, and the OS drops it when the
-   holder dies. The lock file is opened without following a symlink and must be
-   a regular file. The data folder is made first, because the first brain a
-   machine opens may be one outside it. The fd, or LOCK_IO or LOCK_BUSY. */
+/* The lock on brains.json.lock (fileio_lock_open: advisory, the OS drops it when the holder dies).
+   The data folder is made first, because the first brain a machine opens may be one outside it.
+   The fd, or LOCK_IO or LOCK_BUSY. */
 static int lock_file(const char *json_path, int timeout_ms)
 {
     size_t n = strlen(json_path);
     char *lock_path = (char *)list_malloc(n + sizeof(k_lock_suffix));
-    struct stat st;
     int sys_errno = 0;
-    int fd = -1;
-    int rc = LOCK_IO;
+    int fd = LOCK_IO;
 
     if (lock_path == NULL) {
         return LOCK_IO;
@@ -354,19 +328,13 @@ static int lock_file(const char *json_path, int timeout_ms)
     memcpy(lock_path, json_path, n);
     memcpy(lock_path + n, k_lock_suffix, sizeof(k_lock_suffix));
     if (fileio_mkdir_parents(lock_path, &sys_errno) == 0) {
-        fd = open(lock_path, O_RDWR | O_CREAT | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC, LOCK_MODE);
+        fd = fileio_lock_open(lock_path, timeout_ms);
     }
     free(lock_path);
-    if (fd >= 0 && fstat(fd, &st) == 0 && S_ISREG(st.st_mode)) {
-        rc = wait_for_lock(fd, timeout_ms);
-        if (rc == 0) {
-            return fd;
-        }
+    if (fd == FILEIO_LOCK_BUSY) {
+        return LOCK_BUSY;
     }
-    if (fd >= 0) {
-        (void)close(fd);
-    }
-    return rc;
+    return fd < 0 ? LOCK_IO : fd;
 }
 
 static BrainListCode lock_failure(int rc)

@@ -92,4 +92,18 @@ static inline bool fileio_errno_means_absent(int err)
    file_path is changed while it runs and is the same when it returns. */
 int fileio_mkdir_parents(char *file_path, int *sys_errno);
 
+/* lock_path's failures (fileio_lock_open). */
+enum { FILEIO_LOCK_IO = -1, FILEIO_LOCK_BUSY = -2 };
+
+/*
+ * A POSIX record lock on the whole file at lock_path (made, mode 0600, when missing), advisory,
+ * dropped by the OS when the holder dies. The file is opened without following a symlink and
+ * must be a regular file. The wait is bounded: it retries every 10 ms until timeout_ms has gone
+ * by, then FILEIO_LOCK_BUSY (never an unbounded wait). The folder above lock_path must exist.
+ * The descriptor to close when done (closing releases the lock), or FILEIO_LOCK_IO.
+ * ponytail: the wait counts its sleeps, so it can run a little past timeout_ms; a clock_gettime
+ * deadline if that ever matters.
+ */
+int fileio_lock_open(const char *lock_path, int timeout_ms);
+
 #endif /* REMEMBER_FILEIO_H */

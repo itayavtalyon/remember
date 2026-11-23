@@ -128,6 +128,16 @@ void cli_args_free(CliArgs *out);
 /* User-facing base message for err (no trailing newline). Never NULL. */
 const char *cli_error_message(CliError err);
 
+/*
+ * The CLI's host confirm callback on a terminal (H-9.4, plan 33): a remember_confirm_fn. It
+ * shows body (control bytes masked) and asks `Type "<name>" to allow it, or press Enter to
+ * cancel:` on the error stream, and returns true only when the line typed is exactly name. Enter,
+ * any other text, an over-long line and the end of input are false. ctx is the FILE the person
+ * types into; NULL is stdin. With no terminal the CLI passes no callback at all; this function
+ * does not look.
+ */
+bool cli_confirm_typed_name(void *ctx, const char *kind, const char *name, const char *body);
+
 /* Subcommand name for cmd, or NULL if not a real subcommand. */
 const char *cli_command_name(CliCommand cmd);
 

@@ -1,8 +1,10 @@
 #include "cli.h"
 
+#include "appio.h"
 #include "util.h"
 
 #include <stddef.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -677,4 +679,33 @@ void cli_args_free(CliArgs *out)
     free((void *)out->rest_argv);
     out->rest_argv = NULL;
     out->rest_argc = 0;
+}
+
+/* ---- the CLI's confirm callback (plan 33) -------------------------------------------------- */
+
+enum { TYPED_NAME_CAP = 256 };
+
+// NOLINTNEXTLINE(bugprone-easily-swappable-parameters) -- the remember_confirm_fn signature
+bool cli_confirm_typed_name(void *ctx, const char *kind, const char *name, const char *body)
+{
+    static const char k_head[] = "Type \"";
+    static const char k_tail[] = "\" to allow it, or press Enter to cancel: ";
+    FILE *in = ctx != NULL ? (FILE *)ctx : stdin;
+    char typed[TYPED_NAME_CAP];
+    size_t len = strlen(name);
+    char *prompt = (char *)malloc(sizeof(k_head) + len + sizeof(k_tail));
+    bool yes = false;
+
+    (void)kind;
+    if (prompt == NULL) {
+        return false;
+    }
+    memcpy(prompt, k_head, sizeof(k_head) - 1U);
+    memcpy(prompt + sizeof(k_head) - 1U, name, len);
+    memcpy(prompt + sizeof(k_head) - 1U + len, k_tail, sizeof(k_tail));
+    if (app_err_block(body) == 0 && app_prompt_line(in, prompt, typed, sizeof(typed)) == 0) {
+        yes = strcmp(typed, name) == 0;
+    }
+    free(prompt);
+    return yes;
 }

@@ -1,5 +1,6 @@
 #include "harness.h"
 
+#include "plugin_trust.h"
 #include "test.h"
 
 #include <dirent.h>
@@ -723,6 +724,53 @@ char *harness_hooker_manifest_path(void)
     return path;
 }
 
+/* The yes of a host that allows whatever it is asked (plan 33): what `plugin add` records. */
+// NOLINTNEXTLINE(bugprone-easily-swappable-parameters) -- the remember_confirm_fn signature
+static bool allow_all(void *ctx, const char *kind, const char *name, const char *body)
+{
+    (void)ctx;
+    (void)kind;
+    (void)name;
+    (void)body;
+    return true;
+}
+
+/* Record trust for the plugin installed in this run's data dir, as `plugin add` will, so that
+   `settings set plugin.<name>.enabled true` passes the guard of plan 33. */
+int harness_trust_plugin(const char *name)
+{
+    const char *xdg = getenv("XDG_DATA_HOME"); // NOLINT(concurrency-mt-unsafe)
+    size_t cap = (xdg != NULL ? strlen(xdg) : 0U) + sizeof("/remember");
+    char *data = (char *)malloc(cap);
+    PluginTrustInstalled installed;
+    RememberEnv env;
+    PluginTrustStatus status = PLUGIN_TRUST_OOM;
+
+    if (xdg == NULL || data == NULL) {
+        free(data);
+        return -1;
+    }
+    (void)snprintf(data, cap, "%s/remember", xdg);
+    memset(&env, 0, sizeof(env));
+    env.confirm = allow_all;
+    status = plugin_trust_load_installed(data, name, PLUGIN_TRUST_KIND_PLUGIN, NULL, &installed);
+    if (status == PLUGIN_TRUST_OK) {
+        status = plugin_trust_allow(data, &env, &installed.subject, "2026-11-22T10:00:00.000Z");
+    }
+    plugin_trust_installed_free(&installed);
+    free(data);
+    return status == PLUGIN_TRUST_OK ? 0 : -1;
+}
+
+// cppcheck-suppress staticFunction ; harness API (harness.h); called through the macro
+void harness_trust_hooker_at(HarnessSite site)
+{
+    if (harness_trust_plugin("hooker") != 0) {
+        (void)fprintf(stderr, "harness: cannot trust the hooker at %s:%ld\n", site.file, site.line);
+        abort();
+    }
+}
+
 void harness_install_hooker_at(const char *actions, HarnessSite site)
 {
     char doc[HOOKER_DOC_BUFSIZE];
@@ -734,6 +782,7 @@ void harness_install_hooker_at(const char *actions, HarnessSite site)
                    actions);
     harness_write_bytes_at(path, doc, strlen(doc), site);
     free(path);
+    harness_trust_hooker_at(site);
 }
 
 char *harness_read_line(const char *path)

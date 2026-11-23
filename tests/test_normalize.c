@@ -10,6 +10,8 @@
 /* Fixed-length hash inputs / counts and invalid-byte fixtures for normalize tests. */
 enum {
     HASH_IN_56 = 56,
+    HASH_SPLIT_AT = 10,
+    HASH_SPLIT_REST = HASH_IN_56 - HASH_SPLIT_AT,
     HASH_IN_64 = 64,
     TAG_COUNT_99 = 99,
     ASCII_DEL = 0x7f,       /* DEL control byte */
@@ -314,6 +316,40 @@ TEST(body_hash_long_pad_and_multiblock)
     ASSERT_EQ_INT((int)strlen(s64), 64);
     body_hash_hex(s64, HASH_IN_64, hex);
     ASSERT_STREQ(hex, "a8ae6e6ee929abea3afcfc5258c8ccd6f85273e0d4626d26c7279f3250f77c8e");
+}
+
+/* plan 33: a file is hashed in chunks, so the digest must not depend on where the chunks split. */
+TEST(hash_stream_of_split_updates_equals_the_one_shot_digest)
+{
+    char hex[REMEMBER_SHA256_HEX_LEN + 1];
+    static const char s56[] = "abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq";
+    void *mem = malloc(hash_stream_size());
+    HashStream *stream = hash_stream_init(mem);
+
+    ASSERT_TRUE(stream != NULL);
+    hash_stream_update(stream, s56, HASH_SPLIT_AT);
+    hash_stream_update(stream, s56 + HASH_SPLIT_AT, 0U);
+    hash_stream_update(stream, s56 + HASH_SPLIT_AT, HASH_SPLIT_REST);
+    hash_stream_hex(stream, hex);
+    ASSERT_STREQ(hex, "248d6a61d20638b8e5c026930c3e6039a33ce45964ff2167f6ecedd419db06c1");
+    free(mem);
+}
+
+TEST(hash_stream_with_no_update_is_the_empty_digest)
+{
+    char hex[REMEMBER_SHA256_HEX_LEN + 1];
+    void *mem = malloc(hash_stream_size());
+    HashStream *stream = hash_stream_init(mem);
+
+    ASSERT_TRUE(stream != NULL);
+    hash_stream_hex(stream, hex);
+    ASSERT_STREQ(hex, "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855");
+    free(mem);
+}
+
+TEST(hash_stream_init_of_no_memory_is_null)
+{
+    ASSERT_TRUE(hash_stream_init(NULL) == NULL);
 }
 
 TEST(body_hash_matches_trimmed)
@@ -846,6 +882,9 @@ void register_normalize_tests(void)
     RUN_TEST(body_hash_of_null_data_is_the_empty_digest);
     RUN_TEST(body_hash_empty_and_abc);
     RUN_TEST(body_hash_long_pad_and_multiblock);
+    RUN_TEST(hash_stream_of_split_updates_equals_the_one_shot_digest);
+    RUN_TEST(hash_stream_with_no_update_is_the_empty_digest);
+    RUN_TEST(hash_stream_init_of_no_memory_is_null);
     RUN_TEST(body_hash_matches_trimmed);
     RUN_TEST(token_casefold_and_trim);
     RUN_TEST(token_tag_key_identical);

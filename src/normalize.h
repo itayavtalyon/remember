@@ -88,6 +88,18 @@ bool is_ascii_control(unsigned char c);
  */
 void body_hash_hex(const void *data, size_t len, char out_hex[REMEMBER_SHA256_HEX_LEN + 1]);
 
+/*
+ * The same digest in pieces (plan 33: a file is read in chunks, never held whole). Caller-alloc:
+ * the owner allocates hash_stream_size() bytes (malloc alignment), hash_stream_init makes the
+ * stream in that block (NULL mem gives NULL), and the owner frees the block. hash_stream_hex
+ * ends the stream: lowercase hex into out_hex (REMEMBER_SHA256_HEX_LEN + 1 bytes).
+ */
+typedef struct HashStream HashStream;
+size_t hash_stream_size(void);
+HashStream *hash_stream_init(void *mem);
+void hash_stream_update(HashStream *stream, const void *data, size_t len);
+void hash_stream_hex(HashStream *stream, char out_hex[REMEMBER_SHA256_HEX_LEN + 1]);
+
 /* Short ASCII label for st (no trailing newline). Never NULL. */
 const char *norm_status_string(NormStatus st);
 

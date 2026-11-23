@@ -1133,21 +1133,40 @@ bool norm_size_canonical(const char *src, long long *whole_bytes, char *out, siz
 
 /* ---- hash ---------------------------------------------------------------- */
 
-void body_hash_hex(const void *data, size_t len, char out_hex[REMEMBER_SHA256_HEX_LEN + 1])
-{
+struct HashStream {
     SHA256_CTX ctx;
+};
+
+size_t hash_stream_size(void)
+{
+    return sizeof(struct HashStream);
+}
+
+HashStream *hash_stream_init(void *mem)
+{
+    struct HashStream *stream = (struct HashStream *)mem;
+
+    if (stream == NULL) {
+        return NULL;
+    }
+    sha256_init(&stream->ctx);
+    return stream;
+}
+
+void hash_stream_update(HashStream *stream, const void *data, size_t len)
+{
+    if (data != NULL && len > 0U) {
+        sha256_update(&stream->ctx, (const BYTE *)data, len);
+    }
+}
+
+void hash_stream_hex(HashStream *stream, char out_hex[REMEMBER_SHA256_HEX_LEN + 1])
+{
     BYTE digest[SHA256_BLOCK_SIZE];
     size_t i = 0;
     static const char k_hex[] = "0123456789abcdef";
 
-    /* Empty-string digest is well-defined (NIST vector); callers reject empty
-     * bodies before hashing, but zero-length remains valid for tests. */
-    sha256_init(&ctx);
-    if (data != NULL && len > 0U) {
-        sha256_update(&ctx, (const BYTE *)data, len);
-    }
-    sha256_final(&ctx, digest);
-
+    sha256_final(&stream->ctx, digest);
     for (i = 0; i < SHA256_BLOCK_SIZE; i++) {
         unsigned char b = digest[i];
         size_t hi = i * 2U;
@@ -1156,6 +1175,17 @@ void body_hash_hex(const void *data, size_t len, char out_hex[REMEMBER_SHA256_HE
         out_hex[lo] = k_hex[b & HEX_NIBBLE_MASK];
     }
     out_hex[REMEMBER_SHA256_HEX_LEN] = '\0';
+}
+
+/* Empty-string digest is well-defined (NIST vector); callers reject empty bodies before
+   hashing, but zero-length (and NULL data) stays valid for tests. */
+void body_hash_hex(const void *data, size_t len, char out_hex[REMEMBER_SHA256_HEX_LEN + 1])
+{
+    struct HashStream stream;
+
+    (void)hash_stream_init(&stream);
+    hash_stream_update(&stream, data, len);
+    hash_stream_hex(&stream, out_hex);
 }
 
 const char *norm_status_string(NormStatus st)

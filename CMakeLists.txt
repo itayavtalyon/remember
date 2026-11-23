@@ -129,6 +129,7 @@ set_property(SOURCE
     src/events.c
     src/plugin_manifest.c
     src/plugin_settings.c
+    src/plugin_trust.c
     src/import_read.c
     src/import_validate.c
     src/cmd_settings.c
@@ -279,6 +280,7 @@ set(REMEMBER_LIB_SOURCES
     src/events.c
     src/plugin_manifest.c
     src/plugin_settings.c
+    src/plugin_trust.c
     src/import_read.c
     src/import_validate.c
     src/cmd_settings.c
@@ -374,6 +376,7 @@ set(REMEMBER_TEST_SOURCES
     tests/test_old_cli.c
     tests/test_plugins.c
     tests/test_plugin_settings.c
+    tests/test_plugin_trust.c
     tests/test_events.c
     tests/test_sweep.c
     tests/test_brain_list.c
@@ -444,6 +447,7 @@ add_executable(remember_store_tests
     src/events.c
     src/plugin_manifest.c
     src/plugin_settings.c
+    src/plugin_trust.c
     src/import_validate.c
     src/test_alloc.c
     tests/test_unicode.c
@@ -453,6 +457,7 @@ add_executable(remember_store_tests
     tests/test_outbox.c
     tests/test_plugins.c
     tests/test_plugin_settings.c
+    tests/test_plugin_trust.c
     tests/test_events.c
     tests/test_sweep.c
     tests/failing_stream.c

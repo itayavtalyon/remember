@@ -47,17 +47,34 @@ Settings. `settings set plugin.<name>.enabled true` for an installed plugin with
 
 ## Definition of Done
 
-- [ ] `record_is_data_dir_trust_json` (path `<data dir>/trust.json`, format `remember-trust`, mode 0600, `entries` with `kind` `plugin` or `hook`; no file under `plugins/trust.json`).
-- [ ] `record_fields_h_9_2` (folder, manifest, files and interpreter hash fields).
-- [ ] `hash_argv_files_max_8` and `interpreter_hashed` and `sh_c_inline_in_manifest_hash`.
-- [ ] `null_confirm_exits_5_c15_records_nothing` (exit 5, code `plugin_approval_required`), `null_confirm_hook_exits_5_records_nothing` (exit 5, code `hook_approval_required`) and `false_confirm_exits_1_c16_records_nothing` (exit 1, code `plugin_approval_denied`) (010 test 13, first half).
-- [ ] `typed_name_must_match` (old probe 1).
-- [ ] `mismatch_sets_untrusted_keeps_enabled` and `trust_clears_reason` (010 test 13).
-- [ ] `untrusted_enable_setting_fails_c17` (007 test 23).
-- [ ] `builtin_trusted_no_record`.
-- [ ] `specs/PLUGIN-TRUST.md` written; the decisions above are `state:implemented`.
-- [ ] The gate passes on the committed tree.
+- [x] `record_is_data_dir_trust_json` (path `<data dir>/trust.json`, format `remember-trust`, mode 0600, `entries` with `kind` `plugin` or `hook`; no file under `plugins/trust.json`).
+- [x] `record_fields_h_9_2` (folder, manifest, files and interpreter hash fields).
+- [x] `hash_argv_files_max_8` and `interpreter_hashed` and `sh_c_inline_in_manifest_hash`.
+- [x] `null_confirm_exits_5_c15_records_nothing` (exit 5, code `plugin_approval_required`), `null_confirm_hook_exits_5_records_nothing` (exit 5, code `hook_approval_required`) and `false_confirm_exits_1_c16_records_nothing` (exit 1, code `plugin_approval_denied`) (010 test 13, first half). The codes and exits are proven by `c15_plugin_approval_required_prints_message_and_fix_and_exits_5`, `a_hook_with_no_callback_exits_5_with_the_hook_code_and_the_c15_words` and `c16_plugin_approval_denied_prints_message_and_fix_and_exits_1`.
+- [x] `typed_name_must_match` (old probe 1; also `the_cli_confirm_records_trust_only_for_the_typed_name`).
+- [x] `mismatch_sets_untrusted_keeps_enabled` and `trust_clears_reason` (010 test 13; `an_edit_after_trust_keeps_enabled_and_refuses_the_next_set_true` drives the CLI).
+- [x] `untrusted_enable_setting_fails_c17` (007 test 23).
+- [x] `builtin_trusted_no_record`.
+- [x] `specs/PLUGIN-TRUST.md` written; the decisions above are `state:implemented`.
+- [ ] The gate passes on the committed tree. (See Implementation Notes for what ran.)
 
 ## Implementation Notes
+
+Built by the plan 33 coder session (2026-11-22). Decisions answered by Itay in that session: `decision:2026-11-22-plan33-folder-hash`, `-hash-caps`, `-many-entries`, `-argv-paths`, `-enable-guard-error`, `-import-not-guarded`, `-trust-json-unreadable`, `-trust-lock`. Open copy items filed for Story Weaver: `decision:open-2026-11-22-plan33-never-allowed-copy`, `-trust-json-unreadable-copy`, `-hook-approval-copy`, `-trust-body-lines`.
+
+Plan corrections (the plan text above stands as written):
+
+- `RememberEnv.data_dir` does not exist on main (plan 29 adds it). Every function takes `data_dir` as an argument; plan 29's callers pass `env->data_dir`. `src/remember_env.h` is not touched.
+- `plugin_trust_confirm` and `plugin_trust_allow` take the kind (`PLUGIN_TRUST_KIND_PLUGIN` or `_HOOK`), because the plan makes the NULL-callback code depend on it.
+- `plugin_trust_check(name)` takes the code to hash (`PluginTrustSubject`): a check that read the paths out of `trust.json` would let a hand-edited file point it at a harmless folder. `plugin_trust_check_installed(data_dir, name, search_path)` is the by-name form.
+- `plugin_trust_allow` is the one writer: hash, ask, then write under the lock. No code path records trust without a true confirm return.
+- `disabled_reason` in `index.json` is plan 36's. `mismatch_sets_untrusted_keeps_enabled` and `trust_clears_reason` prove this module's part: a mismatch changes and deletes nothing and leaves `enabled` alone, and an allow after the edit makes the next check pass.
+- The hook's `hook_approval_required` has no approved words; it prints C-15's. C-15's and C-16's `<command>` is a parameter of `diag_plugin_approval`.
+- The catalog fix of the four new error codes is a draft that no command prints.
+- The plan says folder files are `files`: H-9.1 says files outside the folder, and `decision:2026-11-22-plan33-argv-paths` follows H-9.1 (a folder file is covered by `folder_sha256`).
+
+Also changed: SHA-256 stays in `normalize.c` (`hash_stream_*`, `body_hash_hex` is built on it); the lock moved from `brain_list.c` to `fileio_lock_open`; `app_err_block` in `appio.c` writes the multi-line body; `harness_install_hooker` records trust (and `harness_trust_hooker` for a test that writes the manifest itself), because `settings set plugin.hooker.enabled true` is guarded now.
+
+Ceilings, named: no cap on the total bytes hashed in one check (4096 files of 512 MiB are each allowed); a check always re-hashes (a size and mtime fast path is plan 35's); a write waits at most 2 s for the lock; the readdir of the folder fails the hash on an error but is not driven by a test (no portable fault).
 
 ## Review Notes

@@ -219,6 +219,15 @@ void app_progress(const char *line, long long now_ms)
     g_state.progress_last_ms = now_ms;
 }
 
+/* cppcheck-suppress staticFunction ; public API (appio.h); the CLI confirm */
+int app_err_block(const char *text)
+{
+    if (output_text_human(app_err(), text, true) != 0 || fputc('\n', app_err()) == EOF) {
+        return -1;
+    }
+    return fflush(app_err()) == 0 ? 0 : -1;
+}
+
 /* cppcheck-suppress staticFunction ; public API (appio.h); tests and plan 25 */
 int app_prompt_line(FILE *in, const char *prompt, char *buf, size_t cap)
 {

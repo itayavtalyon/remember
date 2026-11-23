@@ -79,6 +79,10 @@ static const char *const k_error_codes[] = {
     "quota_exceeded",
     "confirmation_required",
     "setting_from_hook",
+    "plugin_approval_required",
+    "hook_approval_required",
+    "plugin_approval_denied",
+    "plugin_untrusted",
 };
 
 /* error.fix and retryable per code, in catalog order (decision:plan21-error-fix-drafts-c42,
@@ -126,6 +130,12 @@ static const ExpectedFix k_error_fixes[] = {
     {"Reset settings you don't need with 'remember settings reset'.", "false"},
     {"Run the command again with --yes to confirm.", "false"},
     {"Change them yourself in a terminal or in Settings.", "false"},
+    {"Run the command in your own terminal.", "false"},
+    {"Run the command in your own terminal.", "false"},
+    {"Run the command again and type the name to allow it.", "false"},
+    {"Run 'remember plugin trust' with the plugin's name to review the changes and allow it "
+     "again.",
+     "false"},
 };
 
 /* Unit tests pick the mode per call. JSON mode buffers the notice for the
@@ -256,7 +266,7 @@ static const char *const k_warning_codes[] = {
     "setting_invalid",        "flag_meaning_changed",     "unknown_field",
     "setting_import_skipped", "schema_too_new_read_only", "brain_id_cloned",
     "brain_missing",          "plugin_unsupported",       "sweep_failed",
-    "brains_json_unreadable",
+    "brains_json_unreadable", "plugin_untrusted",
 };
 
 TEST(warning_catalog_round_trips_every_code)
