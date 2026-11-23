@@ -237,6 +237,16 @@ Rules:
 - `plugin_settings_load` reads `plugin.json` through `fileio_read_regular` with the 64 KiB cap, parses with plan 25's parser, and registers only a manifest with no error. It keeps no state. Plan 33 reads the same files for trust and must not re-read them for keys.
 - The registry is built on every store open, so every command allocates before it runs. A test that counts allocation faults per command sees that.
 
+## Plugin trust (plan 33; `specs/PLUGIN-TRUST.md`)
+
+- `plugin_trust.c` is hashing, the document and the confirm call. It prints nothing. `diag_plugin_approval` (exit 5 or 1) and `diag_plugin_untrusted_error` / `_warning` print, in `diag.c`, because the ASan store-test binary does not link `diag.c`. `plugin_trust_allow` is the only writer of `trust.json`: hash, ask, then write under the lock. A caller that wants to record trust has no other door.
+- The data dir is an argument, not `RememberEnv.data_dir`: that field arrives with plan 29. Callers pass `env->data_dir` then. `plugin_trust_confirm` and `plugin_trust_allow` take the kind, because the NULL-callback code differs for a plugin and a hook.
+- SHA-256 stays inside `normalize.c`: `hash_stream_*` is the incremental form (caller-alloc, `hash_stream_size`), `body_hash_hex` is built on it. The folder is walked with `openat`/`fstatat(AT_SYMLINK_NOFOLLOW)` from a descriptor, depth 16, recursion capped by that depth (`NOLINT(misc-no-recursion)`).
+- The record is rebuilt from the code on every check and compared field by field. Nothing in `trust.json` is ever opened: its paths are only compared as text, so a hand-edited path cannot point a check at a harmless file.
+- The lock moved out of `brain_list.c` into `fileio_lock_open`; both files use it.
+- The fixture `harness_install_hooker` records trust (through `plugin_trust_allow` with a yes), because `settings set plugin.hooker.enabled true` is guarded now. A test that writes the manifest itself calls `harness_trust_hooker()` after.
+- `disabled_reason` in `index.json` is plan 36's. Plan 33's tests for `mismatch_sets_untrusted_keeps_enabled` and `trust_clears_reason` prove the two things this module owns: a mismatch deletes and changes nothing and leaves `enabled` alone, and a new allow makes the next check pass.
+
 ## Process
 
 - After **each implementation plan step**: run a strict review (see skill `remember-step-review` / project checklist).

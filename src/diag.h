@@ -5,6 +5,7 @@
 #include <stddef.h>
 #include <stdio.h>
 
+#include "plugin_trust.h"
 #include "store.h"
 
 /*
@@ -51,6 +52,11 @@ typedef enum {
     DIAG_QUOTA_EXCEEDED,
     DIAG_CONFIRMATION_REQUIRED,
     DIAG_SETTING_FROM_HOOK,
+    /* Plan 33. Appended so the E4.3 order stays put. */
+    DIAG_PLUGIN_APPROVAL_REQUIRED, /* C-15, exit 5 */
+    DIAG_HOOK_APPROVAL_REQUIRED,   /* exit 5; no approved wording yet, C-15's words are printed */
+    DIAG_PLUGIN_APPROVAL_DENIED,   /* C-16, exit 1 */
+    DIAG_PLUGIN_UNTRUSTED,         /* C-17 as an error: settings set enabled true, exit 1 */
     DIAG_CODE_COUNT
 } DiagCode;
 
@@ -79,6 +85,7 @@ typedef enum {
     DIAG_WARN_PLUGIN_UNSUPPORTED,       /* C-23: a write needed a program this build cannot start */
     DIAG_WARN_SWEEP_FAILED,             /* plan 32: the expiry sweep after a command failed */
     DIAG_WARN_BRAINS_JSON_UNREADABLE,   /* plan 26: an open could not read brains.json */
+    DIAG_WARN_PLUGIN_UNTRUSTED,         /* C-17, plan 33: the code changed, so it did not run */
     DIAG_WARN_COUNT
 } DiagWarning;
 
@@ -224,6 +231,29 @@ int diag_brains_json_unreadable(const char *path);
  * cannot be written.
  */
 int diag_plugin_unsupported(void);
+
+/*
+ * C-15 and C-16 (plan 33): the outcome of plugin_trust_confirm or plugin_trust_allow as an error.
+ * NO_CALLBACK is plugin_approval_required (hook_approval_required for a hook; no approved wording
+ * exists for it, so it prints C-15's: decision:open-2026-11-22-plan33-hook-approval-copy) and
+ * exits 5; DENIED is plugin_approval_denied for either kind and exits 1. command is what the
+ * person runs in a terminal. name and command are echoed whole: the plain line masks control
+ * bytes and JSON escapes them. Returns the exit code (REMEMBER_CONFIRM or REMEMBER_ERR); any
+ * other status prints nothing and returns -1, so the caller reports it.
+ */
+int diag_plugin_approval(PluginTrustStatus status, PluginTrustKind kind, const char *name,
+                         const char *command);
+
+/*
+ * C-17 (plan 33, decision:2026-11-12-copy-batch-e3b-warning-splits entry 11): the code of
+ * plugin "name" changed since it was allowed, so it did not run. The plugin_untrusted warning
+ * (plan 35 and 36 print it) and the plugin_untrusted error (settings set enabled true,
+ * decision:2026-11-22-plan33-enable-guard-error) say the same two sentences. Each returns -1
+ * when the notice cannot be written; the error returns REMEMBER_ERR's 1 on success so the
+ * command can return it.
+ */
+int diag_plugin_untrusted_warning(const char *name);
+int diag_plugin_untrusted_error(const char *name);
 
 /* The sweep of this brain failed (plan 32). The wording is a draft until Story Weaver words it
    (decision:open-2026-11-18-plan32-sweep-failed-copy). path is the brain's path. */

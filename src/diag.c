@@ -1,6 +1,8 @@
 #include "diag.h"
 
 #include "appio.h"
+#include "commands_common.h"
+#include "exit_codes.h"
 #include "normalize.h"
 #include "output.h"
 #include "store.h"
@@ -85,6 +87,10 @@ static const char *const k_error_codes[DIAG_CODE_COUNT] = {
     [DIAG_QUOTA_EXCEEDED] = "quota_exceeded",
     [DIAG_CONFIRMATION_REQUIRED] = "confirmation_required",
     [DIAG_SETTING_FROM_HOOK] = "setting_from_hook",
+    [DIAG_PLUGIN_APPROVAL_REQUIRED] = "plugin_approval_required",
+    [DIAG_HOOK_APPROVAL_REQUIRED] = "hook_approval_required",
+    [DIAG_PLUGIN_APPROVAL_DENIED] = "plugin_approval_denied",
+    [DIAG_PLUGIN_UNTRUSTED] = "plugin_untrusted",
 };
 
 /* error.fix per code (decision:plan21-error-fix-drafts-c42). The SQLite codes
@@ -138,6 +144,13 @@ static const char *const k_fix[DIAG_CODE_COUNT] = {
     [DIAG_QUOTA_EXCEEDED] = "Reset settings you don't need with 'remember settings reset'.",
     [DIAG_CONFIRMATION_REQUIRED] = "Run the command again with --yes to confirm.",
     [DIAG_SETTING_FROM_HOOK] = "Change them yourself in a terminal or in Settings.",
+    /* Catalog fallbacks: every caller passes the C-15, C-16 or C-17 fix of its own command or
+       plugin (decision:open-2026-11-22-plan33-hook-approval-copy). Drafts, never printed. */
+    [DIAG_PLUGIN_APPROVAL_REQUIRED] = "Run the command in your own terminal.",
+    [DIAG_HOOK_APPROVAL_REQUIRED] = "Run the command in your own terminal.",
+    [DIAG_PLUGIN_APPROVAL_DENIED] = "Run the command again and type the name to allow it.",
+    [DIAG_PLUGIN_UNTRUSTED] = "Run 'remember plugin trust' with the plugin's name to review the "
+                              "changes and allow it again.",
 };
 
 /* cppcheck-suppress staticFunction ; public API (diag.h); remember_run */
@@ -174,6 +187,7 @@ static const char *const k_warning_codes[DIAG_WARN_COUNT] = {
     [DIAG_WARN_PLUGIN_UNSUPPORTED] = "plugin_unsupported",
     [DIAG_WARN_SWEEP_FAILED] = "sweep_failed",
     [DIAG_WARN_BRAINS_JSON_UNREADABLE] = "brains_json_unreadable",
+    [DIAG_WARN_PLUGIN_UNTRUSTED] = "plugin_untrusted",
 };
 
 /* Plain line lead per warning. E2.3 gives raw_query_ignored its own words; the
@@ -192,6 +206,7 @@ static const char *const k_warning_plain_prefix[DIAG_WARN_COUNT] = {
     [DIAG_WARN_PLUGIN_UNSUPPORTED] = "warning: ",
     [DIAG_WARN_SWEEP_FAILED] = "warning: ",
     [DIAG_WARN_BRAINS_JSON_UNREADABLE] = "warning: ",
+    [DIAG_WARN_PLUGIN_UNTRUSTED] = "warning: ",
 };
 
 static const char *catalog_name(const char *const *names, size_t count, size_t index)
@@ -690,6 +705,73 @@ int diag_brains_json_unreadable(const char *path)
     }
     free(message);
     return rc;
+}
+
+int diag_plugin_approval(PluginTrustStatus status, PluginTrustKind kind, const char *name,
+                         const char *command)
+{
+    char *message = NULL;
+    char *fix = NULL;
+    DiagCode code = DIAG_PLUGIN_APPROVAL_REQUIRED;
+    int rc = -1;
+
+    if (status != PLUGIN_TRUST_NO_CALLBACK && status != PLUGIN_TRUST_DENIED) {
+        return -1;
+    }
+    if (status == PLUGIN_TRUST_NO_CALLBACK) {
+        code = kind == PLUGIN_TRUST_KIND_HOOK ? DIAG_HOOK_APPROVAL_REQUIRED
+                                              : DIAG_PLUGIN_APPROVAL_REQUIRED;
+        message =
+            fmt_alloc("\"%s\" has to be allowed first, and there's no terminal to ask you in. "
+                      "Nothing was installed.",
+                      name);
+        fix = fmt_alloc("Run '%s' in your own terminal.", command);
+    } else {
+        code = DIAG_PLUGIN_APPROVAL_DENIED;
+        message = fmt_alloc("\"%s\" wasn't allowed, so nothing was installed.", name);
+        fix = fmt_alloc("To try again, run '%s' and type \"%s\" to allow it.", command, name);
+    }
+    if (message != NULL && fix != NULL &&
+        diag_error_split(code, (DiagSplit){.message = message, .fix = fix}) == 0) {
+        rc = REMEMBER_ERR;
+        if (status == PLUGIN_TRUST_NO_CALLBACK) {
+            rc = REMEMBER_CONFIRM;
+        }
+    }
+    free(message);
+    free(fix);
+    return rc;
+}
+
+/* C-17, E3B-1 entry 11: the two sentences are the same for the warning and the error. */
+static int plugin_untrusted(bool as_error, const char *name)
+{
+    char *message = fmt_alloc("\"%s\" changed since you allowed it, so it didn't run.", name);
+    char *fix =
+        fmt_alloc("Run 'remember plugin trust %s' to review the changes and allow it again.", name);
+    DiagSplit split = {.message = message, .fix = fix};
+    int rc = -1;
+
+    if (message != NULL && fix != NULL) {
+        if (as_error) {
+            rc = diag_error_split(DIAG_PLUGIN_UNTRUSTED, split);
+        } else {
+            rc = diag_warning_split_detail(DIAG_WARN_PLUGIN_UNTRUSTED, split, NULL, 0U);
+        }
+    }
+    free(message);
+    free(fix);
+    return rc;
+}
+
+int diag_plugin_untrusted_warning(const char *name)
+{
+    return plugin_untrusted(false, name);
+}
+
+int diag_plugin_untrusted_error(const char *name)
+{
+    return plugin_untrusted(true, name) == 0 ? REMEMBER_ERR : -1;
 }
 
 int diag_plugin_unsupported(void)

@@ -3126,6 +3126,7 @@ TEST(a_plugin_with_only_search_filters_gets_no_rows)
               "\"plugin_version\":\"1.0.0\",\"protocol\":1,\"filters\":[{\"name\":\"rank\","
               "\"point\":\"search.results\",\"run\":{\"process\":\"persistent\","
               "\"command\":[\"hello.py\"]}}]}");
+    harness_trust_hooker();
     assert_ok(RUN(db, "settings", "set", "plugin.hooker.enabled", "true", "--scope", "brain"));
     assert_ok(RUN(db, "add", "body"));
     assert_rows(db, "none");

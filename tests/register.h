@@ -42,6 +42,7 @@ void register_output_tests(void);
 void register_envelope_tests(void);
 void register_plugins_tests(void);
 void register_plugin_settings_tests(void);
+void register_plugin_trust_tests(void);
 void register_events_tests(void);
 void register_sweep_tests(void);
 void register_export_tests(void);

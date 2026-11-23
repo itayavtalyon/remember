@@ -20,40 +20,7 @@
 #include "test_alloc.h" // IWYU pragma: keep
 #endif
 
-enum {
-    PLUGIN_SEGMENT_MAX = 40, /* a settings key segment (ST-1.1) */
-    NAMES_GROW = 16,
-    PREFIX_CAP = SETTING_KEY_MAX + 1,
-    DESCRIPTION_CAP = PLUGIN_NAME_CAP + 32
-};
-
-static bool segment_char(char c)
-{
-    if (c >= 'a' && c <= 'z') {
-        return true;
-    }
-    if (c >= '0' && c <= '9') {
-        return true;
-    }
-    return c == '_';
-}
-
-/* [a-z][a-z0-9_]{0,39}, the name of a plugin as a key segment. */
-static bool segment_ok(const char *name)
-{
-    size_t i = 0;
-    size_t n = strlen(name);
-
-    if (n == 0U || n > (size_t)PLUGIN_SEGMENT_MAX || name[0] < 'a' || name[0] > 'z') {
-        return false;
-    }
-    for (i = 1; i < n; i++) {
-        if (!segment_char(name[i])) {
-            return false;
-        }
-    }
-    return true;
-}
+enum { NAMES_GROW = 16, PREFIX_CAP = SETTING_KEY_MAX + 1, DESCRIPTION_CAP = PLUGIN_NAME_CAP + 32 };
 
 static bool key_of(char *out, size_t cap, const char *name, const char *tail)
 {
@@ -390,35 +357,6 @@ static PluginSettingsStatus read_manifest(const char *dir, const char *folder, c
     return err == ENOMEM ? PLUGIN_SETTINGS_OOM : PLUGIN_SETTINGS_OK;
 }
 
-/* name for a manifest whose own name an earlier folder holds: <name>_<folder>, with a hyphen of
-   the folder read as an underscore, cut to 40 characters. False when that is not a name. */
-static bool second_name(char *out, size_t cap, const char *name, const char *folder)
-{
-    size_t i = 0;
-
-    /* A longer join is cut here; only the first 40 characters are kept below. */
-    (void)snprintf(out, cap, "%s_%s", name, folder);
-    for (i = 0; out[i] != '\0'; i++) {
-        if (out[i] == '-') {
-            out[i] = '_';
-        }
-    }
-    if (strlen(out) > (size_t)PLUGIN_SEGMENT_MAX) {
-        out[PLUGIN_SEGMENT_MAX] = '\0';
-    }
-    return segment_ok(out);
-}
-
-static bool name_taken(const SettingsRegistry *reg, const char *name)
-{
-    char key[SETTING_KEY_MAX + 1];
-
-    if (!key_of(key, sizeof(key), name, "enabled")) {
-        return true;
-    }
-    return setting_by_key(reg, key) != NULL;
-}
-
 /* The manifests plugin_settings_load_manifests keeps: those whose keys are registered. */
 typedef struct {
     PluginManifest **items;
@@ -465,19 +403,9 @@ static PluginSettingsStatus load_folder(const char *dir, const char *folder, Set
     if (parsed == PLUGIN_PARSE_OOM) {
         return PLUGIN_SETTINGS_OOM;
     }
-    /* The built-in name is checked here as well as in register: a duplicate would be renamed. */
-    if (parsed == PLUGIN_PARSE_OK && strcmp(man->name, PLUGIN_HYBRID_NAME) != 0) {
-        if (name_taken(reg, man->name)) {
-            char renamed[PLUGIN_NAME_CAP + PLUGIN_NAME_CAP + 2];
-
-            if (second_name(renamed, sizeof(renamed), man->name, folder) &&
-                !name_taken(reg, renamed)) {
-                (void)snprintf(man->name, sizeof(man->name), "%s", renamed);
-            } else {
-                plugin_manifest_free(man);
-                return PLUGIN_SETTINGS_OK;
-            }
-        }
+    /* A plugin's name is its folder name (decision:2026-11-23-plan33-name-is-folder): trust reads
+       plugins/<name>, so a folder that claims another name registers nothing. */
+    if (parsed == PLUGIN_PARSE_OK && strcmp(man->name, folder) == 0) {
         st = plugin_settings_register(man, reg);
         if (st == PLUGIN_SETTINGS_REFUSED) {
             st = PLUGIN_SETTINGS_OK;

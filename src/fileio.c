@@ -8,6 +8,7 @@
 #include <string.h>
 #include <sys/stat.h>
 #include <sys/types.h> // IWYU pragma: keep (ssize_t; IWYU 0.23 wants it, 0.21 calls it unused)
+#include <time.h>
 #include <unistd.h>
 
 static const unsigned NIBBLE_BITS = 4U;
@@ -390,10 +391,25 @@ static char *grow_read_buffer(char *buf, size_t next)
     return FAULT("read") ? NULL : (char *)realloc(buf, next);
 }
 
-int fileio_read_regular(const char *path, size_t max_bytes, char **out_bytes, size_t *out_len,
-                        int *sys_errno)
+/* 0 when the file at fd may be read: a regular file and, when owner_only, owned by the effective
+   user and not writable by group or others. Else the errno to fail with. */
+static int refused_errno(int fd, bool owner_only)
 {
     struct stat st;
+    unsigned others_write = (unsigned)S_IWGRP | (unsigned)S_IWOTH;
+
+    if (fstat(fd, &st) != 0 || !S_ISREG(st.st_mode)) {
+        return EINVAL;
+    }
+    if (owner_only && (st.st_uid != geteuid() || ((unsigned)st.st_mode & others_write) != 0U)) {
+        return EPERM;
+    }
+    return 0;
+}
+
+static int read_regular(const char *path, size_t max_bytes, bool owner_only, char **out_bytes,
+                        size_t *out_len, int *sys_errno)
+{
     char *buf = NULL;
     size_t cap = 0;
     size_t n = 0;
@@ -404,8 +420,8 @@ int fileio_read_regular(const char *path, size_t max_bytes, char **out_bytes, si
     if (fd < 0) {
         goto fail;
     }
-    if (fstat(fd, &st) != 0 || !S_ISREG(st.st_mode)) {
-        errno = EINVAL;
+    errno = refused_errno(fd, owner_only);
+    if (errno != 0) {
         goto fail;
     }
     for (;;) {
@@ -451,6 +467,18 @@ fail:
     return -1;
 }
 
+int fileio_read_regular(const char *path, size_t max_bytes, char **out_bytes, size_t *out_len,
+                        int *sys_errno)
+{
+    return read_regular(path, max_bytes, false, out_bytes, out_len, sys_errno);
+}
+
+int fileio_read_private(const char *path, size_t max_bytes, char **out_bytes, size_t *out_len,
+                        int *sys_errno)
+{
+    return read_regular(path, max_bytes, true, out_bytes, out_len, sys_errno);
+}
+
 int fileio_mkdir_parents(char *file_path, int *sys_errno)
 {
     size_t i = 0;
@@ -471,4 +499,43 @@ int fileio_mkdir_parents(char *file_path, int *sys_errno)
         }
     }
     return 0;
+}
+
+enum { LOCK_MODE = 0600, LOCK_POLL_MS = 10, NS_PER_MS = 1000000 };
+
+// NOLINTNEXTLINE(bugprone-easily-swappable-parameters) the descriptor, then the wait in ms
+static int wait_for_lock(int fd, int timeout_ms)
+{
+    struct flock whole = {.l_type = F_WRLCK, .l_whence = SEEK_SET};
+    const struct timespec pause = {.tv_nsec = (long)LOCK_POLL_MS * NS_PER_MS};
+    int waited = 0;
+
+    while (fcntl(fd, F_SETLK, &whole) != 0) {
+        if (waited >= timeout_ms) {
+            return FILEIO_LOCK_BUSY;
+        }
+        (void)nanosleep(&pause, NULL);
+        waited += LOCK_POLL_MS;
+    }
+    return 0;
+}
+
+int fileio_lock_open(const char *lock_path, int timeout_ms)
+{
+    struct stat st;
+    int fd = open(lock_path, O_RDWR | O_CREAT | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC, LOCK_MODE);
+    int rc = FILEIO_LOCK_IO;
+
+    if (fd >= 0 && fstat(fd, &st) == 0 && S_ISREG(st.st_mode)) {
+        /* Any F_SETLK failure is retried: a lock that never comes is busy, and the command
+           fails visibly. */
+        rc = wait_for_lock(fd, timeout_ms);
+        if (rc == 0) {
+            return fd;
+        }
+    }
+    if (fd >= 0) {
+        (void)close(fd);
+    }
+    return rc;
 }

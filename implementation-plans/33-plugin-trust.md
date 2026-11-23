@@ -47,17 +47,84 @@ Settings. `settings set plugin.<name>.enabled true` for an installed plugin with
 
 ## Definition of Done
 
-- [ ] `record_is_data_dir_trust_json` (path `<data dir>/trust.json`, format `remember-trust`, mode 0600, `entries` with `kind` `plugin` or `hook`; no file under `plugins/trust.json`).
-- [ ] `record_fields_h_9_2` (folder, manifest, files and interpreter hash fields).
-- [ ] `hash_argv_files_max_8` and `interpreter_hashed` and `sh_c_inline_in_manifest_hash`.
-- [ ] `null_confirm_exits_5_c15_records_nothing` (exit 5, code `plugin_approval_required`), `null_confirm_hook_exits_5_records_nothing` (exit 5, code `hook_approval_required`) and `false_confirm_exits_1_c16_records_nothing` (exit 1, code `plugin_approval_denied`) (010 test 13, first half).
-- [ ] `typed_name_must_match` (old probe 1).
-- [ ] `mismatch_sets_untrusted_keeps_enabled` and `trust_clears_reason` (010 test 13).
-- [ ] `untrusted_enable_setting_fails_c17` (007 test 23).
-- [ ] `builtin_trusted_no_record`.
-- [ ] `specs/PLUGIN-TRUST.md` written; the decisions above are `state:implemented`.
-- [ ] The gate passes on the committed tree.
+- [x] `record_is_data_dir_trust_json` (path `<data dir>/trust.json`, format `remember-trust`, mode 0600, `entries` with `kind` `plugin` or `hook`; no file under `plugins/trust.json`).
+- [x] `record_fields_h_9_2` (folder, manifest, files and interpreter hash fields).
+- [x] `hash_argv_files_max_8` and `interpreter_hashed` and `sh_c_inline_in_manifest_hash`.
+- [x] `null_confirm_exits_5_c15_records_nothing` (exit 5, code `plugin_approval_required`), `null_confirm_hook_exits_5_records_nothing` (exit 5, code `hook_approval_required`) and `false_confirm_exits_1_c16_records_nothing` (exit 1, code `plugin_approval_denied`) (010 test 13, first half). The codes and exits are proven by `c15_plugin_approval_required_prints_message_and_fix_and_exits_5`, `a_hook_with_no_callback_exits_5_with_the_hook_code_and_the_c15_words` and `c16_plugin_approval_denied_prints_message_and_fix_and_exits_1`.
+- [x] `typed_name_must_match` (old probe 1; also `the_cli_confirm_records_trust_only_for_the_typed_name`).
+- [x] `mismatch_sets_untrusted_keeps_enabled` and `trust_clears_reason` (010 test 13; `an_edit_after_trust_keeps_enabled_and_refuses_the_next_set_true` drives the CLI).
+- [x] `untrusted_enable_setting_fails_c17` (007 test 23).
+- [x] `builtin_trusted_no_record`.
+- [x] `specs/PLUGIN-TRUST.md` written; the decisions above are `state:implemented`.
+- [x] The gate passes on the committed tree. (See Implementation Notes for what ran.)
 
 ## Implementation Notes
 
+Built by the plan 33 coder session (2026-11-22). Decisions answered by Itay in that session: `decision:2026-11-22-plan33-folder-hash`, `-hash-caps`, `-many-entries`, `-argv-paths`, `-enable-guard-error`, `-import-not-guarded`, `-trust-json-unreadable`, `-trust-lock`. Open copy items filed for Story Weaver: `decision:open-2026-11-22-plan33-never-allowed-copy`, `-trust-json-unreadable-copy`, `-hook-approval-copy`, `-trust-body-lines`.
+
+Plan corrections (the plan text above stands as written):
+
+- `RememberEnv.data_dir` does not exist on main (plan 29 adds it). Every function takes `data_dir` as an argument; plan 29's callers pass `env->data_dir`. `src/remember_env.h` is not touched.
+- `plugin_trust_confirm` and `plugin_trust_allow` take the kind (`PLUGIN_TRUST_KIND_PLUGIN` or `_HOOK`), because the plan makes the NULL-callback code depend on it.
+- `plugin_trust_check(name)` takes the code to hash (`PluginTrustSubject`): a check that read the paths out of `trust.json` would let a hand-edited file point it at a harmless folder. `plugin_trust_check_installed(data_dir, name, search_path)` is the by-name form.
+- `plugin_trust_allow` is the one writer: hash, ask, then write under the lock. No code path records trust without a true confirm return.
+- `disabled_reason` in `index.json` is plan 36's. `mismatch_sets_untrusted_keeps_enabled` and `trust_clears_reason` prove this module's part: a mismatch changes and deletes nothing and leaves `enabled` alone, and an allow after the edit makes the next check pass.
+- The hook's `hook_approval_required` has no approved words; it prints C-15's. C-15's and C-16's `<command>` is a parameter of `diag_plugin_approval`.
+- The catalog fix of the four new error codes is a draft that no command prints.
+- The plan says folder files are `files`: H-9.1 says files outside the folder, and `decision:2026-11-22-plan33-argv-paths` follows H-9.1 (a folder file is covered by `folder_sha256`).
+
+Also changed: SHA-256 stays in `normalize.c` (`hash_stream_*`, `body_hash_hex` is built on it); the lock moved from `brain_list.c` to `fileio_lock_open`; `app_err_block` in `appio.c` writes the multi-line body; `harness_install_hooker` records trust (and `harness_trust_hooker` for a test that writes the manifest itself), because `settings set plugin.hooker.enabled true` is guarded now.
+
+Mutation check (49 one-clause mutants of `src/plugin_trust.c`, each built with the store-test flags and run against the 88 trust tests under ASan/UBSan; the runner is `register_plugin_trust_tests` alone, so a mutant that survives is one the trust tests cannot see). 45 were killed (assert or ASan abort). Four survive, each with its reason:
+
+- `no_sort` (drop the `qsort` of the folder list): the order of `readdir` on APFS is already the byte order of the names, so `the_folder_hash_does_not_depend_on_the_order_the_files_were_made` cannot turn red here. The Linux run (ext4 and overlayfs return another order) is what proves it.
+- `eof_always` (the digest is taken even when the read loop broke on an error or the cap): the fstat cap stops a file over 512 MiB first, and a failed `read` needs a fault. No test drives it.
+- `errno_check_off` (a `readdir` that stopped on an error is not a failure): no portable fault.
+- `needs_update_all` (the length pass counts every need, old or new): it only over-allocates the body buffer. Equivalent.
+
+The first run of the mutants left 17 survivors. Each got a test: `commands_max` (a subject of 33 valid commands), `dirs_ge` (4096 folders), `entries_cap_commit` and the read cap (1024 and 1025 entries), `env_argc` (a bare `/usr/bin/env`), `files_cap_gt8` and `no_dedupe` (eight files over two commands, a file named twice), `hex_len` (65 digits), `inline_any_shell` (`python3 -c`), `same_file_path`, `same_interp_path`, `same_interp_sha` (the same bytes under another path, an env interpreter that changes, a `PATH` that finds another copy), `same_kind`. `is_one_segment` was deleted: a name that is not one segment cannot equal the name in a parsed manifest, so the guard was dead code.
+
+Commands that prove the claims (all from the worktree):
+
+- Build and the whole gate list: `cmake -S . -B build -DREMEMBER_TEST_VFS=ON && cmake --build build && (cd build && ctest --output-on-failure)` (step_gate and store_asan_gate pass; `plugins` is in `tests/gate-suites`).
+- Format: `clang-format --dry-run --Werror` (llvm@22) on every changed C file.
+- Lint: `PATH=/opt/homebrew/opt/llvm@22/bin:$PATH ./scripts/lint-all.sh` (format, boundaries, cppcheck, gcc -fanalyzer, clang-tidy 22, scan-build).
+- Coverage: `PATH=/opt/homebrew/opt/llvm@22/bin:$PATH ./scripts/check-coverage.sh` (functions 100%, effective lines 100%, pure-TU branches 100%).
+- Linux: `./scripts/ci-linux.sh --ubuntu=24.04` (OK on the final tree). Its first runs found what macOS cannot: two includes IWYU and misc-include-cleaner flagged, and a LeakSanitizer leak (`plugin_trust_allow` did not free the record when the trust file path could not be built). Each was fixed; the allocation-failure tests are what exposed the leak.
+- The trust tests alone under ASan/UBSan: link the objects of `remember_store_tests` with a main that calls `register_plugin_trust_tests` (88 tests, 0 failures).
+
+Simplify pass, three cuts made: `is_one_segment` deleted (12 lines: a name that is not one segment cannot equal the name in a parsed manifest); `diag.c`'s own printf helper `sentence()` deleted for the existing `fmt_alloc` (22 lines); the lock code moved out of `brain_list.c` into `fileio_lock_open`, so two files share one copy (35 lines fewer in `brain_list.c`). SHA-256 reuses `normalize.c` (`body_hash_hex` is now built on `hash_stream_*`). Regions that cannot shrink: the folder walk (one recursion, depth-capped), the record reader (one `has_exactly` per object) and the check (one `same_code`).
+
+Ceilings, named: no cap on the total bytes hashed in one check (4096 files of 512 MiB are each allowed); a check always re-hashes (a size and mtime fast path is plan 35's); a write waits at most 2 s for the lock; the readdir of the folder fails the hash on an error but is not driven by a test (no portable fault).
+
 ## Review Notes
+
+**2026-11-23, second opinion (Claude Opus 5.5).** On the coder's `00bfdd9`, fixed on `claude/suspicious-bose-aba6b9`. Loaded `workflow:deep-review`, the PLAN scope of `workflow:whole-plan-deep-review`, `standard:coding`, `standard:c`, and every decision the plan and the notes cite. Local Bugbot is not installed (`remember-miss:plan33-review-local-bugbot`); its stand-in was an independent exploit pass by a fresh agent given the code and not my findings.
+
+Findings fixed without a grill, each with an exploit test that was red first:
+- **Critical (TOCTOU), a plugin.json swapped between the parse and the hash passed.** `plugin_trust_load_installed` parsed the manifest (the argv the caller runs), then the hash read `plugin.json` again. Swap in a manifest that runs another file of the approved folder, parse it, swap the approved bytes back: `plugin_trust_check` said OK for the swapped argv. `a_manifest_swapped_after_the_parse_is_untrusted`. Fix: `PluginTrustSubject.manifest` (required) carries the bytes the subject was parsed from, and `manifest_sha256` hashes them (`295c16a`).
+- **High, an argv path whose real path is past `PATH_MAX` was text.** `realpath` failed with `ENAMETOOLONG`, which `fileio_errno_means_absent` calls absent, so the file was never hashed while `sh` still ran it. `an_argv_file_whose_realpath_is_too_long_is_unhashable`. Fix: only `ENOENT` and `ENOTDIR` are absent here (`9675838`).
+- **High, an empty or relative `PATH` entry before the hit.** env runs `./python3` from its working directory while the record named `/usr/bin/python3`. `an_empty_or_relative_search_path_entry_before_the_hit_is_unhashable`.
+- **Medium, a newline or ESC in a name, command or need forged lines of the confirm body.** `a_control_byte_in_a_value_cannot_add_a_line_to_the_body`. Fix: each value is masked as it goes in.
+- **Low, a deep folder of long names was reported out of memory** (`join_path`'s cap): `a_deep_folder_with_long_names_is_hashed_not_out_of_memory`.
+
+Grilled and answered by Itay (2026-11-23, relayed by the orchestrator), each built red first (G1 to G5 in `43dd708`, G6 and G7 after):
+- G1 A, `decision:2026-11-23-plan33-argv-cwd`: a relative argv item after `command[0]` is looked up where the command runs (`PluginTrustCommand.cwd`). `a_relative_argv_item_is_looked_up_in_the_commands_working_directory`.
+- G2 A, `decision:2026-11-23-plan33-env-unlisted-unhashable`: env followed by anything but a listed interpreter is unhashable. Widened here to any argv[0] whose base name is `env`, because Linux has `/bin/env` and the exact-path rule let it through. `env_followed_by_anything_but_a_listed_interpreter_is_unhashable`, `a_bare_env_command_with_no_name_after_it_is_unhashable`.
+- G3 A, `decision:2026-11-23-plan33-trust-json-owner-mode`: `fileio_read_private`. `a_trust_json_writable_by_group_or_others_is_unreadable`, `a_file_of_another_owner_is_not_private`.
+- G4 A, `decision:2026-11-23-plan33-total-hash-cap`: 512 MiB read in all for one subject (`PLUGIN_TRUST_HASHED_MAX`). An argv file inside the folder is no longer read a second time. `a_subject_over_512_mebibytes_in_all_is_unhashable_and_one_of_exactly_that_is_hashed`.
+- G5 A, `decision:2026-11-23-plan33-hook-body-whole-command`: the hook body shows the whole command, shell-quoted; the form is `decision:open-2026-11-23-plan33-hook-body-command-form` for Story Weaver. `the_hook_body_shows_the_whole_command_shell_quoted`.
+- Side change: an interpreter path that is a folder or a device is unhashable (it was "no interpreter").
+
+- G6 A, `decision:2026-11-23-plan33-name-is-folder` (High): the settings registry gave `plugin.wake.*` to the first folder in byte order whose manifest said `wake`, so with `plugins/aaa` claiming `wake`, `settings set plugin.wake.enabled true` passed the trust check of `plugins/wake` and turned on `aaa`. A folder now registers only when its manifest name is the folder name; the `<name>_<folder>` rename and its helpers are deleted (about 70 lines), amending plan 30 and specs/SETTINGS.md. `a_folder_registers_only_when_its_manifest_name_is_the_folder_name`, `a_folder_that_claims_another_folders_name_takes_none_of_its_keys`.
+- G7 A, `decision:2026-11-23-plan33-argv-fifo-unhashable`: a FIFO or socket argv item outside the plugin folder is unhashable (a socket already was: `open` fails on it). `a_fifo_or_socket_argv_item_outside_the_folder_is_unhashable`. An argv folder and a path inside one item stay text, named in the spec as a known gap.
+
+Simplify: (1) `name_is_taken` deleted for `doc_find` (one lookup, not two). (2) `old_has_need` folded into `is_new_need`. (3) `resolve_file` split into `real_of_item` and `hash_real`, so an item inside the folder is never hashed twice. (4) `hash_path` and the old `hash_real` merged. (5) `fileio_read_regular` and `fileio_read_private` share one body. (6) G6 deleted the registry's rename: `second_name`, `name_taken`, `segment_ok` and `segment_char` (about 70 lines) and eight tests.
+
+Probes that held: `settings set plugin.wake.enabled` with other spellings of true (only the exact `true` reaches the guard); a NULL and a false callback record nothing; the typed-name confirm; a FIFO `trust.json` (no hang); two entries with one name; a stale lock and `.tmp`. Known, left: `trust.json` as a symlink is followed (the data dir is 0700; G3 checks the target's owner and mode); bidi controls are not masked (the repo's mask covers C0 and C1 only).
+
+Mutants on the review fixes before the grills (valid-but-wrong rewrites, each built and run): all 7 killed. Each G1 to G5 change is proven by its test's red run on the unchanged code.
+
+For later plans: plan 35 runs the argv of the subject it checked, never a second parse; plan 34 fills `PluginTrustCommand.cwd` from `working_directory`, and its `plugin remove` needs a trust-record delete; the "TTY" of the confirm callback is plan 34's to name.
+
+Grades. Coder 6/10: 88 trust tests, 49 mutants with every survivor argued, a leak found by Linux, a careful lock and write path. Missed the parse-then-hash TOCTOU on the one security check, the env and `PATH` forms the runtime follows, and the confirm body as a forging surface. In-session review 5/10: its mutants held, but it accepted a second read of the file it hashes and named the total-bytes gap without grilling it. Folded into `standard:coding` (old body in `history:standard:coding:2026-11-23-33review`): rule 3 (probe prompts and dialog bodies, not only error messages) and rule 4 (decide from the bytes the caller acts on; resolve inputs the way the consuming program does; cap the total work of one call).

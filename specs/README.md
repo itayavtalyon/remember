@@ -14,6 +14,7 @@ A spec describes what `remember` does today. It is normative.
 | [PLUGIN-PROTOCOL.md](PLUGIN-PROTOCOL.md) | `subject:plugin-protocol` | Plugin protocol 1 (revision 6): manifest, messages, schemas |
 | [PLUGIN-PROTOCOL-CHANGES.md](PLUGIN-PROTOCOL-CHANGES.md) | `subject:plugin-protocol` | Changelog of the plugin protocol |
 | [PLUGIN-MANIFEST.md](PLUGIN-MANIFEST.md) | `subject:plugins` | The `plugin.json` parser: accepted fields, defaults, limits, errors and warnings |
+| [PLUGIN-TRUST.md](PLUGIN-TRUST.md) | `subject:plugins` | `trust.json`: what a record holds, the code hash, the confirm callback and the typed-name prompt, the check, and the `settings set` enable guard |
 | [JSON-STYLE.md](JSON-STYLE.md) | `subject:json-envelope` | JSON value rules for every surface |
 | [JSON-ENVELOPE.md](JSON-ENVELOPE.md) | `subject:json-envelope` | Message envelope for CLI `--json` |
 | [OUTBOX-DELIVERY.md](OUTBOX-DELIVERY.md) | `subject:plugins-and-hooks` | Recipient state machine: backoff retry, pre-flight failure, 100-hop halt, 7-day drop, lanes |

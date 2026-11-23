@@ -61,6 +61,10 @@ bool app_use_color(FILE *stream);
    --json write nothing. now_ms is the caller's clock. Never touches stdout. */
 void app_progress(const char *line, long long now_ms);
 
+/* Write text on the error stream and a newline: newlines inside text stay, every other control
+   byte is masked (output_text_human). 0, or -1 when the write fails. */
+int app_err_block(const char *text);
+
 /* Write prompt on the error stream, then read one typed line from in.
    The terminal echoes the typed characters; this does not hide them or write
    them again. Returns 0 and drops the trailing newline, or -1. */

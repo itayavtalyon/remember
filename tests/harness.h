@@ -134,6 +134,17 @@ void harness_install_hooker_at(const char *actions, HarnessSite site);
 #define harness_install_hooker(actions)                                                            \
     harness_install_hooker_at((actions), (HarnessSite){__FILE__, __LINE__})
 
+/* Record trust for the installed hooker as `plugin add` would (plan 33): the guard of
+   `settings set plugin.hooker.enabled true` passes after it. harness_install_hooker does it; a
+   test that writes the manifest itself calls this after. A failure aborts the test run. */
+void harness_trust_hooker_at(HarnessSite site);
+
+/* The same for any plugin installed in the data dir: 0, or -1 when it cannot be trusted (no
+   plugin.json, or a manifest with an error). A fixture that installs a broken plugin on purpose
+   ignores the result. */
+int harness_trust_plugin(const char *name);
+#define harness_trust_hooker() harness_trust_hooker_at((HarnessSite){__FILE__, __LINE__})
+
 /* Directory containing path (heap; caller frees). */
 char *dir_of_path(const char *file_path);
 

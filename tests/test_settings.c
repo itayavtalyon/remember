@@ -9826,6 +9826,9 @@ static void given_installed_plugin(const char *name, const char *settings)
                          name, settings != NULL ? ",\"settings\":[" : "",
                          settings != NULL ? settings : "", settings != NULL ? "]" : "") > 0);
     harness_write_file(path, doc);
+    /* plan 33: enabling an installed plugin needs a trust record. A manifest that cannot be
+       trusted (a broken one on purpose) stays untrusted. */
+    (void)harness_trust_plugin(name);
 }
 
 static void given_uninstalled_plugin(const char *name)

@@ -9,6 +9,7 @@
 #include "export_format.h"
 #include "normalize.h"
 #include "output.h"
+#include "plugin_trust.h"
 #include "settings.h"
 #include "store.h"
 #include "sync_credential.h"
@@ -2391,6 +2392,42 @@ static int write_set_line(FILE *out, const SettingSpec *spec, const SettingRead 
     return fprintf(out, "\"%s\" is now %s for %s.\n", spec->key, display, whose) < 0 ? -1 : 0;
 }
 
+/* decision:2026-11-22-plan33-enable-guard-error (007 test 23): plugin.<name>.enabled set to true
+   fails when the plugin's code has no matching trust record. Only set asks; import and reset do
+   not (decision:2026-11-22-plan33-import-not-guarded). 0 to go on, or the exit code. */
+static int guard_untrusted_enable(const char *key, const char *prepared)
+{
+    char name[PLUGIN_NAME_BUF];
+    char enabled[SETTING_KEY_MAX + 1];
+    char dir[REMEMBER_PATH_MAX];
+    char err[PREPARE_ERR_CAP];
+    const char *search_path = NULL;
+    PluginTrustStatus status = PLUGIN_TRUST_OK;
+
+    if (strcmp(prepared, "true") != 0 || !setting_plugin_name(key, name, sizeof(name))) {
+        return 0;
+    }
+    (void)snprintf(enabled, sizeof(enabled), "plugin.%s.enabled", name);
+    if (strcmp(key, enabled) != 0) {
+        return 0;
+    }
+    /* No data dir means no folder to check: untrusted, never a pass. */
+    // NOLINTNEXTLINE(concurrency-mt-unsafe) -- single-threaded CLI; no C11 thread-safe getenv
+    search_path = getenv("PATH");
+    status = util_resolve_data_dir(dir, sizeof(dir), err, sizeof(err)) != 0
+                 ? PLUGIN_TRUST_UNTRUSTED
+                 : plugin_trust_check_installed(dir, name, search_path);
+    if (status == PLUGIN_TRUST_OK) {
+        return 0;
+    }
+    if (status == PLUGIN_TRUST_OOM) {
+        err_msg(DIAG_OUT_OF_MEMORY, "out of memory");
+        return REMEMBER_ERR;
+    }
+    (void)diag_plugin_untrusted_error(name);
+    return REMEMBER_ERR;
+}
+
 static int apply_set(Store *store, bool json, const WriteOpts *opt)
 {
     const SettingSpec *spec = NULL;
@@ -2430,6 +2467,11 @@ static int apply_set(Store *store, bool json, const WriteOpts *opt)
     if (st != SETTING_OK) {
         return report_prepare(st, spec, opt, err);
     }
+    rc = guard_untrusted_enable(spec->key, prepared);
+    if (rc != 0) {
+        return rc;
+    }
+    rc = REMEMBER_ERR;
     if (read_spec(store, userdb, spec, &read, err, sizeof(err)) != 0) {
         return REMEMBER_ERR;
     }
